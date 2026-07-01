@@ -132,7 +132,8 @@ struct LocalAllocOpConversion
     // If there is an initial tensor, store it into the shared memory.
     if (op.getSrc()) {
       auto *ctx = op.getContext();
-      auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+      auto inVals = unpackTensorElements(loc, adaptor.getSrc(), rewriter,
+                                         op.getSrc().getType());
       if (failed(lowerLocalStore(loc, ctx, op.getSrc(), memDescTy, smemObj,
                                  inVals, typeConverter, rewriter,
                                  targetInfo))) {
@@ -193,7 +194,8 @@ public:
     auto outVals = lowerLocalLdSt(loc, ctx, cvt, {}, llvmElemTy, memDescTy,
                                   smemObj, rewriter, targetInfo, op);
 
-    Value result = packLLElements(loc, typeConverter, outVals, rewriter, regTy);
+    Value result =
+        packTensorElements(loc, typeConverter, outVals, rewriter, regTy);
     rewriter.replaceOp(op, result);
 
     return success();
@@ -227,7 +229,8 @@ public:
     auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getDst(),
                                                          llvmElemTy, rewriter);
-    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    auto inVals = unpackTensorElements(loc, adaptor.getSrc(), rewriter,
+                                       op.getSrc().getType());
     if (failed(lowerLocalStore(loc, ctx, regVal, memDescTy, smemObj, inVals,
                                typeConverter, rewriter, targetInfo))) {
       return failure();
@@ -284,15 +287,16 @@ public:
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
 
-    SmallVector<Value> idxValues =
-        unpackLLElements(loc, adaptor.getIndices(), rewriter);
+    SmallVector<Value> idxValues = unpackTensorElements(
+        loc, adaptor.getIndices(), rewriter, op.getIndices().getType());
     auto regLayout = toLinearLayout(regTy);
 
     auto results = lowerLocalScGt(loc, memDescTy, smemObj, llvmElemTy,
                                   regLayout, idxValues, op.getAxis(),
                                   /*storeVals=*/{}, rewriter, targetInfo);
 
-    Value result = packLLElements(loc, typeConverter, results, rewriter, regTy);
+    Value result =
+        packTensorElements(loc, typeConverter, results, rewriter, regTy);
     rewriter.replaceOp(op, result);
 
     return success();
@@ -330,16 +334,146 @@ public:
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getDst(),
                                                          llvmElemTy, rewriter);
 
-    SmallVector<Value> values =
-        unpackLLElements(loc, adaptor.getValues(), rewriter);
-    SmallVector<Value> idxValues =
-        unpackLLElements(loc, adaptor.getIndices(), rewriter);
+    SmallVector<Value> values = unpackTensorElements(
+        loc, adaptor.getValues(), rewriter, op.getValues().getType());
+    SmallVector<Value> idxValues = unpackTensorElements(
+        loc, adaptor.getIndices(), rewriter, op.getIndices().getType());
     auto regLayout = toLinearLayout(valuesTy);
 
     lowerLocalScGt(loc, memDescTy, smemObj, llvmElemTy, regLayout, idxValues,
                    op.getAxis(), values, rewriter, targetInfo);
 
     rewriter.eraseOp(op);
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+};
+
+struct AtomicPollOpConversion
+    : public ConvertOpToLLVMPattern<triton::AtomicPollOp> {
+  AtomicPollOpConversion(LLVMTypeConverter &converter,
+                         const TargetInfoBase &targetInfo,
+                         PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::AtomicPollOp>(converter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::AtomicPollOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto moduleOp = op->getParentOfType<ModuleOp>();
+    assert(moduleOp && "Parent ModuleOp not found for AtomicPollOp");
+    int numCTAs = TritonGPUDialect::getNumCTAs(moduleOp);
+    if (numCTAs != 1 && !targetInfo.isCuda())
+      return rewriter.notifyMatchFailure(
+          op, "multi-CTA atomic_poll requires cross-CTA shared memory");
+
+    auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+    StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
+    unsigned bitWidth = adaptor.getExpected().getType().getIntOrFloatBitWidth();
+
+    // Split the block at the poll and branch only the elected thread into the
+    // polling loop. All other threads skip directly to the rendezvous block.
+    Block *currentBlock = rewriter.getInsertionBlock();
+    Block *doneBlock = currentBlock->splitBlock(rewriter.getInsertionPoint());
+    Region *region = currentBlock->getParent();
+    Block *pollInitBlock =
+        rewriter.createBlock(region, Region::iterator(doneBlock));
+    Block *pollLoopBlock =
+        rewriter.createBlock(region, Region::iterator(doneBlock));
+    Block *pollSuccessBlock =
+        rewriter.createBlock(region, Region::iterator(doneBlock));
+    Block *timeoutCheckBlock =
+        adaptor.getTimeout()
+            ? rewriter.createBlock(region, Region::iterator(doneBlock))
+            : nullptr;
+    BlockArgument matched = doneBlock->addArgument(i1_ty, loc);
+
+    rewriter.setInsertionPointToEnd(currentBlock);
+    LLVM::CondBrOp::create(rewriter, loc, threadPred, pollInitBlock,
+                           ValueRange{}, doneBlock, ValueRange{b.false_val()});
+
+    rewriter.setInsertionPointToEnd(pollInitBlock);
+    Value start;
+    if (adaptor.getTimeout())
+      start = targetInfo.getGlobalTimer(rewriter, loc);
+    LLVM::BrOp::create(rewriter, loc, pollLoopBlock);
+
+    rewriter.setInsertionPointToEnd(pollLoopBlock);
+    Value loaded = LLVM::LoadOp::create(
+        rewriter, loc, adaptor.getExpected().getType(), adaptor.getPtr(),
+        bitWidth / 8, /*isVolatile=*/false, /*isNonTemporal=*/false,
+        /*isInvariant=*/false, /*isInvariantGroup=*/false,
+        LLVM::AtomicOrdering::monotonic, syncScope);
+    Value pollMatched = b.icmp_eq(loaded, adaptor.getExpected());
+    if (adaptor.getTimeout()) {
+      LLVM::CondBrOp::create(rewriter, loc, pollMatched, pollSuccessBlock,
+                             timeoutCheckBlock);
+
+      rewriter.setInsertionPointToEnd(timeoutCheckBlock);
+      Value elapsed = b.sub(targetInfo.getGlobalTimer(rewriter, loc), start);
+      Value timedOut = b.icmp_uge(elapsed, adaptor.getTimeout());
+      LLVM::CondBrOp::create(rewriter, loc, timedOut, doneBlock,
+                             ValueRange{b.false_val()}, pollLoopBlock,
+                             ValueRange{});
+    } else {
+      LLVM::CondBrOp::create(rewriter, loc, pollMatched, pollSuccessBlock,
+                             pollLoopBlock);
+    }
+
+    rewriter.setInsertionPointToEnd(pollSuccessBlock);
+    if (op.getSem() == triton::MemSemantic::ACQUIRE)
+      LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::acquire,
+                            syncScope);
+    LLVM::BrOp::create(rewriter, loc, ValueRange{b.true_val()}, doneBlock);
+
+    rewriter.setInsertionPointToStart(doneBlock);
+    if (!adaptor.getTimeout()) {
+      // Successful completion is the only possible result without a timeout,
+      // so rendezvous and return true without a shared-memory broadcast.
+      if (numCTAs == 1)
+        targetInfo.barrier(loc, rewriter, AddrSpace::Local);
+      else
+        targetInfo.clusterBarrier(loc, rewriter, op);
+      rewriter.replaceOp(op, b.true_val());
+      return success();
+    }
+
+    // Broadcast the elected thread's result after every thread has left the
+    // loop, preserving the scalar result convention used by Triton atomics.
+    if (op.getResult().use_empty()) {
+      if (numCTAs == 1)
+        targetInfo.barrier(loc, rewriter, AddrSpace::Local);
+      else
+        targetInfo.clusterBarrier(loc, rewriter, op);
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    Value atomPtr =
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+    atomPtr = b.bitcast(atomPtr, ptr_ty(rewriter.getContext(),
+                                        targetInfo.getSharedAddressSpace()));
+    targetInfo.storeShared(rewriter, loc, atomPtr, matched, threadPred);
+    if (numCTAs == 1)
+      targetInfo.barrier(loc, rewriter, AddrSpace::Local);
+    else
+      targetInfo.clusterBarrier(loc, rewriter, op);
+
+    Value result;
+    if (numCTAs == 1) {
+      result = b.load(i1_ty, atomPtr);
+    } else {
+      // Scalar operations are issued by CTA 0, so read CTA 0's scratch.
+      result = targetInfo.loadDShared(rewriter, loc, atomPtr, b.i32_val(0),
+                                      i1_ty, b.true_val());
+    }
+    rewriter.replaceOp(op, result);
     return success();
   }
 
@@ -361,4 +495,5 @@ void mlir::triton::populateMemoryOpToLLVMPatterns(
   patterns.add<LocalScatterOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<BarrierOpConversion>(typeConverter, benefit);
+  patterns.add<AtomicPollOpConversion>(typeConverter, targetInfo, benefit);
 }
