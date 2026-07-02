@@ -14,9 +14,6 @@ public:
     return static_cast<const mlir::triton::NVIDIA::TargetInfo &>(helper);
   }
 
-  Value clock(ConversionPatternRewriter &rewriter, Location loc,
-              bool isClock64) const override;
-
   Value globalTime(ConversionPatternRewriter &rewriter,
                    Location loc) const override;
 
