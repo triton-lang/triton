@@ -445,6 +445,42 @@ def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device)
         assert "mma.sync.aligned.m16n8k32.row.col.kind::mxf8f6f4.block_scale.scale_vec::1X" in ptx
 
 
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128)])
+@pytest.mark.parametrize("NUM_STAGES", [1])
+def test_mxfp_e8m0_scale_dtype(BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, device):
+    # Regression test for issue #10008: tl.dot_scaled should accept scales whose
+    # dtype is the native float8_e8m0fnu, not only uint8. This runs the matmul
+    # and checks numerical correctness so the rest of the compiler path is
+    # exercised, not just compilation.
+    if not hasattr(torch, "float8_e8m0fnu"):
+        pytest.skip("torch.float8_e8m0fnu is not available in this torch version")
+    M, N, K = 1024, 512, 2048
+
+    torch.manual_seed(42)
+    dtype_src_str = "float8e5"
+    a = torch.randint(20, 40, (M, K), dtype=torch.uint8, device=device).view(torch.float8_e5m2)
+    a_f16 = f8_to_f16(a, dtype_src_str)
+    b = torch.randint(20, 40, (K, N), dtype=torch.uint8, device=device).view(torch.float8_e5m2)
+    b_f16 = f8_to_f16(b, dtype_src_str)
+    a_scale_u8 = torch.randint(64, 130, (M, K // 32), dtype=torch.uint8, device=device)
+    b_scale_u8 = torch.randint(64, 130, (N, K // 32), dtype=torch.uint8, device=device)
+    # Pass the scales using the native E8M0 dtype instead of reinterpreting as uint8.
+    a_scale = a_scale_u8.view(torch.float8_e8m0fnu)
+    b_scale = b_scale_u8.view(torch.float8_e8m0fnu)
+
+    output = torch.empty((M, N), dtype=torch.float32, device=device)
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    mxfp_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, a_scale.stride(0), a.stride(0), a.stride(1), b.stride(0),
+                      b.stride(1), output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES)
+
+    a_scale_f32 = fp8e8m0_to_float32(a_scale_u8).repeat_interleave(32, dim=1)
+    b_scale_f32 = fp8e8m0_to_float32(b_scale_u8).repeat_interleave(32, dim=1)
+    # b_scales are always col major
+    b_scale_f32 = b_scale_f32.T.contiguous()
+    ref_out = torch.matmul(a_f16 * a_scale_f32, b_f16 * b_scale_f32).to(torch.float32)
+    torch.testing.assert_close(ref_out, output.to(torch.float32), atol=1e-4, rtol=0)
+
+
 def _knob_promote_lhs_to_tmem(monkeypatch):
     # Promoting the LHS to TMEM should be patched because it will otherwise
     # unintentionally be enabled for all consecutive tests if using os.environ
