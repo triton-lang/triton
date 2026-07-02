@@ -40,7 +40,7 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   auto numCTAs = gpu::lookupNumCTAs(op);
   bool useTwoCTABarrier = triton::valueFeedsTwoCTAMMA(op->getResult(0));
   bool useMulticast =
-      isa<DescriptorLoadOp>(op) && hasCGABroadcast(memDescType) &&
+      isa<DescriptorLoadLikeOpInterface>(op) && hasCGABroadcast(memDescType) &&
       llvm::any_of(op->getResults(), triton::valueFeedsMulticastMMA);
   auto barrierCGALayout = [&]() -> gpu::CGAEncodingAttr {
     if (!useTwoCTABarrier)
@@ -103,10 +103,9 @@ struct TMAGatherLowering : public OpRewritePattern<DescriptorGatherOp> {
 
     auto createLoad = [&](Value desc, Value barrierAlloc, Value alloc,
                           Value pred, bool useMulticast) {
-      triton::nvidia_gpu::AsyncTMAGatherOp::create(rewriter, op.getLoc(), desc,
-                                                   xOffsets, op.getYOffset(),
-                                                   barrierAlloc, alloc, pred,
-                                                   useMulticast);
+      triton::nvidia_gpu::AsyncTMAGatherOp::create(
+          rewriter, op.getLoc(), desc, xOffsets, op.getYOffset(), barrierAlloc,
+          alloc, pred, useMulticast);
     };
     lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter);
     return success();
