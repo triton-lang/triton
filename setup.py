@@ -375,7 +375,10 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
 
 
-backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
+_in_tree_backends = ["nvidia", "amd"]
+if platform.system() == "Darwin":
+    _in_tree_backends.append("metal")
+backends = [*BackendInstaller.copy(_in_tree_backends), *BackendInstaller.copy_externals()]
 
 
 def get_package_dirs():

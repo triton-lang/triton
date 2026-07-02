@@ -81,6 +81,10 @@ test-proton: all
 	$(PYTEST) third_party/proton/test/test_override.py
 	$(PYTEST) third_party/proton/test/test_instrumentation.py::test_overhead
 
+.PHONY: test-metal
+test-metal: all
+	$(PYTEST) -n $(NUM_PROCS) third_party/metal/test/
+
 .PHONY: test-python
 test-python: test-unit test-plugins test-regression test-interpret test-proton
 
