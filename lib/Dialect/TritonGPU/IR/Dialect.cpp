@@ -2813,16 +2813,34 @@ NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
   }
   // warpSizeK * (warpRepK * VecBitWidth)
   auto tileBitWidthK = bitwidth == 64 ? (1 * 256) : (4 * 64);
+  // FP64 paths:
+  //   instrShape[M] == 8  → legacy m8n8k4 (M=8 warp tile, K=4 implicit).
+  //   instrShape[M] == 16 → m16n8k{4,8,16} family; native K is stored as
+  //                         instrShape.back() when present.
+  unsigned mTile = 16;
+  unsigned f64K = 4; // default native K for the m16 family
+  if (bitwidth == 64) {
+    auto instrShape = getInstrShape();
+    unsigned r = shape.size();
+    if (instrShape[r - 2] == 8) {
+      mTile = 8;
+      f64K = 4;
+    } else if (instrShape.size() > r) {
+      f64K = instrShape.back();
+    }
+  }
+  unsigned kTile =
+      bitwidth == 64 ? f64K : static_cast<unsigned>(tileBitWidthK / bitwidth);
   if (opIdx == 0) {
     // m x k
-    tileSize.push_back(bitwidth == 64 ? 8 : 16);
-    tileSize.push_back(tileBitWidthK / bitwidth);
+    tileSize.push_back(mTile);
+    tileSize.push_back(kTile);
   } else {
     // k x n
     // Hopper path never uses the n value, since this method is only invoked
     // for in-RF (dotOpEnc) operands, but WGMMA only supports in A to be in RF
     // so it's fine if the n is incorrect here
-    tileSize.push_back(tileBitWidthK / bitwidth);
+    tileSize.push_back(kTile);
     tileSize.push_back(8);
   }
 
