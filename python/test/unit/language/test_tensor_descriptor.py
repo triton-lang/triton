@@ -715,6 +715,85 @@ def test_make_tensor_descriptor_matmul_multi_cta_tma_multicast(num_ctas, BLOCK_M
 
 
 @triton.jit
+def matmul_kernel_make_tensor_descriptor_no_loop(a_ptr, b_ptr, c_ptr, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
+                                                 BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+    a_desc = tl.make_tensor_descriptor(a_ptr, [M, K], [K, 1], [BLOCK_M, BLOCK_K])
+    b_desc = tl.make_tensor_descriptor(b_ptr, [K, N], [N, 1], [BLOCK_K, BLOCK_N])
+    c_desc = tl.make_tensor_descriptor(c_ptr, [M, N], [N, 1], [BLOCK_M, BLOCK_N])
+
+    a = a_desc.load([0, 0])
+    b = b_desc.load([0, 0])
+    accumulator = tl.dot(a, b)
+    c_desc.store([0, 0], accumulator.to(a_desc.dtype))
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability(0)[0] != 10, reason="Requires Blackwell MMAv5")
+def test_make_tensor_descriptor_no_loop_tma_load_multicast_two_cta(device, capfd):
+    M, N, K = 256, 256, 64
+    BLOCK_M, BLOCK_N, BLOCK_K = M, N, K
+    torch.manual_seed(42)
+    A = torch.randn((M, K), dtype=torch.float16, device=device)
+    B = torch.randn((K, N), dtype=torch.float16, device=device)
+    C = torch.empty((M, N), dtype=torch.float16, device=device)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        assert align == 128
+        assert stream == 0
+        return torch.empty(size, dtype=torch.int8, device=device)
+
+    triton.set_allocator(alloc_fn)
+
+    with pytest.raises(RuntimeError, match="PassManager::run failed"):
+        matmul_kernel_make_tensor_descriptor_no_loop.warmup(A, B, C, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, grid=(1, ),
+                                                            num_warps=4, num_ctas=4)
+    stderr = capfd.readouterr().err
+    assert "scf.for" not in stderr
+    assert "ttng.async_tma_copy_global_to_local" in stderr
+    assert "!ttg.memdesc<2xi64" in stderr
+    assert "ttng.tc_gen5_mma" in stderr
+    assert "two_ctas" in stderr
+    assert "multicast" in stderr
+
+
+@triton.jit
+def matmul_kernel_make_tensor_descriptor_gather_no_loop(a_ptr, b_ptr, c_ptr, M: tl.constexpr, N: tl.constexpr,
+                                                        K: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+                                                        BLOCK_K: tl.constexpr):
+    a_desc = tl.make_tensor_descriptor(a_ptr, [M, K], [K, 1], [1, BLOCK_K])
+    b_desc = tl.make_tensor_descriptor(b_ptr, [K, N], [N, 1], [BLOCK_K, BLOCK_N])
+    c_desc = tl.make_tensor_descriptor(c_ptr, [M, N], [N, 1], [BLOCK_M, BLOCK_N])
+
+    a = a_desc.gather(tl.arange(0, BLOCK_M), 0)
+    b = b_desc.load([0, 0])
+    accumulator = tl.dot(a, b)
+    c_desc.store([0, 0], accumulator.to(a_desc.dtype))
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability(0)[0] != 10, reason="Requires Blackwell MMAv5")
+def test_make_tensor_descriptor_no_loop_tma_gather_multicast_two_cta_rejects_mismatched_offsets(device, capfd):
+    M, N, K = 256, 256, 64
+    BLOCK_M, BLOCK_N, BLOCK_K = M, N, K
+    torch.manual_seed(42)
+    A = torch.randn((M, K), dtype=torch.float16, device=device)
+    B = torch.randn((K, N), dtype=torch.float16, device=device)
+    C = torch.empty((M, N), dtype=torch.float16, device=device)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        assert align == 128
+        assert stream == 0
+        return torch.empty(size, dtype=torch.int8, device=device)
+
+    triton.set_allocator(alloc_fn)
+
+    with pytest.raises(RuntimeError, match="PassManager::run failed"):
+        matmul_kernel_make_tensor_descriptor_gather_no_loop.warmup(A, B, C, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
+                                                                   grid=(1, ), num_warps=4, num_ctas=4)
+    stderr = capfd.readouterr().err
+    assert "ttng.async_tma_gather" in stderr
+    assert "x offsets must have the same row CGA layout as the memdesc" in stderr
+
+
+@triton.jit
 def kernel_make_tensor_descriptor_loop_carried(a_ptr, M, N, MBLOCK: tl.constexpr, NBLOCK: tl.constexpr):
     # Test that descriptors work with
     pid = tl.program_id(0)
