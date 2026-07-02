@@ -163,7 +163,7 @@ class TestMetalCompilerPipeline:
         assert result == (4, 1, 2048)
 
     def test_codegen_implementation(self):
-        """get_codegen_implementation should return min_dot_size."""
+        """get_codegen_implementation should return required keys."""
         from triton.backends.metal.compiler import MetalBackend
         from triton.backends.compiler import GPUTarget
 
@@ -173,4 +173,67 @@ class TestMetalCompilerPipeline:
 
         codegen = backend.get_codegen_implementation(options)
         assert "min_dot_size" in codegen
+        assert "convert_custom_types" in codegen
         assert callable(codegen["min_dot_size"])
+        assert callable(codegen["convert_custom_types"])
+
+
+@requires_metal
+class TestMetalNativeRuntime:
+    """Test the native Metal runtime extension (driver.m)."""
+
+    def test_native_extension_compiles(self):
+        """The ObjC Metal runtime should compile on this system."""
+        from triton.backends.metal.driver import _compile_metal_utils
+        so_path = _compile_metal_utils()
+        import os
+        assert os.path.exists(so_path)
+        assert os.path.getsize(so_path) > 0
+
+    def test_native_extension_loads(self):
+        """The compiled extension should load as a Python module."""
+        from triton.backends.metal.driver import _load_metal_utils
+        mod = _load_metal_utils()
+        assert hasattr(mod, 'init')
+        assert hasattr(mod, 'get_device_name')
+        assert hasattr(mod, 'get_gpu_family')
+        assert hasattr(mod, 'load_binary')
+        assert hasattr(mod, 'dispatch')
+
+    def test_device_detection(self):
+        """Native extension should detect the Metal device."""
+        from triton.backends.metal.driver import _load_metal_utils
+        mod = _load_metal_utils()
+        name = mod.get_device_name()
+        family = mod.get_gpu_family()
+        assert isinstance(name, str)
+        assert len(name) > 0
+        assert family >= 7
+
+    def test_jit_compile_msl(self):
+        """Should JIT-compile MSL source to a pipeline state object."""
+        from triton.backends.metal.driver import _load_metal_utils
+        mod = _load_metal_utils()
+
+        msl = b'''
+#include <metal_stdlib>
+using namespace metal;
+kernel void test_k(device float* out [[buffer(0)]], uint tid [[thread_position_in_grid]]) {
+    out[tid] = float(tid);
+}
+'''
+        pso = mod.load_binary('test_k', msl, 0)
+        assert pso is not None
+
+    def test_dispatch_kernel(self):
+        """Should dispatch a kernel to the GPU without error."""
+        from triton.backends.metal.driver import _load_metal_utils
+        mod = _load_metal_utils()
+
+        msl = b'''
+#include <metal_stdlib>
+using namespace metal;
+kernel void noop_k() {}
+'''
+        pso = mod.load_binary('noop_k', msl, 0)
+        mod.dispatch(pso, 1, 1, 1, 32, 1, 1, 0, ())
