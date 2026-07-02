@@ -187,3 +187,19 @@ def warp_size(_semantic=None):
         constexpr(32): The SIMD group width.
     """
     return core.constexpr(32)
+
+
+# ---------------------------------------------------------------------------
+# FP8 custom type conversion (Metal equivalent of CUDA's convert_custom_float8)
+# ---------------------------------------------------------------------------
+
+
+@core.builtin
+def convert_custom_float8(arg, dst_ty, fp_downcast_rounding=None, _semantic=None):
+    """Convert between FP8 and FP16/FP32 types on Apple Silicon.
+
+    Apple Silicon M2+ (GPU family 8+) supports FP8 via Metal 3.2+.
+    For older hardware, this falls back to software emulation through
+    standard Triton type conversion.
+    """
+    return arg.to(dst_ty, fp_downcast_rounding=fp_downcast_rounding, _semantic=_semantic)
