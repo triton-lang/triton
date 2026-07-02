@@ -467,6 +467,22 @@ class PipelineStagesHook(Protocol):
         ...
 
 
+# The stages-inspection hook's no-argument form returns the (key, hash)
+# identifying the custom pipeline for the compilation cache.  It is consulted
+# on every kernel launch, so the result is memoized per hook object: the
+# key/hash are a property of the hook's code, not of the call site.
+_stages_inspection_memo = None
+
+
+def stages_inspection_key_hash(hook):
+    global _stages_inspection_memo
+    memo = _stages_inspection_memo
+    if memo is None or memo[0] is not hook:
+        key, hash_ = hook()
+        _stages_inspection_memo = memo = (hook, key, hash_)
+    return memo[1], memo[2]
+
+
 class runtime_knobs(base_knobs):
     interpret: env_bool = env_bool("TRITON_INTERPRET")
     # debug is on critical path for kernel launches

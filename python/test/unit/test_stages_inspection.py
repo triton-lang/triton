@@ -62,3 +62,35 @@ def test_inspection(monkeypatch, fresh_knobs, tmp_path: pathlib.Path):
 
     # Check that repros match
     assert golden_repro.replace('k1', 'dummy') == hook_repro.replace('k2', 'dummy')
+
+
+@pytest.mark.skipif(not is_cuda(), reason="only currently tested on CUDA")
+def test_inspection_hash_cached_per_hook(fresh_knobs):
+    # The hook's no-arg form is consulted on every kernel launch to key the
+    # compilation cache; its result must be memoized per hook object so an
+    # expensive key computation does not become per-launch overhead.
+    key_calls = 0
+
+    def make_hook(tag):
+
+        def hook(self=None, stages=None, options=None, language=None, capability=None):
+            if all(arg is None for arg in (stages, options, language, capability)):
+                nonlocal key_calls
+                key_calls += 1
+                return tag, hashlib.sha256(tag.encode('utf-8')).hexdigest()
+
+        return hook
+
+    @triton.jit
+    def k():
+        return
+
+    fresh_knobs.runtime.add_stages_inspection_hook = make_hook("first")
+    for _ in range(4):
+        k[(1, )]()
+    assert key_calls == 1
+
+    # Installing a different hook object must re-derive the hash.
+    fresh_knobs.runtime.add_stages_inspection_hook = make_hook("second")
+    k[(1, )]()
+    assert key_calls == 2
