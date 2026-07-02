@@ -221,6 +221,136 @@ static PyObject *py_dispatch(PyObject *self, PyObject *args) {
   Py_RETURN_NONE;
 }
 
+static PyObject *py_alloc_buffer(PyObject *self, PyObject *args) {
+  Py_ssize_t size;
+  if (!PyArg_ParseTuple(args, "n", &size)) {
+    return NULL;
+  }
+  if (metal_init() != 0) {
+    PyErr_SetString(PyExc_RuntimeError, "Metal not initialized");
+    return NULL;
+  }
+  id<MTLBuffer> buf =
+      [g_device newBufferWithLength:size
+                            options:MTLResourceStorageModeShared];
+  if (buf == nil) {
+    PyErr_SetString(PyExc_MemoryError, "Failed to allocate Metal buffer");
+    return NULL;
+  }
+  return PyCapsule_New((__bridge_retained void *)buf, "metal_buffer", NULL);
+}
+
+static PyObject *py_buffer_write(PyObject *self, PyObject *args) {
+  PyObject *buf_capsule;
+  const char *data;
+  Py_ssize_t data_len;
+  Py_ssize_t offset;
+  if (!PyArg_ParseTuple(args, "Os#n", &buf_capsule, &data, &data_len,
+                        &offset)) {
+    return NULL;
+  }
+  id<MTLBuffer> buf = (__bridge id<MTLBuffer>)PyCapsule_GetPointer(
+      buf_capsule, "metal_buffer");
+  if (buf == nil) {
+    PyErr_SetString(PyExc_RuntimeError, "Invalid buffer");
+    return NULL;
+  }
+  memcpy((char *)[buf contents] + offset, data, data_len);
+  Py_RETURN_NONE;
+}
+
+static PyObject *py_buffer_read(PyObject *self, PyObject *args) {
+  PyObject *buf_capsule;
+  Py_ssize_t offset, size;
+  if (!PyArg_ParseTuple(args, "Onn", &buf_capsule, &offset, &size)) {
+    return NULL;
+  }
+  id<MTLBuffer> buf = (__bridge id<MTLBuffer>)PyCapsule_GetPointer(
+      buf_capsule, "metal_buffer");
+  if (buf == nil) {
+    PyErr_SetString(PyExc_RuntimeError, "Invalid buffer");
+    return NULL;
+  }
+  return PyBytes_FromStringAndSize((char *)[buf contents] + offset, size);
+}
+
+static PyObject *py_dispatch_with_buffers(PyObject *self, PyObject *args) {
+  PyObject *pso_capsule;
+  int grid_x, grid_y, grid_z;
+  int threads_x, threads_y, threads_z;
+  int shared_memory;
+  PyObject *buffer_list;
+  PyObject *bytes_list;
+
+  if (!PyArg_ParseTuple(args, "OiiiiiiiOO", &pso_capsule, &grid_x, &grid_y,
+                        &grid_z, &threads_x, &threads_y, &threads_z,
+                        &shared_memory, &buffer_list, &bytes_list)) {
+    return NULL;
+  }
+
+  if (metal_init() != 0) {
+    PyErr_SetString(PyExc_RuntimeError, "Metal not initialized");
+    return NULL;
+  }
+
+  id<MTLComputePipelineState> pso =
+      (__bridge id<MTLComputePipelineState>)PyCapsule_GetPointer(pso_capsule,
+                                                                 "metal_pso");
+  if (pso == nil) {
+    PyErr_SetString(PyExc_RuntimeError, "Invalid pipeline state");
+    return NULL;
+  }
+
+  id<MTLCommandBuffer> cmdBuffer = [g_queue commandBuffer];
+  id<MTLComputeCommandEncoder> encoder = [cmdBuffer computeCommandEncoder];
+  [encoder setComputePipelineState:pso];
+
+  if (shared_memory > 0) {
+    [encoder setThreadgroupMemoryLength:shared_memory atIndex:0];
+  }
+
+  // Bind MTLBuffers
+  if (PyList_Check(buffer_list)) {
+    Py_ssize_t n = PyList_Size(buffer_list);
+    for (Py_ssize_t i = 0; i < n; i++) {
+      PyObject *item = PyList_GetItem(buffer_list, i);
+      if (item == Py_None)
+        continue;
+      id<MTLBuffer> buf = (__bridge id<MTLBuffer>)PyCapsule_GetPointer(
+          item, "metal_buffer");
+      if (buf != nil) {
+        [encoder setBuffer:buf offset:0 atIndex:i];
+      }
+    }
+  }
+
+  // Bind scalar bytes args (after buffers)
+  if (PyList_Check(bytes_list)) {
+    Py_ssize_t n = PyList_Size(bytes_list);
+    Py_ssize_t buf_count =
+        PyList_Check(buffer_list) ? PyList_Size(buffer_list) : 0;
+    for (Py_ssize_t i = 0; i < n; i++) {
+      PyObject *item = PyList_GetItem(bytes_list, i);
+      if (item == Py_None)
+        continue;
+      if (PyBytes_Check(item)) {
+        Py_ssize_t len = PyBytes_Size(item);
+        const char *data = PyBytes_AsString(item);
+        [encoder setBytes:data length:len atIndex:buf_count + i];
+      }
+    }
+  }
+
+  MTLSize gridSize = MTLSizeMake(grid_x, grid_y, grid_z);
+  MTLSize tgSize = MTLSizeMake(threads_x, threads_y, threads_z);
+  [encoder dispatchThreadgroups:gridSize threadsPerThreadgroup:tgSize];
+  [encoder endEncoding];
+  [cmdBuffer commit];
+  [cmdBuffer waitUntilCompleted];
+
+  Py_RETURN_NONE;
+}
+
 static PyMethodDef MetalMethods[] = {
     {"init", py_metal_init, METH_NOARGS, "Initialize Metal device"},
     {"get_device_name", py_get_device_name, METH_NOARGS,
@@ -232,6 +362,11 @@ static PyMethodDef MetalMethods[] = {
      METH_NOARGS, "Get max threads per threadgroup"},
     {"load_binary", py_load_binary, METH_VARARGS, "Load a metallib/MSL binary"},
     {"dispatch", py_dispatch, METH_VARARGS, "Dispatch a Metal compute kernel"},
+    {"alloc_buffer", py_alloc_buffer, METH_VARARGS, "Allocate a Metal buffer"},
+    {"buffer_write", py_buffer_write, METH_VARARGS, "Write data to buffer"},
+    {"buffer_read", py_buffer_read, METH_VARARGS, "Read data from buffer"},
+    {"dispatch_with_buffers", py_dispatch_with_buffers, METH_VARARGS,
+     "Dispatch with explicit buffer/bytes bindings"},
     {NULL, NULL, 0, NULL}};
 
 static struct PyModuleDef metalmodule = {PyModuleDef_HEAD_INIT, "metal_utils",
