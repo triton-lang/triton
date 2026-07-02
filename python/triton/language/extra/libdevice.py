@@ -750,6 +750,22 @@ def fmod(arg0, arg1):
     ...
 
 
+def fmax(arg0, arg1):
+    ...
+
+
+def fmin(arg0, arg1):
+    ...
+
+
+def max(arg0, arg1):
+    ...
+
+
+def min(arg0, arg1):
+    ...
+
+
 def remainder(arg0, arg1):
     ...
 
