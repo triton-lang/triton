@@ -176,3 +176,44 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %9 : tensor<64x32xf32, #mma1>
   }
 }
+
+
+// -----
+
+#blockedA_twocta = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
+#blockedB_twocta = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [0, 0]]}>
+#sharedA_twocta = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0], [2, 0]]}>
+#sharedB_twocta = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1], [0, 0]]}>
+#mma_bar_twocta = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2]]}>
+#smem = #ttg.shared_memory
+#tmem_twocta = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0], [2, 0]], twoCTAs = true>
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-DAG: #[[$TMA_BAR:.*]] = #ttg.swizzled_shared<{{.*}}CGALayout = {{\[\[0\], \[1\]\]}}{{.*}}>
+  // CHECK-LABEL: @tma_load_feeds_two_cta_multicast_mmav5
+  // CHECK: ttng.tensormap_create
+  // CHECK: [[DESC:%.*]] = ttng.reinterpret_tensor_descriptor
+  // CHECK: ttg.local_alloc : () -> !ttg.memdesc<2xi64, #[[$TMA_BAR]]
+  // CHECK: ttng.async_tma_copy_global_to_local [[DESC]]{{.*}} {multicast} : {{.*}}!ttg.memdesc<2xi64, #[[$TMA_BAR]]
+  tt.func public @tma_load_feeds_two_cta_multicast_mmav5(
+      %ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+      %a: !ttg.memdesc<512x64xf16, #sharedA_twocta, #smem, mutable>,
+      %acc: !ttg.memdesc<512x128xf32, #tmem_twocta, #ttng.tensor_memory, mutable>,
+      %bar: !ttg.memdesc<4xi64, #mma_bar_twocta, #smem, mutable>) {
+    %true = arith.constant true
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c64_i32 = arith.constant 64 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c128_i64 = arith.constant 128 : i64
+    %desc = tt.make_tensor_descriptor %ptr, [%c64_i32, %c128_i32], [%c128_i64, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x128xf16, #sharedB_twocta>
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<64x128xf16, #sharedB_twocta> -> tensor<64x128xf16, #blockedB_twocta>
+    %1 = ttg.local_alloc %0 : (tensor<64x128xf16, #blockedB_twocta>) -> !ttg.memdesc<64x128xf16, #sharedB_twocta, #smem, mutable>
+    ttng.tc_gen5_mma %a, %1, %acc, %true, %true, %bar[%true] {is_async, multicast, two_ctas} :
+      !ttg.memdesc<512x64xf16, #sharedA_twocta, #smem, mutable>,
+      !ttg.memdesc<64x128xf16, #sharedB_twocta, #smem, mutable>,
+      !ttg.memdesc<512x128xf32, #tmem_twocta, #ttng.tensor_memory, mutable>,
+      !ttg.memdesc<4xi64, #mma_bar_twocta, #smem, mutable>
+    tt.return
+  }
+}
