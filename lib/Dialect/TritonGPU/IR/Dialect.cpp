@@ -4169,6 +4169,129 @@ std::string mlir::triton::gpu::getDistributedLayoutStr(LinearLayout &ll,
   return layoutStr;
 }
 
+std::string mlir::triton::gpu::getTensorMemoryLayoutStr(LinearLayout &ll,
+                                                        bool useHWPointOfView) {
+  auto inDimNames = llvm::to_vector(ll.getInDimNames());
+  auto *ctx = inDimNames[0].getContext();
+  StringAttr kRow = StringAttr::get(ctx, "row");
+  StringAttr kCol = StringAttr::get(ctx, "col");
+  StringAttr kBlock = StringAttr::get(ctx, "block");
+  assert(ll.hasInDim(kRow) && ll.hasInDim(kCol) &&
+         "tensor memory layouts need row and col input dimensions");
+
+  auto shape = convertType<int64_t>(llvm::to_vector(ll.getOutDimSizes()));
+  int64_t tensorSize = ll.getTotalOutDimSize();
+  unsigned numRows = ll.getInDimSize(kRow);
+  unsigned numCols = ll.getInDimSize(kCol);
+  unsigned numBlocks = ll.hasInDim(kBlock) ? ll.getInDimSize(kBlock) : 1;
+  std::vector<std::string> elementMapping(tensorSize);
+  std::vector<std::string> addressMapping;
+  addressMapping.reserve(numBlocks * numRows * numCols);
+
+  auto getTensorMemoryAddress = [&](unsigned block, unsigned row,
+                                    unsigned col) {
+    std::string address;
+    int padding = numCharacterPadding(block, numBlocks) +
+                  numCharacterPadding(row, numRows) +
+                  numCharacterPadding(col, numCols);
+    for (int i = 0; i < padding; i++)
+      address += " ";
+    if (numBlocks > 1)
+      address += "B" + std::to_string(block) + ":";
+    address += "R" + std::to_string(row) + ":C" + std::to_string(col);
+    return address;
+  };
+
+  for (unsigned block = 0; block < numBlocks; block++) {
+    for (unsigned row = 0; row < numRows; row++) {
+      for (unsigned col = 0; col < numCols; col++) {
+        SmallVector<std::pair<StringAttr, int32_t>> inputs = {
+            {kRow, static_cast<int32_t>(row)},
+            {kCol, static_cast<int32_t>(col)},
+        };
+        if (ll.hasInDim(kBlock))
+          inputs.push_back({kBlock, static_cast<int32_t>(block)});
+
+        SmallVector<std::pair<StringAttr, int32_t>> outputs = ll.apply(inputs);
+        int32_t linearizedIdx = 0;
+        int stride = 1;
+        for (int i = outputs.size() - 1; i >= 0; i--) {
+          linearizedIdx += outputs[i].second * stride;
+          stride *= shape[i];
+        }
+
+        std::string &value = elementMapping[linearizedIdx];
+        if (!value.empty())
+          value += "|";
+        value += getTensorMemoryAddress(block, row, col);
+
+        std::string tensorInfo = "(";
+        for (int i = 0; i < outputs.size(); i++) {
+          if (i > 0)
+            tensorInfo += ",";
+          tensorInfo += paddedString(outputs[i].second, shape[i]);
+        }
+        tensorInfo += ")";
+        addressMapping.push_back(tensorInfo);
+      }
+    }
+  }
+
+  std::string layoutStr;
+  if (!useHWPointOfView) {
+    int rank = ll.getNumOutDims();
+    bool newLine = true;
+    for (int i = 0; i < tensorSize; i++) {
+      auto indices = delinearizeIndex(i, shape);
+      int numOpenBracket = 0;
+      for (int j = rank - 1; j >= 0; j--) {
+        if (indices[j] % shape[j] != 0)
+          break;
+        layoutStr += "[";
+        numOpenBracket++;
+      }
+      if (newLine) {
+        for (int j = 0; j < rank - numOpenBracket; j++)
+          layoutStr += " ";
+        newLine = false;
+      }
+
+      layoutStr += elementMapping[i];
+      auto nextIndices = delinearizeIndex(i + 1, shape);
+      for (int j = rank - 1; j >= 0; j--) {
+        if (nextIndices[j] % shape[j] != 0)
+          break;
+        layoutStr += "]";
+      }
+      if (nextIndices.back() % shape.back() == 0) {
+        layoutStr += "\n";
+        newLine = true;
+      } else {
+        layoutStr += ", ";
+      }
+    }
+  } else {
+    uint32_t idx = 0;
+    for (unsigned block = 0; block < numBlocks; block++) {
+      if (numBlocks > 1)
+        layoutStr += "Block" + std::to_string(block) + ":\n";
+      for (unsigned row = 0; row < numRows; row++) {
+        for (unsigned col = 0; col < numCols; col++) {
+          layoutStr += addressMapping[idx];
+          if (col < numCols - 1)
+            layoutStr += ", ";
+          idx++;
+        }
+        layoutStr += "\n";
+        if ((row + 1) % 32 == 0 && row + 1 < numRows)
+          layoutStr += "\n";
+      }
+    }
+  }
+
+  return layoutStr;
+}
+
 template <typename T>
 llvm::SmallVector<T>
 mlir::triton::gpu::expandMatrixShapeWithBatch(llvm::ArrayRef<T> s) {
@@ -4199,24 +4322,29 @@ mlir::triton::gpu::expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o) {
   return expanded;
 }
 
-std::string mlir::triton::gpu::getLayoutStr(RankedTensorType tensorType,
+std::string mlir::triton::gpu::getLayoutStr(TensorOrMemDesc tensorOrMemDesc,
                                             bool useHWPointOfView) {
-  auto layout = tensorType.getEncoding();
-  LinearLayout ll = triton::gpu::toLinearLayout(tensorType.getShape(), layout);
+  auto layout = tensorOrMemDesc.getEncoding();
+  LinearLayout ll = triton::gpu::toLinearLayout(tensorOrMemDesc);
 
-  // tensorType is needed later on (e.g., getDimSize(j)), so we still have to
-  // pass it as a param
-  // TODO: Pass TensorOrMemDesc instead of RankedTensorType in
-  // triton-tensor-layout.cpp
   if (mlir::isa<SharedEncodingTrait>(layout)) {
     return getSharedLayoutStr(ll, useHWPointOfView);
   } else if (mlir::isa<DistributedEncodingTrait>(layout)) {
     return getDistributedLayoutStr(ll, useHWPointOfView);
+  } else if (mlir::isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
+                       triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+                 layout)) {
+    return getTensorMemoryLayoutStr(ll, useHWPointOfView);
   }
 
   // else unimplemented, return error
   llvm::report_fatal_error("Unimplemented usage of getLayoutStr");
   return "";
+}
+
+std::string mlir::triton::gpu::getLayoutStr(RankedTensorType tensorType,
+                                            bool useHWPointOfView) {
+  return getLayoutStr(cast<TensorOrMemDesc>(tensorType), useHWPointOfView);
 }
 
 void mlir::triton::gpu::dumpLayout(RankedTensorType tensorType) {

@@ -5,8 +5,10 @@ import pytest
 
 import torch
 import triton
+from triton._filecheck import run_parser
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
+from triton.experimental.gluon.language.nvidia.blackwell import TensorMemoryLayout, allocate_tensor_memory
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
@@ -19,8 +21,12 @@ def ttl_cli():
     else:
         pytest.skip("triton-tensor-layout binary not found")
 
-    def run(layout_str: str, shape: list[int], use_hw_view: bool = False) -> str:
-        tensor_str = "tensor<" + "x".join(str(s) for s in shape) + "xf16>"
+    def run(layout_str: str, shape: list[int], use_hw_view: bool = False, is_memdesc: bool = False) -> str:
+        shape_str = "x".join(str(s) for s in shape)
+        if is_memdesc:
+            tensor_str = f"!ttg.memdesc<{shape_str}xf16, {layout_str}, #ttng.tensor_memory>"
+        else:
+            tensor_str = f"tensor<{shape_str}xf16>"
         cmd = [str(binary), "-l", layout_str, "-t", tensor_str]
         if use_hw_view:
             cmd.append("-use-hw-view")
@@ -182,6 +188,33 @@ def test_format_view_shared_linear_layout(offset_bases, block_bases, alignment, 
 
     layout = ttgl.SharedLinearLayout(offset_bases, block_bases, alignment)
     assert layout.format_tensor_view(shape) == ttl_cli(to_ttg_attr(layout), shape)
+
+
+def test_format_view_tensor_memory_layout(ttl_cli):
+
+    def to_ttng_attr(layout):
+        return (f"#ttng.tensor_memory_encoding<blockM = {layout.block[0]}, blockN = {layout.block[1]}, "
+                f"colStride = {layout.col_stride}>")
+
+    shape = [128, 4]
+    layout = TensorMemoryLayout([128, 4], col_stride=1)
+    layout_str = to_ttng_attr(layout)
+    assert layout.format_tensor_view(shape) == ttl_cli(layout_str, shape, is_memdesc=True)
+    assert layout.format_hardware_view(shape) == ttl_cli(layout_str, shape, use_hw_view=True, is_memdesc=True)
+
+
+def test_format_view_tensor_memory_kernel(capsys):
+
+    @gluon.jit
+    def kernel():
+        layout: ttgl.constexpr = TensorMemoryLayout([128, 4], col_stride=1)
+        tmem = allocate_tensor_memory(ttgl.float16, [128, 4], layout)
+        ttgl.static_print("tmem hardware view:\n", tmem.type.layout.format_hardware_view(tmem.shape))
+
+    run_parser(kernel)
+    out = capsys.readouterr().out
+    assert "tmem hardware view:" in out
+    assert "( 31,0), ( 31,1), ( 31,2), ( 31,3)\n\n( 32,0)" in out
 
 
 def test_format_view_padded_shared_layout():
