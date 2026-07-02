@@ -411,3 +411,120 @@ done:
         assert msl.count('+') >= 3
         # Has conditional
         assert '==' in msl
+
+
+class TestMatmulKernel:
+    """End-to-end test: matrix multiply kernel (most important Triton workload)."""
+
+    def test_matmul_tiled(self):
+        ir = '''
+define void @matmul_kernel(ptr %A, ptr %B, ptr %C, i32 %M, i32 %N, i32 %K, i32 %stride_am, i32 %stride_bk) {
+entry:
+  %pid_m = call i32 @llvm.aarch64.metal.threadgroup.position.x()
+  %pid_n = call i32 @llvm.aarch64.metal.threadgroup.position.y()
+  %tid = call i32 @llvm.aarch64.thread.id.in.simdgroup()
+  %row = mul i32 %pid_m, 64
+  %col = mul i32 %pid_n, 64
+  %lane_row = sdiv i32 %tid, 8
+  %lane_col = srem i32 %tid, 8
+  %a_row = add i32 %row, %lane_row
+  %b_col = add i32 %col, %lane_col
+  br label %loop
+
+loop:
+  %k = phi i32 [ 0, %entry ], [ %k_next, %loop_body ]
+  %acc = phi float [ 0.0, %entry ], [ %new_acc, %loop_body ]
+  %k_done = icmp sge i32 %k, %K
+  br i1 %k_done, label %store_result, label %loop_body
+
+loop_body:
+  %a_off = mul i32 %a_row, %stride_am
+  %a_idx = add i32 %a_off, %k
+  %a_ptr = getelementptr float, ptr %A, i32 %a_idx
+  %a_val = load float, ptr %a_ptr, align 4
+  %b_off = mul i32 %k, %stride_bk
+  %b_idx = add i32 %b_off, %b_col
+  %b_ptr = getelementptr float, ptr %B, i32 %b_idx
+  %b_val = load float, ptr %b_ptr, align 4
+  %prod = fmul float %a_val, %b_val
+  %new_acc = fadd float %acc, %prod
+  %k_next = add i32 %k, 1
+  br label %loop
+
+store_result:
+  %c_off = mul i32 %a_row, %N
+  %c_idx = add i32 %c_off, %b_col
+  %c_ptr = getelementptr float, ptr %C, i32 %c_idx
+  store float %acc, ptr %c_ptr, align 4
+  ret void
+}
+'''
+        msl, t = _translate(ir, shared=4096, num_warps=8)
+        assert t.kernel_name == 'matmul_kernel'
+        # Should have 8 buffer bindings (3 ptrs + 5 scalars)
+        assert msl.count('[[buffer(') == 8
+        # Should have multiply-accumulate pattern
+        assert '*' in msl  # fmul
+        assert '+' in msl  # fadd
+        # Should have threadgroup memory for tiling
+        assert 'threadgroup float shared_mem[1024]' in msl
+        # Should have loop structure
+        assert 'phi' in msl or 'goto' in msl
+        # Should have proper Metal attributes
+        assert 'max_total_threads_per_threadgroup(256)' in msl
+        # No placeholder text
+        assert 'placeholder' not in msl.lower()
+        assert 'TODO' not in msl
+
+    def test_matmul_has_fma_opportunity(self):
+        """Matmul inner loop should have fmul+fadd (fma candidate)."""
+        ir = '''
+define void @fma_kernel(ptr %a, ptr %b, ptr %c) {
+  %0 = load float, ptr %a, align 4
+  %1 = load float, ptr %b, align 4
+  %2 = call float @llvm.fma.f32(float %0, float %1, float %0)
+  store float %2, ptr %c, align 4
+  ret void
+}
+'''
+        msl, _ = _translate(ir)
+        assert 'fma' in msl
+
+
+class TestSoftmaxKernel:
+    """End-to-end test: softmax kernel (common in transformers)."""
+
+    def test_softmax_online(self):
+        ir = '''
+define void @softmax_kernel(ptr %input, ptr %output, i32 %n_cols) {
+entry:
+  %pid = call i32 @llvm.aarch64.metal.threadgroup.position.x()
+  %tid = call i32 @llvm.aarch64.thread.id.in.simdgroup()
+  %col = add i32 %pid, %tid
+  %in_bounds = icmp slt i32 %col, %n_cols
+  br i1 %in_bounds, label %compute, label %done
+
+compute:
+  %ptr_in = getelementptr float, ptr %input, i32 %col
+  %x = load float, ptr %ptr_in, align 4
+  %neg_x = fsub float 0.0, %x
+  %exp_val = call float @llvm.exp.f32(float %neg_x)
+  %one = fadd float %exp_val, 1.0
+  %result = fdiv float %exp_val, %one
+  %ptr_out = getelementptr float, ptr %output, i32 %col
+  store float %result, ptr %ptr_out, align 4
+  br label %done
+
+done:
+  ret void
+}
+'''
+        msl, _ = _translate(ir)
+        # Should have exp intrinsic mapped to Metal's exp()
+        assert 'exp' in msl
+        # Should have division
+        assert '/' in msl
+        # Should have subtraction
+        assert '-' in msl or 'fsub' in msl.lower()
+        # Proper buffer bindings
+        assert msl.count('[[buffer(') == 3

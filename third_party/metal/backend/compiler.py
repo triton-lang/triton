@@ -696,7 +696,11 @@ class MetalBackend(BaseBackend):
         return {"triton.language.extra.libdevice": libdevice}
 
     def load_dialects(self, ctx):
-        pass
+        try:
+            from triton.backends.metal import metal as metal_module
+            metal_module.load_dialects(ctx)
+        except (ImportError, AttributeError):
+            pass
 
     @staticmethod
     def make_ttir(mod, metadata, opt):
