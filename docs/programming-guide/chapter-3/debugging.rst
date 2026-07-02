@@ -65,7 +65,6 @@ Limitations
 
 The interpreter has several known limitations:
 
-- It does not support operations on :code:`bfloat16` numeric types. To perform operations on :code:`bfloat16` tensors, use :code:`tl.cast(tensor)` to convert the tensor to :code:`float32`.
 - It does not support indirect memory access patterns such as:
 
   .. code-block:: python
