@@ -608,12 +608,12 @@ def test_cluster_barrier_does_not_publish_later_read(device, run_wrapper, monkey
         pytest.param("gather", True, id="gather-missing-barrier"),
         pytest.param("gather", False, id="gather-synchronized"),
         pytest.param("scatter", False, id="scatter-synchronized"),
+        pytest.param("atomic", False, id="atomic-synchronized"),
     ],
 )
-def test_local_gather_scatter_cross_cta_visibility(OP, FAILURE, device, run_wrapper, monkeypatch):
+def test_local_indexed_cross_cta_visibility(OP, FAILURE, device, run_wrapper, monkeypatch):
     if run_wrapper:
-        result = run_in_process(test_local_gather_scatter_cross_cta_visibility,
-                                (OP, FAILURE, device, False, monkeypatch))
+        result = run_in_process(test_local_indexed_cross_cta_visibility, (OP, FAILURE, device, False, monkeypatch))
         if FAILURE:
             assert_expected_cuda_failure(result.exc)
             assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
@@ -651,8 +651,12 @@ def test_local_gather_scatter_cross_cta_visibility(OP, FAILURE, device, run_wrap
                 result = smem.gather(peer_cols, axis=1)
                 # Order peer DSM reads and keep allocations alive until they finish.
                 ttgl.barrier(cluster=True)
-            else:
+            elif OP == "scatter":
                 smem.scatter(values, peer_cols, axis=1)
+                ttgl.barrier(cluster=True)
+                result = smem.load(layout)
+            else:
+                smem.atomic_scatter_add(values, peer_cols, axis=1)
                 ttgl.barrier(cluster=True)
                 result = smem.load(layout)
             ttgl.store(out + offsets, result)
@@ -662,7 +666,8 @@ def test_local_gather_scatter_cross_cta_visibility(OP, FAILURE, device, run_wrap
     layout = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0], cga_layout=[[0, 1]])
     kernel[(1, )](inp, out, layout, OP=OP, FAILURE=FAILURE, num_warps=4, num_ctas=2)
     if not FAILURE:
-        expected = inp.reshape(2, 2, 16).flip(1).reshape(2, 32)
+        peer = inp.reshape(2, 2, 16).flip(1).reshape(2, 32)
+        expected = inp + peer if OP == "atomic" else peer
         torch.testing.assert_close(out, expected)
 
 
