@@ -1495,3 +1495,85 @@ def simdgroup_barrier(_semantic=None):
     return core.extern_elementwise("", "", [], {
         (): ("__metal_simdgroup_barrier", core.dtype("int32")),
     }, is_pure=False, _semantic=_semantic)
+
+
+# ---------------------------------------------------------------------------
+# Metal 4 features (macOS 26+ / MTLLanguageVersion4_0)
+# ---------------------------------------------------------------------------
+
+
+@core.extern
+def simdgroup_matrix_multiply(a, b, _semantic=None):
+    """Metal 4 simdgroup matrix multiply-accumulate (8x8 tiles).
+
+    Uses Apple GPU's hardware matrix units for accelerated matmul.
+    Equivalent to NVIDIA's wmma/mma instructions.
+    """
+    return core.extern_elementwise("", "", [a, b], {
+        (core.dtype("fp16"), core.dtype("fp16")): ("__metal_simdgroup_matrix_multiply_f16", core.dtype("fp16")),
+        (core.dtype("fp32"), core.dtype("fp32")): ("__metal_simdgroup_matrix_multiply_f32", core.dtype("fp32")),
+        (core.dtype("bf16"), core.dtype("bf16")): ("__metal_simdgroup_matrix_multiply_bf16", core.dtype("bf16")),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def simdgroup_load(src, _semantic=None):
+    """Load data into a simdgroup matrix tile from device memory."""
+    return core.extern_elementwise("", "", [src], {
+        (core.dtype("fp16"), ): ("__metal_simdgroup_load_f16", core.dtype("fp16")),
+        (core.dtype("fp32"), ): ("__metal_simdgroup_load_f32", core.dtype("fp32")),
+        (core.dtype("bf16"), ): ("__metal_simdgroup_load_bf16", core.dtype("bf16")),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def simdgroup_store(val, dst, _semantic=None):
+    """Store simdgroup matrix tile data to device memory."""
+    return core.extern_elementwise("", "", [val, dst], {
+        (core.dtype("fp16"), core.dtype("fp16")): ("__metal_simdgroup_store_f16", core.dtype("fp16")),
+        (core.dtype("fp32"), core.dtype("fp32")): ("__metal_simdgroup_store_f32", core.dtype("fp32")),
+        (core.dtype("bf16"), core.dtype("bf16")): ("__metal_simdgroup_store_bf16", core.dtype("bf16")),
+    }, is_pure=False, _semantic=_semantic)
+
+
+@core.extern
+def atomic_load_explicit(ptr, _semantic=None):
+    """Metal 4 explicit atomic load (relaxed memory order)."""
+    return core.extern_elementwise("", "", [ptr], {
+        (core.dtype("int32"), ): ("__metal_atomic_load_explicit_i32", core.dtype("int32")),
+        (core.dtype("uint32"), ): ("__metal_atomic_load_explicit_u32", core.dtype("uint32")),
+        (core.dtype("fp32"), ): ("__metal_atomic_load_explicit_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def atomic_store_explicit(ptr, val, _semantic=None):
+    """Metal 4 explicit atomic store (relaxed memory order)."""
+    return core.extern_elementwise("", "", [ptr, val], {
+        (core.dtype("int32"), core.dtype("int32")): ("__metal_atomic_store_explicit_i32", core.dtype("int32")),
+        (core.dtype("uint32"), core.dtype("uint32")): ("__metal_atomic_store_explicit_u32", core.dtype("uint32")),
+        (core.dtype("fp32"), core.dtype("fp32")): ("__metal_atomic_store_explicit_f32", core.dtype("fp32")),
+    }, is_pure=False, _semantic=_semantic)
+
+
+@core.extern
+def threadgroup_async_copy(dst, src, num_elements, _semantic=None):
+    """Asynchronous threadgroup memory copy (Metal 4).
+
+    Initiates an async copy from device to threadgroup memory,
+    similar to CUDA's cp.async.
+    """
+    return core.extern_elementwise("", "", [dst, src, num_elements], {
+        (core.dtype("fp32"), core.dtype("fp32"), core.dtype("int32")):
+            ("__metal_threadgroup_async_copy_f32", core.dtype("int32")),
+        (core.dtype("fp16"), core.dtype("fp16"), core.dtype("int32")):
+            ("__metal_threadgroup_async_copy_f16", core.dtype("int32")),
+    }, is_pure=False, _semantic=_semantic)
+
+
+@core.extern
+def threadgroup_async_copy_wait(_semantic=None):
+    """Wait for all pending async threadgroup copies to complete."""
+    return core.extern_elementwise("", "", [], {
+        (): ("__metal_threadgroup_async_copy_wait", core.dtype("int32")),
+    }, is_pure=False, _semantic=_semantic)

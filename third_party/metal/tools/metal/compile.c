@@ -100,8 +100,16 @@ MTLTritonResult mtl_load_binary(const void *binary, size_t binary_size,
                 return MTL_TRITON_ERROR_LIBRARY_LOAD;
             }}
             MTLCompileOptions *opts = [[MTLCompileOptions alloc] init];
-            opts.fastMathEnabled = YES;
-            opts.languageVersion = MTLLanguageVersion3_0;
+            if (@available(macOS 26.0, *)) {{
+                opts.mathMode = MTLMathModeFast;
+                opts.languageVersion = MTLLanguageVersion4_0;
+            }} else if (@available(macOS 15.0, *)) {{
+                opts.mathMode = MTLMathModeFast;
+                opts.languageVersion = MTLLanguageVersion3_2;
+            }} else {{
+                opts.fastMathEnabled = YES;
+                opts.languageVersion = MTLLanguageVersion3_1;
+            }}
             state->library = [state->device newLibraryWithSource:source
                                                          options:opts
                                                            error:&error];

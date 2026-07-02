@@ -47,9 +47,14 @@ static PyObject* py_get_gpu_family(PyObject* self, PyObject* args) {
         return PyLong_FromLong(0);
     }
 
-    // Detect GPU family
+    // Detect GPU family (Apple10 = M4, Apple9 = M3, Apple8 = M2, Apple7 = M1)
+    if (@available(macOS 26.0, *)) {
+        if ([g_device supportsFamily:MTLGPUFamilyApple10]) {
+            return PyLong_FromLong(10);  // M4
+        }
+    }
     if ([g_device supportsFamily:MTLGPUFamilyApple9]) {
-        return PyLong_FromLong(9);  // M3+
+        return PyLong_FromLong(9);  // M3
     } else if ([g_device supportsFamily:MTLGPUFamilyApple8]) {
         return PyLong_FromLong(8);  // M2
     } else if ([g_device supportsFamily:MTLGPUFamilyApple7]) {
@@ -107,15 +112,19 @@ static PyObject* py_load_binary(PyObject* self, PyObject* args) {
         }
 
         MTLCompileOptions* options = [[MTLCompileOptions alloc] init];
-        if (@available(macOS 15.0, *)) {
+        if (@available(macOS 26.0, *)) {
             options.mathMode = MTLMathModeFast;
+            options.languageVersion = MTLLanguageVersion4_0;
+        } else if (@available(macOS 15.0, *)) {
+            options.mathMode = MTLMathModeFast;
+            options.languageVersion = MTLLanguageVersion3_2;
         } else {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
             options.fastMathEnabled = YES;
 #pragma clang diagnostic pop
+            options.languageVersion = MTLLanguageVersion3_1;
         }
-        options.languageVersion = MTLLanguageVersion3_1;
 
         library = [g_device newLibraryWithSource:source options:options error:&error];
         if (library == nil) {

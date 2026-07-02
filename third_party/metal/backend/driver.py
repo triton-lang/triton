@@ -36,14 +36,20 @@ def _metal_is_available():
 
 @functools.lru_cache()
 def _get_metal_gpu_family():
-    """Detect Apple GPU family using system_profiler."""
+    """Detect Apple GPU family using system_profiler.
+
+    Returns the GPU family number:
+      10 = M4 (Apple10, Metal 4 native)
+       9 = M3 (Apple9)
+       8 = M2 (Apple8)
+       7 = M1 (Apple7, minimum supported)
+    """
     try:
         result = subprocess.check_output(
             ["system_profiler", "SPDisplaysDataType"],
             stderr=subprocess.DEVNULL, timeout=10
         ).decode("utf-8")
 
-        # Detect Apple Silicon chip generation
         if "Apple M4" in result:
             return 10
         elif "Apple M3" in result:
@@ -52,7 +58,6 @@ def _get_metal_gpu_family():
             return 8
         elif "Apple M1" in result:
             return 7
-        # Fallback to apple7 as minimum supported
         if "Apple" in result:
             return 7
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
