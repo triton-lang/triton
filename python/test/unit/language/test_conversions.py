@@ -311,6 +311,45 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
 
     upcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), *stuff, device=device)
 
+
+@pytest.mark.parametrize("src_dtype, dst_dtype", [
+    ('float8e4b8', 'float16'),
+    ('float8e4b8', 'bfloat16'),
+    ('float8e4b8', 'float32'),
+    ('float8e5b16', 'float16'),
+    ('float8e5b16', 'bfloat16'),
+    ('float8e5b16', 'float32'),
+])
+def test_typeconvert_upcast_fnuz_nan(src_dtype, dst_dtype, device):
+    # 0x80 is the only NaN encoding in the FNUZ fp8 formats (float8e4b8 == e4m3fnuz,
+    # float8e5b16 == e5m2fnuz): the -0 slot is repurposed as the single NaN, so
+    # upcasting 0x80 must produce a NaN, not a finite -0.0. On AMD targets without
+    # native FNUZ-fp8 conversion (everything except CDNA3) the upcast is emulated in
+    # software and used to drop the NaN. See triton-lang/triton#10745.
+    if is_cuda():
+        pytest.skip("FNUZ fp8 upcast is an AMD-backend software path")
+    if is_hip():
+        if is_hip_rdna3():
+            pytest.skip(f"{src_dtype} is not supported on AMDGPU RDNA3")
+        if is_hip_cdna2():
+            pytest.skip(f"{src_dtype} is not supported on current AMD GPU")
+
+    @triton.jit
+    def upcast_nan_kernel(src_ptr, dst_ptr, N: tl.constexpr):
+        idxs = tl.arange(0, N)
+        x = tl.load(src_ptr + idxs)
+        tl.store(dst_ptr + idxs, x.to(dst_ptr.dtype.element_ty))
+
+    N = 4
+    src_int = torch.full((N, ), 0x80, dtype=torch.uint8, device=device)
+    src = triton.reinterpret(src_int, getattr(tl, src_dtype))
+    dst = torch.empty((N, ), dtype=getattr(torch, dst_dtype), device=device)
+    upcast_nan_kernel[(1, )](src, dst, N)
+
+    assert torch.isnan(dst).all(), \
+        f"{src_dtype}->{dst_dtype}: upcast of 0x80 gave {dst.tolist()}, expected NaN"
+
+
 @pytest.mark.parametrize("src_dtype, dst_dtype, rounding, max_repr", [
     ('float32', 'float16', 'rtne', 0x477fe000),
     ('float32', 'float16', 'rtz', 0x477fe000),

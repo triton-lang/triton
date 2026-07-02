@@ -968,11 +968,6 @@ public:
 
     Value v8 = b.bitcast(v, i8_ty);
     Value vAbs = b.and_(v8, b.i8_val(0x7F));
-    // Check NaN (1.0000.000 in E4M3FNUZ)
-    // Pick an arbitrary number which represents NaN in fp16 (exp=11111 and mant
-    // != 0)
-    a = b.select(b.icmp_eq(v8, b.i8_val(0x80)), b.i16_val(0x7E00), a);
-
     // Check denorms and zero
     // Here we use a LUT to map S.0000.000 ~ S.0000.111 to its corresponding
     // fp16 value Minimum subnormal value in E4M3FNUZ is 2^-10
@@ -993,6 +988,12 @@ public:
 
     // Set sign
     a = b.or_(a, sign);
+
+    // NaN: 0x80 is the only NaN encoding in E4M3FNUZ. Apply the guard as the
+    // final write -- the denorm/zero LUT above matches vAbs==0 (0x80 & 0x7F) and
+    // would otherwise overwrite the NaN with 0x0000, then the sign re-apply
+    // would yield -0.0. Writing NaN last gives 0x7E00 exactly.
+    a = b.select(b.icmp_eq(v8, b.i8_val(0x80)), b.i16_val(0x7E00), a);
     a = b.bitcast(a, f16_ty);
 
     return a;
@@ -1154,6 +1155,11 @@ public:
     auto o12 = b.select(e_is_one, o2, o1);
     auto o = b.select(e_is_zero, o0, o12);
 
+    // NaN: 0x80 is the only NaN encoding in E5M2FNUZ; there was no guard, so the
+    // e_is_zero branch produced sign|(m>>1) = -0.0. Guard it as the final write.
+    Value v8 = b.bitcast(v, i8_ty);
+    o = b.select(b.icmp_eq(v8, b.i8_val(0x80)), b.int_val(16, 0x7E00), o);
+
     return b.bitcast(o, f16_ty);
   }
 
@@ -1302,8 +1308,15 @@ public:
     // Unpack the 2 bfloat16 values and return them
     auto bf16x2VecTy = vec_ty(bf16_ty, 2);
     out0 = b.bitcast(out0, bf16x2VecTy);
-    return {b.extract_element(bf16_ty, out0, b.i32_val(0)),
-            b.extract_element(bf16_ty, out0, b.i32_val(1))};
+    Value r0 = b.extract_element(bf16_ty, out0, b.i32_val(0));
+    Value r1 = b.extract_element(bf16_ty, out0, b.i32_val(1));
+    // NaN: 0x80 is the only NaN encoding in E4M3FNUZ. The abs-mask zeros the
+    // magnitude and the sign is OR'd back, giving -0.0; guard each lane to the
+    // bf16 NaN 0x7FC0.
+    Value nanBf16 = b.bitcast(b.i16_val(0x7FC0), bf16_ty);
+    r0 = b.select(b.icmp_eq(v[0], b.i8_val(0x80)), nanBf16, r0);
+    r1 = b.select(b.icmp_eq(v[1], b.i8_val(0x80)), nanBf16, r1);
+    return {r0, r1};
   }
 
 private:
