@@ -37,6 +37,10 @@ class Autotuner(KernelInterface):
         self.cache: Dict[Tuple, Config] = {}
         self.arg_names = arg_names
         self.cache_results = (cache_results or knobs.autotuning.cache) and not knobs.runtime.interpret
+        # Custom benchmark functions may depend on arbitrary Python helpers, so
+        # disk cache keys cannot reliably track their full behavior.
+        if do_bench is not None or warmup is not None or rep is not None or use_cuda_graph:
+            self.cache_results = False
 
         # Reset to zero or restore values
         self.reset_to_zero = []
@@ -462,7 +466,9 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     :type rep: int
     :param do_bench: a benchmark function to measure the time of each run.
     :type do_bench: lambda fn, quantiles
-    :param cache_results: whether to cache autotune timings to disk.  Defaults to False.
+    :param cache_results: whether to cache autotune timings to disk. Disabled when
+        a custom benchmark function or deprecated benchmark option is provided.
+        Defaults to False.
     "type cache_results: bool
     """
 
