@@ -278,4 +278,21 @@ tt.func @missing_barrier_reused_allocation(%A: !tt.ptr<f16>, %B: !tt.ptr<f16>) {
   tt.return
 }
 
+// Two async copies into the same buffer need no CTA barrier between them: async DMA
+// copies into LDS are ordered by the async queue + commit/wait tokens, not by a
+// workgroup barrier, so the barrier the stock analysis inserts between them is
+// redundant. The read side is unaffected (a consumer is still ordered by its
+// async_wait).
+// CHECK-LABEL: async_copy_to_async_copy_no_barrier
+tt.func @async_copy_to_async_copy_no_barrier(%A: !tt.ptr<f16>) {
+  %a_ptr = tt.splat %A : !tt.ptr<f16> -> tensor<16x16x!tt.ptr<f16>, #AL>
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %1 = ttg.async_copy_global_to_local %a_ptr, %alloc : tensor<16x16x!tt.ptr<f16>, #AL> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // CHECK: ttg.async_copy_global_to_local
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.async_copy_global_to_local
+  %2 = ttg.async_copy_global_to_local %a_ptr, %alloc : tensor<16x16x!tt.ptr<f16>, #AL> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  tt.return
+}
+
 }

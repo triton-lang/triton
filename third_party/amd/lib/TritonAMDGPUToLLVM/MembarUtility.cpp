@@ -52,6 +52,23 @@ bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2,
          isLocalLoadWithAsyncWaitToken(op2);
 }
 
+// Returns true if both operations are async copies into LDS (cp.async /
+// buffer_load_to_lds / async TDM copy). Such DMA copies are ordered by the
+// async queue and the commit/wait tokens, not by a CTA barrier, so a barrier
+// inserted purely between two of them is redundant: the stock analysis
+// conservatively emits one because it treats them as ordinary shared-memory
+// writes. The read side is unaffected -- a consumer LocalLoad is still ordered
+// by its async-wait (handled by filterAsyncLocalLoadsDependencies) and the
+// barrier the analysis emits after the AsyncWait.
+bool filterAsyncVsAsyncDependencies(Operation *op1, Operation *op2) {
+  auto isAsyncLoad = [](Operation *op) {
+    return llvm::isa<triton::gpu::AsyncCopyGlobalToLocalOp,
+                     triton::amdgpu::BufferLoadToLocalOp,
+                     triton::amdgpu::AsyncTDMCopyLocalToGlobalOp>(op);
+  };
+  return isAsyncLoad(op1) && isAsyncLoad(op2);
+}
+
 bool filterLDSMemoryBarriersDependencies(Operation *op1, Operation *op2) {
   auto isLDSMemoryBarrierOp = [](Operation *op) {
     return llvm::isa<triton::amdgpu::InitBarrierOp,
@@ -67,6 +84,7 @@ bool filterLDSMemoryBarriersDependencies(Operation *op1, Operation *op2) {
 bool membarFilter(Operation *op1, Operation *op2, bool /*op1IsRead*/,
                   bool /*op2IsRead*/, Allocation *allocation) {
   return (filterAsyncLocalLoadsDependencies(op1, op2, allocation) ||
+          filterAsyncVsAsyncDependencies(op1, op2) ||
           filterLDSMemoryBarriersDependencies(op1, op2));
 }
 } // namespace mlir::triton::AMD
