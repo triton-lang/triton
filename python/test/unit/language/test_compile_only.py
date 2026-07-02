@@ -2,7 +2,37 @@ import triton
 import triton.language as tl
 from triton.backends.compiler import GPUTarget
 import re
+import pytest
 from triton.compiler import ASTSource
+
+
+def test_compile_only_sm90_bf16_reduce_disables_slp(monkeypatch, fresh_triton_cache) -> None:
+
+    class StopAfterOptimize(Exception):
+        pass
+
+    def optimize_module(*args, **kwargs):
+        assert kwargs["disable_slp_vectorizer"]
+        raise StopAfterOptimize
+
+    monkeypatch.setattr("triton.backends.nvidia.compiler.llvm.optimize_module", optimize_module)
+
+    @triton.jit
+    def reduce_kernel(in_ptr, out_ptr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        values = tl.load(in_ptr + offsets).to(tl.float32)
+        tl.store(out_ptr, tl.sum(values, axis=0))
+
+    with pytest.raises(StopAfterOptimize):
+        triton.compile(
+            ASTSource(
+                fn=reduce_kernel,
+                signature={"in_ptr": "*bf16", "out_ptr": "*fp32", "BLOCK": "constexpr"},
+                constexprs={"BLOCK": 128},
+            ),
+            target=GPUTarget("cuda", 90, 32),
+            options={"num_warps": 1},
+        )
 
 
 def test_compile_only_sm100() -> None:
