@@ -1882,22 +1882,83 @@ def test_tensor_atomic_cas_multicta_result(size, device):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("sem", [None, "acquire", "release", "acq_rel", "relaxed"])
+@pytest.mark.parametrize("dtype_str", ['float16', 'float32', 'uint32', 'int32', 'uint64', 'int64', 'float64'])
+@pytest.mark.parametrize("mask_type", ['const', 'scalar', 'dyn'])
+def test_atomic_cas_mask_false_is_noop(sem, dtype_str, mask_type, device):
+
+    @triton.jit
+    def masked_noop_const(Lock, sem: tl.constexpr, triton_dtype: tl.constexpr):
+        offsets = tl.arange(0, 1)
+        num0 = tl.full((1, ), 2, dtype=triton_dtype)
+        num1 = tl.full((1, ), 1, dtype=triton_dtype)
+        mask = tl.full((1, ), False, dtype=tl.int1)
+        tl.atomic_cas(Lock + offsets, num0, num1, mask=mask, sem=sem)
+
+    @triton.jit
+    def masked_noop_scalar(Lock, sem: tl.constexpr, triton_dtype: tl.constexpr):
+        offsets = tl.arange(0, 1)
+        num0 = tl.full((1, ), 2, dtype=triton_dtype)
+        num1 = tl.full((1, ), 1, dtype=triton_dtype)
+        mask = False
+        tl.atomic_cas(Lock + offsets, num0, num1, mask=mask, sem=sem)
+
+    @triton.jit
+    def masked_noop_dyn(Lock, sem: tl.constexpr, triton_dtype: tl.constexpr):
+        offsets = tl.arange(0, 1)
+        num0 = tl.full((1, ), 2, dtype=triton_dtype)
+        num1 = tl.full((1, ), 1, dtype=triton_dtype)
+        mask = offsets < 0
+        tl.atomic_cas(Lock + offsets, num0, num1, mask=mask, sem=sem)
+
+    torch_dtype = getattr(torch, dtype_str)
+    tl_dtype = getattr(tl, dtype_str)
+
+    Lock = torch.full((1, ), 2, device=device, dtype=torch_dtype)
+
+    if mask_type == 'const':
+        masked_noop_const[(1, )](Lock, sem=sem, triton_dtype=tl_dtype)
+    elif mask_type == 'scalar':
+        masked_noop_scalar[(1, )](Lock, sem=sem, triton_dtype=tl_dtype)
+    elif mask_type == 'dyn':
+        masked_noop_dyn[(1, )](Lock, sem=sem, triton_dtype=tl_dtype)
+    else:
+        raise ValueError(f"Invalid mask_type: {mask_type}")
+    assert Lock[0] == 2
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("sem", [None, "acquire", "release", "acq_rel", "relaxed"])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 @pytest.mark.parametrize("size", [4, 128, 512, 1024])
 @pytest.mark.parametrize("dtype_str", ['bfloat16', 'float16', 'float32', 'uint64', 'int64', 'float64'])
-def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, device):
+@pytest.mark.parametrize("mask_type", ['none', 'const', 'scalar', 'dyn'])
+def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, mask_type, device):
     check_type_supported(dtype_str, device)
     if is_hip_cdna2():
         pytest.skip("Disabled due to being flaky on CDNA2")
 
     @triton.jit
-    def change_value(X, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr, dtype: tl.constexpr):
+    def change_value(X, R, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr, dtype: tl.constexpr, mask_type: tl.constexpr):
         pid = tl.program_id(axis=0)
         block_start = pid * BLOCK_SIZE
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
         t1 = tl.full((BLOCK_SIZE, ), 0, dtype=dtype)
         t2 = tl.full((BLOCK_SIZE, ), 2, dtype=dtype)
-        tl.atomic_cas(X + offsets, t1, t2, sem=sem)
+
+        if mask_type == 'none':
+            mask = None
+        elif mask_type == 'const':
+            mask = tl.full((BLOCK_SIZE, ), True, dtype=tl.int1)
+        elif mask_type == 'scalar':
+            mask = True
+        elif mask_type == 'dyn':
+            mask = offsets >= 0
+        else:
+            raise ValueError(f"Invalid mask_type: {mask_type}")
+
+        old_vals = tl.atomic_cas(X + offsets, t1, t2, sem=sem, mask=mask)
+
+        tl.store(R + offsets, old_vals, mask=mask)
 
     torch_dtype = getattr(torch, dtype_str)
     X = torch.zeros((size, ), device=device, dtype=torch_dtype)
@@ -1905,9 +1966,61 @@ def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, device):
     Y = X.clone()
     Y[0::2] = 2
 
+    expected_R = X.clone()
+    R = torch.empty((size, ), device=device, dtype=torch_dtype)
+
     tl_dtype = getattr(tl, dtype_str)
-    change_value[(2, )](X, BLOCK_SIZE=size // 2, sem=sem, dtype=tl_dtype)
+    change_value[(2, )](X, R, BLOCK_SIZE=size // 2, sem=sem, dtype=tl_dtype, mask_type=mask_type)
     assert torch.equal(X, Y)
+    assert torch.equal(R, expected_R)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", ['float16', 'float32', 'uint32', 'int32', 'uint64', 'int64', 'float64'])
+def test_atomics_cas_mixed_mask(dtype_str):
+
+    @triton.jit
+    def kernel(X, CMP, VAL, MASK, R, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+
+        mask_tensor = tl.load(MASK + offsets)
+        cmp_tensor = tl.load(CMP + offsets)
+        val_tensor = tl.load(VAL + offsets)
+
+        old_vals = tl.atomic_cas(X + offsets, cmp_tensor, val_tensor, mask=mask_tensor)
+        tl.store(R + offsets, old_vals)
+
+    torch_dtype = getattr(torch, dtype_str)
+    BLOCK_SIZE = 16
+
+    # Values
+    X = torch.tensor([10, 20, 30, 40, 10, 20, 30, 40, 10, 20, 30, 40, 10, 20, 30, 40], device='cuda', dtype=torch_dtype)
+    CMP = torch.tensor([10, 10, 30, 30, 10, 10, 30, 30, 10, 10, 30, 30, 10, 10, 30, 30], device='cuda',
+                       dtype=torch_dtype)
+    CMP_orig = CMP.clone()
+    VAL = torch.tensor([15, 25, 25, 15, 15, 25, 25, 15, 15, 25, 25, 15, 15, 25, 25, 15], device='cuda',
+                       dtype=torch_dtype)
+    VAL_orig = VAL.clone()
+
+    # Mask
+    MASK = torch.zeros((BLOCK_SIZE, ), device='cuda', dtype=torch.bool)
+    MASK[:4] = True
+    MASK[8:12] = True
+
+    # Expected result
+    R = torch.empty((BLOCK_SIZE, ), device='cuda', dtype=torch_dtype)
+    expected_R = X.clone()
+
+    kernel[(2, )](X, CMP, VAL, MASK, R, BLOCK_SIZE=BLOCK_SIZE // 2)
+
+    Y = torch.tensor([15, 20, 25, 40, 10, 20, 30, 40, 15, 20, 25, 40, 10, 20, 30, 40], device='cuda', dtype=torch_dtype)
+
+    assert torch.equal(CMP, CMP_orig) and torch.equal(VAL, VAL_orig), "CMP and VAL should not be modified"
+    assert torch.equal(X, Y), f"Expected X to be {Y} but got {X}"
+    assert torch.equal(R[:4], expected_R[:4]) and torch.equal(
+        R[8:12], expected_R[8:12]), f"Expected R to be {expected_R} but got {R}"
 
 
 @pytest.mark.interpreter

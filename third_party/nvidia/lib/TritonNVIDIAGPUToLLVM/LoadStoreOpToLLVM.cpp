@@ -560,6 +560,7 @@ struct AtomicCASOpConversion
     Value llPtr = adaptor.getPtr();
     Value llCmp = adaptor.getCmp();
     Value llVal = adaptor.getVal();
+    Value llMask = adaptor.getMask();
 
     auto ptrElements =
         unpackTensorElements(loc, llPtr, rewriter, op.getPtr().getType());
@@ -567,6 +568,10 @@ struct AtomicCASOpConversion
         unpackTensorElements(loc, llCmp, rewriter, op.getCmp().getType());
     auto valElements =
         unpackTensorElements(loc, llVal, rewriter, op.getVal().getType());
+    SmallVector<Value> maskElements;
+    if (llMask)
+      maskElements =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
 
     auto valueTy = op.getType();
     auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
@@ -596,9 +601,12 @@ struct AtomicCASOpConversion
       Value casVal = valElements[i];
       Value casCmp = cmpElements[i];
       Value casPtr = ptrElements[i];
-      Value old = NVIDIA::emitPtxAtomicCAS(rewriter, loc, valueElemTy, casPtr,
-                                           casCmp, casVal, op.getSem(),
-                                           op.getScope(), threadPred);
+      Value pred =
+          llMask ? ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i])
+                 : threadPred;
+      Value old =
+          NVIDIA::emitPtxAtomicCAS(rewriter, loc, valueElemTy, casPtr, casCmp,
+                                   casVal, op.getSem(), op.getScope(), pred);
 
       if (tensorTy) {
         resultVals[i] = old;
@@ -616,7 +624,7 @@ struct AtomicCASOpConversion
         auto *valOprStore = ptxBuilderStore.newOperand(old, tyId);
         auto &st = *ptxBuilderStore.create("st");
         st.shared().o(sTy);
-        st(dstOprStore, valOprStore).maybePredicate(threadPred);
+        st(dstOprStore, valOprStore).maybePredicate(pred);
         auto ASMReturnTy = void_ty(ctx);
         ptxBuilderStore.launch(rewriter, loc, ASMReturnTy);
         createBarrier(rewriter, loc, numCTAs, op);
