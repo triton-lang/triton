@@ -1451,6 +1451,23 @@ LogicalResult JoinOp::verify() {
   return success();
 }
 
+OpFoldResult JoinOp::fold(FoldAdaptor adaptor) {
+  // Do not fold ops that carry discardable attributes (e.g. warp-specialization
+  // async_task_id): erasing the op would silently drop them.
+  if (!(*this)->getDiscardableAttrDictionary().empty())
+    return {};
+  // join(split(x)[0], split(x)[1]) -> x
+  // Only fold when both operands are exactly the two results of a single split
+  // and the reconstructed type matches, so layout encodings are preserved.
+  auto lhsSplit = getLhs().getDefiningOp<SplitOp>();
+  auto rhsSplit = getRhs().getDefiningOp<SplitOp>();
+  if (lhsSplit && lhsSplit == rhsSplit && getLhs() == lhsSplit.getOutLHS() &&
+      getRhs() == lhsSplit.getOutRHS() &&
+      lhsSplit.getSrc().getType() == getType())
+    return lhsSplit.getSrc();
+  return {};
+}
+
 // -- SplitOp --
 LogicalResult SplitOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location,
@@ -1477,6 +1494,25 @@ LogicalResult SplitOp::inferReturnTypes(
   inferredReturnTypes.push_back(retTy);
   inferredReturnTypes.push_back(retTy);
   return success();
+}
+
+LogicalResult SplitOp::fold(FoldAdaptor adaptor,
+                            SmallVectorImpl<OpFoldResult> &results) {
+  // Do not fold ops that carry discardable attributes (e.g. warp-specialization
+  // async_task_id): erasing the op would silently drop them.
+  if (!(*this)->getDiscardableAttrDictionary().empty())
+    return failure();
+  // split(join(a, b)) -> (a, b)
+  // Guard on exact type equality so we never silently drop a layout conversion.
+  if (auto join = getSrc().getDefiningOp<JoinOp>()) {
+    if (join.getLhs().getType() == getOutLHS().getType() &&
+        join.getRhs().getType() == getOutRHS().getType()) {
+      results.push_back(join.getLhs());
+      results.push_back(join.getRhs());
+      return success();
+    }
+  }
+  return failure();
 }
 
 // -- ElementwiseInlineAsmOp --
