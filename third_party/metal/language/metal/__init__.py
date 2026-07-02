@@ -3,6 +3,9 @@
 Provides Metal-specific intrinsics and helper functions for Apple Silicon GPUs.
 """
 
+from . import libdevice
+from . import utils
+
 import triton
 from triton import language as tl
 
@@ -11,7 +14,7 @@ from triton import language as tl
 def simdgroup_barrier():
     """Issue a SIMD group barrier (equivalent to __syncwarp in CUDA)."""
     return tl.inline_asm_elementwise(
-        "",  # MSL: simdgroup_barrier handled at IR level
+        "",
         "=r", [], dtype=tl.int32, is_pure=False, pack=1
     )
 
@@ -20,7 +23,7 @@ def simdgroup_barrier():
 def threadgroup_barrier():
     """Issue a threadgroup barrier (equivalent to __syncthreads in CUDA)."""
     return tl.inline_asm_elementwise(
-        "",  # MSL: threadgroup_barrier handled at IR level
+        "",
         "=r", [], dtype=tl.int32, is_pure=False, pack=1
     )
 
