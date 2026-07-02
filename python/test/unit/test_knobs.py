@@ -290,3 +290,15 @@ def test_opt_bool(fresh_knobs_including_libraries, monkeypatch):
     assert fresh_knobs.amd.use_block_pingpong
     monkeypatch.delenv("TRITON_HIP_USE_BLOCK_PINGPONG")
     assert fresh_knobs.amd.use_block_pingpong is None
+
+
+def test_lds_prefetch_num_insts(fresh_knobs_including_libraries, monkeypatch):
+    fresh_knobs = fresh_knobs_including_libraries
+    # Defaults to 0, which tells the LDS prefetch pass to use its arch/dtype default.
+    assert fresh_knobs.amd.lds_prefetch_num_insts == 0
+    monkeypatch.setenv("TRITON_HIP_LDS_PREFETCH_NUM_INSTS", "16")
+    assert fresh_knobs.amd.lds_prefetch_num_insts == 16
+    monkeypatch.setenv("TRITON_HIP_LDS_PREFETCH_NUM_INSTS", "0")
+    assert fresh_knobs.amd.lds_prefetch_num_insts == 0
+    monkeypatch.delenv("TRITON_HIP_LDS_PREFETCH_NUM_INSTS")
+    assert fresh_knobs.amd.lds_prefetch_num_insts == 0

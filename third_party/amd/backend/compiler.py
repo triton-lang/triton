@@ -69,6 +69,10 @@ def _parse_llvm_fn_attrs(attrs):
     return tuple(parsed)
 
 
+def is_lds_prefetch_enabled():
+    return bool(knobs.amd.use_lds_prefetch)
+
+
 @dataclass(frozen=True)
 class HIPOptions:
     num_warps: int = 4
@@ -104,6 +108,12 @@ class HIPOptions:
     # Comma-separated LLVM function attributes; bare names are emitted as valueless attributes.
     # Example: llvm_fn_attrs="amdgpu-sched-strategy=iterative-ilp,noinline"
     llvm_fn_attrs: str | Tuple[Tuple[str, str], ...] = ""
+
+    # Experimental: overrides the target number of matrix instructions per slice tile used by the
+    # LDS prefetch pass (only takes effect when LDS prefetch is enabled). 0 keeps the arch/dtype
+    # default computed by the pass; intended for development, debugging, and tuning. Can also be set
+    # via the TRITON_HIP_LDS_PREFETCH_NUM_INSTS environment variable.
+    lds_prefetch_num_insts: int = 0
 
     def __post_init__(self):
         gfx_major = int(self.arch[3:-2])  # Drop "gfx" prefix and minor/patch number
@@ -174,6 +184,8 @@ class HIPBackend(BaseBackend):
 
         if "enable_fp_fusion" not in opts:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
+        if "lds_prefetch_num_insts" not in opts:
+            args["lds_prefetch_num_insts"] = knobs.amd.lds_prefetch_num_insts
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts and opts[k] is not None})
         return HIPOptions(**args)
 
@@ -283,6 +295,9 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_optimize_descriptor_encoding(pm)
         amd.passes.ttgpuir.add_schedule_loops(pm, options.num_stages)
         amd.passes.ttgpuir.add_pipeline(pm, use_async_copy, use_block_pingpong)
+        if is_lds_prefetch_enabled():
+            amd.passes.ttgpuir.add_lds_prefetch(pm, options.lds_prefetch_num_insts)
+
         if use_async_copy:
             amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
         amd.passes.ttgpuir.add_convert_to_tensor_ops(pm)
