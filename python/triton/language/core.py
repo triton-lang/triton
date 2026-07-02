@@ -3254,14 +3254,26 @@ def associative_scan(input, axis, combine_fn, reverse=False, _semantic=None, _ge
 @_tensor_member_fn
 @builtin
 def histogram(input, num_bins, mask=None, _semantic=None, _generator=None):
-    """computes an histogram based on input tensor with num_bins bins, the bins have a width of 1 and start at 0.
+    """Computes a histogram of :code:`input` with :code:`num_bins` bins. The bins
+    have a width of 1 and start at 0, so element :code:`i` of the result counts how
+    many values in :code:`input` are equal to :code:`i`, for :code:`i` in the range
+    ``[0, num_bins)``.
+
+    Input values must lie in ``[0, num_bins)``. Values outside this range
+    produce undefined behavior, as the backend implementation may change. Use
+    :code:`mask` to drop out-of-range values explicitly:
+
+    .. highlight:: python
+    .. code-block:: python
+
+        counts = tl.histogram(x, num_bins, mask=(x >= 0) & (x < num_bins))
 
     :param input: the input tensor
     :type input: Tensor
     :param num_bins: number of histogram bins
     :type num_bins: int
-    :param mask: if `mask[idx]` is false, exclude `input[idx]` from histogram
-    :type mask: Block of `triton.int1`, optional
+    :param mask: if :code:`mask[idx]` is false, exclude :code:`input[idx]` from the histogram
+    :type mask: Block of :code:`triton.int1`, optional
 
     """
     num_bins = _unwrap_if_constexpr(num_bins)
