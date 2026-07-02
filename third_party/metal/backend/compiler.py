@@ -35,10 +35,8 @@ def min_dot_size(target: GPUTarget):
 @functools.lru_cache()
 def get_metal_version():
     try:
-        result = subprocess.check_output(
-            ["xcrun", "--sdk", "macosx", "metal", "--version"],
-            stderr=subprocess.STDOUT
-        ).decode("utf-8")
+        result = subprocess.check_output(["xcrun", "--sdk", "macosx", "metal", "--version"],
+                                         stderr=subprocess.STDOUT).decode("utf-8")
         return result.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
         return "unknown"
@@ -49,9 +47,9 @@ def get_metal_arch(gpu_family: int):
     # Map Apple GPU family to Metal architecture string
     # Metal 4 (macOS 26+) supports Apple7+ (M1+), optimized for Apple8+ (M2+)
     family_map = {
-        7: "apple7",   # M1 - Metal 3
-        8: "apple8",   # M2 - Metal 3
-        9: "apple9",   # M3 - Metal 3
+        7: "apple7",  # M1 - Metal 3
+        8: "apple8",  # M2 - Metal 3
+        9: "apple9",  # M3 - Metal 3
         10: "apple10",  # M4 - Metal 4 native
     }
     return family_map.get(gpu_family, f"apple{gpu_family}")
@@ -88,34 +86,62 @@ class LLVMIRToMSLTranslator:
 
     # LLVM address spaces → Metal address qualifiers
     ADDRSPACE_MAP = {
-        0: 'device',       # Global memory
-        1: 'constant',     # Constant memory (read-only)
+        0: 'device',  # Global memory
+        1: 'constant',  # Constant memory (read-only)
         3: 'threadgroup',  # Shared memory (per-threadgroup)
-        4: 'thread',       # Private (per-thread)
+        4: 'thread',  # Private (per-thread)
     }
 
     # LLVM binary ops → MSL operators
     BINOP_MAP = {
-        'add': '+', 'fadd': '+',
-        'sub': '-', 'fsub': '-',
-        'mul': '*', 'fmul': '*',
-        'sdiv': '/', 'udiv': '/', 'fdiv': '/',
-        'srem': '%', 'urem': '%', 'frem': 'fmod',
-        'shl': '<<', 'lshr': '>>', 'ashr': '>>',
-        'and': '&', 'or': '|', 'xor': '^',
+        'add': '+',
+        'fadd': '+',
+        'sub': '-',
+        'fsub': '-',
+        'mul': '*',
+        'fmul': '*',
+        'sdiv': '/',
+        'udiv': '/',
+        'fdiv': '/',
+        'srem': '%',
+        'urem': '%',
+        'frem': 'fmod',
+        'shl': '<<',
+        'lshr': '>>',
+        'ashr': '>>',
+        'and': '&',
+        'or': '|',
+        'xor': '^',
     }
 
     # LLVM comparison predicates → MSL operators
     ICMP_MAP = {
-        'eq': '==', 'ne': '!=',
-        'slt': '<', 'sle': '<=', 'sgt': '>', 'sge': '>=',
-        'ult': '<', 'ule': '<=', 'ugt': '>', 'uge': '>=',
+        'eq': '==',
+        'ne': '!=',
+        'slt': '<',
+        'sle': '<=',
+        'sgt': '>',
+        'sge': '>=',
+        'ult': '<',
+        'ule': '<=',
+        'ugt': '>',
+        'uge': '>=',
     }
     FCMP_MAP = {
-        'oeq': '==', 'one': '!=', 'ogt': '>', 'oge': '>=',
-        'olt': '<', 'ole': '<=', 'ord': '!isnan',
-        'ueq': '==', 'une': '!=', 'ugt': '>', 'uge': '>=',
-        'ult': '<', 'ule': '<=', 'uno': 'isnan',
+        'oeq': '==',
+        'one': '!=',
+        'ogt': '>',
+        'oge': '>=',
+        'olt': '<',
+        'ole': '<=',
+        'ord': '!isnan',
+        'ueq': '==',
+        'une': '!=',
+        'ugt': '>',
+        'uge': '>=',
+        'ult': '<',
+        'ule': '<=',
+        'uno': 'isnan',
     }
 
     # Metal intrinsic mapping for LLVM intrinsics
@@ -165,10 +191,8 @@ class LLVMIRToMSLTranslator:
     def translate(self) -> str:
         """Main translation entry point. Returns complete MSL source."""
         # Parse kernel signature
-        func_match = re.search(
-            r'define\s+(?:dso_local\s+)?void\s+@([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)\)',
-            self.llvm_ir
-        )
+        func_match = re.search(r'define\s+(?:dso_local\s+)?void\s+@([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)\)',
+                               self.llvm_ir)
         if func_match:
             self.kernel_name = func_match.group(1)
             args_str = func_match.group(2)
@@ -251,9 +275,8 @@ class LLVMIRToMSLTranslator:
         """Parse an LLVM type string, return (msl_type, is_pointer, addrspace)."""
         arg_str = arg_str.strip()
         # Remove parameter attributes
-        for attr in ('noundef', 'nonnull', 'readnone', 'readonly', 'writeonly',
-                     'nocapture', 'noalias', 'signext', 'zeroext', 'align',
-                     'dereferenceable', 'nofree', 'nsw', 'nuw'):
+        for attr in ('noundef', 'nonnull', 'readnone', 'readonly', 'writeonly', 'nocapture', 'noalias', 'signext',
+                     'zeroext', 'align', 'dereferenceable', 'nofree', 'nsw', 'nuw'):
             arg_str = re.sub(rf'\b{attr}\b(\(\d+\))?', '', arg_str)
         arg_str = arg_str.strip()
 
@@ -285,10 +308,7 @@ class LLVMIRToMSLTranslator:
     def _translate_body(self):
         """Translate LLVM IR function body to MSL statements."""
         # Extract the function body (between first { and last })
-        body_match = re.search(
-            r'define\s+[^{]+\{(.+?)^\}',
-            self.llvm_ir, re.MULTILINE | re.DOTALL
-        )
+        body_match = re.search(r'define\s+[^{]+\{(.+?)^\}', self.llvm_ir, re.MULTILINE | re.DOTALL)
         if not body_match:
             self._body_lines.append("    // Empty kernel body")
             return
@@ -420,8 +440,8 @@ class LLVMIRToMSLTranslator:
             return
 
         # Casts
-        cast_ops = ('bitcast', 'trunc', 'zext', 'sext', 'fptrunc', 'fpext',
-                    'fptoui', 'fptosi', 'uitofp', 'sitofp', 'ptrtoint', 'inttoptr')
+        cast_ops = ('bitcast', 'trunc', 'zext', 'sext', 'fptrunc', 'fpext', 'fptoui', 'fptosi', 'uitofp', 'sitofp',
+                    'ptrtoint', 'inttoptr')
         for cast_op in cast_ops:
             cast_match = re.match(rf'{cast_op}\s+(\w+)\s+(.+?)\s+to\s+(\w+)', operation)
             if cast_match:
@@ -645,7 +665,7 @@ class MetalOptions:
     supported_fp8_dtypes: Tuple[str] = ()
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "ieee"
-    allowed_dot_input_precisions: Tuple[str] = ("ieee",)
+    allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     max_num_imprecise_acc_default: bool = None
     extern_libs: dict = None
     debug: bool = False
@@ -759,24 +779,10 @@ class MetalBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
-        # Allocate threadgroup (shared) memory — Metal equivalent of
-        # NVIDIA's add_allocate_shared_memory_nv. Uses the shared
-        # ModuleAllocation infrastructure to assign offsets within
-        # the threadgroup memory allocation.
-        try:
-            from triton.backends.metal import metal as metal_module
-            metal_module.passes.ttgpuir.add_allocate_shared_memory(pm, gpu_family)
-        except (ImportError, AttributeError):
-            # Fallback: use generic allocation if Metal plugin not built
-            pass
+        from triton.backends.metal import metal as metal_module
+        metal_module.passes.ttgpuir.add_allocate_shared_memory(pm, gpu_family)
         passes.ttgpuir.add_allocate_warp_groups(pm, False)
-        # Convert TritonGPU → LLVM dialect
-        try:
-            from triton.backends.metal import metal as metal_module
-            metal_module.passes.ttgpuir.add_to_llvmir(pm, gpu_family)
-        except (ImportError, AttributeError):
-            # Fallback: use the generic conversion pass (works for basic ops)
-            pass
+        metal_module.passes.ttgpuir.add_to_llvmir(pm, gpu_family)
         passes.convert.add_scf_to_cf(pm)
         passes.ttgpuir.add_canonicalize_llvm_ir(pm)
         passes.common.add_canonicalizer(pm)
@@ -866,11 +872,8 @@ class MetalBackend(BaseBackend):
 
             # Use xcrun metal to compile
             metal_cmd = [
-                "xcrun", "-sdk", "macosx", "metal",
-                "-target", "air64-apple-macosx26.0.0",
-                "-std", "metal4.0",
-                "-o", air_path,
-                "-c", ir_path
+                "xcrun", "-sdk", "macosx", "metal", "-target", "air64-apple-macosx26.0.0", "-std", "metal4.0", "-o",
+                air_path, "-c", ir_path
             ]
             try:
                 subprocess.run(metal_cmd, check=True, capture_output=True)
@@ -882,10 +885,7 @@ class MetalBackend(BaseBackend):
                 return metallib
 
             # Link into metallib
-            metallib_cmd = [
-                "xcrun", "-sdk", "macosx", "metallib",
-                air_path, "-o", metallib_path
-            ]
+            metallib_cmd = ["xcrun", "-sdk", "macosx", "metallib", air_path, "-o", metallib_path]
             subprocess.run(metallib_cmd, check=True, capture_output=True)
 
             with open(metallib_path, 'rb') as f:

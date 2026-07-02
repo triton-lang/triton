@@ -32,8 +32,10 @@ class _FakeOpt:
 
 def _translate(llvm_ir, shared=0, num_warps=4):
     """Helper: translate LLVM IR to MSL."""
+
     class Opt:
         pass
+
     opt = Opt()
     opt.num_warps = num_warps
     opt.warp_size = 32

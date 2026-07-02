@@ -14,7 +14,6 @@ Apple GPUs always have a SIMD width of 32 (simdgroup size).
 
 from triton.language import core
 
-
 # ---------------------------------------------------------------------------
 # Hardware timer
 # ---------------------------------------------------------------------------
@@ -31,10 +30,8 @@ def gpu_timestamp(_semantic=None):
     the Metal GPU timestamp intrinsic. The resolution and behavior
     may vary across GPU families (M1/M2/M3/M4).
     """
-    return core.inline_asm_elementwise(
-        "mov.u64 $0, %clock64;",  # Placeholder: lowered by Metal backend
-        "=l", [], dtype=core.int64, is_pure=False, pack=1,
-        _semantic=_semantic)
+    return core.inline_asm_elementwise("mov.u64 $0, %clock64;",  # Placeholder: lowered by Metal backend
+                                       "=l", [], dtype=core.int64, is_pure=False, pack=1, _semantic=_semantic)
 
 
 # ---------------------------------------------------------------------------
@@ -52,10 +49,8 @@ def simdgroup_id(_semantic=None):
     Returns:
         int32: The index of this thread's SIMD group within the threadgroup.
     """
-    return core.inline_asm_elementwise(
-        "mov.u32 $0, %simdgroup_index_in_threadgroup;",
-        "=r", [], dtype=core.int32, is_pure=True, pack=1,
-        _semantic=_semantic)
+    return core.inline_asm_elementwise("mov.u32 $0, %simdgroup_index_in_threadgroup;", "=r", [], dtype=core.int32,
+                                       is_pure=True, pack=1, _semantic=_semantic)
 
 
 @core.extern
@@ -67,10 +62,8 @@ def threadgroup_id(_semantic=None):
     Returns:
         int32: The linear threadgroup index within the dispatch grid.
     """
-    return core.inline_asm_elementwise(
-        "mov.u32 $0, %threadgroup_position_in_grid;",
-        "=r", [], dtype=core.int32, is_pure=True, pack=1,
-        _semantic=_semantic)
+    return core.inline_asm_elementwise("mov.u32 $0, %threadgroup_position_in_grid;", "=r", [], dtype=core.int32,
+                                       is_pure=True, pack=1, _semantic=_semantic)
 
 
 @core.extern
@@ -83,10 +76,8 @@ def thread_index_in_simdgroup(_semantic=None):
     Returns:
         int32: Lane index within the SIMD group, range [0, 31].
     """
-    return core.inline_asm_elementwise(
-        "mov.u32 $0, %thread_index_in_simdgroup;",
-        "=r", [], dtype=core.int32, is_pure=True, pack=1,
-        _semantic=_semantic)
+    return core.inline_asm_elementwise("mov.u32 $0, %thread_index_in_simdgroup;", "=r", [], dtype=core.int32,
+                                       is_pure=True, pack=1, _semantic=_semantic)
 
 
 @core.extern
@@ -99,10 +90,8 @@ def thread_index_in_threadgroup(_semantic=None):
     Returns:
         int32: Thread position within the threadgroup.
     """
-    return core.inline_asm_elementwise(
-        "mov.u32 $0, %thread_index_in_threadgroup;",
-        "=r", [], dtype=core.int32, is_pure=True, pack=1,
-        _semantic=_semantic)
+    return core.inline_asm_elementwise("mov.u32 $0, %thread_index_in_threadgroup;", "=r", [], dtype=core.int32,
+                                       is_pure=True, pack=1, _semantic=_semantic)
 
 
 @core.extern
@@ -114,10 +103,8 @@ def thread_position_in_grid(_semantic=None):
     Returns:
         int32: Global thread index across the entire dispatch.
     """
-    return core.inline_asm_elementwise(
-        "mov.u32 $0, %thread_position_in_grid;",
-        "=r", [], dtype=core.int32, is_pure=True, pack=1,
-        _semantic=_semantic)
+    return core.inline_asm_elementwise("mov.u32 $0, %thread_position_in_grid;", "=r", [], dtype=core.int32,
+                                       is_pure=True, pack=1, _semantic=_semantic)
 
 
 @core.extern
@@ -129,10 +116,8 @@ def threads_per_threadgroup(_semantic=None):
     Returns:
         int32: Total threads in this threadgroup.
     """
-    return core.inline_asm_elementwise(
-        "mov.u32 $0, %threads_per_threadgroup;",
-        "=r", [], dtype=core.int32, is_pure=True, pack=1,
-        _semantic=_semantic)
+    return core.inline_asm_elementwise("mov.u32 $0, %threads_per_threadgroup;", "=r", [], dtype=core.int32,
+                                       is_pure=True, pack=1, _semantic=_semantic)
 
 
 # ---------------------------------------------------------------------------

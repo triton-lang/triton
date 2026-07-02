@@ -26,15 +26,9 @@ def _torch_mps_available():
         return False
 
 
-requires_metal = pytest.mark.skipif(
-    not _metal_device_available(),
-    reason="Metal device not available"
-)
+requires_metal = pytest.mark.skipif(not _metal_device_available(), reason="Metal device not available")
 
-requires_torch_mps = pytest.mark.skipif(
-    not _torch_mps_available(),
-    reason="PyTorch MPS not available"
-)
+requires_torch_mps = pytest.mark.skipif(not _torch_mps_available(), reason="PyTorch MPS not available")
 
 
 @requires_metal
@@ -111,7 +105,7 @@ class TestMetalMemoryModel:
 
         x = torch.randn(1024, device='mps')
         assert x.device.type == 'mps'
-        assert x.shape == (1024,)
+        assert x.shape == (1024, )
 
     def test_mps_tensor_operations(self):
         """Basic MPS operations should work (validates device is functional)."""
@@ -121,7 +115,7 @@ class TestMetalMemoryModel:
         b = torch.randn(256, device='mps')
         c = a + b
         assert c.device.type == 'mps'
-        assert c.shape == (256,)
+        assert c.shape == (256, )
 
     def test_mps_to_cpu_transfer(self):
         """MPS tensors should transfer to CPU correctly."""

@@ -45,10 +45,8 @@ def _get_metal_gpu_family():
        7 = M1 (Apple7, minimum supported)
     """
     try:
-        result = subprocess.check_output(
-            ["system_profiler", "SPDisplaysDataType"],
-            stderr=subprocess.DEVNULL, timeout=10
-        ).decode("utf-8")
+        result = subprocess.check_output(["system_profiler", "SPDisplaysDataType"], stderr=subprocess.DEVNULL,
+                                         timeout=10).decode("utf-8")
 
         if "Apple M4" in result:
             return 10
@@ -68,10 +66,8 @@ def _get_metal_gpu_family():
 def _get_metal_device_name():
     """Get the Metal device name."""
     try:
-        result = subprocess.check_output(
-            ["system_profiler", "SPDisplaysDataType"],
-            stderr=subprocess.DEVNULL, timeout=10
-        ).decode("utf-8")
+        result = subprocess.check_output(["system_profiler", "SPDisplaysDataType"], stderr=subprocess.DEVNULL,
+                                         timeout=10).decode("utf-8")
         for line in result.splitlines():
             if "Chipset Model" in line:
                 return line.split(":")[-1].strip()
@@ -120,29 +116,29 @@ def _pack_kernel_args(args, signature):
         if sig_type.startswith('*') or isinstance(arg, int) and arg > 0xFFFFFFFF:
             # Device pointer - pass as uint64
             packed_args.append((struct.pack('Q', int(arg)), 'ptr', 8))
-        elif sig_type in ('fp64',):
+        elif sig_type in ('fp64', ):
             packed_args.append((struct.pack('d', float(arg)), 'f64', 8))
         elif sig_type in ('fp32', 'f32'):
             packed_args.append((struct.pack('f', float(arg)), 'f32', 4))
-        elif sig_type in ('fp16',):
+        elif sig_type in ('fp16', ):
             import numpy as np
             packed_args.append((np.float16(arg).tobytes(), 'f16', 2))
-        elif sig_type in ('bf16',):
+        elif sig_type in ('bf16', ):
             import numpy as np
             val = np.float32(arg)
             bf16_bits = int.from_bytes(val.tobytes(), 'little') >> 16
             packed_args.append((struct.pack('H', bf16_bits), 'bf16', 2))
-        elif sig_type in ('i64',):
+        elif sig_type in ('i64', ):
             packed_args.append((struct.pack('q', int(arg)), 'i64', 8))
-        elif sig_type in ('u64',):
+        elif sig_type in ('u64', ):
             packed_args.append((struct.pack('Q', int(arg)), 'u64', 8))
-        elif sig_type in ('i32',):
+        elif sig_type in ('i32', ):
             packed_args.append((struct.pack('i', int(arg)), 'i32', 4))
-        elif sig_type in ('u32',):
+        elif sig_type in ('u32', ):
             packed_args.append((struct.pack('I', int(arg)), 'u32', 4))
-        elif sig_type in ('i16',):
+        elif sig_type in ('i16', ):
             packed_args.append((struct.pack('h', int(arg)), 'i16', 2))
-        elif sig_type in ('u16',):
+        elif sig_type in ('u16', ):
             packed_args.append((struct.pack('H', int(arg)), 'u16', 2))
         elif sig_type in ('i8', 'i1'):
             packed_args.append((struct.pack('b', int(arg)), 'i8', 1))
@@ -179,9 +175,8 @@ class MetalLauncher(object):
         constants = src.constants if hasattr(src, "constants") else dict()
         self.signature = {idx: value for idx, value in src.signature.items()} if hasattr(src, 'signature') else {}
 
-    def __call__(self, gridX, gridY, gridZ, stream, function,
-                 kernel_metadata, launch_metadata,
-                 launch_enter_hook, launch_exit_hook, *args):
+    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                 launch_exit_hook, *args):
         if launch_enter_hook is not None:
             launch_enter_hook(kernel_metadata, launch_metadata)
 
@@ -192,20 +187,14 @@ class MetalLauncher(object):
         threads_per_threadgroup = min(self.num_warps * 32, 1024)
 
         # Dispatch through Metal runtime
-        metal_dispatch(
-            function, gridX, gridY, gridZ,
-            threads_per_threadgroup, 1, 1,
-            self.shared_memory,
-            stream, packed
-        )
+        metal_dispatch(function, gridX, gridY, gridZ, threads_per_threadgroup, 1, 1, self.shared_memory, stream, packed)
 
         if launch_exit_hook is not None:
             launch_exit_hook(kernel_metadata, launch_metadata)
 
 
-def metal_dispatch(function, grid_x, grid_y, grid_z,
-                   threads_x, threads_y, threads_z,
-                   shared_memory, stream, packed_args):
+def metal_dispatch(function, grid_x, grid_y, grid_z, threads_x, threads_y, threads_z, shared_memory, stream,
+                   packed_args):
     """Dispatch a Metal compute kernel via the native extension.
 
     This calls into the compiled ObjC extension that uses the Metal API
@@ -214,11 +203,8 @@ def metal_dispatch(function, grid_x, grid_y, grid_z,
     if hasattr(MetalDriver, '_instance') and MetalDriver._instance is not None:
         utils = MetalDriver._instance.utils
         if utils is not None and hasattr(utils, '_dispatch_native'):
-            utils._dispatch_native(
-                function, grid_x, grid_y, grid_z,
-                threads_x, threads_y, threads_z,
-                shared_memory, stream, packed_args
-            )
+            utils._dispatch_native(function, grid_x, grid_y, grid_z, threads_x, threads_y, threads_z, shared_memory,
+                                   stream, packed_args)
 
 
 class MetalUtils(object):
@@ -234,9 +220,7 @@ class MetalUtils(object):
         self._queue = None
         # Load Metal framework
         try:
-            self._metal_framework = ctypes.cdll.LoadLibrary(
-                '/System/Library/Frameworks/Metal.framework/Metal'
-            )
+            self._metal_framework = ctypes.cdll.LoadLibrary('/System/Library/Frameworks/Metal.framework/Metal')
         except OSError:
             self._metal_framework = None
 
@@ -246,9 +230,7 @@ class MetalUtils(object):
     def get_gpu_family(self):
         return _get_metal_gpu_family()
 
-    def dispatch(self, function, grid_x, grid_y, grid_z,
-                 threads_x, threads_y, threads_z,
-                 shared_memory, stream, args):
+    def dispatch(self, function, grid_x, grid_y, grid_z, threads_x, threads_y, threads_z, shared_memory, stream, args):
         """Dispatch a compute kernel via Metal API.
 
         In full implementation, this uses PyObjC or a compiled extension

@@ -68,8 +68,8 @@ public:
   Value programId(RewriterBase &rewriter, Location loc, ModuleOp moduleOp,
                   ProgramIDDim axis) const override;
 
-  bool warpReduce(RewriterBase &rewriter, Location loc,
-                  SmallVector<Value> &acc, triton::ReduceOp op,
+  bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
+                  triton::ReduceOp op,
                   unsigned reduceLaneIdMask) const override;
 
   std::string getMulhiFuncName(Type resultElementTy) const override;
@@ -90,7 +90,7 @@ public:
 
   bool supportVectorizedAtomics() const override {
     // Apple Silicon supports 32-bit atomics on device memory
-    return gpuFamily >= 8;  // M2+
+    return gpuFamily >= 8; // M2+
   }
 
   unsigned getSharedMemoryBanks() const override { return kSharedMemoryBanks; }

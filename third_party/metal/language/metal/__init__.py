@@ -21,19 +21,13 @@ MAX_THREADGROUP_MEMORY = 32768  # 32 KB
 @triton.jit
 def simdgroup_barrier():
     """Issue a SIMD group barrier (equivalent to __syncwarp in CUDA)."""
-    return tl.inline_asm_elementwise(
-        "",
-        "=r", [], dtype=tl.int32, is_pure=False, pack=1
-    )
+    return tl.inline_asm_elementwise("", "=r", [], dtype=tl.int32, is_pure=False, pack=1)
 
 
 @triton.jit
 def threadgroup_barrier():
     """Issue a threadgroup barrier (equivalent to __syncthreads in CUDA)."""
-    return tl.inline_asm_elementwise(
-        "",
-        "=r", [], dtype=tl.int32, is_pure=False, pack=1
-    )
+    return tl.inline_asm_elementwise("", "=r", [], dtype=tl.int32, is_pure=False, pack=1)
 
 
 def get_simd_width():

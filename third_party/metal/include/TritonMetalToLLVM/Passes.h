@@ -2,15 +2,18 @@
 #define TRITON_METAL_TO_LLVM_PASSES_H
 
 #include "mlir/Pass/Pass.h"
+#include <cstdint>
 #include <memory>
 
 namespace mlir::triton::metal {
 
-// Create the pass that converts TritonGPU dialect to LLVM dialect
-// with Metal-specific target information (Apple Silicon GPU).
+/// Convert TritonGPU dialect to LLVM dialect with Metal-specific target
+/// information (Apple Silicon GPU). Uses MetalTargetInfo for SIMD shuffles,
+/// threadgroup barriers, and simdgroup_matrix operations.
 std::unique_ptr<Pass> createConvertTritonMetalToLLVMPass(int32_t gpuFamily);
 
-// Create the pass that allocates threadgroup (shared) memory for Metal.
+/// Allocate threadgroup (shared) memory for Metal targets. Runs the standard
+/// ModuleAllocation analysis and attaches size/offset attributes.
 std::unique_ptr<Pass> createAllocateSharedMemoryMetalPass(int32_t gpuFamily);
 
 } // namespace mlir::triton::metal

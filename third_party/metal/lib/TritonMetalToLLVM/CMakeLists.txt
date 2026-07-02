@@ -1,11 +1,20 @@
 add_triton_library(TritonMetalToLLVM
+  Allocation.cpp
   TargetInfo.cpp
+  TritonGPUToLLVM.cpp
 
   LINK_LIBS
   TritonAnalysis
   TritonIR
   TritonGPUIR
   TritonGPUToLLVM
+  MLIRArithToLLVM
+  MLIRControlFlowToLLVM
+  MLIRMathToLLVM
   MLIRLLVMDialect
+  MLIRUBToLLVM
   MLIRIR
+  MLIRPass
+  MLIRSCFDialect
+  MLIRTransforms
 )

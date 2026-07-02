@@ -7,7 +7,10 @@ endif()
 set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "Minimum macOS version")
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/lib/TritonMetalToLLVM)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/include)
+
+add_subdirectory(lib)
 
 add_triton_plugin(TritonMetal
   triton_metal.cc
@@ -16,8 +19,12 @@ add_triton_plugin(TritonMetal
   TritonAnalysis
   TritonIR
   TritonGPUIR
+  TritonGPUToLLVM
   TritonGPUTransforms
+  TritonMetalToLLVM
   TritonTools
+  MLIRLLVMDialect
+  MLIRPass
 )
 
 # Compile Objective-C Metal runtime

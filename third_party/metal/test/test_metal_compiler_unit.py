@@ -54,6 +54,7 @@ class TestMinDotSize:
         check_fn = min_dot_size(target)
 
         class MockType:
+
             class scalar:
                 primitive_bitwidth = 16
 
@@ -69,6 +70,7 @@ class TestMinDotSize:
         check_fn = min_dot_size(target)
 
         class MockType:
+
             class scalar:
                 primitive_bitwidth = 32
 

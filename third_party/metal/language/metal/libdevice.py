@@ -17,7 +17,6 @@ MSL naming conventions used here:
 
 from triton.language import core
 
-
 # ---------------------------------------------------------------------------
 # Bit manipulation / integer intrinsics
 # ---------------------------------------------------------------------------
@@ -178,10 +177,9 @@ def rint(arg0, _semantic=None):
 @core.extern
 def nearbyint(arg0, _semantic=None):
     """Round to nearest integer using current rounding mode (no inexact exception)."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_nearbyint_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_nearbyint_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 # ---------------------------------------------------------------------------
@@ -282,10 +280,9 @@ def cospi(arg0, _semantic=None):
 @core.extern
 def tanpi(arg0, _semantic=None):
     """Tangent of pi*x: tan(pi * arg0). More accurate than tan(pi*x)."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_tanpi_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_tanpi_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 # ---------------------------------------------------------------------------
@@ -391,10 +388,9 @@ def exp10(arg0, _semantic=None):
 @core.extern
 def expm1(arg0, _semantic=None):
     """exp(x) - 1, accurate for small x."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_expm1_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_expm1_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 # ---------------------------------------------------------------------------
@@ -435,10 +431,9 @@ def log10(arg0, _semantic=None):
 @core.extern
 def log1p(arg0, _semantic=None):
     """log(1 + x), accurate for small x."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_log1p_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_log1p_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 # ---------------------------------------------------------------------------
@@ -469,10 +464,9 @@ def rsqrt(arg0, _semantic=None):
 @core.extern
 def cbrt(arg0, _semantic=None):
     """Cube root."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_cbrt_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_cbrt_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
@@ -499,10 +493,9 @@ def powr(arg0, arg1, _semantic=None):
 @core.extern
 def hypot(arg0, arg1, _semantic=None):
     """Hypotenuse: sqrt(x*x + y*y) without overflow."""
-    return core.extern_elementwise(
-        "", "", [arg0, arg1], {
-            (core.dtype("fp32"), core.dtype("fp32")): ("__metal_hypot_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.dtype("fp32"), core.dtype("fp32")): ("__metal_hypot_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 # ---------------------------------------------------------------------------
@@ -515,10 +508,8 @@ def fma(arg0, arg1, arg2, _semantic=None):
     """Fused multiply-add: (arg0 * arg1) + arg2 with a single rounding."""
     return core.extern_elementwise(
         "", "", [arg0, arg1, arg2], {
-            (core.dtype("fp16"), core.dtype("fp16"), core.dtype("fp16")):
-                ("__metal_fma_f16", core.dtype("fp16")),
-            (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")):
-                ("__metal_fma_f32", core.dtype("fp32")),
+            (core.dtype("fp16"), core.dtype("fp16"), core.dtype("fp16")): ("__metal_fma_f16", core.dtype("fp16")),
+            (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")): ("__metal_fma_f32", core.dtype("fp32")),
         }, is_pure=True, _semantic=_semantic)
 
 
@@ -540,10 +531,9 @@ def fmod(arg0, arg1, _semantic=None):
 @core.extern
 def remainder(arg0, arg1, _semantic=None):
     """IEEE 754 remainder (result may have different sign from dividend)."""
-    return core.extern_elementwise(
-        "", "", [arg0, arg1], {
-            (core.dtype("fp32"), core.dtype("fp32")): ("__metal_remainder_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.dtype("fp32"), core.dtype("fp32")): ("__metal_remainder_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 # ---------------------------------------------------------------------------
@@ -618,10 +608,9 @@ def copysign(arg0, arg1, _semantic=None):
 @core.extern
 def signbit(arg0, _semantic=None):
     """Return non-zero if sign bit is set."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_signbit_f32", core.dtype("int32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_signbit_f32", core.dtype("int32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
@@ -657,19 +646,17 @@ def isfinite(arg0, _semantic=None):
 @core.extern
 def isnormal(arg0, _semantic=None):
     """Test for normal value (not zero, subnormal, inf, or NaN)."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_isnormal_f32", core.dtype("int32")),
-        }, is_pure=True, _semantic=_semantic).to(core.int1, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_isnormal_f32", core.dtype("int32")),
+    }, is_pure=True, _semantic=_semantic).to(core.int1, _semantic=_semantic)
 
 
 @core.extern
 def isunordered(arg0, arg1, _semantic=None):
     """Test if either argument is NaN (unordered comparison)."""
-    return core.extern_elementwise(
-        "", "", [arg0, arg1], {
-            (core.dtype("fp32"), core.dtype("fp32")): ("__metal_isunordered_f32", core.dtype("int32")),
-        }, is_pure=True, _semantic=_semantic).to(core.int1, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.dtype("fp32"), core.dtype("fp32")): ("__metal_isunordered_f32", core.dtype("int32")),
+    }, is_pure=True, _semantic=_semantic).to(core.int1, _semantic=_semantic)
 
 
 # ---------------------------------------------------------------------------
@@ -680,10 +667,9 @@ def isunordered(arg0, arg1, _semantic=None):
 @core.extern
 def fdim(arg0, arg1, _semantic=None):
     """Positive difference: max(arg0 - arg1, 0)."""
-    return core.extern_elementwise(
-        "", "", [arg0, arg1], {
-            (core.dtype("fp32"), core.dtype("fp32")): ("__metal_fdim_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.dtype("fp32"), core.dtype("fp32")): ("__metal_fdim_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 # ---------------------------------------------------------------------------
@@ -694,46 +680,41 @@ def fdim(arg0, arg1, _semantic=None):
 @core.extern
 def erf(arg0, _semantic=None):
     """Error function."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_erf_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_erf_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def erfc(arg0, _semantic=None):
     """Complementary error function: 1 - erf(x)."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_erfc_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_erfc_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def erfinv(arg0, _semantic=None):
     """Inverse error function."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_erfinv_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_erfinv_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def erfcinv(arg0, _semantic=None):
     """Inverse complementary error function."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_erfcinv_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_erfcinv_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def erfcx(arg0, _semantic=None):
     """Scaled complementary error function: exp(x*x) * erfc(x)."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_erfcx_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_erfcx_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 # ---------------------------------------------------------------------------
@@ -744,19 +725,17 @@ def erfcx(arg0, _semantic=None):
 @core.extern
 def normcdf(arg0, _semantic=None):
     """Standard normal cumulative distribution function."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_normcdf_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_normcdf_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def normcdfinv(arg0, _semantic=None):
     """Inverse standard normal cumulative distribution function."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_normcdfinv_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_normcdfinv_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 # ---------------------------------------------------------------------------
@@ -767,19 +746,17 @@ def normcdfinv(arg0, _semantic=None):
 @core.extern
 def lgamma(arg0, _semantic=None):
     """Log-gamma function: log(|gamma(x)|)."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_lgamma_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_lgamma_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def tgamma(arg0, _semantic=None):
     """True gamma function."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_tgamma_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_tgamma_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 # ---------------------------------------------------------------------------
@@ -790,46 +767,41 @@ def tgamma(arg0, _semantic=None):
 @core.extern
 def nextafter(arg0, arg1, _semantic=None):
     """Next representable float after arg0 in direction of arg1."""
-    return core.extern_elementwise(
-        "", "", [arg0, arg1], {
-            (core.dtype("fp32"), core.dtype("fp32")): ("__metal_nextafter_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.dtype("fp32"), core.dtype("fp32")): ("__metal_nextafter_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def ldexp(arg0, arg1, _semantic=None):
     """Load exponent: arg0 * 2^arg1."""
-    return core.extern_elementwise(
-        "", "", [arg0, arg1], {
-            (core.dtype("fp32"), core.dtype("int32")): ("__metal_ldexp_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.dtype("fp32"), core.dtype("int32")): ("__metal_ldexp_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def scalbn(arg0, arg1, _semantic=None):
     """Scale by power of radix: arg0 * FLT_RADIX^arg1."""
-    return core.extern_elementwise(
-        "", "", [arg0, arg1], {
-            (core.dtype("fp32"), core.dtype("int32")): ("__metal_scalbn_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.dtype("fp32"), core.dtype("int32")): ("__metal_scalbn_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def ilogb(arg0, _semantic=None):
     """Extract unbiased exponent as integer."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_ilogb_f32", core.dtype("int32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_ilogb_f32", core.dtype("int32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def logb(arg0, _semantic=None):
     """Extract exponent as floating-point value."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_logb_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_logb_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 # ---------------------------------------------------------------------------
@@ -862,14 +834,11 @@ def clamp(arg0, arg1, arg2, _semantic=None):
     """Clamp arg0 to range [arg1, arg2]. Returns min(max(arg0, arg1), arg2)."""
     return core.extern_elementwise(
         "", "", [arg0, arg1, arg2], {
-            (core.dtype("fp16"), core.dtype("fp16"), core.dtype("fp16")):
-                ("__metal_clamp_f16", core.dtype("fp16")),
-            (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")):
-                ("__metal_clamp_f32", core.dtype("fp32")),
-            (core.dtype("int32"), core.dtype("int32"), core.dtype("int32")):
-                ("__metal_clamp_i32", core.dtype("int32")),
+            (core.dtype("fp16"), core.dtype("fp16"), core.dtype("fp16")): ("__metal_clamp_f16", core.dtype("fp16")),
+            (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")): ("__metal_clamp_f32", core.dtype("fp32")),
+            (core.dtype("int32"), core.dtype("int32"), core.dtype("int32")): ("__metal_clamp_i32", core.dtype("int32")),
             (core.dtype("uint32"), core.dtype("uint32"), core.dtype("uint32")):
-                ("__metal_clamp_u32", core.dtype("uint32")),
+            ("__metal_clamp_u32", core.dtype("uint32")),
         }, is_pure=True, _semantic=_semantic)
 
 
@@ -878,10 +847,8 @@ def mix(arg0, arg1, arg2, _semantic=None):
     """Linear interpolation: arg0 + (arg1 - arg0) * arg2. Metal native."""
     return core.extern_elementwise(
         "", "", [arg0, arg1, arg2], {
-            (core.dtype("fp16"), core.dtype("fp16"), core.dtype("fp16")):
-                ("__metal_mix_f16", core.dtype("fp16")),
-            (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")):
-                ("__metal_mix_f32", core.dtype("fp32")),
+            (core.dtype("fp16"), core.dtype("fp16"), core.dtype("fp16")): ("__metal_mix_f16", core.dtype("fp16")),
+            (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")): ("__metal_mix_f32", core.dtype("fp32")),
         }, is_pure=True, _semantic=_semantic)
 
 
@@ -901,9 +868,9 @@ def smoothstep(arg0, arg1, arg2, _semantic=None):
     return core.extern_elementwise(
         "", "", [arg0, arg1, arg2], {
             (core.dtype("fp16"), core.dtype("fp16"), core.dtype("fp16")):
-                ("__metal_smoothstep_f16", core.dtype("fp16")),
+            ("__metal_smoothstep_f16", core.dtype("fp16")),
             (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")):
-                ("__metal_smoothstep_f32", core.dtype("fp32")),
+            ("__metal_smoothstep_f32", core.dtype("fp32")),
         }, is_pure=True, _semantic=_semantic)
 
 
@@ -1338,28 +1305,25 @@ def precise_divide(arg0, arg1, _semantic=None):
 @core.extern
 def distance(arg0, arg1, _semantic=None):
     """Euclidean distance between two scalar values: |arg0 - arg1|."""
-    return core.extern_elementwise(
-        "", "", [arg0, arg1], {
-            (core.dtype("fp32"), core.dtype("fp32")): ("__metal_distance_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.dtype("fp32"), core.dtype("fp32")): ("__metal_distance_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def length(arg0, _semantic=None):
     """Length (magnitude) of a scalar value: |arg0|. Same as fabs for scalars."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_length_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_length_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def normalize(arg0, _semantic=None):
     """Normalize: arg0 / |arg0|. Returns sign for scalars."""
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__metal_normalize_f32", core.dtype("fp32")),
-        }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__metal_normalize_f32", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 # ---------------------------------------------------------------------------
@@ -1373,9 +1337,9 @@ def extract_bits(arg0, arg1, arg2, _semantic=None):
     return core.extern_elementwise(
         "", "", [arg0, arg1, arg2], {
             (core.dtype("int32"), core.dtype("int32"), core.dtype("int32")):
-                ("__metal_extract_bits_i32", core.dtype("int32")),
+            ("__metal_extract_bits_i32", core.dtype("int32")),
             (core.dtype("uint32"), core.dtype("int32"), core.dtype("int32")):
-                ("__metal_extract_bits_u32", core.dtype("uint32")),
+            ("__metal_extract_bits_u32", core.dtype("uint32")),
         }, is_pure=True, _semantic=_semantic)
 
 
@@ -1385,9 +1349,9 @@ def insert_bits(arg0, arg1, arg2, arg3, _semantic=None):
     return core.extern_elementwise(
         "", "", [arg0, arg1, arg2, arg3], {
             (core.dtype("int32"), core.dtype("int32"), core.dtype("int32"), core.dtype("int32")):
-                ("__metal_insert_bits_i32", core.dtype("int32")),
+            ("__metal_insert_bits_i32", core.dtype("int32")),
             (core.dtype("uint32"), core.dtype("uint32"), core.dtype("int32"), core.dtype("int32")):
-                ("__metal_insert_bits_u32", core.dtype("uint32")),
+            ("__metal_insert_bits_u32", core.dtype("uint32")),
         }, is_pure=True, _semantic=_semantic)
 
 
@@ -1416,12 +1380,11 @@ def select(arg0, arg1, arg2, _semantic=None):
     """Conditional select: returns arg1 if arg2 is true (MSB set), else arg0."""
     return core.extern_elementwise(
         "", "", [arg0, arg1, arg2], {
-            (core.dtype("fp32"), core.dtype("fp32"), core.dtype("int32")):
-                ("__metal_select_f32", core.dtype("fp32")),
+            (core.dtype("fp32"), core.dtype("fp32"), core.dtype("int32")): ("__metal_select_f32", core.dtype("fp32")),
             (core.dtype("int32"), core.dtype("int32"), core.dtype("int32")):
-                ("__metal_select_i32", core.dtype("int32")),
+            ("__metal_select_i32", core.dtype("int32")),
             (core.dtype("uint32"), core.dtype("uint32"), core.dtype("int32")):
-                ("__metal_select_u32", core.dtype("uint32")),
+            ("__metal_select_u32", core.dtype("uint32")),
         }, is_pure=True, _semantic=_semantic)
 
 
@@ -1435,10 +1398,8 @@ def mad(arg0, arg1, arg2, _semantic=None):
     """Multiply and add: arg0 * arg1 + arg2. May not be fused (unlike fma)."""
     return core.extern_elementwise(
         "", "", [arg0, arg1, arg2], {
-            (core.dtype("fp16"), core.dtype("fp16"), core.dtype("fp16")):
-                ("__metal_mad_f16", core.dtype("fp16")),
-            (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")):
-                ("__metal_mad_f32", core.dtype("fp32")),
+            (core.dtype("fp16"), core.dtype("fp16"), core.dtype("fp16")): ("__metal_mad_f16", core.dtype("fp16")),
+            (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")): ("__metal_mad_f32", core.dtype("fp32")),
         }, is_pure=True, _semantic=_semantic)
 
 
@@ -1509,51 +1470,56 @@ def simdgroup_matrix_multiply(a, b, _semantic=None):
     Uses Apple GPU's hardware matrix units for accelerated matmul.
     Equivalent to NVIDIA's wmma/mma instructions.
     """
-    return core.extern_elementwise("", "", [a, b], {
-        (core.dtype("fp16"), core.dtype("fp16")): ("__metal_simdgroup_matrix_multiply_f16", core.dtype("fp16")),
-        (core.dtype("fp32"), core.dtype("fp32")): ("__metal_simdgroup_matrix_multiply_f32", core.dtype("fp32")),
-        (core.dtype("bf16"), core.dtype("bf16")): ("__metal_simdgroup_matrix_multiply_bf16", core.dtype("bf16")),
-    }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise(
+        "", "", [a, b], {
+            (core.dtype("fp16"), core.dtype("fp16")): ("__metal_simdgroup_matrix_multiply_f16", core.dtype("fp16")),
+            (core.dtype("fp32"), core.dtype("fp32")): ("__metal_simdgroup_matrix_multiply_f32", core.dtype("fp32")),
+            (core.dtype("bf16"), core.dtype("bf16")): ("__metal_simdgroup_matrix_multiply_bf16", core.dtype("bf16")),
+        }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def simdgroup_load(src, _semantic=None):
     """Load data into a simdgroup matrix tile from device memory."""
-    return core.extern_elementwise("", "", [src], {
-        (core.dtype("fp16"), ): ("__metal_simdgroup_load_f16", core.dtype("fp16")),
-        (core.dtype("fp32"), ): ("__metal_simdgroup_load_f32", core.dtype("fp32")),
-        (core.dtype("bf16"), ): ("__metal_simdgroup_load_bf16", core.dtype("bf16")),
-    }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise(
+        "", "", [src], {
+            (core.dtype("fp16"), ): ("__metal_simdgroup_load_f16", core.dtype("fp16")),
+            (core.dtype("fp32"), ): ("__metal_simdgroup_load_f32", core.dtype("fp32")),
+            (core.dtype("bf16"), ): ("__metal_simdgroup_load_bf16", core.dtype("bf16")),
+        }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def simdgroup_store(val, dst, _semantic=None):
     """Store simdgroup matrix tile data to device memory."""
-    return core.extern_elementwise("", "", [val, dst], {
-        (core.dtype("fp16"), core.dtype("fp16")): ("__metal_simdgroup_store_f16", core.dtype("fp16")),
-        (core.dtype("fp32"), core.dtype("fp32")): ("__metal_simdgroup_store_f32", core.dtype("fp32")),
-        (core.dtype("bf16"), core.dtype("bf16")): ("__metal_simdgroup_store_bf16", core.dtype("bf16")),
-    }, is_pure=False, _semantic=_semantic)
+    return core.extern_elementwise(
+        "", "", [val, dst], {
+            (core.dtype("fp16"), core.dtype("fp16")): ("__metal_simdgroup_store_f16", core.dtype("fp16")),
+            (core.dtype("fp32"), core.dtype("fp32")): ("__metal_simdgroup_store_f32", core.dtype("fp32")),
+            (core.dtype("bf16"), core.dtype("bf16")): ("__metal_simdgroup_store_bf16", core.dtype("bf16")),
+        }, is_pure=False, _semantic=_semantic)
 
 
 @core.extern
 def atomic_load_explicit(ptr, _semantic=None):
     """Metal 4 explicit atomic load (relaxed memory order)."""
-    return core.extern_elementwise("", "", [ptr], {
-        (core.dtype("int32"), ): ("__metal_atomic_load_explicit_i32", core.dtype("int32")),
-        (core.dtype("uint32"), ): ("__metal_atomic_load_explicit_u32", core.dtype("uint32")),
-        (core.dtype("fp32"), ): ("__metal_atomic_load_explicit_f32", core.dtype("fp32")),
-    }, is_pure=True, _semantic=_semantic)
+    return core.extern_elementwise(
+        "", "", [ptr], {
+            (core.dtype("int32"), ): ("__metal_atomic_load_explicit_i32", core.dtype("int32")),
+            (core.dtype("uint32"), ): ("__metal_atomic_load_explicit_u32", core.dtype("uint32")),
+            (core.dtype("fp32"), ): ("__metal_atomic_load_explicit_f32", core.dtype("fp32")),
+        }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def atomic_store_explicit(ptr, val, _semantic=None):
     """Metal 4 explicit atomic store (relaxed memory order)."""
-    return core.extern_elementwise("", "", [ptr, val], {
-        (core.dtype("int32"), core.dtype("int32")): ("__metal_atomic_store_explicit_i32", core.dtype("int32")),
-        (core.dtype("uint32"), core.dtype("uint32")): ("__metal_atomic_store_explicit_u32", core.dtype("uint32")),
-        (core.dtype("fp32"), core.dtype("fp32")): ("__metal_atomic_store_explicit_f32", core.dtype("fp32")),
-    }, is_pure=False, _semantic=_semantic)
+    return core.extern_elementwise(
+        "", "", [ptr, val], {
+            (core.dtype("int32"), core.dtype("int32")): ("__metal_atomic_store_explicit_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__metal_atomic_store_explicit_u32", core.dtype("uint32")),
+            (core.dtype("fp32"), core.dtype("fp32")): ("__metal_atomic_store_explicit_f32", core.dtype("fp32")),
+        }, is_pure=False, _semantic=_semantic)
 
 
 @core.extern
@@ -1563,12 +1529,13 @@ def threadgroup_async_copy(dst, src, num_elements, _semantic=None):
     Initiates an async copy from device to threadgroup memory,
     similar to CUDA's cp.async.
     """
-    return core.extern_elementwise("", "", [dst, src, num_elements], {
-        (core.dtype("fp32"), core.dtype("fp32"), core.dtype("int32")):
+    return core.extern_elementwise(
+        "", "", [dst, src, num_elements], {
+            (core.dtype("fp32"), core.dtype("fp32"), core.dtype("int32")):
             ("__metal_threadgroup_async_copy_f32", core.dtype("int32")),
-        (core.dtype("fp16"), core.dtype("fp16"), core.dtype("int32")):
+            (core.dtype("fp16"), core.dtype("fp16"), core.dtype("int32")):
             ("__metal_threadgroup_async_copy_f16", core.dtype("int32")),
-    }, is_pure=False, _semantic=_semantic)
+        }, is_pure=False, _semantic=_semantic)
 
 
 @core.extern

@@ -255,4 +255,4 @@ class TestMetalOptions:
 
         opts = MetalOptions(extern_libs={'test': '/path/to/lib'})
         assert isinstance(opts.extern_libs, tuple)
-        assert opts.extern_libs == (('test', '/path/to/lib'),)
+        assert opts.extern_libs == (('test', '/path/to/lib'), )
