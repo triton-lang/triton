@@ -65,6 +65,27 @@ def test_block_copy(dtypes_str, n, padding_option, boundary_check, device):
             assert torch.all(torch.isnan(b[n // 2:n]))
 
 
+@pytest.mark.parametrize("padding_option", ["zero", "nan"])
+def test_block_copy_fp8_padding(padding_option, device):
+    # Regression test for #10751: a padded block-pointer load of an fp8 tensor
+    # used to fail to compile ("cannot cast int32 ... to fp8e4nv") because the
+    # "zero" padding value was an int and there is no int -> fp8 cast.
+    check_type_supported(torch.float8_e4m3fn, device)
+    n = 256
+    a = torch.randn((n, ), device=device, dtype=torch.float32).to(torch.float8_e4m3fn)
+    b = torch.zeros((n, ), device=device, dtype=torch.float8_e4m3fn)
+    grid = lambda meta: (triton.cdiv(n, meta["BLOCK_SIZE"]), )
+    block_copy_kernel[grid](a_ptr=a, b_ptr=b, N=n, BLOCK_SIZE=64, PADDING_OPTION=padding_option, TEST_LOWER_BOUND=False,
+                            TEST_UPPER_BOUND=False)
+    # In-bounds half is copied exactly; the padded upper half takes the pad value.
+    assert torch.all(a[0:n // 2] == b[0:n // 2])
+    bf = b[n // 2:n].to(torch.float32)
+    if padding_option == "zero":
+        assert torch.all(bf == 0)
+    else:
+        assert torch.all(torch.isnan(bf))
+
+
 @triton.jit
 def matmul_no_scf_with_advance_kernel(  #
         a_ptr, b_ptr, c_ptr,  #
