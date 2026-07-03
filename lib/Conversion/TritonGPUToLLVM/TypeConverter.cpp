@@ -7,7 +7,7 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::triton::gpu::getTotalElemsPerThread;
+using ::mlir::triton::gpu::getUniqueElemsPerThread;
 using ::mlir::triton::gpu::MemDescType;
 
 TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
@@ -48,7 +48,7 @@ Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
     RankedTensorType type, const TargetInfoBase &targetInfo) {
   auto ctx = type.getContext();
   Type eltType = convertType(type.getElementType());
-  unsigned numElementsPerThread = getTotalElemsPerThread(type);
+  unsigned numElementsPerThread = getUniqueElemsPerThread(type);
   SmallVector<Type, 4> types(numElementsPerThread, eltType);
   return LLVM::LLVMStructType::getLiteral(ctx, types);
 }

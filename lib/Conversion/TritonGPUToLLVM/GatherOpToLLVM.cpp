@@ -74,8 +74,8 @@ void GatherOpConversion::emitGatherInShared(
       convertType<unsigned>(triton::gpu::getShapePerCTA(srcType));
 
   // Grab the src values in this thread.
-  SmallVector<Value> srcValues =
-      unpackLLElements(loc, adaptor.getSrc(), rewriter);
+  SmallVector<Value> srcValues = unpackTensorElements(
+      loc, adaptor.getSrc(), rewriter, op.getSrc().getType());
 
   // Emit the indices of the src values owned by this thread.
   SmallVector<SmallVector<Value>> srcIndices =
@@ -105,8 +105,8 @@ void GatherOpConversion::emitGatherInShared(
   b.barrier(triton::gpu::AddrSpace::Local);
 
   // Grab the index values owned by this thread.
-  SmallVector<Value> idxValues =
-      unpackLLElements(loc, adaptor.getIndices(), rewriter);
+  SmallVector<Value> idxValues = unpackTensorElements(
+      loc, adaptor.getIndices(), rewriter, op.getIndices().getType());
 
   // Apply the layout of the destination tensor to obtain the indices of the
   // column to gather along, then for each column, replace the index along the
@@ -132,7 +132,7 @@ void GatherOpConversion::emitGatherInShared(
   }
 
   Value packed =
-      packLLElements(loc, getTypeConverter(), results, rewriter, dstType);
+      packTensorElements(loc, getTypeConverter(), results, rewriter, dstType);
   rewriter.replaceOp(op, packed);
 }
 
@@ -212,6 +212,8 @@ void GatherOpConversion::emitWarpLocalGather(
   // Compute the src and idx layouts.
   LinearLayout srcLayout = toLinearLayout(srcType);
   LinearLayout idxLayout = toLinearLayout(idxType);
+  bool isThreadLocal =
+      srcLayout.sublayoutIsZero({kBlock, kWarp, kLane}, kGatherDim);
 
   // Let `ll_src` be the source layout and `ll_idx` be the index layout.
   // Let `src_col` be a tuple of dimensions except the gather dimension,
@@ -256,10 +258,10 @@ void GatherOpConversion::emitWarpLocalGather(
   LinearLayout idxColLayout =
       idxLayout.sublayout({kBlock, kWarp, kLane, kRegister}, otherDims);
 
-  SmallVector<Value> srcValues =
-      unpackLLElements(loc, adaptor.getSrc(), rewriter);
-  SmallVector<Value> idxValues =
-      unpackLLElements(loc, adaptor.getIndices(), rewriter);
+  SmallVector<Value> srcValues = unpackTensorElements(
+      loc, adaptor.getSrc(), rewriter, op.getSrc().getType());
+  SmallVector<Value> idxValues = unpackTensorElements(
+      loc, adaptor.getIndices(), rewriter, op.getIndices().getType());
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   Value blockId = targetInfo.getClusterCTAId(rewriter, loc);
@@ -328,16 +330,17 @@ void GatherOpConversion::emitWarpLocalGather(
           invertSrcRegMapRest.apply({{kGatherDim, i}}).front().second;
       int32_t srcRegIdx = srcBase ^ rest;
 
-      Value value =
-          targetInfo.shuffleIdx(rewriter, loc, srcValues[srcRegIdx], srcLane);
+      Value value = srcValues[srcRegIdx];
+      if (!isThreadLocal)
+        value = targetInfo.shuffleIdx(rewriter, loc, value, srcLane);
       result = b.select(b.icmp_eq(b.i32_val(srcRegIdx), srcReg), value, result);
     }
 
     results.push_back(result);
   }
 
-  rewriter.replaceOp(op, packLLElements(loc, getTypeConverter(), results,
-                                        rewriter, op.getType()));
+  rewriter.replaceOp(op, packTensorElements(loc, getTypeConverter(), results,
+                                            rewriter, op.getType()));
 }
 
 } // namespace
