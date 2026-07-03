@@ -13,9 +13,6 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
-#include "llvm/Support/ErrorHandling.h"
-
-#include <vector>
 
 namespace mlir {
 namespace triton {
@@ -25,69 +22,6 @@ namespace nvidia_gpu {
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
 namespace {
-
-static gpu::DistributedEncodingTrait
-replaceCGALayout(gpu::DistributedEncodingTrait layout,
-                 const gpu::CGAEncodingAttr &newCGALayout) {
-  if (auto blockedLayout = mlir::dyn_cast<gpu::BlockedEncodingAttr>(layout)) {
-    return gpu::BlockedEncodingAttr::get(
-        layout.getContext(), blockedLayout.getSizePerThread(),
-        blockedLayout.getThreadsPerWarp(), blockedLayout.getWarpsPerCTA(),
-        blockedLayout.getOrder(), newCGALayout);
-  }
-  if (auto sliceLayout = mlir::dyn_cast<gpu::SliceEncodingAttr>(layout)) {
-    return gpu::SliceEncodingAttr::get(
-        layout.getContext(), sliceLayout.getDim(),
-        replaceCGALayout(sliceLayout.getParent(), newCGALayout));
-  }
-  llvm::report_fatal_error("replaceCGALayout not implemented for layout");
-}
-
-static Value convertGatherOffsetsToMemDescRowsCGALayout(
-    Value xOffsets, gpu::MemDescType memDescType, PatternRewriter &rewriter,
-    Location loc) {
-  auto xOffsetsType = cast<RankedTensorType>(xOffsets.getType());
-  if (!xOffsetsType.getEncoding())
-    return xOffsets;
-
-  MLIRContext *ctx = xOffsets.getContext();
-  auto kBlock = StringAttr::get(ctx, "block");
-  auto kDim0 = StringAttr::get(ctx, "dim0");
-  auto rowsCGALayout = gpu::getCGALayout(memDescType.getEncoding())
-                           .getLinearLayout()
-                           .sublayout({kBlock}, {kDim0});
-  auto xOffsetsCGALayout =
-      gpu::getCGALayout(xOffsetsType.getEncoding()).getLinearLayout();
-  if (rowsCGALayout == xOffsetsCGALayout)
-    return xOffsets;
-
-  auto xOffsetsEncoding =
-      cast<gpu::DistributedEncodingTrait>(xOffsetsType.getEncoding());
-  gpu::DistributedEncodingTrait newEncoding;
-  if (auto sliceEncoding = dyn_cast<gpu::SliceEncodingAttr>(xOffsetsEncoding)) {
-    unsigned parentRank = xOffsetsType.getRank() + 1;
-    unsigned keptDim = sliceEncoding.getDim() == 0 ? 1 : 0;
-    std::vector<std::vector<int32_t>> parentBases;
-    for (ArrayRef<int32_t> rowBasis :
-         rowsCGALayout.getBases().lookup(kBlock)) {
-      std::vector<int32_t> parentBasis(parentRank, 0);
-      parentBasis[keptDim] = rowBasis[0];
-      parentBases.push_back(std::move(parentBasis));
-    }
-    auto parentCGALayout = gpu::CGAEncodingAttr::get(
-        ctx, LinearLayout({{kBlock, std::move(parentBases)}},
-                          standardOutDimNames(ctx, parentRank)));
-    auto newParentEncoding =
-        replaceCGALayout(sliceEncoding.getParent(), parentCGALayout);
-    newEncoding = gpu::SliceEncodingAttr::get(ctx, sliceEncoding.getDim(),
-                                              newParentEncoding);
-  } else {
-    auto newCGAEncoding = gpu::CGAEncodingAttr::get(ctx, rowsCGALayout);
-    newEncoding = replaceCGALayout(xOffsetsEncoding, newCGAEncoding);
-  }
-  auto newType = xOffsetsType.cloneWithEncoding(newEncoding);
-  return gpu::ConvertLayoutOp::create(rewriter, loc, newType, xOffsets);
-}
 
 static void
 lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
@@ -168,11 +102,8 @@ struct TMAGatherLowering : public OpRewritePattern<DescriptorGatherOp> {
 
     auto createLoad = [&](Value desc, Value barrierAlloc, Value alloc,
                           Value pred, bool useMulticast) {
-      auto memDescType = cast<gpu::MemDescType>(alloc.getType());
-      Value gatherOffsets = convertGatherOffsetsToMemDescRowsCGALayout(
-          xOffsets, memDescType, rewriter, op.getLoc());
       triton::nvidia_gpu::AsyncTMAGatherOp::create(
-          rewriter, op.getLoc(), desc, gatherOffsets, op.getYOffset(),
+          rewriter, op.getLoc(), desc, xOffsets, op.getYOffset(),
           barrierAlloc, alloc, pred, useMulticast);
     };
     lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter);

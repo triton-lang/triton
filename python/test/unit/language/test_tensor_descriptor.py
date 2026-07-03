@@ -757,49 +757,6 @@ def test_make_tensor_descriptor_no_loop_tma_load_multicast_two_cta(device):
 
 
 @triton.jit
-def matmul_kernel_make_tensor_descriptor_gather_no_loop(a_ptr, b_ptr, c_ptr, M: tl.constexpr, N: tl.constexpr,
-                                                        K: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
-                                                        BLOCK_K: tl.constexpr):
-    a_desc = tl.make_tensor_descriptor(a_ptr, [M, K], [K, 1], [1, BLOCK_K])
-    b_desc = tl.make_tensor_descriptor(b_ptr, [K, N], [N, 1], [BLOCK_K, BLOCK_N])
-    c_desc = tl.make_tensor_descriptor(c_ptr, [M, N], [N, 1], [BLOCK_M, BLOCK_N])
-
-    a = a_desc.gather(tl.arange(0, BLOCK_M), 0)
-    b = b_desc.load([0, 0])
-    accumulator = tl.dot(a, b)
-    c_desc.store([0, 0], accumulator.to(a_desc.dtype))
-
-
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability(0)[0] != 10, reason="Requires Blackwell MMAv5")
-def test_make_tensor_descriptor_no_loop_tma_gather_multicast_two_cta(device):
-    M, N, K = 256, 256, 64
-    BLOCK_M, BLOCK_N, BLOCK_K = M, N, K
-    torch.manual_seed(42)
-    A = torch.randn((M, K), dtype=torch.float16, device=device)
-    B = torch.randn((K, N), dtype=torch.float16, device=device)
-    C = torch.empty((M, N), dtype=torch.float16, device=device)
-
-    def alloc_fn(size: int, align: int, stream: Optional[int]):
-        assert align == 128
-        assert stream == 0
-        return torch.empty(size, dtype=torch.int8, device=device)
-
-    triton.set_allocator(alloc_fn)
-
-    kernel = matmul_kernel_make_tensor_descriptor_gather_no_loop[(1, )](A, B, C, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
-                                                                        num_warps=4, num_ctas=4)
-    ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32)).to(torch.float16)
-    torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
-
-    assert "scf.for" not in kernel.asm["ttgir"]
-    assert "ttng.async_tma_gather" in kernel.asm["ttgir"]
-    mma_lines = [line for line in kernel.asm["ttgir"].splitlines() if "ttng.tc_gen5_mma" in line]
-    assert any("two_ctas" in line and "multicast" in line for line in mma_lines)
-    assert "cta_group::2" in kernel.asm["ptx"]
-    assert "multicast::cluster" in kernel.asm["ptx"]
-
-
-@triton.jit
 def kernel_make_tensor_descriptor_loop_carried(a_ptr, M, N, MBLOCK: tl.constexpr, NBLOCK: tl.constexpr):
     # Test that descriptors work with
     pid = tl.program_id(0)
