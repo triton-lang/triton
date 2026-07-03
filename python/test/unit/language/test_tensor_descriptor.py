@@ -728,7 +728,7 @@ def matmul_kernel_make_tensor_descriptor_no_loop(a_ptr, b_ptr, c_ptr, M: tl.cons
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability(0)[0] != 10, reason="Requires Blackwell MMAv5")
-def test_make_tensor_descriptor_no_loop_tma_load_multicast_two_cta(device, capfd):
+def test_make_tensor_descriptor_no_loop_tma_load_multicast_two_cta(device):
     M, N, K = 256, 256, 64
     BLOCK_M, BLOCK_N, BLOCK_K = M, N, K
     torch.manual_seed(42)
@@ -743,16 +743,17 @@ def test_make_tensor_descriptor_no_loop_tma_load_multicast_two_cta(device, capfd
 
     triton.set_allocator(alloc_fn)
 
-    with pytest.raises(RuntimeError, match="PassManager::run failed"):
-        matmul_kernel_make_tensor_descriptor_no_loop.warmup(A, B, C, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, grid=(1, ),
-                                                            num_warps=4, num_ctas=4)
-    stderr = capfd.readouterr().err
-    assert "scf.for" not in stderr
-    assert "ttng.async_tma_copy_global_to_local" in stderr
-    assert "!ttg.memdesc<2xi64" in stderr
-    assert "ttng.tc_gen5_mma" in stderr
-    assert "two_ctas" in stderr
-    assert "multicast" in stderr
+    kernel = matmul_kernel_make_tensor_descriptor_no_loop[(1, )](A, B, C, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
+                                                                 num_warps=4, num_ctas=4)
+    ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32)).to(torch.float16)
+    torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
+
+    assert "scf.for" not in kernel.asm["ttgir"]
+    assert "ttng.async_tma_copy_global_to_local" in kernel.asm["ttgir"]
+    mma_lines = [line for line in kernel.asm["ttgir"].splitlines() if "ttng.tc_gen5_mma" in line]
+    assert any("two_ctas" in line and "multicast" in line for line in mma_lines)
+    assert "cta_group::2" in kernel.asm["ptx"]
+    assert "multicast::cluster" in kernel.asm["ptx"]
 
 
 @triton.jit
@@ -770,7 +771,7 @@ def matmul_kernel_make_tensor_descriptor_gather_no_loop(a_ptr, b_ptr, c_ptr, M: 
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability(0)[0] != 10, reason="Requires Blackwell MMAv5")
-def test_make_tensor_descriptor_no_loop_tma_gather_multicast_two_cta_rejects_mismatched_offsets(device, capfd):
+def test_make_tensor_descriptor_no_loop_tma_gather_multicast_two_cta(device):
     M, N, K = 256, 256, 64
     BLOCK_M, BLOCK_N, BLOCK_K = M, N, K
     torch.manual_seed(42)
@@ -785,12 +786,17 @@ def test_make_tensor_descriptor_no_loop_tma_gather_multicast_two_cta_rejects_mis
 
     triton.set_allocator(alloc_fn)
 
-    with pytest.raises(RuntimeError, match="PassManager::run failed"):
-        matmul_kernel_make_tensor_descriptor_gather_no_loop.warmup(A, B, C, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
-                                                                   grid=(1, ), num_warps=4, num_ctas=4)
-    stderr = capfd.readouterr().err
-    assert "ttng.async_tma_gather" in stderr
-    assert "x offsets must have the same row CGA layout as the memdesc" in stderr
+    kernel = matmul_kernel_make_tensor_descriptor_gather_no_loop[(1, )](A, B, C, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
+                                                                        num_warps=4, num_ctas=4)
+    ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32)).to(torch.float16)
+    torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
+
+    assert "scf.for" not in kernel.asm["ttgir"]
+    assert "ttng.async_tma_gather" in kernel.asm["ttgir"]
+    mma_lines = [line for line in kernel.asm["ttgir"].splitlines() if "ttng.tc_gen5_mma" in line]
+    assert any("two_ctas" in line and "multicast" in line for line in mma_lines)
+    assert "cta_group::2" in kernel.asm["ptx"]
+    assert "multicast::cluster" in kernel.asm["ptx"]
 
 
 @triton.jit

@@ -140,37 +140,21 @@ static bool opUsesTrackedMBarrier(Operation *op,
 }
 
 static LogicalResult
-insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
-                                          Allocation *allocation, int numCTAs,
-                                          OpBuilder &builder) {
-  if (!funcOp || funcOp->getNumRegions() != 1) {
-    return funcOp.emitOpError(
-        "cross-CTA mbarrier init sync insertion requires a single function "
-        "top-level region");
-  }
+insertCrossCTAMBarrierInitSyncForBarrier(FunctionOpInterface funcOp,
+                                         Allocation *allocation,
+                                         ttng::InitBarrierOp initBarrierOp,
+                                         OpBuilder &builder) {
   Region &topLevelRegion = funcOp->getRegion(0);
-  llvm::SetVector<Operation *> crossCTAInitAnchors;
-  Allocation::BufferIdSetT trackedBarrierBuffers;
+  Operation *crossCTAInitAnchor =
+      topLevelRegion.findAncestorOpInRegion(*initBarrierOp.getOperation());
+  assert(crossCTAInitAnchor && "init op must be inside the function region");
 
-  // Find all cross-CTA mbarrier.init ops and map each
-  // one to the containing top-level op that bounds the insertion window.
-  funcOp.walk([&](ttng::InitBarrierOp initBarrierOp) {
-    if (!requiresCrossCTAMBarrierInitSync(initBarrierOp, funcOp, allocation,
-                                          numCTAs))
-      return;
-    Operation *topLevelAnchor =
-        topLevelRegion.findAncestorOpInRegion(*initBarrierOp.getOperation());
-    assert(topLevelAnchor && "init op must be inside the function region");
-    crossCTAInitAnchors.insert(topLevelAnchor);
-    for (auto bufferId :
-         allocation->getAllBufferIdsWithAliases(initBarrierOp.getBarrier())) {
-      assert(bufferId != Allocation::InvalidBufferId);
-      trackedBarrierBuffers.insert(bufferId);
-    }
-  });
-  // Nothing to do
-  if (crossCTAInitAnchors.empty())
-    return success();
+  Allocation::BufferIdSetT trackedBarrierBuffers;
+  for (auto bufferId :
+       allocation->getAllBufferIdsWithAliases(initBarrierOp.getBarrier())) {
+    assert(bufferId != Allocation::InvalidBufferId);
+    trackedBarrierBuffers.insert(bufferId);
+  }
 
   llvm::SetVector<Operation *> trackedUseAnchors;
   for (Block &block : topLevelRegion) {
@@ -184,31 +168,8 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
                               "not find any mbarrier use");
   }
 
-  // Find the earliest insertion point that postdominates every tracked init.
   PostDominanceInfo postDomInfo(funcOp);
-  llvm::SmallPtrSet<Block *, 8> initBlocks;
-  for (Operation *crossCTAInitAnchor : crossCTAInitAnchors)
-    initBlocks.insert(crossCTAInitAnchor->getBlock());
-  Block *firstInsertionBlock =
-      postDomInfo.findNearestCommonDominator(initBlocks);
-  if (!firstInsertionBlock) {
-    return funcOp.emitOpError(
-        "could not find a common post-dominating insertion block for "
-        "cross-CTA mbarrier.init");
-  }
-
-  Operation *lastInitInInsertionBlock = nullptr;
-  for (Operation *crossCTAInitAnchor : crossCTAInitAnchors) {
-    if (crossCTAInitAnchor->getBlock() != firstInsertionBlock)
-      continue;
-    if (!lastInitInInsertionBlock ||
-        lastInitInInsertionBlock->isBeforeInBlock(crossCTAInitAnchor)) {
-      lastInitInInsertionBlock = crossCTAInitAnchor;
-    }
-  }
-  Operation *firstInsertionAnchor =
-      lastInitInInsertionBlock ? lastInitInInsertionBlock->getNextNode()
-                               : &firstInsertionBlock->front();
+  Operation *firstInsertionAnchor = crossCTAInitAnchor->getNextNode();
 
   // Find the latest insertion point that still dominates every tracked use.
   DominanceInfo domInfo(funcOp);
@@ -235,7 +196,8 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
                                        ? firstTrackedUseInInsertionBlock
                                        : lastInsertionBlock->getTerminator();
 
-  if (!domInfo.dominates(firstInsertionAnchor, lastInsertionAnchor)) {
+  if (!firstInsertionAnchor ||
+      !domInfo.dominates(firstInsertionAnchor, lastInsertionAnchor)) {
     return funcOp.emitOpError(
         "could not find an insertion point between cross-CTA mbarrier.init "
         "ops and tracked mbarrier uses");
@@ -269,12 +231,35 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
           ? reusedClusterBarrier.getOperation()
           : lastInsertionAnchor;
   builder.setInsertionPoint(fenceInsertionPoint);
-  Location loc = lastInitInInsertionBlock
-                     ? lastInitInInsertionBlock->getLoc()
-                     : crossCTAInitAnchors.front()->getLoc();
+  Location loc = crossCTAInitAnchor->getLoc();
   ttng::FenceMBarrierInitReleaseClusterOp::create(builder, loc);
   if (!reusedClusterBarrier)
     ttng::ClusterBarrierOp::create(builder, loc, /*relaxed=*/true);
+  return success();
+}
+
+static LogicalResult
+insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
+                                          Allocation *allocation, int numCTAs,
+                                          OpBuilder &builder) {
+  if (!funcOp || funcOp->getNumRegions() != 1) {
+    return funcOp.emitOpError(
+        "cross-CTA mbarrier init sync insertion requires a single function "
+        "top-level region");
+  }
+
+  SmallVector<ttng::InitBarrierOp> crossCTAInits;
+  funcOp.walk([&](ttng::InitBarrierOp initBarrierOp) {
+    if (requiresCrossCTAMBarrierInitSync(initBarrierOp, funcOp, allocation,
+                                         numCTAs))
+      crossCTAInits.push_back(initBarrierOp);
+  });
+
+  for (ttng::InitBarrierOp initBarrierOp : crossCTAInits)
+    if (failed(insertCrossCTAMBarrierInitSyncForBarrier(
+            funcOp, allocation, initBarrierOp, builder)))
+      return failure();
+
   return success();
 }
 
