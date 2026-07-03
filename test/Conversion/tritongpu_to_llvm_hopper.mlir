@@ -301,11 +301,11 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // CHECK-LABEL: convert_mma_to_blocked
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func @convert_mma_to_blocked(%a: tensor<128x256xf16, #mma>) {
-    // CHECK-COUNT-8: llvm.store
+    // CHECK-COUNT-8: llvm.inline_asm {{.*}} "st.shared::cta.v4.b32
     //          CHECK: nvvm.barrier
     // CHECK-COUNT-8: nvvm.ldmatrix
     //          CHECK: nvvm.barrier
-    // CHECK-COUNT-8: llvm.store
+    // CHECK-COUNT-8: llvm.inline_asm {{.*}} "st.shared::cta.v4.b32
     //          CHECK: nvvm.barrier
     // CHECK-COUNT-8: nvvm.ldmatrix
     %c = ttg.convert_layout %a : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked>
@@ -319,19 +319,19 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 32]], warp = [[32, 0], [64, 0], [16, 0]], block = []}>
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func @convert_mma_to_blocked(%a: tensor<128x64xbf16, #linear>) {
-    // CHECK: llvm.store {{.*}} : vector<4xi32>
+    // CHECK: llvm.inline_asm {{.*}} "st.shared::cta.v4.b32
     // CHECK: nvvm.barrier
     // CHECK: llvm.load {{.*}} -> vector<4xi32>
     // CHECK: nvvm.barrier
-    // CHECK: llvm.store {{.*}} : vector<4xi32>
+    // CHECK: llvm.inline_asm {{.*}} "st.shared::cta.v4.b32
     // CHECK: nvvm.barrier
     // CHECK: llvm.load {{.*}} -> vector<4xi32>
     // CHECK: nvvm.barrier
-    // CHECK: llvm.store {{.*}} : vector<4xi32>
+    // CHECK: llvm.inline_asm {{.*}} "st.shared::cta.v4.b32
     // CHECK: nvvm.barrier
     // CHECK: llvm.load {{.*}} -> vector<4xi32>
     // CHECK: nvvm.barrier
-    // CHECK: llvm.store {{.*}} : vector<4xi32>
+    // CHECK: llvm.inline_asm {{.*}} "st.shared::cta.v4.b32
     // CHECK: nvvm.barrier
     // CHECK: llvm.load {{.*}} -> vector<4xi32>
     // CHECK-NOT: llvm.store
@@ -349,19 +349,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // There are x4 the ldmatrix as there is broadcasting at a warp level
   // CHECK-LABEL: convert_blocked_to_dot_rhs
   tt.func @convert_blocked_to_dot_rhs(%a: tensor<64x64xf16, #blocked>) {
-    // CHECK-COUNT-1: llvm.store
+    // CHECK-COUNT-1: llvm.inline_asm {{.*}} "st.shared::cta.v4.b32
     //          CHECK: nvvm.barrier
     // CHECK-COUNT-4: nvvm.ldmatrix
     //          CHECK: nvvm.barrier
-    // CHECK-COUNT-1: llvm.store
+    // CHECK-COUNT-1: llvm.inline_asm {{.*}} "st.shared::cta.v4.b32
     //          CHECK: nvvm.barrier
     // CHECK-COUNT-4: nvvm.ldmatrix
     //          CHECK: nvvm.barrier
-    // CHECK-COUNT-1: llvm.store
+    // CHECK-COUNT-1: llvm.inline_asm {{.*}} "st.shared::cta.v4.b32
     //          CHECK: nvvm.barrier
     // CHECK-COUNT-4: nvvm.ldmatrix
     //          CHECK: nvvm.barrier
-    // CHECK-COUNT-1: llvm.store
+    // CHECK-COUNT-1: llvm.inline_asm {{.*}} "st.shared::cta.v4.b32
     //          CHECK: nvvm.barrier
     // CHECK-COUNT-4: nvvm.ldmatrix
     %b = ttg.convert_layout %a  : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
