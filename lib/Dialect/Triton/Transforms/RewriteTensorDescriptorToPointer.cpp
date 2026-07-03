@@ -82,16 +82,9 @@ Descriptor unpackDescriptor(TensorDescType type, ValueRange pack) {
 
 Value expandOffsets(OpBuilder &builder, Location loc,
                     ArrayRef<int64_t> blockShape, Value offsets, unsigned dim) {
-  Value expandedResult = offsets;
-  for (size_t j = 0; j < blockShape.size(); ++j) {
-    if (j == dim) {
-      continue;
-    }
-    expandedResult =
-        triton::ExpandDimsOp::create(builder, loc, expandedResult, j);
-  }
-
-  return expandedResult;
+  SmallVector<int64_t> shape(blockShape.size(), 1);
+  shape[dim] = blockShape[dim];
+  return triton::ReshapeOp::create(builder, loc, shape, offsets);
 }
 
 Value getExpandedOffsetWithRange(OpBuilder &builder, const Location &loc,
