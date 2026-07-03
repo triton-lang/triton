@@ -82,6 +82,9 @@ public:
                   triton::ReduceOp op,
                   unsigned reduceLaneIdMask) const override;
 
+  Value warpPrefixPopcount(RewriterBase &rewriter, Location loc,
+                           Value pred) const override;
+
   std::string getMulhiFuncName(Type resultElementTy) const override;
 
   void printf(RewriterBase &rewriter, Value formatStrStart,
