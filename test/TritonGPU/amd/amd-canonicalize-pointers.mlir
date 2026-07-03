@@ -587,6 +587,58 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // -----
 
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @reshape_offset(%arg0: !tt.ptr<f16>, %arg1: i32) -> tensor<4x4xf16> {
+    %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+    %1 = tt.splat %arg1 : i32 -> tensor<16xi32>
+    %2 = arith.addi %1, %0 : tensor<16xi32>
+    %3 = tt.reshape %2 : tensor<16xi32> -> tensor<4x4xi32>
+    %4 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<4x4x!tt.ptr<f16>>
+    %5 = tt.addptr %4, %3 : tensor<4x4x!tt.ptr<f16>>, tensor<4x4xi32>
+    %6 = tt.load %5 : tensor<4x4x!tt.ptr<f16>>
+    tt.return %6 : tensor<4x4xf16>
+  }
+}
+
+// CHECK-LABEL:   tt.func @reshape_offset(
+// CHECK-SAME:                            %[[VAL_0:.*]]: !tt.ptr<f16>,
+// CHECK-SAME:                            %[[VAL_1:.*]]: i32) -> tensor<4x4xf16> {
+// CHECK:           %[[VAL_2:.*]] = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+// CHECK:           %[[VAL_3:.*]] = tt.reshape %[[VAL_2]] : tensor<16xi32> -> tensor<4x4xi32>
+// CHECK:           %[[VAL_4:.*]] = tt.addptr %[[VAL_0]], %[[VAL_1]] : !tt.ptr<f16>, i32
+// CHECK:           %[[VAL_5:.*]] = tt.splat %[[VAL_4]] : !tt.ptr<f16> -> tensor<4x4x!tt.ptr<f16>>
+// CHECK:           %[[VAL_6:.*]] = tt.addptr %[[VAL_5]], %[[VAL_3]] : tensor<4x4x!tt.ptr<f16>>, tensor<4x4xi32>
+// CHECK:           %[[VAL_7:.*]] = tt.load %[[VAL_6]] : tensor<4x4x!tt.ptr<f16>>
+// CHECK:           tt.return %[[VAL_7]] : tensor<4x4xf16>
+// CHECK:         }
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @reshape_pointer(%arg0: !tt.ptr<f16>) -> tensor<4x4xf16> {
+    %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+    %1 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+    %2 = tt.addptr %1, %0 : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+    %3 = tt.reshape %2 : tensor<16x!tt.ptr<f16>> -> tensor<4x4x!tt.ptr<f16>>
+    %4 = tt.load %3 : tensor<4x4x!tt.ptr<f16>>
+    tt.return %4 : tensor<4x4xf16>
+  }
+}
+
+// CHECK-LABEL:   tt.func @reshape_pointer(
+// CHECK-SAME:                             %[[VAL_0:.*]]: !tt.ptr<f16>) -> tensor<4x4xf16> {
+// CHECK:           %[[VAL_1:.*]] = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+// CHECK:           %[[VAL_2:.*]] = arith.extsi %[[VAL_1]] : tensor<16xi32> to tensor<16xi64>
+// CHECK:           %[[VAL_3:.*]] = tt.reshape %[[VAL_2]] : tensor<16xi64> -> tensor<4x4xi64>
+// CHECK:           %[[VAL_4:.*]] = arith.trunci %[[VAL_3]] : tensor<4x4xi64> to tensor<4x4xi32>
+// CHECK:           %[[VAL_5:.*]] = tt.splat %[[VAL_0]] : !tt.ptr<f16> -> tensor<4x4x!tt.ptr<f16>>
+// CHECK:           %[[VAL_6:.*]] = tt.addptr %[[VAL_5]], %[[VAL_4]] : tensor<4x4x!tt.ptr<f16>>, tensor<4x4xi32>
+// CHECK:           %[[VAL_7:.*]] = tt.load %[[VAL_6]] : tensor<4x4x!tt.ptr<f16>>
+// CHECK:           tt.return %[[VAL_7]] : tensor<4x4xf16>
+// CHECK:         }
+
+// -----
+
 
 // The following is a more complex case where also a multiplication is involved. It's useful to walk through the case.
 // We have that the offset to the pointer is the following:
