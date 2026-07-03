@@ -519,10 +519,10 @@ def flip(x, dim=None):
 
     :param x: the first input tensor
     :type x: Block
-    :param dim: the dimension to flip along
-    :type dim: int
+    :param dim: the dimension to flip along. If None, flips along the last dimension.
+    :type dim: int | None
     """
-    core.static_assert(-len(x.shape) <= dim and dim < len(x.shape))
+    core.static_assert(dim is None or (-len(x.shape) <= dim and dim < len(x.shape)))
     _dim: core.constexpr = _get_flip_dim(dim, x.shape)
     core.static_assert(_is_power_of_two(x.shape[_dim]))
     steps: core.constexpr = _log2(x.shape[_dim])
