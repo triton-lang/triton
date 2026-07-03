@@ -80,9 +80,9 @@ ISAFamily TargetFeatures::getISAFamily() const {
     if (minor == 0 && patch == 10)
       return ISAFamily::CDNA2;
     if (minor == 0 && patch == 8)
-      return ISAFamily::CDNA1;
+      return ISAFamily::CDNA1;  // gfx908 (MI100)
     if (minor == 0 && patch == 6)
-      return ISAFamily::GCN5_1;
+      return ISAFamily::GCN5_0; // gfx906 (Vega 10/20 — Radeon VII, MI50, MI60)
   }
 
   // RDNA ISA cases.
@@ -120,6 +120,7 @@ bool TargetFeatures::isGFX1250() const {
 
 int TargetFeatures::getWarpSize() const {
   switch (getISAFamily()) {
+  case ISAFamily::GCN5_0:
   case ISAFamily::GCN5_1:
   case ISAFamily::CDNA1:
   case ISAFamily::CDNA2:
@@ -279,6 +280,8 @@ bool TargetFeatures::supportMaximumMinimum() const {
 
 bool TargetFeatures::supportDppBroadcast() const {
   switch (getISAFamily()) {
+  case ISAFamily::GCN5_0: // gfx906: pre-CDNA2, no DPP warp reduce
+    return false;
   case ISAFamily::GCN5_1:
   case ISAFamily::CDNA1:
   case ISAFamily::CDNA2:

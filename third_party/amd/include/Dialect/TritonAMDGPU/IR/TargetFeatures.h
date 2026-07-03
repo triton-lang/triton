@@ -11,6 +11,7 @@ namespace mlir::triton::amdgpu {
 
 enum class ISAFamily {
   Unknown,
+  GCN5_0, // gfx906 (Vega 10/20 — Radeon VII, MI50, MI60)
   GCN5_1,
   CDNA1,
   CDNA2,
