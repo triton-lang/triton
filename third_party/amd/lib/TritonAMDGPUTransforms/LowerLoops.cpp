@@ -4,6 +4,7 @@
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "amd/lib/TritonAMDGPUTransforms/PipelineUtility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/CGAEncodingAttr.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -357,34 +358,22 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
 }
 
 // On targets without direct-to-LDS scatter support, a direct-to-LDS copy
-// requires each warp to write coalesced into LDS. This fails if the source
-// layout broadcasts across the lanes of a warp, i.e. multiple lanes map to the
-// same element (the tile is smaller than a warp in some dimension). In that
-// case the copy would later fail to legalize, so it must not be turned into an
-// async copy. Returns false when such a lane broadcast is present.
-//
-// Note: this inspects the source layout's free-variable mask on the lane
-// dimension, so it is warpsPerCTA-aware (a tile can have >= warpSize elements
-// in total yet still broadcast within a warp). It is a necessary, not
-// sufficient, predictor of the lowering's full canCoalesceWriteIntoSharedMemory
-// check; the remaining permuted/strided, non-broadcast cases are left to the
-// final layout checks and the CoalesceAsyncCopy pass. If they still cannot be
-// made coalesced, the direct-to-LDS lowering will reject them.
-bool warpCoversDistinctElements(tt::LoadOp loadOp,
-                                const tt::AMD::TargetInfo &targetInfo) {
+// requires enough data per CTA for each lane to write at least 32 bits into LDS.
+// The source layout itself may still be suboptimal here; CoalesceAsyncCopy can
+// rewrite it before the final direct-to-LDS lowering checks coalescing legality.
+bool hasEnoughCTABytesForDirectToLds(tt::LoadOp loadOp,
+                                     const tt::AMD::TargetInfo &targetInfo) {
   if (targetInfo.supportsDirectToLdsScatter())
     return true;
 
   auto srcTy = dyn_cast<RankedTensorType>(loadOp.getResult().getType());
   if (!srcTy)
     return true;
-  auto srcLayout = triton::gpu::toLinearLayout(srcTy);
-  auto kLane = StringAttr::get(srcTy.getContext(), "lane");
-  // A non-zero free-variable mask on the lane dimension means some lane bits do
-  // not affect the accessed element, i.e. lanes broadcast.
-  auto freeMasks = srcLayout.getFreeVariableMasks();
-  auto it = freeMasks.find(kLane);
-  return it == freeMasks.end() || it->second == 0;
+
+  int64_t bytesPerElement = (srcTy.getElementTypeBitWidth() + 7) / 8;
+  int64_t ctaTileBytes = mlir::product(ttg::getShapePerCTA(srcTy)) *
+                         bytesPerElement;
+  return ctaTileBytes >= 4 * targetInfo.getWarpSize();
 }
 
 bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
@@ -408,11 +397,11 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
       {ISAFamily::CDNA3, ISAFamily::CDNA4, ISAFamily::GFX1250},
       targetInfo.getISAFamily());
 
-  // On targets without scatter support a warp whose lanes broadcast (the source
-  // layout maps multiple lanes to the same element) cannot produce coalesced
-  // direct-to-LDS writes, so reject the async copy. This does not depend on the
-  // final shared encoding, so check it even when sharedEnc is not yet known.
-  if (hasDirectToLdsPath && !warpCoversDistinctElements(loadOp, targetInfo))
+  // On targets without scatter support, reject CTA tiles that are too small to
+  // provide one 32-bit direct-to-LDS write per lane. Layout-specific coalescing
+  // is checked later, after CoalesceAsyncCopy has a chance to rewrite the src.
+  if (hasDirectToLdsPath &&
+      !hasEnoughCTABytesForDirectToLds(loadOp, targetInfo))
     return false;
 
   if (sharedEnc && hasDirectToLdsPath) {
