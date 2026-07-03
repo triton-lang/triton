@@ -549,6 +549,11 @@ static Attribute inferDstEncoding(GatherOp op, Attribute encoding) {
 }
 
 static Attribute inferSrcEncoding(triton::ReshapeOp op, Attribute encoding) {
+  if (auto axis = op.getExpandDimsAxis(); axis && !op.getAllowReorder()) {
+    return ttg::SliceEncodingAttr::get(
+        op.getContext(), *axis, cast<ttg::DistributedEncodingTrait>(encoding));
+  }
+
   // The encoding of x given the encoding of y in `reshape(x) -> y` is the same
   // as the encoding of x given the encoding of y in `reshape(y) -> x`.  It's an
   // invariant of inferReshapeOpNoReorderEncoding that it's symmetric in this

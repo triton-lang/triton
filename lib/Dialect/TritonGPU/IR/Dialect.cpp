@@ -3546,6 +3546,12 @@ struct TritonGPUInferLayoutInterface
     if (allowReorder && dstEnc)
       if (!isExpensiveView(srcShape, srcEnc, dstShape, dstEnc))
         return success();
+    if (auto sliceEnc = dyn_cast<SliceEncodingAttr>(srcEnc)) {
+      if (sliceEnc.paddedShape(srcShape) == dstShape) {
+        dstEnc = sliceEnc.getParent();
+        return success();
+      }
+    }
     auto result =
         inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape, dstEnc);
     if (succeeded(result)) {
