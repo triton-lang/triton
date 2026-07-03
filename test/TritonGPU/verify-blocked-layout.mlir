@@ -94,7 +94,7 @@ module attributes {
 } {
     tt.func public @fn(%arg0: tensor<8xf32, #blocked>) {
         // expected-error @+1 {{rank}}
-        %t = tt.expand_dims %arg0 {axis = 0 : i32} : tensor<8xf32, #blocked> -> tensor<8x1xf32, #blocked>
+        %t = tt.reshape %arg0 : tensor<8xf32, #blocked> -> tensor<8x1xf32, #blocked>
         tt.return
     }
 }
