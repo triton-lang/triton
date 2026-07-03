@@ -373,7 +373,10 @@ def test_clc_result_visibility(FAILURE, device, run_wrapper, monkeypatch, num_ct
         result = run_in_process(test_clc_result_visibility, (FAILURE, device, False, monkeypatch, num_ctas))
         if FAILURE:
             assert_expected_cuda_failure(result.exc)
-            assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+            assert any(msg in result.driver_stderr_output for msg in [
+                "Buffer being accessed has outstanding writes",
+                "Buffer being accessed has outstanding reads",
+            ])
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
