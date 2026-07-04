@@ -192,7 +192,7 @@ DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(ArefGetEnterOp getEnter) {
   return mmav5Ops;
 }
 
-int getMMAv5CompletionBarrierCount(ArefGetExitOp getExitOp) {
+int getMMAv5CompletionBarrierCountForGetExit(ArefGetExitOp getExitOp) {
   int mmaCount = 1;
   auto getEnter = getExitOp.getToken().getDefiningOp<ArefGetEnterOp>();
   if (!getEnter || getEnter.getAref() != getExitOp.getAref())
@@ -238,7 +238,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
       for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA: {
-          consumerCount += getMMAv5CompletionBarrierCount(getExitOp);
+          consumerCount += getMMAv5CompletionBarrierCountForGetExit(getExitOp);
           break;
         }
         case AsyncOp::WGMMA:
