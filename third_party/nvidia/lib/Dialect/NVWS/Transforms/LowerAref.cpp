@@ -192,22 +192,11 @@ DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(ArefGetEnterOp getEnter) {
   return mmav5Ops;
 }
 
-int getMMAv5CompletionBarrierCountForGetExit(ArefGetExitOp getExitOp) {
-  int mmaCount = 1;
-  auto getEnter = getExitOp.getToken().getDefiningOp<ArefGetEnterOp>();
-  if (!getEnter || getEnter.getAref() != getExitOp.getAref())
-    return mmaCount;
-
-  for (MMAv5OpInterface mma : getAsyncMMAv5Consumers(getEnter)) {
-    mmaCount =
-        std::max(mmaCount, nvidia_gpu::getMMAv5CompletionBarrierCount(mma));
-  }
-  return mmaCount;
-}
-
-BarrierCount getArrivalCount(ArefCreateOp op) {
+BarrierCount getArrivalCount(ArefCreateOp op,
+                             const DenseSet<MMAv5OpInterface> &mmav5Ops) {
   SetVector<int> producerGroups;
-  DenseMap<int, int> consumerGroupCounts;
+  SetVector<int> consumerGroups;
+  DenseMap<int, int> consumerGroupCounts, tc5MmaConsumerGroupCounts;
   BarrierCount count;
 
   for (auto user : op->getUsers()) {
@@ -238,7 +227,9 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
       for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA: {
-          consumerCount += getMMAv5CompletionBarrierCountForGetExit(getExitOp);
+          int &tc5MmaGroupCount =
+              tc5MmaConsumerGroupCounts[partitionIds.front()];
+          tc5MmaGroupCount = std::max(tc5MmaGroupCount, 1);
           break;
         }
         case AsyncOp::WGMMA:
@@ -249,12 +240,29 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
           llvm_unreachable("unsupported consumer kind");
         }
       }
+      consumerGroups.insert(partitionIds.front());
       int &groupCount = consumerGroupCounts[partitionIds.front()];
       groupCount = std::max(groupCount, consumerCount);
     }
   }
-  for (auto &group : consumerGroupCounts)
-    count.consumerPendingCount += group.second;
+
+  for (MMAv5OpInterface mma : mmav5Ops) {
+    Operation *mmaOp = mma.getOperation();
+    if (!hasPartition(mmaOp))
+      continue;
+    auto partitionIds = getPartitionIds(mmaOp);
+    assert(partitionIds.size() == 1);
+    int partitionId = partitionIds.front();
+    consumerGroups.insert(partitionId);
+    int &tc5MmaGroupCount = tc5MmaConsumerGroupCounts[partitionId];
+    tc5MmaGroupCount = std::max(
+        tc5MmaGroupCount, nvidia_gpu::getMMAv5CompletionBarrierCount(mma));
+  }
+
+  for (int consumerGroup : consumerGroups) {
+    count.consumerPendingCount += consumerGroupCounts[consumerGroup];
+    count.consumerPendingCount += tc5MmaConsumerGroupCounts[consumerGroup];
+  }
 
   // If the aref is not used within a warp-specialized loop, the pending counts
   // will be equal 0. Set them to 1.
@@ -308,7 +316,7 @@ Value createBarriers(ImplicitLocOpBuilder &b1, ImplicitLocOpBuilder &b2,
 
 ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter,
                             const DenseSet<MMAv5OpInterface> &mmav5Ops) {
-  BarrierCount count = getArrivalCount(op);
+  BarrierCount count = getArrivalCount(op, mmav5Ops);
 
   auto arefTy = op.getType();
   auto arefBufTypes = llvm::to_vector(llvm::map_range(
