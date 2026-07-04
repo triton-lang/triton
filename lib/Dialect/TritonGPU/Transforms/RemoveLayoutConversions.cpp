@@ -263,6 +263,15 @@ void LayoutPropagation::initAnchorLayout() {
 void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
                                     SmallVector<Value> &changed,
                                     Operation *op) {
+  std::optional<unsigned> requiredSliceDim;
+  if (auto reshape = dyn_cast<ReshapeOp>(op);
+      reshape && !reshape.getAllowReorder()) {
+    auto srcType = reshape.getSrc().getType();
+    if (auto slice = dyn_cast<SliceEncodingAttr>(srcType.getEncoding());
+        slice &&
+        slice.paddedShape(srcType.getShape()) == reshape.getType().getShape())
+      requiredSliceDim = slice.getDim();
+  }
   for (Value value : values) {
     if (!isa<RankedTensorType>(value.getType()))
       continue;
@@ -274,6 +283,11 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
         // encoding.
         dstEncoding = encoding;
       } else {
+        if (requiredSliceDim) {
+          auto slice = dyn_cast<SliceEncodingAttr>(encoding);
+          if (!slice || slice.getDim() != *requiredSliceDim)
+            continue;
+        }
         dstEncoding = inferDstEncoding(op, encoding);
       }
       if (dstEncoding)
