@@ -284,13 +284,8 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter,
   auto arefBufTypes = llvm::to_vector(llvm::map_range(
       arefTy.getBaseType(), [](Type type) { return cast<MemDescType>(type); }));
   auto depth = getArefDepth(arefBufTypes[0]);
-  ModuleOp mod = op->getParentOfType<ModuleOp>();
-  auto moduleTwoCTAs = mod->getAttrOfType<BoolAttr>(AttrTwoCTAsName);
-  bool useTwoCTATMA =
-      moduleTwoCTAs ? moduleTwoCTAs.getValue()
-                    : llvm::any_of(mmav5Ops, [](MMAv5OpInterface mma) {
-                        return mma.getTwoCtas();
-                      });
+  bool useTwoCTA = llvm::any_of(
+      mmav5Ops, [](MMAv5OpInterface mma) { return mma.getTwoCtas(); });
 
   SetVector<Operation *> arefUsers;
   for (auto user : op->getUsers())
@@ -304,11 +299,11 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter,
   auto emptyMbars = createBarriers(b1, b2, depth, count.consumerPendingCount,
                                    /*twoCTAs=*/false);
   Value fullMbars = createBarriers(b1, b2, depth, count.producerPendingCount,
-                                   /*twoCTAs=*/useTwoCTATMA);
+                                   /*twoCTAs=*/useTwoCTA);
 
   return ArefValue{emptyMbars,
                    fullMbars,
-                   useTwoCTATMA,
+                   useTwoCTA,
                    static_cast<int>(depth),
                    op.getOperands()};
 }
