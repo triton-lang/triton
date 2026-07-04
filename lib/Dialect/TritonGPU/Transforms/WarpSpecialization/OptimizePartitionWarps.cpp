@@ -14,9 +14,6 @@ using namespace triton;
 using namespace triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 
-static constexpr const char kDisableSetMaxRegisterAttr[] =
-    "tti.disable_setmaxregister";
-
 //===----------------------------------------------------------------------===//
 // relayoutWarps
 //===----------------------------------------------------------------------===//
@@ -277,9 +274,6 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
   }
   wsOp.setRequestedRegisters(estRegUsage);
   wsOp.setPartitionNumWarps(partitionNumWarps);
-  if (hasTwoCTAMMA && TritonGPUDialect::getNumCTAs(axisInfo.getModuleOp()) > 1)
-    wsOp->setAttr(kDisableSetMaxRegisterAttr,
-                  UnitAttr::get(wsOp.getContext()));
   return success();
 }
 

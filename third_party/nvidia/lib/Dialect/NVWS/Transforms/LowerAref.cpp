@@ -291,53 +291,6 @@ Value createBarriers(ImplicitLocOpBuilder &b1, ImplicitLocOpBuilder &b2,
   return barrierAlloc;
 }
 
-bool isTwoCTAMMA(MMAv5OpInterface mma) {
-  if (!mma.getTwoCtas())
-    return false;
-  auto accType = mma.getAccumulator().getType();
-  auto accEnc =
-      dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(accType.getEncoding());
-  return accEnc && accEnc.getTwoCTAs();
-}
-
-bool valueFeedsTwoCTAMMA(Value value) {
-  SetVector<Value> worklist;
-  worklist.insert(value);
-  for (unsigned i = 0; i < worklist.size(); ++i) {
-    Value current = worklist[i];
-    for (OpOperand &use : current.getUses()) {
-      Operation *user = use.getOwner();
-      if (auto mma = dyn_cast<MMAv5OpInterface>(user)) {
-        if (isTwoCTAMMA(mma))
-          return true;
-        continue;
-      }
-
-      if (auto ws = dyn_cast<WarpSpecializePartitionsOp>(user)) {
-        unsigned argIdx = use.getOperandNumber();
-        for (Region &region : ws.getPartitionRegions())
-          worklist.insert(region.getArgument(argIdx));
-        continue;
-      }
-
-      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        unsigned operandIdx = use.getOperandNumber();
-        if (operandIdx >= forOp.getNumControlOperands()) {
-          unsigned iterArgIdx = operandIdx - forOp.getNumControlOperands();
-          worklist.insert(forOp.getRegionIterArg(iterArgIdx));
-          worklist.insert(forOp.getResult(iterArgIdx));
-        }
-      } else if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp()))
-          worklist.insert(forOp.getResult(use.getOperandNumber()));
-      }
-
-      worklist.insert(user->result_begin(), user->result_end());
-    }
-  }
-  return false;
-}
-
 bool arefBufferFeedsTwoCTAMMA(Value aref, unsigned bufferIdx) {
   for (auto user : aref.getUsers()) {
     auto getEnter = dyn_cast<ArefGetEnterOp>(user);
