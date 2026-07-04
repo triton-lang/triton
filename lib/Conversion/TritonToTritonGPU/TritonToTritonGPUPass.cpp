@@ -189,6 +189,32 @@ struct TritonExpandDimsPattern
   }
 };
 
+struct TritonReshapePattern : public OpConversionPattern<triton::ReshapeOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::ReshapeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto resultType = cast<RankedTensorType>(
+        this->getTypeConverter()->convertType(op.getType()));
+    Value src = adaptor.getSrc();
+    if (auto axis = op.getExpandDimsAxis(); axis && !op.getAllowReorder()) {
+      auto resultEncoding =
+          cast<DistributedEncodingTrait>(resultType.getEncoding());
+      auto srcType = cast<RankedTensorType>(src.getType());
+      auto slicedEncoding =
+          SliceEncodingAttr::get(getContext(), *axis, resultEncoding);
+      auto slicedSrcType = srcType.cloneWithEncoding(slicedEncoding);
+      src = ConvertLayoutOp::create(rewriter, op.getLoc(), slicedSrcType, src);
+    }
+
+    auto newOp = rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
+        op, resultType, src, op.getAllowReorder(), op.getEfficientLayout());
+    addNamedAttrs(newOp, adaptor.getAttributes());
+    return success();
+  }
+};
+
 struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -487,7 +513,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
   patterns.insert< // TODO: view should have custom pattern that views the
                    // layout
       // clang-format off
-      GenericOpPattern<triton::ReshapeOp>,
+      TritonReshapePattern,
       GenericOpPattern<triton::BitcastOp>,
       GenericOpPattern<triton::FpToFpOp>,
       GenericOpPattern<triton::IntToPtrOp>,
