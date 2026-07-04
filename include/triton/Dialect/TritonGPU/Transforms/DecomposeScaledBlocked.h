@@ -19,8 +19,8 @@ protected:
                                          FloatType computeType) const;
   TypedValue<RankedTensorType>
   broadcastScale(PatternRewriter &rewriter, DotScaledOp scaledDotOp,
-                 ModuleOp mod, TypedValue<RankedTensorType> scale,
-                 int dim) const;
+                 TypedValue<RankedTensorType> scale, int dim,
+                 Attribute dstEncoding) const;
   TypedValue<RankedTensorType> maskNan(PatternRewriter &rewriter,
                                        DotScaledOp scaledDotOp,
                                        TypedValue<RankedTensorType> mxfp,

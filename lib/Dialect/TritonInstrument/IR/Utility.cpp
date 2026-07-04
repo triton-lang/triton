@@ -532,7 +532,8 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
     ModuleOp module, FunctionBuilder &fb, const ConSanTargetHooks *hooks) {
   SmallVector<SmallVector<BufferRegion>, numMemTypes> bufRegions(numMemTypes);
   SmallVector<BufferRegion> barrierRegions;
-  getBuffersAndBarriers(module, bufRegions, barrierRegions);
+  if (failed(getBuffersAndBarriers(module, bufRegions, barrierRegions)))
+    return failure();
   int numCTAs = lookupNumCTAs(module);
   threadLayout = getThreadLayout(module, hooks);
   hasAsyncProxyFenceTracking = hooks &&
@@ -737,7 +738,7 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
   return success();
 }
 
-void AuxDataMap::getBuffersAndBarriers(
+LogicalResult AuxDataMap::getBuffersAndBarriers(
     ModuleOp module, SmallVector<SmallVector<BufferRegion>, 2> &bufRegions,
     SmallVector<BufferRegion> &barrierRegions) {
   // Collect shared memory buffers allocated in the module
@@ -745,7 +746,7 @@ void AuxDataMap::getBuffersAndBarriers(
   triton::BufferRegionAnalysis *analysis =
       solver->load<triton::BufferRegionAnalysis>();
   if (failed(solver->initializeAndRun(module)))
-    return;
+    return failure();
 
   analysis->calculateUsedBufferRegions(module);
   bufRegions[(int)MemType::SHARED_MEM] = analysis->getAllUsedBufferRegions(
@@ -769,6 +770,7 @@ void AuxDataMap::getBuffersAndBarriers(
         llvm::NextPowerOf2(bufRegions[iMemType].size() - 1),
         BufferRegion{0, 0});
   }
+  return success();
 }
 
 void AuxDataMap::passToWarpSpecialize(FuncOp func, ValueType valueType,
