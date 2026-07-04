@@ -101,7 +101,7 @@ module attributes {"ttg.num-warps" = 2 : i32, ttg.target = "hip:gfx942", "ttg.th
   tt.func @multi_load_shared_addptr_i64(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>) {
     %r = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32, #ttg.slice<{dim = 0, parent = #blocked4}>>
     %ext = arith.extsi %r : tensor<8xi32, #ttg.slice<{dim = 0, parent = #blocked4}>> to tensor<8xi64, #ttg.slice<{dim = 0, parent = #blocked4}>>
-    %offset = tt.expand_dims %ext {axis = 0 : i32} : tensor<8xi64, #ttg.slice<{dim = 0, parent = #blocked4}>> -> tensor<1x8xi64, #blocked4>
+    %offset = tt.reshape %ext : tensor<8xi64, #ttg.slice<{dim = 0, parent = #blocked4}>> -> tensor<1x8xi64, #blocked4>
     %base = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1x8x!tt.ptr<f32>, #blocked4>
     %ptr = tt.addptr %base, %offset : tensor<1x8x!tt.ptr<f32>, #blocked4>, tensor<1x8xi64, #blocked4>
     %v1 = tt.load %ptr : tensor<1x8x!tt.ptr<f32>, #blocked4>
