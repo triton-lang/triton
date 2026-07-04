@@ -172,9 +172,42 @@ SmallVector<AsyncOp> castAsyncOpAttrs(ArrayAttr opAttrs) {
   return kinds;
 }
 
-BarrierCount getArrivalCount(ArefCreateOp op,
-                             const DenseSet<MMAv5OpInterface> &mmav5Ops) {
-  SetVector<int> producerGroups, consumerGroups;
+DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(ArefGetEnterOp getEnter) {
+  DenseSet<MMAv5OpInterface> mmav5Ops;
+  for (Value buffer : getEnter.getBuffers()) {
+    for (auto consumer : buffer.getUsers()) {
+      if (auto mmav5 = dyn_cast<MMAv5OpInterface>(consumer)) {
+        mmav5Ops.insert(mmav5);
+      } else if (auto forOp = consumer->getParentOfType<scf::ForOp>()) {
+        auto users = getTopLevelUsersInLoop(consumer, forOp,
+                                            [](Operation *user) {
+                                              return isa<MMAv5OpInterface>(user);
+                                            });
+        for (auto user : users) {
+          mmav5Ops.insert(cast<MMAv5OpInterface>(user));
+        }
+      }
+    }
+  }
+  return mmav5Ops;
+}
+
+int getMMAv5CompletionBarrierCount(ArefGetExitOp getExitOp) {
+  int mmaCount = 1;
+  auto getEnter = getExitOp.getToken().getDefiningOp<ArefGetEnterOp>();
+  if (!getEnter || getEnter.getAref() != getExitOp.getAref())
+    return mmaCount;
+
+  for (MMAv5OpInterface mma : getAsyncMMAv5Consumers(getEnter)) {
+    mmaCount =
+        std::max(mmaCount, nvidia_gpu::getMMAv5CompletionBarrierCount(mma));
+  }
+  return mmaCount;
+}
+
+BarrierCount getArrivalCount(ArefCreateOp op) {
+  SetVector<int> producerGroups;
+  DenseMap<int, int> consumerGroupCounts;
   BarrierCount count;
 
   for (auto user : op->getUsers()) {
@@ -201,31 +234,28 @@ BarrierCount getArrivalCount(ArefCreateOp op,
         }
       }
     } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
-      if (consumerGroups.count(partitionIds.front())) {
-        continue;
-      }
-      consumerGroups.insert(partitionIds.front());
+      int consumerCount = 0;
       for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA: {
-          int mmaCount = 1;
-          for (MMAv5OpInterface mma : mmav5Ops) {
-            mmaCount = std::max(
-                mmaCount, nvidia_gpu::getMMAv5CompletionBarrierCount(mma));
-          }
-          count.consumerPendingCount += mmaCount;
+          consumerCount += getMMAv5CompletionBarrierCount(getExitOp);
           break;
         }
         case AsyncOp::WGMMA:
         case AsyncOp::NONE:
-          count.consumerPendingCount += 1;
+          consumerCount += 1;
           break;
         default:
           llvm_unreachable("unsupported consumer kind");
         }
       }
+      int &groupCount = consumerGroupCounts[partitionIds.front()];
+      groupCount = std::max(groupCount, consumerCount);
     }
   }
+  for (auto &group : consumerGroupCounts)
+    count.consumerPendingCount += group.second;
+
   // If the aref is not used within a warp-specialized loop, the pending counts
   // will be equal 0. Set them to 1.
   if (count.consumerPendingCount == 0)
@@ -278,7 +308,7 @@ Value createBarriers(ImplicitLocOpBuilder &b1, ImplicitLocOpBuilder &b2,
 
 ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter,
                             const DenseSet<MMAv5OpInterface> &mmav5Ops) {
-  BarrierCount count = getArrivalCount(op, mmav5Ops);
+  BarrierCount count = getArrivalCount(op);
 
   auto arefTy = op.getType();
   auto arefBufTypes = llvm::to_vector(llvm::map_range(
@@ -721,19 +751,8 @@ DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
         continue;
       }
 
-      for (auto consumer : getEnter->getUsers()) {
-        if (auto mmav5 = dyn_cast<MMAv5OpInterface>(consumer)) {
-          mmav5Ops.insert(mmav5);
-        } else if (auto forOp = consumer->getParentOfType<scf::ForOp>()) {
-          auto users =
-              getTopLevelUsersInLoop(consumer, forOp, [](Operation *user) {
-                return isa<MMAv5OpInterface>(user);
-              });
-          for (auto user : users) {
-            mmav5Ops.insert(cast<MMAv5OpInterface>(user));
-          }
-        }
-      }
+      for (MMAv5OpInterface mmav5 : getAsyncMMAv5Consumers(getEnter))
+        mmav5Ops.insert(mmav5);
     }
   }
   return mmav5Ops;
