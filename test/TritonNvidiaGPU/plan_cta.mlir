@@ -6,7 +6,6 @@
 
   // CHECK: #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = {{\[\[1\], \[2\]\]}}}>
   // CHECK-DAG: #[[$RESHAPE_DST:.+]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[1, 0\], \[2, 0\]\]}}}>
-  // CHECK-DAG: #[[$RESHAPE_SRC:.+]] = #ttg.linear
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tt.func @reduce_1d_split_ctas
   // CHECK: "tt.reduce"(%{{.*}}) <{axis = 0 : i32}>
@@ -23,8 +22,8 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 
   // CHECK-LABEL: tt.func @reduce_reshape
-  // CHECK: %[[CST:.*]] = arith.constant dense<0.000000e+00> : tensor<65536xf32, #[[$RESHAPE_SRC]]>
-  // CHECK-NEXT: %[[RESHAPE:.*]] = tt.reshape %[[CST]] : tensor<65536xf32, #[[$RESHAPE_SRC]]> -> tensor<65536x1xf32, #[[$RESHAPE_DST]]>
+  // CHECK: %[[CST:.*]] = arith.constant dense<0.000000e+00> : tensor<65536xf32, #ttg.slice<{dim = 1, parent = #[[$RESHAPE_DST]]}>>
+  // CHECK-NEXT: %[[RESHAPE:.*]] = tt.reshape %[[CST]] : tensor<65536xf32, #ttg.slice<{dim = 1, parent = #[[$RESHAPE_DST]]}>> -> tensor<65536x1xf32, #[[$RESHAPE_DST]]>
   // CHECK-NEXT: %[[RED:.*]] = "tt.reduce"(%[[RESHAPE]]) <{axis = 1 : i32}>
   tt.func @reduce_reshape() -> tensor<65536xf32, #slice> {
     %cst = arith.constant dense<0.000000e+00> : tensor<65536xf32, #slice>

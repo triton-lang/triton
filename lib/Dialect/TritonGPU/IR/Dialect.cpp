@@ -3546,6 +3546,41 @@ struct TritonGPUInferLayoutInterface
     if (allowReorder && dstEnc)
       if (!isExpensiveView(srcShape, srcEnc, dstShape, dstEnc))
         return success();
+
+    Attribute inferredDstEnc;
+    if (failed(inferReshapeOpEncodingImpl(srcShape, srcEnc, dstShape,
+                                          inferredDstEnc, loc)))
+      return failure();
+    if (!isa_and_nonnull<DistributedEncodingTrait>(dstEnc) ||
+        failed(verifyLayoutsAreEqual(dstShape, inferredDstEnc, dstEnc,
+                                     /*loc=*/{},
+                                     /*ignoreRegBroadcast=*/false)))
+      dstEnc = inferredDstEnc;
+    return success();
+  }
+
+  LogicalResult inferReshapeOpEncodingImpl(ArrayRef<int64_t> srcShape,
+                                           Attribute srcEnc,
+                                           ArrayRef<int64_t> dstShape,
+                                           Attribute &dstEnc,
+                                           std::optional<Location> loc) const {
+    if (auto sliceEnc = dyn_cast<SliceEncodingAttr>(srcEnc)) {
+      if (sliceEnc.paddedShape(srcShape) == dstShape) {
+        dstEnc = sliceEnc.getParent();
+        return success();
+      }
+    }
+    if (srcShape.size() == dstShape.size() + 1) {
+      for (unsigned dim = 0; dim < srcShape.size(); ++dim) {
+        if (srcShape[dim] == 1 &&
+            srcShape.take_front(dim) == dstShape.take_front(dim) &&
+            srcShape.drop_front(dim + 1) == dstShape.drop_front(dim)) {
+          dstEnc = SliceEncodingAttr::get(
+              srcEnc.getContext(), dim, cast<DistributedEncodingTrait>(srcEnc));
+          return success();
+        }
+      }
+    }
     auto result =
         inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape, dstEnc);
     if (succeeded(result)) {
