@@ -258,7 +258,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @unary_triton_ops_transitive_nonneg(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
     %c10_i32 = arith.constant 5 : i32
     %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #blocked1>
-    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<16xi32, #blocked1> -> tensor<1x16xi32, #blockedsrc>
+    %1 = tt.reshape %0 : tensor<16xi32, #blocked1> -> tensor<1x16xi32, #blockedsrc>
     %2 = tt.reshape %1 allow_reorder : tensor<1x16xi32, #blockedsrc> -> tensor<8x2xi32, #blocked>
     %3 = tt.reshape %1 allow_reorder : tensor<1x16xi32, #blockedsrc> -> tensor<2x8xi32, #blockedtrans>
     %4 = tt.trans %3 {order = array<i32: 1, 0>} : tensor<2x8xi32, #blockedtrans> -> tensor<8x2xi32, #blocked>
@@ -266,7 +266,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %6 = arith.addi %5, %2 : tensor<8x2xi32, #blocked>
     %7 = tt.make_range {end = 10 : i32, start = 2 : i32} : tensor<8xi32, #blocked2>
     %8 = ttg.convert_layout %7 : tensor<8xi32, #blocked2> -> tensor<8xi32, #blocked2>
-    %9 = tt.expand_dims %8 {axis = 0 : i32} : tensor<8xi32, #blocked2> -> tensor<1x8xi32, #blockedtrans>
+    %9 = tt.reshape %8 : tensor<8xi32, #blocked2> -> tensor<1x8xi32, #blockedtrans>
     %10 = tt.broadcast %9 : tensor<1x8xi32, #blockedtrans> -> tensor<2x8xi32, #blockedtrans>
     %11 = tt.reshape %10 allow_reorder : tensor<2x8xi32, #blockedtrans> -> tensor<8x2xi32, #blocked>
     %12 = tt.splat %c10_i32 : i32 -> tensor<8x2xi32, #blocked>
@@ -644,11 +644,11 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.th
     %c2 = arith.constant dense<64> : tensor<128x64xi32, #blocked>
     %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %1 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %2 = tt.expand_dims %0 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
+    %2 = tt.reshape %0 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
     %3 = tt.splat %stride_am : i32 -> tensor<128x1xi32, #blocked>
     %4 = arith.muli %2, %3 : tensor<128x1xi32, #blocked>
     %5 = tt.broadcast %4 : tensor<128x1xi32, #blocked> -> tensor<128x64xi32, #blocked>
-    %6 = tt.expand_dims %1 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
+    %6 = tt.reshape %1 : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
     %7 = tt.broadcast %6 : tensor<1x64xi32, #blocked> -> tensor<128x64xi32, #blocked>
     %8 = arith.addi %5, %7 : tensor<128x64xi32, #blocked>
     %cst_result = arith.constant dense<0.000000e+00> : tensor<128x64xf16, #blocked>

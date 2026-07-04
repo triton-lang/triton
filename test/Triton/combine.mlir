@@ -315,12 +315,12 @@ tt.func @test_canonicalize_masked_store_fail_pattern(%ptr: tensor<8x!tt.ptr<f32>
 tt.func @test_canonicalize_expand_dims(%arg0: tensor<f32>, %arg1: tensor<1xf32>) -> (tensor<1x8xf32>, tensor<8x8xf32>) {
     %splat = tt.splat %arg0 : tensor<f32> -> tensor<8xf32>
     // CHECK: %{{.*}} = tt.splat %arg0 : tensor<f32> -> tensor<1x8xf32>
-    %ed = tt.expand_dims %splat {axis = 0 : i32} : tensor<8xf32> -> tensor<1x8xf32>
+    %ed = tt.reshape %splat : tensor<8xf32> -> tensor<1x8xf32>
 
-    // CHECK-NEXT: %[[ed2:.*]] = tt.expand_dims %arg1 {axis = 0 : i32} : tensor<1xf32> -> tensor<1x1xf32>
+    // CHECK-NEXT: %[[ed2:.*]] = tt.reshape %arg1 : tensor<1xf32> -> tensor<1x1xf32>
     // CHECK-NEXT: %{{.*}} = tt.broadcast %[[ed2]] : tensor<1x1xf32> -> tensor<8x8xf32>
     %bc = tt.broadcast %arg1 : tensor<1xf32> -> tensor<8xf32>
-    %ed2 = tt.expand_dims %bc {axis = 0 : i32} : tensor<8xf32> -> tensor<1x8xf32>
+    %ed2 = tt.reshape %bc : tensor<8xf32> -> tensor<1x8xf32>
     %bc2 = tt.broadcast %ed2 : tensor<1x8xf32> -> tensor<8x8xf32>
 
     tt.return %ed, %bc2 : tensor<1x8xf32>, tensor<8x8xf32>
@@ -369,7 +369,7 @@ tt.func @test_canonicalize_reshape(%arg0: tensor<8xf32>, %arg1: tensor<f32>) -> 
 // CHECK-LABEL: @test_canonicalize_reshape_expand_dims
 tt.func @test_canonicalize_reshape_expand_dims(%arg0: tensor<8xf32>) -> tensor<8xf32> {
     // CHECK-NEXT: tt.return %arg0 : tensor<8xf32>
-    %0 = tt.expand_dims %arg0 {axis = 0 : i32} : tensor<8xf32> -> tensor<1x8xf32>
+    %0 = tt.reshape %arg0 : tensor<8xf32> -> tensor<1x8xf32>
     %1 = tt.reshape %0 : tensor<1x8xf32> -> tensor<8xf32>
     tt.return %1 : tensor<8xf32>
 }
@@ -402,7 +402,7 @@ tt.func @test_fold_views() -> (tensor<16x8xf32>, tensor<16x128xf32>, tensor<1x1x
     %c = tt.broadcast %a : tensor<1x128xf32> -> tensor<16x128xf32>
 
     // CHECK-DAG: %{{.*}} = arith.constant dense<1.{{.*}}> : tensor<1x1x128xf32>
-    %d = tt.expand_dims %a {axis = 0: i32} : tensor<1x128xf32> -> tensor<1x1x128xf32>
+    %d = tt.reshape %a : tensor<1x128xf32> -> tensor<1x1x128xf32>
 
     tt.return %b, %c, %d : tensor<16x8xf32>, tensor<16x128xf32>, tensor<1x1x128xf32>
 }
@@ -487,9 +487,9 @@ tt.func @test_combine_broadcast_mul_reduce(%arg0: tensor<32x16xf32>, %arg1: tens
     // CHECK: %[[CST:.*]] = arith.constant dense<0.000000e+00> : tensor<32x32xf32>
     // CHECK: %[[RES:.*]] = tt.dot %{{.*}}, %{{.*}}, %[[CST]] : tensor<32x16xf32> * tensor<16x32xf32> -> tensor<32x32xf32>
     // CHECK: tt.return %[[RES]] : tensor<32x32xf32>
-    %0 = tt.expand_dims %arg0 {axis = 2 : i32} : tensor<32x16xf32> -> tensor<32x16x1xf32>
+    %0 = tt.reshape %arg0 : tensor<32x16xf32> -> tensor<32x16x1xf32>
     %1 = tt.broadcast %0 : tensor<32x16x1xf32> -> tensor<32x16x32xf32>
-    %2 = tt.expand_dims %arg1 {axis = 0 : i32} : tensor<16x32xf32> -> tensor<1x16x32xf32>
+    %2 = tt.reshape %arg1 : tensor<16x32xf32> -> tensor<1x16x32xf32>
     %3 = tt.broadcast %2 : tensor<1x16x32xf32> -> tensor<32x16x32xf32>
     %4 = arith.mulf %1, %3 : tensor<32x16x32xf32>
     %5 = "tt.reduce"(%4) <{axis = 1 : i32}> ({
@@ -522,9 +522,9 @@ tt.func @test_combine_broadcast_mul_reduce_reshape(%arg0: tensor<32x16x1xf32>, %
 tt.func @test_combine_broadcast_mul_reduce_extra_broadcast(%arg0: tensor<32x1xf32>, %arg1: tensor<1x32xf32>) -> tensor<32x32xf32> {
     // CHECK-NOT: tt.dot
     // CHECK: tt.reduce
-    %0 = tt.expand_dims %arg0 {axis = 2 : i32} : tensor<32x1xf32> -> tensor<32x1x1xf32>
+    %0 = tt.reshape %arg0 : tensor<32x1xf32> -> tensor<32x1x1xf32>
     %1 = tt.broadcast %0 : tensor<32x1x1xf32> -> tensor<32x16x32xf32>
-    %2 = tt.expand_dims %arg1 {axis = 0 : i32} : tensor<1x32xf32> -> tensor<1x1x32xf32>
+    %2 = tt.reshape %arg1 : tensor<1x32xf32> -> tensor<1x1x32xf32>
     %3 = tt.broadcast %2 : tensor<1x1x32xf32> -> tensor<32x16x32xf32>
     %4 = arith.mulf %1, %3 : tensor<32x16x32xf32>
     %5 = "tt.reduce"(%4) <{axis = 1 : i32}> ({
@@ -539,9 +539,9 @@ tt.func @test_combine_broadcast_mul_reduce_extra_broadcast(%arg0: tensor<32x1xf3
 tt.func @test_combine_broadcast_mul_reduce_wrong_axis(%arg0: tensor<32x32xf32>, %arg1: tensor<32x32xf32>) -> tensor<32x32xf32> {
     // CHECK-NOT: tt.dot
     // CHECK: tt.reduce
-    %0 = tt.expand_dims %arg0 {axis = 2 : i32} : tensor<32x32xf32> -> tensor<32x32x1xf32>
+    %0 = tt.reshape %arg0 : tensor<32x32xf32> -> tensor<32x32x1xf32>
     %1 = tt.broadcast %0 : tensor<32x32x1xf32> -> tensor<32x32x32xf32>
-    %2 = tt.expand_dims %arg1 {axis = 0 : i32} : tensor<32x32xf32> -> tensor<1x32x32xf32>
+    %2 = tt.reshape %arg1 : tensor<32x32xf32> -> tensor<1x32x32xf32>
     %3 = tt.broadcast %2 : tensor<1x32x32xf32> -> tensor<32x32x32xf32>
     %4 = arith.mulf %1, %3 : tensor<32x32x32xf32>
     %5 = "tt.reduce"(%4) <{axis = 0 : i32}> ({
@@ -556,9 +556,9 @@ tt.func @test_combine_broadcast_mul_reduce_wrong_axis(%arg0: tensor<32x32xf32>, 
 tt.func @test_combine_broadcast_mul_reduce_higher_rank(%arg0: tensor<32x16x4xf32>, %arg1: tensor<16x32x4xf32>) -> tensor<32x32x4xf32> {
     // CHECK-NOT: tt.dot
     // CHECK: tt.reduce
-    %0 = tt.expand_dims %arg0 {axis = 2 : i32} : tensor<32x16x4xf32> -> tensor<32x16x1x4xf32>
+    %0 = tt.reshape %arg0 : tensor<32x16x4xf32> -> tensor<32x16x1x4xf32>
     %1 = tt.broadcast %0 : tensor<32x16x1x4xf32> -> tensor<32x16x32x4xf32>
-    %2 = tt.expand_dims %arg1 {axis = 0 : i32} : tensor<16x32x4xf32> -> tensor<1x16x32x4xf32>
+    %2 = tt.reshape %arg1 : tensor<16x32x4xf32> -> tensor<1x16x32x4xf32>
     %3 = tt.broadcast %2 : tensor<1x16x32x4xf32> -> tensor<32x16x32x4xf32>
     %4 = arith.mulf %1, %3 : tensor<32x16x32x4xf32>
     %5 = "tt.reduce"(%4) <{axis = 1 : i32}> ({
