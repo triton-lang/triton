@@ -226,12 +226,8 @@ BarrierCount getArrivalCount(ArefCreateOp op,
       int consumerCount = 0;
       for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
         switch (kind) {
-        case AsyncOp::TC5MMA: {
-          int &tc5MmaGroupCount =
-              tc5MmaConsumerGroupCounts[partitionIds.front()];
-          tc5MmaGroupCount = std::max(tc5MmaGroupCount, 1);
+        case AsyncOp::TC5MMA:
           break;
-        }
         case AsyncOp::WGMMA:
         case AsyncOp::NONE:
           consumerCount += 1;
