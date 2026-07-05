@@ -134,7 +134,7 @@ void setIsAsync(triton::nvidia_gpu::MMAv5OpInterface mmaOp,
 struct ArefValue {
   Value emptyMbars;
   Value fullMbars;
-  bool useTwoCTATMA;
+  bool useTwoCTA;
   int depth;
   SmallVector<Value> buffers;
 };
