@@ -4,6 +4,12 @@ import triton
 import triton.language as tl
 from .base import Layout, LayoutTransformation
 
+# The Hopper matmul kernels read scales for a full BLOCK_K tile at a time
+# (block_k = 128 for mxfp4 weights, i.e. 128 // 32 = 4 scale groups) with
+# unmasked loads, so the swizzled storage must cover the last K tile with
+# zero padding or the tail groups are read out of bounds (#10772).
+SCALE_K_ALIGN = 4
+
 # ------------------- Hopper MX Scale Layout -------------------
 
 
@@ -58,7 +64,7 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
             M, K = K, M
         align_m = 32 * self.num_warps
         M = (M + align_m - 1) // align_m * align_m
-        K = (K + 1) // 2 * 2
+        K = (K + SCALE_K_ALIGN - 1) // SCALE_K_ALIGN * SCALE_K_ALIGN
         return [*leading_shape, M, K]
 
     @property
@@ -80,7 +86,11 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
         *_, M, K = self._padded_shape
         pad_m = M - M_in
         pad_k = K - K_in
-        data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
+        if data.numel() == 0:
+            # F.pad rejects padding zero-sized dims; the result is all padding.
+            data = data.new_zeros((*batch, M, K))
+        else:
+            data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
         assert data.is_contiguous()
         assert M % (
             2 * self.num_warps * 2 *

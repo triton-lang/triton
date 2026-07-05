@@ -389,6 +389,21 @@ def matmul(a, b, bias,
     K_W, N = b.shape[-2:]
     if a.ndim == 3 and b.ndim == 3:
         assert a.shape[0] == b.shape[0]
+    # Scale tensors must cover exactly cdiv(K, mx_block_size) groups along K.
+    # The kernels read scales in whole BLOCK_K tiles (swizzled and TMA loads
+    # cannot mask the logical K extent), relying on the layouts to zero-pad
+    # the storage past the last group; extra trailing groups in the logical
+    # tensor would instead be multiplied into the K tail (#10772).
+    if not (is_a_ragged or is_b_ragged):
+        num_k_scales = triton.cdiv(K, mx_block_size)
+        assert a_scale is None or a_scale.shape[-1] == num_k_scales, (
+            f"a_mx_scale must have cdiv(K={K}, {mx_block_size}) = {num_k_scales} "
+            f"scale groups along its last dim; got {a_scale.shape[-1]}"
+        )
+        assert b_scale is None or b_scale.shape[-2] == num_k_scales, (
+            f"b_mx_scale must have cdiv(K={K}, {mx_block_size}) = {num_k_scales} "
+            f"scale groups along dim -2; got {b_scale.shape[-2]}"
+        )
     # compute optimization flags
     out_dtype = precision_config.out_dtype or a.dtype
     out_dtype = torch_dtype_to_dtype(out_dtype)

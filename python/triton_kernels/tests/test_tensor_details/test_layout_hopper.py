@@ -86,6 +86,28 @@ def test_mxfp4_scale_roundtrip(shape, mx_axis, num_warps):
     assert (res[:shape[0], :shape[1]] == x).all()
 
 
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("k_groups", [90, 91, 92])
+def test_mxfp4_scale_k_tail_padding(k_groups, num_warps):
+    # The non-persistent Hopper matmul kernel loads scales for a whole
+    # BLOCK_K tile (block_k = 128 for mxfp4, i.e. 4 scale groups) without
+    # masking, so the swizzled storage must zero-pad the scale-K dim to a
+    # multiple of 4 or the last tile reads past the allocation (#10772:
+    # e.g. K = 2880 -> 90 groups, previously padded to 90, tile reads 92).
+    n = 256
+    x = torch.randint(1, 256, (1, k_groups, n), dtype=torch.uint8, device="cpu")
+    layout = HopperMXScaleLayout(mx_axis=-2, num_warps=num_warps)
+    transformation = layout.make_transformation(x.shape, is_fp4=False)
+    swizzled = transformation.swizzle_data(x)
+    # storage is [1, K * 32, M // 32] for mx_axis == -2
+    assert swizzled.shape[-2] == (k_groups + 3) // 4 * 4 * 32
+    # the padding must be zero-filled: every nonzero byte comes from the input
+    assert (swizzled != 0).sum() == (x != 0).sum()
+    # and the input survives the roundtrip
+    res = transformation.unswizzle_data(swizzled)
+    assert (res[:, :k_groups, :n] == x).all()
+
+
 @pytest.mark.parametrize("shape", ZERO_SIZED_SHAPES)
 @pytest.mark.parametrize("mx_axis", [-2, -1])
 @pytest.mark.parametrize("num_warps", [4, 8])

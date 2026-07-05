@@ -442,21 +442,15 @@ def _matmul(
                     num_warps: tl.constexpr = tl.extra.cuda.num_warps()
                     tl.static_assert(num_warps == 8 or num_warps == 4)
                     w_scales = unswizzle_mxfp4_scale_hopper(tl.load(WMxScalePtrs), mx_axis=1, num_warps=num_warps)
+                    mask_k_scale = off_k_x + tl.arange(0, MX_SCALE_BLOCK_K) * MX_PACK_DIVISOR < x_k_limit
+                    scale_zero = tl.full(w_scales.shape, 0, dtype=w_scales.dtype)
+                    w_scales = tl.where(mask_k_scale[None, :], w_scales, scale_zero)
                 elif SWIZZLE_MX_SCALE == "CDNA4_SCALE":
                     w_scales = unswizzle_mx_scale_cdna4(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
                 elif SWIZZLE_MX_SCALE == "GFX1250_SCALE":
                     w_scales = unswizzle_mx_scale_gfx1250(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
                 else:
                     w_scales = tl.load(WMxScalePtrs, mask=mask_k_scale[None, :], other=0.0)
-                if SWIZZLE_MX_SCALE != "STRIDED":
-                    # Swizzled scale loads cannot use `mask=` (the packed lanes mix
-                    # K and N positions), so K-tail scale groups may contain
-                    # garbage read past the logical end of the tensor; 0xFF bytes
-                    # decode to NaN and NaN * 0 poisons the accumulator (#10772).
-                    # Zero them out after unswizzling instead.
-                    mask_k_scale = off_k_x + tl.arange(0, MX_SCALE_BLOCK_K) * MX_PACK_DIVISOR < x_k_limit
-                    scale_zero = tl.full(w_scales.shape, 0, dtype=w_scales.dtype)
-                    w_scales = tl.where(mask_k_scale[None, :], w_scales, scale_zero)
             else:
                 w_scales: tl.constexpr = None
 

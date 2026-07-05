@@ -390,11 +390,6 @@ def _p_matmul(
                         off_m_scale = slice_block_off_m + off_m // 128
                     x_scales = XMxScale.load([0, off_m_scale, off_k_x // MX_PACK_DIVISOR // 4, 0, 0])
                     x_scales = unswizzle_act_mx_scale_bw(x_scales)
-                    # Same K-tail poisoning hazard as the w_scales TMA loads
-                    # below (#10772): zero out scale groups past the end of K.
-                    mask_k_scale = off_k_x + tl.arange(0, MX_SCALE_BLOCK_K) * MX_PACK_DIVISOR < off_k_x0 + loop_k
-                    scale_zero = tl.full(x_scales.shape, 0, dtype=x_scales.dtype)
-                    x_scales = tl.where(mask_k_scale[None, :], x_scales, scale_zero)
             elif x_format == "fp16" or x_format == "bf16":
                 x_scales: tl.constexpr = None
             else:
@@ -428,13 +423,6 @@ def _p_matmul(
                     w_scales = WMxScale.load([0, flattened_expt_n_idx, off_k_mx // 4, 0, 0])
                     w_scales = w_scales.reshape((w_scales.shape[1], w_scales.shape[2] * w_scales.shape[-2] * w_scales.shape[-1]))
                     w_scales = unswizzle_mx_scale_bw(w_scales)
-                    # The TMA descriptor bounds-checks against the physical
-                    # (padded) storage shape, so K-tail scale groups may contain
-                    # garbage; 0xFF bytes decode to NaN and NaN * 0 poisons the
-                    # accumulator (#10772). Zero them out after unswizzling.
-                    mask_k_scale = off_k_x + tl.arange(0, MX_SCALE_BLOCK_K) * MX_PACK_DIVISOR < off_k_x0 + loop_k
-                    scale_zero = tl.full(w_scales.shape, 0, dtype=w_scales.dtype)
-                    w_scales = tl.where(mask_k_scale[None, :], w_scales, scale_zero)
                 elif SWIZZLE_MX_SCALE == "HOPPER_SCALE":
                     # NYI: Hopper swizzling with non-transposed W
                     tl.static_assert(W_TRANSPOSE)

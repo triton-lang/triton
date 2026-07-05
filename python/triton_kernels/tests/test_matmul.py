@@ -678,90 +678,40 @@ def test_k_ragged_mxfp8_act_scale_swizzling(device):
     torch.testing.assert_close(swizzled, canonical)
 
 
-@pytest.mark.parametrize("is_persistent", [False, True])
-@pytest.mark.parametrize("hbm_swizzling", [False, True])
-def test_w_scale_k_tail_poison(is_persistent, hbm_swizzling, device, opt_flags_scope):
-    # Scale groups past the logical end of K must not leak into the output,
-    # even when the bytes there decode to NaN (#10772). Emulate garbage in
-    # the physical storage adjacent to the K tail by appending poisoned scale
-    # groups: 0xFF is the E8M0 NaN encoding, and NaN * 0 would otherwise
-    # propagate into the accumulator.
-    if is_persistent and not hbm_swizzling:
-        pytest.skip("strided scale TMA descriptor is bounded by the scale tensor's own shape; "
-                    "the oversized-scale poison emulation does not apply")
-    if is_hip():
-        if is_persistent:
-            pytest.skip("NYI: Persistent kernel not supported on AMD GPU")
-        if hbm_swizzling and not (is_hip_cdna4() or is_hip_gfx1250()):
-            pytest.skip("Scale preshuffling on AMD GPU only emulated on CDNA4 and gfx1250")
-    else:
-        if torch.cuda.get_device_capability()[0] < 9:
-            pytest.skip("NYI. Ampere swizzling.")
-        if hbm_swizzling and not is_persistent and torch.cuda.get_device_capability()[0] >= 10:
-            pytest.skip("native MXFP requires the persistent kernel")
-
-    # k = 91 * 32: an odd number of scale groups, so any block_k >= 64 leaves
-    # a K tail whose trailing scale groups are read past the logical end.
-    m, n, k = 128, 256, 2912
+def test_oversized_w_scale_rejected(device, opt_flags_scope):
+    # A scale tensor with extra groups past cdiv(K, 32) along the K dim would
+    # be silently multiplied into the K tail by the swizzled kernels, whose
+    # loads cannot mask the logical K extent (#10772): matmul must reject it.
+    m, n, k = 128, 256, 2880  # 90 scale groups
     torch.manual_seed(0)
     x = torch.randn((m, k), dtype=torch.bfloat16, device=device)
     w = torch.randn((1, k, n), dtype=torch.bfloat16, device=device)
     w_q, w_scale = downcast_to_mxfp(w, torch.uint8, axis=1)
-    # Keep the clean and poisoned scales in the same (contiguous) memory
-    # layout so both runs see identical strides and kernel configurations.
-    w_scale = w_scale.contiguous()
-    poison = torch.full((1, 16, n), 0xFF, dtype=w_scale.dtype, device=device)
-    w_scale_poison = torch.cat([w_scale, poison], dim=1)
+    # One extra scale group past the logical K tail, 0xFF = E8M0 NaN.
+    poison = torch.full((1, 1, n), 0xFF, dtype=w_scale.dtype, device=device)
+    w_scale_oversized = torch.cat([w_scale.contiguous(), poison], dim=1)
 
-    num_warps = 8 if is_hopper() else None
-    w_q = wrap_torch_tensor(w_q, dtype=FP4)
-    scale_layout = None
-    if hbm_swizzling:
-        w_q = convert_layout(w_q, layout.make_default_matmul_mxfp4_w_layout(mx_axis=-2))
-        scale_layout = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=-2, num_warps=num_warps or 8)
-
-    def run(scale):
-        scale = wrap_torch_tensor(scale)
-        if scale_layout is not None:
-            scale = convert_layout(scale, scale_layout)
-        precision_config = PrecisionConfig(b_mx_scale=scale, b_microblock_size=MXFP_BLOCK_SIZE.value,
-                                           flex_ctx=FlexCtx(rhs_data=InFlexData()))
-        return matmul(x, w_q, None, precision_config=precision_config)
-
-    constraints = make_constraints(None, 1, is_persistent, None, hbm_swizzling, "mxfloat4_e2m1", num_warps)
-    with opt_flags.scoped_opt_flags_constraints(constraints):
-        y_clean = run(w_scale)
-        y_poison = run(w_scale_poison)
-    assert not torch.isnan(y_poison).any(), "poisoned K-tail scale groups leaked NaN into the output"
-    assert torch.equal(y_clean, y_poison)
+    precision_config = PrecisionConfig(b_mx_scale=wrap_torch_tensor(w_scale_oversized),
+                                       b_microblock_size=MXFP_BLOCK_SIZE.value,
+                                       flex_ctx=FlexCtx(rhs_data=InFlexData()))
+    with pytest.raises(AssertionError, match="scale groups"):
+        matmul(x, wrap_torch_tensor(w_q, dtype=FP4), None, precision_config=precision_config)
 
 
-def test_x_scale_k_tail_poison(device, opt_flags_scope):
-    # Same as test_w_scale_k_tail_poison, but for the activation scales
-    # loaded through a TMA descriptor on Blackwell (#10772).
-    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
-        pytest.skip("NYI. X swizzling only implemented for B200 for now.")
-
-    m, n, k = 128, 256, 2912
+def test_oversized_x_scale_rejected(device, opt_flags_scope):
+    # Same as test_oversized_w_scale_rejected, for activation scales (#10772).
+    m, n, k = 128, 256, 2880
     torch.manual_seed(0)
     x = torch.randn((m, k), dtype=torch.bfloat16, device=device)
     w = torch.randn((k, n), dtype=torch.bfloat16, device=device)
     x_q, x_scale = downcast_to_mxfp(x, torch.float8_e4m3fn, axis=-1)
-    poison = torch.full((m, 16), 0xFF, dtype=x_scale.dtype, device=device)
-    x_scale_poison = torch.cat([x_scale, poison], dim=-1)
+    poison = torch.full((m, 1), 0xFF, dtype=x_scale.dtype, device=device)
+    x_scale_oversized = torch.cat([x_scale, poison], dim=-1)
 
-    scale_layout = layout.make_default_matmul_mx_act_scale_layout(None)
-
-    def run(scale):
-        precision_config = PrecisionConfig(a_mx_scale=convert_layout(wrap_torch_tensor(scale), scale_layout),
-                                           a_microblock_size=MXFP_BLOCK_SIZE.value, out_dtype=torch.bfloat16)
-        return matmul(x_q, w, None, precision_config=precision_config)
-
-    with opt_flags.scoped_opt_flags_constraints({"block_m": 128, "is_persistent": True, "split_k": 1}):
-        y_clean = run(x_scale)
-        y_poison = run(x_scale_poison)
-    assert not torch.isnan(y_poison).any(), "poisoned K-tail scale groups leaked NaN into the output"
-    assert torch.equal(y_clean, y_poison)
+    precision_config = PrecisionConfig(a_mx_scale=wrap_torch_tensor(x_scale_oversized),
+                                       a_microblock_size=MXFP_BLOCK_SIZE.value, out_dtype=torch.bfloat16)
+    with pytest.raises(AssertionError, match="scale groups"):
+        matmul(x_q, w, None, precision_config=precision_config)
 
 
 def test_set_idle_sms():
