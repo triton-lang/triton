@@ -684,6 +684,64 @@ def test_slice(device):
     slice_kernel[(1, )](XBLOCK=32)
 
 
+@pytest.mark.interpreter
+def test_slice_tensor_indices(device):
+    m = 16
+    n = 32
+    output = torch.empty((m, n // 2), dtype=torch.int32, device=device)
+    expanded_output = torch.empty((m, 1, n // 2), dtype=torch.int32, device=device)
+
+    @triton.jit
+    def slice_kernel(output, expanded_output, M: tl.constexpr, N: tl.constexpr):
+        accumulator = tl.arange(0, M * N).reshape(M, N)
+        rows = tl.arange(0, M)[:, None]
+        cols = tl.arange(0, N // 2)[None, :]
+
+        result = accumulator[rows, cols] * accumulator[rows, cols + N // 2]
+        tl.static_assert(result.shape == [M, N // 2])
+        expanded_result = accumulator[:, None, cols + N // 2]
+        tl.static_assert(expanded_result.shape == [M, 1, N // 2])
+
+        offsets = tl.arange(0, M * N // 2).reshape(M, N // 2)
+        tl.store(output + offsets, result)
+        expanded_offsets = tl.arange(0, M * N // 2).reshape(M, 1, N // 2)
+        tl.store(expanded_output + expanded_offsets, expanded_result)
+
+    slice_kernel[(1, )](output, expanded_output, M=m, N=n)
+
+    accumulator = torch.arange(m * n, dtype=torch.int32, device=device).reshape(m, n)
+    torch.testing.assert_close(output, accumulator[:, :n // 2] * accumulator[:, n // 2:])
+    torch.testing.assert_close(expanded_output, accumulator[:, None, n // 2:])
+
+
+@pytest.mark.interpreter
+def test_slice_unsupported_tensor_indices(device):
+
+    @triton.jit
+    def slice_kernel():
+        M: tl.constexpr = 16
+        N: tl.constexpr = 32
+        accumulator = tl.arange(0, M * N).reshape(M, N)
+        rows = tl.arange(0, M)[:, None]
+        cols = (N // 2 - 1 - tl.arange(0, N // 2))[None, :]
+        accumulator[rows, cols]
+
+    with pytest.raises(triton.TritonError, match="unsupported tensor index"):
+        slice_kernel[(1, )]()
+
+    @triton.jit
+    def multiple_non_full_ranges():
+        M: tl.constexpr = 16
+        N: tl.constexpr = 32
+        accumulator = tl.arange(0, M * N).reshape(M, N)
+        rows = tl.arange(0, M // 2)[:, None]
+        cols = tl.arange(0, N // 2)[None, :]
+        accumulator[rows, cols]
+
+    with pytest.raises(triton.TritonError, match="unsupported tensor index"):
+        multiple_non_full_ranges[(1, )]()
+
+
 # ------------------
 # test invalid slice
 # ------------------

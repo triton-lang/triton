@@ -12,6 +12,7 @@
 #include <nanobind/stl/vector.h>
 #include <optional>
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
@@ -20,6 +21,7 @@
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
@@ -44,6 +46,7 @@
 #include "triton/Tools/PluginUtils.h"
 #include "triton/Tools/Sys/Dump.h"
 #include "triton/Tools/Sys/GetEnv.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/SourceMgr.h"
 
 namespace {
@@ -54,6 +57,63 @@ using namespace triton;
 namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
+
+using LinearRange = std::pair<int64_t, int64_t>;
+
+std::optional<int64_t> getSplatInteger(Value value) {
+  if (auto splat = value.getDefiningOp<SplatOp>())
+    value = splat.getSrc();
+  auto constant = value.getDefiningOp<arith::ConstantOp>();
+  if (!constant)
+    return std::nullopt;
+  if (auto integer = dyn_cast<IntegerAttr>(constant.getValue()))
+    return integer.getInt();
+  auto elements = dyn_cast<DenseIntElementsAttr>(constant.getValue());
+  if (!elements || !elements.isSplat())
+    return std::nullopt;
+  return elements.getSplatValue<APInt>().getSExtValue();
+}
+
+std::optional<LinearRange> matchLinearRange(Value value) {
+  while (auto expandDims = value.getDefiningOp<ExpandDimsOp>())
+    value = expandDims.getSrc();
+
+  if (auto makeRange = value.getDefiningOp<MakeRangeOp>())
+    return LinearRange{makeRange.getStart(), makeRange.getEnd()};
+
+  auto add = value.getDefiningOp<arith::AddIOp>();
+  if (!add)
+    return std::nullopt;
+
+  auto matchAdd = [](Value rangeValue,
+                     Value offsetValue) -> std::optional<LinearRange> {
+    auto range = matchLinearRange(rangeValue);
+    auto offset = getSplatInteger(offsetValue);
+    if (!range || !offset)
+      return std::nullopt;
+    return LinearRange{range->first + *offset, range->second + *offset};
+  };
+  if (auto range = matchAdd(add.getLhs(), add.getRhs()))
+    return range;
+  return matchAdd(add.getRhs(), add.getLhs());
+}
+
+// Canonicalizes an integer tensor created from a linear range, with optional
+// singleton dimensions and constant offsets, to the half-open interval [a, b).
+std::optional<LinearRange> getLinearRange(Value index) {
+  auto indexTy = dyn_cast<RankedTensorType>(index.getType());
+  if (!indexTy || !indexTy.getElementType().isIntOrIndex())
+    return std::nullopt;
+  if (llvm::count_if(indexTy.getShape(), [](int64_t dim) { return dim != 1; }) >
+      1)
+    return std::nullopt;
+
+  auto range = matchLinearRange(index);
+  if (!range || range->second <= range->first ||
+      indexTy.getNumElements() != range->second - range->first)
+    return std::nullopt;
+  return range;
+}
 
 // Function to parse a comma-separated string into a vector of C-style strings
 llvm::SmallVector<const char *, 3>
@@ -1600,6 +1660,9 @@ void init_triton_ir(py::module_ &m) {
            [](TritonOpBuilder &self, Value &arg, int axis) -> Value {
              return self.create<ExpandDimsOp>(arg, axis);
            })
+      .def("get_linear_range",
+           [](TritonOpBuilder &self, Value &index)
+               -> std::optional<LinearRange> { return getLinearRange(index); })
       .def("create_cat",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              auto lhsType = dyn_cast<RankedTensorType>(lhs.getType());

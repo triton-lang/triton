@@ -736,6 +736,16 @@ class InterpreterBuilder:
     def create_gather(self, src, indices, axis):
         return TensorHandle(np.take_along_axis(src.data, indices.data, axis=axis), src.dtype.scalar)
 
+    def get_linear_range(self, index):
+        if not np.issubdtype(index.data.dtype, np.integer):
+            return None
+        if sum(dim != 1 for dim in index.data.shape) > 1:
+            return None
+        values = index.data.reshape(-1)
+        if values.size == 0 or (values.size > 1 and not np.all(np.diff(values) == 1)):
+            return None
+        return int(values[0]), int(values[-1]) + 1
+
     # pointer arithmetic
 
     def create_addptr(self, ptr, offset):

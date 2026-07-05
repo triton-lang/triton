@@ -1743,6 +1743,9 @@ class TritonSemantic(Generic[TensorTy]):
 #                               Gather
 # ===----------------------------------------------------------------------===
 
+    def get_linear_range(self, index: TensorTy):
+        return self.builder.get_linear_range(index.handle)
+
     def gather(self, src: TensorTy, index: TensorTy, axis: int) -> TensorTy:
         assert index.dtype.is_int(), "index must be an integer tensor"
 

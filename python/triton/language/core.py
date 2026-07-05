@@ -1118,19 +1118,49 @@ class tensor(base_value):
 
     @builtin
     def __getitem__(self, slices, _semantic=None):
-        if isinstance(slices, (builtins.slice, slice, constexpr)) or slices is None:
+        if isinstance(slices, (builtins.slice, slice, constexpr, tensor)) or slices is None:
             slices = [slices]
         if isinstance(slices, tuple):
             slices = slices.values
         ret = self
-        for dim, sl in enumerate(slices):
+        source_axis = 0
+        result_axis = 0
+        gather_axis = None
+        gather_range = None
+        for sl in slices:
             if _unwrap_if_constexpr(sl) is None:
-                ret = _semantic.expand_dims(ret, dim)
+                ret = _semantic.expand_dims(ret, result_axis)
+                result_axis += 1
             elif isinstance(sl, (builtins.slice, slice)) and all(
                     _unwrap_if_constexpr(arg) is None for arg in (sl.start, sl.stop, sl.step)):
-                pass  # an unsqueeze
+                source_axis += 1
+                result_axis += 1
+            elif isinstance(sl, tensor) and source_axis < len(self.shape):
+                linear_range = _semantic.get_linear_range(sl)
+                source_dim = _unwrap_if_constexpr(self.shape[source_axis])
+                if linear_range is None or not (0 <= linear_range[0] < linear_range[1] <= source_dim):
+                    raise ValueError(f"unsupported tensor index: {sl}")
+                if linear_range != (0, source_dim):
+                    if gather_axis is not None:
+                        raise ValueError(f"unsupported tensor index: {sl}")
+                    gather_axis = result_axis
+                    gather_range = linear_range
+                source_axis += 1
+                result_axis += 1
             else:
                 raise ValueError(f"unsupported tensor index: {sl}")
+
+        if gather_axis is not None:
+            start, end = gather_range
+            index = _semantic.arange(start, end)
+            for axis in builtins.range(len(ret.shape)):
+                if axis != gather_axis:
+                    index = _semantic.expand_dims(index, axis)
+            index_shape = [_unwrap_if_constexpr(dim) for dim in ret.shape]
+            index_shape[gather_axis] = end - start
+            index = _semantic.broadcast_impl_shape(index, index_shape)
+            ret = _semantic.gather(ret, index, gather_axis)
+
         return ret
 
     @property
