@@ -432,6 +432,11 @@ public:
     return isSurjective() && getTotalInDimSize() == getTotalOutDimSize();
   }
 
+  // Given a linear map L: V -> W.
+  // If L(v) = 0 for every vector v in V, where 0 is the zero vector in W,
+  // then L is the zero linear map.
+  bool isZero() const;
+
   // Remove a dimension of size 1 from the layout.
   [[nodiscard]] LinearLayout squeezeIns(StringAttr dim) const;
   [[nodiscard]] LinearLayout squeezeOuts(StringAttr dim) const;

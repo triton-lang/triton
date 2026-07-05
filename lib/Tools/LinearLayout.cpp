@@ -763,6 +763,18 @@ LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
                       inner.isSurjective() && outer.isSurjective());
 }
 
+bool LinearLayout::isZero() const {
+  for (const auto& [inDimName, basisImages] : bases) {
+    for (const auto& basisImage : basisImages) {
+      for (const auto& coord : basisImage) {
+        if (coord > 0) return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 bool LinearLayout::isTrivialOver(ArrayRef<StringAttr> dimNames) const {
   for (StringAttr dim : dimNames) {
     if (!hasInDim(dim) || !hasOutDim(dim)) {

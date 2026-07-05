@@ -353,6 +353,13 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   for (auto &[outDimName, outIdx] : outIndices) {
     // Apply flattened sublayout for this output
     auto matrix = layout.sublayout(inDimNames, outDimName).flattenIns();
+
+    // If `matrix` is a zero layout, then `matrix(x) = 0`.
+    // Since `outIdx ⊕ 0 = outIdx`, we can safely skip the computation below.
+    if (matrix.isZero()) {
+      continue;
+    }
+
     auto out = triton::gpu::matrixVectorProd(b, matrix, x);
     outIdx = b.xor_(outIdx, out);
   }
