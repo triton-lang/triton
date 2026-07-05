@@ -371,9 +371,9 @@ getSubViews(ArefValue arefVal, Value stage, Location loc, OpBuilder &rewriter,
 }
 
 void createTMALoad(triton::nvws::DescriptorLoadOp op, PatternRewriter &rewriter,
-                   Value barrierAlloc, Value pred, bool useTwoCTATMA) {
+                   Value barrierAlloc, Value pred) {
   auto resultType = cast<MemDescType>(op.getResult().getType());
-  bool useMulticast = useTwoCTATMA && hasCGABroadcast(resultType);
+  bool useMulticast = hasCGABroadcast(resultType);
   auto newLoadOp = triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp::create(
       rewriter, op.getLoc(), op.getDesc(), op.getIndices(), barrierAlloc,
       op.getResult(), pred, useMulticast);
@@ -382,10 +382,10 @@ void createTMALoad(triton::nvws::DescriptorLoadOp op, PatternRewriter &rewriter,
 };
 
 void createTMAGather(triton::nvws::DescriptorGatherOp op,
-                     PatternRewriter &rewriter, Value barrierAlloc, Value pred,
-                     bool useTwoCTATMA) {
+                     PatternRewriter &rewriter, Value barrierAlloc,
+                     Value pred) {
   auto resultType = cast<MemDescType>(op.getResult().getType());
-  bool useMulticast = useTwoCTATMA && hasCGABroadcast(resultType);
+  bool useMulticast = hasCGABroadcast(resultType);
   auto newGatherOp = triton::nvidia_gpu::AsyncTMAGatherOp::create(
       rewriter, op.getLoc(), op.getDesc(), op.getXOffsets(), op.getYOffset(),
       barrierAlloc, op.getResult(), pred, useMulticast);
@@ -423,12 +423,10 @@ void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
   for (auto loadOp : loadOps) {
     rewriter.setInsertionPoint(loadOp);
     if (auto descLoad = dyn_cast<triton::nvws::DescriptorLoadOp>(loadOp)) {
-      createTMALoad(descLoad, rewriter, fullBarrier, pred,
-                    arefVal.useTwoCTATMA);
+      createTMALoad(descLoad, rewriter, fullBarrier, pred);
     } else if (auto descGather =
                    dyn_cast<triton::nvws::DescriptorGatherOp>(loadOp)) {
-      createTMAGather(descGather, rewriter, fullBarrier, pred,
-                      arefVal.useTwoCTATMA);
+      createTMAGather(descGather, rewriter, fullBarrier, pred);
     } else {
       llvm_unreachable("Unknown load op");
     }
@@ -454,6 +452,7 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
   Value emptyBarrier =
       getEmptyBarrier(rewriter, loc, arefVal, op.getStage(),
                       getPartitionWsTagIds(op), getStageCluster(op));
+  insertWaitOp(rewriter, op, emptyBarrier, op.getPhase(), op.getStage());
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter,
                            getPartitionWsTagIds(op), getStageCluster(op));
   assert(views.size() == op.getBuffers().size());
@@ -481,8 +480,6 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
     return kind == AsyncOp::TMALoad || kind == AsyncOp::CpAsync;
   };
   auto hasTMA = [](AsyncOp kind) { return kind == AsyncOp::TMALoad; };
-
-  insertWaitOp(rewriter, op, emptyBarrier, op.getPhase(), op.getStage());
 
   if (llvm::any_of(asyncKinds, hasTMA)) {
     Value fullBarrier =
