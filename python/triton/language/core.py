@@ -1811,7 +1811,7 @@ def _canonicalize_block_ptr_static_tuple(values, name: str, *, positive: bool = 
     return tuple(converted)
 
 
-def _canonicalize_block_ptr_dynamic_tuple(values, name: str, _semantic) -> tuple:
+def _canonicalize_block_ptr_dynamic_tuple(values, name: str, _semantic, target_dtype=int64) -> tuple:
     converted = []
     for value in _as_list_like(values):
         value = _semantic.to_tensor(value)
@@ -1819,8 +1819,8 @@ def _canonicalize_block_ptr_dynamic_tuple(values, name: str, _semantic) -> tuple
             raise ValueError(f"Expected `{name}` entries to be scalar tensors")
         if not value.dtype.is_int():
             raise ValueError(f"Expected `{name}` entries to be integers")
-        if value.dtype != int64:
-            value = _semantic.cast(value, int64)
+        if value.dtype != target_dtype:
+            value = _semantic.cast(value, target_dtype)
         converted.append(value)
     return tuple(converted)
 
@@ -1848,19 +1848,30 @@ class _block_ptr:
     offsets: tuple
     block_shape: tuple
     order: tuple
+    _inner_stride_one: constexpr
 
     __triton_block_ptr__ = True
 
-    def __init__(self, base, shape, strides, offsets, block_shape, order, _semantic=None):
+    def __init__(self, base, shape, strides, offsets, block_shape, order, _semantic=None, _inner_stride_one=None):
         if not base.type.is_ptr() or base.type.is_block():
             raise ValueError("Expected `base` to be a scalar pointer type")
         if isinstance(base.type.element_ty, block_type):
             raise ValueError("Expected `base` to point to a scalar element type")
 
+        if _inner_stride_one is not None:
+            self._inner_stride_one = _inner_stride_one
+        else:
+            # Check if inner stride is a compile-time literal 1 before canonicalization
+            # converts values to IR tensors. We intentionally only match Python int/constexpr
+            # values here; once wrapped in a tensor the constant is opaque to the frontend.
+            last_stride_val = _unwrap_if_constexpr(_as_list_like(strides)[-1])
+            inner_stride_is_one = isinstance(last_stride_val, int) and last_stride_val == 1
+            self._inner_stride_one = constexpr(inner_stride_is_one)
+
         self.base = base
         self.shape = _canonicalize_block_ptr_dynamic_tuple(shape, "shape", _semantic)
         self.strides = _canonicalize_block_ptr_dynamic_tuple(strides, "strides", _semantic)
-        self.offsets = _canonicalize_block_ptr_dynamic_tuple(offsets, "offsets", _semantic)
+        self.offsets = _canonicalize_block_ptr_dynamic_tuple(offsets, "offsets", _semantic, target_dtype=int32)
         self.block_shape = _canonicalize_block_ptr_static_tuple(block_shape, "block_shape", positive=True)
         self.order = _canonicalize_block_ptr_static_tuple(order, "order")
 
@@ -1900,13 +1911,46 @@ class _block_ptr:
 
     def advance(self, offsets, _semantic=None):
         new_offsets = []
-        offsets = _canonicalize_block_ptr_dynamic_tuple(offsets, "offsets", _semantic)
+        offsets = _canonicalize_block_ptr_dynamic_tuple(offsets, "offsets", _semantic, target_dtype=int32)
         if len(offsets) != len(self.offsets):
             raise ValueError(f"Expected `offsets` to have length {len(self.offsets)} but received {len(offsets)}")
         for old_offset, delta in zip(self.offsets, offsets):
             new_offsets.append(add(old_offset, delta, _semantic=_semantic))
         return _block_ptr(self.base, self.shape, self.strides, tuple(new_offsets), self.block_shape, self.order,
-                          _semantic=_semantic)
+                          _semantic=_semantic, _inner_stride_one=self._inner_stride_one)
+
+    def _is_tdesc_eligible(self, boundary_check):
+        """Check if this block pointer can be lowered to a tensor descriptor."""
+        if not self._inner_stride_one.value:
+            return False
+        rank = len(self._tile_shape())
+        checked_dims = _canonicalize_block_ptr_boundary_check(boundary_check, rank)
+        if checked_dims != set(builtins.range(rank)):
+            return False
+        elem_ty = self.base.type.element_ty
+        elem_size = 1 if elem_ty == int1 else elem_ty.primitive_bitwidth // 8
+        if self._tile_shape()[-1] * elem_size < 16:
+            return False
+        return True
+
+    def _make_tensor_desc(self, padding_option, _semantic):
+        """Create a MakeTensorDescOp and return a tensor_descriptor_base."""
+        base = self.base
+        if base.type.element_ty == int1:
+            base = _semantic.cast(base, pointer_type(int8, base.type.address_space))
+        elem_ty = base.type.element_ty
+        is_signed = elem_ty.is_int_signed()
+        padding = _semantic._str_to_padding_option(padding_option)
+        if padding is None:
+            padding = ir.PADDING_OPTION.PAD_ZERO
+        if elem_ty.is_int() and padding == ir.PADDING_OPTION.PAD_NAN:
+            raise ValueError("Padding option `nan` is not supported for integer block pointers")
+        shape_handles = [_semantic.cast(s, int32).handle for s in self.shape]
+        stride_handles = [s.handle for s in self.strides]
+        block_shape_ints = self._tile_shape()
+        handle = _semantic.builder.create_make_tensor_descriptor(base.handle, shape_handles, stride_handles,
+                                                                 block_shape_ints, is_signed, padding)
+        return tensor_descriptor_base(handle, block_type(elem_ty, block_shape_ints))
 
     def load(self, mask=None, other=None, boundary_check=(), padding_option="", cache_modifier="", eviction_policy="",
              volatile=False, _semantic=None):
@@ -1919,6 +1963,11 @@ class _block_ptr:
         volatile = _unwrap_if_constexpr(volatile)
         if padding_option is None:
             padding_option = ""
+
+        if self._is_tdesc_eligible(boundary_check):
+            desc = self._make_tensor_desc(padding_option or "zero", _semantic)
+            return _semantic.descriptor_load(desc, list(self.offsets), cache_modifier or "", eviction_policy or "")
+
         ptrs, mask = self._materialize(boundary_check, _semantic=_semantic)
 
         if padding_option == "":
@@ -1941,6 +1990,14 @@ class _block_ptr:
 
         cache_modifier = _unwrap_if_constexpr(cache_modifier)
         eviction_policy = _unwrap_if_constexpr(eviction_policy)
+
+        if self._is_tdesc_eligible(boundary_check):
+            # Padding only affects loads (OOB reads); stores silently drop OOB writes.
+            # MakeTensorDescOp still requires a padding argument, so pass "zero".
+            desc = self._make_tensor_desc("zero", _semantic)
+            value = _semantic.to_tensor(value)
+            return _semantic.descriptor_store(desc, value, list(self.offsets))
+
         ptrs, mask = self._materialize(boundary_check, _semantic=_semantic)
         return store(ptrs, value, mask=mask, cache_modifier=cache_modifier, eviction_policy=eviction_policy,
                      _semantic=_semantic)
@@ -2656,9 +2713,9 @@ def advance(base, offsets, _semantic=None):
     :param base: the block pointer to advance
     :param offsets: the offsets to advance, a tuple by dimension
     """
-    if _is_block_ptr(base):
-        return base.advance(offsets, _semantic=_semantic)
-    raise ValueError("`tl.advance` only supports block pointers created by `tl.make_block_ptr`")
+    if not _is_block_ptr(base):
+        raise ValueError(f"`tl.advance` expected a block pointer from `tl.make_block_ptr`, got {type(base).__name__}")
+    return base.advance(offsets, _semantic=_semantic)
 
 
 @builtin
