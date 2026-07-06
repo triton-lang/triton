@@ -277,20 +277,6 @@ struct ReshapeOpConversion : public ConvertOpToLLVMPattern<ReshapeOp> {
     return success();
   }
 };
-struct ExpandDimsOpConversion : public ConvertOpToLLVMPattern<ExpandDimsOp> {
-  using OpAdaptor = typename ExpandDimsOp::Adaptor;
-  explicit ExpandDimsOpConversion(
-      LLVMTypeConverter &typeConverter,
-      PatternBenefit benefit = patternBenefitDefault)
-      : ConvertOpToLLVMPattern<ExpandDimsOp>(typeConverter, benefit) {}
-  LogicalResult
-  matchAndRewrite(ExpandDimsOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    assert(!isExpensiveView(op.getSrc().getType(), op.getType()));
-    rewriter.replaceOp(op, adaptor.getSrc());
-    return success();
-  }
-};
 struct MemDescTransOpConversion
     : public ConvertOpToLLVMPattern<MemDescTransOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -580,7 +566,6 @@ void mlir::triton::populateViewOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<ReshapeOpConversion>(typeConverter, benefit);
-  patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
   patterns.add<SplatOpConversion>(typeConverter, benefit);
   patterns.add<UnsplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);

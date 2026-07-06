@@ -199,7 +199,7 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
 }
 
 bool isView(Operation *op) {
-  return isa<ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp>(op);
+  return isa<ReshapeOp, TransOp, JoinOp, SplitOp>(op);
 }
 
 bool isNoop(Operation *op) {
@@ -378,15 +378,6 @@ static Attribute inferDstEncoding(triton::ReduceOp op, Attribute encoding) {
       cast<ttg::DistributedEncodingTrait>(encoding));
 }
 
-static Attribute inferDstEncoding(triton::ExpandDimsOp op, Attribute encoding) {
-  auto sliceEncoding = mlir::dyn_cast<triton::gpu::SliceEncodingAttr>(encoding);
-  if (!sliceEncoding)
-    return {};
-  if (op.getAxis() != sliceEncoding.getDim())
-    return {};
-  return sliceEncoding.getParent();
-}
-
 static Attribute inferDstEncoding(JoinOp op, Attribute srcEnc) {
   Attribute dstEnc;
   auto shape = op.getLhs().getType().getShape();
@@ -420,12 +411,6 @@ static Attribute inferSrcEncoding(triton::ReduceOp op, Attribute encoding) {
   if (op.getAxis() != sliceEncoding.getDim())
     return {};
   return sliceEncoding.getParent();
-}
-
-static Attribute inferSrcEncoding(triton::ExpandDimsOp op, Attribute encoding) {
-  return triton::gpu::SliceEncodingAttr::get(
-      op->getContext(), op.getAxis(),
-      cast<ttg::DistributedEncodingTrait>(encoding));
 }
 
 static Attribute inferSrcEncoding(JoinOp op, Attribute dstEnc) {
@@ -591,8 +576,6 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
 
   if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
     return inferSrcEncoding(reduceOp, encoding);
-  if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
-    return inferSrcEncoding(expand, encoding);
   if (auto join = dyn_cast<triton::JoinOp>(op))
     return inferSrcEncoding(join, encoding);
   if (auto split = dyn_cast<triton::SplitOp>(op))
@@ -625,8 +608,6 @@ Attribute inferDstEncoding(Operation *op, Attribute encoding) {
     return encoding;
   if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
     return inferDstEncoding(reduceOp, encoding);
-  if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
-    return inferDstEncoding(expand, encoding);
   if (auto join = dyn_cast<triton::JoinOp>(op))
     return inferDstEncoding(join, encoding);
   if (auto split = dyn_cast<triton::SplitOp>(op))
