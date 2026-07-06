@@ -147,7 +147,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             isinstance(layout, (AutoLayout, CoalescedLayout)) or layout.dim == axis,
             lambda: f"expected expand_dims input layout to be sliced in axis {axis} but got {layout.dim}")
 
-        handle = self.builder.create_expand_dims(input.handle, axis)
+        handle = self.builder.create_reshape(input.handle, dst_shape, False)
         return self._wrap_handle_infer_layout(handle, input.type.scalar, dst_shape)
 
     def join(self, a: TensorTy, b: TensorTy) -> TensorTy:
