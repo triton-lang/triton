@@ -1377,22 +1377,20 @@ public:
     if (fatPtrTrue.size() == 1 && fatPtrFalse.size() == 1)
       return success();
     if (fatPtrTrue.size() != 2 || fatPtrFalse.size() != 2) {
-      Value trueOp;
-      Value falseOp;
-      if (fatPtrTrue.size() == 2) {
-        trueOp = tt::AddPtrOp::create(rewriter, selectOp.getLoc(),
-                                      selectOp.getType(), fatPtrTrue[0],
-                                      fatPtrTrue[1]);
-      } else {
-        trueOp = fatPtrTrue[0];
-      }
-      if (fatPtrFalse.size() == 2) {
-        falseOp = tt::AddPtrOp::create(rewriter, selectOp.getLoc(),
-                                       selectOp.getType(), fatPtrFalse[0],
-                                       fatPtrFalse[1]);
-      } else {
-        falseOp = fatPtrFalse[0];
-      }
+      // Asymmetric case: one arm is already a materialized pointer, the other
+      // is still a (base, offset) pair. Route the (base, offset) side through
+      // createTensorPointer so the scalar base is splatted before combining
+      // with a tensor offset; a raw tt.addptr would fail TT_AddPtrOp's
+      // TypesMatchWith verifier here.
+      auto materialize = [&](ValueRange fatPtr) -> Value {
+        if (fatPtr.size() == 1)
+          return getSingleValue(fatPtr);
+        return createTensorPointer(rewriter, fatPtr[0], fatPtr[1],
+                                   selectOp.getLoc(),
+                                   fatPtrs.at({fatPtr[0], fatPtr[1]}));
+      };
+      Value trueOp = materialize(fatPtrTrue);
+      Value falseOp = materialize(fatPtrFalse);
       auto newSelectOp = arith::SelectOp::create(
           rewriter, selectOp.getLoc(), selectOp.getType(),
           selectOp.getCondition(), trueOp, falseOp);
