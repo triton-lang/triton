@@ -6,6 +6,7 @@ from typing import Tuple, List, Dict, Callable, TypeVar, Optional
 
 import math
 import numpy as np
+import time
 
 import triton
 import triton.language as tl
@@ -776,6 +777,15 @@ class InterpreterBuilder:
             raise ValueError(f"unsupported semantic {sem}")
         sem = self.ir_sem_to_interpreter_sem[sem]
         return TensorHandle(_interpreter.atomic_cas(ptr.data, cmp.data, val.data, sem), cmp.dtype.scalar)
+
+    def create_atomic_poll(self, ptr, expected, timeout_ns, sem, scope):
+        start_ns = time.perf_counter_ns()
+        while True:
+            value = self.create_load(ptr, None, None, True)
+            if np.array_equal(value.data, expected.data):
+                return TensorHandle(np.array(True, dtype=np.bool_), tl.int1)
+            if timeout_ns is not None and time.perf_counter_ns() - start_ns >= timeout_ns.data.item():
+                return TensorHandle(np.array(False, dtype=np.bool_), tl.int1)
 
     def create_atomic_rmw(self, rmwOp, ptr, val, mask, sem, scope):
         if rmwOp not in self.ir_rmw_op_to_interpreter_rmw_op:

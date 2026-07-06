@@ -156,6 +156,17 @@ void AtomicRMWOp::setPredicateOperand(Value pred) {
 
 Type AtomicRMWOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
 
+LogicalResult AtomicPollOp::verify() {
+  if (getSem() != MemSemantic::ACQUIRE && getSem() != MemSemantic::RELAXED)
+    return emitOpError("only supports acquire and relaxed semantics");
+
+  unsigned bitWidth = getExpected().getType().getIntOrFloatBitWidth();
+  if (bitWidth != 16 && bitWidth != 32 && bitWidth != 64)
+    return emitOpError(
+        "only supports integer elements with width {16, 32, 64}");
+  return success();
+}
+
 void StoreOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                           MLIRContext *context) {
   results.add<CanonicalizeMaskedStorePattern>(context);
@@ -656,8 +667,13 @@ llvm::SmallVector<Type> ReduceOp::getElementTypes() {
   if (!reduceOp || reduceOp->getNumOperands() != 2 ||
       reduceOp->getNumResults() != 1)
     return nullptr;
-  if (reduceOp->getOperand(0) != block->getArgument(0) ||
-      reduceOp->getOperand(1) != block->getArgument(1))
+  Value arg0 = block->getArgument(0), arg1 = block->getArgument(1);
+  Value lhs = reduceOp->getOperand(0), rhs = reduceOp->getOperand(1);
+  // For commutative combiners, the reversed argument-operand mapping is
+  // equivalent.
+  bool reversedMapping = (lhs == arg1 && rhs == arg0) &&
+                         reduceOp->hasTrait<OpTrait::IsCommutative>();
+  if (!(lhs == arg0 && rhs == arg1) && !reversedMapping)
     return nullptr;
 
   return reduceOp;
@@ -904,6 +920,22 @@ LogicalResult CatOp::verify() {
 
 //-- ReshapeOp --
 
+std::optional<unsigned> ReshapeOp::getExpandDimsAxis() {
+  auto srcTy = getSrc().getType();
+  auto dstTy = getType();
+  if (srcTy.getRank() + 1 != dstTy.getRank())
+    return std::nullopt;
+  auto srcShape = srcTy.getShape();
+  auto dstShape = dstTy.getShape();
+  for (unsigned axis = 0; axis < dstShape.size(); ++axis) {
+    if (dstShape[axis] == 1 &&
+        srcShape.take_front(axis) == dstShape.take_front(axis) &&
+        srcShape.drop_front(axis) == dstShape.drop_front(axis + 1))
+      return axis;
+  }
+  return std::nullopt;
+}
+
 void ReshapeOp::build(OpBuilder &builder, OperationState &state,
                       ArrayRef<int64_t> shape, Value src, bool allowReorder) {
   auto srcTy = cast<RankedTensorType>(src.getType());
@@ -927,6 +959,15 @@ LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
   auto definingOp = op.getSrc().getDefiningOp();
   if (!definingOp) {
     return failure();
+  }
+
+  // reshape(expand_dims(x)) -> x
+  if (auto expandDims = dyn_cast<ExpandDimsOp>(definingOp)) {
+    if (!op.getAllowReorder() &&
+        op.getType() == expandDims.getSrc().getType()) {
+      rewriter.replaceOp(op, expandDims.getSrc());
+      return success();
+    }
   }
 
   // reshape(reshape) -> reshape

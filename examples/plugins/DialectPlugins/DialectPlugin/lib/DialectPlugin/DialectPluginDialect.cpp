@@ -68,7 +68,7 @@ TRITON_PLUGIN_API plugin::PluginInfo *tritonGetPluginInfo() {
   static plugin::DialectInfo dialect = {DIALECT_NAME, VERSION,
                                         registerTritonPluginDialect};
   static plugin::DialectInfo dialects[] = {dialect};
-  static plugin::OpInfo op = {"create_custom_op", addTritonPluginCustomOp};
+  static plugin::OpInfo op = {"custom_op", addTritonPluginCustomOp};
   static plugin::OpInfo ops[] = {op};
   static plugin::PluginInfo info = {TRITON_PLUGIN_API_VERSION,
                                     PLUGIN_NAME,

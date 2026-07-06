@@ -278,7 +278,7 @@ struct AuxDataMap {
   int getClusterBarrierSlot(Operation *op) const;
 
 private:
-  void getBuffersAndBarriers(
+  LogicalResult getBuffersAndBarriers(
       ModuleOp module,
       SmallVector<SmallVector<triton::BufferRegion>, 2> &bufRegions,
       SmallVector<triton::BufferRegion> &barrierRegions);

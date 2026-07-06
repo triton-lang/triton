@@ -142,11 +142,23 @@ public:
       info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Read,
                                         loadOp.getSrc());
     }
+    if (auto gatherOp = dyn_cast<ttg::LocalGatherOp>(op)) {
+      info.emplace();
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Read,
+                                        gatherOp.getSrc());
+    }
     if (auto storeOp = dyn_cast<ttg::LocalStoreOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
                                         storeOp.getDst());
+    }
+    if (auto scatterOp = dyn_cast<ttg::LocalScatterOp>(op)) {
+      info.emplace();
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
+                                        scatterOp.getDst());
     }
     if (auto allocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
       if (allocOp.getSrc()) {
