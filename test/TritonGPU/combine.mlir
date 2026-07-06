@@ -2230,6 +2230,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 256, 16]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1, 8], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 8, 1], order = [2, 1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, rank = 3}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @expand_dims_reshape_mma_forward_propagate
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: tt.reshape %arg0
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: tt.return
+  tt.func public @expand_dims_reshape_mma_forward_propagate(
+      %arg0: tensor<128x256xf16, #mma>) {
+    %0 = ttg.convert_layout %arg0 : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #ttg.slice<{dim = 0, parent = #blocked1}>>
+    %1 = tt.reshape %0 : tensor<128x256xf16, #ttg.slice<{dim = 0, parent = #blocked1}>> -> tensor<1x128x256xf16, #blocked1>
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<1x128x256xf16, #shared, #smem, mutable>
+    ttg.local_store %1, %2 : tensor<1x128x256xf16, #blocked1> -> !ttg.memdesc<1x128x256xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1,2], threadsPerWarp = [32,1], warpsPerCTA = [1,1], order = [1,0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1,1], threadsPerWarp = [16,2], warpsPerCTA = [1,1], order = [1,0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
