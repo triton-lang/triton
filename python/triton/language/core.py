@@ -123,6 +123,18 @@ def is_builtin(fn) -> bool:
 
 @builtin
 def to_tensor(x, _semantic=None):
+    """
+    Converts a Python scalar into a 0-dimensional :code:`tensor`.
+
+    If :code:`x` is already a :code:`tensor` it is returned unchanged. The result
+    dtype is inferred from the value: a Python :code:`bool` becomes
+    :code:`tl.int1`, an :code:`int` becomes the smallest of :code:`tl.int32`,
+    :code:`tl.uint32`, :code:`tl.int64`, or :code:`tl.uint64` that can represent
+    it, and a :code:`float` becomes :code:`tl.float32` (or :code:`tl.float64` when
+    it is outside the :code:`float32` range).
+
+    :param x: any numeric value.
+    """
     return _semantic.to_tensor(x)
 
 
@@ -2378,7 +2390,11 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
       the device does not have Tensor Cores or the inputs are not of dtype f32,
       this option is ignored. For devices that do have tensor cores, the
       default precision is tf32.
-    :type input_precision: string. Available options for nvidia: :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`. Default: :code:`"tf32"`. Available options for amd: :code:`"ieee"`, (CDNA3 only) :code:`"tf32"`.
+    :type input_precision: string. Available options for nvidia:
+      :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`,
+      :code:`"bf16x3"`, :code:`"bf16x6"`. Default: :code:`"tf32"`.
+      Available options for amd: :code:`"ieee"`, :code:`"bf16x3"`,
+      :code:`"bf16x6"`, (CDNA3 only) :code:`"tf32"`.
     :param allow_tf32: *Deprecated.* If true, input_precision is set to "tf32".
       Only one of :code:`input_precision` and :code:`allow_tf32` can be
       specified (i.e. at least one must be :code:`None`).
@@ -2925,7 +2941,30 @@ def expect_zero(x, mask, _semantic=None):
 # -----------------------
 
 
+def _add_binary_op_docstr(name: str, op: str) -> Callable[[T], T]:
+
+    def _decorator(func: T) -> T:
+        func.__doc__ = f"""
+    Computes the element-wise {name} of :code:`x` and :code:`y`.
+
+    This is the function form of the :code:`{op}` operator.
+
+    :param x: the first input tensor
+    :type x: Block
+    :param y: the second input tensor
+    :type y: Block
+    :param sanitize_overflow: insert an integer-overflow check when overflow
+        sanitization is enabled at compile time; set to :code:`False` to emit
+        plain wrapping arithmetic. Ignored for floating-point operands.
+    :type sanitize_overflow: bool
+    """
+        return func
+
+    return _decorator
+
+
 @builtin
+@_add_binary_op_docstr("sum", "+")
 def add(x, y, sanitize_overflow: constexpr = True, _semantic=None):
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
@@ -2933,6 +2972,7 @@ def add(x, y, sanitize_overflow: constexpr = True, _semantic=None):
 
 
 @builtin
+@_add_binary_op_docstr("difference", "-")
 def sub(x, y, sanitize_overflow: constexpr = True, _semantic=None):
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
@@ -2940,6 +2980,7 @@ def sub(x, y, sanitize_overflow: constexpr = True, _semantic=None):
 
 
 @builtin
+@_add_binary_op_docstr("product", "*")
 def mul(x, y, sanitize_overflow: constexpr = True, _semantic=None):
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)

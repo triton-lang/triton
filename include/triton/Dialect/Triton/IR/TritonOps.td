@@ -488,6 +488,9 @@ def TT_ReshapeOp : TT_Op<"reshape", [Pure,
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
     let hasVerifier = 1;
+    let extraClassDeclaration = [{
+      std::optional<unsigned> getExpandDimsAxis();
+    }];
 }
 
 def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
