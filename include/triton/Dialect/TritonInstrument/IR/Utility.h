@@ -268,7 +268,7 @@ struct AuxDataMap {
                                                 const ConSanTargetHooks *hooks);
 
 private:
-  void getBuffersAndBarriers(
+  LogicalResult getBuffersAndBarriers(
       ModuleOp module,
       SmallVector<SmallVector<triton::BufferRegion>, 2> &bufRegions,
       SmallVector<triton::BufferRegion> &barrierRegions);

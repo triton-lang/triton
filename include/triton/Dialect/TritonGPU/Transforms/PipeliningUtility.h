@@ -180,13 +180,13 @@ DenseSet<Operation *>
 getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp,
                        std::function<bool(Operation *)> filter = nullptr);
 
-// Return the "first" op in terms of the stage and cluser ordering
+// Return the "first" op in terms of the stage and cluster ordering
 Operation *
 getFirstUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
                          CoarseSchedule &schedule,
                          std::function<bool(Operation *)> filterUse = nullptr);
 
-// Return the "last" op in terms of the stage and cluser ordering
+// Return the "last" op in terms of the stage and cluster ordering
 Operation *
 getLastUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
                         CoarseSchedule &schedule,
