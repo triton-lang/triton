@@ -961,6 +961,56 @@ LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
     return failure();
   }
 
+  // reshape(broadcast(x)) -> broadcast(reshape(x))
+  //
+  // On its own this doesn't do much, but consider
+  //    broadcast(reshape(broadcast))
+  // -> broadcast(broadcast(reshape))
+  // -> broadcast(reshape)
+  if (auto broadcast = dyn_cast<BroadcastOp>(definingOp)) {
+    auto removeUnitDims = [](ArrayRef<int64_t> shape) {
+      SmallVector<int64_t> result;
+      for (int64_t dim : shape)
+        if (dim != 1)
+          result.push_back(dim);
+      return result;
+    };
+    // We can only do this if the reshape only adds/removes unit dimensions.
+    auto broadcastShape = op.getSrc().getType().getShape();
+    auto dstShape = op.getType().getShape();
+    if (removeUnitDims(broadcastShape) == removeUnitDims(dstShape)) {
+      auto src = broadcast.getSrc();
+      auto srcType = src.getType();
+      auto broadcastSrcShape = srcType.getShape();
+      // Compute the result shape of the new reshape. It should be dstShape with
+      // some dims set to 1.
+      auto newShape = dstShape.vec();
+      unsigned broadcastDim = 0;
+      for (int64_t &dim : newShape) {
+        // We are only interested in the non-unit dims, since the reshape may
+        // add or remove any number of unit dims.
+        if (dim == 1)
+          continue;
+        while (broadcastShape[broadcastDim] == 1)
+          ++broadcastDim;
+        // For each non-unit result dim of the broadcast, set the reshape result
+        // to be the source dim size of the broadcast.
+        dim = broadcastSrcShape[broadcastDim++];
+      }
+
+      auto resultEncoding = op.getType().getEncoding();
+      auto newType = RankedTensorType::get(newShape, srcType.getElementType(),
+                                           resultEncoding);
+      auto newReshape = ReshapeOp::create(rewriter, op.getLoc(), newType, src,
+                                          op.getAllowReorder(),
+                                          /*efficient_layout=*/false);
+      auto newBroadcast = BroadcastOp::create(rewriter, broadcast.getLoc(),
+                                              op.getType(), newReshape);
+      rewriter.replaceOp(op, newBroadcast);
+      return success();
+    }
+  }
+
   // reshape(expand_dims(x)) -> x
   if (auto expandDims = dyn_cast<ExpandDimsOp>(definingOp)) {
     if (!op.getAllowReorder() &&

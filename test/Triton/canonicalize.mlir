@@ -69,6 +69,20 @@ tt.func @fn(%arg0: tensor<1xf32, #sliced0>) -> (tensor<32x1xf32, #blocked0>){
 
 // -----
 
+// CHECK-LABEL: @canonicalize_broadcast_reshape_chain
+tt.func @canonicalize_broadcast_reshape_chain(%arg0: tensor<8xf32>) -> tensor<2x4x4x8xf32> {
+  // CHECK-NEXT: %[[RESHAPE:.*]] = tt.reshape %arg0 : tensor<8xf32> -> tensor<1x1x1x8xf32>
+  // CHECK-NEXT: %[[BROADCAST:.*]] = tt.broadcast %[[RESHAPE]] : tensor<1x1x1x8xf32> -> tensor<2x4x4x8xf32>
+  // CHECK-NEXT: tt.return %[[BROADCAST]] : tensor<2x4x4x8xf32>
+  %0 = tt.reshape %arg0 : tensor<8xf32> -> tensor<1x8xf32>
+  %1 = tt.broadcast %0 : tensor<1x8xf32> -> tensor<4x8xf32>
+  %2 = tt.reshape %1 : tensor<4x8xf32> -> tensor<1x4x1x8xf32>
+  %3 = tt.broadcast %2 : tensor<1x4x1x8xf32> -> tensor<2x4x4x8xf32>
+  tt.return %3 : tensor<2x4x4x8xf32>
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   tt.func @fp_to_fp_pos_zero_fold() -> tensor<32x128xf8E4M3FNUZ, #blocked> {
