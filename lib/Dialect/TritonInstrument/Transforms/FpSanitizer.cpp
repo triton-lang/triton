@@ -1427,10 +1427,6 @@ Value loadScaledScaleK32(PatternRewriter &rewriter, Location loc, bool isLhs,
             : SmallVector<int64_t>{groups, repeat, targetTy.getShape()[1]};
   int64_t expandAxis = isLhs ? 2 : 1;
 
-  auto broadcastLayout = getOptimizedBlockedEncoding(
-      rewriter, broadcastShape, scaleTileTy.getElementType());
-  auto compactSliceLayout = ttg::SliceEncodingAttr::get(
-      rewriter.getContext(), expandAxis, broadcastLayout);
   auto compactLoadLayout = getOptimizedBlockedEncoding(
       rewriter, compactShape, scaleTileTy.getElementType());
   auto compactLoadTy = RankedTensorType::get(
@@ -1451,12 +1447,10 @@ Value loadScaledScaleK32(PatternRewriter &rewriter, Location loc, bool isLhs,
                                        /*stride1=*/isLhs ? scaleStride : 1);
   compact = castDotScaledScaleToComputePayload(rewriter, loc, compact,
                                                scale.computeElem);
-  auto compactSliceTy = cast<RankedTensorType>(compact.getType())
-                            .cloneWithEncoding(compactSliceLayout);
-  compact =
-      ttg::ConvertLayoutOp::create(rewriter, loc, compactSliceTy, compact);
 
-  Value expanded = tt::ExpandDimsOp::create(rewriter, loc, compact, expandAxis);
+  auto expandedShape = compactShape;
+  expandedShape.insert(expandedShape.begin() + expandAxis, 1);
+  Value expanded = tt::ReshapeOp::create(rewriter, loc, expandedShape, compact);
   auto broadcastTy =
       cast<RankedTensorType>(expanded.getType()).clone(broadcastShape);
   Value broadcast =
