@@ -392,7 +392,7 @@ completion of <code class="docutils literal notranslate"><span class="pre">async
 <p>The <code class="docutils literal notranslate"><span class="pre">async_wait</span></code> op waits until at most “num” async copy groups are outstanding without synchronising CTA execution.
 It takes zero or more <code class="docutils literal notranslate"><span class="pre">asyncToken</span></code> plus an integer <code class="docutils literal notranslate"><span class="pre">num</span></code> that specifies how many async copy groups can remain
 outstanding after the <code class="docutils literal notranslate"><span class="pre">async_wait</span></code> op is completed. <code class="docutils literal notranslate"><span class="pre">num</span> <span class="pre">=</span> <span class="pre">0</span></code> waits until all groups of async copies are complete.</p>
-<p>This operation does not provide any syncronisation in the CTA, if syncronisation is needed use <code class="docutils literal notranslate"><span class="pre">ttg.local_barrier</span></code>
+<p>This operation does not provide any synchronization in the CTA, if synchronization is needed use <code class="docutils literal notranslate"><span class="pre">ttg.local_barrier</span></code>
 in addition to this operation.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">MemWaitOpTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
@@ -439,14 +439,14 @@ in addition to this operation.</p>
 <p><em>Synchronizes execution and reads/writes to the selected address spaces for all threads in the CTA.</em></p>
 <p>The <code class="docutils literal notranslate"><span class="pre">barrier</span></code> op synchronises the execution and all operations between the selected address spaces for all
 threads in the CTA. It is used to coordinate communication between threads in the CTA.</p>
-<p>This operation waits until all threads in the CTA have reached a <code class="docutils literal notranslate"><span class="pre">barrier</span></code> (for syncronisation) and operations
+<p>This operation waits until all threads in the CTA have reached a <code class="docutils literal notranslate"><span class="pre">barrier</span></code> (for synchronization) and operations
 between the selected address spaces made by these threads prior to the op are visible to all threads in the CTA.</p>
 <p>Data hazards between threads accessing the same memory can be avoided by synchronising the
 specified scope in-between these accesses with a <code class="docutils literal notranslate"><span class="pre">barrier</span></code>.</p>
-<p>A <code class="docutils literal notranslate"><span class="pre">barrier</span></code> operation only provides syncronisation and memory guarantees on the selected address spaces in the CTA.</p>
+<p>A <code class="docutils literal notranslate"><span class="pre">barrier</span></code> operation only provides synchronization and memory guarantees on the selected address spaces in the CTA.</p>
 <p>The mandatory <code class="docutils literal notranslate"><span class="pre">addrspace</span></code> attribute is a bitmask describing which address spaces will be visible when the <code class="docutils literal notranslate"><span class="pre">barrier</span></code> completes:</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">none</span></code>         control-only syncronisation (no memory ordering).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">none</span></code>         control-only synchronization (no memory ordering).</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">local</span></code>        shared-memory operations are complete and visible CTA-wide.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">global_read</span></code>  global memory reads are complete and visible CTA-wide.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">global_write</span></code> global memory writes are complete and visible CTA-wide.</p></li>
