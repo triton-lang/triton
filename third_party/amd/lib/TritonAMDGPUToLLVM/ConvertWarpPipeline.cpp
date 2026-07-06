@@ -280,6 +280,35 @@ static void wrapExistingBarrier(OpBuilder &b, Location loc,
   ROCDL::SchedBarrier::create(b, loc, ROCDL::SchedGroupMask::none);
 }
 
+static bool hasDotOp(Block *block) {
+  bool foundDot = false;
+  block->walk([&](triton::DotOp) {
+    foundDot = true;
+    return WalkResult::interrupt();
+  });
+  return foundDot;
+}
+
+static bool shouldPlaceBackedgeBarrierAtHead(
+    const mlir::triton::AMD::TargetInfo &targetInfo,
+    ArrayRef<Operation *> clusterOps, ArrayRef<Block *> clusterBlocks,
+    ArrayRef<bool> bars, bool hasTopBarrier, bool hasBottomBarrier) {
+  if (targetInfo.getArch() != "gfx950" || hasTopBarrier || hasBottomBarrier ||
+      clusterOps.size() != 4 || bars.empty() || !bars[0])
+    return false;
+
+  for (auto [i, clusterOp] : llvm::enumerate(clusterOps)) {
+    auto priority =
+        clusterOp->getAttrOfType<IntegerAttr>("triton.warp_pipeline.priority");
+    int expectedPriority = (i % 2 == 0) ? 0 : 1;
+    if (!priority || priority.getInt() != expectedPriority)
+      return false;
+    if (expectedPriority == 0 && !hasDotOp(clusterBlocks[i]))
+      return false;
+  }
+  return true;
+}
+
 // Emit pre-barrier, thread-ID partitioning, and phase-shift cond_barrier.
 // Returns warpLow (for reconverge) and warpHigh (consumed by phase shift).
 static std::pair<Value, Value>
@@ -321,11 +350,11 @@ class ConvertPipelinedForPattern : public OpRewritePattern<scf::ForOp> {
 public:
   ConvertPipelinedForPattern(MLIRContext *ctx, ModuleAllocation &moduleAlloc,
                              int threadsPerPipelineGroup,
-                             bool backedgeBarrierToHead)
+                             const mlir::triton::AMD::TargetInfo &targetInfo)
       : OpRewritePattern<scf::ForOp>(ctx, /*benefit=*/2),
         moduleAllocation(moduleAlloc),
         threadsPerPipelineGroup(threadsPerPipelineGroup),
-        backedgeBarrierToHead(backedgeBarrierToHead) {}
+        targetInfo(targetInfo) {}
 
   LogicalResult matchAndRewrite(scf::ForOp forOp,
                                 PatternRewriter &rewriter) const override {
@@ -393,6 +422,7 @@ private:
     auto topBar = existingBarrierMap.find(0);
     auto bottomBar = existingBarrierMap.find(numClusters);
     bool hasTopBarrier = topBar != existingBarrierMap.end();
+    bool hasBottomBarrier = bottomBar != existingBarrierMap.end();
     if (bottomBar != existingBarrierMap.end()) {
       // validatePipelinedForBody guarantees we cannot have both top and
       // bottom barriers, so rotating bottom -> 0 is unambiguous.
@@ -405,6 +435,9 @@ private:
     // 3. Circular dependency analysis (wrap-around for loop pipelines).
     analyzePipelineDependencies(clusterInfo, bars, allocation,
                                 /*circular=*/true);
+    bool heuristicBackedgeBarrierAtHead =
+        shouldPlaceBackedgeBarrierAtHead(targetInfo, clusterOps, clusterBlocks,
+                                         bars, hasTopBarrier, hasBottomBarrier);
 
     // 4. Materializing final cluster-scope barriers.  For each cluster index:
     //  • If there is a pre-existing barrier at that location, we wrap it with
@@ -439,7 +472,7 @@ private:
         bool emitPriorityAtBoundary = true;
         // The first one wraps back to the last of the loop.
         if (i == 0 && !hasTopBarrier) {
-          if (backedgeBarrierToHead) {
+          if (heuristicBackedgeBarrierAtHead) {
             // Keep the priority reset at the tail while moving the backedge
             // barrier itself to the loop head.
             b.setInsertionPoint(terminatorOp);
@@ -459,14 +492,14 @@ private:
 
     // 5. Post-loop priority reset and reconverge.
     b.setInsertionPointAfter(forOp);
-    bool emitPostludeBarrier = hasTopBarrier || backedgeBarrierToHead;
-    emitPipelinePostlude(b, loc, anyHasPriority, warpLow,
-                         emitPostludeBarrier, /*needLocal=*/bars[0]);
+    bool emitPostludeBarrier = hasTopBarrier || heuristicBackedgeBarrierAtHead;
+    emitPipelinePostlude(b, loc, anyHasPriority, warpLow, emitPostludeBarrier,
+                         /*needLocal=*/bars[0]);
   }
 
   ModuleAllocation &moduleAllocation;
   int threadsPerPipelineGroup;
-  bool backedgeBarrierToHead;
+  const mlir::triton::AMD::TargetInfo &targetInfo;
 };
 
 class InlineWarpPipelineExecuteRegionPattern
@@ -970,10 +1003,9 @@ struct ConvertWarpPipeline
     : public mlir::triton::impl::ConvertWarpPipelineBase<ConvertWarpPipeline> {
 
 public:
-  ConvertWarpPipeline(StringRef gfxArch, bool backedgeBarrierToHead)
+  ConvertWarpPipeline(StringRef gfxArch)
       : ConvertWarpPipelineBase<ConvertWarpPipeline>() {
     this->gfxArch = gfxArch.str();
-    this->backedgeBarrierToHead = backedgeBarrierToHead;
   }
 
   void runOnOperation() override {
@@ -1013,9 +1045,8 @@ public:
 
     RewritePatternSet patternFor(&getContext());
     RewritePatternSet patternInline(&getContext());
-    patternFor.add<ConvertPipelinedForPattern>(&getContext(), moduleAllocation,
-                                               threadsPerPipelineGroup,
-                                               backedgeBarrierToHead);
+    patternFor.add<ConvertPipelinedForPattern>(
+        &getContext(), moduleAllocation, threadsPerPipelineGroup, targetInfo);
     patternInline.add<InlineWarpPipelineExecuteRegionPattern>(&getContext());
 
     if (failed(applyPatternsGreedily(m, std::move(patternFor))))
@@ -1040,7 +1071,7 @@ public:
 
 namespace mlir::triton::AMD {
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertWarpPipelinePass(StringRef gfxArch, bool backedgeBarrierToHead) {
-  return std::make_unique<ConvertWarpPipeline>(gfxArch, backedgeBarrierToHead);
+createConvertWarpPipelinePass(StringRef gfxArch) {
+  return std::make_unique<ConvertWarpPipeline>(gfxArch);
 }
 } // namespace mlir::triton::AMD
