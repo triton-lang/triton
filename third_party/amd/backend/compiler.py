@@ -61,11 +61,6 @@ def disable_real_true16_feature(arch):
     return '-real-true16' if arch.startswith('gfx11') else ''
 
 
-def has_schedule_hint(options, hint):
-    hints = {item.strip().lower() for item in options.schedule_hint.split(",")}
-    return hint in hints
-
-
 def _parse_llvm_fn_attrs(attrs):
     if not isinstance(attrs, str):
         return tuple(attrs)
@@ -361,8 +356,7 @@ class HIPBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         amd.passes.ttgpuir.add_update_async_wait_count(pm, options.arch)
-        backedge_barrier_to_head = has_schedule_hint(options, "warp-pipeline-backedge-barrier-to-head")
-        amd.passes.ttgpuir.add_warp_pipeline_conversion(pm, options.arch, backedge_barrier_to_head)
+        amd.passes.ttgpuir.add_warp_pipeline_conversion(pm, options.arch)
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
         passes.convert.add_index_to_llvmir(pm)
