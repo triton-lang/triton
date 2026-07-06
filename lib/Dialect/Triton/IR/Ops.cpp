@@ -961,6 +961,33 @@ LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
     return failure();
   }
 
+  // reshape(broadcast(x)) -> broadcast(reshape(x))
+  //
+  // On its own this doesn't do much, but consider
+  //    broadcast(reshape(broadcast))
+  // -> broadcast(broadcast(reshape))
+  // -> broadcast(reshape)
+  if (auto broadcast = dyn_cast<BroadcastOp>(definingOp)) {
+    if (auto expandAxis = op.getExpandDimsAxis();
+        expandAxis && !op.getAllowReorder()) {
+      auto src = broadcast.getSrc();
+      auto newShape = src.getType().getShape().vec();
+      newShape.insert(newShape.begin() + *expandAxis, 1);
+
+      auto srcType = src.getType();
+      auto resultEncoding = op.getType().getEncoding();
+      auto newType = RankedTensorType::get(newShape, srcType.getElementType(),
+                                           resultEncoding);
+      auto newReshape = ReshapeOp::create(rewriter, op.getLoc(), newType, src,
+                                          /*allow_reorder=*/nullptr,
+                                          /*efficient_layout=*/nullptr);
+      auto newBroadcast = BroadcastOp::create(rewriter, broadcast.getLoc(),
+                                              op.getType(), newReshape);
+      rewriter.replaceOp(op, newBroadcast);
+      return success();
+    }
+  }
+
   // reshape(expand_dims(x)) -> x
   if (auto expandDims = dyn_cast<ExpandDimsOp>(definingOp)) {
     if (!op.getAllowReorder() &&

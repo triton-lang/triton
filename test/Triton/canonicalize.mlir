@@ -59,10 +59,10 @@ tt.func @fold_addptr_scalar(%arg: !tt.ptr<f16>) -> (!tt.ptr<f16>) {
 // CHECK-LABEL: fn
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 tt.func @fn(%arg0: tensor<1xf32, #sliced0>) -> (tensor<32x1xf32, #blocked0>){
-  // CHECK: %[[a:.*]] = tt.expand_dims
+  // CHECK: %[[a:.*]] = tt.reshape {{.*}}
   // CHECK: tt.broadcast %[[a]]
   %a = tt.broadcast %arg0 : tensor<1xf32, #sliced0> -> tensor<32xf32, #sliced0>
-  %b = tt.expand_dims %a {axis = 1 : i32} : tensor<32xf32, #sliced0> -> tensor<32x1xf32, #blocked0>
+  %b = tt.reshape %a : tensor<32xf32, #sliced0> -> tensor<32x1xf32, #blocked0>
   tt.return %b : tensor<32x1xf32, #blocked0>
 }
 }  // end module

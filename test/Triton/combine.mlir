@@ -317,10 +317,10 @@ tt.func @test_canonicalize_expand_dims(%arg0: tensor<f32>, %arg1: tensor<1xf32>)
     // CHECK: %{{.*}} = tt.splat %arg0 : tensor<f32> -> tensor<1x8xf32>
     %ed = tt.expand_dims %splat {axis = 0 : i32} : tensor<8xf32> -> tensor<1x8xf32>
 
-    // CHECK-NEXT: %[[ed2:.*]] = tt.expand_dims %arg1 {axis = 0 : i32} : tensor<1xf32> -> tensor<1x1xf32>
+    // CHECK-NEXT: %[[ed2:.*]] = tt.reshape %arg1 : tensor<1xf32> -> tensor<1x1xf32>
     // CHECK-NEXT: %{{.*}} = tt.broadcast %[[ed2]] : tensor<1x1xf32> -> tensor<8x8xf32>
     %bc = tt.broadcast %arg1 : tensor<1xf32> -> tensor<8xf32>
-    %ed2 = tt.expand_dims %bc {axis = 0 : i32} : tensor<8xf32> -> tensor<1x8xf32>
+    %ed2 = tt.reshape %bc : tensor<8xf32> -> tensor<1x8xf32>
     %bc2 = tt.broadcast %ed2 : tensor<1x8xf32> -> tensor<8x8xf32>
 
     tt.return %ed, %bc2 : tensor<1x8xf32>, tensor<8x8xf32>
