@@ -808,9 +808,11 @@ LogicalResult convertScaledWMMA(triton::DotScaledOp op,
                                 triton::DotScaledOp::Adaptor adaptor,
                                 const LLVMTypeConverter *typeConverter,
                                 ConversionPatternRewriter &rewriter) {
-  assert(isa<LinearEncodingAttr>(op.getAScale().getType().getEncoding()) &&
-         isa<LinearEncodingAttr>(op.getBScale().getType().getEncoding()) &&
-         "Both LhsScale and RhsScale should be linear layout.");
+  assert(isa<mlir::triton::gpu::LinearEncodingTrait>(
+             op.getAScale().getType().getEncoding()) &&
+         isa<mlir::triton::gpu::LinearEncodingTrait>(
+             op.getBScale().getType().getEncoding()) &&
+         "Both LhsScale and RhsScale should be a LinearEncodingTrait.");
 
   auto cTensorTy = op.getC().getType();
   auto dTensorTy = op.getD().getType();

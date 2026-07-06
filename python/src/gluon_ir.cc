@@ -1365,7 +1365,12 @@ void init_gluon_ir(py::module_ &m) {
           auto ll = ttg::chooseScaledWmmaScaleLayout(
               &ctx, opIdx, shape, wmmaMDim, wmmaNDim, isTransposed, scaleFactor,
               ctaLayout, cgaLayout);
-          auto attr = ttg::LinearEncodingAttr::get(&ctx, ll);
+          // A swizzled (partition-aware) WMMA produces a non-permutation scale
+          // layout, which only GenericLinearEncodingAttr can represent.
+          Attribute attr =
+              ttg::isPermutationMatrixLayout(ll)
+                  ? Attribute(ttg::LinearEncodingAttr::get(&ctx, ll))
+                  : Attribute(ttg::GenericLinearEncodingAttr::get(&ctx, ll));
           return layoutToGluon(attr);
         });
 
