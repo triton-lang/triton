@@ -307,7 +307,11 @@ emitPipelinePrelude(OpBuilder &b, Location loc, int threadsPerPipelineGroup) {
 
 // Emit priority reset and reconverge cond_barrier after a pipeline.
 static void emitPipelinePostlude(OpBuilder &b, Location loc,
-                                 bool anyHasPriority, Value warpLow) {
+                                 bool anyHasPriority, Value warpLow,
+                                 bool emitPostludeBarrier = false,
+                                 bool needLocal = false) {
+  if (emitPostludeBarrier)
+    emitClusterBarrier(b, loc, needLocal);
   if (anyHasPriority)
     ROCDL::SetPrioOp::create(b, loc, 0);
   mlir::triton::amdgpu::CondBarrierOp::create(b, loc, warpLow);
@@ -455,7 +459,9 @@ private:
 
     // 5. Post-loop priority reset and reconverge.
     b.setInsertionPointAfter(forOp);
-    emitPipelinePostlude(b, loc, anyHasPriority, warpLow);
+    bool emitPostludeBarrier = hasTopBarrier || backedgeBarrierToHead;
+    emitPipelinePostlude(b, loc, anyHasPriority, warpLow,
+                         emitPostludeBarrier, /*needLocal=*/bars[0]);
   }
 
   ModuleAllocation &moduleAllocation;
