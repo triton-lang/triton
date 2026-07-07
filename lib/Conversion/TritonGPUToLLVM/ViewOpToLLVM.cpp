@@ -286,6 +286,7 @@ struct ExpandDimsOpConversion : public ConvertOpToLLVMPattern<ExpandDimsOp> {
   LogicalResult
   matchAndRewrite(ExpandDimsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    assert(!isExpensiveView(op.getSrc().getType(), op.getType()));
     rewriter.replaceOp(op, adaptor.getSrc());
     return success();
   }
