@@ -177,7 +177,8 @@ def matmul_kernel(
     # The fused epilogue. `epilogue` is a compile-time constant whose type selects
     # which `apply` (BiasAdd's or BiasAddScale's) is emitted here.
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    acc = epilogue.apply(acc, offs_cn)
+    if not epilogue is None:
+        acc = epilogue.apply(acc, offs_cn)
     c = acc.to(c_ptr.dtype.element_ty)
 
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
@@ -215,6 +216,9 @@ def _launch(a, b, epilogue):
     return c
 
 
+def matmul(a, b):
+    return _launch(a, b, None)
+
 def matmul_bias_add(a, b, bias):
     N = b.shape[1]
     # The base epilogue: built on the host with a runtime `bias` tensor.
@@ -238,6 +242,7 @@ bias = torch.randn((N, ), device=DEVICE, dtype=torch.float32)
 scale = 0.5
 
 ref = (a.float() @ b.float())
+run_test(ref, lambda: matmul(a, b), "None epilogue")
 run_test(ref + bias, lambda: matmul_bias_add(a, b, bias), "BiasAdd epilogue")
 run_test((ref + bias) * scale, lambda: matmul_bias_add_scale(a, b, bias, scale), "BiasAddScale epilogue (derived)")
 
