@@ -841,6 +841,36 @@ module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num
 
 // -----
 
+// Verify that SM_120 FP4 inputs packed along M/N fall back to decomposition.
+
+#blocked2_mn = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked2_mn_k = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
+
+module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @sm120_dot_scaled_fp4_rhs_mn_packed_fallback
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: ttg.fp4_to_fp {{.*}} {axis = 1 : i32}
+  // CHECK: ttg.fp4_to_fp {{.*}} {axis = 1 : i32}
+  // CHECK: tt.dot
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.return
+  tt.func public @sm120_dot_scaled_fp4_rhs_mn_packed_fallback(
+    %a: tensor<128x32xi8, #blocked2_mn_k>,
+    %scale_a: tensor<128x2xi8, #blocked2_mn>,
+    %b: tensor<64x64xi8, #blocked2_mn>,
+    %scale_b: tensor<128x2xi8, #blocked2_mn>
+  ) -> tensor<128x128xf32, #blocked2_mn> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked2_mn>
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false, rhs_k_pack = false}
+      : tensor<128x32xi8, #blocked2_mn_k>, tensor<128x2xi8, #blocked2_mn>
+        * tensor<64x64xi8, #blocked2_mn>, tensor<128x2xi8, #blocked2_mn>
+        -> tensor<128x128xf32, #blocked2_mn>
+    tt.return %d : tensor<128x128xf32, #blocked2_mn>
+  }
+}
+
+// -----
+
 // Verify that for SM_120 with mixed fp16/fp8 inputs, tt.dot_scaled falls back
 // to decomposition instead of native dot_scaled MMAv2 lowering.
 

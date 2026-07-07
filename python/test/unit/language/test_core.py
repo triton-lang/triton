@@ -1504,11 +1504,12 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
 
     # triton kernel
     @triton.jit
-    def kernel(X, Z):
+    def kernel(X, Z, Old):
         pid = tl.program_id(0)
         x = tl.load(X + pid)
         old = GENERATE_TEST_HERE
         tl.static_assert(old.dtype == x.dtype)
+        tl.store(Old + pid, old)
 
     sem_arg = sem if sem is None else f'"{sem}"'
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.atomic_{op}(Z, x, sem={sem_arg})'})
@@ -1535,7 +1536,8 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     x_tri = to_triton(x, device=device, dst_type=dst_type)
 
     z_tri = to_triton(np.array([neutral], dtype=getattr(np, dtype_x_str)), device=device, dst_type=dst_type)
-    h = kernel[(n_programs, )](x_tri, z_tri)
+    old_tri = to_triton(np.empty_like(x), device=device, dst_type=dst_type)
+    h = kernel[(n_programs, )](x_tri, z_tri, old_tri)
     # torch result
     if dst_type == 'bfloat16':
         z_ref = numpy_op(x).astype(getattr(np, dtype_x_str))

@@ -48,16 +48,17 @@ SmallVector<Value> lowerLocalScGt(Location loc, MemDescType memDescTy,
   return results;
 }
 
-LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
+LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx,
+                              const LinearLayout &regLayout,
                               MemDescType memDescTy, SharedMemoryObject smemObj,
                               ArrayRef<Value> inVals,
                               const LLVMTypeConverter *typeConverter,
                               ConversionPatternRewriter &rewriter,
                               const TargetInfoBase &targetInfo) {
-  auto regTy = cast<RankedTensorType>(regVal.getType());
+  assert(regLayout.getFreeVariableMasks().lookup(str_attr("register")) == 0 &&
+         "expected register broadcasting to be removed by the caller");
   auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
 
-  auto regLayout = toLinearLayout(regTy);
   auto sharedLayout = isPaddedEncoding(memDescTy.getEncoding())
                           ? paddedLinearLayout(memDescTy)
                           : toLinearLayout(memDescTy);
@@ -132,9 +133,11 @@ struct LocalAllocOpConversion
     // If there is an initial tensor, store it into the shared memory.
     if (op.getSrc()) {
       auto *ctx = op.getContext();
-      auto inVals = unpackTensorElements(loc, adaptor.getSrc(), rewriter,
-                                         op.getSrc().getType());
-      if (failed(lowerLocalStore(loc, ctx, op.getSrc(), memDescTy, smemObj,
+      auto regTy = cast<RankedTensorType>(op.getSrc().getType());
+      auto regLayout =
+          toLinearLayout(regTy).removeZeroBasesAlongDim(str_attr("register"));
+      auto inVals = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
+      if (failed(lowerLocalStore(loc, ctx, regLayout, memDescTy, smemObj,
                                  inVals, typeConverter, rewriter,
                                  targetInfo))) {
         return failure();
@@ -185,7 +188,8 @@ public:
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
 
-    auto regLayout = toLinearLayout(regTy);
+    auto regLayout =
+        toLinearLayout(regTy).removeZeroBasesAlongDim(str_attr("register"));
     auto sharedLayout = isPaddedEncoding(memDescTy.getEncoding())
                             ? paddedLinearLayout(memDescTy)
                             : toLinearLayout(memDescTy);
@@ -195,7 +199,7 @@ public:
                                   smemObj, rewriter, targetInfo, op);
 
     Value result =
-        packTensorElements(loc, typeConverter, outVals, rewriter, regTy);
+        packUniqueTensorElements(loc, typeConverter, outVals, rewriter, regTy);
     rewriter.replaceOp(op, result);
 
     return success();
@@ -222,16 +226,17 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
-    Value regVal = op.getSrc();
     Value memDescVal = op.getDst();
     auto typeConverter = getTypeConverter();
+    auto regTy = cast<RankedTensorType>(op.getSrc().getType());
     auto memDescTy = cast<MemDescType>(memDescVal.getType());
     auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getDst(),
                                                          llvmElemTy, rewriter);
-    auto inVals = unpackTensorElements(loc, adaptor.getSrc(), rewriter,
-                                       op.getSrc().getType());
-    if (failed(lowerLocalStore(loc, ctx, regVal, memDescTy, smemObj, inVals,
+    auto regLayout =
+        toLinearLayout(regTy).removeZeroBasesAlongDim(str_attr("register"));
+    auto inVals = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
+    if (failed(lowerLocalStore(loc, ctx, regLayout, memDescTy, smemObj, inVals,
                                typeConverter, rewriter, targetInfo))) {
       return failure();
     }
@@ -272,6 +277,7 @@ public:
   matchAndRewrite(LocalGatherOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    auto *ctx = op.getContext();
     auto memDescTy = cast<MemDescType>(op.getSrc().getType());
     // TODO: PartitionedSharedEncoding lowering will be enabled in subsequent
     // PRs.
@@ -287,16 +293,17 @@ public:
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
 
-    SmallVector<Value> idxValues = unpackTensorElements(
-        loc, adaptor.getIndices(), rewriter, op.getIndices().getType());
-    auto regLayout = toLinearLayout(regTy);
+    SmallVector<Value> idxValues =
+        unpackUniqueTensorElements(loc, adaptor.getIndices(), rewriter);
+    auto regLayout =
+        toLinearLayout(regTy).removeZeroBasesAlongDim(str_attr("register"));
 
     auto results = lowerLocalScGt(loc, memDescTy, smemObj, llvmElemTy,
                                   regLayout, idxValues, op.getAxis(),
                                   /*storeVals=*/{}, rewriter, targetInfo);
 
     Value result =
-        packTensorElements(loc, typeConverter, results, rewriter, regTy);
+        packUniqueTensorElements(loc, typeConverter, results, rewriter, regTy);
     rewriter.replaceOp(op, result);
 
     return success();
@@ -319,6 +326,7 @@ public:
   matchAndRewrite(LocalScatterOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    auto *ctx = op.getContext();
     auto memDescTy = cast<MemDescType>(op.getDst().getType());
     // TODO: PartitionedSharedEncoding lowering will be enabled in subsequent
     // PRs.
@@ -334,11 +342,12 @@ public:
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getDst(),
                                                          llvmElemTy, rewriter);
 
-    SmallVector<Value> values = unpackTensorElements(
-        loc, adaptor.getValues(), rewriter, op.getValues().getType());
-    SmallVector<Value> idxValues = unpackTensorElements(
-        loc, adaptor.getIndices(), rewriter, op.getIndices().getType());
-    auto regLayout = toLinearLayout(valuesTy);
+    SmallVector<Value> values =
+        unpackUniqueTensorElements(loc, adaptor.getValues(), rewriter);
+    SmallVector<Value> idxValues =
+        unpackUniqueTensorElements(loc, adaptor.getIndices(), rewriter);
+    auto regLayout =
+        toLinearLayout(valuesTy).removeZeroBasesAlongDim(str_attr("register"));
 
     lowerLocalScGt(loc, memDescTy, smemObj, llvmElemTy, regLayout, idxValues,
                    op.getAxis(), values, rewriter, targetInfo);
