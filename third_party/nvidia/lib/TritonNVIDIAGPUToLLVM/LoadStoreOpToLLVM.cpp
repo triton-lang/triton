@@ -674,6 +674,10 @@ public:
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
 
     auto atomicRmwAttr = op.getAtomicRmwOp();
+    const bool useRed = op.getResult().use_empty() &&
+                        atomicRmwAttr != RMWOp::XCHG &&
+                        (op.getSem() == MemSemantic::RELAXED ||
+                         op.getSem() == MemSemantic::RELEASE);
 
     Value val = op.getVal();
     Value ptr = op.getPtr();
@@ -741,8 +745,9 @@ public:
             {triton::MemSyncScope::GPU, triton::nvgpu::MemSyncScope::GPU},
             {triton::MemSyncScope::SYSTEM,
              triton::nvgpu::MemSyncScope::SYSTEM}};
-    const bool doPTXLDPromotion = isPromotableToNVPTXLD(op) && vec == 1 &&
-                                  packed == 1 && ScopeMap.count(op.getScope());
+    const bool doPTXLDPromotion = !useRed && isPromotableToNVPTXLD(op) &&
+                                  vec == 1 && packed == 1 &&
+                                  ScopeMap.count(op.getScope());
 
     for (size_t i = 0; i < elemsPerThread; i += vec * packed) {
       Value rmwPtr = ptrElements[i];
@@ -876,11 +881,15 @@ public:
       rmwVals.reserve(vec > 1 ? vec : packed);
       for (unsigned ii = 0; ii < (vec > 1 ? vec : packed); ++ii)
         rmwVals.push_back(valElements[i + ii]);
-      auto old = NVIDIA::emitPtxAtomicRMW(rewriter, loc, valueElemTy, rmwPtr,
-                                          rmwVals, atomicRmwAttr, op.getSem(),
-                                          op.getScope(), pred, vec, packed);
+      auto old = NVIDIA::emitPtxAtomicRMWImpl(
+          rewriter, loc, valueElemTy, rmwPtr, rmwVals, atomicRmwAttr,
+          op.getSem(), stringifyMemSyncScope(op.getScope()).str(), pred, vec,
+          packed, NVIDIA::PtxAtomicAddrSpace::Global,
+          useRed ? NVIDIA::PtxAtomicInstr::Red : NVIDIA::PtxAtomicInstr::Atom);
       if (failed(old))
         return failure();
+      if (useRed)
+        continue;
       if (tensorTy) {
         Value ret = *old;
         if (vec > 1) {
@@ -911,6 +920,10 @@ public:
         rewriter.replaceOp(op, {ret});
         return success();
       }
+    }
+    if (useRed) {
+      rewriter.eraseOp(op);
+      return success();
     }
     finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
                                 b, threadPred, targetInfo, getTypeConverter());
