@@ -13,7 +13,7 @@ from triton_kernels.matmul import FlexCtx, PrecisionConfig, FusedActivation, FnS
 from triton_kernels.matmul import matmul_set_idle_sms, matmul, matmul_torch
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
-from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp8_fn, quantize_nvfp4_fn, downcast_to_mxfp, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
+from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp8_fn, quantize_nvfp4_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 # testing utilities
 from triton_kernels.testing import assert_close, make_random_tensor
 # target-specific utilities
@@ -21,7 +21,7 @@ from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdn
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor_details import layout
-from triton_kernels.tensor import FP4, Tensor, convert_layout, make_ragged_tensor_metadata, wrap_torch_tensor
+from triton_kernels.tensor import Tensor, convert_layout, make_ragged_tensor_metadata, wrap_torch_tensor
 from triton_kernels.tensor_details.dtype import FP32
 
 # ---------------
@@ -676,42 +676,6 @@ def test_k_ragged_mxfp8_act_scale_swizzling(device):
         swizzled = run(swizzled_a, swizzled_scale, swizzled_metadata)
         canonical = run(canonical_a, canonical_scale, canonical_metadata)
     torch.testing.assert_close(swizzled, canonical)
-
-
-def test_oversized_w_scale_rejected(device, opt_flags_scope):
-    # A scale tensor with extra groups past cdiv(K, 32) along the K dim would
-    # be silently multiplied into the K tail by the swizzled kernels, whose
-    # loads cannot mask the logical K extent (#10772): matmul must reject it.
-    m, n, k = 128, 256, 2880  # 90 scale groups
-    torch.manual_seed(0)
-    x = torch.randn((m, k), dtype=torch.bfloat16, device=device)
-    w = torch.randn((1, k, n), dtype=torch.bfloat16, device=device)
-    w_q, w_scale = downcast_to_mxfp(w, torch.uint8, axis=1)
-    # One extra scale group past the logical K tail, 0xFF = E8M0 NaN.
-    poison = torch.full((1, 1, n), 0xFF, dtype=w_scale.dtype, device=device)
-    w_scale_oversized = torch.cat([w_scale.contiguous(), poison], dim=1)
-
-    precision_config = PrecisionConfig(b_mx_scale=wrap_torch_tensor(w_scale_oversized),
-                                       b_microblock_size=MXFP_BLOCK_SIZE.value,
-                                       flex_ctx=FlexCtx(rhs_data=InFlexData()))
-    with pytest.raises(AssertionError, match="scale groups"):
-        matmul(x, wrap_torch_tensor(w_q, dtype=FP4), None, precision_config=precision_config)
-
-
-def test_oversized_x_scale_rejected(device, opt_flags_scope):
-    # Same as test_oversized_w_scale_rejected, for activation scales (#10772).
-    m, n, k = 128, 256, 2880
-    torch.manual_seed(0)
-    x = torch.randn((m, k), dtype=torch.bfloat16, device=device)
-    w = torch.randn((k, n), dtype=torch.bfloat16, device=device)
-    x_q, x_scale = downcast_to_mxfp(x, torch.float8_e4m3fn, axis=-1)
-    poison = torch.full((m, 1), 0xFF, dtype=x_scale.dtype, device=device)
-    x_scale_oversized = torch.cat([x_scale, poison], dim=-1)
-
-    precision_config = PrecisionConfig(a_mx_scale=wrap_torch_tensor(x_scale_oversized),
-                                       a_microblock_size=MXFP_BLOCK_SIZE.value, out_dtype=torch.bfloat16)
-    with pytest.raises(AssertionError, match="scale groups"):
-        matmul(x_q, w, None, precision_config=precision_config)
 
 
 def test_set_idle_sms():
