@@ -7,6 +7,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
 namespace ttg = mlir::triton::gpu;
@@ -57,6 +58,26 @@ static Value stripConvertLayout(Value v) {
   return v;
 }
 
+static std::optional<Attribute>
+getTMemLdStLayoutForContext(Operation *op, RankedTensorType tensorType,
+                            gpu::MemDescType memType, int numWarps) {
+  int maxnreg = nvidia_gpu::getContextualMaxNReg(op);
+  for (auto atom : {TMemAccessAtom::I32x32b, TMemAccessAtom::I16x256b,
+                    TMemAccessAtom::I16x128b, TMemAccessAtom::I16x64b}) {
+    std::optional<LinearLayout> layout =
+        nvidia_gpu::getDistributedLayoutForTmemLdSt(memType, atom, numWarps);
+    if (!layout)
+      continue;
+    Attribute encoding =
+        gpu::LinearEncodingAttr::get(tensorType.getContext(), std::move(*layout));
+    RankedTensorType candidateType = tensorType.cloneWithEncoding(encoding);
+    if (succeeded(nvidia_gpu::computeTMemLdStEncodingInfo(candidateType, memType,
+                                                          maxnreg)))
+      return encoding;
+  }
+  return std::nullopt;
+}
+
 class TMemSplitLoadPattern : public OpRewritePattern<SplitOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
@@ -98,7 +119,6 @@ public:
     if (shape[0] != cast<RankedTensorType>(reshapeSrc.getType()).getShape()[0])
       return failure();
     int mDim = getShapePerCTA(tmemLoad.getSrc().getType())[0];
-    // TODO: enable other M cases. (the layout is a bit more complex).
     if (mDim != 128)
       return failure();
     int splitNSize = shape[2];
@@ -110,20 +130,22 @@ public:
     int numWarps = ttg::lookupNumWarps(tmemLoad);
     rewriter.setInsertionPoint(tmemLoad);
 
-    auto createSliceLoad =
-        [&](int64_t nOffset) -> std::pair<TMEMLoadOp, ttg::ConvertLayoutOp> {
+    auto tmemType = cast<gpu::MemDescType>(tmem.getType());
+    SmallVector<int64_t> subSliceShape(tmemType.getShape());
+    subSliceShape.back() = splitNSize;
+    auto subSliceType =
+        tmemType.cloneWith(subSliceShape, tmemType.getElementType());
+    RankedTensorType newLoadType = splitOp.getOutLHS().getType();
+    std::optional<Attribute> distLayout = getTMemLdStLayoutForContext(
+        tmemLoad, newLoadType, subSliceType, numWarps);
+    if (!distLayout)
+      return failure();
+    newLoadType = newLoadType.cloneWithEncoding(*distLayout);
+
+    auto createSliceLoad = [&](int64_t nOffset) {
       // Generate the subslice op.
       Value subSlice = TMEMSubSliceOp::create(rewriter, tmemLoad.getLoc(), tmem,
                                               nOffset, splitNSize);
-
-      // Choose a layout compatible with the slice size.
-      gpu::MemDescType subSliceType =
-          cast<gpu::MemDescType>(subSlice.getType());
-      auto distLayout =
-          nvidia_gpu::getDefaultLayoutForTmemLdSt(subSliceType, numWarps);
-
-      RankedTensorType newLoadType =
-          splitOp.getOutLHS().getType().cloneWithEncoding(distLayout);
 
       // Generate the load and convert_layout back to the original layout.
       auto load = TMEMLoadOp::create(rewriter, tmemLoad.getLoc(), newLoadType,
@@ -131,12 +153,12 @@ public:
       auto cvt = ttg::ConvertLayoutOp::create(
           rewriter, tmemLoad.getLoc(), splitOp.getOutLHS().getType(), load);
 
-      return {load, cvt};
+      return std::make_pair(load, cvt);
     };
 
-    auto [load0, cvt0] = createSliceLoad(/*nOffset=*/0);
-    auto [load1, cvt1] = createSliceLoad(/*nOffset=*/splitNSize);
-    rewriter.replaceOp(splitOp, {cvt0, cvt1});
+    auto lhs = createSliceLoad(/*nOffset=*/0);
+    auto rhs = createSliceLoad(/*nOffset=*/splitNSize);
+    rewriter.replaceOp(splitOp, {lhs.second, rhs.second});
     return success();
   }
 };
@@ -170,7 +192,6 @@ public:
     // We found a tmem_store that is joined on the N dimension. We can split it
     // into multiple tmem_stores.
     int mDim = getShapePerCTA(storeOp.getDst().getType())[0];
-    // TODO: enable other M cases. (the layout is a bit more complex).
     if (mDim != 128)
       return failure();
     int splitNSize = shape[2];
@@ -182,11 +203,19 @@ public:
     int numWarps = ttg::lookupNumWarps(storeOp);
     Value truePred = arith::ConstantOp::create(b, loc, b.getBoolAttr(true));
 
+    auto tmemType = cast<gpu::MemDescType>(tmem.getType());
+    SmallVector<int64_t> subSliceShape(tmemType.getShape());
+    subSliceShape.back() = splitNSize;
+    auto subSliceType =
+        tmemType.cloneWith(subSliceShape, tmemType.getElementType());
+    std::optional<Attribute> distLayout = getTMemLdStLayoutForContext(
+        storeOp, joinOp.getLhs().getType(), subSliceType, numWarps);
+    if (!distLayout)
+      return failure();
+
     auto createSlice = [&](TypedValue<RankedTensorType> input, int offset) {
       auto subSlice = TMEMSubSliceOp::create(b, loc, tmem, offset, splitNSize);
-      auto distLayout =
-          nvidia_gpu::getDefaultLayoutForTmemLdSt(subSlice.getType(), numWarps);
-      auto newType = input.getType().cloneWithEncoding(distLayout);
+      auto newType = input.getType().cloneWithEncoding(*distLayout);
       auto cvt = ttg::ConvertLayoutOp::create(b, loc, newType, input);
       TMEMStoreOp::create(b, loc, subSlice, cvt.getResult(), truePred);
     };

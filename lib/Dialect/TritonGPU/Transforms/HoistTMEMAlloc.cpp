@@ -567,6 +567,34 @@ static Value joinLastMemoryUses(OpBuilder &b, Value token) {
       "FIXME: can't hoist TMEM alloc with multiple or conditional uses");
 }
 
+static bool firstMMAOverwritesAccumulator(ttng::TMEMAllocOp alloc,
+                                          scf::ForOp forOp) {
+  ttng::MMAv5OpInterface mmaOp = nullptr;
+  for (Operation *user : alloc.getResult().getUsers()) {
+    auto mma = dyn_cast<ttng::MMAv5OpInterface>(user);
+    if (!mma)
+      continue;
+    if (mmaOp)
+      return false;
+    mmaOp = mma;
+  }
+  if (!mmaOp || mmaOp.getAccumulator() != alloc.getResult() ||
+      !isConstBool(mmaOp.getPredicate(), true))
+    return false;
+
+  Value useAcc = mmaOp.useAccumulator();
+  if (isConstBool(useAcc, false))
+    return true;
+
+  auto blockArg = dyn_cast<BlockArgument>(useAcc);
+  if (!blockArg || blockArg.getOwner() != forOp.getBody())
+    return false;
+  unsigned initArgIdx = blockArg.getArgNumber() - 1;
+  if (initArgIdx >= forOp.getInitArgs().size())
+    return false;
+  return isConstBool(forOp.getInitArgs()[initArgIdx], false);
+}
+
 ttng::TMEMAllocOp hoistTMEMAlloc(TMEMTokenAllocOp alloc, scf::ForOp &forOp) {
   OpBuilder builder(alloc);
   builder.setInsertionPoint(forOp);
@@ -582,7 +610,9 @@ ttng::TMEMAllocOp hoistTMEMAlloc(TMEMTokenAllocOp alloc, scf::ForOp &forOp) {
   Value newTok = forOp.getRegionIterArgs().back();
   appendToForOpYield(forOp, joinLastMemoryUses(builder, alloc.getToken()));
 
-  if (src != nullptr) {
+  if (src != nullptr &&
+      !firstMMAOverwritesAccumulator(cast<ttng::TMEMAllocOp>(alloc.getOperation()),
+                                     forOp)) {
     builder.setInsertionPoint(alloc);
     // Write the initial value of the allocation and replace the token.
     auto initStoreOp =

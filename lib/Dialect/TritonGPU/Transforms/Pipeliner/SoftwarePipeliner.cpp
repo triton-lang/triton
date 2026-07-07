@@ -44,6 +44,27 @@ static void pipelineWgmma(ModuleOp moduleOp, unsigned numStages) {
   }
 }
 
+static int getTMAStoreNumStages(scf::ForOp forOp, unsigned defaultNumStages) {
+  if (auto stageAttr =
+          forOp->getAttrOfType<IntegerAttr>(mlir::triton::kNumStagesAttrName))
+    return stageAttr.getInt();
+
+  if (!forOp->getParentOfType<triton::gpu::WarpSpecializeOp>())
+    return getNumStagesOrDefault(forOp, defaultNumStages);
+
+  for (Operation *parent = forOp->getParentOp(); parent;
+       parent = parent->getParentOp()) {
+    auto parentForOp = dyn_cast<scf::ForOp>(parent);
+    if (!parentForOp)
+      continue;
+    if (auto stageAttr = parentForOp->getAttrOfType<IntegerAttr>(
+            mlir::triton::kNumStagesAttrName))
+      return stageAttr.getInt();
+  }
+
+  return getNumStagesOrDefault(forOp, defaultNumStages);
+}
+
 static bool hasMMAv5WaitsInLastStage(scf::ForOp forOp,
                                      CoarseSchedule &schedule) {
   int maxStage = schedule.getNumStages() - 1;
@@ -212,13 +233,12 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     {
       SmallVector<scf::ForOp> loops;
       getOperation()->walk([&](scf::ForOp forOp) {
-        // Bail out for loops with num_stage <= 1.
-        if (getNumStagesOrDefault(forOp, numStages) > 1)
-          loops.push_back(forOp);
+        loops.push_back(forOp);
       });
 
       for (scf::ForOp forOp : loops) {
-        mlir::triton::pipelineTMAStores(forOp);
+        int loopNumStages = getTMAStoreNumStages(forOp, numStages);
+        mlir::triton::pipelineTMAStores(forOp, loopNumStages);
       }
     }
   }
