@@ -94,48 +94,19 @@ def make_matmul_configs(configs, num_ctas):
     ]
 
 
-def make_persistent_matmul_configs(configs, num_ctas):
-    return [
-        triton.Config(
-            {
-                "BLOCK_M": block_m,
-                "BLOCK_N": block_n,
-                "BLOCK_K": block_k,
-                "GRID_MINOR_DIM": grid_minor_dim,
-                "GRID_TILE_WIDTH": grid_tile_width,
-                "NUM_STAGES": num_stages,
-            },
-            num_stages=num_stages,
-            num_warps=num_warps,
-            num_ctas=num_ctas,
-            pre_hook=matmul_set_block_size_hook,
-        ) for block_m, block_n, block_k, grid_minor_dim, grid_tile_width, num_stages, num_warps in configs
-    ]
-
-
 MATMUL_CONFIGS = make_matmul_configs(
     [
-        (128, 128, 64, 0, 8, 2, 4),
         (128, 128, 64, 0, 8, 3, 4),
-        (128, 128, 64, 0, 8, 4, 4),
-        (128, 128, 128, 0, 8, 2, 4),
         (128, 128, 128, 0, 8, 3, 4),
-        (128, 128, 128, 0, 8, 4, 4),
-        (128, 256, 64, 0, 8, 3, 4),
         (128, 256, 64, 0, 8, 4, 4),
-        (256, 128, 32, 0, 8, 3, 4),
-        (256, 128, 32, 0, 8, 4, 4),
         (256, 128, 64, 0, 8, 3, 4),
         (256, 128, 64, 0, 8, 4, 4),
-        (256, 128, 128, 0, 8, 3, 4),
-        (256, 128, 128, 0, 8, 4, 4),
     ],
     num_ctas=1,
 )
 
 TWO_CTA_CONFIGS = make_matmul_configs(
     [
-        (256, 128, 64, 0, 8, 2, 4),
         (256, 128, 64, 0, 8, 3, 4),
         (256, 128, 64, 0, 8, 4, 4),
         (256, 128, 128, 0, 8, 4, 4),
@@ -151,60 +122,35 @@ TWO_CTA_CONFIGS = make_matmul_configs(
 
 FOUR_CTA_CONFIGS = make_matmul_configs(
     [
-        (256, 128, 64, 0, 8, 2, 4),
         (256, 128, 64, 0, 8, 4, 4),
-        (256, 256, 64, 1, 8, 2, 4),
         (256, 256, 64, 1, 8, 3, 4),
         (256, 256, 64, 1, 8, 4, 4),
-        (256, 256, 64, 1, 8, 6, 4),
-        (512, 128, 64, 0, 8, 2, 4),
         (512, 128, 64, 0, 8, 4, 4),
-        (512, 128, 128, 0, 8, 2, 4),
         (512, 128, 128, 0, 8, 4, 4),
     ],
     num_ctas=4,
 )
 
-PERSISTENT_TWO_CTA_CONFIGS = make_persistent_matmul_configs(
+PERSISTENT_TWO_CTA_CONFIGS = make_matmul_configs(
     [
         (256, 128, 64, 0, 8, 3, 4),
         (256, 128, 64, 0, 8, 4, 4),
-        (256, 128, 64, 0, 8, 4, 8),
         (256, 256, 64, 1, 8, 3, 4),
-        (256, 256, 64, 1, 8, 4, 4),
         (256, 256, 64, 1, 8, 4, 8),
         (256, 256, 64, 1, 8, 5, 4),
-        (256, 256, 64, 1, 8, 5, 8),
-        (256, 256, 64, 1, 8, 6, 4),
-        (256, 256, 64, 1, 8, 6, 8),
         (256, 256, 64, 0, 16, 5, 4),
-        (256, 256, 64, 0, 16, 6, 4),
-        (256, 256, 64, 0, 16, 6, 8),
         (256, 256, 64, 1, 16, 5, 4),
-        (256, 256, 64, 1, 16, 5, 8),
-        (256, 256, 64, 1, 16, 6, 4),
-        (256, 256, 64, 1, 16, 6, 8),
-        (256, 256, 64, 1, 32, 5, 4),
-        (256, 256, 64, 1, 32, 5, 8),
-        (256, 256, 64, 1, 32, 6, 4),
-        (256, 256, 64, 1, 32, 6, 8),
-        (512, 128, 64, 0, 8, 3, 4),
         (512, 128, 64, 0, 8, 4, 4),
-        (512, 128, 64, 0, 8, 4, 8),
     ],
     num_ctas=2,
 )
 
-PERSISTENT_FOUR_CTA_CONFIGS = make_persistent_matmul_configs(
+PERSISTENT_FOUR_CTA_CONFIGS = make_matmul_configs(
     [
-        (256, 128, 64, 0, 8, 3, 4),
         (256, 128, 64, 0, 8, 4, 4),
         (256, 256, 64, 1, 8, 3, 4),
         (256, 256, 64, 1, 8, 4, 4),
-        (512, 128, 64, 0, 8, 3, 4),
         (512, 128, 64, 0, 8, 4, 4),
-        (512, 256, 64, 1, 8, 3, 4),
-        (512, 256, 64, 1, 8, 4, 4),
     ],
     num_ctas=4,
 )
@@ -213,12 +159,9 @@ WS_CONFIGS = make_matmul_configs(
     [
         (256, 128, 64, 0, 8, 3, 4),
         (256, 128, 64, 0, 8, 4, 4),
-        (256, 128, 64, 0, 8, 6, 4),
-        (512, 64, 64, 0, 8, 3, 4),
         (512, 64, 64, 0, 8, 4, 4),
         (512, 128, 64, 0, 8, 3, 4),
         (512, 128, 64, 0, 8, 4, 4),
-        (512, 128, 64, 0, 8, 6, 4),
     ],
     num_ctas=2,
 )
@@ -339,8 +282,8 @@ def matmul_kernel_persistent(a_desc, b_desc, c_desc,  #
                              M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
                              BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
                              GRID_MINOR_DIM: tl.constexpr, GRID_TILE_WIDTH: tl.constexpr, NUM_STAGES: tl.constexpr,
-                             FP8_INPUTS: tl.constexpr, WARP_SPECIALIZE: tl.constexpr,
-                             EPILOGUE_SUBTILE: tl.constexpr, NUM_SMS: tl.constexpr):
+                             FP8_INPUTS: tl.constexpr, WARP_SPECIALIZE: tl.constexpr, EPILOGUE_SUBTILE: tl.constexpr,
+                             NUM_SMS: tl.constexpr):
     start_pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     num_pid_n = tl.cdiv(N, BLOCK_N)
@@ -484,18 +427,18 @@ def validate_and_inspect(skip_ws=False):
     num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
     persistent_2cta_grid = (min(num_sms, triton.cdiv(M, 256) * triton.cdiv(N, 128)), )
     compiled_persistent_2cta_forced = matmul_kernel_persistent[persistent_2cta_grid](
-        a_desc, b_desc, c_desc, M, N, K, BLOCK_M=256, BLOCK_N=128, BLOCK_K=64, GRID_MINOR_DIM=0,
-        GRID_TILE_WIDTH=8, NUM_STAGES=3, FP8_INPUTS=False, WARP_SPECIALIZE=False, EPILOGUE_SUBTILE=1,
-        NUM_SMS=num_sms, num_warps=4, num_stages=3, num_ctas=2)
+        a_desc, b_desc, c_desc, M, N, K, BLOCK_M=256, BLOCK_N=128, BLOCK_K=64, GRID_MINOR_DIM=0, GRID_TILE_WIDTH=8,
+        NUM_STAGES=3, FP8_INPUTS=False, WARP_SPECIALIZE=False, EPILOGUE_SUBTILE=1, NUM_SMS=num_sms, num_warps=4,
+        num_stages=3, num_ctas=2)
 
     a_desc = TensorDescriptor.from_tensor(a, [256, 64])
     b_desc = TensorDescriptor.from_tensor(b, [64, 256])
     c_desc = TensorDescriptor.from_tensor(out, [256, 256])
     persistent_4cta_grid = (min(num_sms, triton.cdiv(M, 256) * triton.cdiv(N, 256)), )
     compiled_persistent_4cta_forced = matmul_kernel_persistent[persistent_4cta_grid](
-        a_desc, b_desc, c_desc, M, N, K, BLOCK_M=256, BLOCK_N=256, BLOCK_K=64, GRID_MINOR_DIM=1,
-        GRID_TILE_WIDTH=8, NUM_STAGES=3, FP8_INPUTS=False, WARP_SPECIALIZE=False, EPILOGUE_SUBTILE=1,
-        NUM_SMS=num_sms, num_warps=4, num_stages=3, num_ctas=4)
+        a_desc, b_desc, c_desc, M, N, K, BLOCK_M=256, BLOCK_N=256, BLOCK_K=64, GRID_MINOR_DIM=1, GRID_TILE_WIDTH=8,
+        NUM_STAGES=3, FP8_INPUTS=False, WARP_SPECIALIZE=False, EPILOGUE_SUBTILE=1, NUM_SMS=num_sms, num_warps=4,
+        num_stages=3, num_ctas=4)
 
     ttgir = compiled_2cta.asm["ttgir"]
     ptx = compiled_2cta.asm["ptx"]
