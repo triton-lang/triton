@@ -880,6 +880,70 @@ LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
     return failure();
   }
 
+  // reshape(broadcast(x)) -> broadcast(reshape(x))
+  //
+  // On its own this doesn't do much, but consider
+  //    broadcast(reshape(broadcast))
+  // -> broadcast(broadcast(reshape))
+  // -> broadcast(reshape)
+  if (auto broadcast = dyn_cast<BroadcastOp>(definingOp)) {
+    auto removeUnitDims = [](ArrayRef<int64_t> shape) {
+      SmallVector<int64_t> result;
+      for (int64_t dim : shape)
+        if (dim != 1)
+          result.push_back(dim);
+      return result;
+    };
+    // We can only do this if the reshape only adds/removes unit dimensions.
+    auto broadcastShape = op.getSrc().getType().getShape();
+    auto dstShape = op.getType().getShape();
+    if (removeUnitDims(broadcastShape) == removeUnitDims(dstShape)) {
+      auto src = broadcast.getSrc();
+      auto srcType = src.getType();
+      auto broadcastSrcShape = srcType.getShape();
+      // Compute the result shape of the new reshape. It should be dstShape with
+      // some dims set to 1.
+      auto newShape = dstShape.vec();
+      unsigned broadcastDim = 0;
+      for (int64_t &dim : newShape) {
+        // We are only interested in the non-unit dims, since the reshape may
+        // add or remove any number of unit dims.
+        if (dim == 1)
+          continue;
+        while (broadcastShape[broadcastDim] == 1)
+          ++broadcastDim;
+        // For each non-unit result dim of the broadcast, set the reshape result
+        // to be the source dim size of the broadcast.
+        dim = broadcastSrcShape[broadcastDim++];
+      }
+
+      auto newType = op.getType().clone(newShape);
+      // Check that a reshape on the smaller shape can still go from the
+      // original broadcast src encoding to the original reshape dst encoding.
+      // This may not always be the case, for instance, dot operand encoding
+      // introduces broadcasting on smaller shapes.
+      if (auto srcEncoding = srcType.getEncoding()) {
+        auto interface =
+            cast<DialectInferLayoutInterface>(&srcEncoding.getDialect());
+        auto resultEncoding = newType.getEncoding();
+        Attribute inferredEncoding = resultEncoding;
+        if (failed(interface->inferReshapeOpEncoding(
+                srcType.getShape(), srcEncoding, newShape, inferredEncoding,
+                op.getAllowReorder(), /*loc=*/{})) ||
+            failed(interface->verifyLayoutsAreEqual(
+                newShape, inferredEncoding, resultEncoding, /*loc=*/{})))
+          return failure();
+      }
+      auto newReshape = ReshapeOp::create(rewriter, op.getLoc(), newType, src,
+                                          op.getAllowReorder(),
+                                          /*efficient_layout=*/false);
+      auto newBroadcast = BroadcastOp::create(rewriter, broadcast.getLoc(),
+                                              op.getType(), newReshape);
+      rewriter.replaceOp(op, newBroadcast);
+      return success();
+    }
+  }
+
   // reshape(reshape) -> reshape
   if (auto parentReshape = dyn_cast<ReshapeOp>(definingOp)) {
     // Allow reorder if either reshape allowed it
