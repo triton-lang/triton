@@ -171,12 +171,13 @@ Value TargetInfo::getGlobalTimer(RewriterBase &rewriter, Location loc) const {
   switch (getISAFamily()) {
   case ISAFamily::RDNA3:
   case ISAFamily::RDNA4:
-  case ISAFamily::GFX1250:
-    timer = LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
-                                            "llvm.amdgcn.s.sendmsg.rtn.i64",
-                                            i64_ty, {b.i32_val(131)})
+  case ISAFamily::GFX1250: {
+    Value msg = b.i32_val(/*MSG_RTN_GET_REALTIME=*/131);
+    timer = LLVM::createLLVMIntrinsicCallOp(
+                rewriter, loc, "llvm.amdgcn.s.sendmsg.rtn.i64", i64_ty, {msg})
                 .getResult(0);
     break;
+  }
   default:
     timer = LLVM::createLLVMIntrinsicCallOp(
                 rewriter, loc, "llvm.amdgcn.s.memrealtime", i64_ty, {})
