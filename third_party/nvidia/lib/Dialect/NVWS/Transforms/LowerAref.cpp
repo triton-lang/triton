@@ -179,10 +179,10 @@ DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(ArefGetEnterOp getEnter) {
       if (auto mmav5 = dyn_cast<MMAv5OpInterface>(consumer)) {
         mmav5Ops.insert(mmav5);
       } else if (auto forOp = consumer->getParentOfType<scf::ForOp>()) {
-        auto users = getTopLevelUsersInLoop(consumer, forOp,
-                                            [](Operation *user) {
-                                              return isa<MMAv5OpInterface>(user);
-                                            });
+        auto users =
+            getTopLevelUsersInLoop(consumer, forOp, [](Operation *user) {
+              return isa<MMAv5OpInterface>(user);
+            });
         for (auto user : users) {
           mmav5Ops.insert(cast<MMAv5OpInterface>(user));
         }
@@ -335,10 +335,7 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter,
   Value fullMbars = createBarriers(b1, b2, depth, count.producerPendingCount,
                                    /*twoCTAs=*/useTwoCTA);
 
-  return ArefValue{emptyMbars,
-                   fullMbars,
-                   useTwoCTA,
-                   static_cast<int>(depth),
+  return ArefValue{emptyMbars, fullMbars, useTwoCTA, static_cast<int>(depth),
                    op.getOperands()};
 }
 
