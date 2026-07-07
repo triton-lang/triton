@@ -69,6 +69,37 @@ tt.func @fn(%arg0: tensor<1xf32, #sliced0>) -> (tensor<32x1xf32, #blocked0>){
 
 // -----
 
+// CHECK-LABEL: @canonicalize_broadcast_reshape_chain
+tt.func @canonicalize_broadcast_reshape_chain(%arg0: tensor<8xf32>) -> tensor<2x4x4x8xf32> {
+  // CHECK-NEXT: %[[RESHAPE:.*]] = tt.reshape %arg0 : tensor<8xf32> -> tensor<1x1x1x8xf32>
+  // CHECK-NEXT: %[[BROADCAST:.*]] = tt.broadcast %[[RESHAPE]] : tensor<1x1x1x8xf32> -> tensor<2x4x4x8xf32>
+  // CHECK-NEXT: tt.return %[[BROADCAST]] : tensor<2x4x4x8xf32>
+  %0 = tt.reshape %arg0 : tensor<8xf32> -> tensor<1x8xf32>
+  %1 = tt.broadcast %0 : tensor<1x8xf32> -> tensor<4x8xf32>
+  %2 = tt.reshape %1 : tensor<4x8xf32> -> tensor<1x4x1x8xf32>
+  %3 = tt.broadcast %2 : tensor<1x4x1x8xf32> -> tensor<2x4x4x8xf32>
+  tt.return %3 : tensor<2x4x4x8xf32>
+}
+
+// -----
+
+#linear = #ttg.linear<{register = [[0, 0, 1], [8, 0, 0], [0, 0, 8], [0, 0, 16], [64, 0, 0]], lane = [[0, 0, 2], [0, 0, 4], [1, 0, 0], [2, 0, 0], [4, 0, 0]], warp = [[16, 0, 0], [32, 0, 0]], block = []}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16, 16]}>
+#dot = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @preserve_reshape_result_layout
+  tt.func @preserve_reshape_result_layout(%arg0: tensor<128x1x1xbf16, #linear>) -> tensor<128x32xbf16, #dot> {
+    // CHECK-NEXT: %[[BROADCAST:.*]] = tt.broadcast %arg0
+    // CHECK-NEXT: %[[RESHAPE:.*]] = tt.reshape %[[BROADCAST]]
+    // CHECK-NEXT: tt.return %[[RESHAPE]]
+    %0 = tt.broadcast %arg0 : tensor<128x1x1xbf16, #linear> -> tensor<128x1x32xbf16, #linear>
+    %1 = tt.reshape %0 : tensor<128x1x32xbf16, #linear> -> tensor<128x32xbf16, #dot>
+    tt.return %1 : tensor<128x32xbf16, #dot>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   tt.func @fp_to_fp_pos_zero_fold() -> tensor<32x128xf8E4M3FNUZ, #blocked> {
