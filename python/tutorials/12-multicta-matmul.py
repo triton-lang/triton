@@ -11,7 +11,7 @@ You will learn:
 
 * How to request a two-CTA launch from the Triton frontend.
 * How to inspect TTGIR/PTX to confirm that MMAv5 two-CTA MMA was selected.
-* How to compare a Triton multi-CTA matmul with cuBLAS.
+* How to compare Triton single-CTA, multi-CTA, and persistent WS variants.
 """
 
 # %%
@@ -360,7 +360,7 @@ def matmul_persistent(a, b, *, num_ctas, out=None):
     num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
     grid = lambda META: (min(num_sms, triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"])), )
     kernel = matmul_kernel_persistent_4cta if num_ctas == 4 else matmul_kernel_persistent_2cta
-    warp_specialize = num_ctas == 2
+    warp_specialize = num_ctas in {2, 4}
     epilogue_subtile = 8 if num_ctas == 2 else 1
     return kernel[grid](a_desc, b_desc, c_desc, M, N, K, FP8_INPUTS=(TORCH_HAS_FP8 and a.dtype == torch.float8_e4m3fn),
                         WARP_SPECIALIZE=warp_specialize, EPILOGUE_SUBTILE=epilogue_subtile, NUM_SMS=num_sms)
@@ -374,7 +374,7 @@ def bench(fn):
     return triton.testing.do_bench_proton(fn, warmup=2, rep=20, return_mode="median")
 
 
-BENCHMARK_SHAPES = [1024, 2048, 4096]
+BENCHMARK_SHAPES = list(range(1024, 4097, 512))
 
 
 def fmt_config(config):
@@ -427,7 +427,7 @@ def validate_and_inspect(skip_ws=False):
     persistent_4cta_grid = (min(num_sms, triton.cdiv(M, 256) * triton.cdiv(N, 256)), )
     compiled_persistent_4cta_forced = matmul_kernel_persistent[persistent_4cta_grid](
         a_desc, b_desc, c_desc, M, N, K, BLOCK_M=256, BLOCK_N=256, BLOCK_K=64, GRID_MINOR_DIM=1, GRID_TILE_WIDTH=8,
-        NUM_STAGES=3, FP8_INPUTS=False, WARP_SPECIALIZE=False, EPILOGUE_SUBTILE=1, NUM_SMS=num_sms, num_warps=4,
+        NUM_STAGES=3, FP8_INPUTS=False, WARP_SPECIALIZE=True, EPILOGUE_SUBTILE=1, NUM_SMS=num_sms, num_warps=4,
         num_stages=3, num_ctas=4)
 
     ttgir = compiled_2cta.asm["ttgir"]
@@ -458,6 +458,8 @@ def validate_and_inspect(skip_ws=False):
     print(f"Persistent 2CTA TTGIR contains two_ctas: {'two_ctas' in persistent_2cta_ttgir}", flush=True)
     print(f"Persistent 2CTA PTX contains cta_group::2: {'cta_group::2' in persistent_2cta_ptx}", flush=True)
     print(f"Persistent 4CTA TTGIR contains two_ctas: {'two_ctas' in persistent_4cta_ttgir}", flush=True)
+    print(f"Persistent 4CTA TTGIR contains ttg.warp_specialize: {'ttg.warp_specialize' in persistent_4cta_ttgir}",
+          flush=True)
     print(f"Persistent 4CTA TTGIR contains TMA multicast: {'multicast' in persistent_4cta_ttgir}", flush=True)
     print(f"Persistent 4CTA PTX contains cta_group::2: {'cta_group::2' in persistent_4cta_ptx}", flush=True)
 
@@ -466,7 +468,7 @@ def validate_and_inspect(skip_ws=False):
 # Benchmark
 # ---------
 #
-# ``torch.matmul`` and the explicit CublasLt helper both use cuBLAS on CUDA.
+# Compare the Triton variants listed below with a cuBLAS reference.
 
 
 def benchmark(shapes=BENCHMARK_SHAPES, precision="fp16"):
@@ -488,7 +490,7 @@ def benchmark(shapes=BENCHMARK_SHAPES, precision="fp16"):
 def benchmark_precision(shapes, precision):
     fp8_inputs = precision == "fp8"
     print(f"\n{precision.upper()} square shapes", flush=True)
-    print("    M=N=K       1CTA       2CTA       4CTA P2CTA+WS    P4CTA     cuBLAS      best shapes", flush=True)
+    print("    M=N=K       1CTA       2CTA       4CTA P2CTA+WS P4CTA+WS     cuBLAS      best shapes", flush=True)
 
     for size in shapes:
         M = N = K = int(size)
@@ -525,7 +527,8 @@ def benchmark_precision(shapes, precision):
         compiled_persistent_4cta = matmul_persistent(a, b, num_ctas=4, out=c_triton)
         ms_persistent_4cta = bench(lambda: matmul_persistent(a, b, num_ctas=4, out=c_triton))
         cfg_persistent_4cta = matmul_kernel_persistent_4cta.best_config
-        persistent_4cta_kind = "multicast" if "multicast" in compiled_persistent_4cta.asm["ttgir"] else "no-multicast"
+        persistent_4cta_kind = ("ws+multicast" if "ttg.warp_specialize" in compiled_persistent_4cta.asm["ttgir"]
+                                and "multicast" in compiled_persistent_4cta.asm["ttgir"] else "missing-ws-or-multicast")
 
         prefix = (f"{size:>9} {tflops(ms_1cta, M, N, K):>10.2f}"
                   f" {tflops(ms_2cta, M, N, K):>10.2f} {tflops(ms_4cta, M, N, K):>10.2f}"
