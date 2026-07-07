@@ -36,7 +36,7 @@ def block_copy_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr, PADDING_OPTION:
     for padding in (None, "zero", "nan")  #
     for boundary_check in (None, "lower", "upper")
 ])
-def test_block_copy(dtypes_str, n, padding_option, boundary_check, device):
+def test_block_copy(dtypes_str, n, padding_option, boundary_check, with_allocator, device):
     src_dtype_str = dtypes_str[0]
     dst_dtype_str = dtypes_str[1]
     src_dtype = getattr(torch, src_dtype_str)
@@ -153,7 +153,7 @@ def block_ptr_dtype_kernel(src_ptr, dst_ptr, N, BLOCK_SIZE: tl.constexpr):
 
 
 @pytest.mark.interpreter
-def test_block_ptr_dtype_element_ty(device):
+def test_block_ptr_dtype_element_ty(with_allocator, device):
     src = torch.arange(16, device=device, dtype=torch.float16)
     dst = torch.zeros_like(src)
 
