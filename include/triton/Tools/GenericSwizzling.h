@@ -50,16 +50,16 @@ int32_t getVecBitwidthLdSt(const LinearLayout &src, const LinearLayout &dst,
 
 LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
                                   const LinearLayout &dst, int32_t bitwidth,
-                                  int32_t numBanks = 32,
+                                  int32_t numBanksSrc = 32,
+                                  int32_t numBanksDst = 32,
                                   LocalMemOpTile srcTile = {},
                                   LocalMemOpTile dstTile = {});
 
-std::pair<int, int> bankConflictsLdSt(const LinearLayout &src,
-                                      const LinearLayout &dst,
-                                      const LinearLayout &smem,
-                                      int32_t bitwidth, int32_t numBanks = 32,
-                                      LocalMemOpTile srcTile = {},
-                                      LocalMemOpTile dstTile = {});
+std::pair<int, int>
+bankConflictsLdSt(const LinearLayout &src, const LinearLayout &dst,
+                  const LinearLayout &smem, int32_t bitwidth,
+                  int32_t numBanksSrc = 32, int32_t numBanksDst = 32,
+                  LocalMemOpTile srcTile = {}, LocalMemOpTile dstTile = {});
 
 int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
                          int32_t bitwidth, int32_t numBanks = 32,
@@ -67,7 +67,9 @@ int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
 
 std::pair<int, int> bankConflicts(llvm::ArrayRef<int32_t> tileSrc,
                                   llvm::ArrayRef<int32_t> tileDst,
-                                  const LinearLayout &smem);
+                                  const LinearLayout &smem, int32_t bitwidth,
+                                  int32_t numBanksSrc = 32,
+                                  int32_t numBanksDst = 32);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_GENERIC_SWIZZLING_H

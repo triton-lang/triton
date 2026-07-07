@@ -23,10 +23,12 @@ unsigned getConvertLayoutScratchInBytes(gpu::ConvertLayoutOp op,
   auto bitwidth = getBitwidth(srcTy);
   auto vecBitwidth =
       triton::gpu::getVecBitwidthLdSt(srcLayout, dstLayout, bitwidth);
-  int numBanks = targetInfo.getSharedMemoryBanks(vecBitwidth);
+  auto [numBanksDst, numBanksSrc] =
+      targetInfo.getSharedMemoryLdStBanks(vecBitwidth);
   auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
-  unsigned elems = getNumScratchElemsSwizzledCvt(srcLayout, dstLayout, bitwidth,
-                                                 numBanks, srcTile, dstTile);
+  unsigned elems =
+      getNumScratchElemsSwizzledCvt(srcLayout, dstLayout, bitwidth, numBanksSrc,
+                                    numBanksDst, srcTile, dstTile);
   return elems * bitwidth / 8;
 }
 
@@ -59,10 +61,11 @@ unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
                       const triton::LinearLayout &dst, unsigned bitwidth) {
           auto vecBitwidth =
               triton::gpu::getVecBitwidthLdSt(src, dst, bitwidth);
-          int numBanks = targetInfo.getSharedMemoryBanks(vecBitwidth);
+          auto [numBanksDst, numBanksSrc] =
+              targetInfo.getSharedMemoryLdStBanks(vecBitwidth);
           auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
-          return getNumScratchElemsSwizzledCvt(src, dst, bitwidth, numBanks,
-                                               srcTile, dstTile);
+          return getNumScratchElemsSwizzledCvt(src, dst, bitwidth, numBanksSrc,
+                                               numBanksDst, srcTile, dstTile);
         };
     return ReduceOpHelper(reduceOp).getScratchSizeInBytes(
         AMDGetNumScratchElemsFn);
