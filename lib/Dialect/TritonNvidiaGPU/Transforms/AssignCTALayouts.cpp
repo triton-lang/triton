@@ -202,8 +202,7 @@ DotCTALayout getDotCTALayout(int64_t m, int64_t n, unsigned numCTAs,
       if (numCTAs % candidateM == 0) {
         unsigned candidateN = numCTAs / candidateM;
         unsigned nPerCTA = n / candidateN;
-        if (isLegalChunkSize(nPerCTA) &&
-            nPerCTA <= kMaxMMAv5TwoCTAsNPerCTA) {
+        if (isLegalChunkSize(nPerCTA) && nPerCTA <= kMaxMMAv5TwoCTAsNPerCTA) {
           splitM = candidateM;
           splitN = candidateN;
           foundSplit = true;
@@ -245,9 +244,9 @@ void assignDotCTALayout(triton::DotOp dot, bool isBlackwell) {
   auto bLayout = cast<ttg::DotOperandEncodingAttr>(bTy.getEncoding());
   auto dLayout = cast<ttg::BlockedEncodingAttr>(dTy.getEncoding());
 
-  DotCTALayout layout = getDotCTALayout(
-      dTy.getShape()[0], dTy.getShape()[1], ttg::getNumCTAs(dLayout),
-      preferTwoCTASplit(dot, isBlackwell));
+  DotCTALayout layout = getDotCTALayout(dTy.getShape()[0], dTy.getShape()[1],
+                                        ttg::getNumCTAs(dLayout),
+                                        preferTwoCTASplit(dot, isBlackwell));
 
   OpBuilder builder(dot);
   int threadsPerWarp = ttg::lookupThreadsPerWarp(builder);

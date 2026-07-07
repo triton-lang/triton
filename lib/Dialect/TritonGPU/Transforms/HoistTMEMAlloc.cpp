@@ -611,8 +611,8 @@ ttng::TMEMAllocOp hoistTMEMAlloc(TMEMTokenAllocOp alloc, scf::ForOp &forOp) {
   appendToForOpYield(forOp, joinLastMemoryUses(builder, alloc.getToken()));
 
   if (src != nullptr &&
-      !firstMMAOverwritesAccumulator(cast<ttng::TMEMAllocOp>(alloc.getOperation()),
-                                     forOp)) {
+      !firstMMAOverwritesAccumulator(
+          cast<ttng::TMEMAllocOp>(alloc.getOperation()), forOp)) {
     builder.setInsertionPoint(alloc);
     // Write the initial value of the allocation and replace the token.
     auto initStoreOp =

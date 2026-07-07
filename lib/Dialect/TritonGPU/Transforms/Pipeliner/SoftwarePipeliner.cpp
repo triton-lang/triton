@@ -232,9 +232,7 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
     {
       SmallVector<scf::ForOp> loops;
-      getOperation()->walk([&](scf::ForOp forOp) {
-        loops.push_back(forOp);
-      });
+      getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
 
       for (scf::ForOp forOp : loops) {
         int loopNumStages = getTMAStoreNumStages(forOp, numStages);

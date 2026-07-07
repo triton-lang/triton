@@ -653,14 +653,13 @@ static DescriptorLoadOp getRHSDescriptorLoad(Value rhs) {
     return load;
 
   if (auto trans = root.getDefiningOp<TransOp>())
-    return getDefiningOpSkippingConvertLayout<DescriptorLoadOp>(
-        trans.getSrc());
+    return getDefiningOpSkippingConvertLayout<DescriptorLoadOp>(trans.getSrc());
 
   return {};
 }
 
-static CGAEncodingAttr getRHSDescriptorLoadCGALayout(Value rhs,
-                                                     CGAEncodingAttr rhsLayout) {
+static CGAEncodingAttr
+getRHSDescriptorLoadCGALayout(Value rhs, CGAEncodingAttr rhsLayout) {
   Value root = skipConvertLayout(rhs);
   if (auto trans = root.getDefiningOp<TransOp>())
     return transposeCGALayout(rhsLayout, trans.getOrder());

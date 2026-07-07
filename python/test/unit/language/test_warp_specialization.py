@@ -262,18 +262,16 @@ def assert_ttgir_has_two_cta_mma(ttgir, num_ctas):
     assert re.search(rf'"ttg\.num-ctas"\s*=\s*{num_ctas}\s*:\s*i32', ttgir)
     tmem_layouts = re.findall(r"(#tmem\d*) = #ttng\.tensor_memory_encoding<[^>\n]*twoCTAs = true", ttgir)
     if not tmem_layouts and num_ctas == 2:
-        tmem_layouts = re.findall(r"(#tmem\d*) = #ttng\.tensor_memory_encoding<[^>\n]*CGALayout = \[\[0, 1\]\]",
-                                  ttgir)
+        tmem_layouts = re.findall(r"(#tmem\d*) = #ttng\.tensor_memory_encoding<[^>\n]*CGALayout = \[\[0, 1\]\]", ttgir)
     assert tmem_layouts
     assert any(
-        "ttng.tc_gen5_mma" in line and (num_ctas == 2 or "two_ctas" in line) and any(
-            tmem_layout in line for tmem_layout in tmem_layouts)
+        "ttng.tc_gen5_mma" in line and (num_ctas == 2 or "two_ctas" in line) and any(tmem_layout in line
+                                                                                     for tmem_layout in tmem_layouts)
         for line in ttgir.splitlines())
 
 
 def assert_ttgir_has_tma_multicast(ttgir):
-    assert any(
-        "ttng.async_tma_copy_global_to_local" in line and "{multicast}" in line for line in ttgir.splitlines())
+    assert any("ttng.async_tma_copy_global_to_local" in line and "{multicast}" in line for line in ttgir.splitlines())
 
 
 @pytest.mark.parametrize("M, N, K", [(32, 32, 32), (2048, 2048, 512)])

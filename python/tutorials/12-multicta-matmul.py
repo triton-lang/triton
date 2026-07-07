@@ -342,9 +342,8 @@ def matmul_kernel_persistent(a_desc, b_desc, c_desc,  #
                              M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
                              BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
                              GRID_MINOR_DIM: tl.constexpr, GRID_TILE_WIDTH: tl.constexpr, NUM_STAGES: tl.constexpr,
-                             OUTER_NUM_STAGES: tl.constexpr, PERSISTENT_NUM_SMS: tl.constexpr,
-                             FP8_INPUTS: tl.constexpr, WARP_SPECIALIZE: tl.constexpr, EPILOGUE_SUBTILE: tl.constexpr,
-                             NUM_SMS: tl.constexpr):
+                             OUTER_NUM_STAGES: tl.constexpr, PERSISTENT_NUM_SMS: tl.constexpr, FP8_INPUTS: tl.constexpr,
+                             WARP_SPECIALIZE: tl.constexpr, EPILOGUE_SUBTILE: tl.constexpr, NUM_SMS: tl.constexpr):
     start_pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     num_pid_n = tl.cdiv(N, BLOCK_N)
@@ -492,9 +491,9 @@ def validate_and_inspect(skip_ws=False):
     c_desc = TensorDescriptor.from_tensor(out, [256, 256])
     persistent_4cta_grid = (min(num_sms, triton.cdiv(M, 256) * triton.cdiv(N, 256)), )
     compiled_persistent_4cta_forced = matmul_kernel_persistent[persistent_4cta_grid](
-        a_desc, b_desc, c_desc, M, N, K, BLOCK_M=256, BLOCK_N=256, BLOCK_K=64, GRID_MINOR_DIM=1,
-        GRID_TILE_WIDTH=8, NUM_STAGES=3, OUTER_NUM_STAGES=1, PERSISTENT_NUM_SMS=0, FP8_INPUTS=False,
-        WARP_SPECIALIZE=True, EPILOGUE_SUBTILE=1, NUM_SMS=num_sms, num_warps=4, num_stages=3, num_ctas=4)
+        a_desc, b_desc, c_desc, M, N, K, BLOCK_M=256, BLOCK_N=256, BLOCK_K=64, GRID_MINOR_DIM=1, GRID_TILE_WIDTH=8,
+        NUM_STAGES=3, OUTER_NUM_STAGES=1, PERSISTENT_NUM_SMS=0, FP8_INPUTS=False, WARP_SPECIALIZE=True,
+        EPILOGUE_SUBTILE=1, NUM_SMS=num_sms, num_warps=4, num_stages=3, num_ctas=4)
 
     ttgir = compiled_2cta.asm["ttgir"]
     ptx = compiled_2cta.asm["ptx"]
