@@ -97,10 +97,8 @@ def make_matmul_configs(configs, num_ctas):
 MATMUL_CONFIGS = make_matmul_configs(
     [
         (128, 128, 64, 0, 8, 3, 4),
-        (128, 128, 128, 0, 8, 3, 4),
         (128, 256, 64, 0, 8, 4, 4),
         (256, 128, 64, 0, 8, 3, 4),
-        (256, 128, 64, 0, 8, 4, 4),
     ],
     num_ctas=1,
 )
@@ -125,8 +123,6 @@ FOUR_CTA_CONFIGS = make_matmul_configs(
         (256, 128, 64, 0, 8, 4, 4),
         (256, 256, 64, 1, 8, 3, 4),
         (256, 256, 64, 1, 8, 4, 4),
-        (512, 128, 64, 0, 8, 4, 4),
-        (512, 128, 128, 0, 8, 4, 4),
     ],
     num_ctas=4,
 )
@@ -137,10 +133,7 @@ PERSISTENT_TWO_CTA_CONFIGS = make_matmul_configs(
         (256, 128, 64, 0, 8, 4, 4),
         (256, 256, 64, 1, 8, 3, 4),
         (256, 256, 64, 1, 8, 4, 8),
-        (256, 256, 64, 1, 8, 5, 4),
         (256, 256, 64, 0, 16, 5, 4),
-        (256, 256, 64, 1, 16, 5, 4),
-        (512, 128, 64, 0, 8, 4, 4),
     ],
     num_ctas=2,
 )
@@ -150,7 +143,6 @@ PERSISTENT_FOUR_CTA_CONFIGS = make_matmul_configs(
         (256, 128, 64, 0, 8, 4, 4),
         (256, 256, 64, 1, 8, 3, 4),
         (256, 256, 64, 1, 8, 4, 4),
-        (512, 128, 64, 0, 8, 4, 4),
     ],
     num_ctas=4,
 )
@@ -159,9 +151,7 @@ WS_CONFIGS = make_matmul_configs(
     [
         (256, 128, 64, 0, 8, 3, 4),
         (256, 128, 64, 0, 8, 4, 4),
-        (512, 64, 64, 0, 8, 4, 4),
         (512, 128, 64, 0, 8, 3, 4),
-        (512, 128, 64, 0, 8, 4, 4),
     ],
     num_ctas=2,
 )
@@ -384,7 +374,7 @@ def bench(fn):
     return triton.testing.do_bench_proton(fn, warmup=2, rep=20, return_mode="median")
 
 
-BENCHMARK_SHAPES = list(range(1024, 4097, 256))
+BENCHMARK_SHAPES = [1024, 2048, 4096]
 
 
 def fmt_config(config):
