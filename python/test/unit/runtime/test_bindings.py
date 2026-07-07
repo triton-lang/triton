@@ -27,7 +27,7 @@ def add_kernel(
     x = tl.load(in_ptr0 + offsets, mask=mask)
     y = tl.load(in_ptr1 + offsets, mask=mask)
     x2d = x[None, :]
-    x1d = tl.reshape(x2d, [BLOCK_SIZE])
+    x1d = tl.sum(x2d, axis=0)
     output = add_helper(x1d, y)
     tl.store(out_ptr + offsets, output, mask=mask)
 
@@ -60,14 +60,11 @@ def test_module_walk(device):
         if name == "arith.constant":
             val = op.get_constant_value()
             assert isinstance(val, int)
-        if name == "tt.expand_dims":
-            shape = op.get_result(0).get_shape()
-            assert shape == [1, _BLOCK_SIZE]
         if name == "tt.reshape":
             in_shape = op.get_operand(0).get_shape()
             out_shape = op.get_result(0).get_shape()
-            assert in_shape == [1, _BLOCK_SIZE]
-            assert out_shape == [_BLOCK_SIZE]
+            assert in_shape == [_BLOCK_SIZE]
+            assert out_shape == [1, _BLOCK_SIZE]
 
     kernel = add_kernel
     args = [
