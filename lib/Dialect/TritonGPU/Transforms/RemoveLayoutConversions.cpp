@@ -1412,8 +1412,6 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     if (isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, BroadcastOp>(op)) {
       return true;
     }
-    if (auto reshapeOp = dyn_cast<ReshapeOp>(op))
-      return reshapeOp.getExpandDimsAxis().has_value();
     if (auto fpToFpOp = dyn_cast<FpToFpOp>(op)) {
       auto srcType = cast<RankedTensorType>(fpToFpOp.getOperand().getType());
       return getElementBitWidth(srcType) <
