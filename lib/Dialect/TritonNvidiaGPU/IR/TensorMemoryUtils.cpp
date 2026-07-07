@@ -302,4 +302,50 @@ computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
   return lowerTMemLdSt(cvt, maxnreg, bitwidth, emitError);
 }
 
+bool supportsTMemLoadReduce(RankedTensorType regTy, MemDescType memTy,
+                            int maxnreg,
+                            std::function<InFlightDiagnostic()> emitError) {
+  auto encodingInfo = computeTMemLdStEncodingInfo(regTy, memTy, maxnreg);
+  if (failed(encodingInfo)) {
+    if (emitError)
+      emitError() << "failed to compute TMEM encoding info";
+    return false;
+  }
+
+  if (encodingInfo->unpacked) {
+    if (emitError)
+      emitError() << "tmem_load reduction requires packed format "
+                     "(unpacked=false)";
+    return false;
+  }
+
+  auto kReg = StringAttr::get(regTy.getContext(), "register");
+  constexpr int dimM = 0, dimN = 1;
+  auto regDims =
+      toLinearEncoding(regTy).basesPerDim(kReg, /*skipBroadcast=*/true);
+
+  // The fused ld.red instruction reduces the values that are already local to a
+  // thread, so the N axis must live entirely in this thread's registers,
+  // otherwise the N reduction would be partial and need cross-lane/warp/CTA
+  // combining.
+  if (regDims[dimN] != toLinearLayout(regTy).getOutDimSizes().begin()[dimN]) {
+    if (emitError)
+      emitError() << "tmem_load reduction with N dimension sharded across "
+                     "threads is not supported.";
+    return false;
+  }
+
+  // regDims[dimM] is the number of distinct M coordinates a single thread holds
+  // across its registers. Require it to be 1, so each thread owns exactly one M
+  // row.
+  if (regDims[dimM] != 1) {
+    if (emitError)
+      emitError() << "tmem_load reduction with multiple M rows per thread is "
+                     "not supported.";
+    return false;
+  }
+
+  return true;
+}
+
 } // namespace mlir::triton::nvidia_gpu
