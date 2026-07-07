@@ -692,8 +692,7 @@ static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
 
 static bool usesTMAMulticast(Value operand) {
   auto loadOp =
-      getDefiningOpSkippingConvertLayout<triton::DescriptorLoadLikeOpInterface>(
-          operand);
+      getDefiningOpSkippingConvertLayout<triton::DescriptorLoadOp>(operand);
   if (!loadOp)
     return false;
   RankedTensorType loadTy =

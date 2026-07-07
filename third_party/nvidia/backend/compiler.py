@@ -363,8 +363,6 @@ class CUDABackend(BaseBackend):
             passes.common.add_canonicalizer(pm)
             passes.common.add_cse(pm)
 
-        nvidia.passes.ttnvgpuir.add_hoist_mbarrier_lifecycle(pm, capability)
-
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
