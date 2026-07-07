@@ -1559,8 +1559,8 @@ def test_reshape_linear_layout():
     # CHECK: [[LINEAR:#.*]] = #ttg.linear
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1])
     x = ttgl.full([128, 1], 1, ttgl.int32, layout=layout)
-    # CHECK: tt.reshape %{{.*}} : tensor<128x1xi32, [[BLOCKED]]> -> tensor<128xi32, [[LINEAR]]>
-    x.reshape([128])
+    # CHECK: tt.reshape %{{.*}} : tensor<128x1xi32, [[BLOCKED]]> -> tensor<64x2xi32, [[LINEAR]]>
+    x.reshape([64, 2])
 
 
 @filecheck_test
