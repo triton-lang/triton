@@ -27,7 +27,7 @@ tt.func @dead_atomic_load(%ptr: !tt.ptr<i32>) {
 tt.func @make_range() -> (tensor<128x1xi32>, tensor<1xi32>) {
   // CHECK-DAG: %[[c:.*]] = arith.constant dense<0> : tensor<128x1xi32>
   %a = tt.make_range {end = 1 : i32, start = 0 : i32} : tensor<1xi32>
-  %b = tt.expand_dims %a {axis = 1 : i32} : tensor<1xi32> -> tensor<1x1xi32>
+  %b = tt.reshape %a : tensor<1xi32> -> tensor<1x1xi32>
   %c = tt.broadcast %b : tensor<1x1xi32> -> tensor<128x1xi32>
 
   // CHECK-DAG: %[[d:.*]] = arith.constant dense<1> : tensor<1xi32>
