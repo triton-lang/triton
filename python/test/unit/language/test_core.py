@@ -3880,7 +3880,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         else:
             assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f16.f16.f16', ptx)
     elif in_dtype == 'int8':
-        if is_tcgen5 and capability[0:2] != (10, 3):
+        if is_tcgen5 and capability[1] not in (3, 7):
             assert re.search(r'tcgen05.mma.cta_group::1.kind::i8', ptx)
         elif capability[0] == 7 and capability[1] == 5:  # Turing
             assert 'mma.sync.aligned.m8n8k16.row.col.satfinite.s32.s8.s8.s32' in ptx

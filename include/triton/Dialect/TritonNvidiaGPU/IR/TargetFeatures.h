@@ -58,6 +58,8 @@ public:
     return computeCapability >= 103 && computeCapability / 10 != 12;
   }
 
+  bool supportsI8Tcgen05MMA() const { return computeCapability == 100; }
+
 private:
   static constexpr char kTargetPrefix[] = "cuda:";
 

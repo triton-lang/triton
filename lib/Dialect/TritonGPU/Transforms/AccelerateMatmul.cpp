@@ -31,7 +31,7 @@ namespace gpu {
 namespace {
 
 static bool isUnsupportedMMAv5Int8Dot(int computeCapability, DotOp op) {
-  if (computeCapability != 103)
+  if (nvidia_gpu::TargetFeatures(computeCapability).supportsI8Tcgen05MMA())
     return false;
   auto aElemTy = op.getA().getType().getElementType();
   auto bElemTy = op.getB().getType().getElementType();
