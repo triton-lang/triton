@@ -29,7 +29,7 @@ buildCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
   });
 
   auto contiguity = axisInfoAnalysis.getAxisInfo(ptr)->getContiguity();
-  SmallVector<unsigned> order = getOrderFromContiguity(contiguity);
+  SmallVector<unsigned> order = argSort(contiguity);
   LDBG("order=[" << triton::join(order, ", ") << "]");
 
   auto matchesShape = [&refTensorType](const Value &val) {
@@ -46,8 +46,8 @@ buildCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
       Value val = getMemAccessPtr(use);
       if (!val || !matchesShape(val) || memAccessesSameOrder.contains(use))
         continue;
-      auto currOrder = getOrderFromContiguity(
-          axisInfoAnalysis.getAxisInfo(val)->getContiguity());
+      auto currOrder =
+          argSort(axisInfoAnalysis.getAxisInfo(val)->getContiguity());
       if (order == currOrder) {
         LDBG("multi-root-slice: insert to memAccessesSameOrder " << *use);
         memAccessesSameOrder.insert(use);
