@@ -18,6 +18,8 @@ You will learn:
 # Setup
 # -----
 
+import argparse
+
 import torch
 
 import triton
@@ -104,12 +106,13 @@ TWO_CTA_CONFIGS = make_matmul_configs(
         (256, 128, 64, 2, 4),
         (256, 128, 64, 3, 4),
         (256, 128, 64, 4, 4),
-        (256, 128, 64, 5, 4),
-        (256, 128, 64, 3, 8),
-        (256, 128, 64, 4, 8),
-        (512, 64, 64, 2, 4),
-        (512, 64, 64, 3, 4),
-        (512, 64, 64, 4, 4),
+        (256, 128, 128, 4, 4),
+        (256, 256, 64, 2, 4),
+        (256, 256, 64, 3, 4),
+        (256, 256, 64, 4, 4),
+        (256, 256, 128, 2, 4),
+        (256, 256, 128, 3, 4),
+        (512, 256, 64, 3, 4),
     ],
     num_ctas=2,
 )
@@ -188,7 +191,7 @@ def matmul(a, b, *, num_ctas, warp_specialize=False, out=None):
 # -----------------------------
 
 
-def validate_and_inspect():
+def validate_and_inspect(skip_ws=False):
     if not is_blackwell():
         raise RuntimeError("This tutorial requires an NVIDIA Blackwell GPU.")
 
@@ -202,18 +205,18 @@ def validate_and_inspect():
     compiled_2cta = matmul(a, b, num_ctas=2, out=out)
     torch.testing.assert_close(ref.to(torch.float32), out.to(torch.float32), atol=0.06, rtol=0.06)
 
-    compiled_ws = matmul(a, b, num_ctas=2, warp_specialize=True, out=out)
-    torch.testing.assert_close(ref.to(torch.float32), out.to(torch.float32), atol=0.06, rtol=0.06)
-
     ttgir = compiled_2cta.asm["ttgir"]
     ptx = compiled_2cta.asm["ptx"]
-    ws_ttgir = compiled_ws.asm["ttgir"]
-    ws_ptx = compiled_ws.asm["ptx"]
     print(f"TTGIR contains two_ctas: {'two_ctas' in ttgir}", flush=True)
-    print(f"WS TTGIR contains two_ctas: {'two_ctas' in ws_ttgir}", flush=True)
-    print(f"WS TTGIR contains ttg.warp_specialize: {'ttg.warp_specialize' in ws_ttgir}", flush=True)
     print(f"PTX contains cta_group::2: {'cta_group::2' in ptx}", flush=True)
-    print(f"WS PTX contains cta_group::2: {'cta_group::2' in ws_ptx}", flush=True)
+    if not skip_ws:
+        compiled_ws = matmul(a, b, num_ctas=2, warp_specialize=True, out=out)
+        torch.testing.assert_close(ref.to(torch.float32), out.to(torch.float32), atol=0.06, rtol=0.06)
+        ws_ttgir = compiled_ws.asm["ttgir"]
+        ws_ptx = compiled_ws.asm["ptx"]
+        print(f"WS TTGIR contains two_ctas: {'two_ctas' in ws_ttgir}", flush=True)
+        print(f"WS TTGIR contains ttg.warp_specialize: {'ttg.warp_specialize' in ws_ttgir}", flush=True)
+        print(f"WS PTX contains cta_group::2: {'cta_group::2' in ws_ptx}", flush=True)
 
 
 # %%
@@ -292,5 +295,8 @@ def benchmark_precision(shapes, precision):
 
 
 if __name__ == "__main__":
-    validate_and_inspect()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--skip-ws", action="store_true", help="skip warp-specialized validation")
+    args = parser.parse_args()
+    validate_and_inspect(skip_ws=args.skip_ws)
     benchmark()
