@@ -1426,29 +1426,10 @@ LogicalResult TMEMLoadOp::verify() {
 
   // Validate reduction conditions
   if (redOp) {
-    auto regTy = getType();
-    auto memTy = getSrc().getType();
     auto maxnreg = getContextualMaxNReg(*this);
-    auto encodingInfoOr = computeTMemLdStEncodingInfo(regTy, memTy, maxnreg);
-    if (failed(encodingInfoOr))
-      return emitOpError("failed to compute TMEM encoding info");
-
-    if (encodingInfoOr->unpacked)
-      return emitOpError(
-          "tmem_load reduction requires packed format (unpacked=false)");
-
-    // Verify that N dimension is in registers entirely, and is not sharded
-    // across threads. This could be relaxed in the future to only reduce the
-    // kReg bases along N then cross-warp/block reduction becomes needed.
-    auto kReg = StringAttr::get(regTy.getContext(), "register");
-    int dimM = 0, dimN = 1;
-    auto regDims =
-        toLinearEncoding(regTy).basesPerDim(kReg, /*skipBroadcast=*/true);
-    if (regDims[dimN] != toLinearLayout(regTy).getOutDimSizes().begin()[dimN] ||
-        regDims[dimM] != 1) {
-      return emitOpError("tmem_load reduction with N dimension sharded across "
-                         "threads is not supported.");
-    }
+    if (!supportsTMemLoadReduce(getType(), getSrc().getType(), maxnreg,
+                                [&]() { return emitOpError(); }))
+      return failure();
   }
 
   return triton::gpu::verifyMemoryOpTypes(*this, getSrc().getType(), getType());
