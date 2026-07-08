@@ -1123,6 +1123,7 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[TMA_LOCAL_BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x4xi64, #[[$MMA_BAR_LAYOUT]]
   // CHECK: ttng.async_tma_copy_global_to_local {{.*}}!ttg.memdesc<2xi64, #[[$TMA_BAR_LAYOUT]]
   // CHECK: ttng.wait_barrier {{.*}}!ttg.memdesc<2xi64, #[[$TMA_BAR_LAYOUT]]
+  // CHECK: ttng.cluster_barrier {{{.*}}relaxed = true}
   // CHECK: ttng.tc_gen5_mma {{.*}} {is_async, {{.*}}two_ctas} : {{.*}}!ttg.memdesc<4xi64, #[[$MMA_BAR_LAYOUT]]
   // CHECK: ttng.async_tma_copy_global_to_local {{.*}}!ttg.memdesc<4xi64, #[[$MMA_BAR_LAYOUT]]
   // CHECK: ttng.wait_barrier {{.*}}!ttg.memdesc<4xi64, #[[$MMA_BAR_LAYOUT]]
