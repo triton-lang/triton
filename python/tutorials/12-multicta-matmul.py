@@ -75,7 +75,12 @@ def matmul_set_block_size_hook(nargs):
         nargs["c_desc"].block_shape = [block_m, block_n]
 
 
-def make_matmul_configs(configs, num_ctas):
+def get_persistent_num_sms(num_ctas):
+    num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
+    return max(1, num_sms // num_ctas)
+
+
+def make_matmul_configs(configs, num_ctas, maxnreg=None):
     return [
         triton.Config(
             {
@@ -89,16 +94,68 @@ def make_matmul_configs(configs, num_ctas):
             num_stages=num_stages,
             num_warps=num_warps,
             num_ctas=num_ctas,
+            maxnreg=maxnreg,
             pre_hook=matmul_set_block_size_hook,
         ) for block_m, block_n, block_k, grid_minor_dim, grid_tile_width, num_stages, num_warps in configs
     ]
 
 
+def make_persistent_matmul_configs(configs, num_ctas, maxnreg=None):
+    persistent_configs = []
+    default_epilogue_subtile = 8 if num_ctas == 2 else 1
+    for config in configs:
+        if len(config) == 7:
+            block_m, block_n, block_k, grid_minor_dim, grid_tile_width, num_stages, num_warps = config
+            outer_num_stages = 1
+            persistent_num_sms = 0
+            epilogue_subtile = default_epilogue_subtile
+        elif len(config) == 8:
+            block_m, block_n, block_k, grid_minor_dim, grid_tile_width, num_stages, num_warps, outer_num_stages = config
+            persistent_num_sms = 0
+            epilogue_subtile = default_epilogue_subtile
+        elif len(config) == 9:
+            block_m, block_n, block_k, grid_minor_dim, grid_tile_width, num_stages, num_warps, outer_num_stages, persistent_num_sms = config
+            epilogue_subtile = default_epilogue_subtile
+        else:
+            block_m, block_n, block_k, grid_minor_dim, grid_tile_width, num_stages, num_warps, outer_num_stages, persistent_num_sms, epilogue_subtile = config
+        persistent_configs.append(
+            triton.Config(
+                {
+                    "BLOCK_M": block_m,
+                    "BLOCK_N": block_n,
+                    "BLOCK_K": block_k,
+                    "GRID_MINOR_DIM": grid_minor_dim,
+                    "GRID_TILE_WIDTH": grid_tile_width,
+                    "NUM_STAGES": num_stages,
+                    "OUTER_NUM_STAGES": outer_num_stages,
+                    "PERSISTENT_NUM_SMS": persistent_num_sms,
+                    "EPILOGUE_SUBTILE": epilogue_subtile,
+                },
+                num_stages=num_stages,
+                num_warps=num_warps,
+                num_ctas=num_ctas,
+                maxnreg=maxnreg,
+                pre_hook=matmul_set_block_size_hook,
+            ))
+    return persistent_configs
+
+
 MATMUL_CONFIGS = make_matmul_configs(
     [
+        (128, 128, 64, 0, 8, 2, 4),
         (128, 128, 64, 0, 8, 3, 4),
+        (128, 128, 64, 0, 8, 4, 4),
+        (128, 128, 128, 0, 8, 2, 4),
+        (128, 128, 128, 0, 8, 3, 4),
+        (128, 128, 128, 0, 8, 4, 4),
+        (128, 256, 64, 0, 8, 3, 4),
         (128, 256, 64, 0, 8, 4, 4),
+        (256, 128, 32, 0, 8, 3, 4),
+        (256, 128, 32, 0, 8, 4, 4),
         (256, 128, 64, 0, 8, 3, 4),
+        (256, 128, 64, 0, 8, 4, 4),
+        (256, 128, 128, 0, 8, 3, 4),
+        (256, 128, 128, 0, 8, 4, 4),
     ],
     num_ctas=1,
 )
@@ -120,45 +177,62 @@ TWO_CTA_CONFIGS = make_matmul_configs(
 
 FOUR_CTA_CONFIGS = make_matmul_configs(
     [
+        (256, 128, 64, 0, 8, 2, 4),
         (256, 128, 64, 0, 8, 4, 4),
+        (256, 256, 64, 1, 8, 2, 4),
         (256, 256, 64, 1, 8, 3, 4),
         (256, 256, 64, 1, 8, 4, 4),
+        (256, 256, 64, 1, 8, 6, 4),
+        (512, 128, 64, 0, 8, 2, 4),
+        (512, 128, 64, 0, 8, 4, 4),
+        (512, 128, 128, 0, 8, 2, 4),
+        (512, 128, 128, 0, 8, 4, 4),
     ],
     num_ctas=4,
 )
 
-PERSISTENT_TWO_CTA_CONFIGS = make_matmul_configs(
+PERSISTENT_TWO_CTA_CONFIGS = make_persistent_matmul_configs(
     [
-        (256, 128, 64, 0, 8, 3, 4),
-        (256, 128, 64, 0, 8, 4, 4),
-        (256, 256, 64, 1, 8, 3, 4),
-        (256, 256, 64, 1, 8, 4, 8),
-        (256, 256, 64, 0, 16, 5, 4),
+        (128, 64, 64, 0, 8, 2, 4),
+        (128, 64, 64, 0, 8, 3, 4),
+        (128, 64, 64, 0, 8, 4, 4),
+        (256, 64, 64, 0, 8, 2, 4),
+        (256, 64, 64, 0, 8, 3, 4),
+        (256, 256, 64, 0, 16, 5, 4, 1, 64),
+        (256, 256, 64, 0, 16, 5, 4, 2),
+        (256, 256, 64, 0, 16, 6, 4, 2),
+        (256, 256, 128, 0, 16, 3, 4, 1, 64, 8),
+        (256, 256, 128, 0, 16, 3, 4, 2, 64, 8),
+        (256, 256, 128, 0, 16, 3, 4, 3, 64, 8),
     ],
     num_ctas=2,
 )
 
-PERSISTENT_FOUR_CTA_CONFIGS = make_matmul_configs(
-    [
-        (256, 128, 64, 0, 8, 4, 4),
-        (256, 256, 64, 1, 8, 3, 4),
-        (256, 256, 64, 1, 8, 4, 4),
-    ],
-    num_ctas=4,
-)
-
-WS_CONFIGS = make_matmul_configs(
+PERSISTENT_FOUR_CTA_CONFIGS = make_persistent_matmul_configs(
     [
         (256, 128, 64, 0, 8, 3, 4),
         (256, 128, 64, 0, 8, 4, 4),
+        (256, 256, 64, 1, 8, 3, 4),
+        (256, 256, 64, 1, 8, 4, 4),
         (512, 128, 64, 0, 8, 3, 4),
+        (512, 128, 64, 0, 8, 4, 4),
+        (512, 256, 64, 1, 8, 3, 4),
+        (512, 256, 64, 1, 8, 4, 4),
+        (512, 256, 64, 1, 8, 4, 4, 1, 64, 2),
+        (512, 256, 64, 1, 8, 4, 4, 2, 64, 4),
+        (512, 256, 64, 1, 8, 4, 4, 3, 64, 2),
     ],
-    num_ctas=2,
+    num_ctas=4,
 )
 
 
 @triton.jit
 def _planar_snake(tile_id, num_pid_m, num_pid_n, GRID_MINOR_DIM: tl.constexpr, GRID_TILE_WIDTH: tl.constexpr):
+    if GRID_MINOR_DIM == 0 and GRID_TILE_WIDTH >= num_pid_m:
+        return tile_id % num_pid_m, tile_id // num_pid_m
+    if GRID_MINOR_DIM == 1 and GRID_TILE_WIDTH >= num_pid_n:
+        return tile_id // num_pid_n, tile_id % num_pid_n
+
     major_size = num_pid_n if GRID_MINOR_DIM == 0 else num_pid_m
     minor_size = num_pid_m if GRID_MINOR_DIM == 0 else num_pid_n
 
@@ -272,16 +346,18 @@ def matmul_kernel_persistent(a_desc, b_desc, c_desc,  #
                              M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
                              BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
                              GRID_MINOR_DIM: tl.constexpr, GRID_TILE_WIDTH: tl.constexpr, NUM_STAGES: tl.constexpr,
-                             FP8_INPUTS: tl.constexpr, WARP_SPECIALIZE: tl.constexpr, EPILOGUE_SUBTILE: tl.constexpr,
-                             NUM_SMS: tl.constexpr):
+                             OUTER_NUM_STAGES: tl.constexpr, PERSISTENT_NUM_SMS: tl.constexpr, FP8_INPUTS: tl.constexpr,
+                             WARP_SPECIALIZE: tl.constexpr, EPILOGUE_SUBTILE: tl.constexpr, NUM_SMS: tl.constexpr):
     start_pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     num_pid_n = tl.cdiv(N, BLOCK_N)
     num_tiles = num_pid_m * num_pid_n
     k_tiles = tl.cdiv(K, BLOCK_K)
+    persistent_num_sms: tl.constexpr = NUM_SMS if PERSISTENT_NUM_SMS == 0 else PERSISTENT_NUM_SMS
 
-    tile_id_c = start_pid - NUM_SMS
-    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True, warp_specialize=WARP_SPECIALIZE):
+    tile_id_c = start_pid - persistent_num_sms
+    for tile_id in tl.range(start_pid, num_tiles, persistent_num_sms, flatten=True, warp_specialize=WARP_SPECIALIZE,
+                            num_stages=OUTER_NUM_STAGES):
         pid_m, pid_n = _planar_snake(tile_id, num_pid_m, num_pid_n, GRID_MINOR_DIM, GRID_TILE_WIDTH)
         off_m = pid_m * BLOCK_M
         off_n = pid_n * BLOCK_N
@@ -293,7 +369,7 @@ def matmul_kernel_persistent(a_desc, b_desc, c_desc,  #
             b = b_desc.load([off_k, off_n])
             acc = tl.dot(a, b, acc)
 
-        tile_id_c += NUM_SMS
+        tile_id_c += persistent_num_sms
         pid_m, pid_n = _planar_snake(tile_id_c, num_pid_m, num_pid_n, GRID_MINOR_DIM, GRID_TILE_WIDTH)
         off_m = pid_m * BLOCK_M
         off_n = pid_n * BLOCK_N
@@ -308,12 +384,10 @@ matmul_kernel_2cta = triton.autotune(configs=TWO_CTA_CONFIGS, key=AUTOTUNE_KEY,
                                      do_bench=proton_autotune_do_bench)(matmul_kernel)
 matmul_kernel_4cta = triton.autotune(configs=FOUR_CTA_CONFIGS, key=AUTOTUNE_KEY,
                                      do_bench=proton_autotune_do_bench)(matmul_kernel)
-matmul_kernel_2cta_ws = triton.autotune(configs=WS_CONFIGS, key=AUTOTUNE_KEY,
-                                        do_bench=proton_autotune_do_bench)(matmul_kernel)
-matmul_kernel_persistent_2cta = triton.autotune(configs=PERSISTENT_TWO_CTA_CONFIGS, key=AUTOTUNE_KEY,
-                                                do_bench=proton_autotune_do_bench)(matmul_kernel_persistent)
-matmul_kernel_persistent_4cta = triton.autotune(configs=PERSISTENT_FOUR_CTA_CONFIGS, key=AUTOTUNE_KEY,
-                                                do_bench=proton_autotune_do_bench)(matmul_kernel_persistent)
+matmul_kernel_2cta_ws = triton.autotune(configs=PERSISTENT_TWO_CTA_CONFIGS, key=AUTOTUNE_KEY,
+                                        do_bench=proton_autotune_do_bench)(matmul_kernel_persistent)
+matmul_kernel_4cta_ws = triton.autotune(configs=PERSISTENT_FOUR_CTA_CONFIGS, key=AUTOTUNE_KEY,
+                                        do_bench=proton_autotune_do_bench)(matmul_kernel_persistent)
 
 
 def matmul(a, b, *, num_ctas, warp_specialize=False, out=None):
@@ -329,13 +403,14 @@ def matmul(a, b, *, num_ctas, warp_specialize=False, out=None):
     M, K = a.shape
     K, N = b.shape
     c = torch.empty((M, N), device=a.device, dtype=torch.float16) if out is None else out
+    if warp_specialize:
+        return matmul_persistent(a, b, num_ctas=num_ctas, out=c)
+
     a_desc = TensorDescriptor.from_tensor(a, [1, 1])
     b_desc = TensorDescriptor.from_tensor(b, [1, 1])
     c_desc = TensorDescriptor.from_tensor(c, [1, 1])
     grid = lambda META: (triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"]), )
-    if warp_specialize:
-        kernel = matmul_kernel_2cta_ws
-    elif num_ctas == 4:
+    if num_ctas == 4:
         kernel = matmul_kernel_4cta
     elif num_ctas == 2:
         kernel = matmul_kernel_2cta
@@ -346,6 +421,7 @@ def matmul(a, b, *, num_ctas, warp_specialize=False, out=None):
 
 
 def matmul_persistent(a, b, *, num_ctas, out=None):
+    assert num_ctas in {2, 4}, "persistent WS matmul expects two or four CTAs"
     assert a.shape[1] == b.shape[0], "incompatible dimensions"
     assert a.dtype == b.dtype, "matrix A and B must have the same dtype"
     assert a.is_contiguous(), "matrix A must be contiguous"
@@ -357,13 +433,13 @@ def matmul_persistent(a, b, *, num_ctas, out=None):
     a_desc = TensorDescriptor.from_tensor(a, [1, 1])
     b_desc = TensorDescriptor.from_tensor(b, [1, 1])
     c_desc = TensorDescriptor.from_tensor(c, [1, 1])
-    num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
-    grid = lambda META: (min(num_sms, triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"])), )
-    kernel = matmul_kernel_persistent_4cta if num_ctas == 4 else matmul_kernel_persistent_2cta
+    num_sms = get_persistent_num_sms(num_ctas)
+    grid = lambda META: (min(META["PERSISTENT_NUM_SMS"] or num_sms,
+                             triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"])), )
+    kernel = matmul_kernel_4cta_ws if num_ctas == 4 else matmul_kernel_2cta_ws
     warp_specialize = num_ctas in {2, 4}
-    epilogue_subtile = 8 if num_ctas == 2 else 1
     return kernel[grid](a_desc, b_desc, c_desc, M, N, K, FP8_INPUTS=(TORCH_HAS_FP8 and a.dtype == torch.float8_e4m3fn),
-                        WARP_SPECIALIZE=warp_specialize, EPILOGUE_SUBTILE=epilogue_subtile, NUM_SMS=num_sms)
+                        WARP_SPECIALIZE=warp_specialize, NUM_SMS=num_sms)
 
 
 def tflops(ms, M, N, K):
@@ -378,9 +454,12 @@ BENCHMARK_SHAPES = list(range(1024, 4097, 512))
 
 
 def fmt_config(config):
+    epilogue_subtile = config.kwargs.get("EPILOGUE_SUBTILE")
     return (f"{config.kwargs['BLOCK_M']}x{config.kwargs['BLOCK_N']}x{config.kwargs['BLOCK_K']}"
             f"g{config.kwargs['GRID_MINOR_DIM']}x{config.kwargs['GRID_TILE_WIDTH']}"
-            f"s{config.num_stages}w{config.num_warps}")
+            f"s{config.num_stages}o{config.kwargs.get('OUTER_NUM_STAGES', 1)}"
+            f"p{config.kwargs.get('PERSISTENT_NUM_SMS', 0)}w{config.num_warps}"
+            f"{f'e{epilogue_subtile}' if epilogue_subtile is not None else ''}")
 
 
 # %%
@@ -405,37 +484,28 @@ def validate_and_inspect(skip_ws=False):
     compiled_4cta = matmul(a, b, num_ctas=4, out=out)
     torch.testing.assert_close(ref.to(torch.float32), out.to(torch.float32), atol=0.06, rtol=0.06)
 
-    matmul_persistent(a, b, num_ctas=2, out=out)
+    compiled_persistent_2cta = matmul_persistent(a, b, num_ctas=2, out=out)
     torch.testing.assert_close(ref.to(torch.float32), out.to(torch.float32), atol=0.06, rtol=0.06)
 
     matmul_persistent(a, b, num_ctas=4, out=out)
     torch.testing.assert_close(ref.to(torch.float32), out.to(torch.float32), atol=0.06, rtol=0.06)
 
-    a_desc = TensorDescriptor.from_tensor(a, [256, 64])
-    b_desc = TensorDescriptor.from_tensor(b, [64, 128])
-    c_desc = TensorDescriptor.from_tensor(out, [256, 128])
-    num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
-    persistent_2cta_grid = (min(num_sms, triton.cdiv(M, 256) * triton.cdiv(N, 128)), )
-    compiled_persistent_2cta_forced = matmul_kernel_persistent[persistent_2cta_grid](
-        a_desc, b_desc, c_desc, M, N, K, BLOCK_M=256, BLOCK_N=128, BLOCK_K=64, GRID_MINOR_DIM=0, GRID_TILE_WIDTH=8,
-        NUM_STAGES=3, FP8_INPUTS=False, WARP_SPECIALIZE=False, EPILOGUE_SUBTILE=1, NUM_SMS=num_sms, num_warps=4,
-        num_stages=3, num_ctas=2)
-
+    num_sms = get_persistent_num_sms(num_ctas=4)
     a_desc = TensorDescriptor.from_tensor(a, [256, 64])
     b_desc = TensorDescriptor.from_tensor(b, [64, 256])
     c_desc = TensorDescriptor.from_tensor(out, [256, 256])
     persistent_4cta_grid = (min(num_sms, triton.cdiv(M, 256) * triton.cdiv(N, 256)), )
     compiled_persistent_4cta_forced = matmul_kernel_persistent[persistent_4cta_grid](
         a_desc, b_desc, c_desc, M, N, K, BLOCK_M=256, BLOCK_N=256, BLOCK_K=64, GRID_MINOR_DIM=1, GRID_TILE_WIDTH=8,
-        NUM_STAGES=3, FP8_INPUTS=False, WARP_SPECIALIZE=True, EPILOGUE_SUBTILE=1, NUM_SMS=num_sms, num_warps=4,
-        num_stages=3, num_ctas=4)
+        NUM_STAGES=3, OUTER_NUM_STAGES=1, PERSISTENT_NUM_SMS=0, FP8_INPUTS=False, WARP_SPECIALIZE=True,
+        EPILOGUE_SUBTILE=1, NUM_SMS=num_sms, num_warps=4, num_stages=3, num_ctas=4)
 
     ttgir = compiled_2cta.asm["ttgir"]
     ptx = compiled_2cta.asm["ptx"]
     four_cta_ttgir = compiled_4cta.asm["ttgir"]
     four_cta_ptx = compiled_4cta.asm["ptx"]
-    persistent_2cta_ttgir = compiled_persistent_2cta_forced.asm["ttgir"]
-    persistent_2cta_ptx = compiled_persistent_2cta_forced.asm["ptx"]
+    persistent_2cta_ttgir = compiled_persistent_2cta.asm["ttgir"]
+    persistent_2cta_ptx = compiled_persistent_2cta.asm["ptx"]
     persistent_4cta_ttgir = compiled_persistent_4cta_forced.asm["ttgir"]
     persistent_4cta_ptx = compiled_persistent_4cta_forced.asm["ptx"]
     print(f"TTGIR contains two_ctas: {'two_ctas' in ttgir}", flush=True)
@@ -458,8 +528,6 @@ def validate_and_inspect(skip_ws=False):
     print(f"Persistent 2CTA TTGIR contains two_ctas: {'two_ctas' in persistent_2cta_ttgir}", flush=True)
     print(f"Persistent 2CTA PTX contains cta_group::2: {'cta_group::2' in persistent_2cta_ptx}", flush=True)
     print(f"Persistent 4CTA TTGIR contains two_ctas: {'two_ctas' in persistent_4cta_ttgir}", flush=True)
-    print(f"Persistent 4CTA TTGIR contains ttg.warp_specialize: {'ttg.warp_specialize' in persistent_4cta_ttgir}",
-          flush=True)
     print(f"Persistent 4CTA TTGIR contains TMA multicast: {'multicast' in persistent_4cta_ttgir}", flush=True)
     print(f"Persistent 4CTA PTX contains cta_group::2: {'cta_group::2' in persistent_4cta_ptx}", flush=True)
 
@@ -521,14 +589,13 @@ def benchmark_precision(shapes, precision):
 
         compiled_persistent_2cta = matmul_persistent(a, b, num_ctas=2, out=c_triton)
         ms_persistent_2cta = bench(lambda: matmul_persistent(a, b, num_ctas=2, out=c_triton))
-        cfg_persistent_2cta = matmul_kernel_persistent_2cta.best_config
+        cfg_persistent_2cta = matmul_kernel_2cta_ws.best_config
         persistent_2cta_kind = "mma2" if "cta_group::2" in compiled_persistent_2cta.asm["ptx"] else "no-mma2"
 
         compiled_persistent_4cta = matmul_persistent(a, b, num_ctas=4, out=c_triton)
         ms_persistent_4cta = bench(lambda: matmul_persistent(a, b, num_ctas=4, out=c_triton))
-        cfg_persistent_4cta = matmul_kernel_persistent_4cta.best_config
-        persistent_4cta_kind = ("ws+multicast" if "ttg.warp_specialize" in compiled_persistent_4cta.asm["ttgir"]
-                                and "multicast" in compiled_persistent_4cta.asm["ttgir"] else "missing-ws-or-multicast")
+        cfg_persistent_4cta = matmul_kernel_4cta_ws.best_config
+        persistent_4cta_kind = "multicast" if "multicast" in compiled_persistent_4cta.asm["ttgir"] else "no-multicast"
 
         prefix = (f"{size:>9} {tflops(ms_1cta, M, N, K):>10.2f}"
                   f" {tflops(ms_2cta, M, N, K):>10.2f} {tflops(ms_4cta, M, N, K):>10.2f}"

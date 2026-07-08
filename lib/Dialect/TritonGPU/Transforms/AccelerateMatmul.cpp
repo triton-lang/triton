@@ -243,6 +243,12 @@ static auto getDefiningOpSkippingConvertLayout(Value value) {
     return value.getDefiningOp<OpTy>();
 }
 
+static Value skipConvertLayout(Value value) {
+  while (auto cvtOp = value.getDefiningOp<ConvertLayoutOp>())
+    value = cvtOp.getSrc();
+  return value;
+}
+
 static Value
 tryCreateTmemCopyCompatibleScaleOperand(Value scale,
                                         mlir::PatternRewriter &rewriter) {
@@ -635,14 +641,37 @@ static CGAEncodingAttr getTwoCTARHSCGALayout(RankedTensorType retType) {
       ctx, LinearLayout({{kBlock, std::move(rhsBases)}}, dims));
 }
 
+static CGAEncodingAttr transposeCGALayout(CGAEncodingAttr layout,
+                                          ArrayRef<int32_t> order) {
+  auto ll = transposeLinearLayout(layout.getLinearLayout(), order);
+  return CGAEncodingAttr::get(layout.getContext(), std::move(ll));
+}
+
+static DescriptorLoadOp getRHSDescriptorLoad(Value rhs) {
+  Value root = skipConvertLayout(rhs);
+  if (auto load = root.getDefiningOp<DescriptorLoadOp>())
+    return load;
+
+  if (auto trans = root.getDefiningOp<TransOp>())
+    return getDefiningOpSkippingConvertLayout<DescriptorLoadOp>(trans.getSrc());
+
+  return {};
+}
+
+static CGAEncodingAttr
+getRHSDescriptorLoadCGALayout(Value rhs, CGAEncodingAttr rhsLayout) {
+  Value root = skipConvertLayout(rhs);
+  if (auto trans = root.getDefiningOp<TransOp>())
+    return transposeCGALayout(rhsLayout, trans.getOrder());
+  return rhsLayout;
+}
+
 static bool canUseTwoCTAs(DotOp dotOp) {
   if (lookupNumCTAs(dotOp) <= 1)
     return false;
 
   RankedTensorType retType = dotOp.getType();
-  auto loadOp =
-      getDefiningOpSkippingConvertLayout<DescriptorLoadOp>(dotOp.getB());
-  if (!loadOp)
+  if (!getRHSDescriptorLoad(dotOp.getB()))
     return false;
 
   auto rhsCGALayout = getTwoCTARHSCGALayout(retType);
@@ -709,27 +738,36 @@ static bool usesTMAMulticast(Value operand) {
 static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
                            const CGAEncodingAttr &newCGALayout) {
   OpBuilder::InsertionGuard g(rewriter);
-  auto loadOp = getDefiningOpSkippingConvertLayout<DescriptorLoadOp>(b);
+  auto loadOp = getRHSDescriptorLoad(b);
   assert(loadOp && "expected descriptor load");
-  b = loadOp->getResult(0);
-  RankedTensorType bType = cast<RankedTensorType>(b.getType());
-  auto currentLayout = cast<DistributedEncodingTrait>(bType.getEncoding());
-  Attribute newLayout = replaceCGALayout(currentLayout, newCGALayout);
-  rewriter.setInsertionPoint(loadOp.getOperation());
-  for (OpOperand &operand : loadOp->getOpOperands()) {
+  Value loaded = loadOp->getResult(0);
+  RankedTensorType loadType = cast<RankedTensorType>(loaded.getType());
+  auto currentLayout = cast<DistributedEncodingTrait>(loadType.getEncoding());
+  auto loadCGALayout = getRHSDescriptorLoadCGALayout(b, newCGALayout);
+  Attribute newLoadLayout = replaceCGALayout(currentLayout, loadCGALayout);
+  RankedTensorType newLoadType = loadType.cloneWithEncoding(newLoadLayout);
+
+  OpBuilder loadBuilder(loadOp);
+  loadBuilder.setInsertionPointAfter(loadOp.getOperation());
+  Operation *newLoad = loadBuilder.clone(*loadOp);
+  newLoad->getResult(0).setType(newLoadType);
+
+  OpBuilder operandBuilder(newLoad);
+  for (OpOperand &operand : newLoad->getOpOperands()) {
     auto tensorType = dyn_cast<RankedTensorType>(operand.get().getType());
     if (!tensorType)
       continue;
     Value newOperand = ConvertLayoutOp::create(
-        rewriter, operand.get().getLoc(),
-        tensorType.cloneWithEncoding(newLayout), operand.get());
-    loadOp->setOperand(operand.getOperandNumber(), newOperand);
+        operandBuilder, operand.get().getLoc(),
+        tensorType.cloneWithEncoding(newLoadLayout), operand.get());
+    operand.set(newOperand);
   }
-  loadOp->getResult(0).setType(bType.cloneWithEncoding(newLayout));
-  Value newB = loadOp->getResult(0);
-  rewriter.setInsertionPointAfter(loadOp.getOperation());
-  auto cvt = ConvertLayoutOp::create(rewriter, b.getLoc(), bType, newB);
-  rewriter.replaceAllUsesExcept(newB, cvt.getResult(), cvt);
+
+  Value newB = newLoad->getResult(0);
+  if (auto trans = skipConvertLayout(b).getDefiningOp<TransOp>()) {
+    rewriter.setInsertionPointAfter(newLoad);
+    newB = TransOp::create(rewriter, trans.getLoc(), newB, trans.getOrder());
+  }
   return newB;
 }
 
