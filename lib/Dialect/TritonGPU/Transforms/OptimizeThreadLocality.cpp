@@ -196,6 +196,18 @@ static LogicalResult setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
   auto newLayout = BlockedEncodingAttr::get(ctx, sizePerThread, threadsPerWarp,
                                             warpsPerCTA, order, cgaLayout);
 
+  // The overflow threads and warps placed along the gather axis broadcast over
+  // the source tensor, whose extent along the axis is always covered by
+  // `sizePerThread[axis] * threadsPerWarp[axis]`. The same is not necessarily
+  // true for the index tensor: if its extent along the gather axis is larger,
+  // overflow warps map to distinct rows of the index tensor, splitting gather
+  // columns across warps (e.g. source 4x4 and index 4096x4 along axis 0 with 4
+  // warps). The layout is not warp-local in that case, so leave the layout
+  // unchanged and let the gather lower through shared memory instead.
+  if (!isWarpLocalGather(srcType.cloneWithEncoding(newLayout),
+                         idxType.cloneWithEncoding(newLayout), axis))
+    return failure();
+
   // Update the layout on the gather op and insert conversions.
   auto cvtSrc = ConvertLayoutOp::create(
       b, op.getLoc(), srcType.cloneWithEncoding(newLayout), op.getSrc());

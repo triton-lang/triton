@@ -1094,19 +1094,22 @@ unsigned GatherLoweringHelper::getScratchSizeInBytes() {
 }
 
 bool GatherLoweringHelper::isWarpLocal() {
+  return isWarpLocalGather(gatherOp.getSrc().getType(),
+                           gatherOp.getIndices().getType(), gatherOp.getAxis());
+}
+
+bool isWarpLocalGather(RankedTensorType srcType, RankedTensorType idxType,
+                       unsigned axis) {
   // The gather is warp-local if for each column along the gather axis in the
   // source and index tensors, all the elements are owned by the same warp.
-  RankedTensorType srcType = gatherOp.getSrc().getType();
-  RankedTensorType idxType = gatherOp.getIndices().getType();
   LinearLayout srcLayout = toLinearLayout(srcType);
   LinearLayout idxLayout = toLinearLayout(idxType);
 
-  Builder b(gatherOp.getContext());
+  Builder b(srcType.getContext());
   StringAttr kBlock = b.getStringAttr("block");
   StringAttr kWarp = b.getStringAttr("warp");
   StringAttr kLane = b.getStringAttr("lane");
-  StringAttr kGatherDim =
-      b.getStringAttr("dim" + std::to_string(gatherOp.getAxis()));
+  StringAttr kGatherDim = b.getStringAttr("dim" + std::to_string(axis));
 
   // The tensor layouts must be distributed layouts, where the basis matrix is a
   // subpermutation matrix (permutation matrix plus zeros for broadcasting).
@@ -1131,7 +1134,7 @@ bool GatherLoweringHelper::isWarpLocal() {
 
   SmallVector<StringAttr> otherDims;
   for (unsigned dim = 0, rank = srcType.getRank(); dim < rank; ++dim) {
-    if (dim != gatherOp.getAxis()) {
+    if (dim != axis) {
       otherDims.push_back(b.getStringAttr("dim" + Twine(dim)));
     }
   }

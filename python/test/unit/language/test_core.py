@@ -6887,7 +6887,17 @@ def gather_test_kernel_1d(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr, src_dim
 @pytest.mark.interpreter
 @pytest.mark.parametrize("src_shape, indices_shape, axis", [
     ([32], [64], 0),
+    ([4], [4096], 0),
     ([4, 4], [8, 4], 0),
+    # Sources too small to absorb all warps in the non-gather dimensions, with
+    # indices longer than the source tile along the gather axis. No warp-local
+    # layout is assigned; these lower through shared memory (issue #5836).
+    ([4, 4], [16, 4], 0),
+    ([4, 4], [4096, 4], 0),
+    ([4, 4], [4, 4096], 1),
+    ([16, 4], [4096, 4], 0),
+    # Large enough along the gather axis for a warp-local layout again.
+    ([64, 4], [4096, 4], 0),
     ([128, 64], [256, 64], 0),
     ([128, 64], [128, 128], 1),
 ])

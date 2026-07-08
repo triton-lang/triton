@@ -787,3 +787,69 @@ tt.func @skip_optimize_on_1d_tensor(%arg0: tensor<256xf32, #blocked>, %arg1: ten
 }
 
 }
+
+// -----
+
+// The source tensor is too small along the non-gather dimension to absorb all
+// the warps, and the index tensor is longer along the gather axis than the
+// source tile, so no warp-local layout is assigned: the overflow warps would
+// split index columns across warps. Check that the gather keeps its original
+// layout and lowers through shared memory (no efficient_layout).
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+// CHECK: [[LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+
+// CHECK: skip_optimize_small_source_large_index_axis_0
+tt.func @skip_optimize_small_source_large_index_axis_0(%arg0: tensor<4x4xf32, #blocked>, %arg1: tensor<4096x4xi32, #blocked>) -> tensor<4096x4xf32, #blocked> {
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: tt.gather {{.*}} {axis = 0 : i32} : (tensor<4x4xf32, [[LAYOUT]]>, tensor<4096x4xi32, [[LAYOUT]]>) -> tensor<4096x4xf32, [[LAYOUT]]>
+  %0 = tt.gather %arg0[%arg1] {axis = 0 : i32} : (tensor<4x4xf32, #blocked>, tensor<4096x4xi32, #blocked>) -> tensor<4096x4xf32, #blocked>
+  tt.return %0 : tensor<4096x4xf32, #blocked>
+}
+
+}
+
+// -----
+
+// Same as above along axis 1.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
+
+// CHECK: [[LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+
+// CHECK: skip_optimize_small_source_large_index_axis_1
+tt.func @skip_optimize_small_source_large_index_axis_1(%arg0: tensor<4x4xf32, #blocked>, %arg1: tensor<4x4096xi32, #blocked>) -> tensor<4x4096xf32, #blocked> {
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: tt.gather {{.*}} {axis = 1 : i32} : (tensor<4x4xf32, [[LAYOUT]]>, tensor<4x4096xi32, [[LAYOUT]]>) -> tensor<4x4096xf32, [[LAYOUT]]>
+  %0 = tt.gather %arg0[%arg1] {axis = 1 : i32} : (tensor<4x4xf32, #blocked>, tensor<4x4096xi32, #blocked>) -> tensor<4x4096xf32, #blocked>
+  tt.return %0 : tensor<4x4096xf32, #blocked>
+}
+
+}
+
+// -----
+
+// Boundary case: the warps still overflow onto the gather axis, but the index
+// tensor's gather-axis extent (8) does not exceed the source tile
+// (sizePerThread[0] * threadsPerWarp[0] = 8), so the overflow warps broadcast
+// over both tensors and the warp-local layout is still valid.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+// CHECK: [[LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [0, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+
+// CHECK: set_warp_shuffle_layout_small_source_boundary_index
+tt.func @set_warp_shuffle_layout_small_source_boundary_index(%arg0: tensor<4x4xf32, #blocked>, %arg1: tensor<8x4xi32, #blocked>) -> tensor<8x4xf32, #blocked> {
+  // CHECK: tt.gather {{.*}} {axis = 0 : i32, efficient_layout} : (tensor<4x4xf32, [[LAYOUT]]>, tensor<8x4xi32, [[LAYOUT]]>) -> tensor<8x4xf32, [[LAYOUT]]>
+  %0 = tt.gather %arg0[%arg1] {axis = 0 : i32} : (tensor<4x4xf32, #blocked>, tensor<8x4xi32, #blocked>) -> tensor<8x4xf32, #blocked>
+  tt.return %0 : tensor<8x4xf32, #blocked>
+}
+
+}

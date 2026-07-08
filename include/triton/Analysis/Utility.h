@@ -164,6 +164,12 @@ private:
   SmallVector<unsigned> order;
 };
 
+// Determine if a gather with the given source and index tensor types along
+// `axis` can be performed completely within a warp, i.e. each gather column in
+// both tensors is wholly owned by the same warp.
+bool isWarpLocalGather(RankedTensorType srcType, RankedTensorType idxType,
+                       unsigned axis);
+
 // Helper class for lowering `tt.gather` operations. This class shares lowering
 // logic between shared memory allocation and LLVM codegen.
 class GatherLoweringHelper {
