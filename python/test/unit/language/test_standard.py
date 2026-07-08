@@ -67,7 +67,7 @@ def test_sort(M, N, k, descending, dtype_str, device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("M, N, K", [[1, 16, 64], [8, 2, 256], [32, 1, 2], [128, 8, 1]])
 @pytest.mark.parametrize("dtype_str", ['int32', 'float16', 'float32', 'bfloat16'])
-@pytest.mark.parametrize("dim", [0, 1, 2, -2])
+@pytest.mark.parametrize("dim", [0, 1, 2, -2, None])
 def test_flip(M, N, K, dtype_str, dim, device):
 
     @triton.jit
@@ -82,7 +82,7 @@ def test_flip(M, N, K, dtype_str, dim, device):
 
     x = numpy_random((M, N, K), dtype_str=dtype_str)
     x = torch.from_numpy(x).to(device)
-    y = torch.flip(x, (dim, ))
+    y = torch.flip(x, (dim if dim is not None else -1, ))
     z = torch.empty_like(x, device=device)
     flip_kernel[(1, )](x, z, M, N, K, dim, num_warps=8)
     assert (y == z).all(), (y, z)
