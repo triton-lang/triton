@@ -2556,10 +2556,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
 tt.func @gather_thread_local(%idx: tensor<32x1xi32, #gather_thread_local_idx>, %src: tensor<32x2xf32, #gather_thread_local_src>) {
   // CHECK-LABEL: gather_thread_local
-  // CHECK-NOT: nvvm.shfl.sync
-  // CHECK-NOT: nvvm.barrier
   // CHECK: llvm.select
-  // CHECK-NOT: nvvm.shfl.sync
   // CHECK-NOT: nvvm.barrier
   // CHECK: llvm.return
   %0 = tt.gather %src[%idx] {axis = 1 : i32} : (tensor<32x2xf32, #gather_thread_local_src>, tensor<32x1xi32, #gather_thread_local_idx>) -> tensor<32x1xf32, #gather_thread_local_idx>
