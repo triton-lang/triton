@@ -1400,6 +1400,8 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
             ExpandDimsOp>(op)) {
       return true;
     }
+    if (auto reshapeOp = dyn_cast<ReshapeOp>(op))
+      return reshapeOp.getExpandDimsAxis().has_value();
     if (auto fpToFpOp = dyn_cast<FpToFpOp>(op)) {
       auto srcType = cast<RankedTensorType>(fpToFpOp.getOperand().getType());
       return getElementBitWidth(srcType) <
@@ -1450,6 +1452,15 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     return false;
   int64_t newCvtCost =
       getConvertCost(extOrBroadcastOp->getOperand(0), srcEncoding);
+  // getConvertCost treats all <=32 bit types as equivalent. However, we
+  // shouldn't hoist to a wider type if everything else remains equal. To
+  // address this, increase the weight of the new convert if it is on a wider
+  // element type.
+  Type oldElemTy = getElementTypeOrSelf(convertOp.getSrc());
+  Type newElemTy = getElementTypeOrSelf(extOrBroadcastOp->getOperand(0));
+  if (oldElemTy.isIntOrFloat() && newElemTy.isIntOrFloat())
+    if (oldElemTy.getIntOrFloatBitWidth() < newElemTy.getIntOrFloatBitWidth())
+      newCvtCost *= 2;
   if (!isRematBeneficial(convertOp, slice, layout, newCvtCost))
     return false;
   // Move the convert before the ext op and rewrite the slice.
