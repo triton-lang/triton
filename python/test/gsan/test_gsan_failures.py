@@ -91,6 +91,19 @@ def _cross_sm_atomic_sync_kernel(payload_ptr, flag_ptr, counter_ptr, scratch_ptr
 
 
 @triton.jit
+def _atomic_poll_cross_sm_sync_kernel(payload_ptr, flag_ptr, scratch_ptr, producer_sem: tl.constexpr,
+                                      consumer_sem: tl.constexpr, scope: tl.constexpr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        tl.store(payload_ptr, 1000)
+        tl.atomic_xchg(flag_ptr, 1, sem=producer_sem, scope=scope)
+    elif pid == 1:
+        tl.atomic_poll(flag_ptr, 1, sem=consumer_sem, scope=scope)
+        result = tl.load(payload_ptr)
+        tl.store(scratch_ptr, result)
+
+
+@triton.jit
 def _transitive_atomic_sync_kernel(payload_ptr, flag0_ptr, flag1_ptr, counter_ptr, scratch_ptr,
                                    release_sem: tl.constexpr, relay_sem: tl.constexpr, scope: tl.constexpr):
     pid = tl.program_id(0)
@@ -362,6 +375,22 @@ def _run_cross_sm_atomic_sync_case(producer_sem: str, consumer_sem: str, scope: 
 
 
 @run_with_gsan
+def _run_atomic_poll_cross_sm_sync_case(producer_sem: str, consumer_sem: str, scope: str) -> None:
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    flag = torch.zeros(1, dtype=torch.int32, device="cuda")
+    scratch = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    _atomic_poll_cross_sm_sync_kernel[(2, )](
+        payload,
+        flag,
+        scratch,
+        producer_sem=producer_sem,
+        consumer_sem=consumer_sem,
+        scope=scope,
+        num_warps=4,
+    )
+
+
+@run_with_gsan
 def _run_transitive_atomic_sync_case(release_sem: str, relay_sem: str, scope: str) -> None:
     payload = torch.zeros(1, dtype=torch.int32, device="cuda")
     flag0 = torch.zeros(1, dtype=torch.int32, device="cuda")
@@ -472,6 +501,14 @@ def test_cross_sm_semantic_mismatch_read_after_write(producer_sem, consumer_sem,
     _run_failure_case(f"cross_sm_semantic_mismatch_{producer_sem}_{consumer_sem}_{scope}",
                       runner=_run_cross_sm_atomic_sync_case, runner_args=(producer_sem, consumer_sem, scope),
                       source_function=_cross_sm_atomic_sync_kernel.fn, marker="result = tl.load(payload_ptr)",
+                      error="Read after write race detected")
+
+
+@pytest.mark.parametrize("producer_sem, consumer_sem, scope", CROSS_SM_SEMANTIC_MISMATCH_CASES)
+def test_atomic_poll_semantic_mismatch_read_after_write(producer_sem, consumer_sem, scope):
+    _run_failure_case(f"atomic_poll_semantic_mismatch_{producer_sem}_{consumer_sem}_{scope}",
+                      runner=_run_atomic_poll_cross_sm_sync_case, runner_args=(producer_sem, consumer_sem, scope),
+                      source_function=_atomic_poll_cross_sm_sync_kernel.fn, marker="result = tl.load(payload_ptr)",
                       error="Read after write race detected")
 
 

@@ -1162,13 +1162,9 @@ LogicalResult MemDescSubsliceOp::verify() {
       namedOffsets[dim] = {kDim, dimSize};
       auto offsetAndBlock = llInv.apply(namedOffsets);
       auto offset = offsetAndBlock[0];
-      auto block = offsetAndBlock[1];
       if (!llvm::isPowerOf2_32(offset.second) && offset.second != 0) {
         return emitError(
             "We don't support splitting along the swizzling pattern");
-      }
-      if (block.second != 0) {
-        return emitError("We don't support splitting along CTA dimensions");
       }
     }
   }

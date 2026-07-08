@@ -339,6 +339,9 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
         continue;
       }
     }
+    if (auto reshapeOp = dyn_cast<ReshapeOp>(user);
+        reshapeOp && reshapeOp.getEfficientLayout())
+      continue;
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
         isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
@@ -1397,6 +1400,8 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
             ExpandDimsOp>(op)) {
       return true;
     }
+    if (auto reshapeOp = dyn_cast<ReshapeOp>(op))
+      return reshapeOp.getExpandDimsAxis().has_value();
     if (auto fpToFpOp = dyn_cast<FpToFpOp>(op)) {
       auto srcType = cast<RankedTensorType>(fpToFpOp.getOperand().getType());
       return getElementBitWidth(srcType) <

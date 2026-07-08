@@ -417,6 +417,14 @@ createDecomposeOffsetFromExpr(RewriterBase &rewriter, Location loc, Value expr,
                 rewriter, loc, nonUniform, expandOp.getAxis());
             return std::make_pair(uniform, expandNonUniform);
           })
+          .Case<tt::ReshapeOp>([&](auto reshapeOp) {
+            auto [uniform, nonUniform] = createDecomposeOffsetFromExpr(
+                rewriter, loc, reshapeOp.getSrc(), bitness, scalarToSplatMap);
+            Value reshapeNonUniform = tt::ReshapeOp::create(
+                rewriter, loc, reshapeOp.getType(), nonUniform,
+                reshapeOp.getAllowReorder(), reshapeOp.getEfficientLayout());
+            return std::make_pair(uniform, reshapeNonUniform);
+          })
           .Case<arith::AddIOp>([&](Operation *op) {
             return createDecomposeOffsetFromAdd(rewriter, loc, expr, bitness,
                                                 scalarToSplatMap);
@@ -1369,22 +1377,20 @@ public:
     if (fatPtrTrue.size() == 1 && fatPtrFalse.size() == 1)
       return success();
     if (fatPtrTrue.size() != 2 || fatPtrFalse.size() != 2) {
-      Value trueOp;
-      Value falseOp;
-      if (fatPtrTrue.size() == 2) {
-        trueOp = tt::AddPtrOp::create(rewriter, selectOp.getLoc(),
-                                      selectOp.getType(), fatPtrTrue[0],
-                                      fatPtrTrue[1]);
-      } else {
-        trueOp = fatPtrTrue[0];
-      }
-      if (fatPtrFalse.size() == 2) {
-        falseOp = tt::AddPtrOp::create(rewriter, selectOp.getLoc(),
-                                       selectOp.getType(), fatPtrFalse[0],
-                                       fatPtrFalse[1]);
-      } else {
-        falseOp = fatPtrFalse[0];
-      }
+      // Asymmetric case: one arm is already a materialized pointer, the other
+      // is still a (base, offset) pair. Route the (base, offset) side through
+      // createTensorPointer so the scalar base is splatted before combining
+      // with a tensor offset; a raw tt.addptr would fail TT_AddPtrOp's
+      // TypesMatchWith verifier here.
+      auto materialize = [&](ValueRange fatPtr) -> Value {
+        if (fatPtr.size() == 1)
+          return getSingleValue(fatPtr);
+        return createTensorPointer(rewriter, fatPtr[0], fatPtr[1],
+                                   selectOp.getLoc(),
+                                   fatPtrs.at({fatPtr[0], fatPtr[1]}));
+      };
+      Value trueOp = materialize(fatPtrTrue);
+      Value falseOp = materialize(fatPtrFalse);
       auto newSelectOp = arith::SelectOp::create(
           rewriter, selectOp.getLoc(), selectOp.getType(),
           selectOp.getCondition(), trueOp, falseOp);
@@ -1581,6 +1587,42 @@ public:
         tt::ExpandDimsOp::create(rewriter, expandOp.getLoc(), newResult,
                                  fatPtrOffset, adaptor.getAxis());
     rewriter.replaceOpWithMultiple(expandOp, {{fatPtrBase, newOffset}});
+    fatPtrs[{fatPtrBase, newOffset}] = fatPtrs.at({fatPtrBase, fatPtrOffset});
+
+    return success();
+  }
+};
+
+/// Rewrite reshape(base, offset) -> base, reshape(offset).
+class ConvertReshape : public PointerCanonicalizationPattern<tt::ReshapeOp> {
+public:
+  using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
+  LogicalResult
+  matchAndRewrite_(tt::ReshapeOp reshapeOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
+    ValueRange remappedOperands = adaptor.getSrc();
+    if (remappedOperands.size() != 2)
+      return success();
+    Value fatPtrBase = remappedOperands[0];
+    if (!llvm::isa<tt::PointerType>(fatPtrBase.getType()))
+      return rewriter.notifyMatchFailure(
+          reshapeOp, "only scalar base currently supported");
+    Value fatPtrOffset = remappedOperands[1];
+
+    RankedTensorType result =
+        llvm::cast<RankedTensorType>(reshapeOp->getResultTypes().front());
+    if (!llvm::isa<tt::PointerType>(result.getElementType()))
+      return rewriter.notifyMatchFailure(
+          reshapeOp, "expected reshape result to be tensor of tt.ptr");
+
+    RankedTensorType newResult = RankedTensorType::get(
+        result.getShape(),
+        llvm::cast<RankedTensorType>(fatPtrOffset.getType()).getElementType(),
+        result.getEncoding());
+    auto newOffset = tt::ReshapeOp::create(
+        rewriter, reshapeOp.getLoc(), newResult, fatPtrOffset,
+        reshapeOp.getAllowReorder(), reshapeOp.getEfficientLayout());
+    rewriter.replaceOpWithMultiple(reshapeOp, {{fatPtrBase, newOffset}});
     fatPtrs[{fatPtrBase, newOffset}] = fatPtrs.at({fatPtrBase, fatPtrOffset});
 
     return success();
@@ -2043,6 +2085,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
       ConvertFuncOpArgsUnrealizedCasts, ConvertBroadcastOp, ConvertSplatOp,
       ConvertConvertLayoutOp, ConvertAddPtrOp, ConvertExtractSliceOp,
       MaterializeFatPointer<tt::AtomicCASOp>,
+      MaterializeFatPointer<tt::AtomicPollOp>,
       MaterializeFatPointer<tt::AtomicRMWOp>,
       MaterializeFatPointer<tt::BitcastOp>, MaterializeFatPointer<tt::LoadOp>,
       MaterializeFatPointer<triton::gpu::AsyncCopyGlobalToLocalOp>,
@@ -2052,7 +2095,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
       MaterializeFatPointerVariadic<tt::ExternElementwiseOp>,
       MaterializeFatPointerVariadic<tt::ElementwiseInlineAsmOp>,
       MaterializeFatPointerVariadic<tt::PrintOp>, ConvertSCFForOp,
-      ConvertExpandDims, ConvertSCFYieldOp, ConvertSCFIfOp,
+      ConvertExpandDims, ConvertReshape, ConvertSCFYieldOp, ConvertSCFIfOp,
       ConvertSCFConditionOp, ConvertSCFWhileOp, ConvertCFCondBranch,
       ConvertCFBranch, ConvertArithSelectOp, ConvertReturnOp>(
       patterns.getContext(), opsToRewrite, fatPrs, convertedBlocks);

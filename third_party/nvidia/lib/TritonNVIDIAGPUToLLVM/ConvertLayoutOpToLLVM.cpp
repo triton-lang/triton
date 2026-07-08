@@ -33,10 +33,13 @@ struct ConvertLayoutOpSwizzlingConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
+    auto *ctx = op.getContext();
 
     LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
     LinearLayout srcLayout = toLinearLayout(srcTy);
     LinearLayout dstLayout = toLinearLayout(dstTy);
+    srcLayout = srcLayout.removeZeroBasesAlongDim(str_attr("register"));
+    dstLayout = dstLayout.removeZeroBasesAlongDim(str_attr("register"));
 
     assert(to_vector(conversion.getInDimNames()) ==
            to_vector(conversion.getOutDimNames()));
@@ -46,13 +49,13 @@ struct ConvertLayoutOpSwizzlingConversion
       auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
       auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
                                                 op.getOperation());
-      auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+      auto inVals = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
       auto outVals =
           transferWithinBlockSwizzling(loc, rewriter, srcLayout, dstLayout,
                                        inVals, llvmElemTy, smemBase, op);
 
-      Value result =
-          packLLElements(loc, getTypeConverter(), outVals, rewriter, dstTy);
+      Value result = packUniqueTensorElements(loc, getTypeConverter(), outVals,
+                                              rewriter, dstTy);
       rewriter.replaceOp(op, result);
       return success();
     }
@@ -97,26 +100,6 @@ struct ConvertLayoutOpSwizzlingConversion
         v = b.trunc(llvmElemTy, v);
       }
       return outVals;
-    }
-
-    // Remove broadcasting in src
-    auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
-    if (!removeBroadcastSrc.isIdentity()) {
-      auto prmtSrc = removeBroadcastSrc.apply(srcLayout);
-      auto newInVals = removeBroadcastSrc.apply(inVals);
-      return transferWithinBlockSwizzling(loc, rewriter, prmtSrc, dstLayout,
-                                          newInVals, llvmElemTy, smemBase,
-                                          sourceOp);
-    }
-
-    // Remove broadcasting in dst
-    auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
-    if (!removeBroadcastDst.isIdentity()) {
-      auto prmtDst = removeBroadcastDst.apply(dstLayout);
-      auto outVals =
-          transferWithinBlockSwizzling(loc, rewriter, srcLayout, prmtDst,
-                                       inVals, llvmElemTy, smemBase, sourceOp);
-      return broadcastAs(outVals, dstLayout);
     }
 
     // At this point we have a type that's at least 8-bit
@@ -198,7 +181,8 @@ struct ConvertLayoutOpSwizzlingConversion
       if (idxSrc == 0) {
         lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
                         /*paddingShifts=*/{}, affineOffset,
-                        maskSpanAffineOffset, rewriter, targetInfo);
+                        maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
+                        /*maskSpanAffineBlock=*/0, rewriter, targetInfo);
       } else {
         assert(idxSrc == 1 || idxSrc == 2);
         bool transpose = idxSrc == 2;
@@ -215,7 +199,8 @@ struct ConvertLayoutOpSwizzlingConversion
       if (idxDst == 0) {
         tileOutVals = lowerLdStShared(
             loc, ctx, loadCvt, {}, llvmElemTy, smemBase, /*paddingShifts=*/{},
-            affineOffset, maskSpanAffineOffset, rewriter, targetInfo);
+            affineOffset, maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
+            /*maskSpanAffineBlock=*/0, rewriter, targetInfo);
       } else {
         assert(idxDst == 1 || idxDst == 2);
         bool transpose = idxDst == 2;

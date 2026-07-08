@@ -43,6 +43,8 @@ static bool hasAcquireOrReleaseOp(scf::ForOp forOp) {
       hasAcquireOrRelease = hasAcquireOrReleaseSemantic(atomicRMW.getSem());
     } else if (auto atomicCAS = dyn_cast<tt::AtomicCASOp>(op)) {
       hasAcquireOrRelease = hasAcquireOrReleaseSemantic(atomicCAS.getSem());
+    } else if (auto atomicPoll = dyn_cast<tt::AtomicPollOp>(op)) {
+      hasAcquireOrRelease = hasAcquireOrReleaseSemantic(atomicPoll.getSem());
     }
     return hasAcquireOrRelease ? WalkResult::interrupt()
                                : WalkResult::advance();

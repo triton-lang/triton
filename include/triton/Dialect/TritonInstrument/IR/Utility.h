@@ -35,6 +35,10 @@ enum Kind { None = -1, AsyncCp = 0, Wgmma, TmaStore, NumCommitKinds };
 // writeVisibility + readVisibility per active memory type.
 constexpr int kCapturesPerMemType = 2;
 
+// proxyAccessVisibility, plus proxyAccessTracking when barriers are present.
+constexpr int kProxyFenceBaseCaptures = 1;
+constexpr int kProxyFenceBarrierCaptures = 1;
+
 // barrierStates + waiting + activeMasks (only when barriers exist).
 constexpr int kBarrierBaseCaptures = 3;
 
@@ -54,13 +58,20 @@ constexpr int kCaptureSizeBytes = 8;
 /// \p hasBarriers        Whether barriers exist in the module.
 /// \p numCommitKinds     Number of distinct commit kinds required.
 inline int estimateConSanCaptureCount(int numActiveMemTypes, bool hasBarriers,
-                                      int numCommitKinds) {
+                                      int numCommitKinds,
+                                      bool hasAsyncProxyFenceTracking) {
   int perMemType = kCapturesPerMemType * numActiveMemTypes;
   int barrierCaptures =
       hasBarriers ? kBarrierBaseCaptures +
                         kBarrierTrackingCapturesPerMemType * numActiveMemTypes
                   : 0;
-  return perMemType + barrierCaptures + kFixedCaptures + numCommitKinds;
+  int proxyFenceCaptures =
+      hasAsyncProxyFenceTracking
+          ? kProxyFenceBaseCaptures +
+                (hasBarriers ? kProxyFenceBarrierCaptures : 0)
+          : 0;
+  return perMemType + barrierCaptures + proxyFenceCaptures + kFixedCaptures +
+         numCommitKinds;
 }
 
 void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,
@@ -155,7 +166,8 @@ struct AuxDataMap {
   //   K = tracked mbarriers, power-of-two padded.
   //   T = logical ConSan thread bit slots used by this module, power-of-two
   //       padded for the distributed layout.
-  //   P = base-thread commit columns used by this module, power-of-two padded.
+  //   P = base-thread columns used by commit and proxy state, power-of-two
+  //       padded.
   //
   // Storage notation:
   //   tensor  = distributed tensor value.
@@ -195,6 +207,17 @@ struct AuxDataMap {
   // Per-memory-type buffer/barrier map for read visibility masks that a barrier
   // tracks.
   RegionToValueMap readTracking[numMemTypes];
+
+  // scratch, <Cbuf x B x Cthr x P x Cmask x i64>
+  // Generic-proxy shared-memory accesses visible to each base thread. The low
+  // 16 bits contain source base-thread ids that have accessed the buffer; bits
+  // [16..31] contain the subset covered by fence.proxy.async on the path to
+  // that consumer. CTA dimensions distinguish source and consumer CTAs.
+  RegionToValueMap proxyAccessVisibility;
+
+  // scratch, <Cbuf x B x Cbar x K x Cmask x i64>
+  // Barrier publication table for packed proxyAccessVisibility state.
+  RegionToValueMap proxyAccessTracking;
 
   // scratch, <C x B x P x i8>
   // Per-commit-kind outstanding commit counters for shared-memory buffers.
@@ -238,12 +261,14 @@ struct AuxDataMap {
   // present; TMA/TC/CLC peer ranges are added only when the module uses them.
   ThreadLayout threadLayout;
 
+  bool hasAsyncProxyFenceTracking = false;
+
   LogicalResult populateAndPassToWarpSpecialize(ModuleOp module,
                                                 FunctionBuilder &funcBuilder,
                                                 const ConSanTargetHooks *hooks);
 
 private:
-  void getBuffersAndBarriers(
+  LogicalResult getBuffersAndBarriers(
       ModuleOp module,
       SmallVector<SmallVector<triton::BufferRegion>, 2> &bufRegions,
       SmallVector<triton::BufferRegion> &barrierRegions);

@@ -35,17 +35,13 @@ using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::getCGALayout;
-using ::mlir::triton::gpu::getTotalElemsPerThread;
+using ::mlir::triton::gpu::getUniqueElemsPerThread;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
 
 // Toggle this to work around Cooperative Grid Launch ld.acquire optimized path
 static constexpr bool disableLDAcquireLowering = false;
 
 namespace {
-
-unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
-  return index & ~freeVarMask;
-}
 
 Value createCachePolicy(triton::EvictionPolicy opEvict,
                         ConversionPatternRewriter &rewriter, Location loc,
@@ -150,7 +146,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(op.getType()));
     unsigned vec = getVectorSize(ptr);
-    unsigned numElems = getTotalElemsPerThread(ptr.getType());
+    unsigned numElems = getUniqueElemsPerThread(ptr.getType());
     unsigned vecOrig = vec;
     if (llMask) {
       LLVM_DEBUG(DBGS() << "vec = " << vec
@@ -158,6 +154,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       vec = std::min<size_t>(vec, getMaskAlignment(mask));
       LLVM_DEBUG(llvm::dbgs() << " vec = " << vec << '\n');
     }
+    assert(vec <= numElems);
 
     if (vec == 1 && numElems > 1) {
       int maskValue = !llMask ? -1 : getMaskAlignment(mask);
@@ -167,13 +164,13 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                        << "\n";
     }
     // Get the LLVM values for pointers
-    auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    auto ptrElems = unpackUniqueTensorElements(loc, llPtr, rewriter);
     assert(ptrElems.size() == numElems);
 
     // Get the LLVM values for mask
     SmallVector<Value> maskElems;
     if (llMask) {
-      maskElems = unpackLLElements(loc, llMask, rewriter);
+      maskElems = unpackUniqueTensorElements(loc, llMask, rewriter);
       assert(maskElems.size() == numElems);
     }
 
@@ -191,7 +188,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     }
     SmallVector<Value> otherElems;
     if (other) {
-      otherElems = unpackLLElements(loc, llOther, rewriter);
+      otherElems = unpackUniqueTensorElements(loc, llOther, rewriter);
     }
 
     // vectorized iteration through all the pointer/mask/other elements
@@ -199,24 +196,11 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
     const int numVecs = numElems / vec;
 
-    // Load redundantly in all dims except reg
-    auto freeVarMasks = getFreeVariableMasks(ptr.getType());
-    uint32_t regMask = freeVarMasks[str_attr("reg")];
-
     LDBG("LoadOp numElems = " << numElems << " vec = " << vec
                               << " valueElemNBits = " << valueElemNBits << " "
                               << op.getType());
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
-      if (auto canonicalVecStart = getCanonicalIndex(vecStart, regMask);
-          vecStart != canonicalVecStart) {
-        // For redundant registers, refer back to the canonical load
-        for (auto iVec = 0; iVec < vec; ++iVec) {
-          loadedVals.push_back(loadedVals[canonicalVecStart + iVec]);
-        }
-        continue;
-      }
-
       // TODO: optimization when ptr is GEP with constant offset
       size_t in_off = 0;
 
@@ -342,9 +326,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       }
     } // end vec
 
-    Type llvmResultStructTy = typeConverter->convertType(op.getType());
-    Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
-                                        rewriter, llvmResultStructTy);
+    Value resultStruct = packUniqueTensorElements(
+        loc, typeConverter, loadedVals, rewriter, op.getType());
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -381,10 +364,10 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
 
     unsigned vec = getVectorSize(ptr);
-    unsigned elemsPerThread = getTotalElemsPerThread(ptr.getType());
+    unsigned elemsPerThread = getUniqueElemsPerThread(ptr.getType());
 
-    auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
-    auto valueElems = unpackLLElements(loc, llValue, rewriter);
+    auto ptrElems = unpackUniqueTensorElements(loc, llPtr, rewriter);
+    auto valueElems = unpackUniqueTensorElements(loc, llValue, rewriter);
     assert(ptrElems.size() == valueElems.size());
 
     // Determine the vectorization size
@@ -392,12 +375,13 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     SmallVector<Value> maskElems;
     if (llMask) {
       Value mask = op.getMask();
-      maskElems = unpackLLElements(loc, llMask, rewriter);
+      maskElems = unpackUniqueTensorElements(loc, llMask, rewriter);
       assert(valueElems.size() == maskElems.size());
 
       unsigned maskAlign = getMaskAlignment(mask);
       vec = std::min(vec, maskAlign);
     }
+    assert(vec <= elemsPerThread);
 
     if (vec == 1 && elemsPerThread > 1) {
       int mask = !llMask ? -1 : getMaskAlignment(op.getMask());
@@ -416,14 +400,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       freeVarMasks[str_attr("block")] = 0;
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                          loc, targetInfo);
-    uint32_t regMask = freeVarMasks[str_attr("reg")];
-
     const int numVecs = elemsPerThread / vec;
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
-      if (!isCanonicalIndex(vecStart, regMask)) {
-        // Don't emit store ops for redundant elements within a thread
-        continue;
-      }
       // TODO: optimization when ptr is AddPtr with constant offset
       size_t in_off = 0;
 
@@ -525,6 +503,10 @@ void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
 
 Value loadScalarAtomicResult(ConversionPatternRewriter &rewriter, Location loc,
                              const NVIDIA::TargetInfo &targetInfo,
+                             Value atomPtr, Type valueTy, int numCTAs);
+
+Value loadScalarAtomicResult(ConversionPatternRewriter &rewriter, Location loc,
+                             const NVIDIA::TargetInfo &targetInfo,
                              Value atomPtr, Type valueTy, int numCTAs) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   if (numCTAs == 1)
@@ -559,9 +541,9 @@ struct AtomicCASOpConversion
     Value llCmp = adaptor.getCmp();
     Value llVal = adaptor.getVal();
 
-    auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
-    auto cmpElements = unpackLLElements(loc, llCmp, rewriter);
-    auto valElements = unpackLLElements(loc, llVal, rewriter);
+    auto ptrElements = unpackUniqueTensorElements(loc, llPtr, rewriter);
+    auto cmpElements = unpackUniqueTensorElements(loc, llCmp, rewriter);
+    auto valElements = unpackUniqueTensorElements(loc, llVal, rewriter);
 
     auto valueTy = op.getType();
     auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
@@ -572,22 +554,14 @@ struct AtomicCASOpConversion
     std::string tyId =
         NVIDIA::getPtxRegisterSizeCode(valueElemNBits, /*isFloat=*/false);
     std::string sTy = "b" + std::to_string(valueElemNBits);
-    auto elemsPerThread = getTotalElemsPerThread(op.getVal().getType());
+    auto elemsPerThread = getUniqueElemsPerThread(op.getVal().getType());
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                          loc, targetInfo);
-    uint32_t regMask = freeVarMasks[str_attr("reg")];
 
     SmallVector<Value> resultVals(elemsPerThread);
 
     for (size_t i = 0; i < elemsPerThread; i += 1) {
-      if (auto canonicalStart = getCanonicalIndex(i, regMask);
-          canonicalStart != i) {
-        // For redundant registers, refer back to the canonical result
-        resultVals[i] = resultVals[canonicalStart];
-        continue;
-      }
-
       Value casVal = valElements[i];
       Value casCmp = cmpElements[i];
       Value casPtr = ptrElements[i];
@@ -713,11 +687,11 @@ public:
     Value llVal = adaptor.getVal();
     Value llMask = adaptor.getMask();
 
-    auto valElements = unpackLLElements(loc, llVal, rewriter);
-    auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
+    auto valElements = unpackUniqueTensorElements(loc, llVal, rewriter);
+    auto ptrElements = unpackUniqueTensorElements(loc, llPtr, rewriter);
     SmallVector<Value> maskElements;
     if (llMask)
-      maskElements = unpackLLElements(loc, llMask, rewriter);
+      maskElements = unpackUniqueTensorElements(loc, llMask, rewriter);
 
     auto valueTy = op.getType();
     auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
@@ -725,7 +699,7 @@ public:
         tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
                  : valueTy;
     const size_t valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
-    auto elemsPerThread = getTotalElemsPerThread(val.getType());
+    auto elemsPerThread = getUniqueElemsPerThread(val.getType());
     // packed: e.g. packed=2 for f16x2
     // vec: e.g. .v2, .v4, .v8 version of atom instruction.
     unsigned vec, vecOrig;
@@ -735,6 +709,7 @@ public:
       if (llMask) {
         vec = std::min<unsigned>(vec, getMaskAlignment(op.getMask()));
       }
+      assert(vec <= elemsPerThread);
       vecOrig = vec;
       packed = 1;
       auto valTy = cast<RankedTensorType>(val.getType());
@@ -761,7 +736,6 @@ public:
     auto freeVarMasks = getFreeVariableMasks(ptr.getType());
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                          loc, targetInfo);
-    uint32_t regMask = freeVarMasks[str_attr("reg")];
 
     SmallVector<Value> resultVals(elemsPerThread);
 
@@ -776,15 +750,6 @@ public:
                                   packed == 1 && ScopeMap.count(op.getScope());
 
     for (size_t i = 0; i < elemsPerThread; i += vec * packed) {
-      if (auto canonicalStart = getCanonicalIndex(i, regMask);
-          canonicalStart != i) {
-        // For redundant registers, refer back to the canonical result
-        for (auto iVecPack = 0; iVecPack < vec * packed; ++iVecPack) {
-          resultVals[i + iVecPack] = resultVals[canonicalStart + iVecPack];
-        }
-        continue;
-      }
-
       Value rmwPtr = ptrElements[i];
       Value pred =
           llMask ? ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i])
@@ -985,12 +950,12 @@ struct AsyncCopyGlobalToLocalOpConversion
     Value llMask = adaptor.getMask();
 
     // %src
-    auto srcElems = unpackLLElements(loc, llSrc, rewriter);
+    auto srcElems = unpackUniqueTensorElements(loc, llSrc, rewriter);
 
     // %mask
     SmallVector<Value> maskElems;
     if (llMask) {
-      maskElems = unpackLLElements(loc, llMask, rewriter);
+      maskElems = unpackUniqueTensorElements(loc, llMask, rewriter);
       assert(srcElems.size() == maskElems.size());
     }
 
@@ -998,7 +963,7 @@ struct AsyncCopyGlobalToLocalOpConversion
     // %other
     // SmallVector<Value> otherElems;
     // if (llOther) {
-    //   otherElems = unpackLLElements(loc, llOther, rewriter);
+    //   otherElems = unpackTensorElements(loc, llOther, rewriter);
     //   assert(srcElems.size() == otherElems.size());
     // }
 
@@ -1017,9 +982,7 @@ struct AsyncCopyGlobalToLocalOpConversion
 
     // Remove broadcasted registers
     auto srcLayout = ttg::toLinearLayout(srcTy);
-    auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
-    srcLayout = removeBroadcastSrc.apply(srcLayout);
-    vals = removeBroadcastSrc.apply(vals);
+    srcLayout = srcLayout.removeZeroBasesAlongDim(str_attr("register"));
 
     // We can load N elements at a time if:
     //  1. Every group of N source pointers are contiguous.  For example, if
@@ -1108,7 +1071,8 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto maskSpanAffineOffset = SharedMemoryObject::getMaskSpanOffsets(dstTy);
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     lowerLdSt(loc, ctx, cvt, vals, resElemTy, smemObj.getBase(),
-              /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset, laneId,
+              /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset,
+              /*affineBlockOffset=*/Value(), /*maskSpanAffineBlock=*/0, laneId,
               warpId, rewriter, targetInfo, maxVec, emitCpAsync);
 
     // Drop the result token.
@@ -1514,6 +1478,7 @@ static LogicalResult iterateGatherScatterIndices(
   // consecutive shared memory. Thus, the layout of the x offsets must be such
   // that 4 consecutive elements are broadcasted to a warp.
   LinearLayout xCoordsLayout = triton::gpu::toLinearLayout(xCoords.getType());
+  xCoordsLayout = xCoordsLayout.removeZeroBasesAlongDim(kRegister);
   if (xCoordsLayout.getInDimSize(kRegister) < 4)
     return op->emitError("must have at least 4 x offsets per warp");
   // Check that the first two bases are [1] and [2].
@@ -1570,10 +1535,8 @@ static LogicalResult iterateGatherScatterIndices(
   LinearLayout sharedLayout = getUnswizzledLayout(smemType);
   LinearLayout msgToShared = msgLayout.invertAndCompose(sharedLayout);
 
-  // If there are too few rows, warps will have redundant data. An individual
-  // thread might also have redundant indices if there is register broadcasting.
+  // If there are too few rows, warps will have redundant data.
   auto freeVars = xCoordsLayout.getFreeVariableMasks();
-  unsigned regMask = freeVars[kRegister];
   unsigned warpMask = freeVars[kWarp];
   if (freeVars[kLane] != (threadsPerWarp - 1))
     return op->emitError("x offsets must be broadcasted across each warp");
@@ -1591,13 +1554,11 @@ static LogicalResult iterateGatherScatterIndices(
   // Select one thread in each warp to issue the gather4 messages.
   pred = b.and_(pred, LLVM::NVIDIA::createElectPredicate(loc, rewriter));
 
-  SmallVector<Value> xOffsets = unpackLLElements(loc, xOffsetsValue, rewriter);
+  SmallVector<Value> xOffsets =
+      unpackUniqueTensorElements(loc, xOffsetsValue, rewriter);
   // Lane ID doesn't matter.
   Value laneId = b.i32_val(0);
   for (auto regId : seq<unsigned>(0, xOffsets.size(), 4)) {
-    // Skip redundant x offsets within a thread.
-    if ((regMask & regId) != 0)
-      continue;
     Value regIdVal = b.i32_val(regId);
 
     for (auto msgId : llvm::seq(numMessagesPerRow)) {

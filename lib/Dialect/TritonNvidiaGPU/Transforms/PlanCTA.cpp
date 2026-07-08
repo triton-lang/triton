@@ -26,6 +26,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/ADT/STLExtras.h"
@@ -123,6 +124,8 @@ private:
   bool processBroadcast(triton::BroadcastOp broadcast, Attribute layout);
   bool processExpandDimsBackward(triton::ExpandDimsOp expandDims,
                                  ttg::DistributedEncodingTrait newResultLayout);
+  bool processReshapeBackward(triton::ReshapeOp reshape,
+                              Attribute newResultLayout);
 
   bool processConvertLayoutBackward(ttg::ConvertLayoutOp convertLayout,
                                     CastOp cast);
@@ -419,6 +422,8 @@ bool CTAPlanner::propagateBackward(CastOp cast) {
       processBroadcast(broadcast, layout);
     } else if (auto expandDims = llvm::dyn_cast<triton::ExpandDimsOp>(op)) {
       processExpandDimsBackward(expandDims, layout);
+    } else if (auto reshape = llvm::dyn_cast<triton::ReshapeOp>(op)) {
+      processReshapeBackward(reshape, layout);
     } else if (auto ifOp = llvm::dyn_cast<scf::IfOp>(op)) {
       processIfOpBackward(ifOp, cast);
     } else if (auto forOp = llvm::dyn_cast<scf::ForOp>(op)) {
@@ -697,6 +702,13 @@ bool CTAPlanner::processExpandDimsBackward(
   auto newSrcLayout = ttg::SliceEncodingAttr::get(
       newResultLayout.getContext(), expandDims.getAxis(), newResultLayout);
   insertCasts(expandDims.getOperation(), {newSrcLayout}, {newResultLayout});
+  return true;
+}
+
+bool CTAPlanner::processReshapeBackward(triton::ReshapeOp reshape,
+                                        Attribute newResultLayout) {
+  auto newSrcLayout = inferSrcEncoding(reshape, newResultLayout);
+  insertCasts(reshape.getOperation(), {newSrcLayout}, {newResultLayout});
   return true;
 }
 

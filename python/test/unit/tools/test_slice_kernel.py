@@ -333,6 +333,16 @@ import triton.experimental.gluon as gluon
 
 @gluon.jit
 def squeeze(x, dim: gl.constexpr):
+    '''
+    Removes a length-1 dimension from :code:`x` at index :code:`dim`.
+
+    The selected dimension must have length 1 (checked at compile time). This is
+    the inverse of :func:`unsqueeze`.
+
+    :param x: the input tensor
+    :param dim: the index of the dimension to remove
+    :type dim: int
+    '''
     gl.static_assert(x.shape[dim] == 1)
     return triton.tools.triton_to_gluon_translator.common_helpers.reset_to_default_layout(x.reshape(x.shape[:dim] + x.shape[dim + 1:]))
 

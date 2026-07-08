@@ -117,8 +117,9 @@ void init_triton_passes_ttgpuir(py::module_ &m) {
 void init_plugin_passes(py::module_ &m) {
   for (const auto &plugin : mlir::triton::plugin::loadPlugins()) {
     for (const auto &pass : plugin.listPasses()) {
+      std::string wrapped = std::string("add_") + pass.name;
       m.def(
-          pass.name,
+          wrapped.c_str(),
           [pass](mlir::PassManager &pm, std::vector<std::string> args) {
             pass.addPass(&pm, args);
           },

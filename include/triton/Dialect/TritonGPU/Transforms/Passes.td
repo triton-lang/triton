@@ -228,7 +228,7 @@ def TritonGPUOptimizeDotOperands : Pass<"tritongpu-optimize-dot-operands", "mlir
   let options = [
     Option<"hoistLayoutConversion", "hoist-layout-conversion",
            "bool", /*default*/"true",
-           "whether to move conver to dot operand earlier pass elementwise ops">
+           "whether to move convert to dot operand earlier pass elementwise ops">
   ];
 }
 
