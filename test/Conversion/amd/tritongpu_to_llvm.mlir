@@ -257,6 +257,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 }
 
 // -----
+#blocked3 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: reduce_dpp_max_commuted
+  tt.func @reduce_dpp_max_commuted(%arg0: tensor<64xf32, #blocked3>) {
+    // CHECK: rocdl.update.dpp
+    // CHECK-SAME: with 280, 15, 15, true : f32
+    // CHECK-NEXT: llvm.intr.maxnum
+
+    // CHECK-NEXT: rocdl.update.dpp
+    // CHECK-SAME: with 276, 15, 15, true : f32
+    // CHECK-NEXT: llvm.intr.maxnum
+
+    // CHECK-NEXT: rocdl.update.dpp
+    // CHECK-SAME: with 274, 15, 15, true : f32
+    // CHECK-NEXT: llvm.intr.maxnum
+
+    // CHECK-NEXT: rocdl.update.dpp
+    // CHECK-SAME: with 273, 15, 15, true : f32
+    // CHECK-NEXT: llvm.intr.maxnum
+
+    // CHECK-NEXT: rocdl.update.dpp
+    // CHECK-SAME: with 322, 10, 15, true : f32
+    // CHECK-NEXT: llvm.intr.maxnum
+
+    // CHECK-NEXT: rocdl.update.dpp
+    // CHECK-SAME: with 323, 15, 15, true : f32
+    // CHECK-NEXT: llvm.intr.maxnum
+
+    // CHECK: rocdl.readlane
+    %0 = "tt.reduce"(%arg0) <{axis = 0 : i32}> ({
+    ^bb0(%arg1: f32, %arg2: f32):
+      %1 = arith.maxnumf %arg2, %arg1 : f32
+      tt.reduce.return %1 : f32
+    }) : (tensor<64xf32, #blocked3>) -> f32
+    tt.return
+  }
+}
+
+// -----
 
 #blocked4 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
@@ -720,6 +759,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 %1 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
 ^bb0(%arg24: f32, %arg25: f32):
   %3166 = "arith.maxnumf"(%arg24, %arg25) <{fastmath = #arith.fastmath<none>}> : (f32, f32) -> f32
+  "tt.reduce.return"(%3166) : (f32) -> ()
+}) : (tensor<64x16xf32, #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16, 16], isTransposed = true}>>) -> tensor<64xf32, #ttg.slice<{dim = 1, parent = #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16, 16], isTransposed = true}>}>>
+  tt.return
+  }
+}
+
+// -----
+
+// GFX950-LABEL: reduce_16x16_commuted
+// GFX950: llvm.call_intrinsic "llvm.amdgcn.permlane32.swap"
+// GFX950: llvm.call_intrinsic "llvm.amdgcn.permlane16.swap"
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @reduce_16x16_commuted(%arg0: tensor<64x16xf32, #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16, 16], isTransposed = true}>>){
+%1 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+^bb0(%arg24: f32, %arg25: f32):
+  %3166 = "arith.maxnumf"(%arg25, %arg24) <{fastmath = #arith.fastmath<none>}> : (f32, f32) -> f32
   "tt.reduce.return"(%3166) : (f32) -> ()
 }) : (tensor<64x16xf32, #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16, 16], isTransposed = true}>>) -> tensor<64xf32, #ttg.slice<{dim = 1, parent = #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16, 16], isTransposed = true}>}>>
   tt.return

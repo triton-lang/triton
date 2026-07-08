@@ -106,13 +106,21 @@ def reduce_launch_metadata(grid, kernel, args):
         ret[f"flops{nbits}"] = X.numel() - Y.numel()
         ret["bytes"] = X.numel() * X.element_size() + Y.numel() * Y.element_size()
     else:
-        m = (Mask != 0)
         dim0, dim1 = tuple(d for d in (0, 1, 2) if d != dim)
+        m = Mask
         if unpadded_batch_size is not None:
             m = m.narrow(dim0, 0, unpadded_batch_size.item())
-        total_loads = m.sum()
-        total_adds = (m.sum(dim=dim) - 1).clamp(min=0).sum()
         total_stores = m.shape[dim0] * Y.shape[1]
+
+        # Avoid materializing broadcasted mask elements, then account for their repetitions below.
+        broadcast_repeats = tuple(size if stride == 0 else 1 for size, stride in zip(m.shape, m.stride()))
+        for d, size in enumerate(broadcast_repeats):
+            if size > 1:
+                m = m.narrow(d, 0, 1)
+        m = (m != 0)
+        total_loads = m.sum() * broadcast_repeats[0] * broadcast_repeats[1] * broadcast_repeats[2]
+        total_adds = ((m.sum(dim=dim) * broadcast_repeats[dim] - 1).clamp(min=0).sum()
+                      * broadcast_repeats[dim0] * broadcast_repeats[dim1])
         if launch_metadata_allow_sync():
             total_loads = total_loads.item()
             total_adds = total_adds.item()
