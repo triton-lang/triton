@@ -522,8 +522,8 @@ def flip(x, dim=None):
     :param dim: the dimension to flip along
     :type dim: int
     """
-    core.static_assert(-len(x.shape) <= dim and dim < len(x.shape))
     _dim: core.constexpr = _get_flip_dim(dim, x.shape)
+    core.static_assert(0 <= _dim and _dim < len(x.shape), "flip: dim must be None or in [-rank, rank)")
     core.static_assert(_is_power_of_two(x.shape[_dim]))
     steps: core.constexpr = _log2(x.shape[_dim])
 
