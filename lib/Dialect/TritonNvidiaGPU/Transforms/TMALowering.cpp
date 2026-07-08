@@ -103,8 +103,8 @@ struct TMAGatherLowering : public OpRewritePattern<DescriptorGatherOp> {
     auto createLoad = [&](Value desc, Value barrierAlloc, Value alloc,
                           Value pred, bool useMulticast) {
       triton::nvidia_gpu::AsyncTMAGatherOp::create(
-          rewriter, op.getLoc(), desc, xOffsets, op.getYOffset(),
-          barrierAlloc, alloc, pred, useMulticast);
+          rewriter, op.getLoc(), desc, xOffsets, op.getYOffset(), barrierAlloc,
+          alloc, pred, useMulticast);
     };
     lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter);
     return success();
