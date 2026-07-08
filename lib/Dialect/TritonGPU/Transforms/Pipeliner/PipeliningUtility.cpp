@@ -177,6 +177,8 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   if (isa<LLVM::AssumeOp, ttng::FenceAsyncSharedOp>(op))
     return op;
+  if (isa<ttng::ClusterBarrierOp>(op))
+    return op;
   if (isa<ttg::AsyncCommitGroupOp, ttg::AsyncWaitOp>(op))
     return op;
   if (op->hasTrait<OpTrait::LocalLoadTrait>())
