@@ -1499,6 +1499,70 @@ void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices) {
 
 namespace mlir::triton {
 
+void addForwardedValuesThroughUse(OpOperand &use,
+                                  llvm::SetVector<Value> &worklist) {
+  Operation *user = use.getOwner();
+
+  if (auto ws = dyn_cast<ttg::WarpSpecializePartitionsOp>(user)) {
+    unsigned argIdx = use.getOperandNumber();
+    for (Region &region : ws.getPartitionRegions())
+      worklist.insert(region.getArgument(argIdx));
+    return;
+  }
+
+  if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+    unsigned operandIdx = use.getOperandNumber();
+    if (operandIdx >= forOp.getNumControlOperands()) {
+      unsigned iterArgIdx = operandIdx - forOp.getNumControlOperands();
+      worklist.insert(forOp.getRegionIterArg(iterArgIdx));
+      worklist.insert(forOp.getResult(iterArgIdx));
+    }
+  } else if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+    if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp()))
+      worklist.insert(forOp.getResult(use.getOperandNumber()));
+  }
+
+  worklist.insert(user->result_begin(), user->result_end());
+}
+
+bool valueFeedsMulticastMMA(Value value) {
+  llvm::SetVector<Value> worklist;
+  worklist.insert(value);
+  for (unsigned i = 0; i < worklist.size(); ++i) {
+    Value current = worklist[i];
+    for (OpOperand &use : current.getUses()) {
+      Operation *user = use.getOwner();
+      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
+        if (mma.getMulticast())
+          return true;
+        continue;
+      }
+
+      addForwardedValuesThroughUse(use, worklist);
+    }
+  }
+  return false;
+}
+
+bool valueFeedsTwoCTAMMA(Value value) {
+  llvm::SetVector<Value> worklist;
+  worklist.insert(value);
+  for (unsigned i = 0; i < worklist.size(); ++i) {
+    Value current = worklist[i];
+    for (OpOperand &use : current.getUses()) {
+      Operation *user = use.getOwner();
+      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
+        if (mma.getTwoCtas())
+          return true;
+        continue;
+      }
+
+      addForwardedValuesThroughUse(use, worklist);
+    }
+  }
+  return false;
+}
+
 void replaceUsesAndPropagateType(
     OpBuilder &builder, Operation *oldUse, Value val,
     std::function<void(Operation *, Operation *)> callback) {
@@ -1677,54 +1741,6 @@ SmallVector<Value> getTiedArgs(Operation *op, int resultIdx) {
     return values;
   }
   return {};
-}
-
-static void addForwardedValuesThroughUse(OpOperand &use,
-                                         llvm::SetVector<Value> &worklist) {
-  Operation *user = use.getOwner();
-  if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-    unsigned operandIdx = use.getOperandNumber();
-    if (operandIdx >= forOp.getNumControlOperands()) {
-      unsigned iterArgIdx = operandIdx - forOp.getNumControlOperands();
-      worklist.insert(forOp.getRegionIterArg(iterArgIdx));
-      worklist.insert(forOp.getResult(iterArgIdx));
-    }
-  } else if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-    if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp()))
-      worklist.insert(forOp.getResult(use.getOperandNumber()));
-  }
-
-  worklist.insert(user->result_begin(), user->result_end());
-}
-
-template <typename Predicate>
-static bool valueFeedsMMAv5MMA(Value value, Predicate predicate) {
-  llvm::SetVector<Value> worklist;
-  worklist.insert(value);
-  for (unsigned i = 0; i < worklist.size(); ++i) {
-    Value current = worklist[i];
-    for (OpOperand &use : current.getUses()) {
-      Operation *user = use.getOwner();
-      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
-        if (predicate(mma))
-          return true;
-        continue;
-      }
-
-      addForwardedValuesThroughUse(use, worklist);
-    }
-  }
-  return false;
-}
-
-bool valueFeedsMulticastMMA(Value value) {
-  return valueFeedsMMAv5MMA(
-      value, [](ttng::MMAv5OpInterface mma) { return mma.getMulticast(); });
-}
-
-bool valueFeedsTwoCTAMMA(Value value) {
-  return valueFeedsMMAv5MMA(
-      value, [](ttng::MMAv5OpInterface mma) { return mma.getTwoCtas(); });
 }
 
 LogicalResult verifyBarrierType(Operation *op,

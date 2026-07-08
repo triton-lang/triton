@@ -692,12 +692,10 @@ static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
 
 static bool usesTMAMulticast(Value operand) {
   auto loadOp =
-      getDefiningOpSkippingConvertLayout<triton::DescriptorLoadLikeOpInterface>(
-          operand);
+      getDefiningOpSkippingConvertLayout<triton::DescriptorLoadOp>(operand);
   if (!loadOp)
     return false;
-  RankedTensorType loadTy =
-      cast<RankedTensorType>(loadOp->getResult(0).getType());
+  RankedTensorType loadTy = loadOp.getType();
   auto sharedEnc = NVMMASharedEncodingAttr::get(
       loadTy.getContext(), loadTy.getShape(), getOrderForMemory(loadTy),
       getCGALayout(loadTy.getEncoding()), loadTy.getElementType(),

@@ -578,8 +578,11 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
 
 bool canDoubleBufferAcc(MMAv5OpInterface mmaOp, int numTmemBlocks) {
   auto tmemDesc = mmaOp.getAccumulator().getType();
-  auto blockM = tmemDesc.getShape()[0];
-  auto blockN = tmemDesc.getShape()[1];
+  // TMEM storage is per CTA; a CGA-split accumulator's logical tile can be
+  // larger than the physical TMEM footprint owned by each CTA.
+  auto shapePerCTA = gpu::getShapePerCTA(tmemDesc);
+  auto blockM = shapePerCTA[0];
+  auto blockN = shapePerCTA[1];
   constexpr int numTMEMColumns = 512;
   constexpr int numTMEMRows = 128;
   if (numTmemBlocks + (blockM * blockN * 2) > numTMEMRows * numTMEMColumns) {

@@ -279,32 +279,15 @@ struct LoadGroupInfo {
   bool hasTMALoad = false;
 };
 
-static bool loadFeedsTwoCTAMMA(Operation *loadOp) {
-  SetVector<Operation *> worklist;
-  worklist.insert(loadOp->user_begin(), loadOp->user_end());
-  for (unsigned i = 0; i < worklist.size(); ++i) {
-    Operation *op = worklist[i];
-    auto mma = dyn_cast<ttng::MMAv5OpInterface>(op);
-    if (mma) {
-      if (mma.getTwoCtas())
-        return true;
-      continue;
-    }
-    worklist.insert(op->user_begin(), op->user_end());
-  }
-  return false;
-}
-
-static bool loadUsesTMAMulticast(Operation *loadOp,
-                                 SharedEncodingTrait sharedEncoding) {
+static bool loadUsesTMAMulticast(Operation *loadOp, Value alloc) {
   if (!isa<tt::DescriptorLoadOp>(loadOp))
     return false;
 
-  auto tensorTy = cast<RankedTensorType>(loadOp->getResult(0).getType());
-  auto memDescTy = MemDescType::get(
-      tensorTy.getShape(), tensorTy.getElementType(), sharedEncoding,
-      SharedMemorySpaceAttr::get(loadOp->getContext()));
-  return ttng::hasCGABroadcast(memDescTy);
+  auto allocTy = dyn_cast<ttg::MemDescType>(alloc.getType());
+  if (!allocTy)
+    return false;
+  return ttng::hasCGABroadcast(getBufferViewType(allocTy,
+                                                 /*mutableMemory=*/true));
 }
 
 // Convert a scalar load to a load of a tensor of shape <1>.
@@ -412,7 +395,8 @@ void createTMABarrierAndWait(
       auto tensorTy = cast<RankedTensorType>(op->getResultTypes()[0]);
       int loadSize = product(getShapePerCTA(tensorTy));
       sizeInBytes += loadSize * tensorTy.getElementTypeBitWidth() / 8;
-      hasTwoCTAMMAUser |= loadFeedsTwoCTAMMA(op);
+      hasTwoCTAMMAUser |=
+          llvm::any_of(op->getResults(), mlir::triton::valueFeedsTwoCTAMMA);
     }
 
     Value barrierAlloc = triton::createBarrierAlloc(
@@ -529,9 +513,6 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
         asyncLoad.stageDiff = stageDiff;
         asyncLoad.contiguity = contiguity;
         asyncLoad.sharedEncoding = sharedEncoding;
-        asyncLoad.useMulticast =
-            loadUsesTMAMulticast(&op, sharedEncoding) &&
-            triton::valueFeedsMulticastMMA(op.getResult(0));
       } else if (stageDiff > 1) {
         // Distance-1 loads can in most cases be pipelined in registers without
         // any performance degradation, as the schedule will usually reorder the
@@ -557,6 +538,9 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
     Value alloc = createAlloc(forOp, loadOp, asyncLoad.sharedEncoding,
                               asyncLoad.stageDiff);
     asyncLoad.alloc = alloc;
+    asyncLoad.useMulticast = loadUsesTMAMulticast(loadOp, alloc) &&
+                             llvm::any_of(loadOp->getResults(),
+                                          mlir::triton::valueFeedsMulticastMMA);
     loadGroups.insert({asyncLoad.stageDiff, {}});
     if (isTMALoad(loadOp)) {
       loadGroups[asyncLoad.stageDiff].hasTMALoad = true;
