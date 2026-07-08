@@ -968,9 +968,6 @@ public:
 
     Value v8 = b.bitcast(v, i8_ty);
     Value vAbs = b.and_(v8, b.i8_val(0x7F));
-    // Check NaN (1.0000.000 in E4M3FNUZ)
-    // Pick an arbitrary number which represents NaN in fp16 (exp=11111 and mant
-    // != 0)
 
     // Check denorms and zero
     // Here we use a LUT to map S.0000.000 ~ S.0000.111 to its corresponding
@@ -1159,7 +1156,7 @@ public:
 
     // 0x80 is the single NaN encoding in E5M2FNUZ (no -0); map it to an fp16
     // NaN.
-    o = b.select(b.icmp_eq(v, b.i8_val(0x80)), b.int_val(16, 0x7E00), o);
+    o = b.select(b.icmp_eq(v, b.i8_val(0x80)), b.i16_val(0x7E00), o);
 
     return b.bitcast(o, f16_ty);
   }
