@@ -1268,8 +1268,13 @@ public:
         int64_t nonKDim = idx == 0 ? valShape[0] : valShape[1];
         int64_t k = idx == 0 ? valShape[1] : valShape[0];
         ScaleDotElemType &elemType = idx == 0 ? aElemType : bElemType;
+        bool kPack = idx == 0 ? dotOp.getLhsKPack() : dotOp.getRhsKPack();
         int packSize = elemType == ScaleDotElemType::E2M1 ? 2 : 1;
-        shape = {nonKDim, k * packSize / scaleFactor};
+        if (kPack)
+          k *= packSize;
+        else
+          nonKDim *= packSize;
+        shape = {nonKDim, k / scaleFactor};
         std::tie(scaleType, scaleValue) = getDefaultScaleTypeValue(idx);
       } else {
         scaleType = scale.getType().getElementType();

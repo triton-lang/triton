@@ -466,3 +466,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @wmma_dot_scaled_mxfp4_mxfp4_n_packed(
+      %arg0: tensor<64x32xi8, #blocked>,
+      %arg1: tensor<64x64xi8, #blocked1>,
+      %arg2: tensor<64x128x!tt.ptr<f32>, #blocked3>
+      ) {
+    // CHECK-DAG: %[[ASCALE:.+]] = arith.constant dense<127> : tensor<64x2xi8, {{.*}}>
+    // CHECK-DAG: %[[BSCALE:.+]] = arith.constant dense<127> : tensor<128x2xi8, {{.*}}>
+    // CHECK: %[[C:.+]] = ttg.convert_layout {{.*}} : tensor<64x128xf32, {{.*}}> -> tensor<64x128xf32, #mma>
+    // CHECK: %[[A:.+]] = ttg.convert_layout {{.*}} : tensor<64x32xi8, {{.*}}> -> tensor<64x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 16}>>
+    // CHECK: %[[B:.+]] = ttg.convert_layout {{.*}} : tensor<64x64xi8, {{.*}}> -> tensor<64x64xi8, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 16}>>
+    // CHECK: tt.dot_scaled %[[A]] scale {{.*}}, %[[B]] scale {{.*}}, %[[C]] lhs = e2m1 rhs = e2m1
+    // CHECK-SAME: tensor<64x32xi8, {{.*}}>, tensor<64x2xi8, {{.*}}> * tensor<64x64xi8, {{.*}}>, tensor<128x2xi8, {{.*}}> -> tensor<64x128xf32, #mma>
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x128xf32, #blocked3>
+    %1 = tt.dot_scaled %arg0, %arg1, %cst lhs = e2m1 rhs = e2m1 {fastMath = false, lhs_k_pack = true, rhs_k_pack = false} : tensor<64x32xi8, #blocked> * tensor<64x64xi8, #blocked1> -> tensor<64x128xf32, #blocked3>
+    tt.store %arg2, %1 : tensor<64x128x!tt.ptr<f32>, #blocked3>
+    tt.return
+  }
+}
