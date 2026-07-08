@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 from test_mxfp import MXFP4Tensor, MXScaleTensor
 import re
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna, is_hip_gfx1250
+from triton._internal_testing import is_cuda, is_rubin, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna, is_hip_gfx1250
 
 
 def f8_to_f16(x, dtype):
@@ -403,7 +403,7 @@ def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device)
         if (BLOCK_M == 256 or BLOCK_N == 256) and BLOCK_K == 256:
             pytest.skip("Config requires too much shared memory")
 
-    if BLOCK_N == 256 and BLOCK_K == 256:
+    if not is_rubin() and BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = min(NUM_STAGES, 2)
     torch.manual_seed(42)
     dtype_src_str = "float8e5"
@@ -789,10 +789,11 @@ def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A
 @pytest.mark.parametrize("USE_2D_SCALE_LOAD", [False, True])
 @pytest.mark.skipif(is_hip() or torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
 def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_2D_SCALE_LOAD, device):
-    if BLOCK_N == 256 and BLOCK_K == 256:
-        NUM_STAGES = min(NUM_STAGES, 2)
-    elif BLOCK_K == 256:
-        NUM_STAGES = min(NUM_STAGES, 3)
+    if not is_rubin():
+        if BLOCK_N == 256 and BLOCK_K == 256:
+            NUM_STAGES = min(NUM_STAGES, 2)
+        elif BLOCK_K == 256:
+            NUM_STAGES = min(NUM_STAGES, 3)
     # since the block size are big we use num_warps = 8 to avoid pressure problems.
     num_warps = 8
     torch.manual_seed(42)
@@ -1217,7 +1218,7 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
             pytest.skip("Config requires too much shared memory")
     if not PACK_B_ALONG_K and B_DATA_TYPE != "float4":
         pytest.skip("Pack along K can only be False for float4")
-    if BLOCK_N == 256 and BLOCK_K == 256:
+    if not is_rubin() and BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = 2
 
     torch.manual_seed(42)

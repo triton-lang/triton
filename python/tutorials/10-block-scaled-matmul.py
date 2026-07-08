@@ -140,6 +140,10 @@ def supports_block_scaling():
     return (is_cuda() and torch.cuda.get_device_capability()[0] in [10, 11]) or is_hip_cdna4()
 
 
+def is_rubin():
+    return torch.cuda.get_device_capability() == (10, 7)
+
+
 if is_cuda() and torch.cuda.get_device_capability()[0] in [10, 11]:
     from triton._C.libtriton import nvidia
     cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
@@ -410,11 +414,16 @@ def initialize_block_scaled(M, N, K, block_scale_type="nvfp4", compute_reference
         b_scale_ref = unpack_scale(b_scale_ref).repeat_interleave(VEC_SIZE, dim=1).T.contiguous()[:K, :N]
         reference = torch.matmul(a_ref.to(torch.float32) * a_scale_ref, b_ref * b_scale_ref)
 
+    if is_rubin():
+        num_stages = 6
+    else:
+        num_stages = 4
+
     configs = {
         "BLOCK_SIZE_M": BLOCK_M,
         "BLOCK_SIZE_N": BLOCK_N,
         "BLOCK_SIZE_K": BLOCK_K,
-        "num_stages": 4,
+        "num_stages": num_stages,
         "ELEM_PER_BYTE_A": ELEM_PER_BYTE_A,
         "ELEM_PER_BYTE_B": ELEM_PER_BYTE_B,
         "VEC_SIZE": VEC_SIZE,

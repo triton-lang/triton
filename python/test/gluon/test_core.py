@@ -11,6 +11,7 @@ from triton._internal_testing import (
     is_ampere_or_newer,
     is_blackwell,
     is_blackwell_ultra,
+    is_rubin,
     is_hip_rdna,
     is_hip_rdna3,
     is_hip_rdna4,
@@ -4786,7 +4787,7 @@ def tmem_reduction_kernel(
     ttgl.store(red_ptr + offs_1d, reduced)
 
 
-@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires Blackwell Ultra")
+@pytest.mark.skipif(not (is_blackwell_ultra() or is_rubin()), reason="Requires Blackwell Ultra or Rubin")
 @pytest.mark.parametrize("red_op", ["min", "max"])
 @pytest.mark.parametrize("use_abs", [False, True])
 @pytest.mark.parametrize("propagate_nan", [tl.PropagateNan.NONE, tl.PropagateNan.ALL])
@@ -4877,7 +4878,8 @@ def test_clc_basic(num_ctas):
 
     dev_props = torch.cuda.get_device_properties("cuda")
     num_sms = dev_props.multi_processor_count
-    smem_size = dev_props.shared_memory_per_block_optin
+    device = triton.runtime.driver.active.get_current_device()
+    smem_size = max_shared_mem(device)
     grid = 2 * (num_sms // num_ctas)
 
     was_launched = torch.zeros([grid], dtype=torch.bool, device="cuda")
