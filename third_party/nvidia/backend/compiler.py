@@ -324,7 +324,6 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.ttir.add_loop_aware_cse(pm)
         passes.common.add_symbol_dce(pm)
-        nvidia.passes.ttnvgpuir.add_hoist_mbarrier_lifecycle(pm, capability)
         nvidia.passes.ttnvgpuir.add_fence_insertion(pm, capability)
         nvidia.passes.ttnvgpuir.add_lower_mma(pm)
         passes.common.add_sccp(pm)
@@ -335,6 +334,8 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_remove_layout_conversions(pm)
             passes.common.add_canonicalizer(pm)
             passes.common.add_cse(pm)
+
+        nvidia.passes.ttnvgpuir.add_hoist_mbarrier_lifecycle(pm, capability)
 
         pm.run(mod, 'make_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()

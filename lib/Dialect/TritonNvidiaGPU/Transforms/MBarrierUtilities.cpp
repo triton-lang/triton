@@ -57,6 +57,8 @@ bool requiresCrossCTAMBarrierInitSync(
   if (isCrossCTAMBarrier(barrier, numCTAs))
     return true;
 
+  // Or if it's used by a multi-CTA consumer that broadcasts barrier state
+  // across CTAs even though the barrier allocation itself looks per-CTA.
   return funcOp
       ->walk<WalkOrder::PreOrder>([&](Operation *op) {
         if (isCrossCTAConsumer(op, aliasesBarrier))
