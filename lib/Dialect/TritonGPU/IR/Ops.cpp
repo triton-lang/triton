@@ -1201,12 +1201,12 @@ void WarpSpecializeOp::getSuccessorRegions(
   // And the default region branches transparently back to the parent.
   if (src.getTerminatorPredecessorOrNull()->getParentRegion() ==
       &getDefaultRegion())
-    successors.push_back(RegionSuccessor::parent());
+    successors.push_back(RegionSuccessor(getOperation()));
 }
 
 ValueRange WarpSpecializeOp::getSuccessorInputs(RegionSuccessor successor) {
   // When returning to parent, the successor inputs are the op results.
-  return successor.isParent() ? getResults() : ValueRange();
+  return successor.isOperation() ? getResults() : ValueRange();
 }
 
 void WarpSpecializePartitionsOp::getSuccessorRegions(

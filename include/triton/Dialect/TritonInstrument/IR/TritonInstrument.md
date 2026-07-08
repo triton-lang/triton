@@ -205,12 +205,13 @@ for the cluster and touches all CTA rows.
 For direct memdesc accesses, ConSan derives the possible recipient CTA rows
 from the same block-local register-to-shared layout conversion used by
 lowering. This covers `ttg.local_load`, `ttg.local_store`, and source-backed
-`ttg.local_alloc`. For `ttg.local_gather` and `ttg.local_scatter`, the runtime
-index replaces one logical coordinate, so ConSan additionally spans that
-index's layout bases. In each case the issuing CTA is fixed while the other
-input bases are spanned, producing a static conservative recipient set for the
-full buffer without defaulting every access to the whole cluster. Cross-CTA
-affine subslices are rejected as unsupported by BufferRegion analysis.
+`ttg.local_alloc`. For `ttg.local_gather`, `ttg.local_scatter`, and
+`ttg.local_atomic_scatter_rmw`, the runtime index replaces one logical
+coordinate, so ConSan additionally spans that index's layout bases. In each
+case the issuing CTA is fixed while the other input bases are spanned,
+producing a static conservative recipient set for the full buffer without
+defaulting every access to the whole cluster. Cross-CTA affine subslices are
+rejected as unsupported by BufferRegion analysis.
 
 ## Barrier Synchronization
 
@@ -296,9 +297,10 @@ The common hook implementation covers these TritonGPU operations:
 - `ttg.local_load` and `ttg.local_gather`: barrier-tracked shared-memory
   reads. A gather conservatively covers its full source descriptor because its
   indices are runtime values.
-- `ttg.local_store` and `ttg.local_scatter`: barrier-tracked shared-memory
-  writes. A scatter conservatively covers its full destination descriptor
-  because its indices are runtime values.
+- `ttg.local_store`, `ttg.local_scatter`, and
+  `ttg.local_atomic_scatter_rmw`: barrier-tracked shared-memory writes. Scatter
+  and atomic scatter RMW conservatively cover their full destination
+  descriptors because their indices are runtime values.
 - `ttg.local_alloc` with a source: barrier-tracked shared-memory write.
 
 These shared-memory effects are generic-proxy accesses for the proxy-ordering

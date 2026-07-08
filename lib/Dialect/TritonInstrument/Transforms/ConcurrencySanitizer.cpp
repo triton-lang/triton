@@ -531,6 +531,12 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
                                            scatter.getValues().getType(),
                                            scatter.getAxis()));
   }
+  if (auto atomic = dyn_cast<ttg::LocalAtomicScatterRMWOp>(op)) {
+    return getLocalMemoryRecipientCTAs(
+        b, getLocalGatherScatterConversion(atomic.getDst().getType(),
+                                           atomic.getValues().getType(),
+                                           atomic.getAxis()));
+  }
   if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     if (tmaLoad.getMulticast())
       return getMulticastRecipientCTAs(b, tmaLoad.getResult());
