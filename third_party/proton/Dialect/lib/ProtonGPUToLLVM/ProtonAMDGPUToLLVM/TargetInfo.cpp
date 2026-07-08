@@ -14,15 +14,11 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
   llvm::AMDGPU::GPUKind GPUKind = llvm::AMDGPU::parseArchAMDGCN(this->arch);
 
   // gfx12 (incl. gfx1250) removed s_memtime and its llvm.amdgcn.s.memtime
-  // intrinsic. On MI400 the shader-cycles counter was widened from 20 to
-  // 64 bits and *moved out of the HW_REGISTERS[] array that backs
-  // s_getreg_b32*; per the MI400 Shader Programming Guide §1.1.1.1:
-  //   "SHADER_CYCLES is now 64 bits (was 20), and can only be read with
-  //    S_GET_SHADER_CYCLES, not S_GETREG."
-  // §3.4.13 "Time" confirms: the method to read the cycle counter is the
-  // dedicated SOP1 instruction S_GET_SHADER_CYCLES_U64, which returns the
-  // full 64-bit counter in a scalar-register pair. Trying to read
-  // hwreg(HW_REG_SHADER_CYCLES_LO/HI) on gfx1250 assembles (LLVM's
+  // intrinsic. The shader-cycles counter was widened from 20 to 64 bits and
+  // moved out of the HW_REGISTERS[] array that backs s_getreg_b32*. It can
+  // only be read via the dedicated SOP1 instruction S_GET_SHADER_CYCLES_U64,
+  // which returns the full 64-bit counter in a scalar-register pair. Trying
+  // to read hwreg(HW_REG_SHADER_CYCLES_LO/HI) on gfx1250 assembles (LLVM's
   // subtarget table still accepts the legacy ids 29/30) but reads 0 at
   // runtime because the register is no longer wired to that path.
   //
