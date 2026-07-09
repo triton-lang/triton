@@ -108,11 +108,11 @@ def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_l
 
     Args:
         block_m: M dimension tile size of the *shared* operand buffer.  Must be
-            at least ``4 * instr_shape[0]`` because one partition in M dimension
-            must be at least 2 tiles wide.
+            at least ``4 * instr_shape[0]`` because the M dimension is split into
+            2 partitions and each partition must be at least 2 instructions wide.
         block_n: N dimension tile size of the *shared* operand buffer.  Must be
-            at least ``2 * instr_shape[1]`` since one partition in N dimension
-            must be at least 1 tile wide.
+            at least ``2 * instr_shape[1]`` because the N dimension is split into
+            2 partitions and each partition must be at least 1 instruction wide.
         original_layout_a: ``PaddedSharedLayout`` for operand A.  Shape is
             ``[block_m, block_k]`` when not transposed (K contiguous) and
             ``[block_k, block_m]`` when transposed (M contiguous).
@@ -125,8 +125,10 @@ def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_l
             the contiguous axis instead of K.
         b_transposed: Whether B is transposed in shared memory, i.e. K is
             the contiguous axis instead of N.
-        slice_m: M dimension of a dot operation after slicing. Defaults to ``block_m`` (unsliced).
-        slice_n: N dimension of a dot operation after slicing. Defaults to ``block_n`` (unsliced).
+        slice_m: M dimension of a dot operation after slicing.  Defaults to
+            ``block_m`` (unsliced).
+        slice_n: N dimension of a dot operation after slicing.  Defaults to
+            ``block_n`` (unsliced).
 
     Returns:
         A tuple ``(shared_layout_a, shared_layout_b, wmma_layout)``.  The
@@ -193,8 +195,9 @@ def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_l
     # operand data blocks in a single instruction, which is necessary precondition
     # for avoiding LDS partition conflicts.
     #
-    # The above defined CTALayout tile will then be repeated across the full block (block_m x block_n).
-    # However, this is not always the optimal way to partition the full block.
+    # The above defined CTALayout tile will then be repeated across the full
+    # block (block_m x block_n).  However, this is not always the optimal way to
+    # partition the full block.
     # For example, if the block 64x128, the block would look like this:
     #
     #   M=0:  w0 w1 w0 w1 w0 w1 w0 w1
@@ -202,40 +205,43 @@ def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_l
     #   M=2:  w0 w1 w0 w1 w0 w1 w0 w1
     #   M=3:  w2 w3 w2 w3 w2 w3 w2 w3
     #
-    # From the TDM perspective, wave can only transfer one strided logical piece at a time.
-    # Since we have 8 logical pieces for B tensor above, and only 4 warps, TDM transaction will be split
-    # into 2 instructions, which is not efficient.
+    # From the TDM perspective, wave can only transfer one strided logical piece
+    # at a time.  Since we have 8 logical pieces for B tensor above, and only 4
+    # warps, TDM transaction will be split into 2 instructions, which is not
+    # efficient.
     #
-    # to avoid this, we can increase number of consecutive tiles the wave computes.
-    # In the above example, we could create following CTA layout:
+    # to avoid this, we can increase number of consecutive instructions the wave
+    # computes.  In the above example, we could create following CTA layout:
     #
     #   M=0:  w0 w0 w0 w0 w1 w1 w1 w1
     #   M=1:  w2 w2 w2 w2 w3 w3 w3 w3
     #   M=2:  w0 w0 w0 w0 w1 w1 w1 w1
     #   M=3:  w2 w2 w2 w2 w3 w3 w3 w3
     #
-    # This way, each warp can read 2 larger strided logical pieces at a time, which will produce 1 TDM transaction.
-    # In addition to having less transaction, this can also help with global bandwidth, because in N contiguous
-    # tensors, it's better if the cache line is not split across multiple waves. This way we can read the whole
-    # cache line with a single wave.
+    # This way, each warp can read 2 larger strided logical pieces at a time,
+    # which will produce 1 TDM transaction.
+    # In addition to having less transaction, this can also help with global
+    # bandwidth, because in N contiguous tensors, it's better if the cache line
+    # is not split across multiple waves. This way we can read the whole cache
+    # line with a single wave.
 
-    tiles_per_slice_m = slice_m // INSTR_M
-    tiles_per_slice_n = slice_n // INSTR_N
-    tiles_per_partition_m = 2
-    tiles_per_partition_n = 1
+    instr_per_slice_m = slice_m // INSTR_M
+    instr_per_slice_n = slice_n // INSTR_N
+    instr_per_partition_m = 2
+    instr_per_partition_n = 1
 
     # Each slice must cover at least one instruction tile per partition piece,
     # otherwise piece_m / piece_n would round down to 0 and produce a degenerate
     # (non-surjective) WMMA layout with zero warp/register bases.
-    assert tiles_per_slice_m >= NUM_PARTITIONS * tiles_per_partition_m, \
+    assert instr_per_slice_m >= NUM_PARTITIONS * instr_per_partition_m, \
         f"slice_m ({slice_m}) must be at least " \
-        f"{NUM_PARTITIONS * tiles_per_partition_m} * instr_shape[0] ({INSTR_M})"
-    assert tiles_per_slice_n >= NUM_PARTITIONS * tiles_per_partition_n, \
+        f"{NUM_PARTITIONS * instr_per_partition_m} * instr_shape[0] ({INSTR_M})"
+    assert instr_per_slice_n >= NUM_PARTITIONS * instr_per_partition_n, \
         f"slice_n ({slice_n}) must be at least " \
-        f"{NUM_PARTITIONS * tiles_per_partition_n} * instr_shape[1] ({INSTR_N})"
+        f"{NUM_PARTITIONS * instr_per_partition_n} * instr_shape[1] ({INSTR_N})"
 
-    piece_m = tiles_per_slice_m // (NUM_PARTITIONS * tiles_per_partition_m)
-    piece_n = tiles_per_slice_n // (NUM_PARTITIONS * tiles_per_partition_n)
+    piece_m = instr_per_slice_m // (NUM_PARTITIONS * instr_per_partition_m)
+    piece_n = instr_per_slice_n // (NUM_PARTITIONS * instr_per_partition_n)
 
     # Registers that walk the contiguous tiles inside one piece.
     m_within = [1 << i for i in range(_log2(piece_m))]
@@ -244,7 +250,7 @@ def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_l
     # (within-slice group repeats).
     m_group = [piece_m * 2]
 
-    warp_bases = [[tiles_per_slice_m // 2, piece_n], [piece_m, 0]]
+    warp_bases = [[instr_per_slice_m // 2, piece_n], [piece_m, 0]]
     reg_bases = []
 
     if num_warps == 8:

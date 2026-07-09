@@ -96,10 +96,6 @@ class MXFPGEMMConfig:
     # the packed (doubled) compute-path width. The store reduces it by 2.
     ACTIVATION: gl.constexpr
 
-    # When set, build partitioned shared layouts and a partition-aware WMMA
-    # layout (via make_partitioned_dot_layouts) to avoid LDS partition conflicts.
-    RESOLVE_PARTITION_CONFLICTS: gl.constexpr
-
     @gluon.constexpr_function
     def __init__(self, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A, DTYPE_B, SCALE_BLOCK, NUM_BUFFERS, TRANSPOSE_B, WITH_A_SCALE,
                  SCALE_PRESHUFFLE, NUM_WARPS, ASYNC_COPY_SCALE=False, NUM_SUBTILES=(1, 1, 1), L2_PREFETCH_DISTANCE=0,
@@ -122,7 +118,6 @@ class MXFPGEMMConfig:
         self.NUM_SUBTILES = gl.constexpr(NUM_SUBTILES)
         self.L2_PREFETCH_DISTANCE = gl.constexpr(L2_PREFETCH_DISTANCE)
         self.ACTIVATION = gl.constexpr(ACTIVATION)
-        self.RESOLVE_PARTITION_CONFLICTS = gl.constexpr(RESOLVE_PARTITION_CONFLICTS)
         if ACTIVATION == "swiglu":
             assert (BLOCK_N // NUM_SUBTILES[1]) % 2 == 0, \
             "SwiGLU requires (BLOCK_N // NUM_SUBTILES[1]) % 2 == 0"
