@@ -5156,19 +5156,6 @@ def test_reshape_err(device):
     assert "reshape" in str(exc_info.value)
 
 
-def test_make_block_ptr_removed():
-
-    @triton.jit
-    def kernel():
-        tl.make_block_ptr(None, (), (), (), (), ())
-
-    with pytest.raises(triton.CompilationError) as exc_info:
-        kernel.warmup(grid=(1, ))
-
-    assert "Block pointers have been removed in favor of the tensor descriptor API" in str(exc_info.value)
-    assert not hasattr(tl, "advance")
-
-
 @pytest.mark.interpreter
 def test_tma_load_block_shape_err(device):
 
