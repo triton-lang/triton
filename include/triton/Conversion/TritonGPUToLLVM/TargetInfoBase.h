@@ -107,6 +107,13 @@ public:
     return {32, 32};
   }
 
+  // Returns whether load and store instructions use uniform shared-memory bank
+  // configurations across vector widths, in the same {load, store} order as
+  // getSharedLdStTiles().
+  virtual std::pair<bool, bool> hasUniformSharedMemoryLdStBanks() const {
+    return {true, true};
+  }
+
   virtual int getSharedAddressSpace() const = 0;
 
   virtual int getAddressSpace(Attribute addressSpace) const = 0;

@@ -782,17 +782,21 @@ TEST_F(BankConflictTest, LowVectorF32MmaConvertKeeps64BankRegisterBasisHigh) {
   EXPECT_EQ(getVecBitwidthLdSt(srcLL, dstLL, /*bitwidth=*/32), 32);
 
   auto smem = optimalSwizzlingLdSt(srcLL, dstLL, /*bitwidth=*/32,
-                                   /*numBanks=*/64);
+                                   /*numBanksSrc=*/32, /*numBanksDst=*/32,
+                                   /*srcTile=*/{}, /*dstTile=*/{},
+                                   /*uniformBanksSrc=*/true,
+                                   /*uniformBanksDst=*/false);
   auto [readConflicts, writeConflicts] =
-      bankConflictsLdSt(srcLL, dstLL, smem, /*bitwidth=*/32, /*numBanks=*/64);
+      bankConflictsLdSt(srcLL, dstLL, smem, /*bitwidth=*/32, /*numBanksSrc=*/32,
+                        /*numBanksDst=*/32);
   EXPECT_EQ(readConflicts, 0);
   EXPECT_EQ(writeConflicts, 0);
-  EXPECT_EQ(smem.getInDimSize(S("bank")), 64);
-  EXPECT_EQ(smem.getInDimSize(S("segment")), 2);
+  EXPECT_EQ(smem.getInDimSize(S("bank")), 32);
+  EXPECT_EQ(smem.getInDimSize(S("segment")), 4);
 
   auto dstToSmem = dstLL.invertAndCompose(smem);
-  EXPECT_EQ(dstToSmem.getBasis(S("register"), /*pos=*/0, S("bank")), 32);
-  EXPECT_EQ(dstToSmem.getBasis(S("register"), /*pos=*/0, S("segment")), 0);
+  EXPECT_EQ(dstToSmem.getBasis(S("register"), /*pos=*/0, S("bank")), 0);
+  EXPECT_EQ(dstToSmem.getBasis(S("register"), /*pos=*/0, S("segment")), 2);
 }
 
 } // namespace

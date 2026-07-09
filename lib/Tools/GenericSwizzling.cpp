@@ -683,7 +683,8 @@ LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
                                   const LinearLayout &dst, int32_t bitwidth,
                                   int32_t numBanksSrc, int32_t numBanksDst,
                                   LocalMemOpTile srcTile,
-                                  LocalMemOpTile dstTile) {
+                                  LocalMemOpTile dstTile, bool uniformBanksSrc,
+                                  bool uniformBanksDst) {
   auto *ctx = src.getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
@@ -719,10 +720,10 @@ LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
     auto kBank = StringAttr::get(ctx, "bank");
     const auto &banks = flatten(smemFlat, kBank);
     for (auto [i, r] : llvm::enumerate(banks)) {
-      if (llvm::is_contained(regSrc, r)) {
+      if (uniformBanksSrc && llvm::is_contained(regSrc, r)) {
         idxBanksInRegSrc.push_back(i);
       }
-      if (llvm::is_contained(regDst, r)) {
+      if (uniformBanksDst && llvm::is_contained(regDst, r)) {
         idxBanksInRegDst.push_back(i);
       }
     }

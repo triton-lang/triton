@@ -38,12 +38,10 @@ namespace mlir {
 //===----------------------------------------------------------------------===//
 namespace triton {
 
-unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
-                                       const LinearLayout &dstLayout,
-                                       int bitwidth, int numBanksSrc,
-                                       int numBanksDst,
-                                       gpu::LocalMemOpTile srcTile,
-                                       gpu::LocalMemOpTile dstTile) {
+unsigned getNumScratchElemsSwizzledCvt(
+    const LinearLayout &srcLayout, const LinearLayout &dstLayout, int bitwidth,
+    int numBanksSrc, int numBanksDst, gpu::LocalMemOpTile srcTile,
+    gpu::LocalMemOpTile dstTile, bool uniformBanksSrc, bool uniformBanksDst) {
   auto *ctx = srcLayout.getInDimNames().begin()->getContext();
   auto srcLayoutNoBroadcast =
       actionRemoveBroadcastedRegs(srcLayout).apply(srcLayout);
@@ -51,7 +49,7 @@ unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
       actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
   auto smem = gpu::optimalSwizzlingLdSt(
       srcLayoutNoBroadcast, dstLayoutNoBroadcast, bitwidth, numBanksSrc,
-      numBanksDst, srcTile, dstTile);
+      numBanksDst, srcTile, dstTile, uniformBanksSrc, uniformBanksDst);
   auto reps = smem.getInDimSize(StringAttr::get(ctx, "reps"));
   // The smem has the same CGA layout as srcLayout, so use that instead.
   // Remove the number of elements duplicated in the CGA layout.
@@ -60,14 +58,14 @@ unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
   return smem.getTotalOutDimSize() / (reps * nBlocks);
 }
 
-unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
-                                       RankedTensorType dstTy, int numBanksSrc,
-                                       int numBanksDst,
-                                       gpu::LocalMemOpTile srcTile,
-                                       gpu::LocalMemOpTile dstTile) {
+unsigned getNumScratchElemsSwizzledCvt(
+    RankedTensorType srcTy, RankedTensorType dstTy, int numBanksSrc,
+    int numBanksDst, gpu::LocalMemOpTile srcTile, gpu::LocalMemOpTile dstTile,
+    bool uniformBanksSrc, bool uniformBanksDst) {
   return getNumScratchElemsSwizzledCvt(
       gpu::toLinearLayout(srcTy), gpu::toLinearLayout(dstTy),
-      getBitwidth(srcTy), numBanksSrc, numBanksDst, srcTile, dstTile);
+      getBitwidth(srcTy), numBanksSrc, numBanksDst, srcTile, dstTile,
+      uniformBanksSrc, uniformBanksDst);
 }
 
 // Both `atomic_cas` and `atomic_rmw` may need scratch memory to store values

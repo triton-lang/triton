@@ -474,11 +474,14 @@ private:
                                                          getBitwidth(inputTy));
       auto [numBanksDst, numBanksSrc] =
           targetInfo.getSharedMemoryLdStBanks(vecBitwidth);
+      auto [uniformBanksDst, uniformBanksSrc] =
+          targetInfo.hasUniformSharedMemoryLdStBanks();
       auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
-      auto bytes = getNumScratchElemsSwizzledCvt(
-                       srcLayout, dstLayout, getBitwidth(inputTy), numBanksSrc,
-                       numBanksDst, srcTile, dstTile) *
-                   (getBitwidth(inputTy) / 8);
+      auto bytes =
+          getNumScratchElemsSwizzledCvt(
+              srcLayout, dstLayout, getBitwidth(inputTy), numBanksSrc,
+              numBanksDst, srcTile, dstTile, uniformBanksSrc, uniformBanksDst) *
+          (getBitwidth(inputTy) / 8);
       offset += bytes;
     }
     return offsets;

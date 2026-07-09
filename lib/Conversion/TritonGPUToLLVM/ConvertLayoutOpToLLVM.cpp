@@ -162,10 +162,12 @@ struct ConvertLayoutOpConversion
         triton::gpu::getVecBitwidthLdSt(srcLayout, dstLayout, bitwidth);
     auto [numBanksDst, numBanksSrc] =
         targetInfo.getSharedMemoryLdStBanks(vecBitwidth);
+    auto [uniformBanksDst, uniformBanksSrc] =
+        targetInfo.hasUniformSharedMemoryLdStBanks();
     auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
-    auto smem =
-        optimalSwizzlingLdSt(srcLayout, dstLayout, bitwidth, numBanksSrc,
-                             numBanksDst, srcTile, dstTile);
+    auto smem = optimalSwizzlingLdSt(srcLayout, dstLayout, bitwidth,
+                                     numBanksSrc, numBanksDst, srcTile, dstTile,
+                                     uniformBanksSrc, uniformBanksDst);
 
     // Extract reps from smem
     auto kReg = str_attr("register");

@@ -24,19 +24,17 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
 /// Returns whether an operation uses scratch memory across CTAs.
 bool hasCrossCTAScratch(Operation *op);
 
-unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
-                                       const LinearLayout &dstLayout,
-                                       int bitwidth, int numBanksSrc = 32,
-                                       int numBanksDst = 32,
-                                       gpu::LocalMemOpTile srcTile = {},
-                                       gpu::LocalMemOpTile dstTile = {});
+unsigned getNumScratchElemsSwizzledCvt(
+    const LinearLayout &srcLayout, const LinearLayout &dstLayout, int bitwidth,
+    int numBanksSrc = 32, int numBanksDst = 32,
+    gpu::LocalMemOpTile srcTile = {}, gpu::LocalMemOpTile dstTile = {},
+    bool uniformBanksSrc = true, bool uniformBanksDst = true);
 
-unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
-                                       RankedTensorType dstTy,
-                                       int numBanksSrc = 32,
-                                       int numBanksDst = 32,
-                                       gpu::LocalMemOpTile srcTile = {},
-                                       gpu::LocalMemOpTile dstTile = {});
+unsigned getNumScratchElemsSwizzledCvt(
+    RankedTensorType srcTy, RankedTensorType dstTy, int numBanksSrc = 32,
+    int numBanksDst = 32, gpu::LocalMemOpTile srcTile = {},
+    gpu::LocalMemOpTile dstTile = {}, bool uniformBanksSrc = true,
+    bool uniformBanksDst = true);
 
 } // namespace triton
 
