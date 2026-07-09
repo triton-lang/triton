@@ -432,7 +432,7 @@ Interfaces: `ConditionallySpeculatable`
 
 | Result | Description |
 | :----: | ----------- |
-| `results` | variadic of any type |
+| `results` | variadic of any non-token type |
 
 
 
@@ -484,6 +484,6 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `values` | variadic of any type |
+| `values` | variadic of any non-token type |
 
 

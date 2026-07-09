@@ -567,7 +567,7 @@ Traits: `SingleBlock`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | variadic of any type |
+| `result` | variadic of any non-token type |
 
 
 
@@ -591,7 +591,7 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `result` | variadic of any type |
+| `result` | variadic of any non-token type |
 
 
 
@@ -952,7 +952,7 @@ Interfaces: `ConditionallySpeculatable`, `RegionBranchOpInterface`
 
 | Result | Description |
 | :----: | ----------- |
-| `defaultPassthrough` | variadic of any type |
+| `defaultPassthrough` | variadic of any non-token type |
 
 
 
@@ -971,7 +971,7 @@ Interfaces: `ConditionallySpeculatable`, `RegionBranchOpInterface`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `explicitCaptures` | variadic of any type |
+| `explicitCaptures` | variadic of any non-token type |
 
 
 
@@ -1005,6 +1005,6 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `values` | variadic of any type |
+| `values` | variadic of any non-token type |
 
 

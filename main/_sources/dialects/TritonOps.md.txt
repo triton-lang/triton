@@ -298,13 +298,13 @@ Interfaces: `ArgAndResultAttrsOpInterface`, `CallOpInterface`, `SymbolUserOpInte
 
 | Operand | Description |
 | :-----: | ----------- |
-| `operands` | variadic of any type |
+| `operands` | variadic of any non-token type |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| &laquo;unnamed&raquo; | variadic of any type |
+| &laquo;unnamed&raquo; | variadic of any non-token type |
 
 
 
@@ -1261,7 +1261,7 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `result` | variadic of any type |
+| `result` | variadic of any non-token type |
 
 
 
@@ -1480,7 +1480,7 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `result` | variadic of any type |
+| `result` | variadic of any non-token type |
 
 
 
@@ -1564,7 +1564,7 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `srcs` | variadic of any type |
+| `srcs` | variadic of any non-token type |
 
 
 
@@ -1620,7 +1620,7 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `result` | variadic of any type |
+| `result` | variadic of any non-token type |
 
 
 

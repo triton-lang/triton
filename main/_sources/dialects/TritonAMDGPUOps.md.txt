@@ -822,7 +822,7 @@ Effects: `MemoryEffects::Effect{}`
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of any type values |
+| `result` | ranked tensor of any non-token type values |
 
 
 
@@ -960,13 +960,13 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `source` | ranked tensor of any type values |
+| `source` | ranked tensor of any non-token type values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of any type values |
+| `result` | ranked tensor of any non-token type values |
 
 
 

@@ -399,7 +399,7 @@ Effects: `MemoryEffects::Effect{}`
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | variadic of any type |
+| `result` | variadic of any non-token type |
 
 
 
