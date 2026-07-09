@@ -277,14 +277,12 @@ private:
   }
 
   Value rewriteIfPhase(scf::IfOp ifOp, Value phase, Value phaseOne,
-                       const llvm::SmallPtrSetImpl<Operation *> &waits,
-                       llvm::SmallPtrSetImpl<Operation *> &seenWaits) {
+                       const llvm::SmallPtrSetImpl<Operation *> &waits) {
     Value thenPhase =
-        rewriteBlockPhases(ifOp.thenBlock(), phase, phaseOne, waits, seenWaits);
+        rewriteBlockPhases(ifOp.thenBlock(), phase, phaseOne, waits);
     Value elsePhase = phase;
     if (ifOp.elseBlock())
-      elsePhase = rewriteBlockPhases(ifOp.elseBlock(), phase, phaseOne, waits,
-                                     seenWaits);
+      elsePhase = rewriteBlockPhases(ifOp.elseBlock(), phase, phaseOne, waits);
 
     // This if does not contain a tracked wait in either branch, so it does not
     // need to yield an updated phase.
@@ -300,20 +298,18 @@ private:
   }
 
   Value rewriteBlockPhases(Block *block, Value phase, Value phaseOne,
-                           const llvm::SmallPtrSetImpl<Operation *> &waits,
-                           llvm::SmallPtrSetImpl<Operation *> &seenWaits) {
+                           const llvm::SmallPtrSetImpl<Operation *> &waits) {
     for (Operation &op :
          llvm::make_early_inc_range(block->without_terminator())) {
       if (waits.contains(&op)) {
         auto wait = cast<ttng::WaitBarrierOp>(op);
         wait.getPhaseMutable().assign(phase);
-        seenWaits.insert(wait);
         phase = createPhaseAdvance(wait, phase, phaseOne);
         continue;
       }
 
       if (auto ifOp = dyn_cast<scf::IfOp>(op))
-        phase = rewriteIfPhase(ifOp, phase, phaseOne, waits, seenWaits);
+        phase = rewriteIfPhase(ifOp, phase, phaseOne, waits);
     }
     return phase;
   }
@@ -388,9 +384,8 @@ private:
 
     Operation *innerLoop = loopPhases.back().first;
     Value innerPhase = loopPhases.back().second;
-    llvm::SmallPtrSet<Operation *, 4> seenWaits;
-    Value nextPhase = rewriteBlockPhases(
-        getLoopBodyBlock(innerLoop), innerPhase, phaseOne, waits, seenWaits);
+    Value nextPhase = rewriteBlockPhases(getLoopBodyBlock(innerLoop),
+                                         innerPhase, phaseOne, waits);
 
     appendToLoopYield(innerLoop, nextPhase);
     Value loopResult = getLoopResultPhase(innerLoop);
