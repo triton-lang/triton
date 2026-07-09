@@ -578,6 +578,67 @@ tt.func public @extern_exp_known(%a: tensor<4xf32>) -> tensor<4xf32> {
 
 // -----
 
+// CHECK-LABEL: @float2_pack_unpack
+tt.func public @float2_pack_unpack(%a: tensor<4xf32>, %b: tensor<4xf32>) -> (tensor<4xf32>, tensor<4xf32>) {
+  // CHECK-DAG: %[[A:.*]] = tti.experimental_fpsan_embed
+  // CHECK-DAG: %[[B:.*]] = tti.experimental_fpsan_embed
+  // CHECK-DAG: %[[A64:.*]] = arith.extui %[[A]]
+  // CHECK-DAG: %[[B64:.*]] = arith.extui %[[B]]
+  // CHECK: %[[SHIFTED:.*]] = arith.shli %[[B64]]
+  // CHECK: %[[PACKED:.*]] = arith.ori %[[A64]], %[[SHIFTED]]
+  // CHECK: %[[LOW:.*]] = arith.trunci %[[PACKED]]
+  // CHECK: %[[HIGH64:.*]] = arith.shrui %[[PACKED]]
+  // CHECK: %[[HIGH:.*]] = arith.trunci %[[HIGH64]]
+  // CHECK: %[[LOW_FLOAT:.*]] = tti.experimental_fpsan_unembed %[[LOW]]
+  // CHECK: %[[HIGH_FLOAT:.*]] = tti.experimental_fpsan_unembed %[[HIGH]]
+  // CHECK-NOT: tt.elementwise_inline_asm
+  // CHECK: tt.return %[[LOW_FLOAT]], %[[HIGH_FLOAT]]
+  %packed = tt.elementwise_inline_asm "mov.b64 $0, { $1, $2 };" {constraints = "=l,r,r", packed_element = 1 : i32, pure = true} %a, %b : tensor<4xf32>, tensor<4xf32> -> tensor<4xi64>
+  %low, %high = tt.elementwise_inline_asm "mov.b64 { $0, $1 }, $2;" {constraints = "=r,=r,l", packed_element = 1 : i32, pure = true} %packed : tensor<4xi64> -> tensor<4xf32>, tensor<4xf32>
+  tt.return %low, %high : tensor<4xf32>, tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @float2_arithmetic
+tt.func public @float2_arithmetic(%a: tensor<4xi64>, %b: tensor<4xi64>, %c: tensor<4xi64>) -> (tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>) {
+  // CHECK: arith.addi
+  // CHECK: arith.subi
+  // CHECK: arith.muli
+  // CHECK: arith.muli
+  // CHECK: arith.addi
+  // CHECK-NOT: tt.elementwise_inline_asm
+  %add = tt.elementwise_inline_asm "add.f32x2 $0, $1, $2;" {constraints = "=l,l,l", packed_element = 1 : i32, pure = true} %a, %b : tensor<4xi64>, tensor<4xi64> -> tensor<4xi64>
+  %sub = tt.elementwise_inline_asm "sub.f32x2 $0, $1, $2;" {constraints = "=l,l,l", packed_element = 1 : i32, pure = true} %a, %b : tensor<4xi64>, tensor<4xi64> -> tensor<4xi64>
+  %mul = tt.elementwise_inline_asm "mul.f32x2 $0, $1, $2;" {constraints = "=l,l,l", packed_element = 1 : i32, pure = true} %a, %b : tensor<4xi64>, tensor<4xi64> -> tensor<4xi64>
+  %fma = tt.elementwise_inline_asm "fma.rn.f32x2 $0, $1, $2, $3;" {constraints = "=l,l,l,l", packed_element = 1 : i32, pure = true} %a, %b, %c : tensor<4xi64>, tensor<4xi64>, tensor<4xi64> -> tensor<4xi64>
+  tt.return %add, %sub, %mul, %fma : tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>
+}
+
+// -----
+
+// CHECK-LABEL: @float2_scalar_add
+tt.func public @float2_scalar_add(%a: i64, %b: i64) -> i64 {
+  // CHECK: arith.trunci
+  // CHECK: arith.shrui
+  // CHECK: arith.addi
+  // CHECK-NOT: tt.elementwise_inline_asm
+  %add = tt.elementwise_inline_asm "add.f32x2 $0, $1, $2;" {constraints = "=l,l,l", packed_element = 1 : i32, pure = true} %a, %b : i64, i64 -> i64
+  tt.return %add : i64
+}
+
+// -----
+
+// CHECK-LABEL: @float2_near_matches_unchanged
+tt.func public @float2_near_matches_unchanged(%a: tensor<4xi64>, %b: tensor<4xi64>) -> (tensor<4xi64>, tensor<4xi64>) {
+  // CHECK-COUNT-2: tt.elementwise_inline_asm
+  %wrong_constraints = tt.elementwise_inline_asm "add.f32x2 $0, $1, $2;" {constraints = "=l,l,r", packed_element = 1 : i32, pure = true} %a, %b : tensor<4xi64>, tensor<4xi64> -> tensor<4xi64>
+  %wrong_asm = tt.elementwise_inline_asm "add.rn.f32x2 $0, $1, $2;" {constraints = "=l,l,l", packed_element = 1 : i32, pure = true} %a, %b : tensor<4xi64>, tensor<4xi64> -> tensor<4xi64>
+  tt.return %wrong_constraints, %wrong_asm : tensor<4xi64>, tensor<4xi64>
+}
+
+// -----
+
 // CHECK-LABEL: @extern_unary_known
 tt.func public @extern_unary_known(%a: tensor<4xf32>) -> tensor<4xf32> {
   // CHECK: tti.experimental_fpsan_embed
