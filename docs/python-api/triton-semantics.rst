@@ -68,3 +68,13 @@ Assign the variable before the block so that it is defined on all paths:
         for _ in range(0, 1):
             value = 1.0
         tl.store(out_ptr, value)
+
+**Overlapping stores** Writing to the same memory address more than once within a single Triton program — for example, storing a full row and then overwriting a suffix of it — has **undefined behavior**. The compiler does not guarantee that stores are ordered by source position, and the final value at an overlapping address may differ between the compiler and the interpreter (``TRITON_INTERPRET=1``), across hardware backends, and across toolkit versions. Not all overlapping stores are detected, and the compiler may optimize either store away, reorder them, or fuse them in ways that produce results inconsistent with a last-write-wins expectation. To avoid this, compute the final value before storing:
+
+.. code-block:: python
+
+    # Correct: compute first, store once
+    out = tl.where(tail_mask, rotated, normed)
+    tl.store(x_ptr + offsets, out, mask=mask)
+
+If you encounter unexpected results from a kernel that writes to overlapping addresses, try the corrected pattern above before investigating other causes.
