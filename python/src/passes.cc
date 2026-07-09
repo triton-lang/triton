@@ -118,6 +118,8 @@ void init_plugin_passes(py::module_ &m) {
   for (const auto &plugin : mlir::triton::plugin::loadPlugins()) {
     for (const auto &pass : plugin.listPasses()) {
       std::string wrapped = std::string("add_") + pass.name;
+      if (py::hasattr(m, wrapped.c_str()))  // already registered (refresh)
+        continue;
       m.def(
           wrapped.c_str(),
           [pass](mlir::PassManager &pm, std::vector<std::string> args) {
@@ -175,4 +177,11 @@ void init_triton_passes(py::module_ &m) {
   init_gluon_passes(gluon_m);
   auto plugin_m = m.def_submodule("plugin");
   init_plugin_passes(plugin_m);
+  // Python-facing refresh: re-run init_plugin_passes for plugins injected
+  // after import triton (e.g. via TritonPlugin::registerInfo from a pybind
+  // PYBIND11_MODULE). Safe to call multiple times: init_plugin_passes skips
+  // already-registered passes via py::hasattr.
+  m.def("refresh_plugin_passes", [](py::module_ pm) {
+    init_plugin_passes(pm);
+  }, py::arg("plugin_m"));
 }

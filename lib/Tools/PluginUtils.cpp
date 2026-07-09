@@ -189,4 +189,24 @@ const std::vector<TritonPlugin> &mlir::triton::plugin::loadPlugins() {
   return plugins;
 }
 
+void TritonPlugin::registerInfo(PluginInfo *info) {
+  if (!info)
+    return;
+  if (info->apiVersion != TRITON_PLUGIN_API_VERSION)
+    llvm::reportFatalUsageError(llvm::createStringError(
+        llvm::Twine("Wrong API version on plugin '") + info->pluginName +
+        "'. Got version " + Twine(info->apiVersion) + ", supported version is " +
+        Twine(TRITON_PLUGIN_API_VERSION) + "."));
+  if (!isTritonAndPluginsVersionsMatch(info->tritonVersion))
+    llvm::reportFatalUsageError(llvm::createStringError(
+        llvm::Twine("Wrong TRITON version on plugin '") + info->pluginName +
+        "'. Got version " + Twine(info->tritonVersion) +
+        ", supported version is " + Twine(TRITON_VERSION) + "."));
+  // The .so is already loaded by Python import; no dlopen needed. An empty
+  // DynamicLibrary is fine — registerDialects/listPasses only use info.
+  TritonPlugin plugin{"", llvm::sys::DynamicLibrary()};
+  plugin.info = info;
+  plugins.push_back(std::move(plugin));
+}
+
 #undef DEBUG_TYPE

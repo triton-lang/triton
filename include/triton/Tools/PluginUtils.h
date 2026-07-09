@@ -157,6 +157,12 @@ public:
   /// with an LLVM usage error if the plugin provides invalid \c PluginInfo.
   const std::vector<Op> listOps() const;
 
+  /// Register a plugin's PluginInfo directly, without dlopen. For plugins
+  /// loaded via Python import (pybind PYBIND11_MODULE) where the .so is
+  /// already loaded by Python. The info must outlive the program (return a
+  /// pointer to a static struct, as with tritonGetPluginInfo).
+  static void registerInfo(PluginInfo *info);
+
 private:
   TritonPlugin(const std::string &filename,
                const llvm::sys::DynamicLibrary &library)
