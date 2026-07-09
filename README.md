@@ -40,6 +40,22 @@ Binary wheels are available for CPython 3.10-3.14.
 
 # Install from source
 
+## Prerequisites
+
+Install system-level build dependencies before building Triton from source.
+
+**Ubuntu/Debian:**
+
+```shell
+sudo apt install zlib1g-dev libxml2-dev build-essential
+```
+
+**CentOS/RHEL:**
+
+```shell
+sudo yum install zlib-devel libxml2-devel gcc gcc-c++
+```
+
 ```shell
 git clone https://github.com/triton-lang/triton.git
 cd triton
