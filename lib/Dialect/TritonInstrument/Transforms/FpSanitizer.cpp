@@ -12,8 +12,10 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringSwitch.h"
 #include <cassert>
+#include <cctype>
 #include <functional>
 
 namespace mlir {
@@ -1848,6 +1850,165 @@ std::optional<scf::ForOp> emitMmaEmulationLoops(
 // Patterns
 //----------------------------------------
 
+enum class Float2AsmKind { Pack, Unpack, Add, Sub, Mul, Fma };
+
+std::optional<Float2AsmKind> getFloat2AsmKind(tt::ElementwiseInlineAsmOp op) {
+  if (!op.getPure() || op.getPackedElement() != 1)
+    return std::nullopt;
+
+  llvm::SmallString<64> asmString;
+  for (char c : op.getAsmString()) {
+    if (!std::isspace(static_cast<unsigned char>(c)))
+      asmString.push_back(c);
+  }
+
+  return llvm::StringSwitch<std::optional<Float2AsmKind>>(asmString)
+      .Case("mov.b64$0,{$1,$2};", op.getConstraints() == "=l,r,r"
+                                      ? std::optional(Float2AsmKind::Pack)
+                                      : std::nullopt)
+      .Case("mov.b64{$0,$1},$2;", op.getConstraints() == "=r,=r,l"
+                                      ? std::optional(Float2AsmKind::Unpack)
+                                      : std::nullopt)
+      .Case("add.f32x2$0,$1,$2;", op.getConstraints() == "=l,l,l"
+                                      ? std::optional(Float2AsmKind::Add)
+                                      : std::nullopt)
+      .Case("sub.f32x2$0,$1,$2;", op.getConstraints() == "=l,l,l"
+                                      ? std::optional(Float2AsmKind::Sub)
+                                      : std::nullopt)
+      .Case("mul.f32x2$0,$1,$2;", op.getConstraints() == "=l,l,l"
+                                      ? std::optional(Float2AsmKind::Mul)
+                                      : std::nullopt)
+      .Case("fma.rn.f32x2$0,$1,$2,$3;", op.getConstraints() == "=l,l,l,l"
+                                            ? std::optional(Float2AsmKind::Fma)
+                                            : std::nullopt)
+      .Default(std::nullopt);
+}
+
+bool hasElementType(Type type, RankedTensorType shape, Type elementType) {
+  return type == shape.clone(elementType);
+}
+
+Type getTypeWithElementOrSelf(Type type, Type elementType) {
+  if (auto tensorType = dyn_cast<RankedTensorType>(type))
+    return tensorType.clone(elementType);
+  return elementType;
+}
+
+Value packFloat2Payloads(PatternRewriter &rewriter, Location loc, Value low,
+                         Value high, Type packedType) {
+  Value low64 = arith::ExtUIOp::create(rewriter, loc, packedType, low);
+  Value high64 = arith::ExtUIOp::create(rewriter, loc, packedType, high);
+  Value shift = getIntConstantLike(rewriter, loc, packedType, 32);
+  high64 = arith::ShLIOp::create(rewriter, loc, high64, shift);
+  return arith::OrIOp::create(rewriter, loc, low64, high64);
+}
+
+std::pair<Value, Value> unpackFloat2Payloads(PatternRewriter &rewriter,
+                                             Location loc, Value packed,
+                                             Type payloadType) {
+  Value low = arith::TruncIOp::create(rewriter, loc, payloadType, packed);
+  Value shift = getIntConstantLike(rewriter, loc, packed.getType(), 32);
+  Value high = arith::ShRUIOp::create(rewriter, loc, packed, shift);
+  high = arith::TruncIOp::create(rewriter, loc, payloadType, high);
+  return {low, high};
+}
+
+struct Float2InlineAsmPattern
+    : public OpRewritePattern<tt::ElementwiseInlineAsmOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(tt::ElementwiseInlineAsmOp op,
+                                PatternRewriter &rewriter) const override {
+    std::optional<Float2AsmKind> kind = getFloat2AsmKind(op);
+    if (!kind)
+      return failure();
+
+    auto i32 = rewriter.getI32Type();
+    auto i64 = rewriter.getI64Type();
+    auto f32 = rewriter.getF32Type();
+    auto loc = op.getLoc();
+
+    if (*kind == Float2AsmKind::Pack) {
+      if (op.getNumOperands() != 2 || op.getNumResults() != 1)
+        return failure();
+      auto packedType = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+      if (!packedType || packedType.getElementType() != i64 ||
+          !hasElementType(op.getOperand(0).getType(), packedType, f32) ||
+          !hasElementType(op.getOperand(1).getType(), packedType, f32))
+        return failure();
+
+      Value low = embedToInt(rewriter, loc, op.getOperand(0));
+      Value high = embedToInt(rewriter, loc, op.getOperand(1));
+      rewriter.replaceOp(
+          op, packFloat2Payloads(rewriter, loc, low, high, packedType));
+      return success();
+    }
+
+    if (*kind == Float2AsmKind::Unpack) {
+      if (op.getNumOperands() != 1 || op.getNumResults() != 2)
+        return failure();
+      auto packedType = dyn_cast<RankedTensorType>(op.getOperand(0).getType());
+      if (!packedType || packedType.getElementType() != i64 ||
+          !hasElementType(op->getResult(0).getType(), packedType, f32) ||
+          !hasElementType(op->getResult(1).getType(), packedType, f32))
+        return failure();
+
+      auto payloadType = packedType.clone(i32);
+      auto [low, high] =
+          unpackFloat2Payloads(rewriter, loc, op.getOperand(0), payloadType);
+      SmallVector<Value> results = {
+          unembedToFloat(rewriter, loc, low, op->getResult(0).getType()),
+          unembedToFloat(rewriter, loc, high, op->getResult(1).getType())};
+      rewriter.replaceOp(op, results);
+      return success();
+    }
+
+    unsigned arity = *kind == Float2AsmKind::Fma ? 3 : 2;
+    if (op.getNumOperands() != arity || op.getNumResults() != 1)
+      return failure();
+    Type packedType = op->getResult(0).getType();
+    if ((!isa<IntegerType>(packedType) && !isa<RankedTensorType>(packedType)) ||
+        getElementTypeOrSelf(packedType) != i64 ||
+        !llvm::all_of(op.getOperandTypes(),
+                      [&](Type type) { return type == packedType; }))
+      return failure();
+
+    Type payloadType = getTypeWithElementOrSelf(packedType, i32);
+    SmallVector<std::pair<Value, Value>> lanes;
+    for (Value operand : op.getOperands())
+      lanes.push_back(
+          unpackFloat2Payloads(rewriter, loc, operand, payloadType));
+
+    auto applyLane = [&](unsigned lane) -> Value {
+      Value a = lane == 0 ? lanes[0].first : lanes[0].second;
+      Value b = lane == 0 ? lanes[1].first : lanes[1].second;
+      switch (*kind) {
+      case Float2AsmKind::Add:
+        return arith::AddIOp::create(rewriter, loc, a, b);
+      case Float2AsmKind::Sub:
+        return arith::SubIOp::create(rewriter, loc, a, b);
+      case Float2AsmKind::Mul:
+        return arith::MulIOp::create(rewriter, loc, a, b);
+      case Float2AsmKind::Fma: {
+        Value c = lane == 0 ? lanes[2].first : lanes[2].second;
+        Value product = arith::MulIOp::create(rewriter, loc, a, b);
+        return arith::AddIOp::create(rewriter, loc, product, c);
+      }
+      case Float2AsmKind::Pack:
+      case Float2AsmKind::Unpack:
+        llvm_unreachable("handled above");
+      }
+      llvm_unreachable("unknown Float2 inline assembly");
+    };
+
+    Value low = applyLane(0);
+    Value high = applyLane(1);
+    rewriter.replaceOp(
+        op, packFloat2Payloads(rewriter, loc, low, high, packedType));
+    return success();
+  }
+};
+
 template <typename OpF, typename OpI>
 struct BinaryFloatToIntPattern : public OpRewritePattern<OpF> {
   using OpRewritePattern<OpF>::OpRewritePattern;
@@ -3188,7 +3349,7 @@ public:
                  PreciseDivFOpPattern, RemFOpPattern, FmaPattern, ExpOpPattern,
                  Exp2OpPattern, CosOpPattern, SinOpPattern, ExtFOpPattern,
                  TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern, DotPattern,
-                 DotScaledPattern>(&getContext());
+                 DotScaledPattern, Float2InlineAsmPattern>(&getContext());
     patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
     patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);
     patterns.add<UnaryPattern<math::SqrtOp>>(&getContext(), UnaryOpId::Sqrt);

@@ -16,6 +16,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     TensorMemoryScalesLayout,
     allocate_tensor_memory,
+    float2,
     mbarrier,
     tcgen05_commit,
     tcgen05_copy,
@@ -569,6 +570,49 @@ def _binop_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl
     gl.store(out_ptr + offs, z, mask=mask)
 
 
+@gluon.jit
+def _float2_kernel(x_ptr, y_ptr, z_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.constexpr,
+                   THREADS_PER_WARP: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+
+    x = float2.pack2(
+        gl.load(x_ptr + offs, mask=mask, other=0.0),
+        gl.load(x_ptr + n_elements + offs, mask=mask, other=0.0),
+    )
+    y = float2.pack2(
+        gl.load(y_ptr + offs, mask=mask, other=0.0),
+        gl.load(y_ptr + n_elements + offs, mask=mask, other=0.0),
+    )
+    z = float2.pack2(
+        gl.load(z_ptr + offs, mask=mask, other=0.0),
+        gl.load(z_ptr + n_elements + offs, mask=mask, other=0.0),
+    )
+
+    if OP == "identity":
+        result = x
+    elif OP == "add":
+        result = x + y
+    elif OP == "sub":
+        result = x - y
+    elif OP == "mul":
+        result = x * y
+    elif OP == "fma":
+        result = float2.fma(x, y, z)
+    elif OP == "reduce_add":
+        result = float2.Float2Tensor(gl.join(x.value, y.value)).sum(axis=1)
+    else:
+        gl.static_assert(False, "unsupported Float2 OP")
+
+    low, high = float2.unpack2(result)
+    low = gl.convert_layout(low, layout)
+    high = gl.convert_layout(high, layout)
+    gl.store(out_ptr + offs, low, mask=mask)
+    gl.store(out_ptr + n_elements + offs, high, mask=mask)
+
+
 @triton.jit
 def _clamp_kernel(x_ptr, lo_ptr, hi_ptr, out_ptr, n_elements, PROPAGATE_NAN: tl.constexpr, BLOCK: tl.constexpr):
     offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
@@ -739,6 +783,45 @@ def test_binops_payload_semantics(device, op, expected_fn, fresh_knobs):
     out_np = out.cpu().numpy().astype(np.int32, copy=False)
     exp_np = expected_fn(x.cpu().numpy().astype(np.int32, copy=False), y.cpu().numpy().astype(np.int32, copy=False))
     _assert_payload_equal(out_np, exp_np)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("op", ["identity", "add", "sub", "mul", "fma", "reduce_add"])
+def test_float2_payload_semantics(device, op, fresh_knobs):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 256
+    g = torch.Generator(device="cuda")
+    g.manual_seed(37)
+    inputs = [
+        torch.randint(-(2**31), 2**31 - 1, (2, n_elements), dtype=torch.int32, device="cuda", generator=g)
+        for _ in range(3)
+    ]
+    out = torch.empty((2, n_elements), dtype=torch.int32, device="cuda")
+    wrapped = [triton.TensorWrapper(value, dtype=torch.float32) for value in inputs]
+
+    _float2_kernel[(1, )](
+        *wrapped,
+        triton.TensorWrapper(out, dtype=torch.float32),
+        n_elements,
+        OP=op,
+        BLOCK=n_elements,
+        THREADS_PER_WARP=THREADS_PER_WARP,
+    )
+
+    input_bits = [value.cpu().numpy().astype(np.int32, copy=False) for value in inputs]
+    if op == "identity":
+        expected = input_bits[0]
+    elif op in ("add", "reduce_add"):
+        expected = _expected_add_i32(input_bits[0], input_bits[1])
+    elif op == "sub":
+        expected = _expected_sub_i32(input_bits[0], input_bits[1])
+    elif op == "mul":
+        expected = _expected_mul_i32(input_bits[0], input_bits[1])
+    elif op == "fma":
+        expected = _expected_fma_i32(input_bits[0], input_bits[1], input_bits[2])
+    _assert_payload_equal(out, expected)
 
 
 @pytest.mark.parametrize("propagate_nan", [False, True], ids=["none", "all"])
