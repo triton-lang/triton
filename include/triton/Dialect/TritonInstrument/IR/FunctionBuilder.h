@@ -98,10 +98,13 @@ public:
   void createRetireActiveThreadCall(ImplicitLocOpBuilder &b, int thread,
                                     Operation *insertPoint);
   // clusterBarrierRendezvous: model a cluster barrier as an arrive-and-wait on
-  // a virtual entry in the ordinary ConSan barrier tables. The call returns
-  // only after the virtual barrier phase changes or a deadlock is reported.
+  // a virtual entry in the ordinary ConSan barrier tables. The completing
+  // arrival publishes cluster visibility for non-relaxed barriers. The call
+  // returns only after the virtual barrier phase changes or a deadlock is
+  // reported.
   void createClusterBarrierRendezvousCall(ImplicitLocOpBuilder &b,
                                           int barrierIdx, int thread,
+                                          bool publishVisibility,
                                           Operation *insertPoint);
   // checkAllActiveWaiting: return whether unfinished threads across the
   // cluster are not all waiting on matching barrier phases.

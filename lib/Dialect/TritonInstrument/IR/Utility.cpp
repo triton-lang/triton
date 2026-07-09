@@ -715,7 +715,7 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
   ExperimentalLockReleaseOp::create(b, lockVal, isCTA0);
   if (numCTAs > 1) {
     auto clusterBarrier = ClusterBarrierOp::create(b, b.getLoc());
-    nonPublishingClusterBarriers.push_back(clusterBarrier.getOperation());
+    internalClusterBarriers.push_back(clusterBarrier.getOperation());
   } else {
     BarrierOp::create(b, b.getLoc(), AddrSpace::Local);
   }

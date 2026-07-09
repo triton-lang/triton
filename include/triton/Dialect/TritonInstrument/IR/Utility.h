@@ -240,10 +240,9 @@ struct AuxDataMap {
   // Shared-cluster lock used to serialize ConSan instrumentation updates.
   RegionToValueMap lock;
 
-  // Consan inserts internal cluster barriers for its own protocols. They must
-  // keep their synchronization semantics, but they are not user-visible
-  // publication points.
-  SmallVector<Operation *> nonPublishingClusterBarriers;
+  // ConSan inserts a cluster barrier to publish lock initialization. It runs
+  // before the lock and rendezvous state are ready, so do not instrument it.
+  SmallVector<Operation *> internalClusterBarriers;
 
   // Virtual barrier slot for each cluster-barrier lowering resource. Cluster
   // barriers outside warp specialization share the entry-region slot; each

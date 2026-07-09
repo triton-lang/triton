@@ -1,6 +1,7 @@
 #include "triton/Dialect/TritonInstrument/IR/FunctionBuilder.h"
 
 #include <cassert>
+#include <utility>
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -446,8 +447,10 @@ Value getVirtualBarrierPhase(ImplicitLocOpBuilder &b, Value states,
   return arith::TruncIOp::create(b, b.getI1Type(), phase);
 }
 
-Value arriveVirtualBarrier(ImplicitLocOpBuilder &b, Value states,
-                           RankedTensorType statesType, Value mask) {
+std::pair<Value, Value> arriveVirtualBarrier(ImplicitLocOpBuilder &b,
+                                             Value states,
+                                             RankedTensorType statesType,
+                                             Value mask) {
   Value zero = tti::createConstIntTensor(b, b.getLoc(), 0, statesType);
   Value one = tti::createConstIntTensor(b, b.getLoc(), 1, statesType);
   Value countMask = tti::createConstIntTensor(
@@ -474,7 +477,9 @@ Value arriveVirtualBarrier(ImplicitLocOpBuilder &b, Value states,
   Value currentField = arith::ShLIOp::create(b, nextCount, shiftCurrent);
   Value nextState = arith::OrIOp::create(b, nextPhase, initField);
   nextState = arith::OrIOp::create(b, nextState, currentField);
-  return arith::SelectOp::create(b, mask, nextState, states);
+  Value updated = arith::SelectOp::create(b, mask, nextState, states);
+  Value completedScalar = reduceAll<arith::OrIOp>(b, completed);
+  return {updated, completedScalar};
 }
 
 Value updateVirtualBarrierWaiting(ImplicitLocOpBuilder &b, Value waiting,
@@ -892,7 +897,7 @@ Value FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
 }
 
 void FunctionBuilder::createClusterBarrierRendezvousCall(
-    ImplicitLocOpBuilder &b, int barrierIdx, int thread,
+    ImplicitLocOpBuilder &b, int barrierIdx, int thread, bool publishVisibility,
     Operation *insertPoint) {
   assert(!auxData.waiting.empty() && !auxData.barrierStates.empty() &&
          !auxData.activeMasks.empty() &&
@@ -927,15 +932,22 @@ void FunctionBuilder::createClusterBarrierRendezvousCall(
     Value states =
         tti::createLoadScratchMemory(b, b.getLoc(), statesPtr, statesType);
     Value mask = createVirtualBarrierMask(b, barrierIdxVal, statesType);
-    Value updated = arriveVirtualBarrier(b, states, statesType, mask);
+    auto [updated, completed] =
+        arriveVirtualBarrier(b, states, statesType, mask);
     tti::createStoreScratchMemory(b, b.getLoc(), statesPtr, updated,
                                   statesType);
+    return completed;
   };
 
   tti::ExperimentalLockAcquireOp::create(b, lock, vTrue);
   Value savedPhase = getPhase();
   updateWaiting(savedPhase, vTrue, /*markWaiting=*/true);
-  arrive();
+  Value completed = arrive();
+  if (publishVisibility) {
+    for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM})
+      createPublishClusterVisibilityCall(b, completed, memType, insertPoint);
+    createPublishClusterProxyAccessesCall(b, completed, insertPoint);
+  }
   Value ok = createCheckAllActiveWaitingCall(b, vTrue, insertPoint);
   tti::ExperimentalLockReleaseOp::create(b, lock, vTrue);
   tti::createAssertInThread(b, ok, "Deadlock detected at a cluster barrier");

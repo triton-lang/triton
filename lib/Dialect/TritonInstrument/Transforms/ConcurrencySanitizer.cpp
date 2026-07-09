@@ -9,7 +9,6 @@
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/Sys/GetEnv.h"
 
@@ -736,31 +735,8 @@ private:
         }
       }
       if (auto clusterBarrier = dyn_cast<ttng::ClusterBarrierOp>(op)) {
-        if (!llvm::is_contained(auxData.nonPublishingClusterBarriers, op))
+        if (!llvm::is_contained(auxData.internalClusterBarriers, op))
           clusterBarriers.push_back(clusterBarrier);
-        if (!clusterBarrier.getRelaxed() &&
-            !llvm::is_contained(auxData.nonPublishingClusterBarriers, op)) {
-          b.setInsertionPointAfter(op);
-          // Publish the cluster-wide frontier once, then keep every CTA at
-          // this synchronization point until the publication completes.
-          b.setListener(nullptr);
-          Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
-          Value zero = arith::ConstantIntOp::create(b, 0, 32);
-          Value isCTA0 =
-              arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
-          Value lock = auxData.lock.at(op).value;
-          tti::ExperimentalLockAcquireOp::create(b, lock, isCTA0);
-          for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM})
-            funcBuilder.createPublishClusterVisibilityCall(b, isCTA0, memType,
-                                                           op);
-          funcBuilder.createPublishClusterProxyAccessesCall(b, isCTA0, op);
-          tti::ExperimentalLockReleaseOp::create(b, lock, isCTA0);
-          auto publishBarrier = ttng::ClusterBarrierOp::create(b, b.getLoc());
-          ttng::copyClusterBarrierMbarOffset(op, publishBarrier);
-          auxData.nonPublishingClusterBarriers.push_back(
-              publishBarrier.getOperation());
-          b.setListener(&listener);
-        }
       }
 
       if (isa<ttg::WarpYieldOp, ttg::WarpReturnOp>(op) &&
@@ -813,7 +789,8 @@ private:
       b.setLoc(op->getLoc());
       b.setInsertionPoint(op);
       funcBuilder.createClusterBarrierRendezvousCall(
-          b, auxData.getClusterBarrierSlot(op), baseThread, op);
+          b, auxData.getClusterBarrierSlot(op), baseThread,
+          /*publishVisibility=*/!clusterBarrier.getRelaxed(), op);
     }
   }
 

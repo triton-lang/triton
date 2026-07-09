@@ -1180,9 +1180,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: cf.cond_br {{.*}}, ^[[CONTINUE:bb[0-9]+]], ^[[POLL]]
     // CHECK: ^[[CONTINUE]]:
     // CHECK-NEXT: ttng.cluster_barrier
-    // CHECK: tti.experimental_lock_acquire
-    // CHECK: tti.experimental_lock_release
-    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NOT: ttng.cluster_barrier
     // CHECK: tt.return
     ttng.cluster_barrier
     tt.return
@@ -1835,14 +1833,12 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   tt.func public @cluster_barrier_publish_protocol() {
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared_cluster_publish, #smem_cluster_publish, mutable>
     // CHECK: ttg.local_load
+    // CHECK: tti.experimental_lock_acquire
+    // CHECK: tt.call @__triton_consan_publish_cluster_visibility
+    // CHECK: tti.experimental_lock_release
     // CHECK: ttng.cluster_barrier
-    // CHECK: %[[PUB_CTA:.*]] = tti.experimental_cluster_cta_id : i32
-    // CHECK: %[[PUB_ZERO:.*]] = arith.constant 0 : i32
-    // CHECK: %[[PUB_PRED:.*]] = arith.cmpi eq, %[[PUB_CTA]], %[[PUB_ZERO]] : i32
-    // CHECK: tti.experimental_lock_acquire %{{.*}}, %[[PUB_PRED]]
-    // CHECK: tt.call @__triton_consan_publish_cluster_visibility{{.*}}(%[[PUB_PRED]],
-    // CHECK: tti.experimental_lock_release %{{.*}}, %[[PUB_PRED]]
-    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NOT: ttng.cluster_barrier
+    // CHECK: tt.return
     ttg.local_load %buf : !ttg.memdesc<32x32xf32, #shared_cluster_publish, #smem_cluster_publish, mutable> -> tensor<32x32xf32, #blocked_cluster_publish>
     ttng.cluster_barrier
     tt.return

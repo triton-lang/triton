@@ -2785,7 +2785,7 @@ def test_deadlock_user_cluster_barrier_inside_warp_specialize(CLUSTER_PARTITION,
 
     compiled = kernel[(1, )](FAILURE, CLUSTER_PARTITION, num_warps=4, num_ctas=num_ctas)
     if not FAILURE:
-        assert compiled.asm["ptx"].count("mbarrier.arrive.release.cluster.shared::cluster.b64") >= 4
+        assert compiled.asm["ptx"].count("mbarrier.arrive.release.cluster.shared::cluster.b64") >= 2
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
