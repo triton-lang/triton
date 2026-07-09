@@ -5156,6 +5156,19 @@ def test_reshape_err(device):
     assert "reshape" in str(exc_info.value)
 
 
+def test_make_block_ptr_removed():
+
+    @triton.jit
+    def kernel():
+        tl.make_block_ptr(None, (), (), (), (), ())
+
+    with pytest.raises(triton.CompilationError) as exc_info:
+        kernel.warmup(grid=(1, ))
+
+    assert "Block pointers have been removed in favor of the tensor descriptor API" in str(exc_info.value)
+    assert not hasattr(tl, "advance")
+
+
 @pytest.mark.interpreter
 def test_tma_load_block_shape_err(device):
 
@@ -5193,15 +5206,13 @@ def test_trans_reshape(device, with_allocator):
     @triton.jit
     def kernel(in_base_ptr, out_base_ptr, IN_SHAPE0: tl.constexpr, IN_SHAPE1: tl.constexpr):
 
-        in_block_ptr = tl.make_block_ptr(
+        in_desc = tl.make_tensor_descriptor(
             base=in_base_ptr,
             shape=(IN_SHAPE0, IN_SHAPE1),
             strides=(IN_SHAPE1, 1),
-            offsets=(0, 0),
             block_shape=(IN_SHAPE0, IN_SHAPE1),
-            order=(1, 0),
         )
-        x = tl.load(in_block_ptr)
+        x = in_desc.load([0, 0])
         x = tl.reshape(x, (32, 4, 4, 2))
         x = tl.permute(x, (1, 2, 3, 0))
         x = tl.reshape(x, (IN_SHAPE0 * IN_SHAPE1, ))
@@ -5215,7 +5226,7 @@ def test_trans_reshape(device, with_allocator):
 
     k = kernel[(1, )](input, actual, shape[0], shape[1])
     assert k.asm['ttgir'].count(
-        'ttg.convert_layout') == 1, "Expected exactly one convert_layout op in the TTGIR after optimization"
+        'ttg.convert_layout') == 0, "Expected no convert_layout ops in the TTGIR after optimization"
 
     np.testing.assert_equal(to_numpy(expected), to_numpy(actual))
 
