@@ -268,13 +268,54 @@ private:
     return nextPhase;
   }
 
-  Value mergePhaseAdvancesToBlock(Value phase, ArrayRef<Value> advances,
-                                  Block *targetBlock) {
-    Value nextPhase = advances.front();
-    if (nextPhase.getParentBlock() != targetBlock)
-      nextPhase = mlir::triton::sinkValueRedefinition(
-          builder, phase, nextPhase, nextPhase.getParentBlock());
-    return nextPhase;
+  void appendToYieldAndReplace(scf::YieldOp yield, Value value) {
+    SmallVector<Value> operands(yield->getOperands());
+    operands.push_back(value);
+    builder.setInsertionPoint(yield);
+    scf::YieldOp::create(builder, yield.getLoc(), operands);
+    yield->erase();
+  }
+
+  Value rewriteIfPhase(scf::IfOp ifOp, Value phase, Value phaseOne,
+                       const llvm::SmallPtrSetImpl<Operation *> &waits,
+                       llvm::SmallPtrSetImpl<Operation *> &seenWaits) {
+    Value thenPhase =
+        rewriteBlockPhases(ifOp.thenBlock(), phase, phaseOne, waits, seenWaits);
+    Value elsePhase = phase;
+    if (ifOp.elseBlock())
+      elsePhase = rewriteBlockPhases(ifOp.elseBlock(), phase, phaseOne, waits,
+                                     seenWaits);
+
+    // This if does not contain a tracked wait in either branch, so it does not
+    // need to yield an updated phase.
+    if (thenPhase == phase && elsePhase == phase)
+      return phase;
+
+    scf::IfOp newIfOp =
+        mlir::replaceIfOpWithNewSignature(builder, ifOp, phase.getType());
+    appendToYieldAndReplace(newIfOp.thenYield(), thenPhase);
+    appendToYieldAndReplace(newIfOp.elseYield(), elsePhase);
+    builder.eraseOp(ifOp);
+    return newIfOp.getResults().back();
+  }
+
+  Value rewriteBlockPhases(Block *block, Value phase, Value phaseOne,
+                           const llvm::SmallPtrSetImpl<Operation *> &waits,
+                           llvm::SmallPtrSetImpl<Operation *> &seenWaits) {
+    for (Operation &op :
+         llvm::make_early_inc_range(block->without_terminator())) {
+      if (waits.contains(&op)) {
+        auto wait = cast<ttng::WaitBarrierOp>(op);
+        wait.getPhaseMutable().assign(phase);
+        seenWaits.insert(wait);
+        phase = createPhaseAdvance(wait, phase, phaseOne);
+        continue;
+      }
+
+      if (auto ifOp = dyn_cast<scf::IfOp>(op))
+        phase = rewriteIfPhase(ifOp, phase, phaseOne, waits, seenWaits);
+    }
+    return phase;
   }
 
   scf::ForOp addForPhaseArg(scf::ForOp forOp, Value initialPhase,
@@ -309,13 +350,16 @@ private:
         }))
       return success();
 
-    if (lifecycle.inits.size() != 1 || lifecycle.invals.size() != 1 ||
-        lifecycle.waits.size() != 1)
+    if (lifecycle.inits.size() != 1 || lifecycle.invals.size() != 1)
       return failure();
 
     SmallVector<Operation *> loops;
     getEnclosingLoops(lifecycle.invals.front(), loops);
     std::reverse(loops.begin(), loops.end());
+
+    llvm::SmallPtrSet<Operation *, 4> waits;
+    for (ttng::WaitBarrierOp wait : lifecycle.waits)
+      waits.insert(wait);
 
     OpBuilder::InsertionGuard guard(builder);
     moveInitialPhaseBeforeLoop(lifecycle.initialPhase, loops.front());
@@ -343,15 +387,9 @@ private:
 
     Operation *innerLoop = loopPhases.back().first;
     Value innerPhase = loopPhases.back().second;
-    for (ttng::WaitBarrierOp wait : lifecycle.waits)
-      wait.getPhaseMutable().assign(innerPhase);
-
-    SmallVector<Value> advances;
-    for (ttng::WaitBarrierOp wait : lifecycle.waits)
-      advances.push_back(createPhaseAdvance(wait, innerPhase, phaseOne));
-
-    Value nextPhase = mergePhaseAdvancesToBlock(innerPhase, advances,
-                                                getLoopBodyBlock(innerLoop));
+    llvm::SmallPtrSet<Operation *, 4> seenWaits;
+    Value nextPhase = rewriteBlockPhases(
+        getLoopBodyBlock(innerLoop), innerPhase, phaseOne, waits, seenWaits);
 
     appendToLoopYield(innerLoop, nextPhase);
     Value loopResult = getLoopResultPhase(innerLoop);

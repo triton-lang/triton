@@ -124,17 +124,22 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: tt.func @skip_if_else_wait_lifecycle
-  // CHECK: scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{[[:alnum:]_]+}} {
+  // CHECK-LABEL: tt.func @hoist_if_else_wait_lifecycle
   // CHECK: %[[BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
   // CHECK-NEXT: ttng.init_barrier %[[BAR]], 1
-  // CHECK: scf.if
-  // CHECK: ttng.wait_barrier %[[BAR]],
-  // CHECK: ttng.wait_barrier %[[BAR]],
+  // CHECK: scf.for {{.*}} iter_args(%[[PHASE:.*]] = %{{.*}}) -> (i32)
+  // CHECK: %[[IF_RESULT:.*]] = scf.if {{.*}} -> (i32)
+  // CHECK: ttng.wait_barrier %[[BAR]], %[[PHASE]]
+  // CHECK-NEXT: %[[THEN_NEXT:.*]] = arith.xori %[[PHASE]],
+  // CHECK: scf.yield %[[THEN_NEXT]] : i32
+  // CHECK: } else {
+  // CHECK: ttng.wait_barrier %[[BAR]], %[[PHASE]]
+  // CHECK-NEXT: %[[ELSE_NEXT:.*]] = arith.xori %[[PHASE]],
+  // CHECK: scf.yield %[[ELSE_NEXT]] : i32
+  // CHECK: scf.yield %[[IF_RESULT]] : i32
   // CHECK: ttng.inval_barrier %[[BAR]]
-  // CHECK: }
   // CHECK-NEXT: tt.return
-  tt.func @skip_if_else_wait_lifecycle(%desc: !tt.tensordesc<64x128xf16, #nvmma>, %pred: i1) {
+  tt.func @hoist_if_else_wait_lifecycle(%desc: !tt.tensordesc<64x128xf16, #nvmma>, %pred: i1) {
     %c0 = arith.constant 0 : i32
     %i0 = arith.constant 0 : index
     %i4 = arith.constant 4 : index
@@ -153,6 +158,70 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       } else {
         ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
         ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf1, %bar, %true {multicast} :
+          !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
+        ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+      }
+      ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    }
+    tt.return
+  }
+}
+
+// -----
+
+#nvmma = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
+#barrierEnc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @hoist_nested_if_else_wait_lifecycle
+  // CHECK: %[[BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
+  // CHECK-NEXT: ttng.init_barrier %[[BAR]], 1
+  // CHECK: scf.for {{.*}} iter_args(%[[PHASE:.*]] = %{{.*}}) -> (i32)
+  // CHECK: %[[OUTER_RESULT:.*]] = scf.if {{.*}} -> (i32)
+  // CHECK: %[[INNER_RESULT:.*]] = scf.if {{.*}} -> (i32)
+  // CHECK: ttng.wait_barrier %[[BAR]], %[[PHASE]]
+  // CHECK-NEXT: %[[INNER_THEN_NEXT:.*]] = arith.xori %[[PHASE]],
+  // CHECK: scf.yield %[[INNER_THEN_NEXT]] : i32
+  // CHECK: } else {
+  // CHECK: ttng.wait_barrier %[[BAR]], %[[PHASE]]
+  // CHECK-NEXT: %[[INNER_ELSE_NEXT:.*]] = arith.xori %[[PHASE]],
+  // CHECK: scf.yield %[[INNER_ELSE_NEXT]] : i32
+  // CHECK: scf.yield %[[INNER_RESULT]] : i32
+  // CHECK: } else {
+  // CHECK: ttng.wait_barrier %[[BAR]], %[[PHASE]]
+  // CHECK-NEXT: %[[OUTER_ELSE_NEXT:.*]] = arith.xori %[[PHASE]],
+  // CHECK: scf.yield %[[OUTER_ELSE_NEXT]] : i32
+  // CHECK: scf.yield %[[OUTER_RESULT]] : i32
+  // CHECK: ttng.inval_barrier %[[BAR]]
+  // CHECK-NEXT: tt.return
+  tt.func @hoist_nested_if_else_wait_lifecycle(%desc: !tt.tensordesc<64x128xf16, #nvmma>, %pred0: i1, %pred1: i1) {
+    %c0 = arith.constant 0 : i32
+    %i0 = arith.constant 0 : index
+    %i4 = arith.constant 4 : index
+    %i1 = arith.constant 1 : index
+    %true = arith.constant true
+    scf.for %i = %i0 to %i4 step %i1 {
+      %buf0 = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
+      %buf1 = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
+      %buf2 = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
+      %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+      ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+      scf.if %pred0 {
+        scf.if %pred1 {
+          ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+          ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf0, %bar, %true {multicast} :
+            !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
+          ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        } else {
+          ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+          ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf1, %bar, %true {multicast} :
+            !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
+          ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        }
+      } else {
+        ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf2, %bar, %true {multicast} :
           !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
         ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       }
@@ -340,6 +409,64 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
     ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
     ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#nvmma = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
+#barrierEnc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @hoist_while_if_else_wait_lifecycle
+  // CHECK: %[[BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
+  // CHECK-NEXT: ttng.init_barrier %[[BAR]], 1
+  // CHECK: scf.while (%[[I:.*]] = %{{.*}}, %[[BEFORE_PHASE:.*]] = %{{.*}}) : (index, i32) -> (index, i32)
+  // CHECK: scf.condition({{.*}}) %[[I]], %[[BEFORE_PHASE]] : index, i32
+  // CHECK: ^bb0(%{{.*}}: index, %[[PHASE:.*]]: i32):
+  // CHECK: %[[IF_RESULT:.*]] = scf.if {{.*}} -> (i32)
+  // CHECK: ttng.wait_barrier %[[BAR]], %[[PHASE]]
+  // CHECK-NEXT: %[[THEN_NEXT:.*]] = arith.xori %[[PHASE]],
+  // CHECK: scf.yield %[[THEN_NEXT]] : i32
+  // CHECK: } else {
+  // CHECK: ttng.wait_barrier %[[BAR]], %[[PHASE]]
+  // CHECK-NEXT: %[[ELSE_NEXT:.*]] = arith.xori %[[PHASE]],
+  // CHECK: scf.yield %[[ELSE_NEXT]] : i32
+  // CHECK: scf.yield {{.*}}, %[[IF_RESULT]] : index, i32
+  // CHECK: ttng.inval_barrier %[[BAR]]
+  // CHECK-NEXT: tt.return
+  tt.func @hoist_while_if_else_wait_lifecycle(%desc: !tt.tensordesc<64x128xf16, #nvmma>, %pred: i1) {
+    %c0 = arith.constant 0 : i32
+    %i0 = arith.constant 0 : index
+    %i4 = arith.constant 4 : index
+    %i1 = arith.constant 1 : index
+    %true = arith.constant true
+    %unused = scf.while (%i = %i0) : (index) -> (index) {
+      %cond = arith.cmpi slt, %i, %i4 : index
+      scf.condition(%cond) %i : index
+    } do {
+    ^bb0(%i_arg: index):
+      %buf0 = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
+      %buf1 = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
+      %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+      ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+      scf.if %pred {
+        ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf0, %bar, %true {multicast} :
+          !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
+        ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+      } else {
+        ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf1, %bar, %true {multicast} :
+          !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
+        ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+      }
+      ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+      %next_i = arith.addi %i_arg, %i1 : index
+      scf.yield %next_i : index
+    }
     tt.return
   }
 }
