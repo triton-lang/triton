@@ -341,8 +341,9 @@ private:
   }
 
   LogicalResult rewriteLoopPhases(BarrierLifecycle &lifecycle) {
-    // If every invalidation is already outside loops, moving them to function
-    // exits does not remove a loop-local phase reset.
+    // Only loop-local invalidations require phase threading. If every
+    // invalidation is already outside loops, moving them to function exits does
+    // not change the phase seen by repeated loop iterations.
     if (llvm::none_of(lifecycle.invals, [&](ttng::InvalBarrierOp inval) {
           SmallVector<Operation *> loops;
           getEnclosingLoops(inval, loops);
