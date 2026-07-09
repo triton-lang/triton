@@ -82,8 +82,7 @@ def test_flip(M, N, K, dtype_str, dim, device):
 
     x = numpy_random((M, N, K), dtype_str=dtype_str)
     x = torch.from_numpy(x).to(device)
-    ref_dim = x.ndim - 1 if dim is None else dim
-    y = torch.flip(x, (ref_dim, ))
+    y = torch.flip(x, (dim if dim is not None else -1, ))
     z = torch.empty_like(x, device=device)
     flip_kernel[(1, )](x, z, M, N, K, dim, num_warps=8)
     assert (y == z).all(), (y, z)

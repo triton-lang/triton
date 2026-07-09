@@ -517,6 +517,32 @@ private:
     LLVM_DEBUG(dumpAllocationSize());
   }
 
+  /// Partition eligibility check: returns true if placing
+  /// `buffer` at `proposedOffset` keeps it in different physical partition(s)
+  /// than all of its already-placed partition neighbors.
+  bool isPartitionEligible(BufferT *buffer, size_t proposedOffset,
+                           const DenseSet<BufferT *> &placed) {
+    if (partitionSize == 0 || buffer->neighbors.empty())
+      return true;
+
+    // Footprints are compared as inclusive partition-index ranges, so a buffer
+    // that straddles a partition boundary is handled correctly.
+    size_t aLo = getPartitionIndex(proposedOffset, partitionSize);
+    size_t aHi =
+        getPartitionIndex(proposedOffset + buffer->size - 1, partitionSize);
+    for (auto *neighbor : buffer->neighbors) {
+      if (!placed.contains(neighbor))
+        continue;
+      size_t bLo = getPartitionIndex(neighbor->offset, partitionSize);
+      size_t bHi = getPartitionIndex(neighbor->offset + neighbor->size - 1,
+                                     partitionSize);
+      // Inclusive partition ranges overlap -> shares a physical partition.
+      if (aLo <= bHi && bLo <= aHi)
+        return false;
+    }
+    return true;
+  }
+
   /// Computes the initial shared memory offsets.
   void calculateStarts(const SmallVector<BufferT *> &buffers) {
     //  v = values in shared memory
@@ -540,28 +566,64 @@ private:
     TripleMapT tripleMap;
     tripleMap.insert(std::make_pair(0, Interval<size_t>()));
     SmallVector<BufferT *> xBuffers = buffers;
+    DenseSet<BufferT *> placed;
     while (!xBuffers.empty()) {
+      // 1) Pick the lowest-offset available slot.
       auto tripleIt = tripleMap.begin();
-      auto offset = tripleIt->first;
-      auto range = tripleIt->second;
+      size_t offset = tripleIt->first;
+      Interval<size_t> range = tripleIt->second;
       tripleMap.erase(tripleIt);
-      auto bufferIt =
-          std::find_if(xBuffers.begin(), xBuffers.end(), [&](auto *buffer) {
-            auto xRange = bufferRange[buffer];
-            bool res = xRange.intersects(range);
-            for (const auto &val : tripleMap)
-              res = res &&
-                    !val.second.intersects(xRange); // only one buffer intersect
-            return res;
-          });
-      if (bufferIt != xBuffers.end()) {
-        auto buffer = *bufferIt;
-        auto xSize = buffer->size;
-        auto xRange = bufferRange.lookup(buffer);
+
+      // 2) Buffers whose whole liveness fits this slot's liveness range
+      // and no other open slot.
+      SmallVector<BufferT *> livenessEligible;
+      for (auto *buffer : xBuffers) {
+        Interval<size_t> live = bufferRange.lookup(buffer);
+        if (!live.intersects(range))
+          continue;
+        if (llvm::none_of(tripleMap, [&](const auto &slot) {
+              return slot.second.intersects(live);
+            }))
+          livenessEligible.push_back(buffer);
+      }
+
+      // 3) The first that is also clear of its placed neighbors' partitions
+      // (for non-partitioned buffers, simply the first candidate).
+      BufferT *chosen = nullptr;
+      for (auto *buffer : livenessEligible) {
+        size_t alignedOffset = llvm::alignTo(offset, buffer->alignment);
+        if (isPartitionEligible(buffer, alignedOffset, placed)) {
+          chosen = buffer;
+          break;
+        }
+      }
+
+      // 4) Give `chosen` this slot's offset and split the slot's remaining free
+      // space around its liveness. If nothing was partition-eligible, reopen
+      // the slot at the smallest offset that clears some conflicting buffer's
+      // neighbors so that buffer becomes eligible next iteration; this only
+      // ever raises the offset, so the loop keeps making progress. If nothing
+      // was even liveness-eligible, the slot is simply dropped.
+      //
+      //     offset      shared memory     physical partition
+      //
+      //               +-----------------+
+      //               |  requeued slot  |   part 1  -> re-added to tripleMap;
+      //               |                 |              P1 placed here next iter
+      //       65536   +=================+   <- first boundary past P0's end
+      //               |  picked slot    |   part 0  -> P1 is liveness-eligible
+      //               |  (P1 blocked)   |              but blocked by P0,
+      //               |                 |              so skipped.
+      //       40000   +-----------------+
+      //               |  P0 (placed)    |   part 0  (P1's neighbor)
+      //           0   +-----------------+
+      if (chosen) {
         // TODO(Keren): A buffer's size shouldn't be determined here, have to
         // clean it up
-        size_t alignOffset = buffer->setOffsetAligned(offset);
-        tripleMap.insert({alignOffset + xSize,
+        size_t alignOffset = chosen->setOffsetAligned(offset);
+        placed.insert(chosen);
+        Interval<size_t> xRange = bufferRange.lookup(chosen);
+        tripleMap.insert({alignOffset + chosen->size,
                           Interval{std::max(range.start(), xRange.start()),
                                    std::min(range.end(), xRange.end())}});
         // We could either insert (range.start, xRange.start) or (range.start,
@@ -572,7 +634,31 @@ private:
           tripleMap.insert({offset, Interval{range.start(), xRange.end()}});
         if (xRange.end() < range.end())
           tripleMap.insert({offset, Interval{xRange.start(), range.end()}});
-        xBuffers.erase(bufferIt);
+        xBuffers.erase(std::find(xBuffers.begin(), xBuffers.end(), chosen));
+      } else if (!livenessEligible.empty()) {
+        assert(partitionSize > 0 &&
+               "candidates can only be blocked when partitioning is active");
+        size_t newSlotOffset = std::numeric_limits<size_t>::max();
+        for (BufferT *buffer : livenessEligible) {
+          // Smallest offset at which `buffer` lands in a partition free of all
+          // its already-placed neighbors. Stays 0 if it has no placed
+          // neighbors.
+          size_t clearOffset = 0;
+          for (BufferT *neighbor : buffer->neighbors)
+            if (placed.contains(neighbor)) {
+              // First offset strictly above every physical partition `neighbor`
+              // occupies.
+              size_t pastNeighbor =
+                  (getPartitionIndex(neighbor->offset + neighbor->size - 1,
+                                     partitionSize) +
+                   1) *
+                  partitionSize;
+              clearOffset = std::max(clearOffset, pastNeighbor);
+            }
+          newSlotOffset = std::min(newSlotOffset, clearOffset);
+        }
+        assert(newSlotOffset > offset && "reopened slot must make progress");
+        tripleMap.insert({newSlotOffset, range});
       }
     }
     LLVM_DEBUG(dumpBuffers());
@@ -622,11 +708,14 @@ private:
       // same partitioned tensor are placed in different physical partitions.
       // Only check this when partitioning is enabled (partitionSize > 0).
       if (partitionSize > 0) {
+        size_t xLo = getPartitionIndex(x->offset, partitionSize);
+        size_t xHi = getPartitionIndex(x->offset + x->size - 1, partitionSize);
         for (auto *neighbor : x->neighbors) {
-          if (getPartitionIndex(x->offset, partitionSize) ==
-              getPartitionIndex(neighbor->offset, partitionSize)) {
+          size_t nLo = getPartitionIndex(neighbor->offset, partitionSize);
+          size_t nHi = getPartitionIndex(neighbor->offset + neighbor->size - 1,
+                                         partitionSize);
+          if (xLo <= nHi && nLo <= xHi)
             interference[x].insert(neighbor);
-          }
         }
       }
     }
@@ -679,11 +768,12 @@ private:
             std::find(x->neighbors.begin(), x->neighbors.end(), y) !=
             x->neighbors.end();
         if (isPartitionNeighbor && partitionSize > 0) {
-          // For partition neighbors, bump to the next partition
-          // boundary to ensure they are in different physical partitions
-          size_t nextPartitionStart =
-              (getPartitionIndex(y->offset, partitionSize) + 1) * partitionSize;
-          newOffset = std::max(newOffset, nextPartitionStart);
+          // For partition neighbors, bump past the neighbor's partition(s) so
+          // they end up in different physical partitions.
+          size_t offsetPastY =
+              (getPartitionIndex(y->offset + y->size - 1, partitionSize) + 1) *
+              partitionSize;
+          newOffset = std::max(newOffset, offsetPastY);
         } else {
           // Regular interference - just move past the interfering buffer
           newOffset = std::max(newOffset, y->offset + y->size);

@@ -14,14 +14,14 @@ tt.func @loop_form_for_in_cluster(%n: index) {
 
   scf.for %i = %c0 to %n step %c1 {
     %a = arith.addi %i, %c1 : index
-    rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage"}
+    rocdl.sched.barrier none {triton.warp_pipeline.border = "stage"}
 
     // expected-error @+1 {{loop op cannot appear inside a warp_pipeline_stage region}}
     scf.for %j = %c0 to %n step %c1 {
       scf.yield
     }
 
-    rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage"}
+    rocdl.sched.barrier none {triton.warp_pipeline.border = "stage"}
     %b = arith.addi %a, %i : index
 
     scf.yield
@@ -40,7 +40,7 @@ tt.func @loop_form_while_in_cluster(%n: index) {
 
   scf.for %i = %c0 to %n step %c1 {
     %a = arith.addi %i, %c1 : index
-    rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage"}
+    rocdl.sched.barrier none {triton.warp_pipeline.border = "stage"}
 
     // expected-error @+1 {{loop op cannot appear inside a warp_pipeline_stage region}}
     scf.while (%w = %c0) : (index) -> index {
@@ -52,7 +52,7 @@ tt.func @loop_form_while_in_cluster(%n: index) {
       scf.yield %wn : index
     }
 
-    rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage"}
+    rocdl.sched.barrier none {triton.warp_pipeline.border = "stage"}
     %b = arith.addi %a, %i : index
 
     scf.yield
@@ -74,7 +74,7 @@ tt.func @loop_form_nested_pipelined_for(%n: index) {
 
   scf.for %i = %c0 to %n step %c1 {
     %a = arith.addi %i, %c1 : index
-    rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage"}
+    rocdl.sched.barrier none {triton.warp_pipeline.border = "stage"}
 
     // expected-error @+1 {{loop op cannot appear inside a warp_pipeline_stage region}}
     scf.for %j = %c0 to %n step %c1 {
@@ -84,7 +84,7 @@ tt.func @loop_form_nested_pipelined_for(%n: index) {
       scf.yield
     } {triton.warp_pipeline.pipelined_for}
 
-    rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage"}
+    rocdl.sched.barrier none {triton.warp_pipeline.border = "stage"}
     %b = arith.addi %a, %i : index
 
     scf.yield
@@ -103,14 +103,14 @@ tt.func @flat_form_for_in_cluster(%n: index, %ptr: !tt.ptr<f32>) {
   %v0 = arith.constant 0.0 : f32
 
   tt.store %ptr, %v0 : !tt.ptr<f32>
-  rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage0"}
+  rocdl.sched.barrier none {triton.warp_pipeline.border = "stage0"}
 
   // expected-error @+1 {{loop op cannot appear inside a warp_pipeline_stage region}}
   scf.for %j = %c0 to %n step %c1 {
     scf.yield
   }
 
-  rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage1"}
+  rocdl.sched.barrier none {triton.warp_pipeline.border = "stage1"}
   tt.store %ptr, %v0 : !tt.ptr<f32>
 
   tt.return

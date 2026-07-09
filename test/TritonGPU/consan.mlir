@@ -162,6 +162,42 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+#local_atomic_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
+#local_atomic_tma_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 32, CGALayout = [[0, 1]]}>
+#local_atomic_smem = #ttg.shared_memory
+#local_atomic_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 1024 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @local_atomic_scatter_rmw_effects
+  tt.func public @local_atomic_scatter_rmw_effects(%out: !tt.tensordesc<8x32xi32, #local_atomic_tma_shared>) {
+    // The atomic is the allocation's only user, so this descriptor proves
+    // BufferRegion discovers its full destination.
+    // CHECK-DAG: tti.experimental_buffer_descriptors [0, 512], [512, 512], shared_mem : tensor<2xi64
+    %c0 = arith.constant 0 : i32
+    %indices = arith.constant dense<0> : tensor<8x32xi32, #local_atomic_blocked>
+    %values = arith.constant dense<1> : tensor<8x32xi32, #local_atomic_blocked>
+    // CHECK: %[[ATOMIC_DST:.*]] = ttg.local_alloc {allocation.offset = 0 : i32}
+    %dst = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8x32xi32, #local_atomic_shared, #local_atomic_smem, mutable>
+    %proxy = ttg.local_alloc {allocation.offset = 512 : i32} : () -> !ttg.memdesc<8x32xi32, #local_atomic_tma_shared, #local_atomic_smem, mutable>
+
+    // Runtime indices along the sharded axis can target either CTA row.
+    // CHECK: %[[ATOMIC_CTAS:.*]] = arith.constant 3 : i32
+    // CHECK: %[[ATOMIC_BUF:.*]] = tti.experimental_memdesc_to_i32 %[[ATOMIC_DST]]
+    // CHECK: %[[ATOMIC_BYTES:.*]] = arith.constant 512 : i32
+    // CHECK: tt.call @__triton_consan_set_proxy_access{{.*}}(%[[ATOMIC_BUF]], %[[ATOMIC_BYTES]], {{.*}}%[[ATOMIC_CTAS]])
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
+    // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
+    // CHECK: tt.call @__triton_consan_clear_read_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
+    // CHECK: ttg.local_atomic_scatter_rmw
+    %old = ttg.local_atomic_scatter_rmw add, %dst[%indices], %values {axis = 1 : i32} : (!ttg.memdesc<8x32xi32, #local_atomic_shared, #local_atomic_smem, mutable>, tensor<8x32xi32, #local_atomic_blocked>, tensor<8x32xi32, #local_atomic_blocked>) -> tensor<8x32xi32, #local_atomic_blocked>
+    // Enable proxy tracking without giving the atomic destination another user.
+    ttng.async_tma_copy_local_to_global %out[%c0, %c0] %proxy : !tt.tensordesc<8x32xi32, #local_atomic_tma_shared>, !ttg.memdesc<8x32xi32, #local_atomic_tma_shared, #local_atomic_smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #local_access_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
 #local_access_smem = #ttg.shared_memory
 #local_access_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
