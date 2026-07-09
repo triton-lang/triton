@@ -53,6 +53,11 @@ public:
     return computeCapability >= 100;
   }
 
+  bool supportLdRed() const {
+    // Blackwell (sm103) and newer, but exclude sm120 and sm121.
+    return computeCapability >= 103 && computeCapability / 10 != 12;
+  }
+
 private:
   static constexpr char kTargetPrefix[] = "cuda:";
 

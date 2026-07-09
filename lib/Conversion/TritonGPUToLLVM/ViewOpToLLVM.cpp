@@ -57,9 +57,10 @@ struct SplatOpConversion : public ConvertOpToLLVMPattern<triton::SplatOp> {
       constVal = vec;
     }
     Value llSrc = bitOrPtrCast(constVal, srcType, b);
-    size_t elemsPerThread = getTotalElemsPerThread(tensorTy);
+    size_t elemsPerThread = getUniqueElemsPerThread(tensorTy);
     llvm::SmallVector<Value> elems(elemsPerThread, llSrc);
-    return packLLElements(loc, typeConverter, elems, rewriter, resType);
+    return packUniqueTensorElements(loc, typeConverter, elems, rewriter,
+                                    resType);
   }
   LogicalResult matchAndRewrite(triton::SplatOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
@@ -78,7 +79,7 @@ struct UnsplatOpConversion : public ConvertOpToLLVMPattern<triton::UnsplatOp> {
   LogicalResult matchAndRewrite(triton::UnsplatOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
     auto loc = op->getLoc();
-    auto scrVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    auto scrVals = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
     rewriter.replaceOp(op, scrVals[0]);
     return success();
   }
@@ -133,35 +134,9 @@ struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto resultTy = cast<RankedTensorType>(op.getType());
-    auto typeConverter = getTypeConverter();
-
-    // Note: We must explicitly handle broadcasted registers. The LLVM lowering
-    // generally represents broadcasted register bits by *duplicating* elements
-    // in the LLVM struct. Many conversions operate on a "stripped" (no-bcast)
-    // view and then re-introduce broadcasting at the end (see
-    // ConvertLayoutOpConversion).
-    StringAttr kReg = StringAttr::get(rewriter.getContext(), "register");
-
     // Unpack input values.
-    auto lhsVals = unpackLLElements(loc, adaptor.getLhs(), rewriter);
-    auto rhsVals = unpackLLElements(loc, adaptor.getRhs(), rewriter);
-
-    // Strip broadcasted registers from inputs.
-    auto lhsTy = cast<RankedTensorType>(op.getLhs().getType());
-    auto rhsTy = cast<RankedTensorType>(op.getRhs().getType());
-    auto lhsLayout = toLinearLayout(lhsTy);
-    auto rhsLayout = toLinearLayout(rhsTy);
-    auto removeBroadcastLhs = actionRemoveBroadcastedRegs(lhsLayout);
-    auto removeBroadcastRhs = actionRemoveBroadcastedRegs(rhsLayout);
-    if (!removeBroadcastLhs.isIdentity())
-      lhsVals = removeBroadcastLhs.apply(lhsVals);
-    if (!removeBroadcastRhs.isIdentity())
-      rhsVals = removeBroadcastRhs.apply(rhsVals);
-
-    // Compute the expected non-broadcast register count for the result.
-    auto dstLayout = toLinearLayout(resultTy);
-    auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
-    auto strippedDstLayout = removeBroadcastDst.apply(dstLayout);
+    auto lhsVals = unpackUniqueTensorElements(loc, adaptor.getLhs(), rewriter);
+    auto rhsVals = unpackUniqueTensorElements(loc, adaptor.getRhs(), rewriter);
 
     // concatenate (and potentially reorder) values
     SmallVector<Value> retVals;
@@ -170,14 +145,11 @@ struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
     for (Value v : rhsVals)
       retVals.push_back(v);
 
-    assert(retVals.size() == strippedDstLayout.getInDimSize(kReg));
-
-    // Re-introduce broadcasting if the destination expects it.
-    if (!removeBroadcastDst.isIdentity())
-      retVals = broadcastAs(retVals, dstLayout);
+    assert(retVals.size() == getUniqueElemsPerThread(resultTy));
 
     // pack and replace
-    Value ret = packLLElements(loc, typeConverter, retVals, rewriter, resultTy);
+    Value ret = packUniqueTensorElements(loc, getTypeConverter(), retVals,
+                                         rewriter, resultTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
@@ -206,6 +178,7 @@ struct JoinOpConversion : public ConvertOpToLLVMPattern<JoinOp> {
     auto ll = toLinearLayout(dstTy);
     int splitDim = dstTy.getRank() - 1;
     auto kReg = mlir::StringAttr::get(dstTy.getContext(), "register");
+    ll = ll.removeZeroBasesAlongDim(kReg);
     const auto &bases = ll.getBases();
     const auto &regs = bases.find(kReg)->second;
     int numContiguousValues = 1;
@@ -219,9 +192,9 @@ struct JoinOpConversion : public ConvertOpToLLVMPattern<JoinOp> {
     }
     assert(found && "Join dimension is not distributed along registers.");
     SmallVector<Value> lhsVals =
-        unpackLLElements(loc, adaptor.getLhs(), rewriter);
+        unpackUniqueTensorElements(loc, adaptor.getLhs(), rewriter);
     SmallVector<Value> rhsVals =
-        unpackLLElements(loc, adaptor.getRhs(), rewriter);
+        unpackUniqueTensorElements(loc, adaptor.getRhs(), rewriter);
     assert(lhsVals.size() == rhsVals.size());
     SmallVector<Value> joinedVals;
     joinedVals.resize(lhsVals.size() * 2);
@@ -231,8 +204,8 @@ struct JoinOpConversion : public ConvertOpToLLVMPattern<JoinOp> {
         joinedVals[2 * i + numContiguousValues + j] = rhsVals[i + j];
       }
     }
-    auto typeConverter = getTypeConverter();
-    Value ret = packLLElements(loc, typeConverter, joinedVals, rewriter, dstTy);
+    Value ret = packUniqueTensorElements(loc, getTypeConverter(), joinedVals,
+                                         rewriter, dstTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
@@ -257,6 +230,7 @@ struct SplitOpConversion : public ConvertOpToLLVMPattern<SplitOp> {
     auto ll = toLinearLayout(srcTy);
     int splitDim = srcTy.getRank() - 1;
     auto kReg = mlir::StringAttr::get(srcTy.getContext(), "register");
+    ll = ll.removeZeroBasesAlongDim(kReg);
     const auto &bases = ll.getBases();
     const auto &regs = bases.find(kReg)->second;
     int numContiguousValues = 1;
@@ -270,9 +244,8 @@ struct SplitOpConversion : public ConvertOpToLLVMPattern<SplitOp> {
     }
     assert(found && "Split dimension is not distributed along registers.");
     Location loc = op->getLoc();
-    auto typeConverter = getTypeConverter();
     SmallVector<Value> srcVals =
-        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+        unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
     assert(srcVals.size() % 2 == 0);
     SmallVector<Value> outLhsVals;
     SmallVector<Value> outRhsVals;
@@ -282,11 +255,11 @@ struct SplitOpConversion : public ConvertOpToLLVMPattern<SplitOp> {
         outRhsVals.push_back(srcVals[i + numContiguousValues + j]);
       }
     }
-    auto resultTy = cast<RankedTensorType>(op.getResult(0).getType());
-    Value retLhs =
-        packLLElements(loc, typeConverter, outLhsVals, rewriter, resultTy);
-    Value retRhs =
-        packLLElements(loc, typeConverter, outRhsVals, rewriter, resultTy);
+    auto resultTy = op.getResult(0).getType();
+    Value retLhs = packUniqueTensorElements(loc, getTypeConverter(), outLhsVals,
+                                            rewriter, resultTy);
+    Value retRhs = packUniqueTensorElements(loc, getTypeConverter(), outRhsVals,
+                                            rewriter, resultTy);
     rewriter.replaceOp(op, {retLhs, retRhs});
     return success();
   }
@@ -299,13 +272,8 @@ struct ReshapeOpConversion : public ConvertOpToLLVMPattern<ReshapeOp> {
   LogicalResult
   matchAndRewrite(ReshapeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
     assert(!isExpensiveView(op.getSrc().getType(), op.getType()));
-    auto resultTy = cast<RankedTensorType>(op.getType());
-    auto typeConverter = getTypeConverter();
-    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    Value ret = packLLElements(loc, typeConverter, vals, rewriter, resultTy);
-    rewriter.replaceOp(op, ret);
+    rewriter.replaceOp(op, adaptor.getSrc());
     return success();
   }
 };
@@ -318,32 +286,7 @@ struct ExpandDimsOpConversion : public ConvertOpToLLVMPattern<ExpandDimsOp> {
   LogicalResult
   matchAndRewrite(ExpandDimsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    auto typeConverter = getTypeConverter();
-    auto srcVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
-    auto resultTy = cast<RankedTensorType>(op.getType());
-    auto srcLayout = dyn_cast<SliceEncodingAttr>(srcTy.getEncoding());
-    if (!srcLayout) {
-      return emitOptionalError(
-          loc, "ExpandDimsOp only supports SliceEncodingAttr as its input");
-    }
-    auto resultLayout = resultTy.getEncoding();
-    auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
-    auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
-    std::map<SmallVector<unsigned>, Value> srcValues;
-    for (size_t i = 0; i < srcOffsets.size(); i++) {
-      srcValues[srcOffsets[i]] = srcVals[i];
-    }
-    SmallVector<Value> resultVals;
-    for (size_t i = 0; i < resultOffsets.size(); i++) {
-      auto offset = resultOffsets[i];
-      offset.erase(offset.begin() + srcLayout.getDim());
-      resultVals.push_back(srcValues.at(offset));
-    }
-    Value ret =
-        packLLElements(loc, typeConverter, resultVals, rewriter, resultTy);
-    rewriter.replaceOp(op, ret);
+    rewriter.replaceOp(op, adaptor.getSrc());
     return success();
   }
 };
@@ -446,7 +389,8 @@ struct BroadcastOpConversion
     assert(rank == resultTy.getRank());
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
     auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
-    SmallVector<Value> srcVals = unpackLLElements(loc, src, rewriter);
+    SmallVector<Value> srcVals =
+        unpackTensorElements(loc, src, rewriter, srcTy);
     std::map<SmallVector<unsigned>, Value> srcValues;
     for (size_t i = 0; i < srcOffsets.size(); i++) {
       srcValues[srcOffsets[i]] = srcVals[i];
@@ -460,7 +404,7 @@ struct BroadcastOpConversion
       resultVals.push_back(srcValues.at(offset));
     }
     Value resultStruct =
-        packLLElements(loc, typeConverter, resultVals, rewriter, resultTy);
+        packTensorElements(loc, typeConverter, resultVals, rewriter, resultTy);
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }

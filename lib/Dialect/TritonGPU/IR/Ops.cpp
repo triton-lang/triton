@@ -1162,13 +1162,9 @@ LogicalResult MemDescSubsliceOp::verify() {
       namedOffsets[dim] = {kDim, dimSize};
       auto offsetAndBlock = llInv.apply(namedOffsets);
       auto offset = offsetAndBlock[0];
-      auto block = offsetAndBlock[1];
       if (!llvm::isPowerOf2_32(offset.second) && offset.second != 0) {
         return emitError(
             "We don't support splitting along the swizzling pattern");
-      }
-      if (block.second != 0) {
-        return emitError("We don't support splitting along CTA dimensions");
       }
     }
   }
@@ -1205,12 +1201,12 @@ void WarpSpecializeOp::getSuccessorRegions(
   // And the default region branches transparently back to the parent.
   if (src.getTerminatorPredecessorOrNull()->getParentRegion() ==
       &getDefaultRegion())
-    successors.push_back(RegionSuccessor::parent());
+    successors.push_back(RegionSuccessor(getOperation()));
 }
 
 ValueRange WarpSpecializeOp::getSuccessorInputs(RegionSuccessor successor) {
   // When returning to parent, the successor inputs are the op results.
-  return successor.isParent() ? getResults() : ValueRange();
+  return successor.isOperation() ? getResults() : ValueRange();
 }
 
 void WarpSpecializePartitionsOp::getSuccessorRegions(

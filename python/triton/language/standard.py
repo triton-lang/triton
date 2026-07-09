@@ -522,8 +522,8 @@ def flip(x, dim=None):
     :param dim: the dimension to flip along
     :type dim: int
     """
-    core.static_assert(-len(x.shape) <= dim and dim < len(x.shape))
     _dim: core.constexpr = _get_flip_dim(dim, x.shape)
+    core.static_assert(0 <= _dim and _dim < len(x.shape), "flip: dim must be None or in [-rank, rank)")
     core.static_assert(_is_power_of_two(x.shape[_dim]))
     steps: core.constexpr = _log2(x.shape[_dim])
 
@@ -561,10 +561,30 @@ def interleave(a, b):
 
 @jit
 def squeeze(x, dim: core.constexpr):
+    """
+    Removes a length-1 dimension from :code:`x` at index :code:`dim`.
+
+    The selected dimension must have length 1 (checked at compile time). This is
+    the inverse of :func:`unsqueeze`.
+
+    :param x: the input tensor
+    :param dim: the index of the dimension to remove
+    :type dim: int
+    """
     core.static_assert(x.shape[dim] == 1)
     return x.reshape(x.shape[:dim] + x.shape[dim + 1:])
 
 
 @jit
 def unsqueeze(x, dim: core.constexpr):
+    """
+    Inserts a length-1 dimension into :code:`x` at index :code:`dim`.
+
+    This is the inverse of :func:`squeeze` and is equivalent to
+    :func:`expand_dims`.
+
+    :param x: the input tensor
+    :param dim: the index at which the new dimension is inserted
+    :type dim: int
+    """
     return x.reshape(x.shape[:dim] + (1, ) + x.shape[dim:])

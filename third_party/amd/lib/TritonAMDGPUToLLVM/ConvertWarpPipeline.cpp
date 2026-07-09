@@ -239,12 +239,12 @@ static void analyzePipelineDependencies(ArrayRef<BlockInfo> clusterInfo,
 }
 
 static void emitClusterBarrier(OpBuilder &r, Location loc, bool needLocal) {
-  ROCDL::SchedBarrier::create(r, loc, 0);
+  ROCDL::SchedBarrier::create(r, loc, ROCDL::SchedGroupMask::none);
   if (needLocal)
     mlir::triton::gpu::BarrierOp::create(r, loc, triton::gpu::AddrSpace::Local);
   else
     ROCDL::SBarrierOp::create(r, loc);
-  ROCDL::SchedBarrier::create(r, loc, 0);
+  ROCDL::SchedBarrier::create(r, loc, ROCDL::SchedGroupMask::none);
 }
 
 static void emitClusterPriority(OpBuilder &r, Location loc,
@@ -268,9 +268,9 @@ static void wrapExistingBarrier(OpBuilder &b, Location loc,
                                 bool anyHasPriority) {
   b.setInsertionPoint(existingBarrier);
   emitClusterPriority(b, loc, clusterOp, anyHasPriority);
-  ROCDL::SchedBarrier::create(b, loc, 0);
+  ROCDL::SchedBarrier::create(b, loc, ROCDL::SchedGroupMask::none);
   b.setInsertionPointAfter(existingBarrier);
-  ROCDL::SchedBarrier::create(b, loc, 0);
+  ROCDL::SchedBarrier::create(b, loc, ROCDL::SchedGroupMask::none);
 }
 
 // Emit pre-barrier, thread-ID partitioning, and phase-shift cond_barrier.

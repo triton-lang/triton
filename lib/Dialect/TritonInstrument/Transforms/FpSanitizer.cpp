@@ -621,6 +621,37 @@ Value castSignedIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
   return v;
 }
 
+// Widening a floating-point payload is signed extension. Narrowing folds the
+// discarded high bits into the retained low bits before truncation. Values
+// produced by signed extension have uniform discarded bits, so normalizing by
+// the source sign makes `high` zero and narrowing remains a left inverse of
+// widening.
+Value castFloatPayloadToType(PatternRewriter &rewriter, Location loc, Value v,
+                             Type targetTy) {
+  if (v.getType() == targetTy)
+    return v;
+
+  unsigned srcWidth = getIntBitwidth(v.getType());
+  unsigned dstWidth = getIntBitwidth(targetTy);
+  if (dstWidth > srcWidth)
+    return arith::ExtSIOp::create(rewriter, loc, targetTy, v);
+
+  assert(srcWidth > dstWidth && "expected a narrowing payload cast");
+  Value signShift = getUIntConstantLike(rewriter, loc, v.getType(),
+                                        static_cast<uint64_t>(srcWidth - 1));
+  Value sign = arith::ShRUIOp::create(rewriter, loc, v, signShift);
+  Value zero = getIntConstantLike(rewriter, loc, v.getType(), 0);
+  Value signMask = arith::SubIOp::create(rewriter, loc, zero, sign);
+  Value normalized = arith::XOrIOp::create(rewriter, loc, v, signMask);
+  Value highShift = getUIntConstantLike(rewriter, loc, v.getType(),
+                                        static_cast<uint64_t>(dstWidth));
+  Value high = arith::ShRUIOp::create(rewriter, loc, normalized, highShift);
+  Value multiplier = getIntConstantLike(rewriter, loc, v.getType(), 3511);
+  Value foldedHigh = arith::MulIOp::create(rewriter, loc, high, multiplier);
+  Value folded = arith::XOrIOp::create(rewriter, loc, v, foldedHigh);
+  return arith::TruncIOp::create(rewriter, loc, targetTy, folded);
+}
+
 Value castScalarIntToIntLike(PatternRewriter &rewriter, Location loc,
                              Value scalar, Type targetTy) {
   auto elemTy = cast<IntegerType>(getElementTypeOrSelf(targetTy));
@@ -1183,7 +1214,7 @@ Value castDotScaledOperandToComputePayload(PatternRewriter &rewriter,
                                               storageFloat.getWidth())));
       payload = embedFloatBitsToInt(rewriter, loc, raw, storageFloat);
     }
-    return castSignedIntValueToType(rewriter, loc, payload, computeIntTy);
+    return castFloatPayloadToType(rewriter, loc, payload, computeIntTy);
   }
 
   // Match ttg.fp4_to_fp sanitization: unpacked e2m1 nibbles are payloads in
@@ -1211,9 +1242,9 @@ Value scaleI8ToComputePayload(PatternRewriter &rewriter, Location loc,
 
   if (computeElem == rewriter.getF16Type()) {
     // The real decomposition builds an f32 E8M0 scale and truncates it to f16.
-    // Under FPSan, truncf means mix-f32, signed-truncate, unmix-f16.
+    // Under FPSan, truncf means mix-f32, fold/truncate, unmix-f16.
     Value payloadF32 = scaleI8ToF32Payload(rewriter, loc, scaleI);
-    return castSignedIntValueToType(rewriter, loc, payloadF32, computeIntTy);
+    return castFloatPayloadToType(rewriter, loc, payloadF32, computeIntTy);
   }
 
   Value scaleComputeI =
@@ -1233,7 +1264,7 @@ Value castDotScaledScaleToComputePayload(PatternRewriter &rewriter,
                                           computeElem.getIntOrFloatBitWidth()));
   if (isFloatLike(scaleSlice.getType())) {
     Value payload = embedToInt(rewriter, loc, scaleSlice);
-    return castSignedIntValueToType(rewriter, loc, payload, computeIntTy);
+    return castFloatPayloadToType(rewriter, loc, payload, computeIntTy);
   }
   return scaleI8ToComputePayload(
       rewriter, loc, embedToInt(rewriter, loc, scaleSlice), computeElem);
@@ -1304,10 +1335,10 @@ Value emulateDotStep(PatternRewriter &rewriter, Location loc, Value aSlice,
     aI = embedToInt(rewriter, loc, aSlice);
     bI = embedToInt(rewriter, loc, bSlice);
   }
-  aI = castSignedIntValueToType(rewriter, loc, aI,
-                                getTypeWithElement(aI.getType(), accElem));
-  bI = castSignedIntValueToType(rewriter, loc, bI,
-                                getTypeWithElement(bI.getType(), accElem));
+  aI = castFloatPayloadToType(rewriter, loc, aI,
+                              getTypeWithElement(aI.getType(), accElem));
+  bI = castFloatPayloadToType(rewriter, loc, bI,
+                              getTypeWithElement(bI.getType(), accElem));
   Value aFull = tt::BroadcastOp::create(rewriter, loc, fullTy, aI);
   Value bFull = tt::BroadcastOp::create(rewriter, loc, fullTy, bI);
   return arith::MulIOp::create(rewriter, loc, aFull, bFull);
@@ -1396,10 +1427,6 @@ Value loadScaledScaleK32(PatternRewriter &rewriter, Location loc, bool isLhs,
             : SmallVector<int64_t>{groups, repeat, targetTy.getShape()[1]};
   int64_t expandAxis = isLhs ? 2 : 1;
 
-  auto broadcastLayout = getOptimizedBlockedEncoding(
-      rewriter, broadcastShape, scaleTileTy.getElementType());
-  auto compactSliceLayout = ttg::SliceEncodingAttr::get(
-      rewriter.getContext(), expandAxis, broadcastLayout);
   auto compactLoadLayout = getOptimizedBlockedEncoding(
       rewriter, compactShape, scaleTileTy.getElementType());
   auto compactLoadTy = RankedTensorType::get(
@@ -1420,12 +1447,10 @@ Value loadScaledScaleK32(PatternRewriter &rewriter, Location loc, bool isLhs,
                                        /*stride1=*/isLhs ? scaleStride : 1);
   compact = castDotScaledScaleToComputePayload(rewriter, loc, compact,
                                                scale.computeElem);
-  auto compactSliceTy = cast<RankedTensorType>(compact.getType())
-                            .cloneWithEncoding(compactSliceLayout);
-  compact =
-      ttg::ConvertLayoutOp::create(rewriter, loc, compactSliceTy, compact);
 
-  Value expanded = tt::ExpandDimsOp::create(rewriter, loc, compact, expandAxis);
+  auto expandedShape = compactShape;
+  expandedShape.insert(expandedShape.begin() + expandAxis, 1);
+  Value expanded = tt::ReshapeOp::create(rewriter, loc, expandedShape, compact);
   auto broadcastTy =
       cast<RankedTensorType>(expanded.getType()).clone(broadcastShape);
   Value broadcast =
@@ -1999,8 +2024,8 @@ struct ExtFOpPattern : public OpRewritePattern<arith::ExtFOp> {
       return failure();
     auto loc = op.getLoc();
     auto inI = embedToInt(rewriter, loc, op.getIn());
-    auto outI = castSignedIntValueToType(rewriter, loc, inI,
-                                         getIntTypeLike(op.getType()));
+    auto outI = castFloatPayloadToType(rewriter, loc, inI,
+                                       getIntTypeLike(op.getType()));
     auto outF = unembedToFloat(rewriter, loc, outI, op.getType());
     rewriter.replaceOp(op, outF);
     return success();
@@ -2015,8 +2040,8 @@ struct TruncFOpPattern : public OpRewritePattern<arith::TruncFOp> {
       return failure();
     auto loc = op.getLoc();
     auto inI = embedToInt(rewriter, loc, op.getIn());
-    auto outI = castSignedIntValueToType(rewriter, loc, inI,
-                                         getIntTypeLike(op.getType()));
+    auto outI = castFloatPayloadToType(rewriter, loc, inI,
+                                       getIntTypeLike(op.getType()));
     auto outF = unembedToFloat(rewriter, loc, outI, op.getType());
     rewriter.replaceOp(op, outF);
     return success();
@@ -2031,8 +2056,8 @@ struct FpToFpPattern : public OpRewritePattern<tt::FpToFpOp> {
       return failure();
     auto loc = op.getLoc();
     auto inI = embedToInt(rewriter, loc, op.getSrc());
-    auto outI = castSignedIntValueToType(rewriter, loc, inI,
-                                         getIntTypeLike(op.getType()));
+    auto outI = castFloatPayloadToType(rewriter, loc, inI,
+                                       getIntTypeLike(op.getType()));
     auto outF = unembedToFloat(rewriter, loc, outI, op.getType());
     rewriter.replaceOp(op, outF);
     return success();
