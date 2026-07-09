@@ -2642,15 +2642,25 @@ def test_deadlock_with_padded_warp_specialize_partition(device, run_wrapper, mon
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
-@pytest.mark.parametrize("TWO_CTAS", [False, True], ids=["single-cta-barrier", "two-cta-barrier"])
-def test_deadlock_after_other_partition_returns(TWO_CTAS, device, run_wrapper, monkeypatch, num_ctas):
+@pytest.mark.parametrize("TWO_CTAS,CLUSTER_BARRIER,FAILURE", [
+    pytest.param(False, False, True, id="single-cta-mbarrier"),
+    pytest.param(True, False, True, id="two-cta-mbarrier"),
+    pytest.param(True, True, True, id="cluster-deadlock"),
+    pytest.param(True, True, False, id="cluster-no-deadlock"),
+])
+def test_deadlock_after_other_partition_returns(TWO_CTAS, CLUSTER_BARRIER, FAILURE, device, run_wrapper, monkeypatch,
+                                                num_ctas):
     if TWO_CTAS and num_ctas == 1:
         pytest.skip("two-CTA barriers require at least two CTAs")
     if run_wrapper:
         result = run_in_process(test_deadlock_after_other_partition_returns,
-                                (TWO_CTAS, device, False, monkeypatch, num_ctas))
-        assert_expected_cuda_failure(result.exc)
-        assert "Deadlock detected" in result.driver_stderr_output
+                                (TWO_CTAS, CLUSTER_BARRIER, FAILURE, device, False, monkeypatch, num_ctas))
+        if FAILURE:
+            assert_expected_cuda_failure(result.exc)
+            assert "Deadlock detected" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
         return
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
@@ -2661,74 +2671,29 @@ def test_deadlock_after_other_partition_returns(TWO_CTAS, device, run_wrapper, m
         pass
 
     @gluon.jit
-    def wait_forever(bar):
-        mbarrier.wait(bar.index(0), phase=0)
+    def wait_forever(bar, FAILURE: ttgl.constexpr):
+        if FAILURE:
+            mbarrier.wait(bar.index(0), phase=0)
 
     @gluon.jit
     def complete_and_return(bar):
         mbarrier.arrive(bar.index(1), count=1)
 
     @gluon.jit
-    def kernel(TWO_CTAS: ttgl.constexpr):
+    def kernel(TWO_CTAS: ttgl.constexpr, CLUSTER_BARRIER: ttgl.constexpr, FAILURE: ttgl.constexpr):
         bar = mbarrier.allocate_mbarrier(batch=2, two_ctas=TWO_CTAS)
         mbarrier.init(bar.index(0), count=1)
         mbarrier.init(bar.index(1), count=1)
         ttgl.warp_specialize([
             (done, (bar, )),
-            (wait_forever, (bar, )),
+            (wait_forever, (bar, FAILURE)),
             (complete_and_return, (bar, )),
         ], [4, 4], [32, 32])
+        if CLUSTER_BARRIER:
+            for _ in range(2):
+                ttgl.barrier(cluster=True)
 
-    kernel[(1, )](TWO_CTAS, num_warps=4, num_ctas=num_ctas)
-
-
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
-@pytest.mark.parametrize("FAILURE", [True, False], ids=["deadlock", "no-deadlock"])
-def test_deadlock_user_cluster_barrier_outside_warp_specialize(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
-    if num_ctas == 1:
-        pytest.skip("two-CTA barriers require at least two CTAs")
-    if run_wrapper:
-        result = run_in_process(test_deadlock_user_cluster_barrier_outside_warp_specialize,
-                                (FAILURE, device, False, monkeypatch, num_ctas))
-        if FAILURE:
-            assert_expected_cuda_failure(result.exc)
-            assert "Deadlock detected" in result.driver_stderr_output
-        else:
-            assert result.exc is None
-            assert result.driver_stderr_output == ""
-        return
-
-    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
-    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
-    knobs.refresh_knobs()
-
-    @gluon.jit
-    def done(bar, FAILURE: ttgl.constexpr):
-        pass
-
-    @gluon.jit
-    def wait_forever(bar, FAILURE: ttgl.constexpr):
-        if FAILURE:
-            mbarrier.wait(bar.index(0), phase=0)
-
-    @gluon.jit
-    def complete_and_return(bar, FAILURE: ttgl.constexpr):
-        mbarrier.arrive(bar.index(1), count=1)
-
-    @gluon.jit
-    def kernel(FAILURE: ttgl.constexpr):
-        bar = mbarrier.allocate_mbarrier(batch=2, two_ctas=True)
-        mbarrier.init(bar.index(0), count=1)
-        mbarrier.init(bar.index(1), count=1)
-        ttgl.warp_specialize([
-            (done, (bar, FAILURE)),
-            (wait_forever, (bar, FAILURE)),
-            (complete_and_return, (bar, FAILURE)),
-        ], [4, 4], [32, 32])
-        for _ in range(2):
-            ttgl.barrier(cluster=True)
-
-    kernel[(1, )](FAILURE, num_warps=4, num_ctas=num_ctas)
+    kernel[(1, )](TWO_CTAS, CLUSTER_BARRIER, FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")

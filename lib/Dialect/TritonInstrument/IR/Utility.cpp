@@ -653,14 +653,6 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
     int numBarriers = barrierRegions.size();
     barrierStates.insert(entryRegion, createZeroInitStateTensor(
                                           b, {numCTAs, numBarriers}, 64, fb));
-    Operation *insertPoint = &*b.getInsertionPoint();
-    Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
-    Value zero = arith::ConstantIntOp::create(b, 0, 32);
-    Value isCTA0 =
-        arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
-    for (auto &entry : clusterBarrierSlots)
-      fb.createInitBarrierStateCall(b, entry.second, numCTAs, isCTA0,
-                                    insertPoint);
     passValueToWarpSpecialize(barrierStates.at(entryRegion), barrierStates);
 
     // Deadlock detection aux data over [cta, barrier]: waiting

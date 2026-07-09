@@ -1126,18 +1126,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
-  // CHECK-LABEL: tt.func private @__triton_consan_init_virtual_barrier_state
-  // CHECK: cf.cond_br
-  // CHECK: arith.shli
-  // CHECK: arith.shli
-  // CHECK: arith.ori
   // CHECK-LABEL: @wait_barrier_multi_cta
   tt.func public @wait_barrier_multi_cta() {
     // The dummy descriptor is the virtual cluster-barrier slot. It uses the
     // ordinary barrier state, waiting, and active-mask captures.
     // CHECK: tti.experimental_buffer_descriptors [65536, 0], [8, 0], shared_mem
     // CHECK: ttg.global_scratch_alloc
-    // CHECK: tt.call @__triton_consan_init_virtual_barrier_state
     // CHECK-COUNT-3: ttg.global_scratch_alloc
     // CHECK-NOT: ttg.global_scratch_alloc
     // CHECK: tti.experimental_lock_release
@@ -1158,22 +1152,12 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK-NEXT: tti.experimental_lock_release %{{.*}}, %[[WAIT_PRED]]
     ttng.wait_barrier %bar, %c0_i32, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tti.experimental_lock_acquire
-    // CHECK: tt.store
-    // CHECK: arith.subi
-    // CHECK: arith.cmpi eq
-    // CHECK: %[[NEXT_PHASE:.*]] = arith.xori
-    // CHECK: %[[PACKED0:.*]] = arith.ori %[[NEXT_PHASE]],
-    // CHECK-NEXT: %[[PACKED:.*]] = arith.ori %[[PACKED0]],
-    // CHECK-NEXT: %[[NEW_STATE:.*]] = arith.select {{.*}}, %[[PACKED]],
-    // CHECK: tt.store {{.*}}, %[[NEW_STATE]]
-    // CHECK-NEXT: %{{.*}} = tt.call @__triton_consan_check_all_active_waiting
+    // CHECK: tt.call @__triton_consan_check_all_active_waiting
     // CHECK-NEXT: tti.experimental_lock_release
     // CHECK-NEXT: tti.experimental_assert_uniform {{.*}}, "Deadlock detected at a cluster barrier"
     // CHECK-NEXT: cf.br ^[[POLL:bb[0-9]+]]
     // CHECK: ^[[POLL]]:
     // CHECK: tti.experimental_lock_acquire
-    // CHECK: arith.cmpi ne
-    // CHECK: tt.store
     // CHECK: tt.call @__triton_consan_check_all_active_waiting
     // CHECK-NEXT: tti.experimental_lock_release
     // CHECK-NEXT: tti.experimental_assert_uniform {{.*}}, "Deadlock detected at a cluster barrier"

@@ -1,7 +1,6 @@
 #include "triton/Dialect/TritonInstrument/IR/FunctionBuilder.h"
 
 #include <cassert>
-#include <utility>
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -437,63 +436,36 @@ Value createVirtualBarrierMask(ImplicitLocOpBuilder &b, Value barrierIdx,
   return arith::AndIOp::create(b, barrierMask, leadCTAMask);
 }
 
-Value getVirtualBarrierPhase(ImplicitLocOpBuilder &b, Value states,
-                             RankedTensorType statesType, Value mask) {
+Value arriveVirtualBarrier(ImplicitLocOpBuilder &b, Value statesPtr,
+                           RankedTensorType statesType, Value barrierIdx,
+                           int count) {
+  Value states =
+      tti::createLoadScratchMemory(b, b.getLoc(), statesPtr, statesType);
+  Value mask = createVirtualBarrierMask(b, barrierIdx, statesType);
   Value one = tti::createConstIntTensor(b, b.getLoc(), 1, statesType);
-  Value zero = tti::createConstIntTensor(b, b.getLoc(), 0, statesType);
-  Value phases = arith::AndIOp::create(b, states, one);
-  phases = arith::SelectOp::create(b, mask, phases, zero);
-  Value phase = reduceAll<arith::OrIOp>(b, phases);
-  return arith::TruncIOp::create(b, b.getI1Type(), phase);
-}
-
-std::pair<Value, Value> arriveVirtualBarrier(ImplicitLocOpBuilder &b,
-                                             Value states,
-                                             RankedTensorType statesType,
-                                             Value mask) {
-  Value zero = tti::createConstIntTensor(b, b.getLoc(), 0, statesType);
-  Value one = tti::createConstIntTensor(b, b.getLoc(), 1, statesType);
-  Value countMask = tti::createConstIntTensor(
-      b, b.getLoc(), BarrierBits::countMask, statesType);
-  Value shiftInit = tti::createConstIntTensor(
-      b, b.getLoc(), BarrierBits::initCountLsb, statesType);
-  Value shiftCurrent = tti::createConstIntTensor(
-      b, b.getLoc(), BarrierBits::currentCountLsb, statesType);
-
+  Value two = tti::createConstIntTensor(b, b.getLoc(), 2, statesType);
   Value phase = arith::AndIOp::create(b, states, one);
-  Value initCount = arith::ShRUIOp::create(b, states, shiftInit);
-  initCount = arith::AndIOp::create(b, initCount, countMask);
-  Value currentCount = arith::ShRUIOp::create(b, states, shiftCurrent);
-  currentCount = arith::AndIOp::create(b, currentCount, countMask);
-  Value decremented = arith::SubIOp::create(b, currentCount, one);
-  Value completed = arith::AndIOp::create(
-      b, mask,
-      arith::CmpIOp::create(b, arith::CmpIPredicate::eq, decremented, zero));
+  // Virtual slots encode 2 * arrivals + phase. Completing an epoch resets the
+  // arrival count and toggles the low phase bit used by deadlock detection.
+  Value nextState = arith::AddIOp::create(b, states, two);
+  Value completionState = arith::AddIOp::create(
+      b, phase,
+      tti::createConstIntTensor(b, b.getLoc(), 2 * count, statesType));
+  Value completed =
+      arith::AndIOp::create(b, mask,
+                            arith::CmpIOp::create(b, arith::CmpIPredicate::eq,
+                                                  nextState, completionState));
   Value completedInt = arith::ExtUIOp::create(b, statesType, completed);
   Value nextPhase = arith::XOrIOp::create(b, phase, completedInt);
-  Value nextCount =
-      arith::SelectOp::create(b, completed, initCount, decremented);
-  Value initField = arith::ShLIOp::create(b, initCount, shiftInit);
-  Value currentField = arith::ShLIOp::create(b, nextCount, shiftCurrent);
-  Value nextState = arith::OrIOp::create(b, nextPhase, initField);
-  nextState = arith::OrIOp::create(b, nextState, currentField);
+  nextState = arith::SelectOp::create(b, completed, nextPhase, nextState);
   Value updated = arith::SelectOp::create(b, mask, nextState, states);
-  Value completedScalar = reduceAll<arith::OrIOp>(b, completed);
-  return {updated, completedScalar};
+  tti::createStoreScratchMemory(b, b.getLoc(), statesPtr, updated, statesType);
+  return reduceAll<arith::OrIOp>(b, completed);
 }
 
-Value updateVirtualBarrierWaiting(ImplicitLocOpBuilder &b, Value waiting,
-                                  RankedTensorType waitingType,
-                                  Value barrierIdx, Value thread, Value phase,
-                                  Value pred, bool markWaiting) {
-  Value barrierMask = createDimMask(b, barrierIdx, waitingType, /*dim=*/1);
-  Value ctaMask = createLeadCTAEffectMask(
-      b, waitingType, arith::ConstantIntOp::create(b, 1, 32));
-  Value slotMask = arith::AndIOp::create(b, barrierMask, ctaMask);
-  auto maskType = cast<RankedTensorType>(slotMask.getType());
-  Value setTensor = triton::SplatOp::create(b, maskType, pred);
-  slotMask = arith::AndIOp::create(b, slotMask, setTensor);
-
+Value updateWaitingBits(ImplicitLocOpBuilder &b, Value waiting,
+                        RankedTensorType waitingType, Value thread, Value phase,
+                        Value mask, bool markWaiting) {
   Value bitsPerThread =
       arith::ConstantIntOp::create(b, WaitingBits::bitsPerThread, 32);
   Value flagBit = arith::ConstantIntOp::create(b, WaitingBits::flagBit, 32);
@@ -510,13 +482,15 @@ Value updateVirtualBarrierWaiting(ImplicitLocOpBuilder &b, Value waiting,
   Value clearMaskTensor = triton::SplatOp::create(b, waitingType, clearMask);
   Value cleared = arith::AndIOp::create(b, waiting, clearMaskTensor);
 
+  if (!markWaiting)
+    return arith::SelectOp::create(b, mask, cleared, waiting);
+
   Value phaseI32 = arith::ExtUIOp::create(b, b.getI32Type(), phase);
   Value phaseShifted = arith::ShLIOp::create(b, phaseI32, phaseShift);
   Value setBits = arith::OrIOp::create(b, flagMask, phaseShifted);
   Value setBitsTensor = triton::SplatOp::create(b, waitingType, setBits);
   Value withWaiting = arith::OrIOp::create(b, cleared, setBitsTensor);
-  Value updated = markWaiting ? withWaiting : cleared;
-  return arith::SelectOp::create(b, slotMask, updated, waiting);
+  return arith::SelectOp::create(b, mask, withWaiting, waiting);
 }
 
 } // namespace
@@ -912,37 +886,41 @@ void FunctionBuilder::createClusterBarrierRendezvousCall(
       cast<RankedTensorType>(auxData.waiting.at(insertPoint).type);
   Value lock = auxData.lock.at(insertPoint).value;
   Value vTrue = arith::ConstantIntOp::create(b, 1, 1);
+  int numCTAs = ttg::lookupNumCTAs(insertPoint);
 
   auto getPhase = [&]() {
     Value states =
         tti::createLoadScratchMemory(b, b.getLoc(), statesPtr, statesType);
     Value mask = createVirtualBarrierMask(b, barrierIdxVal, statesType);
-    return getVirtualBarrierPhase(b, states, statesType, mask);
+    Value phase = arith::AndIOp::create(
+        b, states, tti::createConstIntTensor(b, b.getLoc(), 1, statesType));
+    phase = arith::SelectOp::create(
+        b, mask, phase,
+        tti::createConstIntTensor(b, b.getLoc(), 0, statesType));
+    return arith::TruncIOp::create(b, b.getI1Type(),
+                                   reduceAll<arith::OrIOp>(b, phase));
   };
   auto updateWaiting = [&](Value phase, Value pred, bool markWaiting) {
     Value waiting =
         tti::createLoadScratchMemory(b, b.getLoc(), waitingPtr, waitingType);
-    Value updated =
-        updateVirtualBarrierWaiting(b, waiting, waitingType, barrierIdxVal,
-                                    threadVal, phase, pred, markWaiting);
+    Value mask = arith::AndIOp::create(
+        b, createDimMask(b, barrierIdxVal, waitingType, /*dim=*/1),
+        createLeadCTAEffectMask(b, waitingType,
+                                arith::ConstantIntOp::create(b, 1, 32)));
+    Value predTensor = triton::SplatOp::create(
+        b, cast<RankedTensorType>(mask.getType()), pred);
+    mask = arith::AndIOp::create(b, mask, predTensor);
+    Value updated = updateWaitingBits(b, waiting, waitingType, threadVal, phase,
+                                      mask, markWaiting);
     tti::createStoreScratchMemory(b, b.getLoc(), waitingPtr, updated,
                                   waitingType);
-  };
-  auto arrive = [&]() {
-    Value states =
-        tti::createLoadScratchMemory(b, b.getLoc(), statesPtr, statesType);
-    Value mask = createVirtualBarrierMask(b, barrierIdxVal, statesType);
-    auto [updated, completed] =
-        arriveVirtualBarrier(b, states, statesType, mask);
-    tti::createStoreScratchMemory(b, b.getLoc(), statesPtr, updated,
-                                  statesType);
-    return completed;
   };
 
   tti::ExperimentalLockAcquireOp::create(b, lock, vTrue);
   Value savedPhase = getPhase();
   updateWaiting(savedPhase, vTrue, /*markWaiting=*/true);
-  Value completed = arrive();
+  Value completed =
+      arriveVirtualBarrier(b, statesPtr, statesType, barrierIdxVal, numCTAs);
   if (publishVisibility) {
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM})
       createPublishClusterVisibilityCall(b, completed, memType, insertPoint);
@@ -1157,60 +1135,6 @@ void FunctionBuilder::createInitBarrierStateCall(ImplicitLocOpBuilder &b,
         createCTAScopedStoreScratchMemory(fb, fb.getLoc(), statesPtr, updated,
                                           barrierStatesType,
                                           createCurrentCTAMask(fb));
-        triton::ReturnOp::create(fb);
-      });
-}
-
-void FunctionBuilder::createInitBarrierStateCall(ImplicitLocOpBuilder &b,
-                                                 int barrierIdx, int count,
-                                                 Value pred,
-                                                 Operation *insertPoint) {
-  assert(count >= 0 && (uint64_t)count <= BarrierBits::countMask &&
-         "barrier init count exceeds barrier state capacity");
-  if (!pred)
-    pred = arith::ConstantIntOp::create(b, 1, 1);
-  Value barrierIdxVal = arith::ConstantIntOp::create(b, barrierIdx, 32);
-  Value countVal = arith::ConstantIntOp::create(b, count, 32);
-  Value barrierStatesVal = auxData.barrierStates.at(insertPoint).value;
-  auto barrierStatesType =
-      cast<RankedTensorType>(auxData.barrierStates.at(insertPoint).type);
-  SmallVector<Value> args = {barrierIdxVal, countVal, pred, barrierStatesVal};
-  createCallToCachedFunction(
-      b, "init_virtual_barrier_state", args,
-      /*assertInfo=*/std::nullopt, {barrierStatesType},
-      [barrierStatesType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
-        Value barrierIdx = entryBlock->getArgument(0);
-        Value count = entryBlock->getArgument(1);
-        Value pred = entryBlock->getArgument(2);
-        Value statesPtr = entryBlock->getArgument(3);
-
-        auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
-        fb.setInsertionPointToStart(ifBlock);
-        Value states = tti::createLoadScratchMemory(fb, fb.getLoc(), statesPtr,
-                                                    barrierStatesType);
-        Value mask =
-            createVirtualBarrierMask(fb, barrierIdx, barrierStatesType);
-
-        Value countWide = adjustIntegerWidth(
-            fb, count, cast<IntegerType>(barrierStatesType.getElementType()));
-        Value countMask =
-            arith::ConstantIntOp::create(fb, BarrierBits::countMask, 64);
-        Value maskedCount = arith::AndIOp::create(fb, countWide, countMask);
-        Value countTensor =
-            triton::SplatOp::create(fb, barrierStatesType, maskedCount);
-        Value shiftInitTensor = tti::createConstIntTensor(
-            fb, fb.getLoc(), BarrierBits::initCountLsb, barrierStatesType);
-        Value shiftCurrentTensor = tti::createConstIntTensor(
-            fb, fb.getLoc(), BarrierBits::currentCountLsb, barrierStatesType);
-        Value initField =
-            arith::ShLIOp::create(fb, countTensor, shiftInitTensor);
-        Value currentField =
-            arith::ShLIOp::create(fb, countTensor, shiftCurrentTensor);
-        Value newState = arith::OrIOp::create(fb, initField, currentField);
-        Value updated = arith::SelectOp::create(fb, mask, newState, states);
-        tti::createStoreScratchMemory(fb, fb.getLoc(), statesPtr, updated,
-                                      barrierStatesType);
-        fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
       });
 }

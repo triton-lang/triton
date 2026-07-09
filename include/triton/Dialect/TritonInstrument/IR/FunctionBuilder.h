@@ -126,10 +126,6 @@ public:
   void createInitBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
                                   int count, Value pred,
                                   Operation *insertPoint);
-  // Initialize a virtual barrier slot directly rather than through a memdesc.
-  void createInitBarrierStateCall(ImplicitLocOpBuilder &b, int barrierIdx,
-                                  int count, Value pred,
-                                  Operation *insertPoint);
   // invalidateBarrierState: clear the tracked barrier lifecycle state and any
   // waiting bits for the barrier.
   void createInvalidateBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
