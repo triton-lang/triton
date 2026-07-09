@@ -149,7 +149,115 @@ struct MaskedRegionPlan {
   SmallVector<Operation *> intervalOps;
   SmallVector<Operation *> opsToMove;
   SmallVector<Operation *> opsToHoist;
+  bool hasMaskedStore = false;
+  SmallVector<triton::amdgpu::MaskedLoadOp> escapingLoads;
 };
+
+static bool isStoreValueUse(OpOperand &use) {
+  Operation *owner = use.getOwner();
+  return llvm::TypeSwitch<Operation *, bool>(owner)
+      .Case<LLVM::StoreOp>([&](LLVM::StoreOp store) {
+        return use.getOperandNumber() ==
+               store.getValueMutable().getOperandNumber();
+      })
+      .Case<ROCDL::RawPtrBufferStoreOp>([&](ROCDL::RawPtrBufferStoreOp store) {
+        return use.getOperandNumber() ==
+               store.getVdataMutable().getOperandNumber();
+      })
+      .Case<triton::amdgpu::MaskedStoreOp>(
+          [&](triton::amdgpu::MaskedStoreOp store) {
+            return use.getOperandNumber() ==
+                   store.getValueMutable().getOperandNumber();
+          })
+      .Default([](Operation *) { return false; });
+}
+
+static bool isValueForwardingUse(OpOperand &use) {
+  Operation *owner = use.getOwner();
+  return llvm::TypeSwitch<Operation *, bool>(owner)
+      .Case<LLVM::BitcastOp, LLVM::FPExtOp, LLVM::FPTruncOp, LLVM::SExtOp,
+            LLVM::TruncOp, LLVM::ZExtOp>([&](auto castOp) {
+        return use.getOperandNumber() ==
+               castOp.getArgMutable().getOperandNumber();
+      })
+      .Case<LLVM::ExtractElementOp>([&](LLVM::ExtractElementOp extract) {
+        return use.getOperandNumber() ==
+               extract.getVectorMutable().getOperandNumber();
+      })
+      .Case<LLVM::ExtractValueOp>([&](LLVM::ExtractValueOp extract) {
+        return use.getOperandNumber() ==
+               extract.getContainerMutable().getOperandNumber();
+      })
+      .Case<LLVM::InsertElementOp>([&](LLVM::InsertElementOp insert) {
+        unsigned operandNumber = use.getOperandNumber();
+        return operandNumber == insert.getValueMutable().getOperandNumber() ||
+               operandNumber == insert.getVectorMutable().getOperandNumber();
+      })
+      .Case<LLVM::InsertValueOp>([&](LLVM::InsertValueOp insert) {
+        unsigned operandNumber = use.getOperandNumber();
+        return operandNumber == insert.getValueMutable().getOperandNumber() ||
+               operandNumber == insert.getContainerMutable().getOperandNumber();
+      })
+      .Case<LLVM::ShuffleVectorOp>([&](LLVM::ShuffleVectorOp shuffle) {
+        unsigned operandNumber = use.getOperandNumber();
+        return operandNumber == shuffle.getV1Mutable().getOperandNumber() ||
+               operandNumber == shuffle.getV2Mutable().getOperandNumber();
+      })
+      .Default([](Operation *) { return false; });
+}
+
+struct StoreValueUseState {
+  llvm::SmallPtrSet<Operation *, 16> visited;
+  bool reachesStoreValue = false;
+};
+
+static bool
+onlyFeedsStoreValues(Value value,
+                     const llvm::SmallPtrSetImpl<Operation *> &moveSet,
+                     StoreValueUseState &state) {
+  for (OpOperand &use : value.getUses()) {
+    Operation *owner = use.getOwner();
+    // Uses moved into the region do not escape through region results.
+    if (moveSet.contains(owner))
+      continue;
+
+    if (isStoreValueUse(use)) {
+      state.reachesStoreValue = true;
+      continue;
+    }
+
+    if (!isValueForwardingUse(use))
+      return false;
+
+    if (!state.visited.insert(owner).second)
+      continue;
+    for (Value result : owner->getResults()) {
+      if (!onlyFeedsStoreValues(result, moveSet, state))
+        return false;
+    }
+  }
+  return true;
+}
+
+static bool
+loadOnlyFeedsStoreValues(triton::amdgpu::MaskedLoadOp load,
+                         const llvm::SmallPtrSetImpl<Operation *> &moveSet) {
+  StoreValueUseState state;
+  return onlyFeedsStoreValues(load.getResult(), moveSet, state) &&
+         state.reachesStoreValue;
+}
+
+// Region results for loads can expose adjacent loads to LLVM vectorization and
+// early waits. Keep them only when all outside uses feed store values.
+static bool shouldFormMaskedRegion(const MaskedRegionPlan &plan) {
+  llvm::SmallPtrSet<Operation *, 16> moveSet(plan.opsToMove.begin(),
+                                             plan.opsToMove.end());
+  if (!llvm::all_of(plan.escapingLoads, [&](triton::amdgpu::MaskedLoadOp load) {
+        return loadOnlyFeedsStoreValues(load, moveSet);
+      }))
+    return false;
+  return plan.hasMaskedStore || !plan.escapingLoads.empty();
+}
 
 static FailureOr<MaskedRegionPlan>
 computeMaskedRegionPlan(ArrayRef<Operation *> intervalOps) {
@@ -159,6 +267,7 @@ computeMaskedRegionPlan(ArrayRef<Operation *> intervalOps) {
   llvm::SmallPtrSet<Operation *, 16> hoistSet;
   SmallVector<Operation *> regionBodyWorklist;
   SmallVector<Operation *> regionElseWorklist;
+  bool hasMaskedStore = false;
 
   for (Operation *op : intervalOps) {
     if (Value opMask = getMaskedOpMask(op)) {
@@ -173,6 +282,7 @@ computeMaskedRegionPlan(ArrayRef<Operation *> intervalOps) {
         continue;
       }
       auto store = cast<triton::amdgpu::MaskedStoreOp>(op);
+      hasMaskedStore = true;
       if (!addRegionBodyDependency(store.getPtr(), intervalSet, moveSet,
                                    regionBodyWorklist))
         return failure();
@@ -229,8 +339,16 @@ computeMaskedRegionPlan(ArrayRef<Operation *> intervalOps) {
       return failure();
   }
 
+  SmallVector<triton::amdgpu::MaskedLoadOp> escapingLoads;
+  for (Operation *op : opsToMove) {
+    auto load = dyn_cast<triton::amdgpu::MaskedLoadOp>(op);
+    if (load && hasUseOutside(load.getResult(), moveSet))
+      escapingLoads.push_back(load);
+  }
+
   return MaskedRegionPlan{SmallVector<Operation *>(intervalOps),
-                          std::move(opsToMove), std::move(opsToHoist)};
+                          std::move(opsToMove), std::move(opsToHoist),
+                          hasMaskedStore, std::move(escapingLoads)};
 }
 
 static FailureOr<MaskedRegionPlan> findMaskedRegion(Operation *first) {
@@ -279,13 +397,10 @@ static void formMaskedRegion(const MaskedRegionPlan &plan,
   SmallVector<Value> falseValues;
   SmallVector<Type> resultTypes;
   DenseMap<Operation *, unsigned> loadToResultIndex;
-  for (Operation *op : plan.opsToMove) {
-    auto load = dyn_cast<triton::amdgpu::MaskedLoadOp>(op);
-    if (load && hasUseOutside(load.getResult(), moveSet)) {
-      loadToResultIndex[op] = resultTypes.size();
-      falseValues.push_back(load.getFalseVal());
-      resultTypes.push_back(load.getResult().getType());
-    }
+  for (triton::amdgpu::MaskedLoadOp load : plan.escapingLoads) {
+    loadToResultIndex[load] = resultTypes.size();
+    falseValues.push_back(load.getFalseVal());
+    resultTypes.push_back(load.getResult().getType());
   }
 
   for (Operation *op : plan.opsToHoist)
@@ -351,6 +466,8 @@ static bool tryFormMaskedRegionInBlock(Block &block, IRRewriter &rewriter) {
 
     FailureOr<MaskedRegionPlan> maskedRegion = findMaskedRegion(op);
     if (failed(maskedRegion))
+      continue;
+    if (!shouldFormMaskedRegion(*maskedRegion))
       continue;
 
     formMaskedRegion(*maskedRegion, rewriter);
