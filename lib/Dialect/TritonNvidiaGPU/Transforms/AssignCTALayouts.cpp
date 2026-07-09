@@ -47,13 +47,13 @@ cloneWithCGALayout(ttg::DistributedEncodingTrait layout,
                            threadsPerWarp, newCGALayout));
   }
 
-  llvm::report_fatal_error("cloneWithCGALayout not implemented for layout");
+  assert(false && "cloneWithCGALayout not implemented for layout");
 }
 
 Value convertValueToLayout(OpBuilder &builder, Location loc, Value value,
                            Attribute layout) {
-  auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
-  if (!tensorTy || tensorTy.getEncoding() == layout)
+  auto tensorTy = cast<RankedTensorType>(value.getType());
+  if (tensorTy.getEncoding() == layout)
     return value;
 
   auto newTy = tensorTy.cloneWithEncoding(layout);
