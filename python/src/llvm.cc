@@ -44,6 +44,7 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
+#include <optional>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -338,6 +339,16 @@ std::string translateLLVMIRToASM(
     const std::string &features, const std::vector<std::string> &flags,
     bool enable_fp_fusion, bool isObject, bool canonicalizeGEP) {
   using namespace mlir;
+
+  // TRITON_FORCE_MFMA_AGPR=1 forces MFMA accumulators into AGPR form by setting
+  // amdgpu-mfma-vgpr-form=false. It pairs with the kernel-side
+  // amdgpu-agpr-alloc=256 (applied via llvm_fn_attrs under the same env var)
+  // that reserves the AGPRs. The amdgcnas post-assembly peephole is shipped
+  // out-of-tree (as a Triton plugin).
+  auto forceMfmaAgpr = triton::tools::getStrEnv("TRITON_FORCE_MFMA_AGPR");
+  if (forceMfmaAgpr == "1") {
+    setLLVMOption<bool>("amdgpu-mfma-vgpr-form", false);
+  }
 
   // Apply flags
   for (const std::string &flag : flags) {
@@ -745,8 +756,14 @@ void init_triton_llvm(py::module_ &m) {
         // pass) setting the targetMachine value here can can cause a mismatch
         // in the target machine between the MLIR and Clang generated kernels
         // and break the lowering of some target specific intrinsics.
+        // Scheduler-style plugins (e.g. the out-of-tree LLIR scheduler) need
+        // the target machine so the rest of O3 keeps target-aware cost models.
+        // Opt in with LLVM_PASS_PLUGIN_KEEP_TARGET_MACHINE=1; default behavior
+        // (TM omitted when a plugin is loaded) is unchanged.
+        bool keepTMWithPlugin = mlir::triton::tools::getBoolEnv(
+            "LLVM_PASS_PLUGIN_KEEP_TARGET_MACHINE");
         std::unique_ptr<TargetMachine> targetMachine = nullptr;
-        if (!arch.empty() && pluginFile.empty())
+        if (!arch.empty() && (pluginFile.empty() || keepTMWithPlugin))
           targetMachine =
               createTargetMachine(mod, arch, enable_fp_fusion, features);
         PassBuilder pb(/*targetMachine=*/targetMachine.get(), tuningOptions,
