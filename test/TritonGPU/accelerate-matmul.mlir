@@ -369,11 +369,13 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Descriptor-loaded RHS can be shared by each two-CTA pair, so the generated
+  // MMAv5 op uses both multicast completion metadata and two_ctas mode.
   //   CHECK-DAG:   #ttng.tensor_memory_encoding<{{.*}}twoCTAs = true>
   //   CHECK-DAG:   #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = {{\[\[1, 0\], \[2, 0\]\]}}}>
   //   CHECK-DAG:   #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = {{\[\[0, 1\], \[0, 0\]\]}}}>
   // CHECK-LABEL: mmav5_2ctas_num_ctas4
-  //       CHECK:   ttng.tc_gen5_mma {{.*}} {two_ctas}
+  //       CHECK:   ttng.tc_gen5_mma {{.*}} {multicast, two_ctas}
   tt.func public @mmav5_2ctas_num_ctas4(%a: tensor<256x64xf16, #blocked2>, %b_desc: !tt.tensordesc<64x256xf16>, %c: tensor<256x256xf32, #blocked>) -> tensor<256x256xf32, #blocked> {
       %zero = arith.constant 0 : i32
       %ad = ttg.convert_layout %a : tensor<256x64xf16, #blocked2> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
