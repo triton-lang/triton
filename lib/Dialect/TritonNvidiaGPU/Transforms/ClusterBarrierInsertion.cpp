@@ -335,18 +335,12 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
   }
 
   // Any path from distributed shared memory use to kernel exit must include a
-  // cluster barrier.
+  // cluster barrier. Conservatively insert the barrier since we can't analyze
+  // memory effects properly in warp specialized kernels.
   if (op->hasTrait<OpTrait::ReturnLike>() &&
       isa<FunctionOpInterface>(op->getParentOp())) {
-    // During TMEM deallocation lowering we emit a cluster sync for 2CTA
-    // kernels, as we need to sync before the TMA deallocation.
-    // Note that 2CTA kernels must have a tcgen05_mma instruction and thus must
-    // use TensorMemory
-    // According to NVIDIA this is enough, so we don't need an extra
-    // end-of-kernel barrier
     auto funcOp = cast<FunctionOpInterface>(op->getParentOp());
-    if (isKernel(funcOp) && hasUnresolvedCrossClusterDependency(*blockInfo) &&
-        !getModuleTwoCTAs(funcOp)) {
+    if (isKernel(funcOp)) {
       builder->setInsertionPoint(op);
       ttng::ClusterBarrierOp::create(*builder, op->getLoc());
       blockInfo->sync();
