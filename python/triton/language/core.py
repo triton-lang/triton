@@ -1924,7 +1924,10 @@ class _block_ptr:
         if padding_option == "":
             generated_other = None
         elif padding_option == "zero":
-            generated_other = 0
+            # Use a float zero for floating-point pointees: `other` is cast to the
+            # element type, and there is no int -> fp8 cast, so an int zero breaks
+            # padded loads of fp8 block pointers (see #10751).
+            generated_other = 0 if self.base.dtype.element_ty.is_int() else 0.0
         elif padding_option == "nan":
             if self.base.dtype.element_ty.is_int():
                 raise ValueError("Padding option `nan` is not supported for integer block pointers")
