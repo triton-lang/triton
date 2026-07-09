@@ -444,10 +444,6 @@ void createTMABarrierAndWait(
         builder, barrierAlloc, loadGroup.extractIdx);
     auto wait =
         ttng::WaitBarrierOp::create(builder, barrierViewWait, loadGroup.phase);
-    if (hasTwoCTAMMAUser) {
-      builder.setInsertionPointAfter(wait);
-      ttng::ClusterBarrierOp::create(builder, wait.getLoc(), /*relaxed=*/true);
-    }
 
     // Update the async loads info.
     for (Operation *op : group) {
