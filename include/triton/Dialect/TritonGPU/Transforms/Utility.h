@@ -133,6 +133,9 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding);
 
 bool isExpensiveLoadOrStore(Operation *op);
 
+// Return true if an operation may be cloned by layout rematerialization.
+bool canBeRematerialized(Operation *op);
+
 // Return true if the op can use the target encoding for its result.
 bool canUseResultEncoding(Operation *op, Attribute targetEncoding);
 
