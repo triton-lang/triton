@@ -9,9 +9,9 @@
 #include "Profiler/GPUProfiler.h"
 #include "Runtime/HipRuntime.h"
 #include "Utility/Env.h"
+#include "Utility/Errors.h"
 #include "Utility/Map.h"
 #include "Utility/Singleton.h"
-#include "Utility/Errors.h"
 
 #include "hip/hip_runtime_api.h"
 #include "rocprofiler-sdk/agent.h"
