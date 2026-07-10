@@ -119,8 +119,8 @@ struct TDMFusedLoadMemberInfo {
 };
 
 // Emit one fused TDM load intrinsic, `select`ing each wave's descriptor on an
-// SGPR-uniform per-wave selector. `memberHints` must be pairwise disjoint and
-// verifier-legal; no mbarrier is encoded for fused loads.
+// SGPR-uniform per-wave selector. `memberHints` must be verifier-legal and
+// pairwise disjoint; no mbarrier is encoded for fused loads.
 void emitTDMLoadFused(RewriterBase &rewriter, Location loc,
                       const LLVMTypeConverter *typeConverter,
                       ArrayRef<TDMFusedLoadMemberInfo> members, int numWarps,

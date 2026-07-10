@@ -810,8 +810,9 @@ def AsyncTDMFusedCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_fused_copy_global
   let description = [{
     This operation represents an explicit 2-4 member fused TDM load.  Each
     member provides a tensor descriptor, destination shared-memory descriptor,
-    and `warp_used_hint`.  Descriptors carry tile position and predicate state;
-    destinations remain op-level operands.
+    and `warp_used_hint`.  Member hints must be legal and pairwise disjoint.
+    Descriptors carry tile position and predicate state; destinations remain
+    op-level operands.
   }];
 
   let arguments = (ins
