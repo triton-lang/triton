@@ -17,10 +17,6 @@ if(NOT JSON_INCLUDE_DIR)
   message(FATAL_ERROR "JSON include directory not defined")
 endif()
 
-set(_proton_saved_cmake_required_includes "${CMAKE_REQUIRED_INCLUDES}")
-set(_proton_saved_cmake_required_definitions "${CMAKE_REQUIRED_DEFINITIONS}")
-set(CMAKE_REQUIRED_INCLUDES "${ROCPROFILER_SDK_INCLUDE_DIR}")
-set(CMAKE_REQUIRED_DEFINITIONS -D__HIP_PLATFORM_AMD__)
 unset(PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH CACHE)
 check_cxx_source_compiles([=[
   #include <rocprofiler-sdk/callback_tracing.h>
@@ -31,8 +27,6 @@ check_cxx_source_compiles([=[
     return static_cast<int>(kind) + static_cast<int>(op) + (data != nullptr);
   }
 ]=] PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH)
-set(CMAKE_REQUIRED_INCLUDES "${_proton_saved_cmake_required_includes}")
-set(CMAKE_REQUIRED_DEFINITIONS "${_proton_saved_cmake_required_definitions}")
 
 if(PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH)
   message(STATUS "Proton ROCProfiler-SDK HIP graph tracing: enabled")
