@@ -895,14 +895,12 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
       const_cast<void *>(payload->graph_exec_value.ptr));
   const auto graphExecId = payload->graph_exec_id.handle;
 
-  if (record.operation ==
-      ROCPROFILER_HIP_GRAPH_OPERATION_EXEC_CREATE) {
+  if (record.operation == ROCPROFILER_HIP_GRAPH_OPERATION_EXEC_CREATE) {
     // record.phase = ROCPROFILER_CALLBACK_PHASE_NONE. rocprofiler-sdk emits
     // this after hipGraphInstantiate* has produced a hipGraphExec_t and before
     // the HIP runtime API EXIT callback returns.
     impl->graphExecToGraphExecId[graphExec] = graphExecId;
-  } else if (record.operation ==
-             ROCPROFILER_HIP_GRAPH_OPERATION_EXEC_DESTROY) {
+  } else if (record.operation == ROCPROFILER_HIP_GRAPH_OPERATION_EXEC_DESTROY) {
     // record.phase = ROCPROFILER_CALLBACK_PHASE_NONE
     impl->graphExecToGraph.erase(graphExec);
     impl->graphExecToGraphExecId.erase(graphExec);
