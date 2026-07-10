@@ -2112,8 +2112,6 @@ public:
     if (roundingMode != RoundingMode::RTNE)
       return std::nullopt;
 
-    bool useTwoStageConversion = false;
-
     if (isa<Float8E4M3FNUZType>(dstTy)) {
       if (hasFnuzFp8HW(isaFamily))
         return Fp32ToFp8E4M3fnuzHW(loc, rewriter, inVals);
@@ -2130,30 +2128,6 @@ public:
         return Fp32ToFp8E4M3fnRtneSW(loc, rewriter, inVals);
     }
 
-    if (useTwoStageConversion) {
-      auto fp16converter =
-          CvtFp32ToFp16(isaFamily, maxElementsPerThread, roundingMode);
-      SmallVector<Value> fp16Values;
-      if (isa<Float8E4M3FNType>(dstTy)) {
-        auto fp16Values0 =
-            fp16converter.convert(loc, rewriter, {inVals[0], inVals[1]});
-        auto fp16Values1 =
-            fp16converter.convert(loc, rewriter, {inVals[2], inVals[3]});
-        assert(fp16Values0.has_value() && fp16Values1.has_value() &&
-               "fp32 to fp16 conversion must be completed");
-        fp16Values.append(*fp16Values0);
-        fp16Values.append(*fp16Values1);
-      } else {
-        auto maybeFp16Values = fp16converter.convert(loc, rewriter, inVals);
-        assert(maybeFp16Values.has_value() &&
-               "fp32 to fp16 conversion must be completed");
-        fp16Values.append(*maybeFp16Values);
-      }
-
-      auto fp8converter = CvtFp16ToFp8E4M3(dstTy, isaFamily,
-                                           maxElementsPerThread, roundingMode);
-      return fp8converter.convert(loc, rewriter, fp16Values);
-    }
     return std::nullopt;
   }
 
@@ -2219,7 +2193,6 @@ public:
   convert(Location loc, ConversionPatternRewriter &rewriter,
           const SmallVector<Value> &inVals) final {
 
-    bool useTwoStageConversion = false;
     if (roundingMode == RoundingMode::RTNE) {
       if (isa<Float8E5M2FNUZType>(dstTy)) {
         if (hasFnuzFp8HW(isaFamily))
@@ -2239,18 +2212,6 @@ public:
     } else if (roundingMode == RoundingMode::RTZ) {
       if (isa<Float8E5M2Type>(dstTy))
         return Fp32ToFp8E5M2rtz(loc, rewriter, inVals);
-    }
-
-    // Convert FP32 -> F16 -> BF8
-    if (useTwoStageConversion) {
-      auto fp16converter =
-          CvtFp32ToFp16(isaFamily, maxElementsPerThread, roundingMode);
-      auto fp16Values = fp16converter.convert(loc, rewriter, inVals);
-      assert(fp16Values.has_value() &&
-             "fp32 to fp16 conversion must be completed");
-      auto fp8converter = CvtFp16ToFp8E5M2(dstTy, isaFamily,
-                                           maxElementsPerThread, roundingMode);
-      return fp8converter.convert(loc, rewriter, *fp16Values);
     }
 
     return std::nullopt;
