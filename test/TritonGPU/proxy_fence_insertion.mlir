@@ -145,3 +145,46 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#shared_clc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: clc_try_cancel_single_cta_fence
+  tt.func @clc_try_cancel_single_cta_fence() {
+    %result = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2xi64, #shared_clc, #smem, mutable>
+    %barrier = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<1xi64, #shared_clc, #smem, mutable>
+    %response = ttng.clc_load_result %result : !ttg.memdesc<2xi64, #shared_clc, #smem, mutable> -> i128
+    "test.keep"(%response) : (i128) -> ()
+    // CHECK: ttng.clc_load_result
+    // CHECK: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: ttng.clc_try_cancel
+    ttng.clc_try_cancel %result, %barrier :
+      !ttg.memdesc<2xi64, #shared_clc, #smem, mutable>,
+      !ttg.memdesc<1xi64, #shared_clc, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared_clc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: clc_try_cancel_multi_cta_fence
+  tt.func @clc_try_cancel_multi_cta_fence() {
+    %result = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2xi64, #shared_clc, #smem, mutable>
+    %barrier = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %response = ttng.clc_load_result %result : !ttg.memdesc<2xi64, #shared_clc, #smem, mutable> -> i128
+    "test.keep"(%response) : (i128) -> ()
+    // CHECK: ttng.clc_load_result
+    // CHECK: ttng.fence_async_shared {bCluster = true}
+    // CHECK-NEXT: ttng.clc_try_cancel
+    ttng.clc_try_cancel %result, %barrier :
+      !ttg.memdesc<2xi64, #shared_clc, #smem, mutable>,
+      !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+}

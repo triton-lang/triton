@@ -465,7 +465,6 @@ def test_clc_result_reuse_after_cluster_barrier(device, run_wrapper, monkeypatch
         mbarrier.wait(clc_bar, 0)
         first = clc.load_result(clc_result)
         ttgl.barrier(cluster=True)
-        hopper.fence_async_shared(cluster=True)
 
         mbarrier.expect(clc_bar, 16)
         clc.try_cancel(clc_result, clc_bar)

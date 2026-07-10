@@ -106,7 +106,11 @@ private:
 
 void ProxyFenceAnalysis::insertFence(Operation *op, OpBuilder *builder) {
   OpBuilder::InsertionGuard g(*builder);
-  triton::nvidia_gpu::FenceAsyncSharedOp::create(*builder, op->getLoc(), false);
+  // Multi-CTA CLC multicasts its result to every CTA in the cluster.
+  bool cluster = isa<triton::nvidia_gpu::CLCTryCancelOp>(op) &&
+                 triton::gpu::lookupNumCTAs(op) > 1;
+  triton::nvidia_gpu::FenceAsyncSharedOp::create(*builder, op->getLoc(),
+                                                 cluster);
 }
 
 void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
