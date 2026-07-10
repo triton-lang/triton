@@ -90,7 +90,7 @@ def test_triton(tmp_path: pathlib.Path, device: str):
 
 
 def test_cudagraph(tmp_path: pathlib.Path, device: str):
-    # Uncomment when rocprofiler-sdk has been updated
+    # TODO(Keren): Uncomment when rocprofiler-sdk has been updated
     if os.environ.get("PROTON_SKIP_CUDAGRAPH_TEST", "0") == "1":
         pytest.skip("CUDagraph test is disabled")
 
