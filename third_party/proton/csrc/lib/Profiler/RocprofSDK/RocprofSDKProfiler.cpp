@@ -72,9 +72,9 @@ struct GraphDispatchCorrelation {
 };
 
 // Thread-local dynamic extent of active hipGraphLaunch calls. This mirrors
-// rocprofiler-sdk-tool's graph_stack: HIP_GRAPH_LAUNCH ENTER pushes a launch,
+// rocprofiler-sdk-tool's graph_stack: EXEC_LAUNCH ENTER pushes a launch,
 // each kernel-dispatch external-correlation request consumes nextNodeId, and
-// HIP_GRAPH_LAUNCH EXIT pops it.
+// EXEC_LAUNCH EXIT pops it.
 struct ActiveGraphLaunch {
   size_t externId{Scope::DummyScopeId};
   uint64_t graphExecId{};
@@ -658,7 +658,7 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
                 std::unordered_map<hipGraphExec_t, hipGraph_t>>
       graphExecToGraph;
 
-  // HIP_GRAPH_EXEC_CREATE callback provides graphExec -> SDK graph_exec_id.
+  // EXEC_CREATE callback provides graphExec -> SDK graph_exec_id.
   // The callback fires before HIP runtime instantiate EXIT returns.
   ThreadSafeMap<hipGraphExec_t, uint64_t,
                 std::unordered_map<hipGraphExec_t, uint64_t>>
@@ -677,7 +677,7 @@ void tryBindGraphExecState(RocprofSDKProfiler::RocprofSDKProfilerPimpl *impl,
     return;
 
   // Graph state becomes replay-ready only after both callbacks have arrived:
-  // HIP_GRAPH_EXEC_CREATE supplies graphExec -> graphExecId, while runtime
+  // EXEC_CREATE supplies graphExec -> graphExecId, while runtime
   // hipGraphInstantiate* EXIT supplies graphExec -> graph.
   uint64_t graphExecId = 0;
   if (!impl->graphExecToGraphExecId.withRead(
@@ -818,7 +818,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleSuccessfulRuntimeExit(
       graphExecPtr = payload->args.hipGraphInstantiateWithParams.pGraphExec;
     }
     if (graphExecPtr && *graphExecPtr) {
-      // rocprofiler-sdk fires HIP_GRAPH_EXEC_CREATE after the real
+      // rocprofiler-sdk fires EXEC_CREATE after the real
       // hipGraphInstantiate* succeeds and before the HIP runtime API EXIT
       // callback returns. Therefore graphExecToGraphExecId should already
       // contain this graphExec here; this callback supplies the missing
@@ -916,19 +916,19 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
   const auto graphExecId = payload->graph_exec_id.handle;
 
   if (record.operation ==
-      ROCPROFILER_HIP_GRAPH_OPERATION_HIP_GRAPH_EXEC_CREATE) {
+      ROCPROFILER_HIP_GRAPH_OPERATION_EXEC_CREATE) {
     // record.phase == ROCPROFILER_CALLBACK_PHASE_NONE. rocprofiler-sdk emits
     // this after hipGraphInstantiate* has produced a hipGraphExec_t and before
     // the HIP runtime API EXIT callback returns.
     impl->graphExecToGraphExecId[graphExec] = graphExecId;
   } else if (record.operation ==
-             ROCPROFILER_HIP_GRAPH_OPERATION_HIP_GRAPH_EXEC_DESTROY) {
+             ROCPROFILER_HIP_GRAPH_OPERATION_EXEC_DESTROY) {
     // record.phase == ROCPROFILER_CALLBACK_PHASE_NONE
     impl->graphExecToGraph.erase(graphExec);
     impl->graphExecToGraphExecId.erase(graphExec);
 
   } else if (record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER) {
-    // HIP_GRAPH_LAUNCH ENTER is the graph replay parent scope. If Proton also
+    // EXEC_LAUNCH ENTER is the graph replay parent scope. If Proton also
     // saw capture, build links from this launch entry to each static capture
     // node entry. Otherwise, fall back to normal child entries under the
     // launch.
@@ -1134,14 +1134,12 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
                             correlation.externIdToState, dataPhases, kernelName,
                             record, streamId);
       }
+#else
+      processKernelRecord(profiler, correlation.corrIdToExternId,
+                          correlation.externIdToState, dataPhases, kernelName,
+                          record, streamId);
 #endif
-        processKernelRecord(profiler, correlation.corrIdToExternId,
-                            correlation.externIdToState, dataPhases, kernelName,
-                            record, streamId);
-        impl->corrIdToStreamId.erase(record->correlation_id.internal);
-#ifdef PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
-      }
-#endif
+      impl->corrIdToStreamId.erase(record->correlation_id.internal);
     }
   }
   profiler.flushDataPhases(dataPhases, profiler.pendingGraphPool.get());

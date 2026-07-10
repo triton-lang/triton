@@ -26,7 +26,7 @@ check_cxx_source_compiles([=[
   #include <rocprofiler-sdk/callback_tracing.h>
   int main() {
     auto kind = ROCPROFILER_CALLBACK_TRACING_HIP_GRAPH;
-    auto op = ROCPROFILER_HIP_GRAPH_OPERATION_HIP_GRAPH_LAUNCH;
+    auto op = ROCPROFILER_HIP_GRAPH_OPERATION_EXEC_LAUNCH;
     rocprofiler_callback_tracing_hip_graph_data_t* data = nullptr;
     return static_cast<int>(kind) + static_cast<int>(op) + (data != nullptr);
   }
