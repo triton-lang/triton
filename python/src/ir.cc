@@ -1884,6 +1884,13 @@ void init_triton_ir(py::module_ &m) {
            [](TritonOpBuilder &self) {
              self.create<triton::gpu::BarrierOp>(triton::gpu::AddrSpace::All);
            })
+      // Shared-memory-only (local address space) CTA barrier. Orders local
+      // memory operations CTA-wide without the global/tensor memory ordering of
+      // the full `all` barrier.
+      .def("create_local_barrier",
+           [](TritonOpBuilder &self) {
+             self.create<triton::gpu::BarrierOp>(triton::gpu::AddrSpace::Local);
+           })
       // Make a tensor descriptor
       .def("create_make_tensor_descriptor",
            [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,

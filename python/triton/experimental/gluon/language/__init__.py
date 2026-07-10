@@ -85,6 +85,7 @@ from ._core import (
     store,
     sub,
     barrier,
+    local_barrier,
     to_linear_layout,
     to_tensor,
     expect_zero,

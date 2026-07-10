@@ -1697,6 +1697,13 @@ def test_barrier():
 
 @filecheck_test
 @gluon.jit
+def test_local_barrier():
+    # CHECK: ttg.barrier local
+    ttgl.local_barrier()
+
+
+@filecheck_test
+@gluon.jit
 def test_fence_async_shared():
     # CHECK: ttng.fence_async_shared {bCluster = false}
     blackwell.fence_async_shared()

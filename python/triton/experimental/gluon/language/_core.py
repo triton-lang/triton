@@ -716,6 +716,18 @@ def barrier(*, cluster: bool = False, _semantic=None):
 
 
 @builtin
+def local_barrier(_semantic=None):
+    """
+    Order shared memory operations across the CTA.
+
+    Lowers to ``ttg.barrier local``: makes prior shared memory writes visible
+    to subsequent shared memory reads across the CTA. Unlike :func:`barrier`
+    (``ttg.barrier all``), it does not order global or tensor memory.
+    """
+    _semantic.builder.create_local_barrier()
+
+
+@builtin
 def bank_conflicts(distr_ty, shared_ty, _semantic=None) -> int:
     """
     Count the bank conflicts per wavefront of each instruction generated when
