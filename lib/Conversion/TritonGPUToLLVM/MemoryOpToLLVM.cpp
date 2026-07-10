@@ -380,6 +380,12 @@ struct AtomicPollOpConversion
       return rewriter.notifyMatchFailure(
           op, "multi-CTA atomic_poll requires cross-CTA shared memory");
 
+    // Every lowering path emits a rendezvous barrier after the poll, so use it
+    // as the post-atomic ordering barrier instead of emitting a duplicate.
+    insertAtomicOrderingBarriers(op, op.getSem(),
+                                 /*emitBarrierAfter=*/false, rewriter,
+                                 targetInfo);
+
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
