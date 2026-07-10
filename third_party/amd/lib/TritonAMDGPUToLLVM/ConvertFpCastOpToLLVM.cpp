@@ -2048,7 +2048,7 @@ public:
   std::optional<SmallVector<Value>> convert(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) final {
-    Type dstTy = Float16Type::get(rewriter.getContext());
+    Type dstTy = BFloat16Type::get(rewriter.getContext());
 
     if (roundingMode == RoundingMode::RTNE) {
       if (isCDNA4OrHigher(isaFamily))
