@@ -82,11 +82,7 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
         *_, M, K = self._padded_shape
         pad_m = M - M_in
         pad_k = K - K_in
-        if data.numel() == 0:
-            # Layout conversions support zero-sized tensors, but F.pad rejects them.
-            data = data.new_zeros((*batch, M, K))
-        else:
-            data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
+        data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
         assert data.is_contiguous()
         assert M % (
             2 * self.num_warps * 2 *
