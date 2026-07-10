@@ -96,8 +96,10 @@ public:
 
     int numActiveMemTypes = (hasSharedMemoryBuffers(mod) ? 1 : 0) +
                             (hasTensorMemoryBuffers(mod) ? 1 : 0);
+    // NVIDIA inserts a terminal cluster barrier after this pass.
+    bool hasClusterBarriers = target == "nvidia" && ttg::lookupNumCTAs(mod) > 1;
     int totalCaptures = tti::estimateConSanCaptureCount(
-        numActiveMemTypes, hasBarriers(mod),
+        numActiveMemTypes, hasBarriers(mod), hasClusterBarriers,
         getNumCommitKinds(mod, hooks.get()),
         hasSharedMemoryBuffers(mod) &&
             hooks->needsAsyncProxyFenceTracking(mod));

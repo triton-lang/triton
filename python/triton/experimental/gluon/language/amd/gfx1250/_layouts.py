@@ -72,24 +72,24 @@ class PartitionedSharedLayout(SharedLayout):
 
 
 @constexpr_function
-def _make_partitioned_dot_operand_layout(sublayout, partition_dim, num_partitions, block_mn_size, warp_coverage, order):
+def _make_partitioned_dot_operand_layout(sublayout, partition_dim, num_partitions, num_groups, order):
     """Build a ``PartitionedSharedLayout`` for one GEMM operand.
 
     The operand tile (``sublayout``) is split along ``partition_dim`` into
-    ``num_partitions * num_groups`` logical pieces, where
-    ``num_groups = block_mn_size // warp_coverage``.  Each piece carries an
-    inner ``PaddedSharedLayout`` rebuilt with an identity mapping using the
-    original sublayout's ``interval_padding_pairs`` and ``cga_layout``.
+    ``num_partitions * num_groups`` logical pieces. Each
+    piece carries an inner ``PaddedSharedLayout`` rebuilt with an identity
+    mapping using the original sublayout's parameters.
     """
     is_power_of_2 = lambda n: n > 0 and n & (n - 1) == 0
-    num_groups = block_mn_size // warp_coverage
-    assert num_groups >= 1, f"block dim ({block_mn_size}) must be >= {warp_coverage}"
+    assert num_groups >= 1, f"num_groups ({num_groups}) must be >= 1"
     assert is_power_of_2(num_groups), \
-        f"block_dim / warp_coverage = {num_groups} must be a power of 2"
+        f"num_groups = {num_groups} must be a power of 2"
 
     num_logical_pieces = num_partitions * num_groups
     inner_shape = list(sublayout.shape)
-    assert inner_shape[partition_dim] % num_logical_pieces == 0
+    assert inner_shape[partition_dim] % num_logical_pieces == 0, \
+        f"partitioned dim ({inner_shape[partition_dim]}) must be divisible by " \
+        f"num_partitions * num_groups = {num_logical_pieces}"
     inner_shape[partition_dim] //= num_logical_pieces
 
     # TODO: when the partitioned dimension is the contiguous (fastest-varying)
@@ -102,17 +102,17 @@ def _make_partitioned_dot_operand_layout(sublayout, partition_dim, num_partition
 
 @constexpr_function
 def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_layout_b, num_warps, instr_shape,
-                                 a_transposed=False, b_transposed=False):
+                                 a_transposed=False, b_transposed=False, slice_m=None, slice_n=None):
     """Create partitioned shared memory layouts and WMMA layout for a GFX1250 GEMM
        in order to avoid LDS partition conflicts.
 
     Args:
-        block_m: M dimension tile size.  Must be at least
-            ``WARP_TILES_M * instr_shape[0]`` (the per-CTA M extent covered by
-            one partition group), and a power-of-2 multiple thereof.
-        block_n: N dimension tile size.  Must be at least
-            ``WARP_TILES_N * instr_shape[1]``, and a power-of-2 multiple
-            thereof.
+        block_m: M dimension tile size of the *shared* operand buffer.  Must be
+            at least ``4 * instr_shape[0]`` because the M dimension is split into
+            2 partitions and each partition must be at least 2 instructions wide.
+        block_n: N dimension tile size of the *shared* operand buffer.  Must be
+            at least ``2 * instr_shape[1]`` because the N dimension is split into
+            2 partitions and each partition must be at least 1 instruction wide.
         original_layout_a: ``PaddedSharedLayout`` for operand A.  Shape is
             ``[block_m, block_k]`` when not transposed (K contiguous) and
             ``[block_k, block_m]`` when transposed (M contiguous).
@@ -125,9 +125,15 @@ def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_l
             the contiguous axis instead of K.
         b_transposed: Whether B is transposed in shared memory, i.e. K is
             the contiguous axis instead of N.
+        slice_m: M dimension of a dot operation after slicing.  Defaults to
+            ``block_m`` (unsliced).
+        slice_n: N dimension of a dot operation after slicing.  Defaults to
+            ``block_n`` (unsliced).
 
     Returns:
-        A tuple ``(shared_layout_a, shared_layout_b, wmma_layout)``.
+        A tuple ``(shared_layout_a, shared_layout_b, wmma_layout)``.  The
+        ``wmma_layout`` is sized for ``slice_m x slice_n``; the two shared
+        layouts partition the full ``block_m`` / ``block_n``.
     """
     from triton.experimental.gluon.language.amd._layouts import AMDWMMALayout
 
@@ -147,6 +153,31 @@ def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_l
     # transposition. TDM additionally requires order [rank-1, ..., 0].
     order = [1, 0]
 
+    INSTR_M = INSTR_SHAPE[0]
+    INSTR_N = INSTR_SHAPE[1]
+
+    is_power_of_2 = lambda n: n > 0 and (n & (n - 1)) == 0
+
+    # The sliced dot compute extent defaults to the full block (unsliced).
+    slice_m = block_m if slice_m is None else slice_m
+    slice_n = block_n if slice_n is None else slice_n
+
+    assert is_power_of_2(INSTR_M) and is_power_of_2(INSTR_N), \
+        f"instr_shape M/N must be powers of 2, got {INSTR_SHAPE}"
+    assert block_m % INSTR_M == 0 and block_n % INSTR_N == 0, \
+        f"block ({block_m}, {block_n}) must be a multiple of instr_shape ({INSTR_M}, {INSTR_N})"
+    assert is_power_of_2(slice_m) and is_power_of_2(slice_n), \
+        f"slice_m / slice_n must be powers of 2, got ({slice_m}, {slice_n})"
+    assert block_m % slice_m == 0 and block_n % slice_n == 0, \
+        f"slice ({slice_m}, {slice_n}) must divide block ({block_m}, {block_n})"
+    assert slice_m % INSTR_M == 0 and slice_n % INSTR_N == 0, \
+        f"slice ({slice_m}, {slice_n}) must be a multiple of instr_shape ({INSTR_M}, {INSTR_N})"
+
+    def _log2(n):
+        return n.bit_length() - 1
+
+    # --- Derived layout rule -------------------------------------------------
+    #
     # WMMA CTA layout: Below, M runs vertically (rows) and N
     # horizontally (cols); each cell is one INSTR_SHAPE-sized instruction tile,
     # labelled with the warp that computes it.  ``warp_bases`` map warp-id bits
@@ -163,32 +194,84 @@ def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_l
     # Such layout allows w0 and w1 as well as w2 and w3 to read different A/B
     # operand data blocks in a single instruction, which is necessary precondition
     # for avoiding LDS partition conflicts.
-    if num_warps == 4:
-        warp_bases = [[2, 1], [1, 0]]
-        reg_bases = [[2, 0]]
-    else:  # num_warps == 8
-        # Same idea as the 4-warp case, but the third warp bit replaces the
-        # register bit. This means there's no need to define repetition registers,
-        # single instruction CTA layout is enough to describe the layout we need.
-        # Each warp now owns a single instruction tile and the extra warp dimension
-        # is folded into the M-axis of the warp grid.
-        warp_bases = [[2, 1], [1, 0], [2, 0]]
-        reg_bases = []
+    #
+    # The above defined CTALayout tile will then be repeated across the full
+    # block (block_m x block_n).  However, this is not always the optimal way to
+    # partition the full block.
+    # For example, if the block 64x128, the block would look like this:
+    #
+    #   M=0:  w0 w1 w0 w1 w0 w1 w0 w1
+    #   M=1:  w2 w3 w2 w3 w2 w3 w2 w3
+    #   M=2:  w0 w1 w0 w1 w0 w1 w0 w1
+    #   M=3:  w2 w3 w2 w3 w2 w3 w2 w3
+    #
+    # From the TDM perspective, wave can only transfer one strided logical piece
+    # at a time.  Since we have 8 logical pieces for B tensor above, and only 4
+    # warps, TDM transaction will be split into 2 instructions, which is not
+    # efficient.
+    #
+    # to avoid this, we can increase number of consecutive instructions the wave
+    # computes.  In the above example, we could create following CTA layout:
+    #
+    #   M=0:  w0 w0 w0 w0 w1 w1 w1 w1
+    #   M=1:  w2 w2 w2 w2 w3 w3 w3 w3
+    #   M=2:  w0 w0 w0 w0 w1 w1 w1 w1
+    #   M=3:  w2 w2 w2 w2 w3 w3 w3 w3
+    #
+    # This way, each warp can read 2 larger strided logical pieces at a time,
+    # which will produce 1 TDM transaction.
+    # In addition to having less transaction, this can also help with global
+    # bandwidth, because in N contiguous tensors, it's better if the cache line
+    # is not split across multiple waves. This way we can read the whole cache
+    # line with a single wave.
 
-    # The tile extent along each dimension is 2^m, where m is the largest
-    # basis component in that dimension across both warp and register bases.
-    def _tile_extent(dim):
-        m = max((b[dim] for b in warp_bases + reg_bases), default=0)
-        return 1 << m
+    instr_per_slice_m = slice_m // INSTR_M
+    instr_per_slice_n = slice_n // INSTR_N
+    instr_per_partition_m = 2
+    instr_per_partition_n = 1
 
-    WARP_TILES_M = _tile_extent(0)
-    WARP_TILES_N = _tile_extent(1)
+    # Each slice must cover at least one instruction tile per partition piece,
+    # otherwise piece_m / piece_n would round down to 0 and produce a degenerate
+    # (non-surjective) WMMA layout with zero warp/register bases.
+    assert instr_per_slice_m >= NUM_PARTITIONS * instr_per_partition_m, \
+        f"slice_m ({slice_m}) must be at least " \
+        f"{NUM_PARTITIONS * instr_per_partition_m} * instr_shape[0] ({INSTR_M})"
+    assert instr_per_slice_n >= NUM_PARTITIONS * instr_per_partition_n, \
+        f"slice_n ({slice_n}) must be at least " \
+        f"{NUM_PARTITIONS * instr_per_partition_n} * instr_shape[1] ({INSTR_N})"
+
+    piece_m = instr_per_slice_m // (NUM_PARTITIONS * instr_per_partition_m)
+    piece_n = instr_per_slice_n // (NUM_PARTITIONS * instr_per_partition_n)
+
+    # Registers that walk the contiguous tiles inside one piece.
+    m_within = [1 << i for i in range(_log2(piece_m))]
+    n_within = [1 << i for i in range(_log2(piece_n))]
+    # Register that jump between same-partition pieces of A inside one slice
+    # (within-slice group repeats).
+    m_group = [piece_m * 2]
+
+    warp_bases = [[instr_per_slice_m // 2, piece_n], [piece_m, 0]]
+    reg_bases = []
+
+    if num_warps == 8:
+        # In 8 warp case, instead of repetition of warp0, we use that tile for warp4.
+        warp_bases.append([m_group[-1], 0])
+        m_group = m_group[:-1]
+
+    # Register bases, ordered N-within, M-within, M-group.
+    for w in n_within:
+        reg_bases.append([0, w])
+    for w in m_within:
+        reg_bases.append([w, 0])
+    for w in m_group:
+        reg_bases.append([w, 0])
 
     wmma_layout = AMDWMMALayout(3, True, warp_bases, reg_bases, INSTR_SHAPE)
 
-    # Per-CTA extent that one warp+register cycle covers in each dimension.
-    warp_coverage_m = WARP_TILES_M * INSTR_SHAPE[0]
-    warp_coverage_n = WARP_TILES_N * INSTR_SHAPE[1]
+    # Full-block partitioning (PartitionedSharedLayout): num_groups counts how
+    # many times the [P0, P1] cycle repeats across the full block = block / slice.
+    num_groups_m = block_m // slice_m
+    num_groups_n = block_n // slice_n
 
     # Partition A along its M axis and B along its N axis.  These dims live
     # at different positions in the tile depending on transposition (the
@@ -197,10 +280,10 @@ def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_l
     b_partition_dim = 0 if b_transposed else 1
 
     shared_layout_a = _make_partitioned_dot_operand_layout(original_layout_a, partition_dim=a_partition_dim,
-                                                           num_partitions=NUM_PARTITIONS, block_mn_size=block_m,
-                                                           warp_coverage=warp_coverage_m, order=order)
+                                                           num_partitions=NUM_PARTITIONS, num_groups=num_groups_m,
+                                                           order=order)
     shared_layout_b = _make_partitioned_dot_operand_layout(original_layout_b, partition_dim=b_partition_dim,
-                                                           num_partitions=NUM_PARTITIONS, block_mn_size=block_n,
-                                                           warp_coverage=warp_coverage_n, order=order)
+                                                           num_partitions=NUM_PARTITIONS, num_groups=num_groups_n,
+                                                           order=order)
 
     return shared_layout_a, shared_layout_b, wmma_layout
