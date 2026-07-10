@@ -158,19 +158,19 @@ struct ConvertLayoutOpConversion
     // At this point we have a type that's at least 8-bit
     // and we don't have broadcasting in the registers
     auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-    int32_t vecBitwidth =
+    auto vecBitwidth =
         triton::gpu::getVecBitwidthLdSt(srcLayout, dstLayout, bitwidth);
-    auto [numBanksDst, numBanksSrc] =
-        targetInfo.getSharedMemoryLdStBanks(vecBitwidth);
+    auto kReg = str_attr("register");
+    auto [numBanksDst, numBanksSrc] = targetInfo.getSharedMemoryLdStBanks(
+        vecBitwidth, bitwidth, dstLayout.getInDimSize(kReg));
+    auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
     auto [uniformBanksDst, uniformBanksSrc] =
         targetInfo.hasUniformSharedMemoryLdStBanks();
-    auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
     auto smem = optimalSwizzlingLdSt(srcLayout, dstLayout, bitwidth,
                                      numBanksSrc, numBanksDst, srcTile, dstTile,
                                      uniformBanksSrc, uniformBanksDst);
 
     // Extract reps from smem
-    auto kReg = str_attr("register");
     auto kWarp = str_attr("warp");
     auto kBlock = str_attr("block");
     auto kReps = str_attr("reps");

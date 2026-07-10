@@ -23,11 +23,14 @@ unsigned getConvertLayoutScratchInBytes(gpu::ConvertLayoutOp op,
   auto bitwidth = getBitwidth(srcTy);
   auto vecBitwidth =
       triton::gpu::getVecBitwidthLdSt(srcLayout, dstLayout, bitwidth);
+  auto kReg = StringAttr::get(srcTy.getContext(), "register");
+  auto numLoadElems =
+      dstLayout.removeZeroBasesAlongDim(kReg).getInDimSize(kReg);
   auto [numBanksDst, numBanksSrc] =
-      targetInfo.getSharedMemoryLdStBanks(vecBitwidth);
+      targetInfo.getSharedMemoryLdStBanks(vecBitwidth, bitwidth, numLoadElems);
+  auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
   auto [uniformBanksDst, uniformBanksSrc] =
       targetInfo.hasUniformSharedMemoryLdStBanks();
-  auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
   unsigned elems = getNumScratchElemsSwizzledCvt(
       srcLayout, dstLayout, bitwidth, numBanksSrc, numBanksDst, srcTile,
       dstTile, uniformBanksSrc, uniformBanksDst);
@@ -63,11 +66,15 @@ unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
                       const triton::LinearLayout &dst, unsigned bitwidth) {
           auto vecBitwidth =
               triton::gpu::getVecBitwidthLdSt(src, dst, bitwidth);
-          auto [numBanksDst, numBanksSrc] =
-              targetInfo.getSharedMemoryLdStBanks(vecBitwidth);
+          auto *ctx = src.getInDimNames().begin()->getContext();
+          auto kReg = StringAttr::get(ctx, "register");
+          auto numLoadElems =
+              dst.removeZeroBasesAlongDim(kReg).getInDimSize(kReg);
+          auto [numBanksDst, numBanksSrc] = targetInfo.getSharedMemoryLdStBanks(
+              vecBitwidth, bitwidth, numLoadElems);
+          auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
           auto [uniformBanksDst, uniformBanksSrc] =
               targetInfo.hasUniformSharedMemoryLdStBanks();
-          auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
           return getNumScratchElemsSwizzledCvt(
               src, dst, bitwidth, numBanksSrc, numBanksDst, srcTile, dstTile,
               uniformBanksSrc, uniformBanksDst);

@@ -103,7 +103,9 @@ public:
 
   // Returns the number of shared-memory banks visible to load and store
   // instructions, in the same {load, store} order as getSharedLdStTiles().
-  virtual std::pair<int, int> getSharedMemoryLdStBanks(int vecBitwidth) const {
+  virtual std::pair<int, int> getSharedMemoryLdStBanks(int vecBitwidth,
+                                                       int bitwidth,
+                                                       int numLoadElems) const {
     return {32, 32};
   }
 

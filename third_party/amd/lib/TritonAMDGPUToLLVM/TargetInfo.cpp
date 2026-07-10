@@ -134,12 +134,14 @@ int TargetInfo::getSharedMemorySize() const {
 }
 
 std::pair<int, int>
-TargetInfo::getSharedMemoryLdStBanks(int vecBitwidth) const {
+TargetInfo::getSharedMemoryLdStBanks(int vecBitwidth, int bitwidth,
+                                     int numLoadElems) const {
   switch (getISAFamily()) {
   case ISAFamily::GFX1250:
     return {64, 64};
   case ISAFamily::CDNA4:
-    if (vecBitwidth == 128)
+    if (vecBitwidth == 128 ||
+        (vecBitwidth == 64 && numLoadElems == vecBitwidth / bitwidth))
       return {64, 32};
     return {32, 32};
   default:

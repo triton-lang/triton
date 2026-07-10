@@ -470,18 +470,21 @@ private:
       unsigned idx = indices[i];
       offsets[idx] = offset;
       auto inputTy = op.getInputTypes()[idx];
-      auto vecBitwidth = triton::gpu::getVecBitwidthLdSt(srcLayout, dstLayout,
-                                                         getBitwidth(inputTy));
-      auto [numBanksDst, numBanksSrc] =
-          targetInfo.getSharedMemoryLdStBanks(vecBitwidth);
+      auto bitwidth = getBitwidth(inputTy);
+      auto vecBitwidth =
+          triton::gpu::getVecBitwidthLdSt(srcLayout, dstLayout, bitwidth);
+      auto kReg = StringAttr::get(ctx, "register");
+      auto numLoadElems =
+          dstLayout.removeZeroBasesAlongDim(kReg).getInDimSize(kReg);
+      auto [numBanksDst, numBanksSrc] = targetInfo.getSharedMemoryLdStBanks(
+          vecBitwidth, bitwidth, numLoadElems);
+      auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
       auto [uniformBanksDst, uniformBanksSrc] =
           targetInfo.hasUniformSharedMemoryLdStBanks();
-      auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
-      auto bytes =
-          getNumScratchElemsSwizzledCvt(
-              srcLayout, dstLayout, getBitwidth(inputTy), numBanksSrc,
-              numBanksDst, srcTile, dstTile, uniformBanksSrc, uniformBanksDst) *
-          (getBitwidth(inputTy) / 8);
+      auto bytes = getNumScratchElemsSwizzledCvt(
+                       srcLayout, dstLayout, bitwidth, numBanksSrc, numBanksDst,
+                       srcTile, dstTile, uniformBanksSrc, uniformBanksDst) *
+                   (bitwidth / 8);
       offset += bytes;
     }
     return offsets;
