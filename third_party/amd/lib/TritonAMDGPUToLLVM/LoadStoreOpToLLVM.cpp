@@ -1054,12 +1054,13 @@ struct AsyncCopyGlobalToLocalOpConversion
     int32_t cacheModifiers =
         mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
             cacheMod, /*isLoad=*/true, targetInfo);
+    auto auxAttr = rewriter.getI32IntegerAttr(cacheModifiers);
 
     if (targetInfo.useAsyncMarks()) {
       // Use the async intrinsic so LLVM tracks these via asyncmark
       auto asyncLoadOp = ROCDL::GlobalLoadAsyncLDSOp::create(
-          rewriter, loc, srcPtr, shmemAddr, vecBits / 8,
-          /*offset=*/0, cacheModifiers, nullptr, nullptr, nullptr);
+          rewriter, loc, srcPtr, shmemAddr, vecBits / 8, /*offset=*/0u, auxAttr,
+          nullptr, nullptr, nullptr);
       if (targetInfo.requiresAliasInfoForAsyncOps())
         AMD::addAsyncCopyAliasScope(asyncLoadOp);
     } else if (targetInfo.getISAFamily() == ISAFamily::GFX1250) {
@@ -1067,32 +1068,32 @@ struct AsyncCopyGlobalToLocalOpConversion
       case 32:
         if (multicastMask)
           ROCDL::ClusterLoadAsyncToLDSB32Op::create(
-              rewriter, loc, srcPtr, shmemAddr, 0, cacheModifiers,
-              multicastMask, nullptr, nullptr, nullptr);
+              rewriter, loc, srcPtr, shmemAddr, 0u, auxAttr, multicastMask,
+              nullptr, nullptr, nullptr);
         else
           ROCDL::GlobalLoadAsyncToLDSB32Op::create(rewriter, loc, srcPtr,
-                                                   shmemAddr, 0, cacheModifiers,
+                                                   shmemAddr, 0u, auxAttr,
                                                    nullptr, nullptr, nullptr);
         break;
       case 64:
         if (multicastMask)
           ROCDL::ClusterLoadAsyncToLDSB64Op::create(
-              rewriter, loc, srcPtr, shmemAddr, 0, cacheModifiers,
-              multicastMask, nullptr, nullptr, nullptr);
+              rewriter, loc, srcPtr, shmemAddr, 0u, auxAttr, multicastMask,
+              nullptr, nullptr, nullptr);
         else
           ROCDL::GlobalLoadAsyncToLDSB64Op::create(rewriter, loc, srcPtr,
-                                                   shmemAddr, 0, cacheModifiers,
+                                                   shmemAddr, 0u, auxAttr,
                                                    nullptr, nullptr, nullptr);
         break;
       case 128:
         if (multicastMask)
           ROCDL::ClusterLoadAsyncToLDSB128Op::create(
-              rewriter, loc, srcPtr, shmemAddr, 0, cacheModifiers,
-              multicastMask, nullptr, nullptr, nullptr);
+              rewriter, loc, srcPtr, shmemAddr, 0u, auxAttr, multicastMask,
+              nullptr, nullptr, nullptr);
         else
-          ROCDL::GlobalLoadAsyncToLDSB128Op::create(
-              rewriter, loc, srcPtr, shmemAddr, 0, cacheModifiers, nullptr,
-              nullptr, nullptr);
+          ROCDL::GlobalLoadAsyncToLDSB128Op::create(rewriter, loc, srcPtr,
+                                                    shmemAddr, 0u, auxAttr,
+                                                    nullptr, nullptr, nullptr);
         break;
       default:
         llvm_unreachable("Unsupported vec size for async load");

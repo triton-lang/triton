@@ -205,12 +205,13 @@ for the cluster and touches all CTA rows.
 For direct memdesc accesses, ConSan derives the possible recipient CTA rows
 from the same block-local register-to-shared layout conversion used by
 lowering. This covers `ttg.local_load`, `ttg.local_store`, and source-backed
-`ttg.local_alloc`. For `ttg.local_gather` and `ttg.local_scatter`, the runtime
-index replaces one logical coordinate, so ConSan additionally spans that
-index's layout bases. In each case the issuing CTA is fixed while the other
-input bases are spanned, producing a static conservative recipient set for the
-full buffer without defaulting every access to the whole cluster. Cross-CTA
-affine subslices are rejected as unsupported by BufferRegion analysis.
+`ttg.local_alloc`. For `ttg.local_gather`, `ttg.local_scatter`, and
+`ttg.local_atomic_scatter_rmw`, the runtime index replaces one logical
+coordinate, so ConSan additionally spans that index's layout bases. In each
+case the issuing CTA is fixed while the other input bases are spanned,
+producing a static conservative recipient set for the full buffer without
+defaulting every access to the whole cluster. Cross-CTA affine subslices are
+rejected as unsupported by BufferRegion analysis.
 
 ## Barrier Synchronization
 
@@ -246,9 +247,12 @@ Write transfers also consult the recorded effect-recipient CTA rows, which lets
 TMA-style and CLC cross-CTA writes become visible in the CTA rows reached by the
 memory effect. Read transfers update the current CTA row.
 
-A non-relaxed cluster barrier is different from an mbarrier wait: it publishes
-synchronous work from base threads to all CTA rows directly. This includes both
-ordinary read/write visibility and the generic-access/proxy-fence frontier.
+A non-relaxed cluster barrier is different from an mbarrier wait: its virtual
+rendezvous publishes synchronous work from base threads to all CTA rows at the
+phase-completing arrival. This includes both ordinary read/write visibility and
+the generic-access/proxy-fence frontier. Publishing while the rendezvous lock is
+held makes the shadow state visible before any participant can continue, so no
+second cluster barrier is needed for the ConSan protocol.
 
 ## Barrier Lifecycle and Deadlock Checks
 
@@ -296,9 +300,10 @@ The common hook implementation covers these TritonGPU operations:
 - `ttg.local_load` and `ttg.local_gather`: barrier-tracked shared-memory
   reads. A gather conservatively covers its full source descriptor because its
   indices are runtime values.
-- `ttg.local_store` and `ttg.local_scatter`: barrier-tracked shared-memory
-  writes. A scatter conservatively covers its full destination descriptor
-  because its indices are runtime values.
+- `ttg.local_store`, `ttg.local_scatter`, and
+  `ttg.local_atomic_scatter_rmw`: barrier-tracked shared-memory writes. Scatter
+  and atomic scatter RMW conservatively cover their full destination
+  descriptors because their indices are runtime values.
 - `ttg.local_alloc` with a source: barrier-tracked shared-memory write.
 
 These shared-memory effects are generic-proxy accesses for the proxy-ordering

@@ -1211,7 +1211,8 @@ void init_gluon_ir(py::module_ &m) {
            })
       .def("create_warp_pipeline_border",
            [](GluonOpBuilder &self, const std::string &marker, int priority) {
-             auto border = self.create<ROCDL::SchedBarrier>(0);
+             auto border =
+                 self.create<ROCDL::SchedBarrier>(ROCDL::SchedGroupMask::none);
              auto ctx = self.getContext();
              border->setAttr("triton.warp_pipeline.border",
                              StringAttr::get(ctx, marker));
@@ -1377,7 +1378,12 @@ void init_gluon_ir(py::module_ &m) {
           auto ll = ttg::chooseScaledWmmaScaleLayout(
               &ctx, opIdx, shape, wmmaMDim, wmmaNDim, isTransposed, scaleFactor,
               ctaLayout, cgaLayout);
-          auto attr = ttg::LinearEncodingAttr::get(&ctx, ll);
+          // A swizzled (partition-aware) WMMA produces a non-permutation scale
+          // layout, which only GenericLinearEncodingAttr can represent.
+          Attribute attr =
+              ttg::isPermutationMatrixLayout(ll)
+                  ? Attribute(ttg::LinearEncodingAttr::get(&ctx, ll))
+                  : Attribute(ttg::GenericLinearEncodingAttr::get(&ctx, ll));
           return layoutToGluon(attr);
         });
 
