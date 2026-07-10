@@ -1,6 +1,5 @@
 add_triton_library(TritonAMDGPUTransforms
   AccelerateAMDMatmul.cpp
-  AutoFuseTDMCopy.cpp
   BlockPingpong.cpp
   CanonicalizePointers.cpp
   CoalesceAsyncCopy.cpp

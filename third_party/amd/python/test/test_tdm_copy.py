@@ -83,28 +83,24 @@ is a `(descriptor, destination, warp_used_hint)` tuple.
 
 Fused-copy hints follow the same axis-aligned rule as regular
 `async_load(..., warp_used_hint=H)`, and the member hints must be
-pairwise disjoint.  Regular hinted `async_load`s stay separate by
-contract; manual fusion should use `async_load_fused`.
-
-Adjacent unhinted `async_load`s may be auto-fused by the backend, unless
-`triton.knobs.amd.disable_tdm_auto_fuse` or
-`TRITON_HIP_DISABLE_TDM_AUTO_FUSE=1` disables it.
+pairwise disjoint.  Regular `async_load`s stay separate by contract;
+manual fusion should use `async_load_fused`.
 
 ================================================================
 What this file actually tests
 ================================================================
 
-  * Compile-only tests on the AMDGCN asm: standalone hinted loads yield
-    one `tensor_load_to_lds` instruction per `async_load`, while explicit
-    fused copies and backend auto-fusion yield one instruction per fused op.
-  * Compile-only tests for cache modifier propagation and auto-fuse grouping.
+  * Compile-only tests on the AMDGCN asm: standalone loads yield one
+    `tensor_load_to_lds` instruction per `async_load`, while explicit fused
+    copies yield one instruction per fused op.
+  * Compile-only tests for explicit fused cache modifier propagation.
   * Runtime tests on gfx1250 compare against torch-on-CPU references.
 
 Runtime tests are skipped on non-gfx1250 hosts.
 
-This file is the standalone per-`async_load` reference and the fused-copy
-reference.  Hinted pairs stay as separate copies; explicit fused copies and
-unhinted auto-fusion are covered below.
+This file is the standalone per-`async_load` reference and the explicit
+fused-copy reference.  Hinted and unhinted `async_load`s stay as separate
+copies; explicit fused copies are covered below.
 """
 
 import re
@@ -191,9 +187,8 @@ def vector_add_tdm_kernel(
 # explicit zero is rejected by the verifier).  All entries below are
 # individually verifier-legal.
 #
-# This is the *standalone* per-`async_load` reference, so every hinted
-# pair must stay unfused.  The `no_hint` case also stays standalone
-# because the compile test disables auto-fusion with the knob below.
+# This is the *standalone* per-`async_load` reference, so every pair must
+# stay unfused. Explicit fusion is requested with `async_load_fused`.
 _HINT_PARAMS = [
     (0b00000000, 0b00000000, "no_hint"),
     (0b00001111, 0b00000011, "lo4_overlap_lo2"),
@@ -226,9 +221,8 @@ _COMPILE_BLOCK_SHAPES = [(64, 64), (32, 128)]
 def test_compile_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B):
     """Compile-only: each `async_load` lowers to one `tensor_load_to_lds`.
 
-    Hinted regular copies are standalone by contract.  The backend knob
-    additionally suppresses auto-fusion for the `no_hint` (unhinted) pair.
-    Explicit fused lowering and unhinted auto-fusion are exercised below.
+    Regular copies are standalone by contract.  Explicit fused lowering is
+    exercised below.
     """
     NUM_WARPS = 8
     signature = {
@@ -248,8 +242,7 @@ def test_compile_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B):
         "HINT_A": HINT_A,
         "HINT_B": HINT_B,
     }
-    with triton.knobs.amd.scope(), triton.knobs.compilation.scope():
-        triton.knobs.amd.disable_tdm_auto_fuse = True
+    with triton.knobs.compilation.scope():
         triton.knobs.compilation.always_compile = True
         k = triton.compile(
             gluon._runtime.GluonASTSource(
@@ -332,41 +325,6 @@ def _position_input(desc, off_m, off_n):
 
 
 @gluon.jit
-def vector_add_tdm_adjacent_kernel(
-    a_ptr,
-    b_ptr,
-    c_ptr,
-    M,
-    N,
-    BLOCK_M: ttgl.constexpr,
-    BLOCK_N: ttgl.constexpr,
-    HINT_A: ttgl.constexpr,
-    HINT_B: ttgl.constexpr,
-):
-    """Two-tile vector add with descriptors positioned before adjacent copies."""
-    num_warps: ttgl.constexpr = ttgl.num_warps()
-    BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
-    SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
-
-    pid_m = ttgl.program_id(axis=0)
-    pid_n = ttgl.program_id(axis=1)
-    off_m = pid_m * BLOCK_M
-    off_n = pid_n * BLOCK_N
-
-    a_desc, a_buf = _stage_input(a_ptr, M, N, BLOCK_M, BLOCK_N, SHARED_LAYOUT)
-    b_desc, b_buf = _stage_input(b_ptr, M, N, BLOCK_M, BLOCK_N, SHARED_LAYOUT)
-    a_desc = _position_input(a_desc, off_m, off_n)
-    b_desc = _position_input(b_desc, off_m, off_n)
-
-    ttgl.amd.gfx1250.tdm.async_load(a_desc, dest=a_buf, warp_used_hint=HINT_A)
-    ttgl.amd.gfx1250.tdm.async_load(b_desc, dest=b_buf, warp_used_hint=HINT_B)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
-
-    c = a_buf.load(layout=BLOCKED_LAYOUT) + b_buf.load(layout=BLOCKED_LAYOUT)
-    _store_tile(c_ptr, c, off_m, off_n, M, N, BLOCK_M, BLOCK_N, BLOCKED_LAYOUT)
-
-
-@gluon.jit
 def vector_add_tdm_explicit_fused_kernel(
     a_ptr,
     b_ptr,
@@ -428,7 +386,7 @@ def _compile_gfx1250(fn, ptr_names, constexprs, *, ptr_ty="*fp16", num_warps=8):
     """Compile `fn` for gfx1250.
 
     The signature is `{ptrs: ptr_ty, M/N: i32, <constexpr keys>: constexpr}`,
-    matching every fused/auto-fuse kernel below.
+    matching every fused-copy kernel below.
     """
     signature = {p: ptr_ty for p in ptr_names}
     signature["M"] = signature["N"] = "i32"
@@ -486,23 +444,7 @@ def test_compile_vector_add_tdm_explicit_fused_cache_modifier():
     assert re.search(r", i32 16\)(?:, .*)?$", cg_calls[0])
 
 
-def test_compile_vector_add_tdm_auto_fuse_knob_toggle():
-    """Compile-only: knob toggles auto-fusion for adjacent unhinted copies."""
-
-    def compile_unhinted(block_m, block_n):
-        return _compile_amdgcn(vector_add_tdm_adjacent_kernel, ["a_ptr", "b_ptr", "c_ptr"],
-                               {"BLOCK_M": block_m, "BLOCK_N": block_n, "HINT_A": None, "HINT_B": None})
-
-    with triton.knobs.amd.scope():
-        for disabled, block, expected in [(True, (64, 64), 2), (False, (32, 128), 1), (True, (128, 64), 2)]:
-            triton.knobs.amd.disable_tdm_auto_fuse = disabled
-            _assert_tensor_load_count(compile_unhinted(*block), expected, f"disable_auto_fuse={disabled}")
-
-
-# 3-way copies: covers regular hinted separation and non-uniform generated
-# masks for auto-fusion.
-#   num_warps=4: {0b0011, 0b0100, 0b1000}
-#   num_warps=8: {0b00001111, 0b00110000, 0b11000000}
+# 3-way copies: covers regular hinted separation.
 
 
 @gluon.jit
@@ -546,8 +488,8 @@ def vector_add_tdm_kernel_3way(
 
 
 _HINT_PARAMS_3WAY = [
-    (8, 0b00001111, 0b00110000, 0b11000000, "three_way_8w_generated_shape"),
-    (4, 0b0011, 0b0100, 0b1000, "three_way_4w_generated_shape"),
+    (8, 0b00001111, 0b00110000, 0b11000000, "three_way_8w_disjoint"),
+    (4, 0b0011, 0b0100, 0b1000, "three_way_4w_disjoint"),
     # Pairwise-disjoint hints whose union is not a coset.
     (8, 0b00000001, 0b00001000, 0b00010000, "three_way_noncoset_union"),
 ]
@@ -571,17 +513,6 @@ def test_compile_vector_add_tdm_3way(BLOCK_M, BLOCK_N, NUM_WARPS, HINT_A, HINT_B
     amdgcn = _compile_3way(NUM_WARPS, (HINT_A, HINT_B, HINT_C), (BLOCK_M, BLOCK_N))
     context = f"NUM_WARPS={NUM_WARPS}, HINT_A=0b{HINT_A:08b}, HINT_B=0b{HINT_B:08b}, HINT_C=0b{HINT_C:08b}"
     _assert_tensor_load_count(amdgcn, 3, context)
-
-
-def test_compile_vector_add_tdm_3way_auto_fuse_knob_toggle():
-    """Compile-only: knob toggles 3-way auto-fusion for adjacent unhinted copies."""
-    # (disabled, num_warps, block, expected): generation runs for 4 and 8 warps.
-    with triton.knobs.amd.scope():
-        for disabled, warps, block, expected in [(True, 8, (64, 64), 3), (False, 8, (32, 128), 1),
-                                                 (False, 4, (128, 64), 1), (True, 4, (64, 128), 3)]:
-            triton.knobs.amd.disable_tdm_auto_fuse = disabled
-            amdgcn = _compile_3way(warps, block=block)
-            _assert_tensor_load_count(amdgcn, expected, f"3-way disable_auto_fuse={disabled} warps={warps}")
 
 
 # 4-way copies: exercises the N=4 member-predicate path.
@@ -660,7 +591,7 @@ def test_compile_vector_add_tdm_4way(BLOCK_M, BLOCK_N, HINT_A, HINT_B, HINT_C, H
 
 
 @gluon.jit
-def heterogeneous_tdm_fuse_kernel(
+def heterogeneous_tdm_kernel(
     a_ptr,
     b_ptr,
     as_ptr,
@@ -705,88 +636,11 @@ def heterogeneous_tdm_fuse_kernel(
 def test_compile_heterogeneous_tdm_hints_stay_separate():
     """Compile-only: heterogeneous hinted loads stay separate."""
     amdgcn = _compile_amdgcn(
-        heterogeneous_tdm_fuse_kernel, ["a_ptr", "b_ptr", "as_ptr", "bs_ptr"], {
+        heterogeneous_tdm_kernel, ["a_ptr", "b_ptr", "as_ptr", "bs_ptr"], {
             "BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_N_B": 2048, "BLOCK_SCALE_M": 64, "BLOCK_SCALE_N": 32, "HINT_A":
             0b00010001, "HINT_B": 0b00100010, "HINT_AS": 0b01000100, "HINT_BS": 0b10001000
         }, ptr_ty="*i8")
     _assert_tensor_load_count(amdgcn, 4, "heterogeneous hinted A/B/AS/BS loads")
-
-
-def test_compile_heterogeneous_tdm_auto_fuse():
-    """Compile-only: heterogeneous unhinted loads auto-fuse."""
-    amdgcn = _compile_amdgcn(
-        heterogeneous_tdm_fuse_kernel, ["a_ptr", "b_ptr", "as_ptr", "bs_ptr"], {
-            "BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_N_B": 2048, "BLOCK_SCALE_M": 64, "BLOCK_SCALE_N": 32, "HINT_A": None,
-            "HINT_B": None, "HINT_AS": None, "HINT_BS": None
-        }, ptr_ty="*i8")
-    _assert_tensor_load_count(amdgcn, 1, "heterogeneous unhinted A/B/AS/BS loads")
-
-
-# Cache modifiers must match for auto-fusion.
-
-
-@gluon.jit
-def vector_add_tdm_kernel_cache(
-    a_ptr,
-    b_ptr,
-    c_ptr,
-    M,
-    N,
-    BLOCK_M: ttgl.constexpr,
-    BLOCK_N: ttgl.constexpr,
-    HINT_A: ttgl.constexpr,
-    HINT_B: ttgl.constexpr,
-    CACHE_A: ttgl.constexpr,
-    CACHE_B: ttgl.constexpr,
-):
-    """Two-tile vector add with explicit per-copy cache modifiers (same strings
-    as `tt.load`'s `cache_modifier`: `""`, `.ca`, `.cg`, ...)."""
-    num_warps: ttgl.constexpr = ttgl.num_warps()
-    BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
-    SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
-
-    pid_m = ttgl.program_id(axis=0)
-    pid_n = ttgl.program_id(axis=1)
-    off_m = pid_m * BLOCK_M
-    off_n = pid_n * BLOCK_N
-
-    a_desc, a_buf = _stage_input(a_ptr, M, N, BLOCK_M, BLOCK_N, SHARED_LAYOUT)
-    b_desc, b_buf = _stage_input(b_ptr, M, N, BLOCK_M, BLOCK_N, SHARED_LAYOUT)
-    a_desc = _position_input(a_desc, off_m, off_n)
-    b_desc = _position_input(b_desc, off_m, off_n)
-
-    ttgl.amd.gfx1250.tdm.async_load(a_desc, dest=a_buf, warp_used_hint=HINT_A, cache_modifier=CACHE_A)
-    ttgl.amd.gfx1250.tdm.async_load(b_desc, dest=b_buf, warp_used_hint=HINT_B, cache_modifier=CACHE_B)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
-
-    c = a_buf.load(layout=BLOCKED_LAYOUT) + b_buf.load(layout=BLOCKED_LAYOUT)
-    _store_tile(c_ptr, c, off_m, off_n, M, N, BLOCK_M, BLOCK_N, BLOCKED_LAYOUT)
-
-
-# Layout: (CACHE_A, CACHE_B, expected_auto_fuse, id).
-_CACHE_PARAMS = [
-    # same cache: auto-fuse rule 6 satisfied
-    ("", "", True, "same_default"),
-    (".cg", ".cg", True, "same_cg"),
-    # mismatched cache: auto-fuse rule 6 forces a split
-    ("", ".cg", False, "default_vs_cg"),
-    (".ca", ".cg", False, "ca_vs_cg"),
-]
-
-
-@pytest.mark.parametrize("BLOCK_M,BLOCK_N", _COMPILE_BLOCK_SHAPES)
-@pytest.mark.parametrize(
-    "CACHE_A,CACHE_B,expected_auto_fuse",
-    [_param_args(p) for p in _CACHE_PARAMS],
-    ids=[_param_id(p) for p in _CACHE_PARAMS],
-)
-def test_compile_vector_add_tdm_cache(BLOCK_M, BLOCK_N, CACHE_A, CACHE_B, expected_auto_fuse):
-    """Compile-only: asserts matching cache modifiers for auto-fusion."""
-    amdgcn = _compile_amdgcn(vector_add_tdm_kernel_cache, ["a_ptr", "b_ptr", "c_ptr"], {
-        "BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "HINT_A": None, "HINT_B": None, "CACHE_A": CACHE_A, "CACHE_B": CACHE_B
-    })
-    context = f"CACHE_A={CACHE_A!r}, CACHE_B={CACHE_B!r}"
-    _assert_tensor_load_count(amdgcn, 1 if expected_auto_fuse else 2, context)
 
 
 @gluon.jit
@@ -922,39 +776,6 @@ def test_runtime_vector_add_tdm_explicit_fused(BLOCK_M, BLOCK_N):
         "",
         num_warps=NUM_WARPS,
     )
-
-    assert torch.equal(c.cpu(), a_cpu + b_cpu)
-
-
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="TDM is only tested on gfx1250.")
-@pytest.mark.parametrize("BLOCK_M,BLOCK_N", _RUNTIME_BLOCK_SHAPES)
-def test_runtime_vector_add_tdm_auto_fuse(BLOCK_M, BLOCK_N):
-    """Runtime: backend auto-fused unhinted TDM loads are correct end-to-end."""
-    M, N = 256, 512
-    NUM_WARPS = 8
-
-    torch.manual_seed(0)
-    a_cpu = torch.randint(0, 128, (M, N), dtype=torch.int32)
-    b_cpu = torch.randint(0, 128, (M, N), dtype=torch.int32)
-    a = a_cpu.cuda()
-    b = b_cpu.cuda()
-    c = torch.empty((M, N), dtype=torch.int32, device="cuda")
-
-    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    with triton.knobs.amd.scope():
-        triton.knobs.amd.disable_tdm_auto_fuse = False
-        vector_add_tdm_adjacent_kernel[grid](
-            a,
-            b,
-            c,
-            M,
-            N,
-            BLOCK_M,
-            BLOCK_N,
-            None,
-            None,
-            num_warps=NUM_WARPS,
-        )
 
     assert torch.equal(c.cpu(), a_cpu + b_cpu)
 
