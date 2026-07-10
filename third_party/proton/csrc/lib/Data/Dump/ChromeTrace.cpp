@@ -258,7 +258,12 @@ void dumpKernelMetricTrace(
     const std::map<size_t, std::vector<CpuScopeEvent>> &cpuScopeEvents,
     const std::map<size_t, std::vector<GraphScopeEvent>> &graphScopeEvents,
     std::ostream &os) {
-  json object = {{"displayTimeUnit", "us"}, {"traceEvents", json::array()}};
+  // baseTimeNanoseconds records the absolute time that event ts=0 refers to,
+  // mirroring torch>=2.4 chrome traces, so external tools (e.g. viztracer's
+  // ReportBuilder) can align this trace with traces from other profilers.
+  json object = {{"displayTimeUnit", "us"},
+                 {"baseTimeNanoseconds", minTimeStamp},
+                 {"traceEvents", json::array()}};
 
   emitTraceLaneMetadata(object, cpuScopeEvents, graphScopeEvents, kernelEvents);
   dumpCpuScopeEvents(minTimeStamp, cpuScopeEvents, object);
@@ -273,7 +278,9 @@ void dumpCpuOnlyTrace(
     uint64_t minTimeStamp,
     const std::map<size_t, std::vector<CpuScopeEvent>> &cpuScopeEvents,
     std::ostream &os) {
-  json object = {{"displayTimeUnit", "us"}, {"traceEvents", json::array()}};
+  json object = {{"displayTimeUnit", "us"},
+                 {"baseTimeNanoseconds", minTimeStamp},
+                 {"traceEvents", json::array()}};
   dumpCpuScopeEvents(minTimeStamp, cpuScopeEvents, object);
   os << object.dump() << "\n";
 }

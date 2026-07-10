@@ -13,6 +13,7 @@ import json
 import pytest
 from typing import NamedTuple
 import threading
+import time
 
 import triton.language as tl
 import triton.profiler.hooks.launch as proton_launch
@@ -1160,6 +1161,11 @@ def test_trace(tmp_path: pathlib.Path, device: str):
         assert kernel_event["args"]["call_stack"] == ["ROOT", "test", "foo"]
         assert scope_event["ts"] <= kernel_event["ts"]
         assert kernel_event["ts"] + kernel_event["dur"] <= scope_event["ts"] + scope_event["dur"]
+        # ts=0 anchor for aligning with traces from other profilers
+        # (same contract as torch>=2.4 chrome traces).
+        base_time_ns = data["baseTimeNanoseconds"]
+        one_day_ns = 24 * 60 * 60 * 1_000_000_000
+        assert abs(time.time_ns() - base_time_ns) < one_day_ns
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
