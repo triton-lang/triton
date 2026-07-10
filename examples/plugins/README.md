@@ -261,6 +261,16 @@ def kernel2(BLOCK_SIZE: tl.constexpr):
 PLUGIN_KEY = pathlib.Path(__file__).read_text()
 PLUGIN_HASH = hashlib.sha256(PLUGIN_KEY.encode('utf-8')).hexdigest()
 
+# override_stages builds its pipeline from compiler_override.py, which can
+# change between runs, so its cache key must reflect that file's *current*
+# content and is re-derived on every call. This dynamic-pipeline case is what
+# the per-launch no-arg call exists for; only static derivations (like
+# PLUGIN_KEY above) should be precomputed.
+def override_key_hash():
+    override = pathlib.Path("compiler_override.py")
+    key = PLUGIN_KEY + (override.read_text() if override.is_file() else "")
+    return key, hashlib.sha256(key.encode('utf-8')).hexdigest()
+
 def dump_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
   if all(arg is None for arg in (stages, options, language, capability)):
       return PLUGIN_KEY, PLUGIN_HASH
@@ -279,7 +289,7 @@ def dump_stages_hook(self=None, stages=None, options=None, language=None, capabi
   return PLUGIN_KEY, PLUGIN_HASH
 def override_stages(self=None, stages=None, options=None, language=None, capability=None):
   if all(arg is None for arg in (stages, options, language, capability)):
-      return PLUGIN_KEY, PLUGIN_HASH
+      return override_key_hash()
     if language != Language.TRITON:
         return
     full_name = "compiler_override.py"
@@ -307,7 +317,7 @@ def override_stages(self=None, stages=None, options=None, language=None, capabil
         stages["ttir"] = make_lambda(module.make_ttir)
     if has_func(module, "make_ttgir"):
         stages["ttgir"] = make_lambda(module.make_ttgir)
-    return PLUGIN_KEY, PLUGIN_HASH
+    return override_key_hash()
 
 if __name__ == '__main__':
 
