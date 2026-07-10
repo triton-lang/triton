@@ -205,14 +205,16 @@ FuncOp getOrCreateFunction(
 // Create a call to a function with body given by `buildBody`.
 // If the function does not exist, it will be created, otherwise the
 // existing function will be used.
-// If `assertInfo` is provided, the function should return a tensor of
-// the given type and the result of the function will be asserted.
-void createCallToCachedFunction(
+// If `assertInfo` is provided, the function should return a tensor of the
+// given type. The result is asserted unless `emitAssert` is false.
+Value createCallToCachedFunction(
     ImplicitLocOpBuilder &b, const std::string &name, ArrayRef<Value> args,
     std::optional<AssertInfo> assertInfo, ManglingArgs specializationArgs,
-    std::function<void(ImplicitLocOpBuilder &b, Block *entryBlock)> buildBody) {
-  ModuleOp module = b.getInsertionPoint()->getParentOfType<ModuleOp>();
-  int numWarps = ttg::lookupNumWarps(b.getInsertionPoint()->getParentRegion());
+    std::function<void(ImplicitLocOpBuilder &b, Block *entryBlock)> buildBody,
+    bool emitAssert = true) {
+  Region *region = b.getInsertionBlock()->getParent();
+  ModuleOp module = region->getParentOp()->getParentOfType<ModuleOp>();
+  int numWarps = ttg::lookupNumWarps(region);
   SmallVector<Type> argTypes = llvm::to_vector(
       llvm::map_range(args, [](Value v) { return v.getType(); }));
   Type assertType = assertInfo ? assertInfo->type : nullptr;
@@ -226,9 +228,13 @@ void createCallToCachedFunction(
   auto callOp = triton::CallOp::create(b, func.getName(), resultTypes, args);
   if (assertInfo) {
     Value result = callOp->getResult(0);
-    StringRef message = b.getStringAttr(assertInfo->message);
-    createAssertInThread(b, result, message);
+    if (emitAssert) {
+      StringRef message = b.getStringAttr(assertInfo->message);
+      createAssertInThread(b, result, message);
+    }
+    return result;
   }
+  return {};
 }
 
 Value createBufferDescriptor(ImplicitLocOpBuilder &b, Value offsetI32,
@@ -420,6 +426,71 @@ Operation *createCTAScopedStoreScratchMemory(ImplicitLocOpBuilder &b,
   return createMaskedStoreScratchMemory(
       b, loc, alloc, tensor, tensorType,
       createCTASetMask(b, tensorType, /*dim=*/0, recipientCTAs));
+}
+
+Value createVirtualBarrierMask(ImplicitLocOpBuilder &b, Value barrierIdx,
+                               RankedTensorType tensorType) {
+  Value barrierMask = createDimMask(b, barrierIdx, tensorType, /*dim=*/1);
+  Value leadCTAMask = createCTASetMask(b, tensorType, /*dim=*/0,
+                                       arith::ConstantIntOp::create(b, 1, 32));
+  return arith::AndIOp::create(b, barrierMask, leadCTAMask);
+}
+
+Value arriveVirtualBarrier(ImplicitLocOpBuilder &b, Value statesPtr,
+                           RankedTensorType statesType, Value barrierIdx,
+                           int count) {
+  Value states =
+      tti::createLoadScratchMemory(b, b.getLoc(), statesPtr, statesType);
+  Value mask = createVirtualBarrierMask(b, barrierIdx, statesType);
+  Value one = tti::createConstIntTensor(b, b.getLoc(), 1, statesType);
+  Value two = tti::createConstIntTensor(b, b.getLoc(), 2, statesType);
+  Value phase = arith::AndIOp::create(b, states, one);
+  // Virtual slots encode 2 * arrivals + phase. Completing an epoch resets the
+  // arrival count and toggles the low phase bit used by deadlock detection.
+  Value nextState = arith::AddIOp::create(b, states, two);
+  Value completionState = arith::AddIOp::create(
+      b, phase,
+      tti::createConstIntTensor(b, b.getLoc(), 2 * count, statesType));
+  Value completed =
+      arith::AndIOp::create(b, mask,
+                            arith::CmpIOp::create(b, arith::CmpIPredicate::eq,
+                                                  nextState, completionState));
+  Value completedInt = arith::ExtUIOp::create(b, statesType, completed);
+  Value nextPhase = arith::XOrIOp::create(b, phase, completedInt);
+  nextState = arith::SelectOp::create(b, completed, nextPhase, nextState);
+  Value updated = arith::SelectOp::create(b, mask, nextState, states);
+  tti::createStoreScratchMemory(b, b.getLoc(), statesPtr, updated, statesType);
+  return reduceAll<arith::OrIOp>(b, completed);
+}
+
+Value updateWaitingBits(ImplicitLocOpBuilder &b, Value waiting,
+                        RankedTensorType waitingType, Value thread, Value phase,
+                        Value mask, bool markWaiting) {
+  Value bitsPerThread =
+      arith::ConstantIntOp::create(b, WaitingBits::bitsPerThread, 32);
+  Value flagBit = arith::ConstantIntOp::create(b, WaitingBits::flagBit, 32);
+  Value phaseBit = arith::ConstantIntOp::create(b, WaitingBits::phaseBit, 32);
+  Value one = arith::ConstantIntOp::create(b, 1, 32);
+  Value minusOne = arith::ConstantIntOp::create(b, -1, 32);
+  Value baseTimesBits = arith::MulIOp::create(b, thread, bitsPerThread);
+  Value flagShift = arith::AddIOp::create(b, baseTimesBits, flagBit);
+  Value phaseShift = arith::AddIOp::create(b, baseTimesBits, phaseBit);
+  Value flagMask = arith::ShLIOp::create(b, one, flagShift);
+  Value phaseMask = arith::ShLIOp::create(b, one, phaseShift);
+  Value combinedMask = arith::OrIOp::create(b, flagMask, phaseMask);
+  Value clearMask = arith::XOrIOp::create(b, combinedMask, minusOne);
+  Value clearMaskTensor = triton::SplatOp::create(b, waitingType, clearMask);
+  Value cleared = arith::AndIOp::create(b, waiting, clearMaskTensor);
+
+  if (!markWaiting)
+    return arith::SelectOp::create(b, mask, cleared, waiting);
+
+  Value phaseI32 = arith::ExtUIOp::create(b, b.getI32Type(), phase);
+  Value phaseShifted = arith::ShLIOp::create(b, phaseI32, phaseShift);
+  Value setBits = arith::OrIOp::create(b, flagMask, phaseShifted);
+  Value setBitsTensor = triton::SplatOp::create(b, waitingType, setBits);
+  Value withWaiting = arith::OrIOp::create(b, cleared, setBitsTensor);
+  return arith::SelectOp::create(b, mask, withWaiting, waiting);
 }
 
 } // namespace
@@ -692,11 +763,11 @@ void FunctionBuilder::createRetireActiveThreadCall(ImplicitLocOpBuilder &b,
       });
 }
 
-void FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
-                                                      Value pred,
-                                                      Operation *insertPoint) {
+Value FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
+                                                       Value pred,
+                                                       Operation *insertPoint) {
   if (auxData.waiting.empty() || auxData.barrierStates.empty()) {
-    return;
+    return arith::ConstantIntOp::create(b, 1, 1);
   }
   if (!pred) {
     pred = arith::ConstantIntOp::create(b, 1, 1);
@@ -711,7 +782,7 @@ void FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
   Value barrierStatesVal = auxData.barrierStates.at(insertPoint).value;
   auto barrierStatesType =
       cast<RankedTensorType>(auxData.barrierStates.at(insertPoint).type);
-  Region *region = b.getInsertionPoint()->getParentRegion();
+  Region *region = b.getInsertionBlock()->getParent();
   auto waitingGlobalType = tti::getIntTensorType(
       region, waitingType.getShape(),
       waitingType.getElementType().getIntOrFloatBitWidth());
@@ -726,11 +797,9 @@ void FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
       activeMasksType.getElementType().getIntOrFloatBitWidth());
   SmallVector<Value> args = {pred, waitingVal, barrierStatesVal,
                              activeMasksVal};
-  AssertInfo assertInfo{
-      "Deadlock detected: all unfinished threads are waiting on mbarriers",
-      b.getI1Type()};
-  createCallToCachedFunction(
-      b, "check_all_active_waiting", args, assertInfo,
+  AssertInfo resultInfo{"", b.getI1Type()};
+  return createCallToCachedFunction(
+      b, "check_all_active_waiting", args, resultInfo,
       {waitingGlobalType, barrierStatesGlobalType, activeMasksGlobalType},
       [waitingGlobalType, barrierStatesGlobalType, activeMasksGlobalType,
        flagMask, phaseMask](ImplicitLocOpBuilder &fb, Block *entryBlock) {
@@ -797,7 +866,90 @@ void FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
         Value ok = arith::XOrIOp::create(fb, deadlocked, vTrue);
         Value predicatedOk = arith::SelectOp::create(fb, pred, ok, vTrue);
         triton::ReturnOp::create(fb, predicatedOk);
-      });
+      },
+      /*emitAssert=*/false);
+}
+
+void FunctionBuilder::createClusterBarrierRendezvousCall(
+    ImplicitLocOpBuilder &b, int barrierIdx, int thread, bool publishVisibility,
+    Operation *insertPoint) {
+  assert(!auxData.waiting.empty() && !auxData.barrierStates.empty() &&
+         !auxData.activeMasks.empty() &&
+         "cluster rendezvous requires barrier deadlock state");
+  Value barrierIdxVal = arith::ConstantIntOp::create(b, barrierIdx, 32);
+  Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
+  Value statesPtr = auxData.barrierStates.at(insertPoint).value;
+  auto statesType =
+      cast<RankedTensorType>(auxData.barrierStates.at(insertPoint).type);
+  Value waitingPtr = auxData.waiting.at(insertPoint).value;
+  auto waitingType =
+      cast<RankedTensorType>(auxData.waiting.at(insertPoint).type);
+  Value lock = auxData.lock.at(insertPoint).value;
+  Value vTrue = arith::ConstantIntOp::create(b, 1, 1);
+  int numCTAs = ttg::lookupNumCTAs(insertPoint);
+
+  auto getPhase = [&]() {
+    Value states =
+        tti::createLoadScratchMemory(b, b.getLoc(), statesPtr, statesType);
+    Value mask = createVirtualBarrierMask(b, barrierIdxVal, statesType);
+    Value phase = arith::AndIOp::create(
+        b, states, tti::createConstIntTensor(b, b.getLoc(), 1, statesType));
+    phase = arith::SelectOp::create(
+        b, mask, phase,
+        tti::createConstIntTensor(b, b.getLoc(), 0, statesType));
+    return arith::TruncIOp::create(b, b.getI1Type(),
+                                   reduceAll<arith::OrIOp>(b, phase));
+  };
+  auto updateWaiting = [&](Value phase, Value pred, bool markWaiting) {
+    Value waiting =
+        tti::createLoadScratchMemory(b, b.getLoc(), waitingPtr, waitingType);
+    Value mask = arith::AndIOp::create(
+        b, createDimMask(b, barrierIdxVal, waitingType, /*dim=*/1),
+        createLeadCTAEffectMask(b, waitingType,
+                                arith::ConstantIntOp::create(b, 1, 32)));
+    Value predTensor = triton::SplatOp::create(
+        b, cast<RankedTensorType>(mask.getType()), pred);
+    mask = arith::AndIOp::create(b, mask, predTensor);
+    Value updated = updateWaitingBits(b, waiting, waitingType, threadVal, phase,
+                                      mask, markWaiting);
+    tti::createStoreScratchMemory(b, b.getLoc(), waitingPtr, updated,
+                                  waitingType);
+  };
+
+  tti::ExperimentalLockAcquireOp::create(b, lock, vTrue);
+  Value savedPhase = getPhase();
+  updateWaiting(savedPhase, vTrue, /*markWaiting=*/true);
+  Value completed =
+      arriveVirtualBarrier(b, statesPtr, statesType, barrierIdxVal, numCTAs);
+  if (publishVisibility) {
+    for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM})
+      createPublishClusterVisibilityCall(b, completed, memType, insertPoint);
+    createPublishClusterProxyAccessesCall(b, completed, insertPoint);
+  }
+  Value ok = createCheckAllActiveWaitingCall(b, vTrue, insertPoint);
+  tti::ExperimentalLockReleaseOp::create(b, lock, vTrue);
+  tti::createAssertInThread(b, ok, "Deadlock detected at a cluster barrier");
+
+  Block *entryBlock = b.getInsertionBlock();
+  Block *continueBlock = entryBlock->splitBlock(b.getInsertionPoint());
+  Block *phasePollBlock = new Block();
+  entryBlock->getParent()->getBlocks().insert(continueBlock->getIterator(),
+                                              phasePollBlock);
+  b.setInsertionPointToEnd(entryBlock);
+  cf::BranchOp::create(b, phasePollBlock);
+
+  b.setInsertionPointToStart(phasePollBlock);
+  tti::ExperimentalLockAcquireOp::create(b, lock, vTrue);
+  Value currentPhase = getPhase();
+  Value phaseChanged = arith::CmpIOp::create(b, arith::CmpIPredicate::ne,
+                                             currentPhase, savedPhase);
+  updateWaiting(savedPhase, phaseChanged, /*markWaiting=*/false);
+  ok = createCheckAllActiveWaitingCall(b, vTrue, insertPoint);
+  tti::ExperimentalLockReleaseOp::create(b, lock, vTrue);
+  tti::createAssertInThread(b, ok, "Deadlock detected at a cluster barrier");
+  cf::CondBranchOp::create(b, phaseChanged, continueBlock, ValueRange{},
+                           phasePollBlock, ValueRange{});
+  b.setInsertionPointToStart(continueBlock);
 }
 
 void FunctionBuilder::createVerifyBarrierCanInitCall(ImplicitLocOpBuilder &b,

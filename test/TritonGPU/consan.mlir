@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritoninstrument-prepare-consan-captures="target=nvidia" -tritoninstrument-concurrency-sanitizer | FileCheck %s
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritoninstrument-prepare-consan-captures="target=nvidia" -tritoninstrument-concurrency-sanitizer | FileCheck %s --implicit-check-not=cluster_waiting
 // RUN: env TRITON_CONSAN_INIT_ALLOCATIONS=0 triton-opt %s -split-input-file -allow-unregistered-dialect -tritoninstrument-prepare-consan-captures="target=nvidia" -tritoninstrument-concurrency-sanitizer | FileCheck %s --check-prefix=NO-INIT
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
@@ -1164,20 +1164,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @wait_barrier_multi_cta
   tt.func public @wait_barrier_multi_cta() {
+    // The dummy descriptor is the virtual cluster-barrier slot. It uses the
+    // ordinary barrier state, waiting, and active-mask captures.
+    // CHECK: tti.experimental_buffer_descriptors [65536, 0], [8, 0], shared_mem
+    // CHECK: ttg.global_scratch_alloc
+    // CHECK-COUNT-3: ttg.global_scratch_alloc
+    // CHECK-NOT: ttg.global_scratch_alloc
+    // CHECK: tti.experimental_lock_release
+    // CHECK-NEXT: ttng.cluster_barrier
     %true = arith.constant true
     %c0_i32 = arith.constant 0 : i32
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    // CHECK: ttng.init_barrier
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: %[[WAIT_PRED:.*]] = arith.andi %true, %{{.*}} : i1
     // CHECK-NEXT: tti.experimental_lock_acquire %{{.*}}, %[[WAIT_PRED]]
     // CHECK: tt.call @__triton_consan_check_all_active_waiting
-    // CHECK-NEXT: tti.experimental_assert_uniform
     // CHECK-NEXT: tti.experimental_lock_release %{{.*}}, %[[WAIT_PRED]]
+    // CHECK-NEXT: tti.experimental_assert_uniform
     // CHECK: ttng.wait_barrier
     // CHECK-NEXT: tti.experimental_lock_acquire %{{.*}}, %[[WAIT_PRED]]
     // CHECK: tt.call @__triton_consan_clear_waiting
     // CHECK-NEXT: tti.experimental_lock_release %{{.*}}, %[[WAIT_PRED]]
     ttng.wait_barrier %bar, %c0_i32, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    // CHECK: tti.experimental_lock_acquire
+    // CHECK: tt.call @__triton_consan_check_all_active_waiting
+    // CHECK-NEXT: tti.experimental_lock_release
+    // CHECK-NEXT: tti.experimental_assert_uniform {{.*}}, "Deadlock detected at a cluster barrier"
+    // CHECK-NEXT: cf.br ^[[POLL:bb[0-9]+]]
+    // CHECK: ^[[POLL]]:
+    // CHECK: tti.experimental_lock_acquire
+    // CHECK: tt.call @__triton_consan_check_all_active_waiting
+    // CHECK-NEXT: tti.experimental_lock_release
+    // CHECK-NEXT: tti.experimental_assert_uniform {{.*}}, "Deadlock detected at a cluster barrier"
+    // CHECK: cf.cond_br {{.*}}, ^[[CONTINUE:bb[0-9]+]], ^[[POLL]]
+    // CHECK: ^[[CONTINUE]]:
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NOT: ttng.cluster_barrier
+    // CHECK: tt.return
+    ttng.cluster_barrier
     tt.return
   }
 }
@@ -1828,14 +1853,12 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   tt.func public @cluster_barrier_publish_protocol() {
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared_cluster_publish, #smem_cluster_publish, mutable>
     // CHECK: ttg.local_load
-    // CHECK-NEXT: ttng.cluster_barrier
-    // CHECK: %[[PUB_CTA:.*]] = tti.experimental_cluster_cta_id : i32
-    // CHECK: %[[PUB_ZERO:.*]] = arith.constant 0 : i32
-    // CHECK: %[[PUB_PRED:.*]] = arith.cmpi eq, %[[PUB_CTA]], %[[PUB_ZERO]] : i32
-    // CHECK: tti.experimental_lock_acquire %{{.*}}, %[[PUB_PRED]]
-    // CHECK: tt.call @__triton_consan_publish_cluster_visibility{{.*}}(%[[PUB_PRED]],
-    // CHECK: tti.experimental_lock_release %{{.*}}, %[[PUB_PRED]]
-    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK: tti.experimental_lock_acquire
+    // CHECK: tt.call @__triton_consan_publish_cluster_visibility
+    // CHECK: tti.experimental_lock_release
+    // CHECK: ttng.cluster_barrier
+    // CHECK-NOT: ttng.cluster_barrier
+    // CHECK: tt.return
     ttg.local_load %buf : !ttg.memdesc<32x32xf32, #shared_cluster_publish, #smem_cluster_publish, mutable> -> tensor<32x32xf32, #blocked_cluster_publish>
     ttng.cluster_barrier
     tt.return
