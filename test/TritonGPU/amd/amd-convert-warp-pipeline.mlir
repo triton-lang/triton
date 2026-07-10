@@ -770,7 +770,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: tt.store
 //
 // Between stage 0 and 1: existing async_wait wrapped, no s_barrier.
+// The first barrier follows stage 0's memory op; the cluster barrier is next.
 // CHECK: rocdl.sched.barrier
+// CHECK-NEXT: rocdl.sched.barrier
 // CHECK-NEXT: amdg.async_wait
 // CHECK-NEXT: rocdl.sched.barrier
 // CHECK-NOT: rocdl.s.barrier
@@ -779,6 +781,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 //
 // Between stage 1 and 2: no pre-existing barrier, so s_barrier inserted.
 // CHECK: rocdl.sched.barrier
+// CHECK-NEXT: rocdl.sched.barrier
 // CHECK-NEXT: rocdl.s.barrier
 // CHECK-NEXT: rocdl.sched.barrier
 // Stage 2 ops.
@@ -1072,7 +1075,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: ttg.local_store
 //
 // Barrier between stage0→stage1 is LOCAL (adjacent RAW: write→read).
+// The first barrier follows stage 0's memory op; the cluster barrier is next.
 // CHECK: rocdl.sched.barrier
+// CHECK-NEXT: rocdl.sched.barrier
 // CHECK-NEXT: ttg.barrier local
 // CHECK-NEXT: rocdl.sched.barrier
 //
@@ -1081,6 +1086,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 //
 // Barrier between stage1→stage2 is LOCAL (distance-2 WAR: a1 reads, a0 writes).
 // CHECK: rocdl.sched.barrier
+// CHECK-NEXT: rocdl.sched.barrier
 // CHECK-NEXT: ttg.barrier local
 // CHECK-NEXT: rocdl.sched.barrier
 //
@@ -1089,6 +1095,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 //
 // Wrap-around barrier is s_barrier only (a2 has no LDS, a0 writes — no dep).
 // CHECK: rocdl.sched.barrier
+// CHECK-NEXT: rocdl.sched.barrier
 // CHECK-NEXT: rocdl.s.barrier
 // CHECK-NEXT: rocdl.sched.barrier
 //
@@ -1374,7 +1381,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // Stage 1 reads LDS.
 // CHECK: ttg.local_load
 // Wrap-around barrier is also LOCAL (stage1 read vs stage0 write next iter).
+// The first barrier follows stage 1's memory op; the cluster barrier is next.
 // CHECK: rocdl.sched.barrier
+// CHECK-NEXT: rocdl.sched.barrier
 // CHECK-NEXT: ttg.barrier local
 // CHECK-NEXT: rocdl.sched.barrier
 // CHECK: scf.yield
