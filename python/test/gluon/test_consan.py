@@ -465,6 +465,9 @@ def test_clc_result_reuse_after_cluster_barrier(device, run_wrapper, monkeypatch
         mbarrier.wait(clc_bar, 0)
         first = clc.load_result(clc_result)
         ttgl.barrier(cluster=True)
+        # A CTA fence must not hide the need for a cluster fence before the
+        # next multi-CTA CLC request.
+        hopper.fence_async_shared()
 
         mbarrier.expect(clc_bar, 16)
         clc.try_cancel(clc_result, clc_bar)

@@ -8,7 +8,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: fence_write_after_read
   tt.func @fence_write_after_read(%arg0: !tt.tensordesc<64x64xf32, #shared>, %arg1: !ttg.memdesc<1xi64, #shared1, #smem, mutable>) {
     // CHECK: ttg.local_load
-    // CHECK: ttng.fence_async_shared
+    // CHECK: ttng.fence_async_shared {bCluster = false}
     // CHECK: ttng.async_tma_copy_global_to_local
     %c0_i32 = arith.constant 0 : i32
     %true = arith.constant true
@@ -165,6 +165,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
       !ttg.memdesc<1xi64, #shared_clc, #smem, mutable>
     tt.return
   }
+
+  // CHECK-LABEL: clc_try_cancel_single_cta_after_cluster_fence
+  tt.func @clc_try_cancel_single_cta_after_cluster_fence() {
+    %result = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2xi64, #shared_clc, #smem, mutable>
+    %barrier = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<1xi64, #shared_clc, #smem, mutable>
+    %response = ttng.clc_load_result %result : !ttg.memdesc<2xi64, #shared_clc, #smem, mutable> -> i128
+    "test.keep"(%response) : (i128) -> ()
+    // CHECK: ttng.clc_load_result
+    // CHECK: ttng.fence_async_shared {bCluster = true}
+    // CHECK-NEXT: ttng.clc_try_cancel
+    ttng.fence_async_shared {bCluster = true}
+    ttng.clc_try_cancel %result, %barrier :
+      !ttg.memdesc<2xi64, #shared_clc, #smem, mutable>,
+      !ttg.memdesc<1xi64, #shared_clc, #smem, mutable>
+    tt.return
+  }
 }
 
 // -----
@@ -182,6 +198,39 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     // CHECK: ttng.clc_load_result
     // CHECK: ttng.fence_async_shared {bCluster = true}
     // CHECK-NEXT: ttng.clc_try_cancel
+    ttng.clc_try_cancel %result, %barrier :
+      !ttg.memdesc<2xi64, #shared_clc, #smem, mutable>,
+      !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: clc_try_cancel_multi_cta_after_cta_fence
+  tt.func @clc_try_cancel_multi_cta_after_cta_fence() {
+    %result = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2xi64, #shared_clc, #smem, mutable>
+    %barrier = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %response = ttng.clc_load_result %result : !ttg.memdesc<2xi64, #shared_clc, #smem, mutable> -> i128
+    "test.keep"(%response) : (i128) -> ()
+    // CHECK: ttng.clc_load_result
+    // CHECK: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: ttng.fence_async_shared {bCluster = true}
+    // CHECK-NEXT: ttng.clc_try_cancel
+    ttng.fence_async_shared {bCluster = false}
+    ttng.clc_try_cancel %result, %barrier :
+      !ttg.memdesc<2xi64, #shared_clc, #smem, mutable>,
+      !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: clc_try_cancel_multi_cta_after_cluster_fence
+  tt.func @clc_try_cancel_multi_cta_after_cluster_fence() {
+    %result = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2xi64, #shared_clc, #smem, mutable>
+    %barrier = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %response = ttng.clc_load_result %result : !ttg.memdesc<2xi64, #shared_clc, #smem, mutable> -> i128
+    "test.keep"(%response) : (i128) -> ()
+    // CHECK: ttng.clc_load_result
+    // CHECK: ttng.fence_async_shared {bCluster = true}
+    // CHECK-NEXT: ttng.clc_try_cancel
+    ttng.fence_async_shared {bCluster = true}
     ttng.clc_try_cancel %result, %barrier :
       !ttg.memdesc<2xi64, #shared_clc, #smem, mutable>,
       !ttg.memdesc<1xi64, #barrier, #smem, mutable>
