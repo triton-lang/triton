@@ -18,13 +18,12 @@ if(NOT JSON_INCLUDE_DIR)
 endif()
 
 unset(PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH CACHE)
+set(CMAKE_REQUIRED_INCLUDES "${ROCPROFILER_SDK_INCLUDE_DIR}")
 check_cxx_source_compiles([=[
-  #include <rocprofiler-sdk/callback_tracing.h>
+  #include <fwd.h>
   int main() {
-    auto kind = ROCPROFILER_CALLBACK_TRACING_HIP_GRAPH;
     auto op = ROCPROFILER_HIP_GRAPH_OPERATION_EXEC_LAUNCH;
-    rocprofiler_callback_tracing_hip_graph_data_t* data = nullptr;
-    return static_cast<int>(kind) + static_cast<int>(op) + (data != nullptr);
+    return static_cast<int>(op);
   }
 ]=] PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH)
 

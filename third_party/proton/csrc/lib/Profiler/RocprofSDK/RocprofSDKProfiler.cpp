@@ -510,7 +510,7 @@ void processGraphKernelRecord(
     if (nodeStateIt != nodeIdToState->end()) {
       const auto &nodeState = nodeStateIt->second;
       if (nodeState.status.isMissingName()) {
-        throw MakeRuntimeError(
+        throw makeRuntimeError(
             "[PROTON] Kernel name is missing for a graph node.");
       }
       for (auto &[data, entry] : externState.dataToGraphEntry) {
