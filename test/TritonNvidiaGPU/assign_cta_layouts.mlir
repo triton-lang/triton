@@ -75,7 +75,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %ptrs: tensor<128x32x!tt.ptr<f16>, #load_src>,
     %out: tensor<128x32x!tt.ptr<f16>, #load_src>,
     %b_ptrs: tensor<32x128x!tt.ptr<f16>, #load_src_b>,
-    %c: tensor<128x128xf32, #dot_default_load>) {
+    %c: tensor<128x128xf32, #dot_default_load>) -> tensor<128x128xf32, #dot_default_load> {
     %a = tt.load %ptrs : tensor<128x32x!tt.ptr<f16>, #load_src>
     %b = tt.load %b_ptrs : tensor<32x128x!tt.ptr<f16>, #load_src_b>
     tt.store %out, %a : tensor<128x32x!tt.ptr<f16>, #load_src>
@@ -83,7 +83,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %ad = ttg.convert_layout %a_blocked : tensor<128x32xf16, #dot_default_load> -> tensor<128x32xf16, #dot_a_load>
     %bd = ttg.convert_layout %b : tensor<32x128xf16, #load_src_b> -> tensor<32x128xf16, #dot_b_load>
     %dot = tt.dot %ad, %bd, %c : tensor<128x32xf16, #dot_a_load> * tensor<32x128xf16, #dot_b_load> -> tensor<128x128xf32, #dot_default_load>
-    tt.return
+    tt.return %dot : tensor<128x128xf32, #dot_default_load>
   }
 }
 
@@ -108,19 +108,56 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[B_DESC_LOAD:.*]] = tt.descriptor_load %{{.*}}[%{{.*}}, %{{.*}}] : !tt.tensordesc<32x128xf16> -> tensor<32x128xf16, #[[$DESC_LOAD_B_PLANNED]]>
   // CHECK: ttg.convert_layout %[[DESC_LOAD]] : tensor<128x32xf16, #[[$DESC_LOAD_PLANNED]]> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DOT_OPT_DESC_LOAD]]}>>
   // CHECK: ttg.convert_layout %[[B_DESC_LOAD]] : tensor<32x128xf16, #[[$DESC_LOAD_B_PLANNED]]> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$DOT_OPT_DESC_LOAD]]}>>
-  // CHECK: tt.return %[[ORIG_DESC_LOAD]] : tensor<128x32xf16, #[[$DESC_LOAD_ORIG]]>
+  // CHECK: tt.return %[[ORIG_DESC_LOAD]], %{{.*}} : tensor<128x32xf16, #[[$DESC_LOAD_ORIG]]>,
   tt.func @dot_clones_descriptor_load_source(
     %a_desc: !tt.tensordesc<128x32xf16>,
     %b_desc: !tt.tensordesc<32x128xf16>,
     %i: i32,
     %j: i32,
-    %c: tensor<128x128xf32, #dot_default_desc_load>) -> tensor<128x32xf16, #desc_load_src> {
+    %c: tensor<128x128xf32, #dot_default_desc_load>) -> (tensor<128x32xf16, #desc_load_src>, tensor<128x128xf32, #dot_default_desc_load>) {
     %a = tt.descriptor_load %a_desc[%i, %j] : !tt.tensordesc<128x32xf16> -> tensor<128x32xf16, #desc_load_src>
     %b = tt.descriptor_load %b_desc[%i, %j] : !tt.tensordesc<32x128xf16> -> tensor<32x128xf16, #desc_load_src_b>
     %a_blocked = ttg.convert_layout %a : tensor<128x32xf16, #desc_load_src> -> tensor<128x32xf16, #dot_default_desc_load>
     %ad = ttg.convert_layout %a_blocked : tensor<128x32xf16, #dot_default_desc_load> -> tensor<128x32xf16, #dot_a_desc_load>
     %bd = ttg.convert_layout %b : tensor<32x128xf16, #desc_load_src_b> -> tensor<32x128xf16, #dot_b_desc_load>
     %dot = tt.dot %ad, %bd, %c : tensor<128x32xf16, #dot_a_desc_load> * tensor<32x128xf16, #dot_b_desc_load> -> tensor<128x128xf32, #dot_default_desc_load>
-    tt.return %a : tensor<128x32xf16, #desc_load_src>
+    tt.return %a, %dot : tensor<128x32xf16, #desc_load_src>, tensor<128x128xf32, #dot_default_desc_load>
+  }
+}
+
+// -----
+
+#chain_load = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[0, 1]]}>
+#chain_trans = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+#chain_dot_default = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
+#chain_dot_a = #ttg.dot_op<{opIdx = 0, parent = #chain_dot_default}>
+#chain_dot_b = #ttg.dot_op<{opIdx = 1, parent = #chain_dot_default}>
+
+// CHECK-DAG: #[[$CHAIN_DOT_DEFAULT:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
+// CHECK-DAG: #[[$CHAIN_DOT_PLANNED:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @dot_clones_single_user_producer_chain
+  // CHECK: %[[CHAIN_OLD_LOAD:.*]] = tt.load %{{.*}} : tensor<32x128x!tt.ptr<f16>, #[[$CHAIN_LOAD_ORIG:.*]]>
+  // CHECK: %[[CHAIN_PTRS:.*]] = ttg.convert_layout %{{.*}} : tensor<32x128x!tt.ptr<f16>, #[[$CHAIN_LOAD_ORIG]]> -> tensor<32x128x!tt.ptr<f16>, #[[$CHAIN_LOAD_PLANNED:.*]]>
+  // CHECK: %[[CHAIN_NEW_LOAD:.*]] = tt.load %[[CHAIN_PTRS]] : tensor<32x128x!tt.ptr<f16>, #[[$CHAIN_LOAD_PLANNED]]>
+  // CHECK: tt.store %{{.*}}, %[[CHAIN_OLD_LOAD]] : tensor<32x128x!tt.ptr<f16>, #[[$CHAIN_LOAD_ORIG]]>
+  // CHECK: %[[CHAIN_WIDE:.*]] = arith.extf %[[CHAIN_NEW_LOAD]] : tensor<32x128xf16, #[[$CHAIN_LOAD_PLANNED]]> to tensor<32x128xf32, #[[$CHAIN_LOAD_PLANNED]]>
+  // CHECK: %[[CHAIN_NARROW:.*]] = arith.truncf %[[CHAIN_WIDE]] : tensor<32x128xf32, #[[$CHAIN_LOAD_PLANNED]]> to tensor<32x128xf16, #[[$CHAIN_LOAD_PLANNED]]>
+  // CHECK: %[[CHAIN_TRANS:.*]] = tt.trans %[[CHAIN_NARROW]] {order = array<i32: 1, 0>} : tensor<32x128xf16, #[[$CHAIN_LOAD_PLANNED]]> -> tensor<128x32xf16, #[[$CHAIN_TRANS_PLANNED:.*]]>
+  // CHECK: %[[CHAIN_AD:.*]] = ttg.convert_layout %[[CHAIN_TRANS]] : tensor<128x32xf16, #[[$CHAIN_TRANS_PLANNED]]> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$CHAIN_DOT_PLANNED]]}>>
+  // CHECK: tt.dot %[[CHAIN_AD]], %{{.*}}, %{{.*}} : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$CHAIN_DOT_PLANNED]]}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$CHAIN_DOT_PLANNED]]}>> -> tensor<128x128xf32, #[[$CHAIN_DOT_PLANNED]]>
+  tt.func @dot_clones_single_user_producer_chain(
+      %ptrs: tensor<32x128x!tt.ptr<f16>, #chain_load>,
+      %old_out: tensor<32x128x!tt.ptr<f16>, #chain_load>,
+      %b: tensor<32x128xf16, #chain_dot_b>,
+      %c: tensor<128x128xf32, #chain_dot_default>) -> tensor<128x128xf32, #chain_dot_default> {
+    %value = tt.load %ptrs : tensor<32x128x!tt.ptr<f16>, #chain_load>
+    tt.store %old_out, %value : tensor<32x128x!tt.ptr<f16>, #chain_load>
+    %wide = arith.extf %value : tensor<32x128xf16, #chain_load> to tensor<32x128xf32, #chain_load>
+    %narrow = arith.truncf %wide : tensor<32x128xf32, #chain_load> to tensor<32x128xf16, #chain_load>
+    %trans = tt.trans %narrow {order = array<i32: 1, 0>} : tensor<32x128xf16, #chain_load> -> tensor<128x32xf16, #chain_trans>
+    %ad = ttg.convert_layout %trans : tensor<128x32xf16, #chain_trans> -> tensor<128x32xf16, #chain_dot_a>
+    %dot = tt.dot %ad, %b, %c : tensor<128x32xf16, #chain_dot_a> * tensor<32x128xf16, #chain_dot_b> -> tensor<128x128xf32, #chain_dot_default>
+    tt.return %dot : tensor<128x128xf32, #chain_dot_default>
   }
 }

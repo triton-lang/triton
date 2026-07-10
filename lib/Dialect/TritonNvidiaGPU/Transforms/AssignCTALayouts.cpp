@@ -3,9 +3,12 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/IRMapping.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -60,77 +63,122 @@ Value convertValueToLayout(OpBuilder &builder, Location loc, Value value,
   return ttg::ConvertLayoutOp::create(builder, loc, newTy, value);
 }
 
-Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
-                          Attribute layout, int numWarps, int threadsPerWarp) {
-  Value loadValue = value;
-  // If the operand is already a convert-layout chain rooted at a load:
-  //
-  //   %old_load = tt.load %old_ptr : ... #blocked_old
-  //   %old_dot_operand = ttg.convert_layout %old_load : #blocked_old ->
-  //   #dot_old
-  //
-  // create a sibling load using the planned CTA layout:
-  //
-  //   %new_ptr = ttg.convert_layout %old_ptr : #blocked_old -> #blocked_new
-  //   %new_load = tt.load %new_ptr : ... #blocked_new
-  //   %new_dot_operand = ttg.convert_layout %new_load : #blocked_new ->
-  //   #dot_new
-  //
-  // This avoids inserting a cross-CTA conversion on the loaded value and leaves
-  // the original load available for any other users if any.
-  // TODO: Match more flexible producer patterns between the load and consumer.
-  while (auto cvtOp = loadValue.getDefiningOp<ttg::ConvertLayoutOp>())
-    loadValue = cvtOp.getSrc();
+Attribute getLayoutInCGA(Value value, Attribute preferredLayout, int numWarps,
+                         int threadsPerWarp) {
+  auto type = dyn_cast<RankedTensorType>(value.getType());
+  if (!type)
+    return {};
 
-  Operation *loadOp = loadValue.getDefiningOp();
-  if (!isa_and_nonnull<triton::LoadOp, triton::DescriptorLoadLikeOpInterface>(
-          loadOp))
-    return value;
+  auto currentDot = dyn_cast<ttg::DotOperandEncodingAttr>(type.getEncoding());
+  auto preferredDot = dyn_cast<ttg::DotOperandEncodingAttr>(preferredLayout);
+  if (currentDot && preferredDot &&
+      currentDot.getOpIdx() == preferredDot.getOpIdx() &&
+      currentDot.getKWidth() == preferredDot.getKWidth())
+    return preferredLayout;
 
-  auto oldTy = cast<RankedTensorType>(loadValue.getType());
-  auto oldLayout = cast<ttg::DistributedEncodingTrait>(oldTy.getEncoding());
+  auto currentLayout =
+      dyn_cast<ttg::DistributedEncodingTrait>(type.getEncoding());
+  if (!currentLayout ||
+      !isa<ttg::BlockedEncodingAttr, ttg::SliceEncodingAttr>(currentLayout))
+    return {};
 
-  auto cgaLayout = ttg::getCGALayout(layout);
-  auto newLoadLayout = cloneWithCGALayout(oldLayout, oldTy.getShape(), numWarps,
-                                          threadsPerWarp, cgaLayout);
-  if (oldLayout == newLoadLayout)
-    return value;
+  return cloneWithCGALayout(currentLayout, type.getShape(), numWarps,
+                            threadsPerWarp, ttg::getCGALayout(preferredLayout));
+}
 
-  auto newTy = oldTy.cloneWithEncoding(newLoadLayout);
-
-  OpBuilder loadBuilder(loadOp);
-  loadBuilder.setInsertionPointAfter(loadOp);
-
-  auto convertLoadOperand = [&](Value operand) -> Value {
-    if (!operand)
+Value getSingleTensorOperand(Operation *op) {
+  Value source;
+  for (Value operand : op->getOperands()) {
+    if (!isa<RankedTensorType>(operand.getType()))
+      continue;
+    if (source)
       return {};
-    return convertValueToLayout(loadBuilder, loadOp->getLoc(), operand,
-                                newLoadLayout);
-  };
-  auto convertLoadedValue = [&](Value loaded) {
-    return convertValueToLayout(builder, loc, loaded, layout);
-  };
+    source = operand;
+  }
+  return source;
+}
 
-  if (auto scalarLoad = dyn_cast<triton::LoadOp>(loadOp)) {
-    Value newPtr = convertLoadOperand(scalarLoad.getPtr());
-    Value newMask = convertLoadOperand(scalarLoad.getMask());
-    Value newOther = convertLoadOperand(scalarLoad.getOther());
-    Operation *newLoad = triton::LoadOp::create(
-                             loadBuilder, scalarLoad.getLoc(), newTy, newPtr,
-                             newMask, newOther, scalarLoad.getCache(),
-                             scalarLoad.getEvict(), scalarLoad.getIsVolatile())
-                             .getOperation();
-    newLoad->setAttrs(loadOp->getAttrs());
-    return convertLoadedValue(newLoad->getResult(0));
+// Clone a load and a single-use chain of side-effect-free operations in the
+// planned CTA layout. Restricting each operation to one tensor operand keeps
+// this a simple def-use chain; inferSrcEncoding handles tt.trans.
+Value cloneProducerWithLayout(OpBuilder &builder, Value value, Attribute layout,
+                              int numWarps, int threadsPerWarp) {
+  Operation *op = value.getDefiningOp();
+  if (isa_and_nonnull<triton::LoadOp, triton::DescriptorLoadLikeOpInterface>(
+          op)) {
+    if (auto load = dyn_cast<triton::LoadOp>(op); load && load.getIsVolatile())
+      return {};
+
+    auto oldType = cast<RankedTensorType>(value.getType());
+    if (oldType.getEncoding() == layout)
+      return {};
+    auto newType = oldType.cloneWithEncoding(layout);
+    OpBuilder loadBuilder(op);
+    loadBuilder.setInsertionPointAfter(op);
+
+    if (auto load = dyn_cast<triton::LoadOp>(op)) {
+      auto convertOperand = [&](Value operand) -> Value {
+        if (!operand)
+          return {};
+        return convertValueToLayout(loadBuilder, op->getLoc(), operand, layout);
+      };
+      Operation *newLoad =
+          triton::LoadOp::create(
+              loadBuilder, load.getLoc(), newType,
+              convertOperand(load.getPtr()), convertOperand(load.getMask()),
+              convertOperand(load.getOther()), load.getCache(), load.getEvict(),
+              load.getIsVolatile())
+              .getOperation();
+      newLoad->setAttrs(op->getAttrs());
+      return newLoad->getResult(0);
+    }
+
+    Operation *newLoad = loadBuilder.clone(*op);
+    newLoad->getResult(0).setType(newType);
+    return newLoad->getResult(0);
   }
 
-  if (isa<triton::DescriptorLoadLikeOpInterface>(loadOp)) {
-    Operation *newLoad = loadBuilder.clone(*loadOp);
-    newLoad->getResult(0).setType(newTy);
-    return convertLoadedValue(newLoad->getResult(0));
-  }
+  if (!op || !value.hasOneUse() || op->getNumResults() != 1 ||
+      !op->getRegions().empty() || !isMemoryEffectFree(op))
+    return {};
 
-  llvm_unreachable("expected scalar or descriptor load");
+  Value source = getSingleTensorOperand(op);
+  if (!source)
+    return {};
+
+  bool isConvert = isa<ttg::ConvertLayoutOp>(op);
+  Attribute sourceLayout =
+      isConvert ? getLayoutInCGA(source, layout, numWarps, threadsPerWarp)
+                : inferSrcEncoding(op, layout);
+  if (!sourceLayout)
+    return {};
+
+  Value newSource = cloneProducerWithLayout(builder, source, sourceLayout,
+                                            numWarps, threadsPerWarp);
+  if (!newSource)
+    return {};
+  if (isConvert)
+    return newSource;
+
+  IRMapping mapping;
+  mapping.map(source, newSource);
+  Operation *newOp = builder.clone(*op, mapping);
+  auto oldType = cast<RankedTensorType>(op->getResult(0).getType());
+  newOp->getResult(0).setType(oldType.cloneWithEncoding(layout));
+  return newOp->getResult(0);
+}
+
+Value cloneLoadWithLayout(OpBuilder &builder, Value value,
+                          Attribute preferredLayout, int numWarps,
+                          int threadsPerWarp) {
+  Attribute layout =
+      getLayoutInCGA(value, preferredLayout, numWarps, threadsPerWarp);
+  if (!layout)
+    return value;
+  if (Value cloned = cloneProducerWithLayout(builder, value, layout, numWarps,
+                                             threadsPerWarp))
+    return cloned;
+  return value;
 }
 
 void convertOpOperandsToLayouts(Operation *op,
@@ -140,8 +188,8 @@ void convertOpOperandsToLayouts(Operation *op,
   Location loc = op->getLoc();
   for (auto [operand, layout] :
        llvm::zip(op->getOpOperands(), operandLayouts)) {
-    Value value = cloneLoadWithLayout(builder, loc, operand.get(), layout,
-                                      numWarps, threadsPerWarp);
+    Value value = cloneLoadWithLayout(builder, operand.get(), layout, numWarps,
+                                      threadsPerWarp);
     operand.set(convertValueToLayout(builder, loc, value, layout));
   }
 }
