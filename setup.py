@@ -373,12 +373,13 @@ class CMakeBuild(build_ext):
         update_symlink(Path(self.base_dir) / "compile_commands.json", cmake_dir / "compile_commands.json")
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=cmake_dir)
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
-        # Install Triton headers and TableGen definitions (*.h, *.h.inc, *.td)
-        # into the wheel staging directory so they are bundled in the wheel.
-        # This must run after the full build so that all TableGen-generated
-        # *.h.inc files exist in the CMake binary directory.
-        subprocess.check_call(["cmake", "--install", ".", "--component", "wheel_headers", "--prefix", wheeldir],
-                              cwd=cmake_dir)
+        if check_env_flag("TRITON_EXT_ENABLED"):
+            # Install Triton headers and TableGen definitions (*.h, *.h.inc, *.td)
+            # into the wheel staging directory so they are bundled in the wheel.
+            # This must run after the full build so that all TableGen-generated
+            # *.h.inc files exist in the CMake binary directory.
+            subprocess.check_call(["cmake", "--install", ".", "--component", "wheel_headers", "--prefix", wheeldir],
+                                  cwd=cmake_dir)
 
 
 backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
