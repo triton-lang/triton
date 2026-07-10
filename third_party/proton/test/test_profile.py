@@ -11,7 +11,6 @@ import torch
 import json
 import pytest
 from typing import NamedTuple
-from contextlib import contextmanager
 import threading
 
 import triton.language as tl
@@ -89,7 +88,6 @@ def test_triton(tmp_path: pathlib.Path, device: str):
     assert data[0]["children"][1]["frame"]["name"] == "test2"
 
 
-@pytest.mark.skipif(not (is_cuda() or is_hip()), reason="Only CUDA/HIP backends support cudagraph replay")
 def test_cudagraph(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -162,7 +160,7 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
         total_iters = 0
         for child in child["children"]:
             iter_frame = "iter" if test_frame != test2_frame else "new_iter"
-            if iter_frame in child["frame"]["name"]:  # TODO(Keren): remove empty frames
+            if iter_frame in child["frame"]["name"]:
                 if "time (ns)" in child["children"][0]["metrics"]:
                     total_iters += 1
         # 0...9 iterations

@@ -56,12 +56,11 @@ struct RocprofSDKProfilerPimpl;
 
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
 // Payload attached to each graph replay kernel dispatch through
-// rocprofiler-sdk's external-correlation request service. The dispatch buffer
-// callback later recovers this pointer from
+// rocprofiler-sdk's external-correlation request service.
+// kernelBufferCallback later recovers this pointer from
 // record->correlation_id.external.ptr.
 struct GraphDispatchCorrelation {
-  // Proton scope id for the graph launch. This names the replay parent under
-  // which replayed graph kernels should be attributed.
+  // Proton scope id for the graph launch
   size_t externId{Scope::DummyScopeId};
   // Process-monotonic SDK id for the hipGraphExec_t being replayed.
   uint64_t graphExecId{};
@@ -71,10 +70,7 @@ struct GraphDispatchCorrelation {
   uint64_t graphNodeId{};
 };
 
-// Thread-local dynamic extent of active hipGraphLaunch calls. This mirrors
-// rocprofiler-sdk-tool's graph_stack: EXEC_LAUNCH ENTER pushes a launch,
-// each kernel-dispatch external-correlation request consumes nextNodeId, and
-// EXEC_LAUNCH EXIT pops it.
+// Thread-local dynamic extent of active hipGraphLaunch calls
 struct ActiveGraphLaunch {
   size_t externId{Scope::DummyScopeId};
   uint64_t graphExecId{};
@@ -83,8 +79,7 @@ struct ActiveGraphLaunch {
 
 thread_local std::vector<ActiveGraphLaunch> graphLaunchStack;
 // Temporary graph metadata accumulated while this thread is inside
-// hipStreamBeginCapture/hipStreamEndCapture. It is keyed by hipGraph_t at
-// capture end, then rebound to rocprofiler-sdk's graph_exec_id at instantiate.
+// hipStreamBeginCapture/hipStreamEndCapture
 thread_local GraphState streamCaptureGraphState;
 #endif
 
@@ -673,12 +668,6 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
 void tryBindGraphExecState(RocprofSDKProfiler::RocprofSDKProfilerPimpl *impl,
                            hipGraphExec_t graphExec) {
-  if (!impl || !graphExec)
-    return;
-
-  // Graph state becomes replay-ready only after both callbacks have arrived:
-  // EXEC_CREATE supplies graphExec -> graphExecId, while runtime
-  // hipGraphInstantiate* EXIT supplies graphExec -> graph.
   uint64_t graphExecId = 0;
   if (!impl->graphExecToGraphExecId.withRead(
           graphExec, [&](const uint64_t &value) { graphExecId = value; }) ||
@@ -794,9 +783,6 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleSuccessfulRuntimeExit(
             ? payload->args.hipStreamEndCapture.pGraph
             : payload->args.hipStreamEndCapture_spt.pGraph;
     if (graphPtr && *graphPtr) {
-      // Capture has ended successfully. Keep this GraphState under hipGraph_t
-      // until instantiate callbacks provide the hipGraphExec_t and SDK
-      // graph_exec_id used at replay.
       impl->graphToState.insert(*graphPtr, streamCaptureGraphState);
     }
     break;
@@ -818,12 +804,6 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleSuccessfulRuntimeExit(
       graphExecPtr = payload->args.hipGraphInstantiateWithParams.pGraphExec;
     }
     if (graphExecPtr && *graphExecPtr) {
-      // rocprofiler-sdk fires EXEC_CREATE after the real
-      // hipGraphInstantiate* succeeds and before the HIP runtime API EXIT
-      // callback returns. Therefore graphExecToGraphExecId should already
-      // contain this graphExec here; this callback supplies the missing
-      // graphExec -> graph link so captured GraphState can be bound to the
-      // SDK graph_exec_id.
       impl->graphExecToGraph[*graphExecPtr] = graph;
       tryBindGraphExecState(impl, *graphExecPtr);
     }
@@ -854,16 +834,16 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleKernelExit(
     rocprofiler_tracing_operation_t operation) {
   if (!isKernelLaunchOperation(operation))
     return;
-
-  auto &profiler = threadState.profiler;
-#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
-  if (threadState.isStreamCapturing) {
-    threadState.exitOp();
-    return;
-  }
-#endif
-
   threadState.exitOp();
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
+  if (threadState.isStreamCapturing)
+    return;
+#endif
+  auto &dataToEntry = threadState.dataToEntry;
+  bool deactivated = dataToEntry.empty();
+  auto &profiler = threadState.profiler;
+  if (deactivated) // Profiler is deactivated
+    return;
   profiler.correlation.submit(record.correlation_id.internal);
 }
 
@@ -917,21 +897,21 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
 
   if (record.operation ==
       ROCPROFILER_HIP_GRAPH_OPERATION_EXEC_CREATE) {
-    // record.phase == ROCPROFILER_CALLBACK_PHASE_NONE. rocprofiler-sdk emits
+    // record.phase = ROCPROFILER_CALLBACK_PHASE_NONE. rocprofiler-sdk emits
     // this after hipGraphInstantiate* has produced a hipGraphExec_t and before
     // the HIP runtime API EXIT callback returns.
     impl->graphExecToGraphExecId[graphExec] = graphExecId;
   } else if (record.operation ==
              ROCPROFILER_HIP_GRAPH_OPERATION_EXEC_DESTROY) {
-    // record.phase == ROCPROFILER_CALLBACK_PHASE_NONE
+    // record.phase = ROCPROFILER_CALLBACK_PHASE_NONE
     impl->graphExecToGraph.erase(graphExec);
     impl->graphExecToGraphExecId.erase(graphExec);
 
   } else if (record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER) {
-    // EXEC_LAUNCH ENTER is the graph replay parent scope. If Proton also
-    // saw capture, build links from this launch entry to each static capture
-    // node entry. Otherwise, fall back to normal child entries under the
-    // launch.
+    // HIP_GRAPH_OPERATION_EXEC_LAUNCH ENTER is the graph replay parent scope.
+    // If Proton also saw capture, build links from this launch entry to each
+    // static capture node entry. Otherwise, fall back to normal child entries
+    // under the launch.
     threadState.enterOp(Scope(""));
     auto externId = threadState.scopeStack.back().scopeId;
     auto &profiler = threadState.profiler;
@@ -958,16 +938,9 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
     }
     if (!dataToEntry.empty()) {
       auto &scope = threadState.scopeStack.back();
-      // For captured graphs numNodes is known and lets externIdToState be
-      // erased after the last replay dispatch. If capture was missed, use an
-      // unknown count so replay dispatches fall back to launch-context
-      // attribution instead of capture-node attribution.
       profiler.correlation.correlate(record.correlation_id.internal, externId,
                                      numNodes, scope.name.empty(), dataToEntry);
     }
-    // Kernel-dispatch external-correlation requests arrive while this launch is
-    // on the stack, so they can copy externId/graphExecId and consume the next
-    // per-launch node ordinal.
     graphLaunchStack.push_back(
         ActiveGraphLaunch{externId, graphExecId, /*nextNodeId=*/0});
   } else if (record.phase == ROCPROFILER_CALLBACK_PHASE_EXIT) {
@@ -987,10 +960,6 @@ int RocprofSDKProfiler::RocprofSDKProfilerPimpl::graphNodeCorrelationCallback(
   if (graphLaunchStack.empty())
     return 0;
 
-  // The request service is invoked once per kernel dispatch, including each
-  // dispatch replayed by a hipGraphLaunch. rocprofiler-sdk does not attach a
-  // HIP graph node handle to dispatch records, so the only node key available
-  // here is the launch-local dispatch ordinal.
   auto &graphLaunch = graphLaunchStack.back();
   auto externId = graphLaunch.externId;
   externalCorrelationId->ptr = new GraphDispatchCorrelation{
@@ -1128,6 +1097,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
         // Release the heap allocation for graph correlation data created in
         // graphNodeCorrelationCallback
         delete graphCorrelation;
+        record->correlation_id.external.ptr = nullptr;
         record->correlation_id.external.value = 0;
       } else {
         processKernelRecord(profiler, correlation.corrIdToExternId,
