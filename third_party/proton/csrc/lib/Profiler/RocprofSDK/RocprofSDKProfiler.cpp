@@ -1083,6 +1083,9 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
       auto kernelName = impl->getKernelName(record->dispatch_info.kernel_id);
       uint64_t streamId =
           static_cast<uint64_t>(record->dispatch_info.queue_id.handle);
+      impl->corrIdToStreamId.withRead(
+          record->correlation_id.internal,
+          [&](const uint64_t &sid) { streamId = sid; });
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
       if (record->correlation_id.external.ptr != nullptr) {
         // For now, it's only graph dispatch records that carry external
