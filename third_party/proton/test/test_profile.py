@@ -3,6 +3,7 @@ Reproducibility tests for Proton.
 Each test should invoke one or more GPU kernels and check the validity of their profiling results.
 """
 
+import os
 import pathlib
 
 import triton
@@ -89,6 +90,10 @@ def test_triton(tmp_path: pathlib.Path, device: str):
 
 
 def test_cudagraph(tmp_path: pathlib.Path, device: str):
+    # Uncomment when rocprofiler-sdk has been updated
+    if os.environ.get("PROTON_SKIP_CUDAGRAPH_TEST", "0") == "1":
+        pytest.skip("CUDagraph test is disabled")
+
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -945,8 +950,6 @@ def test_hook_multiple_threads(tmp_path: pathlib.Path, device: str):
 def test_pcsampling(tmp_path: pathlib.Path, device: str):
     if not is_cuda():
         pytest.skip("Only CUDA backend supports pc sampling")
-
-    import os
 
     if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
         pytest.skip("PC sampling test is disabled")
