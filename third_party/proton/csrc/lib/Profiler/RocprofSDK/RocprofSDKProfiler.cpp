@@ -11,6 +11,7 @@
 #include "Utility/Env.h"
 #include "Utility/Map.h"
 #include "Utility/Singleton.h"
+#include "Utility/Errors.h"
 
 #include "hip/hip_runtime_api.h"
 #include "rocprofiler-sdk/agent.h"
@@ -494,7 +495,7 @@ void processGraphKernelRecord(
   // Otherwise:
   // - graph launch externId -> launch context
   // --- rocprofiler callback thread ---
-  // - graph launch externId -> remaining number of expected dispatch records
+  // - graph launch externId -> number of expected dispatch records
   auto externId = graphCorrelation.externId;
   auto externStateRef = externIdToState.find(externId);
   if (!externStateRef)
@@ -509,7 +510,7 @@ void processGraphKernelRecord(
     if (nodeStateIt != nodeIdToState->end()) {
       const auto &nodeState = nodeStateIt->second;
       if (nodeState.status.isMissingName()) {
-        throw std::runtime_error(
+        throw MakeRuntimeError(
             "[PROTON] Kernel name is missing for a graph node.");
       }
       for (auto &[data, entry] : externState.dataToGraphEntry) {

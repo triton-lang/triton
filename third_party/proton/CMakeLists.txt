@@ -23,7 +23,7 @@ set(CMAKE_REQUIRED_INCLUDES "${ROCPROFILER_SDK_INCLUDE_DIR}")
 set(CMAKE_REQUIRED_DEFINITIONS -D__HIP_PLATFORM_AMD__)
 unset(PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH CACHE)
 check_cxx_source_compiles([=[
-  #include <rocprofiler-sdk/callback_tracing.h>
+  #include <callback_tracing.h>
   int main() {
     auto kind = ROCPROFILER_CALLBACK_TRACING_HIP_GRAPH;
     auto op = ROCPROFILER_HIP_GRAPH_OPERATION_EXEC_LAUNCH;
