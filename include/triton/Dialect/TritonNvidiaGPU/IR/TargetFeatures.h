@@ -59,6 +59,10 @@ public:
   }
 
   bool supportsI8Tcgen05MMA() const { return computeCapability == 100; }
+  bool supportsExclusiveTMEMAlloc() const { return computeCapability == 107; }
+  int getMaxTMEMColumns() const {
+    return supportsExclusiveTMEMAlloc() ? 576 : 512;
+  }
 
 private:
   static constexpr char kTargetPrefix[] = "cuda:";
