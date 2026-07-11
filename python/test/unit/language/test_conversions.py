@@ -438,8 +438,7 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, round
 @pytest.mark.parametrize("src_dtype", ['float8e4b8', 'float8e5b16'])
 @pytest.mark.parametrize("dst_dtype", ['float16', 'bfloat16', 'float32'])
 def test_typeconvert_upcast_fnuz_nan(src_dtype, dst_dtype, device):
-    # The fnuz fp8 formats (float8e4b8 / float8e5b16) have no -0 and no inf; the
-    # byte 0x80 is their single NaN encoding. Upcasting 0x80 must yield a NaN.
+    # 0x80 is the single NaN encoding in the fnuz fp8 formats; upcasting it must yield NaN.
     if not is_hip():
         pytest.skip("fnuz fp8 is an AMD format")
     if is_hip_rdna3():
