@@ -735,18 +735,19 @@ void init_triton_llvm(py::module_ &m) {
         std::string pluginFile =
             mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN_PATH");
 
-        // We don't pass the targetMachine to the LLVM-IR pass builder, unless
-        // `arch` is specified.
+        // Pass the target machine to the LLVM-IR pass builder whenever `arch`
+        // is specified, including when an LLVM-IR pass plugin is loaded, so the
+        // O3 pipeline and any plugin passes keep target-aware cost models and
+        // lowering.
         //
-        // Don't set target machine in LLVM pass builder when using LLVM IR
-        // level plugins. LLVM IR level plugin passes typically want to insert
-        // calls to externally generated code (i.e. precompile a Cuda/Hip kernel
-        // with Clang and then insert a call to it within an instrumentation
-        // pass) setting the targetMachine value here can can cause a mismatch
-        // in the target machine between the MLIR and Clang generated kernels
-        // and break the lowering of some target specific intrinsics.
+        // Previously the target machine was dropped whenever a plugin was
+        // present, to avoid a target-machine mismatch with instrumentation
+        // plugins that splice in externally (Clang-)compiled code. We now
+        // always set it when `arch` is known and rely on plugins to be target-
+        // consistent, which lets scheduler-style plugins keep the target cost
+        // models without a separate opt-in guard.
         std::unique_ptr<TargetMachine> targetMachine = nullptr;
-        if (!arch.empty() && pluginFile.empty())
+        if (!arch.empty())
           targetMachine =
               createTargetMachine(mod, arch, enable_fp_fusion, features);
         PassBuilder pb(/*targetMachine=*/targetMachine.get(), tuningOptions,
