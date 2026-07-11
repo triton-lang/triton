@@ -450,7 +450,7 @@ def test_typeconvert_upcast_fnuz_nan(src_dtype, dst_dtype, device):
     tl_src = getattr(tl, src_dtype)
     tl_dst = getattr(tl, dst_dtype)
 
-    # A buffer of the single NaN byte 0x80 (-128 as a signed int8 has the 0x80 bit pattern).
+    # -128 as a signed int8 is the 0x80 bit pattern.
     BLOCK_SIZE = 4096
     src = torch.full((BLOCK_SIZE,), -128, dtype=torch.int8, device=device)
     dst = launch_type_convert_triton(src, tl_src, tl_dst, device=device, BLOCK_SIZE=BLOCK_SIZE)
