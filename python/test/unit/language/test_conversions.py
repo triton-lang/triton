@@ -440,11 +440,6 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, round
 def test_typeconvert_upcast_fnuz_nan(src_dtype, dst_dtype, device):
     # The fnuz fp8 formats (float8e4b8 / float8e5b16) have no -0 and no inf; the
     # byte 0x80 is their single NaN encoding. Upcasting 0x80 must yield a NaN.
-    # This is the one input the exhaustive upcast test masks out (it replaces
-    # 0x80 with 0 before converting), so it is tested explicitly here for every
-    # destination type. The software decode path (where 0x80 was mishandled) is
-    # exercised on every non-CDNA3 arch; CDNA3 uses the hardware path. The skips
-    # below mirror test_typeconvert_upcast (fnuz is unsupported on RDNA3/CDNA2).
     if not is_hip():
         pytest.skip("fnuz fp8 is an AMD format")
     if is_hip_rdna3():
