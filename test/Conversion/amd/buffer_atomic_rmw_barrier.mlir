@@ -9,8 +9,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: @buffer_atomic_rmw
   // CHECK-COUNT-3: rocdl.s.barrier
   // CHECK: llvm.load {{.*}} : !llvm.ptr<3> -> vector<1xi64>
-  // CHECK: rocdl.s.barrier
+  // CHECK-COUNT-2: rocdl.s.barrier
   // CHECK: llvm.amdgcn.raw.ptr.buffer.atomic.add
+  // CHECK: rocdl.s.barrier
+  // CHECK: llvm.load {{.*}} : !llvm.ptr<3> -> vector<1xi64>
+  // CHECK-NOT: rocdl.s.barrier
+  // CHECK: llvm.return
   tt.func public @buffer_atomic_rmw(%arg0: !tt.ptr<i64>, %arg1: !tt.ptr<i64>) {
     %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked>
     %cst = arith.constant dense<1> : tensor<2x64xi64, #blocked1>
