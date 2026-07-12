@@ -499,9 +499,9 @@ struct MemDescSubsliceOpConversion
           encoding, dropPipeliningDim(srcTy.getAllocShape(), encoding)));
       Value offset = b.i32_val(opOffsetVals.front() * stride);
       Value base = smemObj.getBase();
-      smemObj = SharedMemoryObject(
-          b.gep(base.getType(), llvmElemTy, base, offset), llvmElemTy,
-          smemObj.getOffsets());
+      smemObj =
+          SharedMemoryObject(b.gep(base.getType(), llvmElemTy, base, offset),
+                             llvmElemTy, smemObj.getOffsets());
     }
 
     // Accumulate the logical offsets

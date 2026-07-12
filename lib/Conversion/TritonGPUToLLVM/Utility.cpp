@@ -1466,8 +1466,8 @@ std::pair<Value, Value> SharedMemoryObject::getShmemOffsetAndBlock(
     ll = triton::gpu::toLinearLayout(srcTy);
   }
 
-  auto layoutOffsets = triton::gpu::dropPipeliningDim(
-      ArrayRef(offsets), srcTy.getEncoding());
+  auto layoutOffsets =
+      triton::gpu::dropPipeliningDim(ArrayRef(offsets), srcTy.getEncoding());
   auto dimNames = standardOutDimNames(ctx, layoutOffsets.size());
   SmallVector<std::pair<StringAttr, Value>> logicalOffsets;
   for (auto [dim, offset] : llvm::zip(dimNames, layoutOffsets)) {
