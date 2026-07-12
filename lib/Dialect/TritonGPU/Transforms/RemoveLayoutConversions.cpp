@@ -906,9 +906,8 @@ void LayoutRematerialization::rewriteSlice(
 
   convertOp->erase();
   for (Operation *op : llvm::reverse(rematerializedOps)) {
-    if (llvm::all_of(op->getResults(), [](Value result) {
-          return result.use_empty();
-        })) {
+    if (llvm::all_of(op->getResults(),
+                     [](Value result) { return result.use_empty(); })) {
       LDBG("  erase rematerialized op " << *op);
       for (Value result : op->getResults())
         removeRematValue(result);
@@ -1653,7 +1652,8 @@ class TritonGPURemoveLayoutConversionsPass
           TritonGPURemoveLayoutConversionsPass> {
 public:
   using impl::TritonGPURemoveLayoutConversionsBase<
-      TritonGPURemoveLayoutConversionsPass>::TritonGPURemoveLayoutConversionsBase;
+      TritonGPURemoveLayoutConversionsPass>::
+      TritonGPURemoveLayoutConversionsBase;
 
   // Cleanup convert ops.
   void cleanupConvertOps() {
