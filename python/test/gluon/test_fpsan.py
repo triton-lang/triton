@@ -1426,6 +1426,39 @@ def test_inline_asm_payload_semantics(device, asm, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
+@gluon.jit
+def _swiglu_tanh_kernel(gate_ptr, linear_ptr, out_ptr, BLOCK: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = gl.arange(0, BLOCK, layout=layout)
+    gate = gl.load(gate_ptr + offs)
+    linear = gl.load(linear_ptr + offs)
+    tanh = gl.inline_asm_elementwise("tanh.approx.f32 $0, $1;", "=f,f", [0.851 * gate], dtype=gl.float32, is_pure=True,
+                                     pack=1)
+    sig = gate * gl.fma(tanh, 0.5, 0.5)
+    gl.store(out_ptr + offs, gl.fma(sig, linear, sig))
+
+
+def test_swiglu_tanh_payload_semantics(device, fresh_knobs):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    g = torch.Generator(device="cuda")
+    g.manual_seed(44)
+    gate = torch.randint(-(2**31), 2**31 - 1, (128, ), dtype=torch.int32, device="cuda", generator=g)
+    linear = torch.randint(-(2**31), 2**31 - 1, (128, ), dtype=torch.int32, device="cuda", generator=g)
+    out = torch.empty_like(gate)
+    _swiglu_tanh_kernel[(1, )](triton.TensorWrapper(gate, dtype=torch.float32),
+                               triton.TensorWrapper(linear, dtype=torch.float32),
+                               triton.TensorWrapper(out, dtype=torch.float32), BLOCK=128,
+                               THREADS_PER_WARP=THREADS_PER_WARP)
+    gate_bits = gate.cpu().numpy()
+    half = np.full_like(gate_bits, np.float32(0.5).view(np.int32))
+    arg = _expected_mul_i32(gate_bits, np.full_like(gate_bits, np.float32(0.851).view(np.int32)))
+    tanh = _expected_extern_unary_tag_i32(arg, "tanh.approx.f32 $0, $1;")
+    sig = _expected_mul_i32(gate_bits, _expected_fma_i32(tanh, half, half))
+    _assert_payload_equal(out, _expected_fma_i32(sig, linear.cpu().numpy(), sig))
+
+
 def _expected_fma_i32(x_i32: np.ndarray, y_i32: np.ndarray, z_i32: np.ndarray) -> np.ndarray:
     return _expected_add_i32(_expected_mul_i32(x_i32, y_i32), z_i32)
 
