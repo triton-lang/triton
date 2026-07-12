@@ -52,6 +52,9 @@ jobs:
       image: ${{ matrix.image }}
       options: ${{ matrix.options }}
     steps:
+      - name: Reset GPU
+        if: ${{ contains(matrix.runner, 'amd-gfx950') }}
+        run: amd-smi reset --gpureset --gpu "${ROCR_VISIBLE_DEVICES:-0}"
       - name: Checkout
         uses: actions/checkout@v6
         with:
