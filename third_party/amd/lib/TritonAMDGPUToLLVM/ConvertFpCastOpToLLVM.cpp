@@ -989,7 +989,8 @@ public:
 
     // Set sign
     a = b.or_(a, sign);
-    // 0x80 is the fnuz NaN; guard it last, else the zero LUT and sign-or clobber it.
+    // 0x80 is the fnuz NaN; guard it last, else the zero LUT and sign-or
+    // clobber it.
     a = b.select(b.icmp_eq(v8, b.i8_val(0x80)), b.i16_val(0x7E00), a);
     a = b.bitcast(a, f16_ty);
 
@@ -1305,7 +1306,8 @@ public:
     out0 = b.bitcast(out0, bf16x2VecTy);
     Value r0 = b.extract_element(bf16_ty, out0, b.i32_val(0));
     Value r1 = b.extract_element(bf16_ty, out0, b.i32_val(1));
-    // 0x80 is the fnuz NaN; the bit-trick above makes it -0.0, so map it to a bf16 NaN per lane.
+    // 0x80 is the fnuz NaN; the bit-trick above makes it -0.0, so map it to a
+    // bf16 NaN per lane.
     Value bf16Nan = b.bitcast(b.i16_val(0x7FC0), bf16_ty);
     Value isNan0 = b.icmp_eq(v[0], b.i8_val(0x80));
     Value isNan1 = b.icmp_eq(v[1], b.i8_val(0x80));
