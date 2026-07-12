@@ -1381,6 +1381,51 @@ def test_extern_mixed_payload_semantics(device, op, symbol, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
+@gluon.jit
+def _inline_asm_math_kernel(x_ptr, y_ptr, out_ptr, n_elements, ASM: gl.constexpr, BLOCK: gl.constexpr,
+                            THREADS_PER_WARP: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    y = gl.load(y_ptr + offs, mask=mask, other=0.0)
+    out = gl.inline_asm_elementwise(ASM, "=r,r,r", [x, y], dtype=gl.float32, is_pure=True, pack=1)
+    gl.store(out_ptr + offs, out, mask=mask)
+
+
+@pytest.mark.parametrize("asm", ["add.f32 $0, $1, $2;", "sub.f32 $0, $1, $2;"])
+def test_inline_asm_payload_semantics(device, asm, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+    g = torch.Generator(device="cuda")
+    g.manual_seed(43)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _inline_asm_math_kernel[grid](
+        triton.TensorWrapper(x, dtype=torch.float32),
+        triton.TensorWrapper(y, dtype=torch.float32),
+        triton.TensorWrapper(out, dtype=torch.float32),
+        n_elements,
+        ASM=asm,
+        BLOCK=BLOCK,
+        THREADS_PER_WARP=THREADS_PER_WARP,
+    )
+
+    exp_bits = _expected_extern_variadic_tag_i32(
+        [x.cpu().numpy().astype(np.int32, copy=False),
+         y.cpu().numpy().astype(np.int32, copy=False)], asm)
+    _assert_payload_equal(out, exp_bits)
+
+
 def _expected_fma_i32(x_i32: np.ndarray, y_i32: np.ndarray, z_i32: np.ndarray) -> np.ndarray:
     return _expected_add_i32(_expected_mul_i32(x_i32, y_i32), z_i32)
 
