@@ -143,7 +143,7 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     }
     // Takes subslices into account and figures out whether we can construct
     // the linear layout at all
-    allocShape = allocShape.take_back(2);
+    allocShape = dropPipeliningDim(allocShape, enc);
     auto ctaSplit = enc.getCGALayout().getCTASplitNum();
     auto blockN = std::min<int32_t>(enc.getBlockN(), shape.back());
     if (shape[shape.size() - 2] < enc.getBlockM() * ctaSplit[0] ||
@@ -198,9 +198,7 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     // pipelining dimension
     auto outDims = standardOutDimNames(ctx, rank);
     const auto &ll = enc.getLinearComponent();
-    auto expectedShape = allocShape;
-    if (rank == allocShape.size() - 1)
-      expectedShape = expectedShape.drop_front(1);
+    auto expectedShape = dropPipeliningDim(allocShape, enc);
 
     for (auto d = 0; d < rank; d++) {
       if (ll.getOutDimSize(outDims[d]) != expectedShape[d]) {
@@ -211,14 +209,14 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     }
   } else if (auto enc = dyn_cast<NVMMASharedEncodingAttr>(encoding)) {
     SmallVector<int64_t> shapePerCTA(getShapePerCTA(enc, allocShape));
-    auto blockShape = ArrayRef(shapePerCTA).take_back(enc.getRank());
+    auto blockShape = dropPipeliningDim(ArrayRef(shapePerCTA), enc);
     if (failed(getTMABlockShape(blockShape, enc.getElementBitWidth(),
                                 enc.getSwizzlingByteWidth(), enc.getFp4Padded(),
                                 enc.getTransposed(), /*packedSize=*/false,
                                 emitError, TMAMode::Tiled)))
       return failure();
   } else if (auto enc = dyn_cast<SharedLinearEncodingAttr>(encoding)) {
-    auto blockShape = ArrayRef(allocShape).take_back(enc.getRank());
+    auto blockShape = dropPipeliningDim(allocShape, enc);
     const LinearLayout &ll = enc.getLinearLayout();
     for (auto [dim, size, llSize] :
          llvm::enumerate(blockShape, ll.getOutDimSizes())) {

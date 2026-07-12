@@ -1546,19 +1546,12 @@ LogicalResult TMEMCopyOp::verify() {
 LogicalResult TMEMSubSliceOp::verify() {
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
   auto dstTy = cast<triton::gpu::MemDescType>(getResult().getType());
-  auto encoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-      srcTy.getEncoding());
-  if (!encoding)
+  if (!isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr>(
+          srcTy.getEncoding()))
     return emitOpError("The source must be a tensor memory buffer.");
-  auto dstEncoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-      dstTy.getEncoding());
-  if (!dstEncoding)
+  if (!isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr>(
+          dstTy.getEncoding()))
     return emitOpError("The destination must be a tensor memory buffer.");
-  if (dstEncoding.getBlockM() != encoding.getBlockM() ||
-      dstEncoding.getCGALayout() != encoding.getCGALayout() ||
-      dstEncoding.getColStride() != encoding.getColStride())
-    return emitOpError("The destination must have the same block size and "
-                       "CTASplit size as the source.");
   if (srcTy.getElementType() != dstTy.getElementType())
     return emitOpError(
         "The source and result must have the same element type.");

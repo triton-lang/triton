@@ -2075,6 +2075,33 @@ def test_block_m_64_mma():
     torch.testing.assert_close(d_ref, d_tri, rtol=0.08, atol=0)
 
 
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_multibuffer_prefix_subslice():
+
+    @gluon.jit
+    def kernel(out0, out3):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+        shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 32, rank=2)
+        parent = ttgl.allocate_shared_memory(ttgl.float32, [7, 32, 32], shared_layout)
+        stage0 = parent.index(0)
+        stage3 = parent.slice(3, 3, dim=0).index(0)
+        stage0.store(ttgl.full([32, 32], 1.0, ttgl.float32, layout))
+        stage3.store(ttgl.full([32, 32], 3.0, ttgl.float32, layout))
+        ttgl.barrier()
+
+        rows = ttgl.arange(0, 32, layout=ttgl.SliceLayout(1, layout))[:, None]
+        cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))[None, :]
+        offsets = rows * 32 + cols
+        ttgl.store(out0 + offsets, stage0.load(layout))
+        ttgl.store(out3 + offsets, stage3.load(layout))
+
+    out0 = torch.empty((32, 32), device="cuda", dtype=torch.float32)
+    out3 = torch.empty_like(out0)
+    kernel[(1, )](out0, out3, num_warps=4)
+    torch.testing.assert_close(out0, torch.ones_like(out0), atol=0, rtol=0)
+    torch.testing.assert_close(out3, torch.full_like(out3, 3), atol=0, rtol=0)
+
+
 def test_slice_reinterpret():
     BLOCK = ttgl.constexpr(2048)
     SPLIT_BLOCK = ttgl.constexpr(BLOCK // 2)

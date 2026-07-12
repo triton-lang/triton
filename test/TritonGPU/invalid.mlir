@@ -131,10 +131,21 @@ tt.func public @result_rank_too_large(%arg0: !ttg.memdesc<3x8x16xf32, #shared, #
 #smem = #ttg.shared_memory
 tt.func public @memdesc_index_result_alloc_shape_mismatch(%arg0: !ttg.memdesc<3x8x16xf32, #shared, #smem>) {
     %zero = arith.constant 0 : i32
-    // expected-error @+1 {{alloc shape must match shape for both result and src}}
+    // expected-error @+1 {{alloc shape must match shape for the result}}
     %a = ttg.memdesc_index %arg0[%zero] : !ttg.memdesc<3x8x16xf32, #shared, #smem> -> !ttg.memdesc<8x16xf32, #shared, #smem, 3x8x16>
     tt.return
 }
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+tt.func public @memdesc_index_inner_subview(%arg0: !ttg.memdesc<3x8x8xf32, #shared, #smem, 3x8x16>) {
+    %zero = arith.constant 0 : i32
+    // expected-error @+1 {{We only support memdesc_index of a multibuffer-prefix subview}}
+    %a = ttg.memdesc_index %arg0[%zero] : !ttg.memdesc<3x8x8xf32, #shared, #smem, 3x8x16> -> !ttg.memdesc<8x8xf32, #shared, #smem>
+    tt.return
+}
+
 // -----
 
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0]}>
@@ -164,6 +175,26 @@ tt.func public @subview_along_swizzling_pattern(%arg0: !ttg.memdesc<8x16xf32, #s
 tt.func public @subview_along_swizzling(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>, %index: i32) {
     // expected-error @+1 {{tile}}
     %a = ttg.memdesc_subslice %arg0 [2, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<4x16xf32, #shared, #smem>
+    tt.return
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+tt.func public @multibuffer_subview_exceeds_source(%arg0: !ttg.memdesc<8x8x32xf16, #shared, #smem>) {
+    // expected-error @+1 {{The split offset may not exceed the source shape}}
+    %a = ttg.memdesc_subslice %arg0 [6, 0, 0] : !ttg.memdesc<8x8x32xf16, #shared, #smem> -> !ttg.memdesc<3x8x32xf16, #shared, #smem, 8x8x32>
+    tt.return
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+tt.func public @multibuffer_subview_nonzero_identity_offset(%arg0: !ttg.memdesc<8x8x32xf16, #shared, #smem>) {
+    // expected-error @+1 {{A non zero offset found in a dimension that is not being split}}
+    %a = ttg.memdesc_subslice %arg0 [3, 0, 0] : !ttg.memdesc<8x8x32xf16, #shared, #smem> -> !ttg.memdesc<8x8x32xf16, #shared, #smem>
     tt.return
 }
 
@@ -243,6 +274,17 @@ tt.func public @memdesc_reinterpret_changed_mutability(%arg0: !ttg.memdesc<8x16x
 tt.func public @memdesc_reinterpret_subview(%arg0: !ttg.memdesc<8x16xf16, #shared, #smem, 16x16>) {
     // expected-error @+1 {{source and result must not be subviews}}
     %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<8x16xf16, #shared, #smem, 16x16> -> !ttg.memdesc<8x16xf16, #shared, #smem>
+    tt.return
+}
+
+// -----
+
+#shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+tt.func public @memdesc_reinterpret_multibuffer_subview(%arg0: !ttg.memdesc<3x8x32xf16, #shared_a, #smem, 8x8x32>) {
+    // expected-error @+1 {{source and result must not be subviews}}
+    %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<3x8x32xf16, #shared_a, #smem, 8x8x32> -> !ttg.memdesc<16x8x16xf16, #shared_b, #smem>
     tt.return
 }
 

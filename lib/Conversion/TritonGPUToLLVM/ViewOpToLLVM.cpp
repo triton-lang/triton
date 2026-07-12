@@ -2,6 +2,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -489,6 +490,19 @@ struct MemDescSubsliceOpConversion
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
     auto opOffsetVals = op.getOffsets();
+    auto encoding = srcTy.getEncoding();
+    auto layoutOffsets = dropPipeliningDim(opOffsetVals, encoding);
+
+    if (layoutOffsets.size() != opOffsetVals.size() &&
+        opOffsetVals.front() != 0) {
+      int64_t stride = product(getAllocationShapePerCTA(
+          encoding, dropPipeliningDim(srcTy.getAllocShape(), encoding)));
+      Value offset = b.i32_val(opOffsetVals.front() * stride);
+      Value base = smemObj.getBase();
+      smemObj = SharedMemoryObject(
+          b.gep(base.getType(), llvmElemTy, base, offset), llvmElemTy,
+          smemObj.getOffsets());
+    }
 
     // Accumulate the logical offsets
     SmallVector<Value> offsetVals;
