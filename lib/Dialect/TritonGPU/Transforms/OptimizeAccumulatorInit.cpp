@@ -82,6 +82,8 @@ std::pair<Value, Operation *> getAccumulatorUseAndDef(Operation *op) {
     if (!tmemAlloc ||
         tmemAlloc->getParentRegion() != tc05MmaOp->getParentRegion())
       return std::make_pair(nullptr, nullptr);
+    // when multiple MMAs share the allocation, only the first may use
+    // useD=false
     for (Operation *user : tmemAlloc.getResult().getUsers()) {
       auto otherMma = dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(user);
       if (otherMma && otherMma != tc05MmaOp &&

@@ -706,6 +706,17 @@ public:
   }
 };
 
+// Turn
+//
+// MMA1 -> acc0
+// load acc0
+// alloc acc1
+// MMA2 -> acc1
+//
+// into
+//
+// MMA1 -> acc
+// MMA2 -> acc
 static void forwardChainedMMAv5Accumulators(ModuleOp module) {
   SmallVector<triton::nvidia_gpu::TMEMAllocOp> allocs;
   module.walk(

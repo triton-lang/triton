@@ -1064,3 +1064,25 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     tt.return %d : tensor<64x8xf32, #blocked_fp16_n8>
   }
 }
+
+// -----
+
+#chain_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: mmav5_chained_accumulator
+  // CHECK: %[[ACC:.+]], %[[ALLOC_TOK:.+]] = ttng.tmem_alloc
+  // CHECK-NOT: ttng.tmem_alloc
+  // CHECK: %[[MMA0:.+]] = ttng.tc_gen5_mma {{.*}}, %[[ACC]][%[[ALLOC_TOK]]]
+  // CHECK: %[[MMA1:.+]] = ttng.tc_gen5_mma {{.*}}, %[[ACC]][%[[MMA0]]]
+  // CHECK: ttng.tmem_load %[[ACC]][%[[MMA1]]]
+  tt.func @mmav5_chained_accumulator(
+      %a: tensor<128x64xf16, #chain_blocked>,
+      %b: tensor<64x256xf16, #chain_blocked>,
+      %c: tensor<128x256xf32, #chain_blocked>) -> tensor<128x256xf32, #chain_blocked> {
+    %ad = ttg.convert_layout %a : tensor<128x64xf16, #chain_blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #chain_blocked}>>
+    %bd = ttg.convert_layout %b : tensor<64x256xf16, #chain_blocked> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #chain_blocked}>>
+    %d0 = tt.dot %ad, %bd, %c, inputPrecision = tf32 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #chain_blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #chain_blocked}>> -> tensor<128x256xf32, #chain_blocked>
+    %d1 = tt.dot %ad, %bd, %d0, inputPrecision = tf32 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #chain_blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #chain_blocked}>> -> tensor<128x256xf32, #chain_blocked>
+    tt.return %d1 : tensor<128x256xf32, #chain_blocked>
+  }
+}
