@@ -255,6 +255,22 @@ static bool accOverwrittenInLoop(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
 
 bool ttng::isAccMultibufferingPossible(ttng::MMAv5OpInterface mma,
                                        scf::ForOp forOp) {
+  auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
+  if (tmemAlloc) {
+    for (auto user : tmemAlloc->getUsers()) {
+      auto load = dyn_cast<ttng::TMEMLoadOp>(user);
+      if (!load || !forOp->isAncestor(load->getParentOp()))
+        continue;
+      for (Operation *loadUser : load->getUsers()) {
+        auto store = dyn_cast<ttng::TMEMStoreOp>(loadUser);
+        if (!store || !forOp->isAncestor(store->getParentOp()))
+          continue;
+        auto dstAlloc = store.getDst().getDefiningOp<ttng::TMEMAllocOp>();
+        if (dstAlloc && dstAlloc != tmemAlloc)
+          return false;
+      }
+    }
+  }
   // If the accumulator is never overwritten in the loop, we can't multibuffer
   // it, as the overwrite point is the only place where we can swap the
   // buffer.
