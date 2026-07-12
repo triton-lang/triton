@@ -82,6 +82,13 @@ std::pair<Value, Operation *> getAccumulatorUseAndDef(Operation *op) {
     if (!tmemAlloc ||
         tmemAlloc->getParentRegion() != tc05MmaOp->getParentRegion())
       return std::make_pair(nullptr, nullptr);
+    for (Operation *user : tmemAlloc.getResult().getUsers()) {
+      auto otherMma = dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(user);
+      if (otherMma && otherMma != tc05MmaOp &&
+          otherMma->getBlock() == tc05MmaOp->getBlock() &&
+          otherMma->isBeforeInBlock(tc05MmaOp))
+        return std::make_pair(nullptr, nullptr);
+    }
     triton::nvidia_gpu::TMEMLoadOp tmemLoad = nullptr;
     for (auto user : tmemAlloc.getResult().getUsers()) {
       if (auto load = dyn_cast<triton::nvidia_gpu::TMEMLoadOp>(user)) {
