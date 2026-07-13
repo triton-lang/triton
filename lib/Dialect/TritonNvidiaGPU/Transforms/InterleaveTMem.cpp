@@ -157,7 +157,7 @@ std::pair<Value, AccessRange> findBufferAccess(Value a) {
       return {};
     if (!parentAccess.ranges[1])
       return {alloc, parentAccess};
-    uint64_t mStart = parentAccess.ranges[1]->start() + subslice.getN();
+    uint64_t mStart = parentAccess.ranges[1]->start() + subslice.getOffset();
     uint64_t mSize = subslice.getType().getShape()[1];
     AccessRange childAccess = parentAccess;
     childAccess.ranges[1] = {{mStart, mStart + mSize}};

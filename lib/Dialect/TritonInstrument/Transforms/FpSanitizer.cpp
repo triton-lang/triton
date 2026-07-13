@@ -366,7 +366,7 @@ public:
       int64_t stride = baseTy.getShape().front();
       if (baseTy.getRank() > 2)
         stride = product(baseTy.getShape().drop_front(1));
-      int64_t offset = subslice.getN();
+      int64_t offset = subslice.getOffset();
       auto offsetVal = arith::ConstantOp::create(
           rewriter, loc, rewriter.getI32IntegerAttr(offset));
       auto strideVal = arith::ConstantOp::create(

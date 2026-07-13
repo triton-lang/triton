@@ -1561,10 +1561,12 @@ LogicalResult TMEMSubSliceOp::verify() {
     return emitOpError("The result must be a 2D tensor memory buffer.");
   if (dstTy.getRank() != 2)
     return emitOpError("The result must be a 2D tensor memory buffer.");
+  if (getDim() != 1)
+    return emitOpError("Only slicing the inner dimension is supported.");
   if (dstTy.getDimSize(0) != srcTy.getDimSize(0))
     return emitOpError("The result must have the same number of rows as the "
                        "source.");
-  auto offset = getN();
+  auto offset = getOffset();
   if (offset & (dstTy.getDimSize(1) - 1)) {
     return emitError("The split offset may not touch the tile");
   }
@@ -1576,12 +1578,12 @@ LogicalResult TMEMSubSliceOp::verify() {
 }
 
 void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
-                           Value alloc, int offset, int size) {
+                           Value alloc, int offset, int size, int dim) {
   auto allocTy = cast<triton::gpu::MemDescType>(alloc.getType());
   SmallVector<int64_t> shape(allocTy.getShape());
-  shape.back() = size;
+  shape[dim] = size;
   auto subsliceType = allocTy.cloneWith(shape, allocTy.getElementType());
-  build(builder, state, subsliceType, alloc, offset);
+  build(builder, state, subsliceType, alloc, offset, dim);
 }
 
 // -- TensormapCreateOp --

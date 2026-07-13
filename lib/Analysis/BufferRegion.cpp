@@ -269,7 +269,7 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     RegionInfo in = operands[0]->getValue();
     uint32_t subBufferSize = getMemDescSize(tmemSubsliceOp.getType());
     uint32_t relativeOffset = ttng::getTMemSubSliceOffset(
-        tmemSubsliceOp.getType(), tmemSubsliceOp.getN());
+        tmemSubsliceOp.getType(), tmemSubsliceOp.getOffset());
     for (auto &region : in.regions) {
       regionInfo.regions.insert(
           {region.baseOffset + relativeOffset, subBufferSize});

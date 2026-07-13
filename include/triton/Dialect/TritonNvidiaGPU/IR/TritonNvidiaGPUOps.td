@@ -988,14 +988,15 @@ def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure,
     inner dimension of a 2D memdesc, as this is the only supported slice for
     TMEM.
   }];
-  let arguments = (ins TTG_MemDescType:$src, I32Attr:$N);
+  let arguments = (ins TTG_MemDescType:$src, I32Attr:$offset,
+                       DefaultValuedAttr<I32Attr, "1">:$dim);
 
   let assemblyFormat = [{
     $src attr-dict `:` qualified(type($src)) `->` qualified(type($result))
   }];
 
   let builders = [
-      OpBuilder<(ins "Value":$alloc, "int":$offset, "int":$size)>,
+      OpBuilder<(ins "Value":$alloc, "int":$offset, "int":$size, "int":$dim)>,
     ];
   let results = (outs TTG_MemDescType:$result);
   let hasVerifier = 1;

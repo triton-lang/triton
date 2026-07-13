@@ -1699,7 +1699,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK-DAG: arith.constant dense<{{\[\[true, true, false, false\], \[true, true, false, false\], \[false, false, true, false\], \[false, false, false, false\]\]}}> : tensor<4x4xi1
     %buf0 = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
     %buf1 = ttng.tmem_alloc {tensor_memory_col_offset = 64 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
-    %buf3 = ttng.tmem_subslice %buf0 {N = 32 : i32} : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<64x32xf32, #tmem, #ttng.tensor_memory, mutable, 64x64>
+    %buf3 = ttng.tmem_subslice %buf0 {offset = 32 : i32} : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<64x32xf32, #tmem, #ttng.tensor_memory, mutable, 64x64>
     ttng.tmem_load %buf0 : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<64x64xf32>
     ttng.tmem_load %buf1 : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<64x64xf32>
     ttng.tmem_load %buf3 : !ttg.memdesc<64x32xf32, #tmem, #ttng.tensor_memory, mutable, 64x64> -> tensor<64x32xf32>
