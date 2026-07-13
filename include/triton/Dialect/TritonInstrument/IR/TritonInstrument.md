@@ -247,9 +247,12 @@ Write transfers also consult the recorded effect-recipient CTA rows, which lets
 TMA-style and CLC cross-CTA writes become visible in the CTA rows reached by the
 memory effect. Read transfers update the current CTA row.
 
-A non-relaxed cluster barrier is different from an mbarrier wait: it publishes
-synchronous work from base threads to all CTA rows directly. This includes both
-ordinary read/write visibility and the generic-access/proxy-fence frontier.
+A non-relaxed cluster barrier is different from an mbarrier wait: its virtual
+rendezvous publishes synchronous work from base threads to all CTA rows at the
+phase-completing arrival. This includes both ordinary read/write visibility and
+the generic-access/proxy-fence frontier. Publishing while the rendezvous lock is
+held makes the shadow state visible before any participant can continue, so no
+second cluster barrier is needed for the ConSan protocol.
 
 ## Barrier Lifecycle and Deadlock Checks
 

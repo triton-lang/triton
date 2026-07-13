@@ -59,6 +59,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // COMMON-LABEL: atomic_rmw_acquire_staged_result
+  tt.func @atomic_rmw_acquire_staged_result(%ptr : !tt.ptr<f32>,
+                                             %out : !tt.ptr<f32>, %mask : i1,
+                                             %val : f32) {
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: llvm.atomicrmw fadd {{.*}} acquire
+    // COMMON: llvm.store {{.*}} : f32, !llvm.ptr<3>
+    // COMMON: rocdl.s.barrier
+    // COMMON: llvm.load {{.*}} : !llvm.ptr<3> -> f32
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: llvm.store
+    // COMMON: llvm.return
+    %old = tt.atomic_rmw fadd, acquire, gpu, %ptr, %val, %mask {allocation.offset = 0 : i32} : (!tt.ptr<f32>, f32, i1) -> f32
+    tt.store %out, %old : !tt.ptr<f32>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: atomic_add_f32

@@ -639,6 +639,69 @@ tt.func public @extern_mixed(%a: tensor<4xf32>, %b: tensor<4xi32>) -> tensor<4xf
   tt.return %0 : tensor<4xf32>
 }
 
+// -----
+
+// CHECK-LABEL: @inline_asm_unary
+tt.func public @inline_asm_unary(%a: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: arith.constant dense<-2010648817> : tensor<4xi32>
+  // CHECK: tti.experimental_fpsan_embed
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.elementwise_inline_asm
+  %0 = tt.elementwise_inline_asm "ex2.approx.ftz.f32 $0, $1;" {constraints = "=r,r", packed_element = 1 : i32, pure = true} %a : tensor<4xf32> -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @inline_asm_unary_different_asm
+tt.func public @inline_asm_unary_different_asm(%a: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: arith.constant dense<-88535098> : tensor<4xi32>
+  // CHECK: tti.experimental_fpsan_embed
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.elementwise_inline_asm
+  %0 = tt.elementwise_inline_asm "cvt.rn.tf32.f32 $0, $1;" {constraints = "=r,r", packed_element = 1 : i32, pure = true} %a : tensor<4xf32> -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @inline_asm_binary
+tt.func public @inline_asm_binary(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: arith.constant dense<1604722435> : tensor<4xi32>
+  // CHECK: tti.experimental_fpsan_embed
+  // CHECK: arith.addi
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.elementwise_inline_asm
+  %0 = tt.elementwise_inline_asm "add.f32 $0, $1, $2;" {constraints = "=r,r,r", packed_element = 1 : i32, pure = true} %a, %b : tensor<4xf32>, tensor<4xf32> -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @inline_asm_mixed
+tt.func public @inline_asm_mixed(%a: tensor<4xf32>, %b: tensor<4xi32>) -> tensor<4xf32> {
+  // CHECK: arith.constant dense<1352527917> : tensor<4xi32>
+  // CHECK: tti.experimental_fpsan_embed
+  // CHECK: arith.addi
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.elementwise_inline_asm
+  %0 = tt.elementwise_inline_asm "shf.l.wrap.b32 $0, $1, $2, $2;" {constraints = "=r,r,r", packed_element = 1 : i32, pure = true} %a, %b : tensor<4xf32>, tensor<4xi32> -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @inline_asm_multi_result
+tt.func public @inline_asm_multi_result(%a: tensor<4xi64>) -> (tensor<4xf32>, tensor<4xf32>) {
+  // CHECK-DAG: arith.constant dense<2041845833> : tensor<4xi32>
+  // CHECK-DAG: arith.constant dense<2041845832> : tensor<4xi32>
+  // CHECK: arith.xori
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.elementwise_inline_asm
+  %0:2 = tt.elementwise_inline_asm "mov.b64 { $0, $1 }, $2;" {constraints = "=r,=r,l", packed_element = 1 : i32, pure = true} %a : tensor<4xi64> -> tensor<4xf32>, tensor<4xf32>
+  tt.return %0#0, %0#1 : tensor<4xf32>, tensor<4xf32>
+}
+
 //--- canonicalize.mlir
 
 module {
