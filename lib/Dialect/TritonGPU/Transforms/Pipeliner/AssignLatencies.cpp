@@ -91,7 +91,7 @@ class AssignLoadLatencies {
 public:
   AssignLoadLatencies(scf::ForOp forOp, int numStages,
                       DenseMap<Operation *, int> &opLatency)
-      : forOp(forOp), numStages(numStages), opLatency(opLatency){};
+      : forOp(forOp), numStages(numStages), opLatency(opLatency) {};
 
   void run() {
     bool pipelineWithoutDot = forOp->hasAttr(mlir::triton::kNumStagesAttrName);
@@ -190,7 +190,7 @@ public:
 class AssignMMALatencies {
 public:
   AssignMMALatencies(scf::ForOp forOp, DenseMap<Operation *, int> &opLatency)
-      : forOp(forOp), opLatency(opLatency){};
+      : forOp(forOp), opLatency(opLatency) {};
 
   void run() {
     DenseMap<Operation *, int> mmaSelfLatency;
@@ -251,8 +251,6 @@ public:
                                cantWarpSpec)))
               mmaSelfLatency[mma] = 0;
           }
-          // Moving users across a loop-carried accumulator recurrence can
-          // schedule the next iteration before the previous MMA completes.
           if (hasLoopCarriedAccumulatorCycle(mma, forOp))
             opLatency.erase(&op);
         }

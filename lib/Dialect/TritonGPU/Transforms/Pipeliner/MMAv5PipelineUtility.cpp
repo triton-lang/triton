@@ -252,6 +252,7 @@ static bool accOverwrittenInLoop(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
   }
   return false;
 }
+
 bool ttng::isAccMultibufferingPossible(ttng::MMAv5OpInterface mma,
                                        scf::ForOp forOp) {
   // If the accumulator is never overwritten in the loop, we can't multibuffer
