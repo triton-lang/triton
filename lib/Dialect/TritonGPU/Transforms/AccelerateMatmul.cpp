@@ -736,7 +736,8 @@ static void forwardChainedMMAv5Accumulators(ModuleOp module) {
       continue;
     auto mma = dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(
         *alloc.getToken().getUsers().begin());
-    if (!mma || mma.getAccumulator() != alloc.getResult())
+    if (!mma || mma.getAccumulator() != alloc.getResult() ||
+        alloc->getParentRegion() != mma->getParentRegion())
       continue;
     mma.setAccumulator(load.getSrc());
     mma.getAccDepMutable().assign(load.getDep());

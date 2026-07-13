@@ -1223,3 +1223,36 @@ tt.func @tc_gen5_mma_alloc_block_arg(%lb : index, %ub : index, %step : index,
   tt.return
 }
 }
+
+
+// -----
+
+#cycle_blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#cycle_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#cycle_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @cyclic_accumulators
+  tt.func @cyclic_accumulators(%lb: index, %ub: index, %step: index,
+      %ptr_a: tensor<128x128x!tt.ptr<f16>, #cycle_blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
+      %ptr_b: tensor<128x128x!tt.ptr<f16>, #cycle_blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>}) {
+    %true = arith.constant true
+    %acc0 = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #cycle_tmem, #ttng.tensor_memory, mutable>
+    %acc1 = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #cycle_tmem, #ttng.tensor_memory, mutable>
+    scf.for %iv = %lb to %ub step %step : index {
+      // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
+      %a = tt.load %ptr_a : tensor<128x128x!tt.ptr<f16>, #cycle_blocked>
+      %a_sh = ttg.local_alloc %a : (tensor<128x128xf16, #cycle_blocked>) -> !ttg.memdesc<128x128xf16, #cycle_shared, #ttg.shared_memory>
+      %b = tt.load %ptr_b : tensor<128x128x!tt.ptr<f16>, #cycle_blocked>
+      %b_sh = ttg.local_alloc %b : (tensor<128x128xf16, #cycle_blocked>) -> !ttg.memdesc<128x128xf16, #cycle_shared, #ttg.shared_memory>
+      // CHECK: ttng.tc_gen5_mma {{.*}} {tt.self_latency = 1 : i32}
+      ttng.tc_gen5_mma %a_sh, %b_sh, %acc0, %true, %true : !ttg.memdesc<128x128xf16, #cycle_shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf16, #cycle_shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #cycle_tmem, #ttng.tensor_memory, mutable>
+      %v0 = ttng.tmem_load %acc0 : !ttg.memdesc<128x128xf32, #cycle_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #cycle_blocked>
+      ttng.tmem_store %v0, %acc1, %true : tensor<128x128xf32, #cycle_blocked> -> !ttg.memdesc<128x128xf32, #cycle_tmem, #ttng.tensor_memory, mutable>
+      // CHECK: ttng.tc_gen5_mma {{.*}} {tt.self_latency = 1 : i32}
+      ttng.tc_gen5_mma %a_sh, %b_sh, %acc1, %true, %true : !ttg.memdesc<128x128xf16, #cycle_shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf16, #cycle_shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #cycle_tmem, #ttng.tensor_memory, mutable>
+      %v1 = ttng.tmem_load %acc1 : !ttg.memdesc<128x128xf32, #cycle_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #cycle_blocked>
+      ttng.tmem_store %v1, %acc0, %true : tensor<128x128xf32, #cycle_blocked> -> !ttg.memdesc<128x128xf32, #cycle_tmem, #ttng.tensor_memory, mutable>
+    }
+    tt.return
+  }
+}
