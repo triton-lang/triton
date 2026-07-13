@@ -112,8 +112,7 @@ private:
 
 class LayoutRematerialization {
 public:
-  LayoutRematerialization(FuncOp F, bool disableRemat = false)
-      : funcOp(F), disableRemat(disableRemat) {}
+  LayoutRematerialization(FuncOp F) : funcOp(F) {}
   ~LayoutRematerialization();
 
   // Map the original value to the remat'ed one.
@@ -179,7 +178,6 @@ public:
 
 private:
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
-  void removeRematValue(Value value);
   // Map values to their rematerializations for a given encoding. We have to be
   // careful about what we put in this map because updateRematMapping only
   // updates keys, and doesn't search for rematerialized values that may be
@@ -191,7 +189,6 @@ private:
   FuncOp funcOp;
   DominanceInfo domInfo;
   PostDominanceInfo postDomInfo;
-  bool disableRemat;
 };
 
 LayoutRematerialization::~LayoutRematerialization() {
@@ -713,19 +710,6 @@ void LayoutRematerialization::updateRematMapping(
   }
 }
 
-void LayoutRematerialization::removeRematValue(Value value) {
-  rematMapping.erase(value);
-  for (auto &[key, remats] : rematMapping) {
-    SmallVector<Attribute> encodingsToRemove;
-    for (auto [encoding, remat] : remats) {
-      if (remat == value)
-        encodingsToRemove.push_back(encoding);
-    }
-    for (Attribute encoding : encodingsToRemove)
-      remats.erase(encoding);
-  }
-}
-
 void LayoutRematerialization::rewriteSlice(
     SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
     const DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
@@ -771,19 +755,6 @@ void LayoutRematerialization::rewriteSlice(
   }
   slice.set_subtract(valuesWithExistingRemat);
   opsToRewrite = mlir::topologicalSort(opsToRewrite);
-
-  // Backward rematerialization clones the slice. When requested, track the
-  // original straight-line operations so a nested conversion is not left as a
-  // dead duplicate after its users have been rewritten.
-  SmallVector<Operation *> rematerializedOps;
-  if (disableRemat && llvm::any_of(slice, [](Value value) {
-        return value.getDefiningOp<ConvertLayoutOp>();
-      })) {
-    for (Operation *op : opsToRewrite) {
-      if (op->getNumResults() > 0 && op->getNumRegions() == 0)
-        rematerializedOps.push_back(op);
-    }
-  }
 
   // replaceAllUsesWith calls delayed until after initial rewrite.
   // This is required for slice.count(value) to work mid rewrite.
@@ -905,15 +876,6 @@ void LayoutRematerialization::rewriteSlice(
   }
 
   convertOp->erase();
-  for (Operation *op : llvm::reverse(rematerializedOps)) {
-    if (llvm::all_of(op->getResults(),
-                     [](Value result) { return result.use_empty(); })) {
-      LDBG("  erase rematerialized op " << *op);
-      for (Value result : op->getResults())
-        removeRematValue(result);
-      op->erase();
-    }
-  }
   for (Operation *op : deadOps)
     op->erase();
 }
@@ -1628,10 +1590,10 @@ bool LayoutRematerialization::hoistConvertIntoConditionals(
   return true;
 }
 
-bool backwardRematerialization(ModuleOp module, bool disableRemat) {
+bool backwardRematerialization(ModuleOp module) {
   bool changed = false;
   module.walk([&](FuncOp funcOp) {
-    LayoutRematerialization layoutRemat(funcOp, disableRemat);
+    LayoutRematerialization layoutRemat(funcOp);
     changed |= layoutRemat.backwardRematerialization();
   });
   return changed;
@@ -1691,29 +1653,29 @@ public:
 
     cleanupConvertOps();
 
-    bool changed = false;
-    do {
-      changed = false;
-      // 2. For remaining convert ops, try to rematerialize the slice of
-      // producer operation to avoid having to convert.
-      changed = backwardRematerialization(m, disableRemat);
+    if (!disableRemat) {
+      bool changed = false;
+      do {
+        changed = false;
+        // 2. For remaining convert ops, try to rematerialize the slice of
+        // producer operation to avoid having to convert.
+        changed = backwardRematerialization(m);
+        LLVM_DEBUG({
+          DBGS() << "Module after backward remat:\n";
+          m.dump();
+        });
+
+        // Cleanup dummy converts created during backward remat.
+        cleanupConvertOps();
+      } while (changed);
+      // 3. For remaining converts, try to hoist them above cast generating
+      // larger size types in order to reduce the cost of the convert op.
+      hoistConvert(m);
       LLVM_DEBUG({
-        DBGS() << "Module after backward remat:\n";
+        DBGS() << "Module after hoisting converts:\n";
         m.dump();
       });
-
-      // Cleanup dummy converts created during backward remat.
-      cleanupConvertOps();
-    } while (changed);
-    // 3. For remaining converts, try to hoist them above cast generating larger
-    // size types in order to reduce the cost of the convert op.
-    // Hoisting also rematerializes slices and can recreate the duplicate.
-    if (!disableRemat)
-      hoistConvert(m);
-    LLVM_DEBUG({
-      DBGS() << "Module after hoisting converts:\n";
-      m.dump();
-    });
+    }
 
     // 4. Prepare dead iter args to be cleaned up by dead code elimination in
     // the pattern rewriter below.

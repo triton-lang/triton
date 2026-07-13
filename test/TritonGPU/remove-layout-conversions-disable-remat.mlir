@@ -2,12 +2,19 @@
 // RUN: triton-opt %s -tritongpu-remove-layout-conversions='disable-remat=true' | FileCheck %s --check-prefix=DISABLED
 
 // DEFAULT-LABEL: @nested_convert
-// DEFAULT-COUNT-1: ttg.convert_layout
-// DEFAULT-NOT: ttg.convert_layout
+// DEFAULT: %[[RESHAPE:.+]] = tt.reshape
+// DEFAULT-NEXT: %[[CONVERT:.+]] = ttg.convert_layout %[[RESHAPE]]
+// DEFAULT-NEXT: %[[LHS:.+]], %[[RHS:.+]] = tt.split %[[CONVERT]]
+// DEFAULT-NEXT: %[[ASM:.+]] = tt.elementwise_inline_asm {{.*}} %[[LHS]], %[[RHS]]
+// DEFAULT-NEXT: tt.return %[[ASM]]
 
 // DISABLED-LABEL: @nested_convert
-// DISABLED-COUNT-1: ttg.convert_layout
-// DISABLED-NOT: ttg.convert_layout
+// DISABLED: %[[RESHAPE:.+]] = tt.reshape
+// DISABLED-NEXT: %[[INPUT_CONVERT:.+]] = ttg.convert_layout %[[RESHAPE]]
+// DISABLED-NEXT: %[[LHS:.+]], %[[RHS:.+]] = tt.split %[[INPUT_CONVERT]]
+// DISABLED-NEXT: %[[ASM:.+]] = tt.elementwise_inline_asm {{.*}} %[[LHS]], %[[RHS]]
+// DISABLED-NEXT: %[[OUTPUT_CONVERT:.+]] = ttg.convert_layout %[[ASM]]
+// DISABLED-NEXT: tt.return %[[OUTPUT_CONVERT]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0], CGALayout = [[0, 1]]}>
 #src = #ttg.linear<{register = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]], lane = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], warp = [[0, 32], [0, 64], [0, 128]], block = [[0, 256]]}>
