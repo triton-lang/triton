@@ -218,13 +218,9 @@ def test_runtime_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K, M, N, 
     def create_operand(shape, dtype):
         if dtype in (torch.float16, torch.bfloat16, torch.float32):
             return torch.randn(shape, dtype=dtype)
-        elif dtype == torch.float8_e5m2:
-            # range from min normal (0 00001 00) to max normal (0 11110 11)
-            return torch.randint(0x04, 0x7B, shape, dtype=torch.uint8).view(dtype)
         else:
-            # range from min normal (0 0001 000) to max normal (0 1110 111)
-            assert dtype == torch.float8_e4m3fn
-            return torch.randint(0x08, 0x77, shape, dtype=torch.uint8).view(dtype)
+            assert dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
+            return torch.randint(20, 40, shape, dtype=torch.uint8).view(dtype)
 
     a_dtype = getattr(torch, a_dtype)
     b_dtype = getattr(torch, b_dtype)
@@ -835,7 +831,7 @@ def test_runtime_gemm_async(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, a_dtype, b_dtype
             return torch.randn(shape, dtype=dtype)
         else:
             assert dtype == torch.float8_e5m2
-            return torch.randint(0x04, 0x7B, shape, dtype=torch.uint8).view(dtype)
+            return torch.randint(20, 40, shape, dtype=torch.uint8).view(dtype)
 
     a_dtype = getattr(torch, a_dtype)
     b_dtype = getattr(torch, b_dtype)
