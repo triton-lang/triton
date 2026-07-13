@@ -89,7 +89,19 @@ bool filterFn(Operation *op, Operation *other, bool /*opIsRead*/,
 enum class ProxyFenceScope { CTA, Cluster };
 
 ProxyFenceScope getProxyFenceScope(Operation *op) {
-  // Multi-CTA CLC multicasts its result to every CTA in the cluster.
+  // Multicast TMA and two-CTA tensor-core operations access peer-CTA shared
+  // memory. Multi-CTA CLC multicasts its result to every CTA in the cluster.
+  if (auto tma = dyn_cast<triton::nvidia_gpu::TMALoadLikeOpInterface>(op)) {
+    if (tma.getMulticast())
+      return ProxyFenceScope::Cluster;
+  }
+  if (auto mma = dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(op)) {
+    if (mma.getTwoCtas())
+      return ProxyFenceScope::Cluster;
+  }
+  if (isa<triton::nvidia_gpu::TMEMCopyOp>(op) &&
+      triton::nvidia_gpu::getModuleTwoCTAs(op))
+    return ProxyFenceScope::Cluster;
   if (isa<triton::nvidia_gpu::CLCTryCancelOp>(op) &&
       triton::gpu::lookupNumCTAs(op) > 1)
     return ProxyFenceScope::Cluster;
@@ -221,9 +233,18 @@ public:
     // Keep independent frontiers for cluster- and CTA-scoped fences. Run the
     // cluster analysis first so the CTA analysis can observe any cluster
     // fences it inserts.
-    ModuleMembarOrFenceAnalysis<ProxyFenceAnalysis<ProxyFenceScope::Cluster>>
-        clusterAnalysis(&allocation, filterFn);
-    clusterAnalysis.run();
+    bool hasClusterProxyOp =
+        mod.walk([](Operation *op) {
+             return getProxyFenceScope(op) == ProxyFenceScope::Cluster
+                        ? WalkResult::interrupt()
+                        : WalkResult::advance();
+           })
+            .wasInterrupted();
+    if (hasClusterProxyOp) {
+      ModuleMembarOrFenceAnalysis<ProxyFenceAnalysis<ProxyFenceScope::Cluster>>
+          clusterAnalysis(&allocation, filterFn);
+      clusterAnalysis.run();
+    }
     ModuleMembarOrFenceAnalysis<ProxyFenceAnalysis<ProxyFenceScope::CTA>>
         ctaAnalysis(&allocation, filterFn);
     ctaAnalysis.run();
