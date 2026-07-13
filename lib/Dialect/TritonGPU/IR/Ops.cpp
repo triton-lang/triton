@@ -694,6 +694,20 @@ LogicalResult MemDescReinterpretOp::verify() {
     auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
     return ty.getShape().take_back(rank) != ty.getAllocShape().take_back(rank);
   };
+  if (isa<nvidia_gpu::TensorMemorySpaceAttr>(srcTy.getMemorySpace()) &&
+      isSubview(srcTy) && !isSubview(dstTy) &&
+      isa<nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc) &&
+      isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(dstEnc)) {
+    auto srcAlloc = nvidia_gpu::getTmemAllocSizes(srcTy);
+    auto dstAlloc = nvidia_gpu::getTmemAllocSizes(dstTy);
+    if (srcAlloc.numRows != dstAlloc.numRows ||
+        srcAlloc.numCols != dstAlloc.numCols)
+      return emitError() << "source and result must have the same TMEM shape ("
+                         << srcAlloc.numRows << "x" << srcAlloc.numCols
+                         << " vs " << dstAlloc.numRows << "x"
+                         << dstAlloc.numCols << ")";
+    return success();
+  }
   if (isSubview(srcTy) || isSubview(dstTy))
     return emitError("source and result must not be subviews; reinterpret the "
                      "parent descriptor and then take a subview");
