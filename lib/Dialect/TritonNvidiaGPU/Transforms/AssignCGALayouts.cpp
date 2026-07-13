@@ -59,9 +59,9 @@ cloneWithCGALayout(ttg::DistributedEncodingTrait layout,
 // layout choices that affect accesses within a CTA. The shape-aware blocked
 // layout builder redistributes threads and warps when the shape per CTA
 // changes.
-std::optional<Attribute>
-cloneWithCGALayout(RankedTensorType type, ttg::CGAEncodingAttr cgaLayout,
-                   Operation *scope) {
+std::optional<Attribute> cloneWithCGALayout(RankedTensorType type,
+                                            ttg::CGAEncodingAttr cgaLayout,
+                                            Operation *scope) {
   auto layout = dyn_cast<ttg::DistributedEncodingTrait>(type.getEncoding());
   if (!layout)
     return std::nullopt;
@@ -101,10 +101,8 @@ getEncodingInCGA(Value value, Attribute preferredEncoding, Operation *scope) {
   if (!type)
     return std::nullopt;
 
-  auto currentDot =
-      dyn_cast<ttg::DotOperandEncodingAttr>(type.getEncoding());
-  auto preferredDot =
-      dyn_cast<ttg::DotOperandEncodingAttr>(preferredEncoding);
+  auto currentDot = dyn_cast<ttg::DotOperandEncodingAttr>(type.getEncoding());
+  auto preferredDot = dyn_cast<ttg::DotOperandEncodingAttr>(preferredEncoding);
   if (currentDot && preferredDot &&
       currentDot.getOpIdx() == preferredDot.getOpIdx() &&
       currentDot.getKWidth() == preferredDot.getKWidth())
@@ -222,8 +220,8 @@ private:
         if (!type)
           continue;
         auto newType = type.cloneWithEncoding(layoutIt->second);
-        Value converted = ttg::ConvertLayoutOp::create(
-            builder, op->getLoc(), newType, operand.get());
+        Value converted = ttg::ConvertLayoutOp::create(builder, op->getLoc(),
+                                                       newType, operand.get());
         mapping.map(operand.get(), converted);
       }
     } else if (!isa<triton::DescriptorLoadLikeOpInterface>(op)) {
