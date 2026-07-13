@@ -124,7 +124,7 @@ static Interval<int> getLiveIntervals(Value value, Liveness &liveness,
   SmallVector<Operation *> users(value.getUsers());
   while (!users.empty()) {
     Operation *user = users.pop_back_val();
-    if (!isa<ttg::MemDescIndexOp, ttg::MemDescReinterpretOp>(user))
+    if (!user->hasTrait<OpTrait::MemDescViewTrait>())
       continue;
     auto usersLivness = liveness.resolveLiveness(user->getResult(0));
     liveOperations.insert(liveOperations.end(), usersLivness.begin(),
@@ -244,8 +244,6 @@ static SmallVector<Operation *> getAlloc(Value value) {
       allocs.push_back(defOp);
     } else if (defOp->hasTrait<OpTrait::MemDescViewTrait>()) {
       worklist.push_back(defOp->getOperand(0));
-    } else if (auto sliceOp = dyn_cast<TMEMSubSliceOp>(defOp)) {
-      worklist.push_back(sliceOp.getSrc());
     } else if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
       worklist.push_back(selectOp.getTrueValue());
       worklist.push_back(selectOp.getFalseValue());

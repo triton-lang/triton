@@ -2784,6 +2784,71 @@ def test_tmem_index_subslice(device, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("operation,pred", [("store", False), ("store", True), ("copy", True)])
+@pytest.mark.parametrize("column_slice", [False, True])
+def test_tmem_row_subslice(device, operation, pred, column_slice, fresh_knobs):
+    _require_cuda_backend(device)
+
+    m, n = 256, 128
+    view_m = m // 2
+    view_n = n // 2 if column_slice else n
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def kernel(parent_ptr, value_ptr, view_out_ptr, parent_out_ptr, pred, OPERATION: gl.constexpr,
+               COLUMN_SLICE: gl.constexpr, VIEW_N: gl.constexpr):
+        parent = allocate_tensor_memory(gl.float32, [256, 128], TensorMemoryLayout([128, 64], col_stride=1))
+        parent_layout: gl.constexpr = parent.get_reg_layout()
+        parent_rows = gl.arange(0, 256, layout=gl.SliceLayout(1, parent_layout))[:, None]
+        parent_cols = gl.arange(0, 128, layout=gl.SliceLayout(0, parent_layout))[None, :]
+        parent.store(gl.load(parent_ptr + parent_rows * 128 + parent_cols))
+
+        view = parent.slice(128, 128, dim=0)
+        if COLUMN_SLICE:
+            view = view.slice(64, 64)
+        view_layout: gl.constexpr = view.get_reg_layout()
+        view_rows = gl.arange(0, 128, layout=gl.SliceLayout(1, view_layout))[:, None]
+        view_cols = gl.arange(0, VIEW_N, layout=gl.SliceLayout(0, view_layout))[None, :]
+        values = gl.load(value_ptr + view_rows * VIEW_N + view_cols)
+
+        if OPERATION == "copy":
+            smem_layout: gl.constexpr = gl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
+            smem = gl.allocate_shared_memory(gl.float32, [128, VIEW_N], layout=smem_layout)
+            smem.store(values)
+            bar = mbarrier.allocate_mbarrier()
+            mbarrier.init(bar, count=1)
+            tcgen05_copy(smem, view)
+            tcgen05_commit(bar)
+            mbarrier.wait(bar, phase=0)
+        else:
+            view.store(values, pred=pred != 0)
+
+        gl.store(view_out_ptr + view_rows * VIEW_N + view_cols, view.load(view_layout))
+        gl.store(parent_out_ptr + parent_rows * 128 + parent_cols, parent.load(parent_layout))
+
+    rs = np.random.RandomState(0)
+    parent_bits = rs.randint(-(2**31), 2**31 - 1, size=(m, n), dtype=np.int32)
+    value_bits = rs.randint(-(2**31), 2**31 - 1, size=(view_m, view_n), dtype=np.int32)
+    expected_parent = parent_bits.copy()
+    if pred:
+        expected_parent[view_m:, n - view_n:] = value_bits
+    expected_view = expected_parent[view_m:, n - view_n:]
+
+    parent = torch.tensor(parent_bits, device=device, dtype=torch.int32)
+    value = torch.tensor(value_bits, device=device, dtype=torch.int32)
+    view_out = torch.empty((view_m, view_n), device=device, dtype=torch.int32)
+    parent_out = torch.empty_like(parent)
+    kernel[(1, )](triton.TensorWrapper(parent, dtype=torch.float32), triton.TensorWrapper(value, dtype=torch.float32),
+                  triton.TensorWrapper(view_out, dtype=torch.float32),
+                  triton.TensorWrapper(parent_out, dtype=torch.float32), int(pred), operation, column_slice, view_n,
+                  num_warps=4)
+
+    _assert_payload_equal(view_out, expected_view)
+    _assert_payload_equal(parent_out, expected_parent)
+
+
 @pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires Blackwell Ultra")
 @pytest.mark.parametrize("red_op,use_abs", [("min", False), ("max", True)])
 def test_tmem_load_reduce(device, red_op, use_abs, fresh_knobs):

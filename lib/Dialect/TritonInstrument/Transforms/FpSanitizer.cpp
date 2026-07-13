@@ -357,16 +357,18 @@ public:
         return std::nullopt;
 
       auto baseTy = cast<ttg::MemDescType>(subslice.getSrc().getType());
-      if (baseTy.getRank() < 2 || memTy.getRank() != 2)
+      if (baseTy.getRank() != 2 || memTy.getRank() != 2 ||
+          baseInfo->tensorType.getRank() != 2)
         return std::nullopt;
 
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPoint(subslice);
       auto loc = subslice.getLoc();
-      int64_t stride = baseTy.getShape().front();
-      if (baseTy.getRank() > 2)
-        stride = product(baseTy.getShape().drop_front(1));
-      int64_t offset = subslice.getN();
+      // Scratch tensors are column-major. Keep the parent shape so a row
+      // slice and any following column slices retain the original stride.
+      int64_t stride =
+          subslice.getDim() == 0 ? 1 : baseInfo->tensorType.getShape().front();
+      int64_t offset = subslice.getOffset();
       auto offsetVal = arith::ConstantOp::create(
           rewriter, loc, rewriter.getI32IntegerAttr(offset));
       auto strideVal = arith::ConstantOp::create(
@@ -376,11 +378,7 @@ public:
       Value ptr = tt::AddPtrOp::create(rewriter, loc, baseInfo->ptr.getType(),
                                        baseInfo->ptr, offsetEls);
       ptr = remapToScope(ptr, rewriter, scope, loc);
-      auto layout = getScratchEncoding(rewriter, memdesc, memTy);
-      auto tensorTy = RankedTensorType::get(memTy.getShape(),
-                                            memTy.getElementType(), layout);
-
-      ScratchInfo info{ptr, tensorTy};
+      ScratchInfo info{ptr, baseInfo->tensorType};
       return info;
     }
 
@@ -970,6 +968,76 @@ Value fpsanVariadicTagged(PatternRewriter &rewriter, Location loc,
   return unembedToFloat(rewriter, loc, outI, resultTy);
 }
 
+static Value createPointerTensorStrided2D(PatternRewriter &rewriter,
+                                          Location loc, Value base,
+                                          RankedTensorType resultTy,
+                                          int64_t stride0, int64_t stride1) {
+  auto shape = resultTy.getShape();
+  auto encoding = cast<ttg::DistributedEncodingTrait>(resultTy.getEncoding());
+  auto ptrTy = base.getType();
+  auto ptrTensorTy = RankedTensorType::get(shape, ptrTy, encoding);
+  Value ptrTensor = tt::SplatOp::create(rewriter, loc, ptrTensorTy, base);
+  auto i32Ty = rewriter.getI32Type();
+  auto offsetsTy = RankedTensorType::get(shape, i32Ty, encoding);
+
+  auto dim0Ty = getSlicedTensorType(offsetsTy, {0}, i32Ty);
+  auto range0 = tt::MakeRangeOp::create(rewriter, loc, dim0Ty, 0, shape[0]);
+  auto stride0Const = createConstIntTensor(rewriter, loc, stride0, dim0Ty);
+  auto off0 =
+      arith::MulIOp::create(rewriter, loc, dim0Ty, range0, stride0Const);
+  auto off0Exp = reshapeAndBroadcast(rewriter, loc, off0, {0}, offsetsTy);
+  ptrTensor =
+      tt::AddPtrOp::create(rewriter, loc, ptrTensorTy, ptrTensor, off0Exp);
+
+  auto dim1Ty = getSlicedTensorType(offsetsTy, {1}, i32Ty);
+  auto range1 = tt::MakeRangeOp::create(rewriter, loc, dim1Ty, 0, shape[1]);
+  auto stride1Const = createConstIntTensor(rewriter, loc, stride1, dim1Ty);
+  auto off1 =
+      arith::MulIOp::create(rewriter, loc, dim1Ty, range1, stride1Const);
+  auto off1Exp = reshapeAndBroadcast(rewriter, loc, off1, {1}, offsetsTy);
+  ptrTensor =
+      tt::AddPtrOp::create(rewriter, loc, ptrTensorTy, ptrTensor, off1Exp);
+
+  return ptrTensor;
+}
+
+static Value loadScratchStrided2D(PatternRewriter &rewriter, Location loc,
+                                  Value base, RankedTensorType tensorTy,
+                                  int64_t stride0, int64_t stride1) {
+  auto storageTy = getScratchStorageType(tensorTy);
+  auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, storageTy,
+                                                stride0, stride1);
+  Value stored =
+      tt::LoadOp::create(rewriter, loc, ptrTensor, CacheModifier::NONE,
+                         EvictionPolicy::NORMAL, false);
+  if (isFloatLike(tensorTy))
+    return unembedToFloat(rewriter, loc, stored, tensorTy);
+  return stored;
+}
+
+static Value loadScratchStrided2D(PatternRewriter &rewriter, Location loc,
+                                  Value base, RankedTensorType tensorTy,
+                                  int64_t stride1) {
+  return loadScratchStrided2D(rewriter, loc, base, tensorTy, /*stride0=*/1,
+                              stride1);
+}
+
+static Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
+                                        Value base, Value tensor,
+                                        RankedTensorType tensorTy,
+                                        int64_t stride0, int64_t stride1,
+                                        bool ignoreCTA = false) {
+  auto storageTy = getScratchStorageType(tensorTy);
+  auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, storageTy,
+                                                stride0, stride1);
+  Value stored = tensor;
+  if (isFloatLike(tensorTy))
+    stored = embedToInt(rewriter, loc, tensor);
+  return tt::StoreOp::create(rewriter, loc, ptrTensor, stored, Value(),
+                             CacheModifier::NONE, EvictionPolicy::NORMAL,
+                             ignoreCTA);
+}
+
 std::optional<ScratchInfo>
 createTmemOperandScratch(PatternRewriter &rewriter, Location loc,
                          TmemScratchManager &scratch, Value memdesc,
@@ -980,7 +1048,8 @@ createTmemOperandScratch(PatternRewriter &rewriter, Location loc,
   auto info = scratch.getOrCreate(memdesc, rewriter, scope);
   if (!info || info->scaleSourceType)
     return std::nullopt;
-  Value fullVal = loadFpSanScratchMemory(rewriter, loc, info->ptr, tensorTy);
+  Value fullVal = loadScratchStrided2D(rewriter, loc, info->ptr, tensorTy,
+                                       info->tensorType.getShape().front());
   if (!fullVal)
     return std::nullopt;
   int64_t elSize = memTy.getElementType().getIntOrFloatBitWidth() / 8;
@@ -1039,58 +1108,6 @@ Value createAsyncToken(PatternRewriter &rewriter, Location loc,
   return ttg::AsyncCommitGroupOp::create(rewriter, loc, deps).getResult();
 }
 
-Value createPointerTensorStrided2D(PatternRewriter &rewriter, Location loc,
-                                   Value base, RankedTensorType resultTy,
-                                   int64_t stride0, int64_t stride1) {
-  auto shape = resultTy.getShape();
-  auto encoding = cast<ttg::DistributedEncodingTrait>(resultTy.getEncoding());
-  auto ptrTy = base.getType();
-  auto ptrTensorTy = RankedTensorType::get(shape, ptrTy, encoding);
-  Value ptrTensor = tt::SplatOp::create(rewriter, loc, ptrTensorTy, base);
-  auto i32Ty = rewriter.getI32Type();
-  auto offsetsTy = RankedTensorType::get(shape, i32Ty, encoding);
-
-  auto dim0Ty = getSlicedTensorType(offsetsTy, {0}, i32Ty);
-  auto range0 = tt::MakeRangeOp::create(rewriter, loc, dim0Ty, 0, shape[0]);
-  auto stride0Const = createConstIntTensor(rewriter, loc, stride0, dim0Ty);
-  auto off0 =
-      arith::MulIOp::create(rewriter, loc, dim0Ty, range0, stride0Const);
-  auto off0Exp = reshapeAndBroadcast(rewriter, loc, off0, {0}, offsetsTy);
-  ptrTensor =
-      tt::AddPtrOp::create(rewriter, loc, ptrTensorTy, ptrTensor, off0Exp);
-
-  auto dim1Ty = getSlicedTensorType(offsetsTy, {1}, i32Ty);
-  auto range1 = tt::MakeRangeOp::create(rewriter, loc, dim1Ty, 0, shape[1]);
-  auto stride1Const = createConstIntTensor(rewriter, loc, stride1, dim1Ty);
-  auto off1 =
-      arith::MulIOp::create(rewriter, loc, dim1Ty, range1, stride1Const);
-  auto off1Exp = reshapeAndBroadcast(rewriter, loc, off1, {1}, offsetsTy);
-  ptrTensor =
-      tt::AddPtrOp::create(rewriter, loc, ptrTensorTy, ptrTensor, off1Exp);
-
-  return ptrTensor;
-}
-
-Value loadScratchStrided2D(PatternRewriter &rewriter, Location loc, Value base,
-                           RankedTensorType tensorTy, int64_t stride0,
-                           int64_t stride1) {
-  auto storageTy = getScratchStorageType(tensorTy);
-  auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, storageTy,
-                                                stride0, stride1);
-  Value stored =
-      tt::LoadOp::create(rewriter, loc, ptrTensor, CacheModifier::NONE,
-                         EvictionPolicy::NORMAL, false);
-  if (isFloatLike(tensorTy))
-    return unembedToFloat(rewriter, loc, stored, tensorTy);
-  return stored;
-}
-
-Value loadScratchStrided2D(PatternRewriter &rewriter, Location loc, Value base,
-                           RankedTensorType tensorTy, int64_t stride1) {
-  return loadScratchStrided2D(rewriter, loc, base, tensorTy, /*stride0=*/1,
-                              stride1);
-}
-
 Value loadMmaOperand(PatternRewriter &rewriter, Location loc,
                      const MmaOperandSource &source, RankedTensorType resultTy,
                      bool isLhs, Value tileOffset, Value kOffset) {
@@ -1130,20 +1147,6 @@ Value loadMmaOperand(PatternRewriter &rewriter, Location loc,
   return ExperimentalLocalGatherOp::create(rewriter, loc, resultTy, shared,
                                            indices, offsets,
                                            rewriter.getI32IntegerAttr(kAxis));
-}
-
-Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
-                                 Value base, Value tensor,
-                                 RankedTensorType tensorTy, int64_t stride0,
-                                 int64_t stride1) {
-  auto storageTy = getScratchStorageType(tensorTy);
-  auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, storageTy,
-                                                stride0, stride1);
-  Value stored = tensor;
-  if (isFloatLike(tensorTy))
-    stored = embedToInt(rewriter, loc, tensor);
-  return tt::StoreOp::create(rewriter, loc, ptrTensor, stored,
-                             CacheModifier::NONE, EvictionPolicy::NORMAL);
 }
 
 Value unpackPackedFp4Slice(PatternRewriter &rewriter, Location loc,
@@ -2444,7 +2447,8 @@ struct TMEMLoadPattern : public OpRewritePattern<ttng::TMEMLoadOp> {
       if (isFloatLike(resultTy))
         result = unembedToFloat(rewriter, loc, result, resultTy);
     } else {
-      result = loadFpSanScratchMemory(rewriter, loc, info->ptr, resultTy);
+      result = loadScratchStrided2D(rewriter, loc, info->ptr, resultTy,
+                                    info->tensorType.getShape().front());
     }
 
     if (!result)
@@ -2518,15 +2522,17 @@ struct TMEMStorePattern : public OpRewritePattern<ttng::TMEMStoreOp> {
     if (!srcTy.getEncoding())
       return emitFpSanUnsupported(op.getOperation());
     auto storageTy = getScratchStorageType(srcTy);
+    int64_t stride = info->tensorType.getShape().front();
     Value stored = embedToInt(rewriter, loc, op.getSrc());
     if (!matchPattern(op.getPred(), m_One())) {
       Value previous =
-          createLoadScratchMemory(rewriter, loc, info->ptr, storageTy);
+          loadScratchStrided2D(rewriter, loc, info->ptr, storageTy, stride);
       Value pred = castScalarIntToIntLike(
           rewriter, loc, op.getPred(), storageTy.clone(rewriter.getI1Type()));
       stored = arith::SelectOp::create(rewriter, loc, pred, stored, previous);
     }
-    if (!createStoreScratchMemory(rewriter, loc, info->ptr, stored, storageTy))
+    if (!storeScratchStrided2D(rewriter, loc, info->ptr, stored, storageTy,
+                               /*stride0=*/1, stride, /*ignoreCTA=*/true))
       return emitFpSanCodegenError(op.getOperation());
 
     createGlobalScratchBarrier(rewriter, loc,
@@ -2575,7 +2581,10 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
     Value srcReg =
         ttg::LocalLoadOp::create(rewriter, loc, srcRegTy, op.getSrc(), Value())
             .getResult();
-    if (!storeFpSanScratchMemory(rewriter, loc, info->ptr, srcReg, srcRegTy))
+    if (!storeScratchStrided2D(rewriter, loc, info->ptr, srcReg, srcRegTy,
+                               /*stride0=*/1,
+                               info->tensorType.getShape().front(),
+                               /*ignoreCTA=*/true))
       return emitFpSanCodegenError(op.getOperation());
 
     createGlobalScratchBarrier(rewriter, loc,
@@ -2789,7 +2798,8 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
 
     auto mLoop = emitMmaEmulationLoops(
         rewriter, loc, *aSource, *bSource, dInfo->ptr, m, n, k, tileM, tileN,
-        accTileTy, accTileLayout, accElem, useDInt, predInt, /*dStride=*/m);
+        accTileTy, accTileLayout, accElem, useDInt, predInt,
+        /*dStride=*/dInfo->tensorType.getShape().front());
     if (!mLoop)
       return emitFpSanUnsupported(op.getOperation());
     rewriter.setInsertionPointAfter(*mLoop);
@@ -2964,10 +2974,10 @@ struct TCGen5MMAScaledPattern
     createGlobalScratchBarrier(rewriter, loc,
                                scratch->usesSharedClusterState());
 
-    auto mLoop =
-        emitMmaEmulationLoops(rewriter, loc, *aSource, *bSource, dInfo->ptr, m,
-                              n, k, tileM, tileN, accTileTy, accTileLayout,
-                              accElem, useDInt, predInt, /*dStride=*/m, scale);
+    auto mLoop = emitMmaEmulationLoops(
+        rewriter, loc, *aSource, *bSource, dInfo->ptr, m, n, k, tileM, tileN,
+        accTileTy, accTileLayout, accElem, useDInt, predInt,
+        /*dStride=*/dInfo->tensorType.getShape().front(), scale);
     if (!mLoop)
       return emitFpSanUnsupported(op.getOperation());
     rewriter.setInsertionPointAfter(*mLoop);

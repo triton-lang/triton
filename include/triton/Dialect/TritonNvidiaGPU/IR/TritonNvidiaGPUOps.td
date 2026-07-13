@@ -984,18 +984,18 @@ def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure,
   let description = [{
     This operation takes a subslice of a tensor memory allocation and returns a
     new descriptor containing the address and a view of the subslice.
-    This is similar to ttg.memdesc_subslice except we can only slice along the
-    inner dimension of a 2D memdesc, as this is the only supported slice for
-    TMEM.
+    This is similar to ttg.memdesc_subslice and can slice either dimension of a
+    2D tensor memory descriptor, including non-contiguous views within a CTA.
   }];
-  let arguments = (ins TTG_MemDescType:$src, I32Attr:$N);
+  let arguments = (ins TTG_MemDescType:$src, I32Attr:$offset,
+                       DefaultValuedAttr<I32Attr, "1">:$dim);
 
   let assemblyFormat = [{
     $src attr-dict `:` qualified(type($src)) `->` qualified(type($result))
   }];
 
   let builders = [
-      OpBuilder<(ins "Value":$alloc, "int":$offset, "int":$size)>,
+      OpBuilder<(ins "Value":$alloc, "int":$offset, "int":$size, "int":$dim)>,
     ];
   let results = (outs TTG_MemDescType:$result);
   let hasVerifier = 1;
@@ -1008,6 +1008,8 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
     2D blocks stored contiguously in SMEM are copied into TMEM as specified by the destination address.
     This op lowers to the PTX instruction tcgen05.cp. This supports writing to
     the scales TMEM layout as well as the default TMEM layout.
+    For the default layout, each contiguous TMEM row segment must contain at
+    least 128 bits, the minimum width supported by tcgen05.cp.
     Currently, the semantics are different when writing to the TMEM scale layout.
 
     In the case of the default layout, the copy doesn't change the logical
