@@ -480,7 +480,7 @@ public:
 
     // Emit a scheduling barrier after every memory op in the stage so the
     // backend scheduler keeps them in program order.
-    for (Operation &op : *block)
+    for (Operation &op : llvm::make_early_inc_range(*block))
       if (readsOrWritesMemory(&op)) {
         rewriter.setInsertionPointAfter(&op);
         ROCDL::SchedBarrier::create(
