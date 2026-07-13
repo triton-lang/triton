@@ -262,9 +262,9 @@ def TritonGPURemoveLayoutConversions : Pass<"tritongpu-remove-layout-conversions
                            "mlir::triton::TritonDialect"];
 
   let options = [
-    Option<"disableRemat", "disable-remat",
+    Option<"disableRematSplitting", "disable-remat-splitting",
            "bool", /*default*/"false",
-           "prevent backward rematerialization from duplicating layout conversions">
+           "prevent backward rematerialization from duplicating operations">
   ];
 }
 
