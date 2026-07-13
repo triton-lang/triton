@@ -366,7 +366,7 @@ class tensor_memory_descriptor(base_value):
     @builtin
     def slice(self, start, length, dim=1, _semantic: GluonSemantic = None) -> None:
         """
-        Create a slice of the tensor memory descriptor along the last dimension.
+        Create a slice of the tensor memory descriptor along a given dimension.
 
         Args:
             start (int): The starting index for subslice.
@@ -381,7 +381,7 @@ class tensor_memory_descriptor(base_value):
         dim = _unwrap_if_constexpr(dim)
         _check(isinstance(start, int), lambda: "start must be a constant int")
         _check(isinstance(length, int), lambda: "length must be a constant int")
-        _check(isinstance(dim, int) and dim == 1, lambda: "only dim=1 is supported")
+        _check(isinstance(dim, int) and dim in (0, 1), lambda: "dim must be 0 or 1")
         shape = list(self.shape)
         shape[dim] = length
         layout = self.type.layout

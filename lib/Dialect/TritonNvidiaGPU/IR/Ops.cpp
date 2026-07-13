@@ -1526,6 +1526,15 @@ LogicalResult TMEMCopyOp::verify() {
     if (srcTy.getElementType().getIntOrFloatBitWidth() != 32) {
       return emitOpError("Source element type should be 32-bit.");
     }
+    auto kCol = StringAttr::get(getContext(), "col");
+    auto colBases = tmemLl.getBases().lookup(kCol);
+    auto firstHole = llvm::find_if(colBases, [](ArrayRef<int32_t> basis) {
+      return llvm::all_of(basis,
+                          [](int32_t component) { return component == 0; });
+    });
+    if (std::distance(colBases.begin(), firstHole) < 2)
+      return emitOpError("The destination must have at least 128 contiguous "
+                         "bits per TMEM row.");
   }
   // Given that we want to support flexible input SMEM shapes, kinds of shape
   // checking we can do here are limited. For simplicity, shape checking is
@@ -1561,18 +1570,37 @@ LogicalResult TMEMSubSliceOp::verify() {
     return emitOpError("The result must be a 2D tensor memory buffer.");
   if (dstTy.getRank() != 2)
     return emitOpError("The result must be a 2D tensor memory buffer.");
-  if (getDim() != 1)
-    return emitOpError("Only slicing the inner dimension is supported.");
-  if (dstTy.getDimSize(0) != srcTy.getDimSize(0))
-    return emitOpError("The result must have the same number of rows as the "
-                       "source.");
+  auto dim = getDim();
+  if (dim > 1)
+    return emitOpError("The slice dimension must be 0 or 1.");
+  if (dstTy.getDimSize(1 - dim) != srcTy.getDimSize(1 - dim))
+    return emitOpError("The result must have the same size as the source in "
+                       "the dimension that is not being sliced.");
+  auto srcShape = srcTy.getShape();
+  auto dstShape = dstTy.getShape();
   auto offset = getOffset();
-  if (offset & (dstTy.getDimSize(1) - 1)) {
+  if (offset & (dstShape[dim] - 1)) {
     return emitError("The split offset may not touch the tile");
   }
-  if (offset >= srcTy.getDimSize(1)) {
+  if (offset + dstShape[dim] > srcShape[dim]) {
     return emitError("The split offset may not exceed the source shape");
   }
+  auto srcLL = toLinearLayout(srcTy);
+  auto isTrimmed = [&](ArrayRef<int32_t> basis) {
+    return basis[dim] >= dstShape[dim];
+  };
+  auto kBlock = StringAttr::get(getContext(), "block");
+  if (llvm::any_of(srcLL.getBases().lookup(kBlock), isTrimmed))
+    return emitOpError("The result may not be sliced across CTAs.");
+
+  auto dims = standardOutDimNames(getContext(), 2);
+  auto logical = static_cast<int32_t>(offset);
+  SmallVector<std::pair<StringAttr, int32_t>> logicalOffset = {
+      {dims[0], dim == 0 ? logical : 0}, {dims[1], dim == 1 ? logical : 0}};
+  auto rowCol = srcLL.pseudoinvert().apply(logicalOffset);
+  if (uint64_t(rowCol[1].second) * srcTy.getElementTypeBitWidth() % 32 != 0)
+    return emitOpError(
+        "The split offset must be 32-bit aligned in tensor memory.");
 
   return success();
 }

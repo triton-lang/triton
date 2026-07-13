@@ -531,6 +531,14 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
     state.asyncOp[node->partitionId] = AsyncOp::NONE;
   }
 
+  for (Value operand : node->op->getOperands()) {
+    auto type = dyn_cast<MemDescType>(operand.getType());
+    if (type && isa<TensorMemoryEncodingAttr>(type.getEncoding()))
+      assert(type.getShape().take_back(2) ==
+                 type.getAllocShape().take_back(2) &&
+             "NVWS does not support TMEM subviews");
+  }
+
   OpBuilder b(node->op);
   if (auto tmemLoadOp = dyn_cast<TMEMLoadOp>(node->op)) {
     if (auto id = node->partitionId)
