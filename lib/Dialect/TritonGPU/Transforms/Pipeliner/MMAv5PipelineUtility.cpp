@@ -252,44 +252,8 @@ static bool accOverwrittenInLoop(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
   }
   return false;
 }
-
-static bool hasLoopCarriedAccumulatorCycle(ttng::MMAv5OpInterface mma,
-                                           scf::ForOp forOp) {
-  auto start = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
-  if (!start)
-    return false;
-
-  SmallVector<ttng::TMEMAllocOp> worklist = {start};
-  DenseSet<Operation *> seen = {start};
-  while (!worklist.empty()) {
-    ttng::TMEMAllocOp current = worklist.pop_back_val();
-    for (Operation *user : current->getUsers()) {
-      auto load = dyn_cast<ttng::TMEMLoadOp>(user);
-      if (!load || !forOp->isAncestor(load->getParentOp()))
-        continue;
-      for (Operation *loadUser : load->getUsers()) {
-        auto store = dyn_cast<ttng::TMEMStoreOp>(loadUser);
-        if (!store || !forOp->isAncestor(store->getParentOp()))
-          continue;
-        auto dst = store.getDst().getDefiningOp<ttng::TMEMAllocOp>();
-        if (!dst || dst == current)
-          continue;
-        if (dst == start)
-          return true;
-        if (seen.insert(dst).second)
-          worklist.push_back(dst);
-      }
-    }
-  }
-  return false;
-}
-
 bool ttng::isAccMultibufferingPossible(ttng::MMAv5OpInterface mma,
                                        scf::ForOp forOp) {
-  // A transfer cycle is a loop-carried dependency. Multibuffering it would
-  // allow the next iteration to run before the previous one has completed.
-  if (hasLoopCarriedAccumulatorCycle(mma, forOp))
-    return false;
   // If the accumulator is never overwritten in the loop, we can't multibuffer
   // it, as the overwrite point is the only place where we can swap the
   // buffer.

@@ -25,6 +25,37 @@ namespace {
 // assignLatencies
 //===----------------------------------------------------------------------===//
 
+bool hasLoopCarriedAccumulatorCycle(ttng::MMAv5OpInterface mma,
+                                    scf::ForOp forOp) {
+  auto start = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
+  if (!start)
+    return false;
+
+  SmallVector<ttng::TMEMAllocOp> worklist = {start};
+  DenseSet<Operation *> seen = {start};
+  while (!worklist.empty()) {
+    ttng::TMEMAllocOp current = worklist.pop_back_val();
+    for (Operation *user : current->getUsers()) {
+      auto load = dyn_cast<ttng::TMEMLoadOp>(user);
+      if (!load || !forOp->isAncestor(load->getParentOp()))
+        continue;
+      for (Operation *loadUser : load->getUsers()) {
+        auto store = dyn_cast<ttng::TMEMStoreOp>(loadUser);
+        if (!store || !forOp->isAncestor(store->getParentOp()))
+          continue;
+        auto dst = store.getDst().getDefiningOp<ttng::TMEMAllocOp>();
+        if (!dst || dst == current)
+          continue;
+        if (dst == start)
+          return true;
+        if (seen.insert(dst).second)
+          worklist.push_back(dst);
+      }
+    }
+  }
+  return false;
+}
+
 // Return true if the preconditions for pipelining the loop are met.
 bool preCondition(scf::ForOp forOp) {
   // Skip loop with distance > 1 for now.
@@ -60,7 +91,7 @@ class AssignLoadLatencies {
 public:
   AssignLoadLatencies(scf::ForOp forOp, int numStages,
                       DenseMap<Operation *, int> &opLatency)
-      : forOp(forOp), numStages(numStages), opLatency(opLatency) {};
+      : forOp(forOp), numStages(numStages), opLatency(opLatency){};
 
   void run() {
     bool pipelineWithoutDot = forOp->hasAttr(mlir::triton::kNumStagesAttrName);
@@ -159,7 +190,7 @@ public:
 class AssignMMALatencies {
 public:
   AssignMMALatencies(scf::ForOp forOp, DenseMap<Operation *, int> &opLatency)
-      : forOp(forOp), opLatency(opLatency) {};
+      : forOp(forOp), opLatency(opLatency){};
 
   void run() {
     DenseMap<Operation *, int> mmaSelfLatency;
@@ -220,6 +251,10 @@ public:
                                cantWarpSpec)))
               mmaSelfLatency[mma] = 0;
           }
+          // Moving users across a loop-carried accumulator recurrence can
+          // schedule the next iteration before the previous MMA completes.
+          if (hasLoopCarriedAccumulatorCycle(mma, forOp))
+            opLatency.erase(&op);
         }
       }
     }
