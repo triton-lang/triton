@@ -1689,9 +1689,10 @@ def test_runtime_mxgemm_tdm_8warps_pipeline(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, 
 @pytest.mark.parametrize("ASYNC_COPY_SCALE", [True, False])
 @pytest.mark.parametrize("GROUP_SIZE_M", [8])
 @pytest.mark.parametrize("L2_PREFETCH_DISTANCE", [-1, 0, 2])
+@pytest.mark.parametrize("RESOLVE_PARTITION_CONFLICTS", [True, False])
 def test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, NUM_BUFFERS,
                                       SCALE_PRESHUFFLE, WITH_A_SCALE, SCHEDULE, ASYNC_COPY_SCALE, GROUP_SIZE_M,
-                                      L2_PREFETCH_DISTANCE, ACTIVATION, RESOLVE_PARTITION_CONFLICTS=False,
+                                      L2_PREFETCH_DISTANCE, ACTIVATION, RESOLVE_PARTITION_CONFLICTS,
                                       BENCHMARK_MODE=None, BENCHMARK_NUM_ITERS=32):
     """
     Pipelined mxfp GEMM with optional fused SwiGLU epilogue.
@@ -1704,6 +1705,13 @@ def test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_
     numCtas = 1
     IS_SWIGLU = ACTIVATION == "swiglu"
     EFFECTIVE_BLOCK_N = BLOCK_N * 2 if IS_SWIGLU else BLOCK_N
+    is_fp4fp4 = DTYPE_A == "float4" and DTYPE_B == "float4"
+
+    if RESOLVE_PARTITION_CONFLICTS and SCHEDULE != "sliceMNK":
+        pytest.skip("Only test RESOLVE_PARTITION_CONFLICTS in sliceMNK schedule")
+
+    if RESOLVE_PARTITION_CONFLICTS and is_fp4fp4:
+        pytest.skip("NYI: RESOLVE_PARTITION_CONFLICTS not supported with fp4xfp4")
 
     if SCALE_PRESHUFFLE:
         if BLOCK_M < 128 or EFFECTIVE_BLOCK_N < 128 or (SCHEDULE != "baseline" and BLOCK_K < 256):
