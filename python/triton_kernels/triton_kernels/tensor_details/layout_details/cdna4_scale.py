@@ -57,8 +57,7 @@ class CDNA4MXScaleLayoutTransformation(LayoutTransformation):
         # re-pack as column-major
         data = repack(data, -1, -2, self.is_fp4)
         data = data.mT.contiguous().mT
-        if data.numel():
-            data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_SCALE_pad - self.K_SCALE))
+        data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_SCALE_pad - self.K_SCALE))
         data = data.transpose(-1, -2)
         data = data.view(self.B, self.N_pad // NON_K_PRESHUFFLE_BLOCK_SIZE, 2, 16, self.K_SCALE_pad // 8, 2, 4, 1)
         data = data.permute(0, 1, 4, 6, 3, 5, 2, 7).contiguous()

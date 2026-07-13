@@ -71,12 +71,11 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   auto S = [&](StringRef str) { return StringAttr::get(ctx, str); };
   auto kRow = S("row");
   auto kCol = S("col");
-  // Remove multibuffering if present
-  auto shape = memDescType.getShape().take_back(2);
-  auto ll = toLinearLayout(shape, memDescType.getEncoding());
+  // Remove multibuffering if present and preserve any tensor-memory subview.
+  auto ll = toLinearLayout(memDescType);
   auto bitwidth = memDescType.getElementTypeBitWidth();
   int nRow = ll.getInDimSize(kRow);
-  int nCol = ll.getInDimSize(kCol) / (32 / bitwidth);
+  int nCol = llvm::divideCeil(ll.getInDimSize(kCol) * bitwidth, 32);
   // If we have just one 16xcol block per warp, we don't allocate 128 rows
   // we use 64 rows instead.
   // We could generalise this to when we have more zeros in the layout, but
@@ -92,14 +91,15 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   return {nRow, nCol};
 }
 
-uint32_t getTMemSubSliceOffset(MemDescType memDescType, int32_t nOffset) {
+uint32_t getTMemSubSliceOffset(MemDescType memDescType, int32_t offset,
+                               int32_t dim) {
   auto llInv = toLinearLayout(memDescType).pseudoinvert();
   auto dimNames = llvm::to_vector(llInv.getInDimNames());
   SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
   logicalOffsets.reserve(dimNames.size());
   for (auto dim : dimNames)
     logicalOffsets.push_back({dim, 0});
-  logicalOffsets.back().second = nOffset;
+  logicalOffsets[dim].second = offset;
 
   auto rowCol = llInv.apply(logicalOffsets);
   uint32_t bitwidth = memDescType.getElementTypeBitWidth();
@@ -321,7 +321,7 @@ getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
          "numWarps must be a power of 2 and >= 4");
   assert(atom != TMemAccessAtom::I16x32bx2 &&
          "This layout is inferred sometimes for the 32x32b atom");
-  auto ll = toLinearLayout(memType.getShape(), memType.getEncoding());
+  auto ll = toLinearLayout(memType);
   auto bitwidth = memType.getElementTypeBitWidth();
   return getDistributedLayoutForTmemLdSt(ll, atom, numWarps, bitwidth);
 }

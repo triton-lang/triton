@@ -31,12 +31,14 @@ struct MemEffectsOpInfo {
   };
   struct Effects {
     enum RW { Read, Write } rw;
+    enum class Proxy { Generic, Async } proxy;
     Value buf;
     std::string operandName = "";
     uint32_t length = 0;
 
-    Effects(RW rw, Value buf, std::string operandName = "")
-        : rw(rw), buf(buf), operandName(operandName),
+    Effects(RW rw, Value buf, std::string operandName = "",
+            Proxy proxy = Proxy::Generic)
+        : rw(rw), proxy(proxy), buf(buf), operandName(operandName),
           length(getMemDescLength(buf)) {}
   };
   struct BarrierInfo {
@@ -83,6 +85,10 @@ struct WaitOpInfo {
   bool transferReads;
 };
 
+struct AsyncProxyFenceInfo {
+  bool cluster;
+};
+
 struct CommitKindDesc {
   CommitKind::Kind kind;
   std::string operationDesc;
@@ -107,6 +113,15 @@ public:
 
   virtual std::optional<WaitOpInfo> getWaitOpInfo(Operation *op) const = 0;
 
+  virtual std::optional<AsyncProxyFenceInfo>
+  getAsyncProxyFenceInfo(Operation *op) const {
+    return std::nullopt;
+  }
+
+  virtual bool needsAsyncProxyFenceTracking(ModuleOp module) const {
+    return false;
+  }
+
   virtual Value getIssuerCTAPred(ImplicitLocOpBuilder &b,
                                  Operation *op) const = 0;
 
@@ -127,11 +142,29 @@ public:
       info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Read,
                                         loadOp.getSrc());
     }
+    if (auto gatherOp = dyn_cast<ttg::LocalGatherOp>(op)) {
+      info.emplace();
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Read,
+                                        gatherOp.getSrc());
+    }
     if (auto storeOp = dyn_cast<ttg::LocalStoreOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
                                         storeOp.getDst());
+    }
+    if (auto scatterOp = dyn_cast<ttg::LocalScatterOp>(op)) {
+      info.emplace();
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
+                                        scatterOp.getDst());
+    }
+    if (auto atomicOp = dyn_cast<ttg::LocalAtomicScatterRMWOp>(op)) {
+      info.emplace();
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
+                                        atomicOp.getDst());
     }
     if (auto allocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
       if (allocOp.getSrc()) {

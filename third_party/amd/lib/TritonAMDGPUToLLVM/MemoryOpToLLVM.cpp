@@ -59,6 +59,8 @@ public:
     auto ldsParamsVec = targetInfo.queryLDSTransLoadParams(bitWidth);
     if (ldsParamsVec.empty())
       return failure();
+    if (SharedMemoryObject::getMaskSpanOffsetsAndBlocks(srcTy).second != 0)
+      return failure();
 
     LinearLayout sharedLL;
     if (triton::gpu::isPaddedEncoding(srcTy.getEncoding())) {
@@ -98,10 +100,8 @@ public:
       if (failed(result))
         continue;
 
-      auto structTy = LLVM::LLVMStructType::getLiteral(
-          ctx, SmallVector<Type>(values.size(), llvmElemTy));
       auto value =
-          packLLElements(loc, typeConverter, values, rewriter, structTy);
+          packTensorElements(loc, typeConverter, values, rewriter, dstTy);
 
       rewriter.replaceOp(op, value);
       return success();
@@ -128,6 +128,7 @@ private:
     auto kLane = S("lane");
     auto kWarp = S("warp");
     auto kOffset = S("offset");
+    auto kBlock = S("block");
     auto kAddr = S("addr");
     auto kPartition = S("partition");
     auto smemPtrTy = ptr_ty(ctx, 3);
@@ -251,10 +252,17 @@ private:
                       {kWarp, reps.getBases().lookup(kWarp)}},
                      {{kOffset, reps.getOutDimSize(kOffset)}}, false);
 
+    // Matrix accesses are CTA-local. Model that with a trivial block output so
+    // additive stride analysis always compares (offset, block) components.
+    reps =
+        reps.reshapeOuts({{kOffset, reps.getOutDimSize(kOffset)}, {kBlock, 1}});
+    addrLayout = addrLayout.reshapeOuts(reps.getOutDims());
+
     // Compute the bits that are moved by one instruction
     // Compute elements for which we can swap the xor by an add
     auto [nAdditive, permStrides] = actionAdditiveStrides(
-        reps, addrLayout, maskSpanAffineOffset, fullTile.getInDimSize(kReg));
+        reps, addrLayout, maskSpanAffineOffset, /*maskSpanBlocks=*/0,
+        fullTile.getInDimSize(kReg));
     reps = permStrides.apply(reps);
     if (isPartitioned) {
       partitionLayout = permStrides.apply(partitionLayout);
@@ -539,6 +547,8 @@ private:
     auto kBlock = str_attr("block");
     auto dstTy = cast<RankedTensorType>(op.getType());
     auto srcTy = cast<MemDescType>(op.getSrc().getType());
+    if (SharedMemoryObject::getMaskSpanOffsetsAndBlocks(srcTy).second != 0)
+      return failure();
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
     auto bitWidth = llvmElemTy.getIntOrFloatBitWidth();
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
@@ -566,16 +576,18 @@ private:
     if (!ldsTransLayout) {
       return failure();
     }
+    auto regLayout =
+        ldsTransLayout->removeZeroBasesAlongDim(str_attr("register"));
 
     auto paddedEnc =
         dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(srcTy.getEncoding());
     LinearLayout cvt = LinearLayout::empty();
     if (paddedEnc) {
       const auto &sharedLL = paddedEnc.getLinearComponent();
-      cvt = ldsTransLayout->invertAndCompose(sharedLL);
+      cvt = regLayout.invertAndCompose(sharedLL);
     } else {
       auto sharedLL = triton::gpu::toLinearLayout(srcTy);
-      cvt = ldsTransLayout->invertAndCompose(sharedLL);
+      cvt = regLayout.invertAndCompose(sharedLL);
     }
     // Check that we will be able to vectorize the load.
     // Need to have exactly ldsTransLoadParams->tileSize,
@@ -611,9 +623,11 @@ private:
     SmallVector<Value> outVals = lowerLdSt(
         loc, rewriter.getContext(), cvt, {}, // Input for store, output for load
         llvmElemTy, smemObj.getBase(), paddingShifts, affineOffset,
-        maskSpanAffineOffset, laneId, warpId, rewriter, targetInfo,
+        maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
+        /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
         ldsTransLoadParams->tileSize, lowerInst);
-    Value result = packLLElements(loc, typeConverter, outVals, rewriter, retTy);
+    Value result =
+        packUniqueTensorElements(loc, typeConverter, outVals, rewriter, retTy);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -656,13 +670,20 @@ struct LocalAtomicScatterRMWOpConversion
 
     bool returnOld = !op.getResult().use_empty();
 
+    if (llvm::any_of(info.addrs, [](const LocalSharedMemoryAddress &addr) {
+          return bool(addr.ctaId);
+        })) {
+      return rewriter.notifyMatchFailure(
+          op, "cross-CTA shared atomics are not supported on AMDGPU");
+    }
+
     SmallVector<Value> results;
     if (returnOld)
-      results.reserve(info.ptrs.size());
+      results.reserve(info.addrs.size());
 
-    for (auto [i, ptrAndValue] :
-         llvm::enumerate(llvm::zip(info.ptrs, info.values))) {
-      auto [ptr, value] = ptrAndValue;
+    for (auto [i, addrAndValue] :
+         llvm::enumerate(llvm::zip(info.addrs, info.values))) {
+      auto [addr, value] = addrAndValue;
       Value rmwMask = triton::gpu::maybeAnd(
           rewriter, loc, info.threadPred,
           info.maskValues.empty() ? Value() : info.maskValues[i]);
@@ -670,7 +691,7 @@ struct LocalAtomicScatterRMWOpConversion
       if (!rmwMask)
         rmwMask = b.true_val();
 
-      Value old = emitter.emitAtomicRMW(rewriter, ptr, value, rmwMask,
+      Value old = emitter.emitAtomicRMW(rewriter, addr.ptr, value, rmwMask,
                                         /*sharedMemBase=*/std::nullopt,
                                         /*enableIntraWaveReduce=*/false);
       if (returnOld)
@@ -682,8 +703,6 @@ struct LocalAtomicScatterRMWOpConversion
       return success();
     }
 
-    if (!info.removeBroadcast.isIdentity())
-      results = broadcastAs(results, info.regLayout);
     finalizeTensorAtomicResults(op, info.valuesTy, rewriter, results,
                                 info.llvmElemTy, b, info.threadPred, targetInfo,
                                 getTypeConverter());

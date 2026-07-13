@@ -659,21 +659,18 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   dot.numBitsPerElementB = getFormatBitSize(op.getBType());
 
   TritonLLVMOpBuilder tb(loc, rewriter);
-  Value baseD = tb.ptrtoint(i32_ty, adaptor.getD());
+  DotOpMmaV5TmemLoader dLoader =
+      DotOpMmaV5TmemLoader::build(loc, rewriter, dTensorTy, adaptor.getD(),
+                                  dTensorTy.getElementTypeBitWidth());
   Value baseScaleA = tb.ptrtoint(i32_ty, adaptor.getAScale());
   Value baseScaleB = tb.ptrtoint(i32_ty, adaptor.getBScale());
   bool twoCTAs = ttng::getModuleTwoCTAs(op);
   SmallVector<Value> commitDescs = op.getCompletionDescs();
 
-  int numRows = 128;
-  int colSizeInBits = 32;
   dot.getAccAddress = [&](ConversionPatternRewriter &rewriter, Location loc,
                           int m, int n, const DotConversion::InstDesc &desc) {
-    int numColPerBlock = ceil<int>(desc.mmaSizeM * desc.mmaSizeN *
-                                       dTensorTy.getElementTypeBitWidth(),
-                                   numRows * colSizeInBits);
-    int blockId = m + n * desc.repShape.numRepM;
-    return MemDescOperand{baseD, numColPerBlock * blockId};
+    return dLoader.tmemLoad(m * desc.mmaSizeM, n * desc.mmaSizeN, rewriter,
+                            loc);
   };
 
   dot.createMMAInst = [&](ConversionPatternRewriter &rewriter, Location loc,

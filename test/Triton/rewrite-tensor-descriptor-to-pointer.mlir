@@ -30,12 +30,12 @@ module {
 // CHECK-DAG: %[[VAL4:.*]] = tt.make_range {end = 128 : i32, start = 0 : i32}
 // CHECK-DAG: %[[VAL5:.*]] = arith.extsi %[[VAL4]] :
 // CHECK-DAG: %[[VAL6:.*]] = arith.addi %[[VAL3]], %[[VAL5]] :
-// CHECK-DAG: %[[VAL7:.*]] = tt.expand_dims %[[VAL6]] {axis = 1 : i32}
+// CHECK-DAG: %[[VAL7:.*]] = tt.reshape %[[VAL6]]
 // CHECK-DAG: %[[VAL8:.*]] = tt.broadcast %[[VAL7]] : tensor<128x1xi64> -> tensor<128x128xi64>
 // CHECK-DAG: %[[VAL9:.*]] = tt.addptr %[[VAL2]], %[[VAL8]] :
 // CHECK-DAG: %[[VAL10:.*]] = tt.splat %[[VAL1]] :
 // CHECK-DAG: %[[VAL11:.*]] = arith.addi %[[VAL10]], %[[VAL5]] :
-// CHECK-DAG: %[[VAL12:.*]] = tt.expand_dims %[[VAL11]] {axis = 0 : i32}
+// CHECK-DAG: %[[VAL12:.*]] = tt.reshape %[[VAL11]]
 // CHECK-DAG: %[[VAL13:.*]] = arith.muli %[[VAL12]], %[[CST3]] :
 // CHECK-DAG: %[[VAL14:.*]] = tt.broadcast %[[VAL13]] : tensor<1x128xi64> -> tensor<128x128xi64>
 // CHECK-DAG: %[[VAL15:.*]] = tt.addptr %[[VAL9]], %[[VAL14]] :
@@ -85,12 +85,12 @@ module {
 // CHECK-DAG: %[[VAL4:.*]] = tt.make_range {end = 128 : i32, start = 0 : i32}
 // CHECK-DAG: %[[VAL5:.*]] = arith.extsi %[[VAL4]] :
 // CHECK-DAG: %[[VAL6:.*]] = arith.addi %[[VAL3]], %[[VAL5]] :
-// CHECK-DAG: %[[VAL7:.*]] = tt.expand_dims %[[VAL6]] {axis = 1 : i32}
+// CHECK-DAG: %[[VAL7:.*]] = tt.reshape %[[VAL6]]
 // CHECK-DAG: %[[VAL8:.*]] = tt.broadcast %[[VAL7]] : tensor<128x1xi64> -> tensor<128x128xi64>
 // CHECK-DAG: %[[VAL9:.*]] = tt.addptr %[[VAL2]], %[[VAL8]] :
 // CHECK-DAG: %[[VAL10:.*]] = tt.splat %[[VAL1]] :
 // CHECK-DAG: %[[VAL11:.*]] = arith.addi %[[VAL10]], %[[VAL5]] :
-// CHECK-DAG: %[[VAL12:.*]] = tt.expand_dims %[[VAL11]] {axis = 0 : i32}
+// CHECK-DAG: %[[VAL12:.*]] = tt.reshape %[[VAL11]]
 // CHECK-DAG: %[[VAL13:.*]] = arith.muli %[[VAL12]], %[[CST2]] :
 // CHECK-DAG: %[[VAL14:.*]] = tt.broadcast %[[VAL13]] : tensor<1x128xi64> -> tensor<128x128xi64>
 // CHECK-DAG: %[[VAL15:.*]] = tt.addptr %[[VAL9]], %[[VAL14]] :

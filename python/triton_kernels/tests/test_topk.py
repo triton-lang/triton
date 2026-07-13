@@ -1,6 +1,7 @@
 import pytest
 import torch
 import triton.profiler as proton
+from triton.testing import cuda_graph_without_gc
 from triton_kernels.topk import topk, topk_torch
 from triton_kernels.testing import assert_equal, assert_close
 from triton_kernels.distributed import SymmetricMemoryPool
@@ -27,6 +28,28 @@ def test_topk(n_rows, n_cols, k, apply_softmax, dtype):
     assert sparse_x_tri.mask.storage.data.shape == sparse_x_ref.mask.storage.data.shape
 
 
+@pytest.mark.parametrize("n_experts", [13, 33])
+@pytest.mark.parametrize("apply_softmax", [False, True])
+@pytest.mark.parametrize("dtype,storage_dtype", [
+    (torch.float16, torch.int16),
+    (torch.bfloat16, torch.int16),
+    (torch.float32, torch.int32),
+])
+def test_topk_fpsan_masks_padded_experts(fresh_knobs, n_experts, apply_softmax, dtype, storage_dtype):
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_rows = 2
+    k = 8
+    # Negative NaNs sort below -inf as floating-point keys. Under FPSan these
+    # bit patterns are valid payload carriers, so -inf cannot mask padding.
+    logits = torch.full((n_rows, n_experts), -1, dtype=storage_dtype, device="cuda").view(dtype)
+
+    sparse_logits = topk(logits, k, apply_softmax=apply_softmax)
+
+    expected_indices = torch.arange(k, dtype=torch.int16, device="cuda").expand(n_rows, k)
+    assert_equal(sparse_logits.indx, expected_indices)
+
+
 def bench_topk(n_rows, n_cols, k, apply_softmax, all_gather=False):
     # setup distributed environment
     rank, world_size = 0, 1
@@ -47,7 +70,7 @@ def bench_topk(n_rows, n_cols, k, apply_softmax, all_gather=False):
     g = torch.cuda.CUDAGraph()
     stream = torch.cuda.Stream()
     with torch.cuda.stream(stream):
-        with torch.cuda.graph(g):
+        with cuda_graph_without_gc(g):
             _ = topk(x, k, apply_softmax=apply_softmax, all_gather=all_gather, symm_mem_pool=symm_mem_pool)
     torch.cuda.synchronize()
     proton.activate()

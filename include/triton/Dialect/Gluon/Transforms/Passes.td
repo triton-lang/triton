@@ -42,7 +42,7 @@ def GluonInline: Pass<"gluon-inline"> {
 }
 
 def GluonSimplifyControlFlow: Pass<"gluon-slimplify-control-flow"> {
-  let summary = "simplications for control flow ops";
+  let summary = "simplifications for control flow ops";
 
   let description = [{
     The `gluon-simplify-control-flow` pass applies a reduced set of

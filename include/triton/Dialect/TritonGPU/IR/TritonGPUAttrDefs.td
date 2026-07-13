@@ -511,7 +511,7 @@ current block number: 0, 1, 2.. maxPhase-1, 0, 1, 2 ...
 
 This layout is used to reduce bank conflicts in cases where shared memory writes
 and reads are performed on layouts with different order. It's meant for hardware
-without native shared memory tranpose support.
+without native shared memory transpose support.
 
 Swizzling pattern affects only 2 fastest dimensions of a tensor.
 In the following text these two dimensions are called row and column:
@@ -529,7 +529,7 @@ Swizzling pattern is following:
 
 Let's consider an element with logical coordinates = (inRowId, inColId).
 For simplicity, we do not vectorize memory in examples,
-i.e. vec == 1 and layout swizzles inidividual elements.
+i.e. vec == 1 and layout swizzles individual elements.
 For vec != 1 example, take a look at SwizzledSharedEncodingAttr documentation.
 
 Swizzled coordinates within memory object are (outRowId, outColId):
@@ -1169,7 +1169,7 @@ Row |
 Example 2:
 This example illustrates the purpose of the ctaLayout parameter.
 ctaLayout is a linear layout describing how warps are arranged across WMMA tiles.
-Previously, this information was encoded using warpsPerCTA and tilesPerWarp parametes.
+Previously, this information was encoded using warpsPerCTA and tilesPerWarp parameters.
 For instance, a configuration with 4 warps, represented as:
 
 warpsPerCTA = [2, 2], tilesPerWarp = [1, 1]
@@ -1225,7 +1225,7 @@ w2 w3
 w0 w1 <- first tile computed by w1
 w2 w3
 
-Note that ctaLayout naturally composes with layout definied on a single WMMA tile
+Note that ctaLayout naturally composes with layout defined on a single WMMA tile
 to form final WMMA layout.
 
 wmmaLayout = tileLayout * ctaLayout

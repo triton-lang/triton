@@ -523,6 +523,11 @@ static Value createTMAlloc(IRRewriter &rewriter, LLVM::LLVMFuncOp func,
   Location loc = func.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value sharedMem = mlir::LLVM::getStackPointer(rewriter, func);
+  if (twoCTAs) {
+    auto ctx = func->getContext();
+    NVVM::ClusterArriveOp::create(rewriter, loc, UnitAttr::get(ctx));
+    NVVM::ClusterWaitOp::create(rewriter, loc, UnitAttr::get(ctx));
+  }
   std::string ptxString =
       "@$0 tcgen05.alloc.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
       ".sync.aligned.shared::cta.b32 [$1], " + std::to_string(size) + ";";
@@ -555,12 +560,9 @@ void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
     OpBuilder b(ret);
     auto ctx = ret->getContext();
     auto loc = ret.getLoc();
-    if (twoCTAs) {
-      NVVM::ClusterArriveOp::create(b, loc, UnitAttr::get(ctx));
-      NVVM::ClusterWaitOp::create(b, loc, UnitAttr::get(ctx));
-    } else {
+    // Multi-CTA kernels already synchronize the cluster before every return.
+    if (!twoCTAs)
       NVVM::BarrierOp::create(b, loc);
-    }
     PTXBuilder ptxBuilder;
     // Calculate the predicate in the inline asm to avoid creating long
     // liveranges.

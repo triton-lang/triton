@@ -97,10 +97,19 @@ public:
   // reaches its warp-specialize terminator.
   void createRetireActiveThreadCall(ImplicitLocOpBuilder &b, int thread,
                                     Operation *insertPoint);
-  // checkAllActiveWaiting: assert that not all unfinished threads across the
-  // cluster are waiting on matching barrier phases.
-  void createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b, Value pred,
-                                       Operation *insertPoint);
+  // clusterBarrierRendezvous: model a cluster barrier as an arrive-and-wait on
+  // a virtual entry in the ordinary ConSan barrier tables. The completing
+  // arrival publishes cluster visibility for non-relaxed barriers. The call
+  // returns only after the virtual barrier phase changes or a deadlock is
+  // reported.
+  void createClusterBarrierRendezvousCall(ImplicitLocOpBuilder &b,
+                                          int barrierIdx, int thread,
+                                          bool publishVisibility,
+                                          Operation *insertPoint);
+  // checkAllActiveWaiting: return whether unfinished threads across the
+  // cluster are not all waiting on matching barrier phases.
+  Value createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b, Value pred,
+                                        Operation *insertPoint);
   // verifyBarrierCanInit: ensure the barrier is currently invalidated before
   // initializing it again.
   void createVerifyBarrierCanInitCall(ImplicitLocOpBuilder &b, Value mbar,
@@ -231,6 +240,48 @@ public:
   void createPublishClusterVisibilityCall(ImplicitLocOpBuilder &b, Value pred,
                                           MemType memType,
                                           Operation *insertPoint);
+  // setProxyAccess: record a generic-proxy access by the current base thread
+  // and invalidate prior proxy-fence coverage for that source thread.
+  void createSetProxyAccessCall(ImplicitLocOpBuilder &b, Value buf,
+                                uint32_t length, int thread, Value pred,
+                                Operation *insertPoint, Value effectCTAs);
+  // fenceProxyAccesses: mark all generic accesses visible to the current base
+  // thread as covered by fence.proxy.async. A CTA fence covers the current
+  // buffer row; a cluster fence covers every cluster buffer row.
+  void createFenceProxyAccessesCall(ImplicitLocOpBuilder &b, int thread,
+                                    bool cluster, Value pred,
+                                    Operation *insertPoint);
+  // trackProxyAccesses: snapshot the current base thread's packed generic
+  // access/fence frontier into a barrier tracking row.
+  void createTrackProxyAccessesCall(ImplicitLocOpBuilder &b, Value mbar,
+                                    int thread, Value pred,
+                                    Operation *insertPoint, Value barrierCTAs);
+  // transferProxyAccesses: merge a barrier's packed proxy frontier into the
+  // waiting base thread.
+  void createTransferProxyAccessesCall(ImplicitLocOpBuilder &b, Value mbar,
+                                       int thread, Value pred,
+                                       Operation *insertPoint);
+  // clearBarrierProxyAccessTracking: clear packed proxy state associated with
+  // an invalidated barrier.
+  void createClearBarrierProxyAccessTrackingCall(ImplicitLocOpBuilder &b,
+                                                 Value mbar, Value pred,
+                                                 Operation *insertPoint);
+  // verifyProxyAccess: assert that every generic-proxy access visible to the
+  // issuing base thread has crossed fence.proxy.async.
+  void createVerifyProxyAccessCall(ImplicitLocOpBuilder &b, Value buf,
+                                   uint32_t length, int thread,
+                                   StringRef operandName, Value pred,
+                                   Operation *insertPoint, Value effectCTAs);
+  // copyProxyAccesses: copy a parent base thread's packed proxy frontier to
+  // warp-specialization partition threads.
+  void createCopyProxyAccessesCall(ImplicitLocOpBuilder &b, int sourceThread,
+                                   uint64_t destMask, Value pred,
+                                   Operation *insertPoint);
+  // publishClusterProxyAccesses: publish packed generic access and fence facts
+  // to every base thread after a non-relaxed cluster barrier.
+  void createPublishClusterProxyAccessesCall(ImplicitLocOpBuilder &b,
+                                             Value pred,
+                                             Operation *insertPoint);
   // stageAccessForCommit: mark the buffer as staged (value -1) in the
   // outstanding commit table for this thread.
   void createStageAccessForCommitCall(ImplicitLocOpBuilder &b, Value buf,

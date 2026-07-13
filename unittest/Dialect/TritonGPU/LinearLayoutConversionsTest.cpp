@@ -3340,6 +3340,64 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_128) {
                 LinearLayout::identity1D(2, kCol, d1));
 }
 
+TEST_F(LinearLayoutConversionsTest, TensorMemory_subview) {
+  auto d0 = S("dim0");
+  auto d1 = S("dim1");
+  auto kRow = S("row");
+  auto kCol = S("col");
+  auto kBlock = S("block");
+  auto tmemSpace = TensorMemorySpaceAttr::get(&ctx);
+  auto f32 = Float32Type::get(&ctx);
+  auto f16 = Float16Type::get(&ctx);
+  auto i8 = IntegerType::get(&ctx, 8);
+
+  auto interleaved = MemDescType::get({64, 2}, f32, tmem(64, 2), tmemSpace,
+                                      /*mutableMemory=*/true, {64, 128});
+  LinearLayout expectedInterleaved(
+      {{kRow, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 0}, {16, 0}, {32, 0}}},
+       {kCol, {{0, 1}}},
+       {kBlock, {}}},
+      {d0, d1});
+  EXPECT_EQ(toLinearLayout(interleaved), expectedInterleaved);
+
+  auto withHole = MemDescType::get({128, 256}, f32, tmem(128, 64), tmemSpace,
+                                   /*mutableMemory=*/true, {256, 256});
+  LinearLayout expectedWithHole(
+      {{kRow, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {32, 0}, {64, 0}}},
+       {kCol,
+        {{0, 1},
+         {0, 2},
+         {0, 4},
+         {0, 8},
+         {0, 16},
+         {0, 32},
+         {0, 0},
+         {0, 64},
+         {0, 128}}},
+       {kBlock, {}}},
+      {d0, d1});
+  EXPECT_EQ(toLinearLayout(withHole), expectedWithHole);
+
+  auto stridedEnc = TensorMemoryEncodingAttr::get(
+      &ctx, 128, 1, 2, CGAEncodingAttr::get1CTALayout(&ctx, 2));
+  auto stridedSubview = MemDescType::get({128, 1}, f16, stridedEnc, tmemSpace,
+                                         /*mutableMemory=*/true, {256, 1});
+  LinearLayout expectedStrided = LinearLayout::identity1D(128, kRow, d0) *
+                                 LinearLayout::zeros1D(2, kCol, d1) *
+                                 LinearLayout::identity1D(1, kBlock, d0);
+  EXPECT_EQ(toLinearLayout(stridedSubview), expectedStrided);
+
+  auto fp4Enc = TensorMemoryEncodingAttr::get(
+      &ctx, 128, 1, 1, CGAEncodingAttr::get1CTALayout(&ctx, 2),
+      /*twoCTAs=*/false, /*fp4Padded=*/true);
+  auto fp4Subview = MemDescType::get({128, 1}, i8, fp4Enc, tmemSpace,
+                                     /*mutableMemory=*/true, {256, 1});
+  LinearLayout expectedFp4 = LinearLayout::identity1D(128, kRow, d0) *
+                             LinearLayout::zeros1D(4, kCol, d1) *
+                             LinearLayout::identity1D(1, kBlock, d0);
+  EXPECT_EQ(toLinearLayout(fp4Subview), expectedFp4);
+}
+
 TEST_F(LinearLayoutConversionsTest, TensorMemory_fp4Padded) {
   auto enc = TensorMemoryEncodingAttr::get(
       &ctx, 128, 64, 1, CGAEncodingAttr::get1CTALayout(&ctx, 2),
