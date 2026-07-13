@@ -721,9 +721,9 @@ LogicalResult MemDescReinterpretOp::verify() {
   };
   auto srcNumBits = getViewNumBits(srcTy);
   auto dstNumBits = getViewNumBits(dstTy);
-  if (srcNumBits != dstNumBits)
-    return emitError() << "source and result must have the same logical "
-                          "storage size ("
+  if (dstNumBits > srcNumBits)
+    return emitError() << "result logical storage size must not exceed source "
+                          "logical storage size ("
                        << srcNumBits << " vs " << dstNumBits << ")";
   return success();
 }
