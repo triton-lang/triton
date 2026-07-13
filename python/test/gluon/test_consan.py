@@ -465,7 +465,9 @@ def test_clc_result_reuse_after_cluster_barrier(device, run_wrapper, monkeypatch
         mbarrier.wait(clc_bar, 0)
         first = clc.load_result(clc_result)
         ttgl.barrier(cluster=True)
-        hopper.fence_async_shared(cluster=True)
+        # A CTA fence must not hide the need for a cluster fence before the
+        # next multi-CTA CLC request.
+        hopper.fence_async_shared()
 
         mbarrier.expect(clc_bar, 16)
         clc.try_cancel(clc_result, clc_bar)
@@ -499,13 +501,16 @@ def test_async_tma_multicast_kernel_reuse(device, run_wrapper, monkeypatch, num_
         smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], input_desc.layout)
         bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
+        val = ttgl.full([XBLOCK, XBLOCK], 0, ttgl.float16, blocked_layout)
         for phase in ttgl.static_range(2):
             mbarrier.expect(bar, input_desc.nbytes_per_cta)
             ttgl.barrier(cluster=True)
+            # A CTA fence after the cluster handoff cannot cover peer-CTA reads.
+            hopper.fence_async_shared()
             tma.async_load(input_desc, [0, 0], bar, smem, multicast=True)
             mbarrier.wait(bar, phase % 2, deps=[smem])
+            val += smem.load(blocked_layout)
             ttgl.barrier(cluster=True)
-        val = smem.load(blocked_layout)
         mbarrier.invalidate(bar)
 
         out_m = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(1, blocked_layout))[:, None]
