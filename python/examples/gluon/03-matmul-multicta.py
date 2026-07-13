@@ -339,8 +339,12 @@ def matmul_clc_partition(p):
     ACC_STAGES: gl.constexpr = p.clc_barriers.shape[0]
     i = 0
     while has_work:
-        # Reuse the slot only after all consumer partitions signaled consumed.
+        # Reuse the CTA-local planar slot only after its consumer partitions
+        # have finished reading it. Then rendezvous the CLC partitions across
+        # the cluster before reusing the multicast CLC result slot.
         mbarrier.wait(p.clc_consumed_bars.index(consumed_state.index), consumed_state.phase, pred=(i >= ACC_STAGES))
+        if gl.num_ctas() > 1:
+            gl.barrier(cluster=True)
         barrier = p.clc_barriers.index(state.index)
         result = p.clc_result_buffers.index(state.index)
         # 16: clc.try_cancel has a `.b128` modifier
@@ -512,7 +516,7 @@ def _matmul_kernel(
 
     clc_barriers = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
     clc_planar_ready_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
-    clc_consumed_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES, two_ctas=TWO_CTAS)
+    clc_consumed_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
     for i in gl.static_range(ACC_STAGES):
         mbarrier.init(clc_barriers.index(i), count=1)
         mbarrier.init(clc_planar_ready_bars.index(i), count=1)

@@ -303,13 +303,16 @@ if __name__ == "__main__" and is_hopper_or_newer():
 # both to barriers that are themselves cross-CTA and to per-CTA barriers consumed
 # by multicast or 2CTA ops. The compiler inserts the required
 # `fence.mbarrier_init.release.cluster` plus a relaxed cluster barrier after the
-# top-level init sequence and before the first use. Since cluster barriers must
-# execute outside `warp_specialize`, initialize these barriers in the top-level
-# part of the kernel before entering warp specialization.
+# top-level init sequence and before the first use. Keep these initializations
+# in the top-level part of the kernel so that synchronization completes before
+# any warp-specialized partition can use the barriers.
 #
 # Final note on synchronization.
-# cluster.arrive / cluster.wait (i.e., CGA barriers, the cluster equivalent of bar.sync for CTAs) must be
-# executed by all threads in the kernel. As a result, they cannot be used inside a warp_specialize block.
+# A complete `gl.barrier(cluster=True)` can be used inside a warp-specialized
+# partition. The compiler lowers it to a partition-scoped cluster mbarrier, so
+# the corresponding partition in every CTA participates. Split cluster.arrive
+# / cluster.wait operations must still be executed by all threads in the kernel
+# and cannot be used inside a warp_specialize block.
 #
 # Moreover, operations such as convert_layout, reduce, sum, max, etc., emit CGA barriers when they cross CTAs.
 # Therefore, these operations are also not allowed inside a warp_specialize block whenever they may span multiple
@@ -843,7 +846,12 @@ def matmul_clc_partition(p):
     acc_stages: gl.constexpr = p.clc_barriers.shape[0]
     i = 0
     while has_work:
+        # Reuse the CTA-local planar slot only after its consumer partitions
+        # have finished reading it. Then rendezvous the CLC partitions across
+        # the cluster before reusing the multicast CLC result slot.
         mbarrier.wait(p.clc_consumed_bars.index(consumed_state.index), consumed_state.phase, pred=(i >= acc_stages))
+        if gl.num_ctas() > 1:
+            gl.barrier(cluster=True)
         barrier = p.clc_barriers.index(state.index)
         result = p.clc_result_buffers.index(state.index)
         mbarrier.expect(barrier, 16)
@@ -1019,7 +1027,7 @@ def matmul_multicta_kernel(
 
     clc_barriers = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
     clc_planar_ready_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
-    clc_consumed_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES, two_ctas=two_ctas)
+    clc_consumed_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
     for i in gl.static_range(ACC_STAGES):
         mbarrier.init(clc_barriers.index(i), count=1)
         mbarrier.init(clc_planar_ready_bars.index(i), count=1)
