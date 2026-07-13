@@ -483,8 +483,9 @@ public:
     for (Operation &op : *block)
       if (readsOrWritesMemory(&op)) {
         rewriter.setInsertionPointAfter(&op);
-        ROCDL::SchedBarrier::create(rewriter, op.getLoc(),
-                                    ROCDL::SchedGroupMask::non_mem_non_sideeffect);
+        ROCDL::SchedBarrier::create(
+            rewriter, op.getLoc(),
+            ROCDL::SchedGroupMask::non_mem_non_sideeffect);
       }
 
     Operation *terminator = block->getTerminator();
