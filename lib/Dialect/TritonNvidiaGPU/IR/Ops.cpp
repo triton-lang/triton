@@ -1571,7 +1571,7 @@ LogicalResult TMEMSubSliceOp::verify() {
   if (dstTy.getRank() != 2)
     return emitOpError("The result must be a 2D tensor memory buffer.");
   auto dim = getDim();
-  if (dim > 1)
+  if (dim < 0 || dim > 1)
     return emitOpError("The slice dimension must be 0 or 1.");
   if (dstTy.getDimSize(1 - dim) != srcTy.getDimSize(1 - dim))
     return emitOpError("The result must have the same size as the source in "

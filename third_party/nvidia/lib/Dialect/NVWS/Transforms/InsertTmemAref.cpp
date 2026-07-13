@@ -531,14 +531,6 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
     state.asyncOp[node->partitionId] = AsyncOp::NONE;
   }
 
-  for (Value operand : node->op->getOperands()) {
-    auto type = dyn_cast<MemDescType>(operand.getType());
-    if (type && isa<TensorMemoryEncodingAttr>(type.getEncoding()))
-      assert(type.getShape().take_back(2) ==
-                 type.getAllocShape().take_back(2) &&
-             "NVWS does not support TMEM subviews");
-  }
-
   OpBuilder b(node->op);
   if (auto tmemLoadOp = dyn_cast<TMEMLoadOp>(node->op)) {
     if (auto id = node->partitionId)
@@ -902,6 +894,20 @@ LogicalResult runOnFunction(triton::FuncOp funcOp) {
   if (!walkResult.wasInterrupted())
     return success();
 
+  walkResult = funcOp.walk([&](Operation *op) {
+    for (Value operand : op->getOperands()) {
+      auto type = dyn_cast<MemDescType>(operand.getType());
+      if (type && isa<TensorMemoryEncodingAttr>(type.getEncoding()) &&
+          type.getShape().take_back(2) != type.getAllocShape().take_back(2)) {
+        op->emitError("TMEM subviews NYI in the pipeliner");
+        return WalkResult::interrupt();
+      }
+    }
+    return WalkResult::advance();
+  });
+  if (walkResult.wasInterrupted())
+    return failure();
+
   SmallVector<TmemAccessDag> tmemDags;
   funcOp.walk([&](TMEMAllocOp allocOp) {
     tmemDags.push_back(TmemAccessDag::build(allocOp));
@@ -929,11 +935,13 @@ class NVWSTmemArefInsertion
     : public triton::impl::NVWSInsertTmemArefBase<NVWSTmemArefInsertion> {
 public:
   void runOnOperation() override {
-    getOperation().walk([&](triton::FuncOp funcOp) {
+    auto walkResult = getOperation().walk([&](triton::FuncOp funcOp) {
       if (failed(runOnFunction(funcOp)))
         return WalkResult::interrupt();
       return WalkResult::advance();
     });
+    if (walkResult.wasInterrupted())
+      signalPassFailure();
   }
 };
 

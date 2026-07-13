@@ -75,7 +75,7 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   auto ll = toLinearLayout(memDescType);
   auto bitwidth = memDescType.getElementTypeBitWidth();
   int nRow = ll.getInDimSize(kRow);
-  int nCol = ll.getInDimSize(kCol) / (32 / bitwidth);
+  int nCol = llvm::divideCeil(ll.getInDimSize(kCol) * bitwidth, 32);
   // If we have just one 16xcol block per warp, we don't allocate 128 rows
   // we use 64 rows instead.
   // We could generalise this to when we have more zeros in the layout, but
