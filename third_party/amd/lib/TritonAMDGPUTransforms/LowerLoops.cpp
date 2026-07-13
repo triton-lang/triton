@@ -370,10 +370,9 @@ bool hasEnoughCTABytesForDirectToLds(tt::LoadOp loadOp,
   if (!srcTy)
     return true;
 
-  int64_t bytesPerElement = (srcTy.getElementTypeBitWidth() + 7) / 8;
-  int64_t ctaTileBytes = mlir::product(ttg::getShapePerCTA(srcTy)) *
-                         bytesPerElement;
-  return ctaTileBytes >= 4 * targetInfo.getWarpSize();
+  int64_t ctaTileBits = mlir::product(ttg::getShapePerCTA(srcTy)) *
+                        srcTy.getElementTypeBitWidth();
+  return ctaTileBits >= 32 * targetInfo.getWarpSize();
 }
 
 bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
