@@ -1846,7 +1846,7 @@ def test_tmem_noncontiguous_subslice_load_store(dtype, M, N, BLOCK_N, dim):
     torch.testing.assert_close(out, ref, atol=0, rtol=0)
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires Blackwell Ultra")
 def test_tmem_noncontiguous_subslice_load_min():
 
     @gluon.jit
