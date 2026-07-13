@@ -96,14 +96,8 @@ static bool isWarpPipelineIgnorableBarrier(Operation *op) {
 // True if `op` reads or writes memory (a load / store / async-copy).
 static bool readsOrWritesMemory(Operation *op) {
   auto mei = dyn_cast<MemoryEffectOpInterface>(op);
-  if (!mei)
-    return false;
-  SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>> effs;
-  mei.getEffects(effs);
-  for (auto &eff : effs)
-    if (isa<MemoryEffects::Read, MemoryEffects::Write>(eff.getEffect()))
-      return true;
-  return false;
+  return mei && (mei.hasEffect<MemoryEffects::Read>() ||
+                 mei.hasEffect<MemoryEffects::Write>());
 }
 
 // True if `exec` is a stage created by the warp-pipeline frontend.
@@ -494,7 +488,7 @@ public:
       for (Operation *op : memOps) {
         rewriter.setInsertionPointAfter(op);
         ROCDL::SchedBarrier::create(rewriter, op->getLoc(),
-                                    ROCDL::SchedGroupMask::none);
+                                    ROCDL::SchedGroupMask::non_mem_non_sideeffect);
       }
     }
 
