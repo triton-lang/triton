@@ -175,6 +175,33 @@ tt.func @hoist_above_broadcast(%arg0: tensor<1024x1xf32, #layout2>, %arg1: f32) 
   tt.return %3 : tensor<1024x128xf32, #layout3>
 }
 
+// CHECK-LABEL: hoist_above_expand_dims_reshape
+tt.func @hoist_above_expand_dims_reshape(%arg0: tensor<1024xf32, #expand_layout0_slice>) -> tensor<1024x1xf32, #expand_layout1> {
+// CHECK: %[[CVT:.+]] = ttg.convert_layout %arg0 : tensor<1024xf32, #{{.*}}> -> tensor<1024xf32, #[[DST_LAYOUT:.*]]>
+// CHECK: tt.reshape %[[CVT]] : tensor<1024xf32, #[[DST_LAYOUT]]> -> tensor<1024x1xf32, #{{.*}}>
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.return
+  %0 = tt.reshape %arg0 : tensor<1024xf32, #expand_layout0_slice> -> tensor<1024x1xf32, #expand_layout0>
+  %1 = ttg.convert_layout %0 : tensor<1024x1xf32, #expand_layout0> -> tensor<1024x1xf32, #expand_layout1>
+  tt.return %1 : tensor<1024x1xf32, #expand_layout1>
+}
+
+// CHECK-LABEL: dont_hoist_to_wider_type
+tt.func @dont_hoist_to_wider_type(%arg0: tensor<1024xi16, #layout0>) -> tensor<1024xi8, #layout1> {
+// CHECK: %[[EXT:.+]] = arith.extsi %arg0
+// CHECK: %[[ADD:.+]] = arith.addi %[[EXT]]
+// CHECK: %[[TRUNC:.+]] = arith.trunci %[[ADD]]
+// CHECK: ttg.convert_layout %[[TRUNC]]
+// CHECK: tt.return
+  %0 = arith.extsi %arg0 : tensor<1024xi16, #layout0> to tensor<1024xi32, #layout0>
+  %cst = arith.constant dense<1> : tensor<1024xi32, #layout0>
+  %1 = arith.addi %0, %cst : tensor<1024xi32, #layout0>
+  %2 = arith.trunci %1 : tensor<1024xi32, #layout0> to tensor<1024xi8, #layout0>
+  %3 = ttg.convert_layout %2 : tensor<1024xi8, #layout0> -> tensor<1024xi8, #layout1>
+  tt.return %3 : tensor<1024xi8, #layout1>
+}
+
+
 // CHECK-LABEL: if
 tt.func @if(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   // CHECK-NOT: ttg.convert_layout
