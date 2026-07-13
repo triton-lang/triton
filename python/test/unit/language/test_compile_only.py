@@ -1,8 +1,43 @@
+import re
+
+import pytest
+
 import triton
 import triton.language as tl
 from triton.backends.compiler import GPUTarget
-import re
 from triton.compiler import ASTSource
+
+
+def test_llvm_codegen_errors_are_catchable_for_invalid_inline_asm() -> None:
+
+    @triton.jit
+    def kernel(x_ptr, out_ptr, n: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        values = tl.load(x_ptr + offsets, mask=offsets < n, other=0.0)
+        packed = tl.inline_asm_elementwise(
+            asm="""
+            {
+                .reg .b16 result;
+                mov.u16 result, 0;
+                mov.u16 $0, result;
+            }
+            """,
+            constraints="=h,f",
+            args=[values],
+            dtype=tl.uint16,
+            is_pure=True,
+            pack=1,
+        )
+        tl.store(out_ptr + offsets, packed.to(tl.uint8), mask=offsets < n)
+
+    src = ASTSource(
+        fn=kernel,
+        signature={"x_ptr": "*fp32", "out_ptr": "*u8", "n": "constexpr", "BLOCK": "constexpr"},
+        constexprs={"n": 128, "BLOCK": 128},
+    )
+
+    with pytest.raises(RuntimeError, match="could not allocate output register for constraint 'h'"):
+        triton.compile(src, target=GPUTarget("hip", "gfx1200", 32))
 
 
 def test_compile_only_sm100() -> None:

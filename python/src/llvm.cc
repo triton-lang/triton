@@ -9,6 +9,8 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
@@ -59,6 +61,20 @@ struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
 using namespace llvm;
 
 namespace {
+
+class TritonLLVMDiagnosticHandler : public llvm::DiagnosticHandler {
+public:
+  bool handleDiagnostics(const llvm::DiagnosticInfo &diagnostic) override {
+    if (diagnostic.getSeverity() != llvm::DS_Error)
+      return false;
+    llvm::raw_string_ostream stream(message);
+    llvm::DiagnosticPrinterRawOStream printer(stream);
+    diagnostic.print(printer);
+    return true;
+  }
+
+  std::string message;
+};
 
 // Set an LLVM command-line option using addOccurrence (simulates command-line)
 // and return its original value. Using addOccurrence instead of setValue is
@@ -338,6 +354,9 @@ std::string translateLLVMIRToASM(
     const std::string &features, const std::vector<std::string> &flags,
     bool enable_fp_fusion, bool isObject, bool canonicalizeGEP) {
   using namespace mlir;
+  auto diagnosticHandler = std::make_unique<TritonLLVMDiagnosticHandler>();
+  auto *diagnosticHandlerPtr = diagnosticHandler.get();
+  module.getContext().setDiagnosticHandler(std::move(diagnosticHandler));
 
   // Apply flags
   for (const std::string &flag : flags) {
@@ -413,6 +432,8 @@ std::string translateLLVMIRToASM(
                              : llvm::CodeGenFileType::AssemblyFile;
     machine->addPassesToEmitFile(pass, pstream, nullptr, fileType);
     pass.run(module);
+    if (diagnosticHandlerPtr->HasErrors)
+      throw std::runtime_error(diagnosticHandlerPtr->message);
 
     if (enabledTiming) {
       reportAndResetTimings(&reportStream);
