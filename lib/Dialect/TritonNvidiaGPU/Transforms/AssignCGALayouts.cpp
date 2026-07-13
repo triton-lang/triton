@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <deque>
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -35,43 +36,34 @@ struct DotCGASplit {
   unsigned n;
 };
 
-ttg::DistributedEncodingTrait
-cloneWithCGALayout(ttg::DistributedEncodingTrait layout,
-                   llvm::ArrayRef<int64_t> shape, int numWarps,
-                   int threadsPerWarp, ttg::CGAEncodingAttr newCGALayout) {
-  if (auto blockedLayout = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
-    return ttg::BlockedEncodingAttr::get(
-        layout.getContext(), shape, blockedLayout.getSizePerThread(),
-        blockedLayout.getOrder(), numWarps, threadsPerWarp, newCGALayout);
-  }
-
-  if (auto sliceLayout = dyn_cast<ttg::SliceEncodingAttr>(layout)) {
-    return ttg::SliceEncodingAttr::get(
-        layout.getContext(), sliceLayout.getDim(),
-        cloneWithCGALayout(sliceLayout.getParent(), shape, numWarps,
-                           threadsPerWarp, newCGALayout));
-  }
-
-  assert(false && "cloneWithCGALayout not implemented for layout");
-}
-
-// Clone a blocked or sliced encoding with a new CGA layout while retaining the
-// layout choices that affect accesses within a CTA. The shape-aware blocked
-// layout builder redistributes threads and warps when the shape per CTA
-// changes.
-std::optional<Attribute> cloneWithCGALayout(RankedTensorType type,
+// Clone an encoding with `cgaLayout`. Dot operand encodings carry additional
+// parent-layout decisions, so reuse `preferredEncoding` when both encodings are
+// dot operands. For blocked and sliced encodings, retain the existing intra-CTA
+// layout choices. The shape-aware blocked layout builder redistributes threads
+// and warps when the shape per CTA changes.
+std::optional<Attribute> cloneWithCGALayout(RankedTensorType tensorTy,
                                             ttg::CGAEncodingAttr cgaLayout,
-                                            Operation *scope) {
-  auto layout = dyn_cast<ttg::DistributedEncodingTrait>(type.getEncoding());
-  if (!layout)
-    return std::nullopt;
-
+                                            Operation *scope,
+                                            Attribute preferredEncoding = {}) {
+  Attribute layout = tensorTy.getEncoding();
   int numWarps = ttg::lookupNumWarps(scope);
   OpBuilder builder(scope);
   int threadsPerWarp = ttg::lookupThreadsPerWarp(builder);
+  if (auto dot = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
+    auto parent = dyn_cast<ttg::BlockedEncodingAttr>(dot.getParent());
+    if (!parent)
+      return std::nullopt;
+    auto newParent = ttg::BlockedEncodingAttr::get(
+        tensorTy.getContext(), parent.getSizePerThread(),
+        parent.getThreadsPerWarp(), parent.getWarpsPerCTA(), parent.getOrder(),
+        cgaLayout);
+    return ttg::DotOperandEncodingAttr::get(
+        tensorTy.getContext(), dot.getOpIdx(), newParent, dot.getKWidth());
+  }
+
   if (auto blocked = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
     return ttg::BlockedEncodingAttr::get(
-        type.getContext(), type.getShape(), blocked.getSizePerThread(),
+        tensorTy.getContext(), tensorTy.getShape(), blocked.getSizePerThread(),
         blocked.getOrder(), numWarps, threadsPerWarp, cgaLayout);
   }
 
@@ -80,35 +72,14 @@ std::optional<Attribute> cloneWithCGALayout(RankedTensorType type,
     if (!parent)
       return std::nullopt;
     auto newParent = ttg::BlockedEncodingAttr::get(
-        type.getContext(), parent.getSizePerThread(),
+        tensorTy.getContext(), parent.getSizePerThread(),
         parent.getThreadsPerWarp(), parent.getWarpsPerCTA(), parent.getOrder(),
         cgaLayout);
-    return ttg::SliceEncodingAttr::get(type.getContext(), slice.getDim(),
+    return ttg::SliceEncodingAttr::get(tensorTy.getContext(), slice.getDim(),
                                        newParent);
   }
 
   return std::nullopt;
-}
-
-// Return the encoding that `value` should use to stay in the CTA group of
-// `preferredEncoding`. Dot operand encodings carry additional parent-layout
-// decisions, so reuse the preferred encoding when it describes the same
-// operand. Other producers retain their existing intra-CTA layout and only
-// adopt the preferred CGA layout.
-std::optional<Attribute>
-getEncodingInCGA(Value value, Attribute preferredEncoding, Operation *scope) {
-  auto type = dyn_cast<RankedTensorType>(value.getType());
-  if (!type)
-    return std::nullopt;
-
-  auto currentDot = dyn_cast<ttg::DotOperandEncodingAttr>(type.getEncoding());
-  auto preferredDot = dyn_cast<ttg::DotOperandEncodingAttr>(preferredEncoding);
-  if (currentDot && preferredDot &&
-      currentDot.getOpIdx() == preferredDot.getOpIdx() &&
-      currentDot.getKWidth() == preferredDot.getKWidth())
-    return preferredEncoding;
-
-  return cloneWithCGALayout(type, ttg::getCGALayout(preferredEncoding), scope);
 }
 
 // Rematerialize an exclusively-used producer slice in the requested CTA
@@ -120,70 +91,83 @@ public:
   explicit CGARematerialization(ttg::ConvertLayoutOp root) : root(root) {}
 
   LogicalResult run() {
+    Attribute preferredEncoding = root.getType().getEncoding();
     auto desiredEncoding =
-        getEncodingInCGA(root.getSrc(), root.getType().getEncoding(), root);
+        cloneWithCGALayout(cast<RankedTensorType>(root.getSrc().getType()),
+                           ttg::getCGALayout(preferredEncoding), root,
+                           preferredEncoding);
     if (!desiredEncoding || failed(plan(root.getSrc(), *desiredEncoding)) ||
         !foundLoad || !hasExclusiveUses())
       return failure();
 
-    SmallVector<Operation *> originalOps;
-    originalOps.reserve(layouts.size());
-    for (auto &entry : layouts)
-      originalOps.push_back(entry.first.getDefiningOp());
-
     root.getSrcMutable().assign(rewrite(root.getSrc()));
-    eraseOriginalSlice(originalOps);
+    for (Operation *op : llvm::reverse(originalOps))
+      op->erase();
     return success();
   }
 
 private:
-  LogicalResult plan(Value value, Attribute encoding) {
-    auto type = dyn_cast<RankedTensorType>(value.getType());
-    if (!type || type.getEncoding() == encoding)
-      return success();
+  LogicalResult plan(Value rootValue, Attribute rootEncoding) {
+    std::deque<std::pair<Value, Attribute>> queue;
+    queue.emplace_back(rootValue, rootEncoding);
 
-    auto [it, inserted] = layouts.try_emplace(value, encoding);
-    if (!inserted)
-      return success(it->second == encoding);
-
-    Operation *op = value.getDefiningOp();
-    if (!op || op->getNumResults() != 1 || !op->getRegions().empty())
-      return failure();
-
-    if (auto load = dyn_cast<triton::LoadOp>(op)) {
-      if (load.getIsVolatile())
-        return failure();
-      foundLoad = true;
-      return success();
-    }
-    if (isa<triton::DescriptorLoadLikeOpInterface>(op)) {
-      foundLoad = true;
-      return success();
-    }
-
-    if (!isMemoryEffectFree(op) || !canBeRematerialized(op))
-      return failure();
-
-    if (auto gather = dyn_cast<triton::GatherOp>(op))
-      return plan(gather.getIndices(), encoding);
-
-    if (auto convert = dyn_cast<ttg::ConvertLayoutOp>(op)) {
-      auto srcEncoding = getEncodingInCGA(convert.getSrc(), encoding, op);
-      if (!srcEncoding)
-        return failure();
-      return plan(convert.getSrc(), *srcEncoding);
-    }
-
-    for (auto [index, operand] : llvm::enumerate(op->getOpOperands())) {
-      if (!isa<RankedTensorType>(operand.get().getType()))
+    while (!queue.empty()) {
+      auto [value, encoding] = queue.front();
+      queue.pop_front();
+      auto tensorTy = cast<RankedTensorType>(value.getType());
+      if (tensorTy.getEncoding() == encoding)
         continue;
-      Attribute srcEncoding;
-      if (auto upcast = dyn_cast<ttg::UpcastFpOpInterface>(op))
-        srcEncoding = upcast.inferSrcEncoding(index, encoding);
-      else
-        srcEncoding = inferSrcEncoding(op, encoding);
-      if (!srcEncoding || failed(plan(operand.get(), srcEncoding)))
+
+      auto [it, inserted] = layouts.try_emplace(value, encoding);
+      if (!inserted) {
+        if (it->second != encoding)
+          return failure();
+        continue;
+      }
+
+      Operation *op = value.getDefiningOp();
+      if (!op || op->getNumResults() != 1 || !op->getRegions().empty())
         return failure();
+
+      if (auto load = dyn_cast<triton::LoadOp>(op)) {
+        if (load.getIsVolatile())
+          return failure();
+        foundLoad = true;
+        continue;
+      }
+      if (isa<triton::DescriptorLoadLikeOpInterface>(op)) {
+        foundLoad = true;
+        continue;
+      }
+
+      if (!isMemoryEffectFree(op) || !canBeRematerialized(op))
+        return failure();
+
+      if (auto gather = dyn_cast<triton::GatherOp>(op)) {
+        queue.emplace_back(gather.getIndices(), encoding);
+        continue;
+      }
+
+      if (auto convert = dyn_cast<ttg::ConvertLayoutOp>(op)) {
+        auto srcEncoding = cloneWithCGALayout(
+            cast<RankedTensorType>(convert.getSrc().getType()),
+            ttg::getCGALayout(encoding), op, encoding);
+        if (!srcEncoding)
+          return failure();
+        queue.emplace_back(convert.getSrc(), *srcEncoding);
+        continue;
+      }
+
+      for (Value operand : op->getOperands()) {
+        auto operandTy = dyn_cast<RankedTensorType>(operand.getType());
+        if (!operandTy)
+          continue;
+        auto srcEncoding = cloneWithCGALayout(
+            operandTy, ttg::getCGALayout(encoding), op, encoding);
+        if (!srcEncoding)
+          return failure();
+        queue.emplace_back(operand, *srcEncoding);
+      }
     }
     return success();
   }
@@ -216,10 +200,8 @@ private:
 
     if (isa<triton::LoadOp>(op)) {
       for (OpOperand &operand : op->getOpOperands()) {
-        auto type = dyn_cast<RankedTensorType>(operand.get().getType());
-        if (!type)
-          continue;
-        auto newType = type.cloneWithEncoding(layoutIt->second);
+        auto tensorTy = cast<RankedTensorType>(operand.get().getType());
+        auto newType = tensorTy.cloneWithEncoding(layoutIt->second);
         Value converted = ttg::ConvertLayoutOp::create(builder, op->getLoc(),
                                                        newType, operand.get());
         mapping.map(operand.get(), converted);
@@ -241,24 +223,14 @@ private:
       newResult.setType(oldType.cloneWithEncoding(it->second));
       rewritten[oldResult] = newResult;
     }
+    originalOps.push_back(op);
     return rewritten.lookup(value);
-  }
-
-  static void eraseOriginalSlice(SmallVectorImpl<Operation *> &ops) {
-    while (!ops.empty()) {
-      auto it = llvm::find_if(ops, [](Operation *op) {
-        return llvm::all_of(op->getResults(),
-                            [](Value result) { return result.use_empty(); });
-      });
-      assert(it != ops.end() && "exclusive rematerialization slice has a use");
-      (*it)->erase();
-      ops.erase(it);
-    }
   }
 
   ttg::ConvertLayoutOp root;
   DenseMap<Value, Attribute> layouts;
   DenseMap<Value, Value> rewritten;
+  SmallVector<Operation *> originalOps;
   bool foundLoad = false;
 };
 
@@ -274,7 +246,7 @@ Value convertValueToLayout(OpBuilder &builder, Location loc, Value value,
 
 void convertOpOperandsToLayouts(
     Operation *op, llvm::ArrayRef<Attribute> operandLayouts,
-    SmallVectorImpl<ttg::ConvertLayoutOp> &rematerializationRoots) {
+    SmallVector<ttg::ConvertLayoutOp> &rematerializationRoots) {
   OpBuilder builder(op);
   Location loc = op->getLoc();
   for (auto [operand, layout] :
@@ -325,7 +297,7 @@ DotCGASplit getDotCGASplit(int64_t m, int64_t n, unsigned numCTAs) {
 
 void assignDotCGALayout(
     triton::DotOp dot,
-    SmallVectorImpl<ttg::ConvertLayoutOp> &rematerializationRoots) {
+    SmallVector<ttg::ConvertLayoutOp> &rematerializationRoots) {
   MLIRContext *ctx = dot.getContext();
 
   auto aTy = cast<RankedTensorType>(dot.getA().getType());
@@ -411,26 +383,22 @@ ttg::CGAEncodingAttr getReduceCGALayout(triton::ReduceOp reduce,
 
 void assignReduceCGALayout(
     triton::ReduceOp reduce,
-    SmallVectorImpl<ttg::ConvertLayoutOp> &rematerializationRoots) {
+    SmallVector<ttg::ConvertLayoutOp> &rematerializationRoots) {
   MLIRContext *ctx = reduce.getContext();
   Value src = reduce.getOperand(0);
   auto srcTy = cast<RankedTensorType>(src.getType());
 
-  auto srcLayout = cast<ttg::DistributedEncodingTrait>(srcTy.getEncoding());
-
-  OpBuilder builder(reduce);
-  int threadsPerWarp = ttg::lookupThreadsPerWarp(builder);
-  int numWarps = ttg::lookupNumWarps(reduce);
-
   auto cgaLayout = getReduceCGALayout(reduce, srcTy);
-  auto newSrcLayout = cloneWithCGALayout(srcLayout, srcTy.getShape(), numWarps,
-                                         threadsPerWarp, cgaLayout);
+  auto newSrcLayout = cloneWithCGALayout(srcTy, cgaLayout, reduce);
+  if (!newSrcLayout)
+    return;
 
-  SmallVector<Attribute> operandLayouts(reduce.getNumOperands(), newSrcLayout);
+  SmallVector<Attribute> operandLayouts(reduce.getNumOperands(), *newSrcLayout);
   Attribute resultLayout;
   if (srcTy.getRank() > 1)
-    resultLayout =
-        ttg::SliceEncodingAttr::get(ctx, reduce.getAxis(), newSrcLayout);
+    resultLayout = ttg::SliceEncodingAttr::get(
+        ctx, reduce.getAxis(),
+        cast<ttg::DistributedEncodingTrait>(*newSrcLayout));
   SmallVector<Attribute> resultLayouts(reduce.getNumResults(), resultLayout);
 
   convertOpOperandsToLayouts(reduce.getOperation(), operandLayouts,
@@ -456,7 +424,7 @@ struct AssignCGALayoutsPass
     });
 
     for (ttg::ConvertLayoutOp convert : rematerializationRoots)
-      (void)CGARematerialization(convert).run();
+      CGARematerialization(convert).run();
   }
 };
 
