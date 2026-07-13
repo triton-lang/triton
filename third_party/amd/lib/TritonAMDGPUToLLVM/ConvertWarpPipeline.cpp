@@ -480,17 +480,12 @@ public:
 
     // Emit a scheduling barrier after every memory op in the stage so the
     // backend scheduler keeps them in program order.
-    {
-      SmallVector<Operation *> memOps;
-      for (Operation &op : *block)
-        if (readsOrWritesMemory(&op))
-          memOps.push_back(&op);
-      for (Operation *op : memOps) {
-        rewriter.setInsertionPointAfter(op);
-        ROCDL::SchedBarrier::create(rewriter, op->getLoc(),
+    for (Operation &op : *block)
+      if (readsOrWritesMemory(&op)) {
+        rewriter.setInsertionPointAfter(&op);
+        ROCDL::SchedBarrier::create(rewriter, op.getLoc(),
                                     ROCDL::SchedGroupMask::non_mem_non_sideeffect);
       }
-    }
 
     Operation *terminator = block->getTerminator();
     ValueRange results = terminator->getOperands();
