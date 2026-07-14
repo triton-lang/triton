@@ -778,11 +778,10 @@ LogicalResult AuxDataMap::getBuffersAndBarriers(
   barrierRegions = analysis->getAllUsedBufferRegions(
       BufferRegionAnalysis::RegionType::BARRIER);
 
-  // Compiler-owned scratch buffers, such as convert_layout's temporary shared
-  // memory, have no SSA memdesc for BufferRegionAnalysis to discover. Collect
-  // their target-provided static regions from the same effects ConSan will
-  // instrument below. Merging them here also makes overlap with explicit
-  // buffers visible to the alias matrix.
+  // Compiler-owned operation scratch has no SSA memdesc for
+  // BufferRegionAnalysis to discover. Collect its allocator-provided static
+  // regions from the same effects ConSan will instrument below. Merging them
+  // here also makes overlap with explicit buffers visible to the alias matrix.
   if (hooks) {
     WalkResult result = module.walk([&](Operation *op) -> WalkResult {
       auto info = hooks->getMemEffectsOpInfo(op);

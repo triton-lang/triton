@@ -17,7 +17,10 @@ void attachAllocationSizeAndOffsetAttr(ModuleOp mod,
       if (oBufferId != Allocation::InvalidBufferId) {
         int offset = funcAllocation->getOffset(oBufferId);
         op->setAttr("allocation.offset", IntegerAttr::get(i32Ty, offset));
-        if (isa<ConvertLayoutOp, mlir::triton::ReduceOp>(op)) {
+        // Function scratch is scheduler state rather than memory accessed by
+        // the function op itself. Virtual call frames are not Scratch buffers.
+        if (funcAllocation->isScratchBuffer(oBufferId) &&
+            !isa<FunctionOpInterface>(op)) {
           size_t size = funcAllocation->getAllocatedSize(oBufferId);
           op->setAttr("allocation.size", IntegerAttr::get(i32Ty, size));
         }

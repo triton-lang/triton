@@ -100,17 +100,24 @@ can be represented directly. Scratch state is zero-initialized once before the
 instrumented body runs, and the initialization is followed by a CTA or cluster
 barrier before any instrumented operation can use it.
 
-Compiler-owned shared-memory scratch does not always have an SSA memdesc for
-BufferRegion analysis to discover. ConSan additionally tracks the allocator's
-static byte interval for `ttg.convert_layout` operations present when ConSan
-runs after shared-memory allocation. Reduction lowering creates additional
-`ttg.convert_layout` operations after ConSan, so ConSan tracks their already
-allocated interval as an effect of the parent `tt.reduce`. Each operation is
-modeled as one synchronous generic-proxy write over its complete interval: it
-must wait for earlier asynchronous readers or writers, and its lowering leaves
-no pending asynchronous scratch access when the operation returns. Conversions
-forced to use warp shuffles are excluded because their reserved allocator slot
-is not accessed by lowering.
+Compiler-owned shared-memory scratch does not have an SSA memdesc for
+BufferRegion analysis to discover. Allocation therefore publishes the static
+byte interval of every operation-local scratch buffer, and ConSan models it as
+one synchronous generic-proxy write over the complete interval. This covers
+scratch used by layout conversions, reductions, scans, gathers, histograms,
+atomic result broadcasts, tensor-map creation, warp-specialize captures, and
+backend-specific operations. Virtual call frames and function-owned scheduler
+state are not operation effects and publish no size metadata.
+
+Reduction lowering creates additional `ttg.convert_layout` operations after
+ConSan, so the parent `tt.reduce` carries the effect for their already allocated
+interval. A scratch effect must wait for earlier asynchronous readers or
+writers, and its lowering leaves no pending asynchronous access when the
+operation returns. Conversions forced to use warp shuffles allocate no scratch;
+ConSan also ignores stale scratch metadata on such conversions from older IR.
+Cross-CTA convert and reduce effects retain their operation-specific routing.
+Scratch-backed atomic broadcasts are predicated to the producer CTA and routed
+to every CTA that consumes the replicated result.
 
 The exact auxiliary data layout is intentionally documented next to the
 implementation in `AuxDataMap` in
@@ -317,9 +324,10 @@ The common hook implementation covers these TritonGPU operations:
   and atomic scatter RMW conservatively cover their full destination
   descriptors because their indices are runtime values.
 - `ttg.local_alloc` with a source: barrier-tracked shared-memory write.
-- `ttg.convert_layout` and scratch-using `tt.reduce`: allocator-provided shared
-  scratch is modeled as a synchronous generic-proxy write over its allocated
-  byte interval.
+- Any operation with allocator-provided operation-local shared scratch: a
+  synchronous generic-proxy write over its allocated byte interval. Forced
+  warp-shuffle conversions are excluded because they do not touch scratch;
+  convert, reduce, and scratch-backed atomic broadcasts use CTA-aware routing.
 
 These shared-memory effects are generic-proxy accesses for the proxy-ordering
 model.

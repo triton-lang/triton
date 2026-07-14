@@ -1,8 +1,6 @@
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 
 #include "mlir/IR/BuiltinTypes.h"
-#include "triton/Analysis/Utility.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
@@ -26,17 +24,12 @@ namespace tti = mlir::triton::instrument;
 bool hasSharedMemoryBuffers(ModuleOp mod) {
   bool result = false;
   mod.walk([&](ttg::LocalAllocOp op) { result |= op.isSharedMemoryAlloc(); });
-  mod.walk([&](ttg::ConvertLayoutOp op) {
-    auto func = op->getParentOfType<mlir::triton::FuncOp>();
-    bool forceWarpShuffle =
-        func && func->hasAttrOfType<UnitAttr>("always_use_warp_shuffle") &&
-        cvtCanUseWarpShuffle(op.getSrc().getType(), op.getType());
-    result |= !forceWarpShuffle &&
-              cvtNeedsSharedMemory(op.getSrc().getType(), op.getType());
-  });
-  mod.walk([&](mlir::triton::ReduceOp op) {
-    result |= ReduceOpHelper(op).getScratchSizeInBytes() != 0;
-  });
+  // ConSan always passes its lock pointer to warp-specialized regions. That
+  // capture is itself operation-local shared scratch, which makes shared
+  // memory active and requires the read/write visibility captures too. Treat
+  // every warp-specialized kernel as the stable fixed point (three captures),
+  // independent of which user or compiler scratch operations it contains.
+  mod.walk([&](ttg::WarpSpecializeOp) { result = true; });
   return result;
 }
 

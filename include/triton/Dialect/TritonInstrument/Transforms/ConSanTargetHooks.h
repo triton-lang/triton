@@ -137,6 +137,14 @@ public:
   virtual Value getIssuerCTAPred(ImplicitLocOpBuilder &b,
                                  Operation *op) const = 0;
 
+  // For scratch-backed operations whose result is replicated across CTAs,
+  // returns the CTA-id bits that identify peers sharing one scratch result.
+  // The target hook also predicates instrumentation to the producer CTA.
+  virtual std::optional<uint16_t>
+  getScratchCTABroadcastMask(Operation *op) const {
+    return std::nullopt;
+  }
+
   virtual FailureOr<std::optional<MemEffectsOpInfo>>
   getMemEffectsOpInfo(Operation *op) const {
     namespace ttg = triton::gpu;
@@ -187,81 +195,62 @@ public:
       }
     }
 
-    auto addStaticSharedScratchEffect =
-        [&](Operation *scratchOp, StringRef operationName) -> LogicalResult {
-      auto offset = scratchOp->getAttrOfType<IntegerAttr>("allocation.offset");
-      auto size = scratchOp->getAttrOfType<IntegerAttr>("allocation.size");
-      if (!offset && !size) {
-        scratchOp->emitError() << "shared-memory " << operationName
-                               << " is missing scratch allocation metadata";
-        return failure();
-      }
-      if (bool(offset) != bool(size)) {
-        scratchOp->emitError()
-            << operationName << " scratch allocation metadata must include "
-            << "both allocation.offset and allocation.size";
-        return failure();
-      }
+    // allocation.size is published only for operation-local compiler scratch,
+    // making it the generic marker for an SSA-less shared-memory effect.
+    // allocation.offset alone is also used by explicit buffers, virtual call
+    // frames, function scheduler state, and late synthetic conversions.
+    if (auto cvtOp = dyn_cast<ttg::ConvertLayoutOp>(op);
+        cvtOp && cvtUsesForcedWarpShuffle(cvtOp)) {
+      // Accept metadata produced by older pipelines that reserved scratch even
+      // though lowering is forced to use warp shuffles and never touches it.
+      return info;
+    }
 
-      int64_t offsetValue = offset.getInt();
-      int64_t sizeValue = size.getInt();
-      constexpr uint64_t maxSharedMemorySize =
-          uint64_t{kSharedMemoryObjectMask} + 1;
-      bool isValid = offsetValue >= 0 && sizeValue > 0;
-      if (isValid) {
-        uint64_t unsignedOffset = static_cast<uint64_t>(offsetValue);
-        uint64_t unsignedSize = static_cast<uint64_t>(sizeValue);
-        isValid = unsignedOffset <= maxSharedMemorySize &&
-                  unsignedSize <= maxSharedMemorySize - unsignedOffset;
-      }
-      if (!isValid) {
-        scratchOp->emitError()
-            << "invalid " << operationName
-            << " scratch allocation metadata: offset " << offsetValue
-            << ", size " << sizeValue
-            << "; the interval must be non-empty and fit in the 24-bit "
-               "shared-memory address space";
-        return failure();
-      }
+    Attribute sizeAttr = op->getAttr("allocation.size");
+    if (!sizeAttr)
+      return info;
+    auto size = dyn_cast<IntegerAttr>(sizeAttr);
+    auto offset = op->getAttrOfType<IntegerAttr>("allocation.offset");
+    if (!size || !offset) {
+      op->emitError()
+          << "compiler scratch metadata requires integer allocation.offset "
+             "and allocation.size attributes";
+      return failure();
+    }
 
+    int64_t offsetValue = offset.getInt();
+    int64_t sizeValue = size.getInt();
+    constexpr uint64_t maxSharedMemorySize =
+        uint64_t{kSharedMemoryObjectMask} + 1;
+    bool isValid = offsetValue >= 0 && sizeValue > 0;
+    if (isValid) {
+      uint64_t unsignedOffset = static_cast<uint64_t>(offsetValue);
+      uint64_t unsignedSize = static_cast<uint64_t>(sizeValue);
+      isValid = unsignedOffset <= maxSharedMemorySize &&
+                unsignedSize <= maxSharedMemorySize - unsignedOffset;
+    }
+    if (!isValid) {
+      op->emitError() << "invalid compiler scratch allocation metadata: offset "
+                      << offsetValue << ", size " << sizeValue
+                      << "; the interval must be non-empty and fit in the "
+                         "24-bit shared-memory address space";
+      return failure();
+    }
+
+    if (!info)
       info.emplace();
+    if (info->trackingKind == MemEffectsOpInfo::TrackingKind::None)
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-      info->operandEffects.emplace_back(
-          MemEffectsOpInfo::Effects::Write,
-          BufferRegion{static_cast<uint32_t>(offsetValue),
-                       static_cast<uint32_t>(sizeValue)},
-          "Scratch");
-      return success();
-    };
-
-    if (auto cvtOp = dyn_cast<ttg::ConvertLayoutOp>(op)) {
-      auto func = cvtOp->getParentOfType<mlir::triton::FuncOp>();
-      bool forceWarpShuffle =
-          func && func->hasAttrOfType<UnitAttr>("always_use_warp_shuffle") &&
-          cvtCanUseWarpShuffle(cvtOp.getSrc().getType(), cvtOp.getType());
-      // Allocation analysis may reserve an otherwise-needed scratch slot for
-      // conversions that lowering is explicitly forced to implement with
-      // warp shuffles.
-      if (forceWarpShuffle)
-        return info;
-
-      bool needsSharedMemory =
-          cvtNeedsSharedMemory(cvtOp.getSrc().getType(), cvtOp.getType());
-      if (!needsSharedMemory)
-        return info;
-      if (failed(addStaticSharedScratchEffect(cvtOp, "convert_layout")))
-        return failure();
+    if (info->trackingKind != MemEffectsOpInfo::TrackingKind::Barrier) {
+      op->emitError("compiler scratch cannot be combined with asynchronous "
+                    "operation effect tracking");
+      return failure();
     }
-    if (auto reduceOp = dyn_cast<mlir::triton::ReduceOp>(op)) {
-      bool hasAllocationMetadata = reduceOp->hasAttr("allocation.offset") ||
-                                   reduceOp->hasAttr("allocation.size");
-      bool needsSharedMemory =
-          hasAllocationMetadata ||
-          ReduceOpHelper(reduceOp).getScratchSizeInBytes() != 0;
-      if (needsSharedMemory &&
-          failed(addStaticSharedScratchEffect(reduceOp, "reduce")))
-        return failure();
-    }
+    info->operandEffects.emplace_back(
+        MemEffectsOpInfo::Effects::Write,
+        BufferRegion{static_cast<uint32_t>(offsetValue),
+                     static_cast<uint32_t>(sizeValue)},
+        "Scratch");
     return info;
   }
 

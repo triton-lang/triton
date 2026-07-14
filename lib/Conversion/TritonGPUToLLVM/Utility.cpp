@@ -255,8 +255,13 @@ bool cvtAlwaysUseWarpShuffle(ConvertLayoutOp cvt) {
   // target function dialect (for example LLVM::LLVMFuncOp), so do not assume
   // that the enclosing operation is still a tt.func.
   auto func = cvt->getParentOfType<FunctionOpInterface>();
-  return func && func->hasAttrOfType<UnitAttr>("always_use_warp_shuffle") &&
-         cvtCanUseWarpShuffle(cvt.getSrc().getType(), cvt.getType());
+  if (!func || !func->hasAttrOfType<UnitAttr>("always_use_warp_shuffle"))
+    return false;
+  if (cvtCanUseWarpShuffle(cvt.getSrc().getType(), cvt.getType()))
+    return true;
+  assert(cvt->getAttrOfType<IntegerAttr>("allocation.offset") &&
+         "forced non-warp-local conversion requires shared-memory fallback");
+  return false;
 }
 
 Value maybeAnd(OpBuilder &builder, Location loc, Value a, Value b) {

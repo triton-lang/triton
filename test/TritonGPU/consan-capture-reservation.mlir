@@ -4,9 +4,10 @@
 // RUN: not triton-opt %t/cross-cta-affine.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/cross-cta-affine.mlir --check-prefix=AFFINE
 // RUN: triton-opt %t/convert-only.mlir -tritoninstrument-prepare-consan-captures="target=nvidia" | FileCheck %t/convert-only.mlir --check-prefix=CONVERT
 // RUN: triton-opt %t/reduce-only.mlir -tritoninstrument-prepare-consan-captures="target=nvidia" | FileCheck %t/reduce-only.mlir --check-prefix=REDUCE
-// RUN: not triton-opt %t/convert-missing-metadata.mlir -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/convert-missing-metadata.mlir --check-prefix=CVT-MISSING
-// RUN: not triton-opt %t/convert-partial-metadata.mlir -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/convert-partial-metadata.mlir --check-prefix=CVT-PARTIAL
-// RUN: not triton-opt %t/convert-invalid-metadata.mlir -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/convert-invalid-metadata.mlir --check-prefix=CVT-INVALID
+// RUN: triton-opt %t/empty-ws.mlir -tritoninstrument-prepare-consan-captures="target=nvidia" | FileCheck %t/empty-ws.mlir --check-prefix=EMPTY
+// RUN: triton-opt %t/empty-ws.mlir -tritoninstrument-prepare-consan-captures="target=nvidia" --allocate-shared-memory-nv -tritoninstrument-concurrency-sanitizer | FileCheck %t/empty-ws.mlir --check-prefix=EMPTY-INTEGRATION
+// RUN: not triton-opt %t/scratch-missing-offset.mlir -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/scratch-missing-offset.mlir --check-prefix=SCRATCH-MISSING-OFFSET
+// RUN: not triton-opt %t/scratch-invalid.mlir -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/scratch-invalid.mlir --check-prefix=SCRATCH-INVALID
 
 //--- missing.mlir
 
@@ -101,43 +102,48 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 }
 
-//--- convert-missing-metadata.mlir
+//--- empty-ws.mlir
 
-#src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-#dst_parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
-#dst = #ttg.slice<{dim = 1, parent = #dst_parent}>
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 512 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
-  tt.func public @convert_missing_metadata(%arg0: tensor<128xi32, #src>) {
-    // CVT-MISSING: error: shared-memory convert_layout is missing scratch allocation metadata
-    %0 = ttg.convert_layout %arg0 : tensor<128xi32, #src> -> tensor<128xi32, #dst>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32, ttg.shared = 0 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
+  tt.func public @empty_ws_reservation() {
+    // The lock capture makes WarpSpecialize scratch a shared-memory effect,
+    // so the stable reservation is lock + write/read visibility pointers.
+    // EMPTY: ttg.warp_specialize() attributes {consan.extra_capture_bytes = 24 : i32}
+    // EMPTY-INTEGRATION: ttg.warp_specialize({{.*}}allocation.size = 24 : i32
+    ttg.warp_specialize()
+    default {
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      ttg.warp_return
+    } : () -> ()
     tt.return
   }
 }
 
-//--- convert-partial-metadata.mlir
+//--- scratch-missing-offset.mlir
 
 #src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #dst_parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #dst = #ttg.slice<{dim = 1, parent = #dst_parent}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 512 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
-  tt.func public @convert_partial_metadata(%arg0: tensor<128xi32, #src>) {
-    // CVT-PARTIAL: error: convert_layout scratch allocation metadata must include both allocation.offset and allocation.size
-    %0 = ttg.convert_layout %arg0 {allocation.offset = 0 : i32} : tensor<128xi32, #src> -> tensor<128xi32, #dst>
+  tt.func public @scratch_missing_offset(%arg0: tensor<128xi32, #src>) {
+    // SCRATCH-MISSING-OFFSET: error: compiler scratch metadata requires integer allocation.offset and allocation.size attributes
+    %0 = ttg.convert_layout %arg0 {allocation.size = 512 : i32} : tensor<128xi32, #src> -> tensor<128xi32, #dst>
     tt.return
   }
 }
 
-//--- convert-invalid-metadata.mlir
+//--- scratch-invalid.mlir
 
 #src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #dst_parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #dst = #ttg.slice<{dim = 1, parent = #dst_parent}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 512 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
-  tt.func public @convert_invalid_metadata(%arg0: tensor<128xi32, #src>) {
-    // CVT-INVALID: error: invalid convert_layout scratch allocation metadata: offset 16777215, size 2
+  tt.func public @scratch_invalid(%arg0: tensor<128xi32, #src>) {
+    // SCRATCH-INVALID: error: invalid compiler scratch allocation metadata: offset 16777215, size 2
     %0 = ttg.convert_layout %arg0 {allocation.offset = 16777215 : i32, allocation.size = 2 : i32} : tensor<128xi32, #src> -> tensor<128xi32, #dst>
     tt.return
   }

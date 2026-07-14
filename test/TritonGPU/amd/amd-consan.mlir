@@ -1025,3 +1025,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     tt.return
   }
 }
+
+// -----
+
+#buffer_atomic_broadcast = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 64 : i32, ttg.target = "hip:gfx1250", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @buffer_atomic_shared_scratch
+  tt.func public @buffer_atomic_shared_scratch(
+      %base: !tt.ptr<i32>,
+      %offsets: tensor<16xi32, #buffer_atomic_broadcast>,
+      %values: tensor<16xi32, #buffer_atomic_broadcast>,
+      %out: tensor<16x!tt.ptr<i32>, #buffer_atomic_broadcast>) {
+    // CHECK-DAG: tti.experimental_buffer_descriptors [0], [64], shared_mem
+    // CHECK: %[[BUFFER_ATOMIC_SCRATCH:.*]] = tti.experimental_shared_memory_offset_to_i32 0
+    // CHECK: %[[BUFFER_ATOMIC_LENGTH:.*]] = arith.constant 64 : i32
+    // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}(%[[BUFFER_ATOMIC_SCRATCH]], %[[BUFFER_ATOMIC_LENGTH]]
+    // CHECK: amdg.buffer_atomic_rmw
+    %old = amdg.buffer_atomic_rmw add, acq_rel, gpu, %values, %base[%offsets] {
+        allocation.offset = 0 : i32, allocation.size = 64 : i32}
+        : tensor<16xi32, #buffer_atomic_broadcast>
+    tt.store %out, %old : tensor<16x!tt.ptr<i32>, #buffer_atomic_broadcast>
+    tt.return
+  }
+}

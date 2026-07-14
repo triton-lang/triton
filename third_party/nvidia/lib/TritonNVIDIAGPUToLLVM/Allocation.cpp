@@ -70,6 +70,8 @@ std::function<unsigned(Operation *)>
 getNvidiaAllocationAnalysisScratchSizeFn(TargetInfoBase &targetInfo) {
   auto allocation = [&targetInfo](Operation *op) -> unsigned {
     if (auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
+      if (cvtUsesForcedWarpShuffle(cvtOp))
+        return 0;
       auto srcTy = cvtOp.getSrc().getType();
       auto dstTy = cvtOp.getType();
       if (!cvtNeedsSharedMemory(srcTy, dstTy))

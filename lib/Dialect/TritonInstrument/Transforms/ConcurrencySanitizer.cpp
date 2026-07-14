@@ -507,7 +507,8 @@ Value getLocalLoadStoreRecipientCTAs(ImplicitLocOpBuilder &b,
       b, getLocalLoadStoreConversion(memDescTy, regTy));
 }
 
-Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
+Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op,
+                       const ConSanTargetHooks *hooks) {
   if (auto convert = dyn_cast<ttg::ConvertLayoutOp>(op)) {
     // Convert-layout scratch has the source layout's CTA ownership. Stores are
     // therefore local to the issuer, while loads may read the source scratch
@@ -552,11 +553,21 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
                                            scatter.getAxis()));
   }
   if (auto atomic = dyn_cast<ttg::LocalAtomicScatterRMWOp>(op)) {
-    return getLocalMemoryRecipientCTAs(
+    Value recipients = getLocalMemoryRecipientCTAs(
         b, getLocalGatherScatterConversion(atomic.getDst().getType(),
                                            atomic.getValues().getType(),
                                            atomic.getAxis()));
+    if (auto mask = hooks->getScratchCTABroadcastMask(op)) {
+      Value scratchRecipients =
+          *mask ? getRecipientCTAsForBroadcastMasks(b, {*mask})
+                : currentCTAMask(b);
+      recipients = arith::OrIOp::create(b, recipients, scratchRecipients);
+    }
+    return recipients;
   }
+  if (auto mask = hooks->getScratchCTABroadcastMask(op))
+    return *mask ? getRecipientCTAsForBroadcastMasks(b, {*mask})
+                 : currentCTAMask(b);
   if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     if (tmaLoad.getMulticast())
       return getMulticastRecipientCTAs(b, tmaLoad.getResult());
@@ -876,7 +887,7 @@ private:
     Value pred = opInfo->pred;
     Value issuerCTAPred = hooks->getIssuerCTAPred(b, op);
     pred = tti::maybeAnd(b, pred, issuerCTAPred);
-    Value effectCTAs = getMemEffectCTAs(b, op);
+    Value effectCTAs = getMemEffectCTAs(b, op, hooks);
     struct MaterializedEffect {
       tti::MaterializedBufferRegion buffer;
       MemType memType;

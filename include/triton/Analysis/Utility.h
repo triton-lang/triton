@@ -272,8 +272,14 @@ bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy);
 bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
 
 // The conversion does not move values across warps or CTAs, so a lowering may
-// choose warp shuffles even when the ordinary cost model prefers shared memory.
+// choose warp shuffles even when the ordinary cost policy prefers shared
+// memory. This is a feasibility predicate, not that policy decision.
 bool cvtCanUseWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
+
+// The enclosing function requests warp shuffles and the conversion topology
+// permits them. Unlike cvtAlwaysUseWarpShuffle, this predicate is safe to call
+// before shared-memory allocation has attached fallback metadata.
+bool cvtUsesForcedWarpShuffle(triton::gpu::ConvertLayoutOp cvt);
 
 // Conversion from `srcTy` to `dstTy` involves data exchange across threads,
 // warps, and possibly blocks.

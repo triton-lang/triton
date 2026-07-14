@@ -165,13 +165,15 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #local_atomic_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
 #local_atomic_tma_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 32, CGALayout = [[0, 1]]}>
 #local_atomic_smem = #ttg.shared_memory
-#local_atomic_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1]]}>
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 1024 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+#local_atomic_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 4], order = [1, 0], CGALayout = [[0, 1]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, ttg.shared = 1536 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32} {
   // CHECK-LABEL: @local_atomic_scatter_rmw_effects
-  tt.func public @local_atomic_scatter_rmw_effects(%out: !tt.tensordesc<8x32xi32, #local_atomic_tma_shared>) {
+  tt.func public @local_atomic_scatter_rmw_effects(
+      %out: !tt.tensordesc<8x32xi32, #local_atomic_tma_shared>,
+      %result: tensor<8x32x!tt.ptr<i32>, #local_atomic_blocked>) {
     // The atomic is the allocation's only user, so this descriptor proves
     // BufferRegion discovers its full destination.
-    // CHECK-DAG: tti.experimental_buffer_descriptors [0, 512], [512, 512], shared_mem : tensor<2xi64
+    // CHECK-DAG: tti.experimental_buffer_descriptors [0, 512, 1024, 0], [512, 512, 512, 0], shared_mem : tensor<4xi64
     %c0 = arith.constant 0 : i32
     %indices = arith.constant dense<0> : tensor<8x32xi32, #local_atomic_blocked>
     %values = arith.constant dense<1> : tensor<8x32xi32, #local_atomic_blocked>
@@ -180,7 +182,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %proxy = ttg.local_alloc {allocation.offset = 512 : i32} : () -> !ttg.memdesc<8x32xi32, #local_atomic_tma_shared, #local_atomic_smem, mutable>
 
     // Runtime indices along the sharded axis can target either CTA row.
-    // CHECK: %[[ATOMIC_CTAS:.*]] = arith.constant 3 : i32
+    // The destination spans the cluster, while the non-broadcast result
+    // scratch is local to the issuer. The combined effect must retain both.
+    // CHECK: %[[ATOMIC_DST_CTAS:.*]] = arith.constant 3 : i32
+    // CHECK: %[[ATOMIC_CURRENT_CTA:.*]] = arith.shli {{.*}} : i32
+    // CHECK: %[[ATOMIC_CTAS:.*]] = arith.ori %[[ATOMIC_DST_CTAS]], %[[ATOMIC_CURRENT_CTA]] : i32
     // CHECK: %[[ATOMIC_BUF:.*]] = tti.experimental_memdesc_to_i32 %[[ATOMIC_DST]]
     // CHECK: %[[ATOMIC_BYTES:.*]] = arith.constant 512 : i32
     // CHECK: tt.call @__triton_consan_set_proxy_access{{.*}}(%[[ATOMIC_BUF]], %[[ATOMIC_BYTES]], {{.*}}%[[ATOMIC_CTAS]])
@@ -189,9 +195,68 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_clear_read_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
     // CHECK: ttg.local_atomic_scatter_rmw
-    %old = ttg.local_atomic_scatter_rmw add, %dst[%indices], %values {axis = 1 : i32} : (!ttg.memdesc<8x32xi32, #local_atomic_shared, #local_atomic_smem, mutable>, tensor<8x32xi32, #local_atomic_blocked>, tensor<8x32xi32, #local_atomic_blocked>) -> tensor<8x32xi32, #local_atomic_blocked>
+    %old = ttg.local_atomic_scatter_rmw add, %dst[%indices], %values {allocation.offset = 1024 : i32, allocation.size = 512 : i32, axis = 1 : i32} : (!ttg.memdesc<8x32xi32, #local_atomic_shared, #local_atomic_smem, mutable>, tensor<8x32xi32, #local_atomic_blocked>, tensor<8x32xi32, #local_atomic_blocked>) -> tensor<8x32xi32, #local_atomic_blocked>
+    tt.store %result, %old : tensor<8x32x!tt.ptr<i32>, #local_atomic_blocked>
     // Enable proxy tracking without giving the atomic destination another user.
     ttng.async_tma_copy_local_to_global %out[%c0, %c0] %proxy : !tt.tensordesc<8x32xi32, #local_atomic_tma_shared>, !ttg.memdesc<8x32xi32, #local_atomic_tma_shared, #local_atomic_smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#append_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#append_smem = #ttg.shared_memory
+#append_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 132 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @local_atomic_preserves_destination_effect
+  tt.func public @local_atomic_preserves_destination_effect(
+      %indices: tensor<1xi32, #append_blocked>,
+      %values: tensor<1xi32, #append_blocked>,
+      %out: tensor<1x!tt.ptr<i32>, #append_blocked>) {
+    // CHECK-DAG: tti.experimental_buffer_descriptors [0, 128], [4, 4], shared_mem
+    // CHECK: %[[APPEND_DST:.*]] = ttg.local_alloc {allocation.offset = 0 : i32}
+    %dst = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<1xi32, #append_shared, #append_smem, mutable>
+
+    // The destination memdesc and compiler scratch must both survive effect
+    // construction for the same operation.
+    // CHECK: %[[APPEND_DST_I32:.*]] = tti.experimental_memdesc_to_i32 %[[APPEND_DST]]
+    // CHECK: %[[APPEND_SCRATCH:.*]] = tti.experimental_shared_memory_offset_to_i32 128
+    // CHECK: ttg.local_atomic_scatter_rmw
+    %old = ttg.local_atomic_scatter_rmw add, %dst[%indices], %values {
+        allocation.offset = 128 : i32, allocation.size = 4 : i32, axis = 0 : i32}
+        : (!ttg.memdesc<1xi32, #append_shared, #append_smem, mutable>,
+           tensor<1xi32, #append_blocked>, tensor<1xi32, #append_blocked>)
+        -> tensor<1xi32, #append_blocked>
+    tt.store %out, %old : tensor<1x!tt.ptr<i32>, #append_blocked>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 4 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @scalar_atomic_scratch_broadcast
+  tt.func public @scalar_atomic_scratch_broadcast(
+      %ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>) {
+    %one = arith.constant 1 : i32
+    // Only CTA 0 produces the scalar result; both CTAs consume its scratch.
+    // CHECK: tti.experimental_lock_acquire
+    // CHECK: %[[SCALAR_CTA:.*]] = tti.experimental_cluster_cta_id
+    // CHECK: %[[SCALAR_IS_PRODUCER:.*]] = arith.cmpi eq, {{.*}} : i32
+    // CHECK: %[[SCALAR_ALL_CTAS:.*]] = arith.constant 3 : i32
+    // CHECK: %[[SCALAR_SHIFTED_RECIPIENTS:.*]] = arith.shli %[[SCALAR_ALL_CTAS]], {{.*}} : i32
+    // CHECK: %[[SCALAR_RECIPIENTS:.*]] = arith.ori {{.*}}, %[[SCALAR_SHIFTED_RECIPIENTS]] : i32
+    // CHECK: %[[SCALAR_SCRATCH:.*]] = tti.experimental_shared_memory_offset_to_i32 0
+    // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}(%[[SCALAR_SCRATCH]], {{.*}}, {{.*}}%[[SCALAR_IS_PRODUCER]], {{.*}}%[[SCALAR_RECIPIENTS]])
+    // CHECK: tt.atomic_rmw
+    %old = tt.atomic_rmw add, relaxed, gpu, %ptr, %one {
+        allocation.offset = 0 : i32, allocation.size = 4 : i32}
+        : (!tt.ptr<i32>, i32) -> i32
+    tt.store %out, %old : !tt.ptr<i32>
+    // Keep the NVIDIA dialect loaded in this standalone split module.
+    ttng.cluster_barrier {relaxed = true}
     tt.return
   }
 }
