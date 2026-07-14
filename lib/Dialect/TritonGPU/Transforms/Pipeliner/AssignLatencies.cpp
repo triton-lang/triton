@@ -27,31 +27,47 @@ namespace {
 
 bool hasLoopCarriedAccumulatorCycle(ttng::MMAv5OpInterface mma,
                                     scf::ForOp forOp) {
-  auto start = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
-  if (!start)
+  Value start = mma.getAccDep();
+  Value target = mma.getToken();
+  if (!start || !target)
     return false;
 
-  SmallVector<ttng::TMEMAllocOp> worklist = {start};
-  DenseSet<Operation *> seen = {start};
+  // Follow the accumulator dependency backwards, mapping loop block arguments
+  // to their yielded values. A cross-MMA cycle is found when the recurrence
+  // returns to this MMA through another MMA.
+  SmallVector<std::pair<Value, bool>> worklist = {{start, false}};
+  // Following all operands may reach the same value along paths that differ in
+  // whether another MMA was crossed. Track those states separately so that a
+  // visit before crossing another MMA does not suppress a visit after crossing
+  // one.
+  DenseSet<Value> seenBeforeAnotherMMA;
+  DenseSet<Value> seenAfterAnotherMMA;
   while (!worklist.empty()) {
-    ttng::TMEMAllocOp current = worklist.pop_back_val();
-    for (Operation *user : current->getUsers()) {
-      auto load = dyn_cast<ttng::TMEMLoadOp>(user);
-      if (!load || !forOp->isAncestor(load->getParentOp()))
-        continue;
-      for (Operation *loadUser : load->getUsers()) {
-        auto store = dyn_cast<ttng::TMEMStoreOp>(loadUser);
-        if (!store || !forOp->isAncestor(store->getParentOp()))
-          continue;
-        auto dst = store.getDst().getDefiningOp<ttng::TMEMAllocOp>();
-        if (!dst || dst == current)
-          continue;
-        if (dst == start)
-          return true;
-        if (seen.insert(dst).second)
-          worklist.push_back(dst);
-      }
+    auto [current, crossedAnotherMMA] = worklist.pop_back_val();
+    DenseSet<Value> &seen =
+        crossedAnotherMMA ? seenAfterAnotherMMA : seenBeforeAnotherMMA;
+    if (!seen.insert(current).second)
+      continue;
+    if (current == target) {
+      if (crossedAnotherMMA)
+        return true;
+      continue;
     }
+
+    if (auto arg = dyn_cast<BlockArgument>(current)) {
+      if (arg.getOwner() == forOp.getBody() && arg.getArgNumber() > 0)
+        worklist.emplace_back(forOp.getYieldedValues()[arg.getArgNumber() - 1],
+                              crossedAnotherMMA);
+      continue;
+    }
+
+    Operation *def = current.getDefiningOp();
+    if (!def || !forOp->isAncestor(def))
+      continue;
+    crossedAnotherMMA |=
+        isa<ttng::MMAv5OpInterface>(def) && def != mma.getOperation();
+    for (Value operand : getNestedOperands(def))
+      worklist.emplace_back(operand, crossedAnotherMMA);
   }
   return false;
 }
