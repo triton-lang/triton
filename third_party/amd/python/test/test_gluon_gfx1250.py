@@ -4658,6 +4658,8 @@ def async_load_store_roundtrip_kernel(a_ptr, b_ptr, BLOCK: ttgl.constexpr, loadC
     offs = pid * BLOCK + ttgl.arange(0, BLOCK, layout=BLOCKED_LAYOUT)
     buffer = ttgl.allocate_shared_memory(ttgl.float16, shape=[BLOCK], layout=SHARED_LAYOUT)
     ttgl.amd.gfx1250.async_copy.global_to_shared(buffer, a_ptr + offs, cache_modifier=loadCM)
+    ttgl.amd.gfx1250.async_copy.commit_group()
+    ttgl.amd.gfx1250.async_copy.wait_group(0)
     ttgl.amd.gfx1250.async_copy.shared_to_global(b_ptr + offs, buffer, cache_modifier=storeCM)
 
 
@@ -4714,8 +4716,8 @@ def test_cache_modifier(loadCM, storeCM, test_kernel):
                 assert "scope" not in line and "th" not in line
             if storeCM == ".cg":
                 assert "scope:SCOPE_DEV" in line and "th" not in line
-            if storeCM == "cs":
-                assert "scope" not in line and "th:TH_LOAD_NT" in line
+            if storeCM == ".cs":
+                assert "scope" not in line and "th:TH_STORE_NT" in line
             if storeCM == ".wt":
                 assert "scope:SCOPE_SYS" in line and "th:TH_STORE_BYPASS" in line
 
