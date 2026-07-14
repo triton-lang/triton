@@ -91,15 +91,15 @@ Attribute cloneWithCGALayout(RankedTensorType tensorTy,
 // rejected.
 class CGARematerialization {
 public:
-  explicit CGARematerialization(ttg::ConvertLayoutOp root) : root(root) {}
+  CGARematerialization(OpOperand &root, Attribute desiredEncoding)
+      : root(root), desiredEncoding(desiredEncoding) {}
 
   LogicalResult run() {
-    Attribute desiredEncoding = root.getType().getEncoding();
-    if (failed(plan(root.getSrc(), desiredEncoding)) ||
-        !foundLoad || !hasExclusiveUses())
+    if (failed(plan(root.get(), desiredEncoding)) || !foundLoad ||
+        !hasExclusiveUses())
       return failure();
 
-    root.getSrcMutable().assign(rewrite(root.getSrc()));
+    root.set(rewrite(root.get()));
     for (Operation *op : llvm::reverse(originalOps))
       op->erase();
     return success();
@@ -167,7 +167,7 @@ private:
     for (auto &entry : layouts) {
       for (OpOperand &use : entry.first.getUses()) {
         Operation *user = use.getOwner();
-        if (user != root.getOperation() && !sliceOps.contains(user))
+        if (&use != &root && !sliceOps.contains(user))
           return false;
       }
     }
@@ -216,7 +216,8 @@ private:
     return rewritten.lookup(value);
   }
 
-  ttg::ConvertLayoutOp root;
+  OpOperand &root;
+  Attribute desiredEncoding;
   DenseMap<Value, Attribute> layouts;
   DenseMap<Value, Value> rewritten;
   SmallVector<Operation *> originalOps;
@@ -234,16 +235,22 @@ Value convertValueToLayout(OpBuilder &builder, Location loc, Value value,
 }
 
 void convertOpOperandsToLayouts(
-    Operation *op, llvm::ArrayRef<Attribute> operandLayouts,
-    SmallVector<ttg::ConvertLayoutOp> &rematerializationRoots) {
+    Operation *op, llvm::ArrayRef<Attribute> operandLayouts) {
   OpBuilder builder(op);
   Location loc = op->getLoc();
   for (auto [operand, layout] :
        llvm::zip(op->getOpOperands(), operandLayouts)) {
-    Value value = convertValueToLayout(builder, loc, operand.get(), layout);
-    if (auto convert = value.getDefiningOp<ttg::ConvertLayoutOp>())
-      rematerializationRoots.push_back(convert);
-    operand.set(value);
+    Value value = operand.get();
+    auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
+    if (!tensorTy || tensorTy.getEncoding() == layout)
+      continue;
+
+    // Probe the original producer slice before materializing a conversion.
+    // Planning is side-effect free, so a failed rematerialization can cleanly
+    // fall back to the ordinary layout conversion.
+    if (succeeded(CGARematerialization(operand, layout).run()))
+      continue;
+    operand.set(convertValueToLayout(builder, loc, value, layout));
   }
 }
 
@@ -284,9 +291,7 @@ DotCGASplit getDotCGASplit(int64_t m, int64_t n, unsigned numCTAs) {
   return {splitM, splitN};
 }
 
-void assignDotCGALayout(
-    triton::DotOp dot,
-    SmallVector<ttg::ConvertLayoutOp> &rematerializationRoots) {
+void assignDotCGALayout(triton::DotOp dot) {
   MLIRContext *ctx = dot.getContext();
 
   auto aTy = cast<RankedTensorType>(dot.getA().getType());
@@ -315,8 +320,7 @@ void assignDotCGALayout(
       ctx, bLayout.getOpIdx(), newDLayout, bLayout.getKWidth());
 
   convertOpOperandsToLayouts(dot.getOperation(),
-                             {newALayout, newBLayout, newDLayout},
-                             rematerializationRoots);
+                             {newALayout, newBLayout, newDLayout});
   convertOpResultsFromLayouts(dot.getOperation(), {newDLayout});
 }
 
@@ -370,9 +374,7 @@ ttg::CGAEncodingAttr getReduceCGALayout(triton::ReduceOp reduce,
                                                ctaSplitNum, ctaOrder);
 }
 
-void assignReduceCGALayout(
-    triton::ReduceOp reduce,
-    SmallVector<ttg::ConvertLayoutOp> &rematerializationRoots) {
+void assignReduceCGALayout(triton::ReduceOp reduce) {
   MLIRContext *ctx = reduce.getContext();
   Value src = reduce.getOperand(0);
   auto srcTy = cast<RankedTensorType>(src.getType());
@@ -388,8 +390,7 @@ void assignReduceCGALayout(
         cast<ttg::DistributedEncodingTrait>(newSrcLayout));
   SmallVector<Attribute> resultLayouts(reduce.getNumResults(), resultLayout);
 
-  convertOpOperandsToLayouts(reduce.getOperation(), operandLayouts,
-                             rematerializationRoots);
+  convertOpOperandsToLayouts(reduce.getOperation(), operandLayouts);
   convertOpResultsFromLayouts(reduce.getOperation(), resultLayouts);
 }
 
@@ -402,16 +403,12 @@ struct AssignCGALayoutsPass
     if (numCTAs == 1)
       return;
 
-    SmallVector<ttg::ConvertLayoutOp> rematerializationRoots;
     mod.walk([&](Operation *op) {
       if (auto dot = dyn_cast<triton::DotOp>(op))
-        assignDotCGALayout(dot, rematerializationRoots);
+        assignDotCGALayout(dot);
       if (auto reduce = dyn_cast<triton::ReduceOp>(op))
-        assignReduceCGALayout(reduce, rematerializationRoots);
+        assignReduceCGALayout(reduce);
     });
-
-    for (ttg::ConvertLayoutOp convert : rematerializationRoots)
-      CGARematerialization(convert).run();
   }
 };
 
