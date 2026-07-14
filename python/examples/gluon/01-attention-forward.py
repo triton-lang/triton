@@ -1200,8 +1200,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, prof
 def test_op_consan(dtype, cga_layout):
     with triton.knobs.compilation.scope():
         triton.knobs.compilation.instrumentation_mode = "consan"
-        test_op(Z=1, H=1, N_CTX=1024, HEAD_DIM=64, causal=False, dtype=dtype, use_tmem_red=False,
-                cga_layout=cga_layout)
+        test_op(Z=1, H=1, N_CTX=1024, HEAD_DIM=64, causal=False, dtype=dtype, use_tmem_red=False, cga_layout=cga_layout)
 
 
 # ===-----------------------------------------------------------------------===#
