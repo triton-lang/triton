@@ -1044,7 +1044,8 @@ def test_tma_store(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
 @pytest.mark.parametrize(
     "FAILURE",
-    [pytest.param(True, id="reused-pending-source"), pytest.param(False, id="stable-source")],
+    [pytest.param(True, id="reused-pending-source"),
+     pytest.param(False, id="stable-source")],
 )
 def test_tma_store_convert_layout_scratch(FAILURE, device, run_wrapper, monkeypatch):
     if run_wrapper:
@@ -1064,8 +1065,7 @@ def test_tma_store_convert_layout_scratch(FAILURE, device, run_wrapper, monkeypa
     @gluon.jit
     def kernel(output_desc, input, sink, iterations, FAILURE: ttgl.constexpr):
         src_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
-        dst_layout: ttgl.constexpr = ttgl.SliceLayout(
-            1, ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0]))
+        dst_layout: ttgl.constexpr = ttgl.SliceLayout(1, ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0]))
         src_offsets = ttgl.arange(0, 128, layout=src_layout)
         dst_offsets = ttgl.arange(0, 128, layout=dst_layout)
         persistent_page = ttgl.allocate_shared_memory(ttgl.int32, [128], output_desc.layout)
