@@ -66,16 +66,17 @@ def remap_xcd_chunked(pid, grid_mn, num_xcds: ttgl.constexpr = 8, chunk_size: tt
 
 @gluon.constexpr_function
 def create_shared_layouts(BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
-                          TRANSPOSE_B: ttgl.constexpr):
+                          TRANSPOSE_B: ttgl.constexpr, cga_layout_a=[], cga_layout_b=[]):
 
     SHARED_LAYOUT_A: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_K, 8]], [BLOCK_M, BLOCK_K],
-                                                                                [1, 0])
+                                                                                [1, 0], cga_layout_a)
     if not TRANSPOSE_B:
         SHARED_LAYOUT_B: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 16]], [BLOCK_K, BLOCK_N],
-                                                                                    [1, 0])
+                                                                                    [1, 0], cga_layout_b)
     else:
+        cga_layout_b = tuple([tuple([row[1], row[0]]) for row in cga_layout_b])
         SHARED_LAYOUT_B: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK_K, 8]], [BLOCK_N, BLOCK_K],
-                                                                                    [1, 0])
+                                                                                    [1, 0], cga_layout_b)
 
     return (SHARED_LAYOUT_A, SHARED_LAYOUT_B)
 

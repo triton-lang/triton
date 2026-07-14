@@ -3605,16 +3605,16 @@ struct TritonGPUInferLayoutInterface
         ret.insert(ret.begin(), ret.size());
         return ret;
       };
-      auto ctall = enc.getCGALayout().getLinearLayout();
+      auto cgaLl = enc.getCGALayout().getLinearLayout();
       auto kBlock = StringAttr::get(enc.getContext(), "block");
       auto newDim = standardOutDimNames(
-          enc.getContext(), ctall.getNumOutDims() + 1)[ctall.getNumOutDims()];
-      ctall *= LinearLayout::identity1D(1, kBlock, newDim);
+          enc.getContext(), cgaLl.getNumOutDims() + 1)[cgaLl.getNumOutDims()];
+      cgaLl *= LinearLayout::identity1D(1, kBlock, newDim);
       dstEnc = BlockedEncodingAttr::get(
           enc.getContext(), append(enc.getSizePerThread(), 2),
           append(enc.getThreadsPerWarp(), 1), append(enc.getWarpsPerCTA(), 1),
           appendMajorDim(enc.getOrder()),
-          CGAEncodingAttr::get(enc.getContext(), std::move(ctall)));
+          CGAEncodingAttr::get(enc.getContext(), std::move(cgaLl)));
       return success();
     }
 
@@ -3650,19 +3650,19 @@ struct TritonGPUInferLayoutInterface
                           (enc.getCGALayout().getCTAsPerCGA().back() == 1));
     if (isSimpleSplit) {
       SmallVector<unsigned> newOrder(enc.getOrder());
-      auto ctall = enc.getCGALayout().getLinearLayout();
+      auto cgaLl = enc.getCGALayout().getLinearLayout();
       int splitDim = newOrder.size() - 1;
       // Remove splitDim from order.
       newOrder.erase(std::remove(newOrder.begin(), newOrder.end(), splitDim),
                      newOrder.end());
-      // Remove last dimension from ctall.
-      ctall = ctall.squeezeOuts(to_vector(ctall.getOutDimNames()).back());
+      // Remove the last dimension from the CGA layout.
+      cgaLl = cgaLl.squeezeOuts(to_vector(cgaLl.getOutDimNames()).back());
       dstEnc = BlockedEncodingAttr::get(
           enc.getContext(), //
           ArrayRef(enc.getSizePerThread()).drop_back(1),
           ArrayRef(enc.getThreadsPerWarp()).drop_back(1),
           ArrayRef(enc.getWarpsPerCTA()).drop_back(1), ArrayRef(newOrder),
-          CGAEncodingAttr::get(enc.getContext(), std::move(ctall)));
+          CGAEncodingAttr::get(enc.getContext(), std::move(cgaLl)));
       return success();
     }
 

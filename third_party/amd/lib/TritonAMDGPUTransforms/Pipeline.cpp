@@ -177,7 +177,12 @@ void combineWaitOps(ModuleOp moduleOp, bool useAsyncCopy) {
 
   tt::combineRedundantWaitOps(
       tdmWaitOps,
-      [](Operation *op) { return isa<triton::amdgpu::TDMOpInterface>(op); },
+      [](Operation *op) {
+        // TDMOpInterface is intentionally single-descriptor (`getDesc()`).
+        // The fused copy has multiple descriptors, so include it explicitly.
+        return isa<triton::amdgpu::TDMOpInterface,
+                   triton::amdgpu::AsyncTDMFusedCopyGlobalToLocalOp>(op);
+      },
       [](OpBuilder &b, Location loc, ValueRange operands,
          unsigned num) -> Operation * {
         return triton::amdgpu::AsyncTDMWait::create(b, loc, operands, num);
