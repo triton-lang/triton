@@ -369,4 +369,21 @@ def TritonAMDGPUFpSanitizer : Pass<"tritonamdgpu-fp-sanitizer", "mlir::ModuleOp"
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
 
+def TritonAMDGPUConvertTensorDescriptor : Pass<"tritonamdgpu-convert-tensor-descriptor", "mlir::ModuleOp"> {
+  let summary = "Convert tensor reduce descriptor to buffer descriptor on GFX1250";
+
+  let description = [{
+  Convert reduce tensor Descriptor to buffer descriptor
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::amdgpu::TritonAMDGPUDialect",
+                           "mlir::triton::TritonDialect"];
+  let options = [
+    Option<"archGenerationName", "arch-generation-name",
+           "std::string", /*default=*/"std::string{}",
+           "GFX generation name of target device.">
+  ];
+}
+
 #endif

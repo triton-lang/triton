@@ -1581,6 +1581,8 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
         else:
             desc = out_desc
 
+        idx = tl.arange(0, M_BLOCK)[:, None] * N_BLOCK + tl.arange(0, N_BLOCK)[None, :]
+
         assert desc.shape[0] == M
         assert desc.shape[1] == N
         assert desc.strides[0] == N
@@ -1812,3 +1814,107 @@ def test_tensor_descriptor_store_downcast(dtype_str, device):
     kernel[(grid_m, grid_n)](desc, M, N, M_BLOCK=M_BLOCK, N_BLOCK=N_BLOCK)
     ref = torch.arange(M * N, dtype=torch.float32, device=device).reshape(M, N).to(torch_dtype)
     torch.testing.assert_close(out, ref)
+
+
+@pytest.mark.parametrize("kind", ["add", "min", "max", "and", "or", "xor"])
+@pytest.mark.parametrize("dtype_str", ["float16", "bfloat16", "float32", "int32"])
+@pytest.mark.parametrize("reduce_descriptor", ["device", "host"])
+@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128), (512, 32), (1, 1024)])
+def test_mixed_tensor_descriptor_reduce(kind, dtype_str, reduce_descriptor, M_BLOCK, N_BLOCK, device):
+    if not is_hip():
+        pytest.skip("Skip if not HIP")
+
+    if dtype_str == "int8":
+        pytest.skip("int8 is not supported in rmw atomic ops")
+
+    is_float_type = dtype_str != "int32"
+
+    if is_float_type and kind != "add":
+        pytest.skip("float type is not supported in rmw atomic non-add ops")
+
+    if is_float_type and kind == "add" and is_hip_cdna3():
+        pytest.skip("bfloat16 is not supported in rmw atomic add on CDNA3")
+
+    @triton.jit(debug=True)
+    def kernel(reduce_desc, out_ptr, out_ptr_for_tensor, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr,
+               kind: tl.constexpr):
+        moffset = tl.program_id(0) * M_BLOCK
+        noffset = tl.program_id(1) * N_BLOCK
+
+        midx = moffset + tl.arange(0, M_BLOCK)[:, None]
+        nidx = noffset + tl.arange(0, N_BLOCK)[None, :]
+        idx = midx * N + nidx
+        val = tl.load(a_ptr + idx)
+
+        if reduce_desc is None:
+            desc = tl.make_tensor_descriptor(out_ptr, shape=[M, N], strides=[N, 1], block_shape=[M_BLOCK, N_BLOCK])
+        else:
+            desc = reduce_desc
+
+        idx = tl.arange(0, M_BLOCK)[:, None] * N_BLOCK + tl.arange(0, N_BLOCK)[None, :]
+
+        # `reduce_descriptor` is for reduction and write back to global memory.
+        if kind == "add":
+            desc.atomic_add([moffset, noffset], val)
+        elif kind == "min":
+            desc.atomic_min([moffset, noffset], val)
+        elif kind == "max":
+            desc.atomic_max([moffset, noffset], val)
+        elif kind == "and":
+            desc.atomic_and([moffset, noffset], val)
+        elif kind == "or":
+            desc.atomic_or([moffset, noffset], val)
+        else:
+            tl.static_assert(kind == "xor")
+            desc.atomic_xor([moffset, noffset], val)
+
+        # now we use load_descriptor in a loop to load a tile of global memory.
+        # the loop boundary is big enough to avoid unroll, so, even if the make_tensor_descriptor is hoisted out of the loop,
+        # async_tdm_copy_global_to_local should be stay in the loop.
+        for _ in range(1024):
+            load_desc = tl.make_tensor_descriptor(out_ptr, shape=[M, N], strides=[N, 1], block_shape=[M_BLOCK, N_BLOCK])
+            block = load_desc.load([0, 0])
+            idx = tl.arange(0, M_BLOCK)[:, None] * N_BLOCK + tl.arange(0, N_BLOCK)[None, :]
+            tl.store(out_ptr_for_tensor + idx, block)
+
+    M, N = M_BLOCK * 2, N_BLOCK * 2
+    rs = np.random.RandomState(seed=17)
+    inp = to_triton(numpy_random((M, N), dtype_str, rs), device=device, dst_type=dtype_str)
+    out = to_triton(numpy_random((M, N), dtype_str, rs), device=device, dst_type=dtype_str)
+    out_for_tensor = to_triton(numpy_random((M_BLOCK, N_BLOCK), dtype_str, rs), device=device, dst_type=dtype_str)
+
+    grid_m = M // M_BLOCK
+    grid_n = N // N_BLOCK
+
+    num_ctas = 1
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        assert size == 128 * (grid_m * grid_n) * num_ctas
+        assert align == 128
+        assert stream == 0
+        return torch.empty(size, dtype=torch.int8, device=device)
+
+    if reduce_descriptor == "host":
+        reduce_desc = TensorDescriptor.from_tensor(out, [M_BLOCK, N_BLOCK])
+        triton.set_allocator(alloc_fn)
+    else:
+        reduce_desc = None
+
+    expect = REDUCE_OP[kind](inp, out)
+    compiled = kernel[(grid_m, grid_n)](reduce_desc, out, out_for_tensor, inp, M, N, M_BLOCK, N_BLOCK, kind)
+
+    torch.testing.assert_close(expect, unwrap_tensor(out), check_dtype=False)
+    expect_tenosor_output = expect[0:M_BLOCK, 0:N_BLOCK]
+    torch.testing.assert_close(expect_tenosor_output, unwrap_tensor(out_for_tensor), check_dtype=False)
+
+    ttir = compiled.asm["ttir"]
+    kind = "f" + kind if is_float_type else kind
+    pattern = f"tt.atomic_rmw {kind}, release, gpu"
+    assert (pattern in ttir)
+    import re
+    pattern = re.compile(
+        r"""
+    scf\.for\s+%_\s*=\s*%c0_i32\s+to\s+%c1024_i32\s+step\s+%c1_i32\s*:\s*i32\s*\{\s*\n
+    \s*%block\s*=\s*tt\.descriptor_load\s+%load_desc\[%c0_i32,\s*%c0_i32\]
+    """, re.VERBOSE)
+    assert pattern.search(ttir)
