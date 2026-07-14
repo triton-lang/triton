@@ -358,9 +358,10 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
 }
 
 // On targets without direct-to-LDS scatter support, a direct-to-LDS copy
-// requires enough data per CTA for each lane to write at least 32 bits into LDS.
-// The source layout itself may still be suboptimal here; CoalesceAsyncCopy can
-// rewrite it before the final direct-to-LDS lowering checks coalescing legality.
+// requires enough data per CTA for each lane to write at least 32 bits into
+// LDS. The source layout itself may still be suboptimal here; CoalesceAsyncCopy
+// can rewrite it before the final direct-to-LDS lowering checks coalescing
+// legality.
 bool hasEnoughCTABytesForDirectToLds(tt::LoadOp loadOp,
                                      const tt::AMD::TargetInfo &targetInfo) {
   if (targetInfo.supportsDirectToLdsScatter())
