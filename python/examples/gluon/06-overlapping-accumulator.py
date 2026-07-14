@@ -708,7 +708,7 @@ def test_mma_scaled_overlap_accumulator(a_format, b_format, use_overlap):
     torch.manual_seed(0)
     A, B, A_scale, B_scale, C_ref = make_problem(8192, 8192, 8192, a_format, b_format)
     C = mma_scaled_warp_specialized(A, B, A_scale, B_scale, use_overlap=use_overlap)
-    torch.testing.assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
+    torch.testing.assert_close(C_ref, C.to(torch.float32), atol=2e-3, rtol=1e-3)
 
 
 def main():

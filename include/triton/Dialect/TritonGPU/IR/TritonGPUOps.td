@@ -340,10 +340,8 @@ def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewT
     The `ttg.memdesc_reinterpret` operation reinterprets a memory descriptor
     as one with a different shape and element type. The logical storage size of
     the result must not exceed that of the source. Because memory descriptors
-    lack strides, this operation is only valid if the original memory descriptor
-    is contiguous. Reinterpretation of subviews is not allowed; reinterpret the
-    parent descriptor and then take a subview of the reinterpreted descriptor
-    instead.
+    lack strides. A source subview may be reinterpreted, but it must be
+    contiguous. The result must not be a subview.
   }];
 
   let arguments = (ins TTG_MemDescType:$src);
