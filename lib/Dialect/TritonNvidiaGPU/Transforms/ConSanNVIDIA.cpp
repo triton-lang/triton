@@ -155,6 +155,11 @@ public:
     return getLeaderCTAPredicate(b, mask);
   }
 
+  SmallVector<Operation *>
+  createInitClusterBarrier(ImplicitLocOpBuilder &b) const override {
+    return {ClusterBarrierOp::create(b, b.getLoc()).getOperation()};
+  }
+
   std::optional<uint16_t>
   getScratchCTABroadcastMask(Operation *op) const override {
     return getAtomicScratchBroadcastMask(op);

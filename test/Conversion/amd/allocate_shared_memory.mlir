@@ -94,3 +94,26 @@ tt.func @buffer_atomic_scratch_size(
 }
 
 }
+
+// -----
+
+#atomic_broadcast_2cta = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+
+// CHECK-LABEL: module
+// CHECK-SAME: ttg.shared = 64 : i32
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+
+// CHECK-LABEL: @buffer_atomic_cross_cta_scratch_size
+tt.func @buffer_atomic_cross_cta_scratch_size(
+    %base: !tt.ptr<i32>,
+    %offsets: tensor<16xi32, #atomic_broadcast_2cta>,
+    %values: tensor<16xi32, #atomic_broadcast_2cta>,
+    %out: tensor<16x!tt.ptr<i32>, #atomic_broadcast_2cta>) {
+  // CHECK: amdg.buffer_atomic_rmw {{.*}} {allocation.offset = 0 : i32, allocation.size = 64 : i32}
+  %old = amdg.buffer_atomic_rmw add, acq_rel, gpu, %values, %base[%offsets]
+      : tensor<16xi32, #atomic_broadcast_2cta>
+  tt.store %out, %old : tensor<16x!tt.ptr<i32>, #atomic_broadcast_2cta>
+  tt.return
+}
+
+}

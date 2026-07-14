@@ -137,6 +137,11 @@ public:
   virtual Value getIssuerCTAPred(ImplicitLocOpBuilder &b,
                                  Operation *op) const = 0;
 
+  // Creates the target-specific cluster rendezvous used to publish ConSan's
+  // shared lock initialization. Some targets represent it as multiple ops.
+  virtual SmallVector<Operation *>
+  createInitClusterBarrier(ImplicitLocOpBuilder &b) const = 0;
+
   // For scratch-backed operations whose result is replicated across CTAs,
   // returns the CTA-id bits that identify peers sharing one scratch result.
   // The target hook also predicates instrumentation to the producer CTA.
@@ -195,10 +200,11 @@ public:
       }
     }
 
-    // allocation.size is published only for operation-local compiler scratch,
-    // making it the generic marker for an SSA-less shared-memory effect.
-    // allocation.offset alone is also used by explicit buffers, virtual call
-    // frames, function scheduler state, and late synthetic conversions.
+    // Allocation runs before ConSan and publishes allocation.size only for
+    // operation-local compiler scratch, making it the authoritative generic
+    // marker for an SSA-less shared-memory effect. allocation.offset alone is
+    // also used by explicit buffers, virtual call frames, function scheduler
+    // state, and late synthetic conversions.
     if (auto cvtOp = dyn_cast<ttg::ConvertLayoutOp>(op);
         cvtOp && cvtUsesForcedWarpShuffle(cvtOp)) {
       // Accept metadata produced by older pipelines that reserved scratch even

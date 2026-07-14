@@ -16,6 +16,35 @@ using tti::WaitOpInfo;
 
 namespace mlir {
 
+namespace {
+
+Value getLeaderCTAPredicate(ImplicitLocOpBuilder &b, uint32_t broadcastMask) {
+  Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+  Value ctaIdInGroup = arith::AndIOp::create(
+      b, ctaId, arith::ConstantIntOp::create(b, broadcastMask, 32));
+  return arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaIdInGroup,
+                               arith::ConstantIntOp::create(b, 0, 32));
+}
+
+std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op) {
+  if (!op->hasAttr("allocation.size") ||
+      !isa<ttag::BufferAtomicCASOp, ttag::BufferAtomicRMWOp,
+           triton::AtomicRMWOp, triton::AtomicCASOp,
+           ttg::LocalAtomicScatterRMWOp>(op))
+    return std::nullopt;
+
+  // These tensor-result paths all use finalizeTensorAtomicResults, which
+  // broadcasts through shared memory from the canonical producer CTA. Scalar
+  // AMD atomics use CTA-local staging instead.
+  auto tensorTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+  if (!tensorTy)
+    return std::nullopt;
+  auto kBlock = StringAttr::get(op->getContext(), "block");
+  return ttg::toLinearLayout(tensorTy).getFreeVariableMasks().lookup(kBlock);
+}
+
+} // namespace
+
 class AMDConSanHooks : public tti::ConSanTargetHooks {
 public:
   bool isTMAOp(Operation *op) const override {
@@ -86,9 +115,24 @@ public:
     return std::nullopt;
   }
 
-  Value getIssuerCTAPred(ImplicitLocOpBuilder & /*b*/,
-                         Operation * /*op*/) const override {
+  Value getIssuerCTAPred(ImplicitLocOpBuilder &b,
+                         Operation *op) const override {
+    if (auto scratchMask = getAtomicScratchBroadcastMask(op);
+        scratchMask && *scratchMask)
+      return getLeaderCTAPredicate(b, *scratchMask);
     return nullptr;
+  }
+
+  SmallVector<Operation *>
+  createInitClusterBarrier(ImplicitLocOpBuilder &b) const override {
+    auto arrive = ttag::ClusterBarrierArriveOp::create(b, b.getLoc());
+    auto wait = ttag::ClusterBarrierWaitOp::create(b, b.getLoc());
+    return {arrive.getOperation(), wait.getOperation()};
+  }
+
+  std::optional<uint16_t>
+  getScratchCTABroadcastMask(Operation *op) const override {
+    return getAtomicScratchBroadcastMask(op);
   }
 
   FailureOr<std::optional<MemEffectsOpInfo>>

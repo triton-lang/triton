@@ -109,6 +109,12 @@ atomic result broadcasts, tensor-map creation, warp-specialize captures, and
 backend-specific operations. Virtual call frames and function-owned scheduler
 state are not operation effects and publish no size metadata.
 
+Allocation must run before ConSan, and `allocation.size` is the authoritative
+marker that an operation has non-empty compiler scratch at this point in the
+pipeline. A transform that introduces scratch-using operations after allocation
+must rerun allocation before ConSan. ConSan does not infer missing metadata from
+operation kinds because scratch requirements are target- and lowering-specific.
+
 Reduction lowering creates additional `ttg.convert_layout` operations after
 ConSan, so the parent `tt.reduce` carries the effect for their already allocated
 interval. A scratch effect must wait for earlier asynchronous readers or
