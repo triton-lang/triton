@@ -981,6 +981,8 @@ operation ::= `ttng.tmem_copy` $src `,` $dst attr-dict `:` qualified(type(operan
 2D blocks stored contiguously in SMEM are copied into TMEM as specified by the destination address.
 This op lowers to the PTX instruction tcgen05.cp. This supports writing to
 the scales TMEM layout as well as the default TMEM layout.
+For the default layout, each contiguous TMEM row segment must contain at
+least 128 bits, the minimum width supported by tcgen05.cp.
 Currently, the semantics are different when writing to the TMEM scale layout.
 
 In the case of the default layout, the copy doesn't change the logical
@@ -1164,9 +1166,8 @@ operation ::= `ttng.tmem_subslice` $src attr-dict `:` qualified(type($src)) `->`
 
 This operation takes a subslice of a tensor memory allocation and returns a
 new descriptor containing the address and a view of the subslice.
-This is similar to ttg.memdesc_subslice except we can only slice along the
-inner dimension of a 2D memdesc, as this is the only supported slice for
-TMEM.
+This is similar to ttg.memdesc_subslice and can slice either dimension of a
+2D tensor memory descriptor, including non-contiguous views within a CTA.
 
 Traits: `AlwaysSpeculatableImplTrait`, `MemDescViewTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
@@ -1178,7 +1179,8 @@ Effects: `MemoryEffects::Effect{}`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>N</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>offset</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>dim</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 
 #### Operands:

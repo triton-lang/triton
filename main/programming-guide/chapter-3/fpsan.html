@@ -105,7 +105,7 @@
 <li class="toctree-l3"><a class="reference internal" href="#packed-fp4-conversion">Packed fp4 conversion</a></li>
 </ul>
 </li>
-<li class="toctree-l2"><a class="reference internal" href="#pure-extern-elementwise-ops">Pure Extern Elementwise Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#pure-extern-and-inline-asm-elementwise-ops">Pure Extern and Inline-Asm Elementwise Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#gluon-mma-and-tensor-memory">Gluon MMA and Tensor Memory</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#practical-guidance-for-checks">Practical Guidance for Checks</a></li>
 </ul>
@@ -521,14 +521,15 @@ width</p></li>
 </ul>
 </section>
 </section>
-<section id="pure-extern-elementwise-ops">
-<h2>Pure Extern Elementwise Ops<a class="headerlink" href="#pure-extern-elementwise-ops" title="Link to this heading"></a></h2>
+<section id="pure-extern-and-inline-asm-elementwise-ops">
+<h2>Pure Extern and Inline-Asm Elementwise Ops<a class="headerlink" href="#pure-extern-and-inline-asm-elementwise-ops" title="Link to this heading"></a></h2>
 <p>Supported operation:</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">tl.extern_elementwise</span></code> when all of the following hold:</p>
+<li><p><code class="docutils literal notranslate"><span class="pre">tl.extern_elementwise</span></code> and <code class="docutils literal notranslate"><span class="pre">tl.inline_asm_elementwise</span></code> when all of the
+following hold:</p>
 <ul>
 <li><p>the op is <code class="docutils literal notranslate"><span class="pre">pure</span></code></p></li>
-<li><p>the result type is float-like</p></li>
+<li><p>every result type is float-like</p></li>
 <li><p>there is at least one operand</p></li>
 <li><p>every operand is numeric</p></li>
 </ul>
@@ -538,19 +539,22 @@ width</p></li>
 <ul class="simple">
 <li><p>rotate each operand payload by its argument index</p></li>
 <li><p>sum the rotated payloads</p></li>
-<li><p>xor the result with a stable hash of the symbol name</p></li>
+<li><p>xor the result with a stable hash of the symbol name or inline-asm string;
+inline-asm result indices are also included for multi-result operations</p></li>
 <li><p>unembed</p></li>
 </ul>
 <p>Exact preserved properties:</p>
 <ul class="simple">
 <li><p>deterministic dependence on all operands and on operand order</p></li>
-<li><p>deterministic distinction between different external symbols</p></li>
+<li><p>deterministic distinction between different external symbols, inline-asm
+strings, and inline-asm result indices</p></li>
 <li><p>mixed float and integer operands are supported; float operands are embedded,
 integer operands are used directly after signed casting to the result width</p></li>
 </ul>
 <p>Important caveat:</p>
 <ul class="simple">
-<li><p>This is a structural tag, not a numeric model of the external function.</p></li>
+<li><p>This is a structural tag, not a numeric model of the external function or
+inline assembly.</p></li>
 </ul>
 </section>
 <section id="gluon-mma-and-tensor-memory">
