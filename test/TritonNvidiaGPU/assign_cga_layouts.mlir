@@ -75,8 +75,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[B_LOAD:.*]] = tt.load %{{.*}} : tensor<32x128x!tt.ptr<f16>, #[[$LOAD_B_PLANNED]]>
   // CHECK-NOT: tt.load
   // CHECK: tt.store %{{.*}}, %[[ORIG_LOAD]] : tensor<128x32x!tt.ptr<f16>, #[[$LOAD_ORIG]]>
-  // CHECK: arith.addf %[[B_LOAD]], %[[B_LOAD]] : tensor<32x128xf16, #[[$LOAD_B_PLANNED]]>
+  // CHECK: %[[B_SUM:.*]] = arith.addf %[[B_LOAD]], %[[B_LOAD]] : tensor<32x128xf16, #[[$LOAD_B_PLANNED]]>
+  // CHECK: %[[B_DOT:.*]] = ttg.convert_layout %[[B_SUM]] : tensor<32x128xf16, #[[$LOAD_B_PLANNED]]> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$DOT_OPT_LOAD]]}>>
   // CHECK: ttg.convert_layout %{{.*}} : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DOT_DEFAULT_LOAD]]}>> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DOT_OPT_LOAD]]}>>
+  // CHECK: tt.dot %{{.*}}, %[[B_DOT]], %{{.*}} :
   // E2E-LABEL: tt.func @dot_rematerializes_exclusive_load_source
   // E2E: %[[E2E_OLD_A:.*]] = tt.load %{{.*}} : tensor<128x32x!tt.ptr<f16>, #[[$E2E_LOAD_ORIG]]>
   // E2E: %[[E2E_B_PTRS:.*]] = ttg.convert_layout %{{.*}} : tensor<32x128x!tt.ptr<f16>, #[[$E2E_LOAD_B_ORIG]]> -> tensor<32x128x!tt.ptr<f16>, #[[$E2E_LOAD_B_PLANNED]]>
