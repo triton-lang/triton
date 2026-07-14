@@ -848,6 +848,26 @@ def test_return_promotion():
     run_parser(kernel)
 
 
+def test_fp8_div_mod_promotion():
+    # `/` and `%` do not exist natively for fp8, so the result of a division or
+    # modulo between fp8 operands is promoted to fp32 -- the same rule already
+    # applied to float16 and bfloat16. Other ops keep the existing fp8
+    # promotion (same fp8 stays that fp8, mixed fp8 goes to float16).
+
+    @triton.jit
+    def kernel():
+        x = tl.full((8, ), 0, tl.float16).to(tl.float8e5)
+        y = tl.full((8, ), 0, tl.float16).to(tl.float8e5)
+        z = tl.full((8, ), 0, tl.float16).to(tl.float8e4nv)
+        tl.static_assert((x / y).dtype == tl.float32)
+        tl.static_assert((x / z).dtype == tl.float32)
+        tl.static_assert((x % y).dtype == tl.float32)
+        tl.static_assert((x * y).dtype == tl.float8e5)
+        tl.static_assert((x * z).dtype == tl.float16)
+
+    run_parser(kernel)
+
+
 # ===-----------------------------------------------------------------------===#
 # Aggregate inheritance, __post_init__, and aggregate_replace tests
 # ===-----------------------------------------------------------------------===#
