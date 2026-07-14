@@ -3088,6 +3088,7 @@ makeTernaryExternTransform(TernaryExternTransform transform) {
 std::optional<KnownExternTransform> getKnownExtern(StringRef symbol) {
   return llvm::StringSwitch<std::optional<KnownExternTransform>>(symbol)
       .Case("__nv_fast_expf", makeUnaryExternTransform(fpsanExp))
+      .Case("__nv_expf", makeUnaryExternTransform(fpsanExp))
       .Case("__nv_exp2f", makeUnaryExternTransform(fpsanExp2))
       .Case("__nv_logf", makeTaggedUnaryExternTransform(UnaryOpId::Log))
       .Case("__nv_log2f", makeTaggedUnaryExternTransform(UnaryOpId::Log2))
