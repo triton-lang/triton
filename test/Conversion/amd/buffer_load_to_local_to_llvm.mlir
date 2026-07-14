@@ -1,5 +1,5 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s --check-prefixes=COMMON,GFX950
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --verify-diagnostics | FileCheck %s --check-prefixes=COMMON,GFX942
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --verify-diagnostics | FileCheck %s --check-prefixes=COMMON
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -54,7 +54,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
 #shared = #ttg.swizzled_shared<{vec = 2, perPhase = 1, maxPhase = 1, order = [0, 1]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.shared = 0 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
-  // COMMON-LABEL: buffer_load_to_local_vectorized_8xf16
+  // GFX950-LABEL: buffer_load_to_local_vectorized_8xf16
   tt.func public @buffer_load_to_local_vectorized_8xf16(%arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: !ttg.memdesc<64x64xf16, #shared, #smem, mutable>) {
     %cst = arith.constant dense<64> : tensor<1x64xi32, #blocked>
     %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
@@ -72,9 +72,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     // GFX950: rocdl.raw.ptr.buffer.load.async.lds
     // GFX950-NOT: rocdl.raw.ptr.buffer.load.async.lds
 
-    // GFX942 does not support vectorization > 4bytes so we cannot lower it
-    // GFX942-NOT: rocdl.raw.ptr.buffer.load.async.lds
-    // GFX942: amdg.buffer_load_to_local
+    // GFX942 does not support 128-bit direct-to-LDS loads, so this now fails at
+    // legalization with an actionable diagnostic instead of silently surviving
+    // conversion (which used to fail much later in LLVM-IR translation).
+    // expected-error@+2 {{cannot lower 'amdg.buffer_load_to_local' to a direct-to-LDS copy}}
+    // expected-error@+1 {{failed to legalize operation 'amdg.buffer_load_to_local' that was explicitly marked illegal}}
     %8 = amdg.buffer_load_to_local %arg1[%7] into %arg2 : <f16>[tensor<64x64xi32, #blocked>]  -> <64x64xf16, #shared, #smem, mutable>
     tt.return
   }
@@ -86,7 +88,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
-  // COMMON-LABEL: buffer_load_to_local_vectorized_8xf16
+  // GFX950-LABEL: buffer_load_to_local_vectorized_8xf16
   tt.func public @buffer_load_to_local_vectorized_8xf16(%arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: !ttg.memdesc<256x8xf16, #shared, #smem, mutable>) {
     %cst = arith.constant dense<8> : tensor<256x1xi32, #blocked>
     %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
@@ -104,9 +106,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // GFX950: rocdl.raw.ptr.buffer.load.async.lds
     // GFX950-NOT: rocdl.raw.ptr.buffer.load.async.lds
 
-    // GFX942 does not support vectorization > 4bytes so we cannot lower it
-    // GFX942-NOT: rocdl.raw.ptr.buffer.load.async.lds
-    // GFX942: amdg.buffer_load_to_local
+    // GFX942 does not support 128-bit direct-to-LDS loads, so this now fails at
+    // legalization with an actionable diagnostic instead of silently surviving
+    // conversion (which used to fail much later in LLVM-IR translation).
+    // expected-error@+2 {{cannot lower 'amdg.buffer_load_to_local' to a direct-to-LDS copy}}
+    // expected-error@+1 {{failed to legalize operation 'amdg.buffer_load_to_local' that was explicitly marked illegal}}
     %8 = amdg.buffer_load_to_local %arg1[%7] into %arg2 : <f16>[tensor<256x8xi32, #blocked>]  -> <256x8xf16, #shared, #smem, mutable>
     tt.return
   }
@@ -302,7 +306,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 4, maxPhase = 16, order = [0, 1]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.shared = 0 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
-  // COMMON-LABEL: buffer_load_to_local_swizzled_vectorized_8xf16
+  // GFX950-LABEL: buffer_load_to_local_swizzled_vectorized_8xf16
   tt.func public @buffer_load_to_local_swizzled_vectorized_8xf16(%arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: !ttg.memdesc<64x64xf16, #shared, #smem, mutable>) {
     %cst = arith.constant dense<64> : tensor<1x64xi32, #blocked>
     %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
@@ -319,9 +323,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     // GFX950: rocdl.raw.ptr.buffer.load.async.lds
     // GFX950-NOT: rocdl.raw.ptr.buffer.load.async.lds
 
-    // GFX942 does not support vectorization > 4bytes so we cannot lower it
-    // GFX942-NOT: rocdl.raw.ptr.buffer.load.async.lds
-    // GFX942: amdg.buffer_load_to_local
+    // GFX942 does not support 128-bit direct-to-LDS loads, so this now fails at
+    // legalization with an actionable diagnostic instead of silently surviving
+    // conversion (which used to fail much later in LLVM-IR translation).
+    // expected-error@+2 {{cannot lower 'amdg.buffer_load_to_local' to a direct-to-LDS copy}}
+    // expected-error@+1 {{failed to legalize operation 'amdg.buffer_load_to_local' that was explicitly marked illegal}}
     %8 = amdg.buffer_load_to_local %arg1[%7] into %arg2 : <f16>[tensor<64x64xi32, #blocked>]  -> <64x64xf16, #shared, #smem, mutable>
     tt.return
   }
