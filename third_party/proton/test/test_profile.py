@@ -1829,7 +1829,6 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
     assert len(cuda_devices) >= 2
 
 
-@pytest.mark.skipif(not is_cuda(), reason="AMD is broken for now and will be fixed")
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
 def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, device: str):
