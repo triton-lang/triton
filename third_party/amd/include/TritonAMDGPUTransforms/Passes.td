@@ -369,4 +369,62 @@ def TritonAMDGPUFpSanitizer : Pass<"tritonamdgpu-fp-sanitizer", "mlir::ModuleOp"
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
 
+def TritonAMDGPULdsPrefetch : Pass<"tritonamdgpu-lds-prefetch", "mlir::ModuleOp"> {
+  let summary = "Prefetch tt.dot operands from LDS for AMD MFMA/WMMA loops";
+
+  let description = [{
+    AMD-specific prefetch of `tt.dot` (or `tt.dot_scaled` without scales)
+    operands from shared memory (LDS). Operates on `scf.for` loops that
+    have already been pipelined for global-to-LDS loads; the goal is to
+    overlap LDS read latency with MFMA/WMMA compute by issuing local_loads
+    for the next sub-tile while the current sub-tile is being multiplied.
+
+    The pass slices each dot along three dimensions (M, N, K) according to
+    a tile size derived from the MFMA/WMMA instruction shape, the
+    architecture's minimum transpose width (gfx942/gfx950/gfx951: 64,
+    gfx1250: 128), and     a target number of MFMA/WMMA instructions per
+    sub-tile computed from the architecture's LDS latency / matrix
+    throughput and the instruction's FMA count (the product of the
+    instruction shape dims; see computeDefaultNumInsts). The
+    `num-insts` option overrides this default. Slicing produces several
+    fine-grained `tt.dot`s with reshape/transpose/split/convert_layout
+    plumbing on the C operand, plus matching `local_load`s of subslices
+    of the original LDS memdescs.
+
+    The local_load for sub-tile (m=0, n=0, k=0) of each iteration is
+    hoisted to the *previous* iteration (and to a prologue before the
+    loop) so that on entry to a new iteration the first dot has its
+    operands already in registers. `amdgpu.sched_barrier`s are inserted
+    between local_loads and the dots that depend on them so the LLVM
+    scheduler interleaves them rather than batching all loads at the top
+    of the loop.
+
+    Loops whose `local_load` source memdescs are loop-carried iter_args
+    are handled directly. Loops whose source/token are in-body
+    expressions (e.g. `memdesc_index` on a ring buffer fed by an
+    `async_wait`) are also handled by promoting the expression: the
+    chain is cloned into the prologue with the induction var replaced by
+    the lower bound and into the yield region with the induction var
+    advanced.
+
+    Loops preceded by a `triton_amdgpu.cond_barrier` are skipped (this
+    signifies that PingPong scheduling has already taken ownership of
+    the loop). Multi-dot loops, batched dots, dots whose sub-tile would
+    not be a power of 2, and `tt.dot_scaled` ops with scale operands are
+    also skipped.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithDialect",
+                           "mlir::ROCDL::ROCDLDialect"];
+
+  let options = [
+    Option<"numInstsOverride", "num-insts",
+           "unsigned", /*default*/"0",
+           "Override target matrix instructions per slice tile "
+           "(0 = arch/dtype default computed by the pass). For testing/tuning.">
+  ];
+}
+
 #endif
