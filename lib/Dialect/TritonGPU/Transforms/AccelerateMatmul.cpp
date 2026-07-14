@@ -706,46 +706,6 @@ public:
   }
 };
 
-// Turn
-//
-// MMA1 -> acc0
-// load acc0
-// alloc acc1
-// MMA2 -> acc1
-//
-// into
-//
-// MMA1 -> acc
-// MMA2 -> acc
-static void forwardChainedMMAv5Accumulators(ModuleOp module) {
-  SmallVector<triton::nvidia_gpu::TMEMAllocOp> allocs;
-  module.walk(
-      [&](triton::nvidia_gpu::TMEMAllocOp alloc) { allocs.push_back(alloc); });
-  for (auto alloc : allocs) {
-    if (!alloc.getSrc() || !alloc.getToken() || !alloc.getToken().hasOneUse())
-      continue;
-    Value source = alloc.getSrc();
-    bool hasExclusiveChain = true;
-    while (auto cvt = source.getDefiningOp<ConvertLayoutOp>()) {
-      hasExclusiveChain &= source.hasOneUse();
-      source = cvt.getSrc();
-    }
-    auto load = source.getDefiningOp<triton::nvidia_gpu::TMEMLoadOp>();
-    if (!hasExclusiveChain || !source.hasOneUse() || !load || !load.getDep() ||
-        load.getSrc().getType() != alloc.getType())
-      continue;
-    auto mma = dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(
-        *alloc.getToken().getUsers().begin());
-    if (!mma || mma.getAccumulator() != alloc.getResult() ||
-        alloc->getParentRegion() != mma->getParentRegion())
-      continue;
-    mma.setAccumulator(load.getSrc());
-    mma.getAccDepMutable().assign(load.getDep());
-    alloc.getResult().replaceAllUsesWith(load.getSrc());
-    alloc.erase();
-  }
-}
-
 class ScaledBlockedToMMA : public mlir::OpRewritePattern<triton::DotScaledOp> {
   int computeCapability;
 
@@ -1094,7 +1054,6 @@ public:
 
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       return signalPassFailure();
-    forwardChainedMMAv5Accumulators(m);
     // Now that we have picked the mma type, decompose dot that are not natively
     // supported.
     decomposeMixedModeDotOp(m, computeCapability);
