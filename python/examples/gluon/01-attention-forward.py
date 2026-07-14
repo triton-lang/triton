@@ -967,7 +967,7 @@ class KernelConfig:
     USE_TMEM_RED: bool = False
     NUM_KV_BUFFERS: int | None = None
     USE_EXP2_TURNSTILE: bool | None = None
-    CTA_LAYOUT: tuple[tuple[int, int], ...] | None = None
+    CGA_LAYOUT: tuple[tuple[int, int], ...] | None = None
 
 
 def _default_split_exp_factor(head_dim: int) -> int:
@@ -1003,9 +1003,9 @@ def select_kernel_config(
     use_selected_tmem_red = (use_tmem_red or (is_bwu and not causal)) and not causal
     num_kv_buffers = _default_num_kv_buffers(head_dim, dtype)
     use_exp2_turnstile = head_dim == 64
-    cta_layout = ()
+    cga_layout = ()
     if not causal and head_dim == 128 and dtype.itemsize == 2:
-        cta_layout = ((1, 0), )
+        cga_layout = ((1, 0), )
 
     if causal:
         group_size_n = 8 if head_dim == 64 or n_ctx <= 2048 else 4
@@ -1072,7 +1072,7 @@ def select_kernel_config(
         USE_TMEM_RED=use_selected_tmem_red,
         NUM_KV_BUFFERS=num_kv_buffers,
         USE_EXP2_TURNSTILE=use_exp2_turnstile,
-        CTA_LAYOUT=cta_layout,
+        CGA_LAYOUT=cga_layout,
     )
     if override is None:
         return config
@@ -1094,7 +1094,7 @@ def make_tensor_desc(x, shape, strides, block_shape, cga_layout=()):
 
 
 def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red=False, p: KernelConfig | None = None,
-                      cta_layout=None):
+                      cga_layout=None):
     if isinstance(o, bool) and M is None and use_tmem_red is False:
         use_tmem_red = o
         o = None
@@ -1106,8 +1106,8 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
 
     stage = 3 if causal else 1
     p = select_kernel_config(HEAD_DIM_K, q.shape[2], q.dtype, causal, use_tmem_red, override=p)
-    if cta_layout is None:
-        cta_layout = p.CTA_LAYOUT
+    if cga_layout is None:
+        cga_layout = p.CGA_LAYOUT
 
     if o is None:
         o = torch.empty_like(q)
@@ -1117,16 +1117,16 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
     y_dim = q.shape[0] * q.shape[1] * q.shape[2]
 
     # The kernel will split the cluster tile into two subtiles. Keep the
-    # configured M tile per CTA and grow the cluster tile with the CTA layout.
-    BLOCK_M = p.BLOCK_M * get_split_dim(cta_layout, 0)
+    # configured M tile per CTA and grow the cluster tile with the CGA layout.
+    BLOCK_M = p.BLOCK_M * get_split_dim(cga_layout, 0)
     BLOCK_N = p.BLOCK_N
     SPLIT_M = BLOCK_M // 2
     GROUP_SIZE_N = p.GROUP_SIZE_N
-    num_ctas = 2**len(cta_layout)
+    num_ctas = 2**len(cga_layout)
     NUM_SMS = max(1, torch.cuda.get_device_properties("cuda").multi_processor_count * p.OCCUPANCY // num_ctas)
 
-    lhs_cga_layout = get_mma_operand_cga_layout(cta_layout, 0)
-    rhs_cga_layout = get_mma_operand_cga_layout(cta_layout, 1)
+    lhs_cga_layout = get_mma_operand_cga_layout(cga_layout, 0)
+    rhs_cga_layout = get_mma_operand_cga_layout(cga_layout, 1)
     k_cga_layout = tuple((basis[1], basis[0]) for basis in rhs_cga_layout)
 
     desc_q = make_tensor_desc(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=[SPLIT_M, HEAD_DIM_K],
@@ -1136,7 +1136,7 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
     desc_k = make_tensor_desc(k, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=[BLOCK_N, HEAD_DIM_K],
                               cga_layout=k_cga_layout)
     desc_o = make_tensor_desc(o, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=[SPLIT_M, HEAD_DIM_K],
-                              cga_layout=cta_layout)
+                              cga_layout=cga_layout)
 
     num_pid_m = triton.cdiv(q.shape[2], BLOCK_M)
     num_pid_n = q.shape[0] * q.shape[1]
@@ -1148,7 +1148,7 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
         BLOCK_M, BLOCK_N, HEAD_DIM_K, GROUP_SIZE_N, NUM_SMS,  #
         SPLIT_EXP_FACTOR=p.SPLIT_EXP_FACTOR, STAGE=stage, dtype=torch_dtype_to_triton(q.dtype),  #
         num_warps=p.NUM_WARPS, maxnreg=p.MAXNREG, use_tmem_red=p.USE_TMEM_RED, NUM_KV_BUFFERS=p.NUM_KV_BUFFERS,
-        USE_EXP2_TURNSTILE=p.USE_EXP2_TURNSTILE, CGA_LAYOUT=cta_layout, num_ctas=num_ctas)
+        USE_EXP2_TURNSTILE=p.USE_EXP2_TURNSTILE, CGA_LAYOUT=cga_layout, num_ctas=num_ctas)
 
     return o, M
 
@@ -1165,9 +1165,9 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
 @pytest.mark.parametrize("causal", [False, True])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float8_e5m2])
 @pytest.mark.parametrize("use_tmem_red", [False, True] if is_blackwell_ultra() else [False])
-@pytest.mark.parametrize("cta_layout", [(), ((1, 0), ), ((1, 0), (2, 0))], ids=["1cta", "2ctas", "4ctas"])
+@pytest.mark.parametrize("cga_layout", [(), ((1, 0), ), ((1, 0), (2, 0))], ids=["1cta", "2ctas", "4ctas"])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
-def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cta_layout, profile=False):
+def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, profile=False):
     device = "cuda"
 
     def alloc_fn(size: int, alignment: int, stream):
@@ -1184,7 +1184,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cta_layout, prof
     v = (torch.empty((Z, H, N_CTX, HEAD_DIM), device=device).normal_(mean=0.0, std=0.5).to(dtype).requires_grad_())
     sm_scale = 0.5
 
-    tri_out, _ = attention_forward(q, k, v, causal, sm_scale, use_tmem_red=use_tmem_red, cta_layout=cta_layout)
+    tri_out, _ = attention_forward(q, k, v, causal, sm_scale, use_tmem_red=use_tmem_red, cga_layout=cga_layout)
     if dtype == torch.float8_e5m2:
         ref_out = torch.nn.functional.scaled_dot_product_attention(q.float(), k.float(), v.float(), scale=sm_scale,
                                                                    is_causal=causal)
@@ -1195,12 +1195,13 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cta_layout, prof
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
-@pytest.mark.parametrize("cta_layout", [(), ((1, 0), )], ids=["1cta", "2ctas"])
+@pytest.mark.parametrize("cga_layout", [(), ((1, 0), )], ids=["1cta", "2ctas"])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
-def test_op_consan(dtype, cta_layout):
+def test_op_consan(dtype, cga_layout):
     with triton.knobs.compilation.scope():
         triton.knobs.compilation.instrumentation_mode = "consan"
-        test_op(Z=1, H=1, N_CTX=1024, HEAD_DIM=64, causal=False, dtype=dtype, use_tmem_red=False, cta_layout=cta_layout)
+        test_op(Z=1, H=1, N_CTX=1024, HEAD_DIM=64, causal=False, dtype=dtype, use_tmem_red=False,
+                cga_layout=cga_layout)
 
 
 # ===-----------------------------------------------------------------------===#

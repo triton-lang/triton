@@ -285,7 +285,7 @@ if __name__ == "__main__" and is_hopper_or_newer():
 # and so on. The lead CTA is the smallest CTA id in the group. For this layout, the even CTA IDs are the
 # lead CTAs.
 #
-# In general, an mbarrier cta_layout is a sequence `[[2**i] for i in range(k)]` for `k <= log2(num_ctas)`
+# In general, an mbarrier cga_layout is a sequence `[[2**i] for i in range(k)]` for `k <= log2(num_ctas)`
 # with `log2(num_ctas) - k` zeros interleaved.
 #
 # All the operations that act on barriers generalize naturally to multi-CTA barriers. More explicitly:
