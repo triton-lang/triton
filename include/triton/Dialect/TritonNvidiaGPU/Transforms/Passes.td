@@ -24,11 +24,11 @@
 
 include "mlir/Pass/PassBase.td"
 
-def TritonNvidiaGPUAssignCTALayoutsPass : Pass<"triton-nvidia-gpu-assign-cta-layouts", "mlir::ModuleOp"> {
-  let summary = "Assign CTA layouts";
+def TritonNvidiaGPUAssignCGALayoutsPass : Pass<"triton-nvidia-gpu-assign-cga-layouts", "mlir::ModuleOp"> {
+  let summary = "Assign CGA layouts";
 
   let description = [{
-    This pass computes and assigns optimized CTA layouts to anchor ops such as DotOp and ReduceOp
+    This pass computes and assigns optimized CGA layouts to anchor ops such as DotOp and ReduceOp
     operations.
   }];
 

@@ -20,7 +20,7 @@ namespace nvidia_gpu {
 
 namespace {
 
-// AssignCTALayouts chooses preferred CTA layouts for Dot/Reduce ops and
+// AssignCGALayouts chooses preferred CGA layouts for Dot/Reduce ops and
 // materializes the boundary with ttg.convert_layout. This pass looks for
 // cross-CTA conversions that feed side-effecting users, such as stores, and
 // moves those users to a layout in the same CTA group as the conversion source.

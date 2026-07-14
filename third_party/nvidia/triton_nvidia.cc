@@ -179,8 +179,8 @@ createInitializeWSClusterBarriersWrapper(int32_t capability,
 }
 
 void init_triton_nvidia_passes_ttnvgpuir(py::module_ &m) {
-  ADD_PASS_WRAPPER_0("add_assign_cta_layouts",
-                     ttng::createTritonNvidiaGPUAssignCTALayoutsPass);
+  ADD_PASS_WRAPPER_0("add_assign_cga_layouts",
+                     ttng::createTritonNvidiaGPUAssignCGALayoutsPass);
   ADD_PASS_WRAPPER_0("add_to_clc", ttng::createTritonNvidiaGPUToCLCPass);
   ADD_PASS_WRAPPER_0("add_lower_clc", ttng::createTritonNvidiaGPULowerCLCPass);
   ADD_PASS_WRAPPER_0("add_optimize_cta_locality",
