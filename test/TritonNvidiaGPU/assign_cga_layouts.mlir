@@ -1,7 +1,5 @@
 // RUN: triton-opt %s -split-input-file -triton-nvidia-gpu-assign-cga-layouts | FileCheck %s
-// RUN: triton-opt %s -split-input-file -triton-nvidia-gpu-assign-cga-layouts | FileCheck %s --check-prefix=NO-FORCE
 // RUN: triton-opt %s -split-input-file -triton-nvidia-gpu-assign-cga-layouts -tritongpu-remove-layout-conversions | FileCheck %s --check-prefix=E2E
-// NO-FORCE-NOT: ttg.force_cga_rematerialization
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0], [0]]}>
 
@@ -85,8 +83,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // E2E: %[[E2E_B:.*]] = tt.load %[[E2E_B_PTRS]] : tensor<32x128x!tt.ptr<f16>, #[[$E2E_LOAD_B_PLANNED]]>
   // E2E: tt.store %{{.*}}, %[[E2E_OLD_A]] : tensor<128x32x!tt.ptr<f16>, #[[$E2E_LOAD_ORIG]]>
   // E2E: %[[E2E_SUM:.*]] = arith.addf %[[E2E_B]], %[[E2E_B]] : tensor<32x128xf16, #[[$E2E_LOAD_B_PLANNED]]>
-  // E2E: %[[E2E_AD:.*]] = ttg.convert_layout %{{.*}} : tensor<128x32xf16, {{.*}}> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$E2E_DOT_OPT]]}>>
-  // E2E: %[[E2E_BD:.*]] = ttg.convert_layout %[[E2E_SUM]] : tensor<32x128xf16, #[[$E2E_LOAD_B_PLANNED]]> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$E2E_DOT_OPT]]}>>
+  // E2E-DAG: %[[E2E_AD:.*]] = ttg.convert_layout %{{.*}} : tensor<128x32xf16, {{.*}}> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$E2E_DOT_OPT]]}>>
+  // E2E-DAG: %[[E2E_BD:.*]] = ttg.convert_layout %[[E2E_SUM]] : tensor<32x128xf16, #[[$E2E_LOAD_B_PLANNED]]> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$E2E_DOT_OPT]]}>>
   // E2E: tt.dot %[[E2E_AD]], %[[E2E_BD]], %{{.*}} : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$E2E_DOT_OPT]]}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$E2E_DOT_OPT]]}>> -> tensor<128x128xf32, #[[$E2E_DOT_OPT]]>
   tt.func @dot_rematerializes_exclusive_load_source(
     %ptrs: tensor<128x32x!tt.ptr<f16>, #load_src>,

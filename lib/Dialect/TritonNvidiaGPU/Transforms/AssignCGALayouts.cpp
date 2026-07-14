@@ -39,8 +39,7 @@ struct DotCGASplit {
 // layout choices. The shape-aware blocked layout builder redistributes threads
 // and warps when the shape per CTA changes.
 Attribute cloneWithCGALayout(RankedTensorType tensorTy,
-                             ttg::CGAEncodingAttr cgaLayout,
-                             Operation *scope) {
+                             ttg::CGAEncodingAttr cgaLayout, Operation *scope) {
   Attribute layout = tensorTy.getEncoding();
   int numWarps = ttg::lookupNumWarps(scope);
   OpBuilder builder(scope);
@@ -65,19 +64,19 @@ Attribute cloneWithCGALayout(RankedTensorType tensorTy,
     if (auto parent = dyn_cast<ttg::BlockedEncodingAttr>(slice.getParent())) {
       auto newParent = ttg::BlockedEncodingAttr::get(
           tensorTy.getContext(), parent.getSizePerThread(),
-          parent.getThreadsPerWarp(), parent.getWarpsPerCTA(), parent.getOrder(),
-          cgaLayout);
+          parent.getThreadsPerWarp(), parent.getWarpsPerCTA(),
+          parent.getOrder(), cgaLayout);
       return ttg::SliceEncodingAttr::get(tensorTy.getContext(), slice.getDim(),
-                                        newParent);
+                                         newParent);
     } else if (auto parent =
                    dyn_cast<ttg::SliceEncodingAttr>(slice.getParent())) {
       auto parentShape = slice.paddedShape(tensorTy.getShape());
       auto newParent = cloneWithCGALayout(
           RankedTensorType::get(parentShape, tensorTy.getElementType(), parent),
           cgaLayout, scope);
-      return ttg::SliceEncodingAttr::get(tensorTy.getContext(), slice.getDim(),
-                                         cast<ttg::DistributedEncodingTrait>(
-                                             newParent));
+      return ttg::SliceEncodingAttr::get(
+          tensorTy.getContext(), slice.getDim(),
+          cast<ttg::DistributedEncodingTrait>(newParent));
     }
   }
 
@@ -156,8 +155,8 @@ private:
         auto operandTy = dyn_cast<RankedTensorType>(operand.getType());
         if (!operandTy)
           continue;
-        Attribute srcEncoding = cloneWithCGALayout(
-            operandTy, ttg::getCGALayout(encoding), op);
+        Attribute srcEncoding =
+            cloneWithCGALayout(operandTy, ttg::getCGALayout(encoding), op);
         queue.emplace_back(operand, srcEncoding);
       }
     }
@@ -239,8 +238,8 @@ Value convertValueToLayout(OpBuilder &builder, Location loc, Value value,
   return ttg::ConvertLayoutOp::create(builder, loc, newTy, value);
 }
 
-void convertOpOperandsToLayouts(
-    Operation *op, llvm::ArrayRef<Attribute> operandLayouts) {
+void convertOpOperandsToLayouts(Operation *op,
+                                llvm::ArrayRef<Attribute> operandLayouts) {
   OpBuilder builder(op);
   Location loc = op->getLoc();
   for (auto [operand, layout] :
