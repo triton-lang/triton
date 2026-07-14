@@ -110,7 +110,7 @@ def _p_matmul(
              EPILOGUE_SUBTILE: tl.constexpr,
              EVEN_K: tl.constexpr, SPLIT_K: tl.constexpr,
              W_CACHE_MODIFIER: tl.constexpr,
-             NUM_SMS: tl.constexpr,
+             NUM_SMS,
              X_TMA_MODE: tl.constexpr,
              Y_TMA_MODE: tl.constexpr,
              Y_MX_SCALE_LAYOUT: tl.constexpr = None,
