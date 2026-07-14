@@ -115,9 +115,9 @@ def get_src_element_ty_size(dtype_str):
 
 @pytest.mark.parametrize("dtype_src_str", ["float32", "tensorfloat32", "float16", "float8e5", "float64"])
 @pytest.mark.parametrize("dtype_dst_str", ["float32", "float16", "float64"])
-@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES", [(128, 128, 16, 4), (64, 128, 32, 4), (32, 32, 32, 4),
-                                                                   (256, 128, 32, 4), (64, 512, 32, 2),
-                                                                   (512, 64, 32, 2), (64, 16, 64, 4)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES",
+                         [(128, 128, 16, 4), (64, 128, 32, 4), (32, 32, 32, 4), (256, 128, 32, 4), (64, 512, 32, 2),
+                          (512, 64, 32, 2), (64, 16, 64, 4)] + ([(256, 128, 128, 3)] if is_rubin() else []))
 @pytest.mark.parametrize("NUM_CTAS", [1, 2])
 @pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("EPILOGUE_SUBTILE", [True, False])
@@ -383,7 +383,7 @@ def fp8e8m0_to_float32(scale):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128), (128, 16, 256),
-                                                       (128, 16, 64)])
+                                                       (128, 16, 64)] + ([(256, 256, 128)] if is_rubin() else []))
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
 @pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if (is_hip_cdna() or is_hip_gfx1250()) else [0]))

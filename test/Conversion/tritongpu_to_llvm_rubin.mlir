@@ -120,3 +120,61 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 256, 32]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16}>
+#shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: @tc_gen5_mma_breuse
+  // CHECK: tcgen05.mma.cta_group::1.kind::f16.collector::b::fill
+  // CHECK: tcgen05.mma.cta_group::1.kind::f16.collector::b::lastuse
+  tt.func @tc_gen5_mma_breuse(%a: !ttg.memdesc<256x128xf16, #shared, #ttg.shared_memory>,
+                       %b: !ttg.memdesc<128x128xf16, #shared1, #ttg.shared_memory>,
+                       %c: !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+                       %useAcc: i1,
+                       %pred: i1,
+                       %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>,
+                       %barrierPred: i1) {
+    ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred, %barrier[%barrierPred] {is_async} :
+       !ttg.memdesc<256x128xf16, #shared, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xf16, #shared1, #ttg.shared_memory>,
+       !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
+#shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem_scales = #ttng.tensor_memory_scales_encoding<>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @tc_gen5_mma_block_scale_breuse
+  // CHECK: tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.block32.collector::b::fill
+  // CHECK: tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.block32.collector::b::lastuse
+  tt.func @tc_gen5_mma_block_scale_breuse(%a: !ttg.memdesc<256x64xf8E4M3FN, #shared, #ttg.shared_memory>,
+                       %b: !ttg.memdesc<32x128xi8, #shared1, #ttg.shared_memory>,
+                       %c: !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+                       %scale_a: !ttg.memdesc<256x2xi8, #tmem_scales, #ttng.tensor_memory>,
+                       %scale_b: !ttg.memdesc<128x2xi8, #tmem_scales, #ttng.tensor_memory>,
+                       %useAcc: i1,
+                       %pred: i1,
+                       %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>,
+                       %barrierPred: i1) {
+    ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e4m3 rhs = e2m1, %barrier[%barrierPred] {is_async} :
+    !ttg.memdesc<256x64xf8E4M3FN, #shared, #ttg.shared_memory>,
+    !ttg.memdesc<32x128xi8, #shared1, #ttg.shared_memory>,
+    !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+    !ttg.memdesc<256x2xi8, #tmem_scales, #ttng.tensor_memory>,
+    !ttg.memdesc<128x2xi8, #tmem_scales, #ttng.tensor_memory>,
+    !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
+    tt.return
+  }
+}
