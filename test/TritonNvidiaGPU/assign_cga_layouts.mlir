@@ -68,7 +68,7 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // E2E-DAG: #[[$E2E_LOAD_B_PLANNED:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
 // E2E-DAG: #[[$E2E_DOT_OPT:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: tt.func @dot_clones_load_source
+  // CHECK-LABEL: tt.func @dot_rematerializes_exclusive_load_source
   // CHECK-NOT: tt.load
   // CHECK: %[[ORIG_LOAD:.*]] = tt.load %{{.*}} : tensor<128x32x!tt.ptr<f16>, #[[$LOAD_ORIG]]>
   // CHECK-NOT: tt.load
@@ -77,7 +77,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: tt.store %{{.*}}, %[[ORIG_LOAD]] : tensor<128x32x!tt.ptr<f16>, #[[$LOAD_ORIG]]>
   // CHECK: arith.addf %[[B_LOAD]], %[[B_LOAD]] : tensor<32x128xf16, #[[$LOAD_B_PLANNED]]>
   // CHECK: ttg.convert_layout %{{.*}} : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DOT_DEFAULT_LOAD]]}>> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DOT_OPT_LOAD]]}>>
-  // E2E-LABEL: tt.func @dot_clones_load_source
+  // E2E-LABEL: tt.func @dot_rematerializes_exclusive_load_source
   // E2E: %[[E2E_OLD_A:.*]] = tt.load %{{.*}} : tensor<128x32x!tt.ptr<f16>, #[[$E2E_LOAD_ORIG]]>
   // E2E: %[[E2E_B_PTRS:.*]] = ttg.convert_layout %{{.*}} : tensor<32x128x!tt.ptr<f16>, #[[$E2E_LOAD_B_ORIG]]> -> tensor<32x128x!tt.ptr<f16>, #[[$E2E_LOAD_B_PLANNED]]>
   // E2E: %[[E2E_B:.*]] = tt.load %[[E2E_B_PTRS]] : tensor<32x128x!tt.ptr<f16>, #[[$E2E_LOAD_B_PLANNED]]>
@@ -86,7 +86,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // E2E: %[[E2E_AD:.*]] = ttg.convert_layout %{{.*}} : tensor<128x32xf16, {{.*}}> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$E2E_DOT_OPT]]}>>
   // E2E: %[[E2E_BD:.*]] = ttg.convert_layout %[[E2E_SUM]] : tensor<32x128xf16, #[[$E2E_LOAD_B_PLANNED]]> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$E2E_DOT_OPT]]}>>
   // E2E: tt.dot %[[E2E_AD]], %[[E2E_BD]], %{{.*}} : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$E2E_DOT_OPT]]}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$E2E_DOT_OPT]]}>> -> tensor<128x128xf32, #[[$E2E_DOT_OPT]]>
-  tt.func @dot_clones_load_source(
+  tt.func @dot_rematerializes_exclusive_load_source(
     %ptrs: tensor<128x32x!tt.ptr<f16>, #load_src>,
     %out: tensor<128x32x!tt.ptr<f16>, #load_src>,
     %b_ptrs: tensor<32x128x!tt.ptr<f16>, #load_src_b>,
@@ -114,12 +114,12 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK-DAG: #[[$VOLATILE_DEFAULT:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
 // CHECK-DAG: #[[$VOLATILE_OPT:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: tt.func @dot_does_not_clone_volatile_load
+  // CHECK-LABEL: tt.func @dot_does_not_rematerialize_volatile_load
   // CHECK-NOT: tt.load
   // CHECK: tt.load %{{.*}} {isVolatile = true} : tensor<128x32x!tt.ptr<f16>, #[[$VOLATILE_SRC]]>
   // CHECK-NOT: tt.load
   // CHECK: ttg.convert_layout %{{.*}} : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$VOLATILE_DEFAULT]]}>> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$VOLATILE_OPT]]}>>
-  tt.func @dot_does_not_clone_volatile_load(
+  tt.func @dot_does_not_rematerialize_volatile_load(
       %ptrs: tensor<128x32x!tt.ptr<f16>, #volatile_src>) {
     %a = tt.load %ptrs {isVolatile = true} : tensor<128x32x!tt.ptr<f16>, #volatile_src>
     %a_blocked = ttg.convert_layout %a : tensor<128x32xf16, #volatile_src> -> tensor<128x32xf16, #volatile_default>
@@ -144,7 +144,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK-DAG: #[[$DOT_DEFAULT_DESC_LOAD:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
 // CHECK-DAG: #[[$DOT_OPT_DESC_LOAD:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: tt.func @dot_clones_descriptor_load_source
+  // CHECK-LABEL: tt.func @dot_rematerializes_exclusive_descriptor_load_source
   // CHECK-NOT: tt.descriptor_load
   // CHECK: %[[ORIG_DESC_LOAD:.*]] = tt.descriptor_load %{{.*}}[%{{.*}}, %{{.*}}] : !tt.tensordesc<128x32xf16> -> tensor<128x32xf16, #[[$DESC_LOAD_ORIG]]>
   // CHECK-NOT: tt.descriptor_load
@@ -152,12 +152,12 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-NOT: tt.descriptor_load
   // CHECK: ttg.convert_layout %{{.*}} : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DOT_DEFAULT_DESC_LOAD]]}>> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DOT_OPT_DESC_LOAD]]}>>
   // CHECK: tt.return %[[ORIG_DESC_LOAD]], %{{.*}} : tensor<128x32xf16, #[[$DESC_LOAD_ORIG]]>,
-  // E2E-LABEL: tt.func @dot_clones_descriptor_load_source
+  // E2E-LABEL: tt.func @dot_rematerializes_exclusive_descriptor_load_source
   // E2E: %[[E2E_OLD_DESC:.*]] = tt.descriptor_load %{{.*}}[%{{.*}}, %{{.*}}] : !tt.tensordesc<128x32xf16> -> tensor<128x32xf16, #[[$E2E_DESC_ORIG:.*]]>
   // E2E: %[[E2E_NEW_B_DESC:.*]] = tt.descriptor_load %{{.*}}[%{{.*}}, %{{.*}}] : !tt.tensordesc<32x128xf16> -> tensor<32x128xf16, #[[$E2E_DESC_B_PLANNED:.*]]>
   // E2E: ttg.convert_layout %[[E2E_NEW_B_DESC]]
   // E2E: tt.return %[[E2E_OLD_DESC]], %{{.*}} : tensor<128x32xf16, #[[$E2E_DESC_ORIG]]>,
-  tt.func @dot_clones_descriptor_load_source(
+  tt.func @dot_rematerializes_exclusive_descriptor_load_source(
     %a_desc: !tt.tensordesc<128x32xf16>,
     %b_desc: !tt.tensordesc<32x128xf16>,
     %i: i32,

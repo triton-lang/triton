@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <deque>
+#include <optional>
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -13,8 +14,6 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/Support/ErrorHandling.h"
-#include <optional>
 
 namespace ttg = mlir::triton::gpu;
 
@@ -37,10 +36,10 @@ struct DotCGASplit {
 };
 
 // Clone an encoding with `cgaLayout`. Dot operand encodings carry additional
-// parent-layout decisions, so reuse `preferredEncoding` when both encodings are
-// dot operands. For blocked and sliced encodings, retain the existing intra-CTA
-// layout choices. The shape-aware blocked layout builder redistributes threads
-// and warps when the shape per CTA changes.
+// parent-layout decisions, so reuse `preferredEncoding` when available. For
+// blocked and sliced encodings, retain the existing intra-CTA layout choices.
+// The shape-aware blocked layout builder redistributes threads and warps when
+// the shape per CTA changes.
 std::optional<Attribute> cloneWithCGALayout(RankedTensorType tensorTy,
                                             ttg::CGAEncodingAttr cgaLayout,
                                             Operation *scope,
@@ -50,6 +49,8 @@ std::optional<Attribute> cloneWithCGALayout(RankedTensorType tensorTy,
   OpBuilder builder(scope);
   int threadsPerWarp = ttg::lookupThreadsPerWarp(builder);
   if (auto dot = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
+    if (isa_and_nonnull<ttg::DotOperandEncodingAttr>(preferredEncoding))
+      return preferredEncoding;
     auto parent = dyn_cast<ttg::BlockedEncodingAttr>(dot.getParent());
     if (!parent)
       return std::nullopt;
@@ -91,11 +92,10 @@ public:
   explicit CGARematerialization(ttg::ConvertLayoutOp root) : root(root) {}
 
   LogicalResult run() {
-    Attribute preferredEncoding = root.getType().getEncoding();
-    auto desiredEncoding =
-        cloneWithCGALayout(cast<RankedTensorType>(root.getSrc().getType()),
-                           ttg::getCGALayout(preferredEncoding), root,
-                           preferredEncoding);
+    auto desiredEncoding = cloneWithCGALayout(
+        cast<RankedTensorType>(root.getSrc().getType()),
+        ttg::getCGALayout(root.getType().getEncoding()), root,
+        root.getType().getEncoding());
     if (!desiredEncoding || failed(plan(root.getSrc(), *desiredEncoding)) ||
         !foundLoad || !hasExclusiveUses())
       return failure();
@@ -148,16 +148,6 @@ private:
         continue;
       }
 
-      if (auto convert = dyn_cast<ttg::ConvertLayoutOp>(op)) {
-        auto srcEncoding = cloneWithCGALayout(
-            cast<RankedTensorType>(convert.getSrc().getType()),
-            ttg::getCGALayout(encoding), op, encoding);
-        if (!srcEncoding)
-          return failure();
-        queue.emplace_back(convert.getSrc(), *srcEncoding);
-        continue;
-      }
-
       for (Value operand : op->getOperands()) {
         auto operandTy = dyn_cast<RankedTensorType>(operand.getType());
         if (!operandTy)
@@ -200,7 +190,9 @@ private:
 
     if (isa<triton::LoadOp>(op)) {
       for (OpOperand &operand : op->getOpOperands()) {
-        auto tensorTy = cast<RankedTensorType>(operand.get().getType());
+        auto tensorTy = dyn_cast<RankedTensorType>(operand.get().getType());
+        if (!tensorTy)
+          continue;
         auto newType = tensorTy.cloneWithEncoding(layoutIt->second);
         Value converted = ttg::ConvertLayoutOp::create(builder, op->getLoc(),
                                                        newType, operand.get());
@@ -424,7 +416,7 @@ struct AssignCGALayoutsPass
     });
 
     for (ttg::ConvertLayoutOp convert : rematerializationRoots)
-      CGARematerialization(convert).run();
+      (void)CGARematerialization(convert).run();
   }
 };
 
