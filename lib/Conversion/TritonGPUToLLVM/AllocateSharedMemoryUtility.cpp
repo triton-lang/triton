@@ -1,4 +1,5 @@
 #include "triton/Conversion/TritonGPUToLLVM/AllocateSharedMemoryUtility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::gpu {
@@ -11,11 +12,15 @@ void attachAllocationSizeAndOffsetAttr(ModuleOp mod,
   mod.walk<mlir::WalkOrder::PreOrder>([&](FunctionOpInterface funcOp) {
     auto *funcAllocation = allocation.getFuncData(funcOp);
     funcOp.walk([&](Operation *op) {
-      // Handle scratch buffers (from operations like convert_layout)
+      // Handle compiler-owned scratch buffers.
       auto oBufferId = funcAllocation->getBufferId(op);
       if (oBufferId != Allocation::InvalidBufferId) {
         int offset = funcAllocation->getOffset(oBufferId);
         op->setAttr("allocation.offset", IntegerAttr::get(i32Ty, offset));
+        if (isa<ConvertLayoutOp, mlir::triton::ReduceOp>(op)) {
+          size_t size = funcAllocation->getAllocatedSize(oBufferId);
+          op->setAttr("allocation.size", IntegerAttr::get(i32Ty, size));
+        }
         return;
       }
 

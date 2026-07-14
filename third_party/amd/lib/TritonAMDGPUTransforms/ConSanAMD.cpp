@@ -91,9 +91,12 @@ public:
     return nullptr;
   }
 
-  std::optional<MemEffectsOpInfo>
+  FailureOr<std::optional<MemEffectsOpInfo>>
   getMemEffectsOpInfo(Operation *op) const override {
-    auto info = ConSanTargetHooks::getMemEffectsOpInfo(op);
+    auto baseInfo = ConSanTargetHooks::getMemEffectsOpInfo(op);
+    if (failed(baseInfo))
+      return failure();
+    auto info = std::move(*baseInfo);
     if (info)
       return info;
     // AsyncTDMCopyGlobalToLocalOp: Async copy from global to shared memory.

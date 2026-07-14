@@ -271,6 +271,10 @@ bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy);
 // within a warp.  No data exchange across warps or blocks is needed.
 bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
 
+// The conversion does not move values across warps or CTAs, so a lowering may
+// choose warp shuffles even when the ordinary cost model prefers shared memory.
+bool cvtCanUseWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
+
 // Conversion from `srcTy` to `dstTy` involves data exchange across threads,
 // warps, and possibly blocks.
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);

@@ -138,9 +138,12 @@ public:
     return getLeaderCTAPredicate(b, mask);
   }
 
-  std::optional<MemEffectsOpInfo>
+  FailureOr<std::optional<MemEffectsOpInfo>>
   getMemEffectsOpInfo(Operation *op) const override {
-    auto info = ConSanTargetHooks::getMemEffectsOpInfo(op);
+    auto baseInfo = ConSanTargetHooks::getMemEffectsOpInfo(op);
+    if (failed(baseInfo))
+      return failure();
+    auto info = std::move(*baseInfo);
     if (info)
       return info;
     if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {

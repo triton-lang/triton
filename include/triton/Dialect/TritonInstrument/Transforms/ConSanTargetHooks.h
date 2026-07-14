@@ -2,12 +2,14 @@
 #define TRITONINSTRUMENT_CONSAN_TARGET_HOOKS_H
 
 #include "mlir/IR/BuiltinOps.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <variant>
 
 namespace mlir::triton::instrument {
 
@@ -30,16 +32,26 @@ struct MemEffectsOpInfo {
     EffectWrites,
   };
   struct Effects {
+    struct StaticSharedBuffer {
+      BufferRegion region;
+    };
+    using Buffer = std::variant<Value, StaticSharedBuffer>;
+
     enum RW { Read, Write } rw;
     enum class Proxy { Generic, Async } proxy;
-    Value buf;
+    Buffer buffer;
     std::string operandName = "";
     uint32_t length = 0;
 
     Effects(RW rw, Value buf, std::string operandName = "",
             Proxy proxy = Proxy::Generic)
-        : rw(rw), proxy(proxy), buf(buf), operandName(operandName),
+        : rw(rw), proxy(proxy), buffer(buf), operandName(operandName),
           length(getMemDescLength(buf)) {}
+
+    Effects(RW rw, BufferRegion region, std::string operandName = "",
+            Proxy proxy = Proxy::Generic)
+        : rw(rw), proxy(proxy), buffer(StaticSharedBuffer{region}),
+          operandName(operandName), length(region.length) {}
   };
   struct BarrierInfo {
     Value barrier;
@@ -125,7 +137,7 @@ public:
   virtual Value getIssuerCTAPred(ImplicitLocOpBuilder &b,
                                  Operation *op) const = 0;
 
-  virtual std::optional<MemEffectsOpInfo>
+  virtual FailureOr<std::optional<MemEffectsOpInfo>>
   getMemEffectsOpInfo(Operation *op) const {
     namespace ttg = triton::gpu;
     std::optional<MemEffectsOpInfo> info;
@@ -173,6 +185,82 @@ public:
         info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
                                           allocOp.getResult());
       }
+    }
+
+    auto addStaticSharedScratchEffect =
+        [&](Operation *scratchOp, StringRef operationName) -> LogicalResult {
+      auto offset = scratchOp->getAttrOfType<IntegerAttr>("allocation.offset");
+      auto size = scratchOp->getAttrOfType<IntegerAttr>("allocation.size");
+      if (!offset && !size) {
+        scratchOp->emitError() << "shared-memory " << operationName
+                               << " is missing scratch allocation metadata";
+        return failure();
+      }
+      if (bool(offset) != bool(size)) {
+        scratchOp->emitError()
+            << operationName << " scratch allocation metadata must include "
+            << "both allocation.offset and allocation.size";
+        return failure();
+      }
+
+      int64_t offsetValue = offset.getInt();
+      int64_t sizeValue = size.getInt();
+      constexpr uint64_t maxSharedMemorySize =
+          uint64_t{kSharedMemoryObjectMask} + 1;
+      bool isValid = offsetValue >= 0 && sizeValue > 0;
+      if (isValid) {
+        uint64_t unsignedOffset = static_cast<uint64_t>(offsetValue);
+        uint64_t unsignedSize = static_cast<uint64_t>(sizeValue);
+        isValid = unsignedOffset <= maxSharedMemorySize &&
+                  unsignedSize <= maxSharedMemorySize - unsignedOffset;
+      }
+      if (!isValid) {
+        scratchOp->emitError()
+            << "invalid " << operationName
+            << " scratch allocation metadata: offset " << offsetValue
+            << ", size " << sizeValue
+            << "; the interval must be non-empty and fit in the 24-bit "
+               "shared-memory address space";
+        return failure();
+      }
+
+      info.emplace();
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+      info->operandEffects.emplace_back(
+          MemEffectsOpInfo::Effects::Write,
+          BufferRegion{static_cast<uint32_t>(offsetValue),
+                       static_cast<uint32_t>(sizeValue)},
+          "Scratch");
+      return success();
+    };
+
+    if (auto cvtOp = dyn_cast<ttg::ConvertLayoutOp>(op)) {
+      auto func = cvtOp->getParentOfType<mlir::triton::FuncOp>();
+      bool forceWarpShuffle =
+          func && func->hasAttrOfType<UnitAttr>("always_use_warp_shuffle") &&
+          cvtCanUseWarpShuffle(cvtOp.getSrc().getType(), cvtOp.getType());
+      // Allocation analysis may reserve an otherwise-needed scratch slot for
+      // conversions that lowering is explicitly forced to implement with
+      // warp shuffles.
+      if (forceWarpShuffle)
+        return info;
+
+      bool needsSharedMemory =
+          cvtNeedsSharedMemory(cvtOp.getSrc().getType(), cvtOp.getType());
+      if (!needsSharedMemory)
+        return info;
+      if (failed(addStaticSharedScratchEffect(cvtOp, "convert_layout")))
+        return failure();
+    }
+    if (auto reduceOp = dyn_cast<mlir::triton::ReduceOp>(op)) {
+      bool hasAllocationMetadata = reduceOp->hasAttr("allocation.offset") ||
+                                   reduceOp->hasAttr("allocation.size");
+      bool needsSharedMemory =
+          hasAllocationMetadata ||
+          ReduceOpHelper(reduceOp).getScratchSizeInBytes() != 0;
+      if (needsSharedMemory &&
+          failed(addStaticSharedScratchEffect(reduceOp, "reduce")))
+        return failure();
     }
     return info;
   }

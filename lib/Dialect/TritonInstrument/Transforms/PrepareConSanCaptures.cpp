@@ -1,6 +1,7 @@
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 
 #include "mlir/IR/BuiltinTypes.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
@@ -25,6 +26,17 @@ namespace tti = mlir::triton::instrument;
 bool hasSharedMemoryBuffers(ModuleOp mod) {
   bool result = false;
   mod.walk([&](ttg::LocalAllocOp op) { result |= op.isSharedMemoryAlloc(); });
+  mod.walk([&](ttg::ConvertLayoutOp op) {
+    auto func = op->getParentOfType<mlir::triton::FuncOp>();
+    bool forceWarpShuffle =
+        func && func->hasAttrOfType<UnitAttr>("always_use_warp_shuffle") &&
+        cvtCanUseWarpShuffle(op.getSrc().getType(), op.getType());
+    result |= !forceWarpShuffle &&
+              cvtNeedsSharedMemory(op.getSrc().getType(), op.getType());
+  });
+  mod.walk([&](mlir::triton::ReduceOp op) {
+    result |= ReduceOpHelper(op).getScratchSizeInBytes() != 0;
+  });
   return result;
 }
 
@@ -94,15 +106,15 @@ public:
       return signalPassFailure();
     }
 
-    int numActiveMemTypes = (hasSharedMemoryBuffers(mod) ? 1 : 0) +
-                            (hasTensorMemoryBuffers(mod) ? 1 : 0);
+    bool hasSharedBuffers = hasSharedMemoryBuffers(mod);
+    int numActiveMemTypes =
+        (hasSharedBuffers ? 1 : 0) + (hasTensorMemoryBuffers(mod) ? 1 : 0);
     // NVIDIA inserts a terminal cluster barrier after this pass.
     bool hasClusterBarriers = target == "nvidia" && ttg::lookupNumCTAs(mod) > 1;
     int totalCaptures = tti::estimateConSanCaptureCount(
         numActiveMemTypes, hasBarriers(mod), hasClusterBarriers,
         getNumCommitKinds(mod, hooks.get()),
-        hasSharedMemoryBuffers(mod) &&
-            hooks->needsAsyncProxyFenceTracking(mod));
+        hasSharedBuffers && hooks->needsAsyncProxyFenceTracking(mod));
     int extraBytes = totalCaptures * tti::kCaptureSizeBytes;
 
     auto i32Ty = IntegerType::get(mod.getContext(), 32);

@@ -100,6 +100,18 @@ can be represented directly. Scratch state is zero-initialized once before the
 instrumented body runs, and the initialization is followed by a CTA or cluster
 barrier before any instrumented operation can use it.
 
+Compiler-owned shared-memory scratch does not always have an SSA memdesc for
+BufferRegion analysis to discover. ConSan additionally tracks the allocator's
+static byte interval for `ttg.convert_layout` operations present when ConSan
+runs after shared-memory allocation. Reduction lowering creates additional
+`ttg.convert_layout` operations after ConSan, so ConSan tracks their already
+allocated interval as an effect of the parent `tt.reduce`. Each operation is
+modeled as one synchronous generic-proxy write over its complete interval: it
+must wait for earlier asynchronous readers or writers, and its lowering leaves
+no pending asynchronous scratch access when the operation returns. Conversions
+forced to use warp shuffles are excluded because their reserved allocator slot
+is not accessed by lowering.
+
 The exact auxiliary data layout is intentionally documented next to the
 implementation in `AuxDataMap` in
 `include/triton/Dialect/TritonInstrument/IR/Utility.h`.
@@ -305,6 +317,9 @@ The common hook implementation covers these TritonGPU operations:
   and atomic scatter RMW conservatively cover their full destination
   descriptors because their indices are runtime values.
 - `ttg.local_alloc` with a source: barrier-tracked shared-memory write.
+- `ttg.convert_layout` and scratch-using `tt.reduce`: allocator-provided shared
+  scratch is modeled as a synchronous generic-proxy write over its allocated
+  byte interval.
 
 These shared-memory effects are generic-proxy accesses for the proxy-ordering
 model.

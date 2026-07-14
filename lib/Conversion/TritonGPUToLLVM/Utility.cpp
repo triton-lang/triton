@@ -251,7 +251,12 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
 }
 
 bool cvtAlwaysUseWarpShuffle(ConvertLayoutOp cvt) {
-  return cvt->getParentOp()->hasAttrOfType<UnitAttr>("always_use_warp_shuffle");
+  // ConvertLayoutOp lowering runs after functions have been converted to the
+  // target function dialect (for example LLVM::LLVMFuncOp), so do not assume
+  // that the enclosing operation is still a tt.func.
+  auto func = cvt->getParentOfType<FunctionOpInterface>();
+  return func && func->hasAttrOfType<UnitAttr>("always_use_warp_shuffle") &&
+         cvtCanUseWarpShuffle(cvt.getSrc().getType(), cvt.getType());
 }
 
 Value maybeAnd(OpBuilder &builder, Location loc, Value a, Value b) {

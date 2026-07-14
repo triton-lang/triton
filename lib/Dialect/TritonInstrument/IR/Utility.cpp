@@ -543,7 +543,7 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
     ModuleOp module, FunctionBuilder &fb, const ConSanTargetHooks *hooks) {
   SmallVector<SmallVector<BufferRegion>, numMemTypes> bufRegions(numMemTypes);
   SmallVector<BufferRegion> barrierRegions;
-  if (failed(getBuffersAndBarriers(module, bufRegions, barrierRegions)))
+  if (failed(getBuffersAndBarriers(module, bufRegions, barrierRegions, hooks)))
     return failure();
   int numCTAs = lookupNumCTAs(module);
   threadLayout = getThreadLayout(module, hooks);
@@ -762,7 +762,7 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
 
 LogicalResult AuxDataMap::getBuffersAndBarriers(
     ModuleOp module, SmallVector<SmallVector<BufferRegion>, 2> &bufRegions,
-    SmallVector<BufferRegion> &barrierRegions) {
+    SmallVector<BufferRegion> &barrierRegions, const ConSanTargetHooks *hooks) {
   // Collect shared memory buffers allocated in the module
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
   triton::BufferRegionAnalysis *analysis =
@@ -778,8 +778,39 @@ LogicalResult AuxDataMap::getBuffersAndBarriers(
   barrierRegions = analysis->getAllUsedBufferRegions(
       BufferRegionAnalysis::RegionType::BARRIER);
 
+  // Compiler-owned scratch buffers, such as convert_layout's temporary shared
+  // memory, have no SSA memdesc for BufferRegionAnalysis to discover. Collect
+  // their target-provided static regions from the same effects ConSan will
+  // instrument below. Merging them here also makes overlap with explicit
+  // buffers visible to the alias matrix.
+  if (hooks) {
+    WalkResult result = module.walk([&](Operation *op) -> WalkResult {
+      auto info = hooks->getMemEffectsOpInfo(op);
+      if (failed(info))
+        return WalkResult::interrupt();
+      if (!*info)
+        return WalkResult::advance();
+      for (const auto &effect : (*info)->operandEffects) {
+        auto *staticBuffer =
+            std::get_if<MemEffectsOpInfo::Effects::StaticSharedBuffer>(
+                &effect.buffer);
+        if (!staticBuffer)
+          continue;
+        bufRegions[static_cast<int>(MemType::SHARED_MEM)].push_back(
+            staticBuffer->region);
+      }
+      return WalkResult::advance();
+    });
+    if (result.wasInterrupted())
+      return failure();
+  }
+
   for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
     int iMemType = (int)memType;
+    llvm::sort(bufRegions[iMemType]);
+    bufRegions[iMemType].erase(
+        std::unique(bufRegions[iMemType].begin(), bufRegions[iMemType].end()),
+        bufRegions[iMemType].end());
     if (bufRegions[iMemType].empty()) {
       continue;
     }
