@@ -1835,12 +1835,16 @@ def test_ws_store_wait_load(FAILURE, device, run_wrapper, monkeypatch, num_ctas)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
-@pytest.mark.parametrize("FENCE_LOCATION", ["none", "producer_after_arrive", "producer", "consumer"])
+@pytest.mark.parametrize(
+    "FENCE_LOCATION",
+    ["none", "producer_after_arrive", "producer_after_arrive_cluster_barrier", "producer", "consumer"])
 def test_fence_async_shared_across_warp_specialize(FENCE_LOCATION, device, run_wrapper, monkeypatch, num_ctas):
+    if FENCE_LOCATION == "producer_after_arrive_cluster_barrier" and num_ctas == 1:
+        pytest.skip("Need multiple CTAs for a cluster barrier")
     if run_wrapper:
         result = run_in_process(test_fence_async_shared_across_warp_specialize,
                                 (FENCE_LOCATION, device, False, monkeypatch, num_ctas))
-        if FENCE_LOCATION in ("none", "producer_after_arrive"):
+        if FENCE_LOCATION in ("none", "producer_after_arrive", "producer_after_arrive_cluster_barrier"):
             assert_expected_cuda_failure(result.exc)
             assert "Async shared-memory access is missing fence_async_shared" in result.driver_stderr_output
         else:
@@ -1853,7 +1857,8 @@ def test_fence_async_shared_across_warp_specialize(FENCE_LOCATION, device, run_w
     knobs.refresh_knobs()
 
     @gluon.jit
-    def producer(smem: ttgl.constexpr, bar: ttgl.constexpr, FENCE_LOCATION: ttgl.constexpr, layout: ttgl.constexpr):
+    def producer(smem: ttgl.constexpr, bar: ttgl.constexpr, ready, FENCE_LOCATION: ttgl.constexpr,
+                 layout: ttgl.constexpr):
         block_m: ttgl.constexpr = XBLOCK * ttgl.num_ctas()
         smem.store(ttgl.full([block_m, XBLOCK], 42.0, ttgl.float16, layout))
         if FENCE_LOCATION == "producer":
@@ -1861,17 +1866,30 @@ def test_fence_async_shared_across_warp_specialize(FENCE_LOCATION, device, run_w
         mbarrier.arrive(bar, count=1)
         if FENCE_LOCATION == "producer_after_arrive":
             hopper.fence_async_shared()
+        if FENCE_LOCATION == "producer_after_arrive_cluster_barrier":
+            hopper.fence_async_shared()
+            # Order every producer fence before publishing a control-only
+            # global signal. The relaxed barrier does not publish ConSan state.
+            hopper.cluster.barrier(relaxed=True)
+            row_layout: ttgl.constexpr = ttgl.SliceLayout(1, layout)
+            rows = ttgl.arange(0, block_m, row_layout)
+            ttgl.store(ready + rows, 1, mask=rows == 0, cache_modifier=".wt")
 
     @gluon.jit
-    def consumer(output_desc, smem: ttgl.constexpr, bar: ttgl.constexpr, FENCE_LOCATION: ttgl.constexpr):
+    def consumer(output_desc, smem: ttgl.constexpr, bar: ttgl.constexpr, ready, FENCE_LOCATION: ttgl.constexpr):
         mbarrier.wait(bar, phase=0)
+        if FENCE_LOCATION == "producer_after_arrive_cluster_barrier":
+            flag = ttgl.load(ready, volatile=True)
+            while flag == 0:
+                flag = ttgl.load(ready, volatile=True)
+            ttgl.barrier(cluster=True)
         if FENCE_LOCATION == "consumer":
             hopper.fence_async_shared()
         tma.async_copy_shared_to_global(output_desc, [0, 0], smem)
         tma.store_wait(0)
 
     @gluon.jit
-    def kernel(output_desc, FENCE_LOCATION: ttgl.constexpr):
+    def kernel(output_desc, ready, FENCE_LOCATION: ttgl.constexpr):
         block_m: ttgl.constexpr = XBLOCK * ttgl.num_ctas()
         cga_layout: ttgl.constexpr = default_cga_layout(ttgl.num_ctas(), 2)
         smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2,
@@ -1882,8 +1900,8 @@ def test_fence_async_shared_across_warp_specialize(FENCE_LOCATION, device, run_w
         bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
         ttgl.warp_specialize([
-            (producer, (smem, bar, FENCE_LOCATION, blocked_layout)),
-            (consumer, (output_desc, smem, bar, FENCE_LOCATION)),
+            (producer, (smem, bar, ready, FENCE_LOCATION, blocked_layout)),
+            (consumer, (output_desc, smem, bar, ready, FENCE_LOCATION)),
         ], [4], [32])
 
     block_m = XBLOCK.value * num_ctas
@@ -1891,7 +1909,8 @@ def test_fence_async_shared_across_warp_specialize(FENCE_LOCATION, device, run_w
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2,
                                            cga_layout=default_cga_layout(num_ctas, 2))
     output_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(output, [block_m, XBLOCK.value], shared_layout)
-    kernel[(1, )](output_desc, FENCE_LOCATION=FENCE_LOCATION, num_warps=4, num_ctas=num_ctas)
+    ready = torch.zeros((1, ), device=device, dtype=torch.int32)
+    kernel[(1, )](output_desc, ready, FENCE_LOCATION=FENCE_LOCATION, num_warps=4, num_ctas=num_ctas)
     torch.testing.assert_close(output, torch.full_like(output, 42.0))
 
 
@@ -1947,6 +1966,70 @@ def test_ws_load_wait_store(FAILURE, device, run_wrapper, monkeypatch, num_ctas)
 
     output = torch.empty((XBLOCK.value * num_ctas, ), device=device, dtype=torch.float16)
     ws_kernel[(1, )](output, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.parametrize("SYNCHRONIZED", [False, True], ids=["missing-local-handoff", "local-handoff"])
+def test_ws_cluster_barrier_does_not_replace_local_handoff(SYNCHRONIZED, device, run_wrapper, monkeypatch, num_ctas):
+    if num_ctas == 1:
+        pytest.skip("Need multiple CTAs for a cluster barrier")
+    if run_wrapper:
+        result = run_in_process(test_ws_cluster_barrier_does_not_replace_local_handoff,
+                                (SYNCHRONIZED, device, False, monkeypatch, num_ctas))
+        if SYNCHRONIZED:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        else:
+            assert_expected_cuda_failure(result.exc)
+            assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
+        return
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def consumer(smem, consumed, ready, output, layout: ttgl.constexpr):
+        block_x: ttgl.constexpr = XBLOCK * ttgl.num_ctas()
+        offsets = ttgl.arange(0, block_x, layout)
+        val = smem.load(layout)
+        ttgl.store(output + offsets, val)
+        # Order every consumer load before publishing a control-only global
+        # signal. The relaxed barrier does not publish ConSan state.
+        hopper.cluster.barrier(relaxed=True)
+        ttgl.store(ready + offsets, 1, mask=offsets == 0, cache_modifier=".wt")
+        mbarrier.arrive(consumed, count=1)
+
+    @gluon.jit
+    def producer(smem, consumed, ready, SYNCHRONIZED: ttgl.constexpr, layout: ttgl.constexpr):
+        block_x: ttgl.constexpr = XBLOCK * ttgl.num_ctas()
+        flag = ttgl.load(ready, volatile=True)
+        while flag == 0:
+            flag = ttgl.load(ready, volatile=True)
+        if SYNCHRONIZED:
+            mbarrier.wait(consumed, phase=0, deps=[smem])
+        ttgl.barrier(cluster=True)
+        smem.store(ttgl.full([block_x], 2, ttgl.float32, layout))
+
+    @gluon.jit
+    def kernel(output, ready, SYNCHRONIZED: ttgl.constexpr):
+        block_x: ttgl.constexpr = XBLOCK * ttgl.num_ctas()
+        cga_layout: ttgl.constexpr = default_cga_layout(ttgl.num_ctas(), 1)
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0],
+                                                                cga_layout=cga_layout)
+        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
+                                                            warps_per_cta=[4], order=[0], cga_layout=cga_layout)
+        smem = ttgl.allocate_shared_memory(ttgl.float32, [block_x], smem_layout)
+        consumed = mbarrier.allocate_mbarrier()
+        mbarrier.init(consumed, count=1)
+        smem.store(ttgl.full([block_x], 1, ttgl.float32, blocked_layout))
+        ttgl.warp_specialize([
+            (consumer, (smem, consumed, ready, output, blocked_layout)),
+            (producer, (smem, consumed, ready, SYNCHRONIZED, blocked_layout)),
+        ], [4], [32])
+
+    output = torch.empty((XBLOCK.value * num_ctas, ), device=device, dtype=torch.float32)
+    ready = torch.zeros((1, ), device=device, dtype=torch.int32)
+    kernel[(1, )](output, ready, SYNCHRONIZED=SYNCHRONIZED, num_warps=4, num_ctas=num_ctas)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
