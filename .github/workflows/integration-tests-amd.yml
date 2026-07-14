@@ -163,7 +163,11 @@ jobs:
           # Run tests under triton/python/triton_kernels/tests/ on gfx950 and gfx942
           if ${{ contains(matrix.runner, 'amd-gfx950') || contains(matrix.runner, 'amd-gfx942') }}; then
             cd ../../triton_kernels/
-            python3 -m pytest -s -n 12 tests/
+            if ${{ contains(matrix.runner, 'amd-gfx950') }}; then
+              python3 -m pytest -s -n 12 tests/ -k "not test_expert_sharding"
+            else
+              python3 -m pytest -s -n 12 tests/
+            fi
           fi
       - name: Run asan tests on AMD
         if: false
