@@ -831,6 +831,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK: module attributes {
   // CHECK-DAG: ttg.shared = 40 : i32
   // CHECK-DAG: ttg.ws_cluster_barrier_count = 1 : i32
+  // Lowering an assertion creates a public declaration before the kernel.
+  // CHECK: llvm.func @__assertfail
   // CHECK-LABEL: @cluster_barrier_inside_warp_specialize
   // CHECK-COUNT-2: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;"
   // CHECK: st.shared::cta.b32
@@ -839,6 +841,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK: nvvm.cluster.arrive.relaxed
   // CHECK-NEXT: nvvm.cluster.wait
   tt.func @cluster_barrier_inside_warp_specialize() {
+    %true = arith.constant true
+    tt.assert %true, "assert text" : i1
     ttg.warp_specialize()
     default {
       // CHECK: nvvm.barrier
