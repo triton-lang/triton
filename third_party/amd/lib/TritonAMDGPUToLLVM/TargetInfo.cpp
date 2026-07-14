@@ -149,15 +149,6 @@ TargetInfo::getSharedMemoryLdStBanks(int vecBitwidth, int bitwidth,
   }
 }
 
-std::pair<bool, bool> TargetInfo::hasUniformSharedMemoryLdStBanks() const {
-  switch (getISAFamily()) {
-  case ISAFamily::CDNA4:
-    return {/*load=*/false, /*store=*/true};
-  default:
-    return {/*load=*/true, /*store=*/true};
-  }
-}
-
 size_t TargetInfo::getSharedMemoryPartitionSize() const {
   return targetFeatures.getSharedMemoryPartitionSize();
 }

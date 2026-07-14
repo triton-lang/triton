@@ -29,11 +29,9 @@ unsigned getConvertLayoutScratchInBytes(gpu::ConvertLayoutOp op,
   auto [numBanksDst, numBanksSrc] =
       targetInfo.getSharedMemoryLdStBanks(vecBitwidth, bitwidth, numLoadElems);
   auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
-  auto [uniformBanksDst, uniformBanksSrc] =
-      targetInfo.hasUniformSharedMemoryLdStBanks();
-  unsigned elems = getNumScratchElemsSwizzledCvt(
-      srcLayout, dstLayout, bitwidth, numBanksSrc, numBanksDst, srcTile,
-      dstTile, uniformBanksSrc, uniformBanksDst);
+  unsigned elems =
+      getNumScratchElemsSwizzledCvt(srcLayout, dstLayout, bitwidth, numBanksSrc,
+                                    numBanksDst, srcTile, dstTile);
   return elems * bitwidth / 8;
 }
 
@@ -73,11 +71,8 @@ unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
           auto [numBanksDst, numBanksSrc] = targetInfo.getSharedMemoryLdStBanks(
               vecBitwidth, bitwidth, numLoadElems);
           auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
-          auto [uniformBanksDst, uniformBanksSrc] =
-              targetInfo.hasUniformSharedMemoryLdStBanks();
-          return getNumScratchElemsSwizzledCvt(
-              src, dst, bitwidth, numBanksSrc, numBanksDst, srcTile, dstTile,
-              uniformBanksSrc, uniformBanksDst);
+          return getNumScratchElemsSwizzledCvt(src, dst, bitwidth, numBanksSrc,
+                                               numBanksDst, srcTile, dstTile);
         };
     return ReduceOpHelper(reduceOp).getScratchSizeInBytes(
         AMDGetNumScratchElemsFn);

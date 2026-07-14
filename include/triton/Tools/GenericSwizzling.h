@@ -48,12 +48,12 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
 int32_t getVecBitwidthLdSt(const LinearLayout &src, const LinearLayout &dst,
                            int32_t bitwidth);
 
-LinearLayout
-optimalSwizzlingLdSt(const LinearLayout &src, const LinearLayout &dst,
-                     int32_t bitwidth, int32_t numBanksSrc = 32,
-                     int32_t numBanksDst = 32, LocalMemOpTile srcTile = {},
-                     LocalMemOpTile dstTile = {}, bool uniformBanksSrc = true,
-                     bool uniformBanksDst = true);
+LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
+                                  const LinearLayout &dst, int32_t bitwidth,
+                                  int32_t numBanksSrc = 32,
+                                  int32_t numBanksDst = 32,
+                                  LocalMemOpTile srcTile = {},
+                                  LocalMemOpTile dstTile = {});
 
 std::pair<int, int>
 bankConflictsLdSt(const LinearLayout &src, const LinearLayout &dst,

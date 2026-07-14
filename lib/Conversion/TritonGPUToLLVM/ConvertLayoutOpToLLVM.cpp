@@ -164,11 +164,9 @@ struct ConvertLayoutOpConversion
     auto [numBanksDst, numBanksSrc] = targetInfo.getSharedMemoryLdStBanks(
         vecBitwidth, bitwidth, dstLayout.getInDimSize(kReg));
     auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
-    auto [uniformBanksDst, uniformBanksSrc] =
-        targetInfo.hasUniformSharedMemoryLdStBanks();
-    auto smem = optimalSwizzlingLdSt(srcLayout, dstLayout, bitwidth,
-                                     numBanksSrc, numBanksDst, srcTile, dstTile,
-                                     uniformBanksSrc, uniformBanksDst);
+    auto smem =
+        optimalSwizzlingLdSt(srcLayout, dstLayout, bitwidth, numBanksSrc,
+                             numBanksDst, srcTile, dstTile);
 
     // Extract reps from smem
     auto kWarp = str_attr("warp");

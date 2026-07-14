@@ -309,6 +309,7 @@ std::pair<int, int> bankConflicts(ArrayRef<int32_t> tileSrc,
     if (numBanks < otherNumBanks) {
       int32_t lenBbasis = std::min<int32_t>(
           llvm::Log2_32((numBanks * 32) / (vecSize * bitwidth)), bbases.size());
+      // The extra bank bases are segment-like for the smaller-bank side
       bases.append(bbases.begin() + lenBbasis, bbases.end());
     }
     return bases;
@@ -554,6 +555,7 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   unionBasis.append(sbasis.begin(), sbasis.end());
   unionBasis.append(nonZeroBlockBases.begin(), nonZeroBlockBases.end());
   SmallVector<int32_t> bbasis = complementBasis(unionBasis, dim);
+  // Order bank bases so the smaller-bank tail avoids its tile if possible
   if (numBanksSrc != numBanksDst) {
     auto tile = numBanksSrc < numBanksDst ? tileSrc : tileDst;
     bbasis = reorderBankBasis(bbasis, sbasis, tile, dim);
@@ -683,8 +685,7 @@ LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
                                   const LinearLayout &dst, int32_t bitwidth,
                                   int32_t numBanksSrc, int32_t numBanksDst,
                                   LocalMemOpTile srcTile,
-                                  LocalMemOpTile dstTile, bool uniformBanksSrc,
-                                  bool uniformBanksDst) {
+                                  LocalMemOpTile dstTile) {
   auto *ctx = src.getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
@@ -711,19 +712,27 @@ LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
   // e.g for fp32
   // src = {reg = [], lane = [1, 2, 4, 8, 16], warp = [32]}
   // dst = {reg = [8, 32], lane = [0, 0, 1, 2, 4], warp = [16]}
-  if (log2Vec < 2 && numBanksSrc == numBanksDst) {
+  if (log2Vec < 2) {
     auto smemFlat = smem.flattenOuts();
     // For every bank line, find if it is in regSrc or regDst
     // and if so, store the index in the vector
     SmallVector<size_t> idxBanksInRegSrc;
     SmallVector<size_t> idxBanksInRegDst;
     auto kBank = StringAttr::get(ctx, "bank");
-    const auto &banks = flatten(smemFlat, kBank);
-    for (auto [i, r] : llvm::enumerate(banks)) {
-      if (uniformBanksSrc && llvm::is_contained(regSrc, r)) {
+    auto banks = flatten(smemFlat, kBank);
+    // Only reorder the bank prefix common to both sides
+    ArrayRef<int32_t> candidates = banks;
+    if (numBanksSrc != numBanksDst) {
+      int32_t bankBitsMin = std::min<int32_t>(numBanksSrc, numBanksDst) * 32;
+      int32_t lenBanksMin = std::min<int32_t>(
+          llvm::Log2_32(bankBitsMin / (vecSize * bitwidth)), banks.size());
+      candidates = candidates.take_front(lenBanksMin);
+    }
+    for (auto [i, r] : llvm::enumerate(candidates)) {
+      if (llvm::is_contained(regSrc, r)) {
         idxBanksInRegSrc.push_back(i);
       }
-      if (uniformBanksDst && llvm::is_contained(regDst, r)) {
+      if (llvm::is_contained(regDst, r)) {
         idxBanksInRegDst.push_back(i);
       }
     }
