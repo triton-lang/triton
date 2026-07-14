@@ -424,7 +424,6 @@ def test_tensor_descriptor_padding(device):
     M_BLOCK = 32
     N_BLOCK = 32
     padding = "nan"
-
     input = torch.arange(IM * IN, device=device, dtype=torch.float32)
     input = input.reshape(IM, IN)
     out_device_tma = torch.zeros((OM, ON), device=device, dtype=torch.float32)
