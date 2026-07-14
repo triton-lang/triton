@@ -4,7 +4,7 @@ import numpy as np
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hopper, is_sm12x, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
+from triton._internal_testing import is_hip_gfx1250, is_hopper, is_sm12x, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from typing import Optional
 from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3
@@ -424,6 +424,10 @@ def test_tensor_descriptor_padding(device):
     M_BLOCK = 32
     N_BLOCK = 32
     padding = "nan"
+
+    if is_hip_gfx1250() and padding != "zero":
+        pytest.skip("TDM load with padding on GFX1250 does not support non-zero padding.")
+
     input = torch.arange(IM * IN, device=device, dtype=torch.float32)
     input = input.reshape(IM, IN)
     out_device_tma = torch.zeros((OM, ON), device=device, dtype=torch.float32)
