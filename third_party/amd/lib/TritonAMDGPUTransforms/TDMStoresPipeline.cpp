@@ -2,6 +2,7 @@
 
 #include "amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "amd/lib/TritonAMDGPUTransforms/Utility.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -25,21 +26,12 @@ struct TDMStore {
 
 static SmallVector<TDMStore> getTDMStores(scf::ForOp forOp) {
   SmallVector<TDMStore> stores;
-  Block *loopBody = forOp.getBody();
-  forOp.getBody()->walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
-    if (auto storeOp = dyn_cast<tt::DescriptorStoreLikeOpInterface>(op)) {
-      // Only pipeline stores directly in the loop body.  Stores inside
-      // nested regions (e.g. scf.if from loop flattening) can't have
-      // their tokens yielded at the loop level; leave them for
-      // ConvertToTensorOps.
-      if (op->getBlock() == loopBody)
-        stores.push_back({storeOp, storeOp.getDesc(), storeOp.getSrc()});
-    } else if (isa<scf::ForOp>(op)) {
-      // Don't recurse into nested loops; they'd be handled separately.
-      return WalkResult::skip();
-    }
-    return WalkResult::advance();
-  });
+  // Only stores directly in the loop body can yield their tokens at the loop
+  // level; those in nested regions (e.g. scf.if) are left to
+  // ConvertToTensorOps.
+  for (auto storeOp :
+       forOp.getBody()->getOps<tt::DescriptorStoreLikeOpInterface>())
+    stores.push_back({storeOp, storeOp.getDesc(), storeOp.getSrc()});
   return stores;
 }
 
@@ -94,9 +86,11 @@ static Value createTDMAsyncCopy(scf::ForOp forOp, const TDMStore &store,
           indicesType.getShape(), indicesType.getElementType(), idxEnc);
       indices = ttg::ConvertLayoutOp::create(builder, loc, newIdxType, indices);
     }
+    Value zero = arith::ConstantIntOp::create(builder, loc, 0, 32);
+    Value scatterDesc = createUpdateTDMDescriptorOp(
+        builder, loc, desc, {zero, scatterOp.getYOffset()}, /*pred=*/Value{});
     auto scatterTDMOp = ttag::AsyncTDMScatterOp::create(
-        builder, loc, desc, indices, scatterOp.getYOffset(), alloc,
-        /*barrier=*/Value{});
+        builder, loc, scatterDesc, indices, alloc, /*barrier=*/Value{});
     token = scatterTDMOp.getRetToken();
   }
 
