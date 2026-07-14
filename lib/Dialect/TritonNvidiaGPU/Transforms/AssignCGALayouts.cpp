@@ -125,6 +125,11 @@ private:
       }
 
       Operation *op = value.getDefiningOp();
+      // 1. !op: don't slice back through block arguments as it requires alias
+      // 2. analysis op->getNumResults() != 1: Complexity consideration. If an
+      // op has multiple results, we would have to slice all of them.
+      // 3. !op->getRegions().empty(): Complexity consideration. Change region
+      // operations requires rewriting yields, arguments and capture values
       if (!op || op->getNumResults() != 1 || !op->getRegions().empty())
         return failure();
 
