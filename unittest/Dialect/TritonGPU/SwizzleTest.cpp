@@ -355,8 +355,7 @@ TEST_F(BankConflictTest, F64MmaV2BSharedLayout) {
   auto mmaV2 = mma({2, 0}, {4, 1}, {8, 8});
   auto dst = DotOperandEncodingAttr::get(&ctx, /*opIdx=*/1, mmaV2,
                                          /*kWidth=*/1);
-  auto cgaLayout =
-      mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, 2);
+  auto cgaLayout = mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, 2);
   auto shared = SwizzledSharedEncodingAttr::get(
       &ctx, dst, shape, /*order=*/{1, 0}, cgaLayout, /*typeWidthInBit=*/64);
   EXPECT_EQ(shared.getVec(), 4);
