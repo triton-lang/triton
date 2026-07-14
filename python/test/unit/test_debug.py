@@ -2,7 +2,7 @@ import pytest
 import torch
 import triton.language as tl
 import triton
-from triton._internal_testing import run_in_process
+from triton._internal_testing import run_in_process, is_hip_gfx1250
 
 
 def _run_device_assert(cond, mask, opt_flag, jit_flag, device):
@@ -62,6 +62,9 @@ def test_expect_zero_device_assert(device):
 @pytest.mark.parametrize('env_var', [True, False])
 @pytest.mark.parametrize('jit_flag', [True, False])
 def test_device_assert(cond, mask, opt_flag, env_var, jit_flag, device):
+    if is_hip_gfx1250():
+        pytest.skip("s_trap is not supported on GFX1250")
+
     is_debug = env_var or (opt_flag if opt_flag is not None else jit_flag)
     result = run_in_process(_run_device_assert, (cond, mask, opt_flag, jit_flag, device),
                             env={"TRITON_DEBUG": str(int(env_var))})
