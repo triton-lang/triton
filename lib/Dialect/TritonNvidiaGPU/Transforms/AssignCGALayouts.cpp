@@ -16,16 +16,16 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
-#define GEN_PASS_DEF_TRITONNVIDIAGPUASSIGNCTALAYOUTSPASS
+#define GEN_PASS_DEF_TRITONNVIDIAGPUASSIGNCGALAYOUTSPASS
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
 namespace {
 
-// Default CTA layouts are assigned during Triton-to-TritonGPU conversion. This
-// pass only gives Dot/Reduce ops their preferred CTA layout and materializes
+// Default CGA layouts are assigned during Triton-to-TritonGPU conversion. This
+// pass only gives Dot/Reduce ops their preferred CGA layout and materializes
 // the boundary with ttg.convert_layout; RemoveLayoutConversions cleans up
 // later.
-struct DotCTASplit {
+struct DotCGASplit {
   unsigned m;
   unsigned n;
 };
@@ -69,7 +69,7 @@ Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
   //   %old_dot_operand = ttg.convert_layout %old_load : #blocked_old ->
   //   #dot_old
   //
-  // create a sibling load using the planned CTA layout:
+  // create a sibling load using the planned CGA layout:
   //
   //   %new_ptr = ttg.convert_layout %old_ptr : #blocked_old -> #blocked_new
   //   %new_load = tt.load %new_ptr : ... #blocked_new
@@ -162,7 +162,7 @@ void convertOpResultsFromLayouts(Operation *op,
   }
 }
 
-DotCTASplit getDotCTASplit(int64_t m, int64_t n, unsigned numCTAs) {
+DotCGASplit getDotCGASplit(int64_t m, int64_t n, unsigned numCTAs) {
   constexpr unsigned kPreferredChunkSize = 128;
   constexpr unsigned kMinChunkSize = 64;
   auto isLegalChunkSize = [](unsigned chunk) { return chunk >= kMinChunkSize; };
@@ -183,7 +183,7 @@ DotCTASplit getDotCTASplit(int64_t m, int64_t n, unsigned numCTAs) {
   return {splitM, splitN};
 }
 
-void assignDotCTALayout(triton::DotOp dot) {
+void assignDotCGALayout(triton::DotOp dot) {
   MLIRContext *ctx = dot.getContext();
 
   auto aTy = cast<RankedTensorType>(dot.getA().getType());
@@ -194,7 +194,7 @@ void assignDotCTALayout(triton::DotOp dot) {
   auto bLayout = cast<ttg::DotOperandEncodingAttr>(bTy.getEncoding());
   auto dLayout = cast<ttg::BlockedEncodingAttr>(dTy.getEncoding());
 
-  DotCTASplit split = getDotCTASplit(dTy.getShape()[0], dTy.getShape()[1],
+  DotCGASplit split = getDotCGASplit(dTy.getShape()[0], dTy.getShape()[1],
                                      ttg::getNumCTAs(dLayout));
 
   OpBuilder builder(dot);
@@ -267,7 +267,7 @@ ttg::CGAEncodingAttr getReduceCGALayout(triton::ReduceOp reduce,
                                                ctaSplitNum, ctaOrder);
 }
 
-void assignReduceCTALayout(triton::ReduceOp reduce) {
+void assignReduceCGALayout(triton::ReduceOp reduce) {
   MLIRContext *ctx = reduce.getContext();
   Value src = reduce.getOperand(0);
   auto srcTy = cast<RankedTensorType>(src.getType());
@@ -294,9 +294,9 @@ void assignReduceCTALayout(triton::ReduceOp reduce) {
   convertOpResultsFromLayouts(reduce.getOperation(), resultLayouts);
 }
 
-struct AssignCTALayoutsPass
-    : public impl::TritonNvidiaGPUAssignCTALayoutsPassBase<
-          AssignCTALayoutsPass> {
+struct AssignCGALayoutsPass
+    : public impl::TritonNvidiaGPUAssignCGALayoutsPassBase<
+          AssignCGALayoutsPass> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     unsigned numCTAs = ttg::TritonGPUDialect::getNumCTAs(mod);
@@ -305,9 +305,9 @@ struct AssignCTALayoutsPass
 
     mod.walk([&](Operation *op) {
       if (auto dot = dyn_cast<triton::DotOp>(op))
-        assignDotCTALayout(dot);
+        assignDotCGALayout(dot);
       if (auto reduce = dyn_cast<triton::ReduceOp>(op))
-        assignReduceCTALayout(reduce);
+        assignReduceCGALayout(reduce);
     });
   }
 };
