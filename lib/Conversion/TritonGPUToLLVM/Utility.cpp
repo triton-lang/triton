@@ -1180,6 +1180,30 @@ std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering) {
   }
 }
 
+void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
+                                  bool emitBarrierAfter, RewriterBase &rewriter,
+                                  const TargetInfoBase &targetInfo) {
+  auto emitBarrier = [&] {
+    if (triton::gpu::lookupNumCTAs(op) == 1)
+      targetInfo.barrier(op->getLoc(), rewriter, triton::gpu::AddrSpace::Local);
+    else
+      targetInfo.clusterBarrier(op->getLoc(), rewriter, op);
+  };
+
+  if (memOrdering == MemSemantic::RELEASE ||
+      memOrdering == MemSemantic::ACQUIRE_RELEASE) {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
+    emitBarrier();
+  }
+  if (emitBarrierAfter && (memOrdering == MemSemantic::ACQUIRE ||
+                           memOrdering == MemSemantic::ACQUIRE_RELEASE)) {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointAfter(op);
+    emitBarrier();
+  }
+}
+
 llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx) {
   // Mask where all elements are redundant
   auto kReg = str_attr("reg");

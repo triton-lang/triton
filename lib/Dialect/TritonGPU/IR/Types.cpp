@@ -122,6 +122,19 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     if (shape.size() != 2 && shape.size() != 3) {
       return emitError() << "rank must be 2 or 3";
     }
+    auto isPowerOfTwo = [](int64_t dim) {
+      return llvm::isPowerOf2_64(dim) && dim > 0;
+    };
+    if (!llvm::all_of(shape.take_back(2), isPowerOfTwo)) {
+      return emitError()
+             << "shape must have power-of-2 and non-zero dimensions; got "
+             << shape;
+    }
+    if (!llvm::all_of(allocShape.take_back(2), isPowerOfTwo)) {
+      return emitError()
+             << "alloc shape must have power-of-2 and non-zero dimensions; got "
+             << allocShape;
+    }
     unsigned bitwidth = elementType.getIntOrFloatBitWidth();
     if (bitwidth * enc.getColStride() > 32) {
       return emitError()
@@ -133,11 +146,11 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     allocShape = allocShape.take_back(2);
     auto ctaSplit = enc.getCGALayout().getCTASplitNum();
     auto blockN = std::min<int32_t>(enc.getBlockN(), shape.back());
-    if (allocShape[0] < enc.getBlockM() * ctaSplit[0] ||
-        allocShape[1] < blockN * ctaSplit[1]) {
-      return emitError() << "the allocation shape must be at least "
+    if (shape[shape.size() - 2] < enc.getBlockM() * ctaSplit[0] ||
+        shape[shape.size() - 1] < blockN * ctaSplit[1]) {
+      return emitError() << "the tensor shape must be at least "
                          << enc.getBlockM() * ctaSplit[0] << "x"
-                         << blockN * ctaSplit[1] << ". Got " << allocShape;
+                         << blockN * ctaSplit[1] << ". Got " << shape;
     }
     // Checks the layout of the allocation
     auto ll = toLinearLayout(allocShape, enc);

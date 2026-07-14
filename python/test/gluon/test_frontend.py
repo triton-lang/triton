@@ -303,8 +303,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %result_1 = ttng.tmem_load %result_0 : !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xi32, #blocked>
     %true = arith.constant true
     ttng.tmem_store %cst, %result_0, %true : tensor<128x128xi32, #blocked> -> !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable>
-    %0 = ttng.tmem_subslice %result_0 {N = 0 : i32} : !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xi32, #tmem, #ttng.tensor_memory, mutable, 128x128>
-    %1 = ttng.tmem_subslice %result_0 {N = 64 : i32} : !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xi32, #tmem, #ttng.tensor_memory, mutable, 128x128>
+    %0 = ttng.tmem_subslice %result_0 {offset = 0 : i32} : !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xi32, #tmem, #ttng.tensor_memory, mutable, 128x128>
+    %1 = ttng.tmem_subslice %result_0 {offset = 64 : i32} : !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xi32, #tmem, #ttng.tensor_memory, mutable, 128x128>
     %result_2 = ttng.tmem_alloc : () -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     %c0_i32_3 = arith.constant 0 : i32
     %c2_i32 = arith.constant 2 : i32
@@ -1077,12 +1077,25 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %result = ttng.tmem_alloc : () -> !ttg.memdesc<2x512x256xf32, #tmem, #ttng.tensor_memory, mutable>
     %c0_i32 = arith.constant 0 : i32
     %0 = ttg.memdesc_index %result[%c0_i32] : !ttg.memdesc<2x512x256xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<512x256xf32, #tmem, #ttng.tensor_memory, mutable>
-    %1 = ttng.tmem_subslice %0 {N = 0 : i32} : !ttg.memdesc<512x256xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<512x32xf32, #tmem, #ttng.tensor_memory, mutable, 512x256>
+    %1 = ttng.tmem_subslice %0 {offset = 0 : i32} : !ttg.memdesc<512x256xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<512x32xf32, #tmem, #ttng.tensor_memory, mutable, 512x256>
     %result_0 = ttng.tmem_load %1 : !ttg.memdesc<512x32xf32, #tmem, #ttng.tensor_memory, mutable, 512x256> -> tensor<512x32xf32, #linear>
     tt.return
   }
 }
 """)
+
+
+@gluon.jit
+def tmem_subslice_noncontiguous_kernel():
+    layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 128], col_stride=1)
+    tmem = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.float32, [256, 256], layout)
+    tmem.slice(0, 128, dim=0)
+
+
+def test_tmem_subslice_noncontiguous():
+    ir = run_parser(tmem_subslice_noncontiguous_kernel, target=BLACKWELL_TARGET).str_nodebug()
+    assert "ttng.tmem_subslice" in ir
+    assert "!ttg.memdesc<128x256xf32" in ir
 
 
 @filecheck_test

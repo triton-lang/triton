@@ -79,13 +79,12 @@ bool isTensorCoreOp(Operation *op) {
 }
 
 std::optional<int> maybeGetPartitionIdx(Operation *op) {
-  if (auto wsOp = op->getParentOfType<ttg::WarpSpecializePartitionsOp>()) {
+  Operation *parent = op->getParentOp();
+  if (!parent)
+    return std::nullopt;
+  if (isa<ttg::WarpSpecializePartitionsOp>(parent))
     return op->getParentRegion()->getRegionNumber();
-  }
-  if (Operation *parent = op->getParentOp()) {
-    return maybeGetPartitionIdx(parent);
-  }
-  return std::nullopt;
+  return maybeGetPartitionIdx(parent);
 }
 
 int getCurrentThread(Operation *op, const ConSanTargetHooks *hooks,
@@ -792,10 +791,13 @@ private:
       Operation *op = clusterBarrier.getOperation();
       int thread = getCurrentThread(op, hooks, auxData.threadLayout);
       int baseThread = getBaseThread(thread, auxData.threadLayout);
+      bool partitionScoped =
+          static_cast<bool>(op->getParentOfType<ttg::WarpSpecializeOp>());
       b.setLoc(op->getLoc());
       b.setInsertionPoint(op);
       funcBuilder.createClusterBarrierRendezvousCall(
           b, auxData.getClusterBarrierSlot(op), baseThread,
+          getThreadPeersMask(baseThread, auxData.threadLayout), partitionScoped,
           /*publishVisibility=*/!clusterBarrier.getRelaxed(), op);
     }
   }
