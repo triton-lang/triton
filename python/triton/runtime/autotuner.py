@@ -388,6 +388,7 @@ class Config:
         res.append(f"num_ctas: {self.num_ctas}")
         res.append(f"num_stages: {self.num_stages}")
         res.append(f"maxnreg: {self.maxnreg}")
+        res.append(f"ir_override: {self.ir_override}")
         return ", ".join(res)
 
     def __hash__(self):

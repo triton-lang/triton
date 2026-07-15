@@ -39,7 +39,7 @@ CGAEncodingAttr updateCGALayoutForShape(CGAEncodingAttr cgaLayout,
     }
     return CGAEncodingAttr::get(ctx, std::move(ll));
   }
-  // For rank-reducing loads, we need to rank-increase the CTA Layout
+  // For rank-reducing loads, we need to rank-increase the CGA layout.
   auto rankDiff = rank - cgaLayout.getRank();
   for (unsigned i = 0; i < rankDiff; ++i) {
     assert(shape[i] == 1 && "Should only happen for rank-reducing loads");
