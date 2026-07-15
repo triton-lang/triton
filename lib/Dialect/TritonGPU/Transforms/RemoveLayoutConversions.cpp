@@ -1020,16 +1020,14 @@ static bool isExpensiveMathOp(Operation *op) {
              math::SqrtOp, math::RsqrtOp, math::ErfOp, math::CbrtOp>(op);
 }
 
-static int64_t getByteCount(Value result, int64_t minElementCount = 0,
+static int64_t getByteCount(RankedTensorType tensorTy,
+                            int64_t minElementCount = 0,
                             int64_t minBitWidth = 0) {
-  int64_t elementCount = 0;
+  int64_t elementCount = tensorTy.getNumElements();
   int64_t dtypeBitWidth = 0;
-  if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
-    elementCount = tensorTy.getNumElements();
-    auto elemType = tensorTy.getElementType();
-    if (elemType.isIntOrFloat()) {
-      dtypeBitWidth = elemType.getIntOrFloatBitWidth();
-    }
+  auto elemType = tensorTy.getElementType();
+  if (elemType.isIntOrFloat()) {
+    dtypeBitWidth = elemType.getIntOrFloatBitWidth();
   }
   if (elementCount < minElementCount) {
     elementCount = minElementCount;
@@ -1040,11 +1038,12 @@ static int64_t getByteCount(Value result, int64_t minElementCount = 0,
   return (elementCount * dtypeBitWidth) >> 3;
 }
 
-/// Compute the cost of a ConvertLayoutOp with source \p convertSrc and result
-/// encoding \p resultEncoding.
-int64_t getConvertCost(Value convertSrc, Attribute resultEncoding) {
-  auto srcType = cast<RankedTensorType>(convertSrc.getType());
-  auto resultType = srcType.cloneWithEncoding(resultEncoding);
+/// Compute the cost of a ConvertLayoutOp with source encoding \p srcEncoding
+/// and result encoding \p resultEncoding.
+int64_t getConvertCost(RankedTensorType tensorType, Attribute srcEncoding,
+                       Attribute resultEncoding) {
+  auto srcType = tensorType.cloneWithEncoding(srcEncoding);
+  auto resultType = tensorType.cloneWithEncoding(resultEncoding);
   if (cvtReordersRegisters(srcType, resultType))
     return 0;
 
@@ -1054,7 +1053,7 @@ int64_t getConvertCost(Value convertSrc, Attribute resultEncoding) {
   // loads/stores, so we set a minimum element count of 32 (the warp
   // size and number of shared memory banks) and minimum bitwidth of
   // 32 (the width per bank of the shared memory load/store unit).
-  auto convertLayoutBytes = getByteCount(convertSrc, 32, 32);
+  auto convertLayoutBytes = getByteCount(tensorType, 32, 32);
   // We measure costs in standardised milli-SM-cycles. The smem load
   // and store each cost 8 * convertLayoutBytes, and then we double
   // it to account for extra cost due to synchronisation.
@@ -1147,8 +1146,9 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
     return false;
   }
 
-  int64_t convertLayoutCost =
-      getConvertCost(convertOp.getSrc(), convertOp.getType().getEncoding());
+  int64_t convertLayoutCost = getConvertCost(
+      convertOp.getSrc().getType(), convertOp.getSrc().getType().getEncoding(),
+      convertOp.getType().getEncoding());
   int64_t rematerialisationCost = newCvtCost;
 
   // Evaluate single-use status for every operation in slice
@@ -1170,7 +1170,8 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
       int64_t multiplier = isExpensiveMathOp(op) ? 8 : 1;
       for (Value result : op->getResults()) {
         Attribute rematEncoding = layout.lookup(result);
-        int64_t cost = multiplier * getByteCount(result);
+        int64_t cost =
+            multiplier * getByteCount(cast<RankedTensorType>(result.getType()));
         // If the new layout increases the amount of work that needs to happen
         // on each thread, account for that.
         unsigned factor = getCostFactor(result, rematEncoding);
@@ -1178,6 +1179,16 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
           factor -= 1;
         rematerialisationCost += cost * factor;
       }
+      continue;
+    } else if (auto cvt = dyn_cast<ConvertLayoutOp>(op)) {
+      auto srcType = cvt.getSrc().getType();
+      auto srcEnc = layout.lookup_or(cvt.getSrc(), srcType.getEncoding());
+      int64_t cost =
+          getConvertCost(srcType, srcEnc, layout.lookup(cvt.getResult()));
+      if (!isOpUsedOutsideSlice)
+        cost -= getConvertCost(srcType, srcType.getEncoding(),
+                               cvt.getType().getEncoding());
+      rematerialisationCost += cost;
       continue;
     }
 
@@ -1190,7 +1201,8 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
     if (isa<LoadOp>(op) || isa<LocalLoadOp>(op)) {
       // optimistically assume L1-cached:
       for (Value result : op->getResults()) {
-        rematerialisationCost += 8 * getByteCount(result);
+        rematerialisationCost +=
+            8 * getByteCount(cast<RankedTensorType>(result.getType()));
       }
     } else if (isa<ReduceOp>(op)) {
       // Reduce op introduce much cost.
@@ -1456,15 +1468,15 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   Attribute srcEncoding = inferSrcEncoding(extOrBroadcastOp, dstEncoding);
   if (!srcEncoding)
     return false;
+  auto tensorType =
+      cast<RankedTensorType>(extOrBroadcastOp->getOperand(0).getType());
   int64_t newCvtCost =
-      getConvertCost(extOrBroadcastOp->getOperand(0), srcEncoding);
+      getConvertCost(tensorType, tensorType.getEncoding(), srcEncoding);
   if (!isRematBeneficial(convertOp, slice, layout, newCvtCost,
                          /*disableRematSplitting=*/false))
     return false;
   // Move the convert before the ext op and rewrite the slice.
   OpBuilder builder(extOrBroadcastOp);
-  auto tensorType =
-      cast<RankedTensorType>(extOrBroadcastOp->getOperand(0).getType());
   auto newType = tensorType.cloneWithEncoding(srcEncoding);
   auto newConvertOp = ConvertLayoutOp::create(
       builder, convertOp.getLoc(), newType, extOrBroadcastOp->getOperand(0));

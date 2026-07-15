@@ -4298,6 +4298,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked2_slice = #ttg.slice<{dim = 0, parent = #blocked2}>
 
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32} {
   // CHECK-LABEL: @register_reorder_convert_kept
@@ -4310,6 +4312,39 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32} {
     %cvt = ttg.convert_layout %exp : tensor<1x32xf32, #blocked> -> tensor<1x32xf32, #blocked1>
     // CHECK: tt.return
     tt.return %cvt, %exp : tensor<1x32xf32, #blocked1>, tensor<1x32xf32, #blocked>
+  }
+
+  // Account for the new conversion when rematerializing a conversion whose
+  // original result is still used outside the slice.
+  // CHECK-LABEL: @remat_convert_used_outside_slice
+  tt.func public @remat_convert_used_outside_slice(%arg0: f32) -> (tensor<1x32xf32, #blocked>, tensor<1x32xf32, #blocked1>) {
+    %splat = tt.splat %arg0 : f32 -> tensor<32xf32, #blocked2_slice>
+    %reshape = tt.reshape %splat efficient_layout : tensor<32xf32, #blocked2_slice> -> tensor<1x32xf32, #blocked2>
+    // CHECK: %[[INNER:.+]] = ttg.convert_layout {{.*}} : tensor<1x32xf32, #[[SRC:.*]]> -> tensor<1x32xf32, #[[MID:.*]]>
+    %inner = ttg.convert_layout %reshape : tensor<1x32xf32, #blocked2> -> tensor<1x32xf32, #blocked>
+    // CHECK: %[[ADD:.+]] = arith.addf %[[INNER]], %[[INNER]] : tensor<1x32xf32, #[[MID]]>
+    %add = arith.addf %inner, %inner : tensor<1x32xf32, #blocked>
+    // CHECK: %[[OUTER:.+]] = ttg.convert_layout %[[ADD]] : tensor<1x32xf32, #[[MID]]> -> tensor<1x32xf32, #[[DST:.*]]>
+    %outer = ttg.convert_layout %add : tensor<1x32xf32, #blocked> -> tensor<1x32xf32, #blocked1>
+    // CHECK: tt.return %[[INNER]], %[[OUTER]] : tensor<1x32xf32, #[[MID]]>, tensor<1x32xf32, #[[DST]]>
+    tt.return %inner, %outer : tensor<1x32xf32, #blocked>, tensor<1x32xf32, #blocked1>
+  }
+
+  // Account for the removed conversion when rematerializing a conversion
+  // whose original result is only used within the slice.
+  // CHECK-LABEL: @remat_convert_slice_only
+  tt.func public @remat_convert_slice_only(%arg0: f32) -> tensor<1x32xf32, #blocked2> {
+    %splat = tt.splat %arg0 : f32 -> tensor<32xf32, #blocked2_slice>
+    // CHECK: %[[RESHAPE:.+]] = tt.reshape
+    %reshape = tt.reshape %splat efficient_layout : tensor<32xf32, #blocked2_slice> -> tensor<1x32xf32, #blocked2>
+    %inner = ttg.convert_layout %reshape : tensor<1x32xf32, #blocked2> -> tensor<1x32xf32, #blocked>
+    // CHECK-NEXT: %[[ADD0:.+]] = arith.addf %[[RESHAPE]], %[[RESHAPE]]
+    %add0 = arith.addf %inner, %inner : tensor<1x32xf32, #blocked>
+    // CHECK-NEXT: %[[ADD1:.+]] = arith.addf %[[ADD0]], %[[ADD0]]
+    %add1 = arith.addf %add0, %add0 : tensor<1x32xf32, #blocked>
+    %outer = ttg.convert_layout %add1 : tensor<1x32xf32, #blocked> -> tensor<1x32xf32, #blocked2>
+    // CHECK-NEXT: tt.return %[[ADD1]]
+    tt.return %outer : tensor<1x32xf32, #blocked2>
   }
 }
 
