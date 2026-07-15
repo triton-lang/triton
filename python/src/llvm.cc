@@ -62,18 +62,42 @@ using namespace llvm;
 
 namespace {
 
-class TritonLLVMDiagnosticHandler : public llvm::DiagnosticHandler {
-public:
-  bool handleDiagnostics(const llvm::DiagnosticInfo &diagnostic) override {
-    if (diagnostic.getSeverity() != llvm::DS_Error)
-      return false;
-    llvm::raw_string_ostream stream(message);
+class TritonLLVMDiagnosticCapture {
+  llvm::LLVMContext &context;
+  llvm::DiagnosticHandler::DiagnosticHandlerTy previousCallback;
+  void *previousContext;
+  std::string message;
+
+  static void handleDiagnostic(const llvm::DiagnosticInfo *diagnostic,
+                               void *context) {
+    auto *capture = static_cast<TritonLLVMDiagnosticCapture *>(context);
+    llvm::raw_string_ostream stream(capture->message);
+    stream << llvm::LLVMContext::getDiagnosticMessagePrefix(
+                  diagnostic->getSeverity())
+           << ": ";
     llvm::DiagnosticPrinterRawOStream printer(stream);
-    diagnostic.print(printer);
-    return true;
+    diagnostic->print(printer);
+    stream << '\n';
   }
 
-  std::string message;
+public:
+  explicit TritonLLVMDiagnosticCapture(llvm::LLVMContext &context)
+      : context(context),
+        previousCallback(context.getDiagnosticHandlerCallBack()),
+        previousContext(context.getDiagnosticContext()) {
+    context.setDiagnosticHandlerCallBack(handleDiagnostic, this);
+  }
+
+  ~TritonLLVMDiagnosticCapture() {
+    context.setDiagnosticHandlerCallBack(previousCallback, previousContext);
+  }
+
+  TritonLLVMDiagnosticCapture(const TritonLLVMDiagnosticCapture &) = delete;
+  TritonLLVMDiagnosticCapture &
+  operator=(const TritonLLVMDiagnosticCapture &) = delete;
+
+  bool hasErrors() const { return context.getDiagHandlerPtr()->HasErrors; }
+  const std::string &getMessage() const { return message; }
 };
 
 // Set an LLVM command-line option using addOccurrence (simulates command-line)
@@ -354,9 +378,6 @@ std::string translateLLVMIRToASM(
     const std::string &features, const std::vector<std::string> &flags,
     bool enable_fp_fusion, bool isObject, bool canonicalizeGEP) {
   using namespace mlir;
-  auto diagnosticHandler = std::make_unique<TritonLLVMDiagnosticHandler>();
-  auto *diagnosticHandlerPtr = diagnosticHandler.get();
-  module.getContext().setDiagnosticHandler(std::move(diagnosticHandler));
 
   // Apply flags
   for (const std::string &flag : flags) {
@@ -431,9 +452,11 @@ std::string translateLLVMIRToASM(
     auto fileType = isObject ? llvm::CodeGenFileType::ObjectFile
                              : llvm::CodeGenFileType::AssemblyFile;
     machine->addPassesToEmitFile(pass, pstream, nullptr, fileType);
+    TritonLLVMDiagnosticCapture diagnostics(module.getContext());
     pass.run(module);
-    if (diagnosticHandlerPtr->HasErrors)
-      throw std::runtime_error(diagnosticHandlerPtr->message);
+    if (diagnostics.hasErrors())
+      throw std::runtime_error(diagnostics.getMessage());
+    llvm::errs() << diagnostics.getMessage();
 
     if (enabledTiming) {
       reportAndResetTimings(&reportStream);
