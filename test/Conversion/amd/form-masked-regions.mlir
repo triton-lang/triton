@@ -1,13 +1,13 @@
 // RUN: triton-opt %s -split-input-file --triton-amdgpu-form-masked-regions | FileCheck %s
 
-// CHECK-LABEL: llvm.func @two_loads_same_mask
+// CHECK-LABEL: llvm.func @arithmetic_uses_block
 // CHECK-NOT: amdg.masked_region
 // CHECK: amdg.masked_load
 // CHECK: amdg.masked_load
 // CHECK-NOT: amdg.masked_region
 // CHECK: llvm.return
 module {
-  llvm.func @two_loads_same_mask(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr) {
+  llvm.func @arithmetic_uses_block(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr) {
     %zero = llvm.mlir.constant(0 : i32) : i32
     %one = llvm.mlir.constant(1 : i32) : i32
     %a = amdg.masked_load %src0, %active, %zero : (!llvm.ptr, i1, i32) -> i32
@@ -20,7 +20,24 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @loads_packed_to_buffer_store
+// CHECK-LABEL: llvm.func @unused_loads
+// CHECK-NOT: amdg.masked_region
+// CHECK: amdg.masked_load
+// CHECK: amdg.masked_load
+// CHECK-NOT: amdg.masked_region
+// CHECK: llvm.return
+module {
+  llvm.func @unused_loads(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr) {
+    %zero = llvm.mlir.constant(0 : i32) : i32
+    %a = amdg.masked_load %src0, %active, %zero : (!llvm.ptr, i1, i32) -> i32
+    %b = amdg.masked_load %src1, %active, %zero : (!llvm.ptr, i1, i32) -> i32
+    llvm.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: llvm.func @packed_buffer_store
 // CHECK-SAME: (%[[ACTIVE:.*]]: i1
 // CHECK: %[[REGION:.*]]:2 = amdg.masked_region %[[ACTIVE]] else(%{{.*}}, %{{.*}}) {
 // CHECK:   llvm.load %{{.*}} : !llvm.ptr -> vector<1xf16>
@@ -36,11 +53,11 @@ module {
 // CHECK-NOT: amdg.masked_load
 // CHECK: llvm.return
 module {
-  llvm.func @loads_packed_to_buffer_store(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %rsrc: !llvm.ptr<8>, %offset: i32, %soffset: i32, %aux: i32, %zero_vec: vector<1xf16>) {
+  llvm.func @packed_buffer_store(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %rsrc: !llvm.ptr<8>, %offset: i32, %soffset: i32, %aux: i32, %zero: vector<1xf16>) {
     %c0 = llvm.mlir.constant(0 : i32) : i32
     %c1 = llvm.mlir.constant(1 : i32) : i32
-    %v0 = amdg.masked_load %src0, %active, %zero_vec : (!llvm.ptr, i1, vector<1xf16>) -> vector<1xf16>
-    %v1 = amdg.masked_load %src1, %active, %zero_vec : (!llvm.ptr, i1, vector<1xf16>) -> vector<1xf16>
+    %v0 = amdg.masked_load %src0, %active, %zero : (!llvm.ptr, i1, vector<1xf16>) -> vector<1xf16>
+    %v1 = amdg.masked_load %src1, %active, %zero : (!llvm.ptr, i1, vector<1xf16>) -> vector<1xf16>
     %e0 = llvm.extractelement %v0[%c0 : i32] : vector<1xf16>
     %e1 = llvm.extractelement %v1[%c0 : i32] : vector<1xf16>
     %undef = llvm.mlir.undef : vector<2xf16>
@@ -54,7 +71,7 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @loads_to_llvm_stores
+// CHECK-LABEL: llvm.func @loads_to_unmasked_stores
 // CHECK: %[[REGION:.*]]:2 = amdg.masked_region %{{.*}} else(%{{.*}}, %{{.*}}) {
 // CHECK:   llvm.load %{{.*}} : !llvm.ptr -> i32
 // CHECK:   llvm.load %{{.*}} : !llvm.ptr -> i32
@@ -65,7 +82,7 @@ module {
 // CHECK-NOT: amdg.masked_load
 // CHECK: llvm.return
 module {
-  llvm.func @loads_to_llvm_stores(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst0: !llvm.ptr, %dst1: !llvm.ptr) {
+  llvm.func @loads_to_unmasked_stores(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst0: !llvm.ptr, %dst1: !llvm.ptr) {
     %zero = llvm.mlir.constant(0 : i32) : i32
     %one = llvm.mlir.constant(1 : i32) : i32
     %a = amdg.masked_load %src0, %active, %zero : (!llvm.ptr, i1, i32) -> i32
@@ -78,7 +95,56 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @loads_to_later_masked_stores
+// CHECK-LABEL: llvm.func @hoist_escaping_false_value
+// CHECK-SAME: (%[[MASK:.*]]: i1
+// CHECK: %[[FALSE:.*]] = llvm.add
+// CHECK-NEXT: %[[REGION:.*]]:2 = amdg.masked_region %[[MASK]] else(%{{.*}}, %[[FALSE]]) {
+// CHECK:   llvm.load %{{.*}} : !llvm.ptr -> i32
+// CHECK:   llvm.load %{{.*}} : !llvm.ptr -> i32
+// CHECK:   amdg.masked_yield %{{.*}}, %{{.*}} : i32, i32
+// CHECK: } : i32, i32 -> i32, i32
+// CHECK: llvm.store %[[REGION]]#0,
+// CHECK: llvm.store %[[REGION]]#1,
+// CHECK-NOT: amdg.masked_load
+// CHECK: llvm.return
+module {
+  llvm.func @hoist_escaping_false_value(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst0: !llvm.ptr, %dst1: !llvm.ptr, %base: i32) {
+    %zero = llvm.mlir.constant(0 : i32) : i32
+    %a = amdg.masked_load %src0, %active, %zero : (!llvm.ptr, i1, i32) -> i32
+    %false = llvm.add %base, %zero : i32
+    %b = amdg.masked_load %src1, %active, %false : (!llvm.ptr, i1, i32) -> i32
+    llvm.store %a, %dst0 : i32, !llvm.ptr
+    llvm.store %b, %dst1 : i32, !llvm.ptr
+    llvm.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: llvm.func @mixed_load_uses
+// CHECK-NOT: amdg.masked_region
+// CHECK: %[[A:.*]] = amdg.masked_load
+// CHECK: %[[B:.*]] = amdg.masked_load
+// CHECK: llvm.store %[[A]],
+// CHECK: %[[SUM:.*]] = llvm.add %[[A]], %[[B]] : i32
+// CHECK: llvm.store %[[SUM]],
+// CHECK-NOT: amdg.masked_region
+// CHECK: llvm.return
+module {
+  llvm.func @mixed_load_uses(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst0: !llvm.ptr, %dst1: !llvm.ptr) {
+    %zero = llvm.mlir.constant(0 : i32) : i32
+    %a = amdg.masked_load %src0, %active, %zero : (!llvm.ptr, i1, i32) -> i32
+    %b = amdg.masked_load %src1, %active, %zero : (!llvm.ptr, i1, i32) -> i32
+    llvm.store %a, %dst0 : i32, !llvm.ptr
+    %sum = llvm.add %a, %b : i32
+    llvm.store %sum, %dst1 : i32, !llvm.ptr
+    llvm.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: llvm.func @loads_to_masked_stores
 // CHECK-SAME: (%[[LOAD_MASK:.*]]: i1, %[[STORE_MASK:.*]]: i1
 // CHECK: %[[LOADS:.*]]:2 = amdg.masked_region %[[LOAD_MASK]] else(%{{.*}}, %{{.*}}) {
 // CHECK:   llvm.load %{{.*}} : !llvm.ptr -> i32
@@ -94,7 +160,7 @@ module {
 // CHECK-NOT: amdg.masked_store
 // CHECK: llvm.return
 module {
-  llvm.func @loads_to_later_masked_stores(%load_mask: i1, %store_mask: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst0: !llvm.ptr, %dst1: !llvm.ptr) {
+  llvm.func @loads_to_masked_stores(%load_mask: i1, %store_mask: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst0: !llvm.ptr, %dst1: !llvm.ptr) {
     %zero = llvm.mlir.constant(0 : i32) : i32
     %one = llvm.mlir.constant(1 : i32) : i32
     %a = amdg.masked_load %src0, %load_mask, %zero : (!llvm.ptr, i1, i32) -> i32
@@ -107,7 +173,7 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @loads_cast_to_stores
+// CHECK-LABEL: llvm.func @cast_loads_to_stores
 // CHECK: %[[REGION:.*]]:2 = amdg.masked_region %{{.*}} else(%{{.*}}, %{{.*}}) {
 // CHECK:   llvm.load %{{.*}} : !llvm.ptr -> i16
 // CHECK:   llvm.load %{{.*}} : !llvm.ptr -> f16
@@ -120,7 +186,7 @@ module {
 // CHECK-NOT: amdg.masked_load
 // CHECK: llvm.return
 module {
-  llvm.func @loads_cast_to_stores(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst0: !llvm.ptr, %dst1: !llvm.ptr, %zero_i16: i16, %zero_f16: f16) {
+  llvm.func @cast_loads_to_stores(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst0: !llvm.ptr, %dst1: !llvm.ptr, %zero_i16: i16, %zero_f16: f16) {
     %a = amdg.masked_load %src0, %active, %zero_i16 : (!llvm.ptr, i1, i16) -> i16
     %b = amdg.masked_load %src1, %active, %zero_f16 : (!llvm.ptr, i1, f16) -> f16
     %zext = llvm.zext %a : i16 to i32
@@ -133,7 +199,7 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @loads_packed_with_insertvalue
+// CHECK-LABEL: llvm.func @insertvalue_loads_to_store
 // CHECK: %[[REGION:.*]]:2 = amdg.masked_region %{{.*}} else(%{{.*}}, %{{.*}}) {
 // CHECK:   llvm.load %{{.*}} : !llvm.ptr -> !llvm.struct<(i32)>
 // CHECK:   llvm.load %{{.*}} : !llvm.ptr -> !llvm.struct<(i32)>
@@ -147,7 +213,7 @@ module {
 // CHECK-NOT: amdg.masked_load
 // CHECK: llvm.return
 module {
-  llvm.func @loads_packed_with_insertvalue(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr, %zero: !llvm.struct<(i32)>) {
+  llvm.func @insertvalue_loads_to_store(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr, %zero: !llvm.struct<(i32)>) {
     %v0 = amdg.masked_load %src0, %active, %zero : (!llvm.ptr, i1, !llvm.struct<(i32)>) -> !llvm.struct<(i32)>
     %v1 = amdg.masked_load %src1, %active, %zero : (!llvm.ptr, i1, !llvm.struct<(i32)>) -> !llvm.struct<(i32)>
     %e0 = llvm.extractvalue %v0[0] : !llvm.struct<(i32)>
@@ -162,7 +228,7 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @loads_shuffled_to_store
+// CHECK-LABEL: llvm.func @shuffle_loads_to_store
 // CHECK: %[[REGION:.*]]:2 = amdg.masked_region %{{.*}} else(%{{.*}}, %{{.*}}) {
 // CHECK:   llvm.load %{{.*}} : !llvm.ptr -> vector<2xi32>
 // CHECK:   llvm.load %{{.*}} : !llvm.ptr -> vector<2xi32>
@@ -173,9 +239,9 @@ module {
 // CHECK-NOT: amdg.masked_load
 // CHECK: llvm.return
 module {
-  llvm.func @loads_shuffled_to_store(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr, %zero_vec: vector<2xi32>) {
-    %v0 = amdg.masked_load %src0, %active, %zero_vec : (!llvm.ptr, i1, vector<2xi32>) -> vector<2xi32>
-    %v1 = amdg.masked_load %src1, %active, %zero_vec : (!llvm.ptr, i1, vector<2xi32>) -> vector<2xi32>
+  llvm.func @shuffle_loads_to_store(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr, %zero: vector<2xi32>) {
+    %v0 = amdg.masked_load %src0, %active, %zero : (!llvm.ptr, i1, vector<2xi32>) -> vector<2xi32>
+    %v1 = amdg.masked_load %src1, %active, %zero : (!llvm.ptr, i1, vector<2xi32>) -> vector<2xi32>
     %shuffle = llvm.shufflevector %v0, %v1 [0, 2] : vector<2xi32>
     llvm.store %shuffle, %dst : vector<2xi32>, !llvm.ptr
     llvm.return
@@ -184,7 +250,7 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @load_as_extract_index_blocks_region
+// CHECK-LABEL: llvm.func @load_used_as_extract_index
 // CHECK-NOT: amdg.masked_region
 // CHECK: amdg.masked_load
 // CHECK: amdg.masked_load
@@ -193,7 +259,7 @@ module {
 // CHECK-NOT: amdg.masked_region
 // CHECK: llvm.return
 module {
-  llvm.func @load_as_extract_index_blocks_region(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %rsrc: !llvm.ptr<8>, %offset: i32, %soffset: i32, %aux: i32, %vec: vector<4xf32>) {
+  llvm.func @load_used_as_extract_index(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %rsrc: !llvm.ptr<8>, %offset: i32, %soffset: i32, %aux: i32, %vec: vector<4xf32>) {
     %zero = llvm.mlir.constant(0 : i32) : i32
     %idx = amdg.masked_load %src0, %active, %zero : (!llvm.ptr, i1, i32) -> i32
     %unused = amdg.masked_load %src1, %active, %zero : (!llvm.ptr, i1, i32) -> i32
@@ -205,7 +271,7 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @load_as_buffer_store_offset_blocks_region
+// CHECK-LABEL: llvm.func @load_used_as_store_offset
 // CHECK-NOT: amdg.masked_region
 // CHECK: amdg.masked_load
 // CHECK: amdg.masked_load
@@ -213,7 +279,7 @@ module {
 // CHECK-NOT: amdg.masked_region
 // CHECK: llvm.return
 module {
-  llvm.func @load_as_buffer_store_offset_blocks_region(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %rsrc: !llvm.ptr<8>, %soffset: i32, %aux: i32, %value: i32) {
+  llvm.func @load_used_as_store_offset(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %rsrc: !llvm.ptr<8>, %soffset: i32, %aux: i32, %value: i32) {
     %zero = llvm.mlir.constant(0 : i32) : i32
     %offset = amdg.masked_load %src0, %active, %zero : (!llvm.ptr, i1, i32) -> i32
     %unused = amdg.masked_load %src1, %active, %zero : (!llvm.ptr, i1, i32) -> i32
@@ -224,7 +290,7 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @load_load_store_same_mask
+// CHECK-LABEL: llvm.func @same_mask_loads_store
 // CHECK: amdg.masked_region %{{.*}} {
 // CHECK:   %[[A:.*]] = llvm.load
 // CHECK:   %[[B:.*]] = llvm.load
@@ -236,7 +302,7 @@ module {
 // CHECK-NOT: amdg.masked_store
 // CHECK: llvm.return
 module {
-  llvm.func @load_load_store_same_mask(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr) {
+  llvm.func @same_mask_loads_store(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr) {
     %zero = llvm.mlir.constant(0 : i32) : i32
     %a = amdg.masked_load %src0, %active, %zero : (!llvm.ptr, i1, i32) -> i32
     %b = amdg.masked_load %src1, %active, %zero : (!llvm.ptr, i1, i32) -> i32
@@ -248,7 +314,7 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @pure_op_stays_outside_store_region
+// CHECK-LABEL: llvm.func @unrelated_pure_op_stays_outside
 // CHECK-SAME: (%[[ACTIVE:.*]]: i1
 // CHECK-SAME: %[[X:[A-Za-z0-9_]+]]: i32, %[[Y:[A-Za-z0-9_]+]]: i32
 // CHECK: amdg.masked_region %[[ACTIVE]] {
@@ -264,7 +330,7 @@ module {
 // CHECK-NOT: amdg.masked_store
 // CHECK: llvm.return
 module {
-  llvm.func @pure_op_stays_outside_store_region(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr, %side: !llvm.ptr, %x: i32, %y: i32) {
+  llvm.func @unrelated_pure_op_stays_outside(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr, %side: !llvm.ptr, %x: i32, %y: i32) {
     %zero = llvm.mlir.constant(0 : i32) : i32
     %a = amdg.masked_load %src0, %active, %zero : (!llvm.ptr, i1, i32) -> i32
     %tmp = llvm.add %x, %y : i32
@@ -278,7 +344,51 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @masked_store_does_not_hide_load_escape
+// CHECK-LABEL: llvm.func @body_dependency_escape
+// CHECK-NOT: amdg.masked_region
+// CHECK: %[[A:.*]] = amdg.masked_load
+// CHECK: %[[PTR:.*]] = llvm.getelementptr
+// CHECK: %[[B:.*]] = amdg.masked_load %[[PTR]],
+// CHECK: llvm.store %[[A]], %[[PTR]]
+// CHECK: llvm.store %[[B]],
+// CHECK-NOT: amdg.masked_region
+// CHECK: llvm.return
+module {
+  llvm.func @body_dependency_escape(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr) {
+    %zero = llvm.mlir.constant(0 : i32) : i32
+    %a = amdg.masked_load %src0, %active, %zero : (!llvm.ptr, i1, i32) -> i32
+    %ptr = llvm.getelementptr %src1[%zero] : (!llvm.ptr, i32) -> !llvm.ptr, i32
+    %b = amdg.masked_load %ptr, %active, %zero : (!llvm.ptr, i1, i32) -> i32
+    llvm.store %a, %ptr : i32, !llvm.ptr
+    llvm.store %b, %dst : i32, !llvm.ptr
+    llvm.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: llvm.func @false_body_dependency_conflict
+// CHECK-NOT: amdg.masked_region
+// CHECK: amdg.masked_load
+// CHECK: %[[PTR:.*]] = llvm.getelementptr
+// CHECK: %[[LOAD:.*]] = amdg.masked_load %[[PTR]], %{{.*}}, %[[PTR]]
+// CHECK: llvm.store %[[LOAD]],
+// CHECK-NOT: amdg.masked_region
+// CHECK: llvm.return
+module {
+  llvm.func @false_body_dependency_conflict(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr) {
+    %zero = llvm.mlir.constant(0 : i32) : i32
+    %a = amdg.masked_load %src0, %active, %zero : (!llvm.ptr, i1, i32) -> i32
+    %ptr = llvm.getelementptr %src1[%zero] : (!llvm.ptr, i32) -> !llvm.ptr, i8
+    %b = amdg.masked_load %ptr, %active, %ptr : (!llvm.ptr, i1, !llvm.ptr) -> !llvm.ptr
+    llvm.store %b, %dst : !llvm.ptr, !llvm.ptr
+    llvm.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: llvm.func @masked_store_cannot_hide_escape
 // CHECK-NOT: amdg.masked_region
 // CHECK: amdg.masked_load
 // CHECK: amdg.masked_load
@@ -286,7 +396,7 @@ module {
 // CHECK-NOT: amdg.masked_region
 // CHECK: llvm.return
 module {
-  llvm.func @masked_store_does_not_hide_load_escape(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst0: !llvm.ptr, %dst1: !llvm.ptr, %value: i32) {
+  llvm.func @masked_store_cannot_hide_escape(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst0: !llvm.ptr, %dst1: !llvm.ptr, %value: i32) {
     %zero = llvm.mlir.constant(0 : i32) : i32
     %a = amdg.masked_load %src0, %active, %zero : (!llvm.ptr, i1, i32) -> i32
     %b = amdg.masked_load %src1, %active, %zero : (!llvm.ptr, i1, i32) -> i32
@@ -299,7 +409,7 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @extracted_loads_to_arithmetic_block_region
+// CHECK-LABEL: llvm.func @extract_then_arithmetic_blocks
 // CHECK-NOT: amdg.masked_region
 // CHECK: amdg.masked_load
 // CHECK: llvm.extractelement
@@ -308,11 +418,11 @@ module {
 // CHECK-NOT: amdg.masked_region
 // CHECK: llvm.return
 module {
-  llvm.func @extracted_loads_to_arithmetic_block_region(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr, %zero_vec: vector<4xf32>) {
+  llvm.func @extract_then_arithmetic_blocks(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr, %zero: vector<4xf32>) {
     %c0 = llvm.mlir.constant(0 : i32) : i32
-    %v0 = amdg.masked_load %src0, %active, %zero_vec : (!llvm.ptr, i1, vector<4xf32>) -> vector<4xf32>
+    %v0 = amdg.masked_load %src0, %active, %zero : (!llvm.ptr, i1, vector<4xf32>) -> vector<4xf32>
     %e0 = llvm.extractelement %v0[%c0 : i32] : vector<4xf32>
-    %v1 = amdg.masked_load %src1, %active, %zero_vec : (!llvm.ptr, i1, vector<4xf32>) -> vector<4xf32>
+    %v1 = amdg.masked_load %src1, %active, %zero : (!llvm.ptr, i1, vector<4xf32>) -> vector<4xf32>
     %e1 = llvm.extractelement %v1[%c0 : i32] : vector<4xf32>
     %sum = llvm.fadd %e0, %e1 : f32
     llvm.store %sum, %dst : f32, !llvm.ptr
@@ -322,9 +432,11 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @interleaved_false_values_store_region
+// CHECK-LABEL: llvm.func @unused_false_dependencies
 // CHECK-SAME: (%[[ACTIVE:.*]]: i1
-// CHECK: amdg.masked_region %[[ACTIVE]] {
+// CHECK: %[[UNDEF0:.*]] = llvm.mlir.undef : vector<4xf32>
+// CHECK-NEXT: %{{.*}} = llvm.insertelement %{{.*}}, %[[UNDEF0]]
+// CHECK-NEXT: amdg.masked_region %[[ACTIVE]] {
 // CHECK:   llvm.load %{{.*}} : !llvm.ptr -> vector<4xf32>
 // CHECK:   llvm.extractelement
 // CHECK:   llvm.load %{{.*}} : !llvm.ptr -> vector<4xf32>
@@ -333,11 +445,13 @@ module {
 // CHECK:   llvm.store
 // CHECK:   amdg.masked_yield
 // CHECK: }
+// CHECK-NEXT: %[[UNDEF1:.*]] = llvm.mlir.undef : vector<4xf32>
+// CHECK-NEXT: %{{.*}} = llvm.insertelement %{{.*}}, %[[UNDEF1]]
 // CHECK-NOT: amdg.masked_load
 // CHECK-NOT: amdg.masked_store
-// CHECK: llvm.return
+// CHECK-NEXT: llvm.return
 module {
-  llvm.func @interleaved_false_values_store_region(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr, %other0: f32, %other1: f32) {
+  llvm.func @unused_false_dependencies(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr, %other0: f32, %other1: f32) {
     %c0 = llvm.mlir.constant(0 : i32) : i32
     %undef0 = llvm.mlir.undef : vector<4xf32>
     %false0 = llvm.insertelement %other0, %undef0[%c0 : i32] : vector<4xf32>
@@ -355,7 +469,7 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @aggregate_masks_from_same_value_group
+// CHECK-LABEL: llvm.func @equivalent_aggregate_masks
 // CHECK: amdg.masked_region %{{.*}} {
 // CHECK:   llvm.load %{{.*}} : !llvm.ptr -> vector<4xf32>
 // CHECK:   llvm.extractelement
@@ -369,16 +483,16 @@ module {
 // CHECK-NOT: amdg.masked_store
 // CHECK: llvm.return
 module {
-  llvm.func @aggregate_masks_from_same_value_group(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr, %zero_vec: vector<4xf32>) {
+  llvm.func @equivalent_aggregate_masks(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr, %zero: vector<4xf32>) {
     %c0 = llvm.mlir.constant(0 : i32) : i32
     %undef = llvm.mlir.undef : !llvm.struct<(i1, i1)>
     %agg0 = llvm.insertvalue %active, %undef[0] : !llvm.struct<(i1, i1)>
     %agg1 = llvm.insertvalue %active, %agg0[1] : !llvm.struct<(i1, i1)>
     %m0 = llvm.extractvalue %agg1[0] : !llvm.struct<(i1, i1)>
     %m1 = llvm.extractvalue %agg1[1] : !llvm.struct<(i1, i1)>
-    %v0 = amdg.masked_load %src0, %m0, %zero_vec : (!llvm.ptr, i1, vector<4xf32>) -> vector<4xf32>
+    %v0 = amdg.masked_load %src0, %m0, %zero : (!llvm.ptr, i1, vector<4xf32>) -> vector<4xf32>
     %e0 = llvm.extractelement %v0[%c0 : i32] : vector<4xf32>
-    %v1 = amdg.masked_load %src1, %m1, %zero_vec : (!llvm.ptr, i1, vector<4xf32>) -> vector<4xf32>
+    %v1 = amdg.masked_load %src1, %m1, %zero : (!llvm.ptr, i1, vector<4xf32>) -> vector<4xf32>
     %e1 = llvm.extractelement %v1[%c0 : i32] : vector<4xf32>
     %sum = llvm.fadd %e0, %e1 : f32
     amdg.masked_store %dst, %sum, %m1 : !llvm.ptr, f32, i1
@@ -388,7 +502,7 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @materialized_aggregate_mask_store_region
+// CHECK-LABEL: llvm.func @interleaved_aggregate_mask
 // CHECK: amdg.masked_region %{{.*}} {
 // CHECK:   llvm.load %{{.*}} : !llvm.ptr -> vector<1xi32>
 // CHECK:   llvm.extractelement
@@ -402,16 +516,16 @@ module {
 // CHECK-NOT: amdg.masked_store
 // CHECK: llvm.return
 module {
-  llvm.func @materialized_aggregate_mask_store_region(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr, %zero_vec: vector<1xi32>) {
+  llvm.func @interleaved_aggregate_mask(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr, %zero: vector<1xi32>) {
     %c0 = llvm.mlir.constant(0 : i32) : i32
     %undef = llvm.mlir.undef : !llvm.struct<(i1, i1)>
     %agg0 = llvm.insertvalue %active, %undef[0] : !llvm.struct<(i1, i1)>
     %m0 = llvm.extractvalue %agg0[0] : !llvm.struct<(i1, i1)>
-    %v0 = amdg.masked_load %src0, %m0, %zero_vec : (!llvm.ptr, i1, vector<1xi32>) -> vector<1xi32>
+    %v0 = amdg.masked_load %src0, %m0, %zero : (!llvm.ptr, i1, vector<1xi32>) -> vector<1xi32>
     %e0 = llvm.extractelement %v0[%c0 : i32] : vector<1xi32>
     %agg1 = llvm.insertvalue %active, %agg0[1] : !llvm.struct<(i1, i1)>
     %m1 = llvm.extractvalue %agg1[1] : !llvm.struct<(i1, i1)>
-    %v1 = amdg.masked_load %src1, %m1, %zero_vec : (!llvm.ptr, i1, vector<1xi32>) -> vector<1xi32>
+    %v1 = amdg.masked_load %src1, %m1, %zero : (!llvm.ptr, i1, vector<1xi32>) -> vector<1xi32>
     %e1 = llvm.extractelement %v1[%c0 : i32] : vector<1xi32>
     %sum = llvm.add %e0, %e1 : i32
     amdg.masked_store %dst, %sum, %m1 : !llvm.ptr, i32, i1
@@ -421,13 +535,13 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @overlapping_aggregate_insert_blocks_grouping
+// CHECK-LABEL: llvm.func @overwritten_aggregate_mask
 // CHECK-NOT: amdg.masked_region
 // CHECK: amdg.masked_load
 // CHECK: amdg.masked_load
 // CHECK: llvm.return
 module {
-  llvm.func @overlapping_aggregate_insert_blocks_grouping(%old: i1, %new: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %zero_vec: vector<1xi32>) {
+  llvm.func @overwritten_aggregate_mask(%old: i1, %new: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %zero: vector<1xi32>) {
     %undef_inner = llvm.mlir.undef : !llvm.struct<(i1)>
     %undef_outer = llvm.mlir.undef : !llvm.struct<(!llvm.struct<(i1)>)>
     %old_inner = llvm.insertvalue %old, %undef_inner[0] : !llvm.struct<(i1)>
@@ -436,31 +550,31 @@ module {
     %new_outer = llvm.insertvalue %new_inner, %old_outer[0] : !llvm.struct<(!llvm.struct<(i1)>)>
     %m0 = llvm.extractvalue %old_outer[0, 0] : !llvm.struct<(!llvm.struct<(i1)>)>
     %m1 = llvm.extractvalue %new_outer[0, 0] : !llvm.struct<(!llvm.struct<(i1)>)>
-    %a = amdg.masked_load %src0, %m0, %zero_vec : (!llvm.ptr, i1, vector<1xi32>) -> vector<1xi32>
-    %b = amdg.masked_load %src1, %m1, %zero_vec : (!llvm.ptr, i1, vector<1xi32>) -> vector<1xi32>
+    %a = amdg.masked_load %src0, %m0, %zero : (!llvm.ptr, i1, vector<1xi32>) -> vector<1xi32>
+    %b = amdg.masked_load %src1, %m1, %zero : (!llvm.ptr, i1, vector<1xi32>) -> vector<1xi32>
     llvm.return
   }
 }
 
 // -----
 
-// CHECK-LABEL: llvm.func @different_scalarized_predicates_do_not_group
+// CHECK-LABEL: llvm.func @different_scalar_masks
 // CHECK-NOT: amdg.masked_region
 // CHECK: amdg.masked_load
 // CHECK: amdg.masked_load
 // CHECK: llvm.return
 module {
-  llvm.func @different_scalarized_predicates_do_not_group(%row: i1, %pid_n: i32, %N: i32, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr) {
+  llvm.func @different_scalar_masks(%row: i1, %pid_n: i32, %n: i32, %src0: !llvm.ptr, %src1: !llvm.ptr, %dst: !llvm.ptr) {
     %zero = llvm.mlir.constant(0 : i32) : i32
     %c7 = llvm.mlir.constant(7 : i32) : i32
     %c64 = llvm.mlir.constant(64 : i32) : i32
     %base = llvm.mul %pid_n, %c64 : i32
     %col0 = llvm.add %base, %zero : i32
     %col7 = llvm.add %base, %c7 : i32
-    %col0_in_bounds = llvm.icmp "slt" %col0, %N : i32
-    %col7_in_bounds = llvm.icmp "slt" %col7, %N : i32
-    %mask0 = llvm.and %row, %col0_in_bounds : i1
-    %mask7 = llvm.and %row, %col7_in_bounds : i1
+    %in0 = llvm.icmp "slt" %col0, %n : i32
+    %in7 = llvm.icmp "slt" %col7, %n : i32
+    %mask0 = llvm.and %row, %in0 : i1
+    %mask7 = llvm.and %row, %in7 : i1
     %a = amdg.masked_load %src0, %mask0, %zero : (!llvm.ptr, i1, i32) -> i32
     %b = amdg.masked_load %src1, %mask7, %zero : (!llvm.ptr, i1, i32) -> i32
     %sum = llvm.add %a, %b : i32
@@ -471,7 +585,7 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @store_only_same_mask
+// CHECK-LABEL: llvm.func @same_mask_stores
 // CHECK: amdg.masked_region %{{.*}} {
 // CHECK:   llvm.store
 // CHECK:   llvm.store
@@ -480,7 +594,7 @@ module {
 // CHECK-NOT: amdg.masked_store
 // CHECK: llvm.return
 module {
-  llvm.func @store_only_same_mask(%active: i1, %src: !llvm.ptr, %dst0: !llvm.ptr, %dst1: !llvm.ptr) {
+  llvm.func @same_mask_stores(%active: i1, %src: !llvm.ptr, %dst0: !llvm.ptr, %dst1: !llvm.ptr) {
     %v = llvm.load %src : !llvm.ptr -> i32
     amdg.masked_store %dst0, %v, %active : !llvm.ptr, i32, i1
     amdg.masked_store %dst1, %v, %active : !llvm.ptr, i32, i1
@@ -490,7 +604,7 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @cv_load_wt_store_form_volatile_region
+// CHECK-LABEL: llvm.func @volatile_cache_modifiers
 // CHECK: amdg.masked_region %{{.*}} {
 // CHECK:   %[[VALUE:.*]] = llvm.load volatile
 // CHECK:   llvm.store volatile %[[VALUE]],
@@ -500,7 +614,7 @@ module {
 // CHECK-NOT: amdg.masked_store
 // CHECK: llvm.return
 module {
-  llvm.func @cv_load_wt_store_form_volatile_region(%active: i1, %src: !llvm.ptr, %dst: !llvm.ptr, %zero: i32) {
+  llvm.func @volatile_cache_modifiers(%active: i1, %src: !llvm.ptr, %dst: !llvm.ptr, %zero: i32) {
     %value = amdg.masked_load %src, %active, %zero cacheModifier = cv : (!llvm.ptr, i1, i32) -> i32
     amdg.masked_store %dst, %value, %active cacheModifier = wt : !llvm.ptr, i32, i1
     llvm.return
@@ -509,13 +623,13 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @different_masks_do_not_group
+// CHECK-LABEL: llvm.func @different_masks
 // CHECK-NOT: amdg.masked_region
 // CHECK: amdg.masked_load
 // CHECK: amdg.masked_load
 // CHECK: llvm.return
 module {
-  llvm.func @different_masks_do_not_group(%mask0: i1, %mask1: i1, %src0: !llvm.ptr, %src1: !llvm.ptr) {
+  llvm.func @different_masks(%mask0: i1, %mask1: i1, %src0: !llvm.ptr, %src1: !llvm.ptr) {
     %zero = llvm.mlir.constant(0 : i32) : i32
     %a = amdg.masked_load %src0, %mask0, %zero : (!llvm.ptr, i1, i32) -> i32
     %b = amdg.masked_load %src1, %mask1, %zero : (!llvm.ptr, i1, i32) -> i32
@@ -525,34 +639,34 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @different_aggregate_masks_do_not_group
+// CHECK-LABEL: llvm.func @different_aggregate_masks
 // CHECK-NOT: amdg.masked_region
 // CHECK: amdg.masked_load
 // CHECK: amdg.masked_load
 // CHECK: llvm.return
 module {
-  llvm.func @different_aggregate_masks_do_not_group(%mask0: i1, %mask1: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %zero_vec: vector<1xi32>) {
+  llvm.func @different_aggregate_masks(%mask0: i1, %mask1: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %zero: vector<1xi32>) {
     %undef = llvm.mlir.undef : !llvm.struct<(i1, i1)>
     %agg0 = llvm.insertvalue %mask0, %undef[0] : !llvm.struct<(i1, i1)>
     %agg1 = llvm.insertvalue %mask1, %agg0[1] : !llvm.struct<(i1, i1)>
     %m0 = llvm.extractvalue %agg1[0] : !llvm.struct<(i1, i1)>
     %m1 = llvm.extractvalue %agg1[1] : !llvm.struct<(i1, i1)>
-    %a = amdg.masked_load %src0, %m0, %zero_vec : (!llvm.ptr, i1, vector<1xi32>) -> vector<1xi32>
-    %b = amdg.masked_load %src1, %m1, %zero_vec : (!llvm.ptr, i1, vector<1xi32>) -> vector<1xi32>
+    %a = amdg.masked_load %src0, %m0, %zero : (!llvm.ptr, i1, vector<1xi32>) -> vector<1xi32>
+    %b = amdg.masked_load %src1, %m1, %zero : (!llvm.ptr, i1, vector<1xi32>) -> vector<1xi32>
     llvm.return
   }
 }
 
 // -----
 
-// CHECK-LABEL: llvm.func @intervening_store_blocks_grouping
+// CHECK-LABEL: llvm.func @intervening_store
 // CHECK-NOT: amdg.masked_region
 // CHECK: amdg.masked_load
 // CHECK: llvm.store
 // CHECK: amdg.masked_load
 // CHECK: llvm.return
 module {
-  llvm.func @intervening_store_blocks_grouping(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %side: !llvm.ptr) {
+  llvm.func @intervening_store(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %side: !llvm.ptr) {
     %zero = llvm.mlir.constant(0 : i32) : i32
     %a = amdg.masked_load %src0, %active, %zero : (!llvm.ptr, i1, i32) -> i32
     llvm.store %a, %side : i32, !llvm.ptr
@@ -563,7 +677,7 @@ module {
 
 // -----
 
-// CHECK-LABEL: llvm.func @readfirstlane_blocks_grouping
+// CHECK-LABEL: llvm.func @readfirstlane
 // CHECK-NOT: amdg.masked_region
 // CHECK: amdg.masked_load
 // CHECK: rocdl.readfirstlane
@@ -571,23 +685,23 @@ module {
 // CHECK-NOT: amdg.masked_region
 // CHECK: llvm.return
 module {
-  llvm.func @readfirstlane_blocks_grouping(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %lane_value: i32, %zero_vec: vector<1xi32>) {
-    %v0 = amdg.masked_load %src0, %active, %zero_vec : (!llvm.ptr, i1, vector<1xi32>) -> vector<1xi32>
-    %lane = rocdl.readfirstlane %lane_value : i32
-    %v1 = amdg.masked_load %src1, %active, %zero_vec : (!llvm.ptr, i1, vector<1xi32>) -> vector<1xi32>
+  llvm.func @readfirstlane(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr, %value: i32, %zero: vector<1xi32>) {
+    %v0 = amdg.masked_load %src0, %active, %zero : (!llvm.ptr, i1, vector<1xi32>) -> vector<1xi32>
+    %lane = rocdl.readfirstlane %value : i32
+    %v1 = amdg.masked_load %src1, %active, %zero : (!llvm.ptr, i1, vector<1xi32>) -> vector<1xi32>
     llvm.return
   }
 }
 
 // -----
 
-// CHECK-LABEL: llvm.func @multicast_loads_do_not_form_region
+// CHECK-LABEL: llvm.func @multicast_loads
 // CHECK-NOT: amdg.masked_region
 // CHECK: amdg.masked_load
 // CHECK: amdg.masked_load
 // CHECK: llvm.return
 module {
-  llvm.func @multicast_loads_do_not_form_region(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr) {
+  llvm.func @multicast_loads(%active: i1, %src0: !llvm.ptr, %src1: !llvm.ptr) {
     %zero = llvm.mlir.constant(0 : i32) : i32
     %multicast = llvm.mlir.constant(3 : i32) : i32
     %a = amdg.masked_load %src0, %active, %zero, %multicast : (!llvm.ptr, i1, i32, i32) -> i32

@@ -87,36 +87,19 @@ static bool isMovablePureOp(Operation *op) {
 static bool isErasedMaskedOpOperand(OpOperand &use) {
   return llvm::TypeSwitch<Operation *, bool>(use.getOwner())
       .Case<triton::amdgpu::MaskedLoadOp>([&](auto load) {
-        unsigned operandNumber = use.getOperandNumber();
-        return operandNumber == load.getMaskMutable().getOperandNumber() ||
-               operandNumber == load.getFalseValMutable().getOperandNumber();
+        return &use == &load.getMaskMutable() ||
+               &use == &load.getFalseValMutable();
       })
-      .Case<triton::amdgpu::MaskedStoreOp>([&](auto store) {
-        return use.getOperandNumber() ==
-               store.getMaskMutable().getOperandNumber();
-      })
+      .Case<triton::amdgpu::MaskedStoreOp>(
+          [&](auto store) { return &use == &store.getMaskMutable(); })
       .Default([](Operation *) { return false; });
 }
 
 static bool
-hasNoLiveUsesInMovedOps(Operation *op,
-                        const llvm::SmallPtrSetImpl<Operation *> &moveSet) {
-  for (Value result : op->getResults()) {
-    for (OpOperand &use : result.getUses()) {
-      if (!moveSet.contains(use.getOwner()))
-        continue;
-      if (!isErasedMaskedOpOperand(use))
-        return false;
-    }
-  }
-  return true;
-}
-
-static bool
-addRegionBodyDependency(Value value,
-                        const llvm::SmallPtrSetImpl<Operation *> &interval,
-                        llvm::SmallPtrSetImpl<Operation *> &moveSet,
-                        SmallVectorImpl<Operation *> &regionBodyWorklist) {
+addBodyDependency(Value value,
+                  const llvm::SmallPtrSetImpl<Operation *> &interval,
+                  llvm::SmallPtrSetImpl<Operation *> &moveSet,
+                  SmallVectorImpl<Operation *> &worklist) {
   Operation *defOp = value.getDefiningOp();
   if (!defOp || !interval.contains(defOp))
     return true;
@@ -125,28 +108,28 @@ addRegionBodyDependency(Value value,
   if (!isMovablePureOp(defOp))
     return false;
   if (moveSet.insert(defOp).second)
-    regionBodyWorklist.push_back(defOp);
+    worklist.push_back(defOp);
   return true;
 }
 
 static bool
-addRegionElseDependency(Value value,
-                        const llvm::SmallPtrSetImpl<Operation *> &interval,
-                        const llvm::SmallPtrSetImpl<Operation *> &moveSet,
-                        llvm::SmallPtrSetImpl<Operation *> &hoistSet,
-                        SmallVectorImpl<Operation *> &regionElseWorklist) {
+addHoistDependency(Value value,
+                   const llvm::SmallPtrSetImpl<Operation *> &interval,
+                   const llvm::SmallPtrSetImpl<Operation *> &moveSet,
+                   llvm::SmallPtrSetImpl<Operation *> &hoistSet,
+                   SmallVectorImpl<Operation *> &worklist) {
   Operation *defOp = value.getDefiningOp();
   if (!defOp || !interval.contains(defOp))
     return true;
   if (moveSet.contains(defOp) || !isMovablePureOp(defOp))
     return false;
   if (hoistSet.insert(defOp).second)
-    regionElseWorklist.push_back(defOp);
+    worklist.push_back(defOp);
   return true;
 }
 
 struct MaskedRegionPlan {
-  SmallVector<Operation *> intervalOps;
+  Operation *firstMaskedOp;
   SmallVector<Operation *> opsToMove;
   SmallVector<Operation *> opsToHoist;
   bool hasMaskedStore = false;
@@ -156,18 +139,14 @@ struct MaskedRegionPlan {
 static bool isStoreValueUse(OpOperand &use) {
   Operation *owner = use.getOwner();
   return llvm::TypeSwitch<Operation *, bool>(owner)
-      .Case<LLVM::StoreOp>([&](LLVM::StoreOp store) {
-        return use.getOperandNumber() ==
-               store.getValueMutable().getOperandNumber();
-      })
+      .Case<LLVM::StoreOp>(
+          [&](LLVM::StoreOp store) { return &use == &store.getValueMutable(); })
       .Case<ROCDL::RawPtrBufferStoreOp>([&](ROCDL::RawPtrBufferStoreOp store) {
-        return use.getOperandNumber() ==
-               store.getVdataMutable().getOperandNumber();
+        return &use == &store.getVdataMutable();
       })
       .Case<triton::amdgpu::MaskedStoreOp>(
           [&](triton::amdgpu::MaskedStoreOp store) {
-            return use.getOperandNumber() ==
-                   store.getValueMutable().getOperandNumber();
+            return &use == &store.getValueMutable();
           })
       .Default([](Operation *) { return false; });
 }
@@ -176,87 +155,70 @@ static bool isValueForwardingUse(OpOperand &use) {
   Operation *owner = use.getOwner();
   return llvm::TypeSwitch<Operation *, bool>(owner)
       .Case<LLVM::BitcastOp, LLVM::FPExtOp, LLVM::FPTruncOp, LLVM::SExtOp,
-            LLVM::TruncOp, LLVM::ZExtOp>([&](auto castOp) {
-        return use.getOperandNumber() ==
-               castOp.getArgMutable().getOperandNumber();
-      })
+            LLVM::TruncOp, LLVM::ZExtOp>(
+          [&](auto castOp) { return &use == &castOp.getArgMutable(); })
       .Case<LLVM::ExtractElementOp>([&](LLVM::ExtractElementOp extract) {
-        return use.getOperandNumber() ==
-               extract.getVectorMutable().getOperandNumber();
+        return &use == &extract.getVectorMutable();
       })
       .Case<LLVM::ExtractValueOp>([&](LLVM::ExtractValueOp extract) {
-        return use.getOperandNumber() ==
-               extract.getContainerMutable().getOperandNumber();
+        return &use == &extract.getContainerMutable();
       })
       .Case<LLVM::InsertElementOp>([&](LLVM::InsertElementOp insert) {
-        unsigned operandNumber = use.getOperandNumber();
-        return operandNumber == insert.getValueMutable().getOperandNumber() ||
-               operandNumber == insert.getVectorMutable().getOperandNumber();
+        return &use == &insert.getValueMutable() ||
+               &use == &insert.getVectorMutable();
       })
       .Case<LLVM::InsertValueOp>([&](LLVM::InsertValueOp insert) {
-        unsigned operandNumber = use.getOperandNumber();
-        return operandNumber == insert.getValueMutable().getOperandNumber() ||
-               operandNumber == insert.getContainerMutable().getOperandNumber();
+        return &use == &insert.getValueMutable() ||
+               &use == &insert.getContainerMutable();
       })
       .Case<LLVM::ShuffleVectorOp>([&](LLVM::ShuffleVectorOp shuffle) {
-        unsigned operandNumber = use.getOperandNumber();
-        return operandNumber == shuffle.getV1Mutable().getOperandNumber() ||
-               operandNumber == shuffle.getV2Mutable().getOperandNumber();
+        return &use == &shuffle.getV1Mutable() ||
+               &use == &shuffle.getV2Mutable();
       })
       .Default([](Operation *) { return false; });
-}
-
-struct StoreValueUseState {
-  llvm::SmallPtrSet<Operation *, 16> visited;
-  bool reachesStoreValue = false;
-};
-
-static bool
-onlyFeedsStoreValues(Value value,
-                     const llvm::SmallPtrSetImpl<Operation *> &moveSet,
-                     StoreValueUseState &state) {
-  for (OpOperand &use : value.getUses()) {
-    Operation *owner = use.getOwner();
-    // Uses moved into the region do not escape through region results.
-    if (moveSet.contains(owner))
-      continue;
-
-    if (isStoreValueUse(use)) {
-      state.reachesStoreValue = true;
-      continue;
-    }
-
-    if (!isValueForwardingUse(use))
-      return false;
-
-    if (!state.visited.insert(owner).second)
-      continue;
-    for (Value result : owner->getResults()) {
-      if (!onlyFeedsStoreValues(result, moveSet, state))
-        return false;
-    }
-  }
-  return true;
 }
 
 static bool
 loadOnlyFeedsStoreValues(triton::amdgpu::MaskedLoadOp load,
                          const llvm::SmallPtrSetImpl<Operation *> &moveSet) {
-  StoreValueUseState state;
-  return onlyFeedsStoreValues(load.getResult(), moveSet, state) &&
-         state.reachesStoreValue;
+  SmallVector<Value> worklist{load.getResult()};
+  llvm::SmallPtrSet<Operation *, 16> visited;
+  bool sawStore = false;
+  while (!worklist.empty()) {
+    Value value = worklist.pop_back_val();
+    for (OpOperand &use : value.getUses()) {
+      Operation *owner = use.getOwner();
+      // Uses moved into the region do not escape through region results.
+      if (moveSet.contains(owner))
+        continue;
+
+      if (isStoreValueUse(use)) {
+        sawStore = true;
+        continue;
+      }
+
+      if (!isValueForwardingUse(use))
+        return false;
+
+      if (visited.insert(owner).second)
+        worklist.append(owner->result_begin(), owner->result_end());
+    }
+  }
+  return sawStore;
 }
 
 // Region results for loads can expose adjacent loads to LLVM vectorization and
 // early waits. Keep them only when all outside uses feed store values.
 static bool shouldFormMaskedRegion(const MaskedRegionPlan &plan) {
+  if (plan.escapingLoads.empty())
+    return plan.hasMaskedStore;
+
   llvm::SmallPtrSet<Operation *, 16> moveSet(plan.opsToMove.begin(),
                                              plan.opsToMove.end());
-  if (!llvm::all_of(plan.escapingLoads, [&](triton::amdgpu::MaskedLoadOp load) {
-        return loadOnlyFeedsStoreValues(load, moveSet);
-      }))
-    return false;
-  return plan.hasMaskedStore || !plan.escapingLoads.empty();
+  return llvm::all_of(plan.escapingLoads,
+                      [&](triton::amdgpu::MaskedLoadOp load) {
+                        return loadOnlyFeedsStoreValues(load, moveSet);
+                      });
 }
 
 static FailureOr<MaskedRegionPlan>
@@ -265,30 +227,14 @@ computeMaskedRegionPlan(ArrayRef<Operation *> intervalOps) {
                                                  intervalOps.end());
   llvm::SmallPtrSet<Operation *, 16> moveSet;
   llvm::SmallPtrSet<Operation *, 16> hoistSet;
-  SmallVector<Operation *> regionBodyWorklist;
-  SmallVector<Operation *> regionElseWorklist;
+  SmallVector<Operation *> moveWorklist;
   bool hasMaskedStore = false;
 
   for (Operation *op : intervalOps) {
-    if (Value opMask = getMaskedOpMask(op)) {
+    if (getMaskedOpMask(op)) {
       moveSet.insert(op);
-      if (auto load = dyn_cast<triton::amdgpu::MaskedLoadOp>(op)) {
-        if (!addRegionElseDependency(load.getFalseVal(), intervalSet, moveSet,
-                                     hoistSet, regionElseWorklist))
-          return failure();
-        if (!addRegionBodyDependency(load.getPtr(), intervalSet, moveSet,
-                                     regionBodyWorklist))
-          return failure();
-        continue;
-      }
-      auto store = cast<triton::amdgpu::MaskedStoreOp>(op);
-      hasMaskedStore = true;
-      if (!addRegionBodyDependency(store.getPtr(), intervalSet, moveSet,
-                                   regionBodyWorklist))
-        return failure();
-      if (!addRegionBodyDependency(store.getValue(), intervalSet, moveSet,
-                                   regionBodyWorklist))
-        return failure();
+      moveWorklist.push_back(op);
+      hasMaskedStore |= isa<triton::amdgpu::MaskedStoreOp>(op);
       continue;
     }
 
@@ -296,59 +242,58 @@ computeMaskedRegionPlan(ArrayRef<Operation *> intervalOps) {
       return failure();
   }
 
-  while (!regionBodyWorklist.empty()) {
-    Operation *op = regionBodyWorklist.pop_back_val();
-    for (Value operand : op->getOperands()) {
-      if (!addRegionBodyDependency(operand, intervalSet, moveSet,
-                                   regionBodyWorklist))
+  while (!moveWorklist.empty()) {
+    Operation *op = moveWorklist.pop_back_val();
+    for (OpOperand &operand : op->getOpOperands()) {
+      if (isErasedMaskedOpOperand(operand))
+        continue;
+      if (!addBodyDependency(operand.get(), intervalSet, moveSet, moveWorklist))
         return failure();
     }
   }
 
-  while (!regionElseWorklist.empty()) {
-    Operation *op = regionElseWorklist.pop_back_val();
-    if (moveSet.contains(op))
-      return failure();
-    for (Value operand : op->getOperands()) {
-      if (!addRegionElseDependency(operand, intervalSet, moveSet, hoistSet,
-                                   regionElseWorklist))
-        return failure();
-    }
-  }
-
-  SmallVector<Operation *> opsToMove = llvm::to_vector(llvm::make_filter_range(
-      intervalOps, [&](Operation *op) { return moveSet.contains(op); }));
-  SmallVector<Operation *> opsToHoist = llvm::to_vector(llvm::make_filter_range(
-      intervalOps, [&](Operation *op) { return hoistSet.contains(op); }));
-
+  SmallVector<triton::amdgpu::MaskedLoadOp> escapingLoads;
   for (Operation *op : intervalOps) {
-    if (hoistSet.contains(op))
+    if (!moveSet.contains(op))
       continue;
 
     // Moved pure dependencies are not yielded by the region, so all their users
     // must move with them.
-    if (moveSet.contains(op)) {
-      if (!getMaskedOpMask(op) && hasResultUseOutside(op, moveSet))
-        return failure();
-      continue;
-    }
-
-    // Ops left behind may only be used by moved ops through operands that are
-    // erased while rewriting masked memory ops to unmasked memory ops.
-    if (!hasNoLiveUsesInMovedOps(op, moveSet))
+    if (!getMaskedOpMask(op) && hasResultUseOutside(op, moveSet))
       return failure();
-  }
 
-  SmallVector<triton::amdgpu::MaskedLoadOp> escapingLoads;
-  for (Operation *op : opsToMove) {
     auto load = dyn_cast<triton::amdgpu::MaskedLoadOp>(op);
     if (load && hasUseOutside(load.getResult(), moveSet))
       escapingLoads.push_back(load);
   }
 
-  return MaskedRegionPlan{SmallVector<Operation *>(intervalOps),
-                          std::move(opsToMove), std::move(opsToHoist),
-                          hasMaskedStore, std::move(escapingLoads)};
+  SmallVector<Operation *> hoistWorklist;
+  for (triton::amdgpu::MaskedLoadOp load : escapingLoads) {
+    if (!addHoistDependency(load.getFalseVal(), intervalSet, moveSet, hoistSet,
+                            hoistWorklist))
+      return failure();
+  }
+  while (!hoistWorklist.empty()) {
+    Operation *op = hoistWorklist.pop_back_val();
+    for (Value operand : op->getOperands()) {
+      if (!addHoistDependency(operand, intervalSet, moveSet, hoistSet,
+                              hoistWorklist))
+        return failure();
+    }
+  }
+
+  SmallVector<Operation *> opsToMove;
+  SmallVector<Operation *> opsToHoist;
+  for (Operation *op : intervalOps) {
+    if (moveSet.contains(op))
+      opsToMove.push_back(op);
+    else if (hoistSet.contains(op))
+      opsToHoist.push_back(op);
+  }
+
+  return MaskedRegionPlan{intervalOps.front(), std::move(opsToMove),
+                          std::move(opsToHoist), hasMaskedStore,
+                          std::move(escapingLoads)};
 }
 
 static FailureOr<MaskedRegionPlan> findMaskedRegion(Operation *first) {
@@ -388,9 +333,9 @@ static FailureOr<MaskedRegionPlan> findMaskedRegion(Operation *first) {
 
 static void formMaskedRegion(const MaskedRegionPlan &plan,
                              IRRewriter &rewriter) {
-  Operation *first = plan.intervalOps.front();
-  Location loc = first->getLoc();
-  Value mask = getMaskedOpMask(first);
+  Operation *firstMaskedOp = plan.firstMaskedOp;
+  Location loc = firstMaskedOp->getLoc();
+  Value mask = getMaskedOpMask(firstMaskedOp);
   llvm::SmallPtrSet<Operation *, 16> moveSet(plan.opsToMove.begin(),
                                              plan.opsToMove.end());
 
@@ -404,13 +349,16 @@ static void formMaskedRegion(const MaskedRegionPlan &plan,
   }
 
   for (Operation *op : plan.opsToHoist)
-    rewriter.moveOpBefore(op, first);
+    rewriter.moveOpBefore(op, firstMaskedOp);
 
-  rewriter.setInsertionPoint(first);
+  rewriter.setInsertionPoint(firstMaskedOp);
   auto regionOp = triton::amdgpu::MaskedRegionOp::create(
       rewriter, loc, TypeRange(resultTypes), mask, falseValues);
   Block *body = rewriter.createBlock(&regionOp.getBody());
 
+  // Interleaved mask and unused false-value definitions may temporarily stop
+  // dominating moved helpers. They are erased by the rewrites immediately
+  // below, before the transformed IR is observed.
   for (Operation *op : plan.opsToMove)
     rewriter.moveOpBefore(op, body, body->end());
 
@@ -423,18 +371,15 @@ static void formMaskedRegion(const MaskedRegionPlan &plan,
       rewriter.setInsertionPoint(load);
       Value trueValue =
           AMD::createRegularLoadFromMaskedOp(rewriter, load.getLoc(), load);
-      Value outsideValue;
       auto it = loadToResultIndex.find(load);
       if (it != loadToResultIndex.end()) {
         unsigned resultIndex = it->second;
         yieldValues[resultIndex] = trueValue;
-        outsideValue = regionOp.getResult(resultIndex);
-      }
-      if (outsideValue)
         load.getResult().replaceUsesWithIf(
-            outsideValue, [&](OpOperand &use) { return !isMovedUse(use); });
-      load.getResult().replaceUsesWithIf(trueValue, isMovedUse);
-      rewriter.eraseOp(load);
+            regionOp.getResult(resultIndex),
+            [&](OpOperand &use) { return !isMovedUse(use); });
+      }
+      rewriter.replaceOp(load, trueValue);
       continue;
     }
 
@@ -456,21 +401,12 @@ static bool tryFormMaskedRegionInBlock(Block &block, IRRewriter &rewriter) {
       return false;
   }
 
-  SmallVector<Operation *> ops;
-  for (Operation &op : block.without_terminator())
-    ops.push_back(&op);
-
-  for (Operation *op : ops) {
-    if (!getMaskedOpMask(op))
+  for (Operation &op : block.without_terminator()) {
+    FailureOr<MaskedRegionPlan> plan = findMaskedRegion(&op);
+    if (failed(plan) || !shouldFormMaskedRegion(*plan))
       continue;
 
-    FailureOr<MaskedRegionPlan> maskedRegion = findMaskedRegion(op);
-    if (failed(maskedRegion))
-      continue;
-    if (!shouldFormMaskedRegion(*maskedRegion))
-      continue;
-
-    formMaskedRegion(*maskedRegion, rewriter);
+    formMaskedRegion(*plan, rewriter);
     return true;
   }
 
@@ -480,10 +416,7 @@ static bool tryFormMaskedRegionInBlock(Block &block, IRRewriter &rewriter) {
 struct TritonAMDGPUFormMaskedRegionsPass final
     : public triton::impl::TritonAMDGPUFormMaskedRegionsBase<
           TritonAMDGPUFormMaskedRegionsPass> {
-  void runOnOperation() override {
-    ModuleOp module = getOperation();
-    AMD::formMaskedRegions(module);
-  }
+  void runOnOperation() override { AMD::formMaskedRegions(getOperation()); }
 };
 
 } // namespace
@@ -494,11 +427,7 @@ void formMaskedRegions(ModuleOp module) {
   IRRewriter rewriter(module.getContext());
 
   SmallVector<Block *> blocks;
-  module.walk([&](Operation *op) {
-    for (Region &region : op->getRegions())
-      for (Block &block : region.getBlocks())
-        blocks.push_back(&block);
-  });
+  module.walk([&](Block *block) { blocks.push_back(block); });
 
   for (Block *block : blocks) {
     while (tryFormMaskedRegionInBlock(*block, rewriter)) {
