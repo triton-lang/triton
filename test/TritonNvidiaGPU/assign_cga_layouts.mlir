@@ -105,6 +105,145 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#planner_src_b = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+#planner_gather_src = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+#planner_dot_default = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
+#planner_dot_a = #ttg.dot_op<{opIdx = 0, parent = #planner_dot_default}>
+#planner_dot_b = #ttg.dot_op<{opIdx = 1, parent = #planner_dot_default}>
+
+// CHECK-DAG: #[[$PLANNER_SRC_B:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[1, 0\]\]}}}>
+// CHECK-DAG: #[[$PLANNER_B:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
+// CHECK-DAG: #[[$PLANNER_DOT_DEFAULT:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
+// CHECK-DAG: #[[$PLANNER_DOT_OPT:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @dot_rematerializes_masked_load
+  // CHECK-NOT: tt.load
+  // CHECK-DAG: %[[MASKED_PTRS:.*]] = ttg.convert_layout %{{.*}} : tensor<32x128x!tt.ptr<f16>, #[[$PLANNER_SRC_B]]> -> tensor<32x128x!tt.ptr<f16>, #[[$PLANNER_B]]>
+  // CHECK-DAG: %[[MASKED_MASK:.*]] = ttg.convert_layout %{{.*}} : tensor<32x128xi1, #[[$PLANNER_SRC_B]]> -> tensor<32x128xi1, #[[$PLANNER_B]]>
+  // CHECK-DAG: %[[MASKED_OTHER:.*]] = ttg.convert_layout %{{.*}} : tensor<32x128xf16, #[[$PLANNER_SRC_B]]> -> tensor<32x128xf16, #[[$PLANNER_B]]>
+  // CHECK: %[[MASKED_LOAD:.*]] = tt.load %[[MASKED_PTRS]], %[[MASKED_MASK]], %[[MASKED_OTHER]] : tensor<32x128x!tt.ptr<f16>, #[[$PLANNER_B]]>
+  // CHECK-NOT: tt.load
+  // CHECK: ttg.convert_layout %[[MASKED_LOAD]] : tensor<32x128xf16, #[[$PLANNER_B]]> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$PLANNER_DOT_OPT]]}>>
+  tt.func @dot_rematerializes_masked_load(
+      %ptrs: tensor<32x128x!tt.ptr<f16>, #planner_src_b>,
+      %mask: tensor<32x128xi1, #planner_src_b>,
+      %other: tensor<32x128xf16, #planner_src_b>) {
+    %b = tt.load %ptrs, %mask, %other : tensor<32x128x!tt.ptr<f16>, #planner_src_b>
+    %bd = ttg.convert_layout %b : tensor<32x128xf16, #planner_src_b> -> tensor<32x128xf16, #planner_dot_b>
+    %a = arith.constant dense<1.000000e+00> : tensor<128x32xf16, #planner_dot_a>
+    %c = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #planner_dot_default>
+    %dot = tt.dot %a, %bd, %c : tensor<128x32xf16, #planner_dot_a> * tensor<32x128xf16, #planner_dot_b> -> tensor<128x128xf32, #planner_dot_default>
+    tt.return
+  }
+
+  // CHECK-LABEL: tt.func @dot_rematerializes_gather_indices
+  // CHECK-NOT: tt.load
+  // CHECK: %[[GATHER_INDEX_PTRS:.*]] = ttg.convert_layout %{{.*}} : tensor<32x128x!tt.ptr<i32>, #[[$PLANNER_SRC_B]]> -> tensor<32x128x!tt.ptr<i32>, #[[$PLANNER_B]]>
+  // CHECK: %[[GATHER_INDICES:.*]] = tt.load %[[GATHER_INDEX_PTRS]] : tensor<32x128x!tt.ptr<i32>, #[[$PLANNER_B]]>
+  // CHECK-NOT: tt.load
+  // CHECK: %[[GATHER:.*]] = tt.gather %[[GATHER_SRC:.*]][%[[GATHER_INDICES]]] {axis = 0 : i32} : (tensor<64x128xf16, #[[$PLANNER_SRC_B]]>, tensor<32x128xi32, #[[$PLANNER_B]]>) -> tensor<32x128xf16, #[[$PLANNER_B]]>
+  // CHECK: ttg.convert_layout %[[GATHER]] : tensor<32x128xf16, #[[$PLANNER_B]]> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$PLANNER_DOT_OPT]]}>>
+  tt.func @dot_rematerializes_gather_indices(
+      %src: tensor<64x128xf16, #planner_gather_src>,
+      %index_ptrs: tensor<32x128x!tt.ptr<i32>, #planner_src_b>) {
+    %indices = tt.load %index_ptrs : tensor<32x128x!tt.ptr<i32>, #planner_src_b>
+    %gather = tt.gather %src[%indices] {axis = 0 : i32} : (tensor<64x128xf16, #planner_gather_src>, tensor<32x128xi32, #planner_src_b>) -> tensor<32x128xf16, #planner_src_b>
+    %bd = ttg.convert_layout %gather : tensor<32x128xf16, #planner_src_b> -> tensor<32x128xf16, #planner_dot_b>
+    %a = arith.constant dense<1.000000e+00> : tensor<128x32xf16, #planner_dot_a>
+    %c = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #planner_dot_default>
+    %dot = tt.dot %a, %bd, %c : tensor<128x32xf16, #planner_dot_a> * tensor<32x128xf16, #planner_dot_b> -> tensor<128x128xf32, #planner_dot_default>
+    tt.return
+  }
+
+  // CHECK-LABEL: tt.func @dot_does_not_rematerialize_efficient_gather
+  // CHECK: %[[EFFICIENT_INDICES:.*]] = tt.load %{{.*}} : tensor<32x128x!tt.ptr<i32>, #[[$PLANNER_SRC_B]]>
+  // CHECK-NOT: tt.load
+  // CHECK: %[[EFFICIENT_GATHER:.*]] = tt.gather %{{.*}}[%[[EFFICIENT_INDICES]]] {axis = 0 : i32, efficient_layout} : (tensor<64x128xf16, #[[$PLANNER_SRC_B]]>, tensor<32x128xi32, #[[$PLANNER_SRC_B]]>) -> tensor<32x128xf16, #[[$PLANNER_SRC_B]]>
+  // CHECK: %[[EFFICIENT_BD:.*]] = ttg.convert_layout %[[EFFICIENT_GATHER]] : tensor<32x128xf16, #[[$PLANNER_SRC_B]]> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$PLANNER_DOT_DEFAULT]]}>>
+  // CHECK: ttg.convert_layout %[[EFFICIENT_BD]] : tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$PLANNER_DOT_DEFAULT]]}>> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$PLANNER_DOT_OPT]]}>>
+  tt.func @dot_does_not_rematerialize_efficient_gather(
+      %src: tensor<64x128xf16, #planner_gather_src>,
+      %index_ptrs: tensor<32x128x!tt.ptr<i32>, #planner_src_b>) {
+    %indices = tt.load %index_ptrs : tensor<32x128x!tt.ptr<i32>, #planner_src_b>
+    %gather = tt.gather %src[%indices] {axis = 0 : i32, efficient_layout} : (tensor<64x128xf16, #planner_gather_src>, tensor<32x128xi32, #planner_src_b>) -> tensor<32x128xf16, #planner_src_b>
+    %bd = ttg.convert_layout %gather : tensor<32x128xf16, #planner_src_b> -> tensor<32x128xf16, #planner_dot_b>
+    %a = arith.constant dense<1.000000e+00> : tensor<128x32xf16, #planner_dot_a>
+    %c = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #planner_dot_default>
+    %dot = tt.dot %a, %bd, %c : tensor<128x32xf16, #planner_dot_a> * tensor<32x128xf16, #planner_dot_b> -> tensor<128x128xf32, #planner_dot_default>
+    tt.return
+  }
+
+  // CHECK-LABEL: tt.func @dot_does_not_rematerialize_block_argument
+  // CHECK: %[[BLOCK_ARG_B:.*]] = ttg.convert_layout %[[BLOCK_ARG:.*]] : tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$PLANNER_DOT_DEFAULT]]}>> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$PLANNER_DOT_OPT]]}>>
+  // CHECK: tt.dot %{{.*}}, %[[BLOCK_ARG_B]], %{{.*}}
+  tt.func @dot_does_not_rematerialize_block_argument(
+      %b: tensor<32x128xf16, #planner_dot_b>) {
+    %a = arith.constant dense<1.000000e+00> : tensor<128x32xf16, #planner_dot_a>
+    %c = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #planner_dot_default>
+    %dot = tt.dot %a, %b, %c : tensor<128x32xf16, #planner_dot_a> * tensor<32x128xf16, #planner_dot_b> -> tensor<128x128xf32, #planner_dot_default>
+    tt.return
+  }
+
+  // CHECK-LABEL: tt.func @dot_does_not_rematerialize_region_op
+  // CHECK: %[[REGION_VALUE:.*]] = scf.if %{{.*}} -> (tensor<32x128xf16, #[[$PLANNER_SRC_B]]>)
+  // CHECK: %[[REGION_BD:.*]] = ttg.convert_layout %[[REGION_VALUE]] : tensor<32x128xf16, #[[$PLANNER_SRC_B]]> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$PLANNER_DOT_DEFAULT]]}>>
+  // CHECK: ttg.convert_layout %[[REGION_BD]] : tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$PLANNER_DOT_DEFAULT]]}>> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$PLANNER_DOT_OPT]]}>>
+  tt.func @dot_does_not_rematerialize_region_op(
+      %cond: i1,
+      %lhs_ptrs: tensor<32x128x!tt.ptr<f16>, #planner_src_b>,
+      %rhs_ptrs: tensor<32x128x!tt.ptr<f16>, #planner_src_b>) {
+    %selected = scf.if %cond -> tensor<32x128xf16, #planner_src_b> {
+      %lhs = tt.load %lhs_ptrs : tensor<32x128x!tt.ptr<f16>, #planner_src_b>
+      scf.yield %lhs : tensor<32x128xf16, #planner_src_b>
+    } else {
+      %rhs = tt.load %rhs_ptrs : tensor<32x128x!tt.ptr<f16>, #planner_src_b>
+      scf.yield %rhs : tensor<32x128xf16, #planner_src_b>
+    }
+    %bd = ttg.convert_layout %selected : tensor<32x128xf16, #planner_src_b> -> tensor<32x128xf16, #planner_dot_b>
+    %a = arith.constant dense<1.000000e+00> : tensor<128x32xf16, #planner_dot_a>
+    %c = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #planner_dot_default>
+    %dot = tt.dot %a, %bd, %c : tensor<128x32xf16, #planner_dot_a> * tensor<32x128xf16, #planner_dot_b> -> tensor<128x128xf32, #planner_dot_default>
+    tt.return
+  }
+
+  // CHECK-LABEL: tt.func @dot_does_not_rematerialize_atomic
+  // CHECK: %[[ATOMIC:.*]] = tt.atomic_rmw fadd, relaxed, gpu, %{{.*}}, %{{.*}}, %{{.*}} : (tensor<32x128x!tt.ptr<f16>, #[[$PLANNER_SRC_B]]>, tensor<32x128xf16, #[[$PLANNER_SRC_B]]>, tensor<32x128xi1, #[[$PLANNER_SRC_B]]>) -> tensor<32x128xf16, #[[$PLANNER_SRC_B]]>
+  // CHECK-NOT: tt.atomic_rmw
+  // CHECK: %[[ATOMIC_BD:.*]] = ttg.convert_layout %[[ATOMIC]] : tensor<32x128xf16, #[[$PLANNER_SRC_B]]> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$PLANNER_DOT_DEFAULT]]}>>
+  // CHECK: ttg.convert_layout %[[ATOMIC_BD]] : tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$PLANNER_DOT_DEFAULT]]}>> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$PLANNER_DOT_OPT]]}>>
+  tt.func @dot_does_not_rematerialize_atomic(
+      %ptrs: tensor<32x128x!tt.ptr<f16>, #planner_src_b>,
+      %value: tensor<32x128xf16, #planner_src_b>,
+      %mask: tensor<32x128xi1, #planner_src_b>) {
+    %atomic = tt.atomic_rmw fadd, relaxed, gpu, %ptrs, %value, %mask : (tensor<32x128x!tt.ptr<f16>, #planner_src_b>, tensor<32x128xf16, #planner_src_b>, tensor<32x128xi1, #planner_src_b>) -> tensor<32x128xf16, #planner_src_b>
+    %bd = ttg.convert_layout %atomic : tensor<32x128xf16, #planner_src_b> -> tensor<32x128xf16, #planner_dot_b>
+    %a = arith.constant dense<1.000000e+00> : tensor<128x32xf16, #planner_dot_a>
+    %c = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #planner_dot_default>
+    %dot = tt.dot %a, %bd, %c : tensor<128x32xf16, #planner_dot_a> * tensor<32x128xf16, #planner_dot_b> -> tensor<128x128xf32, #planner_dot_default>
+    tt.return
+  }
+
+  // CHECK-LABEL: tt.func @dot_does_not_rematerialize_multi_result_op
+  // CHECK: %[[ASM_LOAD:.*]] = tt.load %{{.*}} : tensor<32x128x!tt.ptr<i8>, #[[$PLANNER_SRC_B]]>
+  // CHECK: %[[ASM_RESULTS:.*]]:2 = tt.elementwise_inline_asm {{.*}} %[[ASM_LOAD]] : tensor<32x128xi8, #[[$PLANNER_SRC_B]]> -> tensor<32x128xbf16, #[[$PLANNER_SRC_B]]>, tensor<32x128xbf16, #[[$PLANNER_SRC_B]]>
+  // CHECK-NOT: tt.elementwise_inline_asm
+  // CHECK: %[[ASM_BD:.*]] = ttg.convert_layout %[[ASM_RESULTS]]#0 : tensor<32x128xbf16, #[[$PLANNER_SRC_B]]> -> tensor<32x128xbf16, #ttg.dot_op<{opIdx = 1, parent = #[[$PLANNER_DOT_DEFAULT]]}>>
+  // CHECK: ttg.convert_layout %[[ASM_BD]] : tensor<32x128xbf16, #ttg.dot_op<{opIdx = 1, parent = #[[$PLANNER_DOT_DEFAULT]]}>> -> tensor<32x128xbf16, #ttg.dot_op<{opIdx = 1, parent = #[[$PLANNER_DOT_OPT]]}>>
+  tt.func @dot_does_not_rematerialize_multi_result_op(
+      %ptrs: tensor<32x128x!tt.ptr<i8>, #planner_src_b>) {
+    %loaded = tt.load %ptrs : tensor<32x128x!tt.ptr<i8>, #planner_src_b>
+    %lhs, %rhs = tt.elementwise_inline_asm "" {constraints = "=r,=r,=r,=r,r", packed_element = 4 : i32, pure = true} %loaded : tensor<32x128xi8, #planner_src_b> -> tensor<32x128xbf16, #planner_src_b>, tensor<32x128xbf16, #planner_src_b>
+    %bd = ttg.convert_layout %lhs : tensor<32x128xbf16, #planner_src_b> -> tensor<32x128xbf16, #planner_dot_b>
+    %a = arith.constant dense<1.000000e+00> : tensor<128x32xbf16, #planner_dot_a>
+    %c = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #planner_dot_default>
+    %dot = tt.dot %a, %bd, %c : tensor<128x32xbf16, #planner_dot_a> * tensor<32x128xbf16, #planner_dot_b> -> tensor<128x128xf32, #planner_dot_default>
+    tt.return
+  }
+
+}
+
+// -----
+
 #volatile_src = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
 #volatile_default = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
 #volatile_a = #ttg.dot_op<{opIdx = 0, parent = #volatile_default}>
