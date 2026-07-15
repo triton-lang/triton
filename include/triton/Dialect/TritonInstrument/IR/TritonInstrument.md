@@ -119,7 +119,8 @@ Reduction lowering creates additional `ttg.convert_layout` operations after
 ConSan, so the parent `tt.reduce` carries the effect for their already allocated
 interval. A scratch effect must wait for earlier asynchronous readers or
 writers, and its lowering leaves no pending asynchronous access when the
-operation returns. Conversions forced to use warp shuffles allocate no scratch.
+operation returns. Conversions forced to use warp shuffles allocate no scratch
+and fail compilation if the conversion is not warp-local.
 Cross-CTA convert and reduce effects retain their operation-specific routing.
 Scratch-backed atomic broadcasts are predicated to the producer CTA and routed
 to every CTA that consumes the replicated result.

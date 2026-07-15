@@ -250,18 +250,17 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
   return b.or_(orPart, xorPart, /*disjoint=*/true);
 }
 
-bool cvtAlwaysUseWarpShuffle(ConvertLayoutOp cvt) {
+FailureOr<bool> cvtAlwaysUseWarpShuffle(ConvertLayoutOp cvt) {
   // ConvertLayoutOp lowering runs after functions have been converted to the
   // target function dialect (for example LLVM::LLVMFuncOp), so do not assume
   // that the enclosing operation is still a tt.func.
   if (cvtUsesForcedWarpShuffle(cvt))
     return true;
-  auto func = cvt->getParentOfType<FunctionOpInterface>();
-  if (!func || !func->hasAttrOfType<UnitAttr>("always_use_warp_shuffle"))
+  if (!cvtIsWarpShuffleForced(cvt))
     return false;
-  assert(cvt->getAttrOfType<IntegerAttr>("allocation.offset") &&
-         "forced non-warp-local conversion requires shared-memory fallback");
-  return false;
+  cvt.emitError("'always_use_warp_shuffle' requires a warp-local layout "
+                "conversion");
+  return failure();
 }
 
 Value maybeAnd(OpBuilder &builder, Location loc, Value a, Value b) {

@@ -1330,9 +1330,14 @@ bool cvtCanUseWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
   return !llvm::is_contained(dims, kBlock) && !llvm::is_contained(dims, kWarp);
 }
 
-bool cvtUsesForcedWarpShuffle(triton::gpu::ConvertLayoutOp cvt) {
+bool cvtIsWarpShuffleForced(triton::gpu::ConvertLayoutOp cvt) {
   auto func = cvt->getParentOfType<FunctionOpInterface>();
-  return func && func->hasAttrOfType<UnitAttr>("always_use_warp_shuffle") &&
+  assert(func && "convert_layout must be nested in a function");
+  return func->hasAttrOfType<UnitAttr>("always_use_warp_shuffle");
+}
+
+bool cvtUsesForcedWarpShuffle(triton::gpu::ConvertLayoutOp cvt) {
+  return cvtIsWarpShuffleForced(cvt) &&
          cvtCanUseWarpShuffle(cvt.getSrc().getType(), cvt.getType());
 }
 

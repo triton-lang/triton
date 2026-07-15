@@ -276,9 +276,13 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
 // memory. This is a feasibility predicate, not that policy decision.
 bool cvtCanUseWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
 
+// Whether the enclosing function requires layout conversions to use warp
+// shuffles. ConvertLayoutOp is expected to be nested in a function.
+bool cvtIsWarpShuffleForced(triton::gpu::ConvertLayoutOp cvt);
+
 // The enclosing function requests warp shuffles and the conversion topology
-// permits them. Unlike cvtAlwaysUseWarpShuffle, this predicate is safe to call
-// before shared-memory allocation has attached fallback metadata.
+// permits them. This predicate does not diagnose an infeasible request and is
+// therefore safe to call from shared-memory allocation analysis.
 bool cvtUsesForcedWarpShuffle(triton::gpu::ConvertLayoutOp cvt);
 
 // Conversion from `srcTy` to `dstTy` involves data exchange across threads,
