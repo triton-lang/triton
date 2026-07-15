@@ -110,8 +110,8 @@ public:
     if (isa<tt::DescriptorLoadLikeOpInterface>(op)) {
       if (!canPipelineTMALoad(op)) {
         LDBG("TMA load " << *op
-                          << " has a per-stage allocation that is not aligned "
-                             "for pipelining");
+                         << " has a per-stage allocation that is not aligned "
+                            "for pipelining");
         return false;
       }
       return true;
