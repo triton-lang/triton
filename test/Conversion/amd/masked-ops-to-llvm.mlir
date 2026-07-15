@@ -104,6 +104,7 @@ module {
 // -----
 
 // CHECK-LABEL: llvm.func @leftover_masked_ops
+// CHECK: llvm.add
 // CHECK: llvm.cond_br %{{.*}}, ^{{.*}}, ^{{.*}}(%{{.*}} : i32)
 // CHECK: llvm.load
 // CHECK: llvm.cond_br %{{.*}}, ^{{.*}}, ^{{.*}}
@@ -112,8 +113,9 @@ module {
 // CHECK-NOT: amdg.masked_store
 // CHECK: llvm.return
 module {
-  llvm.func @leftover_masked_ops(%active: i1, %src: !llvm.ptr, %dst: !llvm.ptr) {
+  llvm.func @leftover_masked_ops(%active: i1, %src: !llvm.ptr, %dst: !llvm.ptr, %lhs: i32, %rhs: i32) {
     %zero = llvm.mlir.constant(0 : i32) : i32
+    %unrelated = llvm.add %lhs, %rhs : i32
     %value = amdg.masked_load %src, %active, %zero : (!llvm.ptr, i1, i32) -> i32
     amdg.masked_store %dst, %value, %active : !llvm.ptr, i32, i1
     llvm.return
@@ -154,6 +156,18 @@ module {
     %multicast = llvm.mlir.constant(3 : i32) : i32
     %value = amdg.masked_load %src, %true, %zero, %multicast cacheModifier = ca : (!llvm.ptr<1>, i1, i32, i32) -> i32
     llvm.store %value, %dst : i32, !llvm.ptr<1>
+    llvm.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: llvm.func @unrelated_ops_unchanged
+// CHECK: %[[SUM:.*]] = llvm.add %{{.*}}, %{{.*}} : i32
+// CHECK: llvm.return
+module {
+  llvm.func @unrelated_ops_unchanged(%lhs: i32, %rhs: i32) {
+    %sum = llvm.add %lhs, %rhs : i32
     llvm.return
   }
 }

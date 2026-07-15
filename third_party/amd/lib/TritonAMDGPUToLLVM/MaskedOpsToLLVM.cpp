@@ -279,7 +279,19 @@ LogicalResult lowerMaskedOpsToLLVM(ModuleOp module,
                                    const TargetInfo &targetInfo) {
   RewritePatternSet patterns(module.getContext());
   populateMaskedOpsToLLVMPatterns(patterns, targetInfo);
-  if (failed(applyPatternsGreedily(module, std::move(patterns))))
+
+  // This lowering runs after unrelated LLVM ops have been produced. Seed only
+  // the transient masked ops so the greedy driver cannot simplify other IR.
+  SmallVector<Operation *> maskedOps;
+  module.walk([&](Operation *op) {
+    if (isa<triton::amdgpu::MaskedRegionOp, triton::amdgpu::MaskedLoadOp,
+            triton::amdgpu::MaskedStoreOp>(op))
+      maskedOps.push_back(op);
+  });
+
+  GreedyRewriteConfig config;
+  config.setStrictness(GreedyRewriteStrictness::ExistingOps);
+  if (failed(applyOpPatternsGreedily(maskedOps, std::move(patterns), config)))
     return failure();
 
   WalkResult remainingMaskedOps = module.walk([](Operation *op) {
