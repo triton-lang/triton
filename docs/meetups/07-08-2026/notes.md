@@ -57,4 +57,4 @@
   * Bill suggested Felix submit a proposal about FlyDSL work for the conference; Felix said he'd think about it.
 
 # Recording
-* Recording link TBD
+* Recording link [here](https://youtu.be/6H8sbWhKCfI?si=LkFz22qlYLiVFqzK)
