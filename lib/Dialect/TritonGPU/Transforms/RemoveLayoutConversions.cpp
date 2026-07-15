@@ -123,12 +123,13 @@ public:
     return rematMapping.lookup(value).lookup(encoding);
   }
 
-  bool backwardRematerialization();
+  bool backwardRematerialization(bool disableRematSplitting);
 
   /// Rematerialize the backward slice leading up to \p convertOp to produce the
   /// result layout directly if it is possible and profitable to do so.
   /// \return true if \p convertOp was eliminated, false otherwise.
-  bool backwardRematerialization(ConvertLayoutOp convertOp);
+  bool backwardRematerialization(ConvertLayoutOp convertOp,
+                                 bool disableRematSplitting);
 
   // TODO: Merge the three hoistConvert*(); functions as they are duplicate code
   void hoistConvertDotOperand();
@@ -955,14 +956,15 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
   return success();
 }
 
-bool LayoutRematerialization::backwardRematerialization() {
+bool LayoutRematerialization::backwardRematerialization(
+    bool disableRematSplitting) {
   bool changed = false;
   // Go through each ConvertLayoutOp.
   SmallVector<ConvertLayoutOp> convertOps;
   funcOp.walk(
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
-    if (!backwardRematerialization(convertOp)) {
+    if (!backwardRematerialization(convertOp, disableRematSplitting)) {
       // If the conversion didn't get removed, consider it for reuse in future
       // backward slices.
       addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
@@ -1072,7 +1074,7 @@ static unsigned getCostFactor(Value result, Attribute rematEncoding) {
 /// newCvtCost.
 bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
                        const DenseMap<Value, Attribute> &layout,
-                       int64_t newCvtCost) {
+                       int64_t newCvtCost, bool disableRematSplitting) {
   // Identify all operations in the slice
   SetVector<Operation *> sliceOps;
   for (Value v : slice) {
@@ -1138,6 +1140,11 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
     for (auto operand : op->getOperands())
       if (slice.contains(operand))
         nonSliceOnlyValues.insert(operand);
+  }
+
+  if (disableRematSplitting && !nonSliceOnlyValues.empty()) {
+    LDBG("  skipped rematerialization because it would split the slice");
+    return false;
   }
 
   int64_t convertLayoutCost =
@@ -1210,7 +1217,7 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
 }
 
 bool LayoutRematerialization::backwardRematerialization(
-    ConvertLayoutOp convertOp) {
+    ConvertLayoutOp convertOp, bool disableRematSplitting) {
   // DotOperand is hoisted by hoistDotOperand
   RankedTensorType targetType = convertOp.getType();
   if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
@@ -1243,8 +1250,9 @@ bool LayoutRematerialization::backwardRematerialization(
   }
 
   // 2. Determine whether rematerialisation is beneficial.
-  if (!isRematBeneficial(convertOp, slice, layout, /*newCvtCost=*/0)) {
-    LDBG("  skipped rematerialization due to higher cost");
+  if (!isRematBeneficial(convertOp, slice, layout, /*newCvtCost=*/0,
+                         disableRematSplitting)) {
+    LDBG("  skipped rematerialization because it is not beneficial");
     return false;
   }
 
@@ -1400,8 +1408,6 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
             ExpandDimsOp>(op)) {
       return true;
     }
-    if (auto reshapeOp = dyn_cast<ReshapeOp>(op))
-      return reshapeOp.getExpandDimsAxis().has_value();
     if (auto fpToFpOp = dyn_cast<FpToFpOp>(op)) {
       auto srcType = cast<RankedTensorType>(fpToFpOp.getOperand().getType());
       return getElementBitWidth(srcType) <
@@ -1452,7 +1458,8 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     return false;
   int64_t newCvtCost =
       getConvertCost(extOrBroadcastOp->getOperand(0), srcEncoding);
-  if (!isRematBeneficial(convertOp, slice, layout, newCvtCost))
+  if (!isRematBeneficial(convertOp, slice, layout, newCvtCost,
+                         /*disableRematSplitting=*/false))
     return false;
   // Move the convert before the ext op and rewrite the slice.
   OpBuilder builder(extOrBroadcastOp);
@@ -1592,11 +1599,11 @@ bool LayoutRematerialization::hoistConvertIntoConditionals(
   return true;
 }
 
-bool backwardRematerialization(ModuleOp module) {
+bool backwardRematerialization(ModuleOp module, bool disableRematSplitting) {
   bool changed = false;
   module.walk([&](FuncOp funcOp) {
     LayoutRematerialization layoutRemat(funcOp);
-    changed |= layoutRemat.backwardRematerialization();
+    changed |= layoutRemat.backwardRematerialization(disableRematSplitting);
   });
   return changed;
 }
@@ -1615,6 +1622,10 @@ class TritonGPURemoveLayoutConversionsPass
     : public impl::TritonGPURemoveLayoutConversionsBase<
           TritonGPURemoveLayoutConversionsPass> {
 public:
+  using impl::TritonGPURemoveLayoutConversionsBase<
+      TritonGPURemoveLayoutConversionsPass>::
+      TritonGPURemoveLayoutConversionsBase;
+
   // Cleanup convert ops.
   void cleanupConvertOps() {
     MLIRContext *context = &getContext();
@@ -1656,7 +1667,7 @@ public:
       changed = false;
       // 2. For remaining convert ops, try to rematerialize the slice of
       // producer operation to avoid having to convert.
-      changed = backwardRematerialization(m);
+      changed = backwardRematerialization(m, disableRematSplitting);
       LLVM_DEBUG({
         DBGS() << "Module after backward remat:\n";
         m.dump();
@@ -1665,13 +1676,16 @@ public:
       // Cleanup dummy converts created during backward remat.
       cleanupConvertOps();
     } while (changed);
-    // 3. For remaining converts, try to hoist them above cast generating larger
-    // size types in order to reduce the cost of the convert op.
-    hoistConvert(m);
-    LLVM_DEBUG({
-      DBGS() << "Module after hoisting converts:\n";
-      m.dump();
-    });
+
+    if (!disableRematSplitting) {
+      // 3. For remaining converts, try to hoist them above cast generating
+      // larger size types in order to reduce the cost of the convert op.
+      hoistConvert(m);
+      LLVM_DEBUG({
+        DBGS() << "Module after hoisting converts:\n";
+        m.dump();
+      });
+    }
 
     // 4. Prepare dead iter args to be cleaned up by dead code elimination in
     // the pattern rewriter below.

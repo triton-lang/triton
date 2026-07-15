@@ -743,10 +743,11 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     it sends an "LDS atomic arrive" to signal its completion.
 
     `warp_used_hint` is an optional i32 bitmask performance hint for
-    partial TDM copy: bit `n` (LSB = warp 0) means warp `n` issues the
-    instruction; bits above `num_warps - 1` must be zero.  Same data
-    lands in shared memory either way -- only emission changes:
-    `K = popcount(hint)` warps cover the block, the rest are pred-off.
+    partial TDM copy: bit `n` (LSB = warp 0) means warp `n` carries a
+    real descriptor; bits above `num_warps - 1` must be zero. Same data
+    lands in shared memory either way: `K = popcount(hint)` active warps
+    cover the block, while inactive warps still issue the TDM instruction
+    with a null descriptor.
 
     For "all warps participate", omit the attribute (preferred) or pass
     a full bitmask `K = num_warps`; an explicit `warp_used_hint = 0` is
@@ -802,6 +803,34 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
   let hasVerifier = 1;
 }
 
+def AsyncTDMFusedCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_fused_copy_global_to_local", [
+    SameVariadicOperandSize]> {
+  let summary = "Fuse multiple TDM global-to-local copies into one async operation";
+
+  let description = [{
+    This operation represents an explicit 2-4 member fused TDM load.  Each
+    member provides a tensor descriptor, destination shared-memory descriptor,
+    and `warp_used_hint`.  Member hints must be legal and pairwise disjoint.
+    Descriptors carry tile position and predicate state; destinations remain
+    op-level operands.
+  }];
+
+  let arguments = (ins
+    Variadic<TT_TensorDescType>:$descs,
+    Variadic<TTG_MemDescType>:$dests,
+    DenseI32ArrayAttr:$warp_used_hints,
+    DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache
+  );
+
+  let results = (outs TTG_AsyncToken:$token);
+
+  let assemblyFormat = [{
+    $descs `into` $dests attr-dict `:` qualified(type($descs)) `->` qualified(type($dests))
+  }];
+
+  let hasVerifier = 1;
+}
+
 //===----------------------------------------------------------------------===//
 // AsyncTDMCopyLocalToGlobalOp
 //===----------------------------------------------------------------------===//
@@ -830,6 +859,8 @@ def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global",
     Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache
   );
+
+  let results = (outs TTG_AsyncToken:$token);
 
   let assemblyFormat = [{
     $desc `from` $src (`,` `barrier` `=` $barrier^)?
@@ -943,7 +974,8 @@ def AsyncTDMWait : TT_AMDGPU_Op<"async_tdm_wait", [MemWaitOpTrait]> {
     This is necessary to ensure that data is available in the LDS (load, gather)
     or HBM (store, scatter) before it is used.
 
-    This operation counts the number of TDM IR operations (AsyncTDMCopyGlobalToLocalOp,
+    This operation counts the number of TDM IR operations
+    (AsyncTDMCopyGlobalToLocalOp, AsyncTDMFusedCopyGlobalToLocalOp,
     AsyncTDMCopyLocalToGlobalOp, AsyncTDMScatterOp, AsyncTDMGatherOp).
   }];
   let results = (outs TTG_AsyncToken:$retToken);

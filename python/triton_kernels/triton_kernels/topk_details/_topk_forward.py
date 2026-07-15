@@ -59,6 +59,10 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
     x = tl.load(X_ptrs, mask=(mask_m & mask_n), other=float("-inf"))
     x = fpval_to_key(x.to(x_utype, bitcast=True))
     x = (x.to(x_ultype) << 16) | indx_to_key(offs_x_n, N_EXPTS_PAD)[None, :]
+    # Valid packed keys are nonzero because their index key is nonzero. Mask
+    # padding to zero so it cannot be selected when FPSan payloads sort below
+    # the floating-point -inf sentinel.
+    x = tl.where(mask_n, x, 0)
     acc = tl.topk(x, N_EXPTS_ACT, dim=1)
 
     # subsequent iterations:

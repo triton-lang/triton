@@ -303,8 +303,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %result_1 = ttng.tmem_load %result_0 : !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xi32, #blocked>
     %true = arith.constant true
     ttng.tmem_store %cst, %result_0, %true : tensor<128x128xi32, #blocked> -> !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable>
-    %0 = ttng.tmem_subslice %result_0 {N = 0 : i32} : !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xi32, #tmem, #ttng.tensor_memory, mutable, 128x128>
-    %1 = ttng.tmem_subslice %result_0 {N = 64 : i32} : !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xi32, #tmem, #ttng.tensor_memory, mutable, 128x128>
+    %0 = ttng.tmem_subslice %result_0 {offset = 0 : i32} : !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xi32, #tmem, #ttng.tensor_memory, mutable, 128x128>
+    %1 = ttng.tmem_subslice %result_0 {offset = 64 : i32} : !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xi32, #tmem, #ttng.tensor_memory, mutable, 128x128>
     %result_2 = ttng.tmem_alloc : () -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     %c0_i32_3 = arith.constant 0 : i32
     %c2_i32 = arith.constant 2 : i32
@@ -1077,12 +1077,25 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %result = ttng.tmem_alloc : () -> !ttg.memdesc<2x512x256xf32, #tmem, #ttng.tensor_memory, mutable>
     %c0_i32 = arith.constant 0 : i32
     %0 = ttg.memdesc_index %result[%c0_i32] : !ttg.memdesc<2x512x256xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<512x256xf32, #tmem, #ttng.tensor_memory, mutable>
-    %1 = ttng.tmem_subslice %0 {N = 0 : i32} : !ttg.memdesc<512x256xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<512x32xf32, #tmem, #ttng.tensor_memory, mutable, 512x256>
+    %1 = ttng.tmem_subslice %0 {offset = 0 : i32} : !ttg.memdesc<512x256xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<512x32xf32, #tmem, #ttng.tensor_memory, mutable, 512x256>
     %result_0 = ttng.tmem_load %1 : !ttg.memdesc<512x32xf32, #tmem, #ttng.tensor_memory, mutable, 512x256> -> tensor<512x32xf32, #linear>
     tt.return
   }
 }
 """)
+
+
+@gluon.jit
+def tmem_subslice_noncontiguous_kernel():
+    layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 128], col_stride=1)
+    tmem = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.float32, [256, 256], layout)
+    tmem.slice(0, 128, dim=0)
+
+
+def test_tmem_subslice_noncontiguous():
+    ir = run_parser(tmem_subslice_noncontiguous_kernel, target=BLACKWELL_TARGET).str_nodebug()
+    assert "ttng.tmem_subslice" in ir
+    assert "!ttg.memdesc<128x256xf32" in ir
 
 
 @filecheck_test
@@ -2206,15 +2219,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("block_m,block_n", [(64, 64), (64, 128), (128, 128)])
+@pytest.mark.parametrize("subtiles_m,subtiles_n", [(1, 1), (1, 2), (2, 1), (2, 2)])
 @pytest.mark.parametrize("a_transposed", [False, True])
 @pytest.mark.parametrize("b_transposed", [False, True])
-def test_make_partitioned_dot_layouts(num_warps, block_m, block_n, a_transposed, b_transposed):
+def test_make_partitioned_dot_layouts(num_warps, block_m, block_n, subtiles_m, subtiles_n, a_transposed, b_transposed):
     block_k = 32
     INSTR_M, INSTR_N, INSTR_K = 16, 16, 32
-    # WARP_TILES_M=4 and WARP_TILES_N=2 for both 4- and 8-warp cases (different
-    # warp/reg base layouts but same per-warp tile extents).
-    warp_coverage_m = 4 * INSTR_M
-    warp_coverage_n = 2 * INSTR_N
+
+    # The WMMA layout is sized for the sliced compute extent (block / subtiles),
+    # while the shared layouts still partition the full block.
+    slice_m = block_m // subtiles_m
+    slice_n = block_n // subtiles_n
+    # A slice must cover at least NUM_PARTITIONS (=2) * tiles_per_partition
+    # instruction tiles (2 in M, 1 in N); skip configs that violate this.
+    if slice_m < 4 * INSTR_M or slice_n < 2 * INSTR_N:
+        pytest.skip(f"slice ({slice_m}, {slice_n}) below the minimum partition extent")
 
     a_shape = [block_k, block_m] if a_transposed else [block_m, block_k]
     b_shape = [block_n, block_k] if b_transposed else [block_k, block_n]
@@ -2222,30 +2241,31 @@ def test_make_partitioned_dot_layouts(num_warps, block_m, block_n, a_transposed,
     pb = ttgl.PaddedSharedLayout.with_identity_for([[b_shape[1], 8]], b_shape, [1, 0])
     sla, slb, wmma = make_partitioned_dot_layouts(block_m, block_n, pa, pb, num_warps=num_warps,
                                                   instr_shape=[INSTR_M, INSTR_N, INSTR_K], a_transposed=a_transposed,
-                                                  b_transposed=b_transposed)
+                                                  b_transposed=b_transposed, slice_m=slice_m, slice_n=slice_n)
 
-    a_num_groups = block_m // warp_coverage_m
-    b_num_groups = block_n // warp_coverage_n
     a_partition_dim = 1 if a_transposed else 0
     b_partition_dim = 0 if b_transposed else 1
-    # The non-partitioned axis of each piece is block_k, the partitioned axis is
-    # divided down to (block / num_partitions / num_groups).
-    a_inner = [block_m / 2 / a_num_groups, block_k]
-    b_inner = [block_n / 2 / b_num_groups, block_k] if b_transposed else [block_k, block_n / 2 / b_num_groups]
-    for layout, num_groups, partition_dim, inner_shape in [
-        (sla, a_num_groups, a_partition_dim, a_inner),
-        (slb, b_num_groups, b_partition_dim, b_inner),
-    ]:
+    a_pieces = 2 * subtiles_m
+    b_pieces = 2 * subtiles_n
+    a_inner = [block_k, block_m // a_pieces] if a_transposed else [block_m // a_pieces, block_k]
+    b_inner = [block_n // b_pieces, block_k] if b_transposed else [block_k, block_n // b_pieces]
+    for layout, partition_dim, num_groups, inner_shape in [(sla, a_partition_dim, subtiles_m, a_inner),
+                                                           (slb, b_partition_dim, subtiles_n, b_inner)]:
         assert isinstance(layout, PartitionedSharedLayout)
         assert layout.num_partitions == 2
         assert layout.num_groups == num_groups
         assert layout.partition_dim == partition_dim
         assert layout.partition_layout.shape == inner_shape
 
-    if num_warps == 4:
-        expected_warp_bases, expected_reg_bases = [[2, 1], [1, 0]], [[2, 0]]
-    else:
-        expected_warp_bases, expected_reg_bases = [[2, 1], [1, 0], [2, 0]], []
+    STM, STN = slice_m // INSTR_M, slice_n // INSTR_N
+    piece_m, piece_n = STM // 4, STN // 2
+    expected_warp_bases = [[STM // 2, piece_n], [piece_m, 0]]
+    m_group = [piece_m * 2]
+    if num_warps == 8:
+        expected_warp_bases.append([m_group.pop(), 0])
+    expected_reg_bases = [[0, 1 << i] for i in range(piece_n.bit_length() - 1)]
+    expected_reg_bases += [[1 << i, 0] for i in range(piece_m.bit_length() - 1)]
+    expected_reg_bases += [[w, 0] for w in m_group]
     assert isinstance(wmma, amd_layouts.AMDWMMALayout)
     assert wmma.warp_bases == expected_warp_bases
     assert wmma.reg_bases == expected_reg_bases
@@ -3651,14 +3671,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
       %c1_i32_0 = arith.constant 1 : i32
       %c1_i32_1 = arith.constant 1 : i32
       %4 = arith.addi %arg0, %c1_i32_1 : i32
-      rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage0"}
+      rocdl.sched.barrier none {triton.warp_pipeline.border = "stage0"}
       %c1_i32_2 = arith.constant 1 : i32
       %c1_i32_3 = arith.constant 1 : i32
       %5 = arith.muli %4, %c1_i32_3 : i32
       %c1_i32_4 = arith.constant 1 : i32
       %c1_i32_5 = arith.constant 1 : i32
       %6 = arith.addi %5, %c1_i32_5 : i32
-      rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage1"}
+      rocdl.sched.barrier none {triton.warp_pipeline.border = "stage1"}
     }
     tt.return
   }
@@ -3881,8 +3901,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32 = arith.constant 0 : i32
     %c2_i32 = arith.constant 2 : i32
     %2 = amdg.update_tensor_descriptor %0 add_offsets = [%c0_i32, %c2_i32] {clamp_bounds} : !tt.tensordesc<16x64xf16, #shared>
-    amdg.async_tdm_copy_local_to_global %2 from %1 : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<16x64xf16, #shared>
-    %3 = amdg.async_tdm_wait  {num = 0 : i32}
+    %3 = amdg.async_tdm_copy_local_to_global %2 from %1 : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<16x64xf16, #shared>
+    %4 = amdg.async_tdm_wait  {num = 0 : i32}
     tt.return
   }
 }

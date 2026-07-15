@@ -628,13 +628,44 @@ tt.func @atomic_scalar(%arg3: !tt.ptr<i32>) -> i32 {
 
 // CHECK-LABEL: atomic_scalar_no_use
 tt.func @atomic_scalar_no_use(%arg3: !tt.ptr<i32>) {
+  // CHECK-NOT: ttg.barrier local
   %c0_i32 = arith.constant 0 : i32
   %1 = arith.constant dense<1.0> : tensor<128x32xf16, #AL>
   %2 = ttg.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   %4 = tt.atomic_cas acq_rel, gpu, %arg3, %c0_i32, %c0_i32 : (!tt.ptr<i32>, i32, i32) -> i32
+  %3 = ttg.local_load %2 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
+  tt.return
+}
+
+// CHECK-LABEL: atomic_scalar_relaxed_no_use
+tt.func @atomic_scalar_relaxed_no_use(%arg3: !tt.ptr<i32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %1 = arith.constant dense<1.0> : tensor<128x32xf16, #AL>
+  %2 = ttg.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
+  %4 = tt.atomic_cas relaxed, gpu, %arg3, %c0_i32, %c0_i32 : (!tt.ptr<i32>, i32, i32) -> i32
   // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %3 = ttg.local_load %2 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
+  tt.return
+}
+
+// CHECK-LABEL: atomic_poll_acquire
+tt.func @atomic_poll_acquire(%ptr: !tt.ptr<i32>, %expected: i32) {
+  // CHECK-NOT: ttg.barrier local
+  %value = arith.constant dense<1.0> : tensor<128x32xf16, #AL>
+  %smem = ttg.local_alloc %value : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
+  %matched = tt.atomic_poll acquire, gpu, %ptr, %expected : !tt.ptr<i32>, i32 -> i1
+  %result = ttg.local_load %smem : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
+  tt.return
+}
+
+// CHECK-LABEL: atomic_poll_relaxed
+tt.func @atomic_poll_relaxed(%ptr: !tt.ptr<i32>, %expected: i32) {
+  // CHECK-NOT: ttg.barrier local
+  %value = arith.constant dense<1.0> : tensor<128x32xf16, #AL>
+  %smem = ttg.local_alloc %value : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
+  %matched = tt.atomic_poll relaxed, gpu, %ptr, %expected : !tt.ptr<i32>, i32 -> i1
+  %result = ttg.local_load %smem : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
   tt.return
 }
 

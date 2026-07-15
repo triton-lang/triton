@@ -198,6 +198,25 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
     %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<32x2xi32, #shared2d, #smem, mutable> -> !ttg.memdesc<32x2xi32, #shared1d, #smem, mutable>
     tt.return
   }
+
+  // CHECK-LABEL: memdesc_reinterpret_smaller_smem
+  // CHECK: ttg.memdesc_reinterpret
+  tt.func @memdesc_reinterpret_smaller_smem(%arg0 : !ttg.memdesc<32x2xi32, #shared2d, #smem, mutable>) {
+    %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<32x2xi32, #shared2d, #smem, mutable> -> !ttg.memdesc<32x2xi16, #shared2d, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: memdesc_reinterpret_smaller_tmem
+  // CHECK: ttg.memdesc_reinterpret
+  tt.func @memdesc_reinterpret_smaller_tmem(%arg0: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>) {
+    %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory> -> !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory>
+    tt.return
+  }
 }
 
 // -----

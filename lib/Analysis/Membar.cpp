@@ -225,7 +225,7 @@ void MembarOrFenceAnalysis::visitTerminator(
     SmallVector<RegionSuccessor> regions;
     br.getSuccessorRegions(RegionBranchPoint::parent(), regions);
     for (RegionSuccessor &region : regions) {
-      if (region.isParent()) {
+      if (region.isOperation()) {
         successors.emplace_back(br->getBlock(), br->getIterator());
       } else {
         Block &block = region.getSuccessor()->front();
@@ -245,7 +245,7 @@ void MembarOrFenceAnalysis::visitTerminator(
     SmallVector<RegionSuccessor> regions;
     br.getSuccessorRegions(operands, regions);
     for (RegionSuccessor &region : regions) {
-      if (region.isParent()) {
+      if (region.isOperation()) {
         Operation *parent = br->getParentOp();
         successors.emplace_back(parent->getBlock(), parent->getIterator());
       } else {
@@ -269,6 +269,12 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 }
 
 bool containsLocalBarrier(Operation *op) {
+  if (isa<triton::AtomicPollOp>(op))
+    return true;
+  if (auto atomic = dyn_cast<triton::AtomicRMWOp>(op))
+    return atomic.getSem() != triton::MemSemantic::RELAXED;
+  if (auto atomic = dyn_cast<triton::AtomicCASOp>(op))
+    return atomic.getSem() != triton::MemSemantic::RELAXED;
   if (isa<gpu::BarrierOp>(op))
     return true;
   if (isa<ttng::ClusterBarrierOp>(op))

@@ -124,14 +124,9 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth,
 
   // Remove broadcasting in the registers
   auto removeBroadcastSrc = actionRemoveBroadcastedRegs(cvt);
-  if (!removeBroadcastSrc.isIdentity()) {
-    auto prmtCvt = removeBroadcastSrc.apply(cvt);
-    auto info = lowerTMemLdSt(prmtCvt, maxnreg, bitwidth, emitError, unpacked);
-    if (failed(info))
-      return failure();
-    info->broadcast = std::move(removeBroadcastSrc);
-    return info;
-  }
+  if (!removeBroadcastSrc.isIdentity())
+    return lowerTMemLdSt(removeBroadcastSrc.apply(cvt), maxnreg, bitwidth,
+                         emitError, unpacked);
   auto *ctx = cvt.getInDimNames().begin()->getContext();
   auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
   auto kReg = S("register");
@@ -170,7 +165,9 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth,
       // to fill a full 32b register, e.g., colN = 1 and colStride != 1 or when
       // bitwidth == 8 (this happens with scales with K=1).
       // These two cases are mostly supported for testing purposes.
-      unpacked = bitwidth == 16;
+      // A padded TMEM value occupies one physical column, so an unpacked
+      // store would overwrite the adjacent column.
+      unpacked = false;
       quot = *maybeQuot;
       padding = true;
       newBitwidth = 32;
@@ -300,6 +297,52 @@ computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
 
   int bitwidth = memTy.getElementTypeBitWidth();
   return lowerTMemLdSt(cvt, maxnreg, bitwidth, emitError);
+}
+
+bool supportsTMemLoadReduce(RankedTensorType regTy, MemDescType memTy,
+                            int maxnreg,
+                            std::function<InFlightDiagnostic()> emitError) {
+  auto encodingInfo = computeTMemLdStEncodingInfo(regTy, memTy, maxnreg);
+  if (failed(encodingInfo)) {
+    if (emitError)
+      emitError() << "failed to compute TMEM encoding info";
+    return false;
+  }
+
+  if (encodingInfo->unpacked) {
+    if (emitError)
+      emitError() << "tmem_load reduction requires packed format "
+                     "(unpacked=false)";
+    return false;
+  }
+
+  auto kReg = StringAttr::get(regTy.getContext(), "register");
+  constexpr int dimM = 0, dimN = 1;
+  auto regDims =
+      toLinearEncoding(regTy).basesPerDim(kReg, /*skipBroadcast=*/true);
+
+  // The fused ld.red instruction reduces the values that are already local to a
+  // thread, so the N axis must live entirely in this thread's registers,
+  // otherwise the N reduction would be partial and need cross-lane/warp/CTA
+  // combining.
+  if (regDims[dimN] != toLinearLayout(regTy).getOutDimSizes().begin()[dimN]) {
+    if (emitError)
+      emitError() << "tmem_load reduction with N dimension sharded across "
+                     "threads is not supported.";
+    return false;
+  }
+
+  // regDims[dimM] is the number of distinct M coordinates a single thread holds
+  // across its registers. Require it to be 1, so each thread owns exactly one M
+  // row.
+  if (regDims[dimM] != 1) {
+    if (emitError)
+      emitError() << "tmem_load reduction with multiple M rows per thread is "
+                     "not supported.";
+    return false;
+  }
+
+  return true;
 }
 
 } // namespace mlir::triton::nvidia_gpu

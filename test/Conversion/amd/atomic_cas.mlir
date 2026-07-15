@@ -7,7 +7,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c32_i32 = arith.constant 32 : i32
     // CHECK: %[[C64:.*]] = llvm.mlir.constant(64 : i32) : i32
     // CHECK: %[[C32:.*]] = llvm.mlir.constant(32 : i32) : i32
+    // CHECK-NOT: rocdl.s.barrier
     // CHECK: llvm.cmpxchg %{{.*}}, %[[C32]], %[[C64]] syncscope("agent") acquire monotonic
+    // CHECK: rocdl.s.barrier
     %0 = tt.atomic_cas acquire, gpu, %arg3, %c32_i32, %c64_i32 : (!tt.ptr<i32>, i32, i32) -> i32
     tt.return
   }
@@ -22,7 +24,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c32_i32 = arith.constant 32 : i32
     // CHECK: %[[C64:.*]] = llvm.mlir.constant(64 : i32) : i32
     // CHECK: %[[C32:.*]] = llvm.mlir.constant(32 : i32) : i32
+    // CHECK-NOT: rocdl.s.barrier
     // CHECK: llvm.cmpxchg %{{.*}}, %[[C32]], %[[C64]] syncscope("agent") monotonic monotonic
+    // CHECK-NOT: rocdl.s.barrier
+    // CHECK: llvm.return
     %0 = tt.atomic_cas relaxed, gpu, %arg3, %c32_i32, %c64_i32 : (!tt.ptr<i32>, i32, i32) -> i32
     tt.return
   }
@@ -37,7 +42,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c32_i32 = arith.constant 32 : i32
     // CHECK: %[[C64:.*]] = llvm.mlir.constant(64 : i32) : i32
     // CHECK: %[[C32:.*]] = llvm.mlir.constant(32 : i32) : i32
+    // CHECK: rocdl.s.barrier
     // CHECK: llvm.cmpxchg %{{.*}}, %[[C32]], %[[C64]] syncscope("agent") acq_rel monotonic
+    // CHECK: rocdl.s.barrier
     %0 = tt.atomic_cas acq_rel, gpu, %arg3, %c32_i32, %c64_i32 : (!tt.ptr<i32>, i32, i32) -> i32
     tt.return
   }
@@ -90,6 +97,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: llvm.fence syncscope("workgroup") release
     // CHECK: rocdl.s.barrier
     // CHECK: llvm.fence syncscope("workgroup") acquire
+    // CHECK-NOT: rocdl.s.barrier
+    // CHECK: llvm.return
     %matched = tt.atomic_poll acquire, gpu, %ptr, %expected timeout %timeout : !tt.ptr<i32>, i32 -> i1
     tt.return
   }
@@ -113,10 +122,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-DAG: %[[C32:.*]] = llvm.mlir.constant(3.200000e+01 : f32) : f32
     // CHECK-DAG: %[[C64I:.*]] = llvm.bitcast %[[C64]] : f32 to i32
     // CHECK-DAG: %[[C32I:.*]] = llvm.bitcast %[[C32]] : f32 to i32
+    // CHECK-NOT: rocdl.s.barrier
     // CHECK: %[[CMPXCHG:.*]] = llvm.cmpxchg %{{.*}}, %[[C32I]], %[[C64I]] acquire monotonic
     // CHECK: %[[RESI:.*]] = llvm.extractvalue %[[CMPXCHG]][0] : !llvm.struct<(i32, i1)>
     // CHECK: %[[RES:.*]] = llvm.bitcast %[[RESI]] : i32 to f32
     // CHECK: llvm.store %[[RES]], %{{.*}} : f32, !llvm.ptr<3>
+    // CHECK: rocdl.s.barrier
+    // CHECK: llvm.load
+    // CHECK-NOT: rocdl.s.barrier
     %0 = tt.atomic_cas acquire, sys, %arg3, %c32_f32, %c64_f32 { allocation.offset = 0 : i32 }: (!tt.ptr<f32>, f32, f32) -> f32
     tt.print "some print" {hex = false, isSigned = array<i32: 0>} : %0: f32
     tt.return

@@ -28,6 +28,7 @@ from triton._internal_testing import (
     is_cuda,
     is_interpreter,
     is_hopper,
+    is_sm12x,
     is_hip,
     is_hip_cdna,
     is_hip_cdna2,
@@ -1504,11 +1505,12 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
 
     # triton kernel
     @triton.jit
-    def kernel(X, Z):
+    def kernel(X, Z, Old):
         pid = tl.program_id(0)
         x = tl.load(X + pid)
         old = GENERATE_TEST_HERE
         tl.static_assert(old.dtype == x.dtype)
+        tl.store(Old + pid, old)
 
     sem_arg = sem if sem is None else f'"{sem}"'
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.atomic_{op}(Z, x, sem={sem_arg})'})
@@ -1535,7 +1537,8 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     x_tri = to_triton(x, device=device, dst_type=dst_type)
 
     z_tri = to_triton(np.array([neutral], dtype=getattr(np, dtype_x_str)), device=device, dst_type=dst_type)
-    h = kernel[(n_programs, )](x_tri, z_tri)
+    old_tri = to_triton(np.empty_like(x), device=device, dst_type=dst_type)
+    h = kernel[(n_programs, )](x_tri, z_tri, old_tri)
     # torch result
     if dst_type == 'bfloat16':
         z_ref = numpy_op(x).astype(getattr(np, dtype_x_str))
@@ -1844,6 +1847,7 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
                     reason="num_ctas > 1 requires NVIDIA SM90+ (Hopper)")
+@pytest.mark.skipif(is_sm12x(), reason="scalar multi-CTA atomic_cas is not supported on sm120 (consumer Blackwell)")
 def test_scalar_atomic_cas_multicta_result(device):
 
     @triton.jit
@@ -6319,7 +6323,7 @@ def test_override_arch(arch, env_var_override, device, fresh_knobs):
             h = simple.warmup(data, out, arch=arch, grid=(1, ))
         ttgir_gfx = re.search(r'hip:(\w+)', h.asm["ttgir"])
         ttgir_warp = re.search(r'"ttg.threads-per-warp" = (\d+)', h.asm["ttgir"])
-        amdgcn_gfx = re.search(r'.amdgcn_target "amdgcn-amd-amdhsa--(\w+)"', h.asm["amdgcn"])
+        amdgcn_gfx = re.search(r'\.amdgcn_target "amdgcn-amd-amdhsa-[^-]*-(\w+)"', h.asm["amdgcn"])
         assert ttgir_gfx.group(1) == arch
         assert int(ttgir_warp.group(1)) == (32 if arch == "gfx1200" else 64)
         assert amdgcn_gfx.group(1) == arch
@@ -6886,6 +6890,7 @@ def gather_test_kernel_1d(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr, src_dim
 @pytest.mark.parametrize("src_shape, indices_shape, axis", [
     ([32], [64], 0),
     ([4, 4], [8, 4], 0),
+    ([4, 4], [4096, 4], 0),
     ([128, 64], [256, 64], 0),
     ([128, 64], [128, 128], 1),
 ])

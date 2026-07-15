@@ -968,10 +968,6 @@ public:
 
     Value v8 = b.bitcast(v, i8_ty);
     Value vAbs = b.and_(v8, b.i8_val(0x7F));
-    // Check NaN (1.0000.000 in E4M3FNUZ)
-    // Pick an arbitrary number which represents NaN in fp16 (exp=11111 and mant
-    // != 0)
-    a = b.select(b.icmp_eq(v8, b.i8_val(0x80)), b.i16_val(0x7E00), a);
 
     // Check denorms and zero
     // Here we use a LUT to map S.0000.000 ~ S.0000.111 to its corresponding
@@ -993,6 +989,9 @@ public:
 
     // Set sign
     a = b.or_(a, sign);
+    // 0x80 is the fnuz NaN; guard it last, else the zero LUT and sign-or
+    // clobber it.
+    a = b.select(b.icmp_eq(v8, b.i8_val(0x80)), b.i16_val(0x7E00), a);
     a = b.bitcast(a, f16_ty);
 
     return a;
@@ -1154,6 +1153,9 @@ public:
     auto o12 = b.select(e_is_one, o2, o1);
     auto o = b.select(e_is_zero, o0, o12);
 
+    // 0x80 is the fnuz NaN; map it to an fp16 NaN.
+    o = b.select(b.icmp_eq(v, b.i8_val(0x80)), b.i16_val(0x7E00), o);
+
     return b.bitcast(o, f16_ty);
   }
 
@@ -1302,8 +1304,14 @@ public:
     // Unpack the 2 bfloat16 values and return them
     auto bf16x2VecTy = vec_ty(bf16_ty, 2);
     out0 = b.bitcast(out0, bf16x2VecTy);
-    return {b.extract_element(bf16_ty, out0, b.i32_val(0)),
-            b.extract_element(bf16_ty, out0, b.i32_val(1))};
+    Value r0 = b.extract_element(bf16_ty, out0, b.i32_val(0));
+    Value r1 = b.extract_element(bf16_ty, out0, b.i32_val(1));
+    // 0x80 is the fnuz NaN; the bit-trick above makes it -0.0, so map it to a
+    // bf16 NaN per lane.
+    Value bf16Nan = b.bitcast(b.i16_val(0x7FC0), bf16_ty);
+    Value isNan0 = b.icmp_eq(v[0], b.i8_val(0x80));
+    Value isNan1 = b.icmp_eq(v[1], b.i8_val(0x80));
+    return {b.select(isNan0, bf16Nan, r0), b.select(isNan1, bf16Nan, r1)};
   }
 
 private:
@@ -2048,7 +2056,7 @@ public:
   std::optional<SmallVector<Value>> convert(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) final {
-    Type dstTy = Float16Type::get(rewriter.getContext());
+    Type dstTy = BFloat16Type::get(rewriter.getContext());
 
     if (roundingMode == RoundingMode::RTNE) {
       if (isCDNA4OrHigher(isaFamily))
@@ -2112,8 +2120,6 @@ public:
     if (roundingMode != RoundingMode::RTNE)
       return std::nullopt;
 
-    bool useTwoStageConversion = false;
-
     if (isa<Float8E4M3FNUZType>(dstTy)) {
       if (hasFnuzFp8HW(isaFamily))
         return Fp32ToFp8E4M3fnuzHW(loc, rewriter, inVals);
@@ -2130,30 +2136,6 @@ public:
         return Fp32ToFp8E4M3fnRtneSW(loc, rewriter, inVals);
     }
 
-    if (useTwoStageConversion) {
-      auto fp16converter =
-          CvtFp32ToFp16(isaFamily, maxElementsPerThread, roundingMode);
-      SmallVector<Value> fp16Values;
-      if (isa<Float8E4M3FNType>(dstTy)) {
-        auto fp16Values0 =
-            fp16converter.convert(loc, rewriter, {inVals[0], inVals[1]});
-        auto fp16Values1 =
-            fp16converter.convert(loc, rewriter, {inVals[2], inVals[3]});
-        assert(fp16Values0.has_value() && fp16Values1.has_value() &&
-               "fp32 to fp16 conversion must be completed");
-        fp16Values.append(*fp16Values0);
-        fp16Values.append(*fp16Values1);
-      } else {
-        auto maybeFp16Values = fp16converter.convert(loc, rewriter, inVals);
-        assert(maybeFp16Values.has_value() &&
-               "fp32 to fp16 conversion must be completed");
-        fp16Values.append(*maybeFp16Values);
-      }
-
-      auto fp8converter = CvtFp16ToFp8E4M3(dstTy, isaFamily,
-                                           maxElementsPerThread, roundingMode);
-      return fp8converter.convert(loc, rewriter, fp16Values);
-    }
     return std::nullopt;
   }
 
@@ -2219,7 +2201,6 @@ public:
   convert(Location loc, ConversionPatternRewriter &rewriter,
           const SmallVector<Value> &inVals) final {
 
-    bool useTwoStageConversion = false;
     if (roundingMode == RoundingMode::RTNE) {
       if (isa<Float8E5M2FNUZType>(dstTy)) {
         if (hasFnuzFp8HW(isaFamily))
@@ -2239,18 +2220,6 @@ public:
     } else if (roundingMode == RoundingMode::RTZ) {
       if (isa<Float8E5M2Type>(dstTy))
         return Fp32ToFp8E5M2rtz(loc, rewriter, inVals);
-    }
-
-    // Convert FP32 -> F16 -> BF8
-    if (useTwoStageConversion) {
-      auto fp16converter =
-          CvtFp32ToFp16(isaFamily, maxElementsPerThread, roundingMode);
-      auto fp16Values = fp16converter.convert(loc, rewriter, inVals);
-      assert(fp16Values.has_value() &&
-             "fp32 to fp16 conversion must be completed");
-      auto fp8converter = CvtFp16ToFp8E5M2(dstTy, isaFamily,
-                                           maxElementsPerThread, roundingMode);
-      return fp8converter.convert(loc, rewriter, *fp16Values);
     }
 
     return std::nullopt;
