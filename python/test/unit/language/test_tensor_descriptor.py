@@ -1873,17 +1873,18 @@ def test_mixed_tensor_descriptor_reduce(kind, dtype_str, reduce_descriptor, M_BL
         # async_tdm_copy_global_to_local should be stay in the loop.
         for _ in range(1024):
             load_desc = tl.make_tensor_descriptor(out_ptr, shape=[M, N], strides=[N, 1], block_shape=[M_BLOCK, N_BLOCK])
-            block = load_desc.load([0, 0])
-            idx = tl.arange(0, M_BLOCK)[:, None] * N_BLOCK + tl.arange(0, N_BLOCK)[None, :]
+            block = load_desc.load([moffset, noffset])
+            idx = midx * N + nidx
             tl.store(out_ptr_for_tensor + idx, block)
 
-    # Keep this mixed reduce/load test to a single CTA. Multiple CTAs all load
-    # tile [0, 0] and write out_for_tensor without a cross-CTA ordering point.
-    M, N = M_BLOCK, N_BLOCK
+    # Use a 2x2 grid of ordinary CTAs, but keep the in-kernel load/store
+    # CTA-local. Loading tile [0, 0] from every CTA would require a grid-wide
+    # ordering point after the reduce, which ordinary grid CTAs do not have.
+    M, N = M_BLOCK * 2, N_BLOCK * 2
     rs = np.random.RandomState(seed=17)
     inp = to_triton(numpy_random((M, N), dtype_str, rs), device=device, dst_type=dtype_str)
     out = to_triton(numpy_random((M, N), dtype_str, rs), device=device, dst_type=dtype_str)
-    out_for_tensor = to_triton(numpy_random((M_BLOCK, N_BLOCK), dtype_str, rs), device=device, dst_type=dtype_str)
+    out_for_tensor = to_triton(numpy_random((M, N), dtype_str, rs), device=device, dst_type=dtype_str)
 
     grid_m = M // M_BLOCK
     grid_n = N // N_BLOCK
@@ -1906,8 +1907,7 @@ def test_mixed_tensor_descriptor_reduce(kind, dtype_str, reduce_descriptor, M_BL
     compiled = kernel[(grid_m, grid_n)](reduce_desc, out, out_for_tensor, inp, M, N, M_BLOCK, N_BLOCK, kind)
 
     torch.testing.assert_close(expect, unwrap_tensor(out), check_dtype=False)
-    expect_tenosor_output = expect[0:M_BLOCK, 0:N_BLOCK]
-    torch.testing.assert_close(expect_tenosor_output, unwrap_tensor(out_for_tensor), check_dtype=False)
+    torch.testing.assert_close(expect, unwrap_tensor(out_for_tensor), check_dtype=False)
 
     ttir = compiled.asm["ttir"]
     import re
@@ -1918,7 +1918,7 @@ def test_mixed_tensor_descriptor_reduce(kind, dtype_str, reduce_descriptor, M_BL
         pattern = re.compile(
             r"""
             scf\.for\s+%_\s*=\s*%c0_i32\s+to\s+%c1024_i32\s+step\s+%c1_i32\s*:\s*i32\s*\{\s*\n
-            \s*%block\s*=\s*tt\.descriptor_load\s+%load_desc\[%c0_i32,\s*%c0_i32\]
+            \s*%block\s*=\s*tt\.descriptor_load\s+%load_desc\[[^\]]+\]
             """, re.VERBOSE)
         assert pattern.search(ttir)
     else:
