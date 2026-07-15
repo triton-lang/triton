@@ -2,7 +2,6 @@
 #define TRITONINSTRUMENT_CONSAN_TARGET_HOOKS_H
 
 #include "mlir/IR/BuiltinOps.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include <functional>
@@ -205,13 +204,6 @@ public:
     // marker for an SSA-less shared-memory effect. allocation.offset alone is
     // also used by explicit buffers, virtual call frames, function scheduler
     // state, and late synthetic conversions.
-    if (auto cvtOp = dyn_cast<ttg::ConvertLayoutOp>(op);
-        cvtOp && cvtUsesForcedWarpShuffle(cvtOp)) {
-      // Accept metadata produced by older pipelines that reserved scratch even
-      // though lowering is forced to use warp shuffles and never touches it.
-      return info;
-    }
-
     Attribute sizeAttr = op->getAttr("allocation.size");
     if (!sizeAttr)
       return info;

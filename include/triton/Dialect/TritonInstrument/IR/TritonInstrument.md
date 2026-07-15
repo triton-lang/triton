@@ -119,8 +119,7 @@ Reduction lowering creates additional `ttg.convert_layout` operations after
 ConSan, so the parent `tt.reduce` carries the effect for their already allocated
 interval. A scratch effect must wait for earlier asynchronous readers or
 writers, and its lowering leaves no pending asynchronous access when the
-operation returns. Conversions forced to use warp shuffles allocate no scratch;
-ConSan also ignores stale scratch metadata on such conversions from older IR.
+operation returns. Conversions forced to use warp shuffles allocate no scratch.
 Cross-CTA convert and reduce effects retain their operation-specific routing.
 Scratch-backed atomic broadcasts are predicated to the producer CTA and routed
 to every CTA that consumes the replicated result.
@@ -332,8 +331,9 @@ The common hook implementation covers these TritonGPU operations:
 - `ttg.local_alloc` with a source: barrier-tracked shared-memory write.
 - Any operation with allocator-provided operation-local shared scratch: a
   synchronous generic-proxy write over its allocated byte interval. Forced
-  warp-shuffle conversions are excluded because they do not touch scratch;
-  convert, reduce, and scratch-backed atomic broadcasts use CTA-aware routing.
+  warp-shuffle conversions publish no scratch metadata because allocation
+  reserves no scratch for them; convert, reduce, and scratch-backed atomic
+  broadcasts use CTA-aware routing.
 
 These shared-memory effects are generic-proxy accesses for the proxy-ordering
 model.

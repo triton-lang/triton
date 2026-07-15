@@ -405,24 +405,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
-#shuffle_src = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4]], lane = [[1, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [], block = []}>
-#shuffle_dst = #ttg.linear<{register = [[1, 0], [0, 4]], lane = [[0, 0], [0, 0], [0, 1], [0, 2], [0, 0]], warp = [], block = []}>
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 32 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
-  // CHECK-LABEL: @convert_layout_forced_warp_shuffle
-  tt.func public @convert_layout_forced_warp_shuffle(
-      %value: tensor<2x8xi16, #shuffle_src>) attributes {always_use_warp_shuffle} {
-    // CHECK-NOT: tti.experimental_shared_memory_offset_to_i32
-    // CHECK: ttg.convert_layout
-    // CHECK-NOT: tti.experimental_shared_memory_offset_to_i32
-    %converted = ttg.convert_layout %value {allocation.offset = 0 : i32, allocation.size = 32 : i32}
-        : tensor<2x8xi16, #shuffle_src> -> tensor<2x8xi16, #shuffle_dst>
-    tt.return
-  }
-}
-
-// -----
-
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
