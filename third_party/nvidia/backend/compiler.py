@@ -246,8 +246,8 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
-        if capability // 10 < 9:
-            passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
+        descriptor_block_alignment = 0 if capability // 10 < 9 else 128
+        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm, descriptor_block_alignment)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)

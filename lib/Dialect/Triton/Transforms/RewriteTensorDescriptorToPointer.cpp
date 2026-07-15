@@ -536,8 +536,23 @@ struct RewriteReducePattern : OpConversionPattern<triton::DescriptorReduceOp> {
 class TritonRewriteTensorDescriptorToPointerPass
     : public impl::TritonRewriteTensorDescriptorToPointerBase<
           TritonRewriteTensorDescriptorToPointerPass> {
+  using Base::Base;
+
   void runOnOperation() override {
     auto op = getOperation();
+
+    if (requiredBlockAlignment > 0) {
+      bool hasUnalignedLoad = false;
+      op.walk([&](triton::DescriptorLoadLikeOpInterface load) {
+        auto tensorTy = cast<RankedTensorType>(load->getResultTypes()[0]);
+        int64_t blockSizeInBits =
+            tensorTy.getNumElements() * tensorTy.getElementTypeBitWidth();
+        hasUnalignedLoad |=
+            blockSizeInBits % (requiredBlockAlignment * 8) != 0;
+      });
+      if (!hasUnalignedLoad)
+        return;
+    }
 
     mlir::ConversionTarget target(getContext());
     target.addDynamicallyLegalDialect<mlir::arith::ArithDialect,

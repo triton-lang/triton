@@ -338,8 +338,10 @@ def test_tma_load_unaligned_stage_size(device):
     kernel = small_tma_load_kernel[(1, )](desc, output, inp.numel())
 
     torch.testing.assert_close(output, inp)
+    ttgir = kernel.asm["ttgir"]
+    assert "ttng.async_tma_copy_global_to_local" not in ttgir
+
     ptx = kernel.asm["ptx"]
-    assert "ld.global" in ptx
     assert "cp.async.bulk.tensor" not in ptx
 
 
