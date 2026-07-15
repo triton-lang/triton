@@ -11,7 +11,7 @@ namespace mlir::triton::proton::gpu::AMD {
 Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
                         bool isClock64) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  llvm::AMDGPU::GPUKind GPUKind = llvm::AMDGPU::parseArchAMDGCN(this->arch);
+  llvm::AMDGPU::GPUKind GPUKind = getTritonTargetInfo().getGPUKind();
 
   // gfx12 (incl. gfx1250) removed s_memtime and its llvm.amdgcn.s.memtime
   // intrinsic. The shader-cycles counter was widened from 20 to 64 bits and
@@ -54,25 +54,15 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
 Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
                              Location loc) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  llvm::AMDGPU::GPUKind GPUKind = llvm::AMDGPU::parseArchAMDGCN(this->arch);
+  llvm::AMDGPU::GPUKind GPUKind = getTritonTargetInfo().getGPUKind();
 
   Value globalTimeVal;
-  // gfx12 (incl. gfx1250) removed the s_memrealtime instruction and its
-  // matching llvm.amdgcn.s.memrealtime intrinsic; LLVM's AMDGPU ISel
-  // aborts with "Cannot select: intrinsic %llvm.amdgcn.s.memrealtime" when
-  // compiling for gfx1250. Use the gfx11/12 replacement sequence instead:
-  //   s_sendmsg_rtn_b64 $0, sendmsg(MSG_RTN_GET_REALTIME)
-  //   s_wait_kmcnt 0
-  // Mirrors triton's own language/hip/utils.py::memrealtime() gfx12 path.
   if (GPUKind == llvm::AMDGPU::GK_GFX1250) {
-    GCNBuilder builder;
-    auto &sendmsg = *builder.create("s_sendmsg_rtn_b64");
-    auto out = builder.newOperand("=s");
-    auto msg = builder.newConstantOperand("sendmsg(MSG_RTN_GET_REALTIME)");
-    sendmsg(out, msg);
-    builder.create<>("s_wait_kmcnt 0")->operator()();
+    Value msg = b.i32_val(/*MSG_RTN_GET_REALTIME=*/131);
     globalTimeVal =
-        builder.launch(rewriter, loc, i64_ty, /*hasSideEffect=*/true);
+        LLVM::createLLVMIntrinsicCallOp(
+            rewriter, loc, "llvm.amdgcn.s.sendmsg.rtn.i64", i64_ty, {msg})
+            .getResult(0);
   } else {
     StringRef globalTimeIntrinsicName = "llvm.amdgcn.s.memrealtime";
     globalTimeVal = LLVM::createLLVMIntrinsicCallOp(
@@ -123,11 +113,6 @@ static Value getSEID(ConversionPatternRewriter &rewriter, Location loc) {
   return builder.launch(rewriter, loc, i32_ty, false);
 }
 
-// gfx942 has 8 XCDs, each XCD contains 40 CUs per XCD but only 38/40 are active
-// (total of 304 CUs). gfx950 has 8 XCDs, each XCD contains 36 CUs per XCD but
-// only 32/36 active CUs (total 256 CUs). gfx1250 has 8 XCDs with 32 active CUs
-// per XCD (total 256 CUs, all active) — verified via rocminfo: 256 CUs, 16
-// SEs (2 per XCD), 2 SAs/SE, 4 SIMDs/CU, Wave32, LDS 320 KB.
 static uint32_t getCU_PER_XCD(llvm::AMDGPU::GPUKind GPUKind) {
   switch (GPUKind) {
   case llvm::AMDGPU::GK_GFX942:
@@ -161,7 +146,7 @@ Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   Value xcc_id = b.i32_val(0);
-  llvm::AMDGPU::GPUKind GPUKind = llvm::AMDGPU::parseArchAMDGCN(this->arch);
+  llvm::AMDGPU::GPUKind GPUKind = getTritonTargetInfo().getGPUKind();
   // Multi-XCD CDNA-family targets: gfx942, gfx950, gfx1250.
   switch (GPUKind) {
   case llvm::AMDGPU::GK_GFX942:

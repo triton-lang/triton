@@ -1,5 +1,6 @@
 // RUN: triton-opt %s -split-input-file -convert-proton-amd-gpu-to-llvm="gfx-arch=gfx942" --verify-diagnostics | FileCheck %s --check-prefix=CHECK
 // RUN: triton-opt %s -split-input-file -convert-proton-amd-gpu-to-llvm="gfx-arch=gfx942" --convert-builtin-func-to-llvm --verify-diagnostics | FileCheck -allow-unused-prefixes --check-prefix=CONVERT-BUILTIN %s
+// RUN: triton-opt %s -split-input-file -convert-proton-amd-gpu-to-llvm="gfx-arch=gfx1250" --verify-diagnostics | FileCheck %s --check-prefix=GFX1250
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -19,9 +20,12 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: convert_read_counter
+  // GFX1250-LABEL: convert_read_counter
   llvm.func @convert_read_counter() -> i32 {
     //CHECK: llvm.call_intrinsic "llvm.amdgcn.s.memtime"() : () -> i64
     //CHECK: llvm.trunc %{{.*}} : i64 to i32
+    // GFX1250: llvm.inline_asm{{.*}}s_get_shader_cycles_u64{{.*}} : () -> i64
+    // GFX1250: llvm.trunc %{{.*}} : i64 to i32
     %1 = proton_gpu.read_counter : i32
     llvm.return %1 : i32
   }
@@ -103,6 +107,17 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
 
   // CHECK: ^bb2:
   // CHECK: llvm.return
+
+  // GFX1250-LABEL: convert_smem_initialize
+  // gfx1250 reads HW registers by numeric id because LLVM's AMDGPU AsmParser
+  // does not accept the symbolic HW_REG_* names on this target.
+  // GFX1250-DAG: llvm.inline_asm{{.*}}"s_getreg_b32 $0, hwreg(20, 0, 4)", "=s"
+  // GFX1250-DAG: llvm.inline_asm{{.*}}"s_getreg_b32 $0, hwreg(4, 8, 4)", "=s"
+  // GFX1250-DAG: llvm.inline_asm{{.*}}"s_getreg_b32 $0, hwreg(4, 13, 3)", "=s"
+  // GFX1250-DAG: %[[MSG:.*]] = llvm.mlir.constant(131 : i32) : i32
+  // GFX1250-DAG: %[[INIT_TIME_RAW:.*]] = llvm.call_intrinsic "llvm.amdgcn.s.sendmsg.rtn.i64"(%[[MSG]]) : (i32) -> i64
+  // GFX1250-DAG: %[[TEN:.*]] = llvm.mlir.constant(10 : i64) : i64
+  // GFX1250-DAG: %[[INIT_TIME:.*]] = llvm.mul %[[INIT_TIME_RAW]], %[[TEN]] : i64
   llvm.func @convert_smem_initialize(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
     %0 = ttg.global_scratch_alloc {alignment = 128 : i32, third_party_allocation, nbytes = 384 : i32, ttg.global_scratch_memory_offset = 0 : i32} : !tt.ptr<i32>
     proton_gpu.initialize %0 : !tt.ptr<i32>
@@ -138,11 +153,17 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: use_clock64
+  // GFX1250-LABEL: use_clock64
   llvm.func @use_clock64() {
     // CHECK-DAG: %[[CYCLE:.*]] = llvm.call_intrinsic "llvm.amdgcn.s.memtime"()
     // CHECK-DAG: %[[CYCLE64:.*]] = llvm.bitcast %[[CYCLE]] : i64 to vector<2xi32>
     // CHECK-DAG: llvm.extractelement %[[CYCLE64]]
     // CHECK-DAG: llvm.extractelement %[[CYCLE64]]
+    // gfx1250 reads the full 64-bit counter directly from s_get_shader_cycles_u64.
+    // GFX1250-DAG: %[[CYCLE:.*]] = llvm.inline_asm{{.*}}s_get_shader_cycles_u64{{.*}} : () -> i64
+    // GFX1250-DAG: %[[CYCLE64:.*]] = llvm.bitcast %[[CYCLE]] : i64 to vector<2xi32>
+    // GFX1250-DAG: llvm.extractelement %[[CYCLE64]]
+    // GFX1250-DAG: llvm.extractelement %[[CYCLE64]]
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
     %3 = proton_gpu.segment_alloc %0 : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.segment<2048, #smem, warp, [0, 1]>
     %8 = proton_gpu.read_counter : i64
