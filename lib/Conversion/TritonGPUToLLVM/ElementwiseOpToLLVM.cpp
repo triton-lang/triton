@@ -11,18 +11,6 @@ using namespace mlir::triton::gpu;
 
 namespace {
 
-int getNumElementsPerThreads(Type type,
-                             const LLVMTypeConverter *typeConverter) {
-  int numElemsPerThread = 1;
-  if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
-    auto structType =
-        dyn_cast<LLVM::LLVMStructType>(typeConverter->convertType(type));
-    if (structType)
-      numElemsPerThread = structType.getBody().size();
-  }
-  return numElemsPerThread;
-}
-
 struct AddPtrOpConversion : public ConvertOpToLLVMPattern<AddPtrOp> {
   using ConvertOpToLLVMPattern<AddPtrOp>::ConvertOpToLLVMPattern;
 
@@ -35,18 +23,19 @@ struct AddPtrOpConversion : public ConvertOpToLLVMPattern<AddPtrOp> {
     auto typeConverter = getTypeConverter();
     auto resultTensorTy = dyn_cast<RankedTensorType>(resultTy);
     if (resultTensorTy) {
-      unsigned elems = getTotalElemsPerThread(resultTy);
+      unsigned elems = getUniqueElemsPerThread(resultTy);
       Type elemTy = typeConverter->convertType(
           cast<PointerType>(resultTensorTy.getElementType()).getPointeeType());
       Type ptrTy = typeConverter->convertType(resultTensorTy.getElementType());
-      auto ptrs = unpackLLElements(loc, adaptor.getPtr(), rewriter);
-      auto offsets = unpackLLElements(loc, adaptor.getOffset(), rewriter);
+      auto ptrs = unpackUniqueTensorElements(loc, adaptor.getPtr(), rewriter);
+      auto offsets =
+          unpackUniqueTensorElements(loc, adaptor.getOffset(), rewriter);
       SmallVector<Value> resultVals(elems);
       for (unsigned i = 0; i < elems; ++i) {
         resultVals[i] = b.gep(ptrTy, elemTy, ptrs[i], offsets[i]);
       }
-      Value view =
-          packLLElements(loc, typeConverter, resultVals, rewriter, resultTy);
+      Value view = packUniqueTensorElements(loc, typeConverter, resultVals,
+                                            rewriter, resultTy);
       rewriter.replaceOp(op, view);
     } else {
       assert(isa<PointerType>(resultTy));
@@ -327,12 +316,13 @@ struct ElementwiseInlineAsmOpConversion
     // Layout is unpackedOperands[operand][elem].
     SmallVector<SmallVector<Value>> unpackedOperands;
     for (auto operand : adaptor.getOperands()) {
-      auto subOperands = unpackLLElements(loc, operand, rewriter);
+      auto subOperands = unpackUniqueTensorElements(loc, operand, rewriter);
       unpackedOperands.push_back(subOperands);
     }
 
-    int numElemsPerThread = getNumElementsPerThreads(op->getResult(0).getType(),
-                                                     getTypeConverter());
+    auto resultTy = op->getResult(0).getType();
+    int numElemsPerThread =
+        isa<RankedTensorType>(resultTy) ? getUniqueElemsPerThread(resultTy) : 1;
 
     // These are checked by the verifier, so we don't need to raise a nice
     // error.
@@ -381,8 +371,9 @@ struct ElementwiseInlineAsmOpConversion
     // Reorder and pack the results.
     SmallVector<Value> outs;
     for (int i = 0; i < unpackedResults.size(); i++) {
-      outs.push_back(packLLElements(loc, getTypeConverter(), unpackedResults[i],
-                                    rewriter, op->getResult(i).getType()));
+      outs.push_back(packUniqueTensorElements(loc, getTypeConverter(),
+                                              unpackedResults[i], rewriter,
+                                              op->getResult(i).getType()));
     }
 
     rewriter.replaceOp(op, outs);
@@ -572,8 +563,7 @@ struct MapElementwiseOpConversion
 
     auto operands = adaptor.getOperands();
     const auto nOperands = operands.size();
-    const auto nElems =
-        cast<LLVM::LLVMStructType>(operands[0].getType()).getBody().size();
+    const auto nElems = getUniqueElemsPerThread(op->getOperand(0).getType());
     const auto nElemsPerPack = op.getPack();
     if (nElems % nElemsPerPack != 0)
       return op->emitError()
@@ -586,7 +576,7 @@ struct MapElementwiseOpConversion
 
     SmallVector<Value> scalarOperands(nOperands * nElems);
     for (auto iOp : llvm::seq(nOperands)) {
-      auto elems = unpackLLElements(loc, operands[iOp], rewriter);
+      auto elems = unpackUniqueTensorElements(loc, operands[iOp], rewriter);
       assert(elems.size() == nElems);
       for (auto iPack : llvm::seq(nPacks)) {
         auto *packOperands =
@@ -620,8 +610,8 @@ struct MapElementwiseOpConversion
     SmallVector<Value> packedOutputs(nOutputs);
     for (auto iOut : llvm::seq(nOutputs)) {
       ArrayRef<Value> vals(&scalarOutputs[iOut * nElems], nElems);
-      packedOutputs[iOut] =
-          packLLElements(loc, typeConverter, vals, rewriter, op.getType(iOut));
+      packedOutputs[iOut] = packUniqueTensorElements(
+          loc, typeConverter, vals, rewriter, op.getType(iOut));
     }
     rewriter.replaceOp(op, packedOutputs);
     return success();

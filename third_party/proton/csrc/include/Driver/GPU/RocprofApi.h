@@ -6,6 +6,7 @@
 #include "rocprofiler-sdk/buffer.h"
 #include "rocprofiler-sdk/buffer_tracing.h"
 #include "rocprofiler-sdk/callback_tracing.h"
+#include "rocprofiler-sdk/external_correlation.h"
 #include "rocprofiler-sdk/fwd.h"
 #include "rocprofiler-sdk/hip/api_args.h"
 #include "rocprofiler-sdk/hip/runtime_api_id.h"
@@ -66,6 +67,13 @@ rocprofiler_status_t configureCallbackTracingService(
     rocprofiler_context_id_t context, rocprofiler_callback_tracing_kind_t kind,
     const rocprofiler_tracing_operation_t *operations, size_t operationCount,
     rocprofiler_callback_tracing_cb_t callback, void *userData);
+
+template <bool CheckSuccess>
+rocprofiler_status_t configureExternalCorrelationIdRequestService(
+    rocprofiler_context_id_t context,
+    const rocprofiler_external_correlation_id_request_kind_t *kinds,
+    size_t kindsCount,
+    rocprofiler_external_correlation_id_request_cb_t callback, void *userData);
 
 template <bool CheckSuccess>
 rocprofiler_status_t

@@ -85,8 +85,11 @@ TDMChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
   return createTDMAsync(
       loadOp, alloc, extractIdx,
       [&](OpBuilder &builder, Location loc, Value view, Value pred) {
-        return triton::amdgpu::AsyncTDMCopyGlobalToLocalOp::create(
-            builder, loc, loadOp.getDesc(), loadOp.getIndices(), view, pred);
+        Value desc = createUpdateTDMDescriptorOp(builder, loc, loadOp.getDesc(),
+                                                 loadOp.getIndices(),
+                                                 /*pred=*/pred);
+        return triton::amdgpu::AsyncTDMCopyGlobalToLocalOp::create(builder, loc,
+                                                                   desc, view);
       });
 }
 
@@ -106,9 +109,12 @@ TDMChainOps createTDMAsyncGather(tt::DescriptorGatherOp gatherOp, Value alloc,
           indices =
               ttg::ConvertLayoutOp::create(builder, loc, newIdxType, indices);
         }
-        return triton::amdgpu::AsyncTDMGatherOp::create(
-            builder, loc, gatherOp.getDesc(), indices, gatherOp.getYOffset(),
-            view, pred);
+        Value zero = arith::ConstantIntOp::create(builder, loc, 0, 32);
+        Value desc = createUpdateTDMDescriptorOp(
+            builder, loc, gatherOp.getDesc(), {zero, gatherOp.getYOffset()},
+            /*pred=*/pred);
+        return triton::amdgpu::AsyncTDMGatherOp::create(builder, loc, desc,
+                                                        indices, view);
       });
 }
 
@@ -515,14 +521,30 @@ void remapClusters(tt::CoarseSchedule &schedule, ClusterMap clusterMap,
 //            can cause invalid schedules to be produced.
 LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
                            int &numBuffers, bool useAsyncCopy, bool hasTDMLoad,
-                           bool waitAtTail, Clusters &clusters,
-                           tt::CoarseSchedule &schedule) {
+                           bool hasScaledDot, bool waitAtTail,
+                           Clusters &clusters, tt::CoarseSchedule &schedule) {
   LDBG("Init SingleDotSchedule");
   int lastStage = numStages - 1;
   stages[SCHED_GLOBAL_LOAD] = 0;
   stages[SCHED_LOCAL_STORE] = 0;
   stages[SCHED_LOCAL_LOAD] = lastStage;
   stages[SCHED_COMPUTE] = lastStage;
+
+  // LDS prefetch of dot operands: schedule ttg.local_load one stage before
+  // the tt.dot that consumes it, so the LDS read of the next K-tile overlaps
+  // the current tile's matrix op. for num_stages<3 there is no room to separate
+  // them.
+  // We take a conservative route and only enable LDS prefetch when the dot is
+  // not scaled until more testing is done.
+  // waitAtTail (pingpong) requires very specific scheduling, which is
+  // incompatible with the prefetch cluster ordering below, so disable prefetch
+  // in that case.
+  bool ldsPrefetch =
+      hasTDMLoad && !hasScaledDot && numStages >= 3 && !waitAtTail;
+  if (ldsPrefetch) {
+    stages[SCHED_LOCAL_LOAD] = lastStage - 1;
+  }
+
   stages[SCHED_ASYNC_WAIT] = stages[SCHED_LOCAL_LOAD];
 
   bool pairedGlobalLoadLocalStore = stages[SCHED_LOCAL_STORE] == 0;
@@ -593,6 +615,18 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   int computeCluster = 2;
   if (stages[SCHED_LOCAL_LOAD] == stages[SCHED_COMPUTE]) {
     computeCluster = localLoadCluster;
+  }
+
+  // ldsPrefetch ordering: lead the loop body with the tt.dot (it consumes
+  // operands pre-loaded into registers the previous iteration, so it has no
+  // intra-iteration dependency), then the async_wait, the next-tile TDM copy,
+  // and finally the ttg.local_load that feeds the next iteration.
+  if (ldsPrefetch) {
+    computeCluster = 0;
+    asyncWaitCluster = 1;
+    globalLoadCluster = 2;
+    localLoadCluster = 3;
+    localStoreCluster = 4;
   }
 
   // Create a hash map to associate cluster hash in old schedule with its
@@ -717,10 +751,13 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
     maxDist = std::max(maxDist, info.distToUse);
   }
 
+  bool hasScaledDot = false;
+  forOp.walk([&](tt::DotScaledOp) { hasScaledDot = true; });
+
   int numBuffers = 1;
   if (failed(initSchedule(maxDist, stages, schedule.getNumStages(), numBuffers,
-                          useAsyncCopy, hasTDMLoad, waitAtTail, clusters,
-                          schedule)))
+                          useAsyncCopy, hasTDMLoad, hasScaledDot, waitAtTail,
+                          clusters, schedule)))
     return;
 
   // Convert the loads into shared memory allocations and loads from them.

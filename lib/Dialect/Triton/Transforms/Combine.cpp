@@ -117,6 +117,17 @@ private:
     return false;
   }
 
+  /// Return true if \p op broadcasts only along \p axis, false otherwise.
+  static bool isBroadcastAlongAxis(BroadcastOp op, unsigned axis) {
+    auto srcShape = op.getSrc().getType().getShape();
+    auto dstShape = op.getType().getShape();
+    for (unsigned i = 0; i < srcShape.size(); ++i) {
+      if ((srcShape[i] != dstShape[i]) != (i == axis))
+        return false;
+    }
+    return true;
+  }
+
 public:
   CombineBroadcastMulReducePattern(MLIRContext *context)
       : RewritePattern(ReduceOp::getOperationName(), 1, context) {}
@@ -125,6 +136,11 @@ public:
                                 PatternRewriter &rewriter) const override {
     auto reduceOp = llvm::dyn_cast<ReduceOp>(op);
     if (!reduceOp)
+      return failure();
+    if (cast<RankedTensorType>(reduceOp.getOperand(0).getType()).getRank() != 3)
+      return failure();
+    // We must be reducing along the middle dim.
+    if (reduceOp.getAxis() != 1)
       return failure();
     // only support reduce with simple addition
     Region &combineOp = reduceOp.getCombineOp();
@@ -144,17 +160,10 @@ public:
     auto broadcastRhsOp = mulOp.getOperand(1).getDefiningOp<BroadcastOp>();
     if (!broadcastRhsOp)
       return failure();
-    // broadcast operand is expand dims
-    auto expandLhsOp = broadcastLhsOp.getSrc().getDefiningOp<ExpandDimsOp>();
-    if (!expandLhsOp)
-      return failure();
-    auto expandRhsOp = broadcastRhsOp.getSrc().getDefiningOp<ExpandDimsOp>();
-    if (!expandRhsOp)
-      return failure();
-    // get not-broadcast dimensions
-    int expandLhsAxis = expandLhsOp.getAxis();
-    int expandRhsAxis = expandRhsOp.getAxis();
-    if (expandLhsAxis != 2 || expandRhsAxis != 0)
+    // The first operand must be broadcasted from (M, K, 1) to (M, K, N), and
+    // the second operand must go from (1, K, N) to (M, K, N).
+    if (!isBroadcastAlongAxis(broadcastLhsOp, 2) ||
+        !isBroadcastAlongAxis(broadcastRhsOp, 0))
       return failure();
     auto broadcastLhsShape =
         cast<ShapedType>(broadcastLhsOp.getType()).getShape();
@@ -166,12 +175,19 @@ public:
         {broadcastLhsShape[0], broadcastRhsShape[2]},
         cast<ShapedType>(broadcastLhsOp.getSrc().getType()).getElementType());
     rewriter.setInsertionPoint(op);
+    Value lhs = ReshapeOp::create(
+        rewriter, op->getLoc(),
+        broadcastLhsOp.getSrc().getType().getShape().drop_back(),
+        broadcastLhsOp.getSrc());
+    Value rhs = ReshapeOp::create(
+        rewriter, op->getLoc(),
+        broadcastRhsOp.getSrc().getType().getShape().drop_front(),
+        broadcastRhsOp.getSrc());
     auto newAcc =
         SplatOp::create(rewriter, op->getLoc(), newAccType,
                         arith::ConstantOp::create(rewriter, op->getLoc(),
                                                   rewriter.getF32FloatAttr(0)));
-    rewriter.replaceOpWithNewOp<DotOp>(op, expandLhsOp.getSrc(),
-                                       expandRhsOp.getSrc(), newAcc,
+    rewriter.replaceOpWithNewOp<DotOp>(op, lhs, rhs, newAcc,
                                        InputPrecision::IEEE, 0);
     return success();
   }

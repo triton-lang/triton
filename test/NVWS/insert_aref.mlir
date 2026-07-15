@@ -231,6 +231,45 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
 
 // -----
 
+#blocked_scale = #ttg.blocked<{sizePerThread = [1, 1, 1, 1, 1], threadsPerWarp = [1, 1, 1, 32, 1], warpsPerCTA = [1, 2, 2, 1, 1], order = [3, 2, 1, 0, 4]}>
+#shared_scale_tma = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, rank = 5}>
+#shared_scale_a = #ttg.shared_linear<{offset = [[0, 0, 0, 0, 1], [0, 0, 0, 0, 2], [0, 0, 0, 0, 4], [0, 0, 0, 0, 8], [0, 0, 0, 0, 16], [0, 0, 0, 0, 32], [0, 0, 0, 0, 64], [0, 0, 0, 0, 128], [0, 0, 0, 1, 0], [0, 0, 1, 0, 0], [0, 1, 0, 0, 0]]}, alignment = 128>
+#shared_scale_a_rs = #ttg.shared_linear<{offset = [[0, 0, 0, 0, 1], [0, 0, 0, 0, 2], [0, 0, 0, 1, 0], [0, 0, 0, 2, 0], [0, 0, 1, 0, 0], [0, 0, 2, 0, 0], [0, 0, 4, 0, 0], [0, 0, 8, 0, 0], [0, 0, 16, 0, 0], [0, 1, 0, 0, 0], [1, 0, 0, 0, 0]]}, alignment = 128>
+#shared_scale_a_tr = #ttg.shared_linear<{offset = [[0, 0, 0, 0, 1], [0, 0, 0, 0, 2], [0, 1, 0, 0, 0], [0, 2, 0, 0, 0], [0, 0, 1, 0, 0], [0, 0, 2, 0, 0], [0, 0, 4, 0, 0], [0, 0, 8, 0, 0], [0, 0, 16, 0, 0], [0, 0, 0, 1, 0], [1, 0, 0, 0, 0]]}, alignment = 128>
+#shared_scale_a_final = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [32, 0], [64, 0], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4], [128, 0]]}, alignment = 128>
+#smem_scale = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: tt.func @descriptor_backed_shared_linear_alloc
+  // CHECK-SAME: (%arg0: !tt.tensordesc<1x2x2x2x256xi8, [[DESC_ENC:#[A-Za-z0-9_]+]]>, %arg1: i32)
+  tt.func @descriptor_backed_shared_linear_alloc(%arg0: !tt.tensordesc<1x2x2x2x256xi8, #shared_scale_tma>, %arg1: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    scf.for %arg2 = %c0_i32 to %arg1 step %c1_i32  : i32 {
+      // CHECK: [[AREF_BUF:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1x2x2x2x256xi8, [[DESC_ENC]], #smem, mutable>
+      // CHECK-NEXT: [[AREF:%.*]] = nvws.aref.create [[AREF_BUF]] : <[!ttg.memdesc<1x1x2x2x2x256xi8, [[DESC_ENC]], #smem, mutable>]>
+      // CHECK: [[PUT_BUF:%.*]], [[PUT_TOKEN:%.*]] = nvws.aref.put.enter [[AREF]] {ttg.partition = array<i32: 2>}
+      // CHECK-NEXT: nvws.descriptor_load %arg0[%c0_i32, %c0_i32, %arg2, %c0_i32, %c0_i32] 2048 [[PUT_BUF]]
+      // CHECK: [[GET_BUF:%.*]], [[GET_TOKEN:%.*]] = nvws.aref.get.enter [[AREF]] {ttg.partition = array<i32: 1>}
+      // CHECK-NEXT: [[RESHAPE:%.*]] = ttg.memdesc_reshape [[GET_BUF]]
+      // CHECK-NEXT: [[TRANS:%.*]] = ttg.memdesc_trans [[RESHAPE]]
+      // CHECK-NEXT: [[FINAL:%.*]] = ttg.memdesc_reshape [[TRANS]]
+      // CHECK-NOT: ttg.local_load
+      // CHECK-NOT: ttg.local_store
+      // CHECK: "use"([[FINAL]])
+      %0 = tt.descriptor_load %arg0[%c0_i32, %c0_i32, %arg2, %c0_i32, %c0_i32] {ttg.partition = array<i32: 2>} : !tt.tensordesc<1x2x2x2x256xi8, #shared_scale_tma> -> tensor<1x2x2x2x256xi8, #blocked_scale>
+      %1 = ttg.local_alloc %0 {ttg.partition = array<i32: 2>} : (tensor<1x2x2x2x256xi8, #blocked_scale>) -> !ttg.memdesc<1x2x2x2x256xi8, #shared_scale_a, #smem_scale>
+      %2 = ttg.memdesc_reshape %1 {ttg.partition = array<i32: 1>} : !ttg.memdesc<1x2x2x2x256xi8, #shared_scale_a, #smem_scale> -> !ttg.memdesc<2x2x32x4x4xi8, #shared_scale_a_rs, #smem_scale>
+      %3 = ttg.memdesc_trans %2 {order = array<i32: 0, 3, 2, 1, 4>, ttg.partition = array<i32: 1>} : !ttg.memdesc<2x2x32x4x4xi8, #shared_scale_a_rs, #smem_scale> -> !ttg.memdesc<2x4x32x2x4xi8, #shared_scale_a_tr, #smem_scale>
+      %4 = ttg.memdesc_reshape %3 {ttg.partition = array<i32: 1>} : !ttg.memdesc<2x4x32x2x4xi8, #shared_scale_a_tr, #smem_scale> -> !ttg.memdesc<256x8xi8, #shared_scale_a_final, #smem_scale>
+      "use"(%4) {ttg.partition = array<i32: 1>} : (!ttg.memdesc<256x8xi8, #shared_scale_a_final, #smem_scale>) -> ()
+    } {tt.num_stages = 2 : i32, tt.warp_specialize, ttg.partition = array<i32: 0, 1, 2>, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 0 : i32}
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory

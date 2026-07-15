@@ -51,6 +51,11 @@ struct MakeTensorDescOpConversion
   LogicalResult
   matchAndRewrite(triton::MakeTensorDescOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (op.getPadding() != PaddingOption::PAD_ZERO) {
+      return op.emitError()
+             << "Padding with non-zero in TDM is not supported on GFX1250.";
+    }
+
     auto loc = op.getLoc();
     auto basePtr = adaptor.getBase();
     auto tensorShape = adaptor.getShape();
@@ -119,48 +124,22 @@ struct UpdateTensorDescriptorOpConversion
         getTypeConverter()->convertType(tensorDescTy.getElementType());
     SmallVector<int64_t> blockShape = to_vector(tensorDescTy.getShape());
 
-    if (blockShape.size() != 2) {
-      return rewriter.notifyMatchFailure(
-          op, "UpdateTensorDescriptorOp lowering currently supports 2D only");
-    }
-
-    // Unpack the input descriptor into vector groups (group0: <4 x i32>,
-    // group1: <8 x i32> for 2D).
+    // Unpack the input descriptor into vector groups: 2 (1D-2D) or 4 (3D-5D).
     SmallVector<Value> groups =
         mlir::LLVM::AMD::unpackTDMDescriptor(rewriter, loc, adaptor.getDesc());
-    assert(groups.size() == 2 && "2D descriptor expects 2 vector groups");
-    Value group0 = groups[0];
-    Value group1 = groups[1];
 
     SmallVector<Value> addOffsets = llvm::to_vector(adaptor.getAddOffsets());
     SmallVector<Value> setBounds = llvm::to_vector(adaptor.getSetBounds());
-
-    Value destPtr;
-    if (op.getDest()) {
-      auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
-          loc, adaptor.getDest(), elementType, rewriter);
-      destPtr = smemObj.getBase();
-    }
-    Value barrierPtr;
-    if (op.getBarrier()) {
-      auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
-          loc, adaptor.getBarrier(),
-          getTypeConverter()->convertType(
-              op.getBarrier().getType().getElementType()),
-          rewriter);
-      barrierPtr = smemObj.getBase();
-    }
     Value pred = adaptor.getPred();
 
     mlir::LLVM::AMD::updateTensorDescriptor(
-        rewriter, loc, elementType, blockShape, group0, group1, addOffsets,
-        setBounds, destPtr, pred, barrierPtr);
+        rewriter, loc, elementType, blockShape, groups, addOffsets, setBounds,
+        pred, op.getClampBounds());
 
     // Re-pack the mutated groups back into the flat MLIR struct that
     // matches convertTensorDescType / the host-side TDMDescriptor ABI.
-    SmallVector<Value> mutated = {group0, group1};
     SmallVector<Value> scalars =
-        mlir::LLVM::AMD::scalarizeTDMDescriptor(rewriter, loc, mutated);
+        mlir::LLVM::AMD::scalarizeTDMDescriptor(rewriter, loc, groups);
     Value newDesc = packLLElements(loc, getTypeConverter(), scalars, rewriter,
                                    tensorDescTy);
 

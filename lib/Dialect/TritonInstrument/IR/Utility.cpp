@@ -306,43 +306,75 @@ TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
           .getResult());
 }
 
-DistributedEncodingTrait
-getSingleDimSliceEncoding(DistributedEncodingTrait encoding, int dim) {
-  int rank = encoding.getRepOrder().size();
+static DistributedEncodingTrait
+getSliceEncoding(DistributedEncodingTrait encoding, int rank,
+                 ArrayRef<int> keptDims) {
   MLIRContext *ctx = encoding.getContext();
-  assert(dim < rank && "Expected dim to be less than rank");
+  assert(llvm::is_sorted(keptDims) &&
+         "expected kept dimensions to preserve source dimension order");
+  llvm::SmallDenseSet<int> keptDimsSet(keptDims.begin(), keptDims.end());
+  assert(keptDimsSet.size() == keptDims.size() &&
+         "expected unique kept dimensions");
+  for (int dim : keptDims) {
+    assert(dim >= 0 && dim < rank &&
+           "expected kept dimension in destination rank");
+  }
   DistributedEncodingTrait sliceEncoding = encoding;
   for (int i = rank - 1; i >= 0; --i) {
-    if (i != dim) {
+    if (!keptDimsSet.contains(i)) {
       sliceEncoding = SliceEncodingAttr::get(ctx, i, sliceEncoding);
     }
   }
   return sliceEncoding;
 }
 
-Value expandOuterSlicedDim(OpBuilder &b, Location loc, Value tensor) {
-  auto type = cast<RankedTensorType>(tensor.getType());
-  auto sliceEncoding = dyn_cast<SliceEncodingAttr>(type.getEncoding());
-  if (sliceEncoding) {
-    int dim = sliceEncoding.getDim();
-    auto shape = type.getShape();
-    auto newShape = SmallVector<int64_t>(shape);
-    newShape.insert(newShape.begin() + dim, 1);
-    auto newType = RankedTensorType::get(newShape, type.getElementType(),
-                                         sliceEncoding.getParent());
-    tensor = ExpandDimsOp::create(b, loc, newType, tensor, dim);
+RankedTensorType getSlicedTensorType(RankedTensorType tensorType,
+                                     ArrayRef<int> keptDims, Type elementType) {
+  auto encoding = cast<DistributedEncodingTrait>(tensorType.getEncoding());
+  auto sliceEncoding =
+      getSliceEncoding(encoding, tensorType.getRank(), keptDims);
+  SmallVector<int64_t> shape;
+  shape.reserve(keptDims.size());
+  for (int dim : keptDims) {
+    assert(dim >= 0 && dim < tensorType.getRank() &&
+           "expected kept dimension in tensor rank");
+    shape.push_back(tensorType.getShape()[dim]);
   }
-  return tensor;
+  return RankedTensorType::get(shape, elementType, sliceEncoding);
 }
 
-static Value expandAllSlicedDims(OpBuilder &b, Location loc, Value tensor) {
-  auto type = cast<RankedTensorType>(tensor.getType());
-  auto sliceEncoding = dyn_cast<SliceEncodingAttr>(type.getEncoding());
-  while (sliceEncoding) {
-    tensor = expandOuterSlicedDim(b, loc, tensor);
-    type = cast<RankedTensorType>(tensor.getType());
-    sliceEncoding = dyn_cast<SliceEncodingAttr>(type.getEncoding());
+Value reshapeAndBroadcast(OpBuilder &b, Location loc, Value tensor,
+                          ArrayRef<int> keptDims, RankedTensorType dstType) {
+  auto tensorType = cast<RankedTensorType>(tensor.getType());
+  assert(static_cast<size_t>(tensorType.getRank()) == keptDims.size() &&
+         "expected one kept dimension per source tensor rank");
+  assert(llvm::is_sorted(keptDims) &&
+         "expected kept dimensions to preserve source dimension order");
+
+  SmallVector<int64_t> reshapeShape(dstType.getRank(), 1);
+  for (auto [srcDim, dstDim] : llvm::enumerate(keptDims)) {
+    assert(dstDim >= 0 && dstDim < dstType.getRank() &&
+           "expected kept dimension in destination rank");
+    assert(!llvm::is_contained(keptDims.take_front(srcDim), dstDim) &&
+           "expected unique kept dimensions");
+    assert(tensorType.getShape()[srcDim] == dstType.getShape()[dstDim] &&
+           "expected kept dimension to preserve size");
+    reshapeShape[dstDim] = tensorType.getShape()[srcDim];
   }
+
+  if (!llvm::equal(tensorType.getShape(), reshapeShape))
+    tensor = ReshapeOp::create(b, loc, reshapeShape, tensor);
+
+  tensorType = cast<RankedTensorType>(tensor.getType());
+  auto broadcastSrcType = RankedTensorType::get(
+      reshapeShape, tensorType.getElementType(), dstType.getEncoding());
+  if (tensor.getType() != broadcastSrcType) {
+    assert(cvtReordersRegisters(tensorType, broadcastSrcType) &&
+           "expected reshaped layout conversion to reorder registers only");
+    tensor = ConvertLayoutOp::create(b, loc, broadcastSrcType, tensor);
+  }
+  if (tensor.getType() != dstType)
+    tensor = BroadcastOp::create(b, loc, dstType, tensor);
   return tensor;
 }
 
@@ -361,19 +393,14 @@ static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
     strides[i] = strides[i - 1] * tensorType.getShape()[i - 1];
   }
   for (int i = 0; i < tensorType.getRank(); ++i) {
-    auto partialEncoding = getSingleDimSliceEncoding(encoding, i);
-    auto arangeType = RankedTensorType::get({tensorType.getShape()[i]},
-                                            b.getI32Type(), partialEncoding);
+    auto arangeType = getSlicedTensorType(tensorType, {i}, b.getI32Type());
     auto arange =
         MakeRangeOp::create(b, loc, arangeType, 0, arangeType.getShape()[0]);
     auto cstStride = createConstIntTensor(b, loc, strides[i], arangeType);
     auto arangeTimesStride =
         arith::MulIOp::create(b, loc, arangeType, arange, cstStride);
-    auto expandDims = expandAllSlicedDims(b, loc, arangeTimesStride);
-    if (cast<RankedTensorType>(expandDims.getType()).getShape() !=
-        tensorType.getShape()) {
-      expandDims = BroadcastOp::create(b, loc, offsetsType, expandDims);
-    }
+    auto expandDims =
+        reshapeAndBroadcast(b, loc, arangeTimesStride, {i}, offsetsType);
     ptrTensor =
         AddPtrOp::create(b, loc, ptrTensor.getType(), ptrTensor, expandDims);
   }
@@ -384,9 +411,7 @@ static Value createCurrentCTAMask(OpBuilder &b, Location loc,
                                   RankedTensorType tensorType) {
   assert(tensorType.getRank() > 0 && "expected ranked tensor");
   auto encoding = cast<DistributedEncodingTrait>(tensorType.getEncoding());
-  auto sliceEncoding = getSingleDimSliceEncoding(encoding, /*dim=*/0);
-  auto indexType = RankedTensorType::get({tensorType.getShape()[0]},
-                                         b.getI32Type(), sliceEncoding);
+  auto indexType = getSlicedTensorType(tensorType, {0}, b.getI32Type());
   Value range = MakeRangeOp::create(b, loc, indexType, /*start=*/0,
                                     tensorType.getShape()[0]);
   Value ctaId = ExperimentalClusterCTAIdOp::create(b, loc);
@@ -395,11 +420,7 @@ static Value createCurrentCTAMask(OpBuilder &b, Location loc,
                                        ctaIdTensor);
   auto maskType =
       RankedTensorType::get(tensorType.getShape(), b.getI1Type(), encoding);
-  Value mask = expandAllSlicedDims(b, loc, mask1D);
-  if (cast<RankedTensorType>(mask.getType()).getShape() !=
-      tensorType.getShape())
-    mask = BroadcastOp::create(b, loc, maskType, mask);
-  return mask;
+  return reshapeAndBroadcast(b, loc, mask1D, {0}, maskType);
 }
 
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
@@ -480,6 +501,17 @@ AuxDataMap::ThreadLayout getThreadLayout(ModuleOp module,
   return layout;
 }
 
+Region *getClusterBarrierGroupRegion(Operation *op) {
+  Region *region = op->getParentRegion();
+  while (region) {
+    Operation *parent = region->getParentOp();
+    if (isa<WarpSpecializeOp, WarpSpecializePartitionsOp, FuncOp>(parent))
+      return region;
+    region = parent->getParentRegion();
+  }
+  llvm_unreachable("cluster barrier must be nested in a Triton function");
+}
+
 Region *AuxDataMap::RegionToValueMap::getEnclosingParitionOrFunctionRegion(
     Operation *op) {
   Region *region = op->getParentRegion();
@@ -511,15 +543,30 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
     ModuleOp module, FunctionBuilder &fb, const ConSanTargetHooks *hooks) {
   SmallVector<SmallVector<BufferRegion>, numMemTypes> bufRegions(numMemTypes);
   SmallVector<BufferRegion> barrierRegions;
-  getBuffersAndBarriers(module, bufRegions, barrierRegions);
+  if (failed(getBuffersAndBarriers(module, bufRegions, barrierRegions)))
+    return failure();
   int numCTAs = lookupNumCTAs(module);
   threadLayout = getThreadLayout(module, hooks);
+  hasAsyncProxyFenceTracking = hooks &&
+                               hooks->needsAsyncProxyFenceTracking(module) &&
+                               !bufRegions[(int)MemType::SHARED_MEM].empty();
   int captureCounter = 0;
   int64_t captureBytes = 0;
 
   FuncOp entryPoint = getEntryPoint(module);
   assert(entryPoint);
   Region *entryRegion = &entryPoint.getBody();
+
+  int numMBarriers = barrierRegions.size();
+  entryPoint.walk([&](ClusterBarrierOp op) {
+    Region *group = getClusterBarrierGroupRegion(op);
+    clusterBarrierSlots.try_emplace(group,
+                                    numMBarriers + clusterBarrierSlots.size());
+  });
+  int numTrackedBarriers = numMBarriers + clusterBarrierSlots.size();
+  if (numTrackedBarriers > 0)
+    barrierRegions.resize(llvm::NextPowerOf2(numTrackedBarriers - 1),
+                          BufferRegion{0, 0});
 
   ImplicitLocOpBuilder b(entryPoint.getLoc(), entryPoint);
   b.setInsertionPointToStart(&entryPoint.getBody().front());
@@ -579,9 +626,20 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
             64, fb));
     passValueToWarpSpecialize(readVisibility[iMemType].at(entryRegion),
                               readVisibility[iMemType]);
+
+    if (memType == MemType::SHARED_MEM && hasAsyncProxyFenceTracking) {
+      proxyAccessVisibility.insert(
+          entryRegion,
+          createZeroInitStateTensor(b,
+                                    {numCTAs, numBufs, numCTAs,
+                                     threadLayout.numBaseThreadSlots, numCTAs},
+                                    64, fb));
+      passValueToWarpSpecialize(proxyAccessVisibility.at(entryRegion),
+                                proxyAccessVisibility);
+    }
   }
 
-  if (!barrierRegions.empty()) {
+  if (numTrackedBarriers > 0) {
     // Barriers allocations are in shared memory
     barriers.insert(entryRegion, createBufferDescriptorsTensor(
                                      b, MemType::SHARED_MEM, barrierRegions));
@@ -611,7 +669,7 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
       int iMemType = (int)memType;
       // Create state tensors:
       int numBufs = bufRegions[iMemType].size();
-      if (numBufs > 0) {
+      if (numMBarriers > 0 && numBufs > 0) {
         writeTracking[iMemType].insert(
             entryRegion,
             createZeroInitStateTensor(
@@ -626,6 +684,16 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
                                   readTracking[iMemType]);
       }
     }
+    if (numMBarriers > 0 && hasAsyncProxyFenceTracking &&
+        !bufRegions[(int)MemType::SHARED_MEM].empty()) {
+      int numBufs = bufRegions[(int)MemType::SHARED_MEM].size();
+      proxyAccessTracking.insert(
+          entryRegion,
+          createZeroInitStateTensor(
+              b, {numCTAs, numBufs, numCTAs, numBarriers, numCTAs}, 64, fb));
+      passValueToWarpSpecialize(proxyAccessTracking.at(entryRegion),
+                                proxyAccessTracking);
+    }
   }
 
   // Create lock variable allocation
@@ -639,7 +707,7 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
   ExperimentalLockReleaseOp::create(b, lockVal, isCTA0);
   if (numCTAs > 1) {
     auto clusterBarrier = ClusterBarrierOp::create(b, b.getLoc());
-    nonPublishingClusterBarriers.push_back(clusterBarrier.getOperation());
+    internalClusterBarriers.push_back(clusterBarrier.getOperation());
   } else {
     BarrierOp::create(b, b.getLoc(), AddrSpace::Local);
   }
@@ -680,7 +748,8 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
     for (int i = 0; i < CommitKind::NumCommitKinds; ++i)
       numCommitKinds += !commits[i].empty();
     int expected = estimateConSanCaptureCount(
-        numActiveMemTypes, !barrierRegions.empty(), numCommitKinds);
+        numActiveMemTypes, numMBarriers > 0, !clusterBarrierSlots.empty(),
+        numCommitKinds, hasAsyncProxyFenceTracking);
     assert(captureCounter == expected &&
            "capture count changed -- update estimateConSanCaptureCount if this "
            "is expected!");
@@ -691,7 +760,7 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
   return success();
 }
 
-void AuxDataMap::getBuffersAndBarriers(
+LogicalResult AuxDataMap::getBuffersAndBarriers(
     ModuleOp module, SmallVector<SmallVector<BufferRegion>, 2> &bufRegions,
     SmallVector<BufferRegion> &barrierRegions) {
   // Collect shared memory buffers allocated in the module
@@ -699,7 +768,7 @@ void AuxDataMap::getBuffersAndBarriers(
   triton::BufferRegionAnalysis *analysis =
       solver->load<triton::BufferRegionAnalysis>();
   if (failed(solver->initializeAndRun(module)))
-    return;
+    return failure();
 
   analysis->calculateUsedBufferRegions(module);
   bufRegions[(int)MemType::SHARED_MEM] = analysis->getAllUsedBufferRegions(
@@ -708,11 +777,6 @@ void AuxDataMap::getBuffersAndBarriers(
       BufferRegionAnalysis::RegionType::TENSOR_MEMORY);
   barrierRegions = analysis->getAllUsedBufferRegions(
       BufferRegionAnalysis::RegionType::BARRIER);
-
-  if (!barrierRegions.empty()) {
-    barrierRegions.resize(llvm::NextPowerOf2(barrierRegions.size() - 1),
-                          BufferRegion{0, 0});
-  }
 
   for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
     int iMemType = (int)memType;
@@ -723,6 +787,15 @@ void AuxDataMap::getBuffersAndBarriers(
         llvm::NextPowerOf2(bufRegions[iMemType].size() - 1),
         BufferRegion{0, 0});
   }
+  return success();
+}
+
+int AuxDataMap::getClusterBarrierSlot(Operation *op) const {
+  Region *group = getClusterBarrierGroupRegion(op);
+  auto it = clusterBarrierSlots.find(group);
+  assert(it != clusterBarrierSlots.end() &&
+         "cluster barrier group must have a virtual barrier slot");
+  return it->second;
 }
 
 void AuxDataMap::passToWarpSpecialize(FuncOp func, ValueType valueType,

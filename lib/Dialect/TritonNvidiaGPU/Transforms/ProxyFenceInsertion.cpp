@@ -86,9 +86,32 @@ bool filterFn(Operation *op, Operation *other, bool /*opIsRead*/,
   return ignoreOpForProxyFence(other);
 }
 
+enum class ProxyFenceScope { CTA, Cluster };
+
+ProxyFenceScope getProxyFenceScope(Operation *op) {
+  // Multicast TMA and two-CTA tensor-core operations access peer-CTA shared
+  // memory. Multi-CTA CLC multicasts its result to every CTA in the cluster.
+  if (auto tma = dyn_cast<triton::nvidia_gpu::TMALoadLikeOpInterface>(op)) {
+    if (tma.getMulticast())
+      return ProxyFenceScope::Cluster;
+  }
+  if (auto mma = dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(op)) {
+    if (mma.getTwoCtas())
+      return ProxyFenceScope::Cluster;
+  }
+  if (isa<triton::nvidia_gpu::TMEMCopyOp>(op) &&
+      triton::nvidia_gpu::getModuleTwoCTAs(op))
+    return ProxyFenceScope::Cluster;
+  if (isa<triton::nvidia_gpu::CLCTryCancelOp>(op) &&
+      triton::gpu::lookupNumCTAs(op) > 1)
+    return ProxyFenceScope::Cluster;
+  return ProxyFenceScope::CTA;
+}
+
 //===----------------------------------------------------------------------===//
 // Proxy Fence Analysis
 //===----------------------------------------------------------------------===//
+template <ProxyFenceScope scope>
 class ProxyFenceAnalysis : public MembarOrFenceAnalysis {
 
 public:
@@ -104,21 +127,28 @@ private:
   void insertFence(Operation *operation, OpBuilder *builder);
 };
 
-void ProxyFenceAnalysis::insertFence(Operation *op, OpBuilder *builder) {
+template <ProxyFenceScope scope>
+void ProxyFenceAnalysis<scope>::insertFence(Operation *op, OpBuilder *builder) {
   OpBuilder::InsertionGuard g(*builder);
-  triton::nvidia_gpu::FenceAsyncSharedOp::create(*builder, op->getLoc(), false);
+  triton::nvidia_gpu::FenceAsyncSharedOp::create(
+      *builder, op->getLoc(), scope == ProxyFenceScope::Cluster);
 }
 
-void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
-                                FuncBlockInfoMapT *funcBlockInfoMap,
-                                OpBuilder *builder) {
-  if (isa<triton::nvidia_gpu::FenceAsyncSharedOp>(op)) {
-    // If the current op is a fence, we clear previous reads and writes
-    blockInfo->sync();
+template <ProxyFenceScope scope>
+void ProxyFenceAnalysis<scope>::update(Operation *op, BlockInfo *blockInfo,
+                                       FuncBlockInfoMapT *funcBlockInfoMap,
+                                       OpBuilder *builder) {
+  if (auto fence = dyn_cast<triton::nvidia_gpu::FenceAsyncSharedOp>(op)) {
+    // A cluster fence covers both frontiers, while a CTA fence only covers the
+    // CTA frontier.
+    if (scope == ProxyFenceScope::CTA || fence.getBCluster())
+      blockInfo->sync();
     return;
   }
   BlockInfo curBlockInfo;
   BlockInfo proxyBlockInfo;
+  bool isProxyOp = (isAsyncProxyWrite(op) || isAsyncProxyRead(op)) &&
+                   getProxyFenceScope(op) == scope;
 
   auto scratchBufferId = Allocation::InvalidBufferId;
   if (isa<triton::CallOp>(op)) {
@@ -142,12 +172,14 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
               auto slice = AllocationSlice(value, interval, bufferId);
 
               if (isAsyncProxyWrite(op) && value == getSmemDest(op)) {
-                proxyBlockInfo.syncWriteSlices[slice].insert(op);
+                if (isProxyOp)
+                  proxyBlockInfo.syncWriteSlices[slice].insert(op);
               } else if (isAsyncProxyRead(op) &&
                          isAsyncProxyReadSource(op, value)) {
                 // Safe fallback for async-proxy reads from shared memory when
                 // the earlier FenceInsertionPass did not place a fence.
-                proxyBlockInfo.syncReadSlices[slice].insert(op);
+                if (isProxyOp)
+                  proxyBlockInfo.syncReadSlices[slice].insert(op);
               } else if (isa<MemoryEffects::Write>(
                              effectInstance.getEffect())) {
                 curBlockInfo.syncWriteSlices[slice].insert(op);
@@ -170,7 +202,7 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
     auto scratchSlice = AllocationSlice(interval);
     curBlockInfo.syncReadSlices[scratchSlice].insert(op);
   }
-  if (isAsyncProxyWrite(op) || isAsyncProxyRead(op)) {
+  if (isProxyOp) {
     if (proxyBlockInfo.isIntersected(*blockInfo, filter, allocation)) {
       builder->setInsertionPoint(op);
       insertFence(op, builder);
@@ -198,9 +230,24 @@ public:
     // This pass does not depend on the amount of shared memory allocated
     // so we can use the default allocation analysis scratch size function
     ModuleAllocation allocation(mod);
-    ModuleMembarOrFenceAnalysis<ProxyFenceAnalysis> analysis(&allocation,
-                                                             filterFn);
-    analysis.run();
+    // Keep independent frontiers for cluster- and CTA-scoped fences. Run the
+    // cluster analysis first so the CTA analysis can observe any cluster
+    // fences it inserts.
+    bool hasClusterProxyOp =
+        mod.walk([](Operation *op) {
+             return getProxyFenceScope(op) == ProxyFenceScope::Cluster
+                        ? WalkResult::interrupt()
+                        : WalkResult::advance();
+           })
+            .wasInterrupted();
+    if (hasClusterProxyOp) {
+      ModuleMembarOrFenceAnalysis<ProxyFenceAnalysis<ProxyFenceScope::Cluster>>
+          clusterAnalysis(&allocation, filterFn);
+      clusterAnalysis.run();
+    }
+    ModuleMembarOrFenceAnalysis<ProxyFenceAnalysis<ProxyFenceScope::CTA>>
+        ctaAnalysis(&allocation, filterFn);
+    ctaAnalysis.run();
   }
 };
 

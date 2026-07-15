@@ -24,7 +24,7 @@ static SmallVector<Value> computeWarpLevelHistogram(
   Value zero = b.i32_val(0);
   int numBits = llvm::Log2_64(numBins);
   int numBitsLaneId = llvm::Log2_64(numThreadPerWarp);
-  unsigned numElementsPerThreads = getTotalElemsPerThread(srcType);
+  unsigned numElementsPerThreads = getUniqueElemsPerThread(srcType);
   // The histogram is distributed across threads, each thread owns `numBins /
   // numThreadPerWarp` bins.
   SmallVector<Value> warpLevelHistogram(numBins / numThreadPerWarp, zero);
@@ -145,14 +145,16 @@ public:
   matchAndRewrite(triton::HistogramOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
+    auto *ctx = op.getContext();
     Value input = adaptor.getSrc();
     auto typeConverter = getTypeConverter();
-    SmallVector<Value> srcValues = unpackLLElements(loc, input, rewriter);
+    SmallVector<Value> srcValues =
+        unpackUniqueTensorElements(loc, input, rewriter);
 
     Value llMask = adaptor.getMask();
     SmallVector<Value> maskValues;
     if (llMask)
-      maskValues = unpackLLElements(loc, llMask, rewriter);
+      maskValues = unpackUniqueTensorElements(loc, llMask, rewriter);
 
     int numBins = op.getType().getDimSize(0);
     auto mod = op->getParentOfType<ModuleOp>();
@@ -179,8 +181,9 @@ public:
     Value baseSharedMemPtr =
         LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto dstType = op.getType();
-    Attribute dstEncoding = dstType.getEncoding();
-    auto indices = emitIndices(op.getLoc(), rewriter, targetInfo, dstEncoding,
+    auto dstLayout =
+        toLinearLayout(dstType).removeZeroBasesAlongDim(str_attr("register"));
+    auto indices = emitIndices(op.getLoc(), rewriter, targetInfo, dstLayout,
                                dstType, true);
     SmallVector<Value> innerDimIndices;
     for (int i = 0; i < indices.size(); ++i)
@@ -207,8 +210,8 @@ public:
           b.sdiv(histogramValue[i], b.i32_val(replicationFactor));
     }
 
-    Value results = packLLElements(loc, typeConverter, histogramValue, rewriter,
-                                   op.getType());
+    Value results = packUniqueTensorElements(loc, typeConverter, histogramValue,
+                                             rewriter, op.getType());
     rewriter.replaceOp(op, results);
     return success();
   }

@@ -294,7 +294,8 @@ def tl_obj_gather_amd(desc_args, x_offsets, y_offset):
     x_offsets = ttgl.convert_layout(x_offsets, idx_layout)
     alloc = ttgl.allocate_shared_memory(desc_args.desc.dtype, list(gather_shape), smem_layout)
     y_off = ttgl.to_tensor(y_offset)
-    amd_tdm.async_gather(gather_desc, x_offsets, y_off, alloc)
+    gather_desc = amd_tdm.update_tensor_descriptor(gather_desc, add_offsets=[0, y_off], clamp_bounds=True)
+    amd_tdm.async_gather(gather_desc, x_offsets, alloc)
     amd_tdm.async_wait(0)
     ret_layout: ttgl.constexpr = default_blocked_layout(list(gather_shape), num_warps, current_target())
     out = alloc.load(ret_layout)
@@ -318,7 +319,8 @@ def tl_obj_scatter_amd(desc_args, value, x_offsets, y_offset):
     x_offsets = ttgl.convert_layout(x_offsets, idx_layout)
     alloc = ttgl.allocate_shared_memory(desc_args.desc.dtype, list(scatter_shape), smem_layout, value)
     y_off = ttgl.to_tensor(y_offset)
-    amd_tdm.async_scatter(scatter_desc, x_offsets, y_off, alloc)
+    scatter_desc = amd_tdm.update_tensor_descriptor(scatter_desc, add_offsets=[0, y_off], clamp_bounds=True)
+    amd_tdm.async_scatter(scatter_desc, x_offsets, alloc)
     amd_tdm.async_wait(0)
 
 

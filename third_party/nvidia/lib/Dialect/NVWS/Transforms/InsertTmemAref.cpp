@@ -824,6 +824,7 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
 
   for (auto ifOp : ifs) {
     ImplicitLocOpBuilder b(ifOp.getLoc(), ifOp);
+    auto originalOutputs = getPartitionOutputs(ifOp);
 
     // move putExitOp
     b.setInsertionPoint(ifOp);
@@ -864,20 +865,22 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
     assignStage(b, enterIf, getStageCluster(putEnterOp));
     assignStage(b, exitIf, getStageCluster(putExitOp));
 
-    SetVector<int> enterExitIds, middleIds;
-    enterExitIds.insert(1);
-    middleIds.insert(0);
+    auto enterExitIds = originalOutputs[pos];
+    auto middleIds = getPartitionIds(ifOp);
+    for (auto id : enterExitIds)
+      middleIds.remove(id);
+    if (middleIds.empty())
+      middleIds = getPartitionIds(ifOp);
+
     setPartition(enterIf, enterExitIds);
     setPartition(exitIf, enterExitIds);
     setPartition(ifOp, middleIds);
 
-    SetVector<int> p0array, p1array;
-    p0array.insert(0);
-    p1array.insert(1);
     setPartitionOutputs(exitIf, {});
-    setPartitionOutputs(enterIf, {p1array});
-    SmallVector<SetVector<int>> outputs(ifOp->getNumResults(), p0array);
-    setPartitionOutputs(ifOp, outputs);
+    setPartitionOutputs(enterIf, {enterExitIds});
+    auto middleOutputs = originalOutputs;
+    middleOutputs[pos] = middleIds;
+    setPartitionOutputs(ifOp, middleOutputs);
   }
 }
 
@@ -890,6 +893,20 @@ LogicalResult runOnFunction(triton::FuncOp funcOp) {
   });
   if (!walkResult.wasInterrupted())
     return success();
+
+  walkResult = funcOp.walk([&](Operation *op) {
+    for (Value operand : op->getOperands()) {
+      auto type = dyn_cast<MemDescType>(operand.getType());
+      if (type && isa<TensorMemoryEncodingAttr>(type.getEncoding()) &&
+          type.getShape().take_back(2) != type.getAllocShape().take_back(2)) {
+        op->emitError("TMEM subviews NYI in the pipeliner");
+        return WalkResult::interrupt();
+      }
+    }
+    return WalkResult::advance();
+  });
+  if (walkResult.wasInterrupted())
+    return failure();
 
   SmallVector<TmemAccessDag> tmemDags;
   funcOp.walk([&](TMEMAllocOp allocOp) {
@@ -918,11 +935,13 @@ class NVWSTmemArefInsertion
     : public triton::impl::NVWSInsertTmemArefBase<NVWSTmemArefInsertion> {
 public:
   void runOnOperation() override {
-    getOperation().walk([&](triton::FuncOp funcOp) {
+    auto walkResult = getOperation().walk([&](triton::FuncOp funcOp) {
       if (failed(runOnFunction(funcOp)))
         return WalkResult::interrupt();
       return WalkResult::advance();
     });
+    if (walkResult.wasInterrupted())
+      signalPassFailure();
   }
 };
 

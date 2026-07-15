@@ -90,42 +90,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
 // CHECK: %[[SLICEB0:.+]] = ttg.local_load
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: tt.load
 // CHECK: %[[SLICEA1:.+]] = ttg.local_load
 // CHECK: %[[SLICEB1:.+]] = ttg.local_load
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: %[[SLICEA2:.+]] = ttg.local_load
 // CHECK: %[[SLICEB2:.+]] = ttg.local_load
 // CHECK: %[[SLICEA3:.+]] = ttg.local_load
 // CHECK: %[[SLICEB3:.+]] = ttg.local_load
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT2:.+]] = tt.dot %[[SLICEA2]], %[[SLICEB2]], %[[DOT1]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: tt.dot %[[SLICEA3]], %[[SLICEB3]], %[[DOT2]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: scf.yield
 // CHECK: amdg.cond_barrier %[[WARPLOW]]
 
@@ -202,29 +202,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
 // CHECK: %[[SLICEB0:.+]] = ttg.local_load
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: tt.load
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: %[[SLICEA1:.+]] = ttg.local_load
 // CHECK: %[[SLICEB1:.+]] = ttg.local_load
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: tt.load
 // CHECK: rocdl.s.barrier
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: scf.yield
 // CHECK: amdg.cond_barrier %[[WARPLOW]]
 
@@ -269,6 +269,81 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %25:6 = scf.for %arg5 = %c0_i32 to %c64_i32 step %c1_i32 iter_args(%arg6 = %cst, %arg7 = %13, %arg8 = %20, %arg9 = %c0_i32, %arg10 = %23, %arg11 = %24) -> (tensor<256x128xf32, #mma>, tensor<256x64x!tt.ptr<f16>, #blocked1>, tensor<64x128x!tt.ptr<f16>, #blocked>, i32, !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<64x128xf16, #shared1, #ttg.shared_memory, mutable>)  : i32 {
       %26 = tt.addptr %arg7, %cst_1 : tensor<256x64x!tt.ptr<f16>, #blocked1>, tensor<256x64xi32, #blocked1>
       %27 = tt.load %26 : tensor<256x64x!tt.ptr<f16>, #blocked1>
+      %28 = tt.addptr %arg8, %cst_0 : tensor<64x128x!tt.ptr<f16>, #blocked>, tensor<64x128xi32, #blocked>
+      %29 = tt.load %28 : tensor<64x128x!tt.ptr<f16>, #blocked>
+      %30 = ttg.local_load %arg10 : !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+      %31 = ttg.local_load %arg11 : !ttg.memdesc<64x128xf16, #shared1, #ttg.shared_memory, mutable> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+      %32 = tt.dot %30, %31, %arg6 : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<256x128xf32, #mma>
+      %33 = arith.addi %arg9, %c1_i32 : i32
+      %34 = arith.cmpi slt, %33, %c1_i32 : i32
+      %35 = arith.select %34, %33, %c0_i32 : i32
+      %36 = ttg.memdesc_index %21[%35] : !ttg.memdesc<1x256x64xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
+      ttg.local_store %27, %36 : tensor<256x64xf16, #blocked1> -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
+      %37 = ttg.memdesc_index %22[%35] : !ttg.memdesc<1x64x128xf16, #shared1, #ttg.shared_memory, mutable> -> !ttg.memdesc<64x128xf16, #shared1, #ttg.shared_memory, mutable>
+      ttg.local_store %29, %37 : tensor<64x128xf16, #blocked> -> !ttg.memdesc<64x128xf16, #shared1, #ttg.shared_memory, mutable>
+      scf.yield %32, %26, %28, %35, %36, %37 : tensor<256x128xf32, #mma>, tensor<256x64x!tt.ptr<f16>, #blocked1>, tensor<64x128x!tt.ptr<f16>, #blocked>, i32, !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<64x128xf16, #shared1, #ttg.shared_memory, mutable>
+    }
+    ttg.local_dealloc %21 : !ttg.memdesc<1x256x64xf16, #shared, #ttg.shared_memory, mutable>
+    ttg.local_dealloc %22 : !ttg.memdesc<1x64x128xf16, #shared1, #ttg.shared_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: pingpong_reject_loop_variant_mask
+// CHECK-NOT: rocdl.s.setprio
+// CHECK-NOT: amdg.cond_barrier
+// CHECK-NOT: rocdl.sched.barrier
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
+#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [2, 4], instrShape = [16, 16, 16], isTransposed = true}>
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [1, 0]}>
+#shared1 = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @pingpong_reject_loop_variant_mask(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<256x128xf32, #mma>
+    %c1_i32 = arith.constant 1 : i32
+    %cst_0 = arith.constant dense<64> : tensor<64x128xi32, #blocked>
+    %cst_1 = arith.constant dense<64> : tensor<256x64xi32, #blocked1>
+    %cst_kbound = arith.constant dense<2048> : tensor<1x64xi32, #blocked1>
+    %c0_i32 = arith.constant 0 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %0 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<256x1x!tt.ptr<f16>, #blocked1>
+    %1 = tt.get_program_id x : i32
+    %2 = tt.splat %1 : i32 -> tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    %3 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    %4 = arith.addi %2, %3 : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    %5 = tt.expand_dims %4 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<256x1xi32, #blocked1>
+    %6 = tt.splat %arg3 : i32 -> tensor<256x1xi32, #blocked1>
+    %7 = arith.muli %5, %6 : tensor<256x1xi32, #blocked1>
+    %8 = tt.addptr %0, %7 : tensor<256x1x!tt.ptr<f16>, #blocked1>, tensor<256x1xi32, #blocked1>
+    %9 = tt.broadcast %8 : tensor<256x1x!tt.ptr<f16>, #blocked1> -> tensor<256x64x!tt.ptr<f16>, #blocked1>
+    %10 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
+    %11 = tt.expand_dims %10 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked1}>> -> tensor<1x64xi32, #blocked1>
+    %12 = tt.broadcast %11 : tensor<1x64xi32, #blocked1> -> tensor<256x64xi32, #blocked1>
+    %13 = tt.addptr %9, %12 : tensor<256x64x!tt.ptr<f16>, #blocked1>, tensor<256x64xi32, #blocked1>
+    %14 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<64x1x!tt.ptr<f16>, #blocked>
+    %15 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %16 = tt.expand_dims %15 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<64x1xi32, #blocked>
+    %17 = tt.addptr %14, %16 : tensor<64x1x!tt.ptr<f16>, #blocked>, tensor<64x1xi32, #blocked>
+    %18 = tt.broadcast %17 : tensor<64x1x!tt.ptr<f16>, #blocked> -> tensor<64x128x!tt.ptr<f16>, #blocked>
+    %19 = tt.splat %arg4 : i32 -> tensor<64x128xi32, #blocked>
+    %20 = tt.addptr %18, %19 : tensor<64x128x!tt.ptr<f16>, #blocked>, tensor<64x128xi32, #blocked>
+    %21 = ttg.local_alloc : () -> !ttg.memdesc<1x256x64xf16, #shared, #ttg.shared_memory, mutable>
+    %22 = ttg.local_alloc : () -> !ttg.memdesc<1x64x128xf16, #shared1, #ttg.shared_memory, mutable>
+    %23 = ttg.memdesc_index %21[%c0_i32] : !ttg.memdesc<1x256x64xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
+    %24 = ttg.memdesc_index %22[%c0_i32] : !ttg.memdesc<1x64x128xf16, #shared1, #ttg.shared_memory, mutable> -> !ttg.memdesc<64x128xf16, #shared1, #ttg.shared_memory, mutable>
+    %25:6 = scf.for %arg5 = %c0_i32 to %c64_i32 step %c1_i32 iter_args(%arg6 = %cst, %arg7 = %13, %arg8 = %20, %arg9 = %c0_i32, %arg10 = %23, %arg11 = %24) -> (tensor<256x128xf32, #mma>, tensor<256x64x!tt.ptr<f16>, #blocked1>, tensor<64x128x!tt.ptr<f16>, #blocked>, i32, !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<64x128xf16, #shared1, #ttg.shared_memory, mutable>)  : i32 {
+      %26 = tt.addptr %arg7, %cst_1 : tensor<256x64x!tt.ptr<f16>, #blocked1>, tensor<256x64xi32, #blocked1>
+      // Loop-variant K-bound mask: %arg5 * 64 + [0, 64) < 2048, broadcast over M.
+      %koff = arith.muli %arg5, %c64_i32 : i32
+      %koffs = tt.splat %koff : i32 -> tensor<1x64xi32, #blocked1>
+      %kpos = arith.addi %koffs, %11 : tensor<1x64xi32, #blocked1>
+      %kcmp = arith.cmpi slt, %kpos, %cst_kbound : tensor<1x64xi32, #blocked1>
+      %kmask = tt.broadcast %kcmp : tensor<1x64xi1, #blocked1> -> tensor<256x64xi1, #blocked1>
+      %27 = tt.load %26, %kmask : tensor<256x64x!tt.ptr<f16>, #blocked1>
       %28 = tt.addptr %arg8, %cst_0 : tensor<64x128x!tt.ptr<f16>, #blocked>, tensor<64x128xi32, #blocked>
       %29 = tt.load %28 : tensor<64x128x!tt.ptr<f16>, #blocked>
       %30 = ttg.local_load %arg10 : !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
@@ -525,29 +600,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
 // CHECK: %[[SLICEB0:.+]] = ttg.local_load
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: tt.load
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: %[[SLICEA1:.+]] = ttg.local_load
 // CHECK: %[[SLICEB1:.+]] = ttg.local_load
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: tt.load
 // CHECK: rocdl.s.barrier
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: scf.yield
 // CHECK: amdg.cond_barrier %[[WARPLOW]]
 
@@ -628,42 +703,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
 // CHECK: %[[SLICEB0:.+]] = ttg.local_load
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: tt.load
 // CHECK: %[[SLICEA1:.+]] = ttg.local_load
 // CHECK: %[[SLICEB1:.+]] = ttg.local_load
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: %[[SLICEA2:.+]] = ttg.local_load
 // CHECK: %[[SLICEB2:.+]] = ttg.local_load
 // CHECK: %[[SLICEA3:.+]] = ttg.local_load
 // CHECK: %[[SLICEB3:.+]] = ttg.local_load
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT2:.+]] = tt.dot %[[SLICEA2]], %[[SLICEB2]], %[[DOT1]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: tt.dot %[[SLICEA3]], %[[SLICEB3]], %[[DOT2]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: scf.yield
 // CHECK: amdg.cond_barrier %[[WARPLOW]]
 
@@ -1003,30 +1078,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
 // CHECK: %[[SLICEB0:.+]] = ttg.local_load
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: tt.load
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: %[[SLICEA1:.+]] = ttg.local_load
 // CHECK: %[[SLICEB1:.+]] = ttg.local_load
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: tt.load
 // CHECK: rocdl.s.barrier
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: scf.if
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: scf.yield
 // CHECK: amdg.cond_barrier %[[WARPLOW]]
 
@@ -1113,43 +1188,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
 // CHECK: %[[SLICEB0:.+]] = ttg.local_load
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: tt.load
 // CHECK: %[[SLICEA1:.+]] = ttg.local_load
 // CHECK: %[[SLICEB1:.+]] = ttg.local_load
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: %[[SLICEA2:.+]] = ttg.local_load
 // CHECK: %[[SLICEB2:.+]] = ttg.local_load
 // CHECK: %[[SLICEA3:.+]] = ttg.local_load
 // CHECK: %[[SLICEB3:.+]] = ttg.local_load
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT2:.+]] = tt.dot %[[SLICEA2]], %[[SLICEB2]], %[[DOT1]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: tt.dot %[[SLICEA3]], %[[SLICEB3]], %[[DOT2]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: scf.if
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: scf.yield
 // CHECK: amdg.cond_barrier %[[WARPLOW]]
 
@@ -1409,29 +1484,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
 // CHECK: %[[SLICEB0:.+]] = ttg.local_load
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: tt.load
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: %[[SLICEA1:.+]] = ttg.local_load
 // CHECK: %[[SLICEB1:.+]] = ttg.local_load
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: tt.load
 // CHECK: rocdl.s.barrier
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: scf.yield
 // CHECK: amdg.cond_barrier %[[WARPLOW]]
 
@@ -1532,42 +1607,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
 // CHECK: %[[SLICEB0:.+]] = ttg.local_load
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT0:.+]] = tt.dot %[[SLICEA0]], %[[SLICEB0]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: tt.load
 // CHECK: %[[SLICEA1:.+]] = ttg.local_load
 // CHECK: %[[SLICEB1:.+]] = ttg.local_load
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT1:.+]] = tt.dot %[[SLICEA1]], %[[SLICEB1]], %[[DOT0]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: %[[SLICEA2:.+]] = ttg.local_load
 // CHECK: %[[SLICEB2:.+]] = ttg.local_load
 // CHECK: %[[SLICEA3:.+]] = ttg.local_load
 // CHECK: %[[SLICEB3:.+]] = ttg.local_load
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: %[[DOT2:.+]] = tt.dot %[[SLICEA2]], %[[SLICEB2]], %[[DOT1]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: ttg.local_store
 // CHECK: ttg.local_store
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.setprio 1
 // CHECK: tt.dot %[[SLICEA3]], %[[SLICEB3]], %[[DOT2]]
 // CHECK: rocdl.s.setprio 0
 // CHECK: ttg.barrier local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: scf.yield
 // CHECK: amdg.cond_barrier %[[WARPLOW]]
 
@@ -1898,9 +1973,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: ttg.async_copy_global_to_local
 // CHECK: ttg.async_copy_global_to_local
 // CHECK: ttg.async_copy_global_to_local
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: rocdl.s.barrier
-// CHECK: rocdl.sched.barrier 0
+// CHECK: rocdl.sched.barrier none
 // CHECK: %[[LL0:.+]] = ttg.local_load
 // CHECK-SAME: %[[WAIT]]
 // CHECK: %[[LL1:.+]] = ttg.local_load

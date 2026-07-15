@@ -154,7 +154,7 @@ def process_streamk_tiles(
     if STREAMK_TILES == 0:
         return
 
-    # Initialize P buffer and locks
+    # Initialize P buffer
     rm = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, WMMA_LAYOUT))
     rn = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
     p_offset = pid * BLOCK_M * BLOCK_N + rm[:, None] * BLOCK_N + rn[None, :]
@@ -162,8 +162,6 @@ def process_streamk_tiles(
         p_ptr + p_offset,
         ttgl.zeros((BLOCK_M, BLOCK_N), dtype=p_ptr.type.element_ty, layout=WMMA_LAYOUT),
     )
-    ttgl.barrier()
-    ttgl.store(locks_ptr + pid, 0)
 
     # Compute StreamK params inline
     iters_per_tile = ttgl.cdiv(K, BLOCK_K)
@@ -375,7 +373,7 @@ def process_streamk_tiles_8warps(
     if STREAMK_TILES == 0:
         return
 
-    # Initialize P buffer and locks
+    # Initialize P buffer
     rm = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, WMMA_LAYOUT))
     rn = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
     p_offset = pid * BLOCK_M * BLOCK_N + rm[:, None] * BLOCK_N + rn[None, :]
@@ -383,8 +381,6 @@ def process_streamk_tiles_8warps(
         p_ptr + p_offset,
         ttgl.zeros((BLOCK_M, BLOCK_N), dtype=p_ptr.type.element_ty, layout=WMMA_LAYOUT),
     )
-    ttgl.barrier()
-    ttgl.store(locks_ptr + pid, 0)
 
     # Compute StreamK params inline
     iters_per_tile = ttgl.cdiv(K, BLOCK_K)
@@ -1167,13 +1163,12 @@ def run_streamk_gemm_tdm_pipelined(
 
     # Allocate StreamK buffers
     p = torch.empty(num_sms * BLOCK_M * BLOCK_N, dtype=torch.float32)
-    locks = torch.empty(num_sms, dtype=torch.int32)
 
     a_device = a.cuda()
     b_device = b.cuda()
     c_device = c.cuda()
     p_device = p.cuda()
-    locks_device = locks.cuda()
+    locks_device = torch.zeros(num_sms, dtype=torch.int32, device=a_device.device)
 
     if num_warps == 8:
         kernel_name = "pipelined-8warps"

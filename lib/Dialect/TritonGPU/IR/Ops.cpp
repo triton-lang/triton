@@ -721,9 +721,9 @@ LogicalResult MemDescReinterpretOp::verify() {
   };
   auto srcNumBits = getViewNumBits(srcTy);
   auto dstNumBits = getViewNumBits(dstTy);
-  if (srcNumBits != dstNumBits)
-    return emitError() << "source and result must have the same logical "
-                          "storage size ("
+  if (dstNumBits > srcNumBits)
+    return emitError() << "result logical storage size must not exceed source "
+                          "logical storage size ("
                        << srcNumBits << " vs " << dstNumBits << ")";
   return success();
 }
@@ -1162,13 +1162,9 @@ LogicalResult MemDescSubsliceOp::verify() {
       namedOffsets[dim] = {kDim, dimSize};
       auto offsetAndBlock = llInv.apply(namedOffsets);
       auto offset = offsetAndBlock[0];
-      auto block = offsetAndBlock[1];
       if (!llvm::isPowerOf2_32(offset.second) && offset.second != 0) {
         return emitError(
             "We don't support splitting along the swizzling pattern");
-      }
-      if (block.second != 0) {
-        return emitError("We don't support splitting along CTA dimensions");
       }
     }
   }
@@ -1205,12 +1201,12 @@ void WarpSpecializeOp::getSuccessorRegions(
   // And the default region branches transparently back to the parent.
   if (src.getTerminatorPredecessorOrNull()->getParentRegion() ==
       &getDefaultRegion())
-    successors.push_back(RegionSuccessor::parent());
+    successors.push_back(RegionSuccessor(getOperation()));
 }
 
 ValueRange WarpSpecializeOp::getSuccessorInputs(RegionSuccessor successor) {
   // When returning to parent, the successor inputs are the op results.
-  return successor.isParent() ? getResults() : ValueRange();
+  return successor.isOperation() ? getResults() : ValueRange();
 }
 
 void WarpSpecializePartitionsOp::getSuccessorRegions(

@@ -29,7 +29,7 @@ def cacheable(f):
     return g
 
 
-def define_kernel(src, module, attrs=None, **extra_globals):
+def define_kernel(src, module, attrs=None, jit_function_cls=triton.JITFunction, **extra_globals):
     """
     Dynamically create a Triton function or kernel from a src string,
     linking any symbols in the kernel to objects specified by extra_globals.
@@ -60,7 +60,7 @@ def define_kernel(src, module, attrs=None, **extra_globals):
 
     if attrs is None:
         attrs = dict()
-    f = triton.JITFunction(f, **attrs)
+    f = jit_function_cls(f, **attrs)
     f._unsafe_update_src(src)
     return f
 
@@ -118,8 +118,10 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
     globals = spec_fns | fn.get_capture_scope()
     # build new source code and define kernel dynamically
     new_signature = f"def {name}({', '.join(non_specialized_args)}):"
+    lang_module = "gl" if fn.is_gluon() else "tl"
     constexpr_lines = [
-        f"    {key}: tl.constexpr = {value.__name__ if callable(value) else value}" for key, value in constants.items()
+        f"    {key}: {lang_module}.constexpr = {value.__name__ if callable(value) else value}"
+        for key, value in constants.items()
     ]
     tuple_lines = [
         f"    {key} = {'(' + ','.join(value) + (',' if len(value)>=1 else '') + ')'}" for key, value in tuples.items()
@@ -153,7 +155,7 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
 
     if do_not_specialize:
         attrs["do_not_specialize"] = do_not_specialize
-    ret = define_kernel(new_src, module, attrs, **globals)
+    ret = define_kernel(new_src, module, attrs, jit_function_cls=type(fn), **globals)
 
     # Reuse the original kernel's metadata so that stack traces and other
     # source-based tooling report the correct file and line numbers.

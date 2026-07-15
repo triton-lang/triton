@@ -15,6 +15,7 @@ include "triton/Dialect/TritonInstrument/IR/TritonInstrumentAttrDefs.td"
 // Interfaces
 //
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
+def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
 
 //
 // Ops
@@ -78,6 +79,29 @@ def TTI_ExperimentalClusterCTAIdOp
   let assemblyFormat = "attr-dict `:` type($result)";
 }
 
+def TTI_ExperimentalLocalGatherOp
+    : TTI_Op<"experimental_local_gather"> {
+  let summary = "Gather elements from shared memory with logical base offsets";
+  let description = [{
+    Gather elements from a shared memory descriptor using an index tensor along
+    one axis, after shifting the logical source coordinates by rank-sized scalar
+    offsets. This is intentionally private to instrumentation passes.
+  }];
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    TT_IntTensor:$indices,
+    Variadic<I32>:$offsets,
+    I32Attr:$axis
+  );
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = [{
+    $src `[` $indices `]` `offsets` `=` `[` $offsets `]`
+    attr-dict `:` qualified(type($src)) `,` type($indices) `->` type($result)
+  }];
+  let hasVerifier = 1;
+}
+
 def TTI_ExperimentalGSanInitOp
     : TTI_Op<"experimental_gsan_init"> {
   let summary = "Initialize GSan thread";
@@ -129,6 +153,24 @@ def TTI_ExperimentalGSanAtomicTensorAccessOp
                    Optional<TT_BoolLike>:$mask, TT_MemSemanticAttr:$sem, TT_MemSyncScopeAttr:$scope);
   let assemblyFormat = [{
     $sem `,` $scope `,` $ptr (`,` $mask^)? attr-dict `:` type($ptr)
+  }];
+}
+
+def TTI_ExperimentalGSanAtomicPollOp
+    : TTI_Op<"experimental_gsan_atomic_poll"> {
+  let summary = "Instrument a completed atomic poll for GSan";
+  let description = [{
+    Records the successful read performed by an atomic poll after the hardware
+    polling loop has completed.
+  }];
+  let arguments = (ins
+    Arg<TT_Ptr, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+    I1:$matched,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+  let assemblyFormat = [{
+    $sem `,` $scope `,` $ptr `,` $matched attr-dict `:` qualified(type($ptr))
   }];
 }
 

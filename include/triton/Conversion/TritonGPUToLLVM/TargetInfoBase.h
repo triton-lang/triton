@@ -17,6 +17,12 @@ public:
   virtual Value ballot(RewriterBase &rewriter, Location loc, Type type,
                        Value cmp) const = 0;
 
+  // Return a monotonically increasing wall-clock value in nanoseconds.
+  virtual Value getGlobalTimer(RewriterBase &rewriter, Location loc) const = 0;
+
+  // Return the LLVM synchronization scope for an atomic operation.
+  virtual StringRef getAtomicSyncScope(MemSyncScope scope) const = 0;
+
   // Emit a block/CTA level barrier that guarantees visibility for the
   // target address space
   virtual void barrier(Location loc, RewriterBase &rewriter,
