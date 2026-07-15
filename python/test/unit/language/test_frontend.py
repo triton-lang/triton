@@ -864,6 +864,13 @@ def test_fp8_div_mod_promotion():
         tl.static_assert((x % y).dtype == tl.float32)
         tl.static_assert((x * y).dtype == tl.float8e5)
         tl.static_assert((x * z).dtype == tl.float16)
+        # A scalar operand doesn't participate in promotion, so / and % against
+        # an fp8 tensor must upcast to fp32 for the same reason, while other ops
+        # keep the fp8 tensor type.
+        tl.static_assert((2.0 / x).dtype == tl.float32)
+        tl.static_assert((x / 2.0).dtype == tl.float32)
+        tl.static_assert((x % 2).dtype == tl.float32)
+        tl.static_assert((x * 2.0).dtype == tl.float8e5)
 
     run_parser(kernel)
 

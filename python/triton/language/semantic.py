@@ -73,8 +73,8 @@ class TritonSemantic(Generic[TensorTy]):
         if a_is_scalar != b_is_scalar:
             scalar_ty, tensor_ty = (a_ty, b_ty) if a_is_scalar else (b_ty, a_ty)
             if scalar_ty.kind().value <= tensor_ty.kind().value:
-                # Upcast because of 3) and 4) below!
-                if div_or_mod and (tensor_ty in (tl.float16, tl.bfloat16)):
+                # Upcast because of 3), 4) and 5) below!
+                if div_or_mod and (tensor_ty in (tl.float16, tl.bfloat16) or tensor_ty.is_fp8()):
                     return tl.float32
                 return tensor_ty
 
