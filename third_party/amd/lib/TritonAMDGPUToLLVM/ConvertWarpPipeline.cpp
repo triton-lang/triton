@@ -93,6 +93,13 @@ static bool isWarpPipelineIgnorableBarrier(Operation *op) {
              triton::amdgpu::AsyncTDMIntrinsicWait>(op);
 }
 
+// True if `op` reads or writes memory (a load / store / async-copy).
+static bool readsOrWritesMemory(Operation *op) {
+  auto mei = dyn_cast<MemoryEffectOpInterface>(op);
+  return mei && (mei.hasEffect<MemoryEffects::Read>() ||
+                 mei.hasEffect<MemoryEffects::Write>());
+}
+
 // True if `exec` is a stage created by the warp-pipeline frontend.
 static bool isPipelineStage(scf::ExecuteRegionOp exec) {
   return exec && exec->hasAttr("triton.warp_pipeline.stage");
@@ -239,12 +246,12 @@ static void analyzePipelineDependencies(ArrayRef<BlockInfo> clusterInfo,
 }
 
 static void emitClusterBarrier(OpBuilder &r, Location loc, bool needLocal) {
-  ROCDL::SchedBarrier::create(r, loc, 0);
+  ROCDL::SchedBarrier::create(r, loc, ROCDL::SchedGroupMask::none);
   if (needLocal)
     mlir::triton::gpu::BarrierOp::create(r, loc, triton::gpu::AddrSpace::Local);
   else
     ROCDL::SBarrierOp::create(r, loc);
-  ROCDL::SchedBarrier::create(r, loc, 0);
+  ROCDL::SchedBarrier::create(r, loc, ROCDL::SchedGroupMask::none);
 }
 
 static void emitClusterPriority(OpBuilder &r, Location loc,
@@ -268,9 +275,9 @@ static void wrapExistingBarrier(OpBuilder &b, Location loc,
                                 bool anyHasPriority) {
   b.setInsertionPoint(existingBarrier);
   emitClusterPriority(b, loc, clusterOp, anyHasPriority);
-  ROCDL::SchedBarrier::create(b, loc, 0);
+  ROCDL::SchedBarrier::create(b, loc, ROCDL::SchedGroupMask::none);
   b.setInsertionPointAfter(existingBarrier);
-  ROCDL::SchedBarrier::create(b, loc, 0);
+  ROCDL::SchedBarrier::create(b, loc, ROCDL::SchedGroupMask::none);
 }
 
 // Emit pre-barrier, thread-ID partitioning, and phase-shift cond_barrier.
@@ -470,6 +477,17 @@ public:
 
     // Inline region.
     Block *block = &reg.front();
+
+    // Emit a scheduling barrier after every memory op in the stage so the
+    // backend scheduler keeps them in program order.
+    for (Operation &op : llvm::make_early_inc_range(*block))
+      if (readsOrWritesMemory(&op)) {
+        rewriter.setInsertionPointAfter(&op);
+        ROCDL::SchedBarrier::create(
+            rewriter, op.getLoc(),
+            ROCDL::SchedGroupMask::non_mem_non_sideeffect);
+      }
+
     Operation *terminator = block->getTerminator();
     ValueRange results = terminator->getOperands();
     rewriter.inlineBlockBefore(block, exec, {});

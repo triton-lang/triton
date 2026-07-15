@@ -264,8 +264,9 @@ struct InitializeWSClusterBarriers
       return;
 
     auto funcs = mod.getOps<LLVM::LLVMFuncOp>();
-    auto kernelIt = llvm::find_if(
-        funcs, [](LLVM::LLVMFuncOp func) { return triton::isKernel(func); });
+    auto kernelIt = llvm::find_if(funcs, [](LLVM::LLVMFuncOp func) {
+      return func->hasAttr(NVVM::NVVMDialect::getKernelFuncAttrName());
+    });
     if (kernelIt == funcs.end())
       return;
     LLVM::LLVMFuncOp kernel = *kernelIt;

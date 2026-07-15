@@ -269,7 +269,8 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     RegionInfo in = operands[0]->getValue();
     uint32_t subBufferSize = getMemDescSize(tmemSubsliceOp.getType());
     uint32_t relativeOffset = ttng::getTMemSubSliceOffset(
-        tmemSubsliceOp.getType(), tmemSubsliceOp.getN());
+        tmemSubsliceOp.getSrc().getType(), tmemSubsliceOp.getOffset(),
+        tmemSubsliceOp.getDim());
     for (auto &region : in.regions) {
       regionInfo.regions.insert(
           {region.baseOffset + relativeOffset, subBufferSize});
@@ -333,9 +334,9 @@ void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
 
 bool BufferRegionAnalysis::isMemoryAccessOperation(Operation *op) {
   if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp, ttg::LocalGatherOp,
-          ttg::LocalScatterOp, ttng::TMEMLoadOp, ttng::TMEMStoreOp,
-          ttng::TMEMCopyOp, ttg::AsyncCopyGlobalToLocalOp, ttng::TMAOpInterface,
-          ttng::CLCLoadResultOp>(op)) {
+          ttg::LocalScatterOp, ttg::LocalAtomicScatterRMWOp, ttng::TMEMLoadOp,
+          ttng::TMEMStoreOp, ttng::TMEMCopyOp, ttg::AsyncCopyGlobalToLocalOp,
+          ttng::TMAOpInterface, ttng::CLCLoadResultOp>(op)) {
     return true;
   }
   if (isa<ttg::MBarrierOpInterface>(op)) {

@@ -159,18 +159,18 @@ struct TritonExpandDimsPattern
     SmallVector<unsigned, 4> retOrder(retShape.size());
     std::iota(retOrder.begin(), retOrder.end(), 0);
 
-    auto ctaLl = argEncoding.getCGALayout().getLinearLayout();
-    auto kBlock = *ctaLl.getInDimNames().begin();
+    auto cgaLl = argEncoding.getCGALayout().getLinearLayout();
+    auto kBlock = *cgaLl.getInDimNames().begin();
     auto *ctx = kBlock.getContext();
     auto newDim = standardOutDimNames(ctx, newRank)[newRank - 1];
-    ctaLl *= LinearLayout::identity1D(1, kBlock, newDim);
+    cgaLl *= LinearLayout::identity1D(1, kBlock, newDim);
     // Move last dim to op.getAxis(). nb is this a std::rotate?
     auto newOrder = to_vector(llvm::seq<int32_t>(newRank));
     for (int i = newRank - 1; i >= op.getAxis() + 1; --i) {
       std::swap(newOrder[i], newOrder[i - 1]);
     }
-    ctaLl = transposeLinearLayout(ctaLl, newOrder);
-    auto retCGALayout = CGAEncodingAttr::get(ctx, std::move(ctaLl));
+    cgaLl = transposeLinearLayout(cgaLl, newOrder);
+    auto retCGALayout = CGAEncodingAttr::get(ctx, std::move(cgaLl));
     triton::gpu::BlockedEncodingAttr retEncoding =
         triton::gpu::BlockedEncodingAttr::get(getContext(), retSizePerThread,
                                               retThreadsPerWarp, retWarpsPerCTA,

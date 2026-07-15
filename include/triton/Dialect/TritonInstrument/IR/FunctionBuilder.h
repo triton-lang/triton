@@ -97,10 +97,21 @@ public:
   // reaches its warp-specialize terminator.
   void createRetireActiveThreadCall(ImplicitLocOpBuilder &b, int thread,
                                     Operation *insertPoint);
-  // checkAllActiveWaiting: assert that not all unfinished threads across the
-  // cluster are waiting on matching barrier phases.
-  void createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b, Value pred,
-                                       Operation *insertPoint);
+  // clusterBarrierRendezvous: model a cluster barrier as an arrive-and-wait on
+  // a virtual entry in the ordinary ConSan barrier tables. The completing
+  // arrival publishes cluster visibility for non-relaxed barriers. The call
+  // returns only after the virtual barrier phase changes or a deadlock is
+  // reported.
+  void createClusterBarrierRendezvousCall(ImplicitLocOpBuilder &b,
+                                          int barrierIdx, int thread,
+                                          uint64_t threadPeersMask,
+                                          bool partitionScoped,
+                                          bool publishVisibility,
+                                          Operation *insertPoint);
+  // checkAllActiveWaiting: return whether unfinished threads across the
+  // cluster are not all waiting on matching barrier phases.
+  Value createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b, Value pred,
+                                        Operation *insertPoint);
   // verifyBarrierCanInit: ensure the barrier is currently invalidated before
   // initializing it again.
   void createVerifyBarrierCanInitCall(ImplicitLocOpBuilder &b, Value mbar,
@@ -226,10 +237,13 @@ public:
   void createCopyReadVisibilityCall(ImplicitLocOpBuilder &b, int sourceThread,
                                     uint64_t destMask, Value pred,
                                     MemType memType, Operation *insertPoint);
-  // publishClusterVisibility: after a non-relaxed cluster barrier, make
-  // synchronous facts visible to every CTA in the cluster.
+  // publishClusterVisibility: after a non-relaxed cluster barrier, make the
+  // participating threads' synchronous facts visible across the cluster. A
+  // top-level barrier includes every thread; a warp-specialized barrier is
+  // scoped to its partition and peer thread classes.
   void createPublishClusterVisibilityCall(ImplicitLocOpBuilder &b, Value pred,
-                                          MemType memType,
+                                          int thread, uint64_t threadPeersMask,
+                                          bool partitionScoped, MemType memType,
                                           Operation *insertPoint);
   // setProxyAccess: record a generic-proxy access by the current base thread
   // and invalidate prior proxy-fence coverage for that source thread.
@@ -269,9 +283,11 @@ public:
                                    uint64_t destMask, Value pred,
                                    Operation *insertPoint);
   // publishClusterProxyAccesses: publish packed generic access and fence facts
-  // to every base thread after a non-relaxed cluster barrier.
+  // across the cluster. A warp-specialized barrier only updates the
+  // participating base-thread column.
   void createPublishClusterProxyAccessesCall(ImplicitLocOpBuilder &b,
-                                             Value pred,
+                                             Value pred, int thread,
+                                             bool partitionScoped,
                                              Operation *insertPoint);
   // stageAccessForCommit: mark the buffer as staged (value -1) in the
   // outstanding commit table for this thread.

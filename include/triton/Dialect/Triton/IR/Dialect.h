@@ -70,10 +70,11 @@ public:
                          std::optional<Location> loc) const = 0;
 
   // Check if two layouts are structurally the same, even if their names are
-  // different
+  // different, optionally ignoring register broadcasting.
   virtual LogicalResult
   verifyLayoutsAreEqual(ArrayRef<int64_t> shape, Attribute expected,
-                        Attribute got, std::optional<Location> loc) const = 0;
+                        Attribute got, std::optional<Location> loc,
+                        bool ignoreRegBroadcast = false) const = 0;
 
   virtual LogicalResult
   inferDefaultJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,

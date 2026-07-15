@@ -160,6 +160,12 @@ public:
       info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
                                         scatterOp.getDst());
     }
+    if (auto atomicOp = dyn_cast<ttg::LocalAtomicScatterRMWOp>(op)) {
+      info.emplace();
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
+                                        atomicOp.getDst());
+    }
     if (auto allocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
       if (allocOp.getSrc()) {
         info.emplace();
