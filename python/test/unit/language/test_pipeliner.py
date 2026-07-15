@@ -112,6 +112,14 @@ def vecadd_kernel(a_ptr, b_ptr, output_ptr, n_elements, num_blocks, BLOCK_SIZE: 
 
 
 @triton.jit
+def small_tma_load_kernel(input_desc, output_ptr, N: tl.constexpr):
+    offsets = tl.arange(0, 4)
+    for block_start in tl.range(0, N, 4, num_stages=3):
+        value = input_desc.load([block_start])
+        tl.store(output_ptr + block_start + offsets, value)
+
+
+@triton.jit
 def mxfp_to_bf16_kernel(
     x_ptr,
     scale_ptr,
@@ -316,6 +324,23 @@ def test_pipeline_matmul(scale, device):
                 assert ttgir.count("ttng.warp_group_dot") != 0, "warp_group_dot not found"
             elif cc[0] < 9:
                 assert ttgir.count("ttg.dot") != 0, "dot not found"
+
+
+def test_tma_load_unaligned_stage_size(device):
+    if not is_cuda() or not is_hopper_or_newer():
+        pytest.skip("TMA requires Hopper or newer")
+
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    inp = torch.arange(12, dtype=torch.float32, device=device)
+    output = torch.empty_like(inp)
+    desc = TensorDescriptor.from_tensor(inp, block_shape=[4])
+    kernel = small_tma_load_kernel[(1, )](desc, output, inp.numel())
+
+    torch.testing.assert_close(output, inp)
+    ptx = kernel.asm["ptx"]
+    assert "ld.global" in ptx
+    assert "cp.async.bulk.tensor" not in ptx
 
 
 def test_pipeline_vecadd(device):

@@ -20,6 +20,32 @@ tt.func @unscheduled_loop(%lb : index, %ub : index, %step : index,
 
 // -----
 
+#tiny_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#tiny_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 32, rank = 1}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  // CHECK-LABEL: @unaligned_tma_stage_size
+  // CHECK-NOT: ttg.local_alloc
+  // CHECK: scf.for
+  // CHECK-NOT: ttng.async_tma_copy_global_to_local
+  // CHECK: tt.descriptor_load
+  // CHECK-NOT: ttng.async_tma_copy_global_to_local
+  // CHECK: "use"
+  // CHECK-NOT: ttng.async_tma_copy_global_to_local
+  // CHECK: tt.return
+  tt.func @unaligned_tma_stage_size(%desc: !tt.tensordesc<4xf32, #tiny_shared>,
+                                    %lb: index, %ub: index, %step: index) {
+    %c0 = arith.constant 0 : i32
+    scf.for %iv = %lb to %ub step %step {
+      %load = tt.descriptor_load %desc[%c0] {loop.cluster = 2 : i32, loop.stage = 0 : i32} : !tt.tensordesc<4xf32, #tiny_shared> -> tensor<4xf32, #tiny_blocked>
+      "use"(%load) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<4xf32, #tiny_blocked>) -> ()
+    } {tt.scheduled_max_stage = 2 : i32}
+    tt.return
+  }
+}
+
+// -----
+
 #A = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
