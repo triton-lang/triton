@@ -137,9 +137,8 @@ void ProxyFenceAnalysis<scope>::insertFence(Operation *op, OpBuilder *builder) {
 template <ProxyFenceScope scope>
 void ProxyFenceAnalysis<scope>::update(Operation *op, BlockInfo *blockInfo,
                                        FuncBlockInfoMapT *funcBlockInfoMap,
-                                       OpBuilder *builder,
-                                       BufferIndexAnalysis *
-                                           /*bufferIndexAnalysis*/) {
+                                       OpBuilder *builder, BufferIndexAnalysis *
+                                       /*bufferIndexAnalysis*/) {
   if (auto fence = dyn_cast<triton::nvidia_gpu::FenceAsyncSharedOp>(op)) {
     // A cluster fence covers both frontiers, while a CTA fence only covers the
     // CTA frontier.
