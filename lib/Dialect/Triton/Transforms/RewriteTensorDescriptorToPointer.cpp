@@ -547,8 +547,7 @@ class TritonRewriteTensorDescriptorToPointerPass
         auto tensorTy = cast<RankedTensorType>(load->getResultTypes()[0]);
         int64_t blockSizeInBits =
             tensorTy.getNumElements() * tensorTy.getElementTypeBitWidth();
-        hasUnalignedLoad |=
-            blockSizeInBits % (requiredBlockAlignment * 8) != 0;
+        hasUnalignedLoad |= blockSizeInBits % (requiredBlockAlignment * 8) != 0;
       });
       if (!hasUnalignedLoad)
         return;
