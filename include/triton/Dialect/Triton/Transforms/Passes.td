@@ -44,13 +44,6 @@ def TritonRewriteTensorDescriptorToPointer : Pass</*cli-arg*/"triton-rewrite-ten
   }];
 
   let dependentDialects = ["mlir::triton::TritonDialect"];
-
-  let options = [
-    Option<"requiredBlockAlignment", "required-block-alignment",
-           "int32_t", /*default*/"0",
-           "only rewrite when a descriptor load block size is not a multiple "
-           "of this byte alignment; zero always rewrites">
-  ];
 }
 
 def TritonLoopUnroll : Pass</*cli-arg*/"triton-loop-unroll", /*Op*/"mlir::ModuleOp"> {

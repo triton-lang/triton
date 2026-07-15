@@ -1,5 +1,4 @@
 // RUN: triton-opt %s --triton-rewrite-tensor-descriptor-to-pointer --canonicalize --cse --mlir-print-debuginfo --split-input-file | FileCheck %s --implicit-check-not \!tt.tensordesc
-// RUN: triton-opt %s --triton-rewrite-tensor-descriptor-to-pointer="required-block-alignment=128" --split-input-file | FileCheck %s --check-prefix=TMA-ALIGNMENT
 
 module {
   tt.func public @load(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32) -> (tensor<128x128xf32>) {
@@ -160,27 +159,3 @@ module {
 
 // CHECK-LABEL: @arg_attr
 // CHECK-SAME: %arg7: i32 {tt.divisibility = 16 : i32} loc({{.*}})) {
-
-// -----
-
-module {
-  // TMA-ALIGNMENT-LABEL: @unaligned_descriptor_block
-  // TMA-ALIGNMENT-NOT: !tt.tensordesc
-  // TMA-ALIGNMENT: tt.load
-  tt.func public @unaligned_descriptor_block(%desc: !tt.tensordesc<4xf32>, %offset: i32) -> tensor<4xf32> {
-    %load = tt.descriptor_load %desc[%offset] : !tt.tensordesc<4xf32> -> tensor<4xf32>
-    tt.return %load : tensor<4xf32>
-  }
-}
-
-// -----
-
-module {
-  // TMA-ALIGNMENT-LABEL: @aligned_descriptor_block
-  // TMA-ALIGNMENT-SAME: !tt.tensordesc<32xf32>
-  // TMA-ALIGNMENT: tt.descriptor_load
-  tt.func public @aligned_descriptor_block(%desc: !tt.tensordesc<32xf32>, %offset: i32) -> tensor<32xf32> {
-    %load = tt.descriptor_load %desc[%offset] : !tt.tensordesc<32xf32> -> tensor<32xf32>
-    tt.return %load : tensor<32xf32>
-  }
-}

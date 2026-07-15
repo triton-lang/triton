@@ -339,10 +339,9 @@ def test_tma_load_unaligned_stage_size(device):
 
     torch.testing.assert_close(output, inp)
     ttgir = kernel.asm["ttgir"]
-    assert "ttng.async_tma_copy_global_to_local" not in ttgir
-
-    ptx = kernel.asm["ptx"]
-    assert "cp.async.bulk.tensor" not in ptx
+    assert "ttng.async_tma_copy_global_to_local" in ttgir
+    assert "ttg.local_alloc : () -> !ttg.memdesc<4xf32" in ttgir
+    assert "ttg.local_alloc : () -> !ttg.memdesc<3x4xf32" not in ttgir
 
 
 def test_pipeline_vecadd(device):
