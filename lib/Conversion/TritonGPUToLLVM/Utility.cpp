@@ -254,11 +254,11 @@ bool cvtAlwaysUseWarpShuffle(ConvertLayoutOp cvt) {
   // ConvertLayoutOp lowering runs after functions have been converted to the
   // target function dialect (for example LLVM::LLVMFuncOp), so do not assume
   // that the enclosing operation is still a tt.func.
+  if (cvtUsesForcedWarpShuffle(cvt))
+    return true;
   auto func = cvt->getParentOfType<FunctionOpInterface>();
   if (!func || !func->hasAttrOfType<UnitAttr>("always_use_warp_shuffle"))
     return false;
-  if (cvtCanUseWarpShuffle(cvt.getSrc().getType(), cvt.getType()))
-    return true;
   assert(cvt->getAttrOfType<IntegerAttr>("allocation.offset") &&
          "forced non-warp-local conversion requires shared-memory fallback");
   return false;

@@ -839,6 +839,24 @@ module attributes {"ttg.num-warps" = 1 : i32} {
 
 // -----
 
+#forced_shuffle_src = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4]], lane = [[1, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [], block = []}>
+#forced_shuffle_dst = #ttg.linear<{register = [[1, 0], [0, 4]], lane = [[0, 0], [0, 0], [0, 1], [0, 2], [0, 0]], warp = [], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: @convert_layout_forced_expensive_warp_local
+  tt.func @convert_layout_forced_expensive_warp_local(
+      %arg0: tensor<2x8xi16, #forced_shuffle_src>) attributes {always_use_warp_shuffle} {
+    // CHECK-NOT: llvm.mlir.addressof @global_smem
+    // CHECK: nvvm.shfl.sync
+    // CHECK-NOT: llvm.mlir.addressof @global_smem
+    %0 = ttg.convert_layout %arg0
+        : tensor<2x8xi16, #forced_shuffle_src> -> tensor<2x8xi16, #forced_shuffle_dst>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
