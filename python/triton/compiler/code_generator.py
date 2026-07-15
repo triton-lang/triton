@@ -1028,7 +1028,6 @@ class CodeGenerator(ast.NodeVisitor):
                     self.builder.set_insertion_point_to_end(if_op.get_then_block())
                     self.builder.create_yield_op([then_val.handle])
 
-                self.builder.set_insertion_point_to_end(if_op.get_then_block())
                 else_block.merge_block_before(if_op.get_else_block())
                 if ret_type_ir:
                     self.builder.set_insertion_point_to_end(if_op.get_else_block())

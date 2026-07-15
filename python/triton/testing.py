@@ -28,6 +28,8 @@ def nvsmi(attrs):
 
 def _quantile(a, q):
     n = len(a)
+    if n == 0:
+        raise ValueError("Cannot compute quantile of an empty list")
     a = sorted(a)
 
     def get_quantile(q):
