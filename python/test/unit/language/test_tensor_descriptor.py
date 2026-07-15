@@ -4,7 +4,7 @@ import numpy as np
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hopper, is_sm12x, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
+from triton._internal_testing import is_hip_gfx1250, is_hopper, is_sm12x, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from typing import Optional
 from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3
@@ -1877,7 +1877,9 @@ def test_mixed_tensor_descriptor_reduce(kind, dtype_str, reduce_descriptor, M_BL
             idx = tl.arange(0, M_BLOCK)[:, None] * N_BLOCK + tl.arange(0, N_BLOCK)[None, :]
             tl.store(out_ptr_for_tensor + idx, block)
 
-    M, N = M_BLOCK * 2, N_BLOCK * 2
+    # Keep this mixed reduce/load test to a single CTA. Multiple CTAs all load
+    # tile [0, 0] and write out_for_tensor without a cross-CTA ordering point.
+    M, N = M_BLOCK, N_BLOCK
     rs = np.random.RandomState(seed=17)
     inp = to_triton(numpy_random((M, N), dtype_str, rs), device=device, dst_type=dtype_str)
     out = to_triton(numpy_random((M, N), dtype_str, rs), device=device, dst_type=dtype_str)
@@ -1908,13 +1910,20 @@ def test_mixed_tensor_descriptor_reduce(kind, dtype_str, reduce_descriptor, M_BL
     torch.testing.assert_close(expect_tenosor_output, unwrap_tensor(out_for_tensor), check_dtype=False)
 
     ttir = compiled.asm["ttir"]
-    kind = "f" + kind if is_float_type else kind
-    pattern = f"tt.atomic_rmw {kind}, release, gpu"
-    assert (pattern in ttir)
     import re
-    pattern = re.compile(
-        r"""
-    scf\.for\s+%_\s*=\s*%c0_i32\s+to\s+%c1024_i32\s+step\s+%c1_i32\s*:\s*i32\s*\{\s*\n
-    \s*%block\s*=\s*tt\.descriptor_load\s+%load_desc\[%c0_i32,\s*%c0_i32\]
-    """, re.VERBOSE)
-    assert pattern.search(ttir)
+    if is_hip_gfx1250():
+        kind = "f" + kind if is_float_type else kind
+        pattern = f"tt.atomic_rmw {kind}, release, gpu"
+        assert (pattern in ttir)
+        pattern = re.compile(
+            r"""
+            scf\.for\s+%_\s*=\s*%c0_i32\s+to\s+%c1024_i32\s+step\s+%c1_i32\s*:\s*i32\s*\{\s*\n
+            \s*%block\s*=\s*tt\.descriptor_load\s+%load_desc\[%c0_i32,\s*%c0_i32\]
+            """, re.VERBOSE)
+        assert pattern.search(ttir)
+    else:
+        pattern = re.compile(
+            r'^(?!.*tt\.descriptor_load)(?=.*tt\.load %).*$',
+            re.DOTALL,
+        )
+        assert pattern.search(ttir)
