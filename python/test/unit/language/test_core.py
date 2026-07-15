@@ -813,6 +813,45 @@ def test_expand_dims_error_cases(device):
     assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", str(exc_info.value.__cause__))
 
 
+@pytest.mark.interpreter
+def test_squeeze_unsqueeze_negative_dim(device):
+
+    @triton.jit
+    def kernel(dummy, N: tl.constexpr):
+        offset1 = tl.arange(0, N)
+
+        t = tl.unsqueeze(offset1, -1)
+        tl.static_assert(t.shape == [N, 1])
+
+        t = tl.unsqueeze(offset1, -2)
+        tl.static_assert(t.shape == [1, N])
+
+        t = tl.unsqueeze(tl.expand_dims(offset1, 0), -1)
+        tl.static_assert(t.shape == [1, N, 1])
+
+        t = tl.squeeze(tl.expand_dims(offset1, 1), -1)
+        tl.static_assert(t.shape == [N])
+
+        t = tl.squeeze(tl.expand_dims(offset1, 0), -2)
+        tl.static_assert(t.shape == [N])
+
+    N = 32
+    dummy_tensor = torch.empty((), device=device)
+    kernel[(1, )](dummy_tensor, N)
+
+    @triton.jit
+    def unsqueeze_out_of_range(dummy, N: tl.constexpr):
+        tl.unsqueeze(tl.arange(0, N), -3)
+
+    @triton.jit
+    def squeeze_out_of_range(dummy, N: tl.constexpr):
+        tl.squeeze(tl.expand_dims(tl.arange(0, N), 1), -3)
+
+    for bad in (unsqueeze_out_of_range, squeeze_out_of_range):
+        with pytest.raises(triton.TritonError):
+            bad[(1, )](dummy_tensor, N)
+
+
 # ----------------------------
 # test invalid program id axis
 # ----------------------------
