@@ -860,6 +860,8 @@ def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global",
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache
   );
 
+  let results = (outs TTG_AsyncToken:$token);
+
   let assemblyFormat = [{
     $desc `from` $src (`,` `barrier` `=` $barrier^)?
     attr-dict `:` qualified(type($src)) (`,` qualified(type($barrier))^)? `->` qualified(type($desc))
