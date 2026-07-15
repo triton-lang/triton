@@ -107,8 +107,15 @@ public:
         return false;
       }
     }
-    if (isa<tt::DescriptorLoadLikeOpInterface>(op))
+    if (isa<tt::DescriptorLoadLikeOpInterface>(op)) {
+      if (!canPipelineTMALoad(op)) {
+        LDBG("TMA load " << *op
+                          << " has a per-stage allocation that is not aligned "
+                             "for pipelining");
+        return false;
+      }
       return true;
+    }
     if (!canHaveSharedEncoding(cast<tt::LoadOp>(op))) {
       LDBG("Load " << *op << " cannot have shared encoding");
       return false;
