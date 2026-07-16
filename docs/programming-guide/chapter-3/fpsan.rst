@@ -406,17 +406,16 @@ Important caveat:
 - The same raw-payload interpretation is reused by scaled-dot paths for
   ``e2m1``.
 
-------------------------------------------
-Pure Extern and Inline-Asm Elementwise Ops
-------------------------------------------
+----------------------------
+Pure Extern Elementwise Ops
+----------------------------
 
 Supported operation:
 
-- ``tl.extern_elementwise`` and ``tl.inline_asm_elementwise`` when all of the
-  following hold:
+- ``tl.extern_elementwise`` when all of the following hold:
 
   - the op is ``pure``
-  - every result type is float-like
+  - the result type is float-like
   - there is at least one operand
   - every operand is numeric
 
@@ -424,22 +423,19 @@ Rewrite:
 
 - rotate each operand payload by its argument index
 - sum the rotated payloads
-- xor the result with a stable hash of the symbol name or inline-asm string;
-  inline-asm result indices are also included for multi-result operations
+- xor the result with a stable hash of the symbol name
 - unembed
 
 Exact preserved properties:
 
 - deterministic dependence on all operands and on operand order
-- deterministic distinction between different external symbols, inline-asm
-  strings, and inline-asm result indices
+- deterministic distinction between different external symbols
 - mixed float and integer operands are supported; float operands are embedded,
   integer operands are used directly after signed casting to the result width
 
 Important caveat:
 
-- This is a structural tag, not a numeric model of the external function or
-  inline assembly.
+- This is a structural tag, not a numeric model of the external function.
 
 ---------------------------
 Gluon MMA and Tensor Memory
