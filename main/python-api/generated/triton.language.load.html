@@ -74,8 +74,6 @@
 <li class="toctree-l3"><a class="reference internal" href="triton.language.make_tensor_descriptor.html">triton.language.make_tensor_descriptor</a></li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.load_tensor_descriptor.html">triton.language.load_tensor_descriptor</a></li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.store_tensor_descriptor.html">triton.language.store_tensor_descriptor</a></li>
-<li class="toctree-l3"><a class="reference internal" href="triton.language.make_block_ptr.html">triton.language.make_block_ptr</a></li>
-<li class="toctree-l3"><a class="reference internal" href="triton.language.advance.html">triton.language.advance</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#indexing-ops">Indexing Ops</a></li>
@@ -141,7 +139,7 @@
 <h1>triton.language.load<a class="headerlink" href="#triton-language-load" title="Link to this heading"></a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.load">
-<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">load</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">boundary_check</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">()</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">padding_option</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_modifier</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eviction_policy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">volatile</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.load" title="Link to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">load</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_modifier</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eviction_policy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">volatile</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.load" title="Link to this definition"></a></dt>
 <dd><p>Return a tensor of data whose values are loaded from memory at location defined by <cite>pointer</cite>:</p>
 <blockquote>
 <div><ol class="arabic simple">
@@ -149,23 +147,14 @@
 this case:</p>
 <ul class="simple">
 <li><p><cite>mask</cite> and <cite>other</cite> must also be scalars,</p></li>
-<li><p><cite>other</cite> is implicitly typecast to <cite>pointer.dtype.element_ty</cite>, and</p></li>
-<li><p><cite>boundary_check</cite> and <cite>padding_option</cite> must be empty.</p></li>
+<li><p><cite>other</cite> is implicitly typecast to <cite>pointer.dtype.element_ty</cite>.</p></li>
 </ul>
 </li>
 <li><p>If <cite>pointer</cite> is an N-dimensional tensor of pointers, an
 N-dimensional tensor is loaded.  In this case:</p>
 <ul class="simple">
 <li><p><cite>mask</cite> and <cite>other</cite> are implicitly broadcast to <cite>pointer.shape</cite>,</p></li>
-<li><p><cite>other</cite> is implicitly typecast to <cite>pointer.dtype.element_ty</cite>, and</p></li>
-<li><p><cite>boundary_check</cite> and <cite>padding_option</cite> must be empty.</p></li>
-</ul>
-</li>
-<li><p>If <cite>pointer</cite> is a block pointer defined by <cite>make_block_ptr</cite>, a
-tensor is loaded.  In this case:</p>
-<ul class="simple">
-<li><p><cite>mask</cite> and <cite>other</cite> must be <cite>None</cite>, and</p></li>
-<li><p><cite>boundary_check</cite> and <cite>padding_option</cite> can be specified to control the behavior of out-of-bound access.</p></li>
+<li><p><cite>other</cite> is implicitly typecast to <cite>pointer.dtype.element_ty</cite>.</p></li>
 </ul>
 </li>
 </ol>
@@ -174,11 +163,8 @@ tensor is loaded.  In this case:</p>
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>pointer</strong> (<cite>triton.PointerType</cite>, or block of <cite>dtype=triton.PointerType</cite>) – Pointer to the data to be loaded</p></li>
-<li><p><strong>mask</strong> (Block of <cite>triton.int1</cite>, optional) – if <cite>mask[idx]</cite> is false, do not load the data at address <cite>pointer[idx]</cite>
-(must be <cite>None</cite> with block pointers)</p></li>
+<li><p><strong>mask</strong> (Block of <cite>triton.int1</cite>, optional) – if <cite>mask[idx]</cite> is false, do not load the data at address <cite>pointer[idx]</cite></p></li>
 <li><p><strong>other</strong> (<em>Block</em><em>, </em><em>optional</em>) – if <cite>mask[idx]</cite> is false, return <cite>other[idx]</cite>. If <cite>other</cite> is <cite>None</cite>, the masked-out value is undefined.</p></li>
-<li><p><strong>boundary_check</strong> (<em>tuple</em><em> of </em><em>ints</em><em>, </em><em>optional</em>) – tuple of integers, indicating the dimensions which should do the boundary check</p></li>
-<li><p><strong>padding_option</strong> – should be one of {“”, “zero”, “nan”}, the padding value to use while out of bounds. “” means an undefined value.</p></li>
 <li><p><strong>cache_modifier</strong> (str, optional, should be one of {“”, “.ca”, “.cg”, “.cv”}, where “.ca” stands for
 cache at all levels, “.cg” stands for cache at global level (cache in L2 and below, not L1),
 and “.cv” means don’t cache and fetch again. see

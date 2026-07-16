@@ -141,29 +141,20 @@
 <h1>triton.experimental.gluon.language.store<a class="headerlink" href="#triton-experimental-gluon-language-store" title="Link to this heading"></a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.store">
-<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.</span></span><span class="sig-name descname"><span class="pre">store</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">boundary_check</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">()</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_modifier</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eviction_policy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.store" title="Link to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.</span></span><span class="sig-name descname"><span class="pre">store</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_modifier</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eviction_policy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.store" title="Link to this definition"></a></dt>
 <dd><p>Store a tensor of data into memory locations defined by <cite>pointer</cite>.</p>
 <blockquote>
 <div><ol class="arabic simple">
 <li><p>If <cite>pointer</cite> is a single element pointer, a scalar is stored.  In
 this case:</p>
 <ul class="simple">
-<li><p><cite>mask</cite> must also be scalar, and</p></li>
-<li><p><cite>boundary_check</cite> and <cite>padding_option</cite> must be empty.</p></li>
+<li><p><cite>mask</cite> must also be scalar.</p></li>
 </ul>
 </li>
 <li><p>If <cite>pointer</cite> is an N-dimensional tensor of pointers, an
 N-dimensional block is stored.  In this case:</p>
 <ul class="simple">
-<li><p><cite>mask</cite> is implicitly broadcast to <cite>pointer.shape</cite>, and</p></li>
-<li><p><cite>boundary_check</cite> must be empty.</p></li>
-</ul>
-</li>
-<li><p>If <cite>pointer</cite> is a block pointer defined by <cite>make_block_ptr</cite>, a block
-of data is stored.  In this case:</p>
-<ul class="simple">
-<li><p><cite>mask</cite> must be None, and</p></li>
-<li><p><cite>boundary_check</cite> can be specified to control the behavior of out-of-bound access.</p></li>
+<li><p><cite>mask</cite> is implicitly broadcast to <cite>pointer.shape</cite>.</p></li>
 </ul>
 </li>
 </ol>
@@ -175,7 +166,6 @@ of data is stored.  In this case:</p>
 <li><p><strong>pointer</strong> (<cite>triton.PointerType</cite>, or block of <cite>dtype=triton.PointerType</cite>) – The memory location where the elements of <cite>value</cite> are stored</p></li>
 <li><p><strong>value</strong> (<em>Block</em>) – The tensor of elements to be stored</p></li>
 <li><p><strong>mask</strong> (<em>Block</em><em> of </em><em>triton.int1</em><em>, </em><em>optional</em>) – If <cite>mask[idx]</cite> is false, do not store <cite>value[idx]</cite> at <cite>pointer[idx]</cite></p></li>
-<li><p><strong>boundary_check</strong> (<em>tuple</em><em> of </em><em>ints</em><em>, </em><em>optional</em>) – tuple of integers, indicating the dimensions which should do the boundary check</p></li>
 <li><p><strong>cache_modifier</strong> (str, optional, should be one of {“”, “.wb”, “.cg”, “.cs”, “.wt”}, where “.wb” stands for
 cache write-back all coherent levels, “.cg” stands for cache global, “.cs” stands for cache streaming, “.wt”
 stands for cache write-through, see <a class="reference external" href="https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#cache-operators">cache operator</a> for more details.) – changes cache option in NVIDIA PTX</p></li>
