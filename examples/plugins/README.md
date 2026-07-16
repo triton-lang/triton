@@ -335,3 +335,51 @@ if __name__ == '__main__':
     h = kernel2[grid](BLOCK_SIZE=1024)
     print(h.asm["ttgir"])
 ```
+
+## Example 5: Custom ops that accept arbitrary Python arguments
+
+The `AddOpCallback` registration only receives a fixed list of `mlir::Value`s.
+A plugin can instead set `OpInfo::addOpWithPyArg`, whose callback receives
+the raw CPython `PyObject *` for `args` / `kwargs`, so the op can take
+heterogeneous Python arguments (e.g. a `mode` string) in addition to value
+operands. The header `PluginUtils.h` only forward-declares `PyObject`, so the
+plugin translation unit is free to use `<Python.h>`, nanobind, or pybind11
+to unpack the arguments:
+
+``` c++
+// Using nanobind inside the .cpp (the header itself does not depend on it).
+static PyObject *addPyArgCustomOp(TritonOpBuilder &self, PyObject *argsObj,
+                                  PyObject *kwargsObj) {
+  py::args args = py::borrow<py::args>(argsObj);
+  py::kwargs kwargs = py::borrow<py::kwargs>(kwargsObj);
+
+  std::string mode = "add";
+  if (kwargs.contains("mode"))
+    mode = py::cast<std::string>(kwargs["mode"]);
+  Value acc = py::cast<Value>(args[0]);
+  for (size_t i = 1; i < args.size(); ++i) {
+    Value v = py::cast<Value>(args[i]);
+    acc = mode == "mul" ? self.create<arith::MulFOp>(acc, v)
+                        : self.create<arith::AddFOp>(acc, v);
+  }
+  // Return a new reference; libtriton.so wraps it with py::steal.
+  return py::cast(acc).release().ptr();
+}
+
+static plugin::OpInfo pyOp = {"py_custom_op", nullptr, addPyArgCustomOp};
+```
+
+Contract: the callback returns a `PyObject *` with a **new reference**;
+`libtriton.so` takes ownership via `py::steal(...)`. Returning `Py_None` is
+fine — wrap it the same way (`return py::none().release().ptr();`).
+
+It is then exposed to Python as `builder.create_py_custom_op(...)` and can be
+called with any positional/keyword arguments:
+
+``` python
+result = builder.create_py_custom_op(*handles, mode="mul")
+```
+
+See `examples/plugins/DialectPlugins/DialectPlugin` for the full plugin and
+`python/test/unit/plugins/py_arg_ops.py` for an end-to-end test. Either
+`addOp` or `addOpWithPyArg` should be set for a given op, not both.
