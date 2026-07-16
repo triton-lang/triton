@@ -262,6 +262,47 @@ def test_select_ids(tmp_path: pathlib.Path):
         assert sorted(warp_indices) == select_ids
 
 
+def test_no_scope_zero_scratch(tmp_path: pathlib.Path):
+    from contextlib import contextmanager
+
+    # A kernel with no `pl.scope` is instrumented but allocates no profile scratch
+    # (profile_scratch_size == 0), so the profiling allocator is never invoked and
+    # `self.buffer` is None. This used to raise ZeroDivisionError in
+    # `_populate_host_buffer`; make sure monitoring such a kernel no longer crashes.
+    mode = proton.mode.Default()
+
+    @contextmanager
+    def instrumentation(file_path):
+        proton.hooks.InstrumentationHook.enable_host_buffer = True
+        proton.start(str(file_path.with_suffix("")), backend="instrumentation", mode=mode)
+        try:
+            yield
+        finally:
+            proton.hooks.InstrumentationHook.enable_host_buffer = False
+            proton.finalize()
+
+    @triton.jit
+    def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        tl.store(output_ptr + offsets, x + y, mask=mask)
+
+    size = 256
+    x = torch.rand(size, device="cuda")
+    y = torch.rand(size, device="cuda")
+    output = torch.empty_like(x)
+    temp_file = tmp_path / "test_no_scope_zero_scratch.hatchet"
+
+    with instrumentation(temp_file):
+        # Previously raised ZeroDivisionError in _populate_host_buffer.
+        add_kernel[(1, 1, 1)](x, y, output, size, BLOCK_SIZE=1024, num_warps=4)
+        # Header is still built even though there is no profile-scratch payload.
+        assert proton.hooks.InstrumentationHook.host_buffer is not None
+
+
 @pytest.mark.parametrize("hook", ["triton", None])
 def test_tree(tmp_path: pathlib.Path, hook):
 
