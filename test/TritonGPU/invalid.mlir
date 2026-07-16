@@ -271,8 +271,8 @@ tt.func public @memdesc_reinterpret_changed_mutability(%arg0: !ttg.memdesc<8x16x
 
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
-tt.func public @memdesc_reinterpret_subview(%arg0: !ttg.memdesc<8x16xf16, #shared, #smem, 16x16>) {
-    // expected-error @+1 {{source and result must not be subviews}}
+tt.func public @memdesc_reinterpret_noncontiguous_subview(%arg0: !ttg.memdesc<8x16xf16, #shared, #smem, 16x16>) {
+    // expected-error @+1 {{source subview must be contiguous}}
     %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<8x16xf16, #shared, #smem, 16x16> -> !ttg.memdesc<8x16xf16, #shared, #smem>
     tt.return
 }
@@ -285,6 +285,26 @@ tt.func public @memdesc_reinterpret_subview(%arg0: !ttg.memdesc<8x16xf16, #share
 tt.func public @memdesc_reinterpret_multibuffer_subview(%arg0: !ttg.memdesc<3x8x32xf16, #shared_a, #smem, 8x8x32>) {
     // expected-error @+1 {{source and result must not be subviews}}
     %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<3x8x32xf16, #shared_a, #smem, 8x8x32> -> !ttg.memdesc<16x8x16xf16, #shared_b, #smem>
+    tt.return
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+tt.func public @memdesc_reinterpret_result_subview(%arg0: !ttg.memdesc<16x16xf16, #shared, #smem>) {
+    // expected-error @+1 {{result must not be a subview}}
+    %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<16x16xf16, #shared, #smem> -> !ttg.memdesc<8x16xf16, #shared, #smem, 16x16>
+    tt.return
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+tt.func public @memdesc_reinterpret_contiguous_subview_changed_storage_size(%arg0: !ttg.memdesc<8x16xf16, #shared, #smem, 16x16>) {
+    // expected-error @+1 {{result logical storage size must not exceed source logical storage size}}
+    %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<8x16xf16, #shared, #smem, 16x16> -> !ttg.memdesc<8x16xf32, #shared, #smem>
     tt.return
 }
 

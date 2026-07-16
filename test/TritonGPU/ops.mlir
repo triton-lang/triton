@@ -205,6 +205,15 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
     %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<32x2xi32, #shared2d, #smem, mutable> -> !ttg.memdesc<32x2xi16, #shared2d, #smem, mutable>
     tt.return
   }
+
+  // CHECK-LABEL: memdesc_reinterpret_contiguous_smem_subview
+  // CHECK: ttg.memdesc_subslice
+  // CHECK: ttg.memdesc_reinterpret
+  tt.func @memdesc_reinterpret_contiguous_smem_subview(%arg0 : !ttg.memdesc<16x16xf16, #shared2d, #smem, mutable>) {
+    %0 = ttg.memdesc_subslice %arg0 [8, 0] : !ttg.memdesc<16x16xf16, #shared2d, #smem, mutable> -> !ttg.memdesc<8x16xf16, #shared2d, #smem, mutable, 16x16>
+    %1 = ttg.memdesc_reinterpret %0 : !ttg.memdesc<8x16xf16, #shared2d, #smem, mutable, 16x16> -> !ttg.memdesc<8x8xf32, #shared2d, #smem, mutable>
+    tt.return
+  }
 }
 
 // -----
