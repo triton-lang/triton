@@ -97,6 +97,8 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
                            _semantic=None) -> tensor_descriptor:
     """Make a tensor descriptor object.
 
+    AMD GFX1250 TDM tensor descriptors only support zero padding.
+
     Args:
         base (tensor): base pointer of the tensor in global memory.
         shape (List[int]): shape of the tensor.
