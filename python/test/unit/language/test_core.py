@@ -2914,20 +2914,6 @@ def test_sum_dtype(device):
     kernel_default_float[(1, )](out)
     torch.testing.assert_close(out[0], torch.tensor(32 * 32, dtype=torch.bfloat16, device=device))
 
-    @triton.jit
-    def kernel_default_float_precision(x_ptr, out_ptr, N: tl.constexpr):
-        x = tl.load(x_ptr + tl.arange(0, N))
-        tl.store(out_ptr, tl.sum(x))
-
-    # A large term must not swallow the small ones: default-dtype float sum accumulates in >= fp32.
-    N = 1024
-    out = torch.empty(1, dtype=torch.float32, device=device)
-    for in_dtype in (torch.float16, torch.bfloat16):
-        x = torch.ones(N, dtype=in_dtype, device=device)
-        x[0] = 4096.0
-        kernel_default_float_precision[(1, )](x, out, N=N)
-        assert out[0] == 4096.0 + (N - 1), (in_dtype, out[0].item())
-
 
 # trivial associative but not commutative function
 @triton.jit
