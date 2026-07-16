@@ -84,10 +84,14 @@ Attribute cloneWithCGALayout(RankedTensorType tensorTy,
   return {};
 }
 
-// Rematerialize an exclusively-used producer slice in the requested CTA
-// layout. Loads are replaced, never duplicated: if any value in the old slice
-// has a user outside the slice and the specific consumer operand being
-// rewritten, the rewrite is rejected.
+// Rematerialize a dot/reduce operand's producer slice in the requested CGA
+// layout. First, trace the slice back to its load leaves, rejecting block
+// arguments, multi-result operations, and operations with regions. Then verify
+// that no value in the slice is used outside the slice, except by the consumer
+// operand being rewritten. The slice can then be cloned with the new layout;
+// tensor operands of each new load are converted to that layout. Finally,
+// replace the consumer operand and erase the original slice. Thus loads are
+// replaced, never duplicated.
 class CGARematerialization {
 public:
   CGARematerialization(OpOperand &root, Attribute desiredEncoding)
