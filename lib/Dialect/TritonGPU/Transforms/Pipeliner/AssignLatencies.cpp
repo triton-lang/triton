@@ -107,8 +107,9 @@ public:
         return false;
       }
     }
-    if (isa<tt::DescriptorLoadLikeOpInterface>(op)) {
-      if (!canPipelineTMALoad(op)) {
+    if (auto loadOp = dyn_cast<tt::DescriptorLoadLikeOpInterface>(op)) {
+      auto descTy = cast<tt::TensorDescType>(loadOp.getDesc().getType());
+      if (descTy.getSharedLayout() && !canPipelineTMALoad(op)) {
         LDBG("TMA load " << *op
                          << " has a per-stage allocation that is not aligned "
                             "for pipelining");
