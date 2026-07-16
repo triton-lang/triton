@@ -912,13 +912,14 @@ Value fpsanSin(PatternRewriter &rewriter, Location loc, Value input) {
   return unembedToFloat(rewriter, loc, cosSin.sin, input.getType());
 }
 
-bool hasNumericOperands(ValueRange operands) {
-  return llvm::all_of(
-      operands, [](Value operand) { return isNumericLike(operand.getType()); });
+bool externHasNumericOperands(tt::ExternElementwiseOp op) {
+  return llvm::all_of(op.getOperands(), [](Value operand) {
+    return isNumericLike(operand.getType());
+  });
 }
 
-Value castOperandToResultInt(PatternRewriter &rewriter, Location loc,
-                             Value operand, Type resultIntTy) {
+Value castExternOperandToResultInt(PatternRewriter &rewriter, Location loc,
+                                   Value operand, Type resultIntTy) {
   if (isFloatLike(operand.getType())) {
     return castSignedIntValueToType(
         rewriter, loc, embedToInt(rewriter, loc, operand), resultIntTy);
@@ -947,14 +948,15 @@ Value rotateLeftIntByAmount(PatternRewriter &rewriter, Location loc,
   return arith::OrIOp::create(rewriter, loc, left, right);
 }
 
-Value fpsanVariadicTagged(PatternRewriter &rewriter, Location loc,
-                          ValueRange operands, Type resultTy, uint64_t hash) {
+Value fpsanVariadicExternTagged(PatternRewriter &rewriter, Location loc,
+                                tt::ExternElementwiseOp op, uint64_t hash) {
+  Type resultTy = op.getType();
   Type resultIntTy = getIntTypeLike(resultTy);
 
   Value sumI = getIntConstantLike(rewriter, loc, resultIntTy, 0);
-  for (auto [argIdx, operand] : llvm::enumerate(operands)) {
+  for (auto [argIdx, operand] : llvm::enumerate(op.getOperands())) {
     Value operandI =
-        castOperandToResultInt(rewriter, loc, operand, resultIntTy);
+        castExternOperandToResultInt(rewriter, loc, operand, resultIntTy);
     if (!operandI)
       return Value();
     Value rotated = rotateLeftIntByAmount(rewriter, loc, operandI,
@@ -3112,7 +3114,7 @@ struct ExternElementwisePattern
   LogicalResult matchAndRewrite(tt::ExternElementwiseOp op,
                                 PatternRewriter &rewriter) const override {
     if (!op.getPure() || !isFloatLike(op.getType()) ||
-        op.getNumOperands() == 0 || !hasNumericOperands(op.getOperands()))
+        op.getNumOperands() == 0 || !externHasNumericOperands(op))
       return failure();
 
     Value result;
@@ -3122,37 +3124,11 @@ struct ExternElementwisePattern
       result = (*transform)(rewriter, op);
     if (!result) {
       uint64_t hash = stableStringHash(op.getSymbol());
-      result = fpsanVariadicTagged(rewriter, op.getLoc(), op.getOperands(),
-                                   op.getType(), hash);
+      result = fpsanVariadicExternTagged(rewriter, op.getLoc(), op, hash);
     }
     if (!result)
       return emitFpSanCodegenError(op.getOperation());
     rewriter.replaceOp(op, result);
-    return success();
-  }
-};
-
-struct ElementwiseInlineAsmPattern
-    : public OpRewritePattern<tt::ElementwiseInlineAsmOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(tt::ElementwiseInlineAsmOp op,
-                                PatternRewriter &rewriter) const override {
-    if (!op.getPure() || op.getNumOperands() == 0 || op.getNumResults() == 0 ||
-        !hasNumericOperands(op.getOperands()) ||
-        !llvm::all_of(op.getResultTypes(), isFloatLike))
-      return failure();
-
-    uint64_t hash = stableStringHash(op.getAsmString());
-    SmallVector<Value> results;
-    for (auto [resultIdx, resultTy] : llvm::enumerate(op.getResultTypes())) {
-      Value result = fpsanVariadicTagged(
-          rewriter, op.getLoc(), op.getOperands(), resultTy, hash ^ resultIdx);
-      if (!result)
-        return emitFpSanCodegenError(op.getOperation());
-      results.push_back(result);
-    }
-    rewriter.replaceOp(op, results);
     return success();
   }
 };
@@ -3199,8 +3175,7 @@ public:
     patterns.add<UnaryPattern<math::CeilOp>>(&getContext(), UnaryOpId::Ceil);
     patterns.add<UnaryPattern<tt::PreciseSqrtOp>>(&getContext(),
                                                   UnaryOpId::PreciseSqrt);
-    patterns.add<ExternElementwisePattern, ElementwiseInlineAsmPattern>(
-        &getContext());
+    patterns.add<ExternElementwisePattern>(&getContext());
     patterns.add<TMEMLoadPattern, TMEMStorePattern, TMEMCopyPattern,
                  TCGen5MMAPattern, TCGen5MMAScaledPattern>(&getContext(),
                                                            &scratch);
