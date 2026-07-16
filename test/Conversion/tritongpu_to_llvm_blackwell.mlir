@@ -490,7 +490,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 2 : i32, "ttg.thr
 
 // CHECK-LABEL: @tmem_copy_2d_2cta
 tt.func public @tmem_copy_2d_2cta(%src: !ttg.memdesc<128x32xi8, #shared, #ttg.shared_memory>,
-                             %dst: !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>) {
+                             %dst: !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>,
+                             %barrier: !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory>, %phase: i32, %pred: i1) {
   // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK: [[IS_WARP_0:%.*]] = llvm.icmp "eq" {{.*}}, [[ZERO]] : i32
   // CHECK: [[ELECT:%.*]] = nvvm.elect.sync
@@ -502,6 +503,12 @@ tt.func public @tmem_copy_2d_2cta(%src: !ttg.memdesc<128x32xi8, #shared, #ttg.sh
   // CHECK-COUNT-8: tcgen05.cp.cta_group::2.warpx4.32x128b
   // CHECK-NOT: tcgen05.commit
   ttng.tmem_copy %src, %dst : !ttg.memdesc<128x32xi8, #shared, #ttg.shared_memory>, !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+  // CHECK: mbarrier.arrive.expect_tx.release.cluster.shared::cluster.b64
+  ttng.barrier_expect %barrier, 16, %pred : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory>
+  // CHECK: mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64
+  ttng.wait_barrier %barrier, %phase : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory>
+  // CHECK: mbarrier.arrive.release.cluster.shared::cluster.b64
+  ttng.arrive_barrier %barrier, 1 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory>
   tt.return
   }
 }

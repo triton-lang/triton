@@ -19,15 +19,11 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
-namespace {
-
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
+static bool hasClusterSync(Operation *op) {
   if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op)) {
-    if (!isRead)
-      return false;
     auto srcTy = cvt.getSrc().getType();
     auto dstTy = cvt.getType();
     auto kBlock = StringAttr::get(op->getContext(), "block");
@@ -35,8 +31,6 @@ static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
                          kBlock);
   }
   if (auto reduce = dyn_cast<triton::ReduceOp>(op)) {
-    if (!isRead)
-      return false;
     auto srcTy = reduce.getInputTypes()[0];
     auto splitNum = ttg::getCTASplitNum(srcTy.getEncoding());
     return splitNum[reduce.getAxis()] > 1;
@@ -52,6 +46,16 @@ static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   }
   return false;
 }
+
+bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
+  if (!isRead && isa<ttg::ConvertLayoutOp, triton::ReduceOp>(op))
+    return false;
+  if (isa<ttng::CLCTryCancelOp>(op))
+    return ttg::lookupNumCTAs(op) > 1;
+  return hasClusterSync(op);
+}
+
+namespace {
 
 static bool isPreAllocAliasSliceFilter(const AllocationSlice &lhsSlice,
                                        const AllocationSlice &rhsSlice,
@@ -409,8 +413,7 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
 
     // Clear prior distributed dependencies if we have inserted a cluster
     // barrier, or if the scratch op itself performs a cluster-level sync.
-    bool hasClusterSync = isDistributedMultiCTAOp(op, /*isRead=*/true);
-    if (insertClusterBarrierNeeded || hasClusterSync)
+    if (insertClusterBarrierNeeded || hasClusterSync(op))
       blockInfo->sync();
 
     curBlockInfo.syncReadSlices[scratchSlice].insert(op);

@@ -191,7 +191,11 @@ struct InvalBarrierOpConversion
 
 struct BarrierExpectConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::BarrierExpectOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  bool isCrossCluster;
+  BarrierExpectConversion(LLVMTypeConverter &typeConverter,
+                          PatternBenefit benefit, bool isCrossCluster)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        isCrossCluster(isCrossCluster) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::BarrierExpectOp op, OpAdaptor adaptor,
@@ -211,14 +215,17 @@ struct BarrierExpectConversion
     Value id = getThreadId(rewriter, loc);
     Value pred = b.icmp_eq(id, b.i32_val(0));
     pred = b.and_(pred, adaptor.getPred());
-    bool crossCluster = LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
+    bool isCrossClusterBarrier =
+        LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
     Value leaderBarrierPtr = LLVM::NVIDIA::getLeaderAddress(
         loc, rewriter, smemObj.getBase(), barrierTy);
 
     ::mlir::triton::PTXBuilder expectPtxBuilder;
     const std::string expectPtx =
         "@$0 mbarrier.arrive.expect_tx." +
-        std::string(crossCluster ? "shared::cluster" : "shared::cta") +
+        std::string(isCrossCluster || isCrossClusterBarrier ? "release.cluster."
+                                                            : "") +
+        std::string(isCrossClusterBarrier ? "shared::cluster" : "shared::cta") +
         ".b64 _, [$1], " + std::to_string(op.getSize()) + ";";
     auto &expectOp = *expectPtxBuilder.create(expectPtx);
     expectOp({expectPtxBuilder.newOperand(pred, "b"),
@@ -235,11 +242,12 @@ struct BarrierExpectConversion
 struct WaitBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::WaitBarrierOp> {
   const NVIDIA::TargetInfo *targetInfo;
+  bool isCrossCluster;
   WaitBarrierOpConversion(LLVMTypeConverter &typeConverter,
                           PatternBenefit benefit,
-                          NVIDIA::TargetInfo &targetInfo)
-      : ConvertOpToLLVMPattern(typeConverter, benefit),
-        targetInfo(&targetInfo) {}
+                          NVIDIA::TargetInfo &targetInfo, bool isCrossCluster)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(&targetInfo),
+        isCrossCluster(isCrossCluster) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::WaitBarrierOp op, OpAdaptor adaptor,
@@ -256,6 +264,10 @@ struct WaitBarrierOpConversion
             LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
       pred = b.and_(pred, *leaderPred);
 
+    bool isCrossClusterBarrier =
+        LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
+    std::string acquire =
+        isCrossCluster || isCrossClusterBarrier ? ".acquire.cluster" : "";
     bool predicated = pred && !matchPattern(pred, m_NonZero());
     std::string ptx;
     if (targetInfo->getComputeCapability() < 90) {
@@ -264,7 +276,8 @@ struct WaitBarrierOpConversion
 {
 	.reg .pred complete;
 	waitLoop:
-	mbarrier.test_wait.parity.shared::cta.b64 complete, [$0], $1;
+	mbarrier.test_wait.parity)" +
+              acquire + R"(.shared::cta.b64 complete, [$0], $1;
 	@!complete nanosleep.u32 20;
 	@!complete bra.uni waitLoop;
 }
@@ -275,7 +288,8 @@ struct WaitBarrierOpConversion
 	@!$2 bra.uni skipWait;
 	.reg .pred complete;
 	waitLoop:
-	mbarrier.test_wait.parity.shared::cta.b64 complete, [$0], $1;
+	mbarrier.test_wait.parity)" +
+              acquire + R"(.shared::cta.b64 complete, [$0], $1;
 	@!complete nanosleep.u32 20;
 	@!complete bra.uni waitLoop;
 	skipWait:
@@ -288,7 +302,8 @@ struct WaitBarrierOpConversion
 {
 	.reg .pred complete;
 	waitLoop:
-	mbarrier.try_wait.parity.shared::cta.b64 complete, [$0], $1;
+	mbarrier.try_wait.parity)" +
+              acquire + R"(.shared::cta.b64 complete, [$0], $1;
 	@!complete bra.uni waitLoop;
 }
 )";
@@ -298,7 +313,8 @@ struct WaitBarrierOpConversion
 	@!$2 bra.uni skipWait;
 	.reg .pred complete;
 	waitLoop:
-	mbarrier.try_wait.parity.shared::cta.b64 complete, [$0], $1;
+	mbarrier.try_wait.parity)" +
+              acquire + R"(.shared::cta.b64 complete, [$0], $1;
 	@!complete bra.uni waitLoop;
 	skipWait:
 }
@@ -322,7 +338,11 @@ struct WaitBarrierOpConversion
 
 struct ArriveBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::ArriveBarrierOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  bool isCrossCluster;
+  ArriveBarrierOpConversion(LLVMTypeConverter &typeConverter,
+                            PatternBenefit benefit, bool isCrossCluster)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        isCrossCluster(isCrossCluster) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::ArriveBarrierOp op, OpAdaptor adaptor,
@@ -346,14 +366,17 @@ struct ArriveBarrierOpConversion
     if (op.getPred())
       pred = b.and_(pred, adaptor.getPred());
 
-    bool isCrossCluster = LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
+    bool isCrossClusterBarrier =
+        LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
 
     Value barrierPtr = LLVM::NVIDIA::getLeaderAddress(
         loc, rewriter, smemObj.getBase(), barrierTy);
     // TODO: Add phase result as needed.
     std::stringstream ptxAsm;
     ptxAsm << "@$0 mbarrier.arrive."
-           << (isCrossCluster ? "shared::cluster" : "shared::cta")
+           << (isCrossCluster || isCrossClusterBarrier ? "release.cluster."
+                                                       : "")
+           << (isCrossClusterBarrier ? "shared::cluster" : "shared::cta")
            << ".b64 _, [$1]";
     if (op.getCount() > 1) {
       ptxAsm << ", " << op.getCount();
@@ -548,15 +571,18 @@ struct CLCGetProgramIdOpConversion
 
 void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit, NVIDIA::TargetInfo &targetInfo) {
+    PatternBenefit benefit, NVIDIA::TargetInfo &targetInfo,
+    bool isCrossCluster) {
   patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
   patterns.add<FenceMBarrierInitReleaseClusterOpConversion>(typeConverter,
                                                             benefit);
   patterns.add<InitBarrierOpConversion, InvalBarrierOpConversion>(
       typeConverter, benefit, targetInfo);
-  patterns.add<WaitBarrierOpConversion>(typeConverter, benefit, targetInfo);
-  patterns.add<BarrierExpectConversion>(typeConverter, benefit);
-  patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<WaitBarrierOpConversion>(typeConverter, benefit, targetInfo,
+                                        isCrossCluster);
+  patterns.add<BarrierExpectConversion>(typeConverter, benefit, isCrossCluster);
+  patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit,
+                                          isCrossCluster);
   patterns.add<CLCTryCancelOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<CLCLoadResultOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<CLCIsCanceledOpConversion>(typeConverter, benefit, targetInfo);
