@@ -71,17 +71,17 @@ bool dotSupportsAccInitFlag(Operation *op) {
 
 // Return true if the allocation's initial contents reach the MMA unchanged.
 // Any intervening write invalidates useD=false.
-bool accumulatorInitReachesMMA(triton::nvidia_gpu::MMAv5OpInterface mma,
-                               triton::nvidia_gpu::TMEMAllocOp alloc) {
+bool accumulatorInitReachesMMA(triton::nvidia_gpu::MMAv5OpInterface mma) {
+  auto alloc = mma.getAccumulator()
+                   .getDefiningOp<triton::nvidia_gpu::TMEMAllocOp>();
+  if (!alloc)
+    return false;
   Value token = mma.getAccDep();
   Value allocToken = alloc.getToken();
   if (!token || !allocToken)
     return false;
 
-  DenseSet<Value> seen;
   while (token != allocToken) {
-    if (!seen.insert(token).second)
-      return false;
     // TMEM loads advance the token without modifying the accumulator.
     auto load = token.getDefiningOp<triton::nvidia_gpu::TMEMLoadOp>();
     if (!load || token != load.getToken() ||
@@ -103,8 +103,7 @@ std::pair<Value, Operation *> getAccumulatorUseAndDef(Operation *op) {
     auto accVal = tc05MmaOp.getAccumulator();
     auto tmemAlloc = accVal.getDefiningOp<triton::nvidia_gpu::TMEMAllocOp>();
     if (!tmemAlloc ||
-        tmemAlloc->getParentRegion() != tc05MmaOp->getParentRegion() ||
-        !accumulatorInitReachesMMA(tc05MmaOp, tmemAlloc))
+        tmemAlloc->getParentRegion() != tc05MmaOp->getParentRegion())
       return std::make_pair(nullptr, nullptr);
     triton::nvidia_gpu::TMEMLoadOp tmemLoad = nullptr;
     for (auto user : tmemAlloc.getResult().getUsers()) {
@@ -232,6 +231,11 @@ public:
       // Find the accumulator
       auto [accUse, accDef] = getAccumulatorUseAndDef(mmaOp);
       if (!accUse || !accDef) {
+        continue;
+      }
+      if (auto tc05MmaOp =
+              dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(mmaOp);
+          tc05MmaOp && !accumulatorInitReachesMMA(tc05MmaOp)) {
         continue;
       }
       if (isConstantZeroTensor(accUse)) {
