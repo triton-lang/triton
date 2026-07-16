@@ -550,8 +550,7 @@ struct AtomicCASOpConversion
     auto valElements = unpackUniqueTensorElements(loc, llVal, rewriter);
     SmallVector<Value> maskElements;
     if (llMask)
-      maskElements =
-          unpackTensorElements(loc, llMask, rewriter);
+      maskElements = unpackTensorElements(loc, llMask, rewriter);
 
     auto valueTy = op.getType();
     auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
