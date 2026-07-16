@@ -263,6 +263,14 @@ def test_prune_configs_fractional_top_k_keeps_one(device: str):
     torch.testing.assert_close(src, dst)
 
 
+def test_config_ir_override_changes_disk_cache_key():
+    # Autotuner derives persisted result-cache keys from Config.__str__().
+    first = triton.Config(kwargs={"BLOCK_SIZE": 32}, ir_override="first.ttir")
+    second = triton.Config(kwargs={"BLOCK_SIZE": 32}, ir_override="second.ttir")
+
+    assert str(first) != str(second)
+
+
 @pytest.mark.parametrize("prune_kind", ["early_config_prune", "perf_model"])
 def test_pruned_single_config_skips_benchmark(prune_kind: str, device: str, fresh_knobs):
     N = 1024
