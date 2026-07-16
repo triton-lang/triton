@@ -94,8 +94,8 @@ public:
       : root(root), desiredEncoding(desiredEncoding) {}
 
   LogicalResult run() {
-    if (failed(plan(root.get(), desiredEncoding)) || !foundLoad ||
-        !hasExclusiveUses())
+    if (failed(plan(root.get(), desiredEncoding)) ||
+        !foundLoadWithDifferentCGALayout || !hasExclusiveUses())
       return failure();
 
     root.set(rewrite(root.get()));
@@ -113,8 +113,6 @@ private:
       auto [value, encoding] = queue.front();
       queue.pop_front();
       auto tensorTy = cast<RankedTensorType>(value.getType());
-      if (tensorTy.getEncoding() == encoding)
-        continue;
 
       auto [it, inserted] = layouts.try_emplace(value, encoding);
       if (!inserted) {
@@ -135,11 +133,15 @@ private:
       if (auto load = dyn_cast<triton::LoadOp>(op)) {
         if (load.getIsVolatile())
           return failure();
-        foundLoad = true;
+        foundLoadWithDifferentCGALayout |=
+            ttg::getCGALayout(tensorTy.getEncoding()) !=
+            ttg::getCGALayout(encoding);
         continue;
       }
       if (isa<triton::DescriptorLoadLikeOpInterface>(op)) {
-        foundLoad = true;
+        foundLoadWithDifferentCGALayout |=
+            ttg::getCGALayout(tensorTy.getEncoding()) !=
+            ttg::getCGALayout(encoding);
         continue;
       }
 
@@ -225,7 +227,7 @@ private:
   DenseMap<Value, Attribute> layouts;
   DenseMap<Value, Value> rewritten;
   SmallVector<Operation *> originalOps;
-  bool foundLoad = false;
+  bool foundLoadWithDifferentCGALayout = false;
 };
 
 Value convertValueToLayout(OpBuilder &builder, Location loc, Value value,
@@ -246,13 +248,15 @@ void convertOpOperandsToLayouts(Operation *op,
        llvm::zip(op->getOpOperands(), operandLayouts)) {
     Value value = operand.get();
     auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
-    if (!tensorTy || tensorTy.getEncoding() == layout)
+    if (!tensorTy)
       continue;
 
     // Probe the original producer slice before materializing a conversion.
     // Planning is side-effect free, so a failed rematerialization can cleanly
     // fall back to the ordinary layout conversion.
     if (succeeded(CGARematerialization(operand, layout).run()))
+      continue;
+    if (tensorTy.getEncoding() == layout)
       continue;
     operand.set(convertValueToLayout(builder, loc, value, layout));
   }
