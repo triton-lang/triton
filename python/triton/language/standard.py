@@ -571,8 +571,10 @@ def squeeze(x, dim: core.constexpr):
     :param dim: the index of the dimension to remove
     :type dim: int
     """
-    core.static_assert(x.shape[dim] == 1)
-    return x.reshape(x.shape[:dim] + x.shape[dim + 1:])
+    core.static_assert(-len(x.shape) <= dim and dim < len(x.shape))
+    _dim: core.constexpr = dim + len(x.shape) if dim < 0 else dim
+    core.static_assert(x.shape[_dim] == 1)
+    return x.reshape(x.shape[:_dim] + x.shape[_dim + 1:])
 
 
 @jit
@@ -587,4 +589,7 @@ def unsqueeze(x, dim: core.constexpr):
     :param dim: the index at which the new dimension is inserted
     :type dim: int
     """
-    return x.reshape(x.shape[:dim] + (1, ) + x.shape[dim:])
+    ndim: core.constexpr = len(x.shape) + 1
+    core.static_assert(-ndim <= dim and dim < ndim)
+    _dim: core.constexpr = dim + ndim if dim < 0 else dim
+    return x.reshape(x.shape[:_dim] + (1, ) + x.shape[_dim:])
