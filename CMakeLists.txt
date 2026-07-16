@@ -295,6 +295,21 @@ include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
 include_directories(${PROJECT_SOURCE_DIR}/third_party)
 include_directories(${PROJECT_BINARY_DIR}/third_party) # Tablegen'd files
 
+if(TRITON_BUILD_PYTHON_MODULE)
+  find_package(Python3 REQUIRED COMPONENTS Development.Module Interpreter)
+  if(NOT TARGET Python::Module)
+    add_library(Python::Module ALIAS Python3::Module)
+    set(Python_EXECUTABLE "${Python3_EXECUTABLE}")
+    set(Python_INCLUDE_DIRS "${Python3_INCLUDE_DIRS}")
+    set(Python_SOABI "${Python3_SOABI}")
+    set(Python_VERSION "${Python3_VERSION}")
+    set(Python_INTERPRETER_ID "${Python3_INTERPRETER_ID}")
+  endif()
+  find_package(nanobind CONFIG REQUIRED HINTS "${Python3_SITELIB}")
+  nanobind_build_library(nanobind-static)
+  target_link_libraries(nanobind-static PRIVATE Python3::Module)
+endif()
+
 add_subdirectory(include)
 add_subdirectory(lib)
 
@@ -313,24 +328,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
   message(STATUS "Adding Python module")
   set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
   include_directories(${PYTHON_SRC_PATH})
-
-  # Python Interpreter is used to run lit tests
-  find_package(Python3 REQUIRED COMPONENTS Development.Module Interpreter)
-  # nanobind expects find_package(Python) which sets Python::Module target
-  # and Python_* variables. Triton uses find_package(Python3) instead.
-  # Bridge the two by aliasing the target and forwarding variables.
-  if(NOT TARGET Python::Module)
-    add_library(Python::Module ALIAS Python3::Module)
-    set(Python_EXECUTABLE "${Python3_EXECUTABLE}")
-    set(Python_INCLUDE_DIRS "${Python3_INCLUDE_DIRS}")
-    set(Python_SOABI "${Python3_SOABI}")
-    set(Python_VERSION "${Python3_VERSION}")
-    set(Python_INTERPRETER_ID "${Python3_INTERPRETER_ID}")
-  endif()
-
-  find_package(nanobind CONFIG REQUIRED HINTS "${Python3_SITELIB}")
-  nanobind_build_library(nanobind-static)
-  target_link_libraries(nanobind-static PRIVATE Python3::Module)
 
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
     add_subdirectory(third_party/${CODEGEN_BACKEND})

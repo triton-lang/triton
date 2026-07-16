@@ -26,8 +26,13 @@ add_mlir_dialect_library(MLIRDialectPlugin
         )
 
 target_compile_options(MLIRDialectPlugin PRIVATE -fvisibility=hidden)
+set_source_files_properties(DialectPluginDialect.cpp PROPERTIES COMPILE_OPTIONS "-frtti;-fexceptions")
 if(DEFINED CMAKE_LIBRARY_OUTPUT_DIRECTORY)
     set_target_properties(MLIRDialectPlugin PROPERTIES
                           LIBRARY_OUTPUT_DIRECTORY
                           "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/../plugins")
 endif(DEFINED CMAKE_LIBRARY_OUTPUT_DIRECTORY)
+
+if(TRITON_BUILD_PYTHON_MODULE)
+  target_link_libraries(MLIRDialectPlugin PRIVATE nanobind-static)
+endif()
