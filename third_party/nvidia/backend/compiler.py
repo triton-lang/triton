@@ -330,7 +330,7 @@ class CUDABackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         if "fpsan" in opt.instrumentation_mode:
             passes.ttgpuir.add_fp_sanitizer(pm)
-            passes.ttgpuir.add_remove_layout_conversions(pm)
+            passes.ttgpuir.add_remove_layout_conversions(pm, True)
             passes.common.add_canonicalizer(pm)
             passes.common.add_cse(pm)
 
@@ -356,7 +356,7 @@ class CUDABackend(BaseBackend):
         if "fpsan" in options.instrumentation_mode:
             passes.ttgpuir.add_fp_sanitizer(pm)
         if any(mode in options.instrumentation_mode for mode in ["consan", "fpsan"]):
-            passes.ttgpuir.add_remove_layout_conversions(pm)
+            passes.ttgpuir.add_remove_layout_conversions(pm, True)
             passes.common.add_canonicalizer(pm)
             passes.common.add_cse(pm)
 
