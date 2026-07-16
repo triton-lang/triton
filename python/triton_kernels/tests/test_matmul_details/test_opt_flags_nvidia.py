@@ -26,16 +26,21 @@ def _make_blackwell_act_scale_tensor():
     return Tensor(scale_storage, dtype=UINT8)
 
 
-def _make_blackwell_nvfp4_precision_config():
+def _make_strided_act_scale_tensor():
+    scale_storage = Storage(torch.empty((128, 16), dtype=torch.float8_e4m3fn), layout.StridedLayout(-1))
+    return Tensor(scale_storage, dtype=UINT8)
+
+
+def _make_blackwell_nvfp4_precision_config(*, swizzle_a_scale=True):
     return PrecisionConfig(
-        a_mx_scale=_make_blackwell_act_scale_tensor(),
+        a_mx_scale=_make_blackwell_act_scale_tensor() if swizzle_a_scale else _make_strided_act_scale_tensor(),
         a_microblock_size=NVFP_BLOCK_SIZE.value,
         b_mx_scale=_make_blackwell_scale_tensor(),
         b_microblock_size=NVFP_BLOCK_SIZE.value,
     )
 
 
-def _make_default_blackwell_nvfp4_flags(monkeypatch, m, n, k, constraints=None):
+def _make_default_blackwell_nvfp4_flags(monkeypatch, m, n, k, constraints=None, *, swizzle_a_scale=True):
     from types import SimpleNamespace
 
     from triton_kernels.matmul_details import opt_flags
@@ -56,7 +61,7 @@ def _make_default_blackwell_nvfp4_flags(monkeypatch, m, n, k, constraints=None):
         BF16,
         FP4,
         FP4,
-        _make_blackwell_nvfp4_precision_config(),
+        _make_blackwell_nvfp4_precision_config(swizzle_a_scale=swizzle_a_scale),
         1,
         m,
         n,
@@ -236,8 +241,68 @@ def test_blackwell_nvfp4_x_nvfp4_uses_smaller_n_tile_for_small_shapes(monkeypatc
     assert flags.is_persistent
     assert (flags.block_m, flags.block_n, flags.block_k) == (128, 128, 256)
     assert flags.num_warps == 8
+    assert flags.num_stages == 4
+    assert flags.epilogue_subtile == 1
+
+
+def test_blackwell_nvfp4_x_nvfp4_uses_low_k_epilogue_subtile(monkeypatch):
+    flags = _make_default_blackwell_nvfp4_flags(monkeypatch, 8192, 2048, 2048)
+
+    assert flags.is_persistent
+    assert (flags.block_m, flags.block_n, flags.block_k) == (128, 128, 256)
+    assert flags.num_warps == 8
+    assert flags.num_stages == 4
+    assert flags.epilogue_subtile == 1
+
+
+def test_blackwell_nvfp4_x_nvfp4_handles_strided_a_scales(monkeypatch):
+    flags = _make_default_blackwell_nvfp4_flags(monkeypatch, 8192, 2048, 2048, swizzle_a_scale=False)
+
+    assert flags.is_persistent
+    assert (flags.block_m, flags.block_n, flags.block_k) == (128, 256, 256)
+    assert flags.num_warps == 8
     assert flags.num_stages == 3
-    assert flags.epilogue_subtile == 4
+    assert flags.epilogue_subtile == 1
+
+
+def test_blackwell_nvfp4_x_nvfp4_uses_smaller_m_tile_for_small_strided_a_scales(monkeypatch):
+    flags = _make_default_blackwell_nvfp4_flags(monkeypatch, 1024, 1024, 1024, swizzle_a_scale=False)
+
+    assert flags.is_persistent
+    assert (flags.block_m, flags.block_n, flags.block_k) == (64, 128, 256)
+    assert flags.num_warps == 8
+    assert flags.num_stages == 4
+    assert flags.epilogue_subtile == 1
+
+
+def test_blackwell_nvfp4_x_nvfp4_uses_four_warps_for_mid_small_mn(monkeypatch):
+    flags = _make_default_blackwell_nvfp4_flags(monkeypatch, 2048, 2048, 8192)
+
+    assert flags.is_persistent
+    assert (flags.block_m, flags.block_n, flags.block_k) == (128, 256, 256)
+    assert flags.num_warps == 4
+    assert flags.num_stages == 3
+    assert flags.epilogue_subtile == 2
+
+
+def test_blackwell_nvfp4_x_nvfp4_keeps_large_tile_for_medium_low_k_strided_a_scales(monkeypatch):
+    flags = _make_default_blackwell_nvfp4_flags(monkeypatch, 4096, 1024, 4096, swizzle_a_scale=False)
+
+    assert flags.is_persistent
+    assert (flags.block_m, flags.block_n, flags.block_k) == (128, 256, 256)
+    assert flags.num_warps == 8
+    assert flags.num_stages == 3
+    assert flags.epilogue_subtile == 1
+
+
+def test_blackwell_nvfp4_x_nvfp4_uses_smaller_tile_for_strided_a_small_mn(monkeypatch):
+    flags = _make_default_blackwell_nvfp4_flags(monkeypatch, 2048, 512, 8192, swizzle_a_scale=False)
+
+    assert flags.is_persistent
+    assert (flags.block_m, flags.block_n, flags.block_k) == (64, 128, 256)
+    assert flags.num_warps == 8
+    assert flags.num_stages == 3
+    assert flags.epilogue_subtile == 1
 
 
 def test_matmul_blackwell_scale_small_n(device):
