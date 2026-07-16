@@ -269,6 +269,7 @@ def make_default_opt_flags_nvidia(
     supports_persistent = can_use_persistent_tma and (arch is None or int(arch[2:-1]) >= 9)
     a_mx_scale_layout = None if not isinstance(precision_config.a_mx_scale, Tensor) else precision_config.a_mx_scale.storage.layout
     b_mx_scale_layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
+    is_blackwell_nvfp4_x_nvfp4 = opt_flags_nvidia.is_blackwell_nvfp4_x_nvfp4(precision_config, lhs_dtype, rhs_dtype)
 
     def _is_layout_strided(layout: Layout | None) -> bool:
         return layout is None or isinstance(layout, StridedLayout)
@@ -306,15 +307,22 @@ def make_default_opt_flags_nvidia(
         # expanded operand in TMEM, so keep the accumulator tile below the
         # 512-column budget.
         block_n = min(block_n, 128)
+    if (is_persistent and constraints.get("block_n", None) is None and is_blackwell_nvfp4_x_nvfp4
+            and m is not None and m <= 4096 and n <= 1024 and k is not None and k <= 4096):
+        block_n = min(block_n, 128)
     # adjust block_m based on is_persistent signal
     if is_persistent and opt_flags_nvidia.is_x_scale_swizzled(precision_config):
         # a mx scale has been swizzled to BlackwellActMXScaleLayout, enforce block_m=128 to align with swizzling layout
+        block_m = 128
+    if is_persistent and is_blackwell_nvfp4_x_nvfp4 and constraints.get("block_m", None) is None:
         block_m = 128
     # block k
     if constraints.get("block_k", None) is not None:
         block_k = constraints["block_k"]
     else:
         block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in)
+        if is_persistent and is_blackwell_nvfp4_x_nvfp4 and (k is None or k >= 256):
+            block_k = max(block_k, 256)
     if block_n == 256 and block_k == 128 and block_m <= 64 and is_persistent and rhs_dtype == FP4 and k >= 4096 and slice_size > 1 and lhs_dtype != torch.bfloat16 and not constraints.get("disable_mx4_block_swap", False):
         # Swap block_n and block_k for mxfp4 weights so that block_k is a full cacheline, so long as K is sufficiently large.
         # TODO: swizzle the HBM layout of the weights instead
@@ -349,6 +357,9 @@ def make_default_opt_flags_nvidia(
     )
 
     num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config, constraints)
+    if (constraints.get("num_warps", None) is None and is_persistent and is_blackwell_nvfp4_x_nvfp4
+            and block_m >= 128 and block_n >= 128 and block_k >= 256):
+        num_warps = 8
     if (constraints.get("num_warps", None) is None
             and is_persistent
             and block_n <= 128
@@ -377,6 +388,9 @@ def make_default_opt_flags_nvidia(
 
     if constraints.get("epilogue_subtile", None) is not None:
         subtiles_to_check = [constraints["epilogue_subtile"]]
+    elif (is_persistent and is_blackwell_nvfp4_x_nvfp4 and precision_config.c_mx_scale is None
+            and block_m >= 128 and block_n >= 128 and block_k >= 256):
+        subtiles_to_check = [4]
     else:
         subtiles_to_check = [1] if out_dtype == FP4 else [1, 2, 4]
     num_stages = -1
@@ -387,6 +401,9 @@ def make_default_opt_flags_nvidia(
         if ns > num_stages:
             epilogue_subtile, num_stages = ep, ns
 
+    if (constraints.get("num_stages", None) is None and is_persistent and is_blackwell_nvfp4_x_nvfp4
+            and block_m >= 128 and block_n <= 128 and block_k >= 256):
+        num_stages = min(num_stages, 3)
     if constraints.get("num_stages", None):
         num_stages = constraints["num_stages"]
     assert num_stages >= 1

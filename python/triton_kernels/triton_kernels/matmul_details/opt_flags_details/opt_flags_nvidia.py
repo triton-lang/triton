@@ -1,7 +1,7 @@
 import torch
 import triton
 from triton_kernels import target_info
-from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
+from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 from triton_kernels.tensor import FP4, FP16, FP32, BF16, Tensor
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout
@@ -11,6 +11,14 @@ def is_x_scale_swizzled(precision_config):
     return (precision_config is not None and precision_config.a_mx_scale is not None
             and isinstance(precision_config.a_mx_scale, Tensor)
             and isinstance(precision_config.a_mx_scale.storage.layout, BlackwellActMXScaleLayout))
+
+
+def is_blackwell_nvfp4_x_nvfp4(precision_config, lhs_dtype, rhs_dtype):
+    return (target_info.cuda_capability_geq(10, 0) and precision_config is not None and lhs_dtype == FP4
+            and rhs_dtype == FP4 and precision_config.a_mx_scale is not None
+            and precision_config.a_microblock_size == int(NVFP_BLOCK_SIZE)
+            and precision_config.b_mx_scale is not None
+            and precision_config.b_microblock_size == int(NVFP_BLOCK_SIZE))
 
 
 def is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype):
@@ -197,7 +205,10 @@ def compute_num_stages(
             # The fp32 accumulator stays in TMEM for the Blackwell SWAP_XW
             # persistent path. Fused reductions such as swiglu still need smem
             # for the unreduced output tile before the narrower TMA-store tile.
-            if epilogue_reduction_n > 1 or epilogue_subtile > 1:
+            has_simple_nvfp4_output = is_blackwell_nvfp4_x_nvfp4(
+                precision_config, lhs_dtype, rhs_dtype
+            ) and precision_config.c_mx_scale is None
+            if epilogue_reduction_n > 1 or (epilogue_subtile > 1 and not has_simple_nvfp4_output):
                 epilogue_smem += int(block_m * block_n * out_itemsize)
         smem_capacity -= epilogue_smem
         if x_transpose:
