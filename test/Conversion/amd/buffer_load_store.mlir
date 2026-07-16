@@ -345,3 +345,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#blocked_contig = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: buffer_load_contiguity_hint_controls_width
+  tt.func @buffer_load_contiguity_hint_controls_width(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offset : tensor<128xi32, #blocked_contig>) {
+    // CHECK: rocdl.raw.ptr.buffer.load {{.*}} : vector<4xf32>
+    %ret = amdg.buffer_load %arg0[%offset] {contiguity = 4 : i32} : tensor<128xf32, #blocked_contig>
+    tt.return
+  }
+}

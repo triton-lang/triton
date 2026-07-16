@@ -2,6 +2,7 @@ add_triton_library(TritonAMDAnalysis
   RangeAnalysis.cpp
   AxisInfoExt.cpp
   AMDGPUAllocation.cpp
+  ConstantTensorValueAnalysis.cpp
 
   DEPENDS
   TritonTableGen
