@@ -560,12 +560,9 @@ void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
     OpBuilder b(ret);
     auto ctx = ret->getContext();
     auto loc = ret.getLoc();
-    if (twoCTAs) {
-      NVVM::ClusterArriveOp::create(b, loc, UnitAttr::get(ctx));
-      NVVM::ClusterWaitOp::create(b, loc, UnitAttr::get(ctx));
-    } else {
+    // Multi-CTA kernels already synchronize the cluster before every return.
+    if (!twoCTAs)
       NVVM::BarrierOp::create(b, loc);
-    }
     PTXBuilder ptxBuilder;
     // Calculate the predicate in the inline asm to avoid creating long
     // liveranges.

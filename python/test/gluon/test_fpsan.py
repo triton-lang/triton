@@ -1381,6 +1381,84 @@ def test_extern_mixed_payload_semantics(device, op, symbol, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
+@gluon.jit
+def _inline_asm_math_kernel(x_ptr, y_ptr, out_ptr, n_elements, ASM: gl.constexpr, BLOCK: gl.constexpr,
+                            THREADS_PER_WARP: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    y = gl.load(y_ptr + offs, mask=mask, other=0.0)
+    out = gl.inline_asm_elementwise(ASM, "=r,r,r", [x, y], dtype=gl.float32, is_pure=True, pack=1)
+    gl.store(out_ptr + offs, out, mask=mask)
+
+
+@pytest.mark.parametrize("asm", ["add.f32 $0, $1, $2;", "sub.f32 $0, $1, $2;"])
+def test_inline_asm_payload_semantics(device, asm, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+    g = torch.Generator(device="cuda")
+    g.manual_seed(43)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _inline_asm_math_kernel[grid](
+        triton.TensorWrapper(x, dtype=torch.float32),
+        triton.TensorWrapper(y, dtype=torch.float32),
+        triton.TensorWrapper(out, dtype=torch.float32),
+        n_elements,
+        ASM=asm,
+        BLOCK=BLOCK,
+        THREADS_PER_WARP=THREADS_PER_WARP,
+    )
+
+    exp_bits = _expected_extern_variadic_tag_i32(
+        [x.cpu().numpy().astype(np.int32, copy=False),
+         y.cpu().numpy().astype(np.int32, copy=False)], asm)
+    _assert_payload_equal(out, exp_bits)
+
+
+@gluon.jit
+def _swiglu_tanh_kernel(gate_ptr, linear_ptr, out_ptr, BLOCK: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = gl.arange(0, BLOCK, layout=layout)
+    gate = gl.load(gate_ptr + offs)
+    linear = gl.load(linear_ptr + offs)
+    tanh = gl.inline_asm_elementwise("tanh.approx.f32 $0, $1;", "=f,f", [0.851 * gate], dtype=gl.float32, is_pure=True,
+                                     pack=1)
+    sig = gate * gl.fma(tanh, 0.5, 0.5)
+    gl.store(out_ptr + offs, gl.fma(sig, linear, sig))
+
+
+def test_swiglu_tanh_payload_semantics(device, fresh_knobs):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    g = torch.Generator(device="cuda")
+    g.manual_seed(44)
+    gate = torch.randint(-(2**31), 2**31 - 1, (128, ), dtype=torch.int32, device="cuda", generator=g)
+    linear = torch.randint(-(2**31), 2**31 - 1, (128, ), dtype=torch.int32, device="cuda", generator=g)
+    out = torch.empty_like(gate)
+    _swiglu_tanh_kernel[(1, )](triton.TensorWrapper(gate, dtype=torch.float32),
+                               triton.TensorWrapper(linear, dtype=torch.float32),
+                               triton.TensorWrapper(out, dtype=torch.float32), BLOCK=128,
+                               THREADS_PER_WARP=THREADS_PER_WARP)
+    gate_bits = gate.cpu().numpy()
+    half = np.full_like(gate_bits, np.float32(0.5).view(np.int32))
+    arg = _expected_mul_i32(gate_bits, np.full_like(gate_bits, np.float32(0.851).view(np.int32)))
+    tanh = _expected_extern_unary_tag_i32(arg, "tanh.approx.f32 $0, $1;")
+    sig = _expected_mul_i32(gate_bits, _expected_fma_i32(tanh, half, half))
+    _assert_payload_equal(out, _expected_fma_i32(sig, linear.cpu().numpy(), sig))
+
+
 def _expected_fma_i32(x_i32: np.ndarray, y_i32: np.ndarray, z_i32: np.ndarray) -> np.ndarray:
     return _expected_add_i32(_expected_mul_i32(x_i32, y_i32), z_i32)
 
@@ -2704,6 +2782,71 @@ def test_tmem_index_subslice(device, fresh_knobs):
     kernel[(1, )](xw, outw)
 
     _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("operation,pred", [("store", False), ("store", True), ("copy", True)])
+@pytest.mark.parametrize("column_slice", [False, True])
+def test_tmem_row_subslice(device, operation, pred, column_slice, fresh_knobs):
+    _require_cuda_backend(device)
+
+    m, n = 256, 128
+    view_m = m // 2
+    view_n = n // 2 if column_slice else n
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def kernel(parent_ptr, value_ptr, view_out_ptr, parent_out_ptr, pred, OPERATION: gl.constexpr,
+               COLUMN_SLICE: gl.constexpr, VIEW_N: gl.constexpr):
+        parent = allocate_tensor_memory(gl.float32, [256, 128], TensorMemoryLayout([128, 64], col_stride=1))
+        parent_layout: gl.constexpr = parent.get_reg_layout()
+        parent_rows = gl.arange(0, 256, layout=gl.SliceLayout(1, parent_layout))[:, None]
+        parent_cols = gl.arange(0, 128, layout=gl.SliceLayout(0, parent_layout))[None, :]
+        parent.store(gl.load(parent_ptr + parent_rows * 128 + parent_cols))
+
+        view = parent.slice(128, 128, dim=0)
+        if COLUMN_SLICE:
+            view = view.slice(64, 64)
+        view_layout: gl.constexpr = view.get_reg_layout()
+        view_rows = gl.arange(0, 128, layout=gl.SliceLayout(1, view_layout))[:, None]
+        view_cols = gl.arange(0, VIEW_N, layout=gl.SliceLayout(0, view_layout))[None, :]
+        values = gl.load(value_ptr + view_rows * VIEW_N + view_cols)
+
+        if OPERATION == "copy":
+            smem_layout: gl.constexpr = gl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
+            smem = gl.allocate_shared_memory(gl.float32, [128, VIEW_N], layout=smem_layout)
+            smem.store(values)
+            bar = mbarrier.allocate_mbarrier()
+            mbarrier.init(bar, count=1)
+            tcgen05_copy(smem, view)
+            tcgen05_commit(bar)
+            mbarrier.wait(bar, phase=0)
+        else:
+            view.store(values, pred=pred != 0)
+
+        gl.store(view_out_ptr + view_rows * VIEW_N + view_cols, view.load(view_layout))
+        gl.store(parent_out_ptr + parent_rows * 128 + parent_cols, parent.load(parent_layout))
+
+    rs = np.random.RandomState(0)
+    parent_bits = rs.randint(-(2**31), 2**31 - 1, size=(m, n), dtype=np.int32)
+    value_bits = rs.randint(-(2**31), 2**31 - 1, size=(view_m, view_n), dtype=np.int32)
+    expected_parent = parent_bits.copy()
+    if pred:
+        expected_parent[view_m:, n - view_n:] = value_bits
+    expected_view = expected_parent[view_m:, n - view_n:]
+
+    parent = torch.tensor(parent_bits, device=device, dtype=torch.int32)
+    value = torch.tensor(value_bits, device=device, dtype=torch.int32)
+    view_out = torch.empty((view_m, view_n), device=device, dtype=torch.int32)
+    parent_out = torch.empty_like(parent)
+    kernel[(1, )](triton.TensorWrapper(parent, dtype=torch.float32), triton.TensorWrapper(value, dtype=torch.float32),
+                  triton.TensorWrapper(view_out, dtype=torch.float32),
+                  triton.TensorWrapper(parent_out, dtype=torch.float32), int(pred), operation, column_slice, view_n,
+                  num_warps=4)
+
+    _assert_payload_equal(view_out, expected_view)
+    _assert_payload_equal(parent_out, expected_parent)
 
 
 @pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires Blackwell Ultra")

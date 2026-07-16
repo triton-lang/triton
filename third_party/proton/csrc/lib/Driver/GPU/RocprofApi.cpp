@@ -44,6 +44,14 @@ DEFINE_DISPATCH(ExternLibRocprofiler, configureCallbackTracingService,
                 const rocprofiler_tracing_operation_t *, size_t,
                 rocprofiler_callback_tracing_cb_t, void *)
 
+DEFINE_DISPATCH(ExternLibRocprofiler,
+                configureExternalCorrelationIdRequestService,
+                rocprofiler_configure_external_correlation_id_request_service,
+                rocprofiler_context_id_t,
+                const rocprofiler_external_correlation_id_request_kind_t *,
+                size_t, rocprofiler_external_correlation_id_request_cb_t,
+                void *)
+
 DEFINE_DISPATCH(ExternLibRocprofiler, createCallbackThread,
                 rocprofiler_create_callback_thread,
                 rocprofiler_callback_thread_t *)

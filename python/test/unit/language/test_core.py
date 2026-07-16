@@ -28,6 +28,7 @@ from triton._internal_testing import (
     is_cuda,
     is_interpreter,
     is_hopper,
+    is_sm12x,
     is_hip,
     is_hip_cdna,
     is_hip_cdna2,
@@ -1846,6 +1847,7 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
                     reason="num_ctas > 1 requires NVIDIA SM90+ (Hopper)")
+@pytest.mark.skipif(is_sm12x(), reason="scalar multi-CTA atomic_cas is not supported on sm120 (consumer Blackwell)")
 def test_scalar_atomic_cas_multicta_result(device):
 
     @triton.jit
@@ -5299,38 +5301,6 @@ def test_tma_store_block_shape_err(device):
     assert "Descriptor block shape must have at least 16 bytes" in str(e.value.__cause__)
 
 
-def test_trans_reshape(device, with_allocator):
-
-    @triton.jit
-    def kernel(in_base_ptr, out_base_ptr, IN_SHAPE0: tl.constexpr, IN_SHAPE1: tl.constexpr):
-
-        in_block_ptr = tl.make_block_ptr(
-            base=in_base_ptr,
-            shape=(IN_SHAPE0, IN_SHAPE1),
-            strides=(IN_SHAPE1, 1),
-            offsets=(0, 0),
-            block_shape=(IN_SHAPE0, IN_SHAPE1),
-            order=(1, 0),
-        )
-        x = tl.load(in_block_ptr)
-        x = tl.reshape(x, (32, 4, 4, 2))
-        x = tl.permute(x, (1, 2, 3, 0))
-        x = tl.reshape(x, (IN_SHAPE0 * IN_SHAPE1, ))
-        tl.store(out_base_ptr + tl.arange(0, IN_SHAPE0 * IN_SHAPE1), x)
-
-    shape = (32, 32)
-    input = torch.arange(math.prod(shape), dtype=torch.int32, device=device).reshape(shape)
-    expected = torch.permute(input, (1, 0))
-    # Don't do zeros_like -- that copies the layout, which we don't want.
-    actual = torch.zeros(expected.shape, dtype=torch.int32, device=device)
-
-    k = kernel[(1, )](input, actual, shape[0], shape[1])
-    assert k.asm['ttgir'].count(
-        'ttg.convert_layout') == 1, "Expected exactly one convert_layout op in the TTGIR after optimization"
-
-    np.testing.assert_equal(to_numpy(expected), to_numpy(actual))
-
-
 # -------------
 # test call
 # -------------
@@ -6434,7 +6404,7 @@ def test_override_arch(arch, env_var_override, device, fresh_knobs):
             h = simple.warmup(data, out, arch=arch, grid=(1, ))
         ttgir_gfx = re.search(r'hip:(\w+)', h.asm["ttgir"])
         ttgir_warp = re.search(r'"ttg.threads-per-warp" = (\d+)', h.asm["ttgir"])
-        amdgcn_gfx = re.search(r'.amdgcn_target "amdgcn-amd-amdhsa--(\w+)"', h.asm["amdgcn"])
+        amdgcn_gfx = re.search(r'\.amdgcn_target "amdgcn-amd-amdhsa-[^-]*-(\w+)"', h.asm["amdgcn"])
         assert ttgir_gfx.group(1) == arch
         assert int(ttgir_warp.group(1)) == (32 if arch == "gfx1200" else 64)
         assert amdgcn_gfx.group(1) == arch
@@ -7001,6 +6971,7 @@ def gather_test_kernel_1d(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr, src_dim
 @pytest.mark.parametrize("src_shape, indices_shape, axis", [
     ([32], [64], 0),
     ([4, 4], [8, 4], 0),
+    ([4, 4], [4096, 4], 0),
     ([128, 64], [256, 64], 0),
     ([128, 64], [128, 128], 1),
 ])

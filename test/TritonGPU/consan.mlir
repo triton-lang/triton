@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritoninstrument-prepare-consan-captures="target=nvidia" -tritoninstrument-concurrency-sanitizer | FileCheck %s
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritoninstrument-prepare-consan-captures="target=nvidia" -tritoninstrument-concurrency-sanitizer | FileCheck %s --implicit-check-not=cluster_waiting
 // RUN: env TRITON_CONSAN_INIT_ALLOCATIONS=0 triton-opt %s -split-input-file -allow-unregistered-dialect -tritoninstrument-prepare-consan-captures="target=nvidia" -tritoninstrument-concurrency-sanitizer | FileCheck %s --check-prefix=NO-INIT
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
@@ -61,6 +61,48 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttg.local_load %0 : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#shared_cluster_ws = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
+#smem_cluster_ws = #ttg.shared_memory
+#blocked_cluster_ws = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 4104 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 6 : i32} {
+  // CHECK-LABEL: @cluster_barrier_partition_scopes
+  tt.func public @cluster_barrier_partition_scopes() {
+    %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared_cluster_ws, #smem_cluster_ws, mutable>
+    %value = ttg.local_load %buf : !ttg.memdesc<32x32xf32, #shared_cluster_ws, #smem_cluster_ws, mutable> -> tensor<32x32xf32, #blocked_cluster_ws>
+
+    // A top-level barrier keeps the all-partition publisher.
+    // CHECK: tt.call @__triton_consan_publish_cluster_visibility{{.*}}_I0
+    ttng.cluster_barrier
+
+    ttg.warp_specialize(%buf) attributes {actualRegisters = array<i32: 32, 32, 32>, allocation.offset = 4096 : i32, requestedRegisters = array<i32: 32, 32>, warpGroupStartIds = array<i32: 4, 5>}
+    default {
+      // The default region is thread 0, but its cluster barrier is still
+      // partition-scoped.
+      // CHECK: default
+      // CHECK: tt.call @__triton_consan_publish_cluster_visibility{{.*}}_I1({{.*}}, %c0_i32_{{[0-9]+}}, %c1_i64_{{[0-9]+}},
+      ttng.cluster_barrier
+      ttg.warp_yield
+    }
+    partition0(%arg0: !ttg.memdesc<32x32xf32, #shared_cluster_ws, #smem_cluster_ws, mutable>) num_warps(1) {
+      ttg.warp_return
+    }
+    partition1(%arg1: !ttg.memdesc<32x32xf32, #shared_cluster_ws, #smem_cluster_ws, mutable>) num_warps(1) {
+      // Nested operations must retain partition1's thread identity.
+      // CHECK: partition1
+      // CHECK: scf.execute_region
+      // CHECK: tt.call @__triton_consan_publish_cluster_visibility{{.*}}_I1({{.*}}, %c2_i32_{{[0-9]+}}, %c4_i64_{{[0-9]+}},
+      scf.execute_region {
+        ttng.cluster_barrier
+        scf.yield
+      }
+      ttg.warp_return
+    } : (!ttg.memdesc<32x32xf32, #shared_cluster_ws, #smem_cluster_ws, mutable>) -> ()
     tt.return
   }
 }
@@ -156,6 +198,42 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_proxy_access
     // CHECK: ttng.async_tma_copy_local_to_global
     ttng.async_tma_copy_local_to_global %out[%c0, %c0] %dst : !tt.tensordesc<8x32xi32, #local_gather_scatter_shared>, !ttg.memdesc<8x32xi32, #local_gather_scatter_shared, #local_gather_scatter_smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#local_atomic_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
+#local_atomic_tma_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 32, CGALayout = [[0, 1]]}>
+#local_atomic_smem = #ttg.shared_memory
+#local_atomic_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 1024 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @local_atomic_scatter_rmw_effects
+  tt.func public @local_atomic_scatter_rmw_effects(%out: !tt.tensordesc<8x32xi32, #local_atomic_tma_shared>) {
+    // The atomic is the allocation's only user, so this descriptor proves
+    // BufferRegion discovers its full destination.
+    // CHECK-DAG: tti.experimental_buffer_descriptors [0, 512], [512, 512], shared_mem : tensor<2xi64
+    %c0 = arith.constant 0 : i32
+    %indices = arith.constant dense<0> : tensor<8x32xi32, #local_atomic_blocked>
+    %values = arith.constant dense<1> : tensor<8x32xi32, #local_atomic_blocked>
+    // CHECK: %[[ATOMIC_DST:.*]] = ttg.local_alloc {allocation.offset = 0 : i32}
+    %dst = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8x32xi32, #local_atomic_shared, #local_atomic_smem, mutable>
+    %proxy = ttg.local_alloc {allocation.offset = 512 : i32} : () -> !ttg.memdesc<8x32xi32, #local_atomic_tma_shared, #local_atomic_smem, mutable>
+
+    // Runtime indices along the sharded axis can target either CTA row.
+    // CHECK: %[[ATOMIC_CTAS:.*]] = arith.constant 3 : i32
+    // CHECK: %[[ATOMIC_BUF:.*]] = tti.experimental_memdesc_to_i32 %[[ATOMIC_DST]]
+    // CHECK: %[[ATOMIC_BYTES:.*]] = arith.constant 512 : i32
+    // CHECK: tt.call @__triton_consan_set_proxy_access{{.*}}(%[[ATOMIC_BUF]], %[[ATOMIC_BYTES]], {{.*}}%[[ATOMIC_CTAS]])
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
+    // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
+    // CHECK: tt.call @__triton_consan_clear_read_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
+    // CHECK: ttg.local_atomic_scatter_rmw
+    %old = ttg.local_atomic_scatter_rmw add, %dst[%indices], %values {axis = 1 : i32} : (!ttg.memdesc<8x32xi32, #local_atomic_shared, #local_atomic_smem, mutable>, tensor<8x32xi32, #local_atomic_blocked>, tensor<8x32xi32, #local_atomic_blocked>) -> tensor<8x32xi32, #local_atomic_blocked>
+    // Enable proxy tracking without giving the atomic destination another user.
+    ttng.async_tma_copy_local_to_global %out[%c0, %c0] %proxy : !tt.tensordesc<8x32xi32, #local_atomic_tma_shared>, !ttg.memdesc<8x32xi32, #local_atomic_tma_shared, #local_atomic_smem, mutable>
     tt.return
   }
 }
@@ -1128,20 +1206,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @wait_barrier_multi_cta
   tt.func public @wait_barrier_multi_cta() {
+    // The dummy descriptor is the virtual cluster-barrier slot. It uses the
+    // ordinary barrier state, waiting, and active-mask captures.
+    // CHECK: tti.experimental_buffer_descriptors [65536, 0], [8, 0], shared_mem
+    // CHECK: ttg.global_scratch_alloc
+    // CHECK-COUNT-3: ttg.global_scratch_alloc
+    // CHECK-NOT: ttg.global_scratch_alloc
+    // CHECK: tti.experimental_lock_release
+    // CHECK-NEXT: ttng.cluster_barrier
     %true = arith.constant true
     %c0_i32 = arith.constant 0 : i32
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    // CHECK: ttng.init_barrier
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: %[[WAIT_PRED:.*]] = arith.andi %true, %{{.*}} : i1
     // CHECK-NEXT: tti.experimental_lock_acquire %{{.*}}, %[[WAIT_PRED]]
     // CHECK: tt.call @__triton_consan_check_all_active_waiting
-    // CHECK-NEXT: tti.experimental_assert_uniform
     // CHECK-NEXT: tti.experimental_lock_release %{{.*}}, %[[WAIT_PRED]]
+    // CHECK-NEXT: tti.experimental_assert_uniform
     // CHECK: ttng.wait_barrier
     // CHECK-NEXT: tti.experimental_lock_acquire %{{.*}}, %[[WAIT_PRED]]
     // CHECK: tt.call @__triton_consan_clear_waiting
     // CHECK-NEXT: tti.experimental_lock_release %{{.*}}, %[[WAIT_PRED]]
     ttng.wait_barrier %bar, %c0_i32, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    // CHECK: tti.experimental_lock_acquire
+    // CHECK: tt.call @__triton_consan_check_all_active_waiting
+    // CHECK-NEXT: tti.experimental_lock_release
+    // CHECK-NEXT: tti.experimental_assert_uniform {{.*}}, "Deadlock detected at a cluster barrier"
+    // CHECK-NEXT: cf.br ^[[POLL:bb[0-9]+]]
+    // CHECK: ^[[POLL]]:
+    // CHECK: tti.experimental_lock_acquire
+    // CHECK: tt.call @__triton_consan_check_all_active_waiting
+    // CHECK-NEXT: tti.experimental_lock_release
+    // CHECK-NEXT: tti.experimental_assert_uniform {{.*}}, "Deadlock detected at a cluster barrier"
+    // CHECK: cf.cond_br {{.*}}, ^[[CONTINUE:bb[0-9]+]], ^[[POLL]]
+    // CHECK: ^[[CONTINUE]]:
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NOT: ttng.cluster_barrier
+    // CHECK: tt.return
+    ttng.cluster_barrier
     tt.return
   }
 }
@@ -1638,7 +1741,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK-DAG: arith.constant dense<{{\[\[true, true, false, false\], \[true, true, false, false\], \[false, false, true, false\], \[false, false, false, false\]\]}}> : tensor<4x4xi1
     %buf0 = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
     %buf1 = ttng.tmem_alloc {tensor_memory_col_offset = 64 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
-    %buf3 = ttng.tmem_subslice %buf0 {N = 32 : i32} : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<64x32xf32, #tmem, #ttng.tensor_memory, mutable, 64x64>
+    %buf3 = ttng.tmem_subslice %buf0 {offset = 32 : i32} : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<64x32xf32, #tmem, #ttng.tensor_memory, mutable, 64x64>
     ttng.tmem_load %buf0 : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<64x64xf32>
     ttng.tmem_load %buf1 : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<64x64xf32>
     ttng.tmem_load %buf3 : !ttg.memdesc<64x32xf32, #tmem, #ttng.tensor_memory, mutable, 64x64> -> tensor<64x32xf32>
@@ -1792,14 +1895,12 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   tt.func public @cluster_barrier_publish_protocol() {
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared_cluster_publish, #smem_cluster_publish, mutable>
     // CHECK: ttg.local_load
-    // CHECK-NEXT: ttng.cluster_barrier
-    // CHECK: %[[PUB_CTA:.*]] = tti.experimental_cluster_cta_id : i32
-    // CHECK: %[[PUB_ZERO:.*]] = arith.constant 0 : i32
-    // CHECK: %[[PUB_PRED:.*]] = arith.cmpi eq, %[[PUB_CTA]], %[[PUB_ZERO]] : i32
-    // CHECK: tti.experimental_lock_acquire %{{.*}}, %[[PUB_PRED]]
-    // CHECK: tt.call @__triton_consan_publish_cluster_visibility{{.*}}(%[[PUB_PRED]],
-    // CHECK: tti.experimental_lock_release %{{.*}}, %[[PUB_PRED]]
-    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK: tti.experimental_lock_acquire
+    // CHECK: tt.call @__triton_consan_publish_cluster_visibility
+    // CHECK: tti.experimental_lock_release
+    // CHECK: ttng.cluster_barrier
+    // CHECK-NOT: ttng.cluster_barrier
+    // CHECK: tt.return
     ttg.local_load %buf : !ttg.memdesc<32x32xf32, #shared_cluster_publish, #smem_cluster_publish, mutable> -> tensor<32x32xf32, #blocked_cluster_publish>
     ttng.cluster_barrier
     tt.return

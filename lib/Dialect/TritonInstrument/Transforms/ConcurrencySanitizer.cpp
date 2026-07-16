@@ -79,13 +79,12 @@ bool isTensorCoreOp(Operation *op) {
 }
 
 std::optional<int> maybeGetPartitionIdx(Operation *op) {
-  if (auto wsOp = op->getParentOfType<ttg::WarpSpecializePartitionsOp>()) {
+  Operation *parent = op->getParentOp();
+  if (!parent)
+    return std::nullopt;
+  if (isa<ttg::WarpSpecializePartitionsOp>(parent))
     return op->getParentRegion()->getRegionNumber();
-  }
-  if (Operation *parent = op->getParentOp()) {
-    return maybeGetPartitionIdx(parent);
-  }
-  return std::nullopt;
+  return maybeGetPartitionIdx(parent);
 }
 
 int getCurrentThread(Operation *op, const ConSanTargetHooks *hooks,
@@ -531,6 +530,12 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
                                            scatter.getValues().getType(),
                                            scatter.getAxis()));
   }
+  if (auto atomic = dyn_cast<ttg::LocalAtomicScatterRMWOp>(op)) {
+    return getLocalMemoryRecipientCTAs(
+        b, getLocalGatherScatterConversion(atomic.getDst().getType(),
+                                           atomic.getValues().getType(),
+                                           atomic.getAxis()));
+  }
   if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     if (tmaLoad.getMulticast())
       return getMulticastRecipientCTAs(b, tmaLoad.getResult());
@@ -620,6 +625,7 @@ private:
 
   void instrumentMemoryOperations(ImplicitLocOpBuilder &b,
                                   tti::FunctionBuilder &funcBuilder) {
+    SmallVector<ttng::ClusterBarrierOp> clusterBarriers;
     module.walk([&](Operation *op) {
       CriticalSectionListener listener;
       b.setListener(&listener);
@@ -734,28 +740,8 @@ private:
         }
       }
       if (auto clusterBarrier = dyn_cast<ttng::ClusterBarrierOp>(op)) {
-        if (!clusterBarrier.getRelaxed() &&
-            !llvm::is_contained(auxData.nonPublishingClusterBarriers, op)) {
-          b.setInsertionPointAfter(op);
-          // Publish the cluster-wide frontier once, then keep every CTA at
-          // this synchronization point until the publication completes.
-          b.setListener(nullptr);
-          Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
-          Value zero = arith::ConstantIntOp::create(b, 0, 32);
-          Value isCTA0 =
-              arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
-          Value lock = auxData.lock.at(op).value;
-          tti::ExperimentalLockAcquireOp::create(b, lock, isCTA0);
-          for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM})
-            funcBuilder.createPublishClusterVisibilityCall(b, isCTA0, memType,
-                                                           op);
-          funcBuilder.createPublishClusterProxyAccessesCall(b, isCTA0, op);
-          tti::ExperimentalLockReleaseOp::create(b, lock, isCTA0);
-          auto publishBarrier = ttng::ClusterBarrierOp::create(b, b.getLoc());
-          auxData.nonPublishingClusterBarriers.push_back(
-              publishBarrier.getOperation());
-          b.setListener(&listener);
-        }
+        if (!llvm::is_contained(auxData.internalClusterBarriers, op))
+          clusterBarriers.push_back(clusterBarrier);
       }
 
       if (isa<ttg::WarpYieldOp, ttg::WarpReturnOp>(op) &&
@@ -766,20 +752,54 @@ private:
             llvm::is_contained(wsOp.getNonEmptyPartitionRegions(),
                                op->getParentRegion());
         if (shouldRetire) {
+          b.setListener(nullptr);
           b.setLoc(wsOp.getLoc());
+          Value lock = auxData.lock.at(op).value;
+          Value trueVal = arith::ConstantIntOp::create(b, 1, 1);
+          tti::ExperimentalLockAcquireOp::create(b, lock, trueVal);
           funcBuilder.createRetireActiveThreadCall(b, baseThread, op);
-          funcBuilder.createCheckAllActiveWaitingCall(b, nullptr, op);
+          Value ok =
+              funcBuilder.createCheckAllActiveWaitingCall(b, nullptr, op);
+          tti::ExperimentalLockReleaseOp::create(b, lock, trueVal);
+          tti::createAssertInThread(
+              b, ok,
+              "Deadlock detected after a warp-specialized thread exited");
+          b.setListener(&listener);
         }
       }
       if (isa<tt::ReturnOp>(op) && !auxData.activeMasks.empty() &&
           op->getParentOfType<tt::FuncOp>() == tti::getEntryPoint(module)) {
+        b.setListener(nullptr);
+        Value lock = auxData.lock.at(op).value;
+        Value trueVal = arith::ConstantIntOp::create(b, 1, 1);
+        tti::ExperimentalLockAcquireOp::create(b, lock, trueVal);
         funcBuilder.createSetActiveMaskCall(b, 0, op);
-        funcBuilder.createCheckAllActiveWaitingCall(b, nullptr, op);
+        Value ok = funcBuilder.createCheckAllActiveWaitingCall(b, nullptr, op);
+        tti::ExperimentalLockReleaseOp::create(b, lock, trueVal);
+        tti::createAssertInThread(b, ok,
+                                  "Deadlock detected when the kernel returned");
+        b.setListener(&listener);
       }
 
       listener.maybeWrapWithCriticalSection(b, auxData, nullptr);
       b.setListener(nullptr);
     });
+
+    // Cluster rendezvous polling introduces control-flow blocks, so add it
+    // after the operation walk rather than invalidating the walk iterators.
+    for (ttng::ClusterBarrierOp clusterBarrier : clusterBarriers) {
+      Operation *op = clusterBarrier.getOperation();
+      int thread = getCurrentThread(op, hooks, auxData.threadLayout);
+      int baseThread = getBaseThread(thread, auxData.threadLayout);
+      bool partitionScoped =
+          static_cast<bool>(op->getParentOfType<ttg::WarpSpecializeOp>());
+      b.setLoc(op->getLoc());
+      b.setInsertionPoint(op);
+      funcBuilder.createClusterBarrierRendezvousCall(
+          b, auxData.getClusterBarrierSlot(op), baseThread,
+          getThreadPeersMask(baseThread, auxData.threadLayout), partitionScoped,
+          /*publishVisibility=*/!clusterBarrier.getRelaxed(), op);
+    }
   }
 
   void instrumentBarrierWait(Operation *op, Value alloc, Value phase,
@@ -793,8 +813,10 @@ private:
     funcBuilder.createVerifyBarrierInitializedCall(wb, alloc, pred, op,
                                                    currentCTAMask(wb));
     funcBuilder.createSetWaitingCall(wb, alloc, baseThread, phase, pred, op);
-    funcBuilder.createCheckAllActiveWaitingCall(wb, pred, op);
+    Value ok = funcBuilder.createCheckAllActiveWaitingCall(wb, pred, op);
     tti::ExperimentalLockReleaseOp::create(wb, lock, pred);
+    tti::createAssertInThread(wb, ok,
+                              "Deadlock detected while waiting on an mbarrier");
     // Post-wait: transfer visible writes and reads to all peer threads,
     // and clear waiting for this barrier.
     assert(!auxData.barriers.empty() &&

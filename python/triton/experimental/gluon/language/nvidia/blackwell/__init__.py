@@ -364,26 +364,30 @@ class tensor_memory_descriptor(base_value):
         _semantic.builder.create_tmem_store(self.handle, value.handle, pred.handle)
 
     @builtin
-    def slice(self, start, length, _semantic: GluonSemantic = None) -> None:
+    def slice(self, start, length, dim=1, _semantic: GluonSemantic = None) -> None:
         """
-        Create a slice of the tensor memory descriptor along the last dimension.
+        Create a slice of the tensor memory descriptor along a given dimension.
 
         Args:
             start (int): The starting index for subslice.
             length (int): The length of the subslice.
+            dim (int): The dimension to slice (default: 1).
 
         Returns:
             tensor_memory_descriptor: Descriptor for the subslice.
         """
         start = _unwrap_if_constexpr(start)
         length = _unwrap_if_constexpr(length)
+        dim = _unwrap_if_constexpr(dim)
         _check(isinstance(start, int), lambda: "start must be a constant int")
         _check(isinstance(length, int), lambda: "length must be a constant int")
-        shape = self.shape[:-1] + [length]
+        _check(isinstance(dim, int) and dim in (0, 1), lambda: "dim must be 0 or 1")
+        shape = list(self.shape)
+        shape[dim] = length
         layout = self.type.layout
         ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
         builder = _semantic.builder
-        ret.handle = builder.create_tmem_subslice(ret.type.to_ir(builder), self.handle, start)
+        ret.handle = builder.create_tmem_subslice(ret.type.to_ir(builder), self.handle, start, dim)
         return ret
 
     @builtin
