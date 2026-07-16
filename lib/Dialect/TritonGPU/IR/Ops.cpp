@@ -653,6 +653,52 @@ OpFoldResult MemDescReinterpretOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
+namespace {
+
+LinearLayout getAllocationLayout(MemDescType type) {
+  auto rank = cast<LayoutEncodingTrait>(type.getEncoding()).getRank();
+  auto allocShape = type.getAllocShape().take_back(rank);
+  auto encoding = type.getEncoding();
+  return isPaddedEncoding(encoding) ? paddedLinearLayout(allocShape, encoding)
+                                    : toLinearLayout(allocShape, encoding);
+}
+
+std::optional<LinearLayout> getContiguousViewLayout(MemDescType type) {
+  auto rank = cast<LayoutEncodingTrait>(type.getEncoding()).getRank();
+  auto allocShape = type.getAllocShape().take_back(rank);
+  auto viewShape = type.getShape().take_back(rank);
+  LinearLayout layout = getAllocationLayout(type);
+
+  if (viewShape == allocShape)
+    return layout;
+
+  // Restrict the allocation layout to the logical shape of the source view.
+  for (auto [dim, size] : llvm::zip_equal(layout.getOutDimNames(), viewShape))
+    layout = layout.resizeOutDim(dim, size);
+
+  // A contiguous view can only discard redundant high address bits. Keep the
+  // block mapping intact so contiguity is checked independently for each CTA.
+  auto freeVariables = layout.getFreeVariableMasks();
+  auto kBlock = StringAttr::get(type.getContext(), "block");
+  for (auto dim : layout.getInDimNames()) {
+    if (dim == kBlock)
+      continue;
+    uint32_t freeMask = freeVariables.lookup(dim);
+    int32_t inputSize = layout.getInDimSize(dim);
+    while (inputSize > 1 && (freeMask & (inputSize >> 1)))
+      inputSize >>= 1;
+    layout = layout.resizeInDim(dim, inputSize);
+  }
+
+  // Any remaining redundant within-CTA address bit represents a gap in the
+  // view and makes reinterpretation unsafe.
+  if (!getLayoutWithinBlock(layout).isInjective())
+    return std::nullopt;
+  return layout;
+}
+
+} // namespace
+
 LogicalResult MemDescReinterpretOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getResult().getType();
@@ -694,19 +740,20 @@ LogicalResult MemDescReinterpretOp::verify() {
     auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
     return ty.getShape().take_back(rank) != ty.getAllocShape().take_back(rank);
   };
-  if (isSubview(srcTy) || isSubview(dstTy))
-    return emitError("source and result must not be subviews; reinterpret the "
-                     "parent descriptor and then take a subview");
   assert((isa<SharedMemorySpaceAttr, nvidia_gpu::TensorMemorySpaceAttr>(
               srcTy.getMemorySpace()) &&
           "expected shared or tensor memory"));
-  auto getViewNumBits = [](MemDescType ty) {
+
+  if (isSubview(dstTy))
+    return emitError("result must not be a subview");
+
+  auto srcLayout = getContiguousViewLayout(srcTy);
+  if (!srcLayout)
+    return emitError("source subview must be contiguous");
+  auto dstLayout = getAllocationLayout(dstTy);
+
+  auto getViewNumBits = [](MemDescType ty, const LinearLayout &layout) {
     auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
-    auto shape = ty.getAllocShape().take_back(rank);
-    auto encoding = ty.getEncoding();
-    LinearLayout layout = isPaddedEncoding(encoding)
-                              ? paddedLinearLayout(shape, encoding)
-                              : toLinearLayout(shape, encoding);
     int64_t numLayoutCopies = 1;
     for (int64_t dim : ty.getAllocShape().drop_back(rank))
       numLayoutCopies *= dim;
@@ -719,8 +766,8 @@ LogicalResult MemDescReinterpretOp::verify() {
     return numLayoutCopies * layout.getInDimSize(dim) *
            ty.getElementTypeBitWidth();
   };
-  auto srcNumBits = getViewNumBits(srcTy);
-  auto dstNumBits = getViewNumBits(dstTy);
+  auto srcNumBits = getViewNumBits(srcTy, *srcLayout);
+  auto dstNumBits = getViewNumBits(dstTy, dstLayout);
   if (dstNumBits > srcNumBits)
     return emitError() << "result logical storage size must not exceed source "
                           "logical storage size ("
