@@ -621,7 +621,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK: llvm.load {{.*}} : !llvm.ptr<3> -> i32
   // CHECK: nvvm.barrier
   // CHECK-NOT: nvvm.mapa
-  // CHECK: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
+  // CHECK: llvm.inline_asm {{.*}} "st.shared::cta.b32
   // CHECK-NOT: nvvm.mapa
   // CHECK: llvm.return
   tt.func @local_gather_scatter_same_ownership(%out: !tt.ptr<i32>, %vals: tensor<2x32xi32, #local_gather_scatter_blocked>) {
@@ -642,7 +642,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK: llvm.load {{.*}} : !llvm.ptr<3> -> i32
   // CHECK: nvvm.barrier
   // CHECK-NOT: nvvm.mapa
-  // CHECK: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
+  // CHECK: llvm.inline_asm {{.*}} "st.shared::cta.b32
   // CHECK-NOT: nvvm.mapa
   // CHECK: llvm.return
   tt.func @local_gather_scatter_broadcast(%out: !tt.ptr<i32>, %vals: tensor<2x32xi32, #local_gather_scatter_blocked>) {
@@ -662,7 +662,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK: llvm.load {{.*}} : !llvm.ptr<7> -> i32
   // CHECK: nvvm.barrier
   // CHECK: nvvm.mapa
-  // CHECK: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<7>
+  // CHECK: llvm.inline_asm {{.*}} "st.shared::cluster.b32
   tt.func @local_gather_scatter_cross_cta(%out: !tt.ptr<i32>, %vals: tensor<2x32xi32, #local_gather_scatter_blocked>) {
     %src = ttg.local_alloc {allocation.offset = [0 : i32, 256 : i32]} : () -> !ttg.memdesc<2x32xi32, #local_gather_scatter_shared_split, #ttg.shared_memory, mutable>
     %idx = arith.constant dense<0> : tensor<2x32xi32, #local_gather_scatter_blocked>
