@@ -104,11 +104,10 @@ unsigned getVectorSize(Value ptr, Value offset,
 Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t);
 
 // Returns true if we can perform coalesced write from the source encoding to
-// the destination encoding for a given vec size.
+// the destination encoding.
 bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
                                       const LinearLayout &srcToSharedLayout,
-                                      unsigned threadsPerWarp,
-                                      unsigned vecSize);
+                                      unsigned threadsPerWarp);
 
 // Returns true if we can load directly from global |srcTy| to shared memory
 // |dstEnc| for the given target.
