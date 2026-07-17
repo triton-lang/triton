@@ -644,7 +644,7 @@ def mma_scaled_clc_partition(p):
         barrier = p.clc_barriers.index(state.index)
         result = p.clc_result_buffers.index(state.index)
         # 16: clc.try_cancel has a `.b128` modifier
-        mbarrier.expect(barrier, 16)
+        mbarrier.expect(barrier, 16, from_ctas=0x0)
         clc.try_cancel(result, barrier)
         mbarrier.wait(barrier, state.phase)
         clc_res = clc.load_result(result)

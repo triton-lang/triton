@@ -20,7 +20,7 @@ __all__ = [
 
 
 @builtin
-def arrive(mbarrier, *, count=1, cta_mask=0, pred=True, _semantic=None):
+def arrive(mbarrier, *, count=1, cta_mask=0, pred=True, from_ctas=None, _semantic=None):
     """
     Arrive at an mbarrier with a specified count.
 
@@ -39,6 +39,9 @@ def arrive(mbarrier, *, count=1, cta_mask=0, pred=True, _semantic=None):
             to 0 (no multicast). Must satisfy ``0 < cta_mask <= num_ctas - 1``
             when non-zero.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
+        from_ctas (int, optional): Mask of CTA-ID bits preserved when routing the arrival, in
+            ``[0, num_ctas - 1]``. Defaults to ``num_ctas - 1``, which arrives from each CTA to itself; ``0``
+            routes from CTA 0 to every CTA. A non-identity mask cannot be combined with multicast.
     """
     count = _unwrap_if_constexpr(count)
     cta_mask = _unwrap_if_constexpr(cta_mask)
@@ -51,4 +54,5 @@ def arrive(mbarrier, *, count=1, cta_mask=0, pred=True, _semantic=None):
         if cta_mask > num_ctas - 1:
             raise ValueError(f"cta_mask must be <= num_ctas - 1 ({num_ctas - 1}), got {cta_mask}")
     pred = _semantic.to_tensor(pred)
-    _semantic.builder.create_mbarrier_arrive(mbarrier.handle, count, cta_mask, pred.handle)
+    from_ctas = _unwrap_if_constexpr(from_ctas)
+    _semantic.builder.create_mbarrier_arrive(mbarrier.handle, count, cta_mask, pred.handle, from_ctas)

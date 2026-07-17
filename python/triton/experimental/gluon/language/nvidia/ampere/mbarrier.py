@@ -108,15 +108,19 @@ def wait(mbarrier, phase, pred=True, deps=(), _semantic=None):
 
 
 @builtin
-def arrive(mbarrier, *, pred=True, _semantic=None):
+def arrive(mbarrier, *, pred=True, from_ctas=None, _semantic=None):
     """
     Arrive on an mbarrier, signaling that a thread has reached the barrier.
 
     Args:
         mbarrier (shared_memory_descriptor): The barrier object to arrive on.
         pred (bool): Predicate. Operation is skipped if predicate is False. Defaults to True.
+        from_ctas (int, optional): Mask of CTA-ID bits preserved when routing the arrival, in
+            ``[0, num_ctas - 1]``. Defaults to ``num_ctas - 1``, which arrives from each CTA to itself; ``0``
+            routes from CTA 0 to every CTA.
     """
     count = 1
     cta_mask = 0
     pred = _semantic.to_tensor(pred)
-    _semantic.builder.create_mbarrier_arrive(mbarrier.handle, count, cta_mask, pred.handle)
+    from_ctas = _unwrap_if_constexpr(from_ctas)
+    _semantic.builder.create_mbarrier_arrive(mbarrier.handle, count, cta_mask, pred.handle, from_ctas)

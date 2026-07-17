@@ -939,20 +939,36 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Value memDesc) {
              self.create<ttng::InvalBarrierOp>(memDesc);
            })
-      .def("create_mbarrier_expect",
-           [](GluonOpBuilder &self, Value memDesc, int bytes, Value pred) {
-             self.create<ttng::BarrierExpectOp>(memDesc, bytes, pred);
-           })
+      .def(
+          "create_mbarrier_expect",
+          [](GluonOpBuilder &self, Value memDesc, int bytes, Value pred,
+             std::optional<int> fromCTAs) {
+            IntegerAttr fromCTAsAttr =
+                fromCTAs ? self.getBuilder().getI32IntegerAttr(*fromCTAs)
+                         : IntegerAttr();
+            self.create<ttng::BarrierExpectOp>(memDesc, bytes, pred,
+                                               fromCTAsAttr);
+          },
+          py::arg("memDesc"), py::arg("bytes"), py::arg("pred"),
+          (py::arg("fromCTAs").none() = py::none()))
       .def("create_mbarrier_wait",
            [](GluonOpBuilder &self, Value memDesc, Value phase, Value pred,
               std::vector<Value> &deps) {
              self.create<ttng::WaitBarrierOp>(memDesc, phase, pred, deps);
            })
-      .def("create_mbarrier_arrive",
-           [](GluonOpBuilder &self, Value memDesc, uint32_t count,
-              uint32_t ctaMask, Value pred) {
-             self.create<ttng::ArriveBarrierOp>(memDesc, count, ctaMask, pred);
-           })
+      .def(
+          "create_mbarrier_arrive",
+          [](GluonOpBuilder &self, Value memDesc, uint32_t count,
+             uint32_t ctaMask, Value pred, std::optional<int> fromCTAs) {
+            IntegerAttr fromCTAsAttr =
+                fromCTAs ? self.getBuilder().getI32IntegerAttr(*fromCTAs)
+                         : IntegerAttr();
+            self.create<ttng::ArriveBarrierOp>(memDesc, count, ctaMask, pred,
+                                               fromCTAsAttr);
+          },
+          py::arg("memDesc"), py::arg("count"), py::arg("ctaMask"),
+          py::arg("pred"),
+          (py::arg("fromCTAs").none() = py::none()))
       .def(
           "create_cluster_barrier",
           [](GluonOpBuilder &self,

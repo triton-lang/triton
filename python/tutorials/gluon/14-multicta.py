@@ -846,7 +846,7 @@ def matmul_clc_partition(p):
         mbarrier.wait(p.clc_consumed_bars.index(consumed_state.index), consumed_state.phase, pred=(i >= acc_stages))
         barrier = p.clc_barriers.index(state.index)
         result = p.clc_result_buffers.index(state.index)
-        mbarrier.expect(barrier, 16)
+        mbarrier.expect(barrier, 16, from_ctas=0x0)
         clc.try_cancel(result, barrier)
         mbarrier.wait(barrier, state.phase)
         clc_res = clc.load_result(result)

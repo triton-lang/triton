@@ -4935,7 +4935,7 @@ def test_clc_basic(num_ctas):
         dummy = ttgl.allocate_shared_memory(ttgl.int64, [smem_size // 8 - 32], clc_mbar.layout)
 
         clc.try_cancel(clc_result, clc_mbar)
-        mbarrier.expect(clc_mbar, 16)
+        mbarrier.expect(clc_mbar, 16, from_ctas=0x0)
         mbarrier.wait(clc_mbar, 0)
 
         response = clc.load_result(clc_result)

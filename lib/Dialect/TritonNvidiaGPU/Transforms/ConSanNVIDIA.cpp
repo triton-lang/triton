@@ -115,6 +115,15 @@ public:
       mask = getBarrierMask(waitOp.getAlloc());
     if (auto invalOp = dyn_cast<ttng::InvalBarrierOp>(op))
       mask = getBarrierMask(invalOp.getAlloc());
+    if (isa<ttng::BarrierExpectOp, ttng::ArriveBarrierOp>(op)) {
+      std::optional<uint32_t> fromCTAs;
+      if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))
+        fromCTAs = expectOp.getFromCtas();
+      else
+        fromCTAs = cast<ttng::ArriveBarrierOp>(op).getFromCtas();
+      if (fromCTAs)
+        mask = ~*fromCTAs & (ttg::lookupNumCTAs(op) - 1);
+    }
     if (auto loadOp = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
       if (loadOp.getMulticast())
         mask = getBlockBroadcastMask(loadOp.getResult().getType());

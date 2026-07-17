@@ -128,9 +128,12 @@ usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
   if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
     return aliasesTracked(store.getMbarrier());
   }
-  if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op)) {
-    return arrive.isMulticast() && aliasesTracked(arrive.getAlloc());
-  }
+  if (auto expect = dyn_cast<ttng::BarrierExpectOp>(op);
+      expect && expect.getFromCtas())
+    return aliasesTracked(expect.getBarrier());
+  if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op))
+    return (arrive.isMulticast() || arrive.getFromCtas()) &&
+           aliasesTracked(arrive.getAlloc());
   return false;
 }
 

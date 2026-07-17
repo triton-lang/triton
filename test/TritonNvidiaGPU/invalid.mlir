@@ -1001,6 +1001,59 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @barrier_expect_from_ctas_out_of_range(%bar: !ttg.memdesc<4xi64, #barrier, #smem, mutable>, %pred: i1) {
+    // expected-error @below {{from_ctas must be in the range [0, num_ctas - 1]}}
+    ttng.barrier_expect %bar, 16 {from_ctas = -1 : i32}, %pred : !ttg.memdesc<4xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+  tt.func @arrive_barrier_from_ctas_out_of_range(%bar: !ttg.memdesc<4xi64, #barrier, #smem, mutable>, %pred: i1) {
+    // expected-error @below {{from_ctas must be in the range [0, num_ctas - 1]}}
+    ttng.arrive_barrier %bar, 1, %pred {from_ctas = 4 : i32} : !ttg.memdesc<4xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0], [0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @barrier_expect_from_ctas_noncanonical_layout(%bar: !ttg.memdesc<4xi64, #barrier, #smem, mutable>, %pred: i1) {
+    // expected-error @below {{from_ctas requires a 1D barrier with one element per CTA and canonical CGA layout}}
+    ttng.barrier_expect %bar, 16 {from_ctas = 1 : i32}, %pred : !ttg.memdesc<4xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @arrive_barrier_from_ctas_broadcast_layout(%bar: !ttg.memdesc<1xi64, #barrier, #smem, mutable>, %pred: i1) {
+    // expected-error @below {{from_ctas requires a 1D barrier with one element per CTA and canonical CGA layout}}
+    ttng.arrive_barrier %bar, 1, %pred {from_ctas = 1 : i32} : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @arrive_barrier_from_ctas_multicast(%bar: !ttg.memdesc<4xi64, #barrier, #smem, mutable>, %pred: i1) {
+    // expected-error @below {{from_ctas cannot be combined with multicast arrive}}
+    ttng.arrive_barrier %bar, 1, %pred {ctaMask = 1 : i32, from_ctas = 0 : i32} : !ttg.memdesc<4xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func public @memdesc_reinterpret_changed_storage_size_tmem(%arg0: !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory>) {
