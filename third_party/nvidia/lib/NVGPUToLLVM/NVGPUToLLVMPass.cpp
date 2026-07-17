@@ -223,11 +223,28 @@ public:
   }
 };
 
-class ClusterCTAIdOpPattern : public OpRewritePattern<ttn::ClusterCTAIdOp> {
-  using OpRewritePattern<ttn::ClusterCTAIdOp>::OpRewritePattern;
+class ProgramCTAIdOpPattern : public OpRewritePattern<ttn::ProgramCTAIdOp> {
+  using OpRewritePattern<ttn::ProgramCTAIdOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(ttn::ClusterCTAIdOp op,
+  LogicalResult matchAndRewrite(ttn::ProgramCTAIdOp op,
                                 PatternRewriter &rewriter) const override {
+    auto moduleOp = op->getParentOfType<ModuleOp>();
+    assert(moduleOp && moduleOp->hasAttr("ttg.num-ctas") &&
+           "ProgramCTAIdOp requires a TritonGPU module with ttg.num-ctas");
+
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
+    if (numCTAs == 1) {
+      rewriter.replaceOp(op, b.i32_val(0));
+      return success();
+    }
+    if (LLVM::NVIDIA::usePreferredClusterFallback(moduleOp)) {
+      Value ctaId = NVVM::BlockIdXOp::create(rewriter, loc, i32_ty);
+      rewriter.replaceOp(op, b.urem(ctaId, b.i32_val(numCTAs)));
+      return success();
+    }
+
     // We could use the value range from LLVM, but it seems to change the
     // codegen quite a bit. Adding an `and` with `nCTAs - 1` generates similar
     // code than not doing anything, so we don't do anything for now. At the end
@@ -645,7 +662,7 @@ public:
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(context);
 
-    patterns.add<ClusterCTAIdOpPattern, WGMMAOpPattern, LoadAcquireOpPattern,
+    patterns.add<ProgramCTAIdOpPattern, WGMMAOpPattern, LoadAcquireOpPattern,
                  WGMMAWaitGroupOpPattern, WarpIdOpPattern>(context);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())

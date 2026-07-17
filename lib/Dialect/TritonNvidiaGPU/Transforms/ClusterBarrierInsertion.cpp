@@ -24,6 +24,17 @@ namespace {
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
+static bool hasTCGen5CommitCrossCTA(Operation *op) {
+  SmallVector<Value> descs;
+  if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
+    descs = mma.getCompletionDescs();
+  else if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op))
+    llvm::append_range(descs, commit.getDescs());
+  else
+    return false;
+  return !ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op), descs).empty();
+}
+
 static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op)) {
     if (!isRead)
@@ -41,8 +52,8 @@ static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
     auto splitNum = ttg::getCTASplitNum(srcTy.getEncoding());
     return splitNum[reduce.getAxis()] > 1;
   }
-  if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
-    return mma.getTwoCtas();
+  if (isa<ttng::MMAv5OpInterface, ttng::TCGen5CommitOp>(op)) {
+    return hasTCGen5CommitCrossCTA(op);
   } else if (isa<ttng::TMEMCopyOp>(op)) {
     return ttng::getModuleTwoCTAs(op);
   } else if (auto tma = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
@@ -77,8 +88,10 @@ static bool hasUnresolvedCrossClusterDependency(const BlockInfo &blockInfo) {
          hasDistributedDependency(blockInfo.syncWriteSlices, /*isRead=*/false);
 }
 
-static bool isCrossCTAMBarrier(ttng::InitBarrierOp initBarrierOp, int numCTAs) {
-  auto barrierTy = cast<ttg::MemDescType>(initBarrierOp.getBarrier().getType());
+static bool isCrossCTAMBarrier(ttg::MBarrierOpInterface initBarrierOp,
+                               int numCTAs) {
+  auto barrierTy =
+      cast<ttg::MemDescType>(initBarrierOp.getBarriers().front().getType());
   return barrierTy.getShape()[0] != numCTAs;
 }
 
@@ -102,11 +115,11 @@ usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
 
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
     auto barrierOp = cast<ttg::MBarrierOpInterface>(op);
-    return mma.getTwoCtas() &&
+    return hasTCGen5CommitCrossCTA(op) &&
            llvm::any_of(barrierOp.getBarriers(), aliasesTracked);
   }
   if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
-    return ttng::getModuleTwoCTAs(op) && aliasesTracked(commit.getBarrier());
+    return hasTCGen5CommitCrossCTA(op) && aliasesTracked(commit.getBarrier());
   }
   if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     return tma.getMulticast() && aliasesTracked(tma.getBarrier());
@@ -114,13 +127,16 @@ usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
   if (auto clc = dyn_cast<ttng::CLCTryCancelOp>(op)) {
     return aliasesTracked(clc.getMbarrier());
   }
+  if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
+    return aliasesTracked(store.getMbarrier());
+  }
   return false;
 }
 
-static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
-                                             FunctionOpInterface funcOp,
-                                             Allocation *allocation,
-                                             int numCTAs) {
+static bool
+requiresCrossCTAMBarrierInitSync(ttg::MBarrierOpInterface initBarrierOp,
+                                 FunctionOpInterface funcOp,
+                                 Allocation *allocation, int numCTAs) {
   // Barrier init sync is needed for barriers that are themselves cross-CTA,
   // and also for per-CTA barriers consumed by multi-CTA ops that multicast or
   // otherwise fan out barrier state across the cluster.
@@ -128,8 +144,8 @@ static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
     return true;
 
   Allocation::BufferIdSetT initBarrierBuffers;
-  for (auto bufferId :
-       allocation->getAllBufferIdsWithAliases(initBarrierOp.getBarrier())) {
+  for (auto bufferId : allocation->getAllBufferIdsWithAliases(
+           initBarrierOp.getBarriers().front())) {
     assert(bufferId != Allocation::InvalidBufferId);
     initBarrierBuffers.insert(bufferId);
   }
@@ -150,7 +166,7 @@ static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
 static bool nestedOpUsesTrackedMBarrier(Operation *op,
                                         const Allocation::BufferIdSetT &tracked,
                                         Allocation *allocation) {
-  if (isa<ttng::InitBarrierOp, ttg::LocalAllocOp>(op))
+  if (isa<ttng::InitBarrierOp, ttng::InitMmaBarrierOp, ttg::LocalAllocOp>(op))
     return false;
 
   if (auto memEffects = dyn_cast<MemoryEffectOpInterface>(op)) {
@@ -190,9 +206,7 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
   llvm::SetVector<Operation *> crossCTAInitAnchors;
   Allocation::BufferIdSetT trackedBarrierBuffers;
 
-  // Find all cross-CTA mbarrier.init ops and map each
-  // one to the containing top-level op that bounds the insertion window.
-  funcOp.walk([&](ttng::InitBarrierOp initBarrierOp) {
+  auto processInitBarrier = [&](ttg::MBarrierOpInterface initBarrierOp) {
     if (!requiresCrossCTAMBarrierInitSync(initBarrierOp, funcOp, allocation,
                                           numCTAs))
       return;
@@ -200,11 +214,20 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
         topLevelRegion.findAncestorOpInRegion(*initBarrierOp.getOperation());
     assert(topLevelAnchor && "init op must be inside the function region");
     crossCTAInitAnchors.insert(topLevelAnchor);
-    for (auto bufferId :
-         allocation->getAllBufferIdsWithAliases(initBarrierOp.getBarrier())) {
+    for (auto bufferId : allocation->getAllBufferIdsWithAliases(
+             initBarrierOp.getBarriers().front())) {
       assert(bufferId != Allocation::InvalidBufferId);
       trackedBarrierBuffers.insert(bufferId);
     }
+  };
+
+  // Find all cross-CTA mbarrier init ops and map each
+  // one to the containing top-level op that bounds the insertion window.
+  funcOp.walk([&](Operation *op) {
+    if (auto initBarrierOp = dyn_cast<ttng::InitBarrierOp>(op))
+      processInitBarrier(initBarrierOp);
+    if (auto initMmaBarrierOp = dyn_cast<ttng::InitMmaBarrierOp>(op))
+      processInitBarrier(initMmaBarrierOp);
   });
   // Nothing to do
   if (crossCTAInitAnchors.empty())

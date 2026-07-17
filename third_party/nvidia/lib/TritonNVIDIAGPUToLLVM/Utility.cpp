@@ -4,6 +4,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace mlir {
@@ -81,34 +82,41 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i) {
                        b.i32_val(0x1f));
 }
 
+bool usePreferredClusterFallback(ModuleOp moduleOp) {
+  return triton::nvidia_gpu::getModulePreferredClusterFallbackCTAs(moduleOp) >
+         0;
+}
+
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis) {
   assert(moduleOp);
 
-  // It is not easy to get the compute capability here, so we use numCTAs to
-  // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
-  // GetProgramIdOp is converted to "%ctaid", otherwise it is converted to
-  // "%clusterid".
+  // Triton clusters are one-dimensional in X. Program ids for Y/Z are raw CUDA
+  // block ids; X depends on cluster mode.
   int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
 
-  if (numCTAs == 1) {
-    switch (axis) {
-    case ProgramIDDim::X:
-      return NVVM::BlockIdXOp::create(rewriter, loc, i32_ty);
-    case ProgramIDDim::Y:
-      return NVVM::BlockIdYOp::create(rewriter, loc, i32_ty);
-    case ProgramIDDim::Z:
-      return NVVM::BlockIdZOp::create(rewriter, loc, i32_ty);
+  bool preferredFallback = usePreferredClusterFallback(moduleOp);
+  switch (axis) {
+  case ProgramIDDim::X: {
+    // Multi-CTA launches expand the CUDA grid in X. Fixed cluster launches can
+    // read the logical program id from %clusterid.x; preferred fallback must
+    // read %ctaid.x and divide by the static preferred cluster size.
+    Value ret = numCTAs == 1 || preferredFallback
+                    ? Value(NVVM::BlockIdXOp::create(rewriter, loc, i32_ty))
+                    : Value(NVVM::ClusterIdXOp::create(rewriter, loc, i32_ty));
+
+    if (preferredFallback) {
+      auto b = TritonLLVMOpBuilder(loc, rewriter);
+      ret = b.udiv(ret, b.i32_val(numCTAs));
     }
-  } else {
-    switch (axis) {
-    case ProgramIDDim::X:
-      return NVVM::ClusterIdXOp::create(rewriter, loc, i32_ty);
-    case ProgramIDDim::Y:
-      return NVVM::ClusterIdYOp::create(rewriter, loc, i32_ty);
-    case ProgramIDDim::Z:
-      return NVVM::ClusterIdZOp::create(rewriter, loc, i32_ty);
-    }
+    return ret;
+  }
+  case ProgramIDDim::Y:
+    // Clusters are always launched as {numCTAs, 1, 1}, so Y/Z are already the
+    // logical program id for all cluster modes.
+    return NVVM::BlockIdYOp::create(rewriter, loc, i32_ty);
+  case ProgramIDDim::Z:
+    return NVVM::BlockIdZOp::create(rewriter, loc, i32_ty);
   }
   llvm_unreachable("invalid axis");
 }
@@ -139,15 +147,37 @@ Value createElectPredicateWarp0(Location loc, OpBuilder &rewriter) {
   return b.and_(warp0, createElectPredicate(loc, rewriter));
 }
 
-Value createTMAMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
-                             uint16_t broadcastBits) {
-  int numCTAs = triton::gpu::lookupNumCTAs(rewriter);
+static Value createTMAMulticastMask(Location loc,
+                                    ConversionPatternRewriter &rewriter,
+                                    uint16_t broadcastBits, int numCTAs) {
   auto encoding =
       triton::nvidia_gpu::getTMAMulticastMaskEncoding(numCTAs, broadcastBits);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+  Value ctaId = NVVM::ClusterId::create(rewriter, loc, i32_ty);
   Value base = b.and_(ctaId, b.i32_val(encoding.fixedBits));
   return b.shl(b.i32_val(encoding.pattern), base);
+}
+
+Value createTMAMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
+                             uint16_t broadcastBits) {
+  ModuleOp moduleOp =
+      rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
+  int fallbackCTAs =
+      triton::nvidia_gpu::getModulePreferredClusterFallbackCTAs(moduleOp);
+  if (!fallbackCTAs)
+    return createTMAMulticastMask(loc, rewriter, broadcastBits,
+                                  triton::gpu::lookupNumCTAs(rewriter));
+
+  int preferredCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
+  Value preferredMask =
+      createTMAMulticastMask(loc, rewriter, broadcastBits, preferredCTAs);
+  Value fallbackMask =
+      createTMAMulticastMask(loc, rewriter, broadcastBits, fallbackCTAs);
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value actualNCTA = NVVM::ClusterDimBlocksXOp::create(rewriter, loc, i32_ty);
+  Value isFallback = b.icmp_eq(actualNCTA, b.i32_val(fallbackCTAs));
+  return b.select(isFallback, fallbackMask, preferredMask);
 }
 
 uint32_t getCGABroadcastMask(mlir::triton::gpu::MemDescType barrierTy) {
@@ -163,7 +193,7 @@ getLeaderCTAPredicate(Location loc, ConversionPatternRewriter &rewriter,
   if (!maskCGABroadcast)
     return std::nullopt;
 
-  Value ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+  Value ctaId = NVVM::ClusterId::create(rewriter, loc, i32_ty);
   Value ctaIdInGroup = b.and_(ctaId, b.i32_val(maskCGABroadcast));
   return std::optional<Value>(b.icmp_eq(ctaIdInGroup, b.i32_val(0)));
 }
@@ -185,7 +215,7 @@ Value getLeaderAddress(Location loc, ConversionPatternRewriter &rewriter,
 
 Value createLeadCTAPredicate(Location loc, RewriterBase &rewriter) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value leftClusterId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+  Value leftClusterId = NVVM::ClusterId::create(rewriter, loc, i32_ty);
   leftClusterId = b.and_(leftClusterId, b.i32_val(1));
   Value cluster0 = b.icmp_eq(leftClusterId, b.i32_val(0));
   return cluster0;

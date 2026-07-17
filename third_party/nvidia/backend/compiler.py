@@ -220,6 +220,7 @@ class CUDABackend(BaseBackend):
             metadata.num_warps,
             metadata.num_ctas,
             metadata.shared,
+            getattr(metadata, "preferred_cluster_fallback_ctas", 0),
         )
 
     def get_codegen_implementation(self, options):
@@ -385,6 +386,8 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
+        if "consan" not in options.instrumentation_mode and not options.launch_cooperative_grid:
+            nvidia.passes.ttnvgpuir.add_preferred_cluster_fallback(pm, capability)
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
         if CUDABackend.instrumentation:
             CUDABackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
@@ -460,6 +463,7 @@ class CUDABackend(BaseBackend):
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment") or 1
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
         metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
+        metadata["preferred_cluster_fallback_ctas"] = src.get_int_attr("ttng.preferred-cluster-fallback-ctas") or 0
         ret = str(llvm_mod)
         del llvm_mod
         del context

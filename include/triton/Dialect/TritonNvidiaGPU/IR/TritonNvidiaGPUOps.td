@@ -274,6 +274,18 @@ def TTNG_InitBarrierOp : TTNG_Op<"init_barrier", [
   let hasVerifier = 1;
 }
 
+def TTNG_InitMmaBarrierOp : TTNG_Op<"init_mma_barrier", [
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
+  let summary = "Initialize a barrier for tcgen05 MMA completion.";
+
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$alloc,
+    Variadic<TTG_MemDescType>:$descs
+  );
+  let assemblyFormat = "$alloc (`,` $descs^)? attr-dict `:` qualified(type($alloc)) (`,` qualified(type($descs))^)?";
+  let hasVerifier = 1;
+}
+
 def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [
     DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
   let summary = "Invalidate a barrier allocation.";

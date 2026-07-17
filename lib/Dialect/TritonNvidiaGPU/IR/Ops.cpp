@@ -165,6 +165,9 @@ LogicalResult WarpGroupDotWaitOp::verify() {
   return success();
 }
 
+static LogicalResult verifyCompletionBarrierLayout(Operation *op,
+                                                   Value barrier);
+
 // -- InitBarrierOp --
 LogicalResult InitBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
@@ -183,6 +186,23 @@ LogicalResult InitBarrierOp::verify() {
 }
 
 TypedValue<MemDescType> InitBarrierOp::getBarrier() { return getAlloc(); }
+
+// -- InitMmaBarrierOp --
+LogicalResult InitMmaBarrierOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  if (getDescs().empty() || getDescs().size() > 4)
+    return emitOpError("expects one to four descriptors");
+  auto barrierTy = cast<MemDescType>(getAlloc().getType());
+  int numCTAs = gpu::lookupNumCTAs(getOperation());
+  if (barrierTy.getShape().size() != 1 || barrierTy.getNumElements() != numCTAs)
+    return emitOpError("requires a 1D barrier with one element per CTA");
+  if (failed(verifyCompletionBarrierLayout(getOperation(), getAlloc())))
+    return failure();
+  return success();
+}
+
+TypedValue<MemDescType> InitMmaBarrierOp::getBarrier() { return getAlloc(); }
 
 // -- InvalBarrierOp --
 LogicalResult InvalBarrierOp::verify() {
@@ -1691,6 +1711,37 @@ SmallVector<uint16_t> getCTABroadcastMasks(bool twoCTAs, ValueRange descs) {
     broadcastMasks.push_back(1);
   }
   return broadcastMasks;
+}
+
+uint32_t getTCGen5MmaBarrierCount(ValueRange descs, bool twoCTAs,
+                                  bool fallback) {
+  if (descs.empty())
+    return 1;
+
+  auto kBlock = StringAttr::get(descs.front().getContext(), "block");
+  SmallVector<uint32_t> masks;
+  for (Value desc : descs) {
+    auto descTy = cast<gpu::MemDescType>(desc.getType());
+    uint32_t mask =
+        toLinearLayout(descTy).getFreeVariableMasks().lookup(kBlock);
+    if (fallback)
+      mask &= 1;
+    if (twoCTAs)
+      mask &= ~1u;
+    masks.push_back(mask);
+  }
+
+  assert(masks.size() <= 4 && "expected at most four descriptors");
+  int32_t count = 0;
+  for (uint32_t subset = 1; subset < (1u << masks.size()); ++subset) {
+    uint32_t intersection = ~0u;
+    for (auto [i, mask] : llvm::enumerate(masks))
+      if (subset & (1u << i))
+        intersection &= mask;
+    int32_t size = 1u << llvm::popcount(intersection);
+    count += llvm::popcount(subset) & 1 ? size : -size;
+  }
+  return count;
 }
 
 TMAMulticastMaskEncoding getTMAMulticastMaskEncoding(int numCTAs,

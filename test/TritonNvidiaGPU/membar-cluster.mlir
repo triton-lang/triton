@@ -2,6 +2,51 @@
 
 // -----
 
+#sharedCommit = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
+#barrierCommit = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Multicast commit can complete a per-CTA barrier on another CTA even when
+  // this is not a two-CTA MMA kernel.
+  // CHECK-LABEL: @cluster_tc_gen5_commit_multicast_with_per_cta_barrier
+  // CHECK: ttng.init_mma_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
+  // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttng.tc_gen5_commit
+  tt.func @cluster_tc_gen5_commit_multicast_with_per_cta_barrier(%desc: !ttg.memdesc<128x128xf16, #sharedCommit, #smem>) {
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierCommit, #smem, mutable>
+    ttng.init_mma_barrier %barrier, %desc : !ttg.memdesc<2xi64, #barrierCommit, #smem, mutable>, !ttg.memdesc<128x128xf16, #sharedCommit, #smem>
+    ttng.tc_gen5_commit %barrier descs %desc : !ttg.memdesc<2xi64, #barrierCommit, #smem, mutable>, !ttg.memdesc<128x128xf16, #sharedCommit, #smem>
+    tt.return
+  }
+}
+
+// -----
+
+#sharedMMA = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
+#barrierMMA = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#tmemMMA = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[0, 0]]>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @cluster_tc_gen5_mma_multicast_with_per_cta_barrier
+  // CHECK: ttng.init_mma_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
+  // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttng.tc_gen5_mma
+  tt.func @cluster_tc_gen5_mma_multicast_with_per_cta_barrier(%a: !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, %b: !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, %acc: !ttg.memdesc<128x128xf32, #tmemMMA, #ttng.tensor_memory, mutable>) {
+    %false = arith.constant false
+    %true = arith.constant true
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
+    ttng.init_mma_barrier %barrier, %a, %b : !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>, !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, !ttg.memdesc<128x128xf16, #sharedMMA, #smem>
+    ttng.tc_gen5_mma %a, %b, %acc, %false, %true, %barrier[%true] {is_async, multicast} : !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, !ttg.memdesc<128x128xf32, #tmemMMA, #ttng.tensor_memory, mutable>, !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #blockedSplitM = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 #blockedSplitN = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
