@@ -839,6 +839,71 @@ tt.func @tc_gen5_commit(%arg0: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %pr
 
 // -----
 
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @tc_gen5_commit_multicast
+  // CHECK: tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.multicast::cluster.b64
+  // CHECK: mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64
+  tt.func @tc_gen5_commit_multicast(%barrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>, %desc: !ttg.memdesc<128x128xf16, #shared, #smem>, %pred: i1, %phase: i32) {
+    ttng.tc_gen5_commit %barrier, %pred descs %desc : !ttg.memdesc<2xi64, #barrier, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem>
+    ttng.wait_barrier %barrier, %phase : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[0, 0]]>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @tc_gen5_mma_multicast
+  // CHECK: tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.multicast::cluster.b64
+  // CHECK: mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64
+  tt.func @tc_gen5_mma_multicast(%a: !ttg.memdesc<128x128xf16, #shared, #smem>, %b: !ttg.memdesc<128x128xf16, #shared, #smem>, %acc: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, %barrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>, %pred: i1, %phase: i32) {
+    %false = arith.constant false
+    ttng.tc_gen5_mma %a, %b, %acc, %false, %pred, %barrier[%pred] {is_async, multicast} : !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.wait_barrier %barrier, %phase : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @tc_gen5_commit_without_multicast
+  // CHECK: tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.b64
+  // CHECK: mbarrier.try_wait.parity.shared::cta.b64
+  tt.func @tc_gen5_commit_without_multicast(%barrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>, %desc: !ttg.memdesc<128x128xf16, #shared, #smem>, %pred: i1, %phase: i32) {
+    ttng.tc_gen5_commit %barrier, %pred descs %desc : !ttg.memdesc<2xi64, #barrier, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem>
+    ttng.wait_barrier %barrier, %phase : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true} {
+  // CHECK-LABEL: @tc_gen5_commit_two_ctas
+  // CHECK: tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::cluster.multicast::cluster.b64
+  // CHECK: mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64
+  tt.func @tc_gen5_commit_two_ctas(%barrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>, %pred: i1, %phase: i32) {
+    ttng.tc_gen5_commit %barrier, %pred : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.wait_barrier %barrier, %phase : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #tmem_f32 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1>
 #tmem_f16 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 2>
 

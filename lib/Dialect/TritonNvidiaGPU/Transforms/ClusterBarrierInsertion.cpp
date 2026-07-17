@@ -22,8 +22,21 @@ namespace nvidia_gpu {
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-static bool hasClusterSync(Operation *op) {
+static bool hasTCGen5Commit(Operation *op) {
+  SmallVector<Value> descs;
+  if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
+    descs = mma.getCompletionDescs();
+  else if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op))
+    llvm::append_range(descs, commit.getDescs());
+  else
+    return false;
+  return !ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op), descs).empty();
+}
+
+bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op)) {
+    if (!isRead)
+      return false;
     auto srcTy = cvt.getSrc().getType();
     auto dstTy = cvt.getType();
     auto kBlock = StringAttr::get(op->getContext(), "block");
@@ -31,28 +44,20 @@ static bool hasClusterSync(Operation *op) {
                          kBlock);
   }
   if (auto reduce = dyn_cast<triton::ReduceOp>(op)) {
+    if (!isRead)
+      return false;
     auto srcTy = reduce.getInputTypes()[0];
     auto splitNum = ttg::getCTASplitNum(srcTy.getEncoding());
     return splitNum[reduce.getAxis()] > 1;
   }
-  if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
-    return mma.getTwoCtas();
+  if (isa<ttng::CLCTryCancelOp, ttng::AsyncSharedStoreOp>(op)) {
+    return ttg::lookupNumCTAs(op) > 1;
   } else if (isa<ttng::TMEMCopyOp>(op)) {
     return ttng::getModuleTwoCTAs(op);
-  } else if (auto tma = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
-    return tma.getMulticast();
-  } else if (auto tma = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
+  } else if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     return tma.getMulticast();
   }
-  return false;
-}
-
-bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
-  if (!isRead && isa<ttg::ConvertLayoutOp, triton::ReduceOp>(op))
-    return false;
-  if (isa<ttng::CLCTryCancelOp>(op))
-    return ttg::lookupNumCTAs(op) > 1;
-  return hasClusterSync(op);
+  return hasTCGen5Commit(op);
 }
 
 namespace {
@@ -106,17 +111,20 @@ usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
 
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
     auto barrierOp = cast<ttg::MBarrierOpInterface>(op);
-    return mma.getTwoCtas() &&
+    return hasTCGen5Commit(op) &&
            llvm::any_of(barrierOp.getBarriers(), aliasesTracked);
   }
   if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
-    return ttng::getModuleTwoCTAs(op) && aliasesTracked(commit.getBarrier());
+    return hasTCGen5Commit(op) && aliasesTracked(commit.getBarrier());
   }
   if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     return tma.getMulticast() && aliasesTracked(tma.getBarrier());
   }
   if (auto clc = dyn_cast<ttng::CLCTryCancelOp>(op)) {
     return aliasesTracked(clc.getMbarrier());
+  }
+  if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
+    return aliasesTracked(store.getMbarrier());
   }
   return false;
 }
@@ -413,7 +421,8 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
 
     // Clear prior distributed dependencies if we have inserted a cluster
     // barrier, or if the scratch op itself performs a cluster-level sync.
-    if (insertClusterBarrierNeeded || hasClusterSync(op))
+    if (insertClusterBarrierNeeded ||
+        isDistributedMultiCTAOp(op, /*isRead=*/true))
       blockInfo->sync();
 
     curBlockInfo.syncReadSlices[scratchSlice].insert(op);
