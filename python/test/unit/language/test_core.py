@@ -5949,6 +5949,21 @@ def test_constexpr_flattens():
     assert tl.constexpr(tl.constexpr(tl.constexpr(5))) == tl.constexpr(5)
 
 
+def test_constexpr_mod_matches_runtime_truncation():
+    # A constexpr-folded `a % b` must match the runtime lowering -- frem for
+    # floats, srem for signed ints -- which truncates toward zero so the
+    # remainder takes the sign of the dividend. Python's built-in `%` floors
+    # instead (sign of the divisor), which flipped the sign of a folded result
+    # relative to the same expression evaluated at runtime. Regression for #10920.
+    assert (tl.constexpr(-5.0) % tl.constexpr(3.0)).value == -2.0
+    assert (tl.constexpr(5.0) % tl.constexpr(-3.0)).value == 2.0
+    assert (tl.constexpr(-5) % tl.constexpr(3)).value == -2
+    assert (tl.constexpr(5) % tl.constexpr(-3)).value == 2
+    # Same-sign and all-positive operands already agreed and must stay put.
+    assert (tl.constexpr(5) % tl.constexpr(3)).value == 2
+    assert (tl.constexpr(-5.0) % tl.constexpr(-3.0)).value == -2.0
+
+
 @pytest.mark.parametrize("literal, tensor_ty", [(10, tl.int32), (32.1, tl.float32),
                                                 ((5, 6, 7), None),  # tuples can't be lifted to tensors
                                                 ])
