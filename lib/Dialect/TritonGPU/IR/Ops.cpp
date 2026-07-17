@@ -653,40 +653,6 @@ OpFoldResult MemDescReinterpretOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
-namespace {
-
-LinearLayout getViewLayout(MemDescType type) {
-  auto encoding = type.getEncoding();
-  auto rank = cast<LayoutEncodingTrait>(encoding).getRank();
-  auto allocShape = type.getAllocShape().take_back(rank);
-  auto viewShape = type.getShape().take_back(rank);
-  LinearLayout layout = isPaddedEncoding(encoding)
-                            ? paddedLinearLayout(allocShape, encoding)
-                            : toLinearLayout(allocShape, encoding);
-
-  if (viewShape == allocShape)
-    return layout;
-
-  for (auto [dim, size] : llvm::zip_equal(layout.getOutDimNames(), viewShape))
-    layout = layout.resizeOutDim(dim, size);
-
-  // Only trim redundant high address bits; block mappings stay intact.
-  auto freeVariables = layout.getFreeVariableMasks();
-  auto kBlock = StringAttr::get(type.getContext(), "block");
-  for (auto dim : layout.getInDimNames()) {
-    if (dim == kBlock)
-      continue;
-    uint32_t freeMask = freeVariables.lookup(dim);
-    int32_t inputSize = layout.getInDimSize(dim);
-    while (inputSize > 1 && (freeMask & (inputSize >> 1)))
-      inputSize >>= 1;
-    layout = layout.resizeInDim(dim, inputSize);
-  }
-  return layout;
-}
-
-} // namespace
-
 LogicalResult MemDescReinterpretOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getResult().getType();
@@ -735,13 +701,13 @@ LogicalResult MemDescReinterpretOp::verify() {
   if (isSubview(dstTy))
     return emitError("result must not be a subview");
 
-  auto srcLayout = getViewLayout(srcTy);
-  if (isSubview(srcTy) && !getLayoutWithinBlock(srcLayout).isInjective())
-    return emitError("source subview must be contiguous");
-  auto dstLayout = getViewLayout(dstTy);
-
-  auto getViewNumBits = [](MemDescType ty, const LinearLayout &layout) {
+  auto getViewNumBits = [](MemDescType ty) {
     auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
+    auto shape = ty.getAllocShape().take_back(rank);
+    auto encoding = ty.getEncoding();
+    LinearLayout layout = isPaddedEncoding(encoding)
+                              ? paddedLinearLayout(shape, encoding)
+                              : toLinearLayout(shape, encoding);
     int64_t numLayoutCopies = 1;
     for (int64_t dim : ty.getAllocShape().drop_back(rank))
       numLayoutCopies *= dim;
@@ -750,12 +716,33 @@ LogicalResult MemDescReinterpretOp::verify() {
     // copies of that logical allocation.
     auto *ctx = ty.getContext();
     bool isSharedMemory = isa<SharedMemorySpaceAttr>(ty.getMemorySpace());
-    auto dim = StringAttr::get(ctx, isSharedMemory ? "offset" : "col");
-    return numLayoutCopies * layout.getInDimSize(dim) *
-           ty.getElementTypeBitWidth();
+    auto kStorage = StringAttr::get(ctx, isSharedMemory ? "offset" : "col");
+    int64_t storageSize = layout.getInDimSize(kStorage);
+    auto viewShape = ty.getShape().take_back(rank);
+    if (viewShape != shape) {
+      for (auto [dim, size] :
+           llvm::zip_equal(layout.getOutDimNames(), viewShape))
+        layout = layout.resizeOutDim(dim, size);
+      auto freeMasks = layout.getFreeVariableMasks();
+      auto kBlock = StringAttr::get(ctx, "block");
+      for (auto dim : layout.getInDimNames()) {
+        if (dim == kBlock)
+          continue;
+        // A contiguous view may only remove high address bits.
+        uint32_t usedMask =
+            (layout.getInDimSize(dim) - 1) & ~freeMasks.lookup(dim);
+        if (usedMask & (usedMask + 1))
+          return int64_t{-1};
+        if (dim == kStorage)
+          storageSize = usedMask + 1;
+      }
+    }
+    return numLayoutCopies * storageSize * ty.getElementTypeBitWidth();
   };
-  auto srcNumBits = getViewNumBits(srcTy, srcLayout);
-  auto dstNumBits = getViewNumBits(dstTy, dstLayout);
+  auto srcNumBits = getViewNumBits(srcTy);
+  if (srcNumBits < 0)
+    return emitError("source subview must be contiguous");
+  auto dstNumBits = getViewNumBits(dstTy);
   if (dstNumBits > srcNumBits)
     return emitError() << "result logical storage size must not exceed source "
                           "logical storage size ("
