@@ -312,3 +312,61 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// A store and a read-back of the same buffer must share one layout, or a
+// thread reads back what another wrote. The wide f16 load pushes the read
+// layout to [1, 8] while the f32 store is clamped to [1, 4]; the store must
+// take the read-back's layout.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @readback_same_layout
+  tt.func public @readback_same_layout(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<8x256xf32, #blocked>
+    %r = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %re = tt.expand_dims %r {axis = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x256xi32, #blocked>
+    %off = tt.broadcast %re : tensor<1x256xi32, #blocked> -> tensor<8x256xi32, #blocked>
+    %sp = tt.splat %arg0 : !tt.ptr<f32> -> tensor<8x256x!tt.ptr<f32>, #blocked>
+    %p = tt.addptr %sp, %off : tensor<8x256x!tt.ptr<f32>, #blocked>, tensor<8x256xi32, #blocked>
+    %sp16 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<8x256x!tt.ptr<f16>, #blocked>
+    %p16 = tt.addptr %sp16, %off : tensor<8x256x!tt.ptr<f16>, #blocked>, tensor<8x256xi32, #blocked>
+    %w = tt.load %p16 : tensor<8x256x!tt.ptr<f16>, #blocked>
+    // The store adopts the read-back's layout, so the two share one encoding.
+    // CHECK: tt.store %{{.*}} : tensor<8x256x!tt.ptr<f32>, [[ENC:#[a-z0-9]+]]>
+    tt.store %p, %cst : tensor<8x256x!tt.ptr<f32>, #blocked>
+    // CHECK: tt.load %{{.*}} : tensor<8x256x!tt.ptr<f32>, [[ENC]]>
+    %v = tt.load %p : tensor<8x256x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// The read-back may rebuild its own pointer instead of reusing the store's.
+// Matching on the (arg, offset) it addresses still pairs them.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @readback_recomputed_pointer
+  tt.func public @readback_recomputed_pointer(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<8x256xf32, #blocked>
+    %r = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %re = tt.expand_dims %r {axis = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x256xi32, #blocked>
+    %off = tt.broadcast %re : tensor<1x256xi32, #blocked> -> tensor<8x256xi32, #blocked>
+    %sp16 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<8x256x!tt.ptr<f16>, #blocked>
+    %p16 = tt.addptr %sp16, %off : tensor<8x256x!tt.ptr<f16>, #blocked>, tensor<8x256xi32, #blocked>
+    %w = tt.load %p16 : tensor<8x256x!tt.ptr<f16>, #blocked>
+    %sp = tt.splat %arg0 : !tt.ptr<f32> -> tensor<8x256x!tt.ptr<f32>, #blocked>
+    %p = tt.addptr %sp, %off : tensor<8x256x!tt.ptr<f32>, #blocked>, tensor<8x256xi32, #blocked>
+    // CHECK: tt.store %{{.*}} : tensor<8x256x!tt.ptr<f32>, [[ENC:#[a-z0-9]+]]>
+    tt.store %p, %cst : tensor<8x256x!tt.ptr<f32>, #blocked>
+    // Read-back rebuilds its own pointer to the same address.
+    %sp2 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<8x256x!tt.ptr<f32>, #blocked>
+    %p2 = tt.addptr %sp2, %off : tensor<8x256x!tt.ptr<f32>, #blocked>, tensor<8x256xi32, #blocked>
+    // CHECK: tt.load %{{.*}} : tensor<8x256x!tt.ptr<f32>, [[ENC]]>
+    %v = tt.load %p2 : tensor<8x256x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}

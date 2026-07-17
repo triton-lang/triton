@@ -68,6 +68,61 @@ static void pickDescriptorLoadStoreLayout(
   });
 }
 
+// Get the (kernel arg, offset) a pointer addresses by walking its
+// splat/addptr chain. Returns null if it is not a single addptr off a kernel
+// argument.
+static std::pair<Value, Value> getBaseAndOffset(Value ptr) {
+  Value offset;
+  while (Operation *def = ptr.getDefiningOp()) {
+    if (auto addPtr = dyn_cast<AddPtrOp>(def)) {
+      if (offset) // keep it simple: only one addptr
+        return {};
+      offset = addPtr.getOffset();
+      ptr = addPtr.getPtr();
+    } else if (auto splat = dyn_cast<SplatOp>(def)) {
+      ptr = splat.getSrc();
+    } else {
+      return {};
+    }
+  }
+  if (!offset || !isa<BlockArgument>(ptr))
+    return {};
+  return {ptr, offset};
+}
+
+// If a store and a later load hit the same buffer, Coalesce may give them
+// different layouts, so one thread reads back what another wrote. Give the
+// store the load's layout so each thread reads back its own data. We match on
+// the (arg, offset) addressed, so different regions of a buffer are left alone.
+static void alignReadBackStores(ModuleOp moduleOp,
+                                llvm::MapVector<Operation *, Attribute> &map) {
+  moduleOp.walk([&](triton::FuncOp func) {
+    for (Block &block : func.getBody()) {
+      llvm::DenseMap<std::pair<Value, Value>, StoreOp> lastStore;
+      for (Operation &op : block) {
+        if (auto store = dyn_cast<StoreOp>(&op)) {
+          if (!map.count(store))
+            continue;
+          std::pair<Value, Value> key = getBaseAndOffset(store.getPtr());
+          if (key.first)
+            lastStore[key] = store;
+        } else if (auto load = dyn_cast<LoadOp>(&op)) {
+          std::pair<Value, Value> key = getBaseAndOffset(load.getPtr());
+          if (!key.first)
+            continue;
+          auto storeIt = lastStore.find(key);
+          if (storeIt == lastStore.end())
+            continue;
+          auto loadLayoutIt = map.find(load);
+          auto storeLayoutIt = map.find(storeIt->second);
+          if (loadLayoutIt != map.end() && storeLayoutIt != map.end())
+            storeLayoutIt->second = loadLayoutIt->second;
+        }
+      }
+    }
+  });
+}
+
 struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
   static Type getNewType(Type type, Attribute encoding) {
     RankedTensorType tensorType = cast<RankedTensorType>(type);
@@ -106,6 +161,9 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
 
     // Also pick a layout for descriptor load/store ops.
     pickDescriptorLoadStoreLayout(moduleOp, layoutMap);
+
+    // Match a store's layout to its read-back so the two do not race.
+    alignReadBackStores(moduleOp, layoutMap);
 
     // For each memory op that has a layout L1:
     // 1. Create a coalesced memory layout L2 of the pointer operands
