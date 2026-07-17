@@ -655,29 +655,22 @@ OpFoldResult MemDescReinterpretOp::fold(FoldAdaptor adaptor) {
 
 namespace {
 
-LinearLayout getAllocationLayout(MemDescType type) {
-  auto rank = cast<LayoutEncodingTrait>(type.getEncoding()).getRank();
-  auto allocShape = type.getAllocShape().take_back(rank);
+LinearLayout getViewLayout(MemDescType type) {
   auto encoding = type.getEncoding();
-  return isPaddedEncoding(encoding) ? paddedLinearLayout(allocShape, encoding)
-                                    : toLinearLayout(allocShape, encoding);
-}
-
-std::optional<LinearLayout> getContiguousViewLayout(MemDescType type) {
-  auto rank = cast<LayoutEncodingTrait>(type.getEncoding()).getRank();
+  auto rank = cast<LayoutEncodingTrait>(encoding).getRank();
   auto allocShape = type.getAllocShape().take_back(rank);
   auto viewShape = type.getShape().take_back(rank);
-  LinearLayout layout = getAllocationLayout(type);
+  LinearLayout layout = isPaddedEncoding(encoding)
+                            ? paddedLinearLayout(allocShape, encoding)
+                            : toLinearLayout(allocShape, encoding);
 
   if (viewShape == allocShape)
     return layout;
 
-  // Restrict the allocation layout to the logical shape of the source view.
   for (auto [dim, size] : llvm::zip_equal(layout.getOutDimNames(), viewShape))
     layout = layout.resizeOutDim(dim, size);
 
-  // A contiguous view can only discard redundant high address bits. Keep the
-  // block mapping intact so contiguity is checked independently for each CTA.
+  // Only trim redundant high address bits; block mappings stay intact.
   auto freeVariables = layout.getFreeVariableMasks();
   auto kBlock = StringAttr::get(type.getContext(), "block");
   for (auto dim : layout.getInDimNames()) {
@@ -689,11 +682,6 @@ std::optional<LinearLayout> getContiguousViewLayout(MemDescType type) {
       inputSize >>= 1;
     layout = layout.resizeInDim(dim, inputSize);
   }
-
-  // Any remaining redundant within-CTA address bit represents a gap in the
-  // view and makes reinterpretation unsafe.
-  if (!getLayoutWithinBlock(layout).isInjective())
-    return std::nullopt;
   return layout;
 }
 
@@ -747,10 +735,10 @@ LogicalResult MemDescReinterpretOp::verify() {
   if (isSubview(dstTy))
     return emitError("result must not be a subview");
 
-  auto srcLayout = getContiguousViewLayout(srcTy);
-  if (!srcLayout)
+  auto srcLayout = getViewLayout(srcTy);
+  if (isSubview(srcTy) && !getLayoutWithinBlock(srcLayout).isInjective())
     return emitError("source subview must be contiguous");
-  auto dstLayout = getAllocationLayout(dstTy);
+  auto dstLayout = getViewLayout(dstTy);
 
   auto getViewNumBits = [](MemDescType ty, const LinearLayout &layout) {
     auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
@@ -766,7 +754,7 @@ LogicalResult MemDescReinterpretOp::verify() {
     return numLayoutCopies * layout.getInDimSize(dim) *
            ty.getElementTypeBitWidth();
   };
-  auto srcNumBits = getViewNumBits(srcTy, *srcLayout);
+  auto srcNumBits = getViewNumBits(srcTy, srcLayout);
   auto dstNumBits = getViewNumBits(dstTy, dstLayout);
   if (dstNumBits > srcNumBits)
     return emitError() << "result logical storage size must not exceed source "

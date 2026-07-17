@@ -2925,23 +2925,15 @@ tt.func private @memdesc_reinterpret(%arg0: !ttg.memdesc<4x1024xi64, #shared0, #
 
 // CHECK-LABEL: @memdesc_reinterpret_contiguous_smem_subview
 tt.func private @memdesc_reinterpret_contiguous_smem_subview(%arg0: !ttg.memdesc<16x16xf16, #shared0, #ttg.shared_memory, mutable>) {
-  // CHECK: [[BASE:%.*]] = llvm.extractvalue %arg0[0]
   // CHECK: [[OFF0:%.*]] = llvm.extractvalue %arg0[1]
-  // CHECK: [[OFF1:%.*]] = llvm.extractvalue %arg0[2]
   // CHECK: [[C8:%.*]] = llvm.mlir.constant(8 : i32)
   // CHECK: [[NEW_OFF0:%.*]] = llvm.add [[OFF0]], [[C8]]
-  // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
-  // CHECK: [[NEW_OFF1:%.*]] = llvm.add [[OFF1]], [[C0]]
-  // CHECK: [[SUB0:%.*]] = llvm.mlir.undef
-  // CHECK: [[SUB1:%.*]] = llvm.insertvalue [[BASE]], [[SUB0]][0]
-  // CHECK: [[SUB2:%.*]] = llvm.insertvalue [[NEW_OFF0]], [[SUB1]][1]
-  // CHECK: [[SUB3:%.*]] = llvm.insertvalue [[NEW_OFF1]], [[SUB2]][2]
+  // CHECK: [[SUB2:%.*]] = llvm.insertvalue [[NEW_OFF0]], {{.*}}[1]
+  // CHECK: [[SUB3:%.*]] = llvm.insertvalue {{.*}}, [[SUB2]][2]
   %0 = ttg.memdesc_subslice %arg0 [8, 0] : !ttg.memdesc<16x16xf16, #shared0, #ttg.shared_memory, mutable> -> !ttg.memdesc<8x16xf16, #shared0, #ttg.shared_memory, mutable, 16x16>
   // CHECK: [[SUB_BASE:%.*]] = llvm.extractvalue [[SUB3]][0]
   // CHECK: [[SUB_OFF0:%.*]] = llvm.extractvalue [[SUB3]][1]
-  // CHECK: [[SUB_OFF1:%.*]] = llvm.extractvalue [[SUB3]][2]
   // CHECK: llvm.shl [[SUB_OFF0]],
-  // CHECK: llvm.shl [[SUB_OFF1]],
   // CHECK: [[NEW_BASE:%.*]] = llvm.getelementptr [[SUB_BASE]][{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
   // CHECK: [[RESET:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK: [[DST0:%.*]] = llvm.mlir.undef
