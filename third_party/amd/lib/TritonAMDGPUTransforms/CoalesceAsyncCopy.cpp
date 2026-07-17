@@ -81,8 +81,16 @@ struct CoalesceAsyncCopyWrites
       sharedLayout = triton::gpu::toLinearLayout(dstTy);
     }
     auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
-    loadContig = std::min<unsigned>(loadContig,
-                                    regToSharedLayout.getNumConsecutiveInOut());
+    unsigned layoutContig = regToSharedLayout.getNumConsecutiveInOut();
+
+    // The src encoding maps more contiguous elements per thread into LDS than
+    // the reg->shared layout can write coalesced (e.g. the blocked and shared
+    // encodings have a different order). In this case the current src encoding
+    // results in strided writes into LDS which the lowering cannot handle, so
+    // we always have to rewrite the src layout even if canLoadDirectToLDS
+    // reports coalesced writes for the reduced (smaller) vector size below.
+    bool layoutRestrictsContig = layoutContig < loadContig;
+    loadContig = std::min<unsigned>(loadContig, layoutContig);
 
     // Select the largest supported load width equal or smaller than loadContig
     auto elemBitWidth = dstTy.getElementTypeBitWidth();
@@ -102,8 +110,15 @@ struct CoalesceAsyncCopyWrites
 
     ttg::DistributedEncodingTrait newDistEnc;
 
-    if (LLVM::AMD::canLoadDirectToLDS(targetInfo, srcTy, dstTy.getEncoding(),
-                                      dstTy.getAllocShape(), loadContig)) {
+    // Note: canLoadDirectToLDS can further reduce loadContig (e.g. for padded
+    // encodings) via the reference parameter, so we always call it. We only
+    // take the early exit when the layout did not restrict the contiguity;
+    // otherwise the current src encoding still writes strided into LDS and must
+    // be rewritten.
+    bool alreadyCoalesced =
+        LLVM::AMD::canLoadDirectToLDS(targetInfo, srcTy, dstTy.getEncoding(),
+                                      dstTy.getAllocShape(), loadContig);
+    if (alreadyCoalesced && !layoutRestrictsContig) {
       return rewriter.notifyMatchFailure(copyOp, "already writes coalesced");
     }
     // Check if we support load contig because canLoadDirectToLds can change it
@@ -112,18 +127,30 @@ struct CoalesceAsyncCopyWrites
                                          "unable to find supported vector size "
                                          "based on src and dst encodings");
 
-    if (isa<ttg::SwizzledSharedEncodingAttr>(dstTy.getEncoding())) {
+    if (auto swizzledEnc =
+            dyn_cast<ttg::SwizzledSharedEncodingAttr>(dstTy.getEncoding())) {
       // For swizzled layouts we apply the swizzling during lowering so we only
-      // adjust the sizePerThread of the blocked encoding to avoid strided
-      // writes into LDS
+      // adjust the blocked encoding to avoid strided writes into LDS.
       auto contigPerThread = ttg::getContigPerThread(srcTy);
       auto srcElemContig = contigPerThread[blockedEnc.getOrder()[0]];
       assert(srcElemContig >= loadContig);
       contigPerThread[blockedEnc.getOrder()[0]] = loadContig;
-      newDistEnc = BlockedEncodingAttr::get(
+
+      // The default builder distributes the lanes (and warps) of a blocked
+      // encoding along its own order. When the blocked and shared order
+      // disagree this spreads consecutive lanes along a dimension that is
+      // strided in LDS, resulting in uncoalesced writes. Instead we distribute
+      // the lanes/warps following the shared order so consecutive lanes map to
+      // consecutive LDS offsets, and afterwards keep the original blocked order
+      // for the register (sizePerThread) contiguity.
+      auto distEnc = BlockedEncodingAttr::get(
           copyOp.getContext(), srcTy.getShape(), contigPerThread,
-          blockedEnc.getOrder(), numWarps, threadsPerWarp,
+          swizzledEnc.getOrder(), numWarps, threadsPerWarp,
           blockedEnc.getCGALayout());
+      newDistEnc = BlockedEncodingAttr::get(
+          copyOp.getContext(), distEnc.getSizePerThread(),
+          distEnc.getThreadsPerWarp(), distEnc.getWarpsPerCTA(),
+          blockedEnc.getOrder(), blockedEnc.getCGALayout());
     } else if (paddedEnc) {
       // For padded layouts the linear_component maps from LDS offsets to n-D
       // tensor indices. This mapping might reorder elements resulting in
