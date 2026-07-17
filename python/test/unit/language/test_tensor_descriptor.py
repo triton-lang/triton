@@ -1814,3 +1814,26 @@ def test_tensor_descriptor_store_downcast(dtype_str, device):
     kernel[(grid_m, grid_n)](desc, M, N, M_BLOCK=M_BLOCK, N_BLOCK=N_BLOCK)
     ref = torch.arange(M * N, dtype=torch.float32, device=device).reshape(M, N).to(torch_dtype)
     torch.testing.assert_close(out, ref)
+
+
+def test_tensor_descriptor_stride_alignment(device):
+    if not is_cuda():
+        pytest.skip("Requires TMA support")
+
+    @triton.jit
+    def kernel(a_ptr, M, N, stride_m: tl.constexpr, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+        desc = tl.make_tensor_descriptor(a_ptr, shape=[M, N], strides=[stride_m, 1], block_shape=[M_BLOCK, N_BLOCK])
+        desc.load([0, 0])
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device=device)
+
+    triton.set_allocator(alloc_fn)
+    a = torch.empty((32, 512), dtype=torch.bfloat16, device=device)
+
+    # bfloat16 stride of 511 elements = 1022 bytes, not a multiple of 16 (issue #10927).
+    with pytest.raises(CompilationError, match="16-byte aligned"):
+        kernel[(1, )](a, 32, 511, stride_m=511, M_BLOCK=8, N_BLOCK=64)
+
+    # A 16-byte aligned stride compiles and runs fine.
+    kernel[(1, )](a, 32, 512, stride_m=512, M_BLOCK=8, N_BLOCK=64)

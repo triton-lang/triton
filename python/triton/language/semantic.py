@@ -1892,8 +1892,21 @@ class TritonSemantic(Generic[TensorTy]):
         if last_stride != 1:
             raise ValueError(f"Tensor descriptor last dim must be 1 but got {last_stride}")
 
+        for stride in strides[:-1]:
+            static_stride = tl._unwrap_if_constexpr(stride)
+            if isinstance(static_stride, int) and (static_stride * elem_size) % 16 != 0:
+                raise ValueError(
+                    f"Tensor descriptor strides must be 16-byte aligned, but got a stride of {static_stride} * {elem_size} = {static_stride * elem_size} bytes"
+                )
+
         shape = [self.make_scalar(x, tl.int32) for x in shape]
         strides = [self.make_scalar(tl._unwrap_if_constexpr(x), tl.int64) for x in strides]
+
+        for stride in strides[:-1]:
+            byte_stride = self.mul(stride, self.make_scalar(elem_size, tl.int64), sanitize_overflow=False)
+            rem = self.mod(byte_stride, self.make_scalar(16, tl.int64))
+            aligned = self.equal(rem, self.make_scalar(0, tl.int64))
+            self.builder.create_assert(aligned.handle, "Tensor descriptor strides must be 16-byte aligned")
 
         # Check whether `block_shape` is static
         block_shape = tl._unwrap_shape(block_shape)
