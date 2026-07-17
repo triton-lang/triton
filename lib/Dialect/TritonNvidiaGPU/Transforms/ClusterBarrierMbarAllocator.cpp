@@ -31,10 +31,8 @@ bool atomicNeedsClusterBarrier(Operation *op) {
 
   auto sem = isa<AtomicCASOp>(op) ? cast<AtomicCASOp>(op).getSem()
                                   : cast<AtomicRMWOp>(op).getSem();
-  if (sem == MemSemantic::RELEASE ||
-      sem == MemSemantic::ACQUIRE_RELEASE ||
-      (sem == MemSemantic::ACQUIRE &&
-       !op->hasAttr("allocation.offset")))
+  if (sem == MemSemantic::RELEASE || sem == MemSemantic::ACQUIRE_RELEASE ||
+      (sem == MemSemantic::ACQUIRE && !op->hasAttr("allocation.offset")))
     return true;
 
   if (op->getResult(0).use_empty())
