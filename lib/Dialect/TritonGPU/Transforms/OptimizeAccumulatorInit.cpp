@@ -72,8 +72,8 @@ bool dotSupportsAccInitFlag(Operation *op) {
 // Return true if the allocation's initial contents reach the MMA unchanged.
 // Any intervening write invalidates useD=false.
 bool accumulatorInitReachesMMA(triton::nvidia_gpu::MMAv5OpInterface mma) {
-  auto alloc = mma.getAccumulator()
-                   .getDefiningOp<triton::nvidia_gpu::TMEMAllocOp>();
+  auto alloc =
+      mma.getAccumulator().getDefiningOp<triton::nvidia_gpu::TMEMAllocOp>();
   if (!alloc)
     return false;
   Value token = mma.getAccDep();
