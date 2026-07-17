@@ -73,11 +73,32 @@ tt.func private @experimental_lock_release(
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_memdesc_to_i32
-// CHECK:  llvm.ptrtoint %1 : !llvm.ptr<3> to i32
+// CHECK: %[[MEMDESC_PTR:.*]] = llvm.extractvalue {{.*}}[0]
+// CHECK: %[[BYTE_OFFSET:.*]] = llvm.mul {{.*}} : i32
+// CHECK: %[[MEMDESC_BASE:.*]] = llvm.ptrtoint %[[MEMDESC_PTR]] : !llvm.ptr<3> to i32
+// CHECK: %[[MEMDESC_ADDRESS:.*]] = llvm.add %[[BYTE_OFFSET]], %[[MEMDESC_BASE]] : i32
+// CHECK: %[[MEMDESC_MASK:.*]] = llvm.mlir.constant(16777215 : i32)
+// CHECK: llvm.and %[[MEMDESC_ADDRESS]], %[[MEMDESC_MASK]] : i32
 tt.func private @experimental_memdesc_to_i32(
   %memdesc: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
 ) {
   tti.experimental_memdesc_to_i32 %memdesc : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_shared_memory_offset_to_i32
+// CHECK: %[[BASE:.*]] = llvm.ptrtoint %arg0 : !llvm.ptr<3> to i32
+// CHECK: %[[OFFSET:.*]] = llvm.mlir.constant(42 : i32)
+// CHECK: %[[ADDRESS:.*]] = llvm.add %[[BASE]], %[[OFFSET]] : i32
+// CHECK: %[[MASK:.*]] = llvm.mlir.constant(16777215 : i32)
+// CHECK: llvm.and %[[ADDRESS]], %[[MASK]] : i32
+tt.func private @experimental_shared_memory_offset_to_i32() {
+  tti.experimental_shared_memory_offset_to_i32 42
   tt.return
 }
 }

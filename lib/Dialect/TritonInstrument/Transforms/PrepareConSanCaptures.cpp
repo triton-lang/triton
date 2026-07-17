@@ -1,7 +1,6 @@
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 
 #include "mlir/IR/BuiltinTypes.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
@@ -25,6 +24,12 @@ namespace tti = mlir::triton::instrument;
 bool hasSharedMemoryBuffers(ModuleOp mod) {
   bool result = false;
   mod.walk([&](ttg::LocalAllocOp op) { result |= op.isSharedMemoryAlloc(); });
+  // ConSan always passes its lock pointer to warp-specialized regions. That
+  // capture is itself operation-local shared scratch, which makes shared
+  // memory active and requires the read/write visibility captures too. Treat
+  // every warp-specialized kernel as the stable fixed point (three captures),
+  // independent of which user or compiler scratch operations it contains.
+  mod.walk([&](ttg::WarpSpecializeOp) { result = true; });
   return result;
 }
 
@@ -94,15 +99,15 @@ public:
       return signalPassFailure();
     }
 
-    int numActiveMemTypes = (hasSharedMemoryBuffers(mod) ? 1 : 0) +
-                            (hasTensorMemoryBuffers(mod) ? 1 : 0);
+    bool hasSharedBuffers = hasSharedMemoryBuffers(mod);
+    int numActiveMemTypes =
+        (hasSharedBuffers ? 1 : 0) + (hasTensorMemoryBuffers(mod) ? 1 : 0);
     // NVIDIA inserts a terminal cluster barrier after this pass.
     bool hasClusterBarriers = target == "nvidia" && ttg::lookupNumCTAs(mod) > 1;
     int totalCaptures = tti::estimateConSanCaptureCount(
         numActiveMemTypes, hasBarriers(mod), hasClusterBarriers,
         getNumCommitKinds(mod, hooks.get()),
-        hasSharedMemoryBuffers(mod) &&
-            hooks->needsAsyncProxyFenceTracking(mod));
+        hasSharedBuffers && hooks->needsAsyncProxyFenceTracking(mod));
     int extraBytes = totalCaptures * tti::kCaptureSizeBytes;
 
     auto i32Ty = IntegerType::get(mod.getContext(), 32);

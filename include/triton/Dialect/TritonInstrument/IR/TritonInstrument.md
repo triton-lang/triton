@@ -100,6 +100,31 @@ can be represented directly. Scratch state is zero-initialized once before the
 instrumented body runs, and the initialization is followed by a CTA or cluster
 barrier before any instrumented operation can use it.
 
+Compiler-owned shared-memory scratch does not have an SSA memdesc for
+BufferRegion analysis to discover. Allocation therefore publishes the static
+byte interval of every operation-local scratch buffer, and ConSan models it as
+one synchronous generic-proxy write over the complete interval. This covers
+scratch used by layout conversions, reductions, scans, gathers, histograms,
+atomic result broadcasts, tensor-map creation, warp-specialize captures, and
+backend-specific operations. Virtual call frames and function-owned scheduler
+state are not operation effects and publish no size metadata.
+
+Allocation must run before ConSan, and `allocation.size` is the authoritative
+marker that an operation has non-empty compiler scratch at this point in the
+pipeline. A transform that introduces scratch-using operations after allocation
+must rerun allocation before ConSan. ConSan does not infer missing metadata from
+operation kinds because scratch requirements are target- and lowering-specific.
+
+Reduction lowering creates additional `ttg.convert_layout` operations after
+ConSan, so the parent `tt.reduce` carries the effect for their already allocated
+interval. A scratch effect must wait for earlier asynchronous readers or
+writers, and its lowering leaves no pending asynchronous access when the
+operation returns. Conversions forced to use warp shuffles allocate no scratch
+and fail compilation if the conversion is not warp-local.
+Cross-CTA convert and reduce effects retain their operation-specific routing.
+Scratch-backed atomic broadcasts are predicated to the producer CTA and routed
+to every CTA that consumes the replicated result.
+
 The exact auxiliary data layout is intentionally documented next to the
 implementation in `AuxDataMap` in
 `include/triton/Dialect/TritonInstrument/IR/Utility.h`.
@@ -152,12 +177,19 @@ places that ordinary read visibility is transported:
 - A frontier-tracked mbarrier arrive copies the issuing base thread's current
   proxy frontier into the barrier tracking row. The local copy remains live, so
   an arrive does not make a later async access by the arriving thread legal.
+- An async-proxy write that signals an mbarrier snapshots the issuing base
+  thread's frontier at launch time, after its proxy-ordering check, but only for
+  tracked shared-memory regions fully contained in the write destination. This
+  lets the completion wait transport a fence immediately preceding a TMA load
+  without publishing unrelated or only partially overwritten regions.
 - A successful mbarrier wait merges the selected barrier row into the waiting
   base thread's row. A fence before the wait cannot cover accesses learned only
   by that wait; a fence after the wait can.
 - Barrier invalidation clears the barrier's proxy tracking row.
-- A non-relaxed publishing cluster barrier publishes the proxy frontier across
-  CTA and base-thread rows.
+- A non-relaxed publishing cluster barrier transports the proxy frontier across
+  CTAs. At top level it publishes to every base-thread row; inside warp
+  specialization it publishes only from and to the participating partition's
+  base-thread row.
 - Warp specialization copies the parent's proxy frontier into the new
   partition base-thread rows.
 
@@ -248,11 +280,16 @@ TMA-style and CLC cross-CTA writes become visible in the CTA rows reached by the
 memory effect. Read transfers update the current CTA row.
 
 A non-relaxed cluster barrier is different from an mbarrier wait: its virtual
-rendezvous publishes synchronous work from base threads to all CTA rows at the
-phase-completing arrival. This includes both ordinary read/write visibility and
-the generic-access/proxy-fence frontier. Publishing while the rendezvous lock is
-held makes the shadow state visible before any participant can continue, so no
-second cluster barrier is needed for the ConSan protocol.
+rendezvous publishes synchronous work across CTA rows at the phase-completing
+arrival. A top-level barrier represents all synchronous threads. A barrier
+inside warp specialization represents only the corresponding partition in each
+CTA, so it publishes frontiers visible to that base thread and merges them only
+into the same partition's peer thread classes. It does not make work observed
+only by another partition visible; that still requires an explicit handoff such
+as an mbarrier arrive/wait. Publication includes both ordinary read/write
+visibility and the generic-access/proxy-fence frontier. Publishing while the
+rendezvous lock is held makes the shadow state visible before any participant
+can continue, so no second cluster barrier is needed for the ConSan protocol.
 
 ## Barrier Lifecycle and Deadlock Checks
 
@@ -305,6 +342,11 @@ The common hook implementation covers these TritonGPU operations:
   and atomic scatter RMW conservatively cover their full destination
   descriptors because their indices are runtime values.
 - `ttg.local_alloc` with a source: barrier-tracked shared-memory write.
+- Any operation with allocator-provided operation-local shared scratch: a
+  synchronous generic-proxy write over its allocated byte interval. Forced
+  warp-shuffle conversions publish no scratch metadata because allocation
+  reserves no scratch for them; convert, reduce, and scratch-backed atomic
+  broadcasts use CTA-aware routing.
 
 These shared-memory effects are generic-proxy accesses for the proxy-ordering
 model.

@@ -431,3 +431,147 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: scf.if %{{[0-9]+}} {
 // CHECK-NEXT: tt.descriptor_store
 // CHECK-NEXT: }
+
+// -----
+
+// Two descriptor stores in the same loop iteration with identical source
+// shape/type share a single LDS allocation. The pipeliner must serialize
+// them so that the second `local_store` does not overwrite the buffer while
+// the first TDM store is still consuming it.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_two_same_shape_stores_share_alloc(
+      %x_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+      %y_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+      %src: tensor<32x64xf16, #blocked>,
+      %M: i32 {tt.divisibility = 16 : i32},
+      %N: i32 {tt.divisibility = 16 : i32},
+      %ub: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %n_stride = arith.extsi %N : i32 to i64
+    %x_desc = tt.make_tensor_descriptor %x_ptr, [%M, %N], [%n_stride, %c1_i64] : <f16>, <32x64xf16>
+    %y_desc = tt.make_tensor_descriptor %y_ptr, [%M, %N], [%n_stride, %c1_i64] : <f16>, <32x64xf16>
+    scf.for %iv = %c0_i32 to %ub step %c1_i32 iter_args(%off = %c0_i32) -> (i32) : i32 {
+      tt.descriptor_store %x_desc[%off, %c0_i32], %src : !tt.tensordesc<32x64xf16>, tensor<32x64xf16, #blocked>
+      tt.descriptor_store %y_desc[%off, %c0_i32], %src : !tt.tensordesc<32x64xf16>, tensor<32x64xf16, #blocked>
+      %next = arith.addi %off, %c32_i32 : i32
+      scf.yield %next : i32
+    }
+    tt.return
+  }
+}
+
+// CHECK-LABEL: tt.func @tdm_two_same_shape_stores_share_alloc
+// One shared LDS allocation hoisted out of the loop.
+// CHECK: %[[ALLOC:.+]] = ttg.local_alloc :
+// CHECK-NOT: ttg.local_alloc
+// One seed wait before the loop.
+// CHECK: %[[SEED:.+]] = amdg.async_tdm_wait  {num = 0 : i32}
+// CHECK-NOT: amdg.async_tdm_wait{{.*}}{num = 0
+// Loop carries one async token iter_arg.
+// CHECK: scf.for {{.*}} iter_args({{.*}}, %[[ITER_TOK:[^ )]+]] = %[[SEED]])
+// CHECK-SAME: -> (i32, !ttg.async.token)
+// First store: wait on previous iteration's tail token, then write LDS.
+// CHECK: amdg.async_tdm_wait %[[ITER_TOK]] {num = 0 : i32}
+// CHECK: ttg.local_store {{.*}}, %[[ALLOC]]
+// CHECK: %[[TOK1:.+]] = amdg.async_tdm_copy_local_to_global {{.*}} from %[[ALLOC]]
+// Second store: wait on first store's token to prevent overwriting LDS while the first TDM store is still consuming it.
+// CHECK: amdg.async_tdm_wait %[[TOK1]] {num = 0 : i32}
+// CHECK: ttg.local_store {{.*}}, %[[ALLOC]]
+// CHECK: %[[TOK2:.+]] = amdg.async_tdm_copy_local_to_global {{.*}} from %[[ALLOC]]
+// Yield the second store's token
+// CHECK: scf.yield {{.*}}, %[[TOK2]] : i32, !ttg.async.token
+// CHECK: }
+// Drain the in-flight TDM store and deallocate the shared buffer
+// CHECK: amdg.async_tdm_wait %{{[^,]+}} {num = 0 : i32}
+// CHECK: ttg.local_dealloc %[[ALLOC]]
+// CHECK-NOT: ttg.local_dealloc
+
+// -----
+
+// Two descriptor stores with different source element types have to use separate allocations.
+#blocked_mix = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_two_stores_diff_elem_type(
+      %x_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+      %y_ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32},
+      %src_a: tensor<32x64xf16, #blocked_mix>,
+      %src_b: tensor<32x64xbf16, #blocked_mix>,
+      %M: i32 {tt.divisibility = 16 : i32},
+      %N: i32 {tt.divisibility = 16 : i32},
+      %ub: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %n_stride = arith.extsi %N : i32 to i64
+    %x_desc = tt.make_tensor_descriptor %x_ptr, [%M, %N], [%n_stride, %c1_i64] : <f16>, <32x64xf16>
+    %y_desc = tt.make_tensor_descriptor %y_ptr, [%M, %N], [%n_stride, %c1_i64] : <bf16>, <32x64xbf16>
+    scf.for %iv = %c0_i32 to %ub step %c1_i32 iter_args(%off = %c0_i32) -> (i32) : i32 {
+      tt.descriptor_store %x_desc[%off, %c0_i32], %src_a : !tt.tensordesc<32x64xf16>, tensor<32x64xf16, #blocked_mix>
+      tt.descriptor_store %y_desc[%off, %c0_i32], %src_b : !tt.tensordesc<32x64xbf16>, tensor<32x64xbf16, #blocked_mix>
+      %next = arith.addi %off, %c32_i32 : i32
+      scf.yield %next : i32
+    }
+    tt.return
+  }
+}
+
+// CHECK-LABEL: tt.func @tdm_two_stores_diff_elem_type
+// CHECK-DAG: %[[AF16:.+]] = ttg.local_alloc : () -> !ttg.memdesc<32x64xf16, {{.+}}, #smem, mutable>
+// CHECK-DAG: %[[ABF16:.+]] = ttg.local_alloc : () -> !ttg.memdesc<32x64xbf16, {{.+}}, #smem, mutable>
+// CHECK-NOT: ttg.local_alloc
+// CHECK: scf.for
+// CHECK-SAME: -> (i32, !ttg.async.token, !ttg.async.token)
+// CHECK: ttg.local_store {{.*}}, %[[AF16]]
+// CHECK: amdg.async_tdm_copy_local_to_global {{.*}} from %[[AF16]]
+// CHECK: ttg.local_store {{.*}}, %[[ABF16]]
+// CHECK: amdg.async_tdm_copy_local_to_global {{.*}} from %[[ABF16]]
+// CHECK: ttg.local_dealloc %[[AF16]]
+// CHECK: ttg.local_dealloc %[[ABF16]]
+
+// -----
+
+// Same element type but different tile size
+#blocked_mix2 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_two_stores_diff_tensor_shape(
+      %x_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+      %y_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+      %src_a: tensor<32x64xf16, #blocked_mix2>,
+      %src_b: tensor<32x32xf16, #blocked_mix2>,
+      %M: i32 {tt.divisibility = 16 : i32},
+      %N: i32 {tt.divisibility = 16 : i32},
+      %ub: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %n_stride = arith.extsi %N : i32 to i64
+    %x_desc = tt.make_tensor_descriptor %x_ptr, [%M, %N], [%n_stride, %c1_i64] : <f16>, <32x64xf16>
+    %y_desc = tt.make_tensor_descriptor %y_ptr, [%M, %c32_i32], [%n_stride, %c1_i64] : <f16>, <32x32xf16>
+    scf.for %iv = %c0_i32 to %ub step %c1_i32 iter_args(%off = %c0_i32) -> (i32) : i32 {
+      tt.descriptor_store %x_desc[%off, %c0_i32], %src_a : !tt.tensordesc<32x64xf16>, tensor<32x64xf16, #blocked_mix2>
+      tt.descriptor_store %y_desc[%off, %c0_i32], %src_b : !tt.tensordesc<32x32xf16>, tensor<32x32xf16, #blocked_mix2>
+      %next = arith.addi %off, %c32_i32 : i32
+      scf.yield %next : i32
+    }
+    tt.return
+  }
+}
+
+// CHECK-LABEL: tt.func @tdm_two_stores_diff_tensor_shape
+// CHECK-DAG: %[[A64:.+]] = ttg.local_alloc : () -> !ttg.memdesc<32x64xf16, {{.+}}, #smem, mutable>
+// CHECK-DAG: %[[A32:.+]] = ttg.local_alloc : () -> !ttg.memdesc<32x32xf16, {{.+}}, #smem, mutable>
+// CHECK-NOT: ttg.local_alloc
+// CHECK: scf.for
+// CHECK-SAME: -> (i32, !ttg.async.token, !ttg.async.token)
+// CHECK: ttg.local_store {{.*}}, %[[A64]]
+// CHECK: amdg.async_tdm_copy_local_to_global {{.*}} from %[[A64]]
+// CHECK: ttg.local_store {{.*}}, %[[A32]]
+// CHECK: amdg.async_tdm_copy_local_to_global {{.*}} from %[[A32]]
+// CHECK: ttg.local_dealloc %[[A64]]
+// CHECK: ttg.local_dealloc %[[A32]]

@@ -102,8 +102,7 @@ def gemm_tdm_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
 
 
 # ---------------------------------------------------------------------------
-# Partial TDM copy variant: only a subset of warps issue TDM copies.
-# Cleared warps get pred=0 (hardware no-op), freeing TDM bandwidth.
+# Partial TDM copy variant: use a subset of warps for the descriptor layout.
 # ---------------------------------------------------------------------------
 
 
@@ -367,7 +366,7 @@ def test_runtime_gemm_tdm_predicated_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BU
     num_warps = 8
     WARP_BASES = [(0, 1), (1, 0), (2, 0)]
 
-    # 4-warp partial TDM copy: warps 0-3 issue, warps 4-7 are no-ops.
+    # 4-warp partial TDM copy.
     tdm_warp_used_hint = 0b00001111
 
     warp_bases = tuple(WARP_BASES)
@@ -402,8 +401,7 @@ if __name__ == "__main__":
     parser.add_argument("-N", type=int, default=256, help='problem N size')
     parser.add_argument("-K", type=int, default=1024, help='problem K size')
     parser.add_argument("--num-buffers", type=int, choices=[2, 3, 4], default=3, help='num shared memory buffers')
-    parser.add_argument("--4warp-tdm", action="store_true", dest="four_warp_tdm",
-                        help="Use 4-warp partial TDM copy (warps 4-7 skip TDM copies)")
+    parser.add_argument("--4warp-tdm", action="store_true", dest="four_warp_tdm", help="Use 4-warp partial TDM copy")
     parser.add_argument("--dump", action="store_true", help="Print out result/golden tensors")
     parser.add_argument("--kernelB", action="store_true", help="Use the kernelB variant")
     args = parser.parse_args()
