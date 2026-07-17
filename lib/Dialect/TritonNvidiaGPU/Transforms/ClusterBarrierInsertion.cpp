@@ -22,7 +22,7 @@ namespace nvidia_gpu {
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-static bool hasTCGen5Commit(Operation *op) {
+static bool hasTCGen5CommitCrossCTA(Operation *op) {
   SmallVector<Value> descs;
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
     descs = mma.getCompletionDescs();
@@ -57,7 +57,7 @@ bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   } else if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     return tma.getMulticast();
   }
-  return hasTCGen5Commit(op);
+  return hasTCGen5CommitCrossCTA(op);
 }
 
 namespace {
@@ -111,11 +111,11 @@ usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
 
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
     auto barrierOp = cast<ttg::MBarrierOpInterface>(op);
-    return hasTCGen5Commit(op) &&
+    return hasTCGen5CommitCrossCTA(op) &&
            llvm::any_of(barrierOp.getBarriers(), aliasesTracked);
   }
   if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
-    return hasTCGen5Commit(op) && aliasesTracked(commit.getBarrier());
+    return hasTCGen5CommitCrossCTA(op) && aliasesTracked(commit.getBarrier());
   }
   if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     return tma.getMulticast() && aliasesTracked(tma.getBarrier());
