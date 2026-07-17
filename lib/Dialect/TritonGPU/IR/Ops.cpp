@@ -676,11 +676,8 @@ LinearLayout getViewLayout(MemDescType type) {
   for (auto dim : layout.getInDimNames()) {
     if (dim == kBlock)
       continue;
-    uint32_t freeMask = freeVariables.lookup(dim);
-    int32_t inputSize = layout.getInDimSize(dim);
-    while (inputSize > 1 && (freeMask & (inputSize >> 1)))
-      inputSize >>= 1;
-    layout = layout.resizeInDim(dim, inputSize);
+    uint32_t used = (layout.getInDimSize(dim) - 1) & ~freeVariables.lookup(dim);
+    layout = layout.resizeInDim(dim, llvm::bit_ceil(used + 1));
   }
   return layout;
 }
