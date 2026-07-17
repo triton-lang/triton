@@ -262,7 +262,7 @@ struct WaitBarrierOpConversion
     auto pred = adaptor.getPred();
     if (auto leaderPred =
             LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
-      pred = b.and_(pred, *leaderPred);
+      pred = pred ? b.and_(pred, *leaderPred) : *leaderPred;
 
     bool isCrossClusterBarrier =
         LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
