@@ -343,8 +343,10 @@ def squeeze(x, dim: gl.constexpr):
     :param dim: the index of the dimension to remove
     :type dim: int
     '''
-    gl.static_assert(x.shape[dim] == 1)
-    return triton.tools.triton_to_gluon_translator.common_helpers.reset_to_default_layout(x.reshape(x.shape[:dim] + x.shape[dim + 1:]))
+    gl.static_assert(-len(x.shape) <= dim and dim < len(x.shape))
+    _dim: gl.constexpr = dim + len(x.shape) if dim < 0 else dim
+    gl.static_assert(x.shape[_dim] == 1)
+    return triton.tools.triton_to_gluon_translator.common_helpers.reset_to_default_layout(x.reshape(x.shape[:_dim] + x.shape[_dim + 1:]))
 
 
 @gluon.jit(repr=lambda _: 'custom_kernel_name')
