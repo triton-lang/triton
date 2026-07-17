@@ -26,8 +26,16 @@ namespace {
 bool atomicNeedsClusterBarrier(Operation *op) {
   if (isa<AtomicPollOp>(op))
     return gpu::lookupNumCTAs(op) != 1;
-  if (!isa<AtomicCASOp, AtomicRMWOp>(op) || op->getResult(0).use_empty() ||
-      gpu::lookupNumCTAs(op) == 1)
+  if (!isa<AtomicCASOp, AtomicRMWOp>(op) || gpu::lookupNumCTAs(op) == 1)
+    return false;
+
+  auto sem = isa<AtomicCASOp>(op) ? cast<AtomicCASOp>(op).getSem()
+                                  : cast<AtomicRMWOp>(op).getSem();
+  if (sem == MemSemantic::RELEASE || sem == MemSemantic::ACQUIRE_RELEASE ||
+      (sem == MemSemantic::ACQUIRE && !op->hasAttr("allocation.offset")))
+    return true;
+
+  if (op->getResult(0).use_empty())
     return false;
   auto tensorTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
   if (!tensorTy)
