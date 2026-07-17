@@ -481,9 +481,9 @@ buildGraphNodeEntries(const DataToEntryMap &dataToEntry, GraphState &graphState,
   return &externIdState;
 }
 
-void queueGraphMetrics(
-    PendingGraphPool *pendingGraphPool, const GraphState &graphState,
-    const RocprofSDKProfiler::ExternIdState *externIdState) {
+void queueGraphMetrics(PendingGraphPool *pendingGraphPool,
+                       const GraphState &graphState,
+                       const RocprofSDKProfiler::ExternIdState *externIdState) {
   if (graphState.metricSeqIdToNodeId.empty())
     return;
 
@@ -771,8 +771,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleCapturedKernelEnter() {
                                               metricKernelLaunchInfo.numWords});
       streamCaptureGraphState.metricSeqIdToNodeId.insert_or_assign(
           metricKernelLaunchInfo.seqId, nodeId);
-      streamCaptureGraphState.numMetricWords +=
-          metricKernelLaunchInfo.numWords;
+      streamCaptureGraphState.numMetricWords += metricKernelLaunchInfo.numWords;
     }
 
     for (auto *data : profiler.dataSet) {
@@ -805,8 +804,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleCapturedKernelEnter() {
         auto staticEntry =
             data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
         nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
-        streamCaptureGraphState
-            .dataToEntryIdToNodeStates[data][staticEntry.id]
+        streamCaptureGraphState.dataToEntryIdToNodeStates[data][staticEntry.id]
             .insert(&nodeState);
         auto flexibleMetricEntry =
             data->addOp(Data::kVirtualPhase, Data::kRootEntryId,
@@ -821,8 +819,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleCapturedKernelEnter() {
         auto staticEntry =
             data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
         nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
-        streamCaptureGraphState
-            .dataToEntryIdToNodeStates[data][staticEntry.id]
+        streamCaptureGraphState.dataToEntryIdToNodeStates[data][staticEntry.id]
             .insert(&nodeState);
       }
     }
@@ -1028,9 +1025,9 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
     } else if (findGraph &&
                !impl->graphStates[graphExecId].captureStatusChecked) {
       auto &graphState = impl->graphStates[graphExecId];
-      auto *externIdState = buildGraphNodeEntries(
-          dataToEntry, graphState, profiler.correlation.externIdToState,
-          externId);
+      auto *externIdState =
+          buildGraphNodeEntries(dataToEntry, graphState,
+                                profiler.correlation.externIdToState, externId);
       queueGraphMetrics(profiler.pendingGraphPool.get(), graphState,
                         externIdState);
     }
