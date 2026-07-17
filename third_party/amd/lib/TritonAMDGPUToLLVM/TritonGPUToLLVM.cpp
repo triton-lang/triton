@@ -63,6 +63,12 @@ public:
     addIllegalDialect<triton::instrument::TritonInstrumentDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
+    // A buffer_load_to_local reaching this pass must lower to a direct-to-LDS
+    // copy. Marking it illegal ensures a lowering failure (e.g. insufficient
+    // alignment or an unaligned mask) is reported here, at legalization, with
+    // an actionable diagnostic, instead of silently surviving to fail much
+    // later in LLVM-IR translation as a bare unrealized_conversion_cast.
+    addIllegalOp<triton::amdgpu::BufferLoadToLocalOp>();
     // Warp specialization is lowered later.
     addLegalOp<triton::gpu::WarpSpecializeOp>();
     addLegalOp<triton::gpu::WarpYieldOp>();

@@ -814,7 +814,13 @@ bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
 //    produce wrong results if we invalidate the condition in the future
 bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
                         RankedTensorType srcTy, Attribute dstEnc,
-                        ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize) {
+                        ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize,
+                        std::string *failureReason) {
+  auto setReason = [&](std::string reason) {
+    if (failureReason)
+      *failureReason = std::move(reason);
+  };
+
   // For padded encodings restrict vec by the min interval
   auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(dstEnc);
   if (paddedEnc) {
@@ -832,6 +838,11 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   int elemBitWidth = tt::getPointeeBitWidth(srcTy);
   if (fitToValidDirectToLdsVecSize(vectorSize, elemBitWidth, targetInfo) == 0) {
     LDBG("unsupported global load to LDS vectorSize (" << vectorSize << ")");
+    setReason(
+        "the load can be vectorized to at most " + std::to_string(vectorSize) +
+        " element(s) (" + std::to_string(vectorSize * elemBitWidth) +
+        " bits), which is not a supported direct-to-LDS transaction width "
+        "on this target");
     return false;
   }
 
@@ -840,8 +851,15 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
     return true;
 
   // Must support the full vector width; splitting would cause strided writes.
-  if (!targetInfo.supportsDirectToLdsLoadBitWidth(vectorSize * elemBitWidth))
+  if (!targetInfo.supportsDirectToLdsLoadBitWidth(vectorSize * elemBitWidth)) {
+    LDBG("unsupported direct-to-LDS load bit width ("
+         << vectorSize * elemBitWidth << ")");
+    setReason(
+        "the resulting " + std::to_string(vectorSize * elemBitWidth) +
+        "-bit direct-to-LDS transaction width is not supported on this "
+        "target (the vector width cannot be split without strided writes)");
     return false;
+  }
 
   // Compute the blocked -> shared linear layout to check preconditions
   LinearLayout srcLayout = triton::gpu::toLinearLayout(srcTy);
@@ -868,12 +886,18 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
     LDBG("Load vectorization ("
          << vectorSize << ") and contiguity (" << contig
          << ") do not match resulting in strided writes");
+    setReason("the global load vectorization (" + std::to_string(vectorSize) +
+              ") does not match the shared-memory contiguity (" +
+              std::to_string(contig) +
+              "), which would require strided LDS writes");
     return false;
   }
 
   if (!canCoalesceWriteIntoSharedMemory(srcTy.getContext(), srcToSharedLayout,
                                         targetInfo.getWarpSize(), vectorSize)) {
     LDBG("Does not write coalesced into LDS");
+    setReason("the load does not write coalesced into shared memory for the "
+              "chosen vectorization");
     return false;
   }
 

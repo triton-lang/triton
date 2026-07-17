@@ -115,9 +115,12 @@ bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
 // This function expects the caller to pass in |vectorSize| as the vector size
 // reading from global memory, after factoring in axis information and alignment
 // hints. It will be updated to factor in shared memory |dstEnc| constraints.
+// If the load cannot be lowered to a direct-to-LDS copy and |failureReason| is
+// non-null, |*failureReason| is set to a human-readable explanation of why.
 bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
                         RankedTensorType srcTy, Attribute dstEnc,
-                        ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize);
+                        ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize,
+                        std::string *failureReason = nullptr);
 
 // Check if the result of this tl.dot is used as opA or opB of another tl.dot.
 bool isChainDotHead(mlir::triton::DotOpInterface dotOp, unsigned opIdx = 0);
