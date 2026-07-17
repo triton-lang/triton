@@ -99,22 +99,27 @@ class TensorMemoryScalesLayout:
 
     Args:
         cga_layout (Optional[List[List[int]]]): CGA layout bases. Defaults to [].
+        block_rep_order (str): Order of repeated scale blocks. Must be either
+            ``"mnThenK"`` or ``"kThenMn"``. Defaults to ``"mnThenK"``.
     """
     cga_layout: List[List[int]] = field(default_factory=list)
+    block_rep_order: str = "mnThenK"
 
     def __post_init__(self):
         super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
+        super().__setattr__("block_rep_order", _unwrap_if_constexpr(self.block_rep_order))
         assert all(len(basis) == 2 for basis in self.cga_layout)
+        assert self.block_rep_order in ("mnThenK", "kThenMn")
 
     def _to_ir(self, builder):
-        return builder.get_tensor_memory_scales_layout([list(basis) for basis in self.cga_layout])
+        return builder.get_tensor_memory_scales_layout([list(basis) for basis in self.cga_layout], self.block_rep_order)
 
     def mangle(self) -> str:
         cga_layout_str = "_".join("~".join(map(str, basis)) for basis in self.cga_layout)
-        return f"TLS{cga_layout_str}TLS"
+        return f"TLS{self.block_rep_order}_{cga_layout_str}TLS"
 
     def __hash__(self):
-        return hash(tuple(tuple(b) for b in self.cga_layout))
+        return hash((tuple(tuple(b) for b in self.cga_layout), self.block_rep_order))
 
 
 @dataclass(frozen=True)

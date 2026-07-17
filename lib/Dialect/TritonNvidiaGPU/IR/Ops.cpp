@@ -1116,6 +1116,28 @@ static LogicalResult verifyScaledLHSOperand(Operation *op, Type elementType,
   return op->emitOpError("unsupported LHS operand type for scaled MMA");
 }
 
+static LogicalResult
+verifyScaleBlockRepOrder(TCGen5MMAScaledOp op,
+                         TensorMemoryScalesEncodingAttr encoding, bool isA) {
+  auto aScaleType = cast<MemDescType>(op.getAScale().getType());
+  auto bScaleType = cast<MemDescType>(op.getBScale().getType());
+  auto expectedOrder = getTensorMemoryScalesBlockRepOrder(
+      op.getOperation(), isA, op.getAType(), op.getBType(),
+      aScaleType.getElementType(), bScaleType.getElementType());
+  if (encoding.getBlockRepOrder() != expectedOrder) {
+    StringRef operandName = isA ? "A" : "B";
+    StringRef expectedOrderName =
+        expectedOrder == TensorMemoryScalesBlockRepOrder::K_THEN_MN ? "kThenMn"
+                                                                    : "mnThenK";
+    return op.emitOpError()
+           << operandName
+           << " scales in tensor memory must use "
+              "#ttng.tensor_memory_scales_encoding<blockRepOrder = "
+           << expectedOrderName << ">";
+  }
+  return success();
+}
+
 LogicalResult TCGen5MMAScaledOp::verify() {
   if (!getIsAsync() && !getBarriers().empty()) {
     return emitOpError("The op is synchronous but a barrier is present.");
@@ -1148,6 +1170,37 @@ LogicalResult TCGen5MMAScaledOp::verify() {
     if (failed(verifyScaledLHSOperand(getOperation(),
                                       getA().getType().getElementType(), lhsEnc,
                                       getAType(), getBType())))
+      return failure();
+  }
+  auto aScaleType = cast<MemDescType>(getAScale().getType());
+  auto bScaleType = cast<MemDescType>(getBScale().getType());
+  auto isScaleBlockRepOrderRelevant = [](MemDescType scaleType) {
+    auto shapePerCTA = getShapePerCTA(scaleType);
+    assert(shapePerCTA.size() >= 2);
+    int64_t rowsPerCTA = shapePerCTA[shapePerCTA.size() - 2];
+    int64_t scalesPerCTA = shapePerCTA.back();
+    // The ordering is relevant only when there are multiple 128x4 scale blocks
+    // from both MN and K dimensions.
+    return rowsPerCTA > 128 && scalesPerCTA > 4;
+  };
+  if (isa<TensorMemorySpaceAttr>(aScaleType.getMemorySpace()) &&
+      isScaleBlockRepOrderRelevant(aScaleType)) {
+    auto encoding =
+        dyn_cast<TensorMemoryScalesEncodingAttr>(aScaleType.getEncoding());
+    if (!encoding)
+      return emitOpError("A scales in tensor memory must use "
+                         "#ttng.tensor_memory_scales_encoding");
+    if (failed(verifyScaleBlockRepOrder(*this, encoding, /*isA=*/true)))
+      return failure();
+  }
+  if (isa<TensorMemorySpaceAttr>(bScaleType.getMemorySpace()) &&
+      isScaleBlockRepOrderRelevant(bScaleType)) {
+    auto encoding =
+        dyn_cast<TensorMemoryScalesEncodingAttr>(bScaleType.getEncoding());
+    if (!encoding)
+      return emitOpError("B scales in tensor memory must use "
+                         "#ttng.tensor_memory_scales_encoding");
+    if (failed(verifyScaleBlockRepOrder(*this, encoding, /*isA=*/false)))
       return failure();
   }
   return success();

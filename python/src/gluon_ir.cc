@@ -311,8 +311,13 @@ py::object layoutToGluon(Attribute layout) {
         partitioned.getPartitionDim(), partitionLayout);
   } else if (auto tmemScales =
                  dyn_cast<ttng::TensorMemoryScalesEncodingAttr>(layout)) {
+    StringRef blockRepOrder =
+        tmemScales.getBlockRepOrder() ==
+                ttng::TensorMemoryScalesBlockRepOrder::K_THEN_MN
+            ? "kThenMn"
+            : "mnThenK";
     return layouts.TensorMemoryScalesLayout(
-        getCgaLayoutBases(tmemScales.getCGALayout()));
+        getCgaLayoutBases(tmemScales.getCGALayout()), blockRepOrder);
   } else if (auto tmem = dyn_cast<ttng::TensorMemoryEncodingAttr>(layout)) {
     return layouts.TensorMemoryLayout(
         std::vector<unsigned>{tmem.getBlockM(), tmem.getBlockN()},
@@ -587,14 +592,24 @@ void init_gluon_ir(py::module_ &m) {
                  ctx, block[0], block[1], colStride, cgaLayout, twoCTAs,
                  fp4Padded);
            })
-      .def("get_tensor_memory_scales_layout",
-           [](GluonOpBuilder &self,
-              std::vector<std::vector<int32_t>> &cgaBases) -> Attribute {
-             auto ctx = self.getContext();
-             auto cgaLayout = buildCgaLayoutAttr(ctx, cgaBases, /*rank=*/2);
-             return self.getChecked<ttng::TensorMemoryScalesEncodingAttr>(
-                 ctx, cgaLayout);
-           })
+      .def(
+          "get_tensor_memory_scales_layout",
+          [](GluonOpBuilder &self, std::vector<std::vector<int32_t>> &cgaBases,
+             const std::string &blockRepOrder) -> Attribute {
+            auto ctx = self.getContext();
+            auto cgaLayout = buildCgaLayoutAttr(ctx, cgaBases, /*rank=*/2);
+            auto repOrder =
+                blockRepOrder == "mnThenK"
+                    ? ttng::TensorMemoryScalesBlockRepOrder::MN_THEN_K
+                : blockRepOrder == "kThenMn"
+                    ? ttng::TensorMemoryScalesBlockRepOrder::K_THEN_MN
+                    : throw py::value_error(
+                          "block_rep_order must be either 'mnThenK' or "
+                          "'kThenMn'");
+            return self.getChecked<ttng::TensorMemoryScalesEncodingAttr>(
+                ctx, cgaLayout, repOrder);
+          },
+          py::arg("cga_bases"), py::arg("block_rep_order") = "mnThenK")
       .def("get_shape_from_tensor",
            [](GluonOpBuilder &self, Value tensor) -> std::vector<int64_t> {
              auto ty = dyn_cast<RankedTensorType>(tensor.getType());
