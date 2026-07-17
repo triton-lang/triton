@@ -512,7 +512,7 @@ tt.func public @tmem_copy_2d_2cta(%src: !ttg.memdesc<128x32xi8, #shared, #ttg.sh
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true} {
   // CHECK-LABEL: @tma_scatter_broadcast_two_ctas
-  // CHECK: %[[CTA:.+]] = nvvm.read.ptx.sreg.cluster.ctarank
+  // CHECK: %[[CTA:.+]] = nvg.program_cta_id
   // CHECK: %[[MASK:.+]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK: %[[CTA_IN_GROUP:.+]] = llvm.and %[[CTA]], %[[MASK]] : i32
   // CHECK: %[[ZERO:.+]] = llvm.mlir.constant(0 : i32) : i32

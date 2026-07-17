@@ -78,10 +78,6 @@ inline int getModulePreferredClusterFallbackCTAs(ModuleOp mod) {
   return attr ? attr.getInt() : 0;
 }
 
-inline int getModulePreferredClusterFallbackCTAs(Operation *op) {
-  return getModulePreferredClusterFallbackCTAs(op->getParentOfType<ModuleOp>());
-}
-
 struct TensorMemory : public SideEffects::Resource::Base<TensorMemory> {
   StringRef getName() const final { return "<TensorMemory>"; }
   SideEffects::Resource *getParent() const override { return nullptr; }
@@ -160,7 +156,8 @@ getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
 
 SmallVector<uint16_t> getCTABroadcastMasks(bool twoCTAs, ValueRange descs);
 
-uint32_t getTCGen5MmaBarrierCount(ValueRange descs, bool fallback);
+uint32_t getTCGen5MmaBarrierCount(ValueRange descs, bool twoCTAs,
+                                  bool fallback);
 
 // Compact encoding of a CTA multicast group for a given broadcast mask:
 // `fixedBits` selects the CTA-id bits that identify the group leader, and

@@ -337,8 +337,8 @@ if __name__ == "__main__" and is_hopper_or_newer():
 # - create any barrier that must be waited on before the lead CTA issues
 #   `tcgen05_mma` with
 #   `mbarrier.allocate_mbarrier(..., two_ctas=True)`;
-# - when initializing an mbarrier used to wait on MMA completion, pass
-#   `two_ctas=...` to `tcgen05_mma_barrier_count`.
+# - when initializing an mbarrier used to wait on MMA completion, use
+#   `mbarrier.init_tcgen05_mma(...)`.
 #
 # Such a pre-MMA barrier needs `two_ctas=True` so that the lead CTA waits for
 # both rows before issuing the collective op. In this single-tile example that is
@@ -481,8 +481,8 @@ cga_layout_b = get_cga_layout(cga_layout, 1, two_ctas=False)
 #   broadcast group;
 # - `tcgen05_mma(..., multicast=True)` multicasts its mbarrier arrival before
 #   the next TMA overwrites the shared-memory tile;
-# - `tcgen05_mma_barrier_count(..., multicast=True, ...)` initializes that
-#   mbarrier with the matching arrival count.
+# - `mbarrier.init_tcgen05_mma(...)` initializes that mbarrier with the
+#   matching arrival count.
 #
 # The TMA synchronization pattern itself is otherwise the same as for a regular
 # load: initialize a barrier, `expect` the byte count, issue the TMA, then wait

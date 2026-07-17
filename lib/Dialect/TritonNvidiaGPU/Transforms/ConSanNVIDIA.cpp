@@ -58,8 +58,8 @@ public:
       return BarrierInitInfo{initOp.getAlloc(), count};
     }
     if (auto initOp = dyn_cast<ttng::InitMmaBarrierOp>(op)) {
-      uint32_t count = ttng::getTCGen5MmaBarrierCount(initOp.getDescs(),
-                                                      /*fallback=*/false);
+      uint32_t count = ttng::getTCGen5MmaBarrierCount(
+          initOp.getDescs(), ttng::getModuleTwoCTAs(op), /*fallback=*/false);
       return BarrierInitInfo{initOp.getAlloc(), count};
     }
     return std::nullopt;
@@ -118,8 +118,6 @@ public:
       mask = getBarrierMask(initOp.getAlloc());
     if (auto initOp = dyn_cast<ttng::InitMmaBarrierOp>(op))
       mask = getBarrierMask(initOp.getAlloc());
-    if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))
-      mask = getBarrierMask(expectOp.getAlloc());
     if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op))
       mask = getBarrierMask(waitOp.getAlloc());
     if (auto invalOp = dyn_cast<ttng::InvalBarrierOp>(op))

@@ -191,8 +191,8 @@ TypedValue<MemDescType> InitBarrierOp::getBarrier() { return getAlloc(); }
 LogicalResult InitMmaBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
-  if (getDescs().empty() || getDescs().size() > 2)
-    return emitOpError("expects one or two descriptors");
+  if (getDescs().empty() || getDescs().size() > 4)
+    return emitOpError("expects one to four descriptors");
   auto barrierTy = cast<MemDescType>(getAlloc().getType());
   int numCTAs = gpu::lookupNumCTAs(getOperation());
   if (barrierTy.getShape().size() != 1 || barrierTy.getNumElements() != numCTAs)
@@ -1713,26 +1713,35 @@ SmallVector<uint16_t> getCTABroadcastMasks(bool twoCTAs, ValueRange descs) {
   return broadcastMasks;
 }
 
-uint32_t getTCGen5MmaBarrierCount(ValueRange descs, bool fallback) {
+uint32_t getTCGen5MmaBarrierCount(ValueRange descs, bool twoCTAs,
+                                  bool fallback) {
   if (descs.empty())
     return 1;
 
   auto kBlock = StringAttr::get(descs.front().getContext(), "block");
-  auto getBroadcastMask = [&](Value desc) {
+  SmallVector<uint32_t> masks;
+  for (Value desc : descs) {
     auto descTy = cast<gpu::MemDescType>(desc.getType());
     uint32_t mask =
         toLinearLayout(descTy).getFreeVariableMasks().lookup(kBlock);
-    return fallback ? mask & 1 : mask;
-  };
+    if (fallback)
+      mask &= 1;
+    if (twoCTAs)
+      mask &= ~1u;
+    masks.push_back(mask);
+  }
 
-  if (descs.size() == 1)
-    return 1 << llvm::popcount(getBroadcastMask(descs.front()));
-
-  assert(descs.size() == 2 && "expected at most two descriptors");
-  uint32_t lhsMask = getBroadcastMask(descs[0]);
-  uint32_t rhsMask = getBroadcastMask(descs[1]);
-  return (1 << llvm::popcount(lhsMask)) + (1 << llvm::popcount(rhsMask)) -
-         (1 << llvm::popcount(lhsMask & rhsMask));
+  assert(masks.size() <= 4 && "expected at most four descriptors");
+  int32_t count = 0;
+  for (uint32_t subset = 1; subset < (1u << masks.size()); ++subset) {
+    uint32_t intersection = ~0u;
+    for (auto [i, mask] : llvm::enumerate(masks))
+      if (subset & (1u << i))
+        intersection &= mask;
+    int32_t size = 1u << llvm::popcount(intersection);
+    count += llvm::popcount(subset) & 1 ? size : -size;
+  }
+  return count;
 }
 
 TMAMulticastMaskEncoding getTMAMulticastMaskEncoding(int numCTAs,

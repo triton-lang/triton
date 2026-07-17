@@ -173,10 +173,11 @@ struct InitMmaBarrierOpConversion
             LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
       pred = b.and_(pred, *leaderPred);
 
+    bool twoCTAs = triton::nvidia_gpu::getModuleTwoCTAs(op);
     int preferredCount = triton::nvidia_gpu::getTCGen5MmaBarrierCount(
-        op.getDescs(), /*fallback=*/false);
+        op.getDescs(), twoCTAs, /*fallback=*/false);
     int fallbackCount = triton::nvidia_gpu::getTCGen5MmaBarrierCount(
-        op.getDescs(), /*fallback=*/true);
+        op.getDescs(), twoCTAs, /*fallback=*/true);
 
     Value initCount;
     if (preferredCount == fallbackCount) {

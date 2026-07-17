@@ -81,6 +81,64 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-NOT: ttng.preferred-cluster-fallback-ctas
+  // CHECK-LABEL: tt.func @reject_atomic_poll
+  tt.func @reject_atomic_poll(%ptr: !tt.ptr<i32>, %expected: i32) {
+    %matched = tt.atomic_poll acquire, gpu, %ptr, %expected : !tt.ptr<i32>, i32 -> i1
+    tt.return
+  }
+}
+
+// -----
+
+#blockedStore = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0], [0]]}>
+#sharedStore = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0], [0]]}>
+#barrierStore = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-NOT: ttng.preferred-cluster-fallback-ctas
+  // CHECK-LABEL: tt.func @reject_async_shared_store
+  tt.func @reject_async_shared_store(%src: tensor<128xi32, #blockedStore>, %dst: !ttg.memdesc<128xi32, #sharedStore, #smem, mutable>, %barrier: !ttg.memdesc<4xi64, #barrierStore, #smem, mutable>) {
+    ttng.async_shared_store %src, %dst, %barrier : tensor<128xi32, #blockedStore> -> !ttg.memdesc<128xi32, #sharedStore, #smem, mutable>, !ttg.memdesc<4xi64, #barrierStore, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blockedShared = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0], [2, 0]]}>
+#sharedCrossCTA = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1], [0, 2]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-NOT: ttng.preferred-cluster-fallback-ctas
+  // CHECK-LABEL: tt.func @reject_cross_cta_local_store
+  tt.func @reject_cross_cta_local_store(%src: tensor<256x128xf16, #blockedShared>, %dst: !ttg.memdesc<256x128xf16, #sharedCrossCTA, #smem, mutable>) {
+    ttg.local_store %src, %dst : tensor<256x128xf16, #blockedShared> -> !ttg.memdesc<256x128xf16, #sharedCrossCTA, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#barrierLocal = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2]]}>
+#mcast = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0], [0, 0]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-NOT: ttng.preferred-cluster-fallback-ctas
+  // CHECK-LABEL: tt.func @reject_static_mma_completion_count
+  tt.func @reject_static_mma_completion_count(%barrier: !ttg.memdesc<4xi64, #barrierLocal, #smem, mutable>, %desc: !ttg.memdesc<128x128xf16, #mcast, #smem>) {
+    ttng.init_barrier %barrier, 2 : !ttg.memdesc<4xi64, #barrierLocal, #smem, mutable>
+    ttng.tc_gen5_commit %barrier descs %desc : !ttg.memdesc<4xi64, #barrierLocal, #smem, mutable>, !ttg.memdesc<128x128xf16, #mcast, #smem>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-NOT: ttng.preferred-cluster-fallback-ctas
   // CHECK-LABEL: tt.func @reject_clc
   tt.func @reject_clc(%clc: i128) -> i32 {
     %pid = ttng.clc_get_program_id %clc, x : i128 -> i32

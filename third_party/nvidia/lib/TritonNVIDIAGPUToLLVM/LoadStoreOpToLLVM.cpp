@@ -1358,8 +1358,7 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
     // Stores and reductions operate from CTA-local shared memory, so if the
     // source tile is broadcast across CTAs only the lead CTA should issue the
     // TMA message.
-    Value physicalCtaId = NVVM::ClusterId::create(rewriter, loc, i32_ty);
-    Value ctaIdInGroup = b.and_(physicalCtaId, b.i32_val(maskCGABroadcast));
+    Value ctaIdInGroup = b.and_(ctaId, b.i32_val(maskCGABroadcast));
     pred = b.and_(pred, b.icmp_eq(ctaIdInGroup, zero));
   }
 
@@ -1727,7 +1726,7 @@ LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
   if (maskCGABroadcast != 0) {
     // `scatter4` only reads from the current CTA's shared memory, so if the
     // source is broadcast across CTAs only the lead CTA should issue it.
-    Value ctaId = NVVM::ClusterId::create(rewriter, loc, i32_ty);
+    Value ctaId = triton::nvgpu::ProgramCTAIdOp::create(rewriter, loc);
     Value ctaIdInGroup = b.and_(ctaId, b.i32_val(maskCGABroadcast));
     pred = b.icmp_eq(ctaIdInGroup, b.i32_val(0));
   }

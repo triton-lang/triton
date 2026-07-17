@@ -1366,7 +1366,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32} {
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: convert_layout_loads_local_replica
   // CHECK: llvm.store
-  // CHECK: nvg.cluster_id
+  // CHECK: nvg.program_cta_id
   // CHECK-NOT: nvvm.mapa
   // CHECK: llvm.load
   // CHECK-NOT: nvvm.cluster.arrive
@@ -2312,7 +2312,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: local_load_uses_local_cta
-  // CHECK: nvg.cluster_id
+  // CHECK: nvg.program_cta_id
   // CHECK-NOT: nvvm.mapa
   // CHECK: llvm.load
   tt.func public @local_load_uses_local_cta(%arg0: !ttg.memdesc<2xf32, #shared, #smem>) {
@@ -2328,7 +2328,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: local_store_uses_local_cta
-  // CHECK: nvg.cluster_id
+  // CHECK: nvg.program_cta_id
   // CHECK-NOT: nvvm.mapa
   // CHECK: llvm.store
   tt.func public @local_store_uses_local_cta(%arg0: tensor<2xf32, #reg>, %arg1: !ttg.memdesc<2xf32, #shared, #smem, mutable>) {

@@ -372,6 +372,8 @@ def test_tma_multicast_copy(ctas_per_cga):
     )
     expect_multicast = any(ctas_per_cga[i] > cga_split_num[i] for i in range(len(ctas_per_cga)))
     assert (".multicast::cluster" in compiled.asm["ptx"]) == expect_multicast
+    if is_blackwell() and num_ctas > 2:
+        assert compiled.metadata.preferred_cluster_fallback_ctas == 2
     torch.testing.assert_close(out, inp, atol=0, rtol=0)
 
 
@@ -649,7 +651,7 @@ def tcgen05_mma_scaled_direct_multicast_kernel(a_desc, b_desc, out_ptr, BLOCK_M:
     tma_bar = mbarrier.allocate_mbarrier(two_ctas=True)
     mbarrier.init(tma_bar, count=1)
     mma_bar = mbarrier.allocate_mbarrier()
-    mma_descs: ttgl.constexpr = [smem_a, smem_b]
+    mma_descs: ttgl.constexpr = [smem_a, smem_b, a_scale, b_scale]
     mbarrier.init_tcgen05_mma(mma_bar, mma_descs)
 
     phase_tma = 0
@@ -5020,7 +5022,7 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     mbarrier.init(tma_bar, count=1)
 
     mma_bar = mbarrier.allocate_mbarrier()
-    mma_descs: ttgl.constexpr = [a_smem, b_smem] if multicast else ()
+    mma_descs: ttgl.constexpr = [a_smem, b_smem, a_scale_tmem, b_scale_tmem] if multicast else ()
     mbarrier.init_tcgen05_mma(mma_bar, mma_descs)
 
     phase_tma = 0
