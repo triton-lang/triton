@@ -385,8 +385,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-// Because blockedOrder != sharedOrder the contig from AxisAnalysis will be 2 (because of the repeat pattern to cover the full tensor)
-// Check that we correctly lower it to 2 separate instructions load 32bit each
+// The blocked layout will return contiguity of 2 because the repeat pattern to cover the full tensor.
+// Check that we lower it to 2 separate instructions because the order of blocked layout and shared layout disagree.
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [64, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
 #smem = #ttg.shared_memory

@@ -149,9 +149,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
-  // The order of #blocked and #shared are different so we need to clip to 1
-  // element. The lanes/warps are distributed following the shared order so
-  // consecutive lanes write coalesced into LDS.
   // CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 2], warpsPerCTA = [1, 4], order = [1, 0]}>
   // CHECK-LABEL: async_copy_different_order
   tt.func public @async_copy_different_order(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
@@ -281,16 +278,15 @@ tt.func @async_copy_with_padding_different_vec(%input: tensor<256x!tt.ptr<f32>, 
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [64, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
-// The current encoding has contiguity 2, but gfx950 does not support 64-bit direct-to-LDS loads.
-// CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
-// CHECK-LABEL: async_copy_swizzled_unsupported_vec_width
-tt.func @async_copy_swizzled_unsupported_vec_width(%input: tensor<64x2x!tt.ptr<f32>, #blocked> {tt.contiguity = dense<[1, 2]> : tensor<2xi32>, tt.divisibility = dense<[4, 8]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>},
+// CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [64, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+// CHECK-LABEL: async_copy_with_mismatching_order_and_unsupported_vec_width
+tt.func @async_copy_with_mismatching_order_and_unsupported_vec_width(%input: tensor<64x2x!tt.ptr<f32>, #blocked> {tt.contiguity = dense<[1, 2]> : tensor<2xi32>, tt.divisibility = dense<[4, 8]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>},
     %view: !ttg.memdesc<64x2xf32, #shared, #smem, mutable>) {
-  // CHECK: %{{.*}} = ttg.convert_layout %{{.*}} : {{.*}} -> tensor<64x2x!tt.ptr<f32>, #[[$NEW_BLOCKED]]>
-  // CHECK: %{{.*}} = ttg.async_copy_global_to_local %{{.*}}: tensor<64x2x!tt.ptr<f32>, #[[$NEW_BLOCKED]]>
+  // CHECK: %[[CVT:.*]] = ttg.convert_layout %{{.*}} : {{.*}} -> tensor<64x2x!tt.ptr<f32>, #[[$NEW_BLOCKED]]>
+  // CHECK: %{{.*}} = ttg.async_copy_global_to_local %[[CVT]], %{{.*}} : tensor<64x2x!tt.ptr<f32>, #[[$NEW_BLOCKED]]>
   %token = ttg.async_copy_global_to_local %input, %view {contiguity = 2 : i32} : tensor<64x2x!tt.ptr<f32>, #blocked> -> <64x2xf32, #shared, #smem, mutable>
   tt.return
 }

@@ -83,12 +83,11 @@ struct CoalesceAsyncCopyWrites
     auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
     unsigned layoutContig = regToSharedLayout.getNumConsecutiveInOut();
 
-    // The src encoding maps more contiguous elements per thread into LDS than
-    // the reg->shared layout can write coalesced (e.g. the blocked and shared
+    // The src encoding supports more contiguous elements per thread than the
+    // reg->shared layout can write coalesced (e.g. the blocked and shared
     // encodings have a different order). In this case the current src encoding
     // results in strided writes into LDS which the lowering cannot handle, so
-    // we always have to rewrite the src layout even if canLoadDirectToLDS
-    // reports coalesced writes for the reduced (smaller) vector size below.
+    // we always have to rewrite the src layout.
     bool layoutRestrictsContig = layoutContig < loadContig;
     loadContig = std::min<unsigned>(loadContig, layoutContig);
 
@@ -110,11 +109,7 @@ struct CoalesceAsyncCopyWrites
 
     ttg::DistributedEncodingTrait newDistEnc;
 
-    // Note: canLoadDirectToLDS can further reduce loadContig (e.g. for padded
-    // encodings) via the reference parameter, so we always call it. We only
-    // take the early exit when the layout did not restrict the contiguity;
-    // otherwise the current src encoding still writes strided into LDS and must
-    // be rewritten.
+    // Do not move canLoadDirectToLDS into the if because it has ref parameters
     bool alreadyCoalesced =
         LLVM::AMD::canLoadDirectToLDS(targetInfo, srcTy, dstTy.getEncoding(),
                                       dstTy.getAllocShape(), loadContig);
@@ -141,16 +136,17 @@ struct CoalesceAsyncCopyWrites
       // disagree this spreads consecutive lanes along a dimension that is
       // strided in LDS, resulting in uncoalesced writes. Instead we distribute
       // the lanes/warps following the shared order so consecutive lanes map to
-      // consecutive LDS offsets, and afterwards keep the original blocked order
-      // for the register (sizePerThread) contiguity.
-      auto distEnc = BlockedEncodingAttr::get(
+      // consecutive LDS offsets, and keep the original blocked order for the
+      // final blocked encoding.
+      auto distEncSharedOrder = BlockedEncodingAttr::get(
           copyOp.getContext(), srcTy.getShape(), contigPerThread,
           swizzledEnc.getOrder(), numWarps, threadsPerWarp,
           blockedEnc.getCGALayout());
       newDistEnc = BlockedEncodingAttr::get(
-          copyOp.getContext(), distEnc.getSizePerThread(),
-          distEnc.getThreadsPerWarp(), distEnc.getWarpsPerCTA(),
-          blockedEnc.getOrder(), blockedEnc.getCGALayout());
+          copyOp.getContext(), distEncSharedOrder.getSizePerThread(),
+          distEncSharedOrder.getThreadsPerWarp(),
+          distEncSharedOrder.getWarpsPerCTA(), blockedEnc.getOrder(),
+          blockedEnc.getCGALayout());
     } else if (paddedEnc) {
       // For padded layouts the linear_component maps from LDS offsets to n-D
       // tensor indices. This mapping might reorder elements resulting in
