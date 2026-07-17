@@ -207,8 +207,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   WarpSpecializeCallbacks callbacks;
   callbacks.createAllBarrier = [](TritonLLVMIRRewriter &b, unsigned barIdx) {
     assert(barIdx < kNumBarriers && "not enough barriers");
-    LLVM::createLLVMIntrinsicCallOp(
-        b, b.getLoc(), "llvm.nvvm.barrier.cta.sync.all", {}, b.i32_val(barIdx));
+    NVVM::BarrierOp::create(b, b.getLoc(), b.i32_val(barIdx), Value{});
   };
 
   callbacks.reallocRegisters = [&](TritonLLVMIRRewriter &b, WarpSpecializeOp ws,
