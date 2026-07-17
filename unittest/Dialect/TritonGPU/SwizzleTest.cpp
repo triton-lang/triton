@@ -65,21 +65,21 @@ protected:
     if (cOrder.empty())
       cOrderStorage.assign(order.begin(), order.end());
 
-    auto cta = mlir::triton::gpu::CGAEncodingAttr::fromSplitParams(
+    auto cgaLayout = mlir::triton::gpu::CGAEncodingAttr::fromSplitParams(
         &ctx, cpgStorage.empty() ? cpg : ArrayRef<unsigned>(cpgStorage),
         splitStorage.empty() ? split : ArrayRef<unsigned>(splitStorage),
         cOrderStorage.empty() ? cOrder : ArrayRef<unsigned>(cOrderStorage));
     return mlir::triton::gpu::BlockedEncodingAttr::get(&ctx, spt, tpw, wpcta,
-                                                       order, cta);
+                                                       order, cgaLayout);
   }
 
   mlir::triton::gpu::NvidiaMmaEncodingAttr mma(ArrayRef<unsigned> version,
                                                ArrayRef<unsigned> warpsPerCTA,
                                                ArrayRef<unsigned> instrShape) {
-    auto cta = mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(
+    auto cgaLayout = mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(
         &ctx, warpsPerCTA.size());
     return mlir::triton::gpu::NvidiaMmaEncodingAttr::get(
-        &ctx, version[0], version[1], warpsPerCTA, cta, instrShape);
+        &ctx, version[0], version[1], warpsPerCTA, cgaLayout, instrShape);
   }
 
   mlir::triton::gpu::NVMMASharedEncodingAttr
@@ -87,31 +87,31 @@ protected:
               bool transposed = false) {
     SmallVector<unsigned> cpg(rank, 1), split(rank, 1), order(rank);
     std::iota(order.begin(), order.end(), 0);
-    auto cta = mlir::triton::gpu::CGAEncodingAttr::fromSplitParams(
+    auto cgaLayout = mlir::triton::gpu::CGAEncodingAttr::fromSplitParams(
         &ctx, cpg, split, order);
     return mlir::triton::gpu::NVMMASharedEncodingAttr::get(
         &ctx, swizzle, transposed, bitwidth,
-        /*fp4Padded=*/false, cta);
+        /*fp4Padded=*/false, cgaLayout);
   }
 
   mlir::triton::gpu::AMDMfmaEncodingAttr
   mfma(unsigned version, ArrayRef<unsigned> warpsPerCTA,
        ArrayRef<unsigned> instrShape, bool isTransposed,
        ArrayRef<unsigned> tilesPerWarp = {}, unsigned bitWidth = 0) {
-    auto cta = mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(
+    auto cgaLayout = mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(
         &ctx, warpsPerCTA.size());
     return mlir::triton::gpu::AMDMfmaEncodingAttr::get(
-        &ctx, version, warpsPerCTA, instrShape, isTransposed, cta, tilesPerWarp,
-        bitWidth);
+        &ctx, version, warpsPerCTA, instrShape, isTransposed, cgaLayout,
+        tilesPerWarp, bitWidth);
   }
 
   mlir::triton::gpu::AMDRotatingSharedEncodingAttr
   AMDRotatingShared(unsigned vec, unsigned perPhase, unsigned maxPhase,
                     ArrayRef<unsigned> order) {
-    auto cta =
+    auto cgaLayout =
         mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, order.size());
     return mlir::triton::gpu::AMDRotatingSharedEncodingAttr::get(
-        &ctx, vec, perPhase, maxPhase, order, cta);
+        &ctx, vec, perPhase, maxPhase, order, cgaLayout);
   }
 
   LinearLayout toLL(ArrayRef<int64_t> shape, Attribute attr) {
@@ -355,9 +355,9 @@ TEST_F(BankConflictTest, F64MmaV2BSharedLayout) {
   auto mmaV2 = mma({2, 0}, {4, 1}, {8, 8});
   auto dst = DotOperandEncodingAttr::get(&ctx, /*opIdx=*/1, mmaV2,
                                          /*kWidth=*/1);
-  auto cta = mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, 2);
+  auto cgaLayout = mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, 2);
   auto shared = SwizzledSharedEncodingAttr::get(
-      &ctx, dst, shape, /*order=*/{1, 0}, cta, /*typeWidthInBit=*/64);
+      &ctx, dst, shape, /*order=*/{1, 0}, cgaLayout, /*typeWidthInBit=*/64);
   EXPECT_EQ(shared.getVec(), 4);
   EXPECT_EQ(shared.getPerPhase(), 1);
   EXPECT_EQ(shared.getMaxPhase(), 4);

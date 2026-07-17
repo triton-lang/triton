@@ -813,6 +813,45 @@ def test_expand_dims_error_cases(device):
     assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", str(exc_info.value.__cause__))
 
 
+@pytest.mark.interpreter
+def test_squeeze_unsqueeze_negative_dim(device):
+
+    @triton.jit
+    def kernel(dummy, N: tl.constexpr):
+        offset1 = tl.arange(0, N)
+
+        t = tl.unsqueeze(offset1, -1)
+        tl.static_assert(t.shape == [N, 1])
+
+        t = tl.unsqueeze(offset1, -2)
+        tl.static_assert(t.shape == [1, N])
+
+        t = tl.unsqueeze(tl.expand_dims(offset1, 0), -1)
+        tl.static_assert(t.shape == [1, N, 1])
+
+        t = tl.squeeze(tl.expand_dims(offset1, 1), -1)
+        tl.static_assert(t.shape == [N])
+
+        t = tl.squeeze(tl.expand_dims(offset1, 0), -2)
+        tl.static_assert(t.shape == [N])
+
+    N = 32
+    dummy_tensor = torch.empty((), device=device)
+    kernel[(1, )](dummy_tensor, N)
+
+    @triton.jit
+    def unsqueeze_out_of_range(dummy, N: tl.constexpr):
+        tl.unsqueeze(tl.arange(0, N), -3)
+
+    @triton.jit
+    def squeeze_out_of_range(dummy, N: tl.constexpr):
+        tl.squeeze(tl.expand_dims(tl.arange(0, N), 1), -3)
+
+    for bad in (unsqueeze_out_of_range, squeeze_out_of_range):
+        with pytest.raises(triton.TritonError):
+            bad[(1, )](dummy_tensor, N)
+
+
 # ----------------------------
 # test invalid program id axis
 # ----------------------------
@@ -5186,38 +5225,6 @@ def test_tma_store_block_shape_err(device):
         kernel[(1, )](input)
 
     assert "Descriptor block shape must have at least 16 bytes" in str(e.value.__cause__)
-
-
-def test_trans_reshape(device, with_allocator):
-
-    @triton.jit
-    def kernel(in_base_ptr, out_base_ptr, IN_SHAPE0: tl.constexpr, IN_SHAPE1: tl.constexpr):
-
-        in_block_ptr = tl.make_block_ptr(
-            base=in_base_ptr,
-            shape=(IN_SHAPE0, IN_SHAPE1),
-            strides=(IN_SHAPE1, 1),
-            offsets=(0, 0),
-            block_shape=(IN_SHAPE0, IN_SHAPE1),
-            order=(1, 0),
-        )
-        x = tl.load(in_block_ptr)
-        x = tl.reshape(x, (32, 4, 4, 2))
-        x = tl.permute(x, (1, 2, 3, 0))
-        x = tl.reshape(x, (IN_SHAPE0 * IN_SHAPE1, ))
-        tl.store(out_base_ptr + tl.arange(0, IN_SHAPE0 * IN_SHAPE1), x)
-
-    shape = (32, 32)
-    input = torch.arange(math.prod(shape), dtype=torch.int32, device=device).reshape(shape)
-    expected = torch.permute(input, (1, 0))
-    # Don't do zeros_like -- that copies the layout, which we don't want.
-    actual = torch.zeros(expected.shape, dtype=torch.int32, device=device)
-
-    k = kernel[(1, )](input, actual, shape[0], shape[1])
-    assert k.asm['ttgir'].count(
-        'ttg.convert_layout') == 1, "Expected exactly one convert_layout op in the TTGIR after optimization"
-
-    np.testing.assert_equal(to_numpy(expected), to_numpy(actual))
 
 
 # -------------

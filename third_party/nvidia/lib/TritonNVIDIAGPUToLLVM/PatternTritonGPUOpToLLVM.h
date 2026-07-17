@@ -13,7 +13,8 @@ namespace NVIDIA {
 void populateBarrierOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                      RewritePatternSet &patterns,
                                      PatternBenefit benefit,
-                                     NVIDIA::TargetInfo &info);
+                                     NVIDIA::TargetInfo &info,
+                                     bool isCrossCluster);
 
 void createFenceMBarrierInitReleaseCluster(OpBuilder &builder, Location loc,
                                            Value pred);

@@ -104,6 +104,8 @@ public:
   // reported.
   void createClusterBarrierRendezvousCall(ImplicitLocOpBuilder &b,
                                           int barrierIdx, int thread,
+                                          uint64_t threadPeersMask,
+                                          bool partitionScoped,
                                           bool publishVisibility,
                                           Operation *insertPoint);
   // checkAllActiveWaiting: return whether unfinished threads across the
@@ -235,10 +237,13 @@ public:
   void createCopyReadVisibilityCall(ImplicitLocOpBuilder &b, int sourceThread,
                                     uint64_t destMask, Value pred,
                                     MemType memType, Operation *insertPoint);
-  // publishClusterVisibility: after a non-relaxed cluster barrier, make
-  // synchronous facts visible to every CTA in the cluster.
+  // publishClusterVisibility: after a non-relaxed cluster barrier, make the
+  // participating threads' synchronous facts visible across the cluster. A
+  // top-level barrier includes every thread; a warp-specialized barrier is
+  // scoped to its partition and peer thread classes.
   void createPublishClusterVisibilityCall(ImplicitLocOpBuilder &b, Value pred,
-                                          MemType memType,
+                                          int thread, uint64_t threadPeersMask,
+                                          bool partitionScoped, MemType memType,
                                           Operation *insertPoint);
   // setProxyAccess: record a generic-proxy access by the current base thread
   // and invalidate prior proxy-fence coverage for that source thread.
@@ -278,9 +283,11 @@ public:
                                    uint64_t destMask, Value pred,
                                    Operation *insertPoint);
   // publishClusterProxyAccesses: publish packed generic access and fence facts
-  // to every base thread after a non-relaxed cluster barrier.
+  // across the cluster. A warp-specialized barrier only updates the
+  // participating base-thread column.
   void createPublishClusterProxyAccessesCall(ImplicitLocOpBuilder &b,
-                                             Value pred,
+                                             Value pred, int thread,
+                                             bool partitionScoped,
                                              Operation *insertPoint);
   // stageAccessForCommit: mark the buffer as staged (value -1) in the
   // outstanding commit table for this thread.
