@@ -421,8 +421,8 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
 
     // Clear prior distributed dependencies if we have inserted a cluster
     // barrier, or if the scratch op itself performs a cluster-level sync.
-    if (insertClusterBarrierNeeded ||
-        isDistributedMultiCTAOp(op, /*isRead=*/true))
+    bool hasClusterSync = isDistributedMultiCTAOp(op, /*isRead=*/true);
+    if (insertClusterBarrierNeeded || hasClusterSync)
       blockInfo->sync();
 
     curBlockInfo.syncReadSlices[scratchSlice].insert(op);
