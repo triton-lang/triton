@@ -7,7 +7,7 @@
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: init_barrier
   tt.func @init_barrier(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>) {
-    // CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
+    // CHECK: nvvm.mbarrier.init %{{.*}}, %{{.*}} : !llvm.ptr<3>, i32
     ttng.init_barrier %alloc, 1 : !ttg.memdesc<1xi64, #shared0, #smem>
     tt.return
   }
@@ -22,7 +22,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @init_barrier_cluster_broadcast() {
     %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     // CHECK: nvg.cluster_id
-    // CHECK: @$0 mbarrier.init.shared::cta.b64 [$1], 2;
+    // CHECK: nvvm.mbarrier.init %{{.*}}, %{{.*}} : !llvm.ptr<3>, i32
     ttng.init_barrier %alloc, 1 : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     ttng.inval_barrier %alloc : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     tt.return
@@ -40,7 +40,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: llvm.ptrtoint
     // CHECK: llvm.and
     // CHECK: llvm.inttoptr
-    // CHECK: @$0 mbarrier.inval.shared::cta.b64 [$1];
+    // CHECK: nvvm.mbarrier.inval %{{.*}} : !llvm.ptr<3>
     ttng.inval_barrier %alloc : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     tt.return
   }
@@ -53,27 +53,17 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: wait_barrier
   tt.func @wait_barrier(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>, %phase: i32, %pred: i1) {
-    // CHECK: waitLoop:
-    // CHECK: mbarrier.try_wait.parity.shared::cta.b64
-    // CHECK: @!complete bra.uni waitLoop
-    // CHECK-NOT: skipWait
-    // CHECK: %{{[0-9]+}}, %arg1 :
+    // CHECK: nvvm.mbarrier.try_wait %{{.*}}, %arg1 : !llvm.ptr<3>, i32 -> i1
+    // CHECK-NEXT: llvm.cond_br
     ttng.wait_barrier %alloc, %phase : !ttg.memdesc<1xi64, #shared0, #smem>
     %true = arith.constant true
 
-    // CHECK: waitLoop:
-    // CHECK: mbarrier.try_wait.parity.shared::cta.b64
-    // CHECK: @!complete bra.uni waitLoop
-    // CHECK-NOT: skipWait
-    // CHECK: %{{[0-9]+}}, %arg1 :
+    // CHECK: nvvm.mbarrier.try_wait %{{.*}}, %arg1 : !llvm.ptr<3>, i32 -> i1
+    // CHECK-NEXT: llvm.cond_br
     ttng.wait_barrier %alloc, %phase, %true : !ttg.memdesc<1xi64, #shared0, #smem>
 
-    // CHECK: @!$2 bra.uni skipWait
-    // CHECK: waitLoop:
-    // CHECK: mbarrier.try_wait.parity.shared::cta.b64
-    // CHECK: @!complete bra.uni waitLoop
-    // CHECK: skipWait:
-    // CHECK: %{{[0-9]+}}, %arg1, %arg2 :
+    // CHECK: llvm.cond_br %arg2
+    // CHECK: nvvm.mbarrier.try_wait %{{.*}}, %arg1 : !llvm.ptr<3>, i32 -> i1
     ttng.wait_barrier %alloc, %phase, %pred : !ttg.memdesc<1xi64, #shared0, #smem>
     tt.return
   }
@@ -88,7 +78,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[RTID:%.*]] = llvm.and [[TID]], [[C127]]
     // CHECK-NEXT: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
     // CHECK-NEXT: [[IS_ZERO:%.*]] = llvm.icmp "eq" [[RTID]], [[C0]]
-    // CHECK-NEXT: "@$0 mbarrier.arrive.shared::cta.b64 _, [$1], 2;", "b,r" [[IS_ZERO]], [[BASE]]
+    // CHECK-NEXT: llvm.cond_br [[IS_ZERO]], ^{{.*}}, ^{{.*}}
+    // CHECK: nvvm.mbarrier.arrive [[BASE]], %{{.*}} : !llvm.ptr<3>
     ttng.arrive_barrier %alloc, 2 : !ttg.memdesc<1xi64, #shared0, #smem>
     tt.return
   }
@@ -104,7 +95,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
     // CHECK-NEXT: [[IS_ZERO:%.*]] = llvm.icmp "eq" [[RTID]], [[C0]]
     // CHECK-NEXT: [[PRED:%.*]] = llvm.and [[IS_ZERO]], %arg1
-    // CHECK-NEXT: "@$0 mbarrier.arrive.shared::cta.b64 _, [$1], 2;", "b,r" [[PRED]], [[BASE]]
+    // CHECK-NEXT: llvm.cond_br [[PRED]], ^{{.*}}, ^{{.*}}
+    // CHECK: nvvm.mbarrier.arrive [[BASE]], %{{.*}} : !llvm.ptr<3>
     ttng.arrive_barrier %alloc, 2, %pred : !ttg.memdesc<1xi64, #shared0, #smem>
     tt.return
   }
@@ -122,8 +114,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: llvm.ptrtoint
     // CHECK: llvm.and
     // CHECK: llvm.inttoptr
-    // CHECK: mbarrier.arrive.shared::cluster.b64
-    // CHECK-NOT: mbarrier.arrive.shared::cta.b64
+    // CHECK: nvvm.mbarrier.arrive %{{.*}}, %{{.*}} : !llvm.ptr<7>
+    // CHECK-NOT: nvvm.mbarrier.arrive {{.*}} : !llvm.ptr<3>
     ttng.arrive_barrier %alloc, 1 : !ttg.memdesc<1xi64, #shared0, #smem>
     tt.return
   }
@@ -138,7 +130,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: arrive_barrier_multicast_absent
   tt.func @arrive_barrier_multicast_absent(%alloc: !ttg.memdesc<2xi64, #shared0, #smem, mutable>) {
     // No ctaMask → non-multicast path.
-    // CHECK: mbarrier.arrive.shared::cta.b64
+    // CHECK: nvvm.mbarrier.arrive %{{.*}}, %{{.*}} : !llvm.ptr<3>
     // CHECK-NOT: mbarrier.arrive.shared::cluster.multicast
     ttng.arrive_barrier %alloc, 1 : !ttg.memdesc<2xi64, #shared0, #smem, mutable>
     tt.return
@@ -473,7 +465,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK: [[IS_ZERO:%.*]] = llvm.icmp "eq" [[RTID]], [[C0]]
   // CHECK: [[PRED:%.*]] = llvm.and [[IS_ZERO]], %arg1
-  // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cta.b64 _, [$1], 16384;
+  // CHECK: nvvm.mbarrier.arrive.expect_tx %{{.*}}, %{{.*}} : !llvm.ptr<3>, i32
   tt.func @expect_barrier(%barrier: !ttg.memdesc<1xi64, #shared0, #smem, mutable>, %pred: i1) {
     ttng.barrier_expect %barrier, 16384, %pred : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     tt.return
@@ -491,8 +483,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.ptrtoint
   // CHECK: llvm.and
   // CHECK: llvm.inttoptr
-  // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cluster.b64 _, [$1], 16384;
-  // CHECK-NOT: mbarrier.arrive.shared::cluster.b64
+  // CHECK: nvvm.mbarrier.arrive.expect_tx %{{.*}}, %{{.*}} : !llvm.ptr<7>, i32
+  // CHECK-NOT: nvvm.mbarrier.arrive {{.*}} : !llvm.ptr<3>
   tt.func @expect_barrier_cluster_broadcast(%barrier: !ttg.memdesc<1xi64, #shared0, #smem, mutable>, %pred: i1) {
     ttng.barrier_expect %barrier, 16384, %pred : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     tt.return
@@ -600,7 +592,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK-LABEL: mbarrier_sync_cluster_init
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @mbarrier_sync_cluster_init() {
-    // CHECK: fence.mbarrier_init.release.cluster
+    // CHECK: nvvm.fence.mbarrier.init
     // CHECK: nvvm.cluster.arrive.relaxed
     // CHECK-NEXT: nvvm.cluster.wait
     ttng.fence_mbarrier_init_release_cluster
@@ -861,10 +853,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-DAG: ttg.shared = 40 : i32
   // CHECK-DAG: ttg.ws_cluster_barrier_count = 1 : i32
   // CHECK-LABEL: @cluster_barrier_inside_warp_specialize
-  // CHECK-COUNT-2: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;"
+  // CHECK-COUNT-2: nvvm.mbarrier.init
   // CHECK: st.shared::cta.b32
   // CHECK-NOT: st.shared::cta.b32
-  // CHECK: fence.mbarrier_init.release.cluster
+  // CHECK: nvvm.fence.mbarrier.init
   // CHECK: nvvm.cluster.arrive.relaxed
   // CHECK-NEXT: nvvm.cluster.wait
   tt.func @cluster_barrier_inside_warp_specialize() {
@@ -879,8 +871,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       // CHECK: %[[PEER_BARRIER_INT:.*]] = llvm.xor %[[BARRIER_INT]],
       // CHECK: llvm.inttoptr %[[PEER_BARRIER_INT]]
       // CHECK-NOT: mapa
-      // CHECK: mbarrier.arrive.release.cluster.shared::cluster.b64
-      // CHECK: mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64
+      // CHECK: nvvm.mbarrier.arrive %{{.*}}, %{{.*}} {scope = #nvvm.mem_scope<cluster>} : !llvm.ptr<7>
+      // CHECK: nvvm.mbarrier.try_wait %{{.*}}, %{{.*}} {scope = #nvvm.mem_scope<cluster>} : !llvm.ptr<3>, i32 -> i1
       // CHECK: %[[NEXT_COUNTER:.*]] = llvm.add %[[COUNTER]]
       // CHECK: llvm.and %[[NEXT_COUNTER]]
       // CHECK: st.shared::cta.b32
@@ -899,9 +891,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 0 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // PTX85-LABEL: @relaxed_cluster_barrier_inside_warp_specialize
-  // PTX85: mbarrier.arrive.release.cluster.shared::cluster.b64
+  // PTX85: nvvm.mbarrier.arrive %{{.*}}, %{{.*}} {scope = #nvvm.mem_scope<cluster>} : !llvm.ptr<7>
   // PTX86-LABEL: @relaxed_cluster_barrier_inside_warp_specialize
-  // PTX86: mbarrier.arrive.relaxed.cluster.shared::cluster.b64
+  // PTX86: nvvm.mbarrier.arrive %{{.*}}, %{{.*}} {relaxed = true, scope = #nvvm.mem_scope<cluster>} : !llvm.ptr<7>
   tt.func @relaxed_cluster_barrier_inside_warp_specialize() {
     ttg.warp_specialize()
     default {
@@ -922,10 +914,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-DAG: ttg.shared = 72 : i32
   // CHECK-DAG: ttg.ws_cluster_barrier_count = 2 : i32
   // CHECK-LABEL: @cluster_barrier_inside_warp_specialize_reuses_slots
-  // CHECK-COUNT-4: mbarrier.init.shared::cta.b64
-  // CHECK-COUNT-1: fence.mbarrier_init.release.cluster
+  // CHECK-COUNT-4: nvvm.mbarrier.init
+  // CHECK-COUNT-1: nvvm.fence.mbarrier.init
   // CHECK-COUNT-1: nvvm.cluster.arrive.relaxed
-  // CHECK-COUNT-3: mbarrier.arrive.release.cluster.shared::cluster.b64
+  // CHECK-COUNT-3: nvvm.mbarrier.arrive
   tt.func @cluster_barrier_inside_warp_specialize_reuses_slots() {
     ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 4>}
     default {
@@ -947,8 +939,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK: ttg.ws_cluster_barrier_count = 1 : i32
   // CHECK-LABEL: @cluster_barrier_created_during_conversion
   // CHECK: llvm.mlir.constant(8 : i32)
-  // CHECK: mbarrier.init.shared::cta.b64
-  // CHECK: mbarrier.arrive.release.cluster.shared::cluster.b64
+  // CHECK: nvvm.mbarrier.init
+  // CHECK: nvvm.mbarrier.arrive %{{.*}}, %{{.*}} {scope = #nvvm.mem_scope<cluster>} : !llvm.ptr<7>
   tt.func @cluster_barrier_created_during_conversion(%arg0: !tt.ptr<i32>) {
     ttg.warp_specialize()
     default {
@@ -972,8 +964,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 512 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK: ttg.ws_cluster_barrier_count = 1 : i32
   // CHECK-LABEL: @tensor_atomic_cluster_barrier_created_during_conversion
-  // CHECK: mbarrier.init.shared::cta.b64
-  // CHECK: mbarrier.arrive.release.cluster.shared::cluster.b64
+  // CHECK: nvvm.mbarrier.init
+  // CHECK: nvvm.mbarrier.arrive %{{.*}}, %{{.*}} {scope = #nvvm.mem_scope<cluster>} : !llvm.ptr<7>
   tt.func @tensor_atomic_cluster_barrier_created_during_conversion(%arg0: !tt.ptr<i32>) {
     ttg.warp_specialize()
     default {
@@ -999,8 +991,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 16384 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK: ttg.ws_cluster_barrier_count = 1 : i32
   // CHECK-LABEL: @cluster_barrier_created_within_reduce_lowering
-  // CHECK: mbarrier.init.shared::cta.b64
-  // CHECK: mbarrier.arrive.release.cluster.shared::cluster.b64
+  // CHECK: nvvm.mbarrier.init
+  // CHECK: nvvm.mbarrier.arrive %{{.*}}, %{{.*}} {scope = #nvvm.mem_scope<cluster>} : !llvm.ptr<7>
   tt.func @cluster_barrier_created_within_reduce_lowering() {
     ttg.warp_specialize()
     default {

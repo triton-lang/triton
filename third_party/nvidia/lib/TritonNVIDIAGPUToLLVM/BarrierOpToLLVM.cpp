@@ -26,6 +26,7 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -38,12 +39,81 @@ using namespace mlir::triton;
 
 namespace ttg = mlir::triton::gpu;
 
+namespace {
+void createPredicatedBlock(OpBuilder &builder, Location loc, Value pred,
+                           function_ref<void()> emit) {
+  Block *currentBlock = builder.getInsertionBlock();
+  Block *continuation = currentBlock->splitBlock(builder.getInsertionPoint());
+  Block *body = builder.createBlock(currentBlock->getParent(),
+                                    std::next(Region::iterator(currentBlock)));
+
+  builder.setInsertionPointToEnd(currentBlock);
+  LLVM::CondBrOp::create(builder, loc, pred, body, continuation);
+  builder.setInsertionPointToEnd(body);
+  emit();
+  LLVM::BrOp::create(builder, loc, continuation);
+  builder.setInsertionPointToStart(continuation);
+}
+
+Value castToSharedClusterPointer(OpBuilder &builder, Location loc, Value ptr) {
+  auto b = TritonLLVMOpBuilder(loc, builder);
+  Value address = b.ptrtoint(builder.getI32Type(), ptr);
+  return b.inttoptr(ptr_ty(builder.getContext(), 7), address);
+}
+} // namespace
+
 void mlir::triton::NVIDIA::createFenceMBarrierInitReleaseCluster(
     OpBuilder &builder, Location loc, Value pred) {
-  PTXBuilder ptxBuilder;
-  auto &fence = *ptxBuilder.create("fence.mbarrier_init.release.cluster");
-  fence().predicate(pred);
-  ptxBuilder.launch(builder, loc, void_ty(builder.getContext()));
+  createPredicatedBlock(builder, loc, pred, [&] {
+    NVVM::FenceMbarrierInitOp::create(builder, loc);
+  });
+}
+
+void mlir::triton::NVIDIA::createMBarrierInit(OpBuilder &builder, Location loc,
+                                              Value pred, Value barrierPtr,
+                                              int count) {
+  createPredicatedBlock(builder, loc, pred, [&] {
+    auto b = TritonLLVMOpBuilder(loc, builder);
+    NVVM::MBarrierInitOp::create(builder, loc, barrierPtr, b.i32_val(count),
+                                 Value{});
+  });
+}
+
+void mlir::triton::NVIDIA::createMBarrierArrive(
+    OpBuilder &builder, Location loc, Value pred, Value barrierPtr, int count,
+    bool clusterScope, bool clusterSpace, bool relaxed) {
+  if (clusterSpace)
+    barrierPtr = castToSharedClusterPointer(builder, loc, barrierPtr);
+  createPredicatedBlock(builder, loc, pred, [&] {
+    auto b = TritonLLVMOpBuilder(loc, builder);
+    NVVM::MBarrierArriveOp::create(
+        builder, loc, Type{}, barrierPtr, b.i32_val(count),
+        clusterScope ? NVVM::MemScopeKind::CLUSTER : NVVM::MemScopeKind::CTA,
+        relaxed);
+  });
+}
+
+void mlir::triton::NVIDIA::createMBarrierWait(OpBuilder &builder, Location loc,
+                                              Value pred, Value barrierPtr,
+                                              Value phase, bool clusterScope) {
+  Block *currentBlock = builder.getInsertionBlock();
+  Block *continuation = currentBlock->splitBlock(builder.getInsertionPoint());
+  Block *loop = builder.createBlock(currentBlock->getParent(),
+                                    std::next(Region::iterator(currentBlock)));
+
+  builder.setInsertionPointToEnd(currentBlock);
+  if (pred)
+    LLVM::CondBrOp::create(builder, loc, pred, loop, continuation);
+  else
+    LLVM::BrOp::create(builder, loc, loop);
+
+  auto scope =
+      clusterScope ? NVVM::MemScopeKind::CLUSTER : NVVM::MemScopeKind::CTA;
+  builder.setInsertionPointToEnd(loop);
+  Value complete = NVVM::MBarrierTryWaitOp::create(
+      builder, loc, barrierPtr, phase, Value{}, scope, /*relaxed=*/false);
+  LLVM::CondBrOp::create(builder, loc, complete, continuation, loop);
+  builder.setInsertionPointToStart(continuation);
 }
 
 namespace {
@@ -134,15 +204,8 @@ struct InitBarrierOpConversion
     // the same barrier.
     initCount *= numCTAs / barrierTy.getNumElements();
 
-    ::mlir::triton::PTXBuilder ptxBuilder;
-    const std::string ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
-                            std::to_string(initCount) + ";";
-    auto &barSyncOp = *ptxBuilder.create(ptx);
-    barSyncOp({ptxBuilder.newOperand(pred, "b"),
-               ptxBuilder.newOperand(smemObj.getBase(), "r")},
-              /*onlyAttachMLIRArgs=*/true);
-    auto voidTy = void_ty(op->getContext());
-    ptxBuilder.launch(rewriter, loc, voidTy);
+    NVIDIA::createMBarrierInit(rewriter, loc, pred, smemObj.getBase(),
+                               initCount);
     rewriter.eraseOp(op);
     return success();
   }
@@ -176,14 +239,9 @@ struct InvalBarrierOpConversion
       pred = b.and_(pred, *leaderPred);
     Value barrierPtr = LLVM::NVIDIA::getLeaderAddress(
         loc, rewriter, smemObj.getBase(), barrierTy);
-    ::mlir::triton::PTXBuilder ptxBuilder;
-    const std::string ptx = "@$0 mbarrier.inval.shared::cta.b64 [$1];";
-    auto &barSyncOp = *ptxBuilder.create(ptx);
-    barSyncOp({ptxBuilder.newOperand(pred, "b"),
-               ptxBuilder.newOperand(barrierPtr, "r")},
-              /*onlyAttachMLIRArgs=*/true);
-    auto voidTy = void_ty(op->getContext());
-    ptxBuilder.launch(rewriter, loc, voidTy);
+    createPredicatedBlock(rewriter, loc, pred, [&] {
+      NVVM::MBarrierInvalOp::create(rewriter, loc, barrierPtr);
+    });
     rewriter.eraseOp(op);
     return success();
   }
@@ -215,17 +273,14 @@ struct BarrierExpectConversion
     Value leaderBarrierPtr = LLVM::NVIDIA::getLeaderAddress(
         loc, rewriter, smemObj.getBase(), barrierTy);
 
-    ::mlir::triton::PTXBuilder expectPtxBuilder;
-    const std::string expectPtx =
-        "@$0 mbarrier.arrive.expect_tx." +
-        std::string(crossCluster ? "shared::cluster" : "shared::cta") +
-        ".b64 _, [$1], " + std::to_string(op.getSize()) + ";";
-    auto &expectOp = *expectPtxBuilder.create(expectPtx);
-    expectOp({expectPtxBuilder.newOperand(pred, "b"),
-              expectPtxBuilder.newOperand(leaderBarrierPtr, "r")},
-             /*onlyAttachMLIRArgs=*/true);
-    auto voidTy = void_ty(op->getContext());
-    expectPtxBuilder.launch(rewriter, loc, voidTy);
+    if (crossCluster)
+      leaderBarrierPtr =
+          castToSharedClusterPointer(rewriter, loc, leaderBarrierPtr);
+    createPredicatedBlock(rewriter, loc, pred, [&] {
+      NVVM::MBarrierArriveExpectTxOp::create(
+          rewriter, loc, Type{}, leaderBarrierPtr, b.i32_val(op.getSize()),
+          NVVM::MemScopeKind::CTA, /*relaxed=*/false, Value{});
+    });
 
     rewriter.eraseOp(op);
     return success();
@@ -248,7 +303,6 @@ struct WaitBarrierOpConversion
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         op.getLoc(), adaptor.getAlloc(),
         typeConverter->convertType(barrierTy.getElementType()), rewriter);
-    auto ctx = op.getContext();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto pred = adaptor.getPred();
@@ -256,65 +310,46 @@ struct WaitBarrierOpConversion
             LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
       pred = b.and_(pred, *leaderPred);
 
-    bool predicated = pred && !matchPattern(pred, m_NonZero());
-    std::string ptx;
     if (targetInfo->getComputeCapability() < 90) {
-      if (!predicated) {
-        ptx = R"(
-{
-	.reg .pred complete;
-	waitLoop:
-	mbarrier.test_wait.parity.shared::cta.b64 complete, [$0], $1;
-	@!complete nanosleep.u32 20;
-	@!complete bra.uni waitLoop;
-}
-)";
-      } else {
-        ptx = R"(
+      // The NVPTX backend only selects the scoped parity-wait intrinsics for
+      // SM90+. Keep the PTX 7.x form until LLVM supports it for SM80.
+      bool predicated = pred && !matchPattern(pred, m_NonZero());
+      std::string ptx = predicated ? R"(
 {
 	@!$2 bra.uni skipWait;
 	.reg .pred complete;
-	waitLoop:
+waitLoop:
 	mbarrier.test_wait.parity.shared::cta.b64 complete, [$0], $1;
 	@!complete nanosleep.u32 20;
 	@!complete bra.uni waitLoop;
-	skipWait:
+skipWait:
+}
+)"
+                                   : R"(
+{
+	.reg .pred complete;
+waitLoop:
+	mbarrier.test_wait.parity.shared::cta.b64 complete, [$0], $1;
+	@!complete nanosleep.u32 20;
+	@!complete bra.uni waitLoop;
 }
 )";
-      }
+      PTXBuilder ptxBuilder;
+      auto &waitLoop = *ptxBuilder.create(ptx);
+      SmallVector<PTXBuilder::Operand *, 3> operands = {
+          ptxBuilder.newOperand(smemObj.getBase(), "r"),
+          ptxBuilder.newOperand(adaptor.getPhase(), "r")};
+      if (predicated)
+        operands.push_back(ptxBuilder.newOperand(pred, "b"));
+      waitLoop(operands, /*onlyAttachMLIRArgs=*/true);
+      ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
     } else {
-      if (!predicated) {
-        ptx = R"(
-{
-	.reg .pred complete;
-	waitLoop:
-	mbarrier.try_wait.parity.shared::cta.b64 complete, [$0], $1;
-	@!complete bra.uni waitLoop;
-}
-)";
-      } else {
-        ptx = R"(
-{
-	@!$2 bra.uni skipWait;
-	.reg .pred complete;
-	waitLoop:
-	mbarrier.try_wait.parity.shared::cta.b64 complete, [$0], $1;
-	@!complete bra.uni waitLoop;
-	skipWait:
-}
-)";
-      }
+      if (pred && matchPattern(pred, m_NonZero()))
+        pred = Value{};
+      NVIDIA::createMBarrierWait(rewriter, loc, pred, smemObj.getBase(),
+                                 adaptor.getPhase(),
+                                 /*clusterScope=*/false);
     }
-    ::mlir::triton::PTXBuilder ptxBuilder;
-    auto &waitLoop = *ptxBuilder.create(ptx);
-    SmallVector<::mlir::triton::PTXBuilder::Operand *, 3> operands = {
-        ptxBuilder.newOperand(smemObj.getBase(), "r"),
-        ptxBuilder.newOperand(adaptor.getPhase(), "r")};
-    if (predicated)
-      operands.push_back(ptxBuilder.newOperand(pred, "b"));
-
-    waitLoop(operands, /*onlyAttachMLIRArgs=*/true);
-    ptxBuilder.launch(rewriter, loc, void_ty(ctx));
     rewriter.eraseOp(op);
     return success();
   }
@@ -322,7 +357,12 @@ struct WaitBarrierOpConversion
 
 struct ArriveBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::ArriveBarrierOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  const NVIDIA::TargetInfo *targetInfo;
+  ArriveBarrierOpConversion(LLVMTypeConverter &typeConverter,
+                            PatternBenefit benefit,
+                            NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::ArriveBarrierOp op, OpAdaptor adaptor,
@@ -351,34 +391,42 @@ struct ArriveBarrierOpConversion
 
     Value barrierPtr = LLVM::NVIDIA::getLeaderAddress(
         loc, rewriter, smemObj.getBase(), barrierTy);
-    // TODO: Add phase result as needed.
-    std::stringstream ptxAsm;
-    ptxAsm << "@$0 mbarrier.arrive."
-           << (isCrossClusterBarrier ? "shared::cluster" : "shared::cta");
-    if (op.isMulticast())
-      ptxAsm << ".multicast::cluster::32b";
-    ptxAsm << ".b64 _, [$1]";
-    if (op.getCount() > 1) {
-      ptxAsm << ", " << op.getCount();
-    }
-    if (op.isMulticast())
-      ptxAsm << ", $2";
-    ptxAsm << ";";
-
-    PTXBuilder ptxBuilder;
-    SmallVector<PTXBuilder::Operand *, 3> operands = {
-        ptxBuilder.newOperand(pred, "b"),
-        ptxBuilder.newOperand(barrierPtr, "r")};
     if (op.isMulticast()) {
+      // LLVM does not model the SM110+ multicast variant yet.
+      std::stringstream ptxAsm;
+      ptxAsm << "@$0 mbarrier.arrive.shared::cluster."
+                "multicast::cluster::32b.b64 _, [$1]";
+      if (op.getCount() > 1)
+        ptxAsm << ", " << op.getCount();
+      ptxAsm << ", $2;";
+
+      PTXBuilder ptxBuilder;
       Value mask = LLVM::NVIDIA::createTMAMulticastMask(
           loc, rewriter, static_cast<uint16_t>(op.getCtaMask()));
-      operands.push_back(ptxBuilder.newOperand(mask, "r"));
+      auto arriveOp = *ptxBuilder.create(ptxAsm.str());
+      arriveOp({ptxBuilder.newOperand(pred, "b"),
+                ptxBuilder.newOperand(barrierPtr, "r"),
+                ptxBuilder.newOperand(mask, "r")},
+               /*onlyAttachMLIRArgs=*/true);
+      ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
+    } else if (targetInfo->getComputeCapability() < 90) {
+      // Explicit-count arrive intrinsics are only selected for SM90+.
+      std::stringstream ptx;
+      ptx << "@$0 mbarrier.arrive.shared::cta.b64 _, [$1]";
+      if (op.getCount() > 1)
+        ptx << ", " << op.getCount();
+      ptx << ";";
+      PTXBuilder ptxBuilder;
+      auto &arrive = *ptxBuilder.create(ptx.str());
+      arrive({ptxBuilder.newOperand(pred, "b"),
+              ptxBuilder.newOperand(barrierPtr, "r")},
+             /*onlyAttachMLIRArgs=*/true);
+      ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
+    } else {
+      NVIDIA::createMBarrierArrive(
+          rewriter, loc, pred, barrierPtr, op.getCount(),
+          /*clusterScope=*/false, isCrossClusterBarrier);
     }
-
-    auto arriveOp = *ptxBuilder.create(ptxAsm.str());
-    arriveOp(operands, /*onlyAttachMLIRArgs=*/true);
-    auto voidTy = void_ty(getContext());
-    ptxBuilder.launch(rewriter, loc, voidTy);
 
     rewriter.eraseOp(op);
     return success();
@@ -566,7 +614,7 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
       typeConverter, benefit, targetInfo);
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<BarrierExpectConversion>(typeConverter, benefit);
-  patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<CLCTryCancelOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<CLCLoadResultOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<CLCIsCanceledOpConversion>(typeConverter, benefit, targetInfo);
