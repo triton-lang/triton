@@ -1041,6 +1041,78 @@ def test_tma_store(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     kernel[(1, )](output_desc, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
+@pytest.mark.parametrize(
+    "FAILURE",
+    [pytest.param(True, id="reused-pending-source"),
+     pytest.param(False, id="stable-source")],
+)
+def test_tma_store_convert_layout_scratch(FAILURE, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_tma_store_convert_layout_scratch, (FAILURE, device, False, monkeypatch))
+        if FAILURE:
+            assert_expected_cuda_failure(result.exc)
+            assert "Accessing buffer with pending access. Pending access type: async_copy_shared_to_global" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(output_desc, input, sink, iterations, FAILURE: ttgl.constexpr):
+        src_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        dst_layout: ttgl.constexpr = ttgl.SliceLayout(1, ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0]))
+        src_offsets = ttgl.arange(0, 128, layout=src_layout)
+        dst_offsets = ttgl.arange(0, 128, layout=dst_layout)
+        persistent_page = ttgl.allocate_shared_memory(ttgl.int32, [128], output_desc.layout)
+        if not FAILURE:
+            stable_source_page = ttgl.allocate_shared_memory(ttgl.int32, [128], output_desc.layout)
+
+        for iteration in range(iterations):
+            base = iteration * 128
+
+            # On iteration 1, the conversion scratch aliases iteration 0's
+            # deallocated source while its TMA read can still be pending.
+            value = ttgl.load(input + base + src_offsets)
+            converted = ttgl.convert_layout(value, dst_layout)
+            ttgl.store(sink + base + dst_offsets, converted)
+
+            # Keep one unrelated store pending so wait(1) does not complete the
+            # source transfer below.
+            tma.store_wait(1)
+            persistent_page.store(value)
+            hopper.fence_async_shared()
+            tma.async_copy_shared_to_global(output_desc, [2 * base], persistent_page)
+
+            tma.store_wait(1)
+            if FAILURE:
+                source_page = ttgl.allocate_shared_memory(ttgl.int32, [128], output_desc.layout, value)
+            else:
+                stable_source_page.store(value)
+                source_page = stable_source_page
+            hopper.fence_async_shared()
+            tma.async_copy_shared_to_global(output_desc, [2 * base + 128], source_page)
+            if FAILURE:
+                source_page._keep_alive()
+
+        tma.store_wait(0)
+        persistent_page._keep_alive()
+        if not FAILURE:
+            stable_source_page._keep_alive()
+
+    iterations = 2
+    output = torch.empty(iterations * 2 * 128, dtype=torch.int32, device=device)
+    input = torch.arange(iterations * 128, dtype=torch.int32, device=device)
+    sink = torch.empty_like(input)
+    shared_layout = ttgl.NVMMASharedLayout.get_default_for([128], ttgl.int32)
+    output_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(output, [128], shared_layout)
+    kernel[(1, )](output_desc, input, sink, iterations, FAILURE=FAILURE, num_warps=4)
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 @pytest.mark.parametrize("MEM_ACCESS_KIND", ["tma_cp", "local_store", "tmem_load", "tmem_store"])
