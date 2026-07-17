@@ -174,8 +174,17 @@ struct ConvertTritonGPUToLLVM
                                                targetInfo, benefit);
     mlir::triton::populateGatherOpToLLVMPatterns(typeConverter, patterns,
                                                  targetInfo, benefit);
+    bool isCrossCluster =
+        computeCapability >= 90 &&
+        triton::gpu::TritonGPUDialect::getNumCTAs(mod) >= 2 &&
+        mod.walk([](Operation *op) {
+             return ttng::isDistributedMultiCTAOp(op, /*isRead=*/true)
+                        ? WalkResult::interrupt()
+                        : WalkResult::advance();
+           })
+            .wasInterrupted();
     populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit,
-                                    targetInfo);
+                                    targetInfo, isCrossCluster);
     populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit,
                                      targetInfo);
     mlir::triton::populateHistogramOpToLLVMPatterns(typeConverter, patterns,
