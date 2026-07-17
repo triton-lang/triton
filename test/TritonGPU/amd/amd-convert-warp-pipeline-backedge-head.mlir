@@ -68,6 +68,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // HEURISTIC: ttg.local_store
 // Key difference: priority still resets for the next cluster-0 iteration
 // at the loop tail, separate from the moved backedge barrier.
+// HEURISTIC-NEXT: rocdl.sched.barrier non_mem_non_sideeffect
 // HEURISTIC-NEXT: rocdl.s.setprio 0
 // HEURISTIC-NEXT: scf.yield
 // HEURISTIC: rocdl.sched.barrier
@@ -95,6 +96,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // NOHEURISTIC: ttg.local_store
 // Key difference: priority reset and the backedge barrier stay together
 // at the loop tail.
+// NOHEURISTIC-NEXT: rocdl.sched.barrier non_mem_non_sideeffect
 // NOHEURISTIC-NEXT: rocdl.s.setprio 0
 // NOHEURISTIC: rocdl.sched.barrier
 // NOHEURISTIC-NEXT: ttg.barrier local

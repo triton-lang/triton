@@ -88,8 +88,9 @@ static BlockInfo buildBlockInfoFromBlock(Block *block, Allocation *allocation) {
 // isPipelineIgnorable in WarpPipeliner.cpp plus the ROCDL-lowered forms that
 // can appear after intermediate passes.
 static bool isWarpPipelineIgnorableBarrier(Operation *op) {
-  return isa<ROCDL::BarrierOp, gpu::BarrierOp, triton::gpu::AsyncWaitOp,
-             triton::amdgpu::AsyncWaitOp, triton::amdgpu::AsyncTDMWait,
+  return isa<ROCDL::BarrierOp, gpu::BarrierOp, triton::gpu::BarrierOp,
+             triton::gpu::AsyncWaitOp, triton::amdgpu::AsyncWaitOp,
+             triton::amdgpu::AsyncTDMWait,
              triton::amdgpu::AsyncTDMIntrinsicWait>(op);
 }
 
@@ -272,9 +273,11 @@ static void emitClusterPriority(OpBuilder &r, Location loc,
 static void wrapExistingBarrier(OpBuilder &b, Location loc,
                                 Operation *clusterOp,
                                 Operation *existingBarrier,
-                                bool anyHasPriority) {
+                                bool anyHasPriority,
+                                bool emitPriority = true) {
   b.setInsertionPoint(existingBarrier);
-  emitClusterPriority(b, loc, clusterOp, anyHasPriority);
+  if (emitPriority)
+    emitClusterPriority(b, loc, clusterOp, anyHasPriority);
   ROCDL::SchedBarrier::create(b, loc, ROCDL::SchedGroupMask::none);
   b.setInsertionPointAfter(existingBarrier);
   ROCDL::SchedBarrier::create(b, loc, ROCDL::SchedGroupMask::none);
@@ -435,9 +438,9 @@ private:
     // 3. Circular dependency analysis (wrap-around for loop pipelines).
     analyzePipelineDependencies(clusterInfo, bars, allocation,
                                 /*circular=*/true);
-    bool heuristicBackedgeBarrierAtHead =
-        shouldPlaceBackedgeBarrierAtHead(targetInfo, clusterOps, clusterBlocks,
-                                         bars, hasTopBarrier, hasBottomBarrier);
+    if (shouldPlaceBackedgeBarrierAtHead(targetInfo, clusterOps, clusterBlocks,
+                                         bars, hasTopBarrier, hasBottomBarrier))
+      hasTopBarrier = true;
 
     // 4. Materializing final cluster-scope barriers.  For each cluster index:
     //  • If there is a pre-existing barrier at that location, we wrap it with
@@ -451,12 +454,28 @@ private:
     //    the first cluster barrier must be inserted just before the loop’s
     //    terminator, forming the wrap-around dependency.
     for (int i = 0; i < numClusters; i++) {
-      if (i == 0 && !hasTopBarrier) {
-        // Prime the first iteration's priority.  The loop-carried cluster-0
-        // barrier sits at the bottom of the loop body, so it only controls
-        // the next iteration.
+      if (i == 0) {
+        // Prime the first iteration's priority.  Subsequent iterations switch
+        // to cluster 0 at the loop tail.
         b.setInsertionPoint(forOp);
         emitClusterPriority(b, loc, clusterOps[i], anyHasPriority);
+      }
+
+      bool emitPriorityAtBoundary = true;
+      if (i == 0) {
+        if (hasTopBarrier) {
+          // The top barrier represents the loop backedge, so keep cluster-0
+          // priority at the loop tail for the next iteration.
+          b.setInsertionPoint(terminatorOp);
+          emitClusterPriority(b, loc, clusterOps[i], anyHasPriority);
+          b.setInsertionPoint(clusterOps[i]);
+          emitPriorityAtBoundary = false;
+        } else {
+          // Insert just before yield (= end of the loop).
+          b.setInsertionPoint(terminatorOp);
+        }
+      } else {
+        b.setInsertionPoint(clusterOps[i]);
       }
 
       if (auto exBar = existingBarrierMap.find(i);
@@ -466,24 +485,8 @@ private:
         // the producer to place such barriers only where no local fence is
         // needed.
         wrapExistingBarrier(b, loc, clusterOps[i], exBar->second,
-                            anyHasPriority);
+                            anyHasPriority, emitPriorityAtBoundary);
       } else {
-        b.setInsertionPoint(clusterOps[i]);
-        bool emitPriorityAtBoundary = true;
-        // The first one wraps back to the last of the loop.
-        if (i == 0 && !hasTopBarrier) {
-          if (heuristicBackedgeBarrierAtHead) {
-            // Keep the priority reset at the tail while moving the backedge
-            // barrier itself to the loop head.
-            b.setInsertionPoint(terminatorOp);
-            emitClusterPriority(b, loc, clusterOps[i], anyHasPriority);
-            b.setInsertionPoint(clusterOps[i]);
-            emitPriorityAtBoundary = false;
-          } else {
-            // Insert just before yield (= end of the loop).
-            b.setInsertionPoint(terminatorOp);
-          }
-        }
         if (emitPriorityAtBoundary)
           emitClusterPriority(b, loc, clusterOps[i], anyHasPriority);
         emitClusterBarrier(b, loc, /*needLocal=*/bars[i]);
@@ -492,7 +495,7 @@ private:
 
     // 5. Post-loop priority reset and reconverge.
     b.setInsertionPointAfter(forOp);
-    bool emitPostludeBarrier = hasTopBarrier || heuristicBackedgeBarrierAtHead;
+    bool emitPostludeBarrier = hasTopBarrier;
     emitPipelinePostlude(b, loc, anyHasPriority, warpLow, emitPostludeBarrier,
                          /*needLocal=*/bars[0]);
   }
