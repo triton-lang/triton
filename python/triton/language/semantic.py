@@ -1798,7 +1798,8 @@ class TritonSemantic(Generic[TensorTy]):
 
     def histogram(self, input: TensorTy, num_bins: int, mask: Optional[TensorTy]) -> TensorTy:
         assert len(input.shape) == 1, "histogram only supports 1D input"
-        assert input.dtype.is_int(), "histogram only supports integer input"
+        if not (input.dtype.is_int() and input.dtype.int_bitwidth == 32):
+            raise ValueError(f"histogram only supports 32-bit integer input, but got {input.dtype}")
         if mask is not None:
             mask = self.broadcast_impl_shape(mask, input.shape)
             if not mask.type.scalar.is_bool():
