@@ -437,7 +437,7 @@ class MXFPGEMMProgramBase:
 
 
 @gluon.jit
-def apply_activation_and_store_tdm(cfg, accumulator, c_desc, off_m, off_n):
+def apply_activation_and_store(cfg, accumulator, c_desc, off_m, off_n):
     if cfg.ACTIVATION == "swiglu":
         output = gl.convert_layout(swiglu_epilogue(accumulator), cfg.acc_layout)
     else:
@@ -559,7 +559,7 @@ class MXFPGEMMPipelinedProgram:
             wmma_idx += 1
             accumulator = gl.amd.gfx1250.wmma_scaled(a, scale_a, cfg.DTYPE_A, b, scale_b, cfg.DTYPE_B, accumulator)
 
-        apply_activation_and_store_tdm(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
+        apply_activation_and_store(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
 
     @gluon.jit
     def warp_pipeline(self, K):
@@ -607,13 +607,13 @@ class MXFPGEMMPipelinedProgram:
 
         # epilogue
         for i in gl.static_range(cfg.NUM_BUFFERS - 1):
-            gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 1 - i) * self.cfg.NUM_LOADS_IN_BATCH)
+            gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 2 - i) * self.cfg.NUM_LOADS_IN_BATCH)
             a, b, scale_a, scale_b = self.issue_local_loads(wmma_idx, self.a_buffer, self.b_buffer, self.a_scale_buffer,
                                                             self.b_scale_buffer)
             wmma_idx += 1
             accumulator = gl.amd.gfx1250.wmma_scaled(a, scale_a, cfg.DTYPE_A, b, scale_b, cfg.DTYPE_B, accumulator)
 
-        apply_activation_and_store_tdm(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
+        apply_activation_and_store(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
 
 
 @composition
@@ -787,7 +787,7 @@ class MXFPGEMMSliceKProgram:
             wmma_idx += 1
             accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
 
-        apply_activation_and_store_tdm(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
+        apply_activation_and_store(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
 
     @gluon.jit
     def warp_pipeline(self, K):
@@ -852,7 +852,7 @@ class MXFPGEMMSliceKProgram:
             accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
             wmma_idx += 1
 
-        apply_activation_and_store_tdm(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
+        apply_activation_and_store(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
 
 
 @composition
@@ -1114,7 +1114,7 @@ class MXFPGEMMSliceNKProgram:
         accumulator = accumulator.permute(0, 2, 1).reshape((cfg.BLOCK_M, cfg.BLOCK_N))
         accumulator = gl.convert_layout(accumulator, cfg.acc_layout, assert_trivial=True)
 
-        apply_activation_and_store_tdm(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
+        apply_activation_and_store(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
 
 
 @composition
@@ -1441,7 +1441,7 @@ class MXFPGEMMSliceMNKProgram:
         accumulator = gl.join(acc_top, acc_bot).permute(2, 0, 1).reshape((cfg.BLOCK_M, cfg.BLOCK_N))
         accumulator = gl.convert_layout(accumulator, cfg.acc_layout)
 
-        apply_activation_and_store_tdm(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
+        apply_activation_and_store(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
 
 
 @composition
@@ -1857,7 +1857,7 @@ class MXFPGEMMSliceMNKTDMSplitProgram:
         accumulator = gl.join(acc_top, acc_bot).permute(2, 0, 1).reshape((cfg.BLOCK_M, cfg.BLOCK_N))
         accumulator = gl.convert_layout(accumulator, cfg.acc_layout)
 
-        apply_activation_and_store_tdm(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
+        apply_activation_and_store(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
 
 
 @gluon.jit
@@ -2033,8 +2033,6 @@ def mxgemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, 
                                                                           N_PACKED, K, stride_am, stride_ak, stride_bk,
                                                                           stride_bn, stride_scale)
 
-    # All schedules store C through TDM: build a C tensor descriptor over the
-    # (output-width) C matrix and pass the tile offsets to the program.
     shared_layout_acc: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [1, 0])
     c_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
                                                        block_shape=(BLOCK_M, BLOCK_N), layout=shared_layout_acc)
@@ -2481,18 +2479,6 @@ if __name__ == '__main__':
                         help='Optional fused activation epilogue')
     parser.add_argument('--partial_tdm', action='store_true')
     parser.add_argument(
-        "--benchmark-mode",
-        choices=("graph", "eager", "none"),
-        default="none",
-        help="Timing method. `graph` uses triton.testing.do_bench_cudagraph.",
-    )
-    parser.add_argument(
-        "--benchmark-num-iters",
-        type=int,
-        default=32,
-        help="Number of iterations (rep) to run when benchmarking.",
-    )
-    parser.add_argument(
         '--resolve_partition_conflicts', action='store_true',
         help='Use partitioned shared layouts and a partition-aware WMMA layout to avoid LDS '
         'partition conflicts')
@@ -2555,4 +2541,3 @@ if __name__ == '__main__':
                                           BENCHMARK_MODE=BENCHMARK_MODE,  #
                                           BENCHMARK_NUM_ITERS=args.benchmark_num_iters,  #
                                           TDM_SPLIT=args.tdm_split)
-
