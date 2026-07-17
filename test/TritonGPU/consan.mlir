@@ -340,6 +340,63 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+#frontier_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 32, rank = 1}>
+#frontier_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#frontier_smem = #ttg.shared_memory
+#frontier_src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#frontier_dst_parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#frontier_dst = #ttg.slice<{dim = 1, parent = #frontier_dst_parent}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8200 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // The helper must select complete descriptor intervals, rather than all
+  // proxy state or every overlapping region.
+  // CHECK-LABEL: tt.func private @__triton_consan_track_proxy_accesses_for_buffer
+  // CHECK-SAME: %arg8: i32, %arg9: i32, %arg10: tensor<4xi64
+  // CHECK: arith.cmpi uge
+  // CHECK: arith.cmpi ule
+  // CHECK: arith.cmpi ne
+  // CHECK-LABEL: @tma_completion_tracks_contained_proxy_frontier
+  tt.func public @tma_completion_tracks_contained_proxy_frontier(
+      %desc: !tt.tensordesc<1024xi32, #frontier_shared>) {
+    // The conversion scratch is contained in the TMA destination. The third
+    // descriptor only partially overlaps it, while the fourth is disjoint;
+    // neither may be published by TMA completion.
+    // CHECK-DAG: %[[FRONTIER_BUFS:.*]] = tti.experimental_buffer_descriptors [0, 0, 3840, 4608], [512, 4096, 512, 512], shared_mem
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %value = arith.constant dense<0> : tensor<128xi32, #frontier_src>
+    %converted = ttg.convert_layout %value {allocation.offset = 0 : i32, allocation.size = 512 : i32}
+        : tensor<128xi32, #frontier_src> -> tensor<128xi32, #frontier_dst>
+    %partial = ttg.local_alloc %value {allocation.offset = 3840 : i32}
+        : (tensor<128xi32, #frontier_src>) -> !ttg.memdesc<128xi32, #frontier_shared, #frontier_smem, mutable>
+    %dst = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<1024xi32, #frontier_shared, #frontier_smem, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 8192 : i32}
+        : () -> !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
+    ttng.init_barrier %bar, 1
+        : !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
+    ttng.barrier_expect %bar, 4096, %true
+        : !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
+    ttng.fence_async_shared {bCluster = false}
+
+    // This access occurs after the fence and is outside the TMA destination.
+    %unrelated = ttg.local_alloc %value {allocation.offset = 4608 : i32}
+        : (tensor<128xi32, #frontier_src>) -> !ttg.memdesc<128xi32, #frontier_shared, #frontier_smem, mutable>
+
+    // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer
+    // CHECK: %[[TRACK_DST_LEN:.*]] = arith.constant 4096 : i32
+    // CHECK-NEXT: tt.call @__triton_consan_track_proxy_accesses_for_buffer{{.*}}({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[TRACK_DST_LEN]], %[[FRONTIER_BUFS]], {{.*}})
+    // CHECK: ttng.async_tma_copy_global_to_local
+    ttng.async_tma_copy_global_to_local %desc[%c0] %dst, %bar, %true
+        : !tt.tensordesc<1024xi32, #frontier_shared>,
+          !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
+          -> !ttg.memdesc<1024xi32, #frontier_shared, #frontier_smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #reduce_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 32, rank = 1}>
 #reduce_smem = #ttg.shared_memory
 #reduce_layout = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
@@ -588,6 +645,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_clear_read_visibility
     // CHECK: tt.call @__triton_consan_clear_read_tracking
     // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer
+    // CHECK: tt.call @__triton_consan_track_proxy_accesses_for_buffer
     // CHECK: tt.call @__triton_consan_verify_barrier_arrive
     // CHECK: tt.call @__triton_consan_update_barrier_state
     ttng.async_tma_copy_global_to_local %arg0[%c0_i32, %c0_i32] %0, %bar, %true : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
@@ -727,7 +785,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_barrier_arrive
     // CHECK: tt.call @__triton_consan_update_barrier_state
     // CHECK: ttng.barrier_expect
-    // CHECK-COUNT-2: tt.call @__triton_consan_track_barrier_write_for_buffer
+    // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer
+    // CHECK: tt.call @__triton_consan_track_proxy_accesses_for_buffer
+    // CHECK: ttng.async_tma_copy_global_to_local
+    // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer
+    // CHECK: tt.call @__triton_consan_track_proxy_accesses_for_buffer
+    // CHECK: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %a[%c0_i32, %c0_i32] %a_smem, %bar, %true : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     ttng.async_tma_copy_global_to_local %b[%c0_i32, %c0_i32] %b_smem, %bar, %true : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
 

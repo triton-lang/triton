@@ -177,6 +177,11 @@ places that ordinary read visibility is transported:
 - A frontier-tracked mbarrier arrive copies the issuing base thread's current
   proxy frontier into the barrier tracking row. The local copy remains live, so
   an arrive does not make a later async access by the arriving thread legal.
+- An async-proxy write that signals an mbarrier snapshots the issuing base
+  thread's frontier at launch time, after its proxy-ordering check, but only for
+  tracked shared-memory regions fully contained in the write destination. This
+  lets the completion wait transport a fence immediately preceding a TMA load
+  without publishing unrelated or only partially overwritten regions.
 - A successful mbarrier wait merges the selected barrier row into the waiting
   base thread's row. A fence before the wait cannot cover accesses learned only
   by that wait; a fence after the wait can.

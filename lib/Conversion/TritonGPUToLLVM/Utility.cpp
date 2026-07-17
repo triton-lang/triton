@@ -251,9 +251,6 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
 }
 
 FailureOr<bool> cvtAlwaysUseWarpShuffle(ConvertLayoutOp cvt) {
-  // ConvertLayoutOp lowering runs after functions have been converted to the
-  // target function dialect (for example LLVM::LLVMFuncOp), so do not assume
-  // that the enclosing operation is still a tt.func.
   if (cvtUsesForcedWarpShuffle(cvt))
     return true;
   if (!cvtIsWarpShuffleForced(cvt))

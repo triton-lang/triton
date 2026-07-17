@@ -22,9 +22,11 @@ struct MemEffectsOpInfo {
   // this for ordering operations whose semantics are a release of prior work.
   //
   // EffectWrites does not snapshot the whole thread frontier. Instead, it
-  // attaches only the explicit write effects of this op to the barrier. A later
-  // wait publishes those op-local writes and nothing else. Use this for PTX ops
-  // that perform the write and also signal the barrier via
+  // attaches only the explicit write effects of this op to the barrier. For an
+  // async-proxy shared-memory write, it also snapshots the proxy frontier only
+  // for tracked regions fully contained in that write. A later wait publishes
+  // those op-local writes and proxy-ordering facts, and nothing else. Use this
+  // for PTX ops that perform the write and also signal the barrier via
   // `mbarrier::complete_tx`.
   enum class BarrierTrackingMode {
     Frontier,

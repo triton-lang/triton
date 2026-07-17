@@ -3,6 +3,7 @@
 
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 
+#include <optional>
 #include <string>
 #include <variant>
 
@@ -271,6 +272,14 @@ public:
   void createTrackProxyAccessesCall(ImplicitLocOpBuilder &b, Value mbar,
                                     int thread, Value pred,
                                     Operation *insertPoint, Value barrierCTAs);
+  // trackProxyAccessesForBuffer: snapshot the current base thread's packed
+  // generic access/fence frontier for shared-memory regions fully contained
+  // in buffer. This is used by async-proxy writes that complete a barrier:
+  // waiting on that barrier orders only the bytes written by the operation.
+  void createTrackProxyAccessesForBufferCall(
+      ImplicitLocOpBuilder &b, Value mbar, MaterializedBufferRegion buffer,
+      int thread, Value pred, Operation *insertPoint, Value barrierCTAs,
+      Value effectCTAs);
   // transferProxyAccesses: merge a barrier's packed proxy frontier into the
   // waiting base thread.
   void createTransferProxyAccessesCall(ImplicitLocOpBuilder &b, Value mbar,
@@ -343,6 +352,11 @@ public:
       bool excludeSelf = false);
 
 private:
+  void createTrackProxyAccessesCallImpl(
+      ImplicitLocOpBuilder &b, Value mbar, int thread, Value pred,
+      Operation *insertPoint, Value barrierCTAs,
+      std::optional<MaterializedBufferRegion> buffer, Value effectCTAs);
+
   ModuleOp module;
   AuxDataMap &auxData;
 };

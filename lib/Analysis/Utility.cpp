@@ -1332,7 +1332,6 @@ bool cvtCanUseWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
 
 bool cvtIsWarpShuffleForced(triton::gpu::ConvertLayoutOp cvt) {
   auto func = cvt->getParentOfType<FunctionOpInterface>();
-  assert(func && "convert_layout must be nested in a function");
   return func->hasAttrOfType<UnitAttr>("always_use_warp_shuffle");
 }
 

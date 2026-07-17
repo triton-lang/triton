@@ -247,6 +247,38 @@ Value createBufferDescriptor(ImplicitLocOpBuilder &b, Value offsetI32,
   return arith::OrIOp::create(b, lengthShifted, offsetI64);
 }
 
+// Return the descriptor rows whose entire byte interval is covered by
+// [offset, offset + length). Restricting completion-barrier proxy state by
+// containment (rather than overlap) prevents a partial async write from
+// publishing generic accesses to bytes it did not write.
+Value createBuffersContainedInRegionMask(ImplicitLocOpBuilder &b, Value buffers,
+                                         Value offsetI32, Value lengthI32) {
+  auto buffersType = cast<RankedTensorType>(buffers.getType());
+  Value offsetMask =
+      tti::createConstIntTensor(b, b.getLoc(), 0xffffffff, buffersType);
+  Value shift = tti::createConstIntTensor(b, b.getLoc(), 32, buffersType);
+  Value zero = tti::createConstIntTensor(b, b.getLoc(), 0, buffersType);
+  Value bufferOffsets = arith::AndIOp::create(b, buffers, offsetMask);
+  Value bufferLengths = arith::ShRUIOp::create(b, buffers, shift);
+  Value bufferEnds = arith::AddIOp::create(b, bufferOffsets, bufferLengths);
+
+  Value regionOffsetI64 = arith::ExtUIOp::create(b, b.getI64Type(), offsetI32);
+  Value regionLengthI64 = arith::ExtUIOp::create(b, b.getI64Type(), lengthI32);
+  Value regionEndI64 =
+      arith::AddIOp::create(b, regionOffsetI64, regionLengthI64);
+  Value regionOffset = triton::SplatOp::create(b, buffersType, regionOffsetI64);
+  Value regionEnd = triton::SplatOp::create(b, buffersType, regionEndI64);
+
+  Value startsInside = arith::CmpIOp::create(b, arith::CmpIPredicate::uge,
+                                             bufferOffsets, regionOffset);
+  Value endsInside = arith::CmpIOp::create(b, arith::CmpIPredicate::ule,
+                                           bufferEnds, regionEnd);
+  Value nonEmpty =
+      arith::CmpIOp::create(b, arith::CmpIPredicate::ne, bufferLengths, zero);
+  return arith::AndIOp::create(
+      b, nonEmpty, arith::AndIOp::create(b, startsInside, endsInside));
+}
+
 std::tuple<Block *, Block *, Block *> createIfBlock(ImplicitLocOpBuilder &b,
                                                     Value cnd) {
   // #prevBlock
@@ -2989,8 +3021,27 @@ void FunctionBuilder::createTrackProxyAccessesCall(ImplicitLocOpBuilder &b,
                                                    Value pred,
                                                    Operation *insertPoint,
                                                    Value barrierCTAs) {
+  createTrackProxyAccessesCallImpl(b, mbar, thread, pred, insertPoint,
+                                   barrierCTAs, std::nullopt, Value());
+}
+
+void FunctionBuilder::createTrackProxyAccessesForBufferCall(
+    ImplicitLocOpBuilder &b, Value mbar, MaterializedBufferRegion buffer,
+    int thread, Value pred, Operation *insertPoint, Value barrierCTAs,
+    Value effectCTAs) {
+  createTrackProxyAccessesCallImpl(b, mbar, thread, pred, insertPoint,
+                                   barrierCTAs, buffer, effectCTAs);
+}
+
+void FunctionBuilder::createTrackProxyAccessesCallImpl(
+    ImplicitLocOpBuilder &b, Value mbar, int thread, Value pred,
+    Operation *insertPoint, Value barrierCTAs,
+    std::optional<MaterializedBufferRegion> buffer, Value effectCTAs) {
+  bool filterByBuffer = buffer.has_value();
+  auto &buffersMap = auxData.buffers[(int)MemType::SHARED_MEM];
   if (auxData.barriers.empty() || auxData.proxyAccessVisibility.empty() ||
-      auxData.proxyAccessTracking.empty())
+      auxData.proxyAccessTracking.empty() ||
+      (filterByBuffer && buffersMap.empty()))
     return;
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
@@ -3000,6 +3051,7 @@ void FunctionBuilder::createTrackProxyAccessesCall(ImplicitLocOpBuilder &b,
   auto barriersType = cast<RankedTensorType>(barriers.type);
   auto visibilityType = cast<RankedTensorType>(visibility.type);
   auto trackingType = cast<RankedTensorType>(tracking.type);
+  RankedTensorType buffersType;
   SmallVector<Value> args = {
       tti::ExperimentalMemDescToI32Op::create(b, mbar),
       arith::ConstantIntOp::create(b, getMemDescLength(mbar), 32),
@@ -3009,11 +3061,22 @@ void FunctionBuilder::createTrackProxyAccessesCall(ImplicitLocOpBuilder &b,
       visibility.value,
       tracking.value,
       barrierCTAs};
+  ManglingArgs specializationArgs{barriersType, visibilityType, trackingType};
+  if (filterByBuffer) {
+    ValueType buffers = buffersMap.at(insertPoint);
+    buffersType = cast<RankedTensorType>(buffers.type);
+    args.append({buffer->baseAddress,
+                 arith::ConstantIntOp::create(b, buffer->length, 32),
+                 buffers.value, effectCTAs});
+    specializationArgs.append(buffersType);
+  }
   createCallToCachedFunction(
-      b, "track_proxy_accesses", args, /*assertInfo=*/std::nullopt,
-      {barriersType, visibilityType, trackingType},
-      [visibilityType, trackingType](ImplicitLocOpBuilder &fb,
-                                     Block *entryBlock) {
+      b,
+      filterByBuffer ? "track_proxy_accesses_for_buffer"
+                     : "track_proxy_accesses",
+      args, /*assertInfo=*/std::nullopt, specializationArgs,
+      [visibilityType, trackingType, filterByBuffer](ImplicitLocOpBuilder &fb,
+                                                     Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
@@ -3022,6 +3085,11 @@ void FunctionBuilder::createTrackProxyAccessesCall(ImplicitLocOpBuilder &b,
         Value visibilityPtr = entryBlock->getArgument(5);
         Value trackingPtr = entryBlock->getArgument(6);
         Value barrierCTAs = entryBlock->getArgument(7);
+        Value bufOffset = filterByBuffer ? entryBlock->getArgument(8) : Value();
+        Value bufLength = filterByBuffer ? entryBlock->getArgument(9) : Value();
+        Value buffers = filterByBuffer ? entryBlock->getArgument(10) : Value();
+        Value effectCTAs =
+            filterByBuffer ? entryBlock->getArgument(11) : Value();
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
@@ -3035,6 +3103,17 @@ void FunctionBuilder::createTrackProxyAccessesCall(ImplicitLocOpBuilder &b,
         sourceMask = arith::AndIOp::create(
             fb, sourceMask,
             createDimMask(fb, threadVal, visibilityType, /*dim=*/3));
+        Value containedBuffers;
+        if (filterByBuffer) {
+          containedBuffers = createBuffersContainedInRegionMask(
+              fb, buffers, bufOffset, bufLength);
+          Value visibilityBuffers =
+              convertAndBroadcast(fb, containedBuffers, {1}, visibilityType);
+          sourceMask = arith::AndIOp::create(fb, sourceMask, visibilityBuffers);
+          sourceMask = arith::AndIOp::create(
+              fb, sourceMask,
+              createCTASetMask(fb, visibilityType, /*dim=*/0, effectCTAs));
+        }
         Value zeroVisibility =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, visibilityType);
         Value source =
@@ -3051,11 +3130,20 @@ void FunctionBuilder::createTrackProxyAccessesCall(ImplicitLocOpBuilder &b,
             createCTASetMask(fb, trackingType, /*dim=*/2, barrierCTAs);
         Value trackMask =
             arith::AndIOp::create(fb, barriersEqBar, barrierCTAMask);
+        if (filterByBuffer) {
+          Value trackingBuffers =
+              convertAndBroadcast(fb, containedBuffers, {1}, trackingType);
+          trackMask = arith::AndIOp::create(fb, trackMask, trackingBuffers);
+          trackMask = arith::AndIOp::create(
+              fb, trackMask,
+              createCTASetMask(fb, trackingType, /*dim=*/0, effectCTAs));
+        }
         Value withSource = arith::OrIOp::create(fb, tracking, source);
         Value updated =
             arith::SelectOp::create(fb, trackMask, withSource, tracking);
+        Value storeMask = filterByBuffer ? trackMask : barrierCTAMask;
         createMaskedStoreScratchMemory(fb, fb.getLoc(), trackingPtr, updated,
-                                       trackingType, barrierCTAMask);
+                                       trackingType, storeMask);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);

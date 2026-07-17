@@ -998,6 +998,12 @@ private:
           funcBuilder.createTrackBarrierWriteForBufferCall(
               b, barrier, materialized.buffer, combinedPred,
               materialized.memType, op, recipientCTAs, effectCTAs);
+          if (materialized.memType == MemType::SHARED_MEM &&
+              effect.proxy == MemEffectsOpInfo::Effects::Proxy::Async) {
+            funcBuilder.createTrackProxyAccessesForBufferCall(
+                b, barrier, materialized.buffer, baseThread, combinedPred, op,
+                recipientCTAs, effectCTAs);
+          }
         }
       }
       if (barrierInfo.count > 0 || barrierInfo.txCount != 0) {
