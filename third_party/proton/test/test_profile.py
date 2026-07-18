@@ -32,6 +32,26 @@ def _find_frame_by_name(frame, name):
     return None
 
 
+def _has_positive_time_metric(frame):
+    queue = [frame]
+    while queue:
+        current = queue.pop(0)
+        if current["metrics"].get("time (ns)", 0) > 0:
+            return True
+        queue.extend(current["children"])
+    return False
+
+
+def _has_metric(frame, metric_name):
+    queue = [frame]
+    while queue:
+        current = queue.pop(0)
+        if metric_name in current["metrics"]:
+            return True
+        queue.extend(current["children"])
+    return False
+
+
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context, tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_torch.hatchet"
@@ -44,8 +64,11 @@ def test_torch(context, tmp_path: pathlib.Path, device: str):
         data = json.load(f)
     if context == "shadow":
         assert len(data[0]["children"]) == 1
-        assert data[0]["children"][0]["frame"]["name"] == "test"
-        assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
+        test_frame = data[0]["children"][0]
+        assert test_frame["frame"]["name"] == "test"
+        # CUPTI can emit an intermediate launch frame without kernel metrics,
+        # so do not assume the first child under the scope owns "time (ns)".
+        assert _has_positive_time_metric(test_frame)
     elif context == "python":
         assert len(data[0]["children"]) == 1
         # bfs search until find the "elementwise_kernel" and then check its children
@@ -995,7 +1018,9 @@ def test_deactivate(tmp_path: pathlib.Path, device: str):
     # Root shouldn't have device id
     assert "device_id" not in data[0]["metrics"]
     assert len(data[0]["children"]) == 1
-    assert "device_id" in data[0]["children"][0]["metrics"]
+    # Some backends insert an intermediate launch frame while resolving the
+    # kernel name from activity records, so device metrics may live below it.
+    assert _has_metric(data[0]["children"][0], "device_id")
 
 
 def test_multiple_sessions(tmp_path: pathlib.Path, device: str):
