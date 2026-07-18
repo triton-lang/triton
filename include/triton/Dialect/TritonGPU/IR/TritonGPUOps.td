@@ -249,11 +249,13 @@ def TTG_MemDescSubsliceOp : TTG_Op<"memdesc_subslice", [Pure, MemDescViewTrait]>
     For example, suppose that
      - the input shape is 32x16xf16,
      - the output shape is 8x16xf16, and
-     - offsets = [2, 1].
-    Then in Python syntax, the subview covers input[2:8+2, 1:16+1] where input is
+     - offsets = [8, 0].
+    Then in Python syntax, the subview covers input[8:8+8, 0:16] where input is
     the logical tensor.
 
-    The offsets must be larger or equal to the tile of the tensor (or zero).
+    The result preserves the input allocation shape. Each offset must be
+    non-negative and the result must fit within the input view. An offset in a
+    split dimension must be aligned to the result tile in that dimension.
   }];
   let arguments = (ins TTG_MemDescType:$src, DenseI32ArrayAttr:$offsets);
   // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".

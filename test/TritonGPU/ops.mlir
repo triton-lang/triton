@@ -92,21 +92,21 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 2 : i32, "ttg.num-w
   // CHECK-LABEL: @subslice_non_trivial_block_cga_01
   tt.func @subslice_non_trivial_block_cga_01(%arg0: !ttg.memdesc<8x16xf32, #shared_cga_01, #smem>) {
     // CHECK: ttg.memdesc_subslice %{{.*}}[0, 0]
-    %0 = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared_cga_01, #smem> -> !ttg.memdesc<4x16xf32, #shared_cga_01, #smem>
+    %0 = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared_cga_01, #smem> -> !ttg.memdesc<4x16xf32, #shared_cga_01, #smem, 8x16>
     tt.return
   }
 
   // CHECK-LABEL: @subslice_non_trivial_block_cga_10
   tt.func @subslice_non_trivial_block_cga_10(%arg0: !ttg.memdesc<8x16xf32, #shared_cga_10, #smem>) {
     // CHECK: ttg.memdesc_subslice %{{.*}}[0, 0]
-    %0 = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared_cga_10, #smem> -> !ttg.memdesc<8x8xf32, #shared_cga_10, #smem>
+    %0 = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared_cga_10, #smem> -> !ttg.memdesc<8x8xf32, #shared_cga_10, #smem, 8x16>
     tt.return
   }
 
   // CHECK-LABEL: @subslice_broadcasted_block_cga_00
   tt.func @subslice_broadcasted_block_cga_00(%arg0: !ttg.memdesc<8x16xf32, #shared_cga_00, #smem>) {
     // CHECK: ttg.memdesc_subslice %{{.*}}[0, 0]
-    %0 = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared_cga_00, #smem> -> !ttg.memdesc<4x16xf32, #shared_cga_00, #smem>
+    %0 = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared_cga_00, #smem> -> !ttg.memdesc<4x16xf32, #shared_cga_00, #smem, 8x16>
     tt.return
   }
 
@@ -114,6 +114,15 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 2 : i32, "ttg.num-w
   tt.func @subview_split_on_cta_dim(%arg0: !ttg.memdesc<8x4xf32, #shared, #smem>) {
     // CHECK: ttg.memdesc_subslice %{{.*}}[0, 0]
     %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x4xf32, #shared, #smem> -> !ttg.memdesc<4x4xf32, #shared, #smem, 8x4>
+    tt.return
+  }
+
+  // CHECK-LABEL: @nested_subslices_preserve_alloc_shape
+  // CHECK: ttg.memdesc_subslice %{{.*}}[4, 0]
+  // CHECK: ttg.memdesc_subslice %{{.*}}[2, 0]
+  tt.func @nested_subslices_preserve_alloc_shape(%arg0: !ttg.memdesc<8x4xf32, #shared, #smem>) {
+    %a = ttg.memdesc_subslice %arg0 [4, 0] : !ttg.memdesc<8x4xf32, #shared, #smem> -> !ttg.memdesc<4x4xf32, #shared, #smem, 8x4>
+    %b = ttg.memdesc_subslice %a [2, 0] : !ttg.memdesc<4x4xf32, #shared, #smem, 8x4> -> !ttg.memdesc<2x4xf32, #shared, #smem, 8x4>
     tt.return
   }
 }

@@ -1132,6 +1132,9 @@ LogicalResult MemDescSubsliceOp::verify() {
   if (srcTy.getRank() != dstTy.getRank()) {
     return emitError("result rank must equal to input rank");
   }
+  if (srcTy.getAllocShape() != dstTy.getAllocShape()) {
+    return emitError("source and result must have the same allocation shape");
+  }
 
   auto srcEnc = srcTy.getEncoding();
   auto dstEnc = dstTy.getEncoding();
@@ -1152,16 +1155,15 @@ LogicalResult MemDescSubsliceOp::verify() {
   }
   SmallVector<int64_t> offsets(getOffsets().begin(), getOffsets().end());
   for (auto [dim, offset] : llvm::enumerate(offsets)) {
+    if (offset < 0 || offset > srcTy.getDimSize(dim) - dstTy.getDimSize(dim)) {
+      return emitError("subslice must fit within the source shape");
+    }
     if (!splitDims.contains(dim)) {
       if (offset != 0) {
         return emitError("A non zero offset found in a dimension that is "
                          "not being split");
       }
     } else {
-      if (offset < 0 ||
-          offset > srcTy.getDimSize(dim) - dstTy.getDimSize(dim)) {
-        return emitError("The split offset may not exceed the source shape");
-      }
       if (dim >= prefixRank && (offset & (dstTy.getDimSize(dim) - 1))) {
         return emitError("The split offset may not touch the tile");
       }
