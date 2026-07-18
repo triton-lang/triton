@@ -112,8 +112,8 @@ LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
 LinearLayout zerosLike(const LinearLayout &layout);
 
 // Return the output bits touched by `inDims` in `outDim`.
-uint32_t getBasisMask(const LinearLayout &layout,
-                      ArrayRef<StringAttr> inDims, StringAttr outDim);
+uint32_t getBasisMask(const LinearLayout &layout, ArrayRef<StringAttr> inDims,
+                      StringAttr outDim);
 
 // Return a mask of the bases in `inDim` that touch any of `outDims`. Bit i is
 // set exactly when the i-th input basis has a nonzero component in at least one
@@ -135,8 +135,8 @@ struct IdentityFactor {
 // Factor the largest identity1D(size, inDim, outDim) prefix from `layout`,
 // considering power-of-two sizes through `maxSize`.
 IdentityFactor factorMaximalIdentityPrefix(const LinearLayout &layout,
-                                           StringAttr inDim,
-                                           StringAttr outDim, int32_t maxSize);
+                                           StringAttr inDim, StringAttr outDim,
+                                           int32_t maxSize);
 
 // Rename input and output dimensions simultaneously without changing their
 // order. Every old name must exist and the final names in each domain must be

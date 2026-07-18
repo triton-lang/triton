@@ -34,9 +34,9 @@ BasesT makeBasesMap(
   return ret;
 }
 
-detail::GF2Matrix getLayoutMatrix(
-    const LinearLayout &layout,
-    ArrayRef<std::pair<StringAttr, int32_t>> codomain) {
+detail::GF2Matrix
+getLayoutMatrix(const LinearLayout &layout,
+                ArrayRef<std::pair<StringAttr, int32_t>> codomain) {
   unsigned numRows = 0;
   for (auto [outDim, size] : codomain) {
     assert(layout.hasOutDim(outDim));
@@ -424,9 +424,8 @@ LinearLayout LinearLayout::resizeInDim(StringAttr inDim,
   assert(hasInDim(inDim));
   assert(llvm::isPowerOf2_32(newSize));
   auto newBases = bases;
-  newBases[inDim].resize(
-      llvm::Log2_32(newSize),
-      std::vector<int32_t>(getNumOutDims(), 0));
+  newBases[inDim].resize(llvm::Log2_32(newSize),
+                         std::vector<int32_t>(getNumOutDims(), 0));
   return LinearLayout(std::move(newBases), getOutDims(),
                       /*requiresSurjective=*/false);
 }
@@ -911,9 +910,8 @@ std::optional<LinearLayout> factorThrough(const LinearLayout &A,
     if (B.getOutDimSize(outDim) > A.getOutDimSize(outDim))
       return std::nullopt;
 
-  auto solution =
-      getLayoutMatrix(A, A.getOutDims())
-          .solve(getLayoutMatrix(B, A.getOutDims()));
+  auto solution = getLayoutMatrix(A, A.getOutDims())
+                      .solve(getLayoutMatrix(B, A.getOutDims()));
   if (!solution)
     return std::nullopt;
 
@@ -926,8 +924,7 @@ std::optional<LinearLayout> factorThrough(const LinearLayout &A,
       unsigned solutionRow = 0;
       for (StringAttr aInDim : A.getInDimNames()) {
         int32_t value = 0;
-        for (unsigned aBit = 0; aBit < A.getInDimSizeLog2(aInDim);
-             ++aBit)
+        for (unsigned aBit = 0; aBit < A.getInDimSizeLog2(aInDim); ++aBit)
           if (solution->get(solutionRow++, solutionColumn))
             value |= int32_t{1} << aBit;
         basis.push_back(value);
@@ -1079,8 +1076,7 @@ LinearLayout::getFreeVariableMasks() const {
 
 LinearLayout LinearLayout::removeZeroBasesAlongDim(StringAttr stripDim) const {
   uint64_t nonZeroBases =
-      getInputBasisMask(*this, stripDim,
-                        llvm::to_vector(getOutDimNames()));
+      getInputBasisMask(*this, stripDim, llvm::to_vector(getOutDimNames()));
   LinearLayout::BasesT result;
   for (auto &[inDim, inDimBases] : getBases()) {
     auto &newInDimBases = result[inDim];

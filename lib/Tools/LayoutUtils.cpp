@@ -209,8 +209,8 @@ LinearLayout zerosLike(const LinearLayout &layout) {
                       /*requireSurjective=*/false);
 }
 
-uint32_t getBasisMask(const LinearLayout &layout,
-                      ArrayRef<StringAttr> inDims, StringAttr outDim) {
+uint32_t getBasisMask(const LinearLayout &layout, ArrayRef<StringAttr> inDims,
+                      StringAttr outDim) {
   assert(layout.hasOutDim(outDim));
   unsigned outIdx = layout.getOutDimIndex(outDim);
   uint32_t mask = 0;
@@ -232,10 +232,13 @@ uint64_t getInputBasisMask(const LinearLayout &layout, StringAttr inDim,
   }
 
   uint64_t mask = 0;
-  for (auto [i, basis] : llvm::enumerate(layout.getBases().lookup(inDim)))
+  for (const auto &indexedBasis :
+       llvm::enumerate(layout.getBases().lookup(inDim))) {
+    const auto &basis = indexedBasis.value();
     if (llvm::any_of(outIndices,
                      [&](unsigned outIdx) { return basis[outIdx] != 0; }))
-      mask |= uint64_t{1} << i;
+      mask |= uint64_t{1} << indexedBasis.index();
+  }
   return mask;
 }
 
@@ -245,8 +248,7 @@ bool isLinearLayoutImageSubset(const LinearLayout &subset,
 }
 
 IdentityFactor factorMaximalIdentityPrefix(const LinearLayout &layout,
-                                           StringAttr inDim,
-                                           StringAttr outDim,
+                                           StringAttr inDim, StringAttr outDim,
                                            int32_t maxSize) {
   assert(layout.hasInDim(inDim) && layout.hasOutDim(outDim));
   assert(maxSize > 0 && llvm::isPowerOf2_32(maxSize));
@@ -314,8 +316,7 @@ getIntegerStrides(const LinearLayout &layout, StringAttr outDim,
   uint32_t selectedMask = 0;
   for (StringAttr inDim : inDims) {
     assert(layout.hasInDim(inDim));
-    assert(selectedDims.insert(inDim).second &&
-           "duplicate input dimension");
+    assert(selectedDims.insert(inDim).second && "duplicate input dimension");
 
     auto bases = layout.getBases().lookup(inDim);
     uint32_t stride = bases.empty() ? 0 : uint32_t(bases.front()[outIdx]);

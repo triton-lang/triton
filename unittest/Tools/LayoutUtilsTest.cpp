@@ -47,9 +47,7 @@ TEST_F(LayoutUtilsTest, SquareSublayoutIsIdentity) {
 
 TEST_F(LayoutUtilsTest, IntegerStrides) {
   LinearLayout layout(
-      {{S("x"), {{2}, {4}}},
-       {S("y"), {{1}}},
-       {S("broadcast"), {{0}}}},
+      {{S("x"), {{2}, {4}}}, {S("y"), {{1}}}, {S("broadcast"), {{0}}}},
       {S("out")});
 
   auto xStride = getIntegerStrides(layout, S("out"), {S("x")});
@@ -57,8 +55,8 @@ TEST_F(LayoutUtilsTest, IntegerStrides) {
   EXPECT_EQ(xStride->lookup(S("x")).stride, 2);
   EXPECT_EQ(xStride->lookup(S("x")).basisMask, 0b110);
 
-  auto allStrides = getIntegerStrides(
-      layout, S("out"), {S("x"), S("y"), S("broadcast")});
+  auto allStrides =
+      getIntegerStrides(layout, S("out"), {S("x"), S("y"), S("broadcast")});
   ASSERT_TRUE(allStrides);
   EXPECT_EQ(allStrides->lookup(S("x")).stride, 2);
   EXPECT_EQ(allStrides->lookup(S("y")).stride, 1);
@@ -70,73 +68,63 @@ TEST_F(LayoutUtilsTest, IntegerStridesRejectNonIntegerAndOverlapping) {
   LinearLayout nonInteger({{S("x"), {{4}, {2}, {1}}}}, {S("out")});
   EXPECT_FALSE(getIntegerStrides(nonInteger, S("out"), {S("x")}));
 
-  LinearLayout overlapping(
-      {{S("x"), {{1}, {2}}}, {S("y"), {{2}}}}, {{S("out"), 4}},
-      /*requireSurjective=*/false);
+  LinearLayout overlapping({{S("x"), {{1}, {2}}}, {S("y"), {{2}}}},
+                           {{S("out"), 4}},
+                           /*requireSurjective=*/false);
   EXPECT_FALSE(getIntegerStrides(overlapping, S("out"), {S("x")}));
-  EXPECT_FALSE(
-      getIntegerStrides(overlapping, S("out"), {S("x"), S("y")}));
+  EXPECT_FALSE(getIntegerStrides(overlapping, S("out"), {S("x"), S("y")}));
 }
 
 TEST_F(LayoutUtilsTest, BasisMask) {
-  LinearLayout layout(
-      {{S("x"), {{1, 8}, {2, 16}}},
-       {S("y"), {{4, 1}}},
-       {S("broadcast"), {{0, 0}}}},
-      {{S("out0"), 8}, {S("out1"), 32}},
-      /*requireSurjective=*/false);
+  LinearLayout layout({{S("x"), {{1, 8}, {2, 16}}},
+                       {S("y"), {{4, 1}}},
+                       {S("broadcast"), {{0, 0}}}},
+                      {{S("out0"), 8}, {S("out1"), 32}},
+                      /*requireSurjective=*/false);
 
   EXPECT_EQ(getBasisMask(layout, {S("x")}, S("out0")), 0b0011);
-  EXPECT_EQ(getBasisMask(layout, {S("x"), S("y")}, S("out0")),
-            0b0111);
-  EXPECT_EQ(getBasisMask(layout, {S("x"), S("broadcast")}, S("out1")),
-            0b11000);
+  EXPECT_EQ(getBasisMask(layout, {S("x"), S("y")}, S("out0")), 0b0111);
+  EXPECT_EQ(getBasisMask(layout, {S("x"), S("broadcast")}, S("out1")), 0b11000);
   EXPECT_EQ(getBasisMask(layout, {}, S("out0")), 0);
 }
 
 TEST_F(LayoutUtilsTest, InputBasisMask) {
   LinearLayout layout(
-      {{S("x"), {{1, 0}, {0, 2}, {0, 0}, {4, 8}}},
-       {S("y"), {{2, 0}}}},
+      {{S("x"), {{1, 0}, {0, 2}, {0, 0}, {4, 8}}}, {S("y"), {{2, 0}}}},
       {{S("out0"), 8}, {S("out1"), 16}},
       /*requireSurjective=*/false);
 
   EXPECT_EQ(getInputBasisMask(layout, S("x"), {S("out0")}), 0b1001);
   EXPECT_EQ(getInputBasisMask(layout, S("x"), {S("out1")}), 0b1010);
-  EXPECT_EQ(getInputBasisMask(layout, S("x"), {S("out0"), S("out1")}),
-            0b1011);
+  EXPECT_EQ(getInputBasisMask(layout, S("x"), {S("out0"), S("out1")}), 0b1011);
   EXPECT_EQ(getInputBasisMask(layout, S("x"), {}), 0);
 }
 
 TEST_F(LayoutUtilsTest, FactorMaximalIdentityPrefix) {
-  LinearLayout layout(
-      {{S("x"), {{1}, {2}, {8}}}, {S("other"), {{4}}}},
-      {{S("out"), 16}}, /*requireSurjective=*/false);
+  LinearLayout layout({{S("x"), {{1}, {2}, {8}}}, {S("other"), {{4}}}},
+                      {{S("out"), 16}}, /*requireSurjective=*/false);
 
   auto [size, quotient] =
       factorMaximalIdentityPrefix(layout, S("x"), S("out"), 8);
   EXPECT_EQ(size, 4);
-  EXPECT_EQ(LinearLayout::identity1D(size, S("x"), S("out")) *
-                quotient,
+  EXPECT_EQ(LinearLayout::identity1D(size, S("x"), S("out")) * quotient,
             layout);
 }
 
 TEST_F(LayoutUtilsTest, RenameDimsPreservesOrder) {
-  LinearLayout layout(
-      {{S("a"), {{1, 0}}}, {S("b"), {{0, 1}}}},
-      {{S("x"), 2}, {S("y"), 2}}, /*requireSurjective=*/true);
+  LinearLayout layout({{S("a"), {{1, 0}}}, {S("b"), {{0, 1}}}},
+                      {{S("x"), 2}, {S("y"), 2}}, /*requireSurjective=*/true);
 
-  auto renamed = renameLinearLayoutDims(
-      layout, {{S("a"), S("b")}, {S("b"), S("a")}},
-      {{S("x"), S("y")}, {S("y"), S("x")}});
+  auto renamed =
+      renameLinearLayoutDims(layout, {{S("a"), S("b")}, {S("b"), S("a")}},
+                             {{S("x"), S("y")}, {S("y"), S("x")}});
   EXPECT_THAT(llvm::to_vector(renamed.getInDimNames()),
               ::testing::ElementsAre(S("b"), S("a")));
   EXPECT_THAT(llvm::to_vector(renamed.getOutDimNames()),
               ::testing::ElementsAre(S("y"), S("x")));
-  EXPECT_EQ(renamed,
-            LinearLayout({{S("b"), {{1, 0}}}, {S("a"), {{0, 1}}}},
-                         {{S("y"), 2}, {S("x"), 2}},
-                         /*requireSurjective=*/true));
+  EXPECT_EQ(renamed, LinearLayout({{S("b"), {{1, 0}}}, {S("a"), {{0, 1}}}},
+                                  {{S("y"), 2}, {S("x"), 2}},
+                                  /*requireSurjective=*/true));
 
   EXPECT_THAT(
       llvm::to_vector(layout.renameInDim(S("a"), S("c")).getInDimNames()),
@@ -171,16 +159,14 @@ TEST_F(LayoutUtilsTest, ImageSubset) {
 }
 
 TEST_F(LayoutUtilsTest, GetRepsWithSubsetOfOutputDims) {
-  LinearLayout cvt({{S("in"), {{1, 0}, {0, 1}}}},
-                   {S("out0"), S("out1")});
+  LinearLayout cvt({{S("in"), {{1, 0}, {0, 1}}}}, {S("out0"), S("out1")});
   LinearLayout tile({{S("in"), {{1}}}}, {S("out0")});
 
   auto reps = getReps(cvt, tile);
   ASSERT_TRUE(reps);
-  EXPECT_EQ(*reps,
-            LinearLayout({{S("in"), {{0, 0}, {0, 1}}}},
-                         {{S("out0"), 2}, {S("out1"), 2}},
-                         /*requireSurjective=*/false));
+  EXPECT_EQ(*reps, LinearLayout({{S("in"), {{0, 0}, {0, 1}}}},
+                                {{S("out0"), 2}, {S("out1"), 2}},
+                                /*requireSurjective=*/false));
 }
 
 } // namespace

@@ -164,8 +164,8 @@ getDistributedLayoutForTmemLdSt(const LinearLayout &ll, TMemAccessAtom atom,
   // This code is dual to the one in lowerTMemLdSt
   if (bitwidth != 32) {
     auto kReg = StringAttr::get(ctx, "register");
-    auto [bestContig, quot] = factorMaximalIdentityPrefix(
-        ll, rowColDims[1], dims[1], 32 / bitwidth);
+    auto [bestContig, quot] =
+        factorMaximalIdentityPrefix(ll, rowColDims[1], dims[1], 32 / bitwidth);
 
     // Pack contiguous elements
     // This works to pack b8 or b16 into b32 but also b8 into b16 and recurse

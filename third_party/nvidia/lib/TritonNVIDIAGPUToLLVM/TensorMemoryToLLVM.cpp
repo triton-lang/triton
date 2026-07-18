@@ -680,9 +680,9 @@ static LogicalResult copySharedToTmem(ConversionPatternRewriter &rewriter,
                llvm::maskTrailingOnes<uint64_t>(colBits);
   }
   auto compact = holeMask ? cvt.removeZeroBasesAlongDim(kCol) : cvt;
-  unsigned contiguousCols =
-      holeMask ? uint64_t{1} << llvm::countr_zero(holeMask)
-               : compact.getInDimSize(kCol);
+  unsigned contiguousCols = holeMask
+                                ? uint64_t{1} << llvm::countr_zero(holeMask)
+                                : compact.getInDimSize(kCol);
   auto atom = getTMemCopyAtom(
       compact.resizeInDim(
           kCol, std::min<unsigned>(contiguousCols, compact.getInDimSize(kCol))),

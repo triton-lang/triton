@@ -398,11 +398,9 @@ TEST_F(LinearLayoutTest, FactorThrough) {
   LinearLayout superset({{S("storage"), {{1, 1}, {2, 0}}}},
                         {{S("x"), 4}, {S("y"), 2}},
                         /*requireSurjective=*/false);
-  LinearLayout subset({{S("value"), {{1, 3}}}},
-                      {{S("y"), 2}, {S("x"), 4}},
+  LinearLayout subset({{S("value"), {{1, 3}}}}, {{S("y"), 2}, {S("x"), 4}},
                       /*requireSurjective=*/false);
-  LinearLayout outside({{S("value"), {{1, 0}}}},
-                       {{S("x"), 4}, {S("y"), 2}},
+  LinearLayout outside({{S("value"), {{1, 0}}}}, {{S("x"), 4}, {S("y"), 2}},
                        /*requireSurjective=*/false);
   LinearLayout wrongDims({{S("value"), {{1}}}}, {S("z")});
 
@@ -420,12 +418,10 @@ TEST_F(LinearLayoutTest, FactorThroughMoreThan64CombinedColumns) {
   for (int i = 0; i < 32; ++i) {
     auto aDim = S("a" + std::to_string(i));
     auto bDim = S("b" + std::to_string(i));
-    aBases[aDim] = i == 0
-                         ? std::vector<std::vector<int32_t>>{{1}, {2}}
-                         : std::vector<std::vector<int32_t>>{{0}, {0}};
-    bBases[bDim] = i == 0
-                         ? std::vector<std::vector<int32_t>>{{2}, {1}}
-                         : std::vector<std::vector<int32_t>>{{0}, {0}};
+    aBases[aDim] = i == 0 ? std::vector<std::vector<int32_t>>{{1}, {2}}
+                          : std::vector<std::vector<int32_t>>{{0}, {0}};
+    bBases[bDim] = i == 0 ? std::vector<std::vector<int32_t>>{{2}, {1}}
+                          : std::vector<std::vector<int32_t>>{{0}, {0}};
   }
   LinearLayout A(std::move(aBases), {{S("out"), 4}},
                  /*requireSurjective=*/false);
@@ -758,8 +754,7 @@ TEST_F(LinearLayoutTest, EqualsChecksOutDimSizes) {
 TEST_F(LinearLayoutTest, ResizeInDim) {
   auto layout = LinearLayout::identity1D(4, S("in"), S("out"));
   EXPECT_EQ(layout.resizeInDim(S("in"), 16),
-            LinearLayout({{S("in"), {{1}, {2}, {0}, {0}}}},
-                         {{S("out"), 4}},
+            LinearLayout({{S("in"), {{1}, {2}, {0}, {0}}}}, {{S("out"), 4}},
                          /*requireSurjective=*/false));
   EXPECT_EQ(layout.resizeInDim(S("in"), 2),
             LinearLayout({{S("in"), {{1}}}}, {{S("out"), 4}},

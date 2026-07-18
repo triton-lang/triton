@@ -2857,8 +2857,8 @@ CGAEncodingAttr DotOperandEncodingAttr::getCGALayout() const {
   auto rank = layout.getNumOutDims();
   auto kDim = getOpIdx() == 0 ? rank - 1 : rank - 2;
   auto dims = layout.getOutDims();
-  return CGAEncodingAttr::get(
-      getContext(), layout.resizeOutDim(dims[kDim].first, 1));
+  return CGAEncodingAttr::get(getContext(),
+                              layout.resizeOutDim(dims[kDim].first, 1));
 }
 LogicalResult DotOperandEncodingAttr::verify(
     function_ref<::mlir::InFlightDiagnostic()> emitError, unsigned opIdx,

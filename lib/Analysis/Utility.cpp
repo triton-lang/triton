@@ -633,10 +633,8 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   auto outDimNames = llvm::to_vector(srcLayout.getOutDimNames());
   auto S = srcLayout.sublayout(inDimNames, outDimNames);
   auto T = dstLayout.sublayout(inDimNames, outDimNames);
-  S = S.resizeInDim(kReg, 1 << nRegBases)
-          .resizeInDim(kLane, 1 << nLaneBases);
-  T = T.resizeInDim(kReg, 1 << nRegBases)
-          .resizeInDim(kLane, 1 << nLaneBases);
+  S = S.resizeInDim(kReg, 1 << nRegBases).resizeInDim(kLane, 1 << nLaneBases);
+  T = T.resizeInDim(kReg, 1 << nRegBases).resizeInDim(kLane, 1 << nLaneBases);
 
   // We compute T^transpose \circ S, which serves as a skeleton for `P`, then
   // fill in zero columns, prioritizing producing fixed points. As we only need
@@ -1041,8 +1039,7 @@ unsigned ScanLoweringHelper::getAxisThreadStride() {
   auto ll = encoding.getLinearLayout();
   auto kThread = StringAttr::get(encoding.getContext(), "lane");
   auto outDims = llvm::to_vector(ll.getOutDimNames());
-  uint64_t bases =
-      getInputBasisMask(ll, kThread, {outDims[getAxis()]});
+  uint64_t bases = getInputBasisMask(ll, kThread, {outDims[getAxis()]});
   return bases ? uint64_t{1} << llvm::countr_zero(bases) : 1;
 }
 

@@ -8,8 +8,7 @@
 namespace mlir::triton::detail {
 
 GF2Matrix::GF2Matrix(unsigned rows, unsigned columns)
-    : rows(rows), columns(columns),
-      stride(std::max(1u, (columns + 63) / 64)),
+    : rows(rows), columns(columns), stride(std::max(1u, (columns + 63) / 64)),
       storage(rows * stride, 0) {}
 
 bool GF2Matrix::get(unsigned row, unsigned column) const {
@@ -134,8 +133,7 @@ std::optional<GF2Matrix> GF2Matrix::solve(const GF2Matrix &rhs) const {
     if (*pivot >= columns)
       return std::nullopt;
     for (unsigned rhsColumn = 0; rhsColumn < rhs.columns; ++rhsColumn)
-      solution.set(*pivot, rhsColumn,
-                   augmented.get(row, columns + rhsColumn));
+      solution.set(*pivot, rhsColumn, augmented.get(row, columns + rhsColumn));
   }
   return solution;
 }
