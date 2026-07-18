@@ -2,6 +2,7 @@
 #define TRITON_GPU_DIALECT_INTERFACES_H
 
 #include "mlir/IR/OpDefinition.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/CGAEncodingAttr.h"
 
 // clang-format off

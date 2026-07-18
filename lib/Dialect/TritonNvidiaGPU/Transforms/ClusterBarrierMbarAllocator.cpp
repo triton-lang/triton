@@ -3,11 +3,10 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonInstrument/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/MathExtras.h"
 
 namespace mlir {
@@ -25,24 +24,14 @@ namespace mlir::triton::nvidia_gpu {
 
 namespace {
 
-namespace tti = mlir::triton::instrument;
-
 bool atomicNeedsClusterBarrier(Operation *op) {
   if (isa<AtomicPollOp>(op))
     return gpu::lookupNumCTAs(op) != 1;
-  if (!isa<AtomicCASOp, AtomicRMWOp, tti::ExperimentalGSanAtomicCASOp,
-           tti::ExperimentalGSanAtomicRMWOp>(op) ||
-      gpu::lookupNumCTAs(op) == 1)
+  auto atomic = dyn_cast<gpu::AtomicOpInterface>(op);
+  if (!atomic || gpu::lookupNumCTAs(op) == 1)
     return false;
 
-  auto sem =
-      llvm::TypeSwitch<Operation *, MemSemantic>(op)
-          .Case<AtomicCASOp, AtomicRMWOp, tti::ExperimentalGSanAtomicCASOp,
-                tti::ExperimentalGSanAtomicRMWOp>(
-              [](auto atomic) { return atomic.getSem(); })
-          .Default([](Operation *) -> MemSemantic {
-            llvm_unreachable("expected an atomic operation");
-          });
+  auto sem = atomic.getMemSemantic();
   if (sem == MemSemantic::RELEASE || sem == MemSemantic::ACQUIRE_RELEASE ||
       (sem == MemSemantic::ACQUIRE && !op->hasAttr("allocation.offset")))
     return true;

@@ -4,6 +4,7 @@
 // TritonInstrument depends on Triton and TritonGPU
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 
 #include "triton/Dialect/TritonInstrument/IR/OpsEnums.h.inc"
 

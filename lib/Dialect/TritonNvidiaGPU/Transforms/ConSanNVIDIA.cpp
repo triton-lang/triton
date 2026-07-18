@@ -1,4 +1,5 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
@@ -37,9 +38,8 @@ uint32_t getBlockBroadcastMask(Type type) {
 
 std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op) {
   if (!op->hasAttr("allocation.size") ||
-      !isa<AtomicPollOp, AtomicRMWOp, AtomicCASOp, ttg::LocalAtomicScatterRMWOp,
-           tti::ExperimentalGSanAtomicRMWOp, tti::ExperimentalGSanAtomicCASOp>(
-          op))
+      (!isa<AtomicPollOp, ttg::LocalAtomicScatterRMWOp>(op) &&
+       !isa<ttg::AtomicOpInterface>(op)))
     return std::nullopt;
 
   Type resultTy = op->getResult(0).getType();
