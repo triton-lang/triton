@@ -1,6 +1,7 @@
 #include "triton/Analysis/Membar.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -8,6 +9,7 @@
 #include <deque>
 
 namespace ttng = mlir::triton::nvidia_gpu;
+namespace tti = mlir::triton::instrument;
 
 namespace mlir {
 
@@ -250,6 +252,10 @@ bool containsLocalBarrier(Operation *op) {
   if (auto atomic = dyn_cast<triton::AtomicRMWOp>(op))
     return atomic.getSem() != triton::MemSemantic::RELAXED;
   if (auto atomic = dyn_cast<triton::AtomicCASOp>(op))
+    return atomic.getSem() != triton::MemSemantic::RELAXED;
+  if (auto atomic = dyn_cast<tti::ExperimentalGSanAtomicRMWOp>(op))
+    return atomic.getSem() != triton::MemSemantic::RELAXED;
+  if (auto atomic = dyn_cast<tti::ExperimentalGSanAtomicCASOp>(op))
     return atomic.getSem() != triton::MemSemantic::RELAXED;
   if (isa<gpu::BarrierOp>(op))
     return true;
