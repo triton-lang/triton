@@ -1,5 +1,5 @@
-#include "triton/Analysis/BufferRegion.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Analysis/BufferRegion.h"
 
 #include "llvm/Support/Signals.h"
 #include <gtest/gtest.h>
@@ -28,8 +28,7 @@ TEST(Analysis, reorder) {
 }
 
 TEST(Analysis, AddressSetCanonicalization) {
-  triton::AddressSet set(
-      {{8, 12}, {1, 3}, {3, 5}, {10, 14}, {7, 7}});
+  triton::AddressSet set({{8, 12}, {1, 3}, {3, 5}, {10, 14}, {7, 7}});
   ASSERT_EQ(set.getRanges().size(), 2);
   EXPECT_EQ(set.getRanges()[0], (triton::AddressRange{1, 5}));
   EXPECT_EQ(set.getRanges()[1], (triton::AddressRange{8, 14}));
@@ -43,16 +42,14 @@ TEST(Analysis, AddressSetExhaustiveEightUnitUniverse) {
     for (unsigned bit = 0; bit < universe; ++bit)
       if (lhsMask & (1u << bit))
         lhsAddresses.push_back(bit);
-    triton::AddressSet lhs =
-        triton::AddressSet::fromAddresses(lhsAddresses);
+    triton::AddressSet lhs = triton::AddressSet::fromAddresses(lhsAddresses);
 
     for (unsigned rhsMask = 0; rhsMask < (1u << universe); ++rhsMask) {
       SmallVector<uint32_t> rhsAddresses;
       for (unsigned bit = 0; bit < universe; ++bit)
         if (rhsMask & (1u << bit))
           rhsAddresses.push_back(bit);
-      triton::AddressSet rhs =
-          triton::AddressSet::fromAddresses(rhsAddresses);
+      triton::AddressSet rhs = triton::AddressSet::fromAddresses(rhsAddresses);
       EXPECT_EQ(lhs.intersects(rhs), (lhsMask & rhsMask) != 0);
       EXPECT_EQ(lhs.contains(rhs), (rhsMask & ~lhsMask) == 0);
     }
@@ -61,8 +58,8 @@ TEST(Analysis, AddressSetExhaustiveEightUnitUniverse) {
 
 TEST(Analysis, ExactBufferRelationMatrices) {
   triton::BufferRegion full(
-      /*baseOffset=*/0, /*length=*/8,
-      triton::AddressSet::fromRange(0, 8), /*storageBase=*/0,
+      /*baseOffset=*/0, /*length=*/8, triton::AddressSet::fromRange(0, 8),
+      /*storageBase=*/0,
       /*affineOffset=*/0);
   triton::BufferRegion evens(
       /*baseOffset=*/0, /*length=*/8,
@@ -95,9 +92,8 @@ TEST(Analysis, BufferRegionIdentityPreservesSubviewProvenance) {
       /*storageBase=*/16, /*affineOffset=*/0);
 
   EXPECT_FALSE(fromSubview == fromAllocation);
-  triton::RegionInfo joined =
-      triton::RegionInfo::join(triton::RegionInfo({fromSubview}),
-                               triton::RegionInfo({fromAllocation}));
+  triton::RegionInfo joined = triton::RegionInfo::join(
+      triton::RegionInfo({fromSubview}), triton::RegionInfo({fromAllocation}));
   EXPECT_EQ(joined.regions.size(), 2);
 }
 
@@ -140,8 +136,7 @@ triton::BufferRegion makeRegion(unsigned id, unsigned addressMask,
       /*storageBase=*/0, /*affineOffset=*/0);
 }
 
-bool planNeverMissesHazard(ArrayRef<unsigned> addressMasks,
-                           unsigned universe) {
+bool planNeverMissesHazard(ArrayRef<unsigned> addressMasks, unsigned universe) {
   SmallVector<triton::BufferRegion> regions;
   for (auto [id, mask] : llvm::enumerate(addressMasks))
     regions.push_back(makeRegion(id, mask, universe));
@@ -164,15 +159,14 @@ bool planNeverMissesHazard(ArrayRef<unsigned> addressMasks,
       if (exactHazard && !planHazard)
         return false;
 
-      State updated = {
-          exactState | addressMasks[region],
-          planState | toBits(plan.regionMasks[region].update)};
+      State updated = {exactState | addressMasks[region],
+                       planState | toBits(plan.regionMasks[region].update)};
       if (seen.insert(updated).second)
         worklist.push_back(updated);
 
-      State completed = {
-          exactState & ~addressMasks[region],
-          planState & ~toBits(plan.regionMasks[region].complete)};
+      State completed = {exactState & ~addressMasks[region],
+                         planState &
+                             ~toBits(plan.regionMasks[region].complete)};
       if (seen.insert(completed).second)
         worklist.push_back(completed);
     }
@@ -208,8 +202,7 @@ TEST(Analysis, BufferStatePlanUsesAtomsForSparsePartition) {
   EXPECT_EQ(plan.components[0].basis, triton::BufferStateBasis::Atoms);
   EXPECT_EQ(plan.numLanes, 2);
 
-  for (unsigned exactState = 0; exactState < (1u << universe);
-       ++exactState) {
+  for (unsigned exactState = 0; exactState < (1u << universe); ++exactState) {
     uint64_t planState = 0;
     if (exactState & 0x55)
       planState |= toBits(plan.regionMasks[1].update);

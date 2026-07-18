@@ -474,10 +474,9 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
     return failure();
   int numCTAs = lookupNumCTAs(module);
   threadLayout = getThreadLayout(module, hooks);
-  hasAsyncProxyFenceTracking = hooks &&
-                               hooks->needsAsyncProxyFenceTracking(module) &&
-                               bufferStatePlans[(int)MemType::SHARED_MEM]
-                                       .numLanes != 0;
+  hasAsyncProxyFenceTracking =
+      hooks && hooks->needsAsyncProxyFenceTracking(module) &&
+      bufferStatePlans[(int)MemType::SHARED_MEM].numLanes != 0;
   int captureCounter = 0;
   int64_t captureBytes = 0;
 
@@ -509,8 +508,7 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
       continue;
     }
 
-    int numBufs =
-        llvm::NextPowerOf2(bufferStatePlans[iMemType].numLanes - 1);
+    int numBufs = llvm::NextPowerOf2(bufferStatePlans[iMemType].numLanes - 1);
 
     writeVisibility[iMemType].insert(
         entryRegion,
@@ -567,10 +565,10 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
       int iMemType = (int)memType;
       // Create state tensors:
-      int numBufs = bufferStatePlans[iMemType].numLanes == 0
-                        ? 0
-                        : llvm::NextPowerOf2(
-                              bufferStatePlans[iMemType].numLanes - 1);
+      int numBufs =
+          bufferStatePlans[iMemType].numLanes == 0
+              ? 0
+              : llvm::NextPowerOf2(bufferStatePlans[iMemType].numLanes - 1);
       if (numMBarriers > 0 && numBufs > 0) {
         writeTracking[iMemType].insert(
             entryRegion,
@@ -620,10 +618,8 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
   passValueToWarpSpecialize(lock.at(entryRegion), lock);
 
   auto createCommitTensor = [&](CommitKind::Kind commitKind) {
-    unsigned numLanes =
-        bufferStatePlans[(int)MemType::SHARED_MEM].numLanes;
-    int numBufs =
-        numLanes == 0 ? 0 : llvm::NextPowerOf2(numLanes - 1);
+    unsigned numLanes = bufferStatePlans[(int)MemType::SHARED_MEM].numLanes;
+    int numBufs = numLanes == 0 ? 0 : llvm::NextPowerOf2(numLanes - 1);
     if (numBufs == 0)
       return;
     // Commit-count tracking operates on base threads.
@@ -794,11 +790,9 @@ LogicalResult AuxDataMap::getBuffersAndBarriers(
         const BufferRegion &lhs = bufRegions[iMemType][ids[i]];
         for (size_t j = i + 1; j < ids.size(); ++j) {
           const BufferRegion &rhs = bufRegions[iMemType][ids[j]];
-          if (lhs.baseOffset == rhs.baseOffset &&
-              !sameMasks(ids[i], ids[j])) {
-            emitError(
-                value.getLoc(),
-                "ambiguous buffer-state cases share a runtime base");
+          if (lhs.baseOffset == rhs.baseOffset && !sameMasks(ids[i], ids[j])) {
+            emitError(value.getLoc(),
+                      "ambiguous buffer-state cases share a runtime base");
             return failure();
           }
         }
@@ -807,15 +801,14 @@ LogicalResult AuxDataMap::getBuffersAndBarriers(
       for (uint32_t id : ids) {
         const BufferRegion &region = bufRegions[iMemType][id];
         if (llvm::any_of(distinguishableIds, [&](uint32_t existingId) {
-              const BufferRegion &existing =
-                  bufRegions[iMemType][existingId];
+              const BufferRegion &existing = bufRegions[iMemType][existingId];
               return existing.baseOffset == region.baseOffset;
             }))
           continue;
         distinguishableIds.push_back(id);
       }
-      bufferCandidateIds[iMemType].try_emplace(
-          value, std::move(distinguishableIds));
+      bufferCandidateIds[iMemType].try_emplace(value,
+                                               std::move(distinguishableIds));
     }
   }
   return success();

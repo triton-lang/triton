@@ -59,9 +59,8 @@ public:
     return ranges == other.ranges;
   }
   bool operator<(const AddressSet &other) const {
-    return std::lexicographical_compare(ranges.begin(), ranges.end(),
-                                        other.ranges.begin(),
-                                        other.ranges.end());
+    return std::lexicographical_compare(
+        ranges.begin(), ranges.end(), other.ranges.begin(), other.ranges.end());
   }
 
   template <typename T> void print(T &os) const {
@@ -98,9 +97,8 @@ struct BufferRegion {
         storageBase(baseOffset) {}
   BufferRegion(uint32_t baseOffset, uint32_t length, AddressSet addresses,
                uint32_t storageBase, uint32_t affineOffset)
-      : baseOffset(baseOffset), length(length),
-        addresses(std::move(addresses)), storageBase(storageBase),
-        affineOffset(affineOffset) {}
+      : baseOffset(baseOffset), length(length), addresses(std::move(addresses)),
+        storageBase(storageBase), affineOffset(affineOffset) {}
 
   bool intersects(const BufferRegion &other) const {
     return addresses.intersects(other.addresses);
@@ -170,8 +168,7 @@ struct BufferStatePlan {
   llvm::SmallVector<BufferStateComponent> components;
 };
 
-BufferStatePlan
-createBufferStatePlan(llvm::ArrayRef<BufferRegion> regions);
+BufferStatePlan createBufferStatePlan(llvm::ArrayRef<BufferRegion> regions);
 
 } // namespace mlir::triton
 
@@ -195,8 +192,8 @@ template <> struct DenseMapInfo<BufferRegion> {
     return region;
   }
   static unsigned getHashValue(const BufferRegion &r) {
-    llvm::hash_code hash = llvm::hash_combine(
-        r.baseOffset, r.length, r.storageBase, r.affineOffset);
+    llvm::hash_code hash = llvm::hash_combine(r.baseOffset, r.length,
+                                              r.storageBase, r.affineOffset);
     for (const auto &range : r.addresses.getRanges())
       hash = llvm::hash_combine(hash, range.begin, range.end);
     return static_cast<unsigned>(hash);

@@ -150,8 +150,8 @@ Value currentCTAMask(ImplicitLocOpBuilder &b) {
 
 enum class StateMaskKind { Update, Check, Complete };
 
-const llvm::SmallBitVector &
-getStateMask(const BufferStateMasks &masks, StateMaskKind kind) {
+const llvm::SmallBitVector &getStateMask(const BufferStateMasks &masks,
+                                         StateMaskKind kind) {
   switch (kind) {
   case StateMaskKind::Update:
     return masks.update;
@@ -171,17 +171,17 @@ Value createStateMaskConstant(ImplicitLocOpBuilder &b,
   for (unsigned bit = 0; bit < mask.size(); ++bit)
     if (mask.test(bit))
       bits[bit] = APInt(1, 1);
-  return arith::ConstantOp::create(
-      b, maskType, DenseElementsAttr::get(maskType, bits));
+  return arith::ConstantOp::create(b, maskType,
+                                   DenseElementsAttr::get(maskType, bits));
 }
 
-FailureOr<tti::MaterializedBufferRegion> createBufferStateMasks(
-    ImplicitLocOpBuilder &b, AuxDataMap &auxData, MemType memType,
-    Value runtimeBase, ArrayRef<uint32_t> candidateIds, Operation *op) {
+FailureOr<tti::MaterializedBufferRegion>
+createBufferStateMasks(ImplicitLocOpBuilder &b, AuxDataMap &auxData,
+                       MemType memType, Value runtimeBase,
+                       ArrayRef<uint32_t> candidateIds, Operation *op) {
   int index = static_cast<int>(memType);
   const BufferStatePlan &plan = auxData.bufferStatePlans[index];
-  if (plan.numLanes == 0 ||
-      auxData.writeVisibility[index].empty()) {
+  if (plan.numLanes == 0 || auxData.writeVisibility[index].empty()) {
     op->emitError("active memdesc has no ConSan state plan");
     return failure();
   }
@@ -196,8 +196,8 @@ FailureOr<tti::MaterializedBufferRegion> createBufferStateMasks(
     }
   }
 
-  auto writeVisibilityType = cast<RankedTensorType>(
-      auxData.writeVisibility[index].at(op).type);
+  auto writeVisibilityType =
+      cast<RankedTensorType>(auxData.writeVisibility[index].at(op).type);
   RankedTensorType maskType =
       tti::getSlicedTensorType(writeVisibilityType, {1}, b.getI1Type());
 
@@ -211,8 +211,8 @@ FailureOr<tti::MaterializedBufferRegion> createBufferStateMasks(
     for (uint32_t id : candidateIds) {
       Value base = tti::ExperimentalMemoryOffsetToI32Op::create(
           b, auxData.bufferRegions[index][id].baseOffset, memType);
-      Value predicate = arith::CmpIOp::create(
-          b, arith::CmpIPredicate::eq, runtimeBase, base);
+      Value predicate =
+          arith::CmpIOp::create(b, arith::CmpIPredicate::eq, runtimeBase, base);
       predicates.push_back(predicate);
       resolved = arith::OrIOp::create(b, resolved, predicate);
     }
@@ -224,16 +224,15 @@ FailureOr<tti::MaterializedBufferRegion> createBufferStateMasks(
   auto materialize = [&](StateMaskKind kind) {
     if (candidateIds.size() == 1)
       return createStateMaskConstant(
-          b, maskType, getStateMask(plan.regionMasks[candidateIds.front()],
-                                    kind));
-    Value result = createStateMaskConstant(
-        b, maskType, llvm::SmallBitVector(plan.numLanes));
+          b, maskType,
+          getStateMask(plan.regionMasks[candidateIds.front()], kind));
+    Value result = createStateMaskConstant(b, maskType,
+                                           llvm::SmallBitVector(plan.numLanes));
     for (auto [id, predicate] : llvm::zip(candidateIds, predicates)) {
       Value candidate = createStateMaskConstant(
           b, maskType, getStateMask(plan.regionMasks[id], kind));
       Value predicateTensor = tt::SplatOp::create(b, maskType, predicate);
-      candidate =
-          arith::AndIOp::create(b, candidate, predicateTensor);
+      candidate = arith::AndIOp::create(b, candidate, predicateTensor);
       result = arith::OrIOp::create(b, result, candidate);
     }
     return result;
@@ -251,11 +250,10 @@ FailureOr<tti::MaterializedBufferRegion> createBufferStateMasks(
                     ? update
                     : materialize(StateMaskKind::Check);
   Value complete =
-      sameMaskKinds(StateMaskKind::Update, StateMaskKind::Complete)
-          ? update
-          : sameMaskKinds(StateMaskKind::Check, StateMaskKind::Complete)
-                ? check
-                : materialize(StateMaskKind::Complete);
+      sameMaskKinds(StateMaskKind::Update, StateMaskKind::Complete) ? update
+      : sameMaskKinds(StateMaskKind::Check, StateMaskKind::Complete)
+          ? check
+          : materialize(StateMaskKind::Complete);
   return tti::MaterializedBufferRegion{update, check, complete};
 }
 

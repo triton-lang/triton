@@ -30,8 +30,7 @@ FailureOr<uint32_t> getAllocationOffset(ttg::LocalAllocOp op) {
   }
   int64_t value = offset.getInt();
   if (value < 0 ||
-      static_cast<uint64_t>(value) >
-          std::numeric_limits<uint32_t>::max()) {
+      static_cast<uint64_t>(value) > std::numeric_limits<uint32_t>::max()) {
     op.emitError("shared-memory allocation offset exceeds 32-bit range");
     return failure();
   }
@@ -93,17 +92,17 @@ size_t getMemDescLayoutRank(ttg::MemDescType ty) {
     return padded.getRank();
   if (isa<ttg::NVMMASharedEncodingAttr>(encoding))
     return std::min<int64_t>(2, ty.getRank());
-  if (isa<ttng::TensorMemoryEncodingAttr,
-          ttng::TensorMemoryScalesEncodingAttr>(encoding))
+  if (isa<ttng::TensorMemoryEncodingAttr, ttng::TensorMemoryScalesEncodingAttr>(
+          encoding))
     return 2;
   return ty.getRank();
 }
 
-FailureOr<triton::AddressSet>
-getMemDescAddresses(uint32_t storageBase, uint32_t affineOffset,
-                    ttg::MemDescType ty, Operation *op,
-                    llvm::DenseMap<std::pair<Type, uint32_t>,
-                                   triton::AddressSet> *cache = nullptr) {
+FailureOr<triton::AddressSet> getMemDescAddresses(
+    uint32_t storageBase, uint32_t affineOffset, ttg::MemDescType ty,
+    Operation *op,
+    llvm::DenseMap<std::pair<Type, uint32_t>, triton::AddressSet> *cache =
+        nullptr) {
   if (cache) {
     auto key = std::make_pair(Type(ty), affineOffset);
     auto found = cache->find(key);
@@ -116,8 +115,7 @@ getMemDescAddresses(uint32_t storageBase, uint32_t affineOffset,
     cache->try_emplace(key, *relative);
     return relative->translated(storageBase);
   }
-  bool isTmem =
-      isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace());
+  bool isTmem = isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace());
   size_t declaredLayoutRank = getMemDescLayoutRank(ty);
   if (declaredLayoutRank != ty.getRank()) {
     if (declaredLayoutRank + 1 != ty.getRank()) {
@@ -214,8 +212,8 @@ getMemDescAddresses(uint32_t storageBase, uint32_t affineOffset,
       uint32_t firstWord = bitBegin / 32;
       uint32_t lastWord = llvm::divideCeil(bitBegin + bitWidth, uint64_t{32});
       uint32_t relative = (row << 16) | firstWord;
-      uint64_t begin = static_cast<uint64_t>(storageBase) + affineOffset +
-                       relative;
+      uint64_t begin =
+          static_cast<uint64_t>(storageBase) + affineOffset + relative;
       for (uint32_t word = firstWord; word < lastWord; ++word) {
         uint64_t address = begin + (word - firstWord);
         assert(address <= std::numeric_limits<uint32_t>::max());
@@ -224,8 +222,8 @@ getMemDescAddresses(uint32_t storageBase, uint32_t affineOffset,
     } else {
       uint32_t relative = offset * (bitWidth / 8);
       uint32_t combined = affineOffset ^ relative;
-      uint64_t begin = static_cast<uint64_t>(storageBase) +
-                       applySharedPadding(combined, ty);
+      uint64_t begin =
+          static_cast<uint64_t>(storageBase) + applySharedPadding(combined, ty);
       for (uint32_t byte = 0; byte < bitWidth / 8; ++byte) {
         assert(begin + byte <= std::numeric_limits<uint32_t>::max());
         addresses.push_back(begin + byte);
@@ -235,27 +233,24 @@ getMemDescAddresses(uint32_t storageBase, uint32_t affineOffset,
   return triton::AddressSet::fromAddresses(addresses);
 }
 
-FailureOr<triton::BufferRegion>
-getMemDescRegion(uint32_t storageBase, uint32_t affineOffset,
-                 ttg::MemDescType ty, Operation *op,
-                 llvm::DenseMap<std::pair<Type, uint32_t>,
-                                triton::AddressSet> *cache) {
+FailureOr<triton::BufferRegion> getMemDescRegion(
+    uint32_t storageBase, uint32_t affineOffset, ttg::MemDescType ty,
+    Operation *op,
+    llvm::DenseMap<std::pair<Type, uint32_t>, triton::AddressSet> *cache) {
   FailureOr<triton::AddressSet> addresses =
       getMemDescAddresses(storageBase, affineOffset, ty, op, cache);
   if (failed(addresses))
     return failure();
   uint32_t baseOffset = storageBase + affineOffset;
   return triton::BufferRegion(baseOffset, getMemDescSize(ty),
-                              std::move(*addresses), storageBase,
-                              affineOffset);
+                              std::move(*addresses), storageBase, affineOffset);
 }
 
 uint32_t getMemDescStorageStride(ttg::MemDescType ty) {
   if (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace()))
     return ttng::getTmemAllocSizes(ty).numCols;
   uint32_t elementBytes = ty.getElementTypeBitWidth() / 8;
-  uint32_t unpadded =
-      product(ttg::getAllocationShapePerCTA(ty)) * elementBytes;
+  uint32_t unpadded = product(ttg::getAllocationShapePerCTA(ty)) * elementBytes;
   return applySharedPadding(unpadded, ty);
 }
 
@@ -365,9 +360,8 @@ namespace mlir::triton {
 
 AddressSet::AddressSet(ArrayRef<AddressRange> input)
     : ranges(input.begin(), input.end()) {
-  llvm::erase_if(ranges, [](const AddressRange &range) {
-    return range.empty();
-  });
+  llvm::erase_if(ranges,
+                 [](const AddressRange &range) { return range.empty(); });
   llvm::sort(ranges);
   SmallVector<AddressRange, 4> canonical;
   for (const AddressRange &range : ranges) {
@@ -415,11 +409,10 @@ uint64_t AddressSet::size() const {
 }
 
 bool AddressSet::contains(uint32_t address) const {
-  auto it = llvm::upper_bound(
-      ranges, address,
-      [](uint32_t address, const AddressRange &range) {
-        return address < range.begin;
-      });
+  auto it = llvm::upper_bound(ranges, address,
+                              [](uint32_t address, const AddressRange &range) {
+                                return address < range.begin;
+                              });
   if (it == ranges.begin())
     return false;
   --it;
@@ -469,8 +462,7 @@ AddressSet AddressSet::translated(uint32_t delta) const {
   return AddressSet(translatedRanges);
 }
 
-BufferRelationMatrix
-createBufferAliasMatrix(ArrayRef<BufferRegion> regions) {
+BufferRelationMatrix createBufferAliasMatrix(ArrayRef<BufferRegion> regions) {
   BufferRelationMatrix matrix(
       regions.size(),
       SmallVector<uint8_t>(regions.size(), static_cast<uint8_t>(0)));
@@ -523,8 +515,7 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions) {
       unsigned current = worklist.pop_back_val();
       component.push_back(current);
       for (unsigned candidate = 0; candidate < regions.size(); ++candidate) {
-        if (assigned.test(candidate) ||
-            regions[candidate].addresses.empty())
+        if (assigned.test(candidate) || regions[candidate].addresses.empty())
           continue;
         if (!regions[current].intersects(regions[candidate]))
           continue;
@@ -573,9 +564,8 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions) {
     componentPlans.push_back(
         {useAtoms ? BufferStateBasis::Atoms : BufferStateBasis::Views,
          component, std::move(atomMemberships)});
-    plan.numLanes +=
-        useAtoms ? componentPlans.back().atomMemberships.size()
-                 : component.size();
+    plan.numLanes += useAtoms ? componentPlans.back().atomMemberships.size()
+                              : component.size();
   }
 
   for (BufferStateMasks &masks : plan.regionMasks) {
@@ -590,17 +580,15 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions) {
     component.basis = componentPlan.basis;
     component.regionIds = componentPlan.regionIds;
     component.laneBegin = laneBegin;
-    component.laneCount =
-        component.basis == BufferStateBasis::Atoms
-            ? componentPlan.atomMemberships.size()
-            : component.regionIds.size();
+    component.laneCount = component.basis == BufferStateBasis::Atoms
+                              ? componentPlan.atomMemberships.size()
+                              : component.regionIds.size();
 
     if (component.basis == BufferStateBasis::Atoms) {
       for (auto [atomId, membership] :
            llvm::enumerate(componentPlan.atomMemberships)) {
         unsigned lane = laneBegin + atomId;
-        for (auto [localId, regionId] :
-             llvm::enumerate(component.regionIds)) {
+        for (auto [localId, regionId] : llvm::enumerate(component.regionIds)) {
           if (!membership.test(localId))
             continue;
           BufferStateMasks &masks = plan.regionMasks[regionId];
@@ -610,8 +598,7 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions) {
         }
       }
     } else {
-      for (auto [localId, regionId] :
-           llvm::enumerate(component.regionIds)) {
+      for (auto [localId, regionId] : llvm::enumerate(component.regionIds)) {
         BufferStateMasks &masks = plan.regionMasks[regionId];
         masks.update.set(laneBegin + localId);
         for (auto [otherLocalId, otherRegionId] :
@@ -672,8 +659,8 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     if (failed(offset))
       return failure();
     FailureOr<BufferRegion> region =
-        getMemDescRegion(*offset, /*affineOffset=*/0, localAllocOp.getType(), op,
-                         &footprintCache);
+        getMemDescRegion(*offset, /*affineOffset=*/0, localAllocOp.getType(),
+                         op, &footprintCache);
     if (failed(region))
       return failure();
     regionInfo.regions.insert(std::move(*region));
@@ -685,9 +672,8 @@ LogicalResult BufferRegionAnalysis::visitOperation(
   }
   if (auto tmemAllocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
     uint32_t offset = getAllocationOffset(tmemAllocOp);
-    FailureOr<BufferRegion> region =
-        getMemDescRegion(offset, /*affineOffset=*/0, tmemAllocOp.getType(), op,
-                         &footprintCache);
+    FailureOr<BufferRegion> region = getMemDescRegion(
+        offset, /*affineOffset=*/0, tmemAllocOp.getType(), op, &footprintCache);
     if (failed(region))
       return failure();
     regionInfo.regions.insert(std::move(*region));

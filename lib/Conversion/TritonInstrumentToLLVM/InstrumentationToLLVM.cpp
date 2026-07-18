@@ -347,8 +347,7 @@ public:
 };
 
 struct MemoryOffsetToI32OpConversion
-    : public ConvertOpToLLVMPattern<
-          tti::ExperimentalMemoryOffsetToI32Op> {
+    : public ConvertOpToLLVMPattern<tti::ExperimentalMemoryOffsetToI32Op> {
 public:
   using ConvertOpToLLVMPattern<
       tti::ExperimentalMemoryOffsetToI32Op>::ConvertOpToLLVMPattern;
@@ -373,8 +372,7 @@ public:
 
     Value address = b.add(base, b.i32_val(op.getOffset()));
     if (op.getMemType() == tti::MemType::SHARED_MEM)
-      address =
-          b.and_(address, b.i32_val(tti::kSharedMemoryObjectMask));
+      address = b.and_(address, b.i32_val(tti::kSharedMemoryObjectMask));
     rewriter.replaceOp(op, address);
     return success();
   }

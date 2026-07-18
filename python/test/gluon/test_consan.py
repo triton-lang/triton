@@ -3352,8 +3352,7 @@ def test_aliasing_tensor_visibility_outstanding_read(FAILURE, device, run_wrappe
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 def test_disjoint_noncontiguous_tmem_subslices(device, run_wrapper, monkeypatch):
     if run_wrapper:
-        result = run_in_process(test_disjoint_noncontiguous_tmem_subslices,
-                                (device, False, monkeypatch))
+        result = run_in_process(test_disjoint_noncontiguous_tmem_subslices, (device, False, monkeypatch))
         assert result.exc is None
         assert result.driver_stderr_output == ""
         return
@@ -3382,8 +3381,7 @@ def test_disjoint_noncontiguous_tmem_subslices(device, run_wrapper, monkeypatch)
         smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1])
         sink = ttgl.allocate_shared_memory(ttgl.float32, [256, 64], smem_layout)
 
-        ttgl.warp_specialize([(reader, (page0_slab1, sink, layout)),
-                              (writer, (page1_slab0, layout))], [4], [32])
+        ttgl.warp_specialize([(reader, (page0_slab1, sink, layout)), (writer, (page1_slab0, layout))], [4], [32])
 
     kernel[(1, )](num_warps=4)
 
@@ -3424,8 +3422,7 @@ def test_same_page_tmem_slabs_with_full_page_descriptor_collision(device, run_wr
         smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1])
         sink = ttgl.allocate_shared_memory(ttgl.float32, [256, 64], smem_layout)
 
-        ttgl.warp_specialize([(reader, (slab0, sink, layout)),
-                              (writer, (slab1, layout))], [4], [32])
+        ttgl.warp_specialize([(reader, (slab0, sink, layout)), (writer, (slab1, layout))], [4], [32])
 
     kernel[(1, )](num_warps=4)
 

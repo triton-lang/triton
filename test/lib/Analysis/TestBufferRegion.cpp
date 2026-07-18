@@ -124,16 +124,15 @@ struct TestBufferRegionAliasPass
         addresses.push_back(static_cast<uint32_t>(address));
       }
       uint32_t base = 0;
-      if (auto baseAttr =
-              op->getAttrOfType<IntegerAttr>("test.region_base"))
+      if (auto baseAttr = op->getAttrOfType<IntegerAttr>("test.region_base"))
         base = static_cast<uint32_t>(baseAttr.getInt());
       uint32_t length = 0;
       if (auto lengthAttr =
               op->getAttrOfType<IntegerAttr>("test.region_length")) {
         length = static_cast<uint32_t>(lengthAttr.getInt());
       } else if (!addresses.empty()) {
-        auto [min, max] = std::minmax_element(addresses.begin(),
-                                               addresses.end());
+        auto [min, max] =
+            std::minmax_element(addresses.begin(), addresses.end());
         base = *min;
         length = *max - *min + 1;
       }
@@ -153,8 +152,7 @@ struct TestBufferRegionAliasPass
     return analysis->getLatticeElement(*memdesc)->getValue();
   }
 
-  static bool mayAlias(const tt::RegionInfo &lhs,
-                       const tt::RegionInfo &rhs) {
+  static bool mayAlias(const tt::RegionInfo &lhs, const tt::RegionInfo &rhs) {
     return llvm::any_of(lhs.regions, [&](const tt::BufferRegion &a) {
       return llvm::any_of(rhs.regions, [&](const tt::BufferRegion &b) {
         return a.intersects(b);
@@ -165,10 +163,9 @@ struct TestBufferRegionAliasPass
   static bool contains(const tt::RegionInfo &container,
                        const tt::RegionInfo &contained) {
     return llvm::all_of(contained.regions, [&](const tt::BufferRegion &b) {
-      return llvm::any_of(container.regions,
-                          [&](const tt::BufferRegion &a) {
-                            return a.contains(b);
-                          });
+      return llvm::any_of(container.regions, [&](const tt::BufferRegion &a) {
+        return a.contains(b);
+      });
     });
   }
 
@@ -187,9 +184,9 @@ struct TestBufferRegionAliasPass
     diag << "}";
   }
 
-  static void emitStatePlan(
-      ModuleOp module,
-      ArrayRef<std::pair<std::string, tt::RegionInfo>> namedRegions) {
+  static void
+  emitStatePlan(ModuleOp module,
+                ArrayRef<std::pair<std::string, tt::RegionInfo>> namedRegions) {
     SmallVector<tt::BufferRegion> regions;
     for (const auto &[name, info] : namedRegions)
       llvm::append_range(regions, info.regions);
@@ -208,7 +205,7 @@ struct TestBufferRegionAliasPass
 
     for (const auto &[name, info] : namedRegions) {
       SmallVector<tt::BufferRegion> candidates(info.regions.begin(),
-                                                info.regions.end());
+                                               info.regions.end());
       llvm::sort(candidates);
       for (const tt::BufferRegion &candidate : candidates) {
         auto it = llvm::lower_bound(regions, candidate);
@@ -247,9 +244,8 @@ struct TestBufferRegionAliasPass
         bool expectedContainment = (rhsMask & ~lhsMask) == 0;
         if (lhs.intersects(rhs) != expectedIntersection ||
             lhs.contains(rhs) != expectedContainment) {
-          module.emitError()
-              << "AddressSet oracle mismatch for masks " << lhsMask << ", "
-              << rhsMask;
+          module.emitError() << "AddressSet oracle mismatch for masks "
+                             << lhsMask << ", " << rhsMask;
           return failure();
         }
       }
@@ -276,17 +272,15 @@ struct TestBufferRegionAliasPass
       auto name = op->getAttrOfType<StringAttr>("test.region_name");
       if (!name)
         return;
-      FailureOr<tt::RegionInfo> regionInfo =
-          getTaggedRegionInfo(op, analysis);
+      FailureOr<tt::RegionInfo> regionInfo = getTaggedRegionInfo(op, analysis);
       if (failed(regionInfo)) {
         return signalPassFailure();
       }
       namedRegions.push_back({name.str(), std::move(*regionInfo)});
     });
-    llvm::sort(namedRegions,
-               [](const auto &lhs, const auto &rhs) {
-                 return lhs.first < rhs.first;
-               });
+    llvm::sort(namedRegions, [](const auto &lhs, const auto &rhs) {
+      return lhs.first < rhs.first;
+    });
 
     if (!module->hasAttr("test.state_plan_only")) {
       for (size_t i = 0; i < namedRegions.size(); ++i) {
