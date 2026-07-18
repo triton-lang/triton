@@ -52,8 +52,17 @@ def _has_metric(frame, metric_name):
     return False
 
 
+# Full AMD xdist runs can leave rocprofiler-sdk profiles with scopes but no
+# kernel-dispatch metrics, so keep metric validation on serial AMD runs.
+def _skip_hip_xdist_kernel_metric_test():
+    if is_hip() and os.environ.get("PYTEST_XDIST_WORKER"):
+        pytest.skip("rocprofiler-sdk kernel timing is not reliable under pytest-xdist on AMD")
+
+
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context, tmp_path: pathlib.Path, device: str):
+    if context == "shadow":
+        _skip_hip_xdist_kernel_metric_test()
     temp_file = tmp_path / "test_torch.hatchet"
     proton.start(str(temp_file.with_suffix("")), context=context)
     proton.enter_scope("test")
@@ -112,8 +121,11 @@ def test_triton(tmp_path: pathlib.Path, device: str):
     assert data[0]["children"][1]["frame"]["name"] == "test2"
 
 
+@pytest.mark.skipif(
+    not is_cuda(),
+    reason="Proton graph replay attribution is only supported by the CUDA backend",
+)
 def test_cudagraph(tmp_path: pathlib.Path, device: str):
-    # TODO(Keren): Uncomment when rocprofiler-sdk has been updated
     if os.environ.get("PROTON_SKIP_CUDAGRAPH_TEST", "0") == "1":
         pytest.skip("CUDagraph test is disabled")
 
@@ -1459,6 +1471,10 @@ def test_scope_multiple_threads(tmp_path: pathlib.Path, device: str):
 @pytest.mark.skipif(not is_cuda() and not is_hip(), reason="Only CUDA/HIP backend supports NVTX profiling")
 @pytest.mark.parametrize("enable_nvtx", [None, True, False])
 def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path, device: str):
+    # This test validates per-kernel timing/count metrics. On AMD, rocprofiler-sdk
+    # can produce empty kernel-dispatch buffers when many xdist workers
+    # profile concurrently.
+    _skip_hip_xdist_kernel_metric_test()
     if enable_nvtx is not None:
         fresh_knobs.proton.enable_nvtx = enable_nvtx
     temp_file = tmp_path / "test_nvtx_range_push_pop.hatchet"
