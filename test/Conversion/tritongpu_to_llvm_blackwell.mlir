@@ -930,6 +930,17 @@ tt.func private @tmem_subslice_reinterpret_scales(%arg0: !ttg.memdesc<128x512xf3
   tt.return %1 : !ttg.memdesc<64x16xi8, #tmem_scales, #ttng.tensor_memory, mutable>
 }
 
+// CHECK-LABEL: @tmem_subslice_source_layout_contiguous
+tt.func private @tmem_subslice_source_layout_contiguous(%arg0: !ttg.memdesc<128x512xf32, #tmem_window, #ttng.tensor_memory, mutable>) -> !ttg.memdesc<128x256xf32, #tmem_window, #ttng.tensor_memory, mutable, 128x512> {
+  // CHECK-NEXT: [[OFFSET:%.*]] = llvm.mlir.constant(208 : i32)
+  // CHECK-NEXT: [[BASE:%.*]] = llvm.ptrtoint %arg0 : !llvm.ptr<3> to i32
+  // CHECK-NEXT: [[NEW_BASE:%.*]] = llvm.add [[BASE]], [[OFFSET]] : i32
+  // CHECK-NEXT: [[TMEM:%.*]] = llvm.inttoptr [[NEW_BASE]] : i32 to !llvm.ptr<3>
+  %0 = ttng.tmem_subslice %arg0 {offset = 208 : i32} : !ttg.memdesc<128x512xf32, #tmem_window, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x256xf32, #tmem_window, #ttng.tensor_memory, mutable, 128x512>
+  // CHECK-NEXT: llvm.return [[TMEM]] : !llvm.ptr<3>
+  tt.return %0 : !ttg.memdesc<128x256xf32, #tmem_window, #ttng.tensor_memory, mutable, 128x512>
+}
+
 }
 
 // -----

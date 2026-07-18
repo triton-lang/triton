@@ -1543,6 +1543,58 @@ LogicalResult TMEMCopyOp::verify() {
 }
 
 // -- TMEMSubSliceOp --
+static bool isTranslatedTMemSubview(MemDescType srcTy, MemDescType dstTy,
+                                    int32_t offset, int32_t dim) {
+  // Subslice lowering only adjusts the base TMEM pointer. Prove that every
+  // point in the selected source region is the corresponding destination
+  // point plus one fixed physical offset.
+  auto srcInv = toLinearLayout(srcTy).pseudoinvert();
+  auto dstInv = toLinearLayout(dstTy).pseudoinvert();
+  auto logicalDims = standardOutDimNames(srcTy.getContext(), 2);
+
+  auto apply = [&](const LinearLayout &layout, int32_t row, int32_t col) {
+    SmallVector<std::pair<StringAttr, int32_t>> logical = {
+        {logicalDims[0], row}, {logicalDims[1], col}};
+    return layout.apply(logical);
+  };
+
+  int32_t srcOrigin[2] = {0, 0};
+  srcOrigin[dim] = offset;
+  auto srcPhysicalOrigin = apply(srcInv, srcOrigin[0], srcOrigin[1]);
+  auto dstPhysicalOrigin = apply(dstInv, 0, 0);
+  if (!llvm::equal(llvm::make_first_range(srcPhysicalOrigin),
+                   llvm::make_first_range(dstPhysicalOrigin)))
+    return false;
+
+  SmallVector<int32_t> physicalDeltas;
+  physicalDeltas.reserve(srcPhysicalOrigin.size());
+  auto kBlock = StringAttr::get(srcTy.getContext(), "block");
+  for (auto [src, dst] :
+       llvm::zip_equal(srcPhysicalOrigin, dstPhysicalOrigin)) {
+    int32_t delta = src.second - dst.second;
+    // A TMEM pointer carries row and column offsets, but not a CTA offset.
+    if (src.first == kBlock && delta != 0)
+      return false;
+    physicalDeltas.push_back(delta);
+  }
+
+  auto dstShape = dstTy.getShape();
+  for (int32_t row = 0; row < dstShape[0]; ++row) {
+    for (int32_t col = 0; col < dstShape[1]; ++col) {
+      int32_t srcLogical[2] = {row, col};
+      srcLogical[dim] += offset;
+      auto srcPhysical = apply(srcInv, srcLogical[0], srcLogical[1]);
+      auto dstPhysical = apply(dstInv, row, col);
+      for (auto [src, dst, delta] :
+           llvm::zip_equal(srcPhysical, dstPhysical, physicalDeltas)) {
+        if (src.first != dst.first || src.second != dst.second + delta)
+          return false;
+      }
+    }
+  }
+  return true;
+}
+
 LogicalResult TMEMSubSliceOp::verify() {
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
   auto dstTy = cast<triton::gpu::MemDescType>(getResult().getType());
@@ -1572,11 +1624,14 @@ LogicalResult TMEMSubSliceOp::verify() {
   auto srcShape = srcTy.getShape();
   auto dstShape = dstTy.getShape();
   auto offset = getOffset();
-  if (offset & (dstShape[dim] - 1)) {
-    return emitError("The split offset may not touch the tile");
-  }
   if (offset + dstShape[dim] > srcShape[dim]) {
     return emitError("The split offset may not exceed the source shape");
+  }
+  bool isResultTileAligned = !(offset & (dstShape[dim] - 1));
+  if (!isResultTileAligned &&
+      !isTranslatedTMemSubview(srcTy, dstTy, offset, dim)) {
+    return emitError("The split offset must align to the result tile or select "
+                     "a contiguous source-layout subview");
   }
   auto srcLL = toLinearLayout(srcTy);
   auto isTrimmed = [&](ArrayRef<int32_t> basis) {
