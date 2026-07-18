@@ -542,8 +542,8 @@ struct AtomicCASOpConversion
           rewriter.eraseOp(op);
           return success();
         }
-        Value ret = broadcastScalarAtomicResult(
-            op, valueElemTy, old, rewriter, b, threadPred, targetInfo);
+        Value ret = broadcastScalarAtomicResult(op, valueElemTy, old, rewriter,
+                                                b, threadPred, targetInfo);
         rewriter.replaceOp(op, {ret});
         return success();
       }
@@ -728,8 +728,8 @@ public:
           rewriter.eraseOp(op);
           return success();
         }
-        Value ret = broadcastScalarAtomicResult(
-            op, valueElemTy, loadAcquireOp, rewriter, b, pred, targetInfo);
+        Value ret = broadcastScalarAtomicResult(op, valueElemTy, loadAcquireOp,
+                                                rewriter, b, pred, targetInfo);
         rewriter.replaceOp(op, {ret});
         return success();
       }
@@ -862,8 +862,8 @@ public:
           rewriter.eraseOp(op);
           return success();
         }
-        Value ret = broadcastScalarAtomicResult(
-            op, valueElemTy, *old, rewriter, b, pred, targetInfo);
+        Value ret = broadcastScalarAtomicResult(op, valueElemTy, *old, rewriter,
+                                                b, pred, targetInfo);
         rewriter.replaceOp(op, {ret});
         return success();
       }
