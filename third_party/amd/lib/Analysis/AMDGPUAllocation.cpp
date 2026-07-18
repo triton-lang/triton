@@ -68,6 +68,8 @@ unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
   }
 
   if (auto cvtLayout = dyn_cast<mlir::triton::gpu::ConvertLayoutOp>(op)) {
+    if (cvtUsesForcedWarpShuffle(cvtLayout))
+      return 0;
     auto srcTy = cvtLayout.getSrc().getType();
     auto dstTy = cvtLayout.getType();
     return getConvertLayoutScratchInBytes(srcTy, dstTy, targetInfo);

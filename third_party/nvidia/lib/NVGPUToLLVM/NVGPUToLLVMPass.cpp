@@ -7,6 +7,8 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TargetFeatures.h"
 
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -518,7 +520,8 @@ public:
 };
 
 static Value createTMAlloc(IRRewriter &rewriter, LLVM::LLVMFuncOp func,
-                           size_t size, Value pred, bool twoCTAs) {
+                           std::string exclusive, size_t size, Value pred,
+                           bool twoCTAs) {
   PTXBuilder ptxBuilder;
   Location loc = func.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -528,9 +531,10 @@ static Value createTMAlloc(IRRewriter &rewriter, LLVM::LLVMFuncOp func,
     NVVM::ClusterArriveOp::create(rewriter, loc, UnitAttr::get(ctx));
     NVVM::ClusterWaitOp::create(rewriter, loc, UnitAttr::get(ctx));
   }
-  std::string ptxString =
-      "@$0 tcgen05.alloc.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
-      ".sync.aligned.shared::cta.b32 [$1], " + std::to_string(size) + ";";
+  std::string ptxString = "@$0 tcgen05.alloc" + exclusive +
+                          ".cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
+                          ".sync.aligned.shared::cta.b32 [$1], " +
+                          std::to_string(size) + ";";
 
   auto &allocOp = *ptxBuilder.create(ptxString);
   allocOp(
@@ -554,8 +558,8 @@ static void createRelinquishAlloc(IRRewriter &rewriter, Location loc,
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
 
-void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
-                 bool twoCTAs) {
+void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, std::string exclusive,
+                 size_t size, Value pred, bool twoCTAs) {
   func.walk([&](LLVM::ReturnOp ret) {
     OpBuilder b(ret);
     auto ctx = ret->getContext();
@@ -566,9 +570,10 @@ void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
     PTXBuilder ptxBuilder;
     // Calculate the predicate in the inline asm to avoid creating long
     // liveranges.
-    std::string ptxString =
-        "@$0 tcgen05.dealloc.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
-        ".sync.aligned.b32 $1, " + std::to_string(size) + ";";
+    std::string ptxString = "@$0 tcgen05.dealloc" + exclusive +
+                            ".cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
+                            ".sync.aligned.b32 $1, " + std::to_string(size) +
+                            ";";
     auto &dealloc = *ptxBuilder.create(ptxString);
     dealloc(
         {ptxBuilder.newOperand(pred, "b"), ptxBuilder.newOperand(alloc, "r")},
@@ -590,22 +595,32 @@ static Value initTensorMemory(LLVM::LLVMFuncOp func) {
   auto ctx = mod.getContext();
   auto loc = func.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  int computeCapability = 100;
+  if (mod->hasAttr("ttg.target"))
+    computeCapability = getNVIDIAComputeCapability(mod);
+  triton::nvidia_gpu::TargetFeatures targetFeatures(computeCapability);
   // A proper error will be raised by the frontend, but to allow compilation to
+  auto tmemMaxSize = targetFeatures.getMaxTMEMColumns();
   // continue we emit a trap.
-  if (size > 512) {
+  if (size > tmemMaxSize) {
     LLVM::Trap::create(rewriter, loc);
     return LLVM::UndefOp::create(rewriter, loc, ptr_ty(ctx, 6));
   }
 
+  std::string exclusive =
+      size == tmemMaxSize && targetFeatures.supportsExclusiveTMEMAlloc()
+          ? ".exclusive"
+          : "";
   bool useTwoCTAs = mlir::triton::nvidia_gpu::getModuleTwoCTAs(mod);
   // This code is only executed by the default warp group.
   Value threadId = NVVM::ThreadIdXOp::create(rewriter, loc, i32_ty);
   Value pred = b.icmp_ult(threadId, b.i32_val(32));
-  Value alloc = createTMAlloc(rewriter, func, size, pred, useTwoCTAs);
+  Value alloc =
+      createTMAlloc(rewriter, func, exclusive, size, pred, useTwoCTAs);
   createRelinquishAlloc(rewriter, loc, pred, useTwoCTAs);
   // TODO: pred will have a long liverange, we need to check if this is a
   // problem and how it can be fixed.
-  freeTMAlloc(func, alloc, size, pred, useTwoCTAs);
+  freeTMAlloc(func, alloc, exclusive, size, pred, useTwoCTAs);
   return alloc;
 }
 

@@ -114,6 +114,8 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
            getBitwidth(dstTy) / 8;
   }
   if (auto cvtLayout = dyn_cast<gpu::ConvertLayoutOp>(op)) {
+    if (cvtUsesForcedWarpShuffle(cvtLayout))
+      return 0;
     auto srcTy = cvtLayout.getSrc().getType();
     auto dstTy = cvtLayout.getType();
     if (!cvtNeedsSharedMemory(srcTy, dstTy))

@@ -839,6 +839,24 @@ module attributes {"ttg.num-warps" = 1 : i32} {
 
 // -----
 
+#forced_shuffle_src = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4]], lane = [[1, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [], block = []}>
+#forced_shuffle_dst = #ttg.linear<{register = [[1, 0], [0, 4]], lane = [[0, 0], [0, 0], [0, 1], [0, 2], [0, 0]], warp = [], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: @convert_layout_forced_expensive_warp_local
+  tt.func @convert_layout_forced_expensive_warp_local(
+      %arg0: tensor<2x8xi16, #forced_shuffle_src>) attributes {always_use_warp_shuffle} {
+    // CHECK-NOT: llvm.mlir.addressof @global_smem
+    // CHECK: nvvm.shfl.sync
+    // CHECK-NOT: llvm.mlir.addressof @global_smem
+    %0 = ttg.convert_layout %arg0
+        : tensor<2x8xi16, #forced_shuffle_src> -> tensor<2x8xi16, #forced_shuffle_dst>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
@@ -847,7 +865,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @convert_layout_blocked_blocked(%arg0: tensor<32x32xf32, #blocked0>) {
     // CHECK: llvm.mlir.addressof @global_smem
     // CHECK-COUNT-8: llvm.store
-    // CHECK-: nvvm.barrier
+    // CHECK: nvvm.barrier
     // CHECK-COUNT-8: llvm.load
     %0 = ttg.convert_layout %arg0 : tensor<32x32xf32, #blocked0> -> tensor<32x32xf32, #blocked1>
     tt.return
@@ -1630,6 +1648,27 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.tar
     // CHECK-NEXT: nvvm.cluster.wait
     // CHECK-NOT: nvvm.barrier
     %old = tt.atomic_rmw fadd, acq_rel, gpu, %ptr, %val, %mask : (!tt.ptr<f32>, f32, i1) -> f32
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:90", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32} {
+  // Atomic ordering barriers must not introduce a nested warp specialization.
+  // CHECK-LABEL: atomic_release_multi_cta_warp_specialize
+  // CHECK: mbarrier.arrive.release.cluster.shared::cluster.b64
+  // CHECK: mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64
+  // CHECK: red.global.sys.release.add.u32
+  tt.func @atomic_release_multi_cta_warp_specialize(%ptr : !tt.ptr<i32>, %mask : i1, %val : i32) {
+    ttg.warp_specialize()
+    default {
+      %old = tt.atomic_rmw add, release, sys, %ptr, %val, %mask : (!tt.ptr<i32>, i32, i1) -> i32
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      ttg.warp_return
+    } : () -> ()
     tt.return
   }
 }

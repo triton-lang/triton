@@ -421,6 +421,29 @@ def test_tuple_assignment_constexpr_tuple_normalizes_recursively():
     run_parser(kernel)
 
 
+def test_list_comprehension_if_filter():
+
+    @triton.jit
+    def kernel():
+        # an `if` filter drops the elements whose condition is false
+        vals: tl.constexpr = [x for x in (10, 20, 30, 40) if x >= 30]
+        tl.static_assert(len(vals) == 2)
+        tl.static_assert(vals[0] == 30)
+        tl.static_assert(vals[1] == 40)
+
+        # multiple `if` clauses compose as "and"
+        multi: tl.constexpr = [x for x in (0, 1, 2, 3, 4, 5) if x > 1 if x % 2 == 0]
+        tl.static_assert(len(multi) == 2)
+        tl.static_assert(multi[0] == 2)
+        tl.static_assert(multi[1] == 4)
+
+        # an unfiltered comprehension is unchanged
+        allv: tl.constexpr = [x for x in (10, 20, 30, 40)]
+        tl.static_assert(len(allv) == 4)
+
+    run_parser(kernel)
+
+
 def test_named_expr_respects_prior_constexpr_annotation():
 
     @triton.jit
