@@ -132,8 +132,8 @@ TEST_F(LinearLayoutTest, TimesEquals) {
 
 TEST_F(LinearLayoutTest, ConcatRequiresDisjointDimensions) {
   auto layout = LinearLayout::identity1D(2, S("in"), S("out"));
-  ASSERT_DEATH(layout.concatIns(layout), "disjoint input dimensions");
-  ASSERT_DEATH(layout.concatOuts(layout), "disjoint output dimensions");
+  ASSERT_DEATH((void)layout.concatIns(layout), "disjoint input dimensions");
+  ASSERT_DEATH((void)layout.concatOuts(layout), "disjoint output dimensions");
 }
 
 TEST_F(LinearLayoutTest, GetOutDimSizeLog2) {
