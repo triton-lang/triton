@@ -225,7 +225,7 @@ jobs:
     if: ${{ always() && github.repository == 'triton-lang/triton' }}
     needs: integration-tests-amd
     name: proton-tests-amd (gfx950-rocm712)
-    runs-on: ["triton-gfx950-test"]
+    runs-on: ["amd-gfx950"]
     timeout-minutes: 25
     env:
       TRITON_BUILD_WITH_CCACHE: "true"
@@ -241,6 +241,7 @@ jobs:
       image: rocm/vllm:rocm7.12.0_gfx950-dcgpu_ubuntu24.04_py3.12_pytorch_2.9.1_vllm_0.16.0
       options: >-
         --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+        --env-file /etc/podinfo/gha-gpu-isolation-settings
         --volume /home/runner/.triton:/github/home/.triton
         --volume /triton-data:/triton-data
     steps:
