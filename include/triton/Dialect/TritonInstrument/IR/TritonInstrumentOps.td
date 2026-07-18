@@ -2,7 +2,6 @@
 #define TRITONINSTRUMENT_OPS
 
 include "triton/Dialect/TritonInstrument/IR/TritonInstrumentDialect.td"
-include "triton/Dialect/TritonGPU/IR/TritonGPUOpInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"

@@ -3,7 +3,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/ADT/DenseMap.h"
@@ -27,7 +26,7 @@ namespace {
 bool atomicNeedsClusterBarrier(Operation *op) {
   if (isa<AtomicPollOp>(op))
     return gpu::lookupNumCTAs(op) != 1;
-  auto atomic = dyn_cast<gpu::AtomicOpInterface>(op);
+  auto atomic = dyn_cast<AtomicOpInterface>(op);
   if (!atomic || gpu::lookupNumCTAs(op) == 1)
     return false;
 

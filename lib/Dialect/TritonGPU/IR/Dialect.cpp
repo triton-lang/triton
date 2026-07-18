@@ -4271,15 +4271,6 @@ struct MemDescModel
     return cast<MemDescType>(pointer).getElementType().getIntOrFloatBitWidth();
   }
 };
-
-template <typename AtomicOp>
-struct AtomicOpModel
-    : public AtomicOpInterface::ExternalModel<AtomicOpModel<AtomicOp>,
-                                              AtomicOp> {
-  MemSemantic getMemSemantic(Operation *op) const {
-    return cast<AtomicOp>(op).getSem();
-  }
-};
 } // namespace
 
 void TritonGPUDialect::initialize() {
@@ -4300,8 +4291,6 @@ void TritonGPUDialect::initialize() {
 
   RankedTensorType::attachInterface<TensorModel>(*getContext());
   MemDescType::attachInterface<MemDescModel>(*getContext());
-  AtomicRMWOp::attachInterface<AtomicOpModel<AtomicRMWOp>>(*getContext());
-  AtomicCASOp::attachInterface<AtomicOpModel<AtomicCASOp>>(*getContext());
 }
 
 LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
