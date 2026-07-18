@@ -176,11 +176,6 @@ struct AuxDataMap {
   //   tensor  = distributed tensor value.
   //   scratch = pointer to shared-cluster global scratch memory.
 
-  // tensor, <B x i64>
-  // Per-memory-type packed buffer descriptors. Each i64 stores the 32-bit base
-  // offset and 32-bit length of one shared-memory or tensor-memory region.
-  RegionToValueMap buffers[numMemTypes];
-
   // tensor, <K x i64>
   // Packed descriptors for tracked mbarrier allocations. Barriers are shared
   // memory descriptors.
@@ -230,11 +225,11 @@ struct AuxDataMap {
   // intra-CTA.
   RegionToValueMap commits[CommitKind::NumCommitKinds];
 
-  // tensor, <B x B x i1>
-  // Optional per-memory-type alias matrix. Created only when BufferRegion
-  // analysis finds cross-buffer aliasing; checks expand selected buffer rows
-  // through this matrix.
-  RegionToValueMap aliasMatrices[numMemTypes];
+  // Stable exact region identities, the selected state-lane plan, and
+  // analysis-derived candidate IDs for each SSA memdesc.
+  SmallVector<triton::BufferRegion> bufferRegions[numMemTypes];
+  triton::BufferStatePlan bufferStatePlans[numMemTypes];
+  DenseMap<Value, SmallVector<uint32_t>> bufferCandidateIds[numMemTypes];
 
   // scratch pointer, i32
   // Shared-cluster lock used to serialize ConSan instrumentation updates.
@@ -259,10 +254,6 @@ struct AuxDataMap {
   // it, set bits denote base threads that have not yet reached their
   // terminator.
   RegionToValueMap activeMasks;
-
-  // True when a memory type has cross-buffer aliasing and therefore requires
-  // aliasMatrices to make visibility and commit checks conservative.
-  std::array<bool, numMemTypes> hasNonTrivialAliasing{};
 
   // Dense logical-thread numbering for this module. Base threads are always
   // present; TMA/TC/CLC peer ranges are added only when the module uses them.

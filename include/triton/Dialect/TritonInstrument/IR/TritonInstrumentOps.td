@@ -77,6 +77,20 @@ def TTI_ExperimentalSharedMemoryOffsetToI32Op
   let assemblyFormat = "$offset attr-dict";
 }
 
+def TTI_ExperimentalMemoryOffsetToI32Op
+    : TTI_Op<"experimental_memory_offset_to_i32", [Pure]> {
+  let summary = "Materialize a memory-space offset as an i32 address";
+  let description = [{
+    Add a static byte or encoded tensor-memory offset to the current
+    function's memory-space base and return the 32-bit address used by ConSan.
+    This provides the runtime identity corresponding to a compile-time
+    BufferRegion key without materializing a descriptor table.
+  }];
+  let arguments = (ins I32Attr:$offset, TT_MemTypeAttr:$memType);
+  let results = (outs I32:$result);
+  let assemblyFormat = "$offset `,` $memType attr-dict";
+}
+
 def TTI_ExperimentalClusterCTAIdOp
     : TTI_Op<"experimental_cluster_cta_id", [Pure]> {
   let summary = "Get the CTA id within the current cluster";

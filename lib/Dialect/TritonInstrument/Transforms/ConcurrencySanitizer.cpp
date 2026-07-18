@@ -148,6 +148,117 @@ Value currentCTAMask(ImplicitLocOpBuilder &b) {
                                ctaId);
 }
 
+enum class StateMaskKind { Update, Check, Complete };
+
+const llvm::SmallBitVector &
+getStateMask(const BufferStateMasks &masks, StateMaskKind kind) {
+  switch (kind) {
+  case StateMaskKind::Update:
+    return masks.update;
+  case StateMaskKind::Check:
+    return masks.check;
+  case StateMaskKind::Complete:
+    return masks.complete;
+  }
+  llvm_unreachable("unknown buffer state mask kind");
+}
+
+Value createStateMaskConstant(ImplicitLocOpBuilder &b,
+                              RankedTensorType maskType,
+                              const llvm::SmallBitVector &mask) {
+  assert(mask.size() <= static_cast<size_t>(maskType.getNumElements()));
+  SmallVector<APInt> bits(maskType.getNumElements(), APInt(1, 0));
+  for (unsigned bit = 0; bit < mask.size(); ++bit)
+    if (mask.test(bit))
+      bits[bit] = APInt(1, 1);
+  return arith::ConstantOp::create(
+      b, maskType, DenseElementsAttr::get(maskType, bits));
+}
+
+FailureOr<tti::MaterializedBufferRegion> createBufferStateMasks(
+    ImplicitLocOpBuilder &b, AuxDataMap &auxData, MemType memType,
+    Value runtimeBase, ArrayRef<uint32_t> candidateIds, Operation *op) {
+  int index = static_cast<int>(memType);
+  const BufferStatePlan &plan = auxData.bufferStatePlans[index];
+  if (plan.numLanes == 0 ||
+      auxData.writeVisibility[index].empty()) {
+    op->emitError("active memdesc has no ConSan state plan");
+    return failure();
+  }
+  if (candidateIds.empty()) {
+    op->emitError("active memdesc has no buffer-state candidates");
+    return failure();
+  }
+  for (uint32_t id : candidateIds) {
+    if (id >= plan.regionMasks.size()) {
+      op->emitError("buffer-region candidate ID is out of bounds");
+      return failure();
+    }
+  }
+
+  auto writeVisibilityType = cast<RankedTensorType>(
+      auxData.writeVisibility[index].at(op).type);
+  RankedTensorType maskType =
+      tti::getSlicedTensorType(writeVisibilityType, {1}, b.getI1Type());
+
+  SmallVector<Value> predicates;
+  if (candidateIds.size() > 1) {
+    if (!runtimeBase) {
+      op->emitError("dynamic buffer-state cases require a runtime base");
+      return failure();
+    }
+    Value resolved = arith::ConstantIntOp::create(b, 0, 1);
+    for (uint32_t id : candidateIds) {
+      Value base = tti::ExperimentalMemoryOffsetToI32Op::create(
+          b, auxData.bufferRegions[index][id].baseOffset, memType);
+      Value predicate = arith::CmpIOp::create(
+          b, arith::CmpIPredicate::eq, runtimeBase, base);
+      predicates.push_back(predicate);
+      resolved = arith::OrIOp::create(b, resolved, predicate);
+    }
+    tti::createAssertInThread(
+        b, resolved,
+        "internal ConSan error: active memdesc resolved to no buffer state");
+  }
+
+  auto materialize = [&](StateMaskKind kind) {
+    if (candidateIds.size() == 1)
+      return createStateMaskConstant(
+          b, maskType, getStateMask(plan.regionMasks[candidateIds.front()],
+                                    kind));
+    Value result = createStateMaskConstant(
+        b, maskType, llvm::SmallBitVector(plan.numLanes));
+    for (auto [id, predicate] : llvm::zip(candidateIds, predicates)) {
+      Value candidate = createStateMaskConstant(
+          b, maskType, getStateMask(plan.regionMasks[id], kind));
+      Value predicateTensor = tt::SplatOp::create(b, maskType, predicate);
+      candidate =
+          arith::AndIOp::create(b, candidate, predicateTensor);
+      result = arith::OrIOp::create(b, result, candidate);
+    }
+    return result;
+  };
+
+  auto sameMaskKinds = [&](StateMaskKind lhs, StateMaskKind rhs) {
+    return llvm::all_of(candidateIds, [&](uint32_t id) {
+      return getStateMask(plan.regionMasks[id], lhs) ==
+             getStateMask(plan.regionMasks[id], rhs);
+    });
+  };
+
+  Value update = materialize(StateMaskKind::Update);
+  Value check = sameMaskKinds(StateMaskKind::Update, StateMaskKind::Check)
+                    ? update
+                    : materialize(StateMaskKind::Check);
+  Value complete =
+      sameMaskKinds(StateMaskKind::Update, StateMaskKind::Complete)
+          ? update
+          : sameMaskKinds(StateMaskKind::Check, StateMaskKind::Complete)
+                ? check
+                : materialize(StateMaskKind::Complete);
+  return tti::MaterializedBufferRegion{update, check, complete};
+}
+
 Value allCTAsMask(ImplicitLocOpBuilder &b) {
   int numCTAs = ttg::lookupNumCTAs(b);
   assert(numCTAs <= 16 && "ConSan CTA bitsets assume at most 16 CTAs");
@@ -905,17 +1016,41 @@ private:
         materialized.memType = MemType::TENSOR_MEM;
         if (isa<ttg::SharedEncodingTrait>(bufType.getEncoding()))
           materialized.memType = MemType::SHARED_MEM;
-        materialized.buffer = {tti::ExperimentalMemDescToI32Op::create(b, *buf),
-                               effect.length};
+        auto &candidateMap =
+            auxData.bufferCandidateIds[static_cast<int>(materialized.memType)];
+        auto candidateIt = candidateMap.find(*buf);
+        if (candidateIt == candidateMap.end()) {
+          op->emitError("missing exact buffer-region candidates for memdesc");
+          return failure();
+        }
+        Value runtimeBase;
+        if (candidateIt->second.size() > 1)
+          runtimeBase = tti::ExperimentalMemDescToI32Op::create(b, *buf);
+        FailureOr<tti::MaterializedBufferRegion> buffer =
+            createBufferStateMasks(b, auxData, materialized.memType,
+                                   runtimeBase, candidateIt->second, op);
+        if (failed(buffer))
+          return failure();
+        materialized.buffer = *buffer;
       } else {
         const auto &staticBuffer =
             std::get<MemEffectsOpInfo::Effects::StaticSharedBuffer>(
                 effect.buffer);
         materialized.memType = MemType::SHARED_MEM;
-        materialized.buffer = {
-            tti::ExperimentalSharedMemoryOffsetToI32Op::create(
-                b, b.getI32IntegerAttr(staticBuffer.region.baseOffset)),
-            staticBuffer.region.length};
+        auto &regions =
+            auxData.bufferRegions[static_cast<int>(MemType::SHARED_MEM)];
+        auto regionIt = llvm::find(regions, staticBuffer.region);
+        if (regionIt == regions.end()) {
+          op->emitError("missing exact region for compiler scratch buffer");
+          return failure();
+        }
+        uint32_t id = std::distance(regions.begin(), regionIt);
+        FailureOr<tti::MaterializedBufferRegion> buffer =
+            createBufferStateMasks(b, auxData, MemType::SHARED_MEM,
+                                   /*runtimeBase=*/{}, {id}, op);
+        if (failed(buffer))
+          return failure();
+        materialized.buffer = *buffer;
       }
       materializedEffects.push_back(materialized);
 

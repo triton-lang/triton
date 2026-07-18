@@ -337,14 +337,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   ^use_simple(%arg_simple: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>):
     cf.br ^merge(%arg_simple : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>)
   ^merge(%phi: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>):
-    // expected-remark @below {{Buffers: [4096, 4096], [28672, 4096], [32768, 4096]}}
+    // expected-remark @below {{Buffers: [4096, 4096], [28672, 4096]}}
     ttg.local_load %phi : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
     cf.br ^exit
   ^exit:
     tt.return
   }
 
-  // expected-remark @below {{All Shared Regions: [4096, 4096], [28672, 4096], [32768, 4096]}}
+  // expected-remark @below {{All Shared Regions: [4096, 4096], [28672, 4096]}}
   tt.func private @print_all_regions() attributes {test.print_all_used_regions} {
     tt.return
   }
