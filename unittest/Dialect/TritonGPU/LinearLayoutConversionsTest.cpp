@@ -149,6 +149,48 @@ protected:
   MLIRContext ctx;
 };
 
+TEST_F(LinearLayoutConversionsTest, TranslatedSubview) {
+  auto kOffset = S("offset");
+  auto kDim = S("dim0");
+
+  auto contiguous = LinearLayout::identity1D(8, kOffset, kDim);
+  EXPECT_TRUE(isTranslatedLinearLayoutSubview(
+      contiguous, contiguous, /*dstShape=*/{4}, /*offsets=*/{2},
+      /*additivePhysicalDims=*/{kOffset},
+      /*allowXorTranslation=*/false));
+
+  auto bitReversed = LinearLayout({{kOffset, {{4}, {2}, {1}}}}, {kDim});
+  EXPECT_FALSE(isTranslatedLinearLayoutSubview(
+      bitReversed, bitReversed, /*dstShape=*/{4}, /*offsets=*/{1},
+      /*additivePhysicalDims=*/{kOffset},
+      /*allowXorTranslation=*/false));
+
+  // An aligned origin needs no integer-linear mapping: addition and xor agree
+  // when the translated origin and destination bases use disjoint bits.
+  EXPECT_TRUE(isTranslatedLinearLayoutSubview(
+      bitReversed, bitReversed, /*dstShape=*/{2}, /*offsets=*/{4},
+      /*additivePhysicalDims=*/{kOffset},
+      /*allowXorTranslation=*/false));
+}
+
+TEST_F(LinearLayoutConversionsTest, SubviewOriginMaskIncludesLowBits) {
+  auto kOffset = S("offset");
+  auto kBlock = S("block");
+  auto kDim = S("dim0");
+  LinearLayout layout(
+      {{kOffset, {{1}, {4}}}, {kBlock, {{2}}}}, {kDim});
+
+  EXPECT_EQ(getLinearLayoutSubviewOriginMask(
+                layout, /*shape=*/{4}, /*allocShape=*/{8}, kOffset),
+            0b11);
+  EXPECT_EQ(getLinearLayoutSubviewOriginMask(
+                layout, /*shape=*/{4}, /*allocShape=*/{8}, kBlock),
+            0b1);
+  EXPECT_EQ(getLinearLayoutSubviewOriginMask(
+                layout, /*shape=*/{8}, /*allocShape=*/{8}, kBlock),
+            0);
+}
+
 TEST_F(LinearLayoutConversionsTest, SimpleBlocked) {
   auto layout =
       toLinearLayout({16}, blocked({1}, {4}, {4}, {1}, {1}, {0}, {0}));

@@ -655,14 +655,19 @@ OpFoldResult MemDescReinterpretOp::fold(FoldAdaptor adaptor) {
 
 namespace {
 
+LinearLayout getAllocationLayout(MemDescType type) {
+  auto encoding = type.getEncoding();
+  auto allocShape = dropPipeliningDim(type.getAllocShape(), encoding);
+  return isPaddedEncoding(encoding)
+             ? paddedLinearLayout(allocShape, encoding)
+             : toLinearLayout(allocShape, encoding);
+}
+
 LinearLayout getViewLayout(MemDescType type) {
   auto encoding = type.getEncoding();
-  auto rank = cast<LayoutEncodingTrait>(encoding).getRank();
-  auto allocShape = type.getAllocShape().take_back(rank);
-  auto viewShape = type.getShape().take_back(rank);
-  LinearLayout layout = isPaddedEncoding(encoding)
-                            ? paddedLinearLayout(allocShape, encoding)
-                            : toLinearLayout(allocShape, encoding);
+  auto allocShape = dropPipeliningDim(type.getAllocShape(), encoding);
+  auto viewShape = dropPipeliningDim(type.getShape(), encoding);
+  LinearLayout layout = getAllocationLayout(type);
 
   if (viewShape == allocShape)
     return layout;
@@ -682,6 +687,43 @@ LinearLayout getViewLayout(MemDescType type) {
   return layout;
 }
 
+int64_t getNumLayoutCopies(MemDescType type) {
+  auto layoutRank =
+      dropPipeliningDim(type.getShape(), type.getEncoding()).size();
+  int64_t copies = 1;
+  for (int64_t dim : type.getShape().drop_back(layoutRank))
+    copies *= dim;
+  return copies;
+}
+
+int64_t getPerCopyNumBits(MemDescType type,
+                          const LinearLayout &layout) {
+  auto *ctx = type.getContext();
+  bool isSharedMemory = isa<SharedMemorySpaceAttr>(type.getMemorySpace());
+  auto dim = StringAttr::get(ctx, isSharedMemory ? "offset" : "col");
+  return int64_t(layout.getInDimSize(dim)) *
+         type.getElementTypeBitWidth();
+}
+
+int64_t getContiguousViewNumBits(MemDescType type,
+                                 const LinearLayout &viewLayout) {
+  int64_t viewBits = getPerCopyNumBits(type, viewLayout);
+  int64_t copyStrideBits =
+      getPerCopyNumBits(type, getAllocationLayout(type));
+  assert(viewBits <= copyStrideBits);
+  return viewBits == copyStrideBits ? getNumLayoutCopies(type) * viewBits
+                                    : viewBits;
+}
+
+LinearLayout getBlockImage(const LinearLayout &layout) {
+  auto inverse = layout.pseudoinvert();
+  assert(!layout.getInDimNames().empty());
+  auto *ctx = layout.getInDimNames().begin()->getContext();
+  auto kBlock = StringAttr::get(ctx, "block");
+  return inverse.sublayout(llvm::to_vector(inverse.getInDimNames()),
+                           {kBlock});
+}
+
 } // namespace
 
 LogicalResult MemDescReinterpretOp::verify() {
@@ -692,11 +734,18 @@ LogicalResult MemDescReinterpretOp::verify() {
   // the destination layouts must be equal.
   auto srcEnc = srcTy.getEncoding();
   auto dstEnc = dstTy.getEncoding();
+  if (isa<PartitionedSharedEncodingAttr>(srcEnc) ||
+      isa<PartitionedSharedEncodingAttr>(dstEnc))
+    return emitError("cannot reinterpret partitioned shared layouts");
+
   if (isPaddedEncoding(srcEnc) != isPaddedEncoding(dstEnc))
     return emitError(
         "cannot reinterpret between padded and non-padded layouts");
 
   if (isPaddedEncoding(srcEnc)) {
+    if (srcTy.getShape() != srcTy.getAllocShape())
+      return emitError("cannot reinterpret a padded source subview");
+
     auto getPadPattern = [](MemDescType ty) {
       auto enc = getPaddedEncoding(ty.getEncoding());
       auto elmtSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
@@ -737,22 +786,24 @@ LogicalResult MemDescReinterpretOp::verify() {
     return emitError("source subview must be contiguous");
   auto dstLayout = getViewLayout(dstTy);
 
-  auto getViewNumBits = [](MemDescType ty, const LinearLayout &layout) {
-    auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
-    int64_t numLayoutCopies = 1;
-    for (int64_t dim : ty.getAllocShape().drop_back(rank))
-      numLayoutCopies *= dim;
-    // Shared memory is allocated by offset and TMEM is allocated by column;
-    // prefix dimensions outside the layout-ranked suffix represent separate
-    // copies of that logical allocation.
-    auto *ctx = ty.getContext();
-    bool isSharedMemory = isa<SharedMemorySpaceAttr>(ty.getMemorySpace());
-    auto dim = StringAttr::get(ctx, isSharedMemory ? "offset" : "col");
-    return numLayoutCopies * layout.getInDimSize(dim) *
-           ty.getElementTypeBitWidth();
-  };
-  auto srcNumBits = getViewNumBits(srcTy, srcLayout);
-  auto dstNumBits = getViewNumBits(dstTy, dstLayout);
+  auto kBlock = StringAttr::get(getContext(), "block");
+  if (isa<SharedMemorySpaceAttr>(srcTy.getMemorySpace())) {
+    auto layoutShape = dropPipeliningDim(srcTy.getShape(), srcEnc);
+    auto allocShape = dropPipeliningDim(srcTy.getAllocShape(), srcEnc);
+    if (getLinearLayoutSubviewOriginMask(
+            getAllocationLayout(srcTy), layoutShape, allocShape, kBlock))
+      return emitError(
+          "cannot reinterpret a source subview with a possible cross-CTA "
+          "origin");
+  }
+
+  if (!isLinearLayoutImageSubset(getBlockImage(dstLayout),
+                                 getBlockImage(srcLayout)))
+    return emitError(
+        "result CTA footprint must be contained in the source CTA footprint");
+
+  auto srcNumBits = getContiguousViewNumBits(srcTy, srcLayout);
+  auto dstNumBits = getContiguousViewNumBits(dstTy, dstLayout);
   if (dstNumBits > srcNumBits)
     return emitError() << "result logical storage size must not exceed source "
                           "logical storage size ("
@@ -1144,35 +1195,25 @@ LogicalResult MemDescSubsliceOp::verify() {
   if (!isa<SharedEncodingTrait>(srcEnc) || !isa<SharedEncodingTrait>(dstEnc)) {
     return emitError("src and dst must both be of shared memory encoding");
   }
-  auto layoutRank = dropPipeliningDim(getOffsets(), srcEnc).size();
-  auto prefixRank = getOffsets().size() - layoutRank;
-
-  SetVector<int> splitDims{};
+  bool isSubview = false;
   for (int i = 0; i < srcTy.getRank(); i++) {
-    if (srcTy.getDimSize(i) != dstTy.getDimSize(i)) {
-      splitDims.insert(i);
-    }
+    isSubview |= srcTy.getDimSize(i) != dstTy.getDimSize(i);
   }
   SmallVector<int64_t> offsets(getOffsets().begin(), getOffsets().end());
   for (auto [dim, offset] : llvm::enumerate(offsets)) {
     if (offset < 0 || offset > srcTy.getDimSize(dim) - dstTy.getDimSize(dim)) {
       return emitError("subslice must fit within the source shape");
     }
-    if (!splitDims.contains(dim)) {
+    if (srcTy.getDimSize(dim) == dstTy.getDimSize(dim)) {
       if (offset != 0) {
         return emitError("A non zero offset found in a dimension that is "
                          "not being split");
       }
-    } else {
-      if (dim >= prefixRank && (offset & (dstTy.getDimSize(dim) - 1))) {
-        return emitError("The split offset may not touch the tile");
-      }
     }
   }
-  if (splitDims.empty())
+  if (!isSubview)
     return success();
 
-  auto ctx = getContext();
   LinearLayout ll;
   if (auto paddedEncoding = triton::gpu::getPaddedEncoding(srcEnc)) {
     if (paddedEncoding.getRank() < srcTy.getRank()) {
@@ -1184,26 +1225,14 @@ LogicalResult MemDescSubsliceOp::verify() {
     ll = triton::gpu::toLinearLayout(srcTy);
   }
 
-  auto llInv = ll.pseudoinvert();
-  for (auto dim : splitDims) {
-    if (dim < prefixRank)
-      continue;
-    auto layoutDim = dim - prefixRank;
-    llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;
-    for (auto d : standardOutDimNames(ctx, layoutRank)) {
-      namedOffsets.push_back({d, 0});
-    }
-    for (int dimSize = dstTy.getDimSize(dim); dimSize < srcTy.getDimSize(dim);
-         dimSize *= 2) {
-      namedOffsets[layoutDim].second = dimSize;
-      auto offsetAndBlock = llInv.apply(namedOffsets);
-      auto offset = offsetAndBlock[0];
-      if (!llvm::isPowerOf2_32(offset.second) && offset.second != 0) {
-        return emitError(
-            "We don't support splitting along the swizzling pattern");
-      }
-    }
-  }
+  auto layoutShape = dropPipeliningDim(dstTy.getShape(), srcEnc);
+  auto layoutOffsets = dropPipeliningDim(ArrayRef(offsets), srcEnc);
+  auto kOffset = StringAttr::get(getContext(), "offset");
+  if (!isTranslatedLinearLayoutSubview(ll, ll, layoutShape, layoutOffsets,
+                                       {kOffset},
+                                       /*allowXorTranslation=*/true))
+    return emitError("subslice must preserve the source layout up to a "
+                     "constant physical translation");
   return success();
 }
 

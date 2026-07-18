@@ -104,8 +104,9 @@ LogicalResult lowerLdStMatrix(
   auto llvmElemTy = typeConverter->convertType(memDescType.getElementType());
   for (bool transpose : {false, true}) {
     auto result = LLVM::NVIDIA::lowerLdStMatrix(
-        loc, cvt, transpose, vals, smemBase, affineOffset, maskSpanAffineOffset,
-        llvmElemTy, rewriter, targetInfo);
+        loc, cvt, transpose, vals, smemBase, affineOffset,
+        triton::gpu::hasIntegerLinearSharedOffset(memDescType),
+        maskSpanAffineOffset, llvmElemTy, rewriter, targetInfo);
     if (succeeded(result)) {
       return result;
     }
@@ -383,9 +384,9 @@ static void lowerAsyncSharedStore(Location loc, MLIRContext *ctx,
   };
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   lowerLdSt(loc, ctx, cvt, vals, llvmElemTy, smemBases, paddingShifts,
-            affineOffset, maskSpanAffineOffset, affineBlockOffset,
-            maskSpanAffineBlock, laneId, warpId, rewriter, targetInfo,
-            maybeMaxVecElems, emitSt);
+            affineOffset, triton::gpu::hasIntegerLinearSharedOffset(dstTy),
+            maskSpanAffineOffset, affineBlockOffset, maskSpanAffineBlock,
+            laneId, warpId, rewriter, targetInfo, maybeMaxVecElems, emitSt);
 }
 
 struct AsyncSharedStoreOpConversion

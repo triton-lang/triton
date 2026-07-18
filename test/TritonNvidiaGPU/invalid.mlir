@@ -935,7 +935,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func public @tmem_subslice_source_layout_noncontiguous() {
     %md = ttng.tmem_alloc : () -> !ttg.memdesc<64x1024xf32, #tmem, #ttng.tensor_memory, mutable>
-    // expected-error @+1 {{The split offset must align to the result tile or select a contiguous source-layout subview}}
+    // expected-error @+1 {{constant physical translation}}
     %sub = ttng.tmem_subslice %md {offset = 256 : i32} : !ttg.memdesc<64x1024xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<64x512xf32, #tmem, #ttng.tensor_memory, mutable, 64x1024>
     tt.return
   }

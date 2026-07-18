@@ -194,8 +194,9 @@ Value createLeadCTAPredicate(Location loc, RewriterBase &rewriter) {
 LogicalResult lowerLdStMatrix(
     Location loc, LinearLayout cvt, bool transpose,
     SmallVector<Value> &vals, // Input for stmatrix, output for ldmatrix
-    Value smemBase, Value affineOffset, uint64_t maskSpanAffineOffset,
-    Type llvmElemTy, ConversionPatternRewriter &rewriter,
+    Value smemBase, Value affineOffset, bool additiveAffineOffset,
+    uint64_t maskSpanAffineOffset, Type llvmElemTy,
+    ConversionPatternRewriter &rewriter,
     const ::triton::NVIDIA::TargetInfo &targetInfo) {
   // Lower load via ldmatrix, store via stmatrix
 
@@ -399,7 +400,6 @@ LogicalResult lowerLdStMatrix(
   // It's fine that we don't compute the offset in bytes as affineOffset
   // will be folded into a constant
   auto affineOffsetI8 = b.mul(affineOffset, b.i32_val(bitwidth / 8));
-  regBase = b.xor_(regBase, affineOffsetI8);
 
   // Instruction params
   auto layout = transpose ? NVVM::MMALayout::col : NVVM::MMALayout::row;
@@ -421,6 +421,10 @@ LogicalResult lowerLdStMatrix(
     auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
     auto regIdxI8 = regIdx * (bitwidth / 8);
     Value offset = b.xor_(regBase, b.i32_val(regIdxI8));
+    if (additiveAffineOffset)
+      offset = b.add(offset, affineOffsetI8);
+    else
+      offset = b.xor_(offset, affineOffsetI8);
     for (int i2 = 0; i2 < nAdditive; i2 += elemsPerInstr) {
       // all these constants will go as immediate values to LDSM/STSM
       auto regIdxAdd =

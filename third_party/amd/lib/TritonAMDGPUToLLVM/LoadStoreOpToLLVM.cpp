@@ -500,7 +500,8 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     }
 
     lowerLdSt(loc, ctx, cvt, vals, resElemTy, smemObj.getBase(), paddingShifts,
-              affineOffset, maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
+              affineOffset, triton::gpu::hasIntegerLinearSharedOffset(sharedTy),
+              maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
               /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
               vec, lowerInstForwardMulticastMask);
     return success();

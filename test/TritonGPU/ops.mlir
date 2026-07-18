@@ -129,6 +129,27 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 2 : i32, "ttg.num-w
 
 // -----
 
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#swizzled = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 16, order = [0, 1]}>
+#smem = #ttg.shared_memory
+module {
+  // CHECK-LABEL: @subslice_unaligned_contiguous
+  // CHECK: ttg.memdesc_subslice %{{.*}}[2, 0]
+  tt.func @subslice_unaligned_contiguous(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
+    %0 = ttg.memdesc_subslice %arg0 [2, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<4x16xf32, #shared, #smem, 8x16>
+    tt.return
+  }
+
+  // CHECK-LABEL: @subslice_zero_origin_through_swizzle
+  // CHECK: ttg.memdesc_subslice %{{.*}}[0, 0]
+  tt.func @subslice_zero_origin_through_swizzle(%arg0: !ttg.memdesc<8x16xf32, #swizzled, #smem>) {
+    %0 = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #swizzled, #smem> -> !ttg.memdesc<8x4xf32, #swizzled, #smem, 8x16>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "gfx950", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
@@ -212,6 +233,44 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
   // CHECK: ttg.memdesc_reinterpret
   tt.func @memdesc_reinterpret_smaller_smem(%arg0 : !ttg.memdesc<32x2xi32, #shared2d, #smem, mutable>) {
     %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<32x2xi32, #shared2d, #smem, mutable> -> !ttg.memdesc<32x2xi16, #shared2d, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: memdesc_reinterpret_geometric_multibuffer_within_copy
+  // CHECK: ttg.memdesc_reinterpret
+  tt.func @memdesc_reinterpret_geometric_multibuffer_within_copy(%arg0 : !ttg.memdesc<7x16x16xf16, #shared2d, #smem, mutable>) {
+    %sub = ttg.memdesc_subslice %arg0 [3, 8, 0] : !ttg.memdesc<7x16x16xf16, #shared2d, #smem, mutable> -> !ttg.memdesc<2x8x16xf16, #shared2d, #smem, mutable, 7x16x16>
+    %0 = ttg.memdesc_reinterpret %sub : !ttg.memdesc<2x8x16xf16, #shared2d, #smem, mutable, 7x16x16> -> !ttg.memdesc<8x16xf16, #shared2d, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#split_n = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
+#broadcast = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: memdesc_reinterpret_multicta_full_view
+  // CHECK: ttg.memdesc_reinterpret
+  tt.func @memdesc_reinterpret_multicta_full_view(%arg0 : !ttg.memdesc<8x16xf16, #split_n, #smem, mutable>) {
+    %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<8x16xf16, #split_n, #smem, mutable> -> !ttg.memdesc<8x16xi16, #split_n, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: memdesc_reinterpret_multicta_local_subview
+  // CHECK: ttg.memdesc_reinterpret
+  tt.func @memdesc_reinterpret_multicta_local_subview(%arg0 : !ttg.memdesc<8x16xf16, #split_n, #smem, mutable>) {
+    %sub = ttg.memdesc_subslice %arg0 [4, 0] : !ttg.memdesc<8x16xf16, #split_n, #smem, mutable> -> !ttg.memdesc<4x16xf16, #split_n, #smem, mutable, 8x16>
+    %0 = ttg.memdesc_reinterpret %sub : !ttg.memdesc<4x16xf16, #split_n, #smem, mutable, 8x16> -> !ttg.memdesc<4x16xi16, #split_n, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: memdesc_reinterpret_multicta_broadcast_subview
+  // CHECK: ttg.memdesc_reinterpret
+  tt.func @memdesc_reinterpret_multicta_broadcast_subview(%arg0 : !ttg.memdesc<8x16xf16, #broadcast, #smem, mutable>) {
+    %sub = ttg.memdesc_subslice %arg0 [4, 0] : !ttg.memdesc<8x16xf16, #broadcast, #smem, mutable> -> !ttg.memdesc<4x16xf16, #broadcast, #smem, mutable, 8x16>
+    %0 = ttg.memdesc_reinterpret %sub : !ttg.memdesc<4x16xf16, #broadcast, #smem, mutable, 8x16> -> !ttg.memdesc<4x16xi16, #broadcast, #smem, mutable>
     tt.return
   }
 }

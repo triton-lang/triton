@@ -2905,6 +2905,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #shared1 = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 1, order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 
@@ -2941,6 +2942,26 @@ tt.func private @memdesc_reinterpret_contiguous_smem_subview(%arg0: !ttg.memdesc
   // CHECK: [[DST2:%.*]] = llvm.insertvalue [[RESET]], [[DST1]][1]
   // CHECK: llvm.insertvalue [[RESET]], [[DST2]][2]
   %1 = ttg.memdesc_reinterpret %0 : !ttg.memdesc<8x16xf16, #shared0, #ttg.shared_memory, mutable, 16x16> -> !ttg.memdesc<8x8xf32, #shared0, #ttg.shared_memory, mutable>
+  tt.return
+}
+
+// CHECK-LABEL: @memdesc_reinterpret_multibuffer_subview
+tt.func private @memdesc_reinterpret_multibuffer_subview(%arg0: !ttg.memdesc<7x16x16xf16, #shared0, #ttg.shared_memory, mutable>) {
+  // CHECK: [[STAGE_OFFSET:%.*]] = llvm.mlir.constant(768 : i32)
+  // CHECK: [[SUB_BASE:%.*]] = llvm.getelementptr {{.*}}[[[STAGE_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
+  %0 = ttg.memdesc_subslice %arg0 [3, 0, 0] : !ttg.memdesc<7x16x16xf16, #shared0, #ttg.shared_memory, mutable> -> !ttg.memdesc<2x16x16xf16, #shared0, #ttg.shared_memory, mutable, 7x16x16>
+  // CHECK: [[DST0:%.*]] = llvm.mlir.undef
+  // CHECK: llvm.insertvalue [[SUB_BASE]], [[DST0]][0]
+  %1 = ttg.memdesc_reinterpret %0 : !ttg.memdesc<2x16x16xf16, #shared0, #ttg.shared_memory, mutable, 7x16x16> -> !ttg.memdesc<4x8x16xf16, #shared0, #ttg.shared_memory, mutable>
+  tt.return
+}
+
+// CHECK-LABEL: @local_load_unaligned_smem_subview
+tt.func private @local_load_unaligned_smem_subview(%arg0: !ttg.memdesc<8x32xf32, #shared0, #ttg.shared_memory, mutable>) {
+  %0 = ttg.memdesc_subslice %arg0 [2, 0] : !ttg.memdesc<8x32xf32, #shared0, #ttg.shared_memory, mutable> -> !ttg.memdesc<4x32xf32, #shared0, #ttg.shared_memory, mutable, 8x32>
+  // CHECK: [[AFFINE_BYTES:%.*]] = llvm.mul {{%.*}}, {{%.*}}
+  // CHECK: llvm.add {{%.*}}, [[AFFINE_BYTES]]
+  %1 = ttg.local_load %0 : !ttg.memdesc<4x32xf32, #shared0, #ttg.shared_memory, mutable, 8x32> -> tensor<4x32xf32, #blocked2>
   tt.return
 }
 
