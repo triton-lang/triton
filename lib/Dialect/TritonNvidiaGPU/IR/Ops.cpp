@@ -1543,54 +1543,61 @@ LogicalResult TMEMCopyOp::verify() {
 }
 
 // -- TMEMSubSliceOp --
-static bool isTranslatedTMemSubview(MemDescType srcTy, MemDescType dstTy,
-                                    int32_t offset, int32_t dim) {
-  // Subslice lowering only adjusts the base TMEM pointer. Prove that every
-  // point in the selected source region is the corresponding destination
-  // point plus one fixed physical offset.
+static bool hasLinearTMemSubviewMapping(MemDescType srcTy, MemDescType dstTy,
+                                       int32_t dim) {
   auto srcInv = toLinearLayout(srcTy).pseudoinvert();
   auto dstInv = toLinearLayout(dstTy).pseudoinvert();
   auto logicalDims = standardOutDimNames(srcTy.getContext(), 2);
 
-  auto apply = [&](const LinearLayout &layout, int32_t row, int32_t col) {
-    SmallVector<std::pair<StringAttr, int32_t>> logical = {
-        {logicalDims[0], row}, {logicalDims[1], col}};
-    return layout.apply(logical);
-  };
-
-  int32_t srcOrigin[2] = {0, 0};
-  srcOrigin[dim] = offset;
-  auto srcPhysicalOrigin = apply(srcInv, srcOrigin[0], srcOrigin[1]);
-  auto dstPhysicalOrigin = apply(dstInv, 0, 0);
-  if (!llvm::equal(llvm::make_first_range(srcPhysicalOrigin),
-                   llvm::make_first_range(dstPhysicalOrigin)))
+  // First prove that the result uses the source mapping restricted to the
+  // result shape.
+  auto restrictedSrcInv = srcInv;
+  for (auto [logicalDim, size] :
+       llvm::zip_equal(logicalDims, dstTy.getShape()))
+    restrictedSrcInv = restrictedSrcInv.resizeInDim(
+        logicalDim, static_cast<int32_t>(size));
+  if (!restrictedSrcInv.equalIgnoringOutDimSizes(dstInv))
     return false;
 
-  SmallVector<int32_t> physicalDeltas;
-  physicalDeltas.reserve(srcPhysicalOrigin.size());
+  // Subslice lowering adds one physical row/column offset to the TMEM pointer.
+  // This is valid when the sliced logical dimension is an integer-linear,
+  // power-of-two-strided mapping. Bits contributed by other logical dimensions
+  // must not overlap that mapping, so xor in LinearLayout is equivalent to
+  // integer addition in the pointer.
+  auto slicedDim = logicalDims[dim];
+  auto slicedBases = srcInv.getBases().lookup(slicedDim);
+  if (slicedBases.empty())
+    return false;
+  auto physicalDims = llvm::to_vector(srcInv.getOutDimNames());
   auto kBlock = StringAttr::get(srcTy.getContext(), "block");
-  for (auto [src, dst] :
-       llvm::zip_equal(srcPhysicalOrigin, dstPhysicalOrigin)) {
-    int32_t delta = src.second - dst.second;
-    // A TMEM pointer carries row and column offsets, but not a CTA offset.
-    if (src.first == kBlock && delta != 0)
+  for (auto [physicalIdx, physicalDim] :
+       llvm::enumerate(physicalDims)) {
+    uint64_t stride = slicedBases.front()[physicalIdx];
+    if (stride != 0 && !llvm::isPowerOf2_64(stride))
       return false;
-    physicalDeltas.push_back(delta);
-  }
 
-  auto dstShape = dstTy.getShape();
-  for (int32_t row = 0; row < dstShape[0]; ++row) {
-    for (int32_t col = 0; col < dstShape[1]; ++col) {
-      int32_t srcLogical[2] = {row, col};
-      srcLogical[dim] += offset;
-      auto srcPhysical = apply(srcInv, srcLogical[0], srcLogical[1]);
-      auto dstPhysical = apply(dstInv, row, col);
-      for (auto [src, dst, delta] :
-           llvm::zip_equal(srcPhysical, dstPhysical, physicalDeltas)) {
-        if (src.first != dst.first || src.second != dst.second + delta)
-          return false;
-      }
+    for (auto [bit, basis] : llvm::enumerate(slicedBases)) {
+      if (uint64_t(basis[physicalIdx]) != (stride << bit))
+        return false;
     }
+
+    if (stride == 0)
+      continue;
+    // A TMEM pointer carries row and column offsets, but not a CTA offset.
+    if (physicalDim == kBlock)
+      return false;
+
+    uint64_t slicedBits =
+        stride * (srcInv.getInDimSize(slicedDim) - 1);
+    uint64_t otherBits = 0;
+    for (auto otherDim : logicalDims) {
+      if (otherDim == slicedDim)
+        continue;
+      for (auto basis : srcInv.getBases().lookup(otherDim))
+        otherBits |= basis[physicalIdx];
+    }
+    if (slicedBits & otherBits)
+      return false;
   }
   return true;
 }
@@ -1629,7 +1636,7 @@ LogicalResult TMEMSubSliceOp::verify() {
   }
   bool isResultTileAligned = !(offset & (dstShape[dim] - 1));
   if (!isResultTileAligned &&
-      !isTranslatedTMemSubview(srcTy, dstTy, offset, dim)) {
+      !hasLinearTMemSubviewMapping(srcTy, dstTy, dim)) {
     return emitError("The split offset must align to the result tile or select "
                      "a contiguous source-layout subview");
   }
