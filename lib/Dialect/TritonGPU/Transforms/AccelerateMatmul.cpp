@@ -18,6 +18,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/DecomposeScaledBlocked.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -921,21 +922,32 @@ public:
     RankedTensorType oldScaleAType = dotOp.getAScale().getType();
     RankedTensorType oldScaleBType = dotOp.getBScale().getType();
 
-    Attribute scaleEncoding =
-        triton::nvidia_gpu::TensorMemoryScalesEncodingAttr::get(context,
-                                                                CGALayout);
+    auto aScaleBlockRepOrder =
+        triton::nvidia_gpu::getTensorMemoryScalesBlockRepOrder(
+            dotOp, /*isA=*/true, dotOp.getAElemType(), dotOp.getBElemType(),
+            oldScaleAType.getElementType(), oldScaleBType.getElementType());
+    auto bScaleBlockRepOrder =
+        triton::nvidia_gpu::getTensorMemoryScalesBlockRepOrder(
+            dotOp, /*isA=*/false, dotOp.getAElemType(), dotOp.getBElemType(),
+            oldScaleAType.getElementType(), oldScaleBType.getElementType());
+    Attribute scaleAEncoding =
+        triton::nvidia_gpu::TensorMemoryScalesEncodingAttr::get(
+            context, CGALayout, aScaleBlockRepOrder);
+    Attribute scaleBEncoding =
+        triton::nvidia_gpu::TensorMemoryScalesEncodingAttr::get(
+            context, CGALayout, bScaleBlockRepOrder);
     Value scaleA =
         tryCreateTmemCopyCompatibleScaleOperand(dotOp.getAScale(), rewriter);
     if (!scaleA) {
       scaleA =
-          createTmemScaleOperand(dotOp.getAScale(), scaleEncoding,
+          createTmemScaleOperand(dotOp.getAScale(), scaleAEncoding,
                                  tensorMemorySpace, numWarps, loc, rewriter);
     }
     Value scaleB =
         tryCreateTmemCopyCompatibleScaleOperand(dotOp.getBScale(), rewriter);
     if (!scaleB) {
       scaleB =
-          createTmemScaleOperand(dotOp.getBScale(), scaleEncoding,
+          createTmemScaleOperand(dotOp.getBScale(), scaleBEncoding,
                                  tensorMemorySpace, numWarps, loc, rewriter);
     }
 
