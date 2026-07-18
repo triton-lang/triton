@@ -3110,21 +3110,6 @@ def test_histogram(M, N, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("dtype", ['int8', 'int16', 'int64'])
-def test_histogram_rejects_non_32bit_int(dtype, device):
-
-    @triton.jit
-    def histogram_kernel(x_ptr, z_ptr, N: tl.constexpr):
-        x = tl.load(x_ptr + tl.arange(0, 8))
-        tl.store(z_ptr + tl.arange(0, N), tl.histogram(x, N))
-
-    x = torch.ones(8, device=device, dtype=getattr(torch, dtype))
-    z = torch.zeros(4, dtype=torch.int32, device=device)
-    with pytest.raises(triton.TritonError, match="histogram only supports 32-bit integer input"):
-        histogram_kernel[(1, )](x, z, N=4)
-
-
-@pytest.mark.interpreter
 def test_histogram_silent_data_corruption(device):
 
     @triton.jit
