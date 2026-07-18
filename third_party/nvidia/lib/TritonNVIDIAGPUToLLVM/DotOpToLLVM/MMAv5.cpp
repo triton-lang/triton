@@ -75,6 +75,7 @@ private:
 //===----------------------------------------------------------------------===//
 
 enum class mxfpKind { mxf8f6f4 = 0, mxf4 = 1, mxf4nvf4 = 2 };
+enum class scaleKind : uint32_t { ue4m3 = 0, e8m0 = 1, ue5m3 = 2 };
 
 bool isTransposed(Value operand) {
   auto tensorTy = cast<MemDescType>(operand.getType());
@@ -86,11 +87,36 @@ bool isTransposed(Value operand) {
   return attrs->transposed;
 }
 
+static int getScaleFactor(Type scaleType, int blockK) {
+  auto shapedType = cast<ShapedType>(scaleType);
+  int64_t scaleCols = shapedType.getShape().back();
+  assert(blockK % scaleCols == 0);
+  return blockK / scaleCols;
+}
+
+static int getScaleVecSize(ttng::TCGen5MMAScaledOp op) {
+  return getScaleFactor(op.getAScale().getType(), op.getBlockK());
+}
+
+static bool isBlock16Scale(Type scaleType, int blockK) {
+  auto shapedType = dyn_cast<ShapedType>(scaleType);
+  if (!shapedType || !shapedType.hasRank())
+    return false;
+  return shapedType.getShape().back() * 16 == blockK;
+}
+
 inline mxfpKind getMXFPKind(ScaleDotElemType typeA, ScaleDotElemType typeB,
-                            Type scaleAType, Type scaleBType, bool transpose) {
+                            Type scaleAType, Type scaleBType, int blockK,
+                            bool transpose) {
   if (typeA == ScaleDotElemType::E2M1 && typeB == ScaleDotElemType::E2M1) {
-    if (llvm::isa<Float8E4M3FNType>(scaleAType) &&
-        llvm::isa<Float8E4M3FNType>(scaleBType)) {
+    auto scaleAElemType = cast<ShapedType>(scaleAType).getElementType();
+    auto scaleBElemType = cast<ShapedType>(scaleBType).getElementType();
+    bool isUE4M3 = llvm::isa<Float8E4M3FNType>(scaleAElemType) &&
+                   llvm::isa<Float8E4M3FNType>(scaleBElemType);
+    bool isUE5M3 = scaleAElemType.isInteger(8) && scaleBElemType.isInteger(8) &&
+                   isBlock16Scale(scaleAType, blockK) &&
+                   isBlock16Scale(scaleBType, blockK);
+    if (isUE4M3 || isUE5M3) {
       assert(!transpose &&
              "MMAv5 with kind=mxf4nvf4 does not support transpose");
       return mxfpKind::mxf4nvf4;
@@ -100,6 +126,16 @@ inline mxfpKind getMXFPKind(ScaleDotElemType typeA, ScaleDotElemType typeB,
   }
   return mxfpKind::mxf8f6f4;
 };
+
+static scaleKind getScaleKind(ttng::TCGen5MMAScaledOp op, int blockK) {
+  Type scaleType = op.getAScale().getType();
+  Type elemType = cast<ShapedType>(scaleType).getElementType();
+  if (llvm::isa<Float8E4M3FNType>(elemType))
+    return scaleKind::ue4m3;
+  if (elemType.isInteger(8) && isBlock16Scale(scaleType, blockK))
+    return scaleKind::ue5m3;
+  return scaleKind::e8m0;
+}
 
 static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
                                   ttng::TCGen5MMAOp op, int M, int N,
@@ -277,10 +313,7 @@ static Value createScaleInstDescriptorFp4(
   desc.bType = 1;
   desc.AScaleFactor = scaleFactorsubIdxA;
   desc.BScaleFactor = scaleFactorsubIdxB;
-  desc.scaleType =
-      llvm::isa<Float8E4M3FNType>(op.getAScale().getType().getElementType())
-          ? 0
-          : 1;
+  desc.scaleType = static_cast<uint32_t>(getScaleKind(op, blockK));
 
   assert(kSize == 64 || kSize == 128);
   if (kSize == 128) {
@@ -293,7 +326,9 @@ static Value createScaleInstDescriptorFp4(
   assert(desc.transposeB == 0 &&
          "MMAv5 with kind=mxf4 does not support transpose");
 
-  if (mxfpInstKind == mxfpKind::mxf4) {
+  int scaleVecSize = getScaleVecSize(op);
+  if (mxfpInstKind == mxfpKind::mxf4 || (mxfpInstKind == mxfpKind::mxf4nvf4 &&
+                                         scaleVecSize == 32 && kSize == 64)) {
     desc.AScaleFactor *= 2;
     desc.BScaleFactor *= 2;
     assert(desc.AScaleFactor == 0 || desc.AScaleFactor == 2 &&
@@ -367,7 +402,8 @@ void createScaledGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
   } else if (mxfpInstKind == mxfpKind::mxf4) {
     opcode += "mxf4.block_scale.block32";
   } else if (mxfpInstKind == mxfpKind::mxf4nvf4) {
-    opcode += "mxf4nvf4.block_scale.block16";
+    opcode += getScaleVecSize(op) == 32 ? "mxf4nvf4.block_scale.block32"
+                                        : "mxf4nvf4.block_scale.block16";
   } else {
     assert(0 && "Unsupported mxfp kind.");
   }
@@ -740,7 +776,7 @@ int getScaleFactorColsPerSet(mxfpKind kind, ttng::TCGen5MMAScaledOp op,
   case mxfpKind::mxf4:
     return kSize == 64 ? 2 : 4;
   case mxfpKind::mxf4nvf4:
-    return 4;
+    return getScaleVecSize(op) == 32 && kSize == 64 ? 2 : 4;
   default:
     llvm_unreachable("Unsupported mxfp kind.");
   }
@@ -755,6 +791,16 @@ bool isFp4Padded(MemDescType operand) {
   return attrs->fp4Padded;
 }
 
+int linearizeScaleBlockIdx(Value scale, int mnIdx, int wordIdx, int numRepMn,
+                           int numRepKWords) {
+  auto enc = cast<ttng::TensorMemoryScalesEncodingAttr>(
+      cast<MemDescType>(scale.getType()).getEncoding());
+  return enc.getBlockRepOrder() ==
+                 ttng::TensorMemoryScalesBlockRepOrder::K_THEN_MN
+             ? (wordIdx + mnIdx * numRepKWords)
+             : (mnIdx + wordIdx * numRepMn);
+}
+
 LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
                                ConversionPatternRewriter &rewriter,
                                Location loc, ttng::TCGen5MMAScaledOp op,
@@ -765,10 +811,10 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   MemDescType dTensorTy = op.getD().getType();
   int blockK = op.getBlockK();
 
-  mxfpKind mxfpInstKind = getMXFPKind(
-      op.getAType(), op.getBType(), op.getAScale().getType().getElementType(),
-      op.getBScale().getType().getElementType(),
-      isTransposed(op.getA()) || !isTransposed(op.getB()));
+  mxfpKind mxfpInstKind =
+      getMXFPKind(op.getAType(), op.getBType(), op.getAScale().getType(),
+                  op.getBScale().getType(), blockK,
+                  isTransposed(op.getA()) || !isTransposed(op.getB()));
   bool opKindIsMXFP4 = mxfpInstKind != mxfpKind::mxf8f6f4;
 
   DotConversion dot;
@@ -798,14 +844,11 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   if (!targetFeatures.supports4xFp4Tcgen05MMA() || hasFp4PaddedOperand ||
       // M = 64 for 1CTA or 128 for 2CTA not supported for 2xfp8 / 4xfp4
       mmaSizeM == 64 ||
-      // There are several cases where we need to disable 4xNVFP4 on Rubin:
-      // * MMA_N < 128 requires a special unpacked layout for scales B in TMEM
+      // We need to disable MMA_K = 128 for NVFP4 on Rubin when MMA_N < 128,
+      // which requires a special unpacked layout for scales B in TMEM
       // (currently undocumented). tensorMemoryScalesToLinearLayout and lowering
       // of tcgen05.cp need to be updated for this.
-      // * When BLOCK_M = 256, tensorMemoryScalesToLinearLayout returns an
-      // incorrect layout for scale A.
-      (mxfpInstKind == mxfpKind::mxf4nvf4 &&
-       (mmaSizeN < 128 || dot.shape.M == 256))) {
+      (mxfpInstKind == mxfpKind::mxf4nvf4 && mmaSizeN < 128)) {
     dot.mmaSizeK = opKindIsMXFP4 ? 64 : 32;
   } else {
     dot.mmaSizeK = opKindIsMXFP4 ? std::min(blockK, 128) : std::min(blockK, 64);
@@ -840,21 +883,26 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
     auto [numRepM, numRepN, numRepK] = desc.repShape;
     int scaleFactorColsPerSet =
         getScaleFactorColsPerSet(mxfpInstKind, op, dot.mmaSizeK);
+    int numRepKWords = ceil<int>(numRepK, 4 / scaleFactorColsPerSet);
     int numColPerScaleBlockA = ceil<int>(
         ttng::getTmemAllocSizes(cast<MemDescType>(op.getAScale().getType()))
             .numCols,
-        numRepM * (ceil<int>(numRepK, 4 / scaleFactorColsPerSet)));
+        numRepM * numRepKWords);
     int numColPerScaleBlockB = ceil<int>(
         ttng::getTmemAllocSizes(cast<MemDescType>(op.getBScale().getType()))
             .numCols,
-        numRepN * (ceil<int>(numRepK, 4 / scaleFactorColsPerSet)));
+        numRepN * numRepKWords);
     numColPerScaleBlockB = std::max(numColPerScaleBlockB, 2);
     int subWordIdx = k % (4 / scaleFactorColsPerSet);
     int wordIdx = k / (4 / scaleFactorColsPerSet);
-    Value scaleA = tb.add(
-        baseScaleA, tb.i32_val((m + wordIdx * numRepM) * numColPerScaleBlockA));
-    Value scaleB = tb.add(
-        baseScaleB, tb.i32_val((n + wordIdx * numRepN) * numColPerScaleBlockB));
+    int scaleIdxA = linearizeScaleBlockIdx(op.getAScale(), m, wordIdx, numRepM,
+                                           numRepKWords);
+    int scaleIdxB = linearizeScaleBlockIdx(op.getBScale(), n, wordIdx, numRepN,
+                                           numRepKWords);
+    Value scaleA =
+        tb.add(baseScaleA, tb.i32_val(scaleIdxA * numColPerScaleBlockA));
+    Value scaleB =
+        tb.add(baseScaleB, tb.i32_val(scaleIdxB * numColPerScaleBlockB));
     Value instDescriptor;
     // For 2CTA mode, the M dimension in the instruction descriptor must be
     // doubled to match the hardware's expectation for cta_group::2 operations.

@@ -164,6 +164,41 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   }
 }
 
+#shared_cga = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @arrive_barrier_multicast_absent
+  tt.func @arrive_barrier_multicast_absent(%alloc: !ttg.memdesc<2xi64, #shared_cga, #ttg.shared_memory, mutable>) {
+    // CHECK: ttng.arrive_barrier %arg0, 1 :
+    // CHECK-NOT: ctaMask
+    ttng.arrive_barrier %alloc, 1 : !ttg.memdesc<2xi64, #shared_cga, #ttg.shared_memory, mutable>
+    tt.return
+  }
+
+  // Explicit ctaMask = 0 is valid and elides on print like the default.
+  // CHECK-LABEL: @arrive_barrier_multicast_zero
+  tt.func @arrive_barrier_multicast_zero(%alloc: !ttg.memdesc<2xi64, #shared_cga, #ttg.shared_memory, mutable>) {
+    // CHECK: ttng.arrive_barrier %arg0, 1 :
+    // CHECK-NOT: ctaMask
+    ttng.arrive_barrier %alloc, 1 {ctaMask = 0 : i32} : !ttg.memdesc<2xi64, #shared_cga, #ttg.shared_memory, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @arrive_barrier_multicast
+  tt.func @arrive_barrier_multicast(%alloc: !ttg.memdesc<2xi64, #shared_cga, #ttg.shared_memory, mutable>) {
+    // CHECK: ttng.arrive_barrier %arg0, 1 {ctaMask = 1 : i32} : !ttg.memdesc<2xi64,
+    ttng.arrive_barrier %alloc, 1 {ctaMask = 1 : i32} : !ttg.memdesc<2xi64, #shared_cga, #ttg.shared_memory, mutable>
+    tt.return
+  }
+
+  // Round-trip the optional-pred-then-attr-dict spelling.
+  // CHECK-LABEL: @arrive_barrier_multicast_pred
+  tt.func @arrive_barrier_multicast_pred(%alloc: !ttg.memdesc<2xi64, #shared_cga, #ttg.shared_memory, mutable>, %pred: i1) {
+    // CHECK: ttng.arrive_barrier %arg0, 1, %arg1 {ctaMask = 1 : i32} : !ttg.memdesc<2xi64,
+    ttng.arrive_barrier %alloc, 1, %pred {ctaMask = 1 : i32} : !ttg.memdesc<2xi64, #shared_cga, #ttg.shared_memory, mutable>
+    tt.return
+  }
+}
+
 // Tests for TMA im2col (3D/4D/5D) and tiled mode
 #nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared3 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
