@@ -314,7 +314,7 @@ tt.func public @memdesc_reinterpret_noncontiguous_subview(%arg0: !ttg.memdesc<8x
 #shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 tt.func public @memdesc_reinterpret_multibuffer_subview(%arg0: !ttg.memdesc<3x8x32xf16, #shared_a, #smem, 8x8x32>) {
-    // expected-error @+1 {{source and result must not be subviews}}
+    // expected-error @+1 {{result logical storage size must not exceed source logical storage size}}
     %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<3x8x32xf16, #shared_a, #smem, 8x8x32> -> !ttg.memdesc<16x8x16xf16, #shared_b, #smem>
     tt.return
 }

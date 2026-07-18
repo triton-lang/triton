@@ -770,19 +770,21 @@ LogicalResult MemDescReinterpretOp::verify() {
     return emitError("source and result must have the same memory space");
   if (srcTy.getMutableMemory() != dstTy.getMutableMemory())
     return emitError("source and result must have the same mutability");
-  auto isSubview = [](MemDescType ty) {
-    auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
-    return ty.getShape().take_back(rank) != ty.getAllocShape().take_back(rank);
+  auto hasLayoutSubview = [](MemDescType ty) {
+    auto encoding = ty.getEncoding();
+    return dropPipeliningDim(ty.getShape(), encoding) !=
+           dropPipeliningDim(ty.getAllocShape(), encoding);
   };
   assert((isa<SharedMemorySpaceAttr, nvidia_gpu::TensorMemorySpaceAttr>(
               srcTy.getMemorySpace()) &&
           "expected shared or tensor memory"));
 
-  if (isSubview(dstTy))
+  if (dstTy.getShape() != dstTy.getAllocShape())
     return emitError("result must not be a subview");
 
   auto srcLayout = getViewLayout(srcTy);
-  if (isSubview(srcTy) && !getLayoutWithinBlock(srcLayout).isInjective())
+  if (hasLayoutSubview(srcTy) &&
+      !getLayoutWithinBlock(srcLayout).isInjective())
     return emitError("source subview must be contiguous");
   auto dstLayout = getViewLayout(dstTy);
 
