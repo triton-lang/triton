@@ -140,6 +140,10 @@ def supports_block_scaling():
     return (is_cuda() and torch.cuda.get_device_capability()[0] in [10, 11]) or is_hip_cdna4()
 
 
+def is_rubin():
+    return torch.cuda.get_device_capability() == (10, 7)
+
+
 if is_cuda() and torch.cuda.get_device_capability()[0] in [10, 11]:
     from triton._C.libtriton import nvidia
     cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
@@ -188,6 +192,7 @@ def block_scaled_matmul_kernel(  #
         rep_n: tl.constexpr,  #
         rep_k: tl.constexpr,  #
         NUM_STAGES: tl.constexpr,  #
+        disallow_acc_multi_buffer: tl.constexpr,  #
 ):  #
     if output_type == 0:
         output_dtype = tl.float32
@@ -211,7 +216,8 @@ def block_scaled_matmul_kernel(  #
     MIXED_PREC: tl.constexpr = ELEM_PER_BYTE_A == 1 and ELEM_PER_BYTE_B == 2
 
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-    for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
+    for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES,
+                      disallow_acc_multi_buffer=disallow_acc_multi_buffer):
         a = a_desc.load([offs_am, offs_k_a])
         b = b_desc.load([offs_bn, offs_k_b])
         scale_a = a_scale_desc.load([0, offs_scale_m, offs_scale_k, 0, 0])
@@ -270,6 +276,7 @@ def block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, dtype_dst, M
         rep_n,
         rep_k,
         configs["num_stages"],
+        disallow_acc_multi_buffer=configs["disallow_acc_multi_buffer"],
     )
     return output
 
@@ -410,14 +417,20 @@ def initialize_block_scaled(M, N, K, block_scale_type="nvfp4", compute_reference
         b_scale_ref = unpack_scale(b_scale_ref).repeat_interleave(VEC_SIZE, dim=1).T.contiguous()[:K, :N]
         reference = torch.matmul(a_ref.to(torch.float32) * a_scale_ref, b_ref * b_scale_ref)
 
+    if is_rubin():
+        num_stages = 6
+    else:
+        num_stages = 4
+
     configs = {
         "BLOCK_SIZE_M": BLOCK_M,
         "BLOCK_SIZE_N": BLOCK_N,
         "BLOCK_SIZE_K": BLOCK_K,
-        "num_stages": 4,
+        "num_stages": num_stages,
         "ELEM_PER_BYTE_A": ELEM_PER_BYTE_A,
         "ELEM_PER_BYTE_B": ELEM_PER_BYTE_B,
         "VEC_SIZE": VEC_SIZE,
+        "disallow_acc_multi_buffer": not is_rubin(),
     }
 
     # Flatten scales for cuBLAS

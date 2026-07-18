@@ -261,6 +261,10 @@ the 2D layout [1] expected by tl.dot_scaled.</p>
     <span class="k">return</span> <span class="p">(</span><span class="n">is_cuda</span><span class="p">()</span> <span class="ow">and</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">10</span><span class="p">,</span> <span class="mi">11</span><span class="p">])</span> <span class="ow">or</span> <span class="n">is_hip_cdna4</span><span class="p">()</span>
 
 
+<span class="k">def</span><span class="w"> </span><span class="nf">is_rubin</span><span class="p">():</span>
+    <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()</span> <span class="o">==</span> <span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">7</span><span class="p">)</span>
+
+
 <span class="k">if</span> <span class="n">is_cuda</span><span class="p">()</span> <span class="ow">and</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">10</span><span class="p">,</span> <span class="mi">11</span><span class="p">]:</span>
     <span class="kn">from</span><span class="w"> </span><span class="nn">triton._C.libtriton</span><span class="w"> </span><span class="kn">import</span> <span class="n">nvidia</span>
     <span class="n">cublas_workspace</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="mi">32</span> <span class="o">*</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span>
@@ -309,6 +313,7 @@ the 2D layout [1] expected by tl.dot_scaled.</p>
         <span class="n">rep_n</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
         <span class="n">rep_k</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
         <span class="n">NUM_STAGES</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">disallow_acc_multi_buffer</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
 <span class="p">):</span>  <span class="c1">#</span>
     <span class="k">if</span> <span class="n">output_type</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
         <span class="n">output_dtype</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">float32</span>
@@ -332,7 +337,8 @@ the 2D layout [1] expected by tl.dot_scaled.</p>
     <span class="n">MIXED_PREC</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">ELEM_PER_BYTE_A</span> <span class="o">==</span> <span class="mi">1</span> <span class="ow">and</span> <span class="n">ELEM_PER_BYTE_B</span> <span class="o">==</span> <span class="mi">2</span>
 
     <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-    <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">tl</span><span class="o">.</span><span class="n">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">),</span> <span class="n">num_stages</span><span class="o">=</span><span class="n">NUM_STAGES</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">tl</span><span class="o">.</span><span class="n">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">),</span> <span class="n">num_stages</span><span class="o">=</span><span class="n">NUM_STAGES</span><span class="p">,</span>
+                      <span class="n">disallow_acc_multi_buffer</span><span class="o">=</span><span class="n">disallow_acc_multi_buffer</span><span class="p">):</span>
         <span class="n">a</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">load</span><span class="p">([</span><span class="n">offs_am</span><span class="p">,</span> <span class="n">offs_k_a</span><span class="p">])</span>
         <span class="n">b</span> <span class="o">=</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">load</span><span class="p">([</span><span class="n">offs_bn</span><span class="p">,</span> <span class="n">offs_k_b</span><span class="p">])</span>
         <span class="n">scale_a</span> <span class="o">=</span> <span class="n">a_scale_desc</span><span class="o">.</span><span class="n">load</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="n">offs_scale_m</span><span class="p">,</span> <span class="n">offs_scale_k</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span>
@@ -391,6 +397,7 @@ the 2D layout [1] expected by tl.dot_scaled.</p>
         <span class="n">rep_n</span><span class="p">,</span>
         <span class="n">rep_k</span><span class="p">,</span>
         <span class="n">configs</span><span class="p">[</span><span class="s2">&quot;num_stages&quot;</span><span class="p">],</span>
+        <span class="n">disallow_acc_multi_buffer</span><span class="o">=</span><span class="n">configs</span><span class="p">[</span><span class="s2">&quot;disallow_acc_multi_buffer&quot;</span><span class="p">],</span>
     <span class="p">)</span>
     <span class="k">return</span> <span class="n">output</span>
 
@@ -531,14 +538,20 @@ the 2D layout [1] expected by tl.dot_scaled.</p>
         <span class="n">b_scale_ref</span> <span class="o">=</span> <span class="n">unpack_scale</span><span class="p">(</span><span class="n">b_scale_ref</span><span class="p">)</span><span class="o">.</span><span class="n">repeat_interleave</span><span class="p">(</span><span class="n">VEC_SIZE</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()[:</span><span class="n">K</span><span class="p">,</span> <span class="p">:</span><span class="n">N</span><span class="p">]</span>
         <span class="n">reference</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">a_ref</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span> <span class="o">*</span> <span class="n">a_scale_ref</span><span class="p">,</span> <span class="n">b_ref</span> <span class="o">*</span> <span class="n">b_scale_ref</span><span class="p">)</span>
 
+    <span class="k">if</span> <span class="n">is_rubin</span><span class="p">():</span>
+        <span class="n">num_stages</span> <span class="o">=</span> <span class="mi">6</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">num_stages</span> <span class="o">=</span> <span class="mi">4</span>
+
     <span class="n">configs</span> <span class="o">=</span> <span class="p">{</span>
         <span class="s2">&quot;BLOCK_SIZE_M&quot;</span><span class="p">:</span> <span class="n">BLOCK_M</span><span class="p">,</span>
         <span class="s2">&quot;BLOCK_SIZE_N&quot;</span><span class="p">:</span> <span class="n">BLOCK_N</span><span class="p">,</span>
         <span class="s2">&quot;BLOCK_SIZE_K&quot;</span><span class="p">:</span> <span class="n">BLOCK_K</span><span class="p">,</span>
-        <span class="s2">&quot;num_stages&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
+        <span class="s2">&quot;num_stages&quot;</span><span class="p">:</span> <span class="n">num_stages</span><span class="p">,</span>
         <span class="s2">&quot;ELEM_PER_BYTE_A&quot;</span><span class="p">:</span> <span class="n">ELEM_PER_BYTE_A</span><span class="p">,</span>
         <span class="s2">&quot;ELEM_PER_BYTE_B&quot;</span><span class="p">:</span> <span class="n">ELEM_PER_BYTE_B</span><span class="p">,</span>
         <span class="s2">&quot;VEC_SIZE&quot;</span><span class="p">:</span> <span class="n">VEC_SIZE</span><span class="p">,</span>
+        <span class="s2">&quot;disallow_acc_multi_buffer&quot;</span><span class="p">:</span> <span class="ow">not</span> <span class="n">is_rubin</span><span class="p">(),</span>
     <span class="p">}</span>
 
     <span class="c1"># Flatten scales for cuBLAS</span>
@@ -876,7 +889,7 @@ the 2D layout [1] expected by tl.dot_scaled.</p>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>⛔ This example requires GPU support for block scaled matmul
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.022 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.023 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-10-block-scaled-matmul-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/336ead1bb945ae9dc42eab20e58658f6/10-block-scaled-matmul.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">10-block-scaled-matmul.ipynb</span></code></a></p>
