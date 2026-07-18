@@ -1484,8 +1484,7 @@ bool isTranslatedLinearLayoutSubview(const LinearLayout &srcLayout,
     if (!getIntegerStrides(srcFull, physicalDim, unalignedDims))
       return false;
     unsigned physicalIdx = srcFull.getOutDimIndex(physicalDim);
-    uint32_t alignedVariableMask =
-        getBasisMask(dst, alignedDims, physicalDim);
+    uint32_t alignedVariableMask = getBasisMask(dst, alignedDims, physicalDim);
     if (uint32_t(alignedOrigin[physicalIdx].second) & alignedVariableMask)
       return false;
   }
@@ -1507,8 +1506,7 @@ uint32_t getLinearLayoutSubviewOriginMask(const LinearLayout &layout,
     assert(viewSize <= allocSize);
     // [0, maxOrigin] exercises exactly the input bits below the smallest
     // power-of-two span containing that interval.
-    uint64_t originSpan =
-        llvm::bit_ceil(uint64_t(allocSize - viewSize) + 1);
+    uint64_t originSpan = llvm::bit_ceil(uint64_t(allocSize - viewSize) + 1);
     assert(originSpan <= uint64_t(inverse.getInDimSize(dim)));
     inverse = inverse.resizeInDim(dim, int32_t(originSpan));
   }

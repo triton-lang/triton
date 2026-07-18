@@ -177,17 +177,16 @@ TEST_F(LinearLayoutConversionsTest, SubviewOriginMaskIncludesLowBits) {
   auto kOffset = S("offset");
   auto kBlock = S("block");
   auto kDim = S("dim0");
-  LinearLayout layout(
-      {{kOffset, {{1}, {4}}}, {kBlock, {{2}}}}, {kDim});
+  LinearLayout layout({{kOffset, {{1}, {4}}}, {kBlock, {{2}}}}, {kDim});
 
-  EXPECT_EQ(getLinearLayoutSubviewOriginMask(
-                layout, /*shape=*/{4}, /*allocShape=*/{8}, kOffset),
+  EXPECT_EQ(getLinearLayoutSubviewOriginMask(layout, /*shape=*/{4},
+                                             /*allocShape=*/{8}, kOffset),
             0b11);
-  EXPECT_EQ(getLinearLayoutSubviewOriginMask(
-                layout, /*shape=*/{4}, /*allocShape=*/{8}, kBlock),
+  EXPECT_EQ(getLinearLayoutSubviewOriginMask(layout, /*shape=*/{4},
+                                             /*allocShape=*/{8}, kBlock),
             0b1);
-  EXPECT_EQ(getLinearLayoutSubviewOriginMask(
-                layout, /*shape=*/{8}, /*allocShape=*/{8}, kBlock),
+  EXPECT_EQ(getLinearLayoutSubviewOriginMask(layout, /*shape=*/{8},
+                                             /*allocShape=*/{8}, kBlock),
             0);
 }
 

@@ -1411,10 +1411,10 @@ std::pair<uint64_t, uint64_t> SharedMemoryObject::getMaskSpanOffsetsAndBlocks(
           : triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding());
   auto kOffset = StringAttr::get(ctx, "offset");
   auto kBlock = StringAttr::get(ctx, "block");
-  return {triton::gpu::getLinearLayoutSubviewOriginMask(
-              totalLl, shape, allocShape, kOffset),
-          triton::gpu::getLinearLayoutSubviewOriginMask(
-              totalLl, shape, allocShape, kBlock)};
+  return {triton::gpu::getLinearLayoutSubviewOriginMask(totalLl, shape,
+                                                        allocShape, kOffset),
+          triton::gpu::getLinearLayoutSubviewOriginMask(totalLl, shape,
+                                                        allocShape, kBlock)};
 }
 
 uint64_t

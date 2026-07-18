@@ -658,9 +658,8 @@ namespace {
 LinearLayout getAllocationLayout(MemDescType type) {
   auto encoding = type.getEncoding();
   auto allocShape = dropPipeliningDim(type.getAllocShape(), encoding);
-  return isPaddedEncoding(encoding)
-             ? paddedLinearLayout(allocShape, encoding)
-             : toLinearLayout(allocShape, encoding);
+  return isPaddedEncoding(encoding) ? paddedLinearLayout(allocShape, encoding)
+                                    : toLinearLayout(allocShape, encoding);
 }
 
 LinearLayout getViewLayout(MemDescType type) {
@@ -696,20 +695,17 @@ int64_t getNumLayoutCopies(MemDescType type) {
   return copies;
 }
 
-int64_t getPerCopyNumBits(MemDescType type,
-                          const LinearLayout &layout) {
+int64_t getPerCopyNumBits(MemDescType type, const LinearLayout &layout) {
   auto *ctx = type.getContext();
   bool isSharedMemory = isa<SharedMemorySpaceAttr>(type.getMemorySpace());
   auto dim = StringAttr::get(ctx, isSharedMemory ? "offset" : "col");
-  return int64_t(layout.getInDimSize(dim)) *
-         type.getElementTypeBitWidth();
+  return int64_t(layout.getInDimSize(dim)) * type.getElementTypeBitWidth();
 }
 
 int64_t getContiguousViewNumBits(MemDescType type,
                                  const LinearLayout &viewLayout) {
   int64_t viewBits = getPerCopyNumBits(type, viewLayout);
-  int64_t copyStrideBits =
-      getPerCopyNumBits(type, getAllocationLayout(type));
+  int64_t copyStrideBits = getPerCopyNumBits(type, getAllocationLayout(type));
   assert(viewBits <= copyStrideBits);
   return viewBits == copyStrideBits ? getNumLayoutCopies(type) * viewBits
                                     : viewBits;
@@ -720,8 +716,7 @@ LinearLayout getBlockImage(const LinearLayout &layout) {
   assert(!layout.getInDimNames().empty());
   auto *ctx = layout.getInDimNames().begin()->getContext();
   auto kBlock = StringAttr::get(ctx, "block");
-  return inverse.sublayout(llvm::to_vector(inverse.getInDimNames()),
-                           {kBlock});
+  return inverse.sublayout(llvm::to_vector(inverse.getInDimNames()), {kBlock});
 }
 
 } // namespace
@@ -783,8 +778,7 @@ LogicalResult MemDescReinterpretOp::verify() {
     return emitError("result must not be a subview");
 
   auto srcLayout = getViewLayout(srcTy);
-  if (hasLayoutSubview(srcTy) &&
-      !getLayoutWithinBlock(srcLayout).isInjective())
+  if (hasLayoutSubview(srcTy) && !getLayoutWithinBlock(srcLayout).isInjective())
     return emitError("source subview must be contiguous");
   auto dstLayout = getViewLayout(dstTy);
 
@@ -792,8 +786,8 @@ LogicalResult MemDescReinterpretOp::verify() {
   if (isa<SharedMemorySpaceAttr>(srcTy.getMemorySpace())) {
     auto layoutShape = dropPipeliningDim(srcTy.getShape(), srcEnc);
     auto allocShape = dropPipeliningDim(srcTy.getAllocShape(), srcEnc);
-    if (getLinearLayoutSubviewOriginMask(
-            getAllocationLayout(srcTy), layoutShape, allocShape, kBlock))
+    if (getLinearLayoutSubviewOriginMask(getAllocationLayout(srcTy),
+                                         layoutShape, allocShape, kBlock))
       return emitError(
           "cannot reinterpret a source subview with a possible cross-CTA "
           "origin");
