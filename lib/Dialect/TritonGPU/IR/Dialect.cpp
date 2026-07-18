@@ -2854,18 +2854,11 @@ SmallVector<unsigned> DotOperandEncodingAttr::getRepOrder() const {
 
 CGAEncodingAttr DotOperandEncodingAttr::getCGALayout() const {
   const auto &layout = ::getCGALayout(getParent()).getLinearLayout();
-  auto bases = layout.getBases();
-  auto kBlock = StringAttr::get(getContext(), "block");
-  auto &blockBases = bases[kBlock];
   auto rank = layout.getNumOutDims();
   auto kDim = getOpIdx() == 0 ? rank - 1 : rank - 2;
-  for (auto &basis : blockBases) {
-    basis[kDim] = 0;
-  }
   auto dims = layout.getOutDims();
-  dims[kDim].second = 1;
-  return CGAEncodingAttr::get(getContext(),
-                              LinearLayout(std::move(bases), dims, true));
+  return CGAEncodingAttr::get(
+      getContext(), layout.resizeOutDim(dims[kDim].first, 1));
 }
 LogicalResult DotOperandEncodingAttr::verify(
     function_ref<::mlir::InFlightDiagnostic()> emitError, unsigned opIdx,

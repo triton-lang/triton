@@ -275,6 +275,8 @@ ColumnAction ReduceOpHelper::moveAxisBasesToFront(const LinearLayout &layout,
   const auto &bases = layout.getBases().lookup(kReg);
   if (bases.empty())
     return ColumnAction::identity(kReg, bases.size());
+  auto outDims = llvm::to_vector(layout.getOutDimNames());
+  uint64_t axisBases = getInputBasisMask(layout, kReg, {outDims[axis]});
 
   // We keep the first basis where it is if it's vectorized to pack it without
   // PRMT/MOV, and then we move the rest of the bases that don't move the axis
@@ -284,7 +286,7 @@ ColumnAction ReduceOpHelper::moveAxisBasesToFront(const LinearLayout &layout,
     perm.push_back(0);
   SmallVector<size_t> back;
   for (size_t i = isVectorized ? 1 : 0; i < bases.size(); ++i) {
-    if (bases[i][axis] != 0)
+    if (axisBases & (uint64_t{1} << i))
       perm.push_back(i);
     else
       back.push_back(i);
@@ -334,22 +336,24 @@ LinearLayout ReduceOpHelper::getInterLayout(const LinearLayout &layout,
   auto &laneBases = bases[kLane];
   auto &warpBases = bases[kWarp];
   auto &blockBases = bases[kBlock];
-
-  auto collectAxisBases = [&](ArrayRef<std::vector<int32_t>> bases) {
+  auto outDims = llvm::to_vector(layout.getOutDimNames());
+  auto collectAxisBases = [&](StringAttr inDim) {
+    uint64_t mask = getInputBasisMask(layout, inDim, {outDims[axis]});
     SmallVector<unsigned> out;
-    for (unsigned i = 0; i < bases.size(); ++i) {
-      if (bases[i][axis] != 0)
+    for (unsigned i = 0; i < layout.getInDimSizeLog2(inDim); ++i) {
+      if (mask & (uint64_t{1} << i))
         out.push_back(i);
     }
     return out;
   };
 
-  SmallVector<unsigned> warpAxisBases = collectAxisBases(warpBases);
-  SmallVector<unsigned> blockAxisBases = collectAxisBases(blockBases);
+  SmallVector<unsigned> warpAxisBases = collectAxisBases(kWarp);
+  SmallVector<unsigned> blockAxisBases = collectAxisBases(kBlock);
 
+  uint64_t nonZeroLaneBases = getInputBasisMask(layout, kLane, outDims);
   SmallVector<unsigned> zeroLaneBases;
   for (unsigned i = 0; i < laneBases.size(); ++i) {
-    if (llvm::all_of(laneBases[i], [](int32_t v) { return v == 0; }))
+    if (!(nonZeroLaneBases & (uint64_t{1} << i)))
       zeroLaneBases.push_back(i);
   }
 
@@ -629,26 +633,10 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   auto outDimNames = llvm::to_vector(srcLayout.getOutDimNames());
   auto S = srcLayout.sublayout(inDimNames, outDimNames);
   auto T = dstLayout.sublayout(inDimNames, outDimNames);
-  // Conditionally pad.
-  if (nSrcRegBases != nDstRegBases || nSrcLaneBases != nDstLaneBases) {
-    auto padWithZeros = [&](const LinearLayout &ll) {
-      auto newBases = ll.getBases();
-      auto padDim = [&](StringAttr dim, int dimSize) {
-        auto &dimBases = newBases[dim];
-        dimBases.reserve(dimSize);
-        for (int i = ll.getInDimSizeLog2(dim); i < dimSize; ++i)
-          dimBases.emplace_back(outDimNames.size(), 0);
-      };
-      padDim(kReg, nRegBases);
-      padDim(kLane, nLaneBases);
-      // Surjectivity is not expected in general since we do not consider
-      // the 'warp' and 'block' dimensions of the original layouts.
-      return LinearLayout(std::move(newBases), ll.getOutDims(),
-                          /*requireSurjective=*/false);
-    };
-    S = padWithZeros(S);
-    T = padWithZeros(T);
-  }
+  S = S.resizeInDim(kReg, 1 << nRegBases)
+          .resizeInDim(kLane, 1 << nLaneBases);
+  T = T.resizeInDim(kReg, 1 << nRegBases)
+          .resizeInDim(kLane, 1 << nLaneBases);
 
   // We compute T^transpose \circ S, which serves as a skeleton for `P`, then
   // fill in zero columns, prioritizing producing fixed points. As we only need
@@ -1052,13 +1040,10 @@ unsigned ScanLoweringHelper::getAxisThreadStride() {
   auto encoding = getEncoding();
   auto ll = encoding.getLinearLayout();
   auto kThread = StringAttr::get(encoding.getContext(), "lane");
-  const auto &bases = ll.getBases().lookup(kThread);
-  unsigned axis = getAxis();
-  for (unsigned i = 0; i < bases.size(); ++i) {
-    if (bases[i][axis] != 0)
-      return 1 << i;
-  }
-  return 1;
+  auto outDims = llvm::to_vector(ll.getOutDimNames());
+  uint64_t bases =
+      getInputBasisMask(ll, kThread, {outDims[getAxis()]});
+  return bases ? uint64_t{1} << llvm::countr_zero(bases) : 1;
 }
 
 unsigned ScanLoweringHelper::getAxisBlockStride() {

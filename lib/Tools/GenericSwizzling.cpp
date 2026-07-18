@@ -1,6 +1,6 @@
 #include "triton/Tools/GenericSwizzling.h"
 
-#include "third_party/f2reduce/f2reduce.h"
+#include "GF2LinearAlgebra.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "llvm/ADT/DenseSet.h"
@@ -11,18 +11,6 @@
 
 #define DEBUG_TYPE "generic-swizzling"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
-
-#if defined(_MSC_VER) && !defined(__clang__)
-// from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
-#include <intrin.h>
-
-static int __builtin_ctzll(unsigned long long x) {
-  unsigned long r;
-  _BitScanForward64(&r, x);
-  return static_cast<int>(r);
-}
-
-#endif
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -67,33 +55,15 @@ std::vector<std::vector<int32_t>> unflatten(ArrayRef<int32_t> basis) {
 
 // Compute the nullspace basis of `vectors`
 SmallVector<int32_t> nullspaceBasis(ArrayRef<int32_t> vectors, int32_t dim) {
-  // Solve A^T x = 0, where A is the matrix of vectors
-  // To do this, we form a matrix where each vector is a row
-  const int32_t nRows = vectors.size();
-  auto mat = std::make_unique<uint64_t[]>(nRows);
-  for (int i = 0; i < nRows; ++i)
-    mat[i] = static_cast<uint64_t>(vectors[i]);
-  f2reduce::inplace_rref_strided(mat.get(), /*rows=*/nRows, /*cols=*/dim,
-                                 /*stride=*/1);
+  mlir::triton::detail::GF2Matrix matrix(vectors.size(), dim);
+  for (auto [row, vector] : llvm::enumerate(vectors))
+    matrix.setRow64(row, uint32_t(vector));
 
-  llvm::SmallDenseSet<int32_t> pivotCols;
-  for (int32_t r = 0; r < nRows; ++r)
-    if (mat[r])
-      pivotCols.insert(__builtin_ctzll(mat[r]));
-
-  SmallVector<int32_t> basis;
-  for (int32_t freeCol = 0; freeCol < dim; ++freeCol) {
-    if (!pivotCols.contains(freeCol)) {
-      uint64_t vec = 1ull << freeCol;
-      for (int32_t r = 0; r < nRows; ++r)
-        if (mat[r] & (1ull << freeCol)) {
-          const int32_t pivot = __builtin_ctzll(mat[r]);
-          vec ^= (1ull << pivot);
-        }
-      basis.push_back(static_cast<int32_t>(vec));
-    }
-  }
-  return basis;
+  auto nullspace = matrix.nullspace();
+  SmallVector<int32_t> result;
+  for (unsigned row = 0; row < nullspace.getNumRows(); ++row)
+    result.push_back(nullspace.getRow64(row));
+  return result;
 }
 
 // Find the smallest tile that we can read and write to smem
@@ -194,27 +164,15 @@ SmallVector<int32_t> computeSegment(ArrayRef<int32_t> bankSrc,
 }
 
 SmallVector<int32_t> complementBasis(ArrayRef<int32_t> basis, int32_t dim) {
-  const int32_t nRows = basis.size();
-  auto mat = std::make_unique<uint64_t[]>(nRows);
-  for (int r = 0; r < nRows; ++r)
-    mat[r] = static_cast<uint64_t>(basis[r]);
+  mlir::triton::detail::GF2Matrix matrix(basis.size(), dim);
+  for (auto [row, vector] : llvm::enumerate(basis))
+    matrix.setRow64(row, uint32_t(vector));
 
-  f2reduce::inplace_rref_strided(mat.get(), /*rows=*/nRows,
-                                 /*cols=*/dim, /*stride=*/1);
-
-  llvm::SmallDenseSet<int32_t> pivotCols;
-  for (int r = 0; r < nRows; ++r) {
-    if (mat[r]) {
-      pivotCols.insert(__builtin_ctzll(mat[r])); // leading-1 position
-    }
-  }
-
-  SmallVector<int32_t> comp;
-  for (int i = 0; i < dim; ++i)
-    if (!pivotCols.contains(i))
-      comp.push_back(1 << i);
-
-  return comp;
+  auto complement = matrix.coordinateComplement();
+  SmallVector<int32_t> result;
+  for (unsigned row = 0; row < complement.getNumRows(); ++row)
+    result.push_back(complement.getRow64(row));
+  return result;
 }
 
 SmallVector<int32_t> intersectionBasis(ArrayRef<int32_t> b1,
@@ -437,9 +395,10 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   auto kReg = StringAttr::get(ctx, "register");
 
   auto regsNotZero = [kReg](const LinearLayout &ll) {
-    return llvm::all_of(
-        ll.getBases().lookup(kReg),
-        [](const std::vector<int32_t> &basis) { return basis[0] != 0; });
+    auto outDims = llvm::to_vector(ll.getOutDimNames());
+    unsigned regBits = ll.getInDimSizeLog2(kReg);
+    return getInputBasisMask(ll, kReg, outDims) ==
+           llvm::maskTrailingOnes<uint64_t>(regBits);
   };
   assert(
       regsNotZero(src) &&
