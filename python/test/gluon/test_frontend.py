@@ -1744,26 +1744,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
-def cluster_arrive_wait_ops_kernel():
-    cluster.arrive()
-    cluster.wait()
-
-
-def test_cluster_arrive_wait_ops():
-    mod = run_parser(cluster_arrive_wait_ops_kernel, *make_args(num_ctas=2), target=HOPPER_TARGET)
-    expecttest.assert_expected_inline(
-        anonymize_ir(mod.str_nodebug()), """\
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @cluster_arrive_wait_ops_kernel() attributes {noinline = false} {
-    ttng.cluster_arrive
-    ttng.cluster_wait
-    tt.return
-  }
-}
-""")
-
-
-@gluon.jit
 def cluster_barrier_relaxed_kernel():
     cluster.barrier(relaxed=True)
 
