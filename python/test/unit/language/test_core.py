@@ -1063,7 +1063,7 @@ def test_math_erf_op(dtype, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("dtype", [dtype for dtype in ["float32", "float64"]])
+@pytest.mark.parametrize("dtype", [dtype for dtype in ["float32", "float64", "bfloat16"]])
 def test_math_fma_op(dtype, device):
     check_type_supported(dtype, device)
     SIZE = 128
@@ -1077,7 +1077,7 @@ def test_math_fma_op(dtype, device):
         z = tl.math.fma(x, y, w)
         tl.store(Z + off, z)
 
-    torch_dtype = torch.float32 if dtype == "float32" else torch.float64
+    torch_dtype = getattr(torch, dtype)
     x = torch.randn(SIZE, dtype=torch_dtype, device=device)
     y = torch.randn(SIZE, dtype=torch_dtype, device=device)
     w = torch.randn(SIZE, dtype=torch_dtype, device=device)
@@ -1085,6 +1085,38 @@ def test_math_fma_op(dtype, device):
     z_tri = torch.zeros_like(x)
     kernel[(1, )](z_tri, x, y, w, SIZE=SIZE, num_warps=4)
     torch.testing.assert_close(z_tri, z_ref)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("op", ['+', '-', '*', '/', '<', 'neg'])
+def test_bfloat16_binop(op, device):
+    # bf16 arithmetic/comparison must run on the value, not its uint16 storage.
+    @triton.jit
+    def kernel(X, Y, Z, OP: tl.constexpr):
+        i = tl.arange(0, 4)
+        x = tl.load(X + i)
+        y = tl.load(Y + i)
+        if OP == 0:
+            z = x + y
+        elif OP == 1:
+            z = x - y
+        elif OP == 2:
+            z = x * y
+        elif OP == 3:
+            z = x / y
+        elif OP == 4:
+            z = (x < y).to(tl.int8)
+        else:
+            z = -x
+        tl.store(Z + i, z)
+
+    x = torch.tensor([2.5, -5.0, 3.0, 0.5], dtype=torch.bfloat16, device=device)
+    y = torch.tensor([2.0, 3.0, 3.0, 2.0], dtype=torch.bfloat16, device=device)
+    out_int = op == '<'
+    z = torch.empty(4, dtype=torch.int8 if out_int else torch.bfloat16, device=device)
+    kernel[(1, )](x, y, z, {'+': 0, '-': 1, '*': 2, '/': 3, '<': 4, 'neg': 5}[op])
+    ref = {'+': x + y, '-': x - y, '*': x * y, '/': x / y, '<': (x < y).to(torch.int8), 'neg': -x}[op]
+    assert (z == ref).all(), f"{op}: got {z.tolist()}, expected {ref.tolist()}"
 
 
 @pytest.mark.interpreter

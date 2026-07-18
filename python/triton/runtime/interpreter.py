@@ -564,6 +564,11 @@ class InterpreterBuilder:
             # other integer type. Compute in a wider integer domain and
             # truncate back to one bit to match the GPU backend (issue #10919).
             output = (op(lhs.data.astype(np.int8), rhs.data.astype(np.int8)) & 1).astype(np.bool_)
+        elif tl_dtype == tl.bfloat16:
+            # bf16 is stored as uint16 bits; compute in float32 like the GPU.
+            output = op(self._bf16_to_f32(lhs.data), self._bf16_to_f32(rhs.data))
+            if output.dtype != np.bool_:
+                output = self._f32_to_bf16(output)
         else:
             output = op(lhs.data, rhs.data)
 
@@ -571,6 +576,14 @@ class InterpreterBuilder:
             output = output.astype(_get_np_dtype(tl_dtype))
 
         return TensorHandle(output, tl_dtype)
+
+    @staticmethod
+    def _bf16_to_f32(data):
+        return _convert_float(data, tl.bfloat16, tl.float32, None).view(np.float32)
+
+    @staticmethod
+    def _f32_to_bf16(data):
+        return _convert_float(data.astype(np.float32), tl.float32, tl.bfloat16, _ir.ROUNDING_MODE.RTNE).view(np.uint16)
 
     create_fadd = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.add)
     create_fmul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
@@ -671,10 +684,18 @@ class InterpreterBuilder:
     create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)
 
     def create_fma(self, x, y, z):
+        if z.dtype.scalar == tl.bfloat16:
+            output = self._bf16_to_f32(x.data) * self._bf16_to_f32(y.data) + self._bf16_to_f32(z.data)
+            return TensorHandle(self._f32_to_bf16(output), z.dtype.scalar)
         return TensorHandle(x.data * y.data + z.data, z.dtype.scalar)
 
     # unary functions
     def unary_op(self, arg, op):
+        if arg.dtype.scalar == tl.bfloat16:
+            output = op(self._bf16_to_f32(arg.data))
+            if output.dtype != np.bool_:
+                output = self._f32_to_bf16(output)
+            return TensorHandle(output, arg.dtype.scalar)
         return TensorHandle(op(arg.data), arg.dtype.scalar)
 
     def create_fabs(self, arg):
@@ -715,8 +736,8 @@ class InterpreterBuilder:
     def create_dot(self, a, b, d, input_precision, max_num_imprecise_acc):
         a_data = a.data
         b_data = b.data
-        if (a.dtype.primitive_bitwidth == 8 and a.dtype.is_floating()) or \
-           (b.dtype.primitive_bitwidth == 8 and b.dtype.is_floating()):
+        if (a.dtype.primitive_bitwidth < 32 and a.dtype.is_floating()) or \
+           (b.dtype.primitive_bitwidth < 32 and b.dtype.is_floating()):
             a_data = _convert_float(a_data, a.dtype, tl.float16, None).view(np.float16)
             b_data = _convert_float(b_data, b.dtype, tl.float16, None).view(np.float16)
         return TensorHandle(np.matmul(a_data, b_data, dtype=d.data.dtype) + d.data, d.dtype.scalar)
