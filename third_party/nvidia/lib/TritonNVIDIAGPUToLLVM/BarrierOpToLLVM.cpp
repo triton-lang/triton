@@ -367,7 +367,7 @@ struct ArriveBarrierOpConversion
       pred = b.and_(pred, adaptor.getPred());
 
     bool isCrossClusterBarrier =
-        LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
+        op.isMulticast() || LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
 
     Value barrierPtr = LLVM::NVIDIA::getLeaderAddress(
         loc, rewriter, smemObj.getBase(), barrierTy);
@@ -376,17 +376,26 @@ struct ArriveBarrierOpConversion
     ptxAsm << "@$0 mbarrier.arrive."
            << (isCrossCluster || isCrossClusterBarrier ? "release.cluster."
                                                        : "")
-           << (isCrossClusterBarrier ? "shared::cluster" : "shared::cta")
-           << ".b64 _, [$1]";
+           << (isCrossClusterBarrier ? "shared::cluster" : "shared::cta");
+    if (op.isMulticast())
+      ptxAsm << ".multicast::cluster::32b";
+    ptxAsm << ".b64 _, [$1]";
     if (op.getCount() > 1) {
       ptxAsm << ", " << op.getCount();
     }
+    if (op.isMulticast())
+      ptxAsm << ", $2";
     ptxAsm << ";";
 
     PTXBuilder ptxBuilder;
-    SmallVector<PTXBuilder::Operand *, 2> operands = {
+    SmallVector<PTXBuilder::Operand *, 3> operands = {
         ptxBuilder.newOperand(pred, "b"),
         ptxBuilder.newOperand(barrierPtr, "r")};
+    if (op.isMulticast()) {
+      Value mask = LLVM::NVIDIA::createTMAMulticastMask(
+          loc, rewriter, static_cast<uint16_t>(op.getCtaMask()));
+      operands.push_back(ptxBuilder.newOperand(mask, "r"));
+    }
 
     auto arriveOp = *ptxBuilder.create(ptxAsm.str());
     arriveOp(operands, /*onlyAttachMLIRArgs=*/true);

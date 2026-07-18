@@ -231,12 +231,28 @@ Type WaitBarrierOp::getPredicateOperandTypeLike() {
   return IntegerType::get(getContext(), 1);
 }
 
+static LogicalResult verifyBarrierCGALayout(Operation *op, Value barrier,
+                                            CGAEncodingAttr expectedCGALayout,
+                                            StringRef barrierName);
+
 // -- ArriveBarrierOp --
 LogicalResult ArriveBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   if (getCount() < 1)
     return emitOpError("count must be greater than or equal to 1");
+  if (isMulticast()) {
+    int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
+    if (numCTAs <= 1)
+      return emitOpError("multicast arrive requires num_ctas > 1");
+    if (getCtaMask() > static_cast<uint32_t>(numCTAs - 1))
+      return emitOpError("ctaMask exceeds numCTAs - 1");
+    auto expectedCGALayout =
+        CGAEncodingAttr::get1DLayout(getContext(), numCTAs);
+    if (failed(verifyBarrierCGALayout(*this, getAlloc(), expectedCGALayout,
+                                      "multicast barrier")))
+      return failure();
+  }
   return success();
 }
 

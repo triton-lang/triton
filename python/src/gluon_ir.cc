@@ -931,8 +931,9 @@ void init_gluon_ir(py::module_ &m) {
              self.create<ttng::WaitBarrierOp>(memDesc, phase, pred, deps);
            })
       .def("create_mbarrier_arrive",
-           [](GluonOpBuilder &self, Value memDesc, int count, Value pred) {
-             self.create<ttng::ArriveBarrierOp>(memDesc, count, pred);
+           [](GluonOpBuilder &self, Value memDesc, uint32_t count,
+              uint32_t ctaMask, Value pred) {
+             self.create<ttng::ArriveBarrierOp>(memDesc, count, ctaMask, pred);
            })
       .def("create_fence_mbarrier_init_release_cluster",
            [](GluonOpBuilder &self) {

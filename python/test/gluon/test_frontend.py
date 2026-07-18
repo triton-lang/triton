@@ -7,6 +7,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
+from triton.experimental.gluon.language.nvidia.ampere import mbarrier as ampere_mbarrier
 from triton.experimental.gluon.language.nvidia.hopper import cluster
 from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, TensorMemoryScalesLayout, async_copy
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
@@ -650,6 +651,75 @@ def async_shared_store_kernel():
 def test_async_shared_store(target):
     mod = run_parser(async_shared_store_kernel, *make_args(num_ctas=2), target=target)
     assert "ttng.async_shared_store" in anonymize_ir(mod.str_nodebug())
+
+
+@gluon.jit
+def ampere_mbarrier_arrive_kernel():
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ampere_mbarrier.MBarrierLayout())
+    ampere_mbarrier.init(bar, count=1)
+    ampere_mbarrier.arrive(bar)
+    phase = 0
+    ampere_mbarrier.wait(bar, phase)
+    ampere_mbarrier.invalidate(bar)
+
+
+@pytest.mark.parametrize("target", [AMPERE_TARGET, HOPPER_TARGET, BLACKWELL_TARGET])
+def test_ampere_mbarrier_arrive(target):
+    # Smoke test that the Ampere mbarrier.arrive wrapper still wires through
+    # to the create_mbarrier_arrive binding after the multicast signature change.
+    run_parser(ampere_mbarrier_arrive_kernel, target=target)
+
+
+def test_mbarrier_arrive_multicast_unsupported_target():
+
+    @gluon.jit
+    def kernel():
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.arrive(bar, count=1, cta_mask=0x1)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel, *make_args(num_ctas=2), target=BLACKWELL_TARGET)
+
+    assert "multicast arrive requires Rubin" in str(e.value)
+
+
+def test_mbarrier_arrive_multicast_negative_mask():
+
+    @gluon.jit
+    def kernel():
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.arrive(bar, count=1, cta_mask=-1)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel, *make_args(num_ctas=2), target=BLACKWELL_TARGET)
+
+    assert "cta_mask must be positive" in str(e.value)
+
+
+def test_mbarrier_arrive_multicast_mask_too_large():
+
+    @gluon.jit
+    def kernel():
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.arrive(bar, count=1, cta_mask=2)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel, *make_args(num_ctas=2), target=BLACKWELL_TARGET)
+
+    assert "cta_mask must be <= num_ctas - 1" in str(e.value)
+
+
+def test_mbarrier_arrive_multicast_non_int_mask():
+
+    @gluon.jit
+    def kernel():
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.arrive(bar, count=1, cta_mask=1.5)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel, *make_args(num_ctas=2), target=BLACKWELL_TARGET)
+
+    assert "cta_mask must be an int" in str(e.value)
 
 
 @gluon.jit
