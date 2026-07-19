@@ -43,8 +43,8 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
                              const std::vector<std::string> &modeAndOptions,
                              const char *profilerName);
 
-int64_t computeTimestampOffsetNs(
-    const std::function<void(uint64_t *)> &getTimestamp);
+int64_t
+computeTimestampOffsetNs(const std::function<void(uint64_t *)> &getTimestamp);
 } // namespace detail
 
 // Singleton<ConcreteProfilerT>: Each concrete GPU profiler, e.g.,
@@ -277,7 +277,6 @@ protected:
   bool pcSamplingEnabled{false};
   bool periodicFlushingEnabled{false};
   std::string periodicFlushingFormat{};
-
 };
 
 } // namespace proton

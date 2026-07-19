@@ -168,8 +168,8 @@ void periodicClearDataPhases(Data &data, size_t maxPhaseToFlush,
 
 } // namespace
 
-int64_t computeTimestampOffsetNs(
-    const std::function<void(uint64_t *)> &getTimestamp) {
+int64_t
+computeTimestampOffsetNs(const std::function<void(uint64_t *)> &getTimestamp) {
   using Clock = std::chrono::system_clock;
   const auto cpuBefore = Clock::now();
   uint64_t profilerTimestampNs{};
