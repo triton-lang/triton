@@ -133,6 +133,9 @@ void init_triton_amd_passes_ttgpuir(py::module_ &m) {
       "add_warp_specialize_to_llvm",
       mlir::triton::AMD::createTritonAMDGPUConvertWarpSpecializeToLLVMPass,
       const std::string &);
+  ADD_PASS_OPTION_WRAPPER_1("add_convert_tensor_descriptor",
+                            mlir::createTritonAMDGPUConvertTensorDescriptor,
+                            const std::string &);
 }
 
 void addControlConstant(llvm::Module *module, const char *name,
