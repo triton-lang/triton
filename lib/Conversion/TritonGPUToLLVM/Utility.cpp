@@ -1026,12 +1026,9 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
   // Extract padding info from padded encoding (standalone or inside
   // partitioned)
   std::optional<int> maybeMaxVecElems;
-  bool allowPerm = true;
   SmallVector<std::pair<unsigned, unsigned>> paddingShifts;
   if (triton::gpu::isPaddedEncoding(srcTy.getEncoding())) {
     maybeMaxVecElems = triton::gpu::getMinInterval(srcTy.getEncoding());
-    // A padding interval bounds the vectorisation; don't permute past it.
-    allowPerm = false;
     auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
     paddingShifts = getPaddedSharedShifts(srcTy.getEncoding(), bitwidth,
                                           /*offsetInBytes=*/true);
@@ -1042,10 +1039,13 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
   // For partitioned tensors, this returns all bases (one per partition).
   SmallVector<Value> smemBases(smemObj.getBases().begin(),
                                smemObj.getBases().end());
+  // Permuting registers is just renaming SSA values; the padding interval
+  // (maybeMaxVecElems) alone bounds the vectorisation, so permutation is safe.
   return lowerLdStShared(loc, ctx, cvt, valsArray, llvmElemTy, smemBases,
                          paddingShifts, affineOffset, maskSpanAffineOffset,
                          affineBlockOffset, maskSpanAffineBlock, rewriter,
-                         targetInfo, allowPerm, maybeMaxVecElems, localLoadOp);
+                         targetInfo, /*allowPerm=*/true, maybeMaxVecElems,
+                         localLoadOp);
 }
 
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,

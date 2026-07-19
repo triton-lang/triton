@@ -1088,8 +1088,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: async_shared_store_padded
-  // CHECK-COUNT-4: complete_tx::bytes.b32
-  // CHECK-NOT: complete_tx::bytes.v2.b32
+  // CHECK-COUNT-2: complete_tx::bytes.v2.b32
+  // CHECK-NOT: complete_tx::bytes.b32
   tt.func @async_shared_store_padded(%src: tensor<32x16xi32, #linear>, %dst: !ttg.memdesc<32x16xi32, #padded, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #bar, #smem, mutable>) {
     ttng.async_shared_store %src, %dst, %mbarrier : tensor<32x16xi32, #linear> -> !ttg.memdesc<32x16xi32, #padded, #smem, mutable>, !ttg.memdesc<2xi64, #bar, #smem, mutable>
     tt.return
