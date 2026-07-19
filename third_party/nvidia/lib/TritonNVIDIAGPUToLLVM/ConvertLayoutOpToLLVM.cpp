@@ -182,8 +182,7 @@ struct ConvertLayoutOpSwizzlingConversion
         lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
                         /*paddingShifts=*/{}, affineOffset,
                         maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
-                        /*maskSpanAffineBlock=*/0, rewriter, targetInfo,
-                        /*allowPerm=*/true);
+                        /*maskSpanAffineBlock=*/0, rewriter, targetInfo);
       } else {
         assert(idxSrc == 1 || idxSrc == 2);
         bool transpose = idxSrc == 2;
@@ -201,8 +200,7 @@ struct ConvertLayoutOpSwizzlingConversion
         tileOutVals = lowerLdStShared(
             loc, ctx, loadCvt, {}, llvmElemTy, smemBase, /*paddingShifts=*/{},
             affineOffset, maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
-            /*maskSpanAffineBlock=*/0, rewriter, targetInfo,
-            /*allowPerm=*/true);
+            /*maskSpanAffineBlock=*/0, rewriter, targetInfo);
       } else {
         assert(idxDst == 1 || idxDst == 2);
         bool transpose = idxDst == 2;

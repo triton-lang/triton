@@ -674,7 +674,7 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 Value affineOffset, uint64_t maskSpanAffineOffset,
                 Value affineBlockOffset, uint64_t maskSpanAffineBlock,
                 RewriterBase &rewriter, const TargetInfoBase &targetInfo,
-                bool allowPerm, std::optional<int> maybeMaxVecElems = {},
+                bool allowPerm = true, std::optional<int> maybeMaxVecElems = {},
                 Operation *localLoadOp = nullptr);
 
 // Lower an ld/st-like operation given a layout and a callback that creates the

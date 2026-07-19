@@ -471,7 +471,7 @@ LinearLayout transposeLinearLayout(LinearLayout layout, ArrayRef<int> order) {
 
 std::pair<int, ColumnAction>
 largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
-                     bool allowPerm, std::optional<int> maybeMaxVecElems) {
+                     std::optional<int> maybeMaxVecElems, bool allowPerm) {
   // Find the largest vectorisation we can use:
   auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
   StringAttr kReg = S("register");

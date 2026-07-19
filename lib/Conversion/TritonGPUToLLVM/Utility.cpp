@@ -841,7 +841,7 @@ SmallVector<Value> lowerLdSt(
   cvt = cvt.sublayout(inDimNames, outDims);
 
   auto [elemsPerVec, permutation] =
-      largestVectorisation(ctx, cvt, bitwidth, allowPerm, maybeMaxVecElems);
+      largestVectorisation(ctx, cvt, bitwidth, maybeMaxVecElems, allowPerm);
 
   cvt = permutation.apply(cvt);
   if (isStore) {

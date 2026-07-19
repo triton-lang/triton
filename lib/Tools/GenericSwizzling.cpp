@@ -325,7 +325,7 @@ int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
   auto regNoBroadcast = actionRemoveBroadcastedRegs(reg).apply(reg);
   auto regToShared = regNoBroadcast.invertAndCompose(smem);
   auto [elemsPerVec, permutation] =
-      largestVectorisation(ctx, regToShared, bitwidth, /*allowPerm=*/true);
+      largestVectorisation(ctx, regToShared, bitwidth);
   regNoBroadcast = permutation.apply(regNoBroadcast);
 
   int32_t vecSize = elemsPerVec;

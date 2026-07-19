@@ -592,8 +592,9 @@ private:
     // Check that we will be able to vectorize the load.
     // Need to have exactly ldsTransLoadParams->tileSize,
     // otherwise we can't use ds_read_tr
-    auto [elemsPerVec, permutation] = largestVectorisation(
-        ctx, cvt, bitWidth, /*allowPerm=*/false, ldsTransLoadParams->tileSize);
+    auto [elemsPerVec, permutation] =
+        largestVectorisation(ctx, cvt, bitWidth, ldsTransLoadParams->tileSize,
+                             /*allowPerm=*/false);
 
     if (paddedEnc)
       elemsPerVec = std::min<int>(elemsPerVec, paddedEnc.getMinInterval());

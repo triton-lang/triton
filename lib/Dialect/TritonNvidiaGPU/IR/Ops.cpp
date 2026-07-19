@@ -298,7 +298,7 @@ LogicalResult AsyncSharedStoreOp::verify() {
     allowPerm = false;
   }
   auto vectorization = largestVectorisation(getContext(), cvt, bitwidth,
-                                            allowPerm, maybeMaxVecElems);
+                                            maybeMaxVecElems, allowPerm);
   unsigned elemsPerVec = vectorization.first;
   if (elemsPerVec * bitwidth < 32)
     return emitOpError("requires a layout vectorizing stores to at least 32 "
