@@ -36,8 +36,7 @@ thread_local GPUProfiler<CuptiProfiler>::ThreadState
 namespace {
 
 std::unique_ptr<Metric>
-convertKernelActivityToMetric(CuptiProfiler &profiler,
-                              CUpti_Activity *activity,
+convertKernelActivityToMetric(CuptiProfiler &profiler, CUpti_Activity *activity,
                               bool isMetricKernel = false) {
   std::unique_ptr<Metric> metric;
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
@@ -136,9 +135,8 @@ uint32_t processActivityKernel(
         auto targetEntryIdIter = nodeState.dataToEntryId.find(data);
         if (targetEntryIdIter != nodeState.dataToEntryId.end()) {
           auto targetEntryId = targetEntryIdIter->second;
-          if (auto kernelMetric =
-                  convertKernelActivityToMetric(profiler, activity,
-                                                isMetricKernel)) {
+          if (auto kernelMetric = convertKernelActivityToMetric(
+                  profiler, activity, isMetricKernel)) {
             entry.upsertLinkedMetric(std::move(kernelMetric), targetEntryId);
             detail::updateDataPhases(dataPhases, data, entry.phase);
           }
@@ -183,10 +181,9 @@ uint32_t processActivity(
   switch (activity->kind) {
   case CUPTI_ACTIVITY_KIND_KERNEL:
   case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
-    correlationId =
-        processActivityKernel(corrIdToExternId, externIdToState,
-                              externIdToStateCache, dataPhases, profiler,
-                              activity);
+    correlationId = processActivityKernel(corrIdToExternId, externIdToState,
+                                          externIdToStateCache, dataPhases,
+                                          profiler, activity);
     break;
   }
   default:

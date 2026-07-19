@@ -1156,12 +1156,8 @@ def test_trace(tmp_path: pathlib.Path, device: str):
     with temp_file.open() as f:
         data = json.load(f)
         trace_events = data["traceEvents"]
-        kernel_event = next(
-            event for event in trace_events if event.get("cat") == "kernel" and event["name"] == "foo"
-        )
-        scope_event = next(
-            event for event in trace_events if event.get("cat") == "scope" and event["name"] == "test"
-        )
+        kernel_event = next(event for event in trace_events if event.get("cat") == "kernel" and event["name"] == "foo")
+        scope_event = next(event for event in trace_events if event.get("cat") == "scope" and event["name"] == "test")
         assert kernel_event["args"]["call_stack"] == ["ROOT", "test", "foo"]
         assert scope_event["ts"] <= kernel_event["ts"]
         assert kernel_event["ts"] + kernel_event["dur"] <= scope_event["ts"] + scope_event["dur"]
