@@ -29,6 +29,9 @@ struct ExternLibRocprofiler : public ExternLibBase {
 template <bool CheckSuccess> rocprofiler_status_t isInitialized(int *status);
 
 template <bool CheckSuccess>
+rocprofiler_status_t getTimestamp(rocprofiler_timestamp_t *timestamp);
+
+template <bool CheckSuccess>
 rocprofiler_status_t forceConfigure(rocprofiler_configure_func_t configureFunc);
 
 template <bool CheckSuccess>

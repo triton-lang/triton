@@ -45,15 +45,18 @@ struct KernelEvent {
   const KernelMetric *kernelMetric{};
   const DataEntry::FlexibleMetricMap *flexibleMetrics{};
   std::vector<Context> contexts;
+  uint64_t startTimeNs{};
+  uint64_t endTimeNs{};
   size_t launchEventId{details::kNoLaunchEventId};
   bool isGraphLinked{};
 
   KernelEvent(const KernelMetric *metric,
               const DataEntry::FlexibleMetricMap *metrics,
-              std::vector<Context> contexts, size_t launchId,
-              bool isGraphLinked)
+              std::vector<Context> contexts, uint64_t startTimeNs,
+              uint64_t endTimeNs, size_t launchId, bool isGraphLinked)
       : kernelMetric(metric), flexibleMetrics(metrics),
-        contexts(std::move(contexts)), launchEventId(launchId),
+        contexts(std::move(contexts)), startTimeNs(startTimeNs),
+        endTimeNs(endTimeNs), launchEventId(launchId),
         isGraphLinked(isGraphLinked) {}
 };
 
