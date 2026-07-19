@@ -28,6 +28,7 @@ from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mma_v2
 from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
 from triton.experimental.gluon.language.nvidia import hopper
+from triton.experimental.gluon.language.nvidia import rubin
 from triton.experimental.gluon.language.nvidia.blackwell import tma as blackwell_tma
 from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_async_copy
 from triton.experimental.gluon.language.extra import libdevice
@@ -763,11 +764,11 @@ def test_mbarrier_arrive_multicast(num_ctas, cta_mask):
 
     @gluon.jit
     def kernel(out_ptr, cta_mask: ttgl.constexpr, init_count: ttgl.constexpr):
-        bar = mbarrier.allocate_mbarrier()
-        mbarrier.init(bar, count=init_count)
-        mbarrier.arrive(bar, cta_mask=cta_mask)
-        mbarrier.wait(bar, 0)
-        mbarrier.invalidate(bar)
+        bar = rubin.mbarrier.allocate_mbarrier()
+        rubin.mbarrier.init(bar, count=init_count)
+        rubin.mbarrier.arrive(bar, cta_mask=cta_mask)
+        rubin.mbarrier.wait(bar, 0)
+        rubin.mbarrier.invalidate(bar)
         ttgl.store(out_ptr + ttgl.program_id(0), ttgl.program_id(0))
 
     out = torch.zeros(num_ctas, device="cuda", dtype=torch.int32)
@@ -797,12 +798,12 @@ def test_mbarrier_arrive_broadcast_one_cta(num_ctas):
             is_pure=True,
             pack=1,
         )
-        bar = mbarrier.allocate_mbarrier()
-        mbarrier.init(bar, count=1)
+        bar = rubin.mbarrier.allocate_mbarrier()
+        rubin.mbarrier.init(bar, count=1)
         # CTA 0 does a multicast arrive, all CTAs wait.
-        mbarrier.arrive(bar, cta_mask=cta_mask, pred=cta_rank == 0)
-        mbarrier.wait(bar, 0)
-        mbarrier.invalidate(bar)
+        rubin.mbarrier.arrive(bar, cta_mask=cta_mask, pred=cta_rank == 0)
+        rubin.mbarrier.wait(bar, 0)
+        rubin.mbarrier.invalidate(bar)
         ttgl.store(out_ptr + pid, pid)
 
     out = torch.zeros(num_ctas, device="cuda", dtype=torch.int32)
