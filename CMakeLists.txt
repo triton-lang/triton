@@ -317,9 +317,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   # Python Interpreter is used to run lit tests
   find_package(Python3 REQUIRED COMPONENTS Development.Module Interpreter)
-  # nanobind uses the FindPython target and variables, while Triton uses
-  # FindPython3. Bridge the two without requesting Development.Embed: the
-  # isolated interpreters used by wheel builds only provide module artifacts.
+  # nanobind expects find_package(Python) which sets Python::Module target
+  # and Python_* variables. Triton uses find_package(Python3) instead.
+  # Bridge the two by aliasing the target and forwarding variables.
   if(NOT TARGET Python::Module)
     add_library(Python::Module ALIAS Python3::Module)
     set(Python_EXECUTABLE "${Python3_EXECUTABLE}")
