@@ -5,15 +5,18 @@
 
 namespace proton {
 
-class CuptiProfiler : public GPUProfiler<CuptiProfiler> {
+class CuptiProfiler : public GPUProfiler<CuptiProfiler>,
+                      public TimestampAlignmentInterface {
 public:
   CuptiProfiler();
   virtual ~CuptiProfiler();
 
+  int64_t getTimestampOffsetNs() const override { return timestampOffsetNs; }
+
 private:
   struct CuptiProfilerPimpl;
-
-  uint64_t doGetTimestamp() override;
+  int64_t timestampOffsetNs{};
+  bool isTimestampCalibrated{false};
 
   virtual void
   doSetMode(const std::vector<std::string> &modeAndOptions) override;

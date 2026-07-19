@@ -789,6 +789,12 @@ void CuptiProfiler::CuptiProfilerPimpl::doStart() {
     nvtx::enable();
     setNvtxCallbacks(subscriber, /*enable=*/true);
   }
+
+  if (!profiler.isTimestampCalibrated) {
+    profiler.timestampOffsetNs =
+        detail::computeTimestampOffsetNs(cupti::getTimestamp<true>);
+    profiler.isTimestampCalibrated = true;
+  }
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
@@ -851,12 +857,6 @@ CuptiProfiler::CuptiProfiler() {
 }
 
 CuptiProfiler::~CuptiProfiler() = default;
-
-uint64_t CuptiProfiler::doGetTimestamp() {
-  uint64_t timestamp{};
-  cupti::getTimestamp<true>(&timestamp);
-  return timestamp;
-}
 
 void CuptiProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
   auto mode = modeAndOptions[0];

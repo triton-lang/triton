@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
@@ -923,16 +924,24 @@ protonConfigure(uint32_t version, const char *runtimeVersion, uint32_t priority,
 // ---- Profiler lifecycle ----
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStart() {
-  auto &state = getRuntimeState();
-  std::lock_guard<std::mutex> lock(state.mutex);
-  if (!state.profilingStarted) {
-    rocprofiler::startContext<true>(state.profilingContext);
-    state.profilingStarted = true;
+  {
+    auto &state = getRuntimeState();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (!state.profilingStarted) {
+      rocprofiler::startContext<true>(state.profilingContext);
+      state.profilingStarted = true;
+    }
+    bool nvtx = getBoolEnv("TRITON_ENABLE_NVTX", true);
+    state.nvtxEnabled.store(nvtx, std::memory_order_relaxed);
+    if (nvtx)
+      registerRoctxCallback(true);
   }
-  bool nvtx = getBoolEnv("TRITON_ENABLE_NVTX", true);
-  state.nvtxEnabled.store(nvtx, std::memory_order_relaxed);
-  if (nvtx)
-    registerRoctxCallback(true);
+
+  if (!profiler.isTimestampCalibrated) {
+    profiler.timestampOffsetNs =
+        detail::computeTimestampOffsetNs(rocprofiler::getTimestamp<true>);
+    profiler.isTimestampCalibrated = true;
+  }
 }
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doFlush() {
@@ -972,12 +981,6 @@ RocprofSDKProfiler::RocprofSDKProfiler() {
 }
 
 RocprofSDKProfiler::~RocprofSDKProfiler() = default;
-
-uint64_t RocprofSDKProfiler::doGetTimestamp() {
-  rocprofiler_timestamp_t timestamp{};
-  rocprofiler::getTimestamp<true>(&timestamp);
-  return timestamp;
-}
 
 namespace {
 // Runs during dlopen of libproton.so (i.e. `import triton.profiler._C`).

@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <stdexcept>
 #include <thread>
@@ -41,6 +42,9 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
                              std::string &periodicFlushingFormat,
                              const std::vector<std::string> &modeAndOptions,
                              const char *profilerName);
+
+int64_t computeTimestampOffsetNs(
+    const std::function<void(uint64_t *)> &getTimestamp);
 } // namespace detail
 
 // Singleton<ConcreteProfilerT>: Each concrete GPU profiler, e.g.,
@@ -48,7 +52,6 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
 template <typename ConcreteProfilerT>
 class GPUProfiler : public Profiler,
                     public OpInterface,
-                    public TimestampAlignmentInterface,
                     public Singleton<ConcreteProfilerT> {
 public:
   GPUProfiler() = default;
@@ -77,10 +80,6 @@ public:
       ThreadSafeMap<size_t, ExternIdState,
                     std::unordered_map<size_t, ExternIdState>>;
 
-  int64_t getTimestampOffsetNs() const override {
-    return timestampOffsetNs.load(std::memory_order_acquire);
-  }
-
 protected:
   // OpInterface
   void startOp(const Scope &scope) override {
@@ -106,13 +105,9 @@ protected:
   }
 
   // Profiler
-  virtual void doStart() override {
-    pImpl->doStart();
-    calibrateTimestamp();
-  }
+  virtual void doStart() override { pImpl->doStart(); }
   virtual void doFlush() override { pImpl->doFlush(); }
   virtual void doStop() override { pImpl->doStop(); }
-  virtual uint64_t doGetTimestamp() { return getCurrentCpuTimestampNs(); }
   virtual void addMetrics(
       size_t scopeId,
       const std::map<std::string, MetricValueType> &scalarMetrics,
@@ -283,25 +278,6 @@ protected:
   bool periodicFlushingEnabled{false};
   std::string periodicFlushingFormat{};
 
-private:
-  static uint64_t getCurrentCpuTimestampNs() {
-    using Clock = std::chrono::system_clock;
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(
-               Clock::now().time_since_epoch())
-        .count();
-  }
-
-  void calibrateTimestamp() {
-    const auto cpuBeforeNs = getCurrentCpuTimestampNs();
-    const auto profilerTimestampNs = doGetTimestamp();
-    const auto cpuAfterNs = getCurrentCpuTimestampNs();
-    const auto cpuTimestampNs = cpuBeforeNs + (cpuAfterNs - cpuBeforeNs) / 2;
-    timestampOffsetNs.store(static_cast<int64_t>(cpuTimestampNs) -
-                                static_cast<int64_t>(profilerTimestampNs),
-                            std::memory_order_release);
-  }
-
-  std::atomic<int64_t> timestampOffsetNs{};
 };
 
 } // namespace proton

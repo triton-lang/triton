@@ -42,15 +42,13 @@ std::unique_ptr<Data> makeData(const std::string &dataName,
   if (toLower(dataName) == "tree") {
     return std::make_unique<TreeData>(path, contextSource);
   } else if (toLower(dataName) == "trace") {
-    TraceData::TimestampOffsetProvider timestampOffsetProvider;
-    if (auto *timestampAlignment =
-            dynamic_cast<TimestampAlignmentInterface *>(profiler)) {
-      timestampOffsetProvider = [timestampAlignment]() {
-        return timestampAlignment->getTimestampOffsetNs();
-      };
-    }
-    return std::make_unique<TraceData>(path, contextSource,
-                                       std::move(timestampOffsetProvider));
+    return std::make_unique<TraceData>(
+        path, contextSource,
+        [timestampAlignment =
+             dynamic_cast<TimestampAlignmentInterface *>(profiler)]() {
+          return timestampAlignment ? timestampAlignment->getTimestampOffsetNs()
+                                    : 0;
+        });
   }
   throw makeInvalidArgument("Unknown data: " + dataName);
 }
