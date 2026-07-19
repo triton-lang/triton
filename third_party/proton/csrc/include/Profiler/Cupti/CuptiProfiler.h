@@ -5,8 +5,7 @@
 
 namespace proton {
 
-class CuptiProfiler : public GPUProfiler<CuptiProfiler>,
-                      public TimestampAlignmentInterface {
+class CuptiProfiler : public GPUProfiler<CuptiProfiler> {
 public:
   CuptiProfiler();
   virtual ~CuptiProfiler();

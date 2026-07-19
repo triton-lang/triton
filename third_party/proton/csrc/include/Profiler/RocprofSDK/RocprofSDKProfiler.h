@@ -5,8 +5,7 @@
 
 namespace proton {
 
-class RocprofSDKProfiler : public GPUProfiler<RocprofSDKProfiler>,
-                           public TimestampAlignmentInterface {
+class RocprofSDKProfiler : public GPUProfiler<RocprofSDKProfiler> {
 public:
   RocprofSDKProfiler();
   virtual ~RocprofSDKProfiler();

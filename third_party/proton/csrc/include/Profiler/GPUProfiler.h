@@ -52,6 +52,7 @@ computeTimestampOffsetNs(const std::function<void(uint64_t *)> &getTimestamp);
 template <typename ConcreteProfilerT>
 class GPUProfiler : public Profiler,
                     public OpInterface,
+                    public TimestampAlignmentInterface,
                     public Singleton<ConcreteProfilerT> {
 public:
   GPUProfiler() = default;
