@@ -230,7 +230,7 @@ void dumpCpuToGpuFlowEvents(
       startElement["tid"] = details::getCpuLaneId(launchEvent->threadId);
       startElement["ts"] =
           static_cast<double>(launchEvent->startTimeNs - minTimeStamp) / 1000.0;
-      startElement["id"] = event.launchEventId;
+      startElement["id2"]["local"] = event.launchEventId;
       startElement["bp"] = "e";
       object["traceEvents"].push_back(std::move(startElement));
 
@@ -242,7 +242,7 @@ void dumpCpuToGpuFlowEvents(
       finishElement["tid"] = details::getGpuLaneId(streamId);
       finishElement["ts"] =
           static_cast<double>(event.startTimeNs - minTimeStamp) / 1000.0;
-      finishElement["id"] = event.launchEventId;
+      finishElement["id2"]["local"] = event.launchEventId;
       finishElement["bp"] = "e";
       object["traceEvents"].push_back(std::move(finishElement));
       prevLaunchEventId = event.launchEventId;

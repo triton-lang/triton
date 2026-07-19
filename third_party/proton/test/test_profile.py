@@ -1231,14 +1231,15 @@ def test_trace_flexible_metrics_scope_ranges(tmp_path: pathlib.Path, device: str
 
     gpu_tid = kernel_events[0]["tid"]
     cpu_tid = metric_by_name["m1"]["tid"]
-    flow_starts = {event["id"]: event for event in flow_events if event["ph"] == "s"}
-    flow_finishes = {event["id"]: event for event in flow_events if event["ph"] == "f"}
+    flow_starts = {event["id2"]["local"]: event for event in flow_events if event["ph"] == "s"}
+    flow_finishes = {event["id2"]["local"]: event for event in flow_events if event["ph"] == "f"}
     assert set(flow_starts) == set(flow_finishes)
     assert len(flow_starts) == 4
     assert all(event["name"] == "launch->kernel" and event["bp"] == "e" and event["tid"] == cpu_tid
                for event in flow_starts.values())
     assert all(event["name"] == "launch->kernel" and event["bp"] == "e" and event["tid"] == gpu_tid
                for event in flow_finishes.values())
+    assert all("id" not in event and set(event["id2"]) == {"local"} for event in flow_events)
 
 
 def test_trace_flexible_metrics_no_kernel_anchor(tmp_path: pathlib.Path):
@@ -1352,8 +1353,9 @@ def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, device: str)
     flow_finish = next(event for event in trace_events
                        if event.get("cat") == "flow" and event["ph"] == "f" and event["name"] == "launch->kernel"
                        and event["tid"] == replay_gpu_tid and event["ts"] == first_replay_kernel["ts"])
-    flow_start = next(event for event in trace_events
-                      if event.get("cat") == "flow" and event["ph"] == "s" and event["id"] == flow_finish["id"])
+    flow_start = next(
+        event for event in trace_events
+        if event.get("cat") == "flow" and event["ph"] == "s" and event["id2"]["local"] == flow_finish["id2"]["local"])
     assert flow_start["tid"] == test0_scope["tid"]
     assert test0_scope["ts"] == flow_start["ts"] <= flow_finish["ts"]
 
