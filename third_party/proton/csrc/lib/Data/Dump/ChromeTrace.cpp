@@ -100,8 +100,7 @@ void dumpKernelEvents(
       auto *flexibleMetrics = event.flexibleMetrics;
       bool isMetricKernel = static_cast<bool>(std::get<uint64_t>(
           kernelMetric->getValue(KernelMetric::IsMetricKernel)));
-      double ts =
-          static_cast<double>(event.startTimeNs - minTimeStamp) / 1000;
+      double ts = static_cast<double>(event.startTimeNs - minTimeStamp) / 1000;
       double dur =
           static_cast<double>(event.endTimeNs - event.startTimeNs) / 1000;
 

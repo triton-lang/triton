@@ -347,40 +347,38 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
     }
     bool hasKernelMetrics = false, hasCycleMetrics = false;
 
-    auto processMetricMaps =
-        [&](size_t eventId, const DataEntry::MetricMap &metrics,
-            const DataEntry::FlexibleMetricMap *flexibleMetrics,
-            const std::vector<Context> &contexts, bool isGraphLinked) {
-          if (auto kernelIt = metrics.find(MetricKind::Kernel);
-              kernelIt != metrics.end()) {
-            auto *kernelMetric =
-                static_cast<KernelMetric *>(kernelIt->second.get());
-            auto streamId = static_cast<size_t>(std::get<uint64_t>(
-                kernelMetric->getValue(KernelMetric::StreamId)));
-            auto startTimeNs = applyTimestampOffset(
-                std::get<uint64_t>(
-                    kernelMetric->getValue(KernelMetric::StartTime)),
-                timestampOffsetNs);
-            auto endTimeNs = applyTimestampOffset(
-                std::get<uint64_t>(
-                    kernelMetric->getValue(KernelMetric::EndTime)),
-                timestampOffsetNs);
-            auto launchEventId = events.at(eventId).parentEventId;
-            kernelEvents[streamId].emplace_back(kernelMetric, flexibleMetrics,
-                                                contexts, startTimeNs,
-                                                endTimeNs, launchEventId,
-                                                isGraphLinked);
-            minTimeStamp = std::min(minTimeStamp, startTimeNs);
-            hasKernelMetrics = true;
-          }
-          if (auto cycleIt = metrics.find(MetricKind::Cycle);
-              cycleIt != metrics.end()) {
-            auto *cycleMetric =
-                static_cast<CycleMetric *>(cycleIt->second.get());
-            cycleEvents.emplace_back(cycleMetric, contexts);
-            hasCycleMetrics = true;
-          }
-        };
+    auto processMetricMaps = [&](size_t eventId,
+                                 const DataEntry::MetricMap &metrics,
+                                 const DataEntry::FlexibleMetricMap
+                                     *flexibleMetrics,
+                                 const std::vector<Context> &contexts,
+                                 bool isGraphLinked) {
+      if (auto kernelIt = metrics.find(MetricKind::Kernel);
+          kernelIt != metrics.end()) {
+        auto *kernelMetric =
+            static_cast<KernelMetric *>(kernelIt->second.get());
+        auto streamId = static_cast<size_t>(
+            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StreamId)));
+        auto startTimeNs = applyTimestampOffset(
+            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime)),
+            timestampOffsetNs);
+        auto endTimeNs = applyTimestampOffset(
+            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::EndTime)),
+            timestampOffsetNs);
+        auto launchEventId = events.at(eventId).parentEventId;
+        kernelEvents[streamId].emplace_back(kernelMetric, flexibleMetrics,
+                                            contexts, startTimeNs, endTimeNs,
+                                            launchEventId, isGraphLinked);
+        minTimeStamp = std::min(minTimeStamp, startTimeNs);
+        hasKernelMetrics = true;
+      }
+      if (auto cycleIt = metrics.find(MetricKind::Cycle);
+          cycleIt != metrics.end()) {
+        auto *cycleMetric = static_cast<CycleMetric *>(cycleIt->second.get());
+        cycleEvents.emplace_back(cycleMetric, contexts);
+        hasCycleMetrics = true;
+      }
+    };
 
     for (const auto &[_, event] : events) {
       if (event.hasCpuTimeRange()) { // CPU scope event
