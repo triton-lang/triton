@@ -306,10 +306,18 @@
 mbarrier object in shared memory. The operation requires a <code class="docutils literal notranslate"><span class="pre">count</span></code> attribute
 of at least 1 and decreases the pending arrival count of the mbarrier by
 the specified count.</p>
+<p>When <code class="docutils literal notranslate"><span class="pre">ctaMask</span></code> is non-zero, the arrive is multicast across the cluster.
+Each bit set in the mask identifies a CTA ID dimension to multicast
+along. CTA IDs <code class="docutils literal notranslate"><span class="pre">a</span></code> and <code class="docutils literal notranslate"><span class="pre">b</span></code> belong to the same equivalence class iff
+<code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">&amp;</span> <span class="pre">~ctaMask</span> <span class="pre">==</span> <span class="pre">b</span> <span class="pre">&amp;</span> <span class="pre">~ctaMask</span></code>; all CTAs in a class multicast to each
+other. Multicast requires <code class="docutils literal notranslate"><span class="pre">numCTAs</span> <span class="pre">&gt;</span> <span class="pre">1</span></code>, <code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">&lt;</span> <span class="pre">ctaMask</span> <span class="pre">&lt;=</span> <span class="pre">numCTAs</span> <span class="pre">-</span> <span class="pre">1</span></code>,
+and the barrier must have the identity CGA layout <code class="docutils literal notranslate"><span class="pre">[[1],</span> <span class="pre">[2],</span> <span class="pre">...]</span></code>. The
+default value of <code class="docutils literal notranslate"><span class="pre">ctaMask</span></code> is 0 (no multicast).</p>
 <p>The operation accepts an optional predicate.</p>
 <p>Example:</p>
 <div class="highlight-mlir notranslate"><div class="highlight"><pre><span></span>ttng.arrive_barrier %barrier, 2 : !ttg.memdesc&lt;1xi64, #shared, #smem, mutable&gt;
 ttng.arrive_barrier %barrier, 1, %pred : !ttg.memdesc&lt;1xi64, #shared, #smem, mutable&gt;
+ttng.arrive_barrier %barrier, 1 {ctaMask = 1 : i32} : !ttg.memdesc&lt;2xi64, #shared, #smem, mutable&gt;
 </pre></div>
 </div>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
@@ -319,6 +327,7 @@ ttng.arrive_barrier %barrier, 1, %pred : !ttg.memdesc&lt;1xi64, #shared, #smem, 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>count</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>ctaMask</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 </section>
 <section id="operands">
