@@ -292,7 +292,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.is_gluon = is_gluon
         if is_gluon:
             from triton.experimental.gluon.language._semantic import GluonSemantic
-            self.builder = gluon_ir.GluonOpBuilder(context)
+            self.builder = gluon_ir.GluonOpBuilder(context, options.arch)
             self.semantic = GluonSemantic(self.builder)
         else:
             from triton.language.semantic import TritonSemantic
