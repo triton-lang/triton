@@ -200,7 +200,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
     // Indexing the sharded axis can target either CTA row.
     // CHECK: %[[GATHER_CTAS:.*]] = arith.constant 3 : i32
-    // CHECK: arith.constant dense<[true, false]> : tensor<2xi1
+    // CHECK: arith.constant dense<[true, true, false, false]> : tensor<4xi1
     // CHECK: tt.call @__triton_consan_set_proxy_access{{.*}}({{.*}}%[[GATHER_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[GATHER_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}({{.*}}%[[GATHER_CTAS]]{{.*}})
@@ -209,7 +209,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
     // Indexing the unsharded axis leaves the scatter local to the issuing CTA.
     // CHECK: %[[SCATTER_CTAS:.*]] = arith.shli {{.*}} : i32
-    // CHECK: arith.constant dense<[false, true]> : tensor<2xi1
+    // CHECK: arith.constant dense<[false, true, true, false]> : tensor<4xi1
     // CHECK: tt.call @__triton_consan_set_proxy_access{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
@@ -383,11 +383,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
     %value = arith.constant dense<0> : tensor<128xi32, #convert_src>
     // CHECK: %[[SCRATCH_MASK:.*]] = arith.constant dense<[true, false]> : tensor<2xi1
-    // CHECK: %[[SCRATCH_CHECK:.*]] = arith.constant dense<true> : tensor<2xi1
     // CHECK: tt.call @__triton_consan_set_proxy_access
-    // CHECK: {{.*}} = tt.call @__triton_consan_verify_write_visibility{{.*}}(%[[SCRATCH_CHECK]],
+    // CHECK: {{.*}} = tt.call @__triton_consan_verify_write_visibility{{.*}}(%[[SCRATCH_MASK]],
     // CHECK: tt.call @__triton_consan_verify_read_visibility
-    // CHECK: {{.*}} = tt.call @__triton_consan_check_outstanding_commits{{.*}}(%[[SCRATCH_CHECK]],
+    // CHECK: {{.*}} = tt.call @__triton_consan_check_outstanding_commits{{.*}}(%[[SCRATCH_MASK]],
     // CHECK: ttg.convert_layout
     %converted = ttg.convert_layout %value {allocation.offset = 0 : i32, allocation.size = 512 : i32}
         : tensor<128xi32, #convert_src> -> tensor<128xi32, #convert_dst>
@@ -410,14 +409,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8200 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
   // The helper consumes the analysis-derived completion mask directly.
   // CHECK-LABEL: tt.func private @__triton_consan_track_proxy_accesses_for_buffer
-  // CHECK-SAME: %arg8: tensor<4xi1{{.*}}, %arg9: i32
+  // CHECK-SAME: %arg8: tensor<8xi1{{.*}}, %arg9: i32
   // CHECK: ttg.convert_layout %arg8
   // CHECK-LABEL: @tma_completion_tracks_contained_proxy_frontier
   tt.func public @tma_completion_tracks_contained_proxy_frontier(
       %desc: !tt.tensordesc<1024xi32, #frontier_shared>) {
     // The conversion scratch is contained in the TMA destination. The third
-    // region only partially overlaps it, while the fourth is disjoint;
-    // neither may be published by TMA completion.
+    // region only partially overlaps it, so only its overlapping atom may be
+    // published by TMA completion. Its remainder and the fourth, disjoint
+    // region must remain unpublished.
     %c0 = arith.constant 0 : i32
     %true = arith.constant true
     %value = arith.constant dense<0> : tensor<128xi32, #frontier_src>
@@ -439,7 +439,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %unrelated = ttg.local_alloc %value {allocation.offset = 4608 : i32}
         : (tensor<128xi32, #frontier_src>) -> !ttg.memdesc<128xi32, #frontier_shared, #frontier_smem, mutable>
 
-    // CHECK: arith.constant dense<[true, true, false, false]> : tensor<4xi1
+    // CHECK: arith.constant dense<[true, true, true, false, false, false, false, false]> : tensor<8xi1
     // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer
     // CHECK: tt.call @__triton_consan_track_proxy_accesses_for_buffer
     // CHECK: ttng.async_tma_copy_global_to_local
@@ -1861,8 +1861,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @alias_matrix_shared
   tt.func public @alias_matrix_shared() {
-    // CHECK-DAG: arith.constant dense<[true, false]> : tensor<2xi1
-    // CHECK-DAG: arith.constant dense<true> : tensor<2xi1
+    // CHECK-DAG: arith.constant dense<[true, true, false, false]> : tensor<4xi1
+    // CHECK-DAG: arith.constant dense<[false, true, true, false]> : tensor<4xi1
     %buf0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
     %buf1 = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
@@ -1927,8 +1927,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @alias_matrix_shared_subslice
   tt.func public @alias_matrix_shared_subslice() {
-    // CHECK-DAG: arith.constant dense<[true, false]> : tensor<2xi1
     // CHECK-DAG: arith.constant dense<true> : tensor<2xi1
+    // CHECK-DAG: arith.constant dense<[false, true]> : tensor<2xi1
     %buf0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<64xf32, #shared, #smem, mutable>
     %buf1 = ttg.memdesc_subslice %buf0 [32] : !ttg.memdesc<64xf32, #shared, #smem, mutable> -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
@@ -1947,9 +1947,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @alias_matrix_tensor
   tt.func public @alias_matrix_tensor() {
-    // CHECK-DAG: arith.constant dense<[true, false, false, false]> : tensor<4xi1
     // CHECK-DAG: arith.constant dense<[true, true, false, false]> : tensor<4xi1
     // CHECK-DAG: arith.constant dense<[false, false, true, false]> : tensor<4xi1
+    // CHECK-DAG: arith.constant dense<[false, true, false, false]> : tensor<4xi1
     %buf0 = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
     %buf1 = ttng.tmem_alloc {tensor_memory_col_offset = 64 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
     %buf3 = ttng.tmem_subslice %buf0 {offset = 32 : i32} : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<64x32xf32, #tmem, #ttng.tensor_memory, mutable, 64x64>
@@ -1970,7 +1970,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK-LABEL: @alias_matrix_mixed
   tt.func public @alias_matrix_mixed() {
     // CHECK-DAG: arith.constant dense<true> : tensor<1xi1
-    // CHECK-DAG: arith.constant dense<true> : tensor<2xi1
+    // CHECK-DAG: arith.constant dense<[true, true, false, false]> : tensor<4xi1
+    // CHECK-DAG: arith.constant dense<[false, true, true, false]> : tensor<4xi1
     %smem0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
     %smem1 = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
     %tmem0 = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
@@ -1989,9 +1990,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
   // CHECK-LABEL: @ws_alias_matrix
   tt.func public @ws_alias_matrix() {
-    // We expect the overlapping-view check mask in the default region and
+    // We expect exact overlapping-atom masks in the default region and
     // partition0 after lowering warp_specialize.
-    // CHECK-DAG: arith.constant dense<true> : tensor<2xi1
+    // CHECK-DAG: arith.constant dense<[true, true, false, false]> : tensor<4xi1
+    // CHECK-DAG: arith.constant dense<[false, true, true, false]> : tensor<4xi1
     %smem0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
     %smem1 = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
@@ -2005,7 +2007,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       ttg.warp_yield
     }
     partition0(%arg0: !ttg.memdesc<32xf32, #shared, #smem, mutable>, %arg1: !ttg.memdesc<32xf32, #shared, #smem, mutable>, %arg2: !ttg.memdesc<1xi64, #shared, #smem, mutable>) num_warps(1) {
-      // CHECK: arith.constant dense<true> : tensor<2xi1
+      // CHECK: arith.constant dense<[true, true, false, false]> : tensor<4xi1
+      // CHECK: arith.constant dense<[false, true, true, false]> : tensor<4xi1
       %c0 = arith.constant 0 : i32
       ttg.local_load %arg0 : !ttg.memdesc<32xf32, #shared, #smem, mutable> -> tensor<32xf32>
       ttg.local_load %arg1 : !ttg.memdesc<32xf32, #shared, #smem, mutable> -> tensor<32xf32>

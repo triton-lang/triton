@@ -84,20 +84,6 @@ triton::LinearLayout getMemDescLinearLayout(ttg::MemDescType ty) {
 
 uint32_t getMemDescStorageStride(ttg::MemDescType ty);
 
-size_t getMemDescLayoutRank(ttg::MemDescType ty) {
-  Attribute encoding = ty.getEncoding();
-  if (auto swizzled = dyn_cast<ttg::SwizzledSharedEncodingAttr>(encoding))
-    return swizzled.getOrder().size();
-  if (auto padded = ttg::getPaddedEncoding(encoding))
-    return padded.getRank();
-  if (isa<ttg::NVMMASharedEncodingAttr>(encoding))
-    return std::min<int64_t>(2, ty.getRank());
-  if (isa<ttng::TensorMemoryEncodingAttr, ttng::TensorMemoryScalesEncodingAttr>(
-          encoding))
-    return 2;
-  return ty.getRank();
-}
-
 FailureOr<triton::AddressSet> getMemDescAddresses(
     uint32_t storageBase, uint32_t affineOffset, ttg::MemDescType ty,
     Operation *op,
@@ -116,9 +102,10 @@ FailureOr<triton::AddressSet> getMemDescAddresses(
     return relative->translated(storageBase);
   }
   bool isTmem = isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace());
-  size_t declaredLayoutRank = getMemDescLayoutRank(ty);
-  if (declaredLayoutRank != ty.getRank()) {
-    if (declaredLayoutRank + 1 != ty.getRank()) {
+  size_t encodingRank =
+      cast<ttg::LayoutEncodingTrait>(ty.getEncoding()).getRank();
+  if (encodingRank != ty.getRank()) {
+    if (encodingRank + 1 != ty.getRank()) {
       op->emitError("unsupported multibuffer rank in exact buffer region "
                     "analysis");
       return failure();
@@ -528,7 +515,6 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions) {
   }
 
   struct ComponentPlan {
-    BufferStateBasis basis;
     SmallVector<unsigned> regionIds;
     SmallVector<llvm::SmallBitVector> atomMemberships;
   };
@@ -560,12 +546,8 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions) {
       atomMemberships.push_back(std::move(membership));
     }
 
-    bool useAtoms = atomMemberships.size() < component.size();
-    componentPlans.push_back(
-        {useAtoms ? BufferStateBasis::Atoms : BufferStateBasis::Views,
-         component, std::move(atomMemberships)});
-    plan.numLanes += useAtoms ? componentPlans.back().atomMemberships.size()
-                              : component.size();
+    plan.numLanes += atomMemberships.size();
+    componentPlans.push_back({component, std::move(atomMemberships)});
   }
 
   for (BufferStateMasks &masks : plan.regionMasks) {
@@ -577,37 +559,20 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions) {
   unsigned laneBegin = 0;
   for (const ComponentPlan &componentPlan : componentPlans) {
     BufferStateComponent component;
-    component.basis = componentPlan.basis;
     component.regionIds = componentPlan.regionIds;
     component.laneBegin = laneBegin;
-    component.laneCount = component.basis == BufferStateBasis::Atoms
-                              ? componentPlan.atomMemberships.size()
-                              : component.regionIds.size();
+    component.laneCount = componentPlan.atomMemberships.size();
 
-    if (component.basis == BufferStateBasis::Atoms) {
-      for (auto [atomId, membership] :
-           llvm::enumerate(componentPlan.atomMemberships)) {
-        unsigned lane = laneBegin + atomId;
-        for (auto [localId, regionId] : llvm::enumerate(component.regionIds)) {
-          if (!membership.test(localId))
-            continue;
-          BufferStateMasks &masks = plan.regionMasks[regionId];
-          masks.update.set(lane);
-          masks.check.set(lane);
-          masks.complete.set(lane);
-        }
-      }
-    } else {
+    for (auto [atomId, membership] :
+         llvm::enumerate(componentPlan.atomMemberships)) {
+      unsigned lane = laneBegin + atomId;
       for (auto [localId, regionId] : llvm::enumerate(component.regionIds)) {
+        if (!membership.test(localId))
+          continue;
         BufferStateMasks &masks = plan.regionMasks[regionId];
-        masks.update.set(laneBegin + localId);
-        for (auto [otherLocalId, otherRegionId] :
-             llvm::enumerate(component.regionIds)) {
-          if (regions[regionId].intersects(regions[otherRegionId]))
-            masks.check.set(laneBegin + otherLocalId);
-          if (regions[regionId].contains(regions[otherRegionId]))
-            masks.complete.set(laneBegin + otherLocalId);
-        }
+        masks.update.set(lane);
+        masks.check.set(lane);
+        masks.complete.set(lane);
       }
     }
 

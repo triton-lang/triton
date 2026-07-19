@@ -196,12 +196,10 @@ struct TestBufferRegionAliasPass
     tt::BufferStatePlan plan = tt::createBufferStatePlan(regions);
     InFlightDiagnostic summary = module.emitRemark();
     summary << "state-plan: lanes=" << plan.numLanes << ", components=";
-    llvm::interleaveComma(
-        plan.components, summary, [&](const tt::BufferStateComponent &comp) {
-          summary << (comp.basis == tt::BufferStateBasis::Atoms ? "atoms"
-                                                                : "views")
-                  << "(" << comp.laneCount << ")";
-        });
+    llvm::interleaveComma(plan.components, summary,
+                          [&](const tt::BufferStateComponent &comp) {
+                            summary << "atoms(" << comp.laneCount << ")";
+                          });
 
     for (const auto &[name, info] : namedRegions) {
       SmallVector<tt::BufferRegion> candidates(info.regions.begin(),

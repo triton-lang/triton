@@ -174,6 +174,28 @@ bool planNeverMissesHazard(ArrayRef<unsigned> addressMasks, unsigned universe) {
   return true;
 }
 
+bool planPublishesEveryAliasingAtom(ArrayRef<unsigned> addressMasks,
+                                    unsigned universe) {
+  SmallVector<triton::BufferRegion> regions;
+  for (auto [id, mask] : llvm::enumerate(addressMasks))
+    regions.push_back(makeRegion(id, mask, universe));
+  triton::BufferStatePlan plan = triton::createBufferStatePlan(regions);
+  if (plan.numLanes > 64)
+    return false;
+
+  for (unsigned generic = 0; generic < regions.size(); ++generic) {
+    uint64_t genericUpdate = toBits(plan.regionMasks[generic].update);
+    for (unsigned async = 0; async < regions.size(); ++async) {
+      uint64_t asyncCheck = toBits(plan.regionMasks[async].check);
+      uint64_t asyncComplete = toBits(plan.regionMasks[async].complete);
+      uint64_t relevantGenericState = genericUpdate & asyncCheck;
+      if (relevantGenericState & ~asyncComplete)
+        return false;
+    }
+  }
+  return true;
+}
+
 } // namespace
 
 TEST(Analysis, BufferStatePlanExhaustiveThreeViewsFourAddresses) {
@@ -181,9 +203,12 @@ TEST(Analysis, BufferStatePlanExhaustiveThreeViewsFourAddresses) {
   constexpr unsigned setCount = 1u << universe;
   for (unsigned a = 0; a < setCount; ++a)
     for (unsigned b = 0; b < setCount; ++b)
-      for (unsigned c = 0; c < setCount; ++c)
+      for (unsigned c = 0; c < setCount; ++c) {
         ASSERT_TRUE(planNeverMissesHazard({a, b, c}, universe))
             << "address masks: " << a << ", " << b << ", " << c;
+        ASSERT_TRUE(planPublishesEveryAliasingAtom({a, b, c}, universe))
+            << "proxy publication masks: " << a << ", " << b << ", " << c;
+      }
 }
 
 TEST(Analysis, BufferStatePlanUsesAtomsForSparsePartition) {
@@ -199,7 +224,6 @@ TEST(Analysis, BufferStatePlanUsesAtomsForSparsePartition) {
 
   triton::BufferStatePlan plan = triton::createBufferStatePlan(regions);
   ASSERT_EQ(plan.components.size(), 1);
-  EXPECT_EQ(plan.components[0].basis, triton::BufferStateBasis::Atoms);
   EXPECT_EQ(plan.numLanes, 2);
 
   for (unsigned exactState = 0; exactState < (1u << universe); ++exactState) {
@@ -215,16 +239,22 @@ TEST(Analysis, BufferStatePlanUsesAtomsForSparsePartition) {
   }
 }
 
-TEST(Analysis, BufferStatePlanBoundsOverlappingWindowsWithViews) {
+TEST(Analysis, BufferStatePlanKeepsPartialOverlapExact) {
   SmallVector<triton::BufferRegion> regions = {
       makeRegion(0, 0b0011, 4),
       makeRegion(1, 0b0110, 4),
   };
   triton::BufferStatePlan plan = triton::createBufferStatePlan(regions);
   ASSERT_EQ(plan.components.size(), 1);
-  EXPECT_EQ(plan.components[0].basis, triton::BufferStateBasis::Views);
-  EXPECT_EQ(plan.numLanes, 2);
+  EXPECT_EQ(plan.numLanes, 3);
+  EXPECT_EQ(toBits(plan.regionMasks[0].update), 0b011);
+  EXPECT_EQ(toBits(plan.regionMasks[1].update), 0b110);
+  EXPECT_EQ(plan.regionMasks[0].update, plan.regionMasks[0].check);
+  EXPECT_EQ(plan.regionMasks[0].update, plan.regionMasks[0].complete);
+  EXPECT_EQ(plan.regionMasks[1].update, plan.regionMasks[1].check);
+  EXPECT_EQ(plan.regionMasks[1].update, plan.regionMasks[1].complete);
   EXPECT_TRUE(planNeverMissesHazard({0b0011, 0b0110}, 4));
+  EXPECT_TRUE(planPublishesEveryAliasingAtom({0b0011, 0b0110}, 4));
 }
 
 } // namespace mlir

@@ -143,18 +143,14 @@ bool hasCrossBufferAliasing(llvm::ArrayRef<BufferRegion> regions);
 //===----------------------------------------------------------------------===//
 
 /// ConSan operations consume three masks over an abstract state-lane space.
-/// The lane geometry is deliberately absent from codegen: lanes may represent
-/// exact physical atoms or logical views.
+/// Each lane represents one unique physical region-membership atom.
 struct BufferStateMasks {
   llvm::SmallBitVector update;
   llvm::SmallBitVector check;
   llvm::SmallBitVector complete;
 };
 
-enum class BufferStateBasis : uint8_t { Views, Atoms };
-
 struct BufferStateComponent {
-  BufferStateBasis basis = BufferStateBasis::Views;
   llvm::SmallVector<unsigned> regionIds;
   unsigned laneBegin = 0;
   unsigned laneCount = 0;

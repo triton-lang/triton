@@ -100,12 +100,13 @@ At a high level, the pass maintains:
 
 Shared-memory regions are byte address sets. Tensor-memory regions use encoded
 32-bit-word addresses `(row << 16) | column`. BufferRegion analysis computes
-intersection and containment exactly from these sets. It then chooses, per
-overlap-connected component, the smaller of logical-view lanes and unique
-physical-membership atoms. Each access lowers to constant update, hazard-check,
-and completion masks over that lane space. Static accesses need no runtime
-buffer lookup; genuinely dynamic memdesc values select among compile-time masks
-by comparing their runtime base.
+intersection and containment exactly from these sets. For each
+overlap-connected component, it creates one lane per unique physical
+region-membership atom. Addresses with the same region membership share a lane,
+which is the minimal exact representation for mask-based state updates. Each
+access lowers to constant update, hazard-check, and completion masks over that
+lane space. Static accesses need no runtime buffer lookup; genuinely dynamic
+memdesc values select among compile-time masks by comparing their runtime base.
 
 Most runtime state is CTA-qualified so cluster, multicast, and cross-CTA effects
 can be represented directly. Scratch state is zero-initialized once before the
@@ -191,9 +192,10 @@ places that ordinary read visibility is transported:
   an arrive does not make a later async access by the arriving thread legal.
 - An async-proxy write that signals an mbarrier snapshots the issuing base
   thread's frontier at launch time, after its proxy-ordering check, but only for
-  state lanes whose physical footprint is contained in the write destination.
-  This lets the completion wait transport a fence immediately preceding a TMA
-  load without publishing bytes outside its destination.
+  physical membership atoms in the write destination. This lets the completion
+  wait transport a fence immediately preceding a TMA load without publishing
+  bytes outside its destination, including when the destination only partially
+  overlaps another logical view.
 - A successful mbarrier wait merges the selected barrier row into the waiting
   base thread's row. A fence before the wait cannot cover accesses learned only
   by that wait; a fence after the wait can.

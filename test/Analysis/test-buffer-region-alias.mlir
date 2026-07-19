@@ -31,11 +31,12 @@ module attributes {test.print_state_plan, test.state_plan_only} {
 
 // -----
 
-// Partially overlapping windows would form three physical atoms, so the plan
-// retains two view lanes and expands only the check masks.
-// expected-remark @below {{state-plan: lanes=2, components=views(2)}}
-// expected-remark @below {{a_left case [0, 2]: update={0}, check={0,1}, complete={0}}}
-// expected-remark @below {{b_right case [1, 2]: update={1}, check={0,1}, complete={1}}}
+// Partially overlapping windows require three physical atoms. Keeping the
+// shared atom exact is necessary when a completion barrier publishes proxy
+// fence state for only one of the two windows.
+// expected-remark @below {{state-plan: lanes=3, components=atoms(3)}}
+// expected-remark @below {{a_left case [0, 2]: update={0,1}, check={0,1}, complete={0,1}}}
+// expected-remark @below {{b_right case [1, 2]: update={1,2}, check={1,2}, complete={1,2}}}
 module attributes {test.print_state_plan, test.state_plan_only} {
   tt.func private @left() attributes {
     test.region_name = "a_left",
