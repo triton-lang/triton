@@ -291,10 +291,14 @@ LogicalResult AsyncSharedStoreOp::verify() {
                           : toLinearLayout(dstTy);
   auto cvt = regLayout.invertAndCompose(sharedLayout);
   std::optional<int> maybeMaxVecElems;
-  if (isPaddedEncoding(dstTy.getEncoding()))
+  bool allowPerm = true;
+  if (isPaddedEncoding(dstTy.getEncoding())) {
     maybeMaxVecElems = getMinInterval(dstTy.getEncoding());
-  auto vectorization =
-      largestVectorisation(getContext(), cvt, bitwidth, maybeMaxVecElems);
+    // A padding interval bounds the vectorisation; don't permute past it.
+    allowPerm = false;
+  }
+  auto vectorization = largestVectorisation(getContext(), cvt, bitwidth,
+                                            allowPerm, maybeMaxVecElems);
   unsigned elemsPerVec = vectorization.first;
   if (elemsPerVec * bitwidth < 32)
     return emitOpError("requires a layout vectorizing stores to at least 32 "

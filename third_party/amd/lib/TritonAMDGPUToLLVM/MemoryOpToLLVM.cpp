@@ -592,8 +592,8 @@ private:
     // Check that we will be able to vectorize the load.
     // Need to have exactly ldsTransLoadParams->tileSize,
     // otherwise we can't use ds_read_tr
-    auto [elemsPerVec, permutation] =
-        largestVectorisation(ctx, cvt, bitWidth, ldsTransLoadParams->tileSize);
+    auto [elemsPerVec, permutation] = largestVectorisation(
+        ctx, cvt, bitWidth, /*allowPerm=*/false, ldsTransLoadParams->tileSize);
 
     if (paddedEnc)
       elemsPerVec = std::min<int>(elemsPerVec, paddedEnc.getMinInterval());
@@ -625,7 +625,7 @@ private:
         llvmElemTy, smemObj.getBase(), paddingShifts, affineOffset,
         maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
         /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
-        ldsTransLoadParams->tileSize, lowerInst);
+        /*allowPerm=*/false, ldsTransLoadParams->tileSize, lowerInst);
     Value result =
         packUniqueTensorElements(loc, typeConverter, outVals, rewriter, retTy);
     rewriter.replaceOp(op, result);

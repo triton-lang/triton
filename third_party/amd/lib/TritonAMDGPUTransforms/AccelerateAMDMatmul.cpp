@@ -517,8 +517,8 @@ SmallVector<unsigned, 2> deduceTilesPerWarpForScale(
     auto composedLL = inferredLayout.invertAndCompose(sharedLL).flattenOuts();
     LLVM_DEBUG(llvm::dbgs()
                << "inferred composed layout: " << composedLL << "\n");
-    auto [v, _] =
-        largestVectorisation(context, composedLL, /*bitwidth=*/8, std::nullopt);
+    auto [v, _] = largestVectorisation(context, composedLL, /*bitwidth=*/8,
+                                       /*allowPerm=*/true, std::nullopt);
     return v;
   };
 

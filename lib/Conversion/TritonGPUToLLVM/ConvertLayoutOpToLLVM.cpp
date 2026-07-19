@@ -217,13 +217,14 @@ struct ConvertLayoutOpConversion
       lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
                       /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset,
                       /*affineBlockOffset=*/Value(),
-                      /*maskSpanAffineBlock=*/0, rewriter, targetInfo);
+                      /*maskSpanAffineBlock=*/0, rewriter, targetInfo,
+                      /*allowPerm=*/true);
       emitBarrier();
       // Load
       auto tileOutVals = lowerLdStShared(
           loc, ctx, loadCvt, {}, llvmElemTy, smemBase, /*paddingShifts=*/{},
           affineOffset, maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
-          /*maskSpanAffineBlock=*/0, rewriter, targetInfo);
+          /*maskSpanAffineBlock=*/0, rewriter, targetInfo, /*allowPerm=*/true);
       llvm::append_range(outVals, tileOutVals);
     }
 

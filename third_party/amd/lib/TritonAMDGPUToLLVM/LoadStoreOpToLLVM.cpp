@@ -502,7 +502,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     lowerLdSt(loc, ctx, cvt, vals, resElemTy, smemObj.getBase(), paddingShifts,
               affineOffset, maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
               /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
-              vec, lowerInstForwardMulticastMask);
+              /*allowPerm=*/false, vec, lowerInstForwardMulticastMask);
     return success();
   }
 

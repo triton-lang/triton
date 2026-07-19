@@ -471,7 +471,7 @@ LinearLayout transposeLinearLayout(LinearLayout layout, ArrayRef<int> order) {
 
 std::pair<int, ColumnAction>
 largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
-                     std::optional<int> maybeMaxVecElems) {
+                     bool allowPerm, std::optional<int> maybeMaxVecElems) {
   // Find the largest vectorisation we can use:
   auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
   StringAttr kReg = S("register");
@@ -479,9 +479,6 @@ largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
   LinearLayout quot;
   LinearLayout tile;
   ColumnAction permutation;
-  // If there are restrictions on the vectorisation, we don't allow
-  // permutations.
-  auto allowPerm = !maybeMaxVecElems.has_value();
   auto maxVecElems = maybeMaxVecElems.value_or(128 / bitwidth);
   for (int v = maxVecElems; v >= 1; v /= 2) {
     tile = LinearLayout::identity1D(v, kReg, kOffset);
@@ -490,6 +487,8 @@ largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
       continue;
     }
     permutation = *maybePerm;
+    // If register permutation is not allowed, only accept vectorisations that
+    // divide the layout in its current register order.
     if (!allowPerm && !permutation.isIdentity()) {
       continue;
     }

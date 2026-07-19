@@ -357,9 +357,12 @@ static void lowerAsyncSharedStore(Location loc, MLIRContext *ctx,
   auto [maskSpanAffineOffset, maskSpanAffineBlock] =
       dstMemObj.getMaskSpanOffsetsAndBlocks(dstTy);
   std::optional<int> maybeMaxVecElems;
+  bool allowPerm = true;
   SmallVector<std::pair<unsigned, unsigned>> paddingShifts;
   if (triton::gpu::isPaddedEncoding(dstTy.getEncoding())) {
     maybeMaxVecElems = triton::gpu::getMinInterval(dstTy.getEncoding());
+    // A padding interval bounds the vectorisation; don't permute past it.
+    allowPerm = false;
     auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
     paddingShifts = getPaddedSharedShifts(dstTy.getEncoding(), bitwidth,
                                           /*offsetInBytes=*/true);
@@ -385,7 +388,7 @@ static void lowerAsyncSharedStore(Location loc, MLIRContext *ctx,
   lowerLdSt(loc, ctx, cvt, vals, llvmElemTy, smemBases, paddingShifts,
             affineOffset, maskSpanAffineOffset, affineBlockOffset,
             maskSpanAffineBlock, laneId, warpId, rewriter, targetInfo,
-            maybeMaxVecElems, emitSt);
+            allowPerm, maybeMaxVecElems, emitSt);
 }
 
 struct AsyncSharedStoreOpConversion
