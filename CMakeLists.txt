@@ -317,10 +317,17 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   # Python Interpreter is used to run lit tests
   find_package(Python3 REQUIRED COMPONENTS Development.Module Interpreter)
-  # nanobind requires CMake's FindPython package. Pin it to the interpreter
-  # selected above so Python and Python3 targets are consistent.
-  set(Python_EXECUTABLE "${Python3_EXECUTABLE}")
-  find_package(Python REQUIRED COMPONENTS Interpreter Development)
+  # nanobind uses the FindPython target and variables, while Triton uses
+  # FindPython3. Bridge the two without requesting Development.Embed: the
+  # isolated interpreters used by wheel builds only provide module artifacts.
+  if(NOT TARGET Python::Module)
+    add_library(Python::Module ALIAS Python3::Module)
+    set(Python_EXECUTABLE "${Python3_EXECUTABLE}")
+    set(Python_INCLUDE_DIRS "${Python3_INCLUDE_DIRS}")
+    set(Python_SOABI "${Python3_SOABI}")
+    set(Python_VERSION "${Python3_VERSION}")
+    set(Python_INTERPRETER_ID "${Python3_INTERPRETER_ID}")
+  endif()
 
   find_package(nanobind CONFIG REQUIRED HINTS "${Python3_SITELIB}")
   nanobind_build_library(nanobind-static)
