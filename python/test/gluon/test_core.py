@@ -3082,6 +3082,34 @@ def in_thread_transpose_roundtrip_kernel(input, output, M: ttgl.constexpr, N: tt
     ttgl.store(output + offs_m * N + offs_n, out_data)
 
 
+@gluon.jit
+def in_thread_convert_layout_kernel(input, output, N: ttgl.constexpr, src_layout: ttgl.constexpr,
+                                    dst_layout: ttgl.constexpr):
+    src_offsets = ttgl.arange(0, N, layout=src_layout)
+    value = ttgl.load(input + src_offsets)
+    value = ttgl.convert_layout(value, dst_layout)
+    dst_offsets = ttgl.arange(0, N, layout=dst_layout)
+    ttgl.store(output + dst_offsets, value)
+
+
+@pytest.mark.parametrize("src_reg_bases, dst_reg_bases", [
+    ([[1], [0], [2]], [[2], [1]]),
+    ([[1], [2]], [[2], [0], [1]]),
+    ([[1], [0], [2]], [[0], [2], [1]]),
+])
+def test_in_thread_convert_layout_broadcast_registers(src_reg_bases, dst_reg_bases):
+    N = 4 * THREADS_PER_WARP
+    lane_bases = [[4 * (2**i)] for i in range(int(math.log2(THREADS_PER_WARP)))]
+    src_layout = ttgl.DistributedLinearLayout(src_reg_bases, lane_bases, [], [], [N])
+    dst_layout = ttgl.DistributedLinearLayout(dst_reg_bases, lane_bases, [], [], [N])
+
+    input = torch.arange(N, device="cuda", dtype=torch.float32)
+    output = torch.empty_like(input)
+    in_thread_convert_layout_kernel[(1, )](input, output, N, src_layout, dst_layout, num_warps=1)
+
+    torch.testing.assert_close(output, input, rtol=0, atol=0)
+
+
 @pytest.mark.skipif(not (is_hip_cdna() or is_hip_rdna()),
                     reason="Correctness tests for special cases on AMD architectures")
 @pytest.mark.parametrize("src_reg_bases, dst_reg_bases", [

@@ -1218,11 +1218,8 @@ bool supportMMA(Value value, int version) {
 // distributed shared memory. If it's also the identity on kWarp, we can
 // transfer via warp-shuffles, and if it's the identity on kLane just have to
 // reorder the registers.
-LinearLayout minimalCvtLayout(Type srcTy_, Type dstTy_) {
-  auto srcTy = cast<triton::gpu::TensorOrMemDesc>(srcTy_);
-  auto dstTy = cast<triton::gpu::TensorOrMemDesc>(dstTy_);
-  LinearLayout srcLayout = toLinearLayout(srcTy);
-  LinearLayout dstLayout = toLinearLayout(dstTy);
+LinearLayout minimalCvtLayout(const LinearLayout &srcLayout,
+                              const LinearLayout &dstLayout) {
   auto sDims = to_vector(srcLayout.getInDimNames());
   auto dDims = to_vector(dstLayout.getInDimNames());
   SmallVector<StringAttr> dims;
@@ -1245,6 +1242,12 @@ LinearLayout minimalCvtLayout(Type srcTy_, Type dstTy_) {
     comp = *quotient;
   }
   return comp;
+}
+
+LinearLayout minimalCvtLayout(Type srcTy_, Type dstTy_) {
+  auto srcTy = cast<triton::gpu::TensorOrMemDesc>(srcTy_);
+  auto dstTy = cast<triton::gpu::TensorOrMemDesc>(dstTy_);
+  return minimalCvtLayout(toLinearLayout(srcTy), toLinearLayout(dstTy));
 }
 
 bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {

@@ -813,6 +813,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
+#reg_broadcast_src = #ttg.linear<{register = [[1], [0], [2]], lane = [[0], [0], [0], [0], [0]], warp = [], block = []}>
+#reg_broadcast_dst = #ttg.linear<{register = [[0], [2], [1]], lane = [[0], [0], [0], [0], [0]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: llvm.func @convert_layout_unique_registers
+  tt.func @convert_layout_unique_registers(
+      %arg0: tensor<4xi32, #reg_broadcast_src>) {
+    // CHECK-DAG: %[[V0:.*]] = llvm.extractvalue %arg0[0]
+    // CHECK-DAG: %[[V1:.*]] = llvm.extractvalue %arg0[1]
+    // CHECK-DAG: %[[V2:.*]] = llvm.extractvalue %arg0[2]
+    // CHECK-DAG: %[[V3:.*]] = llvm.extractvalue %arg0[3]
+    // CHECK: %[[UNDEF:.*]] = llvm.mlir.undef : !llvm.struct<(i32, i32, i32, i32)>
+    // CHECK: %[[R0:.*]] = llvm.insertvalue %[[V0]], %[[UNDEF]][0]
+    // CHECK: %[[R1:.*]] = llvm.insertvalue %[[V2]], %[[R0]][1]
+    // CHECK: %[[R2:.*]] = llvm.insertvalue %[[V1]], %[[R1]][2]
+    // CHECK: llvm.insertvalue %[[V3]], %[[R2]][3]
+    %0 = ttg.convert_layout %arg0
+        : tensor<4xi32, #reg_broadcast_src>
+          -> tensor<4xi32, #reg_broadcast_dst>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [32, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [16, 2], threadsPerWarp = [2, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
