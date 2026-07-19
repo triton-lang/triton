@@ -56,6 +56,8 @@ bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
     return ttng::getModuleTwoCTAs(op);
   } else if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     return tma.getMulticast();
+  } else if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op)) {
+    return arrive.isMulticast();
   }
   return hasTCGen5CommitCrossCTA(op);
 }
@@ -125,6 +127,9 @@ usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
   }
   if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
     return aliasesTracked(store.getMbarrier());
+  }
+  if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op)) {
+    return arrive.isMulticast() && aliasesTracked(arrive.getAlloc());
   }
   return false;
 }
