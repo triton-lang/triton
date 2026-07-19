@@ -1150,6 +1150,8 @@ def test_trace(tmp_path: pathlib.Path, device: str):
 
     with proton.scope("test"):
         foo[(1, )](x, y, x.size()[0], num_warps=4)
+        # Wait for the kernel to finish so that the kernel event is captured before the `test` scope ends.
+        torch.cuda.synchronize()
 
     proton.finalize()
 
