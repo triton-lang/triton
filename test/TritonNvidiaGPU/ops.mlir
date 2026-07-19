@@ -1,4 +1,4 @@
-// RUN: triton-opt %s | FileCheck %s
+// RUN: triton-opt %s -split-input-file --verify-diagnostics | FileCheck %s
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
@@ -263,6 +263,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   // CHECK-SAME: !ttng.tensordesc_im2col<64x128xf16, {{.*}}>
   tt.func public @tensordesc_im2col(%desc: !ttng.tensordesc_im2col<64x128xf16, #nvmma_128>) {
     // CHECK: tt.return
+    tt.return
+  }
+}
+
+// -----
+
+#linear = #ttg.linear<{register = [[0, 8], [0, 1]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[0, 2], [0, 4]], block = [[0, 0]]}>
+#padded = #ttg.padded_shared<[16:+8] {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], block = [[0, 0]]}>
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem_padded = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @async_shared_store_padded_needs_perm(%src: tensor<32x16xf16, #linear>, %dst: !ttg.memdesc<32x16xf16, #padded, #smem_padded, mutable>, %mbarrier: !ttg.memdesc<2xi64, #bar, #smem_padded, mutable>) {
+    // expected-error @+1 {{requires a layout vectorizing stores to at least 32 bits}}
+    ttng.async_shared_store %src, %dst, %mbarrier : tensor<32x16xf16, #linear> -> !ttg.memdesc<32x16xf16, #padded, #smem_padded, mutable>, !ttg.memdesc<2xi64, #bar, #smem_padded, mutable>
     tt.return
   }
 }
