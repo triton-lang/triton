@@ -618,19 +618,19 @@ public:
 
     ImplicitLocOpBuilder b(entryPoint.getLoc(), entryPoint);
     b.setInsertionPointToStart(&entryPoint.getBody().front());
-    if (failed(instrumentMemoryOperations(b, funcBuilder)))
+    if (failed(instrumentMemoryOperations(entryPoint, b, funcBuilder)))
       return failure();
-    initializeAllocations();
+    initializeAllocations(entryPoint);
     return success();
   }
 
 private:
-  void initializeAllocations() {
+  void initializeAllocations(tt::FuncOp entryPoint) {
     if (!shouldInitializeAllocations())
       return;
 
     SmallVector<Operation *> allocationsToInitialize;
-    module.walk([&](Operation *op) {
+    entryPoint.walk([&](Operation *op) {
       if (auto alloc = dyn_cast<ttg::LocalAllocOp>(op)) {
         if (!alloc.getSrc())
           allocationsToInitialize.push_back(op);
@@ -656,10 +656,11 @@ private:
     }
   }
 
-  LogicalResult instrumentMemoryOperations(ImplicitLocOpBuilder &b,
+  LogicalResult instrumentMemoryOperations(tt::FuncOp entryPoint,
+                                           ImplicitLocOpBuilder &b,
                                            tti::FunctionBuilder &funcBuilder) {
     SmallVector<ttng::ClusterBarrierOp> clusterBarriers;
-    WalkResult walkResult = module.walk([&](Operation *op) -> WalkResult {
+    WalkResult walkResult = entryPoint.walk([&](Operation *op) -> WalkResult {
       CriticalSectionListener listener;
       b.setListener(&listener);
 

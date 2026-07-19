@@ -482,6 +482,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+#callee_reduce_layout = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 16 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // ConSan state is scoped to the kernel entry point. Scratch effects in a
+  // private noinline callee must not make the pass instrument that function.
+  // CHECK-LABEL: @entry_with_scratch_callee
+  tt.func public @entry_with_scratch_callee() {
+    tt.call @scratch_reduce_callee() : () -> ()
+    tt.return
+  }
+
+  // CHECK-LABEL: tt.func private @scratch_reduce_callee
+  // CHECK-NOT: __triton_consan
+  // CHECK: tt.return
+  tt.func private @scratch_reduce_callee() attributes {noinline = true} {
+    %value = arith.constant dense<0.000000e+00> : tensor<1x256xf32, #callee_reduce_layout>
+    %reduced = "tt.reduce"(%value) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %sum = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %sum : f32
+    }) {allocation.offset = 0 : i32, allocation.size = 16 : i32}
+        : (tensor<1x256xf32, #callee_reduce_layout>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #callee_reduce_layout}>>
+    tt.return
+  }
+}
+
+// -----
+
 #cross_src = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
 #cross_dst = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1]]}>
 
