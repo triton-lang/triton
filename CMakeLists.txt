@@ -20,6 +20,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" ON)
+option(TRITON_STABLE_ABI "Build with Python Stable ABI (abi3) for Python 3.12+" OFF)
 option(TRITON_BUILD_UT "Build C++ Triton Unit Tests" ON)
 option(TRITON_BUILD_WITH_CCACHE "Build with ccache (if available)" ON)
 option(TRITON_OFFLINE_BUILD "Build without downloading dependencies" OFF)
@@ -316,20 +317,16 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   # Python Interpreter is used to run lit tests
   find_package(Python3 REQUIRED COMPONENTS Development.Module Interpreter)
-  # nanobind expects find_package(Python) which sets Python::Module target
-  # and Python_* variables. Triton uses find_package(Python3) instead.
-  # Bridge the two by aliasing the target and forwarding variables.
-  if(NOT TARGET Python::Module)
-    add_library(Python::Module ALIAS Python3::Module)
-    set(Python_EXECUTABLE "${Python3_EXECUTABLE}")
-    set(Python_INCLUDE_DIRS "${Python3_INCLUDE_DIRS}")
-    set(Python_SOABI "${Python3_SOABI}")
-    set(Python_VERSION "${Python3_VERSION}")
-    set(Python_INTERPRETER_ID "${Python3_INTERPRETER_ID}")
-  endif()
+  # nanobind requires CMake's FindPython package. Pin it to the interpreter
+  # selected above so Python and Python3 targets are consistent.
+  set(Python_EXECUTABLE "${Python3_EXECUTABLE}")
+  find_package(Python REQUIRED COMPONENTS Interpreter Development)
 
   find_package(nanobind CONFIG REQUIRED HINTS "${Python3_SITELIB}")
   nanobind_build_library(nanobind-static)
+  if(TRITON_STABLE_ABI)
+    target_compile_definitions(nanobind-static PUBLIC Py_LIMITED_API=0x030C0000)
+  endif()
   target_link_libraries(nanobind-static PRIVATE Python3::Module)
 
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
