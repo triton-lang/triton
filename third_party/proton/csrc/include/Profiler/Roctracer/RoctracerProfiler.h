@@ -13,7 +13,7 @@ public:
 private:
   struct RoctracerProfilerPimpl;
 
-  // Keep ROCTracer trace timestamps unchanged.
+  // XXX(Keren): RocTracer is deprecated, so we don't fix problems
   int64_t getTimestampOffsetNs() const override { return 0; }
 
   virtual void
