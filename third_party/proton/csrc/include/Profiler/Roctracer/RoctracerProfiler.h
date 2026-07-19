@@ -13,6 +13,9 @@ public:
 private:
   struct RoctracerProfilerPimpl;
 
+  // Keep ROCTracer trace timestamps unchanged.
+  int64_t getTimestampOffsetNs() const override { return 0; }
+
   virtual void
   doSetMode(const std::vector<std::string> &modeAndOptions) override;
 };

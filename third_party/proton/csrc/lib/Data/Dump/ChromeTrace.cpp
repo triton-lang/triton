@@ -98,14 +98,12 @@ void dumpKernelEvents(
     for (const auto &event : events) {
       auto *kernelMetric = event.kernelMetric;
       auto *flexibleMetrics = event.flexibleMetrics;
-      uint64_t startTimeNs =
-          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
-      uint64_t endTimeNs =
-          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::EndTime));
       bool isMetricKernel = static_cast<bool>(std::get<uint64_t>(
           kernelMetric->getValue(KernelMetric::IsMetricKernel)));
-      double ts = static_cast<double>(startTimeNs - minTimeStamp) / 1000;
-      double dur = static_cast<double>(endTimeNs - startTimeNs) / 1000;
+      double ts =
+          static_cast<double>(event.startTimeNs - minTimeStamp) / 1000;
+      double dur =
+          static_cast<double>(event.endTimeNs - event.startTimeNs) / 1000;
 
       const auto &contexts = event.contexts;
 
@@ -225,9 +223,6 @@ void dumpCpuToGpuFlowEvents(
       }
 
       const auto *launchEvent = launchEventIt->second;
-      const auto kernelStartTimeNs = std::get<uint64_t>(
-          event.kernelMetric->getValue(KernelMetric::StartTime));
-
       json startElement;
       startElement["name"] = "launch->kernel";
       startElement["cat"] = "flow";
@@ -247,7 +242,7 @@ void dumpCpuToGpuFlowEvents(
       finishElement["pid"] = details::kTraceProcessId;
       finishElement["tid"] = details::getGpuLaneId(streamId);
       finishElement["ts"] =
-          static_cast<double>(kernelStartTimeNs - minTimeStamp) / 1000.0;
+          static_cast<double>(event.startTimeNs - minTimeStamp) / 1000.0;
       finishElement["id"] = event.launchEventId;
       finishElement["bp"] = "e";
       object["traceEvents"].push_back(std::move(finishElement));

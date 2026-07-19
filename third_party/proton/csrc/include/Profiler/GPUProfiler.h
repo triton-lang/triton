@@ -48,6 +48,7 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
 template <typename ConcreteProfilerT>
 class GPUProfiler : public Profiler,
                     public OpInterface,
+                    public TimestampAlignmentInterface,
                     public Singleton<ConcreteProfilerT> {
 public:
   GPUProfiler() = default;
@@ -76,13 +77,8 @@ public:
       ThreadSafeMap<size_t, ExternIdState,
                     std::unordered_map<size_t, ExternIdState>>;
 
-  /// Convert a GPU profiler timestamp to the system clock's nanosecond time
-  /// domain.
-  uint64_t alignTimestampToCpu(uint64_t timestamp) const {
-    const auto offsetNs = timestampOffsetNs.load(std::memory_order_acquire);
-    if (offsetNs >= 0)
-      return timestamp + static_cast<uint64_t>(offsetNs);
-    return timestamp - static_cast<uint64_t>(-offsetNs);
+  int64_t getTimestampOffsetNs() const override {
+    return timestampOffsetNs.load(std::memory_order_acquire);
   }
 
 protected:
