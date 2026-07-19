@@ -13,6 +13,8 @@ public:
 private:
   struct CuptiProfilerPimpl;
 
+  uint64_t doGetTimestamp() override;
+
   virtual void
   doSetMode(const std::vector<std::string> &modeAndOptions) override;
 };

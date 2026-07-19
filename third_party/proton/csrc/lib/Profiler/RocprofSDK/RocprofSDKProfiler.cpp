@@ -210,6 +210,7 @@ private:
 // ---- Metric conversion ----
 
 std::unique_ptr<Metric> convertDispatchToMetric(
+    RocprofSDKProfiler &profiler,
     const rocprofiler_buffer_tracing_kernel_dispatch_record_t *record,
     uint64_t streamId) {
   if (record->start_timestamp >= record->end_timestamp)
@@ -217,9 +218,11 @@ std::unique_ptr<Metric> convertDispatchToMetric(
   auto deviceId = static_cast<uint64_t>(
       AgentIdMapper::instance().map(record->dispatch_info.agent_id.handle));
   return std::make_unique<KernelMetric>(
-      static_cast<uint64_t>(record->start_timestamp),
-      static_cast<uint64_t>(record->end_timestamp), 1, deviceId,
-      static_cast<uint64_t>(DeviceType::HIP), streamId);
+      profiler.alignTimestampToCpu(
+          static_cast<uint64_t>(record->start_timestamp)),
+      profiler.alignTimestampToCpu(
+          static_cast<uint64_t>(record->end_timestamp)),
+      1, deviceId, static_cast<uint64_t>(DeviceType::HIP), streamId);
 }
 
 // ---- Kernel name resolution at API ENTER time ----
@@ -389,7 +392,7 @@ void processKernelRecord(
 
   if (!isGraph) {
     for (auto [data, entry] : state.dataToEntry) {
-      if (auto metric = convertDispatchToMetric(record, streamId)) {
+      if (auto metric = convertDispatchToMetric(profiler, record, streamId)) {
         if (state.isMissingName) {
           auto childEntry =
               data->addOp(entry.phase, entry.id, {Context(kernelName)});
@@ -402,7 +405,7 @@ void processKernelRecord(
     }
   } else {
     for (auto [data, entry] : state.dataToEntry) {
-      if (auto metric = convertDispatchToMetric(record, streamId)) {
+      if (auto metric = convertDispatchToMetric(profiler, record, streamId)) {
         auto childEntry =
             data->addOp(entry.phase, entry.id, {Context(kernelName)});
         childEntry.upsertMetric(std::move(metric));
@@ -972,6 +975,12 @@ RocprofSDKProfiler::RocprofSDKProfiler() {
 }
 
 RocprofSDKProfiler::~RocprofSDKProfiler() = default;
+
+uint64_t RocprofSDKProfiler::doGetTimestamp() {
+  rocprofiler_timestamp_t timestamp{};
+  rocprofiler::getTimestamp<true>(&timestamp);
+  return timestamp;
+}
 
 namespace {
 // Runs during dlopen of libproton.so (i.e. `import triton.profiler._C`).

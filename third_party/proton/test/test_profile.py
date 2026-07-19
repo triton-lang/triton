@@ -1156,8 +1156,15 @@ def test_trace(tmp_path: pathlib.Path, device: str):
     with temp_file.open() as f:
         data = json.load(f)
         trace_events = data["traceEvents"]
-        assert trace_events[-1]["name"] == "foo"
-        assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
+        kernel_event = next(
+            event for event in trace_events if event.get("cat") == "kernel" and event["name"] == "foo"
+        )
+        scope_event = next(
+            event for event in trace_events if event.get("cat") == "scope" and event["name"] == "test"
+        )
+        assert kernel_event["args"]["call_stack"] == ["ROOT", "test", "foo"]
+        assert scope_event["ts"] <= kernel_event["ts"]
+        assert kernel_event["ts"] + kernel_event["dur"] <= scope_event["ts"] + scope_event["dur"]
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
