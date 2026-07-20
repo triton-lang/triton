@@ -247,38 +247,6 @@ Value createBufferDescriptor(ImplicitLocOpBuilder &b, Value offsetI32,
   return arith::OrIOp::create(b, lengthShifted, offsetI64);
 }
 
-// Return the descriptor rows whose entire byte interval is covered by
-// [offset, offset + length). Restricting completion-barrier proxy state by
-// containment (rather than overlap) prevents a partial async write from
-// publishing generic accesses to bytes it did not write.
-Value createBuffersContainedInRegionMask(ImplicitLocOpBuilder &b, Value buffers,
-                                         Value offsetI32, Value lengthI32) {
-  auto buffersType = cast<RankedTensorType>(buffers.getType());
-  Value offsetMask =
-      tti::createConstIntTensor(b, b.getLoc(), 0xffffffff, buffersType);
-  Value shift = tti::createConstIntTensor(b, b.getLoc(), 32, buffersType);
-  Value zero = tti::createConstIntTensor(b, b.getLoc(), 0, buffersType);
-  Value bufferOffsets = arith::AndIOp::create(b, buffers, offsetMask);
-  Value bufferLengths = arith::ShRUIOp::create(b, buffers, shift);
-  Value bufferEnds = arith::AddIOp::create(b, bufferOffsets, bufferLengths);
-
-  Value regionOffsetI64 = arith::ExtUIOp::create(b, b.getI64Type(), offsetI32);
-  Value regionLengthI64 = arith::ExtUIOp::create(b, b.getI64Type(), lengthI32);
-  Value regionEndI64 =
-      arith::AddIOp::create(b, regionOffsetI64, regionLengthI64);
-  Value regionOffset = triton::SplatOp::create(b, buffersType, regionOffsetI64);
-  Value regionEnd = triton::SplatOp::create(b, buffersType, regionEndI64);
-
-  Value startsInside = arith::CmpIOp::create(b, arith::CmpIPredicate::uge,
-                                             bufferOffsets, regionOffset);
-  Value endsInside = arith::CmpIOp::create(b, arith::CmpIPredicate::ule,
-                                           bufferEnds, regionEnd);
-  Value nonEmpty =
-      arith::CmpIOp::create(b, arith::CmpIPredicate::ne, bufferLengths, zero);
-  return arith::AndIOp::create(
-      b, nonEmpty, arith::AndIOp::create(b, startsInside, endsInside));
-}
-
 std::tuple<Block *, Block *, Block *> createIfBlock(ImplicitLocOpBuilder &b,
                                                     Value cnd) {
   // #prevBlock
@@ -1512,9 +1480,8 @@ void FunctionBuilder::createUpdateBarrierStateCall(
 }
 
 void FunctionBuilder::createSetWriteVisibilityCall(
-    ImplicitLocOpBuilder &b, MaterializedBufferRegion buffer,
-    uint64_t threadMask, Value pred, MemType memType, Operation *insertPoint,
-    Value effectCTAs) {
+    ImplicitLocOpBuilder &b, Value buf, uint32_t length, uint64_t threadMask,
+    Value pred, MemType memType, Operation *insertPoint, Value effectCTAs) {
 
   if (auxData.buffers[(int)memType].empty() ||
       auxData.writeVisibility[(int)memType].empty()) {
@@ -1530,8 +1497,8 @@ void FunctionBuilder::createSetWriteVisibilityCall(
       auxData.writeVisibility[(int)memType].at(insertPoint).value;
   auto writeVisibilityType = cast<RankedTensorType>(
       auxData.writeVisibility[(int)memType].at(insertPoint).type);
-  Value bufOffset = buffer.baseAddress;
-  Value lengthVal = arith::ConstantIntOp::create(b, buffer.length, 32);
+  Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
+  Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
   SmallVector<Value> args = {bufOffset,     lengthVal,  pred,
                              threadMaskVal, buffersVal, writeVisibilityVal,
                              effectCTAs};
@@ -1576,9 +1543,8 @@ void FunctionBuilder::createSetWriteVisibilityCall(
 }
 
 void FunctionBuilder::createSetReadVisibilityCall(
-    ImplicitLocOpBuilder &b, MaterializedBufferRegion buffer,
-    uint64_t threadMask, Value pred, MemType memType, Operation *insertPoint,
-    Value effectCTAs) {
+    ImplicitLocOpBuilder &b, Value buf, uint32_t length, uint64_t threadMask,
+    Value pred, MemType memType, Operation *insertPoint, Value effectCTAs) {
 
   if (auxData.buffers[(int)memType].empty() ||
       auxData.readVisibility[(int)memType].empty()) {
@@ -1594,8 +1560,8 @@ void FunctionBuilder::createSetReadVisibilityCall(
       auxData.readVisibility[(int)memType].at(insertPoint).value;
   auto readVisibilityType = cast<RankedTensorType>(
       auxData.readVisibility[(int)memType].at(insertPoint).type);
-  Value bufOffset = buffer.baseAddress;
-  Value lengthVal = arith::ConstantIntOp::create(b, buffer.length, 32);
+  Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
+  Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
   SmallVector<Value> args = {bufOffset,     lengthVal,  pred,
                              threadMaskVal, buffersVal, readVisibilityVal,
                              effectCTAs};
@@ -1657,9 +1623,11 @@ void FunctionBuilder::createSetReadVisibilityCall(
       });
 }
 
-void FunctionBuilder::createClearWriteTrackingCall(
-    ImplicitLocOpBuilder &b, MaterializedBufferRegion buffer, Value pred,
-    MemType memType, Operation *insertPoint, Value effectCTAs) {
+void FunctionBuilder::createClearWriteTrackingCall(ImplicitLocOpBuilder &b,
+                                                   Value buf, uint32_t length,
+                                                   Value pred, MemType memType,
+                                                   Operation *insertPoint,
+                                                   Value effectCTAs) {
   if (auxData.buffers[(int)memType].empty() ||
       auxData.writeTracking[(int)memType].empty()) {
     return;
@@ -1673,8 +1641,8 @@ void FunctionBuilder::createClearWriteTrackingCall(
       auxData.writeTracking[(int)memType].at(insertPoint).value;
   auto writeTrackingType = cast<RankedTensorType>(
       auxData.writeTracking[(int)memType].at(insertPoint).type);
-  Value bufOffset = buffer.baseAddress;
-  Value lengthVal = arith::ConstantIntOp::create(b, buffer.length, 32);
+  Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
+  Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
   SmallVector<Value> args = {bufOffset,  lengthVal,        pred,
                              buffersVal, writeTrackingVal, effectCTAs};
   createCallToCachedFunction(
@@ -1713,9 +1681,11 @@ void FunctionBuilder::createClearWriteTrackingCall(
       });
 }
 
-void FunctionBuilder::createClearReadVisibilityCall(
-    ImplicitLocOpBuilder &b, MaterializedBufferRegion buffer, Value pred,
-    MemType memType, Operation *insertPoint, Value effectCTAs) {
+void FunctionBuilder::createClearReadVisibilityCall(ImplicitLocOpBuilder &b,
+                                                    Value buf, uint32_t length,
+                                                    Value pred, MemType memType,
+                                                    Operation *insertPoint,
+                                                    Value effectCTAs) {
   if (auxData.buffers[(int)memType].empty() ||
       auxData.readVisibility[(int)memType].empty()) {
     return;
@@ -1729,8 +1699,8 @@ void FunctionBuilder::createClearReadVisibilityCall(
       auxData.readVisibility[(int)memType].at(insertPoint).value;
   auto readVisibilityType = cast<RankedTensorType>(
       auxData.readVisibility[(int)memType].at(insertPoint).type);
-  Value bufOffset = buffer.baseAddress;
-  Value lengthVal = arith::ConstantIntOp::create(b, buffer.length, 32);
+  Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
+  Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
   SmallVector<Value> args = {bufOffset,  lengthVal,         pred,
                              buffersVal, readVisibilityVal, effectCTAs};
   createCallToCachedFunction(
@@ -1770,9 +1740,11 @@ void FunctionBuilder::createClearReadVisibilityCall(
       });
 }
 
-void FunctionBuilder::createClearReadTrackingCall(
-    ImplicitLocOpBuilder &b, MaterializedBufferRegion buffer, Value pred,
-    MemType memType, Operation *insertPoint, Value effectCTAs) {
+void FunctionBuilder::createClearReadTrackingCall(ImplicitLocOpBuilder &b,
+                                                  Value buf, uint32_t length,
+                                                  Value pred, MemType memType,
+                                                  Operation *insertPoint,
+                                                  Value effectCTAs) {
 
   if (auxData.buffers[(int)memType].empty() ||
       auxData.readTracking[(int)memType].empty()) {
@@ -1787,8 +1759,8 @@ void FunctionBuilder::createClearReadTrackingCall(
       auxData.readTracking[(int)memType].at(insertPoint).value;
   auto readTrackingType = cast<RankedTensorType>(
       auxData.readTracking[(int)memType].at(insertPoint).type);
-  Value bufOffset = buffer.baseAddress;
-  Value lengthVal = arith::ConstantIntOp::create(b, buffer.length, 32);
+  Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
+  Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
   SmallVector<Value> args = {bufOffset,  lengthVal,       pred,
                              buffersVal, readTrackingVal, effectCTAs};
   createCallToCachedFunction(
@@ -2008,8 +1980,8 @@ void FunctionBuilder::createTrackVisibleReadsCall(ImplicitLocOpBuilder &b,
 }
 
 void FunctionBuilder::createTrackBarrierWriteForBufferCall(
-    ImplicitLocOpBuilder &b, Value mbar, MaterializedBufferRegion buffer,
-    Value pred, MemType memType, Operation *insertPoint, Value barrierCTAs,
+    ImplicitLocOpBuilder &b, Value mbar, Value buf, uint32_t length, Value pred,
+    MemType memType, Operation *insertPoint, Value barrierCTAs,
     Value effectCTAs) {
   if (auxData.barriers.empty() || auxData.buffers[(int)memType].empty() ||
       auxData.writeTracking[(int)memType].empty()) {
@@ -2030,8 +2002,8 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
   uint32_t mbarLength = getMemDescLength(mbar);
   Value mbarOffset = tti::ExperimentalMemDescToI32Op::create(b, mbar);
   Value mbarLengthVal = arith::ConstantIntOp::create(b, mbarLength, 32);
-  Value bufOffset = buffer.baseAddress;
-  Value bufLengthVal = arith::ConstantIntOp::create(b, buffer.length, 32);
+  Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
+  Value bufLengthVal = arith::ConstantIntOp::create(b, length, 32);
   SmallVector<Value> args = {mbarOffset, mbarLengthVal,    pred,
                              bufOffset,  bufLengthVal,     barriersVal,
                              buffersVal, writeTrackingVal, barrierCTAs,
@@ -2394,7 +2366,7 @@ void FunctionBuilder::createTransferVisibleReadsCall(
 }
 
 void FunctionBuilder::createVerifyWriteVisibilityCall(
-    ImplicitLocOpBuilder &b, MaterializedBufferRegion buffer, int thread,
+    ImplicitLocOpBuilder &b, Value buf, uint32_t length, int thread,
     StringRef operandName, Value pred, MemType memType, Operation *insertPoint,
     Value effectCTAs) {
   if (auxData.buffers[(int)memType].empty() ||
@@ -2413,8 +2385,8 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
       auxData.writeVisibility[(int)memType].at(insertPoint).value;
   auto writeVisibilityType = cast<RankedTensorType>(
       auxData.writeVisibility[(int)memType].at(insertPoint).type);
-  Value bufOffset = buffer.baseAddress;
-  Value lengthVal = arith::ConstantIntOp::create(b, buffer.length, 32);
+  Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
+  Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
   std::string message = "Buffer being accessed has outstanding writes.";
   if (!operandName.empty())
     message += " Operand: " + operandName.str();
@@ -2499,7 +2471,7 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
 }
 
 void FunctionBuilder::createVerifyReadVisibilityCall(
-    ImplicitLocOpBuilder &b, MaterializedBufferRegion buffer, int thread,
+    ImplicitLocOpBuilder &b, Value buf, uint32_t length, int thread,
     StringRef operandName, Value pred, MemType memType, Operation *insertPoint,
     Value effectCTAs) {
   if (auxData.buffers[(int)memType].empty() ||
@@ -2518,8 +2490,8 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
       auxData.readVisibility[(int)memType].at(insertPoint).value;
   auto readVisibilityType = cast<RankedTensorType>(
       auxData.readVisibility[(int)memType].at(insertPoint).type);
-  Value bufOffset = buffer.baseAddress;
-  Value lengthVal = arith::ConstantIntOp::create(b, buffer.length, 32);
+  Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
+  Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
   std::string message = "Buffer being accessed has outstanding reads";
   if (!operandName.empty())
     message += ". Operand: " + operandName.str();
@@ -2882,7 +2854,7 @@ void FunctionBuilder::createPublishClusterVisibilityCall(
 }
 
 void FunctionBuilder::createSetProxyAccessCall(ImplicitLocOpBuilder &b,
-                                               MaterializedBufferRegion buffer,
+                                               Value buf, uint32_t length,
                                                int thread, Value pred,
                                                Operation *insertPoint,
                                                Value effectCTAs) {
@@ -2898,8 +2870,8 @@ void FunctionBuilder::createSetProxyAccessCall(ImplicitLocOpBuilder &b,
   auto visibilityType = cast<RankedTensorType>(visibility.type);
   bool hasTracking = !auxData.proxyAccessTracking.empty();
   RankedTensorType trackingType;
-  SmallVector<Value> args = {buffer.baseAddress,
-                             arith::ConstantIntOp::create(b, buffer.length, 32),
+  SmallVector<Value> args = {tti::ExperimentalMemDescToI32Op::create(b, buf),
+                             arith::ConstantIntOp::create(b, length, 32),
                              pred,
                              arith::ConstantIntOp::create(b, thread, 32),
                              buffers.value,
@@ -3070,27 +3042,8 @@ void FunctionBuilder::createTrackProxyAccessesCall(ImplicitLocOpBuilder &b,
                                                    Value pred,
                                                    Operation *insertPoint,
                                                    Value barrierCTAs) {
-  createTrackProxyAccessesCallImpl(b, mbar, thread, pred, insertPoint,
-                                   barrierCTAs, std::nullopt, Value());
-}
-
-void FunctionBuilder::createTrackProxyAccessesForBufferCall(
-    ImplicitLocOpBuilder &b, Value mbar, MaterializedBufferRegion buffer,
-    int thread, Value pred, Operation *insertPoint, Value barrierCTAs,
-    Value effectCTAs) {
-  createTrackProxyAccessesCallImpl(b, mbar, thread, pred, insertPoint,
-                                   barrierCTAs, buffer, effectCTAs);
-}
-
-void FunctionBuilder::createTrackProxyAccessesCallImpl(
-    ImplicitLocOpBuilder &b, Value mbar, int thread, Value pred,
-    Operation *insertPoint, Value barrierCTAs,
-    std::optional<MaterializedBufferRegion> buffer, Value effectCTAs) {
-  bool filterByBuffer = buffer.has_value();
-  auto &buffersMap = auxData.buffers[(int)MemType::SHARED_MEM];
   if (auxData.barriers.empty() || auxData.proxyAccessVisibility.empty() ||
-      auxData.proxyAccessTracking.empty() ||
-      (filterByBuffer && buffersMap.empty()))
+      auxData.proxyAccessTracking.empty())
     return;
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
@@ -3100,7 +3053,6 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
   auto barriersType = cast<RankedTensorType>(barriers.type);
   auto visibilityType = cast<RankedTensorType>(visibility.type);
   auto trackingType = cast<RankedTensorType>(tracking.type);
-  RankedTensorType buffersType;
   SmallVector<Value> args = {
       tti::ExperimentalMemDescToI32Op::create(b, mbar),
       arith::ConstantIntOp::create(b, getMemDescLength(mbar), 32),
@@ -3110,22 +3062,11 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
       visibility.value,
       tracking.value,
       barrierCTAs};
-  ManglingArgs specializationArgs{barriersType, visibilityType, trackingType};
-  if (filterByBuffer) {
-    ValueType buffers = buffersMap.at(insertPoint);
-    buffersType = cast<RankedTensorType>(buffers.type);
-    args.append({buffer->baseAddress,
-                 arith::ConstantIntOp::create(b, buffer->length, 32),
-                 buffers.value, effectCTAs});
-    specializationArgs.append(buffersType);
-  }
   createCallToCachedFunction(
-      b,
-      filterByBuffer ? "track_proxy_accesses_for_buffer"
-                     : "track_proxy_accesses",
-      args, /*assertInfo=*/std::nullopt, specializationArgs,
-      [visibilityType, trackingType, filterByBuffer](ImplicitLocOpBuilder &fb,
-                                                     Block *entryBlock) {
+      b, "track_proxy_accesses", args, /*assertInfo=*/std::nullopt,
+      {barriersType, visibilityType, trackingType},
+      [visibilityType, trackingType](ImplicitLocOpBuilder &fb,
+                                     Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
@@ -3134,11 +3075,6 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
         Value visibilityPtr = entryBlock->getArgument(5);
         Value trackingPtr = entryBlock->getArgument(6);
         Value barrierCTAs = entryBlock->getArgument(7);
-        Value bufOffset = filterByBuffer ? entryBlock->getArgument(8) : Value();
-        Value bufLength = filterByBuffer ? entryBlock->getArgument(9) : Value();
-        Value buffers = filterByBuffer ? entryBlock->getArgument(10) : Value();
-        Value effectCTAs =
-            filterByBuffer ? entryBlock->getArgument(11) : Value();
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
@@ -3152,17 +3088,6 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
         sourceMask = arith::AndIOp::create(
             fb, sourceMask,
             createDimMask(fb, threadVal, visibilityType, /*dim=*/3));
-        Value containedBuffers;
-        if (filterByBuffer) {
-          containedBuffers = createBuffersContainedInRegionMask(
-              fb, buffers, bufOffset, bufLength);
-          Value visibilityBuffers =
-              convertAndBroadcast(fb, containedBuffers, {1}, visibilityType);
-          sourceMask = arith::AndIOp::create(fb, sourceMask, visibilityBuffers);
-          sourceMask = arith::AndIOp::create(
-              fb, sourceMask,
-              createCTASetMask(fb, visibilityType, /*dim=*/0, effectCTAs));
-        }
         Value zeroVisibility =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, visibilityType);
         Value source =
@@ -3179,20 +3104,11 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
             createCTASetMask(fb, trackingType, /*dim=*/2, barrierCTAs);
         Value trackMask =
             arith::AndIOp::create(fb, barriersEqBar, barrierCTAMask);
-        if (filterByBuffer) {
-          Value trackingBuffers =
-              convertAndBroadcast(fb, containedBuffers, {1}, trackingType);
-          trackMask = arith::AndIOp::create(fb, trackMask, trackingBuffers);
-          trackMask = arith::AndIOp::create(
-              fb, trackMask,
-              createCTASetMask(fb, trackingType, /*dim=*/0, effectCTAs));
-        }
         Value withSource = arith::OrIOp::create(fb, tracking, source);
         Value updated =
             arith::SelectOp::create(fb, trackMask, withSource, tracking);
-        Value storeMask = filterByBuffer ? trackMask : barrierCTAMask;
         createMaskedStoreScratchMemory(fb, fb.getLoc(), trackingPtr, updated,
-                                       trackingType, storeMask);
+                                       trackingType, barrierCTAMask);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -3325,7 +3241,7 @@ void FunctionBuilder::createClearBarrierProxyAccessTrackingCall(
 }
 
 void FunctionBuilder::createVerifyProxyAccessCall(
-    ImplicitLocOpBuilder &b, MaterializedBufferRegion buffer, int thread,
+    ImplicitLocOpBuilder &b, Value buf, uint32_t length, int thread,
     StringRef operandName, Value pred, Operation *insertPoint,
     Value effectCTAs) {
   auto &buffersMap = auxData.buffers[(int)MemType::SHARED_MEM];
@@ -3340,8 +3256,8 @@ void FunctionBuilder::createVerifyProxyAccessCall(
   ValueType visibility = auxData.proxyAccessVisibility.at(insertPoint);
   auto buffersType = cast<RankedTensorType>(buffers.type);
   auto visibilityType = cast<RankedTensorType>(visibility.type);
-  Value bufOffset = buffer.baseAddress;
-  Value lengthVal = arith::ConstantIntOp::create(b, buffer.length, 32);
+  Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
+  Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
   std::string message =
       "Async shared-memory access is missing fence_async_shared";
@@ -3522,9 +3438,8 @@ void FunctionBuilder::createPublishClusterProxyAccessesCall(
 }
 
 void FunctionBuilder::createStageAccessForCommitCall(
-    ImplicitLocOpBuilder &b, MaterializedBufferRegion buffer, int thread,
-    Value pred, MemType memType, CommitKind::Kind commitKind,
-    Operation *insertPoint) {
+    ImplicitLocOpBuilder &b, Value buf, uint32_t length, int thread, Value pred,
+    MemType memType, CommitKind::Kind commitKind, Operation *insertPoint) {
   if (auxData.buffers[(int)memType].empty() ||
       auxData.commits[commitKind].empty()) {
     return;
@@ -3536,8 +3451,8 @@ void FunctionBuilder::createStageAccessForCommitCall(
   auto buffersType = cast<RankedTensorType>(buffers.type);
   auto commitsType = cast<RankedTensorType>(outstandingCommits.type);
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
-  Value bufOffset = buffer.baseAddress;
-  Value lengthVal = arith::ConstantIntOp::create(b, buffer.length, 32);
+  Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
+  Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
   SmallVector<Value> args = {bufOffset,     lengthVal,
                              pred,          threadVal,
                              buffers.value, outstandingCommits.value};
@@ -3959,7 +3874,7 @@ void FunctionBuilder::createClearOutstandingCommitsTransferBothCall(
 }
 
 void FunctionBuilder::createCheckOutstandingCommitsCall(
-    ImplicitLocOpBuilder &b, MaterializedBufferRegion buffer, int thread,
+    ImplicitLocOpBuilder &b, Value buf, uint32_t length, int thread,
     StringRef pendingAccessType, Value pred, MemType memType,
     CommitKind::Kind commitKind, Operation *insertPoint, Value effectCTAs,
     bool excludeSelf) {
@@ -3973,13 +3888,13 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
   ValueType outstandingCommits = auxData.commits[commitKind].at(insertPoint);
   assert(thread < auxData.threadLayout.numBaseThreads &&
          "Commit-count tracking must operate on base threads");
-  Value bufOffset = buffer.baseAddress;
+  Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   auto buffersType = cast<RankedTensorType>(buffers.type);
   auto commitsType = cast<RankedTensorType>(outstandingCommits.type);
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
-  Value lengthVal = arith::ConstantIntOp::create(b, buffer.length, 32);
+  Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
   std::string message =
       "Accessing buffer with pending access. Pending access type: " +
       pendingAccessType.str();
