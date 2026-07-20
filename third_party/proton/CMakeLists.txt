@@ -35,6 +35,59 @@ else()
   message(STATUS "Proton ROCProfiler-SDK HIP graph tracing: disabled")
 endif()
 
+set(_PROTON_ROCPROFILER_SDK_LINK_PATHS "")
+foreach(_path IN ITEMS
+    "${TRITON_ROCPROFILER_SDK_DEVEL_LIB_PATH}"
+    "${TRITON_ROCPROFILER_SDK_LIB_PATH}")
+  if(_path)
+    list(APPEND _PROTON_ROCPROFILER_SDK_LINK_PATHS "${_path}")
+  endif()
+endforeach()
+
+find_library(PROTON_AMD_COMGR_LIBRARY
+  NAMES amd_comgr
+  HINTS ${_PROTON_ROCPROFILER_SDK_LINK_PATHS}
+  NO_DEFAULT_PATH)
+if(NOT PROTON_AMD_COMGR_LIBRARY)
+  find_library(PROTON_AMD_COMGR_LIBRARY NAMES amd_comgr)
+endif()
+find_library(PROTON_DW_LIBRARY NAMES dw)
+
+unset(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE CACHE)
+if(PROTON_AMD_COMGR_LIBRARY AND PROTON_DW_LIBRARY)
+  set(_PROTON_REQUIRED_INCLUDES "${CMAKE_REQUIRED_INCLUDES}")
+  set(_PROTON_REQUIRED_LIBRARIES "${CMAKE_REQUIRED_LIBRARIES}")
+  set(CMAKE_REQUIRED_INCLUDES
+      "${ROCPROFILER_SDK_INCLUDE_DIR}"
+      "${ROCM_INCLUDE_DIR}")
+  set(CMAKE_REQUIRED_LIBRARIES
+      "${PROTON_AMD_COMGR_LIBRARY}"
+      "${PROTON_DW_LIBRARY}")
+  check_cxx_source_compiles([=[
+    #include <rocprofiler-sdk/cxx/codeobj/code_printing.hpp>
+    int main() {
+      using rocprofiler::sdk::codeobj::disassembly::CodeobjAddressTranslate;
+      using rocprofiler::sdk::codeobj::disassembly::Instruction;
+      CodeobjAddressTranslate translator;
+      Instruction inst;
+      (void) inst.comment;
+      const void *data = nullptr;
+      translator.addDecoder(data, 0, 1, 0, 0);
+      (void) translator.get(1, 0);
+      (void) translator.removeDecoder(1, 0);
+      return 0;
+    }
+  ]=] PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE)
+  set(CMAKE_REQUIRED_INCLUDES "${_PROTON_REQUIRED_INCLUDES}")
+  set(CMAKE_REQUIRED_LIBRARIES "${_PROTON_REQUIRED_LIBRARIES}")
+endif()
+
+if(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE)
+  message(STATUS "Proton ROCProfiler-SDK code object source locations: enabled")
+else()
+  message(STATUS "Proton ROCProfiler-SDK code object source locations: disabled")
+endif()
+
 # ============ Dependencies =============
 find_package(Python3 REQUIRED Interpreter Development.Module)
 if(NOT TARGET nanobind-static)
@@ -85,6 +138,13 @@ function(add_proton_library name)
     target_compile_definitions(${name} PRIVATE
       PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH=0)
   endif()
+  if(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE)
+    target_compile_definitions(${name} PRIVATE
+      PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE=1)
+  else()
+    target_compile_definitions(${name} PRIVATE
+      PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE=0)
+  endif()
 
   # Append this library name to the GLOBAL property "PROTON_LIBS"
   set_property(GLOBAL APPEND PROPERTY PROTON_LIBS ${name})
@@ -126,6 +186,11 @@ endforeach()
 add_library(proton SHARED ${_proton_obj_sources})
 
 target_link_libraries(proton PRIVATE Python3::Module nanobind-static)
+if(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE)
+  target_link_libraries(proton PRIVATE
+    "${PROTON_AMD_COMGR_LIBRARY}"
+    "${PROTON_DW_LIBRARY}")
+endif()
 # Apply any macOS linker flags or extra link options
 if(PROTON_PYTHON_LDFLAGS)
   target_link_options(proton PRIVATE ${PROTON_PYTHON_LDFLAGS})

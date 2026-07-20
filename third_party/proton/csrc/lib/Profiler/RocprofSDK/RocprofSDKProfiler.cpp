@@ -7,6 +7,7 @@
 #include "Driver/GPU/RocprofApi.h"
 #include "Driver/GPU/RoctxTypes.h"
 #include "Profiler/GPUProfiler.h"
+#include "Profiler/RocprofSDK/RocprofSDKPCSampling.h"
 #include "Runtime/HipRuntime.h"
 #include "Utility/Env.h"
 #include "Utility/Errors.h"
@@ -618,6 +619,11 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
                                    rocprofiler_record_header_t **headers,
                                    size_t numHeaders, void *userData,
                                    uint64_t dropCount);
+  static void pcSamplingBufferCallback(rocprofiler_context_id_t context,
+                                       rocprofiler_buffer_id_t buffer,
+                                       rocprofiler_record_header_t **headers,
+                                       size_t numHeaders, void *userData,
+                                       uint64_t dropCount);
 
   using KernelNameMap =
       ThreadSafeMap<uint64_t, std::string,
@@ -652,6 +658,7 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
       corrIdToStreamId;
 
   KernelPhaseTracker kernelPhaseTracker;
+  RocprofSDKPCSampling pcSampling;
 
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
   // Captured graph metadata keyed by the HIP graph handle returned by
@@ -676,6 +683,28 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
   // ROCPROFILER_CALLBACK_TRACING_HIP_GRAPH.
   ThreadSafeMap<uint64_t, GraphState> graphStates;
 #endif
+
+  void recordPCSamplingTarget(uint64_t dispatchId, uint64_t correlationId,
+                              uint64_t kernelId, bool isGraph,
+                              size_t graphExternId = Scope::DummyScopeId) {
+    if (dispatchId == 0)
+      return;
+
+    size_t externId = graphExternId;
+    if (externId == Scope::DummyScopeId &&
+        !profiler.correlation.corrIdToExternId.withRead(
+            correlationId, [&](const size_t &value) { externId = value; }))
+      return;
+    if (externId == Scope::DummyScopeId)
+      return;
+
+    if (!profiler.correlation.externIdToState.withRead(
+            externId, [&](const ExternIdState &state) {
+              pcSampling.recordTarget(dispatchId, kernelId, state.dataToEntry,
+                                      isGraph || state.isMissingName);
+            }))
+      return;
+  }
 };
 
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
@@ -1010,24 +1039,38 @@ void registerRoctxCallback(bool enable) {
 }
 } // namespace
 
-// ---- Code object callback (kernel_id -> name mapping) ----
+// ---- Code object callback (code object metadata and kernel_id mappings) ----
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::codeObjectCallback(
     rocprofiler_callback_tracing_record_t record,
     rocprofiler_user_data_t *userData, void *arg) {
-  if (record.kind != ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT ||
-      record.operation !=
-          ROCPROFILER_CODE_OBJECT_DEVICE_KERNEL_SYMBOL_REGISTER ||
-      record.phase != ROCPROFILER_CALLBACK_PHASE_LOAD) {
+  if (record.kind != ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT) {
     return;
   }
   auto *impl = static_cast<RocprofSDKProfilerPimpl *>(arg);
   if (!impl)
     return;
-  auto *payload = static_cast<
-      rocprofiler_callback_tracing_code_object_kernel_symbol_register_data_t *>(
-      record.payload);
-  impl->setKernelName(payload->kernel_id, payload->kernel_name);
+
+  if (record.operation == ROCPROFILER_CODE_OBJECT_LOAD) {
+    auto *payload =
+        static_cast<rocprofiler_callback_tracing_code_object_load_data_t *>(
+            record.payload);
+    if (record.phase == ROCPROFILER_CALLBACK_PHASE_LOAD)
+      impl->pcSampling.recordCodeObjectLoad(*payload);
+    else if (record.phase == ROCPROFILER_CALLBACK_PHASE_UNLOAD)
+      impl->pcSampling.recordCodeObjectUnload(payload->code_object_id);
+    return;
+  }
+
+  if (record.operation ==
+          ROCPROFILER_CODE_OBJECT_DEVICE_KERNEL_SYMBOL_REGISTER &&
+      record.phase == ROCPROFILER_CALLBACK_PHASE_LOAD) {
+    auto *payload = static_cast<
+        rocprofiler_callback_tracing_code_object_kernel_symbol_register_data_t
+            *>(record.payload);
+    impl->setKernelName(payload->kernel_id, payload->kernel_name);
+    impl->pcSampling.recordKernelSymbol(*payload);
+  }
 }
 
 // ---- Kernel dispatch buffer callback ----
@@ -1071,6 +1114,10 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
         // correlation data.
         auto *graphCorrelation = static_cast<GraphDispatchCorrelation *>(
             record->correlation_id.external.ptr);
+        impl->recordPCSamplingTarget(
+            record->dispatch_info.dispatch_id, record->correlation_id.internal,
+            record->dispatch_info.kernel_id, /*isGraph=*/true,
+            graphCorrelation->externId);
         processGraphKernelRecord(
             correlation.externIdToState, impl->kernelPhaseTracker, dataPhases,
             kernelName, record, *graphCorrelation, streamId);
@@ -1082,11 +1129,17 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
         record->correlation_id.external.ptr = nullptr;
         record->correlation_id.external.value = 0;
       } else {
+        impl->recordPCSamplingTarget(
+            record->dispatch_info.dispatch_id, record->correlation_id.internal,
+            record->dispatch_info.kernel_id, /*isGraph=*/false);
         numCompletedTasks += processKernelRecord(
             profiler, correlation.corrIdToExternId, correlation.externIdToState,
             impl->kernelPhaseTracker, dataPhases, kernelName, record, streamId);
       }
 #else
+      impl->recordPCSamplingTarget(
+          record->dispatch_info.dispatch_id, record->correlation_id.internal,
+          record->dispatch_info.kernel_id, /*isGraph=*/false);
       numCompletedTasks += processKernelRecord(
           profiler, correlation.corrIdToExternId, correlation.externIdToState,
           impl->kernelPhaseTracker, dataPhases, kernelName, record, streamId);
@@ -1098,6 +1151,17 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
   correlation.complete(numCompletedTasks, maxCorrelationId);
 }
 
+// ---- PC Sampling buffer callback ----
+
+void RocprofSDKProfiler::RocprofSDKProfilerPimpl::pcSamplingBufferCallback(
+    rocprofiler_context_id_t context, rocprofiler_buffer_id_t buffer,
+    rocprofiler_record_header_t **headers, size_t numHeaders, void *userData,
+    uint64_t dropCount) {
+  auto &profiler = threadState.profiler;
+  auto *impl = static_cast<RocprofSDKProfilerPimpl *>(profiler.pImpl.get());
+  impl->pcSampling.processBuffer(headers, numHeaders, dropCount);
+}
+
 // ---- SDK tool init / fini (called by rocprofiler_force_configure) ----
 
 namespace {
@@ -1105,15 +1169,17 @@ namespace {
 int protonToolInit(rocprofiler_client_finalize_t, void *toolData) {
   auto *state = static_cast<RocprofilerRuntimeState *>(toolData);
 
-  // Context 1: lightweight, always-active context for code object tracking.
-  // Captures kernel_id -> name mappings as kernels are compiled.
+  // Context 1: always-active context for code object tracking. Kernel symbol
+  // mappings are needed for ordinary profiling too; PC-sampling source image
+  // capture is gated separately by mode.
   rocprofiler::createContext<true>(&state->codeObjectContext);
 
   const rocprofiler_tracing_operation_t codeObjectOps[] = {
+      ROCPROFILER_CODE_OBJECT_LOAD,
       ROCPROFILER_CODE_OBJECT_DEVICE_KERNEL_SYMBOL_REGISTER};
   rocprofiler::configureCallbackTracingService<true>(
       state->codeObjectContext, ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT,
-      codeObjectOps, 1,
+      codeObjectOps, std::size(codeObjectOps),
       &RocprofSDKProfiler::RocprofSDKProfilerPimpl::codeObjectCallback,
       static_cast<void *>(state->pimpl));
 
@@ -1217,6 +1283,13 @@ int protonToolInit(rocprofiler_client_finalize_t, void *toolData) {
 
   AgentIdMapper::instance().initialize();
 
+  // ---- PC Sampling configuration (must happen before config lock) ----
+  // Always attempt configuration opportunistically. The env var was set by the
+  // constructor. The PC-sampling context is only *started* when mode=pcsampling
+  // is used.
+  state->pimpl->pcSampling.configure(
+      &RocprofSDKProfiler::RocprofSDKProfilerPimpl::pcSamplingBufferCallback);
+
   // Start the code object context now so the upcoming
   // invoke_register_propagation() replay of already-loaded code objects
   // triggers our callback while it's active.
@@ -1233,6 +1306,7 @@ void protonToolFini(void *toolData) {
   state->nvtxEnabled.store(false, std::memory_order_relaxed);
   {
     std::lock_guard<std::mutex> lock(state->mutex);
+    state->pimpl->pcSampling.stopNoThrow();
     if (state->profilingStarted) {
       rocprofiler::stopContext<false>(state->profilingContext);
       state->profilingStarted = false;
@@ -1243,6 +1317,7 @@ void protonToolFini(void *toolData) {
     }
   }
   rocprofiler::flushBuffer<false>(state->kernelBuffer);
+  state->pimpl->pcSampling.flushBuffersNoThrow();
 }
 
 rocprofiler_tool_configure_result_t *
@@ -1269,6 +1344,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStart() {
       state.profilingStarted = true;
     }
     state.profilingActive.store(true, std::memory_order_relaxed);
+    pcSampling.start();
     bool nvtx = getBoolEnv("TRITON_ENABLE_NVTX", true);
     state.nvtxEnabled.store(nvtx, std::memory_order_relaxed);
     if (nvtx)
@@ -1284,10 +1360,14 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStart() {
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doFlush() {
   auto &state = getRuntimeState();
   std::ignore = hip::deviceSynchronize<true>();
+  // Flush kernel dispatch records first so PC samples can be attached to the
+  // Proton scopes that launched each dispatch.
   profiler.correlation.flush(
       /*maxRetries=*/100, /*sleepUs=*/10,
       [&state]() { rocprofiler::flushBuffer<true>(state.kernelBuffer); });
   profiler.pendingGraphPool->flushAll();
+  pcSampling.flushBuffers();
+  pcSampling.flushAccum();
 }
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStop() {
@@ -1295,7 +1375,10 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStop() {
   state.profilingActive.store(false, std::memory_order_relaxed);
   state.nvtxEnabled.store(false, std::memory_order_relaxed);
   registerRoctxCallback(false);
-
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    pcSampling.stop();
+  }
   corrIdToStreamId.clear();
   kernelPhaseTracker.clear();
 
@@ -1331,6 +1414,7 @@ RocprofSDKProfiler::RocprofSDKProfiler() {
   // via the __attribute__((constructor)) hook below, so force_configure
   // lands before any user code touches the HIP/HSA runtimes.
   if (!state.configured) {
+    setenv("ROCPROFILER_PC_SAMPLING_BETA_ENABLED", "ON", /*overwrite=*/0);
     rocprofiler::forceConfigure<true>(&protonConfigure);
   }
 }
@@ -1357,7 +1441,17 @@ __attribute__((constructor)) void protonRocprofSDKLoadHook() {
 void RocprofSDKProfiler::doSetMode(
     const std::vector<std::string> &modeAndOptions) {
   auto mode = modeAndOptions.empty() ? std::string() : modeAndOptions[0];
-  if (proton::toLower(mode) == "periodic_flushing") {
+  auto *impl = static_cast<RocprofSDKProfilerPimpl *>(pImpl.get());
+  impl->pcSampling.setEnabled(proton::toLower(mode) == "pcsampling");
+  if (impl->pcSampling.isEnabled()) {
+    impl->pcSampling.warnIfInvalidInterval();
+    if (!impl->pcSampling.isConfigured()) {
+      throw std::runtime_error(
+          "[PROTON] PC sampling mode requested but hardware does not support "
+          "it or configuration failed during initialization");
+    }
+    impl->pcSampling.warnIfSourceLocationsUnavailable();
+  } else if (proton::toLower(mode) == "periodic_flushing") {
     detail::setPeriodicFlushingMode(periodicFlushingEnabled,
                                     periodicFlushingFormat, modeAndOptions,
                                     "RocprofSDKProfiler");
