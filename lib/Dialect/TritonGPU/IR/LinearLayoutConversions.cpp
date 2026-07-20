@@ -1140,27 +1140,12 @@ DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 }
 
 LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
-  MLIRContext *ctx = getContext();
-
   // First compute the linear layout for this layout's parent.
   SmallVector<int64_t> parentShape(shape);
   parentShape.insert(parentShape.begin() + getDim(), 1);
   LinearLayout parentLL = triton::gpu::toLinearLayout(parentShape, getParent());
 
-  auto sliceLL = removeStandardDim(parentLL, getDim());
-
-  // Step 3: Along the "register" dim, remove any all-zero bases.
-  auto bases = sliceLL.getBases();
-  std::vector<std::vector<int>> newRegBases;
-  for (const auto &basis : bases[S("register")]) {
-    if (llvm::any_of(basis, [](int b) { return b != 0; })) {
-      newRegBases.push_back(basis);
-    }
-  }
-  bases[S("register")] = newRegBases;
-
-  return LinearLayout(std::move(bases),
-                      llvm::to_vector(sliceLL.getOutDimNames()));
+  return removeStandardDim(parentLL, getDim());
 }
 
 LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
