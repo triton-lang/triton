@@ -1905,16 +1905,19 @@ def create_tensor_descriptor(cfg: MXFPGEMMConfig, a_ptr, a_offs, b_ptr, b_offs, 
             a_scale_base = a_scale_ptr + a_scale_offs
         else:
             a_scale_base = b_scale_ptr + b_scale_offs
+        k_scale = (K + SCALE_BLOCK - 1) // SCALE_BLOCK
+        if cfg.SCALE_PRESHUFFLE:
+            k_scale = (k_scale + cfg.SCALE_KWIDTH - 1) // cfg.SCALE_KWIDTH * cfg.SCALE_KWIDTH
         a_scale_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(
             base=a_scale_base,  #
-            shape=(M // PRESHUFFLE_FACTOR, K // SCALE_BLOCK * PRESHUFFLE_FACTOR),  #
+            shape=(M // PRESHUFFLE_FACTOR, k_scale * PRESHUFFLE_FACTOR),  #
             strides=(stride_scale, 1),  #
             block_shape=(cfg.BLOCK_M_PRESHUFFLED, cfg.BLOCK_K_SCALE_PRESHUFFLED),  #
             layout=cfg.shared_layout_a_scale)
 
         b_scale_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(
             base=b_scale_ptr + b_scale_offs,  #
-            shape=(N // PRESHUFFLE_FACTOR, K // SCALE_BLOCK * PRESHUFFLE_FACTOR),  #
+            shape=(N // PRESHUFFLE_FACTOR, k_scale * PRESHUFFLE_FACTOR),  #
             strides=(stride_scale, 1),  #
             block_shape=(cfg.BLOCK_N_PRESHUFFLED, cfg.BLOCK_K_SCALE_PRESHUFFLED),  #
             layout=cfg.shared_layout_b_scale)
@@ -2089,18 +2092,22 @@ def init_data(dtype, d0: int, d1: int):
         raise NotImplementedError(f"NYI: unsupported dtype: {dtype}")
 
 
-def pack_scale(x):
+def pack_scale(x, scale_kwidth):
     if x is None:
         return x
     NON_K, K_SCALE = x.shape
     preshuffle_factor = 128
     num_chunk_m = NON_K // preshuffle_factor
-    SCALE_KWIDTH = 4 if K_SCALE >= 4 else K_SCALE
-    num_chunk_k = K_SCALE // SCALE_KWIDTH
+    num_chunk_k = (K_SCALE + scale_kwidth - 1) // scale_kwidth
+    K_SCALE_PADDED = num_chunk_k * scale_kwidth
 
-    x = x.view(num_chunk_m, 4, preshuffle_factor // 4, num_chunk_k, SCALE_KWIDTH)
+    if K_SCALE_PADDED != K_SCALE:
+        padding = torch.zeros((NON_K, K_SCALE_PADDED - K_SCALE), dtype=x.dtype, device=x.device)
+        x = torch.cat((x, padding), dim=1)
+
+    x = x.view(num_chunk_m, 4, preshuffle_factor // 4, num_chunk_k, scale_kwidth)
     x = x.permute(0, 3, 2, 1, 4).contiguous()
-    return x.view(NON_K // preshuffle_factor, K_SCALE * preshuffle_factor)
+    return x.view(NON_K // preshuffle_factor, K_SCALE_PADDED * preshuffle_factor)
 
 
 def interleave_b_columns(w_gate, w_up, DTYPE_B):
@@ -2186,8 +2193,9 @@ def test_runtime_mxgemm_tdm_8warps_pipeline(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, 
     b_scale = b_scale.data
 
     if SCALE_PRESHUFFLE:
-        a_scale = pack_scale(a_scale)
-        b_scale = pack_scale(b_scale)
+        scale_kwidth = min(4, BLOCK_K // SCALE_BLOCK)
+        a_scale = pack_scale(a_scale, scale_kwidth)
+        b_scale = pack_scale(b_scale, scale_kwidth)
 
     # mxfp4 input needs packed along the k dim, i.e., two mxfp4 are packed in one uint8
     if DTYPE_A in ['float4', 'float6_e2m3', 'float6_e3m2']:
@@ -2374,8 +2382,9 @@ def test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_
     b_scale = b_scale.data
 
     if SCALE_PRESHUFFLE:
-        a_scale = pack_scale(a_scale)
-        b_scale = pack_scale(b_scale)
+        scale_kwidth = min(4, BLOCK_K // SCALE_BLOCK)
+        a_scale = pack_scale(a_scale, scale_kwidth)
+        b_scale = pack_scale(b_scale, scale_kwidth)
 
     # mxfp4 input needs packed along the k dim, i.e., two mxfp4 are packed in one uint8
     if DTYPE_A in ['float4', 'float6_e2m3', 'float6_e3m2']:

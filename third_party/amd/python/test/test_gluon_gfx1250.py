@@ -14,6 +14,60 @@ from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
 from triton.experimental.gluon.language.amd.gfx1250 import get_wmma_scale_layout, PartitionedSharedLayout, _valid_dtype_combinations
 from triton._C.libtriton.gluon_ir import make_cga_layout
+from third_party.amd.python.examples.gluon.mxfp_gemm_gfx1250 import (
+    pack_scale as pack_mxfp_scale,
+    test_runtime_mxgemm_tdm_pipelined as run_mxgemm_tdm_pipelined,
+)
+
+
+def test_pack_mxfp_scale_pads_partial_k_chunk():
+    non_k = 128
+    for num_scale_groups, scale_kwidth, padded_groups in [
+        (1, 4, 4),
+        (7, 4, 8),  # K=196 has ceil(196 / 32) scale groups.
+        (8, 4, 8),
+    ]:
+        scale = torch.arange(non_k * num_scale_groups, dtype=torch.int32).reshape(non_k, num_scale_groups)
+
+        packed = pack_mxfp_scale(scale, scale_kwidth)
+
+        assert packed.shape == (non_k // 128, padded_groups * 128)
+        unpacked = packed.view(non_k // 128, padded_groups // scale_kwidth, 32, 4,
+                               scale_kwidth).permute(0, 3, 2, 1, 4).reshape(non_k, padded_groups)
+        torch.testing.assert_close(unpacked[:, :num_scale_groups], scale)
+        assert torch.count_nonzero(unpacked[:, num_scale_groups:]) == 0
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("K,SCALE_PRESHUFFLE,SCHEDULE,TDM_SPLIT,BLOCK_K", [
+    (196, False, "baseline", False, 128),
+    (196, True, "baseline", False, 128),
+    (481, True, "sliceMNK", True, 256),
+    (512, True, "sliceMNK", True, 256),
+])
+def test_runtime_mxgemm_tdm_scale_k_tail(K, SCALE_PRESHUFFLE, SCHEDULE, TDM_SPLIT, BLOCK_K):
+    run_mxgemm_tdm_pipelined(
+        "float8_e4m3",
+        "float8_e4m3",
+        M=128,
+        N=128,
+        K=K,
+        BLOCK_M=128,
+        BLOCK_N=128,
+        BLOCK_K=BLOCK_K,
+        TRANSPOSE_B=True,
+        NUM_BUFFERS=2,
+        SCALE_PRESHUFFLE=SCALE_PRESHUFFLE,
+        WITH_A_SCALE=True,
+        SCHEDULE=SCHEDULE,
+        ASYNC_COPY_SCALE=False,
+        GROUP_SIZE_M=8,
+        L2_PREFETCH_DISTANCE=-1,
+        ACTIVATION="",
+        PARTIAL_TDM=False,
+        RESOLVE_PARTITION_CONFLICTS=False,
+        TDM_SPLIT=TDM_SPLIT,
+    )
 
 
 @gluon.jit
