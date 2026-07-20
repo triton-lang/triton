@@ -188,10 +188,7 @@ def test_async_shared_store():
 
     compiled = async_shared_store_kernel[(1, )](out, block, num_warps=4, num_ctas=2)
 
-    ptx = compiled.asm["ptx"]
-    assert "mbarrier.arrive.expect_tx.release.cluster.shared::cta.b64" in ptx
-    assert "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes" in ptx
-    assert "mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64" in ptx
+    assert "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes" in compiled.asm["ptx"]
     torch.testing.assert_close(out, torch.arange(block, device="cuda", dtype=torch.int32))
 
 
@@ -202,10 +199,7 @@ def test_async_shared_store_packed_f16():
 
     compiled = async_shared_store_f16_kernel[(1, )](out, block, num_warps=4, num_ctas=2)
 
-    ptx = compiled.asm["ptx"]
-    assert "mbarrier.arrive.expect_tx.release.cluster.shared::cta.b64" in ptx
-    assert "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32" in ptx
-    assert "mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64" in ptx
+    assert "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32" in compiled.asm["ptx"]
     torch.testing.assert_close(out, torch.arange(block, device="cuda", dtype=torch.float16))
 
 
