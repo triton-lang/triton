@@ -272,27 +272,19 @@ ColumnAction ReduceOpHelper::moveAxisBasesToFront(const LinearLayout &layout,
                                                   int axis, bool isVectorized) {
   auto *ctx = layout.getOutDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
-  const auto &bases = layout.getBases().lookup(kReg);
-  if (bases.empty())
-    return ColumnAction::identity(kReg, bases.size());
+  size_t numBases = layout.getInDimSizeLog2(kReg);
+  if (numBases == 0)
+    return ColumnAction::identity(kReg, numBases);
   auto outDims = llvm::to_vector(layout.getOutDimNames());
   uint64_t axisBases = getInputBasisMask(layout, kReg, {outDims[axis]});
 
   // We keep the first basis where it is if it's vectorized to pack it without
-  // PRMT/MOV, and then we move the rest of the bases that don't move the axis
-  // to the front after it
-  SmallVector<size_t> perm;
-  if (isVectorized)
-    perm.push_back(0);
-  SmallVector<size_t> back;
-  for (size_t i = isVectorized ? 1 : 0; i < bases.size(); ++i) {
-    if (axisBases & (uint64_t{1} << i))
-      perm.push_back(i);
-    else
-      back.push_back(i);
-  }
-  perm.append(back.begin(), back.end());
-  return ColumnAction(perm, kReg, bases.size());
+  // PRMT/MOV, and then stably move the other axis bases to the front.
+  auto permutation = llvm::to_vector(llvm::seq<size_t>(numBases));
+  std::stable_partition(
+      permutation.begin() + isVectorized, permutation.end(),
+      [&](size_t i) { return axisBases & (uint64_t{1} << i); });
+  return ColumnAction(permutation, kReg, numBases);
 }
 
 LinearLayout
@@ -337,63 +329,44 @@ LinearLayout ReduceOpHelper::getInterLayout(const LinearLayout &layout,
   auto &warpBases = bases[kWarp];
   auto &blockBases = bases[kBlock];
   auto outDims = llvm::to_vector(layout.getOutDimNames());
-  auto collectAxisBases = [&](StringAttr inDim) {
-    uint64_t mask = getInputBasisMask(layout, inDim, {outDims[axis]});
-    SmallVector<unsigned> out;
-    for (unsigned i = 0; i < layout.getInDimSizeLog2(inDim); ++i) {
-      if (mask & (uint64_t{1} << i))
-        out.push_back(i);
-    }
-    return out;
+  uint64_t warpAxisBases = getInputBasisMask(layout, kWarp, {outDims[axis]});
+  uint64_t blockAxisBases = getInputBasisMask(layout, kBlock, {outDims[axis]});
+  uint64_t allLaneBases = llvm::maskTrailingOnes<uint64_t>(laneBases.size());
+  uint64_t zeroLaneBases =
+      allLaneBases & ~getInputBasisMask(layout, kLane, outDims);
+  unsigned totalAxisBases =
+      llvm::popcount(warpAxisBases) + llvm::popcount(blockAxisBases);
+
+  auto swapAxisBasesIntoLanes = [&](uint64_t availableLanes,
+                                    bool includeBlock) {
+    auto swapSelectedBases = [&](auto &srcBases, uint64_t selectedBases) {
+      while (selectedBases && availableLanes) {
+        unsigned srcIdx = llvm::countr_zero(selectedBases);
+        unsigned laneIdx = llvm::countr_zero(availableLanes);
+        std::swap(laneBases[laneIdx], srcBases[srcIdx]);
+        selectedBases &= selectedBases - 1;
+        availableLanes &= availableLanes - 1;
+      }
+    };
+    swapSelectedBases(warpBases, warpAxisBases);
+    if (includeBlock)
+      swapSelectedBases(blockBases, blockAxisBases);
+    return LinearLayout(std::move(bases), outDims);
   };
-
-  SmallVector<unsigned> warpAxisBases = collectAxisBases(kWarp);
-  SmallVector<unsigned> blockAxisBases = collectAxisBases(kBlock);
-
-  uint64_t nonZeroLaneBases = getInputBasisMask(layout, kLane, outDims);
-  SmallVector<unsigned> zeroLaneBases;
-  for (unsigned i = 0; i < laneBases.size(); ++i) {
-    if (!(nonZeroLaneBases & (uint64_t{1} << i)))
-      zeroLaneBases.push_back(i);
-  }
-
-  auto totalAxisBases = warpAxisBases.size() + blockAxisBases.size();
 
   // First try to place all warp/block axis bases into lane bases that are
   // currently zero. If we can do this we will be able to perform the full
   // reduction with just one convert_layout
-  if (zeroLaneBases.size() >= totalAxisBases) {
-    unsigned laneIdx = 0;
-    for (unsigned idx : warpAxisBases) {
-      std::swap(laneBases[zeroLaneBases[laneIdx]], warpBases[idx]);
-      ++laneIdx;
-    }
-    for (unsigned idx : blockAxisBases) {
-      std::swap(laneBases[zeroLaneBases[laneIdx]], blockBases[idx]);
-      ++laneIdx;
-    }
-    return LinearLayout(std::move(bases), to_vector(layout.getOutDimNames()));
-  }
+  if (llvm::popcount(zeroLaneBases) >= totalAxisBases)
+    return swapAxisBasesIntoLanes(zeroLaneBases, /*includeBlock=*/true);
 
   // If we can fit all the bases inside the lane dimension, we can perform the
   // reduction with two convert_layouts
   // The first cvt to move the relevant bases to the lane dimension
   // The second to move all the bases we moved out of the lane dimension back to
   // their original positions
-  if (warpAxisBases.size() + blockAxisBases.size() <= laneBases.size()) {
-    assert(totalAxisBases <= laneBases.size() &&
-           "unexpected lane base count for axis layout");
-    unsigned laneIdx = 0;
-    for (unsigned idx : warpAxisBases) {
-      std::swap(laneBases[laneIdx], warpBases[idx]);
-      ++laneIdx;
-    }
-    for (unsigned idx : blockAxisBases) {
-      std::swap(laneBases[laneIdx], blockBases[idx]);
-      ++laneIdx;
-    }
-    return LinearLayout(std::move(bases), to_vector(layout.getOutDimNames()));
-  }
+  if (totalAxisBases <= laneBases.size())
+    return swapAxisBasesIntoLanes(allLaneBases, /*includeBlock=*/true);
 
   // Assumptions (easily relaxed if AMD needs it)
   // We assume that
@@ -406,16 +379,8 @@ LinearLayout ReduceOpHelper::getInterLayout(const LinearLayout &layout,
   assert(blockBases.size() <= laneBases.size());
   assert(warpBases.size() + blockBases.size() <= 2 * laneBases.size());
 
-  // Otherwise, fit as many warp bases as possible into the lane dimension
-  unsigned laneIdx = 0;
-  for (unsigned idx : warpAxisBases) {
-    std::swap(laneBases[laneIdx], warpBases[idx]);
-    ++laneIdx;
-    if (laneIdx >= laneBases.size())
-      break;
-  }
-
-  return LinearLayout(std::move(bases), to_vector(layout.getOutDimNames()));
+  // Otherwise, fit as many warp bases as possible into the lane dimension.
+  return swapAxisBasesIntoLanes(allLaneBases, /*includeBlock=*/false);
 }
 
 LinearLayout ReduceOpHelper::reducedRegLaneLayout(RankedTensorType srcTy,
