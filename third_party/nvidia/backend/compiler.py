@@ -193,14 +193,10 @@ class CUDABackend(BaseBackend):
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})
         capability = int(self._parse_arch(args["arch"]))
 
-        if args.get("num_ctas", 1) > 1:
-            if capability < 90:
-                raise ValueError((f"num_ctas > 1 requires NVIDIA SM90+ (Hopper). "
-                                  f"Current target is sm_{capability}. This configuration will fail. "
-                                  f"Please set num_ctas=1 or target an SM90+ GPU."))
-            if capability // 10 == 12:
-                raise ValueError((f"sm_{capability} does not support cluster operations. "
-                                  f"Please set num_ctas=1."))
+        if args.get("num_ctas", 1) > 1 and (capability < 90 or capability // 10 == 12):
+            raise ValueError((f"num_ctas > 1 is not supported on sm_{capability}: "
+                              f"this target does not support cluster operations. "
+                              f"Please set num_ctas=1."))
 
         if "supported_fp8_dtypes" not in args:
             supported_fp8_dtypes = set(CUDAOptions.supported_fp8_dtypes)
