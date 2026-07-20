@@ -102,8 +102,7 @@ class HIPOptions:
     fpsan_homomorphic_casts: bool = False
 
     # The following option provides hints to the AMDGPU backend regarding instruction scheduling
-    # for all `tt.dot` operations in a kernel. Experimental; semantics may change.
-    # Multiple hints can be comma-separated.
+    # for all `tt.dot` operations in a kernel. Experimental; right now no effect.
     schedule_hint: str = ''
 
     # Experimental: intended for development and debugging; may change or be removed without notice.
