@@ -22,9 +22,11 @@
  */
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "third_party/amd/include/Utils/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Interfaces.h"
@@ -140,7 +142,67 @@ LogicalResult verifyTDMCommonLayout(Operation *op,
   return verifyTDMLayoutConsistency(op, descTy, smemTy);
 }
 
+LogicalResult verifyMaskedRegionBodyOp(Operation *op) {
+  return llvm::TypeSwitch<Operation *, LogicalResult>(op)
+      .Case<MaskedYieldOp>(
+          [](MaskedYieldOp) -> LogicalResult { return success(); })
+      .Case<MaskedRegionOp>([](MaskedRegionOp regionOp) -> LogicalResult {
+        return regionOp.emitOpError("cannot be nested in `amdg.masked_region`");
+      })
+      .Case<LLVM::LoadOp>([](LLVM::LoadOp load) -> LogicalResult {
+        if (load.getOrdering() != LLVM::AtomicOrdering::not_atomic)
+          return load.emitOpError("is not supported in `amdg.masked_region`")
+                 << " because it is atomic";
+        return success();
+      })
+      .Case<LLVM::StoreOp>([](LLVM::StoreOp store) -> LogicalResult {
+        if (store.getOrdering() != LLVM::AtomicOrdering::not_atomic)
+          return store.emitOpError("is not supported in `amdg.masked_region`")
+                 << " because it is atomic";
+        return success();
+      })
+      .Default([](Operation *op) -> LogicalResult {
+        if (op->getNumRegions() != 0)
+          return op->emitOpError("with nested regions is not supported in "
+                                 "`amdg.masked_region`");
+        if (isMemoryEffectFree(op))
+          return success();
+        return op->emitOpError(
+            "has unsupported side effects in `amdg.masked_region`");
+      });
+}
+
 } // namespace
+
+LogicalResult MaskedRegionOp::verify() {
+  if (!llvm::equal(getFalseValues().getTypes(), getResultTypes()))
+    return emitOpError("false value types must match result types");
+
+  if (!getBody().hasOneBlock())
+    return emitOpError("body must have exactly one block");
+
+  Block &block = getBody().front();
+  if (block.getNumArguments() != 0)
+    return emitOpError("body block must not have arguments");
+
+  auto yield = dyn_cast<MaskedYieldOp>(block.getTerminator());
+  if (!yield)
+    return emitOpError("body must terminate with `amdg.masked_yield`");
+
+  for (Operation &op : block) {
+    if (failed(verifyMaskedRegionBodyOp(&op)))
+      return failure();
+  }
+
+  return success();
+}
+
+LogicalResult MaskedYieldOp::verify() {
+  auto parent = cast<MaskedRegionOp>((*this)->getParentOp());
+  if (!llvm::equal(getValues().getTypes(), parent.getResultTypes()))
+    return emitOpError("operand types must match parent result types");
+  return success();
+}
 
 LogicalResult ExtractSliceOp::verify() {
   // Basic type/rank checks.

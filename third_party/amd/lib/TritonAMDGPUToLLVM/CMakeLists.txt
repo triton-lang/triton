@@ -16,6 +16,7 @@ add_triton_library(TritonAMDGPUToLLVM
     ElementwiseOpToLLVM.cpp
     FuncOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
+    MaskedRegionFormation.cpp
     GCNAsmFormat.cpp
     HistogramOpToLLVM.cpp
     TritonGPUToLLVM.cpp

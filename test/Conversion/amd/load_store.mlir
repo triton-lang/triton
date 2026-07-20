@@ -56,3 +56,26 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}
     tt.return
   }
 }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: same_mask_scalar_loads_to_stores
+  // CHECK-NOT: amdg.masked
+  // CHECK: llvm.cond_br %{{.*}}, ^[[LOADS:.*]], ^[[JOIN:.*]](%{{.*}}, %{{.*}} : vector<1xi32>, vector<1xi32>)
+  // CHECK: ^[[LOADS]]:
+  // CHECK:   llvm.load
+  // CHECK:   llvm.load
+  // CHECK:   llvm.br ^[[JOIN]]
+  // CHECK: ^[[JOIN]](
+  // CHECK-NOT: amdg.masked
+  // CHECK: llvm.return
+  tt.func @same_mask_scalar_loads_to_stores(%src0: !tt.ptr<i32>, %src1: !tt.ptr<i32>, %dst0: !tt.ptr<i32>, %dst1: !tt.ptr<i32>, %mask: i1) {
+    %zero = arith.constant 0 : i32
+    %a = tt.load %src0, %mask, %zero : !tt.ptr<i32>
+    %b = tt.load %src1, %mask, %zero : !tt.ptr<i32>
+    tt.store %dst0, %a : !tt.ptr<i32>
+    tt.store %dst1, %b : !tt.ptr<i32>
+    tt.return
+  }
+}
