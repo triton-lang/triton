@@ -1321,25 +1321,6 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
   return false;
 }
 
-bool cvtCanUseWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
-  auto layout = minimalCvtLayout(srcTy, dstTy);
-  MLIRContext *ctx = srcTy.getContext();
-  auto kBlock = StringAttr::get(ctx, "block");
-  auto kWarp = StringAttr::get(ctx, "warp");
-  auto dims = layout.getInDimNames();
-  return !llvm::is_contained(dims, kBlock) && !llvm::is_contained(dims, kWarp);
-}
-
-bool cvtIsWarpShuffleForced(triton::gpu::ConvertLayoutOp cvt) {
-  auto func = cvt->getParentOfType<FunctionOpInterface>();
-  return func->hasAttrOfType<UnitAttr>("always_use_warp_shuffle");
-}
-
-bool cvtUsesForcedWarpShuffle(triton::gpu::ConvertLayoutOp cvt) {
-  return cvtIsWarpShuffleForced(cvt) &&
-         cvtCanUseWarpShuffle(cvt.getSrc().getType(), cvt.getType());
-}
-
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
   return !cvtReordersRegisters(srcTy, dstTy) &&
          !cvtNeedsWarpShuffle(srcTy, dstTy);
