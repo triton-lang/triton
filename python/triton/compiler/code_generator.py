@@ -642,7 +642,7 @@ class CodeGenerator(ast.NodeVisitor):
             if annotation is None:
                 init_node = ast.Assign(targets=[st_target], value=default_value)
             else:
-                init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation)
+                init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation, simple=1)
             try:
                 assert not self.visiting_arg_default_value
                 self.visiting_arg_default_value = True
