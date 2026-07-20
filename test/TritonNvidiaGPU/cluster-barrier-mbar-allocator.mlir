@@ -15,6 +15,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     default {
       %c0 = arith.constant 0 : i32
       %c1 = arith.constant 1 : i32
+      %true = arith.constant true
       %cst = arith.constant dense<0.000000e+00> : tensor<256x128xf16, #blockedSplitM>
       // CHECK: ttg.convert_layout {{.*}} {ttg.mbar_offset = 8 : i32}
       %cvt = ttg.convert_layout %cst : tensor<256x128xf16, #blockedSplitM> -> tensor<256x128xf16, #blockedSplitN>
@@ -28,6 +29,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       // CHECK: tt.atomic_cas {{.*}} {ttg.mbar_offset = 8 : i32}
       %cas = tt.atomic_cas acq_rel, gpu, %ptr, %c0, %c1 : (!tt.ptr<i32>, i32, i32) -> i32
       tt.store %ptr, %cas : !tt.ptr<i32>
+      // CHECK: tt.atomic_rmw {{.*}} {ttg.mbar_offset = 8 : i32}
+      %release = tt.atomic_rmw add, release, sys, %ptr, %c1, %true : (!tt.ptr<i32>, i32, i1) -> i32
+      // CHECK: tt.atomic_rmw {{.*}} {ttg.mbar_offset = 8 : i32}
+      %acquire = tt.atomic_rmw add, acquire, sys, %ptr, %c1, %true : (!tt.ptr<i32>, i32, i1) -> i32
       %ptrs = tt.splat %ptr : !tt.ptr<i32> -> tensor<128x!tt.ptr<i32>, #blockedBroadcast>
       %zeros = arith.constant dense<0> : tensor<128xi32, #blockedBroadcast>
       %ones = arith.constant dense<1> : tensor<128xi32, #blockedBroadcast>

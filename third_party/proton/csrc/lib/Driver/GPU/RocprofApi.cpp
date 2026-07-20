@@ -6,6 +6,9 @@ namespace rocprofiler {
 DEFINE_DISPATCH(ExternLibRocprofiler, isInitialized, rocprofiler_is_initialized,
                 int *)
 
+DEFINE_DISPATCH(ExternLibRocprofiler, getTimestamp, rocprofiler_get_timestamp,
+                rocprofiler_timestamp_t *)
+
 DEFINE_DISPATCH(ExternLibRocprofiler, forceConfigure,
                 rocprofiler_force_configure, rocprofiler_configure_func_t)
 

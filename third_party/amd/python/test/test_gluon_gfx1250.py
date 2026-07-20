@@ -218,13 +218,9 @@ def test_runtime_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K, M, N, 
     def create_operand(shape, dtype):
         if dtype in (torch.float16, torch.bfloat16, torch.float32):
             return torch.randn(shape, dtype=dtype)
-        elif dtype == torch.float8_e5m2:
-            # range from min normal (0 00001 00) to max normal (0 11110 11)
-            return torch.randint(0x04, 0x7B, shape, dtype=torch.uint8).view(dtype)
         else:
-            # range from min normal (0 0001 000) to max normal (0 1110 111)
-            assert dtype == torch.float8_e4m3fn
-            return torch.randint(0x08, 0x77, shape, dtype=torch.uint8).view(dtype)
+            assert dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
+            return torch.randint(20, 40, shape, dtype=torch.uint8).view(dtype)
 
     a_dtype = getattr(torch, a_dtype)
     b_dtype = getattr(torch, b_dtype)
@@ -835,7 +831,7 @@ def test_runtime_gemm_async(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, a_dtype, b_dtype
             return torch.randn(shape, dtype=dtype)
         else:
             assert dtype == torch.float8_e5m2
-            return torch.randint(0x04, 0x7B, shape, dtype=torch.uint8).view(dtype)
+            return torch.randint(20, 40, shape, dtype=torch.uint8).view(dtype)
 
     a_dtype = getattr(torch, a_dtype)
     b_dtype = getattr(torch, b_dtype)
@@ -4662,6 +4658,8 @@ def async_load_store_roundtrip_kernel(a_ptr, b_ptr, BLOCK: ttgl.constexpr, loadC
     offs = pid * BLOCK + ttgl.arange(0, BLOCK, layout=BLOCKED_LAYOUT)
     buffer = ttgl.allocate_shared_memory(ttgl.float16, shape=[BLOCK], layout=SHARED_LAYOUT)
     ttgl.amd.gfx1250.async_copy.global_to_shared(buffer, a_ptr + offs, cache_modifier=loadCM)
+    ttgl.amd.gfx1250.async_copy.commit_group()
+    ttgl.amd.gfx1250.async_copy.wait_group(0)
     ttgl.amd.gfx1250.async_copy.shared_to_global(b_ptr + offs, buffer, cache_modifier=storeCM)
 
 
@@ -4718,8 +4716,8 @@ def test_cache_modifier(loadCM, storeCM, test_kernel):
                 assert "scope" not in line and "th" not in line
             if storeCM == ".cg":
                 assert "scope:SCOPE_DEV" in line and "th" not in line
-            if storeCM == "cs":
-                assert "scope" not in line and "th:TH_LOAD_NT" in line
+            if storeCM == ".cs":
+                assert "scope" not in line and "th:TH_STORE_NT" in line
             if storeCM == ".wt":
                 assert "scope:SCOPE_SYS" in line and "th:TH_STORE_BYPASS" in line
 

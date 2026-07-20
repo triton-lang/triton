@@ -58,6 +58,19 @@ public:
     return computeCapability >= 103 && computeCapability / 10 != 12;
   }
 
+  bool supportsI8Tcgen05MMA() const { return computeCapability == 100; }
+  bool supportsExclusiveTMEMAlloc() const { return computeCapability == 107; }
+  int getMaxTMEMColumns() const {
+    return supportsExclusiveTMEMAlloc() ? 576 : 512;
+  }
+  bool requiresFp4Padding() const {
+    return computeCapability == 100 || computeCapability == 103 ||
+           computeCapability == 110;
+  }
+  bool supports4xFp4Tcgen05MMA() const { return computeCapability == 107; }
+  bool supports2xFp8Tcgen05MMA() const { return computeCapability == 107; }
+  bool supportsReuseB() const { return computeCapability == 107; }
+
 private:
   static constexpr char kTargetPrefix[] = "cuda:";
 
