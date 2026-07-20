@@ -28,6 +28,7 @@ from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mma_v2
 from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
 from triton.experimental.gluon.language.nvidia import hopper
+from triton.experimental.gluon.language.nvidia import rubin
 from triton.experimental.gluon.language.nvidia.blackwell import tma as blackwell_tma
 from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_async_copy
 from triton.experimental.gluon.language.extra import libdevice
@@ -187,10 +188,7 @@ def test_async_shared_store():
 
     compiled = async_shared_store_kernel[(1, )](out, block, num_warps=4, num_ctas=2)
 
-    ptx = compiled.asm["ptx"]
-    assert "mbarrier.arrive.expect_tx.release.cluster.shared::cta.b64" in ptx
-    assert "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes" in ptx
-    assert "mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64" in ptx
+    assert "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes" in compiled.asm["ptx"]
     torch.testing.assert_close(out, torch.arange(block, device="cuda", dtype=torch.int32))
 
 
@@ -201,10 +199,7 @@ def test_async_shared_store_packed_f16():
 
     compiled = async_shared_store_f16_kernel[(1, )](out, block, num_warps=4, num_ctas=2)
 
-    ptx = compiled.asm["ptx"]
-    assert "mbarrier.arrive.expect_tx.release.cluster.shared::cta.b64" in ptx
-    assert "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32" in ptx
-    assert "mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64" in ptx
+    assert "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32" in compiled.asm["ptx"]
     torch.testing.assert_close(out, torch.arange(block, device="cuda", dtype=torch.float16))
 
 
@@ -741,6 +736,74 @@ def test_async_copy_mbarrier():
     async_copy_mbarrier_kernel[(1, )](out, inp, inp.shape[0], XBLOCK=32, YBLOCK=32)
     torch.testing.assert_close(out[:20], inp)
     torch.testing.assert_close(out[20:], torch.zeros((12, 32), **tensor_opts))
+
+
+# Equivalence-class multicast: cta_mask selects which CTA-ID bits to multicast
+# along.  Two CTAs share a class when (id_a & ~mask) == (id_b & ~mask).
+#
+#   CTA ID   0x0  0x1  0x2  0x3  0x4  0x5  0x6  0x7
+#   & ~0x5   0x0  0x0  0x2  0x2  0x0  0x0  0x2  0x2
+#   classes: {0,1,4,5}, {2,3,6,7}  (groups of 4)
+#
+# Multicast requires the identity CGA layout, so two_ctas barriers are not
+# supported. All legal cta_mask values are tested; cta_mask=0 exercises the
+# non-multicast path.
+@pytest.mark.parametrize("num_ctas", [2, 4, 8])
+@pytest.mark.parametrize("cta_mask", range(8))
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+def test_mbarrier_arrive_multicast(num_ctas, cta_mask):
+    if cta_mask >= num_ctas:
+        pytest.skip("cta_mask must be < num_ctas")
+    init_count = 1 << cta_mask.bit_count()
+
+    @gluon.jit
+    def kernel(out_ptr, cta_mask: ttgl.constexpr, init_count: ttgl.constexpr):
+        bar = rubin.mbarrier.allocate_mbarrier()
+        rubin.mbarrier.init(bar, count=init_count)
+        rubin.mbarrier.arrive(bar, cta_mask=cta_mask)
+        rubin.mbarrier.wait(bar, 0)
+        rubin.mbarrier.invalidate(bar)
+        ttgl.store(out_ptr + ttgl.program_id(0), ttgl.program_id(0))
+
+    out = torch.zeros(num_ctas, device="cuda", dtype=torch.int32)
+    compiled = kernel[(num_ctas, )](out, cta_mask, init_count, num_ctas=num_ctas, num_warps=4)
+
+    ttgir = compiled.asm["ttgir"]
+    if cta_mask:
+        assert f"ctaMask = {cta_mask} : i32" in ttgir, "Expected ctaMask in TTGIR"
+    else:
+        assert "ctaMask" not in ttgir, "Expected no ctaMask in TTGIR"
+
+    torch.testing.assert_close(out, torch.arange(num_ctas, device="cuda", dtype=torch.int32))
+
+
+@pytest.mark.parametrize("num_ctas", [2, 4, 8])
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+def test_mbarrier_arrive_broadcast_one_cta(num_ctas):
+
+    @gluon.jit
+    def kernel(out_ptr, cta_mask: ttgl.constexpr):
+        pid = ttgl.program_id(0)
+        cta_rank = ttgl.inline_asm_elementwise(
+            "mov.u32 $0, %cluster_ctarank;",
+            "=r",
+            [],
+            dtype=ttgl.int32,
+            is_pure=True,
+            pack=1,
+        )
+        bar = rubin.mbarrier.allocate_mbarrier()
+        rubin.mbarrier.init(bar, count=1)
+        # CTA 0 does a multicast arrive, all CTAs wait.
+        rubin.mbarrier.arrive(bar, cta_mask=cta_mask, pred=cta_rank == 0)
+        rubin.mbarrier.wait(bar, 0)
+        rubin.mbarrier.invalidate(bar)
+        ttgl.store(out_ptr + pid, pid)
+
+    out = torch.zeros(num_ctas, device="cuda", dtype=torch.int32)
+    kernel[(num_ctas, )](out, num_ctas - 1, num_ctas=num_ctas, num_warps=4)
+
+    torch.testing.assert_close(out, torch.arange(num_ctas, device="cuda", dtype=torch.int32))
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")

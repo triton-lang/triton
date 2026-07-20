@@ -19,6 +19,8 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
+namespace {
+
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
@@ -33,7 +35,7 @@ static bool hasTCGen5CommitCrossCTA(Operation *op) {
   return !ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op), descs).empty();
 }
 
-bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
+static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op)) {
     if (!isRead)
       return false;
@@ -56,11 +58,11 @@ bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
     return ttng::getModuleTwoCTAs(op);
   } else if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     return tma.getMulticast();
+  } else if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op)) {
+    return arrive.isMulticast();
   }
   return hasTCGen5CommitCrossCTA(op);
 }
-
-namespace {
 
 static bool isPreAllocAliasSliceFilter(const AllocationSlice &lhsSlice,
                                        const AllocationSlice &rhsSlice,
@@ -125,6 +127,9 @@ usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
   }
   if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
     return aliasesTracked(store.getMbarrier());
+  }
+  if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op)) {
+    return arrive.isMulticast() && aliasesTracked(arrive.getAlloc());
   }
   return false;
 }

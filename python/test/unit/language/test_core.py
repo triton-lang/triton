@@ -433,6 +433,36 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("op", ['+', '-'])
+def test_int1_bin_op_wraparound(op, device):
+    # int1 is a 1-bit integer, so `+`/`-` wrap around mod 2 just like any other
+    # integer type. The GPU backend already does this; the interpreter must
+    # agree (see issue #10919, where `True + True` gave 0 on GPU but 1 in the
+    # interpreter).
+    @triton.jit
+    def kernel(X, Y, Z, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(X + off)
+        y = tl.load(Y + off)
+        z = GENERATE_TEST_HERE
+        tl.store(Z + off, z)
+
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'x {op} y'})
+
+    x = np.array([False, False, True, True])
+    y = np.array([False, True, False, True])
+    SIZE = x.size
+    wide = x.astype(np.int8) + y.astype(np.int8) if op == '+' else x.astype(np.int8) - y.astype(np.int8)
+    z_ref = np.mod(wide, 2).astype(bool)
+
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+    z_tri = to_triton(np.empty(SIZE, dtype=bool), device=device)
+    kernel[(1, )](x_tri, y_tri, z_tri, SIZE=SIZE)
+    np.testing.assert_array_equal(z_ref, to_numpy(z_tri))
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype, order", [(dtype, order) for dtype in dtypes_with_bfloat16 for order in [0, 1]])
 def test_addptr(dtype, order, device):
     check_type_supported(dtype, device)
