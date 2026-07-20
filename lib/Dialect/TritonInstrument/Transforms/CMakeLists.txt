@@ -10,7 +10,6 @@ add_triton_library(TritonInstrumentTransforms
   LINK_LIBS PUBLIC
   MLIRTransforms
   MLIRTransformUtils
-  TritonAnalysis
   TritonIR
   TritonGPUIR
   TritonNvidiaGPUIR

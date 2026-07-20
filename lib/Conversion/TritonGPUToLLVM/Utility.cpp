@@ -250,14 +250,8 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
   return b.or_(orPart, xorPart, /*disjoint=*/true);
 }
 
-FailureOr<bool> cvtAlwaysUseWarpShuffle(ConvertLayoutOp cvt) {
-  if (cvtUsesForcedWarpShuffle(cvt))
-    return true;
-  if (!cvtIsWarpShuffleForced(cvt))
-    return false;
-  cvt.emitError("'always_use_warp_shuffle' requires a warp-local layout "
-                "conversion");
-  return failure();
+bool cvtAlwaysUseWarpShuffle(ConvertLayoutOp cvt) {
+  return cvt->getParentOp()->hasAttrOfType<UnitAttr>("always_use_warp_shuffle");
 }
 
 Value maybeAnd(OpBuilder &builder, Location loc, Value a, Value b) {
