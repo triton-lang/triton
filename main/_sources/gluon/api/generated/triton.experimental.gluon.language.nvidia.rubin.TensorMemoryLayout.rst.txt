@@ -1,0 +1,33 @@
+﻿triton.experimental.gluon.language.nvidia.rubin.TensorMemoryLayout
+==================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.rubin
+
+.. autoclass:: TensorMemoryLayout
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~TensorMemoryLayout.__init__
+      ~TensorMemoryLayout.mangle
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~TensorMemoryLayout.fp4_padded
+      ~TensorMemoryLayout.two_ctas
+      ~TensorMemoryLayout.block
+      ~TensorMemoryLayout.col_stride
+      ~TensorMemoryLayout.cga_layout
+   
+   

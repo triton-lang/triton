@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.nvidia.rubin.async\_store
+============================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.rubin
+
+.. autofunction:: async_store

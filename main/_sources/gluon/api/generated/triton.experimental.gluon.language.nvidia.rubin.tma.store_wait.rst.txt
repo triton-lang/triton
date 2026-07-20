@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.rubin.tma.store\_wait
+===============================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.rubin
+
+.. autofunction:: tma.store_wait

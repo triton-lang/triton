@@ -86,6 +86,7 @@
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../nvidia.blackwell.html">Blackwell</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../nvidia.rubin.html">Rubin</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../amd.html">AMD Intrinsics</a></li>
@@ -136,23 +137,13 @@
 <h1>triton.experimental.gluon.language.nvidia.hopper.mbarrier.arrive<a class="headerlink" href="#triton-experimental-gluon-language-nvidia-hopper-mbarrier-arrive" title="Link to this heading"></a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.nvidia.hopper.mbarrier.arrive">
-<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.hopper.mbarrier.</span></span><span class="sig-name descname"><span class="pre">arrive</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">mbarrier</span></span></em>, <em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">count</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cta_mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pred</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.hopper.mbarrier.arrive" title="Link to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.hopper.mbarrier.</span></span><span class="sig-name descname"><span class="pre">arrive</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">mbarrier</span></span></em>, <em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">count</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pred</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.hopper.mbarrier.arrive" title="Link to this definition"></a></dt>
 <dd><p>Arrive at an mbarrier with a specified count.</p>
-<p>When <code class="docutils literal notranslate"><span class="pre">cta_mask</span></code> is non-zero, the arrive is multicast across the cluster.
-Each bit set in the mask identifies a CTA ID dimension to multicast
-along. CTA IDs <code class="docutils literal notranslate"><span class="pre">a</span></code> and <code class="docutils literal notranslate"><span class="pre">b</span></code> belong to the same equivalence class iff
-<code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">&amp;</span> <span class="pre">~cta_mask</span> <span class="pre">==</span> <span class="pre">b</span> <span class="pre">&amp;</span> <span class="pre">~cta_mask</span></code>; all CTAs in a class multicast to each
-other. Multicast requires <code class="docutils literal notranslate"><span class="pre">num_ctas</span> <span class="pre">&gt;</span> <span class="pre">1</span></code>, <code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">&lt;</span> <span class="pre">cta_mask</span> <span class="pre">&lt;=</span> <span class="pre">num_ctas</span> <span class="pre">-</span> <span class="pre">1</span></code>,
-and the barrier must have the identity CGA layout <code class="docutils literal notranslate"><span class="pre">[[1],</span> <span class="pre">[2],</span> <span class="pre">...]</span></code>. The
-default value of <code class="docutils literal notranslate"><span class="pre">cta_mask</span></code> is 0 (no multicast).</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>mbarrier</strong> (<a class="reference internal" href="triton.experimental.gluon.language.shared_memory_descriptor.html#triton.experimental.gluon.language.shared_memory_descriptor" title="triton.experimental.gluon.language.shared_memory_descriptor"><em>shared_memory_descriptor</em></a>) – Barrier to be signalled.</p></li>
 <li><p><strong>count</strong> (<em>int</em>) – Count to arrive with. Defaults to 1.</p></li>
-<li><p><strong>cta_mask</strong> (<em>int</em>) – CTA broadcast dimension bits (see above). Defaults
-to 0 (no multicast). Must satisfy <code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">&lt;</span> <span class="pre">cta_mask</span> <span class="pre">&lt;=</span> <span class="pre">num_ctas</span> <span class="pre">-</span> <span class="pre">1</span></code>
-when non-zero.</p></li>
 <li><p><strong>pred</strong> (<em>bool</em>) – Scalar predicate. Operation is skipped if predicate is False. Defaults to True.</p></li>
 </ul>
 </dd>

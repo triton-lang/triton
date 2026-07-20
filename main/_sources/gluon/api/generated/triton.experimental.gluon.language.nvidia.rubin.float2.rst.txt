@@ -1,0 +1,33 @@
+﻿triton.experimental.gluon.language.nvidia.rubin.float2
+======================================================
+
+.. automodule:: triton.experimental.gluon.language.nvidia.rubin.float2
+
+
+
+
+.. rubric:: Functions
+
+.. autosummary::
+   :toctree:
+   :nosignatures:
+
+   pack2
+   unpack2
+   pack
+   unpack
+   fma
+
+
+
+.. rubric:: Classes
+
+.. autosummary::
+   :toctree:
+   :nosignatures:
+
+   Float2Tensor
+
+
+
+

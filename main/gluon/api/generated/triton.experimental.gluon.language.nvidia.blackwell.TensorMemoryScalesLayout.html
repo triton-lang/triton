@@ -28,7 +28,7 @@
     <script src="../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
-    <link rel="next" title="AMD" href="../amd.html" />
+    <link rel="next" title="NVIDIA Rubin" href="../nvidia.rubin.html" />
     <link rel="prev" title="triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryLayout" href="triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryLayout.html" /> 
 </head>
 
@@ -89,6 +89,7 @@
 <li class="toctree-l4 current"><a class="current reference internal" href="#">triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryScalesLayout</a></li>
 </ul>
 </li>
+<li class="toctree-l3"><a class="reference internal" href="../nvidia.rubin.html">Rubin</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../amd.html">AMD Intrinsics</a></li>
@@ -138,26 +139,22 @@
 <h1>triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryScalesLayout<a class="headerlink" href="#triton-experimental-gluon-language-nvidia-blackwell-tensormemoryscaleslayout" title="Link to this heading"></a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryScalesLayout">
-<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.blackwell.</span></span><span class="sig-name descname"><span class="pre">TensorMemoryScalesLayout</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cga_layout</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">&lt;factory&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_rep_order</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'mnThenK'</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryScalesLayout" title="Link to this definition"></a></dt>
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.blackwell.</span></span><span class="sig-name descname"><span class="pre">TensorMemoryScalesLayout</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cga_layout</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">&lt;factory&gt;</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryScalesLayout" title="Link to this definition"></a></dt>
 <dd><p>Describes the layout for tensor memory scales in Blackwell architecture.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>cga_layout</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>List</em><em>[</em><em>int</em><em>]</em><em>]</em><em>]</em>) – CGA layout bases. Defaults to [].</p></li>
-<li><p><strong>block_rep_order</strong> (<em>str</em>) – Order of repeated scale blocks. Must be either
-<code class="docutils literal notranslate"><span class="pre">&quot;mnThenK&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;kThenMn&quot;</span></code>. Defaults to <code class="docutils literal notranslate"><span class="pre">&quot;mnThenK&quot;</span></code>.</p></li>
-</ul>
+<dd class="field-odd"><p><strong>cga_layout</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>List</em><em>[</em><em>int</em><em>]</em><em>]</em><em>]</em>) – CGA layout bases. Defaults to [].</p>
 </dd>
 </dl>
 <dl class="py method">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryScalesLayout.__init__">
-<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cga_layout</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">&lt;factory&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_rep_order</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'mnThenK'</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryScalesLayout.__init__" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cga_layout</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">&lt;factory&gt;</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryScalesLayout.__init__" title="Link to this definition"></a></dt>
 <dd></dd></dl>
 
 <p class="rubric">Methods</p>
 <table class="autosummary longtable docutils align-default">
 <tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="#triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryScalesLayout.__init__" title="triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryScalesLayout.__init__"><code class="xref py py-obj docutils literal notranslate"><span class="pre">__init__</span></code></a>(self, cga_layout, block_rep_order)</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryScalesLayout.__init__" title="triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryScalesLayout.__init__"><code class="xref py py-obj docutils literal notranslate"><span class="pre">__init__</span></code></a>(self, cga_layout)</p></td>
 <td><p></p></td>
 </tr>
 <tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">mangle</span></code>(self)</p></td>
@@ -168,10 +165,7 @@
 <p class="rubric">Attributes</p>
 <table class="autosummary longtable docutils align-default">
 <tbody>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">block_rep_order</span></code></p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">cga_layout</span></code></p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">cga_layout</span></code></p></td>
 <td><p></p></td>
 </tr>
 </tbody>
@@ -185,7 +179,7 @@
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryLayout.html" class="btn btn-neutral float-left" title="triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryLayout" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="../amd.html" class="btn btn-neutral float-right" title="AMD" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="../nvidia.rubin.html" class="btn btn-neutral float-right" title="NVIDIA Rubin" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

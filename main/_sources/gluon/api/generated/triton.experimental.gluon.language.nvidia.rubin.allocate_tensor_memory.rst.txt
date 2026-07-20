@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.nvidia.rubin.allocate\_tensor\_memory
+========================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.rubin
+
+.. autofunction:: allocate_tensor_memory

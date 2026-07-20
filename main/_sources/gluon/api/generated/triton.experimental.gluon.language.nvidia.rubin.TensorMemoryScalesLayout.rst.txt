@@ -1,0 +1,30 @@
+﻿triton.experimental.gluon.language.nvidia.rubin.TensorMemoryScalesLayout
+========================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.rubin
+
+.. autoclass:: TensorMemoryScalesLayout
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~TensorMemoryScalesLayout.__init__
+      ~TensorMemoryScalesLayout.mangle
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~TensorMemoryScalesLayout.block_rep_order
+      ~TensorMemoryScalesLayout.cga_layout
+   
+   

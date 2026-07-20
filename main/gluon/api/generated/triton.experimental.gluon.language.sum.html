@@ -154,7 +154,7 @@
 <li><p><strong>input</strong> (<em>Tensor</em>) – the input values</p></li>
 <li><p><strong>axis</strong> (<em>int</em>) – the dimension along which the reduction should be done. If None, reduce all dimensions</p></li>
 <li><p><strong>keep_dims</strong> (<em>bool</em>) – if true, keep the reduced dimensions with length 1</p></li>
-<li><p><strong>dtype</strong> (<em>tl.dtype</em>) – the desired data type of the returned tensor. If specified, the input tensor is casted to <code class="code docutils literal notranslate"><span class="pre">dtype</span></code> before the operation is performed. This is useful for preventing data overflows. If not specified, integer and bool dtypes are upcasted to <code class="code docutils literal notranslate"><span class="pre">tl.int32</span></code> while float dtypes are kept as-is.</p></li>
+<li><p><strong>dtype</strong> (<em>tl.dtype</em>) – the desired data type of the returned tensor. If specified, the input tensor is casted to <code class="code docutils literal notranslate"><span class="pre">dtype</span></code> before the operation is performed. This is useful for preventing data overflows. If not specified, signed integer dtypes narrower than 32 bits are upcasted to <code class="code docutils literal notranslate"><span class="pre">tl.int32</span></code>, while unsigned integer and bool dtypes narrower than 32 bits are upcasted to <code class="code docutils literal notranslate"><span class="pre">tl.uint32</span></code>. Other dtypes are kept as-is.</p></li>
 </ul>
 </dd>
 </dl>

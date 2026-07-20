@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.rubin.float2.unpack
+=============================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.rubin
+
+.. autofunction:: float2.unpack

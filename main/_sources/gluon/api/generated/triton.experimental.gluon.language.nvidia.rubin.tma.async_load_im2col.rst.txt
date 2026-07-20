@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.rubin.tma.async\_load\_im2col
+=======================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.rubin
+
+.. autofunction:: tma.async_load_im2col

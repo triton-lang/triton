@@ -1,0 +1,31 @@
+triton.experimental.gluon.language.nvidia.rubin.float2.Float2Tensor
+===================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.rubin
+
+.. autoclass:: float2.Float2Tensor
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~float2.Float2Tensor.__init__
+      ~float2.Float2Tensor.sum
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~float2.Float2Tensor.hash_attrs
+      ~float2.Float2Tensor.type
+      ~float2.Float2Tensor.value
+   
+   

@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.nvidia.rubin.fence\_async\_shared
+====================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.rubin
+
+.. autofunction:: fence_async_shared

@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.rubin.mbarrier.arrive
+===============================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.rubin.mbarrier
+
+.. autofunction:: arrive

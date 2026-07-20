@@ -24,7 +24,6 @@
 
    .. autosummary::
    
-      ~TensorMemoryScalesLayout.block_rep_order
       ~TensorMemoryScalesLayout.cga_layout
    
    

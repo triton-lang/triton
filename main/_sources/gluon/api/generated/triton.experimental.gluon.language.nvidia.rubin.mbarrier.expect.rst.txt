@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.rubin.mbarrier.expect
+===============================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.rubin.mbarrier
+
+.. autofunction:: expect

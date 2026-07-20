@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.nvidia.rubin.tcgen05\_mma\_scaled
+====================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.rubin
+
+.. autofunction:: tcgen05_mma_scaled

@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.nvidia.rubin.mma\_v2
+=======================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.rubin
+
+.. autofunction:: mma_v2
