@@ -323,8 +323,8 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
     Blocks the program progress until the mbarrier object in `alloc` completes
     its current phase.
 
-    This lowers a waitloop using the PTX instruction
-    mbarrier.try_wait.parity{.acquire.cluster}.shared::cta.b64.
+    This lowers a waitloop using PTX instruction
+    mbarrier.try_wait.parity.shared::cta.b64.
 
     Accepts an optional list of memory dependencies. If present, it is assumed
     that any of the dependencies may be accessed until the barrier completes.

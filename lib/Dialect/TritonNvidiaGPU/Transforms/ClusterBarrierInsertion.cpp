@@ -19,21 +19,12 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
+namespace {
+
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-static bool hasTCGen5CommitCrossCTA(Operation *op) {
-  SmallVector<Value> descs;
-  if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
-    descs = mma.getCompletionDescs();
-  else if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op))
-    llvm::append_range(descs, commit.getDescs());
-  else
-    return false;
-  return !ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op), descs).empty();
-}
-
-bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
+static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op)) {
     if (!isRead)
       return false;
@@ -50,19 +41,19 @@ bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
     auto splitNum = ttg::getCTASplitNum(srcTy.getEncoding());
     return splitNum[reduce.getAxis()] > 1;
   }
-  if (isa<ttng::CLCTryCancelOp, ttng::AsyncSharedStoreOp>(op)) {
-    return ttg::lookupNumCTAs(op) > 1;
+  if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
+    return mma.getTwoCtas();
   } else if (isa<ttng::TMEMCopyOp>(op)) {
     return ttng::getModuleTwoCTAs(op);
-  } else if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
+  } else if (auto tma = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
+    return tma.getMulticast();
+  } else if (auto tma = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
     return tma.getMulticast();
   } else if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op)) {
     return arrive.isMulticast();
   }
-  return hasTCGen5CommitCrossCTA(op);
+  return false;
 }
-
-namespace {
 
 static bool isPreAllocAliasSliceFilter(const AllocationSlice &lhsSlice,
                                        const AllocationSlice &rhsSlice,
@@ -113,11 +104,11 @@ usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
 
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
     auto barrierOp = cast<ttg::MBarrierOpInterface>(op);
-    return hasTCGen5CommitCrossCTA(op) &&
+    return mma.getTwoCtas() &&
            llvm::any_of(barrierOp.getBarriers(), aliasesTracked);
   }
   if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
-    return hasTCGen5CommitCrossCTA(op) && aliasesTracked(commit.getBarrier());
+    return ttng::getModuleTwoCTAs(op) && aliasesTracked(commit.getBarrier());
   }
   if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     return tma.getMulticast() && aliasesTracked(tma.getBarrier());
