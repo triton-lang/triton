@@ -3,6 +3,8 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
+#include <cassert>
+
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 namespace tti = mlir::triton::instrument;
@@ -91,10 +93,16 @@ public:
   }
 
   std::optional<WaitOpInfo> getWaitOpInfo(Operation *op) const override {
-    if (auto tmaStoreWaitOp = dyn_cast<ttng::TMAStoreWaitOp>(op))
+    if (auto tmaStoreWaitOp = dyn_cast<ttng::TMAStoreWaitOp>(op)) {
+      assert(!tmaStoreWaitOp.getToken() &&
+             "TMA store tokens must be resolved before ConSan runs");
+      auto pendings = tmaStoreWaitOp.getPendingsAttr();
+      if (!pendings)
+        return std::nullopt;
       return WaitOpInfo{tti::CommitKind::TmaStore,
-                        static_cast<int>(tmaStoreWaitOp.getPendings()),
+                        static_cast<int>(pendings.getInt()),
                         /*transferWrites=*/false, /*transferReads=*/true};
+    }
     return std::nullopt;
   }
 

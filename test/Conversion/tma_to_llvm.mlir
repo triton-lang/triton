@@ -158,7 +158,7 @@ tt.func @tma_scatter(%arg0: !tt.tensordesc<1x128xbf16, #shared1>, %arg1: tensor<
   // CHECK: [[PTR:%.*]] = getelementptr {{.*}} [[BASE_PTR]]
   // CHECK-NEXT: "@$0 cp.async.bulk.tensor.2d.tile::scatter4.global.shared::cta.bulk_group [$1, {$2, $3, $4, $5, $6}], [$7];"
   // CHECK-SAME: (i1 [[PRED]], ptr nonnull %0, i32 %2, i32 {{%[0-9]+}}, i32 {{%[0-9]+}}, i32 {{%[0-9]+}}, i32 {{%[0-9]+}}, ptr addrspace(3) [[PTR]])
-  ttng.async_tma_scatter %arg0[%arg1, %arg2] %arg3 : !tt.tensordesc<1x128xbf16, #shared1>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>
+%tma_tok18 = ttng.async_tma_scatter %arg0[%arg1, %arg2] %arg3 : !tt.tensordesc<1x128xbf16, #shared1>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>
 
   // CHECK: nvvm.cp.async.bulk.commit.group()
 

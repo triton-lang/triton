@@ -124,7 +124,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @async_tma_scatter(%desc: !tt.tensordesc<1x128xbf16, #shared>, %x_offsets: tensor<32xi32, #offsets>, %y_offset: i32,
                              %src: !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>) {
     // CHECK-NEXT: ttng.async_tma_scatter [[DESC]][[[X_OFFSETS]], [[Y_OFFSET]]] [[SRC]] : !tt.tensordesc<1x128xbf16, #shared>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<32x128xbf16, #shared, #smem, mutable>
-    ttng.async_tma_scatter %desc[%x_offsets, %y_offset] %src : !tt.tensordesc<1x128xbf16, #shared>, tensor<32xi32, #offsets>, i32, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>
+%tma_tok8 = ttng.async_tma_scatter %desc[%x_offsets, %y_offset] %src : !tt.tensordesc<1x128xbf16, #shared>, tensor<32xi32, #offsets>, i32, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>
     tt.return
   }
 

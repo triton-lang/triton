@@ -211,6 +211,16 @@ def TritonNvidiaGPURemoveTMEMTokensPass : Pass<"triton-nvidia-gpu-remove-tmem-to
   }];
 }
 
+def TritonNvidiaGPUResolveTMAStoreTokensPass : Pass<"triton-nvidia-gpu-resolve-tma-store-tokens", "mlir::ModuleOp"> {
+  let summary = "Resolve token-based TMA store waits to explicit pending counts";
+
+  let description = [{
+    Replace token-based `async_tma_store_wait` ops with pending-count-based
+    equivalents by computing the minimum number of intervening TMA store ops
+    across all CFG paths from the producer to the wait.
+  }];
+}
+
 def TritonNvidiaGPUCheckMatmulTwoCTAPass : Pass<"triton-nvidia-check-matmul-two-cta", "mlir::ModuleOp"> {
   let summary = "Verify consistent two_ctas usage across matmuls";
 

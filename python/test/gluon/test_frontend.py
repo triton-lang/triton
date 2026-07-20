@@ -995,6 +995,13 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr):
     tma.store_wait(0)
 
 
+@gluon.jit
+def async_tma_store_wait_token_kernel(input_desc, XBLOCK: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], input_desc.layout)
+    token = tma.async_copy_shared_to_global(input_desc, [0, 0], smem)
+    tma.store_wait(token)
+
+
 @pytest.mark.parametrize("target", [HOPPER_TARGET, BLACKWELL_TARGET])
 def test_async_tma(target):
     input = MockTensor(ttgl.float16, (1024, 1024))
@@ -1029,12 +1036,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.inval_barrier %1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %c0_i32_4 = arith.constant 0 : i32
     %c0_i32_5 = arith.constant 0 : i32
-    ttng.async_tma_copy_local_to_global %arg0[%c0_i32_4, %c0_i32_5] %0 : !tt.tensordesc<128x128xf16, #shared>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    %2 = ttng.async_tma_copy_local_to_global %arg0[%c0_i32_4, %c0_i32_5] %0 : !tt.tensordesc<128x128xf16, #shared>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
     tt.return
   }
 }
 """)
+
+
+@pytest.mark.parametrize("target", [HOPPER_TARGET, BLACKWELL_TARGET])
+def test_async_tma_store_wait_token(target):
+    input = MockTensor(ttgl.float16, (1024, 1024))
+    XBLOCK = 128
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    input_desc = TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
+
+    mod = run_parser(
+        async_tma_store_wait_token_kernel,
+        *make_args(input_desc, XBLOCK, num_warps=4),
+        target=target,
+    )
+    ttgir = anonymize_ir(mod.str_nodebug())
+    assert re.search(r"%[0-9]+ = ttng.async_tma_copy_local_to_global", ttgir)
+    assert re.search(r"ttng.async_tma_store_wait %[0-9]+", ttgir)
 
 
 @gluon.jit
@@ -1088,7 +1112,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.wait_barrier %1, %c0_i32_1, %true_2 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.inval_barrier %1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %c0_i32_3 = arith.constant 0 : i32
-    ttng.async_tma_scatter %arg0[%2, %c0_i32_3] %0 : !tt.tensordesc<1x128xf16, #shared>, tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    %3 = ttng.async_tma_scatter %arg0[%2, %c0_i32_3] %0 : !tt.tensordesc<1x128xf16, #shared>, tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
     tt.return
   }
@@ -4397,7 +4421,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %1 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
     %c0_i32 = arith.constant 0 : i32
     %c0_i32_1 = arith.constant 0 : i32
-    ttng.async_tma_copy_local_to_global %0[%c0_i32, %c0_i32_1] %1 : !tt.tensordesc<128x128xf32, #shared>, !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
+    %2 = ttng.async_tma_copy_local_to_global %0[%c0_i32, %c0_i32_1] %1 : !tt.tensordesc<128x128xf32, #shared>, !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
     ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
     ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
     tt.return

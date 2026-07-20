@@ -31,9 +31,7 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::getCGALayout;
 using ::mlir::triton::gpu::getUniqueElemsPerThread;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
@@ -1401,7 +1399,7 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
   // be able to schedule them at the high level.
   NVVM::CpAsyncBulkCommitGroupOp::create(rewriter, loc);
 
-  rewriter.eraseOp(op);
+  rewriter.replaceOp(op, b.i32_val(0));
   return success();
 };
 
@@ -1764,7 +1762,7 @@ LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
   // be able to schedule them at the high level.
   NVVM::CpAsyncBulkCommitGroupOp::create(rewriter, loc);
 
-  rewriter.eraseOp(op);
+  rewriter.replaceOp(op, b.i32_val(0));
   return success();
 }
 

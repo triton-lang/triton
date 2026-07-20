@@ -542,6 +542,7 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
     Variadic<I32>:$coord,
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
   );
+  let results = (outs TTG_AsyncToken:$token);
 
   let assemblyFormat = [{
     $desc `[` $coord `]` $src
@@ -566,6 +567,7 @@ def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [TMAStoreLikeOpInterface
     Variadic<I32>:$coord,
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
   );
+  let results = (outs TTG_AsyncToken:$token);
 
   let assemblyFormat = [{
     $kind `,` $desc `[` $coord `]` $src
@@ -625,25 +627,39 @@ def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter", [
     I32:$y_offset,
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
   );
+  let results = (outs TTG_AsyncToken:$token);
 
   let assemblyFormat = [{
     $desc `[` $x_offsets `,` $y_offset `]` $src
     attr-dict `:` type(operands)
   }];
-
   let hasVerifier = 1;
 }
 
 def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait", [MemWaitOpTrait]> {
   let summary = "wait for pending TMA store operations.";
-  let arguments = (ins I32Attr:$pendings, UnitAttr:$read_only);
+  let arguments = (ins Optional<TTG_AsyncToken>:$token,
+                       OptionalAttr<I32Attr>:$pendings,
+                       UnitAttr:$read_only);
   let description = [{
     Wait for the associated store operations to complete. When `read_only` is
     set, only wait until their reads from shared memory have completed. This is
     needed before shared memory can be written to again.
   }];
 
-  let assemblyFormat = "attr-dict";
+  let builders = [
+    OpBuilder<(ins "int":$pendings, CArg<"bool", "false">:$read_only), [{
+      build($_builder, $_state, Value(), $_builder.getI32IntegerAttr(pendings),
+            read_only ? $_builder.getUnitAttr() : UnitAttr());
+    }]>,
+    OpBuilder<(ins "Value":$token, CArg<"bool", "false">:$read_only), [{
+      build($_builder, $_state, token, IntegerAttr(),
+            read_only ? $_builder.getUnitAttr() : UnitAttr());
+    }]>
+  ];
+
+  let assemblyFormat = "($token^)? attr-dict";
+  let hasVerifier = 1;
 }
 
 def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
