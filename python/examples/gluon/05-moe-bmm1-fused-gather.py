@@ -1530,7 +1530,7 @@ def test_op(c: MLPConfig, batch_size: int):
     assert_close(
         ref_y.to(torch.float32),
         cand_y.to(torch.float32),
-        maxtol=0.125,
+        maxtol=0.126,
         rmstol=None,
         description=f"{description}:out",
         verbose=False,

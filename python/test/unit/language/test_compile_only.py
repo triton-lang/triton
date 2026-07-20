@@ -212,7 +212,7 @@ def test_compile_only_dot_mxfp() -> None:
     assert re.search(pattern, str(ttgir)), "The TTGIR does not match the expected pattern."
 
     ptx = k.asm["ptx"]
-    pattern = (r"tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X")
+    pattern = (r"tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.block32")
     assert re.search(pattern, str(ptx)), "The PTX does not match the expected pattern."
     assert k.asm["cubin"] != b""
 

@@ -31,7 +31,7 @@ namespace gpu {
 namespace {
 
 static bool isUnsupportedMMAv5Int8Dot(int computeCapability, DotOp op) {
-  if (computeCapability != 103)
+  if (nvidia_gpu::TargetFeatures(computeCapability).supportsI8Tcgen05MMA())
     return false;
   auto aElemTy = op.getA().getType().getElementType();
   auto bElemTy = op.getB().getType().getElementType();
@@ -855,10 +855,29 @@ public:
       else if (isBFP4)
         IsBMixedPrecFp4 = true;
     }
-    // If we use txgen05.mma.kind.mxf864 we need to padd the fp4 operands:
+
+    bool isFp4MMA = isAFP4 && isBFP4;
+    bool requiresFp4Padding =
+        nvidia_gpu::TargetFeatures(computeCapability).requiresFp4Padding();
+
+    // On Blackwell, if we use mixed-precision MMA we need to pad the fp4
+    // operand
     // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-packing-formats-mxf8f6f4-smem
-    bool isMMAv5Fp4PaddedLhs = IsAMixedPrecFp4 || !dotOp.getLhsKPack();
-    bool isMMAv5Fp4PaddedRhs = IsBMixedPrecFp4 || !dotOp.getRhsKPack();
+    // On Rubin, the fp4 operand must be packed in SMEM if MMA_K = 64 is used.
+    // However, MMA_K = 64 with MN-major fp4 is not supported. In this case,
+    // the fp4 operand must be padded and MMA_K = 32 must be used.
+    // MMA_K = 64 is also not supported when BLOCK_M = 64.
+    auto blockK = dotOp.getA().getType().getShape().back() * (isAFP4 ? 2 : 1);
+    auto blockM = dotOp.getA().getType().getShape()[0];
+    bool isMMAv5Fp4PaddedLhs =
+        (isFp4MMA && !dotOp.getLhsKPack()) || // fp4  x fp4 with M-major A
+        (IsAMixedPrecFp4 && (requiresFp4Padding || blockM == 64 ||
+                             blockK == 32 || !dotOp.getLhsKPack()));
+    bool isMMAv5Fp4PaddedRhs =
+        (isFp4MMA && !dotOp.getRhsKPack()) || // fp4  x fp4 with N-major B
+        (IsBMixedPrecFp4 &&
+         (requiresFp4Padding || blockK == 32 || !dotOp.getRhsKPack()));
+
     // For mixed-precision fp4 operands, set allowTranspose = false, to force
     // the packed axis, K, to be contiguous in SMEM
     a = getSharedMemoryMMAOperand(a, rewriter, 0,
