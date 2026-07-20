@@ -58,11 +58,10 @@ struct ReadCounterOpConversion
   matchAndRewrite(mlir::triton::proton::gpu::ReadCounterOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    bool isClock64 = false;
     auto intType = mlir::cast<IntegerType>(op.getResult().getType());
-    isClock64 = intType.getWidth() == 64;
-    Value clock = targetInfo.clock(rewriter, op.getLoc(), isClock64);
-    rewriter.replaceOp(op, clock);
+    auto time = targetInfo.globalTime(rewriter, op.getLoc());
+    auto trunc = arith::TruncIOp::create(rewriter, op.getLoc(), intType, time);
+    rewriter.replaceOp(op, trunc);
     return success();
   }
 
