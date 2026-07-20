@@ -98,6 +98,12 @@ struct ConvertTritonGPUToLLVM
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     TargetInfo targetInfo(computeCapability, ptxVersion);
+    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
+    if (numCTAs > 1 && !targetInfo.getTargetFeatures().supportClusterOps()) {
+      mod.emitError() << "num_ctas > 1 is not supported on sm_"
+                      << computeCapability;
+      return signalPassFailure();
+    }
 
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(
@@ -242,7 +248,6 @@ struct ConvertTritonGPUToLLVM
       return signalPassFailure();
 
     // Fold CTAId when there is only 1 CTA.
-    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     if (numCTAs == 1) {
       mod.walk([](triton::nvgpu::ClusterCTAIdOp id) {
         OpBuilder b(id);

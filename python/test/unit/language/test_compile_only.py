@@ -1,8 +1,24 @@
 import triton
 import triton.language as tl
+import pytest
 from triton.backends.compiler import GPUTarget
 import re
 from triton.compiler import ASTSource
+
+
+@pytest.mark.parametrize("capability", [120, 121])
+def test_compile_only_rejects_clusters_on_sm12(capability) -> None:
+    backend = triton.compiler.compiler.make_backend(GPUTarget("cuda", capability, 32))
+
+    with pytest.raises(ValueError, match="does not support cluster operations"):
+        backend.parse_options({"num_ctas": 2})
+
+
+@pytest.mark.parametrize("capability,num_ctas", [(90, 2), (120, 1)])
+def test_compile_only_accepts_supported_cluster_options(capability, num_ctas) -> None:
+    backend = triton.compiler.compiler.make_backend(GPUTarget("cuda", capability, 32))
+
+    assert backend.parse_options({"num_ctas": num_ctas}).num_ctas == num_ctas
 
 
 def test_compile_only_sm100() -> None:
