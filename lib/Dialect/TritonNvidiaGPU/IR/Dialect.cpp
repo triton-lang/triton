@@ -66,6 +66,24 @@ void printCGALayoutRankTwo(AsmPrinter &printer, gpu::CGAEncodingAttr cgaAttr) {
 
 } // namespace
 
+TensorMemoryScalesBlockRepOrder getTensorMemoryScalesBlockRepOrder(
+    Operation *op, bool isA, ScaleDotElemType aType, ScaleDotElemType bType,
+    Type aScaleElemType, Type bScaleElemType) {
+  ModuleOp mod = op->getParentOfType<ModuleOp>();
+  auto targetAttr = mod->getAttrOfType<StringAttr>(gpu::AttrTargetName);
+  bool isRubin = targetAttr && targetAttr.getValue() == "cuda:107";
+  // Rubin NVFP4 uses different orders for A and B:
+  // A scales must advance along K before the next M tile, while B scales keep
+  // the default order that advances along N before the next K tile.
+  bool isRubinNVFP4xNVFP4 = isRubin && aType == ScaleDotElemType::E2M1 &&
+                            bType == ScaleDotElemType::E2M1 &&
+                            isa<Float8E4M3FNType>(aScaleElemType) &&
+                            isa<Float8E4M3FNType>(bScaleElemType);
+  return (isRubinNVFP4xNVFP4 && isA)
+             ? TensorMemoryScalesBlockRepOrder::K_THEN_MN
+             : TensorMemoryScalesBlockRepOrder::MN_THEN_K;
+}
+
 TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   auto *ctx = memDescType.getContext();
   auto S = [&](StringRef str) { return StringAttr::get(ctx, str); };
@@ -448,7 +466,7 @@ LogicalResult TensorMemoryEncodingAttr::verify(
 
 LogicalResult TensorMemoryScalesEncodingAttr::verify(
     function_ref<InFlightDiagnostic()> emitError,
-    gpu::CGAEncodingAttr cgaLayout) {
+    gpu::CGAEncodingAttr cgaLayout, TensorMemoryScalesBlockRepOrder) {
   if (cgaLayout.getRank() != 2) {
     return emitError() << "CGALayout must have rank 2";
   }

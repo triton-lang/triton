@@ -132,6 +132,35 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: arrive_barrier_multicast_absent
+  tt.func @arrive_barrier_multicast_absent(%alloc: !ttg.memdesc<2xi64, #shared0, #smem, mutable>) {
+    // No ctaMask → non-multicast path.
+    // CHECK: mbarrier.arrive.shared::cta.b64
+    // CHECK-NOT: mbarrier.arrive.shared::cluster.multicast
+    ttng.arrive_barrier %alloc, 1 : !ttg.memdesc<2xi64, #shared0, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: arrive_barrier_multicast
+  tt.func @arrive_barrier_multicast(%alloc: !ttg.memdesc<2xi64, #shared0, #smem, mutable>) {
+    // CHECK: mbarrier.arrive.release.cluster.shared::cluster.multicast::cluster::32b.b64 _, [${{.*}}], ${{.*}};
+    // CHECK-NOT: mbarrier.arrive.release.cluster.shared::cta.b64
+    ttng.arrive_barrier %alloc, 1 {ctaMask = 1 : i32} : !ttg.memdesc<2xi64, #shared0, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
 #smem = #ttg.shared_memory
