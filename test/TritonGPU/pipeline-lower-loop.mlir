@@ -99,7 +99,9 @@ tt.func @one_dep_async(%lb : index, %ub : index, %step : index,
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: @one_dep_barrier_wait
-// CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x128x64
+// The wait is in a later cluster than the load, so it extends the buffer's
+// effective lifetime by one stage.
+// CHECK: ttg.local_alloc : () -> !ttg.memdesc<4x128x64
 tt.func @one_dep_barrier_wait(%lb : index, %ub : index, %step : index,
                  %a_ptr_init : tensor<128x64x!tt.ptr<f16>, #A> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
                  %bar : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>,
@@ -123,7 +125,7 @@ tt.func @one_dep_barrier_wait(%lb : index, %ub : index, %step : index,
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: @one_dep_barrier_wait_trans
-// CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x128x64
+// CHECK: ttg.local_alloc : () -> !ttg.memdesc<4x128x64
 tt.func @one_dep_barrier_wait_trans(%lb : index, %ub : index, %step : index,
                  %a_ptr_init : tensor<128x64x!tt.ptr<f16>, #A> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
                  %bar : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>,
