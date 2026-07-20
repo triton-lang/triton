@@ -272,8 +272,7 @@ static void emitClusterPriority(OpBuilder &r, Location loc,
 // cluster barrier when one already exists at the cluster boundary.
 static void wrapExistingBarrier(OpBuilder &b, Location loc,
                                 Operation *clusterOp,
-                                Operation *existingBarrier,
-                                bool anyHasPriority,
+                                Operation *existingBarrier, bool anyHasPriority,
                                 bool emitPriority = true) {
   b.setInsertionPoint(existingBarrier);
   if (emitPriority)
