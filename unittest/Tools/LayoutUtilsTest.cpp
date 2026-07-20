@@ -45,47 +45,18 @@ TEST_F(LayoutUtilsTest, SquareSublayoutIsIdentity) {
   EXPECT_TRUE(squareSublayoutIsIdentity(l3, {S("in1"), S("in2")}));
 }
 
-TEST_F(LayoutUtilsTest, IntegerStrides) {
-  LinearLayout layout(
-      {{S("x"), {{2}, {4}}}, {S("y"), {{1}}}, {S("broadcast"), {{0}}}},
-      {S("out")});
-
-  auto xStride = getIntegerStrides(layout, S("out"), {S("x")});
-  ASSERT_TRUE(xStride);
-  EXPECT_EQ(xStride->lookup(S("x")).stride, 2);
-  EXPECT_EQ(xStride->lookup(S("x")).basisMask, 0b110);
-
-  auto allStrides =
-      getIntegerStrides(layout, S("out"), {S("x"), S("y"), S("broadcast")});
-  ASSERT_TRUE(allStrides);
-  EXPECT_EQ(allStrides->lookup(S("x")).stride, 2);
-  EXPECT_EQ(allStrides->lookup(S("y")).stride, 1);
-  EXPECT_EQ(allStrides->lookup(S("broadcast")).stride, 0);
-  EXPECT_EQ(allStrides->lookup(S("broadcast")).basisMask, 0);
-}
-
-TEST_F(LayoutUtilsTest, IntegerStridesRejectNonIntegerAndOverlapping) {
-  LinearLayout nonInteger({{S("x"), {{4}, {2}, {1}}}}, {S("out")});
-  EXPECT_FALSE(getIntegerStrides(nonInteger, S("out"), {S("x")}));
-
-  LinearLayout overlapping({{S("x"), {{1}, {2}}}, {S("y"), {{2}}}},
-                           {{S("out"), 4}},
-                           /*requireSurjective=*/false);
-  EXPECT_FALSE(getIntegerStrides(overlapping, S("out"), {S("x")}));
-  EXPECT_FALSE(getIntegerStrides(overlapping, S("out"), {S("x"), S("y")}));
-}
-
-TEST_F(LayoutUtilsTest, BasisMask) {
+TEST_F(LayoutUtilsTest, OutputBasisMask) {
   LinearLayout layout({{S("x"), {{1, 8}, {2, 16}}},
                        {S("y"), {{4, 1}}},
                        {S("broadcast"), {{0, 0}}}},
                       {{S("out0"), 8}, {S("out1"), 32}},
                       /*requireSurjective=*/false);
 
-  EXPECT_EQ(getBasisMask(layout, {S("x")}, S("out0")), 0b0011);
-  EXPECT_EQ(getBasisMask(layout, {S("x"), S("y")}, S("out0")), 0b0111);
-  EXPECT_EQ(getBasisMask(layout, {S("x"), S("broadcast")}, S("out1")), 0b11000);
-  EXPECT_EQ(getBasisMask(layout, {}, S("out0")), 0);
+  EXPECT_EQ(getOutputBasisMask(layout, {S("x")}, S("out0")), 0b0011);
+  EXPECT_EQ(getOutputBasisMask(layout, {S("x"), S("y")}, S("out0")), 0b0111);
+  EXPECT_EQ(getOutputBasisMask(layout, {S("x"), S("broadcast")}, S("out1")),
+            0b11000);
+  EXPECT_EQ(getOutputBasisMask(layout, {}, S("out0")), 0);
 }
 
 TEST_F(LayoutUtilsTest, InputBasisMask) {

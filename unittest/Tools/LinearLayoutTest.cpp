@@ -412,27 +412,6 @@ TEST_F(LinearLayoutTest, FactorThrough) {
   EXPECT_FALSE(factorThrough(superset, wrongDims));
 }
 
-TEST_F(LinearLayoutTest, FactorThroughMoreThan64CombinedColumns) {
-  BasesT aBases;
-  BasesT bBases;
-  for (int i = 0; i < 32; ++i) {
-    auto aDim = S("a" + std::to_string(i));
-    auto bDim = S("b" + std::to_string(i));
-    aBases[aDim] = i == 0 ? std::vector<std::vector<int32_t>>{{1}, {2}}
-                          : std::vector<std::vector<int32_t>>{{0}, {0}};
-    bBases[bDim] = i == 0 ? std::vector<std::vector<int32_t>>{{2}, {1}}
-                          : std::vector<std::vector<int32_t>>{{0}, {0}};
-  }
-  LinearLayout A(std::move(aBases), {{S("out"), 4}},
-                 /*requireSurjective=*/false);
-  LinearLayout B(std::move(bBases), {{S("out"), 4}},
-                 /*requireSurjective=*/false);
-
-  auto factor = factorThrough(A, B);
-  ASSERT_TRUE(factor);
-  EXPECT_EQ(factor->compose(A), B);
-}
-
 TEST_F(LinearLayoutTest, InvertAndComposeLargerA) {
   // Note that dim0 and dim1 are larger in sharedLaoyout
   auto regLayout =

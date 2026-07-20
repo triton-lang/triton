@@ -900,7 +900,8 @@ std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout);
 
 // Find X such that X.compose(A) == B, equivalently A * X == B in matrix
 // notation. Returns nullopt when B's image is not contained in A's image or
-// when their output dimensions are incompatible. Free variables in X are set
+// when their output dimensions are incompatible, or when the augmented matrix
+// exceeds the existing 64-column solver capacity. Free variables in X are set
 // to zero.
 std::optional<LinearLayout> factorThrough(const LinearLayout &A,
                                           const LinearLayout &B);

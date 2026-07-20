@@ -1,5 +1,4 @@
 add_triton_library(TritonTools
-  GF2LinearAlgebra.cpp
   GenericSwizzling.cpp
   LayoutUtils.cpp
   LinearLayout.cpp

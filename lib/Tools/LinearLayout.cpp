@@ -1,10 +1,11 @@
 #include "triton/Tools/LinearLayout.h"
 
 #include <cstdint>
+#include <set>
 #include <vector>
 
-#include "GF2LinearAlgebra.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "third_party/f2reduce/f2reduce.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/STLExtras.h"
@@ -17,6 +18,18 @@
 #define DEBUG_TYPE "linear_layout"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
+
+#if defined(_MSC_VER) && !defined(__clang__)
+// from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
+#include <intrin.h>
+
+static int __builtin_ctzll(unsigned long long x) {
+  unsigned long r;
+  _BitScanForward64(&r, x);
+  return static_cast<int>(r);
+}
+
+#endif
 
 namespace mlir::triton {
 
@@ -34,31 +47,34 @@ BasesT makeBasesMap(
   return ret;
 }
 
-detail::GF2Matrix
-getLayoutMatrix(const LinearLayout &layout,
-                ArrayRef<std::pair<StringAttr, int32_t>> codomain) {
-  unsigned numRows = 0;
-  for (auto [outDim, size] : codomain) {
-    assert(layout.hasOutDim(outDim));
-    assert(layout.getOutDimSize(outDim) <= size);
-    numRows += llvm::Log2_32(size);
-  }
-
-  detail::GF2Matrix matrix(numRows, layout.getTotalInDimSizeLog2());
-  unsigned row = 0;
-  for (auto [outDim, size] : codomain) {
-    unsigned column = 0;
-    for (StringAttr inDim : layout.getInDimNames()) {
-      for (unsigned i = 0; i < layout.getInDimSizeLog2(inDim); ++i) {
-        uint32_t basis = layout.getBasis(inDim, i, outDim);
-        for (unsigned bit = 0; bit < layout.getOutDimSizeLog2(outDim); ++bit)
-          matrix.set(row + bit, column, basis & (uint32_t{1} << bit));
-        ++column;
-      }
+// Dump the matrix to stderr in a human-readable format for debugging.
+void dumpMatrix(uint64_t *m, int numRows, int numCols) {
+  assert(numCols <= 64);
+  for (int r = 0; r < numRows; r++) {
+    llvm::errs() << "0b";
+    for (int c = 0; c < numCols; c++) {
+      llvm::errs() << ((m[r] & (1 << c)) != 0 ? "1" : "0");
     }
-    row += llvm::Log2_32(size);
+    llvm::errs() << "\n";
   }
-  return matrix;
+}
+
+// Compute the rank of the matrix formed by taking the bases for the given
+// outDim as columns.  In other words, finds the number of linearly-independent
+// bases for this output dimension.
+int getMatrixRank(std::unique_ptr<uint64_t[]> m, int numRows, int numCols) {
+  // stride is specified in number of 64-bit words per row, and we pack our
+  // matrix so that there's only one uint64_t per row.
+  assert(numCols <= 64);
+  f2reduce::inplace_rref_strided(m.get(), numRows, numCols, /*stride=*/1);
+
+  // The rank of the reduced matrix is simply the number of nonzero rows.
+  int rank = 0;
+  for (int i = 0; i < numRows; i++) {
+    if (m[i] != 0)
+      rank++;
+  }
+  return rank;
 }
 
 template <typename T, typename U>
@@ -198,9 +214,9 @@ LinearLayout::checkInvariants(bool requireSurjective) {
   // the rank of our matrix using Gaussian elimination, which runs in O(n^3)
   // for an n x n matrix.  Our matrix size is sum(inDimSizeLog2) x
   // sum(outDimSizeLog2), so this should be plenty fast.
-  assert(getTotalInDimSizeLog2() <= 64 && "LinearLayout too large");
-  assert(getTotalOutDimSizeLog2() <= 64 && "LinearLayout too large");
-  this->rank = getLayoutMatrix(*this, getOutDims()).rank();
+  this->rank =
+      getMatrixRank(getMatrix(*this), /*numRows=*/getTotalOutDimSizeLog2(),
+                    /*numCols=*/getTotalInDimSizeLog2());
 
   if (requireSurjective && !isSurjective()) {
     return "Layout is expected to be surjective, i.e. every `out` coordinate "
@@ -846,7 +862,7 @@ LinearLayout LinearLayout::sublayout(ArrayRef<StringAttr> inDimNames,
 bool LinearLayout::sublayoutIsZero(ArrayRef<StringAttr> inDimNames,
                                    ArrayRef<StringAttr> outDimNames) const {
   return llvm::all_of(outDimNames, [&](StringAttr outDim) {
-    return getBasisMask(*this, inDimNames, outDim) == 0;
+    return getOutputBasisMask(*this, inDimNames, outDim) == 0;
   });
 }
 
@@ -898,6 +914,32 @@ LinearLayout LinearLayout::compose(const LinearLayout &outer) const {
                       compositionIsSurjective);
 }
 
+namespace {
+std::unique_ptr<uint64_t[]> concatMatrices(const LinearLayout &A,
+                                           const LinearLayout &B) {
+  assert(A.getTotalOutDimSizeLog2() >= B.getTotalOutDimSizeLog2() &&
+         "A must have at least as many output bits as B");
+  int numColsA = A.getTotalInDimSizeLog2();
+  int numColsB = B.getTotalInDimSizeLog2();
+
+  // rref expects the lower bits to be the lower indices of the matrix.
+  auto concat = getMatrix(A);
+  auto BMat = getMatrix(B);
+  int rowA = 0;
+  int rowB = 0;
+  for (auto [outDim, outDimSize] : A.getOutDims()) {
+    for (int r = 0; r < llvm::Log2_32(outDimSize); r++) {
+      if (numColsB && r < llvm::Log2_32(B.getOutDimSize(outDim)))
+        concat[rowA] |= BMat[rowB] << numColsA;
+      if (r < llvm::Log2_32(B.getOutDimSize(outDim)))
+        rowB++;
+      rowA++;
+    }
+  }
+  return concat;
+}
+} // namespace
+
 std::optional<LinearLayout> factorThrough(const LinearLayout &A,
                                           const LinearLayout &B) {
   SmallDenseSet<StringAttr> aOutDims(A.getOutDimNames().begin(),
@@ -910,27 +952,58 @@ std::optional<LinearLayout> factorThrough(const LinearLayout &A,
     if (B.getOutDimSize(outDim) > A.getOutDimSize(outDim))
       return std::nullopt;
 
-  auto solution = getLayoutMatrix(A, A.getOutDims())
-                      .solve(getLayoutMatrix(B, A.getOutDims()));
-  if (!solution)
+  auto orderedB = B.transposeOuts(llvm::to_vector(A.getOutDimNames()));
+  int numRows = A.getTotalOutDimSizeLog2();
+  int numColsA = A.getTotalInDimSizeLog2();
+  int numColsB = orderedB.getTotalInDimSizeLog2();
+  int numCols = numColsA + numColsB;
+  if (numCols > 64)
     return std::nullopt;
 
+  std::unique_ptr<uint64_t[]> combinedMat = concatMatrices(A, orderedB);
+  if (numRows && numCols)
+    f2reduce::inplace_rref_strided(combinedMat.get(), numRows, numCols,
+                                   /*stride=*/1);
+
+  // Find the pivot row for each column of A. A pivot in B's columns means that
+  // B's image is not contained in A's image.
+  SmallVector<int32_t> pivotRowOfCol(numColsA, -1);
+  for (int r = 0; r < numRows; r++) {
+    uint64_t row = combinedMat[r];
+    if (row == 0)
+      continue;
+    int c = __builtin_ctzll(row);
+    if (c >= numColsA)
+      return std::nullopt;
+    assert(pivotRowOfCol[c] == -1 &&
+           "duplicate pivot => matrix is not in RREF");
+    pivotRowOfCol[c] = r;
+  }
+
+  // Extract A^{-1}B, setting free variables to zero.
+  SmallVector<uint64_t> solution(numColsA, 0);
+  for (int c = 0; c < numColsA; ++c) {
+    int row = pivotRowOfCol[c];
+    if (row != -1 && numColsB)
+      solution[c] = combinedMat[row] >> numColsA;
+  }
+
   LinearLayout::BasesT resultBases;
-  unsigned solutionColumn = 0;
-  for (StringAttr bInDim : B.getInDimNames()) {
+  unsigned bColumn = 0;
+  for (StringAttr bInDim : orderedB.getInDimNames()) {
     auto &inDimBases = resultBases[bInDim];
-    for (unsigned bBit = 0; bBit < B.getInDimSizeLog2(bInDim); ++bBit) {
+    for (unsigned bBit = 0; bBit < orderedB.getInDimSizeLog2(bInDim);
+         ++bBit, ++bColumn) {
       std::vector<int32_t> basis;
-      unsigned solutionRow = 0;
+      unsigned aColumn = 0;
       for (StringAttr aInDim : A.getInDimNames()) {
         int32_t value = 0;
         for (unsigned aBit = 0; aBit < A.getInDimSizeLog2(aInDim); ++aBit)
-          if (solution->get(solutionRow++, solutionColumn))
+          if (solution[aColumn++] & (uint64_t{1} << bColumn))
             value |= int32_t{1} << aBit;
         basis.push_back(value);
       }
       inDimBases.push_back(std::move(basis));
-      ++solutionColumn;
     }
   }
 
@@ -1059,14 +1132,30 @@ LinearLayout LinearLayout::squeezeOuts(StringAttr dim) const {
 
 llvm::MapVector<StringAttr, int32_t>
 LinearLayout::getFreeVariableMasks() const {
-  auto pivots = getLayoutMatrix(*this, getOutDims()).pivotColumns();
+  std::unique_ptr<uint64_t[]> mat = getMatrix(*this);
+  int numRows = getTotalOutDimSizeLog2();
+  int numCols = getTotalInDimSizeLog2();
+
+  // stride is specified in number of 64-bit words per row, and we pack our
+  // matrix so that there's only one uint64_t per row.
+  assert(numCols <= 64);
+  f2reduce::inplace_rref_strided(mat.get(), numRows, numCols, /*stride=*/1);
+
+  // For each row in the RREF matrix, identify the column with the first "1".
+  // These columns correspond to the basic (i.e. non-free) variables.
+  std::set<int32_t> basicVars;
+  for (int r = 0; r < numRows; r++) {
+    if (mat[r] == 0)
+      continue;
+    basicVars.insert(__builtin_ctzll(mat[r]));
+  }
 
   llvm::MapVector<StringAttr, int32_t> ret;
-  unsigned column = 0;
+  int c = 0;
   for (StringAttr dim : getInDimNames()) {
     int32_t mask = 0;
-    for (int i = 0; i < getInDimSizeLog2(dim); ++i, ++column) {
-      if (!llvm::is_contained(pivots, column))
+    for (int i = 0; i < getInDimSizeLog2(dim); i++, c++) {
+      if (basicVars.count(c) == 0)
         mask |= (1 << i);
     }
     ret[dim] = mask;
@@ -1259,16 +1348,53 @@ std::string ColumnAction::toString() const {
 }
 
 // Build a matrix of size sum(outDimSizeLog2) x sum(inDimSizeLog2) representing
-// the bases of the given layout.
+// the bases of the given layout.  This can then be used by f2reduce.
 //
 // This function is called from the constructor of LinearLayout, so be careful
 // not to use any functions that create LLs in here.
 std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout) {
-  auto matrix = getLayoutMatrix(layout, layout.getOutDims());
-  auto result = std::make_unique<uint64_t[]>(matrix.getNumRows());
-  for (unsigned row = 0; row < matrix.getNumRows(); ++row)
-    result[row] = matrix.getRow64(row);
-  return result;
+  int numRows = layout.getTotalOutDimSizeLog2();
+  int numCols = layout.getTotalInDimSizeLog2();
+
+  // Don't handle giant LLs.  This makes some things easier; for example, each
+  // row can be a single uint64_t.
+  assert(numCols <= 64 && "LinearLayout too large");
+  assert(numRows <= 64 && "LinearLayout too large");
+
+  // Suppose we have a layout specified by the following values.
+  //
+  //   L(0,1) = (0b01, 0b1)
+  //   L(0,2) = (0b10, 0b0)
+  //   L(1,0) = (0b10, 0b0)
+  //   L(2,0) = (0b11, 0b0)
+  //
+  // We will create one column per entry above.  The max bit width of the
+  // codomain is (2,1), so our matrix will have 2+1=3 rows.  The final matrix
+  // will be
+  //
+  //  | L(0,1)[0] L(0,2)[0] L(1,0)[0] L(2,0)[0] |   | 0b1001 |
+  //  |    ↓         ↓         ↓         ↓      |   | 0b0111 |
+  //  | L(0,1)[1] L(0,2)[1] L(1,0)[1] L(2,0)[1] | = | 0b1000 |
+  //  |    ↓         ↓         ↓         ↓      |
+  //
+  // Note `new uint64_t[n]()` is zero-initialized, but `new uint64_t[n]` is not.
+  std::unique_ptr<uint64_t[]> m(new uint64_t[numRows]());
+  int r = 0;
+  for (StringAttr outDim : layout.getOutDimNames()) {
+    int c = 0;
+    for (StringAttr inDim : layout.getInDimNames()) {
+      for (int i = 0; i < layout.getInDimSizeLog2(inDim); i++) {
+        uint64_t basis = layout.getBasis(inDim, i, outDim);
+        for (int j = 0; j < layout.getOutDimSizeLog2(outDim); j++) {
+          m[r + j] |= ((basis >> j) & 1) << c;
+        }
+        c++;
+      }
+    }
+    r += layout.getOutDimSizeLog2(outDim);
+  }
+
+  return m;
 }
 
 } // namespace mlir::triton

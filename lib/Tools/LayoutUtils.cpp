@@ -209,8 +209,8 @@ LinearLayout zerosLike(const LinearLayout &layout) {
                       /*requireSurjective=*/false);
 }
 
-uint32_t getBasisMask(const LinearLayout &layout, ArrayRef<StringAttr> inDims,
-                      StringAttr outDim) {
+uint32_t getOutputBasisMask(const LinearLayout &layout,
+                            ArrayRef<StringAttr> inDims, StringAttr outDim) {
   assert(layout.hasOutDim(outDim));
   unsigned outIdx = layout.getOutDimIndex(outDim);
   uint32_t mask = 0;
@@ -304,48 +304,6 @@ LinearLayout renameLinearLayoutDims(
   }
   return LinearLayout(std::move(bases), outDims,
                       /*requireSurjective=*/layout.isSurjective());
-}
-
-std::optional<llvm::MapVector<StringAttr, IntegerStride>>
-getIntegerStrides(const LinearLayout &layout, StringAttr outDim,
-                  ArrayRef<StringAttr> inDims) {
-  assert(layout.hasOutDim(outDim));
-  unsigned outIdx = layout.getOutDimIndex(outDim);
-  llvm::SmallDenseSet<StringAttr> selectedDims;
-  llvm::MapVector<StringAttr, IntegerStride> result;
-  uint32_t selectedMask = 0;
-  for (StringAttr inDim : inDims) {
-    assert(layout.hasInDim(inDim));
-    assert(selectedDims.insert(inDim).second && "duplicate input dimension");
-
-    auto bases = layout.getBases().lookup(inDim);
-    uint32_t stride = bases.empty() ? 0 : uint32_t(bases.front()[outIdx]);
-    if (stride && !llvm::isPowerOf2_32(stride))
-      return std::nullopt;
-
-    uint32_t mask = 0;
-    for (auto [bit, basis] : llvm::enumerate(bases)) {
-      if (stride && bit >= 32)
-        return std::nullopt;
-      uint64_t expected = uint64_t(stride) << bit;
-      uint32_t value = uint32_t(basis[outIdx]);
-      if (value != expected)
-        return std::nullopt;
-      mask |= value;
-    }
-    if (selectedMask & mask)
-      return std::nullopt;
-    selectedMask |= mask;
-    result.insert({inDim, {stride, mask}});
-  }
-
-  SmallVector<StringAttr> unselectedDims;
-  for (StringAttr inDim : layout.getInDimNames())
-    if (!selectedDims.contains(inDim))
-      unselectedDims.push_back(inDim);
-  if (selectedMask & getBasisMask(layout, unselectedDims, outDim))
-    return std::nullopt;
-  return result;
 }
 
 std::optional<ColumnAction> regPermForDivide(const LinearLayout &A,
@@ -465,8 +423,8 @@ actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
   uint64_t blockBits = maskSpanBlocks;
   auto addrInDims = llvm::to_vector(addrLayout.getInDimNames());
   auto addrOutDims = llvm::to_vector(addrLayout.getOutDimNames());
-  offsetBits |= getBasisMask(addrLayout, addrInDims, addrOutDims[0]);
-  blockBits |= getBasisMask(addrLayout, addrInDims, addrOutDims[1]);
+  offsetBits |= getOutputBasisMask(addrLayout, addrInDims, addrOutDims[0]);
+  blockBits |= getOutputBasisMask(addrLayout, addrInDims, addrOutDims[1]);
   SmallVector<size_t> front, back;
   auto layoutNamedBases = layout.getBases();
   assert(layoutNamedBases.lookup(kReg).size() >= regBasisPerVec &&
@@ -654,7 +612,7 @@ std::optional<LinearLayout> getReps(const LinearLayout &cvt,
   auto tileInDims = llvm::to_vector(tile.getInDimNames());
   for (StringAttr od : cvt.getOutDimNames())
     tileMaskPerOutDim[od] =
-        tile.hasOutDim(od) ? getBasisMask(tile, tileInDims, od) : 0;
+        tile.hasOutDim(od) ? getOutputBasisMask(tile, tileInDims, od) : 0;
 
   // Build reps with the same in/out dims as cvt, but zeroing out the leading
   // inB bases (per in-dim) and keeping the remainder bases unchanged from cvt.

@@ -112,8 +112,8 @@ LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
 LinearLayout zerosLike(const LinearLayout &layout);
 
 // Return the output bits touched by `inDims` in `outDim`.
-uint32_t getBasisMask(const LinearLayout &layout, ArrayRef<StringAttr> inDims,
-                      StringAttr outDim);
+uint32_t getOutputBasisMask(const LinearLayout &layout,
+                            ArrayRef<StringAttr> inDims, StringAttr outDim);
 
 // Return a mask of the bases in `inDim` that touch any of `outDims`. Bit i is
 // set exactly when the i-th input basis has a nonzero component in at least one
@@ -145,24 +145,6 @@ LinearLayout renameLinearLayoutDims(
     const LinearLayout &layout,
     ArrayRef<std::pair<StringAttr, StringAttr>> inDimRenames,
     ArrayRef<std::pair<StringAttr, StringAttr>> outDimRenames);
-
-struct IntegerStride {
-  uint32_t stride = 0;
-  uint32_t basisMask = 0;
-};
-
-// If every selected input dimension `d` maps to `outDim` as
-//
-//   out = stride[d] * d
-//
-// in ordinary integer arithmetic, return its stride and output-bit mask.
-// This requires the bases for `d` to be [stride, 2*stride, ...], with a
-// power-of-two stride, and requires the selected dimensions' masks to be
-// disjoint from one another and from every unselected input dimension.
-// Broadcast dimensions have stride and mask zero.
-std::optional<llvm::MapVector<StringAttr, IntegerStride>>
-getIntegerStrides(const LinearLayout &layout, StringAttr outDim,
-                  ArrayRef<StringAttr> inDims);
 
 // For a layout A with A.hasInDim(kReg), find a permutation of registers action
 // such that action.apply(A) may be divisible by B
