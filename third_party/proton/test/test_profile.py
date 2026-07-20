@@ -1258,6 +1258,7 @@ def test_trace_flexible_metrics_no_kernel_anchor(tmp_path: pathlib.Path):
         trace_events[0]["args"]["call_stack"],
         trace_events[0]["args"]["metrics"],
     ) == ("metric", "metric_only: <foo, 1.000000>", ["ROOT", "metric_only"], {"foo": "1.000000"})
+    assert isinstance(trace_events[0]["args"]["scope_id"], int)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph trace reconstruction")
