@@ -779,10 +779,9 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
     return kernelName.rfind("_Z", 0) == 0;
   }
 
-  void recordPCSamplingTarget(
-      uint64_t dispatchId, uint64_t correlationId,
-      const std::string &kernelName, bool isGraph,
-      size_t graphExternId = Scope::DummyScopeId) {
+  void recordPCSamplingTarget(uint64_t dispatchId, uint64_t correlationId,
+                              const std::string &kernelName, bool isGraph,
+                              size_t graphExternId = Scope::DummyScopeId) {
     if (dispatchId == 0)
       return;
 
@@ -1299,9 +1298,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
     bool isGraph = false;
     size_t graphExternId = Scope::DummyScopeId;
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
-    auto *graphCorrelation =
-        static_cast<GraphDispatchCorrelation *>(
-            record->correlation_id.external.ptr);
+    auto *graphCorrelation = static_cast<GraphDispatchCorrelation *>(
+        record->correlation_id.external.ptr);
     if (graphCorrelation != nullptr) {
       isGraph = true;
       graphExternId = graphCorrelation->externId;
