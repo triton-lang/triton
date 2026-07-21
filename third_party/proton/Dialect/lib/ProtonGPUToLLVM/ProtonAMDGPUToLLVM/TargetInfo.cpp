@@ -11,11 +11,11 @@ namespace mlir::triton::proton::gpu::AMD {
 Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
                         bool isClock64) const {
   // llvm.readcyclecounter lowers to the correct per-target counter:
-  //   - CDNA (gfx9xx): s_memtime
-  //   - gfx12 / gfx1250: s_get_shader_cycles_u64. gfx12 removed s_memtime and
+  //   - gfx942/gfx950: s_memtime
+  //   - gfx1250: s_get_shader_cycles_u64. gfx1250 removed s_memtime and
   //     moved the (now 64-bit) shader-cycles counter out of the s_getreg
-  //     table
-  //     hwreg(HW_REG_SHADER_CYCLES_*) still assembles but reads 0 at runtime.
+  //     table; hwreg(HW_REG_SHADER_CYCLES_*) still assembles but reads 0 at
+  //     runtime.
   //
   // Result is i64. Truncating to i32 for the isClock64=false case is fine:
   // after 0x0000.0000.ffff.ffff comes 0x0000.0001.0000.0000, so truncation

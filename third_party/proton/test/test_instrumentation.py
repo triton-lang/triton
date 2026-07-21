@@ -19,7 +19,6 @@ from triton._internal_testing import (
     is_hip,
     is_hip_cdna2,
     is_hip_cdna4,
-    is_hip_gfx1250,
     supports_tma,
     supports_ws,
 )
@@ -177,12 +176,11 @@ def test_record(method, fresh_knobs, tmp_path: pathlib.Path):
     llir_lines = pgm.asm["llir"].splitlines()
     if is_cuda():
         clock_instr = "clock"
-    elif is_hip_gfx1250():
-        # gfx1250 reads the cycle counter via s_get_shader_cycles_u64 instead
-        # of the removed s_memtime instruction.
-        clock_instr = "shader_cycles"
     else:
-        clock_instr = "memtime"
+        # The AMD lowering emits llvm.readcyclecounter in LLIR. The backend
+        # later selects s_memtime on gfx942/gfx950 or
+        # s_get_shader_cycles_u64 on gfx1250.
+        clock_instr = "readcyclecounter"
     clock_loc = None
     for line in llir_lines:
         if clock_instr not in line or "!dbg" not in line:
