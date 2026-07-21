@@ -929,10 +929,11 @@ std::unique_ptr<uint64_t[]> concatMatrices(const LinearLayout &A,
   int rowB = 0;
   for (auto [outDim, outDimSize] : A.getOutDims()) {
     for (int r = 0; r < llvm::Log2_32(outDimSize); r++) {
-      if (numColsB && r < llvm::Log2_32(B.getOutDimSize(outDim)))
-        concat[rowA] |= BMat[rowB] << numColsA;
-      if (r < llvm::Log2_32(B.getOutDimSize(outDim)))
+      if (r < llvm::Log2_32(B.getOutDimSize(outDim))) {
+        if (numColsB)
+          concat[rowA] |= BMat[rowB] << numColsA;
         rowB++;
+      }
       rowA++;
     }
   }
@@ -976,8 +977,9 @@ std::optional<LinearLayout> lstsq(const LinearLayout &A,
   SmallVector<int32_t> pivotRowOfCol(numColsA, -1);
   for (int r = 0; r < numRows; r++) {
     uint64_t row = combinedMat[r];
-    if (row == 0)
+    if (row == 0) {
       continue;
+    }
     int c = __builtin_ctzll(row);
     // Precondition broken. Im(B) not contained in Im(A).
     if (c >= numColsA)
@@ -1154,8 +1156,9 @@ LinearLayout::getFreeVariableMasks() const {
   // These columns correspond to the basic (i.e. non-free) variables.
   std::set<int32_t> basicVars;
   for (int r = 0; r < numRows; r++) {
-    if (mat[r] == 0)
+    if (mat[r] == 0) {
       continue;
+    }
     basicVars.insert(__builtin_ctzll(mat[r]));
   }
 
@@ -1164,8 +1167,9 @@ LinearLayout::getFreeVariableMasks() const {
   for (StringAttr dim : getInDimNames()) {
     int32_t mask = 0;
     for (int i = 0; i < getInDimSizeLog2(dim); i++, c++) {
-      if (basicVars.count(c) == 0)
+      if (basicVars.count(c) == 0) {
         mask |= (1 << i);
+      }
     }
     ret[dim] = mask;
   }
@@ -1182,9 +1186,11 @@ LinearLayout LinearLayout::removeZeroBasesAlongDim(StringAttr stripDim) const {
       newInDimBases = inDimBases;
       continue;
     }
-    for (auto [i, basis] : llvm::enumerate(inDimBases))
-      if (nonZeroBases & (uint64_t{1} << i))
+    for (auto [i, basis] : llvm::enumerate(inDimBases)) {
+      if (nonZeroBases & (uint64_t{1} << i)) {
         newInDimBases.push_back(basis);
+      }
+    }
   }
   SmallVector<std::pair<StringAttr, int32_t>> newOutDimSizes;
   for (auto outDim : getOutDimNames()) {

@@ -1417,6 +1417,7 @@ LinearLayout paddedLinearLayout(MemDescType type) {
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
   assert(!layout.getInDimNames().empty());
   MLIRContext *ctx = layout.getInDimNames().begin()->getContext();
+
   StringAttr kBlock = S("block");
   assert(layout.hasInDim(kBlock));
   return layout.resizeInDim(kBlock, 1);

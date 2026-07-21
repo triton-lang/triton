@@ -679,8 +679,9 @@ LinearLayout removeStandardDim(const LinearLayout &layout, int dim) {
   auto newLayout = layout.sublayout(to_vector(layout.getInDimNames()), dims);
   auto newDims = standardOutDimNames(ctx, rank - 1);
   SmallVector<std::pair<StringAttr, StringAttr>> renames;
-  for (auto [oldDim, newDim] : llvm::zip_equal(dims, newDims))
+  for (auto [oldDim, newDim] : llvm::zip_equal(dims, newDims)) {
     renames.push_back({oldDim, newDim});
+  }
   return renameLinearLayoutDims(newLayout, {}, renames);
 }
 

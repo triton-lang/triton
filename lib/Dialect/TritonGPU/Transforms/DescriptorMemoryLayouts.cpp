@@ -54,8 +54,9 @@ CGAEncodingAttr updateCGALayoutForShape(CGAEncodingAttr cgaLayout,
   // Rename out dims to dim0..dimn-1
   SmallVector<std::pair<StringAttr, StringAttr>> renames;
   for (auto [oldDim, newDim] :
-       llvm::zip_equal(ll.getOutDimNames(), standardOuts))
+       llvm::zip_equal(ll.getOutDimNames(), standardOuts)) {
     renames.push_back({oldDim, newDim});
+  }
   ll = renameLinearLayoutDims(ll, {}, renames);
   return CGAEncodingAttr::get(ctx, std::move(ll));
 }
