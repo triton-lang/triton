@@ -50,7 +50,7 @@ def _is_triton_tensor(o: Any) -> bool:
 
 
 def _is_dynamic_value(o: Any) -> bool:
-    return _is_triton_value(o) and not isinstance(o, constexpr)
+    return _is_triton_value(o) and not isinstance(o, (constexpr, tl_tuple))
 
 
 def _is_not_implemented(o: Any) -> bool:
@@ -808,7 +808,7 @@ class CodeGenerator(ast.NodeVisitor):
             return 2
         if isinstance(value, tensor):
             return 1
-        return 0 if _is_triton_value(value) else -1
+        return 0
 
     def _call_operator(self, node, owner, method_name, *args):
         method = getattr(owner, method_name, None)
@@ -829,6 +829,8 @@ class CodeGenerator(ast.NodeVisitor):
 
     def _apply_binary_method(self, node, operator, lhs, rhs):
         """Resolve an operator owner before lowering exactly one method."""
+        if not _is_triton_value(lhs) and isinstance(rhs, constexpr):
+            lhs = constexpr(lhs)
         forward_method, reflected_method, symbol = operator
         lhs_priority = self._operator_priority(lhs)
         rhs_priority = self._operator_priority(rhs)

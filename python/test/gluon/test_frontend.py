@@ -527,6 +527,11 @@ class NotImplementedAggregate:
         return NotImplemented
 
 
+@gluon.jit
+def operator_dispatch_optional_annotation(value: ttgl.tensor, other: ttgl.tensor | None = None):
+    return value
+
+
 def TensorTuple(shape, layout, minimum_padding_size=1):
     """Prototype an aggregate for one irregular tensor dimension.
 
@@ -535,6 +540,7 @@ def TensorTuple(shape, layout, minimum_padding_size=1):
     largest chunk. Smaller chunks retain its thread/warp/CTA topology and scale
     ``size_per_thread`` along the irregular dimension when possible.
     """
+
     def is_power_of_two(value):
         return value > 0 and value & (value - 1) == 0
 
@@ -554,8 +560,7 @@ def TensorTuple(shape, layout, minimum_padding_size=1):
 
     extent = shape[split_dim]
     padded_extent = ((extent + minimum_padding_size - 1) // minimum_padding_size) * minimum_padding_size
-    chunks = tuple(1 << bit for bit in range(padded_extent.bit_length() - 1, -1, -1)
-                   if padded_extent & (1 << bit))
+    chunks = tuple(1 << bit for bit in range(padded_extent.bit_length() - 1, -1, -1) if padded_extent & (1 << bit))
     padding = padded_extent - extent
     offsets = tuple(sum(chunks[:i]) for i in range(len(chunks)))
     physical_shapes = tuple(with_split_extent(chunk) for chunk in chunks)
@@ -777,11 +782,16 @@ def test_operator_dispatch_ir():
     # CHECK-NEXT: {{%.*}} = arith.cmpi slt, [[CMP_LHS]], [[VALUE]]
     # CHECK: [[ZERO:%.*]] = arith.constant dense<0> : tensor<128xi32, [[LAYOUT]]>
     # CHECK-NEXT: {{%.*}} = arith.subi [[ZERO]], [[VALUE]]
+    # CHECK: [[ANNOTATED:%.*]] = tt.call @{{.*}}operator_dispatch_optional_annotation{{.*}}([[VALUE]])
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
     value = ttgl.arange(0, 128, layout=layout)
     scalar_tensor = ttgl.to_tensor(4)
     pair = (value, ) + (value, )
     ttgl.static_assert(3 + 4 == 7)
+    ttgl.static_assert(((3, 4) or (5, 6)) == (3, 4))
+    ttgl.static_assert(((3, 4) and (5, 6)) == (5, 6))
+    ttgl.static_assert(((3, 4) and ()) == ())
+    ttgl.static_assert((() or (5, 6)) == (5, 6))
     anchor(value + value)
     anchor(value + 4)
     anchor(4 + value)
@@ -790,6 +800,7 @@ def test_operator_dispatch_ir():
     anchor(value < scalar_tensor)
     anchor(scalar_tensor < value)
     anchor(-value)
+    anchor(operator_dispatch_optional_annotation(value))
     anchor(pair[1])
 
 
