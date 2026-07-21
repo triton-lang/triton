@@ -212,6 +212,7 @@ def core_matrices_to_operand_layout(b_smem_flat, BLOCK_N: gl.constexpr, BLOCK_K_
 def lut_to_tmem_layout(lut_smem):
     # Expose each 512B tmem_copy tile as 32 rows by 16 columns, then concatenate
     # successive BLOCK_K/128 LUT groups along the TMEM column dimension.
+    # This is the inverse of the host-side transform pack_lut_for_tma
     return (
         lut_smem.reshape((lut_smem.shape[0], lut_smem.shape[1], 32, 16))
         .permute((0, 2, 1, 3))
@@ -260,7 +261,9 @@ def mma_lut_kernel(
     mbarrier.init(mma_bar, count=1)
     phase = 0
 
-    tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], col_stride=1)
+    # The TMEM encoding describes the 128-row MMA instruction tile. The
+    # allocation may contain multiple such tiles when BLOCK_M is 256.
+    tmem_layout: gl.constexpr = TensorMemoryLayout([128, BLOCK_N], col_stride=1)
     acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
 
     num_lut_rows: gl.constexpr = BLOCK_N // 8
@@ -268,7 +271,7 @@ def mma_lut_kernel(
 
     load_layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0])
     offs_n = gl.arange(0, BLOCK_N, gl.SliceLayout(1, load_layout))
-    offs_k = gl.arange(0, BLOCK_K_PACKED, gl.SliceLayout(0, load_layout))
+    offs_k = gl.arange(0, BLOCK_K, gl.SliceLayout(0, load_layout))
 
     block_n = pid_n
     lut_block_n = pid_n * (BLOCK_N // 256)
