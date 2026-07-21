@@ -59,6 +59,10 @@ def is_rubin():
     return is_cuda() and torch.cuda.get_device_capability()[0:2] == (10, 7)
 
 
+def has_tcgen05():
+    return is_blackwell() or is_rubin()
+
+
 def is_hopper_or_newer():
     return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
 

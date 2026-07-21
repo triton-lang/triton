@@ -30,6 +30,7 @@ __all__ = [
     "tensor_memory_descriptor_type",
     "TensorMemoryLayout",
     "TensorMemoryScalesLayout",
+    "TensorMemoryLUTLayout",
     "tma",
     "_TensorMemoryLinearLayout",
 ]
@@ -117,6 +118,26 @@ class TensorMemoryScalesLayout:
         return hash(tuple(tuple(b) for b in self.cga_layout))
 
 
+@dataclass(frozen=True, eq=True)
+class TensorMemoryLUTLayout:
+    """Describes the Tensor Memory layout for Rubin LUT decompression data."""
+    cga_layout: List[List[int]] = field(default_factory=list)
+
+    def __post_init__(self):
+        super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
+        assert all(len(basis) == 2 for basis in self.cga_layout)
+
+    def _to_ir(self, builder):
+        return builder.get_tensor_memory_lut_layout([list(basis) for basis in self.cga_layout])
+
+    def mangle(self) -> str:
+        cga_layout_str = "_".join("~".join(map(str, basis)) for basis in self.cga_layout)
+        return f"TLLUT{cga_layout_str}TLLUT"
+
+    def __hash__(self):
+        return hash(tuple(tuple(b) for b in self.cga_layout))
+
+
 @dataclass(frozen=True)
 class _TensorMemoryLinearLayout:
     """
@@ -153,7 +174,7 @@ class tensor_memory_descriptor_type(base_type):
         self.shape = _unwrap_if_constexpr(shape)
         self.layout = _unwrap_if_constexpr(layout)
         self.alloc_shape = _unwrap_if_constexpr(alloc_shape)
-        assert isinstance(self.layout, (TensorMemoryLayout, TensorMemoryScalesLayout))
+        assert isinstance(self.layout, (TensorMemoryLayout, TensorMemoryScalesLayout, TensorMemoryLUTLayout))
 
     def to_ir(self, builder: GluonOpBuilder) -> None:
         return builder.get_tensor_mem_desc_ty(

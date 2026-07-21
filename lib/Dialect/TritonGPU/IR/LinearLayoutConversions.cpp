@@ -16,6 +16,7 @@
 #include "llvm/Support/MathExtras.h"
 
 using mlir::triton::nvidia_gpu::TensorMemoryEncodingAttr;
+using mlir::triton::nvidia_gpu::TensorMemoryLUTEncodingAttr;
 using mlir::triton::nvidia_gpu::TensorMemoryScalesBlockRepOrder;
 using mlir::triton::nvidia_gpu::TensorMemoryScalesEncodingAttr;
 
@@ -1286,6 +1287,38 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
   return tile * cgaLayout.getLinearLayout();
 }
 
+LinearLayout
+tensorMemoryLUTToLinearLayout(ArrayRef<int64_t> shape,
+                              TensorMemoryLUTEncodingAttr encoding) {
+  assert(shape.size() == 2);
+  auto *ctx = encoding.getContext();
+  auto kRow = S("row");
+  auto kCol = S("col");
+  auto dims = standardOutDimNames(ctx, 2);
+  auto cgaLayout = encoding.getCGALayout();
+  auto shapePerCTA = getShapePerCTA(cgaLayout.getCTASplitNum(), shape);
+  assert(shapePerCTA.size() == 2);
+
+  // Two MMA_LUTB instructions (MMA_K = 64) are issued in pairs, so the
+  // smallest supported LUT covers BLOCK_K = 128: two LUTs, or 16 bytes.
+  assert(shapePerCTA[1] % 16 == 0);
+  auto tile = LinearLayout::identity1D(32, kRow, dims[0]) *
+              // Broadcast the LUT over four warps / all 128 TMEM rows.
+              LinearLayout::zeros1D(4, kRow, dims[0]) *
+              LinearLayout::identity1D(shapePerCTA[1], kCol, dims[1]);
+
+  if (shapePerCTA[0] > 32) {
+    auto repsN = shapePerCTA[0] / 32;
+    tile *= LinearLayout::identity1D(repsN, kCol, dims[0]);
+  }
+
+  llvm::SmallDenseMap<StringAttr, int64_t> shapeMap;
+  for (auto [dim, size] : llvm::zip(dims, shapePerCTA))
+    shapeMap[dim] = size;
+  tile = ensureLayoutNotLargerThan(tile, shapeMap);
+  return tile * cgaLayout.getLinearLayout();
+}
+
 // Convert a PartitionedSharedEncodingAttr to a LinearLayout.
 //
 // PartitionedSharedEncoding splits a tensor along partitionDim into
@@ -1375,6 +1408,9 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
                    dyn_cast<TensorMemoryScalesEncodingAttr>(layout)) {
       result =
           tensorMemoryScalesToLinearLayout(shape, tensorMemoryScalesEncoding);
+    } else if (auto tensorMemoryLUTEncoding =
+                   dyn_cast<TensorMemoryLUTEncodingAttr>(layout)) {
+      result = tensorMemoryLUTToLinearLayout(shape, tensorMemoryLUTEncoding);
     } else {
       assert(0 && "unknown layout");
     }

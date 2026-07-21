@@ -1423,6 +1423,17 @@ static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
   if (!type.getEncoding())
     return success();
 
+  if (isa<TensorMemoryLUTEncodingAttr>(memdesc.getEncoding())) {
+    auto shapePerCTA = getShapePerCTA(memdesc.getEncoding(), memdesc.getShape());
+    if (shapePerCTA[0] > 32)
+      return op->emitOpError(
+          "The number of rows in a LUT tensor per CTA must be 32 or less");
+    if (shapePerCTA[1] < 16 || shapePerCTA[1] % 16 != 0)
+      return op->emitOpError(
+          "The number of columns in a LUT tensor per CTA must be a multiple "
+          "of 16 corresponding to BLOCK_K = 128");
+  }
+
   if (isDistributedLayoutTMemCompatible(op, type, memdesc))
     return success();
 
@@ -1439,7 +1450,8 @@ static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
 
 LogicalResult TMEMStoreOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
-           TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding()))
+           TensorMemoryScalesEncodingAttr, TensorMemoryLUTEncodingAttr>(
+          getDst().getType().getEncoding()))
     return emitOpError("should use tensor memory encoding.");
   if (!getDst().getType().getMutableMemory()) {
     return emitOpError("Cannot store into an immutable alloc");
@@ -1464,7 +1476,8 @@ LogicalResult TMEMLoadOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
           getSrc().getType().getMemorySpace()))
     return emitOpError("source must be a tensor memory buffer.");
-  if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+  if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
+           TensorMemoryLUTEncodingAttr>(
           getSrc().getType().getEncoding()))
     return emitOpError("should use tensor memory encoding.");
   if (failed(verifyTMEMOperand(*this, getType(), getSrc().getType(), "result")))
@@ -1508,8 +1521,8 @@ LogicalResult TMEMLoadOp::verify() {
 
 // -- TMEMAllocOp --
 LogicalResult TMEMAllocOp::verify() {
-  if (!isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr>(
-          getType().getEncoding()))
+  if (!isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr,
+           TensorMemoryLUTEncodingAttr>(getType().getEncoding()))
     return emitOpError("should use tensor memory encoding");
   if (getSrc() &&
       failed(verifyTMEMOperand(*this, getSrc().getType(), getType(), "source")))
@@ -1573,7 +1586,8 @@ LogicalResult TMEMCopyOp::verify() {
   if (nvmmaEnc && (nvmmaEnc.getTransposed() || nvmmaEnc.getFp4Padded())) {
     return emitOpError("The source should not be transposed or padded");
   }
-  if (isa<TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding())) {
+  if (isa<TensorMemoryScalesEncodingAttr, TensorMemoryLUTEncodingAttr>(
+          getDst().getType().getEncoding())) {
     if (nvmmaEnc && nvmmaEnc.getSwizzlingByteWidth() != 0) {
       return emitOpError("The source should not be swizzled for now");
     }

@@ -9,6 +9,7 @@
 #tmem_lhs_fp4 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
 #tmem_lhs_fp4_padded = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, fp4Padded = true>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
+#tmem_lut = #ttng.tensor_memory_lut_encoding<>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
 #offsets = #ttg.slice<{dim = 0, parent = #blocked}>

@@ -148,6 +148,7 @@ struct GluonLayouts {
   py::handle NVMMADistributedLayout;
   py::handle RubinTensorMemoryScalesLayout;
   py::handle TensorMemoryScalesLayout;
+  py::handle TensorMemoryLUTLayout;
   py::handle TensorMemoryLayout;
   py::handle NVMMASharedLayout;
   py::handle SwizzledSharedLayout;
@@ -177,6 +178,8 @@ struct GluonLayouts {
         py::object(layouts.attr("NVMMADistributedLayout")).release();
     TensorMemoryScalesLayout =
         py::object(blackwellLayouts.attr("TensorMemoryScalesLayout")).release();
+    TensorMemoryLUTLayout =
+        py::object(blackwellLayouts.attr("TensorMemoryLUTLayout")).release();
     RubinTensorMemoryScalesLayout =
         py::object(rubinLayouts.attr("TensorMemoryScalesLayout")).release();
     TensorMemoryLayout =
@@ -334,6 +337,10 @@ py::object layoutToGluon(Attribute layout, bool isRubin = false) {
       return layouts.RubinTensorMemoryScalesLayout(cgaLayout, blockRepOrder);
     }
     return layouts.TensorMemoryScalesLayout(cgaLayout);
+  } else if (auto tmemLUT =
+                 dyn_cast<ttng::TensorMemoryLUTEncodingAttr>(layout)) {
+    return layouts.TensorMemoryLUTLayout(
+        getCgaLayoutBases(tmemLUT.getCGALayout()));
   } else if (auto tmem = dyn_cast<ttng::TensorMemoryEncodingAttr>(layout)) {
     return layouts.TensorMemoryLayout(
         std::vector<unsigned>{tmem.getBlockM(), tmem.getBlockN()},
@@ -627,6 +634,14 @@ void init_gluon_ir(py::module_ &m) {
                 ctx, cgaLayout, repOrder);
           },
           py::arg("cga_bases"), py::arg("block_rep_order") = "mnThenK")
+      .def("get_tensor_memory_lut_layout",
+           [](GluonOpBuilder &self,
+              std::vector<std::vector<int32_t>> &cgaBases) -> Attribute {
+             auto ctx = self.getContext();
+             auto cgaLayout = buildCgaLayoutAttr(ctx, cgaBases, /*rank=*/2);
+             return self.getChecked<ttng::TensorMemoryLUTEncodingAttr>(
+                 ctx, cgaLayout);
+           })
       .def("get_shape_from_tensor",
            [](GluonOpBuilder &self, Value tensor) -> std::vector<int64_t> {
              auto ty = dyn_cast<RankedTensorType>(tensor.getType());

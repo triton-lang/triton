@@ -11,6 +11,7 @@ from triton._internal_testing import (
     is_ampere_or_newer,
     is_blackwell,
     is_blackwell_ultra,
+    has_tcgen05,
     is_rubin,
     is_hip_rdna,
     is_hip_rdna3,
@@ -34,6 +35,7 @@ from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_asy
 from triton.experimental.gluon.language.extra import libdevice
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
+    TensorMemoryLUTLayout,
     TensorMemoryScalesLayout,
     allocate_tensor_memory,
     tcgen05_mma_barrier_count,
@@ -1787,27 +1789,24 @@ def test_math_fast_dividef():
     torch.testing.assert_close(z, torch.div(x, y), atol=1e-5, rtol=1e-4)
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_tmem_copy_2d():
+@pytest.mark.skipif(not has_tcgen05(), reason="Requires tcgen05")
+@pytest.mark.parametrize("smem_h", [32, 64])
+def test_tmem_copy_2d(smem_h):
     device = "cuda"
 
-    smem_h = 64
     smem_w = 16
     num_rows = 128
     num_cols = smem_h * smem_w // 32
 
     @gluon.jit
     def kernel(in_ptr, out_ptr, smem_h: ttgl.constexpr, smem_w: ttgl.constexpr, num_rows: ttgl.constexpr,
-               num_cols: ttgl.constexpr):
+               num_cols: ttgl.constexpr, smem_layout: ttgl.constexpr, tmem_layout: ttgl.constexpr):
         in_ptrs = in_ptr + ttgl.arange(0, smem_h)[:, None] * smem_w + ttgl.arange(0, smem_w)[None, :]
         out_ptrs = out_ptr + ttgl.arange(0, num_rows)[:, None] * num_cols + ttgl.arange(0, num_cols)[None, :]
 
         blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [32, 1], [4, 1], [1, 0])
         value = ttgl.load(ttgl.set_auto_layout(in_ptrs, blocked))
 
-        smem_layout: ttgl.constexpr = ttgl.SharedLinearLayout(
-            offset_bases=[[0, 1], [0, 2], [32, 0], [0, 4], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 8]])
-        tmem_layout: ttgl.constexpr = TensorMemoryScalesLayout()
         smem = ttgl.allocate_shared_memory(ttgl.int8, (smem_h, smem_w), layout=smem_layout)
         tmem = allocate_tensor_memory(ttgl.int8, (smem_h, smem_w), layout=tmem_layout)
 
@@ -1823,23 +1822,57 @@ def test_tmem_copy_2d():
         value = tmem.load(blocked)
         ttgl.store(ttgl.set_auto_layout(out_ptrs, blocked), value)
 
+    if smem_h == 32:
+        smem_layout = ttgl.NVMMASharedLayout.get_default_for([32, 16], ttgl.int8)
+        tmem_layout = TensorMemoryLUTLayout()
+    else:
+        smem_layout = ttgl.SharedLinearLayout(
+            offset_bases=[[0, 1], [0, 2], [32, 0], [0, 4], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 8]])
+        tmem_layout = TensorMemoryScalesLayout()
+
     torch.manual_seed(0)
     x = torch.randint(size=(smem_h, smem_w), low=-100, high=100, dtype=torch.int8).to(device)
     #x = torch.arange(smem_h * smem_w, dtype=torch.int8, device=device).reshape(smem_h, smem_w)
     z_tri = torch.zeros(size=(num_rows, num_cols), dtype=torch.int8).to(device)
-    kernel[(1, )](x, z_tri, smem_h, smem_w, num_rows, num_cols)
-
-    # offset_bases=[[0, 1], [0, 2], [32, 0], [0, 4], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 8]],
-    # Split into contiguous shmem chunks
-    x_res = x.reshape(2, 32, 2, 2, 4)
-    # Put tmem cols first then rows
-    x_res = x_res.permute(1, 2, 3, 0, 4)
-    # Reshape as 32xnum_cols
-    x_res = x_res.reshape(num_rows // 4, num_cols)
+    kernel[(1, )](x, z_tri, smem_h, smem_w, num_rows, num_cols, smem_layout, tmem_layout)
 
     warps = torch.chunk(z_tri, chunks=4, dim=0)
-    for warp in warps:
-        torch.testing.assert_close(x_res, warp)
+    if smem_h == 32:
+        for warp in warps:
+            assert torch.equal(x, warp)
+    else:
+        x_res = x.reshape(2, 32, 2, 2, 4).permute(1, 2, 3, 0, 4).reshape(num_rows // 4, num_cols)
+        for warp in warps:
+            assert torch.equal(x_res, warp)
+
+
+@pytest.mark.skipif(not has_tcgen05(), reason="Requires tcgen05")
+@pytest.mark.parametrize("rows", [16, 32])
+def test_tmem_store_lut(rows):
+    device = "cuda"
+    cols = 16
+
+    @gluon.jit
+    def kernel(in_ptr, out_ptr, rows: ttgl.constexpr, cols: ttgl.constexpr):
+        in_ptrs = in_ptr + ttgl.arange(0, rows)[:, None] * cols + ttgl.arange(0, cols)[None, :]
+        out_ptrs = out_ptr + ttgl.arange(0, 128)[:, None] * cols + ttgl.arange(0, cols)[None, :]
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [32, 1], [4, 1], [1, 0])
+        value = ttgl.load(ttgl.set_auto_layout(in_ptrs, blocked))
+        smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([rows, cols], ttgl.int8)
+        smem = ttgl.allocate_shared_memory(ttgl.int8, (rows, cols), smem_layout)
+        tmem = allocate_tensor_memory(ttgl.int8, (rows, cols), TensorMemoryLUTLayout())
+        smem.store(value)
+        fence_async_shared()
+        tmem.store(smem.load(tmem.get_reg_layout()))
+        alias = tmem._reinterpret(shape=(128, cols), layout=TensorMemoryLayout((128, cols), col_stride=1))
+        ttgl.store(ttgl.set_auto_layout(out_ptrs, blocked), alias.load(blocked))
+
+    torch.manual_seed(0)
+    x = torch.randint(-100, 100, (rows, cols), dtype=torch.int8, device=device)
+    out = torch.zeros((128, cols), dtype=torch.int8, device=device)
+    kernel[(1, )](x, out, rows, cols)
+    for warp in torch.chunk(out, chunks=4, dim=0):
+        assert torch.equal(x, warp[:rows])
 
 
 @pytest.mark.parametrize("M, N, BLOCK_M, BLOCK_N", [(256, 128, 128, 128), (128, 256, 64, 128)])

@@ -28,14 +28,16 @@ ArefCreateOp createArefCreateOp(OpBuilder &builder, ArrayRef<Type> arefTypes,
 
 int getArefDepth(MemDescType bufTy) {
   auto shape = bufTy.getShape();
-  return isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(bufTy.getEncoding())
+  return isa<nvidia_gpu::TensorMemoryScalesEncodingAttr,
+             nvidia_gpu::TensorMemoryLUTEncodingAttr>(bufTy.getEncoding())
              ? 1
              : shape[0];
 }
 
 MemDescType getArefViewBufferType(MemDescType bufTy) {
-  auto isScalesEnc =
-      isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(bufTy.getEncoding());
+  auto isScalesEnc = isa<nvidia_gpu::TensorMemoryScalesEncodingAttr,
+                         nvidia_gpu::TensorMemoryLUTEncodingAttr>(
+      bufTy.getEncoding());
   auto shape = bufTy.getShape();
   return gpu::MemDescType::get(isScalesEnc ? shape : shape.drop_front(),
                                bufTy.getElementType(), bufTy.getEncoding(),
@@ -47,7 +49,8 @@ MemDescType getArefViewBufferType(MemDescType bufTy) {
 MemDescType getArefMultiBufferedType(MemDescType bufTy, int depth) {
   auto shape = bufTy.getShape();
   SmallVector<int64_t> bufferShape(shape.begin(), shape.end());
-  if (!isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(bufTy.getEncoding()))
+  if (!isa<nvidia_gpu::TensorMemoryScalesEncodingAttr,
+           nvidia_gpu::TensorMemoryLUTEncodingAttr>(bufTy.getEncoding()))
     bufferShape.insert(bufferShape.begin(), depth);
   return gpu::MemDescType::get(bufferShape, bufTy.getElementType(),
                                bufTy.getEncoding(), bufTy.getMemorySpace(),

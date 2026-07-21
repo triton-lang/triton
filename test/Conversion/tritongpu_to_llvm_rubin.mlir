@@ -32,6 +32,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#shared_lut = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
+#tmem_lut = #ttng.tensor_memory_lut_encoding<>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:107"} {
+  // CHECK-LABEL: @tmem_copy_lut
+  // CHECK: tcgen05.cp.cta_group::1.warpx4.32x128b
+  tt.func public @tmem_copy_lut(
+      %src: !ttg.memdesc<32x16xi8, #shared_lut, #ttg.shared_memory>,
+      %dst: !ttg.memdesc<32x16xi8, #tmem_lut, #ttng.tensor_memory, mutable>) {
+    ttng.tmem_copy %src, %dst : !ttg.memdesc<32x16xi8, #shared_lut, #ttg.shared_memory>, !ttg.memdesc<32x16xi8, #tmem_lut, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
 #shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>

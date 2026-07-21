@@ -1225,6 +1225,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#blocked_lut = #ttg.blocked<{sizePerThread = [2, 16], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#tmem_lut = #ttng.tensor_memory_lut_encoding<>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @lut_invalid_rows() {
+    %cst = arith.constant dense<0> : tensor<64x16xi8, #blocked_lut>
+    // expected-error @below {{The number of rows in a LUT tensor per CTA must be 32 or less}}
+    %0 = ttng.tmem_alloc %cst : (tensor<64x16xi8, #blocked_lut>) -> !ttg.memdesc<64x16xi8, #tmem_lut, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked_lut = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#tmem_lut = #ttng.tensor_memory_lut_encoding<>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @lut_invalid_columns() {
+    %cst = arith.constant dense<0> : tensor<32x8xi8, #blocked_lut>
+    // expected-error @below {{The number of columns in a LUT tensor per CTA must be a multiple of 16 corresponding to BLOCK_K = 128}}
+    %0 = ttng.tmem_alloc %cst : (tensor<32x8xi8, #blocked_lut>) -> !ttg.memdesc<32x8xi8, #tmem_lut, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared_bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>

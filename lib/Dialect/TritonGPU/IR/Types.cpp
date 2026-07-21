@@ -186,6 +186,17 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     if (bitwidth != 8) {
       return emitError() << "bitwidth must be 8";
     }
+  } else if (auto enc = dyn_cast<nvidia_gpu::TensorMemoryLUTEncodingAttr>(
+                 encoding)) {
+    if (memorySpace != nvidia_gpu::TensorMemorySpaceAttr::get(ctx)) {
+      return emitError() << "memorySpace must be TensorMemorySpace";
+    }
+    if (allocShape.size() != 2) {
+      return emitError() << "LUT doesn't currently support multibuffering";
+    }
+    if (elementType.getIntOrFloatBitWidth() != 8) {
+      return emitError() << "bitwidth must be 8";
+    }
   } else {
     return emitError() << encoding << " is not a valid encoding";
   }
