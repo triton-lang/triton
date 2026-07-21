@@ -134,7 +134,9 @@ def make_lut_tma_descriptor(lut, BLOCK_N, BLOCK_K):
     assert BLOCK_N % 256 == 0, f"BLOCK_N={BLOCK_N} must be divisible by 256"
     assert BLOCK_K % 128 == 0, f"BLOCK_K={BLOCK_K} must be divisible by 128"
     lut_tile_shape = [BLOCK_N // 256, BLOCK_K // 128, 4, 128]
-    lut_layout = gl.NVMMASharedLayout.get_default_for(lut_tile_shape, gl.int8)
+    # After lut_to_tmem_layout, an unswizzled 4D tile linearizes to the
+    # canonical 32x16B-per-copy LUT layout, including for wider K.
+    lut_layout = gl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=4)
     return TensorDescriptor.from_tensor(lut, lut_tile_shape, lut_layout)
 
 
@@ -259,7 +261,8 @@ def mma_lut_kernel(
     acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
 
     num_lut_rows: gl.constexpr = BLOCK_N // 8
-    lut_tmem = allocate_tensor_memory(gl.int8, (num_lut_rows, 16), TensorMemoryLUTLayout())
+    num_lut_cols: gl.constexpr = BLOCK_K // 128 * 16
+    lut_tmem = allocate_tensor_memory(gl.int8, (num_lut_rows, num_lut_cols), TensorMemoryLUTLayout())
 
     load_layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0])
     offs_n = gl.arange(0, BLOCK_N, gl.SliceLayout(1, load_layout))
