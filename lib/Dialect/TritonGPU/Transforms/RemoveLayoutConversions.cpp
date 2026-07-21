@@ -133,7 +133,7 @@ public:
 
   // TODO: Merge the three hoistConvert*(); functions as they are duplicate code
   void hoistConvertDotOperand();
-  void hoistConvertOnTopOfExtOrBroadcast();
+  void hoistConvertOnTopOfExtOrBroadcast(bool disableRematSplitting);
   void hoistConvertIntoConditionals();
 
   /// Attempt to hoist \p convertOp above operations that make the tensor larger
@@ -141,7 +141,8 @@ public:
   /// possible, rematerialize the slice between the convert and that operation
   /// and hoist the convert above it.
   /// \return true if \p convertOp was hoisted, false otherwise.
-  bool hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp);
+  bool hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp,
+                                         bool disableRematSplitting);
 
   /// Attempt to hoist \p convertOp into conditionals so the conversion is only
   /// conditionally executed. If this is possible, rematerialize the slice
@@ -976,13 +977,15 @@ bool LayoutRematerialization::backwardRematerialization(
   return changed;
 }
 
-void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
+void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
+    bool disableRematSplitting) {
   // Go through each ConvertLayoutOp.
   SmallVector<ConvertLayoutOp> convertOps;
   funcOp.walk(
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
-    if (!hoistConvertOnTopOfExtOrBroadcast(convertOp)) {
+    if (!hoistConvertOnTopOfExtOrBroadcast(convertOp,
+                                           disableRematSplitting)) {
       // If the conversion didn't get removed, consider it for reuse in future
       // backward slices.
       addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
@@ -1142,6 +1145,9 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
         nonSliceOnlyValues.insert(operand);
   }
 
+  // In no-split mode, every value in the rematerialized slice must die with
+  // the original conversion. Otherwise rewriteSlice would clone part of the
+  // producer graph while the original path remains live.
   if (disableRematSplitting && !nonSliceOnlyValues.empty()) {
     LDBG("  skipped rematerialization because it would split the slice");
     return false;
@@ -1397,7 +1403,7 @@ bool LayoutRematerialization::hoistConvertDotOperand(
 // For convert left we try to hoist them above type extension to reduce the cost
 // of the convert.
 bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
-    ConvertLayoutOp convertOp) {
+    ConvertLayoutOp convertOp, bool disableRematSplitting) {
   // DotOperand is hoisted by hoistDotOperand
   RankedTensorType targetType = convertOp.getType();
   if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
@@ -1459,7 +1465,7 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   int64_t newCvtCost =
       getConvertCost(extOrBroadcastOp->getOperand(0), srcEncoding);
   if (!isRematBeneficial(convertOp, slice, layout, newCvtCost,
-                         /*disableRematSplitting=*/false))
+                         disableRematSplitting))
     return false;
   // Move the convert before the ext op and rewrite the slice.
   OpBuilder builder(extOrBroadcastOp);
@@ -1608,10 +1614,21 @@ bool backwardRematerialization(ModuleOp module, bool disableRematSplitting) {
   return changed;
 }
 
-void hoistConvert(ModuleOp module) {
+void hoistConvert(ModuleOp module, bool disableRematSplitting) {
   SmallVector<ConvertLayoutOp> convertOps;
-  module.walk([](FuncOp funcOp) {
-    LayoutRematerialization(funcOp).hoistConvertOnTopOfExtOrBroadcast();
+  module.walk([&](FuncOp funcOp) {
+    // This helper accepts one size-nondecreasing boundary (a widening cast,
+    // broadcast, or expand-dims), so it replaces one conversion with one
+    // no-larger conversion. isRematBeneficial rejects the rewrite under
+    // disableRematSplitting if any value in the rematerialized slice survives
+    // outside that slice.
+    LayoutRematerialization(funcOp).hoistConvertOnTopOfExtOrBroadcast(
+        disableRematSplitting);
+    if (disableRematSplitting)
+      return;
+
+    // These hoists may introduce conversions on conditional edges or after
+    // multiple loads, so keep them disabled when splitting is prohibited.
     LayoutRematerialization(funcOp).hoistConvertIntoConditionals();
     LayoutRematerialization(funcOp).hoistConvertDotOperand();
   });
@@ -1677,15 +1694,15 @@ public:
       cleanupConvertOps();
     } while (changed);
 
-    if (!disableRematSplitting) {
-      // 3. For remaining converts, try to hoist them above cast generating
-      // larger size types in order to reduce the cost of the convert op.
-      hoistConvert(m);
-      LLVM_DEBUG({
-        DBGS() << "Module after hoisting converts:\n";
-        m.dump();
-      });
-    }
+    // 3. For remaining converts, try to hoist them above operations that
+    // generate larger tensors in order to reduce the cost of the convert op.
+    // With remat splitting disabled, only the single-convert cast/broadcast
+    // hoist is allowed.
+    hoistConvert(m, disableRematSplitting);
+    LLVM_DEBUG({
+      DBGS() << "Module after hoisting converts:\n";
+      m.dump();
+    });
 
     // 4. Prepare dead iter args to be cleaned up by dead code elimination in
     // the pattern rewriter below.
