@@ -1510,7 +1510,9 @@ class TritonSemantic(Generic[TensorTy]):
             ret_scalar_ty = tl.int32
         elif out_dtype.is_bf16():
             instrumentation_mode = getattr(self.builder.options, "instrumentation_mode", "")
-            fpsan_bf16_dot = ("fpsan" in instrumentation_mode and lhs.type.scalar.is_bf16()
+            backend_name = getattr(self.builder.options, "backend_name", "")
+            # AMD matmul acceleration promotes BF16 accumulators to F32 before FPSan.
+            fpsan_bf16_dot = (backend_name == "cuda" and "fpsan" in instrumentation_mode and lhs.type.scalar.is_bf16()
                               and rhs.type.scalar.is_bf16())
             if not fpsan_bf16_dot:
                 raise ValueError(

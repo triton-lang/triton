@@ -6,6 +6,7 @@ import warnings
 import torch
 import triton
 import triton.language as tl
+from triton.backends.compiler import GPUTarget
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 import traceback
 from triton._internal_testing import is_cuda, is_hip, is_hip_cdna4
@@ -446,6 +447,25 @@ def test_max_num_imprecise_acc_limit():
         assert (str(e.value.__cause__) == "max_num_imprecise_acc (128) must be <= K (64)")
     except AssertionError as assertion_err:
         raise assertion_err from e.value
+
+
+def test_bf16_dot_fpsan_rejected_on_hip():
+
+    @triton.jit
+    def dot_kernel():
+        size: tl.constexpr = 64
+        a = tl.full((size, size), 0.0, tl.bfloat16)
+        acc = tl.zeros((size, size), tl.bfloat16)
+        tl.dot(a, a, acc=acc, out_dtype=tl.bfloat16)
+
+    src = triton.compiler.ASTSource(fn=dot_kernel, signature={}, constexprs={})
+    with pytest.raises(CompilationError) as e:
+        triton.compile(
+            src,
+            target=GPUTarget("hip", "gfx942", 64),
+            options={"instrumentation_mode": "fpsan"},
+        )
+    assert "out_dtype=bfloat16 is unsupported" in str(e.value.__cause__)
 
 
 extra_words = "These are extra words in the error message."
