@@ -220,10 +220,10 @@ void updateDataPhases(DataPhases &dataPhases, Data *data, size_t phase) {
   }
 }
 
-void flushDataPhasesImpl(
-    const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
-    const DataPhases &dataPhases,
-    PendingGraphPool *pendingGraphPool) {
+void flushDataPhasesImpl(const bool periodicFlushEnabled,
+                         const std::string &periodicFlushingFormat,
+                         const DataPhases &dataPhases,
+                         PendingGraphPool *pendingGraphPool) {
   static const bool timingEnabled =
       getBoolEnv("PROTON_DATA_FLUSH_TIMING", false);
   auto [flushRanges, phasesToPeek] =

@@ -1110,9 +1110,8 @@ int RocprofSDKProfiler::RocprofSDKProfilerPimpl::graphNodeCorrelationCallback(
   auto *impl = static_cast<RocprofSDKProfilerPimpl *>(profiler.pImpl.get());
   profiler.correlation.externIdToState.withRead(
       externId, [&](const RocprofSDKProfiler::ExternIdState &state) {
-        impl->kernelPhaseTracker.record(state.nodeIdToState
-                                            ? state.dataToGraphEntry
-                                            : state.dataToEntry);
+        impl->kernelPhaseTracker.record(
+            state.nodeIdToState ? state.dataToGraphEntry : state.dataToEntry);
       });
   profiler.correlation.submit(internalCorrelationId);
   return 0;
@@ -1243,10 +1242,9 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
         // correlation data.
         auto *graphCorrelation = static_cast<GraphDispatchCorrelation *>(
             record->correlation_id.external.ptr);
-        processGraphKernelRecord(correlation.externIdToState,
-                                 impl->kernelPhaseTracker, dataPhases,
-                                 kernelName, record, *graphCorrelation,
-                                 streamId);
+        processGraphKernelRecord(
+            correlation.externIdToState, impl->kernelPhaseTracker, dataPhases,
+            kernelName, record, *graphCorrelation, streamId);
         correlation.corrIdToExternId.erase(record->correlation_id.internal);
         // Release the heap allocation for graph correlation data created in
         // graphNodeCorrelationCallback
@@ -1254,16 +1252,14 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
         record->correlation_id.external.ptr = nullptr;
         record->correlation_id.external.value = 0;
       } else {
-        processKernelRecord(profiler, correlation.corrIdToExternId,
-                            correlation.externIdToState,
-                            impl->kernelPhaseTracker, dataPhases, kernelName,
-                            record, streamId);
+        processKernelRecord(
+            profiler, correlation.corrIdToExternId, correlation.externIdToState,
+            impl->kernelPhaseTracker, dataPhases, kernelName, record, streamId);
       }
 #else
       processKernelRecord(profiler, correlation.corrIdToExternId,
-                          correlation.externIdToState,
-                          impl->kernelPhaseTracker, dataPhases, kernelName,
-                          record, streamId);
+                          correlation.externIdToState, impl->kernelPhaseTracker,
+                          dataPhases, kernelName, record, streamId);
 #endif
       impl->corrIdToStreamId.erase(record->correlation_id.internal);
     }
