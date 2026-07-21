@@ -849,28 +849,44 @@ def test_return_promotion():
 
 
 def test_fp8_div_mod_promotion():
-    # `/` and `%` do not exist natively for fp8, so the result of a division or
-    # modulo between fp8 operands is promoted to fp32 -- the same rule already
-    # applied to float16 and bfloat16. Other ops keep the existing fp8
-    # promotion (same fp8 stays that fp8, mixed fp8 goes to float16).
+    # `/` and `%` do not exist natively for floats narrower than fp32, so the
+    # result of a division or modulo with a floating operand is promoted to
+    # fp32 -- one rule covering fp8, fp16 and bfloat16, tensor and scalar
+    # operands alike. Other ops keep the existing promotions (same fp8 stays
+    # that fp8, mixed fp8 goes to float16).
 
     @triton.jit
     def kernel():
         x = tl.full((8, ), 0, tl.float16).to(tl.float8e5)
         y = tl.full((8, ), 0, tl.float16).to(tl.float8e5)
         z = tl.full((8, ), 0, tl.float16).to(tl.float8e4nv)
+        h = tl.full((8, ), 0, tl.float16)
+        b = tl.full((8, ), 0, tl.bfloat16)
+        i = tl.full((8, ), 0, tl.int32)
         tl.static_assert((x / y).dtype == tl.float32)
         tl.static_assert((x / z).dtype == tl.float32)
         tl.static_assert((x % y).dtype == tl.float32)
         tl.static_assert((x * y).dtype == tl.float8e5)
         tl.static_assert((x * z).dtype == tl.float16)
+        # fp16 and bfloat16 division/modulo upcast through the same rule
+        tl.static_assert((h / h).dtype == tl.float32)
+        tl.static_assert((h % h).dtype == tl.float32)
+        tl.static_assert((b / b).dtype == tl.float32)
+        tl.static_assert((h * h).dtype == tl.float16)
+        tl.static_assert((b * b).dtype == tl.bfloat16)
+        # integer division and modulo keep integer promotion
+        tl.static_assert((i // i).dtype == tl.int32)
+        tl.static_assert((i % i).dtype == tl.int32)
         # A scalar operand doesn't participate in promotion, so / and % against
-        # an fp8 tensor must upcast to fp32 for the same reason, while other ops
-        # keep the fp8 tensor type.
+        # a float tensor must upcast to fp32 for the same reason, while other
+        # ops keep the tensor's type.
         tl.static_assert((2.0 / x).dtype == tl.float32)
         tl.static_assert((x / 2.0).dtype == tl.float32)
         tl.static_assert((x % 2).dtype == tl.float32)
+        tl.static_assert((h / 2.0).dtype == tl.float32)
         tl.static_assert((x * 2.0).dtype == tl.float8e5)
+        tl.static_assert((h * 2.0).dtype == tl.float16)
+        tl.static_assert((i // 2).dtype == tl.int32)
 
     run_parser(kernel)
 
