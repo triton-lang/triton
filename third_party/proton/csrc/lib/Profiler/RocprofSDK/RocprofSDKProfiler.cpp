@@ -434,7 +434,7 @@ public:
   void clear() {
     std::lock_guard<std::mutex> lock(mutex);
     phaseInstances.clear();
-  }   
+  }
 
 private:
   std::mutex mutex;
