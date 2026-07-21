@@ -28,7 +28,7 @@ public:
                           const TargetInfoBase &targetInfo);
   Type convertAsyncTokenType(triton::gpu::AsyncTokenType type);
 
-  template <typename... T> void convertStorage8FloatType() {
+  template <typename... T> void convertFP8Type() {
     (addConversion([&](T type) -> std::optional<Type> {
        return IntegerType::get(type.getContext(), 8);
      }),

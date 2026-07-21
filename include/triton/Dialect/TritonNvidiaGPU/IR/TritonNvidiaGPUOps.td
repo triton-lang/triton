@@ -49,19 +49,20 @@ class TTNG_Op<string mnemonic, list<Trait> traits = []> :
        !listconcat(traits, [VerifyTensorLayoutsTrait, VerifyMemDescLayoutsTrait])> {
 }
 
-def TTNG_PackedArithFloat : AnyTypeOf<[
-  F4E2M1FN, F6E2M3FN, F6E3M2FN, F8E8M0FNU, F8E4M3FN, F8E5M2,
-  F16, BF16, F32
-], "packed arithmetic floating-point">;
-def TTNG_PackedArithTensor : RankedTensorOf<[TTNG_PackedArithFloat]>;
+def TTNG_PackedArithElement : AnyTypeOf<[
+  I8, F8E8M0FNU, F8E4M3FN, F8E5M2, F16, BF16, F32
+], "packed arithmetic element">;
+def TTNG_PackedArithTensor : RankedTensorOf<[TTNG_PackedArithElement]>;
 
 def TTNG_PackedArithOp : TTNG_Op<"packed_arith", [Pure]> {
   let summary = "Apply elementwise arithmetic using a packed PTX instruction";
 
   let description = [{
     Applies an arithmetic operation elementwise to scalar tensors while grouping
-    adjacent elements along `axis` into one packed PTX instruction. The result
-    has the same shape and layout as every operand.
+    adjacent elements along `axis` into one packed PTX instruction. FP4
+    operands use Triton's packed-i8 representation: each i8 contains two FP4
+    values, with the lower nibble first, and its axis dimension is half the
+    logical result dimension.
 
     `packed_type` is the PTX destination type. `operand_packed_types` contains
     one PTX type for each operand. Keeping the operand types explicit is
@@ -70,10 +71,12 @@ def TTNG_PackedArithOp : TTNG_Op<"packed_arith", [Pure]> {
 
     The op supports homogeneous x2 add/sub/mul/fma, homogeneous f16x2/bf16x2
     min/max, the PTX 9.4 mixed `f32x2`/`f16x2`/`bf16x2` instructions, and the
-    PTX 9.4 alternate FP8/FP6/FP4/UE8M0 x4 add/sub/mul/fma instructions. The
-    selected axis must be contiguous within each thread by at least the packed
-    width. Within each pack, elements with increasing coordinates along `axis`
-    occupy increasingly significant lanes.
+    PTX 9.4 alternate FP8/FP4/UE8M0 x4 add/sub/mul/fma instructions. FP6 is
+    intentionally unsupported. `rounding` and the optional boolean modifiers
+    map directly to the corresponding PTX instruction qualifiers. The selected
+    axis must provide the packed lanes within each thread. Within each pack,
+    elements with increasing coordinates along `axis` occupy increasingly
+    significant lanes.
   }];
 
   let arguments = (ins
@@ -81,18 +84,31 @@ def TTNG_PackedArithOp : TTNG_Op<"packed_arith", [Pure]> {
     TTNG_PackedArithTypeAttr:$packed_type,
     DenseI32ArrayAttr:$operand_packed_types,
     Variadic<TTNG_PackedArithTensor>:$operands,
-    I32Attr:$axis
+    I32Attr:$axis,
+    OptionalAttr<TTNG_PackedArithRoundingModeAttr>:$rounding,
+    OptionalAttr<BoolAttr>:$ftz,
+    OptionalAttr<BoolAttr>:$sat,
+    OptionalAttr<BoolAttr>:$satfinite,
+    OptionalAttr<BoolAttr>:$relu,
+    OptionalAttr<BoolAttr>:$oob,
+    OptionalAttr<BoolAttr>:$NaN,
+    OptionalAttr<BoolAttr>:$xorsign_abs
   );
   let results = (outs TTNG_PackedArithTensor:$result);
 
   let assemblyFormat = [{
     $op_kind `,` $packed_type `,`
     `[` custom<PackedArithTypes>($operand_packed_types) `]` `,`
-    $operands `axis` `=` $axis attr-dict
+    $operands `axis` `=` $axis (`,` `rounding` `=` $rounding^)? attr-dict
     `:` functional-type($operands, $result)
   }];
 
   let hasVerifier = 1;
+
+  let extraClassDeclaration = [{
+    static std::optional<SmallVector<unsigned>> getRegisterOrder(
+        RankedTensorType tensorType, unsigned axis, unsigned packWidth);
+  }];
 }
 
 def TTNG_FenceAsyncSharedOp : TTNG_Op<"fence_async_shared"> {

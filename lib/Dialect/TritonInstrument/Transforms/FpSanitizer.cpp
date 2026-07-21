@@ -2088,6 +2088,67 @@ struct Fp4ToFpPattern : public OpRewritePattern<ttg::Fp4ToFpOp> {
   }
 };
 
+struct PackedArithPattern : public OpRewritePattern<ttng::PackedArithOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttng::PackedArithOp op,
+                                PatternRewriter &rewriter) const override {
+    auto resultTy = op.getType();
+    auto resultIntTy = cast<RankedTensorType>(getIntTypeLike(resultTy));
+    auto resultIntElem = resultIntTy.getElementType();
+    auto loc = op.getLoc();
+
+    SmallVector<Value> payloads;
+    for (auto [index, operand] : llvm::enumerate(op.getOperands())) {
+      auto packedType =
+          *ttng::symbolizePackedArithType(op.getOperandPackedTypes()[index]);
+      if (packedType == ttng::PackedArithType::E2M1X4 ||
+          packedType == ttng::PackedArithType::E2M1P4X4) {
+        payloads.push_back(unpackPackedFp4Tensor(rewriter, loc, operand,
+                                                 op.getAxis(), resultIntTy));
+        continue;
+      }
+
+      Value payload = embedToInt(rewriter, loc, operand);
+      auto payloadTy = cast<RankedTensorType>(payload.getType());
+      payload = castFloatPayloadToType(rewriter, loc, payload,
+                                       payloadTy.clone(resultIntElem));
+      if (payload.getType() != resultIntTy)
+        payload =
+            ttg::ConvertLayoutOp::create(rewriter, loc, resultIntTy, payload);
+      payloads.push_back(payload);
+    }
+
+    Value result;
+    switch (op.getOpKind()) {
+    case ttng::PackedArithOpKind::ADD:
+      result = arith::AddIOp::create(rewriter, loc, payloads[0], payloads[1]);
+      break;
+    case ttng::PackedArithOpKind::SUB:
+      result = arith::SubIOp::create(rewriter, loc, payloads[0], payloads[1]);
+      break;
+    case ttng::PackedArithOpKind::MUL:
+      result = arith::MulIOp::create(rewriter, loc, payloads[0], payloads[1]);
+      break;
+    case ttng::PackedArithOpKind::FMA: {
+      Value product =
+          arith::MulIOp::create(rewriter, loc, payloads[0], payloads[1]);
+      result = arith::AddIOp::create(rewriter, loc, product, payloads[2]);
+      break;
+    }
+    case ttng::PackedArithOpKind::MIN:
+      result = arith::MinSIOp::create(rewriter, loc, payloads[0], payloads[1]);
+      break;
+    case ttng::PackedArithOpKind::MAX:
+      result = arith::MaxSIOp::create(rewriter, loc, payloads[0], payloads[1]);
+      break;
+    }
+
+    rewriter.replaceOp(op, unembedToFloat(rewriter, loc, result, resultTy));
+    return success();
+  }
+};
+
 struct DotPattern : public OpRewritePattern<tt::DotOp> {
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(tt::DotOp op,
@@ -3188,8 +3249,9 @@ public:
                  ClampFOpPattern, NegFOpPattern, DivFOpPattern,
                  PreciseDivFOpPattern, RemFOpPattern, FmaPattern, ExpOpPattern,
                  Exp2OpPattern, CosOpPattern, SinOpPattern, ExtFOpPattern,
-                 TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern, DotPattern,
-                 DotScaledPattern>(&getContext());
+                 TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern,
+                 PackedArithPattern, DotPattern, DotScaledPattern>(
+        &getContext());
     patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
     patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);
     patterns.add<UnaryPattern<math::SqrtOp>>(&getContext(), UnaryOpId::Sqrt);

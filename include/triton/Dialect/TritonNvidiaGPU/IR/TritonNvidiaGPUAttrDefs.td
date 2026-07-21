@@ -68,11 +68,20 @@ def TTNG_PackedArithTypeAttr : I32EnumAttr<
         I32EnumAttrCase<"BF16X2", 2, "bf16x2">,
         I32EnumAttrCase<"E5M2X4", 3, "e5m2x4">,
         I32EnumAttrCase<"E4M3X4", 4, "e4m3x4">,
-        I32EnumAttrCase<"E3M2X4", 5, "e3m2x4">,
-        I32EnumAttrCase<"E2M3X4", 6, "e2m3x4">,
-        I32EnumAttrCase<"E2M1X4", 7, "e2m1x4">,
-        I32EnumAttrCase<"E2M1P4X4", 8, "e2m1p4x4">,
-        I32EnumAttrCase<"UE8M0X4", 9, "ue8m0x4">,
+        I32EnumAttrCase<"E2M1X4", 5, "e2m1x4">,
+        I32EnumAttrCase<"E2M1P4X4", 6, "e2m1p4x4">,
+        I32EnumAttrCase<"UE8M0X4", 7, "ue8m0x4">,
+    ]> {
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+}
+
+def TTNG_PackedArithRoundingModeAttr : I32EnumAttr<
+    "PackedArithRoundingMode", "packed arithmetic rounding mode",
+    [
+        I32EnumAttrCase<"RN", 0, "rn">,
+        I32EnumAttrCase<"RZ", 1, "rz">,
+        I32EnumAttrCase<"RM", 2, "rm">,
+        I32EnumAttrCase<"RP", 3, "rp">,
     ]> {
   let cppNamespace = "::mlir::triton::nvidia_gpu";
 }

@@ -1328,7 +1328,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func @packed_arith_insufficient_contiguity(
       %a: tensor<256xf32, #blocked>,
       %b: tensor<256xf32, #blocked>) {
-    // expected-error @below {{'ttng.packed_arith' op requires at least 2 contiguous elements per thread along axis 0, but the layout provides 1}}
+    // expected-error @below {{'ttng.packed_arith' op result layout cannot provide 2 adjacent storage elements per thread along axis 0}}
     %0 = ttng.packed_arith add, f32x2, [f32x2, f32x2], %a, %b axis = 0 : (tensor<256xf32, #blocked>, tensor<256xf32, #blocked>) -> tensor<256xf32, #blocked>
     tt.return
   }
@@ -1365,10 +1365,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   tt.func @packed_arith_invalid_alternate_result(
-      %a: tensor<256xf6E3M2FN, #blocked>,
-      %b: tensor<256xf6E3M2FN, #blocked>) {
-    // expected-error @below {{'ttng.packed_arith' op e3m2x4 is not a valid packed arithmetic result type}}
-    %0 = ttng.packed_arith mul, e3m2x4, [e3m2x4, e3m2x4], %a, %b axis = 0 : (tensor<256xf6E3M2FN, #blocked>, tensor<256xf6E3M2FN, #blocked>) -> tensor<256xf6E3M2FN, #blocked>
+      %a: tensor<256xi8, #blocked>,
+      %b: tensor<256xi8, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op e2m1x4 is not a valid packed arithmetic result type}}
+    %0 = ttng.packed_arith mul, e2m1x4, [e2m1x4, e2m1x4], %a, %b axis = 0 : (tensor<256xi8, #blocked>, tensor<256xi8, #blocked>) -> tensor<256xi8, #blocked>
     tt.return
   }
 }
@@ -1404,10 +1404,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   tt.func @packed_arith_alternate_addend_must_match_result(
-      %a: tensor<256xf6E3M2FN, #blocked>,
+      %a: tensor<256xf8E5M2, #blocked>,
       %b: tensor<256xf8E5M2, #blocked>) {
-    // expected-error @below {{'ttng.packed_arith' op unsupported add signature e4m3x4 <- (e3m2x4, e5m2x4)}}
-    %0 = ttng.packed_arith add, e4m3x4, [e3m2x4, e5m2x4], %a, %b axis = 0 : (tensor<256xf6E3M2FN, #blocked>, tensor<256xf8E5M2, #blocked>) -> tensor<256xf8E4M3FN, #blocked>
+    // expected-error @below {{'ttng.packed_arith' op unsupported add signature e4m3x4 <- (e5m2x4, e5m2x4)}}
+    %0 = ttng.packed_arith add, e4m3x4, [e5m2x4, e5m2x4], %a, %b axis = 0 : (tensor<256xf8E5M2, #blocked>, tensor<256xf8E5M2, #blocked>) -> tensor<256xf8E4M3FN, #blocked>
     tt.return
   }
 }
@@ -1415,13 +1415,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#fp4 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   tt.func @packed_arith_alternate_fma_addend_must_match_result(
-      %a: tensor<256xf4E2M1FN, #blocked>,
-      %b: tensor<256xf8E8M0FNU, #blocked>,
+      %a: tensor<128xi8, #fp4>,
+      %b: tensor<256xf8E4M3FN, #blocked>,
       %c: tensor<256xf8E5M2, #blocked>) {
-    // expected-error @below {{'ttng.packed_arith' op unsupported fma signature e4m3x4 <- (e2m1p4x4, ue8m0x4, e5m2x4)}}
-    %0 = ttng.packed_arith fma, e4m3x4, [e2m1p4x4, ue8m0x4, e5m2x4], %a, %b, %c axis = 0 : (tensor<256xf4E2M1FN, #blocked>, tensor<256xf8E8M0FNU, #blocked>, tensor<256xf8E5M2, #blocked>) -> tensor<256xf8E4M3FN, #blocked>
+    // expected-error @below {{'ttng.packed_arith' op unsupported fma signature e4m3x4 <- (e2m1p4x4, e4m3x4, e5m2x4)}}
+    %0 = ttng.packed_arith fma, e4m3x4, [e2m1p4x4, e4m3x4, e5m2x4], %a, %b, %c axis = 0 : (tensor<128xi8, #fp4>, tensor<256xf8E4M3FN, #blocked>, tensor<256xf8E5M2, #blocked>) -> tensor<256xf8E4M3FN, #blocked>
     tt.return
   }
 }
@@ -1446,7 +1447,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func @packed_arith_x4_insufficient_contiguity(
       %a: tensor<256xf8E4M3FN, #blocked>,
       %b: tensor<256xf8E4M3FN, #blocked>) {
-    // expected-error @below {{'ttng.packed_arith' op requires at least 4 contiguous elements per thread along axis 0, but the layout provides 2}}
+    // expected-error @below {{'ttng.packed_arith' op result layout cannot provide 4 adjacent storage elements per thread along axis 0}}
     %0 = ttng.packed_arith add, e4m3x4, [e4m3x4, e4m3x4], %a, %b axis = 0 : (tensor<256xf8E4M3FN, #blocked>, tensor<256xf8E4M3FN, #blocked>) -> tensor<256xf8E4M3FN, #blocked>
     tt.return
   }
@@ -1474,6 +1475,118 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %b: tensor<256xf8E4M3FN, #blocked>) {
     // expected-error @below {{'ttng.packed_arith' op unsupported max signature e4m3x4 <- (e4m3x4, e4m3x4)}}
     %0 = ttng.packed_arith max, e4m3x4, [e4m3x4, e4m3x4], %a, %b axis = 0 : (tensor<256xf8E4M3FN, #blocked>, tensor<256xf8E4M3FN, #blocked>) -> tensor<256xf8E4M3FN, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_fp4_wrong_shape(
+      %a: tensor<256xi8, #blocked>,
+      %b: tensor<256xf8E4M3FN, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op fp4 operand 0 dimension 0 must be 128, but got 256}}
+    %0 = ttng.packed_arith add, e4m3x4, [e2m1x4, e4m3x4], %a, %b axis = 0 : (tensor<256xi8, #blocked>, tensor<256xf8E4M3FN, #blocked>) -> tensor<256xf8E4M3FN, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#result = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#fp4 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_fp4_wrong_layout(
+      %a: tensor<128xi8, #fp4>,
+      %b: tensor<256xf8E4M3FN, #result>) {
+    // expected-error @below {{'ttng.packed_arith' op fp4 operand 0 must have a layout compatible with the result}}
+    %0 = ttng.packed_arith add, e4m3x4, [e2m1x4, e4m3x4], %a, %b axis = 0 : (tensor<128xi8, #fp4>, tensor<256xf8E4M3FN, #result>) -> tensor<256xf8E4M3FN, #result>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_fp6_is_unsupported(
+      %a: tensor<256xf6E3M2FN, #blocked>,
+      %b: tensor<256xf8E4M3FN, #blocked>) {
+    // expected-error @below {{custom op 'ttng.packed_arith' unknown packed arithmetic type 'e3m2x4'}}
+    %0 = ttng.packed_arith add, e4m3x4, [e3m2x4, e4m3x4], %a, %b axis = 0 : (tensor<256xf6E3M2FN, #blocked>, tensor<256xf8E4M3FN, #blocked>) -> tensor<256xf8E4M3FN, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_invalid_half_rounding(
+      %a: tensor<256xf16, #blocked>, %b: tensor<256xf16, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op modifier 'rounding' is unsupported for this packed arithmetic signature}}
+    %0 = ttng.packed_arith add, f16x2, [f16x2, f16x2], %a, %b axis = 0, rounding = rz : (tensor<256xf16, #blocked>, tensor<256xf16, #blocked>) -> tensor<256xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_invalid_bf16_ftz(
+      %a: tensor<256xbf16, #blocked>, %b: tensor<256xbf16, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op modifier 'ftz' is unsupported for this packed arithmetic signature}}
+    %0 = ttng.packed_arith add, bf16x2, [bf16x2, bf16x2], %a, %b axis = 0 {ftz = true} : (tensor<256xbf16, #blocked>, tensor<256xbf16, #blocked>) -> tensor<256xbf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_invalid_f32_sat(
+      %a: tensor<256xf32, #blocked>, %b: tensor<256xf32, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op modifier 'sat' is unsupported for this packed arithmetic signature}}
+    %0 = ttng.packed_arith add, f32x2, [f32x2, f32x2], %a, %b axis = 0 {sat = true} : (tensor<256xf32, #blocked>, tensor<256xf32, #blocked>) -> tensor<256xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_invalid_x4_rounding(
+      %a: tensor<256xf8E4M3FN, #blocked>, %b: tensor<256xf8E4M3FN, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op modifier 'rounding' is unsupported for this packed arithmetic signature}}
+    %0 = ttng.packed_arith add, e4m3x4, [e4m3x4, e4m3x4], %a, %b axis = 0, rounding = rm : (tensor<256xf8E4M3FN, #blocked>, tensor<256xf8E4M3FN, #blocked>) -> tensor<256xf8E4M3FN, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_invalid_downconvert_rounding(
+      %a: tensor<256xf32, #blocked>, %b: tensor<256xf32, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op modifier 'rounding' is unsupported for this packed arithmetic signature}}
+    %0 = ttng.packed_arith add, f16x2, [f32x2, f32x2], %a, %b axis = 0, rounding = rn : (tensor<256xf32, #blocked>, tensor<256xf32, #blocked>) -> tensor<256xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_invalid_oob_ftz(
+      %a: tensor<256xf16, #blocked>, %b: tensor<256xf16, #blocked>, %c: tensor<256xf16, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op modifier 'oob' is unsupported for this packed arithmetic signature}}
+    %0 = ttng.packed_arith fma, f16x2, [f16x2, f16x2, f16x2], %a, %b, %c axis = 0 {ftz = true, oob = true} : (tensor<256xf16, #blocked>, tensor<256xf16, #blocked>, tensor<256xf16, #blocked>) -> tensor<256xf16, #blocked>
     tt.return
   }
 }
