@@ -984,8 +984,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   funcOp.walk(
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
-    if (!hoistConvertOnTopOfExtOrBroadcast(convertOp,
-                                           disableRematSplitting)) {
+    if (!hoistConvertOnTopOfExtOrBroadcast(convertOp, disableRematSplitting)) {
       // If the conversion didn't get removed, consider it for reuse in future
       // backward slices.
       addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
