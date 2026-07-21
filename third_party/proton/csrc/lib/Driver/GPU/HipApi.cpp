@@ -62,6 +62,12 @@ DEFINE_DISPATCH(ExternLibHip, streamSynchronize, hipStreamSynchronize,
 
 DEFINE_DISPATCH(ExternLibHip, streamDestroy, hipStreamDestroy, hipStream_t)
 
+DEFINE_DISPATCH(ExternLibHip, graphGetNodes, hipGraphGetNodes, hipGraph_t,
+                hipGraphNode_t *, size_t *)
+
+DEFINE_DISPATCH(ExternLibHip, graphNodeGetType, hipGraphNodeGetType,
+                hipGraphNode_t, hipGraphNodeType *)
+
 DEFINE_DISPATCH(ExternLibHip, memcpyDToHAsync, hipMemcpyDtoHAsync, void *,
                 hipDeviceptr_t, size_t, hipStream_t)
 

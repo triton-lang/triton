@@ -212,6 +212,30 @@ def kernel() -> int:
     assert_code_equal(output, expected)
 
 
+def test_slice_kernel_preserves_gluon_builtin_sugar(tmp_path):
+    pkg, mod = _make_package(
+        tmp_path,
+        {
+            "kernel_mod.py":
+            """
+                import triton.experimental.gluon.language as gl
+
+                def kernel() -> None:
+                    gl.static_assert(True)
+            """,
+        },
+    )
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton"], target=TranslatorTarget.GENERIC)
+    expected = R"""
+import triton.experimental.gluon.language as gl
+
+def kernel() -> None:
+    gl.static_assert(True)
+    """
+    assert_code_equal(output, expected)
+
+
 def test_slice_kernel_supports_injected_decorator_matchers(tmp_path):
     pkg, mod = _make_package(
         tmp_path,
@@ -343,8 +367,10 @@ def squeeze(x, dim: gl.constexpr):
     :param dim: the index of the dimension to remove
     :type dim: int
     '''
-    gl.static_assert(x.shape[dim] == 1)
-    return triton.tools.triton_to_gluon_translator.common_helpers.reset_to_default_layout(x.reshape(x.shape[:dim] + x.shape[dim + 1:]))
+    gl.static_assert(-len(x.shape) <= dim and dim < len(x.shape))
+    _dim: gl.constexpr = dim + len(x.shape) if dim < 0 else dim
+    gl.static_assert(x.shape[_dim] == 1)
+    return triton.tools.triton_to_gluon_translator.common_helpers.reset_to_default_layout(x.reshape(x.shape[:_dim] + x.shape[_dim + 1:]))
 
 
 @gluon.jit(repr=lambda _: 'custom_kernel_name')
