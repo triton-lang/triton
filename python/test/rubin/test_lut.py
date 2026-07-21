@@ -85,25 +85,6 @@ def get_random_lut_and_indices(n, k):
     )
 
 
-def get_shared_swizzling_zero(N, K):
-    import math
-
-    bitwidth = 8
-    bases = []
-
-    def log2_int(x):
-        return x.bit_length() - 1
-
-    for i in range(log2_int(128 // bitwidth)):
-        bases.append([0, 1 << i])
-    for i in range(log2_int(N)):
-        bases.append([1 << i, 0])
-    for i in range(log2_int(K // (128 // bitwidth))):
-        offset = int(math.log2(128 // bitwidth)) + i
-        bases.append([0, 1 << offset])
-    return gl.SharedLinearLayout(bases)
-
-
 def pack_lut_for_tma(lut):
     assert lut.dim() == 3, f"expected logical LUT tensor of rank 3, got {lut.shape}"
     assert lut.shape[2] == 8, f"expected 8 LUT entries, got {lut.shape[2]}"
@@ -217,19 +198,14 @@ def lut_to_tmem_layout(lut_smem):
 @gluon.jit
 def mma_lut_kernel(
     a_desc,
-    b_ptr,
-    b_stride0,
-    b_stride1,
     b_desc_tma,
     lut_desc,
     c_desc,
-    b_layout: gl.constexpr,
     BLOCK_N: gl.constexpr,
     BLOCK_K: gl.constexpr,
     BLOCK_K_PACKED: gl.constexpr,
     b_is_n_major: gl.constexpr,
     num_warps: gl.constexpr,
-    use_tma_for_b: gl.constexpr,
 ):
     BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
     dtype: gl.constexpr = a_desc.dtype
@@ -241,12 +217,7 @@ def mma_lut_kernel(
     off_n = pid_n * BLOCK_N
 
     a_smem = gl.allocate_shared_memory(dtype, a_desc.block_type.shape, a_desc.layout)
-
-    if not use_tma_for_b:
-        b_smem = gl.allocate_shared_memory(gl.uint8, [BLOCK_N, BLOCK_K_PACKED], b_layout)
-    else:
-        b_smem = gl.allocate_shared_memory(b_desc_tma.dtype, b_desc_tma.block_type.shape, b_desc_tma.layout)
-
+    b_smem = gl.allocate_shared_memory(b_desc_tma.dtype, b_desc_tma.block_type.shape, b_desc_tma.layout)
     lut_smem = gl.allocate_shared_memory(gl.int8, lut_desc.block_type.shape, lut_desc.layout)
 
     tma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
@@ -264,10 +235,6 @@ def mma_lut_kernel(
     num_lut_cols: gl.constexpr = BLOCK_K // 128 * 16
     lut_tmem = allocate_tensor_memory(gl.int8, (num_lut_rows, num_lut_cols), TensorMemoryLUTLayout())
 
-    load_layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0])
-    offs_n = gl.arange(0, BLOCK_N, gl.SliceLayout(1, load_layout))
-    offs_k = gl.arange(0, BLOCK_K, gl.SliceLayout(0, load_layout))
-
     block_n = pid_n
     lut_block_n = pid_n * (BLOCK_N // 256)
 
@@ -277,27 +244,14 @@ def mma_lut_kernel(
         k = k_iter * BLOCK_K
         lut_block_k = k_iter * (BLOCK_K // 128)
 
-        if use_tma_for_b:
-            block_k = k_iter
-            # TMA for A, B, and LUT
-            mbarrier.expect(tma_bar,
-                            a_desc.block_type.nbytes + b_desc_tma.block_type.nbytes + lut_desc.block_type.nbytes)
-            tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_smem)
-            tma.async_copy_global_to_shared(b_desc_tma, [block_n, block_k, 0, 0, 0], tma_bar, b_smem)
-            tma.async_copy_global_to_shared(lut_desc, [lut_block_n, lut_block_k, 0, 0], tma_bar, lut_smem)
-            # Apply inverse transformation: reshape and permute to get unswizzled core-matrices layout
-            b_smem_transformed = core_matrices_to_operand_layout(b_smem, BLOCK_N, BLOCK_K_PACKED, b_is_n_major)
-        else:
-            # TMA for A and LUT, gl.load for B
-            mbarrier.expect(tma_bar, a_desc.block_type.nbytes + lut_desc.block_type.nbytes)
-            tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_smem)
-            tma.async_copy_global_to_shared(lut_desc, [lut_block_n, lut_block_k, 0, 0], tma_bar, lut_smem)
-
-            b_k = k_iter * BLOCK_K_PACKED
-            b_load_ptr = b_ptr + (off_n + offs_n)[:, None] * b_stride0 + (b_k + offs_k)[None, :] * b_stride1
-            b_data = gl.load(b_load_ptr)
-            b_smem.store(b_data)
-            b_smem_transformed = b_smem
+        block_k = k_iter
+        mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc_tma.block_type.nbytes +
+                        lut_desc.block_type.nbytes)
+        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_smem)
+        tma.async_copy_global_to_shared(b_desc_tma, [block_n, block_k, 0, 0, 0], tma_bar, b_smem)
+        tma.async_copy_global_to_shared(lut_desc, [lut_block_n, lut_block_k, 0, 0], tma_bar, lut_smem)
+        # Apply inverse transformation to get the operand's core-matrix layout.
+        b_smem_transformed = core_matrices_to_operand_layout(b_smem, BLOCK_N, BLOCK_K_PACKED, b_is_n_major)
 
         fence_async_shared()
 
@@ -337,7 +291,6 @@ def matmul_lut(
     BLOCK_K,
     BLOCK_K_PACKED,
     num_warps,
-    use_tma_for_b=False,
     b_is_n_major=True,
 ):
     M, N = C.shape
@@ -345,12 +298,7 @@ def matmul_lut(
     a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float8e4nv)
     a_desc = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_K], a_layout)
 
-    b_layout = get_shared_swizzling_zero(BLOCK_N, BLOCK_K_PACKED)
-
-    if use_tma_for_b:
-        b_desc_tma = make_packed_b_tma_descriptor(B, BLOCK_N, BLOCK_K_PACKED, is_n_major=b_is_n_major)
-    else:
-        b_desc_tma = None
+    b_desc_tma = make_packed_b_tma_descriptor(B, BLOCK_N, BLOCK_K_PACKED, is_n_major=b_is_n_major)
 
     lut_desc = make_lut_tma_descriptor(lut, BLOCK_N, BLOCK_K)
 
@@ -360,59 +308,15 @@ def matmul_lut(
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
     mma_lut_kernel[grid](
         a_desc,
-        B,
-        B.stride(0),
-        B.stride(1),
         b_desc_tma,
         lut_desc,
         c_desc,
-        b_layout,
         BLOCK_N,
         BLOCK_K,
         BLOCK_K_PACKED,
         b_is_n_major,
         num_warps=num_warps,
-        use_tma_for_b=use_tma_for_b,
     )
-
-
-@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
-@pytest.mark.parametrize("BLOCK_M", [128, 256])
-@pytest.mark.parametrize("use_tma_for_b", [True, False])
-def test_lut_padded_b(BLOCK_M, use_tma_for_b):
-    K = 128
-    N = 256
-    M = 256
-    BLOCK_N = 256
-    BLOCK_K = 128
-    BLOCK_K_PACKED = BLOCK_K
-
-    A = torch.randn(M, K, device="cuda", dtype=torch.float32).to(torch.float8_e4m3fn)
-    C = torch.empty(M, N, device="cuda", dtype=torch.float32)
-
-    LUT_orig, B_indices_packed = get_random_lut_and_indices(N, K)
-    B_indices = torch.nn.functional.pad(B_indices_packed, (0, BLOCK_K - B_indices_packed.shape[1]), "constant", 0)
-    LUT = pack_lut_for_tma(LUT_orig)
-
-    matmul_lut(
-        A,
-        B_indices,
-        LUT,
-        C,
-        BLOCK_M,
-        BLOCK_N,
-        BLOCK_K,
-        BLOCK_K_PACKED,
-        4,
-        use_tma_for_b=use_tma_for_b,
-    )
-
-    B_uint8 = decompress(B_indices_packed, LUT_orig)
-    B = B_uint8.view(torch.float8_e4m3fn)
-
-    C_ref = A.to(torch.float32) @ B.T.to(torch.float32)
-
-    torch.testing.assert_close(C_ref, C, rtol=1e-3, atol=1e-3)
 
 
 @pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
@@ -445,7 +349,6 @@ def test_lut_packed_b_tma(BLOCK_M, BLOCK_K, b_is_n_major):
         BLOCK_K,
         BLOCK_K_PACKED,
         4,
-        use_tma_for_b=True,
         b_is_n_major=b_is_n_major,
     )
 
