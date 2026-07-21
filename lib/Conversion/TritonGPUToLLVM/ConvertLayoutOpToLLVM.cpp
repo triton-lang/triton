@@ -41,12 +41,14 @@ struct ConvertLayoutOpConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
-    LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
-
     auto kBlock = str_attr("block");
     auto kWarp = str_attr("warp");
     auto kLane = str_attr("lane");
     auto kRegister = str_attr("register");
+
+    auto srcLayout = toLinearLayout(srcTy).removeZeroBasesAlongDim(kRegister);
+    auto dstLayout = toLinearLayout(dstTy).removeZeroBasesAlongDim(kRegister);
+    LinearLayout conversion = minimalCvtLayout(srcLayout, dstLayout);
 
     auto dims = conversion.getInDimNames();
     auto srcEnc = cast<RankedTensorType>(srcTy).getEncoding();
@@ -77,39 +79,26 @@ struct ConvertLayoutOpConversion
     } else if (llvm::is_contained(dims, kRegister)) {
       // Case 4. Transfer between values in the same thread, in which case we
       //         simply reorder the elements of adaptor.getSrc().
-      return transferWithinThread(op, adaptor, rewriter);
+      return transferWithinThread(op, conversion, adaptor, rewriter);
     } else {
       // Cast 5. The two layouts are equivalent. We should probably remove
       // these in RemoveLayoutConversion.
+      assert(adaptor.getSrc().getType() ==
+             getTypeConverter()->convertType(dstTy));
       rewriter.replaceOp(op, adaptor.getSrc());
       return success();
     }
   }
 
   LogicalResult
-  transferWithinThread(ConvertLayoutOp op, OpAdaptor adaptor,
+  transferWithinThread(ConvertLayoutOp op, const LinearLayout &conversion,
+                       OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
     auto kRegister = str_attr("register");
-    auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
-    assert(!cvtNeedsSharedMemory(srcTy, dstTy));
-
-    // Tensor structs contain only unique elements, so compute the permutation
-    // after removing register bases that represent replicated values.
-    auto srcLayout = toLinearLayout(srcTy).removeZeroBasesAlongDim(kRegister);
-    auto dstLayout = toLinearLayout(dstTy).removeZeroBasesAlongDim(kRegister);
-    auto conversion = minimalCvtLayout(srcLayout, dstLayout);
     auto dims = to_vector(conversion.getInDimNames());
-    // Distinct layouts can become equivalent once replicated values are
-    // removed, as happens for some MMA encodings.
-    if (dims.empty()) {
-      assert(adaptor.getSrc().getType() ==
-             getTypeConverter()->convertType(dstTy));
-      rewriter.replaceOp(op, adaptor.getSrc());
-      return success();
-    }
     assert(dims.size() == 1 && dims.front() == kRegister &&
            "expected a register-only conversion");
 
@@ -117,6 +106,7 @@ struct ConvertLayoutOpConversion
     SmallVector<Value> outVals(conversion.getInDimSize(kRegister));
     for (int i = 0; i < outVals.size(); i++) {
       auto srcIdx = conversion.apply({{kRegister, i}}).begin()->second;
+      assert(srcIdx < inVals.size());
       outVals[i] = inVals[srcIdx];
     }
     Value result = packUniqueTensorElements(loc, getTypeConverter(), outVals,
