@@ -169,32 +169,32 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @arrive_barrier_multicast_absent
   tt.func @arrive_barrier_multicast_absent(%alloc: !ttg.memdesc<2xi64, #shared_cga, #ttg.shared_memory, mutable>) {
     // CHECK: ttng.arrive_barrier %arg0, 1 :
-    // CHECK-NOT: multicastCTA
+    // CHECK-NOT: ctaMask
     ttng.arrive_barrier %alloc, 1 : !ttg.memdesc<2xi64, #shared_cga, #ttg.shared_memory, mutable>
     tt.return
   }
 
-  // Explicit multicastCTA = 0 is valid and elides on print like the default.
+  // Explicit ctaMask = 0 is valid and elides on print like the default.
   // CHECK-LABEL: @arrive_barrier_multicast_zero
   tt.func @arrive_barrier_multicast_zero(%alloc: !ttg.memdesc<2xi64, #shared_cga, #ttg.shared_memory, mutable>) {
     // CHECK: ttng.arrive_barrier %arg0, 1 :
-    // CHECK-NOT: multicastCTA
-    ttng.arrive_barrier %alloc, 1 {multicastCTA = 0 : i32} : !ttg.memdesc<2xi64, #shared_cga, #ttg.shared_memory, mutable>
+    // CHECK-NOT: ctaMask
+    ttng.arrive_barrier %alloc, 1 {ctaMask = 0 : i32} : !ttg.memdesc<2xi64, #shared_cga, #ttg.shared_memory, mutable>
     tt.return
   }
 
   // CHECK-LABEL: @arrive_barrier_multicast
   tt.func @arrive_barrier_multicast(%alloc: !ttg.memdesc<2xi64, #shared_cga, #ttg.shared_memory, mutable>) {
-    // CHECK: ttng.arrive_barrier %arg0, 1 {multicastCTA = 1 : i32} : !ttg.memdesc<2xi64,
-    ttng.arrive_barrier %alloc, 1 {multicastCTA = 1 : i32} : !ttg.memdesc<2xi64, #shared_cga, #ttg.shared_memory, mutable>
+    // CHECK: ttng.arrive_barrier %arg0, 1 {ctaMask = 1 : i32} : !ttg.memdesc<2xi64,
+    ttng.arrive_barrier %alloc, 1 {ctaMask = 1 : i32} : !ttg.memdesc<2xi64, #shared_cga, #ttg.shared_memory, mutable>
     tt.return
   }
 
   // Round-trip the optional-pred-then-attr-dict spelling.
   // CHECK-LABEL: @arrive_barrier_multicast_pred
   tt.func @arrive_barrier_multicast_pred(%alloc: !ttg.memdesc<2xi64, #shared_cga, #ttg.shared_memory, mutable>, %pred: i1) {
-    // CHECK: ttng.arrive_barrier %arg0, 1, %arg1 {multicastCTA = 1 : i32} : !ttg.memdesc<2xi64,
-    ttng.arrive_barrier %alloc, 1, %pred {multicastCTA = 1 : i32} : !ttg.memdesc<2xi64, #shared_cga, #ttg.shared_memory, mutable>
+    // CHECK: ttng.arrive_barrier %arg0, 1, %arg1 {ctaMask = 1 : i32} : !ttg.memdesc<2xi64,
+    ttng.arrive_barrier %alloc, 1, %pred {ctaMask = 1 : i32} : !ttg.memdesc<2xi64, #shared_cga, #ttg.shared_memory, mutable>
     tt.return
   }
 }
