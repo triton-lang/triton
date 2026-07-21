@@ -658,48 +658,19 @@ struct ExpOpConversionApprox
   }
 };
 
+static bool isPackedArithX2Type(nvidia_gpu::PackedArithType packedType) {
+  return packedType == nvidia_gpu::PackedArithType::F32X2 ||
+         packedType == nvidia_gpu::PackedArithType::F16X2 ||
+         packedType == nvidia_gpu::PackedArithType::BF16X2;
+}
+
 static unsigned getPackedArithWidth(nvidia_gpu::PackedArithType packedType) {
-  switch (packedType) {
-  case nvidia_gpu::PackedArithType::F32X2:
-  case nvidia_gpu::PackedArithType::F16X2:
-  case nvidia_gpu::PackedArithType::BF16X2:
-    return 2;
-  case nvidia_gpu::PackedArithType::E5M2X4:
-  case nvidia_gpu::PackedArithType::E4M3X4:
-  case nvidia_gpu::PackedArithType::E3M2X4:
-  case nvidia_gpu::PackedArithType::E2M3X4:
-  case nvidia_gpu::PackedArithType::E2M1X4:
-  case nvidia_gpu::PackedArithType::E2M1P4X4:
-  case nvidia_gpu::PackedArithType::UE8M0X4:
-    return 4;
-  }
-  llvm_unreachable("unknown packed arithmetic type");
+  return isPackedArithX2Type(packedType) ? 2 : 4;
 }
 
-static unsigned
-getPackedArithRegisterBitWidth(nvidia_gpu::PackedArithType packedType) {
-  switch (packedType) {
-  case nvidia_gpu::PackedArithType::F32X2:
-    return 64;
-  case nvidia_gpu::PackedArithType::E2M1X4:
-    return 16;
-  case nvidia_gpu::PackedArithType::F16X2:
-  case nvidia_gpu::PackedArithType::BF16X2:
-  case nvidia_gpu::PackedArithType::E5M2X4:
-  case nvidia_gpu::PackedArithType::E4M3X4:
-  case nvidia_gpu::PackedArithType::E3M2X4:
-  case nvidia_gpu::PackedArithType::E2M3X4:
-  case nvidia_gpu::PackedArithType::E2M1P4X4:
-  case nvidia_gpu::PackedArithType::UE8M0X4:
-    return 32;
-  }
-  llvm_unreachable("unknown packed arithmetic type");
-}
-
-static StringRef
-getPackedArithConstraint(nvidia_gpu::PackedArithType packedType,
-                         bool isOutput) {
-  switch (getPackedArithRegisterBitWidth(packedType)) {
+static StringRef getPackedArithConstraint(unsigned registerBitWidth,
+                                          bool isOutput) {
+  switch (registerBitWidth) {
   case 16:
     return isOutput ? "=h" : "h";
   case 32:
@@ -711,37 +682,6 @@ getPackedArithConstraint(nvidia_gpu::PackedArithType packedType,
   }
 }
 
-static StringRef
-getPackedArithTypeName(nvidia_gpu::PackedArithType packedType) {
-  switch (packedType) {
-  case nvidia_gpu::PackedArithType::F32X2:
-    return "f32x2";
-  case nvidia_gpu::PackedArithType::F16X2:
-    return "f16x2";
-  case nvidia_gpu::PackedArithType::BF16X2:
-    return "bf16x2";
-  case nvidia_gpu::PackedArithType::E5M2X4:
-    return "e5m2x4";
-  case nvidia_gpu::PackedArithType::E4M3X4:
-    return "e4m3x4";
-  case nvidia_gpu::PackedArithType::E3M2X4:
-    return "e3m2x4";
-  case nvidia_gpu::PackedArithType::E2M3X4:
-    return "e2m3x4";
-  case nvidia_gpu::PackedArithType::E2M1X4:
-    return "e2m1x4";
-  case nvidia_gpu::PackedArithType::E2M1P4X4:
-    return "e2m1p4x4";
-  case nvidia_gpu::PackedArithType::UE8M0X4:
-    return "ue8m0x4";
-  }
-  llvm_unreachable("unknown packed arithmetic type");
-}
-
-static bool isPackedArithX2Type(nvidia_gpu::PackedArithType packedType) {
-  return getPackedArithWidth(packedType) == 2;
-}
-
 static SmallVector<StringRef> getPackedArithInstructionOptions(
     nvidia_gpu::PackedArithOpKind opKind,
     nvidia_gpu::PackedArithType resultType,
@@ -750,11 +690,11 @@ static SmallVector<StringRef> getPackedArithInstructionOptions(
 
   if (!isPackedArithX2Type(resultType)) {
     options.push_back("rn");
-    options.push_back(getPackedArithTypeName(resultType));
-    options.push_back(getPackedArithTypeName(operandTypes[0]));
+    options.push_back(stringifyPackedArithType(resultType));
+    options.push_back(stringifyPackedArithType(operandTypes[0]));
     if (opKind == nvidia_gpu::PackedArithOpKind::MUL ||
         opKind == nvidia_gpu::PackedArithOpKind::FMA) {
-      options.push_back(getPackedArithTypeName(operandTypes[1]));
+      options.push_back(stringifyPackedArithType(operandTypes[1]));
     }
     return options;
   }
@@ -767,7 +707,7 @@ static SmallVector<StringRef> getPackedArithInstructionOptions(
     if (opKind != nvidia_gpu::PackedArithOpKind::MIN &&
         opKind != nvidia_gpu::PackedArithOpKind::MAX)
       options.push_back("rn");
-    options.push_back(getPackedArithTypeName(resultType));
+    options.push_back(stringifyPackedArithType(resultType));
     return options;
   }
 
@@ -778,9 +718,9 @@ static SmallVector<StringRef> getPackedArithInstructionOptions(
                                                                        : "rz");
     if (resultType == nvidia_gpu::PackedArithType::F16X2)
       options.push_back("ftz");
-    options.push_back(getPackedArithTypeName(resultType));
-    options.push_back(getPackedArithTypeName(operandTypes[0]));
-    options.push_back(getPackedArithTypeName(operandTypes[1]));
+    options.push_back(stringifyPackedArithType(resultType));
+    options.push_back(stringifyPackedArithType(operandTypes[0]));
+    options.push_back(stringifyPackedArithType(operandTypes[1]));
     break;
   case nvidia_gpu::PackedArithOpKind::MUL:
     if (operandTypes[0] == nvidia_gpu::PackedArithType::F32X2) {
@@ -788,15 +728,15 @@ static SmallVector<StringRef> getPackedArithInstructionOptions(
         options.push_back("ftz");
       options.push_back("rz");
     }
-    options.push_back(getPackedArithTypeName(resultType));
-    options.push_back(getPackedArithTypeName(operandTypes[0]));
-    options.push_back(getPackedArithTypeName(operandTypes[1]));
+    options.push_back(stringifyPackedArithType(resultType));
+    options.push_back(stringifyPackedArithType(operandTypes[0]));
+    options.push_back(stringifyPackedArithType(operandTypes[1]));
     break;
   case nvidia_gpu::PackedArithOpKind::FMA:
     options.push_back("rn");
-    options.push_back(getPackedArithTypeName(resultType));
+    options.push_back(stringifyPackedArithType(resultType));
     for (nvidia_gpu::PackedArithType operandType : operandTypes)
-      options.push_back(getPackedArithTypeName(operandType));
+      options.push_back(stringifyPackedArithType(operandType));
     break;
   case nvidia_gpu::PackedArithOpKind::MIN:
   case nvidia_gpu::PackedArithOpKind::MAX:
@@ -811,7 +751,10 @@ static Value packPackedArithOperand(
     unsigned base) {
   TritonLLVMOpBuilder b(loc, rewriter);
   unsigned packWidth = getPackedArithWidth(packedType);
-  unsigned registerBitWidth = getPackedArithRegisterBitWidth(packedType);
+  unsigned registerBitWidth =
+      packedType == nvidia_gpu::PackedArithType::E2M1X4
+          ? 16
+          : packWidth * values[base].getType().getIntOrFloatBitWidth();
   Type packedTypeLLVM = int_ty(registerBitWidth);
 
   if (packedType == nvidia_gpu::PackedArithType::E2M1X4) {
@@ -911,11 +854,11 @@ struct PackedArithOpConversion
     Type resultElementType = this->getTypeConverter()->convertType(
         tensorType.getElementType());
     unsigned resultBitWidth =
-        getPackedArithRegisterBitWidth(op.getPackedType());
+        packWidth * resultElementType.getIntOrFloatBitWidth();
     Type resultPackedType = int_ty(resultBitWidth);
     Type resultVectorType = vec_ty(resultElementType, packWidth);
     StringRef outputConstraint =
-        getPackedArithConstraint(op.getPackedType(), /*isOutput=*/true);
+        getPackedArithConstraint(resultBitWidth, /*isOutput=*/true);
     SmallVector<StringRef> instructionOptions =
         getPackedArithInstructionOptions(op.getOpKind(), op.getPackedType(),
                                          operandPackedTypes);
@@ -934,12 +877,11 @@ struct PackedArithOpConversion
       PTXBuilder ptxBuilder;
       SmallVector<PTXBuilder::Operand *> asmOperands;
       asmOperands.push_back(ptxBuilder.newOperand(outputConstraint));
-      for (auto [operandIndex, operand] :
-           llvm::enumerate(packedOperands)) {
+      for (Value operand : packedOperands) {
         asmOperands.push_back(ptxBuilder.newOperand(
-            operand, getPackedArithConstraint(
-                         operandPackedTypes[operandIndex],
-                         /*isOutput=*/false)));
+            operand,
+            getPackedArithConstraint(operand.getType().getIntOrFloatBitWidth(),
+                                     /*isOutput=*/false)));
       }
 
       auto &instruction = *ptxBuilder.create(

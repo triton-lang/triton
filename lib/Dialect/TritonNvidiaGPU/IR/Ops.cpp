@@ -80,22 +80,14 @@ static void printPackedArithTypes(OpAsmPrinter &printer, Operation *op,
   }
 }
 
-static unsigned getPackedArithWidth(PackedArithType type) {
-  switch (type) {
-  case PackedArithType::F32X2:
-  case PackedArithType::F16X2:
-  case PackedArithType::BF16X2:
-    return 2;
-  case PackedArithType::E5M2X4:
-  case PackedArithType::E4M3X4:
-  case PackedArithType::E3M2X4:
-  case PackedArithType::E2M3X4:
-  case PackedArithType::E2M1X4:
-  case PackedArithType::E2M1P4X4:
-  case PackedArithType::UE8M0X4:
-    return 4;
-  }
-  llvm_unreachable("unknown packed arithmetic type");
+static bool isPackedArithX2Type(PackedArithType packedType) {
+  return packedType == PackedArithType::F32X2 ||
+         packedType == PackedArithType::F16X2 ||
+         packedType == PackedArithType::BF16X2;
+}
+
+static unsigned getPackedArithWidth(PackedArithType packedType) {
+  return isPackedArithX2Type(packedType) ? 2 : 4;
 }
 
 static bool hasPackedArithLaneType(PackedArithType packedType,
@@ -124,18 +116,19 @@ static bool hasPackedArithLaneType(PackedArithType packedType,
   llvm_unreachable("unknown packed arithmetic type");
 }
 
-static bool isPackedArithX2Type(PackedArithType packedType) {
-  return getPackedArithWidth(packedType) == 2;
-}
-
 static bool isPackedArithAlternateType(PackedArithType packedType) {
-  return getPackedArithWidth(packedType) == 4;
+  return !isPackedArithX2Type(packedType);
 }
 
 static bool isPackedArithResultType(PackedArithType packedType) {
   return isPackedArithX2Type(packedType) ||
          packedType == PackedArithType::E5M2X4 ||
          packedType == PackedArithType::E4M3X4;
+}
+
+static bool isPackedArithHalfType(PackedArithType packedType) {
+  return packedType == PackedArithType::F16X2 ||
+         packedType == PackedArithType::BF16X2;
 }
 
 static bool isSupportedPackedArithSignature(
@@ -147,44 +140,30 @@ static bool isSupportedPackedArithSignature(
     bool isHomogeneous = llvm::all_of(
         operandTypes, [&](PackedArithType type) { return type == resultType; });
     if (isHomogeneous) {
-      if (opKind == PackedArithOpKind::MIN ||
-          opKind == PackedArithOpKind::MAX) {
-        return resultType == PackedArithType::F16X2 ||
-               resultType == PackedArithType::BF16X2;
-      }
-      return true;
+      return (opKind != PackedArithOpKind::MIN &&
+              opKind != PackedArithOpKind::MAX) ||
+             isPackedArithHalfType(resultType);
     }
 
     switch (opKind) {
     case PackedArithOpKind::ADD:
     case PackedArithOpKind::SUB:
       if (resultType == PackedArithType::F32X2) {
-        return llvm::is_contained(
-                   {PackedArithType::F16X2, PackedArithType::BF16X2},
-                   operandTypes[0]) &&
+        return isPackedArithHalfType(operandTypes[0]) &&
                operandTypes[1] == PackedArithType::F32X2;
       }
       return operandTypes[0] == PackedArithType::F32X2 &&
              operandTypes[1] == PackedArithType::F32X2;
     case PackedArithOpKind::MUL:
-      if (resultType == PackedArithType::F16X2) {
-        return (operandTypes[0] == PackedArithType::F32X2 &&
-                operandTypes[1] == PackedArithType::F32X2) ||
-               (operandTypes[0] == PackedArithType::F16X2 &&
-                operandTypes[1] == PackedArithType::BF16X2);
-      }
-      if (resultType == PackedArithType::BF16X2) {
-        return (operandTypes[0] == PackedArithType::F32X2 &&
-                operandTypes[1] == PackedArithType::F32X2) ||
-               (operandTypes[0] == PackedArithType::BF16X2 &&
-                operandTypes[1] == PackedArithType::F16X2);
-      }
-      return false;
+      return isPackedArithHalfType(resultType) &&
+             ((operandTypes[0] == PackedArithType::F32X2 &&
+               operandTypes[1] == PackedArithType::F32X2) ||
+              (operandTypes[0] == resultType &&
+               isPackedArithHalfType(operandTypes[1]) &&
+               operandTypes[1] != resultType));
     case PackedArithOpKind::FMA:
       return resultType == PackedArithType::F32X2 &&
-             llvm::is_contained(
-                 {PackedArithType::F16X2, PackedArithType::BF16X2},
-                 operandTypes[0]) &&
+             isPackedArithHalfType(operandTypes[0]) &&
              operandTypes[1] == PackedArithType::F32X2 &&
              operandTypes[2] == PackedArithType::F32X2;
     case PackedArithOpKind::MIN:
