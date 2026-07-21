@@ -102,33 +102,6 @@ TEST_F(LayoutUtilsTest, RenameDimsPreservesOrder) {
       ::testing::ElementsAre(S("c"), S("b")));
 }
 
-TEST_F(LayoutUtilsTest, ImageSubset) {
-  LinearLayout superset({{S("x"), {{1, 1}, {2, 0}}}},
-                        {{S("out0"), 4}, {S("out1"), 2}},
-                        /*requireSurjective=*/false);
-  // (out0=3, out1=1) is the xor of the two superset bases. Reverse the
-  // output-dimension order to ensure containment is independent of it.
-  LinearLayout subset({{S("other"), {{1, 3}}}},
-                      {{S("out1"), 2}, {S("out0"), 4}},
-                      /*requireSurjective=*/false);
-  // The output bits occur in the superset, but this combination is not in its
-  // span: an odd out0 always has out1 set.
-  LinearLayout outside({{S("other"), {{1, 0}}}},
-                       {{S("out0"), 4}, {S("out1"), 2}},
-                       /*requireSurjective=*/false);
-  LinearLayout smaller({{S("other"), {{1, 1}}}},
-                       {{S("out0"), 2}, {S("out1"), 2}},
-                       /*requireSurjective=*/false);
-  LinearLayout wrongDims({{S("other"), {{1}}}}, {{S("different"), 2}},
-                         /*requireSurjective=*/false);
-
-  EXPECT_TRUE(isLinearLayoutImageSubset(subset, superset));
-  EXPECT_TRUE(isLinearLayoutImageSubset(smaller, superset));
-  EXPECT_FALSE(isLinearLayoutImageSubset(superset, subset));
-  EXPECT_FALSE(isLinearLayoutImageSubset(outside, superset));
-  EXPECT_FALSE(isLinearLayoutImageSubset(subset, wrongDims));
-}
-
 TEST_F(LayoutUtilsTest, GetRepsWithSubsetOfOutputDims) {
   LinearLayout cvt({{S("in"), {{1, 0}, {0, 1}}}}, {S("out0"), S("out1")});
   LinearLayout tile({{S("in"), {{1}}}}, {S("out0")});

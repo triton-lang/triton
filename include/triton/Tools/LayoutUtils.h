@@ -121,12 +121,6 @@ uint32_t getOutputBasisMask(const LinearLayout &layout,
 uint64_t getInputBasisMask(const LinearLayout &layout, StringAttr inDim,
                            ArrayRef<StringAttr> outDims);
 
-// Return whether every output in `subset`'s image is also in `superset`'s
-// image. Input dimensions may differ. Output dimension names must match, but
-// their order may differ; `subset`'s output dimensions may be smaller.
-bool isLinearLayoutImageSubset(const LinearLayout &subset,
-                               const LinearLayout &superset);
-
 struct IdentityFactor {
   int32_t size;
   LinearLayout quotient;

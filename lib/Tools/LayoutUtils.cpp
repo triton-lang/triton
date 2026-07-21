@@ -242,11 +242,6 @@ uint64_t getInputBasisMask(const LinearLayout &layout, StringAttr inDim,
   return mask;
 }
 
-bool isLinearLayoutImageSubset(const LinearLayout &subset,
-                               const LinearLayout &superset) {
-  return factorThrough(superset, subset).has_value();
-}
-
 IdentityFactor factorMaximalIdentityPrefix(const LinearLayout &layout,
                                            StringAttr inDim, StringAttr outDim,
                                            int32_t maxSize) {

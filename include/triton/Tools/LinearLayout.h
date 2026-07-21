@@ -903,8 +903,7 @@ std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout);
 // when their output dimensions are incompatible, or when the augmented matrix
 // exceeds the existing 64-column solver capacity. Free variables in X are set
 // to zero.
-std::optional<LinearLayout> factorThrough(const LinearLayout &A,
-                                          const LinearLayout &B);
+std::optional<LinearLayout> lstsq(const LinearLayout &A, const LinearLayout &B);
 
 } // namespace mlir::triton
 

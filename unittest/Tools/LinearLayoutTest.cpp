@@ -394,7 +394,7 @@ TEST_F(LinearLayoutTest, InvertAndCompose_Simple) {
   EXPECT_EQ(composition.compose(l2), l1);
 }
 
-TEST_F(LinearLayoutTest, FactorThrough) {
+TEST_F(LinearLayoutTest, Lstsq) {
   LinearLayout superset({{S("storage"), {{1, 1}, {2, 0}}}},
                         {{S("x"), 4}, {S("y"), 2}},
                         /*requireSurjective=*/false);
@@ -404,12 +404,12 @@ TEST_F(LinearLayoutTest, FactorThrough) {
                        /*requireSurjective=*/false);
   LinearLayout wrongDims({{S("value"), {{1}}}}, {S("z")});
 
-  auto factor = factorThrough(superset, subset);
+  auto factor = lstsq(superset, subset);
   ASSERT_TRUE(factor);
   EXPECT_EQ(factor->compose(superset),
             subset.transposeOuts(llvm::to_vector(superset.getOutDimNames())));
-  EXPECT_FALSE(factorThrough(superset, outside));
-  EXPECT_FALSE(factorThrough(superset, wrongDims));
+  EXPECT_FALSE(lstsq(superset, outside));
+  EXPECT_FALSE(lstsq(superset, wrongDims));
 }
 
 TEST_F(LinearLayoutTest, InvertAndComposeLargerA) {

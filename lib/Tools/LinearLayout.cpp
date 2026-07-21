@@ -940,8 +940,14 @@ std::unique_ptr<uint64_t[]> concatMatrices(const LinearLayout &A,
 }
 } // namespace
 
-std::optional<LinearLayout> factorThrough(const LinearLayout &A,
-                                          const LinearLayout &B) {
+std::optional<LinearLayout> lstsq(const LinearLayout &A,
+                                  const LinearLayout &B) {
+  // Solve the least square system AX = B
+  // and return the least square solution X by computing RREF and setting
+  // the free variables to zero.
+  // A and B may not be surjective, but Im(B) must be contained in Im(A).
+  // Sketch of the algorithm:
+  // https://github.com/triton-lang/triton/pull/5309#discussion_r1869084111
   SmallDenseSet<StringAttr> aOutDims(A.getOutDimNames().begin(),
                                      A.getOutDimNames().end());
   SmallDenseSet<StringAttr> bOutDims(B.getOutDimNames().begin(),
@@ -973,10 +979,11 @@ std::optional<LinearLayout> factorThrough(const LinearLayout &A,
     if (row == 0)
       continue;
     int c = __builtin_ctzll(row);
+    // Precondition broken. Im(B) not contained in Im(A).
     if (c >= numColsA)
       return std::nullopt;
     assert(pivotRowOfCol[c] == -1 &&
-           "duplicate pivot => matrix is not in RREF");
+           "duplicate pivot => matrix not in RREF or A not injective");
     pivotRowOfCol[c] = r;
   }
 
@@ -1015,11 +1022,12 @@ std::optional<LinearLayout> factorThrough(const LinearLayout &A,
 }
 
 LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
-  // TODO(Lezcano) Make friend and perhaps rename to `convertFrom` or `lstsq`
+  // TODO(Lezcano) Make friend and perhaps rename to `convertFrom`
   // For this, we need to implement our LLVM lowerings by inverting the "outer"
   // layout, and then iterating over the elements from the "this" layout and
   // fetching the corresponding element from the "outer" layout. This exercises
-  // the broadcasting that we incentivise by setting free variables to zero.
+  // the broadcasting that we incentivise via choosing the minimum norm solution
+  // in lstsq.
 
   // The order of dims does not matter. We choose to transpose outer
   auto outDims = llvm::to_vector(getOutDimNames());
@@ -1038,8 +1046,9 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   // Imagine we have two layouts with `warps = [[0, 0],  [0, 0]]`
   // (broadcasting) on both layouts. We could map any warp to any warp in the
   // conversion. Now, we want to map them as the identity map, to mark that
-  // nothing needs to be done there (factorThrough would map all the warps to
-  // the zero warp). The heuristic here is as follows:
+  // nothing needs to be done there (lstsq would map all the warps to
+  // the zero warp, the minimum norm solution). The heuristic here is as
+  // follows:
   // - If a dimension is the same for both layouts, we want to map it as the
   // identity
   //   Equivalently, we don't add it to the conversion
@@ -1076,7 +1085,7 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
 
   // If one is empty, the other must be empty as well.
   assert((ANonIdentityInDims.empty()) == (BNonIdentityInDims.empty()));
-  auto maybeRet = factorThrough(AReduced, BReduced);
+  auto maybeRet = lstsq(AReduced, BReduced);
   assert(maybeRet && "outer layout does not cover this layout's image");
   auto ret = std::move(*maybeRet);
 
