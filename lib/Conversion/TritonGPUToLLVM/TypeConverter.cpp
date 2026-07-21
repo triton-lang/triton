@@ -40,8 +40,11 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     return convertAsyncTokenType(type);
   });
 
-  convertFP8Type<mlir::Float8E4M3FNUZType, mlir::Float8E4M3FNType,
-                 mlir::Float8E5M2Type, mlir::Float8E5M2FNUZType>();
+  convertStorage8FloatType<
+      mlir::Float4E2M1FNType, mlir::Float6E2M3FNType,
+      mlir::Float6E3M2FNType, mlir::Float8E8M0FNUType,
+      mlir::Float8E4M3FNUZType, mlir::Float8E4M3FNType,
+      mlir::Float8E5M2Type, mlir::Float8E5M2FNUZType>();
 }
 
 Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(

@@ -272,13 +272,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 #packed_blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @packed_arith
-  // CHECK: ttng.packed_arith add, f32x2, {{.*}} axis = 1
-  // CHECK: ttng.packed_arith mul, f16x2, {{.*}} axis = 1
-  // CHECK: ttng.packed_arith fma, bf16x2, {{.*}} axis = 1
-  // CHECK: ttng.packed_arith add, f32x2, {{.*}} axis = 1
-  // CHECK: ttng.packed_arith sub, bf16x2, {{.*}} axis = 1
-  // CHECK: ttng.packed_arith mul, f16x2, {{.*}} axis = 1
-  // CHECK: ttng.packed_arith fma, f32x2, {{.*}} axis = 1
+  // CHECK: ttng.packed_arith add, f32x2, [f32x2, f32x2], {{.*}} axis = 1
+  // CHECK: ttng.packed_arith mul, f16x2, [f16x2, f16x2], {{.*}} axis = 1
+  // CHECK: ttng.packed_arith fma, bf16x2, [bf16x2, bf16x2, bf16x2], {{.*}} axis = 1
+  // CHECK: ttng.packed_arith add, f32x2, [f16x2, f32x2], {{.*}} axis = 1
+  // CHECK: ttng.packed_arith sub, bf16x2, [f32x2, f32x2], {{.*}} axis = 1
+  // CHECK: ttng.packed_arith mul, f16x2, [f16x2, bf16x2], {{.*}} axis = 1
+  // CHECK: ttng.packed_arith fma, f32x2, [bf16x2, f32x2, f32x2], {{.*}} axis = 1
+  // CHECK: ttng.packed_arith min, f16x2, [f16x2, f16x2], {{.*}} axis = 1
+  // CHECK: ttng.packed_arith max, bf16x2, [bf16x2, bf16x2], {{.*}} axis = 1
   tt.func @packed_arith(
       %f32a: tensor<128x2xf32, #packed_blocked>,
       %f32b: tensor<128x2xf32, #packed_blocked>,
@@ -288,13 +290,39 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %bf16a: tensor<128x2xbf16, #packed_blocked>,
       %bf16b: tensor<128x2xbf16, #packed_blocked>,
       %bf16c: tensor<128x2xbf16, #packed_blocked>) {
-    %f32 = ttng.packed_arith add, f32x2, %f32a, %f32b axis = 1 : (tensor<128x2xf32, #packed_blocked>, tensor<128x2xf32, #packed_blocked>) -> tensor<128x2xf32, #packed_blocked>
-    %f16 = ttng.packed_arith mul, f16x2, %f16a, %f16b axis = 1 : (tensor<128x2xf16, #packed_blocked>, tensor<128x2xf16, #packed_blocked>) -> tensor<128x2xf16, #packed_blocked>
-    %bf16 = ttng.packed_arith fma, bf16x2, %bf16a, %bf16b, %bf16c axis = 1 : (tensor<128x2xbf16, #packed_blocked>, tensor<128x2xbf16, #packed_blocked>, tensor<128x2xbf16, #packed_blocked>) -> tensor<128x2xbf16, #packed_blocked>
-    %up = ttng.packed_arith add, f32x2, %f16a, %f32b axis = 1 : (tensor<128x2xf16, #packed_blocked>, tensor<128x2xf32, #packed_blocked>) -> tensor<128x2xf32, #packed_blocked>
-    %down = ttng.packed_arith sub, bf16x2, %f32a, %f32b axis = 1 : (tensor<128x2xf32, #packed_blocked>, tensor<128x2xf32, #packed_blocked>) -> tensor<128x2xbf16, #packed_blocked>
-    %cross = ttng.packed_arith mul, f16x2, %f16a, %bf16b axis = 1 : (tensor<128x2xf16, #packed_blocked>, tensor<128x2xbf16, #packed_blocked>) -> tensor<128x2xf16, #packed_blocked>
-    %mixed_fma = ttng.packed_arith fma, f32x2, %bf16a, %f32b, %f32c axis = 1 : (tensor<128x2xbf16, #packed_blocked>, tensor<128x2xf32, #packed_blocked>, tensor<128x2xf32, #packed_blocked>) -> tensor<128x2xf32, #packed_blocked>
+    %f32 = ttng.packed_arith add, f32x2, [f32x2, f32x2], %f32a, %f32b axis = 1 : (tensor<128x2xf32, #packed_blocked>, tensor<128x2xf32, #packed_blocked>) -> tensor<128x2xf32, #packed_blocked>
+    %f16 = ttng.packed_arith mul, f16x2, [f16x2, f16x2], %f16a, %f16b axis = 1 : (tensor<128x2xf16, #packed_blocked>, tensor<128x2xf16, #packed_blocked>) -> tensor<128x2xf16, #packed_blocked>
+    %bf16 = ttng.packed_arith fma, bf16x2, [bf16x2, bf16x2, bf16x2], %bf16a, %bf16b, %bf16c axis = 1 : (tensor<128x2xbf16, #packed_blocked>, tensor<128x2xbf16, #packed_blocked>, tensor<128x2xbf16, #packed_blocked>) -> tensor<128x2xbf16, #packed_blocked>
+    %up = ttng.packed_arith add, f32x2, [f16x2, f32x2], %f16a, %f32b axis = 1 : (tensor<128x2xf16, #packed_blocked>, tensor<128x2xf32, #packed_blocked>) -> tensor<128x2xf32, #packed_blocked>
+    %down = ttng.packed_arith sub, bf16x2, [f32x2, f32x2], %f32a, %f32b axis = 1 : (tensor<128x2xf32, #packed_blocked>, tensor<128x2xf32, #packed_blocked>) -> tensor<128x2xbf16, #packed_blocked>
+    %cross = ttng.packed_arith mul, f16x2, [f16x2, bf16x2], %f16a, %bf16b axis = 1 : (tensor<128x2xf16, #packed_blocked>, tensor<128x2xbf16, #packed_blocked>) -> tensor<128x2xf16, #packed_blocked>
+    %mixed_fma = ttng.packed_arith fma, f32x2, [bf16x2, f32x2, f32x2], %bf16a, %f32b, %f32c axis = 1 : (tensor<128x2xbf16, #packed_blocked>, tensor<128x2xf32, #packed_blocked>, tensor<128x2xf32, #packed_blocked>) -> tensor<128x2xf32, #packed_blocked>
+    %min = ttng.packed_arith min, f16x2, [f16x2, f16x2], %f16a, %f16b axis = 1 : (tensor<128x2xf16, #packed_blocked>, tensor<128x2xf16, #packed_blocked>) -> tensor<128x2xf16, #packed_blocked>
+    %max = ttng.packed_arith max, bf16x2, [bf16x2, bf16x2], %bf16a, %bf16b axis = 1 : (tensor<128x2xbf16, #packed_blocked>, tensor<128x2xbf16, #packed_blocked>) -> tensor<128x2xbf16, #packed_blocked>
+    tt.return
+  }
+}
+
+// The alternate packed instructions use byte-sized logical elements. E2M1 has
+// both a compact 16-bit register form and a byte-padded 32-bit register form.
+#packed_x4 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @packed_arith_alternate_types
+  // CHECK: ttng.packed_arith add, e4m3x4, [e5m2x4, e4m3x4],
+  // CHECK: ttng.packed_arith sub, e5m2x4, [e2m1x4, e5m2x4],
+  // CHECK: ttng.packed_arith mul, e4m3x4, [e3m2x4, e2m3x4],
+  // CHECK: ttng.packed_arith fma, e5m2x4, [e2m1p4x4, ue8m0x4, e5m2x4],
+  tt.func @packed_arith_alternate_types(
+      %e5m2: tensor<128x4xf8E5M2, #packed_x4>,
+      %e4m3: tensor<128x4xf8E4M3FN, #packed_x4>,
+      %e3m2: tensor<128x4xf6E3M2FN, #packed_x4>,
+      %e2m3: tensor<128x4xf6E2M3FN, #packed_x4>,
+      %e2m1: tensor<128x4xf4E2M1FN, #packed_x4>,
+      %ue8m0: tensor<128x4xf8E8M0FNU, #packed_x4>) {
+    %add = ttng.packed_arith add, e4m3x4, [e5m2x4, e4m3x4], %e5m2, %e4m3 axis = 1 : (tensor<128x4xf8E5M2, #packed_x4>, tensor<128x4xf8E4M3FN, #packed_x4>) -> tensor<128x4xf8E4M3FN, #packed_x4>
+    %sub = ttng.packed_arith sub, e5m2x4, [e2m1x4, e5m2x4], %e2m1, %e5m2 axis = 1 : (tensor<128x4xf4E2M1FN, #packed_x4>, tensor<128x4xf8E5M2, #packed_x4>) -> tensor<128x4xf8E5M2, #packed_x4>
+    %mul = ttng.packed_arith mul, e4m3x4, [e3m2x4, e2m3x4], %e3m2, %e2m3 axis = 1 : (tensor<128x4xf6E3M2FN, #packed_x4>, tensor<128x4xf6E2M3FN, #packed_x4>) -> tensor<128x4xf8E4M3FN, #packed_x4>
+    %fma = ttng.packed_arith fma, e5m2x4, [e2m1p4x4, ue8m0x4, e5m2x4], %e2m1, %ue8m0, %e5m2 axis = 1 : (tensor<128x4xf4E2M1FN, #packed_x4>, tensor<128x4xf8E8M0FNU, #packed_x4>, tensor<128x4xf8E5M2, #packed_x4>) -> tensor<128x4xf8E5M2, #packed_x4>
     tt.return
   }
 }

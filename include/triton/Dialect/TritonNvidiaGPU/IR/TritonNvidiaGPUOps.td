@@ -49,6 +49,12 @@ class TTNG_Op<string mnemonic, list<Trait> traits = []> :
        !listconcat(traits, [VerifyTensorLayoutsTrait, VerifyMemDescLayoutsTrait])> {
 }
 
+def TTNG_PackedArithFloat : AnyTypeOf<[
+  F4E2M1FN, F6E2M3FN, F6E3M2FN, F8E8M0FNU, F8E4M3FN, F8E5M2,
+  F16, BF16, F32
+], "packed arithmetic floating-point">;
+def TTNG_PackedArithTensor : RankedTensorOf<[TTNG_PackedArithFloat]>;
+
 def TTNG_PackedArithOp : TTNG_Op<"packed_arith", [Pure]> {
   let summary = "Apply elementwise arithmetic using a packed PTX instruction";
 
@@ -57,24 +63,32 @@ def TTNG_PackedArithOp : TTNG_Op<"packed_arith", [Pure]> {
     adjacent elements along `axis` into one packed PTX instruction. The result
     has the same shape and layout as every operand.
 
-    `f32x2`, `f16x2`, and `bf16x2` group two values of the corresponding
-    floating-point type. Operand element types may differ for PTX 9.4 mixed
-    precision forms, but must match a signature supported by the selected
-    operation and result packed type. The selected axis must be contiguous
-    within each thread by at least two elements. Within each pair, the element
-    with the lower coordinate along `axis` occupies the least-significant lane.
+    `packed_type` is the PTX destination type. `operand_packed_types` contains
+    one PTX type for each operand. Keeping the operand types explicit is
+    necessary because compact `e2m1x4` and byte-padded `e2m1p4x4` use the same
+    scalar element type but different register representations.
+
+    The op supports homogeneous x2 add/sub/mul/fma, homogeneous f16x2/bf16x2
+    min/max, the PTX 9.4 mixed `f32x2`/`f16x2`/`bf16x2` instructions, and the
+    PTX 9.4 alternate FP8/FP6/FP4/UE8M0 x4 add/sub/mul/fma instructions. The
+    selected axis must be contiguous within each thread by at least the packed
+    width. Within each pack, elements with increasing coordinates along `axis`
+    occupy increasingly significant lanes.
   }];
 
   let arguments = (ins
     TTNG_PackedArithOpKindAttr:$op_kind,
     TTNG_PackedArithTypeAttr:$packed_type,
-    Variadic<TT_FloatTensor>:$operands,
+    DenseI32ArrayAttr:$operand_packed_types,
+    Variadic<TTNG_PackedArithTensor>:$operands,
     I32Attr:$axis
   );
-  let results = (outs TT_FloatTensor:$result);
+  let results = (outs TTNG_PackedArithTensor:$result);
 
   let assemblyFormat = [{
-    $op_kind `,` $packed_type `,` $operands `axis` `=` $axis attr-dict
+    $op_kind `,` $packed_type `,`
+    `[` custom<PackedArithTypes>($operand_packed_types) `]` `,`
+    $operands `axis` `=` $axis attr-dict
     `:` functional-type($operands, $result)
   }];
 
