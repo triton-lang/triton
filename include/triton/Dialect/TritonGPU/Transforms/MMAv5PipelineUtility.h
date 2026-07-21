@@ -77,6 +77,13 @@ TMEMAllocOp createTMemAlloc(OpBuilder &builder, TMEMAllocOp oldTMemAllocOp,
 // mma to read back the accumulator for RMW.
 bool hasAccReadModifyWrite(MMAv5OpInterface mma, scf::ForOp forOp);
 
+// Return true if the accumulator of `mma` is loaded inside the loop and that
+// loaded value (transitively) feeds an operand of a *different* MMAv5 op in the
+// loop. When combined with a read-modify-write accumulator, this makes the
+// accumulator unsafe to multi-buffer: the pipeliner rotates it into a register
+// value and the other MMA reads a desynchronized copy.
+bool isAccReadByAnotherMMA(MMAv5OpInterface mma, scf::ForOp forOp);
+
 } // namespace triton::nvidia_gpu
 } // namespace mlir
 
