@@ -17,7 +17,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // CHECK-LABEL: @convert_layout_swizzled
 tt.func @convert_layout_swizzled(%arg0: tensor<256x256xi32, #blocked1>) {
-  // CHECK-NEXT: allocation.offset = 0 : i32, allocation.size = 131072 : i32
+  // CHECK-NEXT: allocation.offset = 0 : i32
   %0 = ttg.convert_layout %arg0 : tensor<256x256xi32, #blocked1> -> tensor<256x256xi32, #blocked2>
   tt.return
 }
@@ -33,9 +33,8 @@ tt.func @convert_layout_swizzled(%arg0: tensor<256x256xi32, #blocked1>) {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32} {
 
 // CHECK-LABEL: @ws_tensordesc_2d_capture
-// CHECK-SAME: attributes {allocation.offset = 48 : i32}
+// CHECK: allocation.offset = 48 : i32
 tt.func @ws_tensordesc_2d_capture(%desc: !tt.tensordesc<64x64xf16>) {
-  // CHECK: ttg.warp_specialize({{.*}}) attributes {allocation.offset = 0 : i32, allocation.size = 48 : i32
   ttg.warp_specialize(%desc) attributes {warpGroupStartIds = array<i32: 4>}
   default {
     ttg.warp_yield
@@ -57,9 +56,8 @@ tt.func @ws_tensordesc_2d_capture(%desc: !tt.tensordesc<64x64xf16>) {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32} {
 
 // CHECK-LABEL: @ws_tensordesc_5d_capture
-// CHECK-SAME: attributes {allocation.offset = 80 : i32}
+// CHECK: allocation.offset = 80 : i32
 tt.func @ws_tensordesc_5d_capture(%desc: !tt.tensordesc<8x8x8x16x16xf16>) {
-  // CHECK: ttg.warp_specialize({{.*}}) attributes {allocation.offset = 0 : i32, allocation.size = 80 : i32
   ttg.warp_specialize(%desc) attributes {warpGroupStartIds = array<i32: 4>}
   default {
     ttg.warp_yield
@@ -67,52 +65,6 @@ tt.func @ws_tensordesc_5d_capture(%desc: !tt.tensordesc<8x8x8x16x16xf16>) {
   partition0(%arg0: !tt.tensordesc<8x8x8x16x16xf16>) num_warps(4) {
     ttg.warp_return
   } : (!tt.tensordesc<8x8x8x16x16xf16>) -> ()
-  tt.return
-}
-
-}
-
-// -----
-
-#atomic_broadcast = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-
-// CHECK-LABEL: module
-// CHECK-SAME: ttg.shared = 64 : i32
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-
-// CHECK-LABEL: @buffer_atomic_scratch_size
-tt.func @buffer_atomic_scratch_size(
-    %base: !tt.ptr<i32>,
-    %offsets: tensor<16xi32, #atomic_broadcast>,
-    %values: tensor<16xi32, #atomic_broadcast>,
-    %out: tensor<16x!tt.ptr<i32>, #atomic_broadcast>) {
-  // CHECK: amdg.buffer_atomic_rmw {{.*}} {allocation.offset = 0 : i32, allocation.size = 64 : i32}
-  %old = amdg.buffer_atomic_rmw add, acq_rel, gpu, %values, %base[%offsets]
-      : tensor<16xi32, #atomic_broadcast>
-  tt.store %out, %old : tensor<16x!tt.ptr<i32>, #atomic_broadcast>
-  tt.return
-}
-
-}
-
-// -----
-
-#atomic_broadcast_2cta = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
-
-// CHECK-LABEL: module
-// CHECK-SAME: ttg.shared = 64 : i32
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-
-// CHECK-LABEL: @buffer_atomic_cross_cta_scratch_size
-tt.func @buffer_atomic_cross_cta_scratch_size(
-    %base: !tt.ptr<i32>,
-    %offsets: tensor<16xi32, #atomic_broadcast_2cta>,
-    %values: tensor<16xi32, #atomic_broadcast_2cta>,
-    %out: tensor<16x!tt.ptr<i32>, #atomic_broadcast_2cta>) {
-  // CHECK: amdg.buffer_atomic_rmw {{.*}} {allocation.offset = 0 : i32, allocation.size = 64 : i32}
-  %old = amdg.buffer_atomic_rmw add, acq_rel, gpu, %values, %base[%offsets]
-      : tensor<16xi32, #atomic_broadcast_2cta>
-  tt.store %out, %old : tensor<16x!tt.ptr<i32>, #atomic_broadcast_2cta>
   tt.return
 }
 

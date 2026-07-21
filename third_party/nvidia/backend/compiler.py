@@ -434,8 +434,14 @@ class CUDABackend(BaseBackend):
             raise RuntimeError(
                 "Address Sanitizer Error: Address sanitizer is currently only supported on the AMD backend")
         llvm_mod = llvm.to_module(mod, context)
-        proc = sm_arch_from_capability(capability)
-        features = get_features(options, self.target.arch)
+
+        if capability == 107:
+            cap_llvm = 100
+        else:
+            cap_llvm = capability
+
+        proc = sm_arch_from_capability(cap_llvm)
+        features = get_features(options, cap_llvm)
         triple = 'nvptx64-nvidia-cuda'
         nvidia.set_short_ptr()
         llvm.attach_datalayout(llvm_mod, triple, proc, features)
@@ -469,8 +475,14 @@ class CUDABackend(BaseBackend):
         ptx_version = get_ptx_version_from_options(opt, self.target.arch)
 
         triple = 'nvptx64-nvidia-cuda'
-        proc = sm_arch_from_capability(capability)
-        features = get_features(opt, self.target.arch)
+
+        if capability == 107:
+            cap_llvm = 100
+        else:
+            cap_llvm = capability
+
+        proc = sm_arch_from_capability(cap_llvm)
+        features = get_features(opt, cap_llvm)
         flags = ["nvptx-mad-wide-opt"]
         canonicalize_gep = "fpsan" in opt.instrumentation_mode
         ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False, canonicalize_gep)

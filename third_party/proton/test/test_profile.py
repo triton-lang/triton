@@ -13,6 +13,7 @@ import json
 import pytest
 from typing import NamedTuple
 import threading
+import time
 
 import triton.language as tl
 import triton.profiler.hooks.launch as proton_launch
@@ -1147,14 +1148,24 @@ def test_trace(tmp_path: pathlib.Path, device: str):
 
     with proton.scope("test"):
         foo[(1, )](x, y, x.size()[0], num_warps=4)
+        # Wait for the kernel to finish so that the kernel event is captured before the `test` scope ends.
+        torch.cuda.synchronize()
 
     proton.finalize()
 
     with temp_file.open() as f:
         data = json.load(f)
         trace_events = data["traceEvents"]
-        assert trace_events[-1]["name"] == "foo"
-        assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
+        kernel_event = next(event for event in trace_events if event.get("cat") == "kernel" and event["name"] == "foo")
+        scope_event = next(event for event in trace_events if event.get("cat") == "scope" and event["name"] == "test")
+        assert kernel_event["args"]["call_stack"] == ["ROOT", "test", "foo"]
+        assert scope_event["ts"] <= kernel_event["ts"]
+        assert kernel_event["ts"] + kernel_event["dur"] <= scope_event["ts"] + scope_event["dur"]
+        # ts=0 anchor for aligning with traces from other profilers
+        # (same contract as torch>=2.4 chrome traces).
+        base_time_ns = data["baseTimeNanoseconds"]
+        one_day_ns = 24 * 60 * 60 * 1_000_000_000
+        assert abs(time.time_ns() - base_time_ns) < one_day_ns
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
@@ -1247,6 +1258,7 @@ def test_trace_flexible_metrics_no_kernel_anchor(tmp_path: pathlib.Path):
         trace_events[0]["args"]["call_stack"],
         trace_events[0]["args"]["metrics"],
     ) == ("metric", "metric_only: <foo, 1.000000>", ["ROOT", "metric_only"], {"foo": "1.000000"})
+    assert isinstance(trace_events[0]["args"]["scope_id"], int)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph trace reconstruction")

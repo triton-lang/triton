@@ -5,7 +5,6 @@ __all__ = [
     "allocate_mbarrier",
     "arrive",
     "expect",
-    "fence_init_release_cluster",
     "init",
     "invalidate",
     "MBarrierLayout",
@@ -39,15 +38,6 @@ def arrive(mbarrier, *, count=1, pred=True, _semantic=None):
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
     """
     count = _unwrap_if_constexpr(count)
+    cta_mask = 0
     pred = _semantic.to_tensor(pred)
-    _semantic.builder.create_mbarrier_arrive(mbarrier.handle, count, pred.handle)
-
-
-@builtin
-def fence_init_release_cluster(_semantic=None):
-    """
-    Fence that makes prior mbarrier initialization visible across the CTA cluster.
-
-    Needs to be called together with cluster.barrier(relaxed=True).
-    """
-    _semantic.builder.create_fence_mbarrier_init_release_cluster()
+    _semantic.builder.create_mbarrier_arrive(mbarrier.handle, count, cta_mask, pred.handle)

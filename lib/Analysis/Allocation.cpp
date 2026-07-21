@@ -10,7 +10,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -31,7 +30,6 @@ static size_t getPartitionIndex(size_t offset, size_t partitionSize) {
 }
 
 namespace ttng = mlir::triton::nvidia_gpu;
-namespace tti = mlir::triton::instrument;
 
 namespace mlir {
 
@@ -114,8 +112,6 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
            getBitwidth(dstTy) / 8;
   }
   if (auto cvtLayout = dyn_cast<gpu::ConvertLayoutOp>(op)) {
-    if (cvtUsesForcedWarpShuffle(cvtLayout))
-      return 0;
     auto srcTy = cvtLayout.getSrc().getType();
     auto dstTy = cvtLayout.getType();
     if (!cvtNeedsSharedMemory(srcTy, dstTy))
@@ -130,9 +126,8 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     if (!poll.getTimeout())
       return 0;
   }
-  if (isa<gpu::LocalAtomicScatterRMWOp, AtomicPollOp, AtomicRMWOp, AtomicCASOp,
-          tti::ExperimentalGSanAtomicRMWOp, tti::ExperimentalGSanAtomicCASOp>(
-          op)) {
+  if (isa<gpu::LocalAtomicScatterRMWOp, AtomicPollOp>(op) ||
+      isa<AtomicOpInterface>(op)) {
     auto value = op->getOperand(0);
     auto smemShape = getRepShapeForAtomic(op->getResult(0));
     auto elems = getNumScratchElements(smemShape);

@@ -11,6 +11,7 @@ from triton._internal_testing import (
     is_ampere_or_newer,
     is_blackwell,
     is_blackwell_ultra,
+    is_rubin,
     is_hip_rdna,
     is_hip_rdna3,
     is_hip_rdna4,
@@ -27,6 +28,7 @@ from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mma_v2
 from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
 from triton.experimental.gluon.language.nvidia import hopper
+from triton.experimental.gluon.language.nvidia import rubin
 from triton.experimental.gluon.language.nvidia.blackwell import tma as blackwell_tma
 from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_async_copy
 from triton.experimental.gluon.language.extra import libdevice
@@ -186,10 +188,7 @@ def test_async_shared_store():
 
     compiled = async_shared_store_kernel[(1, )](out, block, num_warps=4, num_ctas=2)
 
-    ptx = compiled.asm["ptx"]
-    assert "mbarrier.arrive.expect_tx.release.cluster.shared::cta.b64" in ptx
-    assert "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes" in ptx
-    assert "mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64" in ptx
+    assert "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes" in compiled.asm["ptx"]
     torch.testing.assert_close(out, torch.arange(block, device="cuda", dtype=torch.int32))
 
 
@@ -200,10 +199,7 @@ def test_async_shared_store_packed_f16():
 
     compiled = async_shared_store_f16_kernel[(1, )](out, block, num_warps=4, num_ctas=2)
 
-    ptx = compiled.asm["ptx"]
-    assert "mbarrier.arrive.expect_tx.release.cluster.shared::cta.b64" in ptx
-    assert "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32" in ptx
-    assert "mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64" in ptx
+    assert "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32" in compiled.asm["ptx"]
     torch.testing.assert_close(out, torch.arange(block, device="cuda", dtype=torch.float16))
 
 
@@ -740,6 +736,74 @@ def test_async_copy_mbarrier():
     async_copy_mbarrier_kernel[(1, )](out, inp, inp.shape[0], XBLOCK=32, YBLOCK=32)
     torch.testing.assert_close(out[:20], inp)
     torch.testing.assert_close(out[20:], torch.zeros((12, 32), **tensor_opts))
+
+
+# Equivalence-class multicast: cta_mask selects which CTA-ID bits to multicast
+# along.  Two CTAs share a class when (id_a & ~mask) == (id_b & ~mask).
+#
+#   CTA ID   0x0  0x1  0x2  0x3  0x4  0x5  0x6  0x7
+#   & ~0x5   0x0  0x0  0x2  0x2  0x0  0x0  0x2  0x2
+#   classes: {0,1,4,5}, {2,3,6,7}  (groups of 4)
+#
+# Multicast requires the identity CGA layout, so two_ctas barriers are not
+# supported. All legal cta_mask values are tested; cta_mask=0 exercises the
+# non-multicast path.
+@pytest.mark.parametrize("num_ctas", [2, 4, 8])
+@pytest.mark.parametrize("cta_mask", range(8))
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+def test_mbarrier_arrive_multicast(num_ctas, cta_mask):
+    if cta_mask >= num_ctas:
+        pytest.skip("cta_mask must be < num_ctas")
+    init_count = 1 << cta_mask.bit_count()
+
+    @gluon.jit
+    def kernel(out_ptr, cta_mask: ttgl.constexpr, init_count: ttgl.constexpr):
+        bar = rubin.mbarrier.allocate_mbarrier()
+        rubin.mbarrier.init(bar, count=init_count)
+        rubin.mbarrier.arrive(bar, cta_mask=cta_mask)
+        rubin.mbarrier.wait(bar, 0)
+        rubin.mbarrier.invalidate(bar)
+        ttgl.store(out_ptr + ttgl.program_id(0), ttgl.program_id(0))
+
+    out = torch.zeros(num_ctas, device="cuda", dtype=torch.int32)
+    compiled = kernel[(num_ctas, )](out, cta_mask, init_count, num_ctas=num_ctas, num_warps=4)
+
+    ttgir = compiled.asm["ttgir"]
+    if cta_mask:
+        assert f"ctaMask = {cta_mask} : i32" in ttgir, "Expected ctaMask in TTGIR"
+    else:
+        assert "ctaMask" not in ttgir, "Expected no ctaMask in TTGIR"
+
+    torch.testing.assert_close(out, torch.arange(num_ctas, device="cuda", dtype=torch.int32))
+
+
+@pytest.mark.parametrize("num_ctas", [2, 4, 8])
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+def test_mbarrier_arrive_broadcast_one_cta(num_ctas):
+
+    @gluon.jit
+    def kernel(out_ptr, cta_mask: ttgl.constexpr):
+        pid = ttgl.program_id(0)
+        cta_rank = ttgl.inline_asm_elementwise(
+            "mov.u32 $0, %cluster_ctarank;",
+            "=r",
+            [],
+            dtype=ttgl.int32,
+            is_pure=True,
+            pack=1,
+        )
+        bar = rubin.mbarrier.allocate_mbarrier()
+        rubin.mbarrier.init(bar, count=1)
+        # CTA 0 does a multicast arrive, all CTAs wait.
+        rubin.mbarrier.arrive(bar, cta_mask=cta_mask, pred=cta_rank == 0)
+        rubin.mbarrier.wait(bar, 0)
+        rubin.mbarrier.invalidate(bar)
+        ttgl.store(out_ptr + pid, pid)
+
+    out = torch.zeros(num_ctas, device="cuda", dtype=torch.int32)
+    kernel[(num_ctas, )](out, num_ctas - 1, num_ctas=num_ctas, num_warps=4)
+
+    torch.testing.assert_close(out, torch.arange(num_ctas, device="cuda", dtype=torch.int32))
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
@@ -4792,7 +4856,7 @@ def tmem_reduction_kernel(
     ttgl.store(red_ptr + offs_1d, reduced)
 
 
-@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires Blackwell Ultra")
+@pytest.mark.skipif(not (is_blackwell_ultra() or is_rubin()), reason="Requires Blackwell Ultra or Rubin")
 @pytest.mark.parametrize("red_op", ["min", "max"])
 @pytest.mark.parametrize("use_abs", [False, True])
 @pytest.mark.parametrize("propagate_nan", [tl.PropagateNan.NONE, tl.PropagateNan.ALL])
@@ -4883,7 +4947,8 @@ def test_clc_basic(num_ctas):
 
     dev_props = torch.cuda.get_device_properties("cuda")
     num_sms = dev_props.multi_processor_count
-    smem_size = dev_props.shared_memory_per_block_optin
+    device = triton.runtime.driver.active.get_current_device()
+    smem_size = max_shared_mem(device)
     grid = 2 * (num_sms // num_ctas)
 
     was_launched = torch.zeros([grid], dtype=torch.bool, device="cuda")
@@ -5157,3 +5222,140 @@ def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_K, a_format, b_format, VEC_SIZE,
     C_ref = A_ref @ B_ref.T
     C = mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga, multicast)
     torch.testing.assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
+
+
+@gluon.jit
+def tmem288k_simple_kernel(in_ptr, out_ptr, M: ttgl.constexpr, Ncol1: ttgl.constexpr, Ncol2: ttgl.constexpr,
+                           num_warps: ttgl.constexpr):
+    global_memory_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0])
+
+    offs_m = ttgl.arange(0, M, ttgl.SliceLayout(1, global_memory_layout))
+    offs_n128 = ttgl.arange(0, 128, ttgl.SliceLayout(0, global_memory_layout))
+    offs_n32 = ttgl.arange(0, 32, ttgl.SliceLayout(0, global_memory_layout))
+
+    N: ttgl.constexpr = Ncol1 + Ncol2
+
+    # Allocate some tensor memory.
+    tmem_layout: ttgl.constexpr = TensorMemoryLayout(
+        block=(128, 32),
+        col_stride=32 // in_ptr.dtype.element_ty.primitive_bitwidth,
+    )
+
+    tmem1 = allocate_tensor_memory(
+        element_ty=in_ptr.dtype.element_ty,
+        shape=[M, Ncol1],
+        layout=tmem_layout,
+    )
+    if Ncol2 > 0:
+        tmem2 = allocate_tensor_memory(
+            element_ty=in_ptr.dtype.element_ty,
+            shape=[M, Ncol2],
+            layout=tmem_layout,
+        )
+
+    # Get the register layout needed to access tensor memory from descriptors.
+    tmem_reg_layout1: ttgl.constexpr = tmem1.slice(0, 128).get_reg_layout(num_warps=num_warps)
+    if Ncol2 > 0:
+        tmem_reg_layout2: ttgl.constexpr = tmem2.slice(0, 32).get_reg_layout(num_warps=num_warps)
+
+    assert Ncol1 == 128 or Ncol1 == 256 or Ncol1 == 512
+
+    n1a: ttgl.constexpr = 0
+    offs = offs_m[:, None] * N + n1a + offs_n128[None, :]
+    input = ttgl.load(in_ptr + offs)
+    input = ttgl.convert_layout(input, tmem_reg_layout1)
+    tmem_slice = tmem1.slice(n1a, 128)
+    tmem_slice.store(input)
+
+    if Ncol1 > 128:
+        n1b: ttgl.constexpr = 128
+        offs = offs_m[:, None] * N + n1b + offs_n128[None, :]
+        input = ttgl.load(in_ptr + offs)
+        input = ttgl.convert_layout(input, tmem_reg_layout1)
+        tmem_slice = tmem1.slice(n1b, 128)
+        tmem_slice.store(input)
+
+    if Ncol1 > 256:
+        n1c: ttgl.constexpr = 256
+        offs = offs_m[:, None] * N + n1c + offs_n128[None, :]
+        input = ttgl.load(in_ptr + offs)
+        input = ttgl.convert_layout(input, tmem_reg_layout1)
+        tmem_slice = tmem1.slice(n1c, 128)
+        tmem_slice.store(input)
+
+        n1d: ttgl.constexpr = 384
+        offs = offs_m[:, None] * N + n1d + offs_n128[None, :]
+        input = ttgl.load(in_ptr + offs)
+        input = ttgl.convert_layout(input, tmem_reg_layout1)
+        tmem_slice = tmem1.slice(n1d, 128)
+        tmem_slice.store(input)
+
+    if Ncol2 > 0:
+        n2a: ttgl.constexpr = 0
+        offs = offs_m[:, None] * N + Ncol1 + n2a + offs_n32[None, :]
+        input = ttgl.load(in_ptr + offs)
+        input = ttgl.convert_layout(input, tmem_reg_layout2)
+        tmem_slice = tmem2.slice(n2a, 32)
+        tmem_slice.store(input)
+
+    if Ncol2 > 32:
+        n2b: ttgl.constexpr = 32
+        offs = offs_m[:, None] * N + Ncol1 + n2b + offs_n32[None, :]
+        input = ttgl.load(in_ptr + offs)
+        input = ttgl.convert_layout(input, tmem_reg_layout2)
+        tmem_slice = tmem2.slice(n2b, 32)
+        tmem_slice.store(input)
+
+    offs = offs_m[:, None] * N + n1a + offs_n128[None, :]
+    tmem_slice = tmem1.slice(n1a, 128)
+    output = tmem_slice.load(tmem_reg_layout1)
+    output = ttgl.convert_layout(output, global_memory_layout)
+    ttgl.store(out_ptr + offs, output)
+
+    if Ncol1 > 128:
+        offs = offs_m[:, None] * N + n1b + offs_n128[None, :]
+        tmem_slice = tmem1.slice(n1b, 128)
+        output = tmem_slice.load(tmem_reg_layout1)
+        output = ttgl.convert_layout(output, global_memory_layout)
+        ttgl.store(out_ptr + offs, output)
+
+    if Ncol1 > 256:
+        offs = offs_m[:, None] * N + n1c + offs_n128[None, :]
+        tmem_slice = tmem1.slice(n1c, 128)
+        output = tmem_slice.load(tmem_reg_layout1)
+        output = ttgl.convert_layout(output, global_memory_layout)
+        ttgl.store(out_ptr + offs, output)
+
+        offs = offs_m[:, None] * N + n1d + offs_n128[None, :]
+        tmem_slice = tmem1.slice(n1d, 128)
+        output = tmem_slice.load(tmem_reg_layout1)
+        output = ttgl.convert_layout(output, global_memory_layout)
+        ttgl.store(out_ptr + offs, output)
+
+    if Ncol2 > 0:
+        offs = offs_m[:, None] * N + Ncol1 + n2a + offs_n32[None, :]
+        tmem_slice = tmem2.slice(n2a, 32)
+        output = tmem_slice.load(tmem_reg_layout2)
+        output = ttgl.convert_layout(output, global_memory_layout)
+        ttgl.store(out_ptr + offs, output)
+
+    if Ncol2 > 32:
+        offs = offs_m[:, None] * N + Ncol1 + n2b + offs_n32[None, :]
+        tmem_slice = tmem2.slice(n2b, 32)
+        output = tmem_slice.load(tmem_reg_layout2)
+        output = ttgl.convert_layout(output, global_memory_layout)
+        ttgl.store(out_ptr + offs, output)
+
+
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+@pytest.mark.parametrize("Ncol1", [256, 512])
+@pytest.mark.parametrize("Ncol2", [32, 64])
+def test_tmem288k_simple(Ncol1: int, Ncol2: int):
+    M = 128
+    N = Ncol1 + Ncol2
+    input = torch.randn(M, N, dtype=torch.float32).to(device="cuda")
+    output = torch.empty_like(input)
+
+    num_warps = 4
+    tmem288k_simple_kernel[(1, )](input, output, M, Ncol1, Ncol2, num_warps=num_warps)
+    torch.testing.assert_close(input.cpu(), output.cpu(), atol=0, rtol=0)
