@@ -407,11 +407,54 @@ bool isStreamCaptureEndOperation(rocprofiler_tracing_operation_t op) {
 
 // ---- Kernel dispatch processing (matches main's GPUProfiler interface) ----
 
+// rocprofiler-sdk does not guarantee that kernel dispatch records are ordered
+// by launch, even for kernels on the same stream. Track the number of dispatch
+// records expected in each phase so a later phase cannot make an earlier,
+// still-active phase appear complete.
+class KernelPhaseTracker {
+public:
+  void record(const DataToEntryMap &dataToEntry) {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (const auto &[data, entry] : dataToEntry)
+      ++phaseInstances[data][entry.phase];
+  }
+
+  void complete(const DataToEntryMap &dataToEntry, DataPhases &dataPhases) {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (const auto &[data, entry] : dataToEntry) {
+      auto dataIt = phaseInstances.find(data);
+      if (dataIt == phaseInstances.end())
+        continue;
+
+      auto &instances = dataIt->second;
+      auto phaseIt = instances.find(entry.phase);
+      if (phaseIt == instances.end() || phaseIt->second == 0)
+        continue;
+      if (--phaseIt->second != 0)
+        continue;
+
+      size_t lastCompletePhase = Data::kNoCompletePhase;
+      while (!instances.empty() && instances.begin()->second == 0) {
+        lastCompletePhase = instances.begin()->first;
+        instances.erase(instances.begin());
+      }
+      if (lastCompletePhase != Data::kNoCompletePhase)
+        detail::updateDataPhases(dataPhases, data, lastCompletePhase);
+      if (instances.empty())
+        phaseInstances.erase(dataIt);
+    }
+  }
+
+private:
+  std::mutex mutex;
+  std::map<Data *, std::map<size_t, size_t>> phaseInstances;
+};
+
 void processKernelRecord(
     RocprofSDKProfiler &profiler,
     RocprofSDKProfiler::CorrIdToExternIdMap &corrIdToExternId,
     RocprofSDKProfiler::ExternIdToStateMap &externIdToState,
-    std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
+    KernelPhaseTracker &phaseTracker, DataPhases &dataPhases,
     const std::string &kernelName,
     const rocprofiler_buffer_tracing_kernel_dispatch_record_t *record,
     uint64_t streamId) {
@@ -444,9 +487,9 @@ void processKernelRecord(
       } else {
         entry.upsertMetric(std::move(metric));
       }
-      detail::updateDataPhases(dataPhases, data, entry.phase);
     }
   }
+  phaseTracker.complete(dataToEntry, dataPhases);
 
   bool complete = false;
   externIdToState.withWrite(externId,
@@ -525,7 +568,7 @@ void queueGraphMetrics(PendingGraphPool *pendingGraphPool,
 
 void processGraphKernelRecord(
     RocprofSDKProfiler::ExternIdToStateMap &externIdToState,
-    std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
+    KernelPhaseTracker &phaseTracker, DataPhases &dataPhases,
     const std::string &kernelName,
     const rocprofiler_buffer_tracing_kernel_dispatch_record_t *record,
     const GraphDispatchCorrelation &graphCorrelation, uint64_t streamId) {
@@ -565,7 +608,6 @@ void processGraphKernelRecord(
         if (auto metric =
                 convertDispatchToMetric(record, streamId, isMetricKernel)) {
           entry.upsertLinkedMetric(std::move(metric), targetEntryIdIt->second);
-          detail::updateDataPhases(dataPhases, data, entry.phase);
         }
       }
     }
@@ -578,10 +620,12 @@ void processGraphKernelRecord(
         auto childEntry =
             data->addOp(entry.phase, entry.id, {Context(kernelName)});
         childEntry.upsertMetric(std::move(metric));
-        detail::updateDataPhases(dataPhases, data, childEntry.phase);
       }
     }
   }
+  phaseTracker.complete(nodeIdToState ? externState.dataToGraphEntry
+                                      : externState.dataToEntry,
+                        dataPhases);
   bool complete = false;
   externIdToState.withWrite(externId,
                             [&](RocprofSDKProfiler::ExternIdState &state) {
@@ -689,6 +733,8 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
   // maps multiple HIP streams to the same underlying HSA queue.
   ThreadSafeMap<uint64_t, uint64_t, std::unordered_map<uint64_t, uint64_t>>
       corrIdToStreamId;
+
+  KernelPhaseTracker kernelPhaseTracker;
 
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
   // Captured graph metadata keyed by the HIP graph handle returned by
@@ -860,6 +906,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleRuntimeEnter(
   auto isMissingName = scope.name.empty();
   profiler.correlation.correlate(record.correlation_id.internal, scope.scopeId,
                                  /*numNodes=*/1, isMissingName, dataToEntry);
+  impl->kernelPhaseTracker.record(dataToEntry);
   impl->corrIdToStreamId[record.correlation_id.internal] =
       extractStreamId(operation, payload);
 }
@@ -1059,7 +1106,15 @@ int RocprofSDKProfiler::RocprofSDKProfilerPimpl::graphNodeCorrelationCallback(
   auto externId = graphLaunch.externId;
   externalCorrelationId->ptr = new GraphDispatchCorrelation{
       externId, graphLaunch.graphExecId, graphLaunch.nextNodeId++};
-  threadState.profiler.correlation.submit(internalCorrelationId);
+  auto &profiler = threadState.profiler;
+  auto *impl = static_cast<RocprofSDKProfilerPimpl *>(profiler.pImpl.get());
+  profiler.correlation.externIdToState.withRead(
+      externId, [&](const RocprofSDKProfiler::ExternIdState &state) {
+        impl->kernelPhaseTracker.record(state.nodeIdToState
+                                            ? state.dataToGraphEntry
+                                            : state.dataToEntry);
+      });
+  profiler.correlation.submit(internalCorrelationId);
   return 0;
 }
 #endif
@@ -1163,7 +1218,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
   auto &correlation = profiler.correlation;
 
   uint64_t maxCorrelationId = 0;
-  std::map<Data *, std::pair<size_t, size_t>> dataPhases;
+  DataPhases dataPhases;
 
   for (size_t i = 0; i < numHeaders; ++i) {
     auto *header = headers[i];
@@ -1188,7 +1243,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
         // correlation data.
         auto *graphCorrelation = static_cast<GraphDispatchCorrelation *>(
             record->correlation_id.external.ptr);
-        processGraphKernelRecord(correlation.externIdToState, dataPhases,
+        processGraphKernelRecord(correlation.externIdToState,
+                                 impl->kernelPhaseTracker, dataPhases,
                                  kernelName, record, *graphCorrelation,
                                  streamId);
         correlation.corrIdToExternId.erase(record->correlation_id.internal);
@@ -1199,12 +1255,14 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
         record->correlation_id.external.value = 0;
       } else {
         processKernelRecord(profiler, correlation.corrIdToExternId,
-                            correlation.externIdToState, dataPhases, kernelName,
+                            correlation.externIdToState,
+                            impl->kernelPhaseTracker, dataPhases, kernelName,
                             record, streamId);
       }
 #else
       processKernelRecord(profiler, correlation.corrIdToExternId,
-                          correlation.externIdToState, dataPhases, kernelName,
+                          correlation.externIdToState,
+                          impl->kernelPhaseTracker, dataPhases, kernelName,
                           record, streamId);
 #endif
       impl->corrIdToStreamId.erase(record->correlation_id.internal);
