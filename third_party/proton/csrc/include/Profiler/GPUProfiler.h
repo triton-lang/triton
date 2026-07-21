@@ -24,16 +24,15 @@
 
 namespace proton {
 
-using DataPhases =
-    std::map<Data *, std::pair</*start_phase=*/size_t,
-                               /*end_phase=*/size_t>>;
+using DataPhases = std::map<Data *, std::pair</*start_phase=*/size_t,
+                                              /*end_phase=*/size_t>>;
 
 namespace detail {
 
-void flushDataPhasesImpl(
-    const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
-    const DataPhases &dataPhases,
-    PendingGraphPool *pendingGraphPool);
+void flushDataPhasesImpl(const bool periodicFlushEnabled,
+                         const std::string &periodicFlushingFormat,
+                         const DataPhases &dataPhases,
+                         PendingGraphPool *pendingGraphPool);
 
 void updateDataPhases(DataPhases &dataPhases, Data *data, size_t phase);
 
