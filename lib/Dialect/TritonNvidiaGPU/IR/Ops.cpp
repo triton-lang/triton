@@ -1572,20 +1572,37 @@ LogicalResult TMEMSubSliceOp::verify() {
   auto srcShape = srcTy.getShape();
   auto dstShape = dstTy.getShape();
   auto offset = getOffset();
-  if (offset + dstShape[dim] > srcShape[dim]) {
+  if (offset < 0 || offset + dstShape[dim] > srcShape[dim]) {
     return emitError("The split offset may not exceed the source shape");
   }
   auto srcLL = toLinearLayout(srcTy);
-  auto dstLL = toLinearLayout(dstTy);
-  SmallVector<int64_t> offsets = {0, 0};
-  offsets[dim] = offset;
-  auto kRow = StringAttr::get(getContext(), "row");
-  auto kCol = StringAttr::get(getContext(), "col");
-  if (!isTranslatedLinearLayoutSubview(srcLL, dstLL, dstShape, offsets,
-                                       {kRow, kCol},
-                                       /*allowXorTranslation=*/false))
-    return emitError("The subslice must preserve the source layout up to a "
-                     "constant physical translation");
+  if (offset & (dstShape[dim] - 1)) {
+    // An unaligned slice can carry through the logical bits between its
+    // lowest set offset bit and the highest bit changed by the slice. Those
+    // bits must be consecutive bases in one physical TMEM address dimension.
+    unsigned firstBit = llvm::countr_zero(static_cast<uint32_t>(offset));
+    uint64_t last = uint64_t(offset) + dstShape[dim] - 1;
+    unsigned lastBit = llvm::Log2_64(uint64_t(offset) ^ last);
+    unsigned numBits = lastBit - firstBit + 1;
+    auto hasContiguousBases = [&](StringAttr inDim) {
+      const auto &bases = srcLL.getBases().lookup(inDim);
+      for (unsigned start = 0; start + numBits <= bases.size(); ++start) {
+        bool contiguous = true;
+        for (unsigned bit = 0; bit < numBits; ++bit) {
+          const auto &basis = bases[start + bit];
+          contiguous &= basis[1 - dim] == 0 &&
+                        basis[dim] == (int64_t{1} << (firstBit + bit));
+        }
+        if (contiguous)
+          return true;
+      }
+      return false;
+    };
+    auto kRow = StringAttr::get(getContext(), "row");
+    auto kCol = StringAttr::get(getContext(), "col");
+    if (!hasContiguousBases(kRow) && !hasContiguousBases(kCol))
+      return emitError("The split offset may not touch the tile");
+  }
 
   auto isTrimmed = [&](ArrayRef<int32_t> basis) {
     return basis[dim] >= dstShape[dim];

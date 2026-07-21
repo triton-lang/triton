@@ -797,6 +797,12 @@ LogicalResult MemDescReinterpretOp::verify() {
     return emitError(
         "result CTA footprint must be contained in the source CTA footprint");
 
+  if (isa<nvidia_gpu::TensorMemorySpaceAttr>(srcTy.getMemorySpace()) &&
+      nvidia_gpu::getTmemAllocSizes(dstTy).numRows >
+          nvidia_gpu::getTmemAllocSizes(srcTy).numRows)
+    return emitError("result tensor-memory row footprint must not exceed the "
+                     "source row footprint");
+
   auto srcNumBits = getContiguousViewNumBits(srcTy, srcLayout);
   auto dstNumBits = getContiguousViewNumBits(dstTy, dstLayout);
   if (dstNumBits > srcNumBits)
@@ -1209,6 +1215,13 @@ LogicalResult MemDescSubsliceOp::verify() {
   if (!isSubview)
     return success();
 
+  auto layoutSrcShape = dropPipeliningDim(srcTy.getShape(), srcEnc);
+  auto layoutDstShape = dropPipeliningDim(dstTy.getShape(), srcEnc);
+  auto layoutOffsets = dropPipeliningDim(ArrayRef(offsets), srcEnc);
+  for (auto [size, offset] : llvm::zip_equal(layoutDstShape, layoutOffsets))
+    if (offset & (size - 1))
+      return emitError("The split offset may not touch the tile");
+
   LinearLayout ll;
   if (auto paddedEncoding = triton::gpu::getPaddedEncoding(srcEnc)) {
     if (paddedEncoding.getRank() < srcTy.getRank()) {
@@ -1220,14 +1233,24 @@ LogicalResult MemDescSubsliceOp::verify() {
     ll = triton::gpu::toLinearLayout(srcTy);
   }
 
-  auto layoutShape = dropPipeliningDim(dstTy.getShape(), srcEnc);
-  auto layoutOffsets = dropPipeliningDim(ArrayRef(offsets), srcEnc);
-  auto kOffset = StringAttr::get(getContext(), "offset");
-  if (!isTranslatedLinearLayoutSubview(ll, ll, layoutShape, layoutOffsets,
-                                       {kOffset},
-                                       /*allowXorTranslation=*/true))
-    return emitError("subslice must preserve the source layout up to a "
-                     "constant physical translation");
+  auto llInv = ll.pseudoinvert();
+  auto dimNames = standardOutDimNames(getContext(), layoutDstShape.size());
+  for (auto [dim, sizes] :
+       llvm::enumerate(llvm::zip_equal(layoutSrcShape, layoutDstShape))) {
+    auto [srcSize, dstSize] = sizes;
+    if (srcSize == dstSize)
+      continue;
+    SmallVector<std::pair<StringAttr, int32_t>> namedOffsets;
+    for (StringAttr name : dimNames)
+      namedOffsets.push_back({name, 0});
+    for (int64_t dimSize = dstSize; dimSize < srcSize; dimSize *= 2) {
+      namedOffsets[dim].second = dimSize;
+      auto physicalOffset = llInv.apply(namedOffsets)[0].second;
+      if (!llvm::isPowerOf2_32(physicalOffset) && physicalOffset != 0)
+        return emitError(
+            "We don't support splitting along the swizzling pattern");
+    }
+  }
   return success();
 }
 

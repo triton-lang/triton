@@ -185,8 +185,7 @@ struct ConvertLayoutOpSwizzlingConversion
       if (idxSrc == 0) {
         lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
                         /*paddingShifts=*/{}, affineOffset,
-                        /*additiveAffineOffset=*/false, maskSpanAffineOffset,
-                        /*affineBlockOffset=*/Value(),
+                        maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
                         /*maskSpanAffineBlock=*/0, rewriter, targetInfo);
       } else {
         assert(idxSrc == 1 || idxSrc == 2);
@@ -194,8 +193,7 @@ struct ConvertLayoutOpSwizzlingConversion
         auto storeCvtNoBlock = dropBlock(storeCvt);
         auto result = lowerLdStMatrix(
             loc, storeCvtNoBlock, transpose, tileInVals, smemBase, affineOffset,
-            /*additiveAffineOffset=*/false, maskSpanAffineOffset, llvmElemTy,
-            rewriter, targetInfo);
+            maskSpanAffineOffset, llvmElemTy, rewriter, targetInfo);
         assert(succeeded(result));
       }
       emitBarrier();
@@ -205,8 +203,7 @@ struct ConvertLayoutOpSwizzlingConversion
       if (idxDst == 0) {
         tileOutVals = lowerLdStShared(
             loc, ctx, loadCvt, {}, llvmElemTy, smemBase, /*paddingShifts=*/{},
-            affineOffset, /*additiveAffineOffset=*/false, maskSpanAffineOffset,
-            /*affineBlockOffset=*/Value(),
+            affineOffset, maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
             /*maskSpanAffineBlock=*/0, rewriter, targetInfo);
       } else {
         assert(idxDst == 1 || idxDst == 2);
@@ -214,8 +211,7 @@ struct ConvertLayoutOpSwizzlingConversion
         auto loadCvtNoBlock = dropBlock(loadCvt);
         auto result = lowerLdStMatrix(
             loc, loadCvtNoBlock, transpose, tileOutVals, smemBase, affineOffset,
-            /*additiveAffineOffset=*/false, maskSpanAffineOffset, llvmElemTy,
-            rewriter, targetInfo);
+            maskSpanAffineOffset, llvmElemTy, rewriter, targetInfo);
         assert(succeeded(result));
       }
       llvm::append_range(outVals, tileOutVals);

@@ -93,11 +93,10 @@ public:
       }
 
       llvm::SmallVector<Value> values;
-      auto result = lowerDsReadTr(
-          op, ldsParams, loc, cvtDstLL, values, smemBases, affineOffset,
-          triton::gpu::hasIntegerLinearSharedOffset(srcTy),
-          maskSpanAffineOffset, paddingShifts, llvmElemTy, rewriter,
-          targetInfo);
+      auto result =
+          lowerDsReadTr(op, ldsParams, loc, cvtDstLL, values, smemBases,
+                        affineOffset, maskSpanAffineOffset, paddingShifts,
+                        llvmElemTy, rewriter, targetInfo);
       if (failed(result))
         continue;
 
@@ -116,7 +115,7 @@ private:
                 ::triton::AMD::TargetInfo::LDSTransLoadParams ldsParams,
                 Location loc, LinearLayout cvt, SmallVector<Value> &vals,
                 ArrayRef<Value> smemBases, Value affineOffset,
-                bool additiveAffineOffset, uint64_t maskSpanAffineOffset,
+                uint64_t maskSpanAffineOffset,
                 ArrayRef<std::pair<unsigned, unsigned>> paddingShifts,
                 Type llvmElemTy, ConversionPatternRewriter &rewriter,
                 const ::triton::AMD::TargetInfo &targetInfo) const {
@@ -376,6 +375,17 @@ private:
     // will be folded into a constant
     auto affineOffsetI8 = b.mul(affineOffset, b.i32_val(bitWidth / 8));
     bool hasPadding = !paddingShifts.empty();
+    Value paddedAffineOffsetI8 = b.i32_val(0);
+    if (hasPadding && maskSpanAffineOffset != 0) {
+      // `maskSpanAffineOffset != 0` indicates the affine offsets come from
+      // MemDescSubsliceOp, whose verifier guarantees that the affine offsets
+      // are bitwise disjoint from other offset contributors. Padding can thus
+      // be applied separately. This helps LLVM reuse base pointers.
+      paddedAffineOffsetI8 =
+          applyPadding(loc, rewriter, affineOffsetI8, paddingShifts);
+    } else {
+      regBase = b.xor_(regBase, affineOffsetI8);
+    }
 
     // Elements per op
     auto elemsPerInstr = fullTile.getInDimSize(kReg);
@@ -385,13 +395,12 @@ private:
       auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
       auto regIdxI8 = regIdx * (bitWidth / 8);
       Value offset = b.xor_(regBase, b.i32_val(regIdxI8));
-      if (additiveAffineOffset)
-        offset = b.add(offset, affineOffsetI8);
-      else
-        offset = b.xor_(offset, affineOffsetI8);
 
-      if (hasPadding)
+      if (hasPadding) {
         offset = applyPadding(loc, rewriter, offset, paddingShifts);
+        if (maskSpanAffineOffset != 0)
+          offset = b.add(offset, paddedAffineOffsetI8);
+      }
 
       for (int i2 = 0; i2 < nAdditive; i2 += elemsPerInstr) {
         // all these constants will go as immediate values to ds_read_tr
@@ -614,8 +623,7 @@ private:
     SmallVector<Value> outVals = lowerLdSt(
         loc, rewriter.getContext(), cvt, {}, // Input for store, output for load
         llvmElemTy, smemObj.getBase(), paddingShifts, affineOffset,
-        triton::gpu::hasIntegerLinearSharedOffset(srcTy), maskSpanAffineOffset,
-        /*affineBlockOffset=*/Value(),
+        maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
         /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
         ldsTransLoadParams->tileSize, lowerInst);
     Value result =

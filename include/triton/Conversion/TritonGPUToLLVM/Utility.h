@@ -668,15 +668,16 @@ uint32_t applyPadding(uint32_t baseOffset,
 // Lowers to st when valArrays is empty, and to ld when it is not,
 // and returns the output values.
 // `paddingShifts` encodes shared memory padding if any.
-SmallVector<Value> lowerLdStShared(
-    Location loc, MLIRContext *ctx, LinearLayout cvt,
-    ArrayRef<Value> valsArray, // Input for store, output for load
-    Type llvmElemTy, ArrayRef<Value> smemBases,
-    ArrayRef<std::pair<unsigned, unsigned>> paddingShifts, Value affineOffset,
-    bool additiveAffineOffset, uint64_t maskSpanAffineOffset,
-    Value affineBlockOffset, uint64_t maskSpanAffineBlock,
-    RewriterBase &rewriter, const TargetInfoBase &targetInfo,
-    std::optional<int> maybeMaxVecElems = {}, Operation *localLoadOp = nullptr);
+SmallVector<Value>
+lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
+                ArrayRef<Value> valsArray, // Input for store, output for load
+                Type llvmElemTy, ArrayRef<Value> smemBases,
+                ArrayRef<std::pair<unsigned, unsigned>> paddingShifts,
+                Value affineOffset, uint64_t maskSpanAffineOffset,
+                Value affineBlockOffset, uint64_t maskSpanAffineBlock,
+                RewriterBase &rewriter, const TargetInfoBase &targetInfo,
+                std::optional<int> maybeMaxVecElems = {},
+                Operation *localLoadOp = nullptr);
 
 // Lower an ld/st-like operation given a layout and a callback that creates the
 // PTX instruction Lowers to st when valArrays is empty, and to ld when it is
@@ -690,9 +691,9 @@ SmallVector<Value> lowerLdSt(
     ArrayRef<Value> valsArray, // Input for store, output for load
     Type llvmElemTy, ArrayRef<Value> smemBases,
     ArrayRef<std::pair<unsigned, unsigned>> paddingShifts, Value affineOffset,
-    bool additiveAffineOffset, uint64_t maskSpanAffineOffset,
-    Value affineBlockOffset, uint64_t maskSpanAffineBlock, Value laneId,
-    Value warpId, RewriterBase &rewriter, const TargetInfoBase &targetInfo,
+    uint64_t maskSpanAffineOffset, Value affineBlockOffset,
+    uint64_t maskSpanAffineBlock, Value laneId, Value warpId,
+    RewriterBase &rewriter, const TargetInfoBase &targetInfo,
     std::optional<int> maybeMaxVecElems,
     std::function<SmallVector<Value>(RewriterBase &, Location, ArrayRef<Value>,
                                      Value, int, VectorType, Value)>

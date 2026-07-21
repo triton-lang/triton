@@ -129,27 +129,6 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 2 : i32, "ttg.num-w
 
 // -----
 
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#swizzled = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 16, order = [0, 1]}>
-#smem = #ttg.shared_memory
-module {
-  // CHECK-LABEL: @subslice_unaligned_contiguous
-  // CHECK: ttg.memdesc_subslice %{{.*}}[2, 0]
-  tt.func @subslice_unaligned_contiguous(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
-    %0 = ttg.memdesc_subslice %arg0 [2, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<4x16xf32, #shared, #smem, 8x16>
-    tt.return
-  }
-
-  // CHECK-LABEL: @subslice_zero_origin_through_swizzle
-  // CHECK: ttg.memdesc_subslice %{{.*}}[0, 0]
-  tt.func @subslice_zero_origin_through_swizzle(%arg0: !ttg.memdesc<8x16xf32, #swizzled, #smem>) {
-    %0 = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #swizzled, #smem> -> !ttg.memdesc<8x4xf32, #swizzled, #smem, 8x16>
-    tt.return
-  }
-}
-
-// -----
-
 #shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "gfx950", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {

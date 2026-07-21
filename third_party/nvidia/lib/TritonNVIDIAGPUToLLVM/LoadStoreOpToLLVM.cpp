@@ -1090,8 +1090,7 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto maskSpanAffineOffset = SharedMemoryObject::getMaskSpanOffsets(dstTy);
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     lowerLdSt(loc, ctx, cvt, vals, resElemTy, smemObj.getBase(),
-              /*paddingShifts=*/{}, affineOffset,
-              ttg::hasIntegerLinearSharedOffset(dstTy), maskSpanAffineOffset,
+              /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset,
               /*affineBlockOffset=*/Value(), /*maskSpanAffineBlock=*/0, laneId,
               warpId, rewriter, targetInfo, maxVec, emitCpAsync);
 

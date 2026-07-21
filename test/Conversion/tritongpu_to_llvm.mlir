@@ -2905,7 +2905,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #shared1 = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 1, order = [1, 0]}>
-#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 
@@ -2953,15 +2952,6 @@ tt.func private @memdesc_reinterpret_multibuffer_subview(%arg0: !ttg.memdesc<7x1
   // CHECK: [[DST0:%.*]] = llvm.mlir.undef
   // CHECK: llvm.insertvalue [[SUB_BASE]], [[DST0]][0]
   %1 = ttg.memdesc_reinterpret %0 : !ttg.memdesc<2x16x16xf16, #shared0, #ttg.shared_memory, mutable, 7x16x16> -> !ttg.memdesc<4x8x16xf16, #shared0, #ttg.shared_memory, mutable>
-  tt.return
-}
-
-// CHECK-LABEL: @local_load_unaligned_smem_subview
-tt.func private @local_load_unaligned_smem_subview(%arg0: !ttg.memdesc<8x32xf32, #shared0, #ttg.shared_memory, mutable>) {
-  %0 = ttg.memdesc_subslice %arg0 [2, 0] : !ttg.memdesc<8x32xf32, #shared0, #ttg.shared_memory, mutable> -> !ttg.memdesc<4x32xf32, #shared0, #ttg.shared_memory, mutable, 8x32>
-  // CHECK: [[AFFINE_BYTES:%.*]] = llvm.mul {{%.*}}, {{%.*}}
-  // CHECK: llvm.add {{%.*}}, [[AFFINE_BYTES]]
-  %1 = ttg.local_load %0 : !ttg.memdesc<4x32xf32, #shared0, #ttg.shared_memory, mutable, 8x32> -> tensor<4x32xf32, #blocked2>
   tt.return
 }
 

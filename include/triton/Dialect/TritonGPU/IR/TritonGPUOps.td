@@ -255,7 +255,8 @@ def TTG_MemDescSubsliceOp : TTG_Op<"memdesc_subslice", [Pure, MemDescViewTrait]>
 
     The result preserves the input allocation shape. Each offset must be
     non-negative and the result must fit within the input view. An offset in a
-    split dimension must be aligned to the result tile in that dimension.
+    split layout dimension must be aligned to the result tile in that
+    dimension. The leading pipelining dimension may be sliced at any offset.
   }];
   let arguments = (ins TTG_MemDescType:$src, DenseI32ArrayAttr:$offsets);
   // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".

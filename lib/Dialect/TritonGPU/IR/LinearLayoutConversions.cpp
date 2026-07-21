@@ -1355,7 +1355,7 @@ LinearLayout toLinearLayout(RankedTensorType type) {
 LinearLayout toLinearLayout(MemDescType type) {
   // For TMEM we instantiate the subview directly. This is possible
   // as TMEM has no swizzling.
-  if (isa<TensorMemoryEncodingAttr>(type.getEncoding())) {
+  if (isa<nvidia_gpu::TensorMemorySpaceAttr>(type.getMemorySpace())) {
     auto shape = dropPipeliningDim(type.getShape(), type.getEncoding());
     auto allocShape =
         dropPipeliningDim(type.getAllocShape(), type.getEncoding());
@@ -1415,81 +1415,6 @@ LinearLayout paddedLinearLayout(MemDescType type) {
   return paddedLinearLayout(
       dropPipeliningDim(type.getAllocShape(), type.getEncoding()),
       type.getEncoding());
-}
-
-bool isLinearLayoutIntegerLinear(const LinearLayout &layout,
-                                 ArrayRef<StringAttr> additivePhysicalDims) {
-  auto inverse = layout.pseudoinvert();
-  auto logicalDims = llvm::to_vector(inverse.getInDimNames());
-  return llvm::all_of(additivePhysicalDims, [&](StringAttr physicalDim) {
-    return getIntegerStrides(inverse, physicalDim, logicalDims).has_value();
-  });
-}
-
-bool hasIntegerLinearSharedOffset(MemDescType type) {
-  auto layout = isPaddedEncoding(type.getEncoding()) ? paddedLinearLayout(type)
-                                                     : toLinearLayout(type);
-  return isLinearLayoutIntegerLinear(
-      layout, {StringAttr::get(type.getContext(), "offset")});
-}
-
-bool isTranslatedLinearLayoutSubview(const LinearLayout &srcLayout,
-                                     const LinearLayout &dstLayout,
-                                     ArrayRef<int64_t> dstShape,
-                                     ArrayRef<int64_t> offsets,
-                                     ArrayRef<StringAttr> additivePhysicalDims,
-                                     bool allowXorTranslation) {
-  auto src = srcLayout.pseudoinvert();
-  auto dst = dstLayout.pseudoinvert();
-  auto logicalDims = llvm::to_vector(src.getInDimNames());
-  if (logicalDims != llvm::to_vector(dst.getInDimNames()) ||
-      dstShape.size() != logicalDims.size() ||
-      offsets.size() != logicalDims.size())
-    return false;
-
-  SmallVector<StringAttr> alignedDims;
-  SmallVector<StringAttr> unalignedDims;
-  SmallVector<std::pair<StringAttr, int32_t>> alignedOffsets;
-  for (auto [dim, size, offset] :
-       llvm::zip_equal(logicalDims, dstShape, offsets)) {
-    if (!llvm::isPowerOf2_64(size) || offset < 0 ||
-        offset > src.getInDimSize(dim) - size || size > dst.getInDimSize(dim))
-      return false;
-    src = src.resizeInDim(dim, size);
-    dst = dst.resizeInDim(dim, size);
-    bool isAligned = offset % size == 0;
-    (isAligned ? alignedDims : unalignedDims).push_back(dim);
-    alignedOffsets.push_back({dim, isAligned ? int32_t(offset) : 0});
-  }
-  if (!src.equalIgnoringOutDimSizes(dst))
-    return false;
-
-  if (allowXorTranslation &&
-      !isLinearLayoutIntegerLinear(srcLayout, additivePhysicalDims))
-    return unalignedDims.empty();
-
-  // Unaligned dimensions must map to isolated integer-linear fields. Aligned
-  // dimensions are already xor translations; for additive physical dimensions
-  // their translated origin must therefore be disjoint from their variables.
-  auto srcFull = srcLayout.pseudoinvert();
-  auto alignedOrigin = srcFull.apply(alignedOffsets);
-  SmallVector<StringAttr> nonAdditivePhysicalDims;
-  for (StringAttr physicalDim : srcFull.getOutDimNames())
-    if (!llvm::is_contained(additivePhysicalDims, physicalDim))
-      nonAdditivePhysicalDims.push_back(physicalDim);
-  if (!srcFull.sublayoutIsZero(unalignedDims, nonAdditivePhysicalDims))
-    return false;
-
-  for (StringAttr physicalDim : additivePhysicalDims) {
-    if (!getIntegerStrides(srcFull, physicalDim, unalignedDims))
-      return false;
-    unsigned physicalIdx = srcFull.getOutDimIndex(physicalDim);
-    uint32_t alignedVariableMask =
-        getOutputBasisMask(dst, alignedDims, physicalDim);
-    if (uint32_t(alignedOrigin[physicalIdx].second) & alignedVariableMask)
-      return false;
-  }
-  return true;
 }
 
 uint32_t getLinearLayoutSubviewOriginMask(const LinearLayout &layout,

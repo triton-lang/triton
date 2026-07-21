@@ -55,9 +55,8 @@ void createSyncWarp(Location loc, OpBuilder &builder);
 LogicalResult lowerLdStMatrix(
     Location loc, LinearLayout cvt, bool transpose,
     SmallVector<Value> &vals, // Input for stmatrix, output for ldmatrix
-    Value smemBase, Value affineOffset, bool additiveAffineOffset,
-    uint64_t maskSpanAffineOffset, Type llvmElemTy,
-    ConversionPatternRewriter &rewriter,
+    Value smemBase, Value affineOffset, uint64_t maskSpanAffineOffset,
+    Type llvmElemTy, ConversionPatternRewriter &rewriter,
     const mlir::triton::NVIDIA::TargetInfo &targetInfo);
 
 // Given a broadcast mask and the number of CTAs, create a mask of ones

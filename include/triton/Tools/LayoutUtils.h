@@ -140,24 +140,6 @@ LinearLayout renameLinearLayoutDims(
     ArrayRef<std::pair<StringAttr, StringAttr>> inDimRenames,
     ArrayRef<std::pair<StringAttr, StringAttr>> outDimRenames);
 
-struct IntegerStride {
-  uint32_t stride = 0;
-  uint32_t basisMask = 0;
-};
-
-// If every selected input dimension `d` maps to `outDim` as
-//
-//   out = stride[d] * d
-//
-// in ordinary integer arithmetic, return its stride and output-bit mask.
-// This requires the bases for `d` to be [stride, 2*stride, ...], with a
-// power-of-two stride, and requires the selected dimensions' masks to be
-// disjoint from one another and from every unselected input dimension.
-// Broadcast dimensions have stride and mask zero.
-std::optional<llvm::MapVector<StringAttr, IntegerStride>>
-getIntegerStrides(const LinearLayout &layout, StringAttr outDim,
-                  ArrayRef<StringAttr> inDims);
-
 // For a layout A with A.hasInDim(kReg), find a permutation of registers action
 // such that action.apply(A) may be divisible by B
 // It's not always true that the action returned by this function will

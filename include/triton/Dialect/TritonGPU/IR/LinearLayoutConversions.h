@@ -63,33 +63,6 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 LinearLayout paddedLinearLayout(MemDescType type);
 LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding);
 
-// Returns true when every physical dimension in `additivePhysicalDims` is an
-// ordinary integer-linear function of the logical coordinates. Equivalently,
-// each logical dimension maps to an isolated power-of-two-strided physical
-// field.
-bool isLinearLayoutIntegerLinear(const LinearLayout &layout,
-                                 ArrayRef<StringAttr> additivePhysicalDims);
-
-// Returns whether SMEM lowering must combine a subslice's physical offset with
-// the per-thread offset using integer addition rather than xor.
-bool hasIntegerLinearSharedOffset(MemDescType type);
-
-// Returns true when the source region selected by `offsets` is the destination
-// layout translated by one constant physical offset. The named physical
-// dimensions translate with integer addition. When `allowXorTranslation` is
-// true, an aligned subview of a non-integer-linear layout may translate with
-// xor instead.
-//
-// Formally, for every destination coordinate x and inverse layouts S and D,
-// this proves that S(offsets + x) can be reconstructed from S(offsets) and
-// D(x) using those physical translation operations.
-bool isTranslatedLinearLayoutSubview(const LinearLayout &srcLayout,
-                                     const LinearLayout &dstLayout,
-                                     ArrayRef<int64_t> dstShape,
-                                     ArrayRef<int64_t> offsets,
-                                     ArrayRef<StringAttr> additivePhysicalDims,
-                                     bool allowXorTranslation);
-
 // Return the bits in `physicalDim` that may be set by the origin of a view with
 // `shape` into an allocation with `allocShape`. `layout` maps physical
 // coordinates to the allocation's logical coordinates.

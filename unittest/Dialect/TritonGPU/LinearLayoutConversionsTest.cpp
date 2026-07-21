@@ -149,30 +149,6 @@ protected:
   MLIRContext ctx;
 };
 
-TEST_F(LinearLayoutConversionsTest, TranslatedSubview) {
-  auto kOffset = S("offset");
-  auto kDim = S("dim0");
-
-  auto contiguous = LinearLayout::identity1D(8, kOffset, kDim);
-  EXPECT_TRUE(isTranslatedLinearLayoutSubview(
-      contiguous, contiguous, /*dstShape=*/{4}, /*offsets=*/{2},
-      /*additivePhysicalDims=*/{kOffset},
-      /*allowXorTranslation=*/false));
-
-  auto bitReversed = LinearLayout({{kOffset, {{4}, {2}, {1}}}}, {kDim});
-  EXPECT_FALSE(isTranslatedLinearLayoutSubview(
-      bitReversed, bitReversed, /*dstShape=*/{4}, /*offsets=*/{1},
-      /*additivePhysicalDims=*/{kOffset},
-      /*allowXorTranslation=*/false));
-
-  // An aligned origin needs no integer-linear mapping: addition and xor agree
-  // when the translated origin and destination bases use disjoint bits.
-  EXPECT_TRUE(isTranslatedLinearLayoutSubview(
-      bitReversed, bitReversed, /*dstShape=*/{2}, /*offsets=*/{4},
-      /*additivePhysicalDims=*/{kOffset},
-      /*allowXorTranslation=*/false));
-}
-
 TEST_F(LinearLayoutConversionsTest, SubviewOriginMaskIncludesLowBits) {
   auto kOffset = S("offset");
   auto kBlock = S("block");
@@ -3437,6 +3413,12 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_subview) {
                              LinearLayout::zeros1D(4, kCol, d1) *
                              LinearLayout::identity1D(1, kBlock, d0);
   EXPECT_EQ(toLinearLayout(fp4Subview), expectedFp4);
+
+  auto scalesEnc = TensorMemoryScalesEncodingAttr::get(
+      &ctx, CGAEncodingAttr::get1CTALayout(&ctx, 2));
+  auto scalesSubview = MemDescType::get({128, 4}, i8, scalesEnc, tmemSpace,
+                                        /*mutableMemory=*/true, {128, 8});
+  EXPECT_EQ(toLinearLayout(scalesSubview), toLinearLayout({128, 4}, scalesEnc));
 }
 
 TEST_F(LinearLayoutConversionsTest, TensorMemory_fp4Padded) {
