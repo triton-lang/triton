@@ -494,7 +494,7 @@ def tcgen05_copy(src, dst, _semantic=None):
 
 @builtin
 def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarriers=None, mbarrier_preds=None,
-                _semantic=None):
+                lut=None, _semantic=None):
     """
     Emit a 5th generation TensorCore MMA instruction.
     acc = a * b + (acc if use_acc else 0)
@@ -508,6 +508,7 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
         mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
+        lut (tensor_memory_descriptor, optional): Lookup table used to decompress B. Defaults to None.
     """
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
@@ -525,8 +526,9 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
             mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
 
     multicast = _unwrap_if_constexpr(multicast)
+    lut_handle = lut.handle if lut is not None else None
     _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
-                                         mbarrier_preds, acc.layout.two_ctas, multicast)
+                                         mbarrier_preds, acc.layout.two_ctas, multicast, lut_handle)
 
 
 @builtin

@@ -678,6 +678,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     TTG_MemDescType:$b,
     TTG_MemDescType:$d,
     Optional<TTG_AsyncToken>:$acc_dep,
+    Optional<TTG_MemDescType>:$lut,
     I1:$useD,
     I1:$pred,
     Variadic<TTG_MemDescType>:$barriers,
@@ -691,7 +692,8 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
 
   let builders = [
     OpBuilder<(ins "Type":$token,
-      "Value":$a, "Value":$b, "Value":$d, "Value":$acc_dep, "Value":$useD,
+      "Value":$a, "Value":$b, "Value":$d, "Value":$acc_dep, "Value":$lut,
+      "Value":$useD,
       "Value":$pred, CArg<"bool", "false">:$two_ctas,
       CArg<"bool", "false">:$multicast,
       CArg<"ValueRange", "{}">:$barriers,
@@ -701,10 +703,11 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
   ];
 
   let assemblyFormat = [{
-    $a `,` $b `,` $d `` custom<Token>($acc_dep, type($token)) `,` $useD`,`
+    $a `,` $b (`[` $lut^ `]`)? `,` $d `` custom<Token>($acc_dep, type($token)) `,` $useD`,`
     $pred `` custom<BarriersAndPreds>($barriers, $barrier_preds)
-    attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
-    qualified(type($d)) (`,` qualified(type($barriers))^)?
+    attr-dict `:` qualified(type($a)) `,` qualified(type($b))
+    (`[` qualified(type($lut))^ `]`)? `,` qualified(type($d))
+    (`,` qualified(type($barriers))^)?
   }];
 
   let hasVerifier = 1;

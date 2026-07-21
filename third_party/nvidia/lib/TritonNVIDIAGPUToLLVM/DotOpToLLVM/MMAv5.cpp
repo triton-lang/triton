@@ -189,7 +189,10 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
   desc.M = M >> 4;
   desc.N = N >> 3;
   desc.aType = getTypeEncoding(op.getA().getType().getElementType());
-  desc.bType = getTypeEncoding(op.getB().getType().getElementType());
+  // In LUT mode the i8 container holds packed 3-bit indices whose logical
+  // decompressed type is E4M3.
+  desc.bType =
+      op.getLut() ? 0 : getTypeEncoding(op.getB().getType().getElementType());
   Type dstElType = op.getD().getType().getElementType();
   assert(dstElType.isF16() || dstElType.isF32() || dstElType.isInteger(32));
   if (dstElType.isInteger(32)) {
@@ -354,7 +357,7 @@ static Value createScaleInstDescriptorFp4(
 //===----------------------------------------------------------------------===//
 
 void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
-                   ttng::TCGen5MMAOp op, MemDescOperand a, Value b,
+                   ttng::TCGen5MMAOp op, MemDescOperand a, Value b, Value lut,
                    MemDescOperand d, Value pred, Value instDescriptor,
                    Value useInitAcc, bool aInTMem, bool twoCTAs,
                    std::string collectorB) {
@@ -376,6 +379,8 @@ void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
     assert(0 && "Unsupported type.");
   }
   opcode += collectorB;
+  if (lut)
+    opcode += ".decompress::lut::b";
   auto *accOp = ptxBuilder.newAddrOperand(d.base, "r", *d.offset);
   assert(a.offset.has_value() == aInTMem);
   auto *aOp = aInTMem ? ptxBuilder.newAddrOperand(a.base, "r", *a.offset)
@@ -384,7 +389,12 @@ void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
   auto *instDescOp = ptxBuilder.newOperand(instDescriptor, "r");
   auto *useInitAccOp = ptxBuilder.newOperand(useInitAcc, "b");
   auto &mmaOp = *ptxBuilder.create(opcode);
-  mmaOp({accOp, aOp, bOp, instDescOp, useInitAccOp}).predicate(pred);
+  if (lut) {
+    auto *lutOp = ptxBuilder.newAddrOperand(lut, "r");
+    mmaOp({accOp, aOp, bOp, lutOp, instDescOp, useInitAccOp}).predicate(pred);
+  } else {
+    mmaOp({accOp, aOp, bOp, instDescOp, useInitAccOp}).predicate(pred);
+  }
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
 
@@ -510,7 +520,7 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
                              Value a, Value b, Value loadedA, Value loadedB,
                              MemDescType dTensorTy, Value useDFlag, Value pred,
                              ValueRange barriers, ValueRange barrierPreds,
-                             bool twoCTAs, ValueRange commitDescs,
+                             Value lut, bool twoCTAs, ValueRange commitDescs,
                              bool opKindIsMXFP4,
                              const ttng::TargetFeatures &targetFeatures,
                              const DotConversion &op) {
@@ -580,6 +590,12 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   // along N.
   SmallVector<unsigned> bOperandShape = {mmaSizeK,
                                          mmaSizeN / (twoCTAs ? 2 : 1)};
+  if (lut) {
+    // MMA_LUTB reads a 48B packed-K segment containing the 3-bit indices for
+    // two K=64 MMA instructions (24B per instruction). The instructions select
+    // the lower or upper half of this shared segment via lutBKSegmentOffset.
+    bOperandShape[0] = 48;
+  }
 
   std::unique_ptr<DotOpMmaMemLoader> aLoader;
   bool transA = false;
@@ -602,8 +618,15 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   }
 
   auto isFp4b = op.numBitsPerElementB == 4;
+  // LinearLayout dimensions are powers of two, so use the smallest
+  // power-of-two tile that can represent each physical operand dimension when
+  // deriving the descriptor strides.
+  auto bLoaderShape =
+      llvm::to_vector(llvm::map_range(bOperandShape, [](unsigned dim) {
+        return static_cast<unsigned>(llvm::PowerOf2Ceil(dim));
+      }));
   auto bLoader = DotOpMmaSmemLoader::build(loc, rewriter, bTensorTy, baseB,
-                                           bOperandShape, 1, 5, isFp4b);
+                                           bLoaderShape, 1, 5, isFp4b);
   if (failed(bLoader)) {
     return mlir::emitError(loc, "failed to find valid tcgen05.mma layout for "
                                 "operand B in shared memory ")
@@ -611,6 +634,19 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
            << mmaSizeN << "]";
   }
   bool transB = !bLoader->getDescriptor().transposed;
+
+  auto loadB = [&](int k, int n) {
+    int kSegmentOffset = 0;
+    int kStart = k * bOperandShape[0];
+    if (lut) {
+      // For an odd-k iteration, load the same 48B as the previous even-k
+      // iteration and set kSegmentOffset to 1
+      kSegmentOffset = k % 2;
+      kStart = k / 2 * bOperandShape[0];
+    }
+    return bLoader->smemLoad(kStart, n * bOperandShape[1], rewriter, loc,
+                             kSegmentOffset);
+  };
 
   if (aTensorTy.getElementType().isF32() && (transA || transB)) {
     return mlir::emitError(loc, "tcgen05.mma does not support transposed "
@@ -626,14 +662,23 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
     for (int n = 0; n < numRepN; n++) {
       Value useInitAcc = useDFlag;
       for (int k = 0; k < numRepK; k++) {
-        Value b = bLoader->smemLoad(k * bOperandShape[0], n * bOperandShape[1],
-                                    rewriter, loc);
+        Value b = loadB(k, n);
         for (int m = 0; m < 2; m++) {
           MemDescOperand accAddress =
               op.getAccAddress(rewriter, loc, m, n, desc);
           MemDescOperand a =
               aLoader->memLoad(m * mmaSizeM, k * mmaSizeK, rewriter, loc);
-          ReuseB reuseB = m == 0 ? ReuseB::Keep : ReuseB::Lastuse;
+          ReuseB reuseB;
+          if (lut) {
+            if (m == 0 && k % 2 == 0)
+              reuseB = ReuseB::Keep;
+            else if (m == 1 && k % 2 == 1)
+              reuseB = ReuseB::Lastuse;
+            else
+              reuseB = ReuseB::Use;
+          } else {
+            reuseB = m == 0 ? ReuseB::Keep : ReuseB::Lastuse;
+          }
           op.createMMAInst(rewriter, loc, accAddress, a, b, elect, useInitAcc,
                            desc, m, n, k, reuseB);
         }
@@ -648,10 +693,12 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
         for (int k = 0; k < numRepK; k++) {
           MemDescOperand a = aLoader->memLoad(
               m * aOperandShape[0], k * aOperandShape[1], rewriter, loc);
-          Value b = bLoader->smemLoad(k * bOperandShape[0],
-                                      n * bOperandShape[1], rewriter, loc);
+          Value b = loadB(k, n);
+          ReuseB reuseB = ReuseB::None;
+          if (lut)
+            reuseB = k % 2 == 0 ? ReuseB::Keep : ReuseB::Lastuse;
           op.createMMAInst(rewriter, loc, accAddress, a, b, elect, useInitAcc,
-                           desc, m, n, k, ReuseB::None);
+                           desc, m, n, k, reuseB);
           useInitAcc = tb.i1_val(1);
         }
       }
@@ -717,6 +764,11 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
   dot.numBitsPerElementA = aTensorTy.getElementTypeBitWidth();
   dot.numBitsPerElementB = bTensorTy.getElementTypeBitWidth();
 
+  TritonLLVMOpBuilder tb(loc, rewriter);
+  Value baseLut;
+  if (op.getLut())
+    baseLut = tb.ptrtoint(i32_ty, adaptor.getLut());
+
   DotOpMmaV5TmemLoader dLoader =
       DotOpMmaV5TmemLoader::build(loc, rewriter, dTensorTy, adaptor.getD(),
                                   dTensorTy.getElementTypeBitWidth());
@@ -739,16 +791,20 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
     Value instDescriptor =
         createInstDescriptor(rewriter, op, mmaSizeM, mmaSizeN, desc.transA,
                              desc.transB, dot.mmaSizeK);
+    Value lut;
+    if (op.getLut())
+      lut = tb.add(baseLut, tb.i32_val(k * 2));
     auto collectorB = getCollectorBModifer(reuseB);
-    createGen5MMA(rewriter, loc, op, a, b, accAddress, pred, instDescriptor,
-                  useInitAcc, desc.aInTmem, twoCTAs, collectorB);
+    createGen5MMA(rewriter, loc, op, a, b, lut, accAddress, pred,
+                  instDescriptor, useInitAcc, desc.aInTmem, twoCTAs,
+                  collectorB);
   };
 
   return convertDotImpl(
       typeConverter, rewriter, loc, op.getA(), op.getB(), adaptor.getA(),
       adaptor.getB(), dTensorTy, adaptor.getUseD(), adaptor.getPred(),
-      adaptor.getBarriers(), adaptor.getBarrierPreds(), twoCTAs, commitDescs,
-      /*opKindIsMXFP4=*/false, targetFeatures, dot);
+      adaptor.getBarriers(), adaptor.getBarrierPreds(), adaptor.getLut(),
+      twoCTAs, commitDescs, /*opKindIsMXFP4=*/false, targetFeatures, dot);
 }
 
 int64_t getFormatBitSize(ScaleDotElemType type) {
@@ -923,8 +979,8 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   return convertDotImpl(
       typeConverter, rewriter, loc, op.getA(), op.getB(), adaptor.getA(),
       adaptor.getB(), dTensorTy, adaptor.getUseD(), adaptor.getPred(),
-      adaptor.getBarriers(), adaptor.getBarrierPreds(), twoCTAs, commitDescs,
-      opKindIsMXFP4, targetFeatures, dot);
+      adaptor.getBarriers(), adaptor.getBarrierPreds(), Value(), twoCTAs,
+      commitDescs, opKindIsMXFP4, targetFeatures, dot);
 }
 
 //===----------------------------------------------------------------------===//

@@ -832,8 +832,19 @@ LogicalResult TCGen5MMAOp::verify() {
   Type atype = getA().getType().getElementType();
   Type btype = getB().getType().getElementType();
   Type dtype = getD().getType().getElementType();
-  if (failed(verifyMMADType(*this, atype, btype, dtype)))
+  if (getLut()) {
+    if (!isa<Float8E4M3FNType, Float8E5M2Type>(atype))
+      return emitOpError("LUT decompression requires an FP8 LHS operand");
+    if (!btype.isInteger(8))
+      return emitOpError("LUT decompression requires an i8 packed RHS operand");
+    if (!dtype.isF16() && !dtype.isF32())
+      return emitOpError(
+          "LUT decompression requires an f16 or f32 accumulator");
+    if (!isa<TensorMemoryLUTEncodingAttr>(getLut().getType().getEncoding()))
+      return emitOpError("LUT operand must use tensor_memory_lut_encoding");
+  } else if (failed(verifyMMADType(*this, atype, btype, dtype))) {
     return failure();
+  }
 
   if (getA().getType().getRank() != 2)
     return emitOpError("LHS operand must have a rank-2 tensor");
@@ -841,6 +852,8 @@ LogicalResult TCGen5MMAOp::verify() {
     return emitOpError("RHS operand must have a rank-2 tensor");
   if (getD().getType().getRank() != 2)
     return emitOpError("Return operand must have a rank-2 tensor");
+  if (getLut() && getLut().getType().getRank() != 2)
+    return emitOpError("LUT operand must have a rank-2 tensor");
 
   auto aEnc = getA().getType().getEncoding();
   if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr,
@@ -986,6 +999,11 @@ void TCGen5MMAOp::getEffects(
   }
   effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
                        SharedMemory::get());
+  if (getLut()) {
+    auto lutMutable = getLutMutable();
+    effects.emplace_back(MemoryEffects::Read::get(), &*lutMutable.begin(),
+                         TensorMemory::get());
+  }
   for (auto &barrierMutable : getBarriersMutable())
     effects.emplace_back(MemoryEffects::Write::get(), &barrierMutable,
                          SharedMemory::get());
@@ -1036,14 +1054,14 @@ void TCGen5MMAOp::setPredicateOperand(Value pred) { setPredicate(pred); }
 Type TCGen5MMAOp::getPredicateOperandTypeLike() { return getPred().getType(); }
 
 void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
-                        Value a, Value b, Value d, Value accDep, Value useD,
-                        Value pred, bool twoCtas, bool multicast,
+                        Value a, Value b, Value d, Value accDep, Value lut,
+                        Value useD, Value pred, bool twoCtas, bool multicast,
                         ValueRange barriers, ValueRange barrierPreds,
                         bool isAsync, bool isUnsigned) {
   if (!barriers.empty()) {
     isAsync = true;
   }
-  build(builder, state, token, a, b, d, accDep, useD, pred, barriers,
+  build(builder, state, token, a, b, d, accDep, lut, useD, pred, barriers,
         barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr(),
         twoCtas ? builder.getUnitAttr() : UnitAttr(),
         multicast ? builder.getUnitAttr() : UnitAttr(),

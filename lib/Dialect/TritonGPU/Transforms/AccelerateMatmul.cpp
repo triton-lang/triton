@@ -696,8 +696,8 @@ public:
         rewriter, loc, accMemDescType, tokType, cvtAcc);
     auto vTrue = arith::ConstantIntOp::create(rewriter, dotOp.getLoc(), 1, 1);
     auto mma = triton::nvidia_gpu::TCGen5MMAOp::create(
-        rewriter, loc, tokType, a, b, acc, acc.getToken(), /*useD=*/vTrue,
-        /*pred=*/vTrue);
+        rewriter, loc, tokType, a, b, acc, acc.getToken(), /*lut=*/Value(),
+        /*useD=*/vTrue, /*pred=*/vTrue);
     mma.setTwoCtas(useTwoCTAs);
 
     auto ld = triton::nvidia_gpu::TMEMLoadOp::create(

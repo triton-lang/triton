@@ -20,7 +20,9 @@ union SMEMDescriptor {
     uint64_t strideDimensionBaseOffset : 14;
     uint64_t : 3;
     uint64_t matrixBaseOffset : 3;
-    uint64_t : 10;
+    uint64_t leadDimensionStrideMode : 1;
+    uint64_t lutBKSegmentOffset : 1;
+    uint64_t : 8;
     uint64_t swizzlingMode : 2;
   };
 };
@@ -101,6 +103,8 @@ public:
     assert(mmaTy.has_value() == (mmaVersion == 3));
     assert(MNdim < 2);
     assert(instrShape.size() == 2);
+    assert(llvm::all_of(instrShape, llvm::isPowerOf2_32) &&
+           "instrShape must contain only powers of two");
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     // Due to having a 16B alignment, we can compute the offsets in 128b
@@ -158,7 +162,7 @@ public:
   }
 
   Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                 Location loc) const {
+                 Location loc, int lutBKSegmentOffset = 0) const {
     auto *ctx = loc.getContext();
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     auto dims = to_vector(ll.getInDimNames());
@@ -174,6 +178,7 @@ public:
     // Take the next 0/1/2/3 bits after the 128b tile
     uint32_t mask = (desc.swizzlingByteWidth >> 4) - 1;
     currDesc.matrixBaseOffset = (smemByteOffsetb8 / 128) & mask;
+    currDesc.lutBKSegmentOffset = lutBKSegmentOffset;
     int32_t smemByteOffsetb128 = smemByteOffsetb8 >> 4;
     Value descValBase =
         tb.int_val(64, currDesc.descriptor + smemByteOffsetb128);
