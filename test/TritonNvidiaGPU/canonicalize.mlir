@@ -33,16 +33,16 @@ llvm.func @preserve_ld_acquire(%arg0: !llvm.ptr<1>) {
 #barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2], [4]]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32} {
-// BARRIER-LABEL: @canonicalize_from_ctas
-tt.func @canonicalize_from_ctas(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>, %pred: i1) {
+// BARRIER-LABEL: @canonicalize_fromCTA
+tt.func @canonicalize_fromCTA(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>, %pred: i1) {
   // BARRIER-NEXT: ttng.barrier_expect %arg0, 16, %arg1 :
-  ttng.barrier_expect %barrier, 16 {from_ctas = 7 : i32}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
-  // BARRIER-NEXT: ttng.barrier_expect %arg0, 16 {from_ctas = 5 : i32}, %arg1 :
-  ttng.barrier_expect %barrier, 16 {from_ctas = 5 : i32}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
+  ttng.barrier_expect %barrier, 16 {fromCTA = 7 : i32}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
+  // BARRIER-NEXT: ttng.barrier_expect %arg0, 16 {fromCTA = 5 : i32}, %arg1 :
+  ttng.barrier_expect %barrier, 16 {fromCTA = 5 : i32}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
   // BARRIER-NEXT: ttng.arrive_barrier %arg0, 1, %arg1 :
-  ttng.arrive_barrier %barrier, 1, %pred {from_ctas = 7 : i32} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
-  // BARRIER-NEXT: ttng.arrive_barrier %arg0, 1, %arg1 {from_ctas = 5 : i32} :
-  ttng.arrive_barrier %barrier, 1, %pred {from_ctas = 5 : i32} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
+  ttng.arrive_barrier %barrier, 1, %pred {fromCTA = 7 : i32} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
+  // BARRIER-NEXT: ttng.arrive_barrier %arg0, 1, %arg1 {fromCTA = 5 : i32} :
+  ttng.arrive_barrier %barrier, 1, %pred {fromCTA = 5 : i32} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
   tt.return
 }
 }

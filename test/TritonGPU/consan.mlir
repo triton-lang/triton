@@ -67,16 +67,16 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
-#barrier_from_ctas = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2], [4]]}>
-#smem_from_ctas = #ttg.shared_memory
+#barrier_fromCTA = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2], [4]]}>
+#smem_fromCTA = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
-  // CHECK-LABEL: @mbarrier_from_ctas_basis_mask
-  tt.func public @mbarrier_from_ctas_basis_mask() {
+  // CHECK-LABEL: @mbarrier_fromCTA_basis_mask
+  tt.func public @mbarrier_fromCTA_basis_mask() {
     %true = arith.constant true
-    %bar = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8xi64, #barrier_from_ctas, #smem_from_ctas, mutable>
-    ttng.init_barrier %bar, 1 : !ttg.memdesc<8xi64, #barrier_from_ctas, #smem_from_ctas, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8xi64, #barrier_fromCTA, #smem_fromCTA, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<8xi64, #barrier_fromCTA, #smem_fromCTA, mutable>
 
-    // from_ctas=5 preserves CTA-ID bits 0 and 2, selects CTA0, CTA1, CTA4,
+    // fromCTA=5 preserves CTA-ID bits 0 and 2, selects CTA0, CTA1, CTA4,
     // and CTA5 as issuers, and sends to CTA groups with matching fixed bits.
     // CHECK: ttng.init_barrier
     // CHECK: %[[EXPECT_CTA:.*]] = tti.experimental_cluster_cta_id : i32
@@ -93,11 +93,11 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: %[[EXPECT_RECIPIENTS:.*]] = arith.shli %[[EXPECT_PATTERN]], %[[EXPECT_BASE]] : i32
     // CHECK: tt.call @__triton_consan_verify_barrier_arrive{{.*}}({{.*}}%[[EXPECT_PRED]]{{.*}}%[[EXPECT_RECIPIENTS]])
     // CHECK: ttng.barrier_expect
-    ttng.barrier_expect %bar, 16 {from_ctas = 5 : i32}, %true : !ttg.memdesc<8xi64, #barrier_from_ctas, #smem_from_ctas, mutable>
+    ttng.barrier_expect %bar, 16 {fromCTA = 5 : i32}, %true : !ttg.memdesc<8xi64, #barrier_fromCTA, #smem_fromCTA, mutable>
 
     // CHECK: tt.call @__triton_consan_verify_barrier_arrive
     // CHECK: ttng.arrive_barrier
-    ttng.arrive_barrier %bar, 1, %true {from_ctas = 5 : i32} : !ttg.memdesc<8xi64, #barrier_from_ctas, #smem_from_ctas, mutable>
+    ttng.arrive_barrier %bar, 1, %true {fromCTA = 5 : i32} : !ttg.memdesc<8xi64, #barrier_fromCTA, #smem_fromCTA, mutable>
     tt.return
   }
 }

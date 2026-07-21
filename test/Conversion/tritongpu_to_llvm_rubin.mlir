@@ -154,8 +154,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 #barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107"} {
-  // CHECK-LABEL: @arrive_barrier_from_ctas0_multicast
-  tt.func @arrive_barrier_from_ctas0_multicast(%barrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>, %pred: i1) {
+  // CHECK-LABEL: @arrive_barrier_fromCTA0_multicast
+  tt.func @arrive_barrier_fromCTA0_multicast(%barrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>, %pred: i1) {
     // CHECK: nvvm.barrier
     // CHECK: nvvm.read.ptx.sreg.tid.x
     // CHECK: llvm.icmp "eq"
@@ -165,7 +165,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-NOT: llvm.ptrtoint
     // CHECK-NOT: llvm.xor
     // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 2, $2;
-    ttng.arrive_barrier %barrier, 2, %pred {from_ctas = 0 : i32} : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.arrive_barrier %barrier, 2, %pred {fromCTA = 0 : i32} : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
     tt.return
   }
 }
@@ -175,8 +175,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2], [4]]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107"} {
-  // CHECK-LABEL: @expect_barrier_from_ctas0145_multicast
-  tt.func @expect_barrier_from_ctas0145_multicast(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>, %pred: i1) {
+  // CHECK-LABEL: @expect_barrier_fromCTA0145_multicast
+  tt.func @expect_barrier_fromCTA0145_multicast(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>, %pred: i1) {
     // CHECK: nvvm.barrier
     // CHECK: nvvm.read.ptx.sreg.tid.x
     // CHECK: llvm.icmp "eq"
@@ -188,7 +188,7 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-NOT: llvm.ptrtoint
     // CHECK-NOT: llvm.xor
     // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cluster.multicast::cluster::32b.b64 _, [$1], 16384, $2;
-    ttng.barrier_expect %barrier, 16384 {from_ctas = 5 : i32}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %barrier, 16384 {fromCTA = 5 : i32}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
     tt.return
   }
 }

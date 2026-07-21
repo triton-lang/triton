@@ -396,7 +396,7 @@ def test_clc_result_visibility(FAILURE, device, run_wrapper, monkeypatch, num_ct
         mbarrier.init(clc_bar, count=1)
 
         clc.try_cancel(clc_result, clc_bar)
-        mbarrier.expect(clc_bar, 16, from_ctas=0x0)
+        mbarrier.expect(clc_bar, 16, from_cta=0x0)
         mbarrier.wait(clc_bar, 0, pred=(not FAILURE))
         response = clc.load_result(clc_result)
         mbarrier.wait(clc_bar, 0, pred=FAILURE)
@@ -429,9 +429,9 @@ def test_clc_double_try_cancel_result_overwrite(device, run_wrapper, monkeypatch
         mbarrier.init(bars.index(0), count=1)
         mbarrier.init(bars.index(1), count=1)
 
-        mbarrier.expect(bars.index(0), 16, from_ctas=0x0)
+        mbarrier.expect(bars.index(0), 16, from_cta=0x0)
         clc.try_cancel(result, bars.index(0))
-        mbarrier.expect(bars.index(1), 16, from_ctas=0x0)
+        mbarrier.expect(bars.index(1), 16, from_cta=0x0)
         clc.try_cancel(result, bars.index(1))
 
         mbarrier.wait(bars.index(0), 0)
@@ -460,7 +460,7 @@ def test_clc_result_reuse_after_cluster_barrier(device, run_wrapper, monkeypatch
         clc_bar = mbarrier.allocate_mbarrier()
         mbarrier.init(clc_bar, count=1)
 
-        mbarrier.expect(clc_bar, 16, from_ctas=0x0)
+        mbarrier.expect(clc_bar, 16, from_cta=0x0)
         clc.try_cancel(clc_result, clc_bar)
         mbarrier.wait(clc_bar, 0)
         first = clc.load_result(clc_result)
@@ -469,7 +469,7 @@ def test_clc_result_reuse_after_cluster_barrier(device, run_wrapper, monkeypatch
         # next multi-CTA CLC request.
         hopper.fence_async_shared()
 
-        mbarrier.expect(clc_bar, 16, from_ctas=0x0)
+        mbarrier.expect(clc_bar, 16, from_cta=0x0)
         clc.try_cancel(clc_result, clc_bar)
         mbarrier.wait(clc_bar, 1)
         second = clc.load_result(clc_result)
@@ -480,10 +480,10 @@ def test_clc_result_reuse_after_cluster_barrier(device, run_wrapper, monkeypatch
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell")
-@pytest.mark.parametrize("SYNCHRONIZED", [False, True], ids=["local-expect", "from-ctas0-expect"])
-def test_clc_slot_reuse_from_ctas(SYNCHRONIZED, device, run_wrapper, monkeypatch):
+@pytest.mark.parametrize("SYNCHRONIZED", [False, True], ids=["local-expect", "from-cta0-expect"])
+def test_clc_slot_reuse_from_cta(SYNCHRONIZED, device, run_wrapper, monkeypatch):
     if run_wrapper:
-        result = run_in_process(test_clc_slot_reuse_from_ctas, (SYNCHRONIZED, device, False, monkeypatch))
+        result = run_in_process(test_clc_slot_reuse_from_cta, (SYNCHRONIZED, device, False, monkeypatch))
         if SYNCHRONIZED:
             assert result.exc is None
             assert result.driver_stderr_output == ""
@@ -506,7 +506,7 @@ def test_clc_slot_reuse_from_ctas(SYNCHRONIZED, device, run_wrapper, monkeypatch
     def clc_partition(slot, result, clc_bar, consumed, SYNCHRONIZED: ttgl.constexpr, layout: ttgl.constexpr):
         mbarrier.wait(consumed, 0, deps=[slot])
         if SYNCHRONIZED:
-            mbarrier.expect(clc_bar, 16, from_ctas=0x0)
+            mbarrier.expect(clc_bar, 16, from_cta=0x0)
         else:
             mbarrier.expect(clc_bar, 16)
         clc.try_cancel(result, clc_bar)

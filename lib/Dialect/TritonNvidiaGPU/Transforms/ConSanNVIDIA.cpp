@@ -116,13 +116,13 @@ public:
     if (auto invalOp = dyn_cast<ttng::InvalBarrierOp>(op))
       mask = getBarrierMask(invalOp.getAlloc());
     if (isa<ttng::BarrierExpectOp, ttng::ArriveBarrierOp>(op)) {
-      std::optional<uint32_t> fromCTAs;
+      std::optional<uint32_t> fromCTA;
       if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))
-        fromCTAs = expectOp.getFromCtas();
+        fromCTA = expectOp.getFromCTA();
       else
-        fromCTAs = cast<ttng::ArriveBarrierOp>(op).getFromCtas();
-      if (fromCTAs)
-        mask = ~*fromCTAs & (ttg::lookupNumCTAs(op) - 1);
+        fromCTA = cast<ttng::ArriveBarrierOp>(op).getFromCTA();
+      if (fromCTA)
+        mask = ~*fromCTA & (ttg::lookupNumCTAs(op) - 1);
     }
     if (auto loadOp = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
       if (loadOp.getMulticast())

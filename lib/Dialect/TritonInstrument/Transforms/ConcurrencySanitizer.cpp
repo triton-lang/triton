@@ -552,14 +552,14 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
 Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
   if (isa<ttng::BarrierExpectOp, ttng::ArriveBarrierOp>(op)) {
     Value barrier = cast<ttg::MBarrierOpInterface>(op).getBarrier();
-    std::optional<uint32_t> fromCTAs;
+    std::optional<uint32_t> fromCTA;
     if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))
-      fromCTAs = expectOp.getFromCtas();
+      fromCTA = expectOp.getFromCTA();
     else
-      fromCTAs = cast<ttng::ArriveBarrierOp>(op).getFromCtas();
-    if (fromCTAs) {
+      fromCTA = cast<ttng::ArriveBarrierOp>(op).getFromCTA();
+    if (fromCTA) {
       int numCTAs = ttg::lookupNumCTAs(op);
-      uint32_t broadcastBits = ~*fromCTAs & (numCTAs - 1);
+      uint32_t broadcastBits = ~*fromCTA & (numCTAs - 1);
       auto encoding = ttng::getTMAMulticastMaskEncoding(numCTAs, broadcastBits);
       return createCTABitset(b, encoding.pattern, encoding.fixedBits);
     }

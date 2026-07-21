@@ -58,19 +58,19 @@ Value getElectWarp0OrThread0(const NVIDIA::TargetInfo &targetInfo,
   }
 }
 
-struct FromCTAsLowering {
+struct FromCTALowering {
   Value pred;
   Value barrierPtr;
   Value multicastMask;
 };
 
-FromCTAsLowering getFromCTAsLowering(Location loc,
-                                     ConversionPatternRewriter &rewriter,
-                                     Value barrierPtr, uint32_t fromCTAs,
-                                     bool supportsMBarrierMulticast) {
+FromCTALowering getFromCTALowering(Location loc,
+                                   ConversionPatternRewriter &rewriter,
+                                   Value barrierPtr, uint32_t fromCTA,
+                                   bool supportsMBarrierMulticast) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   uint32_t broadcastMask =
-      (triton::gpu::lookupNumCTAs(rewriter) - 1) & ~fromCTAs;
+      (triton::gpu::lookupNumCTAs(rewriter) - 1) & ~fromCTA;
   Type i32Ty = rewriter.getIntegerType(32);
 
   Value id = getThreadId(rewriter, loc);
@@ -262,10 +262,10 @@ struct BarrierExpectConversion
     Value barrierPtr = LLVM::NVIDIA::getLeaderAddress(
         loc, rewriter, smemObj.getBase(), barrierTy);
     Value multicastMask;
-    if (std::optional<uint32_t> fromCTAs = op.getFromCtas()) {
-      FromCTAsLowering lowering =
-          getFromCTAsLowering(loc, rewriter, smemObj.getBase(), *fromCTAs,
-                              supportsMBarrierMulticast);
+    if (std::optional<uint32_t> fromCTA = op.getFromCTA()) {
+      FromCTALowering lowering =
+          getFromCTALowering(loc, rewriter, smemObj.getBase(), *fromCTA,
+                             supportsMBarrierMulticast);
       pred = lowering.pred;
       barrierPtr = lowering.barrierPtr;
       multicastMask = lowering.multicastMask;
@@ -417,10 +417,10 @@ struct ArriveBarrierOpConversion
     Value barrierPtr = LLVM::NVIDIA::getLeaderAddress(
         loc, rewriter, smemObj.getBase(), barrierTy);
     Value multicastMask;
-    if (std::optional<uint32_t> fromCTAs = op.getFromCtas()) {
-      FromCTAsLowering lowering =
-          getFromCTAsLowering(loc, rewriter, smemObj.getBase(), *fromCTAs,
-                              supportsMBarrierMulticast && !op.isMulticast());
+    if (std::optional<uint32_t> fromCTA = op.getFromCTA()) {
+      FromCTALowering lowering =
+          getFromCTALowering(loc, rewriter, smemObj.getBase(), *fromCTA,
+                             supportsMBarrierMulticast && !op.isMulticast());
       pred = lowering.pred;
       barrierPtr = lowering.barrierPtr;
       multicastMask = lowering.multicastMask;
@@ -448,7 +448,7 @@ struct ArriveBarrierOpConversion
         ptxBuilder.newOperand(barrierPtr, "r")};
     if (op.isMulticast()) {
       multicastMask = LLVM::NVIDIA::createTMAMulticastMask(
-          loc, rewriter, static_cast<uint16_t>(op.getCtaMask()));
+          loc, rewriter, static_cast<uint16_t>(op.getMulticastCTA()));
     }
     if (multicastMask)
       operands.push_back(ptxBuilder.newOperand(multicastMask, "r"));
