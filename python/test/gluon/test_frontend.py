@@ -1,6 +1,7 @@
 import expecttest
 import pytest
 import re
+from dataclasses import replace
 
 from triton.backends.compiler import GPUTarget
 from triton.experimental import gluon
@@ -519,39 +520,11 @@ class ForwardOnlyAggregate:
 
 @gluon.aggregate
 class NotImplementedAggregate:
-    __triton_operator_priority__ = 7
     value: tl.tensor
 
     @gluon.constexpr_function
     def __add__(self, rhs):
         return NotImplemented
-
-
-def _tensor_tuple_is_power_of_two(value):
-    return value > 0 and value & (value - 1) == 0
-
-
-def _tensor_tuple_decompose_extent(extent, minimum_padding_size):
-    padded_extent = ((extent + minimum_padding_size - 1) // minimum_padding_size) * minimum_padding_size
-    chunks = []
-    remaining = padded_extent
-    while remaining:
-        chunk = 1 << (remaining.bit_length() - 1)
-        chunks.append(chunk)
-        remaining -= chunk
-    return tuple(chunks), padded_extent - extent
-
-
-def _tensor_tuple_derive_layout(template, split_dim, largest_chunk, chunk):
-    size_per_thread = list(template.size_per_thread)
-    size_per_thread[split_dim] = max(1, size_per_thread[split_dim] * chunk // largest_chunk)
-    return ttgl.BlockedLayout(
-        size_per_thread=size_per_thread,
-        threads_per_warp=list(template.threads_per_warp),
-        warps_per_cta=list(template.warps_per_cta),
-        order=list(template.order),
-        cga_layout=[list(basis) for basis in template.cga_layout],
-    )
 
 
 def TensorTuple(shape, layout, minimum_padding_size=1):
@@ -562,46 +535,43 @@ def TensorTuple(shape, layout, minimum_padding_size=1):
     largest chunk. Smaller chunks retain its thread/warp/CTA topology and scale
     ``size_per_thread`` along the irregular dimension when possible.
     """
+    def is_power_of_two(value):
+        return value > 0 and value & (value - 1) == 0
+
     shape = tuple(shape)
     assert isinstance(layout, ttgl.BlockedLayout), "TensorTuple requires a BlockedLayout template"
     assert len(shape) == layout.rank, "shape and layout ranks must match"
     assert all(isinstance(dim, int) and dim > 0 for dim in shape), "shape dimensions must be positive integers"
-    assert _tensor_tuple_is_power_of_two(minimum_padding_size), \
+    assert isinstance(minimum_padding_size, int) and is_power_of_two(minimum_padding_size), \
         "minimum_padding_size must be a positive power of two"
 
-    irregular_dims = tuple(i for i, dim in enumerate(shape) if not _tensor_tuple_is_power_of_two(dim))
+    irregular_dims = [i for i, dim in enumerate(shape) if not is_power_of_two(dim)]
     assert len(irregular_dims) == 1, "shape must have exactly one non-power-of-two dimension"
     split_dim = irregular_dims[0]
 
-    chunks, padding = _tensor_tuple_decompose_extent(shape[split_dim], minimum_padding_size)
-    offsets = []
-    physical_shapes = []
-    logical_shapes = []
-    layouts = []
-    offset = 0
-    remaining = shape[split_dim]
-    for chunk in chunks:
-        logical_chunk = min(chunk, remaining)
-        physical_shape = list(shape)
-        physical_shape[split_dim] = chunk
-        logical_shape = list(shape)
-        logical_shape[split_dim] = logical_chunk
-        offsets.append(offset)
-        physical_shapes.append(tuple(physical_shape))
-        logical_shapes.append(tuple(logical_shape))
-        layouts.append(_tensor_tuple_derive_layout(layout, split_dim, chunks[0], chunk))
-        offset += chunk
-        remaining -= logical_chunk
+    def with_split_extent(extent):
+        return shape[:split_dim] + (extent, ) + shape[split_dim + 1:]
 
-    offsets = tuple(offsets)
-    physical_shapes = tuple(physical_shapes)
-    logical_shapes = tuple(logical_shapes)
-    layouts = tuple(layouts)
+    extent = shape[split_dim]
+    padded_extent = ((extent + minimum_padding_size - 1) // minimum_padding_size) * minimum_padding_size
+    chunks = tuple(1 << bit for bit in range(padded_extent.bit_length() - 1, -1, -1)
+                   if padded_extent & (1 << bit))
+    padding = padded_extent - extent
+    offsets = tuple(sum(chunks[:i]) for i in range(len(chunks)))
+    physical_shapes = tuple(with_split_extent(chunk) for chunk in chunks)
+    logical_shapes = tuple(with_split_extent(chunk) for chunk in chunks[:-1])
+    logical_shapes += (with_split_extent(chunks[-1] - padding), )
+
+    def derive_layout(chunk):
+        size_per_thread = list(layout.size_per_thread)
+        size_per_thread[split_dim] = max(1, size_per_thread[split_dim] * chunk // chunks[0])
+        return replace(layout, size_per_thread=size_per_thread)
+
+    layouts = tuple(derive_layout(chunk) for chunk in chunks)
 
     jit_shape = ttgl.constexpr(shape)
     jit_split_dim = ttgl.constexpr(split_dim)
     jit_chunks = ttgl.constexpr(chunks)
-    jit_num_chunks = ttgl.constexpr(len(chunks))
     jit_offsets = ttgl.constexpr(offsets)
     jit_physical_shapes = ttgl.constexpr(physical_shapes)
     jit_logical_shapes = ttgl.constexpr(logical_shapes)
@@ -615,7 +585,7 @@ def TensorTuple(shape, layout, minimum_padding_size=1):
         def arange(start: ttgl.constexpr = 0):
             ttgl.static_assert(len(jit_shape) == 1, "arange requires a rank-1 TensorTuple")
             values = ()
-            for i in ttgl.static_range(jit_num_chunks):
+            for i in ttgl.static_range(len(jit_chunks)):
                 value = ttgl.arange(
                     start + jit_offsets[i],
                     start + jit_offsets[i] + jit_chunks[i],
@@ -627,7 +597,7 @@ def TensorTuple(shape, layout, minimum_padding_size=1):
         @gluon.jit
         def full(value, dtype: ttgl.constexpr):
             values = ()
-            for i in ttgl.static_range(jit_num_chunks):
+            for i in ttgl.static_range(len(jit_chunks)):
                 values += (ttgl.full(jit_physical_shapes[i], value, dtype, jit_layouts[i]), )
             return TensorTupleType(values)
 
@@ -635,7 +605,7 @@ def TensorTuple(shape, layout, minimum_padding_size=1):
         def valid_mask():
             ttgl.static_assert(len(jit_shape) == 1, "valid_mask requires a rank-1 TensorTuple")
             values = ()
-            for i in ttgl.static_range(jit_num_chunks):
+            for i in ttgl.static_range(len(jit_chunks)):
                 offsets = ttgl.arange(
                     jit_offsets[i],
                     jit_offsets[i] + jit_chunks[i],
@@ -646,126 +616,77 @@ def TensorTuple(shape, layout, minimum_padding_size=1):
             return TensorTupleType(values)
 
         @gluon.jit
-        def __add__(self, rhs):
-            values = ()
+        def _binary(self, rhs, method_name: ttgl.constexpr):
             if isinstance(rhs, TensorTupleType):
-                for i in ttgl.static_range(jit_num_chunks):
-                    values += (self.values[i] + rhs.values[i], )
+                rhs = rhs.values
             else:
-                for i in ttgl.static_range(jit_num_chunks):
-                    values += (self.values[i] + rhs, )
+                rhs = (rhs, ) * len(jit_chunks)
+            values = ()
+            for i in ttgl.static_range(len(jit_chunks)):
+                values += (getattr(self.values[i], method_name)(rhs[i]), )
             return TensorTupleType(values)
+
+        @gluon.jit
+        def __add__(self, rhs):
+            return self._binary(rhs, "__add__")
 
         @gluon.jit
         def __radd__(self, lhs):
-            return self + lhs
+            return self._binary(lhs, "__radd__")
 
         @gluon.jit
         def __sub__(self, rhs):
-            values = ()
-            if isinstance(rhs, TensorTupleType):
-                for i in ttgl.static_range(jit_num_chunks):
-                    values += (self.values[i] - rhs.values[i], )
-            else:
-                for i in ttgl.static_range(jit_num_chunks):
-                    values += (self.values[i] - rhs, )
-            return TensorTupleType(values)
+            return self._binary(rhs, "__sub__")
 
         @gluon.jit
         def __rsub__(self, lhs):
-            values = ()
-            for i in ttgl.static_range(jit_num_chunks):
-                values += (lhs - self.values[i], )
-            return TensorTupleType(values)
+            return self._binary(lhs, "__rsub__")
 
         @gluon.jit
         def __mul__(self, rhs):
-            values = ()
-            if isinstance(rhs, TensorTupleType):
-                for i in ttgl.static_range(jit_num_chunks):
-                    values += (self.values[i] * rhs.values[i], )
-            else:
-                for i in ttgl.static_range(jit_num_chunks):
-                    values += (self.values[i] * rhs, )
-            return TensorTupleType(values)
+            return self._binary(rhs, "__mul__")
 
         @gluon.jit
         def __rmul__(self, lhs):
-            return self * lhs
+            return self._binary(lhs, "__rmul__")
 
         @gluon.jit
         def __truediv__(self, rhs):
-            values = ()
-            if isinstance(rhs, TensorTupleType):
-                for i in ttgl.static_range(jit_num_chunks):
-                    values += (self.values[i] / rhs.values[i], )
-            else:
-                for i in ttgl.static_range(jit_num_chunks):
-                    values += (self.values[i] / rhs, )
-            return TensorTupleType(values)
+            return self._binary(rhs, "__truediv__")
 
         @gluon.jit
         def __rtruediv__(self, lhs):
-            values = ()
-            for i in ttgl.static_range(jit_num_chunks):
-                values += (lhs / self.values[i], )
-            return TensorTupleType(values)
+            return self._binary(lhs, "__rtruediv__")
+
+        @gluon.jit
+        def __lt__(self, rhs):
+            return self._binary(rhs, "__lt__")
+
+        @gluon.jit
+        def __le__(self, rhs):
+            return self._binary(rhs, "__le__")
+
+        @gluon.jit
+        def __gt__(self, rhs):
+            return self._binary(rhs, "__gt__")
+
+        @gluon.jit
+        def __ge__(self, rhs):
+            return self._binary(rhs, "__ge__")
+
+        @gluon.jit
+        def __and__(self, rhs):
+            return self._binary(rhs, "__and__")
+
+        @gluon.jit
+        def __or__(self, rhs):
+            return self._binary(rhs, "__or__")
 
         @gluon.jit
         def __neg__(self):
             values = ()
-            for i in ttgl.static_range(jit_num_chunks):
+            for i in ttgl.static_range(len(jit_chunks)):
                 values += (-self.values[i], )
-            return TensorTupleType(values)
-
-        @gluon.jit
-        def __lt__(self, rhs):
-            values = ()
-            for i in ttgl.static_range(jit_num_chunks):
-                values += (self.values[i] < rhs, )
-            return TensorTupleType(values)
-
-        @gluon.jit
-        def __le__(self, rhs):
-            values = ()
-            for i in ttgl.static_range(jit_num_chunks):
-                values += (self.values[i] <= rhs, )
-            return TensorTupleType(values)
-
-        @gluon.jit
-        def __gt__(self, rhs):
-            values = ()
-            for i in ttgl.static_range(jit_num_chunks):
-                values += (self.values[i] > rhs, )
-            return TensorTupleType(values)
-
-        @gluon.jit
-        def __ge__(self, rhs):
-            values = ()
-            for i in ttgl.static_range(jit_num_chunks):
-                values += (self.values[i] >= rhs, )
-            return TensorTupleType(values)
-
-        @gluon.jit
-        def __and__(self, rhs):
-            values = ()
-            if isinstance(rhs, TensorTupleType):
-                for i in ttgl.static_range(jit_num_chunks):
-                    values += (self.values[i] & rhs.values[i], )
-            else:
-                for i in ttgl.static_range(jit_num_chunks):
-                    values += (self.values[i] & rhs, )
-            return TensorTupleType(values)
-
-        @gluon.jit
-        def __or__(self, rhs):
-            values = ()
-            if isinstance(rhs, TensorTupleType):
-                for i in ttgl.static_range(jit_num_chunks):
-                    values += (self.values[i] | rhs.values[i], )
-            else:
-                for i in ttgl.static_range(jit_num_chunks):
-                    values += (self.values[i] | rhs, )
             return TensorTupleType(values)
 
     TensorTupleType.shape = shape
@@ -783,8 +704,40 @@ _TENSOR_TUPLE_LAYOUT = ttgl.BlockedLayout([2], [32], [4], [0])
 _TENSOR_TUPLE_288 = TensorTuple((288, ), _TENSOR_TUPLE_LAYOUT, minimum_padding_size=64)
 
 
+@filecheck_test
 @gluon.jit
-def tensor_tuple_frontend_kernel():
+def test_tensor_tuple_frontend_ir():
+    # CHECK-DAG: [[HEAD_LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    # CHECK-DAG: [[TAIL_LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    # CHECK-LABEL: tt.func public @test_tensor_tuple_frontend_ir()
+    # CHECK: [[OFFSETS:%.*]]:2 = tt.call {{.*}}TensorTupleType.arange
+    # CHECK: [[SCALAR:%.*]] = arith.constant 4 : i32
+    # CHECK: {{%.*}}:2 = tt.call {{.*}}TensorTupleType.__add__{{.*}}([[OFFSETS]]#0, [[OFFSETS]]#1, [[SCALAR]])
+    # CHECK: {{%.*}}:2 = tt.call {{.*}}TensorTupleType.__radd__{{.*}}([[OFFSETS]]#0, [[OFFSETS]]#1, [[SCALAR]])
+    # CHECK: {{%.*}}:2 = tt.call {{.*}}TensorTupleType.__rsub__{{.*}}([[OFFSETS]]#0, [[OFFSETS]]#1, [[SCALAR]])
+    # CHECK: {{%.*}}:2 = tt.call {{.*}}TensorTupleType.__gt__{{.*}}([[OFFSETS]]#0, [[OFFSETS]]#1, [[SCALAR]])
+
+    # CHECK-LABEL: tt.func private {{.*}}TensorTupleType.arange
+    # CHECK: [[HEAD_RANGE:%.*]] = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, [[HEAD_LAYOUT]]>
+    # CHECK-NEXT: [[TAIL_RANGE:%.*]] = tt.make_range {end = 320 : i32, start = 256 : i32} : tensor<64xi32, [[TAIL_LAYOUT]]>
+    # CHECK-NEXT: tt.return [[HEAD_RANGE]], [[TAIL_RANGE]]
+
+    # CHECK-LABEL: tt.func private {{.*}}TensorTupleType.valid_mask
+    # CHECK: [[VALID_HEAD_RANGE:%.*]] = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, [[HEAD_LAYOUT]]>
+    # CHECK: [[HEAD_END:%.*]] = arith.constant dense<256> : tensor<256xi32, [[HEAD_LAYOUT]]>
+    # CHECK: [[HEAD_MASK:%.*]] = arith.cmpi slt, [[VALID_HEAD_RANGE]], [[HEAD_END]]
+    # CHECK: [[VALID_TAIL_RANGE:%.*]] = tt.make_range {end = 320 : i32, start = 256 : i32} : tensor<64xi32, [[TAIL_LAYOUT]]>
+    # CHECK: [[TAIL_END:%.*]] = arith.constant dense<288> : tensor<64xi32, [[TAIL_LAYOUT]]>
+    # CHECK: [[TAIL_MASK:%.*]] = arith.cmpi slt, [[VALID_TAIL_RANGE]], [[TAIL_END]]
+    # CHECK: tt.return [[HEAD_MASK]], [[TAIL_MASK]]
+
+    # CHECK-LABEL: tt.func private {{.*}}TensorTupleType._binary{{.*}}__rsub__
+    # CHECK: [[SPLAT_LHS:%.*]] = tt.splat %arg2 : i32 -> tensor<256xi32, [[HEAD_LAYOUT]]>
+    # CHECK-NEXT: {{%.*}} = arith.subi [[SPLAT_LHS]], %arg0
+
+    # CHECK-LABEL: tt.func private {{.*}}TensorTupleType._binary{{.*}}__gt__
+    # CHECK: [[SPLAT_RHS:%.*]] = tt.splat %arg2 : i32 -> tensor<256xi32, [[HEAD_LAYOUT]]>
+    # CHECK-NEXT: {{%.*}} = arith.cmpi sgt, %arg0, [[SPLAT_RHS]]
     offsets = _TENSOR_TUPLE_288.arange()
     filled = _TENSOR_TUPLE_288.full(3, ttgl.int32)
     values = -(2 * offsets + filled - offsets) / 2
@@ -803,8 +756,27 @@ def tensor_tuple_frontend_kernel():
         anchor(reflected_cmp.values[i])
 
 
+@filecheck_test
 @gluon.jit
-def operator_dispatch_compatibility_kernel():
+def test_operator_dispatch_ir():
+    # CHECK: [[LAYOUT:#.*]] = #ttg.blocked
+    # CHECK-LABEL: tt.func public @test_operator_dispatch_ir()
+    # CHECK: [[VALUE:%.*]] = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, [[LAYOUT]]>
+    # CHECK: {{%.*}} = arith.addi [[VALUE]], [[VALUE]]
+    # CHECK: [[ADD_RHS:%.*]] = arith.constant dense<4> : tensor<128xi32, [[LAYOUT]]>
+    # CHECK-NEXT: {{%.*}} = arith.addi [[VALUE]], [[ADD_RHS]]
+    # CHECK: [[ADD_LHS:%.*]] = arith.constant dense<4> : tensor<128xi32, [[LAYOUT]]>
+    # CHECK-NEXT: {{%.*}} = arith.addi [[ADD_LHS]], [[VALUE]]
+    # CHECK: [[SUB_RHS:%.*]] = arith.constant dense<4> : tensor<128xi32, [[LAYOUT]]>
+    # CHECK-NEXT: {{%.*}} = arith.subi [[VALUE]], [[SUB_RHS]]
+    # CHECK: [[SUB_LHS:%.*]] = arith.constant dense<4> : tensor<128xi32, [[LAYOUT]]>
+    # CHECK-NEXT: {{%.*}} = arith.subi [[SUB_LHS]], [[VALUE]]
+    # CHECK: [[CMP_RHS:%.*]] = arith.constant dense<4> : tensor<128xi32, [[LAYOUT]]>
+    # CHECK-NEXT: {{%.*}} = arith.cmpi slt, [[VALUE]], [[CMP_RHS]]
+    # CHECK: [[CMP_LHS:%.*]] = arith.constant dense<4> : tensor<128xi32, [[LAYOUT]]>
+    # CHECK-NEXT: {{%.*}} = arith.cmpi slt, [[CMP_LHS]], [[VALUE]]
+    # CHECK: [[ZERO:%.*]] = arith.constant dense<0> : tensor<128xi32, [[LAYOUT]]>
+    # CHECK-NEXT: {{%.*}} = arith.subi [[ZERO]], [[VALUE]]
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
     value = ttgl.arange(0, 128, layout=layout)
     scalar_tensor = ttgl.to_tensor(4)
@@ -821,8 +793,16 @@ def operator_dispatch_compatibility_kernel():
     anchor(pair[1])
 
 
+@filecheck_test
 @gluon.jit
-def operator_dispatch_boolean_kernel():
+def test_operator_dispatch_boolean_ir():
+    # CHECK: [[LAYOUT:#.*]] = #ttg.blocked
+    # CHECK-LABEL: tt.func public @test_operator_dispatch_boolean_ir()
+    # CHECK: [[VALUE:%.*]] = tt.make_range {{.*}} : tensor<128xi32, [[LAYOUT]]>
+    # CHECK: [[RESULT:%.*]] = tt.call {{.*}}ForwardOnlyAggregate.logical_and{{.*}}([[VALUE]], [[VALUE]])
+    # CHECK-LABEL: tt.func private {{.*}}ForwardOnlyAggregate.logical_and
+    # CHECK: [[AND:%.*]] = arith.andi %arg0, %arg1 : tensor<128xi32, [[LAYOUT]]>
+    # CHECK-NEXT: tt.return [[AND]]
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
     value = ttgl.arange(0, 128, layout=layout)
     result = ForwardOnlyAggregate(value) and ForwardOnlyAggregate(value)
@@ -843,7 +823,7 @@ def operator_dispatch_not_implemented_kernel():
     NotImplementedAggregate(value) + 1
 
 
-def test_tensor_tuple_frontend():
+def test_tensor_tuple_metadata():
     assert _TENSOR_TUPLE_288.physical_shapes == ((256, ), (64, ))
     assert _TENSOR_TUPLE_288.logical_shapes == ((256, ), (32, ))
     assert _TENSOR_TUPLE_288.offsets == (0, 256)
@@ -858,29 +838,8 @@ def test_tensor_tuple_frontend():
     assert tensor_tuple_2d.logical_shapes == ((8, 256), (8, 61))
     assert [layout.size_per_thread for layout in tensor_tuple_2d.layouts] == [[1, 4], [1, 1]]
 
-    ir = anonymize_ir(run_parser(tensor_tuple_frontend_kernel, target=BLACKWELL_TARGET).str_nodebug())
-    assert "end = 256 : i32, start = 0 : i32" in ir
-    assert "end = 320 : i32, start = 256 : i32" in ir
-    assert "tensor<256xi32" in ir
-    assert "tensor<64xi32" in ir
-    assert "arith.muli" in ir
-    assert "arith.addi" in ir
-    assert "arith.subi" in ir
-    assert "arith.cmpi slt" in ir
 
-
-def test_operator_dispatch():
-    assert tl.constexpr.__triton_operator_priority__ == 0
-    assert tl.tensor.__triton_operator_priority__ == 1
-    assert ForwardOnlyAggregate.__triton_operator_priority__ == 2
-    assert NotImplementedAggregate.__triton_operator_priority__ == 7
-
-    ir = anonymize_ir(run_parser(operator_dispatch_compatibility_kernel).str_nodebug())
-    assert "arith.addi" in ir
-    assert "arith.subi" in ir
-    assert "arith.cmpi" in ir
-    assert "arith.andi" in run_parser(operator_dispatch_boolean_kernel).str_nodebug()
-
+def test_operator_dispatch_errors():
     with pytest.raises(CompilationError, match=r"unsupported operand type\(s\) for \+"):
         run_parser(operator_dispatch_missing_reflected_kernel)
     with pytest.raises(CompilationError, match=r"unsupported operand type\(s\) for \+"):

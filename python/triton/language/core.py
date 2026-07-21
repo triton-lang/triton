@@ -157,8 +157,6 @@ class const:
 class base_value:
     """Base class of values that exist in the triton IR (i.e. not constexprs).
     """
-    # Higher-priority values own mixed-type frontend operator dispatch.
-    __triton_operator_priority__ = 0
     type: base_type
 
     def _set_name(self, builder: ir.builder, name: str) -> None:
@@ -888,8 +886,6 @@ class tensor(base_value):
        of methods.  Not what I want, but I can't figure out how to fix it.  Give
        it its own section so it looks intentional. :)
     """
-
-    __triton_operator_priority__ = 1
 
     def __init__(self, handle, type: dtype):
         """Not called by user code."""
@@ -1676,7 +1672,6 @@ def _aggregate(cls):
     class aggregate_value(base_value):
         __triton_builtin__ = True
         __triton_aggregate__ = True
-        __triton_operator_priority__ = getattr(cls, "__triton_operator_priority__", 2)
         __annotations__ = all_annotations
 
         @classmethod
