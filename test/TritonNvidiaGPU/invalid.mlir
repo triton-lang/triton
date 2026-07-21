@@ -1012,6 +1012,44 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1, CGALayout = [[1, 0]]>
+#tmem_scales = #ttng.tensor_memory_scales_encoding<CGALayout = [[1, 0]]>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func public @memdesc_reinterpret_contiguous_subview_changed_storage_size_tmem(%arg0: !ttg.memdesc<256x512xf32, #tmem, #ttng.tensor_memory, mutable>) {
+    %sub = ttng.tmem_subslice %arg0 {offset = 496 : i32} : !ttg.memdesc<256x512xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<256x16xf32, #tmem, #ttng.tensor_memory, mutable, 256x512>
+    // expected-error @+1 {{result logical storage size must not exceed source logical storage size}}
+    %0 = ttg.memdesc_reinterpret %sub : !ttg.memdesc<256x16xf32, #tmem, #ttng.tensor_memory, mutable, 256x512> -> !ttg.memdesc<256x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func public @memdesc_reinterpret_noncontiguous_tmem_subview(%arg0: !ttg.memdesc<256x256xf32, #tmem, #ttng.tensor_memory, mutable>) {
+    %sub = ttng.tmem_subslice %arg0 {offset = 128 : i32, dim = 0 : i32} : !ttg.memdesc<256x256xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable, 256x256>
+    // expected-error @+1 {{source subview must be contiguous}}
+    %0 = ttg.memdesc_reinterpret %sub : !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable, 256x256> -> !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem64 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, colStride = 1>
+#tmem128 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func public @memdesc_reinterpret_tmem_subview_expands_rows(%arg0: !ttg.memdesc<64x128xf32, #tmem64, #ttng.tensor_memory, mutable>) {
+    %sub = ttng.tmem_subslice %arg0 {offset = 64 : i32} : !ttg.memdesc<64x128xf32, #tmem64, #ttng.tensor_memory, mutable> -> !ttg.memdesc<64x64xf32, #tmem64, #ttng.tensor_memory, mutable, 64x128>
+    // expected-error @+1 {{result logical storage size must not exceed source logical storage size}}
+    %0 = ttg.memdesc_reinterpret %sub : !ttg.memdesc<64x64xf32, #tmem64, #ttng.tensor_memory, mutable, 64x128> -> !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
@@ -1073,12 +1111,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 256, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func public @tmem_subslice_offset_alignment_invalid() {
-    %md = ttng.tmem_alloc : () -> !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
+  tt.func public @tmem_subslice_source_layout_noncontiguous() {
+    %md = ttng.tmem_alloc : () -> !ttg.memdesc<64x1024xf32, #tmem, #ttng.tensor_memory, mutable>
     // expected-error @+1 {{The split offset may not touch the tile}}
-    %sub = ttng.tmem_subslice %md {offset = 32 : i32} : !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable, 128x256>
+    %sub = ttng.tmem_subslice %md {offset = 256 : i32} : !ttg.memdesc<64x1024xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<64x512xf32, #tmem, #ttng.tensor_memory, mutable, 64x1024>
     tt.return
   }
 }
@@ -1091,6 +1129,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %md = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     // expected-error @+1 {{The split offset may not exceed the source shape}}
     %sub = ttng.tmem_subslice %md {offset = 128 : i32} : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable, 128x128>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func public @tmem_subslice_negative_offset(%md: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) {
+    // expected-error @+1 {{The split offset may not exceed the source shape}}
+    %sub = ttng.tmem_subslice %md {offset = -64 : i32} : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable, 128x128>
     tt.return
   }
 }
