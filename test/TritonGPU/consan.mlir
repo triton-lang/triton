@@ -1761,6 +1761,63 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
+#shared = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [16, 16]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 4096 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @padded_dynamic_nested_subslice
+  tt.func public @padded_dynamic_nested_subslice(%idx: i32, %cond: i1) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %multi = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x16x16xf32, #shared, #smem, mutable>
+    %dynamic = ttg.memdesc_index %multi[%idx] : !ttg.memdesc<2x16x16xf32, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf32, #shared, #smem, mutable>
+    %page0 = ttg.memdesc_index %multi[%c0] : !ttg.memdesc<2x16x16xf32, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf32, #shared, #smem, mutable>
+    %page1 = ttg.memdesc_index %multi[%c1] : !ttg.memdesc<2x16x16xf32, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf32, #shared, #smem, mutable>
+    %dynamic_row = ttg.memdesc_subslice %dynamic [8, 0] : !ttg.memdesc<16x16xf32, #shared, #smem, mutable> -> !ttg.memdesc<8x16xf32, #shared, #smem, mutable, 16x16>
+    %dynamic_nested = ttg.memdesc_subslice %dynamic_row [0, 8] : !ttg.memdesc<8x16xf32, #shared, #smem, mutable, 16x16> -> !ttg.memdesc<8x8xf32, #shared, #smem, mutable, 16x16>
+    %row0 = ttg.memdesc_subslice %page0 [8, 0] : !ttg.memdesc<16x16xf32, #shared, #smem, mutable> -> !ttg.memdesc<8x16xf32, #shared, #smem, mutable, 16x16>
+    %nested0 = ttg.memdesc_subslice %row0 [0, 8] : !ttg.memdesc<8x16xf32, #shared, #smem, mutable, 16x16> -> !ttg.memdesc<8x8xf32, #shared, #smem, mutable, 16x16>
+    %row1 = ttg.memdesc_subslice %page1 [8, 0] : !ttg.memdesc<16x16xf32, #shared, #smem, mutable> -> !ttg.memdesc<8x16xf32, #shared, #smem, mutable, 16x16>
+    %nested1 = ttg.memdesc_subslice %row1 [0, 8] : !ttg.memdesc<8x16xf32, #shared, #smem, mutable, 16x16> -> !ttg.memdesc<8x8xf32, #shared, #smem, mutable, 16x16>
+    %complement1 = ttg.memdesc_subslice %row1 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem, mutable, 16x16> -> !ttg.memdesc<8x8xf32, #shared, #smem, mutable, 16x16>
+    %selected = arith.select %cond, %dynamic_nested, %nested1 : !ttg.memdesc<8x8xf32, #shared, #smem, mutable, 16x16>
+
+    // The full pages contain their slices, and complementary page-one slices
+    // remain disjoint in the exact five-lane plan.
+    // CHECK-DAG: arith.constant dense<[true, true, false, false, false, false, false, false]> : tensor<8xi1
+    // CHECK-DAG: arith.constant dense<[false, false, true, true, true, false, false, false]> : tensor<8xi1
+    // CHECK-DAG: arith.constant dense<[false, true, false, false, false, false, false, false]> : tensor<8xi1
+    // CHECK-DAG: arith.constant dense<[false, false, false, false, true, false, false, false]> : tensor<8xi1
+    // CHECK-DAG: arith.constant dense<[false, false, false, true, false, false, false, false]> : tensor<8xi1
+    %0 = ttg.local_load %page0 : !ttg.memdesc<16x16xf32, #shared, #smem, mutable> -> tensor<16x16xf32>
+    %1 = ttg.local_load %page1 : !ttg.memdesc<16x16xf32, #shared, #smem, mutable> -> tensor<16x16xf32>
+    %2 = ttg.local_load %nested0 : !ttg.memdesc<8x8xf32, #shared, #smem, mutable, 16x16> -> tensor<8x8xf32>
+    %3 = ttg.local_load %nested1 : !ttg.memdesc<8x8xf32, #shared, #smem, mutable, 16x16> -> tensor<8x8xf32>
+    %4 = ttg.local_load %complement1 : !ttg.memdesc<8x8xf32, #shared, #smem, mutable, 16x16> -> tensor<8x8xf32>
+
+    // The padded page stride is 1152 bytes; the nested affine offset remains
+    // unpadded (544), yielding the two runtime candidates 544 and 1696.
+    // CHECK: %[[DYNAMIC_BASE:.*]] = tti.experimental_memdesc_to_i32
+    // CHECK-DAG: %[[DYNAMIC_0:.*]] = tti.experimental_memory_offset_to_i32 544, shared_mem
+    // CHECK-DAG: %[[DYNAMIC_1:.*]] = tti.experimental_memory_offset_to_i32 1696, shared_mem
+    // CHECK-DAG: arith.cmpi eq, %[[DYNAMIC_BASE]], %[[DYNAMIC_0]]
+    // CHECK-DAG: arith.cmpi eq, %[[DYNAMIC_BASE]], %[[DYNAMIC_1]]
+    // CHECK: tti.experimental_assert_uniform {{.*}}, "internal ConSan error: active memdesc resolved to no buffer state"
+    %5 = ttg.local_load %dynamic_nested : !ttg.memdesc<8x8xf32, #shared, #smem, mutable, 16x16> -> tensor<8x8xf32>
+
+    // CHECK: %[[SELECT_BASE:.*]] = tti.experimental_memdesc_to_i32
+    // CHECK-DAG: %[[SELECT_0:.*]] = tti.experimental_memory_offset_to_i32 544, shared_mem
+    // CHECK-DAG: %[[SELECT_1:.*]] = tti.experimental_memory_offset_to_i32 1696, shared_mem
+    // CHECK-DAG: arith.cmpi eq, %[[SELECT_BASE]], %[[SELECT_0]]
+    // CHECK-DAG: arith.cmpi eq, %[[SELECT_BASE]], %[[SELECT_1]]
+    // CHECK: tti.experimental_assert_uniform {{.*}}, "internal ConSan error: active memdesc resolved to no buffer state"
+    %6 = ttg.local_load %selected : !ttg.memdesc<8x8xf32, #shared, #smem, mutable, 16x16> -> tensor<8x8xf32>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>

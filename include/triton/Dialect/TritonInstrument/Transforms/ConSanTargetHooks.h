@@ -34,12 +34,10 @@ struct MemEffectsOpInfo {
     enum class Proxy { Generic, Async } proxy;
     Value buf;
     std::string operandName = "";
-    uint32_t length = 0;
 
     Effects(RW rw, Value buf, std::string operandName = "",
             Proxy proxy = Proxy::Generic)
-        : rw(rw), proxy(proxy), buf(buf), operandName(operandName),
-          length(getMemDescLength(buf)) {}
+        : rw(rw), proxy(proxy), buf(buf), operandName(operandName) {}
   };
   struct BarrierInfo {
     Value barrier;

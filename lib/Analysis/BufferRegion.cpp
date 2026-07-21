@@ -7,6 +7,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/Support/MathExtras.h"
 
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
@@ -50,16 +51,6 @@ uint64_t getAllocationOffset(ttng::TMEMAllocOp op) {
   return colOffset | (rowOffset << 16);
 }
 
-unsigned getMemDescSize(ttg::MemDescType ty) {
-  if (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace())) {
-    return ttng::getTmemAllocSizes(ty).numCols;
-  }
-  assert(isa<ttg::SharedMemorySpaceAttr>(ty.getMemorySpace()) &&
-         "Unsupported memory space");
-  unsigned elSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
-  return product(ttg::getShapePerCTA(ty)) * elSize;
-}
-
 uint32_t applySharedPadding(uint32_t byteOffset, ttg::MemDescType ty) {
   auto padded = ttg::getPaddedEncoding(ty.getEncoding());
   if (!padded)
@@ -74,12 +65,6 @@ uint32_t applySharedPadding(uint32_t byteOffset, ttg::MemDescType ty) {
   }
   assert(paddedOffset <= std::numeric_limits<uint32_t>::max());
   return static_cast<uint32_t>(paddedOffset);
-}
-
-triton::LinearLayout getMemDescLinearLayout(ttg::MemDescType ty) {
-  if (ttg::isPaddedEncoding(ty.getEncoding()))
-    return ttg::paddedLinearLayout(ty);
-  return ttg::toLinearLayout(ty);
 }
 
 uint32_t getMemDescStorageStride(ttg::MemDescType ty);
@@ -102,6 +87,20 @@ FailureOr<triton::AddressSet> getMemDescAddresses(
     return relative->translated(storageBase);
   }
   bool isTmem = isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace());
+  auto collectPages = [&]() -> FailureOr<triton::AddressSet> {
+    ttg::MemDescType pageTy =
+        ty.cloneWith(ty.getShape().drop_front(), ty.getElementType());
+    uint32_t pageStride = getMemDescStorageStride(pageTy);
+    triton::AddressSet addresses;
+    for (int64_t page = 0; page < ty.getDimSize(0); ++page) {
+      FailureOr<triton::AddressSet> pageAddresses = getMemDescAddresses(
+          storageBase + page * pageStride, affineOffset, pageTy, op);
+      if (failed(pageAddresses))
+        return failure();
+      addresses.insert(*pageAddresses);
+    }
+    return addresses;
+  };
   size_t encodingRank =
       cast<ttg::LayoutEncodingTrait>(ty.getEncoding()).getRank();
   if (encodingRank != ty.getRank()) {
@@ -110,20 +109,9 @@ FailureOr<triton::AddressSet> getMemDescAddresses(
                     "analysis");
       return failure();
     }
-    ttg::MemDescType pageTy =
-        ty.cloneWith(ty.getShape().drop_front(), ty.getElementType());
-    uint32_t pageStride = getMemDescStorageStride(pageTy);
-    SmallVector<triton::AddressRange> ranges;
-    for (int64_t page = 0; page < ty.getDimSize(0); ++page) {
-      FailureOr<triton::AddressSet> pageAddresses = getMemDescAddresses(
-          storageBase + page * pageStride, affineOffset, pageTy, op);
-      if (failed(pageAddresses))
-        return failure();
-      llvm::append_range(ranges, pageAddresses->getRanges());
-    }
-    return triton::AddressSet(ranges);
+    return collectPages();
   }
-  triton::LinearLayout layout = getMemDescLinearLayout(ty);
+  triton::LinearLayout layout = ttg::getMemDescLinearLayout(ty);
   size_t layoutRank = llvm::size(layout.getOutDimNames());
   if (layoutRank != ty.getRank()) {
     if (layoutRank + 1 != ty.getRank()) {
@@ -131,24 +119,13 @@ FailureOr<triton::AddressSet> getMemDescAddresses(
                     "analysis");
       return failure();
     }
-    ttg::MemDescType pageTy =
-        ty.cloneWith(ty.getShape().drop_front(), ty.getElementType());
-    uint32_t pageStride = getMemDescStorageStride(pageTy);
-    SmallVector<triton::AddressRange> ranges;
-    for (int64_t page = 0; page < ty.getDimSize(0); ++page) {
-      FailureOr<triton::AddressSet> pageAddresses = getMemDescAddresses(
-          storageBase + page * pageStride, affineOffset, pageTy, op);
-      if (failed(pageAddresses))
-        return failure();
-      llvm::append_range(ranges, pageAddresses->getRanges());
-    }
-    return triton::AddressSet(ranges);
+    return collectPages();
   }
   triton::LinearLayout inverse = layout.pseudoinvert();
   MLIRContext *ctx = ty.getContext();
   SmallVector<StringAttr> dims = triton::standardOutDimNames(ctx, ty.getRank());
   SmallVector<int64_t> shape = ttg::getShapePerCTA(ty);
-  uint64_t numElements = product(shape);
+  uint64_t numPoints = product(shape);
   uint32_t bitWidth = ty.getElementTypeBitWidth();
   if (!isTmem && bitWidth % 8 != 0) {
     op->emitError("sub-byte shared-memory elements are unsupported by exact "
@@ -156,44 +133,12 @@ FailureOr<triton::AddressSet> getMemDescAddresses(
     return failure();
   }
 
-  SmallVector<uint32_t> addresses;
-  uint32_t unitsPerElement =
-      isTmem ? std::max(1u, llvm::divideCeil(bitWidth, 32u)) : bitWidth / 8;
-  addresses.reserve(numElements * unitsPerElement);
-
-  SmallVector<std::pair<StringAttr, int32_t>> logical;
-  logical.reserve(shape.size());
-  for (StringAttr dim : dims)
-    logical.push_back({dim, 0});
-
   StringAttr offsetName = StringAttr::get(ctx, "offset");
   StringAttr blockName = StringAttr::get(ctx, "block");
   StringAttr rowName = StringAttr::get(ctx, "row");
   StringAttr colName = StringAttr::get(ctx, "col");
-  for (uint64_t linear = 0; linear < numElements; ++linear) {
-    uint64_t remaining = linear;
-    for (int dim = shape.size() - 1; dim >= 0; --dim) {
-      logical[dim].second = remaining % shape[dim];
-      remaining /= shape[dim];
-    }
-    auto physical = inverse.apply(logical);
-    uint32_t offset = 0;
-    uint32_t row = 0;
-    uint32_t col = 0;
-    for (auto [name, value] : physical) {
-      if (name == blockName && value != 0) {
-        op->emitError("buffer footprint differs across CTA-local layout "
-                      "instances");
-        return failure();
-      }
-      if (name == offsetName)
-        offset = value;
-      else if (name == rowName)
-        row = value;
-      else if (name == colName)
-        col = value;
-    }
-
+  triton::AddressSet addresses;
+  auto addPhysicalAddress = [&](uint32_t offset, uint32_t row, uint32_t col) {
     if (isTmem) {
       uint64_t bitBegin = static_cast<uint64_t>(col) * bitWidth;
       uint32_t firstWord = bitBegin / 32;
@@ -204,7 +149,7 @@ FailureOr<triton::AddressSet> getMemDescAddresses(
       for (uint32_t word = firstWord; word < lastWord; ++word) {
         uint64_t address = begin + (word - firstWord);
         assert(address <= std::numeric_limits<uint32_t>::max());
-        addresses.push_back(address);
+        addresses.set(address);
       }
     } else {
       uint32_t relative = offset * (bitWidth / 8);
@@ -213,11 +158,54 @@ FailureOr<triton::AddressSet> getMemDescAddresses(
           static_cast<uint64_t>(storageBase) + applySharedPadding(combined, ty);
       for (uint32_t byte = 0; byte < bitWidth / 8; ++byte) {
         assert(begin + byte <= std::numeric_limits<uint32_t>::max());
-        addresses.push_back(begin + byte);
+        addresses.set(begin + byte);
       }
     }
+  };
+
+  struct PhysicalBasis {
+    uint32_t offset = 0;
+    uint32_t row = 0;
+    uint32_t col = 0;
+  };
+  SmallVector<PhysicalBasis> bases;
+  for (auto [dim, dimSize] : llvm::zip_equal(dims, shape)) {
+    unsigned numBits = llvm::Log2_64(dimSize);
+    if (numBits > static_cast<unsigned>(inverse.getInDimSizeLog2(dim))) {
+      op->emitError("buffer footprint exceeds its linear-layout domain");
+      return failure();
+    }
+    for (unsigned bit = 0; bit < numBits; ++bit) {
+      if (inverse.hasOutDim(blockName) &&
+          inverse.getBasis(dim, bit, blockName) != 0) {
+        op->emitError("buffer footprint differs across CTA-local layout "
+                      "instances");
+        return failure();
+      }
+      bases.push_back(
+          {inverse.hasOutDim(offsetName)
+               ? static_cast<uint32_t>(inverse.getBasis(dim, bit, offsetName))
+               : 0,
+           inverse.hasOutDim(rowName)
+               ? static_cast<uint32_t>(inverse.getBasis(dim, bit, rowName))
+               : 0,
+           inverse.hasOutDim(colName)
+               ? static_cast<uint32_t>(inverse.getBasis(dim, bit, colName))
+               : 0});
+    }
   }
-  return triton::AddressSet::fromAddresses(addresses);
+
+  PhysicalBasis physical;
+  for (uint64_t index = 0; index < numPoints; ++index) {
+    if (index != 0) {
+      const PhysicalBasis &basis = bases[llvm::countr_zero(index)];
+      physical.offset ^= basis.offset;
+      physical.row ^= basis.row;
+      physical.col ^= basis.col;
+    }
+    addPhysicalAddress(physical.offset, physical.row, physical.col);
+  }
+  return addresses;
 }
 
 FailureOr<triton::BufferRegion> getMemDescRegion(
@@ -229,7 +217,7 @@ FailureOr<triton::BufferRegion> getMemDescRegion(
   if (failed(addresses))
     return failure();
   uint32_t baseOffset = storageBase + affineOffset;
-  return triton::BufferRegion(baseOffset, getMemDescSize(ty),
+  return triton::BufferRegion(baseOffset, triton::getMemDescSize(ty),
                               std::move(*addresses), storageBase, affineOffset);
 }
 
@@ -284,13 +272,7 @@ getMemDescSubsliceUnpaddedByteOffset(ttg::MemDescSubsliceOp op) {
   if (offsets.empty())
     return 0;
 
-  Attribute encoding = srcTy.getEncoding();
-  mlir::triton::LinearLayout layout;
-  if (ttg::isPaddedEncoding(encoding)) {
-    layout = ttg::paddedLinearLayout(srcTy);
-  } else {
-    layout = ttg::toLinearLayout(srcTy);
-  }
+  mlir::triton::LinearLayout layout = ttg::getMemDescLinearLayout(srcTy);
 
   MLIRContext *ctx = op->getContext();
   SmallVector<StringAttr> dimNames =
@@ -345,145 +327,59 @@ std::optional<triton::BufferRegionAnalysis::RegionType> getRegionType(Value v) {
 
 namespace mlir::triton {
 
-AddressSet::AddressSet(ArrayRef<AddressRange> input)
-    : ranges(input.begin(), input.end()) {
-  llvm::erase_if(ranges,
-                 [](const AddressRange &range) { return range.empty(); });
-  llvm::sort(ranges);
-  SmallVector<AddressRange, 4> canonical;
-  for (const AddressRange &range : ranges) {
-    if (canonical.empty() || range.begin > canonical.back().end) {
-      canonical.push_back(range);
-      continue;
-    }
-    canonical.back().end = std::max(canonical.back().end, range.end);
-  }
-  ranges = std::move(canonical);
+uint32_t getMemDescSize(ttg::MemDescType ty) {
+  if (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace()))
+    return ttng::getTmemAllocSizes(ty).numCols;
+  assert(isa<ttg::SharedMemorySpaceAttr>(ty.getMemorySpace()) &&
+         "Unsupported memory space");
+  unsigned elementBytes = ty.getElementType().getIntOrFloatBitWidth() / 8;
+  return product(ttg::getShapePerCTA(ty)) * elementBytes;
 }
 
 AddressSet AddressSet::fromRange(uint32_t begin, uint32_t length) {
-  if (length == 0)
-    return {};
   uint64_t end = static_cast<uint64_t>(begin) + length;
   assert(end <= std::numeric_limits<uint32_t>::max() &&
          "address range exceeds 32-bit address space");
-  return AddressSet({AddressRange{begin, static_cast<uint32_t>(end)}});
+  AddressSet result;
+  for (uint64_t address = begin; address < end; ++address)
+    result.set(address);
+  return result;
 }
 
 AddressSet AddressSet::fromAddresses(ArrayRef<uint32_t> input) {
-  SmallVector<uint32_t> addresses(input.begin(), input.end());
-  llvm::sort(addresses);
-  addresses.erase(std::unique(addresses.begin(), addresses.end()),
-                  addresses.end());
-  SmallVector<AddressRange, 4> ranges;
-  for (uint32_t address : addresses) {
-    assert(address != std::numeric_limits<uint32_t>::max() &&
-           "cannot represent the end of the 32-bit address space");
-    if (ranges.empty() || address != ranges.back().end) {
-      ranges.push_back({address, address + 1});
-    } else {
-      ++ranges.back().end;
-    }
-  }
-  return AddressSet(ranges);
+  AddressSet result;
+  for (uint32_t address : input)
+    result.set(address);
+  return result;
 }
 
-uint64_t AddressSet::size() const {
-  return llvm::accumulate(
-      ranges, uint64_t{0}, [](uint64_t total, const AddressRange &range) {
-        return total + static_cast<uint64_t>(range.end) - range.begin;
-      });
+void AddressSet::set(uint32_t address) { addresses.set(address); }
+
+void AddressSet::insert(const AddressSet &other) {
+  addresses |= other.addresses;
 }
 
 bool AddressSet::contains(uint32_t address) const {
-  auto it = llvm::upper_bound(ranges, address,
-                              [](uint32_t address, const AddressRange &range) {
-                                return address < range.begin;
-                              });
-  if (it == ranges.begin())
-    return false;
-  --it;
-  return address < it->end;
+  return addresses.test(address);
 }
 
 bool AddressSet::intersects(const AddressSet &other) const {
-  size_t i = 0;
-  size_t j = 0;
-  while (i < ranges.size() && j < other.ranges.size()) {
-    if (ranges[i].begin < other.ranges[j].end &&
-        other.ranges[j].begin < ranges[i].end)
-      return true;
-    if (ranges[i].end <= other.ranges[j].begin)
-      ++i;
-    else
-      ++j;
-  }
-  return false;
+  return addresses.intersects(other.addresses);
 }
 
 bool AddressSet::contains(const AddressSet &other) const {
-  if (other.empty())
-    return true;
-  size_t i = 0;
-  for (const AddressRange &range : other.ranges) {
-    while (i < ranges.size() && ranges[i].end <= range.begin)
-      ++i;
-    if (i == ranges.size() || ranges[i].begin > range.begin ||
-        ranges[i].end < range.end)
-      return false;
-  }
-  return true;
+  return addresses.contains(other.addresses);
 }
 
 AddressSet AddressSet::translated(uint32_t delta) const {
-  SmallVector<AddressRange, 4> translatedRanges;
-  translatedRanges.reserve(ranges.size());
-  for (const AddressRange &range : ranges) {
-    uint64_t begin = static_cast<uint64_t>(range.begin) + delta;
-    uint64_t end = static_cast<uint64_t>(range.end) + delta;
-    assert(end <= std::numeric_limits<uint32_t>::max() &&
+  AddressSet result;
+  for (uint32_t address : addresses) {
+    uint64_t translated = static_cast<uint64_t>(address) + delta;
+    assert(translated <= std::numeric_limits<uint32_t>::max() &&
            "translated address set exceeds 32-bit address space");
-    translatedRanges.push_back(
-        {static_cast<uint32_t>(begin), static_cast<uint32_t>(end)});
+    result.set(translated);
   }
-  return AddressSet(translatedRanges);
-}
-
-BufferRelationMatrix createBufferAliasMatrix(ArrayRef<BufferRegion> regions) {
-  BufferRelationMatrix matrix(
-      regions.size(),
-      SmallVector<uint8_t>(regions.size(), static_cast<uint8_t>(0)));
-  for (size_t i = 0; i < regions.size(); ++i) {
-    for (size_t j = i; j < regions.size(); ++j) {
-      if (!regions[i].intersects(regions[j]))
-        continue;
-      matrix[i][j] = 1;
-      matrix[j][i] = 1;
-    }
-  }
-  return matrix;
-}
-
-BufferRelationMatrix
-createBufferContainmentMatrix(ArrayRef<BufferRegion> regions) {
-  BufferRelationMatrix matrix(
-      regions.size(),
-      SmallVector<uint8_t>(regions.size(), static_cast<uint8_t>(0)));
-  for (size_t container = 0; container < regions.size(); ++container)
-    for (size_t contained = 0; contained < regions.size(); ++contained)
-      matrix[container][contained] =
-          !regions[container].addresses.empty() &&
-          !regions[contained].addresses.empty() &&
-          regions[container].contains(regions[contained]);
-  return matrix;
-}
-
-bool hasCrossBufferAliasing(ArrayRef<BufferRegion> regions) {
-  for (size_t i = 0; i < regions.size(); ++i)
-    for (size_t j = i + 1; j < regions.size(); ++j)
-      if (regions[i].intersects(regions[j]))
-        return true;
-  return false;
+  return result;
 }
 
 BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions) {
@@ -520,28 +416,17 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions) {
   };
   SmallVector<ComponentPlan> componentPlans;
   for (const SmallVector<unsigned> &component : components) {
-    SmallVector<uint32_t> endpoints;
-    for (unsigned regionId : component) {
-      for (const AddressRange &range :
-           regions[regionId].addresses.getRanges()) {
-        endpoints.push_back(range.begin);
-        endpoints.push_back(range.end);
-      }
-    }
-    llvm::sort(endpoints);
-    endpoints.erase(std::unique(endpoints.begin(), endpoints.end()),
-                    endpoints.end());
+    AddressSet componentAddresses;
+    for (unsigned regionId : component)
+      componentAddresses.insert(regions[regionId].addresses);
 
     SmallVector<llvm::SmallBitVector> atomMemberships;
-    for (auto [begin, end] :
-         llvm::zip(endpoints, ArrayRef(endpoints).drop_front())) {
-      if (begin == end)
-        continue;
+    for (uint32_t address : componentAddresses) {
       llvm::SmallBitVector membership(component.size());
       for (auto [localId, regionId] : llvm::enumerate(component))
-        if (regions[regionId].addresses.contains(begin))
+        if (regions[regionId].addresses.contains(address))
           membership.set(localId);
-      if (membership.none() || llvm::is_contained(atomMemberships, membership))
+      if (llvm::is_contained(atomMemberships, membership))
         continue;
       atomMemberships.push_back(std::move(membership));
     }
@@ -550,11 +435,8 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions) {
     componentPlans.push_back({component, std::move(atomMemberships)});
   }
 
-  for (BufferStateMasks &masks : plan.regionMasks) {
-    masks.update.resize(plan.numLanes);
-    masks.check.resize(plan.numLanes);
-    masks.complete.resize(plan.numLanes);
-  }
+  for (llvm::SmallBitVector &mask : plan.regionMasks)
+    mask.resize(plan.numLanes);
 
   unsigned laneBegin = 0;
   for (const ComponentPlan &componentPlan : componentPlans) {
@@ -569,10 +451,7 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions) {
       for (auto [localId, regionId] : llvm::enumerate(component.regionIds)) {
         if (!membership.test(localId))
           continue;
-        BufferStateMasks &masks = plan.regionMasks[regionId];
-        masks.update.set(lane);
-        masks.check.set(lane);
-        masks.complete.set(lane);
+        plan.regionMasks[regionId].set(lane);
       }
     }
 

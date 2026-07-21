@@ -208,17 +208,13 @@ struct TestBufferRegionAliasPass
       for (const tt::BufferRegion &candidate : candidates) {
         auto it = llvm::lower_bound(regions, candidate);
         assert(it != regions.end() && *it == candidate);
-        const tt::BufferStateMasks &masks =
+        const llvm::SmallBitVector &mask =
             plan.regionMasks[std::distance(regions.begin(), it)];
         InFlightDiagnostic diag = module.emitRemark();
         diag << name << " case ";
         candidate.print(diag);
-        diag << ": update=";
-        printMask(diag, masks.update);
-        diag << ", check=";
-        printMask(diag, masks.check);
-        diag << ", complete=";
-        printMask(diag, masks.complete);
+        diag << ": mask=";
+        printMask(diag, mask);
       }
     }
   }

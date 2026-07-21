@@ -389,9 +389,7 @@ computeLocalOffsetsWithLogicalOffsets(Location loc, ttg::MemDescType memDescTy,
                                       const TargetInfoBase &targetInfo) {
   MLIRContext *ctx = memDescTy.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto sharedLayout = ttg::isPaddedEncoding(memDescTy.getEncoding())
-                          ? ttg::paddedLinearLayout(memDescTy)
-                          : ttg::toLinearLayout(memDescTy);
+  auto sharedLayout = ttg::getMemDescLinearLayout(memDescTy);
   LinearLayout invSharedLayout = sharedLayout.pseudoinvert();
   auto allDims = tt::standardOutDimNames(ctx, memDescTy.getRank());
   auto kOffset = str_attr("offset");

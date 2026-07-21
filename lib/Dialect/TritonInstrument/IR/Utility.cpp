@@ -13,6 +13,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 
 using namespace mlir;
@@ -172,15 +173,7 @@ static Value createCurrentCTAMask(OpBuilder &b, Location loc,
                                   RankedTensorType tensorType);
 
 uint32_t getMemDescLength(Value buf) {
-  auto memDescType = cast<MemDescType>(buf.getType());
-  if (isa<SharedEncodingTrait>(memDescType.getEncoding())) {
-    unsigned elSize = memDescType.getElementType().getIntOrFloatBitWidth() / 8;
-    return static_cast<uint32_t>(product(getShapePerCTA(memDescType)) * elSize);
-  }
-  if (isa<TensorMemorySpaceAttr>(memDescType.getMemorySpace())) {
-    return getTmemAllocSizes(memDescType).numCols;
-  }
-  llvm_unreachable("Unsupported memory space for memdesc");
+  return triton::getMemDescSize(cast<MemDescType>(buf.getType()));
 }
 
 gpu::GlobalScratchAllocOp
@@ -468,9 +461,8 @@ Region *AuxDataMap::RegionToValueMap::getEnclosingParitionOrFunctionRegion(
 
 LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
     ModuleOp module, FunctionBuilder &fb, const ConSanTargetHooks *hooks) {
-  SmallVector<SmallVector<BufferRegion>, numMemTypes> bufRegions(numMemTypes);
   SmallVector<BufferRegion> barrierRegions;
-  if (failed(getBuffersAndBarriers(module, bufRegions, barrierRegions, hooks)))
+  if (failed(getBuffersAndBarriers(module, barrierRegions, hooks)))
     return failure();
   int numCTAs = lookupNumCTAs(module);
   threadLayout = getThreadLayout(module, hooks);
@@ -662,9 +654,10 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
   return success();
 }
 
-LogicalResult AuxDataMap::getBuffersAndBarriers(
-    ModuleOp module, SmallVector<SmallVector<BufferRegion>, 2> &bufRegions,
-    SmallVector<BufferRegion> &barrierRegions, const ConSanTargetHooks *hooks) {
+LogicalResult
+AuxDataMap::getBuffersAndBarriers(ModuleOp module,
+                                  SmallVector<BufferRegion> &barrierRegions,
+                                  const ConSanTargetHooks *hooks) {
   // Collect shared memory buffers allocated in the module
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
   triton::BufferRegionAnalysis *analysis =
@@ -708,32 +701,27 @@ LogicalResult AuxDataMap::getBuffersAndBarriers(
   }
 
   analysis->calculateUsedBufferRegions(module);
-  bufRegions[(int)MemType::SHARED_MEM] = analysis->getAllUsedBufferRegions(
+  bufferRegions[(int)MemType::SHARED_MEM] = analysis->getAllUsedBufferRegions(
       BufferRegionAnalysis::RegionType::SHARED_MEMORY);
-  bufRegions[(int)MemType::TENSOR_MEM] = analysis->getAllUsedBufferRegions(
+  bufferRegions[(int)MemType::TENSOR_MEM] = analysis->getAllUsedBufferRegions(
       BufferRegionAnalysis::RegionType::TENSOR_MEMORY);
   barrierRegions = analysis->getAllUsedBufferRegions(
       BufferRegionAnalysis::RegionType::BARRIER);
 
   for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
     int iMemType = (int)memType;
-    llvm::sort(bufRegions[iMemType]);
-    bufRegions[iMemType].erase(
-        std::unique(bufRegions[iMemType].begin(), bufRegions[iMemType].end()),
-        bufRegions[iMemType].end());
-    if (bufRegions[iMemType].empty()) {
+    ArrayRef<BufferRegion> regions = bufferRegions[iMemType];
+    if (regions.empty()) {
       continue;
     }
 
-    bufferRegions[iMemType] = bufRegions[iMemType];
-    bufferStatePlans[iMemType] =
-        triton::createBufferStatePlan(bufferRegions[iMemType]);
+    bufferStatePlans[iMemType] = triton::createBufferStatePlan(regions);
 
     for (const auto &[value, regionInfo] : candidates[iMemType]) {
       SmallVector<uint32_t> ids;
       for (const BufferRegion &candidate : regionInfo.regions) {
-        auto it = llvm::lower_bound(bufRegions[iMemType], candidate);
-        if (it == bufRegions[iMemType].end() || !(*it == candidate)) {
+        auto it = llvm::lower_bound(regions, candidate);
+        if (it == regions.end() || !(*it == candidate)) {
           InFlightDiagnostic diag = emitError(
               value.getLoc(),
               "accessed exact buffer-region candidate is absent from the "
@@ -741,37 +729,21 @@ LogicalResult AuxDataMap::getBuffersAndBarriers(
           candidate.print(diag);
           return failure();
         }
-        ids.push_back(std::distance(bufRegions[iMemType].begin(), it));
+        ids.push_back(std::distance(regions.begin(), it));
       }
-      llvm::sort(ids);
-      ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
       const BufferStatePlan &plan = bufferStatePlans[iMemType];
-      auto sameMasks = [&](uint32_t lhs, uint32_t rhs) {
-        const BufferStateMasks &a = plan.regionMasks[lhs];
-        const BufferStateMasks &b = plan.regionMasks[rhs];
-        return a.update == b.update && a.check == b.check &&
-               a.complete == b.complete;
-      };
-      for (size_t i = 0; i < ids.size(); ++i) {
-        const BufferRegion &lhs = bufRegions[iMemType][ids[i]];
-        for (size_t j = i + 1; j < ids.size(); ++j) {
-          const BufferRegion &rhs = bufRegions[iMemType][ids[j]];
-          if (lhs.baseOffset == rhs.baseOffset && !sameMasks(ids[i], ids[j])) {
-            emitError(value.getLoc(),
-                      "ambiguous buffer-state cases share a runtime base");
-            return failure();
-          }
-        }
-      }
+      llvm::SmallDenseMap<uint32_t, uint32_t> firstByBase;
       SmallVector<uint32_t> distinguishableIds;
       for (uint32_t id : ids) {
-        const BufferRegion &region = bufRegions[iMemType][id];
-        if (llvm::any_of(distinguishableIds, [&](uint32_t existingId) {
-              const BufferRegion &existing = bufRegions[iMemType][existingId];
-              return existing.baseOffset == region.baseOffset;
-            }))
-          continue;
-        distinguishableIds.push_back(id);
+        auto [it, inserted] =
+            firstByBase.try_emplace(regions[id].baseOffset, id);
+        if (!inserted && plan.regionMasks[it->second] != plan.regionMasks[id]) {
+          emitError(value.getLoc(),
+                    "ambiguous buffer-state cases share a runtime base");
+          return failure();
+        }
+        if (inserted)
+          distinguishableIds.push_back(id);
       }
       bufferCandidateIds[iMemType].try_emplace(value,
                                                std::move(distinguishableIds));

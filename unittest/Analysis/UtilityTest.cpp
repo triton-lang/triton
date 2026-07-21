@@ -27,12 +27,18 @@ TEST(Analysis, reorder) {
   }
 }
 
-TEST(Analysis, AddressSetCanonicalization) {
-  triton::AddressSet set({{8, 12}, {1, 3}, {3, 5}, {10, 14}, {7, 7}});
-  ASSERT_EQ(set.getRanges().size(), 2);
-  EXPECT_EQ(set.getRanges()[0], (triton::AddressRange{1, 5}));
-  EXPECT_EQ(set.getRanges()[1], (triton::AddressRange{8, 14}));
-  EXPECT_EQ(set.size(), 10);
+TEST(Analysis, AddressSetMembership) {
+  triton::AddressSet set = triton::AddressSet::fromRange(1, 4);
+  set.insert(triton::AddressSet::fromRange(8, 6));
+  set.set(10);
+
+  EXPECT_TRUE(set.contains(1));
+  EXPECT_FALSE(set.contains(5));
+  EXPECT_TRUE(set.contains(13));
+
+  triton::AddressSet same =
+      triton::AddressSet::fromAddresses({13, 12, 11, 10, 9, 8, 4, 3, 2, 1, 10});
+  EXPECT_EQ(set, same);
 }
 
 TEST(Analysis, AddressSetExhaustiveEightUnitUniverse) {
@@ -56,32 +62,6 @@ TEST(Analysis, AddressSetExhaustiveEightUnitUniverse) {
   }
 }
 
-TEST(Analysis, ExactBufferRelationMatrices) {
-  triton::BufferRegion full(
-      /*baseOffset=*/0, /*length=*/8, triton::AddressSet::fromRange(0, 8),
-      /*storageBase=*/0,
-      /*affineOffset=*/0);
-  triton::BufferRegion evens(
-      /*baseOffset=*/0, /*length=*/8,
-      triton::AddressSet::fromAddresses({0, 2, 4, 6}),
-      /*storageBase=*/0, /*affineOffset=*/0);
-  triton::BufferRegion odds(
-      /*baseOffset=*/0, /*length=*/8,
-      triton::AddressSet::fromAddresses({1, 3, 5, 7}),
-      /*storageBase=*/0, /*affineOffset=*/0);
-  SmallVector<triton::BufferRegion> regions = {full, evens, odds};
-  auto aliases = triton::createBufferAliasMatrix(regions);
-  auto contains = triton::createBufferContainmentMatrix(regions);
-
-  EXPECT_TRUE(aliases[0][1]);
-  EXPECT_TRUE(aliases[0][2]);
-  EXPECT_FALSE(aliases[1][2]);
-  EXPECT_TRUE(contains[0][1]);
-  EXPECT_TRUE(contains[0][2]);
-  EXPECT_FALSE(contains[1][0]);
-  EXPECT_FALSE(contains[1][2]);
-}
-
 TEST(Analysis, BufferRegionIdentityPreservesSubviewProvenance) {
   triton::AddressSet addresses = triton::AddressSet::fromRange(16, 8);
   triton::BufferRegion fromSubview(
@@ -95,22 +75,6 @@ TEST(Analysis, BufferRegionIdentityPreservesSubviewProvenance) {
   triton::RegionInfo joined = triton::RegionInfo::join(
       triton::RegionInfo({fromSubview}), triton::RegionInfo({fromAllocation}));
   EXPECT_EQ(joined.regions.size(), 2);
-}
-
-TEST(Analysis, EmptyPaddingRegionsDoNotParticipateInMatrices) {
-  triton::BufferRegion real(/*baseOffset=*/4, /*length=*/4);
-  triton::BufferRegion padding;
-  SmallVector<triton::BufferRegion> regions = {real, padding};
-  auto aliases = triton::createBufferAliasMatrix(regions);
-  auto contains = triton::createBufferContainmentMatrix(regions);
-
-  EXPECT_TRUE(aliases[0][0]);
-  EXPECT_FALSE(aliases[0][1]);
-  EXPECT_FALSE(aliases[1][1]);
-  EXPECT_TRUE(contains[0][0]);
-  EXPECT_FALSE(contains[0][1]);
-  EXPECT_FALSE(contains[1][0]);
-  EXPECT_FALSE(contains[1][1]);
 }
 
 namespace {
@@ -153,20 +117,19 @@ bool planNeverMissesHazard(ArrayRef<unsigned> addressMasks, unsigned universe) {
     auto [exactState, planState] = worklist.front();
     worklist.pop_front();
     for (unsigned region = 0; region < regions.size(); ++region) {
-      uint64_t check = toBits(plan.regionMasks[region].check);
+      uint64_t check = toBits(plan.regionMasks[region]);
       bool exactHazard = (exactState & addressMasks[region]) != 0;
       bool planHazard = (planState & check) != 0;
       if (exactHazard && !planHazard)
         return false;
 
       State updated = {exactState | addressMasks[region],
-                       planState | toBits(plan.regionMasks[region].update)};
+                       planState | toBits(plan.regionMasks[region])};
       if (seen.insert(updated).second)
         worklist.push_back(updated);
 
       State completed = {exactState & ~addressMasks[region],
-                         planState &
-                             ~toBits(plan.regionMasks[region].complete)};
+                         planState & ~toBits(plan.regionMasks[region])};
       if (seen.insert(completed).second)
         worklist.push_back(completed);
     }
@@ -184,12 +147,11 @@ bool planPublishesEveryAliasingAtom(ArrayRef<unsigned> addressMasks,
     return false;
 
   for (unsigned generic = 0; generic < regions.size(); ++generic) {
-    uint64_t genericUpdate = toBits(plan.regionMasks[generic].update);
     for (unsigned async = 0; async < regions.size(); ++async) {
-      uint64_t asyncCheck = toBits(plan.regionMasks[async].check);
-      uint64_t asyncComplete = toBits(plan.regionMasks[async].complete);
-      uint64_t relevantGenericState = genericUpdate & asyncCheck;
-      if (relevantGenericState & ~asyncComplete)
+      bool exactOverlap = (addressMasks[generic] & addressMasks[async]) != 0;
+      bool published = (toBits(plan.regionMasks[generic]) &
+                        toBits(plan.regionMasks[async])) != 0;
+      if (exactOverlap != published)
         return false;
     }
   }
@@ -229,12 +191,12 @@ TEST(Analysis, BufferStatePlanUsesAtomsForSparsePartition) {
   for (unsigned exactState = 0; exactState < (1u << universe); ++exactState) {
     uint64_t planState = 0;
     if (exactState & 0x55)
-      planState |= toBits(plan.regionMasks[1].update);
+      planState |= toBits(plan.regionMasks[1]);
     if (exactState & 0xaa)
-      planState |= toBits(plan.regionMasks[2].update);
+      planState |= toBits(plan.regionMasks[2]);
     for (unsigned region = 0; region < regions.size(); ++region) {
       EXPECT_EQ((exactState & addressMasks[region]) != 0,
-                (planState & toBits(plan.regionMasks[region].check)) != 0);
+                (planState & toBits(plan.regionMasks[region])) != 0);
     }
   }
 }
@@ -247,12 +209,8 @@ TEST(Analysis, BufferStatePlanKeepsPartialOverlapExact) {
   triton::BufferStatePlan plan = triton::createBufferStatePlan(regions);
   ASSERT_EQ(plan.components.size(), 1);
   EXPECT_EQ(plan.numLanes, 3);
-  EXPECT_EQ(toBits(plan.regionMasks[0].update), 0b011);
-  EXPECT_EQ(toBits(plan.regionMasks[1].update), 0b110);
-  EXPECT_EQ(plan.regionMasks[0].update, plan.regionMasks[0].check);
-  EXPECT_EQ(plan.regionMasks[0].update, plan.regionMasks[0].complete);
-  EXPECT_EQ(plan.regionMasks[1].update, plan.regionMasks[1].check);
-  EXPECT_EQ(plan.regionMasks[1].update, plan.regionMasks[1].complete);
+  EXPECT_EQ(toBits(plan.regionMasks[0]), 0b011);
+  EXPECT_EQ(toBits(plan.regionMasks[1]), 0b110);
   EXPECT_TRUE(planNeverMissesHazard({0b0011, 0b0110}, 4));
   EXPECT_TRUE(planPublishesEveryAliasingAtom({0b0011, 0b0110}, 4));
 }

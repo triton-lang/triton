@@ -520,9 +520,7 @@ struct MemDescSubsliceOpConversion
     // load time; only the partition component needs this fix.
     SmallVector<Value> newBases = llvm::to_vector(smemObj.getBases());
     if (newBases.size() > 1) {
-      LinearLayout ll = triton::gpu::isPaddedEncoding(srcTy.getEncoding())
-                            ? triton::gpu::paddedLinearLayout(srcTy)
-                            : triton::gpu::toLinearLayout(srcTy);
+      LinearLayout ll = triton::gpu::getMemDescLinearLayout(srcTy);
       auto kPartition = StringAttr::get(ctx, "partition");
       assert(ll.hasInDim(kPartition) &&
              "multiple bases require a partition input dim");

@@ -62,12 +62,7 @@ public:
     if (SharedMemoryObject::getMaskSpanOffsetsAndBlocks(srcTy).second != 0)
       return failure();
 
-    LinearLayout sharedLL;
-    if (triton::gpu::isPaddedEncoding(srcTy.getEncoding())) {
-      sharedLL = triton::gpu::paddedLinearLayout(srcTy);
-    } else {
-      sharedLL = triton::gpu::toLinearLayout(srcTy);
-    }
+    LinearLayout sharedLL = triton::gpu::getMemDescLinearLayout(srcTy);
     LinearLayout cvtDstLL =
         triton::gpu::toLinearLayout(dstTy).invertAndCompose(sharedLL);
     auto kBlock = StringAttr::get(ctx, "block");

@@ -704,9 +704,7 @@ LogicalResult MemDescReinterpretOp::verify() {
     auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
     auto shape = ty.getAllocShape().take_back(rank);
     auto encoding = ty.getEncoding();
-    LinearLayout layout = isPaddedEncoding(encoding)
-                              ? paddedLinearLayout(shape, encoding)
-                              : toLinearLayout(shape, encoding);
+    LinearLayout layout = getLinearLayout(shape, encoding);
     int64_t numLayoutCopies = 1;
     for (int64_t dim : ty.getAllocShape().drop_back(rank))
       numLayoutCopies *= dim;
@@ -1139,16 +1137,13 @@ LogicalResult MemDescSubsliceOp::verify() {
   }
 
   auto ctx = getContext();
-  LinearLayout ll;
   if (auto paddedEncoding = triton::gpu::getPaddedEncoding(srcEnc)) {
     if (paddedEncoding.getRank() < srcTy.getRank()) {
       return emitError("SubSlice of low rank PaddedSharedEncoding from higher "
                        "rank tensors is not supported yet");
     }
-    ll = triton::gpu::paddedLinearLayout(srcTy);
-  } else {
-    ll = triton::gpu::toLinearLayout(srcTy);
   }
+  LinearLayout ll = triton::gpu::getMemDescLinearLayout(srcTy);
 
   auto llInv = ll.pseudoinvert();
   for (auto dim : splitDims) {

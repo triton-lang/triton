@@ -268,11 +268,10 @@ struct AuxDataMap {
   int getClusterBarrierSlot(Operation *op) const;
 
 private:
-  LogicalResult getBuffersAndBarriers(
-      ModuleOp module,
-      SmallVector<SmallVector<triton::BufferRegion>, 2> &bufRegions,
-      SmallVector<triton::BufferRegion> &barrierRegions,
-      const ConSanTargetHooks *hooks);
+  LogicalResult
+  getBuffersAndBarriers(ModuleOp module,
+                        SmallVector<triton::BufferRegion> &barrierRegions,
+                        const ConSanTargetHooks *hooks);
   void passToWarpSpecialize(triton::FuncOp func, ValueType value,
                             RegionToValueMap &map, int &captureCounter,
                             int64_t &captureBytes);

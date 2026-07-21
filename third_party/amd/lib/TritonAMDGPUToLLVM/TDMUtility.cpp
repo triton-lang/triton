@@ -1329,9 +1329,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
       ctx, numPartitions, numGroupsInSlice, partitionedEnc.getPartitionDim(),
       partitionedEnc.getPartitionLayout());
   triton::LinearLayout sliceLayout =
-      triton::gpu::isPaddedEncoding(sliceEncoding)
-          ? triton::gpu::paddedLinearLayout(sliceShape, sliceEncoding)
-          : triton::gpu::toLinearLayout(sliceShape, sliceEncoding);
+      triton::gpu::getLinearLayout(sliceShape, sliceEncoding);
 
   // Per-partition LDS stride between slices (accounts for padding).
   int64_t elementsPerSlice = computePerPartitionSliceStride(

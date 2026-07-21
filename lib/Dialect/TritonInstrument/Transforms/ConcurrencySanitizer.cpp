@@ -147,21 +147,6 @@ Value currentCTAMask(ImplicitLocOpBuilder &b) {
                                ctaId);
 }
 
-enum class StateMaskKind { Update, Check, Complete };
-
-const llvm::SmallBitVector &getStateMask(const BufferStateMasks &masks,
-                                         StateMaskKind kind) {
-  switch (kind) {
-  case StateMaskKind::Update:
-    return masks.update;
-  case StateMaskKind::Check:
-    return masks.check;
-  case StateMaskKind::Complete:
-    return masks.complete;
-  }
-  llvm_unreachable("unknown buffer state mask kind");
-}
-
 Value createStateMaskConstant(ImplicitLocOpBuilder &b,
                               RankedTensorType maskType,
                               const llvm::SmallBitVector &mask) {
@@ -174,10 +159,11 @@ Value createStateMaskConstant(ImplicitLocOpBuilder &b,
                                    DenseElementsAttr::get(maskType, bits));
 }
 
-FailureOr<tti::MaterializedBufferRegion>
-createBufferStateMasks(ImplicitLocOpBuilder &b, AuxDataMap &auxData,
-                       MemType memType, Value runtimeBase,
-                       ArrayRef<uint32_t> candidateIds, Operation *op) {
+FailureOr<Value> createBufferStateMask(ImplicitLocOpBuilder &b,
+                                       AuxDataMap &auxData, MemType memType,
+                                       Value runtimeBase,
+                                       ArrayRef<uint32_t> candidateIds,
+                                       Operation *op) {
   int index = static_cast<int>(memType);
   const BufferStatePlan &plan = auxData.bufferStatePlans[index];
   if (plan.numLanes == 0 || auxData.writeVisibility[index].empty()) {
@@ -220,40 +206,20 @@ createBufferStateMasks(ImplicitLocOpBuilder &b, AuxDataMap &auxData,
         "internal ConSan error: active memdesc resolved to no buffer state");
   }
 
-  auto materialize = [&](StateMaskKind kind) {
-    if (candidateIds.size() == 1)
-      return createStateMaskConstant(
-          b, maskType,
-          getStateMask(plan.regionMasks[candidateIds.front()], kind));
-    Value result = createStateMaskConstant(b, maskType,
-                                           llvm::SmallBitVector(plan.numLanes));
-    for (auto [id, predicate] : llvm::zip(candidateIds, predicates)) {
-      Value candidate = createStateMaskConstant(
-          b, maskType, getStateMask(plan.regionMasks[id], kind));
-      Value predicateTensor = tt::SplatOp::create(b, maskType, predicate);
-      candidate = arith::AndIOp::create(b, candidate, predicateTensor);
-      result = arith::OrIOp::create(b, result, candidate);
-    }
-    return result;
-  };
+  if (candidateIds.size() == 1)
+    return createStateMaskConstant(b, maskType,
+                                   plan.regionMasks[candidateIds.front()]);
 
-  auto sameMaskKinds = [&](StateMaskKind lhs, StateMaskKind rhs) {
-    return llvm::all_of(candidateIds, [&](uint32_t id) {
-      return getStateMask(plan.regionMasks[id], lhs) ==
-             getStateMask(plan.regionMasks[id], rhs);
-    });
-  };
-
-  Value update = materialize(StateMaskKind::Update);
-  Value check = sameMaskKinds(StateMaskKind::Update, StateMaskKind::Check)
-                    ? update
-                    : materialize(StateMaskKind::Check);
-  Value complete =
-      sameMaskKinds(StateMaskKind::Update, StateMaskKind::Complete) ? update
-      : sameMaskKinds(StateMaskKind::Check, StateMaskKind::Complete)
-          ? check
-          : materialize(StateMaskKind::Complete);
-  return tti::MaterializedBufferRegion{update, check, complete};
+  Value result =
+      createStateMaskConstant(b, maskType, llvm::SmallBitVector(plan.numLanes));
+  for (auto [id, predicate] : llvm::zip(candidateIds, predicates)) {
+    Value candidate =
+        createStateMaskConstant(b, maskType, plan.regionMasks[id]);
+    Value predicateTensor = tt::SplatOp::create(b, maskType, predicate);
+    candidate = arith::AndIOp::create(b, candidate, predicateTensor);
+    result = arith::OrIOp::create(b, result, candidate);
+  }
+  return result;
 }
 
 Value allCTAsMask(ImplicitLocOpBuilder &b) {
@@ -489,15 +455,9 @@ void extendXorSpan(uint32_t &span, uint32_t basis, int numCTAs) {
   }
 }
 
-LinearLayout getSharedLayout(ttg::MemDescType memDescTy) {
-  return ttg::isPaddedEncoding(memDescTy.getEncoding())
-             ? ttg::paddedLinearLayout(memDescTy)
-             : ttg::toLinearLayout(memDescTy);
-}
-
 LinearLayout getLocalLoadStoreConversion(ttg::MemDescType memDescTy,
                                          RankedTensorType regTy) {
-  return invertAndComposeBlockLocal(getSharedLayout(memDescTy),
+  return invertAndComposeBlockLocal(ttg::getMemDescLinearLayout(memDescTy),
                                     ttg::toLinearLayout(regTy));
 }
 
@@ -505,7 +465,7 @@ LinearLayout getLocalGatherScatterConversion(ttg::MemDescType memDescTy,
                                              RankedTensorType regTy,
                                              unsigned axis) {
   MLIRContext *ctx = memDescTy.getContext();
-  LinearLayout sharedLayout = getSharedLayout(memDescTy);
+  LinearLayout sharedLayout = ttg::getMemDescLinearLayout(memDescTy);
   SmallVector<StringAttr> allDims =
       standardOutDimNames(ctx, memDescTy.getRank());
   StringAttr axisDim = allDims[axis];
@@ -834,33 +794,26 @@ private:
                                                CommitKind::AsyncCp, op);
       }
       if (auto asyncWaitOp = dyn_cast<ttg::AsyncWaitOp>(op)) {
-        funcBuilder.createClearOutstandingCommitsTransferWritesCall(
+        funcBuilder.createClearOutstandingCommitsTransferCall(
             b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
             asyncWaitOp.getNum(), nullptr, CommitKind::AsyncCp,
-            MemType::SHARED_MEM, op);
+            MemType::SHARED_MEM, op, /*transferWrites=*/true,
+            /*transferReads=*/false);
       }
       if (auto wgmmaWaitOp = dyn_cast<ttng::WarpGroupDotWaitOp>(op)) {
-        funcBuilder.createClearOutstandingCommitsTransferReadsCall(
+        funcBuilder.createClearOutstandingCommitsTransferCall(
             b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
             wgmmaWaitOp.getPendings(), nullptr, CommitKind::Wgmma,
-            MemType::SHARED_MEM, op);
+            MemType::SHARED_MEM, op, /*transferWrites=*/false,
+            /*transferReads=*/true);
       }
       if (auto info = hooks->getWaitOpInfo(op)) {
-        if (info->transferWrites && info->transferReads) {
-          funcBuilder.createClearOutstandingCommitsTransferBothCall(
+        if (info->transferWrites || info->transferReads) {
+          funcBuilder.createClearOutstandingCommitsTransferCall(
               b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
               info->pendingCount, nullptr, info->commitKind,
-              MemType::SHARED_MEM, op);
-        } else if (info->transferWrites) {
-          funcBuilder.createClearOutstandingCommitsTransferWritesCall(
-              b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
-              info->pendingCount, nullptr, info->commitKind,
-              MemType::SHARED_MEM, op);
-        } else if (info->transferReads) {
-          funcBuilder.createClearOutstandingCommitsTransferReadsCall(
-              b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
-              info->pendingCount, nullptr, info->commitKind,
-              MemType::SHARED_MEM, op);
+              MemType::SHARED_MEM, op, info->transferWrites,
+              info->transferReads);
         }
       }
       if (auto clusterBarrier = dyn_cast<ttng::ClusterBarrierOp>(op)) {
@@ -977,7 +930,7 @@ private:
     pred = tti::maybeAnd(b, pred, issuerCTAPred);
     Value effectCTAs = getMemEffectCTAs(b, op);
     struct MaterializedEffect {
-      tti::MaterializedBufferRegion buffer;
+      Value bufferMask;
       MemType memType;
     };
     SmallVector<MaterializedEffect> materializedEffects;
@@ -1000,65 +953,66 @@ private:
       Value runtimeBase;
       if (candidateIt->second.size() > 1)
         runtimeBase = tti::ExperimentalMemDescToI32Op::create(b, buf);
-      FailureOr<tti::MaterializedBufferRegion> stateMasks =
-          createBufferStateMasks(b, auxData, materialized.memType, runtimeBase,
-                                 candidateIt->second, op);
-      if (failed(stateMasks))
+      FailureOr<Value> stateMask =
+          createBufferStateMask(b, auxData, materialized.memType, runtimeBase,
+                                candidateIt->second, op);
+      if (failed(stateMask))
         return failure();
-      materialized.buffer = *stateMasks;
+      materialized.bufferMask = *stateMask;
       materializedEffects.push_back(materialized);
 
-      auto buffer = materialized.buffer;
+      Value bufferMask = materialized.bufferMask;
       MemType memType = materialized.memType;
       if (memType == MemType::SHARED_MEM) {
         if (effect.proxy == MemEffectsOpInfo::Effects::Proxy::Async) {
-          funcBuilder.createVerifyProxyAccessCall(
-              b, buffer, baseThread, effect.operandName, pred, op, effectCTAs);
+          funcBuilder.createVerifyProxyAccessCall(b, bufferMask, baseThread,
+                                                  effect.operandName, pred, op,
+                                                  effectCTAs);
         } else {
-          funcBuilder.createSetProxyAccessCall(b, buffer, baseThread, pred, op,
-                                               effectCTAs);
+          funcBuilder.createSetProxyAccessCall(b, bufferMask, baseThread, pred,
+                                               op, effectCTAs);
         }
       }
       if (effect.rw == MemEffectsOpInfo::Effects::Read) {
         // For op that is reading, we only need to check if anything else
         // is writing to the same buffer.
-        addWriteChecks(b, funcBuilder, op, buffer, pred, memType, thread,
+        addWriteChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
                        effect.operandName, effectCTAs, opInfo->commitKind);
         if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
           funcBuilder.createSetReadVisibilityCall(
-              b, buffer, getThreadPeersMask(thread, auxData.threadLayout), pred,
-              memType, op, effectCTAs);
+              b, bufferMask, getThreadPeersMask(thread, auxData.threadLayout),
+              pred, memType, op, effectCTAs);
         }
         if (opInfo->trackingKind ==
             MemEffectsOpInfo::TrackingKind::CommitCount) {
           assert(memType == MemType::SHARED_MEM);
           funcBuilder.createStageAccessForCommitCall(
-              b, buffer, baseThread, pred, memType, opInfo->commitKind, op);
+              b, bufferMask, baseThread, pred, memType, opInfo->commitKind, op);
         }
       }
       if (effect.rw == MemEffectsOpInfo::Effects::Write) {
         // Op is writing to the buffer, we need to check if anything else
         // is reading or writing to the same buffer.
-        addWriteChecks(b, funcBuilder, op, buffer, pred, memType, thread,
+        addWriteChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
                        effect.operandName, effectCTAs, opInfo->commitKind);
-        addReadChecks(b, funcBuilder, op, buffer, pred, memType, thread,
+        addReadChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
                       effect.operandName, effectCTAs, opInfo->commitKind);
         if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
           funcBuilder.createSetWriteVisibilityCall(
-              b, buffer, getThreadPeersMask(thread, auxData.threadLayout), pred,
-              memType, op, effectCTAs);
-          funcBuilder.createClearWriteTrackingCall(b, buffer, pred, memType, op,
-                                                   effectCTAs);
-          funcBuilder.createClearReadVisibilityCall(b, buffer, pred, memType,
-                                                    op, effectCTAs);
-          funcBuilder.createClearReadTrackingCall(b, buffer, pred, memType, op,
-                                                  effectCTAs);
+              b, bufferMask, getThreadPeersMask(thread, auxData.threadLayout),
+              pred, memType, op, effectCTAs);
+          funcBuilder.createClearWriteTrackingCall(b, bufferMask, pred, memType,
+                                                   op, effectCTAs);
+          funcBuilder.createClearReadVisibilityCall(b, bufferMask, pred,
+                                                    memType, op, effectCTAs);
+          funcBuilder.createClearReadTrackingCall(b, bufferMask, pred, memType,
+                                                  op, effectCTAs);
         }
         if (opInfo->trackingKind ==
             MemEffectsOpInfo::TrackingKind::CommitCount) {
           assert(memType == MemType::SHARED_MEM);
           funcBuilder.createStageAccessForCommitCall(
-              b, buffer, baseThread, pred, memType, opInfo->commitKind, op);
+              b, bufferMask, baseThread, pred, memType, opInfo->commitKind, op);
         }
       }
     }
@@ -1087,13 +1041,13 @@ private:
           if (effect.rw != MemEffectsOpInfo::Effects::Write)
             continue;
           funcBuilder.createTrackBarrierWriteForBufferCall(
-              b, barrier, materialized.buffer, combinedPred,
+              b, barrier, materialized.bufferMask, combinedPred,
               materialized.memType, op, recipientCTAs, effectCTAs);
           if (materialized.memType == MemType::SHARED_MEM &&
               effect.proxy == MemEffectsOpInfo::Effects::Proxy::Async) {
             funcBuilder.createTrackProxyAccessesForBufferCall(
-                b, barrier, materialized.buffer, baseThread, combinedPred, op,
-                recipientCTAs, effectCTAs);
+                b, barrier, materialized.bufferMask, baseThread, combinedPred,
+                op, recipientCTAs, effectCTAs);
           }
         }
       }
@@ -1117,12 +1071,11 @@ private:
 
   void addWriteChecks(ImplicitLocOpBuilder &b,
                       tti::FunctionBuilder &funcBuilder, Operation *op,
-                      tti::MaterializedBufferRegion buffer, Value pred,
-                      MemType memType, int thread,
+                      Value bufferMask, Value pred, MemType memType, int thread,
                       const std::string &operandName, Value effectCTAs,
                       CommitKind::Kind opCommitKind = CommitKind::None) {
-    funcBuilder.createVerifyWriteVisibilityCall(b, buffer, thread, operandName,
-                                                pred, memType, op, effectCTAs);
+    funcBuilder.createVerifyWriteVisibilityCall(
+        b, bufferMask, thread, operandName, pred, memType, op, effectCTAs);
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM) {
       for (const auto &commitKindDesc :
@@ -1130,7 +1083,7 @@ private:
         bool excludeSelf = (opCommitKind == commitKindDesc.kind &&
                             hooks->isOrderedCommitKind(opCommitKind));
         funcBuilder.createCheckOutstandingCommitsCall(
-            b, buffer, getBaseThread(thread, auxData.threadLayout),
+            b, bufferMask, getBaseThread(thread, auxData.threadLayout),
             commitKindDesc.operationDesc, pred, memType, commitKindDesc.kind,
             op, effectCTAs, excludeSelf);
       }
@@ -1138,12 +1091,12 @@ private:
   }
 
   void addReadChecks(ImplicitLocOpBuilder &b, tti::FunctionBuilder &funcBuilder,
-                     Operation *op, tti::MaterializedBufferRegion buffer,
-                     Value pred, MemType memType, int thread,
+                     Operation *op, Value bufferMask, Value pred,
+                     MemType memType, int thread,
                      const std::string &operandName, Value effectCTAs,
                      CommitKind::Kind opCommitKind = CommitKind::None) {
-    funcBuilder.createVerifyReadVisibilityCall(b, buffer, thread, operandName,
-                                               pred, memType, op, effectCTAs);
+    funcBuilder.createVerifyReadVisibilityCall(
+        b, bufferMask, thread, operandName, pred, memType, op, effectCTAs);
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM) {
       for (const auto &commitKindDesc :
@@ -1151,7 +1104,7 @@ private:
         bool excludeSelf = (opCommitKind == commitKindDesc.kind &&
                             hooks->isOrderedCommitKind(opCommitKind));
         funcBuilder.createCheckOutstandingCommitsCall(
-            b, buffer, getBaseThread(thread, auxData.threadLayout),
+            b, bufferMask, getBaseThread(thread, auxData.threadLayout),
             commitKindDesc.operationDesc, pred, memType, commitKindDesc.kind,
             op, effectCTAs, excludeSelf);
       }

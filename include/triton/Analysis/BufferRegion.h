@@ -3,7 +3,7 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <limits>
+#include <optional>
 #include <set>
 #include <tuple>
 #include <utility>
@@ -11,9 +11,13 @@
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SparseBitVector.h"
+
+namespace mlir::triton::gpu {
+class MemDescType;
+} // namespace mlir::triton::gpu
 
 namespace mlir::triton {
 
@@ -21,58 +25,43 @@ namespace mlir::triton {
 // Exact physical address sets
 //===----------------------------------------------------------------------===//
 
-/// A half-open interval [begin, end) in a memory space's canonical one
-/// dimensional address representation. Shared-memory addresses are bytes.
+/// An exact set of physical storage units. Shared-memory addresses are bytes.
 /// Tensor-memory addresses are 32-bit words encoded as (row << 16) | column.
-struct AddressRange {
-  uint32_t begin = 0;
-  uint32_t end = 0;
-
-  bool empty() const { return begin >= end; }
-  bool operator==(const AddressRange &other) const {
-    return begin == other.begin && end == other.end;
-  }
-  bool operator<(const AddressRange &other) const {
-    return std::tie(begin, end) < std::tie(other.begin, other.end);
-  }
-};
-
-/// A canonical union of physical addresses. Ranges are always sorted,
-/// non-empty, disjoint, and non-adjacent.
 class AddressSet {
 public:
   AddressSet() = default;
-  explicit AddressSet(llvm::ArrayRef<AddressRange> ranges);
 
   static AddressSet fromRange(uint32_t begin, uint32_t length);
   static AddressSet fromAddresses(llvm::ArrayRef<uint32_t> addresses);
 
-  llvm::ArrayRef<AddressRange> getRanges() const { return ranges; }
-  bool empty() const { return ranges.empty(); }
-  uint64_t size() const;
+  void set(uint32_t address);
+  void insert(const AddressSet &other);
+
+  auto begin() const { return addresses.begin(); }
+  auto end() const { return addresses.end(); }
+  bool empty() const { return addresses.empty(); }
   bool contains(uint32_t address) const;
   bool intersects(const AddressSet &other) const;
   bool contains(const AddressSet &other) const;
   AddressSet translated(uint32_t delta) const;
 
   bool operator==(const AddressSet &other) const {
-    return ranges == other.ranges;
+    return addresses == other.addresses;
   }
   bool operator<(const AddressSet &other) const {
-    return std::lexicographical_compare(
-        ranges.begin(), ranges.end(), other.ranges.begin(), other.ranges.end());
-  }
-
-  template <typename T> void print(T &os) const {
-    os << "{";
-    llvm::interleaveComma(ranges, os, [&](const AddressRange &range) {
-      os << "[" << range.begin << ", " << range.end << ")";
-    });
-    os << "}";
+    auto lhs = begin();
+    auto rhs = other.begin();
+    while (lhs != end() && rhs != other.end()) {
+      if (*lhs != *rhs)
+        return *lhs < *rhs;
+      ++lhs;
+      ++rhs;
+    }
+    return lhs == end() && rhs != other.end();
   }
 
 private:
-  llvm::SmallVector<AddressRange, 4> ranges;
+  llvm::SparseBitVector<> addresses;
 };
 
 //===----------------------------------------------------------------------===//
@@ -122,33 +111,13 @@ struct BufferRegion {
   template <typename T> void print(T &os) const {
     os << "[" << baseOffset << ", " << length << "]";
   }
-
-  template <typename T> void printExact(T &os) const {
-    print(os);
-    os << " ";
-    addresses.print(os);
-  }
 };
 
-using BufferRelationMatrix = llvm::SmallVector<llvm::SmallVector<uint8_t>>;
-
-BufferRelationMatrix
-createBufferAliasMatrix(llvm::ArrayRef<BufferRegion> regions);
-BufferRelationMatrix
-createBufferContainmentMatrix(llvm::ArrayRef<BufferRegion> regions);
-bool hasCrossBufferAliasing(llvm::ArrayRef<BufferRegion> regions);
+uint32_t getMemDescSize(gpu::MemDescType type);
 
 //===----------------------------------------------------------------------===//
 // Buffer state planning
 //===----------------------------------------------------------------------===//
-
-/// ConSan operations consume three masks over an abstract state-lane space.
-/// Each lane represents one unique physical region-membership atom.
-struct BufferStateMasks {
-  llvm::SmallBitVector update;
-  llvm::SmallBitVector check;
-  llvm::SmallBitVector complete;
-};
 
 struct BufferStateComponent {
   llvm::SmallVector<unsigned> regionIds;
@@ -160,48 +129,11 @@ struct BufferStateComponent {
 /// indexed by the input region order and all have numLanes bits.
 struct BufferStatePlan {
   unsigned numLanes = 0;
-  llvm::SmallVector<BufferStateMasks> regionMasks;
+  llvm::SmallVector<llvm::SmallBitVector> regionMasks;
   llvm::SmallVector<BufferStateComponent> components;
 };
 
 BufferStatePlan createBufferStatePlan(llvm::ArrayRef<BufferRegion> regions);
-
-} // namespace mlir::triton
-
-namespace llvm {
-
-using namespace mlir::triton;
-
-template <> struct DenseMapInfo<BufferRegion> {
-  static BufferRegion getEmptyKey() {
-    constexpr uint32_t empty = std::numeric_limits<uint32_t>::max();
-    BufferRegion region;
-    region.baseOffset = empty;
-    region.length = empty;
-    return region;
-  }
-  static BufferRegion getTombstoneKey() {
-    constexpr uint32_t tombstone = std::numeric_limits<uint32_t>::max() - 1;
-    BufferRegion region;
-    region.baseOffset = tombstone;
-    region.length = tombstone;
-    return region;
-  }
-  static unsigned getHashValue(const BufferRegion &r) {
-    llvm::hash_code hash = llvm::hash_combine(r.baseOffset, r.length,
-                                              r.storageBase, r.affineOffset);
-    for (const auto &range : r.addresses.getRanges())
-      hash = llvm::hash_combine(hash, range.begin, range.end);
-    return static_cast<unsigned>(hash);
-  }
-  static bool isEqual(const BufferRegion &a, const BufferRegion &b) {
-    return a == b;
-  }
-};
-
-} // namespace llvm
-
-namespace mlir::triton {
 
 //===----------------------------------------------------------------------===//
 // RegionInfo lattice
@@ -210,7 +142,7 @@ namespace mlir::triton {
 // This wraps a set of BufferRegions and provides lattice semantics
 //
 struct RegionInfo {
-  using RegionList = llvm::DenseSet<BufferRegion>;
+  using RegionList = std::set<BufferRegion>;
   RegionList regions;
 
   RegionInfo() = default;
@@ -219,28 +151,16 @@ struct RegionInfo {
   // Lattice join: union of regions
   static RegionInfo join(const RegionInfo &lhs, const RegionInfo &rhs) {
     RegionInfo result = lhs;
-    for (const auto &reg : rhs.regions)
-      if (llvm::find(result.regions, reg) == result.regions.end())
-        result.regions.insert(reg);
+    result.regions.insert(rhs.regions.begin(), rhs.regions.end());
     return result;
   }
 
   bool operator==(const RegionInfo &other) const {
-    if (regions.size() != other.regions.size())
-      return false;
-    for (auto &r : regions)
-      if (llvm::find(other.regions, r) == other.regions.end())
-        return false;
-    return true;
+    return regions == other.regions;
   }
 
   template <typename T> void print(T &os) const {
-    llvm::SmallVector<BufferRegion> sortedRegions(regions.begin(),
-                                                  regions.end());
-    llvm::sort(sortedRegions, [](const BufferRegion &a, const BufferRegion &b) {
-      return a < b;
-    });
-    llvm::interleaveComma(sortedRegions, os,
+    llvm::interleaveComma(regions, os,
                           [&](const BufferRegion &r) { r.print(os); });
   }
 

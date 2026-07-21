@@ -63,6 +63,12 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 LinearLayout paddedLinearLayout(MemDescType type);
 LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding);
 
+// Returns the appropriate linear layout for padded and non-padded encodings.
+// For padded encodings this is only the linear component; callers must still
+// apply the non-linear padding transform when computing physical addresses.
+LinearLayout getMemDescLinearLayout(MemDescType type);
+LinearLayout getLinearLayout(ArrayRef<int64_t> shape, Attribute encoding);
+
 // Convert the shared encoding of a tensor with `nvmma_shared` layout to a
 // LinearLayout that maps from a linear shared memory offset to tensor index.
 //

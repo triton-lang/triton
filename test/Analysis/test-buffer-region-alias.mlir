@@ -9,9 +9,9 @@ module attributes {test.exhaustive_address_sets} {
 // The full/even/odd family has three views but only two physical membership
 // atoms. All masks collapse to the exact atoms touched by each access.
 // expected-remark @below {{state-plan: lanes=2, components=atoms(2)}}
-// expected-remark @below {{a_full case [0, 8]: update={0,1}, check={0,1}, complete={0,1}}}
-// expected-remark @below {{b_even case [0, 7]: update={0}, check={0}, complete={0}}}
-// expected-remark @below {{c_odd case [1, 7]: update={1}, check={1}, complete={1}}}
+// expected-remark @below {{a_full case [0, 8]: mask={0,1}}}
+// expected-remark @below {{b_even case [0, 7]: mask={0}}}
+// expected-remark @below {{c_odd case [1, 7]: mask={1}}}
 module attributes {test.print_state_plan, test.state_plan_only} {
   tt.func private @full() attributes {
     test.region_name = "a_full",
@@ -35,8 +35,8 @@ module attributes {test.print_state_plan, test.state_plan_only} {
 // shared atom exact is necessary when a completion barrier publishes proxy
 // fence state for only one of the two windows.
 // expected-remark @below {{state-plan: lanes=3, components=atoms(3)}}
-// expected-remark @below {{a_left case [0, 2]: update={0,1}, check={0,1}, complete={0,1}}}
-// expected-remark @below {{b_right case [1, 2]: update={1,2}, check={1,2}, complete={1,2}}}
+// expected-remark @below {{a_left case [0, 2]: mask={0,1}}}
+// expected-remark @below {{b_right case [1, 2]: mask={1,2}}}
 module attributes {test.print_state_plan, test.state_plan_only} {
   tt.func private @left() attributes {
     test.region_name = "a_left",
@@ -218,6 +218,79 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %first = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16xi8, #shared, #smem, mutable>
     %0 = ttg.local_load %first {test.region_name = "a_first"} : !ttg.memdesc<16xi8, #shared, #smem, mutable> -> tensor<16xi8>
     %1 = ttg.local_load %second {test.region_name = "b_second"} : !ttg.memdesc<16xi8, #shared, #smem, mutable> -> tensor<16xi8>
+    tt.return
+  }
+}
+
+// -----
+
+#padded = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [16, 16]}>
+#smem = #ttg.shared_memory
+
+// A padded page occupies 1152 bytes, while the two nested nonzero subslices
+// compose to an unpadded affine offset of 544 bytes. Dynamic indexing and
+// select must preserve both exact candidates and their runtime identities.
+// expected-remark @below {{a_page0 vs a_page0: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true}}
+// expected-remark @below {{a_page0 vs b_page1: alias=false, lhs_contains_rhs=false, rhs_contains_lhs=false}}
+// expected-remark @below {{a_page0 vs c_nested0: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=false}}
+// expected-remark @below {{a_page0 vs d_nested1: alias=false, lhs_contains_rhs=false, rhs_contains_lhs=false}}
+// expected-remark @below {{a_page0 vs e_complement1: alias=false, lhs_contains_rhs=false, rhs_contains_lhs=false}}
+// expected-remark @below {{a_page0 vs f_dynamic: alias=true, lhs_contains_rhs=false, rhs_contains_lhs=false}}
+// expected-remark @below {{a_page0 vs g_selected: alias=true, lhs_contains_rhs=false, rhs_contains_lhs=false}}
+// expected-remark @below {{b_page1 vs b_page1: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true}}
+// expected-remark @below {{b_page1 vs c_nested0: alias=false, lhs_contains_rhs=false, rhs_contains_lhs=false}}
+// expected-remark @below {{b_page1 vs d_nested1: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=false}}
+// expected-remark @below {{b_page1 vs e_complement1: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=false}}
+// expected-remark @below {{b_page1 vs f_dynamic: alias=true, lhs_contains_rhs=false, rhs_contains_lhs=false}}
+// expected-remark @below {{b_page1 vs g_selected: alias=true, lhs_contains_rhs=false, rhs_contains_lhs=false}}
+// expected-remark @below {{c_nested0 vs c_nested0: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true}}
+// expected-remark @below {{c_nested0 vs d_nested1: alias=false, lhs_contains_rhs=false, rhs_contains_lhs=false}}
+// expected-remark @below {{c_nested0 vs e_complement1: alias=false, lhs_contains_rhs=false, rhs_contains_lhs=false}}
+// expected-remark @below {{c_nested0 vs f_dynamic: alias=true, lhs_contains_rhs=false, rhs_contains_lhs=true}}
+// expected-remark @below {{c_nested0 vs g_selected: alias=true, lhs_contains_rhs=false, rhs_contains_lhs=true}}
+// expected-remark @below {{d_nested1 vs d_nested1: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true}}
+// expected-remark @below {{d_nested1 vs e_complement1: alias=false, lhs_contains_rhs=false, rhs_contains_lhs=false}}
+// expected-remark @below {{d_nested1 vs f_dynamic: alias=true, lhs_contains_rhs=false, rhs_contains_lhs=true}}
+// expected-remark @below {{d_nested1 vs g_selected: alias=true, lhs_contains_rhs=false, rhs_contains_lhs=true}}
+// expected-remark @below {{e_complement1 vs e_complement1: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true}}
+// expected-remark @below {{e_complement1 vs f_dynamic: alias=false, lhs_contains_rhs=false, rhs_contains_lhs=false}}
+// expected-remark @below {{e_complement1 vs g_selected: alias=false, lhs_contains_rhs=false, rhs_contains_lhs=false}}
+// expected-remark @below {{f_dynamic vs f_dynamic: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true}}
+// expected-remark @below {{f_dynamic vs g_selected: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true}}
+// expected-remark @below {{g_selected vs g_selected: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true}}
+// expected-remark @below {{a_page0 case [0, 1024]: mask={0,1}}}
+// expected-remark @below {{b_page1 case [1152, 1024]: mask={2,3,4}}}
+// expected-remark @below {{c_nested0 case [544, 256]: mask={1}}}
+// expected-remark @below {{d_nested1 case [1696, 256]: mask={4}}}
+// expected-remark @below {{e_complement1 case [1664, 256]: mask={3}}}
+// expected-remark @below {{f_dynamic case [544, 256]: mask={1}}}
+// expected-remark @below {{f_dynamic case [1696, 256]: mask={4}}}
+// expected-remark @below {{g_selected case [544, 256]: mask={1}}}
+// expected-remark @below {{g_selected case [1696, 256]: mask={4}}}
+// expected-remark @below {{state-plan: lanes=5, components=atoms(2), atoms(3)}}
+module attributes {test.print_state_plan, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 4096 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  tt.func public @padded_dynamic_nested(%idx: i32, %cond: i1) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %multi = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x16x16xf32, #padded, #smem, mutable>
+    %dynamic = ttg.memdesc_index %multi[%idx] : !ttg.memdesc<2x16x16xf32, #padded, #smem, mutable> -> !ttg.memdesc<16x16xf32, #padded, #smem, mutable>
+    %page0 = ttg.memdesc_index %multi[%c0] : !ttg.memdesc<2x16x16xf32, #padded, #smem, mutable> -> !ttg.memdesc<16x16xf32, #padded, #smem, mutable>
+    %page1 = ttg.memdesc_index %multi[%c1] : !ttg.memdesc<2x16x16xf32, #padded, #smem, mutable> -> !ttg.memdesc<16x16xf32, #padded, #smem, mutable>
+    %dynamic_row = ttg.memdesc_subslice %dynamic [8, 0] : !ttg.memdesc<16x16xf32, #padded, #smem, mutable> -> !ttg.memdesc<8x16xf32, #padded, #smem, mutable, 16x16>
+    %dynamic_nested = ttg.memdesc_subslice %dynamic_row [0, 8] : !ttg.memdesc<8x16xf32, #padded, #smem, mutable, 16x16> -> !ttg.memdesc<8x8xf32, #padded, #smem, mutable, 16x16>
+    %row0 = ttg.memdesc_subslice %page0 [8, 0] : !ttg.memdesc<16x16xf32, #padded, #smem, mutable> -> !ttg.memdesc<8x16xf32, #padded, #smem, mutable, 16x16>
+    %nested0 = ttg.memdesc_subslice %row0 [0, 8] : !ttg.memdesc<8x16xf32, #padded, #smem, mutable, 16x16> -> !ttg.memdesc<8x8xf32, #padded, #smem, mutable, 16x16>
+    %row1 = ttg.memdesc_subslice %page1 [8, 0] : !ttg.memdesc<16x16xf32, #padded, #smem, mutable> -> !ttg.memdesc<8x16xf32, #padded, #smem, mutable, 16x16>
+    %nested1 = ttg.memdesc_subslice %row1 [0, 8] : !ttg.memdesc<8x16xf32, #padded, #smem, mutable, 16x16> -> !ttg.memdesc<8x8xf32, #padded, #smem, mutable, 16x16>
+    %complement1 = ttg.memdesc_subslice %row1 [0, 0] : !ttg.memdesc<8x16xf32, #padded, #smem, mutable, 16x16> -> !ttg.memdesc<8x8xf32, #padded, #smem, mutable, 16x16>
+    %selected = arith.select %cond, %dynamic_nested, %nested1 : !ttg.memdesc<8x8xf32, #padded, #smem, mutable, 16x16>
+    %0 = ttg.local_load %page0 {test.region_name = "a_page0"} : !ttg.memdesc<16x16xf32, #padded, #smem, mutable> -> tensor<16x16xf32>
+    %1 = ttg.local_load %page1 {test.region_name = "b_page1"} : !ttg.memdesc<16x16xf32, #padded, #smem, mutable> -> tensor<16x16xf32>
+    %2 = ttg.local_load %nested0 {test.region_name = "c_nested0"} : !ttg.memdesc<8x8xf32, #padded, #smem, mutable, 16x16> -> tensor<8x8xf32>
+    %3 = ttg.local_load %nested1 {test.region_name = "d_nested1"} : !ttg.memdesc<8x8xf32, #padded, #smem, mutable, 16x16> -> tensor<8x8xf32>
+    %4 = ttg.local_load %complement1 {test.region_name = "e_complement1"} : !ttg.memdesc<8x8xf32, #padded, #smem, mutable, 16x16> -> tensor<8x8xf32>
+    %5 = ttg.local_load %dynamic_nested {test.region_name = "f_dynamic"} : !ttg.memdesc<8x8xf32, #padded, #smem, mutable, 16x16> -> tensor<8x8xf32>
+    %6 = ttg.local_load %selected {test.region_name = "g_selected"} : !ttg.memdesc<8x8xf32, #padded, #smem, mutable, 16x16> -> tensor<8x8xf32>
     tt.return
   }
 }
