@@ -49,6 +49,145 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
+// -- PackedArithOp --
+static unsigned getPackedArithWidth(PackedArithType type) {
+  switch (type) {
+  case PackedArithType::F32X2:
+  case PackedArithType::F16X2:
+  case PackedArithType::BF16X2:
+    return 2;
+  }
+  llvm_unreachable("unknown packed arithmetic type");
+}
+
+static bool hasPackedArithLaneType(PackedArithType packedType,
+                                   Type elementType) {
+  switch (packedType) {
+  case PackedArithType::F32X2:
+    return elementType.isF32();
+  case PackedArithType::F16X2:
+    return elementType.isF16();
+  case PackedArithType::BF16X2:
+    return elementType.isBF16();
+  }
+  llvm_unreachable("unknown packed arithmetic type");
+}
+
+LogicalResult PackedArithOp::verify() {
+  unsigned expectedOperands =
+      getOpKind() == PackedArithOpKind::FMA ? 3 : 2;
+  if (getNumOperands() != expectedOperands) {
+    return emitOpError() << stringifyPackedArithOpKind(getOpKind())
+                         << " expects " << expectedOperands
+                         << " operands but got " << getNumOperands();
+  }
+
+  auto tensorType = getResult().getType();
+  Type resultElementType = tensorType.getElementType();
+  if (!hasPackedArithLaneType(getPackedType(), resultElementType)) {
+    return emitOpError() << stringifyPackedArithType(getPackedType())
+                         << " requires a result element type matching its "
+                            "scalar lane type, but got "
+                         << resultElementType;
+  }
+
+  SmallVector<Type> operandElementTypes;
+  for (auto [index, operand] : llvm::enumerate(getOperands())) {
+    auto operandType = cast<RankedTensorType>(operand.getType());
+    if (operandType.getShape() != tensorType.getShape()) {
+      return emitOpError() << "operand " << index
+                           << " must have the result shape "
+                           << tensorType.getShape() << ", but got "
+                           << operandType.getShape();
+    }
+    if (operandType.getEncoding() != tensorType.getEncoding()) {
+      return emitOpError() << "operand " << index
+                           << " must have the result layout";
+    }
+    operandElementTypes.push_back(operandType.getElementType());
+  }
+
+  bool isHomogeneous =
+      llvm::all_of(operandElementTypes, [&](Type elementType) {
+        return elementType == resultElementType;
+      });
+  bool isSupportedSignature = isHomogeneous;
+  if (!isSupportedSignature) {
+    switch (getOpKind()) {
+    case PackedArithOpKind::ADD:
+    case PackedArithOpKind::SUB:
+      if (resultElementType.isF32()) {
+        isSupportedSignature =
+            (operandElementTypes[0].isF16() ||
+             operandElementTypes[0].isBF16()) &&
+            operandElementTypes[1].isF32();
+      } else {
+        isSupportedSignature = operandElementTypes[0].isF32() &&
+                               operandElementTypes[1].isF32();
+      }
+      break;
+    case PackedArithOpKind::MUL:
+      if (resultElementType.isF16()) {
+        isSupportedSignature =
+            (operandElementTypes[0].isF32() &&
+             operandElementTypes[1].isF32()) ||
+            (operandElementTypes[0].isF16() &&
+             operandElementTypes[1].isBF16());
+      } else if (resultElementType.isBF16()) {
+        isSupportedSignature =
+            (operandElementTypes[0].isF32() &&
+             operandElementTypes[1].isF32()) ||
+            (operandElementTypes[0].isBF16() &&
+             operandElementTypes[1].isF16());
+      }
+      break;
+    case PackedArithOpKind::FMA:
+      isSupportedSignature =
+          resultElementType.isF32() &&
+          (operandElementTypes[0].isF16() ||
+           operandElementTypes[0].isBF16()) &&
+          operandElementTypes[1].isF32() &&
+          operandElementTypes[2].isF32();
+      break;
+    }
+  }
+  if (!isSupportedSignature) {
+    auto diag = emitOpError()
+                << "unsupported "
+                << stringifyPackedArithOpKind(getOpKind()) << " signature (";
+    for (auto [index, type] : llvm::enumerate(operandElementTypes)) {
+      if (index != 0)
+        diag << ", ";
+      diag << type;
+    }
+    return diag << ") -> " << resultElementType << " for "
+                << stringifyPackedArithType(getPackedType());
+  }
+
+  int64_t axis = getAxis();
+  if (axis < 0 || axis >= tensorType.getRank()) {
+    return emitOpError() << "axis must be in the range [0, "
+                         << tensorType.getRank() << "), but got " << axis;
+  }
+
+  unsigned packWidth = getPackedArithWidth(getPackedType());
+  if (tensorType.getShape()[axis] % packWidth != 0) {
+    return emitOpError() << "dimension " << axis
+                         << " must be divisible by packed width " << packWidth;
+  }
+
+  if (!isa_and_nonnull<DistributedEncodingTrait>(tensorType.getEncoding()))
+    return emitOpError("requires a distributed tensor layout");
+  unsigned contiguity = getContigPerThread(tensorType)[axis];
+  if (contiguity < packWidth) {
+    return emitOpError() << "requires at least " << packWidth
+                         << " contiguous elements per thread along axis "
+                         << axis << ", but the layout provides " << contiguity;
+  }
+
+  return success();
+}
+
 // -- WarpGroupDotOp --
 LogicalResult WarpGroupDotOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,

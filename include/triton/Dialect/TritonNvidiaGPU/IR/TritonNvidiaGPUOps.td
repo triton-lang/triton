@@ -49,6 +49,38 @@ class TTNG_Op<string mnemonic, list<Trait> traits = []> :
        !listconcat(traits, [VerifyTensorLayoutsTrait, VerifyMemDescLayoutsTrait])> {
 }
 
+def TTNG_PackedArithOp : TTNG_Op<"packed_arith", [Pure]> {
+  let summary = "Apply elementwise arithmetic using a packed PTX instruction";
+
+  let description = [{
+    Applies an arithmetic operation elementwise to scalar tensors while grouping
+    adjacent elements along `axis` into one packed PTX instruction. The result
+    has the same shape and layout as every operand.
+
+    `f32x2`, `f16x2`, and `bf16x2` group two values of the corresponding
+    floating-point type. Operand element types may differ for PTX 9.4 mixed
+    precision forms, but must match a signature supported by the selected
+    operation and result packed type. The selected axis must be contiguous
+    within each thread by at least two elements. Within each pair, the element
+    with the lower coordinate along `axis` occupies the least-significant lane.
+  }];
+
+  let arguments = (ins
+    TTNG_PackedArithOpKindAttr:$op_kind,
+    TTNG_PackedArithTypeAttr:$packed_type,
+    Variadic<TT_FloatTensor>:$operands,
+    I32Attr:$axis
+  );
+  let results = (outs TT_FloatTensor:$result);
+
+  let assemblyFormat = [{
+    $op_kind `,` $packed_type `,` $operands `axis` `=` $axis attr-dict
+    `:` functional-type($operands, $result)
+  }];
+
+  let hasVerifier = 1;
+}
+
 def TTNG_FenceAsyncSharedOp : TTNG_Op<"fence_async_shared"> {
   let arguments = (ins BoolAttr:$bCluster);
 

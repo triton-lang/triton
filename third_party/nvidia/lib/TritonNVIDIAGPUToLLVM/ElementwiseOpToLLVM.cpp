@@ -7,6 +7,9 @@
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 
 using namespace mlir::triton::gpu;
 
@@ -655,6 +658,208 @@ struct ExpOpConversionApprox
   }
 };
 
+static unsigned
+getPackedArithWidth(nvidia_gpu::PackedArithType packedType) {
+  switch (packedType) {
+  case nvidia_gpu::PackedArithType::F32X2:
+  case nvidia_gpu::PackedArithType::F16X2:
+  case nvidia_gpu::PackedArithType::BF16X2:
+    return 2;
+  }
+  llvm_unreachable("unknown packed arithmetic type");
+}
+
+static StringRef getPackedArithTypeName(Type elementType) {
+  if (elementType.isF32())
+    return "f32x2";
+  if (elementType.isF16())
+    return "f16x2";
+  if (elementType.isBF16())
+    return "bf16x2";
+  llvm_unreachable("unsupported packed arithmetic element type");
+}
+
+static std::optional<ColumnAction>
+getPackedRegisterOrder(RankedTensorType tensorType, unsigned axis,
+                       unsigned packWidth) {
+  auto layout = toLinearLayout(tensorType);
+  layout = actionRemoveBroadcastedRegs(layout).apply(layout);
+
+  auto kReg = StringAttr::get(tensorType.getContext(), "register");
+  const auto &regBases = layout.getBases().lookup(kReg);
+  SmallVector<size_t> order;
+  SmallVector<bool> used(regBases.size(), false);
+
+  // Move the register bases for adjacent packed lanes to the least-significant
+  // positions. ColumnAction then makes each consecutive packWidth values one
+  // naturally ordered packed operand.
+  for (unsigned laneBit = 0; laneBit < llvm::Log2_32(packWidth); ++laneBit) {
+    std::vector<int32_t> expected(tensorType.getRank(), 0);
+    expected[axis] = 1u << laneBit;
+    auto it = llvm::find(regBases, expected);
+    if (it == regBases.end())
+      return std::nullopt;
+    size_t index = std::distance(regBases.begin(), it);
+    if (used[index])
+      return std::nullopt;
+    order.push_back(index);
+    used[index] = true;
+  }
+  for (size_t i = 0; i < regBases.size(); ++i) {
+    if (!used[i])
+      order.push_back(i);
+  }
+  return ColumnAction(order, kReg, regBases.size());
+}
+
+struct PackedArithOpConversion
+    : ConvertOpToLLVMPattern<nvidia_gpu::PackedArithOp> {
+  using ConvertOpToLLVMPattern<
+      nvidia_gpu::PackedArithOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(nvidia_gpu::PackedArithOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto tensorType = op.getResult().getType();
+    unsigned axis = op.getAxis();
+    unsigned packWidth = getPackedArithWidth(op.getPackedType());
+    auto maybeOrder = getPackedRegisterOrder(tensorType, axis, packWidth);
+    if (!maybeOrder)
+      return rewriter.notifyMatchFailure(
+          op, "packed axis is not contiguous in the register layout");
+    ColumnAction order = *maybeOrder;
+
+    SmallVector<SmallVector<Value>> operandValues;
+    for (Value operand : adaptor.getOperands()) {
+      operandValues.push_back(
+          order.apply(unpackUniqueTensorElements(loc, operand, rewriter)));
+    }
+
+    Type resultElementType = this->getTypeConverter()->convertType(
+        tensorType.getElementType());
+    unsigned resultBitWidth =
+        packWidth * resultElementType.getIntOrFloatBitWidth();
+    Type resultPackedType = int_ty(resultBitWidth);
+    Type resultVectorType = vec_ty(resultElementType, packWidth);
+    StringRef outputConstraint = resultBitWidth == 64 ? "=l" : "=r";
+
+    SmallVector<Type> operandElementTypes;
+    SmallVector<Type> operandPackedTypes;
+    SmallVector<Type> operandVectorTypes;
+    SmallVector<StringRef> operandConstraints;
+    for (Value operand : op.getOperands()) {
+      Type sourceElementType = cast<RankedTensorType>(operand.getType())
+                                   .getElementType();
+      Type convertedElementType =
+          this->getTypeConverter()->convertType(sourceElementType);
+      unsigned packedBitWidth =
+          packWidth * convertedElementType.getIntOrFloatBitWidth();
+      operandElementTypes.push_back(sourceElementType);
+      operandPackedTypes.push_back(int_ty(packedBitWidth));
+      operandVectorTypes.push_back(vec_ty(convertedElementType, packWidth));
+      operandConstraints.push_back(packedBitWidth == 64 ? "l" : "r");
+    }
+
+    Type resultSourceElementType = tensorType.getElementType();
+    bool isHomogeneous =
+        llvm::all_of(operandElementTypes, [&](Type elementType) {
+          return elementType == resultSourceElementType;
+        });
+    SmallVector<StringRef> instructionOptions;
+    if (isHomogeneous) {
+      instructionOptions.push_back("rn");
+      instructionOptions.push_back(
+          getPackedArithTypeName(resultSourceElementType));
+    } else {
+      switch (op.getOpKind()) {
+      case nvidia_gpu::PackedArithOpKind::ADD:
+      case nvidia_gpu::PackedArithOpKind::SUB:
+        instructionOptions.push_back(resultSourceElementType.isF32() ? "rn"
+                                                                     : "rz");
+        if (resultSourceElementType.isF16())
+          instructionOptions.push_back("ftz");
+        instructionOptions.push_back(
+            getPackedArithTypeName(resultSourceElementType));
+        instructionOptions.push_back(
+            getPackedArithTypeName(operandElementTypes[0]));
+        instructionOptions.push_back(
+            getPackedArithTypeName(operandElementTypes[1]));
+        break;
+      case nvidia_gpu::PackedArithOpKind::MUL:
+        if (operandElementTypes[0].isF32()) {
+          if (resultSourceElementType.isF16())
+            instructionOptions.push_back("ftz");
+          instructionOptions.push_back("rz");
+        }
+        instructionOptions.push_back(
+            getPackedArithTypeName(resultSourceElementType));
+        instructionOptions.push_back(
+            getPackedArithTypeName(operandElementTypes[0]));
+        instructionOptions.push_back(
+            getPackedArithTypeName(operandElementTypes[1]));
+        break;
+      case nvidia_gpu::PackedArithOpKind::FMA:
+        instructionOptions.push_back("rn");
+        instructionOptions.push_back(
+            getPackedArithTypeName(resultSourceElementType));
+        for (Type elementType : operandElementTypes)
+          instructionOptions.push_back(
+              getPackedArithTypeName(elementType));
+        break;
+      }
+    }
+
+    SmallVector<Value> packedResults;
+    packedResults.reserve(operandValues.front().size());
+    for (unsigned base = 0; base < operandValues.front().size();
+         base += packWidth) {
+      TritonLLVMOpBuilder b(loc, rewriter);
+      SmallVector<Value> packedOperands;
+      for (auto [operandIndex, values] : llvm::enumerate(operandValues)) {
+        Type vectorType = operandVectorTypes[operandIndex];
+        Value vector = b.undef(vectorType);
+        for (unsigned lane = 0; lane < packWidth; ++lane) {
+          vector = b.insert_element(vectorType, vector, values[base + lane],
+                                    b.i32_val(lane));
+        }
+        packedOperands.push_back(
+            b.bitcast(vector, operandPackedTypes[operandIndex]));
+      }
+
+      PTXBuilder ptxBuilder;
+      SmallVector<PTXBuilder::Operand *> asmOperands;
+      asmOperands.push_back(ptxBuilder.newOperand(outputConstraint));
+      for (auto [operandIndex, operand] :
+           llvm::enumerate(packedOperands)) {
+        asmOperands.push_back(ptxBuilder.newOperand(
+            operand, operandConstraints[operandIndex]));
+      }
+
+      auto &instruction = *ptxBuilder.create(
+          stringifyPackedArithOpKind(op.getOpKind()).str());
+      for (StringRef option : instructionOptions)
+        instruction.o(option.str());
+      instruction(asmOperands);
+
+      Value packedResult =
+          ptxBuilder.launch(rewriter, loc, resultPackedType,
+                            /*hasSideEffect=*/false);
+      Value resultVector = b.bitcast(packedResult, resultVectorType);
+      for (unsigned lane = 0; lane < packWidth; ++lane) {
+        packedResults.push_back(b.extract_element(
+            resultElementType, resultVector, b.i32_val(lane)));
+      }
+    }
+
+    packedResults = order.inverse().apply(packedResults);
+    Value result = packUniqueTensorElements(
+        loc, this->getTypeConverter(), packedResults, rewriter, tensorType);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 struct ClampFOpConversion
     : ElementwiseOpConversionBase<ClampFOp, ClampFOpConversion> {
   using Base = ElementwiseOpConversionBase<ClampFOp, ClampFOpConversion>;
@@ -842,6 +1047,7 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
                                    computeCapability, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
+  patterns.add<PackedArithOpConversion>(typeConverter, benefit);
 
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
