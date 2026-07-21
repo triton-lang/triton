@@ -35,7 +35,6 @@ from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_asy
 from triton.experimental.gluon.language.extra import libdevice
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
-    TensorMemoryLUTLayout,
     TensorMemoryScalesLayout,
     allocate_tensor_memory,
     tcgen05_mma_barrier_count,
@@ -1824,7 +1823,7 @@ def test_tmem_copy_2d(smem_h):
 
     if smem_h == 32:
         smem_layout = ttgl.NVMMASharedLayout.get_default_for([32, 16], ttgl.int8)
-        tmem_layout = TensorMemoryLUTLayout()
+        tmem_layout = rubin.TensorMemoryLUTLayout()
     else:
         smem_layout = ttgl.SharedLinearLayout(
             offset_bases=[[0, 1], [0, 2], [32, 0], [0, 4], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 8]])
@@ -1860,7 +1859,7 @@ def test_tmem_store_lut(rows):
         value = ttgl.load(ttgl.set_auto_layout(in_ptrs, blocked))
         smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([rows, cols], ttgl.int8)
         smem = ttgl.allocate_shared_memory(ttgl.int8, (rows, cols), smem_layout)
-        tmem = allocate_tensor_memory(ttgl.int8, (rows, cols), TensorMemoryLUTLayout())
+        tmem = allocate_tensor_memory(ttgl.int8, (rows, cols), rubin.TensorMemoryLUTLayout())
         smem.store(value)
         fence_async_shared()
         tmem.store(smem.load(tmem.get_reg_layout()))

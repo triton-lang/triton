@@ -30,14 +30,17 @@ __all__ = [
     "tensor_memory_descriptor_type",
     "TensorMemoryLayout",
     "TensorMemoryScalesLayout",
-    "TensorMemoryLUTLayout",
     "tma",
     "_TensorMemoryLinearLayout",
 ]
 
 
+class _TensorMemoryLayoutBase:
+    pass
+
+
 @dataclass(frozen=True, eq=True)
-class TensorMemoryLayout:
+class TensorMemoryLayout(_TensorMemoryLayoutBase):
     """
     Describes the layout for tensor memory in Blackwell architecture.
 
@@ -94,7 +97,7 @@ class TensorMemoryLayout:
 
 
 @dataclass(frozen=True, eq=True)
-class TensorMemoryScalesLayout:
+class TensorMemoryScalesLayout(_TensorMemoryLayoutBase):
     """
     Describes the layout for tensor memory scales in Blackwell architecture.
 
@@ -113,26 +116,6 @@ class TensorMemoryScalesLayout:
     def mangle(self) -> str:
         cga_layout_str = "_".join("~".join(map(str, basis)) for basis in self.cga_layout)
         return f"TLS{cga_layout_str}TLS"
-
-    def __hash__(self):
-        return hash(tuple(tuple(b) for b in self.cga_layout))
-
-
-@dataclass(frozen=True, eq=True)
-class TensorMemoryLUTLayout:
-    """Describes the Tensor Memory layout for Rubin LUT decompression data."""
-    cga_layout: List[List[int]] = field(default_factory=list)
-
-    def __post_init__(self):
-        super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
-        assert all(len(basis) == 2 for basis in self.cga_layout)
-
-    def _to_ir(self, builder):
-        return builder.get_tensor_memory_lut_layout([list(basis) for basis in self.cga_layout])
-
-    def mangle(self) -> str:
-        cga_layout_str = "_".join("~".join(map(str, basis)) for basis in self.cga_layout)
-        return f"TLLUT{cga_layout_str}TLLUT"
 
     def __hash__(self):
         return hash(tuple(tuple(b) for b in self.cga_layout))
@@ -174,7 +157,7 @@ class tensor_memory_descriptor_type(base_type):
         self.shape = _unwrap_if_constexpr(shape)
         self.layout = _unwrap_if_constexpr(layout)
         self.alloc_shape = _unwrap_if_constexpr(alloc_shape)
-        assert isinstance(self.layout, (TensorMemoryLayout, TensorMemoryScalesLayout, TensorMemoryLUTLayout))
+        assert isinstance(self.layout, _TensorMemoryLayoutBase)
 
     def to_ir(self, builder: GluonOpBuilder) -> None:
         return builder.get_tensor_mem_desc_ty(
@@ -492,24 +475,7 @@ def tcgen05_copy(src, dst, _semantic=None):
     _semantic.builder.create_tmem_copy(src.handle, dst.handle)
 
 
-@builtin
-def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarriers=None, mbarrier_preds=None, lut=None,
-                _semantic=None):
-    """
-    Emit a 5th generation TensorCore MMA instruction.
-    acc = a * b + (acc if use_acc else 0)
-
-    Args:
-        a (shared_memory_descriptor or tensor_memory_descriptor): Left hand side operand in shared or tensor memory.
-        b (shared_memory_descriptor): Right hand side operand in shared memory.
-        acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
-        use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
-        pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
-        multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
-        mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
-        mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
-        lut (tensor_memory_descriptor, optional): Lookup table used to decompress B. Defaults to None.
-    """
+def _tcgen05_mma(a, b, acc, *, use_acc, pred, multicast, mbarriers, mbarrier_preds, lut, _semantic):
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
 
@@ -529,6 +495,37 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
     lut_handle = lut.handle if lut is not None else None
     _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
                                          mbarrier_preds, acc.layout.two_ctas, multicast, lut_handle)
+
+
+@builtin
+def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarriers=None, mbarrier_preds=None,
+                _semantic=None):
+    """
+    Emit a 5th generation TensorCore MMA instruction.
+    acc = a * b + (acc if use_acc else 0)
+
+    Args:
+        a (shared_memory_descriptor or tensor_memory_descriptor): Left hand side operand in shared or tensor memory.
+        b (shared_memory_descriptor): Right hand side operand in shared memory.
+        acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
+        use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
+        pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
+        multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
+        mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
+        mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
+    """
+    return _tcgen05_mma(
+        a,
+        b,
+        acc,
+        use_acc=use_acc,
+        pred=pred,
+        multicast=multicast,
+        mbarriers=mbarriers,
+        mbarrier_preds=mbarrier_preds,
+        lut=None,
+        _semantic=_semantic,
+    )
 
 
 @builtin

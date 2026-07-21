@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import List
 
-from triton.experimental.gluon.language._core import _unwrap_if_constexpr
+from triton.experimental.gluon.language._core import _unwrap_if_constexpr, builtin
 
 from ..blackwell import (
     TensorMemoryLayout,
+    _tcgen05_mma,
+    _TensorMemoryLayoutBase,
     _TensorMemoryLinearLayout,
     allocate_tensor_memory,
     async_copy,
@@ -18,7 +21,6 @@ from ..blackwell import (
     tensor_memory_descriptor_type,
     tcgen05_commit,
     tcgen05_copy,
-    tcgen05_mma,
     tcgen05_mma_barrier_count,
     tcgen05_mma_scaled,
     tma,
@@ -43,10 +45,63 @@ __all__ = [
     "tcgen05_mma_barrier_count",
     "tcgen05_mma_scaled",
     "TensorMemoryLayout",
+    "TensorMemoryLUTLayout",
     "TensorMemoryScalesLayout",
     "tma",
     "_TensorMemoryLinearLayout",
 ]
+
+
+@dataclass(frozen=True, eq=True)
+class TensorMemoryLUTLayout(_TensorMemoryLayoutBase):
+    """Describes the Tensor Memory layout for Rubin LUT decompression data."""
+    cga_layout: List[List[int]] = field(default_factory=list)
+
+    def __post_init__(self):
+        super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
+        assert all(len(basis) == 2 for basis in self.cga_layout)
+
+    def _to_ir(self, builder):
+        return builder.get_tensor_memory_lut_layout([list(basis) for basis in self.cga_layout])
+
+    def mangle(self) -> str:
+        cga_layout_str = "_".join("~".join(map(str, basis)) for basis in self.cga_layout)
+        return f"TLLUT{cga_layout_str}TLLUT"
+
+    def __hash__(self):
+        return hash(tuple(tuple(b) for b in self.cga_layout))
+
+
+@builtin
+def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarriers=None, mbarrier_preds=None, lut=None,
+                _semantic=None):
+    """
+    Emit a Rubin 5th generation TensorCore MMA instruction.
+    acc = a * b + (acc if use_acc else 0)
+
+    Args:
+        a (shared_memory_descriptor or tensor_memory_descriptor): Left hand side operand in shared or tensor memory.
+        b (shared_memory_descriptor): Right hand side operand in shared memory.
+        acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
+        use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
+        pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
+        multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
+        mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete.
+        mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
+        lut (tensor_memory_descriptor, optional): Lookup table used to decompress B. Defaults to None.
+    """
+    return _tcgen05_mma(
+        a,
+        b,
+        acc,
+        use_acc=use_acc,
+        pred=pred,
+        multicast=multicast,
+        mbarriers=mbarriers,
+        mbarrier_preds=mbarrier_preds,
+        lut=lut,
+        _semantic=_semantic,
+    )
 
 
 @dataclass(frozen=True, eq=True)

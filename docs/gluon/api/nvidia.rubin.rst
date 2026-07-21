@@ -31,4 +31,5 @@ NVIDIA Rubin
     tcgen05_mma_barrier_count
     tcgen05_mma_scaled
     TensorMemoryLayout
+    TensorMemoryLUTLayout
     TensorMemoryScalesLayout

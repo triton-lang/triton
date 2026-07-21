@@ -8,15 +8,14 @@ from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
-    TensorMemoryLUTLayout,
     allocate_tensor_memory,
     tma,
     mbarrier,
-    tcgen05_mma,
     tcgen05_commit,
     tcgen05_copy,
     fence_async_shared,
 )
+from triton.experimental.gluon.language.nvidia.rubin import TensorMemoryLUTLayout, tcgen05_mma
 from triton._internal_testing import is_rubin
 
 

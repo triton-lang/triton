@@ -147,8 +147,8 @@ struct GluonLayouts {
   py::handle DotOperandLayout;
   py::handle NVMMADistributedLayout;
   py::handle RubinTensorMemoryScalesLayout;
-  py::handle TensorMemoryScalesLayout;
   py::handle TensorMemoryLUTLayout;
+  py::handle TensorMemoryScalesLayout;
   py::handle TensorMemoryLayout;
   py::handle NVMMASharedLayout;
   py::handle SwizzledSharedLayout;
@@ -179,7 +179,7 @@ struct GluonLayouts {
     TensorMemoryScalesLayout =
         py::object(blackwellLayouts.attr("TensorMemoryScalesLayout")).release();
     TensorMemoryLUTLayout =
-        py::object(blackwellLayouts.attr("TensorMemoryLUTLayout")).release();
+        py::object(rubinLayouts.attr("TensorMemoryLUTLayout")).release();
     RubinTensorMemoryScalesLayout =
         py::object(rubinLayouts.attr("TensorMemoryScalesLayout")).release();
     TensorMemoryLayout =
