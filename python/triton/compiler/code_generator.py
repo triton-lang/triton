@@ -292,7 +292,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.is_gluon = is_gluon
         if is_gluon:
             from triton.experimental.gluon.language._semantic import GluonSemantic
-            self.builder = gluon_ir.GluonOpBuilder(context)
+            self.builder = gluon_ir.GluonOpBuilder(context, options.arch)
             self.semantic = GluonSemantic(self.builder)
         else:
             from triton.language.semantic import TritonSemantic
@@ -642,7 +642,7 @@ class CodeGenerator(ast.NodeVisitor):
             if annotation is None:
                 init_node = ast.Assign(targets=[st_target], value=default_value)
             else:
-                init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation)
+                init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation, simple=1)
             try:
                 assert not self.visiting_arg_default_value
                 self.visiting_arg_default_value = True

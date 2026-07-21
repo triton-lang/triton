@@ -35,21 +35,6 @@ uint32_t getBlockBroadcastMask(Type type) {
   return toLinearLayout(memDescTy).getFreeVariableMasks().lookup(kBlock);
 }
 
-std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op) {
-  if (!op->hasAttr("allocation.size") ||
-      !isa<AtomicPollOp, AtomicRMWOp, AtomicCASOp, ttg::LocalAtomicScatterRMWOp,
-           tti::ExperimentalGSanAtomicRMWOp, tti::ExperimentalGSanAtomicCASOp>(
-          op))
-    return std::nullopt;
-
-  Type resultTy = op->getResult(0).getType();
-  if (auto tensorTy = dyn_cast<RankedTensorType>(resultTy)) {
-    auto kBlock = StringAttr::get(op->getContext(), "block");
-    return ttg::toLinearLayout(tensorTy).getFreeVariableMasks().lookup(kBlock);
-  }
-  return static_cast<uint16_t>(ttg::lookupNumCTAs(op) - 1);
-}
-
 } // namespace
 
 class NVIDIAConSanHooks : public tti::ConSanTargetHooks {
@@ -130,14 +115,21 @@ public:
       mask = getBarrierMask(waitOp.getAlloc());
     if (auto invalOp = dyn_cast<ttng::InvalBarrierOp>(op))
       mask = getBarrierMask(invalOp.getAlloc());
+    if (isa<ttng::BarrierExpectOp, ttng::ArriveBarrierOp>(op)) {
+      std::optional<uint32_t> fromCTA;
+      if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))
+        fromCTA = expectOp.getFromCTA();
+      else
+        fromCTA = cast<ttng::ArriveBarrierOp>(op).getFromCTA();
+      if (fromCTA)
+        mask = ~*fromCTA & (ttg::lookupNumCTAs(op) - 1);
+    }
     if (auto loadOp = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
       if (loadOp.getMulticast())
         mask = getBlockBroadcastMask(loadOp.getResult().getType());
     }
     if (auto storeOp = dyn_cast<ttng::TMAStoreLikeOpInterface>(op))
       mask = getBlockBroadcastMask(storeOp.getSrc().getType());
-    if (auto scratchMask = getAtomicScratchBroadcastMask(op))
-      mask = *scratchMask;
     if (isa<ttng::CLCTryCancelOp>(op) && ttg::lookupNumCTAs(op) > 1) {
       Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
       return arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId,
@@ -155,22 +147,9 @@ public:
     return getLeaderCTAPredicate(b, mask);
   }
 
-  SmallVector<Operation *>
-  createInitClusterBarrier(ImplicitLocOpBuilder &b) const override {
-    return {ClusterBarrierOp::create(b, b.getLoc()).getOperation()};
-  }
-
-  std::optional<uint16_t>
-  getScratchCTABroadcastMask(Operation *op) const override {
-    return getAtomicScratchBroadcastMask(op);
-  }
-
-  FailureOr<std::optional<MemEffectsOpInfo>>
+  std::optional<MemEffectsOpInfo>
   getMemEffectsOpInfo(Operation *op) const override {
-    auto baseInfo = ConSanTargetHooks::getMemEffectsOpInfo(op);
-    if (failed(baseInfo))
-      return failure();
-    auto info = std::move(*baseInfo);
+    auto info = ConSanTargetHooks::getMemEffectsOpInfo(op);
     if (info)
       return info;
     if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {

@@ -1,7 +1,6 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Transforms/Passes.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
@@ -616,28 +615,7 @@ Value getLocalLoadStoreRecipientCTAs(ImplicitLocOpBuilder &b,
       b, getLocalLoadStoreConversion(memDescTy, regTy));
 }
 
-Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op,
-                       const ConSanTargetHooks *hooks) {
-  if (auto convert = dyn_cast<ttg::ConvertLayoutOp>(op)) {
-    // Convert-layout scratch has the source layout's CTA ownership. Stores are
-    // therefore local to the issuer, while loads may read the source scratch
-    // owned by peer CTAs. This block-level conversion matches the block
-    // mapping of the swizzled scratch layout used by lowering.
-    LinearLayout srcLayout = ttg::toLinearLayout(convert.getSrc().getType());
-    LinearLayout dstLayout = ttg::toLinearLayout(convert.getType());
-    Value loadCTAs = getLocalMemoryRecipientCTAs(
-        b, invertAndComposeBlockLocal(srcLayout, dstLayout));
-    return arith::OrIOp::create(b, currentCTAMask(b), loadCTAs);
-  }
-  if (auto reduce = dyn_cast<tt::ReduceOp>(op)) {
-    // Reduce lowering creates its scratch-backed conversions after ConSan.
-    // Intra-CTA reductions only access the issuer's scratch. Cross-CTA
-    // reductions are not currently expected after layout optimization, but
-    // conservatively cover the cluster if one reaches this pipeline stage.
-    if (!ReduceOpHelper(reduce).isReduceWithinCTA())
-      return allCTAsMask(b);
-    return currentCTAMask(b);
-  }
+Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
   if (auto load = dyn_cast<ttg::LocalLoadOp>(op)) {
     return getLocalLoadStoreRecipientCTAs(b, load.getSrc().getType(),
                                           load.getType());
@@ -662,21 +640,11 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op,
                                            scatter.getAxis()));
   }
   if (auto atomic = dyn_cast<ttg::LocalAtomicScatterRMWOp>(op)) {
-    Value recipients = getLocalMemoryRecipientCTAs(
+    return getLocalMemoryRecipientCTAs(
         b, getLocalGatherScatterConversion(atomic.getDst().getType(),
                                            atomic.getValues().getType(),
                                            atomic.getAxis()));
-    if (auto mask = hooks->getScratchCTABroadcastMask(op)) {
-      Value scratchRecipients =
-          *mask ? getRecipientCTAsForBroadcastMasks(b, {*mask})
-                : currentCTAMask(b);
-      recipients = arith::OrIOp::create(b, recipients, scratchRecipients);
-    }
-    return recipients;
   }
-  if (auto mask = hooks->getScratchCTABroadcastMask(op))
-    return *mask ? getRecipientCTAsForBroadcastMasks(b, {*mask})
-                 : currentCTAMask(b);
   if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     if (tmaLoad.getMulticast())
       return getMulticastRecipientCTAs(b, tmaLoad.getResult());
@@ -691,10 +659,21 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op,
 }
 
 Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
-  if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))
-    return getLeaderCTA(b, expectOp.getAlloc());
-  if (auto arriveOp = dyn_cast<ttng::ArriveBarrierOp>(op))
-    return getLeaderCTA(b, arriveOp.getAlloc());
+  if (isa<ttng::BarrierExpectOp, ttng::ArriveBarrierOp>(op)) {
+    Value barrier = cast<ttg::MBarrierOpInterface>(op).getBarrier();
+    std::optional<uint32_t> fromCTA;
+    if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))
+      fromCTA = expectOp.getFromCTA();
+    else
+      fromCTA = cast<ttng::ArriveBarrierOp>(op).getFromCTA();
+    if (fromCTA) {
+      int numCTAs = ttg::lookupNumCTAs(op);
+      uint32_t broadcastBits = ~*fromCTA & (numCTAs - 1);
+      auto encoding = ttng::getTMAMulticastMaskEncoding(numCTAs, broadcastBits);
+      return createCTABitset(b, encoding.pattern, encoding.fixedBits);
+    }
+    return getLeaderCTA(b, barrier);
+  }
   if (auto arriveOp = dyn_cast<ttng::AsyncCopyMbarrierArriveOp>(op))
     return getLeaderCTA(b, arriveOp.getBarrier());
   if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
@@ -990,16 +969,13 @@ private:
                                      int thread,
                                      tti::FunctionBuilder &funcBuilder) {
     int baseThread = getBaseThread(thread, auxData.threadLayout);
-    auto opInfoResult = hooks->getMemEffectsOpInfo(op);
-    if (failed(opInfoResult))
-      return failure();
-    std::optional<MemEffectsOpInfo> opInfo = std::move(*opInfoResult);
+    std::optional<MemEffectsOpInfo> opInfo = hooks->getMemEffectsOpInfo(op);
     if (!opInfo)
       return success();
     Value pred = opInfo->pred;
     Value issuerCTAPred = hooks->getIssuerCTAPred(b, op);
     pred = tti::maybeAnd(b, pred, issuerCTAPred);
-    Value effectCTAs = getMemEffectCTAs(b, op, hooks);
+    Value effectCTAs = getMemEffectCTAs(b, op);
     struct MaterializedEffect {
       tti::MaterializedBufferRegion buffer;
       MemType memType;
@@ -1009,47 +985,27 @@ private:
 
     for (const auto &effect : opInfo->operandEffects) {
       MaterializedEffect materialized;
-      if (auto *buf = std::get_if<Value>(&effect.buffer)) {
-        auto bufType = cast<ttg::MemDescType>(buf->getType());
-        materialized.memType = MemType::TENSOR_MEM;
-        if (isa<ttg::SharedEncodingTrait>(bufType.getEncoding()))
-          materialized.memType = MemType::SHARED_MEM;
-        auto &candidateMap =
-            auxData.bufferCandidateIds[static_cast<int>(materialized.memType)];
-        auto candidateIt = candidateMap.find(*buf);
-        if (candidateIt == candidateMap.end()) {
-          op->emitError("missing exact buffer-region candidates for memdesc");
-          return failure();
-        }
-        Value runtimeBase;
-        if (candidateIt->second.size() > 1)
-          runtimeBase = tti::ExperimentalMemDescToI32Op::create(b, *buf);
-        FailureOr<tti::MaterializedBufferRegion> buffer =
-            createBufferStateMasks(b, auxData, materialized.memType,
-                                   runtimeBase, candidateIt->second, op);
-        if (failed(buffer))
-          return failure();
-        materialized.buffer = *buffer;
-      } else {
-        const auto &staticBuffer =
-            std::get<MemEffectsOpInfo::Effects::StaticSharedBuffer>(
-                effect.buffer);
+      Value buf = effect.buf;
+      auto bufType = cast<ttg::MemDescType>(buf.getType());
+      materialized.memType = MemType::TENSOR_MEM;
+      if (isa<ttg::SharedEncodingTrait>(bufType.getEncoding()))
         materialized.memType = MemType::SHARED_MEM;
-        auto &regions =
-            auxData.bufferRegions[static_cast<int>(MemType::SHARED_MEM)];
-        auto regionIt = llvm::find(regions, staticBuffer.region);
-        if (regionIt == regions.end()) {
-          op->emitError("missing exact region for compiler scratch buffer");
-          return failure();
-        }
-        uint32_t id = std::distance(regions.begin(), regionIt);
-        FailureOr<tti::MaterializedBufferRegion> buffer =
-            createBufferStateMasks(b, auxData, MemType::SHARED_MEM,
-                                   /*runtimeBase=*/{}, {id}, op);
-        if (failed(buffer))
-          return failure();
-        materialized.buffer = *buffer;
+      auto &candidateMap =
+          auxData.bufferCandidateIds[static_cast<int>(materialized.memType)];
+      auto candidateIt = candidateMap.find(buf);
+      if (candidateIt == candidateMap.end()) {
+        op->emitError("missing exact buffer-region candidates for memdesc");
+        return failure();
       }
+      Value runtimeBase;
+      if (candidateIt->second.size() > 1)
+        runtimeBase = tti::ExperimentalMemDescToI32Op::create(b, buf);
+      FailureOr<tti::MaterializedBufferRegion> stateMasks =
+          createBufferStateMasks(b, auxData, materialized.memType, runtimeBase,
+                                 candidateIt->second, op);
+      if (failed(stateMasks))
+        return failure();
+      materialized.buffer = *stateMasks;
       materializedEffects.push_back(materialized);
 
       auto buffer = materialized.buffer;

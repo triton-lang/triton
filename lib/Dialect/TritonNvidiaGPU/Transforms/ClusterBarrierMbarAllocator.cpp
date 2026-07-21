@@ -26,11 +26,11 @@ namespace {
 bool atomicNeedsClusterBarrier(Operation *op) {
   if (isa<AtomicPollOp>(op))
     return gpu::lookupNumCTAs(op) != 1;
-  if (!isa<AtomicCASOp, AtomicRMWOp>(op) || gpu::lookupNumCTAs(op) == 1)
+  auto atomic = dyn_cast<AtomicOpInterface>(op);
+  if (!atomic || gpu::lookupNumCTAs(op) == 1)
     return false;
 
-  auto sem = isa<AtomicCASOp>(op) ? cast<AtomicCASOp>(op).getSem()
-                                  : cast<AtomicRMWOp>(op).getSem();
+  auto sem = atomic.getMemSemantic();
   if (sem == MemSemantic::RELEASE || sem == MemSemantic::ACQUIRE_RELEASE ||
       (sem == MemSemantic::ACQUIRE && !op->hasAttr("allocation.offset")))
     return true;

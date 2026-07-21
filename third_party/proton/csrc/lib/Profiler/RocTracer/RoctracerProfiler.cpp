@@ -465,6 +465,12 @@ void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {
   roctracer::openPool<true>(&properties);
   roctracer::enableDomainActivity<true>(ACTIVITY_DOMAIN_HIP_OPS);
   roctracer::start();
+
+  if (!profiler.isTimestampCalibrated) {
+    profiler.timestampOffsetNs =
+        detail::computeTimestampOffsetNs(roctracer::getTimestamp<true>);
+    profiler.isTimestampCalibrated = true;
+  }
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doFlush() {

@@ -3427,6 +3427,32 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_CTASplit) {
                 LinearLayout::identity1D(2, kBlock, d1));
 }
 
+TEST_F(LinearLayoutConversionsTest, TensorMemoryScales_BlockRepOrder) {
+  auto d0 = S("dim0");
+  auto d1 = S("dim1");
+  auto kBlock = S("block");
+  auto kRow = S("row");
+  auto kCol = S("col");
+  auto cgaLayout = CGAEncodingAttr::get1CTALayout(&ctx, /*rank=*/2);
+  auto encKThenMn = TensorMemoryScalesEncodingAttr::get(
+      &ctx, cgaLayout, nvidia_gpu::TensorMemoryScalesBlockRepOrder::K_THEN_MN);
+  auto encMnThenK = TensorMemoryScalesEncodingAttr::get(
+      &ctx, cgaLayout, nvidia_gpu::TensorMemoryScalesBlockRepOrder::MN_THEN_K);
+
+  LinearLayout expectedKThenMn = LinearLayout::identity1D(32, kRow, d0) *
+                                 LinearLayout::zeros1D(4, kRow, d0) *
+                                 LinearLayout::identity1D(4, kCol, d1) *
+                                 LinearLayout::identity1D(2, kCol, d0) *
+                                 LinearLayout::identity1D(2, kCol, d0) *
+                                 LinearLayout::identity1D(2, kCol, d1) *
+                                 LinearLayout::identity1D(2, kCol, d0) *
+                                 LinearLayout::identity1D(1, kBlock, d0);
+  EXPECT_EQ(toLinearLayout({256, 8}, encKThenMn), expectedKThenMn);
+
+  EXPECT_NE(toLinearLayout({256, 8}, encKThenMn),
+            toLinearLayout({256, 8}, encMnThenK));
+}
+
 // Tests for SM120 DotScaled Scale Layout
 TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
   LinearLayout layout, ll;

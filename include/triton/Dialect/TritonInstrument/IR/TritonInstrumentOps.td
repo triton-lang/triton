@@ -63,20 +63,6 @@ def TTI_ExperimentalMemDescToI32Op : TTI_Op<"experimental_memdesc_to_i32", [Pure
   let assemblyFormat = "$memdesc attr-dict `:` type($memdesc)";
 }
 
-def TTI_ExperimentalSharedMemoryOffsetToI32Op
-    : TTI_Op<"experimental_shared_memory_offset_to_i32", [Pure]> {
-  let summary = "Materialize a shared-memory byte offset as an i32 address";
-  let description = [{
-    Add a statically allocated byte offset to the current function's shared
-    memory base, then return the masked 32-bit address used by ConSan buffer
-    descriptors. This represents compiler-owned shared-memory scratch that has
-    no SSA memdesc.
-  }];
-  let arguments = (ins I32Attr:$offset);
-  let results = (outs I32:$result);
-  let assemblyFormat = "$offset attr-dict";
-}
-
 def TTI_ExperimentalMemoryOffsetToI32Op
     : TTI_Op<"experimental_memory_offset_to_i32", [Pure]> {
   let summary = "Materialize a memory-space offset as an i32 address";
@@ -203,6 +189,7 @@ def TTI_ExperimentalGSanAtomicPollOp
 }
 
 def TTI_ExperimentalGSanAtomicRMWOp : TTI_Op<"experimental_gsan_atomic_rmw", [
+  AtomicOpInterface,
   SameOperandsAndResultShape,
   SameOperandsAndResultEncoding,
   TypesMatchWith<"ptr type matches value type", "val", "ptr",
@@ -228,6 +215,7 @@ def TTI_ExperimentalGSanAtomicRMWOp : TTI_Op<"experimental_gsan_atomic_rmw", [
 }
 
 def TTI_ExperimentalGSanAtomicCASOp : TTI_Op<"experimental_gsan_atomic_cas", [
+  AtomicOpInterface,
   SameOperandsAndResultShape,
   SameOperandsAndResultEncoding,
   TypesMatchWith<"ptr type matches cmp type", "cmp", "ptr",

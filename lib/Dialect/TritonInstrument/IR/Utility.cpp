@@ -607,10 +607,8 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
       arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
   ExperimentalLockReleaseOp::create(b, lockVal, isCTA0);
   if (numCTAs > 1) {
-    auto clusterBarriers = hooks->createInitClusterBarrier(b);
-    assert(!clusterBarriers.empty() &&
-           "target must provide a cluster initialization barrier");
-    llvm::append_range(internalClusterBarriers, clusterBarriers);
+    auto clusterBarrier = ClusterBarrierOp::create(b, b.getLoc());
+    internalClusterBarriers.push_back(clusterBarrier.getOperation());
   } else {
     BarrierOp::create(b, b.getLoc(), AddrSpace::Local);
   }
@@ -693,19 +691,13 @@ LogicalResult AuxDataMap::getBuffersAndBarriers(
         {value, analysis->getLatticeElement(value)->getValue()});
   };
   if (hooks) {
-    WalkResult result = module.walk([&](Operation *op) -> WalkResult {
+    module.walk([&](Operation *op) {
       auto info = hooks->getMemEffectsOpInfo(op);
-      if (failed(info))
-        return WalkResult::interrupt();
-      if (!*info)
-        return WalkResult::advance();
-      for (const auto &effect : (*info)->operandEffects)
-        if (auto *value = std::get_if<Value>(&effect.buffer))
-          collectCandidates(*value);
-      return WalkResult::advance();
+      if (!info)
+        return;
+      for (const auto &effect : info->operandEffects)
+        collectCandidates(effect.buf);
     });
-    if (result.wasInterrupted())
-      return failure();
   } else {
     module.walk([&](Operation *op) {
       if (!BufferRegionAnalysis::isMemoryAccessOperation(op))
@@ -722,32 +714,6 @@ LogicalResult AuxDataMap::getBuffersAndBarriers(
       BufferRegionAnalysis::RegionType::TENSOR_MEMORY);
   barrierRegions = analysis->getAllUsedBufferRegions(
       BufferRegionAnalysis::RegionType::BARRIER);
-
-  // Compiler-owned operation scratch has no SSA memdesc for
-  // BufferRegionAnalysis to discover. Collect its allocator-provided static
-  // regions from the same effects ConSan will instrument below. Merging them
-  // here also makes overlap with explicit buffers visible to the state plan.
-  if (hooks) {
-    WalkResult result = module.walk([&](Operation *op) -> WalkResult {
-      auto info = hooks->getMemEffectsOpInfo(op);
-      if (failed(info))
-        return WalkResult::interrupt();
-      if (!*info)
-        return WalkResult::advance();
-      for (const auto &effect : (*info)->operandEffects) {
-        auto *staticBuffer =
-            std::get_if<MemEffectsOpInfo::Effects::StaticSharedBuffer>(
-                &effect.buffer);
-        if (!staticBuffer)
-          continue;
-        bufRegions[static_cast<int>(MemType::SHARED_MEM)].push_back(
-            staticBuffer->region);
-      }
-      return WalkResult::advance();
-    });
-    if (result.wasInterrupted())
-      return failure();
-  }
 
   for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
     int iMemType = (int)memType;

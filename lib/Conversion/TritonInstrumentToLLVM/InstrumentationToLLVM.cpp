@@ -22,6 +22,10 @@ namespace ttg = tt::gpu;
 namespace tti = mlir::triton::instrument;
 namespace ttng = mlir::triton::nvidia_gpu;
 
+// The first 24 bits of the shared memory object are CTA-invariant
+// The next 4 bits are the CTA index
+constexpr uint32_t kSharedMemoryObjectMask = (1u << 24) - 1;
+
 ////////////////////////////////////////////
 // Utility functions
 ////////////////////////////////////////////
@@ -43,7 +47,7 @@ Value createMemDescToI32(RewriterBase &rewriter, Location loc,
   auto elemSize = srcElemTy.getIntOrFloatBitWidth() / 8;
   offset = b.mul(offset, b.i32_val(elemSize));
   return b.and_(b.add(offset, b.ptrtoint(i32Ty, smemObj.getBase())),
-                b.i32_val(tti::kSharedMemoryObjectMask));
+                b.i32_val(kSharedMemoryObjectMask));
 }
 
 ////////////////////////////////////////////
@@ -119,7 +123,7 @@ struct BufferDescriptorsOpConversion
 
     SmallVector<uint64_t> maskVals(offsets.size(),
                                    op.getMemType() == tti::MemType::SHARED_MEM
-                                       ? tti::kSharedMemoryObjectMask
+                                       ? kSharedMemoryObjectMask
                                        : 0xffffffffu);
     Value maskTensor =
         createInitializedIntArrayTensor(rewriter, loc, encoding, maskVals);
@@ -322,30 +326,6 @@ public:
   }
 };
 
-struct SharedMemoryOffsetToI32OpConversion
-    : public ConvertOpToLLVMPattern<
-          tti::ExperimentalSharedMemoryOffsetToI32Op> {
-public:
-  using ConvertOpToLLVMPattern<
-      tti::ExperimentalSharedMemoryOffsetToI32Op>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(tti::ExperimentalSharedMemoryOffsetToI32Op op,
-                  OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto func = op->getParentOfType<FunctionOpInterface>();
-    assert(func && "shared-memory offset must be inside a function");
-
-    TritonLLVMOpBuilder b(op.getLoc(), rewriter);
-    Value base = b.ptrtoint(rewriter.getI32Type(),
-                            LLVM::getStackPointer(rewriter, func));
-    Value address = b.add(base, b.i32_val(op.getOffset()));
-    rewriter.replaceOp(
-        op, b.and_(address, b.i32_val(tti::kSharedMemoryObjectMask)));
-    return success();
-  }
-};
-
 struct MemoryOffsetToI32OpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalMemoryOffsetToI32Op> {
 public:
@@ -372,7 +352,7 @@ public:
 
     Value address = b.add(base, b.i32_val(op.getOffset()));
     if (op.getMemType() == tti::MemType::SHARED_MEM)
-      address = b.and_(address, b.i32_val(tti::kSharedMemoryObjectMask));
+      address = b.and_(address, b.i32_val(kSharedMemoryObjectMask));
     rewriter.replaceOp(op, address);
     return success();
   }
@@ -505,7 +485,6 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
   patterns.add<LockAcquireOpConversion>(typeConverter, targetInfo);
   patterns.add<LockReleaseOpConversion>(typeConverter, targetInfo);
   patterns.add<MemDescToI32OpConversion>(typeConverter);
-  patterns.add<SharedMemoryOffsetToI32OpConversion>(typeConverter);
   patterns.add<MemoryOffsetToI32OpConversion>(typeConverter);
   patterns.add<ClusterCTAIdOpConversion>(typeConverter, targetInfo);
   patterns.add<LocalGatherOpConversion>(typeConverter, targetInfo);

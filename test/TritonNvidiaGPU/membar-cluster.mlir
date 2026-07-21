@@ -509,7 +509,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.clc_try_cancel %result, %barrier :
       !ttg.memdesc<2xi64, #sharedCLC, #smem, mutable>,
       !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>
-    ttng.barrier_expect %barrier, 16, %true :
+    ttng.barrier_expect %barrier, 16 {fromCTA = 0 : i32}, %true :
       !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>
     tt.return
   }
@@ -585,6 +585,28 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
     ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
     ttng.tc_gen5_mma %a, %b, %acc, %false, %true, %barrier[%true] {is_async, multicast} : !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, !ttg.memdesc<128x128xf32, #tmemMMA, #ttng.tensor_memory, mutable>, !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#barrierFromCTA = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // A remote arrival can signal a per-CTA barrier before its peer has
+  // completed initialization, so initialization requires cluster sync.
+  // CHECK-LABEL: @cluster_fromCTA_with_per_cta_barrier
+  // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
+  // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttng.barrier_expect
+  tt.func @cluster_fromCTA_with_per_cta_barrier() {
+    %true = arith.constant true
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierFromCTA, #smem, mutable>
+    ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #barrierFromCTA, #smem, mutable>
+    ttng.barrier_expect %barrier, 16 {fromCTA = 0 : i32}, %true : !ttg.memdesc<2xi64, #barrierFromCTA, #smem, mutable>
     tt.return
   }
 }
@@ -851,5 +873,50 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // b lifetime end
 
     tt.return %t2 : tensor<64x128xf16, #blocked>
+  }
+}
+
+// -----
+
+#barrierEncMC = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // multicastCTA absent is not a cross-CTA op; no fence or cluster barrier should be inserted.
+  // CHECK-LABEL: @cluster_arrive_barrier_no_multicastCTA_no_sync
+  // CHECK: ttng.init_barrier
+  // CHECK-NOT: ttng.fence_mbarrier_init_release_cluster
+  // CHECK-NOT: ttng.cluster_barrier
+  // CHECK: ttng.arrive_barrier
+  tt.func @cluster_arrive_barrier_no_multicastCTA_no_sync() {
+    %c0 = arith.constant 0 : i32
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEncMC, #smem, mutable>
+    ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #barrierEncMC, #smem, mutable>
+    ttng.arrive_barrier %barrier, 1 : !ttg.memdesc<2xi64, #barrierEncMC, #smem, mutable>
+    ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<2xi64, #barrierEncMC, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#barrierEncMC = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // Multicast arrive is a cross-CTA op; the pass should auto-insert
+  // fence + relaxed cluster barrier between init and arrive_barrier multicast.
+  // CHECK-LABEL: @cluster_arrive_barrier_multicast_init_sync
+  // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
+  // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttng.arrive_barrier
+  tt.func @cluster_arrive_barrier_multicast_init_sync() {
+    %c0 = arith.constant 0 : i32
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEncMC, #smem, mutable>
+    ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #barrierEncMC, #smem, mutable>
+    ttng.arrive_barrier %barrier, 1 {multicastCTA = 1 : i32} : !ttg.memdesc<2xi64, #barrierEncMC, #smem, mutable>
+    ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<2xi64, #barrierEncMC, #smem, mutable>
+    tt.return
   }
 }

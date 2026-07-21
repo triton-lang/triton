@@ -105,38 +105,14 @@ overlap-connected component, it creates one lane per unique physical
 region-membership atom. Addresses with the same region membership share a lane,
 which is the minimal exact representation for mask-based state updates. Each
 access lowers to constant update, hazard-check, and completion masks over that
-lane space. Static accesses need no runtime buffer lookup; genuinely dynamic
-memdesc values select among compile-time masks by comparing their runtime base.
+lane space. Single-candidate accesses need no runtime buffer lookup; genuinely
+dynamic memdesc values select among compile-time masks by comparing their
+runtime base.
 
 Most runtime state is CTA-qualified so cluster, multicast, and cross-CTA effects
 can be represented directly. Scratch state is zero-initialized once before the
 instrumented body runs, and the initialization is followed by a CTA or cluster
 barrier before any instrumented operation can use it.
-
-Compiler-owned shared-memory scratch does not have an SSA memdesc for
-BufferRegion analysis to discover. Allocation therefore publishes the static
-byte interval of every operation-local scratch buffer, and ConSan models it as
-one synchronous generic-proxy write over the complete interval. This covers
-scratch used by layout conversions, reductions, scans, gathers, histograms,
-atomic result broadcasts, tensor-map creation, warp-specialize captures, and
-backend-specific operations. Virtual call frames and function-owned scheduler
-state are not operation effects and publish no size metadata.
-
-Allocation must run before ConSan, and `allocation.size` is the authoritative
-marker that an operation has non-empty compiler scratch at this point in the
-pipeline. A transform that introduces scratch-using operations after allocation
-must rerun allocation before ConSan. ConSan does not infer missing metadata from
-operation kinds because scratch requirements are target- and lowering-specific.
-
-Reduction lowering creates additional `ttg.convert_layout` operations after
-ConSan, so the parent `tt.reduce` carries the effect for their already allocated
-interval. A scratch effect must wait for earlier asynchronous readers or
-writers, and its lowering leaves no pending asynchronous access when the
-operation returns. Conversions forced to use warp shuffles allocate no scratch
-and fail compilation if the conversion is not warp-local.
-Cross-CTA convert and reduce effects retain their operation-specific routing.
-Scratch-backed atomic broadcasts are predicated to the producer CTA and routed
-to every CTA that consumes the replicated result.
 
 The exact auxiliary data layout is intentionally documented next to the
 implementation in `AuxDataMap` in
