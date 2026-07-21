@@ -250,14 +250,8 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
   return b.or_(orPart, xorPart, /*disjoint=*/true);
 }
 
-FailureOr<bool> cvtAlwaysUseWarpShuffle(ConvertLayoutOp cvt) {
-  if (cvtUsesForcedWarpShuffle(cvt))
-    return true;
-  if (!cvtIsWarpShuffleForced(cvt))
-    return false;
-  cvt.emitError("'always_use_warp_shuffle' requires a warp-local layout "
-                "conversion");
-  return failure();
+bool cvtAlwaysUseWarpShuffle(ConvertLayoutOp cvt) {
+  return cvt->getParentOp()->hasAttrOfType<UnitAttr>("always_use_warp_shuffle");
 }
 
 Value maybeAnd(OpBuilder &builder, Location loc, Value a, Value b) {
@@ -913,6 +907,27 @@ SmallVector<Value> lowerLdSt(
     regBaseI8 = b.xor_(regBaseI8, affineOffsetI8);
   }
 
+  // Pre-compute the base pointers for partitioned tensors.
+  SmallVector<Value> partitionBases;
+  if (isPartitioned) {
+    // Loop-invariant partition contribution (register = 0).
+    Value dynamicPartition = applyLinearLayout(loc, rewriter, partitionLayout,
+                                               {{kReg, b.i32_val(0)},
+                                                {kLane, laneId},
+                                                {kWarp, warpId},
+                                                {kBlock, blockId}})[0]
+                                 .second;
+    unsigned numPartitions = smemBases.size();
+    partitionBases.resize(numPartitions);
+    for (unsigned c = 0; c < numPartitions; ++c) {
+      // partitionBases[c] holds the base for register partitions that map to
+      // `c`, so reordering by `dynamicPartition ^ c` folds the loop-invariant
+      // part in once.
+      Value idx = b.xor_(dynamicPartition, b.i32_val(c));
+      partitionBases[c] = b.extract_element(basesVec, idx);
+    }
+  }
+
   SmallVector<Value> outVals;
   auto vecTy = vec_ty(llvmElemTy, elemsPerVec);
   for (int i = 0; i < cvt.getInDimSize(kReg); i += nAdditive) {
@@ -942,14 +957,13 @@ SmallVector<Value> lowerLdSt(
       // Select the appropriate base pointer for partitioned tensors
       Value smemBase = smemBases[0];
       if (isPartitioned) {
-        // Compute the partition index dynamically.
-        auto partitionResult = applyLinearLayout(loc, rewriter, partitionLayout,
-                                                 {{kReg, b.i32_val(i + j)},
-                                                  {kLane, laneId},
-                                                  {kWarp, warpId},
-                                                  {kBlock, blockId}});
-        Value partitionIdx = partitionResult[0].second;
-        smemBase = b.extract_element(basesVec, partitionIdx);
+        // The register-only partition contribution is a compile-time constant,
+        // so it indexes the pre-reordered array as a literal.
+        unsigned regPartition =
+            partitionLayout
+                .apply({{kReg, i + j}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}})[0]
+                .second;
+        smemBase = partitionBases[regPartition];
       }
 
       Value innerCtaOffset;
@@ -1202,6 +1216,28 @@ void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
     rewriter.setInsertionPointAfter(op);
     emitBarrier();
   }
+}
+
+Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
+                                  Value resultVal,
+                                  ConversionPatternRewriter &rewriter,
+                                  TritonLLVMOpBuilder &b, Value threadPred,
+                                  const TargetInfoBase &targetInfo) {
+  if (!op->hasAttr("allocation.offset"))
+    return resultVal;
+
+  auto loc = op->getLoc();
+  Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+  targetInfo.storeShared(rewriter, loc, smemBase, resultVal, threadPred);
+  if (triton::gpu::lookupNumCTAs(op) == 1) {
+    targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+    return targetInfo.loadShared(rewriter, loc, smemBase, valueElemTy,
+                                 b.true_val());
+  }
+
+  targetInfo.clusterBarrier(loc, rewriter, op);
+  return targetInfo.loadDShared(rewriter, loc, smemBase, b.i32_val(0),
+                                valueElemTy, b.true_val());
 }
 
 llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx) {

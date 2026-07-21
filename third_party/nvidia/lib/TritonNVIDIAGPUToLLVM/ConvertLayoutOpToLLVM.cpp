@@ -43,11 +43,7 @@ struct ConvertLayoutOpSwizzlingConversion
 
     assert(to_vector(conversion.getInDimNames()) ==
            to_vector(conversion.getOutDimNames()));
-    // Forced conversions are handled by the common pattern, which owns the
-    // diagnostic when the conversion is not warp-local.
-    if (cvtIsWarpShuffleForced(op))
-      return failure();
-    if (cvtNeedsSharedMemory(srcTy, dstTy)) {
+    if (!cvtAlwaysUseWarpShuffle(op) && cvtNeedsSharedMemory(srcTy, dstTy)) {
       auto loc = op.getLoc();
 
       auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());

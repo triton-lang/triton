@@ -649,6 +649,29 @@ tt.func @atomic_scalar_relaxed_no_use(%arg3: !tt.ptr<i32>) {
   tt.return
 }
 
+// CHECK-LABEL: gsan_atomic_cas_scalar
+tt.func @gsan_atomic_cas_scalar(%arg3: !tt.ptr<i32>) -> i32 {
+  // CHECK-NOT: ttg.barrier local
+  %c0_i32 = arith.constant 0 : i32
+  %1 = arith.constant dense<1.0> : tensor<128x32xf16, #AL>
+  %2 = ttg.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
+  %4 = tti.experimental_gsan_atomic_cas acq_rel, gpu, %arg3, %c0_i32, %c0_i32 : (!tt.ptr<i32>, i32, i32) -> i32
+  %3 = ttg.local_load %2 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
+  tt.return %4 : i32
+}
+
+// CHECK-LABEL: gsan_atomic_rmw_scalar_no_use
+tt.func @gsan_atomic_rmw_scalar_no_use(%arg3: !tt.ptr<i32>) {
+  // CHECK-NOT: ttg.barrier local
+  %c1_i32 = arith.constant 1 : i32
+  %true = arith.constant true
+  %1 = arith.constant dense<1.0> : tensor<128x32xf16, #AL>
+  %2 = ttg.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
+  %4 = tti.experimental_gsan_atomic_rmw add, release, gpu, %arg3, %c1_i32, %true : (!tt.ptr<i32>, i32, i1) -> i32
+  %3 = ttg.local_load %2 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
+  tt.return
+}
+
 // CHECK-LABEL: atomic_poll_acquire
 tt.func @atomic_poll_acquire(%ptr: !tt.ptr<i32>, %expected: i32) {
   // CHECK-NOT: ttg.barrier local

@@ -290,10 +290,8 @@ void reconstructGraphScopeEvents(
         throw makeLogicError("Invalid graph contexts without capture tag");
       }
       graphContexts.pop_back();
-      auto startTimeNs = std::get<uint64_t>(
-          kernelEvent.kernelMetric->getValue(KernelMetric::StartTime));
-      auto endTimeNs = std::get<uint64_t>(
-          kernelEvent.kernelMetric->getValue(KernelMetric::EndTime));
+      auto startTimeNs = kernelEvent.startTimeNs;
+      auto endTimeNs = kernelEvent.endTimeNs;
       if (openScopes.empty()) {
         for (const auto &context : graphContexts) {
           openScopes.push_back({context, startTimeNs});

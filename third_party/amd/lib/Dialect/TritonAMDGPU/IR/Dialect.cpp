@@ -140,7 +140,167 @@ LogicalResult verifyTDMCommonLayout(Operation *op,
   return verifyTDMLayoutConsistency(op, descTy, smemTy);
 }
 
+// The v_cvt_scale_pk8 lowering upcasts 8 register-consecutive fp4 values with a
+// single scale, check that 8 elements in the scale layout are all broadcasts.
+bool pk8GroupSharesSingleScale(const LinearLayout &scaleLL,
+                               StringAttr kRegister) {
+  if (scaleLL.getInDimSizeLog2(kRegister) < 3)
+    return false;
+  auto outDims = llvm::to_vector(scaleLL.getOutDimNames());
+  return scaleLL.resizeInDim(kRegister, /*newSize=*/8)
+      .sublayoutIsZero({kRegister}, outDims);
+}
+
+// Validates the output/scale shape relationship and returns the number of
+// output elements each scale covers along the scaled axis (>= 1), or nullopt if
+// the shapes are incompatible. A block of 1 means the scales are expanded to
+// the output shape; anything larger means compact scales.
+std::optional<int64_t> scaledUpcastFp4ScaleBlock(ScaledUpcastFp4Op op) {
+  auto outputShape = op.getOutput().getType().getShape();
+  auto scaleShape = op.getScale().getType().getShape();
+  int64_t axis = op.getAxis();
+  if (axis < 0 || axis >= static_cast<int64_t>(outputShape.size()))
+    return std::nullopt;
+  if (outputShape.size() != scaleShape.size())
+    return std::nullopt;
+  int64_t outputAxis = outputShape[axis];
+  int64_t scaleAxis = scaleShape[axis];
+  if (scaleAxis <= 0 || outputAxis % scaleAxis != 0)
+    return std::nullopt;
+
+  return outputAxis / scaleAxis;
+}
+
+std::optional<LinearLayout>
+computeCompactScaleLayoutForOp(ScaledUpcastFp4Op op, Attribute outputEnc) {
+  auto scaleBlock = scaledUpcastFp4ScaleBlock(op);
+  if (!scaleBlock || *scaleBlock == 1)
+    return std::nullopt;
+  if (!outputEnc || !isa<gpu::LayoutEncodingTrait>(outputEnc))
+    return std::nullopt;
+  auto outputLL =
+      gpu::toLinearLayout(op.getOutput().getType().getShape(),
+                          cast<gpu::LayoutEncodingTrait>(outputEnc));
+  return ScaledUpcastFp4Op::computeScaleLayout(outputLL, op.getAxis(),
+                                               *scaleBlock);
+}
+
+std::optional<Attribute>
+inferScaledUpcastFp4ScaleEncoding(ScaledUpcastFp4Op op, Attribute outputEnc) {
+  auto scaleBlock = scaledUpcastFp4ScaleBlock(op);
+  if (!scaleBlock)
+    return std::nullopt;
+  // Expanded scales have the same axis extent as the output and reuse
+  // outputEnc.
+  if (*scaleBlock == 1)
+    return outputEnc;
+  // Compact scales: drop the broadcast register bases so the inferred layout
+  // keeps a single register per distinct scale value.
+  auto compact = computeCompactScaleLayoutForOp(op, outputEnc);
+  if (!compact)
+    return std::nullopt;
+
+  auto kRegister = StringAttr::get(outputEnc.getContext(), "register");
+  return gpu::LinearEncodingAttr::get(
+      outputEnc.getContext(), compact->removeZeroBasesAlongDim(kRegister));
+}
+
+LogicalResult verifyScaledUpcastFp4ScaleLayout(ScaledUpcastFp4Op op) {
+  RankedTensorType scaleTy = op.getScale().getType();
+  auto scaleEnc = scaleTy.getEncoding();
+  auto outputEnc = op.getOutput().getType().getEncoding();
+  if (!scaleEnc != !outputEnc)
+    return op.emitError()
+           << "scale and output must both have an encoding, or neither";
+  if (!scaleEnc)
+    return success();
+
+  // Reduce a scale encoding to one register per distinct scale, so the final
+  // comparison matches up to redundant register broadcasting (a thread may keep
+  // one register per distinct scale rather than replicating it across every
+  // output register it covers).
+  auto kRegister = StringAttr::get(op.getContext(), "register");
+  auto stripped = [&](Attribute enc) {
+    return mlir::triton::gpu::toLinearLayout(
+               scaleTy.getShape(), cast<gpu::LayoutEncodingTrait>(enc))
+        .removeZeroBasesAlongDim(kRegister);
+  };
+
+  std::optional<LinearLayout> expectedLL;
+  if (auto compact = computeCompactScaleLayoutForOp(op, outputEnc)) {
+    // Compact scales: the 8 register-consecutive fp4 of a v_cvt_scale_pk8 group
+    // must share a single scale; otherwise the lowering has no single held
+    // scale to apply to the group (e.g. a group that spans two scale blocks
+    // along the scaled axis, or one that crosses rows of a non-scaled dim).
+    if (!pk8GroupSharesSingleScale(*compact, kRegister))
+      return op.emitError()
+             << "the 8 elements of a v_cvt_scale_pk8 group would not share a "
+                "single scale; the scaled axis must place 8 register-"
+                "consecutive elements within one scale block";
+    expectedLL = compact->removeZeroBasesAlongDim(kRegister);
+  } else if (auto expectedEnc =
+                 inferScaledUpcastFp4ScaleEncoding(op, outputEnc)) {
+    // Expanded scales reuse the output encoding.
+    expectedLL = stripped(*expectedEnc);
+  } else {
+    return op.emitError() << "could not infer expected scale encoding";
+  }
+
+  if (stripped(scaleEnc) != *expectedLL)
+    return op.emitError()
+           << "scale encoding is not compatible with the inferred scale layout";
+  return success();
+}
+
 } // namespace
+
+// Derive the layout of a scale tensor from the upcast output layout. A compact
+// scale holds a single value per `elementsPerScale` consecutive output elements
+// along `axis`, so the scale that an output element at coordinate `k` needs is
+// `scale[..., k / elementsPerScale, ...]`, i.e. the output coordinate with its
+// low `log2(elementsPerScale)` bits dropped (right-shifted). Output positions
+// that fall inside the same scale tile map to the same scale and so collapse to
+// broadcast (zero) bases along the scaled axis. `elementsPerScale` must be a
+// power of two.
+std::optional<LinearLayout>
+ScaledUpcastFp4Op::computeScaleLayout(const LinearLayout &outputLayout,
+                                      int64_t axis, int64_t elementsPerScale) {
+  // For expanded scales the scale layout is the same as the output layout.
+  if (elementsPerScale == 1)
+    return outputLayout;
+  if (elementsPerScale <= 0 || !llvm::isPowerOf2_64(elementsPerScale))
+    return std::nullopt;
+
+  auto ctx = outputLayout.getOutDimNames().begin()->getContext();
+  auto axisDim = StringAttr::get(ctx, llvm::formatv("dim{0}", axis).str());
+
+  if (!outputLayout.hasOutDim(axisDim) ||
+      outputLayout.getOutDimSize(axisDim) % elementsPerScale != 0)
+    return std::nullopt;
+
+  // Build a `divisor` map from output coordinates to scale coordinates that
+  // floor-divides (right shift) the scaled axis by `elementsPerScale` and
+  // leaves every other dimension unchanged (identity).
+  LinearLayout scaleDivisor = LinearLayout::empty();
+  for (StringAttr outDim : outputLayout.getOutDimNames()) {
+    int32_t size = outputLayout.getOutDimSize(outDim);
+    if (outDim != axisDim) {
+      scaleDivisor *= LinearLayout::identity1D(size, outDim, outDim);
+      continue;
+    }
+
+    // floor-divide the scaled axis by elementsPerScale: drop the low
+    // log2(elementsPerScale) bits, shift the remaining bits down.
+    scaleDivisor *=
+        LinearLayout::zeros1D(elementsPerScale, outDim, outDim) *
+        LinearLayout::identity1D(size / elementsPerScale, outDim, outDim);
+  }
+
+  // Compose the divisor with the output layout to get the scale layout. For
+  // each input it yields the scale coordinate that the output element at that
+  // input needs.
+  return outputLayout.compose(scaleDivisor);
+}
 
 LogicalResult ExtractSliceOp::verify() {
   // Basic type/rank checks.
@@ -364,24 +524,32 @@ LogicalResult ScaledUpcastFp4Op::verify() {
   RankedTensorType inputTy = getInput().getType();
   RankedTensorType outputTy = getOutput().getType();
   RankedTensorType scaleTy = getScale().getType();
-  auto scaleEnc = scaleTy.getEncoding();
-  auto outputEnc = outputTy.getEncoding();
+  auto outputShape = outputTy.getShape();
+  auto scaleShape = scaleTy.getShape();
+  if (outputShape.size() != scaleShape.size())
+    return emitError() << "scale and output must have the same rank";
 
-  if (outputTy.getShape() != scaleTy.getShape())
-    return emitError() << "scale and output should have the same shape";
+  int64_t axis = getAxis();
+  int64_t rank = outputTy.getRank();
+  if (axis < 0 || axis >= rank)
+    return emitError() << "axis out of range: " << getAxis() << " for rank "
+                       << rank;
 
-  if (bool(scaleEnc) != bool(outputEnc))
-    return emitError()
-           << "scale and output must both have an encoding, or neither";
+  for (int64_t dim = 0; dim < rank; ++dim) {
+    if (dim == axis)
+      continue;
+    if (outputShape[dim] != scaleShape[dim])
+      return emitError()
+             << "scale and output must match on non-axis dimensions";
+  }
+  if (scaleShape[axis] <= 0 || outputShape[axis] % scaleShape[axis] != 0)
+    return emitError() << "expected output.shape[axis] to be divisible by "
+                          "scale.shape[axis], but got output["
+                       << axis << "]=" << outputShape[axis] << ", scale["
+                       << axis << "]=" << scaleShape[axis];
 
-  if (scaleEnc && !mlir::triton::gpu::areLayoutsEquivalent(
-                      outputTy.getShape(),
-                      cast<mlir::triton::gpu::LayoutEncodingTrait>(scaleEnc),
-                      cast<mlir::triton::gpu::LayoutEncodingTrait>(outputEnc)))
-    return emitError() << "scale and output encodings are not compatible:\n"
-                       << mlir::triton::gpu::toLinearLayout(outputTy).toString()
-                       << "\n"
-                       << mlir::triton::gpu::toLinearLayout(scaleTy).toString();
+  if (failed(verifyScaledUpcastFp4ScaleLayout(*this)))
+    return failure();
 
   return mlir::triton::gpu::Fp4ToFpOp::verifyFp4ToFp(*this, inputTy, outputTy,
                                                      getAxis());
@@ -389,9 +557,12 @@ LogicalResult ScaledUpcastFp4Op::verify() {
 
 Attribute ScaledUpcastFp4Op::inferDstEncoding(unsigned opIdx,
                                               Attribute srcEnc) {
-  // The layout of scale is the same as that of the result
-  if (opIdx == 1)
-    return srcEnc;
+  // The layout of scale is either identical to the output or a quotient along
+  // the scaled axis (compact scales).
+  if (opIdx == 1) {
+    auto scaleEnc = inferScaledUpcastFp4ScaleEncoding(*this, srcEnc);
+    return scaleEnc.value_or(Attribute());
+  }
   Attribute dstEnc;
   auto shape = getOutput().getType().getShape();
 
@@ -409,9 +580,12 @@ Attribute ScaledUpcastFp4Op::inferDstEncoding(unsigned opIdx,
 
 Attribute ScaledUpcastFp4Op::inferSrcEncoding(unsigned opIdx,
                                               Attribute dstEnc) {
-  // The layout of scale is the same as that of the result
-  if (opIdx == 1)
-    return dstEnc;
+  // The layout of scale is either identical to the output or a quotient along
+  // the scaled axis (compact scales).
+  if (opIdx == 1) {
+    auto scaleEnc = inferScaledUpcastFp4ScaleEncoding(*this, dstEnc);
+    return scaleEnc.value_or(Attribute());
+  }
   Attribute srcEnc;
   auto shape = getOutput().getType().getShape();
 

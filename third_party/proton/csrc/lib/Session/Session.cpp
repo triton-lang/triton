@@ -37,11 +37,18 @@ Profiler *makeProfiler(const std::string &name) {
 
 std::unique_ptr<Data> makeData(const std::string &dataName,
                                const std::string &path,
-                               ContextSource *contextSource) {
+                               ContextSource *contextSource,
+                               Profiler *profiler) {
   if (toLower(dataName) == "tree") {
     return std::make_unique<TreeData>(path, contextSource);
   } else if (toLower(dataName) == "trace") {
-    return std::make_unique<TraceData>(path, contextSource);
+    return std::make_unique<TraceData>(
+        path, contextSource,
+        [timestampAlignment =
+             dynamic_cast<TimestampAlignmentInterface *>(profiler)]() {
+          return timestampAlignment ? timestampAlignment->getTimestampOffsetNs()
+                                    : 0;
+        });
   }
   throw makeInvalidArgument("Unknown data: " + dataName);
 }
@@ -106,7 +113,7 @@ std::unique_ptr<Session> SessionManager::makeSession(
   auto *profiler = makeProfiler(profilerName);
   profiler = validateAndSetProfilerMode(profiler, mode);
   auto contextSource = makeContextSource(contextSourceName);
-  auto data = makeData(dataName, path, contextSource.get());
+  auto data = makeData(dataName, path, contextSource.get(), profiler);
   auto *session =
       new Session(path, profiler, std::move(contextSource), std::move(data));
   return std::unique_ptr<Session>(session);

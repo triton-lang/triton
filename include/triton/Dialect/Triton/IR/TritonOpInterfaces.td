@@ -154,5 +154,25 @@ def PredicatedOpInterface : OpInterface<"PredicatedOpInterface"> {
   ];
 }
 
+def AtomicOpInterface : OpInterface<"AtomicOpInterface"> {
+  let description = [{
+    Common interface for atomic operations with memory-ordering semantics.
+  }];
+
+  let cppNamespace = "::mlir::triton";
+
+  let methods = [
+    InterfaceMethod<
+      /*desc=*/"Return the atomic memory-ordering semantic.",
+      /*retType=*/"::mlir::triton::MemSemantic",
+      /*methodName=*/"getMemSemantic",
+      /*args=*/(ins),
+      /*defaultImplementation=*/[{
+        return $_op.getSem();
+      }]
+    >
+  ];
+}
+
 
 #endif // TRITON_OP_INTERFACES
