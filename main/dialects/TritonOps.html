@@ -480,6 +480,7 @@ If the condition is false, the message is printed, and the program is aborted.</
 <p>else store $old to $ptr,</p>
 <p>return $old</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultShape</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">AtomicOpInterface</span></code></p>
 <section id="id2">
 <h3>Attributes:<a class="headerlink" href="#id2" title="Link to this heading"></a></h3>
 <table>
@@ -595,7 +596,7 @@ the polling thread to finish.</p>
 <p>load data at $ptr, do $rmw_op with $val, and store result to $ptr.</p>
 <p>return old value at $ptr</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultShape</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">AtomicOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id8">
 <h3>Attributes:<a class="headerlink" href="#id8" title="Link to this heading"></a></h3>
 <table>

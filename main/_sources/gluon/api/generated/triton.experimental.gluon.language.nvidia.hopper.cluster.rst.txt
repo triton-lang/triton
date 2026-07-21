@@ -12,8 +12,6 @@
    :toctree:
    :nosignatures:
 
-   arrive
-   wait
    barrier
 
 

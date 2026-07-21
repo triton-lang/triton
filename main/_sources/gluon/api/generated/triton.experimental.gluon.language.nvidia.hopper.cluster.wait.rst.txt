@@ -1,6 +1,0 @@
-triton.experimental.gluon.language.nvidia.hopper.cluster.wait
-=============================================================
-
-.. currentmodule:: triton.experimental.gluon.language.nvidia.hopper.cluster
-
-.. autofunction:: wait

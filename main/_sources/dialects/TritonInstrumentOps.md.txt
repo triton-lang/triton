@@ -213,6 +213,8 @@ operation ::= `tti.experimental_gsan_atomic_cas` $sem `,` $scope `,` $ptr `,` $c
 
 Traits: `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`
 
+Interfaces: `AtomicOpInterface`
+
 #### Attributes:
 
 <table>
@@ -279,6 +281,8 @@ operation ::= `tti.experimental_gsan_atomic_rmw` $atomic_rmw_op `,` $sem `,` $sc
 ```
 
 Traits: `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`
+
+Interfaces: `AtomicOpInterface`
 
 #### Attributes:
 

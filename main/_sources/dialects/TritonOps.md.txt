@@ -84,6 +84,8 @@ return $old
 
 Traits: `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
+Interfaces: `AtomicOpInterface`
+
 #### Attributes:
 
 <table>
@@ -169,7 +171,7 @@ return old value at $ptr
 
 Traits: `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `PredicatedOpInterface`
+Interfaces: `AtomicOpInterface`, `PredicatedOpInterface`
 
 #### Attributes:
 
