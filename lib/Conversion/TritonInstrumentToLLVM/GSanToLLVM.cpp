@@ -204,22 +204,6 @@ unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
   return index & ~freeVarMask;
 }
 
-Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
-                                  Value resultVal,
-                                  ConversionPatternRewriter &rewriter,
-                                  TritonLLVMOpBuilder &b, Value threadPred,
-                                  const TargetInfoBase &targetInfo) {
-  if (!op->hasAttr("allocation.offset"))
-    return resultVal;
-
-  auto loc = op->getLoc();
-  Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
-  targetInfo.storeShared(rewriter, loc, smemBase, resultVal, threadPred);
-  b.barrier(ttg::AddrSpace::Local);
-  return targetInfo.loadShared(rewriter, loc, smemBase, valueElemTy,
-                               b.true_val());
-}
-
 Value materializeI32Bool(ConversionPatternRewriter &rewriter,
                          TritonLLVMOpBuilder &b, Value pred) {
   if (!pred)
@@ -589,11 +573,11 @@ public:
     if (failed(gsanGlobalStatePtr))
       return failure();
 
-    auto moduleOp = op->getParentOfType<ModuleOp>();
-    assert(moduleOp && "Parent ModuleOp not found for atomic op");
     auto rmwOp = op.getAtomicRmwOp();
     auto sem = op.getSem();
     auto scope = op.getScope();
+    insertAtomicOrderingBarriers(op, sem, !op->hasAttr("allocation.offset"),
+                                 rewriter, *targetInfo);
 
     TritonLLVMOpBuilder b(loc, rewriter);
     Value llPtr = adaptor.getPtr();
@@ -697,10 +681,10 @@ public:
     if (failed(gsanGlobalStatePtr))
       return failure();
 
-    auto moduleOp = op->getParentOfType<ModuleOp>();
-    assert(moduleOp && "Parent ModuleOp not found for atomic op");
     auto sem = op.getSem();
     auto scope = op.getScope();
+    insertAtomicOrderingBarriers(op, sem, !op->hasAttr("allocation.offset"),
+                                 rewriter, *targetInfo);
 
     TritonLLVMOpBuilder b(loc, rewriter);
     Value llPtr = adaptor.getPtr();

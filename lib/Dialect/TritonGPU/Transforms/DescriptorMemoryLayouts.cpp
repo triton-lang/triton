@@ -52,11 +52,12 @@ CGAEncodingAttr updateCGALayoutForShape(CGAEncodingAttr cgaLayout,
     ll = LinearLayout::identity1D(1, kBlock, standardOuts[i]) * ll;
   }
   // Rename out dims to dim0..dimn-1
-  auto dimSizes = ll.getOutDims();
-  for (auto [i, dim] : llvm::enumerate(standardOuts)) {
-    dimSizes[i].first = dim;
+  SmallVector<std::pair<StringAttr, StringAttr>> renames;
+  for (auto [oldDim, newDim] :
+       llvm::zip_equal(ll.getOutDimNames(), standardOuts)) {
+    renames.push_back({oldDim, newDim});
   }
-  ll = LinearLayout(ll.getBases(), dimSizes, false);
+  ll = renameLinearLayoutDims(ll, {}, renames);
   return CGAEncodingAttr::get(ctx, std::move(ll));
 }
 
