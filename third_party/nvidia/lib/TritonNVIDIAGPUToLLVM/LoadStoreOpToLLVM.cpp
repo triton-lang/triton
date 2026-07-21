@@ -19,7 +19,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
 
@@ -490,32 +489,6 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
   int computeCapability;
 };
 
-void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
-                   int numCTAs, Operation *sourceOp) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  if (numCTAs == 1) {
-    b.barrier(ttg::AddrSpace::Local);
-  } else {
-    auto barrier = triton::nvidia_gpu::ClusterBarrierOp::create(rewriter, loc);
-    triton::nvidia_gpu::copyClusterBarrierMbarOffset(sourceOp, barrier);
-  }
-}
-
-Value loadScalarAtomicResult(ConversionPatternRewriter &rewriter, Location loc,
-                             const NVIDIA::TargetInfo &targetInfo,
-                             Value atomPtr, Type valueTy, int numCTAs);
-
-Value loadScalarAtomicResult(ConversionPatternRewriter &rewriter, Location loc,
-                             const NVIDIA::TargetInfo &targetInfo,
-                             Value atomPtr, Type valueTy, int numCTAs) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  if (numCTAs == 1)
-    return b.load(valueTy, atomPtr);
-  // Scalar atomics are issued by CTA 0, so read CTA 0's scratch allocation.
-  return targetInfo.loadDShared(rewriter, loc, atomPtr, b.i32_val(0), valueTy,
-                                b.true_val());
-}
-
 struct AtomicCASOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicCASOp>,
       public LoadStoreConversionBase {
@@ -534,12 +507,6 @@ struct AtomicCASOpConversion
                                  !op->hasAttr("allocation.offset"), rewriter,
                                  targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    MLIRContext *ctx = rewriter.getContext();
-
-    auto moduleOp = op->getParentOfType<ModuleOp>();
-    assert(moduleOp && "Parent ModuleOp not found for AtomicCASOp");
-    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
-
     Value llPtr = adaptor.getPtr();
     Value llCmp = adaptor.getCmp();
     Value llVal = adaptor.getVal();
@@ -553,10 +520,6 @@ struct AtomicCASOpConversion
     Type valueElemTy =
         tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
                  : valueTy;
-    auto valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
-    std::string tyId =
-        NVIDIA::getPtxRegisterSizeCode(valueElemNBits, /*isFloat=*/false);
-    std::string sTy = "b" + std::to_string(valueElemNBits);
     auto elemsPerThread = getUniqueElemsPerThread(op.getVal().getType());
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
@@ -579,21 +542,8 @@ struct AtomicCASOpConversion
           rewriter.eraseOp(op);
           return success();
         }
-        Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
-                                                  op.getOperation());
-        atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
-        // Only threads with mask = True store the result
-        PTXBuilder ptxBuilderStore;
-        auto *dstOprStore = ptxBuilderStore.newAddrOperand(atomPtr, "r");
-        auto *valOprStore = ptxBuilderStore.newOperand(old, tyId);
-        auto &st = *ptxBuilderStore.create("st");
-        st.shared().o(sTy);
-        st(dstOprStore, valOprStore).maybePredicate(threadPred);
-        auto ASMReturnTy = void_ty(ctx);
-        ptxBuilderStore.launch(rewriter, loc, ASMReturnTy);
-        createBarrier(rewriter, loc, numCTAs, op);
-        Value ret = loadScalarAtomicResult(rewriter, loc, targetInfo, atomPtr,
-                                           valueElemTy, numCTAs);
+        Value ret = broadcastScalarAtomicResult(op, valueElemTy, old, rewriter,
+                                                b, threadPred, targetInfo);
         rewriter.replaceOp(op, {ret});
         return success();
       }
@@ -682,8 +632,6 @@ public:
 
     auto moduleOp = op->getParentOfType<ModuleOp>();
     assert(moduleOp && "Parent ModuleOp not found for AtomicRMWOp");
-    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
-
     auto atomicRmwAttr = op.getAtomicRmwOp();
     const bool useRed = op.getResult().use_empty() &&
                         atomicRmwAttr != RMWOp::XCHG &&
@@ -780,14 +728,8 @@ public:
           rewriter.eraseOp(op);
           return success();
         }
-        Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
-                                                  op.getOperation());
-        atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
-        // Only threads with rmwMask = True store the result
-        targetInfo.storeShared(rewriter, loc, atomPtr, loadAcquireOp, pred);
-        createBarrier(rewriter, loc, numCTAs, op);
-        Value ret = loadScalarAtomicResult(rewriter, loc, targetInfo, atomPtr,
-                                           valueElemTy, numCTAs);
+        Value ret = broadcastScalarAtomicResult(op, valueElemTy, loadAcquireOp,
+                                                rewriter, b, pred, targetInfo);
         rewriter.replaceOp(op, {ret});
         return success();
       }
@@ -920,14 +862,8 @@ public:
           rewriter.eraseOp(op);
           return success();
         }
-        Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
-                                                  op.getOperation());
-        atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
-        // Only threads with rmwMask = True store the result
-        targetInfo.storeShared(rewriter, loc, atomPtr, *old, pred);
-        createBarrier(rewriter, loc, numCTAs, op);
-        Value ret = loadScalarAtomicResult(rewriter, loc, targetInfo, atomPtr,
-                                           valueElemTy, numCTAs);
+        Value ret = broadcastScalarAtomicResult(op, valueElemTy, *old, rewriter,
+                                                b, pred, targetInfo);
         rewriter.replaceOp(op, {ret});
         return success();
       }

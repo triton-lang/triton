@@ -939,31 +939,36 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Value memDesc) {
              self.create<ttng::InvalBarrierOp>(memDesc);
            })
-      .def("create_mbarrier_expect",
-           [](GluonOpBuilder &self, Value memDesc, int bytes, Value pred) {
-             self.create<ttng::BarrierExpectOp>(memDesc, bytes, pred);
-           })
+      .def(
+          "create_mbarrier_expect",
+          [](GluonOpBuilder &self, Value memDesc, int bytes, Value pred,
+             std::optional<int> fromCTA) {
+            IntegerAttr fromCTAAttr =
+                fromCTA ? self.getBuilder().getI32IntegerAttr(*fromCTA)
+                        : IntegerAttr();
+            self.create<ttng::BarrierExpectOp>(memDesc, bytes, pred,
+                                               fromCTAAttr);
+          },
+          py::arg("memDesc"), py::arg("bytes"), py::arg("pred"),
+          (py::arg("from_cta").none() = py::none()))
       .def("create_mbarrier_wait",
            [](GluonOpBuilder &self, Value memDesc, Value phase, Value pred,
               std::vector<Value> &deps) {
              self.create<ttng::WaitBarrierOp>(memDesc, phase, pred, deps);
            })
-      .def("create_mbarrier_arrive",
-           [](GluonOpBuilder &self, Value memDesc, uint32_t count,
-              uint32_t ctaMask, Value pred) {
-             self.create<ttng::ArriveBarrierOp>(memDesc, count, ctaMask, pred);
-           })
-      .def("create_fence_mbarrier_init_release_cluster",
-           [](GluonOpBuilder &self) {
-             self.create<ttng::FenceMBarrierInitReleaseClusterOp>();
-           })
       .def(
-          "create_cluster_arrive",
-          [](GluonOpBuilder &self,
-             bool relaxed) { self.create<ttng::ClusterArriveOp>(relaxed); },
-          py::arg("relaxed") = false)
-      .def("create_cluster_wait",
-           [](GluonOpBuilder &self) { self.create<ttng::ClusterWaitOp>(); })
+          "create_mbarrier_arrive",
+          [](GluonOpBuilder &self, Value memDesc, uint32_t count, Value pred,
+             std::optional<int> fromCTA, uint32_t multicastCTA) {
+            IntegerAttr fromCTAAttr =
+                fromCTA ? self.getBuilder().getI32IntegerAttr(*fromCTA)
+                        : IntegerAttr();
+            self.create<ttng::ArriveBarrierOp>(memDesc, count, pred,
+                                               fromCTAAttr, multicastCTA);
+          },
+          py::arg("memDesc"), py::arg("count"), py::arg("pred"),
+          (py::arg("from_cta").none() = py::none()),
+          py::arg("multicast_cta") = 0)
       .def(
           "create_cluster_barrier",
           [](GluonOpBuilder &self,

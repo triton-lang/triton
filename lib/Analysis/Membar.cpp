@@ -247,10 +247,8 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 bool containsLocalBarrier(Operation *op) {
   if (isa<triton::AtomicPollOp>(op))
     return true;
-  if (auto atomic = dyn_cast<triton::AtomicRMWOp>(op))
-    return atomic.getSem() != triton::MemSemantic::RELAXED;
-  if (auto atomic = dyn_cast<triton::AtomicCASOp>(op))
-    return atomic.getSem() != triton::MemSemantic::RELAXED;
+  if (auto atomic = dyn_cast<triton::AtomicOpInterface>(op))
+    return atomic.getMemSemantic() != triton::MemSemantic::RELAXED;
   if (isa<gpu::BarrierOp>(op))
     return true;
   if (isa<ttng::ClusterBarrierOp>(op))

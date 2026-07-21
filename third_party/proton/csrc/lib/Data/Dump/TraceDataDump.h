@@ -62,17 +62,20 @@ struct KernelEvent {
 
 struct CpuScopeEvent {
   size_t eventId;
+  size_t scopeId;
   std::vector<Context> contexts;
   size_t threadId;
   uint64_t startTimeNs;
   uint64_t endTimeNs;
   const DataEntry::FlexibleMetricMap *flexibleMetrics{};
 
-  CpuScopeEvent(size_t eventId, const DataEntry::FlexibleMetricMap *metrics,
+  CpuScopeEvent(size_t eventId, size_t scopeId,
+                const DataEntry::FlexibleMetricMap *metrics,
                 std::vector<Context> contexts, size_t tid, uint64_t start,
                 uint64_t end)
-      : eventId(eventId), contexts(std::move(contexts)), threadId(tid),
-        startTimeNs(start), endTimeNs(end), flexibleMetrics(metrics) {}
+      : eventId(eventId), scopeId(scopeId), contexts(std::move(contexts)),
+        threadId(tid), startTimeNs(start), endTimeNs(end),
+        flexibleMetrics(metrics) {}
 };
 
 struct GraphScopeEvent {

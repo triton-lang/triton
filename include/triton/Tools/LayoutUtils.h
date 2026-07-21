@@ -111,6 +111,35 @@ LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
 // bases set to 0.
 LinearLayout zerosLike(const LinearLayout &layout);
 
+// Return the output bits touched by `inDims` in `outDim`.
+uint32_t getOutputBasisMask(const LinearLayout &layout,
+                            ArrayRef<StringAttr> inDims, StringAttr outDim);
+
+// Return a mask of the bases in `inDim` that touch any of `outDims`. Bit i is
+// set exactly when the i-th input basis has a nonzero component in at least one
+// selected output dimension.
+uint64_t getInputBasisMask(const LinearLayout &layout, StringAttr inDim,
+                           ArrayRef<StringAttr> outDims);
+
+struct IdentityFactor {
+  int32_t size;
+  LinearLayout quotient;
+};
+
+// Factor the largest identity1D(size, inDim, outDim) prefix from `layout`,
+// considering power-of-two sizes through `maxSize`.
+IdentityFactor factorMaximalIdentityPrefix(const LinearLayout &layout,
+                                           StringAttr inDim, StringAttr outDim,
+                                           int32_t maxSize);
+
+// Rename input and output dimensions simultaneously without changing their
+// order. Every old name must exist and the final names in each domain must be
+// unique.
+LinearLayout renameLinearLayoutDims(
+    const LinearLayout &layout,
+    ArrayRef<std::pair<StringAttr, StringAttr>> inDimRenames,
+    ArrayRef<std::pair<StringAttr, StringAttr>> outDimRenames);
+
 // For a layout A with A.hasInDim(kReg), find a permutation of registers action
 // such that action.apply(A) may be divisible by B
 // It's not always true that the action returned by this function will

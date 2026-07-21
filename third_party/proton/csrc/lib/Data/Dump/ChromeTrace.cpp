@@ -156,6 +156,7 @@ void dumpCpuScopeEvents(
       element["dur"] = dur;
       element["tid"] = details::getCpuLaneId(threadId);
       element["args"]["call_stack"] = buildCallStackJson(event.contexts);
+      element["args"]["scope_id"] = event.scopeId;
       object["traceEvents"].push_back(std::move(element));
     }
   }

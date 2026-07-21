@@ -193,11 +193,46 @@ LogicalResult InvalBarrierOp::verify() {
 
 TypedValue<MemDescType> InvalBarrierOp::getBarrier() { return getAlloc(); }
 
+static LogicalResult verifyBarrierFromCTA(Operation *op, Value barrier,
+                                          std::optional<uint32_t> fromCTA) {
+  if (!fromCTA)
+    return success();
+
+  auto barrierTy = cast<MemDescType>(barrier.getType());
+  uint32_t numCTAs = gpu::lookupNumCTAs(op);
+  if (*fromCTA >= numCTAs)
+    return op->emitOpError("fromCTA must be in the range [0, num_ctas - 1]");
+
+  auto expectedCGALayout =
+      CGAEncodingAttr::get1DLayout(op->getContext(), numCTAs);
+  if (barrierTy.getRank() != 1 || barrierTy.getNumElements() != numCTAs ||
+      getCGALayout(barrierTy.getEncoding()) != expectedCGALayout)
+    return op->emitOpError("fromCTA requires a 1D barrier with one element "
+                           "per CTA and canonical CGA layout");
+  return success();
+}
+
+template <typename BarrierOp>
+static LogicalResult canonicalizeBarrierFromCTA(BarrierOp op,
+                                                PatternRewriter &rewriter) {
+  if (op.getFromCTA() != gpu::lookupNumCTAs(op) - 1)
+    return failure();
+  rewriter.modifyOpInPlace(op, [&] { op.setFromCTAAttr(IntegerAttr()); });
+  return success();
+}
+
 // -- BarrierExpectOp --
 LogicalResult BarrierExpectOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
+  if (failed(verifyBarrierFromCTA(*this, getAlloc(), getFromCTA())))
+    return failure();
   return success();
+}
+
+LogicalResult BarrierExpectOp::canonicalize(BarrierExpectOp op,
+                                            PatternRewriter &rewriter) {
+  return canonicalizeBarrierFromCTA(op, rewriter);
 }
 
 TypedValue<MemDescType> BarrierExpectOp::getBarrier() { return getAlloc(); }
@@ -245,15 +280,25 @@ LogicalResult ArriveBarrierOp::verify() {
     int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
     if (numCTAs <= 1)
       return emitOpError("multicast arrive requires num_ctas > 1");
-    if (getCtaMask() > static_cast<uint32_t>(numCTAs - 1))
-      return emitOpError("ctaMask exceeds numCTAs - 1");
+    if (getMulticastCTA() > static_cast<uint32_t>(numCTAs - 1))
+      return emitOpError("multicastCTA exceeds numCTAs - 1");
     auto expectedCGALayout =
         CGAEncodingAttr::get1DLayout(getContext(), numCTAs);
     if (failed(verifyBarrierCGALayout(*this, getAlloc(), expectedCGALayout,
                                       "multicast barrier")))
       return failure();
   }
+  if (failed(verifyBarrierFromCTA(*this, getAlloc(), getFromCTA())))
+    return failure();
+  if (isMulticast() && getFromCTA() &&
+      *getFromCTA() != gpu::lookupNumCTAs(getOperation()) - 1)
+    return emitOpError("fromCTA cannot be combined with multicast arrive");
   return success();
+}
+
+LogicalResult ArriveBarrierOp::canonicalize(ArriveBarrierOp op,
+                                            PatternRewriter &rewriter) {
+  return canonicalizeBarrierFromCTA(op, rewriter);
 }
 
 TypedValue<MemDescType> ArriveBarrierOp::getBarrier() { return getAlloc(); }
