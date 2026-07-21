@@ -36,6 +36,20 @@ LogicalResult inferAutoLayout(ModuleOp &mod) {
 
     if (failed(inferLayout(func, isAutoEncodingTensorType, seedEncodings)))
       return failure();
+
+    // A layout conversion does not otherwise constrain its source. If the
+    // source remains unresolved, prefer the destination encoding so the
+    // conversion is trivial without overriding constraints from other uses.
+    seedEncodings.clear();
+    func.walk([&](ttg::ConvertLayoutOp op) {
+      if (!isAutoEncodingTensorType(op.getSrc().getType()))
+        return;
+      auto resultTy = cast<RankedTensorType>(op.getType());
+      seedEncodings.push_back({op.getSrc(), resultTy.getEncoding()});
+    });
+    if (!seedEncodings.empty() &&
+        failed(inferLayout(func, isAutoEncodingTensorType, seedEncodings)))
+      return failure();
   }
   return success();
 }

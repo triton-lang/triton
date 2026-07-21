@@ -249,6 +249,13 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         handle = self.builder.create_convert_layout(ret_ty_ir, value.handle)
         return ttgl.tensor(handle, ret_ty)
 
+    def device_assert(self, cond: TensorTy, msg: str, mask: TensorTy | None) -> TensorTy:
+        if (self.builder.options.debug and mask is not None and isinstance(cond.type, ttgl.distributed_type)
+                and isinstance(mask.type, ttgl.distributed_type) and cond.shape == mask.shape
+                and not isinstance(cond.type.layout, AutoLayout) and cond.type.layout != mask.type.layout):
+            mask = self.convert_layout(mask, cond.type.layout)
+        return super().device_assert(cond, msg, mask)
+
     def allocate_shared(self, element_ty, shape, layout, value):
         _check(isinstance(element_ty, ttgl.dtype), lambda: f"expected 'element_ty' to be a dtype but got {element_ty}")
         _check(_is_int_list(shape), lambda: f"all elements of 'shape' must be integers but got {shape}")

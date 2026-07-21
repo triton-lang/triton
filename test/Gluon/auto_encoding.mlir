@@ -42,6 +42,33 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @infer_convert_source_fallback
+  // CHECK: [[CST:%.*]] = arith.constant dense<7> : tensor<16xi32, [[BLOCKED:#.*]]>
+  // CHECK: [[CVT:%.*]] = ttg.convert_layout [[CST]] : tensor<16xi32, [[BLOCKED]]> -> tensor<16xi32, [[BLOCKED]]>
+  tt.func public @infer_convert_source_fallback() -> tensor<16xi32, #blocked> {
+    %0 = arith.constant dense<7> : tensor<16xi32, #gluon.auto_encoding>
+    %cvt = ttg.convert_layout %0 : tensor<16xi32, #gluon.auto_encoding> -> tensor<16xi32, #blocked>
+    tt.return %cvt : tensor<16xi32, #blocked>
+  }
+
+  // CHECK-LABEL: @infer_convert_source_with_other_constraint
+  // CHECK: [[CST:%.*]] = arith.constant dense<7> : tensor<16xi32, [[BLOCKED1:#.*]]>
+  // CHECK: [[CVT:%.*]] = ttg.convert_layout [[CST]] : tensor<16xi32, [[BLOCKED1]]> -> tensor<16xi32, [[BLOCKED:#.*]]>
+  tt.func public @infer_convert_source_with_other_constraint() -> (tensor<16xi32, #blocked>, tensor<16xi32, #blocked1>) {
+    %0 = arith.constant dense<7> : tensor<16xi32, #gluon.auto_encoding>
+    %cvt = ttg.convert_layout %0 : tensor<16xi32, #gluon.auto_encoding> -> tensor<16xi32, #blocked>
+    %set = gluon.set_auto_layout %0 : tensor<16xi32, #gluon.auto_encoding> -> tensor<16xi32, #blocked1>
+    tt.return %cvt, %set : tensor<16xi32, #blocked>, tensor<16xi32, #blocked1>
+  }
+}
+
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @infer_if(%arg0 : i1) -> tensor<16xi32, #blocked> {

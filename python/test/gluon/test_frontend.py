@@ -117,6 +117,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@gluon.jit
+def expect_zero_fp8_kernel(ptr, BLOCK_SIZE: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    offsets = ttgl.arange(0, BLOCK_SIZE, layout=layout)
+    value = ttgl.load(ptr + offsets)
+    mask = ttgl.full([BLOCK_SIZE], True, ttgl.int1, layout=ttgl.AutoLayout())
+    ttgl.expect_zero(value, mask)
+    mask.reshape([BLOCK_SIZE // 2, 2]).split()
+
+
+def test_expect_zero_fp8_debug():
+    module = run_parser(
+        expect_zero_fp8_kernel,
+        *make_args(MockTensor(ttgl.float8e4nv), BLOCK_SIZE=16, debug=True),
+        target=BLACKWELL_TARGET,
+    )
+    ir = module.str_nodebug()
+    assert "ttg.convert_layout" in ir
+    assert "tt.assert" in ir
+    assert "tt.split" in ir
+
+
 @filecheck_test
 @gluon.jit
 def test_histogram_frontend():
