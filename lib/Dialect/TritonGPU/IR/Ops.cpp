@@ -793,8 +793,7 @@ LogicalResult MemDescReinterpretOp::verify() {
           "origin");
   }
 
-  if (!isLinearLayoutImageSubset(getBlockImage(dstLayout),
-                                 getBlockImage(srcLayout)))
+  if (!lstsq(getBlockImage(srcLayout), getBlockImage(dstLayout)))
     return emitError(
         "result CTA footprint must be contained in the source CTA footprint");
 

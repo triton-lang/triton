@@ -1484,7 +1484,8 @@ bool isTranslatedLinearLayoutSubview(const LinearLayout &srcLayout,
     if (!getIntegerStrides(srcFull, physicalDim, unalignedDims))
       return false;
     unsigned physicalIdx = srcFull.getOutDimIndex(physicalDim);
-    uint32_t alignedVariableMask = getBasisMask(dst, alignedDims, physicalDim);
+    uint32_t alignedVariableMask =
+        getOutputBasisMask(dst, alignedDims, physicalDim);
     if (uint32_t(alignedOrigin[physicalIdx].second) & alignedVariableMask)
       return false;
   }
@@ -1510,7 +1511,7 @@ uint32_t getLinearLayoutSubviewOriginMask(const LinearLayout &layout,
     assert(originSpan <= uint64_t(inverse.getInDimSize(dim)));
     inverse = inverse.resizeInDim(dim, int32_t(originSpan));
   }
-  return getBasisMask(inverse, logicalDims, physicalDim);
+  return getOutputBasisMask(inverse, logicalDims, physicalDim);
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
