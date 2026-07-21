@@ -416,8 +416,6 @@ public:
 
       auto &instances = dataIt->second;
       auto phaseIt = instances.find(entry.phase);
-      if (phaseIt == instances.end() || phaseIt->second == 0)
-        continue;
       if (--phaseIt->second != 0)
         continue;
 
@@ -432,6 +430,11 @@ public:
         phaseInstances.erase(dataIt);
     }
   }
+
+  void clear() {
+    std::lock_guard<std::mutex> lock(mutex);
+    phaseInstances.clear();
+  }   
 
 private:
   std::mutex mutex;
@@ -1428,6 +1431,11 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStop() {
   auto &state = getRuntimeState();
   state.nvtxEnabled.store(false, std::memory_order_relaxed);
   registerRoctxCallback(false);
+  corrIdToStreamId.clear();
+  kernelPhaseTracker.clear();
+  profiler.periodicFlushingEnabled = false;
+  profiler.periodicFlushingFormat.clear();
+  profiler.correlation.clear();
   // Keep the profiling context running. rocprofiler-sdk does not reliably
   // re-intercept HIP runtime API calls after a stopContext→startContext
   // cycle on the same context. The correlation ID mechanism ensures that
