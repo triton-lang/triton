@@ -133,7 +133,7 @@ def stream_unary_pipelined_kernel(
 
 
 @gluon.jit
-def stream_binary_double_pipelined_kernel(
+def stream_binary_pipelined_kernel(
     a_ptr,
     b_ptr,
     out_ptr,
@@ -169,7 +169,7 @@ def stream_binary_double_pipelined_kernel(
 
 
 @gluon.jit
-def stream_ternary_double_pipelined_kernel(
+def stream_ternary_pipelined_kernel(
     a_ptr,
     b_ptr,
     c_ptr,
@@ -208,101 +208,11 @@ def stream_ternary_double_pipelined_kernel(
         c = c_next
 
 
-@gluon.jit
-def stream_load_only_kernel(
-    k_ptr,
-    k_scale_ptr,
-    v_ptr,
-    v_scale_ptr,
-    DATA_ELEMS_PER_HEAD: gl.constexpr,
-    SCALE_ELEMS_PER_HEAD: gl.constexpr,
-    BLOCK_SIZE: gl.constexpr,
-    DATA_ROWS: gl.constexpr,
-    DATA_COLS: gl.constexpr,
-    SCALE_BLOCK_SIZE: gl.constexpr,
-    NUM_K_HEADS: gl.constexpr,
-    NUM_BUFFERS: gl.constexpr,
-):
-    """
-    FA-shaped four-stream TDM load-only diagnostic.
-
-    This streams K, K-scale, V, and V-scale into LDS with no output store and no
-    compute. It is a bandwidth diagnostic, not a semantic copy kernel.
-    """
-    off_h = gl.program_id(0)
-    off_z = gl.program_id(2)
-    head_batch = NUM_K_HEADS * off_z + off_h
-
-    num_tiles: gl.constexpr = DATA_ELEMS_PER_HEAD // BLOCK_SIZE
-    data_base = DATA_ELEMS_PER_HEAD * head_batch
-    scale_base = SCALE_ELEMS_PER_HEAD * head_batch
-
-    smem_layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [1, 0])
-    k_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(
-        base=k_ptr + data_base,
-        shape=(num_tiles * DATA_ROWS, DATA_COLS),
-        strides=(DATA_COLS, 1),
-        block_shape=(DATA_ROWS, DATA_COLS),
-        layout=smem_layout,
-    )
-    v_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(
-        base=v_ptr + data_base,
-        shape=(num_tiles * DATA_ROWS, DATA_COLS),
-        strides=(DATA_COLS, 1),
-        block_shape=(DATA_ROWS, DATA_COLS),
-        layout=smem_layout,
-    )
-    k_scale_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(
-        base=k_scale_ptr + scale_base,
-        shape=(num_tiles, SCALE_BLOCK_SIZE),
-        strides=(SCALE_BLOCK_SIZE, 1),
-        block_shape=(1, SCALE_BLOCK_SIZE),
-        layout=smem_layout,
-    )
-    v_scale_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(
-        base=v_scale_ptr + scale_base,
-        shape=(num_tiles, SCALE_BLOCK_SIZE),
-        strides=(SCALE_BLOCK_SIZE, 1),
-        block_shape=(1, SCALE_BLOCK_SIZE),
-        layout=smem_layout,
-    )
-
-    k_smem = gl.allocate_shared_memory(k_ptr.dtype.element_ty, [NUM_BUFFERS, DATA_ROWS, DATA_COLS], smem_layout)
-    v_smem = gl.allocate_shared_memory(v_ptr.dtype.element_ty, [NUM_BUFFERS, DATA_ROWS, DATA_COLS], smem_layout)
-    k_scale_smem = gl.allocate_shared_memory(k_scale_ptr.dtype.element_ty, [NUM_BUFFERS, 1, SCALE_BLOCK_SIZE],
-                                             smem_layout)
-    v_scale_smem = gl.allocate_shared_memory(v_scale_ptr.dtype.element_ty, [NUM_BUFFERS, 1, SCALE_BLOCK_SIZE],
-                                             smem_layout)
-    wait_count: gl.constexpr = (NUM_BUFFERS - 1) * 4
-
-    buf = 0
-    for i in range(0, num_tiles):
-        data_row = i * DATA_ROWS
-        gl.amd.gfx1250.tdm.async_load(k_desc, [data_row, 0], k_smem.index(buf), pred=1)
-        gl.amd.gfx1250.tdm.async_load(k_scale_desc, [i, 0], k_scale_smem.index(buf), pred=1)
-        gl.amd.gfx1250.tdm.async_load(v_desc, [data_row, 0], v_smem.index(buf), pred=1)
-        gl.amd.gfx1250.tdm.async_load(v_scale_desc, [i, 0], v_scale_smem.index(buf), pred=1)
-        gl.amd.gfx1250.tdm.async_wait(wait_count)
-        buf = (buf + 1) % NUM_BUFFERS
-
-    gl.amd.gfx1250.tdm.async_wait(0)
-
-
 def reference_torch_nary(inputs):
     ref = inputs[0]
     for tensor in inputs[1:]:
         ref = ref + tensor
     return ref
-
-
-def get_stream_arity(kernel_type: str):
-    if "unary" in kernel_type:
-        return 1
-    if "binary" in kernel_type:
-        return 2
-    if "ternary" in kernel_type:
-        return 3
-    raise NotImplementedError(f"Cannot infer stream arity from kernel type: {kernel_type}")
 
 
 def run_stream_nary(kernel_fn, N: int, arity: int, check: bool = True, sync: bool = True, num_workgroups: int = 1024,
@@ -370,118 +280,28 @@ def run_stream_nary(kernel_fn, N: int, arity: int, check: bool = True, sync: boo
     return kernel
 
 
-def _make_stream_tensor(n: int, dtype: torch.dtype):
-    if dtype is torch.uint8:
-        return torch.empty(n, dtype=dtype).random_(0, 256).cuda()
-    if dtype is torch.float8_e4m3fn:
-        return torch.empty(n, dtype=torch.uint8).random_(0, 256).view(dtype).cuda()
-    return torch.randn(n, dtype=dtype).cuda()
+def select_kernel(nary: int, pipelined: bool):
+    kernels = {
+        (1, False): (stream_unary_kernel, "stream_unary_kernel"),
+        (2, False): (stream_binary_kernel, "stream_binary_kernel"),
+        (3, False): (stream_ternary_kernel, "stream_ternary_kernel"),
+        (1, True): (stream_unary_pipelined_kernel, "stream_unary_pipelined_kernel"),
+        (2, True): (stream_binary_pipelined_kernel, "stream_binary_pipelined_kernel"),
+        (3, True): (stream_ternary_pipelined_kernel, "stream_ternary_pipelined_kernel"),
+    }
+    try:
+        return kernels[(nary, pipelined)]
+    except KeyError:
+        raise ValueError(f"Unsupported stream configuration: nary={nary}, pipelined={pipelined}") from None
 
 
-def run_stream_load_only(batch: int = 64, num_k_heads: int = 16, seqlen_k: int = 8192, head_sz: int = 128,
-                         block_n: int = 128):
-    """
-    Run the standalone FA-shaped load-only stream diagnostic.
-
-    This path intentionally has no correctness check because it performs only
-    K/K-scale/V/V-scale TDM loads into LDS.
-    """
-    if head_sz % 32 != 0:
-        raise ValueError("--stream-load-head-size must be divisible by 32 for MXFP scale streams")
-    if seqlen_k % block_n != 0:
-        raise ValueError("--stream-load-seqlen-k must be divisible by --stream-load-block-n")
-    if block_n % 32 != 0:
-        raise ValueError("--stream-load-block-n must be divisible by 32 for scale tiles")
-
-    num_buffers = 3
-    data_rows = 64
-    data_elems_per_head = seqlen_k * head_sz
-    scale_elems_per_head = seqlen_k * (head_sz // 32)
-    data_block_size = block_n * head_sz
-    scale_block_size = block_n * (head_sz // 32)
-    if data_block_size % data_rows != 0:
-        raise ValueError(f"Derived data tile ({data_block_size} elements) must be divisible by {data_rows}")
-
-    torch.random.manual_seed(42)
-    data_n = batch * num_k_heads * data_elems_per_head
-    scale_n = batch * num_k_heads * scale_elems_per_head
-    k = _make_stream_tensor(data_n, torch.float8_e4m3fn)
-    v = _make_stream_tensor(data_n, torch.float8_e4m3fn)
-    k_scale = _make_stream_tensor(scale_n, torch.uint8)
-    v_scale = _make_stream_tensor(scale_n, torch.uint8)
-
-    kernel = stream_load_only_kernel[(num_k_heads, 1, batch)](
-        k,
-        k_scale,
-        v,
-        v_scale,
-        data_elems_per_head,
-        scale_elems_per_head,
-        data_block_size,
-        data_rows,
-        data_block_size // data_rows,
-        scale_block_size,
-        num_k_heads,
-        num_buffers,
-        num_warps=1,
-        num_ctas=1,
-        waves_per_eu=1,
-    )
-    torch.cuda.synchronize()
-    print(f"PASSED: stream-load-only batch={batch}, heads={num_k_heads}, "
-          f"seqlen_k={seqlen_k}, head_sz={head_sz}, block_n={block_n}")
-    return kernel
-
-
-# Test configurations
-def generate_test_configs():
-    return [
-        pytest.param(stream_unary_kernel, 1, 32768, id="unary_N=32768"),
-        pytest.param(stream_binary_kernel, 2, 32768, id="binary_N=32768"),
-        pytest.param(stream_ternary_kernel, 3, 32768, id="ternary_N=32768"),
-        pytest.param(stream_unary_pipelined_kernel, 1, 32768, id="unary_double_N=32768"),
-        pytest.param(stream_binary_double_pipelined_kernel, 2, 32768, id="binary_double_N=32768"),
-        pytest.param(stream_ternary_double_pipelined_kernel, 3, 32768, id="ternary_double_N=32768"),
-        pytest.param(stream_unary_kernel, 1, 500, id="unary_N=500"),
-        pytest.param(stream_binary_kernel, 2, 500, id="binary_N=500"),
-        pytest.param(stream_ternary_kernel, 3, 500, id="ternary_N=500"),
-    ]
-
-
-@pytest.mark.parametrize("kernel_fn, arity, N", generate_test_configs())
-def test_stream_copy(kernel_fn, arity, N):
+@pytest.mark.parametrize("N", [32768, 500], ids=lambda N: f"N={N}")
+@pytest.mark.parametrize("pipelined", [False, True], ids=["non_pipelined", "pipelined"])
+@pytest.mark.parametrize("nary", [1, 2, 3], ids=["unary", "binary", "ternary"])
+def test_stream_copy(nary, pipelined, N):
     """Test stream copy kernel correctness."""
-    run_stream_nary(kernel_fn, N, arity, check=True)
-
-
-def select_kernel(arg_kernel_type):
-    if arg_kernel_type == "stream-load-only":
-        kernel_fn = stream_load_only_kernel
-        kernel_name = "stream_load_only_kernel"
-    elif arg_kernel_type in ("copy-ternary", "stream-ternary"):
-        kernel_fn = stream_ternary_kernel
-        kernel_name = "stream_ternary_kernel"
-    elif arg_kernel_type in ("copy-binary", "stream-binary"):
-        kernel_fn = stream_binary_kernel
-        kernel_name = "stream_binary_kernel"
-    elif arg_kernel_type in ("copy-unary", "stream-unary"):
-        kernel_fn = stream_unary_kernel
-        kernel_name = "stream_unary_kernel"
-    elif arg_kernel_type in ("copy-unary-pipelined", "stream-unary-pipelined"):
-        kernel_fn = stream_unary_pipelined_kernel
-        kernel_name = "stream_unary_pipelined_kernel"
-    elif arg_kernel_type == "copy-unary-double-pipelined":
-        kernel_fn = stream_unary_pipelined_kernel
-        kernel_name = "stream_unary_pipelined_kernel"
-    elif arg_kernel_type == "copy-binary-double-pipelined":
-        kernel_fn = stream_binary_double_pipelined_kernel
-        kernel_name = "stream_binary_double_pipelined_kernel"
-    elif arg_kernel_type == "copy-ternary-double-pipelined":
-        kernel_fn = stream_ternary_double_pipelined_kernel
-        kernel_name = "stream_ternary_double_pipelined_kernel"
-    else:
-        raise ValueError(f"Unknown kernel type: {arg_kernel_type}")
-    return kernel_fn, kernel_name
+    kernel_fn, _ = select_kernel(nary, pipelined)
+    run_stream_nary(kernel_fn, N, nary, check=True)
 
 
 if __name__ == "__main__":
@@ -493,81 +313,26 @@ if __name__ == "__main__":
     except ImportError:
         from gfx1250_utils import static_profile
 
-    parser = argparse.ArgumentParser(description="Stream Copy Kernel for GFX1250")
+    parser = argparse.ArgumentParser(description="Stream Copy Kernels for GFX1250")
     parser.add_argument("-n", type=int, default=65536, help="Number of elements to copy")
-    parser.add_argument(
-        "--kernel-type", type=str, choices=[
-            "copy-unary", "copy-binary", "copy-ternary", "copy-unary-pipelined", "copy-unary-double-pipelined",
-            "copy-binary-double-pipelined", "copy-ternary-double-pipelined", "stream-unary", "stream-binary",
-            "stream-ternary", "stream-unary-pipelined", "stream-load-only"
-        ], default="copy-unary", help="Kernel type to use")
+    parser.add_argument("--nary", type=int, choices=[1, 2, 3], default=1, help="Number of input streams")
+    parser.add_argument("--pipelined", action="store_true", help="Issue next-iteration loads before the current store")
     parser.add_argument("--no-check", action="store_true",
                         help="Skip stream-copy correctness checks and D2H copy-back for bandwidth runs")
-    parser.add_argument("--stream-workgroups", type=int, default=1024,
-                        help="Workgroups for copy-unary/copy-binary/copy-ternary stream kernels")
-    parser.add_argument("--stream-block-size", type=int, default=1024,
-                        help="Elements per workgroup for copy-unary/copy-binary/copy-ternary stream kernels")
-    parser.add_argument("--stream-load-batch", type=int, default=64,
-                        help="Batch size for --kernel-type stream-load-only")
-    parser.add_argument("--stream-load-num-k-heads", type=int, default=16,
-                        help="KV heads for --kernel-type stream-load-only")
-    parser.add_argument("--stream-load-seqlen-k", type=int, default=8192,
-                        help="K/V sequence length for --kernel-type stream-load-only")
-    parser.add_argument("--stream-load-head-size", type=int, default=128,
-                        help="K/V head size for --kernel-type stream-load-only")
-    parser.add_argument("--stream-load-block-n", type=int, default=128,
-                        help="K/V tile size for --kernel-type stream-load-only")
+    parser.add_argument("--stream-workgroups", type=int, default=1024, help="Number of workgroups")
+    parser.add_argument("--stream-block-size", type=int, default=1024, help="Elements per workgroup")
     args = parser.parse_args()
 
-    kernel_fn, kernel_name = select_kernel(args.kernel_type)
-    is_stream_nary = args.kernel_type in (
-        "copy-unary",
-        "copy-binary",
-        "copy-ternary",
-        "copy-unary-pipelined",
-        "copy-unary-double-pipelined",
-        "copy-binary-double-pipelined",
-        "copy-ternary-double-pipelined",
-        "stream-unary",
-        "stream-binary",
-        "stream-ternary",
-        "stream-unary-pipelined",
-    )
-    arity = get_stream_arity(args.kernel_type) if is_stream_nary else None
-    if is_stream_nary:
-        num_workgroups = args.stream_workgroups
-    elif args.kernel_type == "stream-load-only":
-        num_workgroups = args.stream_load_batch * args.stream_load_num_k_heads
-    else:
-        raise ValueError(f"Unknown kernel type: {args.kernel_type}")
-
-    if args.kernel_type == "stream-load-only":
-        print(f"Running {kernel_name}")
-        print("Configuration: 1 warp/CTA, 3 TDM buffers, waves_per_eu=1")
-    else:
-        print(f"Running {kernel_name} with N={args.n} elements")
-        print("Configuration: 4 warps/CTA, 128-bit (8 fp16) read/write per thread")
-        print(f"Block size: {args.stream_block_size} elements per workgroup")
-    if is_stream_nary:
-        print(f"Stream block size: {args.stream_block_size} elements per workgroup")
-    print(f"Grid size: {num_workgroups} workgroups")
-    if args.kernel_type == "stream-load-only":
-        print(f"Stream-load-only: K/K-scale/V/V-scale TDM loads, batch={args.stream_load_batch}, "
-              f"heads={args.stream_load_num_k_heads}, seqlen_k={args.stream_load_seqlen_k}, "
-              f"head_sz={args.stream_load_head_size}, block_n={args.stream_load_block_n}")
-    if arity is not None:
-        print(f"{arity}-input stream copy: {args.stream_workgroups} workgroups, one output stream")
+    kernel_fn, kernel_name = select_kernel(args.nary, args.pipelined)
+    print(f"Running {kernel_name} with N={args.n} elements")
+    print("Configuration: 4 warps/CTA, 128-bit (8 fp16) read/write per thread")
+    print(f"Block size: {args.stream_block_size} elements per workgroup")
+    print(f"Grid size: {args.stream_workgroups} workgroups")
+    print(f"{args.nary}-input stream copy, pipelined={args.pipelined}, one output stream")
     print()
 
-    if args.kernel_type == "stream-load-only":
-        kernel = run_stream_load_only(batch=args.stream_load_batch, num_k_heads=args.stream_load_num_k_heads,
-                                      seqlen_k=args.stream_load_seqlen_k, head_sz=args.stream_load_head_size,
-                                      block_n=args.stream_load_block_n)
-    elif arity is not None:
-        kernel = run_stream_nary(kernel_fn, args.n, arity, check=not args.no_check,
-                                 num_workgroups=args.stream_workgroups, block_size=args.stream_block_size)
-    else:
-        raise ValueError(f"Unknown kernel type: {args.kernel_type}")
+    kernel = run_stream_nary(kernel_fn, args.n, args.nary, check=not args.no_check,
+                             num_workgroups=args.stream_workgroups, block_size=args.stream_block_size)
 
     print("\nStatic Profile:")
     static_profile(kernel)
