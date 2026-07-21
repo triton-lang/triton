@@ -1,6 +1,7 @@
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm=compute-capability=90 --initialize-ws-cluster-barriers=compute-capability=90 -reconcile-unrealized-casts | FileCheck %s
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=85' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=85' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX85 %s
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=86' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=86' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX86 %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' --initialize-ws-cluster-barriers='compute-capability=107 ptx-version=94' -reconcile-unrealized-casts | FileCheck --check-prefix=RUBIN %s
 
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -908,6 +909,44 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     ttg.warp_specialize()
     default {
       ttng.cluster_barrier {relaxed = true}
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      ttg.warp_return
+    } : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 0 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @cluster_barrier_inside_warp_specialize_rubin
+  // CHECK-COUNT-2: mbarrier.init.shared::cta.b64 [$1], 3;
+  // CHECK: nvvm.barrier
+  // CHECK: %[[RAW_TID:.*]] = nvvm.read.ptx.sreg.tid.x
+  // CHECK: %[[TID:.*]] = llvm.and %[[RAW_TID]], %{{.*}} : i32
+  // CHECK: %[[PEER_ID:.*]] = llvm.add %[[TID]], %{{.*}} : i32
+  // CHECK: %[[PEER_OFFSET:.*]] = llvm.shl %[[PEER_ID]], %{{.*}} : i32
+  // CHECK: %[[PEER_BARRIER:.*]] = llvm.xor %{{.*}}, %[[PEER_OFFSET]] : i32
+  // CHECK: %[[ARRIVE_PRED:.*]] = llvm.icmp "ult" %[[TID]], %{{.*}} : i32
+  // CHECK-COUNT-1: mbarrier.arrive.release.cluster.shared::cluster.b64
+  // CHECK-NOT: mbarrier.arrive
+  // CHECK: mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64
+  // CHECK: nvvm.barrier
+  // RUBIN-LABEL: @cluster_barrier_inside_warp_specialize_rubin
+  // RUBIN-COUNT-2: mbarrier.init.shared::cta.b64 [$1], 3;
+  // RUBIN: %[[CTA:.*]] = nvvm.read.ptx.sreg.cluster.ctarank
+  // RUBIN: %[[ALL_CTAS:.*]] = llvm.mlir.constant(15 : i32) : i32
+  // RUBIN: %[[SELF_MASK:.*]] = llvm.shl %{{.*}}, %[[CTA]] : i32
+  // RUBIN: %[[PEER_MASK:.*]] = llvm.xor %[[ALL_CTAS]], %[[SELF_MASK]] : i32
+  // RUBIN-COUNT-1: mbarrier.arrive.release.cluster.shared::cluster.multicast::cluster::32b.b64 _, [$1], $2;
+  // RUBIN-NOT: mbarrier.arrive
+  // RUBIN: mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64
+  tt.func @cluster_barrier_inside_warp_specialize_rubin() {
+    ttg.warp_specialize()
+    default {
+      ttng.cluster_barrier
       ttg.warp_yield
     }
     partition0() num_warps(4) {
