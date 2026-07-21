@@ -22,7 +22,6 @@
  */
 
 #include "PatternTritonGPUOpToLLVM.h"
-#include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -57,42 +56,20 @@ static void createClusterWait(OpBuilder &b, Location loc) {
 
 static void createMBarrierInit(OpBuilder &b, Location loc, Value pred,
                                Value barrierPtr, int count) {
-  PTXBuilder ptxBuilder;
-  auto &init = *ptxBuilder.create("@$0 mbarrier.init.shared::cta.b64 [$1], " +
-                                  std::to_string(count) + ";");
-  init({ptxBuilder.newOperand(pred, "b"),
-        ptxBuilder.newOperand(barrierPtr, "r")},
-       /*onlyAttachMLIRArgs=*/true);
-  ptxBuilder.launch(b, loc, void_ty(b.getContext()));
+  NVIDIA::createMBarrierInit(b, loc, pred, barrierPtr, count);
 }
 
 static void createMBarrierArrive(OpBuilder &b, Location loc, Value pred,
                                  Value barrierPtr, bool relaxed) {
-  PTXBuilder ptxBuilder;
-  auto &arrive = *ptxBuilder.create(
-      "@$0 mbarrier.arrive." + std::string(relaxed ? "relaxed" : "release") +
-      ".cluster.shared::cluster.b64 _, [$1];");
-  arrive({ptxBuilder.newOperand(pred, "b"),
-          ptxBuilder.newOperand(barrierPtr, "r")},
-         /*onlyAttachMLIRArgs=*/true);
-  ptxBuilder.launch(b, loc, void_ty(b.getContext()));
+  NVIDIA::createMBarrierArrive(b, loc, pred, barrierPtr, /*count=*/1,
+                               /*clusterScope=*/true,
+                               /*clusterSpace=*/true, relaxed);
 }
 
 static void createMBarrierWait(OpBuilder &b, Location loc, Value barrierPtr,
                                Value parity) {
-  PTXBuilder ptxBuilder;
-  auto &wait =
-      *ptxBuilder.create("{\n"
-                         "\t.reg .pred complete;\n"
-                         "waitLoop:\n"
-                         "\tmbarrier.try_wait.parity.acquire.cluster.shared::"
-                         "cta.b64 complete, [$0], $1;\n"
-                         "\t@!complete bra.uni waitLoop;\n"
-                         "}\n");
-  wait({ptxBuilder.newOperand(barrierPtr, "r"),
-        ptxBuilder.newOperand(parity, "r")},
-       /*onlyAttachMLIRArgs=*/true);
-  ptxBuilder.launch(b, loc, void_ty(b.getContext()));
+  NVIDIA::createMBarrierWait(b, loc, Value{}, barrierPtr, parity,
+                             /*clusterScope=*/true);
 }
 
 static Value getClusterBarrierMbarPtr(Location loc, RewriterBase &rewriter,

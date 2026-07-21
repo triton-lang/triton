@@ -1639,8 +1639,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.tar
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:90", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32} {
   // Atomic ordering barriers must not introduce a nested warp specialization.
   // CHECK-LABEL: atomic_release_multi_cta_warp_specialize
-  // CHECK: mbarrier.arrive.release.cluster.shared::cluster.b64
-  // CHECK: mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64
+  // CHECK: nvvm.mbarrier.arrive %{{.*}}, %{{.*}} {scope = #nvvm.mem_scope<cluster>} : !llvm.ptr<7>
+  // CHECK: nvvm.mbarrier.try_wait %{{.*}}, %{{.*}} {scope = #nvvm.mem_scope<cluster>} : !llvm.ptr<3>, i32 -> i1
   // CHECK: red.global.sys.release.add.u32
   tt.func @atomic_release_multi_cta_warp_specialize(%ptr : !tt.ptr<i32>, %mask : i1, %val : i32) {
     ttg.warp_specialize()

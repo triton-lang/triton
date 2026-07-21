@@ -44,7 +44,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     k = triton.compile(str(temp_file), target=GPUTarget("cuda", 90, 32))
     ptx = k.asm["ptx"]
     assert "mbarrier.arrive.release.cluster.shared::cluster.b64" in ptx
-    assert "mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64" in ptx
+    assert "mbarrier.try_wait.parity.acquire.cluster.shared.b64" in ptx
     assert "mapa" not in ptx
     assert k.metadata.shared == 40
     assert k.asm["cubin"] != b""
@@ -125,7 +125,7 @@ def test_compile_only_dot() -> None:
                r"(.|\n)*"
                r"tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.b64"
                r"(.|\n)*"
-               r"mbarrier.try_wait.parity.shared::cta.b64"
+               r"mbarrier.try_wait.parity.shared.b64"
                r"(.|\n)*"
                r"tcgen05.ld.sync.aligned.16x32bx2.x32.b32"
                r"(.|\n)*"
