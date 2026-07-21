@@ -189,9 +189,22 @@ public:
              !ttng::hasLoadsAfterMMA(mma, forOp))) {
           // MMA can be overlapped with itself
           mmaSelfLatency[mma] = 1;
-          if (!ttng::requiresAccMultiBuffering(mma, forOp) ||
-              (ttng::isAccMultibufferingPossible(mma, forOp) &&
-               !getDisallowAccMultiBuffer(forOp))) {
+          // A read-modify-written accumulator (loaded from TMEM, modified, and
+          // stored back across iterations) that is ALSO consumed by a different
+          // MMA in the loop cannot be safely multi-buffered / rotated across
+          // pipeline stages: the pipeliner hoists the accumulator into a
+          // rotated register value, so the other MMA reads a desynchronized
+          // copy and the loop silently miscompiles. A purely self-recurrent RMW
+          // accumulator (only read back by its own MMA) is still safe to
+          // pipeline via `tt.self_latency`, so we must not disable pipelining
+          // for that case.
+          bool accRMWConsumedByOtherMMA =
+              ttng::hasAccReadModifyWrite(mma, forOp) &&
+              ttng::isAccReadByAnotherMMA(mma, forOp);
+          if (!accRMWConsumedByOtherMMA &&
+              (!ttng::requiresAccMultiBuffering(mma, forOp) ||
+               (ttng::isAccMultibufferingPossible(mma, forOp) &&
+                !getDisallowAccMultiBuffer(forOp)))) {
             // MMA's users can be pushed to the next stage
             opLatency[&op] = 1;
           }

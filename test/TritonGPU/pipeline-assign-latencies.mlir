@@ -1223,3 +1223,53 @@ tt.func @tc_gen5_mma_alloc_block_arg(%lb : index, %ub : index, %step : index,
   tt.return
 }
 }
+
+// -----
+
+// A read-modify-written accumulator (TMEM load -> modify -> store back) that
+// is ALSO consumed as an operand of a different MMA in the loop must not be
+// pipelined: multi-buffering would rotate it into a register value and the
+// other MMA would read a desynchronized copy (silent miscompile). The state
+// MMA gets only tt.self_latency; the consumer MMA (fresh acc) still pipelines.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @rmw_acc_read_by_other_mma
+  tt.func public @rmw_acc_read_by_other_mma(%arg0: tensor<128x128x!tt.ptr<f16>, #blocked> {tt.contiguity = dense<[1, 16]> : tensor<2xi32>, tt.divisibility = dense<[16, 16]> : tensor<2xi32>}, %arg1: tensor<128x128x!tt.ptr<f16>, #blocked> {tt.contiguity = dense<[1, 16]> : tensor<2xi32>, tt.divisibility = dense<[16, 16]> : tensor<2xi32>}, %arg2: i32) -> tensor<128x128xf16, #blocked1> {
+    %true = arith.constant true
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked1>
+    %cst_0 = arith.constant dense<2.000000e+00> : tensor<128x128xf32, #blocked1>
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %0, %acc_tok = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %other, %other_tok0 = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %init_tok = ttng.tmem_store %cst, %0[%acc_tok], %true : tensor<128x128xf32, #blocked1> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %oinit_tok = ttng.tmem_store %cst, %other[%other_tok0], %true : tensor<128x128xf32, #blocked1> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %last:2 = scf.for %arg3 = %c0_i32 to %arg2 step %c1_i32 iter_args(%tok = %init_tok, %otok = %oinit_tok) -> (!ttg.async.token, !ttg.async.token) : i32 {
+      %3 = tt.load %arg0 : tensor<128x128x!tt.ptr<f16>, #blocked>
+      %4 = ttg.local_alloc %3 : (tensor<128x128xf16, #blocked>) -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+      %5 = tt.load %arg1 : tensor<128x128x!tt.ptr<f16>, #blocked>
+      %6 = ttg.local_alloc %5 : (tensor<128x128xf16, #blocked>) -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+      %7, %load_tok = ttng.tmem_load %0[%tok] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
+      // The loaded accumulator value is consumed as an operand of another MMA.
+      %acc_h = arith.truncf %7 : tensor<128x128xf32, #blocked1> to tensor<128x128xf16, #blocked1>
+      %acc_s = ttg.local_alloc %acc_h : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+      // The consumer MMA (fresh accumulator) is still pipelined.
+      // CHECK: ttng.tc_gen5_mma {{.*}} {tt.latency = 1 : i32, tt.self_latency = 1 : i32}
+      %cons_tok = ttng.tc_gen5_mma %acc_s, %6, %other[%otok], %true, %true : !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      %8 = arith.mulf %7, %cst_0 : tensor<128x128xf32, #blocked1>
+      %store_tok = ttng.tmem_store %8, %0[%load_tok], %true : tensor<128x128xf32, #blocked1> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      // The RMW state accumulator is read by another MMA, so it must NOT be
+      // pipelined (no tt.latency), only self-overlapped (tt.self_latency).
+      // CHECK: ttng.tc_gen5_mma %{{.*}}, %{{.*}}, %{{.*}} {tt.self_latency = 1 : i32}
+      %mma_tok = ttng.tc_gen5_mma %4, %6, %0[%store_tok], %true, %true : !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      scf.yield %mma_tok, %cons_tok : !ttg.async.token, !ttg.async.token
+    } {tt.scheduled_max_stage = 2 : i32}
+    %1, %res_tok = ttng.tmem_load %0[%last#0] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
+    %2 = arith.truncf %1 : tensor<128x128xf32, #blocked1> to tensor<128x128xf16, #blocked1>
+    tt.return %2 : tensor<128x128xf16, #blocked1>
+  }
+}

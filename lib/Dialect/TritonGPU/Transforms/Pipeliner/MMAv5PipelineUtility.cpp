@@ -214,6 +214,50 @@ bool ttng::hasAccReadModifyWrite(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
   return false;
 }
 
+bool ttng::isAccReadByAnotherMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
+  auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
+  if (!tmemAlloc || !forOp.isDefinedOutsideOfLoop(tmemAlloc))
+    return false;
+  // Seed the walk with the values loaded from the accumulator inside the loop.
+  SmallVector<Value> worklist;
+  for (auto user : tmemAlloc->getUsers()) {
+    if (isa<ttng::TMEMLoadOp>(user) && forOp->isAncestor(user->getParentOp()))
+      worklist.push_back(user->getResult(0));
+  }
+  DenseSet<Value> seen;
+  while (!worklist.empty()) {
+    Value v = worklist.pop_back_val();
+    if (!seen.insert(v).second)
+      continue;
+    for (OpOperand &use : v.getUses()) {
+      Operation *owner = use.getOwner();
+      // Reaching a different MMA (as any operand, including the accumulator of
+      // that other MMA) is the unsafe pattern we are looking for.
+      if (auto otherMma = dyn_cast<ttng::MMAv5OpInterface>(owner)) {
+        if (otherMma.getOperation() != mma.getOperation())
+          return true;
+        continue;
+      }
+      // The store-back leg of the read-modify-write cycle is not a consumer.
+      if (isa<ttng::TMEMStoreOp>(owner))
+        continue;
+      // Follow values through terminators: into scf.if results and into the
+      // for-loop's iter-args (matches hasAccReadModifyWrite's traversal).
+      if (auto yield = dyn_cast<scf::YieldOp>(owner)) {
+        if (auto ifOp = dyn_cast<scf::IfOp>(yield->getParentOp()))
+          worklist.push_back(ifOp.getResult(use.getOperandNumber()));
+        if (yield->getParentOp() == forOp)
+          worklist.push_back(forOp.getRegionIterArg(use.getOperandNumber()));
+        continue;
+      }
+      // Propagate through elementwise / convert / local_alloc / etc.
+      for (Value res : owner->getResults())
+        worklist.push_back(res);
+    }
+  }
+  return false;
+}
+
 static bool accUseFlagSetToFalse(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
   Value accUseFlag = mma.useAccumulator();
   if (matchPattern(accUseFlag, m_Zero())) {
