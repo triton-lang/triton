@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import itertools
 import torch
 import triton
+import triton.language as tl
 from enum import Enum, auto
 import math
 from typing import Callable
@@ -137,6 +138,7 @@ class PrecisionConfig:
     c_microblock_size: int | None = None
     c_value_pack_factor: int = 1
     out_dtype: torch.dtype | None = None
+    acc_dtype: torch.dtype | None = None
     # None keeps split-K scratch in the accumulator dtype.
     intermediate_out_dtype: torch.dtype | None = None
     enforce_bitwise_invariance: bool = False
@@ -315,9 +317,12 @@ def matmul(a, b, bias,
     if not isinstance(a, Tensor):
         dtype = FP4 if a_has_mx and a.dtype == torch.uint8 else None
         a = wrap_torch_tensor(a, dtype=dtype)
+    acc_dtype = precision_config.acc_dtype
     intermediate_out_dtype = precision_config.intermediate_out_dtype
     if intermediate_out_dtype is None:
-        intermediate_out_dtype = torch.float64 if a.dtype == b.dtype == FP64 else torch.float32
+        intermediate_out_dtype = acc_dtype if acc_dtype is not None else (
+            torch.float64 if a.dtype == b.dtype == FP64 else torch.float32
+        )
     a_scale_dtype = None if a_scale is None else a_scale.storage.data.dtype
     b_scale_dtype = None if b_scale is None else b_scale.storage.data.dtype
     # NOTE: uint8 scale means OCP E8M0 here. Direct NVFP-style scales stay float8_e4m3fn.
@@ -710,6 +715,7 @@ def matmul(a, b, bias,
                        FnName.QUANTIZE_NVFP4.name,
                    ),
                    Y_VALUE_PACK_FACTOR=precision_config.c_value_pack_factor,
+                   ACC_DTYPE=None if acc_dtype is None else getattr(tl, str(acc_dtype).removeprefix("torch.")),
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **fused_comm_kwargs,
                    **opt_flags.target_kernel_kwargs,

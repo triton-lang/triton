@@ -2022,6 +2022,58 @@ def test_dot_explicit_and_implicit_upcasts_match(device, src_type, mid_type, m, 
     _assert_payload_equal(explicit, explicit_expected)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA dot acceleration")
+@pytest.mark.parametrize("payloads", [(0x00FF, 0x0101, 0x0001, 0x0001), (0x0001, 0x0001, 0x0100, 0x0100)])
+def test_bf16_dot_sharding(device, payloads, fresh_knobs):
+    _require_cuda_backend(device)
+
+    size = 64
+    a0, b0, a1, b1 = payloads
+    a_payload = np.zeros((size, size), dtype=np.uint64)
+    b_payload = np.zeros((size, size), dtype=np.uint64)
+    a_payload[0, 0], b_payload[0, 0] = a0, b0
+    a_payload[0, size // 2], b_payload[size // 2, 0] = a1, b1
+    a_bits = _unmix_payload_to_float_bits(a_payload, "bf16")
+    b_bits = _unmix_payload_to_float_bits(b_payload, "bf16")
+    _, aw = _as_float_bits_tensor(a_bits, "bf16")
+    _, bw = _as_float_bits_tensor(b_bits, "bf16")
+    whole, wholew = _as_float_bits_tensor(np.empty((size, size), dtype=np.int16), "bf16")
+    left, leftw = _as_float_bits_tensor(np.empty((size, size), dtype=np.int16), "bf16")
+    right, rightw = _as_float_bits_tensor(np.empty((size, size), dtype=np.int16), "bf16")
+    split, splitw = _as_float_bits_tensor(np.empty((size, size), dtype=np.int16), "bf16")
+
+    @triton.jit
+    def dot_kernel(a, b, out, K_START: tl.constexpr, K: tl.constexpr, SIZE: tl.constexpr):
+        rows = tl.arange(0, SIZE)[:, None]
+        cols = tl.arange(0, SIZE)[None, :]
+        kk_a = tl.arange(0, K)[None, :] + K_START
+        kk_b = tl.arange(0, K)[:, None] + K_START
+        av = tl.load(a + rows * SIZE + kk_a)
+        bv = tl.load(b + kk_b * SIZE + cols)
+        acc = tl.zeros((SIZE, SIZE), dtype=tl.bfloat16)
+        tl.store(out + rows * SIZE + cols, tl.dot(av, bv, acc=acc, out_dtype=tl.bfloat16))
+
+    @triton.jit
+    def add_kernel(x, y, out, SIZE: tl.constexpr):
+        offsets = tl.arange(0, SIZE * SIZE)
+        tl.store(out + offsets, tl.load(x + offsets) + tl.load(y + offsets))
+
+    fresh_knobs.compilation.instrumentation_mode = ""
+    with pytest.raises(triton.CompilationError, match="out_dtype=bfloat16 is unsupported"):
+        dot_kernel[(1, )](aw, bw, wholew, K_START=0, K=size, SIZE=size, num_warps=4)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    compiled = dot_kernel[(1, )](aw, bw, wholew, K_START=0, K=size, SIZE=size, num_warps=4)
+    dot_kernel[(1, )](aw, bw, leftw, K_START=0, K=size // 2, SIZE=size, num_warps=4)
+    dot_kernel[(1, )](aw, bw, rightw, K_START=size // 2, K=size // 2, SIZE=size, num_warps=4)
+    add_kernel[(1, )](leftw, rightw, splitw, SIZE=size, num_warps=4)
+
+    assert "ttng.tc_gen5_mma" not in compiled.asm["ttgir"]
+    expected = _mm_payload_bits(a_bits, b_bits, None, "bf16", "bf16", "bf16")
+    _assert_payload_equal(whole, expected)
+    _assert_payload_equal(split, expected)
+
+
 @pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA MMA v2")
 @pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k", "instr_m"), _MMA_V2_CASES)
 def test_mma_v2(device, type_a, type_b, acc_type, m, n, k, instr_m, fresh_knobs):

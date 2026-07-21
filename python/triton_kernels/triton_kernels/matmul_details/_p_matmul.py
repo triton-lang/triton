@@ -127,6 +127,7 @@ def _p_matmul(
              all_writes_issued=None,
              reduce_rank=0,
              n_reduce_shards: tl.constexpr = 1,
+             ACC_DTYPE: tl.constexpr = None,
              ):
     # tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
 
@@ -320,7 +321,9 @@ def _p_matmul(
                 XTensorScalePtrs += slice_off_m * stride_x_tensor_scale_m
             XTensorScalePtrs += scale_offs_m.to(index_type) * stride_x_tensor_scale_m
 
-        acc_dtype: tl.constexpr = tl.float64 if x_type == tl.float64 and w_type == tl.float64 else tl.float32
+        acc_dtype: tl.constexpr = ACC_DTYPE if ACC_DTYPE is not None else (
+            tl.float64 if x_type == tl.float64 and w_type == tl.float64 else tl.float32
+        )
         acc = tl.zeros((BLOCK_N, BLOCK_M) if SWAP_XW else (BLOCK_M, BLOCK_N), dtype=acc_dtype)
 
         # ------------------------------------------------------------

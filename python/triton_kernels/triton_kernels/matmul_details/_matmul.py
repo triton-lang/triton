@@ -107,6 +107,7 @@ def _matmul(
              all_writes_issued=None,
              reduce_rank = 0,
              n_reduce_shards: tl.constexpr = 1,
+             ACC_DTYPE: tl.constexpr = None,
              ):
     tl.assume(stride_y_k >= 0)
     tl.assume(stride_y_z >= 0)
@@ -381,7 +382,9 @@ def _matmul(
     else:
         WTensorScalePtrs = None
     # compute output
-    acc_dtype: tl.constexpr = tl.float64 if x_type == tl.float64 and w_type == tl.float64 else tl.float32
+    acc_dtype: tl.constexpr = ACC_DTYPE if ACC_DTYPE is not None else (
+        tl.float64 if x_type == tl.float64 and w_type == tl.float64 else tl.float32
+    )
     acc = tl.zeros((BLOCK_N, BLOCK_M) if SWAP_XW else (BLOCK_M, BLOCK_N), dtype=acc_dtype)
     x_k_limit = K_X + BLOCK_K * SPLIT_K
     w_k_limit = K_W + PACKED_BLOCK_K_W * SPLIT_K

@@ -1124,6 +1124,8 @@ bool supportMMA(triton::DotOp op, int version) {
     RankedTensorType typeA = op.getA().getType();
     int k = typeA.getShape().back();
     auto retType = op.getType();
+    if (retType.getElementType().isBF16())
+      return false;
     auto retShapePerCTA = getShapePerCTA(retType);
     auto rank = retShapePerCTA.size();
     int numWarps = lookupNumWarps(op);
@@ -1159,6 +1161,8 @@ bool supportMMA(triton::DotOp op, int version) {
     auto retType = op.getType();
     RankedTensorType typeA = op.getA().getType();
     int k = typeA.getShape().back();
+    if (retType.getElementType().isBF16())
+      return false;
     // If k size is smaller than the native mma size, we cannot use MMA.
     if (k < 256 / aElemTy.getIntOrFloatBitWidth())
       return false;
