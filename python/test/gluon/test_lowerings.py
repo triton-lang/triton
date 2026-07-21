@@ -214,12 +214,14 @@ def test_atomic_poll_two_ctas(warp_specialize, device):
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
-def test_cluster_barrier_in_warp_specialize(device):
+@pytest.mark.parametrize("num_ctas", [2, 4])
+def test_cluster_barrier_in_warp_specialize(device, num_ctas):
     BLOCK = ttgl.constexpr(128)
 
     @gluon.jit
     def partition(out, offset: ttgl.constexpr):
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[0]])
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0],
+                                                    cga_layout=_make_cga_broadcast(1, ttgl.num_ctas()))
         offs = offset + ttgl.arange(0, BLOCK, layout=layout)
         ttgl.barrier(cluster=True)
         ttgl.store(out + offs, offs)
@@ -232,10 +234,10 @@ def test_cluster_barrier_in_warp_specialize(device):
         ], [4])
 
     out = torch.empty((2 * BLOCK.value, ), device=device, dtype=torch.int32)
-    compiled = kernel[(1, )](out, num_warps=4, num_ctas=2)
+    compiled = kernel[(1, )](out, num_warps=4, num_ctas=num_ctas)
 
     ptx = compiled.asm["ptx"]
-    assert ptx.count("mbarrier.arrive.release.cluster.shared::cluster.b64") >= 2
+    assert ptx.count("mbarrier.arrive.release.cluster.shared::cluster") == 2
     assert "mapa" not in ptx
     torch.testing.assert_close(out, torch.arange(2 * BLOCK.value, device=device, dtype=torch.int32))
 

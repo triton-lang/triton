@@ -70,6 +70,7 @@ public:
   bool supports4xFp4Tcgen05MMA() const { return computeCapability == 107; }
   bool supports2xFp8Tcgen05MMA() const { return computeCapability == 107; }
   bool supportsReuseB() const { return computeCapability == 107; }
+  bool supportsMbarMulticast() const { return computeCapability == 107; }
 
 private:
   static constexpr char kTargetPrefix[] = "cuda:";
