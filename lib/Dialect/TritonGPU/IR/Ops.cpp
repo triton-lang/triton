@@ -695,7 +695,8 @@ LogicalResult MemDescReinterpretOp::verify() {
     return ty.getShape().take_back(rank) != ty.getAllocShape().take_back(rank);
   };
   bool srcIsSubview = isSubview(srcTy);
-  bool srcIsTmem = isa<nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc);
+  bool srcIsTmem =
+      isa<nvidia_gpu::TensorMemorySpaceAttr>(srcTy.getMemorySpace());
   if (isSubview(dstTy) || (srcIsSubview && !srcIsTmem))
     return emitError("source and result must not be subviews; reinterpret the "
                      "parent descriptor and then take a subview");
@@ -719,7 +720,7 @@ LogicalResult MemDescReinterpretOp::verify() {
   assert((isa<SharedMemorySpaceAttr, nvidia_gpu::TensorMemorySpaceAttr>(
               srcTy.getMemorySpace()) &&
           "expected shared or tensor memory"));
-  if (isa<nvidia_gpu::TensorMemorySpaceAttr>(srcTy.getMemorySpace())) {
+  if (srcIsTmem) {
     auto srcAlloc = nvidia_gpu::getTmemAllocSizes(srcTy);
     auto dstAlloc = nvidia_gpu::getTmemAllocSizes(dstTy);
     if (dstAlloc.numRows > srcAlloc.numRows ||
