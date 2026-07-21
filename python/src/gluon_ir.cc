@@ -993,8 +993,8 @@ void init_gluon_ir(py::module_ &m) {
       .def("create_tcgen05_mma",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
               Value pred, std::vector<Value> &mbarriers,
-              std::vector<Value> &mbarrier_preds, bool two_ctas,
-              bool multicast, std::optional<Value> lut = std::nullopt) {
+              std::vector<Value> &mbarrier_preds, bool two_ctas, bool multicast,
+              std::optional<Value> lut = std::nullopt) {
              Value accDep;
              auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
              self.create<ttng::TCGen5MMAOp>(

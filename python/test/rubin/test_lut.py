@@ -76,9 +76,8 @@ def get_random_lut_and_indices(n, k):
     k_packed = k // 8 * 3
 
     indices = torch.randint(low=0, high=256, size=(n, k_packed), dtype=torch.uint8, device="cuda")
-    LUT = (
-        torch.randn((n // 8, k // 64, 8), dtype=torch.float32, device="cuda").to(torch.float8_e4m3fn).view(torch.uint8)
-    )
+    LUT = (torch.randn((n // 8, k // 64, 8), dtype=torch.float32,
+                       device="cuda").to(torch.float8_e4m3fn).view(torch.uint8))
 
     return (
         LUT,
@@ -114,13 +113,9 @@ def pack_lut_for_tma(lut):
     num_chunk_k = lut.shape[1] // 2
     # One top-level chunk corresponds to one 32x2 collection of LUT tables,
     # i.e. four adjacent 128B rows that one 512B tmem_copy operation copies.
-    return (
-        lut.reshape(num_chunk_n, 32, num_chunk_k, 2, 8)
-        .reshape(num_chunk_n, 4, 8, num_chunk_k, 2, 8)
-        .permute(0, 3, 1, 2, 4, 5)
-        .reshape(num_chunk_n, num_chunk_k, 4, 128)
-        .contiguous()
-    )
+    return (lut.reshape(num_chunk_n, 32, num_chunk_k, 2,
+                        8).reshape(num_chunk_n, 4, 8, num_chunk_k, 2,
+                                   8).permute(0, 3, 1, 2, 4, 5).reshape(num_chunk_n, num_chunk_k, 4, 128).contiguous())
 
 
 def make_packed_b_tma_descriptor(B, BLOCK_N, BLOCK_K_PACKED, is_n_major=True):
@@ -213,11 +208,8 @@ def lut_to_tmem_layout(lut_smem):
     # Expose each 512B tmem_copy tile as 32 rows by 16 columns, then concatenate
     # successive BLOCK_K/128 LUT groups along the TMEM column dimension.
     # This is the inverse of the host-side transform pack_lut_for_tma
-    return (
-        lut_smem.reshape((lut_smem.shape[0], lut_smem.shape[1], 32, 16))
-        .permute((0, 2, 1, 3))
-        .reshape((lut_smem.shape[0] * 32, lut_smem.shape[1] * 16))
-    )
+    return (lut_smem.reshape((lut_smem.shape[0], lut_smem.shape[1], 32, 16)).permute((0, 2, 1, 3)).reshape(
+        (lut_smem.shape[0] * 32, lut_smem.shape[1] * 16)))
 
 
 @gluon.jit
@@ -285,16 +277,13 @@ def mma_lut_kernel(
         if use_tma_for_b:
             block_k = k_iter
             # TMA for A, B, and LUT
-            mbarrier.expect(
-                tma_bar, a_desc.block_type.nbytes + b_desc_tma.block_type.nbytes + lut_desc.block_type.nbytes
-            )
+            mbarrier.expect(tma_bar,
+                            a_desc.block_type.nbytes + b_desc_tma.block_type.nbytes + lut_desc.block_type.nbytes)
             tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_smem)
             tma.async_copy_global_to_shared(b_desc_tma, [block_n, block_k, 0, 0, 0], tma_bar, b_smem)
             tma.async_copy_global_to_shared(lut_desc, [lut_block_n, lut_block_k, 0, 0], tma_bar, lut_smem)
             # Apply inverse transformation: reshape and permute to get unswizzled core-matrices layout
-            b_smem_transformed = core_matrices_to_operand_layout(
-                b_smem, BLOCK_N, BLOCK_K_PACKED, b_is_n_major
-            )
+            b_smem_transformed = core_matrices_to_operand_layout(b_smem, BLOCK_N, BLOCK_K_PACKED, b_is_n_major)
         else:
             # TMA for A and LUT, gl.load for B
             mbarrier.expect(tma_bar, a_desc.block_type.nbytes + lut_desc.block_type.nbytes)
@@ -441,9 +430,7 @@ def test_lut_packed_b_tma(BLOCK_M, BLOCK_K, b_is_n_major):
     LUT = pack_lut_for_tma(LUT_orig)
 
     if not b_is_n_major:
-        pytest.xfail(
-            "k_major core-matrix tiling does not satisfy the limited non-pow2 shared-layout invariant"
-        )
+        pytest.xfail("k_major core-matrix tiling does not satisfy the limited non-pow2 shared-layout invariant")
 
     matmul_lut(
         A,

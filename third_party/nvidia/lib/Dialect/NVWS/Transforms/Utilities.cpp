@@ -35,9 +35,9 @@ int getArefDepth(MemDescType bufTy) {
 }
 
 MemDescType getArefViewBufferType(MemDescType bufTy) {
-  auto isScalesEnc = isa<nvidia_gpu::TensorMemoryScalesEncodingAttr,
-                         nvidia_gpu::TensorMemoryLUTEncodingAttr>(
-      bufTy.getEncoding());
+  auto isScalesEnc =
+      isa<nvidia_gpu::TensorMemoryScalesEncodingAttr,
+          nvidia_gpu::TensorMemoryLUTEncodingAttr>(bufTy.getEncoding());
   auto shape = bufTy.getShape();
   return gpu::MemDescType::get(isScalesEnc ? shape : shape.drop_front(),
                                bufTy.getElementType(), bufTy.getEncoding(),

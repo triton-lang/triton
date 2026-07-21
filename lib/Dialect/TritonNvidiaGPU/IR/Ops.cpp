@@ -1458,7 +1458,8 @@ static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
     return success();
 
   if (isa<TensorMemoryLUTEncodingAttr>(memdesc.getEncoding())) {
-    auto shapePerCTA = getShapePerCTA(memdesc.getEncoding(), memdesc.getShape());
+    auto shapePerCTA =
+        getShapePerCTA(memdesc.getEncoding(), memdesc.getShape());
     if (shapePerCTA[0] > 32)
       return op->emitOpError(
           "The number of rows in a LUT tensor per CTA must be 32 or less");
@@ -1511,8 +1512,7 @@ LogicalResult TMEMLoadOp::verify() {
           getSrc().getType().getMemorySpace()))
     return emitOpError("source must be a tensor memory buffer.");
   if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
-           TensorMemoryLUTEncodingAttr>(
-          getSrc().getType().getEncoding()))
+           TensorMemoryLUTEncodingAttr>(getSrc().getType().getEncoding()))
     return emitOpError("should use tensor memory encoding.");
   if (failed(verifyTMEMOperand(*this, getType(), getSrc().getType(), "result")))
     return failure();

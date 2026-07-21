@@ -493,8 +493,8 @@ def tcgen05_copy(src, dst, _semantic=None):
 
 
 @builtin
-def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarriers=None, mbarrier_preds=None,
-                lut=None, _semantic=None):
+def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarriers=None, mbarrier_preds=None, lut=None,
+                _semantic=None):
     """
     Emit a 5th generation TensorCore MMA instruction.
     acc = a * b + (acc if use_acc else 0)
