@@ -118,7 +118,6 @@ NUM_REGS = properties["max_num_regs"]
 SIZE_SMEM = properties["max_shared_mem"]
 WARP_SIZE = properties["warpSize"]
 target = triton.runtime.driver.active.get_current_target()
-kernels = {}
 
 
 def softmax(x):
