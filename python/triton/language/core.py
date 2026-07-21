@@ -718,7 +718,7 @@ class pointer_type(dtype):
 
 class block_type(dtype):
 
-    def __init__(self, element_ty: dtype, shape: List):
+    def __init__(self, element_ty: dtype, shape: List, allow_non_pow2: bool = False):
         self.element_ty = element_ty
 
         # Note that block_type's shape is a list of int
@@ -730,7 +730,7 @@ class block_type(dtype):
         if not self.shape:
             raise TypeError('0d block_type is forbidden')
 
-        self.numel = validate_block_shape(self.shape)
+        self.numel = validate_block_shape(self.shape, allow_non_pow2)
         self.name = f'<{self.shape}, {self.element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.block_type:

@@ -60,12 +60,17 @@ def is_power_of_two(x):
     return x > 0 and (x & (x - 1)) == 0
 
 
-def validate_block_shape(shape: List[int]):
+def validate_block_shape(
+    shape: List[int],
+    allow_non_pow2: bool = False,
+):
     numel = 1
     for i, d in enumerate(shape):
         if not isinstance(d, int):
             raise TypeError(f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d)}]")
-        if not is_power_of_two(d):
+        if d <= 0:
+            raise ValueError(f"Shape element {i} must be positive")
+        if not is_power_of_two(d) and not allow_non_pow2:
             raise ValueError(f"Shape element {i} must be a power of 2")
         numel *= d
 

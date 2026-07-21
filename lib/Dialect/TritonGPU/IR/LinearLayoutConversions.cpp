@@ -1381,11 +1381,8 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
   if (auto distributed = dyn_cast<DistributedEncodingTrait>(layout)) {
     result = distributed.toLinearLayout(shape);
   } else {
-    assert(llvm::all_of(shape,
-                        [](int64_t dim) {
-                          return llvm::isPowerOf2_32(dim) && dim >= 1;
-                        }) &&
-           "shape must be a postive power of 2");
+    assert(isPositivePowerOfTwoShape(shape) &&
+           "shape must be a positive power of 2");
     if (auto shared = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
       result = swizzledSharedToLinearLayout(shape, shared);
     } else if (auto shared = dyn_cast<SharedLinearEncodingAttr>(layout)) {
@@ -1451,6 +1448,11 @@ LinearLayout toLinearLayout(MemDescType type) {
   // there was a call to memdesc_index.
   auto shape = type.getAllocShape().take_back(type.getRank());
   return toLinearLayout(shape, type.getEncoding());
+}
+
+LinearLayout toLinearLayoutWithPow2Shape(MemDescType type) {
+  auto shape = type.getAllocShape().take_back(type.getRank());
+  return toLinearLayout(normalizeShapeToPowerOf2(shape), type.getEncoding());
 }
 
 LinearLayout toLinearLayout(TensorOrMemDesc type) {

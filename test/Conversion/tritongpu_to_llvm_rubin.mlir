@@ -48,7 +48,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
 // -----
 
 #shared_lut_a = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
-#shared_lut_b = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [16, 0], [32, 0], [64, 0]]}, alignment = 16>
+#shared_lut_b = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [16, 0], [32, 0]]}, alignment = 16>
 #tmem_lut_acc = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
 #tmem_lut_metadata = #ttng.tensor_memory_lut_encoding<>
 #smem_lut = #ttg.shared_memory
@@ -60,13 +60,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK: tcgen05.mma.cta_group::1.kind::f8f6f4.collector::b::lastuse.decompress::lut::b
   tt.func @tc_gen5_mma_lut(
       %a: !ttg.memdesc<128x128xf8E4M3FN, #shared_lut_a, #smem_lut>,
-      %b: !ttg.memdesc<128x256xi8, #shared_lut_b, #smem_lut>,
+      %b: !ttg.memdesc<48x256xi8, #shared_lut_b, #smem_lut>,
       %lut: !ttg.memdesc<32x16xi8, #tmem_lut_metadata, #ttng.tensor_memory>,
       %d: !ttg.memdesc<128x256xf32, #tmem_lut_acc, #ttng.tensor_memory, mutable>,
       %useAcc: i1, %pred: i1) {
     ttng.tc_gen5_mma %a, %b[%lut], %d, %useAcc, %pred :
       !ttg.memdesc<128x128xf8E4M3FN, #shared_lut_a, #smem_lut>,
-      !ttg.memdesc<128x256xi8, #shared_lut_b, #smem_lut>[!ttg.memdesc<32x16xi8, #tmem_lut_metadata, #ttng.tensor_memory>],
+      !ttg.memdesc<48x256xi8, #shared_lut_b, #smem_lut>[!ttg.memdesc<32x16xi8, #tmem_lut_metadata, #ttng.tensor_memory>],
       !ttg.memdesc<128x256xf32, #tmem_lut_acc, #ttng.tensor_memory, mutable>
     tt.return
   }
@@ -75,7 +75,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 #shared_lut_a_k256 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
-#shared_lut_b_k256 = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [16, 0], [32, 0], [64, 0], [128, 0]]}, alignment = 16>
+#shared_lut_b_k256 = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [16, 0], [32, 0], [64, 0]]}, alignment = 16>
 #tmem_lut_acc_k256 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
 #tmem_lut_metadata_k256 = #ttng.tensor_memory_lut_encoding<>
 #smem_lut_k256 = #ttg.shared_memory
@@ -89,13 +89,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK: llvm.mlir.constant(9077602375435008 : i64)
   tt.func @tc_gen5_mma_lut_k256(
       %a: !ttg.memdesc<128x256xf8E4M3FN, #shared_lut_a_k256, #smem_lut_k256>,
-      %b: !ttg.memdesc<256x256xi8, #shared_lut_b_k256, #smem_lut_k256>,
+      %b: !ttg.memdesc<96x256xi8, #shared_lut_b_k256, #smem_lut_k256>,
       %lut: !ttg.memdesc<32x16xi8, #tmem_lut_metadata_k256, #ttng.tensor_memory>,
       %d: !ttg.memdesc<128x256xf32, #tmem_lut_acc_k256, #ttng.tensor_memory, mutable>,
       %useAcc: i1, %pred: i1) {
     ttng.tc_gen5_mma %a, %b[%lut], %d, %useAcc, %pred :
       !ttg.memdesc<128x256xf8E4M3FN, #shared_lut_a_k256, #smem_lut_k256>,
-      !ttg.memdesc<256x256xi8, #shared_lut_b_k256, #smem_lut_k256>[!ttg.memdesc<32x16xi8, #tmem_lut_metadata_k256, #ttng.tensor_memory>],
+      !ttg.memdesc<96x256xi8, #shared_lut_b_k256, #smem_lut_k256>[!ttg.memdesc<32x16xi8, #tmem_lut_metadata_k256, #ttng.tensor_memory>],
       !ttg.memdesc<128x256xf32, #tmem_lut_acc_k256, #ttng.tensor_memory, mutable>
     tt.return
   }
@@ -104,7 +104,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 #shared_lut_a = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
-#shared_lut_b = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [16, 0], [32, 0], [64, 0]]}, alignment = 16>
+#shared_lut_b = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [16, 0], [32, 0]]}, alignment = 16>
 #tmem_lut_acc = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
 #tmem_lut_metadata = #ttng.tensor_memory_lut_encoding<>
 #smem_lut = #ttg.shared_memory
@@ -116,13 +116,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK: tcgen05.mma.cta_group::1.kind::f8f6f4.collector::b::lastuse.decompress::lut::b
   tt.func @tc_gen5_mma_lut_b_reuse_m(
       %a: !ttg.memdesc<256x128xf8E4M3FN, #shared_lut_a, #smem_lut>,
-      %b: !ttg.memdesc<128x256xi8, #shared_lut_b, #smem_lut>,
+      %b: !ttg.memdesc<48x256xi8, #shared_lut_b, #smem_lut>,
       %lut: !ttg.memdesc<32x16xi8, #tmem_lut_metadata, #ttng.tensor_memory>,
       %d: !ttg.memdesc<256x256xf32, #tmem_lut_acc, #ttng.tensor_memory, mutable>,
       %useAcc: i1, %pred: i1) {
     ttng.tc_gen5_mma %a, %b[%lut], %d, %useAcc, %pred :
       !ttg.memdesc<256x128xf8E4M3FN, #shared_lut_a, #smem_lut>,
-      !ttg.memdesc<128x256xi8, #shared_lut_b, #smem_lut>[!ttg.memdesc<32x16xi8, #tmem_lut_metadata, #ttng.tensor_memory>],
+      !ttg.memdesc<48x256xi8, #shared_lut_b, #smem_lut>[!ttg.memdesc<32x16xi8, #tmem_lut_metadata, #ttng.tensor_memory>],
       !ttg.memdesc<256x256xf32, #tmem_lut_acc, #ttng.tensor_memory, mutable>
     tt.return
   }
@@ -243,6 +243,46 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
        !ttg.memdesc<128x128xf16, #shared1, #ttg.shared_memory>,
        !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>,
        !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>
+    tt.return
+  }
+}
+
+// -----
+
+#shared_a_nonpow2 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
+#shared_b_nonpow2 = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [16, 0], [32, 0]]}, alignment = 16>
+#barrier_nonpow2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+#tmem_nonpow2 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
+#tmem_lut_nonpow2 = #ttng.tensor_memory_lut_encoding<>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:107"} {
+  // CHECK-LABEL: @tc_gen5_mma_lut_nonpow2_b_descriptor_equiv
+  // Verify LUT-B descriptor equivalence between padded-allocation and fully
+  // packed memdesc forms. The first instruction pair is the padded-B path.
+  // CHECK: llvm.mlir.constant([[$B0C:-?[0-9]+]] : i64) : i64
+  // CHECK: llvm.mlir.constant([[$B1C:-?[0-9]+]] : i64) : i64
+  // The packed-B path must construct the same two descriptors.
+  // CHECK: llvm.mlir.constant([[$B0C]] : i64) : i64
+  // CHECK: llvm.mlir.constant([[$B1C]] : i64) : i64
+  tt.func @tc_gen5_mma_lut_nonpow2_b_descriptor_equiv(
+      %a: !ttg.memdesc<128x128xf8E4M3FN, #shared_a_nonpow2, #smem>,
+      %b_padded: !ttg.memdesc<48x256xi8, #shared_b_nonpow2, #smem, 64x256>,
+      %b_packed: !ttg.memdesc<48x256xi8, #shared_b_nonpow2, #smem>,
+      %lut: !ttg.memdesc<32x16xi8, #tmem_lut_nonpow2, #ttng.tensor_memory>,
+      %c: !ttg.memdesc<128x256xf32, #tmem_nonpow2, #ttng.tensor_memory, mutable>,
+      %useAcc: i1, %pred: i1,
+      %bar: !ttg.memdesc<1xi64, #barrier_nonpow2, #smem>, %barPred: i1) {
+    ttng.tc_gen5_mma %a, %b_padded[%lut], %c, %useAcc, %pred, %bar[%barPred] {is_async} :
+      !ttg.memdesc<128x128xf8E4M3FN, #shared_a_nonpow2, #smem>,
+      !ttg.memdesc<48x256xi8, #shared_b_nonpow2, #smem, 64x256>[!ttg.memdesc<32x16xi8, #tmem_lut_nonpow2, #ttng.tensor_memory>],
+      !ttg.memdesc<128x256xf32, #tmem_nonpow2, #ttng.tensor_memory, mutable>,
+      !ttg.memdesc<1xi64, #barrier_nonpow2, #smem>
+    ttng.tc_gen5_mma %a, %b_packed[%lut], %c, %useAcc, %pred, %bar[%barPred] {is_async} :
+      !ttg.memdesc<128x128xf8E4M3FN, #shared_a_nonpow2, #smem>,
+      !ttg.memdesc<48x256xi8, #shared_b_nonpow2, #smem>[!ttg.memdesc<32x16xi8, #tmem_lut_nonpow2, #ttng.tensor_memory>],
+      !ttg.memdesc<128x256xf32, #tmem_nonpow2, #ttng.tensor_memory, mutable>,
+      !ttg.memdesc<1xi64, #barrier_nonpow2, #smem>
     tt.return
   }
 }

@@ -21,6 +21,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <cassert>
 
@@ -1049,9 +1050,11 @@ static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty,
   auto outDimNames = standardOutDimNames(ctx, rank);
   LinearLayout msgToOffset;
   for (int dim = 0; dim < rank; ++dim) {
-    msgToOffset *=
-        LinearLayout::strided1D(shapePerCTA[dim] / blockShape[dim],
-                                blockShape[dim], kMsg, outDimNames[dim]);
+    int64_t logicalBlockSize = blockShape[dim];
+    assert(shapePerCTA[dim] % logicalBlockSize == 0);
+    msgToOffset *= LinearLayout::strided1D(shapePerCTA[dim] / logicalBlockSize,
+                                           llvm::PowerOf2Ceil(logicalBlockSize),
+                                           kMsg, outDimNames[dim]);
   }
   msgToOffset *= getCGALayout(ty.getEncoding()).getLinearLayout();
   return msgToOffset;
@@ -1125,7 +1128,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     int rank = op.getCoord().size();
 
     auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy, tmaMode);
-    auto smemLayout = ttg::toLinearLayout(smemTy);
+    auto smemLayout = ttg::toLinearLayoutWithPow2Shape(smemTy);
     auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
     auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, smemTy);
 

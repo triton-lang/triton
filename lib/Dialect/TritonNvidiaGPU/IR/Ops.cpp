@@ -30,6 +30,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -818,6 +819,21 @@ static LogicalResult verifyMMADType(Operation *op, Type a, Type b, Type d) {
   return success();
 }
 
+bool TCGen5MMAOp::verifyDims() {
+  auto aShape = getA().getType().getShape();
+  auto bShape = getB().getType().getShape();
+
+  int64_t aKdim = aShape.back();
+  int64_t bKdim = bShape[bShape.size() - 2];
+  if (aKdim != bKdim && getLut()) {
+    // LUT mode consumes 3-bit packed RHS values in an 8-bit container.
+    if (bKdim % 3 != 0)
+      return false;
+    bKdim = (bKdim / 3) * 8;
+  }
+  return aKdim == bKdim;
+}
+
 LogicalResult TCGen5MMAOp::verify() {
   if (!getIsAsync() && !getBarriers().empty()) {
     return emitOpError("The op is synchronous but a barrier is present.");
@@ -959,7 +975,7 @@ LogicalResult TCGen5MMAOp::verify() {
   }
 
   auto aLayout = toLinearLayout(getA().getType());
-  auto bLayout = toLinearLayout(getB().getType());
+  auto bLayout = toLinearLayoutWithPow2Shape(getB().getType());
   auto dLayout = toLinearLayout(getD().getType());
   auto log2nCTAs = dLayout.getInDimSizeLog2(kBlock);
   for (int i = 0; i < log2nCTAs; i++) {

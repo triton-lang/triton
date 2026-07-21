@@ -3103,6 +3103,14 @@ TEST_F(LinearLayoutConversionsTest, LeadingOffset_32x4x64_1_8_32b) {
                    /*requireSurjective=*/true));
 }
 
+TEST_F(LinearLayoutConversionsTest, LeadingOffset_PadsNonPow2LogicalCount) {
+  auto enc =
+      nvmmaShared(64, false, 32, {1, 1, 1}, {1, 1, 1}, {2, 1, 0}, {2, 1, 0});
+  auto normalizedShape = normalizeShapeToPowerOf2({32, 3, 64});
+  EXPECT_EQ(toLinearLayout(normalizedShape, enc),
+            toLinearLayout({32, 4, 64}, enc));
+}
+
 TEST_F(LinearLayoutConversionsTest, LeadingOffset_64x4x32_1_8_32b_transposed) {
   EXPECT_EQ(
       toLinearLayout({64, 4, 32}, nvmmaShared(64, true, 32, {1, 1, 1},

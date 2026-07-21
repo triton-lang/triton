@@ -327,7 +327,7 @@ def str_to_ty(name, c):
         shape_type = tuple_type([int32] * ndim)
         # FIXME: Last dim stride should be constexpr(1)
         stride_type = tuple_type(([int64] * ndim))
-        block = block_type(dtype, block_shape)
+        block = block_type(dtype, block_shape, allow_non_pow2=bool(is_gluon))
         if is_gluon:
             from triton.experimental.gluon.language._layouts import NVMMASharedLayout, PaddedSharedLayout, SwizzledSharedLayout
             from triton.experimental.gluon.language.nvidia.hopper.tma import tensor_descriptor_type as nvidia_tensor_descriptor_type

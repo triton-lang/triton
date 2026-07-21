@@ -1,5 +1,6 @@
 #include "Utility.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/NvmmaSmemAttrs.h"
 #include "triton/Tools/LayoutUtils.h"
 
@@ -71,7 +72,7 @@ public:
     // we would need to handle the getReps part more carefuly
     // This way we could support more subviews that we don't
     // We can implement this generalisation in the future if needed
-    auto llInv = toLinearLayout(memTy).pseudoinvert();
+    auto llInv = gpu::toLinearLayoutWithPow2Shape(memTy).pseudoinvert();
     auto bitwidth = memTy.getElementType().getIntOrFloatBitWidth();
     if (isFp4) {
       // hacky but well

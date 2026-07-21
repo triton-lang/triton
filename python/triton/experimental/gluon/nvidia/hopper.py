@@ -66,7 +66,7 @@ class TensorDescriptor:
             self.round_f32_to_tf32,
             self.block_shape,
         )
-        validate_block_shape(self.block_shape)
+        validate_block_shape(self.block_shape, allow_non_pow2=True)
 
     @property
     def mode(self) -> str:

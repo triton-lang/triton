@@ -576,6 +576,8 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
                                                    ArrayRef<int64_t> dstShape,
                                                    Attribute &dstEnc) {
   auto *ctx = srcEnc.getContext();
+  auto normalizedSrcShape = normalizeShapeToPowerOf2(srcShape);
+  auto normalizedDstShape = normalizeShapeToPowerOf2(dstShape);
   // TODO Delete this once SharedLinearEncodingAttr is more widely supported.
   if (auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(srcEnc)) {
     if (getNumCTAs(mmaEncoding) == 1) {
@@ -592,9 +594,9 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
             ctx, mmaEncoding.getSwizzlingByteWidth(),
             mmaEncoding.getTransposed(), mmaEncoding.getElementBitWidth(),
             mmaEncoding.getFp4Padded(), CGALayout);
-        auto srcLL = toLinearLayout(srcShape, srcEnc);
-        auto dstLL = toLinearLayout(dstShape, candidateEncoding);
-        if (reshapeLayout(ctx, srcLL, dstShape) == dstLL) {
+        auto srcLL = toLinearLayout(normalizedSrcShape, srcEnc);
+        auto dstLL = toLinearLayout(normalizedDstShape, candidateEncoding);
+        if (reshapeLayout(ctx, srcLL, normalizedDstShape) == dstLL) {
           dstEnc = candidateEncoding;
           return success();
         }
@@ -615,8 +617,8 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
 
   // Generic LL case
   auto sharedEnc = cast<SharedEncodingTrait>(srcEnc);
-  auto srcLL = toLinearLayout(srcShape, srcEnc);
-  auto dstLL = reshapeLayout(ctx, srcLL, dstShape);
+  auto srcLL = toLinearLayout(normalizedSrcShape, srcEnc);
+  auto dstLL = reshapeLayout(ctx, srcLL, normalizedDstShape);
   dstEnc = SharedLinearEncodingAttr::get(ctx, std::move(dstLL),
                                          sharedEnc.getAlignment());
   return success();

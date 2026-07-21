@@ -1225,6 +1225,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#nvmma_nonpow2_split = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, rank = 3}>
+#shared_mbar_nonpow2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @async_tma_copy_global_to_local_nonpow2_split_rejected(%arg0: !tt.tensordesc<32x128x70xf16, #nvmma_nonpow2_split>) {
+    %true = arith.constant true
+    %c0_i32 = arith.constant 0 : i32
+    // Last dim 70 is non-pow2 and not divisible by its logical block size 64.
+    // expected-error @+1 {{must be divisible by its logical block size}}
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<32x128x70xf16, #nvmma_nonpow2_split, #smem, mutable>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared_mbar_nonpow2, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %arg0[%c0_i32, %c0_i32, %c0_i32] %0, %1, %true : !tt.tensordesc<32x128x70xf16, #nvmma_nonpow2_split>, !ttg.memdesc<1xi64, #shared_mbar_nonpow2, #smem, mutable> -> !ttg.memdesc<32x128x70xf16, #nvmma_nonpow2_split, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked_lut = #ttg.blocked<{sizePerThread = [2, 16], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
 #tmem_lut = #ttng.tensor_memory_lut_encoding<>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {

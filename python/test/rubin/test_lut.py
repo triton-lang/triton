@@ -1,3 +1,4 @@
+import pytest
 import torch
 import triton
 
@@ -16,6 +17,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_copy,
     fence_async_shared,
 )
+from triton._internal_testing import is_rubin
 
 
 def extract_3bit_elements(indices):
@@ -103,7 +105,45 @@ def get_shared_swizzling_zero(N, K):
     return gl.SharedLinearLayout(bases)
 
 
-def transform_b_to_core_matrices_layout(B, BLOCK_N, BLOCK_K):
+def pack_lut_for_tma(lut):
+    assert lut.dim() == 3, f"expected logical LUT tensor of rank 3, got {lut.shape}"
+    assert lut.shape[2] == 8, f"expected 8 LUT entries, got {lut.shape[2]}"
+    assert lut.shape[0] % 32 == 0, f"lut rows={lut.shape[0]} must be divisible by 32"
+    assert lut.shape[1] % 2 == 0, f"lut K-tiles={lut.shape[1]} must be divisible by 2"
+    num_chunk_n = lut.shape[0] // 32
+    num_chunk_k = lut.shape[1] // 2
+    # One top-level chunk corresponds to one 32x2 collection of LUT tables,
+    # i.e. four adjacent 128B rows that one 512B tmem_copy operation copies.
+    return (
+        lut.reshape(num_chunk_n, 32, num_chunk_k, 2, 8)
+        .reshape(num_chunk_n, 4, 8, num_chunk_k, 2, 8)
+        .permute(0, 3, 1, 2, 4, 5)
+        .reshape(num_chunk_n, num_chunk_k, 4, 128)
+        .contiguous()
+    )
+
+
+def make_packed_b_tma_descriptor(B, BLOCK_N, BLOCK_K_PACKED, is_n_major=True):
+    B_transformed = transform_b_to_core_matrices_layout(B, BLOCK_N, BLOCK_K_PACKED, is_n_major=is_n_major)
+    num_cm_n = BLOCK_N // 8
+    num_cm_k = BLOCK_K_PACKED // 16
+    b_layout_tma = gl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5)
+    if is_n_major:
+        b_block_shape = [1, 1, num_cm_k, num_cm_n, 128]
+    else:
+        b_block_shape = [1, 1, num_cm_n, num_cm_k, 128]
+    return TensorDescriptor.from_tensor(B_transformed, b_block_shape, b_layout_tma)
+
+
+def make_lut_tma_descriptor(lut, BLOCK_N, BLOCK_K):
+    assert BLOCK_N % 256 == 0, f"BLOCK_N={BLOCK_N} must be divisible by 256"
+    assert BLOCK_K % 128 == 0, f"BLOCK_K={BLOCK_K} must be divisible by 128"
+    lut_tile_shape = [BLOCK_N // 256, BLOCK_K // 128, 4, 128]
+    lut_layout = gl.NVMMASharedLayout.get_default_for(lut_tile_shape, gl.int8)
+    return TensorDescriptor.from_tensor(lut, lut_tile_shape, lut_layout)
+
+
+def transform_b_to_core_matrices_layout(B, BLOCK_N, BLOCK_K, is_n_major=True):
     N, K = B.shape
     assert N % BLOCK_N == 0, f"N={N} must be divisible by BLOCK_N={BLOCK_N}"
     assert K % BLOCK_K == 0, f"K={K} must be divisible by BLOCK_K={BLOCK_K}"
@@ -123,7 +163,7 @@ def transform_b_to_core_matrices_layout(B, BLOCK_N, BLOCK_K):
     # [num_blocks_n, num_cm_n, CM_ROWS, num_blocks_k, num_cm_k, CM_COLS]
     B_reshaped = B.reshape(num_blocks_n, num_cm_n, CM_ROWS, num_blocks_k, num_cm_k, CM_COLS)
 
-    # Transform to core-matrices format: group by core matrix (cm_n, cm_k) first
+    # Transform to core-matrices format and expose (cm_n, cm_k) axes.
     # Within each block, permute from [num_cm_n, CM_ROWS, num_cm_k, CM_COLS]
     # to [num_cm_n, num_cm_k, CM_ROWS, CM_COLS]
     # In 6D tensor, apply permute(0, 2, 1, 3) to dims [1, 2, 4, 5]:
@@ -131,37 +171,52 @@ def transform_b_to_core_matrices_layout(B, BLOCK_N, BLOCK_K):
     B_transformed = B_reshaped.permute(0, 1, 4, 3, 2, 5)
     # Now: [num_blocks_n, num_cm_n, num_cm_k, num_blocks_k, CM_ROWS, CM_COLS]
 
-    # Rearrange blocks to be contiguous
-    B_transformed = B_transformed.permute(0, 3, 1, 2, 4, 5)
-    # Now: [num_blocks_n, num_blocks_k, num_cm_n, num_cm_k, CM_ROWS, CM_COLS]
+    # For n-major tiling, make the packed K core-matrix count the outer
+    # logical-count dimension. This is the layout accepted by the limited
+    # non-pow2 shared-layout invariant.
+    if is_n_major:
+        B_transformed = B_transformed.permute(0, 3, 2, 1, 4, 5)
+    else:
+        B_transformed = B_transformed.permute(0, 3, 1, 2, 4, 5)
 
-    # Make the contiguous dim 128B for efficient TMA and reduce the rank to 5
-    B_transformed = B_transformed.reshape(num_blocks_n, num_blocks_k, num_cm_n, num_cm_k, CM_ROWS * CM_COLS)
+    # Make the contiguous dim 128B for efficient TMA and reduce to rank 5.
+    B_transformed = B_transformed.reshape(num_blocks_n, num_blocks_k, num_cm_k, num_cm_n, CM_ROWS * CM_COLS)
 
     return B_transformed.contiguous()
 
 
 @gluon.jit
-def core_matrices_to_k_major(b_smem_flat, BLOCK_N: gl.constexpr, BLOCK_K: gl.constexpr):
+def core_matrices_to_operand_layout(b_smem_flat, BLOCK_N: gl.constexpr, BLOCK_K_PACKED: gl.constexpr,
+                                    is_n_major: gl.constexpr):
     # Core matrix dimensions: 8 rows × 16 bytes
     CM_ROWS: gl.constexpr = 8
     CM_COLS: gl.constexpr = 16
 
     num_cm_n: gl.constexpr = BLOCK_N // CM_ROWS
-    num_cm_k: gl.constexpr = BLOCK_K // CM_COLS
+    num_cm_k: gl.constexpr = BLOCK_K_PACKED // CM_COLS
 
-    # Reshape to expose core-matrices format: [num_cm_n, num_cm_k, CM_ROWS, CM_COLS]
-    # This is how the data is logically organized after host transform + TMA
-    b_smem = b_smem_flat.reshape((num_cm_n, num_cm_k, CM_ROWS, CM_COLS))
-
-    # Permute to get the layout MMA expects: [num_cm_n, CM_ROWS, num_cm_k, CM_COLS]
-    # This is the inverse of the host transform
-    b_smem = b_smem.permute((0, 2, 1, 3))
+    if is_n_major:
+        b_smem = b_smem_flat.reshape((num_cm_k, num_cm_n, CM_ROWS, CM_COLS))
+        b_smem = b_smem.permute((1, 2, 0, 3))
+    else:
+        b_smem = b_smem_flat.reshape((num_cm_n, num_cm_k, CM_ROWS, CM_COLS))
+        b_smem = b_smem.permute((0, 2, 1, 3))
 
     # Reshape back to [BLOCK_N, BLOCK_K]
-    b_smem = b_smem.reshape((BLOCK_N, BLOCK_K))
+    b_smem = b_smem.reshape((BLOCK_N, BLOCK_K_PACKED))
 
     return b_smem
+
+
+@gluon.jit
+def lut_to_tmem_layout(lut_smem):
+    # Expose each 512B tmem_copy tile as 32 rows by 16 columns, then concatenate
+    # successive BLOCK_K/128 LUT groups along the TMEM column dimension.
+    return (
+        lut_smem.reshape((lut_smem.shape[0], lut_smem.shape[1], 32, 16))
+        .permute((0, 2, 1, 3))
+        .reshape((lut_smem.shape[0] * 32, lut_smem.shape[1] * 16))
+    )
 
 
 @gluon.jit
@@ -176,6 +231,8 @@ def mma_lut_kernel(
     b_layout: gl.constexpr,
     BLOCK_N: gl.constexpr,
     BLOCK_K: gl.constexpr,
+    BLOCK_K_PACKED: gl.constexpr,
+    b_is_n_major: gl.constexpr,
     num_warps: gl.constexpr,
     use_tma_for_b: gl.constexpr,
 ):
@@ -191,7 +248,7 @@ def mma_lut_kernel(
     a_smem = gl.allocate_shared_memory(dtype, a_desc.block_type.shape, a_desc.layout)
 
     if not use_tma_for_b:
-        b_smem = gl.allocate_shared_memory(gl.uint8, [BLOCK_N, BLOCK_K], b_layout)
+        b_smem = gl.allocate_shared_memory(gl.uint8, [BLOCK_N, BLOCK_K_PACKED], b_layout)
     else:
         b_smem = gl.allocate_shared_memory(b_desc_tma.dtype, b_desc_tma.block_type.shape, b_desc_tma.layout)
 
@@ -206,18 +263,21 @@ def mma_lut_kernel(
     tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], col_stride=1)
     acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
 
-    lut_tmem = allocate_tensor_memory(gl.int8, (32, 16), TensorMemoryLUTLayout())
+    num_lut_rows: gl.constexpr = BLOCK_N // 8
+    lut_tmem = allocate_tensor_memory(gl.int8, (num_lut_rows, 16), TensorMemoryLUTLayout())
 
     load_layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0])
     offs_n = gl.arange(0, BLOCK_N, gl.SliceLayout(1, load_layout))
-    offs_k = gl.arange(0, BLOCK_K, gl.SliceLayout(0, load_layout))
+    offs_k = gl.arange(0, BLOCK_K_PACKED, gl.SliceLayout(0, load_layout))
 
     block_n = pid_n
+    lut_block_n = pid_n * (BLOCK_N // 256)
 
     use_acc = False
 
     for k_iter in range(0, K // BLOCK_K):
         k = k_iter * BLOCK_K
+        lut_block_k = k_iter * (BLOCK_K // 128)
 
         if use_tma_for_b:
             block_k = k_iter
@@ -227,16 +287,19 @@ def mma_lut_kernel(
             )
             tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_smem)
             tma.async_copy_global_to_shared(b_desc_tma, [block_n, block_k, 0, 0, 0], tma_bar, b_smem)
-            tma.async_copy_global_to_shared(lut_desc, [off_n, k_iter, 0], tma_bar, lut_smem)
+            tma.async_copy_global_to_shared(lut_desc, [lut_block_n, lut_block_k, 0, 0], tma_bar, lut_smem)
             # Apply inverse transformation: reshape and permute to get unswizzled core-matrices layout
-            b_smem_transformed = core_matrices_to_k_major(b_smem, BLOCK_N, BLOCK_K)
+            b_smem_transformed = core_matrices_to_operand_layout(
+                b_smem, BLOCK_N, BLOCK_K_PACKED, b_is_n_major
+            )
         else:
             # TMA for A and LUT, gl.load for B
             mbarrier.expect(tma_bar, a_desc.block_type.nbytes + lut_desc.block_type.nbytes)
             tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_smem)
-            tma.async_copy_global_to_shared(lut_desc, [off_n, k_iter, 0], tma_bar, lut_smem)
+            tma.async_copy_global_to_shared(lut_desc, [lut_block_n, lut_block_k, 0, 0], tma_bar, lut_smem)
 
-            b_load_ptr = b_ptr + (off_n + offs_n)[:, None] * b_stride0 + (k + offs_k)[None, :] * b_stride1
+            b_k = k_iter * BLOCK_K_PACKED
+            b_load_ptr = b_ptr + (off_n + offs_n)[:, None] * b_stride0 + (b_k + offs_k)[None, :] * b_stride1
             b_data = gl.load(b_load_ptr)
             b_smem.store(b_data)
             b_smem_transformed = b_smem
@@ -245,14 +308,7 @@ def mma_lut_kernel(
 
         mbarrier.wait(tma_bar, phase=phase)
 
-        # unswizzle lut into (32, 16) "row major": (num_lut_n, num_lut_k * 8)
-        lut_smem_2d = (
-            lut_smem.reshape((lut_smem.shape[0], lut_smem.shape[1], 8, 2, 8))
-            .permute((0, 2, 1, 3, 4))
-            .reshape((lut_smem.shape[0] * 8, lut_smem.shape[1] * 2 * 8))
-        )
-
-        tcgen05_copy(lut_smem_2d, lut_tmem)
+        tcgen05_copy(lut_to_tmem_layout(lut_smem), lut_tmem)
 
         b = b_smem_transformed.permute((1, 0))
 
@@ -276,36 +332,38 @@ def mma_lut_kernel(
     tma.store_wait(pendings=0)
 
 
-def matmul_lut(A, B, lut, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps, use_tma_for_b=False):
+def matmul_lut(
+    A,
+    B,
+    lut,
+    C,
+    BLOCK_M,
+    BLOCK_N,
+    BLOCK_K,
+    BLOCK_K_PACKED,
+    num_warps,
+    use_tma_for_b=False,
+    b_is_n_major=True,
+):
     M, N = C.shape
 
     a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float8e4nv)
     a_desc = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_K], a_layout)
 
-    b_layout = get_shared_swizzling_zero(BLOCK_N, BLOCK_K)
+    b_layout = get_shared_swizzling_zero(BLOCK_N, BLOCK_K_PACKED)
 
     if use_tma_for_b:
-        # Transform B to core-matrices format
-        # [num_blocks_n, num_blocks_k, num_cm_n, num_cm_k, CM_ROWS * CM_COLS]
-        B_transformed = transform_b_to_core_matrices_layout(B, BLOCK_N, BLOCK_K)
-        num_cm_n = BLOCK_N // 8
-        num_cm_k = BLOCK_K // 16
-
-        b_layout_tma = gl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5)
-        b_desc_tma = TensorDescriptor.from_tensor(B_transformed, [1, 1, num_cm_n, num_cm_k, 128], b_layout_tma)
+        b_desc_tma = make_packed_b_tma_descriptor(B, BLOCK_N, BLOCK_K_PACKED, is_n_major=b_is_n_major)
     else:
         b_desc_tma = None
 
-    # Copy 4 * 8 luts along M and 2 luts along K (corresponding to BLOCK_M = 256 and BLOCK_K = 128)
-    lut_tile_shape = [4, 1, 128]
-    lut_layout = gl.NVMMASharedLayout.get_default_for(lut_tile_shape, gl.int8)
-    lut_desc = TensorDescriptor.from_tensor(lut, lut_tile_shape, lut_layout)
+    lut_desc = make_lut_tma_descriptor(lut, BLOCK_N, BLOCK_K)
 
     c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float32)
     c_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N], c_layout)
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    out = mma_lut_kernel[grid](
+    mma_lut_kernel[grid](
         a_desc,
         B,
         B.stride(0),
@@ -316,40 +374,45 @@ def matmul_lut(A, B, lut, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps, use_tma_for_b
         b_layout,
         BLOCK_N,
         BLOCK_K,
+        BLOCK_K_PACKED,
+        b_is_n_major,
         num_warps=num_warps,
         use_tma_for_b=use_tma_for_b,
     )
 
-    # print(out.asm["ttgir"])
 
-
-def test_lut(use_tma_for_b=False):
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+@pytest.mark.parametrize("BLOCK_M", [128, 256])
+@pytest.mark.parametrize("use_tma_for_b", [True, False])
+def test_lut_padded_b(BLOCK_M, use_tma_for_b):
     K = 128
     N = 256
-    M = 128
+    M = 256
+    BLOCK_N = 256
+    BLOCK_K = 128
+    BLOCK_K_PACKED = BLOCK_K
 
     A = torch.randn(M, K, device="cuda", dtype=torch.float32).to(torch.float8_e4m3fn)
     C = torch.empty(M, N, device="cuda", dtype=torch.float32)
 
-    LUT_orig, B_indices = get_random_lut_and_indices(N, K)
+    LUT_orig, B_indices_packed = get_random_lut_and_indices(N, K)
+    B_indices = torch.nn.functional.pad(B_indices_packed, (0, BLOCK_K - B_indices_packed.shape[1]), "constant", 0)
+    LUT = pack_lut_for_tma(LUT_orig)
 
-    # One chunk: 8x2 LUTs, k major, 128B
-    num_chunk_n = LUT_orig.shape[0] // 8
-    num_chunk_k = LUT_orig.shape[1] // 2
-
-    # 128B chunks are contiguously laid out so that they can be efficiently copied by TMA
-    # Depending on BLOCK_N, multiple chunks along N are copied at once (e.g. 4 for BLOCK_N = 256)
-    LUT = (
-        LUT_orig.reshape(num_chunk_n, 8, num_chunk_k, 2, 8)
-        .permute(0, 2, 1, 3, 4)
-        .reshape(num_chunk_n, num_chunk_k, 128)
-        .contiguous()
+    matmul_lut(
+        A,
+        B_indices,
+        LUT,
+        C,
+        BLOCK_M,
+        BLOCK_N,
+        BLOCK_K,
+        BLOCK_K_PACKED,
+        4,
+        use_tma_for_b=use_tma_for_b,
     )
 
-    B_indices_padded = torch.nn.functional.pad(B_indices, (0, 128 - B_indices.shape[1]), "constant", 0)
-    matmul_lut(A, B_indices_padded, LUT, C, 128, 256, 128, 4, use_tma_for_b=use_tma_for_b)
-
-    B_uint8 = decompress(B_indices, LUT_orig)
+    B_uint8 = decompress(B_indices_packed, LUT_orig)
     B = B_uint8.view(torch.float8_e4m3fn)
 
     C_ref = A.to(torch.float32) @ B.T.to(torch.float32)
@@ -357,9 +420,43 @@ def test_lut(use_tma_for_b=False):
     torch.testing.assert_close(C_ref, C, rtol=1e-3, atol=1e-3)
 
 
-if __name__ == "__main__":
-    print("Testing with gl.load for B...")
-    test_lut(use_tma_for_b=False)
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+@pytest.mark.parametrize("BLOCK_M", [128, 256])
+@pytest.mark.parametrize("BLOCK_K", [128, 256])
+@pytest.mark.parametrize("b_is_n_major", [True, False], ids=["n_major", "k_major"])
+def test_lut_packed_b_tma(BLOCK_M, BLOCK_K, b_is_n_major):
+    K = 4096
+    N = 4096
+    M = 4096
+    BLOCK_N = 256
+    BLOCK_K_PACKED = BLOCK_K * 3 // 8
 
-    print("\nTesting with TMA for B...")
-    test_lut(use_tma_for_b=True)
+    A = torch.randn(M, K, device="cuda", dtype=torch.float32).to(torch.float8_e4m3fn)
+    C = torch.empty(M, N, device="cuda", dtype=torch.float32)
+
+    LUT_orig, B_indices_packed = get_random_lut_and_indices(N, K)
+    LUT = pack_lut_for_tma(LUT_orig)
+
+    if not b_is_n_major:
+        pytest.xfail(
+            "k_major core-matrix tiling does not satisfy the limited non-pow2 shared-layout invariant"
+        )
+
+    matmul_lut(
+        A,
+        B_indices_packed,
+        LUT,
+        C,
+        BLOCK_M,
+        BLOCK_N,
+        BLOCK_K,
+        BLOCK_K_PACKED,
+        4,
+        use_tma_for_b=True,
+        b_is_n_major=b_is_n_major,
+    )
+
+    B_uint8 = decompress(B_indices_packed, LUT_orig)
+    B = B_uint8.view(torch.float8_e4m3fn)
+    C_ref = A.to(torch.float32) @ B.T.to(torch.float32)
+    torch.testing.assert_close(C_ref, C, rtol=1e-3, atol=1e-3)

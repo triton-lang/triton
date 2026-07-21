@@ -648,7 +648,7 @@ def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait", [MemWaitOpTrait]> {
 
 def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
-    DeclareOpInterfaceMethods<DotOpInterface>,
+    DeclareOpInterfaceMethods<DotOpInterface, ["verifyDims"]>,
     DeclareOpInterfaceMethods<MMAv5OpInterface>,
     DeclareOpInterfaceMethods<PredicatedOpInterface>,
     DeclareOpInterfaceMethods<MBarrierOpInterface>,

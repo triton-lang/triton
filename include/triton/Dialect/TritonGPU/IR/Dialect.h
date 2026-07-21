@@ -276,6 +276,10 @@ SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
                                               ArrayRef<int64_t> shape);
 SmallVector<int64_t> getAllocationShapePerCTA(Type type);
 
+// Shape normalization helpers for handling non-pow2 shapes.
+bool isPositivePowerOfTwoShape(ArrayRef<int64_t> shape);
+SmallVector<int64_t> normalizeShapeToPowerOf2(ArrayRef<int64_t> shape);
+
 unsigned getNumCTAs(Attribute layout);
 
 // Returns the MMAv2 warp distribution for a matrix tile. This does not apply
