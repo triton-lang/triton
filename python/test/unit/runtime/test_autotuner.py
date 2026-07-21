@@ -262,6 +262,48 @@ def test_prune_configs_fractional_top_k_keeps_one(device: str):
     _kernel[grid](dst, src, N=N)
     torch.testing.assert_close(src, dst)
 
+def test_prune_configs_fractional_top_k_uses_pruned_count(device: str):
+    # A fractional top_k is a fraction of the configs that survived
+    # early_config_prune, not of the original config list. With 8 configs
+    # pruned down to 4 and top_k=0.5, exactly 2 configs should be benchmarked;
+    # scaling the original count instead would give top_k=4 and bench all 4.
+    N = 1024
+    src = torch.randn(N, device=device)
+    dst = torch.empty(N, device=device)
+
+    benched = []
+
+    def counting_bench(kernel_call, quantiles=None, **kwargs):
+        benched.append(1)
+        return do_bench(kernel_call, quantiles=quantiles, **kwargs)
+
+    def early_config_prune(configs, named_args, **kwargs):
+        return [c for c in configs if c.kwargs['BLOCK_SIZE'] >= 32]
+
+    def perf_model(*args, **kwargs):
+        return kwargs['BLOCK_SIZE']
+
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': bs}) for bs in [1, 2, 4, 8, 32, 64, 128, 256]]
+    prune_configs_by = {
+        'perf_model': perf_model,
+        'early_config_prune': early_config_prune,
+        'top_k': 0.5,
+    }
+
+    @triton.autotune(configs=configs, key=['N'], prune_configs_by=prune_configs_by, do_bench=counting_bench)
+    @triton.jit
+    def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        x = tl.load(src + offsets, mask=offsets < N)
+        tl.store(dst + offsets, x, mask=offsets < N)
+
+    grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
+    _kernel[grid](dst, src, N=N)
+    torch.testing.assert_close(src, dst)
+    assert len(benched) == 2
+
+
+
 
 def test_config_ir_override_changes_disk_cache_key():
     # Autotuner derives persisted result-cache keys from Config.__str__().
