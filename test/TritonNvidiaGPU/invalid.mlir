@@ -1065,6 +1065,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#tmem_scales = #ttng.tensor_memory_scales_encoding<>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // expected-error @+1 {{tensor-memory scale descriptors must have rank 2; got 1}}
+  tt.func public @tmem_scales_rank_one(%arg0: !ttg.memdesc<16xi8, #tmem_scales, #ttng.tensor_memory, 128x16>) {
+    tt.return
+  }
+}
+
+// -----
+
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1, CGALayout = [[1, 0]]>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<CGALayout = [[1, 0]]>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {

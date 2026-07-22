@@ -175,6 +175,10 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     if (memorySpace != nvidia_gpu::TensorMemorySpaceAttr::get(ctx)) {
       return emitError() << "memorySpace must be TensorMemorySpace";
     }
+    if (shape.size() != 2) {
+      return emitError() << "tensor-memory scale descriptors must have rank 2; "
+                         << "got " << shape.size();
+    }
     if (allocShape.size() != 2) {
       return emitError() << "Scales don't currently support multibuffering";
     }
