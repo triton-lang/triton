@@ -61,7 +61,7 @@ static bool hasMMAv5WaitsInLastStage(scf::ForOp forOp,
   return hasMMAv5 && hasWaitInLastStage;
 }
 
-static void expandLoops(ModuleOp moduleOp) {
+static void expandLoops(ModuleOp moduleOp, int defaultNumStages) {
   DenseSet<MaskOp> peeledMaskOps;
   auto processPeeledEpilogueOp = [&](RewriterBase &rewriter, Operation *op,
                                      bool isEpilogue) -> Operation * {
@@ -93,6 +93,8 @@ static void expandLoops(ModuleOp moduleOp) {
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
   for (scf::ForOp forOp : loops) {
+    if (!shouldPipelineLoop(forOp, defaultNumStages))
+      continue;
     CoarseSchedule schedule;
     if (failed(schedule.deSerialize(forOp))) {
       continue;
@@ -176,7 +178,7 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     ModuleOp moduleOp = getOperation();
     // Transform the loop by introducing async operations to prepare it for
     // pipeline expansion.
-    lowerLoops(moduleOp);
+    lowerLoops(moduleOp, numStages);
     if (dumpIntermediateSteps) {
       ::mlir::triton::tools::mlirDumpsOrDbgs()
           << "// -----// SoftwarePipeliner internal IR Dump After: LowerLoops\n"
@@ -184,7 +186,7 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     }
 
     // Apply the pipeline expansion.
-    expandLoops(moduleOp);
+    expandLoops(moduleOp, numStages);
     if (dumpIntermediateSteps) {
       ::mlir::triton::tools::mlirDumpsOrDbgs()
           << "// -----// SoftwarePipeliner internal IR Dump After: "

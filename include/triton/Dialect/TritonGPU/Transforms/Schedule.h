@@ -17,6 +17,7 @@ namespace gpu {
 
 /// Lower the loops to prepare them for pipeline expansion.
 void lowerLoops(ModuleOp moduleOp);
+void lowerLoops(ModuleOp moduleOp, int defaultNumStages);
 
 bool hasGpuBarriers(scf::ForOp forOp);
 bool isSafeToPipeline(scf::ForOp forOp);

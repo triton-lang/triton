@@ -1,4 +1,74 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-pipeline | FileCheck %s --check-prefixes=CHECK
+// RUN: triton-opt %s -split-input-file -tritongpu-pipeline | FileCheck %s --check-prefixes=CHECK,STAGES-ZERO,STAGES-ONE,WARP-SCHEDULE
+// RUN: triton-opt %s -split-input-file -tritongpu-pipeline=num-stages=1 | FileCheck %s --check-prefix=DEFAULT-ONE
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // STAGES-ZERO-LABEL: @num_stages_zero
+  // STAGES-ZERO-NEXT:    %[[RESULT:.*]] = scf.for
+  // STAGES-ZERO-NEXT:      %[[FIRST:.*]] = arith.addi
+  // STAGES-ZERO-NEXT:      %[[SECOND:.*]] = arith.addi
+  // STAGES-ZERO-NEXT:      scf.yield %[[SECOND]]
+  // STAGES-ZERO-NEXT:    } {tt.num_stages = 0 : i32}
+  tt.func public @num_stages_zero(%lb: i32, %ub: i32, %step: i32, %init: i32) -> i32 {
+    %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %init) -> i32 : i32 {
+      %first = arith.addi %iv, %acc {loop.cluster = 1 : i32, loop.stage = 0 : i32} : i32
+      %second = arith.addi %first, %acc {loop.cluster = 0 : i32, loop.stage = 1 : i32} : i32
+      scf.yield %second : i32
+    } {tt.num_stages = 0 : i32, tt.scheduled_max_stage = 1 : i32}
+    tt.return %result : i32
+  }
+
+  // STAGES-ONE-LABEL: @num_stages_one
+  // STAGES-ONE-NEXT:    %[[RESULT:.*]] = scf.for
+  // STAGES-ONE-NEXT:      %[[FIRST:.*]] = arith.addi
+  // STAGES-ONE-NEXT:      %[[SECOND:.*]] = arith.addi
+  // STAGES-ONE-NEXT:      scf.yield %[[SECOND]]
+  // STAGES-ONE-NEXT:    } {tt.num_stages = 1 : i32}
+  tt.func public @num_stages_one(%lb: i32, %ub: i32, %step: i32, %init: i32) -> i32 {
+    %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %init) -> i32 : i32 {
+      %first = arith.addi %iv, %acc {loop.cluster = 1 : i32, loop.stage = 0 : i32} : i32
+      %second = arith.addi %first, %acc {loop.cluster = 0 : i32, loop.stage = 1 : i32} : i32
+      scf.yield %second : i32
+    } {tt.num_stages = 1 : i32, tt.scheduled_max_stage = 1 : i32}
+    tt.return %result : i32
+  }
+
+  // DEFAULT-ONE-LABEL: @default_num_stages_one
+  // DEFAULT-ONE-NEXT:    %[[RESULT:.*]] = scf.for
+  // DEFAULT-ONE-NEXT:      %[[FIRST:.*]] = arith.addi
+  // DEFAULT-ONE-NEXT:      %[[SECOND:.*]] = arith.addi
+  // DEFAULT-ONE-NEXT:      scf.yield %[[SECOND]]
+  // DEFAULT-ONE-NEXT:    }
+  tt.func public @default_num_stages_one(%lb: i32, %ub: i32, %step: i32, %init: i32) -> i32 {
+    %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %init) -> i32 : i32 {
+      %first = arith.addi %iv, %acc {loop.cluster = 1 : i32, loop.stage = 0 : i32} : i32
+      %second = arith.addi %first, %acc {loop.cluster = 0 : i32, loop.stage = 1 : i32} : i32
+      scf.yield %second : i32
+    } {tt.scheduled_max_stage = 1 : i32}
+    tt.return %result : i32
+  }
+
+  // A loop produced inside warp specialization has an internal schedule whose
+  // stages are independent of the source loop's num_stages setting.
+  // WARP-SCHEDULE-LABEL: @warp_specialized_schedule
+  // WARP-SCHEDULE:          ttg.warp_specialize(
+  // WARP-SCHEDULE:          default {
+  // WARP-SCHEDULE-NEXT:       %[[PROLOGUE:.*]] = arith.addi
+  // WARP-SCHEDULE-NEXT:       %{{.*}}:2 = scf.for {{.*}} iter_args({{.*}}, {{.*}}) -> (i32, i32)
+  tt.func public @warp_specialized_schedule(%lb: i32, %ub: i32, %step: i32, %init: i32) -> i32 {
+    %ws_result = ttg.warp_specialize(%init)
+    default {
+      %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %init) -> i32 : i32 {
+        %first = arith.addi %iv, %acc {loop.cluster = 1 : i32, loop.stage = 0 : i32} : i32
+        %second = arith.addi %first, %acc {loop.cluster = 0 : i32, loop.stage = 1 : i32} : i32
+        scf.yield %second : i32
+      } {tt.num_stages = 1 : i32, tt.scheduled_max_stage = 1 : i32}
+      ttg.warp_yield %result : i32
+    } : (i32) -> i32
+    tt.return %ws_result : i32
+  }
+}
+
+// -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>

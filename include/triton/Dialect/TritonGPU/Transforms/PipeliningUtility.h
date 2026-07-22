@@ -165,6 +165,11 @@ gpu::SharedEncodingTrait getSharedEncoding(Operation *loadOp);
 // specified.
 int getNumStagesOrDefault(scf::ForOp forOp, int defaultNumStages);
 
+// Return true if a loop should undergo cross-iteration software pipelining.
+// Loops materialized inside a warp-specialize op carry compiler-generated
+// schedules that are independent of the source loop's stage setting.
+bool shouldPipelineLoop(scf::ForOp forOp, int defaultNumStages);
+
 // Given a result of MemDescIndex, or Alloca, create a MemDescIndex with a
 // single buffer slice (leading dimension equal to 1), at the given index.
 TypedValue<triton::gpu::MemDescType>

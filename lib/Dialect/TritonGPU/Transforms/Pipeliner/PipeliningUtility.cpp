@@ -564,6 +564,11 @@ int mlir::triton::getNumStagesOrDefault(scf::ForOp forOp,
   return defaultNumStages;
 }
 
+bool mlir::triton::shouldPipelineLoop(scf::ForOp forOp, int defaultNumStages) {
+  return getNumStagesOrDefault(forOp, defaultNumStages) > 1 ||
+         forOp->getParentOfType<triton::gpu::WarpSpecializeOp>();
+}
+
 TypedValue<ttg::MemDescType>
 triton::createSingleBufferView(OpBuilder &builder, Value alloc, Value idx) {
   assert(isa<ttg::MemDescType>(alloc.getType()) && "Expected MemDescType");

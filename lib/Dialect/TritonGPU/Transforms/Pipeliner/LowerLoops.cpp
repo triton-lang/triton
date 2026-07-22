@@ -1064,15 +1064,24 @@ void lowerLoop(scf::ForOp forOp,
 
 } // namespace
 
-void lowerLoops(ModuleOp moduleOp) {
+static void lowerLoops(ModuleOp moduleOp, std::optional<int> defaultNumStages) {
   triton::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
   SmallVector<scf::ForOp> loops;
-  moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
+  moduleOp->walk([&](scf::ForOp forOp) {
+    if (!defaultNumStages || shouldPipelineLoop(forOp, *defaultNumStages))
+      loops.push_back(forOp);
+  });
   if (loops.empty())
     return;
   for (auto forOp : loops) {
     lowerLoop(forOp, axisInfoAnalysis);
   }
+}
+
+void lowerLoops(ModuleOp moduleOp) { lowerLoops(moduleOp, std::nullopt); }
+
+void lowerLoops(ModuleOp moduleOp, int defaultNumStages) {
+  lowerLoops(moduleOp, std::optional<int>(defaultNumStages));
 }
 
 } // namespace gpu

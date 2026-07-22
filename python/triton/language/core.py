@@ -3565,6 +3565,9 @@ class range(base_value):
     :param step: the step value.
     :param num_stages: pipeline the loop into this many stages (so there are
         :code:`num_stages` iterations of the loop in flight at once).
+        Values of 0 or 1 disable cross-iteration software pipelining for the
+        loop, but do not prevent target-specific asynchronous execution within
+        a single iteration.
 
         Note this is subtly different than passing :code:`num_stages` as a
         kernel argument.  The kernel argument only pipelines loads that feed
