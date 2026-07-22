@@ -1370,7 +1370,7 @@ LinearLayout toLinearLayout(RankedTensorType type) {
 LinearLayout toLinearLayout(MemDescType type) {
   // For TMEM we instantiate the subview directly. This is possible
   // as TMEM has no swizzling.
-  if (isa<TensorMemoryEncodingAttr>(type.getEncoding())) {
+  if (isa<nvidia_gpu::TensorMemorySpaceAttr>(type.getMemorySpace())) {
     auto shape = type.getShape().take_back(2);
     auto allocShape = type.getAllocShape().take_back(2);
     auto ll = toLinearLayout(allocShape, type.getEncoding());

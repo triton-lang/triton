@@ -694,12 +694,44 @@ LogicalResult MemDescReinterpretOp::verify() {
     auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
     return ty.getShape().take_back(rank) != ty.getAllocShape().take_back(rank);
   };
-  if (isSubview(srcTy) || isSubview(dstTy))
+  bool srcIsSubview = isSubview(srcTy);
+  bool srcIsTmem =
+      isa<nvidia_gpu::TensorMemorySpaceAttr>(srcTy.getMemorySpace());
+  if (isSubview(dstTy) || (srcIsSubview && !srcIsTmem))
     return emitError("source and result must not be subviews; reinterpret the "
                      "parent descriptor and then take a subview");
+  if (srcIsSubview) {
+    auto rank = cast<LayoutEncodingTrait>(srcEnc).getRank();
+    auto allocLayout =
+        toLinearLayout(srcTy.getAllocShape().take_back(rank), srcEnc);
+    auto viewLayout = toLinearLayout(srcTy);
+    const auto &allocBases = allocLayout.getBases();
+    const auto &viewBases = viewLayout.getBases();
+    if (viewBases.size() != allocBases.size())
+      return emitError("source subview must be contiguous");
+    for (auto [view, alloc] : llvm::zip_equal(viewBases, allocBases)) {
+      if (view.first != alloc.first ||
+          view.second.size() > alloc.second.size() ||
+          !std::equal(view.second.begin(), view.second.end(),
+                      alloc.second.begin()))
+        return emitError("source subview must be contiguous");
+    }
+  }
   assert((isa<SharedMemorySpaceAttr, nvidia_gpu::TensorMemorySpaceAttr>(
               srcTy.getMemorySpace()) &&
           "expected shared or tensor memory"));
+  if (srcIsTmem) {
+    auto srcAlloc = nvidia_gpu::getTmemAllocSizes(srcTy);
+    auto dstAlloc = nvidia_gpu::getTmemAllocSizes(dstTy);
+    if (dstAlloc.numRows > srcAlloc.numRows ||
+        dstAlloc.numCols > srcAlloc.numCols)
+      return emitError()
+             << "result logical storage size must not exceed source "
+                "logical storage size ("
+             << srcAlloc.numRows << "x" << srcAlloc.numCols << " vs "
+             << dstAlloc.numRows << "x" << dstAlloc.numCols << ")";
+    return success();
+  }
   auto getViewNumBits = [](MemDescType ty) {
     auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
     auto shape = ty.getAllocShape().take_back(rank);
@@ -710,12 +742,10 @@ LogicalResult MemDescReinterpretOp::verify() {
     int64_t numLayoutCopies = 1;
     for (int64_t dim : ty.getAllocShape().drop_back(rank))
       numLayoutCopies *= dim;
-    // Shared memory is allocated by offset and TMEM is allocated by column;
-    // prefix dimensions outside the layout-ranked suffix represent separate
-    // copies of that logical allocation.
+    // Shared memory is allocated by offset; prefix dimensions outside the
+    // layout-ranked suffix represent separate copies of that allocation.
     auto *ctx = ty.getContext();
-    bool isSharedMemory = isa<SharedMemorySpaceAttr>(ty.getMemorySpace());
-    auto dim = StringAttr::get(ctx, isSharedMemory ? "offset" : "col");
+    auto dim = StringAttr::get(ctx, "offset");
     return numLayoutCopies * layout.getInDimSize(dim) *
            ty.getElementTypeBitWidth();
   };

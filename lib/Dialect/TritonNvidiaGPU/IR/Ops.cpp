@@ -1662,19 +1662,10 @@ LogicalResult TMEMCopyOp::verify() {
 LogicalResult TMEMSubSliceOp::verify() {
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
   auto dstTy = cast<triton::gpu::MemDescType>(getResult().getType());
-  auto encoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-      srcTy.getEncoding());
-  if (!encoding)
+  if (!isa<TensorMemorySpaceAttr>(srcTy.getMemorySpace()))
     return emitOpError("The source must be a tensor memory buffer.");
-  auto dstEncoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-      dstTy.getEncoding());
-  if (!dstEncoding)
+  if (!isa<TensorMemorySpaceAttr>(dstTy.getMemorySpace()))
     return emitOpError("The destination must be a tensor memory buffer.");
-  if (dstEncoding.getBlockM() != encoding.getBlockM() ||
-      dstEncoding.getCGALayout() != encoding.getCGALayout() ||
-      dstEncoding.getColStride() != encoding.getColStride())
-    return emitOpError("The destination must have the same block size and "
-                       "CTASplit size as the source.");
   if (srcTy.getElementType() != dstTy.getElementType())
     return emitOpError(
         "The source and result must have the same element type.");
@@ -1695,13 +1686,40 @@ LogicalResult TMEMSubSliceOp::verify() {
   auto srcShape = srcTy.getShape();
   auto dstShape = dstTy.getShape();
   auto offset = getOffset();
-  if (offset & (dstShape[dim] - 1)) {
-    return emitError("The split offset may not touch the tile");
-  }
-  if (offset + dstShape[dim] > srcShape[dim]) {
+  if (offset < 0 || offset + dstShape[dim] > srcShape[dim]) {
     return emitError("The split offset may not exceed the source shape");
   }
   auto srcLL = toLinearLayout(srcTy);
+  if (offset & (dstShape[dim] - 1)) {
+    // An unaligned slice can carry through the logical bits between its
+    // lowest set offset bit and the highest bit changed by the slice. For
+    // example, an N-slice at offset 208 with size 256 spans [208, 463], so
+    // it needs consecutive [0, 16], [0, 32], ..., [0, 256] bases in one
+    // physical TMEM address dimension. The other set offset bits contribute
+    // only to the translated base pointer.
+    unsigned firstBit = llvm::countr_zero(static_cast<uint32_t>(offset));
+    uint64_t last = uint64_t(offset) + dstShape[dim] - 1;
+    unsigned lastBit = llvm::Log2_64(uint64_t(offset) ^ last);
+    unsigned numBits = lastBit - firstBit + 1;
+    auto hasContiguousBases = [&](StringAttr inDim) {
+      const auto &bases = srcLL.getBases().lookup(inDim);
+      for (unsigned start = 0; start + numBits <= bases.size(); ++start) {
+        bool contiguous = true;
+        for (unsigned bit = 0; bit < numBits; ++bit) {
+          const auto &basis = bases[start + bit];
+          contiguous &= basis[1 - dim] == 0 &&
+                        basis[dim] == (int64_t{1} << (firstBit + bit));
+        }
+        if (contiguous)
+          return true;
+      }
+      return false;
+    };
+    auto kRow = StringAttr::get(getContext(), "row");
+    auto kCol = StringAttr::get(getContext(), "col");
+    if (!hasContiguousBases(kRow) && !hasContiguousBases(kCol))
+      return emitError("The split offset may not touch the tile");
+  }
   auto isTrimmed = [&](ArrayRef<int32_t> basis) {
     return basis[dim] >= dstShape[dim];
   };
