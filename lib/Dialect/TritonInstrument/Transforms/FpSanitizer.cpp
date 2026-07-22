@@ -11,6 +11,7 @@
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 #include <cassert>
@@ -635,6 +636,9 @@ Value castFloatPayloadToType(PatternRewriter &rewriter, Location loc, Value v,
     return arith::ExtSIOp::create(rewriter, loc, targetTy, v);
 
   assert(srcWidth > dstWidth && "expected a narrowing payload cast");
+  if (tt::tools::getBoolEnv("TRITON_FPSAN_HOMOMORPHIC_CASTS"))
+    return arith::TruncIOp::create(rewriter, loc, targetTy, v);
+
   Value signShift = getUIntConstantLike(rewriter, loc, v.getType(),
                                         static_cast<uint64_t>(srcWidth - 1));
   Value sign = arith::ShRUIOp::create(rewriter, loc, v, signShift);
