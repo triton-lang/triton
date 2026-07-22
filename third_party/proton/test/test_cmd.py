@@ -1,6 +1,7 @@
 import pytest
 import subprocess
 import json
+import os
 import pathlib
 import sys
 
@@ -8,6 +9,35 @@ import sys
 def test_help():
     # Only check if the viewer can be invoked
     subprocess.check_call(["proton", "-h"], stdout=subprocess.DEVNULL)
+
+
+def test_rocprofiler_multi_client_shutdown(tmp_path: pathlib.Path):
+    script = """
+import pathlib
+import sys
+
+import torch
+
+if torch.version.hip is None:
+    raise SystemExit(77)
+
+import triton.profiler as proton
+
+session = proton.start(str(pathlib.Path(sys.argv[1]).with_suffix("")))
+proton.finalize(session)
+"""
+    env = os.environ.copy()
+    env.pop("ROCPROFILER_REGISTER_FORCE_LOAD", None)
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path / "multi_client.hatchet")],
+        capture_output=True,
+        env=env,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode == 77:
+        pytest.skip("Requires a HIP PyTorch build")
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize("mode", ["script", "python", "pytest"])
