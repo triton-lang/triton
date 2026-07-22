@@ -348,6 +348,7 @@ def TT_AtomicPollOp : TT_Op<"atomic_poll", [
 }
 
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
+  AtomicOpInterface,
   SameOperandsAndResultShape,
   SameOperandsAndResultEncoding,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
@@ -386,6 +387,7 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
 }
 
 def TT_AtomicCASOp : TT_Op<"atomic_cas", [
+  AtomicOpInterface,
   SameOperandsAndResultShape,
   SameOperandsAndResultEncoding,
   TypesMatchWith<"ptr type matches cmp type", "cmp", "ptr",

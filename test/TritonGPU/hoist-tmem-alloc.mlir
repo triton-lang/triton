@@ -268,15 +268,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @two_dots
-  // CHECK: %[[ACC_TM1:.*]] = ttng.tmem_alloc : ()
-  // CHECK: %[[ACC_TM2:.*]] = ttng.tmem_alloc : ()
-  // CHECK: scf.for
-  // CHECK:   ttng.tmem_store
-  // CHECK:   ttng.tc_gen5_mma
-  // CHECK:   ttng.tmem_load
-  // CHECK:   ttng.tmem_store
-  // CHECK:   ttng.tc_gen5_mma
-  // CHECK:   ttng.tmem_load
+  // CHECK: %[[ACC_TM:.*]], %[[ALLOC_TOK:.*]] = ttng.tmem_alloc : ()
+  // CHECK-NOT: ttng.tmem_alloc
+  // CHECK: scf.for {{.*}} iter_args(%[[TOK:.*]] = %[[ALLOC_TOK]])
+  // CHECK:   %[[INIT_TOK:.*]] = ttng.tmem_store {{.*}}, %[[ACC_TM]][%[[TOK]]]
+  // CHECK:   %[[MMA0:.*]] = ttng.tc_gen5_mma {{.*}}, %[[ACC_TM]][%[[INIT_TOK]]]
+  // CHECK-NOT: ttng.tmem_load
+  // CHECK-NOT: ttng.tmem_store
+  // CHECK:   %[[MMA1:.*]] = ttng.tc_gen5_mma {{.*}}, %[[ACC_TM]][%[[MMA0]]]
+  // CHECK:   ttng.tmem_load %[[ACC_TM]][%[[MMA1]]]
   tt.func public @two_dots(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}, %acc_ptr: tensor<128x128x!tt.ptr<f32>, #blocked> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}, %res_ptr: tensor<128x128x!tt.ptr<f32>, #blocked> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}, %arg3: i32) {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
@@ -432,6 +432,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %result1, %token1 = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
     %token2 = ttng.tmem_store %result, %result1[%token1], %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     tt.return %result1, %token2 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @forward_tmem_load_through_convert_layout
+  // CHECK-SAME: %[[MEMDESC:.+]]: !ttg.memdesc
+  // CHECK-SAME: %[[TOKEN:.+]]: !ttg.async.token
+  // CHECK-NEXT: tt.return %[[MEMDESC]], %[[TOKEN]]
+  // POST-PIPELINE-LABEL: @forward_tmem_load_through_convert_layout
+  // POST-PIPELINE-SAME: %[[POST_MEMDESC:.+]]: !ttg.memdesc
+  // POST-PIPELINE-SAME: %[[POST_TOKEN:.+]]: !ttg.async.token
+  // POST-PIPELINE-NEXT: tt.return %[[POST_MEMDESC]], %[[POST_TOKEN]]
+  tt.func public @forward_tmem_load_through_convert_layout(
+      %m: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+      %t: !ttg.async.token) -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token) {
+    %result, %load_token = ttng.tmem_load %m[%t] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    %converted = ttg.convert_layout %result : tensor<128x128xf32, #blocked> -> tensor<128x128xf32, #blocked1>
+    %next, %next_token = ttng.tmem_alloc %converted : (tensor<128x128xf32, #blocked1>) -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    tt.return %next, %next_token : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token
   }
 }
 

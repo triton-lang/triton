@@ -130,6 +130,12 @@ TEST_F(LinearLayoutTest, TimesEquals) {
   EXPECT_EQ(prod, LinearLayout::identity1D(32, S("in"), S("out")));
 }
 
+TEST_F(LinearLayoutTest, ConcatRequiresDisjointDimensions) {
+  auto layout = LinearLayout::identity1D(2, S("in"), S("out"));
+  ASSERT_DEATH((void)layout.concatIns(layout), "disjoint input dimensions");
+  ASSERT_DEATH((void)layout.concatOuts(layout), "disjoint output dimensions");
+}
+
 TEST_F(LinearLayoutTest, GetOutDimSizeLog2) {
   LinearLayout layout(
       {
@@ -386,6 +392,24 @@ TEST_F(LinearLayoutTest, InvertAndCompose_Simple) {
             LinearLayout({{S("in1"), {{4}, {2}, {1}}}}, {S("in2")}));
   // L2 ∘ L2^-1 ∘ L1 == L1.
   EXPECT_EQ(composition.compose(l2), l1);
+}
+
+TEST_F(LinearLayoutTest, Lstsq) {
+  LinearLayout superset({{S("storage"), {{1, 1}, {2, 0}}}},
+                        {{S("x"), 4}, {S("y"), 2}},
+                        /*requireSurjective=*/false);
+  LinearLayout subset({{S("value"), {{1, 3}}}}, {{S("y"), 2}, {S("x"), 4}},
+                      /*requireSurjective=*/false);
+  LinearLayout outside({{S("value"), {{1, 0}}}}, {{S("x"), 4}, {S("y"), 2}},
+                       /*requireSurjective=*/false);
+  LinearLayout wrongDims({{S("value"), {{1}}}}, {S("z")});
+
+  auto factor = lstsq(superset, subset);
+  ASSERT_TRUE(factor);
+  EXPECT_EQ(factor->compose(superset),
+            subset.transposeOuts(llvm::to_vector(superset.getOutDimNames())));
+  EXPECT_FALSE(lstsq(superset, outside));
+  EXPECT_FALSE(lstsq(superset, wrongDims));
 }
 
 TEST_F(LinearLayoutTest, InvertAndComposeLargerA) {
@@ -704,6 +728,16 @@ TEST_F(LinearLayoutTest, EqualsChecksOutDimSizes) {
                   .equalIgnoringOutDimSizes(
                       LinearLayout({{S("in"), {{1}, {2}}}}, {{S("out"), 8}},
                                    /*requireSurjective=*/false)));
+}
+
+TEST_F(LinearLayoutTest, ResizeInDim) {
+  auto layout = LinearLayout::identity1D(4, S("in"), S("out"));
+  EXPECT_EQ(layout.resizeInDim(S("in"), 16),
+            LinearLayout({{S("in"), {{1}, {2}, {0}, {0}}}}, {{S("out"), 4}},
+                         /*requireSurjective=*/false));
+  EXPECT_EQ(layout.resizeInDim(S("in"), 2),
+            LinearLayout({{S("in"), {{1}}}}, {{S("out"), 4}},
+                         /*requireSurjective=*/false));
 }
 
 TEST_F(LinearLayoutTest, Sublayout) {
