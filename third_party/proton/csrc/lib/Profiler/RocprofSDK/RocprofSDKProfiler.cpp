@@ -566,12 +566,12 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
                     rocprofiler_tracing_operation_t operation,
                     rocprofiler_callback_tracing_hip_api_data_t *payload);
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
-  static void handleStreamCaptureBegin(
-      rocprofiler_tracing_operation_t operation);
+  static void
+  handleStreamCaptureBegin(rocprofiler_tracing_operation_t operation);
   static void handleCapturedKernelEnter();
-  static void handleGraphRuntimeExit(
-      rocprofiler_tracing_operation_t operation,
-      rocprofiler_callback_tracing_hip_api_data_t *payload);
+  static void
+  handleGraphRuntimeExit(rocprofiler_tracing_operation_t operation,
+                         rocprofiler_callback_tracing_hip_api_data_t *payload);
 #endif
   static void markerCallback(rocprofiler_callback_tracing_record_t record,
                              rocprofiler_user_data_t *userData, void *arg);
@@ -679,8 +679,8 @@ void tryBindGraphExecState(RocprofSDKProfiler::RocprofSDKProfilerPimpl *impl,
 // ---- HIP Runtime API callback (correlation tracking) ----
 
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
-void RocprofSDKProfiler::RocprofSDKProfilerPimpl::
-    handleStreamCaptureBegin(rocprofiler_tracing_operation_t operation) {
+void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleStreamCaptureBegin(
+    rocprofiler_tracing_operation_t operation) {
   if (operation != ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamBeginCapture &&
       operation != ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamBeginCapture_spt)
     return;
