@@ -214,7 +214,14 @@ struct DecomposedWarpConversion {
 // This function handles cases where the numbers of register and lane basis
 // vectors differ between the two layouts. This is done by padding the smaller
 // dimension(s) with zero vectors, ensuring that the layout conversion can be
-// represented as a permutation.
+// represented as a permutation. The layouts must not contain broadcasted
+// register bases.
+DecomposedWarpConversion
+getWarpLayoutConvertDecomposition(const triton::LinearLayout &srcLayout,
+                                  const triton::LinearLayout &dstLayout,
+                                  int bitwidth);
+
+// Type-based convenience overload that removes broadcasted register bases.
 DecomposedWarpConversion
 getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
                                   RankedTensorType dstTy, int bitwidth);

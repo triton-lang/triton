@@ -530,8 +530,8 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
                           int bitwidth);
 
 DecomposedWarpConversion
-getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
-                                  RankedTensorType dstTy, int bitwidth) {
+getWarpLayoutConvertDecomposition(const LinearLayout &srcLayout,
+                                  const LinearLayout &dstLayout, int bitwidth) {
   // Two layouts, ll_src and ll_dst, representing the same tensor can be
   // viewed as surjections of GF(2) vector spaces:
   //
@@ -567,22 +567,15 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   // `pLane`. Finally, we determine any selectors needed for byte permute
   // instructions in place of `selp` instructions when packing registers.
 
-  // We remove any broadcasting in the register dimensions of the layouts before
-  // forming the permutation `P` as the components of the decomposition directly
-  // inform the number of emitted instructions, and leaving broadcasting in
-  // would unnecessarily inflate the count.
-  auto srcLayout = toLinearLayout(srcTy);
-  auto dstLayout = toLinearLayout(dstTy);
-  auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
-  auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
-  srcLayout = removeBroadcastSrc.apply(srcLayout);
-  dstLayout = removeBroadcastDst.apply(dstLayout);
+  assert(actionRemoveBroadcastedRegs(srcLayout).isIdentity() &&
+         actionRemoveBroadcastedRegs(dstLayout).isIdentity() &&
+         "expected layouts without broadcasted registers");
 
   // We want to describe the conversion from `srcLayout` to `dstLayout` as a
   // permutation. Since this requires that each input dimension have the same
   // size in each of the layouts, we first pad the lane and register dimensions
   // with zero vectors if needed.
-  auto *ctx = srcTy.getContext();
+  auto *ctx = srcLayout.getInDimNames().begin()->getContext();
   StringAttr kReg = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
 
@@ -734,6 +727,17 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
                             /*requireSurjective=*/true);
   return {std::move(pReg), std::move(pLane), std::move(processedTranspos),
           nPack};
+}
+
+DecomposedWarpConversion
+getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
+                                  RankedTensorType dstTy, int bitwidth) {
+  auto removeBroadcastedRegs = [](RankedTensorType type) {
+    auto layout = toLinearLayout(type);
+    return actionRemoveBroadcastedRegs(layout).apply(layout);
+  };
+  return getWarpLayoutConvertDecomposition(
+      removeBroadcastedRegs(srcTy), removeBroadcastedRegs(dstTy), bitwidth);
 }
 
 static SmallVector<DecomposedWarpConversion::TranspositionInfo>

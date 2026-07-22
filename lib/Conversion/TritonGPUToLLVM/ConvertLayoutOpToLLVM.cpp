@@ -65,16 +65,18 @@ struct ConvertLayoutOpConversion
       assert(!alwaysUseWarpShuffle);
       // Transfer between values in the same CTA, or across CTAs. We move values
       // through (distributed) shared memory.
-      transferSwizzlingLocalMem(op, adaptor.getSrc(), rewriter);
+      transferSwizzlingLocalMem(op, adaptor.getSrc(), srcLayout, dstLayout,
+                                rewriter);
       return success();
     } else if (llvm::is_contained(dims, kLane)) {
       // Case 3. Transfer between values in the same warp, in which case we try
       //         to move values using warp shuffles, though if the pattern is
       //         expensive enough we fall back to using shared memory
       if (cvtNeedsWarpShuffle(srcTy, dstTy) || alwaysUseWarpShuffle)
-        return transferWithinWarp(op, adaptor, rewriter);
+        return transferWithinWarp(op, srcLayout, dstLayout, adaptor, rewriter);
 
-      transferSwizzlingLocalMem(op, adaptor.getSrc(), rewriter);
+      transferSwizzlingLocalMem(op, adaptor.getSrc(), srcLayout, dstLayout,
+                                rewriter);
       return success();
     } else if (llvm::is_contained(dims, kRegister)) {
       // Case 4. Transfer between values in the same thread, in which case we
@@ -240,16 +242,12 @@ struct ConvertLayoutOpConversion
   }
 
   void transferSwizzlingLocalMem(ConvertLayoutOp op, Value src,
+                                 const LinearLayout &srcLayout,
+                                 const LinearLayout &dstLayout,
                                  ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
-    auto *ctx = op.getContext();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
-
-    auto srcLayout = toLinearLayout(srcTy);
-    auto dstLayout = toLinearLayout(dstTy);
-    srcLayout = srcLayout.removeZeroBasesAlongDim(str_attr("register"));
-    dstLayout = dstLayout.removeZeroBasesAlongDim(str_attr("register"));
 
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto smemBase =
@@ -265,7 +263,10 @@ struct ConvertLayoutOpConversion
 
   // Use warp shuffles to implement a layout conversion where data only needs to
   // be moved within warps.
-  LogicalResult transferWithinWarp(ConvertLayoutOp op, OpAdaptor adaptor,
+  LogicalResult transferWithinWarp(ConvertLayoutOp op,
+                                   const LinearLayout &srcLayout,
+                                   const LinearLayout &dstLayout,
+                                   OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
@@ -277,7 +278,8 @@ struct ConvertLayoutOpConversion
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
     int bitwidth = getIntOrFloatOrPtrBitWidth(elemTy);
 
-    auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy, bitwidth);
+    auto factors =
+        getWarpLayoutConvertDecomposition(srcLayout, dstLayout, bitwidth);
     auto &[pReg, pLane, mixedTranspositions, nPack] = factors;
     int m = mixedTranspositions.size();
     bool pLaneIsTrivial = squareSublayoutIsIdentity(pLane, kLane);
@@ -403,9 +405,7 @@ struct ConvertLayoutOpConversion
 
     // If `dstLayout` has a smaller `kReg` dimension than `srcLayout` after
     // broadcasting is removed, then drop the extra registers from `outVals`.
-    auto dstLayout = toLinearLayout(dstTy);
-    auto strippedDstLayout = dstLayout.removeZeroBasesAlongDim(kReg);
-    outVals.resize(strippedDstLayout.getInDimSize(kReg));
+    outVals.resize(dstLayout.getInDimSize(kReg));
 
     Value result = packUniqueTensorElements(loc, getTypeConverter(), outVals,
                                             rewriter, dstTy);
