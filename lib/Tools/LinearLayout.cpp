@@ -318,6 +318,22 @@ int32_t LinearLayout::getNumConsecutiveInOut() const {
       .size;
 }
 
+int32_t LinearLayout::contiguousElemsAlongOutputDim(StringAttr outDim) const {
+  assert(hasOutDim(outDim) && "output dimension is not in the layout");
+  auto projected = sublayout(llvm::to_vector(getInDimNames()), {outDim});
+  auto outsideDim =
+      StringAttr::get(outDim.getContext(), "__contiguous_outside");
+  auto outside = identity1D(getOutDimSize(outDim), outsideDim, outDim);
+
+  // The outside component of this pseudoinverse is a cokernel map: its kernel
+  // is exactly the projected layout's image.
+  auto inverse = *lstsq(projected.concatIns(outside),
+                        identity1D(getOutDimSize(outDim), outDim, outDim));
+  uint64_t outsideMask = getInputBasisMask(inverse, outDim, {outsideDim});
+  return outsideMask ? int32_t{1} << llvm::countr_zero(outsideMask)
+                     : getOutDimSize(outDim);
+}
+
 LinearLayout LinearLayout::transposeIns(ArrayRef<StringAttr> newInDims) const {
   assertDimsEqualIgnoringOrder(newInDims, getInDimNames());
 

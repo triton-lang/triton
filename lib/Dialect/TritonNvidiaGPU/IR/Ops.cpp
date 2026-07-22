@@ -1673,22 +1673,31 @@ LogicalResult TMEMSubSliceOp::verify() {
     return emitOpError("The source and result must have the same encoding.");
   if (srcTy.getAllocShape() != dstTy.getAllocShape())
     return emitOpError("The source and result must have the same alloc shape.");
-  if (srcTy.getRank() != 2)
-    return emitOpError("The result must be a 2D tensor memory buffer.");
-  if (dstTy.getRank() != 2)
-    return emitOpError("The result must be a 2D tensor memory buffer.");
+  if (srcTy.getRank() != dstTy.getRank() ||
+      (srcTy.getRank() != 2 && srcTy.getRank() != 3))
+    return emitOpError("The source and result must both be 2D or 3D tensor "
+                       "memory buffers.");
   auto dim = getDim();
-  if (dim < 0 || dim > 1)
-    return emitOpError("The slice dimension must be 0 or 1.");
-  if (dstTy.getDimSize(1 - dim) != srcTy.getDimSize(1 - dim))
-    return emitOpError("The result must have the same size as the source in "
-                       "the dimension that is not being sliced.");
+  if (dim < 0 || dim >= srcTy.getRank())
+    return emitOpError("The slice dimension must be within the descriptor "
+                       "rank.");
+  for (int axis = 0; axis < srcTy.getRank(); ++axis)
+    if (axis != dim && dstTy.getDimSize(axis) != srcTy.getDimSize(axis))
+      return emitOpError("The result must have the same size as the source in "
+                         "the dimensions that are not being sliced.");
   auto srcShape = srcTy.getShape();
   auto dstShape = dstTy.getShape();
   auto offset = getOffset();
-  if (offset < 0 || offset + dstShape[dim] > srcShape[dim]) {
+  if (offset < 0 || int64_t(offset) + dstShape[dim] > srcShape[dim]) {
     return emitError("The split offset may not exceed the source shape");
   }
+
+  if (srcTy.getRank() == 3 && dim == 0)
+    return success();
+
+  srcShape = dropPipeliningDim(srcShape, srcTy.getEncoding());
+  dstShape = dropPipeliningDim(dstShape, dstTy.getEncoding());
+  dim -= srcTy.getRank() - srcShape.size();
   auto srcLL = toLinearLayout(srcTy);
   if (offset & (dstShape[dim] - 1)) {
     // An unaligned slice can carry through the logical bits between its
