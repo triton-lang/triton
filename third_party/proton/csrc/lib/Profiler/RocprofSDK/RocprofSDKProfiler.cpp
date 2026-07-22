@@ -1472,11 +1472,18 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStop() {
   auto &state = getRuntimeState();
   state.nvtxEnabled.store(false, std::memory_order_relaxed);
   registerRoctxCallback(false);
+
   corrIdToStreamId.clear();
   kernelPhaseTracker.clear();
+  graphToState.clear();
+  graphExecToGraph.clear();
+  graphExecToGraphExecId.clear();
+  graphStates.clear();
+
   profiler.periodicFlushingEnabled = false;
   profiler.periodicFlushingFormat.clear();
   profiler.correlation.clear();
+
   // Keep the profiling context running. rocprofiler-sdk does not reliably
   // re-intercept HIP runtime API calls after a stopContext→startContext
   // cycle on the same context. The correlation ID mechanism ensures that
