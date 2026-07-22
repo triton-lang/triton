@@ -79,6 +79,7 @@ public:
 
   bool supportsBufferAtomicRMW() const;
   bool supportsBufferAtomicFadd(Type elementType) const;
+  bool supportsBufferAtomicFMinMax(Type elementType) const;
   int32_t getBufferAtomicCachePolicy(bool hasUsers) const;
 
   bool supportMaximumMinimum() const;
