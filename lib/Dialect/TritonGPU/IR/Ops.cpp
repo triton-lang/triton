@@ -690,13 +690,18 @@ LogicalResult MemDescReinterpretOp::verify() {
     return emitError("source and result must have the same memory space");
   if (srcTy.getMutableMemory() != dstTy.getMutableMemory())
     return emitError("source and result must have the same mutability");
-  bool srcIsSubview = srcTy.getShape() != srcTy.getAllocShape();
+  auto isLayoutSubview = [](MemDescType ty) {
+    auto encoding = ty.getEncoding();
+    return dropPipeliningDim(ty.getShape(), encoding) !=
+           dropPipeliningDim(ty.getAllocShape(), encoding);
+  };
+  bool srcIsLayoutSubview = isLayoutSubview(srcTy);
   bool srcIsTmem =
       isa<nvidia_gpu::TensorMemorySpaceAttr>(srcTy.getMemorySpace());
-  if (dstTy.getShape() != dstTy.getAllocShape() || (srcIsSubview && !srcIsTmem))
+  if (isLayoutSubview(dstTy) || (srcIsLayoutSubview && !srcIsTmem))
     return emitError("source and result must not be subviews; reinterpret the "
                      "parent descriptor and then take a subview");
-  if (srcIsSubview) {
+  if (srcIsLayoutSubview) {
     auto rank = cast<LayoutEncodingTrait>(srcEnc).getRank();
     auto allocLayout =
         toLinearLayout(srcTy.getAllocShape().take_back(rank), srcEnc);
@@ -735,7 +740,7 @@ LogicalResult MemDescReinterpretOp::verify() {
                               ? paddedLinearLayout(shape, encoding)
                               : toLinearLayout(shape, encoding);
     int64_t numLayoutCopies = 1;
-    for (int64_t dim : ty.getAllocShape().drop_back(shape.size()))
+    for (int64_t dim : ty.getShape().drop_back(shape.size()))
       numLayoutCopies *= dim;
     // Shared memory is allocated by offset; prefix dimensions outside the
     // layout-ranked suffix represent separate copies of that allocation.
