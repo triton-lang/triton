@@ -481,14 +481,17 @@ such as <code class="docutils literal notranslate"><span class="pre">sqrt(x)^2</
 </ul>
 <p>Rewrite:</p>
 <ul class="simple">
-<li><p>signed integer extension or truncation in payload space, followed by
-<code class="docutils literal notranslate"><span class="pre">unembed</span></code></p></li>
+<li><p>signed integer extension when widening</p></li>
+<li><p>when narrowing, fold the discarded high payload bits into the retained bits,
+then truncate and <code class="docutils literal notranslate"><span class="pre">unembed</span></code></p></li>
+<li><p>optionally, set <code class="docutils literal notranslate"><span class="pre">TRITON_FPSAN_HOMOMORPHIC_CASTS=1</span></code> to use simple payload
+truncation when narrowing; this preserves addition across independently
+downcast partial reductions</p></li>
 </ul>
 <p>Exact preserved properties:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">0</span></code>, <code class="docutils literal notranslate"><span class="pre">+1</span></code>, and <code class="docutils literal notranslate"><span class="pre">-1</span></code> remain stable across the conversion</p></li>
 <li><p>sign-extension behavior in the payload domain</p></li>
-<li><p>truncation drops high payload bits</p></li>
 <li><p>an upcast followed by a downcast is the identity</p></li>
 </ul>
 <p>Important caveat:</p>
