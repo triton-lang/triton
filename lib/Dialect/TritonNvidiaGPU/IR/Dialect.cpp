@@ -36,6 +36,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
@@ -180,18 +181,9 @@ getDistributedLayoutForTmemLdSt(const LinearLayout &ll, TMemAccessAtom atom,
   auto *ctx = dims[0].getContext();
   // This code is dual to the one in lowerTMemLdSt
   if (bitwidth != 32) {
-    // TODO move this to a helper function
     auto kReg = StringAttr::get(ctx, "register");
-    LinearLayout quot;
-    int bestContig = 1;
-    for (int contig = 1; bitwidth * contig <= 32; contig *= 2) {
-      auto maybeQuot = divideLeft(
-          ll, LinearLayout::identity1D(contig, rowColDims[1], dims[1]));
-      if (!maybeQuot)
-        break;
-      quot = *maybeQuot;
-      bestContig = contig;
-    }
+    auto [bestContig, quot] =
+        factorMaximalIdentityPrefix(ll, rowColDims[1], dims[1], 32 / bitwidth);
 
     // Pack contiguous elements
     // This works to pack b8 or b16 into b32 but also b8 into b16 and recurse

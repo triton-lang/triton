@@ -641,6 +641,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
+def mbarrier_from_cta_kernel():
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.expect(bar, 4, from_cta=5)
+    mbarrier.arrive(bar, count=1, from_cta=5)
+
+
+def test_mbarrier_from_cta():
+    mod = run_parser(mbarrier_from_cta_kernel, *make_args(num_ctas=8), target=HOPPER_TARGET)
+    ir = anonymize_ir(mod.str_nodebug())
+    assert re.search(r"ttng\.barrier_expect %\d+, 4 \{fromCTA = 5 : i32\}, %true", ir)
+    assert re.search(r"ttng\.arrive_barrier %\d+, 1, %true_\d+ \{fromCTA = 5 : i32\}", ir)
+
+
+def test_rubin_mbarrier_arrive_from_cta():
+
+    @gluon.jit
+    def kernel():
+        bar = rubin.mbarrier.allocate_mbarrier()
+        rubin.mbarrier.arrive(bar, from_cta=0)
+
+    mod = run_parser(kernel, *make_args(num_ctas=2), target=RUBIN_TARGET)
+    assert "fromCTA = 0 : i32" in anonymize_ir(mod.str_nodebug())
+
+
+@gluon.jit
 def async_shared_store_kernel():
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[0]])
     shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=[[0]])
@@ -691,9 +716,9 @@ def test_mbarrier_arrive_multicast_not_exposed_on_blackwell():
     @gluon.jit
     def kernel():
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
-        mbarrier.arrive(bar, count=1, cta_mask=0x1)
+        mbarrier.arrive(bar, count=1, multicast_cta=0x1)
 
-    with pytest.raises(CompilationError, match="cta_mask"):
+    with pytest.raises(CompilationError, match="multicast_cta"):
         run_parser(kernel, *make_args(num_ctas=2), target=BLACKWELL_TARGET)
 
 
@@ -702,12 +727,12 @@ def test_mbarrier_arrive_multicast_negative_mask():
     @gluon.jit
     def kernel():
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], rubin.mbarrier.MBarrierLayout())
-        rubin.mbarrier.arrive(bar, count=1, cta_mask=-1)
+        rubin.mbarrier.arrive(bar, count=1, multicast_cta=-1)
 
     with pytest.raises(CompilationError) as e:
         run_parser(kernel, *make_args(num_ctas=2), target=RUBIN_TARGET)
 
-    assert "cta_mask must be positive" in str(e.value)
+    assert "multicast_cta must be positive" in str(e.value)
 
 
 def test_mbarrier_arrive_multicast_mask_too_large():
@@ -715,12 +740,12 @@ def test_mbarrier_arrive_multicast_mask_too_large():
     @gluon.jit
     def kernel():
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], rubin.mbarrier.MBarrierLayout())
-        rubin.mbarrier.arrive(bar, count=1, cta_mask=2)
+        rubin.mbarrier.arrive(bar, count=1, multicast_cta=2)
 
     with pytest.raises(CompilationError) as e:
         run_parser(kernel, *make_args(num_ctas=2), target=RUBIN_TARGET)
 
-    assert "cta_mask must be <= num_ctas - 1" in str(e.value)
+    assert "multicast_cta must be <= num_ctas - 1" in str(e.value)
 
 
 def test_mbarrier_arrive_multicast_non_int_mask():
@@ -728,12 +753,12 @@ def test_mbarrier_arrive_multicast_non_int_mask():
     @gluon.jit
     def kernel():
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], rubin.mbarrier.MBarrierLayout())
-        rubin.mbarrier.arrive(bar, count=1, cta_mask=1.5)
+        rubin.mbarrier.arrive(bar, count=1, multicast_cta=1.5)
 
     with pytest.raises(CompilationError) as e:
         run_parser(kernel, *make_args(num_ctas=2), target=RUBIN_TARGET)
 
-    assert "cta_mask must be an int" in str(e.value)
+    assert "multicast_cta must be an int" in str(e.value)
 
 
 @gluon.jit
