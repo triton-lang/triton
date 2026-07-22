@@ -996,13 +996,13 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleKernelExit(
     rocprofiler_tracing_operation_t operation) {
   if (!isKernelLaunchOperation(operation))
     return;
+  auto &dataToEntry = threadState.dataToEntry;
+  bool deactivated = dataToEntry.empty();
   threadState.exitOp();
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
   if (threadState.isStreamCapturing)
     return;
 #endif
-  auto &dataToEntry = threadState.dataToEntry;
-  bool deactivated = dataToEntry.empty();
   auto &profiler = threadState.profiler;
   if (deactivated) // Profiler is deactivated
     return;
