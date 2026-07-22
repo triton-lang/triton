@@ -2036,7 +2036,6 @@ def test_bf16_dot_sharding(device, homomorphic_casts, fresh_knobs):
     M = N = K = 64
     HALF = K // 2
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
-    fresh_knobs.compilation.fpsan_homomorphic_casts = homomorphic_casts
 
     @triton.jit
     def dot(a, b, out, K_START: tl.constexpr, BLOCK_K: tl.constexpr):
@@ -2070,6 +2069,11 @@ def test_bf16_dot_sharding(device, homomorphic_casts, fresh_knobs):
     left, leftw = _as_float_bits_tensor(np.empty((M, N), dtype=np.int16), "bf16")
     right, rightw = _as_float_bits_tensor(np.empty((M, N), dtype=np.int16), "bf16")
     split, splitw = _as_float_bits_tensor(np.empty((M, N), dtype=np.int16), "bf16")
+
+    # Ensure toggling the knob cannot reuse an in-process cached kernel.
+    fresh_knobs.compilation.fpsan_homomorphic_casts = False
+    dot[(1, )](aw, bw, wholew, K_START=0, BLOCK_K=K, num_warps=4)
+    fresh_knobs.compilation.fpsan_homomorphic_casts = homomorphic_casts
 
     dot[(1, )](aw, bw, wholew, K_START=0, BLOCK_K=K, num_warps=4)
     dot[(1, )](aw, bw, leftw, K_START=0, BLOCK_K=HALF, num_warps=4)
