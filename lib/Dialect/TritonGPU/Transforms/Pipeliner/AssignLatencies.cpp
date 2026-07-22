@@ -157,6 +157,10 @@ public:
     if (auto loadOp = dyn_cast<tt::DescriptorLoadLikeOpInterface>(op)) {
       auto descTy = cast<tt::TensorDescType>(loadOp.getDesc().getType());
       if (descTy.getSharedLayout() && !canPipelineTMALoad(op)) {
+        op->emitRemark()
+            << "Not pipelining TMA load because the per-stage shared-memory "
+               "allocation size is not a multiple of the 128-byte TMA "
+               "alignment.";
         LDBG("TMA load " << *op
                          << " has a per-stage allocation that is not aligned "
                             "for pipelining");

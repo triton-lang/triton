@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-assign-latencies=num-stages=3 -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-assign-latencies=num-stages=3 -verify-diagnostics=only-expected -o /dev/null
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #BL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -394,8 +395,28 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
                                     %lb: index, %ub: index, %step: index) {
     %c0 = arith.constant 0 : i32
     scf.for %iv = %lb to %ub step %step {
+      // expected-remark @below {{Not pipelining TMA load because the per-stage shared-memory allocation size is not a multiple of the 128-byte TMA alignment.}}
       %load = tt.descriptor_load %desc[%c0] : !tt.tensordesc<4xf32, #tiny_shared> -> tensor<4xf32, #tiny_blocked>
       "use"(%load) : (tensor<4xf32, #tiny_blocked>) -> ()
+    } {tt.num_stages = 3 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+#aligned_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#aligned_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 32, rank = 1}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  // CHECK-LABEL: @aligned_tma_stage_size
+  // CHECK: tt.descriptor_load {{.*}} {tt.latency = 2 : i32}
+  tt.func @aligned_tma_stage_size(%desc: !tt.tensordesc<32xf32, #aligned_shared>,
+                                  %lb: index, %ub: index, %step: index) {
+    %c0 = arith.constant 0 : i32
+    scf.for %iv = %lb to %ub step %step {
+      %load = tt.descriptor_load %desc[%c0] : !tt.tensordesc<32xf32, #aligned_shared> -> tensor<32xf32, #aligned_blocked>
+      "use"(%load) : (tensor<32xf32, #aligned_blocked>) -> ()
     } {tt.num_stages = 3 : i32}
     tt.return
   }
