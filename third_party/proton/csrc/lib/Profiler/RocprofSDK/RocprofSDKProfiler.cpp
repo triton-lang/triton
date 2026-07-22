@@ -588,8 +588,7 @@ void processGraphKernelRecord(
     if (nodeStateIt != nodeIdToState->end()) {
       const auto &nodeState = nodeStateIt->second;
       if (nodeState.status.isMissingName()) {
-        throw makeRuntimeError(
-            "Kernel name is missing for a graph node.");
+        throw makeRuntimeError("Kernel name is missing for a graph node.");
       }
       const bool isMetricKernel = nodeState.status.isMetricNode();
       for (auto &[data, entry] : externState.dataToGraphEntry) {
@@ -1497,8 +1496,8 @@ void RocprofSDKProfiler::doSetMode(
                                     periodicFlushingFormat, modeAndOptions,
                                     "RocprofSDKProfiler");
   } else if (!mode.empty()) {
-    throw std::invalid_argument(
-        "RocprofSDKProfiler: unsupported mode: " + mode);
+    throw std::invalid_argument("RocprofSDKProfiler: unsupported mode: " +
+                                mode);
   }
 }
 
