@@ -244,8 +244,7 @@ def mma_lut_kernel(
         lut_block_k = k_iter * (BLOCK_K // 128)
 
         block_k = k_iter
-        mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc_tma.block_type.nbytes +
-                        lut_desc.block_type.nbytes)
+        mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc_tma.block_type.nbytes + lut_desc.block_type.nbytes)
         tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_smem)
         tma.async_copy_global_to_shared(b_desc_tma, [block_n, block_k, 0, 0, 0], tma_bar, b_smem)
         tma.async_copy_global_to_shared(lut_desc, [lut_block_n, lut_block_k, 0, 0], tma_bar, lut_smem)
