@@ -2024,8 +2024,8 @@ def test_dot_explicit_and_implicit_upcasts_match(device, src_type, mid_type, m, 
 
 @pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA dot acceleration")
 @pytest.mark.parametrize("homomorphic_casts", [
-    pytest.param(False, id="non-homomorphic",
-                 marks=pytest.mark.xfail(strict=True, reason="FPSan downcasts are non-homomorphic by default")),
+    pytest.param(False, id="non-homomorphic", marks=pytest.mark.xfail(
+        strict=True, reason="FPSan downcasts are non-homomorphic by default")),
     pytest.param(True, id="homomorphic"),
 ])
 def test_bf16_dot_sharding(device, homomorphic_casts, fresh_knobs):
@@ -2071,10 +2071,10 @@ def test_bf16_dot_sharding(device, homomorphic_casts, fresh_knobs):
     right, rightw = _as_float_bits_tensor(np.empty((M, N), dtype=np.int16), "bf16")
     split, splitw = _as_float_bits_tensor(np.empty((M, N), dtype=np.int16), "bf16")
 
-    dot[(1,)](aw, bw, wholew, K_START=0, BLOCK_K=K, num_warps=4)
-    dot[(1,)](aw, bw, leftw, K_START=0, BLOCK_K=HALF, num_warps=4)
-    dot[(1,)](aw, bw, rightw, K_START=HALF, BLOCK_K=HALF, num_warps=4)
-    add[(1,)](leftw, rightw, splitw, num_warps=4)
+    dot[(1, )](aw, bw, wholew, K_START=0, BLOCK_K=K, num_warps=4)
+    dot[(1, )](aw, bw, leftw, K_START=0, BLOCK_K=HALF, num_warps=4)
+    dot[(1, )](aw, bw, rightw, K_START=HALF, BLOCK_K=HALF, num_warps=4)
+    add[(1, )](leftw, rightw, splitw, num_warps=4)
     torch.testing.assert_close(whole, split, atol=0, rtol=0)
 
 
