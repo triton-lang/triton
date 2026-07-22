@@ -240,10 +240,40 @@ GSAN_DEVICE bool canAccumulateReleaseRmw(ThreadState *state, AtomicScope scope,
                                    getGlobalState(state));
 }
 
-GSAN_DEVICE void initThread(GlobalState *globals, Location loc) {
+GSAN_DEVICE void acquireStreamClock(ThreadState *state,
+                                    const uint32_t *streamClock) {
+  bool changed = false;
+  auto *globals = getGlobalState(state);
+  for (int i = 0; i < globals->numThreads; ++i) {
+    auto epoch = __scoped_atomic_load_n(streamClock + i, __ATOMIC_ACQUIRE,
+                                        __MEMORY_SCOPE_SYSTEM);
+    if (state->vectorClock[i] < epoch) {
+      state->vectorClock[i] = static_cast<epoch_t>(epoch);
+      changed = true;
+    }
+  }
+  if (changed)
+    state->clockBufferDirty = 1;
+}
+
+GSAN_DEVICE void publishStreamClock(ThreadState *state, uint32_t *streamClock) {
+  auto *globals = getGlobalState(state);
+  for (int i = 0; i < globals->numThreads; ++i) {
+    uint32_t current = state->vectorClock[i];
+    asm volatile("red.relaxed.gpu.max.u32 [%0], %1;"
+                 :
+                 : "l"(streamClock + i), "r"(current)
+                 : "memory");
+  }
+}
+
+GSAN_DEVICE void initThread(GlobalState *globals, uint32_t *streamClock,
+                            bool acquireOnEntry, Location loc) {
   auto *state = getThreadState(globals);
 
   if (getThreadIdxX() == 0) {
+    if (acquireOnEntry)
+      acquireStreamClock(state, streamClock);
     auto smid = getSmId();
     auto tid = getDeviceThreadId(globals, smid);
 
@@ -689,9 +719,34 @@ __triton_gsan_load_tensor(void *globalState, const char *stackPtr, int numElems,
 }
 
 extern "C" GSAN_DEVICE void
-__triton_gsan_init(void *globalState, const char *file, unsigned line) {
+__triton_gsan_init(void *globalState, gsan::uint32_t *streamClock,
+                   int acquireOnEntry, const char *file, unsigned line) {
   auto loc = gsan::Location{file, line};
-  gsan::initThread(reinterpret_cast<gsan::GlobalState *>(globalState), loc);
+  gsan::initThread(reinterpret_cast<gsan::GlobalState *>(globalState),
+                   streamClock, acquireOnEntry != 0, loc);
+}
+
+extern "C" GSAN_DEVICE void
+__triton_gsan_kernel_exit(void *globalState, gsan::uint32_t *streamClock,
+                          const char *file, unsigned line) {
+  (void)file;
+  (void)line;
+  auto *state =
+      gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
+  if (gsan::getThreadIdxX() == 0)
+    gsan::publishStreamClock(state, streamClock);
+}
+
+extern "C" GSAN_DEVICE void
+__triton_gsan_grid_dependency_wait(void *globalState,
+                                   const gsan::uint32_t *streamClock,
+                                   const char *file, unsigned line) {
+  (void)file;
+  (void)line;
+  auto *state =
+      gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
+  if (gsan::getThreadIdxX() == 0)
+    gsan::acquireStreamClock(state, streamClock);
 }
 
 extern "C" GSAN_DEVICE void

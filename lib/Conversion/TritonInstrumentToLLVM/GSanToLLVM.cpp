@@ -9,6 +9,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/LogicalResult.h"
 #include <limits>
+#include <type_traits>
 
 namespace tt = mlir::triton;
 namespace tti = mlir::triton::instrument;
@@ -38,8 +39,14 @@ static constexpr StringLiteral kGSanAtomicBeginRuntimeFn =
 static constexpr StringLiteral kGSanAtomicEndRuntimeFn =
     "__triton_gsan_atomic_end_scalar";
 static constexpr StringLiteral kGSanInitRuntimeFn = "__triton_gsan_init";
+static constexpr StringLiteral kGSanKernelExitRuntimeFn =
+    "__triton_gsan_kernel_exit";
+static constexpr StringLiteral kGSanGridDependencyWaitRuntimeFn =
+    "__triton_gsan_grid_dependency_wait";
 static constexpr StringLiteral kGSanGlobalStateArgAttr =
     "tti.gsan_global_state";
+static constexpr StringLiteral kGSanStreamClockArgAttr =
+    "tti.gsan_stream_clock";
 
 LLVM::LLVMFuncOp
 getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
@@ -51,7 +58,10 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
   auto *ctx = rewriter.getContext();
   SmallVector<Type> argTys;
   if (funcName == kGSanInitRuntimeFn) {
-    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty};
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanKernelExitRuntimeFn ||
+             funcName == kGSanGridDependencyWaitRuntimeFn) {
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanLoadTensorRuntimeFn ||
              funcName == kGSanStoreTensorRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty, ptr_ty(ctx), i32_ty};
@@ -323,6 +333,23 @@ FailureOr<Value> getGSanGlobalStateArg(Operation *op,
     return arg;
   }
   return emitError(loc, "Unable to find gsan global state");
+}
+
+FailureOr<Value> getGSanStreamClockArg(Operation *op,
+                                       ConversionPatternRewriter &rewriter,
+                                       Location loc) {
+  auto funcOp = op->getParentOfType<FunctionOpInterface>();
+  for (unsigned i = 0; i < funcOp.getNumArguments(); ++i) {
+    if (!funcOp.getArgAttr(i, kGSanStreamClockArgAttr))
+      continue;
+    Value arg = funcOp.getArgument(i);
+    if (arg.getType() == ptr_ty(rewriter.getContext()))
+      return arg;
+    TritonLLVMOpBuilder b(loc, rewriter);
+    arg = b.addrspacecast(ptr_ty(rewriter.getContext()), arg);
+    return arg;
+  }
+  return emitError(loc, "Unable to find gsan stream clock");
 }
 
 static LLVM::LLVMStructType
@@ -823,15 +850,51 @@ public:
     auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
     if (failed(gsanGlobalStatePtr))
       return failure();
+    auto streamClockPtr = getGSanStreamClockArg(op, rewriter, loc);
+    if (failed(streamClockPtr))
+      return failure();
 
     auto runtimeFunc =
         getOrCreateGSanRuntimeFunction(rewriter, kGSanInitRuntimeFn);
 
     TritonLLVMOpBuilder b(loc, rewriter);
     auto sourceLoc = materializeSourceLocation(rewriter, loc);
-    b.call(runtimeFunc,
-           ValueRange{*gsanGlobalStatePtr, sourceLoc.file, sourceLoc.line});
+    b.call(runtimeFunc, ValueRange{*gsanGlobalStatePtr, *streamClockPtr,
+                                   b.i32_val(op.getAcquireStreamClock()),
+                                   sourceLoc.file, sourceLoc.line});
     b.barrier(ttg::AddrSpace::Local);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+template <typename OpTy>
+struct GSanStreamClockOpConversion : public ConvertOpToLLVMPattern<OpTy> {
+  using ConvertOpToLLVMPattern<OpTy>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
+    auto streamClockPtr = getGSanStreamClockArg(op, rewriter, loc);
+    if (failed(gsanGlobalStatePtr) || failed(streamClockPtr))
+      return failure();
+
+    StringRef runtimeFn;
+    if constexpr (std::is_same_v<OpTy, tti::ExperimentalGSanKernelExitOp>)
+      runtimeFn = kGSanKernelExitRuntimeFn;
+    else
+      runtimeFn = kGSanGridDependencyWaitRuntimeFn;
+    auto runtimeFunc = getOrCreateGSanRuntimeFunction(rewriter, runtimeFn);
+    TritonLLVMOpBuilder b(loc, rewriter);
+    if constexpr (std::is_same_v<OpTy, tti::ExperimentalGSanKernelExitOp>)
+      b.barrier(ttg::AddrSpace::Local);
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    b.call(runtimeFunc, ValueRange{*gsanGlobalStatePtr, *streamClockPtr,
+                                   sourceLoc.file, sourceLoc.line});
+    if constexpr (!std::is_same_v<OpTy, tti::ExperimentalGSanKernelExitOp>)
+      b.barrier(ttg::AddrSpace::Local);
     rewriter.eraseOp(op);
     return success();
   }
@@ -844,6 +907,10 @@ void mlir::triton::populateGSanToLLVMPatterns(
     ModuleAxisInfoAnalysis &axisInfoAnalysis,
     const TargetInfoBase &targetInfo) {
   patterns.add<GSanInitOpConversion>(typeConverter);
+  patterns.add<
+      GSanStreamClockOpConversion<tti::ExperimentalGSanKernelExitOp>,
+      GSanStreamClockOpConversion<tti::ExperimentalGSanGridDependencyWaitOp>>(
+      typeConverter);
   patterns.add<GSanTensorDescInfoOpConversion>(typeConverter);
   patterns.add<GSanAtomicPollOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanAtomicCASOpConversion>(typeConverter, targetInfo);

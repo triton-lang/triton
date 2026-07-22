@@ -131,6 +131,36 @@ def test_load_store_updates_shadow(with_gsan):
     assert cell1.num_reads == 1
 
 
+@triton.jit
+def _pdl_producer_kernel(payload_ptr):
+    pid = tl.program_id(0)
+    tl.store(payload_ptr + pid, 1000 + pid)
+    tl.extra.cuda.gdc_launch_dependents()
+
+
+@triton.jit
+def _pdl_consumer_kernel(payload_ptr, result_ptr):
+    tl.extra.cuda.gdc_wait()
+    pid = tl.program_id(0)
+    value = tl.load(payload_ptr + pid)
+    tl.store(result_ptr + pid, value)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
+def test_programmatic_dependent_launch_wait_synchronizes_vector_clocks(with_gsan, capfd):
+    payload = torch.zeros(2, dtype=torch.int32, device="cuda")
+    result = torch.full_like(payload, -1)
+
+    _pdl_producer_kernel[(2, )](payload, num_warps=1)
+    compiled = _pdl_consumer_kernel[(2, )](payload, result, num_warps=1, launch_pdl=True)
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(result, torch.tensor([1000, 1001], device="cuda", dtype=torch.int32))
+    assert "griddepcontrol.wait" in compiled.asm["ptx"]
+    assert "red.relaxed.gpu.max.u32" in compiled.asm["ptx"]
+    _assert_no_gsan_runtime_output(capfd)
+
+
 @gluon.jit
 def _gluon_ws_completion_default(out_ptr, layout: gl.constexpr):
     offsets = gl.arange(0, 128, layout=layout)

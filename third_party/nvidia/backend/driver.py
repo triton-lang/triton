@@ -280,6 +280,7 @@ class CudaLauncher(object):
         self.gsan_enabled = "gsan" in getattr(metadata, "instrumentation_mode", "")
         if self.gsan_enabled:
             signature["_gsan_globals_ptr"] = "*i8"
+            signature["_gsan_stream_clock_ptr"] = "*i32"
 
         launcher = triton.runtime.driver.active.utils.launch
         expanded_signature = expand_signature(signature.values(), tensordesc_meta, "nvTmaDesc")
@@ -323,17 +324,16 @@ class CudaLauncher(object):
         kernel_args = args
         if self.gsan_enabled:
             import triton.experimental.gsan._allocator as gsan_allocator
+            import triton.experimental.gsan._stream_sync as gsan_stream_sync
             device = triton.runtime.driver.active.get_current_device()
             device_rank = gsan_allocator.get_device_rank(device)
             gsan_state_ptr = gsan_allocator.get_global_state_pointer() + device_rank * GSAN_PER_DEVICE_STATE_STRIDE
-            kernel_args = (*args, gsan_state_ptr)
+            stream_clock = gsan_stream_sync.get_launch_stream_clock(device, stream)
+            kernel_args = (*args, gsan_state_ptr, stream_clock)
 
         self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
                     kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
                     profile_scratch, self.arg_annotations, self.kernel_signature, kernel_args)
-        if self.gsan_enabled:
-            import triton.experimental.gsan._stream_sync as gsan_stream_sync
-            gsan_stream_sync.synchronize_launch_stream(device)
 
 
 class CudaDriver(GPUDriver):

@@ -34,6 +34,17 @@ def _runtime_state_layout(runtime_state_device: int, access_device: int) -> _Run
     )
 
 
+@functools.lru_cache()
+def get_launch_stream_clock(device: int, stream: int):
+    """Return the persistent completion clock for one CUDA launch stream."""
+    import torch
+
+    layout = _runtime_state_layout(get_device_rank(device), device)
+    cuda_stream = torch.cuda.ExternalStream(stream, device=device) if stream else torch.cuda.default_stream(device)
+    with torch.cuda.device(device), torch.cuda.stream(cuda_stream):
+        return torch.zeros(layout.num_threads, dtype=torch.int32, device=device)
+
+
 @contextmanager
 def _compile_without_gsan():
     with triton.knobs.compilation.scope():
