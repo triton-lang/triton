@@ -5,6 +5,7 @@ from collections import namedtuple
 from triton._C.libtriton import native_specialize_impl
 from triton.runtime.jit import MockTensor, JITCallable
 from triton._utils import canonicalize_dtype
+from triton.backends.compiler import GPUTarget
 from triton.backends.nvidia.compiler import CUDABackend
 from triton.backends.amd.compiler import HIPBackend
 from triton.language import constexpr
@@ -175,3 +176,42 @@ def test_specialize_impl(input_generator, backend, is_const, specialize_value, a
         result = native_specialize_impl(backend, arg, is_const, specialize_value, align)
         expected = reference_specialize_impl(backend, arg, is_const, specialize_value, align)
         assert result == expected
+
+
+@pytest.mark.parametrize(
+    ("instrumentation_mode", "disable_optimization", "expected_option"),
+    [
+        ("", False, ()),
+        ("consan", False, ("--Ofast-compile", "max")),
+        ("iisan,consan", False, ("--Ofast-compile", "max")),
+        ("consan", True, ("--opt-level", "0")),
+        ("fpsan", False, ("--opt-level", "1")),
+        ("gsan", False, ()),
+    ],
+)
+def test_sanitizer_ptxas_compilation_options(instrumentation_mode, disable_optimization, expected_option, monkeypatch):
+    import triton.backends.nvidia.compiler as cuda_compiler
+
+    commands = []
+
+    def run_ptxas(command, **kwargs):
+        commands.append(command)
+        with open(command[-1], "wb") as cubin:
+            cubin.write(b"compiled cubin")
+
+    monkeypatch.setenv("DISABLE_PTXAS_OPT", "1" if disable_optimization else "0")
+    monkeypatch.setattr(cuda_compiler, "get_ptxas", lambda arch: namedtuple("Tool", ["path"])("ptxas"))
+    monkeypatch.setattr(cuda_compiler.subprocess, "run", run_ptxas)
+
+    backend = CUDABackend(GPUTarget("cuda", 100, 32))
+    options = backend.parse_options({"instrumentation_mode": instrumentation_mode})
+
+    assert backend.make_cubin(".version 9.0\n", {}, options, 100) == b"compiled cubin"
+    assert len(commands) == 1
+    command = commands[0]
+    if expected_option:
+        option_index = command.index(expected_option[0])
+        assert tuple(command[option_index:option_index + 2]) == expected_option
+    else:
+        assert "--Ofast-compile" not in command
+        assert "--opt-level" not in command
