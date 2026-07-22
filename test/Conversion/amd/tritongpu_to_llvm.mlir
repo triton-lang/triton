@@ -60,6 +60,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // COMMON-LABEL: atomic_max_f16_fallback
+  tt.func @atomic_max_f16_fallback(%ptr : !tt.ptr<f16>, %mask : i1,
+                                   %value : f16) {
+    // COMMON: llvm.atomicrmw fmax
+    %0 = tt.atomic_rmw max, relaxed, gpu, %ptr, %value, %mask : (!tt.ptr<f16>, f16, i1) -> f16
+    tt.return
+  }
+
+  // COMMON-LABEL: atomic_min_bf16_fallback
+  tt.func @atomic_min_bf16_fallback(%ptr : !tt.ptr<bf16>, %mask : i1,
+                                    %value : bf16) {
+    // COMMON: llvm.atomicrmw fmin
+    %0 = tt.atomic_rmw min, relaxed, gpu, %ptr, %value, %mask : (!tt.ptr<bf16>, bf16, i1) -> bf16
+    tt.return
+  }
+
+  // COMMON-LABEL: atomic_max_f32_fallback
+  tt.func @atomic_max_f32_fallback(%ptr : !tt.ptr<f32>, %mask : i1,
+                                   %value : f32) {
+    // COMMON: llvm.atomicrmw fmax
+    %0 = tt.atomic_rmw max, relaxed, gpu, %ptr, %value, %mask : (!tt.ptr<f32>, f32, i1) -> f32
+    tt.return
+  }
+
+  // COMMON-LABEL: atomic_min_f64_fallback
+  tt.func @atomic_min_f64_fallback(%ptr : !tt.ptr<f64>, %mask : i1,
+                                   %value : f64) {
+    // COMMON: llvm.atomicrmw fmin
+    %0 = tt.atomic_rmw min, relaxed, gpu, %ptr, %value, %mask : (!tt.ptr<f64>, f64, i1) -> f64
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // COMMON-LABEL: atomic_rmw_acquire_staged_result
   tt.func @atomic_rmw_acquire_staged_result(%ptr : !tt.ptr<f32>,
                                              %out : !tt.ptr<f32>, %mask : i1,

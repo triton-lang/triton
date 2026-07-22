@@ -2287,7 +2287,16 @@ struct AtomicRMWOpConversion
                                  targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
+    Type atomicElementType = getElementTypeOrSelf(op.getVal().getType());
     auto binOp = matchAtomicOp(op.getAtomicRmwOp());
+    // MAX/MIN normally denote signed integer atomics. Float-typed Triton IR
+    // uses the same RMW enum values, so select LLVM's floating operations.
+    if (isa<FloatType>(atomicElementType)) {
+      if (op.getAtomicRmwOp() == RMWOp::MAX)
+        binOp = LLVM::AtomicBinOp::fmax;
+      else if (op.getAtomicRmwOp() == RMWOp::MIN)
+        binOp = LLVM::AtomicBinOp::fmin;
+    }
     if (!binOp)
       return rewriter.notifyMatchFailure(op, "Unsupported RMW operation");
 
@@ -2398,15 +2407,15 @@ struct AtomicRMWOpConversion
     // barriers have UnmodeledSideEffects but not mayStore(), so loads can
     // be sunk past them into successor blocks.
     //
-    // When buffer atomics are not enabled for the target (see
+    // When an atomic is not converted to a buffer operation (see
     // ConvertToBufferOps.cpp), this AtomicRMWOp lowering path is used instead.
     // emitAtomicRMW() below creates a condBr that splits the current block to
     // mask which threads execute the atomic. Without this fence, preceding LDS
     // loads (from ConvertLayoutOps or reduce cross-warp communication) can be
-    // sunk past barriers in the successor blocks. On targets where buffer
-    // atomics ARE enabled (e.g., gfx950), LLVM replaces the condBr with buffer
-    // atomic OOB offset masking, eliminating the block split entirely and
-    // avoiding this issue.
+    // sunk past barriers in the successor blocks.
+    //
+    // For atomics converted to buffer operations, OOB offset masking eliminates
+    // the block split and avoids this issue.
     //
     // This inline asm has mayStore()=true via the "~{memory}" constraint,
     // which sets SawStore in MachineSink's bottom-up walk, preventing any
