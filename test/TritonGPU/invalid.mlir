@@ -1,5 +1,41 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+// expected-error @+1 {{shape must have power-of-2 and non-zero dimensions; got 3, 4}}
+tt.func public @memdesc_non_power_of_two_layout_dimension(%arg0: !ttg.memdesc<3x4xi32, #shared, #smem, mutable, 4x4>) {
+  tt.return
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+// expected-error @+1 {{alloc shape must have power-of-2 and non-zero dimensions; got 3, 4}}
+tt.func public @memdesc_non_power_of_two_layout_allocation(%arg0: !ttg.memdesc<2x4xi32, #shared, #smem, mutable, 3x4>) {
+  tt.return
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+// expected-error @+1 {{shape has 0 dimension}}
+tt.func public @memdesc_zero_layout_dimension(%arg0: !ttg.memdesc<4x0xi32, #shared, #smem, mutable, 4x4>) {
+  tt.return
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+// expected-error @+1 {{alloc shape has 0 dimension}}
+tt.func public @memdesc_zero_allocation_dimension(%arg0: !ttg.memdesc<2x4xi32, #shared, #smem, mutable, 0x4>) {
+  tt.return
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 tt.func public @local_alloc_i1() {

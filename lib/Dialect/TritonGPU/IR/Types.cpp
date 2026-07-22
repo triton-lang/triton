@@ -95,19 +95,28 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
   if (shape.empty()) {
     return emitError() << "rank 0 memdesc is not allowed";
   }
-  // Every dimension but the first (to allow for pipelining) must be a power of
-  // 2
-  if (!llvm::all_of(shape.drop_front(1), [](int64_t dim) {
-        return llvm::isPowerOf2_64(dim) && dim > 0;
-      }))
-    return emitError()
-           << "shape must have power-of-2 and non-zero dimensions; got "
-           << shape;
-  if (shape.front() == 0)
+  if (llvm::is_contained(shape, 0))
     return emitError() << "shape has 0 dimension";
+  if (llvm::is_contained(allocShape, 0))
+    return emitError() << "alloc shape has 0 dimension";
   if (allocShape.size() < shape.size())
     return emitError()
            << "alloc shape must have at least as many dimensions as shape";
+  // Every layout dimension must be a power of 2; only a leading pipeline
+  // dimension may have another positive size.
+  ArrayRef<int64_t> layoutShape =
+      encoding ? dropPipeliningDim(shape, encoding) : shape.drop_front(1);
+  ArrayRef<int64_t> layoutAllocShape =
+      encoding ? dropPipeliningDim(allocShape, encoding)
+               : allocShape.drop_front(1);
+  if (!llvm::all_of(layoutShape, llvm::isPowerOf2_64))
+    return emitError()
+           << "shape must have power-of-2 and non-zero dimensions; got "
+           << shape;
+  if (!llvm::all_of(layoutAllocShape, llvm::isPowerOf2_64))
+    return emitError()
+           << "alloc shape must have power-of-2 and non-zero dimensions; got "
+           << allocShape;
   if (llvm::any_of(
           llvm::zip(shape, allocShape.take_back(shape.size())),
           [](auto pair) { return std::get<0>(pair) > std::get<1>(pair); }))
@@ -121,19 +130,6 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     }
     if (shape.size() != 2 && shape.size() != 3) {
       return emitError() << "rank must be 2 or 3";
-    }
-    auto isPowerOfTwo = [](int64_t dim) {
-      return llvm::isPowerOf2_64(dim) && dim > 0;
-    };
-    if (!llvm::all_of(shape.take_back(2), isPowerOfTwo)) {
-      return emitError()
-             << "shape must have power-of-2 and non-zero dimensions; got "
-             << shape;
-    }
-    if (!llvm::all_of(allocShape.take_back(2), isPowerOfTwo)) {
-      return emitError()
-             << "alloc shape must have power-of-2 and non-zero dimensions; got "
-             << allocShape;
     }
     unsigned bitwidth = elementType.getIntOrFloatBitWidth();
     if (bitwidth * enc.getColStride() > 32) {
