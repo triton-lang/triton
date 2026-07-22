@@ -1029,7 +1029,7 @@ def test_multiple_sessions(tmp_path: pathlib.Path, device: str):
     assert scope0_count + scope1_count == 3
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+@_skip_cudagraph_test
 def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -1173,7 +1173,6 @@ def test_trace(tmp_path: pathlib.Path, device: str):
         assert abs(time.time_ns() - base_time_ns) < one_day_ns
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
 def test_trace_flexible_metrics_scope_ranges(tmp_path: pathlib.Path, device: str):
 
     @triton.jit
@@ -1266,7 +1265,7 @@ def test_trace_flexible_metrics_no_kernel_anchor(tmp_path: pathlib.Path):
     assert isinstance(trace_events[0]["args"]["scope_id"], int)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph trace reconstruction")
+@_skip_cudagraph_test
 def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
