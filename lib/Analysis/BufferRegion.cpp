@@ -614,9 +614,9 @@ LogicalResult BufferRegionAnalysis::visitOperation(
   if (auto reinterpretOp = dyn_cast<ttg::MemDescReinterpretOp>(op)) {
     RegionInfo in = operands[0]->getValue();
     for (auto &region : in.regions) {
-      FailureOr<BufferRegion> reinterpreted = getMemDescRegion(
-          region.storageBase, region.affineOffset, reinterpretOp.getType(), op,
-          &footprintCache);
+      FailureOr<BufferRegion> reinterpreted =
+          getMemDescRegion(region.storageBase, region.affineOffset,
+                           reinterpretOp.getType(), op, &footprintCache);
       if (failed(reinterpreted))
         return failure();
       regionInfo.regions.insert(std::move(*reinterpreted));
