@@ -2725,6 +2725,54 @@ def test_ws_wgmma_wait_visibility(FAILURE, device, run_wrapper, monkeypatch, num
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.parametrize("EXPLICIT_BARRIER", [False, True], ids=["terminal-barrier", "explicit-barrier"])
+@pytest.mark.parametrize("DEFAULT_WARPS", [4, 8], ids=["four-default-warps", "eight-default-warps"])
+def test_cluster_barrier_warp_specialized_phase_snapshot(EXPLICIT_BARRIER, DEFAULT_WARPS, device, run_wrapper,
+                                                          monkeypatch, num_ctas):
+    if num_ctas == 1:
+        pytest.skip("cluster barriers require multiple CTAs")
+    if run_wrapper:
+        result = run_in_process(test_cluster_barrier_warp_specialized_phase_snapshot,
+                                (EXPLICIT_BARRIER, DEFAULT_WARPS, device, False, monkeypatch, num_ctas))
+        assert result.exc is None
+        assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def wait_then_signal(bar):
+        mbarrier.wait(bar.index(0), phase=0)
+        mbarrier.arrive(bar.index(1), count=1)
+
+    @gluon.jit
+    def signal_then_wait(bar):
+        mbarrier.arrive(bar.index(0), count=1)
+        mbarrier.wait(bar.index(1), phase=0)
+
+    @gluon.jit
+    def kernel(output, EXPLICIT_BARRIER: ttgl.constexpr):
+        bar = mbarrier.allocate_mbarrier(batch=2)
+        mbarrier.init(bar.index(0), count=1)
+        mbarrier.init(bar.index(1), count=1)
+        ttgl.warp_specialize([
+            (wait_then_signal, (bar, )),
+            (signal_then_wait, (bar, )),
+        ], [4], [32])
+        if EXPLICIT_BARRIER:
+            ttgl.barrier(cluster=True)
+        pid = ttgl.program_id(0)
+        ttgl.store(output + pid, pid)
+
+    output = torch.empty((num_ctas * 16, ), device=device, dtype=torch.int32)
+    for _ in range(4):
+        kernel[(num_ctas * 16, )](output, EXPLICIT_BARRIER, num_warps=DEFAULT_WARPS, num_ctas=num_ctas)
+    torch.testing.assert_close(output, torch.arange(num_ctas * 16, device=device, dtype=torch.int32))
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 def test_deadlock_two_partitions(device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
         result = run_in_process(test_deadlock_two_partitions, (device, False, monkeypatch, num_ctas))
