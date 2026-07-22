@@ -1695,9 +1695,6 @@ LogicalResult TMEMSubSliceOp::verify() {
   auto srcShape = srcTy.getShape();
   auto dstShape = dstTy.getShape();
   auto offset = getOffset();
-  if (offset & (dstShape[dim] - 1)) {
-    return emitError("The split offset may not touch the tile");
-  }
   if (offset + dstShape[dim] > srcShape[dim]) {
     return emitError("The split offset may not exceed the source shape");
   }

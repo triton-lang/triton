@@ -653,6 +653,58 @@ OpFoldResult MemDescReinterpretOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
+namespace {
+
+// Returns the layout for the complete MemDesc allocation.
+LinearLayout getAllocationLayout(MemDescType type) {
+  auto rank = cast<LayoutEncodingTrait>(type.getEncoding()).getRank();
+  auto allocShape = type.getAllocShape().take_back(rank);
+  auto encoding = type.getEncoding();
+  return isPaddedEncoding(encoding) ? paddedLinearLayout(allocShape, encoding)
+                                    : toLinearLayout(allocShape, encoding);
+}
+
+// Returns the allocation layout for a non-subview, the restricted layout for a
+// contiguous subview, or std::nullopt for a non-contiguous subview.
+std::optional<LinearLayout> getContiguousViewLayout(MemDescType view) {
+  auto rank = cast<LayoutEncodingTrait>(view.getEncoding()).getRank();
+  auto allocShape = view.getAllocShape().take_back(rank);
+  auto viewShape = view.getShape().take_back(rank);
+  LinearLayout layout = getAllocationLayout(view);
+
+  // Return the allocation layout for a non-subview.
+  if (viewShape == allocShape)
+    return layout;
+
+  // Restrict the layout outputs to the view shape.
+  for (auto [dim, size] : llvm::zip_equal(layout.getOutDimNames(), viewShape))
+    layout = layout.resizeOutDim(dim, size);
+
+  // Remove high redundant bases while preserving the block mapping.
+  auto freeVariables = layout.getFreeVariableMasks();
+  auto kBlock = StringAttr::get(view.getContext(), "block");
+  for (auto dim : layout.getInDimNames()) {
+    if (dim == kBlock)
+      continue;
+    uint32_t freeMask = freeVariables.lookup(dim);
+    int32_t inputSize = layout.getInDimSize(dim);
+    int32_t viewInputSize = inputSize;
+    while (viewInputSize > 1 && (freeMask & (viewInputSize >> 1)))
+      viewInputSize >>= 1;
+    layout = layout.resizeInDim(dim, viewInputSize);
+  }
+
+  // After removing unused high address bits, require an injective within-block
+  // address mapping to ensure the subview is contiguous.
+  if (!getLayoutWithinBlock(layout).isInjective())
+    return std::nullopt;
+
+  // Return the restricted layout for a contiguous subview.
+  return layout;
+}
+
+} // namespace
+
 LogicalResult MemDescReinterpretOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getResult().getType();
@@ -694,19 +746,23 @@ LogicalResult MemDescReinterpretOp::verify() {
     auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
     return ty.getShape().take_back(rank) != ty.getAllocShape().take_back(rank);
   };
-  if (isSubview(srcTy) || isSubview(dstTy))
-    return emitError("source and result must not be subviews; reinterpret the "
-                     "parent descriptor and then take a subview");
+
   assert((isa<SharedMemorySpaceAttr, nvidia_gpu::TensorMemorySpaceAttr>(
               srcTy.getMemorySpace()) &&
           "expected shared or tensor memory"));
-  auto getViewNumBits = [](MemDescType ty) {
+
+  // The result must not be a subview.
+  if (isSubview(dstTy))
+    return emitError("result must not be a subview");
+  auto dstLayout = getAllocationLayout(dstTy);
+
+  // The source may be a subview if it has a contiguous layout.
+  auto srcLayout = getContiguousViewLayout(srcTy);
+  if (!srcLayout)
+    return emitError("source subview must be contiguous");
+
+  auto getViewNumBits = [](MemDescType ty, const LinearLayout &layout) {
     auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
-    auto shape = ty.getAllocShape().take_back(rank);
-    auto encoding = ty.getEncoding();
-    LinearLayout layout = isPaddedEncoding(encoding)
-                              ? paddedLinearLayout(shape, encoding)
-                              : toLinearLayout(shape, encoding);
     int64_t numLayoutCopies = 1;
     for (int64_t dim : ty.getAllocShape().drop_back(rank))
       numLayoutCopies *= dim;
@@ -719,8 +775,8 @@ LogicalResult MemDescReinterpretOp::verify() {
     return numLayoutCopies * layout.getInDimSize(dim) *
            ty.getElementTypeBitWidth();
   };
-  auto srcNumBits = getViewNumBits(srcTy);
-  auto dstNumBits = getViewNumBits(dstTy);
+  auto srcNumBits = getViewNumBits(srcTy, *srcLayout);
+  auto dstNumBits = getViewNumBits(dstTy, dstLayout);
   if (dstNumBits > srcNumBits)
     return emitError() << "result logical storage size must not exceed source "
                           "logical storage size ("
