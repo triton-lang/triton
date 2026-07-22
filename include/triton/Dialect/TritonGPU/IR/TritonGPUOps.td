@@ -249,14 +249,11 @@ def TTG_MemDescSubsliceOp : TTG_Op<"memdesc_subslice", [Pure, MemDescViewTrait]>
     For example, suppose that
      - the input shape is 32x16xf16,
      - the output shape is 8x16xf16, and
-     - offsets = [8, 0].
-    Then in Python syntax, the subview covers input[8:8+8, 0:16] where input is
+     - offsets = [2, 1].
+    Then in Python syntax, the subview covers input[2:8+2, 1:16+1] where input is
     the logical tensor.
 
-    The result preserves the input allocation shape. Each offset must be
-    non-negative and the result must fit within the input view. An offset in a
-    split layout dimension must be aligned to the result tile in that
-    dimension. The leading pipelining dimension may be sliced at any offset.
+    The offsets must be larger or equal to the tile of the tensor (or zero).
   }];
   let arguments = (ins TTG_MemDescType:$src, DenseI32ArrayAttr:$offsets);
   // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
@@ -341,10 +338,11 @@ def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewT
 
   let description = [{
     The `ttg.memdesc_reinterpret` operation reinterprets a memory descriptor
-    as one with a different shape and element type. The logical storage size of
-    the result must not exceed that of the source. Because memory descriptors
-    lack strides, a source subview may only be reinterpreted if it is
-    contiguous. The result must not be a subview.
+    as one with a different shape and element type. Every physical byte, tensor
+    memory row, pipeline stage, and CTA reached by the result must also be
+    reachable through the source descriptor. Source subviews need not be
+    contiguous, but the result must describe a complete allocation rather than
+    another subview.
   }];
 
   let arguments = (ins TTG_MemDescType:$src);

@@ -269,7 +269,7 @@ SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
 SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape);
 SmallVector<int64_t> getShapePerCTA(Type type);
 
-// Returns the layout-ranked suffix, dropping a leading pipelining dimension.
+// Return the dimensions described by the encoding, excluding pipeline stages.
 template <typename T>
 ArrayRef<T> dropPipeliningDim(ArrayRef<T> shape, Attribute layout) {
   return shape.take_back(cast<LayoutEncodingTrait>(layout).getRank());

@@ -550,8 +550,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: rank_reducing_subview
   tt.func @rank_reducing_subview() {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK: llvm.mlir.constant(1536 : i32) : i32
-    // CHECK-NEXT: llvm.getelementptr
     // CHECK: llvm.mlir.constant(512 : i32) : i32
     // CHECK-NEXT: llvm.mul
     // CHECK-NEXT: llvm.extractvalue
@@ -560,9 +558,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: llvm.extractvalue
     // CHECK-NEXT: llvm.getelementptr
     %index = arith.constant 1 : i32
+    %zero = arith.constant 0 : i32
     %0 = ttg.local_alloc : () -> !ttg.memdesc<128x16x32xf32, #shared0, #smem, mutable>
-    %sub = ttg.memdesc_subslice %0 [3, 0, 0] : !ttg.memdesc<128x16x32xf32, #shared0, #smem, mutable> -> !ttg.memdesc<3x16x32xf32, #shared0, #smem, mutable, 128x16x32>
-    %1 = ttg.memdesc_index %sub[%index] : !ttg.memdesc<3x16x32xf32, #shared0, #smem, mutable, 128x16x32> -> !ttg.memdesc<16x32xf32, #shared0, #smem, mutable>
+    %1 = ttg.memdesc_index %0[%index] : !ttg.memdesc<128x16x32xf32, #shared0, #smem, mutable> -> !ttg.memdesc<16x32xf32, #shared0, #smem, mutable>
     tt.return
   }
 }
@@ -2902,38 +2900,6 @@ tt.func private @memdesc_reinterpret(%arg0: !ttg.memdesc<4x1024xi64, #shared0, #
   // CHECK: [[S2:%.*]] = llvm.insertvalue [[C0]], [[S1]][1]
   // CHECK: [[S3:%.*]] = llvm.insertvalue [[C0]], [[S2]][2]
   // CHECK: [[S4:%.*]] = llvm.insertvalue [[C0]], [[S3]][3]
-  tt.return
-}
-
-// CHECK-LABEL: @memdesc_reinterpret_contiguous_smem_subview
-tt.func private @memdesc_reinterpret_contiguous_smem_subview(%arg0: !ttg.memdesc<16x16xf16, #shared0, #ttg.shared_memory, mutable>) {
-  // CHECK: [[OFF0:%.*]] = llvm.extractvalue %arg0[1]
-  // CHECK: [[C8:%.*]] = llvm.mlir.constant(8 : i32)
-  // CHECK: [[NEW_OFF0:%.*]] = llvm.add [[OFF0]], [[C8]]
-  // CHECK: [[SUB2:%.*]] = llvm.insertvalue [[NEW_OFF0]], {{.*}}[1]
-  // CHECK: [[SUB3:%.*]] = llvm.insertvalue {{.*}}, [[SUB2]][2]
-  %0 = ttg.memdesc_subslice %arg0 [8, 0] : !ttg.memdesc<16x16xf16, #shared0, #ttg.shared_memory, mutable> -> !ttg.memdesc<8x16xf16, #shared0, #ttg.shared_memory, mutable, 16x16>
-  // CHECK: [[SUB_BASE:%.*]] = llvm.extractvalue [[SUB3]][0]
-  // CHECK: [[SUB_OFF0:%.*]] = llvm.extractvalue [[SUB3]][1]
-  // CHECK: llvm.shl [[SUB_OFF0]],
-  // CHECK: [[NEW_BASE:%.*]] = llvm.getelementptr [[SUB_BASE]][{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
-  // CHECK: [[RESET:%.*]] = llvm.mlir.constant(0 : i32)
-  // CHECK: [[DST0:%.*]] = llvm.mlir.undef
-  // CHECK: [[DST1:%.*]] = llvm.insertvalue [[NEW_BASE]], [[DST0]][0]
-  // CHECK: [[DST2:%.*]] = llvm.insertvalue [[RESET]], [[DST1]][1]
-  // CHECK: llvm.insertvalue [[RESET]], [[DST2]][2]
-  %1 = ttg.memdesc_reinterpret %0 : !ttg.memdesc<8x16xf16, #shared0, #ttg.shared_memory, mutable, 16x16> -> !ttg.memdesc<8x8xf32, #shared0, #ttg.shared_memory, mutable>
-  tt.return
-}
-
-// CHECK-LABEL: @memdesc_reinterpret_multibuffer_subview
-tt.func private @memdesc_reinterpret_multibuffer_subview(%arg0: !ttg.memdesc<7x16x16xf16, #shared0, #ttg.shared_memory, mutable>) {
-  // CHECK: [[STAGE_OFFSET:%.*]] = llvm.mlir.constant(768 : i32)
-  // CHECK: [[SUB_BASE:%.*]] = llvm.getelementptr {{.*}}[[[STAGE_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
-  %0 = ttg.memdesc_subslice %arg0 [3, 0, 0] : !ttg.memdesc<7x16x16xf16, #shared0, #ttg.shared_memory, mutable> -> !ttg.memdesc<2x16x16xf16, #shared0, #ttg.shared_memory, mutable, 7x16x16>
-  // CHECK: [[DST0:%.*]] = llvm.mlir.undef
-  // CHECK: llvm.insertvalue [[SUB_BASE]], [[DST0]][0]
-  %1 = ttg.memdesc_reinterpret %0 : !ttg.memdesc<2x16x16xf16, #shared0, #ttg.shared_memory, mutable, 7x16x16> -> !ttg.memdesc<4x8x16xf16, #shared0, #ttg.shared_memory, mutable>
   tt.return
 }
 

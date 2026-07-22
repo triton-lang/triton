@@ -14,6 +14,8 @@
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/MathExtras.h"
 
+#include <limits>
+
 // Provide custom directive handlers for declarative assemblyFormat.
 // They must be visible before including the generated op classes.
 static mlir::ParseResult parseOffsets(mlir::OpAsmParser &p,
@@ -655,68 +657,189 @@ OpFoldResult MemDescReinterpretOp::fold(FoldAdaptor adaptor) {
 
 namespace {
 
-LinearLayout getAllocationLayout(MemDescType type) {
+struct MemDescPhysicalImage {
+  LinearLayout layout;
+  StringAttr addressDim;
+  uint64_t stageStride;
+  int64_t stages;
+};
+
+LinearLayout getMemDescAllocationLayout(MemDescType type) {
   auto encoding = type.getEncoding();
-  auto allocShape = dropPipeliningDim(type.getAllocShape(), encoding);
-  return isPaddedEncoding(encoding) ? paddedLinearLayout(allocShape, encoding)
-                                    : toLinearLayout(allocShape, encoding);
+  auto shape = dropPipeliningDim(type.getAllocShape(), encoding);
+  return isPaddedEncoding(encoding) ? paddedLinearLayout(shape, encoding)
+                                    : toLinearLayout(shape, encoding);
 }
 
-LinearLayout getViewLayout(MemDescType type) {
-  auto encoding = type.getEncoding();
-  auto allocShape = dropPipeliningDim(type.getAllocShape(), encoding);
-  auto viewShape = dropPipeliningDim(type.getShape(), encoding);
-  LinearLayout layout = getAllocationLayout(type);
-
-  if (viewShape == allocShape)
-    return layout;
-
-  for (auto [dim, size] : llvm::zip_equal(layout.getOutDimNames(), viewShape))
-    layout = layout.resizeOutDim(dim, size);
-
-  // Only trim redundant high address bits; block mappings stay intact.
-  auto freeVariables = layout.getFreeVariableMasks();
-  auto kBlock = StringAttr::get(type.getContext(), "block");
-  for (auto dim : layout.getInDimNames()) {
-    if (dim == kBlock)
-      continue;
-    uint32_t used = (layout.getInDimSize(dim) - 1) & ~freeVariables.lookup(dim);
-    layout = layout.resizeInDim(dim, llvm::bit_ceil(used + 1));
-  }
-  return layout;
-}
-
-int64_t getNumLayoutCopies(MemDescType type) {
-  auto layoutRank =
-      dropPipeliningDim(type.getShape(), type.getEncoding()).size();
-  int64_t copies = 1;
-  for (int64_t dim : type.getShape().drop_back(layoutRank))
-    copies *= dim;
-  return copies;
-}
-
-int64_t getPerCopyNumBits(MemDescType type, const LinearLayout &layout) {
+MemDescPhysicalImage getMemDescPhysicalImage(MemDescType type) {
   auto *ctx = type.getContext();
-  bool isSharedMemory = isa<SharedMemorySpaceAttr>(type.getMemorySpace());
-  auto dim = StringAttr::get(ctx, isSharedMemory ? "offset" : "col");
-  return int64_t(layout.getInDimSize(dim)) * type.getElementTypeBitWidth();
+  bool shared = isa<SharedMemorySpaceAttr>(type.getMemorySpace());
+  StringAttr addressDim = StringAttr::get(ctx, shared ? "offset" : "col");
+  LinearLayout allocation = getMemDescAllocationLayout(type);
+  LinearLayout allocationInverse = allocation.pseudoinvert();
+  LinearLayout inverse = allocationInverse;
+  auto shape = dropPipeliningDim(type.getShape(), type.getEncoding());
+  auto logicalDims = llvm::to_vector(inverse.getInDimNames());
+  for (auto [dim, size] : llvm::zip_equal(logicalDims, shape))
+    inverse = inverse.resizeInDim(dim, size);
+
+  uint32_t elementBytes = type.getElementTypeBitWidth() / 8;
+  auto bases = inverse.getBases();
+  unsigned addressIndex = inverse.getOutDimIndex(addressDim);
+
+  if (isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(type.getEncoding())) {
+    auto broadcastDim = StringAttr::get(ctx, "broadcast");
+    auto rowDim = StringAttr::get(ctx, "row");
+    const auto &rowBases = allocation.getBases().lookup(rowDim);
+    for (auto [bit, logicalBasis] : llvm::enumerate(rowBases)) {
+      SmallVector<std::pair<StringAttr, int32_t>> logical;
+      for (auto [dim, value] :
+           llvm::zip_equal(allocation.getOutDimNames(), logicalBasis))
+        logical.push_back({dim, value});
+      auto representative = allocationInverse.apply(logical);
+      std::vector<int32_t> kernel;
+      bool nonzero = false;
+      for (auto [physicalDim, value] : representative) {
+        if (physicalDim == rowDim)
+          value ^= int32_t{1} << bit;
+        kernel.push_back(value);
+        nonzero |= value != 0;
+      }
+      if (nonzero)
+        bases[broadcastDim].push_back(std::move(kernel));
+    }
+  }
+
+  for (auto &[dim, dimBases] : bases)
+    for (auto &basis : dimBases)
+      basis[addressIndex] *= elementBytes;
+
+  if (elementBytes > 1) {
+    auto byteDim = StringAttr::get(ctx, "byte");
+    auto &byteBases = bases[byteDim];
+    for (uint32_t bit = 1; bit < elementBytes; bit <<= 1) {
+      std::vector<int32_t> basis(inverse.getNumOutDims(), 0);
+      basis[addressIndex] = bit;
+      byteBases.push_back(std::move(basis));
+    }
+  }
+
+  auto outDims = inverse.getOutDims();
+  for (auto &[dim, size] : outDims)
+    if (dim == addressDim)
+      size *= elementBytes;
+
+  int64_t stages = 1;
+  auto layoutRank = shape.size();
+  for (int64_t dim : type.getShape().drop_back(layoutRank))
+    stages *= dim;
+
+  return {LinearLayout(std::move(bases), outDims,
+                       /*requireSurjective=*/false),
+          addressDim,
+          uint64_t(allocation.getInDimSize(addressDim)) * elementBytes,
+          stages};
 }
 
-int64_t getContiguousViewNumBits(MemDescType type,
-                                 const LinearLayout &viewLayout) {
-  int64_t viewBits = getPerCopyNumBits(type, viewLayout);
-  int64_t copyStrideBits = getPerCopyNumBits(type, getAllocationLayout(type));
-  assert(viewBits <= copyStrideBits);
-  return viewBits == copyStrideBits ? getNumLayoutCopies(type) * viewBits
-                                    : viewBits;
+struct PhysicalImageComponent {
+  LinearLayout image;
+  uint64_t origin;
+  uint64_t addressMask;
+};
+
+SmallVector<PhysicalImageComponent>
+getPhysicalImageComponents(const MemDescPhysicalImage &physical,
+                           ArrayRef<std::pair<StringAttr, int32_t>> outDims) {
+  SmallVector<PhysicalImageComponent> components;
+  int64_t remaining = physical.stages;
+  int64_t firstStage = 0;
+  auto stageDim = StringAttr::get(
+      physical.addressDim.getContext(), "stage");
+  unsigned addressIndex = physical.layout.getOutDimIndex(physical.addressDim);
+
+  while (remaining) {
+    int64_t stageCount = llvm::bit_floor(uint64_t(remaining));
+    auto bases = physical.layout.getBases();
+    if (stageCount > 1) {
+      auto &stageBases = bases[stageDim];
+      for (int64_t stage = 1; stage < stageCount; stage <<= 1) {
+        std::vector<int32_t> basis(physical.layout.getNumOutDims(), 0);
+        basis[addressIndex] = stage * physical.stageStride;
+        stageBases.push_back(std::move(basis));
+      }
+    }
+
+    LinearLayout image(std::move(bases), outDims,
+                       /*requireSurjective=*/false);
+    uint64_t addressMask = 0;
+    for (const auto &[dim, dimBases] : image.getBases())
+      for (const auto &basis : dimBases)
+        addressMask |= static_cast<uint32_t>(basis[addressIndex]);
+    components.push_back(
+        {std::move(image), firstStage * physical.stageStride, addressMask});
+    firstStage += stageCount;
+    remaining -= stageCount;
+  }
+  return components;
 }
 
-LinearLayout getBlockImage(const LinearLayout &layout) {
-  auto inverse = layout.pseudoinvert();
-  assert(!layout.getInDimNames().empty());
-  auto *ctx = layout.getInDimNames().begin()->getContext();
-  auto kBlock = StringAttr::get(ctx, "block");
-  return inverse.sublayout(llvm::to_vector(inverse.getInDimNames()), {kBlock});
+bool isPhysicalImageContained(const MemDescPhysicalImage &src,
+                              const MemDescPhysicalImage &dst) {
+  if (src.addressDim != dst.addressDim)
+    return false;
+
+  auto srcOutDims = src.layout.getOutDims();
+  auto dstOutDims = dst.layout.getOutDims();
+  if (srcOutDims.size() != dstOutDims.size())
+    return false;
+
+  for (auto &[dim, size] : srcOutDims) {
+    if (!dst.layout.hasOutDim(dim))
+      return false;
+    size = std::max(size, dst.layout.getOutDimSize(dim));
+    if (dim == src.addressDim) {
+      uint64_t srcSpan = src.stageStride * src.stages;
+      uint64_t dstSpan = dst.stageStride * dst.stages;
+      uint64_t span = std::max({uint64_t(size), srcSpan, dstSpan});
+      if (span > uint64_t(std::numeric_limits<int32_t>::max()) / 2)
+        return false;
+      size = llvm::bit_ceil(span);
+    }
+  }
+  for (auto &[dim, size] : dstOutDims)
+    size = srcOutDims[src.layout.getOutDimIndex(dim)].second;
+
+  auto srcComponents = getPhysicalImageComponents(src, srcOutDims);
+  auto dstComponents = getPhysicalImageComponents(dst, dstOutDims);
+  auto originDim = StringAttr::get(src.addressDim.getContext(), "origin");
+  unsigned dstAddressIndex = dst.layout.getOutDimIndex(dst.addressDim);
+
+  for (const auto &dstComponent : dstComponents) {
+    bool contained = false;
+    for (const auto &srcComponent : srcComponents) {
+      if (dstComponent.origin < srcComponent.origin)
+        continue;
+      uint64_t relativeOrigin = dstComponent.origin - srcComponent.origin;
+      if (relativeOrigin & dstComponent.addressMask)
+        continue;
+
+      auto bases = dstComponent.image.getBases();
+      if (relativeOrigin) {
+        std::vector<int32_t> basis(dstComponent.image.getNumOutDims(), 0);
+        basis[dstAddressIndex] = relativeOrigin;
+        bases[originDim].push_back(std::move(basis));
+      }
+      LinearLayout translated(std::move(bases), dstOutDims,
+                              /*requireSurjective=*/false);
+      if (lstsq(srcComponent.image, translated)) {
+        contained = true;
+        break;
+      }
+    }
+    if (!contained)
+      return false;
+  }
+  return true;
 }
 
 } // namespace
@@ -765,37 +888,21 @@ LogicalResult MemDescReinterpretOp::verify() {
     return emitError("source and result must have the same memory space");
   if (srcTy.getMutableMemory() != dstTy.getMutableMemory())
     return emitError("source and result must have the same mutability");
-  auto hasLayoutSubview = [](MemDescType ty) {
-    auto encoding = ty.getEncoding();
-    return dropPipeliningDim(ty.getShape(), encoding) !=
-           dropPipeliningDim(ty.getAllocShape(), encoding);
-  };
+  if (dstTy.getShape() != dstTy.getAllocShape())
+    return emitError("result must not be a subview");
   assert((isa<SharedMemorySpaceAttr, nvidia_gpu::TensorMemorySpaceAttr>(
               srcTy.getMemorySpace()) &&
           "expected shared or tensor memory"));
 
-  if (dstTy.getShape() != dstTy.getAllocShape())
-    return emitError("result must not be a subview");
-
-  auto srcLayout = getViewLayout(srcTy);
-  if (hasLayoutSubview(srcTy) && !getLayoutWithinBlock(srcLayout).isInjective())
-    return emitError("source subview must be contiguous");
-  auto dstLayout = getViewLayout(dstTy);
-
-  auto kBlock = StringAttr::get(getContext(), "block");
   if (isa<SharedMemorySpaceAttr>(srcTy.getMemorySpace())) {
-    auto layoutShape = dropPipeliningDim(srcTy.getShape(), srcEnc);
+    auto layout = getMemDescAllocationLayout(srcTy);
+    auto shape = dropPipeliningDim(srcTy.getShape(), srcEnc);
     auto allocShape = dropPipeliningDim(srcTy.getAllocShape(), srcEnc);
-    if (getLinearLayoutSubviewOriginMask(getAllocationLayout(srcTy),
-                                         layoutShape, allocShape, kBlock))
-      return emitError(
-          "cannot reinterpret a source subview with a possible cross-CTA "
-          "origin");
+    auto blockDim = StringAttr::get(getContext(), "block");
+    if (getLinearLayoutSubviewOriginMask(layout, shape, allocShape, blockDim))
+      return emitError("cannot reinterpret a source subview with a possible "
+                       "cross-CTA origin");
   }
-
-  if (!lstsq(getBlockImage(srcLayout), getBlockImage(dstLayout)))
-    return emitError(
-        "result CTA footprint must be contained in the source CTA footprint");
 
   if (isa<nvidia_gpu::TensorMemorySpaceAttr>(srcTy.getMemorySpace()) &&
       nvidia_gpu::getTmemAllocSizes(dstTy).numRows >
@@ -803,12 +910,10 @@ LogicalResult MemDescReinterpretOp::verify() {
     return emitError("result tensor-memory row footprint must not exceed the "
                      "source row footprint");
 
-  auto srcNumBits = getContiguousViewNumBits(srcTy, srcLayout);
-  auto dstNumBits = getContiguousViewNumBits(dstTy, dstLayout);
-  if (dstNumBits > srcNumBits)
-    return emitError() << "result logical storage size must not exceed source "
-                          "logical storage size ("
-                       << srcNumBits << " vs " << dstNumBits << ")";
+  if (!isPhysicalImageContained(getMemDescPhysicalImage(srcTy),
+                                getMemDescPhysicalImage(dstTy)))
+    return emitError("result physical address and CTA footprint must be "
+                     "contained in the source view");
   return success();
 }
 
@@ -1116,10 +1221,9 @@ LogicalResult MemDescIndexOp::verify() {
   }
 
   if (dropPipeliningDim(srcTy.getAllocShape(), srcTy.getEncoding()) !=
-      layoutShape) {
+      layoutShape)
     return emitError(
         "We only support memdesc_index of a multibuffer-prefix subview");
-  }
 
   auto srcEnc = srcTy.getEncoding();
   auto dstEnc = dstTy.getEncoding();
@@ -1131,9 +1235,8 @@ LogicalResult MemDescIndexOp::verify() {
     return emitError("src and dst must have the same type of encoding");
   }
 
-  if (dstTy.getAllocShape() != dstTy.getShape()) {
+  if (dstTy.getAllocShape() != dstTy.getShape())
     return emitError("alloc shape must match shape for the result");
-  }
 
   if (isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
     // We support only 3D -> 2D subviews with only first offset being non-zero.
@@ -1184,9 +1287,8 @@ LogicalResult MemDescSubsliceOp::verify() {
   if (srcTy.getRank() != dstTy.getRank()) {
     return emitError("result rank must equal to input rank");
   }
-  if (srcTy.getAllocShape() != dstTy.getAllocShape()) {
+  if (srcTy.getAllocShape() != dstTy.getAllocShape())
     return emitError("source and result must have the same allocation shape");
-  }
 
   auto srcEnc = srcTy.getEncoding();
   auto dstEnc = dstTy.getEncoding();
@@ -1196,21 +1298,18 @@ LogicalResult MemDescSubsliceOp::verify() {
   if (!isa<SharedEncodingTrait>(srcEnc) || !isa<SharedEncodingTrait>(dstEnc)) {
     return emitError("src and dst must both be of shared memory encoding");
   }
+
   bool isSubview = false;
   for (int i = 0; i < srcTy.getRank(); i++) {
     isSubview |= srcTy.getDimSize(i) != dstTy.getDimSize(i);
   }
   SmallVector<int64_t> offsets(getOffsets().begin(), getOffsets().end());
   for (auto [dim, offset] : llvm::enumerate(offsets)) {
-    if (offset < 0 || offset > srcTy.getDimSize(dim) - dstTy.getDimSize(dim)) {
+    if (offset < 0 || offset > srcTy.getDimSize(dim) - dstTy.getDimSize(dim))
       return emitError("subslice must fit within the source shape");
-    }
-    if (srcTy.getDimSize(dim) == dstTy.getDimSize(dim)) {
-      if (offset != 0) {
-        return emitError("A non zero offset found in a dimension that is "
-                         "not being split");
-      }
-    }
+    if (srcTy.getDimSize(dim) == dstTy.getDimSize(dim) && offset != 0)
+      return emitError("A non zero offset found in a dimension that is "
+                       "not being split");
   }
   if (!isSubview)
     return success();
@@ -1245,7 +1344,7 @@ LogicalResult MemDescSubsliceOp::verify() {
       namedOffsets.push_back({name, 0});
     for (int64_t dimSize = dstSize; dimSize < srcSize; dimSize *= 2) {
       namedOffsets[dim].second = dimSize;
-      auto physicalOffset = llInv.apply(namedOffsets)[0].second;
+      int32_t physicalOffset = llInv.apply(namedOffsets)[0].second;
       if (!llvm::isPowerOf2_32(physicalOffset) && physicalOffset != 0)
         return emitError(
             "We don't support splitting along the swizzling pattern");

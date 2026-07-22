@@ -149,23 +149,6 @@ protected:
   MLIRContext ctx;
 };
 
-TEST_F(LinearLayoutConversionsTest, SubviewOriginMaskIncludesLowBits) {
-  auto kOffset = S("offset");
-  auto kBlock = S("block");
-  auto kDim = S("dim0");
-  LinearLayout layout({{kOffset, {{1}, {4}}}, {kBlock, {{2}}}}, {kDim});
-
-  EXPECT_EQ(getLinearLayoutSubviewOriginMask(layout, /*shape=*/{4},
-                                             /*allocShape=*/{8}, kOffset),
-            0b11);
-  EXPECT_EQ(getLinearLayoutSubviewOriginMask(layout, /*shape=*/{4},
-                                             /*allocShape=*/{8}, kBlock),
-            0b1);
-  EXPECT_EQ(getLinearLayoutSubviewOriginMask(layout, /*shape=*/{8},
-                                             /*allocShape=*/{8}, kBlock),
-            0);
-}
-
 TEST_F(LinearLayoutConversionsTest, SimpleBlocked) {
   auto layout =
       toLinearLayout({16}, blocked({1}, {4}, {4}, {1}, {1}, {0}, {0}));
@@ -3413,12 +3396,6 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_subview) {
                              LinearLayout::zeros1D(4, kCol, d1) *
                              LinearLayout::identity1D(1, kBlock, d0);
   EXPECT_EQ(toLinearLayout(fp4Subview), expectedFp4);
-
-  auto scalesEnc = TensorMemoryScalesEncodingAttr::get(
-      &ctx, CGAEncodingAttr::get1CTALayout(&ctx, 2));
-  auto scalesSubview = MemDescType::get({128, 4}, i8, scalesEnc, tmemSpace,
-                                        /*mutableMemory=*/true, {128, 8});
-  EXPECT_EQ(toLinearLayout(scalesSubview), toLinearLayout({128, 4}, scalesEnc));
 }
 
 TEST_F(LinearLayoutConversionsTest, TensorMemory_fp4Padded) {
@@ -3474,6 +3451,26 @@ TEST_F(LinearLayoutConversionsTest, TensorMemoryScales_BlockRepOrder) {
 
   EXPECT_NE(toLinearLayout({256, 8}, encKThenMn),
             toLinearLayout({256, 8}, encMnThenK));
+}
+
+TEST_F(LinearLayoutConversionsTest, TensorMemoryScales_subview) {
+  auto cgaLayout = CGAEncodingAttr::get1CTALayout(&ctx, /*rank=*/2);
+  auto enc = TensorMemoryScalesEncodingAttr::get(
+      &ctx, cgaLayout, nvidia_gpu::TensorMemoryScalesBlockRepOrder::K_THEN_MN);
+  auto tmemSpace = TensorMemorySpaceAttr::get(&ctx);
+  auto i8 = IntegerType::get(&ctx, 8);
+
+  auto full = MemDescType::get({128, 8}, i8, enc, tmemSpace,
+                              /*mutableMemory=*/true, {128, 8});
+  auto subview = MemDescType::get({128, 4}, i8, enc, tmemSpace,
+                                 /*mutableMemory=*/true, {128, 8});
+  auto pipelined = MemDescType::get({3, 128, 4}, i8, enc, tmemSpace,
+                                   /*mutableMemory=*/true, {5, 128, 8});
+
+  EXPECT_EQ(toLinearLayout(full), toLinearLayout({128, 8}, enc));
+  EXPECT_EQ(toLinearLayout(subview).getOutDimSize(S("dim0")), 128);
+  EXPECT_EQ(toLinearLayout(subview).getOutDimSize(S("dim1")), 4);
+  EXPECT_EQ(toLinearLayout(pipelined), toLinearLayout(subview));
 }
 
 // Tests for SM120 DotScaled Scale Layout

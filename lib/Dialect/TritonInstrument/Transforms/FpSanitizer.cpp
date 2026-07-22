@@ -357,8 +357,9 @@ public:
         return std::nullopt;
 
       auto baseTy = cast<ttg::MemDescType>(subslice.getSrc().getType());
-      if (baseTy.getRank() != 2 || memTy.getRank() != 2 ||
-          baseInfo->tensorType.getRank() != 2)
+      if (baseTy.getRank() != memTy.getRank() ||
+          baseTy.getRank() != baseInfo->tensorType.getRank() ||
+          (baseTy.getRank() != 2 && baseTy.getRank() != 3))
         return std::nullopt;
 
       OpBuilder::InsertionGuard guard(rewriter);
@@ -366,8 +367,15 @@ public:
       auto loc = subslice.getLoc();
       // Scratch tensors are column-major. Keep the parent shape so a row
       // slice and any following column slices retain the original stride.
-      int64_t stride =
-          subslice.getDim() == 0 ? 1 : baseInfo->tensorType.getShape().front();
+      int64_t stride;
+      if (baseTy.getRank() == 3 && subslice.getDim() == 0) {
+        stride = product(baseInfo->tensorType.getShape().drop_front(1));
+      } else {
+        int layoutDim = subslice.getDim() - (baseTy.getRank() - 2);
+        stride = layoutDim == 0
+                     ? 1
+                     : baseInfo->tensorType.getShape()[baseTy.getRank() - 2];
+      }
       int64_t offset = subslice.getOffset();
       auto offsetVal = arith::ConstantOp::create(
           rewriter, loc, rewriter.getI32IntegerAttr(offset));

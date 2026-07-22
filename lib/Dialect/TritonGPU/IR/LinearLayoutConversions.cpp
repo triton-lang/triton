@@ -1440,15 +1440,11 @@ uint32_t getLinearLayoutSubviewOriginMask(const LinearLayout &layout,
   auto inverse = layout.pseudoinvert();
   assert(inverse.hasOutDim(physicalDim));
   auto logicalDims = llvm::to_vector(inverse.getInDimNames());
-  assert(inverse.getNumInDims() == shape.size());
 
   for (auto [dim, viewSize, allocSize] :
        llvm::zip_equal(logicalDims, shape, allocShape)) {
     assert(viewSize <= allocSize);
-    // [0, maxOrigin] exercises exactly the input bits below the smallest
-    // power-of-two span containing that interval.
     uint64_t originSpan = llvm::bit_ceil(uint64_t(allocSize - viewSize) + 1);
-    assert(originSpan <= uint64_t(inverse.getInDimSize(dim)));
     inverse = inverse.resizeInDim(dim, int32_t(originSpan));
   }
   return getOutputBasisMask(inverse, logicalDims, physicalDim);

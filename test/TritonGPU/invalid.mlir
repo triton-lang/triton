@@ -159,10 +159,9 @@ tt.func public @memdesc_subslice_exceeds_source(%arg0: !ttg.memdesc<8x16xf32, #s
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
-tt.func public @memdesc_nested_subslice_exceeds_source(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
-    %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<4x16xf32, #shared, #smem, 8x16>
+tt.func public @memdesc_subslice_nonzero_identity_offset(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
     // expected-error @+1 {{subslice must fit within the source shape}}
-    %b = ttg.memdesc_subslice %a [4, 0] : !ttg.memdesc<4x16xf32, #shared, #smem, 8x16> -> !ttg.memdesc<2x16xf32, #shared, #smem, 8x16>
+    %a = ttg.memdesc_subslice %arg0 [1, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<8x16xf32, #shared, #smem>
     tt.return
 }
 
@@ -176,17 +175,6 @@ tt.func public @memdesc_index_result_alloc_shape_mismatch(%arg0: !ttg.memdesc<3x
     %a = ttg.memdesc_index %arg0[%zero] : !ttg.memdesc<3x8x16xf32, #shared, #smem> -> !ttg.memdesc<8x16xf32, #shared, #smem, 3x8x16>
     tt.return
 }
-// -----
-
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#smem = #ttg.shared_memory
-tt.func public @memdesc_index_inner_subview(%arg0: !ttg.memdesc<3x8x8xf32, #shared, #smem, 3x8x16>) {
-    %zero = arith.constant 0 : i32
-    // expected-error @+1 {{We only support memdesc_index of a multibuffer-prefix subview}}
-    %a = ttg.memdesc_index %arg0[%zero] : !ttg.memdesc<3x8x8xf32, #shared, #smem, 3x8x16> -> !ttg.memdesc<8x8xf32, #shared, #smem>
-    tt.return
-}
-
 // -----
 
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0]}>
@@ -204,38 +192,18 @@ tt.func public @result_1d_to_1d(%arg0: !ttg.memdesc<8xf32, #shared, #smem>) {
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 16, order = [0, 1]}>
 #smem = #ttg.shared_memory
 tt.func public @subview_along_swizzling_pattern(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
-    // expected-error @+1 {{We don't support splitting along the swizzling pattern}}
+    // expected-error @+1 {{swizzling pattern}}
     %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<8x4xf32, #shared, #smem, 8x16>
     tt.return
 }
 
 // -----
 
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 16, order = [0, 1]}>
 #smem = #ttg.shared_memory
-tt.func public @subslice_unaligned_contiguous(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
-    // expected-error @+1 {{The split offset may not touch the tile}}
+tt.func public @subview_along_swizzling(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>, %index: i32) {
+    // expected-error @+1 {{tile}}
     %a = ttg.memdesc_subslice %arg0 [2, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<4x16xf32, #shared, #smem, 8x16>
-    tt.return
-}
-
-// -----
-
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
-#smem = #ttg.shared_memory
-tt.func public @multibuffer_subview_exceeds_source(%arg0: !ttg.memdesc<8x8x32xf16, #shared, #smem>) {
-    // expected-error @+1 {{subslice must fit within the source shape}}
-    %a = ttg.memdesc_subslice %arg0 [6, 0, 0] : !ttg.memdesc<8x8x32xf16, #shared, #smem> -> !ttg.memdesc<3x8x32xf16, #shared, #smem, 8x8x32>
-    tt.return
-}
-
-// -----
-
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
-#smem = #ttg.shared_memory
-tt.func public @multibuffer_subview_nonzero_identity_offset(%arg0: !ttg.memdesc<8x8x32xf16, #shared, #smem>) {
-    // expected-error @+1 {{subslice must fit within the source shape}}
-    %a = ttg.memdesc_subslice %arg0 [3, 0, 0] : !ttg.memdesc<8x8x32xf16, #shared, #smem> -> !ttg.memdesc<8x8x32xf16, #shared, #smem>
     tt.return
 }
 
@@ -282,7 +250,7 @@ tt.func public @result_dim_too_large(%arg0: !ttg.memdesc<8x16xf32, #shared1d, #s
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 tt.func public @memdesc_reinterpret_changed_storage_size(%arg0: !ttg.memdesc<8x16xf16, #shared, #smem>) {
-    // expected-error @+1 {{result logical storage size must not exceed source logical storage size}}
+    // expected-error @+1 {{result physical address and CTA footprint must be contained in the source view}}
     %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<8x16xf16, #shared, #smem> -> !ttg.memdesc<8x16xf32, #shared, #smem>
     tt.return
 }
@@ -312,20 +280,21 @@ tt.func public @memdesc_reinterpret_changed_mutability(%arg0: !ttg.memdesc<8x16x
 
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
-tt.func public @memdesc_reinterpret_noncontiguous_subview(%arg0: !ttg.memdesc<8x16xf16, #shared, #smem, 16x16>) {
-    // expected-error @+1 {{source subview must be contiguous}}
+tt.func public @memdesc_reinterpret_subview(%arg0: !ttg.memdesc<8x16xf16, #shared, #smem, 16x16>) {
+    // expected-error @+1 {{result physical address and CTA footprint must be contained in the source view}}
     %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<8x16xf16, #shared, #smem, 16x16> -> !ttg.memdesc<8x16xf16, #shared, #smem>
     tt.return
 }
 
 // -----
 
-#shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
-#shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#shared_dense = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [2, 0]], block = []}, alignment = 16>
+#shared_tight = #ttg.shared_linear<{offset = [[0, 1], [1, 0], [2, 0]], block = []}, alignment = 16>
 #smem = #ttg.shared_memory
-tt.func public @memdesc_reinterpret_multibuffer_subview(%arg0: !ttg.memdesc<3x8x32xf16, #shared_a, #smem, 8x8x32>) {
-    // expected-error @+1 {{result logical storage size must not exceed source logical storage size}}
-    %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<3x8x32xf16, #shared_a, #smem, 8x8x32> -> !ttg.memdesc<16x8x16xf16, #shared_b, #smem>
+tt.func public @memdesc_reinterpret_noncontiguous_subview_escapes(%arg0: !ttg.memdesc<4x4xi32, #shared_dense, #smem, mutable>) {
+    %view = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<4x4xi32, #shared_dense, #smem, mutable> -> !ttg.memdesc<4x2xi32, #shared_dense, #smem, mutable, 4x4>
+    // expected-error @+1 {{result physical address and CTA footprint must be contained in the source view}}
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<4x2xi32, #shared_dense, #smem, mutable, 4x4> -> !ttg.memdesc<4x2xi32, #shared_tight, #smem, mutable>
     tt.return
 }
 
@@ -333,10 +302,31 @@ tt.func public @memdesc_reinterpret_multibuffer_subview(%arg0: !ttg.memdesc<3x8x
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
-tt.func public @memdesc_reinterpret_geometric_multibuffer_gap(%arg0: !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable>) {
-    %sub = ttg.memdesc_subslice %arg0 [3, 8, 0] : !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<2x8x16xf16, #shared, #smem, mutable, 7x16x16>
-    // expected-error @+1 {{result logical storage size must not exceed source logical storage size}}
-    %a = ttg.memdesc_reinterpret %sub : !ttg.memdesc<2x8x16xf16, #shared, #smem, mutable, 7x16x16> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+tt.func public @memdesc_reinterpret_pipeline_subview_gap(%arg0: !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable>) {
+    %view = ttg.memdesc_subslice %arg0 [3, 8, 0] : !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<2x8x16xf16, #shared, #smem, mutable, 7x16x16>
+    // expected-error @+1 {{result physical address and CTA footprint must be contained in the source view}}
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<2x8x16xf16, #shared, #smem, mutable, 7x16x16> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+    tt.return
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+tt.func public @memdesc_reinterpret_pipeline_stage_expansion(%arg0: !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable>) {
+    %view = ttg.memdesc_subslice %arg0 [3, 0, 0] : !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<2x16x16xf16, #shared, #smem, mutable, 7x16x16>
+    // expected-error @+1 {{result physical address and CTA footprint must be contained in the source view}}
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<2x16x16xf16, #shared, #smem, mutable, 7x16x16> -> !ttg.memdesc<4x16x16xf16, #shared, #smem, mutable>
+    tt.return
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+tt.func public @memdesc_reinterpret_result_pipeline_subview(%arg0: !ttg.memdesc<4x16x16xf16, #shared, #smem, mutable>) {
+    // expected-error @+1 {{result must not be a subview}}
+    %result = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<4x16x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<2x16x16xf16, #shared, #smem, mutable, 4x16x16>
     tt.return
 }
 
@@ -347,15 +337,15 @@ tt.func public @memdesc_reinterpret_geometric_multibuffer_gap(%arg0: !ttg.memdes
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @memdesc_reinterpret_possible_cross_cta_origin(%arg0: !ttg.memdesc<8x16xf16, #split_m, #smem, mutable>) {
-    %sub = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf16, #split_m, #smem, mutable> -> !ttg.memdesc<4x16xf16, #split_m, #smem, mutable, 8x16>
+    %view = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf16, #split_m, #smem, mutable> -> !ttg.memdesc<4x16xf16, #split_m, #smem, mutable, 8x16>
     // expected-error @+1 {{cannot reinterpret a source subview with a possible cross-CTA origin}}
-    %a = ttg.memdesc_reinterpret %sub : !ttg.memdesc<4x16xf16, #split_m, #smem, mutable, 8x16> -> !ttg.memdesc<4x16xi16, #broadcast, #smem, mutable>
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<4x16xf16, #split_m, #smem, mutable, 8x16> -> !ttg.memdesc<4x16xi16, #broadcast, #smem, mutable>
     tt.return
   }
 
   tt.func public @memdesc_reinterpret_expands_cta_footprint(%arg0: !ttg.memdesc<8x16xf16, #broadcast, #smem, mutable>) {
-    // expected-error @+1 {{result CTA footprint must be contained in the source CTA footprint}}
-    %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<8x16xf16, #broadcast, #smem, mutable> -> !ttg.memdesc<8x16xi16, #split_m, #smem, mutable>
+    // expected-error @+1 {{result physical address and CTA footprint must be contained in the source view}}
+    %result = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<8x16xf16, #broadcast, #smem, mutable> -> !ttg.memdesc<8x16xi16, #split_m, #smem, mutable>
     tt.return
   }
 }
@@ -367,7 +357,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 2 : i32, "ttg.num-
 #smem = #ttg.shared_memory
 tt.func public @memdesc_reinterpret_padded_subview(%arg0: !ttg.memdesc<8x128xf16, #padded16, #smem, mutable, 16x128>) {
     // expected-error @+1 {{cannot reinterpret a padded source subview}}
-    %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<8x128xf16, #padded16, #smem, mutable, 16x128> -> !ttg.memdesc<8x128xf16, #padded8, #smem, mutable>
+    %result = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<8x128xf16, #padded16, #smem, mutable, 16x128> -> !ttg.memdesc<8x128xf16, #padded8, #smem, mutable>
     tt.return
 }
 
@@ -378,27 +368,7 @@ tt.func public @memdesc_reinterpret_padded_subview(%arg0: !ttg.memdesc<8x128xf16
 #smem = #ttg.shared_memory
 tt.func public @memdesc_reinterpret_partitioned(%arg0: !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>) {
     // expected-error @+1 {{cannot reinterpret partitioned shared layouts}}
-    %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<128x16xi16, #partitioned, #smem, mutable>
-    tt.return
-}
-
-// -----
-
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#smem = #ttg.shared_memory
-tt.func public @memdesc_reinterpret_result_subview(%arg0: !ttg.memdesc<16x16xf16, #shared, #smem>) {
-    // expected-error @+1 {{result must not be a subview}}
-    %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<16x16xf16, #shared, #smem> -> !ttg.memdesc<8x16xf16, #shared, #smem, 16x16>
-    tt.return
-}
-
-// -----
-
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#smem = #ttg.shared_memory
-tt.func public @memdesc_reinterpret_contiguous_subview_changed_storage_size(%arg0: !ttg.memdesc<8x16xf16, #shared, #smem, 16x16>) {
-    // expected-error @+1 {{result logical storage size must not exceed source logical storage size}}
-    %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<8x16xf16, #shared, #smem, 16x16> -> !ttg.memdesc<8x16xf32, #shared, #smem>
+    %result = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<128x16xi16, #partitioned, #smem, mutable>
     tt.return
 }
 

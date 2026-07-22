@@ -1675,53 +1675,57 @@ LogicalResult TMEMSubSliceOp::verify() {
     return emitOpError("The source and result must have the same encoding.");
   if (srcTy.getAllocShape() != dstTy.getAllocShape())
     return emitOpError("The source and result must have the same alloc shape.");
-  if (srcTy.getRank() != 2)
-    return emitOpError("The result must be a 2D tensor memory buffer.");
-  if (dstTy.getRank() != 2)
-    return emitOpError("The result must be a 2D tensor memory buffer.");
+  if (srcTy.getRank() != dstTy.getRank() ||
+      (srcTy.getRank() != 2 && srcTy.getRank() != 3))
+    return emitOpError("The source and result must both be 2D or 3D tensor "
+                       "memory buffers.");
   auto dim = getDim();
-  if (dim < 0 || dim > 1)
-    return emitOpError("The slice dimension must be 0 or 1.");
-  if (dstTy.getDimSize(1 - dim) != srcTy.getDimSize(1 - dim))
-    return emitOpError("The result must have the same size as the source in "
-                       "the dimension that is not being sliced.");
+  if (dim < 0 || dim >= srcTy.getRank())
+    return emitOpError("The slice dimension must be within the descriptor "
+                       "rank.");
+  for (int axis = 0; axis < srcTy.getRank(); ++axis)
+    if (axis != dim && dstTy.getDimSize(axis) != srcTy.getDimSize(axis))
+      return emitOpError("The result must have the same size as the source in "
+                         "the dimensions that are not being sliced.");
   auto srcShape = srcTy.getShape();
   auto dstShape = dstTy.getShape();
   auto offset = getOffset();
-  if (offset < 0 || offset + dstShape[dim] > srcShape[dim]) {
+  if (offset < 0 || int64_t(offset) + dstShape[dim] > srcShape[dim]) {
     return emitError("The split offset may not exceed the source shape");
   }
+
+  if (srcTy.getRank() == 3 && dim == 0)
+    return success();
+
+  int layoutDim = dim - (srcTy.getRank() - 2);
   auto srcLL = toLinearLayout(srcTy);
   if (offset & (dstShape[dim] - 1)) {
-    // An unaligned slice can carry through the logical bits between its
-    // lowest set offset bit and the highest bit changed by the slice. Those
-    // bits must be consecutive bases in one physical TMEM address dimension.
     unsigned firstBit = llvm::countr_zero(static_cast<uint32_t>(offset));
     uint64_t last = uint64_t(offset) + dstShape[dim] - 1;
     unsigned lastBit = llvm::Log2_64(uint64_t(offset) ^ last);
     unsigned numBits = lastBit - firstBit + 1;
-    auto hasContiguousBases = [&](StringAttr inDim) {
-      const auto &bases = srcLL.getBases().lookup(inDim);
+    auto hasContiguousBases = [&](StringAttr physicalDim) {
+      const auto &bases = srcLL.getBases().lookup(physicalDim);
       for (unsigned start = 0; start + numBits <= bases.size(); ++start) {
         bool contiguous = true;
         for (unsigned bit = 0; bit < numBits; ++bit) {
           const auto &basis = bases[start + bit];
-          contiguous &= basis[1 - dim] == 0 &&
-                        basis[dim] == (int64_t{1} << (firstBit + bit));
+          contiguous &= basis[1 - layoutDim] == 0 &&
+                        basis[layoutDim] == (int64_t{1} << (firstBit + bit));
         }
         if (contiguous)
           return true;
       }
       return false;
     };
-    auto kRow = StringAttr::get(getContext(), "row");
-    auto kCol = StringAttr::get(getContext(), "col");
-    if (!hasContiguousBases(kRow) && !hasContiguousBases(kCol))
+    auto rowDim = StringAttr::get(getContext(), "row");
+    auto colDim = StringAttr::get(getContext(), "col");
+    if (!hasContiguousBases(rowDim) && !hasContiguousBases(colDim))
       return emitError("The split offset may not touch the tile");
   }
 
   auto isTrimmed = [&](ArrayRef<int32_t> basis) {
-    return basis[dim] >= dstShape[dim];
+    return basis[layoutDim] >= dstShape[dim];
   };
   auto kBlock = StringAttr::get(getContext(), "block");
   if (llvm::any_of(srcLL.getBases().lookup(kBlock), isTrimmed))
@@ -1730,7 +1734,8 @@ LogicalResult TMEMSubSliceOp::verify() {
   auto dims = standardOutDimNames(getContext(), 2);
   auto logical = static_cast<int32_t>(offset);
   SmallVector<std::pair<StringAttr, int32_t>> logicalOffset = {
-      {dims[0], dim == 0 ? logical : 0}, {dims[1], dim == 1 ? logical : 0}};
+      {dims[0], layoutDim == 0 ? logical : 0},
+      {dims[1], layoutDim == 1 ? logical : 0}};
   auto rowCol = srcLL.pseudoinvert().apply(logicalOffset);
   if (uint64_t(rowCol[1].second) * srcTy.getElementTypeBitWidth() % 32 != 0)
     return emitOpError(

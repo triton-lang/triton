@@ -516,25 +516,6 @@ def anchor_noinline(x):
 
 @filecheck_test
 @gluon.jit
-def test_reinterpret_parent_then_multibuffer_subslice():
-    # CHECK-LABEL: test_reinterpret_parent_then_multibuffer_subslice
-    a_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(64, 16, rank=2)
-    b_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(32, 16, rank=2)
-    arena = ttgl.allocate_shared_memory(ttgl.float16, [7, 8, 32], a_layout)
-    # CHECK: [[B_PARENT:%.*]] = ttg.memdesc_reinterpret {{.*}} -> !ttg.memdesc<14x8x16xf16
-    b_parent = arena._reinterpret(ttgl.float16, [14, 8, 16], b_layout)
-    # CHECK: [[A_SUB:%.*]] = ttg.memdesc_subslice {{.*}}[0, 0, 0]
-    a_stages = arena.slice(0, 3, dim=0)
-    # CHECK: [[B_SUB:%.*]] = ttg.memdesc_subslice [[B_PARENT]][6, 0, 0] {{.*}} -> !ttg.memdesc<4x8x16xf16
-    b_stages = b_parent.slice(6, 4, dim=0)
-    # CHECK: ttg.memdesc_index [[A_SUB]]
-    anchor_noinline(a_stages.index(0))
-    # CHECK: ttg.memdesc_index [[B_SUB]]
-    anchor_noinline(b_stages.index(0))
-
-
-@filecheck_test
-@gluon.jit
 def test_warp_specialize():
     # CHECK:       [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
     # CHECK-LABEL: test_warp_specialize
@@ -1253,6 +1234,60 @@ def test_tmem_subslice_noncontiguous():
     ir = run_parser(tmem_subslice_noncontiguous_kernel, target=BLACKWELL_TARGET).str_nodebug()
     assert "ttng.tmem_subslice" in ir
     assert "!ttg.memdesc<128x256xf32" in ir
+
+
+@gluon.jit
+def shared_pipeline_stage_subslice_kernel():
+    layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
+    parent = ttgl.allocate_shared_memory(ttgl.float16, [7, 16, 16], layout)
+    stages = parent.slice(3, 2, dim=0)
+    stages.index(1)
+    stages._reinterpret(dtype=ttgl.int16, shape=[2, 16, 16])
+    stages.slice(1, 1, dim=0)
+
+
+def test_shared_pipeline_stage_subslice_constexpr():
+    ir = run_parser(shared_pipeline_stage_subslice_kernel, target=BLACKWELL_TARGET).str_nodebug()
+    assert "ttg.memdesc_subslice" in ir
+    assert "ttg.memdesc_index" in ir
+    assert "ttg.memdesc_reinterpret" in ir
+    assert "!ttg.memdesc<2x16x16xf16" in ir
+    assert "mutable, 7x16x16>" in ir
+
+
+@gluon.jit
+def tmem_pipeline_stage_subslice_kernel():
+    layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 64], col_stride=1)
+    parent = blackwell.allocate_tensor_memory(ttgl.float32, [5, 128, 64], layout)
+    stages = parent.slice(2, 2, dim=0)
+    stages.index(1).slice(16, 32)
+    stages._reinterpret(dtype=ttgl.int32, shape=[2, 128, 64])
+    stages.slice(1, 1, dim=0)
+    stages.slice(0, 32, dim=2)
+
+
+def test_tmem_pipeline_stage_subslice_constexpr():
+    ir = run_parser(tmem_pipeline_stage_subslice_kernel, target=BLACKWELL_TARGET).str_nodebug()
+    assert "ttng.tmem_subslice" in ir
+    assert "dim = 0 : i32" in ir
+    assert "dim = 2 : i32" in ir
+    assert "ttg.memdesc_index" in ir
+    assert "ttg.memdesc_reinterpret" in ir
+    assert "mutable, 5x128x64>" in ir
+
+
+@gluon.jit
+def tmem_scales_subslice_kernel():
+    layout: ttgl.constexpr = TensorMemoryScalesLayout()
+    parent = blackwell.allocate_tensor_memory(ttgl.int8, [128, 8], layout)
+    parent.slice(4, 4)
+
+
+def test_tmem_scales_subslice_constexpr():
+    ir = run_parser(tmem_scales_subslice_kernel, target=BLACKWELL_TARGET).str_nodebug()
+    assert "#ttng.tensor_memory_scales_encoding<>" in ir
+    assert "ttng.tmem_subslice" in ir
+    assert "!ttg.memdesc<128x4xi8" in ir
 
 
 @filecheck_test

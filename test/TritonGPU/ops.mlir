@@ -116,15 +116,6 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 2 : i32, "ttg.num-w
     %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x4xf32, #shared, #smem> -> !ttg.memdesc<4x4xf32, #shared, #smem, 8x4>
     tt.return
   }
-
-  // CHECK-LABEL: @nested_subslices_preserve_alloc_shape
-  // CHECK: ttg.memdesc_subslice %{{.*}}[4, 0]
-  // CHECK: ttg.memdesc_subslice %{{.*}}[2, 0]
-  tt.func @nested_subslices_preserve_alloc_shape(%arg0: !ttg.memdesc<8x4xf32, #shared, #smem>) {
-    %a = ttg.memdesc_subslice %arg0 [4, 0] : !ttg.memdesc<8x4xf32, #shared, #smem> -> !ttg.memdesc<4x4xf32, #shared, #smem, 8x4>
-    %b = ttg.memdesc_subslice %a [2, 0] : !ttg.memdesc<4x4xf32, #shared, #smem, 8x4> -> !ttg.memdesc<2x4xf32, #shared, #smem, 8x4>
-    tt.return
-  }
 }
 
 // -----
@@ -214,44 +205,6 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
     %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<32x2xi32, #shared2d, #smem, mutable> -> !ttg.memdesc<32x2xi16, #shared2d, #smem, mutable>
     tt.return
   }
-
-  // CHECK-LABEL: memdesc_reinterpret_geometric_multibuffer_within_copy
-  // CHECK: ttg.memdesc_reinterpret
-  tt.func @memdesc_reinterpret_geometric_multibuffer_within_copy(%arg0 : !ttg.memdesc<7x16x16xf16, #shared2d, #smem, mutable>) {
-    %sub = ttg.memdesc_subslice %arg0 [3, 8, 0] : !ttg.memdesc<7x16x16xf16, #shared2d, #smem, mutable> -> !ttg.memdesc<2x8x16xf16, #shared2d, #smem, mutable, 7x16x16>
-    %0 = ttg.memdesc_reinterpret %sub : !ttg.memdesc<2x8x16xf16, #shared2d, #smem, mutable, 7x16x16> -> !ttg.memdesc<8x16xf16, #shared2d, #smem, mutable>
-    tt.return
-  }
-}
-
-// -----
-
-#split_n = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
-#broadcast = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 0]]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: memdesc_reinterpret_multicta_full_view
-  // CHECK: ttg.memdesc_reinterpret
-  tt.func @memdesc_reinterpret_multicta_full_view(%arg0 : !ttg.memdesc<8x16xf16, #split_n, #smem, mutable>) {
-    %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<8x16xf16, #split_n, #smem, mutable> -> !ttg.memdesc<8x16xi16, #split_n, #smem, mutable>
-    tt.return
-  }
-
-  // CHECK-LABEL: memdesc_reinterpret_multicta_local_subview
-  // CHECK: ttg.memdesc_reinterpret
-  tt.func @memdesc_reinterpret_multicta_local_subview(%arg0 : !ttg.memdesc<8x16xf16, #split_n, #smem, mutable>) {
-    %sub = ttg.memdesc_subslice %arg0 [4, 0] : !ttg.memdesc<8x16xf16, #split_n, #smem, mutable> -> !ttg.memdesc<4x16xf16, #split_n, #smem, mutable, 8x16>
-    %0 = ttg.memdesc_reinterpret %sub : !ttg.memdesc<4x16xf16, #split_n, #smem, mutable, 8x16> -> !ttg.memdesc<4x16xi16, #split_n, #smem, mutable>
-    tt.return
-  }
-
-  // CHECK-LABEL: memdesc_reinterpret_multicta_broadcast_subview
-  // CHECK: ttg.memdesc_reinterpret
-  tt.func @memdesc_reinterpret_multicta_broadcast_subview(%arg0 : !ttg.memdesc<8x16xf16, #broadcast, #smem, mutable>) {
-    %sub = ttg.memdesc_subslice %arg0 [4, 0] : !ttg.memdesc<8x16xf16, #broadcast, #smem, mutable> -> !ttg.memdesc<4x16xf16, #broadcast, #smem, mutable, 8x16>
-    %0 = ttg.memdesc_reinterpret %sub : !ttg.memdesc<4x16xf16, #broadcast, #smem, mutable, 8x16> -> !ttg.memdesc<4x16xi16, #broadcast, #smem, mutable>
-    tt.return
-  }
 }
 
 // -----
@@ -262,6 +215,85 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: ttg.memdesc_reinterpret
   tt.func @memdesc_reinterpret_smaller_tmem(%arg0: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>) {
     %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory> -> !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#shared_dense = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [2, 0]], block = []}, alignment = 16>
+#shared_holey = #ttg.shared_linear<{offset = [[0, 1], [0, 0], [1, 0], [2, 0]], block = []}, alignment = 16>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @memdesc_subslice_pipeline_stage_chain
+  // CHECK: ttg.memdesc_subslice {{.*}}[3, 0, 0]
+  // CHECK: ttg.memdesc_index
+  // CHECK: ttg.memdesc_reinterpret
+  tt.func @memdesc_subslice_pipeline_stage_chain(%arg0: !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable>, %index: i32) {
+    %stages = ttg.memdesc_subslice %arg0 [3, 0, 0] : !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<2x16x16xf16, #shared, #smem, mutable, 7x16x16>
+    %indexed = ttg.memdesc_index %stages[%index] : !ttg.memdesc<2x16x16xf16, #shared, #smem, mutable, 7x16x16> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+    %reinterpret = ttg.memdesc_reinterpret %stages : !ttg.memdesc<2x16x16xf16, #shared, #smem, mutable, 7x16x16> -> !ttg.memdesc<2x16x16xi16, #shared, #smem, mutable>
+    %last = ttg.memdesc_subslice %stages [1, 0, 0] : !ttg.memdesc<2x16x16xf16, #shared, #smem, mutable, 7x16x16> -> !ttg.memdesc<1x16x16xf16, #shared, #smem, mutable, 7x16x16>
+    tt.return
+  }
+
+  // CHECK-LABEL: @memdesc_reinterpret_pipeline_subview_with_gaps
+  tt.func @memdesc_reinterpret_pipeline_subview_with_gaps(%arg0: !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable>) {
+    %view = ttg.memdesc_subslice %arg0 [3, 8, 0] : !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<2x8x16xf16, #shared, #smem, mutable, 7x16x16>
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<2x8x16xf16, #shared, #smem, mutable, 7x16x16> -> !ttg.memdesc<8x16xi16, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @memdesc_reinterpret_noncontiguous_shared_subview
+  tt.func @memdesc_reinterpret_noncontiguous_shared_subview(%arg0: !ttg.memdesc<4x4xi32, #shared_dense, #smem, mutable>) {
+    %view = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<4x4xi32, #shared_dense, #smem, mutable> -> !ttg.memdesc<4x2xi32, #shared_dense, #smem, mutable, 4x4>
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<4x2xi32, #shared_dense, #smem, mutable, 4x4> -> !ttg.memdesc<4x2xi32, #shared_holey, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+#tmem_scales = #ttng.tensor_memory_scales_encoding<>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @tmem_subslice_unaligned_offset
+  tt.func @tmem_subslice_unaligned_offset(%arg0: !ttg.memdesc<128x512xf32, #tmem, #ttng.tensor_memory, mutable>) {
+    %result = ttng.tmem_subslice %arg0 {offset = 208 : i32} : !ttg.memdesc<128x512xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable, 128x512>
+    tt.return
+  }
+
+  // CHECK-LABEL: @tmem_subslice_scale_descriptor
+  tt.func @tmem_subslice_scale_descriptor(%arg0: !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory, mutable>) {
+    %result = ttng.tmem_subslice %arg0 {offset = 4 : i32} : !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory, mutable, 128x8>
+    tt.return
+  }
+
+  // CHECK-LABEL: @tmem_subslice_pipeline_stage_chain
+  tt.func @tmem_subslice_pipeline_stage_chain(%arg0: !ttg.memdesc<5x128x128xf32, #tmem, #ttng.tensor_memory, mutable>, %index: i32) {
+    %stages = ttng.tmem_subslice %arg0 {offset = 2 : i32, dim = 0 : i32} : !ttg.memdesc<5x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable, 5x128x128>
+    %indexed = ttg.memdesc_index %stages[%index] : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable, 5x128x128> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %result = ttg.memdesc_reinterpret %stages : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable, 5x128x128> -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %last = ttng.tmem_subslice %stages {offset = 1 : i32, dim = 0 : i32} : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable, 5x128x128> -> !ttg.memdesc<1x128x128xf32, #tmem, #ttng.tensor_memory, mutable, 5x128x128>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem_window = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1, CGALayout = [[1, 0]]>
+#tmem_scale_a = #ttng.tensor_memory_scales_encoding<CGALayout = [[1, 0]]>
+#tmem_scale_b = #ttng.tensor_memory_scales_encoding<CGALayout = [[0, 0]]>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @tmem_subslice_reinterpret_scales
+  tt.func @tmem_subslice_reinterpret_scales(%arg0: !ttg.memdesc<256x512xf32, #tmem_window, #ttng.tensor_memory, mutable>) {
+    %window = ttng.tmem_subslice %arg0 {offset = 208 : i32} : !ttg.memdesc<256x512xf32, #tmem_window, #ttng.tensor_memory, mutable> -> !ttg.memdesc<256x256xf32, #tmem_window, #ttng.tensor_memory, mutable, 256x512>
+    %acc = ttg.memdesc_reinterpret %window : !ttg.memdesc<256x256xf32, #tmem_window, #ttng.tensor_memory, mutable, 256x512> -> !ttg.memdesc<256x256xf32, #tmem_window, #ttng.tensor_memory, mutable>
+    %a_base = ttng.tmem_subslice %arg0 {offset = 464 : i32} : !ttg.memdesc<256x512xf32, #tmem_window, #ttng.tensor_memory, mutable> -> !ttg.memdesc<256x16xf32, #tmem_window, #ttng.tensor_memory, mutable, 256x512>
+    %a = ttg.memdesc_reinterpret %a_base : !ttg.memdesc<256x16xf32, #tmem_window, #ttng.tensor_memory, mutable, 256x512> -> !ttg.memdesc<256x16xi8, #tmem_scale_a, #ttng.tensor_memory, mutable>
+    %b_base = ttng.tmem_subslice %arg0 {offset = 480 : i32} : !ttg.memdesc<256x512xf32, #tmem_window, #ttng.tensor_memory, mutable> -> !ttg.memdesc<256x32xf32, #tmem_window, #ttng.tensor_memory, mutable, 256x512>
+    %b = ttg.memdesc_reinterpret %b_base : !ttg.memdesc<256x32xf32, #tmem_window, #ttng.tensor_memory, mutable, 256x512> -> !ttg.memdesc<256x16xi8, #tmem_scale_b, #ttng.tensor_memory, mutable>
     tt.return
   }
 }

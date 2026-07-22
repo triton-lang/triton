@@ -682,8 +682,7 @@ static void rewriteRematerializedOps(triton::FuncOp &funcOp,
         shape[dim] = sliceSize;
         auto slicedMemdescType = MemDescType::get(
             shape, memdescType.getElementType(), memdescType.getEncoding(),
-            memdescType.getMemorySpace(), memdescType.getMutableMemory(),
-            memdescType.getAllocShape());
+            memdescType.getMemorySpace(), memdescType.getMutableMemory());
         SmallVector<int32_t> offsets(shape.size(), 0);
         auto viewOp = builder.createWithAsyncTaskIds<MemDescSubsliceOp>(
             allocOp.getLoc(), slicedMemdescType, allocOp.getResult(), offsets);

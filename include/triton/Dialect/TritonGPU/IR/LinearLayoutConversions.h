@@ -63,9 +63,8 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 LinearLayout paddedLinearLayout(MemDescType type);
 LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding);
 
-// Return the bits in `physicalDim` that may be set by the origin of a view with
-// `shape` into an allocation with `allocShape`. `layout` maps physical
-// coordinates to the allocation's logical coordinates.
+// Return the physical bits that any possible origin of the specified view can
+// set. The layout maps allocation coordinates to logical coordinates.
 uint32_t getLinearLayoutSubviewOriginMask(const LinearLayout &layout,
                                           ArrayRef<int64_t> shape,
                                           ArrayRef<int64_t> allocShape,

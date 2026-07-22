@@ -632,8 +632,14 @@ materializeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
     //   physical_offset = L⁻¹(coords) ⊕ L⁻¹(subslice_logical_offset)
     //   target_cta = block(L⁻¹(coords)) ⊕
     //                block(L⁻¹(subslice_logical_offset))
-    // The subslice verifier requires aligned offsets, so the logical bits are
-    // disjoint and addition is equivalent to xor before applying L⁻¹.
+    //
+    // We use XOR for consistency with lowerLdSt. MemDescSubsliceOp::verify()
+    // enforces:
+    // 1. Subslice offsets must be multiples of the tile size
+    // 2. Subslice offsets must map to power-of-2 physical offsets
+    //
+    // These constraints ensure the bit ranges of L⁻¹(coords) and
+    // L⁻¹(subslice_offset) are disjoint, so XOR and addition are equivalent.
     offset = b.xor_(offset, affineOffset);
     if (hasAffineBlock) {
       if (!blockId)
@@ -1447,12 +1453,12 @@ std::pair<uint64_t, uint64_t> SharedMemoryObject::getMaskSpanOffsetsAndBlocks(
       triton::gpu::isPaddedEncoding(srcTy.getEncoding())
           ? triton::gpu::paddedLinearLayout(allocShape, srcTy.getEncoding())
           : triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding());
-  auto kOffset = StringAttr::get(ctx, "offset");
-  auto kBlock = StringAttr::get(ctx, "block");
+  auto offsetDim = StringAttr::get(ctx, "offset");
+  auto blockDim = StringAttr::get(ctx, "block");
   return {triton::gpu::getLinearLayoutSubviewOriginMask(totalLl, shape,
-                                                        allocShape, kOffset),
+                                                        allocShape, offsetDim),
           triton::gpu::getLinearLayoutSubviewOriginMask(totalLl, shape,
-                                                        allocShape, kBlock)};
+                                                        allocShape, blockDim)};
 }
 
 uint64_t

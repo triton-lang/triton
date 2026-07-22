@@ -37,13 +37,47 @@ uint64_t getAllocationOffset(ttng::TMEMAllocOp op) {
 }
 
 unsigned getMemDescSize(ttg::MemDescType ty) {
+  auto encoding = ty.getEncoding();
+  auto layoutShape = ttg::dropPipeliningDim(ty.getShape(), encoding);
+  auto allocShape = ttg::dropPipeliningDim(ty.getAllocShape(), encoding);
+  uint64_t stages = 1;
+  for (int64_t size : ty.getShape().drop_back(layoutShape.size()))
+    stages *= size;
+
   if (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace())) {
-    return ttng::getTmemAllocSizes(ty).numCols;
+    auto colDim = StringAttr::get(ty.getContext(), "col");
+    auto viewLayout = ttg::toLinearLayout(ty);
+    auto allocLayout = ttg::toLinearLayout(allocShape, encoding);
+    uint64_t bitwidth = ty.getElementTypeBitWidth();
+    uint64_t viewCols =
+        llvm::divideCeil(uint64_t(viewLayout.getInDimSize(colDim)) * bitwidth,
+                         uint64_t(32));
+    uint64_t stageCols =
+        llvm::divideCeil(uint64_t(allocLayout.getInDimSize(colDim)) * bitwidth,
+                         uint64_t(32));
+    return (stages - 1) * stageCols + viewCols;
   }
   assert(isa<ttg::SharedMemorySpaceAttr>(ty.getMemorySpace()) &&
          "Unsupported memory space");
-  unsigned elSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
-  return product(ttg::getShapePerCTA(ty)) * elSize;
+  uint64_t elementBytes = ty.getElementType().getIntOrFloatBitWidth() / 8;
+  if (ttg::isPaddedEncoding(encoding))
+    return product(ttg::getShapePerCTA(ty)) * elementBytes;
+
+  auto layout = ttg::toLinearLayout(allocShape, encoding);
+  auto inverse = layout.pseudoinvert();
+  auto logicalDims = llvm::to_vector(inverse.getInDimNames());
+  for (auto [dim, size] : llvm::zip_equal(logicalDims, layoutShape))
+    inverse = inverse.resizeInDim(dim, size);
+
+  auto offsetDim = StringAttr::get(ty.getContext(), "offset");
+  unsigned offsetIndex = inverse.getOutDimIndex(offsetDim);
+  uint64_t offsetMask = 0;
+  for (const auto &[dim, bases] : inverse.getBases())
+    for (const auto &basis : bases)
+      offsetMask |= static_cast<uint32_t>(basis[offsetIndex]);
+
+  uint64_t stageBytes = layout.getInDimSize(offsetDim) * elementBytes;
+  return (stages - 1) * stageBytes + (offsetMask + 1) * elementBytes;
 }
 
 unsigned getAllocSize(ttg::LocalAllocOp op) {

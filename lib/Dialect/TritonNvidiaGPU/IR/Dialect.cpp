@@ -112,6 +112,12 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
 
 uint32_t getTMemSubSliceOffset(MemDescType memDescType, int32_t offset,
                                int32_t dim) {
+  if (memDescType.getRank() == 3 && dim == 0) {
+    auto allocation = getTmemAllocSizes(memDescType);
+    return offset * allocation.numCols / memDescType.getDimSize(0);
+  }
+
+  dim -= memDescType.getRank() - 2;
   auto llInv = toLinearLayout(memDescType).pseudoinvert();
   auto dimNames = llvm::to_vector(llInv.getInDimNames());
   SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
