@@ -1130,6 +1130,8 @@ LogicalResult MemDescSubsliceOp::verify() {
   if (srcTy.getRank() != dstTy.getRank()) {
     return emitError("result rank must equal to input rank");
   }
+  if (srcTy.getAllocShape() != dstTy.getAllocShape())
+    return emitError("source and result must have the same allocation shape");
 
   auto srcEnc = srcTy.getEncoding();
   auto dstEnc = dstTy.getEncoding();
