@@ -2728,7 +2728,7 @@ def test_ws_wgmma_wait_visibility(FAILURE, device, run_wrapper, monkeypatch, num
 @pytest.mark.parametrize("EXPLICIT_BARRIER", [False, True], ids=["terminal-barrier", "explicit-barrier"])
 @pytest.mark.parametrize("DEFAULT_WARPS", [4, 8], ids=["four-default-warps", "eight-default-warps"])
 def test_cluster_barrier_warp_specialized_phase_snapshot(EXPLICIT_BARRIER, DEFAULT_WARPS, device, run_wrapper,
-                                                          monkeypatch, num_ctas):
+                                                         monkeypatch, num_ctas):
     if num_ctas == 1:
         pytest.skip("cluster barriers require multiple CTAs")
     if run_wrapper:
