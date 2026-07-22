@@ -1434,7 +1434,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStop() {
   corrIdToStreamId.clear();
   kernelPhaseTracker.clear();
 
-#ifdef PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
   graphToState.clear();
   graphExecToGraph.clear();
   graphExecToGraphExecId.clear();
