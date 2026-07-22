@@ -555,8 +555,17 @@ class InterpreterBuilder:
 
     # binary operators
     def binary_op(self, lhs, rhs, op):
-        output = op(lhs.data, rhs.data)
         tl_dtype = lhs.dtype.scalar
+
+        if lhs.data.dtype == np.bool_ and rhs.data.dtype == np.bool_:
+            # numpy uses logical/saturating semantics for bool arithmetic
+            # (True + True == True) and rejects bool subtraction outright, but
+            # Triton treats int1 as a 1-bit integer that wraps around like any
+            # other integer type. Compute in a wider integer domain and
+            # truncate back to one bit to match the GPU backend (issue #10919).
+            output = (op(lhs.data.astype(np.int8), rhs.data.astype(np.int8)) & 1).astype(np.bool_)
+        else:
+            output = op(lhs.data, rhs.data)
 
         if not _validate_np_data_size(output, tl_dtype):
             output = output.astype(_get_np_dtype(tl_dtype))
@@ -811,7 +820,14 @@ class InterpreterBuilder:
         if prefix:
             msg += f" {prefix}"
         if hex:
-            np.set_printoptions(formatter={'all': lambda x: f"0x{x:02x}"})
+
+            def _to_hex(x):
+                if isinstance(x, np.floating):
+                    return float(x).hex()
+                width = x.dtype.itemsize * 2
+                return f"0x{int(x):0{width}x}"
+
+            np.set_printoptions(formatter={'all': _to_hex})
         for value in values:
             print(msg + f" {value.data}")
         if hex:

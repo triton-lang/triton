@@ -274,6 +274,11 @@ public:
     Value init = alloc.getSrc();
     if (!init)
       return failure();
+    while (auto cvt = init.getDefiningOp<ConvertLayoutOp>()) {
+      if (!init.hasOneUse())
+        return failure();
+      init = cvt.getSrc();
+    }
     auto load = init.getDefiningOp<TMEMTokenLoadOp>();
     if (!load || !load->hasOneUse() || !load.getDep().hasOneUse())
       return failure();
@@ -634,6 +639,16 @@ struct HoistTMEMAlloc
   void runOnOperation() override {
     ModuleOp m = getOperation();
     if (!postPipeline) {
+      // Forward TMEM loads before hoisting turns allocation initializers into
+      // explicit stores.
+      mlir::RewritePatternSet forwardingPatterns(&getContext());
+      forwardingPatterns.add<TMEMLoadForwarding>(&getContext());
+      if (failed(applyPatternsGreedily(getOperation(),
+                                       std::move(forwardingPatterns)))) {
+        signalPassFailure();
+        return;
+      }
+
       SmallVector<ttng::MMAv5OpInterface> mmaOps;
       m.walk([&](ttng::MMAv5OpInterface mmaOp) { mmaOps.push_back(mmaOp); });
       for (auto mmaOp : mmaOps) {

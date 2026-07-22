@@ -113,11 +113,15 @@ def scaled_upcast(src, scale, elem_type, axis=None, _semantic=None):
     Upcast an fp4 or fp8 tensor and fold raw E8M0 scale payload into the
     GFX1250 scaled-upcast op.
 
-    The scale tensor must use raw E8M0 payload in `int8` or `uint8`, and must
-    already have the expanded output shape and scaled-upcast result layout.
-    For fp4 inputs, that is the canonical unpacked layout implied by `src`
-    and `axis`. `elem_type` must be `fp16` or `bf16`. GFX1250 keeps those
-    bytes in the native `cvt.scale.pk8` payload form.
+    The scale tensor must use raw E8M0 payload in `int8` or `uint8`.
+    For fp8, scale shape/layout match `src`.
+    For fp4, expanded or compact scales are supported along `axis` dimension.
+    Expanded scales are broadcasted to one scale value per upcast output value,
+    e.g. fp4 bytes `[M, K / 2]` -> output `[M, K]` with scale `[M, K]`.
+    Compact scales keep one scale value per native scale block, e.g. output
+    `[M, K]` with `axis=1` and scale block 32 uses scale `[M, K / 32]`.
+    `elem_type` must be `fp16` or `bf16`. GFX1250 keeps those bytes in the native
+    `cvt.scale.pk8` payload form.
     """
     axis = _unwrap_if_constexpr(axis)
     elem_type = _unwrap_if_constexpr(elem_type)

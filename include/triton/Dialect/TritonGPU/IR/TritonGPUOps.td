@@ -341,9 +341,9 @@ def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewT
     as one with a different shape and element type. The logical storage size of
     the result must not exceed that of the source. Because memory descriptors
     lack strides, this operation is only valid if the original memory descriptor
-    is contiguous. Reinterpretation of subviews is not allowed; reinterpret the
-    parent descriptor and then take a subview of the reinterpreted descriptor
-    instead.
+    is contiguous. Contiguous tensor-memory source subviews may be
+    reinterpreted; other subviews must be taken after reinterpreting their
+    parent descriptor.
   }];
 
   let arguments = (ins TTG_MemDescType:$src);
