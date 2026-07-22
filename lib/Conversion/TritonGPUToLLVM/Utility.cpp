@@ -761,7 +761,8 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 Value affineOffset, uint64_t maskSpanAffineOffset,
                 Value affineBlockOffset, uint64_t maskSpanAffineBlock,
                 RewriterBase &rewriter, const TargetInfoBase &targetInfo,
-                std::optional<int> maybeMaxVecElems, Operation *localLoadOp) {
+                bool allowPerm, std::optional<int> maybeMaxVecElems,
+                Operation *localLoadOp) {
 
   bool isStore = !valsArray.empty();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -788,7 +789,7 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
   return lowerLdSt(loc, ctx, cvt, valsArray, llvmElemTy, smemBases,
                    paddingShifts, affineOffset, maskSpanAffineOffset,
                    affineBlockOffset, maskSpanAffineBlock, laneId, warpId,
-                   rewriter, targetInfo, maybeMaxVecElems, emitLdSt);
+                   rewriter, targetInfo, allowPerm, maybeMaxVecElems, emitLdSt);
 }
 
 SmallVector<Value> lowerLdSt(
@@ -798,7 +799,7 @@ SmallVector<Value> lowerLdSt(
     ArrayRef<std::pair<unsigned, unsigned>> paddingShifts, Value affineOffset,
     uint64_t maskSpanAffineOffset, Value affineBlockOffset,
     uint64_t maskSpanAffineBlock, Value laneId, Value warpId,
-    RewriterBase &rewriter, const TargetInfoBase &targetInfo,
+    RewriterBase &rewriter, const TargetInfoBase &targetInfo, bool allowPerm,
     std::optional<int> maybeMaxVecElems,
     std::function<SmallVector<Value>(RewriterBase &, Location, ArrayRef<Value>,
                                      Value, int, VectorType, Value)>
@@ -840,7 +841,7 @@ SmallVector<Value> lowerLdSt(
   cvt = cvt.sublayout(inDimNames, outDims);
 
   auto [elemsPerVec, permutation] =
-      largestVectorisation(ctx, cvt, bitwidth, maybeMaxVecElems);
+      largestVectorisation(ctx, cvt, bitwidth, maybeMaxVecElems, allowPerm);
 
   cvt = permutation.apply(cvt);
   if (isStore) {
@@ -1038,10 +1039,13 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
   // For partitioned tensors, this returns all bases (one per partition).
   SmallVector<Value> smemBases(smemObj.getBases().begin(),
                                smemObj.getBases().end());
+  // Permuting registers is just renaming SSA values; the padding interval
+  // (maybeMaxVecElems) alone bounds the vectorisation, so permutation is safe.
   return lowerLdStShared(loc, ctx, cvt, valsArray, llvmElemTy, smemBases,
                          paddingShifts, affineOffset, maskSpanAffineOffset,
                          affineBlockOffset, maskSpanAffineBlock, rewriter,
-                         targetInfo, maybeMaxVecElems, localLoadOp);
+                         targetInfo, /*allowPerm=*/true, maybeMaxVecElems,
+                         localLoadOp);
 }
 
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
@@ -2203,7 +2207,7 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
             /*paddingShifts=*/{}, /*affineOffset=*/b.i32_val(0),
             /*maskSpanAffineOffset=*/0, /*affineBlockOffset=*/Value(),
             /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
-            /*maybeMaxVecElems=*/{}, emitSt);
+            /*allowPerm=*/true, /*maybeMaxVecElems=*/{}, emitSt);
   if (crossCTA)
     targetInfo.clusterBarrier(loc, rewriter, op);
   else
@@ -2214,7 +2218,7 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
                 /*paddingShifts=*/{}, /*affineOffset=*/b.i32_val(0),
                 /*maskSpanAffineOffset=*/0, /*affineBlockOffset=*/Value(),
                 /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
-                /*maybeMaxVecElems=*/{}, emitLd);
+                /*allowPerm=*/true, /*maybeMaxVecElems=*/{}, emitLd);
   // Create the result struct and replace the operation
   Value resultStruct = packUniqueTensorElements(loc, typeConverter, resultVals,
                                                 rewriter, tensorTy);

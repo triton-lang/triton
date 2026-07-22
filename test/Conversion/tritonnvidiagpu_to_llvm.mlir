@@ -1157,3 +1157,19 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
     llvm.return
   }
 }
+
+// -----
+
+#linear = #ttg.linear<{register = [[0, 8], [0, 1]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[0, 2], [0, 4]], block = [[0, 0]]}>
+#padded = #ttg.padded_shared<[16:+8] {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], block = [[0, 0]]}>
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: async_shared_store_padded
+  // CHECK-COUNT-2: complete_tx::bytes.v2.b32
+  // CHECK-NOT: complete_tx::bytes.b32
+  tt.func @async_shared_store_padded(%src: tensor<32x16xi32, #linear>, %dst: !ttg.memdesc<32x16xi32, #padded, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #bar, #smem, mutable>) {
+    ttng.async_shared_store %src, %dst, %mbarrier : tensor<32x16xi32, #linear> -> !ttg.memdesc<32x16xi32, #padded, #smem, mutable>, !ttg.memdesc<2xi64, #bar, #smem, mutable>
+    tt.return
+  }
+}

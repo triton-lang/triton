@@ -181,7 +181,8 @@ LinearLayout transposeLinearLayout(LinearLayout layout, ArrayRef<int> order);
 // that can be used to lower the layout via ld/st.
 std::pair<int, ColumnAction>
 largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
-                     std::optional<int> maybeMaxVecElems = std::nullopt);
+                     std::optional<int> maybeMaxVecElems = std::nullopt,
+                     bool allowPerm = true);
 
 // Close cousin of doing zerosLike(tile) * divideLeft(cvt, tile)
 // This one is a tad more general in the sense that it allows to divide

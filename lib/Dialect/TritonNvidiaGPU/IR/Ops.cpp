@@ -336,10 +336,14 @@ LogicalResult AsyncSharedStoreOp::verify() {
                           : toLinearLayout(dstTy);
   auto cvt = regLayout.invertAndCompose(sharedLayout);
   std::optional<int> maybeMaxVecElems;
-  if (isPaddedEncoding(dstTy.getEncoding()))
+  if (isPaddedEncoding(dstTy.getEncoding())) {
     maybeMaxVecElems = getMinInterval(dstTy.getEncoding());
+  }
+  // Permuting registers is just renaming SSA values; the padding interval
+  // (maybeMaxVecElems) alone bounds the vectorisation, so permutation is safe.
   auto vectorization =
-      largestVectorisation(getContext(), cvt, bitwidth, maybeMaxVecElems);
+      largestVectorisation(getContext(), cvt, bitwidth, maybeMaxVecElems,
+                           /*allowPerm=*/true);
   unsigned elemsPerVec = vectorization.first;
   if (elemsPerVec * bitwidth < 32)
     return emitOpError("requires a layout vectorizing stores to at least 32 "

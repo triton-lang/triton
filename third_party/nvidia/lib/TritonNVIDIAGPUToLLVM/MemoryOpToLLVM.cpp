@@ -382,10 +382,12 @@ static void lowerAsyncSharedStore(Location loc, MLIRContext *ctx,
     return {};
   };
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  // Permuting registers is just renaming SSA values; the padding interval
+  // (maybeMaxVecElems) alone bounds the vectorisation, so permutation is safe.
   lowerLdSt(loc, ctx, cvt, vals, llvmElemTy, smemBases, paddingShifts,
             affineOffset, maskSpanAffineOffset, affineBlockOffset,
             maskSpanAffineBlock, laneId, warpId, rewriter, targetInfo,
-            maybeMaxVecElems, emitSt);
+            /*allowPerm=*/true, maybeMaxVecElems, emitSt);
 }
 
 struct AsyncSharedStoreOpConversion

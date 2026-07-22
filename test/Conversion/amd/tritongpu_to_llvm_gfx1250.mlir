@@ -110,3 +110,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %0 : tensor<64xbf16, #blocked>
   }
 }
+
+// -----
+
+#linear = #ttg.linear<{register = [[0, 8], [0, 1]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[0, 2], [0, 4]], block = []}>
+#shared = #ttg.padded_shared<[16:+8] {order = [1, 0], shape = [32, 16]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // GFX1250-LABEL: padded_shared_local_load
+  // GFX1250-COUNT-2: llvm.load {{.*}} : !llvm.ptr<3> -> vector<2xf16>
+  // GFX1250-NOT: llvm.load {{.*}} : !llvm.ptr<3> -> vector<1xf16>
+  tt.func public @padded_shared_local_load(%arg0: !ttg.memdesc<32x16xf16, #shared, #smem, mutable>) -> tensor<32x16xf16, #linear> {
+    %0 = ttg.local_load %arg0 : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> tensor<32x16xf16, #linear>
+    tt.return %0 : tensor<32x16xf16, #linear>
+  }
+}
+
+// -----
+
+#linear = #ttg.linear<{register = [[0, 8], [0, 1]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[0, 2], [0, 4]], block = []}>
+#shared = #ttg.padded_shared<[16:+8] {order = [1, 0], shape = [32, 16]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // GFX1250-LABEL: padded_shared_local_store
+  // GFX1250-COUNT-2: llvm.store {{.*}} : vector<2xf16>, !llvm.ptr<3>
+  // GFX1250-NOT: llvm.store {{.*}} : vector<1xf16>, !llvm.ptr<3>
+  tt.func public @padded_shared_local_store(%arg0: tensor<32x16xf16, #linear>, %arg1: !ttg.memdesc<32x16xf16, #shared, #smem, mutable>) {
+    ttg.local_store %arg0, %arg1 : tensor<32x16xf16, #linear> -> !ttg.memdesc<32x16xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
