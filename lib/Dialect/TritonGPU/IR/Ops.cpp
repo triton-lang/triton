@@ -690,17 +690,18 @@ LogicalResult MemDescReinterpretOp::verify() {
     return emitError("source and result must have the same memory space");
   if (srcTy.getMutableMemory() != dstTy.getMutableMemory())
     return emitError("source and result must have the same mutability");
-  auto isSubview = [](MemDescType ty) {
-    auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
-    return ty.getShape().take_back(rank) != ty.getAllocShape().take_back(rank);
+  auto isLayoutSubview = [](MemDescType ty) {
+    auto encoding = ty.getEncoding();
+    return dropPipeliningDim(ty.getShape(), encoding) !=
+           dropPipeliningDim(ty.getAllocShape(), encoding);
   };
-  bool srcIsSubview = isSubview(srcTy);
+  bool srcIsLayoutSubview = isLayoutSubview(srcTy);
   bool srcIsTmem =
       isa<nvidia_gpu::TensorMemorySpaceAttr>(srcTy.getMemorySpace());
-  if (isSubview(dstTy) || (srcIsSubview && !srcIsTmem))
+  if (isLayoutSubview(dstTy) || (srcIsLayoutSubview && !srcIsTmem))
     return emitError("source and result must not be subviews; reinterpret the "
                      "parent descriptor and then take a subview");
-  if (srcIsSubview) {
+  if (srcIsLayoutSubview) {
     auto rank = cast<LayoutEncodingTrait>(srcEnc).getRank();
     auto allocLayout =
         toLinearLayout(srcTy.getAllocShape().take_back(rank), srcEnc);
@@ -733,14 +734,13 @@ LogicalResult MemDescReinterpretOp::verify() {
     return success();
   }
   auto getViewNumBits = [](MemDescType ty) {
-    auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
-    auto shape = ty.getAllocShape().take_back(rank);
     auto encoding = ty.getEncoding();
+    auto shape = dropPipeliningDim(ty.getAllocShape(), encoding);
     LinearLayout layout = isPaddedEncoding(encoding)
                               ? paddedLinearLayout(shape, encoding)
                               : toLinearLayout(shape, encoding);
     int64_t numLayoutCopies = 1;
-    for (int64_t dim : ty.getAllocShape().drop_back(rank))
+    for (int64_t dim : ty.getShape().drop_back(shape.size()))
       numLayoutCopies *= dim;
     // Shared memory is allocated by offset; prefix dimensions outside the
     // layout-ranked suffix represent separate copies of that allocation.
@@ -1056,14 +1056,15 @@ LogicalResult MemDescIndexOp::verify() {
     return emitError("We don't allow taking memdesc_index of a memdesc_index");
   }
 
-  if (ArrayRef(srcTy.getShape()).take_back(dstTy.getRank()) !=
-      dstTy.getShape()) {
+  auto layoutShape = dropPipeliningDim(srcTy.getShape(), srcTy.getEncoding());
+  if (layoutShape != dstTy.getShape()) {
     return emitError("result shape must equal to srcShape[1:]");
   }
 
-  bool isSubview = srcTy.getAllocShape() != srcTy.getShape();
-  if (isSubview) {
-    return emitError("We don't support memdesc_index of a subview");
+  if (dropPipeliningDim(srcTy.getAllocShape(), srcTy.getEncoding()) !=
+      layoutShape) {
+    return emitError(
+        "We only support memdesc_index of a multibuffer-prefix subview");
   }
 
   auto srcEnc = srcTy.getEncoding();
@@ -1076,9 +1077,8 @@ LogicalResult MemDescIndexOp::verify() {
     return emitError("src and dst must have the same type of encoding");
   }
 
-  if (dstTy.getAllocShape() != dstTy.getShape() ||
-      srcTy.getAllocShape() != srcTy.getShape()) {
-    return emitError("alloc shape must match shape for both result and src");
+  if (dstTy.getAllocShape() != dstTy.getShape()) {
+    return emitError("alloc shape must match shape for the result");
   }
 
   if (isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
@@ -1139,6 +1139,8 @@ LogicalResult MemDescSubsliceOp::verify() {
   if (!isa<SharedEncodingTrait>(srcEnc) || !isa<SharedEncodingTrait>(dstEnc)) {
     return emitError("src and dst must both be of shared memory encoding");
   }
+  auto layoutRank = dropPipeliningDim(getOffsets(), srcEnc).size();
+  auto prefixRank = getOffsets().size() - layoutRank;
 
   SetVector<int> splitDims{};
   for (int i = 0; i < srcTy.getRank(); i++) {
@@ -1147,11 +1149,6 @@ LogicalResult MemDescSubsliceOp::verify() {
     }
   }
   SmallVector<int64_t> offsets(getOffsets().begin(), getOffsets().end());
-  // Identity subview
-  if (splitDims.empty()) {
-    return success();
-  }
-
   for (auto [dim, offset] : llvm::enumerate(offsets)) {
     if (!splitDims.contains(dim)) {
       if (offset != 0) {
@@ -1159,14 +1156,18 @@ LogicalResult MemDescSubsliceOp::verify() {
                          "not being split");
       }
     } else {
-      if (offset & (dstTy.getDimSize(dim) - 1)) {
-        return emitError("The split offset may not touch the tile");
-      }
-      if (offset >= srcTy.getDimSize(dim)) {
+      if (offset < 0 ||
+          offset > srcTy.getDimSize(dim) - dstTy.getDimSize(dim)) {
         return emitError("The split offset may not exceed the source shape");
+      }
+      if (dim >= prefixRank && (offset & (dstTy.getDimSize(dim) - 1))) {
+        return emitError("The split offset may not touch the tile");
       }
     }
   }
+  // Identity subview
+  if (splitDims.empty())
+    return success();
 
   auto ctx = getContext();
   LinearLayout ll;
@@ -1182,14 +1183,16 @@ LogicalResult MemDescSubsliceOp::verify() {
 
   auto llInv = ll.pseudoinvert();
   for (auto dim : splitDims) {
-    auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
+    if (dim < prefixRank)
+      continue;
+    auto layoutDim = dim - prefixRank;
     llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;
-    for (auto d : standardOutDimNames(ctx, srcTy.getRank())) {
+    for (auto d : standardOutDimNames(ctx, layoutRank)) {
       namedOffsets.push_back({d, 0});
     }
     for (int dimSize = dstTy.getDimSize(dim); dimSize < srcTy.getDimSize(dim);
          dimSize *= 2) {
-      namedOffsets[dim] = {kDim, dimSize};
+      namedOffsets[layoutDim].second = dimSize;
       auto offsetAndBlock = llInv.apply(namedOffsets);
       auto offset = offsetAndBlock[0];
       if (!llvm::isPowerOf2_32(offset.second) && offset.second != 0) {

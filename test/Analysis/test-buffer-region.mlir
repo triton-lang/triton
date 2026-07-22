@@ -49,14 +49,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   tt.func public @memdesc_index_multiple_access(%idx: i32) {
-    %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x32x32xf32, #shared, #smem, mutable>
-    %view = ttg.memdesc_index %0[%idx] : !ttg.memdesc<2x32x32xf32, #shared, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
-    // expected-remark @below {{Buffers: [0, 4096], [4096, 4096]}}
+    %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8x32x32xf32, #shared, #smem, mutable>
+    %sub = ttg.memdesc_subslice %0 [3, 0, 0] : !ttg.memdesc<8x32x32xf32, #shared, #smem, mutable> -> !ttg.memdesc<3x32x32xf32, #shared, #smem, mutable, 8x32x32>
+    %view = ttg.memdesc_index %sub[%idx] : !ttg.memdesc<3x32x32xf32, #shared, #smem, mutable, 8x32x32> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    // expected-remark @below {{Buffers: [12288, 4096], [16384, 4096], [20480, 4096]}}
     ttg.local_load %view : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
     tt.return
   }
 
-  // expected-remark @below {{All Shared Regions: [0, 4096], [4096, 4096]}}
+  // expected-remark @below {{All Shared Regions: [12288, 4096], [16384, 4096], [20480, 4096]}}
   tt.func private @print_all_regions() attributes {test.print_all_used_regions} {
     tt.return
   }
