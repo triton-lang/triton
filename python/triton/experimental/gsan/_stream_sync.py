@@ -20,6 +20,12 @@ class _RuntimeStateLayout:
     num_threads: int
 
 
+@dataclass
+class _LaunchStreamState:
+    clocks: object
+    next_kernel_id: int = 0
+
+
 @functools.lru_cache()
 def _runtime_state_layout(runtime_state_device: int, access_device: int) -> _RuntimeStateLayout:
     layout = get_runtime_state_layout(runtime_state_device)
@@ -35,14 +41,22 @@ def _runtime_state_layout(runtime_state_device: int, access_device: int) -> _Run
 
 
 @functools.lru_cache()
-def get_launch_stream_clock(device: int, stream: int):
-    """Return the persistent completion clock for one CUDA launch stream."""
+def _launch_stream_state(device: int, stream: int) -> _LaunchStreamState:
     import torch
 
     layout = _runtime_state_layout(get_device_rank(device), device)
     cuda_stream = torch.cuda.ExternalStream(stream, device=device) if stream else torch.cuda.default_stream(device)
     with torch.cuda.device(device), torch.cuda.stream(cuda_stream):
-        return torch.zeros(layout.num_threads, dtype=torch.int32, device=device)
+        clocks = torch.zeros((3, layout.num_threads), dtype=torch.int32, device=device)
+    return _LaunchStreamState(clocks=clocks)
+
+
+def get_launch_stream_clock(device: int, stream: int):
+    """Return a stream's triple-buffered clocks and monotonically increasing launch ID."""
+    state = _launch_stream_state(device, stream)
+    kernel_id = state.next_kernel_id
+    state.next_kernel_id += 1
+    return state.clocks, kernel_id
 
 
 @contextmanager
@@ -50,39 +64,6 @@ def _compile_without_gsan():
     with triton.knobs.compilation.scope():
         triton.knobs.compilation.instrumentation_mode = ""
         yield
-
-
-def warmup_gsan_kernels() -> None:
-    """Compile GSan support kernels without initializing the GSan runtime."""
-    with _compile_without_gsan():
-        _synchronize_vector_clocks_kernel.warmup(
-            triton.MockTensor(tl.uint8),
-            0,
-            0,
-            0,
-            0,
-            BLOCK_SIZE=128,
-            grid=(1, ),
-            num_warps=1,
-        )
-
-
-@triton.jit(do_not_specialize=["stride_bytes", "num_sms", "num_threads", "header_bytes"])
-def _synchronize_vector_clocks_kernel(thread_state_region, stride_bytes, num_sms, num_threads, header_bytes,
-                                      BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < num_threads
-    max_clocks = tl.full([BLOCK_SIZE], 0, tl.uint16)
-
-    for sm in range(num_sms):
-        vector_clock_ptr = (thread_state_region + sm * stride_bytes + header_bytes).to(tl.pointer_type(tl.uint16))
-        thread_clocks = tl.load(vector_clock_ptr + offsets, mask=mask, other=0)
-        max_clocks = tl.maximum(thread_clocks, max_clocks)
-
-    for sm in range(num_sms):
-        vector_clock_ptr = (thread_state_region + sm * stride_bytes + header_bytes).to(tl.pointer_type(tl.uint16))
-        tl.store(vector_clock_ptr + offsets, max_clocks, mask=mask)
 
 
 def _check_compatible_runtime_state_layout(lhs: _RuntimeStateLayout, rhs: _RuntimeStateLayout) -> None:
@@ -112,27 +93,6 @@ def _synchronize_process_group_barrier_kernel(local_thread_state_region, peer_th
     for sm in range(num_sms):
         vector_clock_ptr = (local_thread_state_region + sm * stride_bytes + header_bytes).to(tl.pointer_type(tl.uint16))
         tl.store(vector_clock_ptr + offsets, max_clocks, mask=mask)
-
-
-def synchronize_launch_stream(device: int) -> None:
-    """This models the implicit synchronization between kernel launches.
-
-    To do this, we compute the elementwise maximum of all SMs' vector clocks, and set every SM's clock to this starting point.
-
-    This makes all reads and writes transitively visible to other threads.
-    """
-    layout = _runtime_state_layout(get_device_rank(device), device)
-    grid = (triton.cdiv(layout.num_threads, 128), 1, 1)
-    with _compile_without_gsan():
-        _synchronize_vector_clocks_kernel[grid](
-            layout.thread_state_region,
-            layout.thread_state_stride_bytes,
-            layout.num_sms,
-            layout.num_threads,
-            layout.thread_state_header_size_bytes,
-            BLOCK_SIZE=128,
-            num_warps=1,
-        )
 
 
 def synchronize_process_group_barrier(device: int, peer_devices: tuple[int, ...]) -> None:

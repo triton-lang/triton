@@ -146,6 +146,20 @@ def _pdl_consumer_kernel(payload_ptr, result_ptr):
     tl.store(result_ptr + pid, value)
 
 
+@triton.jit
+def _pdl_stage_kernel(payload_ptr, INDEX: tl.constexpr, WAIT_PREDECESSOR: tl.constexpr):
+    if WAIT_PREDECESSOR:
+        tl.extra.cuda.gdc_wait()
+    tl.store(payload_ptr + INDEX, 1000 + INDEX)
+    tl.extra.cuda.gdc_launch_dependents()
+
+
+@triton.jit
+def _pdl_two_back_consumer_kernel(payload_ptr, result_ptr):
+    value = tl.load(payload_ptr)
+    tl.store(result_ptr, value)
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
 def test_programmatic_dependent_launch_wait_synchronizes_vector_clocks(with_gsan, capfd):
     payload = torch.zeros(2, dtype=torch.int32, device="cuda")
@@ -161,6 +175,20 @@ def test_programmatic_dependent_launch_wait_synchronizes_vector_clocks(with_gsan
     _assert_no_gsan_runtime_output(capfd)
 
 
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
+def test_programmatic_dependent_launch_sees_two_kernels_back_without_wait(with_gsan, capfd):
+    payload = torch.zeros(2, dtype=torch.int32, device="cuda")
+    result = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+
+    _pdl_stage_kernel[(1, )](payload, INDEX=0, WAIT_PREDECESSOR=False, num_warps=1)
+    _pdl_stage_kernel[(1, )](payload, INDEX=1, WAIT_PREDECESSOR=True, num_warps=1, launch_pdl=True)
+    _pdl_two_back_consumer_kernel[(1, )](payload, result, num_warps=1, launch_pdl=True)
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(result, torch.tensor([1000], dtype=torch.int32, device="cuda"))
+    _assert_no_gsan_runtime_output(capfd)
+
+
 @gluon.jit
 def _gluon_ws_completion_default(out_ptr, layout: gl.constexpr):
     offsets = gl.arange(0, 128, layout=layout)
@@ -171,6 +199,28 @@ def _gluon_ws_completion_default(out_ptr, layout: gl.constexpr):
 def _gluon_ws_completion_worker(out_ptr, layout: gl.constexpr):
     offsets = 128 + gl.arange(0, 128, layout=layout)
     gl.store(out_ptr + offsets, offsets)
+
+
+@gluon.jit
+def _gluon_ws_pdl_wait_default(payload_ptr, result_ptr, layout: gl.constexpr):
+    pass
+
+
+@gluon.jit
+def _gluon_ws_pdl_wait_worker(payload_ptr, result_ptr, layout: gl.constexpr):
+    tl.extra.cuda.gdc_wait()
+    offsets = gl.arange(0, 128, layout=layout)
+    values = gl.load(payload_ptr + offsets)
+    gl.store(result_ptr + offsets, values)
+
+
+@gluon.jit
+def _gluon_ws_pdl_wait_kernel(payload_ptr, result_ptr):
+    layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+    gl.warp_specialize([
+        (_gluon_ws_pdl_wait_default, (payload_ptr, result_ptr, layout)),
+        (_gluon_ws_pdl_wait_worker, (payload_ptr, result_ptr, layout)),
+    ], [4], [24])
 
 
 @gluon.jit
@@ -190,6 +240,20 @@ def test_gluon_warp_specialize_completes(with_gsan):
     _gluon_ws_completion_kernel[(1, )](out, num_warps=4)
     torch.cuda.synchronize()
     torch.testing.assert_close(out, expected)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
+def test_programmatic_dependent_launch_wait_inside_warp_specialize(with_gsan, capfd):
+    payload = torch.empty((128, ), dtype=torch.int32, device="cuda")
+    result = torch.full_like(payload, -1)
+
+    _pdl_producer_kernel[(128, )](payload, num_warps=1)
+    compiled = _gluon_ws_pdl_wait_kernel[(1, )](payload, result, num_warps=4, launch_pdl=True)
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(result, torch.arange(1000, 1128, device="cuda", dtype=torch.int32))
+    assert "griddepcontrol.wait" in compiled.asm["ptx"]
+    _assert_no_gsan_runtime_output(capfd)
 
 
 @gluon.jit
