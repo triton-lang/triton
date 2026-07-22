@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file --allow-unregistered-dialect --nvws-lower-aref  | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allow-unregistered-dialect --nvws-lower-aref  | FileCheck %s --check-prefix=TWOCTA
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
@@ -265,6 +266,40 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
       nvws.aref.get.exit %4[%c0_i32], %token_4 [#nvws.async_op<tc5mma>] {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = array<i32: 1>} : <[!ttg.memdesc<1x128x64xf16, #shared, #smem, mutable>]>, !ttg.async.token
       scf.yield %0 : !ttg.async.token
     } {tt.num_stages = 2 : i32, tt.scheduled_max_stage = 1 : i32, tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 0 : i32, ttg.partition = array<i32: 0, 1, 2>, ttg.partition.outputs = [array<i32: 1>]}
+    tt.return
+  }
+}
+
+// -----
+
+#shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1]]}>
+#smem = #ttg.shared_memory
+#tmem_2cta = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // TWOCTA-LABEL: @two_cta_tma_barrier_layout
+  tt.func @two_cta_tma_barrier_layout(
+      %a_desc: !tt.tensordesc<128x64xf16, #shared_a>,
+      %b_desc: !tt.tensordesc<64x128xf16, #shared_b>) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %acc = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem_2cta, #ttng.tensor_memory, mutable>
+
+    // The empty/MMAv5 completion barrier remains per CTA.
+    // TWOCTA: [[EMPTY:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x2xi64
+    // The TMA full/ready barrier is shared by the cooperating CTA pair.
+    // TWOCTA: [[FULL:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi64
+    %a = ttg.local_alloc : () -> !ttg.memdesc<1x128x64xf16, #shared_a, #smem, mutable>
+    %b = ttg.local_alloc : () -> !ttg.memdesc<1x64x128xf16, #shared_b, #smem, mutable>
+    %aref = nvws.aref.create %a, %b : <[!ttg.memdesc<1x128x64xf16, #shared_a, #smem, mutable>, !ttg.memdesc<1x64x128xf16, #shared_b, #smem, mutable>]>
+    %a_put, %b_put, %put_token = nvws.aref.put.enter %aref[%c0, %c0] {ttg.partition = array<i32: 1>} : <[!ttg.memdesc<1x128x64xf16, #shared_a, #smem, mutable>, !ttg.memdesc<1x64x128xf16, #shared_b, #smem, mutable>]> -> !ttg.memdesc<128x64xf16, #shared_a, #smem, mutable>, !ttg.memdesc<64x128xf16, #shared_b, #smem, mutable>, !ttg.async.token
+    nvws.descriptor_load %a_desc[%c0, %c0] 16384 %a_put {ttg.partition = array<i32: 1>} : !tt.tensordesc<128x64xf16, #shared_a>, i32, i32, !ttg.memdesc<128x64xf16, #shared_a, #smem, mutable>
+    nvws.descriptor_load %b_desc[%c0, %c0] 16384 %b_put {ttg.partition = array<i32: 1>} : !tt.tensordesc<64x128xf16, #shared_b>, i32, i32, !ttg.memdesc<64x128xf16, #shared_b, #smem, mutable>
+    nvws.aref.put.exit %aref[%c0], %put_token [#nvws.async_op<tma_load>, #nvws.async_op<tma_load>] {ttg.partition = array<i32: 1>} : <[!ttg.memdesc<1x128x64xf16, #shared_a, #smem, mutable>, !ttg.memdesc<1x64x128xf16, #shared_b, #smem, mutable>]>, !ttg.async.token
+
+    %a_get, %b_get, %get_token = nvws.aref.get.enter %aref[%c0, %c0] {ttg.partition = array<i32: 0>} : <[!ttg.memdesc<1x128x64xf16, #shared_a, #smem, mutable>, !ttg.memdesc<1x64x128xf16, #shared_b, #smem, mutable>]> -> !ttg.memdesc<128x64xf16, #shared_a, #smem>, !ttg.memdesc<64x128xf16, #shared_b, #smem>, !ttg.async.token
+    ttng.tc_gen5_mma %a_get, %b_get, %acc, %true, %true {two_ctas, ttg.partition = array<i32: 0>} : !ttg.memdesc<128x64xf16, #shared_a, #smem>, !ttg.memdesc<64x128xf16, #shared_b, #smem>, !ttg.memdesc<128x128xf32, #tmem_2cta, #ttng.tensor_memory, mutable>
+    nvws.aref.get.exit %aref[%c0], %get_token [#nvws.async_op<tc5mma>, #nvws.async_op<tc5mma>] {ttg.partition = array<i32: 0>} : <[!ttg.memdesc<1x128x64xf16, #shared_a, #smem, mutable>, !ttg.memdesc<1x64x128xf16, #shared_b, #smem, mutable>]>, !ttg.async.token
     tt.return
   }
 }

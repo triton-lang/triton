@@ -367,11 +367,31 @@ Value mlir::triton::createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
 
 // Create an allocation and init the mbarriers.
 Value mlir::triton::createBarrierAlloc(Operation *op, int numBarriers,
-                                       int arriveCount) {
+                                       int arriveCount, bool twoCTALayout) {
   ImplicitLocOpBuilder rewriter(op->getLoc(), op);
 
-  Value barrierAlloc =
-      createScalarAlloc(rewriter, rewriter.getI64Type(), numBarriers);
+  Value barrierAlloc;
+  if (!twoCTALayout) {
+    barrierAlloc =
+        createScalarAlloc(rewriter, rewriter.getI64Type(), numBarriers);
+  } else {
+    MLIRContext *ctx = rewriter.getContext();
+    int numCTAs = triton::gpu::lookupNumCTAs(op);
+    assert(numCTAs > 1 && numCTAs % 2 == 0);
+    Attribute sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(ctx);
+    auto kBlock = StringAttr::get(ctx, "block");
+    auto dim = standardOutDimNames(ctx, /*rank=*/1)[0];
+    auto barrierCGALayout = ttg::CGAEncodingAttr::get(
+        ctx, LinearLayout::zeros1D(2, kBlock, dim) *
+                 LinearLayout::identity1D(numCTAs / 2, kBlock, dim));
+    auto barrierEncoding = ttg::SwizzledSharedEncodingAttr::get(
+        ctx, 1, 1, 1, {0}, barrierCGALayout);
+    auto barrierType = ttg::MemDescType::get(
+        {numBarriers, numCTAs / 2}, rewriter.getI64Type(), barrierEncoding,
+        sharedMemorySpace, /*mutableMemory=*/true);
+    barrierAlloc =
+        ttg::LocalAllocOp::create(rewriter, barrierType, Value());
+  }
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(rewriter, barrierAlloc, i);
     ttng::InitBarrierOp::create(rewriter, barrierView, arriveCount);

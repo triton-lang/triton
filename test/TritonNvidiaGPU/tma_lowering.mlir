@@ -18,6 +18,41 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 }
 
 // -----
+
+#blocked_a_twocta = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+#blocked_b_twocta = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
+#shared_a_twocta = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#shared_b_twocta = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1]]}>
+#mma_bar_twocta = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+#tmem_twocta = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-DAG: #[[$TWOCTA_TMA_BAR:.*]] = #ttg.swizzled_shared<{{.*}}CGALayout = {{\[\[0\]\]}}{{.*}}>
+  // CHECK-LABEL: @tma_load_feeds_two_cta_mmav5
+  // CHECK: ttg.local_alloc : () -> !ttg.memdesc<1xi64, #[[$TWOCTA_TMA_BAR]]
+  // CHECK: ttng.async_tma_copy_global_to_local
+  // CHECK-NOT: multicast
+  // CHECK: ttng.wait_barrier
+  tt.func public @tma_load_feeds_two_cta_mmav5(
+      %desc: !tt.tensordesc<64x128xf16, #shared_b_twocta>,
+      %a: !ttg.memdesc<256x64xf16, #shared_a_twocta, #smem, mutable>,
+      %acc: !ttg.memdesc<256x128xf32, #tmem_twocta, #ttng.tensor_memory, mutable>,
+      %bar: !ttg.memdesc<2xi64, #mma_bar_twocta, #smem, mutable>) {
+    %true = arith.constant true
+    %zero = arith.constant 0 : i32
+    %b = tt.descriptor_load %desc[%zero, %zero] : !tt.tensordesc<64x128xf16, #shared_b_twocta> -> tensor<64x128xf16, #blocked_b_twocta>
+    %b_smem = ttg.local_alloc %b : (tensor<64x128xf16, #blocked_b_twocta>) -> !ttg.memdesc<64x128xf16, #shared_b_twocta, #smem, mutable>
+    ttng.tc_gen5_mma %a, %b_smem, %acc, %true, %true, %bar[%true] {is_async, two_ctas} :
+      !ttg.memdesc<256x64xf16, #shared_a_twocta, #smem, mutable>,
+      !ttg.memdesc<64x128xf16, #shared_b_twocta, #smem, mutable>,
+      !ttg.memdesc<256x128xf32, #tmem_twocta, #ttng.tensor_memory, mutable>,
+      !ttg.memdesc<2xi64, #mma_bar_twocta, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
 #nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>

@@ -46,6 +46,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir::triton;
@@ -225,9 +226,34 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
   return count;
 }
 
+Value createArefBarrierAlloc(ImplicitLocOpBuilder &builder, Type type,
+                             unsigned numBarriers, bool twoCTAs) {
+  if (!twoCTAs)
+    return createScalarAlloc(builder, type, numBarriers);
+
+  MLIRContext *ctx = builder.getContext();
+  unsigned numCTAs = TritonGPUDialect::getNumCTAs(
+      builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>());
+  assert(numCTAs > 1 && numCTAs % 2 == 0);
+  Attribute sharedMemorySpace = SharedMemorySpaceAttr::get(ctx);
+  auto kBlock = StringAttr::get(ctx, "block");
+  auto dim = standardOutDimNames(ctx, /*rank=*/1)[0];
+  auto barrierCGALayout = CGAEncodingAttr::get(
+      ctx, LinearLayout::zeros1D(2, kBlock, dim) *
+               LinearLayout::identity1D(numCTAs / 2, kBlock, dim));
+  auto barrierEncoding =
+      SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCGALayout);
+  auto memDescType =
+      MemDescType::get({numBarriers, numCTAs / 2}, type, barrierEncoding,
+                       sharedMemorySpace, /*mutableMemory=*/true);
+  return LocalAllocOp::create(builder, memDescType, Value());
+}
+
 Value createBarriers(ImplicitLocOpBuilder &b1, ImplicitLocOpBuilder &b2,
-                     int numBarriers, int arrivalCount) {
-  Value barrierAlloc = createScalarAlloc(b1, b1.getI64Type(), numBarriers);
+                     int numBarriers, int arrivalCount,
+                     bool twoCTAs = false) {
+  Value barrierAlloc =
+      createArefBarrierAlloc(b1, b1.getI64Type(), numBarriers, twoCTAs);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(b1, barrierAlloc, i);
     InitBarrierOp::create(b1, barrierView, arrivalCount);
@@ -241,7 +267,9 @@ Value createBarriers(ImplicitLocOpBuilder &b1, ImplicitLocOpBuilder &b2,
   return barrierAlloc;
 }
 
-ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
+ArefValue
+createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter,
+                  const DenseSet<MMAv5OpInterface> &mmav5Ops) {
   BarrierCount count = getArrivalCount(op);
 
   auto arefTy = op.getType();
@@ -258,8 +286,27 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   auto op1 = op->getBlock()->findAncestorOpInBlock(*sorted.back());
   b2.setInsertionPointAfter(op1);
 
+  bool hasOnlyTMAProducers = false;
+  for (Operation *user : op->getUsers()) {
+    auto putExit = dyn_cast<ArefPutExitOp>(user);
+    if (!putExit)
+      continue;
+    auto asyncOps = castAsyncOpAttrs(putExit.getAsyncOps());
+    if (asyncOps.empty() ||
+        !llvm::all_of(asyncOps,
+                      [](AsyncOp kind) { return kind == AsyncOp::TMALoad; })) {
+      hasOnlyTMAProducers = false;
+      break;
+    }
+    hasOnlyTMAProducers = true;
+  }
+  bool useTwoCTATMA =
+      hasOnlyTMAProducers && !mmav5Ops.empty() &&
+      llvm::all_of(mmav5Ops,
+                   [](MMAv5OpInterface mma) { return mma.getTwoCtas(); });
   auto emptyMbars = createBarriers(b1, b2, depth, count.consumerPendingCount);
-  auto fullMbars = createBarriers(b1, b2, depth, count.producerPendingCount);
+  auto fullMbars = createBarriers(b1, b2, depth, count.producerPendingCount,
+                                  useTwoCTATMA);
 
   return ArefValue{emptyMbars, fullMbars, static_cast<int>(depth),
                    op.getOperands()};
@@ -615,7 +662,6 @@ public:
 
   LogicalResult matchAndRewrite(ArefCreateOp op,
                                 PatternRewriter &rewriter) const override {
-    auto aref = createAndInitMbar(op, rewriter);
     SetVector<Operation *> opToDelete;
     opToDelete.insert(op.getOperation());
 
@@ -624,6 +670,7 @@ public:
     // consumer mmav5 ops requires the corresponding get enter op to be still
     // used in the IR, collect them here.
     auto mmav5Ops = getAsyncMMAv5Consumers(op.getResult());
+    auto aref = createAndInitMbar(op, rewriter, mmav5Ops);
 
     for (auto userOp : op->getUsers()) {
       opToDelete.insert(userOp);

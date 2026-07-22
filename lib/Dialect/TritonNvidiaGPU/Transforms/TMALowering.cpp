@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/ErrorHandling.h"
 
 namespace mlir {
@@ -37,13 +38,24 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   auto alloc =
       gpu::LocalAllocOp::create(rewriter, loc, memDescType).getResult();
   auto numCTAs = gpu::lookupNumCTAs(op);
-  auto barrierCGALayout =
-      gpu::CGAEncodingAttr::get1DLayout(tensorType.getContext(), numCTAs);
+  bool useTwoCTABarrier = triton::valueFeedsTwoCTAMMA(op->getResult(0));
+  auto barrierCGALayout = [&]() -> gpu::CGAEncodingAttr {
+    if (!useTwoCTABarrier)
+      return gpu::CGAEncodingAttr::get1DLayout(ctx, numCTAs);
+    assert(numCTAs > 1 && numCTAs % 2 == 0);
+    auto kBlock = StringAttr::get(ctx, "block");
+    auto dim = standardOutDimNames(ctx, /*rank=*/1)[0];
+    return gpu::CGAEncodingAttr::get(
+        ctx, LinearLayout::zeros1D(2, kBlock, dim) *
+                 LinearLayout::identity1D(numCTAs / 2, kBlock, dim));
+  }();
   auto barrierEncoding = gpu::SwizzledSharedEncodingAttr::get(
       tensorType.getContext(), 1, 1, 1, {0}, barrierCGALayout);
+  int numBarrierSlots = useTwoCTABarrier ? numCTAs / 2 : numCTAs;
   gpu::MemDescType barrierMemDescType =
-      gpu::MemDescType::get({numCTAs}, rewriter.getI64Type(), barrierEncoding,
-                            sharedMemorySpace, /*mutableMemory=*/true);
+      gpu::MemDescType::get({numBarrierSlots}, rewriter.getI64Type(),
+                            barrierEncoding, sharedMemorySpace,
+                            /*mutableMemory=*/true);
   Value barrierAlloc =
       gpu::LocalAllocOp::create(rewriter, loc, barrierMemDescType);
   InitBarrierOp::create(rewriter, loc, barrierAlloc, 1);

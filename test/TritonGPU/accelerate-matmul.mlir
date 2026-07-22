@@ -1,4 +1,5 @@
-// RUN: triton-opt %s -split-input-file --tritongpu-accelerate-matmul -verify-diagnostics=only-expected | FileCheck %s
+// RUN: env -u TRITON_ENABLE_MMA_V5_TWO_CTA triton-opt %s -split-input-file --tritongpu-accelerate-matmul -verify-diagnostics=only-expected | FileCheck %s
+// RUN: env TRITON_ENABLE_MMA_V5_TWO_CTA=1 triton-opt %s -split-input-file --tritongpu-accelerate-matmul -verify-diagnostics=only-expected | FileCheck %s --check-prefix=TWOCTA
 
 // CHECK: #[[MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16, 16]}>
 // CHECK: #[[MMA1:.+]] = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>
@@ -42,6 +43,126 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     }
     tt.store %153, %149 : tensor<128x64x!tt.ptr<f16>, #blocked1>
     tt.return
+  }
+}
+
+// -----
+
+#twocta_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#twocta_rhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @mmav5_two_ctas_descriptor_rhs
+  // CHECK: ttng.tc_gen5_mma
+  // CHECK-NOT: {two_ctas}
+  // TWOCTA-LABEL: @mmav5_two_ctas_descriptor_rhs
+  // TWOCTA: tt.descriptor_load
+  // TWOCTA: ttng.tc_gen5_mma {{.*}} {two_ctas}
+  tt.func public @mmav5_two_ctas_descriptor_rhs(
+      %a: tensor<128x64xf16, #twocta_blocked>,
+      %b_desc: !tt.tensordesc<64x256xf16>,
+      %c: tensor<128x256xf32, #twocta_blocked>) -> tensor<128x256xf32, #twocta_blocked> {
+    %zero = arith.constant 0 : i32
+    %ad = ttg.convert_layout %a : tensor<128x64xf16, #twocta_blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #twocta_blocked}>>
+    %b = tt.descriptor_load %b_desc[%zero, %zero] : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #twocta_rhs>
+    %bd = ttg.convert_layout %b : tensor<64x256xf16, #twocta_rhs> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #twocta_blocked}>>
+    %d = tt.dot %ad, %bd, %c : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #twocta_blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #twocta_blocked}>> -> tensor<128x256xf32, #twocta_blocked>
+    tt.return %d : tensor<128x256xf32, #twocta_blocked>
+  }
+}
+
+// -----
+
+#twocta_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#twocta_rhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // TWOCTA-LABEL: @mmav5_two_ctas_mixed_eligible
+  // TWOCTA: ttng.tc_gen5_mma
+  // TWOCTA-NOT: {two_ctas}
+  tt.func public @mmav5_two_ctas_mixed_eligible(
+      %a: tensor<128x64xf16, #twocta_blocked>,
+      %b_desc: !tt.tensordesc<64x256xf16>,
+      %c: tensor<128x256xf32, #twocta_blocked>) -> tensor<128x256xf32, #twocta_blocked> {
+    %zero = arith.constant 0 : i32
+    %ad = ttg.convert_layout %a : tensor<128x64xf16, #twocta_blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #twocta_blocked}>>
+    %b = tt.descriptor_load %b_desc[%zero, %zero] : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #twocta_rhs>
+    %bd = ttg.convert_layout %b : tensor<64x256xf16, #twocta_rhs> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #twocta_blocked}>>
+    %d = tt.dot %ad, %bd, %c : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #twocta_blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #twocta_blocked}>> -> tensor<128x256xf32, #twocta_blocked>
+    tt.return %d : tensor<128x256xf32, #twocta_blocked>
+  }
+
+  // TWOCTA-LABEL: @mmav5_two_ctas_mixed_ineligible
+  // TWOCTA: ttng.tc_gen5_mma
+  // TWOCTA-NOT: {two_ctas}
+  tt.func public @mmav5_two_ctas_mixed_ineligible(
+      %a: tensor<128x64xf16, #twocta_blocked>,
+      %b: tensor<64x256xf16, #twocta_rhs>,
+      %c: tensor<128x256xf32, #twocta_blocked>) -> tensor<128x256xf32, #twocta_blocked> {
+    %ad = ttg.convert_layout %a : tensor<128x64xf16, #twocta_blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #twocta_blocked}>>
+    %bd = ttg.convert_layout %b : tensor<64x256xf16, #twocta_rhs> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #twocta_blocked}>>
+    %d = tt.dot %ad, %bd, %c : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #twocta_blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #twocta_blocked}>> -> tensor<128x256xf32, #twocta_blocked>
+    tt.return %d : tensor<128x256xf32, #twocta_blocked>
+  }
+}
+
+// -----
+
+#twocta_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#twocta_rhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // TWOCTA-LABEL: @mmav5_two_ctas_n_too_large
+  // TWOCTA: ttng.tc_gen5_mma
+  // TWOCTA-NOT: {two_ctas}
+  tt.func public @mmav5_two_ctas_n_too_large(
+      %a: tensor<128x64xf16, #twocta_blocked>,
+      %b_desc: !tt.tensordesc<64x512xf16>,
+      %c: tensor<128x512xf32, #twocta_blocked>) -> tensor<128x512xf32, #twocta_blocked> {
+    %zero = arith.constant 0 : i32
+    %ad = ttg.convert_layout %a : tensor<128x64xf16, #twocta_blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #twocta_blocked}>>
+    %b = tt.descriptor_load %b_desc[%zero, %zero] : !tt.tensordesc<64x512xf16> -> tensor<64x512xf16, #twocta_rhs>
+    %bd = ttg.convert_layout %b : tensor<64x512xf16, #twocta_rhs> -> tensor<64x512xf16, #ttg.dot_op<{opIdx = 1, parent = #twocta_blocked}>>
+    %d = tt.dot %ad, %bd, %c : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #twocta_blocked}>> * tensor<64x512xf16, #ttg.dot_op<{opIdx = 1, parent = #twocta_blocked}>> -> tensor<128x512xf32, #twocta_blocked>
+    tt.return %d : tensor<128x512xf32, #twocta_blocked>
+  }
+}
+
+// -----
+
+#onecta_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // TWOCTA-LABEL: @mmav5_num_ctas_one
+  // TWOCTA: ttng.tc_gen5_mma
+  // TWOCTA-NOT: {two_ctas}
+  tt.func public @mmav5_num_ctas_one(
+      %a: tensor<128x64xf16, #onecta_blocked>,
+      %b_desc: !tt.tensordesc<64x256xf16>,
+      %c: tensor<128x256xf32, #onecta_blocked>) -> tensor<128x256xf32, #onecta_blocked> {
+    %zero = arith.constant 0 : i32
+    %ad = ttg.convert_layout %a : tensor<128x64xf16, #onecta_blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #onecta_blocked}>>
+    %b = tt.descriptor_load %b_desc[%zero, %zero] : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #onecta_blocked>
+    %bd = ttg.convert_layout %b : tensor<64x256xf16, #onecta_blocked> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #onecta_blocked}>>
+    %d = tt.dot %ad, %bd, %c : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #onecta_blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #onecta_blocked}>> -> tensor<128x256xf32, #onecta_blocked>
+    tt.return %d : tensor<128x256xf32, #onecta_blocked>
+  }
+}
+
+// -----
+
+#multicta_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1], [0, 2]]}>
+#multicta_lhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0], [0, 0]]}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // TWOCTA-LABEL: @mmav5_four_ctas_fallback
+  // TWOCTA: ttng.tc_gen5_mma
+  // TWOCTA-NOT: {two_ctas}
+  tt.func public @mmav5_four_ctas_fallback(
+      %a: tensor<128x64xf16, #multicta_lhs>,
+      %b_desc: !tt.tensordesc<64x1024xf16>,
+      %c: tensor<128x1024xf32, #multicta_blocked>) -> tensor<128x1024xf32, #multicta_blocked> {
+    %zero = arith.constant 0 : i32
+    %ad = ttg.convert_layout %a : tensor<128x64xf16, #multicta_lhs> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #multicta_blocked}>>
+    %b = tt.descriptor_load %b_desc[%zero, %zero] : !tt.tensordesc<64x1024xf16> -> tensor<64x1024xf16, #multicta_blocked>
+    %bd = ttg.convert_layout %b : tensor<64x1024xf16, #multicta_blocked> -> tensor<64x1024xf16, #ttg.dot_op<{opIdx = 1, parent = #multicta_blocked}>>
+    %d = tt.dot %ad, %bd, %c : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #multicta_blocked}>> * tensor<64x1024xf16, #ttg.dot_op<{opIdx = 1, parent = #multicta_blocked}>> -> tensor<128x1024xf32, #multicta_blocked>
+    tt.return %d : tensor<128x1024xf32, #multicta_blocked>
   }
 }
 

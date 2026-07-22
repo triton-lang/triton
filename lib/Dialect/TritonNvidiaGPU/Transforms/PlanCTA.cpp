@@ -29,6 +29,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -213,9 +214,20 @@ void CTAPlanner::markTiled() {
 }
 
 bool CTAPlanner::processDot(triton::FuncOp &funcOp) {
+  ModuleOp mod = funcOp->getParentOfType<ModuleOp>();
+  bool enableTwoCTAs =
+      tools::getBoolEnv("TRITON_ENABLE_MMA_V5_TWO_CTA") &&
+      ::mlir::getNVIDIAComputeCapability(mod) >= 100;
+
   // TODO: This is a naive implementation and should be refactored
   auto getCTATiling = [](int64_t M, int64_t N, int64_t K,
-                         unsigned numCTAs) -> std::pair<unsigned, unsigned> {
+                         unsigned numCTAs,
+                         bool preferTwoCTAs) -> std::pair<unsigned, unsigned> {
+    // MMAv5 cta_group::2 requires the first CTA basis to split M. Descriptor
+    // RHS dots are the constrained Phase 1 path supported by AccelerateMatmul.
+    if (preferTwoCTAs && numCTAs == 2 && M >= 128)
+      return {2, 1};
+
     // prefer a larger chunk size, at most 128; first assign splitM.
     unsigned chunk_m = 128;
     auto isLegal = [](unsigned chunk) { return chunk >= 64; };
@@ -250,7 +262,14 @@ bool CTAPlanner::processDot(triton::FuncOp &funcOp) {
     unsigned K = aTy.getShape()[1];
 
     unsigned splitM, splitN;
-    std::tie(splitM, splitN) = getCTATiling(M, N, K, ttg::getNumCTAs(dLayout));
+    auto rhs = dot.getB();
+    while (auto cvt = rhs.getDefiningOp<ttg::ConvertLayoutOp>())
+      rhs = cvt.getSrc();
+    bool preferTwoCTAs =
+        enableTwoCTAs && ttg::getNumCTAs(dLayout) == 2 &&
+        isa_and_nonnull<triton::DescriptorLoadOp>(rhs.getDefiningOp());
+    std::tie(splitM, splitN) =
+        getCTATiling(M, N, K, ttg::getNumCTAs(dLayout), preferTwoCTAs);
     // FIXME: Should consider IR with more than one DotOps
     markTiled();
 

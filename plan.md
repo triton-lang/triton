@@ -361,7 +361,7 @@ Res FFN-down: [778, 16384] * [16384, 2048] + residual, 17 calls/inference
 
 验收：数值正确；默认 Python 路径和 `.so` hash 可追溯；相同源码/相同 cache 策略重复运行稳定；能从汇编区分 1CTA/2CTA/multicast。
 
-### Phase 1：普通 Triton 最小自动 2CTA，先做 Res FFN-down
+### Phase 1：普通 Triton 最小自动 2CTA，先做 Res FFN-down（已完成，性能负结果）
 
 范围：只处理单 `tl.dot` 的 Res FFN-down；保持 tile、TMA descriptor、residual epilogue、Group-M 和 CUDA Graph 集成不变。
 
@@ -384,6 +384,15 @@ Res FFN-down: [778, 16384] * [16384, 2048] + residual, 17 calls/inference
 - 无意外 `.multicast::cluster`；
 - Res 微基准、Graph 内累计时间和端到端均不回退超过 3%；
 - 能通过环境变量或 compiler option 回退 1CTA。
+
+执行结果（2026-07-22）：编译器 IR、ISA 和数值正确性全部通过；普通 Triton
+已能在 `TRITON_ENABLE_MMA_V5_TWO_CTA=1` 时为 descriptor-RHS Res FFN-down
+生成 `tcgen05.mma.cta_group::2`，且默认关闭。2CTA 的 Graph P50 相对相同普通
+Triton 1CTA 回退 2.071%，仍在本阶段 3% 验收线内，但明显慢于生产 Gluon。
+NSYS 证明回退来自 kernel 本体；NCU 显示 shared memory 虽减半，但两版均为
+255 registers/thread、1 CTA/SM，2CTA grid/waves 翻倍且没有 TMA load multicast。
+本阶段不进入生产默认。完整报告位于
+`/workspace/realtime_vla/profiling_reports/2026-07-22_phase1_triton_res_2cta/REPORT_ZH.md`。
 
 ### Phase 2：Gate encoder 双 dot
 
@@ -599,4 +608,4 @@ ncu/
 - [x] 审查 Triton 2CTA 开发分支与 CUTLASS/CuTe Blackwell schedule。
 - [ ] 网络可用后补齐 partial-clone 对象，逐文件复核目标提交 diff。
 - [ ] 执行 Phase 0 的重编、独立 cache 和 compiler-only 基线。
-- [ ] 从 Res FFN-down 开始 Phase 1 最小自动 2CTA pass。
+- [x] 完成 Res FFN-down Phase 1 最小自动 2CTA pass、ISA/数值/Graph/NSYS/NCU 验证；性能负结果，默认关闭。

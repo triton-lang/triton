@@ -381,7 +381,11 @@ void createTMABarrierAndWait(
       sizeInBytes += loadSize * tensorTy.getElementTypeBitWidth() / 8;
     }
 
-    Value barrierAlloc = triton::createBarrierAlloc(forOp, numBuffers);
+    bool useTwoCTABarrier = llvm::any_of(group, [](Operation *op) {
+      return llvm::any_of(op->getResults(), triton::valueFeedsTwoCTAMMA);
+    });
+    Value barrierAlloc = triton::createBarrierAlloc(
+        forOp, numBuffers, /*arriveCount=*/1, useTwoCTABarrier);
     OpBuilderForStage builder(forOp.getLoc(), group[0], schedule);
     Value barrier = triton::createSingleBufferView(builder, barrierAlloc,
                                                    loadGroup.insertIdx);

@@ -20,6 +20,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
@@ -426,6 +427,17 @@ static int computeOrigBitWidth(Value x) {
   return origBitWidth;
 }
 
+static LogicalResult checkMMAv5InputPrecision(DotOp dotOp) {
+  Value a = dotOp.getA();
+  Value b = dotOp.getB();
+  // Other 32-bit input precision modes are handled by decomposition or
+  // fallback paths outside BlockedToMMAv5.
+  if (std::min(computeOrigBitWidth(a), computeOrigBitWidth(b)) >= 32 &&
+      dotOp.getInputPrecision() != InputPrecision::TF32)
+    return failure();
+  return success();
+}
+
 namespace {
 
 // Common MMA encoding creation
@@ -593,20 +605,95 @@ replaceCGALayout(DistributedEncodingTrait layout,
   }
 }
 
-static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter) {
+static CGAEncodingAttr getTwoCTARHSCGALayout(RankedTensorType retType) {
+  if (retType.getRank() != 2)
+    return {};
+
+  // A two-CTA MMAv5 pair splits the output along M and the RHS along N. Map
+  // the first M-splitting CTA basis to N and broadcast any remaining M bases.
+  MLIRContext *ctx = retType.getContext();
+  auto retCGALayout = getCGALayout(retType.getEncoding());
+  auto kBlock = StringAttr::get(ctx, "block");
+  const auto &retBases =
+      retCGALayout.getLinearLayout().getBases().lookup(kBlock);
+  if (retBases.empty() || retBases.front().size() != 2 ||
+      retBases.front()[0] != 1 || retBases.front()[1] != 0)
+    return {};
+
+  std::vector<std::vector<int32_t>> rhsBases;
+  rhsBases.reserve(retBases.size());
+  rhsBases.push_back({0, 1});
+  for (ArrayRef<int32_t> basis : llvm::drop_begin(retBases)) {
+    if (basis.size() != 2)
+      return {};
+    rhsBases.push_back({0, 2 * basis[1]});
+  }
+
+  return CGAEncodingAttr::get(
+      ctx, LinearLayout({{kBlock, std::move(rhsBases)}},
+                        standardOutDimNames(ctx, 2)));
+}
+
+static bool canUseTwoCTAs(DotOp dotOp) {
+  // Phase 1 validates exactly one cooperating CTA pair. Multi-pair clusters
+  // require the separate multicast layout and scheduling work from Phase 4.
+  if (lookupNumCTAs(dotOp) != 2)
+    return false;
+
+  RankedTensorType retType = dotOp.getType();
+  Value b = stripConvertLayout(dotOp.getB());
+  Operation *defOp = b.getDefiningOp();
+  // Phase 1 intentionally accepts descriptor loads only. Ordinary loads and
+  // descriptor gathers remain on the existing one-CTA path.
+  if (!isa_and_nonnull<triton::DescriptorLoadOp>(defOp))
+    return false;
+
+  if (!getTwoCTARHSCGALayout(retType))
+    return false;
+
+  auto outDims = standardOutDimNames(retType.getContext(), 2);
+  auto retCGALinearLayout =
+      getCGALayout(retType.getEncoding()).getLinearLayout();
+  unsigned nPerCTA =
+      retType.getDimSize(1) / retCGALinearLayout.getOutDimSize(outDims[1]);
+  return nPerCTA <= 256;
+}
+
+static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
+  bool sawMMAv5Dot = false;
+  WalkResult result = module.walk([&](Operation *op) -> WalkResult {
+    if (auto dotOp = dyn_cast<DotOp>(op)) {
+      RankedTensorType retType = dotOp.getType();
+      if (!retType.getEncoding() ||
+          isa<NvidiaMmaEncodingAttr>(retType.getEncoding()))
+        return WalkResult::advance();
+      if (getMMAVersionSafe(computeCapability, dotOp) != 5 ||
+          failed(checkMMAv5InputPrecision(dotOp)))
+        return WalkResult::advance();
+
+      sawMMAv5Dot = true;
+      return canUseTwoCTAs(dotOp) ? WalkResult::advance()
+                                  : WalkResult::interrupt();
+    }
+
+    // Scaled MMAv5 lowering does not support two_ctas yet. PTX requires every
+    // TCGen05 instruction in a kernel to use a consistent CTA mode.
+    if (isa<DotScaledOp>(op))
+      return WalkResult::interrupt();
+    return WalkResult::advance();
+  });
+  return sawMMAv5Dot && !result.wasInterrupted();
+}
+
+static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
+                           const CGAEncodingAttr &newCGALayout) {
   OpBuilder::InsertionGuard g(rewriter);
-  MLIRContext *ctx = b.getContext();
-  while (auto cvtOp = b.getDefiningOp<ConvertLayoutOp>())
-    b = cvtOp.getSrc();
+  b = stripConvertLayout(b);
   auto loadOp = b.getDefiningOp();
   assert((isa<triton::LoadOp, triton::DescriptorLoadLikeOpInterface>(loadOp)) &&
          "expected LoadOp");
   RankedTensorType bType = cast<RankedTensorType>(b.getType());
   auto currentLayout = cast<DistributedEncodingTrait>(bType.getEncoding());
-  auto kBlock = StringAttr::get(ctx, "block");
-  auto dims = standardOutDimNames(ctx, 2);
-  auto newCGALayout =
-      CGAEncodingAttr::get(ctx, LinearLayout({{kBlock, {{0, 1}}}}, dims));
   Attribute newLayout = replaceCGALayout(currentLayout, newCGALayout);
   rewriter.setInsertionPoint(loadOp);
   for (OpOperand &operand : loadOp->getOpOperands()) {
@@ -628,11 +715,13 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter) {
 
 class BlockedToMMAv5 : public mlir::OpRewritePattern<DotOp> {
   int computeCapability;
+  bool enableTwoCTAs;
 
 public:
-  BlockedToMMAv5(mlir::MLIRContext *context, int computeCapability, int benefit)
+  BlockedToMMAv5(mlir::MLIRContext *context, int computeCapability,
+                 bool enableTwoCTAs, int benefit)
       : OpRewritePattern<DotOp>(context, benefit),
-        computeCapability(computeCapability) {}
+        computeCapability(computeCapability), enableTwoCTAs(enableTwoCTAs) {}
 
   mlir::LogicalResult
   matchAndRewrite(triton::DotOp dotOp,
@@ -654,16 +743,12 @@ public:
     // operands
     Value a = dotOp.getA();
     Value b = dotOp.getB();
-    if (std::min(computeOrigBitWidth(a), computeOrigBitWidth(b)) >= 32 &&
-        dotOp.getInputPrecision() != InputPrecision::TF32)
+    if (failed(checkMMAv5InputPrecision(dotOp)))
       return failure();
     auto oldAType = dotOp.getA().getType();
-    // NYI: PTX 13+ requires all tcgen instructions in a kernel to have a
-    // consistent CTA mode, disabling 2CTA mode for now. To re-enable,
-    // change the line below to: bool useTwoCTAs = canUseTwoCTAs(dotOp);
-    bool useTwoCTAs = false;
+    bool useTwoCTAs = enableTwoCTAs && canUseTwoCTAs(dotOp);
     if (useTwoCTAs) {
-      b = splitBOperand(b, rewriter);
+      b = splitBOperand(b, rewriter, getTwoCTARHSCGALayout(oldRetType));
     }
     // TF32 transpose is only supported with 128 swizzle mode with 32B
     // atomicity. As we currently don't support this layout we disallow
@@ -1049,8 +1134,13 @@ public:
     patterns.add<BlockedToMMA>(context, computeCapability, benefitDefault);
     patterns.add<ScaledBlockedToMMA>(context, computeCapability, benefitSM120);
     populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);
-    patterns.add<BlockedToMMAv5, ScaledBlockedToMMAv5>(
-        context, computeCapability, benefitMMAv5);
+    bool enableTwoCTAs =
+        tools::getBoolEnv("TRITON_ENABLE_MMA_V5_TWO_CTA") &&
+        canUseTwoCTAsInModule(m, computeCapability);
+    patterns.add<BlockedToMMAv5>(context, computeCapability, enableTwoCTAs,
+                                 benefitMMAv5);
+    patterns.add<ScaledBlockedToMMAv5>(context, computeCapability,
+                                       benefitMMAv5);
 
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       return signalPassFailure();

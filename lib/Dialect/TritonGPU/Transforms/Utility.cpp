@@ -1614,6 +1614,45 @@ SmallVector<Value> getTiedArgs(Operation *op, int resultIdx) {
   return {};
 }
 
+static void addForwardedValuesThroughUse(OpOperand &use,
+                                         llvm::SetVector<Value> &worklist) {
+  Operation *user = use.getOwner();
+  if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+    unsigned operandIdx = use.getOperandNumber();
+    if (operandIdx >= forOp.getNumControlOperands()) {
+      unsigned iterArgIdx = operandIdx - forOp.getNumControlOperands();
+      worklist.insert(forOp.getRegionIterArg(iterArgIdx));
+      worklist.insert(forOp.getResult(iterArgIdx));
+    }
+  } else if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+    if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp()))
+      worklist.insert(forOp.getResult(use.getOperandNumber()));
+  }
+
+  worklist.insert(user->result_begin(), user->result_end());
+}
+
+bool valueFeedsTwoCTAMMA(Value value) {
+  llvm::SetVector<Value> worklist;
+  worklist.insert(value);
+  for (unsigned i = 0; i < worklist.size(); ++i) {
+    Value current = worklist[i];
+    LLVM_DEBUG(DBGS() << "checking two-CTA users of " << current << "\n");
+    for (OpOperand &use : current.getUses()) {
+      Operation *user = use.getOwner();
+      LLVM_DEBUG(DBGS() << "  user: " << *user << "\n");
+      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
+        LLVM_DEBUG(DBGS() << "  MMAv5 two_ctas=" << mma.getTwoCtas() << "\n");
+        if (mma.getTwoCtas())
+          return true;
+        continue;
+      }
+      addForwardedValuesThroughUse(use, worklist);
+    }
+  }
+  return false;
+}
+
 LogicalResult verifyBarrierType(Operation *op,
                                 mlir::triton::gpu::MemDescType barrierType) {
   auto numCTAs = triton::gpu::lookupNumCTAs(op);
