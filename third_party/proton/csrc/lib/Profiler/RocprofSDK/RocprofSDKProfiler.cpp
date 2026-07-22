@@ -601,7 +601,7 @@ void processGraphKernelRecord(
       const auto &nodeState = nodeStateIt->second;
       if (nodeState.status.isMissingName()) {
         throw makeRuntimeError(
-            "[PROTON] Kernel name is missing for a graph node.");
+            "Kernel name is missing for a graph node.");
       }
       const bool isMetricKernel = nodeState.status.isMetricNode();
       for (auto &[data, entry] : externState.dataToGraphEntry) {
@@ -1069,8 +1069,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
     if (!findGraph && !impl->graphStates[graphExecId].captureStatusChecked) {
       impl->graphStates[graphExecId].captureStatusChecked = true;
       std::cerr << "[PROTON] Cannot find graph for graphExecId: " << graphExecId
-                << ", and graph replay attribution may be incomplete. "
-                   "Please start profiling before the graph is captured."
+                << ", and it may cause memory leak. To avoid this problem, "
+                   "please start profiling before the graph is created."
                 << std::endl;
     } else if (findGraph &&
                !impl->graphStates[graphExecId].captureStatusChecked) {
@@ -1529,7 +1529,7 @@ void RocprofSDKProfiler::doSetMode(
                                     "RocprofSDKProfiler");
   } else if (!mode.empty()) {
     throw std::invalid_argument(
-        "[PROTON] RocprofSDKProfiler: unsupported mode: " + mode);
+        "RocprofSDKProfiler: unsupported mode: " + mode);
   }
 }
 
