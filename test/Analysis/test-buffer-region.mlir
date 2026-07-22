@@ -65,6 +65,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
+#shared_holey = #ttg.shared_linear<{offset = [[0, 1], [0, 0], [1, 0], [2, 0]], block = []}, alignment = 16>
+#shared_dense = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [2, 0]], block = []}, alignment = 16>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  tt.func public @shared_zero_bases_belong_to_allocation() {
+    %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x2xi32, #shared_holey, #smem, mutable>
+    %view = ttg.memdesc_reinterpret %alloc : !ttg.memdesc<4x2xi32, #shared_holey, #smem, mutable> -> !ttg.memdesc<4x4xi32, #shared_dense, #smem, mutable>
+    // expected-remark @below {{Buffers: [0, 64]}}
+    ttg.local_load %view : !ttg.memdesc<4x4xi32, #shared_dense, #smem, mutable> -> tensor<4x4xi32>
+    tt.return
+  }
+
+  tt.func public @shared_zero_bases_belong_to_subslices() {
+    %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x2xi32, #shared_holey, #smem, mutable>
+    %lower = ttg.memdesc_subslice %alloc [0, 0] : !ttg.memdesc<4x2xi32, #shared_holey, #smem, mutable> -> !ttg.memdesc<2x2xi32, #shared_holey, #smem, mutable, 4x2>
+    %upper = ttg.memdesc_subslice %alloc [2, 0] : !ttg.memdesc<4x2xi32, #shared_holey, #smem, mutable> -> !ttg.memdesc<2x2xi32, #shared_holey, #smem, mutable, 4x2>
+    // expected-remark @below {{Buffers: [0, 32]}}
+    ttg.local_load %lower : !ttg.memdesc<2x2xi32, #shared_holey, #smem, mutable, 4x2> -> tensor<2x2xi32>
+    // expected-remark @below {{Buffers: [32, 32]}}
+    ttg.local_load %upper : !ttg.memdesc<2x2xi32, #shared_holey, #smem, mutable, 4x2> -> tensor<2x2xi32>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>

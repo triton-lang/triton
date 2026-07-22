@@ -62,7 +62,11 @@ unsigned getMemDescSize(ttg::MemDescType ty) {
   for (auto [dim, size] : llvm::zip_equal(logicalDims, shape))
     view = view.resizeInDim(dim, size);
   auto offsetDim = StringAttr::get(ty.getContext(), "offset");
-  uint64_t viewSpan = getOutputBasisMask(view, logicalDims, offsetDim) + 1;
+  // Zero physical bases are still owned by the allocation and its subviews.
+  uint64_t zeroMask = (allocation.getInDimSize(offsetDim) - 1) &
+                      ~getInputBasisMask(allocation, offsetDim, logicalDims);
+  uint64_t viewSpan =
+      (getOutputBasisMask(view, logicalDims, offsetDim) | zeroMask) + 1;
   return ((stages - 1) * allocation.getInDimSize(offsetDim) + viewSpan) *
          elSize;
 }
@@ -138,7 +142,7 @@ FailureOr<uint32_t> getMemDescSubsliceByteOffset(ttg::MemDescSubsliceOp op) {
 
   StringAttr offsetDim = StringAttr::get(ctx, "offset");
   StringAttr blockDim = StringAttr::get(ctx, "block");
-  mlir::triton::LinearLayout inverse = layout.invert();
+  mlir::triton::LinearLayout inverse = layout.pseudoinvert();
   auto mapped = inverse.apply(logicalOffsets);
   if (mapped.size() != 2 || mapped[0].first != offsetDim ||
       mapped[1].first != blockDim) {
