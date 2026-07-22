@@ -301,7 +301,6 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
     assert has_positive_time_metric(replay1_frame)
 
 
-
 @_skip_cudagraph_test
 def test_cudagraph_deactivate(tmp_path, device: str):
     stream = torch.cuda.Stream()
@@ -368,7 +367,6 @@ def test_cudagraph_deactivate(tmp_path, device: str):
     assert scope_a_frame is not None
     assert scope_b_frame is None
     assert scope_c_frame is not None
-
 
 
 @_skip_cudagraph_test
