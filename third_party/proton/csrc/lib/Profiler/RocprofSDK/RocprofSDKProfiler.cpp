@@ -98,6 +98,9 @@ struct RocprofilerRuntimeState {
   bool configured{false};
   bool codeObjectStarted{false};
   bool profilingStarted{false};
+  // The profiling context stays started across Proton sessions, so track
+  // whether callbacks should logically be processed separately.
+  std::atomic<bool> profilingActive{false};
   std::atomic<bool> nvtxEnabled{false};
   RocprofSDKProfiler::RocprofSDKProfilerPimpl *pimpl{nullptr};
 };
@@ -105,6 +108,22 @@ struct RocprofilerRuntimeState {
 RocprofilerRuntimeState &getRuntimeState() {
   static RocprofilerRuntimeState state;
   return state;
+}
+
+// rocprofiler-sdk preserves userData from ENTER to EXIT for each API call.
+// Remember whether the call entered during an active Proton session so an
+// in-flight call still gets its matching EXIT handling if the session stops.
+bool isProfilingCallbackActive(
+    rocprofiler_callback_tracing_record_t record,
+    rocprofiler_user_data_t *userData) {
+  if (record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER ||
+      record.phase == ROCPROFILER_CALLBACK_PHASE_NONE) {
+    userData->value = getRuntimeState().profilingActive.load(
+                          std::memory_order_relaxed)
+                          ? 1
+                          : 0;
+  }
+  return userData->value != 0;
 }
 
 using RoctxTracerCallbackFn = int (*)(uint32_t domain, uint32_t operationId,
@@ -1009,6 +1028,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleRuntimeExit(
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
     rocprofiler_callback_tracing_record_t record,
     rocprofiler_user_data_t *userData, void *arg) {
+  if (!isProfilingCallbackActive(record, userData))
+    return;
   if (record.kind != ROCPROFILER_CALLBACK_TRACING_HIP_RUNTIME_API)
     return;
 
@@ -1031,6 +1052,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
     rocprofiler_callback_tracing_record_t record,
     rocprofiler_user_data_t *userData, void *arg) {
+  if (!isProfilingCallbackActive(record, userData))
+    return;
   auto *payload = static_cast<rocprofiler_callback_tracing_hip_graph_data_t *>(
       record.payload);
   auto *impl = static_cast<RocprofSDKProfilerPimpl *>(arg);
@@ -1099,6 +1122,8 @@ int RocprofSDKProfiler::RocprofSDKProfilerPimpl::graphNodeCorrelationCallback(
     rocprofiler_tracing_operation_t operation, uint64_t internalCorrelationId,
     rocprofiler_user_data_t *externalCorrelationId, void *userData) {
   externalCorrelationId->value = 0;
+  if (!getRuntimeState().profilingActive.load(std::memory_order_relaxed))
+    return 0;
   if (kind != ROCPROFILER_EXTERNAL_CORRELATION_REQUEST_KERNEL_DISPATCH)
     return 0;
   if (graphLaunchStack.empty())
@@ -1131,6 +1156,8 @@ int RocprofSDKProfiler::RocprofSDKProfilerPimpl::graphNodeCorrelationCallback(
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::markerCallback(
     rocprofiler_callback_tracing_record_t record,
     rocprofiler_user_data_t *userData, void *arg) {
+  if (!isProfilingCallbackActive(record, userData))
+    return;
   if (record.kind != ROCPROFILER_CALLBACK_TRACING_MARKER_CORE_API)
     return;
   if (record.phase != ROCPROFILER_CALLBACK_PHASE_ENTER)
@@ -1153,6 +1180,10 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::markerCallback(
 // librocprofiler-sdk-roctx.so is not loaded (e.g. bare ROCm without TheRock).
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::roctxCallback(
     uint32_t operationId, void *data) {
+  auto &state = getRuntimeState();
+  if (!state.profilingActive.load(std::memory_order_relaxed) ||
+      !state.nvtxEnabled.load(std::memory_order_relaxed))
+    return;
   auto *apiData = static_cast<roctx_api_data_t *>(data);
   if (operationId == ROCTX_API_ID_roctxRangePushA) {
     threadState.enterScope(apiData->args.roctxRangePushA.message);
@@ -1404,6 +1435,8 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
 
 void protonToolFini(void *toolData) {
   auto *state = static_cast<RocprofilerRuntimeState *>(toolData);
+  state->profilingActive.store(false, std::memory_order_relaxed);
+  state->nvtxEnabled.store(false, std::memory_order_relaxed);
   {
     std::lock_guard<std::mutex> lock(state->mutex);
     if (state->profilingStarted) {
@@ -1445,6 +1478,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStart() {
       rocprofiler::startContext<true>(state.profilingContext);
       state.profilingStarted = true;
     }
+    state.profilingActive.store(true, std::memory_order_relaxed);
     bool nvtx = getBoolEnv("TRITON_ENABLE_NVTX", true);
     state.nvtxEnabled.store(nvtx, std::memory_order_relaxed);
     if (nvtx)
@@ -1469,6 +1503,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doFlush() {
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStop() {
   auto &state = getRuntimeState();
+  state.profilingActive.store(false, std::memory_order_relaxed);
   state.nvtxEnabled.store(false, std::memory_order_relaxed);
   registerRoctxCallback(false);
 
@@ -1488,8 +1523,9 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStop() {
 
   // Keep the profiling context running. rocprofiler-sdk does not reliably
   // re-intercept HIP runtime API calls after a stopContext→startContext
-  // cycle on the same context. The correlation ID mechanism ensures that
-  // kernel dispatch records without a matching active session are discarded.
+  // cycle on the same context. profilingActive suppresses synchronous
+  // callbacks outside a Proton session, while the correlation ID mechanism
+  // discards unmatched kernel dispatch records from the always-running buffer.
 }
 
 RocprofSDKProfiler::RocprofSDKProfiler() {
