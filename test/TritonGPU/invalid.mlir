@@ -824,6 +824,12 @@ tt.func @async_copy_invalid_other_type(%input: tensor<64x64x!tt.ptr<f16>, #block
 
 // -----
 
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+// expected-error @below {{element type bit width must be 1 or at least 8; got 4}}
+!subbyte_memdesc = !ttg.memdesc<8xi4, #shared, #ttg.shared_memory>
+
+// -----
+
 #shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
 // expected-error @below {{rank must be equal to or one less than the shape size. Got 2 and 4}}
 !rank_too_high = !ttg.memdesc<4x4x4x4xf32, #shared, #ttg.shared_memory>

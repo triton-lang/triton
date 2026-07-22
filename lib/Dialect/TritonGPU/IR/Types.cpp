@@ -1,5 +1,6 @@
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "mlir/IR/DialectImplementation.h" // required by `Types.cpp.inc`
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -95,6 +96,10 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
   if (shape.empty()) {
     return emitError() << "rank 0 memdesc is not allowed";
   }
+  unsigned bitwidth = getIntOrFloatOrPtrBitWidth(elementType);
+  if (bitwidth != 1 && bitwidth < 8)
+    return emitError() << "element type bit width must be 1 or at least 8; got "
+                       << bitwidth;
   if (llvm::is_contained(shape, 0))
     return emitError() << "shape has 0 dimension";
   if (llvm::is_contained(allocShape, 0))
