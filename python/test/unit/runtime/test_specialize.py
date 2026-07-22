@@ -179,17 +179,20 @@ def test_specialize_impl(input_generator, backend, is_const, specialize_value, a
 
 
 @pytest.mark.parametrize(
-    ("instrumentation_mode", "disable_optimization", "expected_option"),
+    ("instrumentation_mode", "disable_optimization", "num_ctas", "expected_option"),
     [
-        ("", False, ()),
-        ("consan", False, ("--Ofast-compile", "max")),
-        ("iisan,consan", False, ("--Ofast-compile", "max")),
-        ("consan", True, ("--opt-level", "0")),
-        ("fpsan", False, ("--opt-level", "1")),
-        ("gsan", False, ()),
+        ("", False, 1, ()),
+        ("consan", False, 1, ("--Ofast-compile", "max")),
+        ("consan", False, 2, ("--Ofast-compile", "min")),
+        ("iisan,consan", False, 1, ("--Ofast-compile", "max")),
+        ("iisan,consan", False, 2, ("--Ofast-compile", "min")),
+        ("consan", True, 2, ("--opt-level", "0")),
+        ("fpsan", False, 1, ("--opt-level", "1")),
+        ("gsan", False, 1, ()),
     ],
 )
-def test_sanitizer_ptxas_compilation_options(instrumentation_mode, disable_optimization, expected_option, monkeypatch):
+def test_sanitizer_ptxas_compilation_options(instrumentation_mode, disable_optimization, num_ctas, expected_option,
+                                             monkeypatch):
     import triton.backends.nvidia.compiler as cuda_compiler
 
     commands = []
@@ -204,7 +207,7 @@ def test_sanitizer_ptxas_compilation_options(instrumentation_mode, disable_optim
     monkeypatch.setattr(cuda_compiler.subprocess, "run", run_ptxas)
 
     backend = CUDABackend(GPUTarget("cuda", 100, 32))
-    options = backend.parse_options({"instrumentation_mode": instrumentation_mode})
+    options = backend.parse_options({"instrumentation_mode": instrumentation_mode, "num_ctas": num_ctas})
 
     assert backend.make_cubin(".version 9.0\n", {}, options, 100) == b"compiled cubin"
     assert len(commands) == 1

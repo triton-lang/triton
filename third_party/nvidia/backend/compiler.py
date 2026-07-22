@@ -540,11 +540,11 @@ class CUDABackend(BaseBackend):
             # Accept more ptxas options if provided
             ptx_extra_options = opt.ptx_options.split(" ") if opt.ptx_options else []
 
-            # Maximum fast compilation avoids expensive allocation on ConSan's
-            # large helper-call graphs while retaining lower-spill code.
+            # Clustered persistent kernels need more ptxas optimization to
+            # avoid expensive spills in their repeated sanitizer checks.
             if not knobs.nvidia.disable_ptxas_opt:
                 if "consan" in opt.instrumentation_mode:
-                    ptx_extra_options += ["--Ofast-compile", "max"]
+                    ptx_extra_options += ["--Ofast-compile", "min" if opt.num_ctas > 1 else "max"]
                 elif "fpsan" in opt.instrumentation_mode:
                     ptx_extra_options += ["--opt-level", "1"]
 
