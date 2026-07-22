@@ -37,13 +37,34 @@ uint64_t getAllocationOffset(ttng::TMEMAllocOp op) {
 }
 
 unsigned getMemDescSize(ttg::MemDescType ty) {
+  auto encoding = ty.getEncoding();
+  auto shape = ttg::dropPipeliningDim(ty.getShape(), encoding);
+  auto allocShape = ttg::dropPipeliningDim(ty.getAllocShape(), encoding);
+  uint64_t stages = product(ty.getShape().drop_back(shape.size()));
+
   if (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace())) {
-    return ttng::getTmemAllocSizes(ty).numCols;
+    if (stages == 1)
+      return ttng::getTmemAllocSizes(ty).numCols;
+    uint32_t stageCols =
+        ttng::getTMemSubSliceOffset(ty, /*offset=*/1, /*dim=*/0);
+    return (stages - 1) * stageCols +
+           ttng::getTmemAllocSizes(ty).numCols / stages;
   }
   assert(isa<ttg::SharedMemorySpaceAttr>(ty.getMemorySpace()) &&
          "Unsupported memory space");
   unsigned elSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
-  return product(ttg::getShapePerCTA(ty)) * elSize;
+  if (ttg::isPaddedEncoding(encoding))
+    return product(ttg::getShapePerCTA(ty)) * elSize;
+
+  auto allocation = ttg::toLinearLayout(allocShape, encoding);
+  auto view = allocation.pseudoinvert();
+  auto logicalDims = llvm::to_vector(view.getInDimNames());
+  for (auto [dim, size] : llvm::zip_equal(logicalDims, shape))
+    view = view.resizeInDim(dim, size);
+  auto offsetDim = StringAttr::get(ty.getContext(), "offset");
+  uint64_t viewSpan = getOutputBasisMask(view, logicalDims, offsetDim) + 1;
+  return ((stages - 1) * allocation.getInDimSize(offsetDim) + viewSpan) *
+         elSize;
 }
 
 unsigned getAllocSize(ttg::LocalAllocOp op) {
