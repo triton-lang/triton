@@ -611,9 +611,23 @@ LogicalResult BufferRegionAnalysis::visitOperation(
       return success();
     }
   }
+  if (auto reinterpretOp = dyn_cast<ttg::MemDescReinterpretOp>(op)) {
+    RegionInfo in = operands[0]->getValue();
+    for (auto &region : in.regions) {
+      FailureOr<BufferRegion> reinterpreted = getMemDescRegion(
+          region.storageBase, region.affineOffset, reinterpretOp.getType(), op,
+          &footprintCache);
+      if (failed(reinterpreted))
+        return failure();
+      regionInfo.regions.insert(std::move(*reinterpreted));
+    }
+    for (auto *r : results) {
+      propagateIfChanged(r, r->join(regionInfo));
+    }
+    return success();
+  }
   // "Passthrough" ops that don't modify the buffer regions.
-  if (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp,
-          ttg::MemDescReinterpretOp>(op)) {
+  if (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp>(op)) {
     // Just propagate the regions from the operand.
     RegionInfo in = operands[0]->getValue();
     for (auto &region : in.regions) {

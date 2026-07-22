@@ -345,3 +345,50 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+// A shrinking reinterpret only covers the first half of its parent. It must
+// not inherit the parent's footprint and alias the untouched second half.
+// expected-remark @below {{a_reinterpreted_first_half vs a_reinterpreted_first_half: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true}}
+// expected-remark @below {{a_reinterpreted_first_half vs b_upper_half: alias=false, lhs_contains_rhs=false, rhs_contains_lhs=false}}
+// expected-remark @below {{b_upper_half vs b_upper_half: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true}}
+// expected-remark @below {{a_reinterpreted_first_half case [0, 32]: mask={0}}}
+// expected-remark @below {{b_upper_half case [32, 32]: mask={1}}}
+// expected-remark @below {{state-plan: lanes=2, components=atoms(1), atoms(1)}}
+module attributes {test.print_state_plan, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  tt.func public @shared_shrinking_reinterpret() {
+    %parent = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    %smaller = ttg.memdesc_reinterpret %parent : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> !ttg.memdesc<8xi32, #shared, #smem, mutable>
+    %upper = ttg.memdesc_subslice %parent [8] : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> !ttg.memdesc<8xi32, #shared, #smem, mutable, 16>
+    %0 = ttg.local_load %smaller {test.region_name = "a_reinterpreted_first_half"} : !ttg.memdesc<8xi32, #shared, #smem, mutable> -> tensor<8xi32>
+    %1 = ttg.local_load %upper {test.region_name = "b_upper_half"} : !ttg.memdesc<8xi32, #shared, #smem, mutable, 16> -> tensor<8xi32>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+// Changing f32 to f16 shrinks the live TMEM columns by half, leaving the
+// upper f32 subslice physically disjoint from the reinterpreted view.
+// expected-remark @below {{a_reinterpreted_first_half vs a_reinterpreted_first_half: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true}}
+// expected-remark @below {{a_reinterpreted_first_half vs b_upper_half: alias=false, lhs_contains_rhs=false, rhs_contains_lhs=false}}
+// expected-remark @below {{b_upper_half vs b_upper_half: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true}}
+// expected-remark @below {{a_reinterpreted_first_half case [0, 64]: mask={0}}}
+// expected-remark @below {{b_upper_half case [64, 64]: mask={1}}}
+// expected-remark @below {{state-plan: lanes=2, components=atoms(1), atoms(1)}}
+module attributes {test.print_state_plan, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 0 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  tt.func public @tensor_shrinking_reinterpret() {
+    %parent = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %smaller = ttg.memdesc_reinterpret %parent : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>
+    %upper = ttng.tmem_subslice %parent {offset = 64 : i32, dim = 1 : i32} : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable, 128x128>
+    %0 = ttng.tmem_load %smaller {test.region_name = "a_reinterpreted_first_half"} : !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf16>
+    %1 = ttng.tmem_load %upper {test.region_name = "b_upper_half"} : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable, 128x128> -> tensor<128x64xf32>
+    tt.return
+  }
+}

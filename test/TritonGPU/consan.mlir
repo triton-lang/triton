@@ -2042,3 +2042,40 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @shared_shrinking_reinterpret
+  tt.func public @shared_shrinking_reinterpret() {
+    // CHECK-DAG: arith.constant dense<[true, false]> : tensor<2xi1
+    // CHECK-DAG: arith.constant dense<[false, true]> : tensor<2xi1
+    %parent = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    %smaller = ttg.memdesc_reinterpret %parent : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> !ttg.memdesc<8xi32, #shared, #smem, mutable>
+    %upper = ttg.memdesc_subslice %parent [8] : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> !ttg.memdesc<8xi32, #shared, #smem, mutable, 16>
+    ttg.local_load %smaller : !ttg.memdesc<8xi32, #shared, #smem, mutable> -> tensor<8xi32>
+    ttg.local_load %upper : !ttg.memdesc<8xi32, #shared, #smem, mutable, 16> -> tensor<8xi32>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 0 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @tensor_shrinking_reinterpret
+  tt.func public @tensor_shrinking_reinterpret() {
+    // CHECK-DAG: arith.constant dense<[true, false]> : tensor<2xi1
+    // CHECK-DAG: arith.constant dense<[false, true]> : tensor<2xi1
+    %parent = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %smaller = ttg.memdesc_reinterpret %parent : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>
+    %upper = ttng.tmem_subslice %parent {offset = 64 : i32, dim = 1 : i32} : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable, 128x128>
+    ttng.tmem_load %smaller : !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf16>
+    ttng.tmem_load %upper : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable, 128x128> -> tensor<128x64xf32>
+    tt.return
+  }
+}
