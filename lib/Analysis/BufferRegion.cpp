@@ -1,4 +1,8 @@
 #include "triton/Analysis/BufferRegion.h"
+
+#include <limits>
+#include <optional>
+
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Matchers.h"
@@ -49,6 +53,16 @@ uint64_t getAllocationOffset(ttng::TMEMAllocOp op) {
   int colOffset = cast<IntegerAttr>(colOffsetAttr).getInt();
   int rowOffset = cast<IntegerAttr>(rowOffsetAttr).getInt();
   return colOffset | (rowOffset << 16);
+}
+
+unsigned getMemDescSize(ttg::MemDescType ty) {
+  if (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace())) {
+    return ttng::getTmemAllocSizes(ty).numCols;
+  }
+  assert(isa<ttg::SharedMemorySpaceAttr>(ty.getMemorySpace()) &&
+         "Unsupported memory space");
+  unsigned elSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
+  return product(ttg::getShapePerCTA(ty)) * elSize;
 }
 
 uint32_t applySharedPadding(uint32_t byteOffset, ttg::MemDescType ty) {
@@ -219,7 +233,7 @@ FailureOr<triton::BufferRegion> getMemDescRegion(
   if (failed(addresses))
     return failure();
   uint32_t baseOffset = storageBase + affineOffset;
-  return triton::BufferRegion(baseOffset, triton::getMemDescSize(ty),
+  return triton::BufferRegion(baseOffset, getMemDescSize(ty),
                               std::move(*addresses), storageBase, affineOffset);
 }
 
@@ -341,15 +355,6 @@ std::optional<triton::BufferRegionAnalysis::RegionType> getRegionType(Value v) {
 } // namespace
 
 namespace mlir::triton {
-
-uint32_t getMemDescSize(ttg::MemDescType ty) {
-  if (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace()))
-    return ttng::getTmemAllocSizes(ty).numCols;
-  assert(isa<ttg::SharedMemorySpaceAttr>(ty.getMemorySpace()) &&
-         "Unsupported memory space");
-  unsigned elementBytes = ty.getElementType().getIntOrFloatBitWidth() / 8;
-  return product(ttg::getShapePerCTA(ty)) * elementBytes;
-}
 
 AddressSet AddressSet::fromRange(uint32_t begin, uint32_t length) {
   uint64_t end = static_cast<uint64_t>(begin) + length;

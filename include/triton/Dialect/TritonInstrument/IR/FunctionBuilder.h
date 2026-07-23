@@ -304,13 +304,29 @@ public:
   void createCommitAccessesCall(ImplicitLocOpBuilder &b, int thread, Value pred,
                                 CommitKind::Kind commitKind,
                                 Operation *insertPoint);
-  // clearOutstandingCommitsTransfer: clear entries farther than outstandingNum
-  // from the thread and transfer the requested read/write visibility.
-  void createClearOutstandingCommitsTransferCall(
+  // clearOutstandingCommitsTransferWrites: clear entries farther than
+  // outstandingNum from the thread and set write visibility for threads in
+  // transferThreadMask.
+  void createClearOutstandingCommitsTransferWritesCall(
       ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
       int outstandingNum, Value pred, CommitKind::Kind commitKind,
-      MemType memType, Operation *insertPoint, bool transferWrites,
-      bool transferReads);
+      MemType memType, Operation *insertPoint);
+  // clearOutstandingCommitsTransferReads: clear entries farther than
+  // outstandingNum from the thread and set read visibility for threads in
+  // transferThreadMask.
+  void createClearOutstandingCommitsTransferReadsCall(
+      ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
+      int outstandingNum, Value pred, CommitKind::Kind commitKind,
+      MemType memType, Operation *insertPoint);
+  // clearOutstandingCommitsTransferBoth: clear entries farther than
+  // outstandingNum from the thread and set both write and read visibility
+  // for threads in transferThreadMask. Handles the partial case gracefully:
+  // if only one visibility table exists, delegates to the corresponding
+  // single-transfer function.
+  void createClearOutstandingCommitsTransferBothCall(
+      ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
+      int outstandingNum, Value pred, CommitKind::Kind commitKind,
+      MemType memType, Operation *insertPoint);
   // checkOutstandingCommits: assert that the outstanding commit row for the
   // buffer is zero before the access described by pendingAccessType.
   // When excludeSelf is true, the calling thread's own column is masked out
@@ -322,6 +338,12 @@ public:
       bool excludeSelf = false);
 
 private:
+  void createClearOutstandingCommitsTransferCall(
+      ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
+      int outstandingNum, Value pred, CommitKind::Kind commitKind,
+      MemType memType, Operation *insertPoint, bool transferWrites,
+      bool transferReads);
+
   void createTrackProxyAccessesCallImpl(ImplicitLocOpBuilder &b, Value mbar,
                                         int thread, Value pred,
                                         Operation *insertPoint,

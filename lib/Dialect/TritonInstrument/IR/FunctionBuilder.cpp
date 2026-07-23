@@ -3236,6 +3236,33 @@ void FunctionBuilder::createCommitAccessesCall(ImplicitLocOpBuilder &b,
       });
 }
 
+void FunctionBuilder::createClearOutstandingCommitsTransferWritesCall(
+    ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
+    int outstandingNum, Value pred, CommitKind::Kind commitKind,
+    MemType memType, Operation *insertPoint) {
+  createClearOutstandingCommitsTransferCall(
+      b, thread, transferThreadMask, outstandingNum, pred, commitKind, memType,
+      insertPoint, /*transferWrites=*/true, /*transferReads=*/false);
+}
+
+void FunctionBuilder::createClearOutstandingCommitsTransferReadsCall(
+    ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
+    int outstandingNum, Value pred, CommitKind::Kind commitKind,
+    MemType memType, Operation *insertPoint) {
+  createClearOutstandingCommitsTransferCall(
+      b, thread, transferThreadMask, outstandingNum, pred, commitKind, memType,
+      insertPoint, /*transferWrites=*/false, /*transferReads=*/true);
+}
+
+void FunctionBuilder::createClearOutstandingCommitsTransferBothCall(
+    ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
+    int outstandingNum, Value pred, CommitKind::Kind commitKind,
+    MemType memType, Operation *insertPoint) {
+  createClearOutstandingCommitsTransferCall(
+      b, thread, transferThreadMask, outstandingNum, pred, commitKind, memType,
+      insertPoint, /*transferWrites=*/true, /*transferReads=*/true);
+}
+
 void FunctionBuilder::createClearOutstandingCommitsTransferCall(
     ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
     int outstandingNum, Value pred, CommitKind::Kind commitKind,

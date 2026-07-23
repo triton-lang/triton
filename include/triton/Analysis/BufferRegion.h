@@ -1,9 +1,7 @@
 #ifndef TRITON_ANALYSIS_BUFFER_REGION_H
 #define TRITON_ANALYSIS_BUFFER_REGION_H
 
-#include <algorithm>
 #include <cstdint>
-#include <optional>
 #include <set>
 #include <tuple>
 #include <utility>
@@ -14,10 +12,6 @@
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SparseBitVector.h"
-
-namespace mlir::triton::gpu {
-class MemDescType;
-} // namespace mlir::triton::gpu
 
 namespace mlir::triton {
 
@@ -112,8 +106,6 @@ struct BufferRegion {
     os << "[" << baseOffset << ", " << length << "]";
   }
 };
-
-uint32_t getMemDescSize(gpu::MemDescType type);
 
 //===----------------------------------------------------------------------===//
 // Buffer state planning

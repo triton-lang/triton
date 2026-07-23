@@ -800,26 +800,33 @@ private:
                                                CommitKind::AsyncCp, op);
       }
       if (auto asyncWaitOp = dyn_cast<ttg::AsyncWaitOp>(op)) {
-        funcBuilder.createClearOutstandingCommitsTransferCall(
+        funcBuilder.createClearOutstandingCommitsTransferWritesCall(
             b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
             asyncWaitOp.getNum(), nullptr, CommitKind::AsyncCp,
-            MemType::SHARED_MEM, op, /*transferWrites=*/true,
-            /*transferReads=*/false);
+            MemType::SHARED_MEM, op);
       }
       if (auto wgmmaWaitOp = dyn_cast<ttng::WarpGroupDotWaitOp>(op)) {
-        funcBuilder.createClearOutstandingCommitsTransferCall(
+        funcBuilder.createClearOutstandingCommitsTransferReadsCall(
             b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
             wgmmaWaitOp.getPendings(), nullptr, CommitKind::Wgmma,
-            MemType::SHARED_MEM, op, /*transferWrites=*/false,
-            /*transferReads=*/true);
+            MemType::SHARED_MEM, op);
       }
       if (auto info = hooks->getWaitOpInfo(op)) {
-        if (info->transferWrites || info->transferReads) {
-          funcBuilder.createClearOutstandingCommitsTransferCall(
+        if (info->transferWrites && info->transferReads) {
+          funcBuilder.createClearOutstandingCommitsTransferBothCall(
               b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
               info->pendingCount, nullptr, info->commitKind,
-              MemType::SHARED_MEM, op, info->transferWrites,
-              info->transferReads);
+              MemType::SHARED_MEM, op);
+        } else if (info->transferWrites) {
+          funcBuilder.createClearOutstandingCommitsTransferWritesCall(
+              b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
+              info->pendingCount, nullptr, info->commitKind,
+              MemType::SHARED_MEM, op);
+        } else if (info->transferReads) {
+          funcBuilder.createClearOutstandingCommitsTransferReadsCall(
+              b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
+              info->pendingCount, nullptr, info->commitKind,
+              MemType::SHARED_MEM, op);
         }
       }
       if (auto clusterBarrier = dyn_cast<ttng::ClusterBarrierOp>(op)) {
