@@ -735,6 +735,43 @@ def TTG_WarpReturnOp : TTG_Op<"warp_return", [
   let assemblyFormat = "attr-dict";
 }
 
+def TTG_WarpPredicateOp : TTG_Op<"warp_predicate", [
+  RecursiveMemoryEffects, RecursivelySpeculatable
+]> {
+  let summary = "run a region under a per-lane predicate (per-wave masked skip)";
+  let description = [{
+    Executes `$region` with the per-thread execution mask restricted to lanes
+    where `$predicate` (a `tensor<...xi1>`) is true. If no lane in a wavefront
+    has the predicate set, the region is skipped for that wavefront -- a per-wave
+    skip that needs no cross-warp synchronization (lowers to `s_and_saveexec` +
+    `s_cbranch_execz` on AMD). SSA values are threaded in as `$inits` and out as
+    the op `$results`; lanes where `$predicate` is false keep their `$inits`
+    value (per-lane merge). The region implicitly captures values from above and
+    is terminated by `ttg.predicate_yield`.
+  }];
+
+  let arguments = (ins TT_BoolTensor:$predicate, Variadic<AnyType>:$inits);
+  let results = (outs Variadic<AnyType>:$results);
+  let regions = (region SizedRegion<1>:$region);
+
+  let assemblyFormat = [{
+    $predicate `(` $inits `)` $region attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def TTG_PredicateYieldOp : TTG_Op<"predicate_yield", [
+  Pure, Terminator, ReturnLike, HasParent<"WarpPredicateOp">
+]> {
+  let summary = "terminator for ttg.warp_predicate; operands become the op results";
+  let description = [{
+    Terminator of the `ttg.warp_predicate` region. Its operands are the values
+    for lanes where the predicate is true; the op merges them per-lane with the
+    parent's `$inits` for the false lanes.
+  }];
+  let arguments = (ins Variadic<AnyType>:$values);
+  let assemblyFormat = "($values^)? attr-dict (`:` type($values)^)?";
+}
+
 def TTG_BarrierOp : TTG_Op<"barrier"> {
   let summary = "Synchronizes execution and reads/writes to the selected address spaces for all threads in the CTA.";
   let description = [{

@@ -684,6 +684,38 @@ def warp_specialize(functions_and_args, worker_num_warps, worker_num_regs=None, 
 
 
 @builtin
+def warp_predicate(predicate, inits, body, args=(), _semantic=None, _generator=None):
+    """
+    Run ``body(*inits)`` under a per-lane predicate (per-wave masked skip).
+
+    The region executes with the execution mask restricted to lanes where
+    ``predicate`` is true. If no lane in a wavefront has the predicate set, the
+    whole region is skipped for that wavefront -- a per-wave skip that needs no
+    cross-warp synchronization (AMD: ``s_and_saveexec`` + ``s_cbranch_execz``).
+    Lanes where ``predicate`` is false keep their ``inits`` value.
+
+    Args:
+        predicate: a bool tensor giving the per-lane predicate.
+        inits (tuple): carried values, kept for the false lanes.
+        body (Callable): ``body(*inits)`` returning the updated values (types
+            must match ``inits``), emitted into the predicated region.
+
+    Returns:
+        The per-lane merge of the body's yields (true lanes) and ``inits``
+        (false lanes) -- a single value or a tuple.
+    """
+    # NOTE: `tuple`/`list` are shadowed in this module by the Gluon aggregate
+    # types, so use the Python builtins explicitly for sequence handling.
+    import builtins
+    seq_types = (builtins.tuple, builtins.list, tuple)  # `tuple` here is the Gluon aggregate
+    if not isinstance(inits, seq_types):
+        inits = (inits, )
+    if not isinstance(args, seq_types):
+        args = (args, )
+    return _semantic.warp_predicate(predicate, inits, body, _generator, args)
+
+
+@builtin
 def num_warps(_semantic=None, _generator=None):
     """
     Returns the number of warps that execute the current context, including in warp-specialized regions.

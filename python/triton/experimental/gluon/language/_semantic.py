@@ -637,6 +637,40 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         mlir_results = [ws_op.get_result(i) for i in range(len(result_types))]
         return next(unflatten_ir_values(mlir_results, [default_result.type]))
 
+    def warp_predicate(self, predicate, inits, body, generator, args=()):
+        # Per-wave masked region: run body(*inits, *args) with the exec mask
+        # restricted to lanes where `predicate` is true; the whole region is
+        # skipped for any wavefront where no lane has the predicate set (no
+        # cross-warp sync). The op results are the per-lane merge of the body's
+        # yields (true lanes) and `inits` (false lanes) -- so the body must
+        # return exactly the `inits`, updated. `args` are extra read-only inputs
+        # to the body (e.g. alpha) that are not carried/merged.
+        inits = list(inits)
+        args = list(args)
+        builder = self.builder
+        insert_pt = builder.get_insertion_point()
+
+        # Emit the region body first, to learn the yielded (result) types.
+        region_block = builder.new_block()
+        builder.set_insertion_point_to_start(region_block)
+        body_result = generator.call_JitFunction(body, inits + args, kwargs={})
+        results_list = list(body_result) if isinstance(body_result, (tuple, ttgl.tuple)) else [body_result]
+        yield_ir = flatten_values_to_ir(results_list)
+        builder.create_predicate_yield(yield_ir)
+        result_types = [r.get_type() for r in yield_ir]
+
+        # Create the op and hand it the pre-built region.
+        builder.restore_insertion_point(insert_pt)
+        pred_ir = flatten_values_to_ir([predicate])[0]
+        init_ir = flatten_values_to_ir(inits)
+        wp_op = builder.create_warp_predicate(result_types, pred_ir, init_ir)
+        wp_op.get_region(0).push_back(region_block)
+
+        builder.set_insertion_point_after(wp_op)
+        merged = [wp_op.get_result(i) for i in range(len(result_types))]
+        out = list(unflatten_ir_values(merged, [r.type for r in results_list]))
+        return out[0] if len(out) == 1 else tuple(out)
+
     def num_ctas(self):
         return ttgl.constexpr(self.builder.options.num_ctas)
 

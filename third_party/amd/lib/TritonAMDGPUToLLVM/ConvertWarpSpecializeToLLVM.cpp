@@ -4,6 +4,7 @@
 #include "Utility.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Conversion/Passes.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -173,6 +174,111 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
 }
 
 //===----------------------------------------------------------------------===//
+// lowerWarpPredicate
+//===----------------------------------------------------------------------===//
+
+// Lower a single `ttg.warp_predicate` to a divergent branch. By the time this
+// runs (right after convert-to-llvm), the region body is already LLVM-dialect
+// and every value crossing the op boundary is bridged by an
+// `unrealized_conversion_cast` to/from the tensor type the op still carries.
+// We follow those casts to the underlying LLVM structs and rebuild:
+//
+//   curBlock:
+//     %p0.. = extractvalue <predicate struct>          ; per-lane predicate
+//     %lane = or %p0, %p1, ...                          ; any element set?
+//     cf.cond_br %lane, body, merge(<init structs>)
+//   body:                       ; runs with exec = lanes that need it
+//     ... (already-lowered body) ...
+//     cf.br merge(<yield structs>)
+//   merge(%r0.. : structs):     ; phi: yields (true) vs inits (false)
+//     ...
+//
+// A per-lane `cf.cond_br` is turned by the AMDGPU backend into
+// `s_and_saveexec` + `s_cbranch_execz`, i.e. the whole wavefront skips `body`
+// when no lane has the predicate set -- the per-wave skip we want.
+static LogicalResult lowerOneWarpPredicate(WarpPredicateOp op) {
+  Location loc = op.getLoc();
+  IRRewriter rw(op->getContext());
+  rw.setInsertionPoint(op);
+
+  // Follow a 1:1 unrealized_conversion_cast to its source value.
+  auto asLLVM = [](Value v) -> Value {
+    if (auto c = v.getDefiningOp<UnrealizedConversionCastOp>())
+      if (c.getNumOperands() == 1)
+        return c.getOperand(0);
+    return v;
+  };
+
+  // Per-lane predicate: OR together the i1 elements this lane holds.
+  Value predStruct = asLLVM(op.getPredicate());
+  SmallVector<Value> predElems = unpackLLElements(loc, predStruct, rw);
+  if (predElems.empty())
+    return op.emitError("warp_predicate: empty predicate");
+  Value lanePred;
+  for (Value e : predElems)
+    lanePred = lanePred ? LLVM::OrOp::create(rw, loc, lanePred, e).getResult()
+                        : e;
+
+  // True-path (yield) and false-path (init) values, as LLVM structs.
+  auto yield = cast<PredicateYieldOp>(op.getRegion().front().getTerminator());
+  SmallVector<Value> initStructs, yieldStructs;
+  SmallVector<Type> resTypes;
+  for (Value in : op.getInits())
+    initStructs.push_back(asLLVM(in));
+  for (Value y : yield.getValues()) {
+    Value s = asLLVM(y);
+    yieldStructs.push_back(s);
+    resTypes.push_back(s.getType());
+  }
+
+  // Split off everything from `op` onward into the merge block, which receives
+  // the results as block arguments (the phi).
+  Block *curBlock = rw.getInsertionBlock();
+  Block *mergeBlock = rw.splitBlock(curBlock, Block::iterator(op));
+  SmallVector<Location> argLocs(resTypes.size(), loc);
+  SmallVector<Value> mergeArgs;
+  for (auto [t, l] : llvm::zip(resTypes, argLocs))
+    mergeArgs.push_back(mergeBlock->addArgument(t, l));
+
+  // Inline the (already-lowered) body between curBlock and mergeBlock.
+  Block *bodyBlock = &op.getRegion().front();
+  rw.inlineRegionBefore(op.getRegion(), mergeBlock);
+
+  // predicate_yield -> branch to merge with the yielded structs.
+  rw.setInsertionPoint(yield);
+  cf::BranchOp::create(rw, loc, mergeBlock, yieldStructs);
+  rw.eraseOp(yield);
+
+  // Rewire result uses. Downstream consumes the results through
+  // tensor->struct casts; point those at the merge block args instead.
+  for (auto [res, arg] : llvm::zip(op.getResults(), mergeArgs)) {
+    for (OpOperand &use : llvm::make_early_inc_range(res.getUses())) {
+      auto c = dyn_cast<UnrealizedConversionCastOp>(use.getOwner());
+      if (!c || c.getNumResults() != 1)
+        return op.emitError("warp_predicate: unexpected use of result");
+      rw.replaceAllUsesWith(c.getResult(0), arg);
+      rw.eraseOp(c);
+    }
+  }
+  rw.eraseOp(op);
+
+  // Divergent branch: true lanes run the body, false lanes carry inits.
+  rw.setInsertionPointToEnd(curBlock);
+  cf::CondBranchOp::create(rw, loc, lanePred, bodyBlock, ValueRange{},
+                           mergeBlock, ValueRange(initStructs));
+  return success();
+}
+
+static LogicalResult lowerWarpPredicateOps(ModuleOp mod) {
+  SmallVector<WarpPredicateOp> ops;
+  mod.walk([&](WarpPredicateOp op) { ops.push_back(op); });
+  for (WarpPredicateOp op : ops)
+    if (failed(lowerOneWarpPredicate(op)))
+      return failure();
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // Pass Definition
 //===----------------------------------------------------------------------===//
 
@@ -187,8 +293,17 @@ struct TritonAMDGPUConvertWarpSpecializeToLLVM
     this->gfxArch = gfxArch;
   }
 
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<cf::ControlFlowDialect>();
+  }
+
   void runOnOperation() override {
     ModuleOp mod = getOperation();
+
+    // Lower ttg.warp_predicate to divergent control flow. Independent of warp
+    // specialization and supported on all AMD targets.
+    if (failed(lowerWarpPredicateOps(mod)))
+      return signalPassFailure();
 
     SmallVector<Operation *> wsOps;
     mod.walk([&](Operation *op) {
