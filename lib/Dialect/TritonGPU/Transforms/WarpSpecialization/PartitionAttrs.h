@@ -8,6 +8,7 @@
 namespace mlir {
 class Operation;
 class OpOperand;
+class LoopLikeOpInterface;
 namespace scf {
 class ForOp;
 } // namespace scf
@@ -27,7 +28,7 @@ bool hasPartition(Operation *op);
 bool hasWarpSpecializeTag(Operation *op);
 std::optional<int> getWarpSpecializeTag(Operation *op);
 
-LogicalResult verifyPartitionedLoop(scf::ForOp loop);
+LogicalResult verifyPartitionedLoop(LoopLikeOpInterface loop);
 
 } // namespace mlir::triton::gpu
 

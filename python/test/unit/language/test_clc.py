@@ -1,4 +1,5 @@
 import pytest
+import re
 import torch
 
 import triton
@@ -7,6 +8,14 @@ from triton._internal_testing import supports_clc
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 requires_clc = pytest.mark.skipif(not supports_clc(), reason="CLC requires NVIDIA SM100+")
+
+
+def _assert_clc_ws_ir(compiled):
+    ttgir = compiled.asm["ttgir"]
+    num_partitions = len(re.findall(r"^\s*partition\d+\(", ttgir, re.MULTILINE))
+    assert num_partitions > 0
+    assert ttgir.count("scf.while") == num_partitions + 1
+    assert ttgir.count("ttng.clc_try_cancel ") == 1
 
 
 @triton.jit
@@ -250,3 +259,82 @@ def test_clc_multicta_loop_reuse_consan(num_ctas, device, fresh_knobs):
     )
 
     torch.testing.assert_close(dst, src, atol=0, rtol=0)
+
+
+@triton.jit
+def _clc_ws_tma_matmul_kernel(
+    a_desc,
+    b_desc,
+    c_desc,
+    counts,
+    M: tl.constexpr,
+    N: tl.constexpr,
+    K: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    tile_id = tl.program_id(0)
+    num_pid_n = tl.cdiv(N, BLOCK_N)
+    pid_m = tile_id // num_pid_n
+    pid_n = tile_id % num_pid_n
+    off_m = pid_m * BLOCK_M
+    off_n = pid_n * BLOCK_N
+    accumulator = tl.zeros((BLOCK_M, BLOCK_N), tl.float32)
+    for off_k in tl.range(0, K, BLOCK_K, num_stages=2, warp_specialize=True):
+        a = a_desc.load([off_m, off_k])
+        b = b_desc.load([off_k, off_n])
+        accumulator = tl.dot(a, b, accumulator)
+
+    c_desc.store([off_m, off_n], accumulator.to(tl.float16))
+    tl.atomic_add(counts + tile_id, 1)
+
+
+def _run_clc_ws_tma_matmul(M, N, K, device, num_ctas):
+    block_m, block_n, block_k = 128, 64, 64
+    torch.manual_seed(42)
+    a = torch.randn((M, K), dtype=torch.float16, device=device)
+    b = torch.randn((K, N), dtype=torch.float16, device=device)
+    c = torch.empty((M, N), dtype=torch.float16, device=device)
+    num_tiles = triton.cdiv(M, block_m) * triton.cdiv(N, block_n)
+    counts = torch.zeros((num_tiles, ), dtype=torch.int32, device=device)
+    a_desc = TensorDescriptor.from_tensor(a, [block_m, block_k])
+    b_desc = TensorDescriptor.from_tensor(b, [block_k, block_n])
+    c_desc = TensorDescriptor.from_tensor(c, [block_m, block_n])
+
+    compiled = _clc_ws_tma_matmul_kernel[(num_tiles, )](
+        a_desc,
+        b_desc,
+        c_desc,
+        counts,
+        M,
+        N,
+        K,
+        block_m,
+        block_n,
+        block_k,
+        num_warps=4,
+        num_stages=2,
+        num_ctas=num_ctas,
+        clc=True,
+    )
+    _assert_clc_ws_ir(compiled)
+    expected = torch.matmul(a.float(), b.float()).half()
+    torch.testing.assert_close(c, expected, atol=3e-2, rtol=3e-2)
+    return counts
+
+
+@requires_clc
+@pytest.mark.parametrize("M,N,K", [(512, 512, 192), (4096, 2048, 512), (2048, 2048, 128)])
+def test_clc_ws_tma_matmul_1cta(M, N, K, device):
+    counts = _run_clc_ws_tma_matmul(M, N, K, device, 1)
+    assert torch.all(counts == 1)
+
+
+@requires_clc
+def test_clc_ws_consan_1cta(device, fresh_knobs):
+    triton.knobs.compilation.instrumentation_mode = "consan"
+    num_sms = torch.cuda.get_device_properties(device).multi_processor_count
+    num_tiles = max(64, num_sms * 32)
+    counts = _run_clc_ws_tma_matmul(128, num_tiles * 64, 128, device, 1)
+    assert torch.all(counts == 1)
