@@ -1173,12 +1173,15 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
       for (Value result : op->getResults()) {
         Attribute rematEncoding = layout.lookup(result);
         int64_t cost = multiplier * getByteCount(result);
-        // If the new layout increases the amount of work that needs to happen
-        // on each thread, account for that -- but only for expensive per-element
-        // ops. Cheap integer/index math (make_range/ext/add/cmp) stays cheap even
-        // when the target (e.g. slice/broadcast) layout widens elems-per-thread;
+        // Account for a layout that widens elems-per-thread only for
+        // floating-point/expensive ops, where duplicated compute is real.
+        // Cheap integer/index math (GEMM address-gen) keeps factor 1.
+        bool accountForWidening =
+            isExpensiveMathOp(op) ||
+            isa<FloatType>(
+                cast<RankedTensorType>(result.getType()).getElementType());
         unsigned factor =
-            isExpensiveMathOp(op) ? getCostFactor(result, rematEncoding) : 1u;
+            accountForWidening ? getCostFactor(result, rematEncoding) : 1u;
         if (!isOpUsedOutsideSlice)
           factor -= 1;
         rematerialisationCost += cost * factor;
