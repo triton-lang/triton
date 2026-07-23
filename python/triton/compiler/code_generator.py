@@ -49,6 +49,14 @@ def _is_triton_tensor(o: Any) -> bool:
     return isinstance(o, tensor)
 
 
+def _is_dynamic_boolean_operand(o: Any) -> bool:
+    return _is_triton_value(o) and not isinstance(o, (constexpr, tl_tuple))
+
+
+def _is_not_implemented(o: Any) -> bool:
+    return _unwrap_if_constexpr(o) is NotImplemented
+
+
 def _is_constexpr(o: Any) -> bool:
     return o is None or isinstance(o, (constexpr, language.core.dtype, JITCallable))
 
@@ -642,7 +650,7 @@ class CodeGenerator(ast.NodeVisitor):
             if annotation is None:
                 init_node = ast.Assign(targets=[st_target], value=default_value)
             else:
-                init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation)
+                init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation, simple=1)
             try:
                 assert not self.visiting_arg_default_value
                 self.visiting_arg_default_value = True
@@ -794,43 +802,82 @@ class CodeGenerator(ast.NodeVisitor):
         args = [self.visit(x) for x in node.elts]
         return language.tuple(args)
 
-    def _apply_binary_method(self, node, method_name, lhs, rhs):
-        # TODO: raise something meaningful if getattr fails below, esp for reverse method
-        if _is_triton_tensor(lhs):
-            return getattr(lhs, method_name)(rhs, _semantic=self.semantic)
-        if _is_triton_tensor(rhs):
-            reverse_method_name = re.sub(r"__(.*)__", r"__r\1__", method_name)
-            return getattr(rhs, reverse_method_name)(lhs, _semantic=self.semantic)
-        if not isinstance(lhs, (constexpr, language.tuple)) and isinstance(rhs, constexpr):
+    @staticmethod
+    def _operator_priority(value):
+        if getattr(type(value), "__triton_aggregate__", False):
+            return 2
+        if isinstance(value, tensor):
+            return 1
+        return 0
+
+    def _call_operator(self, node, owner, method_name, *args):
+        method = getattr(owner, method_name, None)
+        if method is None:
+            return False, None
+        if _is_triton_value(owner) and isinstance(method, JITFunction):
+            method = BoundJITMethod(owner, method)
+        return True, self.call_Function(node, method, list(args), {})
+
+    def _unsupported_binary_operator(self, node, symbol, lhs, rhs):
+        lhs_type, rhs_type = (type(_unwrap_if_constexpr(value)).__name__ for value in (lhs, rhs))
+        return self._unsupported(node, f"unsupported operand type(s) for {symbol}: '{lhs_type}' and '{rhs_type}'")
+
+    def _get_operator(self, node, op, kind):
+        if (operator := self._operators.get(type(op))) is None:
+            raise self._unsupported(node, f"AST {kind} operator '{type(op).__name__}' is not (currently) implemented.")
+        return operator
+
+    def _apply_binary_method(self, node, operator, lhs, rhs):
+        """Resolve an operator owner before lowering exactly one method."""
+        if not _is_triton_value(lhs) and isinstance(rhs, constexpr):
             lhs = constexpr(lhs)
-        if isinstance(lhs, constexpr):
-            fn = getattr(lhs, method_name)
-        else:
-            fn = self.get_Attribute(lhs, method_name)
-        return self.call_Function(node, fn, [rhs], {})
+        forward_method, reflected_method, symbol = operator
+        lhs_priority = self._operator_priority(lhs)
+        rhs_priority = self._operator_priority(rhs)
+        highest_priority = max(lhs_priority, rhs_priority)
+        candidates = [(lhs, forward_method, rhs), (rhs, reflected_method, lhs)]
+        if lhs_priority == rhs_priority and type(lhs) is not type(rhs) and isinstance(rhs, type(lhs)):
+            candidates.reverse()
+
+        for owner, method_name, other in candidates:
+            if self._operator_priority(owner) != highest_priority:
+                continue
+            found, result = self._call_operator(node, owner, method_name, other)
+            if not found:
+                continue
+            if _is_not_implemented(result):
+                continue
+            return result
+
+        raise self._unsupported_binary_operator(node, symbol, lhs, rhs)
 
     def visit_BinOp(self, node):
         lhs = self.visit(node.left)
         rhs = self.visit(node.right)
-        method_name = self._method_name_for_bin_op.get(type(node.op))
-        if method_name is None:
-            raise self._unsupported(node,
-                                    "AST binary operator '{}' is not (currently) implemented.".format(node.op.__name__))
-        return self._apply_binary_method(node, method_name, lhs, rhs)
+        operator = self._get_operator(node, node.op, "binary")
+        return self._apply_binary_method(node, operator, lhs, rhs)
 
-    _method_name_for_bin_op: Dict[Type[ast.operator], str] = {
-        ast.Add: '__add__',
-        ast.Sub: '__sub__',
-        ast.Mult: '__mul__',
-        ast.Div: '__truediv__',
-        ast.FloorDiv: '__floordiv__',
-        ast.Mod: '__mod__',
-        ast.Pow: '__pow__',
-        ast.LShift: '__lshift__',
-        ast.RShift: '__rshift__',
-        ast.BitAnd: '__and__',
-        ast.BitOr: '__or__',
-        ast.BitXor: '__xor__',
+    _operators: Dict[Type[ast.AST], Tuple[str, str, str]] = {
+        ast.Add: ('__add__', '__radd__', '+'),
+        ast.Sub: ('__sub__', '__rsub__', '-'),
+        ast.Mult: ('__mul__', '__rmul__', '*'),
+        ast.Div: ('__truediv__', '__rtruediv__', '/'),
+        ast.FloorDiv: ('__floordiv__', '__rfloordiv__', '//'),
+        ast.Mod: ('__mod__', '__rmod__', '%'),
+        ast.Pow: ('__pow__', '__rpow__', '**'),
+        ast.LShift: ('__lshift__', '__rlshift__', '<<'),
+        ast.RShift: ('__rshift__', '__rrshift__', '>>'),
+        ast.BitAnd: ('__and__', '__rand__', '&'),
+        ast.BitOr: ('__or__', '__ror__', '|'),
+        ast.BitXor: ('__xor__', '__rxor__', '^'),
+        ast.Eq: ('__eq__', '__eq__', '=='),
+        ast.NotEq: ('__ne__', '__ne__', '!='),
+        ast.Lt: ('__lt__', '__gt__', '<'),
+        ast.LtE: ('__le__', '__ge__', '<='),
+        ast.Gt: ('__gt__', '__lt__', '>'),
+        ast.GtE: ('__ge__', '__le__', '>='),
+        ast.And: ('logical_and', 'logical_and', 'and'),
+        ast.Or: ('logical_or', 'logical_or', 'or'),
     }
 
     def visit_then_else_blocks(self, node, liveins, then_block, else_block):
@@ -1086,30 +1133,24 @@ class CodeGenerator(ast.NodeVisitor):
             return constexpr(lhs_value is rhs_value)
         if type(node.ops[0]) is ast.IsNot:
             return constexpr(lhs_value is not rhs_value)
-        method_name = self._method_name_for_comp_op.get(type(node.ops[0]))
-        if method_name is None:
-            raise self._unsupported(
-                node, "AST comparison operator '{}' is not (currently) implemented.".format(node.ops[0].__name__))
-        return self._apply_binary_method(node, method_name, lhs, rhs)
-
-    _method_name_for_comp_op: Dict[Type[ast.cmpop], str] = {
-        ast.Eq: '__eq__', ast.NotEq: '__ne__', ast.Lt: '__lt__', ast.LtE: '__le__', ast.Gt: '__gt__', ast.GtE: '__ge__'
-    }
+        operator = self._get_operator(node, node.ops[0], "comparison")
+        return self._apply_binary_method(node, operator, lhs, rhs)
 
     def visit_UnaryOp(self, node):
         operand = self.visit(node.operand)
         fn = self._method_name_for_unary_op.get(type(node.op))
         if fn is None:
             raise self._unsupported(node, f"AST unary operator '{node.op.__name__}' is not (currently) implemented.")
-        if _is_triton_tensor(operand):
-            return getattr(operand, fn)(_semantic=self.semantic)
-        try:
-            return getattr(operand, fn)()
-        except AttributeError:
-            if fn == "__not__":
+        found, result = self._call_operator(node, operand, fn)
+        if not found:
+            if fn == "__not__" and not _is_dynamic_boolean_operand(operand):
                 return constexpr(not operand)
             raise self._unsupported(
                 node, f"AST unary operator '{fn}' is not (currently) implemented on type {type(operand).__name__}")
+        if _is_not_implemented(result):
+            raise self._unsupported(
+                node, f"AST unary operator '{fn}' is not (currently) implemented on type {type(operand).__name__}")
+        return result
 
     _method_name_for_unary_op: Dict[Type[ast.unaryop], str] = {
         ast.USub: '__neg__', ast.UAdd: '__pos__', ast.Not: '__not__', ast.Invert: '__invert__'
@@ -1481,10 +1522,8 @@ class CodeGenerator(ast.NodeVisitor):
         return constexpr(node.value)
 
     def visit_BoolOp(self, node: ast.BoolOp):
-        method_name = self._method_name_for_bool_op.get(type(node.op))
-        if method_name is None:
-            raise self._unsupported(
-                node, "AST boolean operator '{}' is not (currently) implemented.".format(node.op.__name__))
+        operator = self._get_operator(node, node.op, "boolean")
+        method_name = operator[0]
 
         nontrivial_values = []
 
@@ -1492,7 +1531,7 @@ class CodeGenerator(ast.NodeVisitor):
             # we visit the values in order, executing their side-effects
             # and possibly early-exiting:
             value = self.visit(subnode)
-            if not _is_triton_tensor(value):
+            if not _is_dynamic_boolean_operand(value):
                 # this is a constexpr, so we might be able to short-circuit:
                 bv = bool(value)
                 if (bv is False) and (method_name == "logical_and"):
@@ -1504,7 +1543,7 @@ class CodeGenerator(ast.NodeVisitor):
                 # otherwise, our constexpr has no effect on the output of the
                 # expression so we do not append it to nontrivial_values.
             else:
-                if value.type.is_block():
+                if _is_triton_tensor(value) and value.type.is_block():
                     lineno = getattr(node, "lineno", None)
                     if lineno is not None:
                         lineno += self.begin_line
@@ -1526,13 +1565,11 @@ class CodeGenerator(ast.NodeVisitor):
         while len(nontrivial_values) >= 2:
             rhs = nontrivial_values.pop()
             lhs = nontrivial_values.pop()
-            res = self._apply_binary_method(node, method_name, lhs, rhs)
+            res = self._apply_binary_method(node, operator, lhs, rhs)
             nontrivial_values.append(res)
 
         assert len(nontrivial_values) == 1
         return nontrivial_values[0]
-
-    _method_name_for_bool_op: Dict[Type[ast.boolop], str] = {ast.And: 'logical_and', ast.Or: 'logical_or'}
 
     def get_Attribute(self, lhs, attr):
         if _is_triton_tensor(lhs) and attr == "T":
