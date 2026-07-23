@@ -1440,11 +1440,10 @@ SmallVector<Type> SharedMemoryObject::getTypes() const {
 std::pair<uint64_t, uint64_t> SharedMemoryObject::getMaskSpanOffsetsAndBlocks(
     triton::gpu::MemDescType srcTy) {
   auto ctx = srcTy.getContext();
-  auto shape = srcTy.getShape();
-  auto allocShape = srcTy.getAllocShape();
-  assert(allocShape.size() >= shape.size());
-  assert(allocShape.size() - shape.size() <= 1);
-  allocShape = allocShape.take_back(shape.size());
+  auto encoding = srcTy.getEncoding();
+  auto shape = triton::gpu::dropPipeliningDim(srcTy.getShape(), encoding);
+  auto allocShape =
+      triton::gpu::dropPipeliningDim(srcTy.getAllocShape(), encoding);
 
   // Early exist when there is no subview
   if (allocShape == shape) {
@@ -1503,9 +1502,11 @@ std::pair<Value, Value> SharedMemoryObject::getShmemOffsetAndBlock(
     ll = triton::gpu::toLinearLayout(srcTy);
   }
 
-  auto dimNames = standardOutDimNames(ctx, offsets.size());
+  auto layoutOffsets =
+      triton::gpu::dropPipeliningDim(ArrayRef(offsets), srcTy.getEncoding());
+  auto dimNames = standardOutDimNames(ctx, layoutOffsets.size());
   SmallVector<std::pair<StringAttr, Value>> logicalOffsets;
-  for (auto [dim, offset] : llvm::zip(dimNames, offsets)) {
+  for (auto [dim, offset] : llvm::zip(dimNames, layoutOffsets)) {
     logicalOffsets.push_back({dim, offset});
   }
 

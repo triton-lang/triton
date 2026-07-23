@@ -142,6 +142,12 @@ def test_print(func: str, data_type: str, device: str):
         kernel_print_no_arg[(1, )](num_warps=num_warps)
     elif func == "device_print_hex":
         kernel_device_print_hex[(1, )](x, y, num_warps=num_warps, BLOCK=N)
+    elif func == "device_print_hex_fp32_canonical":
+        canonical = torch.tensor(
+            [1.0, 1.5, 0.1, -1.5, -0.0, float("inf"), float("-inf"), 6.0], dtype=torch.float32, device=device)
+        x = canonical.repeat(N // canonical.numel())
+        y = torch.zeros_like(x)
+        kernel_device_print_hex[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "device_print_pointer":
         kernel_print_pointer[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "device_print_2d_tensor":

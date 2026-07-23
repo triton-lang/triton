@@ -1403,9 +1403,10 @@ LinearLayout toLinearLayout(RankedTensorType type) {
 LinearLayout toLinearLayout(MemDescType type) {
   // For TMEM we instantiate the subview directly. This is possible
   // as TMEM has no swizzling.
-  if (isa<TensorMemoryEncodingAttr>(type.getEncoding())) {
-    auto shape = type.getShape().take_back(2);
-    auto allocShape = type.getAllocShape().take_back(2);
+  if (isa<nvidia_gpu::TensorMemorySpaceAttr>(type.getMemorySpace())) {
+    auto shape = dropPipeliningDim(type.getShape(), type.getEncoding());
+    auto allocShape =
+        dropPipeliningDim(type.getAllocShape(), type.getEncoding());
     auto ll = toLinearLayout(allocShape, type.getEncoding());
     auto outDims = llvm::to_vector(ll.getOutDimNames());
     // Trim the shape
@@ -1423,8 +1424,9 @@ LinearLayout toLinearLayout(MemDescType type) {
   // Shared memory needs the allocation shape so that invertAndCompose can trim
   // subviews. We also remove the first dimension of the allocation shape if
   // there was a call to memdesc_index.
-  auto shape = type.getAllocShape().take_back(type.getRank());
-  return toLinearLayout(shape, type.getEncoding());
+  return toLinearLayout(
+      dropPipeliningDim(type.getAllocShape(), type.getEncoding()),
+      type.getEncoding());
 }
 
 LinearLayout toLinearLayoutWithPow2Shape(MemDescType type) {
@@ -1463,8 +1465,9 @@ LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding) {
 }
 
 LinearLayout paddedLinearLayout(MemDescType type) {
-  auto shape = type.getAllocShape().take_back(type.getRank());
-  return paddedLinearLayout(shape, type.getEncoding());
+  return paddedLinearLayout(
+      dropPipeliningDim(type.getAllocShape(), type.getEncoding()),
+      type.getEncoding());
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {

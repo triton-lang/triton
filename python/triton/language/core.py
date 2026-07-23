@@ -3328,7 +3328,7 @@ def device_print(prefix, *args, hex=False, _semantic=None):
 
     :param prefix: a prefix to print before the values. This is required to be a string literal.
     :param args: the values to print. They can be any tensor or scalar.
-    :param hex: print all values as hex instead of decimal
+    :param hex: print integers in hexadecimal and floating-point values in hexadecimal floating-point notation
     '''
     import string
     prefix = _unwrap_if_constexpr(prefix)

@@ -30,6 +30,8 @@ namespace ttng = mlir::triton::nvidia_gpu;
 namespace {
 
 static constexpr const char kGSanGlobalStateArgAttr[] = "tti.gsan_global_state";
+static constexpr const char kGSanStreamClockArgAttr[] = "tti.gsan_stream_clock";
+static constexpr const char kGSanKernelIdArgAttr[] = "tti.gsan_kernel_id";
 static constexpr const char kDisableSetMaxRegisterAttr[] =
     "tti.disable_setmaxregister";
 
@@ -370,6 +372,10 @@ public:
     ModuleOp module = getOperation();
     OpBuilder builder(module);
     Type gsanStatePtrTy = tt::PointerType::get(builder.getI8Type(), 1);
+    Type streamClockPtrTy = tt::PointerType::get(builder.getI32Type(), 1);
+    Type kernelIdTy = builder.getI64Type();
+    auto launchPdl = module->getAttrOfType<IntegerAttr>("tti.gsan_launch_pdl");
+    bool acquireStreamClock = !launchPdl || launchPdl.getInt() == 0;
     DenseSet<StringRef> calledFuncs;
     module.walk(
         [&](tt::CallOp callOp) { calledFuncs.insert(callOp.getCallee()); });
@@ -381,10 +387,14 @@ public:
       SmallVector<Type> inputTys(funcTy.getInputs().begin(),
                                  funcTy.getInputs().end());
       inputTys.push_back(gsanStatePtrTy);
+      inputTys.push_back(streamClockPtrTy);
+      inputTys.push_back(kernelIdTy);
       func.setType(FunctionType::get(module.getContext(), inputTys,
                                      funcTy.getResults()));
 
       func.getBody().addArgument(gsanStatePtrTy, func.getLoc());
+      func.getBody().addArgument(streamClockPtrTy, func.getLoc());
+      func.getBody().addArgument(kernelIdTy, func.getLoc());
       SmallVector<Attribute> newArgAttrs;
       if (auto argAttrs = func.getAllArgAttrs())
         newArgAttrs.append(argAttrs.begin(), argAttrs.end());
@@ -393,13 +403,22 @@ public:
       }
       if (!newArgAttrs.empty())
         func.setAllArgAttrs(newArgAttrs);
-      func.setArgAttr(func.getNumArguments() - 1, kGSanGlobalStateArgAttr,
+      func.setArgAttr(func.getNumArguments() - 3, kGSanGlobalStateArgAttr,
+                      builder.getUnitAttr());
+      func.setArgAttr(func.getNumArguments() - 2, kGSanStreamClockArgAttr,
+                      builder.getUnitAttr());
+      func.setArgAttr(func.getNumArguments() - 1, kGSanKernelIdArgAttr,
                       builder.getUnitAttr());
 
       bool isEntry = !calledFuncs.contains(func.getSymName());
       if (isEntry) {
         OpBuilder b(&func.front(), func.front().begin());
-        ExperimentalGSanInitOp::create(b, func.getLoc());
+        ExperimentalGSanInitOp::create(b, func.getLoc(), acquireStreamClock);
+        func.walk([&](tt::ReturnOp returnOp) {
+          OpBuilder returnBuilder(returnOp);
+          ExperimentalGSanKernelExitOp::create(returnBuilder,
+                                               returnOp.getLoc());
+        });
       }
     }
 
@@ -407,13 +426,17 @@ public:
     module.walk([&](tt::CallOp op) { callOps.push_back(op); });
     for (tt::CallOp callOp : callOps) {
       auto caller = callOp->getParentOfType<tt::FuncOp>();
-      assert(caller && caller.getNumArguments() > 0 &&
+      assert(caller && caller.getNumArguments() >= 3 &&
              "expected triton.call to be nested under a Triton function");
 
       SmallVector<Value> operands(callOp.getOperands().begin(),
                                   callOp.getOperands().end());
-      Value gsanState = caller.getArgument(caller.getNumArguments() - 1);
+      Value gsanState = caller.getArgument(caller.getNumArguments() - 3);
+      Value streamClock = caller.getArgument(caller.getNumArguments() - 2);
+      Value kernelId = caller.getArgument(caller.getNumArguments() - 1);
       operands.push_back(getGSanStateForCall(callOp, gsanState));
+      operands.push_back(getGSanStateForCall(callOp, streamClock));
+      operands.push_back(getGSanStateForCall(callOp, kernelId));
 
       OpBuilder b(callOp);
       auto newCallOp =
@@ -467,6 +490,10 @@ public:
             b.replaceOp(op, newOp);
           })
           .Case([&](tt::AtomicPollOp op) { instrumentAtomicPoll(op); })
+          .Case([&](tt::GridDependencyWaitOp op) {
+            b.setInsertionPointAfter(op);
+            ExperimentalGSanGridDependencyWaitOp::create(b, op.getLoc());
+          })
           .Case([&](ttg::WarpSpecializeOp op) {
             op->setAttr(kDisableSetMaxRegisterAttr, builder.getUnitAttr());
           });

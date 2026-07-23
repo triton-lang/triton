@@ -108,7 +108,8 @@ void init_triton_passes_ttgpuir(py::module_ &m) {
         });
   ADD_PASS_WRAPPER_0("add_concurrency_sanitizer",
                      createTritonInstrumentConcurrencySanitizer);
-  ADD_PASS_WRAPPER_0("add_fp_sanitizer", createTritonInstrumentFpSanitizer);
+  ADD_PASS_OPTION_WRAPPER_1("add_fp_sanitizer",
+                            createTritonInstrumentFpSanitizer, bool);
   ADD_PASS_WRAPPER_0("add_optimize_partition_warps",
                      createTritonGPUOptimizePartitionWarps);
   m.def("add_canonicalize_llvm_ir", [](mlir::PassManager &pm) {

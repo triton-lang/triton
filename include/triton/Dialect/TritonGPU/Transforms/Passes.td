@@ -264,7 +264,8 @@ def TritonGPURemoveLayoutConversions : Pass<"tritongpu-remove-layout-conversions
   let options = [
     Option<"disableRematSplitting", "disable-remat-splitting",
            "bool", /*default*/"false",
-           "prevent backward rematerialization from duplicating operations">
+           "prevent rematerialization from splitting or duplicating "
+           "convert-layout work">
   ];
 }
 
