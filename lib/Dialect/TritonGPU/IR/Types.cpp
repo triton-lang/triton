@@ -121,9 +121,12 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
       return emitError() << "rank must be equal to or one less than "
                          << "the shape size. Got " << rank << " and "
                          << shape.size();
-  } else if (shape.size() != 2) {
-    return emitError() << "tensor-memory scale descriptors must have rank 2; "
-                       << "got " << shape.size();
+  } else {
+    assert(isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(encoding) &&
+           "expected tensor-memory scales encoding");
+    if (shape.size() != 2)
+      return emitError() << "tensor-memory scale descriptors must have rank 2; "
+                         << "got " << shape.size();
   }
   // Every layout dimension must be a power of 2; only a leading pipeline
   // dimension may have another positive size.
