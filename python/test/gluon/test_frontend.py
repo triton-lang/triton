@@ -527,6 +527,15 @@ class NotImplementedAggregate:
         return NotImplemented
 
 
+@gluon.aggregate
+class ReflectedOnlyAggregate:
+    value: tl.tensor
+
+    @gluon.jit
+    def __radd__(self, lhs):
+        return ReflectedOnlyAggregate(lhs.value + self.value)
+
+
 @gluon.jit
 def operator_dispatch_optional_annotation(value: ttgl.tensor, other: ttgl.tensor | None = None):
     return value
@@ -817,6 +826,21 @@ def test_operator_dispatch_boolean_ir():
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
     value = ttgl.arange(0, 128, layout=layout)
     result = ForwardOnlyAggregate(value) and ForwardOnlyAggregate(value)
+    anchor(result.value)
+
+
+@filecheck_test
+@gluon.jit
+def test_operator_dispatch_not_implemented_fallback_ir():
+    # CHECK-LABEL: tt.func public @test_operator_dispatch_not_implemented_fallback_ir()
+    # CHECK: [[VALUE:%.*]] = tt.make_range
+    # CHECK: {{%.*}} = tt.call {{.*}}ReflectedOnlyAggregate.__radd__{{.*}}([[VALUE]], [[VALUE]])
+    # CHECK-LABEL: tt.func private {{.*}}ReflectedOnlyAggregate.__radd__
+    # CHECK: [[RESULT:%.*]] = arith.addi %arg1, %arg0
+    # CHECK-NEXT: tt.return [[RESULT]]
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    value = ttgl.arange(0, 128, layout=layout)
+    result = NotImplementedAggregate(value) + ReflectedOnlyAggregate(value)
     anchor(result.value)
 
 

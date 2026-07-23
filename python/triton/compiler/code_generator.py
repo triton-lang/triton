@@ -49,7 +49,7 @@ def _is_triton_tensor(o: Any) -> bool:
     return isinstance(o, tensor)
 
 
-def _is_dynamic_value(o: Any) -> bool:
+def _is_dynamic_boolean_operand(o: Any) -> bool:
     return _is_triton_value(o) and not isinstance(o, (constexpr, tl_tuple))
 
 
@@ -846,7 +846,7 @@ class CodeGenerator(ast.NodeVisitor):
             if not found:
                 continue
             if _is_not_implemented(result):
-                raise self._unsupported_binary_operator(node, symbol, lhs, rhs)
+                continue
             return result
 
         raise self._unsupported_binary_operator(node, symbol, lhs, rhs)
@@ -1143,7 +1143,7 @@ class CodeGenerator(ast.NodeVisitor):
             raise self._unsupported(node, f"AST unary operator '{node.op.__name__}' is not (currently) implemented.")
         found, result = self._call_operator(node, operand, fn)
         if not found:
-            if fn == "__not__" and not _is_dynamic_value(operand):
+            if fn == "__not__" and not _is_dynamic_boolean_operand(operand):
                 return constexpr(not operand)
             raise self._unsupported(
                 node, f"AST unary operator '{fn}' is not (currently) implemented on type {type(operand).__name__}")
@@ -1531,7 +1531,7 @@ class CodeGenerator(ast.NodeVisitor):
             # we visit the values in order, executing their side-effects
             # and possibly early-exiting:
             value = self.visit(subnode)
-            if not _is_dynamic_value(value):
+            if not _is_dynamic_boolean_operand(value):
                 # this is a constexpr, so we might be able to short-circuit:
                 bv = bool(value)
                 if (bv is False) and (method_name == "logical_and"):
