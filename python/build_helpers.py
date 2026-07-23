@@ -86,16 +86,12 @@ def find_therock_rocm_include_dir() -> Optional[str]:
     if rocm_sdk is None:
         return None
     try:
-        env = os.environ.copy()
-        # PEP 517 build isolation injects its overlay through PYTHONPATH. The
-        # rocm-sdk entry point belongs to the caller's venv and must import the
-        # matching rocm_sdk package from that venv, not the temporary overlay.
-        env.pop("PYTHONPATH", None)
+        # Run the caller venv's rocm-sdk entry point in isolated mode so pip's
+        # temporary PEP 517 import path cannot shadow its installed packages.
         root = subprocess.check_output(
-            [str(rocm_sdk), "path", "--root"],
+            [sys.executable, "-I", str(rocm_sdk), "path", "--root"],
             stderr=subprocess.DEVNULL,
             text=True,
-            env=env,
         ).strip()
     except (OSError, subprocess.CalledProcessError):
         return None
