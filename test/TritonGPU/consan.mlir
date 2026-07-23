@@ -1299,12 +1299,14 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK-NEXT: tti.experimental_lock_release %{{.*}}, %[[WAIT_PRED]]
     ttng.wait_barrier %bar, %c0_i32, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tti.experimental_lock_acquire
+    // CHECK: ttg.barrier global_read
     // CHECK: tt.call @__triton_consan_check_all_active_waiting
     // CHECK-NEXT: tti.experimental_lock_release
     // CHECK-NEXT: tti.experimental_assert_uniform {{.*}}, "Deadlock detected at a cluster barrier"
     // CHECK-NEXT: cf.br ^[[POLL:bb[0-9]+]]
     // CHECK: ^[[POLL]]:
     // CHECK: tti.experimental_lock_acquire
+    // CHECK: ttg.barrier global_read
     // CHECK: tt.call @__triton_consan_check_all_active_waiting
     // CHECK-NEXT: tti.experimental_lock_release
     // CHECK-NEXT: tti.experimental_assert_uniform {{.*}}, "Deadlock detected at a cluster barrier"

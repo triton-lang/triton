@@ -368,14 +368,17 @@ Supported operations:
 
 Rewrite:
 
-- signed integer extension or truncation in payload space, followed by
-  ``unembed``
+- signed integer extension when widening
+- when narrowing, fold the discarded high payload bits into the retained bits,
+  then truncate and ``unembed``
+- optionally, set ``TRITON_FPSAN_HOMOMORPHIC_CASTS=1`` to use simple payload
+  truncation when narrowing; this preserves addition across independently
+  downcast partial reductions
 
 Exact preserved properties:
 
 - ``0``, ``+1``, and ``-1`` remain stable across the conversion
 - sign-extension behavior in the payload domain
-- truncation drops high payload bits
 - an upcast followed by a downcast is the identity
 
 Important caveat:

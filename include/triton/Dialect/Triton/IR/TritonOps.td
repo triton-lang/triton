@@ -316,6 +316,20 @@ def TT_StoreOp : TT_Op<"store", [
 //
 // Atomic Ops
 //
+def TT_GridDependencyWaitOp
+    : TT_Op<"grid_dependency_wait", [MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>]> {
+    let summary = "wait for prerequisite grids and acquire their memory writes";
+    let arguments = (ins);
+    let assemblyFormat = "attr-dict";
+}
+
+def TT_GridDependencyLaunchDependentsOp
+    : TT_Op<"grid_dependency_launch_dependents", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+    let summary = "allow dependent grids to begin execution";
+    let arguments = (ins);
+    let assemblyFormat = "attr-dict";
+}
+
 def TT_AtomicPollOp : TT_Op<"atomic_poll", [
   TypesMatchWith<"ptr type matches expected type", "expected", "ptr",
                  "getPointerTypeSameShape($_self)">

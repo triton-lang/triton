@@ -3891,8 +3891,7 @@ struct TritonGPUVerifyTensorLayoutInterface
       return failure();
 
     if (auto sharedLinearEnc = dyn_cast<SharedLinearEncodingAttr>(layout)) {
-      auto rank = cast<LayoutEncodingTrait>(layout).getRank();
-      auto shape = memDescTy.getAllocShape().take_back(rank);
+      auto shape = dropPipeliningDim(memDescTy.getAllocShape(), layout);
       auto layoutShape = sharedLinearEnc.getLinearLayout().getOutDimSizes();
       if (!llvm::equal(shape, layoutShape)) {
         return makeErr() << layout << ".\nLayout has shape " << layoutShape

@@ -272,14 +272,22 @@ getMemDescSubsliceUnpaddedByteOffset(ttg::MemDescSubsliceOp op) {
   if (offsets.empty())
     return 0;
 
-  mlir::triton::LinearLayout layout = ttg::getMemDescLinearLayout(srcTy);
+  Attribute encoding = srcTy.getEncoding();
+  auto layoutOffsets = ttg::dropPipeliningDim(offsets, encoding);
+  auto layoutRank = layoutOffsets.size();
+  mlir::triton::LinearLayout layout;
+  if (auto padded = dyn_cast<ttg::PaddedSharedEncodingAttr>(encoding)) {
+    layout = padded.getLinearComponent();
+  } else {
+    layout = ttg::toLinearLayout(srcTy);
+  }
 
   MLIRContext *ctx = op->getContext();
   SmallVector<StringAttr> dimNames =
-      mlir::triton::standardOutDimNames(ctx, srcTy.getRank());
+      mlir::triton::standardOutDimNames(ctx, layoutRank);
   SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
-  logicalOffsets.reserve(offsets.size());
-  for (auto &&[dimName, offset] : llvm::zip_equal(dimNames, offsets)) {
+  logicalOffsets.reserve(layoutRank);
+  for (auto &&[dimName, offset] : llvm::zip_equal(dimNames, layoutOffsets)) {
     logicalOffsets.push_back({dimName, static_cast<int32_t>(offset)});
   }
 
@@ -299,6 +307,11 @@ getMemDescSubsliceUnpaddedByteOffset(ttg::MemDescSubsliceOp op) {
     return failure();
   }
   uint64_t elementOffset = static_cast<uint32_t>(mapped[0].second);
+  if (offsets.size() != layoutRank) {
+    uint64_t stride = product(ttg::getAllocationShapePerCTA(
+        encoding, ttg::dropPipeliningDim(srcTy.getAllocShape(), encoding)));
+    elementOffset += static_cast<uint64_t>(offsets.front()) * stride;
+  }
 
   uint64_t elementSizeBytes =
       srcTy.getElementType().getIntOrFloatBitWidth() / 8;
