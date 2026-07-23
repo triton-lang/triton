@@ -67,14 +67,25 @@ static void createMBarrierInit(OpBuilder &b, Location loc, Value pred,
 }
 
 static void createMBarrierArrive(OpBuilder &b, Location loc, Value pred,
-                                 Value barrierPtr, bool relaxed) {
+                                 Value barrierPtr, bool relaxed,
+                                 Value multicastMask = {}) {
   PTXBuilder ptxBuilder;
-  auto &arrive = *ptxBuilder.create(
-      "@$0 mbarrier.arrive." + std::string(relaxed ? "relaxed" : "release") +
-      ".cluster.shared::cluster.b64 _, [$1];");
-  arrive({ptxBuilder.newOperand(pred, "b"),
-          ptxBuilder.newOperand(barrierPtr, "r")},
-         /*onlyAttachMLIRArgs=*/true);
+  std::string ptx = "@$0 mbarrier.arrive." +
+                    std::string(relaxed ? "relaxed" : "release") +
+                    ".cluster.shared::cluster";
+  if (multicastMask)
+    ptx += ".multicast::cluster::32b";
+  ptx += ".b64 _, [$1]";
+  if (multicastMask)
+    ptx += ", $2";
+  ptx += ";";
+
+  SmallVector<PTXBuilder::Operand *> operands = {
+      ptxBuilder.newOperand(pred, "b"), ptxBuilder.newOperand(barrierPtr, "r")};
+  if (multicastMask)
+    operands.push_back(ptxBuilder.newOperand(multicastMask, "r"));
+  auto &arrive = *ptxBuilder.create(ptx);
+  arrive(operands, /*onlyAttachMLIRArgs=*/true);
   ptxBuilder.launch(b, loc, void_ty(b.getContext()));
 }
 
@@ -230,14 +241,23 @@ struct ClusterBarrierOpConversion
     auto barrierSlotTy = LLVM::LLVMArrayType::get(
         i8_ty, triton::nvidia_gpu::kClusterBarrierMbarSlotSize);
     Value barrierPtr = b.gep(ptrTy, barrierSlotTy, barrierPtr0, barrierIdx);
-    Value pred = b.icmp_eq(getThreadId(rewriter, loc), b.i32_val(0));
-    Value barrierInt = b.ptrtoint(i32_ty, barrierPtr);
+    Value threadId = getThreadId(rewriter, loc);
+    Value pred = b.icmp_eq(threadId, b.i32_val(0));
     int numCTAs = triton::gpu::lookupNumCTAs(op);
     bool relaxed = op.getRelaxed() && targetInfo.getPtxVersion() >= 86;
-    for (int i = 1; i < numCTAs; ++i) {
-      Value peerBarrierInt = b.xor_(barrierInt, b.i32_val(i << 24));
+    if (targetInfo.getTargetFeatures().supportsMbarMulticast()) {
+      Value ctaId = NVVM::ClusterId::create(rewriter, loc, i32_ty);
+      // Exclude the issuing CTA: the mbarriers expect numCTAs - 1 arrivals.
+      Value peerMask =
+          b.xor_(b.i32_val((1u << numCTAs) - 1), b.shl(b.i32_val(1), ctaId));
+      createMBarrierArrive(rewriter, loc, pred, barrierPtr, relaxed, peerMask);
+    } else {
+      Value barrierInt = b.ptrtoint(i32_ty, barrierPtr);
+      Value peerId = b.add(threadId, b.i32_val(1));
+      Value peerBarrierInt = b.xor_(barrierInt, b.shl(peerId, b.i32_val(24)));
       Value peerBarrierPtr = b.inttoptr(barrierPtr.getType(), peerBarrierInt);
-      createMBarrierArrive(rewriter, loc, pred, peerBarrierPtr, relaxed);
+      Value arrivePred = b.icmp_ult(threadId, b.i32_val(numCTAs - 1));
+      createMBarrierArrive(rewriter, loc, arrivePred, peerBarrierPtr, relaxed);
     }
     createMBarrierWait(rewriter, loc, barrierPtr, parity);
     Value nextCounter = b.and_(b.add(counter, b.i32_val(1)), b.i32_val(3));

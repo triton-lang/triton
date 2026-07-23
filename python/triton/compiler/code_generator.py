@@ -292,7 +292,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.is_gluon = is_gluon
         if is_gluon:
             from triton.experimental.gluon.language._semantic import GluonSemantic
-            self.builder = gluon_ir.GluonOpBuilder(context)
+            self.builder = gluon_ir.GluonOpBuilder(context, options.arch)
             self.semantic = GluonSemantic(self.builder)
         else:
             from triton.language.semantic import TritonSemantic
@@ -537,7 +537,9 @@ class CodeGenerator(ast.NodeVisitor):
         results = []
         for item in iter:
             self.set_value(comp.target.id, item)
-            results.append(self.visit(node.elt))
+            # Apply the comprehension's `if` filters (the conditions are constexpr).
+            if all(self.visit(cond) for cond in comp.ifs):
+                results.append(self.visit(node.elt))
         return tl_tuple(results)
 
     # By design, only non-kernel functions can return
@@ -640,7 +642,7 @@ class CodeGenerator(ast.NodeVisitor):
             if annotation is None:
                 init_node = ast.Assign(targets=[st_target], value=default_value)
             else:
-                init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation)
+                init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation, simple=1)
             try:
                 assert not self.visiting_arg_default_value
                 self.visiting_arg_default_value = True

@@ -5,7 +5,7 @@ import torch
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hopper_or_newer, is_hip_cdna, is_hip_cdna2, is_hip
+from triton._internal_testing import is_cuda, is_hopper_or_newer, is_hip_cdna, is_hip_cdna2, is_hip, is_hip_gfx1250
 
 
 def check_capabilities():
@@ -109,6 +109,14 @@ def vecadd_kernel(a_ptr, b_ptr, output_ptr, n_elements, num_blocks, BLOCK_SIZE: 
         output = x + y
         tl.store(output_ptr + offsets, output, mask=mask)
         offsets += BLOCK_SIZE
+
+
+@triton.jit
+def small_tma_load_kernel(input_desc, output_ptr, N: tl.constexpr):
+    offsets = tl.arange(0, 4)
+    for block_start in tl.range(0, N, 4, num_stages=3):
+        value = input_desc.load([block_start])
+        tl.store(output_ptr + block_start + offsets, value)
 
 
 @triton.jit
@@ -318,6 +326,24 @@ def test_pipeline_matmul(scale, device):
                 assert ttgir.count("ttg.dot") != 0, "dot not found"
 
 
+def test_tma_load_unaligned_stage_size(device):
+    if not is_cuda() or not is_hopper_or_newer():
+        pytest.skip("TMA requires Hopper or newer")
+
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    inp = torch.arange(12, dtype=torch.float32, device=device)
+    output = torch.empty_like(inp)
+    desc = TensorDescriptor.from_tensor(inp, block_shape=[4])
+    kernel = small_tma_load_kernel[(1, )](desc, output, inp.numel())
+
+    torch.testing.assert_close(output, inp)
+    ttgir = kernel.asm["ttgir"]
+    assert "ttng.async_tma_copy_global_to_local" in ttgir
+    assert "ttg.local_alloc : () -> !ttg.memdesc<4xf32" in ttgir
+    assert "ttg.local_alloc : () -> !ttg.memdesc<3x4xf32" not in ttgir
+
+
 def test_pipeline_vecadd(device):
     check_capabilities()
     SIZE = 4096
@@ -515,12 +541,18 @@ def matmul_kernel_persistent_scatter(a_ptr, b_ptr, c_ptr,  #
         c_desc.scatter(c, offs_am + tl.arange(0, BLOCK_SIZE_M), offs_bn)
 
 
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10,
-                    reason="TMA Scatter only works on cloud Blackwell Chips")
+def _supports_descriptor_scatter():
+    if is_cuda():
+        return torch.cuda.get_device_capability()[0] == 10
+    return is_hip_gfx1250()
+
+
+@pytest.mark.skipif(not _supports_descriptor_scatter(),
+                    reason="TMA/TDM Scatter only works on cloud Blackwell Chips or AMD gfx1250")
 def test_scatter_pipeline(device):
 
     def alloc_fn(size, alignment, stream):
-        return torch.empty(size, device="cuda", dtype=torch.int8)
+        return torch.empty(size, device=device, dtype=torch.int8)
 
     triton.set_allocator(alloc_fn)
 
@@ -528,7 +560,7 @@ def test_scatter_pipeline(device):
     BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 32
     GROUP_SIZE_M = 4
 
-    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
+    NUM_SMS = torch.cuda.get_device_properties(device).multi_processor_count
     grid_x = min(NUM_SMS, triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N))
 
     a = torch.randn(M, K, device=device, dtype=torch.float16)
@@ -541,7 +573,16 @@ def test_scatter_pipeline(device):
     ref = torch.matmul(a, b.T)
     torch.testing.assert_close(c, ref)
 
-    assert kernel.asm["ttgir"].count("tma_store_wait") == 2, "expected pipelined TMA scatter"
+    if is_cuda():
+        # NVIDIA: pipelineTMAStores hoists the wait, leaving one wait inside
+        # the persistent loop and one drain wait after the loop.
+        assert kernel.asm["ttgir"].count("tma_store_wait") == 2, "expected pipelined TMA scatter"
+    else:
+        # AMD: 5 async_tdm_wait ops total:
+        #   2 from load pipeline (1 inside inner K-loop + 1 in epilogue)
+        #   3 from store pipeline (1 seed before loop + 1 inside outer
+        #     loop consuming previous iteration's token + 1 drain after loop)
+        assert kernel.asm["ttgir"].count("async_tdm_wait") == 5, "expected pipelined TDM scatter"
 
 
 @pytest.mark.parametrize("num_stages", [1, 2, 3])

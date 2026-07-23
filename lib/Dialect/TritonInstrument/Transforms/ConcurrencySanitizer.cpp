@@ -79,13 +79,12 @@ bool isTensorCoreOp(Operation *op) {
 }
 
 std::optional<int> maybeGetPartitionIdx(Operation *op) {
-  if (auto wsOp = op->getParentOfType<ttg::WarpSpecializePartitionsOp>()) {
+  Operation *parent = op->getParentOp();
+  if (!parent)
+    return std::nullopt;
+  if (isa<ttg::WarpSpecializePartitionsOp>(parent))
     return op->getParentRegion()->getRegionNumber();
-  }
-  if (Operation *parent = op->getParentOp()) {
-    return maybeGetPartitionIdx(parent);
-  }
-  return std::nullopt;
+  return maybeGetPartitionIdx(parent);
 }
 
 int getCurrentThread(Operation *op, const ConSanTargetHooks *hooks,
@@ -551,10 +550,21 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
 }
 
 Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
-  if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))
-    return getLeaderCTA(b, expectOp.getAlloc());
-  if (auto arriveOp = dyn_cast<ttng::ArriveBarrierOp>(op))
-    return getLeaderCTA(b, arriveOp.getAlloc());
+  if (isa<ttng::BarrierExpectOp, ttng::ArriveBarrierOp>(op)) {
+    Value barrier = cast<ttg::MBarrierOpInterface>(op).getBarrier();
+    std::optional<uint32_t> fromCTA;
+    if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))
+      fromCTA = expectOp.getFromCTA();
+    else
+      fromCTA = cast<ttng::ArriveBarrierOp>(op).getFromCTA();
+    if (fromCTA) {
+      int numCTAs = ttg::lookupNumCTAs(op);
+      uint32_t broadcastBits = ~*fromCTA & (numCTAs - 1);
+      auto encoding = ttng::getTMAMulticastMaskEncoding(numCTAs, broadcastBits);
+      return createCTABitset(b, encoding.pattern, encoding.fixedBits);
+    }
+    return getLeaderCTA(b, barrier);
+  }
   if (auto arriveOp = dyn_cast<ttng::AsyncCopyMbarrierArriveOp>(op))
     return getLeaderCTA(b, arriveOp.getBarrier());
   if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
@@ -792,10 +802,13 @@ private:
       Operation *op = clusterBarrier.getOperation();
       int thread = getCurrentThread(op, hooks, auxData.threadLayout);
       int baseThread = getBaseThread(thread, auxData.threadLayout);
+      bool partitionScoped =
+          static_cast<bool>(op->getParentOfType<ttg::WarpSpecializeOp>());
       b.setLoc(op->getLoc());
       b.setInsertionPoint(op);
       funcBuilder.createClusterBarrierRendezvousCall(
           b, auxData.getClusterBarrierSlot(op), baseThread,
+          getThreadPeersMask(baseThread, auxData.threadLayout), partitionScoped,
           /*publishVisibility=*/!clusterBarrier.getRelaxed(), op);
     }
   }

@@ -36,6 +36,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
@@ -65,6 +66,24 @@ void printCGALayoutRankTwo(AsmPrinter &printer, gpu::CGAEncodingAttr cgaAttr) {
 }
 
 } // namespace
+
+TensorMemoryScalesBlockRepOrder getTensorMemoryScalesBlockRepOrder(
+    Operation *op, bool isA, ScaleDotElemType aType, ScaleDotElemType bType,
+    Type aScaleElemType, Type bScaleElemType) {
+  ModuleOp mod = op->getParentOfType<ModuleOp>();
+  auto targetAttr = mod->getAttrOfType<StringAttr>(gpu::AttrTargetName);
+  bool isRubin = targetAttr && targetAttr.getValue() == "cuda:107";
+  // Rubin NVFP4 uses different orders for A and B:
+  // A scales must advance along K before the next M tile, while B scales keep
+  // the default order that advances along N before the next K tile.
+  bool isRubinNVFP4xNVFP4 = isRubin && aType == ScaleDotElemType::E2M1 &&
+                            bType == ScaleDotElemType::E2M1 &&
+                            isa<Float8E4M3FNType>(aScaleElemType) &&
+                            isa<Float8E4M3FNType>(bScaleElemType);
+  return (isRubinNVFP4xNVFP4 && isA)
+             ? TensorMemoryScalesBlockRepOrder::K_THEN_MN
+             : TensorMemoryScalesBlockRepOrder::MN_THEN_K;
+}
 
 TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   auto *ctx = memDescType.getContext();
@@ -162,18 +181,9 @@ getDistributedLayoutForTmemLdSt(const LinearLayout &ll, TMemAccessAtom atom,
   auto *ctx = dims[0].getContext();
   // This code is dual to the one in lowerTMemLdSt
   if (bitwidth != 32) {
-    // TODO move this to a helper function
     auto kReg = StringAttr::get(ctx, "register");
-    LinearLayout quot;
-    int bestContig = 1;
-    for (int contig = 1; bitwidth * contig <= 32; contig *= 2) {
-      auto maybeQuot = divideLeft(
-          ll, LinearLayout::identity1D(contig, rowColDims[1], dims[1]));
-      if (!maybeQuot)
-        break;
-      quot = *maybeQuot;
-      bestContig = contig;
-    }
+    auto [bestContig, quot] =
+        factorMaximalIdentityPrefix(ll, rowColDims[1], dims[1], 32 / bitwidth);
 
     // Pack contiguous elements
     // This works to pack b8 or b16 into b32 but also b8 into b16 and recurse
@@ -448,7 +458,7 @@ LogicalResult TensorMemoryEncodingAttr::verify(
 
 LogicalResult TensorMemoryScalesEncodingAttr::verify(
     function_ref<InFlightDiagnostic()> emitError,
-    gpu::CGAEncodingAttr cgaLayout) {
+    gpu::CGAEncodingAttr cgaLayout, TensorMemoryScalesBlockRepOrder) {
   if (cgaLayout.getRank() != 2) {
     return emitError() << "CGALayout must have rank 2";
   }

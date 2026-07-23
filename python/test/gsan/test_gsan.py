@@ -9,7 +9,7 @@ from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy
 from triton.tools.tensor_descriptor import TensorDescriptor
 
-from triton._internal_testing import is_blackwell, is_cuda, is_ampere_or_newer, is_hopper_or_newer
+from triton._internal_testing import is_blackwell, is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_sm12x
 from triton.experimental.gsan import create_mem_pool
 from triton._C.libtriton.gsan_testing import AtomicScope, SHADOW_GRANULARITY_BYTES, ScalarClock
 from triton.experimental.gsan._testing_utils import (atomic_poll, load_one_i32, shadow_cell_from_address, store_one_i32,
@@ -204,6 +204,47 @@ def atomic_add_kernel(ptr, sem: tl.constexpr, scope: tl.constexpr = "gpu"):
 def atomic_cas_kernel(ptr, out_ptr, expect, sem: tl.constexpr, scope: tl.constexpr = "gpu"):
     old = tl.atomic_cas(ptr, expect, 2, sem=sem, scope=scope)
     tl.store(out_ptr, old)
+
+
+@triton.jit
+def _scalar_atomic_rmw_cluster_kernel(ptr, out_ptr):
+    old = tl.atomic_add(ptr, 1, sem="relaxed", scope="gpu")
+    offsets = tl.arange(0, 32)
+    tl.store(out_ptr + offsets, old)
+
+
+@triton.jit
+def _scalar_atomic_cas_cluster_kernel(ptr, out_ptr, expected, desired):
+    old = tl.atomic_cas(ptr, expected, desired, sem="relaxed", scope="gpu")
+    offsets = tl.arange(0, 32)
+    tl.store(out_ptr + offsets, old)
+
+
+def _assert_cluster_scalar_atomic_result(kernel):
+    initial = 0x12345678
+    target = torch.full((1, ), initial, dtype=torch.int32, device="cuda")
+    out = torch.full((32, ), -1, dtype=torch.int32, device="cuda")
+
+    if kernel is _scalar_atomic_rmw_cluster_kernel:
+        kernel[(1, )](target, out, num_warps=1, num_ctas=2)
+    else:
+        kernel[(1, )](target, out, initial, initial + 1, num_warps=1, num_ctas=2)
+    torch.cuda.synchronize()
+
+    assert target.item() == initial + 1
+    torch.testing.assert_close(out, torch.full_like(out, initial))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer() or is_sm12x(),
+                    reason="scalar multi-CTA atomics require Hopper+ and are unsupported on sm12x")
+def test_scalar_atomic_rmw_cluster_result_broadcast(with_gsan):
+    _assert_cluster_scalar_atomic_result(_scalar_atomic_rmw_cluster_kernel)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer() or is_sm12x(),
+                    reason="scalar multi-CTA atomics require Hopper+ and are unsupported on sm12x")
+def test_scalar_atomic_cas_cluster_result_broadcast(with_gsan):
+    _assert_cluster_scalar_atomic_result(_scalar_atomic_cas_cluster_kernel)
 
 
 @triton.jit

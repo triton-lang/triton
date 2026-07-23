@@ -168,6 +168,22 @@ void periodicClearDataPhases(Data &data, size_t maxPhaseToFlush,
 
 } // namespace
 
+int64_t
+computeTimestampOffsetNs(const std::function<void(uint64_t *)> &getTimestamp) {
+  using Clock = std::chrono::system_clock;
+  const auto cpuBefore = Clock::now();
+  uint64_t profilerTimestampNs{};
+  getTimestamp(&profilerTimestampNs);
+  const auto cpuAfter = Clock::now();
+  // The native timestamp is sampled between these reads; use their midpoint.
+  const auto cpuTimestampNs =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          (cpuBefore + (cpuAfter - cpuBefore) / 2).time_since_epoch())
+          .count();
+  return static_cast<int64_t>(cpuTimestampNs) -
+         static_cast<int64_t>(profilerTimestampNs);
+}
+
 void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
                              std::string &periodicFlushingFormat,
                              const std::vector<std::string> &modeAndOptions,
