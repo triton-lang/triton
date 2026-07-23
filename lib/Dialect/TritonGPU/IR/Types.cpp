@@ -18,7 +18,6 @@ static constexpr llvm::StringRef kMutableMemory = "mutable";
 static LogicalResult verifyNonPow2InvertedLayoutInvariant(
     function_ref<InFlightDiagnostic()> emitError, ArrayRef<int64_t> blockShape,
     const mlir::triton::LinearLayout &ll) {
-  // Pow2-only shapes already satisfy the regular SharedLinear assumptions.
   if (isPositivePowerOfTwoShape(blockShape))
     return success();
 
@@ -309,17 +308,17 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
         return emitError() << "shapePerCTA size " << dimSize
                            << " must be divisible by its logical block size "
                            << logicalBlockSize << " (dim " << dim << ")";
-      int64_t logicalBlocks = dimSize / logicalBlockSize;
-      if (!llvm::isPowerOf2_64(logicalBlocks))
-        return emitError() << "number of logical blocks per CTA ("
-                           << logicalBlocks << ") must be a power of two (dim "
+      int64_t numMessages = dimSize / logicalBlockSize;
+      if (!llvm::isPowerOf2_64(numMessages))
+        return emitError() << "number of TMA messages per CTA (" << numMessages
+                           << ") must be a power of two (dim "
                            << dim << ", dimSize=" << dimSize
                            << ", logicalBlockSize=" << logicalBlockSize << ")";
-      if (logicalBlocks > 1 && !llvm::isPowerOf2_64(dimSize))
+      if (numMessages > 1 && !llvm::isPowerOf2_64(dimSize))
         return emitError()
                << "non-power-of-two dimension " << dimSize
                << " is unsupported when split across multiple messages (dim "
-               << dim << ", logicalBlocks=" << logicalBlocks << ")";
+               << dim << ", numMessages=" << numMessages << ")";
     }
   } else if (auto enc = dyn_cast<SharedLinearEncodingAttr>(encoding)) {
     auto blockShape = ArrayRef(allocShape).take_back(enc.getRank());
