@@ -176,13 +176,13 @@ def test_programmatic_dependent_launch_wait_synchronizes_vector_clocks(with_gsan
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
-def test_programmatic_dependent_launch_sees_two_kernels_back_without_wait(with_gsan, capfd):
+def test_normal_launch_after_programmatic_dependent_launch_acquires_all_predecessors(with_gsan, capfd):
     payload = torch.zeros(2, dtype=torch.int32, device="cuda")
     result = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
 
     _pdl_stage_kernel[(1, )](payload, INDEX=0, WAIT_PREDECESSOR=False, num_warps=1)
     _pdl_stage_kernel[(1, )](payload, INDEX=1, WAIT_PREDECESSOR=True, num_warps=1, launch_pdl=True)
-    _pdl_two_back_consumer_kernel[(1, )](payload, result, num_warps=1, launch_pdl=True)
+    _pdl_two_back_consumer_kernel[(1, )](payload, result, num_warps=1)
     torch.cuda.synchronize()
 
     torch.testing.assert_close(result, torch.tensor([1000], dtype=torch.int32, device="cuda"))

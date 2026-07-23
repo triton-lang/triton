@@ -87,6 +87,13 @@ def _pdl_consumer_without_wait_kernel(payload_ptr, scratch_ptr):
 
 
 @triton.jit
+def _pdl_conditional_wait_kernel(should_wait_ptr, scratch_ptr):
+    if tl.load(should_wait_ptr) != 0:
+        tl.extra.cuda.gdc_wait()
+    tl.store(scratch_ptr, 1)
+
+
+@triton.jit
 def _pdl_transitively_acquired_producer_kernel(payload_ptr, flag_ptr):
     pid = tl.program_id(0)
     if pid == 0:
@@ -298,6 +305,16 @@ def _run_pdl_without_wait_case() -> None:
 
 
 @run_with_gsan
+def _run_pdl_missing_wait_case() -> None:
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    should_wait = torch.zeros(1, dtype=torch.int32, device="cuda")
+    scratch = torch.zeros(1, dtype=torch.int32, device="cuda")
+    _pdl_producer_kernel[(1, )](payload, num_warps=1)
+    _pdl_conditional_wait_kernel[(1, )](should_wait, scratch, num_warps=1, launch_pdl=True)
+    torch.cuda.synchronize()
+
+
+@run_with_gsan
 def _run_pdl_persistent_state_without_wait_case() -> None:
     num_sms = torch.cuda.get_device_properties(torch.cuda.current_device()).multi_processor_count
     payload = torch.zeros(1, dtype=torch.int32, device="cuda")
@@ -500,6 +517,17 @@ def test_write_after_read():
 def test_write_after_write():
     _run_failure_case("waw", runner=_run_waw_case, source_function=_waw_kernel.fn, marker="tl.store(ptr, 2)",
                       error="Write after write race detected")
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
+def test_programmatic_dependent_launch_requires_wait():
+    _run_failure_case(
+        "pdl_missing_wait",
+        runner=_run_pdl_missing_wait_case,
+        source_function=_pdl_conditional_wait_kernel.fn,
+        marker="def _pdl_conditional_wait_kernel",
+        error="kernel launched with programmatic dependent launch did not call gdc_wait",
+    )
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")

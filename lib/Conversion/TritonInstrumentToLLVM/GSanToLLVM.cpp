@@ -61,8 +61,10 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
   if (funcName == kGSanInitRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i64_ty,      i32_ty, i32_ty,
               i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
-  } else if (funcName == kGSanKernelExitRuntimeFn ||
-             funcName == kGSanGridDependencyWaitRuntimeFn) {
+  } else if (funcName == kGSanKernelExitRuntimeFn) {
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i64_ty,      i32_ty,
+              i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanGridDependencyWaitRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i64_ty, i32_ty, i32_ty, i32_ty};
   } else if (funcName == kGSanLoadTensorRuntimeFn ||
              funcName == kGSanStoreTensorRuntimeFn) {
@@ -926,9 +928,13 @@ struct GSanStreamClockOpConversion : public ConvertOpToLLVMPattern<OpTy> {
     auto numThreads = b.i32_val(ttg::lookupNumWarps(op) *
                                 ttg::lookupThreadsPerWarp(rewriter));
     auto barrierId = b.i32_val(getGSanBarrierId(op));
-    b.call(runtimeFunc,
-           ValueRange{*gsanGlobalStatePtr, *streamClockPtr, *kernelId,
-                      threadIdx, numThreads, barrierId});
+    SmallVector<Value> args{*gsanGlobalStatePtr, *streamClockPtr, *kernelId,
+                            threadIdx,           numThreads,      barrierId};
+    if constexpr (std::is_same_v<OpTy, tti::ExperimentalGSanKernelExitOp>) {
+      auto sourceLoc = materializeSourceLocation(rewriter, loc);
+      args.append({sourceLoc.file, sourceLoc.line});
+    }
+    b.call(runtimeFunc, args);
     rewriter.eraseOp(op);
     return success();
   }
