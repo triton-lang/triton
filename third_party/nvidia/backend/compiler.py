@@ -375,6 +375,7 @@ class CUDABackend(BaseBackend):
 
         if "gsan" in options.instrumentation_mode:
             # GSan introduces layout conversions, so must come before shared memory allocation
+            mod.set_attr("tti.gsan_launch_pdl", ir.builder(mod.context).get_int32_attr(int(options.launch_pdl)))
             passes.ttgpuir.add_global_sanitizer(pm)
 
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
