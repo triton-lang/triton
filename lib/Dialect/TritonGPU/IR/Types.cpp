@@ -164,15 +164,6 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
   if (shape.empty()) {
     return emitError() << "rank 0 memdesc is not allowed";
   }
-  bool hasNonPow2Shape = !isPositivePowerOfTwoShape(shape.drop_front(1));
-  // Non-pow2 logical dimensions are only meaningful for shared-memory
-  // encodings, where we can validate them against layout invariants below.
-  if (hasNonPow2Shape && !isa<SharedEncodingTrait>(encoding))
-    return emitError() << "shape must have power-of-2 and non-zero dimensions; "
-                          "got "
-                       << shape;
-  if (llvm::any_of(shape.drop_front(1), [](int64_t dim) { return dim <= 0; }))
-    return emitError() << "shape dimensions must be positive; got " << shape;
   unsigned bitwidth = getIntOrFloatOrPtrBitWidth(elementType);
   if (bitwidth != 1 && bitwidth < 8)
     return emitError() << "element type bit width must be 1 or at least 8; got "
@@ -187,7 +178,8 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
   auto layoutEncoding = dyn_cast_if_present<LayoutEncodingTrait>(encoding);
   if (!layoutEncoding ||
       !isa<nvidia_gpu::TensorMemoryEncodingAttr, SharedEncodingTrait,
-           nvidia_gpu::TensorMemoryScalesEncodingAttr>(encoding))
+           nvidia_gpu::TensorMemoryScalesEncodingAttr,
+           nvidia_gpu::TensorMemoryLUTEncodingAttr>(encoding))
     return emitError() << encoding << " is not a valid encoding";
   auto rank = layoutEncoding.getRank();
   if (isa<nvidia_gpu::TensorMemoryEncodingAttr>(encoding)) {
@@ -199,21 +191,32 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                          << "the shape size. Got " << rank << " and "
                          << shape.size();
   } else {
-    assert(isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(encoding) &&
-           "expected tensor-memory scales encoding");
-    if (shape.size() != 2)
-      return emitError() << "tensor-memory scale descriptors must have rank 2; "
-                         << "got " << shape.size();
+    assert((isa<nvidia_gpu::TensorMemoryScalesEncodingAttr,
+                nvidia_gpu::TensorMemoryLUTEncodingAttr>(encoding)) &&
+           "expected tensor-memory scales or LUT encoding");
+    if (shape.size() != 2) {
+      if (isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(encoding))
+        return emitError()
+               << "tensor-memory scale descriptors must have rank 2; got "
+               << shape.size();
+      return emitError() << "tensor-memory LUT descriptors must have rank 2; "
+                            "got "
+                         << shape.size();
+    }
   }
   // Every layout dimension must be a power of 2; only a leading pipeline
-  // dimension may have another positive size.
+  // dimension may have another positive size. The limited non-pow2
+  // relaxation is restricted to MMA operand layouts whose physical envelope
+  // is checked below.
   ArrayRef<int64_t> layoutShape = dropPipeliningDim(shape, encoding);
   ArrayRef<int64_t> layoutAllocShape = dropPipeliningDim(allocShape, encoding);
-  if (!llvm::all_of(layoutShape, llvm::isPowerOf2_64))
+  bool allowNonPow2 =
+      isa<SharedLinearEncodingAttr, NVMMASharedEncodingAttr>(encoding);
+  if (!allowNonPow2 && !llvm::all_of(layoutShape, llvm::isPowerOf2_64))
     return emitError()
            << "shape must have power-of-2 and non-zero dimensions; got "
            << shape;
-  if (!llvm::all_of(layoutAllocShape, llvm::isPowerOf2_64))
+  if (!allowNonPow2 && !llvm::all_of(layoutAllocShape, llvm::isPowerOf2_64))
     return emitError()
            << "alloc shape must have power-of-2 and non-zero dimensions; got "
            << allocShape;
