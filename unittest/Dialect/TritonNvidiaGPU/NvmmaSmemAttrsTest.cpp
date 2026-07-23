@@ -164,7 +164,7 @@ TEST_F(NvmmaSmemAttrsTest, Fp4PaddedRequiresI8Storage) {
 }
 
 TEST_F(NvmmaSmemAttrsTest, InferNvmmaSmemAttrsRejectsNearMisses) {
-  auto i4Ty = IntegerType::get(&ctx, 4);
+  auto i8Ty = IntegerType::get(&ctx, 8);
   auto smem = SharedMemorySpaceAttr::get(&ctx);
   auto inferSharedLinearInfo = [&](LinearLayout layout) {
     SmallVector<int64_t> shape;
@@ -172,7 +172,7 @@ TEST_F(NvmmaSmemAttrsTest, InferNvmmaSmemAttrsRejectsNearMisses) {
       shape.push_back(size);
     auto sharedLinear = SharedLinearEncodingAttr::get(&ctx, std::move(layout),
                                                       /*layoutAlignment=*/1024);
-    auto memTy = MemDescType::get(shape, i4Ty, sharedLinear, smem);
+    auto memTy = MemDescType::get(shape, i8Ty, sharedLinear, smem);
     return getNvmmaSmemAttrs(memTy);
   };
   auto nonPaddedPrefix = LinearLayout({{S("offset"),
