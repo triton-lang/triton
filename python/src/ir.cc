@@ -1880,6 +1880,12 @@ void init_triton_ir(py::module_ &m) {
            [](TritonOpBuilder &self, Value src, Value indices, int axis)
                -> Value { return self.create<GatherOp>(src, indices, axis); })
       // Force GPU barrier
+      .def("create_grid_dependency_wait",
+           [](TritonOpBuilder &self) { self.create<GridDependencyWaitOp>(); })
+      .def("create_grid_dependency_launch_dependents",
+           [](TritonOpBuilder &self) {
+             self.create<GridDependencyLaunchDependentsOp>();
+           })
       .def("create_barrier",
            [](TritonOpBuilder &self) {
              self.create<triton::gpu::BarrierOp>(triton::gpu::AddrSpace::All);

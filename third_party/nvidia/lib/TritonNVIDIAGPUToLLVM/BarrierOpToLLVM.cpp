@@ -33,6 +33,7 @@
 #include "llvm/Support/MathExtras.h"
 
 #include "Utility.h"
+#include <type_traits>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -48,6 +49,24 @@ void mlir::triton::NVIDIA::createFenceMBarrierInitReleaseCluster(
 }
 
 namespace {
+template <typename OpTy>
+struct GridDependencyOpConversion : public ConvertOpToLLVMPattern<OpTy> {
+  using ConvertOpToLLVMPattern<OpTy>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    PTXBuilder ptxBuilder;
+    if constexpr (std::is_same_v<OpTy, triton::GridDependencyWaitOp>)
+      (*ptxBuilder.create("griddepcontrol.wait"))();
+    else
+      (*ptxBuilder.create("griddepcontrol.launch_dependents"))();
+    ptxBuilder.launch(rewriter, op.getLoc(), void_ty(rewriter.getContext()));
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 Value getElectWarp0OrThread0(const NVIDIA::TargetInfo &targetInfo,
                              TritonLLVMOpBuilder &b) {
   if (targetInfo.getComputeCapability() >= 90) {
@@ -639,6 +658,10 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
     PatternBenefit benefit, NVIDIA::TargetInfo &targetInfo) {
   bool supportsMBarrierMulticast = targetInfo.getComputeCapability() == 107;
   patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
+  patterns.add<
+      GridDependencyOpConversion<triton::GridDependencyWaitOp>,
+      GridDependencyOpConversion<triton::GridDependencyLaunchDependentsOp>>(
+      typeConverter, benefit);
   patterns.add<FenceMBarrierInitReleaseClusterOpConversion>(typeConverter,
                                                             benefit);
   patterns.add<InitBarrierOpConversion, InvalBarrierOpConversion>(
