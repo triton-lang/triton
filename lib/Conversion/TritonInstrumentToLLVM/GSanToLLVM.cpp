@@ -1,6 +1,7 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/AtomicPTXBuilder.h"
 #include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -365,17 +366,6 @@ FailureOr<Value> getGSanKernelIdArg(Operation *op,
       return funcOp.getArgument(i);
   }
   return emitError(loc, "Unable to find gsan kernel ID");
-}
-
-unsigned getGSanBarrierId(Operation *op) {
-  Region *region = op->getParentRegion();
-  while (region) {
-    Operation *parent = region->getParentOp();
-    if (isa<ttg::WarpSpecializePartitionsOp>(parent))
-      return region->getRegionNumber() + 2;
-    region = parent ? parent->getParentRegion() : nullptr;
-  }
-  return 0;
 }
 
 static LLVM::LLVMStructType
@@ -891,7 +881,7 @@ public:
     auto threadIdx = mlir::getThreadId(rewriter, loc);
     auto numThreads = b.i32_val(ttg::lookupNumWarps(op) *
                                 ttg::lookupThreadsPerWarp(rewriter));
-    auto barrierId = b.i32_val(getGSanBarrierId(op));
+    Value barrierId = tt::nvgpu::WarpGroupBarrierIdOp::create(rewriter, loc);
     b.call(runtimeFunc,
            ValueRange{*gsanGlobalStatePtr, *streamClockPtr, *kernelId,
                       b.i32_val(op.getAcquireStreamClock()), threadIdx,
@@ -927,7 +917,7 @@ struct GSanStreamClockOpConversion : public ConvertOpToLLVMPattern<OpTy> {
     auto threadIdx = mlir::getThreadId(rewriter, loc);
     auto numThreads = b.i32_val(ttg::lookupNumWarps(op) *
                                 ttg::lookupThreadsPerWarp(rewriter));
-    auto barrierId = b.i32_val(getGSanBarrierId(op));
+    Value barrierId = tt::nvgpu::WarpGroupBarrierIdOp::create(rewriter, loc);
     SmallVector<Value> args{*gsanGlobalStatePtr, *streamClockPtr, *kernelId,
                             threadIdx,           numThreads,      barrierId};
     if constexpr (std::is_same_v<OpTy, tti::ExperimentalGSanKernelExitOp>) {

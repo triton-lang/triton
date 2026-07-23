@@ -214,12 +214,29 @@ def _gluon_ws_pdl_wait_worker(payload_ptr, result_ptr, layout: gl.constexpr):
     gl.store(result_ptr + offsets, values)
 
 
+@gluon.jit(noinline=True)
+def _gluon_ws_pdl_wait_noinline_worker(payload_ptr, result_ptr, layout: gl.constexpr):
+    tl.extra.cuda.gdc_wait()
+    offsets = gl.arange(0, 128, layout=layout)
+    values = gl.load(payload_ptr + offsets)
+    gl.store(result_ptr + offsets, values)
+
+
 @gluon.jit
 def _gluon_ws_pdl_wait_kernel(payload_ptr, result_ptr):
     layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
     gl.warp_specialize([
         (_gluon_ws_pdl_wait_default, (payload_ptr, result_ptr, layout)),
         (_gluon_ws_pdl_wait_worker, (payload_ptr, result_ptr, layout)),
+    ], [4], [24])
+
+
+@gluon.jit
+def _gluon_ws_pdl_wait_noinline_kernel(payload_ptr, result_ptr):
+    layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+    gl.warp_specialize([
+        (_gluon_ws_pdl_wait_default, (payload_ptr, result_ptr, layout)),
+        (_gluon_ws_pdl_wait_noinline_worker, (payload_ptr, result_ptr, layout)),
     ], [4], [24])
 
 
@@ -252,6 +269,21 @@ def test_programmatic_dependent_launch_wait_inside_warp_specialize(with_gsan, ca
     torch.cuda.synchronize()
 
     torch.testing.assert_close(result, torch.arange(1000, 1128, device="cuda", dtype=torch.int32))
+    assert "griddepcontrol.wait" in compiled.asm["ptx"]
+    _assert_no_gsan_runtime_output(capfd)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
+def test_programmatic_dependent_launch_wait_inside_noinline_warp_specialize(with_gsan, capfd):
+    payload = torch.empty((128, ), dtype=torch.int32, device="cuda")
+    result = torch.full_like(payload, -1)
+
+    _pdl_producer_kernel[(128, )](payload, num_warps=1)
+    compiled = _gluon_ws_pdl_wait_noinline_kernel[(1, )](payload, result, num_warps=4, launch_pdl=True)
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(result, torch.arange(1000, 1128, device="cuda", dtype=torch.int32))
+    assert "tt.call" in compiled.asm["ttgir"]
     assert "griddepcontrol.wait" in compiled.asm["ptx"]
     _assert_no_gsan_runtime_output(capfd)
 
