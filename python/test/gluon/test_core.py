@@ -1944,17 +1944,14 @@ def _transform_b_to_core_matrices_layout(b, block_n, block_k, is_n_major=True):
         b_transformed = b_transformed.permute(0, 3, 2, 1, 4, 5)
     else:
         b_transformed = b_transformed.permute(0, 3, 1, 2, 4, 5)
-    return b_transformed.reshape(num_blocks_n, num_blocks_k, num_cm_k, num_cm_n,
-                                 cm_rows * cm_cols).contiguous()
+    return b_transformed.reshape(num_blocks_n, num_blocks_k, num_cm_k, num_cm_n, cm_rows * cm_cols).contiguous()
 
 
 def _make_packed_b_tma_descriptor(b, block_n, block_k_packed, is_n_major=True, cga_layout=None):
-    b_transformed = _transform_b_to_core_matrices_layout(b, block_n, block_k_packed,
-                                                         is_n_major=is_n_major)
+    b_transformed = _transform_b_to_core_matrices_layout(b, block_n, block_k_packed, is_n_major=is_n_major)
     num_cm_n = block_n // 8
     num_cm_k = block_k_packed // 16
-    b_layout_tma = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5,
-                                          cga_layout=cga_layout)
+    b_layout_tma = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, cga_layout=cga_layout)
     if is_n_major:
         b_block_shape = [1, 1, num_cm_k, num_cm_n, 128]
     else:
@@ -2031,8 +2028,8 @@ def _mma_lut_kernel(
 
     cga_layout: ttgl.constexpr = [[1, 0]] if two_ctas else []
     tmem_block_m: ttgl.constexpr = BLOCK_M // 2 if two_ctas else 128
-    tmem_layout: ttgl.constexpr = TensorMemoryLayout([tmem_block_m, BLOCK_N], col_stride=1,
-                                                     cga_layout=cga_layout, two_ctas=two_ctas)
+    tmem_layout: ttgl.constexpr = TensorMemoryLayout([tmem_block_m, BLOCK_N], col_stride=1, cga_layout=cga_layout,
+                                                     two_ctas=two_ctas)
     acc_tmem = allocate_tensor_memory(ttgl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
     num_lut_rows: ttgl.constexpr = BLOCK_N // 8
     num_lut_cols: ttgl.constexpr = BLOCK_K // 128 * 16
@@ -2089,12 +2086,10 @@ def _mma_lut_kernel(
     tma.store_wait(pendings=0)
 
 
-def _matmul_lut(a, b, lut, c, block_m, block_n, block_k, block_k_packed, num_warps, b_is_n_major=True,
-                two_ctas=False):
+def _matmul_lut(a, b, lut, c, block_m, block_n, block_k, block_k_packed, num_warps, b_is_n_major=True, two_ctas=False):
     m, n = c.shape
     cga_layout = [[1, 0]] if two_ctas else []
-    a_layout = ttgl.NVMMASharedLayout.get_default_for([block_m, block_k], ttgl.float8e4nv,
-                                                      cga_layout=cga_layout)
+    a_layout = ttgl.NVMMASharedLayout.get_default_for([block_m, block_k], ttgl.float8e4nv, cga_layout=cga_layout)
     a_desc = TensorDescriptor.from_tensor(a, [block_m, block_k], a_layout)
     b_cga_layout = [[0, 0, 0, 1, 0]] if two_ctas else []
     b_desc_tma = _make_packed_b_tma_descriptor(
@@ -2106,8 +2101,7 @@ def _matmul_lut(a, b, lut, c, block_m, block_n, block_k, block_k_packed, num_war
     )
     lut_cga_layout = [[0, 0, 0, 0]] if two_ctas else []
     lut_desc = _make_lut_tma_descriptor(lut, block_n, block_k, cga_layout=lut_cga_layout)
-    c_layout = ttgl.NVMMASharedLayout.get_default_for([block_m, block_n], ttgl.float32,
-                                                      cga_layout=cga_layout)
+    c_layout = ttgl.NVMMASharedLayout.get_default_for([block_m, block_n], ttgl.float32, cga_layout=cga_layout)
     c_desc = TensorDescriptor.from_tensor(c, [block_m, block_n], c_layout)
 
     grid = (triton.cdiv(m, block_m), triton.cdiv(n, block_n))
@@ -2148,8 +2142,8 @@ def test_tcgen05_lutb(BLOCK_M, BLOCK_K, b_is_n_major, two_ctas):
     lut_orig, b_indices_packed = _get_random_lut_and_indices(n, k)
     lut = _pack_lut_for_tma(lut_orig)
 
-    _matmul_lut(a, b_indices_packed, lut, c, BLOCK_M, block_n, BLOCK_K, block_k_packed, 4,
-                b_is_n_major=b_is_n_major, two_ctas=two_ctas)
+    _matmul_lut(a, b_indices_packed, lut, c, BLOCK_M, block_n, BLOCK_K, block_k_packed, 4, b_is_n_major=b_is_n_major,
+                two_ctas=two_ctas)
 
     b_uint8 = _decompress_lut(b_indices_packed, lut_orig)
     b = b_uint8.view(torch.float8_e4m3fn)
@@ -5339,9 +5333,7 @@ def make_scales_descriptor(scales, BLOCK_MN, BLOCK_K, VEC_SIZE, cga_layout=None)
     REP_K = BLOCK_K // (VEC_SIZE * 4)
     block_shape = [1, REP_MN, REP_K, 2, 256]
     scales = scales.reshape(1, scales.shape[0], scales.shape[1], 2, 256)
-    IS_NVFP4 = scales.dtype == torch.float8_e4m3fn
-    layout = ttgl.NVMMASharedLayout.get_default_for(block_shape, ttgl.float8e4nv if IS_NVFP4 else ttgl.uint8,
-                                                    cga_layout=cga_layout)
+    layout = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, cga_layout=cga_layout)
     return TensorDescriptor.from_tensor(scales, block_shape, layout)
 
 
@@ -5470,7 +5462,6 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
 
 def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga, multicast,
                             out_dtype=torch.float16):
-    from dataclasses import replace
     M, N = A.shape[0], B.shape[0]
     MIXED_PREC = A.dtype != B.dtype
     num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
@@ -5497,13 +5488,6 @@ def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, 
     C_desc = make_output_descriptor(M, N, out_dtype, BLOCK_M, BLOCK_N, cga_layout=cga_layout_c)
     A_scale_desc = make_scales_descriptor(A_scale, BLOCK_M, BLOCK_K, VEC_SIZE, cga_layout=cga_layout_a_scale)
     B_scale_desc = make_scales_descriptor(B_scale, BLOCK_N, BLOCK_K, VEC_SIZE, cga_layout=cga_layout_b_scale)
-
-    a_scale_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5,
-                                            cga_layout=cga_layout_a_scale)
-    b_scale_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5,
-                                            cga_layout=cga_layout_b_scale)
-    A_scale_desc = replace(A_scale_desc, layout=a_scale_layout)
-    B_scale_desc = replace(B_scale_desc, layout=b_scale_layout)
 
     block_layout_c = ttgl.BlockedLayout([1, 8], [1, 32], warps_per_cta=warps, order=[1, 0],
                                         cga_layout=cga_layout_c) if multi_cta else None
@@ -5537,17 +5521,6 @@ def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_K, a_format, b_format, VEC_SIZE,
     C_ref = A_ref @ B_ref.T
     C = mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga, multicast)
     torch.testing.assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
-
-
-def _make_lut_scale_descriptor(scales, block_mn, block_k, cga_layout=None):
-    vec_size = 32
-    rep_mn = block_mn // 128
-    rep_k = block_k // (vec_size * 4)
-    block_shape = [1, rep_mn, rep_k, 2, 256]
-    scales = scales.reshape(1, scales.shape[0], scales.shape[1], 2, 256)
-    layout = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5,
-                                    cga_layout=cga_layout)
-    return TensorDescriptor.from_tensor(scales, block_shape, layout)
 
 
 @gluon.jit
@@ -5587,14 +5560,14 @@ def _mma_scaled_lut_kernel(
 
     cga_layout: ttgl.constexpr = [[1, 0]] if two_ctas else []
     tmem_block_m: ttgl.constexpr = BLOCK_M // 2 if two_ctas else 128
-    acc_layout: ttgl.constexpr = TensorMemoryLayout([tmem_block_m, BLOCK_N], col_stride=1,
-                                                    cga_layout=cga_layout, two_ctas=two_ctas)
+    acc_layout: ttgl.constexpr = TensorMemoryLayout([tmem_block_m, BLOCK_N], col_stride=1, cga_layout=cga_layout,
+                                                    two_ctas=two_ctas)
     acc_tmem = allocate_tensor_memory(ttgl.float32, [BLOCK_M, BLOCK_N], acc_layout)
 
     num_lut_rows: ttgl.constexpr = BLOCK_N // 8
     num_lut_cols: ttgl.constexpr = BLOCK_K // 128 * 16
     lut_cga_layout: ttgl.constexpr = [[0, 0]] if two_ctas else []
-    lut_tmem = rubin.allocate_tensor_memory(
+    lut_tmem = allocate_tensor_memory(
         ttgl.int8,
         (num_lut_rows, num_lut_cols),
         rubin.TensorMemoryLUTLayout(cga_layout=lut_cga_layout),
@@ -5628,18 +5601,15 @@ def _mma_scaled_lut_kernel(
         off_k_a_scale = k_iter * rep_k_a
         off_k_b_scale = k_iter * rep_k_b
 
-        expected_bytes: ttgl.constexpr = (a_desc.nbytes_per_cta + b_desc.nbytes_per_cta +
-                                          lut_desc.nbytes_per_cta + a_scale_desc.nbytes_per_cta +
-                                          b_scale_desc.nbytes_per_cta)
+        expected_bytes: ttgl.constexpr = (a_desc.nbytes_per_cta + b_desc.nbytes_per_cta + lut_desc.nbytes_per_cta +
+                                          a_scale_desc.nbytes_per_cta + b_scale_desc.nbytes_per_cta)
         mbarrier.expect(tma_bar, expected_bytes)
         tma.async_load(a_desc, [off_m, off_k], tma_bar, a_smem)
         tma.async_load(b_desc, [pid_n, k_iter, 0, 0, 0], tma_bar, b_smem)
         tma.async_load(lut_desc, [lut_block_n, lut_block_k, 0, 0], tma_bar, lut_smem, multicast=two_ctas)
         tma.async_load(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], tma_bar, a_scale_smem)
-        tma.async_load(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], tma_bar, b_scale_smem,
-                       multicast=two_ctas)
-        mbarrier.wait(tma_bar, phase=phase,
-                      deps=[a_smem, b_smem, lut_smem, a_scale_smem, b_scale_smem])
+        tma.async_load(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], tma_bar, b_scale_smem, multicast=two_ctas)
+        mbarrier.wait(tma_bar, phase=phase, deps=[a_smem, b_smem, lut_smem, a_scale_smem, b_scale_smem])
 
         b = _core_matrices_to_operand_layout(b_smem, BLOCK_N, BLOCK_K_PACKED, True).permute((1, 0))
         tcgen05_copy(_lut_to_tmem_layout(lut_smem), lut_tmem)
@@ -5682,23 +5652,20 @@ def _mma_scaled_lut_kernel(
     tma.store_wait(0)
 
 
-def _matmul_scaled_lut(a, a_scale, b, lut, b_scale, c, block_m, block_n, block_k, block_k_packed,
-                       num_warps, two_ctas):
+def _matmul_scaled_lut(a, a_scale, b, lut, b_scale, c, block_m, block_n, block_k, block_k_packed, num_warps, two_ctas):
     cga_layout = [[1, 0]] if two_ctas else []
     b_cga_layout = [[0, 0, 0, 1, 0]] if two_ctas else []
     lut_cga_layout = [[0, 0, 0, 0]] if two_ctas else []
     a_scale_cga_layout = [[0, 1, 0, 0, 0]] if two_ctas else []
     b_scale_cga_layout = [[0, 0, 0, 0, 0]] if two_ctas else []
 
-    a_layout = ttgl.NVMMASharedLayout.get_default_for([block_m, block_k], ttgl.float8e4nv,
-                                                      cga_layout=cga_layout)
+    a_layout = ttgl.NVMMASharedLayout.get_default_for([block_m, block_k], ttgl.float8e4nv, cga_layout=cga_layout)
     a_desc = TensorDescriptor.from_tensor(a, [block_m, block_k], a_layout)
     b_desc = _make_packed_b_tma_descriptor(b, block_n, block_k_packed, cga_layout=b_cga_layout)
     lut_desc = _make_lut_tma_descriptor(lut, block_n, block_k, cga_layout=lut_cga_layout)
-    a_scale_desc = _make_lut_scale_descriptor(a_scale, block_m, block_k, cga_layout=a_scale_cga_layout)
-    b_scale_desc = _make_lut_scale_descriptor(b_scale, block_n, block_k, cga_layout=b_scale_cga_layout)
-    c_layout = ttgl.NVMMASharedLayout.get_default_for([block_m, block_n], ttgl.float32,
-                                                      cga_layout=cga_layout)
+    a_scale_desc = make_scales_descriptor(a_scale, block_m, block_k, 32, cga_layout=a_scale_cga_layout)
+    b_scale_desc = make_scales_descriptor(b_scale, block_n, block_k, 32, cga_layout=b_scale_cga_layout)
+    c_layout = ttgl.NVMMASharedLayout.get_default_for([block_m, block_n], ttgl.float32, cga_layout=cga_layout)
     c_desc = TensorDescriptor.from_tensor(c, [block_m, block_n], c_layout)
 
     grid = (triton.cdiv(c.shape[0], block_m), triton.cdiv(c.shape[1], block_n))
@@ -5743,8 +5710,8 @@ def test_tcgen05_lutb_scaled(BLOCK_M, two_ctas):
     b_scale = swizzle_scales_packed_block(b_scale_mx.data, vec_size)
     c = torch.empty(m, n, device="cuda", dtype=torch.float32)
 
-    _matmul_scaled_lut(a, a_scale, b_indices_packed, lut, b_scale, c, BLOCK_M, block_n, block_k,
-                       block_k_packed, 4, two_ctas)
+    _matmul_scaled_lut(a, a_scale, b_indices_packed, lut, b_scale, c, BLOCK_M, block_n, block_k, block_k_packed, 4,
+                       two_ctas)
 
     a_scale_ref = a_scale_mx.to(torch.float32).repeat_interleave(vec_size, dim=1)
     b_scale_ref = b_scale_mx.to(torch.float32).repeat_interleave(vec_size, dim=1)

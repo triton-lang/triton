@@ -688,6 +688,19 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     and write on its accumulator operand. When the tokens are present, they can
     be used to check aliasing and modref on the accumulator memory.
 
+    The optional `$lut` operand enables Rubin LUT-based decompression of B. In
+    this mode, `$b` does not contain matrix elements. Instead, each logical B
+    element is represented by a 3-bit index in `[0, 7]`, and successive indices
+    along K are packed into `i8` elements. Thus, for logical B shape `(K, N)`,
+    `$b` has shape `(K * 3 / 8, N)` and element type `i8`.
+
+    One 8-entry lookup table is shared by each logical `64x8` B tile along
+    `(K, N)`. `$lut` stores the collection of tables in tensor memory as a
+    rank-2 `i8` tensor with shape `(N / 8, (K / 64) * 8)`. For logical B
+    coordinate `(k, n)`, the 3-bit index selects an entry from
+    `$lut[n / 8, (k / 64) * 8 : (k / 64 + 1) * 8]`. The `$lut` operand must use
+    `tensor_memory_lut_encoding`.
+
     The `isUnsigned` attribute is only relevant when performing an integer MMA operation.
     If true, the integer values are treated as unsigned, otherwise they are treated as signed.
   }];
@@ -755,6 +768,20 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     This operation takes and produces an optional token to indicate TMEM read
     and write on its accumulator operand. When the tokens are present, they can
     be used to check aliasing and modref on the accumulator memory.
+
+    The optional `$lut` operand enables Rubin LUT-based decompression of B. In
+    this mode, `$b` does not contain matrix elements. Instead, each logical B
+    element is represented by a 3-bit index in `[0, 7]`, and successive indices
+    along K are packed into `i8` elements. Thus, for logical B shape `(K, N)`,
+    `$b` has shape `(K * 3 / 8, N)` and element type `i8`.
+
+    One 8-entry lookup table is shared by each logical `64x8` B tile along
+    `(K, N)`. `$lut` stores the collection of tables in tensor memory as a
+    rank-2 `i8` tensor with shape `(N / 8, (K / 64) * 8)`. For logical B
+    coordinate `(k, n)`, the 3-bit index selects an entry from
+    `$lut[n / 8, (k / 64) * 8 : (k / 64 + 1) * 8]`. The `$lut` operand must use
+    `tensor_memory_lut_encoding`; the B scales apply to the decompressed logical
+    B values.
   }];
 
   let arguments = (ins

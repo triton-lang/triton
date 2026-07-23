@@ -864,13 +864,50 @@ static LogicalResult verifyMMADType(Operation *op, Type a, Type b, Type d) {
   return success();
 }
 
+static LogicalResult verifyMMALUTOperands(Operation *op, MemDescType bType,
+                                          MemDescType lutType,
+                                          int64_t logicalK) {
+  if (bType.getRank() != 2)
+    return op->emitOpError("LUT decompression requires a rank-2 RHS operand");
+  if (!bType.getElementType().isInteger(8))
+    return op->emitOpError(
+        "LUT decompression requires an i8 packed RHS operand");
+  if (lutType.getRank() != 2)
+    return op->emitOpError("LUT operand must have a rank-2 tensor");
+  if (!isa<TensorMemoryLUTEncodingAttr>(lutType.getEncoding()))
+    return op->emitOpError("LUT operand must use tensor_memory_lut_encoding");
+
+  ArrayRef<int64_t> bShape = bType.getShape();
+  int64_t packedK = bShape[bShape.size() - 2];
+  int64_t blockN = bShape.back();
+  if (blockN != 256)
+    return op->emitOpError(
+        "LUT decompression currently requires the RHS N dimension to be 256");
+  if (logicalK % 128 != 0)
+    return op->emitOpError(
+        "LUT decompression requires the logical K dimension to be a multiple "
+        "of 128");
+  if (packedK % 3 != 0 || packedK / 3 * 8 != logicalK)
+    return op->emitOpError()
+           << "LUT decompression requires packed RHS K dimension "
+              "logicalK * 3 / 8; got logical K "
+           << logicalK << " and packed K " << packedK;
+
+  SmallVector<int64_t> expectedLutShape = {blockN / 8, logicalK / 8};
+  if (lutType.getShape() != ArrayRef<int64_t>(expectedLutShape))
+    return op->emitOpError()
+           << "LUT operand shape must be " << expectedLutShape
+           << " for RHS shape " << bShape << ", but got " << lutType.getShape();
+  return success();
+}
+
 bool TCGen5MMAOp::verifyDims() {
   auto aShape = getA().getType().getShape();
   auto bShape = getB().getType().getShape();
 
   int64_t aKdim = aShape.back();
   int64_t bKdim = bShape[bShape.size() - 2];
-  if (aKdim != bKdim && getLut()) {
+  if (getLut()) {
     // LUT mode consumes 3-bit packed RHS values in an 8-bit container.
     if (bKdim % 3 != 0)
       return false;
@@ -896,13 +933,9 @@ LogicalResult TCGen5MMAOp::verify() {
   if (getLut()) {
     if (!isa<Float8E4M3FNType, Float8E5M2Type>(atype))
       return emitOpError("LUT decompression requires an FP8 LHS operand");
-    if (!btype.isInteger(8))
-      return emitOpError("LUT decompression requires an i8 packed RHS operand");
     if (!dtype.isF16() && !dtype.isF32())
       return emitOpError(
           "LUT decompression requires an f16 or f32 accumulator");
-    if (!isa<TensorMemoryLUTEncodingAttr>(getLut().getType().getEncoding()))
-      return emitOpError("LUT operand must use tensor_memory_lut_encoding");
   } else if (failed(verifyMMADType(*this, atype, btype, dtype))) {
     return failure();
   }
@@ -913,8 +946,10 @@ LogicalResult TCGen5MMAOp::verify() {
     return emitOpError("RHS operand must have a rank-2 tensor");
   if (getD().getType().getRank() != 2)
     return emitOpError("Return operand must have a rank-2 tensor");
-  if (getLut() && getLut().getType().getRank() != 2)
-    return emitOpError("LUT operand must have a rank-2 tensor");
+  if (getLut() && failed(verifyMMALUTOperands(
+                      getOperation(), getB().getType(), getLut().getType(),
+                      getA().getType().getShape().back())))
+    return failure();
 
   auto aEnc = getA().getType().getEncoding();
   if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr,
@@ -1180,6 +1215,17 @@ static Type getScaledMMAOperandType(Type elementType,
   llvm_unreachable("Unsupported type.");
 };
 
+static int64_t getScaledMMAAKDim(TCGen5MMAScaledOp op) {
+  int64_t aKdim = op.getA().getType().getShape().back();
+  bool transA = false;
+  if (auto aSharedLayout =
+          dyn_cast<NVMMASharedEncodingAttr>(op.getA().getType().getEncoding()))
+    transA = aSharedLayout.getTransposed();
+  if (op.getAType() == ScaleDotElemType::E2M1 && !transA)
+    aKdim *= 2;
+  return aKdim;
+}
+
 static LogicalResult verifyScaledLHSOperand(Operation *op, Type elementType,
                                             TensorMemoryEncodingAttr encoding,
                                             ScaleDotElemType aType,
@@ -1260,6 +1306,10 @@ LogicalResult TCGen5MMAScaledOp::verify() {
     return emitOpError("accumulator layout must not be fp4_padded");
   if (enc.getBlockM() != 128)
     return emitOpError("only supports instruction shape blockM=128");
+  if (getLut() && failed(verifyMMALUTOperands(getOperation(), getB().getType(),
+                                              getLut().getType(),
+                                              getScaledMMAAKDim(*this))))
+    return failure();
   if (auto lhsEnc =
           dyn_cast<TensorMemoryEncodingAttr>(getA().getType().getEncoding())) {
     if (failed(verifyScaledLHSOperand(getOperation(),
@@ -1340,23 +1390,15 @@ void TCGen5MMAScaledOp::getEffects(
 }
 
 bool TCGen5MMAScaledOp::verifyDims() {
-  auto aShape = this->getA().getType().getShape();
   auto bShape = this->getB().getType().getShape();
 
-  bool transA = false;
-  if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
-          getA().getType().getEncoding())) {
-    transA = aSharedLayout.getTransposed();
-  }
   bool transB = false;
   if (auto bSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
           getB().getType().getEncoding())) {
     transB = !bSharedLayout.getTransposed();
   }
-  auto aKdim = aShape[aShape.size() - 1];
-  auto bKdim = bShape[aShape.size() - 2];
-  if (this->getAType() == ScaleDotElemType::E2M1 && !transA)
-    aKdim *= 2;
+  auto aKdim = getScaledMMAAKDim(*this);
+  auto bKdim = bShape[bShape.size() - 2];
   if (getLut()) {
     if (bKdim % 3 != 0)
       return false;

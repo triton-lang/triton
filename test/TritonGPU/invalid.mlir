@@ -698,14 +698,3 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
     tt.return
   }
 }
-
-// -----
-
-// Leading non-power-of-two dimensions remain valid for ordinary shared
-// encodings. They predate the limited relaxation for packed LUTB layouts and
-// do not need to satisfy its homogeneous-tiling invariant.
-#shared_nonpow2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#smem = #ttg.shared_memory
-tt.func @memdesc_swizzled_shared_nonpow2(%arg0: !ttg.memdesc<1250xi64, #shared_nonpow2, #smem>) {
-  tt.return
-}

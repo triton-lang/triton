@@ -402,9 +402,8 @@ void createScaledGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
                          ttng::TCGen5MMAScaledOp op, MemDescOperand a, Value b,
                          Value lut, MemDescOperand d, Value scaleA,
                          Value scaleB, Value pred, Value instDescriptor,
-                         Value useInitAcc, bool aInTmem,
-                         mxfpKind mxfpInstKind, bool twoCTAs,
-                         std::string collectorB) {
+                         Value useInitAcc, bool aInTmem, mxfpKind mxfpInstKind,
+                         bool twoCTAs, std::string collectorB) {
   PTXBuilder ptxBuilder;
   std::string opcode =
       "tcgen05.mma.cta_group::" + std::to_string(twoCTAs ? 2 : 1) + ".kind::";
@@ -650,7 +649,8 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
     int kStart = k * bOperandShape[0];
     if (lut) {
       // For an odd-k iteration, load the same 48B as the previous even-k
-      // iteration and set kSegmentOffset to 1
+      // iteration and set kSegmentOffset to 1. We rely on B reuse over the
+      // K dimension so that the duplicated load from SMEM does not occur.
       kSegmentOffset = k % 2;
       kStart = k / 2 * bOperandShape[0];
     }

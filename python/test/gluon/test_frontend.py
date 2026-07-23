@@ -685,7 +685,8 @@ def test_rubin_namespace_extends_blackwell():
     assert ttgl.nvidia.rubin is rubin
     assert rubin.TensorMemoryLayout is blackwell.TensorMemoryLayout
     assert rubin.allocate_tensor_memory is blackwell.allocate_tensor_memory
-    assert rubin.tcgen05_mma_scaled is blackwell.tcgen05_mma_scaled
+    assert rubin.tcgen05_mma is not blackwell.tcgen05_mma
+    assert rubin.tcgen05_mma_scaled is not blackwell.tcgen05_mma_scaled
     assert rubin.tma is blackwell.tma
     assert rubin.mbarrier is not blackwell.mbarrier
     assert rubin.mbarrier.allocate_mbarrier is blackwell.mbarrier.allocate_mbarrier

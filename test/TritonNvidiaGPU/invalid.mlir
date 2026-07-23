@@ -1322,6 +1322,97 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
 // -----
 
+#shared_lut_a = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
+#shared_lut_b_n128 = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [16, 0], [32, 0]]}, alignment = 16>
+#shared_lut_b_n256 = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [16, 0], [32, 0]]}, alignment = 16>
+#shared_lut_b_equal_k = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
+#tmem_lut_acc_n128 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem_lut_acc_n256 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
+#tmem_lut_metadata_n128 = #ttng.tensor_memory_lut_encoding<>
+#tmem_lut_scales_n128 = #ttng.tensor_memory_scales_encoding<>
+#smem_lut_n128 = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tc_gen5_mma_lut_invalid_block_n(
+      %a: !ttg.memdesc<128x128xf8E4M3FN, #shared_lut_a, #smem_lut_n128>,
+      %b: !ttg.memdesc<48x128xi8, #shared_lut_b_n128, #smem_lut_n128>,
+      %lut: !ttg.memdesc<16x16xi8, #tmem_lut_metadata_n128, #ttng.tensor_memory>,
+      %d: !ttg.memdesc<128x128xf32, #tmem_lut_acc_n128, #ttng.tensor_memory, mutable>,
+      %use_acc: i1, %pred: i1) {
+    // expected-error @below {{LUT decompression currently requires the RHS N dimension to be 256}}
+    ttng.tc_gen5_mma %a, %b[%lut], %d, %use_acc, %pred :
+      !ttg.memdesc<128x128xf8E4M3FN, #shared_lut_a, #smem_lut_n128>,
+      !ttg.memdesc<48x128xi8, #shared_lut_b_n128, #smem_lut_n128>[!ttg.memdesc<16x16xi8, #tmem_lut_metadata_n128, #ttng.tensor_memory>],
+      !ttg.memdesc<128x128xf32, #tmem_lut_acc_n128, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  tt.func @tc_gen5_mma_scaled_lut_invalid_block_n(
+      %a: !ttg.memdesc<128x128xf8E4M3FN, #shared_lut_a, #smem_lut_n128>,
+      %b: !ttg.memdesc<48x128xi8, #shared_lut_b_n128, #smem_lut_n128>,
+      %lut: !ttg.memdesc<16x16xi8, #tmem_lut_metadata_n128, #ttng.tensor_memory>,
+      %d: !ttg.memdesc<128x128xf32, #tmem_lut_acc_n128, #ttng.tensor_memory, mutable>,
+      %scale_a: !ttg.memdesc<128x4xi8, #tmem_lut_scales_n128, #ttng.tensor_memory>,
+      %scale_b: !ttg.memdesc<128x4xi8, #tmem_lut_scales_n128, #ttng.tensor_memory>,
+      %use_acc: i1, %pred: i1) {
+    // expected-error @below {{LUT decompression currently requires the RHS N dimension to be 256}}
+    ttng.tc_gen5_mma_scaled %a, %b[%lut], %d, %scale_a, %scale_b, %use_acc, %pred lhs = e4m3 rhs = e4m3 :
+      !ttg.memdesc<128x128xf8E4M3FN, #shared_lut_a, #smem_lut_n128>,
+      !ttg.memdesc<48x128xi8, #shared_lut_b_n128, #smem_lut_n128>[!ttg.memdesc<16x16xi8, #tmem_lut_metadata_n128, #ttng.tensor_memory>],
+      !ttg.memdesc<128x128xf32, #tmem_lut_acc_n128, #ttng.tensor_memory, mutable>,
+      !ttg.memdesc<128x4xi8, #tmem_lut_scales_n128, #ttng.tensor_memory>,
+      !ttg.memdesc<128x4xi8, #tmem_lut_scales_n128, #ttng.tensor_memory>
+    tt.return
+  }
+
+  tt.func @tc_gen5_mma_lut_invalid_lut_shape(
+      %a: !ttg.memdesc<128x128xf8E4M3FN, #shared_lut_a, #smem_lut_n128>,
+      %b: !ttg.memdesc<48x256xi8, #shared_lut_b_n256, #smem_lut_n128>,
+      %lut: !ttg.memdesc<16x16xi8, #tmem_lut_metadata_n128, #ttng.tensor_memory>,
+      %d: !ttg.memdesc<128x256xf32, #tmem_lut_acc_n256, #ttng.tensor_memory, mutable>,
+      %use_acc: i1, %pred: i1) {
+    // expected-error @below {{LUT operand shape must be 32, 16}}
+    ttng.tc_gen5_mma %a, %b[%lut], %d, %use_acc, %pred :
+      !ttg.memdesc<128x128xf8E4M3FN, #shared_lut_a, #smem_lut_n128>,
+      !ttg.memdesc<48x256xi8, #shared_lut_b_n256, #smem_lut_n128>[!ttg.memdesc<16x16xi8, #tmem_lut_metadata_n128, #ttng.tensor_memory>],
+      !ttg.memdesc<128x256xf32, #tmem_lut_acc_n256, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  tt.func @tc_gen5_mma_scaled_lut_invalid_encoding(
+      %a: !ttg.memdesc<128x128xf8E4M3FN, #shared_lut_a, #smem_lut_n128>,
+      %b: !ttg.memdesc<48x256xi8, #shared_lut_b_n256, #smem_lut_n128>,
+      %lut: !ttg.memdesc<32x16xi8, #tmem_lut_scales_n128, #ttng.tensor_memory>,
+      %d: !ttg.memdesc<128x256xf32, #tmem_lut_acc_n256, #ttng.tensor_memory, mutable>,
+      %scale_a: !ttg.memdesc<128x4xi8, #tmem_lut_scales_n128, #ttng.tensor_memory>,
+      %scale_b: !ttg.memdesc<256x4xi8, #tmem_lut_scales_n128, #ttng.tensor_memory>,
+      %use_acc: i1, %pred: i1) {
+    // expected-error @below {{LUT operand must use tensor_memory_lut_encoding}}
+    ttng.tc_gen5_mma_scaled %a, %b[%lut], %d, %scale_a, %scale_b, %use_acc, %pred lhs = e4m3 rhs = e4m3 :
+      !ttg.memdesc<128x128xf8E4M3FN, #shared_lut_a, #smem_lut_n128>,
+      !ttg.memdesc<48x256xi8, #shared_lut_b_n256, #smem_lut_n128>[!ttg.memdesc<32x16xi8, #tmem_lut_scales_n128, #ttng.tensor_memory>],
+      !ttg.memdesc<128x256xf32, #tmem_lut_acc_n256, #ttng.tensor_memory, mutable>,
+      !ttg.memdesc<128x4xi8, #tmem_lut_scales_n128, #ttng.tensor_memory>,
+      !ttg.memdesc<256x4xi8, #tmem_lut_scales_n128, #ttng.tensor_memory>
+    tt.return
+  }
+
+  tt.func @tc_gen5_mma_lut_equal_physical_k_is_invalid(
+      %a: !ttg.memdesc<128x128xf8E4M3FN, #shared_lut_a, #smem_lut_n128>,
+      %b: !ttg.memdesc<128x256xi8, #shared_lut_b_equal_k, #smem_lut_n128>,
+      %lut: !ttg.memdesc<32x16xi8, #tmem_lut_metadata_n128, #ttng.tensor_memory>,
+      %d: !ttg.memdesc<128x256xf32, #tmem_lut_acc_n256, #ttng.tensor_memory, mutable>,
+      %use_acc: i1, %pred: i1) {
+    // expected-error @below {{expected the last dimension of the first operand to be equal to the second-to-last dimension of the second operand}}
+    ttng.tc_gen5_mma %a, %b[%lut], %d, %use_acc, %pred :
+      !ttg.memdesc<128x128xf8E4M3FN, #shared_lut_a, #smem_lut_n128>,
+      !ttg.memdesc<128x256xi8, #shared_lut_b_equal_k, #smem_lut_n128>[!ttg.memdesc<32x16xi8, #tmem_lut_metadata_n128, #ttng.tensor_memory>],
+      !ttg.memdesc<128x256xf32, #tmem_lut_acc_n256, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared_bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>

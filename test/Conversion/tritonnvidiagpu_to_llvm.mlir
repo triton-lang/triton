@@ -680,23 +680,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
 
 // -----
 
-// CHECK-LABEL: device_tensormap_create5d_nonpow2_block_count
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @device_tensormap_create5d_nonpow2_block_count(%global: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %desc: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %d0: i32, %d1: i32, %d2: i32, %d3: i32, %d4: i32, %s0: i64, %s1: i64, %s2: i64, %s3: i64) {
-    %c32_i32 = arith.constant 32 : i32
-    %c3_i32 = arith.constant 3 : i32
-    %c1_i32 = arith.constant 1 : i32
-    // CHECK: [[C3:%.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK: tensormap.replace.tile.rank.shared::cta.b1024.b32 [ $0 + 0 ], 0x4;
-    // CHECK: tensormap.replace.tile.box_dim.shared::cta.b1024.b32 [ $0 + 0 ], 0x1, $1;", "l,r,b" {{.*}}, [[C3]], {{.*}} :
-    // CHECK: tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned [ $0 + 0 ], [ $1 + 0 ], 0x80;
-    ttng.tensormap_create %desc, %global, [%c32_i32, %c3_i32, %c32_i32, %c1_i32, %c1_i32], [%d0, %d1, %d2, %d3, %d4], [%s0, %s1, %s2, %s3], [%c1_i32, %c1_i32, %c1_i32, %c1_i32, %c1_i32] {elem_type = 0 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 1 : i32, allocation.offset = 0 : i32} : (!tt.ptr<i8>, !tt.ptr<i8>, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i64, i64, i64, i64, i32, i32, i32, i32, i32) -> ()
-    tt.return
-  }
-}
-
-// -----
-
 #local_gather_scatter_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1]]}>
 #local_gather_scatter_shared_split = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
 #local_gather_scatter_shared_broadcast = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 0]]}>

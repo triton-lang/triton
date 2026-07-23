@@ -1006,32 +1006,43 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Value clcResult, int dim) -> Value {
              return self.create<ttng::CLCGetProgramIdOp>(clcResult, dim);
            })
-      .def("create_tcgen05_mma",
-           [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
-              Value pred, std::vector<Value> &mbarriers,
-              std::vector<Value> &mbarrier_preds, bool two_ctas, bool multicast,
-              std::optional<Value> lut = std::nullopt) {
-             Value accDep;
-             auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
-             self.create<ttng::TCGen5MMAOp>(
-                 tokType, a, b, acc, accDep, lut.value_or(Value()), useAcc,
-                 pred, two_ctas, multicast, mbarriers, mbarrier_preds);
-           })
-      .def("create_tcgen05_mma_scaled",
-           [](GluonOpBuilder &self, Value a, Value b, Value acc, Value aScale,
-              Value bScale, tt::ScaleDotElemType aType,
-              tt::ScaleDotElemType bType, Value useAcc, Value pred,
-              std::vector<Value> &mbarriers, std::vector<Value> &mbarrier_preds,
-              bool two_ctas, bool multicast,
-              std::optional<Value> lut = std::nullopt) {
-             Value accDep;
-             auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
-             Value lutValue = lut.value_or(Value());
-             self.create<ttng::TCGen5MMAScaledOp>(
-                 tokType, a, b, acc, accDep, lutValue, aScale, bScale, aType,
-                 bType, useAcc, pred, mbarriers, mbarrier_preds, two_ctas,
-                 /*isAsync=*/false, multicast);
-           })
+      .def(
+          "create_tcgen05_mma",
+          [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
+             Value pred, std::vector<Value> &mbarriers,
+             std::vector<Value> &mbarrier_preds, bool two_ctas, bool multicast,
+             std::optional<Value> lut = std::nullopt) {
+            Value accDep;
+            auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
+            self.create<ttng::TCGen5MMAOp>(
+                tokType, a, b, acc, accDep, lut.value_or(Value()), useAcc, pred,
+                two_ctas, multicast, mbarriers, mbarrier_preds);
+          },
+          py::arg("a"), py::arg("b"), py::arg("acc"), py::arg("useAcc"),
+          py::arg("pred"), py::arg("mbarriers"), py::arg("mbarrier_preds"),
+          py::arg("two_ctas"), py::arg("multicast"),
+          (py::arg("lut").none() = py::none()))
+      .def(
+          "create_tcgen05_mma_scaled",
+          [](GluonOpBuilder &self, Value a, Value b, Value acc, Value aScale,
+             Value bScale, tt::ScaleDotElemType aType,
+             tt::ScaleDotElemType bType, Value useAcc, Value pred,
+             std::vector<Value> &mbarriers, std::vector<Value> &mbarrier_preds,
+             bool two_ctas, bool multicast,
+             std::optional<Value> lut = std::nullopt) {
+            Value accDep;
+            auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
+            Value lutValue = lut.value_or(Value());
+            self.create<ttng::TCGen5MMAScaledOp>(
+                tokType, a, b, acc, accDep, lutValue, aScale, bScale, aType,
+                bType, useAcc, pred, mbarriers, mbarrier_preds, two_ctas,
+                /*isAsync=*/false, multicast);
+          },
+          py::arg("a"), py::arg("b"), py::arg("acc"), py::arg("aScale"),
+          py::arg("bScale"), py::arg("aType"), py::arg("bType"),
+          py::arg("useAcc"), py::arg("pred"), py::arg("mbarriers"),
+          py::arg("mbarrier_preds"), py::arg("two_ctas"), py::arg("multicast"),
+          (py::arg("lut").none() = py::none()))
       .def("create_tcgen05_commit",
            [](GluonOpBuilder &self, Value &barrier, Value &pred,
               std::vector<Value> &descs) {

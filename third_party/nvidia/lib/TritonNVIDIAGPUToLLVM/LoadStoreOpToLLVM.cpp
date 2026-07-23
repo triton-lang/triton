@@ -21,19 +21,15 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
-#include "llvm/Support/MathExtras.h"
 
 #include <cassert>
 
 using namespace mlir;
 using namespace mlir::triton;
-namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::getCGALayout;
 using ::mlir::triton::gpu::getUniqueElemsPerThread;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
