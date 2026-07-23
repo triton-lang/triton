@@ -67,6 +67,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 #shared_holey = #ttg.shared_linear<{offset = [[0, 1], [0, 0], [1, 0], [2, 0]], block = []}, alignment = 16>
 #shared_dense = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [2, 0]], block = []}, alignment = 16>
+#shared_dense_half = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0]], block = []}, alignment = 16>
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
@@ -75,6 +76,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %view = ttg.memdesc_reinterpret %alloc : !ttg.memdesc<4x2xi32, #shared_holey, #smem, mutable> -> !ttg.memdesc<4x4xi32, #shared_dense, #smem, mutable>
     // expected-remark @below {{Buffers: [0, 64]}}
     ttg.local_load %view : !ttg.memdesc<4x4xi32, #shared_dense, #smem, mutable> -> tensor<4x4xi32>
+    tt.return
+  }
+
+  tt.func public @shared_reinterpret_smaller_holey_region() {
+    %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x2xi32, #shared_holey, #smem, mutable>
+    %view = ttg.memdesc_reinterpret %alloc : !ttg.memdesc<4x2xi32, #shared_holey, #smem, mutable> -> !ttg.memdesc<2x4xi32, #shared_dense_half, #smem, mutable>
+    // expected-remark @below {{Buffers: [0, 32]}}
+    ttg.local_load %view : !ttg.memdesc<2x4xi32, #shared_dense_half, #smem, mutable> -> tensor<2x4xi32>
     tt.return
   }
 
@@ -100,13 +109,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %parent = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable>
     %stages = ttg.memdesc_subslice %parent [3, 8, 0] : !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<2x8x16xf16, #shared, #smem, mutable, 7x16x16>
     %view = ttg.memdesc_reinterpret %stages : !ttg.memdesc<2x8x16xf16, #shared, #smem, mutable, 7x16x16> -> !ttg.memdesc<8x16xf16, #shared, #smem, mutable>
-    // expected-remark @below {{Buffers: [1792, 768]}}
+    // expected-remark @below {{Buffers: [1792, 256]}}
     ttg.local_load %view : !ttg.memdesc<8x16xf16, #shared, #smem, mutable> -> tensor<8x16xf16, #blocked>
     tt.return
   }
 
-  // expected-remark @below {{All Shared Regions: [1792, 768]}}
+  // expected-remark @below {{All Shared Regions: [1792, 256]}}
   tt.func private @print_all_regions() attributes {test.print_all_used_regions} {
+    tt.return
+  }
+}
+
+// -----
+
+#padded = #ttg.padded_shared<[4:+2] {order = [1, 0], shape = [4, 4]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 44 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  tt.func public @padded_shared_reinterpret_region() {
+    %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x4xf16, #padded, #smem, mutable>
+    %view = ttg.memdesc_reinterpret %alloc : !ttg.memdesc<4x4xf16, #padded, #smem, mutable> -> !ttg.memdesc<4x4xbf16, #padded, #smem, mutable>
+    // expected-remark @below {{Buffers: [0, 44]}}
+    ttg.local_load %view : !ttg.memdesc<4x4xbf16, #padded, #smem, mutable> -> tensor<4x4xbf16>
     tt.return
   }
 }
@@ -148,7 +172,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     tt.return
   }
 
-  // expected-remark @below {{All Tensor Regions: [0, 128]}}
+  tt.func public @tensor_memory_reinterpret_smaller_region() {
+    %tm = ttng.tmem_alloc {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %view = ttg.memdesc_reinterpret %tm : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>
+    // expected-remark @below {{Buffers: [128, 64]}}
+    ttng.tmem_load %view : !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf16>
+    tt.return
+  }
+
+  // expected-remark @below {{All Tensor Regions: [0, 128], [128, 64]}}
   tt.func private @print_all_regions() attributes {test.print_all_used_regions} {
     tt.return
   }

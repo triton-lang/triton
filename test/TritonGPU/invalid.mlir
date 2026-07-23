@@ -36,6 +36,11 @@ tt.func public @memdesc_zero_allocation_dimension(%arg0: !ttg.memdesc<2x4xi32, #
 
 // -----
 
+// expected-error @below {{is not a valid encoding}}
+!invalid_memdesc_encoding = !ttg.memdesc<4xi32, #ttg.shared_memory, #ttg.shared_memory>
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 tt.func public @local_alloc_i1() {

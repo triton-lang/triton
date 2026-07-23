@@ -312,6 +312,19 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     }
     return success();
   }
+  if (auto reinterpretOp = dyn_cast<ttg::MemDescReinterpretOp>(op)) {
+    auto type = reinterpretOp.getType();
+    uint32_t size = getMemDescSize(type);
+    if (auto padded = ttg::getPaddedEncoding(type.getEncoding())) {
+      unsigned elementSize = type.getElementType().getIntOrFloatBitWidth() / 8;
+      size = padded.getPaddedSize({size / elementSize}) * elementSize;
+    }
+    for (auto &region : operands[0]->getValue().regions)
+      regionInfo.regions.insert({region.baseOffset, size});
+    for (auto *result : results)
+      propagateIfChanged(result, result->join(regionInfo));
+    return success();
+  }
   if (auto selectOp = dyn_cast<arith::SelectOp>(op)) {
     if (isa<ttg::MemDescType>(selectOp.getType())) {
       regionInfo =
@@ -323,8 +336,7 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     }
   }
   // "Passthrough" ops that don't modify the buffer regions.
-  if (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp,
-          ttg::MemDescReinterpretOp>(op)) {
+  if (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp>(op)) {
     // Just propagate the regions from the operand.
     RegionInfo in = operands[0]->getValue();
     for (auto &region : in.regions) {

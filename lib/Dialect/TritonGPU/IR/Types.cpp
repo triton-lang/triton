@@ -107,13 +107,28 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
   if (allocShape.size() < shape.size())
     return emitError()
            << "alloc shape must have at least as many dimensions as shape";
+  auto layoutEncoding = dyn_cast_if_present<LayoutEncodingTrait>(encoding);
+  if (!layoutEncoding ||
+      !isa<nvidia_gpu::TensorMemoryEncodingAttr, SharedEncodingTrait,
+           nvidia_gpu::TensorMemoryScalesEncodingAttr>(encoding))
+    return emitError() << encoding << " is not a valid encoding";
+  auto rank = layoutEncoding.getRank();
+  if (isa<nvidia_gpu::TensorMemoryEncodingAttr>(encoding)) {
+    if (shape.size() != 2 && shape.size() != 3)
+      return emitError() << "rank must be 2 or 3";
+  } else if (isa<SharedEncodingTrait>(encoding)) {
+    if (!(rank == shape.size() || rank == shape.size() - 1))
+      return emitError() << "rank must be equal to or one less than "
+                         << "the shape size. Got " << rank << " and "
+                         << shape.size();
+  } else if (shape.size() != 2) {
+    return emitError() << "tensor-memory scale descriptors must have rank 2; "
+                       << "got " << shape.size();
+  }
   // Every layout dimension must be a power of 2; only a leading pipeline
   // dimension may have another positive size.
-  ArrayRef<int64_t> layoutShape =
-      encoding ? dropPipeliningDim(shape, encoding) : shape.drop_front(1);
-  ArrayRef<int64_t> layoutAllocShape =
-      encoding ? dropPipeliningDim(allocShape, encoding)
-               : allocShape.drop_front(1);
+  ArrayRef<int64_t> layoutShape = dropPipeliningDim(shape, encoding);
+  ArrayRef<int64_t> layoutAllocShape = dropPipeliningDim(allocShape, encoding);
   if (!llvm::all_of(layoutShape, llvm::isPowerOf2_64))
     return emitError()
            << "shape must have power-of-2 and non-zero dimensions; got "
@@ -133,10 +148,11 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     if (memorySpace != nvidia_gpu::TensorMemorySpaceAttr::get(ctx)) {
       return emitError() << "memorySpace must be TensorMemorySpace";
     }
-    if (shape.size() != 2 && shape.size() != 3) {
-      return emitError() << "rank must be 2 or 3";
-    }
     unsigned bitwidth = elementType.getIntOrFloatBitWidth();
+    if (bitwidth < 8)
+      return emitError()
+             << "tensor-memory element type bit width must be at least 8; got "
+             << bitwidth;
     if (bitwidth * enc.getColStride() > 32) {
       return emitError()
              << "bitwidth * colStride must be less than or equal to 32. Got "
@@ -163,26 +179,16 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                          << ll.getOutDimSize(dims[0]) << "x"
                          << ll.getOutDimSize(dims[1]);
     }
-  } else if (auto enc = dyn_cast<SharedEncodingTrait>(encoding)) {
+  } else if (isa<SharedEncodingTrait>(encoding)) {
     if (memorySpace != SharedMemorySpaceAttr::get(ctx)) {
       return emitError()
              << "memorySpace must be SharedMemorySpace for shared encoding. "
              << "Got " << memorySpace;
     }
-    auto rank = cast<LayoutEncodingTrait>(enc).getRank();
-    if (!(rank == shape.size() || rank == shape.size() - 1)) {
-      return emitError() << "rank must be equal to or one less than "
-                         << "the shape size. Got " << rank << " and "
-                         << shape.size();
-    }
   } else if (auto enc = dyn_cast<nvidia_gpu::TensorMemoryScalesEncodingAttr>(
                  encoding)) {
     if (memorySpace != nvidia_gpu::TensorMemorySpaceAttr::get(ctx)) {
       return emitError() << "memorySpace must be TensorMemorySpace";
-    }
-    if (shape.size() != 2) {
-      return emitError() << "tensor-memory scale descriptors must have rank 2; "
-                         << "got " << shape.size();
     }
     if (allocShape.size() != 2) {
       return emitError() << "Scales don't currently support multibuffering";
@@ -191,8 +197,6 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     if (bitwidth != 8) {
       return emitError() << "bitwidth must be 8";
     }
-  } else {
-    return emitError() << encoding << " is not a valid encoding";
   }
 
   // PaddedSharedEncodingAttr is also a SharedEncodingTrait but we have some
