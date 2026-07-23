@@ -715,24 +715,15 @@ void LayoutRematerialization::rewriteSlice(
     SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
     const DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
     ConvertLayoutOp convertOp, IRMapping &mapping) {
+  for (const auto &[value, encoding] : layout) {
+    if (Value remat = existingRemats.lookup({value, encoding}))
+      mapping.map(value, remat);
+  }
+
   SetVector<Operation *> opsToRewrite;
   // Keep track of yield operands that need to be duplicated.
   DenseMap<Operation *, SmallVector<int>> yieldOperandsMap;
-  // Keep these around to remove them from the slice after our collection pass
-  // This ensures we don't duplicate them during an for rewrite or causing the
-  // for/yield to fall out of sync
-  SetVector<Value> valuesWithExistingRemat;
   for (Value v : slice) {
-    auto layoutIt = layout.find(v);
-    assert(layoutIt != layout.end());
-    // If we found a valid rematerialization for this value while constructing
-    // the slice, use that.
-    if (Value remat = existingRemats.lookup({v, layoutIt->second})) {
-      assert(getRematValue(v, layoutIt->second) == remat && "remat mismatch");
-      mapping.map(v, remat);
-      valuesWithExistingRemat.insert(v);
-      continue;
-    }
     if (v.getDefiningOp()) {
       opsToRewrite.insert(v.getDefiningOp());
       if (auto ifOp = v.getDefiningOp<scf::IfOp>()) {
@@ -754,7 +745,6 @@ void LayoutRematerialization::rewriteSlice(
       }
     }
   }
-  slice.set_subtract(valuesWithExistingRemat);
   opsToRewrite = mlir::topologicalSort(opsToRewrite);
 
   // replaceAllUsesWith calls delayed until after initial rewrite.
@@ -762,7 +752,7 @@ void LayoutRematerialization::rewriteSlice(
   SmallVector<std::tuple<Value, Value>> replacements;
 
   SmallVector<Operation *> deadOps;
-  IRRewriter builder(slice.begin()->getContext());
+  IRRewriter builder(convertOp.getContext());
   for (Operation *op : opsToRewrite) {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       // Keep a mapping of the operands index to the new operands index.
@@ -940,7 +930,7 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
   auto existingRemats = existingRematsArg;
   LogicalResult result = getConvertBackwardSlice(
       root, rootEncoding, slice, layout, existingRemats, stopPropagation);
-  if (result.failed() || slice.empty())
+  if (result.failed())
     return failure();
 
   // Check if all the operations in the slice can be rematerialized.
@@ -1225,17 +1215,6 @@ bool LayoutRematerialization::backwardRematerialization(
   Value oldV = convertOp.getSrc();
   LDBG("check backward remat with source " << oldV << " encoding "
                                            << targetType.getEncoding());
-  // Check to see if there are existing remat'ed values for the pair of oldValue
-  // and encoding. Make sure it dominates the current conversion.
-  Value newV = getRematValue(oldV, targetType.getEncoding());
-  if (newV && domInfo.properlyDominates(newV, convertOp)) {
-    // Replace it with the remat'ed value.
-    convertOp.replaceAllUsesWith(newV);
-    convertOp->erase();
-    LDBG("found remat'ed value" << newV);
-    return true;
-  }
-
   // 1. Take a backward slice of all the tensor dependencies that can be
   // rematerialized.
   SetVector<Value> slice;
