@@ -454,6 +454,8 @@ SmallVector<int64_t> getShapePerCTA(Type type) {
 
 int64_t getAllocationElems(Attribute encoding, ArrayRef<int64_t> shape,
                            ArrayRef<int64_t> allocShape) {
+  assert(isa<SharedEncodingTrait>(encoding) &&
+         "expected a shared-memory encoding");
   if (allocShape.empty())
     allocShape = shape;
   auto layoutShape = dropPipeliningDim(shape, encoding);

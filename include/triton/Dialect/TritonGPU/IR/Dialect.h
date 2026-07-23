@@ -277,7 +277,11 @@ ArrayRef<T> dropPipeliningDim(ArrayRef<T> shape, Attribute layout) {
 
 // Returns the number of elements per CTA in the allocation's linear address
 // space. This does not include padding introduced by padded shared layouts.
+// Leading pipelining dimensions count full allocation stages, including any
+// gaps between visible subslices of consecutive stages.
 // If allocShape is provided, shape may describe a subslice of that allocation.
+// For a pipelined slice, it computes the length of the smallest (perhaps
+// non-contiguous) run from its first element to its last element.
 int64_t getAllocationElems(Attribute layout, ArrayRef<int64_t> shape,
                            ArrayRef<int64_t> allocShape = {});
 
