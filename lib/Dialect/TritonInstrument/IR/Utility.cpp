@@ -173,7 +173,15 @@ static Value createCurrentCTAMask(OpBuilder &b, Location loc,
                                   RankedTensorType tensorType);
 
 uint32_t getMemDescLength(Value buf) {
-  return triton::getMemDescSize(cast<MemDescType>(buf.getType()));
+  auto memDescType = cast<MemDescType>(buf.getType());
+  if (isa<SharedEncodingTrait>(memDescType.getEncoding())) {
+    unsigned elSize = memDescType.getElementType().getIntOrFloatBitWidth() / 8;
+    return static_cast<uint32_t>(product(getShapePerCTA(memDescType)) * elSize);
+  }
+  if (isa<TensorMemorySpaceAttr>(memDescType.getMemorySpace())) {
+    return getTmemAllocSizes(memDescType).numCols;
+  }
+  llvm_unreachable("Unsupported memory space for memdesc");
 }
 
 gpu::GlobalScratchAllocOp

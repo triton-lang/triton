@@ -1170,13 +1170,16 @@ LogicalResult MemDescSubsliceOp::verify() {
     return success();
 
   auto ctx = getContext();
+  LinearLayout ll;
   if (auto paddedEncoding = triton::gpu::getPaddedEncoding(srcEnc)) {
     if (paddedEncoding.getRank() < srcTy.getRank()) {
       return emitError("SubSlice of low rank PaddedSharedEncoding from higher "
                        "rank tensors is not supported yet");
     }
+    ll = triton::gpu::paddedLinearLayout(srcTy);
+  } else {
+    ll = triton::gpu::toLinearLayout(srcTy);
   }
-  LinearLayout ll = triton::gpu::getMemDescLinearLayout(srcTy);
 
   auto llInv = ll.pseudoinvert();
   for (auto dim : splitDims) {

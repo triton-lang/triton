@@ -534,7 +534,9 @@ struct MemDescSubsliceOpConversion
     // The offset component of (3) is already XORed in by getShmemOffset at
     // load time; only the partition component needs this fix.
     if (newBases.size() > 1) {
-      LinearLayout ll = triton::gpu::getMemDescLinearLayout(srcTy);
+      LinearLayout ll = triton::gpu::isPaddedEncoding(srcTy.getEncoding())
+                            ? triton::gpu::paddedLinearLayout(srcTy)
+                            : triton::gpu::toLinearLayout(srcTy);
       auto kPartition = StringAttr::get(ctx, "partition");
       assert(ll.hasInDim(kPartition) &&
              "multiple bases require a partition input dim");

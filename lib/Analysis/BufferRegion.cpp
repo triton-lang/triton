@@ -111,7 +111,9 @@ FailureOr<triton::AddressSet> getMemDescAddresses(
     }
     return collectPages();
   }
-  triton::LinearLayout layout = ttg::getMemDescLinearLayout(ty);
+  triton::LinearLayout layout = ttg::isPaddedEncoding(ty.getEncoding())
+                                    ? ttg::paddedLinearLayout(ty)
+                                    : ttg::toLinearLayout(ty);
   size_t layoutRank = llvm::size(layout.getOutDimNames());
   if (layoutRank != ty.getRank()) {
     if (layoutRank + 1 != ty.getRank()) {

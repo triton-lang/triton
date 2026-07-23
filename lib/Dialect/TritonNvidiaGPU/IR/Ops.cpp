@@ -331,7 +331,9 @@ LogicalResult AsyncSharedStoreOp::verify() {
   unsigned bitwidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
 
   auto regLayout = toLinearLayout(srcTy);
-  auto sharedLayout = getMemDescLinearLayout(dstTy);
+  auto sharedLayout = isPaddedEncoding(dstTy.getEncoding())
+                          ? paddedLinearLayout(dstTy)
+                          : toLinearLayout(dstTy);
   auto cvt = regLayout.invertAndCompose(sharedLayout);
   std::optional<int> maybeMaxVecElems;
   if (isPaddedEncoding(dstTy.getEncoding()))

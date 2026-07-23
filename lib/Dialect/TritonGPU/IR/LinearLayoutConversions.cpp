@@ -1432,16 +1432,6 @@ LinearLayout paddedLinearLayout(MemDescType type) {
       type.getEncoding());
 }
 
-LinearLayout getMemDescLinearLayout(MemDescType type) {
-  return isPaddedEncoding(type.getEncoding()) ? paddedLinearLayout(type)
-                                              : toLinearLayout(type);
-}
-
-LinearLayout getLinearLayout(ArrayRef<int64_t> shape, Attribute encoding) {
-  return isPaddedEncoding(encoding) ? paddedLinearLayout(shape, encoding)
-                                    : toLinearLayout(shape, encoding);
-}
-
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
   assert(!layout.getInDimNames().empty());
   MLIRContext *ctx = layout.getInDimNames().begin()->getContext();

@@ -455,9 +455,15 @@ void extendXorSpan(uint32_t &span, uint32_t basis, int numCTAs) {
   }
 }
 
+LinearLayout getSharedLayout(ttg::MemDescType memDescTy) {
+  return ttg::isPaddedEncoding(memDescTy.getEncoding())
+             ? ttg::paddedLinearLayout(memDescTy)
+             : ttg::toLinearLayout(memDescTy);
+}
+
 LinearLayout getLocalLoadStoreConversion(ttg::MemDescType memDescTy,
                                          RankedTensorType regTy) {
-  return invertAndComposeBlockLocal(ttg::getMemDescLinearLayout(memDescTy),
+  return invertAndComposeBlockLocal(getSharedLayout(memDescTy),
                                     ttg::toLinearLayout(regTy));
 }
 
@@ -465,7 +471,7 @@ LinearLayout getLocalGatherScatterConversion(ttg::MemDescType memDescTy,
                                              RankedTensorType regTy,
                                              unsigned axis) {
   MLIRContext *ctx = memDescTy.getContext();
-  LinearLayout sharedLayout = ttg::getMemDescLinearLayout(memDescTy);
+  LinearLayout sharedLayout = getSharedLayout(memDescTy);
   SmallVector<StringAttr> allDims =
       standardOutDimNames(ctx, memDescTy.getRank());
   StringAttr axisDim = allDims[axis];

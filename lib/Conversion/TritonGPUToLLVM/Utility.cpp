@@ -546,7 +546,9 @@ SmallVector<std::pair<Value, Value>> computeBlockLocalOffsets(
     RewriterBase &rewriter, const TargetInfoBase &targetInfo) {
   MLIRContext *ctx = memDescTy.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto sharedLayout = getMemDescLinearLayout(memDescTy);
+  auto sharedLayout = triton::gpu::isPaddedEncoding(memDescTy.getEncoding())
+                          ? paddedLinearLayout(memDescTy)
+                          : toLinearLayout(memDescTy);
   auto allDims = standardOutDimNames(ctx, memDescTy.getRank());
   auto kRegister = str_attr("register");
   auto kLane = str_attr("lane");
@@ -1447,7 +1449,10 @@ std::pair<uint64_t, uint64_t> SharedMemoryObject::getMaskSpanOffsetsAndBlocks(
   if (allocShape == shape) {
     return {0, 0};
   }
-  auto totalLl = triton::gpu::getLinearLayout(allocShape, srcTy.getEncoding());
+  auto totalLl =
+      triton::gpu::isPaddedEncoding(srcTy.getEncoding())
+          ? triton::gpu::paddedLinearLayout(allocShape, srcTy.getEncoding())
+          : triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding());
   // Map from dimNames to offset, block
   auto invLl = totalLl.pseudoinvert();
   SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
@@ -1490,7 +1495,12 @@ std::pair<Value, Value> SharedMemoryObject::getShmemOffsetAndBlock(
 
   // We return the offset without the padding. The padding will be added in the
   // lowering
-  LinearLayout ll = triton::gpu::getMemDescLinearLayout(srcTy);
+  LinearLayout ll;
+  if (triton::gpu::isPaddedEncoding(srcTy.getEncoding())) {
+    ll = triton::gpu::paddedLinearLayout(srcTy);
+  } else {
+    ll = triton::gpu::toLinearLayout(srcTy);
+  }
 
   auto layoutOffsets =
       triton::gpu::dropPipeliningDim(ArrayRef(offsets), srcTy.getEncoding());

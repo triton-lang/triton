@@ -59,7 +59,9 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx,
          "expected register broadcasting to be removed by the caller");
   auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
 
-  auto sharedLayout = getMemDescLinearLayout(memDescTy);
+  auto sharedLayout = isPaddedEncoding(memDescTy.getEncoding())
+                          ? paddedLinearLayout(memDescTy)
+                          : toLinearLayout(memDescTy);
   auto cvt = invertAndComposeBlockLocal(sharedLayout, regLayout);
 
   lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, memDescTy, smemObj,
@@ -188,7 +190,9 @@ public:
 
     auto regLayout =
         toLinearLayout(regTy).removeZeroBasesAlongDim(str_attr("register"));
-    auto sharedLayout = getMemDescLinearLayout(memDescTy);
+    auto sharedLayout = isPaddedEncoding(memDescTy.getEncoding())
+                            ? paddedLinearLayout(memDescTy)
+                            : toLinearLayout(memDescTy);
     auto cvt = invertAndComposeBlockLocal(sharedLayout, regLayout);
 
     auto outVals = lowerLocalLdSt(loc, ctx, cvt, {}, llvmElemTy, memDescTy,

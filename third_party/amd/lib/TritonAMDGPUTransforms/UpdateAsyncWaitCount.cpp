@@ -64,7 +64,10 @@ int getNumberOfAsyncCopyInstructions(RankedTensorType globalType,
                                      const TargetFeatures &targetFeatures,
                                      bool isStore) {
   LinearLayout globalLayout = tt::gpu::toLinearLayout(globalType);
-  triton::LinearLayout sharedLayout = getMemDescLinearLayout(sharedType);
+  triton::LinearLayout sharedLayout =
+      triton::gpu::isPaddedEncoding(sharedType.getEncoding())
+          ? paddedLinearLayout(sharedType)
+          : toLinearLayout(sharedType);
   LinearLayout globalToSharedLayout =
       globalLayout.invertAndCompose(sharedLayout);
 

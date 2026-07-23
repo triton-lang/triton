@@ -418,7 +418,9 @@ struct AsyncSharedStoreOpConversion
 
     auto regLayout =
         toLinearLayout(srcTy).removeZeroBasesAlongDim(str_attr("register"));
-    auto sharedLayout = getMemDescLinearLayout(dstTy);
+    auto sharedLayout = isPaddedEncoding(dstTy.getEncoding())
+                            ? paddedLinearLayout(dstTy)
+                            : toLinearLayout(dstTy);
     auto cvt = regLayout.invertAndCompose(sharedLayout);
     auto values = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
     lowerAsyncSharedStore(loc, ctx, cvt, values, llvmElemTy, dstTy, dstMemObj,
