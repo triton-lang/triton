@@ -1904,13 +1904,23 @@ void init_triton_ir(py::module_ &m) {
   for (const auto &plugin : mlir::triton::plugin::loadPlugins()) {
     for (const auto &op : plugin.listOps()) {
       std::string wrapped = std::string("create_") + op.name;
-      TritonOpBuilderBinding.def(
-          wrapped.c_str(),
-          [op](TritonOpBuilder &self, std::vector<Value> args) {
-            args.insert(args.begin(), Value());
-            op.addOp(self, args);
-            return args[0];
-          });
+      if (op.addOp) {
+        TritonOpBuilderBinding.def(
+            wrapped.c_str(),
+            [op](TritonOpBuilder &self, std::vector<Value> args) {
+              args.insert(args.begin(), Value());
+              op.addOp(self, args);
+              return args[0];
+            });
+      }
+      if (op.addOpWithPyArg) {
+        TritonOpBuilderBinding.def(wrapped.c_str(),
+                                   [op](TritonOpBuilder &self, py::args args,
+                                        py::kwargs kwargs) -> py::object {
+                                     return py::steal(op.addOpWithPyArg(
+                                         self, args.ptr(), kwargs.ptr()));
+                                   });
+      }
     }
   }
 

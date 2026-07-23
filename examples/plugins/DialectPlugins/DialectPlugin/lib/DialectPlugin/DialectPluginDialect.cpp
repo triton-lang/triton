@@ -30,6 +30,9 @@ void DialectPluginDialect::initialize() {
 #include "mlir/Tools/Plugins/PassPlugin.h"
 #include "triton/Tools/PluginUtils.h"
 #include "llvm/Config/llvm-config.h"
+#include <nanobind/stl/string.h>
+
+namespace py = nanobind;
 
 static const char *PLUGIN_NAME = "DialectPlugin";
 static const char *DIALECT_NAME = "DialectPlugin";
@@ -61,6 +64,29 @@ static void addTritonPluginCustomOp(TritonOpBuilder &self,
   operands[0] = dst;
 }
 
+static PyObject *addPyArgCustomOp(TritonOpBuilder &self, PyObject *argsObj,
+                                  PyObject *kwargsObj) {
+  py::args args = py::borrow<py::args>(argsObj);
+  py::kwargs kwargs = py::borrow<py::kwargs>(kwargsObj);
+
+  if (args.empty())
+    return py::none().release().ptr();
+
+  std::string mode = "add";
+  if (kwargs.contains("mode"))
+    mode = py::cast<std::string>(kwargs["mode"]);
+
+  Value acc = py::cast<Value>(args[0]);
+  for (size_t i = 1; i < args.size(); ++i) {
+    Value v = py::cast<Value>(args[i]);
+    if (mode == "mul")
+      acc = self.create<arith::MulFOp>(acc, v);
+    else
+      acc = self.create<arith::AddFOp>(acc, v);
+  }
+  return py::cast(acc).release().ptr();
+}
+
 TRITON_PLUGIN_API plugin::PluginInfo *tritonGetPluginInfo() {
   static plugin::PassInfo pass = {PASS_NAME, VERSION, addTritonPluginPass,
                                   registerTritonPluginPass};
@@ -69,7 +95,8 @@ TRITON_PLUGIN_API plugin::PluginInfo *tritonGetPluginInfo() {
                                         registerTritonPluginDialect};
   static plugin::DialectInfo dialects[] = {dialect};
   static plugin::OpInfo op = {"custom_op", addTritonPluginCustomOp};
-  static plugin::OpInfo ops[] = {op};
+  static plugin::OpInfo pyOp = {"py_custom_op", nullptr, addPyArgCustomOp};
+  static plugin::OpInfo ops[] = {op, pyOp};
   static plugin::PluginInfo info = {TRITON_PLUGIN_API_VERSION,
                                     PLUGIN_NAME,
                                     VERSION,
@@ -78,7 +105,7 @@ TRITON_PLUGIN_API plugin::PluginInfo *tritonGetPluginInfo() {
                                     dialects,
                                     1,
                                     ops,
-                                    1,
+                                    2,
                                     TRITON_VERSION};
   return &info;
 }
