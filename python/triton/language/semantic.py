@@ -73,8 +73,8 @@ class TritonSemantic(Generic[TensorTy]):
         if a_is_scalar != b_is_scalar:
             scalar_ty, tensor_ty = (a_ty, b_ty) if a_is_scalar else (b_ty, a_ty)
             if scalar_ty.kind().value <= tensor_ty.kind().value:
-                # Upcast because of 3) and 4) below!
-                if div_or_mod and (tensor_ty in (tl.float16, tl.bfloat16)):
+                # Upcast because of 2) below!
+                if div_or_mod and tensor_ty.is_floating():
                     return tl.float32
                 return tensor_ty
 
@@ -82,27 +82,24 @@ class TritonSemantic(Generic[TensorTy]):
         #    converted to double
         if a_ty.is_fp64() or b_ty.is_fp64():
             return tl.float64
-        # 2) if one operand is float, the other is implicitly
+        # 2) if we have a div or a mod we upcast to `fp32` as div and mod are
+        #    not supported for floats with bitwidth < 32
+        if div_or_mod and (a_ty.is_floating() or b_ty.is_floating()):
+            return tl.float32
+        # 3) if one operand is float, the other is implicitly
         #    converted to float
         if a_ty.is_fp32() or b_ty.is_fp32():
             return tl.float32
-        # 3 ) if one operand is half, the other is implicitly converted to half
-        #     unless we're doing / or %, which do not exist natively in PTX for fp16.
+        # 4 ) if one operand is half, the other is implicitly converted to half
         #     Supported PTX op: add, sub, mul, fma, neg, abs, min, max, tanh, ex2, setp
         if a_ty.is_fp16() or b_ty.is_fp16():
-            if div_or_mod:
-                return tl.float32
-            else:
-                return tl.float16
-        # 4) return bf16 only if both operands are of bf16
+            return tl.float16
+        # 5) return bf16 only if both operands are of bf16
         if a_ty.is_bf16() and b_ty.is_bf16():
-            if div_or_mod:
-                return tl.float32
-            else:
-                return tl.bfloat16
+            return tl.bfloat16
         if a_ty.is_bf16() or b_ty.is_bf16():
             return tl.float32
-        # 5) return fp16 if operands are different fp8
+        # 6) return fp16 if operands are different fp8
         if a_ty.is_fp8() and b_ty.is_fp8():
             return a_ty if a_ty == b_ty else tl.float16
         if not a_ty.is_int() or not b_ty.is_int():
