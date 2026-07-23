@@ -249,6 +249,7 @@ GSAN_DEVICE void acquireStreamClock(ThreadState *state,
                                     const uint32_t *streamClock,
                                     uint32_t threadIdx, uint32_t numThreads,
                                     uint32_t barrierId) {
+  syncThreads(barrierId, numThreads);
   if (threadIdx == 0)
     rwLockAcquireWrite(state->lock);
   syncThreads(barrierId, numThreads);
@@ -270,6 +271,7 @@ GSAN_DEVICE void acquireStreamClock(ThreadState *state,
 GSAN_DEVICE void publishStreamClock(ThreadState *state, uint32_t *streamClock,
                                     uint32_t threadIdx, uint32_t numThreads,
                                     uint32_t barrierId) {
+  syncThreads(barrierId, numThreads);
   if (threadIdx == 0)
     rwLockAcquireRead(state->lock);
   syncThreads(barrierId, numThreads);

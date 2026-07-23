@@ -922,8 +922,6 @@ struct GSanStreamClockOpConversion : public ConvertOpToLLVMPattern<OpTy> {
       runtimeFn = kGSanGridDependencyWaitRuntimeFn;
     auto runtimeFunc = getOrCreateGSanRuntimeFunction(rewriter, runtimeFn);
     TritonLLVMOpBuilder b(loc, rewriter);
-    if constexpr (std::is_same_v<OpTy, tti::ExperimentalGSanKernelExitOp>)
-      b.barrier(ttg::AddrSpace::Local);
     auto threadIdx = mlir::getThreadId(rewriter, loc);
     auto numThreads = b.i32_val(ttg::lookupNumWarps(op) *
                                 ttg::lookupThreadsPerWarp(rewriter));
@@ -931,8 +929,6 @@ struct GSanStreamClockOpConversion : public ConvertOpToLLVMPattern<OpTy> {
     b.call(runtimeFunc,
            ValueRange{*gsanGlobalStatePtr, *streamClockPtr, *kernelId,
                       threadIdx, numThreads, barrierId});
-    if constexpr (!std::is_same_v<OpTy, tti::ExperimentalGSanKernelExitOp>)
-      b.barrier(ttg::AddrSpace::Local);
     rewriter.eraseOp(op);
     return success();
   }
