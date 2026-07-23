@@ -236,11 +236,11 @@ class AttentionProgram:
 
     @gluon.jit
     def tdm_load_global_to_shared_k(self, offset, buffer_index):
-        gl.amd.gfx1250.tdm.async_load(self.k_desc, offset, self.k_buffer.index(buffer_index))
+        gl.amd.gfx1250.tdm.async_load(self.k_desc, offset, self.k_buffer.index(buffer_index), warp_used_hint=0b00001111)
 
     @gluon.jit
     def tdm_load_global_to_shared_v(self, offset, buffer_index):
-        gl.amd.gfx1250.tdm.async_load(self.v_desc, offset, self.v_buffer.index(buffer_index))
+        gl.amd.gfx1250.tdm.async_load(self.v_desc, offset, self.v_buffer.index(buffer_index), warp_used_hint=0b00001111)
 
     @gluon.jit
     def compute_qk(self, k, cur_seq):
@@ -751,6 +751,9 @@ def attn_fwd_pingpong_pipelined_kernel(q_ptr, k_ptr, v_ptr, out_ptr,  #
             t_3 = block_id + 3 * BLOCK_N
             qk = pgm.compute_qk_no_mask(k)
 
+        # Warp-pipelined code has two warps on the same SIMD at consecutive stages.
+        # warp_used_hint lets us effectively emit TDM from only the leading warp,
+        # so we can defer the async wait until here.
         gl.amd.gfx1250.tdm.async_wait(2)
         with gl.amd.warp_pipeline_stage("stage1", priority=1):
             # v = pgm.tdm_shared_load_v(iter_id % NUM_BUFFERS, wait_count=2)
@@ -762,6 +765,9 @@ def attn_fwd_pingpong_pipelined_kernel(q_ptr, k_ptr, v_ptr, out_ptr,  #
         with gl.amd.warp_pipeline_stage("stage2", priority=0):
             acc = pgm.compute_pv(p, v, acc)
 
+        # Warp-pipelined code has two warps on the same SIMD at consecutive stages.
+        # warp_used_hint lets us effectively emit TDM from only the leading warp,
+        # so we can defer the async wait until here.
         gl.amd.gfx1250.tdm.async_wait(2)
         with gl.amd.warp_pipeline_stage("stage3", priority=1):
             # k = pgm.tdm_shared_load_k(iter_id % NUM_BUFFERS, wait_count=2)

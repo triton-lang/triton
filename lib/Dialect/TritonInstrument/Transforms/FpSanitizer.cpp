@@ -57,6 +57,8 @@ constexpr int64_t kTileN = 8;
 constexpr int64_t kI8MmaM = 16;
 constexpr int64_t kI8MmaN = 8;
 constexpr int64_t kI8MmaK = 32;
+constexpr llvm::StringLiteral kHomomorphicCastsAttr =
+    "triton.instrument.fpsan_homomorphic_casts";
 
 bool supportsI8DotDecomposition(PatternRewriter &rewriter,
                                 IntegerType accElem) {
@@ -635,6 +637,13 @@ Value castFloatPayloadToType(PatternRewriter &rewriter, Location loc, Value v,
     return arith::ExtSIOp::create(rewriter, loc, targetTy, v);
 
   assert(srcWidth > dstWidth && "expected a narrowing payload cast");
+  auto moduleOp =
+      rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
+  auto homomorphicCasts =
+      moduleOp->getAttrOfType<BoolAttr>(kHomomorphicCastsAttr);
+  if (homomorphicCasts && homomorphicCasts.getValue())
+    return arith::TruncIOp::create(rewriter, loc, targetTy, v);
+
   Value signShift = getUIntConstantLike(rewriter, loc, v.getType(),
                                         static_cast<uint64_t>(srcWidth - 1));
   Value sign = arith::ShRUIOp::create(rewriter, loc, v, signShift);
@@ -3160,6 +3169,9 @@ struct ElementwiseInlineAsmPattern
 class FpSanitizerPass
     : public impl::TritonInstrumentFpSanitizerBase<FpSanitizerPass> {
 public:
+  using impl::TritonInstrumentFpSanitizerBase<
+      FpSanitizerPass>::TritonInstrumentFpSanitizerBase;
+
   void runOnOperation() override {
     bool fpSanErrorEmitted = false;
     ScopedDiagnosticHandler diagnosticHandler(
@@ -3175,6 +3187,8 @@ public:
 
     getOperation()->setAttr(ttng::AttrTwoCTAsName,
                             BoolAttr::get(&getContext(), twoCTAs));
+    getOperation()->setAttr(kHomomorphicCastsAttr,
+                            BoolAttr::get(&getContext(), homomorphicCasts));
 
     TmemScratchManager scratch(twoCTAs);
     RewritePatternSet patterns(&getContext());
@@ -3209,6 +3223,7 @@ public:
 
     LogicalResult result =
         applyPatternsGreedily(getOperation(), std::move(patterns));
+    getOperation()->removeAttr(kHomomorphicCastsAttr);
     if (failed(result)) {
       llvm::errs() << "FpSanitizer error: Failed to apply patterns\n";
       signalPassFailure();

@@ -3,6 +3,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
@@ -58,8 +59,8 @@ struct TCGen5MMAScaleSharedToTmemConversion
 
   // Create a tmem_copy of scales from shared memory to tmem. `rows` is the M or
   // N of the MMA operation (for LHS or RHS respectively).
-  bool lowerScaleToTmem(OpOperand &operand, PatternRewriter &rewriter,
-                        int rows) const {
+  bool lowerScaleToTmem(OpOperand &operand, PatternRewriter &rewriter, int rows,
+                        TensorMemoryScalesBlockRepOrder blockRepOrder) const {
     Location loc = operand.getOwner()->getLoc();
     MLIRContext *context = operand.getOwner()->getContext();
     Attribute tensorMemorySpace = TensorMemorySpaceAttr::get(context);
@@ -70,7 +71,7 @@ struct TCGen5MMAScaleSharedToTmemConversion
     // Distribute the scales across the rows of the MMA operation.
     SmallVector<int64_t> shape = {rows, numElems / rows};
     Attribute scaleEncoding =
-        TensorMemoryScalesEncodingAttr::get(context, CGALayout);
+        TensorMemoryScalesEncodingAttr::get(context, CGALayout, blockRepOrder);
     Type scaleAType =
         ttg::MemDescType::get(shape, elType, scaleEncoding, tensorMemorySpace,
                               /*mutableMemory=*/true);
@@ -91,12 +92,22 @@ struct TCGen5MMAScaleSharedToTmemConversion
     }
     int blockM = op.getBlockM();
     int blockN = op.getBlockN();
+    auto aScaleBlockRepOrder = getTensorMemoryScalesBlockRepOrder(
+        op, /*isA=*/true, op.getAType(), op.getBType(),
+        aScaleType.getElementType(), bScaleType.getElementType());
+    auto bScaleBlockRepOrder = getTensorMemoryScalesBlockRepOrder(
+        op, /*isA=*/false, op.getAType(), op.getBType(),
+        aScaleType.getElementType(), bScaleType.getElementType());
     bool anyChanged = false;
     if (isa<ttg::SharedMemorySpaceAttr>(aScaleType.getMemorySpace())) {
-      anyChanged = lowerScaleToTmem(op.getAScaleMutable(), rewriter, blockM);
+      anyChanged = lowerScaleToTmem(op.getAScaleMutable(), rewriter, blockM,
+                                    aScaleBlockRepOrder) ||
+                   anyChanged;
     }
     if (isa<ttg::SharedMemorySpaceAttr>(bScaleType.getMemorySpace())) {
-      anyChanged = lowerScaleToTmem(op.getBScaleMutable(), rewriter, blockN);
+      anyChanged = lowerScaleToTmem(op.getBScaleMutable(), rewriter, blockN,
+                                    bScaleBlockRepOrder) ||
+                   anyChanged;
     }
     return LogicalResult::success(anyChanged);
   }

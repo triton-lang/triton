@@ -133,7 +133,7 @@ public:
 
   // TODO: Merge the three hoistConvert*(); functions as they are duplicate code
   void hoistConvertDotOperand();
-  void hoistConvertOnTopOfExtOrBroadcast();
+  void hoistConvertOnTopOfExtOrBroadcast(bool disableRematSplitting);
   void hoistConvertIntoConditionals();
 
   /// Attempt to hoist \p convertOp above operations that make the tensor larger
@@ -141,7 +141,8 @@ public:
   /// possible, rematerialize the slice between the convert and that operation
   /// and hoist the convert above it.
   /// \return true if \p convertOp was hoisted, false otherwise.
-  bool hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp);
+  bool hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp,
+                                         bool disableRematSplitting);
 
   /// Attempt to hoist \p convertOp into conditionals so the conversion is only
   /// conditionally executed. If this is possible, rematerialize the slice
@@ -976,13 +977,14 @@ bool LayoutRematerialization::backwardRematerialization(
   return changed;
 }
 
-void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
+void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
+    bool disableRematSplitting) {
   // Go through each ConvertLayoutOp.
   SmallVector<ConvertLayoutOp> convertOps;
   funcOp.walk(
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
-    if (!hoistConvertOnTopOfExtOrBroadcast(convertOp)) {
+    if (!hoistConvertOnTopOfExtOrBroadcast(convertOp, disableRematSplitting)) {
       // If the conversion didn't get removed, consider it for reuse in future
       // backward slices.
       addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
@@ -1397,7 +1399,7 @@ bool LayoutRematerialization::hoistConvertDotOperand(
 // For convert left we try to hoist them above type extension to reduce the cost
 // of the convert.
 bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
-    ConvertLayoutOp convertOp) {
+    ConvertLayoutOp convertOp, bool disableRematSplitting) {
   // DotOperand is hoisted by hoistDotOperand
   RankedTensorType targetType = convertOp.getType();
   if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
@@ -1459,7 +1461,7 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   int64_t newCvtCost =
       getConvertCost(extOrBroadcastOp->getOperand(0), srcEncoding);
   if (!isRematBeneficial(convertOp, slice, layout, newCvtCost,
-                         /*disableRematSplitting=*/false))
+                         /*disableRematSplitting=*/disableRematSplitting))
     return false;
   // Move the convert before the ext op and rewrite the slice.
   OpBuilder builder(extOrBroadcastOp);
@@ -1608,10 +1610,14 @@ bool backwardRematerialization(ModuleOp module, bool disableRematSplitting) {
   return changed;
 }
 
-void hoistConvert(ModuleOp module) {
+void hoistConvert(ModuleOp module, bool disableRematSplitting) {
   SmallVector<ConvertLayoutOp> convertOps;
-  module.walk([](FuncOp funcOp) {
-    LayoutRematerialization(funcOp).hoistConvertOnTopOfExtOrBroadcast();
+  module.walk([&](FuncOp funcOp) {
+    LayoutRematerialization(funcOp).hoistConvertOnTopOfExtOrBroadcast(
+        disableRematSplitting);
+    if (disableRematSplitting)
+      return;
+
     LayoutRematerialization(funcOp).hoistConvertIntoConditionals();
     LayoutRematerialization(funcOp).hoistConvertDotOperand();
   });
@@ -1677,15 +1683,13 @@ public:
       cleanupConvertOps();
     } while (changed);
 
-    if (!disableRematSplitting) {
-      // 3. For remaining converts, try to hoist them above cast generating
-      // larger size types in order to reduce the cost of the convert op.
-      hoistConvert(m);
-      LLVM_DEBUG({
-        DBGS() << "Module after hoisting converts:\n";
-        m.dump();
-      });
-    }
+    // 3. For remaining converts, try to hoist them above cast generating
+    // larger size types in order to reduce the cost of the convert op.
+    hoistConvert(m, disableRematSplitting);
+    LLVM_DEBUG({
+      DBGS() << "Module after hoisting converts:\n";
+      m.dump();
+    });
 
     // 4. Prepare dead iter args to be cleaned up by dead code elimination in
     // the pattern rewriter below.

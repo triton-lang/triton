@@ -27,7 +27,7 @@ def test_maximum_minium(dtype, op, device):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("M, N", [[1, 1], [1, 512], [8, 64], [256, 16], [512, 8]])
-@pytest.mark.parametrize("k", [None, 8])
+@pytest.mark.parametrize("k", [None, 1, 8])
 @pytest.mark.parametrize("descending", [False, True])
 @pytest.mark.parametrize("dtype_str", ['int32', 'float16', 'float32', 'bfloat16'])
 def test_sort(M, N, k, descending, dtype_str, device):

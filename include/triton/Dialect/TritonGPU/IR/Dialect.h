@@ -269,6 +269,12 @@ SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
 SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape);
 SmallVector<int64_t> getShapePerCTA(Type type);
 
+// Returns the layout-ranked suffix, dropping a leading pipelining dimension.
+template <typename T>
+ArrayRef<T> dropPipeliningDim(ArrayRef<T> shape, Attribute layout) {
+  return shape.take_back(cast<LayoutEncodingTrait>(layout).getRank());
+}
+
 // Returns the shape per CTA, which is "physically" allocated.
 // Such shapes may be bigger than the logical one due to, for example, padding
 // in shared memory.

@@ -898,8 +898,12 @@ void FunctionBuilder::createClusterBarrierRendezvousCall(
     phase = arith::SelectOp::create(
         b, mask, phase,
         tti::createConstIntTensor(b, b.getLoc(), 0, statesType));
-    return arith::TruncIOp::create(b, b.getI1Type(),
-                                   reduceAll<arith::OrIOp>(b, phase));
+    Value result = arith::TruncIOp::create(b, b.getI1Type(),
+                                           reduceAll<arith::OrIOp>(b, phase));
+    // Every warp must sample this phase before the elected warp can advance
+    // it; otherwise sibling warps can wait for opposite rendezvous epochs.
+    ttg::BarrierOp::create(b, b.getLoc(), ttg::AddrSpace::GlobalRead);
+    return result;
   };
   auto updateWaiting = [&](Value phase, Value pred, bool markWaiting) {
     Value waiting =

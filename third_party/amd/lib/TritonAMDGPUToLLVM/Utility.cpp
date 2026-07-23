@@ -782,8 +782,7 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
 
 bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
                                       const LinearLayout &srcToSharedLayout,
-                                      unsigned threadsPerWarp,
-                                      unsigned vecSize) {
+                                      unsigned threadsPerWarp) {
   auto kReg = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
   auto kOffset = StringAttr::get(ctx, "offset");
@@ -839,10 +838,6 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   if (targetInfo.supportsDirectToLdsScatter())
     return true;
 
-  // Must support the full vector width; splitting would cause strided writes.
-  if (!targetInfo.supportsDirectToLdsLoadBitWidth(vectorSize * elemBitWidth))
-    return false;
-
   // Compute the blocked -> shared linear layout to check preconditions
   LinearLayout srcLayout = triton::gpu::toLinearLayout(srcTy);
   LinearLayout sharedLayout;
@@ -864,15 +859,28 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
   auto contig = srcToSharedLayout.getNumConsecutiveInOut();
-  if (vectorSize != contig) {
-    LDBG("Load vectorization ("
-         << vectorSize << ") and contiguity (" << contig
-         << ") do not match resulting in strided writes");
+  // The reg->shared layout can only write `contig` consecutive elements
+  // coalesced into LDS. A load narrower than `contig` would leave gaps between
+  // lanes and produce strided writes, so we cannot lower it here.
+  if (vectorSize < contig) {
+    LDBG("Load vectorization (" << vectorSize << ") smaller than contiguity ("
+                                << contig << ") resulting in strided writes");
+    return false;
+  }
+  // If the requested load is wider than what the layout can write coalesced,
+  // reduce it so that each load instruction writes exactly one coalesced chunk.
+  // The lowering then emits multiple (narrower) direct-to-LDS loads.
+  vectorSize = contig;
+
+  // The reduced width must still be a supported direct-to-LDS load width.
+  if (!targetInfo.supportsDirectToLdsLoadBitWidth(vectorSize * elemBitWidth)) {
+    LDBG("coalesced load width (" << vectorSize
+                                  << ") is not a supported direct-to-LDS load");
     return false;
   }
 
   if (!canCoalesceWriteIntoSharedMemory(srcTy.getContext(), srcToSharedLayout,
-                                        targetInfo.getWarpSize(), vectorSize)) {
+                                        targetInfo.getWarpSize())) {
     LDBG("Does not write coalesced into LDS");
     return false;
   }

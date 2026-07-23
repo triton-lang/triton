@@ -5,8 +5,11 @@ import re
 from triton.backends.compiler import GPUTarget
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
+from triton.experimental.gluon.language._core import _unwrap_if_constexpr, builtin
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
+from triton.experimental.gluon.language.nvidia import rubin
+from triton.experimental.gluon.language.nvidia.ampere import mbarrier as ampere_mbarrier
 from triton.experimental.gluon.language.nvidia.hopper import cluster
 from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, TensorMemoryScalesLayout, async_copy
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
@@ -32,6 +35,7 @@ PTRRANGE_PAT = re.compile('(, )?tt.pointer_range = 32 : i32')
 LIBDEVICE_PAT = re.compile('{libname = "", libpath = "", pure = true, symbol = "__.*"}')
 
 BLACKWELL_TARGET = GPUTarget("cuda", 100, 32)
+RUBIN_TARGET = GPUTarget("cuda", 107, 32)
 HOPPER_TARGET = GPUTarget("cuda", 90, 32)
 AMPERE_TARGET = GPUTarget("cuda", 80, 32)
 HIP_TARGET_RDNA3 = GPUTarget("hip", "gfx1100", 32)
@@ -512,6 +516,25 @@ def anchor_noinline(x):
 
 @filecheck_test
 @gluon.jit
+def test_reinterpret_parent_then_multibuffer_subslice():
+    # CHECK-LABEL: test_reinterpret_parent_then_multibuffer_subslice
+    a_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(64, 16, rank=2)
+    b_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(32, 16, rank=2)
+    arena = ttgl.allocate_shared_memory(ttgl.float16, [7, 8, 32], a_layout)
+    # CHECK: [[B_PARENT:%.*]] = ttg.memdesc_reinterpret {{.*}} -> !ttg.memdesc<14x8x16xf16
+    b_parent = arena._reinterpret(ttgl.float16, [14, 8, 16], b_layout)
+    # CHECK: [[A_SUB:%.*]] = ttg.memdesc_subslice {{.*}}[0, 0, 0]
+    a_stages = arena.slice(0, 3, dim=0)
+    # CHECK: [[B_SUB:%.*]] = ttg.memdesc_subslice [[B_PARENT]][6, 0, 0] {{.*}} -> !ttg.memdesc<4x8x16xf16
+    b_stages = b_parent.slice(6, 4, dim=0)
+    # CHECK: ttg.memdesc_index [[A_SUB]]
+    anchor_noinline(a_stages.index(0))
+    # CHECK: ttg.memdesc_index [[B_SUB]]
+    anchor_noinline(b_stages.index(0))
+
+
+@filecheck_test
+@gluon.jit
 def test_warp_specialize():
     # CHECK:       [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
     # CHECK-LABEL: test_warp_specialize
@@ -637,6 +660,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
+def mbarrier_from_cta_kernel():
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.expect(bar, 4, from_cta=5)
+    mbarrier.arrive(bar, count=1, from_cta=5)
+
+
+def test_mbarrier_from_cta():
+    mod = run_parser(mbarrier_from_cta_kernel, *make_args(num_ctas=8), target=HOPPER_TARGET)
+    ir = anonymize_ir(mod.str_nodebug())
+    assert re.search(r"ttng\.barrier_expect %\d+, 4 \{fromCTA = 5 : i32\}, %true", ir)
+    assert re.search(r"ttng\.arrive_barrier %\d+, 1, %true_\d+ \{fromCTA = 5 : i32\}", ir)
+
+
+def test_rubin_mbarrier_arrive_from_cta():
+
+    @gluon.jit
+    def kernel():
+        bar = rubin.mbarrier.allocate_mbarrier()
+        rubin.mbarrier.arrive(bar, from_cta=0)
+
+    mod = run_parser(kernel, *make_args(num_ctas=2), target=RUBIN_TARGET)
+    assert "fromCTA = 0 : i32" in anonymize_ir(mod.str_nodebug())
+
+
+@gluon.jit
 def async_shared_store_kernel():
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[0]])
     shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=[[0]])
@@ -650,6 +698,86 @@ def async_shared_store_kernel():
 def test_async_shared_store(target):
     mod = run_parser(async_shared_store_kernel, *make_args(num_ctas=2), target=target)
     assert "ttng.async_shared_store" in anonymize_ir(mod.str_nodebug())
+
+
+def test_rubin_namespace_extends_blackwell():
+    assert ttgl.nvidia.rubin is rubin
+    assert rubin.TensorMemoryLayout is blackwell.TensorMemoryLayout
+    assert rubin.allocate_tensor_memory is blackwell.allocate_tensor_memory
+    assert rubin.tcgen05_mma_scaled is blackwell.tcgen05_mma_scaled
+    assert rubin.tma is blackwell.tma
+    assert rubin.mbarrier is not blackwell.mbarrier
+    assert rubin.mbarrier.allocate_mbarrier is blackwell.mbarrier.allocate_mbarrier
+
+    with pytest.raises(TypeError, match="block_rep_order"):
+        blackwell.TensorMemoryScalesLayout(block_rep_order="kThenMn")
+
+
+@gluon.jit
+def ampere_mbarrier_arrive_kernel():
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ampere_mbarrier.MBarrierLayout())
+    ampere_mbarrier.init(bar, count=1)
+    ampere_mbarrier.arrive(bar)
+    phase = 0
+    ampere_mbarrier.wait(bar, phase)
+    ampere_mbarrier.invalidate(bar)
+
+
+@pytest.mark.parametrize("target", [AMPERE_TARGET, HOPPER_TARGET, BLACKWELL_TARGET])
+def test_ampere_mbarrier_arrive(target):
+    # Smoke test that the Ampere mbarrier.arrive wrapper still wires through
+    # to the create_mbarrier_arrive binding after the multicast signature change.
+    run_parser(ampere_mbarrier_arrive_kernel, target=target)
+
+
+def test_mbarrier_arrive_multicast_not_exposed_on_blackwell():
+
+    @gluon.jit
+    def kernel():
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.arrive(bar, count=1, multicast_cta=0x1)
+
+    with pytest.raises(CompilationError, match="multicast_cta"):
+        run_parser(kernel, *make_args(num_ctas=2), target=BLACKWELL_TARGET)
+
+
+def test_mbarrier_arrive_multicast_negative_mask():
+
+    @gluon.jit
+    def kernel():
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], rubin.mbarrier.MBarrierLayout())
+        rubin.mbarrier.arrive(bar, count=1, multicast_cta=-1)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel, *make_args(num_ctas=2), target=RUBIN_TARGET)
+
+    assert "multicast_cta must be positive" in str(e.value)
+
+
+def test_mbarrier_arrive_multicast_mask_too_large():
+
+    @gluon.jit
+    def kernel():
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], rubin.mbarrier.MBarrierLayout())
+        rubin.mbarrier.arrive(bar, count=1, multicast_cta=2)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel, *make_args(num_ctas=2), target=RUBIN_TARGET)
+
+    assert "multicast_cta must be <= num_ctas - 1" in str(e.value)
+
+
+def test_mbarrier_arrive_multicast_non_int_mask():
+
+    @gluon.jit
+    def kernel():
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], rubin.mbarrier.MBarrierLayout())
+        rubin.mbarrier.arrive(bar, count=1, multicast_cta=1.5)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel, *make_args(num_ctas=2), target=RUBIN_TARGET)
+
+    assert "multicast_cta must be an int" in str(e.value)
 
 
 @gluon.jit
@@ -692,6 +820,35 @@ def tcgen05_mma_scaled_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.con
     scale_b = blackwell.allocate_tensor_memory(ttgl.int8, [128, 32], scale_layout)
     acc = blackwell.allocate_tensor_memory(ttgl.float16, [128, 128], acc_layout)
     blackwell.tcgen05_mma_scaled(a, b, acc, scale_a, scale_b, "e5m2", "e5m2")
+
+
+@builtin
+def assert_tmem_scales_layout_roundtrip(memdesc, expected_layout, _semantic=None):
+    expected_layout = _unwrap_if_constexpr(expected_layout)
+    actual_layout = _semantic.builder.get_gluon_layout_from_memdesc(memdesc.handle)
+    assert actual_layout == expected_layout, f"expected {expected_layout}, got {actual_layout}"
+
+
+@gluon.jit
+def tmem_scales_layout_roundtrip_kernel(scale_layout: ttgl.constexpr):
+    scale = blackwell.allocate_tensor_memory(ttgl.int8, [128, 8], scale_layout)
+    assert_tmem_scales_layout_roundtrip(scale, scale_layout)
+
+
+@pytest.mark.parametrize(
+    "target,scale_layout",
+    [
+        pytest.param(BLACKWELL_TARGET, blackwell.TensorMemoryScalesLayout(), id="blackwell-mn-then-k"),
+        pytest.param(RUBIN_TARGET, rubin.TensorMemoryScalesLayout(), id="rubin-mn-then-k"),
+        pytest.param(
+            RUBIN_TARGET,
+            rubin.TensorMemoryScalesLayout(block_rep_order="kThenMn"),
+            id="rubin-k-then-mn",
+        ),
+    ],
+)
+def test_tmem_scales_layout_roundtrip(target, scale_layout):
+    run_parser(tmem_scales_layout_roundtrip_kernel, *make_args(scale_layout), target=target)
 
 
 def test_tcgen05_mma_scaled():
@@ -1737,26 +1894,6 @@ def test_cluster_barrier_multi_cta():
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @cluster_barrier_multi_cta_kernel() attributes {noinline = false} {
     ttng.cluster_barrier
-    tt.return
-  }
-}
-""")
-
-
-@gluon.jit
-def cluster_arrive_wait_ops_kernel():
-    cluster.arrive()
-    cluster.wait()
-
-
-def test_cluster_arrive_wait_ops():
-    mod = run_parser(cluster_arrive_wait_ops_kernel, *make_args(num_ctas=2), target=HOPPER_TARGET)
-    expecttest.assert_expected_inline(
-        anonymize_ir(mod.str_nodebug()), """\
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @cluster_arrive_wait_ops_kernel() attributes {noinline = false} {
-    ttng.cluster_arrive
-    ttng.cluster_wait
     tt.return
   }
 }
