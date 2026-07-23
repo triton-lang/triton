@@ -275,12 +275,11 @@ ArrayRef<T> dropPipeliningDim(ArrayRef<T> shape, Attribute layout) {
   return shape.take_back(cast<LayoutEncodingTrait>(layout).getRank());
 }
 
-// Returns the shape per CTA, which is "physically" allocated.
-// Such shapes may be bigger than the logical one due to, for example, padding
-// in shared memory.
-SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
-                                              ArrayRef<int64_t> shape);
-SmallVector<int64_t> getAllocationShapePerCTA(Type type);
+// Returns the number of elements per CTA in the allocation's linear address
+// space. This does not include padding introduced by padded shared layouts.
+// If allocShape is provided, shape may describe a subslice of that allocation.
+int64_t getAllocationElems(Attribute layout, ArrayRef<int64_t> shape,
+                           ArrayRef<int64_t> allocShape = {});
 
 unsigned getNumCTAs(Attribute layout);
 

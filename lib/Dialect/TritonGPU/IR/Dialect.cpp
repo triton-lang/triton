@@ -447,35 +447,38 @@ SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
   return getShapePerCTA(getCTASplitNum(layout), shape);
 }
 
-SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
-                                              ArrayRef<int64_t> shapeLogical) {
-  SmallVector<int64_t> shape(shapeLogical);
-  std::optional<int64_t> packedAxis;
-  if (auto sharedMMALayout = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-    if (sharedMMALayout.getFp4Padded())
-      packedAxis = getOrder(sharedMMALayout, shapeLogical)[0];
-  } else if (auto tmemLayout =
-                 dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(layout)) {
-    // An fp4Padded TMEM descriptor keeps the packed Mx(K/2)xi8 shape. Allocate
-    // two physical columns per packed K coordinate so each logical FP4 element
-    // occupies one byte in TMEM.
-    if (tmemLayout.getFp4Padded())
-      packedAxis = 1;
-  }
-  if (packedAxis)
-    shape[*packedAxis] *= 2;
-  return getShapePerCTA(layout, shape);
-}
-
 SmallVector<int64_t> getShapePerCTA(Type type) {
   auto tensorType = cast<TensorOrMemDesc>(type);
   return getShapePerCTA(tensorType.getEncoding(), tensorType.getShape());
 }
 
-SmallVector<int64_t> getAllocationShapePerCTA(Type type) {
-  auto tensorType = cast<TensorOrMemDesc>(type);
-  return getAllocationShapePerCTA(tensorType.getEncoding(),
-                                  tensorType.getShape());
+int64_t getAllocationElems(Attribute encoding, ArrayRef<int64_t> shape,
+                           ArrayRef<int64_t> allocShape) {
+  if (allocShape.empty())
+    allocShape = shape;
+  auto layoutShape = dropPipeliningDim(shape, encoding);
+  auto allocationShape = dropPipeliningDim(allocShape, encoding);
+  auto layout = isPaddedEncoding(encoding)
+                    ? paddedLinearLayout(allocationShape, encoding)
+                    : toLinearLayout(allocationShape, encoding);
+  auto offsetDim = StringAttr::get(encoding.getContext(), "offset");
+  int64_t stages = product<int64_t>(shape.drop_back(layoutShape.size()));
+  int64_t elems = stages * layout.getInDimSize(offsetDim);
+  if (layoutShape != allocationShape) {
+    auto logicalDims = llvm::to_vector(layout.getOutDimNames());
+    LinearLayout identity = LinearLayout::empty();
+    for (auto [dim, size] : llvm::zip_equal(logicalDims, layoutShape))
+      identity *= LinearLayout::identity1D(size, dim, dim);
+    auto view = identity.invertAndCompose(layout);
+    uint64_t zeroMask = (layout.getInDimSize(offsetDim) - 1) &
+                        ~getInputBasisMask(layout, offsetDim, logicalDims);
+    int64_t viewElems =
+        (getOutputBasisMask(view, logicalDims, offsetDim) | zeroMask) + 1;
+    elems = (stages - 1) * layout.getInDimSize(offsetDim) + viewElems;
+  }
+  if (auto partitioned = dyn_cast<PartitionedSharedEncodingAttr>(encoding))
+    elems *= partitioned.getNumPartitions();
+  return elems;
 }
 
 SmallVector<unsigned> getMmaV2WarpsPerCTA(ArrayRef<int64_t> shape,

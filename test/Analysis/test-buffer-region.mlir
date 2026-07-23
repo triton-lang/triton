@@ -70,9 +70,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #shared_dense_half = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0]], block = []}, alignment = 16>
 #smem = #ttg.shared_memory
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 128 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   tt.func public @shared_zero_bases_belong_to_allocation() {
     %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x2xi32, #shared_holey, #smem, mutable>
+    // expected-remark @below {{Buffers: [0, 64]}}
+    ttg.local_load %alloc : !ttg.memdesc<4x2xi32, #shared_holey, #smem, mutable> -> tensor<4x2xi32>
     %view = ttg.memdesc_reinterpret %alloc : !ttg.memdesc<4x2xi32, #shared_holey, #smem, mutable> -> !ttg.memdesc<4x4xi32, #shared_dense, #smem, mutable>
     // expected-remark @below {{Buffers: [0, 64]}}
     ttg.local_load %view : !ttg.memdesc<4x4xi32, #shared_dense, #smem, mutable> -> tensor<4x4xi32>
@@ -95,6 +97,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     ttg.local_load %lower : !ttg.memdesc<2x2xi32, #shared_holey, #smem, mutable, 4x2> -> tensor<2x2xi32>
     // expected-remark @below {{Buffers: [32, 32]}}
     ttg.local_load %upper : !ttg.memdesc<2x2xi32, #shared_holey, #smem, mutable, 4x2> -> tensor<2x2xi32>
+    tt.return
+  }
+
+  tt.func public @shared_zero_bases_pipeline_stages(%index: i32) {
+    %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x4x2xi32, #shared_holey, #smem, mutable>
+    %view = ttg.memdesc_index %alloc[%index] : !ttg.memdesc<2x4x2xi32, #shared_holey, #smem, mutable> -> !ttg.memdesc<4x2xi32, #shared_holey, #smem, mutable>
+    // expected-remark @below {{Buffers: [0, 64], [64, 64]}}
+    ttg.local_load %view : !ttg.memdesc<4x2xi32, #shared_holey, #smem, mutable> -> tensor<4x2xi32>
+    tt.return
+  }
+
+  tt.func public @shared_zero_bases_pipeline_subslice() {
+    %zero = arith.constant 0 : i32
+    %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x4x2xi32, #shared_holey, #smem, mutable>
+    %stage = ttg.memdesc_subslice %alloc [1, 0, 0] : !ttg.memdesc<2x4x2xi32, #shared_holey, #smem, mutable> -> !ttg.memdesc<1x4x2xi32, #shared_holey, #smem, mutable, 2x4x2>
+    %view = ttg.memdesc_index %stage[%zero] : !ttg.memdesc<1x4x2xi32, #shared_holey, #smem, mutable, 2x4x2> -> !ttg.memdesc<4x2xi32, #shared_holey, #smem, mutable>
+    // expected-remark @below {{Buffers: [64, 64]}}
+    ttg.local_load %view : !ttg.memdesc<4x2xi32, #shared_holey, #smem, mutable> -> tensor<4x2xi32>
     tt.return
   }
 }
@@ -125,12 +145,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #padded = #ttg.padded_shared<[4:+2] {order = [1, 0], shape = [4, 4]}>
 #smem = #ttg.shared_memory
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 44 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 184 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   tt.func public @padded_shared_reinterpret_region() {
     %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x4xf16, #padded, #smem, mutable>
     %view = ttg.memdesc_reinterpret %alloc : !ttg.memdesc<4x4xf16, #padded, #smem, mutable> -> !ttg.memdesc<4x4xbf16, #padded, #smem, mutable>
     // expected-remark @below {{Buffers: [0, 44]}}
     ttg.local_load %view : !ttg.memdesc<4x4xbf16, #padded, #smem, mutable> -> tensor<4x4xbf16>
+    tt.return
+  }
+
+  tt.func public @padded_shared_buffer_regions() {
+    %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x4xi32, #padded, #smem, mutable>
+    // expected-remark @below {{Buffers: [0, 88]}}
+    ttg.local_load %alloc : !ttg.memdesc<4x4xi32, #padded, #smem, mutable> -> tensor<4x4xi32>
+    tt.return
+  }
+
+  tt.func public @padded_shared_subslice_regions() {
+    %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x4xi32, #padded, #smem, mutable>
+    %lower = ttg.memdesc_subslice %alloc [0, 0] : !ttg.memdesc<4x4xi32, #padded, #smem, mutable> -> !ttg.memdesc<2x4xi32, #padded, #smem, mutable, 4x4>
+    %upper = ttg.memdesc_subslice %alloc [2, 0] : !ttg.memdesc<4x4xi32, #padded, #smem, mutable> -> !ttg.memdesc<2x4xi32, #padded, #smem, mutable, 4x4>
+    // expected-remark @below {{Buffers: [0, 40]}}
+    ttg.local_load %lower : !ttg.memdesc<2x4xi32, #padded, #smem, mutable, 4x4> -> tensor<2x4xi32>
+    // expected-remark @below {{Buffers: [48, 40]}}
+    ttg.local_load %upper : !ttg.memdesc<2x4xi32, #padded, #smem, mutable, 4x4> -> tensor<2x4xi32>
+    tt.return
+  }
+
+  tt.func public @padded_shared_pipeline_stages(%index: i32) {
+    %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x4x4xi32, #padded, #smem, mutable>
+    %view = ttg.memdesc_index %alloc[%index] : !ttg.memdesc<2x4x4xi32, #padded, #smem, mutable> -> !ttg.memdesc<4x4xi32, #padded, #smem, mutable>
+    // expected-remark @below {{Buffers: [0, 88], [96, 88]}}
+    ttg.local_load %view : !ttg.memdesc<4x4xi32, #padded, #smem, mutable> -> tensor<4x4xi32>
     tt.return
   }
 }
