@@ -729,17 +729,6 @@ getWarpLayoutConvertDecomposition(const LinearLayout &srcLayout,
           nPack};
 }
 
-DecomposedWarpConversion
-getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
-                                  RankedTensorType dstTy, int bitwidth) {
-  auto removeBroadcastedRegs = [](RankedTensorType type) {
-    auto layout = toLinearLayout(type);
-    return actionRemoveBroadcastedRegs(layout).apply(layout);
-  };
-  return getWarpLayoutConvertDecomposition(
-      removeBroadcastedRegs(srcTy), removeBroadcastedRegs(dstTy), bitwidth);
-}
-
 static SmallVector<DecomposedWarpConversion::TranspositionInfo>
 getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
                           std::vector<std::vector<int32_t>> &regBases,
@@ -1269,7 +1258,9 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
   auto kLane = StringAttr::get(ctx, "lane");
   if (to_vector(layout.getOutDimNames()) ==
       SmallVector<StringAttr, 2>{kRegister, kLane}) {
-    auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy, 32);
+    auto srcLayout = toLinearLayout(srcTy).removeZeroBasesAlongDim(kRegister);
+    auto dstLayout = toLinearLayout(dstTy).removeZeroBasesAlongDim(kRegister);
+    auto factors = getWarpLayoutConvertDecomposition(srcLayout, dstLayout, 32);
     return (factors.mixedTranspositions.size() < 2);
   }
   return false;

@@ -221,11 +221,6 @@ getWarpLayoutConvertDecomposition(const triton::LinearLayout &srcLayout,
                                   const triton::LinearLayout &dstLayout,
                                   int bitwidth);
 
-// Type-based convenience overload that removes broadcasted register bases.
-DecomposedWarpConversion
-getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
-                                  RankedTensorType dstTy, int bitwidth);
-
 // Decomposes a reshape into simpler pieces.
 //
 // As an example, suppose we have a reshape from [4,4,4] to [2,2,8,2].
