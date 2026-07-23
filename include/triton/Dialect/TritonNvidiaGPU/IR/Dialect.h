@@ -59,6 +59,37 @@ LogicalResult verifyMMAv5Op(Operation *op);
 
 namespace mlir::triton::nvidia_gpu {
 
+enum class PackedArithLaneKind { F32, F16, BF16, E5M2, E4M3, FP4, UE8M0 };
+
+enum class PackedArithStorageKind { Regular, CompactFP4, PaddedFP4 };
+
+struct PackedArithTypeInfo {
+  PackedArithType type;
+  PackedArithLaneKind laneKind;
+  unsigned laneCount;
+  unsigned registerBitWidth;
+  PackedArithStorageKind storageKind;
+  bool isValidResult;
+
+  bool matchesElementType(Type elementType) const;
+  bool isX2() const { return laneCount == 2; }
+  bool isFP4() const { return storageKind != PackedArithStorageKind::Regular; }
+  unsigned getStorageLaneCount() const {
+    return isFP4() ? laneCount / 2 : laneCount;
+  }
+};
+
+const PackedArithTypeInfo &getPackedArithTypeInfo(PackedArithType type);
+
+struct PackedArithInstructionSpec {
+  StringRef modifiers;
+  unsigned explicitOperandTypes;
+};
+
+std::optional<PackedArithInstructionSpec>
+getPackedArithInstructionSpec(PackedArithOpKind kind, PackedArithType result,
+                              ArrayRef<PackedArithType> operands);
+
 constexpr static char AttrTwoCTAsName[] = "ttng.two-ctas";
 
 inline bool getModuleTwoCTAs(ModuleOp mod) {

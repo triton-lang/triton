@@ -42,6 +42,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include <array>
 
 using namespace mlir::triton::gpu;
 
@@ -80,118 +81,155 @@ static void printPackedArithTypes(OpAsmPrinter &printer, Operation *op,
   }
 }
 
-static bool isPackedArithX2Type(PackedArithType packedType) {
-  return packedType == PackedArithType::F32X2 ||
-         packedType == PackedArithType::F16X2 ||
-         packedType == PackedArithType::BF16X2;
-}
-
-static unsigned getPackedArithWidth(PackedArithType packedType) {
-  return isPackedArithX2Type(packedType) ? 2 : 4;
-}
-
-static bool isPackedArithFp4Type(PackedArithType packedType) {
-  return packedType == PackedArithType::E2M1X4 ||
-         packedType == PackedArithType::E2M1P4X4;
-}
-
-static bool hasPackedArithLaneType(PackedArithType packedType,
-                                   Type elementType) {
-  switch (packedType) {
-  case PackedArithType::F32X2:
+bool PackedArithTypeInfo::matchesElementType(Type elementType) const {
+  switch (laneKind) {
+  case PackedArithLaneKind::F32:
     return elementType.isF32();
-  case PackedArithType::F16X2:
+  case PackedArithLaneKind::F16:
     return elementType.isF16();
-  case PackedArithType::BF16X2:
+  case PackedArithLaneKind::BF16:
     return elementType.isBF16();
-  case PackedArithType::E5M2X4:
+  case PackedArithLaneKind::E5M2:
     return isa<Float8E5M2Type>(elementType);
-  case PackedArithType::E4M3X4:
+  case PackedArithLaneKind::E4M3:
     return isa<Float8E4M3FNType>(elementType);
-  case PackedArithType::E2M1X4:
-  case PackedArithType::E2M1P4X4:
+  case PackedArithLaneKind::FP4:
     return elementType.isInteger(8);
-  case PackedArithType::UE8M0X4:
+  case PackedArithLaneKind::UE8M0:
     return isa<Float8E8M0FNUType>(elementType);
   }
   llvm_unreachable("unknown packed arithmetic type");
 }
 
-static bool isPackedArithAlternateType(PackedArithType packedType) {
-  return !isPackedArithX2Type(packedType);
+const PackedArithTypeInfo &getPackedArithTypeInfo(PackedArithType packedType) {
+  static constexpr PackedArithTypeInfo types[] = {
+      {PackedArithType::F32X2, PackedArithLaneKind::F32, 2, 64,
+       PackedArithStorageKind::Regular, true},
+      {PackedArithType::F16X2, PackedArithLaneKind::F16, 2, 32,
+       PackedArithStorageKind::Regular, true},
+      {PackedArithType::BF16X2, PackedArithLaneKind::BF16, 2, 32,
+       PackedArithStorageKind::Regular, true},
+      {PackedArithType::E5M2X4, PackedArithLaneKind::E5M2, 4, 32,
+       PackedArithStorageKind::Regular, true},
+      {PackedArithType::E4M3X4, PackedArithLaneKind::E4M3, 4, 32,
+       PackedArithStorageKind::Regular, true},
+      {PackedArithType::E2M1X4, PackedArithLaneKind::FP4, 4, 16,
+       PackedArithStorageKind::CompactFP4, false},
+      {PackedArithType::E2M1P4X4, PackedArithLaneKind::FP4, 4, 32,
+       PackedArithStorageKind::PaddedFP4, false},
+      {PackedArithType::UE8M0X4, PackedArithLaneKind::UE8M0, 4, 32,
+       PackedArithStorageKind::Regular, false},
+  };
+  for (const PackedArithTypeInfo &info : types)
+    if (info.type == packedType)
+      return info;
+  llvm_unreachable("unknown packed arithmetic type");
 }
 
-static bool isPackedArithResultType(PackedArithType packedType) {
-  return isPackedArithX2Type(packedType) ||
-         packedType == PackedArithType::E5M2X4 ||
-         packedType == PackedArithType::E4M3X4;
+namespace {
+enum class PackedArithTypePattern {
+  Any,
+  X2,
+  Half,
+  F32,
+  F16,
+  BF16,
+  Alternate,
+  AlternateResult,
+  SameAsResult,
+  OtherHalf,
+};
+
+struct PackedArithSignatureRule {
+  unsigned operationMask;
+  PackedArithTypePattern result;
+  std::array<PackedArithTypePattern, 3> operands;
+  unsigned operandCount;
+  const char *modifiers;
+  unsigned explicitOperandTypes;
+};
+
+constexpr unsigned packedArithOperationMask(PackedArithOpKind kind) {
+  return 1u << static_cast<unsigned>(kind);
 }
 
-static bool isPackedArithHalfType(PackedArithType packedType) {
-  return packedType == PackedArithType::F16X2 ||
-         packedType == PackedArithType::BF16X2;
-}
-
-static bool
-isSupportedPackedArithSignature(PackedArithOpKind opKind,
-                                PackedArithType resultType,
-                                ArrayRef<PackedArithType> operandTypes) {
-  if (isPackedArithX2Type(resultType)) {
-    if (!llvm::all_of(operandTypes, isPackedArithX2Type))
-      return false;
-    bool isHomogeneous = llvm::all_of(
-        operandTypes, [&](PackedArithType type) { return type == resultType; });
-    if (isHomogeneous) {
-      return (opKind != PackedArithOpKind::MIN &&
-              opKind != PackedArithOpKind::MAX) ||
-             isPackedArithHalfType(resultType);
-    }
-
-    switch (opKind) {
-    case PackedArithOpKind::ADD:
-    case PackedArithOpKind::SUB:
-      if (resultType == PackedArithType::F32X2) {
-        return isPackedArithHalfType(operandTypes[0]) &&
-               operandTypes[1] == PackedArithType::F32X2;
-      }
-      return operandTypes[0] == PackedArithType::F32X2 &&
-             operandTypes[1] == PackedArithType::F32X2;
-    case PackedArithOpKind::MUL:
-      return isPackedArithHalfType(resultType) &&
-             ((operandTypes[0] == PackedArithType::F32X2 &&
-               operandTypes[1] == PackedArithType::F32X2) ||
-              (operandTypes[0] == resultType &&
-               isPackedArithHalfType(operandTypes[1]) &&
-               operandTypes[1] != resultType));
-    case PackedArithOpKind::FMA:
-      return resultType == PackedArithType::F32X2 &&
-             isPackedArithHalfType(operandTypes[0]) &&
-             operandTypes[1] == PackedArithType::F32X2 &&
-             operandTypes[2] == PackedArithType::F32X2;
-    case PackedArithOpKind::MIN:
-    case PackedArithOpKind::MAX:
-      return false;
-    }
-    llvm_unreachable("unknown packed arithmetic operation");
-  }
-
-  if (!isPackedArithResultType(resultType) ||
-      !llvm::all_of(operandTypes, isPackedArithAlternateType))
-    return false;
-
-  switch (opKind) {
-  case PackedArithOpKind::ADD:
-  case PackedArithOpKind::SUB:
-    return operandTypes[1] == resultType;
-  case PackedArithOpKind::MUL:
+bool matchesPackedArithTypePattern(PackedArithTypePattern pattern,
+                                   PackedArithType actual,
+                                   PackedArithType result) {
+  const PackedArithTypeInfo &info = getPackedArithTypeInfo(actual);
+  switch (pattern) {
+  case PackedArithTypePattern::Any:
     return true;
-  case PackedArithOpKind::FMA:
-    return operandTypes[2] == resultType;
-  case PackedArithOpKind::MIN:
-  case PackedArithOpKind::MAX:
-    return false;
+  case PackedArithTypePattern::X2:
+    return info.isX2();
+  case PackedArithTypePattern::Half:
+    return info.laneKind == PackedArithLaneKind::F16 ||
+           info.laneKind == PackedArithLaneKind::BF16;
+  case PackedArithTypePattern::F32:
+    return info.laneKind == PackedArithLaneKind::F32;
+  case PackedArithTypePattern::F16:
+    return info.laneKind == PackedArithLaneKind::F16;
+  case PackedArithTypePattern::BF16:
+    return info.laneKind == PackedArithLaneKind::BF16;
+  case PackedArithTypePattern::Alternate:
+    return !info.isX2();
+  case PackedArithTypePattern::AlternateResult:
+    return !info.isX2() && info.isValidResult;
+  case PackedArithTypePattern::SameAsResult:
+    return actual == result;
+  case PackedArithTypePattern::OtherHalf:
+    return actual != result && (info.laneKind == PackedArithLaneKind::F16 ||
+                                info.laneKind == PackedArithLaneKind::BF16);
   }
-  llvm_unreachable("unknown packed arithmetic operation");
+  llvm_unreachable("unknown packed arithmetic type pattern");
+}
+} // namespace
+
+std::optional<PackedArithInstructionSpec>
+getPackedArithInstructionSpec(PackedArithOpKind kind, PackedArithType result,
+                              ArrayRef<PackedArithType> operands) {
+  using P = PackedArithTypePattern;
+  constexpr unsigned add = packedArithOperationMask(PackedArithOpKind::ADD);
+  constexpr unsigned sub = packedArithOperationMask(PackedArithOpKind::SUB);
+  constexpr unsigned mul = packedArithOperationMask(PackedArithOpKind::MUL);
+  constexpr unsigned fma = packedArithOperationMask(PackedArithOpKind::FMA);
+  constexpr unsigned min = packedArithOperationMask(PackedArithOpKind::MIN);
+  constexpr unsigned max = packedArithOperationMask(PackedArithOpKind::MAX);
+
+  // clang-format off
+  static constexpr PackedArithSignatureRule signatures[] = {
+      // operations       result               operands                                                   count  modifiers  suffixes
+      {add | sub | mul,   P::X2,               {P::SameAsResult, P::SameAsResult},                        2,     "",        0},
+      {fma,               P::X2,               {P::SameAsResult, P::SameAsResult, P::SameAsResult},        3,     "rn",      0},
+      {min | max,         P::Half,             {P::SameAsResult, P::SameAsResult},                        2,     "",        0},
+      {add | sub,         P::F32,              {P::Half, P::F32},                                         2,     "",        2},
+      {add | sub,         P::F16,              {P::F32, P::F32},                                          2,     "rz.ftz",  2},
+      {add | sub,         P::BF16,             {P::F32, P::F32},                                          2,     "rz",      2},
+      {mul,               P::F16,              {P::F32, P::F32},                                          2,     "ftz.rz",  2},
+      {mul,               P::BF16,             {P::F32, P::F32},                                          2,     "rz",      2},
+      {mul,               P::Half,             {P::SameAsResult, P::OtherHalf},                           2,     "",        2},
+      {fma,               P::F32,              {P::Half, P::F32, P::F32},                                 3,     "rn",      3},
+      {add | sub,         P::AlternateResult,  {P::Alternate, P::SameAsResult},                           2,     "",        1},
+      {mul,               P::AlternateResult,  {P::Alternate, P::Alternate},                              2,     "",        2},
+      {fma,               P::AlternateResult,  {P::Alternate, P::Alternate, P::SameAsResult},             3,     "",        2},
+  };
+  // clang-format on
+
+  for (const PackedArithSignatureRule &signature : signatures) {
+    if (!(signature.operationMask & packedArithOperationMask(kind)) ||
+        operands.size() != signature.operandCount ||
+        !matchesPackedArithTypePattern(signature.result, result, result))
+      continue;
+    if (!llvm::all_of(llvm::zip(operands, signature.operands),
+                      [&](auto operand) {
+                        return matchesPackedArithTypePattern(
+                            std::get<1>(operand), std::get<0>(operand), result);
+                      }))
+      continue;
+    return PackedArithInstructionSpec{signature.modifiers,
+                                      signature.explicitOperandTypes};
+  }
+  return std::nullopt;
 }
 
 std::optional<SmallVector<unsigned>>
@@ -290,14 +328,16 @@ LogicalResult PackedArithOp::verify() {
     operandPackedTypes.push_back(*packedType);
   }
 
-  if (!isPackedArithResultType(getPackedType())) {
+  const PackedArithTypeInfo &resultInfo =
+      getPackedArithTypeInfo(getPackedType());
+  if (!resultInfo.isValidResult) {
     return emitOpError() << stringifyPackedArithType(getPackedType())
                          << " is not a valid packed arithmetic result type";
   }
 
   auto tensorType = getResult().getType();
   Type resultElementType = tensorType.getElementType();
-  if (!hasPackedArithLaneType(getPackedType(), resultElementType)) {
+  if (!resultInfo.matchesElementType(resultElementType)) {
     return emitOpError() << stringifyPackedArithType(getPackedType())
                          << " requires a result element type matching its "
                             "scalar lane type, but got "
@@ -310,7 +350,7 @@ LogicalResult PackedArithOp::verify() {
                          << tensorType.getRank() << "), but got " << axis;
   }
 
-  unsigned packWidth = getPackedArithWidth(getPackedType());
+  unsigned packWidth = resultInfo.laneCount;
   if (tensorType.getShape()[axis] % packWidth != 0) {
     return emitOpError() << "dimension " << axis
                          << " must be divisible by packed width " << packWidth;
@@ -320,15 +360,16 @@ LogicalResult PackedArithOp::verify() {
 
   for (auto [index, operand] : llvm::enumerate(getOperands())) {
     auto operandType = cast<RankedTensorType>(operand.getType());
-    if (!hasPackedArithLaneType(operandPackedTypes[index],
-                                operandType.getElementType())) {
+    const PackedArithTypeInfo &operandInfo =
+        getPackedArithTypeInfo(operandPackedTypes[index]);
+    if (!operandInfo.matchesElementType(operandType.getElementType())) {
       return emitOpError() << "operand " << index << " packed type "
                            << stringifyPackedArithType(
                                   operandPackedTypes[index])
                            << " does not match its scalar element type "
                            << operandType.getElementType();
     }
-    if (isPackedArithFp4Type(operandPackedTypes[index])) {
+    if (operandInfo.isFP4()) {
       if (operandType.getRank() != tensorType.getRank())
         return emitOpError()
                << "operand " << index << " must have the result rank";
@@ -363,8 +404,8 @@ LogicalResult PackedArithOp::verify() {
     }
   }
 
-  if (!isSupportedPackedArithSignature(getOpKind(), getPackedType(),
-                                       operandPackedTypes)) {
+  if (!getPackedArithInstructionSpec(getOpKind(), getPackedType(),
+                                     operandPackedTypes)) {
     auto diag = emitOpError()
                 << "unsupported " << stringifyPackedArithOpKind(getOpKind())
                 << " signature " << stringifyPackedArithType(getPackedType())
@@ -389,9 +430,8 @@ LogicalResult PackedArithOp::verify() {
   if (failed(verifyPacking(tensorType, packWidth, "result layout")))
     return failure();
   for (auto [index, operand] : llvm::enumerate(getOperands())) {
-    unsigned width = isPackedArithFp4Type(operandPackedTypes[index])
-                         ? packWidth / 2
-                         : packWidth;
+    unsigned width =
+        getPackedArithTypeInfo(operandPackedTypes[index]).getStorageLaneCount();
     if (failed(verifyPacking(cast<RankedTensorType>(operand.getType()), width,
                              "operand layout")))
       return failure();

@@ -1,6 +1,7 @@
 import triton
 import triton.language as tl
 from triton.backends.compiler import GPUTarget
+import pytest
 import re
 from triton.compiler import ASTSource
 
@@ -19,6 +20,63 @@ def test_compile_only_sm100() -> None:
     assert ".target sm_100a" in ptx
     assert ".address_size 64" in ptx
     assert k.asm["cubin"] != b""
+
+
+@pytest.mark.parametrize("element_type", ["f32", "f16", "bf16"])
+def test_compile_only_packed_arith_chains(element_type, tmp_path) -> None:
+    packed_type = f"{element_type}x2"
+    tensor_type = f"tensor<256x{element_type}, #blocked>"
+    pointer_type = f"!tt.ptr<{element_type}>"
+    operations = [
+        ("add", "%av, %bv", 2),
+        ("sub", "%add, %bv", 2),
+        ("mul", "%sub, %bv", 2),
+        ("fma", "%mul, %bv, %cv", 3),
+    ]
+    if element_type != "f32":
+        operations.extend([("min", "%fma, %bv", 2), ("max", "%min, %cv", 2)])
+
+    instructions = []
+    for name, operands, operand_count in operations:
+        operand_types = ", ".join([packed_type] * operand_count)
+        tensor_types = ", ".join([tensor_type] * operand_count)
+        instructions.append(f"    %{name} = ttng.packed_arith {name}, {packed_type}, [{operand_types}], "
+                            f"{operands} axis = 0 : ({tensor_types}) -> {tensor_type}")
+    packed_operations = "\n".join(instructions)
+    result = operations[-1][0]
+    src = f"""
+#blocked = #ttg.blocked<{{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}}>
+module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32}} {{
+  tt.func public @packed_chain_{element_type}(%a: {pointer_type} {{tt.divisibility = 16 : i32}}, %b: {pointer_type} {{tt.divisibility = 16 : i32}}, %c: {pointer_type} {{tt.divisibility = 16 : i32}}, %out: {pointer_type} {{tt.divisibility = 16 : i32}}) attributes {{noinline = false}} {{
+    %offsets = tt.make_range {{start = 0 : i32, end = 256 : i32}} : tensor<256xi32, #blocked>
+    %ap = tt.splat %a : {pointer_type} -> tensor<256x{pointer_type}, #blocked>
+    %bp = tt.splat %b : {pointer_type} -> tensor<256x{pointer_type}, #blocked>
+    %cp = tt.splat %c : {pointer_type} -> tensor<256x{pointer_type}, #blocked>
+    %op = tt.splat %out : {pointer_type} -> tensor<256x{pointer_type}, #blocked>
+    %aa = tt.addptr %ap, %offsets : tensor<256x{pointer_type}, #blocked>, tensor<256xi32, #blocked>
+    %ba = tt.addptr %bp, %offsets : tensor<256x{pointer_type}, #blocked>, tensor<256xi32, #blocked>
+    %ca = tt.addptr %cp, %offsets : tensor<256x{pointer_type}, #blocked>, tensor<256xi32, #blocked>
+    %oa = tt.addptr %op, %offsets : tensor<256x{pointer_type}, #blocked>, tensor<256xi32, #blocked>
+    %av = tt.load %aa : tensor<256x{pointer_type}, #blocked>
+    %bv = tt.load %ba : tensor<256x{pointer_type}, #blocked>
+    %cv = tt.load %ca : tensor<256x{pointer_type}, #blocked>
+{packed_operations}
+    tt.store %oa, %{result} : tensor<256x{pointer_type}, #blocked>
+    tt.return
+  }}
+}}
+"""
+    source_file = tmp_path / f"packed_chain_{element_type}.ttgir"
+    source_file.write_text(src)
+    ptx = triton.compile(str(source_file), target=GPUTarget("cuda", 100, 32)).asm["ptx"]
+    pattern = re.compile(
+        rf"^\s*(?P<operation>add|sub|mul|fma|min|max)\.(?:rn\.)?{packed_type}\s+"
+        r"(?P<output>%\w+),\s*(?P<input>%\w+)", re.MULTILINE)
+    emitted_operations = list(pattern.finditer(ptx))
+    assert [match.group("operation") for match in emitted_operations] == [name for name, _, _ in operations]
+    for previous, current in zip(emitted_operations, emitted_operations[1:]):
+        assert current.group("input") == previous.group("output")
+    assert "prmt.b32" not in ptx
 
 
 def test_compile_only_ws_cluster_barrier_shared_memory(tmp_path) -> None:

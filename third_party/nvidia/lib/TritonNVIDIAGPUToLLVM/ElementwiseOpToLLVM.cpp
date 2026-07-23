@@ -658,21 +658,6 @@ struct ExpOpConversionApprox
   }
 };
 
-static bool isPackedArithX2Type(nvidia_gpu::PackedArithType packedType) {
-  return packedType == nvidia_gpu::PackedArithType::F32X2 ||
-         packedType == nvidia_gpu::PackedArithType::F16X2 ||
-         packedType == nvidia_gpu::PackedArithType::BF16X2;
-}
-
-static unsigned getPackedArithWidth(nvidia_gpu::PackedArithType packedType) {
-  return isPackedArithX2Type(packedType) ? 2 : 4;
-}
-
-static bool isPackedArithFp4Type(nvidia_gpu::PackedArithType packedType) {
-  return packedType == nvidia_gpu::PackedArithType::E2M1X4 ||
-         packedType == nvidia_gpu::PackedArithType::E2M1P4X4;
-}
-
 static StringRef getPackedArithConstraint(unsigned registerBitWidth,
                                           bool isOutput) {
   switch (registerBitWidth) {
@@ -691,61 +676,15 @@ static SmallVector<StringRef> getPackedArithInstructionOptions(
     nvidia_gpu::PackedArithOp op,
     ArrayRef<nvidia_gpu::PackedArithType> operandTypes) {
   SmallVector<StringRef> options;
-  auto opKind = op.getOpKind();
-  auto resultType = op.getPackedType();
-
-  if (!isPackedArithX2Type(resultType)) {
-    options.push_back(stringifyPackedArithType(resultType));
-    options.push_back(stringifyPackedArithType(operandTypes[0]));
-    if (opKind == nvidia_gpu::PackedArithOpKind::MUL ||
-        opKind == nvidia_gpu::PackedArithOpKind::FMA) {
-      options.push_back(stringifyPackedArithType(operandTypes[1]));
-    }
-    return options;
-  }
-
-  bool isHomogeneous =
-      llvm::all_of(operandTypes, [&](nvidia_gpu::PackedArithType packedType) {
-        return packedType == resultType;
-      });
-  if (isHomogeneous) {
-    if (opKind == nvidia_gpu::PackedArithOpKind::FMA)
-      options.push_back("rn");
-    options.push_back(stringifyPackedArithType(resultType));
-    return options;
-  }
-
-  switch (opKind) {
-  case nvidia_gpu::PackedArithOpKind::ADD:
-  case nvidia_gpu::PackedArithOpKind::SUB:
-    if (resultType != nvidia_gpu::PackedArithType::F32X2)
-      options.push_back("rz");
-    if (resultType == nvidia_gpu::PackedArithType::F16X2)
-      options.push_back("ftz");
-    options.push_back(stringifyPackedArithType(resultType));
-    options.push_back(stringifyPackedArithType(operandTypes[0]));
-    options.push_back(stringifyPackedArithType(operandTypes[1]));
-    break;
-  case nvidia_gpu::PackedArithOpKind::MUL:
-    if (operandTypes[0] == nvidia_gpu::PackedArithType::F32X2) {
-      if (resultType == nvidia_gpu::PackedArithType::F16X2)
-        options.push_back("ftz");
-      options.push_back("rz");
-    }
-    options.push_back(stringifyPackedArithType(resultType));
-    options.push_back(stringifyPackedArithType(operandTypes[0]));
-    options.push_back(stringifyPackedArithType(operandTypes[1]));
-    break;
-  case nvidia_gpu::PackedArithOpKind::FMA:
-    options.push_back("rn");
-    options.push_back(stringifyPackedArithType(resultType));
-    for (nvidia_gpu::PackedArithType operandType : operandTypes)
-      options.push_back(stringifyPackedArithType(operandType));
-    break;
-  case nvidia_gpu::PackedArithOpKind::MIN:
-  case nvidia_gpu::PackedArithOpKind::MAX:
-    llvm_unreachable("mixed packed min/max is unsupported");
-  }
+  auto instruction = nvidia_gpu::getPackedArithInstructionSpec(
+      op.getOpKind(), op.getPackedType(), operandTypes);
+  assert(instruction && "unsupported packed arithmetic instruction");
+  if (!instruction->modifiers.empty())
+    instruction->modifiers.split(options, '.');
+  options.push_back(stringifyPackedArithType(op.getPackedType()));
+  for (nvidia_gpu::PackedArithType type :
+       operandTypes.take_front(instruction->explicitOperandTypes))
+    options.push_back(stringifyPackedArithType(type));
   return options;
 }
 
@@ -754,15 +693,12 @@ static Value packPackedArithOperand(Location loc,
                                     nvidia_gpu::PackedArithType packedType,
                                     ArrayRef<Value> values, unsigned base) {
   TritonLLVMOpBuilder b(loc, rewriter);
-  unsigned packWidth = getPackedArithWidth(packedType);
-  unsigned registerBitWidth =
-      packedType == nvidia_gpu::PackedArithType::E2M1X4 ? 16
-      : packedType == nvidia_gpu::PackedArithType::E2M1P4X4
-          ? 32
-          : packWidth * values[base].getType().getIntOrFloatBitWidth();
-  Type packedTypeLLVM = int_ty(registerBitWidth);
+  const nvidia_gpu::PackedArithTypeInfo &typeInfo =
+      nvidia_gpu::getPackedArithTypeInfo(packedType);
+  unsigned packWidth = typeInfo.laneCount;
+  Type packedTypeLLVM = int_ty(typeInfo.registerBitWidth);
 
-  if (packedType == nvidia_gpu::PackedArithType::E2M1X4) {
+  if (typeInfo.storageKind == nvidia_gpu::PackedArithStorageKind::CompactFP4) {
     // Triton stores two e2m1 values per i8, so two bytes form e2m1x4.
     Type vectorType = vec_ty(i8_ty, 2);
     Value vector = b.undef(vectorType);
@@ -772,7 +708,7 @@ static Value packPackedArithOperand(Location loc,
     return b.bitcast(vector, packedTypeLLVM);
   }
 
-  if (packedType == nvidia_gpu::PackedArithType::E2M1P4X4) {
+  if (typeInfo.storageKind == nvidia_gpu::PackedArithStorageKind::PaddedFP4) {
     // Expand two compact fp4 bytes to four zero-padded fp4 bytes.
     Type vectorType = vec_ty(i8_ty, packWidth);
     Value vector = b.undef(vectorType);
@@ -808,7 +744,9 @@ struct PackedArithOpConversion
     Location loc = op.getLoc();
     auto tensorType = op.getResult().getType();
     unsigned axis = op.getAxis();
-    unsigned packWidth = getPackedArithWidth(op.getPackedType());
+    const nvidia_gpu::PackedArithTypeInfo &resultInfo =
+        nvidia_gpu::getPackedArithTypeInfo(op.getPackedType());
+    unsigned packWidth = resultInfo.laneCount;
     auto resultOrder = nvidia_gpu::PackedArithOp::getRegisterOrder(
         tensorType, axis, packWidth);
     if (!resultOrder)
@@ -825,8 +763,8 @@ struct PackedArithOpConversion
     SmallVector<unsigned> operandPackWidths;
     for (auto [index, operand] : llvm::enumerate(adaptor.getOperands())) {
       unsigned operandPackWidth =
-          isPackedArithFp4Type(operandPackedTypes[index]) ? packWidth / 2
-                                                          : packWidth;
+          nvidia_gpu::getPackedArithTypeInfo(operandPackedTypes[index])
+              .getStorageLaneCount();
       auto operandType =
           cast<RankedTensorType>(op.getOperands()[index].getType());
       auto order = nvidia_gpu::PackedArithOp::getRegisterOrder(
@@ -846,8 +784,7 @@ struct PackedArithOpConversion
 
     Type resultElementType =
         this->getTypeConverter()->convertType(tensorType.getElementType());
-    unsigned resultBitWidth =
-        packWidth * resultElementType.getIntOrFloatBitWidth();
+    unsigned resultBitWidth = resultInfo.registerBitWidth;
     Type resultPackedType = int_ty(resultBitWidth);
     Type resultVectorType = vec_ty(resultElementType, packWidth);
     StringRef outputConstraint =
