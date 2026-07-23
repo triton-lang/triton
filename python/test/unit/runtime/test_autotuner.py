@@ -263,6 +263,53 @@ def test_prune_configs_fractional_top_k_keeps_one(device: str):
     torch.testing.assert_close(src, dst)
 
 
+def test_prune_configs_fractional_top_k_after_early_prune():
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': block_size}) for block_size in range(1, 11)]
+    estimated = []
+    launched = []
+    benchmarked = []
+
+    class Kernel:
+
+        def __init__(self):
+            self.fn = lambda: None
+
+        def run(self, **kwargs):
+            launched.append(kwargs['BLOCK_SIZE'])
+
+    def do_bench(kernel_call, quantiles):
+        kernel_call()
+        benchmarked.append(launched[-1])
+        return [launched[-1]] * 3
+
+    def early_config_prune(configs, named_args, **kwargs):
+        return configs[:6]
+
+    def perf_model(*args, **kwargs):
+        estimated.append(kwargs['BLOCK_SIZE'])
+        return kwargs['BLOCK_SIZE']
+
+    tuner = triton.runtime.Autotuner(
+        Kernel(),
+        arg_names=[],
+        configs=configs,
+        key=[],
+        reset_to_zero=None,
+        restore_value=None,
+        do_bench=do_bench,
+        prune_configs_by={
+            'early_config_prune': early_config_prune,
+            'perf_model': perf_model,
+            'top_k': 0.5,
+        },
+    )
+
+    tuner.run()
+
+    assert estimated == list(range(1, 7))
+    assert benchmarked == [1, 2, 3]
+
+
 def test_config_ir_override_changes_disk_cache_key():
     # Autotuner derives persisted result-cache keys from Config.__str__().
     first = triton.Config(kwargs={"BLOCK_SIZE": 32}, ir_override="first.ttir")

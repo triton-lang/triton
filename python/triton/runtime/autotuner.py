@@ -295,7 +295,7 @@ class Autotuner(KernelInterface):
                 # set rounds down to zero, which would prune everything and crash
                 # the later min() on an empty set. early_config_prune already
                 # guarantees at least one config; mirror that here.
-                top_k = max(1, int(len(self.configs) * top_k))
+                top_k = max(1, int(len(pruned_configs) * top_k))
             elif not isinstance(top_k, int):
                 # Slice index must be an integer
                 raise TypeError("Error while pruning configs, top_k must be either 1) a float <= 1.0 or 2) an int")

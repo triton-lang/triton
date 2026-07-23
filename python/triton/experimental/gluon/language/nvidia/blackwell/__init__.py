@@ -371,7 +371,7 @@ class tensor_memory_descriptor(base_value):
         Args:
             start (int): The starting index for subslice.
             length (int): The length of the subslice.
-            dim (int): The dimension to slice (default: 1).
+            dim (int): The dimension to slice, including a leading pipeline-stage dimension (default: 1).
 
         Returns:
             tensor_memory_descriptor: Descriptor for the subslice.
@@ -381,7 +381,7 @@ class tensor_memory_descriptor(base_value):
         dim = _unwrap_if_constexpr(dim)
         _check(isinstance(start, int), lambda: "start must be a constant int")
         _check(isinstance(length, int), lambda: "length must be a constant int")
-        _check(isinstance(dim, int) and dim in (0, 1), lambda: "dim must be 0 or 1")
+        _check(isinstance(dim, int) and dim in range(len(self.shape)), lambda: "invalid slice dimension")
         shape = list(self.shape)
         shape[dim] = length
         layout = self.type.layout

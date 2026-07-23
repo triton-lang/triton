@@ -36,22 +36,13 @@ uint64_t getAllocationOffset(ttng::TMEMAllocOp op) {
   return colOffset | (rowOffset << 16);
 }
 
-unsigned getMemDescSize(ttg::MemDescType ty) {
-  if (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace())) {
-    return ttng::getTmemAllocSizes(ty).numCols;
-  }
-  assert(isa<ttg::SharedMemorySpaceAttr>(ty.getMemorySpace()) &&
-         "Unsupported memory space");
-  unsigned elSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
-  return product(ttg::getShapePerCTA(ty)) * elSize;
-}
-
 unsigned getAllocSize(ttg::LocalAllocOp op) {
-  return getMemDescSize(op.getType());
-}
-
-unsigned getAllocSize(ttng::TMEMAllocOp op) {
-  return getMemDescSize(op.getType());
+  auto type = op.getType();
+  int64_t numElems =
+      ttg::getAllocationElems(type.getEncoding(), type.getAllocShape());
+  if (auto padded = ttg::getPaddedEncoding(type.getEncoding()))
+    numElems = padded.getPaddedSize({numElems});
+  return numElems * type.getElementType().getIntOrFloatBitWidth() / 8;
 }
 
 unsigned getNumBuffers(ttg::MemDescIndexOp memdescIndexOp) {
@@ -97,6 +88,8 @@ FailureOr<uint32_t> getMemDescSubsliceByteOffset(ttg::MemDescSubsliceOp op) {
     return 0;
 
   Attribute encoding = srcTy.getEncoding();
+  auto layoutOffsets = ttg::dropPipeliningDim(offsets, encoding);
+  auto layoutRank = layoutOffsets.size();
   mlir::triton::LinearLayout layout;
   if (auto padded = dyn_cast<ttg::PaddedSharedEncodingAttr>(encoding)) {
     layout = padded.getLinearComponent();
@@ -106,16 +99,16 @@ FailureOr<uint32_t> getMemDescSubsliceByteOffset(ttg::MemDescSubsliceOp op) {
 
   MLIRContext *ctx = op->getContext();
   SmallVector<StringAttr> dimNames =
-      mlir::triton::standardOutDimNames(ctx, srcTy.getRank());
+      mlir::triton::standardOutDimNames(ctx, layoutRank);
   SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
-  logicalOffsets.reserve(offsets.size());
-  for (auto &&[dimName, offset] : llvm::zip_equal(dimNames, offsets)) {
+  logicalOffsets.reserve(layoutRank);
+  for (auto &&[dimName, offset] : llvm::zip_equal(dimNames, layoutOffsets)) {
     logicalOffsets.push_back({dimName, static_cast<int32_t>(offset)});
   }
 
   StringAttr offsetDim = StringAttr::get(ctx, "offset");
   StringAttr blockDim = StringAttr::get(ctx, "block");
-  mlir::triton::LinearLayout inverse = layout.invert();
+  mlir::triton::LinearLayout inverse = layout.pseudoinvert();
   auto mapped = inverse.apply(logicalOffsets);
   if (mapped.size() != 2 || mapped[0].first != offsetDim ||
       mapped[1].first != blockDim) {
@@ -129,31 +122,19 @@ FailureOr<uint32_t> getMemDescSubsliceByteOffset(ttg::MemDescSubsliceOp op) {
     return failure();
   }
   uint64_t elementOffset = static_cast<uint32_t>(mapped[0].second);
+  if (offsets.size() != layoutRank) {
+    uint64_t stride = ttg::getAllocationElems(
+        encoding, ttg::dropPipeliningDim(srcTy.getAllocShape(), encoding));
+    elementOffset += static_cast<uint64_t>(offsets.front()) * stride;
+  }
+
+  if (auto padded = ttg::getPaddedEncoding(encoding))
+    elementOffset = padded.getPaddedSize({int64_t(elementOffset + 1)}) - 1;
 
   uint64_t elementSizeBytes =
       srcTy.getElementType().getIntOrFloatBitWidth() / 8;
   assert(elementSizeBytes > 0 && "element size must be non-zero");
   uint64_t byteOffset = elementOffset * elementSizeBytes;
-
-  if (auto padded = dyn_cast<ttg::PaddedSharedEncodingAttr>(encoding)) {
-    uint64_t padBytes = 0;
-    for (auto &&[interval, padding] :
-         llvm::zip_equal(padded.getIntervals(), padded.getPaddings())) {
-      if (interval == 0 || padding == 0)
-        continue;
-      uint64_t intervalScaled =
-          static_cast<uint64_t>(interval) * elementSizeBytes;
-      uint64_t paddingScaled =
-          static_cast<uint64_t>(padding) * elementSizeBytes;
-      assert(llvm::isPowerOf2_64(intervalScaled) &&
-             llvm::isPowerOf2_64(paddingScaled) &&
-             "interval and padding must be powers of two in bytes");
-      unsigned intervalLog2 = llvm::Log2_64(intervalScaled);
-      unsigned paddingLog2 = llvm::Log2_64(paddingScaled);
-      padBytes += (byteOffset >> intervalLog2) << paddingLog2;
-    }
-    byteOffset += padBytes;
-  }
 
   assert(byteOffset <= std::numeric_limits<uint32_t>::max() &&
          "memdesc_subslice offset exceeds 32-bit range");
@@ -225,7 +206,7 @@ LogicalResult BufferRegionAnalysis::visitOperation(
   }
   if (auto tmemAllocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
     uint32_t offset = getAllocationOffset(tmemAllocOp);
-    uint32_t size = getAllocSize(tmemAllocOp);
+    uint32_t size = ttng::getTmemAllocSizes(tmemAllocOp.getType()).numCols;
     regionInfo.regions.insert({offset, size});
 
     for (auto *r : results) {
@@ -236,11 +217,25 @@ LogicalResult BufferRegionAnalysis::visitOperation(
   if (auto memdescIndexOp = dyn_cast<ttg::MemDescIndexOp>(op)) {
     RegionInfo in = operands[0]->getValue();
     int numSubBuffers = getNumBuffers(memdescIndexOp);
+    auto type = memdescIndexOp.getType();
+    bool isTmem = isa<ttng::TensorMemorySpaceAttr>(type.getMemorySpace());
+    uint32_t elementSize =
+        isTmem ? 1 : type.getElementType().getIntOrFloatBitWidth() / 8;
+    uint64_t stageElems =
+        isTmem ? ttng::getTmemAllocSizes(type).numCols
+               : ttg::getAllocationElems(type.getEncoding(), type.getShape(),
+                                         type.getAllocShape());
+    auto padded = ttg::getPaddedEncoding(type.getEncoding());
+    uint64_t stageSize =
+        padded ? padded.getPaddedSize({int64_t(stageElems)}) : stageElems;
     for (auto &region : in.regions) {
       for (int i = 0; i < numSubBuffers; i++) {
-        uint32_t subBufferSize = getMemDescSize(memdescIndexOp.getType());
+        uint64_t offset = i * stageElems;
+        if (padded)
+          offset = padded.getPaddedSize({int64_t(offset + 1)}) - 1;
         regionInfo.regions.insert(
-            {region.baseOffset + i * subBufferSize, subBufferSize});
+            {region.baseOffset + static_cast<uint32_t>(offset * elementSize),
+             static_cast<uint32_t>(stageSize * elementSize)});
       }
     }
 
@@ -251,7 +246,13 @@ LogicalResult BufferRegionAnalysis::visitOperation(
   }
   if (auto memdescSubsliceOp = dyn_cast<ttg::MemDescSubsliceOp>(op)) {
     RegionInfo in = operands[0]->getValue();
-    uint32_t subBufferSize = getMemDescSize(memdescSubsliceOp.getType());
+    auto type = memdescSubsliceOp.getType();
+    uint64_t numElems = ttg::getAllocationElems(
+        type.getEncoding(), type.getShape(), type.getAllocShape());
+    if (auto padded = ttg::getPaddedEncoding(type.getEncoding()))
+      numElems = padded.getPaddedSize({int64_t(numElems)});
+    uint32_t subBufferSize =
+        numElems * type.getElementType().getIntOrFloatBitWidth() / 8;
     FailureOr<uint32_t> relativeOffset =
         getMemDescSubsliceByteOffset(memdescSubsliceOp);
     if (failed(relativeOffset))
@@ -267,7 +268,15 @@ LogicalResult BufferRegionAnalysis::visitOperation(
   }
   if (auto tmemSubsliceOp = dyn_cast<ttng::TMEMSubSliceOp>(op)) {
     RegionInfo in = operands[0]->getValue();
-    uint32_t subBufferSize = getMemDescSize(tmemSubsliceOp.getType());
+    auto type = tmemSubsliceOp.getType();
+    uint64_t stages = product(type.getShape().drop_back(
+        ttg::dropPipeliningDim(type.getShape(), type.getEncoding()).size()));
+    uint32_t subBufferSize = ttng::getTmemAllocSizes(type).numCols;
+    if (stages > 1) {
+      uint32_t stageCols =
+          ttng::getTMemSubSliceOffset(type, /*offset=*/1, /*dim=*/0);
+      subBufferSize = (stages - 1) * stageCols + subBufferSize / stages;
+    }
     uint32_t relativeOffset = ttng::getTMemSubSliceOffset(
         tmemSubsliceOp.getSrc().getType(), tmemSubsliceOp.getOffset(),
         tmemSubsliceOp.getDim());
@@ -278,6 +287,24 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     for (auto *r : results) {
       propagateIfChanged(r, r->join(regionInfo));
     }
+    return success();
+  }
+  if (auto reinterpretOp = dyn_cast<ttg::MemDescReinterpretOp>(op)) {
+    auto type = reinterpretOp.getType();
+    uint32_t size;
+    if (isa<ttng::TensorMemorySpaceAttr>(type.getMemorySpace())) {
+      size = ttng::getTmemAllocSizes(type).numCols;
+    } else {
+      uint64_t numElems = ttg::getAllocationElems(
+          type.getEncoding(), type.getShape(), type.getAllocShape());
+      if (auto padded = ttg::getPaddedEncoding(type.getEncoding()))
+        numElems = padded.getPaddedSize({int64_t(numElems)});
+      size = numElems * type.getElementType().getIntOrFloatBitWidth() / 8;
+    }
+    for (auto &region : operands[0]->getValue().regions)
+      regionInfo.regions.insert({region.baseOffset, size});
+    for (auto *result : results)
+      propagateIfChanged(result, result->join(regionInfo));
     return success();
   }
   if (auto selectOp = dyn_cast<arith::SelectOp>(op)) {
@@ -291,8 +318,7 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     }
   }
   // "Passthrough" ops that don't modify the buffer regions.
-  if (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp,
-          ttg::MemDescReinterpretOp>(op)) {
+  if (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp>(op)) {
     // Just propagate the regions from the operand.
     RegionInfo in = operands[0]->getValue();
     for (auto &region : in.regions) {

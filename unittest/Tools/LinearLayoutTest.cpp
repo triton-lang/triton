@@ -717,6 +717,23 @@ TEST_F(LinearLayoutTest, NumConsecutiveInOut) {
                    .getNumConsecutiveInOut());
 }
 
+TEST_F(LinearLayoutTest, ContiguousElemsAlongOutputDim) {
+  EXPECT_EQ(8, LinearLayout::identity1D(8, S("offset"), S("offset"))
+                   .contiguousElemsAlongOutputDim(S("offset")));
+  EXPECT_EQ(1, LinearLayout({{S("logical"), {{3}}}}, {{S("offset"), 4}},
+                            /*requireSurjective=*/false)
+                   .contiguousElemsAlongOutputDim(S("offset")));
+  EXPECT_EQ(4,
+            LinearLayout({{S("lhs"), {{3}}}, {S("rhs"), {{1}}}}, {S("offset")})
+                .contiguousElemsAlongOutputDim(S("offset")));
+  EXPECT_EQ(2, LinearLayout({{S("logical"), {{1}, {4}}}}, {{S("offset"), 8}},
+                            /*requireSurjective=*/false)
+                   .contiguousElemsAlongOutputDim(S("offset")));
+  EXPECT_EQ(8, LinearLayout({{S("logical"), {{1}, {4}}}, {S("free"), {{2}}}},
+                            {S("offset")})
+                   .contiguousElemsAlongOutputDim(S("offset")));
+}
+
 TEST_F(LinearLayoutTest, EqualsChecksOutDimSizes) {
   EXPECT_FALSE(LinearLayout::identity1D(4, S("in"), S("out")) ==
                LinearLayout({{S("in"), {{1}, {2}}}}, {{S("out"), 8}},

@@ -102,6 +102,9 @@ llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 :
 // CHECK: llvm.func internal @inner_func_nw4_ws(%arg0: i32)
 llvm.func internal @inner_func_nw4() attributes {"ws_num_warps" = 4 : i32} {
   // CHECK: [[C128:%.*]] = llvm.mlir.constant(128 : i32)
+  // CHECK: "use.barrier_id"(%arg0) : (i32) -> ()
+  %barrier_id = nvg.warp_group_barrier_id
+  "use.barrier_id"(%barrier_id) : (i32) -> ()
   // CHECK: nvvm.barrier id = %arg0 number_of_threads = [[C128]]
   // CHECK: llvm.call @inner_func_nw4_ws(%arg0) : (i32) -> ()
   nvvm.barrier
