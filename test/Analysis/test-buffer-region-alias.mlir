@@ -44,6 +44,28 @@ module attributes {test.print_state_plan, test.state_plan_only} {
 
 // -----
 
+// Nested partial overlaps must retain the original first-address lane order.
+// expected-remark @below {{state-plan: lanes=5}}
+// expected-remark @below {{a_first case [0, 8]: mask={0,1,2}}}
+// expected-remark @below {{b_second case [4, 8]: mask={1,2,3,4}}}
+// expected-remark @below {{c_third case [6, 4]: mask={2,3}}}
+module attributes {test.print_state_plan, test.state_plan_only} {
+  tt.func private @first() attributes {
+    test.region_name = "a_first",
+    test.region_addresses = array<i32: 0, 1, 2, 3, 4, 5, 6, 7>
+  }
+  tt.func private @second() attributes {
+    test.region_name = "b_second",
+    test.region_addresses = array<i32: 4, 5, 6, 7, 8, 9, 10, 11>
+  }
+  tt.func private @third() attributes {
+    test.region_name = "c_third",
+    test.region_addresses = array<i32: 6, 7, 8, 9>
+  }
+}
+
+// -----
+
 // Direct address sets isolate the relation algebra from layout construction.
 // These cover aligned, adjacent, overlapping, contained, and non-power-of-two
 // regions.

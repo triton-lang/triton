@@ -379,6 +379,16 @@ void AddressSet::insert(const AddressSet &other) {
   addresses |= other.addresses;
 }
 
+AddressSet AddressSet::intersection(const AddressSet &other) const {
+  AddressSet result = *this;
+  result.addresses &= other.addresses;
+  return result;
+}
+
+void AddressSet::subtract(const AddressSet &other) {
+  addresses.intersectWithComplement(other.addresses);
+}
+
 bool AddressSet::contains(uint32_t address) const {
   return addresses.test(address);
 }
@@ -434,22 +444,45 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions) {
     SmallVector<unsigned> regionIds;
     SmallVector<llvm::SmallBitVector> atomMemberships;
   };
+  using Atom = std::pair<AddressSet, llvm::SmallBitVector>;
   SmallVector<ComponentPlan> componentPlans;
   for (const SmallVector<unsigned> &component : components) {
-    AddressSet componentAddresses;
-    for (unsigned regionId : component)
-      componentAddresses.insert(regions[regionId].addresses);
+    SmallVector<Atom> atoms;
+    for (auto [localId, regionId] : llvm::enumerate(component)) {
+      AddressSet uncovered = regions[regionId].addresses;
+      for (size_t atomId = 0, atomCount = atoms.size();
+           atomId < atomCount && !uncovered.empty(); ++atomId) {
+        auto &[addresses, atomMembership] = atoms[atomId];
+        AddressSet overlap = addresses.intersection(uncovered);
+        if (overlap.empty())
+          continue;
+
+        uncovered.subtract(overlap);
+        if (addresses == overlap) {
+          atomMembership.set(localId);
+          continue;
+        }
+
+        llvm::SmallBitVector membership = atomMembership;
+        membership.set(localId);
+        addresses.subtract(overlap);
+        atoms.push_back({std::move(overlap), std::move(membership)});
+      }
+
+      if (!uncovered.empty()) {
+        llvm::SmallBitVector membership(component.size());
+        membership.set(localId);
+        atoms.push_back({std::move(uncovered), std::move(membership)});
+      }
+    }
+
+    // Preserve the original lane order by each atom's first address.
+    llvm::sort(atoms, llvm::less_first());
 
     SmallVector<llvm::SmallBitVector> atomMemberships;
-    for (uint32_t address : componentAddresses) {
-      llvm::SmallBitVector membership(component.size());
-      for (auto [localId, regionId] : llvm::enumerate(component))
-        if (regions[regionId].addresses.contains(address))
-          membership.set(localId);
-      if (llvm::is_contained(atomMemberships, membership))
-        continue;
-      atomMemberships.push_back(std::move(membership));
-    }
+    atomMemberships.reserve(atoms.size());
+    for (Atom &atom : atoms)
+      atomMemberships.push_back(std::move(atom.second));
 
     plan.numLanes += atomMemberships.size();
     componentPlans.push_back({component, std::move(atomMemberships)});

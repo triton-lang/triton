@@ -43,21 +43,26 @@ TEST(Analysis, AddressSetMembership) {
 
 TEST(Analysis, AddressSetExhaustiveEightUnitUniverse) {
   constexpr unsigned universe = 8;
-  for (unsigned lhsMask = 0; lhsMask < (1u << universe); ++lhsMask) {
-    SmallVector<uint32_t> lhsAddresses;
+  auto fromMask = [](unsigned mask) {
+    triton::AddressSet result;
     for (unsigned bit = 0; bit < universe; ++bit)
-      if (lhsMask & (1u << bit))
-        lhsAddresses.push_back(bit);
-    triton::AddressSet lhs = triton::AddressSet::fromAddresses(lhsAddresses);
+      if (mask & (1u << bit))
+        result.set(bit);
+    return result;
+  };
+
+  for (unsigned lhsMask = 0; lhsMask < (1u << universe); ++lhsMask) {
+    triton::AddressSet lhs = fromMask(lhsMask);
 
     for (unsigned rhsMask = 0; rhsMask < (1u << universe); ++rhsMask) {
-      SmallVector<uint32_t> rhsAddresses;
-      for (unsigned bit = 0; bit < universe; ++bit)
-        if (rhsMask & (1u << bit))
-          rhsAddresses.push_back(bit);
-      triton::AddressSet rhs = triton::AddressSet::fromAddresses(rhsAddresses);
+      triton::AddressSet rhs = fromMask(rhsMask);
       EXPECT_EQ(lhs.intersects(rhs), (lhsMask & rhsMask) != 0);
       EXPECT_EQ(lhs.contains(rhs), (rhsMask & ~lhsMask) == 0);
+      EXPECT_EQ(lhs.intersection(rhs), fromMask(lhsMask & rhsMask));
+
+      triton::AddressSet difference = lhs;
+      difference.subtract(rhs);
+      EXPECT_EQ(difference, fromMask(lhsMask & ~rhsMask));
     }
   }
 }
@@ -86,6 +91,17 @@ uint64_t toBits(const llvm::SmallBitVector &mask) {
     if (mask.test(bit))
       result |= uint64_t{1} << bit;
   return result;
+}
+
+void expectFullCoveragePartition(ArrayRef<triton::BufferRegion> regions) {
+  ASSERT_EQ(regions.size(), 64u);
+  triton::BufferStatePlan plan = triton::createBufferStatePlan(regions);
+  ASSERT_EQ(plan.numLanes, 64u);
+  ASSERT_EQ(plan.regionMasks.size(), regions.size());
+  EXPECT_EQ(toBits(plan.regionMasks.front()), ~uint64_t{0});
+  for (unsigned tile = 0; tile < 63; ++tile)
+    EXPECT_EQ(toBits(plan.regionMasks[tile + 1]), uint64_t{1} << tile)
+        << "tile " << tile;
 }
 
 triton::BufferRegion makeRegion(unsigned id, unsigned addressMask,
@@ -211,6 +227,39 @@ TEST(Analysis, BufferStatePlanKeepsPartialOverlapExact) {
   EXPECT_EQ(toBits(plan.regionMasks[1]), 0b110);
   EXPECT_TRUE(planNeverMissesHazard({0b0011, 0b0110}, 4));
   EXPECT_TRUE(planPublishesEveryAliasingAtom({0b0011, 0b0110}, 4));
+}
+
+TEST(Analysis, BufferStatePlanKeepsLargePaddedIntervalsExact) {
+  constexpr uint32_t tileCount = 64;
+  constexpr uint32_t tileLength = 3648;
+  SmallVector<triton::BufferRegion> regions;
+  regions.reserve(tileCount);
+  regions.emplace_back(0, tileCount * tileLength);
+  for (uint32_t tile = 0; tile < tileCount - 1; ++tile)
+    regions.emplace_back(tile * tileLength, tileLength);
+
+  expectFullCoveragePartition(regions);
+}
+
+TEST(Analysis, BufferStatePlanKeepsLargeSparsePartitionsExact) {
+  constexpr uint32_t tileCount = 64;
+  constexpr uint32_t stripeCount = 4;
+  constexpr uint32_t stripeLength = 912;
+  constexpr uint32_t tileLength = stripeCount * stripeLength;
+  SmallVector<triton::BufferRegion> regions;
+  regions.reserve(tileCount);
+  regions.emplace_back(0, tileCount * tileLength);
+
+  for (uint32_t tile = 0; tile < tileCount - 1; ++tile) {
+    triton::AddressSet addresses;
+    for (uint32_t stripe = 0; stripe < stripeCount; ++stripe)
+      addresses.insert(triton::AddressSet::fromRange(
+          (stripe * tileCount + tile) * stripeLength, stripeLength));
+    regions.emplace_back(tile * stripeLength, tileLength, std::move(addresses),
+                         /*storageBase=*/0, /*affineOffset=*/0);
+  }
+
+  expectFullCoveragePartition(regions);
 }
 
 } // namespace mlir

@@ -30,6 +30,8 @@ public:
 
   void set(uint32_t address);
   void insert(const AddressSet &other);
+  AddressSet intersection(const AddressSet &other) const;
+  void subtract(const AddressSet &other);
 
   auto begin() const { return addresses.begin(); }
   auto end() const { return addresses.end(); }
