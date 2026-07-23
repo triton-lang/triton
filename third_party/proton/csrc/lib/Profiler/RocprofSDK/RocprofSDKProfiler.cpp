@@ -980,7 +980,10 @@ void registerRoctxCallback(bool enable) {
   // case dlsym(RTLD_DEFAULT, "roctxRegisterTracerCallback") does not find the
   // callback registration entry point, but resolving it from the library handle
   // does.
-  void *roctxLib = dlopen("libroctx64.so", RTLD_NOLOAD | RTLD_NOW);
+  auto roctxPath = getStrEnv("TRITON_ROCTX_LIB_PATH");
+  const char *roctxLibrary =
+      roctxPath.empty() ? "libroctx64.so" : roctxPath.c_str();
+  void *roctxLib = dlopen(roctxLibrary, RTLD_NOLOAD | RTLD_NOW);
   if (!roctxLib)
     return;
   auto *fn = reinterpret_cast<RoctxRegisterTracerCallbackFn>(
