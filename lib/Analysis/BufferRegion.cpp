@@ -460,23 +460,18 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions) {
 
   unsigned laneBegin = 0;
   for (const ComponentPlan &componentPlan : componentPlans) {
-    BufferStateComponent component;
-    component.regionIds = componentPlan.regionIds;
-    component.laneBegin = laneBegin;
-    component.laneCount = componentPlan.atomMemberships.size();
-
     for (auto [atomId, membership] :
          llvm::enumerate(componentPlan.atomMemberships)) {
       unsigned lane = laneBegin + atomId;
-      for (auto [localId, regionId] : llvm::enumerate(component.regionIds)) {
+      for (auto [localId, regionId] :
+           llvm::enumerate(componentPlan.regionIds)) {
         if (!membership.test(localId))
           continue;
         plan.regionMasks[regionId].set(lane);
       }
     }
 
-    plan.components.push_back(std::move(component));
-    laneBegin += plan.components.back().laneCount;
+    laneBegin += componentPlan.atomMemberships.size();
   }
   assert(laneBegin == plan.numLanes);
   return plan;

@@ -111,18 +111,11 @@ struct BufferRegion {
 // Buffer state planning
 //===----------------------------------------------------------------------===//
 
-struct BufferStateComponent {
-  llvm::SmallVector<unsigned> regionIds;
-  unsigned laneBegin = 0;
-  unsigned laneCount = 0;
-};
-
 /// A compile-time plan for representing mutable ConSan state. Masks are
 /// indexed by the input region order and all have numLanes bits.
 struct BufferStatePlan {
   unsigned numLanes = 0;
   llvm::SmallVector<llvm::SmallBitVector> regionMasks;
-  llvm::SmallVector<BufferStateComponent> components;
 };
 
 BufferStatePlan createBufferStatePlan(llvm::ArrayRef<BufferRegion> regions);

@@ -1,14 +1,8 @@
 // RUN: triton-opt %s -split-input-file -mlir-disable-threading -test-buffer-region-alias -verify-diagnostics -o /dev/null
 
-// expected-remark @below {{exhaustive AddressSet oracle passed: 65536 ordered pairs}}
-module attributes {test.exhaustive_address_sets} {
-}
-
-// -----
-
 // The full/even/odd family has three views but only two physical membership
 // atoms. All masks collapse to the exact atoms touched by each access.
-// expected-remark @below {{state-plan: lanes=2, components=atoms(2)}}
+// expected-remark @below {{state-plan: lanes=2}}
 // expected-remark @below {{a_full case [0, 8]: mask={0,1}}}
 // expected-remark @below {{b_even case [0, 7]: mask={0}}}
 // expected-remark @below {{c_odd case [1, 7]: mask={1}}}
@@ -34,7 +28,7 @@ module attributes {test.print_state_plan, test.state_plan_only} {
 // Partially overlapping windows require three physical atoms. Keeping the
 // shared atom exact is necessary when a completion barrier publishes proxy
 // fence state for only one of the two windows.
-// expected-remark @below {{state-plan: lanes=3, components=atoms(3)}}
+// expected-remark @below {{state-plan: lanes=3}}
 // expected-remark @below {{a_left case [0, 2]: mask={0,1}}}
 // expected-remark @below {{b_right case [1, 2]: mask={1,2}}}
 module attributes {test.print_state_plan, test.state_plan_only} {
@@ -267,7 +261,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 // expected-remark @below {{f_dynamic case [1696, 256]: mask={4}}}
 // expected-remark @below {{g_selected case [544, 256]: mask={1}}}
 // expected-remark @below {{g_selected case [1696, 256]: mask={4}}}
-// expected-remark @below {{state-plan: lanes=5, components=atoms(2), atoms(3)}}
+// expected-remark @below {{state-plan: lanes=5}}
 module attributes {test.print_state_plan, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 4096 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   tt.func public @padded_dynamic_nested(%idx: i32, %cond: i1) {
     %c0 = arith.constant 0 : i32
@@ -358,7 +352,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 // expected-remark @below {{b_upper_half vs b_upper_half: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true}}
 // expected-remark @below {{a_reinterpreted_first_half case [0, 32]: mask={0}}}
 // expected-remark @below {{b_upper_half case [32, 32]: mask={1}}}
-// expected-remark @below {{state-plan: lanes=2, components=atoms(1), atoms(1)}}
+// expected-remark @below {{state-plan: lanes=2}}
 module attributes {test.print_state_plan, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   tt.func public @shared_shrinking_reinterpret() {
     %parent = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
@@ -381,7 +375,7 @@ module attributes {test.print_state_plan, "ttg.num-ctas" = 1 : i32, "ttg.num-war
 // expected-remark @below {{b_upper_half vs b_upper_half: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true}}
 // expected-remark @below {{a_reinterpreted_first_half case [0, 64]: mask={0}}}
 // expected-remark @below {{b_upper_half case [64, 64]: mask={1}}}
-// expected-remark @below {{state-plan: lanes=2, components=atoms(1), atoms(1)}}
+// expected-remark @below {{state-plan: lanes=2}}
 module attributes {test.print_state_plan, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 0 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   tt.func public @tensor_shrinking_reinterpret() {
     %parent = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>

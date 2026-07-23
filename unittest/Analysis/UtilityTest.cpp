@@ -185,7 +185,6 @@ TEST(Analysis, BufferStatePlanUsesAtomsForSparsePartition) {
     regions.push_back(makeRegion(id, mask, universe));
 
   triton::BufferStatePlan plan = triton::createBufferStatePlan(regions);
-  ASSERT_EQ(plan.components.size(), 1);
   EXPECT_EQ(plan.numLanes, 2);
 
   for (unsigned exactState = 0; exactState < (1u << universe); ++exactState) {
@@ -207,7 +206,6 @@ TEST(Analysis, BufferStatePlanKeepsPartialOverlapExact) {
       makeRegion(1, 0b0110, 4),
   };
   triton::BufferStatePlan plan = triton::createBufferStatePlan(regions);
-  ASSERT_EQ(plan.components.size(), 1);
   EXPECT_EQ(plan.numLanes, 3);
   EXPECT_EQ(toBits(plan.regionMasks[0]), 0b011);
   EXPECT_EQ(toBits(plan.regionMasks[1]), 0b110);

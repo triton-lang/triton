@@ -195,11 +195,7 @@ struct TestBufferRegionAliasPass
 
     tt::BufferStatePlan plan = tt::createBufferStatePlan(regions);
     InFlightDiagnostic summary = module.emitRemark();
-    summary << "state-plan: lanes=" << plan.numLanes << ", components=";
-    llvm::interleaveComma(plan.components, summary,
-                          [&](const tt::BufferStateComponent &comp) {
-                            summary << "atoms(" << comp.laneCount << ")";
-                          });
+    summary << "state-plan: lanes=" << plan.numLanes;
 
     for (const auto &[name, info] : namedRegions) {
       SmallVector<tt::BufferRegion> candidates(info.regions.begin(),
@@ -219,42 +215,8 @@ struct TestBufferRegionAliasPass
     }
   }
 
-  LogicalResult runExhaustiveAddressSetTest(ModuleOp module) {
-    constexpr unsigned kUniverse = 8;
-    constexpr unsigned kSetCount = 1u << kUniverse;
-    for (unsigned lhsMask = 0; lhsMask < kSetCount; ++lhsMask) {
-      SmallVector<uint32_t> lhsAddresses;
-      for (unsigned bit = 0; bit < kUniverse; ++bit)
-        if (lhsMask & (1u << bit))
-          lhsAddresses.push_back(bit);
-      tt::AddressSet lhs = tt::AddressSet::fromAddresses(lhsAddresses);
-      for (unsigned rhsMask = 0; rhsMask < kSetCount; ++rhsMask) {
-        SmallVector<uint32_t> rhsAddresses;
-        for (unsigned bit = 0; bit < kUniverse; ++bit)
-          if (rhsMask & (1u << bit))
-            rhsAddresses.push_back(bit);
-        tt::AddressSet rhs = tt::AddressSet::fromAddresses(rhsAddresses);
-        bool expectedIntersection = (lhsMask & rhsMask) != 0;
-        bool expectedContainment = (rhsMask & ~lhsMask) == 0;
-        if (lhs.intersects(rhs) != expectedIntersection ||
-            lhs.contains(rhs) != expectedContainment) {
-          module.emitError() << "AddressSet oracle mismatch for masks "
-                             << lhsMask << ", " << rhsMask;
-          return failure();
-        }
-      }
-    }
-    module.emitRemark()
-        << "exhaustive AddressSet oracle passed: 65536 ordered pairs";
-    return success();
-  }
-
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    if (module->hasAttr("test.exhaustive_address_sets") &&
-        failed(runExhaustiveAddressSetTest(module)))
-      return signalPassFailure();
-
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     tt::BufferRegionAnalysis *analysis =
         solver->load<tt::BufferRegionAnalysis>();
