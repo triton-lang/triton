@@ -1115,17 +1115,33 @@ LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
 }
 
 LinearLayout
+NvidiaMmaEncodingAttr::dotOperandToLinearLayout(Attribute dotOp,
+                                                ArrayRef<int64_t> shape) const {
+  return nvidiaDotToLinearLayout(shape, cast<DotOperandEncodingAttr>(dotOp));
+}
+
+LinearLayout
+AMDMfmaEncodingAttr::dotOperandToLinearLayout(Attribute dotOp,
+                                              ArrayRef<int64_t> shape) const {
+  return mfmaDotToLinearLayout(cast<DotOperandEncodingAttr>(dotOp), shape);
+}
+
+LinearLayout
+AMDWmmaEncodingAttr::dotOperandToLinearLayout(Attribute dotOp,
+                                              ArrayRef<int64_t> shape) const {
+  return wmmaDotOperandToLinearLayout(cast<DotOperandEncodingAttr>(dotOp),
+                                      shape);
+}
+
+LinearLayout
 DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto parent = getParent();
-  if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
+  if (mlir::isa<BlockedEncodingAttr>(parent))
     return fmaDotToLinearLayout(*this, shape);
-  } else if (auto mfmaLayout = mlir::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
-    return mfmaDotToLinearLayout(*this, shape);
-  } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
-    return wmmaDotOperandToLinearLayout(*this, shape);
-  } else {
-    return nvidiaDotToLinearLayout(shape, *this);
-  }
+  if (auto mma = mlir::dyn_cast<MmaEncodingTrait>(parent))
+    return mma.dotOperandToLinearLayout(*this, shape);
+  llvm::report_fatal_error(
+      "unexpected parent layout in DotOperandEncodingAttr::toLinearLayout");
 }
 
 LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {

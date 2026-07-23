@@ -1,5 +1,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 
+#include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/Location.h"
 #include "mlir/IR/MLIRContext.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -3663,6 +3665,52 @@ TEST_F(LinearLayoutConversionsTest,
           << dim0 << ", " << dim1 << "] with " << swizzleBytes << "B swizzle";
     }
   }
+}
+
+// A dot-operand parent may be any MmaEncodingTrait, including out-of-tree
+// layouts unknown to core. No such layout exists in-tree, so attach the
+// interface to a placeholder attribute (a test-only stand-in) and check both
+// seams. testExtMmaSentinel is what the stand-in returns, so the test can
+// confirm dispatch reached it.
+static LinearLayout testExtMmaSentinel(MLIRContext *ctx) {
+  auto S = [&](StringRef s) { return StringAttr::get(ctx, s); };
+  return LinearLayout(
+      {
+          {S("register"), {}},
+          {S("lane"), {{1}, {2}}},
+          {S("warp"), {}},
+          {S("block"), {}},
+      },
+      {S("dim0")});
+}
+
+// Test-only stand-in: MmaEncodingTrait attached to a placeholder attribute.
+struct TestExtMmaModel
+    : public MmaEncodingTrait::ExternalModel<TestExtMmaModel, StringAttr> {
+  SmallVector<unsigned> getRepOrderForOperand(Attribute attr, int opIdx) const {
+    return {0};
+  }
+  LinearLayout dotOperandToLinearLayout(Attribute attr, Attribute dotOp,
+                                        ArrayRef<int64_t> shape) const {
+    return testExtMmaSentinel(attr.getContext());
+  }
+};
+
+TEST_F(LinearLayoutConversionsTest, OutOfTreeMmaDotOperandExtensionPoint) {
+  StringAttr::attachInterface<TestExtMmaModel>(ctx);
+  Attribute parent = S("test_out_of_tree_mma");
+  ASSERT_TRUE(isa<MmaEncodingTrait>(parent));
+
+  // verify accepts an unknown MmaEncodingTrait parent.
+  auto emitError = [&]() {
+    return mlir::emitError(mlir::UnknownLoc::get(&ctx));
+  };
+  EXPECT_TRUE(succeeded(DotOperandEncodingAttr::verify(emitError, /*opIdx=*/0,
+                                                       parent, /*kWidth=*/0)));
+
+  // toLinearLayout dispatches through the interface, not a hardcoded type.
+  auto dotOperand = dot(parent, /*idx=*/0, /*kWidth=*/0);
+  EXPECT_EQ(dotOperand.toLinearLayout({4}), testExtMmaSentinel(&ctx));
 }
 
 } // anonymous namespace

@@ -2914,6 +2914,11 @@ LogicalResult DotOperandEncodingAttr::verify(
     return success();
   }
 
+  // Accept any MMA-like parent by interface, so an out-of-tree matmul layout
+  // can be a valid dot-operand parent without being enumerated here.
+  if (mlir::isa<MmaEncodingTrait>(parent))
+    return success();
+
   return emitError() << "ttg.dot_op unexpected parent layout: " << parent;
 }
 
