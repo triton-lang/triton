@@ -1797,19 +1797,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %3 = ttg.local_load %nested1 : !ttg.memdesc<8x8xf32, #shared, #smem, mutable, 16x16> -> tensor<8x8xf32>
     %4 = ttg.local_load %complement1 : !ttg.memdesc<8x8xf32, #shared, #smem, mutable, 16x16> -> tensor<8x8xf32>
 
-    // The padded page stride is 1152 bytes; the nested affine offset remains
-    // unpadded (544), yielding the two runtime candidates 544 and 1696.
+    // The padded page stride is 1152 bytes, and the nested affine offset of
+    // 544 bytes maps to the physical runtime candidates 608 and 1760.
     // CHECK: %[[DYNAMIC_BASE:.*]] = tti.experimental_memdesc_to_i32
-    // CHECK-DAG: %[[DYNAMIC_0:.*]] = tti.experimental_memory_offset_to_i32 544, shared_mem
-    // CHECK-DAG: %[[DYNAMIC_1:.*]] = tti.experimental_memory_offset_to_i32 1696, shared_mem
+    // CHECK-DAG: %[[DYNAMIC_0:.*]] = tti.experimental_memory_offset_to_i32 608, shared_mem
+    // CHECK-DAG: %[[DYNAMIC_1:.*]] = tti.experimental_memory_offset_to_i32 1760, shared_mem
     // CHECK-DAG: arith.cmpi eq, %[[DYNAMIC_BASE]], %[[DYNAMIC_0]]
     // CHECK-DAG: arith.cmpi eq, %[[DYNAMIC_BASE]], %[[DYNAMIC_1]]
     // CHECK: tti.experimental_assert_uniform {{.*}}, "internal ConSan error: active memdesc resolved to no buffer state"
     %5 = ttg.local_load %dynamic_nested : !ttg.memdesc<8x8xf32, #shared, #smem, mutable, 16x16> -> tensor<8x8xf32>
 
     // CHECK: %[[SELECT_BASE:.*]] = tti.experimental_memdesc_to_i32
-    // CHECK-DAG: %[[SELECT_0:.*]] = tti.experimental_memory_offset_to_i32 544, shared_mem
-    // CHECK-DAG: %[[SELECT_1:.*]] = tti.experimental_memory_offset_to_i32 1696, shared_mem
+    // CHECK-DAG: %[[SELECT_0:.*]] = tti.experimental_memory_offset_to_i32 608, shared_mem
+    // CHECK-DAG: %[[SELECT_1:.*]] = tti.experimental_memory_offset_to_i32 1760, shared_mem
     // CHECK-DAG: arith.cmpi eq, %[[SELECT_BASE]], %[[SELECT_0]]
     // CHECK-DAG: arith.cmpi eq, %[[SELECT_BASE]], %[[SELECT_1]]
     // CHECK: tti.experimental_assert_uniform {{.*}}, "internal ConSan error: active memdesc resolved to no buffer state"
@@ -1855,11 +1855,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK-DAG: arith.constant dense<true> : tensor<2xi1
     // CHECK-DAG: arith.constant dense<[false, true]> : tensor<2xi1
     %buf0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<64xf32, #shared, #smem, mutable>
-    %buf1 = ttg.memdesc_subslice %buf0 [32] : !ttg.memdesc<64xf32, #shared, #smem, mutable> -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
+    %buf1 = ttg.memdesc_subslice %buf0 [32] : !ttg.memdesc<64xf32, #shared, #smem, mutable> -> !ttg.memdesc<32xf32, #shared, #smem, mutable, 64>
     %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ttg.local_load %buf0 : !ttg.memdesc<64xf32, #shared, #smem, mutable> -> tensor<64xf32>
-    ttg.local_load %buf1 : !ttg.memdesc<32xf32, #shared, #smem, mutable> -> tensor<32xf32>
+    ttg.local_load %buf1 : !ttg.memdesc<32xf32, #shared, #smem, mutable, 64> -> tensor<32xf32>
     tt.return
   }
 }

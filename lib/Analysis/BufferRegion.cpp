@@ -56,32 +56,32 @@ uint64_t getAllocationOffset(ttng::TMEMAllocOp op) {
 }
 
 unsigned getMemDescSize(ttg::MemDescType ty) {
-  if (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace())) {
+  if (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace()))
     return ttng::getTmemAllocSizes(ty).numCols;
-  }
   assert(isa<ttg::SharedMemorySpaceAttr>(ty.getMemorySpace()) &&
          "Unsupported memory space");
-  unsigned elSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
-  return product(ttg::getShapePerCTA(ty)) * elSize;
+  int64_t numElems = ttg::getAllocationElems(ty.getEncoding(), ty.getShape(),
+                                             ty.getAllocShape());
+  if (auto padded = ttg::getPaddedEncoding(ty.getEncoding()))
+    numElems = padded.getPaddedSize({numElems});
+  return numElems * ty.getElementType().getIntOrFloatBitWidth() / 8;
 }
 
 uint32_t applySharedPadding(uint32_t byteOffset, ttg::MemDescType ty) {
   auto padded = ttg::getPaddedEncoding(ty.getEncoding());
   if (!padded)
     return byteOffset;
-  uint64_t paddedOffset = byteOffset;
   uint64_t elementSize = ty.getElementTypeBitWidth() / 8;
-  for (auto [interval, padding] :
-       llvm::zip_equal(padded.getIntervals(), padded.getPaddings())) {
-    uint64_t intervalBytes = static_cast<uint64_t>(interval) * elementSize;
-    uint64_t paddingBytes = static_cast<uint64_t>(padding) * elementSize;
-    paddedOffset += (byteOffset / intervalBytes) * paddingBytes;
-  }
+  uint64_t elementOffset = byteOffset / elementSize;
+  uint64_t paddedOffset =
+      (padded.getPaddedSize({static_cast<int64_t>(elementOffset + 1)}) - 1) *
+          elementSize +
+      byteOffset % elementSize;
   assert(paddedOffset <= std::numeric_limits<uint32_t>::max());
   return static_cast<uint32_t>(paddedOffset);
 }
 
-uint32_t getMemDescStorageStride(ttg::MemDescType ty);
+uint32_t getMemDescStorageOffset(ttg::MemDescType ty, unsigned index);
 
 FailureOr<triton::AddressSet> getMemDescAddresses(
     uint32_t storageBase, uint32_t affineOffset, ttg::MemDescType ty,
@@ -104,11 +104,11 @@ FailureOr<triton::AddressSet> getMemDescAddresses(
   auto collectPages = [&]() -> FailureOr<triton::AddressSet> {
     ttg::MemDescType pageTy =
         ty.cloneWith(ty.getShape().drop_front(), ty.getElementType());
-    uint32_t pageStride = getMemDescStorageStride(pageTy);
     triton::AddressSet addresses;
     for (int64_t page = 0; page < ty.getDimSize(0); ++page) {
       FailureOr<triton::AddressSet> pageAddresses = getMemDescAddresses(
-          storageBase + page * pageStride, affineOffset, pageTy, op);
+          storageBase + getMemDescStorageOffset(pageTy, page), affineOffset,
+          pageTy, op);
       if (failed(pageAddresses))
         return failure();
       addresses.insert(*pageAddresses);
@@ -232,17 +232,23 @@ FailureOr<triton::BufferRegion> getMemDescRegion(
       getMemDescAddresses(storageBase, affineOffset, ty, op, cache);
   if (failed(addresses))
     return failure();
-  uint32_t baseOffset = storageBase + affineOffset;
+  uint32_t baseOffset =
+      storageBase + (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace())
+                         ? affineOffset
+                         : applySharedPadding(affineOffset, ty));
   return triton::BufferRegion(baseOffset, getMemDescSize(ty),
                               std::move(*addresses), storageBase, affineOffset);
 }
 
-uint32_t getMemDescStorageStride(ttg::MemDescType ty) {
+uint32_t getMemDescStorageOffset(ttg::MemDescType ty, unsigned index) {
   if (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace()))
-    return ttng::getTmemAllocSizes(ty).numCols;
-  uint32_t elementBytes = ty.getElementTypeBitWidth() / 8;
-  uint32_t unpadded = product(ttg::getAllocationShapePerCTA(ty)) * elementBytes;
-  return applySharedPadding(unpadded, ty);
+    return index * ttng::getTmemAllocSizes(ty).numCols;
+  uint64_t unpadded = static_cast<uint64_t>(index) *
+                      ttg::getAllocationElems(ty.getEncoding(), ty.getShape(),
+                                              ty.getAllocShape()) *
+                      (ty.getElementTypeBitWidth() / 8);
+  assert(unpadded <= std::numeric_limits<uint32_t>::max());
+  return applySharedPadding(static_cast<uint32_t>(unpadded), ty);
 }
 
 unsigned getNumBuffers(ttg::MemDescIndexOp memdescIndexOp) {
@@ -324,8 +330,8 @@ getMemDescSubsliceUnpaddedByteOffset(ttg::MemDescSubsliceOp op) {
   }
   uint64_t elementOffset = static_cast<uint32_t>(mapped[0].second);
   if (offsets.size() != layoutRank) {
-    uint64_t stride = product(ttg::getAllocationShapePerCTA(
-        encoding, ttg::dropPipeliningDim(srcTy.getAllocShape(), encoding)));
+    uint64_t stride = ttg::getAllocationElems(
+        encoding, ttg::dropPipeliningDim(srcTy.getAllocShape(), encoding));
     elementOffset += static_cast<uint64_t>(offsets.front()) * stride;
   }
 
@@ -595,7 +601,7 @@ LogicalResult BufferRegionAnalysis::visitOperation(
       for (int i = firstSubBuffer; i < endSubBuffer; ++i) {
         uint32_t storageBase =
             region.storageBase +
-            i * getMemDescStorageStride(memdescIndexOp.getType());
+            getMemDescStorageOffset(memdescIndexOp.getType(), i);
         FailureOr<BufferRegion> subBuffer =
             getMemDescRegion(storageBase, region.affineOffset,
                              memdescIndexOp.getType(), op, &footprintCache);

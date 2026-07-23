@@ -243,9 +243,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #padded = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [16, 16]}>
 #smem = #ttg.shared_memory
 
-// A padded page occupies 1152 bytes, while the two nested nonzero subslices
-// compose to an unpadded affine offset of 544 bytes. Dynamic indexing and
-// select must preserve both exact candidates and their runtime identities.
+// Padded pages have a 1152-byte stride and a 1136-byte allocation span. The
+// nested subslices' 544-byte unpadded affine offset becomes a 608-byte physical
+// offset. Dynamic indexing and select must preserve both exact candidates.
 // expected-remark @below {{a_page0 vs a_page0: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true}}
 // expected-remark @below {{a_page0 vs b_page1: alias=false, lhs_contains_rhs=false, rhs_contains_lhs=false}}
 // expected-remark @below {{a_page0 vs c_nested0: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=false}}
@@ -274,15 +274,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 // expected-remark @below {{f_dynamic vs f_dynamic: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true}}
 // expected-remark @below {{f_dynamic vs g_selected: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true}}
 // expected-remark @below {{g_selected vs g_selected: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true}}
-// expected-remark @below {{a_page0 case [0, 1024]: mask={0,1}}}
-// expected-remark @below {{b_page1 case [1152, 1024]: mask={2,3,4}}}
-// expected-remark @below {{c_nested0 case [544, 256]: mask={1}}}
-// expected-remark @below {{d_nested1 case [1696, 256]: mask={4}}}
-// expected-remark @below {{e_complement1 case [1664, 256]: mask={3}}}
-// expected-remark @below {{f_dynamic case [544, 256]: mask={1}}}
-// expected-remark @below {{f_dynamic case [1696, 256]: mask={4}}}
-// expected-remark @below {{g_selected case [544, 256]: mask={1}}}
-// expected-remark @below {{g_selected case [1696, 256]: mask={4}}}
+// expected-remark @below {{a_page0 case [0, 1136]: mask={0,1}}}
+// expected-remark @below {{b_page1 case [1152, 1136]: mask={2,3,4}}}
+// expected-remark @below {{c_nested0 case [608, 528]: mask={1}}}
+// expected-remark @below {{d_nested1 case [1760, 528]: mask={4}}}
+// expected-remark @below {{e_complement1 case [1728, 528]: mask={3}}}
+// expected-remark @below {{f_dynamic case [608, 528]: mask={1}}}
+// expected-remark @below {{f_dynamic case [1760, 528]: mask={4}}}
+// expected-remark @below {{g_selected case [608, 528]: mask={1}}}
+// expected-remark @below {{g_selected case [1760, 528]: mask={4}}}
 // expected-remark @below {{state-plan: lanes=5}}
 module attributes {test.print_state_plan, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 4096 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   tt.func public @padded_dynamic_nested(%idx: i32, %cond: i1) {

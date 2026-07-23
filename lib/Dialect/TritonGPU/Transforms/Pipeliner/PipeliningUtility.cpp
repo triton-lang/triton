@@ -408,9 +408,9 @@ Value mlir::triton::createAlloc(Operation *insertBefore, RankedTensorType ty,
 bool mlir::triton::canPipelineTMALoad(Operation *op) {
   auto tensorTy = cast<RankedTensorType>(op->getResultTypes()[0]);
   auto sharedEncoding = getSharedEncoding(op);
-  int64_t stageSizeInBits = product(ttg::getAllocationShapePerCTA(
-                                sharedEncoding, tensorTy.getShape())) *
-                            tensorTy.getElementTypeBitWidth();
+  int64_t stageSizeInBits =
+      ttg::getAllocationElems(sharedEncoding, tensorTy.getShape()) *
+      tensorTy.getElementTypeBitWidth();
   return stageSizeInBits % (ttng::TMA_ALIGN * 8) == 0;
 }
 
