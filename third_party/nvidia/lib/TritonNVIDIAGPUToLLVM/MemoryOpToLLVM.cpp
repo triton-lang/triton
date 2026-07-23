@@ -31,45 +31,46 @@ bool isConstI32OneTensor(Value value) {
 }
 
 Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
-                    Value ptr, bool returnOld, Value pred = Value()) {
+                    Value ptr, bool returnOld, bool isCluster,
+                    Value pred = Value()) {
   PTXBuilder ptxBuilder;
   // PTX atom/red.inc resets to 0 only when the old value reaches the bound, so
   // using UINT32_MAX makes it equivalent to a wrapping increment-by-1.
   auto *boundOpr = ptxBuilder.newConstantOperand("0xffffffff");
+  auto &inc = *ptxBuilder.create(returnOld ? "atom" : "red");
+  if (isCluster)
+    inc.o("shared::cluster").o("cluster");
+  else
+    inc.shared().o("cta");
+  inc.o("relaxed").o("inc").o("u32");
+
   if (!returnOld) {
     auto *ptrOpr = ptxBuilder.newAddrOperand(ptr, "r");
-    auto &red = *ptxBuilder.create("red");
-    red.shared().o("cta").o("relaxed").o("inc").o("u32");
-    red(ptrOpr, boundOpr).maybePredicate(pred, "b");
+    inc(ptrOpr, boundOpr).maybePredicate(pred, "b");
     return ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
   }
 
   auto *dstOpr = ptxBuilder.newOperand("=r", /*init=*/true);
   auto *ptrOpr = ptxBuilder.newAddrOperand(ptr, "r");
-  auto &atom = *ptxBuilder.create("atom");
-  atom.shared().o("cta").o("relaxed").o("inc").o("u32");
-  atom(dstOpr, ptrOpr, boundOpr).maybePredicate(pred, "b");
+  inc(dstOpr, ptrOpr, boundOpr).maybePredicate(pred, "b");
   return ptxBuilder.launch(rewriter, loc, i32_ty);
 }
 
 FailureOr<Value> emitSharedAtomicRMW(ConversionPatternRewriter &rewriter,
                                      Location loc, Type valueElemTy, Value ptr,
                                      Value value, RMWOp rmwOp, bool returnOld,
-                                     Value pred) {
+                                     bool isCluster, Value pred) {
   SmallVector<Value> vals{value};
   if (!returnOld) {
-    auto result = emitPtxAtomicRMW(
-        rewriter, loc, valueElemTy, ptr, vals, rmwOp, MemSemantic::RELAXED,
-        MemSyncScope::CTA, pred, /*vec=*/1, /*packed=*/1,
-        PtxAtomicAddrSpace::Shared, PtxAtomicInstr::Red);
+    auto result =
+        emitPtxSharedAtomicRMW(rewriter, loc, valueElemTy, ptr, vals, rmwOp,
+                               pred, isCluster, PtxAtomicInstr::Red);
     if (succeeded(result))
       return result;
   }
 
-  return emitPtxAtomicRMW(rewriter, loc, valueElemTy, ptr, vals, rmwOp,
-                          MemSemantic::RELAXED, MemSyncScope::CTA, pred,
-                          /*vec=*/1, /*packed=*/1, PtxAtomicAddrSpace::Shared,
-                          PtxAtomicInstr::Atom);
+  return emitPtxSharedAtomicRMW(rewriter, loc, valueElemTy, ptr, vals, rmwOp,
+                                pred, isCluster, PtxAtomicInstr::Atom);
 }
 
 LogicalResult lowerLdStMatrix(
@@ -78,33 +79,19 @@ LogicalResult lowerLdStMatrix(
     SharedMemoryObject smemObj, ConversionPatternRewriter &rewriter,
     const NVIDIA::TargetInfo &targetInfo,
     const LLVMTypeConverter *typeConverter) {
-  bool isStore = !vals.empty();
-
-  // Remove broadcasting from regLayout
-  auto removeBroadcast = actionRemoveBroadcastedRegs(regLayout);
-  if (!removeBroadcast.isIdentity()) {
-    if (isStore) {
-      auto newRegLayout = removeBroadcast.apply(regLayout);
-      vals = removeBroadcast.apply(vals);
-      return lowerLdStMatrix(loc, newRegLayout, memDescType, vals, smemObj,
-                             rewriter, targetInfo, typeConverter);
-    } else {
-      auto newRegLayout = removeBroadcast.apply(regLayout);
-      auto result =
-          lowerLdStMatrix(loc, newRegLayout, memDescType, vals, smemObj,
-                          rewriter, targetInfo, typeConverter);
-      if (succeeded(result)) {
-        vals = broadcastAs(vals, regLayout);
-      }
-      return result;
-    }
-  }
+  auto *ctx = loc.getContext();
+  assert(regLayout.getFreeVariableMasks().lookup(str_attr("register")) == 0 &&
+         "expected register broadcasting to be removed by the caller");
   if (isa<PaddedSharedEncodingAttr>(memDescType.getEncoding())) {
+    return failure();
+  }
+  if (SharedMemoryObject::getMaskSpanOffsetsAndBlocks(memDescType).second !=
+      0) {
     return failure();
   }
   auto memLayout = toLinearLayout(memDescType);
   auto cvt = regLayout.invertAndCompose(memLayout);
-  auto kBlock = StringAttr::get(loc.getContext(), "block");
+  auto kBlock = str_attr("block");
   // ldmatrix/stmatrix does not support shared::cluster
   auto maybeSublayout = cvt.quotient({kBlock});
   if (!maybeSublayout) {
@@ -140,6 +127,7 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     if (!op.getSrc())
       return failure();
+    auto *ctx = op.getContext();
     MemDescType memDescType = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
     Type llvmElemTy = typeConverter->convertType(dstTy.getElementType());
@@ -148,17 +136,16 @@ public:
 
     auto *typeConverter = getTypeConverter();
     llvm::SmallVector<Value> values;
-    auto regLayout = toLinearLayout(dstTy);
+    auto regLayout =
+        toLinearLayout(dstTy).removeZeroBasesAlongDim(str_attr("register"));
     auto result =
         lowerLdStMatrix(op.getLoc(), regLayout, memDescType, values, smemObj,
                         rewriter, targetInfo, getTypeConverter());
     if (failed(result)) {
       return failure();
     }
-    auto structTy = LLVM::LLVMStructType::getLiteral(
-        op.getLoc().getContext(), SmallVector<Type>(values.size(), llvmElemTy));
-    auto value =
-        packLLElements(op.getLoc(), typeConverter, values, rewriter, structTy);
+    auto value = packUniqueTensorElements(op.getLoc(), typeConverter, values,
+                                          rewriter, dstTy);
     rewriter.replaceOp(op, value);
     return success();
   }
@@ -180,6 +167,7 @@ struct LocalAllocOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     if (!op.getSrc())
       return failure();
+    auto *ctx = op.getContext();
     MemDescType memDescType = op.getType();
     RankedTensorType regTy = op.getSrc().getType();
     Type llvmElemTy = typeConverter->convertType(regTy.getElementType());
@@ -188,8 +176,10 @@ struct LocalAllocOpConversion
     auto smemObj = SharedMemoryObject(
         smemBase, llvmElemTy, memDescType.getRank(), op.getLoc(), rewriter);
 
-    auto regLayout = toLinearLayout(regTy);
-    auto values = unpackLLElements(op.getLoc(), adaptor.getSrc(), rewriter);
+    auto regLayout =
+        toLinearLayout(regTy).removeZeroBasesAlongDim(str_attr("register"));
+    auto values =
+        unpackUniqueTensorElements(op.getLoc(), adaptor.getSrc(), rewriter);
     auto result =
         lowerLdStMatrix(op.getLoc(), regLayout, memDescType, values, smemObj,
                         rewriter, targetInfo, getTypeConverter());
@@ -218,14 +208,17 @@ struct LocalStoreOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::LocalStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto *ctx = op.getContext();
     MemDescType memDescType = op.getDst().getType();
     RankedTensorType srcTy = op.getSrc().getType();
     Type llvmElemTy = typeConverter->convertType(srcTy.getElementType());
     SharedMemoryObject smemObj = LLVM::getSharedMemoryObjectFromStruct(
         op.getLoc(), adaptor.getDst(), llvmElemTy, rewriter);
 
-    auto regLayout = toLinearLayout(srcTy);
-    auto values = unpackLLElements(op.getLoc(), adaptor.getSrc(), rewriter);
+    auto regLayout =
+        toLinearLayout(srcTy).removeZeroBasesAlongDim(str_attr("register"));
+    auto values =
+        unpackUniqueTensorElements(op.getLoc(), adaptor.getSrc(), rewriter);
     auto result =
         lowerLdStMatrix(op.getLoc(), regLayout, memDescType, values, smemObj,
                         rewriter, targetInfo, getTypeConverter());
@@ -350,24 +343,19 @@ static void emitAsyncSharedStore(Location loc, ArrayRef<Value> vals, Value dst,
 }
 
 static void lowerAsyncSharedStore(Location loc, MLIRContext *ctx,
-                                  LinearLayout cvt, ArrayRef<Value> vals,
+                                  const LinearLayout &cvt, ArrayRef<Value> vals,
                                   Type llvmElemTy, MemDescType dstTy,
                                   SharedMemoryObject dstMemObj,
                                   Value mbarrierPtr, MemDescType mbarrierTy,
                                   ConversionPatternRewriter &rewriter,
                                   const NVIDIA::TargetInfo &targetInfo) {
-  auto removeBroadcastSrc = actionRemoveBroadcastedRegs(cvt);
-  if (!removeBroadcastSrc.isIdentity()) {
-    auto prmtCvt = removeBroadcastSrc.apply(cvt);
-    auto inVals = removeBroadcastSrc.apply(to_vector(vals));
-    lowerAsyncSharedStore(loc, ctx, prmtCvt, inVals, llvmElemTy, dstTy,
-                          dstMemObj, mbarrierPtr, mbarrierTy, rewriter,
-                          targetInfo);
-    return;
-  }
+  assert(cvt.getFreeVariableMasks().lookup(str_attr("register")) == 0 &&
+         "expected register broadcasting to be removed by the caller");
 
-  auto affineOffset = dstMemObj.getShmemOffset(loc, rewriter, dstTy);
-  auto maskSpanAffineOffset = dstMemObj.getMaskSpanOffsets(dstTy);
+  auto [affineOffset, affineBlockOffset] =
+      dstMemObj.getShmemOffsetAndBlock(loc, rewriter, dstTy);
+  auto [maskSpanAffineOffset, maskSpanAffineBlock] =
+      dstMemObj.getMaskSpanOffsetsAndBlocks(dstTy);
   std::optional<int> maybeMaxVecElems;
   SmallVector<std::pair<unsigned, unsigned>> paddingShifts;
   if (triton::gpu::isPaddedEncoding(dstTy.getEncoding())) {
@@ -395,8 +383,9 @@ static void lowerAsyncSharedStore(Location loc, MLIRContext *ctx,
   };
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   lowerLdSt(loc, ctx, cvt, vals, llvmElemTy, smemBases, paddingShifts,
-            affineOffset, maskSpanAffineOffset, laneId, warpId, rewriter,
-            targetInfo, maybeMaxVecElems, emitSt);
+            affineOffset, maskSpanAffineOffset, affineBlockOffset,
+            maskSpanAffineBlock, laneId, warpId, rewriter, targetInfo,
+            maybeMaxVecElems, emitSt);
 }
 
 struct AsyncSharedStoreOpConversion
@@ -416,6 +405,7 @@ struct AsyncSharedStoreOpConversion
       return op.emitError("requires cluster-capable SM90+");
 
     auto loc = op.getLoc();
+    auto *ctx = op.getContext();
     MemDescType dstTy = op.getDst().getType();
     RankedTensorType srcTy = op.getSrc().getType();
     Type llvmElemTy = typeConverter->convertType(srcTy.getElementType());
@@ -426,15 +416,16 @@ struct AsyncSharedStoreOpConversion
         loc, adaptor.getMbarrier(),
         typeConverter->convertType(mbarrierTy.getElementType()), rewriter);
 
-    auto regLayout = toLinearLayout(srcTy);
+    auto regLayout =
+        toLinearLayout(srcTy).removeZeroBasesAlongDim(str_attr("register"));
     auto sharedLayout = isPaddedEncoding(dstTy.getEncoding())
                             ? paddedLinearLayout(dstTy)
                             : toLinearLayout(dstTy);
     auto cvt = regLayout.invertAndCompose(sharedLayout);
-    auto values = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    lowerAsyncSharedStore(loc, op.getContext(), cvt, values, llvmElemTy, dstTy,
-                          dstMemObj, mbarrierMemObj.getBase(), mbarrierTy,
-                          rewriter, targetInfo);
+    auto values = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
+    lowerAsyncSharedStore(loc, ctx, cvt, values, llvmElemTy, dstTy, dstMemObj,
+                          mbarrierMemObj.getBase(), mbarrierTy, rewriter,
+                          targetInfo);
     rewriter.eraseOp(op);
     return success();
   }
@@ -474,21 +465,25 @@ public:
 
     SmallVector<Value> results;
     if (returnOld)
-      results.reserve(info.ptrs.size());
-    for (auto [i, ptrAndValue] :
-         llvm::enumerate(llvm::zip(info.ptrs, info.values))) {
-      auto [ptr, value] = ptrAndValue;
+      results.reserve(info.addrs.size());
+    for (auto [i, addrAndValue] :
+         llvm::enumerate(llvm::zip(info.addrs, info.values))) {
+      auto [addr, value] = addrAndValue;
       Value pred =
           maybeAnd(rewriter, loc, info.threadPred,
                    info.maskValues.empty() ? Value() : info.maskValues[i]);
+      bool isCluster = bool(addr.ctaId);
+      Value ptr =
+          targetInfo.mapDShared(rewriter, loc, addr.ptr, addr.ctaId, pred);
       if (isI32Inc) {
-        Value result = emitSharedInc(rewriter, loc, ptr, returnOld, pred);
+        Value result =
+            emitSharedInc(rewriter, loc, ptr, returnOld, isCluster, pred);
         if (returnOld)
           results.push_back(result);
         continue;
       }
       auto old = emitSharedAtomicRMW(rewriter, loc, info.llvmElemTy, ptr, value,
-                                     rmwOp, returnOld, pred);
+                                     rmwOp, returnOld, isCluster, pred);
       if (failed(old))
         return failure();
       if (returnOld)
@@ -500,8 +495,6 @@ public:
       return success();
     }
 
-    if (!info.removeBroadcast.isIdentity())
-      results = broadcastAs(results, info.regLayout);
     finalizeTensorAtomicResults(op, info.valuesTy, rewriter, results,
                                 info.llvmElemTy, b, info.threadPred, targetInfo,
                                 getTypeConverter());

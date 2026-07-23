@@ -6,6 +6,9 @@ namespace rocprofiler {
 DEFINE_DISPATCH(ExternLibRocprofiler, isInitialized, rocprofiler_is_initialized,
                 int *)
 
+DEFINE_DISPATCH(ExternLibRocprofiler, getTimestamp, rocprofiler_get_timestamp,
+                rocprofiler_timestamp_t *)
+
 DEFINE_DISPATCH(ExternLibRocprofiler, forceConfigure,
                 rocprofiler_force_configure, rocprofiler_configure_func_t)
 
@@ -43,6 +46,14 @@ DEFINE_DISPATCH(ExternLibRocprofiler, configureCallbackTracingService,
                 rocprofiler_context_id_t, rocprofiler_callback_tracing_kind_t,
                 const rocprofiler_tracing_operation_t *, size_t,
                 rocprofiler_callback_tracing_cb_t, void *)
+
+DEFINE_DISPATCH(ExternLibRocprofiler,
+                configureExternalCorrelationIdRequestService,
+                rocprofiler_configure_external_correlation_id_request_service,
+                rocprofiler_context_id_t,
+                const rocprofiler_external_correlation_id_request_kind_t *,
+                size_t, rocprofiler_external_correlation_id_request_cb_t,
+                void *)
 
 DEFINE_DISPATCH(ExternLibRocprofiler, createCallbackThread,
                 rocprofiler_create_callback_thread,

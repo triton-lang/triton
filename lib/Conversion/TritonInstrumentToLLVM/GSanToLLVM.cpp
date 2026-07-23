@@ -204,22 +204,6 @@ unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
   return index & ~freeVarMask;
 }
 
-Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
-                                  Value resultVal,
-                                  ConversionPatternRewriter &rewriter,
-                                  TritonLLVMOpBuilder &b, Value threadPred,
-                                  const TargetInfoBase &targetInfo) {
-  if (!op->hasAttr("allocation.offset"))
-    return resultVal;
-
-  auto loc = op->getLoc();
-  Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
-  targetInfo.storeShared(rewriter, loc, smemBase, resultVal, threadPred);
-  b.barrier(ttg::AddrSpace::Local);
-  return targetInfo.loadShared(rewriter, loc, smemBase, valueElemTy,
-                               b.true_val());
-}
-
 Value materializeI32Bool(ConversionPatternRewriter &rewriter,
                          TritonLLVMOpBuilder &b, Value pred) {
   if (!pred)
@@ -426,10 +410,12 @@ public:
     Location loc = op.getLoc();
     auto ptrTy = op.getPtr().getType();
     int32_t bytesPerElem = tt::getPointeeBitWidth(ptrTy) / 8;
-    auto ptrElems = unpackLLElements(loc, adaptor.getPtr(), rewriter);
+    auto ptrElems =
+        unpackTensorElements(loc, adaptor.getPtr(), rewriter, ptrTy);
     SmallVector<Value> maskElems;
     if (Value llMask = adaptor.getMask()) {
-      maskElems = unpackLLElements(loc, llMask, rewriter);
+      maskElems =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
     }
 
     unsigned mergeVec = getVecSize(op);
@@ -484,10 +470,12 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     auto ptrTy = op.getPtr().getType();
-    auto ptrElems = unpackLLElements(loc, adaptor.getPtr(), rewriter);
+    auto ptrElems =
+        unpackTensorElements(loc, adaptor.getPtr(), rewriter, ptrTy);
     SmallVector<Value> maskElems;
     if (Value llMask = adaptor.getMask()) {
-      maskElems = unpackLLElements(loc, llMask, rewriter);
+      maskElems =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
     }
 
     int32_t bytesPerElem = std::max(1u, tt::getPointeeBitWidth(ptrTy) / 8);
@@ -509,6 +497,54 @@ public:
     emitAtomicTensorAccessRuntimeCall(rewriter, loc, *gsanGlobalStatePtr,
                                       ptrElems, maskElems, regMask, threadPred,
                                       bytesPerElem, op.getSem(), op.getScope());
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct GSanAtomicPollOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanAtomicPollOp> {
+public:
+  using ConvertOpToLLVMPattern<
+      tti::ExperimentalGSanAtomicPollOp>::ConvertOpToLLVMPattern;
+  const TargetInfoBase *targetInfo;
+
+  GSanAtomicPollOpConversion(LLVMTypeConverter &typeConverter,
+                             const TargetInfoBase &targetInfo,
+                             PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanAtomicPollOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto *ctx = rewriter.getContext();
+    Location loc = op.getLoc();
+    auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
+    if (failed(gsanGlobalStatePtr))
+      return failure();
+
+    Value pollPtr = unpackLLElements(loc, adaptor.getPtr(), rewriter).front();
+    int32_t bytesPerElem = tt::getPointeeBitWidth(op.getPtr().getType()) / 8;
+    auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
+    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
+                                                         loc, *targetInfo);
+    threadPred = ttg::maybeAnd(rewriter, loc, threadPred, adaptor.getMatched());
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+
+    TritonLLVMOpBuilder b(loc, rewriter);
+    auto eventStateTy = getGSanAtomicEventStateType(rewriter);
+    Value eventState = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx),
+                                              eventStateTy, b.i32_val(1),
+                                              /*alignment=*/0);
+    emitGSanAtomicBeginCall(rewriter, loc, *gsanGlobalStatePtr, eventState,
+                            threadPred, pollPtr, bytesPerElem,
+                            static_cast<int32_t>(op.getSem()),
+                            static_cast<int32_t>(op.getScope()), sourceLoc);
+    emitGSanAtomicEndCall(rewriter, loc, eventState, threadPred, b.false_val(),
+                          static_cast<int32_t>(op.getSem()),
+                          static_cast<int32_t>(op.getScope()), sourceLoc);
 
     rewriter.eraseOp(op);
     return success();
@@ -537,22 +573,25 @@ public:
     if (failed(gsanGlobalStatePtr))
       return failure();
 
-    auto moduleOp = op->getParentOfType<ModuleOp>();
-    assert(moduleOp && "Parent ModuleOp not found for atomic op");
     auto rmwOp = op.getAtomicRmwOp();
     auto sem = op.getSem();
     auto scope = op.getScope();
+    insertAtomicOrderingBarriers(op, sem, !op->hasAttr("allocation.offset"),
+                                 rewriter, *targetInfo);
 
     TritonLLVMOpBuilder b(loc, rewriter);
     Value llPtr = adaptor.getPtr();
     Value llVal = adaptor.getVal();
     Value llMask = adaptor.getMask();
 
-    auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
-    auto valElements = unpackLLElements(loc, llVal, rewriter);
+    auto ptrElements =
+        unpackTensorElements(loc, llPtr, rewriter, op.getPtr().getType());
+    auto valElements =
+        unpackTensorElements(loc, llVal, rewriter, op.getVal().getType());
     SmallVector<Value> maskElements;
     if (llMask)
-      maskElements = unpackLLElements(loc, llMask, rewriter);
+      maskElements =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
 
     auto valueTy = op.getType();
     auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
@@ -642,19 +681,22 @@ public:
     if (failed(gsanGlobalStatePtr))
       return failure();
 
-    auto moduleOp = op->getParentOfType<ModuleOp>();
-    assert(moduleOp && "Parent ModuleOp not found for atomic op");
     auto sem = op.getSem();
     auto scope = op.getScope();
+    insertAtomicOrderingBarriers(op, sem, !op->hasAttr("allocation.offset"),
+                                 rewriter, *targetInfo);
 
     TritonLLVMOpBuilder b(loc, rewriter);
     Value llPtr = adaptor.getPtr();
     Value llCmp = adaptor.getCmp();
     Value llVal = adaptor.getVal();
 
-    auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
-    auto cmpElements = unpackLLElements(loc, llCmp, rewriter);
-    auto valElements = unpackLLElements(loc, llVal, rewriter);
+    auto ptrElements =
+        unpackTensorElements(loc, llPtr, rewriter, op.getPtr().getType());
+    auto cmpElements =
+        unpackTensorElements(loc, llCmp, rewriter, op.getCmp().getType());
+    auto valElements =
+        unpackTensorElements(loc, llVal, rewriter, op.getVal().getType());
 
     auto valueTy = op.getType();
     auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
@@ -803,6 +845,7 @@ void mlir::triton::populateGSanToLLVMPatterns(
     const TargetInfoBase &targetInfo) {
   patterns.add<GSanInitOpConversion>(typeConverter);
   patterns.add<GSanTensorDescInfoOpConversion>(typeConverter);
+  patterns.add<GSanAtomicPollOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanAtomicCASOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanAtomicRMWOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanAtomicTensorAccessOpConversion>(

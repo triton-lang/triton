@@ -13,7 +13,7 @@ import triton.language as tl
 from triton._internal_testing import is_cuda, run_in_process
 from triton.experimental.gsan import symmetric_memory
 from triton.experimental.gsan._allocator import get_runtime_state_layout
-from triton.experimental.gsan._testing_utils import atomic_poll, shadow_tensor_for
+from triton.experimental.gsan._testing_utils import atomic_poll, shadow_cell_from_address, shadow_tensor_for, SHADOW_GRANULARITY_BYTES
 from triton.experimental.gsan._utils import uint8_cuda_tensor_from_ptr
 
 
@@ -23,16 +23,20 @@ def _get_free_tcp_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _local_vector_clocks(device_index: int) -> tuple[torch.Tensor, dict[str, int]]:
-    layout = get_runtime_state_layout(device_index)
+def _vector_clocks(runtime_state_device: int, access_device: int) -> tuple[torch.Tensor, dict[str, int]]:
+    layout = get_runtime_state_layout(runtime_state_device)
     region_size = layout["thread_state_stride_bytes"] * layout["num_sms"]
-    region = uint8_cuda_tensor_from_ptr(layout["thread_state_base_ptr"], region_size, device_index)
+    region = uint8_cuda_tensor_from_ptr(layout["thread_state_base_ptr"], region_size, access_device)
     clocks = torch.as_strided(
         region.view(torch.uint16)[layout["thread_state_header_size_bytes"] // 2:],
         size=(layout["num_sms"], layout["num_threads"]),
         stride=(layout["thread_state_stride_bytes"] // 2, 1),
     )
     return clocks, layout
+
+
+def _local_vector_clocks(device_index: int) -> tuple[torch.Tensor, dict[str, int]]:
+    return _vector_clocks(device_index, device_index)
 
 
 @triton.jit
@@ -56,9 +60,15 @@ def _single_cta_no_atomic_sync_kernel(payload_ptr, peer_payload_ptr, seen_peer_p
     tl.store(seen_peer_ptr, seen_peer)
 
 
+@triton.jit
+def _store_scalar_kernel(peer_buf, byte_offset, value):
+    tl.store(peer_buf + byte_offset, value)
+
+
 def _run_symmetric_memory_checks(rank: int, world_size: int) -> None:
     dev = torch.device(f"cuda:{rank}")
     torch.cuda.set_device(dev)
+    symmetric_memory.configure(dist.group.WORLD)
 
     buf = symmetric_memory.empty((2048, ), dtype=torch.uint8, device=dev)
     buf.fill_(rank + 1)
@@ -141,6 +151,7 @@ def _run_subgroup_symmetric_memory_checks(rank: int) -> None:
             subgroup_rank = dist.get_rank(subgroup)
             subgroup_world_size = dist.get_world_size(subgroup)
             assert subgroup_world_size == 2
+            symmetric_memory.configure(subgroup)
 
             buf = symmetric_memory.empty((2048, ), dtype=torch.uint8, device=dev)
             buf.fill_(subgroup_rank + 7)
@@ -189,9 +200,73 @@ def _run_subgroup_symmetric_memory_checks(rank: int) -> None:
             dist.destroy_process_group(subgroup)
 
 
+def _run_multi_node_simulated_symmetric_memory_checks(rank: int, world_size: int, device_index: int) -> None:
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+
+    dev = torch.device(f"cuda:{device_index}")
+    torch.cuda.set_device(dev)
+    symmetric_memory.configure(dist.group.WORLD)
+
+    buf = symmetric_memory.empty((2048, ), dtype=torch.uint8, device=dev)
+    buf.fill_(rank + 31)
+
+    hdl = symmetric_memory.rendezvous(buf, group=dist.group.WORLD)
+    assert hdl.rank == rank
+    assert hdl.world_size == world_size
+
+    peer = (rank + 1) % world_size
+    prev = (rank - 1) % world_size
+    hdl.barrier(channel=0)
+    peer_buf = hdl.get_buffer(peer, buf.shape, buf.dtype)
+    assert torch.all(peer_buf == (peer + 31)).item()
+
+    peer_buf.fill_(rank + 101)
+    hdl.barrier(channel=0)
+    assert torch.all(buf == (prev + 101)).item()
+
+    outgoing_shadow_offset = rank * SHADOW_GRANULARITY_BYTES
+    incoming_shadow_offset = prev * SHADOW_GRANULARITY_BYTES
+    untouched_shadow_offset = (world_size + rank) * SHADOW_GRANULARITY_BYTES
+    incoming_shadow_before = shadow_cell_from_address(buf.data_ptr() + incoming_shadow_offset,
+                                                      device_index=device_index)
+    untouched_shadow_before = shadow_cell_from_address(buf.data_ptr() + untouched_shadow_offset,
+                                                       device_index=device_index)
+
+    _store_scalar_kernel[(1, )](peer_buf, outgoing_shadow_offset, rank + 151, num_warps=1)
+    torch.cuda.synchronize()
+    hdl.barrier(channel=0)
+    dist.barrier()
+
+    incoming_shadow_after = shadow_cell_from_address(buf.data_ptr() + incoming_shadow_offset, device_index=device_index)
+    untouched_shadow_after = shadow_cell_from_address(buf.data_ptr() + untouched_shadow_offset,
+                                                      device_index=device_index)
+    assert int(buf[incoming_shadow_offset].item()) == prev + 151
+    assert incoming_shadow_after != incoming_shadow_before
+    assert incoming_shadow_after.write_clock != incoming_shadow_before.write_clock
+    assert incoming_shadow_after.write_clock.epoch != 0
+    assert untouched_shadow_after == untouched_shadow_before
+
+    local_clocks, layout = _vector_clocks(rank, device_index)
+    local_clocks.zero_()
+    local_tid = rank * layout["num_sms"]
+    local_clocks[0, local_tid] = rank + 211
+    hdl.barrier(channel=0)
+
+    synced_clocks, _ = _vector_clocks(rank, device_index)
+    for global_rank in range(world_size):
+        tid = global_rank * layout["num_sms"]
+        assert torch.all(synced_clocks[:, tid] == (global_rank + 211)).item()
+
+    del peer_buf
+    torch.cuda.synchronize()
+    dist.barrier()
+    hdl.close()
+
+
 def _run_single_cta_atomic_sync_check(rank: int, world_size: int) -> None:
     dev = torch.device(f"cuda:{rank}")
     torch.cuda.set_device(dev)
+    symmetric_memory.configure(dist.group.WORLD)
 
     peer = (rank + 1) % world_size
     state = symmetric_memory.empty((2, ), dtype=torch.int32, device=dev)
@@ -237,6 +312,7 @@ def _run_single_cta_no_atomic_sync_check(rank: int, world_size: int) -> None:
 
     dev = torch.device(f"cuda:{rank}")
     torch.cuda.set_device(dev)
+    symmetric_memory.configure(dist.group.WORLD)
 
     peer = (rank + 1) % world_size
     payload = symmetric_memory.empty((1, ), dtype=torch.int32, device=dev)
@@ -281,6 +357,20 @@ def _distributed_worker_single_cta_atomic_sync(rank: int, world_size: int, maste
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, device_id=torch.device(dev))
     try:
         _run_single_cta_atomic_sync_check(rank, world_size)
+        dist.barrier()
+    finally:
+        dist.destroy_process_group()
+
+
+def _distributed_worker_multi_node_simulated(rank: int, world_size: int, master_port: int,
+                                             num_local_devices: int) -> None:
+    device_index = rank % num_local_devices
+    os.environ["WORLD_SIZE"] = str(world_size)
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = str(master_port)
+    dist.init_process_group(backend="gloo", rank=rank, world_size=world_size)
+    try:
+        _run_multi_node_simulated_symmetric_memory_checks(rank, world_size, device_index)
         dist.barrier()
     finally:
         dist.destroy_process_group()
@@ -342,6 +432,21 @@ def test_gsan_symmetric_memory_rendezvous_subgroup_without_global_zero():
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_gsan_symmetric_memory_rendezvous_multi_node_simulated():
+    if torch.cuda.device_count() < 2:
+        pytest.skip("requires 2 CUDA devices")
+
+    world_size = 4
+    master_port = _get_free_tcp_port()
+    mp.spawn(
+        _distributed_worker_multi_node_simulated,
+        args=(world_size, master_port, 2),
+        nprocs=world_size,
+        join=True,
+    )
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
 def test_gsan_symmetric_memory_single_cta_atomic_sync():
     if torch.cuda.device_count() < 2:
         pytest.skip("requires 2 CUDA devices")
@@ -373,6 +478,7 @@ def _run_triton_kernels_convert_dp_to_ep_with_gsan_pool(rank: int, world_size: i
 
     dev = torch.device(f"cuda:{rank}")
     torch.cuda.set_device(dev)
+    symmetric_memory.configure(dist.group.WORLD)
 
     class _GSanSymmetricMemoryPool(SymmetricMemoryPool):
 

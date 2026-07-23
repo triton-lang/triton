@@ -4,12 +4,14 @@
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "amd/lib/TritonAMDGPUTransforms/PipelineUtility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/CGAEncodingAttr.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/Support/Debug.h"
 #include <variant>
 
+#undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonamdgpu-pipeline-lower-loops"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
@@ -85,8 +87,11 @@ TDMChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
   return createTDMAsync(
       loadOp, alloc, extractIdx,
       [&](OpBuilder &builder, Location loc, Value view, Value pred) {
-        return triton::amdgpu::AsyncTDMCopyGlobalToLocalOp::create(
-            builder, loc, loadOp.getDesc(), loadOp.getIndices(), view, pred);
+        Value desc = createUpdateTDMDescriptorOp(builder, loc, loadOp.getDesc(),
+                                                 loadOp.getIndices(),
+                                                 /*pred=*/pred);
+        return triton::amdgpu::AsyncTDMCopyGlobalToLocalOp::create(builder, loc,
+                                                                   desc, view);
       });
 }
 
@@ -106,9 +111,12 @@ TDMChainOps createTDMAsyncGather(tt::DescriptorGatherOp gatherOp, Value alloc,
           indices =
               ttg::ConvertLayoutOp::create(builder, loc, newIdxType, indices);
         }
-        return triton::amdgpu::AsyncTDMGatherOp::create(
-            builder, loc, gatherOp.getDesc(), indices, gatherOp.getYOffset(),
-            view, pred);
+        Value zero = arith::ConstantIntOp::create(builder, loc, 0, 32);
+        Value desc = createUpdateTDMDescriptorOp(
+            builder, loc, gatherOp.getDesc(), {zero, gatherOp.getYOffset()},
+            /*pred=*/pred);
+        return triton::amdgpu::AsyncTDMGatherOp::create(builder, loc, desc,
+                                                        indices, view);
       });
 }
 
@@ -349,6 +357,25 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
   return maxVecSharedEnc;
 }
 
+// On targets without direct-to-LDS scatter support, a direct-to-LDS copy
+// requires enough data per CTA for each lane to write at least 32 bits into
+// LDS. The source layout itself may still be suboptimal here; CoalesceAsyncCopy
+// can rewrite it before the final direct-to-LDS lowering checks coalescing
+// legality.
+bool hasEnoughCTABytesForDirectToLds(tt::LoadOp loadOp,
+                                     const tt::AMD::TargetInfo &targetInfo) {
+  if (targetInfo.supportsDirectToLdsScatter())
+    return true;
+
+  auto srcTy = dyn_cast<RankedTensorType>(loadOp.getResult().getType());
+  if (!srcTy)
+    return true;
+
+  int64_t ctaTileBits = mlir::product(ttg::getShapePerCTA(srcTy)) *
+                        srcTy.getElementTypeBitWidth();
+  return ctaTileBits >= 32 * targetInfo.getWarpSize();
+}
+
 bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
                                ttg::SharedEncodingTrait sharedEnc,
                                tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
@@ -360,10 +387,24 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   if (numBuffers <= 1)
     return false;
 
+  // Checks whether the global pointer's contiguity and mask alignment allows
+  // for at least 32 bit wide loads.
+  if (!triton::canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis))
+    return false;
+
   using tt::amdgpu::ISAFamily;
-  if (sharedEnc && llvm::is_contained(
-                       {ISAFamily::CDNA3, ISAFamily::CDNA4, ISAFamily::GFX1250},
-                       targetInfo.getISAFamily())) {
+  bool hasDirectToLdsPath = llvm::is_contained(
+      {ISAFamily::CDNA3, ISAFamily::CDNA4, ISAFamily::GFX1250},
+      targetInfo.getISAFamily());
+
+  // On targets without scatter support, reject CTA tiles that are too small to
+  // provide one 32-bit direct-to-LDS write per lane. Layout-specific coalescing
+  // is checked later, after CoalesceAsyncCopy has a chance to rewrite the src.
+  if (hasDirectToLdsPath &&
+      !hasEnoughCTABytesForDirectToLds(loadOp, targetInfo))
+    return false;
+
+  if (sharedEnc && hasDirectToLdsPath) {
     // Compute the final vecSize we can use for the combination of
     // sourceEncoding and sharedEncoding. We can only use AsyncCopy if the
     // target supports the requested or a smaller vecSize because we cannot
@@ -390,9 +431,7 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
       return false;
   }
 
-  // Checks whether the global pointer's contiguity and mask alignment allows
-  // for at least 32 bit wide loads
-  return triton::canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis);
+  return true;
 }
 
 // Convert load ops into shared memory allocation loads and apply
@@ -515,14 +554,30 @@ void remapClusters(tt::CoarseSchedule &schedule, ClusterMap clusterMap,
 //            can cause invalid schedules to be produced.
 LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
                            int &numBuffers, bool useAsyncCopy, bool hasTDMLoad,
-                           bool waitAtTail, Clusters &clusters,
-                           tt::CoarseSchedule &schedule) {
+                           bool hasScaledDot, bool waitAtTail,
+                           Clusters &clusters, tt::CoarseSchedule &schedule) {
   LDBG("Init SingleDotSchedule");
   int lastStage = numStages - 1;
   stages[SCHED_GLOBAL_LOAD] = 0;
   stages[SCHED_LOCAL_STORE] = 0;
   stages[SCHED_LOCAL_LOAD] = lastStage;
   stages[SCHED_COMPUTE] = lastStage;
+
+  // LDS prefetch of dot operands: schedule ttg.local_load one stage before
+  // the tt.dot that consumes it, so the LDS read of the next K-tile overlaps
+  // the current tile's matrix op. for num_stages<3 there is no room to separate
+  // them.
+  // We take a conservative route and only enable LDS prefetch when the dot is
+  // not scaled until more testing is done.
+  // waitAtTail (pingpong) requires very specific scheduling, which is
+  // incompatible with the prefetch cluster ordering below, so disable prefetch
+  // in that case.
+  bool ldsPrefetch =
+      hasTDMLoad && !hasScaledDot && numStages >= 3 && !waitAtTail;
+  if (ldsPrefetch) {
+    stages[SCHED_LOCAL_LOAD] = lastStage - 1;
+  }
+
   stages[SCHED_ASYNC_WAIT] = stages[SCHED_LOCAL_LOAD];
 
   bool pairedGlobalLoadLocalStore = stages[SCHED_LOCAL_STORE] == 0;
@@ -593,6 +648,18 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   int computeCluster = 2;
   if (stages[SCHED_LOCAL_LOAD] == stages[SCHED_COMPUTE]) {
     computeCluster = localLoadCluster;
+  }
+
+  // ldsPrefetch ordering: lead the loop body with the tt.dot (it consumes
+  // operands pre-loaded into registers the previous iteration, so it has no
+  // intra-iteration dependency), then the async_wait, the next-tile TDM copy,
+  // and finally the ttg.local_load that feeds the next iteration.
+  if (ldsPrefetch) {
+    computeCluster = 0;
+    asyncWaitCluster = 1;
+    globalLoadCluster = 2;
+    localLoadCluster = 3;
+    localStoreCluster = 4;
   }
 
   // Create a hash map to associate cluster hash in old schedule with its
@@ -717,10 +784,13 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
     maxDist = std::max(maxDist, info.distToUse);
   }
 
+  bool hasScaledDot = false;
+  forOp.walk([&](tt::DotScaledOp) { hasScaledDot = true; });
+
   int numBuffers = 1;
   if (failed(initSchedule(maxDist, stages, schedule.getNumStages(), numBuffers,
-                          useAsyncCopy, hasTDMLoad, waitAtTail, clusters,
-                          schedule)))
+                          useAsyncCopy, hasTDMLoad, hasScaledDot, waitAtTail,
+                          clusters, schedule)))
     return;
 
   // Convert the loads into shared memory allocations and loads from them.

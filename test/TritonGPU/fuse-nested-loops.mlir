@@ -471,6 +471,22 @@ tt.func @preserve_stage_count(%lb: i32, %ub: i32) {
   tt.return
 }
 
+// CHECK-LABEL: @preserve_explicit_stage_one
+tt.func @preserve_explicit_stage_one(%lb: i32, %ub: i32) {
+  %c1_i32 = arith.constant 1 : i32
+
+  // CHECK-COUNT-1: scf.for
+  scf.for %i = %lb to %ub step %c1_i32 : i32 {
+    scf.for %j = %lb to %ub step %c1_i32 : i32 {
+      "body"(%j) : (i32) -> ()
+      scf.yield
+    }
+  } {"ttg.always-fuse", tt.num_stages = 1 : i32}
+  // CHECK: tt.num_stages = 1 : i32
+  // CHECK-NOT: scf.for
+  tt.return
+}
+
 // CHECK-LABEL: @fuse_attr_speculate
 // CHECK-SAME: [[LB:%.*]]: i32, [[UB:%.*]]: i32
 tt.func @fuse_attr_speculate(%lb: i32, %ub: i32) {

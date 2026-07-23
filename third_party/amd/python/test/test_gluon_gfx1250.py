@@ -13,6 +13,7 @@ from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
 from triton.experimental.gluon.language.amd.gfx1250 import get_wmma_scale_layout, PartitionedSharedLayout, _valid_dtype_combinations
+from triton._C.libtriton.gluon_ir import make_cga_layout
 
 
 @gluon.jit
@@ -134,11 +135,18 @@ def test_compile_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K):
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
-def test_runtime_scaled_upcast_fp4():
+@pytest.mark.parametrize("compact_scale", [
+    False,
+    True,
+], ids=["expanded_scale", "compact_scale"])
+@pytest.mark.parametrize("BLOCK_K", [64, 128, 256], ids=lambda v: f"BLOCK_K{v}")
+def test_runtime_scaled_upcast_fp4(compact_scale, BLOCK_K):
 
     @gluon.jit
-    def scaled_upcast_fp4_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr):
+    def scaled_upcast_fp4_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
+                                 SCALE_FACTOR: ttgl.constexpr, COMPACT_SCALE: ttgl.constexpr):
         packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [8, 4], [4, 1], [1, 0])
+        compact_layout: ttgl.constexpr = ttgl.BlockedLayout([1, BLOCK_K // SCALE_FACTOR], [8, 4], [4, 1], [1, 0])
         unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 4], [4, 1], [1, 0])
 
         offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, packed_layout))
@@ -146,25 +154,94 @@ def test_runtime_scaled_upcast_fp4():
         x_offsets = offs_m[:, None] * (BLOCK_K // 2) + offs_k_packed[None, :]
         x = ttgl.load(x_ptr + x_offsets)
 
-        offs_scale_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, unpacked_layout))
-        offs_scale_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, unpacked_layout))
-        scale_offsets = offs_scale_m[:, None] * BLOCK_K + offs_scale_k[None, :]
+        if COMPACT_SCALE:
+            scale_layout: ttgl.constexpr = compact_layout
+            scale_k: ttgl.constexpr = BLOCK_K // SCALE_FACTOR
+        else:
+            scale_layout: ttgl.constexpr = unpacked_layout
+            scale_k: ttgl.constexpr = BLOCK_K
+        offs_scale_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, scale_layout))
+        offs_scale_k = ttgl.arange(0, scale_k, layout=ttgl.SliceLayout(0, scale_layout))
+        scale_offsets = offs_scale_m[:, None] * scale_k + offs_scale_k[None, :]
         scale = ttgl.load(scale_ptr + scale_offsets)
 
         y = ttgl.amd.gfx1250.scaled_upcast(x, scale, ttgl.bfloat16, axis=1)
-        ttgl.store(y_ptr + scale_offsets, y)
+        out_layout: ttgl.constexpr = y.type.layout
+        offs_out_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, out_layout))
+        offs_out_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, out_layout))
+        out_offsets = offs_out_m[:, None] * BLOCK_K + offs_out_k[None, :]
+        ttgl.store(y_ptr + out_offsets, y)
 
     BLOCK_M = 16
-    BLOCK_K = 64
     SCALE_FACTOR = 32
     torch.manual_seed(42)
 
     x, x_ref = create_mxfp_operand(0, BLOCK_M, BLOCK_K, "e2m1")
     scale, scale_ref = create_mxfp_scale(0, BLOCK_M, BLOCK_K, "e8m0", SCALE_FACTOR)
-    scale = scale.repeat_interleave(SCALE_FACTOR, dim=1).contiguous()
+    if not compact_scale:
+        scale = scale.repeat_interleave(SCALE_FACTOR, dim=1).contiguous()
     y = torch.empty((BLOCK_M, BLOCK_K), dtype=torch.bfloat16, device="cuda")
 
-    pgm = scaled_upcast_fp4_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, num_warps=4)
+    pgm = scaled_upcast_fp4_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, SCALE_FACTOR, compact_scale,
+                                          num_warps=4)
+
+    assert pgm.asm["amdgcn"].count("v_cvt_scale_pk8_bf16_fp4") == BLOCK_K // 32
+    y_ref = (x_ref * scale_ref).to(torch.bfloat16)
+    torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+def test_runtime_scaled_upcast_fp4_bf16_gemm_layouts():
+    # Test packed / compact-scale DistributedLinearLayouts used when upcasting an fp4 weight tile to bf16 for a WMMA GEMM.
+    @gluon.jit
+    def scaled_upcast_fp4_bf16_gemm_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
+                                           SCALE_FACTOR: ttgl.constexpr):
+        packed_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [64, 0]],
+            lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 4]],
+            warp_bases=[[16, 0], [32, 0]],
+            block_bases=[],
+            shape=[BLOCK_N, BLOCK_K // 2],
+        )
+        compact_scale_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 1], [0, 2], [0, 4], [0, 8], [64, 0]],
+            lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]],
+            warp_bases=[[16, 0], [32, 0]],
+            block_bases=[],
+            shape=[BLOCK_N, BLOCK_K // SCALE_FACTOR],
+        )
+
+        offs_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(1, packed_layout))
+        offs_k_packed = ttgl.arange(0, BLOCK_K // 2, layout=ttgl.SliceLayout(0, packed_layout))
+        x_offsets = offs_n[:, None] * (BLOCK_K // 2) + offs_k_packed[None, :]
+        x = ttgl.load(x_ptr + x_offsets)
+
+        scale_k: ttgl.constexpr = BLOCK_K // SCALE_FACTOR
+        offs_scale_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(1, compact_scale_layout))
+        offs_scale_k = ttgl.arange(0, scale_k, layout=ttgl.SliceLayout(0, compact_scale_layout))
+        scale_offsets = offs_scale_n[:, None] * scale_k + offs_scale_k[None, :]
+        scale = ttgl.load(scale_ptr + scale_offsets)
+
+        y = ttgl.amd.gfx1250.scaled_upcast(x, scale, ttgl.bfloat16, axis=1)
+        out_layout: ttgl.constexpr = y.type.layout
+        offs_out_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(1, out_layout))
+        offs_out_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, out_layout))
+        out_offsets = offs_out_n[:, None] * BLOCK_K + offs_out_k[None, :]
+        ttgl.store(y_ptr + out_offsets, y)
+
+    # Shapes match a typical fp4 weight tile: packed [128, 256] i8 == [128, 512] fp4,
+    # compact scale [128, 16] (one e8m0 per 32 elements along K).
+    BLOCK_N = 128
+    BLOCK_K = 512
+    SCALE_FACTOR = 32
+    torch.manual_seed(42)
+
+    x, x_ref = create_mxfp_operand(0, BLOCK_N, BLOCK_K, "e2m1")
+    scale, scale_ref = create_mxfp_scale(0, BLOCK_N, BLOCK_K, "e8m0", SCALE_FACTOR)
+    y = torch.empty((BLOCK_N, BLOCK_K), dtype=torch.bfloat16, device="cuda")
+
+    pgm = scaled_upcast_fp4_bf16_gemm_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_N, BLOCK_K, SCALE_FACTOR,
+                                                    num_warps=4)
 
     assert "v_cvt_scale_pk8_bf16_fp4" in pgm.asm["amdgcn"]
     y_ref = (x_ref * scale_ref).to(torch.bfloat16)
@@ -172,11 +249,72 @@ def test_runtime_scaled_upcast_fp4():
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
-def test_runtime_scaled_upcast_fp8():
+@pytest.mark.parametrize("fp8_dtype", ["e4m3", "e5m2"])
+@pytest.mark.parametrize("out_dtype", ["bf16", "f16"], ids=lambda v: f"out_{v}")
+def test_runtime_scaled_upcast_fp8(fp8_dtype, out_dtype):
+    # Cover all four v_cvt_scale_pk8 fp8 instructions: {bf16,f16} output x
+    # {fp8 (e4m3), bf8 (e5m2)} input.
+    torch_fp8 = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2}[fp8_dtype]
+    ttgl_out = {"bf16": ttgl.bfloat16, "f16": ttgl.float16}[out_dtype]
+    torch_out = {"bf16": torch.bfloat16, "f16": torch.float16}[out_dtype]
+    in_mnemonic = {"e4m3": "fp8", "e5m2": "bf8"}[fp8_dtype]
+
+    @gluon.jit
+    def scaled_upcast_fp8_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
+                                 OUT_DTYPE: ttgl.constexpr):
+        # FP8 v_cvt_scale_pk8 (opSel=0) reads the same Vscale byte for both
+        # output-lane halves, so it requires a scale layout that is broadcast
+        # across the lane^16 split (lane_bases[4] = [0, 0]).
+        layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]],
+            lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]],
+            warp_bases=[],
+            block_bases=[],
+            shape=[BLOCK_M, BLOCK_K],
+        )
+
+        offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, layout))
+        offs_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, layout))
+        offsets = offs_m[:, None] * BLOCK_K + offs_k[None, :]
+        x = ttgl.load(x_ptr + offsets)
+        scale = ttgl.load(scale_ptr + offsets)
+
+        y = ttgl.amd.gfx1250.scaled_upcast(x, scale, OUT_DTYPE)
+        ttgl.store(y_ptr + offsets, y)
+
+    BLOCK_M = 16
+    BLOCK_K = 64
+    SCALE_FACTOR = 32
+    torch.manual_seed(42)
+
+    x, x_ref = create_mxfp_operand(0, BLOCK_M, BLOCK_K, fp8_dtype)
+    x = x.view(torch_fp8)
+    scale, scale_ref = create_mxfp_scale(0, BLOCK_M, BLOCK_K, "e8m0", SCALE_FACTOR)
+    scale = scale.repeat_interleave(SCALE_FACTOR, dim=1).contiguous()
+    y = torch.empty((BLOCK_M, BLOCK_K), dtype=torch_out, device="cuda")
+
+    pgm = scaled_upcast_fp8_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, ttgl_out, num_warps=1)
+
+    assert f"v_cvt_scale_pk8_{out_dtype}_{in_mnemonic}" in pgm.asm["amdgcn"]
+    y_ref = (x_ref * scale_ref).to(torch_out)
+    torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+def test_runtime_scaled_upcast_fp8_non_broadcast_block16():
 
     @gluon.jit
     def scaled_upcast_fp8_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr):
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 4], [4, 1], [1, 0])
+        # This layout is not broadcast across lane^16 (lane_bases[4] = [16, 0]).
+        # FP8 lowering uses v_cvt_scale_pk8 Block16 mode (opSel=8) and packs
+        # lane (j^16)'s scale into byte 1 via a cross-lane exchange.
+        layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]],
+            lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
+            warp_bases=[],
+            block_bases=[],
+            shape=[BLOCK_M, BLOCK_K],
+        )
 
         offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, layout))
         offs_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, layout))
@@ -187,7 +325,7 @@ def test_runtime_scaled_upcast_fp8():
         y = ttgl.amd.gfx1250.scaled_upcast(x, scale, ttgl.bfloat16)
         ttgl.store(y_ptr + offsets, y)
 
-    BLOCK_M = 16
+    BLOCK_M = 32
     BLOCK_K = 64
     SCALE_FACTOR = 32
     torch.manual_seed(42)
@@ -198,7 +336,7 @@ def test_runtime_scaled_upcast_fp8():
     scale = scale.repeat_interleave(SCALE_FACTOR, dim=1).contiguous()
     y = torch.empty((BLOCK_M, BLOCK_K), dtype=torch.bfloat16, device="cuda")
 
-    pgm = scaled_upcast_fp8_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, num_warps=4)
+    pgm = scaled_upcast_fp8_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, num_warps=1)
 
     assert "v_cvt_scale_pk8_bf16_fp8" in pgm.asm["amdgcn"]
     y_ref = (x_ref * scale_ref).to(torch.bfloat16)
@@ -217,13 +355,9 @@ def test_runtime_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K, M, N, 
     def create_operand(shape, dtype):
         if dtype in (torch.float16, torch.bfloat16, torch.float32):
             return torch.randn(shape, dtype=dtype)
-        elif dtype == torch.float8_e5m2:
-            # range from min normal (0 00001 00) to max normal (0 11110 11)
-            return torch.randint(0x04, 0x7B, shape, dtype=torch.uint8).view(dtype)
         else:
-            # range from min normal (0 0001 000) to max normal (0 1110 111)
-            assert dtype == torch.float8_e4m3fn
-            return torch.randint(0x08, 0x77, shape, dtype=torch.uint8).view(dtype)
+            assert dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
+            return torch.randint(20, 40, shape, dtype=torch.uint8).view(dtype)
 
     a_dtype = getattr(torch, a_dtype)
     b_dtype = getattr(torch, b_dtype)
@@ -630,9 +764,11 @@ def test_compile_gemm_async_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, AS
         b_rows = BLOCK_N if B_K_CONTIG else BLOCK_K
         copy_isntr_for_B = b_rows // 4 // 4
         copy_instr_per_iter = copy_instr_for_A + copy_isntr_for_B
+        assert len(re.findall("ttg.async_copy_global_to_local", ttgir)) == NUM_BUFFERS * 2
         for cnt in range(NUM_BUFFERS - 1, -1, -1):
             assert re.search(f"s_wait_asynccnt 0x{(cnt * copy_instr_per_iter):x}", amdgcn)
         # Each instruction loads 4 rows per warp and we have 4 warps (see BlockedLayout in test)
+        # Only treat this as a lower bound because LLVM might unroll the loop
         assert len(re.findall("global_load_async_to_lds", amdgcn)) >= NUM_BUFFERS * copy_instr_per_iter
 
 
@@ -832,7 +968,7 @@ def test_runtime_gemm_async(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, a_dtype, b_dtype
             return torch.randn(shape, dtype=dtype)
         else:
             assert dtype == torch.float8_e5m2
-            return torch.randint(0x04, 0x7B, shape, dtype=torch.uint8).view(dtype)
+            return torch.randint(20, 40, shape, dtype=torch.uint8).view(dtype)
 
     a_dtype = getattr(torch, a_dtype)
     b_dtype = getattr(torch, b_dtype)
@@ -3645,7 +3781,9 @@ def tdm_scatter_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_out, stri
     dst_row_indices = ttgl.load(dst_row_indices_ptr + idx_offs)
 
     # Scatter the data to non-contiguous rows starting at DST_COL_OFFSET
-    ttgl.amd.gfx1250.tdm.async_scatter(out_desc, dst_row_indices, DST_COL_OFFSET, smem)
+    out_desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(out_desc, add_offsets=[0, DST_COL_OFFSET],
+                                                             clamp_bounds=True)
+    ttgl.amd.gfx1250.tdm.async_scatter(out_desc, dst_row_indices, smem)
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
 
@@ -3890,7 +4028,8 @@ def tdm_scatter_multi_col_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M, N, st
     dst_row_indices = ttgl.load(dst_row_indices_ptr + pid_m * BLOCK_M + idx_offs, mask=idx_mask, other=M)
 
     col_offset = pid_n * BLOCK_N
-    ttgl.amd.gfx1250.tdm.async_scatter(out_desc, dst_row_indices, col_offset, smem)
+    out_desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(out_desc, add_offsets=[0, col_offset], clamp_bounds=True)
+    ttgl.amd.gfx1250.tdm.async_scatter(out_desc, dst_row_indices, smem)
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
 
@@ -3950,7 +4089,9 @@ def _tdm_scatter_padded_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_o
     idx_offs = ttgl.arange(0, NUM_INDICES, layout=IDX_LAYOUT)
     dst_row_indices = ttgl.load(dst_row_indices_ptr + idx_offs)
 
-    ttgl.amd.gfx1250.tdm.async_scatter(out_desc, dst_row_indices, DST_COL_OFFSET, smem)
+    out_desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(out_desc, add_offsets=[0, DST_COL_OFFSET],
+                                                             clamp_bounds=True)
+    ttgl.amd.gfx1250.tdm.async_scatter(out_desc, dst_row_indices, smem)
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
 
@@ -4024,8 +4165,9 @@ def tdm_gather_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_inp, strid
     idx_offs = ttgl.arange(0, NUM_INDICES, layout=IDX_LAYOUT)
     src_row_indices = ttgl.load(src_row_indices_ptr + idx_offs)
 
-    # Gather data from non-contiguous rows starting at SRC_COL_OFFSET
-    ttgl.amd.gfx1250.tdm.async_gather(inp_desc, src_row_indices, SRC_COL_OFFSET, smem)
+    inp_desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(inp_desc, add_offsets=[0, SRC_COL_OFFSET],
+                                                             clamp_bounds=True)
+    ttgl.amd.gfx1250.tdm.async_gather(inp_desc, src_row_indices, smem)
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
     # Store gathered data to output using TDM
@@ -4033,6 +4175,28 @@ def tdm_gather_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_inp, strid
                                                            block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
     ttgl.amd.gfx1250.tdm.async_store(out_desc, [0, 0], smem)
     ttgl.amd.gfx1250.tdm.async_wait(0)
+
+
+@gluon.jit
+def tdm_gather_multi_cta_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_inp, stride_m, BLOCK_M: ttgl.constexpr,
+                                BLOCK_N: ttgl.constexpr, SRC_COL_OFFSET: ttgl.constexpr, SHARED_LAYOUT: ttgl.constexpr,
+                                BLOCK_LAYOUT: ttgl.constexpr, IDX_LAYOUT: ttgl.constexpr):
+    """Kernel that uses TDM gather with a multi-CTA shared-memory layout."""
+    smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
+
+    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(M_inp, N_inp), strides=(stride_m, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+
+    idx_offs = ttgl.arange(0, BLOCK_M, layout=IDX_LAYOUT)
+    src_row_indices = ttgl.load(src_row_indices_ptr + idx_offs)
+
+    ttgl.amd.gfx1250.tdm.async_gather(inp_desc, src_row_indices, smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    gathered = smem.load(layout=BLOCK_LAYOUT)
+    offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, BLOCK_LAYOUT))
+    offs_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, BLOCK_LAYOUT))
+    ttgl.store(out_ptr + offs_m[:, None] * BLOCK_N + offs_n[None, :], gathered)
 
 
 @pytest.mark.parametrize("NUM_INDICES", [1, 2, 4, 8, 16])
@@ -4083,6 +4247,53 @@ def test_compile_tdm_gather(NUM_INDICES, BLOCK_M, BLOCK_N, dtype, index_dtype, s
     # Verify the gather uses tensor load to lds
     assert re.search("tensor_load_to_lds", amdgcn), "Expected tensor_load_to_lds instruction for TDM gather"
     assert re.search("s_wait_tensorcnt 0x0", amdgcn), "Expected s_wait_tensorcnt instruction"
+
+
+@pytest.mark.parametrize("CGALayout", [[[0, 0]],  # 1x1 cluster (single-cta)
+                                       [[0, 1]],  # 1x2 cluster
+                                       [[1, 0], [2, 0]],  # 4x1 cluster
+                                       [[0, 1], [0, 2]],  # 1x4 cluster
+                                       [[1, 0], [0, 1]],  # 2x2 cluster
+                                       ])
+def test_compile_tdm_gather_multi_cta(CGALayout):
+    """Test that TDM gather compiles for multi-CTA layouts."""
+    BLOCK_M = 16
+    BLOCK_N = 64
+    NUM_WARPS = 1
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], CGALayout)
+    BLOCK_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [NUM_WARPS, 1], [1, 0], CGALayout)
+    IDX_CGA_LAYOUT: ttgl.constexpr = [[basis[0], 0] for basis in CGALayout]
+    IDX_PARENT_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([BLOCK_M, 1], [1, 32], [1, NUM_WARPS], [1, 0],
+                                                           IDX_CGA_LAYOUT)
+    IDX_LAYOUT: ttgl.constexpr = ttgl.SliceLayout(1, IDX_PARENT_LAYOUT)
+    num_ctas = 2**len(CGALayout)
+
+    signature = {
+        "inp_ptr": "*fp16",
+        "out_ptr": "*fp16",
+        "src_row_indices_ptr": "*i32",
+        "M_inp": "i32",
+        "N_inp": "i32",
+        "stride_m": "i32",
+        "BLOCK_M": "constexpr",
+        "BLOCK_N": "constexpr",
+        "SRC_COL_OFFSET": "constexpr",
+        "SHARED_LAYOUT": "constexpr",
+        "BLOCK_LAYOUT": "constexpr",
+        "IDX_LAYOUT": "constexpr",
+    }
+    constexprs = {
+        "BLOCK_M": BLOCK_M,
+        "BLOCK_N": BLOCK_N,
+        "SRC_COL_OFFSET": 0,
+        "SHARED_LAYOUT": SHARED_LAYOUT,
+        "BLOCK_LAYOUT": BLOCK_LAYOUT,
+        "IDX_LAYOUT": IDX_LAYOUT,
+    }
+
+    k = triton.compile(gluon._runtime.GluonASTSource(tdm_gather_multi_cta_kernel, signature, constexprs),
+                       target=GPUTarget("hip", 'gfx1250', 32), options={"num_warps": NUM_WARPS, "num_ctas": num_ctas})
+    assert re.search("tensor_load_to_lds", k.asm["amdgcn"])
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
@@ -4144,6 +4355,51 @@ def test_runtime_tdm_gather(NUM_INDICES, BLOCK_M, BLOCK_N, src_col_offset, dtype
     inp_bytes = inp.view(torch.uint8).reshape(M_inp, -1)
     ref_bytes = inp_bytes[src_row_indices.long(), src_col_offset * elem_size:(src_col_offset + BLOCK_N) * elem_size]
     torch.testing.assert_close(gathered_out.view(torch.uint8), ref_bytes)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("CGALayout", [[[0, 0]],  # 1x1 cluster (single-cta)
+                                       [[0, 1]],  # 1x2 cluster
+                                       [[1, 0], [2, 0]],  # 4x1 cluster
+                                       [[0, 1], [0, 2]],  # 1x4 cluster
+                                       [[1, 0], [0, 1]],  # 2x2 cluster
+                                       ])
+@pytest.mark.parametrize("src_col_offset,physical_tail_cols", [(0, 0), (16, 16)])
+def test_runtime_tdm_gather_multi_cta(CGALayout, src_col_offset, physical_tail_cols):
+    """Test TDM gather correctness with multi-CTA and multicast layouts."""
+    torch.manual_seed(42)
+
+    BLOCK_M = 16
+    BLOCK_N = 64
+    NUM_WARPS = 1
+    num_ctas = 2**len(CGALayout)
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], CGALayout)
+    BLOCK_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [NUM_WARPS, 1], [1, 0], CGALayout)
+    IDX_CGA_LAYOUT: ttgl.constexpr = [[basis[0], 0] for basis in CGALayout]
+    IDX_PARENT_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([BLOCK_M, 1], [1, 32], [1, NUM_WARPS], [1, 0],
+                                                           IDX_CGA_LAYOUT)
+    IDX_LAYOUT: ttgl.constexpr = ttgl.SliceLayout(1, IDX_PARENT_LAYOUT)
+
+    M_inp = 128
+    N_inp = BLOCK_N
+    physical_N_inp = N_inp + physical_tail_cols
+    inp = _create_scatter_test_data((M_inp, physical_N_inp), torch.float16)
+    out = torch.zeros((BLOCK_M, BLOCK_N), dtype=torch.float16)
+    src_row_indices = torch.randperm(M_inp, dtype=torch.int32)[:BLOCK_M]
+
+    inp_d = inp.cuda()
+    out_d = out.cuda()
+    indices_d = src_row_indices.cuda()
+
+    tdm_gather_multi_cta_kernel[(1, )](inp_d, out_d, indices_d, M_inp=M_inp, N_inp=N_inp, stride_m=inp_d.stride(0),
+                                       BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, SHARED_LAYOUT=SHARED_LAYOUT,
+                                       SRC_COL_OFFSET=src_col_offset, BLOCK_LAYOUT=BLOCK_LAYOUT, IDX_LAYOUT=IDX_LAYOUT,
+                                       num_warps=NUM_WARPS, num_ctas=num_ctas)
+
+    valid_cols = N_inp - src_col_offset
+    ref = torch.zeros_like(out)
+    ref[:, :valid_cols] = inp[src_row_indices.long(), src_col_offset:N_inp]
+    torch.testing.assert_close(out_d.cpu().view(torch.uint8), ref.view(torch.uint8))
 
 
 @pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])
@@ -4279,7 +4535,8 @@ def tdm_gather_multi_col_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M, N, str
     src_row_indices = ttgl.load(src_row_indices_ptr + pid_m * BLOCK_M + idx_offs, mask=idx_mask, other=M)
 
     col_offset = pid_n * BLOCK_N
-    ttgl.amd.gfx1250.tdm.async_gather(inp_desc, src_row_indices, col_offset, smem)
+    inp_desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(inp_desc, add_offsets=[0, col_offset], clamp_bounds=True)
+    ttgl.amd.gfx1250.tdm.async_gather(inp_desc, src_row_indices, smem)
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
     out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=(M, N), strides=(stride_m, 1),
@@ -4308,7 +4565,9 @@ def _tdm_gather_layout_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_in
     idx_offs = ttgl.arange(0, NUM_INDICES, layout=IDX_LAYOUT)
     src_row_indices = ttgl.load(src_row_indices_ptr + idx_offs)
 
-    ttgl.amd.gfx1250.tdm.async_gather(inp_desc, src_row_indices, SRC_COL_OFFSET, smem)
+    inp_desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(inp_desc, add_offsets=[0, SRC_COL_OFFSET],
+                                                             clamp_bounds=True)
+    ttgl.amd.gfx1250.tdm.async_gather(inp_desc, src_row_indices, smem)
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
     out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
@@ -4430,7 +4689,9 @@ def _tdm_scatter_layout_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_o
     idx_offs = ttgl.arange(0, NUM_INDICES, layout=IDX_LAYOUT)
     dst_row_indices = ttgl.load(dst_row_indices_ptr + idx_offs)
 
-    ttgl.amd.gfx1250.tdm.async_scatter(out_desc, dst_row_indices, DST_COL_OFFSET, smem)
+    out_desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(out_desc, add_offsets=[0, DST_COL_OFFSET],
+                                                             clamp_bounds=True)
+    ttgl.amd.gfx1250.tdm.async_scatter(out_desc, dst_row_indices, smem)
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
 
@@ -4534,6 +4795,8 @@ def async_load_store_roundtrip_kernel(a_ptr, b_ptr, BLOCK: ttgl.constexpr, loadC
     offs = pid * BLOCK + ttgl.arange(0, BLOCK, layout=BLOCKED_LAYOUT)
     buffer = ttgl.allocate_shared_memory(ttgl.float16, shape=[BLOCK], layout=SHARED_LAYOUT)
     ttgl.amd.gfx1250.async_copy.global_to_shared(buffer, a_ptr + offs, cache_modifier=loadCM)
+    ttgl.amd.gfx1250.async_copy.commit_group()
+    ttgl.amd.gfx1250.async_copy.wait_group(0)
     ttgl.amd.gfx1250.async_copy.shared_to_global(b_ptr + offs, buffer, cache_modifier=storeCM)
 
 
@@ -4590,10 +4853,80 @@ def test_cache_modifier(loadCM, storeCM, test_kernel):
                 assert "scope" not in line and "th" not in line
             if storeCM == ".cg":
                 assert "scope:SCOPE_DEV" in line and "th" not in line
-            if storeCM == "cs":
-                assert "scope" not in line and "th:TH_LOAD_NT" in line
+            if storeCM == ".cs":
+                assert "scope" not in line and "th:TH_STORE_NT" in line
             if storeCM == ".wt":
                 assert "scope:SCOPE_SYS" in line and "th:TH_STORE_BYPASS" in line
 
     assert load_found
     assert store_found
+
+
+# Multi-CTA batched matmul: each CTA in the cluster computes one batch of A @ B.
+@gluon.jit
+def gemm_3d_cga_split_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
+                             BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
+                             NUM_CTAS: ttgl.constexpr, K_WIDTH: ttgl.constexpr, load_layout: ttgl.constexpr,
+                             wmma_layout: ttgl.constexpr):
+    load_dim0_layout: ttgl.constexpr = ttgl.SliceLayout(1, ttgl.SliceLayout(2, load_layout))
+    load_dim1_layout: ttgl.constexpr = ttgl.SliceLayout(0, ttgl.SliceLayout(2, load_layout))
+    load_dim2_layout: ttgl.constexpr = ttgl.SliceLayout(0, ttgl.SliceLayout(1, load_layout))
+    wmma_dim0_layout: ttgl.constexpr = ttgl.SliceLayout(1, ttgl.SliceLayout(2, wmma_layout))
+    wmma_dim1_layout: ttgl.constexpr = ttgl.SliceLayout(0, ttgl.SliceLayout(2, wmma_layout))
+    wmma_dim2_layout: ttgl.constexpr = ttgl.SliceLayout(0, ttgl.SliceLayout(1, wmma_layout))
+
+    ob = ttgl.arange(0, NUM_CTAS, layout=load_dim0_layout)
+    om = ttgl.arange(0, BLOCK_M, layout=load_dim1_layout)
+    ok = ttgl.arange(0, BLOCK_K, layout=load_dim2_layout)
+    okb = ttgl.arange(0, BLOCK_K, layout=load_dim1_layout)
+    on = ttgl.arange(0, BLOCK_N, layout=load_dim2_layout)
+
+    offs_a = ob[:, None, None] * (M * K) + om[None, :, None] * K + ok[None, None, :]
+    a = ttgl.load(a_ptr + offs_a)
+    offs_b = ob[:, None, None] * (K * N) + okb[None, :, None] * N + on[None, None, :]
+    b = ttgl.load(b_ptr + offs_b)
+
+    a = ttgl.convert_layout(a, ttgl.DotOperandLayout(0, wmma_layout, K_WIDTH))
+    b = ttgl.convert_layout(b, ttgl.DotOperandLayout(1, wmma_layout, K_WIDTH))
+    acc = ttgl.zeros((NUM_CTAS, BLOCK_M, BLOCK_N), dtype=ttgl.float32, layout=wmma_layout)
+    acc = ttgl.amd.gfx1250.wmma(a, b, acc)
+
+    sb = ttgl.arange(0, NUM_CTAS, layout=wmma_dim0_layout)
+    sm = ttgl.arange(0, BLOCK_M, layout=wmma_dim1_layout)
+    sn = ttgl.arange(0, BLOCK_N, layout=wmma_dim2_layout)
+    offs_c = sb[:, None, None] * (BLOCK_M * BLOCK_N) + sm[None, :, None] * BLOCK_N + sn[None, None, :]
+    ttgl.store(c_ptr + offs_c, acc)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("num_ctas", [2, 4])
+def test_runtime_gemm_3d_multi_cta(num_ctas):
+    BLOCK_M = BLOCK_N = 32
+    BLOCK_K = 64
+    num_warps = 4
+    M, N, K = BLOCK_M, BLOCK_N, BLOCK_K
+
+    cga = make_cga_layout([num_ctas, 1, 1], [num_ctas, 1, 1], [2, 1, 0])
+    n_warps = 2
+    m_warps = num_warps // n_warps
+    sM = BLOCK_M // (m_warps * 8)
+    sN = BLOCK_N // (n_warps * 4)
+    load_layout = ttgl.BlockedLayout([1, sM, sN], [1, 8, 4], [1, m_warps, n_warps], [2, 1, 0], cga)
+    warp_bases = [[0, 0, 1]]
+    for i in range(int(math.log2(num_warps // 2))):
+        warp_bases.append([0, 1 << i, 0])
+    wmma_layout = ttgl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=warp_bases, reg_bases=[],
+                                         instr_shape=[16, 16, 32], cga_layout=cga, rank=3)
+
+    torch.manual_seed(0)
+    a = torch.randn((num_ctas, M, K), dtype=torch.float16)
+    b = torch.randn((num_ctas, K, N), dtype=torch.float16)
+    c = torch.zeros((num_ctas, M, N), dtype=torch.float32)
+    a_device, b_device, c_device = a.cuda(), b.cuda(), c.cuda()
+
+    # Launching with num_ctas > 1 runs the multi-CTA CGA-layout verifier on the rank-3 dot.
+    gemm_3d_cga_split_kernel[(1, )](a_device, b_device, c_device, M, N, K, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+                                    BLOCK_K=BLOCK_K, NUM_CTAS=num_ctas, K_WIDTH=8, load_layout=load_layout,
+                                    wmma_layout=wmma_layout, num_warps=num_warps, num_ctas=num_ctas)
+
+    torch.testing.assert_close(c_device.cpu(), torch.bmm(a.float(), b.float()), rtol=2e-2, atol=2e-2)

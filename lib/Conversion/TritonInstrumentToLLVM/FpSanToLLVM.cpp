@@ -123,10 +123,14 @@ Value mixFloatToInt(ConversionPatternRewriter &rewriter, Location loc, Value u,
   PayloadMixConfig cfg = getPayloadMixConfig(floatTy);
   Value signFlip =
       selectUIntConstantOnSign(rewriter, loc, u, cfg.signMask, 0, cfg.signMask);
-  Value x = b.xor_(u, signFlip);
   Value mulA = createUIntConstant(rewriter, loc, u.getType(), cfg.mulA);
   Value magMask = createUIntConstant(rewriter, loc, u.getType(), cfg.magMask);
-  Value yMul = b.mul(x, mulA);
+  // Avoid patterns that InstCombine rewrites to `llvm.fabs`. LLVM specifies
+  // that `llvm.fabs` preserves the NaN quiet/signaling bit and payload, but
+  // NVPTX lowers it to PTX `abs.f32`, whose NaN result is unspecified. On
+  // Blackwell, `abs.f32` is observed to canonicalize signaling NaNs, corrupting
+  // FPSan payloads.
+  Value yMul = b.mul(u, mulA);
   Value y = b.and_(yMul, magMask);
   Value z = xorShiftRight(rewriter, loc, y, cfg.shift);
   Value mulB = selectUIntConstantOnSign(rewriter, loc, u, cfg.signMask,
@@ -142,11 +146,10 @@ Value unmixIntToFloat(ConversionPatternRewriter &rewriter, Location loc,
   PayloadMixConfig cfg = getPayloadMixConfig(floatTy);
   Value signFlip =
       selectUIntConstantOnSign(rewriter, loc, v, cfg.signMask, 0, cfg.signMask);
-  Value w = b.xor_(v, signFlip);
   Value magMask = createUIntConstant(rewriter, loc, v.getType(), cfg.magMask);
   Value mulBInv = selectUIntConstantOnSign(rewriter, loc, v, cfg.signMask,
                                            cfg.mulBPosInv, cfg.mulBNegInv);
-  Value zMul = b.mul(w, mulBInv);
+  Value zMul = b.mul(v, mulBInv);
   Value z = b.and_(zMul, magMask);
   Value y = inverseXorShiftRight(rewriter, loc, z, cfg);
   Value mulAInv = createUIntConstant(rewriter, loc, v.getType(), cfg.mulAInv);
@@ -175,13 +178,14 @@ struct ExperimentalFPSanEmbedOpConversion
     Type intTy = rewriter.getIntegerType(floatTy.getWidth());
 
     SmallVector<Value> resultVals;
-    for (Value elem : unpackLLElements(loc, adaptor.getVal(), rewriter)) {
+    for (Value elem :
+         unpackUniqueTensorElements(loc, adaptor.getVal(), rewriter)) {
       Value raw = bitcastIfNeeded(rewriter, loc, elem, intTy);
       resultVals.push_back(mixFloatToInt(rewriter, loc, raw, floatTy));
     }
 
-    Value result = packLLElements(loc, getTypeConverter(), resultVals, rewriter,
-                                  op.getType());
+    Value result = packUniqueTensorElements(loc, getTypeConverter(), resultVals,
+                                            rewriter, op.getType());
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -199,13 +203,14 @@ struct ExperimentalFPSanUnembedOpConversion
     Type resultElemTy = getTypeConverter()->convertType(floatTy);
 
     SmallVector<Value> resultVals;
-    for (Value elem : unpackLLElements(loc, adaptor.getVal(), rewriter)) {
+    for (Value elem :
+         unpackUniqueTensorElements(loc, adaptor.getVal(), rewriter)) {
       Value raw = unmixIntToFloat(rewriter, loc, elem, floatTy);
       resultVals.push_back(bitcastIfNeeded(rewriter, loc, raw, resultElemTy));
     }
 
-    Value result = packLLElements(loc, getTypeConverter(), resultVals, rewriter,
-                                  op.getType());
+    Value result = packUniqueTensorElements(loc, getTypeConverter(), resultVals,
+                                            rewriter, op.getType());
     rewriter.replaceOp(op, result);
     return success();
   }

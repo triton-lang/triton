@@ -228,7 +228,7 @@ def TritonGPUOptimizeDotOperands : Pass<"tritongpu-optimize-dot-operands", "mlir
   let options = [
     Option<"hoistLayoutConversion", "hoist-layout-conversion",
            "bool", /*default*/"true",
-           "whether to move conver to dot operand earlier pass elementwise ops">
+           "whether to move convert to dot operand earlier pass elementwise ops">
   ];
 }
 
@@ -261,6 +261,12 @@ def TritonGPURemoveLayoutConversions : Pass<"tritongpu-remove-layout-conversions
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
 
+  let options = [
+    Option<"disableRematSplitting", "disable-remat-splitting",
+           "bool", /*default*/"false",
+           "prevent rematerialization from splitting or duplicating "
+           "convert-layout work">
+  ];
 }
 
 def TritonGPUOptimizeThreadLocality : Pass<"tritongpu-optimize-thread-locality", "mlir::ModuleOp"> {

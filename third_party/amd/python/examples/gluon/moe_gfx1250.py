@@ -342,8 +342,9 @@ class MoEProgramBase:
 
         if cfg.USE_GATHER:
             col_offset_x = self.off_k_x + load_idx * BLOCK_K_PACKED_X
-            tdm.async_gather(self.x_desc, self.gathered_m, col_offset_x,
-                             self.x_buffer.index(load_idx % cfg.NUM_BUFFERS), pred=pred)
+            x_desc_k = tdm.update_tensor_descriptor(self.x_desc, add_offsets=[0, col_offset_x], pred=pred,
+                                                    clamp_bounds=True)
+            tdm.async_gather(x_desc_k, self.gathered_m, self.x_buffer.index(load_idx % cfg.NUM_BUFFERS))
         else:
             tdm.async_load(self.x_desc, [0, load_idx * BLOCK_K_PACKED_X],
                            self.x_buffer.index(load_idx % cfg.NUM_BUFFERS), pred=pred)
@@ -358,8 +359,9 @@ class MoEProgramBase:
         if cfg.WITH_X_MX_SCALE:
             if cfg.USE_GATHER:
                 col_offset_x_scale = self.off_k_x * cfg.DIV_FACTOR_X // cfg.SCALE_BLOCK + load_idx * BLOCK_K_SCALE
-                tdm.async_gather(self.x_scale_desc, self.gathered_m, col_offset_x_scale,
-                                 self.x_scale_buffer.index(load_idx % cfg.NUM_BUFFERS), pred=pred)
+                x_scale_desc_k = tdm.update_tensor_descriptor(self.x_scale_desc, add_offsets=[0, col_offset_x_scale],
+                                                              pred=pred, clamp_bounds=True)
+                tdm.async_gather(x_scale_desc_k, self.gathered_m, self.x_scale_buffer.index(load_idx % cfg.NUM_BUFFERS))
             else:
                 tdm.async_load(self.x_scale_desc, [0, load_idx * cfg.BLOCK_K_SCALE_PRESHUFFLED],
                                self.x_scale_buffer.index(load_idx % cfg.NUM_BUFFERS), pred=pred)
@@ -822,8 +824,9 @@ class MoESliceNKProgram:
 
         if cfg.USE_GATHER:
             col_offset_x = self.off_k_x + load_idx * BLOCK_K_PACKED_X
-            tdm.async_gather(self.x_desc, self.gathered_m, col_offset_x,
-                             self.x_buffer.index(load_idx % cfg.NUM_BUFFERS), pred=pred)
+            x_desc_k = tdm.update_tensor_descriptor(self.x_desc, add_offsets=[0, col_offset_x], pred=pred,
+                                                    clamp_bounds=True)
+            tdm.async_gather(x_desc_k, self.gathered_m, self.x_buffer.index(load_idx % cfg.NUM_BUFFERS))
         else:
             tdm.async_load(self.x_desc, [0, load_idx * BLOCK_K_PACKED_X],
                            self.x_buffer.index(load_idx % cfg.NUM_BUFFERS), pred=pred)
@@ -831,8 +834,9 @@ class MoESliceNKProgram:
         if cfg.WITH_X_MX_SCALE:
             if cfg.USE_GATHER:
                 col_offset_x_scale = self.off_k_x * cfg.DIV_FACTOR_X // cfg.SCALE_BLOCK + load_idx * BLOCK_K_SCALE
-                tdm.async_gather(self.x_scale_desc, self.gathered_m, col_offset_x_scale,
-                                 self.x_scale_buffer.index(load_idx % cfg.NUM_BUFFERS), pred=pred)
+                x_scale_desc_k = tdm.update_tensor_descriptor(self.x_scale_desc, add_offsets=[0, col_offset_x_scale],
+                                                              pred=pred, clamp_bounds=True)
+                tdm.async_gather(x_scale_desc_k, self.gathered_m, self.x_scale_buffer.index(load_idx % cfg.NUM_BUFFERS))
             else:
                 tdm.async_load(self.x_scale_desc, [0, load_idx * cfg.BLOCK_K_SCALE_PRESHUFFLED],
                                self.x_scale_buffer.index(load_idx % cfg.NUM_BUFFERS), pred=pred)
@@ -1170,7 +1174,8 @@ def _matmul(Y, stride_y_k, stride_y_z, stride_y_m, stride_y_n, X, stride_x_z, st
                                             block_shape=(BLOCK_M, OUT_BLOCK_N), layout=SCATTER_SHARED_LAYOUT)
 
         col_offset = (OUT_BLOCK_N * pid_n).to(cfg.index_type)
-        tdm.async_scatter(y_desc, dst_row_indices, col_offset, out_smem)
+        y_desc = tdm.update_tensor_descriptor(y_desc, add_offsets=[0, col_offset], clamp_bounds=True)
+        tdm.async_scatter(y_desc, dst_row_indices, out_smem)
         tdm.async_wait(0)
     else:
         offs_y_m = off_m + gl.arange(0, BLOCK_M, gl.SliceLayout(1, BLOCKED_LAYOUT_Y))
@@ -1201,7 +1206,8 @@ def matmul(a, b, bias, a_ragged_metadata: RaggedTensorMetadata | None = None,
 
            # Optimization parameters
            num_buffers: int = 2, scale_block: int = 32, block_m: int = 128, block_n: int = 128, block_k: int = 256,
-           schedule: str = 'baseline', pingpong: bool = False, num_warps: int = 4):
+           schedule: str = 'baseline', pingpong: bool = False, num_warps: int = 4, benchmark_mode: str | None = None,
+           benchmark_num_iters: int = 32):
     if precision_config is None:
         precision_config = PrecisionConfig()
 
@@ -1303,16 +1309,28 @@ def matmul(a, b, bias, a_ragged_metadata: RaggedTensorMetadata | None = None,
     kernels = specializations.get(activation=fused_activation.specs)
 
     W_TRANSPOSE = True
-    k = kernels._matmul[(grid, )](
-        c_storage.data, *out_matmul.stride(), a_storage.data, *a_strides, a_scale, *a_scale_strides, b_storage.data,
-        *b_storage.data.stride(), W_TRANSPOSE, b_scale, *b_scale_strides, bias, bias_stride, M, N, K, K_W, gather_indx,
-        scatter_indx, None if scatter_indx is None else scatter_indx.shape[0], ragged_dimension, *expt_data_x,
-        *expt_data_w, batch_size, grid_m, grid_n, *fused_activation.fn_args, fused_activation.specs.reduction_n,
-        n_valid_slices, opt_flags.block_m, opt_flags.block_n, opt_flags.block_k, opt_flags.group_m,
-        opt_flags.xcd_swizzle, SWIZZLE_MX_SCALE=None if b_scale is None else b_scale.storage.layout.name,
-        EVEN_K=(K % opt_flags.block_k == 0), UPCAST_INDICES=should_upcast_indices(a, b,
-                                                                                  out_matmul), num_warps=num_warps,
-        NUM_BUFFERS=num_buffers, SCALE_BLOCK=scale_block, SCHEDULE=schedule, PINGPONG=pingpong, NUM_WARPS=num_warps)
+    fn = lambda: kernels._matmul[
+        (grid, )
+    ](c_storage.data, *out_matmul.stride(), a_storage.data, *a_strides, a_scale, *a_scale_strides, b_storage.data, *
+      b_storage.data.stride(
+      ), W_TRANSPOSE, b_scale, *b_scale_strides, bias, bias_stride, M, N, K, K_W, gather_indx, scatter_indx, None
+      if scatter_indx is None else scatter_indx.shape[0], ragged_dimension, *expt_data_x, *expt_data_w, batch_size,
+      grid_m, grid_n, *fused_activation.fn_args, fused_activation.specs.reduction_n, n_valid_slices, opt_flags.block_m,
+      opt_flags.block_n, opt_flags.block_k, opt_flags.group_m, opt_flags.xcd_swizzle, SWIZZLE_MX_SCALE=None
+      if b_scale is None else b_scale.storage.layout.name, EVEN_K=(
+          K % opt_flags.block_k == 0), UPCAST_INDICES=should_upcast_indices(a, b, out_matmul), num_warps=num_warps,
+      NUM_BUFFERS=num_buffers, SCALE_BLOCK=scale_block, SCHEDULE=schedule, PINGPONG=pingpong, NUM_WARPS=num_warps)
+
+    if benchmark_mode == 'graph':
+        time = triton.testing.do_bench_cudagraph(fn, rep=benchmark_num_iters)
+        tflops = 2 * M * N * K / (time * 1e-3) / 1e12
+        print(f'[moe matmul M={M} N={N} K={K}] execution time: {time} ms, {tflops:.2f} TFLOPS')
+    elif benchmark_mode == 'eager':
+        time = triton.testing.do_bench(fn, warmup=30, rep=benchmark_num_iters)
+        tflops = 2 * M * N * K / (time * 1e-3) / 1e12
+        print(f'[moe matmul M={M} N={N} K={K}] execution time: {time} ms, {tflops:.2f} TFLOPS')
+
+    k = fn()
 
     out_final = c_storage.data
     if not (is_input_batched or b_ragged_metadata is not None):
@@ -1484,7 +1502,7 @@ def routing(x, logits, n_expts_act, apply_softmax: bool = True):
 
 
 def main(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, num_buffers, action, block_m, block_n,
-         block_k, schedule='baseline', num_warps=4, pingpong=False):
+         block_k, schedule='baseline', num_warps=4, pingpong=False, benchmark_mode=None, benchmark_num_iters=32):
     assert ((x_dtype == "fp8" and w_dtype == "fp8") or w_dtype == "mx4")
     dev = 'cuda'
     batch = batch_per_expt * n_expts_tot // n_expts_act
@@ -1526,7 +1544,8 @@ def main(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
                            block_k=128 if is_e2e else block_k,  #
                            schedule='baseline' if is_e2e else schedule,  #
                            num_warps=4 if is_e2e else num_warps,  #
-                           pingpong=False if is_e2e else pingpong)
+                           pingpong=False if is_e2e else pingpong, benchmark_mode=None if is_e2e else benchmark_mode,
+                           benchmark_num_iters=benchmark_num_iters)
     else:
         logits = torch.randn((batch, n_expts_tot), device=dev)
 
@@ -1545,7 +1564,9 @@ def main(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
                       block_k=block_k,  #
                       schedule=schedule,  #
                       num_warps=num_warps,  #
-                      pingpong=pingpong)
+                      pingpong=pingpong,  #
+                      benchmark_mode=benchmark_mode,  #
+                      benchmark_num_iters=benchmark_num_iters)
     else:
         if x_dtype in (torch.float16, torch.bfloat16):
             x = torch.randn((batch * n_expts_act, dim2 // 2), device=dev, dtype=x_dtype)
@@ -1567,7 +1588,9 @@ def main(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
                       block_k=block_k,  #
                       schedule=schedule,  #
                       num_warps=num_warps,  #
-                      pingpong=pingpong)
+                      pingpong=pingpong,  #
+                      benchmark_mode=benchmark_mode,  #
+                      benchmark_num_iters=benchmark_num_iters)
 
     if action != "e2e":
         return x.cpu()
@@ -1594,6 +1617,14 @@ if __name__ == '__main__':
     parser.add_argument("--schedule", type=str, choices=['sliceNK', 'sliceK', 'baseline'], default='baseline')
     parser.add_argument("--num_warps", type=int, default=4, choices=[4, 8])
     parser.add_argument("--pingpong", action='store_true')
+    parser.add_argument(
+        "--benchmark-mode", choices=("graph", "eager", "none"), default="none",
+        help="Timing method for the dispatch/combine matmul. `graph` uses "
+        "triton.testing.do_bench_cudagraph, `eager` uses triton.testing.do_bench.")
+    parser.add_argument("--benchmark-num-iters", type=int, default=32,
+                        help="Number of iterations (rep) to run when benchmarking.")
     args = parser.parse_args()
+    if args.benchmark_mode == "none":
+        args.benchmark_mode = None
     main(**vars(args))
     print('✅ Done')

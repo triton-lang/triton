@@ -201,7 +201,7 @@ void MembarOrFenceAnalysis::visitTerminator(
     SmallVector<RegionSuccessor> regions;
     br.getSuccessorRegions(RegionBranchPoint::parent(), regions);
     for (RegionSuccessor &region : regions) {
-      if (region.isParent()) {
+      if (region.isOperation()) {
         successors.emplace_back(br->getBlock(), br->getIterator());
       } else {
         Block &block = region.getSuccessor()->front();
@@ -221,7 +221,7 @@ void MembarOrFenceAnalysis::visitTerminator(
     SmallVector<RegionSuccessor> regions;
     br.getSuccessorRegions(operands, regions);
     for (RegionSuccessor &region : regions) {
-      if (region.isParent()) {
+      if (region.isOperation()) {
         Operation *parent = br->getParentOp();
         successors.emplace_back(parent->getBlock(), parent->getIterator());
       } else {
@@ -245,6 +245,10 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 }
 
 bool containsLocalBarrier(Operation *op) {
+  if (isa<triton::AtomicPollOp>(op))
+    return true;
+  if (auto atomic = dyn_cast<triton::AtomicOpInterface>(op))
+    return atomic.getMemSemantic() != triton::MemSemantic::RELAXED;
   if (isa<gpu::BarrierOp>(op))
     return true;
   if (isa<ttng::ClusterBarrierOp>(op))
@@ -264,6 +268,20 @@ bool containsLocalBarrier(Operation *op) {
   return false;
 }
 
+// Returns true if the same block has a later wait or local barrier before any
+// memory effect or nested control flow.
+static bool hasSyncPointBeforeMemoryEffect(Operation *op) {
+  for (Operation *next = op->getNextNode(); next; next = next->getNextNode()) {
+    if (containsLocalBarrier(next) ||
+        next->hasTrait<mlir::OpTrait::MemWaitOpTrait>())
+      return true;
+
+    if (isa<RegionBranchOpInterface>(next) || !isMemoryEffectFree(next))
+      return false;
+  }
+  return false;
+}
+
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
@@ -272,10 +290,11 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     blockInfo->sync();
   }
 
+  // If the current op is an (async) memory wait and there is no later sync
+  // point before memory is accessed, insert a barrier op and sync. This avoids
+  // redundant barriers by deferring the barrier to the later sync point.
   if (op->hasTrait<mlir::OpTrait::MemWaitOpTrait>() &&
-      !containsLocalBarrier(op->getNextNode())) {
-    // If the current op is an async wait and the next op is not a barrier we
-    // insert a barrier op and sync
+      !hasSyncPointBeforeMemoryEffect(op)) {
     builder->setInsertionPointAfter(op);
     insertBarrier(op, builder);
     blockInfo->sync();

@@ -70,7 +70,7 @@ test-microbenchmark: all
 .PHONY: test-interpret
 test-interpret: all
 	cd python/test/unit && TRITON_INTERPRET=1 $(PYTEST) -n 16 -m interpreter cuda language/test_core.py language/test_standard.py \
-		language/test_random.py language/test_block_pointer.py language/test_subprocess.py language/test_line_info.py \
+		language/test_random.py language/test_subprocess.py language/test_line_info.py \
 		language/test_tuple.py runtime/test_launch.py runtime/test_autotuner.py::test_kwargs[False] \
 		../../tutorials/06-fused-attention.py::test_op --device=cpu
 
@@ -118,8 +118,7 @@ dev-install: dev-install-requires dev-install-triton
 .NOPARALLEL: dev-install-llvm
 dev-install-llvm:
 	LLVM_BUILD_PATH=$(LLVM_BUILD_PATH) scripts/build-llvm-project.sh
-	TRITON_BUILD_WITH_CLANG_LLD=1 TRITON_BUILD_WITH_CCACHE=0 \
-		LLVM_INCLUDE_DIRS=$(LLVM_BUILD_PATH)/include \
+	LLVM_INCLUDE_DIRS=$(LLVM_BUILD_PATH)/include \
 		LLVM_LIBRARY_DIR=$(LLVM_BUILD_PATH)/lib \
 		LLVM_SYSPATH=$(LLVM_BUILD_PATH) \
 	$(MAKE) dev-install

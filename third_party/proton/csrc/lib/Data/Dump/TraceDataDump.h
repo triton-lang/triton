@@ -45,31 +45,37 @@ struct KernelEvent {
   const KernelMetric *kernelMetric{};
   const DataEntry::FlexibleMetricMap *flexibleMetrics{};
   std::vector<Context> contexts;
+  uint64_t startTimeNs{};
+  uint64_t endTimeNs{};
   size_t launchEventId{details::kNoLaunchEventId};
   bool isGraphLinked{};
 
   KernelEvent(const KernelMetric *metric,
               const DataEntry::FlexibleMetricMap *metrics,
-              std::vector<Context> contexts, size_t launchId,
-              bool isGraphLinked)
+              std::vector<Context> contexts, uint64_t startTimeNs,
+              uint64_t endTimeNs, size_t launchId, bool isGraphLinked)
       : kernelMetric(metric), flexibleMetrics(metrics),
-        contexts(std::move(contexts)), launchEventId(launchId),
+        contexts(std::move(contexts)), startTimeNs(startTimeNs),
+        endTimeNs(endTimeNs), launchEventId(launchId),
         isGraphLinked(isGraphLinked) {}
 };
 
 struct CpuScopeEvent {
   size_t eventId;
+  size_t scopeId;
   std::vector<Context> contexts;
   size_t threadId;
   uint64_t startTimeNs;
   uint64_t endTimeNs;
   const DataEntry::FlexibleMetricMap *flexibleMetrics{};
 
-  CpuScopeEvent(size_t eventId, const DataEntry::FlexibleMetricMap *metrics,
+  CpuScopeEvent(size_t eventId, size_t scopeId,
+                const DataEntry::FlexibleMetricMap *metrics,
                 std::vector<Context> contexts, size_t tid, uint64_t start,
                 uint64_t end)
-      : eventId(eventId), contexts(std::move(contexts)), threadId(tid),
-        startTimeNs(start), endTimeNs(end), flexibleMetrics(metrics) {}
+      : eventId(eventId), scopeId(scopeId), contexts(std::move(contexts)),
+        threadId(tid), startTimeNs(start), endTimeNs(end),
+        flexibleMetrics(metrics) {}
 };
 
 struct GraphScopeEvent {

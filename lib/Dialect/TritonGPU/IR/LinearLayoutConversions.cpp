@@ -16,6 +16,7 @@
 #include "llvm/Support/MathExtras.h"
 
 using mlir::triton::nvidia_gpu::TensorMemoryEncodingAttr;
+using mlir::triton::nvidia_gpu::TensorMemoryScalesBlockRepOrder;
 using mlir::triton::nvidia_gpu::TensorMemoryScalesEncodingAttr;
 
 namespace mlir::triton::gpu {
@@ -191,6 +192,77 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
   }
   auto outDimNames = standardOutDimNames(ctx, 2);
   return LinearLayout({{S("offset"), bases2D}}, outDimNames);
+}
+
+LinearLayout getScaleSmemLayoutForTMEMCopy(MLIRContext *ctx,
+                                           ArrayRef<int64_t> shape,
+                                           CGAEncodingAttr cgaLayout) {
+  assert(shape.size() == 2 && "scale layout expects rank-2");
+  assert(shape[0] % 128 == 0 && "scale rows must be a multiple of 128");
+  assert(shape[1] % 4 == 0 && "scale columns must be a multiple of 4");
+
+  auto rows = shape[0];
+  auto cols = shape[1];
+  auto kOffset = S("offset");
+  auto kFlat = S("flat");
+  auto kColLo = S("colLo");
+  auto kRowMid = S("rowMid");
+  auto kRowLo = S("rowLo");
+  auto kOuterCol = S("outerCol");
+  auto kOuterRow = S("outerRow");
+  auto outDims = standardOutDimNames(ctx, 2);
+
+  int32_t outerRows = rows / (32 * 4);
+  int32_t outerCols = cols / 4;
+
+  // Build the semantic pre-transpose chunked view that the user/kernel
+  // convention exposes before flattening back to 2D.
+  //
+  // Scale example:
+  //   shape         = [256, 16]
+  //   innerColSize  = 4
+  //   rowMidSize    = 4
+  //   rowLoSize     = 32
+  //
+  // The logical 2D scale tensor is interpreted as:
+  //   [outerRow=2, outerCol=4, rowLo=32, rowMid=4, colLo=4]
+  SmallVector<std::pair<StringAttr, int32_t>> chunkedDims = {
+      {kColLo, 4},
+      {kRowMid, 4},
+      {kRowLo, 32},
+      {kOuterCol, outerCols},
+      {kOuterRow, outerRows},
+  };
+
+  // Start from a flat row-major SMEM layout over `rows * cols` bytes and
+  // reinterpret it as the chunked view above.
+  //
+  // Scale example:
+  //   offset -> flat[4096]
+  //          -> [colLo=4, rowMid=4, rowLo=32, outerCol=4, outerRow=2]
+  auto offsetToChunked = LinearLayout::identity1D(rows * cols, kOffset, kFlat)
+                             .reshapeOuts(chunkedDims);
+
+  // Map each chunked dimension back to the final logical 2D tensor:
+  //   - colLo and outerCol both contribute to dim1
+  //   - rowLo, rowMid, and outerRow all contribute to dim0
+  //
+  // Scale example:
+  //   colLo    = 4      -> dim1 low bits
+  //   rowLo    = 32     -> dim0 low bits
+  //   rowMid   = 4      -> dim0 middle bits
+  //   outerCol = 4      -> dim1 high bits
+  //   outerRow = 2      -> dim0 high bits
+  LinearLayout chunkedToLogical =
+      LinearLayout::identity1D(32, kRowLo, outDims[0]) *
+      LinearLayout::identity1D(4, kRowMid, outDims[0]) *
+      LinearLayout::identity1D(outerRows, kOuterRow, outDims[0]) *
+      LinearLayout::identity1D(4, kColLo, outDims[1]) *
+      LinearLayout::identity1D(outerCols, kOuterCol, outDims[1]);
+
+  return combineCtaCgaWithShape(
+      offsetToChunked.compose(chunkedToLogical).transposeOuts(outDims),
+      cgaLayout, shape);
 }
 
 static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
@@ -500,18 +572,7 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
 static LinearLayout projectAwayOutDim(const LinearLayout &layout,
                                       StringAttr dim) {
-  auto ctx = layout.getOutDimNames().begin()->getContext();
-  auto bases = layout.getBases();
-  auto idx = layout.getOutDimIndex(dim);
-  for (auto inDim : layout.getInDimNames()) {
-    auto &inDimBases = bases[inDim];
-    for (auto &basis : inDimBases) {
-      basis[idx] = 0;
-    }
-  }
-
-  auto outDimNames = standardOutDimNames(ctx, layout.getOutDims().size());
-  return LinearLayout(std::move(bases), outDimNames);
+  return layout.resizeOutDim(dim, 1);
 }
 
 LinearLayout chooseWmmaCTALinearLayout(MLIRContext *ctx, unsigned rank,
@@ -1078,17 +1139,7 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto sliceLL = removeStandardDim(parentLL, getDim());
 
   // Step 3: Along the "register" dim, remove any all-zero bases.
-  auto bases = sliceLL.getBases();
-  std::vector<std::vector<int>> newRegBases;
-  for (const auto &basis : bases[S("register")]) {
-    if (llvm::any_of(basis, [](int b) { return b != 0; })) {
-      newRegBases.push_back(basis);
-    }
-  }
-  bases[S("register")] = newRegBases;
-
-  return LinearLayout(std::move(bases),
-                      llvm::to_vector(sliceLL.getOutDimNames()));
+  return sliceLL.removeZeroBasesAlongDim(S("register"));
 }
 
 LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
@@ -1119,9 +1170,17 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
   assert(blockM == 64 || blockM == 128);
   LinearLayout tile =
       LinearLayout::zeros1D(encoding.getColStride(), kCol, dims[1]);
+
+  LinearLayout colLayout;
+  if (encoding.getFp4Padded()) {
+    // The physical low column bit selects the real/padded half, so the logical
+    // column bits start one bit later than they do for dense TMEM layouts.
+    colLayout *= LinearLayout::zeros1D(2, kCol, dims[1]);
+  }
+  colLayout *= LinearLayout::identity1D(blockN, kCol, dims[1]);
+
   if (blockM == 64 && !encoding.getTwoCTAs()) {
-    tile *= LinearLayout::identity1D(16, kRow, dims[0]) *
-            LinearLayout::identity1D(blockN, kCol, dims[1]);
+    tile *= LinearLayout::identity1D(16, kRow, dims[0]) * colLayout;
     auto bases = tile.getBases();
     if (shapePerCTA[0] > blockM) {
       bases[kRow].push_back({64, 0});
@@ -1135,8 +1194,7 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
     bases[kRow].push_back({32, 0});
     tile = LinearLayout(std::move(bases), dims);
   } else {
-    tile *= LinearLayout::identity1D(blockM, kRow, dims[0]) *
-            LinearLayout::identity1D(blockN, kCol, dims[1]);
+    tile *= LinearLayout::identity1D(blockM, kRow, dims[0]) * colLayout;
     if (isM64TwoCTA) {
       auto bases = tile.getBases();
       bases[kRow].push_back(bases[kCol].back());
@@ -1174,13 +1232,27 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
               LinearLayout::zeros1D(4, kRow, dims[0]) *
               LinearLayout::identity1D(4, kCol, dims[1]) *
               LinearLayout::identity1D(2, kCol, dims[0]);
-  // We choose repOrder = [0, 1]
-  tile *= LinearLayout::identity1D(
-              llvm::divideCeil(shapePerCTA[0], tile.getOutDimSize(dims[0])),
-              kCol, dims[0]) *
-          LinearLayout::identity1D(
-              llvm::divideCeil(shapePerCTA[1], tile.getOutDimSize(dims[1])),
-              kCol, dims[1]);
+  auto repsMn = llvm::divideCeil(shapePerCTA[0], tile.getOutDimSize(dims[0]));
+  auto repsK = llvm::divideCeil(shapePerCTA[1], tile.getOutDimSize(dims[1]));
+
+  if (repsMn > 1) {
+    // blockRepOrder applies after this normalization step. First merge the two
+    // MN-adjacent 64x4 pieces into the repeated scale block, then order the
+    // remaining block repetitions along MN and K.
+    tile *= LinearLayout::identity1D(2, kCol, dims[0]);
+    repsMn /= 2;
+  }
+
+  if (encoding.getBlockRepOrder() ==
+      TensorMemoryScalesBlockRepOrder::K_THEN_MN) {
+    // kThenMn uses repOrder = [1, 0] at the repeated block level.
+    tile *= LinearLayout::identity1D(repsK, kCol, dims[1]) *
+            LinearLayout::identity1D(repsMn, kCol, dims[0]);
+  } else {
+    // mnThenK uses repOrder = [0, 1] at the repeated block level.
+    tile *= LinearLayout::identity1D(repsMn, kCol, dims[0]) *
+            LinearLayout::identity1D(repsK, kCol, dims[1]);
+  }
   // Add a trivial block dimension
   tile *= LinearLayout::identity1D(1, kBlock, dims[0]);
   // See [Zeros in TMEM LinearLayouts]
@@ -1296,12 +1368,32 @@ LinearLayout toLinearLayout(RankedTensorType type) {
 }
 
 LinearLayout toLinearLayout(MemDescType type) {
-  // Pass in the allocation shape. Then when using invertAndCompose it will
-  // trim the allocationShape to the shape if they are different.
-  // We also remove the first dimension of the allocationShape if there was a
-  // call to memdesc_index
-  auto shape = type.getAllocShape().take_back(type.getRank());
-  return toLinearLayout(shape, type.getEncoding());
+  // For TMEM we instantiate the subview directly. This is possible
+  // as TMEM has no swizzling.
+  if (isa<nvidia_gpu::TensorMemorySpaceAttr>(type.getMemorySpace())) {
+    auto shape = dropPipeliningDim(type.getShape(), type.getEncoding());
+    auto allocShape =
+        dropPipeliningDim(type.getAllocShape(), type.getEncoding());
+    auto ll = toLinearLayout(allocShape, type.getEncoding());
+    auto outDims = llvm::to_vector(ll.getOutDimNames());
+    // Trim the shape
+    for (auto [dim, size] : llvm::zip_equal(outDims, shape))
+      ll = ll.resizeOutDim(dim, size);
+
+    auto kCol = StringAttr::get(type.getContext(), "col");
+    int bitwidth = type.getElementType().getIntOrFloatBitWidth();
+    int minColBases = llvm::Log2_32(32 / bitwidth);
+    uint64_t nonZeroColBases = getInputBasisMask(ll, kCol, outDims);
+    int nColBases =
+        std::max(minColBases, int(llvm::bit_width(nonZeroColBases)));
+    return ll.resizeInDim(kCol, 1u << nColBases);
+  }
+  // Shared memory needs the allocation shape so that invertAndCompose can trim
+  // subviews. We also remove the first dimension of the allocation shape if
+  // there was a call to memdesc_index.
+  return toLinearLayout(
+      dropPipeliningDim(type.getAllocShape(), type.getEncoding()),
+      type.getEncoding());
 }
 
 LinearLayout toLinearLayout(TensorOrMemDesc type) {
@@ -1335,8 +1427,9 @@ LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding) {
 }
 
 LinearLayout paddedLinearLayout(MemDescType type) {
-  auto shape = type.getAllocShape().take_back(type.getRank());
-  return paddedLinearLayout(shape, type.getEncoding());
+  return paddedLinearLayout(
+      dropPipeliningDim(type.getAllocShape(), type.getEncoding()),
+      type.getEncoding());
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
@@ -1345,10 +1438,7 @@ LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
 
   StringAttr kBlock = S("block");
   assert(layout.hasInDim(kBlock));
-  auto bases = layout.getBases();
-  bases[kBlock] = {};
-  return LinearLayout(std::move(bases),
-                      llvm::to_vector<4>(layout.getOutDimNames()));
+  return layout.resizeInDim(kBlock, 1);
 }
 
 LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,

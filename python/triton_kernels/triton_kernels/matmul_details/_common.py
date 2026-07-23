@@ -14,6 +14,7 @@ from triton_kernels.tensor_details.layout_details.blackwell_scale import (
 @triton.constexpr_function
 def get_scaled_dot_format_string(dtype: tl.dtype):
     mapping = {
+        tl.float64: "fp64",
         tl.float32: "fp32",
         tl.float16: "fp16",
         tl.bfloat16: "bf16",
@@ -378,7 +379,7 @@ def matmul_launch_metadata(grid, kernel, args):
     K_repr = K
     if args["RAGGED_DIMENSION"] == "K":
         K = None if n_tokens is None else n_tokens
-        K_repr = K if allow_sync else None
+        K_repr = None
 
     repr = lambda s, x: f"{s} = {x}" if x is not None else f"E_{len(slice_sizes)}({s}) = {n_rows}"
     nbits = X.dtype.itemsize * 8

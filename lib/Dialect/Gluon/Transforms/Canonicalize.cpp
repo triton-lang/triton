@@ -57,9 +57,12 @@ void Canonicalize::runOnOperation() {
   StoreOp::getCanonicalizationPatterns(patterns, ctx);
   BroadcastOp::getCanonicalizationPatterns(patterns, ctx);
   ExpandDimsOp::getCanonicalizationPatterns(patterns, ctx);
+  ReshapeOp::getCanonicalizationPatterns(patterns, ctx);
   IntToPtrOp::getCanonicalizationPatterns(patterns, ctx);
   ttg::WarpSpecializeOp::getCanonicalizationPatterns(patterns, ctx);
   ttg::WarpSpecializePartitionsOp::getCanonicalizationPatterns(patterns, ctx);
+  ttng::BarrierExpectOp::getCanonicalizationPatterns(patterns, ctx);
+  ttng::ArriveBarrierOp::getCanonicalizationPatterns(patterns, ctx);
 
   (void)applyPatternsGreedily(getOperation(), std::move(patterns));
 }

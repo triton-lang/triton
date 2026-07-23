@@ -59,6 +59,10 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
     x = tl.load(X_ptrs, mask=(mask_m & mask_n), other=float("-inf"))
     x = fpval_to_key(x.to(x_utype, bitcast=True))
     x = (x.to(x_ultype) << 16) | indx_to_key(offs_x_n, N_EXPTS_PAD)[None, :]
+    # Valid packed keys are nonzero because their index key is nonzero. Mask
+    # padding to zero so it cannot be selected when FPSan payloads sort below
+    # the floating-point -inf sentinel.
+    x = tl.where(mask_n, x, 0)
     acc = tl.topk(x, N_EXPTS_ACT, dim=1)
 
     # subsequent iterations:
@@ -87,8 +91,7 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
 @triton.jit
 def _topk_forward(X, stride_xm,  # inputs
                   PeerYvs, PeerYis, stride_ym,  # topk values/indices
-                  USE_PROVIDED_INDX: tl.constexpr, PeerBits, stride_rm: tl.constexpr,
-                  stride_rn: tl.constexpr,  # bitmatrix
+                  USE_PROVIDED_INDX: tl.constexpr, PeerBits, stride_rm, stride_rn,  # bitmatrix
                   n_rows, n_expts_tot,  # shape
                   dst_offs_m, APPLY_SOFTMAX: tl.constexpr,  # constant
                   BLOCK_M: tl.constexpr, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr, BLOCK_N: tl.constexpr):

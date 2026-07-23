@@ -21,6 +21,8 @@ struct ExternLibCupti : public ExternLibBase {
 
 template <bool CheckSuccess> CUptiResult getVersion(uint32_t *version);
 
+template <bool CheckSuccess> CUptiResult getTimestamp(uint64_t *timestamp);
+
 template <bool CheckSuccess>
 CUptiResult getContextId(CUcontext context, uint32_t *pCtxId);
 

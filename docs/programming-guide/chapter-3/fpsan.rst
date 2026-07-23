@@ -164,29 +164,33 @@ Important caveat:
 
 - This is ring arithmetic modulo ``2^w``, not IEEE arithmetic.
 
-Min and Max
-===========
+Min, Max, and Clamp
+===================
 
 Supported operations:
 
 - ``tl.minimum(x, y)``
 - ``tl.maximum(x, y)``
 - ``min(x, y)`` and ``max(x, y)`` in Triton code
+- ``tl.clamp(x, lo, hi)``
 
 Rewrite:
 
 - signed integer ``min`` or ``max`` on payloads
+- clamp becomes ``min(max(x, lo), hi)`` in the same signed payload order
 
 Exact preserved properties:
 
 - idempotence: ``min(x, x) = x`` and ``max(x, x) = x``
 - commutativity
 - associativity
+- ``clamp(x, lo, hi) = min(max(x, lo), hi)``
 
 Important caveats:
 
 - The order is the signed integer order of payloads, not IEEE float order.
 - NaN handling, and the exact signed-zero contract, are not modeled.
+- Both ``propagate_nan`` modes use the same payload semantics.
 
 Division
 ========
@@ -364,14 +368,17 @@ Supported operations:
 
 Rewrite:
 
-- signed integer extension or truncation in payload space, followed by
-  ``unembed``
+- signed integer extension when widening
+- when narrowing, fold the discarded high payload bits into the retained bits,
+  then truncate and ``unembed``
+- optionally, set ``TRITON_FPSAN_HOMOMORPHIC_CASTS=1`` to use simple payload
+  truncation when narrowing; this preserves addition across independently
+  downcast partial reductions
 
 Exact preserved properties:
 
 - ``0``, ``+1``, and ``-1`` remain stable across the conversion
 - sign-extension behavior in the payload domain
-- truncation drops high payload bits
 - an upcast followed by a downcast is the identity
 
 Important caveat:
@@ -402,16 +409,17 @@ Important caveat:
 - The same raw-payload interpretation is reused by scaled-dot paths for
   ``e2m1``.
 
-----------------------------
-Pure Extern Elementwise Ops
-----------------------------
+------------------------------------------
+Pure Extern and Inline-Asm Elementwise Ops
+------------------------------------------
 
 Supported operation:
 
-- ``tl.extern_elementwise`` when all of the following hold:
+- ``tl.extern_elementwise`` and ``tl.inline_asm_elementwise`` when all of the
+  following hold:
 
   - the op is ``pure``
-  - the result type is float-like
+  - every result type is float-like
   - there is at least one operand
   - every operand is numeric
 
@@ -419,19 +427,22 @@ Rewrite:
 
 - rotate each operand payload by its argument index
 - sum the rotated payloads
-- xor the result with a stable hash of the symbol name
+- xor the result with a stable hash of the symbol name or inline-asm string;
+  inline-asm result indices are also included for multi-result operations
 - unembed
 
 Exact preserved properties:
 
 - deterministic dependence on all operands and on operand order
-- deterministic distinction between different external symbols
+- deterministic distinction between different external symbols, inline-asm
+  strings, and inline-asm result indices
 - mixed float and integer operands are supported; float operands are embedded,
   integer operands are used directly after signed casting to the result width
 
 Important caveat:
 
-- This is a structural tag, not a numeric model of the external function.
+- This is a structural tag, not a numeric model of the external function or
+  inline assembly.
 
 ---------------------------
 Gluon MMA and Tensor Memory

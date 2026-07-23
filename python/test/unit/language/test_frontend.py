@@ -421,6 +421,29 @@ def test_tuple_assignment_constexpr_tuple_normalizes_recursively():
     run_parser(kernel)
 
 
+def test_list_comprehension_if_filter():
+
+    @triton.jit
+    def kernel():
+        # an `if` filter drops the elements whose condition is false
+        vals: tl.constexpr = [x for x in (10, 20, 30, 40) if x >= 30]
+        tl.static_assert(len(vals) == 2)
+        tl.static_assert(vals[0] == 30)
+        tl.static_assert(vals[1] == 40)
+
+        # multiple `if` clauses compose as "and"
+        multi: tl.constexpr = [x for x in (0, 1, 2, 3, 4, 5) if x > 1 if x % 2 == 0]
+        tl.static_assert(len(multi) == 2)
+        tl.static_assert(multi[0] == 2)
+        tl.static_assert(multi[1] == 4)
+
+        # an unfiltered comprehension is unchanged
+        allv: tl.constexpr = [x for x in (10, 20, 30, 40)]
+        tl.static_assert(len(allv) == 4)
+
+    run_parser(kernel)
+
+
 def test_named_expr_respects_prior_constexpr_annotation():
 
     @triton.jit
@@ -772,6 +795,45 @@ def test_atomic_scalar_masks():
     tl.atomic_xor(ptrs, 1, mask=True)
 
 
+@filecheck_test
+@triton.jit
+def test_atomic_poll():
+    # CHECK-LABEL: test_atomic_poll
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    # CHECK: %{{.*}} = tt.atomic_poll relaxed, sys, %{{.*}}, %{{.*}} : !tt.ptr<i32>, i32 -> i1
+    tl.atomic_poll(ptr, 1, sem="relaxed", scope="sys")
+
+
+@filecheck_test
+@triton.jit
+def test_atomic_poll_timeout():
+    # CHECK-LABEL: test_atomic_poll_timeout
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    # CHECK: %{{.*}} = tt.atomic_poll acquire, gpu, %{{.*}}, %{{.*}} timeout %{{.*}} : !tt.ptr<i32>, i32 -> i1
+    tl.atomic_poll(ptr, 1, timeout_ns=1000)
+
+
+@doesnt_compile
+@triton.jit
+def test_atomic_poll_rejects_tensor_pointer():
+    ptrs = tl.full((1, ), 0, tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_poll(ptrs, 1)
+
+
+@doesnt_compile
+@triton.jit
+def test_atomic_poll_rejects_release_semantics():
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_poll(ptr, 1, sem="release")
+
+
+@doesnt_compile
+@triton.jit
+def test_atomic_poll_rejects_negative_timeout():
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_poll(ptr, 1, timeout_ns=-1)
+
+
 @pytest.mark.interpreter
 def test_return_promotion():
 
@@ -805,6 +867,49 @@ def test_return_promotion():
 
         c = tuple_return(tmp)
         tl.static_assert(c.type == tl.tuple_type([tl.int32, tl.int32]))
+
+    run_parser(kernel)
+
+
+def test_fp8_div_mod_promotion():
+    # `/` and `%` do not exist natively for floats narrower than fp32, so the
+    # result of a division or modulo with a floating operand is promoted to
+    # fp32 -- one rule covering fp8, fp16 and bfloat16, tensor and scalar
+    # operands alike. Other ops keep the existing promotions (same fp8 stays
+    # that fp8, mixed fp8 goes to float16).
+
+    @triton.jit
+    def kernel():
+        x = tl.full((8, ), 0, tl.float16).to(tl.float8e5)
+        y = tl.full((8, ), 0, tl.float16).to(tl.float8e5)
+        z = tl.full((8, ), 0, tl.float16).to(tl.float8e4nv)
+        h = tl.full((8, ), 0, tl.float16)
+        b = tl.full((8, ), 0, tl.bfloat16)
+        i = tl.full((8, ), 0, tl.int32)
+        tl.static_assert((x / y).dtype == tl.float32)
+        tl.static_assert((x / z).dtype == tl.float32)
+        tl.static_assert((x % y).dtype == tl.float32)
+        tl.static_assert((x * y).dtype == tl.float8e5)
+        tl.static_assert((x * z).dtype == tl.float16)
+        # fp16 and bfloat16 division/modulo upcast through the same rule
+        tl.static_assert((h / h).dtype == tl.float32)
+        tl.static_assert((h % h).dtype == tl.float32)
+        tl.static_assert((b / b).dtype == tl.float32)
+        tl.static_assert((h * h).dtype == tl.float16)
+        tl.static_assert((b * b).dtype == tl.bfloat16)
+        # integer division and modulo keep integer promotion
+        tl.static_assert((i // i).dtype == tl.int32)
+        tl.static_assert((i % i).dtype == tl.int32)
+        # A scalar operand doesn't participate in promotion, so / and % against
+        # a float tensor must upcast to fp32 for the same reason, while other
+        # ops keep the tensor's type.
+        tl.static_assert((2.0 / x).dtype == tl.float32)
+        tl.static_assert((x / 2.0).dtype == tl.float32)
+        tl.static_assert((x % 2).dtype == tl.float32)
+        tl.static_assert((h / 2.0).dtype == tl.float32)
+        tl.static_assert((x * 2.0).dtype == tl.float8e5)
+        tl.static_assert((h * 2.0).dtype == tl.float16)
+        tl.static_assert((i // 2).dtype == tl.int32)
 
     run_parser(kernel)
 

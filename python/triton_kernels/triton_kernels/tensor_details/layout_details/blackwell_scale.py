@@ -2,6 +2,7 @@ import math
 from dataclasses import dataclass
 
 import torch
+from torch._subclasses.fake_tensor import is_fake
 import triton
 import triton.language as tl
 
@@ -96,26 +97,29 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "mode", mode)
         object.__setattr__(self, "added_leading_batch_dim", added_leading_batch_dim)
 
+    @property
+    def storage_shape(self) -> list[int]:
+        return [1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256]
+
     def swizzle_data(self, data):
-        if data.numel():
-            if self.mode == "batched":
-                # value of padding on left, right, top, bottom
-                data = torch.nn.functional.pad(data, (0, self.K_pad - self.K, 0, self.M_pad - self.M))
-            else:
-                # Objective is to pad the number of rows in each slice to be multiple of ALIGN_M
-                data = pad_segments_triton(
-                    data,
-                    self.ragged_metadata,
-                    self.ALIGN_M,
-                    self.M_pad,
-                    self.K,
-                    self.K_pad,
-                )
+        if self.mode == "batched":
+            # value of padding on left, right, top, bottom
+            data = torch.nn.functional.pad(data, (0, self.K_pad - self.K, 0, self.M_pad - self.M))
+        elif data.numel():
+            # Objective is to pad the number of rows in each slice to be multiple of ALIGN_M
+            data = pad_segments_triton(
+                data,
+                self.ragged_metadata,
+                self.ALIGN_M,
+                self.M_pad,
+                self.K,
+                self.K_pad,
+            )
 
         data = data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
         data = data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
-        data = data.view(1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256)
-        return data
+        data = data.view(*self.storage_shape)
+        return self._validate_storage_shape(data)
 
     def unswizzle_data(self, data):
         data = data.reshape(self.B, self.M_pad // 128, self.K_pad // 4, 32, 4, 4)
@@ -158,23 +162,21 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "K_pad", (K + self.ALIGN_K - 1) // self.ALIGN_K * self.ALIGN_K)
         object.__setattr__(self, "N_pad", (N + self.ALIGN_N - 1) // self.ALIGN_N * self.ALIGN_N)
 
+    @property
+    def storage_shape(self) -> list[int]:
+        return [1, self.B * self.N_pad // 128, self.K_pad // self.SWIZZLE_K, 2, 256]
+
     def swizzle_data(self, data):
-        need_torch = data.device.type in ["cpu", "meta"] or data.dtype.itemsize != 1
-        try:
-            from torch._subclasses.fake_tensor import is_fake
-            need_torch = need_torch or is_fake(data)
-        except ImportError:
-            pass
+        need_torch = data.device.type in ["cpu", "meta"] or data.dtype.itemsize != 1 or is_fake(data)
 
         if need_torch:
-            if data.numel():
-                data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
+            data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
             data = data.transpose(-1, -2).contiguous()
             data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32,
                                 self.K_pad // self.SWIZZLE_K, self.SWIZZLE_K)
             data = data.transpose(2, 4).contiguous()
-            data = data.view(1, self.B * self.N_pad // 128, self.K_pad // self.SWIZZLE_K, 2, 256)
-            return data
+            data = data.view(*self.storage_shape)
+            return self._validate_storage_shape(data)
 
         # The following code is equivalent to the above, but faster for GPU tensors.
 
@@ -182,13 +184,9 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         assert tuple(data.shape) == tuple(self.shape)
         data = data.reshape((self.B, self.K, self.N))
 
-        out = torch.empty(
-            (1, self.B * self.N_pad // self.ALIGN_N, self.K_pad // self.SWIZZLE_K, 2, 256),
-            dtype=torch.uint8,
-            device=data.device,
-        )
+        out = torch.empty(self.storage_shape, dtype=torch.uint8, device=data.device)
         if not out.numel():
-            return out
+            return self._validate_storage_shape(out)
 
         block_k = 64
         grid = (self.B * triton.cdiv(self.N_pad, self.ALIGN_N) * triton.cdiv(self.K_pad, block_k), )
@@ -203,7 +201,7 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
             BLOCK_K=block_k,
             num_warps=4,
         )
-        return out.view(data.dtype)
+        return self._validate_storage_shape(out.view(data.dtype))
 
     def unswizzle_data(self, data):
         data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.K_pad // self.SWIZZLE_K, 32, self.ALIGN_N // 32,

@@ -90,13 +90,15 @@ bool isUsedAsTensorMemory(Value v) {
          isa_and_nonnull<ttng::TensorMemorySpaceAttr>(type.getMemorySpace());
 }
 
-uint32_t getMemDescSubsliceByteOffset(ttg::MemDescSubsliceOp op) {
+FailureOr<uint32_t> getMemDescSubsliceByteOffset(ttg::MemDescSubsliceOp op) {
   auto srcTy = op.getSrc().getType();
   auto offsets = op.getOffsets();
   if (offsets.empty())
     return 0;
 
   Attribute encoding = srcTy.getEncoding();
+  auto layoutOffsets = ttg::dropPipeliningDim(offsets, encoding);
+  auto layoutRank = layoutOffsets.size();
   mlir::triton::LinearLayout layout;
   if (auto padded = dyn_cast<ttg::PaddedSharedEncodingAttr>(encoding)) {
     layout = padded.getLinearComponent();
@@ -106,10 +108,10 @@ uint32_t getMemDescSubsliceByteOffset(ttg::MemDescSubsliceOp op) {
 
   MLIRContext *ctx = op->getContext();
   SmallVector<StringAttr> dimNames =
-      mlir::triton::standardOutDimNames(ctx, srcTy.getRank());
+      mlir::triton::standardOutDimNames(ctx, layoutRank);
   SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
-  logicalOffsets.reserve(offsets.size());
-  for (auto &&[dimName, offset] : llvm::zip_equal(dimNames, offsets)) {
+  logicalOffsets.reserve(layoutRank);
+  for (auto &&[dimName, offset] : llvm::zip_equal(dimNames, layoutOffsets)) {
     logicalOffsets.push_back({dimName, static_cast<int32_t>(offset)});
   }
 
@@ -117,10 +119,23 @@ uint32_t getMemDescSubsliceByteOffset(ttg::MemDescSubsliceOp op) {
   StringAttr blockDim = StringAttr::get(ctx, "block");
   mlir::triton::LinearLayout inverse = layout.invert();
   auto mapped = inverse.apply(logicalOffsets);
-  assert(mapped.size() == 2 && mapped[0].first == offsetDim &&
-         mapped[1].first == blockDim && mapped[1].second == 0 &&
-         "expected offset and zero block dimensions after inversion");
+  if (mapped.size() != 2 || mapped[0].first != offsetDim ||
+      mapped[1].first != blockDim) {
+    op.emitError("unsupported memdesc subslice layout in buffer region "
+                 "analysis");
+    return failure();
+  }
+  if (mapped[1].second != 0) {
+    op.emitError("memdesc subslices with cross-CTA affine offsets are "
+                 "unsupported by buffer region analysis");
+    return failure();
+  }
   uint64_t elementOffset = static_cast<uint32_t>(mapped[0].second);
+  if (offsets.size() != layoutRank) {
+    uint64_t stride = product(ttg::getAllocationShapePerCTA(
+        encoding, ttg::dropPipeliningDim(srcTy.getAllocShape(), encoding)));
+    elementOffset += static_cast<uint64_t>(offsets.front()) * stride;
+  }
 
   uint64_t elementSizeBytes =
       srcTy.getElementType().getIntOrFloatBitWidth() / 8;
@@ -244,10 +259,13 @@ LogicalResult BufferRegionAnalysis::visitOperation(
   if (auto memdescSubsliceOp = dyn_cast<ttg::MemDescSubsliceOp>(op)) {
     RegionInfo in = operands[0]->getValue();
     uint32_t subBufferSize = getMemDescSize(memdescSubsliceOp.getType());
-    uint32_t relativeOffset = getMemDescSubsliceByteOffset(memdescSubsliceOp);
+    FailureOr<uint32_t> relativeOffset =
+        getMemDescSubsliceByteOffset(memdescSubsliceOp);
+    if (failed(relativeOffset))
+      return failure();
     for (auto &region : in.regions) {
       regionInfo.regions.insert(
-          {region.baseOffset + relativeOffset, subBufferSize});
+          {region.baseOffset + *relativeOffset, subBufferSize});
     }
     for (auto *r : results) {
       propagateIfChanged(r, r->join(regionInfo));
@@ -258,7 +276,8 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     RegionInfo in = operands[0]->getValue();
     uint32_t subBufferSize = getMemDescSize(tmemSubsliceOp.getType());
     uint32_t relativeOffset = ttng::getTMemSubSliceOffset(
-        tmemSubsliceOp.getType(), tmemSubsliceOp.getN());
+        tmemSubsliceOp.getSrc().getType(), tmemSubsliceOp.getOffset(),
+        tmemSubsliceOp.getDim());
     for (auto &region : in.regions) {
       regionInfo.regions.insert(
           {region.baseOffset + relativeOffset, subBufferSize});
@@ -321,7 +340,8 @@ void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
 }
 
 bool BufferRegionAnalysis::isMemoryAccessOperation(Operation *op) {
-  if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp, ttng::TMEMLoadOp,
+  if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp, ttg::LocalGatherOp,
+          ttg::LocalScatterOp, ttg::LocalAtomicScatterRMWOp, ttng::TMEMLoadOp,
           ttng::TMEMStoreOp, ttng::TMEMCopyOp, ttg::AsyncCopyGlobalToLocalOp,
           ttng::TMAOpInterface, ttng::CLCLoadResultOp>(op)) {
     return true;

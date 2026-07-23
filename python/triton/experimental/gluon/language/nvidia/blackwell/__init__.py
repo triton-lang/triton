@@ -47,17 +47,23 @@ class TensorMemoryLayout:
             layouts use ``32 / bitwidth``.
         cga_layout (Optional[List[List[int]]]): CGA layout bases. Defaults to [].
         two_ctas (bool): Whether the layout is for two-CTA mode. Defaults to False.
+        fp4_padded (bool): Whether byte-backed operand A uses the padded MMAv5
+            FP4 layout. Its descriptor keeps the packed ``Mx(K/2)xi8`` shape,
+            MMAv5 treats logical K as twice descriptor K, and physical TMEM
+            reserves one byte per logical FP4 element. Defaults to False.
     """
     block: Tuple[int, int]
     col_stride: int
     cga_layout: List[List[int]] = field(default_factory=list)
     two_ctas: bool = False
+    fp4_padded: bool = False
 
     def __post_init__(self):
         super().__setattr__("block", _unwrap_if_constexpr(self.block))
         super().__setattr__("col_stride", _unwrap_if_constexpr(self.col_stride))
         super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
         super().__setattr__("two_ctas", _unwrap_if_constexpr(self.two_ctas))
+        super().__setattr__("fp4_padded", _unwrap_if_constexpr(self.fp4_padded))
         assert len(self.block) == 2
         assert all(len(basis) == 2 for basis in self.cga_layout)
         assert self.col_stride >= 1 and (self.col_stride &
@@ -69,6 +75,7 @@ class TensorMemoryLayout:
             self.col_stride,
             [list(basis) for basis in self.cga_layout],
             self.two_ctas,
+            self.fp4_padded,
         )
 
     def mangle(self) -> str:
@@ -76,10 +83,13 @@ class TensorMemoryLayout:
         stride_str = f"C{self.col_stride}"
         cga_layout_str = "_".join("~".join(map(str, basis)) for basis in self.cga_layout)
         two_ctas_str = "2CT" if self.two_ctas else ""
-        return f"TL{block_str}{stride_str}{cga_layout_str}{two_ctas_str}TL"
+        fp4_padded_str = "FP4P" if self.fp4_padded else ""
+        return f"TL{block_str}{stride_str}{cga_layout_str}{two_ctas_str}{fp4_padded_str}TL"
 
     def __hash__(self):
-        return hash((self.block, self.col_stride, tuple(tuple(b) for b in self.cga_layout), self.two_ctas))
+        return hash(
+            (tuple(self.block), self.col_stride, tuple(tuple(b)
+                                                       for b in self.cga_layout), self.two_ctas, self.fp4_padded))
 
 
 @dataclass(frozen=True, eq=True)
@@ -354,26 +364,30 @@ class tensor_memory_descriptor(base_value):
         _semantic.builder.create_tmem_store(self.handle, value.handle, pred.handle)
 
     @builtin
-    def slice(self, start, length, _semantic: GluonSemantic = None) -> None:
+    def slice(self, start, length, dim=1, _semantic: GluonSemantic = None) -> None:
         """
-        Create a slice of the tensor memory descriptor along the last dimension.
+        Create a slice of the tensor memory descriptor along a given dimension.
 
         Args:
             start (int): The starting index for subslice.
             length (int): The length of the subslice.
+            dim (int): The dimension to slice (default: 1).
 
         Returns:
             tensor_memory_descriptor: Descriptor for the subslice.
         """
         start = _unwrap_if_constexpr(start)
         length = _unwrap_if_constexpr(length)
+        dim = _unwrap_if_constexpr(dim)
         _check(isinstance(start, int), lambda: "start must be a constant int")
         _check(isinstance(length, int), lambda: "length must be a constant int")
-        shape = self.shape[:-1] + [length]
+        _check(isinstance(dim, int) and dim in (0, 1), lambda: "dim must be 0 or 1")
+        shape = list(self.shape)
+        shape[dim] = length
         layout = self.type.layout
         ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
         builder = _semantic.builder
-        ret.handle = builder.create_tmem_subslice(ret.type.to_ir(builder), self.handle, start)
+        ret.handle = builder.create_tmem_subslice(ret.type.to_ir(builder), self.handle, start, dim)
         return ret
 
     @builtin

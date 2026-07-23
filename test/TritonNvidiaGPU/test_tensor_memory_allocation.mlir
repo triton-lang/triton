@@ -62,6 +62,44 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK: ttg.tensor_memory_size = 512
+  // CHECK-LABEL: @tmem_subslice_extends_liveness
+  tt.func @tmem_subslice_extends_liveness() {
+    %true = arith.constant true
+    %zero = arith.constant dense<0.0> : tensor<128x128xf32, #blocked>
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %parent = ttng.tmem_alloc : () -> !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %view = ttng.tmem_subslice %parent {offset = 128 : i32, dim = 0 : i32} : !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 256x128>
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 256 : i32, tensor_memory_row_offset = 0 : i32}
+    %other = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %zero, %other, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %zero, %view, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 256x128>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem_n1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 1, colStride = 1>
+#tmem = #ttng.tensor_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK: ttg.tensor_memory_size = 32
+  // CHECK-LABEL: @tmem_f16_one_column
+  tt.func public @tmem_f16_one_column() {
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %a = ttng.tmem_alloc : () -> !ttg.memdesc<128x1xf16, #tmem_n1, #tmem, mutable>
+    "use"(%a) : (!ttg.memdesc<128x1xf16, #tmem_n1, #tmem, mutable>) -> ()
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 #tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
@@ -271,7 +309,7 @@ tt.func @mma_lhs_tmem(
 
 // CHECK-LABEL: @mma_scaled_lhs_tmem
 tt.func @mma_scaled_lhs_tmem(
-  %b: !ttg.memdesc<64x64xf16, #shared1, #ttg.shared_memory>,
+  %b: !ttg.memdesc<64x64xf8E5M2, #shared1, #ttg.shared_memory>,
   %scale_a: !ttg.memdesc<128x8xf8E4M3FN, #tmem_scales, #ttng.tensor_memory>,
   %scale_b: !ttg.memdesc<256x8xf8E4M3FN, #tmem_scales, #ttng.tensor_memory>,
   %useAcc: i1,
@@ -281,15 +319,36 @@ tt.func @mma_scaled_lhs_tmem(
 ) {
   // CHECK-COUNT-2: ttng.tmem_alloc {{.*}} tensor_memory_row_offset = 0 : i32
   // CHECK-NOT: tensor_memory_row_offset
-  %a = ttng.tmem_alloc : () -> !ttg.memdesc<128x64xf16, #tmem_f16, #ttng.tensor_memory, mutable>
+  %a = ttng.tmem_alloc : () -> !ttg.memdesc<128x64xf8E5M2, #tmem_f16, #ttng.tensor_memory, mutable>
   %c = ttng.tmem_alloc : () -> !ttg.memdesc<128x64xf32, #tmem_f32, #ttng.tensor_memory, mutable>
-  ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e2m1 rhs = e2m1, %barrier[%barrierPred] {is_async} :
-    !ttg.memdesc<128x64xf16, #tmem_f16, #ttng.tensor_memory, mutable>,
-    !ttg.memdesc<64x64xf16, #shared1, #ttg.shared_memory>,
+  ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e5m2 rhs = e5m2, %barrier[%barrierPred] {is_async} :
+    !ttg.memdesc<128x64xf8E5M2, #tmem_f16, #ttng.tensor_memory, mutable>,
+    !ttg.memdesc<64x64xf8E5M2, #shared1, #ttg.shared_memory>,
     !ttg.memdesc<128x64xf32, #tmem_f32, #ttng.tensor_memory, mutable>,
     !ttg.memdesc<128x8xf8E4M3FN, #tmem_scales, #ttng.tensor_memory>,
     !ttg.memdesc<256x8xf8E4M3FN, #tmem_scales, #ttng.tensor_memory>,
     !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>
+  tt.return
+}
+
+}
+
+// -----
+
+#tmem_fp4_padded = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, fp4Padded = true>
+#tmem_scales = #ttng.tensor_memory_scales_encoding<>
+#tmem = #ttng.tensor_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32, ttg.target = "cuda:100"} {
+
+// CHECK: ttg.tensor_memory_size = 64
+// CHECK-LABEL: @fp4_padded_tmem_alloc_columns
+tt.func @fp4_padded_tmem_alloc_columns() {
+  // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+  %fp4 = ttng.tmem_alloc : () -> !ttg.memdesc<128x64xi8, #tmem_fp4_padded, #tmem, mutable>
+  // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 32 : i32, tensor_memory_row_offset = 0 : i32}
+  %next = ttng.tmem_alloc : () -> !ttg.memdesc<128x4xi8, #tmem_scales, #tmem, mutable>
+  "use"(%fp4, %next) : (!ttg.memdesc<128x64xi8, #tmem_fp4_padded, #tmem, mutable>, !ttg.memdesc<128x4xi8, #tmem_scales, #tmem, mutable>) -> ()
   tt.return
 }
 

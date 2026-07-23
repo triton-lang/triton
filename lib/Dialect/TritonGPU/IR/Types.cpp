@@ -122,6 +122,19 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     if (shape.size() != 2 && shape.size() != 3) {
       return emitError() << "rank must be 2 or 3";
     }
+    auto isPowerOfTwo = [](int64_t dim) {
+      return llvm::isPowerOf2_64(dim) && dim > 0;
+    };
+    if (!llvm::all_of(shape.take_back(2), isPowerOfTwo)) {
+      return emitError()
+             << "shape must have power-of-2 and non-zero dimensions; got "
+             << shape;
+    }
+    if (!llvm::all_of(allocShape.take_back(2), isPowerOfTwo)) {
+      return emitError()
+             << "alloc shape must have power-of-2 and non-zero dimensions; got "
+             << allocShape;
+    }
     unsigned bitwidth = elementType.getIntOrFloatBitWidth();
     if (bitwidth * enc.getColStride() > 32) {
       return emitError()
@@ -130,14 +143,14 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     }
     // Takes subslices into account and figures out whether we can construct
     // the linear layout at all
-    allocShape = allocShape.take_back(2);
+    allocShape = dropPipeliningDim(allocShape, enc);
     auto ctaSplit = enc.getCGALayout().getCTASplitNum();
     auto blockN = std::min<int32_t>(enc.getBlockN(), shape.back());
-    if (allocShape[0] < enc.getBlockM() * ctaSplit[0] ||
-        allocShape[1] < blockN * ctaSplit[1]) {
-      return emitError() << "the allocation shape must be at least "
+    if (shape[shape.size() - 2] < enc.getBlockM() * ctaSplit[0] ||
+        shape[shape.size() - 1] < blockN * ctaSplit[1]) {
+      return emitError() << "the tensor shape must be at least "
                          << enc.getBlockM() * ctaSplit[0] << "x"
-                         << blockN * ctaSplit[1] << ". Got " << allocShape;
+                         << blockN * ctaSplit[1] << ". Got " << shape;
     }
     // Checks the layout of the allocation
     auto ll = toLinearLayout(allocShape, enc);
@@ -185,9 +198,7 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     // pipelining dimension
     auto outDims = standardOutDimNames(ctx, rank);
     const auto &ll = enc.getLinearComponent();
-    auto expectedShape = allocShape;
-    if (rank == allocShape.size() - 1)
-      expectedShape = expectedShape.drop_front(1);
+    auto expectedShape = dropPipeliningDim(allocShape, enc);
 
     for (auto d = 0; d < rank; d++) {
       if (ll.getOutDimSize(outDims[d]) != expectedShape[d]) {
@@ -198,14 +209,14 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     }
   } else if (auto enc = dyn_cast<NVMMASharedEncodingAttr>(encoding)) {
     SmallVector<int64_t> shapePerCTA(getShapePerCTA(enc, allocShape));
-    auto blockShape = ArrayRef(shapePerCTA).take_back(enc.getRank());
+    auto blockShape = dropPipeliningDim(ArrayRef(shapePerCTA), enc);
     if (failed(getTMABlockShape(blockShape, enc.getElementBitWidth(),
                                 enc.getSwizzlingByteWidth(), enc.getFp4Padded(),
                                 enc.getTransposed(), /*packedSize=*/false,
                                 emitError, TMAMode::Tiled)))
       return failure();
   } else if (auto enc = dyn_cast<SharedLinearEncodingAttr>(encoding)) {
-    auto blockShape = ArrayRef(allocShape).take_back(enc.getRank());
+    auto blockShape = dropPipeliningDim(allocShape, enc);
     const LinearLayout &ll = enc.getLinearLayout();
     for (auto [dim, size, llSize] :
          llvm::enumerate(blockShape, ll.getOutDimSizes())) {

@@ -73,8 +73,8 @@ class TritonSemantic(Generic[TensorTy]):
         if a_is_scalar != b_is_scalar:
             scalar_ty, tensor_ty = (a_ty, b_ty) if a_is_scalar else (b_ty, a_ty)
             if scalar_ty.kind().value <= tensor_ty.kind().value:
-                # Upcast because of 3) and 4) below!
-                if div_or_mod and (tensor_ty in (tl.float16, tl.bfloat16)):
+                # Upcast because of 2) below!
+                if div_or_mod and tensor_ty.is_floating():
                     return tl.float32
                 return tensor_ty
 
@@ -82,27 +82,24 @@ class TritonSemantic(Generic[TensorTy]):
         #    converted to double
         if a_ty.is_fp64() or b_ty.is_fp64():
             return tl.float64
-        # 2) if one operand is float, the other is implicitly
+        # 2) if we have a div or a mod we upcast to `fp32` as div and mod are
+        #    not supported for floats with bitwidth < 32
+        if div_or_mod and (a_ty.is_floating() or b_ty.is_floating()):
+            return tl.float32
+        # 3) if one operand is float, the other is implicitly
         #    converted to float
         if a_ty.is_fp32() or b_ty.is_fp32():
             return tl.float32
-        # 3 ) if one operand is half, the other is implicitly converted to half
-        #     unless we're doing / or %, which do not exist natively in PTX for fp16.
+        # 4 ) if one operand is half, the other is implicitly converted to half
         #     Supported PTX op: add, sub, mul, fma, neg, abs, min, max, tanh, ex2, setp
         if a_ty.is_fp16() or b_ty.is_fp16():
-            if div_or_mod:
-                return tl.float32
-            else:
-                return tl.float16
-        # 4) return bf16 only if both operands are of bf16
+            return tl.float16
+        # 5) return bf16 only if both operands are of bf16
         if a_ty.is_bf16() and b_ty.is_bf16():
-            if div_or_mod:
-                return tl.float32
-            else:
-                return tl.bfloat16
+            return tl.bfloat16
         if a_ty.is_bf16() or b_ty.is_bf16():
             return tl.float32
-        # 5) return fp16 if operands are different fp8
+        # 6) return fp16 if operands are different fp8
         if a_ty.is_fp8() and b_ty.is_fp8():
             return a_ty if a_ty == b_ty else tl.float16
         if not a_ty.is_int() or not b_ty.is_int():
@@ -973,8 +970,8 @@ class TritonSemantic(Generic[TensorTy]):
                 raise ValueError(f"Padding option {padding_option} not supported")
         return padding
 
-    def _str_to_sem(self, sem_option):
-        sem = ir.MEM_SEMANTIC.ACQUIRE_RELEASE
+    def _str_to_sem(self, sem_option, default=ir.MEM_SEMANTIC.ACQUIRE_RELEASE):
+        sem = default
         if sem_option:
             if sem_option == "acquire":
                 sem = ir.MEM_SEMANTIC.ACQUIRE
@@ -1001,21 +998,16 @@ class TritonSemantic(Generic[TensorTy]):
                 raise ValueError(f"Memory semantic {scope_option} not supported")
         return scope
 
-    def load(self, ptr: TensorTy, mask: Optional[TensorTy], other: Optional[TensorTy], boundary_check: Tuple,
-             padding_option: str, cache_modifier: str, eviction_policy: str, is_volatile: bool) -> TensorTy:
+    def load(self, ptr: TensorTy, mask: Optional[TensorTy], other: Optional[TensorTy], cache_modifier: str,
+             eviction_policy: str, is_volatile: bool) -> TensorTy:
         cache = self._str_to_load_cache_modifier(cache_modifier)
         eviction = self._str_to_eviction_policy(eviction_policy)
-        padding = self._str_to_padding_option(padding_option)
         if not ptr.type.scalar.is_ptr():
             raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.load`")
 
-        # Check `mask`, `other`, `boundary_check`, and `padding` arguments
+        # Check `mask` and `other` arguments
         if mask is None and other is not None:
             raise ValueError("`other` cannot be provided without `mask`")
-        if padding or boundary_check:
-            raise ValueError("`padding_option` or `boundary_check` argument is not supported for loading a tensor of"
-                             "pointers or loading a scalar. Because the compiler does not know the boundary; please "
-                             "use block pointers (defined by `make_block_ptr`) instead")
 
         # For a pointer of scalar, check the type of `mask` and `other`
         if not ptr.type.is_block():
@@ -1204,7 +1196,7 @@ class TritonSemantic(Generic[TensorTy]):
             raise ValueError(f"Expected pointer argument to have shape {ptr.shape} but got {ptr_shape}")
         return ptr, val, mask
 
-    def store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], boundary_check, cache_modifier: str,
+    def store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], cache_modifier: str,
               eviction_policy: str) -> TensorTy:
         cache = self._str_to_store_cache_modifier(cache_modifier)
         eviction = self._str_to_eviction_policy(eviction_policy)
@@ -1214,12 +1206,6 @@ class TritonSemantic(Generic[TensorTy]):
         # Store by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
         if not ptr.type.scalar.is_ptr():
             raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.store`")
-
-        # Check `boundary_check` argument
-        if boundary_check:
-            raise ValueError("`boundary_check` argument is not supported for storing a tensor of pointers or storing a "
-                             "scalar. Because the compiler does not know the boundary; please use block pointers "
-                             "(defined by `make_block_ptr`) instead")
 
         # For a pointer of scalar, check the type of `val` and `mask`
         if not ptr.type.is_block():
@@ -1255,6 +1241,41 @@ class TritonSemantic(Generic[TensorTy]):
 #########
 # atomic
 #########
+
+    def atomic_poll(self, ptr: TensorTy, expected: TensorTy, sem: str, scope: str,
+                    timeout_ns: Optional[TensorTy]) -> TensorTy:
+        if isinstance(timeout_ns, int) and timeout_ns < 0:
+            raise ValueError("atomic_poll timeout_ns must be non-negative")
+        if timeout_ns is not None:
+            timeout_ns = self.to_tensor(timeout_ns)
+        if ptr.type.is_block():
+            raise ValueError("atomic_poll only supports a pointer to a scalar")
+        if not ptr.type.is_ptr():
+            raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.atomic_poll`")
+        if expected.type.is_block():
+            raise ValueError("Expected value argument cannot be block type")
+
+        element_ty = ptr.type.element_ty
+        if not element_ty.is_int() or element_ty.primitive_bitwidth not in [16, 32, 64]:
+            raise ValueError("atomic_poll only supports integer elements with width {16, 32, 64}")
+        expected = self.cast(expected, element_ty)
+
+        sem = self._str_to_sem(sem, default=ir.MEM_SEMANTIC.ACQUIRE)
+        if sem not in [ir.MEM_SEMANTIC.ACQUIRE, ir.MEM_SEMANTIC.RELAXED]:
+            raise ValueError("atomic_poll only supports acquire and relaxed semantics")
+        scope = self._str_to_scope(scope)
+        if timeout_ns is not None:
+            if timeout_ns.type.is_block() or not timeout_ns.type.is_int():
+                raise ValueError("atomic_poll timeout_ns must be a scalar integer")
+            timeout_ns = self.cast(timeout_ns, tl.uint64)
+        handle = self.builder.create_atomic_poll(
+            ptr.handle,
+            expected.handle,
+            ir.value() if timeout_ns is None else timeout_ns.handle,
+            sem,
+            scope,
+        )
+        return self.tensor(handle, tl.int1)
 
     def atomic_cas(self, ptr: TensorTy, cmp: TensorTy, val: TensorTy, sem: str, scope: str) -> TensorTy:
         sem = self._str_to_sem(sem)
@@ -1826,12 +1847,12 @@ class TritonSemantic(Generic[TensorTy]):
             if isinstance(elem.value, bool):
                 return self.builder.get_int1(elem.value)
             if require_i64:
-                assert -2**63 <= elem.value < 2**63, f"Block pointers only support 64 bit `shape/strides`, " \
-                    f"got a value {elem.value} which is out of the range"
+                assert -2**63 <= elem.value < 2**63, \
+                    f"Expected a signed 64-bit integer, but {elem.value} is out of range"
                 return self.builder.get_int64(elem.value)
             else:
-                assert -2**31 <= elem.value < 2**31, f"Block pointers only support 32 bit `offsets/block_shape`, " \
-                    f"got a value {elem.value} which is out of the range"
+                assert -2**31 <= elem.value < 2**31, \
+                    f"Expected a signed 32-bit integer, but {elem.value} is out of range"
                 return self.builder.get_int32(elem.value)
         elif isinstance(elem, tl.tensor):
             assert elem.numel.value == 1, "Expected a scalar in shape/strides/offsets"
@@ -1840,8 +1861,7 @@ class TritonSemantic(Generic[TensorTy]):
                 return self.builder.create_int_cast(elem.handle, self.builder.get_int64_ty(),
                                                     elem.dtype.is_int_signed())
             elif elem.dtype == tl.int64 and not require_i64:
-                assert False, "Block pointers only support 32 bit `offsets/block_shape`, " \
-                    "add a `.to(tl.int32)` or use regular indexing for 64 bit support"
+                assert False, "Expected a 32-bit integer; add a `.to(tl.int32)` to convert the value"
             return elem.handle
         assert False, f"Unsupported element type in shape/strides/offsets: {type(elem)}"
 

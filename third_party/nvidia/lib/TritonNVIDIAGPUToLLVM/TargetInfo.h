@@ -8,6 +8,8 @@ namespace mlir::triton::NVIDIA {
 
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
+  explicit TargetInfo(int computeCapability)
+      : TargetInfo(computeCapability, /*ptxVersion=*/0) {}
   TargetInfo(int computeCapability, int ptxVersion)
       : targetFeatures(computeCapability), ptxVersion(ptxVersion) {}
 
@@ -17,6 +19,10 @@ public:
 
   Value ballot(RewriterBase &rewriter, Location loc, Type type,
                Value cmp) const override;
+
+  Value getGlobalTimer(RewriterBase &rewriter, Location loc) const override;
+
+  StringRef getAtomicSyncScope(MemSyncScope scope) const override;
 
   void barrier(Location loc, RewriterBase &rewriter,
                triton::gpu::AddrSpace targets) const override;
@@ -30,6 +36,8 @@ public:
   Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     Value ctaId, Type elemTy, Value pred,
                     Operation *localLoadOp = nullptr) const override;
+  Value mapDShared(RewriterBase &rewriter, Location loc, Value ptr, Value ctaId,
+                   Value pred) const;
 
   bool supportLdMatrix() const override {
     return targetFeatures.supportLdMatrix();
@@ -88,6 +96,9 @@ public:
   int getPtxVersion() const { return ptxVersion; }
   int getComputeCapability() const {
     return targetFeatures.getComputeCapability();
+  }
+  const triton::nvidia_gpu::TargetFeatures &getTargetFeatures() const {
+    return targetFeatures;
   }
 
   bool isCuda() const override { return true; }

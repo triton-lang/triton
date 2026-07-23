@@ -46,7 +46,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     assert "mbarrier.arrive.release.cluster.shared::cluster.b64" in ptx
     assert "mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64" in ptx
     assert "mapa" not in ptx
-    assert k.metadata.shared == 24
+    assert k.metadata.shared == 40
     assert k.asm["cubin"] != b""
 
 
@@ -212,7 +212,7 @@ def test_compile_only_dot_mxfp() -> None:
     assert re.search(pattern, str(ttgir)), "The TTGIR does not match the expected pattern."
 
     ptx = k.asm["ptx"]
-    pattern = (r"tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X")
+    pattern = (r"tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.block32")
     assert re.search(pattern, str(ptx)), "The PTX does not match the expected pattern."
     assert k.asm["cubin"] != b""
 

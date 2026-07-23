@@ -4,9 +4,10 @@ import pytest
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton._internal_testing import is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
+from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
 from triton._C.libtriton.gluon_ir import make_cga_layout
 from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
+from triton.experimental.gluon.language.nvidia.blackwell import TensorMemoryLayout, allocate_tensor_memory
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
@@ -175,12 +176,52 @@ def test_convert_1d_to_2d_slice_cga(num_ctas, device):
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
-def test_cluster_barrier_in_warp_specialize(device):
+@pytest.mark.parametrize("warp_specialize", [False, True])
+def test_atomic_poll_two_ctas(warp_specialize, device):
+
+    @gluon.jit
+    def poll_partition(payload, flag, out):
+        pid = ttgl.program_id(0)
+        if pid == 0:
+            ttgl.store(payload, 42)
+            ttgl.atomic_xchg(flag, 1, sem="release", scope="gpu")
+        else:
+            matched = ttgl.atomic_poll(flag, 1, sem="acquire", scope="gpu", timeout_ns=1_000_000_000)
+            if matched:
+                ttgl.store(out, ttgl.load(payload))
+
+    @gluon.jit
+    def empty_partition():
+        pass
+
+    @gluon.jit
+    def kernel(payload, flag, out, WARP_SPECIALIZE: ttgl.constexpr):
+        if WARP_SPECIALIZE:
+            ttgl.warp_specialize([
+                (poll_partition, (payload, flag, out)),
+                (empty_partition, ()),
+            ], [4])
+        else:
+            poll_partition(payload, flag, out)
+
+    payload = torch.zeros((1, ), device=device, dtype=torch.int32)
+    flag = torch.zeros((1, ), device=device, dtype=torch.int32)
+    out = torch.full((1, ), -1, device=device, dtype=torch.int32)
+
+    kernel[(2, )](payload, flag, out, warp_specialize, num_warps=4)
+
+    assert out.item() == 42
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
+@pytest.mark.parametrize("num_ctas", [2, 4])
+def test_cluster_barrier_in_warp_specialize(device, num_ctas):
     BLOCK = ttgl.constexpr(128)
 
     @gluon.jit
     def partition(out, offset: ttgl.constexpr):
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[0]])
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0],
+                                                    cga_layout=_make_cga_broadcast(1, ttgl.num_ctas()))
         offs = offset + ttgl.arange(0, BLOCK, layout=layout)
         ttgl.barrier(cluster=True)
         ttgl.store(out + offs, offs)
@@ -193,10 +234,10 @@ def test_cluster_barrier_in_warp_specialize(device):
         ], [4])
 
     out = torch.empty((2 * BLOCK.value, ), device=device, dtype=torch.int32)
-    compiled = kernel[(1, )](out, num_warps=4, num_ctas=2)
+    compiled = kernel[(1, )](out, num_warps=4, num_ctas=num_ctas)
 
     ptx = compiled.asm["ptx"]
-    assert ptx.count("mbarrier.arrive.release.cluster.shared::cluster.b64") >= 2
+    assert ptx.count("mbarrier.arrive.release.cluster.shared::cluster") == 2
     assert "mapa" not in ptx
     torch.testing.assert_close(out, torch.arange(2 * BLOCK.value, device=device, dtype=torch.int32))
 
@@ -645,6 +686,38 @@ def test_local_store_tmem_32x32b_2cta_splitm_to_splitk(device):
     kernel[(1, )](x, y, shape, src_layout, dst_layout, shared_layout, num_warps=4, num_ctas=2)
 
     torch.testing.assert_close(y, x, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("instr_variant", ["32x32b", "16x64b", "16x128b", "16x256b"])
+def test_tmem_load_store_instruction_sizes(instr_variant, device):
+    shape = (128, 128)
+
+    @gluon.jit
+    def kernel(x_ptr, y_ptr, shape: ttgl.constexpr, instr_variant: ttgl.constexpr):
+        M: ttgl.constexpr = shape[0]
+        N: ttgl.constexpr = shape[1]
+        tmem_layout: ttgl.constexpr = TensorMemoryLayout(block=shape, col_stride=1)
+        tmem = allocate_tensor_memory(ttgl.float32, shape, tmem_layout)
+        tmem_reg_layout: ttgl.constexpr = tmem.get_reg_layout(instr_variant=instr_variant)
+        offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, tmem_reg_layout))[:, None]
+        offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, tmem_reg_layout))[None, :]
+        offsets = offs_m * N + offs_n
+        x = ttgl.load(x_ptr + offsets)
+        tmem.store(x)
+        y = tmem.load(tmem_reg_layout)
+        ttgl.store(y_ptr + offsets, y)
+
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.float32, device=device)
+    y = torch.empty_like(x)
+
+    compiled = kernel[(1, )](x, y, shape, instr_variant, num_warps=4)
+
+    torch.testing.assert_close(y, x, rtol=0, atol=0)
+    ptx = compiled.asm["ptx"]
+    assert f"tcgen05.st.sync.aligned.{instr_variant}" in ptx
+    assert f"tcgen05.ld.sync.aligned.{instr_variant}" in ptx
 
 
 def _funky_reduce_layouts():
@@ -1149,7 +1222,7 @@ def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layo
 
     torch.testing.assert_close(y, x, rtol=0, atol=0)
     if src_ctas_per_cga != dst_ctas_per_cga:
-        assert "ld.shared::cluster" in compiled.asm["ptx"]
+        # Replicated values may be loaded from the local CTA.
         assert "st.shared::cluster" not in compiled.asm["ptx"]
 
 
