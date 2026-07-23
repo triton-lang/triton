@@ -68,6 +68,10 @@ public:
     addLegalOp<triton::gpu::WarpYieldOp>();
     addLegalOp<triton::gpu::WarpSpecializePartitionsOp>();
     addLegalOp<triton::gpu::WarpReturnOp>();
+    // warp_predicate is lowered later (ConvertWarpSpecializeToLLVM pass),
+    // after its region body has been converted to LLVM.
+    addLegalOp<triton::gpu::WarpPredicateOp>();
+    addLegalOp<triton::gpu::PredicateYieldOp>();
   }
 };
 

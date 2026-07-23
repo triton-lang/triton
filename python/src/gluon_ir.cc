@@ -1061,6 +1061,19 @@ void init_gluon_ir(py::module_ &m) {
              return self.create<ttg::WarpSpecializeOp>(resultTypes,
                                                        partitionNumWarps);
            })
+      .def("create_warp_predicate",
+           [](GluonOpBuilder &self, std::vector<Type> &resultTypes,
+              Value predicate, std::vector<Value> &inits) -> Operation * {
+             return self.create<ttg::WarpPredicateOp>(resultTypes, predicate,
+                                                      inits);
+           },
+           ret::reference)
+      .def(
+          "create_predicate_yield",
+          [](GluonOpBuilder &self, std::vector<Value> &values) -> Operation * {
+            return self.create<ttg::PredicateYieldOp>(values);
+          },
+          ret::reference)
       .def("create_buffer_load",
            [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
               Value mask, Value other, tt::CacheModifier cache) -> Value {
