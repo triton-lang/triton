@@ -331,8 +331,8 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
       int64_t numMessages = dimSize / logicalBlockSize;
       if (!llvm::isPowerOf2_64(numMessages))
         return emitError() << "number of TMA messages per CTA (" << numMessages
-                           << ") must be a power of two (dim "
-                           << dim << ", dimSize=" << dimSize
+                           << ") must be a power of two (dim " << dim
+                           << ", dimSize=" << dimSize
                            << ", logicalBlockSize=" << logicalBlockSize << ")";
       if (numMessages > 1 && !llvm::isPowerOf2_64(dimSize))
         return emitError()
