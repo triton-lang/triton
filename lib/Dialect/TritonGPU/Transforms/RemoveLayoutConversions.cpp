@@ -180,6 +180,11 @@ public:
 
 private:
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
+  // Erase any rematMapping entries whose key or remat value belongs to \p op
+  // (its own results, or the results / block arguments of nested operations).
+  // Must be called right before erasing \p op so the map never retains dangling
+  // keys/values (e.g. old loop body block args added during for/if rewrites).
+  void eraseRematMappingForErasedOp(Operation *op);
   // Map values to their rematerializations for a given encoding. We have to be
   // careful about what we put in this map because updateRematMapping only
   // updates keys, and doesn't search for rematerialized values that may be
@@ -213,6 +218,40 @@ void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
                                             Value newV) {
   LDBG("addRematValue " << old << " encoding " << encoding << " " << newV);
   rematMapping[old][encoding] = newV;
+}
+
+void LayoutRematerialization::eraseRematMappingForErasedOp(Operation *op) {
+  // Collect every value that will be destroyed together with \p op: its own
+  // results, plus the results and block arguments of any nested operations
+  // (e.g. the body block arguments of an scf.for/scf.if being replaced).
+  llvm::SmallDenseSet<Value, 8> dying;
+  for (Value r : op->getResults())
+    dying.insert(r);
+  op->walk([&](Operation *nested) {
+    if (nested != op)
+      for (Value r : nested->getResults())
+        dying.insert(r);
+    for (Region &region : nested->getRegions())
+      for (Block &block : region)
+        for (BlockArgument arg : block.getArguments())
+          dying.insert(arg);
+  });
+  if (dying.empty())
+    return;
+  // Drop entries keyed on a dying value.
+  for (Value v : dying)
+    rematMapping.erase(v);
+  // Drop entries whose remat value is dying. (llvm::DenseMap::erase(iterator)
+  // returns void, so collect the encodings first, then erase by key.)
+  for (auto &keyAndRemats : rematMapping) {
+    auto &remats = keyAndRemats.second;
+    SmallVector<Attribute, 4> encodingsToErase;
+    for (auto &encAndVal : remats)
+      if (dying.contains(encAndVal.second))
+        encodingsToErase.push_back(encAndVal.first);
+    for (Attribute enc : encodingsToErase)
+      remats.erase(enc);
+  }
 }
 
 // Return true if the op is an op with a layout we don't want to change. We will
@@ -877,9 +916,12 @@ void LayoutRematerialization::rewriteSlice(
     builder.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
   }
 
+  eraseRematMappingForErasedOp(convertOp);
   convertOp->erase();
-  for (Operation *op : deadOps)
+  for (Operation *op : deadOps) {
+    eraseRematMappingForErasedOp(op);
     op->erase();
+  }
 }
 
 void LayoutRematerialization::rewriteSlice(
@@ -1233,6 +1275,7 @@ bool LayoutRematerialization::backwardRematerialization(
   if (newV && domInfo.properlyDominates(newV, convertOp)) {
     // Replace it with the remat'ed value.
     convertOp.replaceAllUsesWith(newV);
+    eraseRematMappingForErasedOp(convertOp);
     convertOp->erase();
     LDBG("found remat'ed value" << newV);
     return true;
