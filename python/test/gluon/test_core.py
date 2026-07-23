@@ -1948,12 +1948,13 @@ def _transform_b_to_core_matrices_layout(b, block_n, block_k, is_n_major=True):
                                  cm_rows * cm_cols).contiguous()
 
 
-def _make_packed_b_tma_descriptor(b, block_n, block_k_packed, is_n_major=True):
+def _make_packed_b_tma_descriptor(b, block_n, block_k_packed, is_n_major=True, cga_layout=None):
     b_transformed = _transform_b_to_core_matrices_layout(b, block_n, block_k_packed,
                                                          is_n_major=is_n_major)
     num_cm_n = block_n // 8
     num_cm_k = block_k_packed // 16
-    b_layout_tma = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5)
+    b_layout_tma = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5,
+                                          cga_layout=cga_layout)
     if is_n_major:
         b_block_shape = [1, 1, num_cm_k, num_cm_n, 128]
     else:
@@ -1961,13 +1962,13 @@ def _make_packed_b_tma_descriptor(b, block_n, block_k_packed, is_n_major=True):
     return TensorDescriptor.from_tensor(b_transformed, b_block_shape, b_layout_tma)
 
 
-def _make_lut_tma_descriptor(lut, block_n, block_k):
+def _make_lut_tma_descriptor(lut, block_n, block_k, cga_layout=None):
     assert block_n % 256 == 0, f"BLOCK_N={block_n} must be divisible by 256"
     assert block_k % 128 == 0, f"BLOCK_K={block_k} must be divisible by 128"
     lut_tile_shape = [block_n // 256, block_k // 128, 4, 128]
     # After _lut_to_tmem_layout, an unswizzled 4D tile linearizes to the
     # canonical 32x16B-per-copy LUT layout, including for wider K.
-    lut_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=4)
+    lut_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=4, cga_layout=cga_layout)
     return TensorDescriptor.from_tensor(lut, lut_tile_shape, lut_layout)
 
 
@@ -2006,6 +2007,7 @@ def _mma_lut_kernel(
     BLOCK_K: ttgl.constexpr,
     BLOCK_K_PACKED: ttgl.constexpr,
     b_is_n_major: ttgl.constexpr,
+    two_ctas: ttgl.constexpr,
     num_warps: ttgl.constexpr,
 ):
     BLOCK_M: ttgl.constexpr = c_desc.block_type.shape[0]
@@ -2021,17 +2023,25 @@ def _mma_lut_kernel(
     b_smem = ttgl.allocate_shared_memory(b_desc_tma.dtype, b_desc_tma.block_type.shape, b_desc_tma.layout)
     lut_smem = ttgl.allocate_shared_memory(ttgl.int8, lut_desc.block_type.shape, lut_desc.layout)
 
-    tma_bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+    tma_bar = mbarrier.allocate_mbarrier(two_ctas=two_ctas)
     mbarrier.init(tma_bar, count=1)
-    mma_bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+    mma_bar = mbarrier.allocate_mbarrier()
     mbarrier.init(mma_bar, count=1)
     phase = 0
 
-    tmem_layout: ttgl.constexpr = TensorMemoryLayout([128, BLOCK_N], col_stride=1)
+    cga_layout: ttgl.constexpr = [[1, 0]] if two_ctas else []
+    tmem_block_m: ttgl.constexpr = BLOCK_M // 2 if two_ctas else 128
+    tmem_layout: ttgl.constexpr = TensorMemoryLayout([tmem_block_m, BLOCK_N], col_stride=1,
+                                                     cga_layout=cga_layout, two_ctas=two_ctas)
     acc_tmem = allocate_tensor_memory(ttgl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
     num_lut_rows: ttgl.constexpr = BLOCK_N // 8
     num_lut_cols: ttgl.constexpr = BLOCK_K // 128 * 16
-    lut_tmem = allocate_tensor_memory(ttgl.int8, (num_lut_rows, num_lut_cols), rubin.TensorMemoryLUTLayout())
+    lut_cga_layout: ttgl.constexpr = [[0, 0]] if two_ctas else []
+    lut_tmem = allocate_tensor_memory(
+        ttgl.int8,
+        (num_lut_rows, num_lut_cols),
+        rubin.TensorMemoryLUTLayout(cga_layout=lut_cga_layout),
+    )
 
     block_n = pid_n
     lut_block_n = pid_n * (BLOCK_N // 256)
@@ -2040,41 +2050,64 @@ def _mma_lut_kernel(
     for k_iter in range(0, k_size // BLOCK_K):
         k = k_iter * BLOCK_K
         lut_block_k = k_iter * (BLOCK_K // 128)
-        mbarrier.expect(tma_bar,
-                        a_desc.block_type.nbytes + b_desc_tma.block_type.nbytes + lut_desc.block_type.nbytes)
+        mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc_tma.nbytes_per_cta + lut_desc.nbytes_per_cta)
         tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_smem)
         tma.async_copy_global_to_shared(b_desc_tma, [block_n, k_iter, 0, 0, 0], tma_bar, b_smem)
-        tma.async_copy_global_to_shared(lut_desc, [lut_block_n, lut_block_k, 0, 0], tma_bar, lut_smem)
+        tma.async_copy_global_to_shared(
+            lut_desc,
+            [lut_block_n, lut_block_k, 0, 0],
+            tma_bar,
+            lut_smem,
+            multicast=two_ctas,
+        )
         b_smem_transformed = _core_matrices_to_operand_layout(b_smem, BLOCK_N, BLOCK_K_PACKED, b_is_n_major)
 
-        fence_async_shared()
-        mbarrier.wait(tma_bar, phase=phase)
+        mbarrier.wait(tma_bar, phase=phase, deps=[a_smem, b_smem, lut_smem])
         tcgen05_copy(_lut_to_tmem_layout(lut_smem), lut_tmem)
         b = b_smem_transformed.permute((1, 0))
         rubin.tcgen05_mma(a_smem, b, acc_tmem, use_acc=use_acc, lut=lut_tmem)
         tcgen05_commit(mma_bar)
-        mbarrier.wait(mma_bar, phase=phase)
+        mbarrier.wait(mma_bar, phase=phase, deps=[a_smem, b_smem])
         use_acc = True
         phase ^= 1
 
     mbarrier.invalidate(tma_bar)
     mbarrier.invalidate(mma_bar)
 
-    acc = acc_tmem.load(acc_tmem.get_reg_layout(num_warps=num_warps))
-    c_smem = ttgl.allocate_shared_memory(ttgl.float32, c_desc.block_type.shape, c_desc.layout)
+    if two_ctas:
+        acc = acc_tmem.load()
+        block_layout_c: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [1, 32], [num_warps, 1], [1, 0],
+                                                            cga_layout=cga_layout)
+        acc = ttgl.convert_layout(acc, block_layout_c)
+    else:
+        acc = acc_tmem.load(acc_tmem.get_reg_layout(num_warps=num_warps))
+
+    c_smem = ttgl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
     c_smem.store(acc)
     fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
     tma.store_wait(pendings=0)
 
 
-def _matmul_lut(a, b, lut, c, block_m, block_n, block_k, block_k_packed, num_warps, b_is_n_major=True):
+def _matmul_lut(a, b, lut, c, block_m, block_n, block_k, block_k_packed, num_warps, b_is_n_major=True,
+                two_ctas=False):
     m, n = c.shape
-    a_layout = ttgl.NVMMASharedLayout.get_default_for([block_m, block_k], ttgl.float8e4nv)
+    cga_layout = [[1, 0]] if two_ctas else []
+    a_layout = ttgl.NVMMASharedLayout.get_default_for([block_m, block_k], ttgl.float8e4nv,
+                                                      cga_layout=cga_layout)
     a_desc = TensorDescriptor.from_tensor(a, [block_m, block_k], a_layout)
-    b_desc_tma = _make_packed_b_tma_descriptor(b, block_n, block_k_packed, is_n_major=b_is_n_major)
-    lut_desc = _make_lut_tma_descriptor(lut, block_n, block_k)
-    c_layout = ttgl.NVMMASharedLayout.get_default_for([block_m, block_n], ttgl.float32)
+    b_cga_layout = [[0, 0, 0, 1, 0]] if two_ctas else []
+    b_desc_tma = _make_packed_b_tma_descriptor(
+        b,
+        block_n,
+        block_k_packed,
+        is_n_major=b_is_n_major,
+        cga_layout=b_cga_layout,
+    )
+    lut_cga_layout = [[0, 0, 0, 0]] if two_ctas else []
+    lut_desc = _make_lut_tma_descriptor(lut, block_n, block_k, cga_layout=lut_cga_layout)
+    c_layout = ttgl.NVMMASharedLayout.get_default_for([block_m, block_n], ttgl.float32,
+                                                      cga_layout=cga_layout)
     c_desc = TensorDescriptor.from_tensor(c, [block_m, block_n], c_layout)
 
     grid = (triton.cdiv(m, block_m), triton.cdiv(n, block_n))
@@ -2087,7 +2120,9 @@ def _matmul_lut(a, b, lut, c, block_m, block_n, block_k, block_k_packed, num_war
         block_k,
         block_k_packed,
         b_is_n_major,
+        two_ctas,
         num_warps=num_warps,
+        num_ctas=2 if two_ctas else 1,
     )
 
 
@@ -2095,7 +2130,13 @@ def _matmul_lut(a, b, lut, c, block_m, block_n, block_k, block_k_packed, num_war
 @pytest.mark.parametrize("BLOCK_M", [128, 256])
 @pytest.mark.parametrize("BLOCK_K", [128, 256])
 @pytest.mark.parametrize("b_is_n_major", [True, False], ids=["n_major", "k_major"])
-def test_tcgen05_lutb(BLOCK_M, BLOCK_K, b_is_n_major):
+@pytest.mark.parametrize("two_ctas", [False, True], ids=["1cta", "2cta"])
+def test_tcgen05_lutb(BLOCK_M, BLOCK_K, b_is_n_major, two_ctas):
+    if two_ctas and BLOCK_M != 256:
+        pytest.skip("2CTA coverage uses BLOCK_M=256")
+    if not b_is_n_major:
+        pytest.xfail("k_major core-matrix tiling does not satisfy the limited non-pow2 shared-layout invariant")
+
     k = 4096
     n = 4096
     m = 4096
@@ -2107,11 +2148,8 @@ def test_tcgen05_lutb(BLOCK_M, BLOCK_K, b_is_n_major):
     lut_orig, b_indices_packed = _get_random_lut_and_indices(n, k)
     lut = _pack_lut_for_tma(lut_orig)
 
-    if not b_is_n_major:
-        pytest.xfail("k_major core-matrix tiling does not satisfy the limited non-pow2 shared-layout invariant")
-
     _matmul_lut(a, b_indices_packed, lut, c, BLOCK_M, block_n, BLOCK_K, block_k_packed, 4,
-                b_is_n_major=b_is_n_major)
+                b_is_n_major=b_is_n_major, two_ctas=two_ctas)
 
     b_uint8 = _decompress_lut(b_indices_packed, lut_orig)
     b = b_uint8.view(torch.float8_e4m3fn)
