@@ -7,7 +7,6 @@ from triton.experimental.gluon.language._core import _unwrap_if_constexpr, built
 
 from ..blackwell import (
     TensorMemoryLayout,
-    _tcgen05_mma,
     _TensorMemoryLayoutBase,
     _TensorMemoryLinearLayout,
     allocate_tensor_memory,
@@ -22,7 +21,6 @@ from ..blackwell import (
     tcgen05_commit,
     tcgen05_copy,
     tcgen05_mma_barrier_count,
-    tcgen05_mma_scaled,
     tma,
 )
 from ..blackwell import TensorMemoryScalesLayout as _BlackwellTensorMemoryScalesLayout
@@ -90,18 +88,57 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
         lut (tensor_memory_descriptor, optional): Lookup table used to decompress B. Defaults to None.
     """
-    return _tcgen05_mma(
-        a,
-        b,
-        acc,
-        use_acc=use_acc,
-        pred=pred,
-        multicast=multicast,
-        mbarriers=mbarriers,
-        mbarrier_preds=mbarrier_preds,
-        lut=lut,
-        _semantic=_semantic,
-    )
+    use_acc = _semantic.to_tensor(use_acc)
+    pred = _semantic.to_tensor(pred)
+
+    if mbarriers is None:
+        assert mbarrier_preds is None
+        mbarriers = []
+        mbarrier_preds = []
+    else:
+        mbarriers = [bar.handle for bar in mbarriers]
+        if mbarrier_preds is None:
+            true = _semantic.to_tensor(True)
+            mbarrier_preds = [true.handle] * len(mbarriers)
+        else:
+            mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
+
+    multicast = _unwrap_if_constexpr(multicast)
+    lut_handle = lut.handle if lut is not None else None
+    _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
+                                         mbarrier_preds, acc.layout.two_ctas, multicast, lut_handle)
+
+
+@builtin
+def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=True, pred=True, multicast=False,
+                       mbarriers=None, mbarrier_preds=None, lut=None, _semantic=None):
+    """Emit a Rubin scaled TensorCore MMA instruction with an optional LUT used to decompress B."""
+    use_acc = _semantic.to_tensor(use_acc)
+    pred = _semantic.to_tensor(pred)
+    assert acc.type.layout.block[0] != 64, "tcgen05_mma_scaled does not support blockM=64"
+
+    if mbarriers is None:
+        assert mbarrier_preds is None
+        mbarriers = []
+        mbarrier_preds = []
+    else:
+        mbarriers = [bar.handle for bar in mbarriers]
+        if mbarrier_preds is None:
+            true = _semantic.to_tensor(True)
+            mbarrier_preds = [true.handle] * len(mbarriers)
+        else:
+            mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
+
+    allowed_formats = {"e2m1", "e4m3", "e5m2"}
+    assert a_type.value in allowed_formats, f"Unsupported lhs_format: {a_type.value}"
+    assert b_type.value in allowed_formats, f"Unsupported rhs_format: {b_type.value}"
+    a_type = _semantic._str_to_fp_type(a_type.value)
+    b_type = _semantic._str_to_fp_type(b_type.value)
+    multicast = _unwrap_if_constexpr(multicast)
+    lut_handle = lut.handle if lut is not None else None
+    _semantic.builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, a_type,
+                                                b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds,
+                                                acc.layout.two_ctas, multicast, lut_handle)
 
 
 @dataclass(frozen=True, eq=True)

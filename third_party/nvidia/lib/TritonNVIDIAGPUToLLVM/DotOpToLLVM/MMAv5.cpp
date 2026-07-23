@@ -400,9 +400,10 @@ void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
 
 void createScaledGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
                          ttng::TCGen5MMAScaledOp op, MemDescOperand a, Value b,
-                         MemDescOperand d, Value scaleA, Value scaleB,
-                         Value pred, Value instDescriptor, Value useInitAcc,
-                         bool aInTmem, mxfpKind mxfpInstKind, bool twoCTAs,
+                         Value lut, MemDescOperand d, Value scaleA,
+                         Value scaleB, Value pred, Value instDescriptor,
+                         Value useInitAcc, bool aInTmem,
+                         mxfpKind mxfpInstKind, bool twoCTAs,
                          std::string collectorB) {
   PTXBuilder ptxBuilder;
   std::string opcode =
@@ -418,6 +419,8 @@ void createScaledGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
     assert(0 && "Unsupported mxfp kind.");
   }
   opcode += collectorB;
+  if (lut)
+    opcode += ".decompress::lut::b";
   auto *accOp = ptxBuilder.newAddrOperand(d.base, "r", *d.offset);
   assert(aInTmem == a.offset.has_value());
   auto *aOp = aInTmem ? ptxBuilder.newAddrOperand(a.base, "r", *a.offset)
@@ -428,8 +431,15 @@ void createScaledGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
   auto *scaleBOp = ptxBuilder.newAddrOperand(scaleB, "r");
   auto *useInitAccOp = ptxBuilder.newOperand(useInitAcc, "b");
   auto &mmaOp = *ptxBuilder.create(opcode);
-  mmaOp({accOp, aOp, bOp, instDescOp, scaleAOp, scaleBOp, useInitAccOp})
-      .predicate(pred);
+  if (lut) {
+    auto *lutOp = ptxBuilder.newAddrOperand(lut, "r");
+    mmaOp(
+        {accOp, aOp, bOp, lutOp, instDescOp, scaleAOp, scaleBOp, useInitAccOp})
+        .predicate(pred);
+  } else {
+    mmaOp({accOp, aOp, bOp, instDescOp, scaleAOp, scaleBOp, useInitAccOp})
+        .predicate(pred);
+  }
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
 
@@ -919,6 +929,9 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
                                   dTensorTy.getElementTypeBitWidth());
   Value baseScaleA = tb.ptrtoint(i32_ty, adaptor.getAScale());
   Value baseScaleB = tb.ptrtoint(i32_ty, adaptor.getBScale());
+  Value baseLut;
+  if (op.getLut())
+    baseLut = tb.ptrtoint(i32_ty, adaptor.getLut());
   bool twoCTAs = ttng::getModuleTwoCTAs(op);
   SmallVector<Value> commitDescs = op.getCompletionDescs();
 
@@ -970,17 +983,20 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
           subWordIdx, subWordIdx, mxfpInstKind, blockK, dot.mmaSizeK);
     }
 
+    Value lut;
+    if (op.getLut())
+      lut = tb.add(baseLut, tb.i32_val(k * 2));
     auto collectorB = getCollectorBModifer(reuseB);
-    createScaledGen5MMA(rewriter, loc, op, a, b, accAddress, scaleA, scaleB,
-                        pred, instDescriptor, useInitAcc, desc.aInTmem,
+    createScaledGen5MMA(rewriter, loc, op, a, b, lut, accAddress, scaleA,
+                        scaleB, pred, instDescriptor, useInitAcc, desc.aInTmem,
                         mxfpInstKind, twoCTAs, collectorB);
   };
 
   return convertDotImpl(
       typeConverter, rewriter, loc, op.getA(), op.getB(), adaptor.getA(),
       adaptor.getB(), dTensorTy, adaptor.getUseD(), adaptor.getPred(),
-      adaptor.getBarriers(), adaptor.getBarrierPreds(), Value(), twoCTAs,
-      commitDescs, opKindIsMXFP4, targetFeatures, dot);
+      adaptor.getBarriers(), adaptor.getBarrierPreds(), adaptor.getLut(),
+      twoCTAs, commitDescs, opKindIsMXFP4, targetFeatures, dot);
 }
 
 //===----------------------------------------------------------------------===//

@@ -953,8 +953,9 @@ public:
 
     auto vTrue = arith::ConstantIntOp::create(rewriter, dotOp.getLoc(), 1, 1);
     auto mmaOp = triton::nvidia_gpu::TCGen5MMAScaledOp::create(
-        rewriter, loc, tokType, a, b, acc.getResult(), acc.getToken(), scaleA,
-        scaleB, dotOp.getAElemType(), dotOp.getBElemType(),
+        rewriter, loc, tokType, a, b, acc.getResult(), acc.getToken(),
+        /*lut=*/Value(), scaleA, scaleB, dotOp.getAElemType(),
+        dotOp.getBElemType(),
         /*useD=*/vTrue, /*pred=*/vTrue);
 
     auto ld = triton::nvidia_gpu::TMEMLoadOp::create(

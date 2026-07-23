@@ -1022,12 +1022,14 @@ void init_gluon_ir(py::module_ &m) {
               Value bScale, tt::ScaleDotElemType aType,
               tt::ScaleDotElemType bType, Value useAcc, Value pred,
               std::vector<Value> &mbarriers, std::vector<Value> &mbarrier_preds,
-              bool two_ctas, bool multicast) {
+              bool two_ctas, bool multicast,
+              std::optional<Value> lut = std::nullopt) {
              Value accDep;
              auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
+             Value lutValue = lut.value_or(Value());
              self.create<ttng::TCGen5MMAScaledOp>(
-                 tokType, a, b, acc, accDep, aScale, bScale, aType, bType,
-                 useAcc, pred, mbarriers, mbarrier_preds, two_ctas,
+                 tokType, a, b, acc, accDep, lutValue, aScale, bScale, aType,
+                 bType, useAcc, pred, mbarriers, mbarrier_preds, two_ctas,
                  /*isAsync=*/false, multicast);
            })
       .def("create_tcgen05_commit",

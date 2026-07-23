@@ -475,28 +475,6 @@ def tcgen05_copy(src, dst, _semantic=None):
     _semantic.builder.create_tmem_copy(src.handle, dst.handle)
 
 
-def _tcgen05_mma(a, b, acc, *, use_acc, pred, multicast, mbarriers, mbarrier_preds, lut, _semantic):
-    use_acc = _semantic.to_tensor(use_acc)
-    pred = _semantic.to_tensor(pred)
-
-    if mbarriers is None:
-        assert mbarrier_preds is None
-        mbarriers = []
-        mbarrier_preds = []
-    else:
-        mbarriers = [bar.handle for bar in mbarriers]
-        if mbarrier_preds is None:
-            true = _semantic.to_tensor(True)
-            mbarrier_preds = [true.handle] * len(mbarriers)
-        else:
-            mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
-
-    multicast = _unwrap_if_constexpr(multicast)
-    lut_handle = lut.handle if lut is not None else None
-    _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
-                                         mbarrier_preds, acc.layout.two_ctas, multicast, lut_handle)
-
-
 @builtin
 def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarriers=None, mbarrier_preds=None,
                 _semantic=None):
@@ -514,18 +492,24 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
         mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
     """
-    return _tcgen05_mma(
-        a,
-        b,
-        acc,
-        use_acc=use_acc,
-        pred=pred,
-        multicast=multicast,
-        mbarriers=mbarriers,
-        mbarrier_preds=mbarrier_preds,
-        lut=None,
-        _semantic=_semantic,
-    )
+    use_acc = _semantic.to_tensor(use_acc)
+    pred = _semantic.to_tensor(pred)
+
+    if mbarriers is None:
+        assert mbarrier_preds is None
+        mbarriers = []
+        mbarrier_preds = []
+    else:
+        mbarriers = [bar.handle for bar in mbarriers]
+        if mbarrier_preds is None:
+            true = _semantic.to_tensor(True)
+            mbarrier_preds = [true.handle] * len(mbarriers)
+        else:
+            mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
+
+    multicast = _unwrap_if_constexpr(multicast)
+    _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
+                                         mbarrier_preds, acc.layout.two_ctas, multicast)
 
 
 @builtin

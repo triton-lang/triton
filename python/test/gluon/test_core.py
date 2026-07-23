@@ -5539,6 +5539,220 @@ def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_K, a_format, b_format, VEC_SIZE,
     torch.testing.assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
 
 
+def _make_lut_scale_descriptor(scales, block_mn, block_k, cga_layout=None):
+    vec_size = 32
+    rep_mn = block_mn // 128
+    rep_k = block_k // (vec_size * 4)
+    block_shape = [1, rep_mn, rep_k, 2, 256]
+    scales = scales.reshape(1, scales.shape[0], scales.shape[1], 2, 256)
+    layout = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5,
+                                    cga_layout=cga_layout)
+    return TensorDescriptor.from_tensor(scales, block_shape, layout)
+
+
+@gluon.jit
+def _mma_scaled_lut_kernel(
+    a_desc,
+    b_desc,
+    lut_desc,
+    c_desc,
+    a_scale_desc,
+    b_scale_desc,
+    BLOCK_N: ttgl.constexpr,
+    BLOCK_K: ttgl.constexpr,
+    BLOCK_K_PACKED: ttgl.constexpr,
+    two_ctas: ttgl.constexpr,
+    num_warps: ttgl.constexpr,
+):
+    BLOCK_M: ttgl.constexpr = c_desc.block_type.shape[0]
+    vec_size: ttgl.constexpr = 32
+    k_size = a_desc.shape[1]
+
+    pid_m = ttgl.program_id(0)
+    pid_n = ttgl.program_id(1)
+    off_m = pid_m * BLOCK_M
+    off_n = pid_n * BLOCK_N
+
+    a_smem = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_type.shape, a_desc.layout)
+    b_smem = ttgl.allocate_shared_memory(b_desc.dtype, b_desc.block_type.shape, b_desc.layout)
+    lut_smem = ttgl.allocate_shared_memory(lut_desc.dtype, lut_desc.block_type.shape, lut_desc.layout)
+    a_scale_smem = ttgl.allocate_shared_memory(a_scale_desc.dtype, a_scale_desc.block_type.shape, a_scale_desc.layout)
+    b_scale_smem = ttgl.allocate_shared_memory(b_scale_desc.dtype, b_scale_desc.block_type.shape, b_scale_desc.layout)
+
+    tma_bar = mbarrier.allocate_mbarrier(two_ctas=two_ctas)
+    mbarrier.init(tma_bar, count=1)
+    mma_bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(mma_bar, count=1)
+    phase = 0
+
+    cga_layout: ttgl.constexpr = [[1, 0]] if two_ctas else []
+    tmem_block_m: ttgl.constexpr = BLOCK_M // 2 if two_ctas else 128
+    acc_layout: ttgl.constexpr = TensorMemoryLayout([tmem_block_m, BLOCK_N], col_stride=1,
+                                                    cga_layout=cga_layout, two_ctas=two_ctas)
+    acc_tmem = allocate_tensor_memory(ttgl.float32, [BLOCK_M, BLOCK_N], acc_layout)
+
+    num_lut_rows: ttgl.constexpr = BLOCK_N // 8
+    num_lut_cols: ttgl.constexpr = BLOCK_K // 128 * 16
+    lut_cga_layout: ttgl.constexpr = [[0, 0]] if two_ctas else []
+    lut_tmem = rubin.allocate_tensor_memory(
+        ttgl.int8,
+        (num_lut_rows, num_lut_cols),
+        rubin.TensorMemoryLUTLayout(cga_layout=lut_cga_layout),
+    )
+
+    a_scale_cga_layout: ttgl.constexpr = [[1, 0]] if two_ctas else []
+    b_scale_cga_layout: ttgl.constexpr = [[0, 0]] if two_ctas else []
+    a_scale_tmem = allocate_tensor_memory(
+        a_scale_desc.dtype,
+        [BLOCK_M, BLOCK_K // vec_size],
+        TensorMemoryScalesLayout(cga_layout=a_scale_cga_layout),
+    )
+    b_scale_tmem = allocate_tensor_memory(
+        b_scale_desc.dtype,
+        [BLOCK_N, BLOCK_K // vec_size],
+        TensorMemoryScalesLayout(cga_layout=b_scale_cga_layout),
+    )
+
+    rep_m: ttgl.constexpr = a_scale_desc.block_type.shape[1]
+    rep_n: ttgl.constexpr = b_scale_desc.block_type.shape[1]
+    rep_k_a: ttgl.constexpr = a_scale_desc.block_type.shape[2]
+    rep_k_b: ttgl.constexpr = b_scale_desc.block_type.shape[2]
+    off_m_a_scale = pid_m * rep_m
+    off_n_b_scale = pid_n * rep_n
+
+    use_acc = False
+    for k_iter in range(0, k_size // BLOCK_K):
+        off_k = k_iter * BLOCK_K
+        lut_block_n = pid_n * (BLOCK_N // 256)
+        lut_block_k = k_iter * (BLOCK_K // 128)
+        off_k_a_scale = k_iter * rep_k_a
+        off_k_b_scale = k_iter * rep_k_b
+
+        expected_bytes: ttgl.constexpr = (a_desc.nbytes_per_cta + b_desc.nbytes_per_cta +
+                                          lut_desc.nbytes_per_cta + a_scale_desc.nbytes_per_cta +
+                                          b_scale_desc.nbytes_per_cta)
+        mbarrier.expect(tma_bar, expected_bytes)
+        tma.async_load(a_desc, [off_m, off_k], tma_bar, a_smem)
+        tma.async_load(b_desc, [pid_n, k_iter, 0, 0, 0], tma_bar, b_smem)
+        tma.async_load(lut_desc, [lut_block_n, lut_block_k, 0, 0], tma_bar, lut_smem, multicast=two_ctas)
+        tma.async_load(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], tma_bar, a_scale_smem)
+        tma.async_load(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], tma_bar, b_scale_smem,
+                       multicast=two_ctas)
+        mbarrier.wait(tma_bar, phase=phase,
+                      deps=[a_smem, b_smem, lut_smem, a_scale_smem, b_scale_smem])
+
+        b = _core_matrices_to_operand_layout(b_smem, BLOCK_N, BLOCK_K_PACKED, True).permute((1, 0))
+        tcgen05_copy(_lut_to_tmem_layout(lut_smem), lut_tmem)
+
+        a_scale = unswizzle_scales_shared_memory(a_scale_smem, BLOCK_M, BLOCK_K, vec_size)
+        b_scale = unswizzle_scales_shared_memory(b_scale_smem, BLOCK_N, BLOCK_K, vec_size)
+        tcgen05_copy(a_scale, a_scale_tmem)
+        tcgen05_copy(b_scale, b_scale_tmem)
+
+        rubin.tcgen05_mma_scaled(
+            a_smem,
+            b,
+            acc_tmem,
+            a_scale_tmem,
+            b_scale_tmem,
+            "e4m3",
+            "e4m3",
+            use_acc=use_acc,
+            lut=lut_tmem,
+        )
+        tcgen05_commit(mma_bar)
+        mbarrier.wait(mma_bar, phase=phase, deps=[a_smem, b_smem])
+        use_acc = True
+        phase ^= 1
+
+    mbarrier.invalidate(tma_bar)
+    mbarrier.invalidate(mma_bar)
+
+    acc = acc_tmem.load()
+    if two_ctas:
+        block_layout_c: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [1, 32], [num_warps, 1], [1, 0],
+                                                            cga_layout=cga_layout)
+        acc = ttgl.convert_layout(acc, block_layout_c)
+    acc = acc.to(c_desc.dtype)
+
+    c_smem = ttgl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
+    c_smem.store(acc)
+    fence_async_shared()
+    tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
+    tma.store_wait(0)
+
+
+def _matmul_scaled_lut(a, a_scale, b, lut, b_scale, c, block_m, block_n, block_k, block_k_packed,
+                       num_warps, two_ctas):
+    cga_layout = [[1, 0]] if two_ctas else []
+    b_cga_layout = [[0, 0, 0, 1, 0]] if two_ctas else []
+    lut_cga_layout = [[0, 0, 0, 0]] if two_ctas else []
+    a_scale_cga_layout = [[0, 1, 0, 0, 0]] if two_ctas else []
+    b_scale_cga_layout = [[0, 0, 0, 0, 0]] if two_ctas else []
+
+    a_layout = ttgl.NVMMASharedLayout.get_default_for([block_m, block_k], ttgl.float8e4nv,
+                                                      cga_layout=cga_layout)
+    a_desc = TensorDescriptor.from_tensor(a, [block_m, block_k], a_layout)
+    b_desc = _make_packed_b_tma_descriptor(b, block_n, block_k_packed, cga_layout=b_cga_layout)
+    lut_desc = _make_lut_tma_descriptor(lut, block_n, block_k, cga_layout=lut_cga_layout)
+    a_scale_desc = _make_lut_scale_descriptor(a_scale, block_m, block_k, cga_layout=a_scale_cga_layout)
+    b_scale_desc = _make_lut_scale_descriptor(b_scale, block_n, block_k, cga_layout=b_scale_cga_layout)
+    c_layout = ttgl.NVMMASharedLayout.get_default_for([block_m, block_n], ttgl.float32,
+                                                      cga_layout=cga_layout)
+    c_desc = TensorDescriptor.from_tensor(c, [block_m, block_n], c_layout)
+
+    grid = (triton.cdiv(c.shape[0], block_m), triton.cdiv(c.shape[1], block_n))
+    _mma_scaled_lut_kernel[grid](
+        a_desc,
+        b_desc,
+        lut_desc,
+        c_desc,
+        a_scale_desc,
+        b_scale_desc,
+        block_n,
+        block_k,
+        block_k_packed,
+        two_ctas,
+        num_warps=num_warps,
+        num_ctas=2 if two_ctas else 1,
+    )
+
+
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+@pytest.mark.parametrize("BLOCK_M", [128, 256])
+@pytest.mark.parametrize("two_ctas", [False, True], ids=["1cta", "2cta"])
+def test_tcgen05_lutb_scaled(BLOCK_M, two_ctas):
+    if two_ctas and BLOCK_M == 128:
+        pytest.skip("scaled 2CTA MMA does not support a 64-row per-CTA TMEM block")
+
+    m = 1024
+    n = 1024
+    k = 1024
+    block_n = 256
+    block_k = 128
+    block_k_packed = block_k * 3 // 8
+    vec_size = 32
+
+    a = torch.randn(m, k, device="cuda", dtype=torch.float32).to(torch.float8_e4m3fn)
+    a_scale_mx = MXScaleTensor(size=(m, k // vec_size), device="cuda").random(low=1 / 128, high=2.0)
+    a_scale = swizzle_scales_packed_block(a_scale_mx.data, vec_size)
+
+    lut_orig, b_indices_packed = _get_random_lut_and_indices(n, k)
+    lut = _pack_lut_for_tma(lut_orig)
+    b_scale_mx = MXScaleTensor(size=(n, k // vec_size), device="cuda").random(low=1 / 128, high=2.0)
+    b_scale = swizzle_scales_packed_block(b_scale_mx.data, vec_size)
+    c = torch.empty(m, n, device="cuda", dtype=torch.float32)
+
+    _matmul_scaled_lut(a, a_scale, b_indices_packed, lut, b_scale, c, BLOCK_M, block_n, block_k,
+                       block_k_packed, 4, two_ctas)
+
+    a_scale_ref = a_scale_mx.to(torch.float32).repeat_interleave(vec_size, dim=1)
+    b_scale_ref = b_scale_mx.to(torch.float32).repeat_interleave(vec_size, dim=1)
+    b = _decompress_lut(b_indices_packed, lut_orig).view(torch.float8_e4m3fn)
+    c_ref = (a.to(torch.float32) * a_scale_ref) @ (b.to(torch.float32) * b_scale_ref).T
+    torch.testing.assert_close(c_ref, c, rtol=1e-3, atol=1e-3)
+
+
 @gluon.jit
 def tmem288k_simple_kernel(in_ptr, out_ptr, M: ttgl.constexpr, Ncol1: ttgl.constexpr, Ncol2: ttgl.constexpr,
                            num_warps: ttgl.constexpr):

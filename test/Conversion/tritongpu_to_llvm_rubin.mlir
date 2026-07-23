@@ -201,6 +201,41 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#shared_scaled_lut_a = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
+#shared_scaled_lut_b = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [16, 0], [32, 0]]}, alignment = 16>
+#shared_scaled_lut_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#tmem_scaled_lut_acc = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
+#tmem_scaled_lut_scales = #ttng.tensor_memory_scales_encoding<>
+#tmem_scaled_lut = #ttng.tensor_memory_lut_encoding<>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107"} {
+  // CHECK-LABEL: @tc_gen5_mma_block_scale_lut
+  // CHECK: tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.block32.collector::b::fill.decompress::lut::b
+  // CHECK: tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.block32.collector::b::lastuse.decompress::lut::b
+  tt.func @tc_gen5_mma_block_scale_lut(
+      %a: !ttg.memdesc<128x128xf8E4M3FN, #shared_scaled_lut_a, #ttg.shared_memory>,
+      %b: !ttg.memdesc<48x256xi8, #shared_scaled_lut_b, #ttg.shared_memory>,
+      %lut: !ttg.memdesc<32x16xi8, #tmem_scaled_lut, #ttng.tensor_memory>,
+      %c: !ttg.memdesc<128x256xf32, #tmem_scaled_lut_acc, #ttng.tensor_memory, mutable>,
+      %scale_a: !ttg.memdesc<128x4xi8, #tmem_scaled_lut_scales, #ttng.tensor_memory>,
+      %scale_b: !ttg.memdesc<256x4xi8, #tmem_scaled_lut_scales, #ttng.tensor_memory>,
+      %useAcc: i1,
+      %pred: i1,
+      %barrier: !ttg.memdesc<1xi64, #shared_scaled_lut_barrier, #ttg.shared_memory>,
+      %barrierPred: i1) {
+    ttng.tc_gen5_mma_scaled %a, %b[%lut], %c, %scale_a, %scale_b, %useAcc, %pred lhs = e4m3 rhs = e4m3, %barrier[%barrierPred] {is_async} :
+      !ttg.memdesc<128x128xf8E4M3FN, #shared_scaled_lut_a, #ttg.shared_memory>,
+      !ttg.memdesc<48x256xi8, #shared_scaled_lut_b, #ttg.shared_memory>[!ttg.memdesc<32x16xi8, #tmem_scaled_lut, #ttng.tensor_memory>],
+      !ttg.memdesc<128x256xf32, #tmem_scaled_lut_acc, #ttng.tensor_memory, mutable>,
+      !ttg.memdesc<128x4xi8, #tmem_scaled_lut_scales, #ttng.tensor_memory>,
+      !ttg.memdesc<256x4xi8, #tmem_scaled_lut_scales, #ttng.tensor_memory>,
+      !ttg.memdesc<1xi64, #shared_scaled_lut_barrier, #ttg.shared_memory>
+    tt.return
+  }
+}
+
+// -----
+
 // MMA codegen recognizes a fp4-padded SharedLinear A operand and selects
 // the padded mxf8f6f4 MMA_K = 32 variant
 #shared_fp4_padded_sl = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 0], [0, 8], [0, 16], [0, 32], [1, 8], [2, 16], [4, 32], [8, 0], [16, 0], [32, 0], [64, 0]], block = [[128, 0]]}, alignment = 1024>

@@ -1329,6 +1329,11 @@ void TCGen5MMAScaledOp::getEffects(
                        TensorMemory::get());
   effects.emplace_back(MemoryEffects::Read::get(), &getBScaleMutable(),
                        TensorMemory::get());
+  if (getLut()) {
+    auto lutMutable = getLutMutable();
+    effects.emplace_back(MemoryEffects::Read::get(), &*lutMutable.begin(),
+                         TensorMemory::get());
+  }
   for (auto &barrierMutable : getBarriersMutable())
     effects.emplace_back(MemoryEffects::Write::get(), &barrierMutable,
                          SharedMemory::get());
@@ -1352,8 +1357,13 @@ bool TCGen5MMAScaledOp::verifyDims() {
   auto bKdim = bShape[aShape.size() - 2];
   if (this->getAType() == ScaleDotElemType::E2M1 && !transA)
     aKdim *= 2;
-  if (this->getBType() == ScaleDotElemType::E2M1 && !transB)
+  if (getLut()) {
+    if (bKdim % 3 != 0)
+      return false;
+    bKdim = (bKdim / 3) * 8;
+  } else if (this->getBType() == ScaleDotElemType::E2M1 && !transB) {
     bKdim *= 2;
+  }
 
   return aKdim == bKdim;
 }
@@ -1475,16 +1485,16 @@ int64_t TCGen5MMAScaledOp::getBlockK() {
 
 void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
                               Type token, Value a, Value b, Value d,
-                              Value accDep, Value aScale, Value bScale,
-                              ScaleDotElemType aType, ScaleDotElemType bType,
-                              Value useD, Value pred, ValueRange barriers,
-                              ValueRange barrierPreds, bool twoCTAs,
-                              bool isAsync, bool multicast) {
+                              Value accDep, Value lut, Value aScale,
+                              Value bScale, ScaleDotElemType aType,
+                              ScaleDotElemType bType, Value useD, Value pred,
+                              ValueRange barriers, ValueRange barrierPreds,
+                              bool twoCTAs, bool isAsync, bool multicast) {
   MLIRContext *ctx = builder.getContext();
   if (!barriers.empty()) {
     isAsync = true;
   }
-  build(builder, state, token, a, b, d, accDep, aScale, bScale,
+  build(builder, state, token, a, b, d, accDep, lut, aScale, bScale,
         ScaleDotElemTypeAttr::get(ctx, aType),
         ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
         barrierPreds, twoCTAs ? builder.getUnitAttr() : UnitAttr(),
