@@ -1874,6 +1874,251 @@ def test_tmem_store_lut(rows):
         assert torch.equal(x, warp[:rows])
 
 
+def _extract_3bit_elements(indices):
+    n, k_packed = indices.shape
+    k = (k_packed * 8) // 3
+    device = indices.device
+
+    bit_positions = torch.arange(k, device=device) * 3
+    byte_positions = bit_positions // 8
+    bit_offsets = bit_positions % 8
+
+    extended_indices = torch.cat([indices, torch.zeros(n, 1, dtype=torch.uint8, device=device)], dim=1)
+    byte0 = extended_indices[:, byte_positions].to(torch.int32)
+    byte1 = extended_indices[:, byte_positions + 1].to(torch.int32)
+    values = ((byte0 | (byte1 << 8)) >> bit_offsets) & 0b111
+    return values.to(torch.uint8)
+
+
+def _decompress_lut(indices, lut):
+    n = indices.shape[0]
+    k = lut.shape[1] * 64
+    device = indices.device
+    extracted_indices = _extract_3bit_elements(indices)
+    row_lut_idx = torch.arange(n, device=device) // 8
+    col_lut_idx = torch.arange(k, device=device) // 64
+    luts = lut[row_lut_idx[:, None], col_lut_idx[None, :]]
+    return torch.gather(luts, 2, extracted_indices.unsqueeze(-1).long()).squeeze(-1).to(lut.dtype)
+
+
+def _get_random_lut_and_indices(n, k):
+    k_packed = k // 8 * 3
+    indices = torch.randint(low=0, high=256, size=(n, k_packed), dtype=torch.uint8, device="cuda")
+    lut = torch.randn((n // 8, k // 64, 8), dtype=torch.float32,
+                      device="cuda").to(torch.float8_e4m3fn).view(torch.uint8)
+    return lut, indices
+
+
+def _pack_lut_for_tma(lut):
+    assert lut.dim() == 3, f"expected logical LUT tensor of rank 3, got {lut.shape}"
+    assert lut.shape[2] == 8, f"expected 8 LUT entries, got {lut.shape[2]}"
+    assert lut.shape[0] % 32 == 0, f"lut rows={lut.shape[0]} must be divisible by 32"
+    assert lut.shape[1] % 2 == 0, f"lut K-tiles={lut.shape[1]} must be divisible by 2"
+    num_chunk_n = lut.shape[0] // 32
+    num_chunk_k = lut.shape[1] // 2
+    # One top-level chunk corresponds to one 32x2 collection of LUT tables,
+    # i.e. four adjacent 128B rows that one 512B tmem_copy operation copies.
+    return (lut.reshape(num_chunk_n, 32, num_chunk_k, 2,
+                        8).reshape(num_chunk_n, 4, 8, num_chunk_k, 2,
+                                   8).permute(0, 3, 1, 2, 4, 5).reshape(num_chunk_n, num_chunk_k, 4, 128).contiguous())
+
+
+def _transform_b_to_core_matrices_layout(b, block_n, block_k, is_n_major=True):
+    n, k = b.shape
+    assert n % block_n == 0, f"N={n} must be divisible by BLOCK_N={block_n}"
+    assert k % block_k == 0, f"K={k} must be divisible by BLOCK_K={block_k}"
+
+    cm_rows = 8
+    cm_cols = 16
+    assert block_n % cm_rows == 0, f"BLOCK_N={block_n} must be divisible by {cm_rows}"
+    assert block_k % cm_cols == 0, f"BLOCK_K={block_k} must be divisible by {cm_cols}"
+
+    num_blocks_n = n // block_n
+    num_blocks_k = k // block_k
+    num_cm_n = block_n // cm_rows
+    num_cm_k = block_k // cm_cols
+
+    b_transformed = b.reshape(num_blocks_n, num_cm_n, cm_rows, num_blocks_k, num_cm_k, cm_cols)
+    b_transformed = b_transformed.permute(0, 1, 4, 3, 2, 5)
+    if is_n_major:
+        b_transformed = b_transformed.permute(0, 3, 2, 1, 4, 5)
+    else:
+        b_transformed = b_transformed.permute(0, 3, 1, 2, 4, 5)
+    return b_transformed.reshape(num_blocks_n, num_blocks_k, num_cm_k, num_cm_n,
+                                 cm_rows * cm_cols).contiguous()
+
+
+def _make_packed_b_tma_descriptor(b, block_n, block_k_packed, is_n_major=True):
+    b_transformed = _transform_b_to_core_matrices_layout(b, block_n, block_k_packed,
+                                                         is_n_major=is_n_major)
+    num_cm_n = block_n // 8
+    num_cm_k = block_k_packed // 16
+    b_layout_tma = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5)
+    if is_n_major:
+        b_block_shape = [1, 1, num_cm_k, num_cm_n, 128]
+    else:
+        b_block_shape = [1, 1, num_cm_n, num_cm_k, 128]
+    return TensorDescriptor.from_tensor(b_transformed, b_block_shape, b_layout_tma)
+
+
+def _make_lut_tma_descriptor(lut, block_n, block_k):
+    assert block_n % 256 == 0, f"BLOCK_N={block_n} must be divisible by 256"
+    assert block_k % 128 == 0, f"BLOCK_K={block_k} must be divisible by 128"
+    lut_tile_shape = [block_n // 256, block_k // 128, 4, 128]
+    # After _lut_to_tmem_layout, an unswizzled 4D tile linearizes to the
+    # canonical 32x16B-per-copy LUT layout, including for wider K.
+    lut_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=4)
+    return TensorDescriptor.from_tensor(lut, lut_tile_shape, lut_layout)
+
+
+@gluon.jit
+def _core_matrices_to_operand_layout(b_smem_flat, BLOCK_N: ttgl.constexpr, BLOCK_K_PACKED: ttgl.constexpr,
+                                     is_n_major: ttgl.constexpr):
+    cm_rows: ttgl.constexpr = 8
+    cm_cols: ttgl.constexpr = 16
+    num_cm_n: ttgl.constexpr = BLOCK_N // cm_rows
+    num_cm_k: ttgl.constexpr = BLOCK_K_PACKED // cm_cols
+
+    if is_n_major:
+        b_smem = b_smem_flat.reshape((num_cm_k, num_cm_n, cm_rows, cm_cols))
+        b_smem = b_smem.permute((1, 2, 0, 3))
+    else:
+        b_smem = b_smem_flat.reshape((num_cm_n, num_cm_k, cm_rows, cm_cols))
+        b_smem = b_smem.permute((0, 2, 1, 3))
+    return b_smem.reshape((BLOCK_N, BLOCK_K_PACKED))
+
+
+@gluon.jit
+def _lut_to_tmem_layout(lut_smem):
+    # Expose each 512B tmem_copy tile as 32 rows by 16 columns, then concatenate
+    # successive BLOCK_K/128 LUT groups along the TMEM column dimension.
+    return (lut_smem.reshape((lut_smem.shape[0], lut_smem.shape[1], 32, 16)).permute((0, 2, 1, 3)).reshape(
+        (lut_smem.shape[0] * 32, lut_smem.shape[1] * 16)))
+
+
+@gluon.jit
+def _mma_lut_kernel(
+    a_desc,
+    b_desc_tma,
+    lut_desc,
+    c_desc,
+    BLOCK_N: ttgl.constexpr,
+    BLOCK_K: ttgl.constexpr,
+    BLOCK_K_PACKED: ttgl.constexpr,
+    b_is_n_major: ttgl.constexpr,
+    num_warps: ttgl.constexpr,
+):
+    BLOCK_M: ttgl.constexpr = c_desc.block_type.shape[0]
+    dtype: ttgl.constexpr = a_desc.dtype
+    k_size = a_desc.shape[1]
+
+    pid_m = ttgl.program_id(axis=0)
+    pid_n = ttgl.program_id(axis=1)
+    off_m = pid_m * BLOCK_M
+    off_n = pid_n * BLOCK_N
+
+    a_smem = ttgl.allocate_shared_memory(dtype, a_desc.block_type.shape, a_desc.layout)
+    b_smem = ttgl.allocate_shared_memory(b_desc_tma.dtype, b_desc_tma.block_type.shape, b_desc_tma.layout)
+    lut_smem = ttgl.allocate_shared_memory(ttgl.int8, lut_desc.block_type.shape, lut_desc.layout)
+
+    tma_bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+    mbarrier.init(tma_bar, count=1)
+    mma_bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+    mbarrier.init(mma_bar, count=1)
+    phase = 0
+
+    tmem_layout: ttgl.constexpr = TensorMemoryLayout([128, BLOCK_N], col_stride=1)
+    acc_tmem = allocate_tensor_memory(ttgl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
+    num_lut_rows: ttgl.constexpr = BLOCK_N // 8
+    num_lut_cols: ttgl.constexpr = BLOCK_K // 128 * 16
+    lut_tmem = allocate_tensor_memory(ttgl.int8, (num_lut_rows, num_lut_cols), rubin.TensorMemoryLUTLayout())
+
+    block_n = pid_n
+    lut_block_n = pid_n * (BLOCK_N // 256)
+    use_acc = False
+
+    for k_iter in range(0, k_size // BLOCK_K):
+        k = k_iter * BLOCK_K
+        lut_block_k = k_iter * (BLOCK_K // 128)
+        mbarrier.expect(tma_bar,
+                        a_desc.block_type.nbytes + b_desc_tma.block_type.nbytes + lut_desc.block_type.nbytes)
+        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_smem)
+        tma.async_copy_global_to_shared(b_desc_tma, [block_n, k_iter, 0, 0, 0], tma_bar, b_smem)
+        tma.async_copy_global_to_shared(lut_desc, [lut_block_n, lut_block_k, 0, 0], tma_bar, lut_smem)
+        b_smem_transformed = _core_matrices_to_operand_layout(b_smem, BLOCK_N, BLOCK_K_PACKED, b_is_n_major)
+
+        fence_async_shared()
+        mbarrier.wait(tma_bar, phase=phase)
+        tcgen05_copy(_lut_to_tmem_layout(lut_smem), lut_tmem)
+        b = b_smem_transformed.permute((1, 0))
+        rubin.tcgen05_mma(a_smem, b, acc_tmem, use_acc=use_acc, lut=lut_tmem)
+        tcgen05_commit(mma_bar)
+        mbarrier.wait(mma_bar, phase=phase)
+        use_acc = True
+        phase ^= 1
+
+    mbarrier.invalidate(tma_bar)
+    mbarrier.invalidate(mma_bar)
+
+    acc = acc_tmem.load(acc_tmem.get_reg_layout(num_warps=num_warps))
+    c_smem = ttgl.allocate_shared_memory(ttgl.float32, c_desc.block_type.shape, c_desc.layout)
+    c_smem.store(acc)
+    fence_async_shared()
+    tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
+    tma.store_wait(pendings=0)
+
+
+def _matmul_lut(a, b, lut, c, block_m, block_n, block_k, block_k_packed, num_warps, b_is_n_major=True):
+    m, n = c.shape
+    a_layout = ttgl.NVMMASharedLayout.get_default_for([block_m, block_k], ttgl.float8e4nv)
+    a_desc = TensorDescriptor.from_tensor(a, [block_m, block_k], a_layout)
+    b_desc_tma = _make_packed_b_tma_descriptor(b, block_n, block_k_packed, is_n_major=b_is_n_major)
+    lut_desc = _make_lut_tma_descriptor(lut, block_n, block_k)
+    c_layout = ttgl.NVMMASharedLayout.get_default_for([block_m, block_n], ttgl.float32)
+    c_desc = TensorDescriptor.from_tensor(c, [block_m, block_n], c_layout)
+
+    grid = (triton.cdiv(m, block_m), triton.cdiv(n, block_n))
+    _mma_lut_kernel[grid](
+        a_desc,
+        b_desc_tma,
+        lut_desc,
+        c_desc,
+        block_n,
+        block_k,
+        block_k_packed,
+        b_is_n_major,
+        num_warps=num_warps,
+    )
+
+
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+@pytest.mark.parametrize("BLOCK_M", [128, 256])
+@pytest.mark.parametrize("BLOCK_K", [128, 256])
+@pytest.mark.parametrize("b_is_n_major", [True, False], ids=["n_major", "k_major"])
+def test_tcgen05_lutb(BLOCK_M, BLOCK_K, b_is_n_major):
+    k = 4096
+    n = 4096
+    m = 4096
+    block_n = 256
+    block_k_packed = BLOCK_K * 3 // 8
+
+    a = torch.randn(m, k, device="cuda", dtype=torch.float32).to(torch.float8_e4m3fn)
+    c = torch.empty(m, n, device="cuda", dtype=torch.float32)
+    lut_orig, b_indices_packed = _get_random_lut_and_indices(n, k)
+    lut = _pack_lut_for_tma(lut_orig)
+
+    if not b_is_n_major:
+        pytest.xfail("k_major core-matrix tiling does not satisfy the limited non-pow2 shared-layout invariant")
+
+    _matmul_lut(a, b_indices_packed, lut, c, BLOCK_M, block_n, BLOCK_K, block_k_packed, 4,
+                b_is_n_major=b_is_n_major)
+
+    b_uint8 = _decompress_lut(b_indices_packed, lut_orig)
+    b = b_uint8.view(torch.float8_e4m3fn)
+    c_ref = a.to(torch.float32) @ b.T.to(torch.float32)
+    torch.testing.assert_close(c_ref, c, rtol=1e-3, atol=1e-3)
+
+
 @pytest.mark.parametrize("M, N, BLOCK_M, BLOCK_N", [(256, 128, 128, 128), (128, 256, 64, 128)])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_row_slice(M, N, BLOCK_M, BLOCK_N):
