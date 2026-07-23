@@ -75,17 +75,6 @@ def TTNG_PackedArithTypeAttr : I32EnumAttr<
   let cppNamespace = "::mlir::triton::nvidia_gpu";
 }
 
-def TTNG_PackedArithRoundingModeAttr : I32EnumAttr<
-    "PackedArithRoundingMode", "packed arithmetic rounding mode",
-    [
-        I32EnumAttrCase<"RN", 0, "rn">,
-        I32EnumAttrCase<"RZ", 1, "rz">,
-        I32EnumAttrCase<"RM", 2, "rm">,
-        I32EnumAttrCase<"RP", 3, "rp">,
-    ]> {
-  let cppNamespace = "::mlir::triton::nvidia_gpu";
-}
-
 def TTNG_TensorMemoryScalesBlockRepOrderAttr : I32EnumAttr<
     "TensorMemoryScalesBlockRepOrder", "",
     [

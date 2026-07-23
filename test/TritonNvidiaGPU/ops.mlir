@@ -343,32 +343,3 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @packed_arith_modifiers
-  // CHECK: ttng.packed_arith add, f32x2, [f32x2, f32x2], {{.*}} axis = 1, rounding = rm {{.*}}ftz = true
-  // CHECK: ttng.packed_arith fma, f32x2, [f32x2, f32x2, f32x2], {{.*}} axis = 1, rounding = rp {{.*}}ftz = true
-  // CHECK: ttng.packed_arith mul, f16x2, [f16x2, f16x2], {{.*}} axis = 1, rounding = rn {{.*}}ftz = true{{.*}}sat = true
-  // CHECK: ttng.packed_arith fma, f16x2, [f16x2, f16x2, f16x2], {{.*}} axis = 1, rounding = rn {{.*}}oob = true{{.*}}relu = true
-  // CHECK: ttng.packed_arith max, bf16x2, [bf16x2, bf16x2], {{.*}}NaN = true{{.*}}xorsign_abs = true
-  // CHECK: ttng.packed_arith add, e4m3x4, [e5m2x4, e4m3x4], {{.*}} axis = 1, rounding = rn {{.*}}satfinite = true
-  tt.func @packed_arith_modifiers(
-      %f32a: tensor<128x4xf32, #packed_x4>,
-      %f32b: tensor<128x4xf32, #packed_x4>,
-      %f32c: tensor<128x4xf32, #packed_x4>,
-      %f16a: tensor<128x4xf16, #packed_x4>,
-      %f16b: tensor<128x4xf16, #packed_x4>,
-      %f16c: tensor<128x4xf16, #packed_x4>,
-      %bf16a: tensor<128x4xbf16, #packed_x4>,
-      %bf16b: tensor<128x4xbf16, #packed_x4>,
-      %e5m2: tensor<128x4xf8E5M2, #packed_x4>,
-      %e4m3: tensor<128x4xf8E4M3FN, #packed_x4>) {
-    %f32add = ttng.packed_arith add, f32x2, [f32x2, f32x2], %f32a, %f32b axis = 1, rounding = rm {ftz = true} : (tensor<128x4xf32, #packed_x4>, tensor<128x4xf32, #packed_x4>) -> tensor<128x4xf32, #packed_x4>
-    %f32fma = ttng.packed_arith fma, f32x2, [f32x2, f32x2, f32x2], %f32a, %f32b, %f32c axis = 1, rounding = rp {ftz = true} : (tensor<128x4xf32, #packed_x4>, tensor<128x4xf32, #packed_x4>, tensor<128x4xf32, #packed_x4>) -> tensor<128x4xf32, #packed_x4>
-    %f16mul = ttng.packed_arith mul, f16x2, [f16x2, f16x2], %f16a, %f16b axis = 1, rounding = rn {ftz = true, sat = true} : (tensor<128x4xf16, #packed_x4>, tensor<128x4xf16, #packed_x4>) -> tensor<128x4xf16, #packed_x4>
-    %f16fma = ttng.packed_arith fma, f16x2, [f16x2, f16x2, f16x2], %f16a, %f16b, %f16c axis = 1, rounding = rn {oob = true, relu = true} : (tensor<128x4xf16, #packed_x4>, tensor<128x4xf16, #packed_x4>, tensor<128x4xf16, #packed_x4>) -> tensor<128x4xf16, #packed_x4>
-    %bf16max = ttng.packed_arith max, bf16x2, [bf16x2, bf16x2], %bf16a, %bf16b axis = 1 {NaN = true, xorsign_abs = true} : (tensor<128x4xbf16, #packed_x4>, tensor<128x4xbf16, #packed_x4>) -> tensor<128x4xbf16, #packed_x4>
-    %alt = ttng.packed_arith add, e4m3x4, [e5m2x4, e4m3x4], %e5m2, %e4m3 axis = 1, rounding = rn {satfinite = true} : (tensor<128x4xf8E5M2, #packed_x4>, tensor<128x4xf8E4M3FN, #packed_x4>) -> tensor<128x4xf8E4M3FN, #packed_x4>
-    tt.return
-  }
-}

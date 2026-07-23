@@ -693,22 +693,14 @@ static SmallVector<StringRef> getPackedArithInstructionOptions(
   SmallVector<StringRef> options;
   auto opKind = op.getOpKind();
   auto resultType = op.getPackedType();
-  auto rounding = op.getRounding();
-  auto round = [&](StringRef defaultMode) {
-    options.push_back(rounding ? stringifyPackedArithRoundingMode(*rounding)
-                               : defaultMode);
-  };
 
   if (!isPackedArithX2Type(resultType)) {
-    round("rn");
     options.push_back(stringifyPackedArithType(resultType));
     options.push_back(stringifyPackedArithType(operandTypes[0]));
     if (opKind == nvidia_gpu::PackedArithOpKind::MUL ||
         opKind == nvidia_gpu::PackedArithOpKind::FMA) {
       options.push_back(stringifyPackedArithType(operandTypes[1]));
     }
-    if (op.getSatfinite().value_or(false))
-      options.push_back("satfinite");
     return options;
   }
 
@@ -717,24 +709,8 @@ static SmallVector<StringRef> getPackedArithInstructionOptions(
         return packedType == resultType;
       });
   if (isHomogeneous) {
-    bool isMinMax = opKind == nvidia_gpu::PackedArithOpKind::MIN ||
-                    opKind == nvidia_gpu::PackedArithOpKind::MAX;
-    if (!isMinMax)
-      round("rn");
-    if (op.getFtz().value_or(false))
-      options.push_back("ftz");
-    if (op.getSat().value_or(false))
-      options.push_back("sat");
-    if (op.getOob().value_or(false))
-      options.push_back("oob");
-    if (op.getRelu().value_or(false))
-      options.push_back("relu");
-    if (op.getNaN().value_or(false))
-      options.push_back("NaN");
-    if (op.getXorsignAbs().value_or(false)) {
-      options.push_back("xorsign");
-      options.push_back("abs");
-    }
+    if (opKind == nvidia_gpu::PackedArithOpKind::FMA)
+      options.push_back("rn");
     options.push_back(stringifyPackedArithType(resultType));
     return options;
   }
@@ -742,7 +718,8 @@ static SmallVector<StringRef> getPackedArithInstructionOptions(
   switch (opKind) {
   case nvidia_gpu::PackedArithOpKind::ADD:
   case nvidia_gpu::PackedArithOpKind::SUB:
-    round(resultType == nvidia_gpu::PackedArithType::F32X2 ? "rn" : "rz");
+    if (resultType != nvidia_gpu::PackedArithType::F32X2)
+      options.push_back("rz");
     if (resultType == nvidia_gpu::PackedArithType::F16X2)
       options.push_back("ftz");
     options.push_back(stringifyPackedArithType(resultType));
@@ -753,14 +730,14 @@ static SmallVector<StringRef> getPackedArithInstructionOptions(
     if (operandTypes[0] == nvidia_gpu::PackedArithType::F32X2) {
       if (resultType == nvidia_gpu::PackedArithType::F16X2)
         options.push_back("ftz");
-      round("rz");
+      options.push_back("rz");
     }
     options.push_back(stringifyPackedArithType(resultType));
     options.push_back(stringifyPackedArithType(operandTypes[0]));
     options.push_back(stringifyPackedArithType(operandTypes[1]));
     break;
   case nvidia_gpu::PackedArithOpKind::FMA:
-    round("rn");
+    options.push_back("rn");
     options.push_back(stringifyPackedArithType(resultType));
     for (nvidia_gpu::PackedArithType operandType : operandTypes)
       options.push_back(stringifyPackedArithType(operandType));

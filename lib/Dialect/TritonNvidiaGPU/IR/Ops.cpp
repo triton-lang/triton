@@ -267,89 +267,6 @@ static bool arePackedFp4LayoutsCompatible(RankedTensorType srcType,
   return expected == actual;
 }
 
-static LogicalResult
-verifyPackedArithModifiers(PackedArithOp op,
-                           ArrayRef<PackedArithType> operandTypes) {
-  auto kind = op.getOpKind();
-  auto resultType = op.getPackedType();
-  bool homogeneous = llvm::all_of(
-      operandTypes, [&](PackedArithType type) { return type == resultType; });
-  bool isMinMax =
-      kind == PackedArithOpKind::MIN || kind == PackedArithOpKind::MAX;
-  bool ftz = op.getFtz().value_or(false);
-  bool sat = op.getSat().value_or(false);
-  bool satfinite = op.getSatfinite().value_or(false);
-  bool relu = op.getRelu().value_or(false);
-  bool oob = op.getOob().value_or(false);
-  bool nan = op.getNaN().value_or(false);
-  bool xorsignAbs = op.getXorsignAbs().value_or(false);
-  auto rounding = op.getRounding();
-
-  auto invalid = [&](StringRef modifier) {
-    return op.emitOpError() << "modifier '" << modifier
-                            << "' is unsupported for this packed arithmetic "
-                               "signature";
-  };
-  auto requireRound = [&](PackedArithRoundingMode expected) -> LogicalResult {
-    if (rounding && *rounding != expected)
-      return invalid("rounding");
-    return success();
-  };
-
-  if (isMinMax) {
-    if (rounding)
-      return invalid("rounding");
-    if (ftz && resultType != PackedArithType::F16X2)
-      return invalid("ftz");
-    if (sat || satfinite || relu || oob)
-      return invalid(sat         ? "sat"
-                     : satfinite ? "satfinite"
-                     : relu      ? "relu"
-                                 : "oob");
-    return success();
-  }
-  if (nan || xorsignAbs)
-    return invalid(nan ? "NaN" : "xorsign_abs");
-
-  if (!isPackedArithX2Type(resultType)) {
-    if (failed(requireRound(PackedArithRoundingMode::RN)))
-      return failure();
-    if (ftz || sat || relu || oob)
-      return invalid(ftz ? "ftz" : sat ? "sat" : relu ? "relu" : "oob");
-    return success();
-  }
-  if (satfinite)
-    return invalid("satfinite");
-
-  if (homogeneous) {
-    if (resultType != PackedArithType::F32X2 &&
-        failed(requireRound(PackedArithRoundingMode::RN)))
-      return failure();
-    if (ftz && resultType == PackedArithType::BF16X2)
-      return invalid("ftz");
-    if (sat && resultType != PackedArithType::F16X2)
-      return invalid("sat");
-    if ((relu || oob) && (kind != PackedArithOpKind::FMA ||
-                          resultType == PackedArithType::F32X2))
-      return invalid(relu ? "relu" : "oob");
-    if ((relu && sat) || (oob && (sat || ftz)))
-      return invalid(relu && sat ? "relu/sat" : "oob");
-    return success();
-  }
-
-  bool downconvert = resultType != PackedArithType::F32X2 &&
-                     operandTypes.front() == PackedArithType::F32X2;
-  if (downconvert && failed(requireRound(PackedArithRoundingMode::RZ)))
-    return failure();
-  if (ftz && !(downconvert && resultType == PackedArithType::F16X2))
-    return invalid("ftz");
-  if (sat || relu || oob)
-    return invalid(sat ? "sat" : relu ? "relu" : "oob");
-  if (!downconvert && kind == PackedArithOpKind::MUL && rounding)
-    return invalid("rounding");
-  return success();
-}
-
 LogicalResult PackedArithOp::verify() {
   unsigned expectedOperands = getOpKind() == PackedArithOpKind::FMA ? 3 : 2;
   if (getNumOperands() != expectedOperands) {
@@ -459,9 +376,6 @@ LogicalResult PackedArithOp::verify() {
     }
     return diag << ")";
   }
-
-  if (failed(verifyPackedArithModifiers(*this, operandPackedTypes)))
-    return failure();
 
   auto verifyPacking = [&](RankedTensorType type, unsigned width,
                            StringRef value) -> LogicalResult {

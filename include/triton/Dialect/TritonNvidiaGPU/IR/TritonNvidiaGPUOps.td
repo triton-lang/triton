@@ -72,11 +72,11 @@ def TTNG_PackedArithOp : TTNG_Op<"packed_arith", [Pure]> {
     The op supports homogeneous x2 add/sub/mul/fma, homogeneous f16x2/bf16x2
     min/max, the PTX 9.4 mixed `f32x2`/`f16x2`/`bf16x2` instructions, and the
     PTX 9.4 alternate FP8/FP4/UE8M0 x4 add/sub/mul/fma instructions. FP6 is
-    intentionally unsupported. `rounding` and the optional boolean modifiers
-    map directly to the corresponding PTX instruction qualifiers. The selected
-    axis must provide the packed lanes within each thread. Within each pack,
-    elements with increasing coordinates along `axis` occupy increasingly
-    significant lanes.
+    intentionally unsupported. PTX rounding and other required instruction
+    qualifiers are selected from the operation and its operand types. The
+    selected axis must provide the packed lanes within each thread. Within each
+    pack, elements with increasing coordinates along `axis` occupy
+    increasingly significant lanes.
   }];
 
   let arguments = (ins
@@ -84,22 +84,14 @@ def TTNG_PackedArithOp : TTNG_Op<"packed_arith", [Pure]> {
     TTNG_PackedArithTypeAttr:$packed_type,
     DenseI32ArrayAttr:$operand_packed_types,
     Variadic<TTNG_PackedArithTensor>:$operands,
-    I32Attr:$axis,
-    OptionalAttr<TTNG_PackedArithRoundingModeAttr>:$rounding,
-    OptionalAttr<BoolAttr>:$ftz,
-    OptionalAttr<BoolAttr>:$sat,
-    OptionalAttr<BoolAttr>:$satfinite,
-    OptionalAttr<BoolAttr>:$relu,
-    OptionalAttr<BoolAttr>:$oob,
-    OptionalAttr<BoolAttr>:$NaN,
-    OptionalAttr<BoolAttr>:$xorsign_abs
+    I32Attr:$axis
   );
   let results = (outs TTNG_PackedArithTensor:$result);
 
   let assemblyFormat = [{
     $op_kind `,` $packed_type `,`
     `[` custom<PackedArithTypes>($operand_packed_types) `]` `,`
-    $operands `axis` `=` $axis (`,` `rounding` `=` $rounding^)? attr-dict
+    $operands `axis` `=` $axis attr-dict
     `:` functional-type($operands, $result)
   }];
 
