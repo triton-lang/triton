@@ -156,8 +156,10 @@ places that ordinary read visibility is transported:
   base thread's row. A fence before the wait cannot cover accesses learned only
   by that wait; a fence after the wait can.
 - Barrier invalidation clears the barrier's proxy tracking row.
-- A non-relaxed publishing cluster barrier publishes the proxy frontier across
-  CTA and base-thread rows.
+- A non-relaxed publishing cluster barrier transports the proxy frontier across
+  CTAs. At top level it publishes to every base-thread row; inside warp
+  specialization it publishes only from and to the participating partition's
+  base-thread row.
 - Warp specialization copies the parent's proxy frontier into the new
   partition base-thread rows.
 
@@ -247,9 +249,17 @@ Write transfers also consult the recorded effect-recipient CTA rows, which lets
 TMA-style and CLC cross-CTA writes become visible in the CTA rows reached by the
 memory effect. Read transfers update the current CTA row.
 
-A non-relaxed cluster barrier is different from an mbarrier wait: it publishes
-synchronous work from base threads to all CTA rows directly. This includes both
-ordinary read/write visibility and the generic-access/proxy-fence frontier.
+A non-relaxed cluster barrier is different from an mbarrier wait: its virtual
+rendezvous publishes synchronous work across CTA rows at the phase-completing
+arrival. A top-level barrier represents all synchronous threads. A barrier
+inside warp specialization represents only the corresponding partition in each
+CTA, so it publishes frontiers visible to that base thread and merges them only
+into the same partition's peer thread classes. It does not make work observed
+only by another partition visible; that still requires an explicit handoff such
+as an mbarrier arrive/wait. Publication includes both ordinary read/write
+visibility and the generic-access/proxy-fence frontier. Publishing while the
+rendezvous lock is held makes the shadow state visible before any participant
+can continue, so no second cluster barrier is needed for the ConSan protocol.
 
 ## Barrier Lifecycle and Deadlock Checks
 

@@ -1,6 +1,6 @@
 ### How to run a Triton Community Meetup
 
-Contributors:  Bill Yoshimi, Areg Melikadamyan, Whitney Tsang, Ksharma Pawar
+Contributors:  Bill Yoshimi, Areg Melikadamyan, Whitney Tsang, Ksharma Pawar, Cicie Wang, Bryan Bowyer, Simon Waters
 
 Last updated: Aug 6, 2025
 
@@ -34,7 +34,7 @@ During the meetup, take notes.
 
 Post the final notes on the Triton-lang website here: https://github.com/triton-lang/triton/tree/main/docs/meetups
 
-Ask Whitney, Cicie or Bill for access to the shared Google calendar ["Triton Community Meetup"](https://calendar.google.com/calendar/u/0?cid=MDVhM2U3NjgwNWEwNTJmNDAwODYyMzJmNzNhNmIxYzk2MWViOTE3YTRjZjIzNDgxMDZhYjcwNmEwOWU2MGE4Y0Bncm91cC5jYWxlbmRhci5nb29nbGUuY29t). people should be able to add this calendar to their calendars so they'll see future events when they're available.
+Ask Bryan, Whitney, or Bill for access to the shared Google calendar ["Triton Community Meetup"](https://calendar.google.com/calendar/u/0?cid=MDVhM2U3NjgwNWEwNTJmNDAwODYyMzJmNzNhNmIxYzk2MWViOTE3YTRjZjIzNDgxMDZhYjcwNmEwOWU2MGE4Y0Bncm91cC5jYWxlbmRhci5nb29nbGUuY29t). people should be able to add this calendar to their calendars so they'll see future events when they're available.
 
 ## How to run a community meetup
 
@@ -129,3 +129,4 @@ If this is your first time using Microsoft Teams, work with the meeting creator 
 | 2026-01-05 |  | Topic: Update on triton-shared (Haishan Zhu and Nhat Nguyen, Meta) <br/>Topic: Update on the plugin system infrastructure - what's upstream today and roadmap (Puyan Lotfi and Corbin Robeck, Meta)<br/>Topic: Status of Triton Plugin repository and example: loop unfolding (Simon Waters, kernelize.ai) | https://youtu.be/JnFFwBB6Dhk |
 | 2026-03-04 |  | Topic: Triton to TileIR - Feiwen Zhu, Nvidia Shanghai (mzhu@nvidia.com) <br/>Topic:[Optimal Software Pipelining and Warp Specialization for Tensor Core GPUs](https://arxiv.org/pdf/2512.18134)  - Rupanshu Soi, Rohan Yadav, Fredrik Kjolstad, Alex Aiken, Mayam Mehri Dehnavi, Michael Garland and Michael Bauer,  Nvidia and Stanford | https://youtu.be/kuBGHVP4M3w |
 | 2026-05-05 |  | Topic: TileLens - visual program analysis for tile-based programming models (Taihua He, George Mason University) <br/>Topic: Triton Extensions on Windows - investigation and findings (Quinn Pham, Intel)<br/>Community questions - block pointer deprecation, `use_tma` rename, Triton release cadence vs PyTorch (Whitney Tsang, Intel; Thomas Raoux, OpenAI; Andrey, Meta) | https://youtu.be/RwqdPXBSMCE |
+| 2026-07-08 |  | Topic: FlyDSL - Felix Li, AMD <br/>Triton Extensions - Andrew Brown, Kernelize<br/>Triton Developer Conference - Alexey Loginov, Meta | https://youtu.be/6H8sbWhKCfI?si=LkFz22qlYLiVFqzK |

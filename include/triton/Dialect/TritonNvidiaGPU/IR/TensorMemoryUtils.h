@@ -21,7 +21,6 @@ struct TMemLdStEncodingInfo {
   ColumnAction perm;
   int numRegsPerMessage;
   std::optional<uint32_t> secondHalfOffset;
-  std::optional<ColumnAction> broadcast = std::nullopt;
   bool unpacked = false;
   unsigned vec = 1;
   bool padding = false;

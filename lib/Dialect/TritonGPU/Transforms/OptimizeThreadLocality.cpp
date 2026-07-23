@@ -176,10 +176,13 @@ static LogicalResult setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
   assert(llvm::none_of(warpsPerCTA, [](unsigned c) { return c == 0; }));
 
   // Just set `sizePerThread` to 1 along other dimensions and let broadcasting
-  // handling it. This also means we can use the same layout between the source
-  // and index tensors for simplicity.
+  // handle it. This also means we can use the same layout between the source
+  // and index tensors for simplicity. Along the gather axis, make sure the
+  // layout covers both tensors, which may have different dimension sizes.
   SmallVector<unsigned> sizePerThread(rank, 1);
-  sizePerThread[axis] = srcType.getDimSize(axis) / threadsPerWarp[axis];
+  sizePerThread[axis] =
+      std::max(srcType.getDimSize(axis), idxType.getDimSize(axis)) /
+      threadsPerWarp[axis];
 
   // Overflow by broadcasting along the gather axis since this is the most
   // predictable.
@@ -546,15 +549,15 @@ private:
     auto threadsPerWarp3d = insertValue(blocked.getThreadsPerWarp(), rank, 1);
     auto warsPerCTA3d = insertValue(blocked.getWarpsPerCTA(), rank, 1);
     auto order3d = insertValue(blocked.getOrder(), 0, rank);
-    auto ctaLl = blocked.getCGALayout().getLinearLayout();
-    auto kBlocked = *ctaLl.getInDimNames().begin();
-    auto *ctx = kBlocked.getContext();
+    auto cgaLl = blocked.getCGALayout().getLinearLayout();
+    auto kBlock = *cgaLl.getInDimNames().begin();
+    auto *ctx = kBlock.getContext();
     auto dim = standardOutDimNames(ctx, rank + 1)[rank];
-    ctaLl *= LinearLayout::identity1D(1, kBlocked, dim);
-    auto ctaLayout3d = CGAEncodingAttr::get(ctx, std::move(ctaLl));
+    cgaLl *= LinearLayout::identity1D(1, kBlock, dim);
+    auto cgaLayout3d = CGAEncodingAttr::get(ctx, std::move(cgaLl));
     auto blocked3d = triton::gpu::BlockedEncodingAttr::get(
         reduce.getContext(), sizePerThread3d, threadsPerWarp3d, warsPerCTA3d,
-        order3d, ctaLayout3d);
+        order3d, cgaLayout3d);
     return blocked3d;
   }
 
