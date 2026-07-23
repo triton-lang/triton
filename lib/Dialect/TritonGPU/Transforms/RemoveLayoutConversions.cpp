@@ -1174,7 +1174,7 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
         Attribute rematEncoding = layout.lookup(result);
         int64_t cost = multiplier * getByteCount(result);
         // Account for a layout that widens elems-per-thread only for
-        // floating-point/expensive ops, where duplicated compute is real.
+        // floating-point/expensive ops, where the duplicated compute is real.
         // Cheap integer/index math (GEMM address-gen) keeps factor 1.
         bool accountForWidening =
             isExpensiveMathOp(op) ||
