@@ -131,6 +131,26 @@ def test_load_store_updates_shadow(with_gsan):
     assert cell1.num_reads == 1
 
 
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+def test_cuda_graph_capture_is_rejected(with_gsan):
+    target = torch.zeros(1, dtype=torch.int32, device="cuda")
+    scratch = torch.zeros_like(target)
+    load_one_i32[(1, )](target, scratch, num_warps=1)
+    torch.cuda.synchronize()
+
+    cuda_utils = triton.runtime.driver.active.utils
+    assert not cuda_utils.is_stream_capturing(torch.cuda.current_stream().cuda_stream)
+
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        scratch.zero_()
+        assert cuda_utils.is_stream_capturing(torch.cuda.current_stream().cuda_stream)
+        with pytest.raises(RuntimeError, match="GSan does not support CUDA graph capture"):
+            load_one_i32[(1, )](target, scratch, num_warps=1)
+
+    assert not cuda_utils.is_stream_capturing(torch.cuda.current_stream().cuda_stream)
+
+
 @triton.jit
 def _pdl_producer_kernel(payload_ptr):
     pid = tl.program_id(0)

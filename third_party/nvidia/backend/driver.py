@@ -120,6 +120,7 @@ class CudaUtils(object):
         self.get_current_device = mod.get_current_device
         self.set_current_device = mod.set_current_device
         self.get_default_stream = mod.get_default_stream
+        self.is_stream_capturing = mod.is_stream_capturing
         self.get_device_capability = mod.get_device_capability
         self.get_device_properties = mod.get_device_properties
         self.cuOccupancyMaxActiveClusters = mod.cuOccupancyMaxActiveClusters
@@ -324,6 +325,9 @@ class CudaLauncher(object):
 
         kernel_args = args
         if self.gsan_enabled:
+            if active_driver.utils.is_stream_capturing(stream):
+                raise RuntimeError("GSan does not support CUDA graph capture")
+
             import triton.experimental.gsan._allocator as gsan_allocator
             import triton.experimental.gsan._stream_sync as gsan_stream_sync
             device = triton.runtime.driver.active.get_current_device()
