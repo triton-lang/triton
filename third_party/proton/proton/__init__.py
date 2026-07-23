@@ -1,6 +1,5 @@
 # ruff: noqa
 
-
 # Select a coherent ROCm runtime before libproton.so is loaded. Explicit
 # overrides win; otherwise, when TheRock is installed, all ROCm libraries used
 # by Triton and Proton come from that installation.
@@ -52,8 +51,7 @@ def _ensure_rocm_runtime():
     for name, override in preload_libraries:
         if override in explicit_overrides:
             continue
-        _therock_library_handles.append(
-            ctypes.CDLL(libraries[name], mode=ctypes.RTLD_GLOBAL | os.RTLD_NOW))
+        _therock_library_handles.append(ctypes.CDLL(libraries[name], mode=ctypes.RTLD_GLOBAL | os.RTLD_NOW))
 
 
 _ensure_rocm_runtime()
