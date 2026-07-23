@@ -3713,6 +3713,51 @@ TEST_F(LinearLayoutConversionsTest, OutOfTreeMmaDotOperandExtensionPoint) {
   EXPECT_EQ(dotOperand.toLinearLayout({4}), testExtMmaSentinel(&ctx));
 }
 
+// layoutToGluon (gluon_ir.cc) accepts an unrecognized distributed layout by
+// converting it via toLinearEncoding instead of throwing. That path is
+// pybind-only, so guard the core conversion here with an out-of-tree stand-in.
+static LinearLayout testExtDistSentinel(MLIRContext *ctx) {
+  auto S = [&](StringRef s) { return StringAttr::get(ctx, s); };
+  return LinearLayout(
+      {
+          {S("register"), {}},
+          {S("lane"), {{1}, {2}, {4}}},
+          {S("warp"), {}},
+          {S("block"), {}},
+      },
+      {S("dim0")});
+}
+
+struct TestExtDistModel
+    : public DistributedEncodingTrait::ExternalModel<TestExtDistModel,
+                                                     StringAttr> {
+  SmallVector<unsigned> getRepOrder(Attribute attr) const { return {0}; }
+  LinearLayout toLinearLayout(Attribute attr, ArrayRef<int64_t> shape) const {
+    return testExtDistSentinel(attr.getContext());
+  }
+  // FallbackModel requires these too (no auto-defaults); unused by this test.
+  unsigned getTotalElemsPerThread(Attribute attr,
+                                  ArrayRef<int64_t> shape) const {
+    return 1;
+  }
+  SmallVector<unsigned> getElemsPerThread(Attribute attr,
+                                          ArrayRef<int64_t> shape) const {
+    return SmallVector<unsigned>(shape.size(), 1);
+  }
+};
+
+TEST_F(LinearLayoutConversionsTest, OutOfTreeDistributedGluonFallback) {
+  StringAttr::attachInterface<TestExtDistModel>(ctx);
+  Attribute layout = S("test_out_of_tree_distributed");
+  ASSERT_TRUE(isa<DistributedEncodingTrait>(layout));
+
+  // The conversion the layoutToGluon fallback performs: succeeds and carries
+  // LL.
+  auto enc = toLinearEncoding(cast<DistributedEncodingTrait>(layout), {8});
+  ASSERT_TRUE(enc);
+  EXPECT_EQ(enc.getLinearLayout(), testExtDistSentinel(&ctx));
+}
+
 } // anonymous namespace
 } // namespace mlir::triton::gpu
 
