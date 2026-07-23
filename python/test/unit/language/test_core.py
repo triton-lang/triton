@@ -35,6 +35,7 @@ from triton._internal_testing import (
     is_hip_cdna3,
     is_hip_cdna4,
     is_hip_rdna3,
+    is_hip_rdna4m,
     is_hip_rdna4,
     is_hip_gfx1250,
     is_xpu,
@@ -78,7 +79,7 @@ elif is_hip():
     # 0 is a special value for automatic heuristic
     if is_hip_cdna():
         mma_nonk_sizes = [0, 16, 32]
-    elif is_hip_rdna3() or is_hip_rdna4() or is_hip_gfx1250():
+    elif is_hip_rdna3() or is_hip_rdna4m() or is_hip_rdna4() or is_hip_gfx1250():
         mma_nonk_sizes = [16]
 else:
     THREADS_PER_WARP = 32
@@ -3659,7 +3660,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                 pytest.skip("Only IEEE precision is supported for float64 dot")
 
         if is_hip():
-            if in_dtype in ("float8e5", "float8e4nv") and not (is_hip_gfx1250() or is_hip_cdna4() or is_hip_rdna4()):
+            if in_dtype in ("float8e5", "float8e4nv") and not (is_hip_gfx1250() or is_hip_cdna4() or is_hip_rdna4m()
+                                                               or is_hip_rdna4()):
                 pytest.skip(f"{in_dtype} only supported on CDNA4, RDNA4 and above")
             if in_dtype in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
                 pytest.skip(f"{in_dtype} only supported on CDNA3")
@@ -3924,14 +3926,15 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
         is_SM120 = cc >= (12, 0)
     if is_hip():
-        if not (is_hip_cdna() or is_hip_rdna3() or is_hip_rdna4() or is_hip_gfx1250()):
+        if not (is_hip_cdna() or is_hip_rdna3() or is_hip_rdna4m() or is_hip_rdna4() or is_hip_gfx1250()):
             pytest.skip("scaled_dot only implemented for HIP CDNA, RDNA3, RDNA4 and above")
         if "e4m3" in (mxfp_type, normal_type):
-            if not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna3() or is_hip_rdna4() or is_hip_gfx1250()):
+            if not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna3() or is_hip_rdna4m() or is_hip_rdna4()
+                    or is_hip_gfx1250()):
                 pytest.skip(
                     f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3, CDNA4, RDNA3, RDNA4, and above"
                 )
-        if mma == 16 and K == 64 and not (is_hip_rdna4() or is_hip_rdna3() or is_hip_gfx1250()):
+        if mma == 16 and K == 64 and not (is_hip_rdna4() or is_hip_rdna4m() or is_hip_rdna3() or is_hip_gfx1250()):
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
     @triton.jit
@@ -4694,7 +4697,7 @@ def test_load_cache_modifier(cache, device):
                                             ".cg": "sc0 nt", \
                                             ".cs": "sc0 nt", \
                                             ".cv": "sc0 sc1"}
-            elif is_hip_rdna3():
+            elif is_hip_rdna3() or is_hip_rdna4m():
                 expected_cache_modifiers = {"": "", \
                                             ".ca": "", \
                                             ".cg": "glc", \
@@ -4719,7 +4722,7 @@ def test_load_cache_modifier(cache, device):
                                             ".cg": "nt", \
                                             ".cs": "nt", \
                                             ".cv": "sc0 sc1"}
-            elif is_hip_rdna3():
+            elif is_hip_rdna3() or is_hip_rdna4m():
                 expected_cache_modifiers = {"": "", \
                                             ".ca": "", \
                                             ".cg": "slc dlc", \
@@ -4866,7 +4869,7 @@ def test_store_cache_modifier(cache, device):
                                             ".cg": "", \
                                             ".cs": "sc0 nt", \
                                             ".wt": "sc0 sc1"}
-            elif is_hip_rdna3():
+            elif is_hip_rdna3() or is_hip_rdna4m():
                 expected_cache_modifiers = {"": "", \
                                             ".wb": "", \
                                             ".cg": "", \
@@ -4894,7 +4897,7 @@ def test_store_cache_modifier(cache, device):
                                             ".cg": "", \
                                             ".cs": "nt", \
                                             ".wt": "sc0 sc1"}
-            elif is_hip_rdna3():
+            elif is_hip_rdna3() or is_hip_rdna4m():
                 expected_cache_modifiers = {"": "", \
                                             ".wb": "", \
                                             ".cg": "", \
@@ -6206,7 +6209,8 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
         num_stages = 2
         if in_type_str in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
             pytest.skip(f"{in_type_str} only supported on CDNA3")
-        if in_type_str in ("float8e5", "float8e4nv") and not (is_hip_cdna4() or is_hip_rdna4() or is_hip_gfx1250()):
+        if in_type_str in ("float8e5", "float8e4nv") and not (is_hip_cdna4() or is_hip_rdna4m() or is_hip_rdna4()
+                                                              or is_hip_gfx1250()):
             pytest.skip(f"{in_type_str} only supported on CDNA4, RDNA4 and above")
 
     check_type_supported(in_type_str, device)
@@ -6895,7 +6899,7 @@ def gather_test_kernel_1d(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr, src_dim
     ([128, 64], [128, 128], 1),
 ])
 def test_gather(src_shape, indices_shape, axis, device):
-    if (is_hip_cdna2() or is_hip_cdna3() or is_hip_rdna3()
+    if (is_hip_cdna2() or is_hip_cdna3() or is_hip_rdna3() or is_hip_rdna4m()
             or is_hip_rdna4()) and src_shape == [128, 64] and indices_shape == [256, 64]:
         # This could be solved by reducing vectorization in general swizzling algorithm.
         # We will do this if any relevant workload suffers from large LDS consumption of the algorithm.
