@@ -265,7 +265,16 @@ class constexpr(base_value):
         return constexpr(self.value * _unwrap_if_constexpr(other))
 
     def __mod__(self, other):
-        return constexpr(self.value % _unwrap_if_constexpr(other))
+        other = _unwrap_if_constexpr(other)
+        # Match the runtime lowering (LLVM frem / srem, which truncate toward
+        # zero so the remainder takes the sign of the dividend) rather than
+        # Python's floored `%` (sign of the divisor). Otherwise a constexpr-
+        # folded `a % b` disagrees in sign with the same expression evaluated
+        # at runtime. See #10920.
+        if isinstance(self.value, float) or isinstance(other, float):
+            return constexpr(math.fmod(self.value, other))
+        rem = abs(self.value) % abs(other)
+        return constexpr(rem if self.value >= 0 else -rem)
 
     def __rmul__(self, other):
         return constexpr(_unwrap_if_constexpr(other) * self.value)
