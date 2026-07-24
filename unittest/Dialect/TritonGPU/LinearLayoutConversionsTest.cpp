@@ -1,5 +1,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 
+#include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/Location.h"
 #include "mlir/IR/MLIRContext.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -3663,6 +3665,97 @@ TEST_F(LinearLayoutConversionsTest,
           << dim0 << ", " << dim1 << "] with " << swizzleBytes << "B swizzle";
     }
   }
+}
+
+// A dot-operand parent may be any MmaEncodingTrait, including out-of-tree
+// layouts unknown to core. No such layout exists in-tree, so attach the
+// interface to a placeholder attribute (a test-only stand-in) and check both
+// seams. testExtMmaSentinel is what the stand-in returns, so the test can
+// confirm dispatch reached it.
+static LinearLayout testExtMmaSentinel(MLIRContext *ctx) {
+  auto S = [&](StringRef s) { return StringAttr::get(ctx, s); };
+  return LinearLayout(
+      {
+          {S("register"), {}},
+          {S("lane"), {{1}, {2}}},
+          {S("warp"), {}},
+          {S("block"), {}},
+      },
+      {S("dim0")});
+}
+
+// Test-only stand-in: MmaEncodingTrait attached to a placeholder attribute.
+struct TestExtMmaModel
+    : public MmaEncodingTrait::ExternalModel<TestExtMmaModel, StringAttr> {
+  SmallVector<unsigned> getRepOrderForOperand(Attribute attr, int opIdx) const {
+    return {0};
+  }
+  LinearLayout dotOperandToLinearLayout(Attribute attr, Attribute dotOp,
+                                        ArrayRef<int64_t> shape) const {
+    return testExtMmaSentinel(attr.getContext());
+  }
+};
+
+TEST_F(LinearLayoutConversionsTest, OutOfTreeMmaDotOperandExtensionPoint) {
+  StringAttr::attachInterface<TestExtMmaModel>(ctx);
+  Attribute parent = S("test_out_of_tree_mma");
+  ASSERT_TRUE(isa<MmaEncodingTrait>(parent));
+
+  // verify accepts an unknown MmaEncodingTrait parent.
+  auto emitError = [&]() {
+    return mlir::emitError(mlir::UnknownLoc::get(&ctx));
+  };
+  EXPECT_TRUE(succeeded(DotOperandEncodingAttr::verify(emitError, /*opIdx=*/0,
+                                                       parent, /*kWidth=*/0)));
+
+  // toLinearLayout dispatches through the interface, not a hardcoded type.
+  auto dotOperand = dot(parent, /*idx=*/0, /*kWidth=*/0);
+  EXPECT_EQ(dotOperand.toLinearLayout({4}), testExtMmaSentinel(&ctx));
+}
+
+// layoutToGluon (gluon_ir.cc) accepts an unrecognized distributed layout by
+// converting it via toLinearEncoding instead of throwing. That path is
+// pybind-only, so guard the core conversion here with an out-of-tree stand-in.
+static LinearLayout testExtDistSentinel(MLIRContext *ctx) {
+  auto S = [&](StringRef s) { return StringAttr::get(ctx, s); };
+  return LinearLayout(
+      {
+          {S("register"), {}},
+          {S("lane"), {{1}, {2}, {4}}},
+          {S("warp"), {}},
+          {S("block"), {}},
+      },
+      {S("dim0")});
+}
+
+struct TestExtDistModel
+    : public DistributedEncodingTrait::ExternalModel<TestExtDistModel,
+                                                     StringAttr> {
+  SmallVector<unsigned> getRepOrder(Attribute attr) const { return {0}; }
+  LinearLayout toLinearLayout(Attribute attr, ArrayRef<int64_t> shape) const {
+    return testExtDistSentinel(attr.getContext());
+  }
+  // FallbackModel requires these too (no auto-defaults); unused by this test.
+  unsigned getTotalElemsPerThread(Attribute attr,
+                                  ArrayRef<int64_t> shape) const {
+    return 1;
+  }
+  SmallVector<unsigned> getElemsPerThread(Attribute attr,
+                                          ArrayRef<int64_t> shape) const {
+    return SmallVector<unsigned>(shape.size(), 1);
+  }
+};
+
+TEST_F(LinearLayoutConversionsTest, OutOfTreeDistributedGluonFallback) {
+  StringAttr::attachInterface<TestExtDistModel>(ctx);
+  Attribute layout = S("test_out_of_tree_distributed");
+  ASSERT_TRUE(isa<DistributedEncodingTrait>(layout));
+
+  // The conversion the layoutToGluon fallback performs: succeeds and carries
+  // LL.
+  auto enc = toLinearEncoding(cast<DistributedEncodingTrait>(layout), {8});
+  ASSERT_TRUE(enc);
+  EXPECT_EQ(enc.getLinearLayout(), testExtDistSentinel(&ctx));
 }
 
 } // anonymous namespace
