@@ -261,8 +261,9 @@ def _run_in_process_worker(client_fn, q, args, kwargs, env, stderr_file):
 
         try:
             client_fn(*args, **kwargs)
-            # Raise any CUDA errors
-            torch.cuda.synchronize()
+            if is_cuda():
+                # Raise any CUDA errors
+                torch.cuda.synchronize()
         except Exception as e:
             exc = e
         finally:
