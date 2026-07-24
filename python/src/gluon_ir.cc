@@ -1453,9 +1453,14 @@ void init_gluon_ir(py::module_ &m) {
           auto ll = ttg::toLinearLayout(shape, attr);
           if (isa<ttg::DistributedEncodingTrait>(attr)) {
             return ttg::getDistributedLayoutStr(ll, useHwView);
-          } else {
+          } else if (isa<ttg::SharedEncodingTrait>(attr)) {
             return ttg::getSharedLayoutStr(ll, useHwView);
+          } else if (isa<ttng::TensorMemoryEncodingAttr,
+                         ttng::TensorMemoryScalesEncodingAttr>(attr)) {
+            return ttg::getTensorMemoryLayoutStr(ll, useHwView);
           }
+
+          throw py::value_error("Layout cannot be visualized");
         });
 
   py::class_<ttg::WarpSpecializeOp, OpState>(m, "WarpSpecializeOp")
