@@ -267,6 +267,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   }
 }
 
+// Packed arithmetic keeps scalar tensor semantics in TTNGIR and only groups
+// adjacent lanes when lowering to PTX.
+#packed_blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @packed_arith
+  // CHECK: ttng.packed_arith add, f32x2, [f32x2, f32x2], {{.*}} axis = 1
+  // CHECK: ttng.packed_arith mul, f16x2, [f16x2, f16x2], {{.*}} axis = 1
+  // CHECK: ttng.packed_arith fma, bf16x2, [bf16x2, bf16x2, bf16x2], {{.*}} axis = 1
+  // CHECK: ttng.packed_arith add, f32x2, [f16x2, f32x2], {{.*}} axis = 1
+  // CHECK: ttng.packed_arith sub, bf16x2, [f32x2, f32x2], {{.*}} axis = 1
+  // CHECK: ttng.packed_arith mul, f16x2, [f16x2, bf16x2], {{.*}} axis = 1
+  // CHECK: ttng.packed_arith fma, f32x2, [bf16x2, f32x2, f32x2], {{.*}} axis = 1
+  // CHECK: ttng.packed_arith min, f16x2, [f16x2, f16x2], {{.*}} axis = 1
+  // CHECK: ttng.packed_arith max, bf16x2, [bf16x2, bf16x2], {{.*}} axis = 1
+  tt.func @packed_arith(
+      %f32a: tensor<128x2xf32, #packed_blocked>,
+      %f32b: tensor<128x2xf32, #packed_blocked>,
+      %f32c: tensor<128x2xf32, #packed_blocked>,
+      %f16a: tensor<128x2xf16, #packed_blocked>,
+      %f16b: tensor<128x2xf16, #packed_blocked>,
+      %bf16a: tensor<128x2xbf16, #packed_blocked>,
+      %bf16b: tensor<128x2xbf16, #packed_blocked>,
+      %bf16c: tensor<128x2xbf16, #packed_blocked>) {
+    %f32 = ttng.packed_arith add, f32x2, [f32x2, f32x2], %f32a, %f32b axis = 1 : (tensor<128x2xf32, #packed_blocked>, tensor<128x2xf32, #packed_blocked>) -> tensor<128x2xf32, #packed_blocked>
+    %f16 = ttng.packed_arith mul, f16x2, [f16x2, f16x2], %f16a, %f16b axis = 1 : (tensor<128x2xf16, #packed_blocked>, tensor<128x2xf16, #packed_blocked>) -> tensor<128x2xf16, #packed_blocked>
+    %bf16 = ttng.packed_arith fma, bf16x2, [bf16x2, bf16x2, bf16x2], %bf16a, %bf16b, %bf16c axis = 1 : (tensor<128x2xbf16, #packed_blocked>, tensor<128x2xbf16, #packed_blocked>, tensor<128x2xbf16, #packed_blocked>) -> tensor<128x2xbf16, #packed_blocked>
+    %up = ttng.packed_arith add, f32x2, [f16x2, f32x2], %f16a, %f32b axis = 1 : (tensor<128x2xf16, #packed_blocked>, tensor<128x2xf32, #packed_blocked>) -> tensor<128x2xf32, #packed_blocked>
+    %down = ttng.packed_arith sub, bf16x2, [f32x2, f32x2], %f32a, %f32b axis = 1 : (tensor<128x2xf32, #packed_blocked>, tensor<128x2xf32, #packed_blocked>) -> tensor<128x2xbf16, #packed_blocked>
+    %cross = ttng.packed_arith mul, f16x2, [f16x2, bf16x2], %f16a, %bf16b axis = 1 : (tensor<128x2xf16, #packed_blocked>, tensor<128x2xbf16, #packed_blocked>) -> tensor<128x2xf16, #packed_blocked>
+    %mixed_fma = ttng.packed_arith fma, f32x2, [bf16x2, f32x2, f32x2], %bf16a, %f32b, %f32c axis = 1 : (tensor<128x2xbf16, #packed_blocked>, tensor<128x2xf32, #packed_blocked>, tensor<128x2xf32, #packed_blocked>) -> tensor<128x2xf32, #packed_blocked>
+    %min = ttng.packed_arith min, f16x2, [f16x2, f16x2], %f16a, %f16b axis = 1 : (tensor<128x2xf16, #packed_blocked>, tensor<128x2xf16, #packed_blocked>) -> tensor<128x2xf16, #packed_blocked>
+    %max = ttng.packed_arith max, bf16x2, [bf16x2, bf16x2], %bf16a, %bf16b axis = 1 : (tensor<128x2xbf16, #packed_blocked>, tensor<128x2xbf16, #packed_blocked>) -> tensor<128x2xbf16, #packed_blocked>
+    tt.return
+  }
+}
+
 #tmem_window = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1, CGALayout = [[1, 0]]>
 #tmem_window_broadcast = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1, CGALayout = [[0, 0]]>
 #tmem_window_scale_a = #ttng.tensor_memory_scales_encoding<CGALayout = [[1, 0]]>
@@ -292,6 +328,47 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @tmem_reinterpret_sharding
   tt.func public @tmem_reinterpret_sharding(%broadcast: !ttg.memdesc<256x128xf32, #tmem_window_broadcast, #ttng.tensor_memory, mutable>) {
     %sharded = ttg.memdesc_reinterpret %broadcast : !ttg.memdesc<256x128xf32, #tmem_window_broadcast, #ttng.tensor_memory, mutable> -> !ttg.memdesc<256x128xf32, #tmem_window, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// The alternate packed instructions use byte-sized FP8 elements. E2M1 is
+// stored as two logical values per i8 and has compact/padded register forms.
+#packed_x4 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#packed_fp4 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @packed_arith_alternate_types
+  // CHECK: ttng.packed_arith add, e4m3x4, [e5m2x4, e4m3x4],
+  // CHECK: ttng.packed_arith sub, e5m2x4, [e2m1x4, e5m2x4],
+  // CHECK: ttng.packed_arith mul, e4m3x4, [e2m1x4, e5m2x4],
+  // CHECK: ttng.packed_arith fma, e5m2x4, [e2m1p4x4, e4m3x4, e5m2x4],
+  tt.func @packed_arith_alternate_types(
+      %e5m2: tensor<128x4xf8E5M2, #packed_x4>,
+      %e4m3: tensor<128x4xf8E4M3FN, #packed_x4>,
+      %e2m1: tensor<128x2xi8, #packed_fp4>) {
+    %add = ttng.packed_arith add, e4m3x4, [e5m2x4, e4m3x4], %e5m2, %e4m3 axis = 1 : (tensor<128x4xf8E5M2, #packed_x4>, tensor<128x4xf8E4M3FN, #packed_x4>) -> tensor<128x4xf8E4M3FN, #packed_x4>
+    %sub = ttng.packed_arith sub, e5m2x4, [e2m1x4, e5m2x4], %e2m1, %e5m2 axis = 1 : (tensor<128x2xi8, #packed_fp4>, tensor<128x4xf8E5M2, #packed_x4>) -> tensor<128x4xf8E5M2, #packed_x4>
+    %mul = ttng.packed_arith mul, e4m3x4, [e2m1x4, e5m2x4], %e2m1, %e5m2 axis = 1 : (tensor<128x2xi8, #packed_fp4>, tensor<128x4xf8E5M2, #packed_x4>) -> tensor<128x4xf8E4M3FN, #packed_x4>
+    %fma = ttng.packed_arith fma, e5m2x4, [e2m1p4x4, e4m3x4, e5m2x4], %e2m1, %e4m3, %e5m2 axis = 1 : (tensor<128x2xi8, #packed_fp4>, tensor<128x4xf8E4M3FN, #packed_x4>, tensor<128x4xf8E5M2, #packed_x4>) -> tensor<128x4xf8E5M2, #packed_x4>
+    tt.return
+  }
+}
+
+// Packed arithmetic accepts register permutations and broadcast bases as long
+// as every thread owns each logical lane in a pack.
+#packed_perm = #ttg.linear<{register = [[2], [1]], lane = [[4], [8], [16], [32], [64]], warp = [[128], [256]], block = []}>
+#packed_bcast = #ttg.linear<{register = [[0], [1]], lane = [[2], [4], [8], [16], [32]], warp = [[64], [128]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @packed_arith_register_layouts
+  // CHECK: ttng.packed_arith add, f32x2, [f32x2, f32x2],
+  // CHECK: ttng.packed_arith mul, f32x2, [f32x2, f32x2],
+  tt.func @packed_arith_register_layouts(
+      %pa: tensor<512xf32, #packed_perm>,
+      %pb: tensor<512xf32, #packed_perm>,
+      %ba: tensor<256xf32, #packed_bcast>,
+      %bb: tensor<256xf32, #packed_bcast>) {
+    %perm = ttng.packed_arith add, f32x2, [f32x2, f32x2], %pa, %pb axis = 0 : (tensor<512xf32, #packed_perm>, tensor<512xf32, #packed_perm>) -> tensor<512xf32, #packed_perm>
+    %bcast = ttng.packed_arith mul, f32x2, [f32x2, f32x2], %ba, %bb axis = 0 : (tensor<256xf32, #packed_bcast>, tensor<256xf32, #packed_bcast>) -> tensor<256xf32, #packed_bcast>
     tt.return
   }
 }

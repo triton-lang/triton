@@ -47,6 +47,34 @@ def TTNG_TMEMLoadReduceModifierEnum : EnumAttr<TritonNvidiaGPU_Dialect, TTNG_TME
   let assemblyFormat = "`<` $value `>`";
 }
 
+def TTNG_PackedArithOpKindAttr : I32EnumAttr<
+    "PackedArithOpKind", "packed arithmetic operation",
+    [
+        I32EnumAttrCase<"ADD", 0, "add">,
+        I32EnumAttrCase<"SUB", 1, "sub">,
+        I32EnumAttrCase<"MUL", 2, "mul">,
+        I32EnumAttrCase<"FMA", 3, "fma">,
+        I32EnumAttrCase<"MIN", 4, "min">,
+        I32EnumAttrCase<"MAX", 5, "max">,
+    ]> {
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+}
+
+def TTNG_PackedArithTypeAttr : I32EnumAttr<
+    "PackedArithType", "packed arithmetic element type",
+    [
+        I32EnumAttrCase<"F32X2", 0, "f32x2">,
+        I32EnumAttrCase<"F16X2", 1, "f16x2">,
+        I32EnumAttrCase<"BF16X2", 2, "bf16x2">,
+        I32EnumAttrCase<"E5M2X4", 3, "e5m2x4">,
+        I32EnumAttrCase<"E4M3X4", 4, "e4m3x4">,
+        I32EnumAttrCase<"E2M1X4", 5, "e2m1x4">,
+        I32EnumAttrCase<"E2M1P4X4", 6, "e2m1p4x4">,
+        I32EnumAttrCase<"UE8M0X4", 7, "ue8m0x4">,
+    ]> {
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+}
+
 def TTNG_TensorMemoryScalesBlockRepOrderAttr : I32EnumAttr<
     "TensorMemoryScalesBlockRepOrder", "",
     [
