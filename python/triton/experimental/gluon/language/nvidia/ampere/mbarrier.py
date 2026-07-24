@@ -4,9 +4,8 @@ import triton.experimental.gluon.language as ttgl
 from triton.experimental.gluon._runtime import constexpr_function, jit
 from triton.experimental.gluon.language._layouts import SwizzledSharedLayout
 from triton.experimental.gluon.language._core import builtin, _unwrap_if_constexpr
-from triton.language import core as tl
 
-__all__ = ["allocate_mbarrier", "arrive", "init", "invalidate", "MBarrierLayout", "test_wait", "wait"]
+__all__ = ["allocate_mbarrier", "arrive", "init", "invalidate", "MBarrierLayout", "wait"]
 
 
 class MBarrierLayout(SwizzledSharedLayout):
@@ -92,49 +91,20 @@ def invalidate(mbarrier, _semantic=None):
 
 
 @builtin
-def wait(mbarrier, phase, pred=True, conditional=False, deps=(), _semantic=None):
+def wait(mbarrier, phase, pred=True, deps=(), _semantic=None):
     """
     Wait until the mbarrier object completes its current phase.
 
     Args:
         mbarrier (shared_memory_descriptor): The barrier object to wait on.
-        phase (int): The phase/parity value to wait for.
+        phase (int): The phase index to wait for.
         pred (bool): Predicate. Operation is skipped if predicate is False. Defaults to True.
-        conditional (bool): If True, wait on the mbarrier conditional phase
-            instead of the primary phase. This is used by TMA report-validity
-            operations on targets that support conditional phases. Defaults
-            to False.
         deps (Sequence[shared_memory_descriptor]): Dependent allocations barrier is waiting on. Used to track liveness of dependent allocations. Defaults to ().
     """
-    conditional = _unwrap_if_constexpr(conditional)
     phase = _semantic.to_tensor(phase)
     pred = _semantic.to_tensor(pred)
     deps = [x.handle for x in deps]
-    _semantic.builder.create_mbarrier_wait(mbarrier.handle, phase.handle, pred.handle, conditional, deps)
-
-
-@builtin
-def test_wait(mbarrier, phase, pred=True, conditional=False, _semantic=None):
-    """
-    Test an mbarrier phase once without blocking.
-
-    Args:
-        mbarrier (shared_memory_descriptor): The barrier object to test.
-        phase (int): The phase/parity value to test.
-        pred (bool): Predicate. Operation is skipped if predicate is False.
-            Defaults to True.
-        conditional (bool): If True, test the mbarrier conditional phase
-            instead of the primary phase. Defaults to False.
-
-    Returns:
-        tensor: Scalar int32 tensor containing 1 if the requested phase has
-            completed, otherwise 0.
-    """
-    conditional = _unwrap_if_constexpr(conditional)
-    phase = _semantic.to_tensor(phase)
-    pred = _semantic.to_tensor(pred)
-    handle = _semantic.builder.create_mbarrier_test_wait(mbarrier.handle, phase.handle, pred.handle, conditional)
-    return _semantic.tensor(handle, tl.int32)
+    _semantic.builder.create_mbarrier_wait(mbarrier.handle, phase.handle, pred.handle, deps)
 
 
 @builtin

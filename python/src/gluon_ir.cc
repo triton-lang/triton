@@ -951,12 +951,15 @@ void init_gluon_ir(py::module_ &m) {
           },
           py::arg("memDesc"), py::arg("bytes"), py::arg("pred"),
           (py::arg("from_cta").none() = py::none()))
-      .def("create_mbarrier_wait",
-           [](GluonOpBuilder &self, Value memDesc, Value phase, Value pred,
-              bool conditional, std::vector<Value> &deps) {
-             self.create<ttng::WaitBarrierOp>(memDesc, phase, pred, conditional,
-                                              deps);
-           })
+      .def(
+          "create_mbarrier_wait",
+          [](GluonOpBuilder &self, Value memDesc, Value phase, Value pred,
+             std::vector<Value> &deps, bool conditional) {
+            self.create<ttng::WaitBarrierOp>(memDesc, phase, pred, conditional,
+                                             deps);
+          },
+          py::arg("memDesc"), py::arg("phase"), py::arg("pred"),
+          py::arg("deps"), py::arg("conditional") = false)
       .def("create_mbarrier_test_wait",
            [](GluonOpBuilder &self, Value memDesc, Value phase, Value pred,
               bool conditional) -> Value {
@@ -1044,7 +1047,8 @@ void init_gluon_ir(py::module_ &m) {
           },
           py::arg("descPtr"), py::arg("coord"), py::arg("barrier"),
           py::arg("result"), py::arg("pred"), py::arg("multicast"),
-          py::arg("offsets").none(), py::arg("report_validity"))
+          py::arg("offsets").none(),
+          py::arg("report_validity") = triton::ReportValidity::NONE)
       .def("create_async_tma_copy_local_to_global",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
               Value src) {

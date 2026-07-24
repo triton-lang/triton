@@ -1,3 +1,5 @@
+from triton.language import core as tl
+
 from ..._core import _unwrap_if_constexpr, builtin
 from ..hopper.mbarrier import (
     MBarrierLayout,
@@ -5,8 +7,6 @@ from ..hopper.mbarrier import (
     expect,
     init,
     invalidate,
-    test_wait,
-    wait,
 )
 
 __all__ = [
@@ -19,6 +19,50 @@ __all__ = [
     "test_wait",
     "wait",
 ]
+
+
+@builtin
+def wait(mbarrier, phase, pred=True, conditional=False, deps=(), _semantic=None):
+    """
+    Wait until the mbarrier object completes the requested phase.
+
+    Args:
+        mbarrier (shared_memory_descriptor): The barrier object to wait on.
+        phase (int): The phase/parity value to wait for.
+        pred (bool): Predicate. Operation is skipped if predicate is False. Defaults to True.
+        conditional (bool): If True, wait on the conditional phase used by
+            TMA report-validity operations. Defaults to False.
+        deps (Sequence[shared_memory_descriptor]): Dependent allocations barrier is waiting on. Used to track liveness of dependent allocations. Defaults to ().
+    """
+    conditional = _unwrap_if_constexpr(conditional)
+    phase = _semantic.to_tensor(phase)
+    pred = _semantic.to_tensor(pred)
+    deps = [x.handle for x in deps]
+    _semantic.builder.create_mbarrier_wait(mbarrier.handle, phase.handle, pred.handle, deps, conditional)
+
+
+@builtin
+def test_wait(mbarrier, phase, pred=True, conditional=False, _semantic=None):
+    """
+    Test an mbarrier phase once without blocking.
+
+    Args:
+        mbarrier (shared_memory_descriptor): The barrier object to test.
+        phase (int): The phase/parity value to test.
+        pred (bool): Predicate. Operation is skipped if predicate is False.
+            Defaults to True.
+        conditional (bool): If True, test the conditional phase used by TMA
+            report-validity operations. Defaults to False.
+
+    Returns:
+        tensor: Scalar int32 tensor containing 1 if the requested phase has
+            completed, otherwise 0.
+    """
+    conditional = _unwrap_if_constexpr(conditional)
+    phase = _semantic.to_tensor(phase)
+    pred = _semantic.to_tensor(pred)
+    handle = _semantic.builder.create_mbarrier_test_wait(mbarrier.handle, phase.handle, pred.handle, conditional)
+    return _semantic.tensor(handle, tl.int32)
 
 
 @builtin

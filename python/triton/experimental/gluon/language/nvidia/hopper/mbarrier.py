@@ -1,4 +1,4 @@
-from ..ampere.mbarrier import MBarrierLayout, allocate_mbarrier, init, invalidate, test_wait, wait
+from ..ampere.mbarrier import MBarrierLayout, allocate_mbarrier, init, invalidate, wait
 from ..._core import _unwrap_if_constexpr, builtin
 
 __all__ = [
@@ -8,7 +8,6 @@ __all__ = [
     "init",
     "invalidate",
     "MBarrierLayout",
-    "test_wait",
     "wait",
 ]
 
