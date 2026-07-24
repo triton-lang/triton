@@ -8,17 +8,75 @@ from triton_kernels.matmul import matmul, matmul_torch, PrecisionConfig
 from triton_kernels.matmul_details._matmul import _compute_packed_n_w
 from triton_kernels.matmul_details.opt_flags import InapplicableConstraint, scoped_opt_flags_constraints
 from triton_kernels.matmul_details.opt_flags_details import opt_flags_nvidia
-from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, downcast_to_mxfp
+from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE, downcast_to_mxfp
 from triton_kernels.tensor import FP4, UINT8, Storage, Tensor, convert_layout, wrap_torch_tensor
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor_details.layout import BlackwellMX4ValueShuffledLayout
-from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellMXScaleLayout
+from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout
 from triton_kernels.testing import assert_close
 
 
 def _make_blackwell_scale_tensor():
     scale_storage = Storage(torch.empty((1, 128), dtype=torch.uint8), BlackwellMXScaleLayout())
     return Tensor(scale_storage, dtype=UINT8)
+
+
+def _make_blackwell_act_scale_tensor():
+    scale_storage = Storage(torch.empty((128, 16), dtype=torch.float8_e4m3fn), BlackwellActMXScaleLayout(None))
+    return Tensor(scale_storage, dtype=UINT8)
+
+
+def _make_strided_act_scale_tensor():
+    scale_storage = Storage(torch.empty((128, 16), dtype=torch.float8_e4m3fn), layout.StridedLayout(-1))
+    return Tensor(scale_storage, dtype=UINT8)
+
+
+def _make_blackwell_nvfp4_precision_config(*, swizzle_a_scale=True):
+    return PrecisionConfig(
+        a_mx_scale=_make_blackwell_act_scale_tensor() if swizzle_a_scale else _make_strided_act_scale_tensor(),
+        a_microblock_size=NVFP_BLOCK_SIZE.value,
+        b_mx_scale=_make_blackwell_scale_tensor(),
+        b_microblock_size=NVFP_BLOCK_SIZE.value,
+    )
+
+
+def _make_default_blackwell_nvfp4_flags(monkeypatch, m, n, k, constraints=None, *, swizzle_a_scale=True):
+    from types import SimpleNamespace
+
+    from triton_kernels.matmul_details import opt_flags
+    from triton_kernels.tensor import BF16
+
+    monkeypatch.setattr(opt_flags.torch.cuda, "get_device_capability", lambda: (10, 3))
+    monkeypatch.setattr(
+        opt_flags.torch.cuda,
+        "get_device_properties",
+        lambda _device: SimpleNamespace(multi_processor_count=132, shared_memory_per_block_optin=232448),
+    )
+    monkeypatch.setattr(opt_flags, "cuda_capability_geq", lambda major, minor: (10, 3) >= (major, minor))
+    monkeypatch.setattr(opt_flags.target_info, "has_native_mxfp", lambda: True)
+    monkeypatch.setattr(opt_flags.opt_flags_nvidia.target_info, "cuda_capability_geq",
+                        lambda major, minor: (10, 3) >= (major, minor))
+
+    return opt_flags.make_default_opt_flags_nvidia(
+        BF16,
+        FP4,
+        FP4,
+        _make_blackwell_nvfp4_precision_config(swizzle_a_scale=swizzle_a_scale),
+        1,
+        m,
+        n,
+        k,
+        None,
+        True,
+        False,
+        False,
+        None,
+        False,
+        False,
+        constraints or {},
+        torch.float32,
+        mx_block_size=NVFP_BLOCK_SIZE.value,
+    )
 
 
 def _make_blackwell_mxfp4_weight(device, k, n):
@@ -158,6 +216,93 @@ def test_compute_block_n_blackwell_scale_aligns_to_128(n, expected):
     )
     block_n, block_n_tma = opt_flags_nvidia.compute_block_n(n, None, precision_config)
     assert block_n == block_n_tma == expected
+
+
+def test_blackwell_nvfp4_x_nvfp4_uses_gb300_persistent_tile(monkeypatch):
+    flags = _make_default_blackwell_nvfp4_flags(monkeypatch, 32768, 40960, 20480)
+
+    assert flags.is_persistent
+    assert (flags.block_m, flags.block_n, flags.block_k) == (128, 256, 256)
+    assert flags.num_warps == 8
+    assert flags.num_stages == 3
+    assert flags.epilogue_subtile == 4
+
+
+def test_blackwell_nvfp4_x_nvfp4_caps_warps_for_large_constrained_tile(monkeypatch):
+    flags = _make_default_blackwell_nvfp4_flags(monkeypatch, 32768, 40960, 20480, {"block_n": 512})
+
+    assert (flags.block_m, flags.block_n, flags.block_k) == (128, 512, 256)
+    assert flags.num_warps == 8
+
+
+def test_blackwell_nvfp4_x_nvfp4_uses_smaller_n_tile_for_small_shapes(monkeypatch):
+    flags = _make_default_blackwell_nvfp4_flags(monkeypatch, 1024, 1024, 1024)
+
+    assert flags.is_persistent
+    assert (flags.block_m, flags.block_n, flags.block_k) == (128, 128, 256)
+    assert flags.num_warps == 8
+    assert flags.num_stages == 4
+    assert flags.epilogue_subtile == 1
+
+
+def test_blackwell_nvfp4_x_nvfp4_uses_low_k_epilogue_subtile(monkeypatch):
+    flags = _make_default_blackwell_nvfp4_flags(monkeypatch, 8192, 2048, 2048)
+
+    assert flags.is_persistent
+    assert (flags.block_m, flags.block_n, flags.block_k) == (128, 128, 256)
+    assert flags.num_warps == 8
+    assert flags.num_stages == 4
+    assert flags.epilogue_subtile == 1
+
+
+def test_blackwell_nvfp4_x_nvfp4_handles_strided_a_scales(monkeypatch):
+    flags = _make_default_blackwell_nvfp4_flags(monkeypatch, 8192, 2048, 2048, swizzle_a_scale=False)
+
+    assert flags.is_persistent
+    assert (flags.block_m, flags.block_n, flags.block_k) == (128, 256, 256)
+    assert flags.num_warps == 8
+    assert flags.num_stages == 3
+    assert flags.epilogue_subtile == 1
+
+
+def test_blackwell_nvfp4_x_nvfp4_uses_smaller_m_tile_for_small_strided_a_scales(monkeypatch):
+    flags = _make_default_blackwell_nvfp4_flags(monkeypatch, 1024, 1024, 1024, swizzle_a_scale=False)
+
+    assert flags.is_persistent
+    assert (flags.block_m, flags.block_n, flags.block_k) == (64, 128, 256)
+    assert flags.num_warps == 8
+    assert flags.num_stages == 4
+    assert flags.epilogue_subtile == 1
+
+
+def test_blackwell_nvfp4_x_nvfp4_uses_four_warps_for_mid_small_mn(monkeypatch):
+    flags = _make_default_blackwell_nvfp4_flags(monkeypatch, 2048, 2048, 8192)
+
+    assert flags.is_persistent
+    assert (flags.block_m, flags.block_n, flags.block_k) == (128, 256, 256)
+    assert flags.num_warps == 4
+    assert flags.num_stages == 3
+    assert flags.epilogue_subtile == 2
+
+
+def test_blackwell_nvfp4_x_nvfp4_keeps_large_tile_for_medium_low_k_strided_a_scales(monkeypatch):
+    flags = _make_default_blackwell_nvfp4_flags(monkeypatch, 4096, 1024, 4096, swizzle_a_scale=False)
+
+    assert flags.is_persistent
+    assert (flags.block_m, flags.block_n, flags.block_k) == (128, 256, 256)
+    assert flags.num_warps == 8
+    assert flags.num_stages == 3
+    assert flags.epilogue_subtile == 1
+
+
+def test_blackwell_nvfp4_x_nvfp4_uses_smaller_tile_for_strided_a_small_mn(monkeypatch):
+    flags = _make_default_blackwell_nvfp4_flags(monkeypatch, 2048, 512, 8192, swizzle_a_scale=False)
+
+    assert flags.is_persistent
+    assert (flags.block_m, flags.block_n, flags.block_k) == (64, 128, 256)
+    assert flags.num_warps == 8
+    assert flags.num_stages == 3
+    assert flags.epilogue_subtile == 1
 
 
 def test_matmul_blackwell_scale_small_n(device):
