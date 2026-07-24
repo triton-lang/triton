@@ -1,4 +1,5 @@
 #include <Python.h>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -37,8 +38,12 @@ static std::pair<py::object, py::object>
 specialize_arg(PyObject *backend, PyObject *arg, bool is_const,
                bool specialize_value, bool align);
 
-static std::once_flag init_flag;
-static bool init_success = false;
+#if PY_VERSION_HEX >= 0x030D0000
+static PyMutex init_mutex = {};
+#else
+static std::mutex init_mutex;
+#endif
+static std::atomic<bool> init_success = false;
 
 static PyObject *constexpr_cls = nullptr;
 static PyObject *jit_callable_cls = nullptr;
@@ -165,14 +170,30 @@ bool init_globals() noexcept try {
   return false;
 }
 
-// NOTE: std::call_once does not support re-entrant calls from within the
-// callable. If init_globals() triggers a Python import that re-enters
-// native_specialize_impl on the same thread, behavior is undefined. In
-// practice this should not occur since triton.runtime.jit is already loaded
-// before specialize is first called.
+// Initialization imports Python modules, so waiters must detach their thread
+// state while blocked and a failed attempt must remain retryable.
 bool ensure_init() {
-  std::call_once(init_flag, []() { init_success = init_globals(); });
-  return init_success;
+  if (init_success.load(std::memory_order_acquire))
+    return true;
+#if PY_VERSION_HEX >= 0x030D0000
+  PyMutex_Lock(&init_mutex);
+#else
+  std::unique_lock<std::mutex> lock(init_mutex, std::defer_lock);
+  {
+    py::gil_scoped_release release;
+    lock.lock();
+  }
+#endif
+  bool initialized = init_success.load(std::memory_order_relaxed);
+  if (!initialized) {
+    initialized = init_globals();
+    if (initialized)
+      init_success.store(true, std::memory_order_release);
+  }
+#if PY_VERSION_HEX >= 0x030D0000
+  PyMutex_Unlock(&init_mutex);
+#endif
+  return initialized;
 }
 
 std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
