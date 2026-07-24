@@ -5,7 +5,7 @@ import time
 import inspect
 import hashlib
 import json
-from functools import cached_property
+from functools import cached_property, lru_cache
 from typing import Dict, Tuple, List, Optional
 
 from .. import knobs
@@ -325,6 +325,22 @@ class Autotuner(KernelInterface):
         return ret
 
 
+# Option names to fall back on before the active backend can be resolved
+# (e.g. during Config construction at import time). Matches the historical set.
+_DEFAULT_OPTION_NAMES = ("num_warps", "num_ctas", "num_stages", "maxnreg")
+
+
+@lru_cache
+def _resolve_option_names(target):
+    """The autotune option names declared by the backend for `target`.
+
+    Cached per target because it is queried from Config.__hash__/__eq__, which
+    can be hot. Backends expose this via BaseBackend.autotune_option_names.
+    """
+    from triton.compiler.compiler import make_backend
+    return tuple(make_backend(target).autotune_option_names)
+
+
 class Config:
     """
     An object that represents a possible kernel configuration for the auto-tuner to try.
@@ -366,28 +382,28 @@ class Config:
         self.pre_hook = state.get("pre_hook", None)
         self.ir_override = state.get("ir_override", None)
 
+    @staticmethod
+    def _active_option_names():
+        try:
+            target = driver.active.get_current_target()
+        except Exception:
+            return _DEFAULT_OPTION_NAMES
+        return _resolve_option_names(target)
+
     def all_kwargs(self):
-        return {
-            **self.kwargs, **{
-                k: v
-                for (k, v) in (
-                    ("num_warps", self.num_warps),
-                    ("num_ctas", self.num_ctas),
-                    ("num_stages", self.num_stages),
-                    ("maxnreg", self.maxnreg),
-                    ("ir_override", self.ir_override),
-                ) if v is not None
-            }
-        }
+        # Backend declares which option knobs are meaningful for it; only those
+        # (plus the backend-agnostic ir_override) are forwarded to the compiler.
+        options = {name: getattr(self, name) for name in self._active_option_names() if hasattr(self, name)}
+        options["ir_override"] = self.ir_override
+        return {**self.kwargs, **{k: v for k, v in options.items() if v is not None}}
 
     def __str__(self):
         res = []
         for k, v in self.kwargs.items():
             res.append(f"{k}: {v}")
-        res.append(f"num_warps: {self.num_warps}")
-        res.append(f"num_ctas: {self.num_ctas}")
-        res.append(f"num_stages: {self.num_stages}")
-        res.append(f"maxnreg: {self.maxnreg}")
+        for name in self._active_option_names():
+            if hasattr(self, name):
+                res.append(f"{name}: {getattr(self, name)}")
         res.append(f"ir_override: {self.ir_override}")
         return ", ".join(res)
 
