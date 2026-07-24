@@ -1557,7 +1557,7 @@ LinearLayout chooseScaledWmmaScaleLayout(
       wmmaMDim, wmmaNDim, isTransposed, dotOperandIdx);
   unsigned depth = warpSize / nonKDim;
   unsigned scaleKWidth = scaleFactor == 32 ? 4 : 8;
-  auto kSize = dotOperandShape[1];
+  auto kSize = dotOperandShape[rank - 1];
   LinearLayout tileLayout =
       LinearLayout::identity1D(scaleKWidth, kRegister, dimK) *
       LinearLayout::identity1D(nonKDim, kLane, dimNonK) *
