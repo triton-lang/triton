@@ -272,10 +272,9 @@ getSubViews(ArefValue arefVal, Value stage, Location loc, OpBuilder &rewriter,
   SmallVector<Value> views;
   for (auto buffer : arefVal.buffers) {
     auto memDescType = cast<MemDescType>(buffer.getType());
-    if (isa<nvidia_gpu::TensorMemoryScalesEncodingAttr,
-            nvidia_gpu::TensorMemoryLUTEncodingAttr>(
+    if (isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(
             memDescType.getEncoding())) {
-      // TMEM scales and LUT encodings don't support multi-buffering.
+      // tmem scales encoding doesn't support multi-buffering, use buffer as-is
       views.push_back(buffer);
     } else {
       auto shape = memDescType.getShape();

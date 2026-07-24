@@ -1855,8 +1855,9 @@ def test_tmem_store_lut(rows):
 
     @gluon.jit
     def kernel(in_ptr, out_ptr, rows: ttgl.constexpr, cols: ttgl.constexpr):
+        num_rows: ttgl.constexpr = 4 * rows
         in_ptrs = in_ptr + ttgl.arange(0, rows)[:, None] * cols + ttgl.arange(0, cols)[None, :]
-        out_ptrs = out_ptr + ttgl.arange(0, 128)[:, None] * cols + ttgl.arange(0, cols)[None, :]
+        out_ptrs = out_ptr + ttgl.arange(0, num_rows)[:, None] * cols + ttgl.arange(0, cols)[None, :]
         blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [32, 1], [4, 1], [1, 0])
         value = ttgl.load(ttgl.set_auto_layout(in_ptrs, blocked))
         smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([rows, cols], ttgl.int8)
@@ -1865,12 +1866,12 @@ def test_tmem_store_lut(rows):
         smem.store(value)
         fence_async_shared()
         tmem.store(smem.load(tmem.get_reg_layout()))
-        alias = tmem._reinterpret(shape=(128, cols), layout=TensorMemoryLayout((128, cols), col_stride=1))
+        alias = tmem._reinterpret(shape=(num_rows, cols), layout=TensorMemoryLayout((num_rows, cols), col_stride=1))
         ttgl.store(ttgl.set_auto_layout(out_ptrs, blocked), alias.load(blocked))
 
     torch.manual_seed(0)
     x = torch.randint(-100, 100, (rows, cols), dtype=torch.int8, device=device)
-    out = torch.zeros((128, cols), dtype=torch.int8, device=device)
+    out = torch.zeros((4 * rows, cols), dtype=torch.int8, device=device)
     kernel[(1, )](x, out, rows, cols)
     for warp in torch.chunk(out, chunks=4, dim=0):
         assert torch.equal(x, warp[:rows])
