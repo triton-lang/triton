@@ -953,8 +953,15 @@ void init_gluon_ir(py::module_ &m) {
           (py::arg("from_cta").none() = py::none()))
       .def("create_mbarrier_wait",
            [](GluonOpBuilder &self, Value memDesc, Value phase, Value pred,
-              std::vector<Value> &deps) {
-             self.create<ttng::WaitBarrierOp>(memDesc, phase, pred, deps);
+              bool conditional, std::vector<Value> &deps) {
+             self.create<ttng::WaitBarrierOp>(memDesc, phase, pred, conditional,
+                                              deps);
+           })
+      .def("create_mbarrier_test_wait",
+           [](GluonOpBuilder &self, Value memDesc, Value phase, Value pred,
+              bool conditional) -> Value {
+             return self.create<ttng::BarrierTestWaitOp>(memDesc, phase, pred,
+                                                         conditional);
            })
       .def(
           "create_mbarrier_arrive",
@@ -1025,17 +1032,19 @@ void init_gluon_ir(py::module_ &m) {
           "create_async_tma_copy_global_to_local",
           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
              Value barrier, Value result, Value pred, bool multicast,
-             std::optional<std::vector<Value>> offsets) {
+             std::optional<std::vector<Value>> offsets,
+             triton::ReportValidity reportValidity) {
             multicast &=
                 ttng::hasCGABroadcast(cast<ttg::MemDescType>(result.getType()));
             ValueRange offsetsRange =
                 offsets.has_value() ? ValueRange(*offsets) : ValueRange{};
             self.create<ttng::AsyncTMACopyGlobalToLocalOp>(
-                descPtr, coord, offsetsRange, barrier, result, pred, multicast);
+                descPtr, coord, offsetsRange, barrier, result, pred,
+                reportValidity, multicast);
           },
           py::arg("descPtr"), py::arg("coord"), py::arg("barrier"),
           py::arg("result"), py::arg("pred"), py::arg("multicast"),
-          py::arg("offsets").none())
+          py::arg("offsets").none(), py::arg("report_validity"))
       .def("create_async_tma_copy_local_to_global",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
               Value src) {

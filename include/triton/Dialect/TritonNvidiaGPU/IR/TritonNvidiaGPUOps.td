@@ -332,10 +332,14 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
 
   let description = [{
     Blocks the program progress until the mbarrier object in `alloc` completes
-    its current phase.
+    the requested phase.
 
     This lowers a waitloop using PTX instruction
     mbarrier.try_wait.parity.shared::cta.b64.
+
+    `phase` is the phase/parity value to wait for. If `conditional` is false,
+    the op waits on the barrier's primary phase. If `conditional` is true, the
+    op waits on the conditional phase used by TMA report-validity operations.
 
     Accepts an optional list of memory dependencies. If present, it is assumed
     that any of the dependencies may be accessed until the barrier completes.
@@ -348,27 +352,74 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$alloc,
     I32:$phase,
     Optional<I1>:$pred,
+    DefaultValuedAttr<BoolAttr, "false">:$conditional,
     Variadic<TTG_MemDescType>:$deps
   );
 
   let builders = [
     OpBuilder<(ins "Value":$alloc, "Value":$phase),
     [{
-    build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr), /*deps=*/{});
+    build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr),
+          /*conditional=*/false, /*deps=*/{});
     }]>,
     OpBuilder<(ins "Value":$alloc, "Value":$phase, "Value":$pred),
     [{
-    build($_builder, $_state, alloc, phase, pred, /*deps=*/{});
+    build($_builder, $_state, alloc, phase, pred, /*conditional=*/false,
+          /*deps=*/{});
     }]>,
     OpBuilder<(ins "Value":$alloc, "Value":$phase, "ValueRange":$deps),
     [{
-    build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr), deps);
+    build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr),
+          /*conditional=*/false, deps);
     }]>,
   ];
 
   let assemblyFormat = [{
-    $alloc `,` $phase (`,` $pred^)? (`deps` $deps^)?
+    $alloc `,` $phase (`,` $pred^)? (`,` $conditional^)? (`deps` $deps^)?
     attr-dict `:` qualified(type($alloc)) (`,` type($deps)^)?
+  }];
+  let hasVerifier = 1;
+}
+
+def TTNG_BarrierTestWaitOp : TTNG_Op<"barrier_test_wait", [
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
+    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
+  let summary = "perform a non-blocking parity test on an mbarrier";
+
+  let description = [{
+    Tests whether the mbarrier object in `alloc` has completed the requested
+    phase and returns `1` on success or `0` otherwise. Unlike
+    `ttng.wait_barrier`, this operation performs a single non-blocking query.
+
+    If `conditional` is false, the op tests the primary phase. If
+    `conditional` is true, it tests the conditional phase used by TMA
+    report-validity operations.
+  }];
+
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$alloc,
+    I32:$phase,
+    Optional<I1>:$pred,
+    DefaultValuedAttr<BoolAttr, "false">:$conditional
+  );
+  let results = (outs I32:$waitComplete);
+
+  let builders = [
+    OpBuilder<(ins "Value":$alloc, "Value":$phase),
+    [{
+      build($_builder, $_state, $_builder.getI32Type(), alloc, phase,
+            /*pred=*/static_cast<mlir::Value>(nullptr), /*conditional=*/false);
+    }]>,
+    OpBuilder<(ins "Value":$alloc, "Value":$phase, "bool":$conditional),
+    [{
+      build($_builder, $_state, $_builder.getI32Type(), alloc, phase,
+            /*pred=*/static_cast<mlir::Value>(nullptr), conditional);
+    }]>
+  ];
+
+  let assemblyFormat = [{
+    $alloc `,` $phase (`,` $pred^)? (`,` $conditional^)?
+    attr-dict `:` qualified(type($alloc)) `->` type($waitComplete)
   }];
   let hasVerifier = 1;
 }
@@ -504,6 +555,22 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
         - General rule: number of offsets = coord.size() - 2
       - See: https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-im2col-mode
 
+    `reportValidity` selects an optional TMA validity-reporting mechanism. A
+    matching sentinel still allows the primary mbarrier phase to complete, but
+    prevents the conditional phase from completing. This lets software retry
+    the load without releasing consumers waiting on the conditional phase.
+
+    The supported modes inspect:
+    - `per_16B_fp32`: one sampled FP32 element per aligned 16-byte chunk,
+      matching the `-0` bit pattern `0x80000000`.
+    - `per_16B_fp16`: one sampled FP16 element per aligned 16-byte chunk,
+      matching the `-0` bit pattern `0x8000`.
+    - `per_16B_fp8`: one sampled FP8 element per aligned 16-byte chunk,
+      matching `0x80`.
+    - `per_16B_fp4`: one sampled FP4 element per aligned 16-byte chunk,
+      matching `0x8`.
+    - `per_elem_1B`: every byte, matching `0xff`.
+
   }];
 
   let hasVerifier = 1;
@@ -514,6 +581,7 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
     I1:$pred,
+    DefaultValuedAttr<TT_ReportValidityAttr, "triton::ReportValidity::NONE">:$reportValidity,
     UnitAttr:$multicast,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
@@ -524,6 +592,7 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
     // Builder for TILED mode (no offsets required, attributes default to standard values)
     OpBuilder<(ins "Value":$desc, "ValueRange":$coord, "Value":$barrier,
                    "Value":$result, "Value":$pred,
+                   CArg<"triton::ReportValidity", "triton::ReportValidity::NONE">:$reportValidity,
                    CArg<"bool", "false">:$multicast,
                    CArg<"triton::CacheModifier", "triton::CacheModifier::NONE">:$cache,
                    CArg<"triton::EvictionPolicy", "triton::EvictionPolicy::NORMAL">:$evict,
@@ -532,13 +601,14 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
                                    ::mlir::cast<::mlir::triton::gpu::MemDescType>(
                                        result.getType()));
       build($_builder, $_state, desc, coord, /*offsets=*/ValueRange{}, barrier,
-            result, pred, multicast, cache, evict, isVolatile);
+            result, pred, reportValidity, multicast, cache, evict, isVolatile);
     }]>
   ];
 
   let assemblyFormat = [{
     $desc `[` $coord `]` (`offsets` `=` `[` $offsets^ `]`)? $result `,` $barrier `,` $pred
-    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
+    oilist(`reportValidity` `=` $reportValidity | `cacheModifier` `=` $cache |
+           `evictionPolicy` `=` $evict)
     attr-dict `:` qualified(type($desc)) `,` qualified(type($barrier)) `->` qualified(type($result))
   }];
 

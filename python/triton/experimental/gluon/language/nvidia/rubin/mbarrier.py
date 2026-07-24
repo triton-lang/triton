@@ -5,6 +5,7 @@ from ..hopper.mbarrier import (
     expect,
     init,
     invalidate,
+    test_wait,
     wait,
 )
 
@@ -15,6 +16,7 @@ __all__ = [
     "init",
     "invalidate",
     "MBarrierLayout",
+    "test_wait",
     "wait",
 ]
 

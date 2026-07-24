@@ -1416,6 +1416,39 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr):
     tma.store_wait(0)
 
 
+@gluon.jit
+def rubin_tma_validity_kernel(input_desc, XBLOCK: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], input_desc.layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [1], rubin.mbarrier.MBarrierLayout())
+    rubin.mbarrier.init(bar, count=1)
+
+    rubin.mbarrier.expect(bar, input_desc.block_type.nbytes)
+    rubin.tma.async_load(input_desc, [0, 0], bar, smem, report_validity="per_16B_fp16")
+    rubin.mbarrier.test_wait(bar, 0)
+    rubin.mbarrier.test_wait(bar, 0, conditional=True)
+    rubin.mbarrier.wait(bar, 0, conditional=True)
+
+    rubin.mbarrier.invalidate(bar)
+
+
+def test_rubin_tma_validity_ir():
+    input = MockTensor(ttgl.float16, (1024, 1024))
+    xblock = 128
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    input_desc = TensorDescriptor.from_tensor(input, [xblock, xblock], shared_layout)
+
+    mod = run_parser(
+        rubin_tma_validity_kernel,
+        *make_args(input_desc, xblock, num_warps=4),
+        target=RUBIN_TARGET,
+    )
+    ir = anonymize_ir(mod.str_nodebug())
+    assert "reportValidity = per_16B_fp16" in ir
+    assert ir.count("ttng.barrier_test_wait") == 2
+    assert "ttng.barrier_test_wait" in ir and ", true :" in ir
+    assert "ttng.wait_barrier" in ir and ", true :" in ir
+
+
 @pytest.mark.parametrize("target", [HOPPER_TARGET, BLACKWELL_TARGET])
 def test_async_tma(target):
     input = MockTensor(ttgl.float16, (1024, 1024))
