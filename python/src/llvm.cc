@@ -362,8 +362,7 @@ std::string translateLLVMIRToASM(
   }
 
   // Set up target information before inlining so target-specific inline
-  // compatibility checks use the backend's TTI. In particular, NVPTX allows
-  // calls between functions with different target attributes.
+  // compatibility checks use the backend's TTI.
   module.setTargetTriple(Triple(triple));
   auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
   module.setDataLayout(machine->createDataLayout());
@@ -374,9 +373,8 @@ std::string translateLLVMIRToASM(
       f.addFnAttr(llvm::Attribute::AlwaysInline);
   // verify and store llvm
   llvm::legacy::PassManager pm;
-  if (Triple(triple).isNVPTX())
-    pm.add(llvm::createTargetTransformInfoWrapperPass(
-        machine->getTargetIRAnalysis()));
+  pm.add(llvm::createTargetTransformInfoWrapperPass(
+      machine->getTargetIRAnalysis()));
   pm.add(llvm::createAlwaysInlinerLegacyPass());
   pm.add(llvm::createVerifierPass());
 
