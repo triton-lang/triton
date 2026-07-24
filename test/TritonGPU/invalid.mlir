@@ -330,6 +330,33 @@ tt.func public @memdesc_reinterpret_subview(%arg0: !ttg.memdesc<8x16xf16, #share
 
 // -----
 
+#shared_split = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
+#shared_broadcast = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @memdesc_reinterpret_shared_subview_slices_cta(%parent: !ttg.memdesc<8x16xf16, #shared_split, #smem, mutable>) {
+    %view = ttg.memdesc_subslice %parent [4, 0] : !ttg.memdesc<8x16xf16, #shared_split, #smem, mutable> -> !ttg.memdesc<4x16xf16, #shared_split, #smem, mutable, 8x16>
+    // expected-error @+1 {{cannot reinterpret a source subview sliced across CTAs}}
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<4x16xf16, #shared_split, #smem, mutable, 8x16> -> !ttg.memdesc<4x16xf16, #shared_broadcast, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem_split = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1, CGALayout = [[0, 1]]>
+#tmem_broadcast = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1, CGALayout = [[0, 0]]>
+#tmem = #ttng.tensor_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @memdesc_reinterpret_tmem_subview_slices_cta(%view: !ttg.memdesc<128x32xf32, #tmem_split, #tmem, mutable, 128x128>) {
+    // expected-error @+1 {{cannot reinterpret a source subview sliced across CTAs}}
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<128x32xf32, #tmem_split, #tmem, mutable, 128x128> -> !ttg.memdesc<128x32xf32, #tmem_broadcast, #tmem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 tt.func public @memdesc_subslice_alloc_shape_mismatch(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {

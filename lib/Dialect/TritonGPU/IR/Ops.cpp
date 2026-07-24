@@ -721,6 +721,14 @@ LogicalResult MemDescReinterpretOp::verify() {
 
   auto srcAllocation = allocationLayout(srcTy);
   auto dstAllocation = allocationLayout(dstTy);
+  auto srcShape = dropPipeliningDim(srcTy.getShape(), srcEnc);
+  auto blockDim = StringAttr::get(getContext(), "block");
+  for (const auto &basis : srcAllocation.getBases().lookup(blockDim))
+    for (auto [component, size] : llvm::zip_equal(basis, srcShape))
+      if (component >= size)
+        return emitError("cannot reinterpret a source subview sliced across "
+                         "CTAs");
+
   if (srcIsTmem) {
     auto srcAlloc = nvidia_gpu::getTmemAllocSizes(srcTy);
     auto dstAlloc = nvidia_gpu::getTmemAllocSizes(dstTy);
@@ -755,7 +763,6 @@ LogicalResult MemDescReinterpretOp::verify() {
   uint64_t dstStride = llvm::divideCeil(
       uint64_t(dstAllocation.getInDimSize(addressDim)) * dstElementBits,
       uint64_t(unitBits));
-  auto srcShape = dropPipeliningDim(srcTy.getShape(), srcEnc);
   auto dstShape = dropPipeliningDim(dstTy.getShape(), dstEnc);
   int64_t srcStages = product(srcTy.getShape().drop_back(srcShape.size()));
   int64_t dstStages = product(dstTy.getShape().drop_back(dstShape.size()));
