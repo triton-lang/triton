@@ -66,29 +66,26 @@ def _find_already_mmapped_dylib_on_linux(lib_name):
     return None
 
 
-@functools.lru_cache()
-def _get_path_to_hip_runtime_dylib():
-    lib_name = "libamdhip64.so"
+def _find_hip_runtime_dylib(lib_name):
+    """
+    Search for the HIP runtime library with the given name.
 
-    # If we are told explicitly what HIP runtime dynamic library to use, obey that.
-    if env_libhip_path := knobs.amd.libhip_path:
-        if env_libhip_path.endswith(lib_name) and os.path.exists(env_libhip_path):
-            return env_libhip_path
-        raise RuntimeError(f"TRITON_LIBHIP_PATH '{env_libhip_path}' does not point to a valid {lib_name}")
+    Returns:
+        tuple: (found_path, tried_paths)
+    """
+    paths = []
 
     # If the shared object is already mmapped to address space, use it.
     mmapped_path = _find_already_mmapped_dylib_on_linux(lib_name)
     if mmapped_path:
         if os.path.exists(mmapped_path):
-            return mmapped_path
-        raise RuntimeError(f"memory mapped '{mmapped_path}' in process does not point to a valid {lib_name}")
-
-    paths = []
+            return mmapped_path, []
+        paths.append(mmapped_path)
 
     # Check backend
     local_lib = os.path.join(os.path.dirname(__file__), "lib", lib_name)
     if os.path.exists(local_lib):
-        return local_lib
+        return local_lib, []
     paths.append(local_lib)
 
     import site
@@ -102,7 +99,7 @@ def _get_path_to_hip_runtime_dylib():
     for path in site_packages:
         path = os.path.join(path, "torch", "lib", lib_name)
         if os.path.exists(path):
-            return path
+            return path, []
         paths.append(path)
 
     # Then try to see if developer provides a HIP runtime dynamic library using LD_LIBARAY_PATH.
@@ -111,7 +108,7 @@ def _get_path_to_hip_runtime_dylib():
         for d in env_ld_library_path.split(":"):
             f = os.path.join(d, lib_name)
             if os.path.exists(f):
-                return f
+                return f, []
             paths.append(f)
 
     # HIP_PATH should point to HIP SDK root if set
@@ -119,7 +116,7 @@ def _get_path_to_hip_runtime_dylib():
     if env_hip_path:
         hip_lib_path = os.path.join(env_hip_path, "lib", lib_name)
         if os.path.exists(hip_lib_path):
-            return hip_lib_path
+            return hip_lib_path, []
         paths.append(hip_lib_path)
 
     # if available, `hipconfig --path` prints the HIP SDK root
@@ -128,7 +125,7 @@ def _get_path_to_hip_runtime_dylib():
         if hip_root:
             hip_lib_path = os.path.join(hip_root, "lib", lib_name)
             if os.path.exists(hip_lib_path):
-                return hip_lib_path
+                return hip_lib_path, []
             paths.append(hip_lib_path)
     except (subprocess.CalledProcessError, FileNotFoundError):
         # hipconfig may not be available
@@ -139,7 +136,7 @@ def _get_path_to_hip_runtime_dylib():
     if env_rocm_path:
         rocm_lib_path = os.path.join(env_rocm_path, "lib", lib_name)
         if os.path.exists(rocm_lib_path):
-            return rocm_lib_path
+            return rocm_lib_path, []
         paths.append(rocm_lib_path)
 
     # Afterwards try to search the loader dynamic library resolution paths.
@@ -150,16 +147,37 @@ def _get_path_to_hip_runtime_dylib():
     locs = [line.split()[-1] for line in libs.splitlines() if line.strip().endswith(lib_name)]
     for loc in locs:
         if os.path.exists(loc):
-            return loc
+            return loc, []
         paths.append(loc)
 
     # As a last resort, guess if we have it in some common installation path.
     common_install_path = os.path.join('/opt/rocm/lib/', lib_name)
     if os.path.exists(common_install_path):
-        return common_install_path
+        return common_install_path, []
     paths.append(common_install_path)
 
-    raise RuntimeError(f"cannot locate {lib_name} after attempted paths {paths}")
+    return None, paths
+
+
+@functools.lru_cache()
+def _get_path_to_hip_runtime_dylib():
+    # If we are told explicitly what HIP runtime dynamic library to use, obey that.
+    if env_libhip_path := knobs.amd.libhip_path:
+        if os.path.exists(env_libhip_path):
+            return env_libhip_path
+        raise RuntimeError(f"TRITON_LIBHIP_PATH '{env_libhip_path}' does not point to a valid library")
+
+    # Search order: .so (no version), then .so.7 and .so.6 in case missing symlink.
+    lib_name_variants = ["libamdhip64.so", "libamdhip64.so.7", "libamdhip64.so.6"]
+
+    all_paths = []
+    for variant in lib_name_variants:
+        result, tried_paths = _find_hip_runtime_dylib(variant)
+        if result:
+            return result
+        all_paths.extend(tried_paths)
+
+    raise RuntimeError(f"cannot locate libamdhip64.so after attempted paths {all_paths}")
 
 
 class HIPUtils(object):
