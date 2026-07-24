@@ -6426,6 +6426,31 @@ def test_propagate_nan(dtype, propagate_nan, func, device):
             assert not torch.isnan(C[0])
 
 
+@pytest.mark.parametrize("func", ['minimum', 'maximum'])
+def test_fp16_scalar_literal_no_fp32_promotion(func, device):
+    # Regression test for #10730. minimum/maximum of an fp16 tensor and a
+    # Python float scalar literal must stay in fp16, like the other elementwise
+    # ops (e.g. `+`): a scalar of equal-or-lower kind does not participate in
+    # type promotion. Previously the operands were materialized with to_tensor()
+    # before binary_op_type_checking_impl ran, so 0.0 became a 0-d fp32 tensor
+    # and forced the result (and a loop-carried fp16 variable) to fp32.
+
+    @triton.jit
+    def kernel(X, Y, func: tl.constexpr):
+        offs = tl.arange(0, 16)
+        x = tl.load(X + offs)
+        y = getattr(tl, func)(x, 0.0)
+        tl.static_assert(y.dtype == tl.float16)
+        tl.store(Y + offs, y)
+
+    x = torch.randn((16, ), device=device, dtype=torch.float16)
+    y = torch.empty_like(x)
+    kernel[(1, )](x, y, func)
+    ref = torch.maximum(x, torch.zeros_like(x)) if func == 'maximum' else torch.minimum(x, torch.zeros_like(x))
+    assert y.dtype == torch.float16
+    torch.testing.assert_close(y, ref)
+
+
 # -----------------------
 # test clamp
 # -----------------------

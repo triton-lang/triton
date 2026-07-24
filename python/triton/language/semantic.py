@@ -360,8 +360,12 @@ class TritonSemantic(Generic[TensorTy]):
 # other arithmetic ops
 ##############
 
-    def minimum(self, x: TensorTy, y: TensorTy, propagate_nan: tl.PropagateNan):
+    def minimum(self, x: TensorTy | numbers.Number, y: TensorTy | numbers.Number, propagate_nan: tl.PropagateNan):
         x, y = self.binary_op_type_checking_impl(x, y)
+        # hardware doesn't support FMAX, FMIN, CMP for bfloat16
+        if x.type.scalar is tl.bfloat16:
+            x = self.cast(x, tl.float32)
+            y = self.cast(y, tl.float32)
         dtype = x.dtype
         if dtype.is_floating():
             if propagate_nan == tl.PropagateNan.ALL:
@@ -377,8 +381,12 @@ class TritonSemantic(Generic[TensorTy]):
         else:
             raise TypeError(f"Unexpected dtype {dtype}")
 
-    def maximum(self, x: TensorTy, y: TensorTy, propagate_nan: tl.PropagateNan):
+    def maximum(self, x: TensorTy | numbers.Number, y: TensorTy | numbers.Number, propagate_nan: tl.PropagateNan):
         x, y = self.binary_op_type_checking_impl(x, y)
+        # hardware doesn't support FMAX, FMIN, CMP for bfloat16
+        if x.type.scalar is tl.bfloat16:
+            x = self.cast(x, tl.float32)
+            y = self.cast(y, tl.float32)
         dtype = x.dtype
         if dtype.is_floating():
             if propagate_nan == tl.PropagateNan.ALL:
