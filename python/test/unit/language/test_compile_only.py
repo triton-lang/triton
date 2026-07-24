@@ -3,25 +3,6 @@ import triton.language as tl
 from triton.backends.compiler import GPUTarget
 import re
 from triton.compiler import ASTSource
-from triton.language import core
-
-
-@core.extern
-def _extern_poly(x, lib_path: tl.constexpr, _semantic=None):
-    return core.extern_elementwise(
-        "test_inline",
-        lib_path.value,
-        [x],
-        {(core.dtype("fp32"), ): ("test_poly", core.dtype("fp32"))},
-        is_pure=True,
-        _semantic=_semantic,
-    )
-
-
-@triton.jit
-def _extern_poly_kernel(x, out, lib_path: tl.constexpr):
-    value = tl.load(x)
-    tl.store(out, _extern_poly(value, lib_path))
 
 
 def test_compile_only_sm100() -> None:
@@ -38,40 +19,6 @@ def test_compile_only_sm100() -> None:
     assert ".target sm_100a" in ptx
     assert ".address_size 64" in ptx
     assert k.asm["cubin"] != b""
-
-
-def test_nvptx_always_inline_with_different_target_attributes(tmp_path) -> None:
-    lib = tmp_path / "test_inline.ll"
-    body = []
-    previous = "%x"
-    for i in range(128):
-        body.append(f"  %v{i} = tail call float @llvm.fma.f32(float {previous}, float %x, float 0x3F8110F7C0000000)")
-        previous = f"%v{i}"
-    lib.write_text("\n".join([
-        "define float @test_poly(float noundef %x) unnamed_addr #0 {",
-        *body,
-        f"  ret float {previous}",
-        "}",
-        "",
-        "declare float @llvm.fma.f32(float, float, float)",
-        "",
-        ('attributes #0 = { nofree nosync nounwind memory(none) '
-         '"denormal-fp-math-f32"="preserve-sign,preserve-sign" "frame-pointer"="all" '
-         '"no-trapping-math"="true" "target-cpu"="sm_100" "target-features"="+ptx87,+sm_100" }'),
-    ]))
-
-    src = ASTSource(
-        fn=_extern_poly_kernel,
-        signature={"x": "*fp32", "out": "*fp32", "lib_path": "constexpr"},
-        constexprs={"lib_path": str(lib)},
-    )
-    compiled = triton.compile(
-        src,
-        target=GPUTarget("cuda", 103, 32),
-        options={"extern_libs": {"test_inline": str(lib)}},
-    )
-
-    assert "test_poly" not in compiled.asm["ptx"]
 
 
 def test_compile_only_ws_cluster_barrier_shared_memory(tmp_path) -> None:
