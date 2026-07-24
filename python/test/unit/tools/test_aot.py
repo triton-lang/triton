@@ -388,6 +388,71 @@ def check_hasco_binary_str(tmp_dir: str, dtype: str):
         assert int(matches[0]) > 16, "Expected valid HSACO object binary string"
 
 
+def test_linker_rejects_invalid_algo_id():
+    from triton.tools.link import (
+        KernelLinkerMeta,
+        make_func_pointers,
+        make_get_num_algos_def,
+        make_kernel_meta_const_dispatcher,
+    )
+
+    meta = KernelLinkerMeta(
+        orig_kernel_name="kernel",
+        arg_names=["x"],
+        arg_ctypes=["int"],
+        sizes=[None],
+        sig_hash="abcdef12",
+        triton_suffix="",
+        suffix="",
+        num_specs=0,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        c_path = os.path.join(tmp_dir, "test_linker_algo_id_bounds.c")
+        exe_path = os.path.join(tmp_dir, "test_linker_algo_id_bounds")
+        with open(c_path, "w") as fp:
+            fp.write(f"""
+#include <stdio.h>
+
+typedef void *TT_StreamTy;
+typedef int TT_ResultTy;
+
+#define TT_ERROR_INVALID_VALUE 777
+#define CHECK_EQ(actual, expected) \\
+  do {{ \\
+    TT_ResultTy got = (actual); \\
+    if (got != (expected)) {{ \\
+      fprintf(stderr, "%s:%d: got %d, expected %d\\n", __FILE__, __LINE__, got, (expected)); \\
+      return 1; \\
+    }} \\
+  }} while (0)
+
+TT_ResultTy kernel_algo0(TT_StreamTy stream, int x) {{
+  return x + 10;
+}}
+
+TT_ResultTy kernel_algo1(TT_StreamTy stream, int x) {{
+  return x + 20;
+}}
+
+{make_func_pointers(["kernel_algo0", "kernel_algo1"], meta)}
+{make_get_num_algos_def(meta)}
+{make_kernel_meta_const_dispatcher(meta)}
+
+int main(void) {{
+  CHECK_EQ(kernel_get_num_algos(), 2);
+  CHECK_EQ(kernel(0, 5, 0), 15);
+  CHECK_EQ(kernel(0, 5, 1), 25);
+  CHECK_EQ(kernel(0, 5, -1), TT_ERROR_INVALID_VALUE);
+  CHECK_EQ(kernel(0, 5, 2), TT_ERROR_INVALID_VALUE);
+  return 0;
+}}
+""")
+
+        subprocess.run(["gcc", "-std=c99", "-DNDEBUG", c_path, "-o", exe_path], check=True)
+        subprocess.run([exe_path], check=True)
+
+
 # Test edge case where the provided kernel signature has no specializations
 def test_compile_link_matmul_no_specialization():
     np.random.seed(3)
