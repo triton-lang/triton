@@ -53,13 +53,39 @@ scanThreadContiguousElements(SmallVector<SmallVector<Value>> &srcValues,
 static void warpScan(SmallVector<SmallVector<Value>> &srcValues,
                      ConversionPatternRewriter &rewriter,
                      const TargetInfoBase &targetInfo,
-                     ScanLoweringHelper &helper, Value laneIdAxis) {
+                     ScanLoweringHelper &helper, Value laneIdAxis,
+                     unsigned iWarpSize) {
   Location loc = helper.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThread();
   unsigned elementStride = helper.getAxisElementStride();
   unsigned threadStride = helper.getAxisThreadStride();
   unsigned scanDim = helper.getAxisNumThreadsPerWarpWithUniqueData();
+
+  if (scanElementsPerThreads == 1 && threadStride == 1 &&
+      scanDim == iWarpSize && (iWarpSize == 32 || iWarpSize == 64) &&
+      helper.isSingleBooleanAddScan()) {
+    // Fast path for boolean add scan, assuming full warp participation
+    // and 1 contiguous element per thread.
+    // Example (warpsize = 4):
+    //    starting bit:   [1],   [0],    [1],    [1]
+    //    ballot:         [1***],[10**], [101*], [1011]
+    //    popcnt:         [1],   [1],    [2],    [3]
+    auto elemTy = cast<IntegerType>(helper.getElementTypes()[0]);
+    unsigned width = elemTy.getWidth();
+    for (SmallVector<Value> &elem : srcValues) {
+      Value bit = b.icmp_ne(elem.front(), b.int_val(width, 0));
+      // NVIDIA: lane-masked ballot + popc, AMD: ballot + mbcnt
+      Value cnt = targetInfo.warpPrefixPopcount(rewriter, loc, bit);
+      if (width < 32)
+        cnt = b.trunc(elemTy, cnt);
+      else if (width > 32)
+        cnt = b.zext(elemTy, cnt);
+      elem.front() = cnt;
+    }
+    return;
+  }
+
   for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
     unsigned elementIdx = (srcIndex / elementStride) % scanElementsPerThreads;
     // Only consider the last element of each contiguous chunk of elements.
@@ -496,8 +522,9 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   // Scan contiguous elements in a thread and update `srcValues`.
   scanThreadContiguousElements(srcValues, rewriter, helper);
   // Apply warp level scan to the last element of each chunk of contiguous
-  // elements.
-  warpScan(srcValues, rewriter, targetInfo, helper, laneIdAxis);
+  // elements (ballot + popcount fast path for boolean add-scans, else the
+  // generic shuffle tree).
+  warpScan(srcValues, rewriter, targetInfo, helper, laneIdAxis, iWarpSize);
 
   if (axisNumWarps > 1) {
     // Slow path for the case where there are multiple warps with unique data on
