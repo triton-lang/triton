@@ -16,7 +16,7 @@ from .._C.libtriton import ir, gluon_ir
 from ..language import constexpr, str_to_ty, tensor, tuple as tl_tuple
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
 # ideally we wouldn't need any runtime component
-from ..runtime.jit import get_full_name, JITCallable, BoundConstexprFunction, ConstexprFunction, JITFunction
+from ..runtime.jit import get_full_name, JITCallable, BoundConstexprFunction, ConstexprFunction, JITFunction, KernelParam
 from .._utils import apply_with_path, set_iterable_path, is_namedtuple
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
@@ -216,6 +216,12 @@ class ContainsReturnChecker(ast.NodeVisitor):
     def visit_FunctionDef(self, node: ast.FunctionDef) -> bool:
         return self._visit_stmts(node.body)
 
+    def visit_Lambda(self, node: ast.Lambda) -> bool:
+        # A lambda body is a single expression, not statements.
+        # A return inside a lambda (which can't happen in Python) would
+        # belong to the lambda, not the outer function.
+        return False
+
     def visit_If(self, node: ast.If) -> bool:
         # TODO: optimize the following case in which we actually don't have
         # a return when static_cond is false:
@@ -291,6 +297,94 @@ class BoundJITMethod:
     __func__: JITFunction
 
 
+class _LambdaCaptureVisitor(ast.NodeVisitor):
+
+    def __init__(self, params):
+        self.local_names = set(params)
+        self.free_names = set()
+
+    def visit_Name(self, node):
+        if isinstance(node.ctx, ast.Load) and node.id not in self.local_names:
+            self.free_names.add(node.id)
+        elif isinstance(node.ctx, ast.Store):
+            self.local_names.add(node.id)
+
+    def visit_Lambda(self, node):
+        return
+
+    def visit_FunctionDef(self, node):
+        return
+
+
+class LambdaJITFunction:
+    """
+    A lightweight wrapper that provides the JITFunction-like interface needed by
+    call_JitFunction, allowing lambda expressions to be used as combine_fn
+    in tl.reduce() and tl.associative_scan().
+
+    Example usage:
+        tl.associative_scan(val, axis=0, combine_fn=lambda a, b: a + b)
+    """
+
+    def __init__(self, node, name, capture_scope, file_name, begin_line, begin_col):
+        self._node = node  # ast.Lambda node
+        self._name = name
+        self.__name__ = name
+        self.__module__ = 'triton.language'
+        self.__qualname__ = name
+        self._capture_scope = capture_scope
+        self.file_name = file_name
+        self.def_file_line_number = node.lineno + begin_line
+        self.def_file_col_number = node.col_offset + begin_col
+        self.noinline = False
+
+        # Build inspect.Signature from lambda args
+        params = []
+        for arg in node.args.args:
+            params.append(inspect.Parameter(arg.arg, inspect.Parameter.POSITIONAL_OR_KEYWORD))
+        self.signature = inspect.Signature(params)
+
+        # Build KernelParam list (needed by visit_arg in the new CodeGenerator).
+        # Lambda args are never constexpr, so do_not_specialize = False.
+        self.params = [
+            KernelParam(i, p, do_not_specialize=False, do_not_specialize_on_alignment=False)
+            for i, p in enumerate(self.signature.parameters.values())
+        ]
+        self.arg_names = [p.name for p in self.params]
+
+        # Reconstruct source code for error messages
+        self.src = ast.unparse(node)
+
+        # Build AST for parse()
+        self._ast = self._build_ast(node)
+
+    def _build_ast(self, node):
+        """Build an AST Module containing a FunctionDef from the lambda.
+        lambda a, b: a + b  →  def _lambda_N(a, b): return a + b
+        """
+        func_def = ast.FunctionDef(
+            name=self._name,
+            args=node.args,
+            body=[ast.Return(value=node.body)],
+            decorator_list=[],
+            returns=None,
+        )
+        ast.copy_location(func_def, node)
+
+        module = ast.Module(body=[func_def], type_ignores=[])
+        ast.fix_missing_locations(module)
+        return module
+
+    def parse(self):
+        return self._ast
+
+    def get_capture_scope(self):
+        return self._capture_scope
+
+    def is_gluon(self):
+        return False
+
+
 class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, function_name, jit_fn: JITFunction, *, options, codegen_fns,
@@ -351,6 +445,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.caller_context = caller_context
         self.scf_stack = []
         self.ret_type = None
+        self._lambda_counter = 0
         # SSA-construction
         # name => language.tensor
         self.local_defs: Dict[str, tensor] = {}
@@ -1398,7 +1493,7 @@ class CodeGenerator(ast.NodeVisitor):
         msg = self.visit(node.msg) if node.msg is not None else ""
         return language.core.device_assert(test, msg, _semantic=self.semantic)
 
-    def call_JitFunction(self, fn: JITFunction, args, kwargs, caller_context=None):
+    def call_JitFunction(self, fn: JITCallable, args, kwargs, caller_context=None):
         bound_args = fn.signature.bind(*args, **kwargs)
         bound_args.apply_defaults()
         args = bound_args.arguments
@@ -1450,7 +1545,7 @@ class CodeGenerator(ast.NodeVisitor):
                 error_message.append(mur)
             raise CompilationError(self.jit_fn.src, node, " ".join(error_message))
 
-        if isinstance(fn, JITFunction):
+        if isinstance(fn, (JITFunction, LambdaJITFunction)):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)
         if (hasattr(fn, '__self__') and _is_triton_value(fn.__self__)) or language.core.is_builtin(fn) or isinstance(
@@ -1649,6 +1744,50 @@ class CodeGenerator(ast.NodeVisitor):
             self.cur_node = last_node
             self.builder.set_loc(last_loc)
         return ret
+
+    def visit_Lambda(self, node):
+        """Handle lambda expressions by converting them to anonymous JIT functions.
+
+        Example: tl.associative_scan(val, axis=0, combine_fn=lambda a, b: a + b)
+
+        The lambda is converted to a LambdaJITFunction which provides the
+        JITFunction-like interface needed by call_JitFunction.  The function
+        is lazily compiled when call_JitFunction invokes it with concrete
+        argument types.
+        """
+        lambda_name = f"_lambda_{self._lambda_counter}"
+        self._lambda_counter += 1
+
+        capture_visitor = _LambdaCaptureVisitor(arg.arg for arg in node.args.args)
+        capture_visitor.visit(node.body)
+
+        # Build the capture scope: the current gscope plus constexpr values
+        # from lscope that the lambda might reference.
+        capture_scope = dict(self.gscope)
+        for name in sorted(capture_visitor.free_names):
+            if name not in self.lscope:
+                continue
+            value = self.lscope[name]
+            if not _is_constexpr(value):
+                raise self._unsupported(
+                    node,
+                    f"lambda can only capture constexpr values from the enclosing scope, but '{name}' is {value}",
+                )
+            capture_scope[name] = value
+
+        for k, v in self.lscope.items():
+            if k not in capture_scope and _is_constexpr(v):
+                capture_scope[k] = v
+
+        lambda_fn = LambdaJITFunction(
+            node=node,
+            name=lambda_name,
+            capture_scope=capture_scope,
+            file_name=self.file_name,
+            begin_line=self.begin_line,
+            begin_col=self.begin_col,
+        )
+        return lambda_fn
 
     def generic_visit(self, node):
         raise self._unsupported(node, "unsupported AST node type: {}".format(type(node).__name__))

@@ -195,8 +195,17 @@ class DependenciesFinder(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node):
         # Save the local name, which may hide the global name.
+        prev_local_names = getattr(self, 'local_names', set())
         self.local_names = {arg.arg for arg in node.args.args}
         self.generic_visit(node)
+        self.local_names = prev_local_names
+
+    def visit_Lambda(self, node):
+        # A lambda introduces new local names, just like a FunctionDef.
+        prev_local_names = getattr(self, 'local_names', set())
+        self.local_names = prev_local_names | {arg.arg for arg in node.args.args}
+        self.generic_visit(node)
+        self.local_names = prev_local_names
 
     def visit_arguments(self, node):
         # The purpose of this function is to visit everything in `arguments`
