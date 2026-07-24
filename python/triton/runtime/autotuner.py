@@ -36,10 +36,9 @@ class Autotuner(KernelInterface):
             self.configs = configs
         self.keys = key
         self.cache: Dict[Tuple, Config] = {}
-        # Per-key synchronization so only one thread benchmarks a given
-        # tuning key. `_cache_lock` only protects `_key_events` bookkeeping.
-        self._cache_lock = threading.Lock()
-        self._key_events: Dict[Tuple, threading.Event] = {}
+        # Serialize cold misses so timings, restore hooks, and listener state
+        # cannot be mixed across tuning keys. Hot cache hits remain concurrent.
+        self._cache_lock = threading.RLock()
         # Per-thread storage for the default restore-value hook's snapshot
         # dict, so concurrent _bench calls don't clobber each other.
         self._tls = threading.local()
@@ -209,8 +208,8 @@ class Autotuner(KernelInterface):
             with open(path, "r") as cached_configs:
                 timings = json.load(cached_configs)["configs_timings"]
                 timings = {Config(**config): timing for config, timing in timings}
-                self.cache[tuning_key] = builtins.min(timings, key=timings.get)
                 self.configs_timings = timings
+                self.cache[tuning_key] = builtins.min(timings, key=timings.get)
             return True
 
         timings = bench_fn()
@@ -235,20 +234,13 @@ class Autotuner(KernelInterface):
             for _, arg in _args.items():
                 if hasattr(arg, "dtype"):
                     key_list.append(str(arg.dtype))
+            if not knobs.runtime.interpret:
+                key_list.append(driver.active.get_current_device())
             key = tuple(key_list)
             if key not in self.cache:
-                # Per-key synchronization: only one thread benchmarks a
-                # given tuning key. Other threads wait for the result.
+                listener_args = None
                 with self._cache_lock:
-                    event = self._key_events.get(key)
-                    if event is None and key not in self.cache:
-                        event = threading.Event()
-                        self._key_events[key] = event
-                        is_leader = True
-                    else:
-                        is_leader = False
-                if is_leader:
-                    try:
+                    if key not in self.cache:
                         used_cached_result = False
                         pruned_configs = self.prune_configs(kwargs, nargs)
 
@@ -263,34 +255,40 @@ class Autotuner(KernelInterface):
                             bench_time = bench_end - bench_start
                             self.bench_time = bench_time
                             best = builtins.min(timings, key=timings.get)
-                            self.cache[key] = best
                             self.configs_timings = timings
                             full_nargs = {**nargs, **kwargs, **best.all_kwargs()}
                             self.pre_hook(full_nargs, reset_only=True)
+                            self.cache[key] = best
                             return timings
 
                         if self.cache_results:
                             used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
                         else:
                             benchmark()
-                    finally:
-                        with self._cache_lock:
-                            self._key_events.pop(key, None)
-                        event.set()
-                elif event is not None:
-                    event.wait()
 
-                if knobs.autotuning.listener is not None:
-                    jit_fn = self.fn
-                    while not isinstance(jit_fn, JITFunction):
-                        jit_fn = jit_fn.fn
-                    knobs.autotuning.listener(
+                        listener = knobs.autotuning.listener
+                        if listener is not None:
+                            jit_fn = self.fn
+                            while not isinstance(jit_fn, JITFunction):
+                                jit_fn = jit_fn.fn
+                            listener_args = (
+                                listener,
+                                jit_fn,
+                                key,
+                                self.cache[key],
+                                self.configs_timings,
+                                bench_time if not used_cached_result else None,
+                                used_cached_result,
+                            )
+                if listener_args is not None:
+                    listener, jit_fn, tuning_key, best_config, timings, duration, cache_hit = listener_args
+                    listener(
                         fn=jit_fn,
-                        key=key,
-                        best_config=self.cache[key],
-                        configs_timings=self.configs_timings,
-                        duration=getattr(self, 'bench_time', None) if not used_cached_result else None,
-                        cache_hit=used_cached_result,
+                        key=tuning_key,
+                        best_config=best_config,
+                        configs_timings=timings,
+                        duration=duration,
+                        cache_hit=cache_hit,
                     )
 
             config = self.cache[key]
