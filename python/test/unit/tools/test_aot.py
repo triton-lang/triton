@@ -413,7 +413,8 @@ def test_compile_link_matmul_no_specialization():
 
         # run test case
         env = os.environ.copy()
-        env["LD_LIBRARY_PATH"] = tmp_dir
+        existing = env.get("LD_LIBRARY_PATH")
+        env["LD_LIBRARY_PATH"] = f"{tmp_dir}:{existing}" if existing else tmp_dir
         subprocess.run(["./test", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
 
         # read data and compare against reference
@@ -446,7 +447,8 @@ def test_compile_link_matmul():
 
         # run test case
         env = os.environ.copy()
-        env["LD_LIBRARY_PATH"] = tmp_dir
+        existing = env.get("LD_LIBRARY_PATH")
+        env["LD_LIBRARY_PATH"] = f"{tmp_dir}:{existing}" if existing else tmp_dir
         subprocess.run(["./test", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
 
         # read data and compare against reference
@@ -480,7 +482,8 @@ def test_launcher_has_no_available_kernel():
 
         # run test case
         env = os.environ.copy()
-        env["LD_LIBRARY_PATH"] = tmp_dir
+        existing = env.get("LD_LIBRARY_PATH")
+        env["LD_LIBRARY_PATH"] = f"{tmp_dir}:{existing}" if existing else tmp_dir
         result = subprocess.run(
             ["./test", a_path, b_path, c_path],
             env=env,
@@ -528,7 +531,8 @@ def test_compile_link_autotune_matmul():
             gen_test_bin(tmp_dir, M, N, K, exe=test_name, algo_id=algo_id)
 
             env = os.environ.copy()
-            env["LD_LIBRARY_PATH"] = tmp_dir
+            existing = env.get("LD_LIBRARY_PATH")
+            env["LD_LIBRARY_PATH"] = f"{tmp_dir}:{existing}" if existing else tmp_dir
             subprocess.run(
                 [f"./{test_name}", a_path, b_path, c_path],
                 check=True,
