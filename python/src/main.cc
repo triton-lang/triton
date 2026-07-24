@@ -48,7 +48,11 @@ void init_linear_layout(pybind11::module &&m);
 void init_native_specialize(pybind11::module &m);
 FOR_EACH_P(DECLARE_BACKEND, TRITON_BACKENDS_TUPLE)
 
+#ifdef Py_GIL_DISABLED
+PYBIND11_MODULE(libtriton, m, py::mod_gil_not_used()) {
+#else
 PYBIND11_MODULE(libtriton, m) {
+#endif
   m.doc() = "Python bindings to the C++ Triton API";
   init_triton_stacktrace_hook(m);
   init_triton_env_vars(m);
