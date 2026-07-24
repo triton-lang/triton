@@ -1177,7 +1177,7 @@ class tensor(base_value):
     def store(self, value, mask=None, *, cache_modifier="", eviction_policy="") -> tensor:
         ...
 
-    def atomic_cas(self, cmp, val, sem=None, scope=None) -> tensor:
+    def atomic_cas(self, cmp, val, sem=None, scope=None, mask=None) -> tensor:
         ...
 
     def atomic_xchg(self, val, mask=None, sem=None, scope=None) -> tensor:
@@ -2553,12 +2553,13 @@ def _add_atomic_docstr(name: str, has_cmp: bool = False) -> Callable[[T], T]:
 @_tensor_member_fn
 @builtin
 @_add_atomic_docstr("compare-and-swap", has_cmp=True)
-def atomic_cas(pointer, cmp, val, sem=None, scope=None, _semantic=None):
+def atomic_cas(pointer, cmp, val, sem=None, scope=None, _semantic=None, mask=None):
     cmp = _semantic.to_tensor(cmp)
     val = _semantic.to_tensor(val)
     sem = _unwrap_if_constexpr(sem)
     scope = _unwrap_if_constexpr(scope)
-    return _semantic.atomic_cas(pointer, cmp, val, sem, scope)
+    mask = _unwrap_if_constexpr(mask)
+    return _semantic.atomic_cas(pointer, cmp, val, mask, sem, scope)
 
 
 @_tensor_member_fn

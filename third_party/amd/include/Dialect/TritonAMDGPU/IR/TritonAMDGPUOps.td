@@ -405,14 +405,19 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
 // BufferAtomicCASOp
 //===----------------------------------------------------------------------===//
 def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
+  AttrSizedOperandSegments,
   SameLoadStoreOperandsAndResultEncoding,
   BufferOpInterface,
   TypesMatchWith<"result element type matches the val type", "result", "val", "$_self">,
   TypesMatchWith<"result element type matches the cmp type", "result", "cmp", "$_self">,
   TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
+                 "(cast<BufferAtomicCASOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
   TypesMatchWith<"val and offsets have the same shape", "val", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"val and cmp have the same shape", "val", "cmp", "$_self">,
+  TypesMatchWith<"val and mask have the same shape", "val", "mask", "getI1SameShape($_self)",
+                 "(cast<BufferAtomicCASOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
 ]>{
     let summary = "Atomic CAS op which does compare-exchange to a scalar base pointer and a tensor offset";
     let description = [{
@@ -420,6 +425,7 @@ def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
         scalar base pointer and a tensor of offsets instead of a tensor of pointers.
         Similar to TT_AtomicCASOp: Buffer atomic CAS op loads data at $ptr, and stores $val to $ptr atomically if value at $ptr equals $cmp, with
         the specified memory semantics and scope. Atomic CAS ops return the pre-op value if used, otherwise the value is implicitly dropped.
+        If `mask` is provided, elements with `mask[i] == 0` are dropped (i.e., the atomic is not executed).
         Stride is the distance between the beginning of contiguous memory chunks. When performing a CAS, the `stride` is
         the address difference between the first elements of each row in bytes. Compiler tries to obtain the `stride`
         when it converts to the buffer ops because it is important for optimizing the cache memory access.
@@ -431,12 +437,13 @@ def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
       TT_Tensor:$val,
       Optional<I32>:$stride,
       TT_MemSemanticAttr:$sem,
-      TT_MemSyncScopeAttr:$scope
+      TT_MemSyncScopeAttr:$scope,
+      Optional<TT_BoolTensor>:$mask
     );
     let results = (outs TT_Tensor:$result);
 
     let assemblyFormat = [{
-        $sem `,` $scope `,` $cmp `,` $val `,` $ptr `[` $offsets `]`
+        $sem `,` $scope `,` $cmp `,` $val `,` $ptr `[` $offsets `]` (`,` $mask^)?
         (`stride` `=` $stride^)?
         attr-dict `:` type($result)
     }];

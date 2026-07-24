@@ -2562,7 +2562,7 @@ def test_atomic_cas():
     ptr0 = x0.cast(ttgl.pointer_type(ttgl.int32), bitcast=True).item()
     # CHECK: [[c0:%.*]] = arith.constant 0 : i32
     # CHECK: [[c1:%.*]] = arith.constant 1 : i32
-    # CHECK: {{.*}} = tt.atomic_cas acq_rel, gpu, %{{.*}}, [[c0]], [[c1]] : (!tt.ptr<i32>, i32, i32) -> i32
+    # CHECK: {{.*}} = tt.atomic_cas acq_rel, gpu, %{{.*}}, [[c0]], [[c1]], %{{.*}} : (!tt.ptr<i32>, i32, i32, i1) -> i32
     ttgl.atomic_cas(ptr0, 0, 1)
 
     BLOCK: ttgl.constexpr = 128
@@ -2574,10 +2574,34 @@ def test_atomic_cas():
     new = ttgl.full([BLOCK], 1, ttgl.int32, layout=ttgl.AutoLayout())
     # CHECK: [[old:%.*]] = arith.constant dense<0> : tensor<128xi32, #gluon.auto_encoding>
     # CHECK: [[new:%.*]] = arith.constant dense<1> : tensor<128xi32, #gluon.auto_encoding>
-    # CHECK: {{.*}} = tt.atomic_cas relaxed, gpu, %{{.*}}, [[old]], [[new]] : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
-    # CHECK: {{.*}} = tt.atomic_cas acq_rel, gpu, %{{.*}}, [[old]], [[new]] : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
+    # CHECK: {{.*}} = tt.atomic_cas relaxed, gpu, %{{.*}}, [[old]], [[new]], %{{.*}} : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi1, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
+    # CHECK: {{.*}} = tt.atomic_cas acq_rel, gpu, %{{.*}}, [[old]], [[new]], %{{.*}} : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi1, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
     ttgl.atomic_cas(offset + ptr, old, new, sem="relaxed")
     ttgl.atomic_cas(offset + ptr, old, new)
+
+
+@filecheck_test
+@gluon.jit
+def test_atomic_cas_masks():
+    BLOCK: ttgl.constexpr = 128
+    x = ttgl.full([BLOCK], 0, ttgl.int64)
+    ptr = x.cast(ttgl.pointer_type(ttgl.int32), bitcast=True)
+    offs = ttgl.arange(0, BLOCK)
+    ptrs = ptr + offs
+    old = ttgl.full([BLOCK], 0, ttgl.int32)
+    new = ttgl.full([BLOCK], 1, ttgl.int32)
+    mask = offs >= 0
+    const_mask = ttgl.full([BLOCK], True, ttgl.int1, layout=ttgl.AutoLayout())
+    scalar_mask = True
+
+    # CHECK: [[old:%.*]] = arith.constant dense<0> : tensor<128xi32, #gluon.auto_encoding>
+    # CHECK: [[new:%.*]] = arith.constant dense<1> : tensor<128xi32, #gluon.auto_encoding>
+    # CHECK: {{.*}} = tt.atomic_cas acq_rel, gpu, %{{.*}}, [[old]], [[new]], %{{.*}} : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi1, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
+    # CHECK: {{.*}} = tt.atomic_cas relaxed, gpu, %{{.*}}, [[old]], [[new]], %{{.*}} : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi1, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
+    # CHECK: {{.*}} = tt.atomic_cas acquire, gpu, %{{.*}}, [[old]], [[new]], %{{.*}} : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi32, #gluon.auto_encoding>, tensor<128xi1, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
+    ttgl.atomic_cas(ptrs, old, new, mask=mask)
+    ttgl.atomic_cas(ptrs, old, new, mask=const_mask, sem="relaxed")
+    ttgl.atomic_cas(ptrs, old, new, mask=scalar_mask, sem="acquire")
 
 
 @gluon.jit

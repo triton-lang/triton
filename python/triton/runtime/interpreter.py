@@ -781,11 +781,11 @@ class InterpreterBuilder:
     def create_unsplat(self, arg):
         return TensorHandle(np.full((1, ), arg.data[0], dtype=_get_np_dtype(arg.dtype)), arg.dtype.scalar)
 
-    def create_atomic_cas(self, ptr, cmp, val, sem, scope):
+    def create_atomic_cas(self, ptr, cmp, val, mask, sem, scope):
         if sem not in self.ir_sem_to_interpreter_sem:
             raise ValueError(f"unsupported semantic {sem}")
         sem = self.ir_sem_to_interpreter_sem[sem]
-        return TensorHandle(_interpreter.atomic_cas(ptr.data, cmp.data, val.data, sem), cmp.dtype.scalar)
+        return TensorHandle(_interpreter.atomic_cas(ptr.data, cmp.data, val.data, mask.data, sem), cmp.dtype.scalar)
 
     def create_atomic_poll(self, ptr, expected, timeout_ns, sem, scope):
         start_ns = time.perf_counter_ns()
