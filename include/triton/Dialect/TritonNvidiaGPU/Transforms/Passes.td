@@ -24,15 +24,26 @@
 
 include "mlir/Pass/PassBase.td"
 
-def TritonGPUPlanCTAPass : Pass<"triton-nvidia-gpu-plan-cta", "mlir::ModuleOp"> {
-  let summary = "plan CTA";
+def TritonNvidiaGPUAssignCGALayoutsPass : Pass<"triton-nvidia-gpu-assign-cga-layouts", "mlir::ModuleOp"> {
+  let summary = "Assign CGA layouts";
 
   let description = [{
-    This pass computes and applies "optimized" CTA tilings to DotOp, ReduceOp
-    and StoreLikeOps operations.
+    This pass computes and assigns optimized CGA layouts to anchor ops such as DotOp and ReduceOp
+    operations.
   }];
 
-  let constructor = "mlir::triton::nvidia_gpu::createTritonNvidiaGPUPlanCTAPass()";
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+def TritonNvidiaGPUOptimizeCTALocalityPass : Pass<"triton-nvidia-gpu-optimize-cta-locality", "mlir::ModuleOp"> {
+  let summary = "Optimize CTA locality";
+
+  let description = [{
+    This pass removes cross-CTA layout conversions by making their source and destination the same CGA layout.
+  }];
 
   let dependentDialects = [
     "mlir::triton::gpu::TritonGPUDialect",

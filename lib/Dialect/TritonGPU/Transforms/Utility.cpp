@@ -685,6 +685,22 @@ bool canUseResultEncoding(Operation *op, Attribute targetEncoding) {
              triton::gpu::LocalStoreOp>(op);
 }
 
+bool canBeRematerialized(Operation *op) {
+  if (isa<LoadOp, StoreOp>(op))
+    return !isExpensiveLoadOrStore(op);
+  if (isa<AtomicRMWOp, AtomicCASOp, DotOp>(op))
+    return false;
+  if (auto gather = dyn_cast<GatherOp>(op))
+    return !gather.getEfficientLayout();
+  if (auto reshape = dyn_cast<ReshapeOp>(op))
+    return !reshape.getEfficientLayout();
+
+  if (isa<scf::WhileOp, scf::ConditionOp>(op))
+    return false;
+
+  return true;
+}
+
 scf::ForOp replaceForOpWithNewSignature(
     OpBuilder &rewriter, scf::ForOp loop, ValueRange newIterOperands,
     SmallVectorImpl<std::tuple<Value, Value>> &replacements) {
@@ -1011,6 +1027,33 @@ LogicalResult getConvertBackwardSlice(
     // TODO: add support for WhileOp and other region types.
     return failure();
   }
+  return success();
+}
+
+LogicalResult getRematerializableSlice(
+    OpOperand &root, SetVector<Value> &sliceArg, Attribute rootEncoding,
+    DenseMap<Value, Attribute> &layoutArg,
+    std::function<bool(Operation *)> stopPropagation,
+    std::function<Value(OpOperand &, Attribute)> getExistingConversion) {
+  // Operate on copies of the input, we do not want to modify them unless we
+  // have succeeded.
+  auto slice = sliceArg;
+  auto layout = layoutArg;
+  LogicalResult result =
+      getConvertBackwardSlice(root, slice, rootEncoding, layout,
+                              stopPropagation, getExistingConversion);
+  if (result.failed() || slice.empty())
+    return failure();
+
+  // Check if all the operations in the slice can be rematerialized.
+  for (Value v : slice) {
+    if (Operation *op = v.getDefiningOp()) {
+      if (!canBeRematerialized(op))
+        return failure();
+    }
+  }
+  sliceArg = std::move(slice);
+  layoutArg = std::move(layout);
   return success();
 }
 
