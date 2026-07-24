@@ -167,6 +167,7 @@ def _get_np_dtype(tt_dtype):
         tl.float8e4nv: np.dtype(np.uint8),
         tl.float8e4b8: np.dtype(np.uint8),
         tl.float8e4b15: np.dtype(np.uint8),
+        tl.float8e8m0fnu: np.dtype(np.uint8),
     }
     if isinstance(tt_dtype, tl.block_type):
         if isinstance(tt_dtype.element_ty, tl.pointer_type):

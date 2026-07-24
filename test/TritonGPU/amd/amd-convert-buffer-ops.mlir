@@ -35,6 +35,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
+#blocked_e8m0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // COMMON-LABEL: e8m0_storage_buffer_ops
+  tt.func public @e8m0_storage_buffer_ops(%arg0: !tt.ptr<f8E8M0FNU> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<f8E8M0FNU> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    %0 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32, #blocked_e8m0>
+    %1 = tt.splat %arg0 : !tt.ptr<f8E8M0FNU> -> tensor<8x!tt.ptr<f8E8M0FNU>, #blocked_e8m0>
+    %2 = tt.addptr %1, %0 : tensor<8x!tt.ptr<f8E8M0FNU>, #blocked_e8m0>, tensor<8xi32, #blocked_e8m0>
+    // COMMON: %[[loaded:.*]] = amdg.buffer_load %arg0[%{{.*}}] : tensor<8xf8E8M0FNU, #blocked>
+    %3 = tt.load %2 : tensor<8x!tt.ptr<f8E8M0FNU>, #blocked_e8m0>
+    %4 = tt.splat %arg1 : !tt.ptr<f8E8M0FNU> -> tensor<8x!tt.ptr<f8E8M0FNU>, #blocked_e8m0>
+    %5 = tt.addptr %4, %0 : tensor<8x!tt.ptr<f8E8M0FNU>, #blocked_e8m0>, tensor<8xi32, #blocked_e8m0>
+    // COMMON: amdg.buffer_store %[[loaded]], %arg1[%{{.*}}] : tensor<8xf8E8M0FNU, #blocked>
+    tt.store %5, %3 : tensor<8x!tt.ptr<f8E8M0FNU>, #blocked_e8m0>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
 // COMMON-LABEL: buffer_stride
