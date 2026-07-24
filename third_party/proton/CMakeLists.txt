@@ -18,7 +18,8 @@ if(NOT JSON_INCLUDE_DIR)
 endif()
 
 unset(PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH CACHE)
-set(CMAKE_REQUIRED_INCLUDES "${ROCPROFILER_SDK_INCLUDE_DIR}")
+set(_proton_saved_cmake_required_includes "${CMAKE_REQUIRED_INCLUDES}")
+set(CMAKE_REQUIRED_INCLUDES "${ROCPROFILER_SDK_INCLUDE_DIR};${ROCM_INCLUDE_DIR}")
 check_cxx_source_compiles([=[
   #include <rocprofiler-sdk/fwd.h>
   int main() {
@@ -26,6 +27,7 @@ check_cxx_source_compiles([=[
     return static_cast<int>(op);
   }
 ]=] PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH)
+set(CMAKE_REQUIRED_INCLUDES "${_proton_saved_cmake_required_includes}")
 
 if(PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH)
   message(STATUS "Proton ROCProfiler-SDK HIP graph tracing: enabled")
