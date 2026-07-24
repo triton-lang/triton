@@ -113,3 +113,36 @@ def test_isinf(device, dtype_str):
     BLOCK_SIZE = 256
     triton_isinf[(triton.cdiv(numel, BLOCK_SIZE), )](x, y, numel, BLOCK_SIZE)
     assert torch.equal(y.cpu(), res)
+
+
+@pytest.mark.parametrize("dtype_str", ["float32", "float64"])
+@pytest.mark.parametrize("fn", ["fmax", "fmin"])
+def test_fmax_fmin(device, dtype_str, fn):
+
+    @triton.jit
+    def kernel(x_ptr, y_ptr, out_ptr, fn: tl.constexpr, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(x_ptr + off)
+        y = tl.load(y_ptr + off)
+        tl.store(out_ptr + off, getattr(libdevice, fn)(x, y))
+
+    SIZE = 128
+    dtype = getattr(torch, dtype_str)
+    torch.manual_seed(0)
+    x = torch.randn((SIZE, ), dtype=dtype, device=device)
+    y = torch.randn((SIZE, ), dtype=dtype, device=device)
+    inf, nan = float("inf"), float("nan")
+    # IEEE edge cases: fmax/fmin return the non-NaN operand (NaN only when both
+    # are NaN) and treat +/-inf as ordinary large/small values -- unlike
+    # tl.maximum/tl.minimum, which propagate NaN.
+    edge_x = [nan, 1.0, nan, inf, -inf, 2.0, -inf]
+    edge_y = [3.0, nan, nan, 5.0, 4.0, -inf, inf]
+    for i, (xv, yv) in enumerate(zip(edge_x, edge_y)):
+        x[i], y[i] = xv, yv
+    out = torch.empty_like(x)
+    kernel[(1, )](x, y, out, fn=fn, SIZE=SIZE)
+
+    # Exact fmax/fmin: pick the non-NaN operand, otherwise the larger/smaller.
+    mm = torch.maximum if fn == "fmax" else torch.minimum
+    ref = torch.where(x.isnan(), y, torch.where(y.isnan(), x, mm(x, y)))
+    torch.testing.assert_close(out, ref, equal_nan=True)

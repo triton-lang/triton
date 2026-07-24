@@ -1540,6 +1540,46 @@ def fmod(arg0, arg1, _semantic=None):
 
 
 @core.extern
+def fmax(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("fp32"), core.dtype("fp32")): ("__nv_fmaxf", core.dtype("fp32")),
+            (core.dtype("fp64"), core.dtype("fp64")): ("__nv_fmax", core.dtype("fp64")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def fmin(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("fp32"), core.dtype("fp32")): ("__nv_fminf", core.dtype("fp32")),
+            (core.dtype("fp64"), core.dtype("fp64")): ("__nv_fmin", core.dtype("fp64")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def max(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__nv_max", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__nv_umax", core.dtype("uint32")),
+            (core.dtype("int64"), core.dtype("int64")): ("__nv_llmax", core.dtype("int64")),
+            (core.dtype("uint64"), core.dtype("uint64")): ("__nv_ullmax", core.dtype("uint64")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def min(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__nv_min", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__nv_umin", core.dtype("uint32")),
+            (core.dtype("int64"), core.dtype("int64")): ("__nv_llmin", core.dtype("int64")),
+            (core.dtype("uint64"), core.dtype("uint64")): ("__nv_ullmin", core.dtype("uint64")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
 def remainder(arg0, arg1, _semantic=None):
     return core.extern_elementwise(
         "", "", [arg0, arg1], {

@@ -6,7 +6,7 @@ import torch
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda
+from triton._internal_testing import is_cuda, numpy_random, to_numpy, to_triton
 from triton.language.extra import libdevice
 
 
@@ -264,3 +264,33 @@ def test_fpsan_distinguishes_approximate_libdevice(op, fresh_knobs):
     )
 
     assert not torch.equal(builtin, external)
+
+
+# Integer min/max are NVIDIA-only libdevice builtins (__nv_min/__nv_umin/__nv_llmin/...),
+# so they live here rather than in the cross-backend test_libdevice.py. Data is generated
+# via numpy_random/to_triton because torch lacks randint ranges and maximum/minimum for
+# the unsigned dtypes.
+@pytest.mark.parametrize("dtype_str", ["int32", "int64", "uint32", "uint64"])
+@pytest.mark.parametrize("fn", ["max", "min"])
+def test_int_max_min(fn, dtype_str, device):
+    if not is_cuda():
+        pytest.skip("integer max/min are NVIDIA-only libdevice builtins")
+
+    @triton.jit
+    def kernel(x_ptr, y_ptr, out_ptr, fn: tl.constexpr, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(x_ptr + off)
+        y = tl.load(y_ptr + off)
+        tl.store(out_ptr + off, getattr(libdevice, fn)(x, y))
+
+    SIZE = 128
+    rs = np.random.RandomState(seed=0)
+    x = numpy_random(SIZE, dtype_str=dtype_str, rs=rs)
+    y = numpy_random(SIZE, dtype_str=dtype_str, rs=rs)
+    x_tri = to_triton(x, device=device, dst_type=dtype_str)
+    y_tri = to_triton(y, device=device, dst_type=dtype_str)
+    out_tri = to_triton(np.empty(SIZE, dtype=getattr(np, dtype_str)), device=device, dst_type=dtype_str)
+    kernel[(1, )](x_tri, y_tri, out_tri, fn=fn, SIZE=SIZE)
+
+    ref = np.maximum(x, y) if fn == "max" else np.minimum(x, y)
+    np.testing.assert_array_equal(to_numpy(out_tri), ref)
