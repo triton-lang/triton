@@ -56,6 +56,50 @@ def test_tensor_descriptor_load(dtype_str, num_ctas, M_BLOCK, N_BLOCK, device):
     torch.testing.assert_close(expect, unwrap_tensor(out))
 
 
+@pytest.mark.parametrize("dtype_str,M_BLOCK,N_BLOCK,REDUCE_AXIS", [
+    ("bfloat16", 32, 128, 1),
+    ("bfloat16", 64, 128, 1),
+    ("float32", 32, 64, 1),
+    ("bfloat16", 32, 128, 2),
+])
+def test_tensor_descriptor_load_partial_reduce(dtype_str, M_BLOCK, N_BLOCK, REDUCE_AXIS, device):
+
+    @triton.jit
+    def kernel(out_ptr, desc, M: tl.constexpr, N: tl.constexpr, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr,
+               REDUCE_AXIS: tl.constexpr):
+        pid = tl.program_id(0)
+        num_n_blocks: tl.constexpr = N // N_BLOCK
+        pid_m = pid // num_n_blocks
+        pid_n = pid % num_n_blocks
+        offset_m = pid_m * M_BLOCK
+        offset_n = pid_n * N_BLOCK
+
+        block = desc.load([0, offset_m, offset_n]).to(tl.float32)
+        block_max = tl.max(block, axis=REDUCE_AXIS)
+        if REDUCE_AXIS == 1:
+            offsets_n = offset_n + tl.arange(0, N_BLOCK)
+            tl.store(out_ptr + pid_m * N + offsets_n, tl.reshape(block_max, [N_BLOCK]))
+        else:
+            offsets_m = tl.arange(0, M_BLOCK)
+            tl.store(out_ptr + pid * M_BLOCK + offsets_m, tl.reshape(block_max, [M_BLOCK]))
+
+    M, N = 2 * M_BLOCK, 2 * N_BLOCK
+    inp = torch.randn((1, M, N), dtype=getattr(torch, dtype_str), device=device)
+    desc = TensorDescriptor(inp, inp.shape, inp.stride(), [1, M_BLOCK, N_BLOCK])
+    grid = ((M // M_BLOCK) * (N // N_BLOCK), )
+    out_shape = (M // M_BLOCK, N) if REDUCE_AXIS == 1 else (grid[0], M_BLOCK)
+    out = torch.empty(out_shape, dtype=torch.float32, device=device)
+
+    kernel[grid](out, desc, M, N, M_BLOCK, N_BLOCK, REDUCE_AXIS, num_warps=4)
+
+    if REDUCE_AXIS == 1:
+        expect = inp.reshape(M // M_BLOCK, M_BLOCK, N).float().amax(dim=1)
+    else:
+        expect = inp.reshape(M // M_BLOCK, M_BLOCK, N // N_BLOCK, N_BLOCK)
+        expect = expect.float().amax(dim=3).permute(0, 2, 1).reshape(out_shape)
+    torch.testing.assert_close(expect, out, rtol=0, atol=0)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("num_ctas", [1, 2])

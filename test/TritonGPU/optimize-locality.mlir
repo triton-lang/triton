@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-optimize-thread-locality -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritongpu-optimize-thread-locality -tritongpu-remove-layout-conversions | FileCheck %s --check-prefix=DESC
 
 // CHECK-LABEL: negative_zero_accumulator
 // CHECK: %[[INIT_ARG:.*]] = arith.constant dense<0.000000e+00>
@@ -48,6 +49,139 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
     tt.store %25, %26 : tensor<32x!tt.ptr<f32>, #blocked1>
     tt.return
   }
+}
+
+// -----
+
+#descriptor_vec8 = #ttg.blocked<{sizePerThread = [1, 1, 8], threadsPerWarp = [1, 2, 16], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+
+// DESC: #[[$REDUCE_FRIENDLY:.+]] = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 2, 2], order = [2, 0, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+
+// DESC-LABEL: descriptor_load_partial_reduce
+tt.func @descriptor_load_partial_reduce(%desc: !tt.tensordesc<1x32x128xbf16>, %idx: i32) -> tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #descriptor_vec8}>> {
+  // DESC: %[[LOAD:.+]] = tt.descriptor_load {{.*}} -> tensor<1x32x128xbf16, #[[$REDUCE_FRIENDLY]]>
+  // DESC-NEXT: %[[EXT:.+]] = arith.extf %[[LOAD]] : tensor<1x32x128xbf16, #[[$REDUCE_FRIENDLY]]> to tensor<1x32x128xf32, #[[$REDUCE_FRIENDLY]]>
+  %0 = tt.descriptor_load %desc[%idx, %idx, %idx] : !tt.tensordesc<1x32x128xbf16> -> tensor<1x32x128xbf16, #descriptor_vec8>
+  %1 = arith.extf %0 : tensor<1x32x128xbf16, #descriptor_vec8> to tensor<1x32x128xf32, #descriptor_vec8>
+  // DESC-NEXT: %[[REDUCE:.+]] = "tt.reduce"(%[[EXT]]) <{axis = 1 : i32}>
+  %2 = "tt.reduce"(%1) <{axis = 1 : i32}> ({
+  ^bb0(%lhs: f32, %rhs: f32):
+    %max = arith.maximumf %lhs, %rhs : f32
+    tt.reduce.return %max : f32
+  }) : (tensor<1x32x128xf32, #descriptor_vec8>) -> tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #descriptor_vec8}>>
+  // DESC: ttg.convert_layout %[[REDUCE]] : tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #[[$REDUCE_FRIENDLY]]}>>
+  tt.return %2 : tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #descriptor_vec8}>>
+}
+
+}
+
+// -----
+
+#descriptor_vec8 = #ttg.blocked<{sizePerThread = [1, 1, 8], threadsPerWarp = [1, 2, 16], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+
+// DESC: #[[$LARGE_REDUCTION:.+]] = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 4, 1], order = [2, 0, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+
+// DESC-LABEL: descriptor_load_large_partial_reduce
+tt.func @descriptor_load_large_partial_reduce(%desc: !tt.tensordesc<1x64x128xbf16>, %idx: i32) -> tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #descriptor_vec8}>> {
+  // DESC: %[[LOAD:.+]] = tt.descriptor_load {{.*}} -> tensor<1x64x128xbf16, #[[$LARGE_REDUCTION]]>
+  // DESC-NEXT: %[[EXT_LARGE:.+]] = arith.extf %[[LOAD]] : tensor<1x64x128xbf16, #[[$LARGE_REDUCTION]]> to tensor<1x64x128xf32, #[[$LARGE_REDUCTION]]>
+  %0 = tt.descriptor_load %desc[%idx, %idx, %idx] : !tt.tensordesc<1x64x128xbf16> -> tensor<1x64x128xbf16, #descriptor_vec8>
+  %1 = arith.extf %0 : tensor<1x64x128xbf16, #descriptor_vec8> to tensor<1x64x128xf32, #descriptor_vec8>
+  // DESC-NEXT: "tt.reduce"(%[[EXT_LARGE]]) <{axis = 1 : i32}>
+  %2 = "tt.reduce"(%1) <{axis = 1 : i32}> ({
+  ^bb0(%lhs: f32, %rhs: f32):
+    %max = arith.maximumf %lhs, %rhs : f32
+    tt.reduce.return %max : f32
+  }) : (tensor<1x64x128xf32, #descriptor_vec8>) -> tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #descriptor_vec8}>>
+  tt.return %2 : tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #descriptor_vec8}>>
+}
+
+}
+
+// -----
+
+#descriptor_vec8 = #ttg.blocked<{sizePerThread = [1, 1, 8], threadsPerWarp = [1, 2, 16], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+
+// DESC: #[[$UNCHANGED:.+]] = #ttg.blocked<{sizePerThread = [1, 1, 8], threadsPerWarp = [1, 2, 16], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+
+// DESC-LABEL: descriptor_load_multiple_users
+tt.func @descriptor_load_multiple_users(%desc: !tt.tensordesc<1x32x128xbf16>, %idx: i32) -> (tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #descriptor_vec8}>>, tensor<1x32x128xf32, #descriptor_vec8>) {
+  // DESC: %[[LOAD:.+]] = tt.descriptor_load {{.*}} -> tensor<1x32x128xbf16, #[[$UNCHANGED]]>
+  // DESC-NEXT: %[[EXT_UNCHANGED:.+]] = arith.extf %[[LOAD]] : tensor<1x32x128xbf16, #[[$UNCHANGED]]> to tensor<1x32x128xf32, #[[$UNCHANGED]]>
+  %0 = tt.descriptor_load %desc[%idx, %idx, %idx] : !tt.tensordesc<1x32x128xbf16> -> tensor<1x32x128xbf16, #descriptor_vec8>
+  %1 = arith.extf %0 : tensor<1x32x128xbf16, #descriptor_vec8> to tensor<1x32x128xf32, #descriptor_vec8>
+  // DESC-NEXT: "tt.reduce"(%[[EXT_UNCHANGED]]) <{axis = 1 : i32}>
+  %2 = "tt.reduce"(%1) <{axis = 1 : i32}> ({
+  ^bb0(%lhs: f32, %rhs: f32):
+    %max = arith.maximumf %lhs, %rhs : f32
+    tt.reduce.return %max : f32
+  }) : (tensor<1x32x128xf32, #descriptor_vec8>) -> tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #descriptor_vec8}>>
+  // DESC-NOT: ttg.convert_layout
+  // DESC: tt.return
+  tt.return %2, %1 : tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #descriptor_vec8}>>, tensor<1x32x128xf32, #descriptor_vec8>
+}
+
+}
+
+// -----
+
+#descriptor_vec8 = #ttg.blocked<{sizePerThread = [1, 1, 8], threadsPerWarp = [1, 2, 16], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+
+// DESC: #[[$MULTI_RESULT:.+]] = #ttg.blocked<{sizePerThread = [1, 1, 8], threadsPerWarp = [1, 2, 16], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+
+// DESC-LABEL: descriptor_load_multi_result_reduce
+tt.func @descriptor_load_multi_result_reduce(%desc: !tt.tensordesc<1x32x128xbf16>, %idx: i32) -> (tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #descriptor_vec8}>>, tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #descriptor_vec8}>>) {
+  // DESC: %[[LOAD_MULTI:.+]] = tt.descriptor_load {{.*}} -> tensor<1x32x128xbf16, #[[$MULTI_RESULT]]>
+  // DESC-NEXT: %[[EXT_MULTI:.+]] = arith.extf %[[LOAD_MULTI]] : tensor<1x32x128xbf16, #[[$MULTI_RESULT]]> to tensor<1x32x128xf32, #[[$MULTI_RESULT]]>
+  %0 = tt.descriptor_load %desc[%idx, %idx, %idx] : !tt.tensordesc<1x32x128xbf16> -> tensor<1x32x128xbf16, #descriptor_vec8>
+  %1 = arith.extf %0 : tensor<1x32x128xbf16, #descriptor_vec8> to tensor<1x32x128xf32, #descriptor_vec8>
+  // DESC-NEXT: %{{.*}}:2 = "tt.reduce"(%[[EXT_MULTI]], %[[EXT_MULTI]]) <{axis = 1 : i32}>
+  %2:2 = "tt.reduce"(%1, %1) <{axis = 1 : i32}> ({
+  ^bb0(%lhs0: f32, %lhs1: f32, %rhs0: f32, %rhs1: f32):
+    %max0 = arith.maximumf %lhs0, %rhs0 : f32
+    %max1 = arith.maximumf %lhs1, %rhs1 : f32
+    tt.reduce.return %max0, %max1 : f32, f32
+  }) : (tensor<1x32x128xf32, #descriptor_vec8>, tensor<1x32x128xf32, #descriptor_vec8>) -> (tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #descriptor_vec8}>>, tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #descriptor_vec8}>>)
+  // DESC-NOT: ttg.convert_layout
+  // DESC: tt.return
+  tt.return %2#0, %2#1 : tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #descriptor_vec8}>>, tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #descriptor_vec8}>>
+}
+
+}
+
+// -----
+
+#descriptor_cross_cta = #ttg.blocked<{sizePerThread = [1, 1, 8], threadsPerWarp = [1, 2, 16], warpsPerCTA = [1, 4, 1], order = [2, 1, 0], CGALayout = [[0, 1, 0]]}>
+
+// DESC: #[[$CROSS_CTA:.+]] = #ttg.blocked<{sizePerThread = [1, 1, 8], threadsPerWarp = [1, 2, 16], warpsPerCTA = [1, 4, 1], order = [2, 1, 0], CGALayout = {{\[\[0, 1, 0\]\]}}}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+
+// DESC-LABEL: descriptor_load_cross_cta_reduce
+tt.func @descriptor_load_cross_cta_reduce(%desc: !tt.tensordesc<1x32x128xbf16>, %idx: i32) -> tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #descriptor_cross_cta}>> {
+  // DESC: %[[LOAD:.+]] = tt.descriptor_load {{.*}} -> tensor<1x32x128xbf16, #[[$CROSS_CTA]]>
+  // DESC-NEXT: %[[EXT_CROSS:.+]] = arith.extf %[[LOAD]] : tensor<1x32x128xbf16, #[[$CROSS_CTA]]> to tensor<1x32x128xf32, #[[$CROSS_CTA]]>
+  %0 = tt.descriptor_load %desc[%idx, %idx, %idx] : !tt.tensordesc<1x32x128xbf16> -> tensor<1x32x128xbf16, #descriptor_cross_cta>
+  %1 = arith.extf %0 : tensor<1x32x128xbf16, #descriptor_cross_cta> to tensor<1x32x128xf32, #descriptor_cross_cta>
+  // DESC-NEXT: "tt.reduce"(%[[EXT_CROSS]]) <{axis = 1 : i32}>
+  %2 = "tt.reduce"(%1) <{axis = 1 : i32}> ({
+  ^bb0(%lhs: f32, %rhs: f32):
+    %max = arith.maximumf %lhs, %rhs : f32
+    tt.reduce.return %max : f32
+  }) : (tensor<1x32x128xf32, #descriptor_cross_cta>) -> tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #descriptor_cross_cta}>>
+  // DESC-NOT: ttg.convert_layout
+  // DESC: tt.return
+  tt.return %2 : tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #descriptor_cross_cta}>>
+}
+
 }
 
 // -----
@@ -784,6 +918,34 @@ tt.func @skip_optimize_on_1d_tensor(%arg0: tensor<256xf32, #blocked>, %arg1: ten
   // CHECK: tt.gather {{.*}} [[LAYOUT]]>
   %0 = tt.gather %arg0[%arg1] {axis = 0 : i32} : (tensor<256xf32, #blocked>, tensor<8xi32, #blocked>) -> tensor<8xf32, #blocked>
   tt.return %0 : tensor<8xf32, #blocked>
+}
+
+}
+
+// -----
+
+#descriptor_i32 = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [1, 2, 16], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+
+// DESC: #[[$INT_REDUCTION:.+]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 1, 4], order = [2, 0, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+
+// Integer reductions exercise the integer combiner allowlist and the integer
+// inferDstEncoding path. A 32-bit element keeps a full shared-memory bank even
+// at vector width 1, so the descriptor is still moved to a reduction-friendly
+// layout.
+// DESC-LABEL: descriptor_load_integer_partial_reduce
+tt.func @descriptor_load_integer_partial_reduce(%desc: !tt.tensordesc<1x64x128xi32>, %idx: i32) -> tensor<1x128xi32, #ttg.slice<{dim = 1, parent = #descriptor_i32}>> {
+  // DESC: %[[LOAD:.+]] = tt.descriptor_load {{.*}} -> tensor<1x64x128xi32, #[[$INT_REDUCTION]]>
+  %0 = tt.descriptor_load %desc[%idx, %idx, %idx] : !tt.tensordesc<1x64x128xi32> -> tensor<1x64x128xi32, #descriptor_i32>
+  // DESC-NEXT: %[[REDUCE:.+]] = "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32}>
+  %2 = "tt.reduce"(%0) <{axis = 1 : i32}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %max = arith.maxsi %lhs, %rhs : i32
+    tt.reduce.return %max : i32
+  }) : (tensor<1x64x128xi32, #descriptor_i32>) -> tensor<1x128xi32, #ttg.slice<{dim = 1, parent = #descriptor_i32}>>
+  // DESC: ttg.convert_layout %[[REDUCE]] : tensor<1x128xi32, #ttg.slice<{dim = 1, parent = #[[$INT_REDUCTION]]}>>
+  tt.return %2 : tensor<1x128xi32, #ttg.slice<{dim = 1, parent = #descriptor_i32}>>
 }
 
 }
