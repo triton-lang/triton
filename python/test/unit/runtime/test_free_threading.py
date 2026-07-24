@@ -1,8 +1,10 @@
+import importlib
 import os
 import subprocess
 import sys
 import sysconfig
 import threading
+import types
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -126,3 +128,54 @@ def test_free_threaded_concurrent_dispatch_distinct_streams_and_devices():
     assert sorted(outputs) == [(worker, float((worker + 1) * 4096), float((worker + 2) * 4096))
                                for worker in range(workers)]
     assert not sys._is_gil_enabled()
+
+
+def test_compiled_kernel_waits_for_load_end_before_publishing(monkeypatch):
+    compiler = importlib.import_module("triton.compiler.compiler")
+    entered = threading.Event()
+    release = threading.Event()
+    launcher = object()
+    loaded = []
+
+    def load_binary(name, kernel, shared, device):
+        module, function = object(), object()
+        loaded.append((module, function))
+        return module, function, 8, 0, 1024
+
+    def end_hook(*args):
+        entered.set()
+        assert release.wait(5)
+
+    active = types.SimpleNamespace(
+        utils=types.SimpleNamespace(load_binary=load_binary, unload_module=lambda module: None),
+        launcher_cls=lambda src, metadata: launcher,
+        get_current_device=lambda: 0,
+        get_current_target=lambda: types.SimpleNamespace(warp_size=32),
+    )
+    monkeypatch.setattr(compiler, "driver", types.SimpleNamespace(active=active))
+    monkeypatch.setattr(compiler, "max_shared_mem", lambda device: 65536)
+    monkeypatch.setattr(compiler.knobs.runtime, "kernel_load_start_hook", None)
+    monkeypatch.setattr(compiler.knobs.runtime, "kernel_load_end_hook", end_hook)
+    kernel = compiler.CompiledKernel.__new__(compiler.CompiledKernel)
+    kernel.src = object()
+    kernel.metadata = types.SimpleNamespace(shared=0, tmem_size=None, num_warps=4)
+    kernel.name = "kernel"
+    kernel.metadata_group = {}
+    kernel.hash = "hash"
+    kernel.kernel = b"kernel"
+    kernel.module = None
+    kernel.function = None
+    kernel._run = None
+    kernel._init_lock = threading.Lock()
+    with ThreadPoolExecutor(2) as pool:
+        first = pool.submit(lambda: kernel.run)
+        assert entered.wait(5)
+        second = pool.submit(lambda: kernel.run)
+        try:
+            assert not second.done()
+        finally:
+            release.set()
+        assert first.result(timeout=5) is launcher
+        assert second.result(timeout=5) is launcher
+    assert len(loaded) == 1
+    kernel.module = None

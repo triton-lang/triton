@@ -502,9 +502,9 @@ class CompiledKernel:
         self.n_max_threads = n_max_threads
         self.module = module
         self.function = function
-        self._run = launcher
         if knobs.runtime.kernel_load_end_hook is not None:
             knobs.runtime.kernel_load_end_hook(module, function, self.name, self.metadata_group, self.hash)
+        self._run = launcher
 
     @property
     def run(self):
