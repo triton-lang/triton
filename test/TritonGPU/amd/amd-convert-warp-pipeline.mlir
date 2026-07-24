@@ -371,6 +371,60 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
+// ---- Top-of-loop barrier uses tail priority placement ----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @top_barrier_priority_placement(%n: index, %ptr: !tt.ptr<f32>) {
+    %c0  = arith.constant 0 : index
+    %c1  = arith.constant 1 : index
+    %v0  = arith.constant 0.0 : f32
+    %v1  = arith.constant 1.0 : f32
+
+    scf.for %i = %c0 to %n step %c1 {
+      ttg.barrier local
+
+      scf.execute_region {
+        tt.store %ptr, %v0 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage0", triton.warp_pipeline.priority = 3 : i32}
+
+      scf.execute_region {
+        tt.store %ptr, %v1 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage1", triton.warp_pipeline.priority = 0 : i32}
+
+      scf.yield
+    } {triton.warp_pipeline.pipelined_for}
+
+    tt.return
+  }
+}
+
+// CHECK-LABEL: tt.func @top_barrier_priority_placement
+// First iteration is primed before the loop.
+// CHECK: rocdl.s.setprio 3
+// CHECK-NEXT: scf.for
+// The existing top barrier is wrapped without another setprio at the boundary.
+// CHECK-NEXT: rocdl.sched.barrier
+// CHECK-NEXT: ttg.barrier local
+// CHECK-NEXT: rocdl.sched.barrier
+// CHECK: tt.store
+// CHECK: rocdl.s.setprio 0
+// CHECK: tt.store
+// Later iterations switch back to stage 0 at the loop tail.
+// CHECK-NEXT: rocdl.sched.barrier non_mem_non_sideeffect
+// CHECK-NEXT: rocdl.s.setprio 3
+// CHECK-NEXT: }
+// hasTopBarrier emits a post-loop barrier before reconverging.
+// CHECK: rocdl.sched.barrier
+// CHECK-NEXT: rocdl.s.barrier
+// CHECK-NEXT: rocdl.sched.barrier
+// CHECK-NEXT: rocdl.s.setprio 0
+// CHECK-NEXT: amdg.cond_barrier
+// CHECK: tt.return
+
+// -----
+
 // ---- No priority: no setprio emitted when no stage uses priority ----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
