@@ -5,6 +5,7 @@ import torch
 
 import triton
 import triton.language as tl
+import triton.backends.nvidia.driver as cuda_driver
 from triton.backends.driver import GPUDriver, expand_signature, wrap_handle_tensordesc_impl
 
 
@@ -17,6 +18,18 @@ def test_is_lazy():
     assert isinstance(triton.runtime.driver.active, getattr(triton.backends.driver, "DriverBase"))
     assert isinstance(triton.runtime.driver.default, getattr(triton.backends.driver, "DriverBase"))
     utils = triton.runtime.driver.active.utils  # noqa: F841
+
+
+def test_cuda_driver_is_active_with_nvml(monkeypatch):
+    cuda_calls = []
+    monkeypatch.setattr(cuda_driver, "_device_count_nvml", lambda: 1)
+    monkeypatch.setattr(cuda_driver, "_cuda_driver_is_active", lambda: cuda_calls.append(None) or False)
+
+    with triton.knobs.nvidia.scope():
+        triton.knobs.nvidia.use_nvml_cuda_check = True
+        assert cuda_driver.CudaDriver.is_active() is True
+
+    assert cuda_calls == []
 
 
 def test_profile_scratch_stream_zero_uses_default_stream(monkeypatch):

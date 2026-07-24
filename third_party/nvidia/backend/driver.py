@@ -51,6 +51,115 @@ def library_dirs():
     return [libdevice_dir, *libcuda_dirs()]
 
 
+# Adapted from PyTorch's NVML-based CUDA availability check:
+# https://github.com/pytorch/pytorch/blob/70d99e998b4955e0049d13a98d77ae1b14db1f45/torch/cuda/__init__.py
+def _parse_visible_devices():
+    var = os.getenv("CUDA_VISIBLE_DEVICES")
+    if var is None:
+        return list(range(64))
+
+    def _strtoul(s):
+        if not s:
+            return -1
+        for idx, c in enumerate(s):
+            if not (c.isdigit() or (idx == 0 and c in "+-")):
+                break
+            if idx + 1 == len(s):
+                idx += 1
+        return int(s[:idx]) if idx > 0 else -1
+
+    def parse_list_with_prefix(prefix):
+        rc = []
+        for elem in var.split(","):
+            if elem in rc:
+                return []
+            if not elem.startswith(prefix):
+                break
+            rc.append(elem)
+        return rc
+
+    if var.startswith("GPU-"):
+        return parse_list_with_prefix("GPU-")
+    if var.startswith("MIG-"):
+        return parse_list_with_prefix("MIG-")
+
+    rc = []
+    for elem in var.split(","):
+        x = _strtoul(elem.strip())
+        if x in rc:
+            return []
+        if x < 0:
+            break
+        rc.append(x)
+    return rc
+
+
+def _raw_device_count_nvml():
+    nvml_h = ctypes.CDLL("libnvidia-ml.so.1")
+    if nvml_h.nvmlInit() != 0:
+        return -1
+    count = ctypes.c_int(-1)
+    if nvml_h.nvmlDeviceGetCount_v2(ctypes.byref(count)) != 0:
+        return -1
+    return count.value
+
+
+def _raw_device_uuid_nvml():
+    nvml_h = ctypes.CDLL("libnvidia-ml.so.1")
+    if nvml_h.nvmlInit() != 0:
+        return None
+    count = ctypes.c_int(-1)
+    if nvml_h.nvmlDeviceGetCount_v2(ctypes.byref(count)) != 0:
+        return None
+
+    uuids = []
+    for idx in range(count.value):
+        device = ctypes.c_void_p()
+        if nvml_h.nvmlDeviceGetHandleByIndex_v2(idx, ctypes.byref(device)) != 0:
+            return None
+        buf = ctypes.create_string_buffer(96)
+        if nvml_h.nvmlDeviceGetUUID(device, buf, len(buf)) != 0:
+            return None
+        uuids.append(buf.raw.decode("ascii").strip("\0"))
+    return uuids
+
+
+def _transform_uuid_to_ordinals(candidates, uuids):
+    ordinals = []
+    for candidate in candidates:
+        matches = [idx for idx, uuid in enumerate(uuids) if uuid.startswith(candidate)]
+        if len(matches) != 1:
+            break
+        if matches[0] in ordinals:
+            return []
+        ordinals.append(matches[0])
+    return ordinals
+
+
+def _device_count_nvml():
+    visible_devices = _parse_visible_devices()
+    if not visible_devices:
+        return 0
+    try:
+        if isinstance(visible_devices[0], str):
+            if visible_devices[0].startswith("MIG-"):
+                return -1
+            uuids = _raw_device_uuid_nvml()
+            if uuids is None:
+                return -1
+            visible_devices = _transform_uuid_to_ordinals(visible_devices, uuids)
+        else:
+            raw_count = _raw_device_count_nvml()
+            if raw_count <= 0:
+                return raw_count
+            for idx, value in enumerate(visible_devices):
+                if value >= raw_count:
+                    return idx
+    except (OSError, AttributeError):
+        return -1
+    return len(visible_devices)
+
+
 def _cuda_driver_is_active():
     candidates = ["libcuda.so.1"]
     try:
@@ -386,6 +495,10 @@ class CudaDriver(GPUDriver):
 
     @staticmethod
     def is_active():
+        if knobs.nvidia.use_nvml_cuda_check:
+            count = _device_count_nvml()
+            if count >= 0:
+                return count > 0
         return _cuda_driver_is_active()
 
     def map_python_to_cpp_type(self, ty: str) -> str:
