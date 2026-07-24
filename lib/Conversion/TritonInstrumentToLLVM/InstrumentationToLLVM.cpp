@@ -326,6 +326,38 @@ public:
   }
 };
 
+struct MemoryOffsetToI32OpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalMemoryOffsetToI32Op> {
+public:
+  using ConvertOpToLLVMPattern<
+      tti::ExperimentalMemoryOffsetToI32Op>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalMemoryOffsetToI32Op op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    TritonLLVMOpBuilder b(op.getLoc(), rewriter);
+    auto i32Ty = rewriter.getI32Type();
+    Value base;
+    if (op.getMemType() == tti::MemType::SHARED_MEM) {
+      auto func = op->getParentOfType<FunctionOpInterface>();
+      assert(func && "memory offset must be inside a function");
+      base = b.ptrtoint(i32Ty, LLVM::getStackPointer(rewriter, func));
+    } else {
+      assert(op.getMemType() == tti::MemType::TENSOR_MEM &&
+             "unsupported memory type");
+      Value basePtr =
+          nvgpu::TensorMemoryBaseAddress::create(rewriter, op.getLoc());
+      base = b.ptrtoint(i32Ty, basePtr);
+    }
+
+    Value address = b.add(base, b.i32_val(op.getOffset()));
+    if (op.getMemType() == tti::MemType::SHARED_MEM)
+      address = b.and_(address, b.i32_val(kSharedMemoryObjectMask));
+    rewriter.replaceOp(op, address);
+    return success();
+  }
+};
+
 struct ClusterCTAIdOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalClusterCTAIdOp> {
   ClusterCTAIdOpConversion(const LLVMTypeConverter &converter,
@@ -453,6 +485,7 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
   patterns.add<LockAcquireOpConversion>(typeConverter, targetInfo);
   patterns.add<LockReleaseOpConversion>(typeConverter, targetInfo);
   patterns.add<MemDescToI32OpConversion>(typeConverter);
+  patterns.add<MemoryOffsetToI32OpConversion>(typeConverter);
   patterns.add<ClusterCTAIdOpConversion>(typeConverter, targetInfo);
   patterns.add<LocalGatherOpConversion>(typeConverter, targetInfo);
 }
