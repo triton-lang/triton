@@ -1184,8 +1184,9 @@ operation ::= `ttng.tmem_subslice` $src attr-dict `:` qualified(type($src)) `->`
 
 This operation takes a subslice of a tensor memory allocation and returns a
 new descriptor containing the address and a view of the subslice.
-This is similar to ttg.memdesc_subslice and can slice either dimension of a
-2D tensor memory descriptor, including non-contiguous views within a CTA.
+This is similar to ttg.memdesc_subslice and can slice either physical-layout
+dimension or the leading pipeline dimension of an ordinary descriptor. Scale
+descriptors support their two physical-layout dimensions.
 
 Traits: `AlwaysSpeculatableImplTrait`, `MemDescViewTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 

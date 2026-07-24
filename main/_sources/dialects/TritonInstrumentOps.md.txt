@@ -339,9 +339,54 @@ elements are atomic read-modify-write operations.
 
 
 
+### `tti.experimental_gsan_grid_dependency_wait` (triton::instrument::ExperimentalGSanGridDependencyWaitOp)
+
+_Acquire completed predecessor clocks after a grid dependency wait_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_gsan_grid_dependency_wait` attr-dict
+```
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory, MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+
+
 ### `tti.experimental_gsan_init` (triton::instrument::ExperimentalGSanInitOp)
 
 _Initialize GSan thread_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_gsan_init` $acquireStreamClock attr-dict
+```
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>acquireStreamClock</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+</table>
+
+
+
+### `tti.experimental_gsan_kernel_exit` (triton::instrument::ExperimentalGSanKernelExitOp)
+
+_Publish a completed GSan thread clock to its launch stream_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_gsan_kernel_exit` attr-dict
+```
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
 
 
 
@@ -520,6 +565,43 @@ Effects: `MemoryEffects::Effect{}`
 | Operand | Description |
 | :-----: | ----------- |
 | `memdesc` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | 32-bit signless integer |
+
+
+
+### `tti.experimental_memory_offset_to_i32` (triton::instrument::ExperimentalMemoryOffsetToI32Op)
+
+_Materialize a memory-space offset as an i32 address_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_memory_offset_to_i32` $offset `,` $memType attr-dict
+```
+
+Add a static byte or encoded tensor-memory offset to the current
+function's memory-space base and return the 32-bit address used by ConSan.
+This provides the runtime identity corresponding to a compile-time
+BufferRegion key without materializing a descriptor table.
+
+Traits: `AlwaysSpeculatableImplTrait`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>offset</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>memType</code></td><td>::mlir::triton::instrument::MemTypeAttr</td><td>allowed 32-bit signless integer cases: 0, 1</td></tr>
+</table>
 
 #### Results:
 

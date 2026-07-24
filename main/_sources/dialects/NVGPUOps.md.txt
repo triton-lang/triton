@@ -82,6 +82,26 @@ Effects: `MemoryEffects::Effect{}`
 
 
 
+### `nvg.warp_group_barrier_id` (triton::nvgpu::WarpGroupBarrierIdOp)
+
+_Get the named barrier ID for the current warp group_
+
+Syntax:
+
+```
+operation ::= `nvg.warp_group_barrier_id` attr-dict
+```
+
+Interfaces: `InferTypeOpInterface`
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | 32-bit signless integer |
+
+
+
 ### `nvg.wgmma` (triton::nvgpu::WGMMAOp)
 
 Syntax:

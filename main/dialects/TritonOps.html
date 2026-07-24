@@ -226,6 +226,8 @@
 <li class="toctree-l4"><a class="reference internal" href="#id57">Results:</a></li>
 </ul>
 </li>
+<li class="toctree-l3"><a class="reference internal" href="#tt-grid-dependency-launch-dependents-triton-griddependencylaunchdependentsop"><code class="docutils literal notranslate"><span class="pre">tt.grid_dependency_launch_dependents</span></code> (triton::GridDependencyLaunchDependentsOp)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#tt-grid-dependency-wait-triton-griddependencywaitop"><code class="docutils literal notranslate"><span class="pre">tt.grid_dependency_wait</span></code> (triton::GridDependencyWaitOp)</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#tt-histogram-triton-histogramop"><code class="docutils literal notranslate"><span class="pre">tt.histogram</span></code> (triton::HistogramOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id58">Operands:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id59">Results:</a></li>
@@ -1621,6 +1623,28 @@ changed.</p>
 </tbody>
 </table>
 </section>
+</section>
+<section id="tt-grid-dependency-launch-dependents-triton-griddependencylaunchdependentsop">
+<h2><code class="docutils literal notranslate"><span class="pre">tt.grid_dependency_launch_dependents</span></code> (triton::GridDependencyLaunchDependentsOp)<a class="headerlink" href="#tt-grid-dependency-launch-dependents-triton-griddependencylaunchdependentsop" title="Link to this heading"></a></h2>
+<p><em>Allow dependent grids to begin execution</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.grid_dependency_launch_dependents` attr-dict
+</pre></div>
+</div>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
+</section>
+<section id="tt-grid-dependency-wait-triton-griddependencywaitop">
+<h2><code class="docutils literal notranslate"><span class="pre">tt.grid_dependency_wait</span></code> (triton::GridDependencyWaitOp)<a class="headerlink" href="#tt-grid-dependency-wait-triton-griddependencywaitop" title="Link to this heading"></a></h2>
+<p><em>Wait for prerequisite grids and acquire their memory writes</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.grid_dependency_wait` attr-dict
+</pre></div>
+</div>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory,</span> <span class="pre">MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
 </section>
 <section id="tt-histogram-triton-histogramop">
 <h2><code class="docutils literal notranslate"><span class="pre">tt.histogram</span></code> (triton::HistogramOp)<a class="headerlink" href="#tt-histogram-triton-histogramop" title="Link to this heading"></a></h2>

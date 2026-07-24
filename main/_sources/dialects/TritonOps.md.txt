@@ -992,6 +992,42 @@ Effects: `MemoryEffects::Effect{}`
 
 
 
+### `tt.grid_dependency_launch_dependents` (triton::GridDependencyLaunchDependentsOp)
+
+_Allow dependent grids to begin execution_
+
+Syntax:
+
+```
+operation ::= `tt.grid_dependency_launch_dependents` attr-dict
+```
+
+Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+
+
+### `tt.grid_dependency_wait` (triton::GridDependencyWaitOp)
+
+_Wait for prerequisite grids and acquire their memory writes_
+
+Syntax:
+
+```
+operation ::= `tt.grid_dependency_wait` attr-dict
+```
+
+Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory, MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+
+
 ### `tt.histogram` (triton::HistogramOp)
 
 _Return a histogram of the inputs._
