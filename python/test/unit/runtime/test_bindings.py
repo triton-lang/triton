@@ -32,6 +32,20 @@ def add_kernel(
     tl.store(out_ptr + offsets, output, mask=mask)
 
 
+def test_blocked_layout_metadata():
+    compiled = add_kernel.warmup(
+        torch.float32,
+        torch.float32,
+        1024,
+        torch.float32,
+        _BLOCK_SIZE,
+        grid=(1, ),
+    )
+    assert compiled.metadata.blocked_layouts
+    expected_keys = {"size_per_thread", "threads_per_warp", "warps_per_cta", "order"}
+    assert all(layout.keys() == expected_keys for layout in compiled.metadata.blocked_layouts)
+
+
 def test_module_walk(device):
     """
     Test the MLIR bindings exposed for the out-of-tree walk.

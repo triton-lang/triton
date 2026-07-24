@@ -1,5 +1,6 @@
 #include "ir.h"
 
+#include <algorithm>
 #include <cstring>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/function.h>
@@ -229,6 +230,65 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
         metadata["interval_padding_pairs"] = intervalPaddingPairs;
       }
     }
+    result.append(std::move(metadata));
+  }
+  return result;
+}
+
+void collectBlockedLayouts(
+    Attribute encoding,
+    llvm::SmallVectorImpl<ttg::BlockedEncodingAttr> &blockedLayouts) {
+  if (!encoding)
+    return;
+
+  if (auto blocked = dyn_cast<ttg::BlockedEncodingAttr>(encoding)) {
+    if (std::find(blockedLayouts.begin(), blockedLayouts.end(), blocked) ==
+        blockedLayouts.end())
+      blockedLayouts.push_back(blocked);
+    return;
+  }
+
+  if (auto slice = dyn_cast<ttg::SliceEncodingAttr>(encoding)) {
+    collectBlockedLayouts(slice.getParent(), blockedLayouts);
+    return;
+  }
+
+  if (auto dotOperand = dyn_cast<ttg::DotOperandEncodingAttr>(encoding))
+    collectBlockedLayouts(dotOperand.getParent(), blockedLayouts);
+}
+
+py::list getBlockedLayoutMetadata(ModuleOp &mod) {
+  llvm::SmallVector<ttg::BlockedEncodingAttr, 4> blockedLayouts;
+
+  auto collectType = [&](Type type) {
+    if (auto tensorType = dyn_cast<RankedTensorType>(type))
+      collectBlockedLayouts(tensorType.getEncoding(), blockedLayouts);
+    else if (auto memDescType = dyn_cast<ttg::MemDescType>(type))
+      collectBlockedLayouts(memDescType.getEncoding(), blockedLayouts);
+  };
+
+  mod.walk([&](Operation *op) {
+    for (Type type : op->getOperandTypes())
+      collectType(type);
+    for (Type type : op->getResultTypes())
+      collectType(type);
+    for (Region &region : op->getRegions())
+      for (Block &block : region)
+        for (Type type : block.getArgumentTypes())
+          collectType(type);
+  });
+
+  py::list result;
+  for (auto blocked : blockedLayouts) {
+    py::dict metadata;
+    metadata["size_per_thread"] = std::vector<unsigned>(
+        blocked.getSizePerThread().begin(), blocked.getSizePerThread().end());
+    metadata["threads_per_warp"] = std::vector<unsigned>(
+        blocked.getThreadsPerWarp().begin(), blocked.getThreadsPerWarp().end());
+    metadata["warps_per_cta"] = std::vector<unsigned>(
+        blocked.getWarpsPerCTA().begin(), blocked.getWarpsPerCTA().end());
+    metadata["order"] = std::vector<unsigned>(blocked.getOrder().begin(),
+                                              blocked.getOrder().end());
     result.append(std::move(metadata));
   }
   return result;
@@ -779,6 +839,7 @@ void init_triton_ir(py::module_ &m) {
              return py::int_(ret.getInt());
            })
       .def("get_tensordesc_metadata", getTensorDescMetadata)
+      .def("get_blocked_layout_metadata", getBlockedLayoutMetadata)
       .def("create_location_snapshot",
            [](ModuleOp &self, const std::string &fileName) -> void {
              auto printingFlags = getOpPrintingFlags();
