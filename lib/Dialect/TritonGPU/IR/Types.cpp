@@ -4,9 +4,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h" // required by `Types.cpp.inc`
-#include <numeric>
 
 using namespace mlir;
 using namespace mlir::triton::gpu;
@@ -38,13 +36,16 @@ static LogicalResult verifyNonPow2InvertedLayoutInvariant(
     if (seenNonPow2Dim)
       return emitError()
              << "at most one non-power-of-two dimension is currently "
-                "supported for shared_linear memdesc shapes in shape "
+                "supported for nvmma_shared/shared_linear memdesc shapes in "
+                "shape "
              << blockShape;
     seenNonPow2Dim = true;
 
-    // Project the inverted layout to a single logical-dim -> offset view.
-    // This enforces that the non-pow2 logical-count dimension is tiled by
-    // homogeneous physical blocks.
+    // Project the inverted layout to the non-power-of-two logical dimension and
+    // physical offset. We factor this dimension into a power-of-two inner group
+    // of size C and an implicit outer group coordinate. The checks below verify
+    // that the bases of this outer coordinate select homogeneous, consecutively
+    // ordered physical groups.
     auto dimName = outDims[dim];
     auto dimToOffset = llInv.sublayout({dimName}, {kOffset});
     int64_t m2 = dimToOffset.getInDimSize(dimName);
@@ -53,7 +54,7 @@ static LogicalResult verifyNonPow2InvertedLayoutInvariant(
     unsigned log2C = llvm::Log2_64(c);
     unsigned log2M2 = llvm::Log2_64(m2);
     // From the gcd boundary onward, adjacent bases must double. This means
-    // the layout past the inner C-sized region repeats the same tile.
+    // the layout past the inner C-sized region repeats the same group.
     for (unsigned i = log2C; i + 1 < log2M2; ++i) {
       int32_t curr = dimToOffset.getBasis(dimName, i, kOffset);
       int32_t next = dimToOffset.getBasis(dimName, i + 1, kOffset);
@@ -326,17 +327,17 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
         TMAMode::Tiled);
     for (auto [dim, dimShapes] :
          llvm::enumerate(llvm::zip(blockShape, packedTMABlockShape))) {
-      auto [dimSize, logicalBlockSize] = dimShapes;
-      if (dimSize % logicalBlockSize != 0)
+      auto [dimSize, tmaBlockSize] = dimShapes;
+      if (dimSize % tmaBlockSize != 0)
         return emitError() << "shapePerCTA size " << dimSize
-                           << " must be divisible by its logical block size "
-                           << logicalBlockSize << " (dim " << dim << ")";
-      int64_t numMessages = dimSize / logicalBlockSize;
+                           << " must be divisible by its TMA block size "
+                           << tmaBlockSize << " (dim " << dim << ")";
+      int64_t numMessages = dimSize / tmaBlockSize;
       if (!llvm::isPowerOf2_64(numMessages))
         return emitError() << "number of TMA messages per CTA (" << numMessages
                            << ") must be a power of two (dim " << dim
                            << ", dimSize=" << dimSize
-                           << ", logicalBlockSize=" << logicalBlockSize << ")";
+                           << ", tmaBlockSize=" << tmaBlockSize << ")";
       if (numMessages > 1 && !llvm::isPowerOf2_64(dimSize))
         return emitError()
                << "non-power-of-two dimension " << dimSize

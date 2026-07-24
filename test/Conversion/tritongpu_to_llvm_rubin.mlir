@@ -304,7 +304,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:107"} {
   // CHECK-LABEL: @tc_gen5_mma_lut_nonpow2_b_descriptor_equiv
   // Verify LUT-B descriptor equivalence between padded-allocation and fully
-  // packed memdesc forms. The first instruction pair is the padded-B path.
+  // packed memdesc forms. #shared_b_nonpow2 represents the swizzle-0 MMA operand layout,
+  // where 8x16B core matrices are tiled in the N-major ordering. Thus, descriptor strides
+  // are unaffected by the K extent.
+  // The first instruction pair is the padded-B path.
   // CHECK: llvm.mlir.constant([[$B0C:-?[0-9]+]] : i64) : i64
   // CHECK: llvm.mlir.constant([[$B1C:-?[0-9]+]] : i64) : i64
   // The packed-B path must construct the same two descriptors.
