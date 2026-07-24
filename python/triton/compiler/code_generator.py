@@ -549,20 +549,19 @@ class CodeGenerator(ast.NodeVisitor):
         absent = object()
         saved = {attr: getattr(self, attr).get(target, absent) for attr in ("lscope", "local_defs")}
 
-        try:
-            results = []
-            for item in iter:
-                self.set_value(target, item)
-                # Apply the comprehension's `if` filters (conditions are constexpr).
-                if all(self.visit(cond) for cond in comp.ifs):
-                    results.append(self.visit(node.elt))
-        finally:
-            for attr, old in saved.items():
-                scope = getattr(self, attr)
-                if old is absent:
-                    scope.pop(target, None)
-                else:
-                    scope[target] = old
+        results = []
+        for item in iter:
+            self.set_value(target, item)
+            # Apply the comprehension's `if` filters (conditions are constexpr).
+            if all(self.visit(cond) for cond in comp.ifs):
+                results.append(self.visit(node.elt))
+
+        for attr, old in saved.items():
+            scope = getattr(self, attr)
+            if old is absent:
+                scope.pop(target, None)
+            else:
+                scope[target] = old
         return tl_tuple(results)
 
     # By design, only non-kernel functions can return
