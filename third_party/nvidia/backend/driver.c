@@ -692,7 +692,9 @@ static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
   CUresult driver_version_result = cuDriverGetVersion(&driver_version);
   assert(driver_version_result == CUDA_SUCCESS);
 
-  if (driver_version <= 13010) {
+  // CUDA 13.2/13.3 forward-compat reports 13020/13030 but still needs the
+  // bit-85 workaround for <128KB non-dense TMA descriptors.
+  if (driver_version <= 13030) {
     int max_byte_index = 0;
     for (int i = 0; i < rank; ++i) {
       int bytes_stride = i == 0 ? elemSize : stridesLL[i - 1];
