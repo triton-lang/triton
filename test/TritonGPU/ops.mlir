@@ -526,3 +526,16 @@ module attributes {"ttg.threads-per-warp" = 4 : i32, "ttg.num-warps" = 1 : i32} 
     tt.return %loaded : tensor<4x4xf32, #blocked>
   }
 }
+
+// -----
+
+#mma_assert = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {register = [[0, 1], [2, 0]], warp = [[2, 2], [1, 0]]}, instrShape = [16, 16, 32]}>
+
+module attributes {"ttg.target" = "hip:gfx1260", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @assert_generic_wmma_slice_layout
+  tt.func @assert_generic_wmma_slice_layout(%cond: tensor<64xi1, #ttg.slice<{dim = 1, parent = #mma_assert}>>) {
+    // CHECK: tt.assert
+    tt.assert %cond, "assert generic wmma slice layout" : tensor<64xi1, #ttg.slice<{dim = 1, parent = #mma_assert}>>
+    tt.return
+  }
+}
