@@ -16,6 +16,20 @@ def _run_python(source, *, force_no_gil=True):
 
 
 @pytest.mark.skipif(sysconfig.get_config_var("Py_GIL_DISABLED") != 1, reason="requires a free-threaded Python build")
+def test_free_threaded_import_keeps_gil_disabled():
+    result = _run_python(
+        "import sys\n"
+        "assert not sys._is_gil_enabled()\n"
+        "import triton\n"
+        "from triton.runtime.driver import driver\n"
+        "assert driver.active is not None\n"
+        "assert not sys._is_gil_enabled()\n",
+        force_no_gil=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.skipif(sysconfig.get_config_var("Py_GIL_DISABLED") != 1, reason="requires a free-threaded Python build")
 def test_native_specialize_concurrent_first_use():
     result = _run_python("import gc, threading\n"
                          "from concurrent.futures import ThreadPoolExecutor\n"

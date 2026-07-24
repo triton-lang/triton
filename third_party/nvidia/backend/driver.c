@@ -100,6 +100,27 @@ static bool gpuAssert(CUresult code, const char *file, int line) {
   } while (0)
 
 // Used to check if functions exist in old CUDA driver versions.
+#if PY_VERSION_HEX >= 0x030D0000
+static PyMutex cuda_function_pointer_mutex = {0};
+#define INITIALIZE_FUNCTION_POINTER_IF_NULL(funcPointer, initializerFunction)  \
+  do {                                                                         \
+    if (__atomic_load_n(&(funcPointer), __ATOMIC_ACQUIRE) == NULL) {           \
+      PyMutex_Lock(&cuda_function_pointer_mutex);                              \
+      if (__atomic_load_n(&(funcPointer), __ATOMIC_RELAXED) == NULL) {         \
+        __typeof__(funcPointer) initialized = (initializerFunction)();         \
+        if (initialized != NULL) {                                             \
+          __atomic_store_n(&(funcPointer), initialized, __ATOMIC_RELEASE);     \
+        }                                                                      \
+      }                                                                        \
+      bool initialized =                                                       \
+          __atomic_load_n(&(funcPointer), __ATOMIC_RELAXED) != NULL;           \
+      PyMutex_Unlock(&cuda_function_pointer_mutex);                            \
+      if (!initialized) {                                                      \
+        goto cleanup;                                                          \
+      }                                                                        \
+    }                                                                          \
+  } while (0)
+#else
 #define INITIALIZE_FUNCTION_POINTER_IF_NULL(funcPointer, initializerFunction)  \
   do {                                                                         \
     if ((funcPointer) == NULL) {                                               \
@@ -109,6 +130,7 @@ static bool gpuAssert(CUresult code, const char *file, int line) {
       }                                                                        \
     }                                                                          \
   } while (0)
+#endif
 
 static void ensureCudaContext() {
   CUcontext pctx;
@@ -931,14 +953,10 @@ cleanup:
 static void _launch(int gridX, int gridY, int gridZ, int num_warps,
                     int num_ctas, int launch_cooperative_grid, int launch_pdl,
                     int shared_memory, CUstream stream, CUfunction function,
-                    void **params) {
+                    cuLaunchKernelEx_t cuLaunchKernelExHandle, void **params) {
   if (gridX * gridY * gridZ > 0) {
     // 4 attributes that we can currently pass maximum
     CUlaunchAttribute launchAttr[4];
-    static cuLaunchKernelEx_t cuLaunchKernelExHandle = NULL;
-    if (cuLaunchKernelExHandle == NULL) {
-      cuLaunchKernelExHandle = getLaunchKernelExHandle();
-    }
     CUlaunchConfig config;
     config.gridDimX = gridX * num_ctas;
     config.gridDimY = gridY;
@@ -1458,10 +1476,16 @@ static PyObject *launchKernel(PyObject *self, PyObject *args) {
     goto cleanup;
   }
 
+  static cuLaunchKernelEx_t cuLaunchKernelExHandle = NULL;
+  if (gridX * gridY * gridZ > 0) {
+    INITIALIZE_FUNCTION_POINTER_IF_NULL(cuLaunchKernelExHandle,
+                                        getLaunchKernelExHandle);
+  }
+
   Py_BEGIN_ALLOW_THREADS;
   _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid,
           launch_pdl, shared_memory, (CUstream)_stream, (CUfunction)_function,
-          params);
+          cuLaunchKernelExHandle, params);
   Py_END_ALLOW_THREADS;
   if (PyErr_Occurred()) {
     goto cleanup;
@@ -1531,6 +1555,12 @@ PyMODINIT_FUNC PyInit_cuda_utils(void) {
   if (m == NULL) {
     return NULL;
   }
+#ifdef Py_GIL_DISABLED
+  if (PyUnstable_Module_SetGIL(m, Py_MOD_GIL_NOT_USED) < 0) {
+    Py_DECREF(m);
+    return NULL;
+  }
+#endif
   data_ptr_str = PyUnicode_InternFromString("data_ptr");
   if (data_ptr_str == NULL) {
     return NULL;
