@@ -1401,14 +1401,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   tt.func public @async_tma_copy_global_to_local_nonpow2_split_rejected(%arg0: !tt.tensordesc<32x128x70xf16, #nvmma_nonpow2_split>) {
     %true = arith.constant true
     %c0_i32 = arith.constant 0 : i32
-    // Last dim 70 is non-pow2 and not divisible by its logical block size 64.
-    // expected-error @+1 {{must be divisible by its logical block size}}
+    // Last dim 70 is non-pow2 and not divisible by its TMA block size 64.
+    // expected-error @+1 {{must be divisible by its TMA block size}}
     %0 = ttg.local_alloc : () -> !ttg.memdesc<32x128x70xf16, #nvmma_nonpow2_split, #smem, mutable>
     %1 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared_mbar_nonpow2, #smem, mutable>
     ttng.async_tma_copy_global_to_local %arg0[%c0_i32, %c0_i32, %c0_i32] %0, %1, %true : !tt.tensordesc<32x128x70xf16, #nvmma_nonpow2_split>, !ttg.memdesc<1xi64, #shared_mbar_nonpow2, #smem, mutable> -> !ttg.memdesc<32x128x70xf16, #nvmma_nonpow2_split, #smem, mutable>
     tt.return
   }
 }
+
+// -----
+
+#nvmma_nonpow2_message_grid = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, rank = 3}>
+#smem = #ttg.shared_memory
+// The 128-byte swizzle selects a 64-element TMA block in the contiguous
+// dimension. An extent of 192 would require three TMA messages.
+// expected-error @below {{number of TMA messages per CTA (3) must be a power of two}}
+!invalid_nvmma_nonpow2_message_grid = !ttg.memdesc<32x128x192xf16, #nvmma_nonpow2_message_grid, #smem>
 
 // -----
 

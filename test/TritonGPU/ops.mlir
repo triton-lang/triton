@@ -526,3 +526,17 @@ module attributes {"ttg.threads-per-warp" = 4 : i32, "ttg.num-warps" = 1 : i32} 
     tt.return %loaded : tensor<4x4xf32, #blocked>
   }
 }
+
+// -----
+
+// A 64-element layout capacity may represent an inner K coordinate of size 16
+// and an outer logical count of three. Each outer count selects a complete
+// 16x256 slab; the unused fourth slab is a physical suffix, so the inner layout
+// and the other dimension's strides are unchanged.
+#shared_nonpow2_valid = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [16, 0], [32, 0]]}, alignment = 16>
+#smem = #ttg.shared_memory
+// CHECK-LABEL: @memdesc_shared_linear_nonpow2_complete_tiles
+tt.func @memdesc_shared_linear_nonpow2_complete_tiles(
+    %arg0: !ttg.memdesc<48x256xi8, #shared_nonpow2_valid, #smem>) {
+  tt.return
+}
