@@ -9,3 +9,4 @@ llnl-hatchet
 pandas<3.0
 expecttest
 msgpack
+ml_dtypes
