@@ -15,6 +15,8 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/MathExtras.h"
+#include <numeric>
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
@@ -1561,6 +1563,165 @@ public:
   }
 };
 
+// Non-WMMA/Non-MFMA fallback: rebalance the per-thread tile of an FMA (blocked)
+// dot.
+//
+// This heuristic tries to find the blocked encoding such that the LDS reads
+// are minimized.
+//
+// The idea is to compute the "perimeter" which is M_pt + N_pt (where M_pt
+// and N_pt are the number of elements per thread in the M and N dimensions
+// respectively), and find the minimum perimeter (which esentially minimizes
+// the LDS reads). Let aM/aN be the number of threads along M/N, so that
+// M_pt = M/aM and N_pt = N/aN. The search respects the constraints:
+// - aM and aN are powers of two with aM * aN == warpSize * numWarps (every
+//   thread is used)
+// - M_pt and N_pt must be divisible by the size per thread (the tile divides
+//   the output exactly)
+// - aM factors into threadsPerWarp_M * warpsPerCTA_M, and aN likewise, such
+//   that threadsPerWarp_M * threadsPerWarp_N == warpSize and
+//   warpsPerCTA_M * warpsPerCTA_N == numWarps
+class RebalanceBlockedFMA : public OpRewritePattern<tt::DotOp> {
+public:
+  using OpRewritePattern<tt::DotOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(tt::DotOp dotOp,
+                                PatternRewriter &rewriter) const override {
+    auto ctx = dotOp.getContext();
+    auto oldRetType = cast<RankedTensorType>(dotOp.getResult().getType());
+    auto blocked =
+        dyn_cast_or_null<ttg::BlockedEncodingAttr>(oldRetType.getEncoding());
+    if (!blocked)
+      return rewriter.notifyMatchFailure(
+          dotOp, "result not blocked (handled by MFMA/WMMA)");
+    if (oldRetType.getRank() != 2)
+      return rewriter.notifyMatchFailure(dotOp, "only rank-2 supported");
+
+    SmallVector<unsigned> sizePerThread =
+        llvm::to_vector(blocked.getSizePerThread());
+    SmallVector<unsigned> curTPW = llvm::to_vector(blocked.getThreadsPerWarp());
+    SmallVector<unsigned> curWPC = llvm::to_vector(blocked.getWarpsPerCTA());
+
+    int64_t M = oldRetType.getShape()[0];
+    int64_t N = oldRetType.getShape()[1];
+    unsigned warpSize = curTPW[0] * curTPW[1];
+    unsigned numWarps = curWPC[0] * curWPC[1];
+    unsigned T = warpSize * numWarps;
+
+    if (!llvm::isPowerOf2_32(warpSize) || !llvm::isPowerOf2_32(numWarps))
+      return rewriter.notifyMatchFailure(dotOp, "non-pow2 warp/lane counts");
+
+    // order[0] is the fastest-varying (contiguous) dimension; the whole layout
+    // decision is oriented around it so that lanes and per-thread runs land on
+    // the contiguous dimension for coalesced/vectorized LDS reads.
+    auto order = blocked.getOrder();
+    bool contiguousIsN = order[0] == 1;
+
+    // The actual layout decision.
+    // Pick threads-along-M (aM) and threads-along-N (aN=T/aM) that make the
+    // per-thread tile (M/aM x N/aN) as square as possible. Seed with the
+    // current split so we only switch to a strictly more balanced one.
+    //
+    // Lambda to compute the imbalance metric; how imbalanced the per-thread
+    // tile is. The lower the imbalance, the better.
+    //
+    // The tie-break (the +1 term) only matters when |mpt - npt| is equal for
+    // two splits. We then prefer the per-thread tile to be larger along the
+    // contiguous dimension, since extending the per-thread run along the
+    // fastest-varying dim helps vectorization:
+    // - For order=[1,0] (N contiguous) we prefer mpt >= npt;
+    // - For order=[0,1] (M contiguous) we prefer npt >= mpt.
+    auto imbalance = [&](unsigned aM) -> long {
+      unsigned aN = T / aM;
+      long mpt = M / aM, npt = N / aN;
+      long tieBreak = contiguousIsN ? (npt > mpt ? 1 : 0) : (mpt > npt ? 1 : 0);
+      return std::abs(mpt - npt) * 2 + tieBreak;
+    };
+    unsigned bestAM = curTPW[0] * curWPC[0];
+    long bestImb = imbalance(bestAM);
+    for (unsigned aM = 1; aM <= T; aM <<= 1) {
+      unsigned aN = T / aM;
+      unsigned tileM = sizePerThread[0] * aM;
+      unsigned tileN = sizePerThread[1] * aN;
+      if (tileM == 0 || tileN == 0)
+        continue;
+      if (M % tileM != 0 || N % tileN != 0)
+        continue; // require exact tiling
+      long imb = imbalance(aM);
+      if (imb < bestImb) {
+        bestImb = imb;
+        bestAM = aM;
+      }
+    }
+
+    // We have found the aM/aN that minimizes the imbalance metric. Now split
+    // it into warpsPerCTA_M * threadsPerWarp_M, preferring warps on M. This
+    // maximizes the number of lanes on N which, being the contiguous (fastest)
+    // dimension per order=[1,0], improves read coalescing. Empirically this
+    // matches the best-performing layout for FMA-based dot operations.
+    unsigned aM = bestAM, aN = T / bestAM;
+
+    unsigned wpcM, wpcN, tpwM, tpwN;
+    if (contiguousIsN) {
+      // Lanes on N: maximize warps on M. The largest wpcM that divides both
+      // numWarps (so wpcN is whole) and aM (so tpwM is whole) is their gcd.
+      wpcM = std::gcd(numWarps, aM);
+      wpcN = numWarps / wpcM;
+      tpwM = aM / wpcM;
+      tpwN = warpSize / tpwM;
+    } else {
+      // Lanes on M: same idea, but maximize warps on N instead.
+      wpcN = std::gcd(numWarps, aN);
+      wpcM = numWarps / wpcN;
+      tpwN = aN / wpcN;
+      tpwM = warpSize / tpwN;
+    }
+    if (tpwM * tpwN != warpSize || wpcM * wpcN != numWarps ||
+        tpwM * wpcM != aM || tpwN * wpcN != aN)
+      return rewriter.notifyMatchFailure(dotOp, "factorization mismatch");
+
+    SmallVector<unsigned> newTPW{tpwM, tpwN};
+    SmallVector<unsigned> newWPC{wpcM, wpcN};
+    if (newTPW == curTPW && newWPC == curWPC)
+      return rewriter.notifyMatchFailure(dotOp, "already balanced");
+
+    // We have computed the threads per warp (newTPW) and warps per CTA (newWPC)
+    // that we want to use, now rewrite the dot op to use the new
+    // blocked encoding.
+    auto newBlocked = ttg::BlockedEncodingAttr::get(ctx, sizePerThread, newTPW,
+                                                    newWPC, blocked.getOrder(),
+                                                    blocked.getCGALayout());
+
+    Value a = dotOp.getA(), b = dotOp.getB(), c = dotOp.getC();
+    auto aTy = cast<RankedTensorType>(a.getType());
+    auto bTy = cast<RankedTensorType>(b.getType());
+    auto cTy = cast<RankedTensorType>(c.getType());
+    auto aEnc = cast<ttg::DotOperandEncodingAttr>(aTy.getEncoding());
+    auto bEnc = cast<ttg::DotOperandEncodingAttr>(bTy.getEncoding());
+    auto newAEnc = ttg::DotOperandEncodingAttr::get(
+        ctx, aEnc.getOpIdx(), newBlocked, aEnc.getKWidth());
+    auto newBEnc = ttg::DotOperandEncodingAttr::get(
+        ctx, bEnc.getOpIdx(), newBlocked, bEnc.getKWidth());
+
+    Value newA =
+        convertAndCastTensor(rewriter, a, newAEnc, aTy.getElementType());
+    Value newB =
+        convertAndCastTensor(rewriter, b, newBEnc, bTy.getElementType());
+    Value newC =
+        convertAndCastTensor(rewriter, c, newBlocked, cTy.getElementType());
+
+    auto newRetType = RankedTensorType::get(
+        oldRetType.getShape(), oldRetType.getElementType(), newBlocked);
+    auto newDot = tt::DotOp::create(rewriter, dotOp.getLoc(), newRetType, newA,
+                                    newB, newC, dotOp.getInputPrecision(),
+                                    dotOp.getMaxNumImpreciseAcc());
+    Value res = convertAndCastTensor(rewriter, newDot, oldRetType.getEncoding(),
+                                     oldRetType.getElementType());
+    rewriter.replaceOp(dotOp, res);
+    return success();
+  }
+};
+
 class AccelerateBlocked : public OpRewritePattern<DotOp> {
   TargetFeatures targetFeatures;
 
@@ -1786,6 +1947,7 @@ struct TritonAMDGPUAccelerateMatmulPass
       mfmaPatterns.add<::BlockedToWMMA>(context, wmmaVersion,
                                         matrixInstructionSize,
                                         /*benefit=*/2);
+      mfmaPatterns.add<::RebalanceBlockedFMA>(context, /*benefit=*/1);
       break;
     default:
       break;
