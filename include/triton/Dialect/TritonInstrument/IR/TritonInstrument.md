@@ -3,8 +3,9 @@
 ## Overview
 
 ConSan instruments Triton IR with runtime checks for illegal concurrent access
-to shared memory and tensor memory. The pass tracks a per-buffer frontier of
-visible reads and writes, models mbarrier synchronization, and models
+to shared memory and tensor memory. The pass tracks visible read and write
+frontiers over analysis-selected buffer state lanes, models mbarrier
+synchronization, and models
 commit-count synchronization for asynchronous operations such as `cp.async`,
 WGMMA, TMA store, and AMD TDM copies.
 
@@ -15,10 +16,10 @@ implementation:
 - `hip:*` uses the AMD hooks.
 
 ConSan currently supports one public entry point in the module. It uses
-BufferRegion analysis to collect shared-memory buffers, tensor-memory buffers,
-and barrier allocations, then creates auxiliary state in distributed tensors and
-shared-cluster global scratch memory. Most scratch state is CTA-qualified so
-cluster and multicast effects can be modeled explicitly.
+BufferRegion analysis to collect exact shared-memory and tensor-memory address
+sets plus barrier allocations, then creates auxiliary state in distributed
+tensors and shared-cluster global scratch memory. Most scratch state is
+CTA-qualified so cluster and multicast effects can be modeled explicitly.
 
 ## Visibility Model
 
@@ -67,10 +68,11 @@ CTA-qualified axis has one row, so the usual per-buffer and per-barrier rules
 apply unchanged.
 
 For multiCTA kernels, each CTA is modeled as its own set of logical threads.
-Buffer and barrier descriptors stay CTA-agnostic, while shadow state records the
-CTA whose buffer row, barrier row, logical thread, or visibility mask a fact
-belongs to. This keeps the single-CTA visibility rules intact and adds only the
-question of which CTA rows an operation reads, writes, or synchronizes.
+Compile-time buffer masks and runtime barrier descriptors stay CTA-agnostic,
+while shadow state records the CTA whose buffer-state row, barrier row, logical
+thread, or visibility mask a fact belongs to. This keeps the single-CTA
+visibility rules intact and adds only the question of which CTA rows an
+operation reads, writes, or synchronizes.
 
 A multicast-layout barrier has one live barrier row per multicast group, owned
 by the group's lead CTA. Every CTA in the group may `arrive` or `expect` on that
@@ -87,13 +89,25 @@ for shared memory and tensor memory when those memory types are present.
 
 At a high level, the pass maintains:
 
-- Buffer and barrier descriptors discovered by BufferRegion analysis.
-- Read and write visibility frontiers for each tracked buffer.
-- Optional generic-to-async proxy-fence frontiers for shared-memory buffers.
+- Exact compile-time buffer regions and runtime barrier descriptors discovered
+  by BufferRegion analysis.
+- A compact state-lane plan and read/write visibility frontiers for those
+  lanes.
+- Optional generic-to-async proxy-fence frontiers for shared-memory lanes.
 - Barrier lifecycle, waiting, and barrier-to-buffer tracking state.
 - Outstanding commit counters for commit-count-ordered asynchronous flows.
-- Optional alias metadata when tracked buffer regions overlap.
 - A shared-cluster lock that serializes instrumentation updates.
+
+Shared-memory regions are byte address sets. Tensor-memory regions use encoded
+32-bit-word addresses `(row << 16) | column`. BufferRegion analysis computes
+intersection and containment exactly from these sets. For each
+overlap-connected component, it creates one lane per unique physical
+region-membership atom. Addresses with the same region membership share a lane,
+which is the minimal exact representation for mask-based state updates. Each
+access lowers to constant update, hazard-check, and completion masks over that
+lane space. Single-candidate accesses need no runtime buffer lookup; genuinely
+dynamic memdesc values select among compile-time masks by comparing their
+runtime base.
 
 Most runtime state is CTA-qualified so cluster, multicast, and cross-CTA effects
 can be represented directly. Scratch state is zero-initialized once before the
@@ -112,11 +126,11 @@ write effect, ConSan checks both write visibility and read visibility: the
 writing thread must see the latest write frontier and all prior reads for the
 selected buffer.
 
-The runtime checks account for aliasing and CTA recipients. A check against one
-buffer is expanded through the alias metadata when BufferRegion analysis found
-overlapping tracked regions, and multi-CTA operations only inspect the CTA rows
-that the operation can affect. Aliasing remains intra-CTA: overlapping
-descriptors may alias within one CTA row, but not across different CTA rows.
+The runtime checks account for aliasing and CTA recipients. Each access's
+analysis-derived check mask already includes every overlapping state lane, and
+multi-CTA operations inspect only the CTA rows that the operation can affect.
+Aliasing remains intra-CTA: overlapping physical address sets may alias within
+one CTA row, but not across different CTA rows.
 
 After a barrier-tracked read, ConSan records that the current peer thread mask
 can see that read. After a barrier-tracked write, ConSan records the current
@@ -152,6 +166,12 @@ places that ordinary read visibility is transported:
 - A frontier-tracked mbarrier arrive copies the issuing base thread's current
   proxy frontier into the barrier tracking row. The local copy remains live, so
   an arrive does not make a later async access by the arriving thread legal.
+- An async-proxy write that signals an mbarrier snapshots the issuing base
+  thread's frontier at launch time, after its proxy-ordering check, but only for
+  physical membership atoms in the write destination. This lets the completion
+  wait transport a fence immediately preceding a TMA load without publishing
+  bytes outside its destination, including when the destination only partially
+  overlaps another logical view.
 - A successful mbarrier wait merges the selected barrier row into the waiting
   base thread's row. A fence before the wait cannot cover accesses learned only
   by that wait; a fence after the wait can.
@@ -164,12 +184,11 @@ places that ordinary read visibility is transported:
   partition base-thread rows.
 
 Before an async-proxy shared-memory effect, ConSan checks only the issuing base
-thread's row, restricted to the effect-recipient CTA rows and expanded through
-the shared-memory alias matrix. The access is legal when every visible generic
-source bit has corresponding fence coverage. This current-thread check is what
-allows a producer to fence before publishing through an mbarrier, or a consumer
-to wait and then fence, without treating a fence in an unrelated thread as
-sufficient.
+thread's row, restricted to the effect-recipient CTA rows and the access's exact
+overlap mask. The access is legal when every visible generic source bit has
+corresponding fence coverage. This current-thread check is what allows a
+producer to fence before publishing through an mbarrier, or a consumer to wait
+and then fence, without treating a fence in an unrelated thread as sufficient.
 
 When ConSan initializes an otherwise uninitialized shared allocation with a
 poison pattern, it emits a CTA-scoped async-shared fence after the poison store
@@ -289,11 +308,12 @@ pending-count threshold and transfers the corresponding read and/or write
 visibility to the waiting thread's peer mask.
 
 Before shared-memory reads and writes, ConSan checks target-defined outstanding
-commit kinds. The check inspects all relevant CTA/buffer rows, expands aliases
-when necessary, and can exclude the caller's own base-thread column for ordered
-commit kinds. That exclusion is used by targets whose operations complete in
-issue order within one ConSan logical partition, avoiding false positives for
-same-partition ordering while still checking cross-partition races.
+commit kinds. The check inspects all CTA/state-lane rows selected by the
+access's exact overlap mask and can exclude the caller's own base-thread column
+for ordered commit kinds. That exclusion is used by targets whose operations
+complete in issue order within one ConSan logical partition, avoiding false
+positives for same-partition ordering while still checking cross-partition
+races.
 
 ## Target Coverage
 
@@ -312,6 +332,11 @@ The common hook implementation covers these TritonGPU operations:
   and atomic scatter RMW conservatively cover their full destination
   descriptors because their indices are runtime values.
 - `ttg.local_alloc` with a source: barrier-tracked shared-memory write.
+- Any operation with allocator-provided operation-local shared scratch: a
+  synchronous generic-proxy write over its allocated byte interval. Forced
+  warp-shuffle conversions publish no scratch metadata because allocation
+  reserves no scratch for them; convert, reduce, and scratch-backed atomic
+  broadcasts use CTA-aware routing.
 
 These shared-memory effects are generic-proxy accesses for the proxy-ordering
 model.
