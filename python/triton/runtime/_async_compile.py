@@ -8,10 +8,17 @@ active_mode: ContextVar[Optional[AsyncCompileMode]] = ContextVar("async_compile_
 
 class FutureKernel:
 
-    def __init__(self, finalize_compile: Callable, future: Future):
-        self.finalize_compile = finalize_compile
+    def __init__(self, future: Future):
+        # Several warmups can share one pending compile by cache key. Keep
+        # per-waiter callbacks so every JIT cache entry is finalized or cleaned.
+        self.finalize_compile = []
+        self.cleanup_compile = []
         self.kernel = None
         self.future = future
+
+    def add_callbacks(self, finalize_compile: Callable, cleanup_compile: Callable):
+        self.finalize_compile.append(finalize_compile)
+        self.cleanup_compile.append(cleanup_compile)
 
     def result(self, ignore_errors: bool = False):
         if self.kernel is not None:
@@ -20,11 +27,20 @@ class FutureKernel:
         try:
             kernel = self.future.result()
         except Exception:
+            for cleanup_compile in self.cleanup_compile:
+                cleanup_compile(self)
+            self.future = None
+            self.finalize_compile = []
+            self.cleanup_compile = []
             if ignore_errors:
                 return
             else:
                 raise
-        self.finalize_compile(kernel)
+        for finalize_compile in self.finalize_compile:
+            finalize_compile(kernel)
+        self.future = None
+        self.finalize_compile = []
+        self.cleanup_compile = []
         self.kernel = kernel
         return kernel
 
@@ -42,15 +58,17 @@ class AsyncCompileMode:
         self.raw_futures = []
         self.future_kernels = {}
 
-    def submit(self, key, compile_fn, finalize_fn):
+    def submit(self, key, compile_fn, finalize_fn, cleanup_fn):
         future = self.future_kernels.get(key)
         if future is not None:
+            future.add_callbacks(finalize_fn, cleanup_fn)
             return future
 
         future = self.executor.submit(compile_fn)
         future._key = key
         self.raw_futures.append(future)
-        future_kernel = FutureKernel(finalize_fn, future)
+        future_kernel = FutureKernel(future)
+        future_kernel.add_callbacks(finalize_fn, cleanup_fn)
         self.future_kernels[key] = future_kernel
         return future_kernel
 
@@ -63,5 +81,11 @@ class AsyncCompileMode:
     def __exit__(self, exc_type, exc_value, traceback):
         active_mode.set(None)
         # Finalize any outstanding compiles
-        for future in as_completed(self.raw_futures):
-            self.future_kernels[future._key].result(self.ignore_errors)
+        try:
+            for future in as_completed(self.raw_futures):
+                self.future_kernels[future._key].result(self.ignore_errors)
+        finally:
+            # Completed futures can still point back to compile frames so need
+            # to drop them to avoid resource leakage.
+            self.raw_futures = []
+            self.future_kernels = {}

@@ -897,7 +897,13 @@ class JITFunction(JITCallable, KernelInterface[T]):
                 self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, target, device, constexprs,
                                 options, [attrs], warmup)
 
-            kernel = async_mode.submit(cache_key, async_compile, finalize_compile)
+            def cleanup_compile(future_kernel):
+                # On failure, remove the unresolved async placeholder from cache to avoid the failed
+                # Future's exception traceback holding and leaking compiler locals.
+                if kernel_cache.get(key) is future_kernel:
+                    del kernel_cache[key]
+
+            kernel = async_mode.submit(cache_key, async_compile, finalize_compile, cleanup_compile)
             kernel_cache[key] = kernel
         else:
             kernel = self.compile(src, target=target, options=options.__dict__)
