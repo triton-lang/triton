@@ -41,9 +41,18 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
       : dataflow::IntegerRangeAnalysis(solver), assumptions(assumptions),
         domInfo(dominanceInfo), assumeNoArithOverflow(assumeNoArithOverflow_) {}
 
-  /// Set the maximum PID value for a given axis. When set, GetProgramIdOp
-  /// for that axis will use [0, maxPID] instead of the default range.
+  /// Set the maximum PID value for a given axis (global). When set,
+  /// GetProgramIdOp for that axis will use [0, maxPID] instead of the default
+  /// range. Per-function bounds (below) take precedence over global bounds.
   void setPidBound(int axis, int64_t maxPID) { pidBounds[axis] = maxPID; }
+
+  /// Set the maximum PID value for a given axis within a specific function.
+  /// Per-function bounds take precedence over global bounds set via
+  /// setPidBound(axis, maxPID). This is needed when a module contains multiple
+  /// functions with different PID ranges on the same axis.
+  void setPidBound(Operation *funcOp, int axis, int64_t maxPID) {
+    funcPidBounds[funcOp][axis] = maxPID;
+  }
 
   void setToEntryState(dataflow::IntegerValueRangeLattice *lattice) override;
 
@@ -163,9 +172,14 @@ private:
   DominanceInfo *domInfo = nullptr;
   bool assumeNoArithOverflow = false;
 
-  /// Optional per-axis PID bounds. When set via setPidBound(), these override
-  /// the default kDefaultMaxPrograms for GetProgramIdOp on the given axis.
+  /// Optional global per-axis PID bounds. When set via setPidBound(axis, max),
+  /// these override the default kDefaultMaxPrograms for GetProgramIdOp.
   llvm::SmallDenseMap<int, int64_t> pidBounds;
+
+  /// Optional per-function per-axis PID bounds. When set via
+  /// setPidBound(funcOp, axis, max), these take precedence over global
+  /// pidBounds for GetProgramIdOp ops inside that function.
+  llvm::DenseMap<Operation *, llvm::SmallDenseMap<int, int64_t>> funcPidBounds;
 };
 
 std::optional<SmallVector<std::optional<ConstantIntRanges>>>
