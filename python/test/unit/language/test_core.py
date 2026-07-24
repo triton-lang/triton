@@ -6522,6 +6522,27 @@ def test_static_range(device):
 
 
 @pytest.mark.interpreter
+def test_tl_range_runtime_step(device):
+    # A runtime (non-constexpr) negative step must iterate downward like Python
+    # range / the interpreter, instead of silently running zero iterations. The
+    # empty cases must also match Python range. See issue #10950.
+    @triton.jit
+    def sum_kernel(X, Z, start, stop, step):
+        acc = 0.0
+        for i in tl.range(start, stop, step):
+            acc += tl.load(X + i)
+        tl.store(Z, acc)
+
+    N = 128
+    x = torch.arange(0, N, dtype=torch.float32, device=device)  # x[i] == i
+    for start, stop, step in [(88, -1, -8), (0, 89, 8), (5, -1, -1), (10, 5, 1), (5, 10, -1)]:
+        out = torch.zeros(1, dtype=torch.float32, device=device)
+        sum_kernel[(1, )](x, out, start, stop, step)
+        expect = float(sum(range(start, stop, step)))
+        assert out.item() == expect, (start, stop, step, out.item(), expect)
+
+
+@pytest.mark.interpreter
 def test_tl_range_num_stages(device):
     if is_hip():
         pytest.skip("test_tl_range is not supported in HIP")

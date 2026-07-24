@@ -1292,6 +1292,9 @@ class CodeGenerator(ast.NodeVisitor):
             step = constexpr(-step.value)
             negative_step = True
             lb, ub = ub, lb
+        # A runtime (non-constexpr) step may be negative at runtime, which we
+        # cannot detect here; normalize such loops below so any step sign works.
+        step_is_constexpr = _is_constexpr(step)
         lb = self.semantic.to_tensor(lb)
         ub = self.semantic.to_tensor(ub)
         step = self.semantic.to_tensor(step)
@@ -1316,6 +1319,23 @@ class CodeGenerator(ast.NodeVisitor):
         lb = self.builder.create_int_cast(lb, iv_ir_type, iv_is_signed)
         ub = self.builder.create_int_cast(ub, iv_ir_type, iv_is_signed)
         step = self.builder.create_int_cast(step, iv_ir_type, iv_is_signed)
+        # scf.for only counts upward, so a runtime step that is negative would
+        # silently run zero iterations. For a runtime step of unknown sign,
+        # iterate over a non-negative trip count and reconstruct the induction
+        # variable as `lb + k * step`, matching Python range / the interpreter.
+        for_lb, for_ub, for_step = lb, ub, step
+        if not step_is_constexpr:
+
+            def _iv_const(v):
+                h = self.semantic.to_tensor(constexpr(v)).handle
+                return self.builder.create_int_cast(h, iv_ir_type, iv_is_signed)
+
+            zero, one = _iv_const(0), _iv_const(1)
+            sign = self.builder.create_select(self.builder.create_icmpSGT(step, zero), one, _iv_const(-1))
+            # trip_count = max(0, (ub - lb + step - sign) // step)
+            numer = self.builder.create_sub(self.builder.create_add(self.builder.create_sub(ub, lb), step), sign)
+            trip_count = self.builder.create_maxsi(self.builder.create_sdiv(numer, step), zero)
+            for_lb, for_ub, for_step = zero, trip_count, one
         # Create placeholder for the loop induction variable
         iv_placeholder = self.builder.create_poison(iv_ir_type)
         self.set_value(node.target.id, language.core.tensor(iv_placeholder, iv_type))
@@ -1328,7 +1348,7 @@ class CodeGenerator(ast.NodeVisitor):
 
             # create ForOp
             self._set_insertion_point_and_loc(ip, last_loc)
-            for_op = self.builder.create_for_op(lb, ub, step, init_handles)
+            for_op = self.builder.create_for_op(for_lb, for_ub, for_step, init_handles)
             if _unwrap_if_constexpr(num_stages) is not None:
                 for_op.set_attr("tt.num_stages", self.builder.get_int32_attr(num_stages))
             if _unwrap_if_constexpr(loop_unroll_factor) is not None:
@@ -1363,7 +1383,10 @@ class CodeGenerator(ast.NodeVisitor):
             # update induction variable with actual value, and replace all uses
             self.builder.set_insertion_point_to_start(for_op_body)
             iv = for_op.get_induction_var()
-            if negative_step:
+            if not step_is_constexpr:
+                # Reconstruct the user's induction variable: iv = lb + k * step.
+                iv = self.builder.create_add(lb, self.builder.create_mul(iv, step))
+            elif negative_step:
                 iv = self.builder.create_sub(ub, iv)
                 iv = self.builder.create_add(iv, lb)
             iv_placeholder.replace_all_uses_with(iv)
