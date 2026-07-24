@@ -1162,10 +1162,60 @@ def test_fdiv_ieee_rounding(device):
 # ----------------
 
 
+@triton.jit
+def integer_abs_mask(m, n):
+    """Create a two-dimensional neighborhood mask from flattened indices."""
+    center_row = tl.maximum(tl.minimum(m // 128, 121), 6)
+    center_col = tl.maximum(tl.minimum(m % 128, 121), 6)
+    row_distance = tl.abs(center_row - n // 128)
+    col_distance = tl.abs(center_col - n % 128)
+    return tl.maximum(row_distance, col_distance) <= 6
+
+
+@triton.jit
+def integer_abs_ptxas_kernel(q_ptr, k_ptr, out_ptr):
+    """Keep a TCGen5 dot live while reducing an integer neighborhood mask."""
+    block_m: tl.constexpr = 128
+    block_n: tl.constexpr = 64
+    head_dim: tl.constexpr = 64
+    m_offset = tl.arange(0, block_m)[:, None]
+    m = 89 * 128 + m_offset
+    d = tl.arange(0, head_dim)[None, :]
+    q = tl.load(q_ptr + m_offset * head_dim + d)
+    count = tl.zeros([block_m], tl.float32)
+    dot_sum = tl.zeros([block_m], tl.float32)
+    n = 83 * 128 + tl.arange(0, block_n)[None, :]
+    kv_offset = 0
+    for _ in range(26):
+        n_offset = tl.arange(0, block_n)[:, None]
+        k = tl.load(k_ptr + (kv_offset + n_offset) * head_dim + d)
+        qk = tl.dot(q, tl.trans(k), input_precision="ieee")
+        count += tl.sum(integer_abs_mask(m, n).to(tl.float32), 1)
+        dot_sum += tl.sum(qk, 1)
+        n += block_n
+        kv_offset += block_n
+    tl.store(out_ptr + tl.arange(0, block_m), count + dot_sum)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x", [(dtype_x) for dtype_x in dtypes_with_bfloat16])
 def test_abs(dtype_x, device):
     _test_unary(dtype_x, 'tl.abs(x)', 'np.abs(x) ', device=device)
+
+
+@pytest.mark.skipif(
+    not is_cuda() or torch.cuda.get_device_capability() != (10, 0),
+    reason="Requires SM100",
+)
+def test_integer_abs_ptxas_fusion(device):
+    """Check that optimized ptxas preserves both operands of integer abs."""
+    q = torch.zeros((128, 64), device=device, dtype=torch.float16)
+    k = torch.zeros((26 * 64, 64), device=device, dtype=torch.float16)
+    out = torch.empty(128, device=device)
+
+    integer_abs_ptxas_kernel[(1, )](q, k, out, num_warps=4, num_stages=3)
+
+    torch.testing.assert_close(out, torch.full_like(out, 13 * 13))
 
 
 @pytest.mark.interpreter

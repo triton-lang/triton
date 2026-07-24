@@ -496,6 +496,15 @@ class CUDABackend(BaseBackend):
         ptx_version = f'{ptx_version//10}.{ptx_version%10}'
         ret = re.sub(r'\.version \d+\.\d+', f'.version {ptx_version}', ret, flags=re.MULTILINE)
         ret = re.sub(r'\.target sm_\d+', f'.target sm_{capability}', ret, flags=re.MULTILINE)
+        if capability >= 100:
+            # Avoid ptxas miscompiling max(x, -x) when fusing it into VIMNMX3.
+            ret = re.sub(
+                (r"^([ \t]*)neg\.s32[ \t]+(%r\d+),[ \t]*(%r\d+);[ \t]*\n"
+                 r"[ \t]*max\.s32[ \t]+(%r\d+),[ \t]*\3,[ \t]*\2;"),
+                r"\1neg.s32 \2, \3;\n\1abs.s32 \4, \3;",
+                ret,
+                flags=re.MULTILINE,
+            )
         if not knobs.compilation.dump_ir_extract_di_local_variables:
             # Remove the debug flag that prevents ptxas from optimizing the code
             # Note: if this flag is removed, the source var name and type info will be lost when ptx was compiled into cubin
