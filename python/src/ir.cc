@@ -2096,7 +2096,11 @@ PyObject *py_getenv(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     PyErr_SetString(PyExc_TypeError, "name must be a string");
     return NULL;
   }
-  char *env_val = getenv(PyUnicode_AsUTF8(name));
+  Py_ssize_t name_size;
+  const char *name_cstr = PyUnicode_AsUTF8AndSize(name, &name_size);
+  if (!name_cstr)
+    return NULL;
+  char *env_val = getenv(name_cstr);
   if (!env_val) {
     Py_INCREF(default_val);
     return default_val;
@@ -2116,7 +2120,11 @@ PyObject *py_getenv_bool(PyObject *self, PyObject *const *args,
     PyErr_SetString(PyExc_TypeError, "name must be a string");
     return NULL;
   }
-  char *env_val = getenv(PyUnicode_AsUTF8(name));
+  Py_ssize_t name_size;
+  const char *name_cstr = PyUnicode_AsUTF8AndSize(name, &name_size);
+  if (!name_cstr)
+    return NULL;
+  char *env_val = getenv(name_cstr);
   PyObject *res = default_val;
   if (env_val) {
     res = is_truthy(env_val) ? Py_True : Py_False;

@@ -82,6 +82,30 @@ py::object from_borrowed_ref(py::handle val) {
   return py::borrow<py::object>(val);
 }
 
+const char *unicode_as_utf8(PyObject *obj) {
+  Py_ssize_t size;
+  return PyUnicode_AsUTF8AndSize(obj, &size);
+}
+
+void set_specialize_type_error(PyObject *arg) {
+  auto arg_type = from_new_ref(PyObject_Type(arg));
+  if (!arg_type) {
+    PyErr_SetString(PyExc_TypeError, "failed to specialize argument");
+    return;
+  }
+
+  auto type_name =
+      from_new_ref(PyObject_GetAttrString(arg_type.ptr(), "__name__"));
+  if (!type_name) {
+    PyErr_Clear();
+    PyErr_SetString(PyExc_TypeError, "failed to specialize argument");
+    return;
+  }
+
+  PyErr_Format(PyExc_TypeError, "failed to specialize argument of type: %U",
+               type_name.ptr());
+}
+
 PyObject *intern_from_string(const char *str) {
   PyObject *obj = PyUnicode_InternFromString(str);
   if (!obj)
@@ -204,7 +228,7 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
   if (!dtype_str)
     return {};
 
-  const char *dtype_cstr = PyUnicode_AsUTF8(dtype_str.ptr());
+  const char *dtype_cstr = unicode_as_utf8(dtype_str.ptr());
   if (!dtype_cstr)
     return {};
   desc_cstr += dtype_cstr;
@@ -218,7 +242,7 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
   auto block_shape_str = from_new_ref(PyObject_Str(block_shape_list.ptr()));
   if (!block_shape_str)
     return {};
-  const char *block_shape_cstr = PyUnicode_AsUTF8(block_shape_str.ptr());
+  const char *block_shape_cstr = unicode_as_utf8(block_shape_str.ptr());
   if (!block_shape_cstr)
     return {};
   desc_cstr += block_shape_cstr;
@@ -245,7 +269,7 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
     if (!layout_repr)
       return {};
     desc_cstr += ",";
-    const char *layout_cstr = PyUnicode_AsUTF8(layout_repr.ptr());
+    const char *layout_cstr = unicode_as_utf8(layout_repr.ptr());
     if (!layout_cstr)
       return {};
     desc_cstr += layout_cstr;
@@ -350,7 +374,7 @@ std::pair<py::object, py::object> handle_tensor(PyObject *backend,
   py::object key;
   if (native_impl_available) {
     auto data_ptr_result =
-        from_new_ref(PyObject_CallMethodNoArgs(arg, data_ptr_attr));
+        from_new_ref(PyObject_CallMethodObjArgs(arg, data_ptr_attr, nullptr));
     if (!data_ptr_result)
       return {};
 
@@ -416,7 +440,9 @@ std::pair<py::object, py::object> handle_tuple(PyObject *backend, PyObject *arg,
                                                bool is_const,
                                                bool specialize_value,
                                                bool align) {
-  Py_ssize_t size = PyTuple_GET_SIZE(arg);
+  Py_ssize_t size = PyTuple_Size(arg);
+  if (size < 0)
+    return {};
   if (size == 0) {
     // return tuple of empty tuples as in python reference
     return {from_borrowed_ref(arg), from_borrowed_ref(arg)};
@@ -435,15 +461,19 @@ std::pair<py::object, py::object> handle_tuple(PyObject *backend, PyObject *arg,
     return {};
 
   for (Py_ssize_t i = 0; i < size; ++i) {
-    PyObject *item = PyTuple_GET_ITEM(arg, i); // Borrowed reference
+    PyObject *item = PyTuple_GetItem(arg, i); // Borrowed reference
+    if (!item)
+      return {};
     // python reference calls specialize recursively with default arguments set
     // currently this is is_const=False, specialize_value=True, align=True
     auto [type, key] = specialize_arg(backend, item, false, true, true);
     if (!type || !key)
       return {};
-    // Steals reference
-    PyTuple_SET_ITEM(tys_tuple.ptr(), i, type.release().ptr());
-    PyTuple_SET_ITEM(keys_tuple.ptr(), i, key.release().ptr());
+    // Steals references on success.
+    if (PyTuple_SetItem(tys_tuple.ptr(), i, type.release().ptr()) < 0)
+      return {};
+    if (PyTuple_SetItem(keys_tuple.ptr(), i, key.release().ptr()) < 0)
+      return {};
   }
 
   if (is_namedtuple) {
@@ -599,10 +629,8 @@ PyObject *specialize_impl(PyObject *self, PyObject *const *args,
 
   // check if specialization failed
   if (!type || !key) {
-    if (!PyErr_Occurred()) {
-      PyErr_Format(PyExc_TypeError, "failed to specialize argument of type: %s",
-                   Py_TYPE(arg)->tp_name);
-    }
+    if (!PyErr_Occurred())
+      set_specialize_type_error(arg);
     return nullptr;
   }
 
@@ -621,14 +649,23 @@ bool visit_make_tensordesc_args(PyObject *arg, PyObject *sig,
   if (!arg_fast)
     return false;
 
-  Py_ssize_t arg_len = PySequence_Fast_GET_SIZE(arg_fast.ptr());
-  Py_ssize_t sig_len = PyTuple_GET_SIZE(sig);
+  Py_ssize_t arg_len = PySequence_Size(arg_fast.ptr());
+  if (arg_len < 0)
+    return false;
+  Py_ssize_t sig_len = PyTuple_Size(sig);
+  if (sig_len < 0)
+    return false;
   assert(sig_len == arg_len || !"Invalid signature");
   Py_ssize_t len = arg_len;
 
   for (Py_ssize_t i = 0; i < len; ++i) {
-    PyObject *a = PySequence_Fast_GET_ITEM(arg_fast.ptr(), i);
-    PyObject *s = PyTuple_GET_ITEM(sig, i);
+    auto a_obj = from_new_ref(PySequence_GetItem(arg_fast.ptr(), i));
+    if (!a_obj)
+      return false;
+    PyObject *a = a_obj.ptr();
+    PyObject *s = PyTuple_GetItem(sig, i);
+    if (!s)
+      return false;
 
     if (PyUnicode_CheckExact(s)) {
       Py_ssize_t size;
@@ -721,7 +758,10 @@ PyObject *make_tensordesc_args(PyObject *self, PyObject *const *args,
     PyErr_SetString(PyExc_TypeError, "Expected tensordesc_meta to be a list");
     return nullptr;
   }
-  bool has_tensordesc_meta = PyList_GET_SIZE(tensordesc_meta) > 0;
+  Py_ssize_t tensordesc_meta_len = PyList_Size(tensordesc_meta);
+  if (tensordesc_meta_len < 0)
+    return nullptr;
+  bool has_tensordesc_meta = tensordesc_meta_len > 0;
 
   auto result = from_new_ref(PyList_New(0));
   if (!result)

@@ -20,6 +20,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" ON)
+option(TRITON_STABLE_ABI "Build with Python Stable ABI (abi3) for Python 3.12+" OFF)
 option(TRITON_BUILD_UT "Build C++ Triton Unit Tests" ON)
 option(TRITON_BUILD_WITH_CCACHE "Build with ccache (if available)" ON)
 option(TRITON_OFFLINE_BUILD "Build without downloading dependencies" OFF)
@@ -330,6 +331,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   find_package(nanobind CONFIG REQUIRED HINTS "${Python3_SITELIB}")
   nanobind_build_library(nanobind-static)
+  if(TRITON_STABLE_ABI)
+    target_compile_definitions(nanobind-static PUBLIC Py_LIMITED_API=0x030C0000)
+  endif()
   target_link_libraries(nanobind-static PRIVATE Python3::Module)
 
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
@@ -415,6 +419,10 @@ if(TRITON_BUILD_PYTHON_MODULE)
                   ${PYTHON_SRC_PATH}/interpreter.cc
                   ${PYTHON_SRC_PATH}/llvm.cc
                   ${PYTHON_SRC_PATH}/specialize.cc)
+
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(triton PRIVATE -Wno-array-bounds)
+  endif()
 
   # Link triton with its dependencies
   target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})
