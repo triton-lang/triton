@@ -107,7 +107,7 @@ class InterpreterOptions:
     debug: bool = False
     sanitize_overflow: bool = True
     arch: Optional[str] = None
-    supported_fp8_dtypes: Tuple[str, ...] = ("fp8e5", "fp8e5b16", "fp8e4nv", "fp8e4b8", "fp8e4b15")
+    supported_fp8_dtypes: Tuple[str, ...] = ("fp8e5", "fp8e5b16", "fp8e4nv", "fp8e4b8", "fp8e4b15", "fp8e8m0fnu")
     deprecated_fp8_dot_operand_dtypes: Tuple[str, ...] = ()
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str, ...] = ("tf32", "tf32x3", "ieee")
@@ -167,6 +167,7 @@ def _get_np_dtype(tt_dtype):
         tl.float8e4nv: np.dtype(np.uint8),
         tl.float8e4b8: np.dtype(np.uint8),
         tl.float8e4b15: np.dtype(np.uint8),
+        tl.float8e8m0fnu: np.dtype(np.uint8),
     }
     if isinstance(tt_dtype, tl.block_type):
         if isinstance(tt_dtype.element_ty, tl.pointer_type):
