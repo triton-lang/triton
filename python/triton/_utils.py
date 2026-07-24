@@ -114,10 +114,26 @@ type_canonicalisation_dict = {
 for v in list(type_canonicalisation_dict.values()):
     type_canonicalisation_dict[v] = v
 
+# torch dtypes with no Triton element type that Triton instead consumes as
+# packed uint8 (see tl.dot_scaled): MXFP4 data and E8M0 scales. We don't map
+# them automatically -- silently reinterpreting them as uint8 would let later
+# arithmetic run as integer math without warning -- but we point the user at the
+# supported pattern.
+_PACKED_AS_UINT8 = {
+    "float4_e2m1fn_x2": "MXFP4 data",
+    "float8_e8m0fnu": "E8M0 scales",
+}
+
 
 def canonicalize_dtype(dtype):
     dtype_str = str(dtype).split(".")[-1]
-    return type_canonicalisation_dict[dtype_str]
+    canonical = type_canonicalisation_dict.get(dtype_str)
+    if canonical is not None:
+        return canonical
+    if dtype_str in _PACKED_AS_UINT8:
+        raise TypeError(f"{dtype} ({_PACKED_AS_UINT8[dtype_str]}) has no Triton element type; pass it as a "
+                        f"packed uint8 tensor (e.g. t.view(torch.uint8)) and select the format in tl.dot_scaled.")
+    raise TypeError(f"unsupported dtype: {dtype}")
 
 
 def canonicalize_ptr_dtype(dtype, is_const):
