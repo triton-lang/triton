@@ -115,18 +115,19 @@ DEVICE = triton.runtime.driver.active.get_active_torch_device()
 def kernel(BLOCK_SIZE: tl.constexpr):
     return
 
-#These two methods must be implemented by the plugin
-def get_key():
-    return pathlib.Path(__file__).read_text()
-def get_hash():
-    return hashlib.sha256(get_key().encode('utf-8')).hexdigest()
+# The key/hash identify the custom pipeline code for the compilation cache.
+# The no-argument form of the hook is consulted on every kernel launch to key
+# the cache, so anything expensive (file I/O, hashing) must be precomputed
+# rather than done inside the hook.
+PLUGIN_KEY = pathlib.Path(__file__).read_text()
+PLUGIN_HASH = hashlib.sha256(PLUGIN_KEY.encode('utf-8')).hexdigest()
 
 def inspect_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
     # If the hook is called with no arguments we assume were just after the key and hash and don't want to
     # actually execute the pipeline yet.
     # This no argument early return must be implemented.
     if all(arg is None for arg in (stages, options, language, capability)):
-        return get_key(), get_hash()
+        return PLUGIN_KEY, PLUGIN_HASH
 
     def make_ttir_wrapper(mod, metadata, opt, capability):
         mod = self.make_ttir(mod, metadata, opt, capability)
@@ -138,7 +139,7 @@ def inspect_stages_hook(self=None, stages=None, options=None, language=None, cap
 
     stages["ttir"] = lambda src, metadata: make_ttir_wrapper(src, metadata, options, capability)
 
-    return get_key(), get_hash()
+    return PLUGIN_KEY, PLUGIN_HASH
 
 if __name__ == '__main__':
 
@@ -206,7 +207,7 @@ Example 2 added a new pass to the end of the ttgir "stage". However the plugin p
 ```python
 def inspect_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
     if all(arg is None for arg in (stages, options, language, capability)):
-        return get_key(), get_hash()
+        return PLUGIN_KEY, PLUGIN_HASH
     module_name = 'dynamic_module'
     spec = importlib.util.spec_from_loader(module_name, loader=None)
     module = importlib.util.module_from_spec(spec)
@@ -221,7 +222,7 @@ def inspect_stages_hook(self=None, stages=None, options=None, language=None, cap
     exec(stage_src, module.__dict__)
     make_lambda = lambda f: lambda src, metadata: f(src, metadata, options, capability)
     stages["ttir"] = make_lambda(module.make_ttir)
-    return get_key(), get_hash()
+    return PLUGIN_KEY, PLUGIN_HASH
 ```
 directs the new pass's placement based on other surrounding passes. Knowing which passes are in the pipeline a priori can be challenging, therefore in the next example we show how to dump and inspect the entire pipeline that is run for a particular kernel to allow for precise placement of specialized out of tree passes even if the upstream pass pipeline structure changes.
 
@@ -257,14 +258,22 @@ def kernel1(BLOCK_SIZE: tl.constexpr):
 def kernel2(BLOCK_SIZE: tl.constexpr):
     return
 
-def get_key():
-    return pathlib.Path(__file__).read_text()
-def get_hash():
-    return hashlib.sha256(get_key().encode('utf-8')).hexdigest()
+PLUGIN_KEY = pathlib.Path(__file__).read_text()
+PLUGIN_HASH = hashlib.sha256(PLUGIN_KEY.encode('utf-8')).hexdigest()
+
+# override_stages builds its pipeline from compiler_override.py, which can
+# change between runs, so its cache key must reflect that file's *current*
+# content and is re-derived on every call. This dynamic-pipeline case is what
+# the per-launch no-arg call exists for; only static derivations (like
+# PLUGIN_KEY above) should be precomputed.
+def override_key_hash():
+    override = pathlib.Path("compiler_override.py")
+    key = PLUGIN_KEY + (override.read_text() if override.is_file() else "")
+    return key, hashlib.sha256(key.encode('utf-8')).hexdigest()
 
 def dump_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
   if all(arg is None for arg in (stages, options, language, capability)):
-      return get_key(), get_hash()
+      return PLUGIN_KEY, PLUGIN_HASH
     source_code = "# This is generated from Triton compiler.py"
     source_code = (
         source_code
@@ -277,10 +286,10 @@ def dump_stages_hook(self=None, stages=None, options=None, language=None, capabi
 
     with open("compiler_override.py", "w") as file:
         file.write(source_code)
-  return get_key(), get_hash()
+  return PLUGIN_KEY, PLUGIN_HASH
 def override_stages(self=None, stages=None, options=None, language=None, capability=None):
   if all(arg is None for arg in (stages, options, language, capability)):
-      return get_key(), get_hash()
+      return override_key_hash()
     if language != Language.TRITON:
         return
     full_name = "compiler_override.py"
@@ -308,7 +317,7 @@ def override_stages(self=None, stages=None, options=None, language=None, capabil
         stages["ttir"] = make_lambda(module.make_ttir)
     if has_func(module, "make_ttgir"):
         stages["ttgir"] = make_lambda(module.make_ttgir)
-    return get_key(), get_hash()
+    return override_key_hash()
 
 if __name__ == '__main__':
 
