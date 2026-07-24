@@ -172,8 +172,15 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
         assert(opIdx == 0 || opIdx == 1);
         int rank = order.size();
         int kDim = opIdx == 0 ? rank-1 : rank-2;
-        if (order[0] != kDim)
+        if (order[0] != kDim) {
           std::swap(vec, mmaStride);
+          // FP64 m16n8k{8,16}: a thread's fragment elements are K-adjacent
+          // (a full row apart in smem), so use a 16B swizzle unit (vec=2) to
+          // expose all 8 phases and avoid pairwise bank conflicts on the 8
+          // rows loaded together. No-op for kWidth=1 (legacy m8n8k4).
+          if (bitwidth == 64 && kWidth >= 2)
+            vec = 128 / bitwidth;
+        }
         // Count how many vec elements are needed to cover all the banks
         int maxPhase = std::max(std::min<int>(mmaStride, 1024 / (vec * bitwidth)), 1);
         // Account for the row packing from perPhase: mmaStride / perPhase
@@ -1484,6 +1491,17 @@ vecIdx (index of the element in the quad; this is always along the k-dim)
       // For MMAV2 and V3
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
       unsigned kWidth = std::max(32 / bitwidth, 1u);
+      // FP64 m16n8k{4,8,16} encodes the native K in instrShape. The dot
+      // operand needs kWidth = K/4 (4 lanes cover the K dim) so that the
+      // layout's register granularity matches the MMA instruction.
+      if (bitwidth == 64) {
+        auto instr = parentAttr.getInstrShape();
+        unsigned r = parentAttr.getWarpsPerCTA().size();
+        if (instr.size() > r) {
+          unsigned k = instr[instr.size() - 1];
+          kWidth = std::max<unsigned>(k / 4, 1u);
+        }
+      }
       return $_get(context, opIdx, parent, kWidth);
     }]>
   ];

@@ -7252,6 +7252,88 @@ def test_dot_multidim(rank, trans_a, trans_b, device):
     assert torch.allclose(c, d, rtol=1e-3, atol=1e-2)
 
 
+@pytest.mark.skipif(not is_hopper(), reason="FP64 m16n8k{8,16} MMA requires sm_90+")
+@pytest.mark.parametrize("BLOCK_K, expected_k", [(16, 4), (32, 8), (64, 16)])
+def test_dot_fp64_m16_native_k(BLOCK_K, expected_k, device):
+    # The m16n8k{4,8,16} FP64 path auto-selects the native K tile from BLOCK_K.
+    # Verify (a) the expected mma.sync instruction is emitted and (b) the result
+    # is numerically correct against torch.
+    M, N = 64, 64
+
+    @triton.jit
+    def kernel(A, B, C, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+               BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+        offs_m = tl.arange(0, BLOCK_M)
+        offs_n = tl.arange(0, BLOCK_N)
+        offs_k = tl.arange(0, BLOCK_K)
+        a_ptrs = A + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak
+        b_ptrs = B + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn
+        acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float64)
+        for k in range(0, K, BLOCK_K):
+            a = tl.load(a_ptrs)
+            b = tl.load(b_ptrs)
+            acc += tl.dot(a, b, input_precision="ieee")
+            a_ptrs += BLOCK_K * stride_ak
+            b_ptrs += BLOCK_K * stride_bk
+        c_ptrs = C + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
+        tl.store(c_ptrs, acc)
+
+    K = BLOCK_K * 2  # loop-carried accumulator exercises the prefetcher too
+    torch.manual_seed(0)
+    a = torch.randn((M, K), dtype=torch.float64, device=device)
+    b = torch.randn((K, N), dtype=torch.float64, device=device)
+    c = torch.empty((M, N), dtype=torch.float64, device=device)
+
+    pgm = kernel[(1, )](a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0),
+                        c.stride(1), BLOCK_M=M, BLOCK_N=N, BLOCK_K=BLOCK_K)
+
+    assert f"mma.sync.aligned.m16n8k{expected_k}.row.col.f64" in pgm.asm["ptx"]
+    torch.testing.assert_close(c, a @ b, rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.skipif(not is_hopper(), reason="FP64 m16n8k{8,16} MMA requires sm_90+")
+@pytest.mark.parametrize("force_k", [4, 8, 16])
+def test_dot_fp64_mma_k_override(force_k, device):
+    # TRITON_FP64_MMA_K forces the native K tile regardless of BLOCK_K. It is not
+    # part of the compile cache key, so clear the cache before compiling.
+    M, N, K = 64, 64, 64
+
+    @triton.jit
+    def kernel(A, B, C, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+               BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+        offs_m = tl.arange(0, BLOCK_M)
+        offs_n = tl.arange(0, BLOCK_N)
+        offs_k = tl.arange(0, BLOCK_K)
+        a = tl.load(A + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak)
+        b = tl.load(B + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn)
+        acc = tl.dot(a, b, input_precision="ieee")
+        tl.store(C + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn, acc)
+
+    torch.manual_seed(0)
+    a = torch.randn((M, K), dtype=torch.float64, device=device)
+    b = torch.randn((K, N), dtype=torch.float64, device=device)
+    c = torch.empty((M, N), dtype=torch.float64, device=device)
+
+    import os
+    import shutil
+    old = os.environ.get("TRITON_FP64_MMA_K")
+    os.environ["TRITON_FP64_MMA_K"] = str(force_k)
+    cache_dir = os.path.expanduser("~/.triton/cache")
+    shutil.rmtree(cache_dir, ignore_errors=True)
+    try:
+        pgm = kernel[(1, )](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1),
+                            BLOCK_M=M, BLOCK_N=N, BLOCK_K=K)
+    finally:
+        if old is None:
+            os.environ.pop("TRITON_FP64_MMA_K", None)
+        else:
+            os.environ["TRITON_FP64_MMA_K"] = old
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+    assert f"mma.sync.aligned.m16n8k{force_k}.row.col.f64" in pgm.asm["ptx"]
+    torch.testing.assert_close(c, a @ b, rtol=1e-12, atol=1e-12)
+
+
 @pytest.mark.parametrize("dtype_str", ["float32", "float64"])
 def test_libdevice_rint(dtype_str, device):
     iinfo32 = np.iinfo(np.int32)
