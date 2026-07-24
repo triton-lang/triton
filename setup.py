@@ -301,8 +301,9 @@ class CMakeBuild(build_ext):
         if platform.system() == "Windows":
             cmake_args += [f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{cfg.upper()}={extdir}"]
         else:
-            max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
-            build_args += ['-j' + max_jobs]
+            if "--jobserver-auth=fifo:" not in os.environ.get("MAKEFLAGS", ""):
+                max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
+                build_args += ['-j' + max_jobs]
 
         if check_env_flag("TRITON_BUILD_WITH_CLANG_LLD"):
             cmake_args += [
