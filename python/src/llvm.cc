@@ -9,6 +9,8 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
@@ -59,6 +61,44 @@ struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
 using namespace llvm;
 
 namespace {
+
+class TritonLLVMDiagnosticCapture {
+  llvm::LLVMContext &context;
+  llvm::DiagnosticHandler::DiagnosticHandlerTy previousCallback;
+  void *previousContext;
+  std::string message;
+
+  static void handleDiagnostic(const llvm::DiagnosticInfo *diagnostic,
+                               void *context) {
+    auto *capture = static_cast<TritonLLVMDiagnosticCapture *>(context);
+    llvm::raw_string_ostream stream(capture->message);
+    stream << llvm::LLVMContext::getDiagnosticMessagePrefix(
+                  diagnostic->getSeverity())
+           << ": ";
+    llvm::DiagnosticPrinterRawOStream printer(stream);
+    diagnostic->print(printer);
+    stream << '\n';
+  }
+
+public:
+  explicit TritonLLVMDiagnosticCapture(llvm::LLVMContext &context)
+      : context(context),
+        previousCallback(context.getDiagnosticHandlerCallBack()),
+        previousContext(context.getDiagnosticContext()) {
+    context.setDiagnosticHandlerCallBack(handleDiagnostic, this);
+  }
+
+  ~TritonLLVMDiagnosticCapture() {
+    context.setDiagnosticHandlerCallBack(previousCallback, previousContext);
+  }
+
+  TritonLLVMDiagnosticCapture(const TritonLLVMDiagnosticCapture &) = delete;
+  TritonLLVMDiagnosticCapture &
+  operator=(const TritonLLVMDiagnosticCapture &) = delete;
+
+  bool hasErrors() const { return context.getDiagHandlerPtr()->HasErrors; }
+  const std::string &getMessage() const { return message; }
+};
 
 // Set an LLVM command-line option using addOccurrence (simulates command-line)
 // and return its original value. Using addOccurrence instead of setValue is
@@ -412,7 +452,11 @@ std::string translateLLVMIRToASM(
     auto fileType = isObject ? llvm::CodeGenFileType::ObjectFile
                              : llvm::CodeGenFileType::AssemblyFile;
     machine->addPassesToEmitFile(pass, pstream, nullptr, fileType);
+    TritonLLVMDiagnosticCapture diagnostics(module.getContext());
     pass.run(module);
+    if (diagnostics.hasErrors())
+      throw std::runtime_error(diagnostics.getMessage());
+    llvm::errs() << diagnostics.getMessage();
 
     if (enabledTiming) {
       reportAndResetTimings(&reportStream);
