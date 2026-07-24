@@ -78,7 +78,7 @@ jobs:
       - name: Restore build dependencies cache
         id: restore-build-deps-cache
         if: ${{ !contains(matrix.runner, 'gfx90a') }}
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           # Note that we cannot use environment variables here given there is
           # no shell to interpret them in the paths.
@@ -203,7 +203,7 @@ jobs:
           du -h -d 1 ~/.ccache
       - name: Save build dependencies cache
         if: ${{ github.ref == 'refs/heads/main' && !contains(matrix.runner, 'gfx90a') }}
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             ~/.triton/llvm
@@ -264,7 +264,7 @@ jobs:
         shell: bash
       - name: Restore build dependencies cache
         id: restore-build-deps-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.triton/llvm
@@ -328,7 +328,7 @@ jobs:
           du -h -d 1 ~/.ccache
       - name: Save build dependencies cache
         if: github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             ~/.triton/llvm
