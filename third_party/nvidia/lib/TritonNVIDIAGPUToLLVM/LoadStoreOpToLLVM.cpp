@@ -199,6 +199,10 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                               << " valueElemNBits = " << valueElemNBits << " "
                               << op.getType());
     SmallVector<Value> loadedVals;
+    // The L2 cache policy register is loop-invariant; create it once instead of
+    // re-emitting an identical createpolicy per vectorized load.
+    Value l2PolicyReg =
+        createCachePolicy(op.getEvict(), rewriter, loc, computeCapability);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       // TODO: optimization when ptr is GEP with constant offset
       size_t in_off = 0;
@@ -265,10 +269,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
       auto *addrOpr =
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
-
-      // Create L2 cache policy register if needed
-      Value l2PolicyReg =
-          createCachePolicy(op.getEvict(), rewriter, loc, computeCapability);
 
       // Define the instruction opcode
       auto &ld = ptxBuilder.create("ld")
@@ -400,6 +400,10 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                          loc, targetInfo);
     const int numVecs = elemsPerThread / vec;
+    // The L2 cache policy register is loop-invariant; create it once instead of
+    // re-emitting an identical createpolicy per vectorized store.
+    Value l2PolicyReg =
+        createCachePolicy(op.getEvict(), rewriter, loc, computeCapability);
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
       // TODO: optimization when ptr is AddPtr with constant offset
       size_t in_off = 0;
@@ -450,10 +454,6 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
 
       auto *asmAddr =
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
-
-      // Create L2 cache policy register if needed
-      Value l2PolicyReg =
-          createCachePolicy(op.getEvict(), rewriter, loc, computeCapability);
 
       auto &ptxStoreInstr =
           ptxBuilder.create("st")

@@ -1632,6 +1632,21 @@ def test_tmem_subslice_noncontiguous():
     assert "!ttg.memdesc<128x256xf32" in ir
 
 
+@gluon.jit
+def tmem_pipeline_stage_subslice_kernel():
+    layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 64], col_stride=1)
+    parent = blackwell.allocate_tensor_memory(ttgl.float32, [5, 128, 64], layout)
+    stages = parent.slice(2, 2, dim=0)
+    stages.slice(0, 32, dim=2)
+
+
+def test_tmem_pipeline_stage_subslice_constexpr():
+    ir = run_parser(tmem_pipeline_stage_subslice_kernel, target=BLACKWELL_TARGET).str_nodebug()
+    assert "dim = 0 : i32" in ir
+    assert "dim = 2 : i32" in ir
+    assert "mutable, 5x128x64>" in ir
+
+
 @filecheck_test
 @gluon.jit
 def test_tmem_reduction_default_layout_constexpr():
