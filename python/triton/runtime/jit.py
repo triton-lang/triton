@@ -626,6 +626,15 @@ def convert_to_tuple_if_list(item):
 
 
 class JITFunction(JITCallable, KernelInterface[T]):
+    """
+    A just-in-time compiled Triton kernel.
+
+    Instances are produced by applying the :func:`triton.jit` decorator to a Python
+    function and are rarely constructed directly. A kernel is launched with the
+    ``kernel[grid](*args, **kwargs)`` syntax: on the first launch for a given set of
+    argument types the kernel is specialized and compiled, and the result is cached
+    for subsequent launches.
+    """
 
     def is_gluon(self):
         return False
@@ -1045,6 +1054,14 @@ class MockTensor:
 
 
 class TensorWrapper:
+    """
+    Presents a tensor under a different element type.
+
+    Returned by :func:`triton.reinterpret`. The wrapper forwards the storage,
+    shape, strides, and device of the wrapped tensor while reporting :attr:`dtype`
+    as the new type, so a kernel reads the same bytes under a different
+    interpretation.
+    """
 
     def __init__(self, base, dtype):
         self.dtype = dtype
@@ -1082,6 +1099,18 @@ class TensorWrapper:
 
 
 def reinterpret(tensor, dtype):
+    """
+    Reinterprets a tensor's data as a different element type, without copying.
+
+    This is a bitcast-like view: the underlying bytes are unchanged and only their
+    interpretation differs. Useful for element types that have no native framework
+    dtype (for example the 8-bit floating-point formats).
+
+    :param tensor: the tensor whose data should be reinterpreted.
+    :param dtype: the Triton dtype to interpret the data as.
+    :returns: a :class:`TensorWrapper` viewing :code:`tensor` as :code:`dtype` (or
+        the original tensor when the reinterpretation is a no-op).
+    """
     if isinstance(tensor, TensorWrapper):
         if dtype == tensor.base.dtype:
             # Reinterpreting to the original interpretation; return the base.
