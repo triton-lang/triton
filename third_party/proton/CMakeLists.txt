@@ -17,15 +17,37 @@ if(NOT JSON_INCLUDE_DIR)
   message(FATAL_ERROR "JSON include directory not defined")
 endif()
 
+# Auto-detect rocprofiler-sdk: only the SDK profiler needs these headers
+# (HIP and HSA headers are bundled in third_party/amd/backend/include/).
+if(NOT DEFINED PROTON_BUILD_ROCPROFILER_SDK)
+  if(ROCPROFILER_SDK_INCLUDE_DIR AND
+     EXISTS "${ROCPROFILER_SDK_INCLUDE_DIR}/rocprofiler-sdk/agent.h")
+    set(PROTON_BUILD_ROCPROFILER_SDK ON)
+  else()
+    set(PROTON_BUILD_ROCPROFILER_SDK OFF)
+  endif()
+endif()
+
 unset(PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH CACHE)
-set(CMAKE_REQUIRED_INCLUDES "${ROCPROFILER_SDK_INCLUDE_DIR}")
-check_cxx_source_compiles([=[
-  #include <rocprofiler-sdk/fwd.h>
-  int main() {
-    auto op = ROCPROFILER_HIP_GRAPH_OPERATION_EXEC_LAUNCH;
-    return static_cast<int>(op);
-  }
-]=] PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH)
+if(PROTON_BUILD_ROCPROFILER_SDK)
+  if(NOT ROCPROFILER_SDK_INCLUDE_DIR)
+    message(FATAL_ERROR
+      "PROTON_BUILD_ROCPROFILER_SDK is ON but ROCPROFILER_SDK_INCLUDE_DIR is not defined")
+  endif()
+  message(STATUS "Proton: rocprofiler-sdk profiler enabled")
+
+  set(CMAKE_REQUIRED_INCLUDES "${ROCPROFILER_SDK_INCLUDE_DIR}")
+  check_cxx_source_compiles([=[
+    #include <rocprofiler-sdk/fwd.h>
+    int main() {
+      auto op = ROCPROFILER_HIP_GRAPH_OPERATION_EXEC_LAUNCH;
+      return static_cast<int>(op);
+    }
+  ]=] PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH)
+else()
+  set(PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH OFF)
+  message(STATUS "Proton: rocprofiler-sdk profiler disabled (headers not found)")
+endif()
 
 if(PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH)
   message(STATUS "Proton ROCProfiler-SDK HIP graph tracing: enabled")
@@ -62,9 +84,17 @@ function(add_proton_library name)
   # Use system to skip warnings caused by legacy clang compilers
   target_include_directories(${name}
     SYSTEM PRIVATE
-      ${ROCPROFILER_SDK_INCLUDE_DIR}
       "${ROCM_INCLUDE_DIR}"
   )
+
+  if(PROTON_BUILD_ROCPROFILER_SDK)
+    # ROCPROFILER_SDK_INCLUDE_DIR listed first so its headers take priority
+    # over any older versions in ROCM_INCLUDE_DIR.
+    target_include_directories(${name}
+      SYSTEM BEFORE PRIVATE
+        "${ROCPROFILER_SDK_INCLUDE_DIR}"
+    )
+  endif()
 
   target_include_directories(${name}
     PRIVATE

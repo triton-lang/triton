@@ -9,6 +9,7 @@
 
 #include "Backend/Backend.h"
 #include "Context/Context.h"
+#include "Profiler/RocprofSDK/RocprofSDKProfiler.h"
 #include "Session/Session.h"
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/map.h>
@@ -258,6 +259,14 @@ static void initProton(nanobind::module_ &m) {
         throw nanobind::value_error(message.c_str());
       },
       nanobind::arg("tritonBackend"));
+  m.def("ensure_rocprofiler_configured", []() {
+    try {
+      RocprofSDKProfiler::instance();
+      return true;
+    } catch (...) {
+      return false;
+    }
+  });
 }
 
 NB_MODULE(libproton, m) {
