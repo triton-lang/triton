@@ -611,7 +611,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK-LABEL: tensormap_fenceproxy_acquire
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @tensormap_fenceproxy_acquire(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}) {
-    // CHECK: fence.proxy.tensormap::generic.acquire.gpu [ $0 + 0 ], 0x80;
+    // CHECK: llvm.cond_br
+    // CHECK: [[DESC:%.*]] = llvm.addrspacecast %arg0 : !llvm.ptr<1> to !llvm.ptr
+    // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(128 : i32) : i32
+    // CHECK: nvvm.fence.proxy.acquire <gpu> [[DESC]], [[SIZE]]
     // ptxas missing fence workaround:
     // CHECK: cp.async.bulk.commit_group
     // CHECK: cp.async.bulk.wait_group.read 0
