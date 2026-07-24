@@ -444,6 +444,57 @@ def test_list_comprehension_if_filter():
     run_parser(kernel)
 
 
+def test_list_comprehension_does_not_clobber_outer_scope():
+
+    @triton.jit
+    def kernel():
+        # `x` must keep its outer value after the comprehension.
+        x: tl.constexpr = 99
+        vals: tl.constexpr = [x for x in (1, 2, 3)]
+        tl.static_assert(len(vals) == 3)
+        tl.static_assert(x == 99)
+
+    run_parser(kernel)
+
+
+@doesnt_compile
+@triton.jit
+def test_list_comprehension_target_does_not_leak():
+    # `y` must be undefined after the comprehension.
+    vals: tl.constexpr = [y for y in (1, 2, 3)]
+    tl.static_assert(vals[0] == 1)
+    tl.static_assert(y == 3)  # noqa: F821
+
+
+def test_list_comprehension_scope_restored_after_tensor_ternary():
+
+    @triton.jit
+    def kernel():
+        # Tensor ternaries replace the scope dictionaries while visiting the body.
+        x: tl.constexpr = 99
+        c = tl.to_tensor(1) > 0
+        vals = [(tl.to_tensor(1) if c else tl.to_tensor(2)) for x in (1, 2, 3)]  # noqa: F841
+        tl.static_assert(x == 99)
+
+    run_parser(kernel)
+
+
+def test_list_comprehension_does_not_pollute_if_branch_merge():
+
+    @triton.jit
+    def kernel(c):
+        # The target must not linger in `local_defs`: otherwise the branch merge
+        # sees a phantom `t` in the `if` block that collides with the real `t`
+        # defined in the `else` block.
+        cc = c > 0
+        if cc:
+            vals = [t for t in (1, 2, 3)]  # noqa: F841
+        else:
+            t = tl.zeros([4], tl.int32)  # noqa: F841
+
+    run_parser(kernel, args=(1, ))
+
+
 def test_named_expr_respects_prior_constexpr_annotation():
 
     @triton.jit

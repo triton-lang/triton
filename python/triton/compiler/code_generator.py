@@ -542,12 +542,26 @@ class CodeGenerator(ast.NodeVisitor):
         if not isinstance(iter, tl_tuple):
             raise NotImplementedError("only tuple comprehensions are supported")
 
+        # Comprehension targets do not leak into the enclosing scope. `set_value`
+        # updates both scope maps, and visiting the body may replace them, so
+        # restore the saved bindings through the live attributes.
+        target = comp.target.id
+        absent = object()
+        saved = {attr: getattr(self, attr).get(target, absent) for attr in ("lscope", "local_defs")}
+
         results = []
         for item in iter:
-            self.set_value(comp.target.id, item)
-            # Apply the comprehension's `if` filters (the conditions are constexpr).
+            self.set_value(target, item)
+            # Apply the comprehension's `if` filters (conditions are constexpr).
             if all(self.visit(cond) for cond in comp.ifs):
                 results.append(self.visit(node.elt))
+
+        for attr, old in saved.items():
+            scope = getattr(self, attr)
+            if old is absent:
+                scope.pop(target, None)
+            else:
+                scope[target] = old
         return tl_tuple(results)
 
     # By design, only non-kernel functions can return
