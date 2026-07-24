@@ -6,6 +6,7 @@ from ._layouts import AutoLayout, DistributedLayout, DistributedLinearLayout, Sl
 from triton._C.libtriton.gluon_ir import GluonOpBuilder, compute_tmem_reg_layout
 from triton._C.libtriton import ir
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
+from triton.language import constexpr
 
 TensorTy = TypeVar("TensorTy")
 
@@ -610,7 +611,11 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         # Emit the default partition to get the result types.
         default_block = builder.new_block()
         builder.set_insertion_point_to_start(default_block)
-        default_result = generator.call_JitFunction(default_partition, default_args, kwargs={})
+        if default_partition:
+            default_result = generator.call_JitFunction(default_partition, default_args, kwargs={})
+        else:
+            default_result = constexpr(None)
+
         mlir_results = flatten_values_to_ir([default_result])
         builder.create_warp_yield(mlir_results)
         result_types = [r.get_type() for r in mlir_results]
