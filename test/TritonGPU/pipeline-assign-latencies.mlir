@@ -36,6 +36,36 @@ tt.func @default_stages(%lb : index, %ub : index, %step : index,
   tt.return %loop#2: tensor<128x128xf32, #C>
 }
 
+// CHECK-LABEL: @conditional_load
+tt.func @conditional_load(%lb : index, %ub : index, %step : index,
+                  %cond : i1,
+                  %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #AL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 32]> : tensor<2xi32>},
+                  %b_ptr_init : tensor<32x128x!tt.ptr<f16>, #BL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 32]> : tensor<2xi32>}) -> tensor<128x128xf32, #C> {
+  %a_zero = arith.constant dense<0.00e+00> : tensor<128x32xf16, #AL>
+  %c_init = arith.constant dense<0.00e+00> : tensor<128x128xf32, #C>
+  %loop = scf.for %iv = %lb to %ub step %step iter_args(%prev_c = %c_init) -> tensor<128x128xf32, #C> {
+    %a_ = scf.if %cond -> tensor<128x32xf16, #AL> {
+      %nested = scf.if %cond -> tensor<128x32xf16, #AL> {
+        // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
+        %loaded = tt.load %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #AL>
+        scf.yield %loaded : tensor<128x32xf16, #AL>
+      } else {
+        scf.yield %a_zero : tensor<128x32xf16, #AL>
+      }
+      scf.yield %nested : tensor<128x32xf16, #AL>
+    } else {
+      scf.yield %a_zero : tensor<128x32xf16, #AL>
+    }
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
+    // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
+    %b_ = tt.load %b_ptr_init : tensor<32x128x!tt.ptr<f16>, #BL>
+    %b = ttg.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
+    %c = tt.dot %a, %b, %prev_c : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
+    scf.yield %c : tensor<128x128xf32, #C>
+  }
+  tt.return %loop : tensor<128x128xf32, #C>
+}
+
 // CHECK-LABEL: @small_load
 // We should *not* assign latency to the load of b_ptr.
 tt.func @small_load(%lb : index, %ub : index, %step : index,
