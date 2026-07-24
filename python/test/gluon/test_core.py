@@ -1867,7 +1867,8 @@ def test_tmem_store_lut(rows):
         fence_async_shared()
         tmem.store(smem.load(tmem.get_reg_layout()))
         alias = tmem._reinterpret(shape=(num_rows, cols), layout=TensorMemoryLayout((num_rows, cols), col_stride=1))
-        ttgl.store(ttgl.set_auto_layout(out_ptrs, blocked), alias.load(blocked))
+        out_layout: ttgl.constexpr = alias.get_reg_layout()
+        ttgl.store(ttgl.set_auto_layout(out_ptrs, out_layout), alias.load(out_layout))
 
     torch.manual_seed(0)
     x = torch.randint(-100, 100, (rows, cols), dtype=torch.int8, device=device)
