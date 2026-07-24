@@ -1286,7 +1286,8 @@ class CodeGenerator(ast.NodeVisitor):
             step = iter_args[2] if len(iter_args) > 2 else self.visit(ast.Constant(1))
         else:
             raise RuntimeError('Only `range` and `static_range` iterators are currently supported')
-        # handle negative constant step (not supported by scf.for in MLIR)
+        # handle negative constant step (not supported by scf.for in MLIR).
+        # Only a constexpr step can be normalized here; a runtime step must be positive.
         negative_step = False
         if _is_constexpr(step) and step.value < 0:
             step = constexpr(-step.value)
