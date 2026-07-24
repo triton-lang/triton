@@ -73,6 +73,41 @@ def check_env_flag(name: str, default: str = "") -> bool:
     return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
 
 
+def find_therock_rocm_include_dir() -> Optional[str]:
+    """Find the ROCm include directory from a TheRock Python installation.
+
+    `rocm-sdk path --root` is the public CLI for locating the expanded devel
+    package. It also initializes that package on first use, so callers do not
+    need to run `rocm-sdk init` separately.
+    """
+    rocm_sdk = Path(sys.executable).with_name("rocm-sdk")
+    if not rocm_sdk.is_file():
+        rocm_sdk = shutil.which("rocm-sdk")
+    if rocm_sdk is None:
+        return None
+    try:
+        # Run the caller venv's rocm-sdk entry point in isolated mode so pip's
+        # temporary PEP 517 import path cannot shadow its installed packages.
+        root = subprocess.check_output(
+            [sys.executable, "-I", str(rocm_sdk), "path", "--root"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    if not root:
+        return None
+
+    include_dir = Path(root) / "include"
+    required_headers = [
+        include_dir / "hip" / "hip_runtime.h",
+        include_dir / "rocprofiler-sdk" / "fwd.h",
+    ]
+    if not all(header.is_file() for header in required_headers):
+        return None
+    return str(include_dir)
+
+
 def _normalize_optional_path(value: str) -> Optional[str]:
     normalized = _normalize_optional(value)
     if normalized is None:
