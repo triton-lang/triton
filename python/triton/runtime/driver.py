@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 
 from ..backends import backends, DriverBase
 
@@ -26,18 +27,34 @@ class DriverConfig:
     def __init__(self) -> None:
         self._default: DriverBase | None = None
         self._active: DriverBase | None = None
+        # Serialize lazy initialization so two threads cannot concurrently
+        # construct duplicate backend drivers under free-threaded CPython.
+        self._lock = threading.Lock()
 
     @property
     def default(self) -> DriverBase:
-        if self._default is None:
-            self._default = _create_driver()
-        return self._default
+        default = self._default
+        if default is not None:
+            return default
+        with self._lock:
+            if self._default is None:
+                self._default = _create_driver()
+            return self._default
 
     @property
     def active(self) -> DriverBase:
-        if self._active is None:
-            self._active = self.default
-        return self._active
+        active = self._active
+        if active is not None:
+            return active
+        with self._lock:
+            if self._active is None:
+                # self.default takes the same lock recursively-safe path
+                # via its own fast check; call _default directly to avoid
+                # re-entering the lock.
+                if self._default is None:
+                    self._default = _create_driver()
+                self._active = self._default
+            return self._active
 
     def set_active(self, driver: DriverBase) -> None:
         self._active = driver
