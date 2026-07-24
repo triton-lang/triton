@@ -1394,6 +1394,86 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#nvmma_nonpow2_split = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, rank = 3}>
+#shared_mbar_nonpow2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @async_tma_copy_global_to_local_nonpow2_split_rejected(%arg0: !tt.tensordesc<32x128x70xf16, #nvmma_nonpow2_split>) {
+    %true = arith.constant true
+    %c0_i32 = arith.constant 0 : i32
+    // Last dim 70 is non-pow2 and not divisible by its TMA block size 64.
+    // expected-error @+1 {{must be divisible by its TMA block size}}
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<32x128x70xf16, #nvmma_nonpow2_split, #smem, mutable>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared_mbar_nonpow2, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %arg0[%c0_i32, %c0_i32, %c0_i32] %0, %1, %true : !tt.tensordesc<32x128x70xf16, #nvmma_nonpow2_split>, !ttg.memdesc<1xi64, #shared_mbar_nonpow2, #smem, mutable> -> !ttg.memdesc<32x128x70xf16, #nvmma_nonpow2_split, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#nvmma_nonpow2_message_grid = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, rank = 3}>
+#smem = #ttg.shared_memory
+// The 128-byte swizzle selects a 64-element TMA block in the contiguous
+// dimension. An extent of 192 would require three TMA messages.
+// expected-error @below {{number of TMA messages per CTA (3) must be a power of two}}
+!invalid_nvmma_nonpow2_message_grid = !ttg.memdesc<32x128x192xf16, #nvmma_nonpow2_message_grid, #smem>
+
+// -----
+
+#blocked_lut = #ttg.blocked<{sizePerThread = [2, 16], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#tmem_lut = #ttng.tensor_memory_lut_encoding<>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @lut_invalid_rows() {
+    %cst = arith.constant dense<0> : tensor<64x16xi8, #blocked_lut>
+    // expected-error @below {{The number of rows in a LUT tensor per CTA must be 32 or less}}
+    %0 = ttng.tmem_alloc %cst : (tensor<64x16xi8, #blocked_lut>) -> !ttg.memdesc<64x16xi8, #tmem_lut, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked_lut = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#tmem_lut = #ttng.tensor_memory_lut_encoding<>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @lut_invalid_columns() {
+    %cst = arith.constant dense<0> : tensor<32x8xi8, #blocked_lut>
+    // expected-error @below {{The number of columns in a LUT tensor per CTA must be a multiple of 16 corresponding to BLOCK_K = 128}}
+    %0 = ttng.tmem_alloc %cst : (tensor<32x8xi8, #blocked_lut>) -> !ttg.memdesc<32x8xi8, #tmem_lut, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared_lut_a = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
+#shared_lut_b_n128 = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [16, 0], [32, 0]]}, alignment = 16>
+#shared_lut_b_n256 = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [16, 0], [32, 0]]}, alignment = 16>
+#shared_lut_b_equal_k = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
+#tmem_lut_acc_n128 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem_lut_acc_n256 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
+#tmem_lut_metadata_n128 = #ttng.tensor_memory_lut_encoding<>
+#tmem_lut_scales_n128 = #ttng.tensor_memory_scales_encoding<>
+#smem_lut_n128 = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tc_gen5_mma_lut_invalid_block_n(
+      %a: !ttg.memdesc<128x128xf8E4M3FN, #shared_lut_a, #smem_lut_n128>,
+      %b: !ttg.memdesc<48x128xi8, #shared_lut_b_n128, #smem_lut_n128>,
+      %lut: !ttg.memdesc<16x16xi8, #tmem_lut_metadata_n128, #ttng.tensor_memory>,
+      %d: !ttg.memdesc<128x128xf32, #tmem_lut_acc_n128, #ttng.tensor_memory, mutable>,
+      %use_acc: i1, %pred: i1) {
+    // expected-error @below {{LUT decompression currently requires the RHS N dimension to be 256}}
+    ttng.tc_gen5_mma %a, %b[%lut], %d, %use_acc, %pred :
+      !ttg.memdesc<128x128xf8E4M3FN, #shared_lut_a, #smem_lut_n128>,
+      !ttg.memdesc<48x128xi8, #shared_lut_b_n128, #smem_lut_n128>[!ttg.memdesc<16x16xi8, #tmem_lut_metadata_n128, #ttng.tensor_memory>],
+      !ttg.memdesc<128x128xf32, #tmem_lut_acc_n128, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared_bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>

@@ -667,7 +667,7 @@ def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait", [MemWaitOpTrait]> {
 
 def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
-    DeclareOpInterfaceMethods<DotOpInterface>,
+    DeclareOpInterfaceMethods<DotOpInterface, ["verifyDims"]>,
     DeclareOpInterfaceMethods<MMAv5OpInterface>,
     DeclareOpInterfaceMethods<PredicatedOpInterface>,
     DeclareOpInterfaceMethods<MBarrierOpInterface>,
@@ -688,6 +688,19 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     and write on its accumulator operand. When the tokens are present, they can
     be used to check aliasing and modref on the accumulator memory.
 
+    The optional `$lut` operand enables Rubin LUT-based decompression of B. In
+    this mode, `$b` does not contain matrix elements. Instead, each logical B
+    element is represented by a 3-bit index in `[0, 7]`, and successive indices
+    along K are packed into `i8` elements. Thus, for logical B shape `(K, N)`,
+    `$b` has shape `(K * 3 / 8, N)` and element type `i8`.
+
+    One 8-entry lookup table is shared by each logical `64x8` B tile along
+    `(K, N)`. `$lut` stores the collection of tables in tensor memory as a
+    rank-2 `i8` tensor with shape `(N / 8, (K / 64) * 8)`. For logical B
+    coordinate `(k, n)`, the 3-bit index selects an entry from
+    `$lut[n / 8, (k / 64) * 8 : (k / 64 + 1) * 8]`. The `$lut` operand must use
+    `tensor_memory_lut_encoding`.
+
     The `isUnsigned` attribute is only relevant when performing an integer MMA operation.
     If true, the integer values are treated as unsigned, otherwise they are treated as signed.
   }];
@@ -697,6 +710,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     TTG_MemDescType:$b,
     TTG_MemDescType:$d,
     Optional<TTG_AsyncToken>:$acc_dep,
+    Optional<TTG_MemDescType>:$lut,
     I1:$useD,
     I1:$pred,
     Variadic<TTG_MemDescType>:$barriers,
@@ -710,7 +724,8 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
 
   let builders = [
     OpBuilder<(ins "Type":$token,
-      "Value":$a, "Value":$b, "Value":$d, "Value":$acc_dep, "Value":$useD,
+      "Value":$a, "Value":$b, "Value":$d, "Value":$acc_dep, "Value":$lut,
+      "Value":$useD,
       "Value":$pred, CArg<"bool", "false">:$two_ctas,
       CArg<"bool", "false">:$multicast,
       CArg<"ValueRange", "{}">:$barriers,
@@ -720,10 +735,11 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
   ];
 
   let assemblyFormat = [{
-    $a `,` $b `,` $d `` custom<Token>($acc_dep, type($token)) `,` $useD`,`
+    $a `,` $b (`[` $lut^ `]`)? `,` $d `` custom<Token>($acc_dep, type($token)) `,` $useD`,`
     $pred `` custom<BarriersAndPreds>($barriers, $barrier_preds)
-    attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
-    qualified(type($d)) (`,` qualified(type($barriers))^)?
+    attr-dict `:` qualified(type($a)) `,` qualified(type($b))
+    (`[` qualified(type($lut))^ `]`)? `,` qualified(type($d))
+    (`,` qualified(type($barriers))^)?
   }];
 
   let hasVerifier = 1;
@@ -752,6 +768,20 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     This operation takes and produces an optional token to indicate TMEM read
     and write on its accumulator operand. When the tokens are present, they can
     be used to check aliasing and modref on the accumulator memory.
+
+    The optional `$lut` operand enables Rubin LUT-based decompression of B. In
+    this mode, `$b` does not contain matrix elements. Instead, each logical B
+    element is represented by a 3-bit index in `[0, 7]`, and successive indices
+    along K are packed into `i8` elements. Thus, for logical B shape `(K, N)`,
+    `$b` has shape `(K * 3 / 8, N)` and element type `i8`.
+
+    One 8-entry lookup table is shared by each logical `64x8` B tile along
+    `(K, N)`. `$lut` stores the collection of tables in tensor memory as a
+    rank-2 `i8` tensor with shape `(N / 8, (K / 64) * 8)`. For logical B
+    coordinate `(k, n)`, the 3-bit index selects an entry from
+    `$lut[n / 8, (k / 64) * 8 : (k / 64 + 1) * 8]`. The `$lut` operand must use
+    `tensor_memory_lut_encoding`; the B scales apply to the decompressed logical
+    B values.
   }];
 
   let arguments = (ins
@@ -759,6 +789,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     TTG_MemDescType:$b,
     TTG_MemDescType:$d,
     Optional<TTG_AsyncToken>:$acc_dep,
+    Optional<TTG_MemDescType>:$lut,
     TTG_MemDescType:$a_scale,
     TTG_MemDescType:$b_scale,
     TT_ScaleDotElemTypeAttr:$a_type,
@@ -784,7 +815,8 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     // custom builder signature over the default-generated one.
     OpBuilder<(ins "::mlir::Type":$token,
       "::mlir::Value":$a, "::mlir::Value":$b, "::mlir::Value":$d,
-      "::mlir::Value":$acc_dep, "::mlir::Value":$a_scale,
+      "::mlir::Value":$acc_dep, "::mlir::Value":$lut,
+      "::mlir::Value":$a_scale,
       "::mlir::Value":$b_scale, "::mlir::triton::ScaleDotElemType":$a_type,
       "::mlir::triton::ScaleDotElemType":$b_type,
       "::mlir::Value":$useD, "::mlir::Value":$pred,
@@ -796,10 +828,11 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
   ];
 
   let assemblyFormat = [{
-    $a `,` $b `,` $d `` custom<Token>($acc_dep, type($token)) `,` $a_scale `,`
+    $a `,` $b (`[` $lut^ `]`)? `,` $d `` custom<Token>($acc_dep, type($token)) `,` $a_scale `,`
     $b_scale `,` $useD `,` $pred `lhs` `=` $a_type `rhs` `=` $b_type
     `` custom<BarriersAndPreds>($barriers, $barrier_preds)
-    attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
+    attr-dict `:` qualified(type($a)) `,` qualified(type($b))
+    (`[` qualified(type($lut))^ `]`)? `,`
     qualified(type($d)) `,` qualified(type($a_scale)) `,`
     qualified(type($b_scale)) (`,` qualified(type($barriers))^)?
   }];

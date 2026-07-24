@@ -60,7 +60,7 @@ std::optional<NvmmaSmemAttrs> getNvmmaSmemAttrs(ttg::MemDescType memTy) {
     return NvmmaSmemAttrs{nvmma.getSwizzlingByteWidth(), nvmma.getTransposed(),
                           nvmma.getFp4Padded()};
 
-  auto ll = ttg::toLinearLayout(memTy).pseudoinvert();
+  auto ll = ttg::toLinearLayoutWithPow2Shape(memTy).pseudoinvert();
   unsigned bitwidth = memTy.getElementType().getIntOrFloatBitWidth();
   auto attrsAndCandidate = getNvmmaSmemAttrs(ll, bitwidth);
   if (!attrsAndCandidate)

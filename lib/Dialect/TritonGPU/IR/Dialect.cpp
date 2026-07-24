@@ -38,6 +38,21 @@ static SmallVector<unsigned>
 basesPerDimImpl(const LinearLayout::BasesT &namedBases, StringAttr dimName,
                 size_t rank, bool skipBroadcast = true);
 
+bool mlir::triton::gpu::isPositivePowerOfTwoShape(ArrayRef<int64_t> shape) {
+  return llvm::all_of(
+      shape, [](int64_t dim) { return dim >= 1 && llvm::isPowerOf2_64(dim); });
+}
+
+SmallVector<int64_t>
+mlir::triton::gpu::normalizeShapeToPowerOf2(ArrayRef<int64_t> shape) {
+  SmallVector<int64_t> normalizedShape(shape.begin(), shape.end());
+  for (int64_t &dim : normalizedShape) {
+    assert(dim > 0 && "shape dimensions must be positive");
+    dim = llvm::PowerOf2Ceil(dim);
+  }
+  return normalizedShape;
+}
+
 // Utility
 namespace mlir {
 namespace triton {
@@ -2065,12 +2080,11 @@ CGAEncodingAttr SharedLinearEncodingAttr::getCGALayout() const {
 LinearLayout
 SharedLinearEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   const auto &ll = getLinearLayout();
-  auto outDimNames = llvm::to_vector(ll.getOutDimNames());
-  assert(shape.size() == outDimNames.size());
-  // We don't support automatic broadcasting for shared linear layouts
-  for (auto [size, llSize] : llvm::zip(shape, ll.getOutDimSizes())) {
-    assert(size == llSize);
-  }
+  assert(shape.size() == ll.getNumOutDims());
+  // SharedLinear may represent a non-pow2 logical shape with a larger
+  // pow2-compatible LinearLayout capacity (e.g. logical-count dimensions).
+  // Require the normalized logical shape to match the LinearLayout capacity.
+  assert(llvm::equal(normalizeShapeToPowerOf2(shape), ll.getOutDimSizes()));
   return ll;
 }
 
@@ -3111,8 +3125,9 @@ struct TritonGPUInferLayoutInterface
     // Generic case
     auto padded = dyn_cast<PaddedSharedEncodingAttr>(operandEncoding);
 
+    auto layoutShape = normalizeShapeToPowerOf2(shape);
     auto ll = padded ? padded.getLinearComponent()
-                     : toLinearLayout(shape, operandEncoding);
+                     : toLinearLayout(layoutShape, operandEncoding);
     if (failed(checkRank(ll.getNumOutDims())))
       return failure();
     auto transposedLl = transposeLinearLayout(ll, order);
@@ -3849,8 +3864,7 @@ struct TritonGPUVerifyTensorLayoutInterface
                        << "(e.g., swizzled warp bases or non-injective layout) "
                        << "is not supported on " << op->getName() << ".";
     }
-    if (llvm::any_of(rankedTy.getShape(),
-                     [](int64_t i) { return !llvm::isPowerOf2_64(i); })) {
+    if (!isPositivePowerOfTwoShape(rankedTy.getShape())) {
       return makeErr() << "Layout has shape " << rankedTy.getShape()
                        << ", but the tensor it's attached to has shape "
                        << rankedTy.getShape()
@@ -3898,7 +3912,7 @@ struct TritonGPUVerifyTensorLayoutInterface
     if (auto sharedLinearEnc = dyn_cast<SharedLinearEncodingAttr>(layout)) {
       auto shape = dropPipeliningDim(memDescTy.getAllocShape(), layout);
       auto layoutShape = sharedLinearEnc.getLinearLayout().getOutDimSizes();
-      if (!llvm::equal(shape, layoutShape)) {
+      if (!llvm::equal(normalizeShapeToPowerOf2(shape), layoutShape)) {
         return makeErr() << layout << ".\nLayout has shape " << layoutShape
                          << ", but the memdesc type has shape " << shape << ".";
       }

@@ -35,8 +35,12 @@ __all__ = [
 ]
 
 
+class _TensorMemoryLayoutBase:
+    pass
+
+
 @dataclass(frozen=True, eq=True)
-class TensorMemoryLayout:
+class TensorMemoryLayout(_TensorMemoryLayoutBase):
     """
     Describes the layout for tensor memory in Blackwell architecture.
 
@@ -93,7 +97,7 @@ class TensorMemoryLayout:
 
 
 @dataclass(frozen=True, eq=True)
-class TensorMemoryScalesLayout:
+class TensorMemoryScalesLayout(_TensorMemoryLayoutBase):
     """
     Describes the layout for tensor memory scales in Blackwell architecture.
 
@@ -153,7 +157,7 @@ class tensor_memory_descriptor_type(base_type):
         self.shape = _unwrap_if_constexpr(shape)
         self.layout = _unwrap_if_constexpr(layout)
         self.alloc_shape = _unwrap_if_constexpr(alloc_shape)
-        assert isinstance(self.layout, (TensorMemoryLayout, TensorMemoryScalesLayout))
+        assert isinstance(self.layout, _TensorMemoryLayoutBase)
 
     def to_ir(self, builder: GluonOpBuilder) -> None:
         return builder.get_tensor_mem_desc_ty(

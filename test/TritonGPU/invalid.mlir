@@ -877,3 +877,26 @@ tt.func public @padded_subview_unsupported_size(%arg0: !ttg.memdesc<2x32x32xf32,
 // expected-error @below {{alignment must be specified outside of the linear layout braces}}
 #shared = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [2, 0]], block = [], alignment = 16}>
 !alignment_in_layout = !ttg.memdesc<4x4xf32, #shared, #ttg.shared_memory>
+
+// -----
+
+// Fails the doubling invariant for the allowed non-pow2 shape
+#shared_linear_nonpow2_bad = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [48, 0], [32, 0]]}, alignment = 16>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // expected-error @+1 {{unexpected basis in inverted layout view}}
+  tt.func @memdesc_shared_linear_nonpow2_invariant(%arg0: !ttg.memdesc<48x256xi8, #shared_linear_nonpow2_bad, #smem>) {
+    tt.return
+  }
+}
+
+// -----
+
+#shared_linear_two_nonpow2 = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0], [128, 0]]}, alignment = 16>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // expected-error @+1 {{at most one non-power-of-two dimension is currently supported for nvmma_shared/shared_linear memdesc shapes}}
+  tt.func @memdesc_shared_linear_nonpow2_two_dims(%arg0: !ttg.memdesc<192x48xi8, #shared_linear_two_nonpow2, #smem>) {
+    tt.return
+  }
+}

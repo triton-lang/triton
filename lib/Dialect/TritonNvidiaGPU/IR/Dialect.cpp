@@ -476,6 +476,14 @@ LogicalResult TensorMemoryScalesEncodingAttr::verify(
   return success();
 }
 
+LogicalResult TensorMemoryLUTEncodingAttr::verify(
+    function_ref<InFlightDiagnostic()> emitError,
+    gpu::CGAEncodingAttr cgaLayout) {
+  if (cgaLayout.getRank() != 2)
+    return emitError() << "CGALayout must have rank 2";
+  return success();
+}
+
 LogicalResult impl::verifyMMAv5Op(Operation *op) {
   auto isInterleaved = [](MemDescType memdesc) {
     auto enc = dyn_cast<TensorMemoryEncodingAttr>(memdesc.getEncoding());
@@ -615,6 +623,10 @@ public:
     }
     if (mlir::isa<TensorMemoryScalesEncodingAttr>(attr)) {
       os << "tmem_scales";
+      return AliasResult::FinalAlias;
+    }
+    if (mlir::isa<TensorMemoryLUTEncodingAttr>(attr)) {
+      os << "tmem_lut";
       return AliasResult::FinalAlias;
     }
     return OpAsmDialectInterface::getAlias(attr, os);

@@ -151,4 +151,19 @@ def TTG_TensorMemoryScalesEncodingAttr
   let assemblyFormat = "`<` struct(params) `>`";
 }
 
+def TTG_TensorMemoryLUTEncodingAttr
+    : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemoryLUTEncoding",
+              [LayoutEncodingTrait]> {
+  let mnemonic = "tensor_memory_lut_encoding";
+  let attrName = "triton.gpu.tensor_memory_lut_encoding";
+  let description = [{
+    An encoding for lookup tables used by tcgen05 MMA decompression. LUT data
+    is broadcast across four warps to fill TMEM's 128 rows and, unlike scale
+    tensors, does not use 32-row interleaving.
+  }];
+  let parameters = (ins TTNG_CGALayoutRankTwoParam:$CGALayout);
+  let genVerifyDecl = 1;
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+
 #endif

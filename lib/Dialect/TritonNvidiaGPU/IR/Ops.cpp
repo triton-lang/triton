@@ -30,6 +30,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -863,6 +864,58 @@ static LogicalResult verifyMMADType(Operation *op, Type a, Type b, Type d) {
   return success();
 }
 
+static LogicalResult verifyMMALUTOperands(Operation *op, MemDescType bType,
+                                          MemDescType lutType,
+                                          int64_t logicalK) {
+  if (bType.getRank() != 2)
+    return op->emitOpError("LUT decompression requires a rank-2 RHS operand");
+  if (!bType.getElementType().isInteger(8))
+    return op->emitOpError(
+        "LUT decompression requires an i8 packed RHS operand");
+  if (lutType.getRank() != 2)
+    return op->emitOpError("LUT operand must have a rank-2 tensor");
+  if (!isa<TensorMemoryLUTEncodingAttr>(lutType.getEncoding()))
+    return op->emitOpError("LUT operand must use tensor_memory_lut_encoding");
+
+  ArrayRef<int64_t> bShape = bType.getShape();
+  int64_t packedK = bShape[bShape.size() - 2];
+  int64_t blockN = bShape.back();
+  if (blockN != 256)
+    return op->emitOpError(
+        "LUT decompression currently requires the RHS N dimension to be 256");
+  if (logicalK % 128 != 0)
+    return op->emitOpError(
+        "LUT decompression requires the logical K dimension to be a multiple "
+        "of 128");
+  if (packedK % 3 != 0 || packedK / 3 * 8 != logicalK)
+    return op->emitOpError()
+           << "LUT decompression requires packed RHS K dimension "
+              "logicalK * 3 / 8; got logical K "
+           << logicalK << " and packed K " << packedK;
+
+  SmallVector<int64_t> expectedLutShape = {blockN / 8, logicalK / 8};
+  if (lutType.getShape() != ArrayRef<int64_t>(expectedLutShape))
+    return op->emitOpError()
+           << "LUT operand shape must be " << expectedLutShape
+           << " for RHS shape " << bShape << ", but got " << lutType.getShape();
+  return success();
+}
+
+bool TCGen5MMAOp::verifyDims() {
+  auto aShape = getA().getType().getShape();
+  auto bShape = getB().getType().getShape();
+
+  int64_t aKdim = aShape.back();
+  int64_t bKdim = bShape[bShape.size() - 2];
+  if (getLut()) {
+    // LUT mode consumes 3-bit packed RHS values in an 8-bit container.
+    if (bKdim % 3 != 0)
+      return false;
+    bKdim = (bKdim / 3) * 8;
+  }
+  return aKdim == bKdim;
+}
+
 LogicalResult TCGen5MMAOp::verify() {
   if (!getIsAsync() && !getBarriers().empty()) {
     return emitOpError("The op is synchronous but a barrier is present.");
@@ -877,8 +930,15 @@ LogicalResult TCGen5MMAOp::verify() {
   Type atype = getA().getType().getElementType();
   Type btype = getB().getType().getElementType();
   Type dtype = getD().getType().getElementType();
-  if (failed(verifyMMADType(*this, atype, btype, dtype)))
+  if (getLut()) {
+    if (!isa<Float8E4M3FNType, Float8E5M2Type>(atype))
+      return emitOpError("LUT decompression requires an FP8 LHS operand");
+    if (!dtype.isF16() && !dtype.isF32())
+      return emitOpError(
+          "LUT decompression requires an f16 or f32 accumulator");
+  } else if (failed(verifyMMADType(*this, atype, btype, dtype))) {
     return failure();
+  }
 
   if (getA().getType().getRank() != 2)
     return emitOpError("LHS operand must have a rank-2 tensor");
@@ -886,6 +946,10 @@ LogicalResult TCGen5MMAOp::verify() {
     return emitOpError("RHS operand must have a rank-2 tensor");
   if (getD().getType().getRank() != 2)
     return emitOpError("Return operand must have a rank-2 tensor");
+  if (getLut() && failed(verifyMMALUTOperands(
+                      getOperation(), getB().getType(), getLut().getType(),
+                      getA().getType().getShape().back())))
+    return failure();
 
   auto aEnc = getA().getType().getEncoding();
   if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr,
@@ -991,7 +1055,7 @@ LogicalResult TCGen5MMAOp::verify() {
   }
 
   auto aLayout = toLinearLayout(getA().getType());
-  auto bLayout = toLinearLayout(getB().getType());
+  auto bLayout = toLinearLayoutWithPow2Shape(getB().getType());
   auto dLayout = toLinearLayout(getD().getType());
   auto log2nCTAs = dLayout.getInDimSizeLog2(kBlock);
   for (int i = 0; i < log2nCTAs; i++) {
@@ -1031,6 +1095,11 @@ void TCGen5MMAOp::getEffects(
   }
   effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
                        SharedMemory::get());
+  if (getLut()) {
+    auto lutMutable = getLutMutable();
+    effects.emplace_back(MemoryEffects::Read::get(), &*lutMutable.begin(),
+                         TensorMemory::get());
+  }
   for (auto &barrierMutable : getBarriersMutable())
     effects.emplace_back(MemoryEffects::Write::get(), &barrierMutable,
                          SharedMemory::get());
@@ -1081,14 +1150,14 @@ void TCGen5MMAOp::setPredicateOperand(Value pred) { setPredicate(pred); }
 Type TCGen5MMAOp::getPredicateOperandTypeLike() { return getPred().getType(); }
 
 void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
-                        Value a, Value b, Value d, Value accDep, Value useD,
-                        Value pred, bool twoCtas, bool multicast,
+                        Value a, Value b, Value d, Value accDep, Value lut,
+                        Value useD, Value pred, bool twoCtas, bool multicast,
                         ValueRange barriers, ValueRange barrierPreds,
                         bool isAsync, bool isUnsigned) {
   if (!barriers.empty()) {
     isAsync = true;
   }
-  build(builder, state, token, a, b, d, accDep, useD, pred, barriers,
+  build(builder, state, token, a, b, d, accDep, lut, useD, pred, barriers,
         barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr(),
         twoCtas ? builder.getUnitAttr() : UnitAttr(),
         multicast ? builder.getUnitAttr() : UnitAttr(),
@@ -1145,6 +1214,17 @@ static Type getScaledMMAOperandType(Type elementType,
   }
   llvm_unreachable("Unsupported type.");
 };
+
+static int64_t getScaledMMAAKDim(TCGen5MMAScaledOp op) {
+  int64_t aKdim = op.getA().getType().getShape().back();
+  bool transA = false;
+  if (auto aSharedLayout =
+          dyn_cast<NVMMASharedEncodingAttr>(op.getA().getType().getEncoding()))
+    transA = aSharedLayout.getTransposed();
+  if (op.getAType() == ScaleDotElemType::E2M1 && !transA)
+    aKdim *= 2;
+  return aKdim;
+}
 
 static LogicalResult verifyScaledLHSOperand(Operation *op, Type elementType,
                                             TensorMemoryEncodingAttr encoding,
@@ -1226,6 +1306,10 @@ LogicalResult TCGen5MMAScaledOp::verify() {
     return emitOpError("accumulator layout must not be fp4_padded");
   if (enc.getBlockM() != 128)
     return emitOpError("only supports instruction shape blockM=128");
+  if (getLut() && failed(verifyMMALUTOperands(getOperation(), getB().getType(),
+                                              getLut().getType(),
+                                              getScaledMMAAKDim(*this))))
+    return failure();
   if (auto lhsEnc =
           dyn_cast<TensorMemoryEncodingAttr>(getA().getType().getEncoding())) {
     if (failed(verifyScaledLHSOperand(getOperation(),
@@ -1295,31 +1379,33 @@ void TCGen5MMAScaledOp::getEffects(
                        TensorMemory::get());
   effects.emplace_back(MemoryEffects::Read::get(), &getBScaleMutable(),
                        TensorMemory::get());
+  if (getLut()) {
+    auto lutMutable = getLutMutable();
+    effects.emplace_back(MemoryEffects::Read::get(), &*lutMutable.begin(),
+                         TensorMemory::get());
+  }
   for (auto &barrierMutable : getBarriersMutable())
     effects.emplace_back(MemoryEffects::Write::get(), &barrierMutable,
                          SharedMemory::get());
 }
 
 bool TCGen5MMAScaledOp::verifyDims() {
-  auto aShape = this->getA().getType().getShape();
   auto bShape = this->getB().getType().getShape();
 
-  bool transA = false;
-  if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
-          getA().getType().getEncoding())) {
-    transA = aSharedLayout.getTransposed();
-  }
   bool transB = false;
   if (auto bSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
           getB().getType().getEncoding())) {
     transB = !bSharedLayout.getTransposed();
   }
-  auto aKdim = aShape[aShape.size() - 1];
-  auto bKdim = bShape[aShape.size() - 2];
-  if (this->getAType() == ScaleDotElemType::E2M1 && !transA)
-    aKdim *= 2;
-  if (this->getBType() == ScaleDotElemType::E2M1 && !transB)
+  auto aKdim = getScaledMMAAKDim(*this);
+  auto bKdim = bShape[bShape.size() - 2];
+  if (getLut()) {
+    if (bKdim % 3 != 0)
+      return false;
+    bKdim = (bKdim / 3) * 8;
+  } else if (this->getBType() == ScaleDotElemType::E2M1 && !transB) {
     bKdim *= 2;
+  }
 
   return aKdim == bKdim;
 }
@@ -1441,16 +1527,16 @@ int64_t TCGen5MMAScaledOp::getBlockK() {
 
 void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
                               Type token, Value a, Value b, Value d,
-                              Value accDep, Value aScale, Value bScale,
-                              ScaleDotElemType aType, ScaleDotElemType bType,
-                              Value useD, Value pred, ValueRange barriers,
-                              ValueRange barrierPreds, bool twoCTAs,
-                              bool isAsync, bool multicast) {
+                              Value accDep, Value lut, Value aScale,
+                              Value bScale, ScaleDotElemType aType,
+                              ScaleDotElemType bType, Value useD, Value pred,
+                              ValueRange barriers, ValueRange barrierPreds,
+                              bool twoCTAs, bool isAsync, bool multicast) {
   MLIRContext *ctx = builder.getContext();
   if (!barriers.empty()) {
     isAsync = true;
   }
-  build(builder, state, token, a, b, d, accDep, aScale, bScale,
+  build(builder, state, token, a, b, d, accDep, lut, aScale, bScale,
         ScaleDotElemTypeAttr::get(ctx, aType),
         ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
         barrierPreds, twoCTAs ? builder.getUnitAttr() : UnitAttr(),
@@ -1468,6 +1554,18 @@ static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
   if (!type.getEncoding())
     return success();
 
+  if (isa<TensorMemoryLUTEncodingAttr>(memdesc.getEncoding())) {
+    auto shapePerCTA =
+        getShapePerCTA(memdesc.getEncoding(), memdesc.getShape());
+    if (shapePerCTA[0] > 32)
+      return op->emitOpError(
+          "The number of rows in a LUT tensor per CTA must be 32 or less");
+    if (shapePerCTA[1] < 16 || shapePerCTA[1] % 16 != 0)
+      return op->emitOpError(
+          "The number of columns in a LUT tensor per CTA must be a multiple "
+          "of 16 corresponding to BLOCK_K = 128");
+  }
+
   if (isDistributedLayoutTMemCompatible(op, type, memdesc))
     return success();
 
@@ -1484,7 +1582,8 @@ static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
 
 LogicalResult TMEMStoreOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
-           TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding()))
+           TensorMemoryScalesEncodingAttr, TensorMemoryLUTEncodingAttr>(
+          getDst().getType().getEncoding()))
     return emitOpError("should use tensor memory encoding.");
   if (!getDst().getType().getMutableMemory()) {
     return emitOpError("Cannot store into an immutable alloc");
@@ -1509,8 +1608,8 @@ LogicalResult TMEMLoadOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
           getSrc().getType().getMemorySpace()))
     return emitOpError("source must be a tensor memory buffer.");
-  if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-          getSrc().getType().getEncoding()))
+  if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
+           TensorMemoryLUTEncodingAttr>(getSrc().getType().getEncoding()))
     return emitOpError("should use tensor memory encoding.");
   if (failed(verifyTMEMOperand(*this, getType(), getSrc().getType(), "result")))
     return failure();
@@ -1553,8 +1652,8 @@ LogicalResult TMEMLoadOp::verify() {
 
 // -- TMEMAllocOp --
 LogicalResult TMEMAllocOp::verify() {
-  if (!isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr>(
-          getType().getEncoding()))
+  if (!isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr,
+           TensorMemoryLUTEncodingAttr>(getType().getEncoding()))
     return emitOpError("should use tensor memory encoding");
   if (getSrc() &&
       failed(verifyTMEMOperand(*this, getSrc().getType(), getType(), "source")))
@@ -1618,7 +1717,8 @@ LogicalResult TMEMCopyOp::verify() {
   if (nvmmaEnc && (nvmmaEnc.getTransposed() || nvmmaEnc.getFp4Padded())) {
     return emitOpError("The source should not be transposed or padded");
   }
-  if (isa<TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding())) {
+  if (isa<TensorMemoryScalesEncodingAttr, TensorMemoryLUTEncodingAttr>(
+          getDst().getType().getEncoding())) {
     if (nvmmaEnc && nvmmaEnc.getSwizzlingByteWidth() != 0) {
       return emitOpError("The source should not be swizzled for now");
     }

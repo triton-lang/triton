@@ -31,7 +31,7 @@ ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
 
 bool hasCGABroadcast(ttg::MemDescType memDescType) {
   auto kBlock = StringAttr::get(memDescType.getContext(), "block");
-  return ttg::toLinearLayout(memDescType)
+  return ttg::toLinearLayoutWithPow2Shape(memDescType)
              .getFreeVariableMasks()
              .lookup(kBlock) != 0;
 }
