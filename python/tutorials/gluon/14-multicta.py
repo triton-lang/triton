@@ -308,8 +308,8 @@ if __name__ == "__main__" and is_hopper_or_newer():
 # part of the kernel before entering warp specialization.
 #
 # Final note on synchronization.
-# cluster.arrive / cluster.wait (i.e., CGA barriers, the cluster equivalent of bar.sync for CTAs) must be
-# executed by all threads in the kernel. As a result, they cannot be used inside a warp_specialize block.
+# Cluster barriers (i.e., CGA barriers, the cluster equivalent of bar.sync for CTAs) must be executed by all
+# threads in the kernel. As a result, they cannot be used inside a warp_specialize block.
 #
 # Moreover, operations such as convert_layout, reduce, sum, max, etc., emit CGA barriers when they cross CTAs.
 # Therefore, these operations are also not allowed inside a warp_specialize block whenever they may span multiple
@@ -846,7 +846,7 @@ def matmul_clc_partition(p):
         mbarrier.wait(p.clc_consumed_bars.index(consumed_state.index), consumed_state.phase, pred=(i >= acc_stages))
         barrier = p.clc_barriers.index(state.index)
         result = p.clc_result_buffers.index(state.index)
-        mbarrier.expect(barrier, 16)
+        mbarrier.expect(barrier, 16, from_cta=0x0)
         clc.try_cancel(result, barrier)
         mbarrier.wait(barrier, state.phase)
         clc_res = clc.load_result(result)
@@ -1019,14 +1019,14 @@ def matmul_multicta_kernel(
 
     clc_barriers = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
     clc_planar_ready_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
-    clc_consumed_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES, two_ctas=two_ctas)
+    cga_layout: gl.constexpr = [[0]] * (gl.num_ctas().bit_length() - 1)
+    clc_layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout)
+    clc_consumed_bars = gl.allocate_shared_memory(gl.int64, [ACC_STAGES, 1], clc_layout)
     for i in gl.static_range(ACC_STAGES):
         mbarrier.init(clc_barriers.index(i), count=1)
         mbarrier.init(clc_planar_ready_bars.index(i), count=1)
         mbarrier.init(clc_consumed_bars.index(i), count=n_partitions - 1)
 
-    cga_layout: gl.constexpr = [[0]] * (gl.num_ctas().bit_length() - 1)
-    clc_layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout)
     clc_result_buffers = gl.allocate_shared_memory(
         gl.int64,
         [clc_barriers.shape[0], 2],

@@ -135,11 +135,18 @@ def test_compile_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K):
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
-def test_runtime_scaled_upcast_fp4():
+@pytest.mark.parametrize("compact_scale", [
+    False,
+    True,
+], ids=["expanded_scale", "compact_scale"])
+@pytest.mark.parametrize("BLOCK_K", [64, 128, 256], ids=lambda v: f"BLOCK_K{v}")
+def test_runtime_scaled_upcast_fp4(compact_scale, BLOCK_K):
 
     @gluon.jit
-    def scaled_upcast_fp4_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr):
+    def scaled_upcast_fp4_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
+                                 SCALE_FACTOR: ttgl.constexpr, COMPACT_SCALE: ttgl.constexpr):
         packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [8, 4], [4, 1], [1, 0])
+        compact_layout: ttgl.constexpr = ttgl.BlockedLayout([1, BLOCK_K // SCALE_FACTOR], [8, 4], [4, 1], [1, 0])
         unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 4], [4, 1], [1, 0])
 
         offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, packed_layout))
@@ -147,25 +154,94 @@ def test_runtime_scaled_upcast_fp4():
         x_offsets = offs_m[:, None] * (BLOCK_K // 2) + offs_k_packed[None, :]
         x = ttgl.load(x_ptr + x_offsets)
 
-        offs_scale_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, unpacked_layout))
-        offs_scale_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, unpacked_layout))
-        scale_offsets = offs_scale_m[:, None] * BLOCK_K + offs_scale_k[None, :]
+        if COMPACT_SCALE:
+            scale_layout: ttgl.constexpr = compact_layout
+            scale_k: ttgl.constexpr = BLOCK_K // SCALE_FACTOR
+        else:
+            scale_layout: ttgl.constexpr = unpacked_layout
+            scale_k: ttgl.constexpr = BLOCK_K
+        offs_scale_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, scale_layout))
+        offs_scale_k = ttgl.arange(0, scale_k, layout=ttgl.SliceLayout(0, scale_layout))
+        scale_offsets = offs_scale_m[:, None] * scale_k + offs_scale_k[None, :]
         scale = ttgl.load(scale_ptr + scale_offsets)
 
         y = ttgl.amd.gfx1250.scaled_upcast(x, scale, ttgl.bfloat16, axis=1)
-        ttgl.store(y_ptr + scale_offsets, y)
+        out_layout: ttgl.constexpr = y.type.layout
+        offs_out_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, out_layout))
+        offs_out_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, out_layout))
+        out_offsets = offs_out_m[:, None] * BLOCK_K + offs_out_k[None, :]
+        ttgl.store(y_ptr + out_offsets, y)
 
     BLOCK_M = 16
-    BLOCK_K = 64
     SCALE_FACTOR = 32
     torch.manual_seed(42)
 
     x, x_ref = create_mxfp_operand(0, BLOCK_M, BLOCK_K, "e2m1")
     scale, scale_ref = create_mxfp_scale(0, BLOCK_M, BLOCK_K, "e8m0", SCALE_FACTOR)
-    scale = scale.repeat_interleave(SCALE_FACTOR, dim=1).contiguous()
+    if not compact_scale:
+        scale = scale.repeat_interleave(SCALE_FACTOR, dim=1).contiguous()
     y = torch.empty((BLOCK_M, BLOCK_K), dtype=torch.bfloat16, device="cuda")
 
-    pgm = scaled_upcast_fp4_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, num_warps=4)
+    pgm = scaled_upcast_fp4_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, SCALE_FACTOR, compact_scale,
+                                          num_warps=4)
+
+    assert pgm.asm["amdgcn"].count("v_cvt_scale_pk8_bf16_fp4") == BLOCK_K // 32
+    y_ref = (x_ref * scale_ref).to(torch.bfloat16)
+    torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+def test_runtime_scaled_upcast_fp4_bf16_gemm_layouts():
+    # Test packed / compact-scale DistributedLinearLayouts used when upcasting an fp4 weight tile to bf16 for a WMMA GEMM.
+    @gluon.jit
+    def scaled_upcast_fp4_bf16_gemm_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
+                                           SCALE_FACTOR: ttgl.constexpr):
+        packed_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [64, 0]],
+            lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 4]],
+            warp_bases=[[16, 0], [32, 0]],
+            block_bases=[],
+            shape=[BLOCK_N, BLOCK_K // 2],
+        )
+        compact_scale_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 1], [0, 2], [0, 4], [0, 8], [64, 0]],
+            lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]],
+            warp_bases=[[16, 0], [32, 0]],
+            block_bases=[],
+            shape=[BLOCK_N, BLOCK_K // SCALE_FACTOR],
+        )
+
+        offs_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(1, packed_layout))
+        offs_k_packed = ttgl.arange(0, BLOCK_K // 2, layout=ttgl.SliceLayout(0, packed_layout))
+        x_offsets = offs_n[:, None] * (BLOCK_K // 2) + offs_k_packed[None, :]
+        x = ttgl.load(x_ptr + x_offsets)
+
+        scale_k: ttgl.constexpr = BLOCK_K // SCALE_FACTOR
+        offs_scale_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(1, compact_scale_layout))
+        offs_scale_k = ttgl.arange(0, scale_k, layout=ttgl.SliceLayout(0, compact_scale_layout))
+        scale_offsets = offs_scale_n[:, None] * scale_k + offs_scale_k[None, :]
+        scale = ttgl.load(scale_ptr + scale_offsets)
+
+        y = ttgl.amd.gfx1250.scaled_upcast(x, scale, ttgl.bfloat16, axis=1)
+        out_layout: ttgl.constexpr = y.type.layout
+        offs_out_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(1, out_layout))
+        offs_out_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, out_layout))
+        out_offsets = offs_out_n[:, None] * BLOCK_K + offs_out_k[None, :]
+        ttgl.store(y_ptr + out_offsets, y)
+
+    # Shapes match a typical fp4 weight tile: packed [128, 256] i8 == [128, 512] fp4,
+    # compact scale [128, 16] (one e8m0 per 32 elements along K).
+    BLOCK_N = 128
+    BLOCK_K = 512
+    SCALE_FACTOR = 32
+    torch.manual_seed(42)
+
+    x, x_ref = create_mxfp_operand(0, BLOCK_N, BLOCK_K, "e2m1")
+    scale, scale_ref = create_mxfp_scale(0, BLOCK_N, BLOCK_K, "e8m0", SCALE_FACTOR)
+    y = torch.empty((BLOCK_N, BLOCK_K), dtype=torch.bfloat16, device="cuda")
+
+    pgm = scaled_upcast_fp4_bf16_gemm_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_N, BLOCK_K, SCALE_FACTOR,
+                                                    num_warps=4)
 
     assert "v_cvt_scale_pk8_bf16_fp4" in pgm.asm["amdgcn"]
     y_ref = (x_ref * scale_ref).to(torch.bfloat16)
@@ -173,11 +249,72 @@ def test_runtime_scaled_upcast_fp4():
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
-def test_runtime_scaled_upcast_fp8():
+@pytest.mark.parametrize("fp8_dtype", ["e4m3", "e5m2"])
+@pytest.mark.parametrize("out_dtype", ["bf16", "f16"], ids=lambda v: f"out_{v}")
+def test_runtime_scaled_upcast_fp8(fp8_dtype, out_dtype):
+    # Cover all four v_cvt_scale_pk8 fp8 instructions: {bf16,f16} output x
+    # {fp8 (e4m3), bf8 (e5m2)} input.
+    torch_fp8 = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2}[fp8_dtype]
+    ttgl_out = {"bf16": ttgl.bfloat16, "f16": ttgl.float16}[out_dtype]
+    torch_out = {"bf16": torch.bfloat16, "f16": torch.float16}[out_dtype]
+    in_mnemonic = {"e4m3": "fp8", "e5m2": "bf8"}[fp8_dtype]
+
+    @gluon.jit
+    def scaled_upcast_fp8_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
+                                 OUT_DTYPE: ttgl.constexpr):
+        # FP8 v_cvt_scale_pk8 (opSel=0) reads the same Vscale byte for both
+        # output-lane halves, so it requires a scale layout that is broadcast
+        # across the lane^16 split (lane_bases[4] = [0, 0]).
+        layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]],
+            lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]],
+            warp_bases=[],
+            block_bases=[],
+            shape=[BLOCK_M, BLOCK_K],
+        )
+
+        offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, layout))
+        offs_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, layout))
+        offsets = offs_m[:, None] * BLOCK_K + offs_k[None, :]
+        x = ttgl.load(x_ptr + offsets)
+        scale = ttgl.load(scale_ptr + offsets)
+
+        y = ttgl.amd.gfx1250.scaled_upcast(x, scale, OUT_DTYPE)
+        ttgl.store(y_ptr + offsets, y)
+
+    BLOCK_M = 16
+    BLOCK_K = 64
+    SCALE_FACTOR = 32
+    torch.manual_seed(42)
+
+    x, x_ref = create_mxfp_operand(0, BLOCK_M, BLOCK_K, fp8_dtype)
+    x = x.view(torch_fp8)
+    scale, scale_ref = create_mxfp_scale(0, BLOCK_M, BLOCK_K, "e8m0", SCALE_FACTOR)
+    scale = scale.repeat_interleave(SCALE_FACTOR, dim=1).contiguous()
+    y = torch.empty((BLOCK_M, BLOCK_K), dtype=torch_out, device="cuda")
+
+    pgm = scaled_upcast_fp8_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, ttgl_out, num_warps=1)
+
+    assert f"v_cvt_scale_pk8_{out_dtype}_{in_mnemonic}" in pgm.asm["amdgcn"]
+    y_ref = (x_ref * scale_ref).to(torch_out)
+    torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+def test_runtime_scaled_upcast_fp8_non_broadcast_block16():
 
     @gluon.jit
     def scaled_upcast_fp8_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr):
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 4], [4, 1], [1, 0])
+        # This layout is not broadcast across lane^16 (lane_bases[4] = [16, 0]).
+        # FP8 lowering uses v_cvt_scale_pk8 Block16 mode (opSel=8) and packs
+        # lane (j^16)'s scale into byte 1 via a cross-lane exchange.
+        layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]],
+            lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
+            warp_bases=[],
+            block_bases=[],
+            shape=[BLOCK_M, BLOCK_K],
+        )
 
         offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, layout))
         offs_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, layout))
@@ -188,7 +325,7 @@ def test_runtime_scaled_upcast_fp8():
         y = ttgl.amd.gfx1250.scaled_upcast(x, scale, ttgl.bfloat16)
         ttgl.store(y_ptr + offsets, y)
 
-    BLOCK_M = 16
+    BLOCK_M = 32
     BLOCK_K = 64
     SCALE_FACTOR = 32
     torch.manual_seed(42)
@@ -199,7 +336,7 @@ def test_runtime_scaled_upcast_fp8():
     scale = scale.repeat_interleave(SCALE_FACTOR, dim=1).contiguous()
     y = torch.empty((BLOCK_M, BLOCK_K), dtype=torch.bfloat16, device="cuda")
 
-    pgm = scaled_upcast_fp8_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, num_warps=4)
+    pgm = scaled_upcast_fp8_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, num_warps=1)
 
     assert "v_cvt_scale_pk8_bf16_fp8" in pgm.asm["amdgcn"]
     y_ref = (x_ref * scale_ref).to(torch.bfloat16)
@@ -218,13 +355,9 @@ def test_runtime_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K, M, N, 
     def create_operand(shape, dtype):
         if dtype in (torch.float16, torch.bfloat16, torch.float32):
             return torch.randn(shape, dtype=dtype)
-        elif dtype == torch.float8_e5m2:
-            # range from min normal (0 00001 00) to max normal (0 11110 11)
-            return torch.randint(0x04, 0x7B, shape, dtype=torch.uint8).view(dtype)
         else:
-            # range from min normal (0 0001 000) to max normal (0 1110 111)
-            assert dtype == torch.float8_e4m3fn
-            return torch.randint(0x08, 0x77, shape, dtype=torch.uint8).view(dtype)
+            assert dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
+            return torch.randint(20, 40, shape, dtype=torch.uint8).view(dtype)
 
     a_dtype = getattr(torch, a_dtype)
     b_dtype = getattr(torch, b_dtype)
@@ -835,7 +968,7 @@ def test_runtime_gemm_async(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, a_dtype, b_dtype
             return torch.randn(shape, dtype=dtype)
         else:
             assert dtype == torch.float8_e5m2
-            return torch.randint(0x04, 0x7B, shape, dtype=torch.uint8).view(dtype)
+            return torch.randint(20, 40, shape, dtype=torch.uint8).view(dtype)
 
     a_dtype = getattr(torch, a_dtype)
     b_dtype = getattr(torch, b_dtype)
@@ -4662,6 +4795,8 @@ def async_load_store_roundtrip_kernel(a_ptr, b_ptr, BLOCK: ttgl.constexpr, loadC
     offs = pid * BLOCK + ttgl.arange(0, BLOCK, layout=BLOCKED_LAYOUT)
     buffer = ttgl.allocate_shared_memory(ttgl.float16, shape=[BLOCK], layout=SHARED_LAYOUT)
     ttgl.amd.gfx1250.async_copy.global_to_shared(buffer, a_ptr + offs, cache_modifier=loadCM)
+    ttgl.amd.gfx1250.async_copy.commit_group()
+    ttgl.amd.gfx1250.async_copy.wait_group(0)
     ttgl.amd.gfx1250.async_copy.shared_to_global(b_ptr + offs, buffer, cache_modifier=storeCM)
 
 
@@ -4718,8 +4853,8 @@ def test_cache_modifier(loadCM, storeCM, test_kernel):
                 assert "scope" not in line and "th" not in line
             if storeCM == ".cg":
                 assert "scope:SCOPE_DEV" in line and "th" not in line
-            if storeCM == "cs":
-                assert "scope" not in line and "th:TH_LOAD_NT" in line
+            if storeCM == ".cs":
+                assert "scope" not in line and "th:TH_STORE_NT" in line
             if storeCM == ".wt":
                 assert "scope:SCOPE_SYS" in line and "th:TH_STORE_BYPASS" in line
 

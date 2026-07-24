@@ -4,12 +4,14 @@
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "amd/lib/TritonAMDGPUTransforms/PipelineUtility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/CGAEncodingAttr.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/Support/Debug.h"
 #include <variant>
 
+#undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonamdgpu-pipeline-lower-loops"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
@@ -355,6 +357,25 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
   return maxVecSharedEnc;
 }
 
+// On targets without direct-to-LDS scatter support, a direct-to-LDS copy
+// requires enough data per CTA for each lane to write at least 32 bits into
+// LDS. The source layout itself may still be suboptimal here; CoalesceAsyncCopy
+// can rewrite it before the final direct-to-LDS lowering checks coalescing
+// legality.
+bool hasEnoughCTABytesForDirectToLds(tt::LoadOp loadOp,
+                                     const tt::AMD::TargetInfo &targetInfo) {
+  if (targetInfo.supportsDirectToLdsScatter())
+    return true;
+
+  auto srcTy = dyn_cast<RankedTensorType>(loadOp.getResult().getType());
+  if (!srcTy)
+    return true;
+
+  int64_t ctaTileBits = mlir::product(ttg::getShapePerCTA(srcTy)) *
+                        srcTy.getElementTypeBitWidth();
+  return ctaTileBits >= 32 * targetInfo.getWarpSize();
+}
+
 bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
                                ttg::SharedEncodingTrait sharedEnc,
                                tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
@@ -366,10 +387,24 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   if (numBuffers <= 1)
     return false;
 
+  // Checks whether the global pointer's contiguity and mask alignment allows
+  // for at least 32 bit wide loads.
+  if (!triton::canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis))
+    return false;
+
   using tt::amdgpu::ISAFamily;
-  if (sharedEnc && llvm::is_contained(
-                       {ISAFamily::CDNA3, ISAFamily::CDNA4, ISAFamily::GFX1250},
-                       targetInfo.getISAFamily())) {
+  bool hasDirectToLdsPath = llvm::is_contained(
+      {ISAFamily::CDNA3, ISAFamily::CDNA4, ISAFamily::GFX1250},
+      targetInfo.getISAFamily());
+
+  // On targets without scatter support, reject CTA tiles that are too small to
+  // provide one 32-bit direct-to-LDS write per lane. Layout-specific coalescing
+  // is checked later, after CoalesceAsyncCopy has a chance to rewrite the src.
+  if (hasDirectToLdsPath &&
+      !hasEnoughCTABytesForDirectToLds(loadOp, targetInfo))
+    return false;
+
+  if (sharedEnc && hasDirectToLdsPath) {
     // Compute the final vecSize we can use for the combination of
     // sourceEncoding and sharedEncoding. We can only use AsyncCopy if the
     // target supports the requested or a smaller vecSize because we cannot
@@ -396,9 +431,7 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
       return false;
   }
 
-  // Checks whether the global pointer's contiguity and mask alignment allows
-  // for at least 32 bit wide loads
-  return triton::canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis);
+  return true;
 }
 
 // Convert load ops into shared memory allocation loads and apply

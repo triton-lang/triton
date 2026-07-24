@@ -479,7 +479,8 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
           contiguity = vec;
         }
       }
-      if (canUseAsyncCp || isTMALoad(&op)) {
+      bool canUseTMA = isTMALoad(&op) && canPipelineTMALoad(&op);
+      if (canUseAsyncCp || canUseTMA) {
         if (loadRequiresAdditionalBuffer(&op)) {
           // Allocate additional buffer required by the wgmma pipelining.
           stageDiff += 1;
@@ -489,15 +490,22 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
         asyncLoad.contiguity = contiguity;
         asyncLoad.sharedEncoding = sharedEncoding;
       } else if (stageDiff > 1) {
-        // Distance-1 loads can in most cases be pipelined in registers without
-        // any performance degradation, as the schedule will usually reorder the
-        // user and the producer so there is no liverange overlap, and no copy
-        // needed.
-        op.emitRemark() << "Pipelining load that cannot use vectorized "
-                           "copy. This will likely "
-                           "lead to pipelining in registers and severe "
-                           "performance degradation.";
+        if (isTMALoad(&op)) {
+          op.emitRemark()
+              << "Not pipelining TMA load because the per-stage shared-memory "
+                 "allocation size is not a multiple of the 128-byte TMA "
+                 "alignment.";
+        } else {
+          op.emitRemark() << "Pipelining load that cannot use vectorized "
+                             "copy. This will likely "
+                             "lead to pipelining in registers and severe "
+                             "performance degradation.";
+        }
       }
+      // Otherwise, stageDiff == 1. Distance-1 loads can generally be pipelined
+      // in registers without any performance degradation because the schedule
+      // will usually reorder the producer and user so that their live ranges do
+      // not overlap and no copy is needed.
     }
   }
 

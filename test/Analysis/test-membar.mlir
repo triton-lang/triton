@@ -156,6 +156,48 @@ tt.func @async_wait_existing_barrier(%arg: tensor<32x16xf16, #AL>) {
   tt.return
 }
 
+// An acquire barrier follows the shared-memory write used to broadcast a
+// scalar atomic result, so it cannot replace the barrier after the wait.
+// CHECK-LABEL: async_wait_before_atomic_acquire
+tt.func @async_wait_before_atomic_acquire(%ptr: !tt.ptr<i32>) -> i32 {
+  %c0_i32 = arith.constant 0 : i32
+  // CHECK: ttg.async_wait
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: %{{.*}} = tt.atomic_cas acquire
+  ttg.async_wait {num = 0 : i32}
+  %result = tt.atomic_cas acquire, gpu, %ptr, %c0_i32, %c0_i32 : (!tt.ptr<i32>, i32, i32) -> i32
+  tt.return %result : i32
+}
+
+// A release barrier precedes the atomic's scratch write, so the membar pass
+// does not need to insert another barrier after the wait.
+// CHECK-LABEL: async_wait_before_atomic_release
+tt.func @async_wait_before_atomic_release(%ptr: !tt.ptr<i32>) -> i32 {
+  %c0_i32 = arith.constant 0 : i32
+  // CHECK: ttg.async_wait
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: %{{.*}} = tt.atomic_cas release
+  ttg.async_wait {num = 0 : i32}
+  %result = tt.atomic_cas release, gpu, %ptr, %c0_i32, %c0_i32 : (!tt.ptr<i32>, i32, i32) -> i32
+  tt.return %result : i32
+}
+
+// Without scratch, the acquire barrier follows the atomic and synchronizes
+// prior shared-memory effects before the later load.
+// CHECK-LABEL: async_wait_before_atomic_acquire_no_scratch
+tt.func @async_wait_before_atomic_acquire_no_scratch(%ptr: !tt.ptr<i32>, %arg: tensor<32x16xf16, #AL>) {
+  %c0_i32 = arith.constant 0 : i32
+  %smem = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
+  // CHECK: ttg.async_wait
+  // CHECK-NEXT: %{{.*}} = tt.atomic_cas acquire
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.local_load
+  ttg.async_wait {num = 0 : i32}
+  %unused = tt.atomic_cas acquire, gpu, %ptr, %c0_i32, %c0_i32 : (!tt.ptr<i32>, i32, i32) -> i32
+  %result = ttg.local_load %smem : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<32x16xf16, #AL>
+  tt.return
+}
+
 // CHECK-LABEL: async_wait_scan_stops_at_memory_effect
 tt.func @async_wait_scan_stops_at_memory_effect(%arg: tensor<32x16xf16, #AL>) {
   %cst0 = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
@@ -215,10 +257,10 @@ tt.func @async_wait_scan_reaches_block_end(%arg: tensor<32x16xf16, #AL>, %cond: 
 tt.func @subview() {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<32x16xf16, #AL>
   %a = ttg.local_alloc %cst0 : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
-  %0 = ttg.memdesc_subslice %a [0, 0] : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
+  %0 = ttg.memdesc_subslice %a [0, 0] : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, 32x16>
   // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
-  %1 = ttg.local_load %0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<16x16xf16, #AL>
+  %1 = ttg.local_load %0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, 32x16> -> tensor<16x16xf16, #AL>
   // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_alloc
   %2 = ttg.local_alloc %1 : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
@@ -649,6 +691,29 @@ tt.func @atomic_scalar_relaxed_no_use(%arg3: !tt.ptr<i32>) {
   tt.return
 }
 
+// CHECK-LABEL: gsan_atomic_cas_scalar
+tt.func @gsan_atomic_cas_scalar(%arg3: !tt.ptr<i32>) -> i32 {
+  // CHECK-NOT: ttg.barrier local
+  %c0_i32 = arith.constant 0 : i32
+  %1 = arith.constant dense<1.0> : tensor<128x32xf16, #AL>
+  %2 = ttg.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
+  %4 = tti.experimental_gsan_atomic_cas acq_rel, gpu, %arg3, %c0_i32, %c0_i32 : (!tt.ptr<i32>, i32, i32) -> i32
+  %3 = ttg.local_load %2 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
+  tt.return %4 : i32
+}
+
+// CHECK-LABEL: gsan_atomic_rmw_scalar_no_use
+tt.func @gsan_atomic_rmw_scalar_no_use(%arg3: !tt.ptr<i32>) {
+  // CHECK-NOT: ttg.barrier local
+  %c1_i32 = arith.constant 1 : i32
+  %true = arith.constant true
+  %1 = arith.constant dense<1.0> : tensor<128x32xf16, #AL>
+  %2 = ttg.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
+  %4 = tti.experimental_gsan_atomic_rmw add, release, gpu, %arg3, %c1_i32, %true : (!tt.ptr<i32>, i32, i1) -> i32
+  %3 = ttg.local_load %2 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
+  tt.return
+}
+
 // CHECK-LABEL: atomic_poll_acquire
 tt.func @atomic_poll_acquire(%ptr: !tt.ptr<i32>, %expected: i32) {
   // CHECK-NOT: ttg.barrier local
@@ -667,6 +732,59 @@ tt.func @atomic_poll_relaxed(%ptr: !tt.ptr<i32>, %expected: i32) {
   %matched = tt.atomic_poll relaxed, gpu, %ptr, %expected : !tt.ptr<i32>, i32 -> i1
   %result = ttg.local_load %smem : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
   tt.return
+}
+
+// A scalar acquire atomic reads its scratch buffer after its internal barrier.
+// Reusing that buffer in the next loop iteration therefore requires a barrier
+// before the next scratch write.
+// CHECK-LABEL: atomic_acquire_loop
+tt.func @atomic_acquire_loop(%ptr: !tt.ptr<i32>) -> i32 {
+  %c0_i32 = arith.constant 0 : i32
+  %lb = arith.constant 0 : index
+  %ub = arith.constant 10 : index
+  %step = arith.constant 1 : index
+  %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %c0_i32) -> i32 {
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: %{{.*}} = tt.atomic_cas acquire
+    %value = tt.atomic_cas acquire, gpu, %ptr, %c0_i32, %c0_i32 : (!tt.ptr<i32>, i32, i32) -> i32
+    %next = arith.addi %acc, %value : i32
+    scf.yield %next : i32
+  }
+  tt.return %result : i32
+}
+
+// The release barrier precedes the scratch write, while the broadcast barrier
+// remains between the scratch write and read. No extra barrier is needed.
+// CHECK-LABEL: atomic_release_loop
+tt.func @atomic_release_loop(%ptr: !tt.ptr<i32>) -> i32 {
+  // CHECK-NOT: ttg.barrier local
+  %c0_i32 = arith.constant 0 : i32
+  %lb = arith.constant 0 : index
+  %ub = arith.constant 10 : index
+  %step = arith.constant 1 : index
+  %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %c0_i32) -> i32 {
+    %value = tt.atomic_cas release, gpu, %ptr, %c0_i32, %c0_i32 : (!tt.ptr<i32>, i32, i32) -> i32
+    %next = arith.addi %acc, %value : i32
+    scf.yield %next : i32
+  }
+  tt.return %result : i32
+}
+
+// A timed poll also uses shared memory to broadcast its result.
+// CHECK-LABEL: atomic_poll_acquire_loop
+tt.func @atomic_poll_acquire_loop(%ptr: !tt.ptr<i32>, %expected: i32, %timeout: i64) -> i1 {
+  %false = arith.constant false
+  %lb = arith.constant 0 : index
+  %ub = arith.constant 10 : index
+  %step = arith.constant 1 : index
+  %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %false) -> i1 {
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: %{{.*}} = tt.atomic_poll acquire
+    %matched = tt.atomic_poll acquire, gpu, %ptr, %expected timeout %timeout : !tt.ptr<i32>, i32 -> i1
+    %next = arith.ori %acc, %matched : i1
+    scf.yield %next : i1
+  }
+  tt.return %result : i1
 }
 
 }

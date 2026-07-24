@@ -134,16 +134,8 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth,
   auto kRow = S("row");
   auto kCol = S("col");
   if (bitwidth < 32) {
-    LinearLayout quot;
-    int bestContig = 1;
-    for (int contig = 1; bitwidth * contig <= 32; contig *= 2) {
-      auto maybeQuot =
-          divideLeft(cvt, LinearLayout::identity1D(contig, kReg, kCol));
-      if (!maybeQuot)
-        break;
-      quot = *maybeQuot;
-      bestContig = contig;
-    }
+    auto [bestContig, quot] =
+        factorMaximalIdentityPrefix(cvt, kReg, kCol, 32 / bitwidth);
     bool padding = false;
     int newBitwidth = bitwidth;
     if (bestContig > 1) {

@@ -564,6 +564,20 @@ tt.func public @extern_unary_fallback(%a: tensor<4xf32>) -> tensor<4xf32> {
 
 // -----
 
+// CHECK-LABEL: @extern_exp_known
+tt.func public @extern_exp_known(%a: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK-DAG: arith.constant dense<594471359>
+  // CHECK-DAG: arith.constant dense<1>
+  // CHECK: tti.experimental_fpsan_embed
+  // CHECK: arith.muli
+  // CHECK-NOT: scf.for
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a {libname = "", libpath = "", pure = true, symbol = "__nv_expf"} : (tensor<4xf32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
 // CHECK-LABEL: @extern_unary_known
 tt.func public @extern_unary_known(%a: tensor<4xf32>) -> tensor<4xf32> {
   // CHECK: tti.experimental_fpsan_embed

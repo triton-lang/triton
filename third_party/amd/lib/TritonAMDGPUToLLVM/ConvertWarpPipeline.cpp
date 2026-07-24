@@ -93,6 +93,13 @@ static bool isWarpPipelineIgnorableBarrier(Operation *op) {
              triton::amdgpu::AsyncTDMIntrinsicWait>(op);
 }
 
+// True if `op` reads or writes memory (a load / store / async-copy).
+static bool readsOrWritesMemory(Operation *op) {
+  auto mei = dyn_cast<MemoryEffectOpInterface>(op);
+  return mei && (mei.hasEffect<MemoryEffects::Read>() ||
+                 mei.hasEffect<MemoryEffects::Write>());
+}
+
 // True if `exec` is a stage created by the warp-pipeline frontend.
 static bool isPipelineStage(scf::ExecuteRegionOp exec) {
   return exec && exec->hasAttr("triton.warp_pipeline.stage");
@@ -470,6 +477,17 @@ public:
 
     // Inline region.
     Block *block = &reg.front();
+
+    // Emit a scheduling barrier after every memory op in the stage so the
+    // backend scheduler keeps them in program order.
+    for (Operation &op : llvm::make_early_inc_range(*block))
+      if (readsOrWritesMemory(&op)) {
+        rewriter.setInsertionPointAfter(&op);
+        ROCDL::SchedBarrier::create(
+            rewriter, op.getLoc(),
+            ROCDL::SchedGroupMask::non_mem_non_sideeffect);
+      }
+
     Operation *terminator = block->getTerminator();
     ValueRange results = terminator->getOperands();
     rewriter.inlineBlockBefore(block, exec, {});

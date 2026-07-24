@@ -79,8 +79,6 @@ Memory/Pointer Ops
     make_tensor_descriptor
     load_tensor_descriptor
     store_tensor_descriptor
-    make_block_ptr
-    advance
 
 
 Indexing Ops

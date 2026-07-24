@@ -789,6 +789,12 @@ void CuptiProfiler::CuptiProfilerPimpl::doStart() {
     nvtx::enable();
     setNvtxCallbacks(subscriber, /*enable=*/true);
   }
+
+  if (!profiler.isTimestampCalibrated) {
+    profiler.timestampOffsetNs =
+        detail::computeTimestampOffsetNs(cupti::getTimestamp<true>);
+    profiler.isTimestampCalibrated = true;
+  }
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doFlush() {

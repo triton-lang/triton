@@ -128,6 +128,10 @@ inline bool isTMALoad(Operation *op) {
   return isa<DescriptorLoadLikeOpInterface>(op);
 }
 
+// Return true if Tensor Descriptor load can satisfy TMA's
+// shared-memory address alignment requirement.
+bool canPipelineTMALoad(Operation *op);
+
 // Determine if the operation can be lowered to an async load.
 bool canBeAsyncLoad(Operation *op);
 

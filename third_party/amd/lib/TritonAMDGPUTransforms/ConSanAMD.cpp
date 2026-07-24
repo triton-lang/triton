@@ -20,6 +20,7 @@ class AMDConSanHooks : public tti::ConSanTargetHooks {
 public:
   bool isTMAOp(Operation *op) const override {
     return isa<ttag::AsyncTDMCopyGlobalToLocalOp,
+               ttag::AsyncTDMFusedCopyGlobalToLocalOp,
                ttag::AsyncTDMCopyLocalToGlobalOp>(op);
   }
 
@@ -116,6 +117,18 @@ public:
       info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
                                         copyOp.getResult());
     }
+    // AsyncTDMFusedCopyGlobalToLocalOp: explicit fused async copy from global
+    // to one or more shared-memory destinations. It has no mbarrier operand, so
+    // completion is tracked through the TDM wait counter.
+    if (auto fusedOp = dyn_cast<ttag::AsyncTDMFusedCopyGlobalToLocalOp>(op)) {
+      info.emplace();
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
+      info->commitKind = tti::CommitKind::TmaStore;
+      info->implicitCommit = true;
+      for (Value dest : fusedOp.getDests())
+        info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
+                                          dest);
+    }
     // AsyncTDMCopyLocalToGlobalOp: Async copy from shared to global memory
     // Same principles as AsyncTDMCopyGlobalToLocalOp apply.
     if (auto storeOp = dyn_cast<ttag::AsyncTDMCopyLocalToGlobalOp>(op)) {
@@ -164,6 +177,7 @@ public:
     bool needsAsyncCp = false;
     module.walk([&](Operation *op) {
       if (isa<ttag::AsyncTDMCopyGlobalToLocalOp,
+              ttag::AsyncTDMFusedCopyGlobalToLocalOp,
               ttag::AsyncTDMCopyLocalToGlobalOp, ttag::AsyncTDMWait,
               ttag::AsyncTDMIntrinsicWait>(op))
         needsTdm = true;

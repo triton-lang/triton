@@ -140,8 +140,14 @@ def _scaled_upcast(src, scale, elem_type, axis, semantic):
 
     expected_shape = list(src.type.shape)
     expected_shape[axis] *= 2
-    _check(scale.type.shape == expected_shape,
-           lambda: f"Expected scale shape for fp4 scaled_upcast to be {expected_shape} but got {scale.type.shape}")
+    _check(
+        scale.type.shape[:axis] + scale.type.shape[axis + 1:] == expected_shape[:axis] + expected_shape[axis + 1:],
+        lambda: f"Expected scale shape for scaled_upcast to match output shape on non-axis dims: "
+        f"{expected_shape}, but got {scale.type.shape}")
+    _check(
+        scale.type.shape[axis] > 0 and expected_shape[axis] % scale.type.shape[axis] == 0,
+        lambda: f"Expected output axis extent {expected_shape[axis]} to be divisible by scale axis extent "
+        f"{scale.type.shape[axis]}")
     _check(scale.dtype in {ttgl.int8, ttgl.uint8, ttgl.bfloat16},
            lambda: f"Unsupported scale dtype for fp4 scaled_upcast: {scale.dtype}")
 

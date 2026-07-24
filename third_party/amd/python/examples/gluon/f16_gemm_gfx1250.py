@@ -314,7 +314,8 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
                                                             NUM_BUFFERS: ttgl.constexpr,  #
                                                             TRANSPOSE_B: ttgl.constexpr,  #
                                                             WARP_BASES: ttgl.constexpr,
-                                                            L2_PREFETCH_DISTANCE: ttgl.constexpr):
+                                                            L2_PREFETCH_DISTANCE: ttgl.constexpr,
+                                                            WMMA_LAYOUT: ttgl.constexpr):
     a_dtype: ttgl.constexpr = a_ptr.type.element_ty
     b_dtype: ttgl.constexpr = b_ptr.type.element_ty
     ttgl.static_assert(a_dtype.is_fp16() or a_dtype.is_bf16(), "Only fp16/bf16 supported for A")
@@ -324,13 +325,13 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
     SUBTILE_LEN: ttgl.constexpr = BLOCK_K // NUM_SUBTILES
     ttgl.static_assert(SUBTILE_LEN == 32, "Subtile length must match the kdim of the wmma instruction")
 
-    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, WARP_BASES, [], [16, 16, 32])
-    shared_layouts: ttgl.constexpr = create_shared_layouts(BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B)
-    SHARED_LAYOUT_A: ttgl.constexpr = shared_layouts[0]
-    SHARED_LAYOUT_B: ttgl.constexpr = shared_layouts[1]
-    SHARED_LAYOUT_ACC: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
     OPERAND_LAYOUT_A: ttgl.constexpr = ttgl.DotOperandLayout(0, WMMA_LAYOUT, 8)
     OPERAND_LAYOUT_B: ttgl.constexpr = ttgl.DotOperandLayout(1, WMMA_LAYOUT, 8)
+    shared_layouts: ttgl.constexpr = create_shared_layouts(BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B,
+                                                           OPERAND_LAYOUT_A.cga_layout, OPERAND_LAYOUT_B.cga_layout)
+    SHARED_LAYOUT_A: ttgl.constexpr = shared_layouts[0]
+    SHARED_LAYOUT_B: ttgl.constexpr = shared_layouts[1]
+    SHARED_LAYOUT_ACC: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], WMMA_LAYOUT.cga_layout)
 
     pid = ttgl.program_id(axis=0)
     num_pid_m = ttgl.cdiv(M, BLOCK_M)
@@ -369,6 +370,7 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
                            pred=pred)
 
     ttgl.assume(loop_ub > 0)
+    num_ctas: ttgl.constexpr = ttgl.num_ctas()
     for i in range(0, loop_ub):
         # SubIteration0
         # LDS load SubIteration1
@@ -392,7 +394,11 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
         a3, b3 = lds_subtile_load(consumer, 3 * SUBTILE_LEN, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
                                   NUM_BUFFERS, TRANSPOSE_B, SUBTILE_LEN)
         # WMMA Subtile2
+        if num_ctas > 1:
+            ttgl.amd.gfx1250.cluster.arrive()
         accumulator = ttgl.amd.gfx1250.wmma(a2, b2, accumulator)
+        if num_ctas > 1:
+            ttgl.amd.gfx1250.cluster.wait()
 
         # SubIteration3
         consumer += 1
@@ -424,12 +430,6 @@ def _run_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRAN
         pytest.skip("Skip tests with multiple CTAs and persistent or prefetch")
     if num_ctas > 1 and ACTIVATION != "":
         pytest.skip("Skip tests with multiple CTAs and fused activation")
-
-    # We scale the problem size and block dims by ctas_per_cga so each CTA works on BLOCK_M/BLOCK_N sized tile
-    M *= ctas_per_cga[0]
-    N *= ctas_per_cga[1]
-    BLOCK_M *= ctas_per_cga[0]
-    BLOCK_N *= ctas_per_cga[1]
 
     ACTIVATION_REDUCTION_N = 2 if ACTIVATION == "swiglu" else 1
     BLOCK_N_PACKED = BLOCK_N * ACTIVATION_REDUCTION_N
@@ -565,6 +565,13 @@ def test_runtime_gemm_tdm_pipelined_single_cta(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BU
 @pytest.mark.parametrize("M,N,K,BLOCK_M,BLOCK_N,BLOCK_K,ctas_per_cga", _build_multi_cta_gemm_cases())
 def test_runtime_gemm_tdm_pipelined_multi_cta(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga, NUM_BUFFERS,
                                               TRANSPOSE_B, PERSISTENT, PREFETCH, L2_PREFETCH_DISTANCE, num_warps):
+    # In the context of multi-cta, the "block" in _run_runtime_gemm_tdm_pipelined()
+    # refers to the chunk of data collectively processed by all CTAs in the cluster.
+    # However, the "block" of the testing parameters refers to the chunk of data
+    # processed by an individual CTA. We need to scale the block size to remove
+    # the discrepancy of the different interpretation of "block".
+    BLOCK_M *= ctas_per_cga[0]
+    BLOCK_N *= ctas_per_cga[1]
     _run_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, PERSISTENT, PREFETCH,
                                     L2_PREFETCH_DISTANCE, M, N, K, num_warps, ctas_per_cga)
 
@@ -588,8 +595,9 @@ def test_runtime_swiglu_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFER
 @pytest.mark.parametrize("TRANSPOSE_B", [False, True])
 @pytest.mark.parametrize("L2_PREFETCH_DISTANCE", [0, 2])
 @pytest.mark.parametrize("M,N,K", [(256, 256, 512), (250, 250, 510)])
+@pytest.mark.parametrize("ctas_per_cga", [[1, 1]])
 def test_runtime_gemm_tdm_pipelined_single_warp_per_simd_schedule(BLOCK_M, BLOCK_N, NUM_BUFFERS, TRANSPOSE_B,
-                                                                  L2_PREFETCH_DISTANCE, M, N, K):
+                                                                  L2_PREFETCH_DISTANCE, M, N, K, ctas_per_cga):
     num_warps = 4
     BLOCK_K = 128  # 4 subtiles * 32 (wmma kdim)
 
@@ -612,6 +620,9 @@ def test_runtime_gemm_tdm_pipelined_single_warp_per_simd_schedule(BLOCK_M, BLOCK
     for i in range(int(math.log2(num_warps // 2))):
         warp_bases.append((1 << i, 0))
     warp_bases = tuple(warp_bases)
+    num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
+    cga_layout_c = make_cga_layout(ctas_per_cga, [ctas_per_cga[0], ctas_per_cga[1]], [0, 1])
+    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, warp_bases, [], [16, 16, 32], cga_layout_c)
 
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
     kernel = gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel[grid](
@@ -623,7 +634,7 @@ def test_runtime_gemm_tdm_pipelined_single_warp_per_simd_schedule(BLOCK_M, BLOCK
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
         NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B,  #
         num_warps=num_warps, WARP_BASES=tuple(warp_bases), waves_per_eu=num_warps // 4,
-        L2_PREFETCH_DISTANCE=L2_PREFETCH_DISTANCE)
+        L2_PREFETCH_DISTANCE=L2_PREFETCH_DISTANCE, WMMA_LAYOUT=WMMA_LAYOUT, num_ctas=num_ctas)
     static_profile(kernel)
 
     c_triton = c_device.cpu()
@@ -1624,6 +1635,11 @@ if __name__ == "__main__":
     if NUM_CTAS not in [1, 2, 4, 8, 16]:
         raise ValueError(f"NUM_CTAS (product of CTAS_PER_CGA) {NUM_CTAS} not supported")
 
+    # To make workload for each wavefront remain unchanged with or without --ctas-per-cga,
+    # scale the block dims by ctas_per_cga, but keep the M and N unchanged.
+    BLOCK_M *= CTAS_PER_CGA[0]
+    BLOCK_N *= CTAS_PER_CGA[1]
+
     if ACTIVATION != "":
         assert not args.warp_specialized, "Fused activation not supported for warp specialized kernels"
         assert not args.single_warp_schedule, "Fused activation not supported for single-warp schedule kernel"
@@ -1656,13 +1672,12 @@ if __name__ == "__main__":
                                                    NUM_BUFFERS, TRANSPOSE_B, PERSISTENT,  #
                                                    M, N, K, NUM_WARPS)
     elif args.single_warp_schedule:
-        assert NUM_CTAS == 1, "NUM_CTAS > 1 not supported for single warp schedule"
         print(
             f"({M=}, {N=}, {K=}), ({BLOCK_M=}, {BLOCK_N=}, {BLOCK_K=}), {TRANSPOSE_B=}, {NUM_WARPS=}, {NUM_BUFFERS=}, {PERSISTENT=}, {PREFETCH=}, {L2_PREFETCH_DISTANCE=}"
         )
         test_runtime_gemm_tdm_pipelined_single_warp_per_simd_schedule(BLOCK_M, BLOCK_N,  #
                                                                       NUM_BUFFERS, TRANSPOSE_B, L2_PREFETCH_DISTANCE,  #
-                                                                      M, N, K)
+                                                                      M, N, K, CTAS_PER_CGA)
     else:
         print(
             f"({M=}, {N=}, {K=}), ({BLOCK_M=}, {BLOCK_N=}, {BLOCK_K=}), {TRANSPOSE_B=}, {NUM_WARPS=}, {NUM_BUFFERS=}, {PERSISTENT=}, {PREFETCH=}, {L2_PREFETCH_DISTANCE=}, {CTAS_PER_CGA=}, {ACTIVATION=}"

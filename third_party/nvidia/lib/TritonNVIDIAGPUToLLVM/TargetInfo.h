@@ -8,6 +8,8 @@ namespace mlir::triton::NVIDIA {
 
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
+  explicit TargetInfo(int computeCapability)
+      : TargetInfo(computeCapability, /*ptxVersion=*/0) {}
   TargetInfo(int computeCapability, int ptxVersion)
       : targetFeatures(computeCapability), ptxVersion(ptxVersion) {}
 
@@ -94,6 +96,9 @@ public:
   int getPtxVersion() const { return ptxVersion; }
   int getComputeCapability() const {
     return targetFeatures.getComputeCapability();
+  }
+  const triton::nvidia_gpu::TargetFeatures &getTargetFeatures() const {
+    return targetFeatures;
   }
 
   bool isCuda() const override { return true; }

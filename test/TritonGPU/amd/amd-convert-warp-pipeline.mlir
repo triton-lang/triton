@@ -770,17 +770,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: tt.store
 //
 // Between stage 0 and 1: existing async_wait wrapped, no s_barrier.
-// CHECK: rocdl.sched.barrier
+// The per-mem-op barrier (non_mem_non_sideeffect) follows stage 0's store; the
+// cluster barrier (none) is next.
+// CHECK: rocdl.sched.barrier non_mem_non_sideeffect
+// CHECK-NEXT: rocdl.sched.barrier none
 // CHECK-NEXT: amdg.async_wait
-// CHECK-NEXT: rocdl.sched.barrier
+// CHECK-NEXT: rocdl.sched.barrier none
 // CHECK-NOT: rocdl.s.barrier
 // Stage 1 ops.
 // CHECK: tt.store
 //
 // Between stage 1 and 2: no pre-existing barrier, so s_barrier inserted.
-// CHECK: rocdl.sched.barrier
+// CHECK: rocdl.sched.barrier non_mem_non_sideeffect
+// CHECK-NEXT: rocdl.sched.barrier none
 // CHECK-NEXT: rocdl.s.barrier
-// CHECK-NEXT: rocdl.sched.barrier
+// CHECK-NEXT: rocdl.sched.barrier none
 // Stage 2 ops.
 // CHECK: tt.store
 //
@@ -1072,25 +1076,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: ttg.local_store
 //
 // Barrier between stage0→stage1 is LOCAL (adjacent RAW: write→read).
-// CHECK: rocdl.sched.barrier
+// The per-mem-op barrier (non_mem_non_sideeffect) follows stage 0's store; the
+// cluster barrier (none) is next.
+// CHECK: rocdl.sched.barrier non_mem_non_sideeffect
+// CHECK-NEXT: rocdl.sched.barrier none
 // CHECK-NEXT: ttg.barrier local
-// CHECK-NEXT: rocdl.sched.barrier
+// CHECK-NEXT: rocdl.sched.barrier none
 //
 // Stage 1 ops (local_load).
 // CHECK: ttg.local_load
 //
 // Barrier between stage1→stage2 is LOCAL (distance-2 WAR: a1 reads, a0 writes).
-// CHECK: rocdl.sched.barrier
+// CHECK: rocdl.sched.barrier non_mem_non_sideeffect
+// CHECK-NEXT: rocdl.sched.barrier none
 // CHECK-NEXT: ttg.barrier local
-// CHECK-NEXT: rocdl.sched.barrier
+// CHECK-NEXT: rocdl.sched.barrier none
 //
 // Stage 2 ops (global store).
 // CHECK: tt.store
 //
 // Wrap-around barrier is s_barrier only (a2 has no LDS, a0 writes — no dep).
-// CHECK: rocdl.sched.barrier
+// CHECK: rocdl.sched.barrier non_mem_non_sideeffect
+// CHECK-NEXT: rocdl.sched.barrier none
 // CHECK-NEXT: rocdl.s.barrier
-// CHECK-NEXT: rocdl.sched.barrier
+// CHECK-NEXT: rocdl.sched.barrier none
 //
 // CHECK: scf.yield
 
@@ -1368,13 +1377,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: scf.if
 // CHECK:   ttg.local_store
 // Cluster barrier between stage 0 and stage 1 is LOCAL (nested write seen).
-// CHECK: rocdl.sched.barrier
+// Stage 0's mem ops are nested in the scf.if (not top-level), so there is no
+// per-mem-op barrier here — just the cluster barrier (none).
+// CHECK: rocdl.sched.barrier none
 // CHECK-NEXT: ttg.barrier local
-// CHECK-NEXT: rocdl.sched.barrier
+// CHECK-NEXT: rocdl.sched.barrier none
 // Stage 1 reads LDS.
 // CHECK: ttg.local_load
 // Wrap-around barrier is also LOCAL (stage1 read vs stage0 write next iter).
-// CHECK: rocdl.sched.barrier
+// The per-mem-op barrier (non_mem_non_sideeffect) follows stage 1's load; the
+// cluster barrier (none) is next.
+// CHECK: rocdl.sched.barrier non_mem_non_sideeffect
+// CHECK-NEXT: rocdl.sched.barrier none
 // CHECK-NEXT: ttg.barrier local
-// CHECK-NEXT: rocdl.sched.barrier
+// CHECK-NEXT: rocdl.sched.barrier none
 // CHECK: scf.yield

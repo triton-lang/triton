@@ -369,6 +369,7 @@ class compilation_knobs(base_knobs):
     # Instrumentation mode is checked on every run, which is expensive.
     # We cache the value here to avoid the expensive check on every run.
     instrumentation_mode: str = env_str("TRITON_INSTRUMENTATION_MODE", "").get()
+    fpsan_homomorphic_casts: env_bool = env_bool("TRITON_FPSAN_HOMOMORPHIC_CASTS")
     listener: Union[CompilationListener, None] = None
 
 

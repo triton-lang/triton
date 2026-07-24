@@ -2575,6 +2575,7 @@ def mxfp_attn_epilogue(  #
             m_offs = l_offs
             buffer_store(m_i, m_ptr + m_off, m_offs)
 
+            tdm.async_wait(0)
             cluster.arrive()
             cluster.wait()
 
