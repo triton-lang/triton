@@ -644,6 +644,8 @@ class TritonSemantic(Generic[TensorTy]):
 
     def expand_dims(self, input: TensorTy, axis: int) -> TensorTy:
         dst_shape = [tl._unwrap_if_constexpr(x) for x in input.shape]
+        if axis < 0 or axis > len(dst_shape):
+            raise ValueError(f"invalid axis {axis}")
         dst_shape.insert(axis, 1)
 
         if not input.type.is_block():

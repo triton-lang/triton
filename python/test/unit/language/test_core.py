@@ -712,6 +712,12 @@ def test_slice(device):
         t = scalar[None, None]
         tl.static_assert(t.shape == [1, 1])
 
+        t = scalar[None, :]
+        tl.static_assert(t.shape == [1])
+
+        t = scalar[None, None, :]
+        tl.static_assert(t.shape == [1, 1])
+
     slice_kernel[(1, )](XBLOCK=32)
 
 
@@ -728,8 +734,26 @@ def test_invalid_slice(device):
     def _kernel(dst):
         dst[10:]
 
+    @triton.jit
+    def _scalar_slice_newaxis():
+        scalar = tl.program_id(axis=0)
+        scalar[:, None]
+
+    @triton.jit
+    def _vector_too_many_slices():
+        vector = tl.arange(0, 4)
+        vector[:, :]
+
     with pytest.raises(triton.TritonError, match='unsupported tensor index'):
         _kernel[(1, )](dst=dst)
+
+    with pytest.raises(triton.TritonError) as exc_info:
+        _scalar_slice_newaxis[(1, )]()
+    assert "too many indices for tensor of rank 0" in str(exc_info.value.__cause__)
+
+    with pytest.raises(triton.TritonError) as exc_info:
+        _vector_too_many_slices[(1, )]()
+    assert "too many indices for tensor of rank 1" in str(exc_info.value.__cause__)
 
 
 # ----------------
