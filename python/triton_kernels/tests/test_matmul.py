@@ -630,6 +630,62 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
 
 
+@pytest.mark.parametrize("is_persistent", [False, True])
+@pytest.mark.parametrize("n", [960, 1024, 1536, 1568, 1600, 1632, 1664])
+def test_mxfp8_act_scale_store_zeroes_partial_group(n, is_persistent, device):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell or newer")
+
+    torch.manual_seed(0)
+    m, k = 128, 256
+    a = torch.randn((m, k), device=device, dtype=torch.bfloat16)
+    b = torch.randn((k, n), device=device, dtype=torch.bfloat16)
+    scale_blocks = triton.cdiv(n, MXFP_BLOCK_SIZE.value)
+    out_scale = convert_layout(
+        wrap_torch_tensor(torch.empty((m, scale_blocks), device=device, dtype=torch.uint8)),
+        layout.BlackwellActMXScaleLayout(None),
+    )
+    out_scale.storage.data.fill_(0xFF)
+    epilogue = Epilogue(
+        FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ()),
+        tuple(),
+        tuple(),
+        effective_itemsize=6.0,
+    )
+
+    with opt_flags.scoped_opt_flags_constraints(
+        {"block_m": 128, "block_k": 128, "is_persistent": is_persistent, "split_k": 1}
+    ):
+        actual = matmul(
+            a,
+            b,
+            None,
+            precision_config=PrecisionConfig(
+                c_mx_scale=out_scale,
+                c_microblock_size=MXFP_BLOCK_SIZE.value,
+                out_dtype=torch.float8_e4m3fn,
+            ),
+            epilogue=epilogue,
+        )
+
+    logical_scale = convert_layout(out_scale, layout.StridedLayout(-1)).storage.data
+    actual = upcast_from_mxfp(actual, logical_scale, target_dtype=torch.bfloat16, axis=-1)
+    assert_close(torch.matmul(a, b), actual, maxtol=4e-1, rmstol=4e-2)
+
+    group_index, valid_bytes = divmod(scale_blocks, 4)
+    if valid_bytes:
+        scale_group = out_scale.storage.data.select(-3, group_index).reshape(-1, 4)
+        assert torch.count_nonzero(scale_group[:, valid_bytes:]).item() == 0
+
+    first_unused_group = triton.cdiv(scale_blocks, 4)
+    n_scale_groups = out_scale.storage.data.shape[-3]
+    if first_unused_group < n_scale_groups:
+        unused_groups = out_scale.storage.data.narrow(
+            -3, first_unused_group, n_scale_groups - first_unused_group
+        )
+        assert torch.all(unused_groups == 0xFF)
+
+
 def test_k_ragged_mxfp8_act_scale_swizzling(device):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("requires Blackwell or newer")

@@ -214,10 +214,12 @@ struct DecomposedWarpConversion {
 // This function handles cases where the numbers of register and lane basis
 // vectors differ between the two layouts. This is done by padding the smaller
 // dimension(s) with zero vectors, ensuring that the layout conversion can be
-// represented as a permutation.
+// represented as a permutation. The layouts must not contain broadcasted
+// register bases.
 DecomposedWarpConversion
-getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
-                                  RankedTensorType dstTy, int bitwidth);
+getWarpLayoutConvertDecomposition(const triton::LinearLayout &srcLayout,
+                                  const triton::LinearLayout &dstLayout,
+                                  int bitwidth);
 
 // Decomposes a reshape into simpler pieces.
 //
@@ -256,11 +258,14 @@ bool supportMMA(triton::DotOpInterface op, int version);
 
 bool supportMMA(Value value, int version);
 
-// Conversion from `srcTy` to `dstTy` involving the minimum amount of data
-// transfer provided that both types can be converted to LL (if it can't it'll
-// return nullopt). The output will be such that layout.getInDimNames() ==
+// Conversion from `srcLayout` to `dstLayout` involving the minimum amount of
+// data transfer. The output will be such that layout.getInDimNames() ==
 // layout.getOutDimNames() and the conversion will not include kBlock (resp.
-// kWarp or kLane) if it can be avoided
+// kWarp or kLane) if it can be avoided.
+triton::LinearLayout minimalCvtLayout(const triton::LinearLayout &srcLayout,
+                                      const triton::LinearLayout &dstLayout);
+
+// Type-based convenience overload for layouts that can be converted to LL.
 triton::LinearLayout minimalCvtLayout(Type srcTy, Type dstTy);
 
 // Conversion from `srcTy` to `dstTy` only involves reordering of registers.
