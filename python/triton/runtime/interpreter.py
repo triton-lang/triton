@@ -246,8 +246,11 @@ def _erf(x):
 
 def _umulhi_64(a, b):
     # Numpy does not support 128-bit multiplication
-    # So we have to implement it manually
-    return (int(a) * int(b)) >> 64
+    # So we have to implement it manually. umulhi is unsigned, so mask the
+    # operands to their raw 64-bit pattern -- a signed int64 would otherwise be
+    # sign-extended by Python's arbitrary-precision int() and corrupt the result.
+    mask = (1 << 64) - 1
+    return ((int(a) & mask) * (int(b) & mask)) >> 64
 
 
 def _e8m0_to_f32(scale):
@@ -646,10 +649,16 @@ class InterpreterBuilder:
         if dtype == np.int64 or dtype == np.uint64:
             return TensorHandle(np_umulhi_u64(lhs.data, rhs.data), lhs.dtype.scalar)
         else:
-            compute_dtype = getattr(np, f"uint{dtype.itemsize * 8 * 2}")
-            lhs_data = lhs.data.astype(compute_dtype)
-            rhs_data = rhs.data.astype(compute_dtype)
-            ret_data = np.multiply(lhs_data, rhs_data) >> (dtype.itemsize * 8)
+            bitwidth = dtype.itemsize * 8
+            # umulhi is unsigned: reinterpret the operands as unsigned before
+            # widening, otherwise a signed operand is sign-extended and the high
+            # bits are corrupted (e.g. int32 -1 -> 0xFFFFFFFFFFFFFFFF instead of
+            # 0x00000000FFFFFFFF).
+            unsigned_dtype = getattr(np, f"uint{bitwidth}")
+            compute_dtype = getattr(np, f"uint{bitwidth * 2}")
+            lhs_data = lhs.data.astype(unsigned_dtype).astype(compute_dtype)
+            rhs_data = rhs.data.astype(unsigned_dtype).astype(compute_dtype)
+            ret_data = np.multiply(lhs_data, rhs_data) >> bitwidth
             return TensorHandle(ret_data.astype(dtype), lhs.dtype.scalar)
 
     # ternary functions

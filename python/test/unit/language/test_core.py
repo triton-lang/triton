@@ -2305,7 +2305,7 @@ def test_load_store_same_ptr(device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("dtype_str", ['int32'])
+@pytest.mark.parametrize("dtype_str", ['int32', 'int64'])
 def test_umulhi(dtype_str, device):
 
     @triton.jit
@@ -2316,28 +2316,30 @@ def test_umulhi(dtype_str, device):
         z = tl.umulhi(x, y)
         tl.store(Z + tl.arange(0, N), z)
 
-    def umulhi32(a, b):
-        # Convert to 64-bit unsigned integers to prevent overflow
-        a_64 = a.astype(np.int64)
-        b_64 = b.astype(np.int64)
+    bits = 32 if dtype_str == 'int32' else 64
 
-        # Perform the multiplication in 64-bit
-        product_64 = a_64 * b_64
-
-        # Shift right by 32 bits to get the high part of the product
-        result_high_32 = product_64 >> 32
-        return result_high_32
+    def umulhi_ref(a, b):
+        # umulhi is unsigned: reinterpret the operand bits as unsigned and take
+        # the high `bits` of the 2*bits-wide product. Signed operands with the
+        # top bit set must be treated as their raw bit pattern, not sign-extended.
+        mask = (1 << bits) - 1
+        hi = [((int(u) & mask) * (int(v) & mask)) >> bits for u, v in zip(a.tolist(), b.tolist())]
+        return np.array(hi, dtype=getattr(np, f"uint{bits}")).astype(a.dtype)
 
     rs = RandomState(17)
     N = 128
-    x = numpy_random((N, ), dtype_str=dtype_str, rs=rs, low=0)
+    iinfo = np.iinfo(getattr(np, dtype_str))
+    # Include negatives / top-bit-set values (the previously-untested path) plus
+    # explicit edge cases. Full signed range, not low=0.
+    edges = np.array([-1, -2, 1, iinfo.min, iinfo.max, iinfo.min + 1], dtype=getattr(np, dtype_str))
+    x = np.concatenate([edges, numpy_random((N - edges.size, ), dtype_str=dtype_str, rs=rs)])
+    y = np.concatenate([edges[::-1], numpy_random((N - edges.size, ), dtype_str=dtype_str, rs=rs)])
     x_tri = to_triton(x, device=device)
-    y = numpy_random((N, ), dtype_str=dtype_str, rs=rs, low=0)
     y_tri = to_triton(y, device=device)
     z_tri = torch.zeros_like(x_tri)
     kernel[(1, )](x_tri, y_tri, z_tri, N=N)
 
-    z_ref = umulhi32(x, y)
+    z_ref = umulhi_ref(x, y)
     np.testing.assert_equal(z_ref, to_numpy(z_tri))
 
 
