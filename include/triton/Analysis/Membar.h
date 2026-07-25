@@ -89,6 +89,9 @@ struct BlockInfo {
 
   SliceMapT syncReadSlices;
   SliceMapT syncWriteSlices;
+  // Shared-memory reads issued by asynchronous operations that have not
+  // reached their completion wait. A CTA barrier alone cannot complete them.
+  SliceMapT pendingAsyncReadSlices;
 
   BlockInfo() = default;
 
@@ -101,7 +104,20 @@ struct BlockInfo {
     for (auto &slice : other.syncWriteSlices)
       syncWriteSlices[slice.first].insert(slice.second.begin(),
                                           slice.second.end());
+    for (auto &slice : other.pendingAsyncReadSlices)
+      pendingAsyncReadSlices[slice.first].insert(slice.second.begin(),
+                                                 slice.second.end());
     return *this;
+  }
+
+  /// Makes locally completed asynchronous reads visible to the regular
+  /// dependence analysis. A later conflicting write will then require a CTA
+  /// barrier before it can proceed.
+  void completeAsyncReads() {
+    for (auto &slice : pendingAsyncReadSlices)
+      syncReadSlices[slice.first].insert(slice.second.begin(),
+                                         slice.second.end());
+    pendingAsyncReadSlices.clear();
   }
 
   void dump() {
@@ -118,6 +134,15 @@ struct BlockInfo {
     }
     err << "  Write Intervals:\n";
     for (auto &[slice, ops] : syncWriteSlices) {
+      err << "    ";
+      slice.print(err);
+      err << " ";
+      for (auto &op : ops)
+        err << op->getName() << " ";
+      err << "\n";
+    }
+    err << "  Pending async read intervals:\n";
+    for (auto &[slice, ops] : pendingAsyncReadSlices) {
       err << "    ";
       slice.print(err);
       err << " ";
@@ -144,7 +169,8 @@ struct BlockInfo {
                          sliceFilter, allocation);
   }
 
-  /// Clears the slices because a barrier is inserted.
+  /// Clears synchronized slices because a barrier is inserted. Pending
+  /// asynchronous reads remain live until their completion wait.
   void sync() {
     syncReadSlices.clear();
     syncWriteSlices.clear();
@@ -153,7 +179,8 @@ struct BlockInfo {
   /// Compares two BlockInfo objects.
   bool operator==(const BlockInfo &other) const {
     return syncReadSlices == other.syncReadSlices &&
-           syncWriteSlices == other.syncWriteSlices;
+           syncWriteSlices == other.syncWriteSlices &&
+           pendingAsyncReadSlices == other.pendingAsyncReadSlices;
   }
 
   bool operator!=(const BlockInfo &other) const { return !(*this == other); }
@@ -194,6 +221,8 @@ inline BlockInfo translateBlockInfoToCallsite(const BlockInfo &calleeBlockInfo,
                   translatedBlockInfo.syncReadSlices);
   translateSlices(calleeBlockInfo.syncWriteSlices,
                   translatedBlockInfo.syncWriteSlices);
+  translateSlices(calleeBlockInfo.pendingAsyncReadSlices,
+                  translatedBlockInfo.pendingAsyncReadSlices);
   return translatedBlockInfo;
 }
 

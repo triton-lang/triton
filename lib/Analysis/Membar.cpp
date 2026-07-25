@@ -368,6 +368,15 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     blockInfo->sync();
   }
 
+  // wgmma.wait_group is local to one warp group. Once every WGMMA is complete
+  // locally, restore its shared-memory reads to the dependence state so that a
+  // later conflicting write gets a CTA barrier. Reads must survive barriers
+  // that occur before the wait because those barriers do not complete WGMMA.
+  if (auto wait = dyn_cast<ttng::WarpGroupDotWaitOp>(op);
+      wait && wait.getPendings() == 0 && triton::gpu::lookupNumWarps(op) > 4) {
+    blockInfo->completeAsyncReads();
+  }
+
   // If the current op is an (async) memory wait and there is no later sync
   // point before memory is accessed, insert a barrier op and sync. This avoids
   // redundant barriers by deferring the barrier to the later sync point.
@@ -416,6 +425,11 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
         }
       }
     }
+  }
+
+  if (auto dot = dyn_cast<ttng::WarpGroupDotOp>(op);
+      dot && dot.getIsAsync() && triton::gpu::lookupNumWarps(op) > 4) {
+    curBlockInfo.pendingAsyncReadSlices = curBlockInfo.syncReadSlices;
   }
 
   // Scratch buffer operations consist of a series of shared memory operations
