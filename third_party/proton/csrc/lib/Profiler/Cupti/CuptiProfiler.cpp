@@ -746,11 +746,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiExitLaunchCallbacks(
     return;
   if (deactivated) // Profiler is deactivated
     return;
-  if (threadState.numNodes == std::numeric_limits<size_t>::max())
-    profiler.correlation.submit(threadState.numNodes,
-                                callbackData->correlationId);
-  else
-    profiler.correlation.submit(threadState.numNodes);
+  profiler.correlation.submit(threadState.numNodes, callbackData->correlationId);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::handleApiCallbacks(
