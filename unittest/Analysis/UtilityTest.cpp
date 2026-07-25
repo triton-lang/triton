@@ -67,19 +67,25 @@ TEST(Analysis, AddressSetExhaustiveEightUnitUniverse) {
   }
 }
 
-TEST(Analysis, BufferRegionIdentityPreservesSubviewProvenance) {
-  triton::AddressSet addresses = triton::AddressSet::fromRange(16, 8);
-  triton::BufferRegion fromSubview(
-      /*baseOffset=*/16, /*length=*/8, addresses,
-      /*storageBase=*/0, /*affineOffset=*/16);
-  triton::BufferRegion fromAllocation(
-      /*baseOffset=*/16, /*length=*/8, addresses,
-      /*storageBase=*/16, /*affineOffset=*/0);
+TEST(Analysis, BufferRegionViewPreservesSubviewProvenance) {
+  triton::BufferRegion region(
+      /*baseOffset=*/16, /*length=*/8,
+      triton::AddressSet::fromRange(/*begin=*/16, /*length=*/8));
+  triton::BufferRegionView fromSubview{region, /*storageBase=*/0,
+                                       /*affineOffset=*/16};
+  triton::BufferRegionView fromAllocation{region, /*storageBase=*/16,
+                                          /*affineOffset=*/0};
 
+  EXPECT_EQ(fromSubview.region, fromAllocation.region);
   EXPECT_FALSE(fromSubview == fromAllocation);
   triton::RegionInfo joined = triton::RegionInfo::join(
       triton::RegionInfo({fromSubview}), triton::RegionInfo({fromAllocation}));
-  EXPECT_EQ(joined.regions.size(), 2);
+  EXPECT_EQ(joined.views.size(), 2);
+
+  std::set<triton::BufferRegion> physicalRegions;
+  for (const triton::BufferRegionView &view : joined.views)
+    physicalRegions.insert(view.region);
+  EXPECT_EQ(physicalRegions.size(), 1);
 }
 
 namespace {
@@ -112,8 +118,7 @@ triton::BufferRegion makeRegion(unsigned id, unsigned addressMask,
       addresses.push_back(bit);
   return triton::BufferRegion(
       /*baseOffset=*/id * 16, /*length=*/universe,
-      triton::AddressSet::fromAddresses(addresses),
-      /*storageBase=*/0, /*affineOffset=*/0);
+      triton::AddressSet::fromAddresses(addresses));
 }
 
 bool planNeverMissesHazard(ArrayRef<unsigned> addressMasks, unsigned universe) {
@@ -255,8 +260,7 @@ TEST(Analysis, BufferStatePlanKeepsLargeSparsePartitionsExact) {
     for (uint32_t stripe = 0; stripe < stripeCount; ++stripe)
       addresses.insert(triton::AddressSet::fromRange(
           (stripe * tileCount + tile) * stripeLength, stripeLength));
-    regions.emplace_back(tile * stripeLength, tileLength, std::move(addresses),
-                         /*storageBase=*/0, /*affineOffset=*/0);
+    regions.emplace_back(tile * stripeLength, tileLength, std::move(addresses));
   }
 
   expectFullCoveragePartition(regions);

@@ -88,11 +88,11 @@ std::optional<int> maybeGetPartitionIdx(Operation *op) {
   return maybeGetPartitionIdx(parent);
 }
 
-int getCurrentThread(Operation *op, const ConSanTargetHooks *hooks,
+int getCurrentThread(Operation *op, const ConSanTargetHooks &hooks,
                      const AuxDataMap::ThreadLayout &threadLayout) {
   // Default partition is 0, other partitions are idx + 1
   int thread = maybeGetPartitionIdx(op).value_or(-1) + 1;
-  if (hooks->isTMAOp(op)) {
+  if (hooks.isTMAOp(op)) {
     assert(threadLayout.hasTMAThreads() &&
            "TMA thread class must exist when instrumenting a TMA op");
     thread += threadLayout.tmaThreadOffset;
@@ -104,7 +104,7 @@ int getCurrentThread(Operation *op, const ConSanTargetHooks *hooks,
     thread += threadLayout.tcThreadOffset;
     return thread;
   }
-  if (hooks->isCLCOp(op)) {
+  if (hooks.isCLCOp(op)) {
     assert(threadLayout.hasCLCThreads() &&
            "CLC thread class must exist when instrumenting a CLC op");
     thread += threadLayout.clcThreadOffset;
@@ -693,7 +693,7 @@ Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
 
 class ConcurrencySanitizerImpl {
 public:
-  ConcurrencySanitizerImpl(ModuleOp module, const ConSanTargetHooks *hooks)
+  ConcurrencySanitizerImpl(ModuleOp module, const ConSanTargetHooks &hooks)
       : module(module), hooks(hooks) {}
 
   LogicalResult run() {
@@ -763,7 +763,7 @@ private:
         b.setInsertionPointAfter(op);
       }
 
-      if (auto info = hooks->getBarrierWaitInfo(op)) {
+      if (auto info = hooks.getBarrierWaitInfo(op)) {
         // For waits we want to instrument it before and after, so we do it
         // manually inside instrumentBarrierWait (disable the critical section
         // listener and return early)
@@ -778,9 +778,9 @@ private:
         return WalkResult::interrupt();
       }
       b.setLoc(op->getLoc());
-      if (auto info = hooks->getAsyncProxyFenceInfo(op)) {
+      if (auto info = hooks.getAsyncProxyFenceInfo(op)) {
         funcBuilder.createFenceProxyAccessesCall(
-            b, baseThread, info->cluster, hooks->getIssuerCTAPred(b, op), op);
+            b, baseThread, info->cluster, hooks.getIssuerCTAPred(b, op), op);
       }
       if (auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(op)) {
         funcBuilder.createSetActiveMaskCall(b, getActiveMask(wsOp), op);
@@ -806,16 +806,16 @@ private:
                                                     nullptr, op);
         }
       }
-      if (auto info = hooks->getBarrierInitInfo(op)) {
-        Value pred = hooks->getIssuerCTAPred(b, op);
+      if (auto info = hooks.getBarrierInitInfo(op)) {
+        Value pred = hooks.getIssuerCTAPred(b, op);
         funcBuilder.createVerifyBarrierCanInitCall(b, info->alloc, pred, op,
                                                    currentCTAMask(b));
         funcBuilder.createInitBarrierStateCall(b, info->alloc, info->count,
                                                pred, op);
       }
-      if (auto info = hooks->getBarrierInvalidateInfo(op)) {
+      if (auto info = hooks.getBarrierInvalidateInfo(op)) {
         Value barrier = info->alloc;
-        Value pred = hooks->getIssuerCTAPred(b, op);
+        Value pred = hooks.getIssuerCTAPred(b, op);
         funcBuilder.createVerifyBarrierInitializedCall(b, barrier, pred, op,
                                                        currentCTAMask(b));
         funcBuilder.createInvalidateBarrierStateCall(b, barrier, pred, op);
@@ -833,19 +833,13 @@ private:
           funcBuilder.createCommitAccessesCall(b, thread, nullptr,
                                                CommitKind::AsyncCp, op);
       }
-      if (auto asyncWaitOp = dyn_cast<ttg::AsyncWaitOp>(op)) {
-        funcBuilder.createClearOutstandingCommitsTransferWritesCall(
-            b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
-            asyncWaitOp.getNum(), nullptr, CommitKind::AsyncCp,
-            MemType::SHARED_MEM, op);
-      }
       if (auto wgmmaWaitOp = dyn_cast<ttng::WarpGroupDotWaitOp>(op)) {
         funcBuilder.createClearOutstandingCommitsTransferReadsCall(
             b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
             wgmmaWaitOp.getPendings(), nullptr, CommitKind::Wgmma,
             MemType::SHARED_MEM, op);
       }
-      if (auto info = hooks->getWaitOpInfo(op)) {
+      if (auto info = hooks.getWaitOpInfo(op, auxData)) {
         if (info->transferWrites && info->transferReads) {
           funcBuilder.createClearOutstandingCommitsTransferBothCall(
               b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
@@ -862,6 +856,11 @@ private:
               info->pendingCount, nullptr, info->commitKind,
               MemType::SHARED_MEM, op);
         }
+      } else if (auto asyncWaitOp = dyn_cast<ttg::AsyncWaitOp>(op)) {
+        funcBuilder.createClearOutstandingCommitsTransferWritesCall(
+            b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
+            asyncWaitOp.getNum(), nullptr, CommitKind::AsyncCp,
+            MemType::SHARED_MEM, op);
       }
       if (auto clusterBarrier = dyn_cast<ttng::ClusterBarrierOp>(op)) {
         if (!llvm::is_contained(auxData.internalClusterBarriers, op))
@@ -934,7 +933,7 @@ private:
                              Value pred, int thread, int baseThread,
                              tti::FunctionBuilder &funcBuilder) {
     ImplicitLocOpBuilder wb(op->getLoc(), op);
-    pred = tti::maybeAnd(wb, pred, hooks->getIssuerCTAPred(wb, op));
+    pred = tti::maybeAnd(wb, pred, hooks.getIssuerCTAPred(wb, op));
     Value lock = auxData.lock.at(op).value;
     // Pre-wait: mark waiting threads and check for deadlock.
     tti::ExperimentalLockAcquireOp::create(wb, lock, pred);
@@ -969,11 +968,11 @@ private:
                                      int thread,
                                      tti::FunctionBuilder &funcBuilder) {
     int baseThread = getBaseThread(thread, auxData.threadLayout);
-    std::optional<MemEffectsOpInfo> opInfo = hooks->getMemEffectsOpInfo(op);
+    std::optional<MemEffectsOpInfo> opInfo = hooks.getMemEffectsOpInfo(op);
     if (!opInfo)
       return success();
     Value pred = opInfo->pred;
-    Value issuerCTAPred = hooks->getIssuerCTAPred(b, op);
+    Value issuerCTAPred = hooks.getIssuerCTAPred(b, op);
     pred = tti::maybeAnd(b, pred, issuerCTAPred);
     Value defaultEffectCTAs = getMemEffectCTAs(b, op);
     struct MaterializedEffect {
@@ -1130,9 +1129,9 @@ private:
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM) {
       for (const auto &commitKindDesc :
-           hooks->getOutstandingWriteCommitKinds()) {
+           hooks.getOutstandingWriteCommitKinds()) {
         bool excludeSelf = (opCommitKind == commitKindDesc.kind &&
-                            hooks->isOrderedCommitKind(opCommitKind));
+                            hooks.isOrderedCommitKind(opCommitKind));
         funcBuilder.createCheckOutstandingCommitsCall(
             b, bufferMask, getBaseThread(thread, auxData.threadLayout),
             commitKindDesc.operationDesc, pred, memType, commitKindDesc.kind,
@@ -1151,9 +1150,9 @@ private:
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM) {
       for (const auto &commitKindDesc :
-           hooks->getOutstandingReadCommitKinds()) {
+           hooks.getOutstandingReadCommitKinds(auxData)) {
         bool excludeSelf = (opCommitKind == commitKindDesc.kind &&
-                            hooks->isOrderedCommitKind(opCommitKind));
+                            hooks.isOrderedCommitKind(opCommitKind));
         funcBuilder.createCheckOutstandingCommitsCall(
             b, bufferMask, getBaseThread(thread, auxData.threadLayout),
             commitKindDesc.operationDesc, pred, memType, commitKindDesc.kind,
@@ -1164,14 +1163,13 @@ private:
 
   ModuleOp module;
   AuxDataMap auxData;
-  const ConSanTargetHooks *hooks;
+  const ConSanTargetHooks &hooks;
 };
 
 } // namespace
 
 LogicalResult runConcurrencySanitizer(ModuleOp module,
-                                      const ConSanTargetHooks *hooks) {
-  assert(hooks && "hooks must not be null");
+                                      const ConSanTargetHooks &hooks) {
   ConcurrencySanitizerImpl impl(module, hooks);
   return impl.run();
 }
@@ -1190,7 +1188,7 @@ public:
                                                  : "";
     auto hooks = createConSanHooks(key);
     assert(hooks && "no ConSan hooks registered for target");
-    if (failed(runConcurrencySanitizer(module, hooks.get())))
+    if (failed(runConcurrencySanitizer(module, *hooks)))
       return signalPassFailure();
   }
 };

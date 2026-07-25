@@ -75,7 +75,8 @@ public:
     return std::nullopt;
   }
 
-  std::optional<WaitOpInfo> getWaitOpInfo(Operation *op) const override {
+  std::optional<WaitOpInfo>
+  getWaitOpInfo(Operation *op, const tti::AuxDataMap &) const override {
     if (auto tmaStoreWaitOp = dyn_cast<ttng::TMAStoreWaitOp>(op))
       return WaitOpInfo{tti::CommitKind::TmaStore,
                         static_cast<int>(tmaStoreWaitOp.getPendings()),
@@ -311,7 +312,8 @@ public:
     return info ? info : ConSanTargetHooks::getMemEffectsOpInfo(op);
   }
 
-  SmallVector<CommitKindDesc> getOutstandingReadCommitKinds() const override {
+  SmallVector<CommitKindDesc>
+  getOutstandingReadCommitKinds(const tti::AuxDataMap &) const override {
     return {{tti::CommitKind::Wgmma, "warpgroup_mma operand read"},
             {tti::CommitKind::TmaStore, "async_copy_shared_to_global"}};
   }

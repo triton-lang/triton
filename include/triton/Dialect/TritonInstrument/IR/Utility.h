@@ -270,11 +270,12 @@ struct AuxDataMap {
   // present; TMA/TC/CLC peer ranges are added only when the module uses them.
   ThreadLayout threadLayout;
 
+  bool hasAsyncCopyReads = false;
   bool hasAsyncProxyFenceTracking = false;
 
   LogicalResult populateAndPassToWarpSpecialize(ModuleOp module,
                                                 FunctionBuilder &funcBuilder,
-                                                const ConSanTargetHooks *hooks);
+                                                const ConSanTargetHooks &hooks);
 
   int getClusterBarrierSlot(Operation *op) const;
 
@@ -282,7 +283,7 @@ private:
   LogicalResult
   getBuffersAndBarriers(ModuleOp module,
                         SmallVector<triton::BufferRegion> &barrierRegions,
-                        const ConSanTargetHooks *hooks);
+                        const ConSanTargetHooks &hooks);
   void passToWarpSpecialize(triton::FuncOp func, ValueType value,
                             RegionToValueMap &map, int &captureCounter,
                             int64_t &captureBytes);

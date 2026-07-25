@@ -17,8 +17,6 @@ using tti::WaitOpInfo;
 namespace mlir {
 
 class AMDConSanHooks : public tti::ConSanTargetHooks {
-  mutable bool hasAsyncCopyReads = false;
-
 public:
   bool isTMAOp(Operation *op) const override {
     return isa<ttag::TDMOpInterface, ttag::AsyncTDMFusedCopyGlobalToLocalOp>(
@@ -53,12 +51,13 @@ public:
     return std::nullopt;
   }
 
-  std::optional<WaitOpInfo> getWaitOpInfo(Operation *op) const override {
+  std::optional<WaitOpInfo>
+  getWaitOpInfo(Operation *op, const tti::AuxDataMap &auxData) const override {
     // On asyncmark targets (CDNA3/CDNA4), ttg::AsyncWaitOp is kept as-is
     // by UpdateAsyncWaitCount — read the commit group count directly.
     if (auto asyncWaitOp = dyn_cast<ttg::AsyncWaitOp>(op)) {
       return WaitOpInfo{tti::CommitKind::AsyncCp, (int)asyncWaitOp.getNum(),
-                        /*transferWrites=*/true, hasAsyncCopyReads};
+                        /*transferWrites=*/true, auxData.hasAsyncCopyReads};
     }
     // On non-asyncmark targets, amdgpu::AsyncWaitOp replaces ttg::AsyncWaitOp
     // after UpdateAsyncWaitCount. Read the preserved commit-group count.
@@ -66,7 +65,7 @@ public:
       if (auto attr = asyncWaitOp->getAttrOfType<IntegerAttr>(
               "ttg.num_commit_groups")) {
         return WaitOpInfo{tti::CommitKind::AsyncCp, (int)attr.getInt(),
-                          /*transferWrites=*/true, hasAsyncCopyReads};
+                          /*transferWrites=*/true, auxData.hasAsyncCopyReads};
       }
       return std::nullopt;
     }
@@ -98,7 +97,7 @@ public:
     bool isAsyncCopy =
         isa<ttag::BufferLoadToLocalOp, ttag::AsyncCopyLocalToGlobalOp>(op);
     if (isAsyncCopy || isTMAOp(op)) {
-      MemEffectsOpInfo info;
+      MemEffectsOpInfo info = *ConSanTargetHooks::getMemEffectsOpInfo(op);
       Value barrier;
       if (auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op))
         barrier = barrierOp.getBarrier();
@@ -111,13 +110,6 @@ public:
             isAsyncCopy ? tti::CommitKind::AsyncCp : tti::CommitKind::TmaStore;
         info.implicitCommit = !isAsyncCopy;
       }
-      for (const auto &access :
-           triton::BufferRegionAnalysis::getMemoryAccesses(op))
-        if (access.value != barrier)
-          info.operandEffects.emplace_back(
-              access.isWrite ? MemEffectsOpInfo::Effects::Write
-                             : MemEffectsOpInfo::Effects::Read,
-              access.value);
       return info;
     }
     // AMD ArriveBarrierOp: Explicit barrier arrival.
@@ -143,8 +135,9 @@ public:
             {tti::CommitKind::TmaStore, "async_tdm_global_to_shared"}};
   }
 
-  SmallVector<CommitKindDesc> getOutstandingReadCommitKinds() const override {
-    if (!hasAsyncCopyReads)
+  SmallVector<CommitKindDesc>
+  getOutstandingReadCommitKinds(const tti::AuxDataMap &auxData) const override {
+    if (!auxData.hasAsyncCopyReads)
       return {{tti::CommitKind::TmaStore, "async_tdm_shared_to_global"}};
     return {{tti::CommitKind::AsyncCp, "async_copy_shared_to_global"},
             {tti::CommitKind::TmaStore, "async_tdm_shared_to_global"}};
@@ -155,7 +148,6 @@ public:
     SmallVector<tti::CommitKind::Kind> kinds;
     bool needsTdm = false;
     bool needsAsyncCp = false;
-    hasAsyncCopyReads = false;
     module.walk([&](Operation *op) {
       needsTdm |= isTMAOp(op) ||
                   isa<ttag::AsyncTDMWait, ttag::AsyncTDMIntrinsicWait>(op);
@@ -163,7 +155,6 @@ public:
           isa<ttg::AsyncCopyGlobalToLocalOp, ttg::AsyncCommitGroupOp,
               ttg::AsyncWaitOp, ttag::BufferLoadToLocalOp,
               ttag::AsyncCopyLocalToGlobalOp, ttag::AsyncWaitOp>(op);
-      hasAsyncCopyReads |= isa<ttag::AsyncCopyLocalToGlobalOp>(op);
     });
     if (needsTdm)
       kinds.push_back(tti::CommitKind::TmaStore);

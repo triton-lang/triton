@@ -84,30 +84,16 @@ uint32_t applySharedPadding(uint32_t byteOffset, ttg::MemDescType ty) {
 
 uint32_t getMemDescStorageOffset(ttg::MemDescType ty, unsigned index);
 
-struct MemDescFootprint {
-  triton::AddressSet addresses;
-  SmallVector<triton::BufferRegion::CTAAddresses, 2> ctaAddresses;
+using MemDescFootprint = SmallVector<triton::BufferRegion::CTAAddresses, 2>;
 
-  triton::AddressSet &forCTA(uint32_t cta) {
-    auto it = llvm::lower_bound(
-        ctaAddresses, cta,
-        [](const auto &entry, uint32_t cta) { return entry.first < cta; });
-    if (it == ctaAddresses.end() || it->first != cta)
-      it = ctaAddresses.insert(it, triton::BufferRegion::CTAAddresses{cta, {}});
-    return it->second;
-  }
-
-  void set(uint32_t cta, uint32_t address) {
-    addresses.set(address);
-    forCTA(cta).set(address);
-  }
-
-  void insert(const MemDescFootprint &other) {
-    addresses.insert(other.addresses);
-    for (const auto &[cta, otherAddresses] : other.ctaAddresses)
-      forCTA(cta).insert(otherAddresses);
-  }
-};
+triton::AddressSet &getAddressesForCTA(MemDescFootprint &footprint,
+                                       uint32_t cta) {
+  auto it = llvm::partition_point(
+      footprint, [cta](const auto &entry) { return entry.first < cta; });
+  if (it == footprint.end() || it->first != cta)
+    it = footprint.insert(it, triton::BufferRegion::CTAAddresses{cta, {}});
+  return it->second;
+}
 
 MemDescFootprint getMemDescAddresses(
     uint32_t storageBase, uint32_t affineOffset, ttg::MemDescType ty,
@@ -122,10 +108,12 @@ MemDescFootprint getMemDescAddresses(
     MemDescFootprint footprint;
     for (int64_t page = 0; page < ty.getDimSize(0); ++page) {
       uint32_t pageOffset = getMemDescStorageOffset(pageTy, page);
-      footprint.insert(getMemDescAddresses(
+      MemDescFootprint pageFootprint = getMemDescAddresses(
           storageBase + pageOffset, affineOffset, pageTy, /*cache=*/nullptr,
           advancePartitionBases(partitionBases, pageOffset),
-          affinePartitionOffset, affineCTAOffset));
+          affinePartitionOffset, affineCTAOffset);
+      for (const auto &[cta, addresses] : pageFootprint)
+        getAddressesForCTA(footprint, cta).insert(addresses);
     }
     return footprint;
   };
@@ -154,6 +142,7 @@ MemDescFootprint getMemDescAddresses(
   auto addPhysicalAddress = [&](uint32_t offset, uint32_t row, uint32_t col,
                                 uint32_t partition, uint32_t block) {
     uint32_t cta = block ^ affineCTAOffset;
+    auto &addresses = getAddressesForCTA(footprint, cta);
     if (isTmem) {
       uint64_t bitBegin = static_cast<uint64_t>(col) * bitWidth;
       uint32_t firstWord = bitBegin / 32;
@@ -164,7 +153,7 @@ MemDescFootprint getMemDescAddresses(
       for (uint32_t word = firstWord; word < lastWord; ++word) {
         uint64_t address = begin + (word - firstWord);
         assert(address <= std::numeric_limits<uint32_t>::max());
-        footprint.set(cta, address);
+        addresses.set(address);
       }
     } else {
       uint32_t base = storageBase;
@@ -176,7 +165,7 @@ MemDescFootprint getMemDescAddresses(
           static_cast<uint64_t>(base) + applySharedPadding(combined, ty);
       for (uint32_t byte = 0; byte < bitWidth / 8; ++byte) {
         assert(begin + byte <= std::numeric_limits<uint32_t>::max());
-        footprint.set(cta, begin + byte);
+        addresses.set(begin + byte);
       }
     }
   };
@@ -210,10 +199,9 @@ MemDescFootprint getMemDescAddresses(
         cache->try_emplace(std::make_pair(Type(ty), affineOffset));
     if (inserted)
       found->second =
-          getMemDescAddresses(/*storageBase=*/0, affineOffset, ty).addresses;
-    footprint.addresses = found->second.translated(storageBase);
-    if (!footprint.addresses.empty())
-      footprint.ctaAddresses.emplace_back(affineCTAOffset, footprint.addresses);
+          std::move(getMemDescAddresses(0, affineOffset, ty).front().second);
+    footprint.emplace_back(affineCTAOffset,
+                           found->second.translated(storageBase));
     return footprint;
   }
 
@@ -233,7 +221,7 @@ MemDescFootprint getMemDescAddresses(
   return footprint;
 }
 
-triton::BufferRegion getMemDescRegion(
+triton::BufferRegionView getMemDescView(
     uint32_t storageBase, uint32_t affineOffset, ttg::MemDescType ty,
     llvm::DenseMap<std::pair<Type, uint32_t>, triton::AddressSet> *cache,
     ArrayRef<uint32_t> partitionBases = {}, uint32_t affinePartitionOffset = 0,
@@ -248,10 +236,12 @@ triton::BufferRegion getMemDescRegion(
                         (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace())
                              ? affineOffset
                              : applySharedPadding(affineOffset, ty));
-  return triton::BufferRegion(
-      baseOffset, getMemDescSize(ty), std::move(footprint.addresses),
-      storageBase, affineOffset, partitionBases, affinePartitionOffset,
-      footprint.ctaAddresses, affineCTAOffset);
+  return {{baseOffset, getMemDescSize(ty), std::move(footprint)},
+          storageBase,
+          affineOffset,
+          llvm::to_vector<2>(partitionBases),
+          affinePartitionOffset,
+          affineCTAOffset};
 }
 
 uint32_t getMemDescStorageOffset(ttg::MemDescType ty, unsigned index) {
@@ -447,10 +437,15 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions,
   BufferStatePlan plan;
   plan.regionMasks.resize(regions.size());
 
+  SmallVector<AddressSet> projectedAddresses(regions.size());
+  for (auto [region, projected] : llvm::zip(regions, projectedAddresses))
+    for (const auto &[cta, addresses] : region.ctaAddresses)
+      projected.insert(addresses);
+
   llvm::SmallBitVector assigned(regions.size());
   SmallVector<SmallVector<unsigned>> components;
   for (unsigned first = 0; first < regions.size(); ++first) {
-    if (assigned.test(first) || regions[first].addresses.empty())
+    if (assigned.test(first) || projectedAddresses[first].empty())
       continue;
     SmallVector<unsigned> component;
     SmallVector<unsigned> worklist = {first};
@@ -459,10 +454,8 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions,
       unsigned current = worklist.pop_back_val();
       component.push_back(current);
       for (unsigned candidate = 0; candidate < regions.size(); ++candidate) {
-        if (assigned.test(candidate) || regions[candidate].addresses.empty())
-          continue;
-        if (!regions[current].addresses.intersects(
-                regions[candidate].addresses))
+        if (assigned.test(candidate) || !projectedAddresses[current].intersects(
+                                            projectedAddresses[candidate]))
           continue;
         assigned.set(candidate);
         worklist.push_back(candidate);
@@ -481,7 +474,7 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions,
   for (const SmallVector<unsigned> &component : components) {
     SmallVector<Atom> atoms;
     for (auto [localId, regionId] : llvm::enumerate(component)) {
-      AddressSet uncovered = regions[regionId].addresses;
+      AddressSet uncovered = projectedAddresses[regionId];
       for (size_t atomId = 0, atomCount = atoms.size();
            atomId < atomCount && !uncovered.empty(); ++atomId) {
         auto &[addresses, atomMembership] = atoms[atomId];
@@ -568,7 +561,7 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     Operation *op,
     llvm::ArrayRef<const dataflow::Lattice<RegionInfo> *> operands,
     llvm::ArrayRef<dataflow::Lattice<RegionInfo> *> results) {
-  RegionInfo regionInfo(RegionInfo::RegionList{});
+  RegionInfo regionInfo(RegionInfo::ViewList{});
   auto propagateRegions = [&](const RegionInfo &info) {
     for (auto *result : results)
       propagateIfChanged(result, result->join(info));
@@ -594,15 +587,15 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     ArrayRef<uint32_t> partitionBases = offsets->size() > 1
                                             ? ArrayRef<uint32_t>(*offsets)
                                             : ArrayRef<uint32_t>();
-    regionInfo.regions.insert(getMemDescRegion(
-        offsets->front(), /*affineOffset=*/0, localAllocOp.getType(),
-        &footprintCache, partitionBases));
+    regionInfo.views.insert(getMemDescView(offsets->front(), /*affineOffset=*/0,
+                                           localAllocOp.getType(),
+                                           &footprintCache, partitionBases));
     return propagateRegions(regionInfo);
   }
   if (auto tmemAllocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
-    regionInfo.regions.insert(
-        getMemDescRegion(getAllocationOffset(tmemAllocOp), /*affineOffset=*/0,
-                         tmemAllocOp.getType(), &footprintCache));
+    regionInfo.views.insert(
+        getMemDescView(getAllocationOffset(tmemAllocOp), /*affineOffset=*/0,
+                       tmemAllocOp.getType(), &footprintCache));
     return propagateRegions(regionInfo);
   }
   if (auto memdescIndexOp = dyn_cast<ttg::MemDescIndexOp>(op)) {
@@ -619,15 +612,15 @@ LogicalResult BufferRegionAnalysis::visitOperation(
       firstSubBuffer = index;
       endSubBuffer = index + 1;
     }
-    for (auto &region : in.regions) {
+    for (const BufferRegionView &view : in.views) {
       for (int i = firstSubBuffer; i < endSubBuffer; ++i) {
         uint32_t stageOffset =
             getMemDescStorageOffset(memdescIndexOp.getType(), i);
-        regionInfo.regions.insert(getMemDescRegion(
-            region.storageBase + stageOffset, region.affineOffset,
+        regionInfo.views.insert(getMemDescView(
+            view.storageBase + stageOffset, view.affineOffset,
             memdescIndexOp.getType(), &footprintCache,
-            advancePartitionBases(region.partitionBases, stageOffset),
-            region.affinePartitionOffset, region.affineCTAOffset));
+            advancePartitionBases(view.partitionBases, stageOffset),
+            view.affinePartitionOffset, view.affineCTAOffset));
       }
     }
 
@@ -639,12 +632,12 @@ LogicalResult BufferRegionAnalysis::visitOperation(
       return propagateRegions(in);
     MemDescSubsliceOffsets relativeOffset =
         getMemDescSubsliceUnpaddedOffsets(memdescSubsliceOp);
-    for (auto &region : in.regions)
-      regionInfo.regions.insert(getMemDescRegion(
-          region.storageBase, region.affineOffset ^ relativeOffset.byteOffset,
-          memdescSubsliceOp.getType(), &footprintCache, region.partitionBases,
-          region.affinePartitionOffset ^ relativeOffset.partitionOffset,
-          region.affineCTAOffset ^ relativeOffset.ctaOffset));
+    for (const BufferRegionView &view : in.views)
+      regionInfo.views.insert(getMemDescView(
+          view.storageBase, view.affineOffset ^ relativeOffset.byteOffset,
+          memdescSubsliceOp.getType(), &footprintCache, view.partitionBases,
+          view.affinePartitionOffset ^ relativeOffset.partitionOffset,
+          view.affineCTAOffset ^ relativeOffset.ctaOffset));
     return propagateRegions(regionInfo);
   }
   if (auto tmemSubsliceOp = dyn_cast<ttng::TMEMSubSliceOp>(op)) {
@@ -654,11 +647,11 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     uint32_t relativeOffset = ttng::getTMemSubSliceOffset(
         tmemSubsliceOp.getSrc().getType(), tmemSubsliceOp.getOffset(),
         tmemSubsliceOp.getDim());
-    for (auto &region : in.regions)
-      regionInfo.regions.insert(getMemDescRegion(
-          region.storageBase, region.affineOffset + relativeOffset,
-          tmemSubsliceOp.getType(), &footprintCache, region.partitionBases,
-          region.affinePartitionOffset, region.affineCTAOffset));
+    for (const BufferRegionView &view : in.views)
+      regionInfo.views.insert(getMemDescView(
+          view.storageBase, view.affineOffset + relativeOffset,
+          tmemSubsliceOp.getType(), &footprintCache, view.partitionBases,
+          view.affinePartitionOffset, view.affineCTAOffset));
     return propagateRegions(regionInfo);
   }
   if (auto selectOp = dyn_cast<arith::SelectOp>(op)) {
@@ -672,11 +665,11 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     const RegionInfo &in = operands[0]->getValue();
     if (in.isUnknown())
       return propagateRegions(in);
-    for (auto &region : in.regions)
-      regionInfo.regions.insert(getMemDescRegion(
-          region.storageBase, region.affineOffset, reinterpretOp.getType(),
-          &footprintCache, region.partitionBases, region.affinePartitionOffset,
-          region.affineCTAOffset));
+    for (const BufferRegionView &view : in.views)
+      regionInfo.views.insert(getMemDescView(
+          view.storageBase, view.affineOffset, reinterpretOp.getType(),
+          &footprintCache, view.partitionBases, view.affinePartitionOffset,
+          view.affineCTAOffset));
     return propagateRegions(regionInfo);
   }
   if (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp>(op))
@@ -704,8 +697,8 @@ void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
           getLatticeElement(access.value)->getValue();
       if (regionInfo.isUnknown())
         usedUnknownBufferRegions[*regionType] = true;
-      usedBufferRegions[*regionType].insert(regionInfo.regions.begin(),
-                                            regionInfo.regions.end());
+      for (const BufferRegionView &view : regionInfo.views)
+        usedBufferRegions[*regionType].insert(view.region);
     }
   });
 }
@@ -738,10 +731,6 @@ BufferRegionAnalysis::getMemoryAccesses(Operation *op) {
       existing->isWrite |= isWrite;
   }
   return accesses;
-}
-
-bool BufferRegionAnalysis::isMemoryAccessOperation(Operation *op) {
-  return !getMemoryAccesses(op).empty();
 }
 
 } // namespace mlir::triton

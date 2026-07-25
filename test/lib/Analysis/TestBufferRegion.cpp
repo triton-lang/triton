@@ -56,18 +56,14 @@ struct TestBufferRegionPass
     analysis->calculateUsedBufferRegions(moduleOp);
 
     moduleOp.walk([&](Operation *op) {
-      if (!triton::BufferRegionAnalysis::isMemoryAccessOperation(op))
-        return;
-
-      auto maybeMemDesc = llvm::find_if(op->getOperands(), [](Value operand) {
-        return isa<ttg::MemDescType>(operand.getType());
-      });
-
-      if (maybeMemDesc == op->operand_end())
-        return;
-
-      emitRegionInfo(op->getLoc(), "Buffers",
-                     analysis->getLatticeElement(*maybeMemDesc)->getValue());
+      for (const auto &access :
+           triton::BufferRegionAnalysis::getMemoryAccesses(op)) {
+        if (!llvm::is_contained(op->getOperands(), access.value))
+          continue;
+        emitRegionInfo(op->getLoc(), "Buffers",
+                       analysis->getLatticeElement(access.value)->getValue());
+        break;
+      }
     });
 
     llvm::SmallVector<Operation *> anchors;
@@ -136,10 +132,11 @@ struct TestBufferRegionAliasPass
         base = *min;
         length = *max - *min + 1;
       }
-      tt::RegionInfo info(tt::RegionInfo::RegionList{});
-      info.regions.insert(tt::BufferRegion(
-          base, length, tt::AddressSet::fromAddresses(addresses),
-          /*storageBase=*/base, /*affineOffset=*/0));
+      tt::RegionInfo info(tt::RegionInfo::ViewList{});
+      info.views.insert(
+          {tt::BufferRegion(base, length,
+                            tt::AddressSet::fromAddresses(addresses)),
+           /*storageBase=*/base, /*affineOffset=*/0});
       return info;
     }
 
@@ -155,9 +152,9 @@ struct TestBufferRegionAliasPass
   static bool mayAlias(const tt::RegionInfo &lhs, const tt::RegionInfo &rhs) {
     if (lhs.isUnknown() || rhs.isUnknown())
       return true;
-    return llvm::any_of(lhs.regions, [&](const tt::BufferRegion &a) {
-      return llvm::any_of(rhs.regions, [&](const tt::BufferRegion &b) {
-        return a.intersects(b);
+    return llvm::any_of(lhs.views, [&](const tt::BufferRegionView &a) {
+      return llvm::any_of(rhs.views, [&](const tt::BufferRegionView &b) {
+        return a.region.intersects(b.region);
       });
     });
   }
@@ -166,9 +163,9 @@ struct TestBufferRegionAliasPass
                        const tt::RegionInfo &contained) {
     if (container.isUnknown() || contained.isUnknown())
       return false;
-    return llvm::all_of(contained.regions, [&](const tt::BufferRegion &b) {
-      return llvm::any_of(container.regions, [&](const tt::BufferRegion &a) {
-        return a.contains(b);
+    return llvm::all_of(contained.views, [&](const tt::BufferRegionView &b) {
+      return llvm::any_of(container.views, [&](const tt::BufferRegionView &a) {
+        return a.region.contains(b.region);
       });
     });
   }
@@ -193,7 +190,8 @@ struct TestBufferRegionAliasPass
                 ArrayRef<std::pair<std::string, tt::RegionInfo>> namedRegions) {
     SmallVector<tt::BufferRegion> regions;
     for (const auto &[name, info] : namedRegions)
-      llvm::append_range(regions, info.regions);
+      for (const tt::BufferRegionView &view : info.views)
+        regions.push_back(view.region);
     llvm::sort(regions);
     regions.erase(std::unique(regions.begin(), regions.end()), regions.end());
 
@@ -211,8 +209,9 @@ struct TestBufferRegionAliasPass
         printMask(diag, plan.unknownMask);
         continue;
       }
-      SmallVector<tt::BufferRegion> candidates(info.regions.begin(),
-                                               info.regions.end());
+      SmallVector<tt::BufferRegion> candidates;
+      for (const tt::BufferRegionView &view : info.views)
+        candidates.push_back(view.region);
       llvm::sort(candidates);
       for (const tt::BufferRegion &candidate : candidates) {
         auto it = llvm::lower_bound(regions, candidate);

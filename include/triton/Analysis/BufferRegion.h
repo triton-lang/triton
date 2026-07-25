@@ -72,35 +72,21 @@ struct BufferRegion {
   /// distinct sparse views may have the same key.
   uint32_t baseOffset = 0;
   uint32_t length = 0;
-  AddressSet addresses;
   llvm::SmallVector<CTAAddresses, 2> ctaAddresses;
-
-  /// Internal view provenance used while composing nested views.
-  uint32_t storageBase = 0;
-  uint32_t affineOffset = 0;
-  llvm::SmallVector<uint32_t, 2> partitionBases;
-  uint32_t affinePartitionOffset = 0;
-  uint32_t affineCTAOffset = 0;
 
   BufferRegion() = default;
   BufferRegion(uint32_t baseOffset, uint32_t length)
-      : baseOffset(baseOffset), length(length),
-        addresses(AddressSet::fromRange(baseOffset, length)),
-        ctaAddresses{{0, addresses}}, storageBase(baseOffset) {}
-  BufferRegion(uint32_t baseOffset, uint32_t length, AddressSet addresses,
-               uint32_t storageBase, uint32_t affineOffset,
-               llvm::ArrayRef<uint32_t> partitionBases = {},
-               uint32_t affinePartitionOffset = 0,
-               llvm::ArrayRef<CTAAddresses> ctaAddresses = {},
-               uint32_t affineCTAOffset = 0)
-      : baseOffset(baseOffset), length(length), addresses(std::move(addresses)),
-        ctaAddresses(ctaAddresses), storageBase(storageBase),
-        affineOffset(affineOffset), partitionBases(partitionBases),
-        affinePartitionOffset(affinePartitionOffset),
-        affineCTAOffset(affineCTAOffset) {
-    if (this->ctaAddresses.empty() && !this->addresses.empty())
-      this->ctaAddresses.emplace_back(0, this->addresses);
+      : BufferRegion(baseOffset, length,
+                     AddressSet::fromRange(baseOffset, length)) {}
+  BufferRegion(uint32_t baseOffset, uint32_t length, AddressSet addresses)
+      : baseOffset(baseOffset), length(length) {
+    if (!addresses.empty())
+      ctaAddresses.emplace_back(0, std::move(addresses));
   }
+  BufferRegion(uint32_t baseOffset, uint32_t length,
+               llvm::SmallVector<CTAAddresses, 2> ctaAddresses)
+      : baseOffset(baseOffset), length(length),
+        ctaAddresses(std::move(ctaAddresses)) {}
 
   bool intersects(const BufferRegion &other) const {
     return llvm::any_of(ctaAddresses, [&](const CTAAddresses &lhs) {
@@ -118,27 +104,42 @@ struct BufferRegion {
   }
 
   bool operator==(const BufferRegion &other) const {
-    return baseOffset == other.baseOffset && length == other.length &&
-           addresses == other.addresses && storageBase == other.storageBase &&
-           affineOffset == other.affineOffset &&
-           affinePartitionOffset == other.affinePartitionOffset &&
-           affineCTAOffset == other.affineCTAOffset &&
-           partitionBases == other.partitionBases &&
-           ctaAddresses == other.ctaAddresses;
+    return std::tie(baseOffset, length, ctaAddresses) ==
+           std::tie(other.baseOffset, other.length, other.ctaAddresses);
   }
 
   bool operator<(const BufferRegion &other) const {
-    return std::tie(baseOffset, length, addresses, storageBase, affineOffset,
-                    affinePartitionOffset, affineCTAOffset, partitionBases,
-                    ctaAddresses) <
-           std::tie(other.baseOffset, other.length, other.addresses,
-                    other.storageBase, other.affineOffset,
-                    other.affinePartitionOffset, other.affineCTAOffset,
-                    other.partitionBases, other.ctaAddresses);
+    return std::tie(baseOffset, length, ctaAddresses) <
+           std::tie(other.baseOffset, other.length, other.ctaAddresses);
   }
 
   template <typename T> void print(T &os) const {
     os << "[" << baseOffset << ", " << length << "]";
+  }
+};
+
+/// A physical region and the provenance required to compose descriptor views.
+struct BufferRegionView {
+  BufferRegion region;
+  uint32_t storageBase = 0;
+  uint32_t affineOffset = 0;
+  llvm::SmallVector<uint32_t, 2> partitionBases;
+  uint32_t affinePartitionOffset = 0;
+  uint32_t affineCTAOffset = 0;
+
+private:
+  auto key() const {
+    return std::tie(region, storageBase, affineOffset, affinePartitionOffset,
+                    affineCTAOffset, partitionBases);
+  }
+
+public:
+  bool operator==(const BufferRegionView &other) const {
+    return key() == other.key();
+  }
+
+  bool operator<(const BufferRegionView &other) const {
+    return key() < other.key();
   }
 };
 
@@ -161,17 +162,17 @@ BufferStatePlan createBufferStatePlan(llvm::ArrayRef<BufferRegion> regions,
 // RegionInfo lattice
 //===----------------------------------------------------------------------===//
 //
-// This wraps a set of BufferRegions and provides lattice semantics
+// This wraps a set of descriptor views and provides lattice semantics.
 //
 struct RegionInfo {
   enum class Kind { Uninitialized, Exact, Unknown };
-  using RegionList = std::set<BufferRegion>;
+  using ViewList = std::set<BufferRegionView>;
 
   Kind kind = Kind::Uninitialized;
-  RegionList regions;
+  ViewList views;
 
   RegionInfo() = default;
-  RegionInfo(const RegionList &r) : kind(Kind::Exact), regions(r) {}
+  RegionInfo(const ViewList &views) : kind(Kind::Exact), views(views) {}
 
   bool isUnknown() const { return kind == Kind::Unknown; }
 
@@ -183,12 +184,12 @@ struct RegionInfo {
     if (rhs.kind == Kind::Uninitialized)
       return lhs;
     RegionInfo result = lhs;
-    result.regions.insert(rhs.regions.begin(), rhs.regions.end());
+    result.views.insert(rhs.views.begin(), rhs.views.end());
     return result;
   }
 
   bool operator==(const RegionInfo &other) const {
-    return kind == other.kind && regions == other.regions;
+    return kind == other.kind && views == other.views;
   }
 
   template <typename T> void print(T &os) const {
@@ -196,8 +197,9 @@ struct RegionInfo {
       os << "unknown";
       return;
     }
-    llvm::interleaveComma(regions, os,
-                          [&](const BufferRegion &r) { r.print(os); });
+    llvm::interleaveComma(views, os, [&](const BufferRegionView &view) {
+      view.region.print(os);
+    });
   }
 
   static RegionInfo getPessimisticValueState(MLIRContext *context = nullptr) {
@@ -234,7 +236,6 @@ public:
   };
 
   static llvm::SmallVector<MemoryAccess> getMemoryAccesses(Operation *op);
-  static bool isMemoryAccessOperation(Operation *op);
 
   // ------------------------------
   // Public API for ConSan
