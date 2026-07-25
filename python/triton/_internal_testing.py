@@ -89,18 +89,15 @@ def is_hip_cdna4():
 
 def is_hip_rdna3():
     target = get_current_target()
-    return target is not None and target.backend == 'hip' and 'gfx11' in target.arch
-
-
-def is_hip_rdna4m():
-    target = get_current_target()
-    return target is not None and target.backend == 'hip' and 'gfx117' in target.arch
+    return target is not None and target.backend == 'hip' and ('gfx110' in target.arch or 'gfx115' in target.arch)
 
 
 def is_hip_rdna4():
     target = get_current_target()
-    # check for gfx120 instead of gfx12, to avoid matching gfx1250
-    return target is not None and target.backend == 'hip' and 'gfx120' in target.arch
+    if target is None or target.backend != 'hip':
+        return False
+    # gfx117* has WMMA v2 layout so we classify as RDNA4 for purpose of the tests
+    return 'gfx120' in target.arch or 'gfx117' in target.arch
 
 
 def is_hip_gfx1250():

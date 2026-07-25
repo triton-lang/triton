@@ -19,7 +19,6 @@ enum class ISAFamily {
   RDNA1,
   RDNA2,
   RDNA3,
-  RDNA4m,
   RDNA4,
   GFX1250,
 };
