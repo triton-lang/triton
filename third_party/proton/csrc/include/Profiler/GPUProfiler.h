@@ -119,6 +119,8 @@ protected:
     bool isApiExternOp{false};
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
+    // Number of kernel activities expected from the current launch API.
+    size_t numNodes{1};
     struct MetricKernelLaunchInfo {
       uint64_t seqId{};
       uint64_t metricId{};
@@ -155,6 +157,8 @@ protected:
   };
 
   struct Correlation {
+    std::atomic<uint64_t> numSubmittedTasks{0};
+    std::atomic<uint64_t> numCompletedTasks{0};
     std::atomic<uint64_t> maxSubmittedCorrelationId{0};
     std::atomic<uint64_t> maxCompletedCorrelationId{0};
     // Mapping from a native profiler correlation id to an external id.
@@ -164,8 +168,15 @@ protected:
 
     Correlation() = default;
 
-    void submit(uint64_t correlationId) {
+    void submit(size_t numTasks,
+                uint64_t correlationId = Scope::DummyScopeId) {
       atomicMax(maxSubmittedCorrelationId, correlationId);
+      numSubmittedTasks.fetch_add(numTasks);
+    }
+
+    void complete(uint64_t numTasks, uint64_t correlationId) {
+      numCompletedTasks.fetch_add(numTasks);
+      atomicMax(maxCompletedCorrelationId, correlationId);
     }
 
     void complete(uint64_t correlationId) {
@@ -186,13 +197,18 @@ protected:
     template <typename FlushFnT>
     void flush(uint64_t maxRetries, uint64_t sleepUs, FlushFnT &&flushFn) {
       flushFn();
-      auto submittedId = maxSubmittedCorrelationId.load();
-      auto completedId = maxCompletedCorrelationId.load();
+      auto submittedTasks = numSubmittedTasks.load();
+      auto completedTasks = numCompletedTasks.load();
+      auto submittedCorrelationId = maxSubmittedCorrelationId.load();
+      auto completedCorrelationId = maxCompletedCorrelationId.load();
       auto retries = maxRetries;
-      while ((completedId < submittedId) && retries > 0) {
+      while ((completedTasks < submittedTasks ||
+              completedCorrelationId < submittedCorrelationId) &&
+             retries > 0) {
         std::this_thread::sleep_for(std::chrono::microseconds(sleepUs));
         flushFn();
-        completedId = maxCompletedCorrelationId.load();
+        completedTasks = numCompletedTasks.load();
+        completedCorrelationId = maxCompletedCorrelationId.load();
         --retries;
       }
     }
@@ -200,6 +216,8 @@ protected:
     void clear() {
       corrIdToExternId.clear();
       externIdToState.clear();
+      numCompletedTasks.store(0);
+      numSubmittedTasks.store(0);
       maxCompletedCorrelationId.store(0);
       maxSubmittedCorrelationId.store(0);
     }

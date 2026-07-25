@@ -396,7 +396,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
         return;
       }
       // Track outstanding op for flush
-      profiler.correlation.submit(data->correlation_id);
+      profiler.correlation.submit(1, data->correlation_id);
     }
   } else if (domain == ACTIVITY_DOMAIN_ROCTX) {
     const roctx_api_data_t *data =

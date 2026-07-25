@@ -108,22 +108,6 @@ RocprofilerRuntimeState &getRuntimeState() {
   return state;
 }
 
-// rocprofiler-sdk preserves userData from ENTER to EXIT for each API call.
-// Remember whether the call entered during an active Proton session so an
-// in-flight call still gets its matching EXIT handling if the session stops.
-bool isProfilingCallbackActive(
-    rocprofiler_callback_tracing_record_t record,
-    rocprofiler_user_data_t *userData) {
-  if (record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER ||
-      record.phase == ROCPROFILER_CALLBACK_PHASE_NONE) {
-    userData->value = getRuntimeState().profilingActive.load(
-                          std::memory_order_relaxed)
-                          ? 1
-                          : 0;
-  }
-  return userData->value != 0;
-}
-
 using RoctxTracerCallbackFn = int (*)(uint32_t domain, uint32_t operationId,
                                       void *data);
 using RoctxRegisterTracerCallbackFn = void (*)(RoctxTracerCallbackFn);
@@ -458,7 +442,7 @@ private:
   std::map<Data *, std::map<size_t, size_t>> phaseInstances;
 };
 
-void processKernelRecord(
+bool processKernelRecord(
     RocprofSDKProfiler &profiler,
     RocprofSDKProfiler::CorrIdToExternIdMap &corrIdToExternId,
     RocprofSDKProfiler::ExternIdToStateMap &externIdToState,
@@ -472,10 +456,7 @@ void processKernelRecord(
                                 [&](const size_t &value) { externId = value; });
 
   if (!hasCorrelation)
-    return;
-
-  if (externId == Scope::DummyScopeId)
-    return;
+    return false;
 
   DataToEntryMap dataToEntry;
   bool isMissingName = true;
@@ -483,8 +464,10 @@ void processKernelRecord(
           externId, [&](const RocprofSDKProfiler::ExternIdState &state) {
             dataToEntry = state.dataToEntry;
             isMissingName = state.isMissingName;
-          }))
-    return;
+          })) {
+    corrIdToExternId.erase(record->correlation_id.internal);
+    return true;
+  }
 
   for (auto [data, entry] : dataToEntry) {
     if (auto metric = convertDispatchToMetric(record, streamId)) {
@@ -502,7 +485,9 @@ void processKernelRecord(
   bool complete = false;
   externIdToState.withWrite(externId,
                             [&](RocprofSDKProfiler::ExternIdState &state) {
-                              if (state.numNodes > 0)
+                              if (state.numNodes !=
+                                      std::numeric_limits<size_t>::max() &&
+                                  state.numNodes > 0)
                                 --state.numNodes;
                               complete = state.numNodes == 0;
                             });
@@ -510,6 +495,7 @@ void processKernelRecord(
     corrIdToExternId.erase(record->correlation_id.internal);
     externIdToState.erase(externId);
   }
+  return true;
 }
 
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
@@ -636,7 +622,9 @@ void processGraphKernelRecord(
   bool complete = false;
   externIdToState.withWrite(externId,
                             [&](RocprofSDKProfiler::ExternIdState &state) {
-                              if (state.numNodes > 0)
+                              if (state.numNodes !=
+                                      std::numeric_limits<size_t>::max() &&
+                                  state.numNodes > 0)
                                 --state.numNodes;
                               complete = state.numNodes == 0;
                             });
@@ -982,13 +970,13 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleRuntimeExit(
 #endif
   if (deactivated) // Profiler is deactivated
     return;
-  profiler.correlation.submit(record.correlation_id.internal);
+  profiler.correlation.submit(1);
 }
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
     rocprofiler_callback_tracing_record_t record,
     rocprofiler_user_data_t *userData, void *arg) {
-  if (!isProfilingCallbackActive(record, userData))
+  if (!getRuntimeState().profilingActive.load(std::memory_order_relaxed))
     return;
   if (record.kind != ROCPROFILER_CALLBACK_TRACING_HIP_RUNTIME_API)
     return;
@@ -1009,7 +997,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
     rocprofiler_callback_tracing_record_t record,
     rocprofiler_user_data_t *userData, void *arg) {
-  if (!isProfilingCallbackActive(record, userData))
+  if (!getRuntimeState().profilingActive.load(std::memory_order_relaxed))
     return;
   auto *payload = static_cast<rocprofiler_callback_tracing_hip_graph_data_t *>(
       record.payload);
@@ -1097,7 +1085,7 @@ int RocprofSDKProfiler::RocprofSDKProfilerPimpl::graphNodeCorrelationCallback(
         impl->kernelPhaseTracker.record(
             state.nodeIdToState ? state.dataToGraphEntry : state.dataToEntry);
       });
-  profiler.correlation.submit(internalCorrelationId);
+  profiler.correlation.submit(1);
   return 0;
 }
 #endif
@@ -1113,7 +1101,7 @@ int RocprofSDKProfiler::RocprofSDKProfilerPimpl::graphNodeCorrelationCallback(
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::markerCallback(
     rocprofiler_callback_tracing_record_t record,
     rocprofiler_user_data_t *userData, void *arg) {
-  if (!isProfilingCallbackActive(record, userData))
+  if (!getRuntimeState().profilingActive.load(std::memory_order_relaxed))
     return;
   if (record.kind != ROCPROFILER_CALLBACK_TRACING_MARKER_CORE_API)
     return;
@@ -1206,7 +1194,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
   auto *impl = static_cast<RocprofSDKProfilerPimpl *>(profiler.pImpl.get());
   auto &correlation = profiler.correlation;
 
-  uint64_t maxCorrelationId = 0;
+  uint64_t numCompletedTasks = 0;
   DataPhases dataPhases;
 
   for (size_t i = 0; i < numHeaders; ++i) {
@@ -1218,8 +1206,6 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
       auto *record =
           static_cast<rocprofiler_buffer_tracing_kernel_dispatch_record_t *>(
               header->payload);
-      maxCorrelationId =
-          std::max(maxCorrelationId, record->correlation_id.internal);
       auto kernelName = impl->getKernelName(record->dispatch_info.kernel_id);
       uint64_t streamId =
           static_cast<uint64_t>(record->dispatch_info.queue_id.handle);
@@ -1235,6 +1221,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
         processGraphKernelRecord(
             correlation.externIdToState, impl->kernelPhaseTracker, dataPhases,
             kernelName, record, *graphCorrelation, streamId);
+        ++numCompletedTasks;
         correlation.corrIdToExternId.erase(record->correlation_id.internal);
         // Release the heap allocation for graph correlation data created in
         // graphNodeCorrelationCallback
@@ -1242,22 +1229,20 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
         record->correlation_id.external.ptr = nullptr;
         record->correlation_id.external.value = 0;
       } else {
-        processKernelRecord(
+        numCompletedTasks += processKernelRecord(
             profiler, correlation.corrIdToExternId, correlation.externIdToState,
             impl->kernelPhaseTracker, dataPhases, kernelName, record, streamId);
       }
 #else
-      processKernelRecord(profiler, correlation.corrIdToExternId,
-                          correlation.externIdToState, impl->kernelPhaseTracker,
-                          dataPhases, kernelName, record, streamId);
+      numCompletedTasks += processKernelRecord(
+          profiler, correlation.corrIdToExternId, correlation.externIdToState,
+          impl->kernelPhaseTracker, dataPhases, kernelName, record, streamId);
 #endif
       impl->corrIdToStreamId.erase(record->correlation_id.internal);
     }
   }
   profiler.flushDataPhases(dataPhases, profiler.pendingGraphPool.get());
-  if (maxCorrelationId > 0) {
-    correlation.complete(maxCorrelationId);
-  }
+  correlation.complete(numCompletedTasks, /*correlationId=*/0);
 }
 
 // ---- SDK tool init / fini (called by rocprofiler_force_configure) ----
