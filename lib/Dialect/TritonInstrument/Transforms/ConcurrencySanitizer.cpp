@@ -1,5 +1,6 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -162,7 +163,7 @@ Value createStateMaskConstant(ImplicitLocOpBuilder &b,
 FailureOr<Value> createBufferStateMask(ImplicitLocOpBuilder &b,
                                        AuxDataMap &auxData, MemType memType,
                                        Value runtimeBase,
-                                       ArrayRef<uint32_t> candidateIds,
+                                       const BufferStateCandidates &candidates,
                                        Operation *op) {
   int index = static_cast<int>(memType);
   const BufferStatePlan &plan = auxData.bufferStatePlans[index];
@@ -170,15 +171,9 @@ FailureOr<Value> createBufferStateMask(ImplicitLocOpBuilder &b,
     op->emitError("active memdesc has no ConSan state plan");
     return failure();
   }
-  if (candidateIds.empty()) {
+  if (!candidates.unknown && candidates.cases.empty()) {
     op->emitError("active memdesc has no buffer-state candidates");
     return failure();
-  }
-  for (uint32_t id : candidateIds) {
-    if (id >= plan.regionMasks.size()) {
-      op->emitError("buffer-region candidate ID is out of bounds");
-      return failure();
-    }
   }
 
   auto writeVisibilityType =
@@ -186,16 +181,19 @@ FailureOr<Value> createBufferStateMask(ImplicitLocOpBuilder &b,
   RankedTensorType maskType =
       tti::getSlicedTensorType(writeVisibilityType, {1}, b.getI1Type());
 
+  if (candidates.unknown)
+    return createStateMaskConstant(b, maskType, plan.unknownMask);
+
   SmallVector<Value> predicates;
-  if (candidateIds.size() > 1) {
+  if (candidates.cases.size() > 1) {
     if (!runtimeBase) {
       op->emitError("dynamic buffer-state cases require a runtime base");
       return failure();
     }
     Value resolved = arith::ConstantIntOp::create(b, 0, 1);
-    for (uint32_t id : candidateIds) {
+    for (const BufferStateCandidate &candidate : candidates.cases) {
       Value base = tti::ExperimentalMemoryOffsetToI32Op::create(
-          b, auxData.bufferRegions[index][id].baseOffset, memType);
+          b, candidate.baseOffset, memType);
       Value predicate =
           arith::CmpIOp::create(b, arith::CmpIPredicate::eq, runtimeBase, base);
       predicates.push_back(predicate);
@@ -206,15 +204,13 @@ FailureOr<Value> createBufferStateMask(ImplicitLocOpBuilder &b,
         "internal ConSan error: active memdesc resolved to no buffer state");
   }
 
-  if (candidateIds.size() == 1)
-    return createStateMaskConstant(b, maskType,
-                                   plan.regionMasks[candidateIds.front()]);
+  if (candidates.cases.size() == 1)
+    return createStateMaskConstant(b, maskType, candidates.cases.front().mask);
 
   Value result =
       createStateMaskConstant(b, maskType, llvm::SmallBitVector(plan.numLanes));
-  for (auto [id, predicate] : llvm::zip(candidateIds, predicates)) {
-    Value candidate =
-        createStateMaskConstant(b, maskType, plan.regionMasks[id]);
+  for (auto [state, predicate] : llvm::zip(candidates.cases, predicates)) {
+    Value candidate = createStateMaskConstant(b, maskType, state.mask);
     Value predicateTensor = tt::SplatOp::create(b, maskType, predicate);
     candidate = arith::AndIOp::create(b, candidate, predicateTensor);
     result = arith::OrIOp::create(b, result, candidate);
@@ -624,6 +620,47 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
   return currentCTAMask(b);
 }
 
+Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Value recipients,
+                       const BufferStateCandidates &candidates) {
+  if (candidates.unknown)
+    return allCTAsMask(b);
+
+  uint32_t ownerMask = 0;
+  for (const BufferStateCandidate &candidate : candidates.cases)
+    ownerMask |= candidate.ctaMask;
+
+  if (ownerMask == 1)
+    return recipients;
+
+  int numCTAs = ttg::lookupNumCTAs(b);
+  APInt constant;
+  if (matchPattern(recipients, m_ConstantInt(&constant))) {
+    uint32_t result = 0;
+    for (int offset = 0; offset < numCTAs; ++offset)
+      if (ownerMask & (1u << offset))
+        result |= translateXorMask(constant.getZExtValue(), offset, numCTAs);
+    return arith::ConstantIntOp::create(b, result, 32);
+  }
+
+  Value result = arith::ConstantIntOp::create(b, 0, 32);
+  for (int source = 0; source < numCTAs; ++source) {
+    uint32_t targets = 0;
+    for (int offset = 0; offset < numCTAs; ++offset)
+      if (ownerMask & (1u << offset))
+        targets |= 1u << (source ^ offset);
+    Value sourceBit = arith::ConstantIntOp::create(b, 1u << source, 32);
+    Value present =
+        arith::CmpIOp::create(b, arith::CmpIPredicate::ne,
+                              arith::AndIOp::create(b, recipients, sourceBit),
+                              arith::ConstantIntOp::create(b, 0, 32));
+    Value targetMask = arith::SelectOp::create(
+        b, present, arith::ConstantIntOp::create(b, targets, 32),
+        arith::ConstantIntOp::create(b, 0, 32));
+    result = arith::OrIOp::create(b, result, targetMask);
+  }
+  return result;
+}
+
 Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
   if (isa<ttng::BarrierExpectOp, ttng::ArriveBarrierOp>(op)) {
     Value barrier = cast<ttg::MBarrierOpInterface>(op).getBarrier();
@@ -941,9 +978,10 @@ private:
     Value pred = opInfo->pred;
     Value issuerCTAPred = hooks->getIssuerCTAPred(b, op);
     pred = tti::maybeAnd(b, pred, issuerCTAPred);
-    Value effectCTAs = getMemEffectCTAs(b, op);
+    Value defaultEffectCTAs = getMemEffectCTAs(b, op);
     struct MaterializedEffect {
       Value bufferMask;
+      Value effectCTAs;
       MemType memType;
     };
     SmallVector<MaterializedEffect> materializedEffects;
@@ -954,17 +992,17 @@ private:
       Value buf = effect.buf;
       auto bufType = cast<ttg::MemDescType>(buf.getType());
       materialized.memType = MemType::TENSOR_MEM;
-      if (isa<ttg::SharedEncodingTrait>(bufType.getEncoding()))
+      if (isa<ttg::SharedMemorySpaceAttr>(bufType.getMemorySpace()))
         materialized.memType = MemType::SHARED_MEM;
       auto &candidateMap =
-          auxData.bufferCandidateIds[static_cast<int>(materialized.memType)];
+          auxData.bufferCandidates[static_cast<int>(materialized.memType)];
       auto candidateIt = candidateMap.find(buf);
       if (candidateIt == candidateMap.end()) {
-        op->emitError("missing exact buffer-region candidates for memdesc");
+        op->emitError("missing buffer-region candidates for memdesc");
         return failure();
       }
       Value runtimeBase;
-      if (candidateIt->second.size() > 1)
+      if (!candidateIt->second.unknown && candidateIt->second.cases.size() > 1)
         runtimeBase = tti::ExperimentalMemDescToI32Op::create(b, buf);
       FailureOr<Value> stateMask =
           createBufferStateMask(b, auxData, materialized.memType, runtimeBase,
@@ -972,9 +1010,12 @@ private:
       if (failed(stateMask))
         return failure();
       materialized.bufferMask = *stateMask;
+      materialized.effectCTAs =
+          getMemEffectCTAs(b, defaultEffectCTAs, candidateIt->second);
       materializedEffects.push_back(materialized);
 
       Value bufferMask = materialized.bufferMask;
+      Value effectCTAs = materialized.effectCTAs;
       MemType memType = materialized.memType;
       if (memType == MemType::SHARED_MEM) {
         if (effect.proxy == MemEffectsOpInfo::Effects::Proxy::Async) {
@@ -1055,12 +1096,12 @@ private:
             continue;
           funcBuilder.createTrackBarrierWriteForBufferCall(
               b, barrier, materialized.bufferMask, combinedPred,
-              materialized.memType, op, recipientCTAs, effectCTAs);
+              materialized.memType, op, recipientCTAs, materialized.effectCTAs);
           if (materialized.memType == MemType::SHARED_MEM &&
               effect.proxy == MemEffectsOpInfo::Effects::Proxy::Async) {
             funcBuilder.createTrackProxyAccessesForBufferCall(
                 b, barrier, materialized.bufferMask, baseThread, combinedPred,
-                op, recipientCTAs, effectCTAs);
+                op, recipientCTAs, materialized.effectCTAs);
           }
         }
       }

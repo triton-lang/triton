@@ -1,6 +1,7 @@
 #ifndef TRITON_ANALYSIS_BUFFER_REGION_H
 #define TRITON_ANALYSIS_BUFFER_REGION_H
 
+#include <algorithm>
 #include <cstdint>
 #include <set>
 #include <tuple>
@@ -9,6 +10,7 @@
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SparseBitVector.h"
@@ -65,43 +67,82 @@ private:
 //===----------------------------------------------------------------------===//
 
 struct BufferRegion {
+  using CTAAddresses = std::pair<uint32_t, AddressSet>;
+
   /// Runtime descriptor key. It deliberately does not define geometry:
   /// distinct sparse views may have the same key.
   uint32_t baseOffset = 0;
   uint32_t length = 0;
   AddressSet addresses;
+  llvm::SmallVector<CTAAddresses, 2> ctaAddresses;
 
   /// Internal view provenance used while composing nested views.
   uint32_t storageBase = 0;
   uint32_t affineOffset = 0;
+  llvm::SmallVector<uint32_t, 2> partitionBases;
+  uint32_t affinePartitionOffset = 0;
+  uint32_t affineCTAOffset = 0;
 
   BufferRegion() = default;
   BufferRegion(uint32_t baseOffset, uint32_t length)
       : baseOffset(baseOffset), length(length),
         addresses(AddressSet::fromRange(baseOffset, length)),
-        storageBase(baseOffset) {}
+        ctaAddresses{{0, addresses}}, storageBase(baseOffset) {}
   BufferRegion(uint32_t baseOffset, uint32_t length, AddressSet addresses,
-               uint32_t storageBase, uint32_t affineOffset)
+               uint32_t storageBase, uint32_t affineOffset,
+               llvm::ArrayRef<uint32_t> partitionBases = {},
+               uint32_t affinePartitionOffset = 0,
+               llvm::ArrayRef<CTAAddresses> ctaAddresses = {},
+               uint32_t affineCTAOffset = 0)
       : baseOffset(baseOffset), length(length), addresses(std::move(addresses)),
-        storageBase(storageBase), affineOffset(affineOffset) {}
+        ctaAddresses(ctaAddresses), storageBase(storageBase),
+        affineOffset(affineOffset), partitionBases(partitionBases),
+        affinePartitionOffset(affinePartitionOffset),
+        affineCTAOffset(affineCTAOffset) {
+    if (this->ctaAddresses.empty() && !this->addresses.empty())
+      this->ctaAddresses.emplace_back(0, this->addresses);
+  }
 
   bool intersects(const BufferRegion &other) const {
-    return addresses.intersects(other.addresses);
+    return llvm::any_of(ctaAddresses, [&](const CTAAddresses &lhs) {
+      return llvm::any_of(other.ctaAddresses, [&](const CTAAddresses &rhs) {
+        return lhs.first == rhs.first && lhs.second.intersects(rhs.second);
+      });
+    });
   }
   bool contains(const BufferRegion &other) const {
-    return addresses.contains(other.addresses);
+    return llvm::all_of(other.ctaAddresses, [&](const CTAAddresses &rhs) {
+      return llvm::any_of(ctaAddresses, [&](const CTAAddresses &lhs) {
+        return lhs.first == rhs.first && lhs.second.contains(rhs.second);
+      });
+    });
   }
 
   bool operator==(const BufferRegion &other) const {
     return baseOffset == other.baseOffset && length == other.length &&
-           addresses == other.addresses && storageBase == other.storageBase &&
-           affineOffset == other.affineOffset;
+           addresses == other.addresses && ctaAddresses == other.ctaAddresses &&
+           storageBase == other.storageBase &&
+           affineOffset == other.affineOffset &&
+           partitionBases == other.partitionBases &&
+           affinePartitionOffset == other.affinePartitionOffset &&
+           affineCTAOffset == other.affineCTAOffset;
   }
 
   bool operator<(const BufferRegion &other) const {
-    return std::tie(baseOffset, length, addresses, storageBase, affineOffset) <
-           std::tie(other.baseOffset, other.length, other.addresses,
-                    other.storageBase, other.affineOffset);
+    auto lhs = std::tie(baseOffset, length, addresses, storageBase,
+                        affineOffset, affinePartitionOffset, affineCTAOffset);
+    auto rhs = std::tie(other.baseOffset, other.length, other.addresses,
+                        other.storageBase, other.affineOffset,
+                        other.affinePartitionOffset, other.affineCTAOffset);
+    if (lhs != rhs)
+      return lhs < rhs;
+    if (partitionBases != other.partitionBases)
+      return std::lexicographical_compare(
+          partitionBases.begin(), partitionBases.end(),
+          other.partitionBases.begin(), other.partitionBases.end());
+    return std::lexicographical_compare(
+        ctaAddresses.begin(), ctaAddresses.end(), other.ctaAddresses.begin(),
+        other.ctaAddresses.end());
   }
 
   template <typename T> void print(T &os) const {
@@ -118,9 +159,11 @@ struct BufferRegion {
 struct BufferStatePlan {
   unsigned numLanes = 0;
   llvm::SmallVector<llvm::SmallBitVector> regionMasks;
+  llvm::SmallBitVector unknownMask;
 };
 
-BufferStatePlan createBufferStatePlan(llvm::ArrayRef<BufferRegion> regions);
+BufferStatePlan createBufferStatePlan(llvm::ArrayRef<BufferRegion> regions,
+                                      bool includeUnknown = false);
 
 //===----------------------------------------------------------------------===//
 // RegionInfo lattice
@@ -129,32 +172,50 @@ BufferStatePlan createBufferStatePlan(llvm::ArrayRef<BufferRegion> regions);
 // This wraps a set of BufferRegions and provides lattice semantics
 //
 struct RegionInfo {
+  enum class Kind { Uninitialized, Exact, Unknown };
   using RegionList = std::set<BufferRegion>;
+
+  Kind kind = Kind::Uninitialized;
   RegionList regions;
 
   RegionInfo() = default;
-  RegionInfo(const RegionList &r) : regions(r) {}
+  RegionInfo(const RegionList &r) : kind(Kind::Exact), regions(r) {}
 
-  // Lattice join: union of regions
+  bool isUnknown() const { return kind == Kind::Unknown; }
+
   static RegionInfo join(const RegionInfo &lhs, const RegionInfo &rhs) {
+    if (lhs.isUnknown() || rhs.isUnknown())
+      return getPessimisticValueState();
+    if (lhs.kind == Kind::Uninitialized)
+      return rhs;
+    if (rhs.kind == Kind::Uninitialized)
+      return lhs;
     RegionInfo result = lhs;
     result.regions.insert(rhs.regions.begin(), rhs.regions.end());
     return result;
   }
 
   bool operator==(const RegionInfo &other) const {
-    return regions == other.regions;
+    return kind == other.kind && regions == other.regions;
   }
 
   template <typename T> void print(T &os) const {
+    if (isUnknown()) {
+      os << "unknown";
+      return;
+    }
     llvm::interleaveComma(regions, os,
                           [&](const BufferRegion &r) { r.print(os); });
   }
 
   static RegionInfo getPessimisticValueState(MLIRContext *context = nullptr) {
-    return RegionInfo(); // means "unknown / empty"
+    RegionInfo result;
+    result.kind = Kind::Unknown;
+    return result;
   }
-  static RegionInfo getPessimisticValueState(Value) { return RegionInfo(); }
+  static RegionInfo getPessimisticValueState(Value) {
+    return getPessimisticValueState();
+  }
 };
 
 //===----------------------------------------------------------------------===//
@@ -175,6 +236,12 @@ public:
 
   enum RegionType { SHARED_MEMORY, TENSOR_MEMORY, BARRIER, NUM_REGION_TYPES };
 
+  struct MemoryAccess {
+    Value value;
+    bool isWrite;
+  };
+
+  static llvm::SmallVector<MemoryAccess> getMemoryAccesses(Operation *op);
   static bool isMemoryAccessOperation(Operation *op);
 
   // ------------------------------
@@ -185,6 +252,10 @@ public:
   llvm::SmallVector<BufferRegion>
   getAllUsedBufferRegions(RegionType type) const {
     return llvm::to_vector(usedBufferRegions[type]);
+  }
+
+  bool hasUnknownUsedBufferRegions(RegionType type) const {
+    return usedUnknownBufferRegions[type];
   }
 
   void calculateUsedBufferRegions(Operation *op);
@@ -208,9 +279,8 @@ public:
 private:
   // Global registry of all regions
   std::set<BufferRegion> usedBufferRegions[NUM_REGION_TYPES];
+  bool usedUnknownBufferRegions[NUM_REGION_TYPES] = {};
   llvm::DenseMap<std::pair<Type, uint32_t>, AddressSet> footprintCache;
-
-  static void verifyOpIsSupported(Operation *op);
 };
 
 } // namespace mlir::triton

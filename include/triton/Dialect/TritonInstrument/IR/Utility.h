@@ -118,6 +118,17 @@ struct ValueType {
       : value(value.first), type(value.second) {}
 };
 
+struct BufferStateCandidate {
+  uint32_t baseOffset = 0;
+  llvm::SmallBitVector mask;
+  uint32_t ctaMask = 0;
+};
+
+struct BufferStateCandidates {
+  SmallVector<BufferStateCandidate, 2> cases;
+  bool unknown = false;
+};
+
 // Map from IR region to ConSan auxiliary data.
 //
 // Aux data is created in the entry function and then either rematerialized or
@@ -226,10 +237,10 @@ struct AuxDataMap {
   RegionToValueMap commits[CommitKind::NumCommitKinds];
 
   // Stable exact region identities, the selected state-lane plan, and
-  // analysis-derived candidate IDs for each SSA memdesc.
+  // analysis-derived runtime-base, state-mask, and CTA cases for each memdesc.
   SmallVector<triton::BufferRegion> bufferRegions[numMemTypes];
   triton::BufferStatePlan bufferStatePlans[numMemTypes];
-  DenseMap<Value, SmallVector<uint32_t>> bufferCandidateIds[numMemTypes];
+  DenseMap<Value, BufferStateCandidates> bufferCandidates[numMemTypes];
 
   // scratch pointer, i32
   // Shared-cluster lock used to serialize ConSan instrumentation updates.

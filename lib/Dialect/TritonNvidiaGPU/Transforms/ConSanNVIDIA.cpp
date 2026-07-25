@@ -149,9 +149,7 @@ public:
 
   std::optional<MemEffectsOpInfo>
   getMemEffectsOpInfo(Operation *op) const override {
-    auto info = ConSanTargetHooks::getMemEffectsOpInfo(op);
-    if (info)
-      return info;
+    std::optional<MemEffectsOpInfo> info;
     if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
@@ -310,7 +308,7 @@ public:
       info->barriers.push_back(
           {arriveOp.getBarrier(), nullptr, (int)arriveOp.getCount()});
     }
-    return info;
+    return info ? info : ConSanTargetHooks::getMemEffectsOpInfo(op);
   }
 
   SmallVector<CommitKindDesc> getOutstandingReadCommitKinds() const override {

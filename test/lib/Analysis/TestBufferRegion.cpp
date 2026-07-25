@@ -136,7 +136,7 @@ struct TestBufferRegionAliasPass
         base = *min;
         length = *max - *min + 1;
       }
-      tt::RegionInfo info;
+      tt::RegionInfo info(tt::RegionInfo::RegionList{});
       info.regions.insert(tt::BufferRegion(
           base, length, tt::AddressSet::fromAddresses(addresses),
           /*storageBase=*/base, /*affineOffset=*/0));
@@ -153,6 +153,8 @@ struct TestBufferRegionAliasPass
   }
 
   static bool mayAlias(const tt::RegionInfo &lhs, const tt::RegionInfo &rhs) {
+    if (lhs.isUnknown() || rhs.isUnknown())
+      return true;
     return llvm::any_of(lhs.regions, [&](const tt::BufferRegion &a) {
       return llvm::any_of(rhs.regions, [&](const tt::BufferRegion &b) {
         return a.intersects(b);
@@ -162,6 +164,8 @@ struct TestBufferRegionAliasPass
 
   static bool contains(const tt::RegionInfo &container,
                        const tt::RegionInfo &contained) {
+    if (container.isUnknown() || contained.isUnknown())
+      return false;
     return llvm::all_of(contained.regions, [&](const tt::BufferRegion &b) {
       return llvm::any_of(container.regions, [&](const tt::BufferRegion &a) {
         return a.contains(b);
@@ -193,11 +197,20 @@ struct TestBufferRegionAliasPass
     llvm::sort(regions);
     regions.erase(std::unique(regions.begin(), regions.end()), regions.end());
 
-    tt::BufferStatePlan plan = tt::createBufferStatePlan(regions);
+    bool hasUnknown = llvm::any_of(namedRegions, [](const auto &named) {
+      return named.second.isUnknown();
+    });
+    tt::BufferStatePlan plan = tt::createBufferStatePlan(regions, hasUnknown);
     InFlightDiagnostic summary = module.emitRemark();
     summary << "state-plan: lanes=" << plan.numLanes;
 
     for (const auto &[name, info] : namedRegions) {
+      if (info.isUnknown()) {
+        InFlightDiagnostic diag = module.emitRemark();
+        diag << name << " case unknown: mask=";
+        printMask(diag, plan.unknownMask);
+        continue;
+      }
       SmallVector<tt::BufferRegion> candidates(info.regions.begin(),
                                                info.regions.end());
       llvm::sort(candidates);

@@ -27,6 +27,7 @@ namespace {
 
 DistributedEncodingTrait getWarpLocalEncoding(MLIRContext *ctx,
                                               ArrayRef<int64_t> shape,
+                                              unsigned threadsPerWarp,
                                               unsigned warps, unsigned numCTAs,
                                               unsigned bitwidth) {
   assert(!shape.empty() && "Expected non-empty shape");
@@ -41,13 +42,13 @@ DistributedEncodingTrait getWarpLocalEncoding(MLIRContext *ctx,
   // We pick a layout that vectorises global loads and stores.
   auto dim = StringAttr::get(ctx, "dim0");
   int numel = product(shape);
-  auto nlanes = std::min(numel, 32);
+  auto nlanes = std::min(numel, static_cast<int>(threadsPerWarp));
   auto nregs = numel / nlanes;
   auto vec = std::min<int>(kMaxVectorLengthBits / bitwidth, nregs);
   nregs /= vec;
   auto ll = LinearLayout::identity1D(vec, kRegister, dim) *
             LinearLayout::identity1D(nlanes, kLane, dim) *
-            LinearLayout::zeros1D(32 / nlanes, kLane, dim) *
+            LinearLayout::zeros1D(threadsPerWarp / nlanes, kLane, dim) *
             LinearLayout::zeros1D(warps, kWarp, dim) *
             LinearLayout::zeros1D(numCTAs, kBlock, dim) *
             LinearLayout::identity1D(nregs, kRegister, dim);
@@ -214,10 +215,12 @@ void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,
 RankedTensorType getIntTensorType(Region *region, ArrayRef<int64_t> shape,
                                   unsigned bitWidth) {
   MLIRContext *ctx = region->getContext();
+  unsigned int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(
+      region->getParentOp()->getParentOfType<ModuleOp>());
   unsigned int warps = lookupNumWarps(region);
   unsigned int numCTAs = lookupNumCTAs(region->getParentOp());
-  DistributedEncodingTrait encoding =
-      getWarpLocalEncoding(ctx, shape, warps, numCTAs, bitWidth);
+  DistributedEncodingTrait encoding = getWarpLocalEncoding(
+      ctx, shape, threadsPerWarp, warps, numCTAs, bitWidth);
   Type elType = IntegerType::get(ctx, bitWidth);
   return RankedTensorType::get(shape, elType, encoding);
 }
@@ -701,10 +704,8 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
     });
   } else {
     module.walk([&](Operation *op) {
-      if (!BufferRegionAnalysis::isMemoryAccessOperation(op))
-        return;
-      llvm::for_each(op->getOperands(), collectCandidates);
-      llvm::for_each(op->getResults(), collectCandidates);
+      for (const auto &access : BufferRegionAnalysis::getMemoryAccesses(op))
+        collectCandidates(access.value);
     });
   }
 
@@ -719,14 +720,19 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
   for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
     int iMemType = (int)memType;
     ArrayRef<BufferRegion> regions = bufferRegions[iMemType];
-    if (regions.empty()) {
+    auto regionType = memType == MemType::SHARED_MEM
+                          ? BufferRegionAnalysis::SHARED_MEMORY
+                          : BufferRegionAnalysis::TENSOR_MEMORY;
+    bool hasUnknown = analysis->hasUnknownUsedBufferRegions(regionType);
+    if (regions.empty() && !hasUnknown)
       continue;
-    }
 
-    bufferStatePlans[iMemType] = triton::createBufferStatePlan(regions);
+    bufferStatePlans[iMemType] =
+        triton::createBufferStatePlan(regions, hasUnknown);
 
     for (const auto &[value, regionInfo] : candidates[iMemType]) {
-      SmallVector<uint32_t> ids;
+      BufferStateCandidates stateCandidates;
+      stateCandidates.unknown = regionInfo.isUnknown();
       for (const BufferRegion &candidate : regionInfo.regions) {
         auto it = llvm::lower_bound(regions, candidate);
         if (it == regions.end() || !(*it == candidate)) {
@@ -737,24 +743,23 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
           candidate.print(diag);
           return failure();
         }
-        ids.push_back(std::distance(regions.begin(), it));
-      }
-      const BufferStatePlan &plan = bufferStatePlans[iMemType];
-      llvm::SmallDenseMap<uint32_t, uint32_t> firstByBase;
-      SmallVector<uint32_t> distinguishableIds;
-      for (uint32_t id : ids) {
-        auto [it, inserted] =
-            firstByBase.try_emplace(regions[id].baseOffset, id);
-        if (!inserted && plan.regionMasks[it->second] != plan.regionMasks[id]) {
-          emitError(value.getLoc(),
-                    "ambiguous buffer-state cases share a runtime base");
-          return failure();
+        uint32_t id = std::distance(regions.begin(), it);
+        uint32_t ctaMask = 1u << candidate.affineCTAOffset;
+
+        auto existing = llvm::find_if(
+            stateCandidates.cases, [&](const BufferStateCandidate &state) {
+              return state.baseOffset == candidate.baseOffset;
+            });
+        if (existing == stateCandidates.cases.end()) {
+          stateCandidates.cases.push_back(
+              {candidate.baseOffset, bufferStatePlans[iMemType].regionMasks[id],
+               ctaMask});
+        } else {
+          existing->mask |= bufferStatePlans[iMemType].regionMasks[id];
+          existing->ctaMask |= ctaMask;
         }
-        if (inserted)
-          distinguishableIds.push_back(id);
       }
-      bufferCandidateIds[iMemType].try_emplace(value,
-                                               std::move(distinguishableIds));
+      bufferCandidates[iMemType].try_emplace(value, std::move(stateCandidates));
     }
   }
   return success();

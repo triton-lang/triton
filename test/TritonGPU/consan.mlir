@@ -2139,3 +2139,68 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// A known allocation and an external descriptor share the known state lane;
+// the unknown descriptor additionally covers its dedicated wildcard lane.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @known_and_unknown_descriptor_state
+  tt.func public @known_and_unknown_descriptor_state(%incoming: !ttg.memdesc<16xi32, #shared, #smem, mutable>) {
+    // CHECK: %[[KNOWN:.*]] = ttg.local_alloc
+    %known = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    // CHECK: arith.constant dense<[true, false]> : tensor<2xi1
+    // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK: ttg.local_load %[[KNOWN]]
+    %0 = ttg.local_load %known : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
+    // CHECK: arith.constant dense<true> : tensor<2xi1
+    // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK: ttg.local_load %arg0
+    %1 = ttg.local_load %incoming : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
+    tt.return
+  }
+}
+
+// -----
+
+// An unknown-only module still allocates sanitizer state without fabricating
+// or dynamically comparing a physical allocation base.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @unknown_only_descriptor_state
+  tt.func public @unknown_only_descriptor_state(%incoming: !ttg.memdesc<16xi32, #shared, #smem, mutable>) {
+    // CHECK: arith.constant dense<true> : tensor<1xi1
+    // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK-NOT: tti.experimental_memdesc_to_i32
+    // CHECK: ttg.local_load %arg0
+    %0 = ttg.local_load %incoming : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
+    tt.return
+  }
+}
+
+// -----
+
+// A warp-group wait forwards descriptor provenance to its result while
+// separately preserving its asynchronous read-completion semantics.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @warp_group_wait_preserves_descriptor
+  tt.func public @warp_group_wait_preserves_descriptor() {
+    // CHECK: %[[BUFFER:.*]] = ttg.local_alloc
+    %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_reads
+    // CHECK: %[[WAITED:.*]] = ttng.warp_group_dot_wait %[[BUFFER]]
+    %waited = ttng.warp_group_dot_wait %buffer {pendings = 0 : i32} : !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK: ttg.local_load %[[WAITED]]
+    %value = ttg.local_load %waited : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
+    tt.return
+  }
+}

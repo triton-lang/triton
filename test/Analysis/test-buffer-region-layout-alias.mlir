@@ -360,6 +360,62 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.shar
 
 // -----
 
+// Partition selection follows the linear layout and physical base order, not
+// the slicing dimension or the numerical ordering of allocation offsets.
+#inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 4, numGroups = 2, partitionDim = 1, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: column_partition_a_parent vs column_partition_a_parent: alias=true
+// CHECK: column_partition_a_parent vs column_partition_b_first: alias=true
+// CHECK: column_partition_a_parent vs column_partition_c_second: alias=true
+// CHECK: column_partition_a_parent vs column_partition_d_third: alias=true
+// CHECK: column_partition_a_parent vs column_partition_e_fourth: alias=true
+// CHECK: column_partition_a_parent vs column_partition_f_next_group: alias=true
+// CHECK: column_partition_a_parent vs column_partition_g_first_base: alias=true
+// CHECK: column_partition_a_parent vs column_partition_h_second_base: alias=true
+// CHECK: column_partition_a_parent vs column_partition_i_third_base: alias=true
+// CHECK: column_partition_a_parent vs column_partition_j_fourth_base: alias=true
+// CHECK: column_partition_a_parent vs column_partition_k_next_group_base: alias=true
+// CHECK: column_partition_b_first vs column_partition_c_second: alias=false
+// CHECK: column_partition_b_first vs column_partition_d_third: alias=false
+// CHECK: column_partition_b_first vs column_partition_e_fourth: alias=false
+// CHECK: column_partition_b_first vs column_partition_f_next_group: alias=false
+// CHECK: column_partition_b_first vs column_partition_g_first_base: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true
+// CHECK: column_partition_c_second vs column_partition_h_second_base: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true
+// CHECK: column_partition_d_third vs column_partition_i_third_base: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true
+// CHECK: column_partition_e_fourth vs column_partition_j_fourth_base: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true
+// CHECK: column_partition_f_next_group vs column_partition_k_next_group_base: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.shared = 4096 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 2 : i32} {
+  tt.func public @partitioned_four_column_physical_alias() {
+    %parent = ttg.local_alloc {allocation.offset = [3072 : i32, 1024 : i32, 0 : i32, 2048 : i32]} : () -> !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable>
+    %first = ttg.memdesc_subslice %parent [0, 0] : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<16x2xf16, #partitioned, #smem, mutable, 16x16>
+    %second = ttg.memdesc_subslice %parent [0, 2] : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<16x2xf16, #partitioned, #smem, mutable, 16x16>
+    %third = ttg.memdesc_subslice %parent [0, 4] : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<16x2xf16, #partitioned, #smem, mutable, 16x16>
+    %fourth = ttg.memdesc_subslice %parent [0, 6] : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<16x2xf16, #partitioned, #smem, mutable, 16x16>
+    %next_group = ttg.memdesc_subslice %parent [0, 8] : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<16x2xf16, #partitioned, #smem, mutable, 16x16>
+    %first_base = ttg.local_alloc {allocation.offset = 3072 : i32} : () -> !ttg.memdesc<16x2xf16, #inner, #smem, mutable>
+    %second_base = ttg.local_alloc {allocation.offset = 1024 : i32} : () -> !ttg.memdesc<16x2xf16, #inner, #smem, mutable>
+    %third_base = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16x2xf16, #inner, #smem, mutable>
+    %fourth_base = ttg.local_alloc {allocation.offset = 2048 : i32} : () -> !ttg.memdesc<16x2xf16, #inner, #smem, mutable>
+    %next_group_base = ttg.local_alloc {allocation.offset = 3136 : i32} : () -> !ttg.memdesc<16x2xf16, #inner, #smem, mutable>
+    %0 = ttg.local_load %parent {test.region_name = "column_partition_a_parent"} : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> tensor<16x16xf16>
+    %1 = ttg.local_load %first {test.region_name = "column_partition_b_first"} : !ttg.memdesc<16x2xf16, #partitioned, #smem, mutable, 16x16> -> tensor<16x2xf16>
+    %2 = ttg.local_load %second {test.region_name = "column_partition_c_second"} : !ttg.memdesc<16x2xf16, #partitioned, #smem, mutable, 16x16> -> tensor<16x2xf16>
+    %3 = ttg.local_load %third {test.region_name = "column_partition_d_third"} : !ttg.memdesc<16x2xf16, #partitioned, #smem, mutable, 16x16> -> tensor<16x2xf16>
+    %4 = ttg.local_load %fourth {test.region_name = "column_partition_e_fourth"} : !ttg.memdesc<16x2xf16, #partitioned, #smem, mutable, 16x16> -> tensor<16x2xf16>
+    %5 = ttg.local_load %next_group {test.region_name = "column_partition_f_next_group"} : !ttg.memdesc<16x2xf16, #partitioned, #smem, mutable, 16x16> -> tensor<16x2xf16>
+    %6 = ttg.local_load %first_base {test.region_name = "column_partition_g_first_base"} : !ttg.memdesc<16x2xf16, #inner, #smem, mutable> -> tensor<16x2xf16>
+    %7 = ttg.local_load %second_base {test.region_name = "column_partition_h_second_base"} : !ttg.memdesc<16x2xf16, #inner, #smem, mutable> -> tensor<16x2xf16>
+    %8 = ttg.local_load %third_base {test.region_name = "column_partition_i_third_base"} : !ttg.memdesc<16x2xf16, #inner, #smem, mutable> -> tensor<16x2xf16>
+    %9 = ttg.local_load %fourth_base {test.region_name = "column_partition_j_fourth_base"} : !ttg.memdesc<16x2xf16, #inner, #smem, mutable> -> tensor<16x2xf16>
+    %10 = ttg.local_load %next_group_base {test.region_name = "column_partition_k_next_group_base"} : !ttg.memdesc<16x2xf16, #inner, #smem, mutable> -> tensor<16x2xf16>
+    tt.return
+  }
+}
+
+// -----
+
 // A valid shared-linear layout can interleave CTA ownership within one
 // descriptor instead of expressing the CTA as a single affine view offset.
 #shared = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [4, 0]], block = [[2, 0]]}, alignment = 16>
@@ -540,6 +596,117 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %token = amdg.async_tdm_fused_copy_global_to_local %desc0, %desc1 into %first, %second {warp_used_hints = array<i32: 3, 12>} : !tt.tensordesc<64x64xf16, #shared>, !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     %first_value = ttg.local_load %first {test.region_name = "amd_fused_a_first"} : !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> tensor<64x64xf16, #blocked>
     %second_value = ttg.local_load %second {test.region_name = "amd_fused_b_second"} : !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> tensor<64x64xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// A warp-group wait forwards each memory descriptor without accessing or
+// replacing the allocation it keeps alive.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: wait_a_source vs wait_a_source: alias=true
+// CHECK: wait_a_source vs wait_b_result: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true
+// CHECK: wait_a_source vs wait_c_load: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true
+// CHECK: wait_b_result vs wait_c_load: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  tt.func public @warp_group_wait_preserves_memdesc() {
+    %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    %source = ttg.local_load %buffer {test.region_name = "wait_a_source"} : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
+    %waited = ttng.warp_group_dot_wait %buffer {pendings = 0 : i32, test.region_name = "wait_b_result"} : !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    %result = ttg.local_load %waited {test.region_name = "wait_c_load"} : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
+    tt.return
+  }
+}
+
+// -----
+
+// Unknown memory aliases every exact state while retaining one additional
+// state lane for hazards between independently unknown descriptors.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: wildcard_a_known vs wildcard_a_known: alias=true
+// CHECK: wildcard_a_known vs wildcard_b_incoming: alias=true, lhs_contains_rhs=false, rhs_contains_lhs=false
+// CHECK: wildcard_b_incoming vs wildcard_b_incoming: alias=true, lhs_contains_rhs=false, rhs_contains_lhs=false
+// CHECK: wildcard_a_known case [0, 64]: mask={0}
+// CHECK: wildcard_b_incoming case unknown: mask={0,1}
+// CHECK: state-plan: lanes=2
+module attributes {test.print_state_plan, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  tt.func public @unknown_descriptor_state_masks(%incoming: !ttg.memdesc<16xi32, #shared, #smem, mutable>) {
+    %known = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    %0 = ttg.local_load %known {test.region_name = "wildcard_a_known"} : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
+    %1 = ttg.local_load %incoming {test.region_name = "wildcard_b_incoming"} : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
+    tt.return
+  }
+}
+
+// -----
+
+// An unknown-only module still has one state lane and cannot conclude that
+// two external descriptors are disjoint.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: unknown_only_a_first vs unknown_only_a_first: alias=true
+// CHECK: unknown_only_a_first vs unknown_only_b_second: alias=true, lhs_contains_rhs=false, rhs_contains_lhs=false
+// CHECK: unknown_only_a_first case unknown: mask={0}
+// CHECK: unknown_only_b_second case unknown: mask={0}
+// CHECK: state-plan: lanes=1
+module attributes {test.print_state_plan, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  tt.func public @unknown_only_descriptor_state_masks(%first: !ttg.memdesc<16xi32, #shared, #smem, mutable>, %second: !ttg.memdesc<16xi32, #shared, #smem, mutable>) {
+    %0 = ttg.local_load %first {test.region_name = "unknown_only_a_first"} : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
+    %1 = ttg.local_load %second {test.region_name = "unknown_only_b_second"} : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
+    tt.return
+  }
+}
+
+// -----
+
+// Physical CTA identity separates peer-CTA aliases without duplicating state
+// lanes for the same projected physical bytes.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: cta_state_a_local vs cta_state_a_local: alias=true
+// CHECK: cta_state_a_local vs cta_state_b_remote: alias=false
+// CHECK: cta_state_a_local case {{.*}}: mask={0}
+// CHECK: cta_state_b_remote case {{.*}}: mask={0}
+// CHECK: state-plan: lanes=1
+module attributes {test.print_state_plan, "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 512 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  tt.func public @peer_ctas_share_projected_state_lane() {
+    %parent = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x32xi32, #shared, #smem, mutable>
+    %local = ttg.memdesc_subslice %parent [0, 0] : !ttg.memdesc<4x32xi32, #shared, #smem, mutable> -> !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>
+    %remote = ttg.memdesc_subslice %parent [2, 0] : !ttg.memdesc<4x32xi32, #shared, #smem, mutable> -> !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>
+    %0 = ttg.local_load %local {test.region_name = "cta_state_a_local"} : !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32> -> tensor<2x32xi32, #blocked>
+    %1 = ttg.local_load %remote {test.region_name = "cta_state_b_remote"} : !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32> -> tensor<2x32xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// TDM gather and scatter expose the exact shared-memory destination and
+// source in their declared memory effects.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#idx_parent = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: amd_tdm_a_gather vs amd_tdm_a_gather: alias=true
+// CHECK: amd_tdm_a_gather vs amd_tdm_b_scatter: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true
+// CHECK: amd_tdm_a_gather vs amd_tdm_c_other: alias=false
+// CHECK: amd_tdm_b_scatter vs amd_tdm_c_other: alias=false
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 131072 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  tt.func public @amd_tdm_gather_scatter_shared_alias(%desc: !tt.tensordesc<64x128xf16>, %rows: tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>) {
+    %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<256x128xf16, #shared, #smem, mutable>
+    %other = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<256x128xf16, #shared, #smem, mutable>
+    %gather = amdg.async_tdm_gather %desc[%rows] to %buffer {test.region_name = "amd_tdm_a_gather"} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
+    %scatter = amdg.async_tdm_scatter %desc[%rows] from %buffer {test.region_name = "amd_tdm_b_scatter"} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
+    %value = ttg.local_load %other {test.region_name = "amd_tdm_c_other"} : !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> tensor<256x128xf16, #blocked>
     tt.return
   }
 }

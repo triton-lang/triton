@@ -408,3 +408,123 @@ module attributes {test.print_state_plan, "ttg.num-ctas" = 1 : i32, "ttg.num-war
     tt.return
   }
 }
+
+// -----
+
+// Sixteen swizzled partitions must follow their physical-base array even
+// when the bases are out of order and a later group reuses a partition.
+#inner = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 16, numGroups = 2, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+
+// expected-remark @below {{state-plan: lanes=3}}
+// expected-remark @below {{a_first case [61440, 1024]: mask={1}}}
+// expected-remark @below {{b_last case [0, 1024]: mask={0}}}
+// expected-remark @below {{c_next_group case [61504, 1024]: mask={2}}}
+// expected-remark @below {{d_first_reference case [61440, 64]: mask={1}}}
+// expected-remark @below {{e_last_reference case [0, 64]: mask={0}}}
+// expected-remark @below {{f_group_reference case [61504, 64]: mask={2}}}
+// expected-remark @below {{g_selected case [0, 1024]: mask={0}}}
+// expected-remark @below {{g_selected case [61440, 1024]: mask={1}}}
+module attributes {test.print_state_plan, test.state_plan_only, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.shared = 65536 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 2 : i32} {
+  tt.func public @partitioned_swizzled_permuted_bases(%choose: i1) {
+    %parent = ttg.local_alloc {allocation.offset = [61440 : i32, 4096 : i32, 57344 : i32, 8192 : i32, 53248 : i32, 12288 : i32, 49152 : i32, 16384 : i32, 45056 : i32, 20480 : i32, 40960 : i32, 24576 : i32, 36864 : i32, 28672 : i32, 32768 : i32, 0 : i32]} : () -> !ttg.memdesc<32x32xf16, #partitioned, #smem, mutable>
+    %first = ttg.memdesc_subslice %parent [0, 0] : !ttg.memdesc<32x32xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<1x32xf16, #partitioned, #smem, mutable, 32x32>
+    %last = ttg.memdesc_subslice %parent [15, 0] : !ttg.memdesc<32x32xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<1x32xf16, #partitioned, #smem, mutable, 32x32>
+    %next_group = ttg.memdesc_subslice %parent [16, 0] : !ttg.memdesc<32x32xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<1x32xf16, #partitioned, #smem, mutable, 32x32>
+    %first_reference = ttg.local_alloc {allocation.offset = 61440 : i32} : () -> !ttg.memdesc<1x32xf16, #inner, #smem, mutable>
+    %last_reference = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1x32xf16, #inner, #smem, mutable>
+    %group_reference = ttg.local_alloc {allocation.offset = 61504 : i32} : () -> !ttg.memdesc<1x32xf16, #inner, #smem, mutable>
+    %selected = arith.select %choose, %first, %last : !ttg.memdesc<1x32xf16, #partitioned, #smem, mutable, 32x32>
+    %0 = ttg.local_load %first {test.region_name = "a_first"} : !ttg.memdesc<1x32xf16, #partitioned, #smem, mutable, 32x32> -> tensor<1x32xf16>
+    %1 = ttg.local_load %last {test.region_name = "b_last"} : !ttg.memdesc<1x32xf16, #partitioned, #smem, mutable, 32x32> -> tensor<1x32xf16>
+    %2 = ttg.local_load %next_group {test.region_name = "c_next_group"} : !ttg.memdesc<1x32xf16, #partitioned, #smem, mutable, 32x32> -> tensor<1x32xf16>
+    %3 = ttg.local_load %first_reference {test.region_name = "d_first_reference"} : !ttg.memdesc<1x32xf16, #inner, #smem, mutable> -> tensor<1x32xf16>
+    %4 = ttg.local_load %last_reference {test.region_name = "e_last_reference"} : !ttg.memdesc<1x32xf16, #inner, #smem, mutable> -> tensor<1x32xf16>
+    %5 = ttg.local_load %group_reference {test.region_name = "f_group_reference"} : !ttg.memdesc<1x32xf16, #inner, #smem, mutable> -> tensor<1x32xf16>
+    %6 = ttg.local_load %selected {test.region_name = "g_selected"} : !ttg.memdesc<1x32xf16, #partitioned, #smem, mutable, 32x32> -> tensor<1x32xf16>
+    tt.return
+  }
+}
+
+// -----
+
+// Padding and nested subslice offsets are relative to the selected partition.
+// The independent allocations expose the padded group and nested addresses.
+#inner = #ttg.padded_shared<[16:+4] {order = [1, 0], shape = [4, 16]}>
+#nested_inner = #ttg.padded_shared<[16:+4] {order = [1, 0], shape = [2, 16]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+
+// expected-remark @below {{state-plan: lanes=4}}
+// expected-remark @below {{a_first case [4096, 312]: mask={1}}}
+// expected-remark @below {{b_second case [128, 312]: mask={0}}}
+// expected-remark @below {{c_next_group case [4256, 312]: mask={2,3}}}
+// expected-remark @below {{d_nested case [4336, 152]: mask={3}}}
+// expected-remark @below {{e_group_reference case [4256, 152]: mask={2,3}}}
+// expected-remark @below {{f_nested_reference case [4336, 72]: mask={3}}}
+// expected-remark @below {{g_selected case [128, 312]: mask={0}}}
+// expected-remark @below {{g_selected case [4096, 312]: mask={1}}}
+module attributes {test.print_state_plan, test.state_plan_only, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 2 : i32} {
+  tt.func public @partitioned_padded_groups_and_nested_views(%choose: i1) {
+    %parent = ttg.local_alloc {allocation.offset = [4096 : i32, 128 : i32]} : () -> !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable>
+    %first = ttg.memdesc_subslice %parent [0, 0] : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<4x16xf16, #partitioned, #smem, mutable, 16x16>
+    %second = ttg.memdesc_subslice %parent [4, 0] : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<4x16xf16, #partitioned, #smem, mutable, 16x16>
+    %next_group = ttg.memdesc_subslice %parent [8, 0] : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<4x16xf16, #partitioned, #smem, mutable, 16x16>
+    %nested = ttg.memdesc_subslice %next_group [2, 0] : !ttg.memdesc<4x16xf16, #partitioned, #smem, mutable, 16x16> -> !ttg.memdesc<2x16xf16, #partitioned, #smem, mutable, 16x16>
+    %group_reference = ttg.local_alloc {allocation.offset = 4256 : i32} : () -> !ttg.memdesc<4x16xf16, #inner, #smem, mutable>
+    %nested_reference = ttg.local_alloc {allocation.offset = 4336 : i32} : () -> !ttg.memdesc<2x16xf16, #nested_inner, #smem, mutable>
+    %selected = arith.select %choose, %first, %second : !ttg.memdesc<4x16xf16, #partitioned, #smem, mutable, 16x16>
+    %0 = ttg.local_load %first {test.region_name = "a_first"} : !ttg.memdesc<4x16xf16, #partitioned, #smem, mutable, 16x16> -> tensor<4x16xf16>
+    %1 = ttg.local_load %second {test.region_name = "b_second"} : !ttg.memdesc<4x16xf16, #partitioned, #smem, mutable, 16x16> -> tensor<4x16xf16>
+    %2 = ttg.local_load %next_group {test.region_name = "c_next_group"} : !ttg.memdesc<4x16xf16, #partitioned, #smem, mutable, 16x16> -> tensor<4x16xf16>
+    %3 = ttg.local_load %nested {test.region_name = "d_nested"} : !ttg.memdesc<2x16xf16, #partitioned, #smem, mutable, 16x16> -> tensor<2x16xf16>
+    %4 = ttg.local_load %group_reference {test.region_name = "e_group_reference"} : !ttg.memdesc<4x16xf16, #inner, #smem, mutable> -> tensor<4x16xf16>
+    %5 = ttg.local_load %nested_reference {test.region_name = "f_nested_reference"} : !ttg.memdesc<2x16xf16, #nested_inner, #smem, mutable> -> tensor<2x16xf16>
+    %6 = ttg.local_load %selected {test.region_name = "g_selected"} : !ttg.memdesc<4x16xf16, #partitioned, #smem, mutable, 16x16> -> tensor<4x16xf16>
+    tt.return
+  }
+}
+
+// -----
+
+// Each padded pipeline stage advances every physical base. Dynamic indexing
+// retains all three stage candidates, and a stage subview matches its own
+// independently allocated physical partition.
+#inner = #ttg.padded_shared<[16:+4] {order = [1, 0], shape = [4, 16]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+
+// expected-remark @below {{state-plan: lanes=4}}
+// expected-remark @below {{a_stage0 case [4096, 632]: mask={2}}}
+// expected-remark @below {{b_stage1 case [4416, 632]: mask={3}}}
+// expected-remark @below {{c_stage2 case [4736, 632]: mask={0,1}}}
+// expected-remark @below {{d_stage2_reference case [4736, 632]: mask={0,1}}}
+// expected-remark @below {{e_stage2_piece case [768, 312]: mask={0}}}
+// expected-remark @below {{f_piece_reference case [768, 152]: mask={0}}}
+// expected-remark @below {{g_dynamic case [4096, 632]: mask={2}}}
+// expected-remark @below {{g_dynamic case [4416, 632]: mask={3}}}
+// expected-remark @below {{g_dynamic case [4736, 632]: mask={0,1}}}
+module attributes {test.print_state_plan, test.state_plan_only, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 2 : i32} {
+  tt.func public @partitioned_padded_dynamic_pipeline(%index: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c2 = arith.constant 2 : i32
+    %parent = ttg.local_alloc {allocation.offset = [4096 : i32, 128 : i32]} : () -> !ttg.memdesc<3x16x16xf16, #partitioned, #smem, mutable>
+    %stage0 = ttg.memdesc_index %parent[%c0] : !ttg.memdesc<3x16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable>
+    %stage1 = ttg.memdesc_index %parent[%c1] : !ttg.memdesc<3x16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable>
+    %stage2 = ttg.memdesc_index %parent[%c2] : !ttg.memdesc<3x16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable>
+    %dynamic = ttg.memdesc_index %parent[%index] : !ttg.memdesc<3x16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable>
+    %stage2_reference = ttg.local_alloc {allocation.offset = [4736 : i32, 768 : i32]} : () -> !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable>
+    %stage2_piece = ttg.memdesc_subslice %stage2 [4, 0] : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<4x16xf16, #partitioned, #smem, mutable, 16x16>
+    %piece_reference = ttg.local_alloc {allocation.offset = 768 : i32} : () -> !ttg.memdesc<4x16xf16, #inner, #smem, mutable>
+    %0 = ttg.local_load %stage0 {test.region_name = "a_stage0"} : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> tensor<16x16xf16>
+    %1 = ttg.local_load %stage1 {test.region_name = "b_stage1"} : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> tensor<16x16xf16>
+    %2 = ttg.local_load %stage2 {test.region_name = "c_stage2"} : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> tensor<16x16xf16>
+    %3 = ttg.local_load %stage2_reference {test.region_name = "d_stage2_reference"} : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> tensor<16x16xf16>
+    %4 = ttg.local_load %stage2_piece {test.region_name = "e_stage2_piece"} : !ttg.memdesc<4x16xf16, #partitioned, #smem, mutable, 16x16> -> tensor<4x16xf16>
+    %5 = ttg.local_load %piece_reference {test.region_name = "f_piece_reference"} : !ttg.memdesc<4x16xf16, #inner, #smem, mutable> -> tensor<4x16xf16>
+    %6 = ttg.local_load %dynamic {test.region_name = "g_dynamic"} : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> tensor<16x16xf16>
+    tt.return
+  }
+}
