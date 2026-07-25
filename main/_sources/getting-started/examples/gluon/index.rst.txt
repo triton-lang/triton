@@ -17,6 +17,7 @@ These examples can be found in ``python/examples/gluon``.
     matmul-multicta
     2cta-block-scale-matmul
     moe-bmm1-fused-gather
+    overlapping-accumulator
 
 
 .. grid::
@@ -123,6 +124,22 @@ These examples can be found in ``python/examples/gluon``.
     .. grid-item-card:: :ref:`example_moe-bmm1-fused-gather`
         :img-top: /getting-started/examples/gluon/myst_sphinx_gallery_thumbs/no_image.webp
         :link: example_moe-bmm1-fused-gather
+        :link-type: ref
+        :shadow: md
+        :class-card: sd-rounded-2 msg-sd-card sd-border-0
+        :class-item: msg-sd-card-hover
+        :class-title: msg-sd-card-title
+        :class-img-top: msg-sd-card-img-top
+        :class-header: msg-sd-card-header
+        :class-body: msg-sd-card-body
+        :class-footer: msg-sd-card-footer
+        :text-align: center
+
+
+    
+    .. grid-item-card:: :ref:`example_overlapping-accumulator`
+        :img-top: /getting-started/examples/gluon/myst_sphinx_gallery_thumbs/no_image.webp
+        :link: example_overlapping-accumulator
         :link-type: ref
         :shadow: md
         :class-card: sd-rounded-2 msg-sd-card sd-border-0
