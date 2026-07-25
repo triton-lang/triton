@@ -41,12 +41,14 @@ struct ConvertLayoutOpConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
-    LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
-
     auto kBlock = str_attr("block");
     auto kWarp = str_attr("warp");
     auto kLane = str_attr("lane");
     auto kRegister = str_attr("register");
+
+    auto srcLayout = toLinearLayout(srcTy).removeZeroBasesAlongDim(kRegister);
+    auto dstLayout = toLinearLayout(dstTy).removeZeroBasesAlongDim(kRegister);
+    LinearLayout conversion = minimalCvtLayout(srcLayout, dstLayout);
 
     auto dims = conversion.getInDimNames();
     auto srcEnc = cast<RankedTensorType>(srcTy).getEncoding();
@@ -63,16 +65,18 @@ struct ConvertLayoutOpConversion
       assert(!alwaysUseWarpShuffle);
       // Transfer between values in the same CTA, or across CTAs. We move values
       // through (distributed) shared memory.
-      transferSwizzlingLocalMem(op, adaptor.getSrc(), rewriter);
+      transferSwizzlingLocalMem(op, adaptor.getSrc(), srcLayout, dstLayout,
+                                rewriter);
       return success();
     } else if (llvm::is_contained(dims, kLane)) {
       // Case 3. Transfer between values in the same warp, in which case we try
       //         to move values using warp shuffles, though if the pattern is
       //         expensive enough we fall back to using shared memory
       if (cvtNeedsWarpShuffle(srcTy, dstTy) || alwaysUseWarpShuffle)
-        return transferWithinWarp(op, adaptor, rewriter);
+        return transferWithinWarp(op, srcLayout, dstLayout, adaptor, rewriter);
 
-      transferSwizzlingLocalMem(op, adaptor.getSrc(), rewriter);
+      transferSwizzlingLocalMem(op, adaptor.getSrc(), srcLayout, dstLayout,
+                                rewriter);
       return success();
     } else if (llvm::is_contained(dims, kRegister)) {
       // Case 4. Transfer between values in the same thread, in which case we
@@ -81,6 +85,8 @@ struct ConvertLayoutOpConversion
     } else {
       // Cast 5. The two layouts are equivalent. We should probably remove
       // these in RemoveLayoutConversion.
+      assert(adaptor.getSrc().getType() ==
+             getTypeConverter()->convertType(dstTy));
       rewriter.replaceOp(op, adaptor.getSrc());
       return success();
     }
@@ -93,17 +99,20 @@ struct ConvertLayoutOpConversion
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
     auto kRegister = str_attr("register");
-    assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
+    auto dstTy = op.getType();
+    auto dims = to_vector(conversion.getInDimNames());
+    assert(dims.size() == 1 && dims.front() == kRegister &&
+           "expected a register-only conversion");
 
-    auto inVals = unpackTensorElements(loc, adaptor.getSrc(), rewriter,
-                                       op.getSrc().getType());
+    auto inVals = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
     SmallVector<Value> outVals(conversion.getInDimSize(kRegister));
     for (int i = 0; i < outVals.size(); i++) {
       auto srcIdx = conversion.apply({{kRegister, i}}).begin()->second;
+      assert(srcIdx < inVals.size());
       outVals[i] = inVals[srcIdx];
     }
-    Value result = packTensorElements(loc, getTypeConverter(), outVals,
-                                      rewriter, op.getType());
+    Value result = packUniqueTensorElements(loc, getTypeConverter(), outVals,
+                                            rewriter, dstTy);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -233,16 +242,12 @@ struct ConvertLayoutOpConversion
   }
 
   void transferSwizzlingLocalMem(ConvertLayoutOp op, Value src,
+                                 const LinearLayout &srcLayout,
+                                 const LinearLayout &dstLayout,
                                  ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
-    auto *ctx = op.getContext();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
-
-    auto srcLayout = toLinearLayout(srcTy);
-    auto dstLayout = toLinearLayout(dstTy);
-    srcLayout = srcLayout.removeZeroBasesAlongDim(str_attr("register"));
-    dstLayout = dstLayout.removeZeroBasesAlongDim(str_attr("register"));
 
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto smemBase =
@@ -258,7 +263,10 @@ struct ConvertLayoutOpConversion
 
   // Use warp shuffles to implement a layout conversion where data only needs to
   // be moved within warps.
-  LogicalResult transferWithinWarp(ConvertLayoutOp op, OpAdaptor adaptor,
+  LogicalResult transferWithinWarp(ConvertLayoutOp op,
+                                   const LinearLayout &srcLayout,
+                                   const LinearLayout &dstLayout,
+                                   OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
@@ -270,7 +278,8 @@ struct ConvertLayoutOpConversion
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
     int bitwidth = getIntOrFloatOrPtrBitWidth(elemTy);
 
-    auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy, bitwidth);
+    auto factors =
+        getWarpLayoutConvertDecomposition(srcLayout, dstLayout, bitwidth);
     auto &[pReg, pLane, mixedTranspositions, nPack] = factors;
     int m = mixedTranspositions.size();
     bool pLaneIsTrivial = squareSublayoutIsIdentity(pLane, kLane);
@@ -396,9 +405,7 @@ struct ConvertLayoutOpConversion
 
     // If `dstLayout` has a smaller `kReg` dimension than `srcLayout` after
     // broadcasting is removed, then drop the extra registers from `outVals`.
-    auto dstLayout = toLinearLayout(dstTy);
-    auto strippedDstLayout = dstLayout.removeZeroBasesAlongDim(kReg);
-    outVals.resize(strippedDstLayout.getInDimSize(kReg));
+    outVals.resize(dstLayout.getInDimSize(kReg));
 
     Value result = packUniqueTensorElements(loc, getTypeConverter(), outVals,
                                             rewriter, dstTy);

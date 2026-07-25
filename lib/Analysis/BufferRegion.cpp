@@ -1,11 +1,17 @@
 #include "triton/Analysis/BufferRegion.h"
+
+#include <limits>
+#include <optional>
+
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/Support/MathExtras.h"
 
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
@@ -14,13 +20,26 @@ using namespace mlir;
 
 namespace {
 // TODO: move to Utility.cpp/unify with TritonInstrument/Utility.cpp
-uint64_t getAllocationOffset(ttg::LocalAllocOp op) {
+FailureOr<uint32_t> getAllocationOffset(ttg::LocalAllocOp op) {
   auto offsetAttr = op->getAttr("allocation.offset");
   if (!offsetAttr) {
-    llvm::report_fatal_error(
-        "ConcurrencySanitizer should run after AllocateSharedMemory pass.");
+    op.emitError("ConcurrencySanitizer should run after "
+                 "AllocateSharedMemory pass");
+    return failure();
   }
-  return cast<IntegerAttr>(offsetAttr).getInt();
+  auto offset = dyn_cast<IntegerAttr>(offsetAttr);
+  if (!offset) {
+    op.emitError("exact buffer-region analysis does not support shared-memory "
+                 "layouts with multiple physical allocation bases");
+    return failure();
+  }
+  int64_t value = offset.getInt();
+  if (value < 0 ||
+      static_cast<uint64_t>(value) > std::numeric_limits<uint32_t>::max()) {
+    op.emitError("shared-memory allocation offset exceeds 32-bit range");
+    return failure();
+  }
+  return static_cast<uint32_t>(value);
 }
 
 uint64_t getAllocationOffset(ttng::TMEMAllocOp op) {
@@ -36,13 +55,200 @@ uint64_t getAllocationOffset(ttng::TMEMAllocOp op) {
   return colOffset | (rowOffset << 16);
 }
 
-unsigned getAllocSize(ttg::LocalAllocOp op) {
-  auto type = op.getType();
-  int64_t numElems =
-      ttg::getAllocationElems(type.getEncoding(), type.getAllocShape());
-  if (auto padded = ttg::getPaddedEncoding(type.getEncoding()))
+unsigned getMemDescSize(ttg::MemDescType ty) {
+  if (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace()))
+    return ttng::getTmemAllocSizes(ty).numCols;
+  assert(isa<ttg::SharedMemorySpaceAttr>(ty.getMemorySpace()) &&
+         "Unsupported memory space");
+  int64_t numElems = ttg::getAllocationElems(ty.getEncoding(), ty.getShape(),
+                                             ty.getAllocShape());
+  if (auto padded = ttg::getPaddedEncoding(ty.getEncoding()))
     numElems = padded.getPaddedSize({numElems});
-  return numElems * type.getElementType().getIntOrFloatBitWidth() / 8;
+  return numElems * ty.getElementType().getIntOrFloatBitWidth() / 8;
+}
+
+uint32_t applySharedPadding(uint32_t byteOffset, ttg::MemDescType ty) {
+  auto padded = ttg::getPaddedEncoding(ty.getEncoding());
+  if (!padded)
+    return byteOffset;
+  uint64_t elementSize = ty.getElementTypeBitWidth() / 8;
+  uint64_t elementOffset = byteOffset / elementSize;
+  uint64_t paddedOffset =
+      (padded.getPaddedSize({static_cast<int64_t>(elementOffset + 1)}) - 1) *
+          elementSize +
+      byteOffset % elementSize;
+  assert(paddedOffset <= std::numeric_limits<uint32_t>::max());
+  return static_cast<uint32_t>(paddedOffset);
+}
+
+uint32_t getMemDescStorageOffset(ttg::MemDescType ty, unsigned index);
+
+FailureOr<triton::AddressSet> getMemDescAddresses(
+    uint32_t storageBase, uint32_t affineOffset, ttg::MemDescType ty,
+    Operation *op,
+    llvm::DenseMap<std::pair<Type, uint32_t>, triton::AddressSet> *cache =
+        nullptr) {
+  if (cache) {
+    auto key = std::make_pair(Type(ty), affineOffset);
+    auto found = cache->find(key);
+    if (found != cache->end())
+      return found->second.translated(storageBase);
+    FailureOr<triton::AddressSet> relative =
+        getMemDescAddresses(/*storageBase=*/0, affineOffset, ty, op);
+    if (failed(relative))
+      return failure();
+    cache->try_emplace(key, *relative);
+    return relative->translated(storageBase);
+  }
+  bool isTmem = isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace());
+  auto collectPages = [&]() -> FailureOr<triton::AddressSet> {
+    ttg::MemDescType pageTy =
+        ty.cloneWith(ty.getShape().drop_front(), ty.getElementType());
+    triton::AddressSet addresses;
+    for (int64_t page = 0; page < ty.getDimSize(0); ++page) {
+      FailureOr<triton::AddressSet> pageAddresses = getMemDescAddresses(
+          storageBase + getMemDescStorageOffset(pageTy, page), affineOffset,
+          pageTy, op);
+      if (failed(pageAddresses))
+        return failure();
+      addresses.insert(*pageAddresses);
+    }
+    return addresses;
+  };
+  size_t encodingRank =
+      cast<ttg::LayoutEncodingTrait>(ty.getEncoding()).getRank();
+  if (encodingRank != ty.getRank()) {
+    if (encodingRank + 1 != ty.getRank()) {
+      op->emitError("unsupported multibuffer rank in exact buffer region "
+                    "analysis");
+      return failure();
+    }
+    return collectPages();
+  }
+  triton::LinearLayout layout = ttg::isPaddedEncoding(ty.getEncoding())
+                                    ? ttg::paddedLinearLayout(ty)
+                                    : ttg::toLinearLayout(ty);
+  size_t layoutRank = llvm::size(layout.getOutDimNames());
+  if (layoutRank != ty.getRank()) {
+    if (layoutRank + 1 != ty.getRank()) {
+      op->emitError("unsupported multibuffer rank in exact buffer region "
+                    "analysis");
+      return failure();
+    }
+    return collectPages();
+  }
+  triton::LinearLayout inverse = layout.pseudoinvert();
+  MLIRContext *ctx = ty.getContext();
+  SmallVector<StringAttr> dims = triton::standardOutDimNames(ctx, ty.getRank());
+  SmallVector<int64_t> shape = ttg::getShapePerCTA(ty);
+  uint64_t numPoints = product(shape);
+  uint32_t bitWidth = ty.getElementTypeBitWidth();
+  if (!isTmem && bitWidth % 8 != 0) {
+    op->emitError("sub-byte shared-memory elements are unsupported by exact "
+                  "buffer region analysis");
+    return failure();
+  }
+
+  StringAttr offsetName = StringAttr::get(ctx, "offset");
+  StringAttr blockName = StringAttr::get(ctx, "block");
+  StringAttr rowName = StringAttr::get(ctx, "row");
+  StringAttr colName = StringAttr::get(ctx, "col");
+  triton::AddressSet addresses;
+  auto addPhysicalAddress = [&](uint32_t offset, uint32_t row, uint32_t col) {
+    if (isTmem) {
+      uint64_t bitBegin = static_cast<uint64_t>(col) * bitWidth;
+      uint32_t firstWord = bitBegin / 32;
+      uint32_t lastWord = llvm::divideCeil(bitBegin + bitWidth, uint64_t{32});
+      uint32_t relative = (row << 16) | firstWord;
+      uint64_t begin =
+          static_cast<uint64_t>(storageBase) + affineOffset + relative;
+      for (uint32_t word = firstWord; word < lastWord; ++word) {
+        uint64_t address = begin + (word - firstWord);
+        assert(address <= std::numeric_limits<uint32_t>::max());
+        addresses.set(address);
+      }
+    } else {
+      uint32_t relative = offset * (bitWidth / 8);
+      uint32_t combined = affineOffset ^ relative;
+      uint64_t begin =
+          static_cast<uint64_t>(storageBase) + applySharedPadding(combined, ty);
+      for (uint32_t byte = 0; byte < bitWidth / 8; ++byte) {
+        assert(begin + byte <= std::numeric_limits<uint32_t>::max());
+        addresses.set(begin + byte);
+      }
+    }
+  };
+
+  struct PhysicalBasis {
+    uint32_t offset = 0;
+    uint32_t row = 0;
+    uint32_t col = 0;
+  };
+  SmallVector<PhysicalBasis> bases;
+  for (auto [dim, dimSize] : llvm::zip_equal(dims, shape)) {
+    unsigned numBits = llvm::Log2_64(dimSize);
+    if (numBits > static_cast<unsigned>(inverse.getInDimSizeLog2(dim))) {
+      op->emitError("buffer footprint exceeds its linear-layout domain");
+      return failure();
+    }
+    for (unsigned bit = 0; bit < numBits; ++bit) {
+      if (inverse.hasOutDim(blockName) &&
+          inverse.getBasis(dim, bit, blockName) != 0) {
+        op->emitError("buffer footprint differs across CTA-local layout "
+                      "instances");
+        return failure();
+      }
+      bases.push_back(
+          {inverse.hasOutDim(offsetName)
+               ? static_cast<uint32_t>(inverse.getBasis(dim, bit, offsetName))
+               : 0,
+           inverse.hasOutDim(rowName)
+               ? static_cast<uint32_t>(inverse.getBasis(dim, bit, rowName))
+               : 0,
+           inverse.hasOutDim(colName)
+               ? static_cast<uint32_t>(inverse.getBasis(dim, bit, colName))
+               : 0});
+    }
+  }
+
+  PhysicalBasis physical;
+  for (uint64_t index = 0; index < numPoints; ++index) {
+    if (index != 0) {
+      const PhysicalBasis &basis = bases[llvm::countr_zero(index)];
+      physical.offset ^= basis.offset;
+      physical.row ^= basis.row;
+      physical.col ^= basis.col;
+    }
+    addPhysicalAddress(physical.offset, physical.row, physical.col);
+  }
+  return addresses;
+}
+
+FailureOr<triton::BufferRegion> getMemDescRegion(
+    uint32_t storageBase, uint32_t affineOffset, ttg::MemDescType ty,
+    Operation *op,
+    llvm::DenseMap<std::pair<Type, uint32_t>, triton::AddressSet> *cache) {
+  FailureOr<triton::AddressSet> addresses =
+      getMemDescAddresses(storageBase, affineOffset, ty, op, cache);
+  if (failed(addresses))
+    return failure();
+  uint32_t baseOffset =
+      storageBase + (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace())
+                         ? affineOffset
+                         : applySharedPadding(affineOffset, ty));
+  return triton::BufferRegion(baseOffset, getMemDescSize(ty),
+                              std::move(*addresses), storageBase, affineOffset);
+}
+
+uint32_t getMemDescStorageOffset(ttg::MemDescType ty, unsigned index) {
+  if (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace()))
+    return index * ttng::getTmemAllocSizes(ty).numCols;
+  uint64_t unpadded = static_cast<uint64_t>(index) *
+                      ttg::getAllocationElems(ty.getEncoding(), ty.getShape(),
+                                              ty.getAllocShape()) *
+                      (ty.getElementTypeBitWidth() / 8);
+  assert(unpadded <= std::numeric_limits<uint32_t>::max());
+  return applySharedPadding(static_cast<uint32_t>(unpadded), ty);
 }
 
 unsigned getNumBuffers(ttg::MemDescIndexOp memdescIndexOp) {
@@ -81,7 +287,8 @@ bool isUsedAsTensorMemory(Value v) {
          isa_and_nonnull<ttng::TensorMemorySpaceAttr>(type.getMemorySpace());
 }
 
-FailureOr<uint32_t> getMemDescSubsliceByteOffset(ttg::MemDescSubsliceOp op) {
+FailureOr<uint32_t>
+getMemDescSubsliceUnpaddedByteOffset(ttg::MemDescSubsliceOp op) {
   auto srcTy = op.getSrc().getType();
   auto offsets = op.getOffsets();
   if (offsets.empty())
@@ -128,9 +335,6 @@ FailureOr<uint32_t> getMemDescSubsliceByteOffset(ttg::MemDescSubsliceOp op) {
     elementOffset += static_cast<uint64_t>(offsets.front()) * stride;
   }
 
-  if (auto padded = ttg::getPaddedEncoding(encoding))
-    elementOffset = padded.getPaddedSize({int64_t(elementOffset + 1)}) - 1;
-
   uint64_t elementSizeBytes =
       srcTy.getElementType().getIntOrFloatBitWidth() / 8;
   assert(elementSizeBytes > 0 && "element size must be non-zero");
@@ -157,6 +361,160 @@ std::optional<triton::BufferRegionAnalysis::RegionType> getRegionType(Value v) {
 } // namespace
 
 namespace mlir::triton {
+
+AddressSet AddressSet::fromRange(uint32_t begin, uint32_t length) {
+  uint64_t end = static_cast<uint64_t>(begin) + length;
+  assert(end <= std::numeric_limits<uint32_t>::max() &&
+         "address range exceeds 32-bit address space");
+  AddressSet result;
+  for (uint64_t address = begin; address < end; ++address)
+    result.set(address);
+  return result;
+}
+
+AddressSet AddressSet::fromAddresses(ArrayRef<uint32_t> input) {
+  AddressSet result;
+  for (uint32_t address : input)
+    result.set(address);
+  return result;
+}
+
+void AddressSet::set(uint32_t address) { addresses.set(address); }
+
+void AddressSet::insert(const AddressSet &other) {
+  addresses |= other.addresses;
+}
+
+AddressSet AddressSet::intersection(const AddressSet &other) const {
+  AddressSet result = *this;
+  result.addresses &= other.addresses;
+  return result;
+}
+
+void AddressSet::subtract(const AddressSet &other) {
+  addresses.intersectWithComplement(other.addresses);
+}
+
+bool AddressSet::contains(uint32_t address) const {
+  return addresses.test(address);
+}
+
+bool AddressSet::intersects(const AddressSet &other) const {
+  return addresses.intersects(other.addresses);
+}
+
+bool AddressSet::contains(const AddressSet &other) const {
+  return addresses.contains(other.addresses);
+}
+
+AddressSet AddressSet::translated(uint32_t delta) const {
+  AddressSet result;
+  for (uint32_t address : addresses) {
+    uint64_t translated = static_cast<uint64_t>(address) + delta;
+    assert(translated <= std::numeric_limits<uint32_t>::max() &&
+           "translated address set exceeds 32-bit address space");
+    result.set(translated);
+  }
+  return result;
+}
+
+BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions) {
+  BufferStatePlan plan;
+  plan.regionMasks.resize(regions.size());
+
+  llvm::SmallBitVector assigned(regions.size());
+  SmallVector<SmallVector<unsigned>> components;
+  for (unsigned first = 0; first < regions.size(); ++first) {
+    if (assigned.test(first) || regions[first].addresses.empty())
+      continue;
+    SmallVector<unsigned> component;
+    SmallVector<unsigned> worklist = {first};
+    assigned.set(first);
+    while (!worklist.empty()) {
+      unsigned current = worklist.pop_back_val();
+      component.push_back(current);
+      for (unsigned candidate = 0; candidate < regions.size(); ++candidate) {
+        if (assigned.test(candidate) || regions[candidate].addresses.empty())
+          continue;
+        if (!regions[current].intersects(regions[candidate]))
+          continue;
+        assigned.set(candidate);
+        worklist.push_back(candidate);
+      }
+    }
+    llvm::sort(component);
+    components.push_back(std::move(component));
+  }
+
+  struct ComponentPlan {
+    SmallVector<unsigned> regionIds;
+    SmallVector<llvm::SmallBitVector> atomMemberships;
+  };
+  using Atom = std::pair<AddressSet, llvm::SmallBitVector>;
+  SmallVector<ComponentPlan> componentPlans;
+  for (const SmallVector<unsigned> &component : components) {
+    SmallVector<Atom> atoms;
+    for (auto [localId, regionId] : llvm::enumerate(component)) {
+      AddressSet uncovered = regions[regionId].addresses;
+      for (size_t atomId = 0, atomCount = atoms.size();
+           atomId < atomCount && !uncovered.empty(); ++atomId) {
+        auto &[addresses, atomMembership] = atoms[atomId];
+        AddressSet overlap = addresses.intersection(uncovered);
+        if (overlap.empty())
+          continue;
+
+        uncovered.subtract(overlap);
+        if (addresses == overlap) {
+          atomMembership.set(localId);
+          continue;
+        }
+
+        llvm::SmallBitVector membership = atomMembership;
+        membership.set(localId);
+        addresses.subtract(overlap);
+        atoms.push_back({std::move(overlap), std::move(membership)});
+      }
+
+      if (!uncovered.empty()) {
+        llvm::SmallBitVector membership(component.size());
+        membership.set(localId);
+        atoms.push_back({std::move(uncovered), std::move(membership)});
+      }
+    }
+
+    // Preserve the original lane order by each atom's first address.
+    llvm::sort(atoms, llvm::less_first());
+
+    SmallVector<llvm::SmallBitVector> atomMemberships;
+    atomMemberships.reserve(atoms.size());
+    for (Atom &atom : atoms)
+      atomMemberships.push_back(std::move(atom.second));
+
+    plan.numLanes += atomMemberships.size();
+    componentPlans.push_back({component, std::move(atomMemberships)});
+  }
+
+  for (llvm::SmallBitVector &mask : plan.regionMasks)
+    mask.resize(plan.numLanes);
+
+  unsigned laneBegin = 0;
+  for (const ComponentPlan &componentPlan : componentPlans) {
+    for (auto [atomId, membership] :
+         llvm::enumerate(componentPlan.atomMemberships)) {
+      unsigned lane = laneBegin + atomId;
+      for (auto [localId, regionId] :
+           llvm::enumerate(componentPlan.regionIds)) {
+        if (!membership.test(localId))
+          continue;
+        plan.regionMasks[regionId].set(lane);
+      }
+    }
+
+    laneBegin += componentPlan.atomMemberships.size();
+  }
+  assert(laneBegin == plan.numLanes);
+  return plan;
+}
 
 LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
   // Mark all warp-specialize partitions as live.
@@ -195,9 +553,15 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     return success();
   }
   if (auto localAllocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
-    uint32_t offset = getAllocationOffset(localAllocOp);
-    uint32_t size = getAllocSize(localAllocOp);
-    regionInfo.regions.insert({offset, size});
+    FailureOr<uint32_t> offset = getAllocationOffset(localAllocOp);
+    if (failed(offset))
+      return failure();
+    FailureOr<BufferRegion> region =
+        getMemDescRegion(*offset, /*affineOffset=*/0, localAllocOp.getType(),
+                         op, &footprintCache);
+    if (failed(region))
+      return failure();
+    regionInfo.regions.insert(std::move(*region));
 
     for (auto *r : results) {
       propagateIfChanged(r, r->join(regionInfo));
@@ -206,8 +570,11 @@ LogicalResult BufferRegionAnalysis::visitOperation(
   }
   if (auto tmemAllocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
     uint32_t offset = getAllocationOffset(tmemAllocOp);
-    uint32_t size = ttng::getTmemAllocSizes(tmemAllocOp.getType()).numCols;
-    regionInfo.regions.insert({offset, size});
+    FailureOr<BufferRegion> region = getMemDescRegion(
+        offset, /*affineOffset=*/0, tmemAllocOp.getType(), op, &footprintCache);
+    if (failed(region))
+      return failure();
+    regionInfo.regions.insert(std::move(*region));
 
     for (auto *r : results) {
       propagateIfChanged(r, r->join(regionInfo));
@@ -217,25 +584,30 @@ LogicalResult BufferRegionAnalysis::visitOperation(
   if (auto memdescIndexOp = dyn_cast<ttg::MemDescIndexOp>(op)) {
     RegionInfo in = operands[0]->getValue();
     int numSubBuffers = getNumBuffers(memdescIndexOp);
-    auto type = memdescIndexOp.getType();
-    bool isTmem = isa<ttng::TensorMemorySpaceAttr>(type.getMemorySpace());
-    uint32_t elementSize =
-        isTmem ? 1 : type.getElementType().getIntOrFloatBitWidth() / 8;
-    uint64_t stageElems =
-        isTmem ? ttng::getTmemAllocSizes(type).numCols
-               : ttg::getAllocationElems(type.getEncoding(), type.getShape(),
-                                         type.getAllocShape());
-    auto padded = ttg::getPaddedEncoding(type.getEncoding());
-    uint64_t stageSize =
-        padded ? padded.getPaddedSize({int64_t(stageElems)}) : stageElems;
+    int firstSubBuffer = 0;
+    int endSubBuffer = numSubBuffers;
+    APInt constantIndex;
+    if (matchPattern(memdescIndexOp.getIndex(),
+                     m_ConstantInt(&constantIndex))) {
+      int64_t index = constantIndex.getSExtValue();
+      if (index < 0 || index >= numSubBuffers) {
+        op->emitError("constant memdesc index is out of bounds");
+        return failure();
+      }
+      firstSubBuffer = index;
+      endSubBuffer = index + 1;
+    }
     for (auto &region : in.regions) {
-      for (int i = 0; i < numSubBuffers; i++) {
-        uint64_t offset = i * stageElems;
-        if (padded)
-          offset = padded.getPaddedSize({int64_t(offset + 1)}) - 1;
-        regionInfo.regions.insert(
-            {region.baseOffset + static_cast<uint32_t>(offset * elementSize),
-             static_cast<uint32_t>(stageSize * elementSize)});
+      for (int i = firstSubBuffer; i < endSubBuffer; ++i) {
+        uint32_t storageBase =
+            region.storageBase +
+            getMemDescStorageOffset(memdescIndexOp.getType(), i);
+        FailureOr<BufferRegion> subBuffer =
+            getMemDescRegion(storageBase, region.affineOffset,
+                             memdescIndexOp.getType(), op, &footprintCache);
+        if (failed(subBuffer))
+          return failure();
+        regionInfo.regions.insert(std::move(*subBuffer));
       }
     }
 
@@ -246,20 +618,18 @@ LogicalResult BufferRegionAnalysis::visitOperation(
   }
   if (auto memdescSubsliceOp = dyn_cast<ttg::MemDescSubsliceOp>(op)) {
     RegionInfo in = operands[0]->getValue();
-    auto type = memdescSubsliceOp.getType();
-    uint64_t numElems = ttg::getAllocationElems(
-        type.getEncoding(), type.getShape(), type.getAllocShape());
-    if (auto padded = ttg::getPaddedEncoding(type.getEncoding()))
-      numElems = padded.getPaddedSize({int64_t(numElems)});
-    uint32_t subBufferSize =
-        numElems * type.getElementType().getIntOrFloatBitWidth() / 8;
     FailureOr<uint32_t> relativeOffset =
-        getMemDescSubsliceByteOffset(memdescSubsliceOp);
+        getMemDescSubsliceUnpaddedByteOffset(memdescSubsliceOp);
     if (failed(relativeOffset))
       return failure();
     for (auto &region : in.regions) {
-      regionInfo.regions.insert(
-          {region.baseOffset + *relativeOffset, subBufferSize});
+      uint32_t affineOffset = region.affineOffset ^ *relativeOffset;
+      FailureOr<BufferRegion> subBuffer =
+          getMemDescRegion(region.storageBase, affineOffset,
+                           memdescSubsliceOp.getType(), op, &footprintCache);
+      if (failed(subBuffer))
+        return failure();
+      regionInfo.regions.insert(std::move(*subBuffer));
     }
     for (auto *r : results) {
       propagateIfChanged(r, r->join(regionInfo));
@@ -268,43 +638,21 @@ LogicalResult BufferRegionAnalysis::visitOperation(
   }
   if (auto tmemSubsliceOp = dyn_cast<ttng::TMEMSubSliceOp>(op)) {
     RegionInfo in = operands[0]->getValue();
-    auto type = tmemSubsliceOp.getType();
-    uint64_t stages = product(type.getShape().drop_back(
-        ttg::dropPipeliningDim(type.getShape(), type.getEncoding()).size()));
-    uint32_t subBufferSize = ttng::getTmemAllocSizes(type).numCols;
-    if (stages > 1) {
-      uint32_t stageCols =
-          ttng::getTMemSubSliceOffset(type, /*offset=*/1, /*dim=*/0);
-      subBufferSize = (stages - 1) * stageCols + subBufferSize / stages;
-    }
     uint32_t relativeOffset = ttng::getTMemSubSliceOffset(
         tmemSubsliceOp.getSrc().getType(), tmemSubsliceOp.getOffset(),
         tmemSubsliceOp.getDim());
     for (auto &region : in.regions) {
-      regionInfo.regions.insert(
-          {region.baseOffset + relativeOffset, subBufferSize});
+      uint32_t affineOffset = region.affineOffset + relativeOffset;
+      FailureOr<BufferRegion> subBuffer =
+          getMemDescRegion(region.storageBase, affineOffset,
+                           tmemSubsliceOp.getType(), op, &footprintCache);
+      if (failed(subBuffer))
+        return failure();
+      regionInfo.regions.insert(std::move(*subBuffer));
     }
     for (auto *r : results) {
       propagateIfChanged(r, r->join(regionInfo));
     }
-    return success();
-  }
-  if (auto reinterpretOp = dyn_cast<ttg::MemDescReinterpretOp>(op)) {
-    auto type = reinterpretOp.getType();
-    uint32_t size;
-    if (isa<ttng::TensorMemorySpaceAttr>(type.getMemorySpace())) {
-      size = ttng::getTmemAllocSizes(type).numCols;
-    } else {
-      uint64_t numElems = ttg::getAllocationElems(
-          type.getEncoding(), type.getShape(), type.getAllocShape());
-      if (auto padded = ttg::getPaddedEncoding(type.getEncoding()))
-        numElems = padded.getPaddedSize({int64_t(numElems)});
-      size = numElems * type.getElementType().getIntOrFloatBitWidth() / 8;
-    }
-    for (auto &region : operands[0]->getValue().regions)
-      regionInfo.regions.insert({region.baseOffset, size});
-    for (auto *result : results)
-      propagateIfChanged(result, result->join(regionInfo));
     return success();
   }
   if (auto selectOp = dyn_cast<arith::SelectOp>(op)) {
@@ -316,6 +664,21 @@ LogicalResult BufferRegionAnalysis::visitOperation(
       }
       return success();
     }
+  }
+  if (auto reinterpretOp = dyn_cast<ttg::MemDescReinterpretOp>(op)) {
+    RegionInfo in = operands[0]->getValue();
+    for (auto &region : in.regions) {
+      FailureOr<BufferRegion> reinterpreted =
+          getMemDescRegion(region.storageBase, region.affineOffset,
+                           reinterpretOp.getType(), op, &footprintCache);
+      if (failed(reinterpreted))
+        return failure();
+      regionInfo.regions.insert(std::move(*reinterpreted));
+    }
+    for (auto *r : results) {
+      propagateIfChanged(r, r->join(regionInfo));
+    }
+    return success();
   }
   // "Passthrough" ops that don't modify the buffer regions.
   if (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp>(op)) {
