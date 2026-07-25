@@ -239,6 +239,15 @@ bool isLayoutAnchor(Operation *op) {
   return false;
 }
 
+// Look through layout conversions to identify values with repeated elements.
+// Their layouts do not describe how distinct values should be distributed
+// along the repeated dimensions.
+bool hasRepeatedElements(Value value) {
+  while (auto convert = value.getDefiningOp<ConvertLayoutOp>())
+    value = convert.getSrc();
+  return isa_and_nonnull<BroadcastOp, SplatOp>(value.getDefiningOp());
+}
+
 void LayoutPropagation::initAnchorLayout() {
   auto addAnchor = [&](Value v) {
     if (auto tensorType = dyn_cast<RankedTensorType>(v.getType())) {
@@ -291,6 +300,21 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
   SmallVector<Value> changed;
   for (OpOperand &use : value.getUses()) {
     Operation *user = use.getOwner();
+    bool hasMmaCandidate = llvm::any_of(info.encodings, [](Attribute encoding) {
+      return isa<MmaEncodingTrait>(encoding);
+    });
+    // A layout propagated from repeated data does not describe how distinct
+    // values should be distributed along the repeated dimensions. Let a
+    // non-repeated tensor peer determine the elementwise result's layout.
+    // Preserve the existing conflict preference for MMA layouts, where some
+    // conversions between encodings are known to be free.
+    if (user->hasTrait<OpTrait::Elementwise>() && hasRepeatedElements(value) &&
+        !hasMmaCandidate &&
+        llvm::any_of(user->getOperands(), [&](Value operand) {
+          return operand != value && isa<RankedTensorType>(operand.getType()) &&
+                 !hasRepeatedElements(operand);
+        }))
+      continue;
     if (auto forOp = dyn_cast<scf::ForOp>(user)) {
       Value arg = forOp.getTiedLoopRegionIterArg(&use);
       Value result = forOp.getTiedLoopResult(&use);

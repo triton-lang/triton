@@ -2504,10 +2504,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
   // Verify that we don't hoist the convert on top of the broadcast. In general we should hoist the convert to reduce its cost
   // but because this would combine the 1st and 2nd convert and since the 1st convert is known to be a no-op this would
   // generate more expensive code.
+  // CHECK: [[$MMA256:#.*]] = #ttg.nvidia_mma<{{.*}}instrShape = [16, 256, 32]{{.*}}>
+  // CHECK: [[$MMA128:#.*]] = #ttg.nvidia_mma<{{.*}}instrShape = [16, 128, 32]{{.*}}>
   // CHECK-LABEL: @hoist_with_free_convert
   tt.func public @hoist_with_free_convert(%arg0: tensor<128x256xf32, #mma1>, %arg1: tensor<128x1xf32, #mma>) -> tensor<128x256xf32, #blocked> {
-    // CHECK: ttg.convert_layout
-    // CHECK: tt.broadcast
+    // CHECK: ttg.convert_layout %arg0 : tensor<128x256xf32, [[$MMA256]]> -> tensor<128x256xf32, [[$MMA128]]>
+    // CHECK: tt.broadcast %arg1 : tensor<128x1xf32, [[$MMA128]]> -> tensor<128x256xf32, [[$MMA128]]>
+    // CHECK: arith.addf {{.*}} : tensor<128x256xf32, [[$MMA128]]>
     // CHECK: ttg.convert_layout
     // CHECK: tt.return
     %0 = ttg.convert_layout %arg0 : tensor<128x256xf32, #mma1> -> tensor<128x256xf32, #mma>
@@ -4535,5 +4538,61 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %1 = ttg.convert_layout %0 : tensor<32xf32, #blocked1> -> tensor<32xf32, #blocked2>
     %2 = ttg.convert_layout %0 : tensor<32xf32, #blocked1> -> tensor<32xf32, #blocked3>
     tt.return %1, %2 : tensor<32xf32, #blocked2>, tensor<32xf32, #blocked3>
+  }
+}
+
+// -----
+
+// Keep a dense elementwise layout when the other operand is broadcast from a
+// reduction result. Otherwise, the broadcast layout can expand the chained
+// division into one scalar operation per tensor element.
+
+// CHECK: [[$DENSE:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+// CHECK-LABEL: @prefer_dense_layout_over_broadcast
+// CHECK: %[[DIV0:.+]] = arith.divf {{.*}} : tensor<16x256xf32, [[$DENSE]]>
+// CHECK: %[[DIV1:.+]] = arith.divf %[[DIV0]], {{.*}} : tensor<16x256xf32, [[$DENSE]]>
+// CHECK: %[[REDUCE:.+]] = "tt.reduce"(%[[DIV1]]) <{axis = 1 : i32}>
+// CHECK: }) : (tensor<16x256xf32, [[$DENSE]]>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = [[$DENSE]]}>>
+#row = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#one_d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#dense = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @prefer_dense_layout_over_broadcast(%arg0: tensor<16x256xf32, #dense>) -> tensor<16x256xf32, #dense> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%arg1: f32, %arg2: f32):
+      %4 = arith.addf %arg1, %arg2 : f32
+      tt.reduce.return %4 : f32
+    }) : (tensor<16x256xf32, #dense>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #dense}>>
+    %1 = ttg.convert_layout %0 : tensor<16xf32, #ttg.slice<{dim = 1, parent = #dense}>> -> tensor<16xf32, #one_d>
+    %2 = tt.reshape %1 : tensor<16xf32, #one_d> -> tensor<16x1xf32, #row>
+    %3 = tt.broadcast %2 : tensor<16x1xf32, #row> -> tensor<16x256xf32, #row>
+    %4 = ttg.convert_layout %3 : tensor<16x256xf32, #row> -> tensor<16x256xf32, #dense>
+    %5 = arith.divf %arg0, %4 : tensor<16x256xf32, #dense>
+    %6 = arith.divf %5, %4 : tensor<16x256xf32, #dense>
+    %7 = "tt.reduce"(%6) <{axis = 1 : i32}> ({
+    ^bb0(%arg1: f32, %arg2: f32):
+      %8 = arith.addf %arg1, %arg2 : f32
+      tt.reduce.return %8 : f32
+    }) : (tensor<16x256xf32, #dense>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #dense}>>
+    %8 = ttg.convert_layout %7 : tensor<16xf32, #ttg.slice<{dim = 1, parent = #dense}>> -> tensor<16xf32, #one_d>
+    %9 = tt.reshape %8 : tensor<16xf32, #one_d> -> tensor<16x1xf32, #row>
+    %10 = tt.broadcast %9 : tensor<16x1xf32, #row> -> tensor<16x256xf32, #row>
+    %11 = ttg.convert_layout %10 : tensor<16x256xf32, #row> -> tensor<16x256xf32, #dense>
+    %12 = arith.addf %11, %6 : tensor<16x256xf32, #dense>
+    tt.return %12 : tensor<16x256xf32, #dense>
+  }
+
+  // CHECK-LABEL: @keep_broadcast_layout_with_splat
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: arith.addf {{.*}} : tensor<16x256xf32, [[$ROW:#.*]]>
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: tt.return
+  tt.func public @keep_broadcast_layout_with_splat(%arg0: tensor<16x1xf32, #row>, %arg1: f32) -> tensor<16x256xf32, #row> {
+    %0 = tt.broadcast %arg0 : tensor<16x1xf32, #row> -> tensor<16x256xf32, #row>
+    %1 = ttg.convert_layout %0 : tensor<16x256xf32, #row> -> tensor<16x256xf32, #dense>
+    %2 = tt.splat %arg1 : f32 -> tensor<16x256xf32, #dense>
+    %3 = arith.addf %1, %2 : tensor<16x256xf32, #dense>
+    %4 = ttg.convert_layout %3 : tensor<16x256xf32, #dense> -> tensor<16x256xf32, #row>
+    tt.return %4 : tensor<16x256xf32, #row>
   }
 }
