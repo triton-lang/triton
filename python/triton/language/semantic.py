@@ -578,9 +578,7 @@ class TritonSemantic(Generic[TensorTy]):
     def arange(self, start: int, end: int, *, ret_ty: tl.block_type = None) -> TensorTy:
         if not isinstance(start, int) or not isinstance(end, int):
             raise ValueError("arange's arguments must be of type tl.constexpr")
-        is_start_int64 = bool(start >> 32)
-        is_end_int64 = bool(end >> 32)
-        if is_start_int64 or is_end_int64:
+        if start < -2**31 or end > 2**31 - 1:
             raise ValueError("arange must fit in int32")
         if end <= start:
             raise ValueError("arange's end argument must be greater than the start argument")

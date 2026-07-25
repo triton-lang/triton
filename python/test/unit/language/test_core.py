@@ -4681,7 +4681,7 @@ def test_dot_without_load(dtype_str, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("start", [0, 1, 7, 16])
+@pytest.mark.parametrize("start", [-128, -64, -16, 0, 1, 7, 16])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_arange(start, num_ctas, device):
     BLOCK = 128
