@@ -95,54 +95,29 @@ public:
 
   std::optional<MemEffectsOpInfo>
   getMemEffectsOpInfo(Operation *op) const override {
-    if (auto loadOp = dyn_cast<ttag::BufferLoadToLocalOp>(op)) {
+    bool isAsyncCopy =
+        isa<ttag::BufferLoadToLocalOp, ttag::AsyncCopyLocalToGlobalOp>(op);
+    if (isAsyncCopy || isTMAOp(op)) {
       MemEffectsOpInfo info;
-      info.trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
-      info.commitKind = tti::CommitKind::AsyncCp;
-      info.operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
-                                       loadOp.getDest());
-      return info;
-    }
-
-    if (auto storeOp = dyn_cast<ttag::AsyncCopyLocalToGlobalOp>(op)) {
-      MemEffectsOpInfo info;
-      info.trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
-      info.commitKind = tti::CommitKind::AsyncCp;
-      info.operandEffects.emplace_back(MemEffectsOpInfo::Effects::Read,
-                                       storeOp.getSrc());
-      return info;
-    }
-
-    if (isa<ttag::TDMOpInterface>(op)) {
-      MemEffectsOpInfo info;
-      Value barrier = cast<ttg::MBarrierOpInterface>(op).getBarrier();
+      Value barrier;
+      if (auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op))
+        barrier = barrierOp.getBarrier();
       if (barrier) {
         info.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
         info.barriers.push_back({barrier, nullptr, ttg::lookupNumWarps(op)});
       } else {
         info.trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
-        info.commitKind = tti::CommitKind::TmaStore;
-        info.implicitCommit = true;
+        info.commitKind =
+            isAsyncCopy ? tti::CommitKind::AsyncCp : tti::CommitKind::TmaStore;
+        info.implicitCommit = !isAsyncCopy;
       }
       for (const auto &access :
-           triton::BufferRegionAnalysis::getMemoryAccesses(op)) {
+           triton::BufferRegionAnalysis::getMemoryAccesses(op))
         if (access.value != barrier)
           info.operandEffects.emplace_back(
               access.isWrite ? MemEffectsOpInfo::Effects::Write
                              : MemEffectsOpInfo::Effects::Read,
               access.value);
-      }
-      return info;
-    }
-
-    if (auto fusedOp = dyn_cast<ttag::AsyncTDMFusedCopyGlobalToLocalOp>(op)) {
-      MemEffectsOpInfo info;
-      info.trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
-      info.commitKind = tti::CommitKind::TmaStore;
-      info.implicitCommit = true;
-      for (Value dest : fusedOp.getDests())
-        info.operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
-                                         dest);
       return info;
     }
     // AMD ArriveBarrierOp: Explicit barrier arrival.
@@ -169,12 +144,10 @@ public:
   }
 
   SmallVector<CommitKindDesc> getOutstandingReadCommitKinds() const override {
-    SmallVector<CommitKindDesc> kinds;
-    if (hasAsyncCopyReads)
-      kinds.push_back(
-          {tti::CommitKind::AsyncCp, "async_copy_shared_to_global"});
-    kinds.push_back({tti::CommitKind::TmaStore, "async_tdm_shared_to_global"});
-    return kinds;
+    if (!hasAsyncCopyReads)
+      return {{tti::CommitKind::TmaStore, "async_tdm_shared_to_global"}};
+    return {{tti::CommitKind::AsyncCp, "async_copy_shared_to_global"},
+            {tti::CommitKind::TmaStore, "async_tdm_shared_to_global"}};
   }
 
   SmallVector<tti::CommitKind::Kind>
@@ -184,15 +157,13 @@ public:
     bool needsAsyncCp = false;
     hasAsyncCopyReads = false;
     module.walk([&](Operation *op) {
-      if (isa<ttag::TDMOpInterface, ttag::AsyncTDMFusedCopyGlobalToLocalOp,
-              ttag::AsyncTDMWait, ttag::AsyncTDMIntrinsicWait>(op))
-        needsTdm = true;
-      if (isa<ttg::AsyncCopyGlobalToLocalOp, ttg::AsyncCommitGroupOp,
+      needsTdm |= isTMAOp(op) ||
+                  isa<ttag::AsyncTDMWait, ttag::AsyncTDMIntrinsicWait>(op);
+      needsAsyncCp |=
+          isa<ttg::AsyncCopyGlobalToLocalOp, ttg::AsyncCommitGroupOp,
               ttg::AsyncWaitOp, ttag::BufferLoadToLocalOp,
-              ttag::AsyncCopyLocalToGlobalOp, ttag::AsyncWaitOp>(op))
-        needsAsyncCp = true;
-      if (isa<ttag::AsyncCopyLocalToGlobalOp>(op))
-        hasAsyncCopyReads = true;
+              ttag::AsyncCopyLocalToGlobalOp, ttag::AsyncWaitOp>(op);
+      hasAsyncCopyReads |= isa<ttag::AsyncCopyLocalToGlobalOp>(op);
     });
     if (needsTdm)
       kinds.push_back(tti::CommitKind::TmaStore);

@@ -644,10 +644,7 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Value recipients,
 
   Value result = arith::ConstantIntOp::create(b, 0, 32);
   for (int source = 0; source < numCTAs; ++source) {
-    uint32_t targets = 0;
-    for (int offset = 0; offset < numCTAs; ++offset)
-      if (ownerMask & (1u << offset))
-        targets |= 1u << (source ^ offset);
+    uint32_t targets = translateXorMask(ownerMask, source, numCTAs);
     Value sourceBit = arith::ConstantIntOp::create(b, 1u << source, 32);
     Value present =
         arith::CmpIOp::create(b, arith::CmpIPredicate::ne,

@@ -1,7 +1,6 @@
 #ifndef TRITON_ANALYSIS_BUFFER_REGION_H
 #define TRITON_ANALYSIS_BUFFER_REGION_H
 
-#include <algorithm>
 #include <cstdint>
 #include <set>
 #include <tuple>
@@ -120,29 +119,22 @@ struct BufferRegion {
 
   bool operator==(const BufferRegion &other) const {
     return baseOffset == other.baseOffset && length == other.length &&
-           addresses == other.addresses && ctaAddresses == other.ctaAddresses &&
-           storageBase == other.storageBase &&
+           addresses == other.addresses && storageBase == other.storageBase &&
            affineOffset == other.affineOffset &&
-           partitionBases == other.partitionBases &&
            affinePartitionOffset == other.affinePartitionOffset &&
-           affineCTAOffset == other.affineCTAOffset;
+           affineCTAOffset == other.affineCTAOffset &&
+           partitionBases == other.partitionBases &&
+           ctaAddresses == other.ctaAddresses;
   }
 
   bool operator<(const BufferRegion &other) const {
-    auto lhs = std::tie(baseOffset, length, addresses, storageBase,
-                        affineOffset, affinePartitionOffset, affineCTAOffset);
-    auto rhs = std::tie(other.baseOffset, other.length, other.addresses,
-                        other.storageBase, other.affineOffset,
-                        other.affinePartitionOffset, other.affineCTAOffset);
-    if (lhs != rhs)
-      return lhs < rhs;
-    if (partitionBases != other.partitionBases)
-      return std::lexicographical_compare(
-          partitionBases.begin(), partitionBases.end(),
-          other.partitionBases.begin(), other.partitionBases.end());
-    return std::lexicographical_compare(
-        ctaAddresses.begin(), ctaAddresses.end(), other.ctaAddresses.begin(),
-        other.ctaAddresses.end());
+    return std::tie(baseOffset, length, addresses, storageBase, affineOffset,
+                    affinePartitionOffset, affineCTAOffset, partitionBases,
+                    ctaAddresses) <
+           std::tie(other.baseOffset, other.length, other.addresses,
+                    other.storageBase, other.affineOffset,
+                    other.affinePartitionOffset, other.affineCTAOffset,
+                    other.partitionBases, other.ctaAddresses);
   }
 
   template <typename T> void print(T &os) const {

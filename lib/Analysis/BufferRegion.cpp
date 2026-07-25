@@ -29,22 +29,18 @@ FailureOr<SmallVector<uint32_t, 2>> getAllocationOffsets(ttg::LocalAllocOp op) {
     return failure();
   }
   SmallVector<uint32_t, 2> offsets;
-  if (auto array = dyn_cast<ArrayAttr>(offsetAttr)) {
+  if (auto array = dyn_cast<ArrayAttr>(offsetAttr))
     for (Attribute offset : array)
       offsets.push_back(cast<IntegerAttr>(offset).getInt());
-  } else {
+  else
     offsets.push_back(cast<IntegerAttr>(offsetAttr).getInt());
-  }
   return offsets;
 }
 
 SmallVector<uint32_t, 2> advancePartitionBases(ArrayRef<uint32_t> bases,
                                                uint32_t offset) {
-  SmallVector<uint32_t, 2> advanced;
-  advanced.reserve(bases.size());
-  for (uint32_t base : bases)
-    advanced.push_back(base + offset);
-  return advanced;
+  return llvm::to_vector<2>(
+      llvm::map_range(bases, [=](uint32_t base) { return base + offset; }));
 }
 
 uint64_t getAllocationOffset(ttng::TMEMAllocOp op) {
@@ -92,94 +88,98 @@ struct MemDescFootprint {
   triton::AddressSet addresses;
   SmallVector<triton::BufferRegion::CTAAddresses, 2> ctaAddresses;
 
+  triton::AddressSet &forCTA(uint32_t cta) {
+    auto it = llvm::lower_bound(
+        ctaAddresses, cta,
+        [](const auto &entry, uint32_t cta) { return entry.first < cta; });
+    if (it == ctaAddresses.end() || it->first != cta)
+      it = ctaAddresses.insert(it, triton::BufferRegion::CTAAddresses{cta, {}});
+    return it->second;
+  }
+
   void set(uint32_t cta, uint32_t address) {
     addresses.set(address);
-    auto it = llvm::find_if(
-        ctaAddresses, [=](const auto &entry) { return entry.first == cta; });
-    if (it == ctaAddresses.end()) {
-      ctaAddresses.emplace_back(cta, triton::AddressSet());
-      it = std::prev(ctaAddresses.end());
-    }
-    it->second.set(address);
+    forCTA(cta).set(address);
   }
 
   void insert(const MemDescFootprint &other) {
     addresses.insert(other.addresses);
-    for (const auto &[cta, otherAddresses] : other.ctaAddresses) {
-      auto it = llvm::find_if(
-          ctaAddresses, [=](const auto &entry) { return entry.first == cta; });
-      if (it == ctaAddresses.end())
-        ctaAddresses.emplace_back(cta, otherAddresses);
-      else
-        it->second.insert(otherAddresses);
-    }
+    for (const auto &[cta, otherAddresses] : other.ctaAddresses)
+      forCTA(cta).insert(otherAddresses);
   }
 };
 
-FailureOr<MemDescFootprint> getMemDescAddresses(
+MemDescFootprint getMemDescAddresses(
     uint32_t storageBase, uint32_t affineOffset, ttg::MemDescType ty,
-    Operation *op,
     llvm::DenseMap<std::pair<Type, uint32_t>, triton::AddressSet> *cache =
         nullptr,
     ArrayRef<uint32_t> partitionBases = {}, uint32_t affinePartitionOffset = 0,
     uint32_t affineCTAOffset = 0) {
   bool isTmem = isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace());
-  auto collectPages = [&]() -> FailureOr<MemDescFootprint> {
+  auto collectPages = [&]() {
     ttg::MemDescType pageTy =
         ty.cloneWith(ty.getShape().drop_front(), ty.getElementType());
     MemDescFootprint footprint;
     for (int64_t page = 0; page < ty.getDimSize(0); ++page) {
       uint32_t pageOffset = getMemDescStorageOffset(pageTy, page);
-      SmallVector<uint32_t, 2> pageBases =
-          advancePartitionBases(partitionBases, pageOffset);
-      FailureOr<MemDescFootprint> pageAddresses = getMemDescAddresses(
-          storageBase + pageOffset, affineOffset, pageTy, op,
-          /*cache=*/nullptr, pageBases, affinePartitionOffset, affineCTAOffset);
-      if (failed(pageAddresses))
-        return failure();
-      footprint.insert(*pageAddresses);
+      footprint.insert(getMemDescAddresses(
+          storageBase + pageOffset, affineOffset, pageTy, /*cache=*/nullptr,
+          advancePartitionBases(partitionBases, pageOffset),
+          affinePartitionOffset, affineCTAOffset));
     }
     return footprint;
   };
-  size_t encodingRank =
-      cast<ttg::LayoutEncodingTrait>(ty.getEncoding()).getRank();
-  if (encodingRank != ty.getRank()) {
-    if (encodingRank + 1 != ty.getRank()) {
-      op->emitError("unsupported multibuffer rank in exact buffer region "
-                    "analysis");
-      return failure();
-    }
+  if (cast<ttg::LayoutEncodingTrait>(ty.getEncoding()).getRank() !=
+      ty.getRank())
     return collectPages();
-  }
   triton::LinearLayout layout = ttg::isPaddedEncoding(ty.getEncoding())
                                     ? ttg::paddedLinearLayout(ty)
                                     : ttg::toLinearLayout(ty);
-  size_t layoutRank = llvm::size(layout.getOutDimNames());
-  if (layoutRank != ty.getRank()) {
-    if (layoutRank + 1 != ty.getRank()) {
-      op->emitError("unsupported multibuffer rank in exact buffer region "
-                    "analysis");
-      return failure();
-    }
+  if (llvm::size(layout.getOutDimNames()) != ty.getRank())
     return collectPages();
-  }
   triton::LinearLayout inverse = layout.pseudoinvert();
   MLIRContext *ctx = ty.getContext();
   SmallVector<StringAttr> dims = triton::standardOutDimNames(ctx, ty.getRank());
-  SmallVector<int64_t> shape(ty.getShape());
+  ArrayRef<int64_t> shape = ty.getShape();
   uint64_t numPoints = product(shape);
   uint32_t bitWidth = ty.getElementTypeBitWidth();
-  if (!isTmem && bitWidth % 8 != 0) {
-    op->emitError("sub-byte shared-memory elements are unsupported by exact "
-                  "buffer region analysis");
-    return failure();
-  }
 
   StringAttr offsetName = StringAttr::get(ctx, "offset");
   StringAttr blockName = StringAttr::get(ctx, "block");
   StringAttr partitionName = StringAttr::get(ctx, "partition");
   StringAttr rowName = StringAttr::get(ctx, "row");
   StringAttr colName = StringAttr::get(ctx, "col");
+
+  MemDescFootprint footprint;
+  auto addPhysicalAddress = [&](uint32_t offset, uint32_t row, uint32_t col,
+                                uint32_t partition, uint32_t block) {
+    uint32_t cta = block ^ affineCTAOffset;
+    if (isTmem) {
+      uint64_t bitBegin = static_cast<uint64_t>(col) * bitWidth;
+      uint32_t firstWord = bitBegin / 32;
+      uint32_t lastWord = llvm::divideCeil(bitBegin + bitWidth, uint64_t{32});
+      uint32_t relative = (row << 16) | firstWord;
+      uint64_t begin =
+          static_cast<uint64_t>(storageBase) + affineOffset + relative;
+      for (uint32_t word = firstWord; word < lastWord; ++word) {
+        uint64_t address = begin + (word - firstWord);
+        assert(address <= std::numeric_limits<uint32_t>::max());
+        footprint.set(cta, address);
+      }
+    } else {
+      uint32_t base = storageBase;
+      if (!partitionBases.empty())
+        base = partitionBases[partition ^ affinePartitionOffset];
+      uint32_t relative = offset * (bitWidth / 8);
+      uint32_t combined = affineOffset ^ relative;
+      uint64_t begin =
+          static_cast<uint64_t>(base) + applySharedPadding(combined, ty);
+      for (uint32_t byte = 0; byte < bitWidth / 8; ++byte) {
+        assert(begin + byte <= std::numeric_limits<uint32_t>::max());
+        footprint.set(cta, begin + byte);
+      }
+    }
+  };
 
   struct PhysicalBasis {
     uint32_t offset = 0;
@@ -192,10 +192,6 @@ FailureOr<MemDescFootprint> getMemDescAddresses(
   bool hasCTAAddressVariation = false;
   for (auto [dim, dimSize] : llvm::zip_equal(dims, shape)) {
     unsigned numBits = llvm::Log2_64(dimSize);
-    if (numBits > static_cast<unsigned>(inverse.getInDimSizeLog2(dim))) {
-      op->emitError("buffer footprint exceeds its linear-layout domain");
-      return failure();
-    }
     for (unsigned bit = 0; bit < numBits; ++bit) {
       auto basis = [&](StringAttr name) {
         return inverse.hasOutDim(name)
@@ -210,51 +206,16 @@ FailureOr<MemDescFootprint> getMemDescAddresses(
   }
 
   if (cache && partitionBases.empty() && !hasCTAAddressVariation) {
-    auto key = std::make_pair(Type(ty), affineOffset);
-    auto found = cache->find(key);
-    if (found == cache->end()) {
-      FailureOr<MemDescFootprint> relative =
-          getMemDescAddresses(/*storageBase=*/0, affineOffset, ty, op);
-      if (failed(relative))
-        return failure();
-      found = cache->try_emplace(key, std::move(relative->addresses)).first;
-    }
-    MemDescFootprint footprint;
+    auto [found, inserted] =
+        cache->try_emplace(std::make_pair(Type(ty), affineOffset));
+    if (inserted)
+      found->second =
+          getMemDescAddresses(/*storageBase=*/0, affineOffset, ty).addresses;
     footprint.addresses = found->second.translated(storageBase);
     if (!footprint.addresses.empty())
       footprint.ctaAddresses.emplace_back(affineCTAOffset, footprint.addresses);
     return footprint;
   }
-
-  MemDescFootprint footprint;
-  auto addPhysicalAddress = [&](const PhysicalBasis &physical) {
-    uint32_t cta = physical.block ^ affineCTAOffset;
-    if (isTmem) {
-      uint64_t bitBegin = static_cast<uint64_t>(physical.col) * bitWidth;
-      uint32_t firstWord = bitBegin / 32;
-      uint32_t lastWord = llvm::divideCeil(bitBegin + bitWidth, uint64_t{32});
-      uint32_t relative = (physical.row << 16) | firstWord;
-      uint64_t begin =
-          static_cast<uint64_t>(storageBase) + affineOffset + relative;
-      for (uint32_t word = firstWord; word < lastWord; ++word) {
-        uint64_t address = begin + (word - firstWord);
-        assert(address <= std::numeric_limits<uint32_t>::max());
-        footprint.set(cta, address);
-      }
-    } else {
-      uint32_t base = storageBase;
-      if (!partitionBases.empty())
-        base = partitionBases[physical.partition ^ affinePartitionOffset];
-      uint32_t relative = physical.offset * (bitWidth / 8);
-      uint32_t combined = affineOffset ^ relative;
-      uint64_t begin =
-          static_cast<uint64_t>(base) + applySharedPadding(combined, ty);
-      for (uint32_t byte = 0; byte < bitWidth / 8; ++byte) {
-        assert(begin + byte <= std::numeric_limits<uint32_t>::max());
-        footprint.set(cta, begin + byte);
-      }
-    }
-  };
 
   PhysicalBasis physical;
   for (uint64_t index = 0; index < numPoints; ++index) {
@@ -266,23 +227,20 @@ FailureOr<MemDescFootprint> getMemDescAddresses(
       physical.partition ^= basis.partition;
       physical.block ^= basis.block;
     }
-    addPhysicalAddress(physical);
+    addPhysicalAddress(physical.offset, physical.row, physical.col,
+                       physical.partition, physical.block);
   }
-  llvm::sort(footprint.ctaAddresses, llvm::less_first());
   return footprint;
 }
 
-FailureOr<triton::BufferRegion> getMemDescRegion(
+triton::BufferRegion getMemDescRegion(
     uint32_t storageBase, uint32_t affineOffset, ttg::MemDescType ty,
-    Operation *op,
     llvm::DenseMap<std::pair<Type, uint32_t>, triton::AddressSet> *cache,
     ArrayRef<uint32_t> partitionBases = {}, uint32_t affinePartitionOffset = 0,
     uint32_t affineCTAOffset = 0) {
-  FailureOr<MemDescFootprint> footprint = getMemDescAddresses(
-      storageBase, affineOffset, ty, op, cache, partitionBases,
-      affinePartitionOffset, affineCTAOffset);
-  if (failed(footprint))
-    return failure();
+  MemDescFootprint footprint =
+      getMemDescAddresses(storageBase, affineOffset, ty, cache, partitionBases,
+                          affinePartitionOffset, affineCTAOffset);
   uint32_t runtimeStorageBase = partitionBases.empty()
                                     ? storageBase
                                     : partitionBases[affinePartitionOffset];
@@ -291,9 +249,9 @@ FailureOr<triton::BufferRegion> getMemDescRegion(
                              ? affineOffset
                              : applySharedPadding(affineOffset, ty));
   return triton::BufferRegion(
-      baseOffset, getMemDescSize(ty), std::move(footprint->addresses),
+      baseOffset, getMemDescSize(ty), std::move(footprint.addresses),
       storageBase, affineOffset, partitionBases, affinePartitionOffset,
-      footprint->ctaAddresses, affineCTAOffset);
+      footprint.ctaAddresses, affineCTAOffset);
 }
 
 uint32_t getMemDescStorageOffset(ttg::MemDescType ty, unsigned index) {
@@ -380,7 +338,7 @@ getMemDescSubsliceUnpaddedOffsets(ttg::MemDescSubsliceOp op) {
   StringAttr partitionDim = StringAttr::get(ctx, "partition");
   mlir::triton::LinearLayout inverse = layout.pseudoinvert();
   auto mapped = inverse.apply(logicalOffsets);
-  uint32_t elementOffset = 0;
+  uint64_t elementOffset = 0;
   uint32_t blockOffset = 0;
   uint32_t partitionOffset = 0;
   for (auto [dim, offset] : mapped) {
@@ -391,20 +349,19 @@ getMemDescSubsliceUnpaddedOffsets(ttg::MemDescSubsliceOp op) {
     else if (dim == partitionDim)
       partitionOffset = static_cast<uint32_t>(offset);
   }
-  uint64_t totalElementOffset = elementOffset;
   if (offsets.size() != layoutRank) {
     uint64_t stride = ttg::getAllocationElems(
         encoding, ttg::dropPipeliningDim(srcTy.getAllocShape(), encoding));
     if (auto partitioned =
             dyn_cast<ttg::PartitionedSharedEncodingAttr>(encoding))
       stride /= partitioned.getNumPartitions();
-    totalElementOffset += static_cast<uint64_t>(offsets.front()) * stride;
+    elementOffset += static_cast<uint64_t>(offsets.front()) * stride;
   }
 
   uint64_t elementSizeBytes =
       srcTy.getElementType().getIntOrFloatBitWidth() / 8;
   assert(elementSizeBytes > 0 && "element size must be non-zero");
-  uint64_t byteOffset = totalElementOffset * elementSizeBytes;
+  uint64_t byteOffset = elementOffset * elementSizeBytes;
 
   assert(byteOffset <= std::numeric_limits<uint32_t>::max() &&
          "memdesc_subslice offset exceeds 32-bit range");
@@ -563,10 +520,8 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions,
     componentPlans.push_back({component, std::move(atomMemberships)});
   }
 
-  if (includeUnknown) {
-    ++plan.numLanes;
-    plan.unknownMask = llvm::SmallBitVector(plan.numLanes, true);
-  }
+  if (includeUnknown)
+    plan.unknownMask = llvm::SmallBitVector(++plan.numLanes, true);
 
   for (llvm::SmallBitVector &mask : plan.regionMasks)
     mask.resize(plan.numLanes);
@@ -614,9 +569,9 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     llvm::ArrayRef<const dataflow::Lattice<RegionInfo> *> operands,
     llvm::ArrayRef<dataflow::Lattice<RegionInfo> *> results) {
   RegionInfo regionInfo(RegionInfo::RegionList{});
-  auto propagateRegions = [&]() {
+  auto propagateRegions = [&](const RegionInfo &info) {
     for (auto *result : results)
-      propagateIfChanged(result, result->join(regionInfo));
+      propagateIfChanged(result, result->join(info));
     return success();
   };
   if (auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(op)) {
@@ -639,31 +594,21 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     ArrayRef<uint32_t> partitionBases = offsets->size() > 1
                                             ? ArrayRef<uint32_t>(*offsets)
                                             : ArrayRef<uint32_t>();
-    FailureOr<BufferRegion> region = getMemDescRegion(
-        offsets->front(), /*affineOffset=*/0, localAllocOp.getType(), op,
-        &footprintCache, partitionBases);
-    if (failed(region))
-      return failure();
-    regionInfo.regions.insert(std::move(*region));
-
-    return propagateRegions();
+    regionInfo.regions.insert(getMemDescRegion(
+        offsets->front(), /*affineOffset=*/0, localAllocOp.getType(),
+        &footprintCache, partitionBases));
+    return propagateRegions(regionInfo);
   }
   if (auto tmemAllocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
-    uint32_t offset = getAllocationOffset(tmemAllocOp);
-    FailureOr<BufferRegion> region = getMemDescRegion(
-        offset, /*affineOffset=*/0, tmemAllocOp.getType(), op, &footprintCache);
-    if (failed(region))
-      return failure();
-    regionInfo.regions.insert(std::move(*region));
-
-    return propagateRegions();
+    regionInfo.regions.insert(
+        getMemDescRegion(getAllocationOffset(tmemAllocOp), /*affineOffset=*/0,
+                         tmemAllocOp.getType(), &footprintCache));
+    return propagateRegions(regionInfo);
   }
   if (auto memdescIndexOp = dyn_cast<ttg::MemDescIndexOp>(op)) {
-    RegionInfo in = operands[0]->getValue();
-    if (in.isUnknown()) {
-      regionInfo = in;
-      return propagateRegions();
-    }
+    const RegionInfo &in = operands[0]->getValue();
+    if (in.isUnknown())
+      return propagateRegions(in);
     int numSubBuffers = getNumBuffers(memdescIndexOp);
     int firstSubBuffer = 0;
     int endSubBuffer = numSubBuffers;
@@ -678,94 +623,64 @@ LogicalResult BufferRegionAnalysis::visitOperation(
       for (int i = firstSubBuffer; i < endSubBuffer; ++i) {
         uint32_t stageOffset =
             getMemDescStorageOffset(memdescIndexOp.getType(), i);
-        uint32_t storageBase = region.storageBase + stageOffset;
-        SmallVector<uint32_t, 2> partitionBases =
-            advancePartitionBases(region.partitionBases, stageOffset);
-        FailureOr<BufferRegion> subBuffer = getMemDescRegion(
-            storageBase, region.affineOffset, memdescIndexOp.getType(), op,
-            &footprintCache, partitionBases, region.affinePartitionOffset,
-            region.affineCTAOffset);
-        if (failed(subBuffer))
-          return failure();
-        regionInfo.regions.insert(std::move(*subBuffer));
+        regionInfo.regions.insert(getMemDescRegion(
+            region.storageBase + stageOffset, region.affineOffset,
+            memdescIndexOp.getType(), &footprintCache,
+            advancePartitionBases(region.partitionBases, stageOffset),
+            region.affinePartitionOffset, region.affineCTAOffset));
       }
     }
 
-    return propagateRegions();
+    return propagateRegions(regionInfo);
   }
   if (auto memdescSubsliceOp = dyn_cast<ttg::MemDescSubsliceOp>(op)) {
-    RegionInfo in = operands[0]->getValue();
-    if (in.isUnknown()) {
-      regionInfo = in;
-      return propagateRegions();
-    }
+    const RegionInfo &in = operands[0]->getValue();
+    if (in.isUnknown())
+      return propagateRegions(in);
     MemDescSubsliceOffsets relativeOffset =
         getMemDescSubsliceUnpaddedOffsets(memdescSubsliceOp);
-    for (auto &region : in.regions) {
-      uint32_t affineOffset = region.affineOffset ^ relativeOffset.byteOffset;
-      uint32_t affinePartitionOffset =
-          region.affinePartitionOffset ^ relativeOffset.partitionOffset;
-      uint32_t affineCTAOffset =
-          region.affineCTAOffset ^ relativeOffset.ctaOffset;
-      FailureOr<BufferRegion> subBuffer = getMemDescRegion(
-          region.storageBase, affineOffset, memdescSubsliceOp.getType(), op,
-          &footprintCache, region.partitionBases, affinePartitionOffset,
-          affineCTAOffset);
-      if (failed(subBuffer))
-        return failure();
-      regionInfo.regions.insert(std::move(*subBuffer));
-    }
-    return propagateRegions();
+    for (auto &region : in.regions)
+      regionInfo.regions.insert(getMemDescRegion(
+          region.storageBase, region.affineOffset ^ relativeOffset.byteOffset,
+          memdescSubsliceOp.getType(), &footprintCache, region.partitionBases,
+          region.affinePartitionOffset ^ relativeOffset.partitionOffset,
+          region.affineCTAOffset ^ relativeOffset.ctaOffset));
+    return propagateRegions(regionInfo);
   }
   if (auto tmemSubsliceOp = dyn_cast<ttng::TMEMSubSliceOp>(op)) {
-    RegionInfo in = operands[0]->getValue();
-    if (in.isUnknown()) {
-      regionInfo = in;
-      return propagateRegions();
-    }
+    const RegionInfo &in = operands[0]->getValue();
+    if (in.isUnknown())
+      return propagateRegions(in);
     uint32_t relativeOffset = ttng::getTMemSubSliceOffset(
         tmemSubsliceOp.getSrc().getType(), tmemSubsliceOp.getOffset(),
         tmemSubsliceOp.getDim());
-    for (auto &region : in.regions) {
-      uint32_t affineOffset = region.affineOffset + relativeOffset;
-      FailureOr<BufferRegion> subBuffer = getMemDescRegion(
-          region.storageBase, affineOffset, tmemSubsliceOp.getType(), op,
-          &footprintCache, region.partitionBases, region.affinePartitionOffset,
-          region.affineCTAOffset);
-      if (failed(subBuffer))
-        return failure();
-      regionInfo.regions.insert(std::move(*subBuffer));
-    }
-    return propagateRegions();
+    for (auto &region : in.regions)
+      regionInfo.regions.insert(getMemDescRegion(
+          region.storageBase, region.affineOffset + relativeOffset,
+          tmemSubsliceOp.getType(), &footprintCache, region.partitionBases,
+          region.affinePartitionOffset, region.affineCTAOffset));
+    return propagateRegions(regionInfo);
   }
   if (auto selectOp = dyn_cast<arith::SelectOp>(op)) {
     if (isa<ttg::MemDescType>(selectOp.getType())) {
       regionInfo =
           RegionInfo::join(operands[1]->getValue(), operands[2]->getValue());
-      return propagateRegions();
+      return propagateRegions(regionInfo);
     }
   }
   if (auto reinterpretOp = dyn_cast<ttg::MemDescReinterpretOp>(op)) {
-    RegionInfo in = operands[0]->getValue();
-    if (in.isUnknown()) {
-      regionInfo = in;
-      return propagateRegions();
-    }
-    for (auto &region : in.regions) {
-      FailureOr<BufferRegion> reinterpreted = getMemDescRegion(
-          region.storageBase, region.affineOffset, reinterpretOp.getType(), op,
+    const RegionInfo &in = operands[0]->getValue();
+    if (in.isUnknown())
+      return propagateRegions(in);
+    for (auto &region : in.regions)
+      regionInfo.regions.insert(getMemDescRegion(
+          region.storageBase, region.affineOffset, reinterpretOp.getType(),
           &footprintCache, region.partitionBases, region.affinePartitionOffset,
-          region.affineCTAOffset);
-      if (failed(reinterpreted))
-        return failure();
-      regionInfo.regions.insert(std::move(*reinterpreted));
-    }
-    return propagateRegions();
+          region.affineCTAOffset));
+    return propagateRegions(regionInfo);
   }
-  if (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp>(op)) {
-    regionInfo = operands[0]->getValue();
-    return propagateRegions();
-  }
+  if (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp>(op))
+    return propagateRegions(operands[0]->getValue());
   if (isa<ttng::WarpGroupDotWaitOp>(op)) {
     for (auto [operand, result] : llvm::zip_equal(operands, results))
       propagateIfChanged(result, result->join(operand->getValue()));
