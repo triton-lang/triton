@@ -746,7 +746,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiExitLaunchCallbacks(
     return;
   if (deactivated) // Profiler is deactivated
     return;
-  profiler.correlation.submit(threadState.numNodes, callbackData->correlationId);
+  profiler.correlation.submit(threadState.numNodes,
+                              callbackData->correlationId);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::handleApiCallbacks(
