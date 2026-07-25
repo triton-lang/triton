@@ -168,8 +168,7 @@ protected:
 
     Correlation() = default;
 
-    void submit(size_t numTasks,
-                uint64_t correlationId = Scope::DummyScopeId) {
+    void submit(size_t numTasks, uint64_t correlationId = Scope::DummyScopeId) {
       atomicMax(maxSubmittedCorrelationId, correlationId);
       numSubmittedTasks.fetch_add(numTasks);
     }

@@ -458,8 +458,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
                           profiler.correlation.externIdToState,
                           externIdToStateCache, dataPhases, activity);
       numCompletedTasks += completion.countsAsTask;
-      maxCorrelationId =
-          std::max(maxCorrelationId, completion.correlationId);
+      maxCorrelationId = std::max(maxCorrelationId, completion.correlationId);
     } else if (status == CUPTI_ERROR_MAX_LIMIT_REACHED) {
       break;
     } else {

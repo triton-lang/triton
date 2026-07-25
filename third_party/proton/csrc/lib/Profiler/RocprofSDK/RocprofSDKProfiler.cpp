@@ -483,14 +483,13 @@ bool processKernelRecord(
   phaseTracker.complete(dataToEntry, dataPhases);
 
   bool complete = false;
-  externIdToState.withWrite(externId,
-                            [&](RocprofSDKProfiler::ExternIdState &state) {
-                              if (state.numNodes !=
-                                      std::numeric_limits<size_t>::max() &&
-                                  state.numNodes > 0)
-                                --state.numNodes;
-                              complete = state.numNodes == 0;
-                            });
+  externIdToState.withWrite(
+      externId, [&](RocprofSDKProfiler::ExternIdState &state) {
+        if (state.numNodes != std::numeric_limits<size_t>::max() &&
+            state.numNodes > 0)
+          --state.numNodes;
+        complete = state.numNodes == 0;
+      });
   if (complete) {
     corrIdToExternId.erase(record->correlation_id.internal);
     externIdToState.erase(externId);
@@ -620,14 +619,13 @@ void processGraphKernelRecord(
                                       : externState.dataToEntry,
                         dataPhases);
   bool complete = false;
-  externIdToState.withWrite(externId,
-                            [&](RocprofSDKProfiler::ExternIdState &state) {
-                              if (state.numNodes !=
-                                      std::numeric_limits<size_t>::max() &&
-                                  state.numNodes > 0)
-                                --state.numNodes;
-                              complete = state.numNodes == 0;
-                            });
+  externIdToState.withWrite(
+      externId, [&](RocprofSDKProfiler::ExternIdState &state) {
+        if (state.numNodes != std::numeric_limits<size_t>::max() &&
+            state.numNodes > 0)
+          --state.numNodes;
+        complete = state.numNodes == 0;
+      });
   if (complete)
     externIdToState.erase(externId);
 }
