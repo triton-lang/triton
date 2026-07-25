@@ -179,7 +179,9 @@ MemDescFootprint getMemDescAddresses(
   };
   SmallVector<PhysicalBasis> bases;
   bool hasCTAAddressVariation = false;
-  for (auto [dim, dimSize] : llvm::zip_equal(dims, shape)) {
+  for (auto dimAndSize : llvm::zip_equal(dims, shape)) {
+    auto dim = std::get<0>(dimAndSize);
+    auto dimSize = std::get<1>(dimAndSize);
     unsigned numBits = llvm::Log2_64(dimSize);
     for (unsigned bit = 0; bit < numBits; ++bit) {
       auto basis = [&](StringAttr name) {
