@@ -738,7 +738,7 @@ def test_async_copy_mbarrier():
     torch.testing.assert_close(out[20:], torch.zeros((12, 32), **tensor_opts))
 
 
-# Equivalence-class multicast: cta_mask selects which CTA-ID bits to multicast
+# Equivalence-class multicast: multicast_cta selects which CTA-ID bits to multicast
 # along.  Two CTAs share a class when (id_a & ~mask) == (id_b & ~mask).
 #
 #   CTA ID   0x0  0x1  0x2  0x3  0x4  0x5  0x6  0x7
@@ -746,33 +746,33 @@ def test_async_copy_mbarrier():
 #   classes: {0,1,4,5}, {2,3,6,7}  (groups of 4)
 #
 # Multicast requires the identity CGA layout, so two_ctas barriers are not
-# supported. All legal cta_mask values are tested; cta_mask=0 exercises the
+# supported. All legal multicast_cta values are tested; multicast_cta=0 exercises the
 # non-multicast path.
 @pytest.mark.parametrize("num_ctas", [2, 4, 8])
-@pytest.mark.parametrize("cta_mask", range(8))
+@pytest.mark.parametrize("multicast_cta", range(8))
 @pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
-def test_mbarrier_arrive_multicast(num_ctas, cta_mask):
-    if cta_mask >= num_ctas:
-        pytest.skip("cta_mask must be < num_ctas")
-    init_count = 1 << cta_mask.bit_count()
+def test_mbarrier_arrive_multicast(num_ctas, multicast_cta):
+    if multicast_cta >= num_ctas:
+        pytest.skip("multicast_cta must be < num_ctas")
+    init_count = 1 << multicast_cta.bit_count()
 
     @gluon.jit
-    def kernel(out_ptr, cta_mask: ttgl.constexpr, init_count: ttgl.constexpr):
+    def kernel(out_ptr, multicast_cta: ttgl.constexpr, init_count: ttgl.constexpr):
         bar = rubin.mbarrier.allocate_mbarrier()
         rubin.mbarrier.init(bar, count=init_count)
-        rubin.mbarrier.arrive(bar, cta_mask=cta_mask)
+        rubin.mbarrier.arrive(bar, multicast_cta=multicast_cta)
         rubin.mbarrier.wait(bar, 0)
         rubin.mbarrier.invalidate(bar)
         ttgl.store(out_ptr + ttgl.program_id(0), ttgl.program_id(0))
 
     out = torch.zeros(num_ctas, device="cuda", dtype=torch.int32)
-    compiled = kernel[(num_ctas, )](out, cta_mask, init_count, num_ctas=num_ctas, num_warps=4)
+    compiled = kernel[(num_ctas, )](out, multicast_cta, init_count, num_ctas=num_ctas, num_warps=4)
 
     ttgir = compiled.asm["ttgir"]
-    if cta_mask:
-        assert f"ctaMask = {cta_mask} : i32" in ttgir, "Expected ctaMask in TTGIR"
+    if multicast_cta:
+        assert f"multicastCTA = {multicast_cta} : i32" in ttgir, "Expected multicastCTA in TTGIR"
     else:
-        assert "ctaMask" not in ttgir, "Expected no ctaMask in TTGIR"
+        assert "multicastCTA" not in ttgir, "Expected no multicastCTA in TTGIR"
 
     torch.testing.assert_close(out, torch.arange(num_ctas, device="cuda", dtype=torch.int32))
 
@@ -782,7 +782,7 @@ def test_mbarrier_arrive_multicast(num_ctas, cta_mask):
 def test_mbarrier_arrive_broadcast_one_cta(num_ctas):
 
     @gluon.jit
-    def kernel(out_ptr, cta_mask: ttgl.constexpr):
+    def kernel(out_ptr, multicast_cta: ttgl.constexpr):
         pid = ttgl.program_id(0)
         cta_rank = ttgl.inline_asm_elementwise(
             "mov.u32 $0, %cluster_ctarank;",
@@ -795,7 +795,7 @@ def test_mbarrier_arrive_broadcast_one_cta(num_ctas):
         bar = rubin.mbarrier.allocate_mbarrier()
         rubin.mbarrier.init(bar, count=1)
         # CTA 0 does a multicast arrive, all CTAs wait.
-        rubin.mbarrier.arrive(bar, cta_mask=cta_mask, pred=cta_rank == 0)
+        rubin.mbarrier.arrive(bar, multicast_cta=multicast_cta, pred=cta_rank == 0)
         rubin.mbarrier.wait(bar, 0)
         rubin.mbarrier.invalidate(bar)
         ttgl.store(out_ptr + pid, pid)
@@ -1809,7 +1809,9 @@ def test_tmem_copy_2d():
             offset_bases=[[0, 1], [0, 2], [32, 0], [0, 4], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 8]])
         tmem_layout: ttgl.constexpr = TensorMemoryScalesLayout()
         smem = ttgl.allocate_shared_memory(ttgl.int8, (smem_h, smem_w), layout=smem_layout)
-        tmem = allocate_tensor_memory(ttgl.int8, (smem_h, smem_w), layout=tmem_layout)
+        tmem_pool_layout: ttgl.constexpr = TensorMemoryLayout((num_rows, 256), col_stride=1)
+        tmem_pool = allocate_tensor_memory(ttgl.float32, (num_rows, 512), layout=tmem_pool_layout)
+        tmem = tmem_pool.slice(480, num_cols)._reinterpret(ttgl.int8, (smem_h, smem_w), tmem_layout)
 
         barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.constexpr(mbarrier.MBarrierLayout()))
         mbarrier.init(barrier, count=1)
@@ -1840,6 +1842,34 @@ def test_tmem_copy_2d():
     warps = torch.chunk(z_tri, chunks=4, dim=0)
     for warp in warps:
         torch.testing.assert_close(x_res, warp)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tmem_pipeline_stage_subslice_index_reinterpret():
+
+    @gluon.jit
+    def kernel(inp, out):
+        parent = allocate_tensor_memory(ttgl.float32, [5, 128, 64], TensorMemoryLayout([128, 64], col_stride=1))
+        layout: ttgl.constexpr = parent.index(0).get_reg_layout()
+        rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))[:, None]
+        cols = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, layout))[None, :]
+        for stage in ttgl.static_range(5):
+            parent.index(stage).store(ttgl.load(inp + stage * 8192 + rows * 64 + cols))
+        stages = parent.slice(2, 2, dim=0)
+        first = stages._reinterpret().index(0)
+        first.store(first.load() + 11.0)
+        second = stages.slice(1, 1, dim=0).index(0)
+        second.store(second.load() + 7.0)
+        for stage in ttgl.static_range(5):
+            ttgl.store(out + stage * 8192 + rows * 64 + cols, parent.index(stage).load(layout))
+
+    inp = torch.arange(5 * 128 * 64, device="cuda", dtype=torch.int32).remainder(64).float().reshape(5, 128, 64)
+    out = torch.empty_like(inp)
+    kernel[(1, )](inp, out, num_warps=4)
+    expected = inp.clone()
+    expected[2] += 11
+    expected[3] += 7
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
 
 
 @pytest.mark.parametrize("M, N, BLOCK_M, BLOCK_N", [(256, 128, 128, 128), (128, 256, 64, 128)])
@@ -1881,6 +1911,32 @@ def test_tmem_row_slice(M, N, BLOCK_M, BLOCK_N):
     torch.testing.assert_close(out0, inp[:M // 2], atol=0, rtol=0)
     torch.testing.assert_close(out1, inp[M // 2:], atol=0, rtol=0)
     torch.testing.assert_close(out2, inp[M // 2:, N // 2:], atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tmem_source_layout_contiguous_subslice():
+
+    @gluon.jit
+    def kernel(inp, out):
+        parent = allocate_tensor_memory(ttgl.float32, [128, 512], TensorMemoryLayout([128, 256], col_stride=1))
+        parent_layout: ttgl.constexpr = parent.get_reg_layout()
+        rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, parent_layout))[:, None]
+        cols = ttgl.arange(0, 512, layout=ttgl.SliceLayout(0, parent_layout))[None, :]
+        parent.store(ttgl.load(inp + rows * 512 + cols))
+
+        view = parent.slice(208, 256)
+        view_layout: ttgl.constexpr = TensorMemoryLayout([128, 256], col_stride=1)
+        view = view._reinterpret(ttgl.float32, [128, 256], view_layout)
+        view.store(view.load() + 7.0)
+        ttgl.store(out + rows * 512 + cols, parent.load(parent_layout))
+
+    inp = torch.arange(128 * 512, device="cuda", dtype=torch.int32).remainder(64)
+    inp = inp.to(torch.float32).reshape(128, 512)
+    out = torch.empty_like(inp)
+    kernel[(1, )](inp, out, num_warps=4)
+    ref = inp.clone()
+    ref[:, 208:464] += 7
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
@@ -2136,6 +2192,33 @@ def test_block_m_64_mma():
 
     d_ref = a @ b + c
     torch.testing.assert_close(d_ref, d_tri, rtol=0.08, atol=0)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_multibuffer_prefix_subslice():
+
+    @gluon.jit
+    def kernel(out0, out3):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+        shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 32, rank=2)
+        parent = ttgl.allocate_shared_memory(ttgl.float32, [7, 32, 32], shared_layout)
+        stage0 = parent.index(0)
+        stage3 = parent.slice(3, 3, dim=0).index(0)
+        stage0.store(ttgl.full([32, 32], 1.0, ttgl.float32, layout))
+        stage3.store(ttgl.full([32, 32], 3.0, ttgl.float32, layout))
+        ttgl.barrier()
+
+        rows = ttgl.arange(0, 32, layout=ttgl.SliceLayout(1, layout))[:, None]
+        cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))[None, :]
+        offsets = rows * 32 + cols
+        ttgl.store(out0 + offsets, stage0.load(layout))
+        ttgl.store(out3 + offsets, stage3.load(layout))
+
+    out0 = torch.empty((32, 32), device="cuda", dtype=torch.float32)
+    out3 = torch.empty_like(out0)
+    kernel[(1, )](out0, out3, num_warps=4)
+    torch.testing.assert_close(out0, torch.ones_like(out0), atol=0, rtol=0)
+    torch.testing.assert_close(out3, torch.full_like(out3, 3), atol=0, rtol=0)
 
 
 def test_slice_reinterpret():
@@ -4932,10 +5015,10 @@ def test_clc_basic(num_ctas):
         mbarrier.init(clc_mbar, count=1)
 
         # Large shared memory allocation to force 1 block per SM
-        dummy = ttgl.allocate_shared_memory(ttgl.int64, [smem_size // 8 - 32], clc_mbar.layout)
+        dummy = ttgl.allocate_shared_memory(ttgl.int64, [smem_size // 8 - 32, 1], clc_mbar.layout)
 
         clc.try_cancel(clc_result, clc_mbar)
-        mbarrier.expect(clc_mbar, 16)
+        mbarrier.expect(clc_mbar, 16, from_cta=0x0)
         mbarrier.wait(clc_mbar, 0)
 
         response = clc.load_result(clc_result)

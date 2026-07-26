@@ -43,12 +43,7 @@ test-unit: all
 
 .PHONY: test-plugins
 test-plugins: all
-	TRITON_PLUGIN_PATHS=python/triton/plugins/libTritonPluginsTestLib.so \
-		$(PYTEST) -vvv python/test/unit/plugins/test_plugin.py
-	TRITON_PLUGIN_PATHS=python/triton/plugins/libMLIRDialectPlugin.so \
-		$(PYTEST) -vvv python/test/unit/plugins/test_dialect_plugin.py
-	TRITON_PLUGIN_PATHS=python/triton/plugins/libMLIRDialectPlugin.so \
-		$(PYTEST) -s -vvv python/test/unit/plugins/custom_ops.py
+	$(PYTEST) -vvv python/test/unit/plugins
 
 .PHONY: test-gluon
 test-gluon: all

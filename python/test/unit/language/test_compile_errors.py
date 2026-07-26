@@ -1,6 +1,7 @@
 import contextlib
 import pytest
 import os
+import warnings
 
 import torch
 import triton
@@ -333,7 +334,11 @@ def test_defaults_assign_no_err():
     def kernel(a=1, B: tl.constexpr = ""):
         pass
 
-    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={'a': 'i32', 'B': 'constexpr'}, constexprs={'B': ""}))
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=r"AnnAssign\.__init__ missing .* 'simple'",
+                                category=DeprecationWarning)
+        triton.compile(
+            triton.compiler.ASTSource(fn=kernel, signature={'a': 'i32', 'B': 'constexpr'}, constexprs={'B': ""}))
 
 
 def test_where_warning(fresh_triton_cache):
