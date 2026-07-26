@@ -749,6 +749,12 @@ void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
                                   bool emitBarrierAfter, RewriterBase &rewriter,
                                   const TargetInfoBase &targetInfo);
 
+Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
+                                  Value resultVal,
+                                  ConversionPatternRewriter &rewriter,
+                                  TritonLLVMOpBuilder &b, Value threadPred,
+                                  const TargetInfoBase &targetInfo);
+
 llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx);
 
 llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks(Type type);

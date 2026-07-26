@@ -247,10 +247,8 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 bool containsLocalBarrier(Operation *op) {
   if (isa<triton::AtomicPollOp>(op))
     return true;
-  if (auto atomic = dyn_cast<triton::AtomicRMWOp>(op))
-    return atomic.getSem() != triton::MemSemantic::RELAXED;
-  if (auto atomic = dyn_cast<triton::AtomicCASOp>(op))
-    return atomic.getSem() != triton::MemSemantic::RELAXED;
+  if (auto atomic = dyn_cast<triton::AtomicOpInterface>(op))
+    return atomic.getMemSemantic() != triton::MemSemantic::RELAXED;
   if (isa<gpu::BarrierOp>(op))
     return true;
   if (isa<ttng::ClusterBarrierOp>(op))
@@ -270,12 +268,89 @@ bool containsLocalBarrier(Operation *op) {
   return false;
 }
 
+struct LocalBarrierStages {
+  // Stages are independent: for example, a release atomic with scratch has
+  // both a leading ordering barrier and a scratch rendezvous.
+  bool beforeMemoryEffects = false;
+  bool afterMemoryEffects = false;
+  bool betweenMemoryEffects = false;
+};
+
+static Allocation::BufferId getScratchBufferId(Operation *op,
+                                               Allocation *allocation) {
+  // A call's allocation belongs to the callee and is translated separately.
+  if (isa<triton::CallOp>(op))
+    return Allocation::InvalidBufferId;
+  return allocation->getBufferId(op);
+}
+
+static bool scratchBufferUsesWarpSync(Operation *op) {
+  auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
+  if (!cvt)
+    return false;
+
+  auto srcTy = cast<RankedTensorType>(cvt.getSrc().getType());
+  auto dstTy = cast<RankedTensorType>(cvt.getType());
+  auto srcLayout = triton::gpu::toLinearLayout(srcTy);
+  auto dstLayout = triton::gpu::toLinearLayout(dstTy);
+  auto kWarp = StringAttr::get(op->getContext(), "warp");
+  return mlir::isCvtDimSync(srcLayout, dstLayout, kWarp);
+}
+
+static LocalBarrierStages getLocalBarrierStages(Operation *op,
+                                                Allocation *allocation) {
+  LocalBarrierStages stages;
+  auto scratchBufferId = getScratchBufferId(op, allocation);
+  bool hasScratchBarrier = scratchBufferId != Allocation::InvalidBufferId &&
+                           !scratchBufferUsesWarpSync(op);
+
+  // Atomic polls always end in a rendezvous. With scratch, the rendezvous is
+  // between the scratch write and read; otherwise it follows all effects.
+  if (isa<triton::AtomicPollOp>(op)) {
+    stages.betweenMemoryEffects = hasScratchBarrier;
+    stages.afterMemoryEffects = !hasScratchBarrier;
+    return stages;
+  }
+
+  if (auto atomic = dyn_cast<triton::AtomicOpInterface>(op)) {
+    auto sem = atomic.getMemSemantic();
+    stages.beforeMemoryEffects = sem == triton::MemSemantic::RELEASE ||
+                                 sem == triton::MemSemantic::ACQUIRE_RELEASE;
+    stages.afterMemoryEffects =
+        !hasScratchBarrier && (sem == triton::MemSemantic::ACQUIRE ||
+                               sem == triton::MemSemantic::ACQUIRE_RELEASE);
+    // Scalar-result broadcast uses a scratch write, rendezvous, and read for
+    // every memory semantic, including relaxed.
+    stages.betweenMemoryEffects = hasScratchBarrier;
+    return stages;
+  }
+
+  // Scratch-backed operations contain a rendezvous between their scratch
+  // write and read phases. Other barrier-like operations behave as a barrier
+  // immediately before the operation.
+  stages.betweenMemoryEffects = hasScratchBarrier;
+  stages.beforeMemoryEffects = containsLocalBarrier(op);
+  return stages;
+}
+
 // Returns true if the same block has a later wait or local barrier before any
 // memory effect or nested control flow.
-static bool hasSyncPointBeforeMemoryEffect(Operation *op) {
+static bool hasSyncPointBeforeMemoryEffect(Operation *op,
+                                           Allocation *allocation) {
   for (Operation *next = op->getNextNode(); next; next = next->getNextNode()) {
-    if (containsLocalBarrier(next) ||
+    auto stages = getLocalBarrierStages(next, allocation);
+    if (stages.beforeMemoryEffects ||
         next->hasTrait<mlir::OpTrait::MemWaitOpTrait>())
+      return true;
+
+    // A contained barrier follows the operation's incoming shared-memory
+    // effects, so it cannot protect those effects from the preceding wait.
+    if (stages.betweenMemoryEffects)
+      return false;
+
+    // Barriers classified as "after" have no shared-memory effects before
+    // them. Currently these are non-scratch atomics and polls.
+    if (stages.afterMemoryEffects)
       return true;
 
     if (isa<RegionBranchOpInterface>(next) || !isMemoryEffectFree(next))
@@ -287,8 +362,9 @@ static bool hasSyncPointBeforeMemoryEffect(Operation *op) {
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
-  if (containsLocalBarrier(op)) {
-    // If the current op is a local barrier, we sync previous reads and writes
+  auto barrierStages = getLocalBarrierStages(op, allocation);
+  if (barrierStages.beforeMemoryEffects) {
+    // Model a leading local barrier before handling the operation's effects.
     blockInfo->sync();
   }
 
@@ -296,7 +372,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   // point before memory is accessed, insert a barrier op and sync. This avoids
   // redundant barriers by deferring the barrier to the later sync point.
   if (op->hasTrait<mlir::OpTrait::MemWaitOpTrait>() &&
-      !hasSyncPointBeforeMemoryEffect(op)) {
+      !hasSyncPointBeforeMemoryEffect(op, allocation)) {
     builder->setInsertionPointAfter(op);
     insertBarrier(op, builder);
     blockInfo->sync();
@@ -304,7 +380,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   }
 
   BlockInfo curBlockInfo;
-  auto scratchBufferId = Allocation::InvalidBufferId;
+  auto scratchBufferId = getScratchBufferId(op, allocation);
   if (isa<triton::CallOp>(op)) {
     // Inter-function dependencies
     auto callOpInterface = dyn_cast<CallOpInterface>(op);
@@ -340,7 +416,6 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
         }
       }
     }
-    scratchBufferId = allocation->getBufferId(op);
   }
 
   // Scratch buffer operations consist of a series of shared memory operations
@@ -348,20 +423,6 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   // read/write operations, and ending with a shared memory read, i.e., shared
   // memory write -> ... -> shared memory read.
   if (scratchBufferId != Allocation::InvalidBufferId) {
-    // Detect warp-synchronous convert-layout operations. These emit a
-    // warp-level barrier (warp.sync) rather than a CTA-wide barrier between
-    // the internal shared-memory write and read phases. For these ops, we must
-    // not globally clear pending dependencies.
-    bool isWarpSync = false;
-    if (auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-      auto srcTy = cast<RankedTensorType>(cvt.getSrc().getType());
-      auto dstTy = cast<RankedTensorType>(cvt.getType());
-      auto srcLayout = triton::gpu::toLinearLayout(srcTy);
-      auto dstLayout = triton::gpu::toLinearLayout(dstTy);
-      auto kWarp = StringAttr::get(op->getContext(), "warp");
-      isWarpSync = mlir::isCvtDimSync(srcLayout, dstLayout, kWarp);
-    }
-
     bool hasExplicitSharedDeps = !curBlockInfo.syncReadSlices.empty() ||
                                  !curBlockInfo.syncWriteSlices.empty();
     if (hasExplicitSharedDeps &&
@@ -379,10 +440,16 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       builder->setInsertionPoint(op);
       insertBarrier(op, builder);
     }
-    // Ops with a scratch buffer that don't use warp.sync internally sync
-    // read/write on shared memory
-    if (insertCTABarrier || !isWarpSync)
+    if (insertCTABarrier)
       blockInfo->sync();
+
+    if (barrierStages.betweenMemoryEffects) {
+      // The internal barrier synchronizes all incoming effects. Do not carry
+      // them past the operation; only effects after the barrier are outgoing.
+      blockInfo->join(curBlockInfo);
+      blockInfo->sync();
+      curBlockInfo.sync();
+    }
     curBlockInfo.syncReadSlices[scratchSlice].insert(op);
   } else if (blockInfo->isIntersected(curBlockInfo, filter, allocation)) {
     builder->setInsertionPoint(op);
@@ -392,5 +459,10 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   // Update the region info, even if barrier is inserted, we have to maintain
   // the current op's read/write buffers.
   blockInfo->join(curBlockInfo);
+
+  if (barrierStages.afterMemoryEffects) {
+    // Model a trailing local barrier after handling the operation's effects.
+    blockInfo->sync();
+  }
 }
 } // namespace mlir

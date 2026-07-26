@@ -43,12 +43,7 @@ test-unit: all
 
 .PHONY: test-plugins
 test-plugins: all
-	TRITON_PLUGIN_PATHS=python/triton/plugins/libTritonPluginsTestLib.so \
-		$(PYTEST) -vvv python/test/unit/plugins/test_plugin.py
-	TRITON_PLUGIN_PATHS=python/triton/plugins/libMLIRDialectPlugin.so \
-		$(PYTEST) -vvv python/test/unit/plugins/test_dialect_plugin.py
-	TRITON_PLUGIN_PATHS=python/triton/plugins/libMLIRDialectPlugin.so \
-		$(PYTEST) -s -vvv python/test/unit/plugins/custom_ops.py
+	$(PYTEST) -vvv python/test/unit/plugins
 
 .PHONY: test-gluon
 test-gluon: all
@@ -70,7 +65,7 @@ test-microbenchmark: all
 .PHONY: test-interpret
 test-interpret: all
 	cd python/test/unit && TRITON_INTERPRET=1 $(PYTEST) -n 16 -m interpreter cuda language/test_core.py language/test_standard.py \
-		language/test_random.py language/test_block_pointer.py language/test_subprocess.py language/test_line_info.py \
+		language/test_random.py language/test_subprocess.py language/test_line_info.py \
 		language/test_tuple.py runtime/test_launch.py runtime/test_autotuner.py::test_kwargs[False] \
 		../../tutorials/06-fused-attention.py::test_op --device=cpu
 

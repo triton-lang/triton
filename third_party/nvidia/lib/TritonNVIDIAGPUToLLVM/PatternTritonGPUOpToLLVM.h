@@ -74,7 +74,8 @@ void populateClampFOpToLLVMPattern(LLVMTypeConverter &typeConverter,
 
 void populateTCGen5MMAOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                       RewritePatternSet &patterns,
-                                      PatternBenefit benefit);
+                                      PatternBenefit benefit,
+                                      const TargetInfo &targetInfo);
 
 void populateTensorMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                          RewritePatternSet &patterns,

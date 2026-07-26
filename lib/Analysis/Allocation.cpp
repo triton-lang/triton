@@ -10,7 +10,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -31,7 +30,6 @@ static size_t getPartitionIndex(size_t offset, size_t partitionSize) {
 }
 
 namespace ttng = mlir::triton::nvidia_gpu;
-namespace tti = mlir::triton::instrument;
 
 namespace mlir {
 
@@ -128,9 +126,8 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     if (!poll.getTimeout())
       return 0;
   }
-  if (isa<gpu::LocalAtomicScatterRMWOp, AtomicPollOp, AtomicRMWOp, AtomicCASOp,
-          tti::ExperimentalGSanAtomicRMWOp, tti::ExperimentalGSanAtomicCASOp>(
-          op)) {
+  if (isa<gpu::LocalAtomicScatterRMWOp, AtomicPollOp>(op) ||
+      isa<AtomicOpInterface>(op)) {
     auto value = op->getOperand(0);
     auto smemShape = getRepShapeForAtomic(op->getResult(0));
     auto elems = getNumScratchElements(smemShape);
@@ -196,17 +193,10 @@ private:
       unsigned numLogicalPieces = partitionedEnc.getNumLogicalPieces();
 
       // Calculate size per logical piece
-      auto partitionLayout = partitionedEnc.getPartitionLayout();
-      int64_t totalNumElems = 0;
-
-      if (auto paddedEnc =
-              dyn_cast<gpu::PaddedSharedEncodingAttr>(partitionLayout)) {
-        SmallVector<int64_t> unpaddedShape = gpu::getShapePerCTA(allocType);
-        totalNumElems = paddedEnc.getPaddedSize(unpaddedShape);
-      } else {
-        auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
-        totalNumElems = product<int64_t>(shapePerCTA);
-      }
+      int64_t totalNumElems = gpu::getAllocationElems(
+          allocType.getEncoding(), allocType.getAllocShape());
+      if (auto padded = gpu::getPaddedEncoding(allocType.getEncoding()))
+        totalNumElems = padded.getPaddedSize({totalNumElems});
 
       int64_t totalBytes =
           totalNumElems *
@@ -224,15 +214,10 @@ private:
     }
 
     // Standard (non-partitioned) buffer allocation
-    int64_t numElems = 0;
-    if (auto paddedEnc =
-            dyn_cast<gpu::PaddedSharedEncodingAttr>(allocType.getEncoding())) {
-      SmallVector<int64_t> unpaddedShape = gpu::getShapePerCTA(allocType);
-      numElems = paddedEnc.getPaddedSize(unpaddedShape);
-    } else {
-      auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
-      numElems = product<int64_t>(shapePerCTA);
-    }
+    int64_t numElems = gpu::getAllocationElems(allocType.getEncoding(),
+                                               allocType.getAllocShape());
+    if (auto padded = gpu::getPaddedEncoding(allocType.getEncoding()))
+      numElems = padded.getPaddedSize({numElems});
     int64_t bytes =
         numElems * getIntOrFloatOrPtrBitWidth(allocType.getElementType()) / 8;
 

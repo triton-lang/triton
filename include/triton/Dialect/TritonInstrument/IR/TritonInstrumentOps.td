@@ -63,6 +63,20 @@ def TTI_ExperimentalMemDescToI32Op : TTI_Op<"experimental_memdesc_to_i32", [Pure
   let assemblyFormat = "$memdesc attr-dict `:` type($memdesc)";
 }
 
+def TTI_ExperimentalMemoryOffsetToI32Op
+    : TTI_Op<"experimental_memory_offset_to_i32", [Pure]> {
+  let summary = "Materialize a memory-space offset as an i32 address";
+  let description = [{
+    Add a static byte or encoded tensor-memory offset to the current
+    function's memory-space base and return the 32-bit address used by ConSan.
+    This provides the runtime identity corresponding to a compile-time
+    BufferRegion key without materializing a descriptor table.
+  }];
+  let arguments = (ins I32Attr:$offset, TT_MemTypeAttr:$memType);
+  let results = (outs I32:$result);
+  let assemblyFormat = "$offset `,` $memType attr-dict";
+}
+
 def TTI_ExperimentalClusterCTAIdOp
     : TTI_Op<"experimental_cluster_cta_id", [Pure]> {
   let summary = "Get the CTA id within the current cluster";
@@ -105,7 +119,22 @@ def TTI_ExperimentalLocalGatherOp
 def TTI_ExperimentalGSanInitOp
     : TTI_Op<"experimental_gsan_init"> {
   let summary = "Initialize GSan thread";
+  let arguments = (ins BoolAttr:$acquireStreamClock);
+  let assemblyFormat = "$acquireStreamClock attr-dict";
+}
+
+def TTI_ExperimentalGSanKernelExitOp
+    : TTI_Op<"experimental_gsan_kernel_exit", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Publish a completed GSan thread clock to its launch stream";
   let arguments = (ins);
+  let assemblyFormat = "attr-dict";
+}
+
+def TTI_ExperimentalGSanGridDependencyWaitOp
+    : TTI_Op<"experimental_gsan_grid_dependency_wait", [MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>]> {
+  let summary = "Acquire completed predecessor clocks after a grid dependency wait";
+  let arguments = (ins);
+  let assemblyFormat = "attr-dict";
 }
 
 def TTI_ExperimentalGSanTensorDescInfoOp
@@ -175,6 +204,7 @@ def TTI_ExperimentalGSanAtomicPollOp
 }
 
 def TTI_ExperimentalGSanAtomicRMWOp : TTI_Op<"experimental_gsan_atomic_rmw", [
+  AtomicOpInterface,
   SameOperandsAndResultShape,
   SameOperandsAndResultEncoding,
   TypesMatchWith<"ptr type matches value type", "val", "ptr",
@@ -200,6 +230,7 @@ def TTI_ExperimentalGSanAtomicRMWOp : TTI_Op<"experimental_gsan_atomic_rmw", [
 }
 
 def TTI_ExperimentalGSanAtomicCASOp : TTI_Op<"experimental_gsan_atomic_cas", [
+  AtomicOpInterface,
   SameOperandsAndResultShape,
   SameOperandsAndResultEncoding,
   TypesMatchWith<"ptr type matches cmp type", "cmp", "ptr",

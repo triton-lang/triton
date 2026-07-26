@@ -314,45 +314,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// Gather of a sub-byte element type: the lds_addr byte-delta scaling truncates
-// to zero for <8-bit elements.
-#blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
-#slice = #ttg.slice<{dim = 1, parent = #blocked}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @tdm_gather_invalid_subbyte_element(
-    %tensorDesc: !tt.tensordesc<16x64xi4, #shared>,
-    %memDesc: !ttg.memdesc<16x64xi4, #shared, #smem, mutable>,
-    %row_indices: tensor<16xi32, #slice>
-  ) {
-    // expected-error @+1 {{TDM gather requires element types of at least 8 bits}}
-    %token = amdg.async_tdm_gather %tensorDesc[%row_indices] to %memDesc : tensor<16xi32, #slice>, !ttg.memdesc<16x64xi4, #shared, #smem, mutable> -> !tt.tensordesc<16x64xi4, #shared>
-    tt.return
-  }
-}
-
-// -----
-
-// Scatter of a sub-byte element type: same lds_addr byte-delta truncation.
-#blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
-#slice = #ttg.slice<{dim = 1, parent = #blocked}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @tdm_scatter_invalid_subbyte_element(
-    %tensorDesc: !tt.tensordesc<16x64xi4, #shared>,
-    %memDesc: !ttg.memdesc<16x64xi4, #shared, #smem, mutable>,
-    %row_indices: tensor<16xi32, #slice>
-  ) {
-    // expected-error @+1 {{TDM scatter requires element types of at least 8 bits}}
-    %token = amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<16xi32, #slice>, !ttg.memdesc<16x64xi4, #shared, #smem, mutable> -> !tt.tensordesc<16x64xi4, #shared>
-    tt.return
-  }
-}
-
-// -----
-
 #blocked1 = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0], CGALayout = [[0, 0], [0, 0]]}>
 #slice1 = #ttg.slice<{dim = 1, parent = #blocked1}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
@@ -481,7 +442,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 #fp4_scale_bad = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"ttg.target" = "hip:gfx950", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @scaled_upcast_fp4_incompatible_scale_encoding(%src: tensor<16x32xi8, #fp4_src>, %scale: tensor<16x64xbf16, #fp4_scale_bad>) {
-    // expected-error @+1 {{scale and output encodings are not compatible}}
+    // expected-error @+1 {{scale encoding is not compatible with the inferred scale layout}}
     %0 = amdg.scaled_upcast_fp4 %src scale %scale {axis = 1 : i32} : tensor<16x32xi8, #fp4_src>, tensor<16x64xbf16, #fp4_scale_bad> -> tensor<16x64xbf16, #fp4_dst>
     tt.return
   }
@@ -540,6 +501,21 @@ module attributes {"ttg.target" = "hip:gfx950", "ttg.num-ctas" = 1 : i32, "ttg.n
   tt.func @scaled_upcast_fp8_invalid_result_type(%src: tensor<16x64xf8E4M3FN, #blocked>, %scale: tensor<16x64xbf16, #blocked>) {
     // expected-error @+1 {{must be ranked tensor of 16-bit float or bfloat16 type values}}
     %0 = amdg.scaled_upcast_fp8 %src scale %scale : tensor<16x64xf8E4M3FN, #blocked>, tensor<16x64xbf16, #blocked> -> tensor<16x64xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// Compact scale where the scale layout does not match the value layout, so one
+// scale value spans multiple scale blocks.
+#packed = #ttg.linear<{register = [[0, 16], [0, 1], [0, 2], [0, 4], [0, 8]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
+#unpacked = #ttg.linear<{register = [[0, 1], [0, 32], [0, 2], [0, 4], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
+#scale = #ttg.linear<{register = [[0, 1]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @scaled_upcast_fp4_pk8_group_straddles_scale_block(%x: tensor<32x32xi8, #packed>, %s: tensor<32x2xi8, #scale>) {
+    // expected-error @+1 {{the 8 elements of a v_cvt_scale_pk8 group would not share a single scale}}
+    %u = amdg.scaled_upcast_fp4 %x scale %s {axis = 1 : i32} : tensor<32x32xi8, #packed>, tensor<32x2xi8, #scale> -> tensor<32x64xbf16, #unpacked>
     tt.return
   }
 }
@@ -664,6 +640,62 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   ) {
     // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
     %token = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<64x64xf16, #load_desc> -> !ttg.memdesc<64x64xf16, #load_alloc, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// scaled_upcast_fp4: scale and output rank mismatch.
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @scaled_upcast_fp4_rank_mismatch(%x: tensor<16x32xi8>, %s: tensor<64xi8>) {
+    // expected-error @+1 {{scale and output must have the same rank}}
+    %u = amdg.scaled_upcast_fp4 %x scale %s {axis = 1 : i32} : tensor<16x32xi8>, tensor<64xi8> -> tensor<16x64xbf16>
+    tt.return
+  }
+}
+
+// -----
+
+// scaled_upcast_fp4: axis out of range for the tensor rank.
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @scaled_upcast_fp4_axis_out_of_range(%x: tensor<16x32xi8>, %s: tensor<16x64xi8>) {
+    // expected-error @+1 {{axis out of range: 2 for rank 2}}
+    %u = amdg.scaled_upcast_fp4 %x scale %s {axis = 2 : i32} : tensor<16x32xi8>, tensor<16x64xi8> -> tensor<16x64xbf16>
+    tt.return
+  }
+}
+
+// -----
+
+// scaled_upcast_fp4: scale and output differ on a non-scaled dimension.
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @scaled_upcast_fp4_non_axis_mismatch(%x: tensor<16x32xi8>, %s: tensor<8x64xi8>) {
+    // expected-error @+1 {{scale and output must match on non-axis dimensions}}
+    %u = amdg.scaled_upcast_fp4 %x scale %s {axis = 1 : i32} : tensor<16x32xi8>, tensor<8x64xi8> -> tensor<16x64xbf16>
+    tt.return
+  }
+}
+
+// -----
+
+// scaled_upcast_fp4: output axis extent not divisible by the scale axis extent.
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @scaled_upcast_fp4_axis_not_divisible(%x: tensor<16x32xi8>, %s: tensor<16x48xi8>) {
+    // expected-error @+1 {{expected output.shape[axis] to be divisible by scale.shape[axis]}}
+    %u = amdg.scaled_upcast_fp4 %x scale %s {axis = 1 : i32} : tensor<16x32xi8>, tensor<16x48xi8> -> tensor<16x64xbf16>
+    tt.return
+  }
+}
+
+// -----
+
+// scaled_upcast_fp4: scale carries an encoding but the output does not.
+#enc = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @scaled_upcast_fp4_one_sided_encoding(%x: tensor<16x32xi8>, %s: tensor<16x64xi8, #enc>) {
+    // expected-error @+1 {{scale and output must both have an encoding, or neither}}
+    %u = amdg.scaled_upcast_fp4 %x scale %s {axis = 1 : i32} : tensor<16x32xi8>, tensor<16x64xi8, #enc> -> tensor<16x64xbf16>
     tt.return
   }
 }

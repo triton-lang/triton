@@ -9,7 +9,7 @@ from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy
 from triton.tools.tensor_descriptor import TensorDescriptor
 
-from triton._internal_testing import is_blackwell, is_cuda, is_ampere_or_newer, is_hopper_or_newer
+from triton._internal_testing import is_blackwell, is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_sm12x
 from triton.experimental.gsan import create_mem_pool
 from triton._C.libtriton.gsan_testing import AtomicScope, SHADOW_GRANULARITY_BYTES, ScalarClock
 from triton.experimental.gsan._testing_utils import (atomic_poll, load_one_i32, shadow_cell_from_address, store_one_i32,
@@ -131,6 +131,84 @@ def test_load_store_updates_shadow(with_gsan):
     assert cell1.num_reads == 1
 
 
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+def test_cuda_graph_capture_is_rejected(with_gsan):
+    target = torch.zeros(1, dtype=torch.int32, device="cuda")
+    scratch = torch.zeros_like(target)
+    load_one_i32[(1, )](target, scratch, num_warps=1)
+    torch.cuda.synchronize()
+
+    cuda_utils = triton.runtime.driver.active.utils
+    assert not cuda_utils.is_stream_capturing(torch.cuda.current_stream().cuda_stream)
+
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        scratch.zero_()
+        assert cuda_utils.is_stream_capturing(torch.cuda.current_stream().cuda_stream)
+        with pytest.raises(RuntimeError, match="GSan does not support CUDA graph capture"):
+            load_one_i32[(1, )](target, scratch, num_warps=1)
+
+    assert not cuda_utils.is_stream_capturing(torch.cuda.current_stream().cuda_stream)
+
+
+@triton.jit
+def _pdl_producer_kernel(payload_ptr):
+    pid = tl.program_id(0)
+    tl.store(payload_ptr + pid, 1000 + pid)
+    tl.extra.cuda.gdc_launch_dependents()
+
+
+@triton.jit
+def _pdl_consumer_kernel(payload_ptr, result_ptr):
+    tl.extra.cuda.gdc_wait()
+    pid = tl.program_id(0)
+    value = tl.load(payload_ptr + pid)
+    tl.store(result_ptr + pid, value)
+
+
+@triton.jit
+def _pdl_stage_kernel(payload_ptr, INDEX: tl.constexpr, WAIT_PREDECESSOR: tl.constexpr):
+    if WAIT_PREDECESSOR:
+        tl.extra.cuda.gdc_wait()
+    tl.store(payload_ptr + INDEX, 1000 + INDEX)
+    tl.extra.cuda.gdc_launch_dependents()
+
+
+@triton.jit
+def _pdl_two_back_consumer_kernel(payload_ptr, result_ptr):
+    value = tl.load(payload_ptr)
+    tl.store(result_ptr, value)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
+def test_programmatic_dependent_launch_wait_synchronizes_vector_clocks(with_gsan, capfd):
+    payload = torch.zeros(2, dtype=torch.int32, device="cuda")
+    result = torch.full_like(payload, -1)
+
+    _pdl_producer_kernel[(2, )](payload, num_warps=1)
+    compiled = _pdl_consumer_kernel[(2, )](payload, result, num_warps=1, launch_pdl=True)
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(result, torch.tensor([1000, 1001], device="cuda", dtype=torch.int32))
+    assert "griddepcontrol.wait" in compiled.asm["ptx"]
+    assert "red.relaxed.gpu.max.u32" in compiled.asm["ptx"]
+    _assert_no_gsan_runtime_output(capfd)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
+def test_normal_launch_after_programmatic_dependent_launch_acquires_all_predecessors(with_gsan, capfd):
+    payload = torch.zeros(2, dtype=torch.int32, device="cuda")
+    result = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+
+    _pdl_stage_kernel[(1, )](payload, INDEX=0, WAIT_PREDECESSOR=False, num_warps=1)
+    _pdl_stage_kernel[(1, )](payload, INDEX=1, WAIT_PREDECESSOR=True, num_warps=1, launch_pdl=True)
+    _pdl_two_back_consumer_kernel[(1, )](payload, result, num_warps=1)
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(result, torch.tensor([1000], dtype=torch.int32, device="cuda"))
+    _assert_no_gsan_runtime_output(capfd)
+
+
 @gluon.jit
 def _gluon_ws_completion_default(out_ptr, layout: gl.constexpr):
     offsets = gl.arange(0, 128, layout=layout)
@@ -141,6 +219,45 @@ def _gluon_ws_completion_default(out_ptr, layout: gl.constexpr):
 def _gluon_ws_completion_worker(out_ptr, layout: gl.constexpr):
     offsets = 128 + gl.arange(0, 128, layout=layout)
     gl.store(out_ptr + offsets, offsets)
+
+
+@gluon.jit
+def _gluon_ws_pdl_wait_default(payload_ptr, result_ptr, layout: gl.constexpr):
+    pass
+
+
+@gluon.jit
+def _gluon_ws_pdl_wait_worker(payload_ptr, result_ptr, layout: gl.constexpr):
+    tl.extra.cuda.gdc_wait()
+    offsets = gl.arange(0, 128, layout=layout)
+    values = gl.load(payload_ptr + offsets)
+    gl.store(result_ptr + offsets, values)
+
+
+@gluon.jit(noinline=True)
+def _gluon_ws_pdl_wait_noinline_worker(payload_ptr, result_ptr, layout: gl.constexpr):
+    tl.extra.cuda.gdc_wait()
+    offsets = gl.arange(0, 128, layout=layout)
+    values = gl.load(payload_ptr + offsets)
+    gl.store(result_ptr + offsets, values)
+
+
+@gluon.jit
+def _gluon_ws_pdl_wait_kernel(payload_ptr, result_ptr):
+    layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+    gl.warp_specialize([
+        (_gluon_ws_pdl_wait_default, (payload_ptr, result_ptr, layout)),
+        (_gluon_ws_pdl_wait_worker, (payload_ptr, result_ptr, layout)),
+    ], [4], [24])
+
+
+@gluon.jit
+def _gluon_ws_pdl_wait_noinline_kernel(payload_ptr, result_ptr):
+    layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+    gl.warp_specialize([
+        (_gluon_ws_pdl_wait_default, (payload_ptr, result_ptr, layout)),
+        (_gluon_ws_pdl_wait_noinline_worker, (payload_ptr, result_ptr, layout)),
+    ], [4], [24])
 
 
 @gluon.jit
@@ -160,6 +277,35 @@ def test_gluon_warp_specialize_completes(with_gsan):
     _gluon_ws_completion_kernel[(1, )](out, num_warps=4)
     torch.cuda.synchronize()
     torch.testing.assert_close(out, expected)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
+def test_programmatic_dependent_launch_wait_inside_warp_specialize(with_gsan, capfd):
+    payload = torch.empty((128, ), dtype=torch.int32, device="cuda")
+    result = torch.full_like(payload, -1)
+
+    _pdl_producer_kernel[(128, )](payload, num_warps=1)
+    compiled = _gluon_ws_pdl_wait_kernel[(1, )](payload, result, num_warps=4, launch_pdl=True)
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(result, torch.arange(1000, 1128, device="cuda", dtype=torch.int32))
+    assert "griddepcontrol.wait" in compiled.asm["ptx"]
+    _assert_no_gsan_runtime_output(capfd)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
+def test_programmatic_dependent_launch_wait_inside_noinline_warp_specialize(with_gsan, capfd):
+    payload = torch.empty((128, ), dtype=torch.int32, device="cuda")
+    result = torch.full_like(payload, -1)
+
+    _pdl_producer_kernel[(128, )](payload, num_warps=1)
+    compiled = _gluon_ws_pdl_wait_noinline_kernel[(1, )](payload, result, num_warps=4, launch_pdl=True)
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(result, torch.arange(1000, 1128, device="cuda", dtype=torch.int32))
+    assert "tt.call" in compiled.asm["ttgir"]
+    assert "griddepcontrol.wait" in compiled.asm["ptx"]
+    _assert_no_gsan_runtime_output(capfd)
 
 
 @gluon.jit
@@ -204,6 +350,47 @@ def atomic_add_kernel(ptr, sem: tl.constexpr, scope: tl.constexpr = "gpu"):
 def atomic_cas_kernel(ptr, out_ptr, expect, sem: tl.constexpr, scope: tl.constexpr = "gpu"):
     old = tl.atomic_cas(ptr, expect, 2, sem=sem, scope=scope)
     tl.store(out_ptr, old)
+
+
+@triton.jit
+def _scalar_atomic_rmw_cluster_kernel(ptr, out_ptr):
+    old = tl.atomic_add(ptr, 1, sem="relaxed", scope="gpu")
+    offsets = tl.arange(0, 32)
+    tl.store(out_ptr + offsets, old)
+
+
+@triton.jit
+def _scalar_atomic_cas_cluster_kernel(ptr, out_ptr, expected, desired):
+    old = tl.atomic_cas(ptr, expected, desired, sem="relaxed", scope="gpu")
+    offsets = tl.arange(0, 32)
+    tl.store(out_ptr + offsets, old)
+
+
+def _assert_cluster_scalar_atomic_result(kernel):
+    initial = 0x12345678
+    target = torch.full((1, ), initial, dtype=torch.int32, device="cuda")
+    out = torch.full((32, ), -1, dtype=torch.int32, device="cuda")
+
+    if kernel is _scalar_atomic_rmw_cluster_kernel:
+        kernel[(1, )](target, out, num_warps=1, num_ctas=2)
+    else:
+        kernel[(1, )](target, out, initial, initial + 1, num_warps=1, num_ctas=2)
+    torch.cuda.synchronize()
+
+    assert target.item() == initial + 1
+    torch.testing.assert_close(out, torch.full_like(out, initial))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer() or is_sm12x(),
+                    reason="scalar multi-CTA atomics require Hopper+ and are unsupported on sm12x")
+def test_scalar_atomic_rmw_cluster_result_broadcast(with_gsan):
+    _assert_cluster_scalar_atomic_result(_scalar_atomic_rmw_cluster_kernel)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer() or is_sm12x(),
+                    reason="scalar multi-CTA atomics require Hopper+ and are unsupported on sm12x")
+def test_scalar_atomic_cas_cluster_result_broadcast(with_gsan):
+    _assert_cluster_scalar_atomic_result(_scalar_atomic_cas_cluster_kernel)
 
 
 @triton.jit
