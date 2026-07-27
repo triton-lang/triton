@@ -948,38 +948,98 @@ def test_hook_multiple_threads(tmp_path: pathlib.Path, device: str):
     assert root[1]["metrics"]["count"] == 100
 
 
-def test_pcsampling(tmp_path: pathlib.Path, device: str):
-    if not is_cuda():
-        pytest.skip("Only CUDA backend supports pc sampling")
+@triton.jit
+def _pcsampling_foo(x, y, size: tl.constexpr):
+    offs = tl.arange(0, size)
+    for _ in range(1000):
+        tl.store(y + offs, tl.load(x + offs))
 
-    if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
-        pytest.skip("PC sampling test is disabled")
 
-    @triton.jit
-    def foo(x, y, size: tl.constexpr):
-        offs = tl.arange(0, size)
-        for _ in range(1000):
-            tl.store(y + offs, tl.load(x + offs))
-
-    temp_file = tmp_path / "test_pcsampling.hatchet"
-    proton.start(str(temp_file.with_suffix("")), hook="triton", backend="cupti", mode="pcsampling")
+def _run_pcsampling_profile(temp_file: pathlib.Path, device: str, backend: str):
+    proton.start(str(temp_file.with_suffix("")), hook="triton", backend=backend, mode="pcsampling")
     with proton.scope("init"):
         x = torch.ones((1024, ), device=device, dtype=torch.float32)
         y = torch.zeros_like(x)
     with proton.scope("test"):
-        foo[(1, )](x, y, x.size()[0], num_warps=4)
+        _pcsampling_foo[(1, )](x, y, x.size()[0], num_warps=4)
     proton.finalize()
+
+
+def _total_samples(frame):
+    samples = frame["metrics"].get("num_samples", 0)
+    for child in frame["children"]:
+        samples += _total_samples(child)
+    return samples
+
+
+def test_pcsampling(tmp_path: pathlib.Path, device: str):
+    if not (is_cuda() or is_hip()):
+        pytest.skip("Only CUDA and HIP backends support pc sampling")
+
+    if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
+        pytest.skip("PC sampling test is disabled")
+
+    temp_file = tmp_path / "test_pcsampling.hatchet"
+    backend = "cupti" if is_cuda() else "rocprofiler"
+    if is_hip():
+        # AMD PC sampling is stochastic, so request a higher sample rate to
+        # make missing the short test window very unlikely. ROCprofiler reads
+        # the interval during Proton initialization, so use a fresh subprocess
+        # where the environment is set before importing this module.
+        import subprocess
+        import sys
+        import textwrap
+
+        script_file = tmp_path / "test_pcsampling_child.py"
+        script = textwrap.dedent("""
+            import importlib.util
+            import pathlib
+            import sys
+
+            module_path = pathlib.Path(sys.argv[1])
+            spec = importlib.util.spec_from_file_location("test_profile", module_path)
+            module = importlib.util.module_from_spec(spec)
+            assert spec.loader is not None
+            spec.loader.exec_module(module)
+            module._run_pcsampling_profile(pathlib.Path(sys.argv[2]), sys.argv[3], "rocprofiler")
+        """)
+        script_file.write_text(script)
+        env = os.environ.copy()
+        env["PROTON_PC_SAMPLING_INTERVAL"] = "4096"
+        try:
+            result = subprocess.run(
+                [sys.executable, str(script_file), __file__,
+                 str(temp_file), device],
+                cwd=pathlib.Path(__file__).resolve().parents[3],
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired as e:
+            stdout = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
+            stderr = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
+            pytest.fail(stdout + stderr + "PC sampling subprocess timed out")
+        assert result.returncode == 0, result.stdout + result.stderr
+    else:
+        _run_pcsampling_profile(temp_file, device, backend)
+
     with temp_file.open() as f:
         data = json.load(f)
+
     init_frame = data[0]["children"][0]
     test_frame = data[0]["children"][1]
-    # With line mapping
+
     assert "foo" in test_frame["children"][0]["frame"]["name"]
-    assert test_frame["children"][0]["children"][0]["metrics"]["num_samples"] > 0
-    assert "@" in test_frame["children"][0]["children"][0]["frame"]["name"]
+    assert _total_samples(test_frame["children"][0]) > 0
+    if is_cuda():
+        # CUPTI provides source line mapping for Triton kernels.
+        assert "@" in test_frame["children"][0]["children"][0]["frame"]["name"]
+
     # Without line mapping
     assert "elementwise" in init_frame["children"][0]["frame"]["name"]
-    assert init_frame["children"][0]["metrics"]["num_samples"] > 0
+    if is_cuda():
+        assert init_frame["children"][0]["metrics"]["num_samples"] > 0
 
 
 def test_deactivate(tmp_path: pathlib.Path, device: str):

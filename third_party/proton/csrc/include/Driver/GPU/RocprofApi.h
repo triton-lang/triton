@@ -11,6 +11,7 @@
 #include "rocprofiler-sdk/hip/api_args.h"
 #include "rocprofiler-sdk/hip/runtime_api_id.h"
 #include "rocprofiler-sdk/internal_threading.h"
+#include "rocprofiler-sdk/pc_sampling.h"
 #include "rocprofiler-sdk/registration.h"
 
 namespace proton {
@@ -39,6 +40,10 @@ rocprofiler_status_t createContext(rocprofiler_context_id_t *context);
 
 template <bool CheckSuccess>
 rocprofiler_status_t destroyContext(rocprofiler_context_id_t context);
+
+template <bool CheckSuccess>
+rocprofiler_status_t contextIsValid(rocprofiler_context_id_t context,
+                                    int *valid);
 
 template <bool CheckSuccess>
 rocprofiler_status_t startContext(rocprofiler_context_id_t context);
@@ -91,6 +96,18 @@ rocprofiler_status_t
 queryAvailableAgents(rocprofiler_agent_version_t version,
                      rocprofiler_query_available_agents_cb_t callback,
                      size_t agentSize, void *userData);
+
+template <bool CheckSuccess>
+rocprofiler_status_t queryPCSamplingAgentConfigurations(
+    rocprofiler_agent_id_t agentId,
+    rocprofiler_available_pc_sampling_configurations_cb_t cb, void *userData);
+
+template <bool CheckSuccess>
+rocprofiler_status_t configurePCSamplingService(
+    rocprofiler_context_id_t contextId, rocprofiler_agent_id_t agentId,
+    rocprofiler_pc_sampling_method_t method,
+    rocprofiler_pc_sampling_unit_t unit, uint64_t interval,
+    rocprofiler_buffer_id_t bufferId, int flags);
 
 } // namespace rocprofiler
 
