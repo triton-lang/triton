@@ -19,6 +19,7 @@
 #include <charconv>
 #include <cstddef>
 #include <iostream>
+#include <sstream>
 #include <system_error>
 #include <unordered_set>
 #include <utility>
@@ -164,6 +165,17 @@ std::optional<uint64_t> parsePCSamplingInterval(const std::string &value) {
   return parsed;
 }
 
+const char *rocprofilerStatusName(rocprofiler_status_t status) {
+  switch (status) {
+  case ROCPROFILER_STATUS_SUCCESS:
+    return "ROCPROFILER_STATUS_SUCCESS";
+  case ROCPROFILER_STATUS_ERROR_NOT_AVAILABLE:
+    return "ROCPROFILER_STATUS_ERROR_NOT_AVAILABLE";
+  default:
+    return "ROCPROFILER_STATUS_ERROR";
+  }
+}
+
 void mergePCSamplingAccum(RocprofSDKPCSampling::PCSamplingAccum &dst,
                           const RocprofSDKPCSampling::PCSamplingAccum &src) {
   for (int i = 0; i < PCSamplingMetric::PCSamplingMetricKind::Count; ++i)
@@ -215,6 +227,7 @@ RocprofSDKPCSampling::RocprofSDKPCSampling() = default;
 RocprofSDKPCSampling::~RocprofSDKPCSampling() = default;
 
 void RocprofSDKPCSampling::configure(rocprofiler_buffer_tracing_cb_t callback) {
+  pcSamplingConfigurationFailureReason.clear();
   auto intervalStr = getStrEnv("PROTON_PC_SAMPLING_INTERVAL");
   if (!intervalStr.empty()) {
     auto parsedInterval = parsePCSamplingInterval(intervalStr);
@@ -231,10 +244,25 @@ void RocprofSDKPCSampling::configure(rocprofiler_buffer_tracing_cb_t callback) {
       ROCPROFILER_AGENT_INFO_VERSION_0, agentQueryCallback,
       sizeof(rocprofiler_agent_t), &agentsWithPCSampling);
 
+  if (agentsWithPCSampling.empty()) {
+    pcSamplingConfigurationFailureReason =
+        "rocprofiler-sdk did not report PC sampling configurations for any "
+        "visible AMD GPU agent";
+    return;
+  }
+
+  std::stringstream failureDetails;
+  size_t failedConfigCount = 0;
+  size_t unsupportedConfigCount = 0;
+
   for (auto &agent : agentsWithPCSampling) {
     auto *picked = pickPCSamplingConfig(agent.configs);
-    if (!picked)
+    if (!picked) {
+      failureDetails << " agent " << agent.agentId.handle
+                     << " has no supported PC sampling method;";
+      ++failedConfigCount;
       continue;
+    }
 
     auto interval = pcSamplingInterval;
     if (interval < picked->min_interval)
@@ -261,10 +289,32 @@ void RocprofSDKPCSampling::configure(rocprofiler_buffer_tracing_cb_t callback) {
                                               pcSamplingThread);
       pcSamplingBuffers.push_back(pcSamplingBuffer);
       pcSamplingConfigured = true;
-    } else if (cfgStatus != ROCPROFILER_STATUS_ERROR_NOT_AVAILABLE) {
+    } else {
+      failureDetails << " agent " << agent.agentId.handle
+                     << " status=" << rocprofilerStatusName(cfgStatus) << "("
+                     << cfgStatus << ");";
+      ++failedConfigCount;
+      if (cfgStatus == ROCPROFILER_STATUS_ERROR_NOT_AVAILABLE)
+        ++unsupportedConfigCount;
+    }
+    if (cfgStatus != ROCPROFILER_STATUS_SUCCESS &&
+        cfgStatus != ROCPROFILER_STATUS_ERROR_NOT_AVAILABLE) {
       std::cerr << "[PROTON] PC sampling configuration failed on agent "
                 << agent.agentId.handle << " status=" << cfgStatus << std::endl;
     }
+  }
+
+  if (!pcSamplingConfigured) {
+    if (failedConfigCount == unsupportedConfigCount) {
+      pcSamplingConfigurationFailureReason =
+          "rocprofiler-sdk PC sampling service is not available for the "
+          "visible AMD GPU agents.";
+    } else {
+      pcSamplingConfigurationFailureReason =
+          "rocprofiler-sdk failed to configure PC sampling for the visible AMD "
+          "GPU agents.";
+    }
+    pcSamplingConfigurationFailureReason += failureDetails.str();
   }
 }
 
