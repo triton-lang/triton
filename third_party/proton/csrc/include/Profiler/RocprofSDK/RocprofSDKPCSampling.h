@@ -19,7 +19,8 @@
 #include <unordered_set>
 #include <vector>
 
-#if PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE
+#if PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING &&                                  \
+    PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE
 namespace rocprofiler {
 namespace sdk {
 namespace codeobj {
@@ -177,7 +178,8 @@ private:
   std::map<SourceLocationKey, std::optional<SourceLocation>>
       sourceLocationCache;
   std::mutex sourceLocationTranslatorMutex;
-#if PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE
+#if PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING &&                                  \
+    PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE
   std::unique_ptr<
       ::rocprofiler::sdk::codeobj::disassembly::CodeobjAddressTranslate>
       sourceLocationTranslator;

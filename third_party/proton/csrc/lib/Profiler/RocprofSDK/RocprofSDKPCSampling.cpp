@@ -1,5 +1,7 @@
 #include "Profiler/RocprofSDK/RocprofSDKPCSampling.h"
 
+#if PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING
+
 #include "Context/Context.h"
 #include "Driver/GPU/RocprofApi.h"
 #include "Utility/Env.h"
@@ -672,3 +674,67 @@ void RocprofSDKPCSampling::flushAccum() {
 }
 
 } // namespace proton
+
+#else
+
+namespace proton {
+
+RocprofSDKPCSampling::RocprofSDKPCSampling() = default;
+
+RocprofSDKPCSampling::~RocprofSDKPCSampling() = default;
+
+void RocprofSDKPCSampling::configure(rocprofiler_buffer_tracing_cb_t callback) {
+  (void)callback;
+}
+
+void RocprofSDKPCSampling::warnIfInvalidInterval() {}
+
+void RocprofSDKPCSampling::warnIfSourceLocationsUnavailable() {}
+
+void RocprofSDKPCSampling::recordCodeObjectLoad(
+    const rocprofiler_callback_tracing_code_object_load_data_t &load) {
+  (void)load;
+}
+
+void RocprofSDKPCSampling::recordCodeObjectUnload(uint64_t codeObjectId) {
+  (void)codeObjectId;
+}
+
+void RocprofSDKPCSampling::recordKernelSymbol(
+    const rocprofiler_callback_tracing_code_object_kernel_symbol_register_data_t
+        &symbol) {
+  (void)symbol;
+}
+
+void RocprofSDKPCSampling::start() {}
+
+void RocprofSDKPCSampling::stop() {}
+
+void RocprofSDKPCSampling::stopNoThrow() {}
+
+void RocprofSDKPCSampling::flushBuffers() {}
+
+void RocprofSDKPCSampling::flushBuffersNoThrow() {}
+
+void RocprofSDKPCSampling::recordTarget(uint64_t dispatchId, uint64_t kernelId,
+                                        const DataToEntryMap &dataToEntry,
+                                        bool needsKernelChild) {
+  (void)dispatchId;
+  (void)kernelId;
+  (void)dataToEntry;
+  (void)needsKernelChild;
+}
+
+void RocprofSDKPCSampling::processBuffer(rocprofiler_record_header_t **headers,
+                                         size_t numHeaders,
+                                         uint64_t dropCount) {
+  (void)headers;
+  (void)numHeaders;
+  (void)dropCount;
+}
+
+void RocprofSDKPCSampling::flushAccum() {}
+
+} // namespace proton
+
+#endif

@@ -35,6 +35,35 @@ else()
   message(STATUS "Proton ROCProfiler-SDK HIP graph tracing: disabled")
 endif()
 
+unset(PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING CACHE)
+set(CMAKE_REQUIRED_INCLUDES "${ROCPROFILER_SDK_INCLUDE_DIR}")
+check_cxx_source_compiles([=[
+  #include <rocprofiler-sdk/pc_sampling.h>
+  int main() {
+    rocprofiler_pc_sampling_configuration_t config{};
+    rocprofiler_pc_sampling_record_host_trap_v0_t hostTrap{};
+    rocprofiler_pc_sampling_record_stochastic_v0_t stochastic{};
+    rocprofiler_available_pc_sampling_configurations_cb_t cb = nullptr;
+    auto method = ROCPROFILER_PC_SAMPLING_METHOD_STOCHASTIC;
+    auto unit = ROCPROFILER_PC_SAMPLING_UNIT_INSTRUCTIONS;
+    auto reason = ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_WAITCNT;
+    (void) config;
+    (void) hostTrap;
+    (void) stochastic;
+    (void) cb;
+    (void) method;
+    (void) unit;
+    (void) reason;
+    return 0;
+  }
+]=] PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING)
+
+if(PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING)
+  message(STATUS "Proton ROCProfiler-SDK PC sampling: enabled")
+else()
+  message(STATUS "Proton ROCProfiler-SDK PC sampling: disabled")
+endif()
+
 set(_PROTON_ROCPROFILER_SDK_LINK_PATHS "")
 foreach(_path IN ITEMS
     "${TRITON_ROCPROFILER_SDK_DEVEL_LIB_PATH}"
@@ -54,7 +83,8 @@ endif()
 find_library(PROTON_DW_LIBRARY NAMES dw)
 
 unset(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE CACHE)
-if(PROTON_AMD_COMGR_LIBRARY AND PROTON_DW_LIBRARY)
+if(PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING AND PROTON_AMD_COMGR_LIBRARY AND
+   PROTON_DW_LIBRARY)
   set(_PROTON_REQUIRED_INCLUDES "${CMAKE_REQUIRED_INCLUDES}")
   set(_PROTON_REQUIRED_LIBRARIES "${CMAKE_REQUIRED_LIBRARIES}")
   set(CMAKE_REQUIRED_INCLUDES
@@ -64,12 +94,15 @@ if(PROTON_AMD_COMGR_LIBRARY AND PROTON_DW_LIBRARY)
       "${PROTON_AMD_COMGR_LIBRARY}"
       "${PROTON_DW_LIBRARY}")
   check_cxx_source_compiles([=[
+    #include <rocprofiler-sdk/pc_sampling.h>
     #include <rocprofiler-sdk/cxx/codeobj/code_printing.hpp>
     int main() {
+      rocprofiler_pc_sampling_record_stochastic_v0_t sample{};
       using rocprofiler::sdk::codeobj::disassembly::CodeobjAddressTranslate;
       using rocprofiler::sdk::codeobj::disassembly::Instruction;
       CodeobjAddressTranslate translator;
       Instruction inst;
+      (void) sample;
       (void) inst.comment;
       const void *data = nullptr;
       translator.addDecoder(data, 0, 1, 0, 0);
@@ -137,6 +170,13 @@ function(add_proton_library name)
   else()
     target_compile_definitions(${name} PRIVATE
       PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH=0)
+  endif()
+  if(PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING)
+    target_compile_definitions(${name} PRIVATE
+      PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING=1)
+  else()
+    target_compile_definitions(${name} PRIVATE
+      PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING=0)
   endif()
   if(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE)
     target_compile_definitions(${name} PRIVATE
