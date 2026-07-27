@@ -120,23 +120,23 @@ struct TestBufferRegionAliasPass
         addresses.push_back(static_cast<uint32_t>(address));
       }
       uint32_t base = 0;
-      if (auto baseAttr = op->getAttrOfType<IntegerAttr>("test.region_base"))
-        base = static_cast<uint32_t>(baseAttr.getInt());
       uint32_t length = 0;
-      if (auto lengthAttr =
-              op->getAttrOfType<IntegerAttr>("test.region_length")) {
-        length = static_cast<uint32_t>(lengthAttr.getInt());
-      } else if (!addresses.empty()) {
+      if (!addresses.empty()) {
         auto [min, max] =
             std::minmax_element(addresses.begin(), addresses.end());
         base = *min;
         length = *max - *min + 1;
       }
+      tt::BufferRegion region{base, length};
+      if (!addresses.empty()) {
+        tt::AddressSet addressSet;
+        for (uint32_t address : addresses)
+          addressSet.set(address);
+        region.ctaAddresses.emplace_back(0, std::move(addressSet));
+      }
       tt::RegionInfo info(tt::RegionInfo::ViewList{});
       info.views.insert(
-          {tt::BufferRegion(base, length,
-                            tt::AddressSet::fromAddresses(addresses)),
-           /*storageBase=*/base, /*affineOffset=*/0});
+          {std::move(region), /*storageBase=*/base, /*affineOffset=*/0});
       return info;
     }
 

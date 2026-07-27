@@ -388,13 +388,6 @@ AddressSet AddressSet::fromRange(uint32_t begin, uint32_t length) {
   return result;
 }
 
-AddressSet AddressSet::fromAddresses(ArrayRef<uint32_t> input) {
-  AddressSet result;
-  for (uint32_t address : input)
-    result.set(address);
-  return result;
-}
-
 void AddressSet::set(uint32_t address) { addresses.set(address); }
 
 void AddressSet::insert(const AddressSet &other) {
@@ -409,10 +402,6 @@ AddressSet AddressSet::intersection(const AddressSet &other) const {
 
 void AddressSet::subtract(const AddressSet &other) {
   addresses.intersectWithComplement(other.addresses);
-}
-
-bool AddressSet::contains(uint32_t address) const {
-  return addresses.test(address);
 }
 
 bool AddressSet::intersects(const AddressSet &other) const {

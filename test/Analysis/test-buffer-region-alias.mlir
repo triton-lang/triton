@@ -9,8 +9,6 @@
 module attributes {test.print_state_plan, test.state_plan_only} {
   tt.func private @full() attributes {
     test.region_name = "a_full",
-    test.region_base = 0 : i32,
-    test.region_length = 8 : i32,
     test.region_addresses = array<i32: 0, 1, 2, 3, 4, 5, 6, 7>
   }
   tt.func private @even() attributes {

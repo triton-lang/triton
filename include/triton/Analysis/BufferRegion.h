@@ -27,7 +27,6 @@ public:
   AddressSet() = default;
 
   static AddressSet fromRange(uint32_t begin, uint32_t length);
-  static AddressSet fromAddresses(llvm::ArrayRef<uint32_t> addresses);
 
   void set(uint32_t address);
   void insert(const AddressSet &other);
@@ -37,7 +36,6 @@ public:
   auto begin() const { return addresses.begin(); }
   auto end() const { return addresses.end(); }
   bool empty() const { return addresses.empty(); }
-  bool contains(uint32_t address) const;
   bool intersects(const AddressSet &other) const;
   bool contains(const AddressSet &other) const;
   AddressSet translated(uint32_t delta) const;
@@ -73,20 +71,6 @@ struct BufferRegion {
   uint32_t baseOffset = 0;
   uint32_t length = 0;
   llvm::SmallVector<CTAAddresses, 2> ctaAddresses;
-
-  BufferRegion() = default;
-  BufferRegion(uint32_t baseOffset, uint32_t length)
-      : BufferRegion(baseOffset, length,
-                     AddressSet::fromRange(baseOffset, length)) {}
-  BufferRegion(uint32_t baseOffset, uint32_t length, AddressSet addresses)
-      : baseOffset(baseOffset), length(length) {
-    if (!addresses.empty())
-      ctaAddresses.emplace_back(0, std::move(addresses));
-  }
-  BufferRegion(uint32_t baseOffset, uint32_t length,
-               llvm::SmallVector<CTAAddresses, 2> ctaAddresses)
-      : baseOffset(baseOffset), length(length),
-        ctaAddresses(std::move(ctaAddresses)) {}
 
   bool intersects(const BufferRegion &other) const {
     return llvm::any_of(ctaAddresses, [&](const CTAAddresses &lhs) {

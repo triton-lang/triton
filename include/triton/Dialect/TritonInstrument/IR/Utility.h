@@ -236,9 +236,8 @@ struct AuxDataMap {
   // intra-CTA.
   RegionToValueMap commits[CommitKind::NumCommitKinds];
 
-  // Stable exact region identities, the selected state-lane plan, and
-  // analysis-derived runtime-base, state-mask, and CTA cases for each memdesc.
-  SmallVector<triton::BufferRegion> bufferRegions[numMemTypes];
+  // State-lane plans and analysis-derived runtime-base, state-mask, and CTA
+  // cases for each memdesc.
   triton::BufferStatePlan bufferStatePlans[numMemTypes];
   DenseMap<Value, BufferStateCandidates> bufferCandidates[numMemTypes];
 

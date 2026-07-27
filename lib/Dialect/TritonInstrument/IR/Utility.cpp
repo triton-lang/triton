@@ -495,8 +495,7 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
   });
   int numTrackedBarriers = numMBarriers + clusterBarrierSlots.size();
   if (numTrackedBarriers > 0)
-    barrierRegions.resize(llvm::NextPowerOf2(numTrackedBarriers - 1),
-                          BufferRegion{0, 0});
+    barrierRegions.resize(llvm::NextPowerOf2(numTrackedBarriers - 1));
 
   ImplicitLocOpBuilder b(entryPoint.getLoc(), entryPoint);
   b.setInsertionPointToStart(&entryPoint.getBody().front());
@@ -706,19 +705,16 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
   });
 
   analysis->calculateUsedBufferRegions(module);
-  bufferRegions[(int)MemType::SHARED_MEM] = analysis->getAllUsedBufferRegions(
-      BufferRegionAnalysis::RegionType::SHARED_MEMORY);
-  bufferRegions[(int)MemType::TENSOR_MEM] = analysis->getAllUsedBufferRegions(
-      BufferRegionAnalysis::RegionType::TENSOR_MEMORY);
   barrierRegions = analysis->getAllUsedBufferRegions(
       BufferRegionAnalysis::RegionType::BARRIER);
 
   for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
     int iMemType = (int)memType;
-    ArrayRef<BufferRegion> regions = bufferRegions[iMemType];
     auto regionType = memType == MemType::SHARED_MEM
                           ? BufferRegionAnalysis::SHARED_MEMORY
                           : BufferRegionAnalysis::TENSOR_MEMORY;
+    SmallVector<BufferRegion> regions =
+        analysis->getAllUsedBufferRegions(regionType);
     bool hasUnknown = analysis->hasUnknownUsedBufferRegions(regionType);
     if (regions.empty() && !hasUnknown)
       continue;
