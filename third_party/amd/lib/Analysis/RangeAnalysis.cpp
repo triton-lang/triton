@@ -821,6 +821,13 @@ struct FoldTrueCmpIOp : OpRewritePattern<arith::CmpIOp> {
     if (!result)
       return failure();
 
+    // getOneAttr/getZeroAttr build a splat DenseElementsAttr for a shaped
+    // result, which requires all dimensions to be static. A result with any
+    // dynamic dimension is still valid IR, so decline the fold.
+    if (auto shapedType = dyn_cast<ShapedType>(cmpOp.getType());
+        shapedType && !shapedType.hasStaticShape())
+      return failure();
+
     TypedAttr constAttr = *result ? rewriter.getOneAttr(cmpOp.getType())
                                   : rewriter.getZeroAttr(cmpOp.getType());
     rewriter.replaceOpWithNewOp<arith::ConstantOp>(cmpOp, constAttr);
