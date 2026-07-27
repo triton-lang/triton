@@ -449,7 +449,7 @@ def TT_SplatOp : TT_Op<"splat", [Pure,
 
     let arguments = (ins TT_Type:$src);
 
-    let results = (outs TT_Tensor:$result);
+    let results = (outs TT_StaticShapeTensor:$result);
 
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 

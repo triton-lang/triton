@@ -657,3 +657,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
     tt.return
   }
 }
+
+// -----
+
+tt.func @splat_dynamic_shape(%v: i32) -> tensor<?xi32> {
+  // expected-error @below {{result #0 must be statically shaped tensor of floating-point or integer or ptr values, but got 'tensor<?xi32>'}}
+  %b = tt.splat %v : i32 -> tensor<?xi32>
+  tt.return %b : tensor<?xi32>
+}

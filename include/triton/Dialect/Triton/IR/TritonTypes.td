@@ -87,6 +87,7 @@ def TT_PtrLike : AnyTypeOf<[TT_Ptr, TT_PtrTensor]>;
 // Tensor Type
 def TT_FpIntTensor : RankedTensorOf<[TT_Float, TT_Int]>;
 def TT_Tensor : RankedTensorOf<[TT_Float, TT_Int, TT_Ptr]>;
+def TT_StaticShapeTensor : StaticShapeTensorOf<[TT_Float, TT_Int, TT_Ptr]>;
 
 // Any Type in Triton IR
 def TT_Type : AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike]>;
