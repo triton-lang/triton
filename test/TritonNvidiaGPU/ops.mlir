@@ -342,14 +342,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttng.packed_arith sub {{.*}} : (tensor<128x2xi8
   // CHECK: ttng.packed_arith mul {{.*}} : (tensor<128x2xi8
   // CHECK: ttng.packed_arith fma {{.*}} : (tensor<128x2xi8
+  // CHECK: ttng.packed_arith add {{.*}} : (tensor<128x4xf8E8M0FNU
+  // CHECK: ttng.packed_arith mul {{.*}} : (tensor<128x2xi8{{.*}}, tensor<128x2xi8
+  // CHECK: ttng.packed_arith fma {{.*}} : (tensor<128x4xf8E8M0FNU
   tt.func @packed_arith_alternate_types(
       %e5m2: tensor<128x4xf8E5M2, #packed_x4>,
       %e4m3: tensor<128x4xf8E4M3FN, #packed_x4>,
-      %e2m1: tensor<128x2xi8, #packed_fp4>) {
+      %ue8m0: tensor<128x4xf8E8M0FNU, #packed_x4>,
+      %e2m1: tensor<128x2xi8, #packed_fp4>,
+      %e2m1b: tensor<128x2xi8, #packed_fp4>) {
     %add = ttng.packed_arith add %e5m2, %e4m3 : (tensor<128x4xf8E5M2, #packed_x4>, tensor<128x4xf8E4M3FN, #packed_x4>) -> tensor<128x4xf8E4M3FN, #packed_x4>
     %sub = ttng.packed_arith sub %e2m1, %e5m2 : (tensor<128x2xi8, #packed_fp4>, tensor<128x4xf8E5M2, #packed_x4>) -> tensor<128x4xf8E5M2, #packed_x4>
     %mul = ttng.packed_arith mul %e2m1, %e5m2 : (tensor<128x2xi8, #packed_fp4>, tensor<128x4xf8E5M2, #packed_x4>) -> tensor<128x4xf8E4M3FN, #packed_x4>
     %fma = ttng.packed_arith fma %e2m1, %e4m3, %e5m2 : (tensor<128x2xi8, #packed_fp4>, tensor<128x4xf8E4M3FN, #packed_x4>, tensor<128x4xf8E5M2, #packed_x4>) -> tensor<128x4xf8E5M2, #packed_x4>
+    %scale = ttng.packed_arith add %ue8m0, %e4m3 : (tensor<128x4xf8E8M0FNU, #packed_x4>, tensor<128x4xf8E4M3FN, #packed_x4>) -> tensor<128x4xf8E4M3FN, #packed_x4>
+    %two_fp4 = ttng.packed_arith mul %e2m1, %e2m1b : (tensor<128x2xi8, #packed_fp4>, tensor<128x2xi8, #packed_fp4>) -> tensor<128x4xf8E4M3FN, #packed_x4>
+    %scale_fp4 = ttng.packed_arith fma %ue8m0, %e2m1, %e4m3 : (tensor<128x4xf8E8M0FNU, #packed_x4>, tensor<128x2xi8, #packed_fp4>, tensor<128x4xf8E4M3FN, #packed_x4>) -> tensor<128x4xf8E4M3FN, #packed_x4>
     tt.return
   }
 }

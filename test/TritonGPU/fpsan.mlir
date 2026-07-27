@@ -26,6 +26,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 #packed = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#fp4 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @packed_arith_fpsan_ue8m0_multiple_fp4
+  tt.func public @packed_arith_fpsan_ue8m0_multiple_fp4(
+      %scale: tensor<128x4xf8E8M0FNU, #packed>,
+      %a: tensor<128x2xi8, #fp4>,
+      %b: tensor<128x2xi8, #fp4>,
+      %addend: tensor<128x4xf8E4M3FN, #packed>) -> tensor<128x4xf8E4M3FN, #packed> {
+    // CHECK: arith.muli
+    // CHECK: tti.experimental_fpsan_embed
+    // CHECK: arith.addi
+    // CHECK: arith.muli
+    // CHECK: arith.addi
+    // CHECK-NOT: ttng.packed_arith
+    %product = ttng.packed_arith mul %a, %b : (tensor<128x2xi8, #fp4>, tensor<128x2xi8, #fp4>) -> tensor<128x4xf8E4M3FN, #packed>
+    %scaled = ttng.packed_arith add %scale, %product : (tensor<128x4xf8E8M0FNU, #packed>, tensor<128x4xf8E4M3FN, #packed>) -> tensor<128x4xf8E4M3FN, #packed>
+    %result = ttng.packed_arith fma %scale, %a, %scaled : (tensor<128x4xf8E8M0FNU, #packed>, tensor<128x2xi8, #fp4>, tensor<128x4xf8E4M3FN, #packed>) -> tensor<128x4xf8E4M3FN, #packed>
+    tt.return %result : tensor<128x4xf8E4M3FN, #packed>
+  }
+}
+
+// -----
+
+#packed = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @packed_arith_fpsan_x2
   tt.func public @packed_arith_fpsan_x2(

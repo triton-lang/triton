@@ -60,20 +60,6 @@ def TTNG_PackedArithOpKindAttr : I32EnumAttr<
   let cppNamespace = "::mlir::triton::nvidia_gpu";
 }
 
-def TTNG_PackedArithTypeAttr : I32EnumAttr<
-    "PackedArithType", "packed arithmetic element type",
-    [
-        I32EnumAttrCase<"F32X2", 0, "f32x2">,
-        I32EnumAttrCase<"F16X2", 1, "f16x2">,
-        I32EnumAttrCase<"BF16X2", 2, "bf16x2">,
-        I32EnumAttrCase<"E5M2X4", 3, "e5m2x4">,
-        I32EnumAttrCase<"E4M3X4", 4, "e4m3x4">,
-        I32EnumAttrCase<"E2M1X4", 5, "e2m1x4">,
-        I32EnumAttrCase<"UE8M0X4", 6, "ue8m0x4">,
-    ]> {
-  let cppNamespace = "::mlir::triton::nvidia_gpu";
-}
-
 def TTNG_TensorMemoryScalesBlockRepOrderAttr : I32EnumAttr<
     "TensorMemoryScalesBlockRepOrder", "",
     [

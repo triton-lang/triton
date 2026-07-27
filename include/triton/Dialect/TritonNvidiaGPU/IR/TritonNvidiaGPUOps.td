@@ -55,34 +55,21 @@ def TTNG_PackedArithOperandElement : AnyTypeOf<[
 def TTNG_PackedArithResultElement : AnyTypeOf<[
   F8E4M3FN, F8E5M2, F16, BF16, F32
 ], "packed arithmetic result element">;
-def TTNG_PackedArithOperandTensor :
-    RankedTensorOf<[TTNG_PackedArithOperandElement]>;
-def TTNG_PackedArithResultTensor :
-    RankedTensorOf<[TTNG_PackedArithResultElement]>;
 
 def TTNG_PackedArithOp : TTNG_Op<"packed_arith", [Pure]> {
   let summary = "Apply elementwise arithmetic using a packed PTX instruction";
 
   let description = [{
-    Applies an arithmetic operation elementwise using packed PTX instructions.
-    Packed instruction types and lane grouping are inferred from the operand and
-    result tensor types and layouts. FP4 operands use Triton's packed-i8
-    representation, where each i8 contains two FP4 values with the lower nibble
-    first. Their packed axis is inferred from the dimension whose size is half
-    the corresponding result dimension.
-
-    The op supports homogeneous x2 add/sub/mul/fma, homogeneous f16x2/bf16x2
-    min/max, the PTX 9.4 mixed `f32x2`/`f16x2`/`bf16x2` instructions, and the
-    PTX 9.4 alternate FP8/FP4/UE8M0 x4 add/sub/mul/fma instructions. FP6 is
-    intentionally unsupported. PTX rounding and other required instruction
-    qualifiers and FP4 register representation are selected by the compiler.
+    Applies packed x2, mixed-precision, and FP8/FP4/UE8M0 x4 arithmetic.
+    Instruction types, modifiers, and grouping are inferred from tensor types.
+    FP4 uses lower-nibble-first i8 values along the inferred halved dimension.
   }];
 
   let arguments = (ins
     TTNG_PackedArithOpKindAttr:$op_kind,
-    Variadic<TTNG_PackedArithOperandTensor>:$operands
+    Variadic<RankedTensorOf<[TTNG_PackedArithOperandElement]>>:$operands
   );
-  let results = (outs TTNG_PackedArithResultTensor:$result);
+  let results = (outs RankedTensorOf<[TTNG_PackedArithResultElement]>:$result);
 
   let assemblyFormat = [{
     $op_kind $operands attr-dict `:` functional-type($operands, $result)

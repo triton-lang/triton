@@ -60,32 +60,24 @@ LogicalResult verifyMMAv5Op(Operation *op);
 namespace mlir::triton::nvidia_gpu {
 
 struct PackedArithTypeInfo {
-  PackedArithType type;
-  unsigned laneCount;
-  unsigned registerBitWidth;
-  bool isValidResult;
+  llvm::StringLiteral suffix;
+  unsigned lanes, registerBits;
+  char kind;
 
-  bool isX2() const { return laneCount == 2; }
-  bool isFP4() const { return type == PackedArithType::E2M1X4; }
-  unsigned getStorageLaneCount() const {
-    return isFP4() ? laneCount / 2 : laneCount;
-  }
+  bool isFP4() const { return suffix == "e2m1x4"; }
+  unsigned storageLanes() const { return isFP4() ? lanes / 2 : lanes; }
 };
 
-std::optional<PackedArithType> getPackedArithType(Type elementType);
-const PackedArithTypeInfo &getPackedArithTypeInfo(PackedArithType type);
-unsigned getPackedArithOperandCount(PackedArithOpKind kind);
-
 struct PackedArithInstructionSpec {
+  const PackedArithTypeInfo *result;
+  SmallVector<const PackedArithTypeInfo *, 3> operands;
   StringRef modifiers;
-  unsigned explicitOperandTypes;
-  unsigned minimumPtxVersion;
+  unsigned operandSuffixes;
+  bool ptx94;
 };
 
 std::optional<PackedArithInstructionSpec>
-getPackedArithInstructionSpec(PackedArithOpKind kind, PackedArithType result,
-                              ArrayRef<PackedArithType> operands);
-
+getPackedArithInstructionSpec(PackedArithOp op);
 std::optional<unsigned> getPackedArithFp4Axis(PackedArithOp op);
 std::optional<ColumnAction>
 getPackedArithRegisterAction(RankedTensorType tensorType, unsigned axis,

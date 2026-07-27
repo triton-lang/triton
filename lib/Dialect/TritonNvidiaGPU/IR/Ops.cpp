@@ -42,7 +42,6 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
-#include <array>
 
 using namespace mlir::triton::gpu;
 
@@ -51,173 +50,125 @@ namespace triton {
 namespace nvidia_gpu {
 
 // -- PackedArithOp --
-std::optional<PackedArithType> getPackedArithType(Type elementType) {
-  if (elementType.isF32())
-    return PackedArithType::F32X2;
-  if (elementType.isF16())
-    return PackedArithType::F16X2;
-  if (elementType.isBF16())
-    return PackedArithType::BF16X2;
-  if (isa<Float8E5M2Type>(elementType))
-    return PackedArithType::E5M2X4;
-  if (isa<Float8E4M3FNType>(elementType))
-    return PackedArithType::E4M3X4;
-  if (elementType.isInteger(8))
-    return PackedArithType::E2M1X4;
-  if (isa<Float8E8M0FNUType>(elementType))
-    return PackedArithType::UE8M0X4;
-  return std::nullopt;
-}
-
-const PackedArithTypeInfo &getPackedArithTypeInfo(PackedArithType packedType) {
-  static constexpr PackedArithTypeInfo types[] = {
-      {PackedArithType::F32X2, 2, 64, true},
-      {PackedArithType::F16X2, 2, 32, true},
-      {PackedArithType::BF16X2, 2, 32, true},
-      {PackedArithType::E5M2X4, 4, 32, true},
-      {PackedArithType::E4M3X4, 4, 32, true},
-      {PackedArithType::E2M1X4, 4, 16, false},
-      {PackedArithType::UE8M0X4, 4, 32, false},
-  };
-  unsigned index = static_cast<unsigned>(packedType);
-  assert(index < std::size(types) && types[index].type == packedType &&
-         "unknown packed arithmetic type");
-  return types[index];
-}
-
 namespace {
-enum class PackedArithTypePattern {
-  X2,
-  Half,
-  F32,
-  F16,
-  BF16,
-  Alternate,
-  AlternateResult,
-  SameAsResult,
-  OtherHalf,
-};
+constexpr llvm::StringLiteral Half = "hb";
+constexpr llvm::StringLiteral X2 = "fhb";
+constexpr llvm::StringLiteral Alternate = "542u";
+constexpr llvm::StringLiteral AlternateResult = "54";
 
 struct PackedArithSignatureRule {
-  unsigned operationMask;
-  PackedArithTypePattern result;
-  std::array<PackedArithTypePattern, 3> operands;
-  StringLiteral modifiers;
-  unsigned explicitOperandTypes;
-  unsigned minimumPtxVersion;
+  llvm::StringLiteral operations;
+  StringRef resultTypes;
+  StringRef operandTypes[3];
+  llvm::StringLiteral modifiers;
+  unsigned operandSuffixes;
+  bool ptx94;
 };
-
-constexpr unsigned packedArithOperationMask(PackedArithOpKind kind) {
-  return 1u << static_cast<unsigned>(kind);
-}
-
-bool matchesPackedArithTypePattern(PackedArithTypePattern pattern,
-                                   PackedArithType actual,
-                                   PackedArithType result) {
-  const PackedArithTypeInfo &info = getPackedArithTypeInfo(actual);
-  switch (pattern) {
-  case PackedArithTypePattern::X2:
-    return info.isX2();
-  case PackedArithTypePattern::Half:
-    return actual == PackedArithType::F16X2 ||
-           actual == PackedArithType::BF16X2;
-  case PackedArithTypePattern::F32:
-    return actual == PackedArithType::F32X2;
-  case PackedArithTypePattern::F16:
-    return actual == PackedArithType::F16X2;
-  case PackedArithTypePattern::BF16:
-    return actual == PackedArithType::BF16X2;
-  case PackedArithTypePattern::Alternate:
-    return !info.isX2();
-  case PackedArithTypePattern::AlternateResult:
-    return !info.isX2() && info.isValidResult;
-  case PackedArithTypePattern::SameAsResult:
-    return actual == result;
-  case PackedArithTypePattern::OtherHalf:
-    return actual != result && (actual == PackedArithType::F16X2 ||
-                                actual == PackedArithType::BF16X2);
-  }
-  llvm_unreachable("unknown packed arithmetic type pattern");
-}
 } // namespace
 
-unsigned getPackedArithOperandCount(PackedArithOpKind kind) {
-  return kind == PackedArithOpKind::FMA ? 3 : 2;
+static const PackedArithTypeInfo *getPackedArithTypeInfo(Type elementType) {
+  static const struct {
+    TypeID type;
+    PackedArithTypeInfo info;
+  } types[] = {
+      {TypeID::get<Float32Type>(), {"f32x2", 2, 64, 'f'}},
+      {TypeID::get<Float16Type>(), {"f16x2", 2, 32, 'h'}},
+      {TypeID::get<BFloat16Type>(), {"bf16x2", 2, 32, 'b'}},
+      {TypeID::get<Float8E5M2Type>(), {"e5m2x4", 4, 32, '5'}},
+      {TypeID::get<Float8E4M3FNType>(), {"e4m3x4", 4, 32, '4'}},
+      {TypeID::get<IntegerType>(), {"e2m1x4", 4, 16, '2'}},
+      {TypeID::get<Float8E8M0FNUType>(), {"ue8m0x4", 4, 32, 'u'}},
+  };
+  if (isa<IntegerType>(elementType) && !elementType.isInteger(8))
+    return nullptr;
+  for (const auto &type : types)
+    if (elementType.getTypeID() == type.type)
+      return &type.info;
+  return nullptr;
 }
 
 std::optional<PackedArithInstructionSpec>
-getPackedArithInstructionSpec(PackedArithOpKind kind, PackedArithType result,
-                              ArrayRef<PackedArithType> operands) {
-  if (operands.size() != getPackedArithOperandCount(kind))
+getPackedArithInstructionSpec(PackedArithOp op) {
+  auto kind = op.getOpKind();
+  if (op.getNumOperands() != (kind == PackedArithOpKind::FMA ? 3u : 2u))
     return std::nullopt;
 
-  using P = PackedArithTypePattern;
-  constexpr unsigned add = packedArithOperationMask(PackedArithOpKind::ADD);
-  constexpr unsigned sub = packedArithOperationMask(PackedArithOpKind::SUB);
-  constexpr unsigned mul = packedArithOperationMask(PackedArithOpKind::MUL);
-  constexpr unsigned fma = packedArithOperationMask(PackedArithOpKind::FMA);
-  constexpr unsigned min = packedArithOperationMask(PackedArithOpKind::MIN);
-  constexpr unsigned max = packedArithOperationMask(PackedArithOpKind::MAX);
+  const auto *result = getPackedArithTypeInfo(op.getType().getElementType());
+  if (!result)
+    return std::nullopt;
+  SmallVector<const PackedArithTypeInfo *, 3> operands;
+  for (Value operand : op.getOperands()) {
+    const auto *info = getPackedArithTypeInfo(
+        cast<RankedTensorType>(operand.getType()).getElementType());
+    if (!info)
+      return std::nullopt;
+    operands.push_back(info);
+  }
 
   // clang-format off
   static constexpr PackedArithSignatureRule signatures[] = {
-      // operations       result               operands                                                    modifiers  suffixes  min PTX
-      {add | sub | mul,   P::X2,               {P::SameAsResult, P::SameAsResult},                         "",        0,        0},
-      {fma,               P::X2,               {P::SameAsResult, P::SameAsResult, P::SameAsResult},         "rn",      0,        0},
-      {min | max,         P::Half,             {P::SameAsResult, P::SameAsResult},                         "",        0,        0},
-      {add | sub,         P::F32,              {P::Half, P::F32},                                          "",        2,       94},
-      {add | sub,         P::F16,              {P::F32, P::F32},                                           "rz.ftz",  2,       94},
-      {add | sub,         P::BF16,             {P::F32, P::F32},                                           "rz",      2,       94},
-      {mul,               P::F16,              {P::F32, P::F32},                                           "ftz.rz",  2,       94},
-      {mul,               P::BF16,             {P::F32, P::F32},                                           "rz",      2,       94},
-      {mul,               P::Half,             {P::SameAsResult, P::OtherHalf},                            "",        2,       94},
-      {fma,               P::F32,              {P::Half, P::F32, P::F32},                                  "rn",      3,       94},
-      {add | sub,         P::AlternateResult,  {P::Alternate, P::SameAsResult},                            "",        1,       94},
-      {mul,               P::AlternateResult,  {P::Alternate, P::Alternate},                               "",        2,       94},
-      {fma,               P::AlternateResult,  {P::Alternate, P::Alternate, P::SameAsResult},              "",        2,       94},
+      // operations       result           operands                     modifiers  suffixes  PTX 9.4
+      {"add sub mul",    X2,              {"=", "="},                  "",        0,        false},
+      {"fma",            X2,              {"=", "=", "="},             "rn",      0,        false},
+      {"min max",        Half,            {"=", "="},                  "",        0,        false},
+      {"add sub",        "f",             {Half, "f"},                 "",        2,        true},
+      {"add sub",        "h",             {"f", "f"},                  "rz.ftz",  2,        true},
+      {"add sub",        "b",             {"f", "f"},                  "rz",      2,        true},
+      {"mul",            "h",             {"f", "f"},                  "ftz.rz",  2,        true},
+      {"mul",            "b",             {"f", "f"},                  "rz",      2,        true},
+      {"mul",            Half,            {"=", "!"},                  "",        2,        true},
+      {"fma",            "f",             {Half, "f", "f"},            "rn",      3,        true},
+      {"add sub",        AlternateResult, {Alternate, "="},            "",        1,        true},
+      {"mul",            AlternateResult, {Alternate, Alternate},      "",        2,        true},
+      {"fma",            AlternateResult, {Alternate, Alternate, "="}, "",        2,        true},
   };
   // clang-format on
 
+  auto matches = [result](StringRef types, const PackedArithTypeInfo *info) {
+    if (types == "=")
+      return info == result;
+    if (types == "!")
+      return info != result && Half.contains(info->kind);
+    return types.contains(info->kind);
+  };
   for (const PackedArithSignatureRule &signature : signatures) {
-    if (!(signature.operationMask & packedArithOperationMask(kind)) ||
-        !matchesPackedArithTypePattern(signature.result, result, result))
+    if (!StringRef(signature.operations)
+             .contains(stringifyPackedArithOpKind(kind)) ||
+        !matches(signature.resultTypes, result))
       continue;
-    auto patterns = ArrayRef<PackedArithTypePattern>(signature.operands)
-                        .take_front(operands.size());
-    if (!llvm::all_of(llvm::zip_equal(operands, patterns), [&](auto operand) {
-          return matchesPackedArithTypePattern(std::get<1>(operand),
-                                               std::get<0>(operand), result);
+    auto types = ArrayRef(signature.operandTypes).take_front(operands.size());
+    if (!llvm::all_of(llvm::zip_equal(operands, types), [&](auto pair) {
+          return matches(std::get<1>(pair), std::get<0>(pair));
         }))
       continue;
-    return PackedArithInstructionSpec{signature.modifiers,
-                                      signature.explicitOperandTypes,
-                                      signature.minimumPtxVersion};
+    return PackedArithInstructionSpec{
+        result, std::move(operands), signature.modifiers,
+        signature.operandSuffixes, signature.ptx94};
   }
   return std::nullopt;
 }
 
 std::optional<unsigned> getPackedArithFp4Axis(PackedArithOp op) {
-  auto resultType = op.getResult().getType();
+  auto resultShape = op.getType().getShape();
   std::optional<unsigned> axis;
   for (Value operand : op.getOperands()) {
-    auto operandType = cast<RankedTensorType>(operand.getType());
-    if (!operandType.getElementType().isInteger(8))
+    auto type = cast<RankedTensorType>(operand.getType());
+    if (!type.getElementType().isInteger(8))
       continue;
-    if (operandType.getRank() != resultType.getRank())
+    if (type.getRank() != resultShape.size())
       return std::nullopt;
-
-    std::optional<unsigned> operandAxis;
-    for (unsigned dim = 0; dim < resultType.getRank(); ++dim) {
-      if (operandType.getShape()[dim] == resultType.getShape()[dim])
+    unsigned differing = resultShape.size();
+    for (unsigned dim = 0; dim < resultShape.size(); ++dim) {
+      if (type.getShape()[dim] == resultShape[dim])
         continue;
-      if (operandAxis ||
-          2 * operandType.getShape()[dim] != resultType.getShape()[dim])
+      if (differing != resultShape.size() ||
+          2 * type.getShape()[dim] != resultShape[dim])
         return std::nullopt;
-      operandAxis = dim;
+      differing = dim;
     }
-    if (!operandAxis || (axis && *axis != *operandAxis))
+    if (differing == resultShape.size() || (axis && *axis != differing))
       return std::nullopt;
-    axis = operandAxis;
+    axis = differing;
   }
   return axis;
 }
@@ -240,113 +191,89 @@ static bool arePackedFp4LayoutsCompatible(RankedTensorType srcType,
                                           unsigned axis) {
   auto srcLayout = toLinearLayout(srcType);
   auto resultLayout = toLinearLayout(resultType);
-  auto kReg = StringAttr::get(srcType.getContext(), "register");
   srcLayout = actionRemoveBroadcastedRegs(srcLayout).apply(srcLayout);
   resultLayout = actionRemoveBroadcastedRegs(resultLayout).apply(resultLayout);
-  auto outDims = llvm::to_vector(resultLayout.getOutDimNames());
-  auto split = LinearLayout::identity1D(2, kReg, outDims[axis]);
-  auto expected = split * srcLayout;
-  auto permutation = regPermForDivide(resultLayout, expected, /*left=*/true);
-  return permutation && permutation->apply(resultLayout) == expected;
+  auto reg = StringAttr::get(srcType.getContext(), "register");
+  auto dims = llvm::to_vector(resultLayout.getOutDimNames());
+  auto expected = LinearLayout::identity1D(2, reg, dims[axis]) * srcLayout;
+  auto action = regPermForDivide(resultLayout, expected, /*left=*/true);
+  return action && action->apply(resultLayout) == expected;
 }
 
 LogicalResult PackedArithOp::verify() {
-  unsigned expectedOperands = getPackedArithOperandCount(getOpKind());
-  if (getNumOperands() != expectedOperands) {
+  unsigned expectedOperands = getOpKind() == PackedArithOpKind::FMA ? 3 : 2;
+  if (getNumOperands() != expectedOperands)
     return emitOpError() << stringifyPackedArithOpKind(getOpKind())
                          << " expects " << expectedOperands
                          << " operands but got " << getNumOperands();
-  }
-
-  SmallVector<PackedArithType> operandPackedTypes;
-  for (Value operand : getOperands()) {
-    auto packedType = getPackedArithType(
-        cast<RankedTensorType>(operand.getType()).getElementType());
-    if (!packedType)
-      return emitOpError("has an unsupported operand element type");
-    operandPackedTypes.push_back(*packedType);
-  }
 
   auto tensorType = getResult().getType();
-  auto resultPackedType = getPackedArithType(tensorType.getElementType());
-  if (!resultPackedType)
+  const auto *resultInfo = getPackedArithTypeInfo(tensorType.getElementType());
+  if (!resultInfo)
     return emitOpError("has an unsupported result element type");
-  const PackedArithTypeInfo &resultInfo =
-      getPackedArithTypeInfo(*resultPackedType);
   if (!isa_and_nonnull<DistributedEncodingTrait>(tensorType.getEncoding()))
     return emitOpError("requires a distributed tensor layout");
 
-  auto instruction = getPackedArithInstructionSpec(
-      getOpKind(), *resultPackedType, operandPackedTypes);
+  auto instruction = getPackedArithInstructionSpec(*this);
   if (!instruction) {
     auto diag = emitOpError()
                 << "unsupported " << stringifyPackedArithOpKind(getOpKind())
-                << " signature " << stringifyPackedArithType(*resultPackedType)
-                << " <- (";
-    llvm::interleaveComma(operandPackedTypes, diag, [&](PackedArithType type) {
-      diag << stringifyPackedArithType(type);
+                << " signature " << resultInfo->suffix << " <- (";
+    llvm::interleaveComma(getOperands(), diag, [&](Value operand) {
+      diag << getPackedArithTypeInfo(
+                  cast<RankedTensorType>(operand.getType()).getElementType())
+                  ->suffix;
     });
     return diag << ")";
   }
 
-  bool hasFp4 = llvm::any_of(operandPackedTypes, [](PackedArithType type) {
-    return getPackedArithTypeInfo(type).isFP4();
-  });
   std::optional<unsigned> fp4Axis = getPackedArithFp4Axis(*this);
-  if (hasFp4 && !fp4Axis) {
+  if (!fp4Axis && llvm::any_of(instruction->operands,
+                               [](auto *info) { return info->isFP4(); }))
     return emitOpError("requires every fp4 operand to have the result shape "
                        "with the same single dimension halved");
-  }
 
-  unsigned packWidth = resultInfo.laneCount;
+  unsigned packWidth = resultInfo->lanes;
   unsigned resultRegisters = getUniqueElemsPerThread(tensorType);
-  if (resultRegisters < packWidth || resultRegisters % packWidth != 0) {
+  if (resultRegisters < packWidth || resultRegisters % packWidth != 0)
     return emitOpError() << "result layout must provide a multiple of "
                          << packWidth << " unique elements per thread";
-  }
-  if (fp4Axis &&
-      !getPackedArithRegisterAction(tensorType, *fp4Axis, packWidth)) {
+  if (fp4Axis && !getPackedArithRegisterAction(tensorType, *fp4Axis, packWidth))
     return emitOpError()
            << "result layout cannot provide " << packWidth
            << " fp4-aligned elements per thread along inferred axis "
            << *fp4Axis;
-  }
 
   for (auto [index, operand] : llvm::enumerate(getOperands())) {
     auto operandType = cast<RankedTensorType>(operand.getType());
-    const PackedArithTypeInfo &operandInfo =
-        getPackedArithTypeInfo(operandPackedTypes[index]);
+    const auto &operandInfo = *instruction->operands[index];
     if (operandInfo.isFP4()) {
       if (!isa_and_nonnull<DistributedEncodingTrait>(
               operandType.getEncoding()) ||
-          !arePackedFp4LayoutsCompatible(operandType, tensorType, *fp4Axis)) {
+          !arePackedFp4LayoutsCompatible(operandType, tensorType, *fp4Axis))
         return emitOpError() << "fp4 operand " << index
                              << " must have a layout compatible with the "
                                 "result";
-      }
       if (!getPackedArithRegisterAction(operandType, *fp4Axis,
-                                        operandInfo.getStorageLaneCount())) {
+                                        operandInfo.storageLanes()))
         return emitOpError()
                << "fp4 operand " << index << " layout cannot provide "
-               << operandInfo.getStorageLaneCount()
+               << operandInfo.storageLanes()
                << " packed bytes per thread along inferred axis " << *fp4Axis;
-      }
       continue;
     }
-    if (operandType.getShape() != tensorType.getShape()) {
+    if (operandType.getShape() != tensorType.getShape())
       return emitOpError() << "operand " << index
                            << " must have the result shape "
                            << tensorType.getShape() << ", but got "
                            << operandType.getShape();
-    }
     if (!isa_and_nonnull<LayoutEncodingTrait>(operandType.getEncoding()) ||
         !areLayoutsEquivalent(
             tensorType.getShape(),
             cast<LayoutEncodingTrait>(operandType.getEncoding()),
-            cast<LayoutEncodingTrait>(tensorType.getEncoding()))) {
+            cast<LayoutEncodingTrait>(tensorType.getEncoding())))
       return emitOpError() << "operand " << index
                            << " must have a layout equivalent to the result";
-    }
   }
 
   return success();

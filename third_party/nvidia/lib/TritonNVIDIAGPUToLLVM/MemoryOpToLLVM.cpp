@@ -236,8 +236,9 @@ private:
 static std::string getAsyncSharedStoreConstraint(unsigned bitwidth) {
   switch (bitwidth) {
   case 32:
+    return "r";
   case 64:
-    return getPtxRegisterSizeCode(bitwidth, /*isFloat=*/false);
+    return "l";
   default:
     llvm_unreachable("unsupported st.async.shared bitwidth");
   }

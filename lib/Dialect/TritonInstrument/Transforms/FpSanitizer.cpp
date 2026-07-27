@@ -2101,16 +2101,18 @@ struct Fp4ToFpPattern : public OpRewritePattern<ttg::Fp4ToFpOp> {
   }
 };
 
+template <ttng::PackedArithOpKind Kind, typename IntOp>
 struct PackedArithPattern : public OpRewritePattern<ttng::PackedArithOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(ttng::PackedArithOp op,
                                 PatternRewriter &rewriter) const override {
+    if (op.getOpKind() != Kind)
+      return failure();
     auto resultTy = op.getType();
     auto resultIntTy = cast<RankedTensorType>(getIntTypeLike(resultTy));
-    auto resultIntElem = resultIntTy.getElementType();
     auto loc = op.getLoc();
-    std::optional<unsigned> fp4Axis = ttng::getPackedArithFp4Axis(op);
+    auto fp4Axis = ttng::getPackedArithFp4Axis(op);
 
     SmallVector<Value> payloads;
     for (Value operand : op.getOperands()) {
@@ -2123,41 +2125,23 @@ struct PackedArithPattern : public OpRewritePattern<ttng::PackedArithOp> {
         continue;
       }
 
-      Value payload = embedToInt(rewriter, loc, operand);
-      auto payloadTy = cast<RankedTensorType>(payload.getType());
-      payload = castFloatPayloadToType(rewriter, loc, payload,
-                                       payloadTy.clone(resultIntElem));
+      if (isa<Float8E8M0FNUType>(operandTy.getElementType()))
+        operand = arith::BitcastOp::create(
+            rewriter, loc, operandTy.clone(rewriter.getI8Type()), operand);
+      Value payload = castDotScaledScaleToComputePayload(
+          rewriter, loc, operand, cast<FloatType>(resultTy.getElementType()));
       if (payload.getType() != resultIntTy)
         payload =
             ttg::ConvertLayoutOp::create(rewriter, loc, resultIntTy, payload);
       payloads.push_back(payload);
     }
 
-    Value result;
-    switch (op.getOpKind()) {
-    case ttng::PackedArithOpKind::ADD:
-      result = arith::AddIOp::create(rewriter, loc, payloads[0], payloads[1]);
-      break;
-    case ttng::PackedArithOpKind::SUB:
-      result = arith::SubIOp::create(rewriter, loc, payloads[0], payloads[1]);
-      break;
-    case ttng::PackedArithOpKind::MUL:
-      result = arith::MulIOp::create(rewriter, loc, payloads[0], payloads[1]);
-      break;
-    case ttng::PackedArithOpKind::FMA: {
-      Value product =
-          arith::MulIOp::create(rewriter, loc, payloads[0], payloads[1]);
-      result = arith::AddIOp::create(rewriter, loc, product, payloads[2]);
-      break;
+    Value lhs = payloads[0], rhs = payloads[1];
+    if constexpr (Kind == ttng::PackedArithOpKind::FMA) {
+      lhs = arith::MulIOp::create(rewriter, loc, lhs, rhs);
+      rhs = payloads[2];
     }
-    case ttng::PackedArithOpKind::MIN:
-      result = arith::MinSIOp::create(rewriter, loc, payloads[0], payloads[1]);
-      break;
-    case ttng::PackedArithOpKind::MAX:
-      result = arith::MaxSIOp::create(rewriter, loc, payloads[0], payloads[1]);
-      break;
-    }
-
+    Value result = IntOp::create(rewriter, loc, lhs, rhs);
     rewriter.replaceOp(op, unembedToFloat(rewriter, loc, result, resultTy));
     return success();
   }
@@ -3268,8 +3252,15 @@ public:
                  ClampFOpPattern, NegFOpPattern, DivFOpPattern,
                  PreciseDivFOpPattern, RemFOpPattern, FmaPattern, ExpOpPattern,
                  Exp2OpPattern, CosOpPattern, SinOpPattern, ExtFOpPattern,
-                 TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern,
-                 PackedArithPattern, DotPattern, DotScaledPattern>(
+                 TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern, DotPattern,
+                 DotScaledPattern>(&getContext());
+    using PackedKind = ttng::PackedArithOpKind;
+    patterns.add<PackedArithPattern<PackedKind::ADD, arith::AddIOp>,
+                 PackedArithPattern<PackedKind::SUB, arith::SubIOp>,
+                 PackedArithPattern<PackedKind::MUL, arith::MulIOp>,
+                 PackedArithPattern<PackedKind::FMA, arith::AddIOp>,
+                 PackedArithPattern<PackedKind::MIN, arith::MinSIOp>,
+                 PackedArithPattern<PackedKind::MAX, arith::MaxSIOp>>(
         &getContext());
     patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
     patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);

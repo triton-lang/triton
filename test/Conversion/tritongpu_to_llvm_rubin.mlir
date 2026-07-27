@@ -380,14 +380,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: llvm.inline_asm {{.*}} "mul.e4m3x4.e2m1x4.e5m2x4 $0, $1, $2;", "=r,h,r" {{.*}} : (i16, i32) -> i32
   // CHECK: llvm.inline_asm {{.*}} "fma.e5m2x4.e2m1x4.e4m3x4 $0, $1, $2, $3;", "=r,h,r,r" {{.*}} : (i16, i32, i32) -> i32
   // CHECK: llvm.bitcast {{.*}} : i32 to vector<4xi8>
+  // CHECK: llvm.inline_asm {{.*}} "add.e4m3x4.ue8m0x4 $0, $1, $2;", "=r,r,r" {{.*}} : (i32, i32) -> i32
+  // CHECK: llvm.inline_asm {{.*}} "mul.e4m3x4.e2m1x4.e2m1x4 $0, $1, $2;", "=r,h,h" {{.*}} : (i16, i16) -> i32
+  // CHECK: llvm.inline_asm {{.*}} "fma.e4m3x4.ue8m0x4.e2m1x4 $0, $1, $2, $3;", "=r,r,h,r" {{.*}} : (i32, i16, i32) -> i32
   tt.func @packed_arith_alternate_x4(
       %e5m2: tensor<128x4xf8E5M2, #blocked>,
       %e4m3: tensor<128x4xf8E4M3FN, #blocked>,
-      %e2m1: tensor<128x2xi8, #fp4>) {
+      %ue8m0: tensor<128x4xf8E8M0FNU, #blocked>,
+      %e2m1: tensor<128x2xi8, #fp4>,
+      %e2m1b: tensor<128x2xi8, #fp4>) {
     %add = ttng.packed_arith add %e5m2, %e4m3 : (tensor<128x4xf8E5M2, #blocked>, tensor<128x4xf8E4M3FN, #blocked>) -> tensor<128x4xf8E4M3FN, #blocked>
     %sub = ttng.packed_arith sub %e2m1, %e5m2 : (tensor<128x2xi8, #fp4>, tensor<128x4xf8E5M2, #blocked>) -> tensor<128x4xf8E5M2, #blocked>
     %mul = ttng.packed_arith mul %e2m1, %e5m2 : (tensor<128x2xi8, #fp4>, tensor<128x4xf8E5M2, #blocked>) -> tensor<128x4xf8E4M3FN, #blocked>
     %fma = ttng.packed_arith fma %e2m1, %e4m3, %e5m2 : (tensor<128x2xi8, #fp4>, tensor<128x4xf8E4M3FN, #blocked>, tensor<128x4xf8E5M2, #blocked>) -> tensor<128x4xf8E5M2, #blocked>
+    %scale = ttng.packed_arith add %ue8m0, %e4m3 : (tensor<128x4xf8E8M0FNU, #blocked>, tensor<128x4xf8E4M3FN, #blocked>) -> tensor<128x4xf8E4M3FN, #blocked>
+    %two_fp4 = ttng.packed_arith mul %e2m1, %e2m1b : (tensor<128x2xi8, #fp4>, tensor<128x2xi8, #fp4>) -> tensor<128x4xf8E4M3FN, #blocked>
+    %scale_fp4 = ttng.packed_arith fma %ue8m0, %e2m1, %e4m3 : (tensor<128x4xf8E8M0FNU, #blocked>, tensor<128x2xi8, #fp4>, tensor<128x4xf8E4M3FN, #blocked>) -> tensor<128x4xf8E4M3FN, #blocked>
     tt.return
   }
 }
