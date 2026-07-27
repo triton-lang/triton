@@ -774,6 +774,10 @@ OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
   if (!isa<FloatAttr, IntegerAttr>(value))
     return {};
   auto shapedType = cast<ShapedType>(getType());
+  // SplatElementsAttr requires a static shape; a dynamically-shaped result is
+  // still valid IR, so decline the fold instead of asserting.
+  if (!shapedType.hasStaticShape())
+    return {};
   auto ret = SplatElementsAttr::get(shapedType, ArrayRef<Attribute>(value));
   return ret;
 }

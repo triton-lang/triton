@@ -260,3 +260,44 @@ tt.func @no_canonicalize_indivisible_offset(%base: tensor<128x!tt.ptr<f32>>) -> 
   %result = tt.int_to_ptr %offset_ptr_int : tensor<128xi64> -> tensor<128x!tt.ptr<f32>>
   tt.return %result : tensor<128x!tt.ptr<f32>>
 }
+
+// -----
+
+// A tt.splat of a scalar constant into a dynamic-shaped tensor must not fold to
+// a dense splat constant: SplatElementsAttr needs a static shape. The splat is
+// left unchanged.
+
+// CHECK-LABEL: @dynamic_splat_constant
+// CHECK: tt.splat
+tt.func @dynamic_splat_constant() -> tensor<?xi32> {
+  %c = arith.constant 1000 : i32
+  %s = tt.splat %c : i32 -> tensor<?xi32>
+  tt.return %s : tensor<?xi32>
+}
+
+// -----
+
+// A partially dynamic result also fails hasStaticShape (any dynamic dim is
+// enough), so the splat is likewise left unchanged.
+
+// CHECK-LABEL: @partial_dynamic_splat_constant
+// CHECK: tt.splat
+tt.func @partial_dynamic_splat_constant() -> tensor<4x?xi32> {
+  %c = arith.constant 1000 : i32
+  %s = tt.splat %c : i32 -> tensor<4x?xi32>
+  tt.return %s : tensor<4x?xi32>
+}
+
+// -----
+
+// Positive control: a tt.splat of a scalar constant into a statically-shaped
+// tensor is still folded to a dense splat constant.
+
+// CHECK-LABEL: @static_splat_constant
+// CHECK-NOT: tt.splat
+// CHECK: arith.constant dense<1000> : tensor<4xi32>
+tt.func @static_splat_constant() -> tensor<4xi32> {
+  %c = arith.constant 1000 : i32
+  %s = tt.splat %c : i32 -> tensor<4xi32>
+  tt.return %s : tensor<4xi32>
+}
