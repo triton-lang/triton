@@ -285,6 +285,27 @@ Type BarrierTestWaitOp::getPredicateOperandTypeLike() {
   return IntegerType::get(getContext(), 1);
 }
 
+// -- BarrierTestWaitReportOp --
+LogicalResult BarrierTestWaitReportOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  return success();
+}
+
+TypedValue<MemDescType> BarrierTestWaitReportOp::getBarrier() {
+  return getAlloc();
+}
+
+Value BarrierTestWaitReportOp::getPredicateOperand() { return getPred(); }
+
+void BarrierTestWaitReportOp::setPredicateOperand(Value pred) {
+  getPredMutable().assign(pred);
+}
+
+Type BarrierTestWaitReportOp::getPredicateOperandTypeLike() {
+  return IntegerType::get(getContext(), 1);
+}
+
 static LogicalResult verifyBarrierCGALayout(Operation *op, Value barrier,
                                             CGAEncodingAttr expectedCGALayout,
                                             StringRef barrierName);

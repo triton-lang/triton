@@ -40,15 +40,14 @@ def test_tma_check_valid(report_validity):
         tma.async_load(input_desc, [0, 0], bar, smem, report_validity=REPORT_VALIDITY)
 
         primary_phase = 0
-        is_loaded = 0
-        is_valid = 0
+        done = 0
+        valid = 0
 
-        # Retry TMA until both the primary and conditional phases complete.
-        while is_loaded != 1 or is_valid != 1:
-            is_loaded = mbarrier.test_wait(bar, primary_phase)
-            is_valid = mbarrier.test_wait(bar, 0, conditional=True)
+        # Retry after each completed attempt that reports invalid data.
+        while done != 1 or valid != 1:
+            done, valid = mbarrier.test_wait_validity(bar, primary_phase)
 
-            if is_loaded == 1 and is_valid == 0:
+            if done == 1 and valid == 0:
                 request_data_update(need_update_ptr)
                 primary_phase ^= 1
                 mbarrier.expect(bar, input_desc.block_type.nbytes)
@@ -166,11 +165,8 @@ def test_tma_check_valid(report_validity):
 
 def test_multi_stage():
     PRIMARY_PHASE = ttgl.constexpr(0)
-    CONDITIONAL_PHASE = ttgl.constexpr(1)
-    NEED_ISSUE = ttgl.constexpr(2)
-    ACQUIRED = ttgl.constexpr(3)
-    DONE = ttgl.constexpr(4)
-    NUM_STAGE_STATE_FIELDS = ttgl.constexpr(5)
+    DONE = ttgl.constexpr(1)
+    NUM_STAGE_STATE_FIELDS = ttgl.constexpr(2)
 
     @gluon.jit
     def store_scalar(smem, value):
@@ -223,60 +219,52 @@ def test_multi_stage():
 
         for i in range(num_stages):
             store_stage_state(stage_state, PRIMARY_PHASE, i, num_stages, 0)
-            store_stage_state(stage_state, CONDITIONAL_PHASE, i, num_stages, 0)
 
         offset = 0
         num_iter = num_elems // block_size
         acquire_phase = 0
 
         for _ in range(num_iter // num_stages):
-            for stage in ttgl.static_range(num_stages):
-                store_stage_state(stage_state, ACQUIRED, stage, num_stages, 0)
-                store_stage_state(stage_state, DONE, stage, num_stages, 0)
-                store_stage_state(stage_state, NEED_ISSUE, stage, num_stages, 1)
-
-            num_done = 0
             acquire_phase ^= 1
 
+            # Acquire and initially fill every stage in this batch.
+            for stage in ttgl.static_range(num_stages):
+                cur_full_bar = bar_full.index(stage)
+                mbarrier.wait(bar_empty.index(stage), acquire_phase)
+                mbarrier.expect(cur_full_bar, input_desc.block_type.nbytes)
+                tma.async_load(
+                    input_desc,
+                    [0, offset + block_size * stage],
+                    cur_full_bar,
+                    smem.slice(stage, 1, dim=0),
+                    report_validity=REPORT_VALIDITY,
+                )
+                store_stage_state(stage_state, DONE, stage, num_stages, 0)
+
+            num_done = 0
             while num_done != num_stages:
                 for stage in ttgl.static_range(num_stages):
-                    if load_stage_state(stage_state, ACQUIRED, stage, num_stages) == 0:
-                        mbarrier.wait(bar_empty.index(stage), acquire_phase)
-                        store_stage_state(stage_state, ACQUIRED, stage, num_stages, 1)
-
                     if load_stage_state(stage_state, DONE, stage, num_stages) == 0:
                         cur_full_bar = bar_full.index(stage)
-
-                        if load_stage_state(stage_state, NEED_ISSUE, stage, num_stages) == 1:
-                            mbarrier.expect(cur_full_bar, input_desc.block_type.nbytes)
-                            tma.async_load(
-                                input_desc,
-                                [0, offset + block_size * stage],
-                                cur_full_bar,
-                                smem.slice(stage, 1, dim=0),
-                                report_validity=REPORT_VALIDITY,
-                            )
-                            store_stage_state(stage_state, NEED_ISSUE, stage, num_stages, 0)
-
                         primary_phase = load_stage_state(stage_state, PRIMARY_PHASE, stage, num_stages)
-                        conditional_phase = load_stage_state(stage_state, CONDITIONAL_PHASE, stage, num_stages)
+                        attempt_done, data_valid = mbarrier.test_wait_validity(cur_full_bar, primary_phase)
 
-                        if mbarrier.test_wait(cur_full_bar, primary_phase) == 1:
+                        if attempt_done == 1:
                             store_stage_state(stage_state, PRIMARY_PHASE, stage, num_stages, primary_phase ^ 1)
 
-                            if mbarrier.test_wait(cur_full_bar, conditional_phase, conditional=True):
+                            if data_valid:
                                 num_done += 1
                                 store_stage_state(stage_state, DONE, stage, num_stages, 1)
-                                store_stage_state(
-                                    stage_state,
-                                    CONDITIONAL_PHASE,
-                                    stage,
-                                    num_stages,
-                                    conditional_phase ^ 1,
-                                )
                             else:
                                 request_data_update(need_update_ptr)
-                                store_stage_state(stage_state, NEED_ISSUE, stage, num_stages, 1)
+                                mbarrier.expect(cur_full_bar, input_desc.block_type.nbytes)
+                                tma.async_load(
+                                    input_desc,
+                                    [0, offset + block_size * stage],
+                                    cur_full_bar,
+                                    smem.slice(stage, 1, dim=0),
+                                    report_validity=REPORT_VALIDITY,
+                                )
 
             offset += num_stages * block_size
 

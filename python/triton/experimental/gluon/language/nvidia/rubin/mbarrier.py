@@ -17,6 +17,7 @@ __all__ = [
     "invalidate",
     "MBarrierLayout",
     "test_wait",
+    "test_wait_validity",
     "wait",
 ]
 
@@ -63,6 +64,35 @@ def test_wait(mbarrier, phase, pred=True, conditional=False, _semantic=None):
     pred = _semantic.to_tensor(pred)
     handle = _semantic.builder.create_mbarrier_test_wait(mbarrier.handle, phase.handle, pred.handle, conditional)
     return _semantic.tensor(handle, tl.int32)
+
+
+@builtin
+def test_wait_validity(mbarrier, phase, pred=True, _semantic=None):
+    """
+    Test primary completion and validity of a report-validity TMA attempt.
+
+    Args:
+        mbarrier (shared_memory_descriptor): The report-validity barrier to test.
+        phase (int): The primary phase/parity value to test.
+        pred (bool): Predicate. If False, both results are zero. Defaults to True.
+
+    Returns:
+        tuple[tensor, tensor]: Scalar int32 tensors ``(done, valid)``. ``done``
+            is one after primary completion. ``valid`` is one only when the
+            attempt is complete and produced no validity report.
+    """
+    phase = _semantic.to_tensor(phase)
+    pred = _semantic.to_tensor(pred)
+    done_handle, reported_handle = _semantic.builder.create_mbarrier_test_wait_report(
+        mbarrier.handle,
+        phase.handle,
+        pred.handle,
+    )
+    done = _semantic.tensor(done_handle, tl.int32)
+    reported = _semantic.tensor(reported_handle, tl.int32)
+    one = _semantic.to_tensor(1)
+    valid = _semantic.and_(done, _semantic.xor_(reported, one))
+    return done, valid
 
 
 @builtin

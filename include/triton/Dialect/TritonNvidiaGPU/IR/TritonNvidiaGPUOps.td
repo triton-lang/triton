@@ -424,6 +424,35 @@ def TTNG_BarrierTestWaitOp : TTNG_Op<"barrier_test_wait", [
   let hasVerifier = 1;
 }
 
+def TTNG_BarrierTestWaitReportOp : TTNG_Op<"barrier_test_wait_report", [
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
+    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
+  let summary = "test primary mbarrier completion and retrieve its report";
+
+  let description = [{
+    Performs a single non-blocking test of the requested primary mbarrier phase
+    and returns both its completion predicate and report predicate as scalar
+    `i32` values.
+
+    The report predicate is meaningful only when `waitComplete` is non-zero.
+    Frontends must gate it with completion before interpreting the report.
+    This operation is supported only by Rubin report-validity barriers.
+  }];
+
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$alloc,
+    I32:$phase,
+    Optional<I1>:$pred
+  );
+  let results = (outs I32:$waitComplete, I32:$reportPredicate);
+
+  let assemblyFormat = [{
+    $alloc `,` $phase (`,` $pred^)? attr-dict `:` qualified(type($alloc))
+    `->` `(` type($waitComplete) `,` type($reportPredicate) `)`
+  }];
+  let hasVerifier = 1;
+}
+
 def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
     DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
     DeclareOpInterfaceMethods<PredicatedOpInterface>]> {

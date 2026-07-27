@@ -966,6 +966,14 @@ void init_gluon_ir(py::module_ &m) {
              return self.create<ttng::BarrierTestWaitOp>(memDesc, phase, pred,
                                                          conditional);
            })
+      .def("create_mbarrier_test_wait_report",
+           [](GluonOpBuilder &self, Value memDesc, Value phase,
+              Value pred) -> std::pair<Value, Value> {
+             auto op = self.create<ttng::BarrierTestWaitReportOp>(memDesc,
+                                                                  phase, pred);
+             return std::make_pair(op.getWaitComplete(),
+                                   op.getReportPredicate());
+           })
       .def(
           "create_mbarrier_arrive",
           [](GluonOpBuilder &self, Value memDesc, uint32_t count, Value pred,
