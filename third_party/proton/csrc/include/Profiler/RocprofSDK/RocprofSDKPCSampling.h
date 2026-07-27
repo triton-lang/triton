@@ -46,6 +46,9 @@ public:
   void setEnabled(bool enabled) { pcSamplingEnabled = enabled; }
   bool isEnabled() const { return pcSamplingEnabled; }
   bool isConfigured() const { return pcSamplingConfigured; }
+  const std::string &configurationFailureReason() const {
+    return pcSamplingConfigurationFailureReason;
+  }
   bool isStarted() const { return pcSamplingStarted; }
 
   void start();
@@ -168,6 +171,8 @@ private:
   bool sourceLocationWarningEmitted{false};
   uint64_t pcSamplingInterval{1ULL << 17};
   std::string invalidPCSamplingInterval;
+  std::string pcSamplingConfigurationFailureReason{
+      "Proton was built without rocprofiler-sdk PC sampling support"};
   rocprofiler_context_id_t pcSamplingContext{};
   std::vector<rocprofiler_buffer_id_t> pcSamplingBuffers;
 
