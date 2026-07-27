@@ -1,5 +1,6 @@
 // RUN: triton-opt --split-input-file -convert-proton-to-protongpu="max-shared-mem-size=32768" -canonicalize -cse %s | FileCheck %s
 // RUN: triton-opt --split-input-file -convert-proton-to-protongpu="buffer-type=global buffer-size=1024" -canonicalize -cse %s | FileCheck --check-prefix=CHECK-GMEM %s
+// RUN: triton-opt --split-input-file -convert-proton-to-protongpu="max-shared-mem-size=32768 sampling-strategy=selective sampling-options=0,1,2" -canonicalize -cse %s | FileCheck --check-prefix=CHECK-SELECTIVE %s
 
 module {
   // CHECK-LABEL: no_record
@@ -13,9 +14,12 @@ module {
 
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: simple_record
+  // CHECK-SELECTIVE-LABEL: tt.func @simple_record
+  // CHECK-SELECTIVE: %[[SELECTIVE_BUF:.*]] = ttg.local_alloc{{.*}}!ttg.memdesc<192x1xi32, #shared, #smem, mutable>
+  // CHECK-SELECTIVE: proton_gpu.segment_alloc %[[SELECTIVE_BUF]]{{.*}}<768, #smem, warp, [0, 1, 2]>
   // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 1152 : i32, third_party_allocation} : !tt.ptr<i32>
   // CHECK: proton_gpu.initialize %[[SCRATCH]] : !tt.ptr<i32>
-  // CHECK: %[[BUF:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
+  // CHECK: %[[BUF:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<256x1xi32, #shared, #smem, mutable>
   // CHECK: %[[SEGMENT:.*]] = proton_gpu.segment_alloc %[[BUF]]
   // CHECK: %[[START:.*]] = proton_gpu.read_counter : i32
   // CHECK: proton_gpu.circular_store start %[[SEGMENT]], %[[START]] {scopeId = 0 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
@@ -114,8 +118,8 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 // CHECK: module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32} {
 // CHECK:   tt.func @convert_warp_specialize() {
 // CHECK:     %[[SCRATCH:.*]] = ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 1152 : i32, third_party_allocation} : !tt.ptr<i32>
-// CHECK:     %[[MEMDESC:.*]] = ttg.local_alloc : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
-// CHECK:     %[[SEGMENT:.*]] = proton_gpu.segment_alloc %[[MEMDESC]] : !ttg.memdesc<256xi32, #shared, #smem, mutable> -> <1024, #smem, warp>
+// CHECK:     %[[MEMDESC:.*]] = ttg.local_alloc : () -> !ttg.memdesc<256x1xi32, #shared, #smem, mutable>
+// CHECK:     %[[SEGMENT:.*]] = proton_gpu.segment_alloc %[[MEMDESC]] : !ttg.memdesc<256x1xi32, #shared, #smem, mutable> -> <1024, #smem, warp>
 // CHECK:     proton_gpu.init_ctx %[[SCRATCH]] : !tt.ptr<i32>
 // CHECK:     %[[COUNTER1:.*]] = proton_gpu.read_counter : i32
 // CHECK:     proton_gpu.circular_store start %[[SEGMENT]], %[[COUNTER1]] {scopeId = 0 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
@@ -127,15 +131,15 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 // CHECK:       proton_gpu.circular_store end %[[SEGMENT]], %[[COUNTER3]] {scopeId = 1 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
 // CHECK:       ttg.warp_yield
 // CHECK:     }
-// CHECK:     partition0(%[[ARG0:.*]]: !ttg.memdesc<256xi32, #shared, #smem, mutable>, %[[ARG1:.*]]: !tt.ptr<i32>) num_warps(1) {
-// CHECK:       %[[SEGMENT2:.*]] = proton_gpu.segment_alloc %[[ARG0]] : !ttg.memdesc<256xi32, #shared, #smem, mutable> -> <1024, #smem, warp>
+// CHECK:     partition0(%[[ARG0:.*]]: !ttg.memdesc<256x1xi32, #shared, #smem, mutable>, %[[ARG1:.*]]: !tt.ptr<i32>) num_warps(1) {
+// CHECK:       %[[SEGMENT2:.*]] = proton_gpu.segment_alloc %[[ARG0]] : !ttg.memdesc<256x1xi32, #shared, #smem, mutable> -> <1024, #smem, warp>
 // CHECK:       proton_gpu.restore_ctx %[[SEGMENT2]], %[[ARG1]] : !proton_gpu.segment<1024, #smem, warp>, !tt.ptr<i32>
 // CHECK:       %[[COUNTER4:.*]] = proton_gpu.read_counter : i32
 // CHECK:       proton_gpu.circular_store start %[[SEGMENT2]], %[[COUNTER4]] {scopeId = 2 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
 // CHECK:       %[[COUNTER5:.*]] = proton_gpu.read_counter : i32
 // CHECK:       proton_gpu.circular_store end %[[SEGMENT2]], %[[COUNTER5]] {scopeId = 2 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
 // CHECK:       ttg.warp_return
-// CHECK:     } : (!ttg.memdesc<256xi32, #shared, #smem, mutable>, !tt.ptr<i32>) -> ()
+// CHECK:     } : (!ttg.memdesc<256x1xi32, #shared, #smem, mutable>, !tt.ptr<i32>) -> ()
 // CHECK:     %[[COUNTER6:.*]] = proton_gpu.read_counter : i32
 // CHECK:     proton_gpu.circular_store end %[[SEGMENT]], %[[COUNTER6]] {scopeId = 0 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
 // CHECK: ttg.barrier local|global_read|global_write

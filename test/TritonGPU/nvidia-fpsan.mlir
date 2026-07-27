@@ -8,6 +8,26 @@
 #red = #ttg.slice<{dim = 1, parent = #blocked_reduce}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.tensor_memory_size = 0 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @tmem_pipeline_stage_subslice_index
+  // CHECK-DAG: arith.constant 16384 : i32
+  // CHECK-DAG: arith.constant 32768 : i32
+  // CHECK: ttg.global_scratch_alloc
+  // CHECK: tt.addptr
+  // CHECK: tt.addptr
+  // CHECK-NOT: ttng.tmem_subslice
+  // CHECK-NOT: ttg.memdesc_index
+  tt.func public @tmem_pipeline_stage_subslice_index() {
+    %true = arith.constant true
+    %one = arith.constant 1 : i32
+    %zero = arith.constant dense<0.0> : tensor<128x128xf32, #blocked>
+    %buf = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<5x128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %stages = ttng.tmem_subslice %buf {offset = 2 : i32, dim = 0 : i32} : !ttg.memdesc<5x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable, 5x128x128>
+    %view = ttg.memdesc_index %stages[%one] : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable, 5x128x128> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %zero, %view, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tmem_load %view : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    tt.return
+  }
+
   // CHECK-LABEL: @tmem_load_store
   tt.func public @tmem_load_store() {
     // CHECK: ttg.global_scratch_alloc
