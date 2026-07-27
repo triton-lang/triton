@@ -1564,8 +1564,9 @@ void RocprofSDKProfiler::doSetMode(
     impl->pcSampling.warnIfInvalidInterval();
     if (!impl->pcSampling.isConfigured()) {
       throw std::runtime_error(
-          "[PROTON] PC sampling mode requested but hardware does not support "
-          "it or configuration failed during initialization");
+          "[PROTON] PC sampling mode requested but rocprofiler-sdk could not "
+          "configure it: " +
+          impl->pcSampling.configurationFailureReason());
     }
     impl->pcSampling.warnIfSourceLocationsUnavailable();
   } else if (proton::toLower(mode) == "periodic_flushing") {

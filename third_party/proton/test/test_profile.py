@@ -1007,12 +1007,23 @@ def test_pcsampling(tmp_path: pathlib.Path, device: str):
 
     temp_file = tmp_path / "test_pcsampling.hatchet"
     backend = "cupti" if is_cuda() else "rocprofiler"
-    proton.start(
-        str(temp_file.with_suffix("")),
-        hook="triton",
-        backend=backend,
-        mode="pcsampling",
-    )
+    try:
+        proton.start(
+            str(temp_file.with_suffix("")),
+            hook="triton",
+            backend=backend,
+            mode="pcsampling",
+        )
+    except RuntimeError as e:
+        message = str(e)
+        amd_pc_sampling_unavailable = (
+            "rocprofiler-sdk PC sampling service is not available" in message
+            or "rocprofiler-sdk did not report PC sampling configurations" in message
+        )
+        if is_hip() and amd_pc_sampling_unavailable:
+            proton.finalize()
+            pytest.skip(message)
+        raise
     with proton.scope("init"):
         x = torch.ones((1024, ), device=device, dtype=torch.float32)
         y = torch.zeros_like(x)
