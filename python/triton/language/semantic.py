@@ -1814,6 +1814,12 @@ class TritonSemantic(Generic[TensorTy]):
     def debug_barrier(self) -> TensorTy:
         return self.tensor(self.builder.create_barrier(), tl.void)
 
+    def grid_dependency_wait(self) -> None:
+        self.builder.create_grid_dependency_wait()
+
+    def grid_dependency_launch_dependents(self) -> None:
+        self.builder.create_grid_dependency_launch_dependents()
+
     def device_print(self, prefix: str, args: List[TensorTy], hex: bool) -> TensorTy:
         # It makes sense visually for prefix to end in ": "; make it so.  Also,
         # non-empty prefixes should start with " ".

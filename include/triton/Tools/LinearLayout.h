@@ -535,6 +535,10 @@ public:
   // TODO(jlebar): Replace with divideLeft.
   int32_t getNumConsecutiveInOut() const;
 
+  // Returns the largest contiguous prefix of an output dimension contained in
+  // the image of this layout projected onto that dimension.
+  [[nodiscard]] int32_t contiguousElemsAlongOutputDim(StringAttr outDim) const;
+
   // Reorders the in/out dimensions of the layout.  This is mostly cosmetic
   // (affecting e.g. the order of getIn/OutDimNames), but it also affects the
   // behavior of reshape.
