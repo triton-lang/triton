@@ -421,6 +421,46 @@ def test_tuple_assignment_constexpr_tuple_normalizes_recursively():
     run_parser(kernel)
 
 
+def test_tuple_assignment_rejects_too_many_values():
+
+    @triton.jit
+    def kernel():
+        a, b = (1, 2, 3)  # noqa: F841
+
+    with pytest.raises(CompilationError, match="too many values to unpack"):
+        run_parser(kernel)
+
+
+def test_tuple_assignment_rejects_too_few_values():
+
+    @triton.jit
+    def kernel():
+        a, b, c = (1, 2)  # noqa: F841
+
+    with pytest.raises(CompilationError, match=r"not enough values to unpack \(expected 3, got 2\)"):
+        run_parser(kernel)
+
+
+def test_tuple_assignment_rejects_nested_mismatch():
+
+    @triton.jit
+    def kernel():
+        (a, b), c = ((1, 2, 3), 4)  # noqa: F841
+
+    with pytest.raises(CompilationError, match="too many values to unpack"):
+        run_parser(kernel)
+
+
+def test_tuple_assignment_rejects_starred_target():
+
+    @triton.jit
+    def kernel():
+        a, *rest = (1, 2, 3)  # noqa: F841
+
+    with pytest.raises(CompilationError, match="starred assignment targets are not supported"):
+        run_parser(kernel)
+
+
 def test_list_comprehension_if_filter():
 
     @triton.jit
