@@ -82,10 +82,12 @@ struct ThreadState {
   // monotonic counter, used for stochastic read clock updates
   uint32_t numReads;
 
+  uint32_t gdcWaitCalled : 1;
+
   // Index to head of the circular clock buffer, plus a bit to mark if the
   // vector clock has changed since the last clock buffer write (to allow reuse)
   uint32_t clockBufferDirty : 1;
-  uint32_t clockBufferHead : 31;
+  uint32_t clockBufferHead : 30;
 
   // Reader-writer lock controlling access to the vector clock and clock buffer
   uint32_t lock;

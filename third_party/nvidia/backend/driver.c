@@ -263,6 +263,20 @@ static PyObject *getDefaultStream(PyObject *self, PyObject *args) {
   return PyLong_FromUnsignedLongLong(0);
 }
 
+static PyObject *isStreamCapturing(PyObject *self, PyObject *args) {
+  uint64_t stream;
+  if (!PyArg_ParseTuple(args, "K", &stream)) {
+    return NULL;
+  }
+
+  CUstreamCaptureStatus status;
+  CUDA_CHECK_AND_RETURN_NULL(cuStreamIsCapturing((CUstream)stream, &status));
+  return PyBool_FromLong(status != CU_STREAM_CAPTURE_STATUS_NONE);
+
+cleanup:
+  return NULL;
+}
+
 static PyObject *loadBinary(PyObject *self, PyObject *args) {
   const char *name;
   const char *data;
@@ -1542,6 +1556,8 @@ static PyMethodDef ModuleMethods[] = {
      "Set the current CUDA device index"},
     {"get_default_stream", getDefaultStream, METH_VARARGS,
      "Get the CUDA default stream for torch-free launches"},
+    {"is_stream_capturing", isStreamCapturing, METH_VARARGS,
+     "Check whether a CUDA stream is being captured"},
     {"cuOccupancyMaxActiveClusters", occupancyMaxActiveClusters, METH_VARARGS,
      "Python interface for cuOccupancyMaxActiveClusters function"},
     {"set_printf_fifo_size", setPrintfFifoSize, METH_VARARGS,

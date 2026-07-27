@@ -2725,6 +2725,54 @@ def test_ws_wgmma_wait_visibility(FAILURE, device, run_wrapper, monkeypatch, num
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.parametrize("EXPLICIT_BARRIER", [False, True], ids=["terminal-barrier", "explicit-barrier"])
+@pytest.mark.parametrize("DEFAULT_WARPS", [4, 8], ids=["four-default-warps", "eight-default-warps"])
+def test_cluster_barrier_warp_specialized_phase_snapshot(EXPLICIT_BARRIER, DEFAULT_WARPS, device, run_wrapper,
+                                                         monkeypatch, num_ctas):
+    if num_ctas == 1:
+        pytest.skip("cluster barriers require multiple CTAs")
+    if run_wrapper:
+        result = run_in_process(test_cluster_barrier_warp_specialized_phase_snapshot,
+                                (EXPLICIT_BARRIER, DEFAULT_WARPS, device, False, monkeypatch, num_ctas))
+        assert result.exc is None
+        assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def wait_then_signal(bar):
+        mbarrier.wait(bar.index(0), phase=0)
+        mbarrier.arrive(bar.index(1), count=1)
+
+    @gluon.jit
+    def signal_then_wait(bar):
+        mbarrier.arrive(bar.index(0), count=1)
+        mbarrier.wait(bar.index(1), phase=0)
+
+    @gluon.jit
+    def kernel(output, EXPLICIT_BARRIER: ttgl.constexpr):
+        bar = mbarrier.allocate_mbarrier(batch=2)
+        mbarrier.init(bar.index(0), count=1)
+        mbarrier.init(bar.index(1), count=1)
+        ttgl.warp_specialize([
+            (wait_then_signal, (bar, )),
+            (signal_then_wait, (bar, )),
+        ], [4], [32])
+        if EXPLICIT_BARRIER:
+            ttgl.barrier(cluster=True)
+        pid = ttgl.program_id(0)
+        ttgl.store(output + pid, pid)
+
+    output = torch.empty((num_ctas * 16, ), device=device, dtype=torch.int32)
+    for _ in range(4):
+        kernel[(num_ctas * 16, )](output, EXPLICIT_BARRIER, num_warps=DEFAULT_WARPS, num_ctas=num_ctas)
+    torch.testing.assert_close(output, torch.arange(num_ctas * 16, device=device, dtype=torch.int32))
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 def test_deadlock_two_partitions(device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
         result = run_in_process(test_deadlock_two_partitions, (device, False, monkeypatch, num_ctas))
@@ -3331,6 +3379,84 @@ def test_aliasing_tensor_visibility_outstanding_read(FAILURE, device, run_wrappe
                               (writer, (alias1, bar, FAILURE, blocked_layout_write))], [4], [32])
 
     kernel[(1, )](FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+def test_disjoint_noncontiguous_tmem_subslices(device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_disjoint_noncontiguous_tmem_subslices, (device, False, monkeypatch))
+        assert result.exc is None
+        assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def reader(src: ttgl.constexpr, sink: ttgl.constexpr, layout: ttgl.constexpr):
+        sink.store(src.load(layout))
+
+    @gluon.jit
+    def writer(dst: ttgl.constexpr, layout: ttgl.constexpr):
+        dst.store(ttgl.zeros([256, 64], ttgl.float32, layout))
+
+    @gluon.jit
+    def kernel():
+        tmem_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([128, 128], col_stride=1, cga_layout=())
+        tmem = blackwell.allocate_tensor_memory(ttgl.float32, [2, 256, 128], tmem_layout)
+        page0 = tmem.index(0)
+        page1 = tmem.index(1)
+        page0_slab1 = page0.slice(64, 64)
+        page1_slab0 = page1.slice(0, 64)
+        layout: ttgl.constexpr = page0_slab1.get_reg_layout()
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1])
+        sink = ttgl.allocate_shared_memory(ttgl.float32, [256, 64], smem_layout)
+
+        ttgl.warp_specialize([(reader, (page0_slab1, sink, layout)), (writer, (page1_slab0, layout))], [4], [32])
+
+    kernel[(1, )](num_warps=4)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+def test_same_page_tmem_slabs_with_full_page_descriptor_collision(device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_same_page_tmem_slabs_with_full_page_descriptor_collision,
+                                (device, False, monkeypatch))
+        assert result.exc is None
+        assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def reader(src: ttgl.constexpr, sink: ttgl.constexpr, layout: ttgl.constexpr):
+        sink.store(src.load(layout))
+
+    @gluon.jit
+    def writer(dst: ttgl.constexpr, layout: ttgl.constexpr):
+        dst.store(ttgl.zeros([256, 64], ttgl.float32, layout))
+
+    @gluon.jit
+    def kernel():
+        tmem_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([128, 128], col_stride=1, cga_layout=())
+        zero_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 128], threads_per_warp=[32, 1],
+                                                         warps_per_cta=[4, 1], order=[0, 1])
+        zero = ttgl.zeros([256, 128], ttgl.float32, zero_layout)
+        # Initializing the full page makes both the full-page region and slab 0
+        # appear in ConSan's registry with the same runtime descriptor key.
+        tmem = blackwell.allocate_tensor_memory(ttgl.float32, [256, 128], tmem_layout, zero)
+        slab0 = tmem.slice(0, 64)
+        slab1 = tmem.slice(64, 64)
+        layout: ttgl.constexpr = slab0.get_reg_layout()
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1])
+        sink = ttgl.allocate_shared_memory(ttgl.float32, [256, 64], smem_layout)
+
+        ttgl.warp_specialize([(reader, (slab0, sink, layout)), (writer, (slab1, layout))], [4], [32])
+
+    kernel[(1, )](num_warps=4)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
