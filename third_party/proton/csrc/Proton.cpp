@@ -247,7 +247,8 @@ static void initProton(nanobind::module_ &m) {
   m.def("get_available_profilers",
         []() { return getRegisteredProfilerNames(); });
   m.def("has_amd_pc_sampling_source_locations", []() {
-    return PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE != 0;
+    return PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING != 0 &&
+           PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE != 0;
   });
   m.def(
       "select_profiler_from_triton_backend",
