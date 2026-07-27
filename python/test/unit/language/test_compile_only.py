@@ -38,10 +38,9 @@ def test_compile_only_packed_arith_chains(element_type, tmp_path) -> None:
 
     instructions = []
     for name, operands, operand_count in operations:
-        operand_types = ", ".join([packed_type] * operand_count)
         tensor_types = ", ".join([tensor_type] * operand_count)
-        instructions.append(f"    %{name} = ttng.packed_arith {name}, {packed_type}, [{operand_types}], "
-                            f"{operands} axis = 0 : ({tensor_types}) -> {tensor_type}")
+        instructions.append(f"    %{name} = ttng.packed_arith {name} "
+                            f"{operands} : ({tensor_types}) -> {tensor_type}")
     packed_operations = "\n".join(instructions)
     result = operations[-1][0]
     src = f"""

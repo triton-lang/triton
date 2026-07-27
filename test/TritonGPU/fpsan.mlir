@@ -43,14 +43,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: arith.minsi
     // CHECK: arith.maxsi
     // CHECK-NOT: ttng.packed_arith
-    %add = ttng.packed_arith add, f32x2, [f32x2, f32x2], %f32a, %f32b axis = 1 : (tensor<128x4xf32, #packed>, tensor<128x4xf32, #packed>) -> tensor<128x4xf32, #packed>
-    %sub = ttng.packed_arith sub, f32x2, [f32x2, f32x2], %add, %f32b axis = 1 : (tensor<128x4xf32, #packed>, tensor<128x4xf32, #packed>) -> tensor<128x4xf32, #packed>
-    %mul = ttng.packed_arith mul, f32x2, [f32x2, f32x2], %sub, %f32b axis = 1 : (tensor<128x4xf32, #packed>, tensor<128x4xf32, #packed>) -> tensor<128x4xf32, #packed>
-    %fma = ttng.packed_arith fma, f32x2, [f32x2, f32x2, f32x2], %mul, %f32b, %f32c axis = 1 : (tensor<128x4xf32, #packed>, tensor<128x4xf32, #packed>, tensor<128x4xf32, #packed>) -> tensor<128x4xf32, #packed>
-    %up = ttng.packed_arith add, f32x2, [f16x2, f32x2], %f16a, %fma axis = 1 : (tensor<128x4xf16, #packed>, tensor<128x4xf32, #packed>) -> tensor<128x4xf32, #packed>
-    %down = ttng.packed_arith sub, f16x2, [f32x2, f32x2], %up, %f32c axis = 1 : (tensor<128x4xf32, #packed>, tensor<128x4xf32, #packed>) -> tensor<128x4xf16, #packed>
-    %min = ttng.packed_arith min, f16x2, [f16x2, f16x2], %down, %f16b axis = 1 : (tensor<128x4xf16, #packed>, tensor<128x4xf16, #packed>) -> tensor<128x4xf16, #packed>
-    %max = ttng.packed_arith max, f16x2, [f16x2, f16x2], %min, %f16b axis = 1 : (tensor<128x4xf16, #packed>, tensor<128x4xf16, #packed>) -> tensor<128x4xf16, #packed>
+    %add = ttng.packed_arith add %f32a, %f32b : (tensor<128x4xf32, #packed>, tensor<128x4xf32, #packed>) -> tensor<128x4xf32, #packed>
+    %sub = ttng.packed_arith sub %add, %f32b : (tensor<128x4xf32, #packed>, tensor<128x4xf32, #packed>) -> tensor<128x4xf32, #packed>
+    %mul = ttng.packed_arith mul %sub, %f32b : (tensor<128x4xf32, #packed>, tensor<128x4xf32, #packed>) -> tensor<128x4xf32, #packed>
+    %fma = ttng.packed_arith fma %mul, %f32b, %f32c : (tensor<128x4xf32, #packed>, tensor<128x4xf32, #packed>, tensor<128x4xf32, #packed>) -> tensor<128x4xf32, #packed>
+    %up = ttng.packed_arith add %f16a, %fma : (tensor<128x4xf16, #packed>, tensor<128x4xf32, #packed>) -> tensor<128x4xf32, #packed>
+    %down = ttng.packed_arith sub %up, %f32c : (tensor<128x4xf32, #packed>, tensor<128x4xf32, #packed>) -> tensor<128x4xf16, #packed>
+    %min = ttng.packed_arith min %down, %f16b : (tensor<128x4xf16, #packed>, tensor<128x4xf16, #packed>) -> tensor<128x4xf16, #packed>
+    %max = ttng.packed_arith max %min, %f16b : (tensor<128x4xf16, #packed>, tensor<128x4xf16, #packed>) -> tensor<128x4xf16, #packed>
     tt.return %max : tensor<128x4xf16, #packed>
   }
 }
@@ -74,10 +74,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: arith.muli
     // CHECK: arith.addi
     // CHECK-NOT: ttng.packed_arith
-    %add = ttng.packed_arith add, e4m3x4, [e2m1x4, e4m3x4], %fp4, %e4m3 axis = 1 : (tensor<128x2xi8, #fp4>, tensor<128x4xf8E4M3FN, #packed>) -> tensor<128x4xf8E4M3FN, #packed>
-    %mul = ttng.packed_arith mul, e4m3x4, [e5m2x4, e2m1p4x4], %e5m2, %fp4 axis = 1 : (tensor<128x4xf8E5M2, #packed>, tensor<128x2xi8, #fp4>) -> tensor<128x4xf8E4M3FN, #packed>
-    %fma = ttng.packed_arith fma, e4m3x4, [e2m1p4x4, e5m2x4, e4m3x4], %fp4, %e5m2, %add axis = 1 : (tensor<128x2xi8, #fp4>, tensor<128x4xf8E5M2, #packed>, tensor<128x4xf8E4M3FN, #packed>) -> tensor<128x4xf8E4M3FN, #packed>
-    %out = ttng.packed_arith add, e4m3x4, [e4m3x4, e4m3x4], %mul, %fma axis = 1 : (tensor<128x4xf8E4M3FN, #packed>, tensor<128x4xf8E4M3FN, #packed>) -> tensor<128x4xf8E4M3FN, #packed>
+    %add = ttng.packed_arith add %fp4, %e4m3 : (tensor<128x2xi8, #fp4>, tensor<128x4xf8E4M3FN, #packed>) -> tensor<128x4xf8E4M3FN, #packed>
+    %mul = ttng.packed_arith mul %e5m2, %fp4 : (tensor<128x4xf8E5M2, #packed>, tensor<128x2xi8, #fp4>) -> tensor<128x4xf8E4M3FN, #packed>
+    %fma = ttng.packed_arith fma %fp4, %e5m2, %add : (tensor<128x2xi8, #fp4>, tensor<128x4xf8E5M2, #packed>, tensor<128x4xf8E4M3FN, #packed>) -> tensor<128x4xf8E4M3FN, #packed>
+    %out = ttng.packed_arith add %mul, %fma : (tensor<128x4xf8E4M3FN, #packed>, tensor<128x4xf8E4M3FN, #packed>) -> tensor<128x4xf8E4M3FN, #packed>
     tt.return %out : tensor<128x4xf8E4M3FN, #packed>
   }
 }
@@ -96,7 +96,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: tt.reshape
     // CHECK: arith.addi
     // CHECK-NOT: ttng.packed_arith
-    %out = ttng.packed_arith add, e4m3x4, [e2m1x4, e4m3x4], %fp4, %f8 axis = 0 : (tensor<2x256xi8, #fp4>, tensor<4x256xf8E4M3FN, #result>) -> tensor<4x256xf8E4M3FN, #result>
+    %out = ttng.packed_arith add %fp4, %f8 : (tensor<2x256xi8, #fp4>, tensor<4x256xf8E4M3FN, #result>) -> tensor<4x256xf8E4M3FN, #result>
     tt.return %out : tensor<4x256xf8E4M3FN, #result>
   }
 }

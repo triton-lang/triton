@@ -19,23 +19,6 @@ namespace mlir::triton::NVIDIA {
 enum class PtxAtomicAddrSpace { Global, Shared, SharedCluster };
 enum class PtxAtomicInstr { Atom, Red };
 
-inline std::string getPtxRegisterSizeCode(int size, bool isFloat) {
-  switch (size) {
-  case 1:
-    return "b";
-  case 16:
-    return "h";
-  case 32:
-    return isFloat ? "f" : "r";
-  case 64:
-    return isFloat ? "d" : "l";
-  case 128:
-    return "q";
-  default:
-    llvm_unreachable("Unsupported register size");
-  }
-}
-
 inline FailureOr<Value>
 emitPtxAtomicRMWImpl(ConversionPatternRewriter &rewriter, Location loc,
                      Type valueElemTy, Value ptr, ArrayRef<Value> vals,

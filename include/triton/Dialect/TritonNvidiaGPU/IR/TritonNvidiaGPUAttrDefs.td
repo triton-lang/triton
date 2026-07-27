@@ -69,8 +69,7 @@ def TTNG_PackedArithTypeAttr : I32EnumAttr<
         I32EnumAttrCase<"E5M2X4", 3, "e5m2x4">,
         I32EnumAttrCase<"E4M3X4", 4, "e4m3x4">,
         I32EnumAttrCase<"E2M1X4", 5, "e2m1x4">,
-        I32EnumAttrCase<"E2M1P4X4", 6, "e2m1p4x4">,
-        I32EnumAttrCase<"UE8M0X4", 7, "ue8m0x4">,
+        I32EnumAttrCase<"UE8M0X4", 6, "ue8m0x4">,
     ]> {
   let cppNamespace = "::mlir::triton::nvidia_gpu";
 }

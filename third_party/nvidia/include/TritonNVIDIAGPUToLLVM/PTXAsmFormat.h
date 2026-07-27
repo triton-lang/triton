@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <memory>
 #include <string>
 
@@ -14,6 +15,24 @@ class Location;
 
 namespace triton {
 using llvm::StringRef;
+
+inline std::string getPtxRegisterSizeCode(unsigned bitWidth, bool isFloat) {
+  switch (bitWidth) {
+  case 1:
+    return "b";
+  case 8:
+  case 16:
+    return "h";
+  case 32:
+    return isFloat ? "f" : "r";
+  case 64:
+    return isFloat ? "d" : "l";
+  case 128:
+    return "q";
+  default:
+    llvm_unreachable("unsupported PTX register size");
+  }
+}
 
 struct PTXInstr;
 struct PTXInstrCommon;

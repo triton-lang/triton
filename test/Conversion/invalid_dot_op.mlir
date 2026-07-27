@@ -21,3 +21,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     tt.return %D : tensor<16x16xi32, #mma0>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_requires_ptx94(
+      %a: tensor<256xf16, #blocked>,
+      %b: tensor<256xf32, #blocked>) {
+    // expected-error@+2 {{requires PTX ISA 9.4 or newer}}
+    // expected-error@+1 {{failed to legalize operation 'ttng.packed_arith' that was explicitly marked illegal}}
+    %0 = ttng.packed_arith add %a, %b : (tensor<256xf16, #blocked>, tensor<256xf32, #blocked>) -> tensor<256xf32, #blocked>
+    tt.return
+  }
+}

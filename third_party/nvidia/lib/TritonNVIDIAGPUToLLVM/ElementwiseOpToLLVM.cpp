@@ -658,32 +658,25 @@ struct ExpOpConversionApprox
   }
 };
 
-static StringRef getPackedArithConstraint(unsigned registerBitWidth,
-                                          bool isOutput) {
-  switch (registerBitWidth) {
-  case 16:
-    return isOutput ? "=h" : "h";
-  case 32:
-    return isOutput ? "=r" : "r";
-  case 64:
-    return isOutput ? "=l" : "l";
-  default:
-    llvm_unreachable("unsupported packed arithmetic register width");
-  }
+static std::string getPackedArithConstraint(unsigned registerBitWidth,
+                                            bool isOutput) {
+  std::string constraint =
+      getPtxRegisterSizeCode(registerBitWidth, /*isFloat=*/false);
+  if (isOutput)
+    constraint.insert(constraint.begin(), '=');
+  return constraint;
 }
 
 static SmallVector<StringRef> getPackedArithInstructionOptions(
-    nvidia_gpu::PackedArithOp op,
-    ArrayRef<nvidia_gpu::PackedArithType> operandTypes) {
+    nvidia_gpu::PackedArithType resultType,
+    ArrayRef<nvidia_gpu::PackedArithType> operandTypes,
+    const nvidia_gpu::PackedArithInstructionSpec &instruction) {
   SmallVector<StringRef> options;
-  auto instruction = nvidia_gpu::getPackedArithInstructionSpec(
-      op.getOpKind(), op.getPackedType(), operandTypes);
-  assert(instruction && "unsupported packed arithmetic instruction");
-  if (!instruction->modifiers.empty())
-    instruction->modifiers.split(options, '.');
-  options.push_back(stringifyPackedArithType(op.getPackedType()));
+  if (!instruction.modifiers.empty())
+    instruction.modifiers.split(options, '.');
+  options.push_back(stringifyPackedArithType(resultType));
   for (nvidia_gpu::PackedArithType type :
-       operandTypes.take_front(instruction->explicitOperandTypes))
+       operandTypes.take_front(instruction.explicitOperandTypes))
     options.push_back(stringifyPackedArithType(type));
   return options;
 }
@@ -691,72 +684,60 @@ static SmallVector<StringRef> getPackedArithInstructionOptions(
 static Value packPackedArithOperand(Location loc,
                                     ConversionPatternRewriter &rewriter,
                                     nvidia_gpu::PackedArithType packedType,
-                                    ArrayRef<Value> values, unsigned base) {
+                                    ArrayRef<Value> values) {
   TritonLLVMOpBuilder b(loc, rewriter);
   const nvidia_gpu::PackedArithTypeInfo &typeInfo =
       nvidia_gpu::getPackedArithTypeInfo(packedType);
-  unsigned packWidth = typeInfo.laneCount;
-  Type packedTypeLLVM = int_ty(typeInfo.registerBitWidth);
-
-  if (typeInfo.storageKind == nvidia_gpu::PackedArithStorageKind::CompactFP4) {
-    // Triton stores two e2m1 values per i8, so two bytes form e2m1x4.
-    Type vectorType = vec_ty(i8_ty, 2);
-    Value vector = b.undef(vectorType);
-    for (unsigned lane = 0; lane < 2; ++lane)
-      vector = b.insert_element(vectorType, vector, values[base + lane],
-                                b.i32_val(lane));
-    return b.bitcast(vector, packedTypeLLVM);
-  }
-
-  if (typeInfo.storageKind == nvidia_gpu::PackedArithStorageKind::PaddedFP4) {
-    // Expand two compact fp4 bytes to four zero-padded fp4 bytes.
-    Type vectorType = vec_ty(i8_ty, packWidth);
-    Value vector = b.undef(vectorType);
-    for (unsigned byte = 0; byte < 2; ++byte) {
-      Value packed = values[base + byte];
-      Value lo = b.and_(packed, b.i8_val(0xf));
-      Value hi = b.lshr(packed, b.i8_val(4));
-      vector = b.insert_element(vectorType, vector, lo, b.i32_val(2 * byte));
-      vector =
-          b.insert_element(vectorType, vector, hi, b.i32_val(2 * byte + 1));
-    }
-    return b.bitcast(vector, packedTypeLLVM);
-  }
-
-  Type elementType = values[base].getType();
-  Type vectorType = vec_ty(elementType, packWidth);
-  Value vector = b.undef(vectorType);
-  for (unsigned lane = 0; lane < packWidth; ++lane) {
-    vector = b.insert_element(vectorType, vector, values[base + lane],
-                              b.i32_val(lane));
-  }
-  return b.bitcast(vector, packedTypeLLVM);
+  assert(values.size() == typeInfo.getStorageLaneCount());
+  return b.bitcast(packLLVector(loc, values, rewriter),
+                   int_ty(typeInfo.registerBitWidth));
 }
 
 struct PackedArithOpConversion
     : ConvertOpToLLVMPattern<nvidia_gpu::PackedArithOp> {
-  using ConvertOpToLLVMPattern<
-      nvidia_gpu::PackedArithOp>::ConvertOpToLLVMPattern;
+  PackedArithOpConversion(LLVMTypeConverter &typeConverter,
+                          const NVIDIA::TargetInfo &targetInfo,
+                          PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(nvidia_gpu::PackedArithOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     auto tensorType = op.getResult().getType();
-    unsigned axis = op.getAxis();
+    auto resultType =
+        *nvidia_gpu::getPackedArithType(tensorType.getElementType());
     const nvidia_gpu::PackedArithTypeInfo &resultInfo =
-        nvidia_gpu::getPackedArithTypeInfo(op.getPackedType());
+        nvidia_gpu::getPackedArithTypeInfo(resultType);
     unsigned packWidth = resultInfo.laneCount;
-    auto resultOrder = nvidia_gpu::PackedArithOp::getRegisterOrder(
-        tensorType, axis, packWidth);
-    if (!resultOrder)
-      return rewriter.notifyMatchFailure(
-          op, "packed result lanes are not all available within one thread");
+    unsigned resultValueCount = getUniqueElemsPerThread(tensorType);
+    unsigned packCount = resultValueCount / packWidth;
 
     SmallVector<nvidia_gpu::PackedArithType> operandPackedTypes;
-    for (int32_t rawType : op.getOperandPackedTypes()) {
-      operandPackedTypes.push_back(
-          *nvidia_gpu::symbolizePackedArithType(rawType));
+    for (Value operand : op.getOperands()) {
+      operandPackedTypes.push_back(*nvidia_gpu::getPackedArithType(
+          cast<RankedTensorType>(operand.getType()).getElementType()));
+    }
+    auto instruction = nvidia_gpu::getPackedArithInstructionSpec(
+        op.getOpKind(), resultType, operandPackedTypes);
+    assert(instruction && "unsupported packed arithmetic instruction");
+    if (targetInfo.getPtxVersion() <
+        static_cast<int>(instruction->minimumPtxVersion)) {
+      op.emitError() << "requires PTX ISA "
+                     << instruction->minimumPtxVersion / 10 << "."
+                     << instruction->minimumPtxVersion % 10 << " or newer";
+      return failure();
+    }
+
+    std::optional<unsigned> fp4Axis = nvidia_gpu::getPackedArithFp4Axis(op);
+    std::optional<ColumnAction> resultAction;
+    if (fp4Axis) {
+      resultAction = nvidia_gpu::getPackedArithRegisterAction(
+          tensorType, *fp4Axis, packWidth);
+      if (!resultAction)
+        return rewriter.notifyMatchFailure(
+            op, "packed result lanes are not all available within one thread");
     }
 
     SmallVector<SmallVector<Value>> operandValues;
@@ -767,41 +748,46 @@ struct PackedArithOpConversion
               .getStorageLaneCount();
       auto operandType =
           cast<RankedTensorType>(op.getOperands()[index].getType());
-      auto order = nvidia_gpu::PackedArithOp::getRegisterOrder(
-          operandType, axis, operandPackWidth);
-      if (!order)
-        return rewriter.notifyMatchFailure(
-            op, "packed operand lanes are not all available within one thread");
       SmallVector<Value> values =
           unpackUniqueTensorElements(loc, operand, rewriter);
-      SmallVector<Value> orderedValues;
-      orderedValues.reserve(order->size());
-      for (unsigned registerIndex : *order)
-        orderedValues.push_back(values[registerIndex]);
-      operandValues.push_back(std::move(orderedValues));
+      if (fp4Axis) {
+        auto action = nvidia_gpu::getPackedArithRegisterAction(
+            operandType, *fp4Axis, operandPackWidth);
+        if (!action)
+          return rewriter.notifyMatchFailure(
+              op,
+              "packed operand lanes are not all available within one thread");
+        values = action->apply(values);
+      }
+      if (values.size() != packCount * operandPackWidth)
+        return rewriter.notifyMatchFailure(
+            op, "packed operand has the wrong number of unique elements");
+      operandValues.push_back(std::move(values));
       operandPackWidths.push_back(operandPackWidth);
     }
 
     Type resultElementType =
         this->getTypeConverter()->convertType(tensorType.getElementType());
     unsigned resultBitWidth = resultInfo.registerBitWidth;
-    Type resultPackedType = int_ty(resultBitWidth);
+    Type resultRegisterType = int_ty(resultBitWidth);
     Type resultVectorType = vec_ty(resultElementType, packWidth);
-    StringRef outputConstraint =
+    std::string outputConstraint =
         getPackedArithConstraint(resultBitWidth, /*isOutput=*/true);
     SmallVector<StringRef> instructionOptions =
-        getPackedArithInstructionOptions(op, operandPackedTypes);
+        getPackedArithInstructionOptions(resultType, operandPackedTypes,
+                                         *instruction);
 
     SmallVector<Value> packedResults;
-    packedResults.reserve(resultOrder->size());
-    for (unsigned packIndex = 0; packIndex < resultOrder->size() / packWidth;
-         ++packIndex) {
+    packedResults.reserve(resultValueCount);
+    for (unsigned packIndex = 0; packIndex < packCount; ++packIndex) {
       TritonLLVMOpBuilder b(loc, rewriter);
       SmallVector<Value> packedOperands;
       for (auto [operandIndex, values] : llvm::enumerate(operandValues)) {
+        unsigned operandPackWidth = operandPackWidths[operandIndex];
+        unsigned base = packIndex * operandPackWidth;
         packedOperands.push_back(packPackedArithOperand(
-            loc, rewriter, operandPackedTypes[operandIndex], values,
-            packIndex * operandPackWidths[operandIndex]));
+            loc, rewriter, operandPackedTypes[operandIndex],
+            ArrayRef(values).slice(base, operandPackWidth)));
       }
 
       PTXBuilder ptxBuilder;
@@ -820,23 +806,23 @@ struct PackedArithOpConversion
         instruction.o(option.str());
       instruction(asmOperands);
 
-      Value packedResult = ptxBuilder.launch(rewriter, loc, resultPackedType,
+      Value packedResult = ptxBuilder.launch(rewriter, loc, resultRegisterType,
                                              /*hasSideEffect=*/false);
       Value resultVector = b.bitcast(packedResult, resultVectorType);
-      for (unsigned lane = 0; lane < packWidth; ++lane) {
-        packedResults.push_back(b.extract_element(
-            resultElementType, resultVector, b.i32_val(lane)));
-      }
+      llvm::append_range(packedResults,
+                         unpackLLVector(loc, resultVector, rewriter));
     }
 
-    SmallVector<Value> restoredResults(packedResults.size());
-    for (auto [index, value] : llvm::enumerate(packedResults))
-      restoredResults[(*resultOrder)[index]] = value;
+    if (resultAction)
+      packedResults = resultAction->inverse().apply(packedResults);
     Value result = packUniqueTensorElements(
-        loc, this->getTypeConverter(), restoredResults, rewriter, tensorType);
+        loc, this->getTypeConverter(), packedResults, rewriter, tensorType);
     rewriter.replaceOp(op, result);
     return success();
   }
+
+private:
+  const NVIDIA::TargetInfo &targetInfo;
 };
 
 struct ClampFOpConversion
@@ -1026,7 +1012,7 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
                                    computeCapability, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
-  patterns.add<PackedArithOpConversion>(typeConverter, benefit);
+  patterns.add<PackedArithOpConversion>(typeConverter, targetInfo, benefit);
 
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and

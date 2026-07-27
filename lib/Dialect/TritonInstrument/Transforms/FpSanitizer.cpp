@@ -2110,15 +2110,16 @@ struct PackedArithPattern : public OpRewritePattern<ttng::PackedArithOp> {
     auto resultIntTy = cast<RankedTensorType>(getIntTypeLike(resultTy));
     auto resultIntElem = resultIntTy.getElementType();
     auto loc = op.getLoc();
+    std::optional<unsigned> fp4Axis = ttng::getPackedArithFp4Axis(op);
 
     SmallVector<Value> payloads;
-    for (auto [index, operand] : llvm::enumerate(op.getOperands())) {
-      auto packedType =
-          *ttng::symbolizePackedArithType(op.getOperandPackedTypes()[index]);
-      if (packedType == ttng::PackedArithType::E2M1X4 ||
-          packedType == ttng::PackedArithType::E2M1P4X4) {
+    for (Value operand : op.getOperands()) {
+      auto operandTy = cast<RankedTensorType>(operand.getType());
+      if (operandTy.getElementType().isInteger(8)) {
+        if (!fp4Axis)
+          return emitFpSanInvariantError(op.getOperation());
         payloads.push_back(unpackPackedFp4Tensor(rewriter, loc, operand,
-                                                 op.getAxis(), resultIntTy));
+                                                 *fp4Axis, resultIntTy));
         continue;
       }
 

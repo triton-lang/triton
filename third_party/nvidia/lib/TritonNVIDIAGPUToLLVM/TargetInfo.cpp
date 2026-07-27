@@ -215,20 +215,6 @@ Value TargetInfo::mapDShared(RewriterBase &rewriter, Location loc, Value ptr,
   return ctaId ? mapa(rewriter, loc, ptr, ctaId, pred) : ptr;
 }
 
-static std::string getConstraintForBitwidth(unsigned bitwidth) {
-  switch (bitwidth) {
-  case 8:
-  case 16:
-    return "h";
-  case 32:
-    return "r";
-  case 64:
-    return "l";
-  default:
-    llvm_unreachable("unsupported bitwidth");
-  }
-}
-
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               Value ctaId, Value val, Value pred) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -334,7 +320,8 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
     b.store(val, ptr, /*align=*/vec * elemBitwidth / 8);
   } else {
     PTXBuilder::Operand *valOpr;
-    std::string constraint = getConstraintForBitwidth(elemBitwidth);
+    std::string constraint =
+        getPtxRegisterSizeCode(elemBitwidth, /*isFloat=*/false);
     if (vec > 1) {
       SmallVector<std::pair<Value, std::string>> vecVals;
       for (int i = 0; i < vec; i++) {
@@ -461,7 +448,8 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
       load = structValue;
     }
   } else {
-    std::string elemConstraint = "=" + getConstraintForBitwidth(elemBitwidth);
+    std::string elemConstraint =
+        "=" + getPtxRegisterSizeCode(elemBitwidth, /*isFloat=*/false);
     auto *outOpr = vec == 1 ? builder.newOperand(elemConstraint)
                             : builder.newListOperand(vec, elemConstraint);
     ld(outOpr, builder.newAddrOperand(ptr, "r")).predicate(pred, "b");
