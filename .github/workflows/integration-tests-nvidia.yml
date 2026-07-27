@@ -11,7 +11,7 @@ jobs:
   integration-tests-nvidia:
     name: integration-tests-nvidia (${{ matrix.config.name }})
     runs-on: ${{ matrix.config.runs_on }}
-    timeout-minutes: 60
+    timeout-minutes: 120
     # Let A100 and H100 continue even if GB200 fails, as it's a bit flaky
     continue-on-error: ${{ startsWith(matrix.config.runner_type, 'nvidia-gb200') }}
     strategy:
@@ -89,9 +89,25 @@ jobs:
       - name: Run lit tests
         run: make test-lit
       - name: Run triton tests
+        env:
+          PYTEST_PLUGINS: triton._ci_timing
+          TRITON_CI_TIMING_DIR: ${{ startsWith(matrix.config.runner_type, 'nvidia-gb200') && '/tmp/triton-ci-timing' || '' }}
+          TRITON_CI_TIMING_LABEL: triton-tests
         run: make NUM_PROCS=24 test-unit
       - name: Run gluon tests
+        env:
+          PYTEST_PLUGINS: triton._ci_timing
+          TRITON_CI_TIMING_DIR: ${{ startsWith(matrix.config.runner_type, 'nvidia-gb200') && '/tmp/triton-ci-timing' || '' }}
+          TRITON_CI_TIMING_LABEL: gluon-tests
         run: make NUM_PROCS=24 test-gluon
+      - name: Upload GB200 timing
+        if: ${{ always() && startsWith(matrix.config.runner_type, 'nvidia-gb200') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gb200-ci-timing-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/triton-ci-timing
+          if-no-files-found: error
+          retention-days: 3
       - name: Run gsan tests
         run: make NUM_PROCS=24 test-gsan
       - name: Run interpreter tests
