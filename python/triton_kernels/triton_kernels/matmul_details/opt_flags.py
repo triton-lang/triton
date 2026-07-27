@@ -12,6 +12,7 @@ import torch
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.strided import StridedLayout
 from triton_kernels.tensor_details.layout_details.base import Layout
+from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellMXScaleLayout
 from triton_kernels.tensor_details.layout_details.blackwell_value_shuffled import BlackwellMX4ValueShuffledLayout
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
 
@@ -273,6 +274,35 @@ def make_default_opt_flags_nvidia(
     def _is_layout_strided(layout: Layout | None) -> bool:
         return layout is None or isinstance(layout, StridedLayout)
 
+    is_blackwell_nvfp4_x_nvfp4 = (
+        opt_flags_nvidia.is_blackwell_nvfp4_x_nvfp4(precision_config, lhs_dtype, rhs_dtype)
+        and isinstance(b_mx_scale_layout, BlackwellMXScaleLayout)
+    )
+    # GB300 NVFP4 x NVFP4 tuning follows the amount of work available:
+    # first reduce epilogue pressure, then N tile pressure, and only strided
+    # activation-scale layouts may reduce M below the Blackwell act-scale tile.
+    has_blackwell_act_a_scale = is_blackwell_nvfp4_x_nvfp4 and opt_flags_nvidia.is_x_scale_swizzled(precision_config)
+    has_strided_a_scale = is_blackwell_nvfp4_x_nvfp4 and _is_layout_strided(a_mx_scale_layout)
+    is_low_k = k is not None and k <= 4096
+    is_medium_low_k = k is not None and k <= 8192 and n <= 2048
+    is_narrow_n = n <= 1024
+    is_mid_small_mn = k is not None and k <= 8192 and ((m is not None and m <= 2048) or n <= 512)
+    is_small_m_and_n = m is not None and m <= 2048 and n <= 512
+    is_small_blackwell_nvfp4_x_nvfp4 = (is_blackwell_nvfp4_x_nvfp4
+                                        and m is not None and m <= 4096
+                                        and n <= 1024
+                                        and k is not None and k <= 4096)
+    reduce_tile_for_strided_a_scale = has_strided_a_scale and (
+        (is_small_blackwell_nvfp4_x_nvfp4 and ((m is not None and m <= 2048) or n <= 512))
+        or (is_medium_low_k and is_small_m_and_n)
+    )
+    reduce_epilogue_for_strided_a_scale = has_strided_a_scale and (is_low_k or is_medium_low_k)
+    reduce_n_for_blackwell_act_a_scale = has_blackwell_act_a_scale and (is_low_k or (is_narrow_n and not is_mid_small_mn))
+    reduce_epilogue_for_blackwell_act_a_scale = has_blackwell_act_a_scale and (
+        reduce_n_for_blackwell_act_a_scale or is_small_blackwell_nvfp4_x_nvfp4
+    )
+    reduce_warps_for_mid_small_mn = has_blackwell_act_a_scale and not is_small_blackwell_nvfp4_x_nvfp4 and is_mid_small_mn
+
     requires_persistent = (not _is_layout_strided(a_mx_scale_layout) or not _is_layout_strided(b_mx_scale_layout)) and target_info.has_native_mxfp()
     if constraints.get("is_persistent", None) is not None:
         if requires_persistent and not constraints["is_persistent"]:
@@ -306,15 +336,24 @@ def make_default_opt_flags_nvidia(
         # expanded operand in TMEM, so keep the accumulator tile below the
         # 512-column budget.
         block_n = min(block_n, 128)
+    if (is_persistent and constraints.get("block_n", None) is None
+            and ((has_blackwell_act_a_scale and is_small_blackwell_nvfp4_x_nvfp4)
+                 or reduce_tile_for_strided_a_scale
+                 or reduce_n_for_blackwell_act_a_scale)):
+        block_n = min(block_n, 128)
     # adjust block_m based on is_persistent signal
     if is_persistent and opt_flags_nvidia.is_x_scale_swizzled(precision_config):
         # a mx scale has been swizzled to BlackwellActMXScaleLayout, enforce block_m=128 to align with swizzling layout
         block_m = 128
+    if is_persistent and is_blackwell_nvfp4_x_nvfp4 and constraints.get("block_m", None) is None:
+        block_m = 64 if reduce_tile_for_strided_a_scale else 128
     # block k
     if constraints.get("block_k", None) is not None:
         block_k = constraints["block_k"]
     else:
         block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in)
+        if is_persistent and is_blackwell_nvfp4_x_nvfp4 and (k is None or k >= 256):
+            block_k = max(block_k, 256)
     if block_n == 256 and block_k == 128 and block_m <= 64 and is_persistent and rhs_dtype == FP4 and k >= 4096 and slice_size > 1 and lhs_dtype != torch.bfloat16 and not constraints.get("disable_mx4_block_swap", False):
         # Swap block_n and block_k for mxfp4 weights so that block_k is a full cacheline, so long as K is sufficiently large.
         # TODO: swizzle the HBM layout of the weights instead
@@ -349,6 +388,15 @@ def make_default_opt_flags_nvidia(
     )
 
     num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config, constraints)
+    if (constraints.get("num_warps", None) is None and is_persistent and reduce_tile_for_strided_a_scale
+            and block_m >= 64 and block_n >= 128 and block_k >= 256):
+        num_warps = 8
+    elif (constraints.get("num_warps", None) is None and is_persistent and reduce_warps_for_mid_small_mn
+            and block_m >= 128 and block_n >= 128 and block_k >= 256):
+        num_warps = 4
+    elif (constraints.get("num_warps", None) is None and is_persistent and is_blackwell_nvfp4_x_nvfp4
+            and block_m >= 128 and block_n >= 128 and block_k >= 256):
+        num_warps = 8
     if (constraints.get("num_warps", None) is None
             and is_persistent
             and block_n <= 128
@@ -377,6 +425,24 @@ def make_default_opt_flags_nvidia(
 
     if constraints.get("epilogue_subtile", None) is not None:
         subtiles_to_check = [constraints["epilogue_subtile"]]
+    elif (is_persistent and precision_config.c_mx_scale is None
+            and (is_small_blackwell_nvfp4_x_nvfp4
+                 or reduce_epilogue_for_strided_a_scale
+                 or reduce_epilogue_for_blackwell_act_a_scale)
+            and block_m >= 128 and block_n >= 128 and block_k >= 256):
+        subtiles_to_check = [1]
+    elif (is_persistent and reduce_tile_for_strided_a_scale
+            and precision_config.c_mx_scale is None and block_m >= 64 and block_n >= 128 and block_k >= 256):
+        subtiles_to_check = [1]
+    elif (is_persistent and reduce_warps_for_mid_small_mn and precision_config.c_mx_scale is None
+            and block_m >= 128 and block_n >= 256 and block_k >= 256):
+        subtiles_to_check = [2]
+    elif (is_persistent and is_blackwell_nvfp4_x_nvfp4 and precision_config.c_mx_scale is None
+            and block_m >= 128 and block_n >= 256 and block_k >= 256 and k is not None and k <= 2048):
+        subtiles_to_check = [2]
+    elif (is_persistent and is_blackwell_nvfp4_x_nvfp4 and precision_config.c_mx_scale is None
+            and block_m >= 128 and block_n >= 128 and block_k >= 256):
+        subtiles_to_check = [4]
     else:
         subtiles_to_check = [1] if out_dtype == FP4 else [1, 2, 4]
     num_stages = -1
@@ -387,6 +453,18 @@ def make_default_opt_flags_nvidia(
         if ns > num_stages:
             epilogue_subtile, num_stages = ep, ns
 
+    if (constraints.get("num_stages", None) is None and is_persistent
+            and ((has_blackwell_act_a_scale and is_small_blackwell_nvfp4_x_nvfp4)
+                 or reduce_tile_for_strided_a_scale
+                 or reduce_n_for_blackwell_act_a_scale)
+            and block_m >= 64 and block_n <= 128 and block_k >= 256):
+        num_stages = min(num_stages, 4)
+    if (constraints.get("num_stages", None) is None and is_persistent and reduce_tile_for_strided_a_scale
+            and not is_small_blackwell_nvfp4_x_nvfp4 and block_m >= 64 and block_n <= 128 and block_k >= 256):
+        num_stages = min(num_stages, 3)
+    if (constraints.get("num_stages", None) is None and is_persistent and reduce_epilogue_for_strided_a_scale
+            and block_m >= 128 and block_n >= 256 and block_k >= 256):
+        num_stages = max(num_stages, 3)
     if constraints.get("num_stages", None):
         num_stages = constraints["num_stages"]
     assert num_stages >= 1
