@@ -49,13 +49,11 @@ int getMfmaVersion(ISAFamily isaFamily) {
   return 0;
 }
 
-int getWmmaVersion(const TargetFeatures &targetFeatures) {
-  if (targetFeatures.getArch().starts_with("gfx117"))
-    return 2;
-
-  switch (targetFeatures.getISAFamily()) {
+int getWmmaVersion(ISAFamily isaFamily) {
+  switch (isaFamily) {
   case ISAFamily::RDNA3:
     return 1;
+  case ISAFamily::RDNA4m:
   case ISAFamily::RDNA4:
     return 2;
   case ISAFamily::GFX1250:
@@ -1759,7 +1757,7 @@ struct TritonAMDGPUAccelerateMatmulPass
     RewritePatternSet mfmaPatterns(context);
     TargetFeatures targetFeatures{llvm::StringRef(gfxArch)};
     auto isaFamily = targetFeatures.getISAFamily();
-    unsigned wmmaVersion = getWmmaVersion(targetFeatures);
+    unsigned wmmaVersion = getWmmaVersion(isaFamily);
     switch (isaFamily) {
     case ISAFamily::GFX1250:
       mfmaPatterns.add<ScaledBlockedToScaledWMMAF8F6F4>(context, wmmaVersion,
@@ -1783,6 +1781,7 @@ struct TritonAMDGPUAccelerateMatmulPass
                                         /*benefit=*/2);
       break;
     case ISAFamily::RDNA3:
+    case ISAFamily::RDNA4m:
     case ISAFamily::RDNA4:
       ttg::populateDecomposeScaledBlockedPatterns(mfmaPatterns,
                                                   /*benefit=*/3);
