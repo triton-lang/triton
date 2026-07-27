@@ -156,7 +156,7 @@ struct RegionInfo {
   ViewList views;
 
   RegionInfo() = default;
-  RegionInfo(const ViewList &views) : kind(Kind::Exact), views(views) {}
+  RegionInfo(ViewList views) : kind(Kind::Exact), views(std::move(views)) {}
 
   bool isUnknown() const { return kind == Kind::Unknown; }
 

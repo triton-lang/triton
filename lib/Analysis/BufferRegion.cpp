@@ -260,40 +260,11 @@ uint32_t getMemDescStorageOffset(ttg::MemDescType ty, unsigned index) {
   return applySharedPadding(static_cast<uint32_t>(unpadded), ty);
 }
 
-unsigned getNumBuffers(ttg::MemDescIndexOp memdescIndexOp) {
-  ttg::MemDescType ty =
-      cast<ttg::MemDescType>(memdescIndexOp.getSrc().getType());
-  return ty.getShape()[0];
-}
-
-llvm::DenseSet<Value> getBarrierOperands(Operation *op) {
-  if (auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op)) {
-    auto barriers = barrierOp.getBarriers();
-    return llvm::DenseSet<Value>(barriers.begin(), barriers.end());
-  }
-
-  return llvm::DenseSet<Value>{};
-}
-
 bool isUsedAsBarrier(Value v) {
-  for (auto user : v.getUsers()) {
-    if (getBarrierOperands(user).contains(v)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool isUsedAsSharedMemory(Value v) {
-  auto type = dyn_cast<ttg::MemDescType>(v.getType());
-  return type &&
-         isa_and_nonnull<ttg::SharedMemorySpaceAttr>(type.getMemorySpace());
-}
-
-bool isUsedAsTensorMemory(Value v) {
-  auto type = dyn_cast<ttg::MemDescType>(v.getType());
-  return type &&
-         isa_and_nonnull<ttng::TensorMemorySpaceAttr>(type.getMemorySpace());
+  return llvm::any_of(v.getUsers(), [&](Operation *user) {
+    auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(user);
+    return barrierOp && llvm::is_contained(barrierOp.getBarriers(), v);
+  });
 }
 
 struct MemDescSubsliceOffsets {
@@ -362,15 +333,15 @@ getMemDescSubsliceUnpaddedOffsets(ttg::MemDescSubsliceOp op) {
 }
 
 std::optional<triton::BufferRegionAnalysis::RegionType> getRegionType(Value v) {
-  if (isUsedAsBarrier(v)) {
+  if (isUsedAsBarrier(v))
     return triton::BufferRegionAnalysis::RegionType::BARRIER;
-  }
-  if (isUsedAsSharedMemory(v)) {
+  auto type = dyn_cast<ttg::MemDescType>(v.getType());
+  if (!type)
+    return std::nullopt;
+  if (isa<ttg::SharedMemorySpaceAttr>(type.getMemorySpace()))
     return triton::BufferRegionAnalysis::RegionType::SHARED_MEMORY;
-  }
-  if (isUsedAsTensorMemory(v)) {
+  if (isa<ttng::TensorMemorySpaceAttr>(type.getMemorySpace()))
     return triton::BufferRegionAnalysis::RegionType::TENSOR_MEMORY;
-  }
   return std::nullopt;
 }
 
@@ -593,7 +564,8 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     const RegionInfo &in = operands[0]->getValue();
     if (in.isUnknown())
       return propagateRegions(in);
-    int numSubBuffers = getNumBuffers(memdescIndexOp);
+    int numSubBuffers =
+        cast<ttg::MemDescType>(memdescIndexOp.getSrc().getType()).getShape()[0];
     int firstSubBuffer = 0;
     int endSubBuffer = numSubBuffers;
     APInt constantIndex;
