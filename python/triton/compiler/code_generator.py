@@ -749,6 +749,16 @@ class CodeGenerator(ast.NodeVisitor):
 
         def _sanitize_target_value(target, value):
             if isinstance(target, ast.Tuple) and isinstance(value, language.tuple):
+                if any(isinstance(elt, ast.Starred) for elt in target.elts):
+                    raise NotImplementedError("starred assignment targets are not supported")
+                num_targets, num_values = len(target.elts), len(value.values)
+                if num_targets != num_values:
+                    # Match CPython's errors for mismatched unpacking.
+                    if num_values > num_targets:
+                        message = f"too many values to unpack (expected {num_targets})"
+                    else:
+                        message = f"not enough values to unpack (expected {num_targets}, got {num_values})"
+                    raise ValueError(message)
                 vals = [_sanitize_target_value(elt, val) for elt, val in zip(target.elts, value.values)]
                 vals = [constexpr(val) if val is None else val for val in vals]
                 types = [val.type for val in vals]
