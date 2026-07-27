@@ -35,6 +35,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#shared = #ttg.amd_rotating_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [2, 2], order = [1, 0]}>
+module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @amd_pipeline_stage_subslice_index
+  // COMMON-DAG: llvm.mlir.constant(256 : i32)
+  // CHECK-DAG: llvm.getelementptr {{.*}}[768]
+  // GFX950-DAG: llvm.mlir.constant(768 : i32)
+  // GFX1250-DAG: llvm.mlir.constant(768 : i32)
+  // GFX906-DAG: llvm.mlir.constant(768 : i32)
+  // COMMON: llvm.mul
+  // COMMON: llvm.getelementptr
+  tt.func @amd_pipeline_stage_subslice_index(%index: i32) {
+    %parent = ttg.local_alloc : () -> !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable>
+    %stages = ttg.memdesc_subslice %parent [3, 0, 0] : !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<2x16x16xf16, #shared, #smem, mutable, 7x16x16>
+    %view = ttg.memdesc_index %stages[%index] : !ttg.memdesc<2x16x16xf16, #shared, #smem, mutable, 7x16x16> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+    %zero = arith.constant dense<0.0> : tensor<16x16xf16, #blocked>
+    ttg.local_store %zero, %view : tensor<16x16xf16, #blocked> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: atomic_add_f32_scalar
   // GFX1250-LABEL: atomic_add_f32_scalar
@@ -640,7 +664,7 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
     // Skip three constants from the stride calculation
     // GFX950: llvm.mlir.constant
     // GFX950: llvm.mlir.constant
-    // GFX950: llvm.mlir.constant
+    // GFX950: llvm.mlir.constant(4096 : i32)
 
     // GFX950-DAG: %[[CST0:.+]] = llvm.mlir.constant(0 : i32)
     // GFX950-DAG: %[[CST7:.+]] = llvm.mlir.constant(7 : i32)

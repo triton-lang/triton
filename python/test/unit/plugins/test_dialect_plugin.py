@@ -19,7 +19,7 @@ def test_override(tmp_path: pathlib.Path):
     first_env["TRITON_KERNEL_DUMP"] = "1"
     first_env["TRITON_DUMP_DIR"] = str(tmp_path)
 
-    subprocess.run(["python3", dir_path + "/override_helper.py", str(tmp_path)], env=first_env)
+    subprocess.run(["python3", dir_path + "/override_helper.py"], env=first_env)
 
     ttir_files = list(tmp_path.rglob("*.ttir"))
     ttgir_files = list(tmp_path.rglob("*.ttgir"))
@@ -62,7 +62,7 @@ def test_override(tmp_path: pathlib.Path):
     second_env["TRITON_OVERRIDE_DIR"] = str(tmp_path)
     second_env["TRITON_KERNEL_DUMP"] = "1"
     second_env["TRITON_DUMP_DIR"] = str(tmp_path)
-    subprocess.run(["python3", dir_path + "/override_helper.py", str(tmp_path)], env=second_env)
+    subprocess.run(["python3", dir_path + "/override_helper.py"], env=second_env)
 
     with open(ttir_files[0], 'r') as f:
         ttir = f.read()

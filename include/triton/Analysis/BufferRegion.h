@@ -1,29 +1,107 @@
 #ifndef TRITON_ANALYSIS_BUFFER_REGION_H
 #define TRITON_ANALYSIS_BUFFER_REGION_H
 
-#include <limits>
+#include <cstdint>
 #include <set>
+#include <tuple>
+#include <utility>
 
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/IR/Value.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallBitVector.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SparseBitVector.h"
 
 namespace mlir::triton {
 
 //===----------------------------------------------------------------------===//
-// BufferRegion: a single logical region derived from an alloc
+// Exact physical address sets
 //===----------------------------------------------------------------------===//
+
+/// An exact set of physical storage units. Shared-memory addresses are bytes.
+/// Tensor-memory addresses are 32-bit words encoded as (row << 16) | column.
+class AddressSet {
+public:
+  AddressSet() = default;
+
+  static AddressSet fromRange(uint32_t begin, uint32_t length);
+  static AddressSet fromAddresses(llvm::ArrayRef<uint32_t> addresses);
+
+  void set(uint32_t address);
+  void insert(const AddressSet &other);
+  AddressSet intersection(const AddressSet &other) const;
+  void subtract(const AddressSet &other);
+
+  auto begin() const { return addresses.begin(); }
+  auto end() const { return addresses.end(); }
+  bool empty() const { return addresses.empty(); }
+  bool contains(uint32_t address) const;
+  bool intersects(const AddressSet &other) const;
+  bool contains(const AddressSet &other) const;
+  AddressSet translated(uint32_t delta) const;
+
+  bool operator==(const AddressSet &other) const {
+    return addresses == other.addresses;
+  }
+  bool operator<(const AddressSet &other) const {
+    auto lhs = begin();
+    auto rhs = other.begin();
+    while (lhs != end() && rhs != other.end()) {
+      if (*lhs != *rhs)
+        return *lhs < *rhs;
+      ++lhs;
+      ++rhs;
+    }
+    return lhs == end() && rhs != other.end();
+  }
+
+private:
+  llvm::SparseBitVector<> addresses;
+};
+
+//===----------------------------------------------------------------------===//
+// BufferRegion: runtime identity plus exact physical geometry
+//===----------------------------------------------------------------------===//
+
 struct BufferRegion {
-  uint32_t baseOffset;
-  uint32_t length;
+  /// Runtime descriptor key. It deliberately does not define geometry:
+  /// distinct sparse views may have the same key.
+  uint32_t baseOffset = 0;
+  uint32_t length = 0;
+  AddressSet addresses;
+
+  /// Internal view provenance used while composing nested views.
+  uint32_t storageBase = 0;
+  uint32_t affineOffset = 0;
+
+  BufferRegion() = default;
+  BufferRegion(uint32_t baseOffset, uint32_t length)
+      : baseOffset(baseOffset), length(length),
+        addresses(AddressSet::fromRange(baseOffset, length)),
+        storageBase(baseOffset) {}
+  BufferRegion(uint32_t baseOffset, uint32_t length, AddressSet addresses,
+               uint32_t storageBase, uint32_t affineOffset)
+      : baseOffset(baseOffset), length(length), addresses(std::move(addresses)),
+        storageBase(storageBase), affineOffset(affineOffset) {}
+
+  bool intersects(const BufferRegion &other) const {
+    return addresses.intersects(other.addresses);
+  }
+  bool contains(const BufferRegion &other) const {
+    return addresses.contains(other.addresses);
+  }
 
   bool operator==(const BufferRegion &other) const {
-    return baseOffset == other.baseOffset && length == other.length;
+    return baseOffset == other.baseOffset && length == other.length &&
+           addresses == other.addresses && storageBase == other.storageBase &&
+           affineOffset == other.affineOffset;
   }
 
   bool operator<(const BufferRegion &other) const {
-    if (baseOffset != other.baseOffset)
-      return baseOffset < other.baseOffset;
-    return length < other.length;
+    return std::tie(baseOffset, length, addresses, storageBase, affineOffset) <
+           std::tie(other.baseOffset, other.length, other.addresses,
+                    other.storageBase, other.affineOffset);
   }
 
   template <typename T> void print(T &os) const {
@@ -31,32 +109,18 @@ struct BufferRegion {
   }
 };
 
-} // namespace mlir::triton
+//===----------------------------------------------------------------------===//
+// Buffer state planning
+//===----------------------------------------------------------------------===//
 
-namespace llvm {
-
-using namespace mlir::triton;
-
-template <> struct DenseMapInfo<BufferRegion> {
-  static BufferRegion getEmptyKey() {
-    constexpr uint32_t empty = std::numeric_limits<uint32_t>::max();
-    return BufferRegion{empty, empty};
-  }
-  static BufferRegion getTombstoneKey() {
-    constexpr uint32_t tombstone = std::numeric_limits<uint32_t>::max() - 1;
-    return BufferRegion{tombstone, tombstone};
-  }
-  static unsigned getHashValue(const BufferRegion &r) {
-    return llvm::hash_combine(r.baseOffset, r.length);
-  }
-  static bool isEqual(const BufferRegion &a, const BufferRegion &b) {
-    return a == b;
-  }
+/// A compile-time plan for representing mutable ConSan state. Masks are
+/// indexed by the input region order and all have numLanes bits.
+struct BufferStatePlan {
+  unsigned numLanes = 0;
+  llvm::SmallVector<llvm::SmallBitVector> regionMasks;
 };
 
-} // namespace llvm
-
-namespace mlir::triton {
+BufferStatePlan createBufferStatePlan(llvm::ArrayRef<BufferRegion> regions);
 
 //===----------------------------------------------------------------------===//
 // RegionInfo lattice
@@ -65,7 +129,7 @@ namespace mlir::triton {
 // This wraps a set of BufferRegions and provides lattice semantics
 //
 struct RegionInfo {
-  using RegionList = llvm::DenseSet<BufferRegion>;
+  using RegionList = std::set<BufferRegion>;
   RegionList regions;
 
   RegionInfo() = default;
@@ -74,28 +138,16 @@ struct RegionInfo {
   // Lattice join: union of regions
   static RegionInfo join(const RegionInfo &lhs, const RegionInfo &rhs) {
     RegionInfo result = lhs;
-    for (const auto &reg : rhs.regions)
-      if (llvm::find(result.regions, reg) == result.regions.end())
-        result.regions.insert(reg);
+    result.regions.insert(rhs.regions.begin(), rhs.regions.end());
     return result;
   }
 
   bool operator==(const RegionInfo &other) const {
-    if (regions.size() != other.regions.size())
-      return false;
-    for (auto &r : regions)
-      if (llvm::find(other.regions, r) == other.regions.end())
-        return false;
-    return true;
+    return regions == other.regions;
   }
 
   template <typename T> void print(T &os) const {
-    llvm::SmallVector<BufferRegion> sortedRegions(regions.begin(),
-                                                  regions.end());
-    llvm::sort(sortedRegions, [](const BufferRegion &a, const BufferRegion &b) {
-      return a < b;
-    });
-    llvm::interleaveComma(sortedRegions, os,
+    llvm::interleaveComma(regions, os,
                           [&](const BufferRegion &r) { r.print(os); });
   }
 
@@ -129,8 +181,7 @@ public:
   // Public API for ConSan
   // ------------------------------
 
-  /// Return the list of all unique (alloc,offset,len) buffer regions
-  /// discovered by the analysis.
+  /// Return all unique exact regions discovered by the analysis.
   llvm::SmallVector<BufferRegion>
   getAllUsedBufferRegions(RegionType type) const {
     return llvm::to_vector(usedBufferRegions[type]);
@@ -157,6 +208,7 @@ public:
 private:
   // Global registry of all regions
   std::set<BufferRegion> usedBufferRegions[NUM_REGION_TYPES];
+  llvm::DenseMap<std::pair<Type, uint32_t>, AddressSet> footprintCache;
 
   static void verifyOpIsSupported(Operation *op);
 };
