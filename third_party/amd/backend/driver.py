@@ -366,6 +366,21 @@ class HIPLauncher(object):
         else:
             profile_scratch = allocate_default_profile_scratch(self.profile_scratch_size, self.profile_scratch_align)
 
+        # Guard against a stale/mismatched compiled kernel being reused for a
+        # different kernel signature. The C launcher walks `args` and
+        # `arg_annotations` in lock-step; when their lengths differ it reads
+        # misaligned data and fails with a cryptic "'tuple' object cannot be
+        # interpreted as an integer" TypeError (or, worse, silently corrupts
+        # memory / segfaults). Fail loudly with an actionable message instead.
+        if len(args) != len(self.arg_annotations):
+            raise ValueError(
+                "AMD kernel launch argument mismatch: received "
+                f"{len(args)} runtime argument(s) but this compiled kernel was "
+                f"built for {len(self.arg_annotations)}. This usually means a "
+                "stale or mismatched compiled kernel (e.g. from an external "
+                "launcher/kernel cache) is being reused for a different kernel "
+                "signature.")
+
         self.launch(self.launch_cooperative_grid, gridX, gridY, gridZ, stream, function, global_scratch,
                     profile_scratch, kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook,
                     self.warp_size, self.arg_annotations, self.kernel_signature, args)
