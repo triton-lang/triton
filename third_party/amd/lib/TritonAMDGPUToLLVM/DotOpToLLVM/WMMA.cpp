@@ -301,6 +301,7 @@ static inline int32_t getWmmaScaleDataType(Type scaleElemType) {
   // 1: E5M3
   // 2: E4M3
   return llvm::TypeSwitch<Type, int32_t>(scaleElemType)
+      .Case<Float8E8M0FNUType>([](Type) { return 0; })
       .Case<IntegerType>([](Type) { return 0; })
       .Case<Float8E4M3FNType>([](Type) { return 2; })
       .Default([](Type) { return -1; });

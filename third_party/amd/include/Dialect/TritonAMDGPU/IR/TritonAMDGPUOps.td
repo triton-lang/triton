@@ -295,10 +295,10 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       Optional<I32>:$stride,
       DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
       Optional<TT_BoolTensor>:$mask,
-      Optional<TT_Tensor>:$other,
+      Optional<TT_StorageTensor>:$other,
       DefaultValuedAttr<I32Attr, "1">:$contiguity
     );
-    let results = (outs TT_Tensor:$result);
+    let results = (outs TT_StorageTensor:$result);
 
     let assemblyFormat = [{
       $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
@@ -474,7 +474,7 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
       This allows to use buffer_store even if the alignment cannot be proven based on IR.
     }];
     let arguments = (ins
-      TT_Tensor:$value,
+      TT_StorageTensor:$value,
       Arg<TT_Ptr, "Global memory scalar base pointer to write to", [MemWrite<GlobalMemory>]>:$ptr,
       I32Tensor:$offsets,
       Optional<I32>:$stride,

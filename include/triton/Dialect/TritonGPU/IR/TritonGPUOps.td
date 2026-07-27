@@ -35,9 +35,9 @@ def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
                                   Pure]> {
   let summary = "convert layout";
 
-  let arguments = (ins TT_Tensor:$src);
+  let arguments = (ins TT_StorageTensor:$src);
 
-  let results = (outs TT_Tensor:$result);
+  let results = (outs TT_StorageTensor:$result);
 
   let hasCanonicalizer = 1;
 

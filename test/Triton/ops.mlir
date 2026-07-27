@@ -79,6 +79,21 @@ tt.func @load_store_ops_scalar(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, 
   tt.return
 }
 
+// CHECK-LABEL: @e8m0_storage_ops_scalar
+tt.func @e8m0_storage_ops_scalar(%ptr: !tt.ptr<f8E8M0FNU>, %raw_ptr: !tt.ptr<i8>) {
+  // CHECK: %[[E8M0:.*]] = tt.load %{{.*}} : !tt.ptr<f8E8M0FNU>
+  %e8m0 = tt.load %ptr : !tt.ptr<f8E8M0FNU>
+  // CHECK: %[[RAW:.*]] = tt.bitcast %[[E8M0]] : f8E8M0FNU -> i8
+  %raw = tt.bitcast %e8m0 : f8E8M0FNU -> i8
+  // CHECK: %[[E8M0_RESTORED:.*]] = tt.bitcast %[[RAW]] : i8 -> f8E8M0FNU
+  %restored = tt.bitcast %raw : i8 -> f8E8M0FNU
+  // CHECK: tt.store %{{.*}}, %[[RAW]] : !tt.ptr<i8>
+  tt.store %raw_ptr, %raw : !tt.ptr<i8>
+  // CHECK: tt.store %{{.*}}, %[[E8M0_RESTORED]] : !tt.ptr<f8E8M0FNU>
+  tt.store %ptr, %restored : !tt.ptr<f8E8M0FNU>
+  tt.return
+}
+
 // CHECK-LABEL: reduce_ops_infer
 tt.func @reduce_ops_infer(%ptr: !tt.ptr<f32>, %v : tensor<1x2x4xf32>) {
   // Test if reduce ops infer types correctly
