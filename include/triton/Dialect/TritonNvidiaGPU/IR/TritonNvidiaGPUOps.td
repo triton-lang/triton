@@ -251,7 +251,8 @@ def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterface
 
     The `warpGroupLocal` attribute specifies that we only wait for the local
     warp group, and if num_warps > 4 then shared memory inputs may still be in
-    use by other warp groups.
+    use by other warp groups. This is useful when only the result register
+    values need to be ready and the shared memory inputs will not be overwritten.
   }];
 
   let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
