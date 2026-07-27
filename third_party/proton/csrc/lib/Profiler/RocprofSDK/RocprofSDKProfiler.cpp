@@ -57,6 +57,54 @@ constexpr const char *UnknownKernelName = "<unknown>";
 
 struct RocprofSDKProfilerPimpl;
 
+std::string dirname(std::string path) {
+  auto pos = path.rfind('/');
+  if (pos == std::string::npos)
+    return "";
+  return path.substr(0, pos);
+}
+
+std::string findLoadedLibPath(const char *libName, const char *symbolName) {
+  void *handle = dlopen(libName, RTLD_NOLOAD | RTLD_LAZY);
+  if (!handle)
+    return "";
+
+  std::string path;
+  if (void *symbol = dlsym(handle, symbolName)) {
+    Dl_info info;
+    if (dladdr(symbol, &info) && info.dli_fname)
+      path = info.dli_fname;
+  }
+  dlclose(handle);
+  return path;
+}
+
+void promoteRocprofilerLibraries() {
+  std::string libDir = getStrEnv(rocprofiler::ExternLibRocprofiler::pathEnv);
+  if (libDir.empty()) {
+    libDir = dirname(findLoadedLibPath(
+        "librocprofiler-register.so",
+        "rocprofiler_register_library_api_table"));
+  }
+
+  void *sdkHandle = nullptr;
+  for (const char *libName :
+       {"librocprofiler-register.so", "librocprofiler-sdk.so"}) {
+    void *handle = nullptr;
+    if (!libDir.empty()) {
+      std::string fullPath = libDir + "/" + libName;
+      handle = dlopen(fullPath.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    }
+    if (!handle)
+      handle = dlopen(libName, RTLD_NOW | RTLD_GLOBAL);
+    if (std::string(libName) == "librocprofiler-sdk.so")
+      sdkHandle = handle;
+  }
+
+  if (sdkHandle)
+    rocprofiler::ExternLibRocprofiler::lib = sdkHandle;
+}
+
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
 // Payload attached to each graph replay kernel dispatch through
 // rocprofiler-sdk's external-correlation request service.
@@ -1414,6 +1462,7 @@ RocprofSDKProfiler::RocprofSDKProfiler() {
   // via the __attribute__((constructor)) hook below, so force_configure
   // lands before any user code touches the HIP/HSA runtimes.
   if (!state.configured) {
+    promoteRocprofilerLibraries();
     setenv("ROCPROFILER_PC_SAMPLING_BETA_ENABLED", "ON", /*overwrite=*/0);
     rocprofiler::forceConfigure<true>(&protonConfigure);
   }
