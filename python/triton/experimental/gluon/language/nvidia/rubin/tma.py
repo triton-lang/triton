@@ -72,9 +72,9 @@ def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, 
             - ``"per_elem_1B"``: match each byte against ``0xff``.
 
             A sentinel match prevents the mbarrier conditional phase from
-            completing. Use ``rubin.mbarrier.wait(..., conditional=True)`` or
-            ``rubin.mbarrier.test_wait(..., conditional=True)`` to consume or
-            retry the load.
+            completing. Use ``rubin.mbarrier.wait(..., conditional=True)`` to
+            consume the load and ``rubin.mbarrier.test_wait_validity(...)`` to
+            decide whether to retry it.
     """
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, coord, "async_load", "innermost coordinate", _semantic=_semantic)

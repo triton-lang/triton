@@ -22,8 +22,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // RUBIN-LABEL: conditional_barrier_wait
   tt.func @conditional_barrier_wait(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>, %phase: i32, %pred: i1) {
-    // RUBIN: mbarrier.test_wait.parity.phase_type::conditional.shared::cta.b64
-    %complete = ttng.barrier_test_wait %alloc, %phase, %pred, true : !ttg.memdesc<1xi64, #shared0, #smem> -> i32
     // RUBIN: mbarrier.try_wait.parity.phase_type::conditional.shared::cta.b64
     ttng.wait_barrier %alloc, %phase, %pred, true : !ttg.memdesc<1xi64, #shared0, #smem>
     tt.return

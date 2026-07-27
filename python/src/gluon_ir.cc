@@ -960,12 +960,6 @@ void init_gluon_ir(py::module_ &m) {
           },
           py::arg("memDesc"), py::arg("phase"), py::arg("pred"),
           py::arg("deps"), py::arg("conditional") = false)
-      .def("create_mbarrier_test_wait",
-           [](GluonOpBuilder &self, Value memDesc, Value phase, Value pred,
-              bool conditional) -> Value {
-             return self.create<ttng::BarrierTestWaitOp>(memDesc, phase, pred,
-                                                         conditional);
-           })
       .def("create_mbarrier_test_wait_report",
            [](GluonOpBuilder &self, Value memDesc, Value phase,
               Value pred) -> std::pair<Value, Value> {

@@ -16,7 +16,6 @@ __all__ = [
     "init",
     "invalidate",
     "MBarrierLayout",
-    "test_wait",
     "test_wait_validity",
     "wait",
 ]
@@ -40,30 +39,6 @@ def wait(mbarrier, phase, pred=True, conditional=False, deps=(), _semantic=None)
     pred = _semantic.to_tensor(pred)
     deps = [x.handle for x in deps]
     _semantic.builder.create_mbarrier_wait(mbarrier.handle, phase.handle, pred.handle, deps, conditional)
-
-
-@builtin
-def test_wait(mbarrier, phase, pred=True, conditional=False, _semantic=None):
-    """
-    Test an mbarrier phase once without blocking.
-
-    Args:
-        mbarrier (shared_memory_descriptor): The barrier object to test.
-        phase (int): The phase/parity value to test.
-        pred (bool): Predicate. Operation is skipped if predicate is False.
-            Defaults to True.
-        conditional (bool): If True, test the conditional phase used by TMA
-            report-validity operations. Defaults to False.
-
-    Returns:
-        tensor: Scalar int32 tensor containing 1 if the requested phase has
-            completed, otherwise 0.
-    """
-    conditional = _unwrap_if_constexpr(conditional)
-    phase = _semantic.to_tensor(phase)
-    pred = _semantic.to_tensor(pred)
-    handle = _semantic.builder.create_mbarrier_test_wait(mbarrier.handle, phase.handle, pred.handle, conditional)
-    return _semantic.tensor(handle, tl.int32)
 
 
 @builtin

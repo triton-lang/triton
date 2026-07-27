@@ -13,12 +13,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: selp.u32 $0, 1, 0, complete;
     // CHECK: selp.u32 $1, 1, 0, reported;
     %done, %reported = ttng.barrier_test_wait_report %alloc, %phase, %pred : !ttg.memdesc<1xi64, #shared, #smem> -> (i32, i32)
-
-    // CHECK: mbarrier.test_wait.parity.shared::cta.b64 complete, [$1], $2;
-    %primary = ttng.barrier_test_wait %alloc, %phase, %pred : !ttg.memdesc<1xi64, #shared, #smem> -> i32
-
-    // CHECK: mbarrier.test_wait.parity.phase_type::conditional.shared::cta.b64 complete, [$1], $2;
-    %conditional = ttng.barrier_test_wait %alloc, %phase, %pred, true : !ttg.memdesc<1xi64, #shared, #smem> -> i32
     tt.return
   }
 }

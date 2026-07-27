@@ -381,49 +381,6 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
   let hasVerifier = 1;
 }
 
-def TTNG_BarrierTestWaitOp : TTNG_Op<"barrier_test_wait", [
-    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
-    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
-  let summary = "perform a non-blocking parity test on an mbarrier";
-
-  let description = [{
-    Tests whether the mbarrier object in `alloc` has completed the requested
-    phase and returns `1` on success or `0` otherwise. Unlike
-    `ttng.wait_barrier`, this operation performs a single non-blocking query.
-
-    If `conditional` is false, the op tests the primary phase. If
-    `conditional` is true, it tests the conditional phase used by TMA
-    report-validity operations.
-  }];
-
-  let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$alloc,
-    I32:$phase,
-    Optional<I1>:$pred,
-    DefaultValuedAttr<BoolAttr, "false">:$conditional
-  );
-  let results = (outs I32:$waitComplete);
-
-  let builders = [
-    OpBuilder<(ins "Value":$alloc, "Value":$phase),
-    [{
-      build($_builder, $_state, $_builder.getI32Type(), alloc, phase,
-            /*pred=*/static_cast<mlir::Value>(nullptr), /*conditional=*/false);
-    }]>,
-    OpBuilder<(ins "Value":$alloc, "Value":$phase, "bool":$conditional),
-    [{
-      build($_builder, $_state, $_builder.getI32Type(), alloc, phase,
-            /*pred=*/static_cast<mlir::Value>(nullptr), conditional);
-    }]>
-  ];
-
-  let assemblyFormat = [{
-    $alloc `,` $phase (`,` $pred^)? (`,` $conditional^)?
-    attr-dict `:` qualified(type($alloc)) `->` type($waitComplete)
-  }];
-  let hasVerifier = 1;
-}
-
 def TTNG_BarrierTestWaitReportOp : TTNG_Op<"barrier_test_wait_report", [
     DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
     DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
