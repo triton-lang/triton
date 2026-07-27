@@ -1016,10 +1016,8 @@ def test_pcsampling(tmp_path: pathlib.Path, device: str):
         )
     except RuntimeError as e:
         message = str(e)
-        amd_pc_sampling_unavailable = (
-            "rocprofiler-sdk PC sampling service is not available" in message
-            or "rocprofiler-sdk did not report PC sampling configurations" in message
-        )
+        amd_pc_sampling_unavailable = ("rocprofiler-sdk PC sampling service is not available" in message
+                                       or "rocprofiler-sdk did not report PC sampling configurations" in message)
         if is_hip() and amd_pc_sampling_unavailable:
             proton.finalize()
             pytest.skip(message)

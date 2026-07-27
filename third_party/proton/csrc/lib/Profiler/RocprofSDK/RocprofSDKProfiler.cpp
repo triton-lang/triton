@@ -82,9 +82,9 @@ std::string findLoadedLibPath(const char *libName, const char *symbolName) {
 void promoteRocprofilerLibraries() {
   std::string libDir = getStrEnv(rocprofiler::ExternLibRocprofiler::pathEnv);
   if (libDir.empty()) {
-    libDir = dirname(findLoadedLibPath(
-        "librocprofiler-register.so",
-        "rocprofiler_register_library_api_table"));
+    libDir =
+        dirname(findLoadedLibPath("librocprofiler-register.so",
+                                  "rocprofiler_register_library_api_table"));
   }
 
   void *sdkHandle = nullptr;
