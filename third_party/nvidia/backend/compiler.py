@@ -546,7 +546,7 @@ class CUDABackend(BaseBackend):
                 if "consan" in opt.instrumentation_mode:
                     ptx_extra_options += ["--Ofast-compile", "min" if opt.num_ctas > 1 else "max"]
                 elif "fpsan" in opt.instrumentation_mode:
-                    ptx_extra_options += ["--opt-level", "1"]
+                    ptx_extra_options += ["--opt-level", "2"]
 
             # Add --regAllocOptLevel=2 to work around ptxas 13.x bug
             reg_alloc = ['--regAllocOptLevel=2']

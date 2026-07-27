@@ -83,8 +83,9 @@ std::pair<int64_t, int64_t> getMmaEmulationTileShape(PatternRewriter &rewriter,
   if (!supportsI8DotDecomposition(rewriter, accElem) || (k % kI8MmaK) != 0)
     return tile;
 
-  // Cap the MMAv2 accumulator at 32 registers per thread.
-  int64_t maxTileArea = 32 * 32 * numWarps / (accElem.getWidth() == 64 ? 2 : 1);
+  // Cap the MMAv2 accumulator at 16 registers per thread. Larger tiles
+  // scalarize too much payload-limb code in kernels with many MMA operations.
+  int64_t maxTileArea = 16 * 32 * numWarps / (accElem.getWidth() == 64 ? 2 : 1);
   for (int64_t tileM = kI8MmaM; tileM <= m; tileM *= 2) {
     if ((m % tileM) != 0)
       continue;

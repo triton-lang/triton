@@ -187,7 +187,7 @@ def test_specialize_impl(input_generator, backend, is_const, specialize_value, a
         ("iisan,consan", False, 1, ("--Ofast-compile", "max")),
         ("iisan,consan", False, 2, ("--Ofast-compile", "min")),
         ("consan", True, 2, ("--opt-level", "0")),
-        ("fpsan", False, 1, ("--opt-level", "1")),
+        ("fpsan", False, 1, ("--opt-level", "2")),
         ("gsan", False, 1, ()),
     ],
 )

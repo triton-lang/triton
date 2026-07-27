@@ -113,7 +113,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK-NEXT: scf.for
     // CHECK: tti.experimental_local_gather
     // CHECK: tti.experimental_local_gather
-    // CHECK-COUNT-32: tti.dot_i8
+    // CHECK-COUNT-16: tti.dot_i8
     // CHECK-NOT: tti.dot_i8
     // CHECK: tt.store
     // CHECK: ttg.barrier global_read|global_write
@@ -198,7 +198,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK-NEXT: scf.for
     // CHECK: tti.experimental_local_gather {{.*}}#ttg.dot_op<{{.*}}opIdx = 0{{.*}}kWidth = 2
     // CHECK: tti.experimental_local_gather {{.*}}#ttg.dot_op<{{.*}}opIdx = 1{{.*}}kWidth = 2
-    // CHECK-COUNT-32: tti.dot_i8
+    // CHECK-COUNT-16: tti.dot_i8
     // CHECK-NOT: tti.dot_i8
     // CHECK: ttg.barrier global_read|global_write
     // CHECK: tt.store
