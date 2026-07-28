@@ -104,6 +104,12 @@ public:
   void dump();
 
 private:
+  struct GlobalAssignmentChange {
+    Value value;
+    Attribute originalEncoding;
+    Attribute proposedEncoding;
+  };
+
   bool canAssignEncoding(Value value, Attribute encoding,
                          const DenseMap<Value, Attribute> &assignments) const;
   Attribute
@@ -114,6 +120,10 @@ private:
                   const DenseMap<Value, Attribute> &assignments) const;
   uint64_t getLayoutTransitionCost(Value value, Attribute sourceEncoding,
                                    Attribute resultEncoding) const;
+  uint64_t getLayoutRegisterPressureCost(Value value, Attribute encoding) const;
+  uint64_t getLayoutReductionCost(Value value, Attribute encoding,
+                                  unsigned axis) const;
+  uint64_t getLayoutExecutionWeight(Operation *op) const;
   uint64_t
   getAssignmentCost(Value value, Attribute encoding,
                     const DenseMap<Value, Attribute> &assignments) const;
@@ -122,9 +132,9 @@ private:
   uint64_t getAffectedAssignmentCost(
       ArrayRef<Value> changed,
       const DenseMap<Value, Attribute> &assignments) const;
-  bool
-  buildGlobalComponentProposal(Value seed, Attribute encoding,
-                               DenseMap<Value, Attribute> &assignments) const;
+  bool buildGlobalComponentProposal(
+      Value seed, Attribute encoding, DenseMap<Value, Attribute> &assignments,
+      SmallVectorImpl<GlobalAssignmentChange> &changes) const;
 
   // map from value to layout information.
   llvm::MapVector<Value, LayoutInfo> layouts;
@@ -132,6 +142,10 @@ private:
   // original encodings of tensor values rewritten in place.
   DenseMap<Value, Attribute> originalEncodings;
   mutable DenseMap<std::pair<Type, Type>, uint64_t> layoutTransitionCosts;
+  mutable DenseMap<std::pair<Type, Attribute>, uint64_t>
+      layoutRegisterPressureCosts;
+  mutable DenseMap<std::pair<Type, unsigned>, uint64_t> layoutReductionCosts;
+  mutable DenseMap<Operation *, uint64_t> layoutExecutionWeights;
   FuncOp funcOp;
   LayoutAssignmentStrategy strategy;
 };
@@ -727,16 +741,23 @@ uint64_t LayoutPropagation::getLayoutTransitionCost(
   return cached->second = 32 * byteCount;
 }
 
-static uint64_t getLayoutRegisterPressureCost(Value value, Attribute encoding) {
+uint64_t
+LayoutPropagation::getLayoutRegisterPressureCost(Value value,
+                                                 Attribute encoding) const {
   auto tensorType = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorType || !encoding || !value.getDefiningOp())
     return 0;
+
+  auto [cached, inserted] = layoutRegisterPressureCosts.try_emplace(
+      std::pair<Type, Attribute>{tensorType, encoding}, 0);
+  if (!inserted)
+    return cached->second;
 
   uint64_t originalElements = getUniqueElemsPerThread(tensorType);
   uint64_t assignedElements =
       getUniqueElemsPerThread(encoding, tensorType.getShape());
   if (assignedElements <= originalElements)
-    return 0;
+    return cached->second;
 
   uint64_t elementBytes = 4;
   if (tensorType.getElementType().isIntOrFloat())
@@ -746,11 +767,13 @@ static uint64_t getLayoutRegisterPressureCost(Value value, Attribute encoding) {
   // Concentrating a distributed tile into registers serializes work that
   // could otherwise be performed by a warp. Price that work alongside the
   // warp-sized exchange used for physical layout transitions.
-  return 32 * (assignedElements - originalElements) * elementBytes;
+  cached->second = 32 * (assignedElements - originalElements) * elementBytes;
+  return cached->second;
 }
 
-static uint64_t getLayoutReductionCost(Value value, Attribute encoding,
-                                       unsigned axis) {
+uint64_t LayoutPropagation::getLayoutReductionCost(Value value,
+                                                   Attribute encoding,
+                                                   unsigned axis) const {
   auto tensorType = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorType || !encoding || axis >= tensorType.getRank())
     return 0;
@@ -758,6 +781,12 @@ static uint64_t getLayoutReductionCost(Value value, Attribute encoding,
   int64_t axisSize = tensorType.getDimSize(axis);
   if (axisSize <= 1)
     return 0;
+
+  RankedTensorType assignedType = tensorType.cloneWithEncoding(encoding);
+  auto [cached, inserted] = layoutReductionCosts.try_emplace(
+      std::pair<Type, unsigned>{assignedType, axis}, 0);
+  if (!inserted)
+    return cached->second;
 
   uint64_t elementBytes = 4;
   if (tensorType.getElementType().isIntOrFloat())
@@ -771,11 +800,17 @@ static uint64_t getLayoutReductionCost(Value value, Attribute encoding,
   // A warp-local reduction exchanges only the participating lanes. Splitting
   // its axis across warps additionally requires shared-memory exchange and
   // CTA-wide synchronization, even when the IR has no explicit conversion.
-  return rows * elementBytes * ((lanes - 1) + 32 * lanes * (warps - 1));
+  cached->second =
+      rows * elementBytes * ((lanes - 1) + 32 * lanes * (warps - 1));
+  return cached->second;
 }
 
-static uint64_t getLayoutExecutionWeight(Operation *op) {
-  uint64_t weight = 1;
+uint64_t LayoutPropagation::getLayoutExecutionWeight(Operation *op) const {
+  auto [cached, inserted] = layoutExecutionWeights.try_emplace(op, 1);
+  if (!inserted)
+    return cached->second;
+
+  uint64_t &weight = cached->second;
   for (Operation *parent = op->getParentOp(); parent;
        parent = parent->getParentOp()) {
     if (isa<scf::ForOp, scf::WhileOp>(parent))
@@ -1061,11 +1096,18 @@ uint64_t LayoutPropagation::getAffectedAssignmentCost(
 }
 
 bool LayoutPropagation::buildGlobalComponentProposal(
-    Value seed, Attribute encoding,
-    DenseMap<Value, Attribute> &assignments) const {
+    Value seed, Attribute encoding, DenseMap<Value, Attribute> &assignments,
+    SmallVectorImpl<GlobalAssignmentChange> &changes) const {
   constexpr unsigned maxComponentValues = 512;
   DenseMap<Value, Attribute> requested;
   SmallVector<std::pair<Value, Attribute>, 32> worklist;
+
+  auto rollback = [&]() {
+    for (const GlobalAssignmentChange &change : llvm::reverse(changes))
+      assignments[change.value] = change.originalEncoding;
+    changes.clear();
+    return false;
+  };
 
   auto request = [&](Value value, Attribute candidate) {
     auto type = dyn_cast<RankedTensorType>(value.getType());
@@ -1117,23 +1159,27 @@ bool LayoutPropagation::buildGlobalComponentProposal(
 
   while (!worklist.empty()) {
     auto [value, candidate] = worklist.pop_back_val();
-    assignments[value] = candidate;
+    Attribute original = assignments.lookup(value);
+    if (original != candidate) {
+      changes.push_back({value, original, candidate});
+      assignments[value] = candidate;
+    }
 
     if (Operation *producer = value.getDefiningOp()) {
       if (auto splitOp = dyn_cast<SplitOp>(producer)) {
         if (!request(splitOp.getOutLHS(), candidate) ||
             !request(splitOp.getOutRHS(), candidate))
-          return false;
+          return rollback();
       }
       if (auto reduceOp = dyn_cast<ReduceOp>(producer))
         for (Value sibling : reduceOp->getResults())
           if (!request(sibling, candidate))
-            return false;
+            return rollback();
       if (isa<scf::ForOp, scf::WhileOp>(producer)) {
         auto result = cast<OpResult>(value);
         if (!requestLoopComponent(producer, result.getResultNumber(),
                                   candidate))
-          return false;
+          return rollback();
       }
       if (isLayoutComponent(producer) && !isFixedLayoutBoundary(producer)) {
         Attribute source = isa<ConvertLayoutOp>(producer)
@@ -1142,7 +1188,7 @@ bool LayoutPropagation::buildGlobalComponentProposal(
         if (source) {
           for (Value operand : producer->getOperands())
             if (!request(operand, source))
-              return false;
+              return rollback();
         }
       }
     } else if (auto blockArg = dyn_cast<BlockArgument>(value)) {
@@ -1151,11 +1197,11 @@ bool LayoutPropagation::buildGlobalComponentProposal(
         if (blockArg.getArgNumber() != 0 &&
             !requestLoopComponent(forOp, blockArg.getArgNumber() - 1,
                                   candidate))
-          return false;
+          return rollback();
       } else if (auto whileOp = dyn_cast<scf::WhileOp>(parent)) {
         if (blockArg.getArgNumber() < whileOp.getNumResults() &&
             !requestLoopComponent(whileOp, blockArg.getArgNumber(), candidate))
-          return false;
+          return rollback();
       }
     }
 
@@ -1165,14 +1211,14 @@ bool LayoutPropagation::buildGlobalComponentProposal(
         if (Value result = forOp.getTiedLoopResult(&use)) {
           if (!requestLoopComponent(
                   forOp, cast<OpResult>(result).getResultNumber(), candidate))
-            return false;
+            return rollback();
         }
         continue;
       }
       if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
         if (use.getOperandNumber() < whileOp.getNumResults() &&
             !requestLoopComponent(whileOp, use.getOperandNumber(), candidate))
-          return false;
+          return rollback();
         continue;
       }
       if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
@@ -1180,7 +1226,7 @@ bool LayoutPropagation::buildGlobalComponentProposal(
         if (isa<scf::ForOp, scf::WhileOp>(parent) &&
             use.getOperandNumber() < parent->getNumResults()) {
           if (!requestLoopComponent(parent, use.getOperandNumber(), candidate))
-            return false;
+            return rollback();
         }
         continue;
       }
@@ -1189,7 +1235,7 @@ bool LayoutPropagation::buildGlobalComponentProposal(
           auto whileOp = cast<scf::WhileOp>(condition->getParentOp());
           if (!requestLoopComponent(whileOp, use.getOperandNumber() - 1,
                                     candidate))
-            return false;
+            return rollback();
         }
         continue;
       }
@@ -1204,18 +1250,19 @@ bool LayoutPropagation::buildGlobalComponentProposal(
 
       for (Value result : user->getResults())
         if (!request(result, destination))
-          return false;
+          return rollback();
     }
   }
 
   for (const auto &[value, candidate] : requested)
     if (!canAssignEncoding(value, candidate, assignments))
-      return false;
+      return rollback();
   return true;
 }
 
 void LayoutPropagation::resolveGlobalConflicts() {
   DenseMap<Value, Attribute> assignments;
+  bool hasFlexibleLayouts = false;
   for (auto &[value, info] : layouts) {
     if (info.encodings.empty())
       continue;
@@ -1223,6 +1270,20 @@ void LayoutPropagation::resolveGlobalConflicts() {
     Attribute original = cast<RankedTensorType>(value.getType()).getEncoding();
     info.encodings.insert(original);
     assignments.try_emplace(value, original);
+    hasFlexibleLayouts |=
+        !fixedLayouts.contains(value) && info.encodings.size() > 1;
+  }
+
+  // Original encodings already form the only legal assignment.
+  if (!hasFlexibleLayouts) {
+    for (auto &[value, info] : layouts) {
+      Attribute encoding = assignments.lookup(value);
+      if (!encoding)
+        continue;
+      info.encodings.clear();
+      info.encodings.insert(encoding);
+    }
+    return;
   }
 
   bool hasJoinConstraints = false;
@@ -1292,27 +1353,29 @@ void LayoutPropagation::resolveGlobalConflicts() {
                   cast<RankedTensorType>(value.getType()).getEncoding())
             continue;
 
-          DenseMap<Value, Attribute> proposal = assignments;
-          if (!buildGlobalComponentProposal(value, candidate, proposal))
+          SmallVector<GlobalAssignmentChange, 32> proposal;
+          if (!buildGlobalComponentProposal(value, candidate, assignments,
+                                            proposal) ||
+              proposal.empty())
             continue;
 
           SmallVector<Value, 32> changedValues;
-          for (const auto &[proposedValue, proposedEncoding] : proposal)
-            if (assignments.lookup(proposedValue) != proposedEncoding)
-              changedValues.push_back(proposedValue);
-          if (changedValues.empty())
-            continue;
+          for (const GlobalAssignmentChange &change : proposal)
+            changedValues.push_back(change.value);
 
+          uint64_t affectedProposalCost =
+              getAffectedAssignmentCost(changedValues, assignments);
+          for (const GlobalAssignmentChange &change : llvm::reverse(proposal))
+            assignments[change.value] = change.originalEncoding;
           uint64_t previousCost =
               getAffectedAssignmentCost(changedValues, assignments);
-          uint64_t affectedProposalCost =
-              getAffectedAssignmentCost(changedValues, proposal);
           uint64_t proposalCost =
               currentCost - previousCost + affectedProposalCost;
           if (proposalCost >= currentCost)
             continue;
 
-          assignments = std::move(proposal);
+          for (const GlobalAssignmentChange &change : proposal)
+            assignments[change.value] = change.proposedEncoding;
           currentCost = proposalCost;
           changed = true;
         }
