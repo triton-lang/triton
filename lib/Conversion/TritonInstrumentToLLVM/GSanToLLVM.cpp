@@ -9,6 +9,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/LogicalResult.h"
 #include <limits>
+#include <utility>
 
 namespace tt = mlir::triton;
 namespace tti = mlir::triton::instrument;
@@ -113,10 +114,11 @@ materializeSourceLocation(ConversionPatternRewriter &rewriter, Location loc) {
 // Utility functions
 ////////////////////////////////////////////
 
-Value prepareTensorStackArg(ConversionPatternRewriter &rewriter, Location loc,
-                            ArrayRef<Value> ptrElems, ArrayRef<Value> maskElems,
-                            uint32_t regMask, Value threadPred,
-                            unsigned elemIndexStride) {
+std::pair<Value, unsigned>
+prepareTensorStackArg(ConversionPatternRewriter &rewriter, Location loc,
+                      ArrayRef<Value> ptrElems, ArrayRef<Value> maskElems,
+                      uint32_t regMask, Value threadPred,
+                      unsigned elemIndexStride) {
   auto *ctx = rewriter.getContext();
   TritonLLVMOpBuilder b(loc, rewriter);
   Value one = b.i32_val(1);
@@ -124,7 +126,9 @@ Value prepareTensorStackArg(ConversionPatternRewriter &rewriter, Location loc,
   Type i8Ty = rewriter.getI8Type();
   Type i64Ty = rewriter.getI64Type();
 
-  unsigned numElems = ptrElems.size();
+  unsigned numElems = 0;
+  for (unsigned i = 0; i < ptrElems.size(); ++i)
+    numElems += isCanonicalIndex(i * elemIndexStride, regMask);
   auto ptrArrayTy = array_ty(i64Ty, numElems);
   auto maskArrayTy = array_ty(i8Ty, numElems);
   SmallVector<Type> argsFieldTys = {ptrArrayTy, maskArrayTy};
@@ -132,16 +136,17 @@ Value prepareTensorStackArg(ConversionPatternRewriter &rewriter, Location loc,
   auto argsBuffer = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx), argsTy,
                                            one, /*alignment=*/0);
 
-  for (unsigned i = 0; i < numElems; ++i) {
-    Value idx = b.i32_val(i);
+  unsigned packedIndex = 0;
+  for (unsigned i = 0; i < ptrElems.size(); ++i) {
+    if (!isCanonicalIndex(i * elemIndexStride, regMask))
+      continue;
+    Value idx = b.i32_val(packedIndex++);
     Value ptrValue = b.ptrtoint(i64_ty, ptrElems[i]);
     Value ptrSlot =
         b.gep(ptr_ty(ctx), argsTy, argsBuffer, ValueRange{zero, zero, idx});
     b.store(ptrValue, ptrSlot);
 
     Value maskValue = maskElems.empty() ? b.true_val() : maskElems[i];
-    if (!isCanonicalIndex(i * elemIndexStride, regMask))
-      maskValue = b.false_val();
     maskValue = ttg::maybeAnd(rewriter, loc, maskValue, threadPred);
     Value maskByte = b.zext(i8Ty, maskValue);
     Value maskSlot =
@@ -149,7 +154,7 @@ Value prepareTensorStackArg(ConversionPatternRewriter &rewriter, Location loc,
     b.store(maskByte, maskSlot);
   }
 
-  return argsBuffer;
+  return {argsBuffer, numElems};
 }
 
 void emitTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
@@ -162,15 +167,15 @@ void emitTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
     return;
 
   TritonLLVMOpBuilder b(loc, rewriter);
-  auto stackPtr = prepareTensorStackArg(rewriter, loc, ptrElems, maskElems,
-                                        regMask, threadPred, elemIndexStride);
+  auto [stackPtr, numElems] = prepareTensorStackArg(
+      rewriter, loc, ptrElems, maskElems, regMask, threadPred, elemIndexStride);
   StringRef funcName =
       isStore ? kGSanStoreTensorRuntimeFn : kGSanLoadTensorRuntimeFn;
   auto runtimeFunc = getOrCreateGSanRuntimeFunction(rewriter, funcName);
   auto sourceLoc = materializeSourceLocation(rewriter, loc);
 
   b.call(runtimeFunc,
-         ValueRange{gsanGlobalStatePtr, stackPtr, b.i32_val(ptrElems.size()),
+         ValueRange{gsanGlobalStatePtr, stackPtr, b.i32_val(numElems),
                     b.i32_val(bytesPerElem), sourceLoc.file, sourceLoc.line});
 }
 
@@ -185,19 +190,18 @@ void emitAtomicTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
     return;
 
   TritonLLVMOpBuilder b(loc, rewriter);
-  auto stackPtr =
+  auto [stackPtr, numElems] =
       prepareTensorStackArg(rewriter, loc, ptrElems, maskElems, regMask,
                             threadPred, /*elemIndexStride=*/1);
   auto runtimeFunc =
       getOrCreateGSanRuntimeFunction(rewriter, kGSanAtomicTensorRuntimeFn);
   auto sourceLoc = materializeSourceLocation(rewriter, loc);
 
-  b.call(runtimeFunc,
-         ValueRange{gsanGlobalStatePtr, stackPtr, b.i32_val(ptrElems.size()),
-                    b.i32_val(bytesPerElem),
-                    b.i32_val(static_cast<int32_t>(sem)),
-                    b.i32_val(static_cast<int32_t>(scope)), sourceLoc.file,
-                    sourceLoc.line});
+  b.call(runtimeFunc, ValueRange{gsanGlobalStatePtr, stackPtr,
+                                 b.i32_val(numElems), b.i32_val(bytesPerElem),
+                                 b.i32_val(static_cast<int32_t>(sem)),
+                                 b.i32_val(static_cast<int32_t>(scope)),
+                                 sourceLoc.file, sourceLoc.line});
 }
 
 unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
@@ -425,7 +429,7 @@ public:
                               maskAlign, bytesPerElem);
 
     auto ctx = op.getContext();
-    auto kReg = str_attr("reg");
+    auto kReg = str_attr("register");
     auto freeVarMasks = getFreeVariableMasks(ptrTy);
     auto threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                         loc, *targetInfo);
@@ -486,7 +490,7 @@ public:
                               maskAlign, bytesPerElem);
 
     auto ctx = op.getContext();
-    auto kReg = str_attr("reg");
+    auto kReg = str_attr("register");
     auto freeVarMasks = getFreeVariableMasks(ptrTy);
     auto regMask = freeVarMasks.lookup(kReg);
     auto threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
@@ -602,7 +606,7 @@ public:
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                          loc, *targetInfo);
-    uint32_t regMask = freeVarMasks.lookup(str_attr("reg"));
+    uint32_t regMask = freeVarMasks.lookup(str_attr("register"));
     auto sourceLoc = materializeSourceLocation(rewriter, loc);
     auto eventStateTy = getGSanAtomicEventStateType(rewriter);
     Value eventState = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx),
@@ -707,7 +711,7 @@ public:
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                          loc, *targetInfo);
-    uint32_t regMask = freeVarMasks.lookup(str_attr("reg"));
+    uint32_t regMask = freeVarMasks.lookup(str_attr("register"));
     auto sourceLoc = materializeSourceLocation(rewriter, loc);
     auto eventStateTy = getGSanAtomicEventStateType(rewriter);
     Value eventState = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx),
