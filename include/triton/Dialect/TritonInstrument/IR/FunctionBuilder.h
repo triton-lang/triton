@@ -238,11 +238,11 @@ public:
   void createTrackProxyAccessesForBufferCall(
       ImplicitLocOpBuilder &b, Value mbar, Value bufferMask, int thread,
       Value pred, Operation *insertPoint, Value barrierCTAs, Value effectCTAs);
-  // transferProxyAccesses: merge a barrier's packed proxy frontier into the
-  // waiting base thread.
-  void createTransferProxyAccessesCall(ImplicitLocOpBuilder &b, Value mbar,
-                                       int thread, Value pred,
-                                       Operation *insertPoint);
+  // completeBarrierWait: merge the barrier's available proxy frontier and
+  // clear the issuing base thread's waiting flag and phase.
+  void createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b, Value mbar,
+                                     int thread, Value pred,
+                                     Operation *insertPoint);
   // clearBarrierProxyAccessTracking: clear packed proxy state associated with
   // an invalidated barrier.
   void createClearBarrierProxyAccessTrackingCall(ImplicitLocOpBuilder &b,

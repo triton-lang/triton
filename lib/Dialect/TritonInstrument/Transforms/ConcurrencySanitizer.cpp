@@ -950,9 +950,8 @@ private:
           wb, alloc, getThreadPeersMask(thread, auxData.threadLayout), pred,
           memType, op);
     }
-    funcBuilder.createTransferProxyAccessesCall(wb, alloc, baseThread, pred,
-                                                op);
-    funcBuilder.createClearWaitingCall(wb, alloc, baseThread, pred, op);
+    funcBuilder.createCompleteBarrierWaitCall(wb, alloc, baseThread, pred,
+                                              op);
     tti::ExperimentalLockReleaseOp::create(wb, lock, pred);
   }
 
