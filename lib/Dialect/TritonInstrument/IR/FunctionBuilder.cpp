@@ -842,14 +842,25 @@ Value FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
             arith::AndIOp::create(fb, waitingOr, activeMaskTensor);
         Value eqPerCTA = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
                                                waitingMasked, activeMaskTensor);
-        Value allFinishedOrWaiting = reduceAll<arith::AndIOp>(fb, eqPerCTA);
-        Value zeroMask = tti::createConstIntTensor(fb, fb.getLoc(), 0,
-                                                   activeMasksGlobalType);
-        Value activePerCTA = arith::CmpIOp::create(fb, arith::CmpIPredicate::ne,
-                                                   activeMasks, zeroMask);
-        Value anyUnfinished = reduceAll<arith::OrIOp>(fb, activePerCTA);
-        Value deadlocked =
-            arith::AndIOp::create(fb, allFinishedOrWaiting, anyUnfinished);
+        Value zeroMask =
+            tti::createConstIntTensor(fb, fb.getLoc(), 0, waitingOrType);
+        Value noActivePerCTA = arith::CmpIOp::create(
+            fb, arith::CmpIPredicate::eq, activeMaskTensor, zeroMask);
+        auto deadlockStatusType =
+            cast<RankedTensorType>(eqPerCTA.getType()).clone(fb.getI32Type());
+        Value waitingBits =
+            arith::ExtUIOp::create(fb, deadlockStatusType, eqPerCTA);
+        Value noActiveBits =
+            arith::ExtUIOp::create(fb, deadlockStatusType, noActivePerCTA);
+        Value statusShift =
+            tti::createConstIntTensor(fb, fb.getLoc(), 1, deadlockStatusType);
+        noActiveBits = arith::ShLIOp::create(fb, noActiveBits, statusShift);
+        Value statusBits =
+            arith::OrIOp::create(fb, waitingBits, noActiveBits);
+        Value status = reduceAll<arith::AndIOp>(fb, statusBits);
+        Value deadlockStatus = arith::ConstantIntOp::create(fb, 1, 32);
+        Value deadlocked = arith::CmpIOp::create(
+            fb, arith::CmpIPredicate::eq, status, deadlockStatus);
 
         Value vTrue = arith::ConstantOp::create(
             fb, deadlocked.getType(), fb.getIntegerAttr(fb.getI1Type(), 1));
