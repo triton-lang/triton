@@ -1043,15 +1043,10 @@ private:
         addReadChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
                       effect.operandName, effectCTAs, opInfo->commitKind);
         if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
-          funcBuilder.createSetWriteVisibilityCall(
-              b, bufferMask, getThreadPeersMask(thread, auxData.threadLayout),
-              pred, memType, op, effectCTAs);
-          funcBuilder.createClearWriteTrackingCall(b, bufferMask, pred, memType,
-                                                   op, effectCTAs);
-          funcBuilder.createClearReadVisibilityCall(b, bufferMask, pred,
-                                                    memType, op, effectCTAs);
-          funcBuilder.createClearReadTrackingCall(b, bufferMask, pred, memType,
-                                                  op, effectCTAs);
+          funcBuilder.createPublishWriteVisibilityCall(
+              b, bufferMask,
+              getThreadPeersMask(thread, auxData.threadLayout), pred, memType,
+              op, effectCTAs);
         }
         if (opInfo->trackingKind ==
             MemEffectsOpInfo::TrackingKind::CommitCount) {

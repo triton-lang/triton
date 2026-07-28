@@ -250,8 +250,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_set_proxy_access{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
-    // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
-    // CHECK: tt.call @__triton_consan_clear_read_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
+    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
     // CHECK: ttg.local_scatter
     ttg.local_scatter %dst[%indices], %values {axis = 0 : i32} : !ttg.memdesc<8x32xi32, #local_gather_scatter_shared, #local_gather_scatter_smem, mutable>, tensor<8x32xi32, #local_gather_scatter_blocked>, tensor<8x32xi32, #local_gather_scatter_blocked>
 
@@ -289,8 +288,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_set_proxy_access{{.*}}({{.*}}%[[ATOMIC_CTAS]])
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
-    // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
-    // CHECK: tt.call @__triton_consan_clear_read_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
+    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
     // CHECK: ttg.local_atomic_scatter_rmw
     %old = ttg.local_atomic_scatter_rmw add, %dst[%indices], %values {axis = 1 : i32} : (!ttg.memdesc<8x32xi32, #local_atomic_shared, #local_atomic_smem, mutable>, tensor<8x32xi32, #local_atomic_blocked>, tensor<8x32xi32, #local_atomic_blocked>) -> tensor<8x32xi32, #local_atomic_blocked>
     // Enable proxy tracking without giving the atomic destination another user.
@@ -312,7 +310,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // A source-backed allocation lowers through the local-store path.
     // CHECK: ttg.local_alloc %{{.*}}
     // CHECK: %[[ALLOC_CTAS:.*]] = arith.constant 3 : i32
-    // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}({{.*}}%[[ALLOC_CTAS]]{{.*}})
+    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}({{.*}}%[[ALLOC_CTAS]]{{.*}})
     %buf = ttg.local_alloc %values {allocation.offset = 0 : i32} : (tensor<8x32xi32, #local_access_blocked>) -> !ttg.memdesc<8x32xi32, #local_access_shared, #local_access_smem, mutable>
 
     // The register and shared layouts shard different logical axes, so every
@@ -555,10 +553,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     // CHECK: tt.call @__triton_consan_verify_write_visibility
     // CHECK: tt.call @__triton_consan_verify_read_visibility
-    // CHECK: tt.call @__triton_consan_set_write_visibility
-    // CHECK: tt.call @__triton_consan_clear_write_tracking
-    // CHECK: tt.call @__triton_consan_clear_read_visibility
-    // CHECK: tt.call @__triton_consan_clear_read_tracking
+    // CHECK: tt.call @__triton_consan_publish_write_visibility
     // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
@@ -585,7 +580,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: %[[CLC_THREAD:.*]] = arith.constant 1 : i32
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[CLC_THREAD]]
     // CHECK: %[[CLC_MASK:.*]] = arith.constant 2 : i64
-    // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}%[[CLC_MASK]]
+    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}%[[CLC_MASK]]
     // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer{{.*}}_I1
     ttng.clc_try_cancel %result, %bar : !ttg.memdesc<2xi64, #shared_clc, #smem, mutable>, !ttg.memdesc<1xi64, #barrier, #smem, mutable>
     ttng.barrier_expect %bar, 16, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
@@ -828,10 +823,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
     // CHECK: tt.call @__triton_consan_verify_write_visibility
     // CHECK: tt.call @__triton_consan_verify_read_visibility
-    // CHECK: tt.call @__triton_consan_set_write_visibility
-    // CHECK: tt.call @__triton_consan_clear_write_tracking
-    // CHECK: tt.call @__triton_consan_clear_read_visibility
-    // CHECK: tt.call @__triton_consan_clear_read_tracking
+    // CHECK: tt.call @__triton_consan_publish_write_visibility
     // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer
     ttng.async_tma_gather %arg0[%x_offsets, %c0_i32] %0, %bar, %true : !tt.tensordesc<1x32xf32, #shared>, tensor<32xi32>, i32, !ttg.memdesc<1xi64, #shared1, #smem, mutable>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, i1
     tt.return
@@ -1060,10 +1052,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[TM_READ_VISIBILITY_GLOB]]
     // CHECK: %[[TC_MASK:.*]] = arith.constant 2 : i64
-    // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}%[[TC_MASK]], %[[TM_WRITE_VISIBILITY_GLOB]]
-    // CHECK: tt.call @__triton_consan_clear_write_tracking{{.*}}%[[TM_WRITE_TRACKING_GLOB]]
-    // CHECK: tt.call @__triton_consan_clear_read_visibility{{.*}}%[[TM_READ_VISIBILITY_GLOB]]
-    // CHECK: tt.call @__triton_consan_clear_read_tracking
+    // CHECK: tt.call @__triton_consan_publish_write_visibility
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
     // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BAR:.*]] :
     // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
@@ -1120,10 +1109,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[TM_READ_VISIBILITY_GLOB]]
     // CHECK: %[[TC_MASK:.*]] = arith.constant 2 : i64
-    // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}%[[TC_MASK]], %[[TM_WRITE_VISIBILITY_GLOB]]
-    // CHECK: tt.call @__triton_consan_clear_write_tracking{{.*}}%[[TM_WRITE_TRACKING_GLOB]]
-    // CHECK: tt.call @__triton_consan_clear_read_visibility{{.*}}%[[TM_READ_VISIBILITY_GLOB]]
-    // CHECK: tt.call @__triton_consan_clear_read_tracking
+    // CHECK: tt.call @__triton_consan_publish_write_visibility
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
     // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BAR:.*]] :
     // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
@@ -1544,10 +1530,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_check_outstanding_commits
     // CHECK: tt.call @__triton_consan_verify_read_visibility
     // CHECK: tt.call @__triton_consan_check_outstanding_commits
-    // CHECK: tt.call @__triton_consan_set_write_visibility
-    // CHECK: tt.call @__triton_consan_clear_write_tracking
-    // CHECK: tt.call @__triton_consan_clear_read_visibility
-    // CHECK: tt.call @__triton_consan_clear_read_tracking
+    // CHECK: tt.call @__triton_consan_publish_write_visibility
     // CHECK: tti.experimental_lock_release
     // CHECK: ttg.local_store
     ttg.local_store %acc, %buf : tensor<128x128xf16, #mma> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>

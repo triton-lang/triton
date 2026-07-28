@@ -140,31 +140,17 @@ public:
                                              Operation *insertPoint,
                                              Value recipientCTAs,
                                              int txCount = 0);
-  // setWriteVisibility: Set the write visibility for a buffer. Marks the buffer
-  // as visible to the threads set in threadMask. Clears out any other threads
-  // from the visibility bitmask. We know this is safe because there cannot be
-  // outstanding writes to this buffer at this point.
-  void createSetWriteVisibilityCall(ImplicitLocOpBuilder &b, Value bufferMask,
-                                    uint64_t threadMask, Value pred,
-                                    MemType memType, Operation *insertPoint,
-                                    Value effectCTAs);
+  // publishWriteVisibility: publish the writing threads for a buffer and clear
+  // its obsolete write tracking, read visibility, and read tracking.
+  void createPublishWriteVisibilityCall(ImplicitLocOpBuilder &b,
+                                        Value bufferMask, uint64_t threadMask,
+                                        Value pred, MemType memType,
+                                        Operation *insertPoint,
+                                        Value effectCTAs);
   // setReadVisibility: add the threads set in threadMask to the buffer's read
   // visibility bitmask.
   void createSetReadVisibilityCall(ImplicitLocOpBuilder &b, Value bufferMask,
-                                   uint64_t threadMask, Value pred,
-                                   MemType memType, Operation *insertPoint,
-                                   Value effectCTAs);
-  // clearWriteTracking: clear all the information about threads writing to a
-  // buffer.
-  void createClearWriteTrackingCall(ImplicitLocOpBuilder &b, Value bufferMask,
-                                    Value pred, MemType memType,
-                                    Operation *insertPoint, Value effectCTAs);
-  // clearReadVisibility: clear the read visibility for a buffer.
-  void createClearReadVisibilityCall(ImplicitLocOpBuilder &b, Value bufferMask,
-                                     Value pred, MemType memType,
-                                     Operation *insertPoint, Value effectCTAs);
-  // clearReadTracking: clear the read tracking for a buffer.
-  void createClearReadTrackingCall(ImplicitLocOpBuilder &b, Value bufferMask,
+                                   uint64_t threadMask,
                                    Value pred, MemType memType,
                                    Operation *insertPoint, Value effectCTAs);
   // trackVisibleAccesses: snapshot the available read and write visibility

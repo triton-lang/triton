@@ -466,10 +466,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_init_barrier_state
     // CHECK: tt.call @__triton_consan_verify_write_visibility
     // CHECK: tt.call @__triton_consan_verify_read_visibility
-    // CHECK: tt.call @__triton_consan_set_write_visibility
-    // CHECK: tt.call @__triton_consan_clear_write_tracking
-    // CHECK: tt.call @__triton_consan_clear_read_visibility
-    // CHECK: tt.call @__triton_consan_clear_read_tracking
+    // CHECK: tt.call @__triton_consan_publish_write_visibility
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
     // CHECK: tt.call @__triton_consan_track_visible_accesses
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
@@ -503,10 +500,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     // First TDM copy: full effects + barrier instrumentation
     // CHECK: tt.call @__triton_consan_verify_write_visibility
     // CHECK: tt.call @__triton_consan_verify_read_visibility
-    // CHECK: tt.call @__triton_consan_set_write_visibility
-    // CHECK: tt.call @__triton_consan_clear_write_tracking
-    // CHECK: tt.call @__triton_consan_clear_read_visibility
-    // CHECK: tt.call @__triton_consan_clear_read_tracking
+    // CHECK: tt.call @__triton_consan_publish_write_visibility
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
     // CHECK: tt.call @__triton_consan_track_visible_accesses
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
@@ -516,10 +510,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     // Second TDM copy: same full instrumentation
     // CHECK: tt.call @__triton_consan_verify_write_visibility
     // CHECK: tt.call @__triton_consan_verify_read_visibility
-    // CHECK: tt.call @__triton_consan_set_write_visibility
-    // CHECK: tt.call @__triton_consan_clear_write_tracking
-    // CHECK: tt.call @__triton_consan_clear_read_visibility
-    // CHECK: tt.call @__triton_consan_clear_read_tracking
+    // CHECK: tt.call @__triton_consan_publish_write_visibility
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
     // CHECK: tt.call @__triton_consan_track_visible_accesses
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
