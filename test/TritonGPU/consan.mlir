@@ -858,8 +858,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
     ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_invalidate_barrier_state
-    // CHECK: tt.call @__triton_consan_clear_barrier_write_tracking
-    // CHECK: tt.call @__triton_consan_clear_barrier_read_tracking
+    // CHECK-NOT: tt.call @__triton_consan_clear_barrier_write_tracking
+    // CHECK-NOT: tt.call @__triton_consan_clear_barrier_read_tracking
+    // CHECK-NOT: tt.call @__triton_consan_clear_barrier_proxy_tracking
     // CHECK: tt.call @__triton_consan_verify_barrier_can_init
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_init_barrier_state
