@@ -49,6 +49,13 @@ void mlir::triton::NVIDIA::createFenceMBarrierInitReleaseCluster(
 }
 
 namespace {
+bool supportsMbarV1Layout(const NVIDIA::TargetInfo &targetInfo) {
+  // Hopper is compiled with an older PTX toolchain by default. Require PTX
+  // 9.3, selected by the CUDA 13.3 toolchain, in addition to hardware support.
+  return targetInfo.getTargetFeatures().supportsMbarV1Layout() &&
+         targetInfo.getPtxVersion() >= 93;
+}
+
 template <typename OpTy>
 struct GridDependencyOpConversion : public ConvertOpToLLVMPattern<OpTy> {
   using ConvertOpToLLVMPattern<OpTy>::ConvertOpToLLVMPattern;
@@ -197,7 +204,7 @@ struct InitBarrierOpConversion
 
     ::mlir::triton::PTXBuilder ptxBuilder;
     std::string ptx;
-    if (targetInfo->getComputeCapability() == 107) {
+    if (supportsMbarV1Layout(*targetInfo)) {
       ptx = "@$0 mbarrier.init.layout::v1.shared::cta.b64 [$1], " +
             std::to_string(initCount) + ";";
     } else {
@@ -372,7 +379,7 @@ struct WaitBarrierOpConversion
       }
     } else {
       std::string phaseType;
-      if (targetInfo->getComputeCapability() == 107 && op.getConditional())
+      if (supportsMbarV1Layout(*targetInfo) && op.getConditional())
         phaseType = ".phase_type::conditional";
 
       if (!predicated) {
@@ -428,8 +435,9 @@ struct BarrierTestWaitReportOpConversion
   matchAndRewrite(triton::nvidia_gpu::BarrierTestWaitReportOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (targetInfo->getComputeCapability() != 107)
-      return op.emitError("primary mbarrier report requires Rubin (SM107)");
+    if (!supportsMbarV1Layout(*targetInfo))
+      return op.emitError(
+          "primary mbarrier report requires mbarrier v1 layout support");
 
     auto barrierTy = op.getAlloc().getType();
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(

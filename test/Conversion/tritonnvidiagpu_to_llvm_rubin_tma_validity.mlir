@@ -1,5 +1,7 @@
 // RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' -reconcile-unrealized-casts | FileCheck %s
+// RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=93' -reconcile-unrealized-casts | FileCheck %s
 // RUN: not triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=86' -reconcile-unrealized-casts 2>&1 | FileCheck --check-prefix=ERROR %s
+// RUN: not triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=93' -reconcile-unrealized-casts 2>&1 | FileCheck --check-prefix=ERROR %s
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -17,4 +19,4 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   }
 }
 
-// ERROR: primary mbarrier report requires Rubin (SM107)
+// ERROR: primary mbarrier report requires mbarrier v1 layout support
