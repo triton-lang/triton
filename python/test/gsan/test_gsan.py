@@ -9,7 +9,7 @@ from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy
 from triton.tools.tensor_descriptor import TensorDescriptor
 
-from triton._internal_testing import is_blackwell, is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_sm12x
+from triton._internal_testing import is_blackwell, is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_sm12x, run_in_process
 from triton.experimental.gsan import create_mem_pool
 from triton._C.libtriton.gsan_testing import AtomicScope, SHADOW_GRANULARITY_BYTES, ScalarClock
 from triton.experimental.gsan._testing_utils import (atomic_poll, load_one_i32, shadow_cell_from_address, store_one_i32,
@@ -671,6 +671,31 @@ def _assert_shadow_mask(before, after, changed_mask: torch.Tensor, *, access_kin
                 assert after_cell == before_cell
 
 
+def _run_masked_tensor_access_updates_only_active_shadow(store: bool, first_active: int, last_active: int) -> None:
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool()
+    with torch.cuda.use_mem_pool(pool):
+        block = 32
+        target = torch.arange(block, dtype=torch.int32, device="cuda")
+        scratch = torch.full_like(target, -1)
+        expected = target.clone() if store else scratch.clone()
+        if store:
+            expected[first_active:last_active] = torch.arange(first_active, last_active, device="cuda") + block
+        else:
+            expected[first_active:last_active] = target[first_active:last_active]
+
+        shadow_before = [_shadow_cells_for_tensor(target)]
+        _masked_tensor_access_kernel[(1, )](target, scratch, first_active, last_active, STORE=store, BLOCK=block,
+                                            num_warps=1)
+        torch.cuda.synchronize()
+
+        torch.testing.assert_close(target if store else scratch, expected)
+        changed_mask = torch.zeros((1, block), dtype=torch.bool)
+        changed_mask[0, first_active:last_active] = True
+        shadow_after = [_shadow_cells_for_tensor(target)]
+        _assert_shadow_mask(shadow_before, shadow_after, changed_mask, access_kind="write" if store else "read")
+
+
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 @pytest.mark.parametrize("store", [False, True], ids=["load", "store"])
 @pytest.mark.parametrize(
@@ -678,26 +703,10 @@ def _assert_shadow_mask(before, after, changed_mask: torch.Tensor, *, access_kin
     [(0, 0), (0, 1), (5, 21), (0, 32), (32, 32)],
     ids=["empty", "first", "interior", "all", "past-end"],
 )
-def test_masked_tensor_access_updates_only_active_shadow(with_gsan, store, first_active, last_active):
-    block = 32
-    target = torch.arange(block, dtype=torch.int32, device="cuda")
-    scratch = torch.full_like(target, -1)
-    expected = target.clone() if store else scratch.clone()
-    if store:
-        expected[first_active:last_active] = torch.arange(first_active, last_active, device="cuda") + block
-    else:
-        expected[first_active:last_active] = target[first_active:last_active]
-
-    shadow_before = [_shadow_cells_for_tensor(target)]
-    _masked_tensor_access_kernel[(1, )](target, scratch, first_active, last_active, STORE=store, BLOCK=block,
-                                        num_warps=1)
-    torch.cuda.synchronize()
-
-    torch.testing.assert_close(target if store else scratch, expected)
-    changed_mask = torch.zeros((1, block), dtype=torch.bool)
-    changed_mask[0, first_active:last_active] = True
-    shadow_after = [_shadow_cells_for_tensor(target)]
-    _assert_shadow_mask(shadow_before, shadow_after, changed_mask, access_kind="write" if store else "read")
+def test_masked_tensor_access_updates_only_active_shadow(store, first_active, last_active):
+    result = run_in_process(_run_masked_tensor_access_updates_only_active_shadow,
+                            args=(store, first_active, last_active))
+    assert result.exc is None, f"GSan mask regression failed: {result.exc!r}\n{result.driver_stderr_output}"
 
 
 def _masked_store_change_mask(storage: torch.Tensor, m_size: int, n_size: int, row_idx: int,
