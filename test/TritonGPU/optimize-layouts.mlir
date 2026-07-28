@@ -304,6 +304,150 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// Keep both coalesced inputs, conditional branches, and row reductions in
+// their existing zero-copy layout. A competing vector-layout consumer must
+// not move either 64x64 operand into an inter-warp reduction layout. The
+// independent conflict still needs its one necessary source conversion.
+//
+// BASELINE-LABEL: @coalesced_row_reduction_independent_fanout
+// BASELINE: tt.load
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.load
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: "tt.reduce"
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: "tt.reduce"
+// BASELINE: tt.store
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @coalesced_row_reduction_independent_fanout
+// OPTIMIZED: tt.load
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.load
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: "tt.reduce"
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: "tt.reduce"
+// OPTIMIZED: tt.store
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#row = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#interwarp = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#interwarp_slice = #ttg.slice<{dim = 1, parent = #interwarp}>
+#vector = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @coalesced_row_reduction_independent_fanout(%condition: i1, %x_ptr: tensor<64x64x!tt.ptr<f16>, #row>, %dy_ptr: tensor<64x64x!tt.ptr<f16>, #row>, %out_ptr: tensor<64x64x!tt.ptr<f32>, #row>, %reference: tensor<64xf32, #vector>, %target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>) {
+    %x_half = tt.load %x_ptr : tensor<64x64x!tt.ptr<f16>, #row>
+    %dy_half = tt.load %dy_ptr : tensor<64x64x!tt.ptr<f16>, #row>
+    %x_reduction = ttg.convert_layout %x_half : tensor<64x64xf16, #row> -> tensor<64x64xf16, #interwarp>
+    %dy_reduction = ttg.convert_layout %dy_half : tensor<64x64xf16, #row> -> tensor<64x64xf16, #interwarp>
+    %x = arith.extf %x_reduction : tensor<64x64xf16, #interwarp> to tensor<64x64xf32, #interwarp>
+    %dy = arith.extf %dy_reduction : tensor<64x64xf16, #interwarp> to tensor<64x64xf32, #interwarp>
+    %x_selected = scf.if %condition -> (tensor<64x64xf32, #interwarp>) {
+      %factor = arith.constant dense<2.000000e+00> : tensor<64x64xf32, #interwarp>
+      %scaled = arith.mulf %x, %factor : tensor<64x64xf32, #interwarp>
+      scf.yield %scaled : tensor<64x64xf32, #interwarp>
+    } else {
+      scf.yield %x : tensor<64x64xf32, #interwarp>
+    }
+    %dy_selected = scf.if %condition -> (tensor<64x64xf32, #interwarp>) {
+      %factor = arith.constant dense<2.000000e+00> : tensor<64x64xf32, #interwarp>
+      %scaled = arith.mulf %dy, %factor : tensor<64x64xf32, #interwarp>
+      scf.yield %scaled : tensor<64x64xf32, #interwarp>
+    } else {
+      scf.yield %dy : tensor<64x64xf32, #interwarp>
+    }
+    %squared = arith.mulf %x_selected, %x_selected : tensor<64x64xf32, #interwarp>
+    %norm = "tt.reduce"(%squared) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %sum = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %sum : f32
+    }) : (tensor<64x64xf32, #interwarp>) -> tensor<64xf32, #interwarp_slice>
+    %product = arith.mulf %x_selected, %dy_selected : tensor<64x64xf32, #interwarp>
+    %dot = "tt.reduce"(%product) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %sum = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %sum : f32
+    }) : (tensor<64x64xf32, #interwarp>) -> tensor<64xf32, #interwarp_slice>
+    %norm_vector = ttg.convert_layout %norm : tensor<64xf32, #interwarp_slice> -> tensor<64xf32, #vector>
+    %dot_vector = ttg.convert_layout %dot : tensor<64xf32, #interwarp_slice> -> tensor<64xf32, #vector>
+    %row_scale = arith.addf %norm_vector, %reference : tensor<64xf32, #vector>
+    %scaled_dot = arith.mulf %dot_vector, %row_scale : tensor<64xf32, #vector>
+    %reduction_scale = ttg.convert_layout %scaled_dot : tensor<64xf32, #vector> -> tensor<64xf32, #interwarp_slice>
+    %expanded = tt.expand_dims %reduction_scale {axis = 1 : i32} : tensor<64xf32, #interwarp_slice> -> tensor<64x1xf32, #interwarp>
+    %broadcast = tt.broadcast %expanded : tensor<64x1xf32, #interwarp> -> tensor<64x64xf32, #interwarp>
+    %row_broadcast = ttg.convert_layout %broadcast : tensor<64x64xf32, #interwarp> -> tensor<64x64xf32, #row>
+    %dy_row = arith.extf %dy_half : tensor<64x64xf16, #row> to tensor<64x64xf32, #row>
+    %result = arith.addf %row_broadcast, %dy_row : tensor<64x64xf32, #row>
+    tt.store %out_ptr, %result : tensor<64x64x!tt.ptr<f32>, #row>
+
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %first = arith.mulf %converted, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %converted, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %converted, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
+  }
+}
+
+// -----
+
+// Pairwise reductions in a high-rank register network jointly own their
+// distributed layout. Protect that network without falling back to the legacy
+// assignment for an independent loop and its three consumers.
+//
+// BASELINE-LABEL: @pairwise_reduction_network_independent_fanout
+// BASELINE-COUNT-2: "tt.reduce"
+// BASELINE: scf.for
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @pairwise_reduction_network_independent_fanout
+// OPTIMIZED-COUNT-2: "tt.reduce"
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED: scf.for
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#network = #ttg.blocked<{sizePerThread = [1, 1, 1, 2], threadsPerWarp = [4, 8, 1, 1], warpsPerCTA = [4, 1, 1, 1], order = [3, 2, 1, 0]}>
+#network_slice = #ttg.slice<{dim = 3, parent = #network}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @pairwise_reduction_network_independent_fanout(%network_input: tensor<16x4x2x2xi32, #network>, %target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x4x2xi32, #network_slice>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %first_pair = "tt.reduce"(%network_input) <{axis = 3 : i32}> ({
+    ^bb0(%lhs: i32, %rhs: i32):
+      %selected = arith.maxui %lhs, %rhs : i32
+      tt.reduce.return %selected : i32
+    }) : (tensor<16x4x2x2xi32, #network>) -> tensor<16x4x2xi32, #network_slice>
+    %expanded = tt.expand_dims %first_pair {axis = 3 : i32} : tensor<16x4x2xi32, #network_slice> -> tensor<16x4x2x1xi32, #network>
+    %broadcast = tt.broadcast %expanded : tensor<16x4x2x1xi32, #network> -> tensor<16x4x2x2xi32, #network>
+    %mixed = arith.xori %network_input, %broadcast : tensor<16x4x2x2xi32, #network>
+    %second_pair = "tt.reduce"(%mixed) <{axis = 3 : i32}> ({
+    ^bb0(%lhs: i32, %rhs: i32):
+      %selected = arith.maxui %lhs, %rhs : i32
+      tt.reduce.return %selected : i32
+    }) : (tensor<16x4x2x2xi32, #network>) -> tensor<16x4x2xi32, #network_slice>
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %second_pair : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x4x2xi32, #network_slice>
+  }
+}
+
+// -----
+
 // Both results of tt.split share one inferred parent layout. Optimize their
 // fixed consumers together and keep the sole conversion on the source side.
 //
@@ -896,6 +1040,75 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// The index range used by a tensor-core store also has an independent
+// consumer in a conflicting layout. Rematerialize the range for that consumer
+// instead of converting the coalesced store pointer or mask. Keep the one
+// required accumulator conversion and optimize the independent fanout.
+//
+// BASELINE-LABEL: @hardware_dot_store_address_independent_fanout
+// BASELINE: tt.dot
+// BASELINE: ttg.convert_layout
+// BASELINE: tt.store
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @hardware_dot_store_address_independent_fanout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED: tt.dot
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.store
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#source_row = #ttg.slice<{dim = 1, parent = #source}>
+#target_row = #ttg.slice<{dim = 1, parent = #target}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 8]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
+#dot_b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @hardware_dot_store_address_independent_fanout(%ptr: !tt.ptr<f32>, %bound: i32, %target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>, %lhs: tensor<16x16xf16, #dot_a>, %rhs: tensor<16x16xf16, #dot_b>, %initial: tensor<16x16xf32, #mma>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #mma>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %hardware = scf.for %iv = %zero to %four step %one iter_args(%acc = %initial) -> (tensor<16x16xf32, #mma>) {
+      %next = tt.dot %lhs, %rhs, %acc : tensor<16x16xf16, #dot_a> * tensor<16x16xf16, #dot_b> -> tensor<16x16xf32, #mma>
+      scf.yield %next : tensor<16x16xf32, #mma>
+    }
+
+    %offsets = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32, #target_row>
+    %expanded_offsets = tt.expand_dims %offsets {axis = 1 : i32} : tensor<16xi32, #target_row> -> tensor<16x1xi32, #target>
+    %base = tt.splat %ptr : !tt.ptr<f32> -> tensor<16x1x!tt.ptr<f32>, #target>
+    %row_ptrs = tt.addptr %base, %expanded_offsets : tensor<16x1x!tt.ptr<f32>, #target>, tensor<16x1xi32, #target>
+    %ptrs = tt.broadcast %row_ptrs : tensor<16x1x!tt.ptr<f32>, #target> -> tensor<16x16x!tt.ptr<f32>, #target>
+    %bounds = tt.splat %bound : i32 -> tensor<16xi32, #target_row>
+    %row_mask = arith.cmpi slt, %offsets, %bounds : tensor<16xi32, #target_row>
+    %expanded_mask = tt.expand_dims %row_mask {axis = 1 : i32} : tensor<16xi1, #target_row> -> tensor<16x1xi1, #target>
+    %mask = tt.broadcast %expanded_mask : tensor<16x1xi1, #target> -> tensor<16x16xi1, #target>
+    %epilogue = ttg.convert_layout %hardware : tensor<16x16xf32, #mma> -> tensor<16x16xf32, #target>
+    tt.store %ptrs, %epilogue, %mask : tensor<16x16x!tt.ptr<f32>, #target>
+
+    %source_offsets = ttg.convert_layout %offsets : tensor<16xi32, #target_row> -> tensor<16xi32, #source_row>
+    %source_column = tt.expand_dims %source_offsets {axis = 1 : i32} : tensor<16xi32, #source_row> -> tensor<16x1xi32, #source>
+    %source_grid = tt.broadcast %source_column : tensor<16x1xi32, #source> -> tensor<16x16xi32, #source>
+    %source_grid_float = arith.sitofp %source_grid : tensor<16x16xi32, #source> to tensor<16x16xf32, #source>
+    %indexed_source = arith.addf %source, %source_grid_float : tensor<16x16xf32, #source>
+    %converted = ttg.convert_layout %indexed_source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %hardware : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #mma>
+  }
+}
+
+// -----
+
 // A tensor-memory load has a hardware-owned result encoding. Keep that load
 // and its loop-carried accumulator unchanged while globally optimizing an
 // unrelated expression in the same function.
@@ -1019,6 +1232,109 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %hardware = scf.for %iv = %zero to %four step %one iter_args(%acc = %initial) -> (tensor<128x64xf16, #target>) {
       %loaded = tt.descriptor_load %descriptor[%coord, %coord] : !tt.tensordesc<128x64xf16, #nvmma_128> -> tensor<128x64xf16, #target>
       %next = arith.addf %acc, %loaded : tensor<128x64xf16, #target>
+      scf.yield %next : tensor<128x64xf16, #target>
+    }
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %hardware : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<128x64xf16, #target>
+  }
+}
+
+// -----
+
+// Descriptor stores also participate in the hardware-owned protocol. Keep
+// the descriptor load, store, and loop-carried layout together while still
+// globally optimizing an independent loop and its three consumers.
+//
+// BASELINE-LABEL: @hardware_descriptor_store_independent_fanout
+// BASELINE-COUNT-1: ttg.convert_layout
+// BASELINE: tt.descriptor_load
+// BASELINE: tt.descriptor_store
+// BASELINE-COUNT-3: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @hardware_descriptor_store_independent_fanout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED: tt.descriptor_load
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.descriptor_store
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @hardware_descriptor_store_independent_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>, %input: !tt.tensordesc<128x64xf16, #nvmma_128>, %output: !tt.tensordesc<128x64xf16, #nvmma_128>, %initial: tensor<128x64xf16, #target>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<128x64xf16, #target>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %coord = arith.constant 0 : i32
+    %hardware = scf.for %iv = %zero to %four step %one iter_args(%acc = %initial) -> (tensor<128x64xf16, #target>) {
+      %loaded = tt.descriptor_load %input[%coord, %coord] : !tt.tensordesc<128x64xf16, #nvmma_128> -> tensor<128x64xf16, #target>
+      %next = arith.addf %acc, %loaded : tensor<128x64xf16, #target>
+      tt.descriptor_store %output[%coord, %coord], %next : !tt.tensordesc<128x64xf16, #nvmma_128>, tensor<128x64xf16, #target>
+      scf.yield %next : tensor<128x64xf16, #target>
+    }
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %hardware : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<128x64xf16, #target>
+  }
+}
+
+// -----
+
+// TMA lowering replaces descriptor stores with a local store, a proxy fence,
+// and an asynchronous shared-to-global copy before layout assignment runs
+// again. Preserve the lowered store protocol and the independent fanout.
+//
+// BASELINE-LABEL: @hardware_lowered_tma_store_independent_fanout
+// BASELINE-COUNT-1: ttg.convert_layout
+// BASELINE: ttg.local_store
+// BASELINE: ttng.async_tma_copy_local_to_global
+// BASELINE-COUNT-3: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @hardware_lowered_tma_store_independent_fanout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED: ttg.local_store
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: ttng.async_tma_copy_local_to_global
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @hardware_lowered_tma_store_independent_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>, %output: !tt.tensordesc<128x64xf16, #nvmma_128>, %initial: tensor<128x64xf16, #target>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<128x64xf16, #target>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %coord = arith.constant 0 : i32
+    %buffer = ttg.local_alloc : () -> !ttg.memdesc<128x64xf16, #nvmma_128, #smem, mutable>
+    %hardware = scf.for %iv = %zero to %four step %one iter_args(%acc = %initial) -> (tensor<128x64xf16, #target>) {
+      %next = arith.addf %acc, %initial : tensor<128x64xf16, #target>
+      ttg.local_store %next, %buffer : tensor<128x64xf16, #target> -> !ttg.memdesc<128x64xf16, #nvmma_128, #smem, mutable>
+      ttng.fence_async_shared {bCluster = false}
+      ttng.async_tma_copy_local_to_global %output[%coord, %coord] %buffer : !tt.tensordesc<128x64xf16, #nvmma_128>, !ttg.memdesc<128x64xf16, #nvmma_128, #smem, mutable>
       scf.yield %next : tensor<128x64xf16, #target>
     }
     %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>

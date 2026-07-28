@@ -117,6 +117,9 @@ private:
                     const DenseMap<Value, Attribute> &assignments) const;
   uint64_t
   getGlobalAssignmentCost(const DenseMap<Value, Attribute> &assignments) const;
+  uint64_t getAffectedAssignmentCost(
+      ArrayRef<Value> changed,
+      const DenseMap<Value, Attribute> &assignments) const;
   bool
   buildGlobalComponentProposal(Value seed, Attribute encoding,
                                DenseMap<Value, Attribute> &assignments) const;
@@ -259,6 +262,16 @@ bool isLayoutAnchor(Operation *op) {
   return false;
 }
 
+static bool isProtectedLayoutReduction(Operation *op) {
+  auto reduce = dyn_cast<ReduceOp>(op);
+  if (!reduce)
+    return false;
+
+  auto sourceType = dyn_cast<RankedTensorType>(reduce->getOperand(0).getType());
+  return sourceType && sourceType.getRank() >= 4 &&
+         sourceType.getDimSize(reduce.getAxis()) == 2;
+}
+
 static bool isFixedLayoutBoundary(Operation *op) {
   if (isa<scf::ForOp, scf::WhileOp, scf::IfOp, scf::YieldOp, scf::ConditionOp>(
           op))
@@ -267,6 +280,13 @@ static bool isFixedLayoutBoundary(Operation *op) {
   if (auto reshape = dyn_cast<ReshapeOp>(op))
     if (reshape.getAllowReorder() || reshape.getEfficientLayout())
       return true;
+
+  // High-rank pairwise reductions implement register-level sorting networks.
+  // Their reduction axes jointly determine how values are distributed across
+  // registers, lanes, and warps; changing one stage independently can
+  // duplicate the network and introduce a conversion at every stage.
+  if (isProtectedLayoutReduction(op))
+    return true;
 
   // Gather has distinct source and index encodings. Preserve both contracts
   // instead of treating its result layout as a requirement on every operand.
@@ -336,6 +356,43 @@ void LayoutPropagation::initAnchorLayout() {
   }
 
   if (strategy == LayoutAssignmentStrategy::Global) {
+    DenseSet<Value> protectedReductionValues;
+    SmallVector<Value> reductionWorklist;
+    auto addProtectedReductionValue = [&](Value value) {
+      auto tensorType = dyn_cast<RankedTensorType>(value.getType());
+      if (!tensorType || tensorType.getRank() < 4 ||
+          !protectedReductionValues.insert(value).second)
+        return;
+      addAnchor(value);
+      reductionWorklist.push_back(value);
+    };
+
+    funcOp.walk([&](ReduceOp reduce) {
+      if (!isProtectedLayoutReduction(reduce.getOperation()))
+        return;
+      for (Value operand : reduce->getOperands())
+        addProtectedReductionValue(operand);
+      for (Value result : reduce->getResults())
+        addProtectedReductionValue(result);
+    });
+
+    auto protectReductionComponent = [&](Operation *op) {
+      if (!op || !isMemoryEffectFree(op) || isa<ConvertLayoutOp>(op) ||
+          (isFixedLayoutBoundary(op) && !isProtectedLayoutReduction(op)))
+        return;
+      for (Value operand : op->getOperands())
+        addProtectedReductionValue(operand);
+      for (Value result : op->getResults())
+        addProtectedReductionValue(result);
+    };
+
+    while (!reductionWorklist.empty()) {
+      Value value = reductionWorklist.pop_back_val();
+      protectReductionComponent(value.getDefiningOp());
+      for (OpOperand &use : value.getUses())
+        protectReductionComponent(use.getOwner());
+    }
+
     funcOp.walk([&](Operation *op) {
       if (!isProtectedLayoutLoop(op))
         return;
@@ -357,6 +414,37 @@ void LayoutPropagation::initAnchorLayout() {
               addAnchor(argument);
       });
     });
+
+    if (hasProtectedLayoutLoop(funcOp)) {
+      DenseSet<Value> protectedStoreAddresses;
+      SmallVector<Value> addressWorklist;
+      auto addProtectedStoreAddress = [&](Value value) {
+        if (!value || !isa<RankedTensorType>(value.getType()) ||
+            !protectedStoreAddresses.insert(value).second)
+          return;
+        addAnchor(value);
+        addressWorklist.push_back(value);
+      };
+
+      // Tensor-core and tensor-memory loops establish separately
+      // rematerialized, coalesced store indices. Preserve that complete
+      // address-and-mask slice without constraining stored data or unrelated
+      // layout components.
+      funcOp.walk([&](StoreOp store) {
+        addProtectedStoreAddress(store.getPtr());
+        addProtectedStoreAddress(store.getMask());
+      });
+
+      while (!addressWorklist.empty()) {
+        Value address = addressWorklist.pop_back_val();
+        Operation *producer = address.getDefiningOp();
+        if (!producer || !isMemoryEffectFree(producer) ||
+            isa<ConvertLayoutOp>(producer))
+          continue;
+        for (Value operand : producer->getOperands())
+          addProtectedStoreAddress(operand);
+      }
+    }
   }
 
   funcOp.walk([&](Operation *op) {
@@ -374,8 +462,12 @@ void LayoutPropagation::initAnchorLayout() {
       addAnchor(result);
 
     for (Value operand : op->getOperands()) {
-      if (auto tensorType = dyn_cast<RankedTensorType>(operand.getType()))
+      if (isProtectedLayoutReduction(op)) {
+        addAnchor(operand);
+      } else if (auto tensorType =
+                     dyn_cast<RankedTensorType>(operand.getType())) {
         addEncoding(operand, tensorType.getEncoding());
+      }
     }
   });
 }
@@ -621,6 +713,53 @@ static uint64_t getLayoutTransitionCost(Value value, Attribute sourceEncoding,
   return 32 * byteCount;
 }
 
+static uint64_t getLayoutRegisterPressureCost(Value value, Attribute encoding) {
+  auto tensorType = dyn_cast<RankedTensorType>(value.getType());
+  if (!tensorType || !encoding || !value.getDefiningOp())
+    return 0;
+
+  uint64_t originalElements = getUniqueElemsPerThread(tensorType);
+  uint64_t assignedElements =
+      getUniqueElemsPerThread(encoding, tensorType.getShape());
+  if (assignedElements <= originalElements)
+    return 0;
+
+  uint64_t elementBytes = 4;
+  if (tensorType.getElementType().isIntOrFloat())
+    elementBytes = std::max<uint64_t>(
+        1, (tensorType.getElementType().getIntOrFloatBitWidth() + 7) / 8);
+
+  // Concentrating a distributed tile into registers serializes work that
+  // could otherwise be performed by a warp. Price that work alongside the
+  // warp-sized exchange used for physical layout transitions.
+  return 32 * (assignedElements - originalElements) * elementBytes;
+}
+
+static uint64_t getLayoutReductionCost(Value value, Attribute encoding,
+                                       unsigned axis) {
+  auto tensorType = dyn_cast<RankedTensorType>(value.getType());
+  if (!tensorType || !encoding || axis >= tensorType.getRank())
+    return 0;
+
+  int64_t axisSize = tensorType.getDimSize(axis);
+  if (axisSize <= 1)
+    return 0;
+
+  uint64_t elementBytes = 4;
+  if (tensorType.getElementType().isIntOrFloat())
+    elementBytes = std::max<uint64_t>(
+        1, (tensorType.getElementType().getIntOrFloatBitWidth() + 7) / 8);
+
+  uint64_t rows = tensorType.getNumElements() / axisSize;
+  uint64_t lanes = getThreadsPerWarp(encoding, tensorType.getShape())[axis];
+  uint64_t warps = getWarpsPerCTA(encoding, tensorType.getShape())[axis];
+
+  // A warp-local reduction exchanges only the participating lanes. Splitting
+  // its axis across warps additionally requires shared-memory exchange and
+  // CTA-wide synchronization, even when the IR has no explicit conversion.
+  return rows * elementBytes * ((lanes - 1) + 32 * lanes * (warps - 1));
+}
+
 static uint64_t getLayoutExecutionWeight(Operation *op) {
   uint64_t weight = 1;
   for (Operation *parent = op->getParentOp(); parent;
@@ -778,10 +917,16 @@ uint64_t LayoutPropagation::getAssignmentCost(
     Value value, Attribute encoding,
     const DenseMap<Value, Attribute> &assignments) const {
   uint64_t cost = 0;
+  if (Operation *definingOp = value.getDefiningOp())
+    cost += getLayoutRegisterPressureCost(value, encoding) *
+            getLayoutExecutionWeight(definingOp);
   DenseMap<Attribute, uint64_t> userWeights;
 
   for (OpOperand &use : value.getUses()) {
     uint64_t weight = getLayoutExecutionWeight(use.getOwner());
+    if (auto reduce = dyn_cast<ReduceOp>(use.getOwner()))
+      cost +=
+          getLayoutReductionCost(value, encoding, reduce.getAxis()) * weight;
     for (Attribute required : getUseEncodings(use, assignments)) {
       auto [it, inserted] = userWeights.try_emplace(required, weight);
       if (!inserted)
@@ -834,6 +979,70 @@ uint64_t LayoutPropagation::getGlobalAssignmentCost(
     if (encoding)
       cost += getAssignmentCost(value, encoding, assignments);
   }
+  return cost;
+}
+
+uint64_t LayoutPropagation::getAffectedAssignmentCost(
+    ArrayRef<Value> changedValues,
+    const DenseMap<Value, Attribute> &assignments) const {
+  llvm::SmallSetVector<Value, 32> affected;
+  auto addValue = [&](Value value) {
+    if (layouts.find(value) != layouts.end())
+      affected.insert(value);
+  };
+  auto addOperation = [&](Operation *op) {
+    if (!op)
+      return;
+    for (Value operand : op->getOperands())
+      addValue(operand);
+    for (Value result : op->getResults())
+      addValue(result);
+  };
+  auto addControlFlow = [&](Operation *op, unsigned resultIndex) {
+    if (!op || resultIndex >= op->getNumResults())
+      return;
+    for (Value tied : getTiedArgs(op, resultIndex))
+      addValue(tied);
+  };
+
+  for (Value changed : changedValues) {
+    addValue(changed);
+    if (Operation *producer = changed.getDefiningOp()) {
+      addOperation(producer);
+      if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(producer))
+        addControlFlow(producer, cast<OpResult>(changed).getResultNumber());
+    } else if (auto blockArgument = dyn_cast<BlockArgument>(changed)) {
+      Operation *parent = blockArgument.getOwner()->getParentOp();
+      if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
+        if (blockArgument.getArgNumber() != 0)
+          addControlFlow(forOp, blockArgument.getArgNumber() - 1);
+      } else if (auto whileOp = dyn_cast<scf::WhileOp>(parent)) {
+        addControlFlow(whileOp, blockArgument.getArgNumber());
+      }
+    }
+
+    for (OpOperand &use : changed.getUses()) {
+      Operation *user = use.getOwner();
+      addOperation(user);
+      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+        if (Value result = forOp.getTiedLoopResult(&use))
+          addControlFlow(forOp, cast<OpResult>(result).getResultNumber());
+      } else if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
+        addControlFlow(whileOp, use.getOperandNumber());
+      } else if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+        addControlFlow(yieldOp->getParentOp(), use.getOperandNumber());
+      } else if (auto conditionOp = dyn_cast<scf::ConditionOp>(user)) {
+        if (use.getOperandNumber() != 0)
+          addControlFlow(conditionOp->getParentOp(),
+                         use.getOperandNumber() - 1);
+      }
+    }
+  }
+
+  uint64_t cost = 0;
+  for (Value value : affected)
+    if (Attribute encoding = getAssignedEncoding(value, assignments))
+      cost += getAssignmentCost(value, encoding, assignments);
   return cost;
 }
 
@@ -1008,36 +1217,45 @@ void LayoutPropagation::resolveGlobalConflicts() {
   bool hasLoopConstraints = false;
   bool hasTensorMemoryConstraints = false;
   bool hasReductionConstraints = false;
+  bool hasProtectedReductionConstraints = false;
   funcOp.walk([&](Operation *op) {
     if (isa<JoinOp>(op))
       hasJoinConstraints = true;
     if (isa<SplitOp>(op))
       hasSplitConstraints = true;
-    if (auto reduceOp = dyn_cast<ReduceOp>(op))
+    if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
+      hasReductionConstraints = true;
+      if (isProtectedLayoutReduction(op))
+        hasProtectedReductionConstraints = true;
       if (reduceOp->getNumResults() > 1)
         hasMultiResultReductionConstraints = true;
+    }
     if (isa<scf::ForOp, scf::WhileOp>(op))
       hasLoopConstraints = true;
     if (isa<triton::nvidia_gpu::TMEMLoadOp>(op))
       hasTensorMemoryConstraints = true;
-    if (isa<ReduceOp>(op))
-      hasReductionConstraints = true;
   });
   constexpr unsigned maxFullObjectiveValues = 256;
   // Keep reductions in their accumulator layout until a narrower output can
   // cross the tensor-memory boundary without a full-precision exchange.
   bool hasTensorMemoryReductionConstraints =
       hasTensorMemoryConstraints && hasReductionConstraints;
-  bool useFullGlobalObjective = (hasJoinConstraints || hasSplitConstraints ||
-                                 hasMultiResultReductionConstraints ||
-                                 hasTensorMemoryReductionConstraints) &&
-                                layouts.size() <= maxFullObjectiveValues;
+  bool useFullGlobalObjective =
+      (hasJoinConstraints || hasSplitConstraints || hasReductionConstraints ||
+       hasMultiResultReductionConstraints ||
+       hasTensorMemoryReductionConstraints) &&
+      layouts.size() <= maxFullObjectiveValues;
+  LDBG("resolving " << layouts.size() << " layout values with "
+                    << (useFullGlobalObjective ? "the full" : "the bounded")
+                    << " global objective");
 
-  if (hasJoinConstraints || hasSplitConstraints ||
+  if (hasJoinConstraints || hasSplitConstraints || hasReductionConstraints ||
       hasMultiResultReductionConstraints || hasLoopConstraints ||
       hasTensorMemoryReductionConstraints) {
     constexpr unsigned maxComponentIterations = 4;
     const unsigned maxComponentProposals = useFullGlobalObjective ? 128 : 32;
+    const bool pruneRedundantReductionProposals =
+        hasReductionConstraints && !hasProtectedReductionConstraints;
     uint64_t currentCost = getGlobalAssignmentCost(assignments);
 
     for (unsigned iteration = 0; iteration < maxComponentIterations;
@@ -1046,7 +1264,13 @@ void LayoutPropagation::resolveGlobalConflicts() {
       unsigned proposalCount = 0;
 
       for (const auto &[value, info] : layouts) {
+        if (pruneRedundantReductionProposals &&
+            (fixedLayouts.contains(value) || info.encodings.size() <= 1))
+          continue;
         for (Attribute candidate : info.encodings) {
+          if (pruneRedundantReductionProposals &&
+              candidate == assignments.lookup(value))
+            continue;
           if (proposalCount++ >= maxComponentProposals)
             break;
           if (fixedLayouts.contains(value) &&
@@ -1058,7 +1282,19 @@ void LayoutPropagation::resolveGlobalConflicts() {
           if (!buildGlobalComponentProposal(value, candidate, proposal))
             continue;
 
-          uint64_t proposalCost = getGlobalAssignmentCost(proposal);
+          SmallVector<Value, 32> changedValues;
+          for (const auto &[proposedValue, proposedEncoding] : proposal)
+            if (assignments.lookup(proposedValue) != proposedEncoding)
+              changedValues.push_back(proposedValue);
+          if (changedValues.empty())
+            continue;
+
+          uint64_t previousCost =
+              getAffectedAssignmentCost(changedValues, assignments);
+          uint64_t affectedProposalCost =
+              getAffectedAssignmentCost(changedValues, proposal);
+          uint64_t proposalCost =
+              currentCost - previousCost + affectedProposalCost;
           if (proposalCost >= currentCost)
             continue;
 
@@ -1084,7 +1320,7 @@ void LayoutPropagation::resolveGlobalConflicts() {
       Attribute original = assignments.lookup(value);
       Attribute best = original;
       uint64_t bestCost = useFullGlobalObjective
-                              ? getGlobalAssignmentCost(assignments)
+                              ? getAffectedAssignmentCost({value}, assignments)
                               : getAssignmentCost(value, best, assignments);
       for (Attribute candidate : info.encodings) {
         if (!canAssignEncoding(value, candidate, assignments))
@@ -1092,7 +1328,7 @@ void LayoutPropagation::resolveGlobalConflicts() {
         uint64_t candidateCost;
         if (useFullGlobalObjective) {
           assignments[value] = candidate;
-          candidateCost = getGlobalAssignmentCost(assignments);
+          candidateCost = getAffectedAssignmentCost({value}, assignments);
           assignments[value] = original;
         } else {
           candidateCost = getAssignmentCost(value, candidate, assignments);
@@ -2377,6 +2613,27 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
   // Propagate fixed anchor layouts across complete functions and structured
   // control flow before resolving competing assignments.
   WalkResult propagationResult = module.walk([&](FuncOp funcOp) -> WalkResult {
+    bool hasProtectedLoop = strategy == LayoutAssignmentStrategy::Global &&
+                            hasProtectedLayoutLoop(funcOp);
+    bool hasProtectedStore =
+        hasProtectedLoop &&
+        funcOp
+            .walk([](Operation *op) {
+              if (isa<StoreOp, DescriptorStoreLikeOpInterface,
+                      triton::nvidia_gpu::TMAStoreLikeOpInterface>(op))
+                return WalkResult::interrupt();
+              return WalkResult::advance();
+            })
+            .wasInterrupted();
+    bool hasProtectedReductionNetwork =
+        strategy == LayoutAssignmentStrategy::Global &&
+        funcOp
+            .walk([](ReduceOp reduce) {
+              if (isProtectedLayoutReduction(reduce.getOperation()))
+                return WalkResult::interrupt();
+              return WalkResult::advance();
+            })
+            .wasInterrupted();
     bool hasConvertiblePermutingReshape =
         strategy == LayoutAssignmentStrategy::Global &&
         funcOp
@@ -2389,9 +2646,11 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
             .wasInterrupted();
 
     if (strategy == LayoutAssignmentStrategy::Global &&
-        (hasProtectedLayoutLoop(funcOp) || hasConvertiblePermutingReshape)) {
-      // Establish the incumbent layout for protected protocols and permuting
-      // views before optimizing the remaining components globally.
+        (hasProtectedLoop || hasProtectedReductionNetwork ||
+         hasConvertiblePermutingReshape)) {
+      // Establish the incumbent layout for protected hardware and reduction
+      // protocols and permuting views before optimizing the remaining
+      // components globally.
       LayoutPropagation legacyPropagation(funcOp,
                                           LayoutAssignmentStrategy::Legacy);
       legacyPropagation.initAnchorLayout();
@@ -2399,13 +2658,33 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
       legacyPropagation.resolveConflicts();
       legacyPropagation.rewrite();
 
-      if (hasConvertiblePermutingReshape) {
-        // Preserve conversions the incumbent can fold through an explicitly
-        // permuting reshape before global assignment fixes that boundary.
+      if (hasProtectedStore || hasConvertiblePermutingReshape) {
+        // Expose the incumbent's rematerializable hardware-store addresses
+        // and explicitly permuting reshapes before fixing their boundaries.
         RewritePatternSet patterns(context);
         ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
         if (failed(applyPatternsGreedily(funcOp, std::move(patterns))))
           return WalkResult::interrupt();
+      }
+
+      if (hasProtectedStore) {
+        bool changed;
+        do {
+          // Establish the complete incumbent before fixing hardware-store
+          // addresses. The standard rematerialization traversal also keeps
+          // its existing conversion-reuse and IR-mapping invariants.
+          {
+            LayoutRematerialization rematerialization(funcOp);
+            changed = rematerialization.backwardRematerialization(
+                disableRematSplitting);
+          }
+          if (changed) {
+            RewritePatternSet patterns(context);
+            ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
+            if (failed(applyPatternsGreedily(funcOp, std::move(patterns))))
+              return WalkResult::interrupt();
+          }
+        } while (changed);
       }
     }
 
