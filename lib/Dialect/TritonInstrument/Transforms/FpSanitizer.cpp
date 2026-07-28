@@ -1272,6 +1272,9 @@ Value scaleI8ToComputePayload(PatternRewriter &rewriter, Location loc,
 Value castDotScaledScaleToComputePayload(PatternRewriter &rewriter,
                                          Location loc, Value scaleSlice,
                                          FloatType computeElem) {
+  if (isa<Float8E8M0FNUType>(getElementTypeOrSelf(scaleSlice.getType())))
+    scaleSlice = arith::BitcastOp::create(
+        rewriter, loc, getIntTypeLike(scaleSlice.getType()), scaleSlice);
   Type computeIntTy =
       getTypeWithElement(scaleSlice.getType(),
                          IntegerType::get(rewriter.getContext(),
@@ -2120,9 +2123,6 @@ struct PackedArithPattern : public OpRewritePattern<ttng::PackedArithOp> {
         continue;
       }
 
-      if (isa<Float8E8M0FNUType>(operandTy.getElementType()))
-        operand = arith::BitcastOp::create(
-            rewriter, loc, operandTy.clone(rewriter.getI8Type()), operand);
       Value payload = castDotScaledScaleToComputePayload(
           rewriter, loc, operand, cast<FloatType>(resultTy.getElementType()));
       if (payload.getType() != resultIntTy)

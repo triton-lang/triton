@@ -65,7 +65,7 @@ struct PackedArithSignatureRule {
 };
 } // namespace
 
-static const PackedArithTypeInfo *getPackedArithTypeInfo(Type elementType) {
+static const PackedArithTypeInfo &getPackedArithTypeInfo(Type elementType) {
   static const struct {
     TypeID type;
     PackedArithTypeInfo info;
@@ -78,31 +78,20 @@ static const PackedArithTypeInfo *getPackedArithTypeInfo(Type elementType) {
       {TypeID::get<IntegerType>(), {"e2m1x4", 4, 16, '2'}},
       {TypeID::get<Float8E8M0FNUType>(), {"ue8m0x4", 4, 32, 'u'}},
   };
-  if (isa<IntegerType>(elementType) && !elementType.isInteger(8))
-    return nullptr;
   for (const auto &type : types)
     if (elementType.getTypeID() == type.type)
-      return &type.info;
-  return nullptr;
+      return type.info;
+  llvm_unreachable("unsupported packed arithmetic element type");
 }
 
 static FailureOr<PackedArithInstructionSpec>
 resolvePackedArithInstructionSpec(PackedArithOp op) {
   auto kind = op.getOpKind();
-  if (op.getNumOperands() != (kind == PackedArithOpKind::FMA ? 3u : 2u))
-    return failure();
-
-  const auto *result = getPackedArithTypeInfo(op.getType().getElementType());
-  if (!result)
-    return failure();
+  const auto *result = &getPackedArithTypeInfo(op.getType().getElementType());
   SmallVector<const PackedArithTypeInfo *, 3> operands;
-  for (Value operand : op.getOperands()) {
-    const auto *info = getPackedArithTypeInfo(
-        cast<RankedTensorType>(operand.getType()).getElementType());
-    if (!info)
-      return failure();
-    operands.push_back(info);
-  }
+  for (Value operand : op.getOperands())
+    operands.push_back(&getPackedArithTypeInfo(
+        cast<RankedTensorType>(operand.getType()).getElementType()));
 
   // clang-format off
   static constexpr PackedArithSignatureRule signatures[] = {
@@ -162,16 +151,15 @@ static std::optional<unsigned> inferPackedArithFp4Axis(PackedArithOp op) {
       continue;
     if (type.getRank() != resultShape.size())
       return std::nullopt;
-    unsigned differing = resultShape.size();
-    for (unsigned dim = 0; dim < resultShape.size(); ++dim) {
-      if (type.getShape()[dim] == resultShape[dim])
-        continue;
-      if (differing != resultShape.size() ||
-          2 * type.getShape()[dim] != resultShape[dim])
-        return std::nullopt;
-      differing = dim;
-    }
-    if (differing == resultShape.size() || (axis && *axis != differing))
+    auto shape = type.getShape();
+    auto [sourceDim, resultDim] = llvm::mismatch(shape, resultShape);
+    if (sourceDim == shape.end())
+      return std::nullopt;
+    unsigned differing = std::distance(shape.begin(), sourceDim);
+    if (2 * *sourceDim != *resultDim ||
+        !llvm::equal(shape.drop_front(differing + 1),
+                     resultShape.drop_front(differing + 1)) ||
+        (axis && *axis != differing))
       return std::nullopt;
     axis = differing;
   }
@@ -193,9 +181,7 @@ LogicalResult PackedArithOp::verify() {
                          << " operands but got " << getNumOperands();
 
   auto tensorType = getResult().getType();
-  const auto *resultInfo = getPackedArithTypeInfo(tensorType.getElementType());
-  if (!resultInfo)
-    return emitOpError("has an unsupported result element type");
+  const auto &resultInfo = getPackedArithTypeInfo(tensorType.getElementType());
   if (!isa_and_nonnull<DistributedEncodingTrait>(tensorType.getEncoding()))
     return emitOpError("requires a distributed tensor layout");
 
@@ -203,11 +189,11 @@ LogicalResult PackedArithOp::verify() {
   if (failed(instruction)) {
     auto diag = emitOpError()
                 << "unsupported " << stringifyPackedArithOpKind(getOpKind())
-                << " signature " << resultInfo->suffix << " <- (";
+                << " signature " << resultInfo.suffix << " <- (";
     llvm::interleaveComma(getOperands(), diag, [&](Value operand) {
       diag << getPackedArithTypeInfo(
                   cast<RankedTensorType>(operand.getType()).getElementType())
-                  ->suffix;
+                  .suffix;
     });
     return diag << ")";
   }
@@ -218,7 +204,7 @@ LogicalResult PackedArithOp::verify() {
     return emitOpError("requires every fp4 operand to have the result shape "
                        "with the same single dimension halved");
 
-  unsigned packWidth = resultInfo->lanes;
+  unsigned packWidth = resultInfo.lanes;
   unsigned resultRegisters = getUniqueElemsPerThread(tensorType);
   if (resultRegisters < packWidth || resultRegisters % packWidth != 0)
     return emitOpError() << "result layout must provide a multiple of "

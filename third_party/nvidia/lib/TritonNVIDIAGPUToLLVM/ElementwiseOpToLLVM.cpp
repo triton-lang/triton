@@ -8,9 +8,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Tools/LayoutUtils.h"
 
 using namespace mlir::triton::gpu;
 
@@ -671,12 +669,13 @@ struct PackedArithOpConversion
     auto spec = nvidia_gpu::getPackedArithInstructionSpec(op);
     const auto &resultInfo = *spec.result;
     unsigned packWidth = resultInfo.lanes;
-    unsigned packCount = getUniqueElemsPerThread(tensorType) / packWidth;
 
     SmallVector<SmallVector<Value>> operandValues;
     for (Value operand : adaptor.getOperands())
       operandValues.push_back(
           unpackUniqueTensorElements(loc, operand, rewriter));
+    unsigned packCount =
+        operandValues.front().size() / spec.operands.front()->storageLanes();
 
     Type resultRegisterType = int_ty(resultInfo.registerBits);
     Type resultVectorType =
