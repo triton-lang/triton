@@ -75,6 +75,13 @@ def iter_trace_intervals(
         return
 
     trace_path = summary_path.parent / Path(summary["profile"]).name
+    phase_zero_suffix = ".part_0.chrome_trace"
+    if not trace_path.exists() and trace_path.name.endswith(phase_zero_suffix):
+        profile_base = trace_path.name[:-len(phase_zero_suffix)]
+        phase_sidecars = list(summary_path.parent.glob(f"{profile_base}.part_*.profile.json"))
+        fallback = summary_path.parent / f"{profile_base}.chrome_trace"
+        if len(phase_sidecars) == 1 and fallback.exists():
+            trace_path = fallback
     if not trace_path.exists():
         errors.append(f"{trace_path}: missing trace")
         return
@@ -191,6 +198,7 @@ def stream_gpu_stats(
 def analyze(root: Path) -> dict:
     summaries: list[tuple[Path, dict]] = []
     profile_phases: list[tuple[Path, dict]] = []
+    profile_phases_by_dir: dict[Path, list[tuple[Path, dict]]] = defaultdict(list)
     errors: list[str] = []
     for path in sorted(root.rglob("summary.json")):
         try:
@@ -206,8 +214,20 @@ def analyze(root: Path) -> dict:
                 errors.append(f"{path}: unexpected profile sidecar kind")
                 continue
             profile_phases.append((path, profile))
+            profile_phases_by_dir[path.parent].append((path, profile))
         except Exception as exc:
             errors.append(f"{path}: {exc}")
+
+    summary_dirs = {path.parent for path, _ in summaries}
+    for directory in sorted(set(profile_phases_by_dir) - summary_dirs):
+        errors.append(f"{directory}: profile directory missing summary")
+    for path, summary in summaries:
+        if summary["role"] == "controller" or summary.get("profile_phase_tests") is None or summary.get("errors"):
+            continue
+        expected_phases = int(summary.get("profile_phases", 0))
+        actual_phases = len(profile_phases_by_dir[path.parent])
+        if actual_phases != expected_phases:
+            errors.append(f"{path.parent}: expected {expected_phases} profile phases, found {actual_phases}")
 
     by_invocation: dict[str, list[dict]] = defaultdict(list)
     for _, summary in summaries:
@@ -435,6 +455,36 @@ def self_test() -> None:
         assert errors == []
         assert gpu_intervals == [(11_000_050, 11_500_050)]
         assert raw_ns == 500_000
+
+        phase_sidecar = root / "gpu.part_0.profile.json"
+        phase_sidecar.write_text("{}")
+        summary["kind"] = "gpu_profile_phase"
+        summary["phase"] = 0
+        summary["profile"] = str(root / "gpu.part_0.chrome_trace")
+        gpu_intervals, raw_ns, errors = load_trace(phase_sidecar, summary)
+        assert errors == []
+        assert gpu_intervals == [(11_000_050, 11_500_050)]
+        assert raw_ns == 500_000
+
+    with tempfile.TemporaryDirectory() as tmp:
+        orphan = Path(tmp) / "orphan"
+        orphan.mkdir()
+        (orphan / "gpu.part_0.profile.json").write_text(
+            json.dumps({
+                "kind": "gpu_profile_phase",
+                "label": "test",
+                "invocation": "orphan",
+                "role": "worker",
+                "worker_id": "gw0",
+                "phase": 0,
+                "calibration": {
+                    "enter_before_ns": 0,
+                    "enter_after_ns": 0,
+                },
+                "profile": str(orphan / "gpu.part_0.chrome_trace"),
+            }))
+        orphan_analysis = analyze(Path(tmp))
+        assert f"{orphan}: profile directory missing summary" in orphan_analysis["errors"]
 
     compile_result = {
         "wall_ns": 100,
