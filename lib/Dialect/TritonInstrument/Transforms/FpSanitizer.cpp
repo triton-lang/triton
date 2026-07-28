@@ -11,6 +11,7 @@
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 #include <cassert>
@@ -85,8 +86,15 @@ std::pair<int64_t, int64_t> getMmaEmulationTileShape(PatternRewriter &rewriter,
   if (!supportsI8DotDecomposition(rewriter, accElem) || (k % kI8MmaK) != 0)
     return tile;
 
-  // Cap the MMAv2 accumulator at 32 registers per thread.
-  int64_t maxTileArea = 32 * 32 * numWarps / (accElem.getWidth() == 64 ? 2 : 1);
+  int64_t threadsPerWarp = ttg::lookupThreadsPerWarp(rewriter);
+  // When one accumulator dimension fits within a warp, expanding the tile
+  // along the other dimension reduces emulation loop trips. When both
+  // dimensions exceed a warp, cap the tile more tightly to limit the number
+  // of simultaneously live accumulator limbs and generated integer MMAs.
+  int64_t maxRegistersPerThread =
+      std::min(m, n) <= threadsPerWarp ? threadsPerWarp : threadsPerWarp / 2;
+  int64_t maxTileArea = maxRegistersPerThread * threadsPerWarp * numWarps /
+                        (accElem.getWidth() == 64 ? 2 : 1);
   for (int64_t tileM = kI8MmaM; tileM <= m; tileM *= 2) {
     if ((m % tileM) != 0)
       continue;
@@ -2103,6 +2111,7 @@ struct Fp4ToFpPattern : public OpRewritePattern<ttg::Fp4ToFpOp> {
 
 struct DotPattern : public OpRewritePattern<tt::DotOp> {
   using OpRewritePattern::OpRewritePattern;
+
   LogicalResult matchAndRewrite(tt::DotOp op,
                                 PatternRewriter &rewriter) const override {
     if (!isFloatLike(op.getType()))
@@ -2269,6 +2278,7 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
 
 struct DotScaledPattern : public OpRewritePattern<tt::DotScaledOp> {
   using OpRewritePattern::OpRewritePattern;
+
   LogicalResult matchAndRewrite(tt::DotScaledOp op,
                                 PatternRewriter &rewriter) const override {
     if (!isFloatLike(op.getType()))
@@ -3206,8 +3216,9 @@ public:
                  ClampFOpPattern, NegFOpPattern, DivFOpPattern,
                  PreciseDivFOpPattern, RemFOpPattern, FmaPattern, ExpOpPattern,
                  Exp2OpPattern, CosOpPattern, SinOpPattern, ExtFOpPattern,
-                 TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern, DotPattern,
-                 DotScaledPattern>(&getContext());
+                 TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern>(&getContext());
+    patterns.add<DotPattern, DotScaledPattern, WarpGroupDotPattern>(
+        &getContext());
     patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
     patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);
     patterns.add<UnaryPattern<math::SqrtOp>>(&getContext(), UnaryOpId::Sqrt);
@@ -3219,10 +3230,10 @@ public:
                                                   UnaryOpId::PreciseSqrt);
     patterns.add<ExternElementwisePattern, ElementwiseInlineAsmPattern>(
         &getContext());
-    patterns.add<TMEMLoadPattern, TMEMStorePattern, TMEMCopyPattern,
-                 TCGen5MMAPattern, TCGen5MMAScaledPattern>(&getContext(),
+    patterns.add<TMEMLoadPattern, TMEMStorePattern, TMEMCopyPattern>(
+        &getContext(), &scratch);
+    patterns.add<TCGen5MMAPattern, TCGen5MMAScaledPattern>(&getContext(),
                                                            &scratch);
-    patterns.add<WarpGroupDotPattern>(&getContext());
     patterns.add<TCGen5CommitPattern>(&getContext(), twoCTAs);
 
     LogicalResult result =
