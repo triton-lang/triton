@@ -438,3 +438,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %first, %second, %third : tensor<16x1x16xf32, #target_parent>, tensor<16x1x16xf32, #target_parent>, tensor<16x1x16xf32, #target_parent>
   }
 }
+
+// -----
+
+// A single-result reduction uniquely determines its sliced result encoding.
+// Keep that relation in the global problem so one input conversion can serve
+// every fixed consumer instead of converting both the reduction input and its
+// sliced result.
+//
+// BASELINE-LABEL: @layout_conflict_reduce_fanout
+// BASELINE-COUNT-2: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @layout_conflict_reduce_fanout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#reduced = #ttg.slice<{dim = 1, parent = #target}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @layout_conflict_reduce_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>, %reference: tensor<16xf32, #reduced>) -> (tensor<16xf32, #reduced>, tensor<16xf32, #reduced>, tensor<16xf32, #reduced>) {
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %mixed = arith.addf %converted, %target : tensor<16x16xf32, #target>
+    %reduction = "tt.reduce"(%mixed) <{axis = 1 : i32}> ({
+      ^bb0(%lhs: f32, %rhs: f32):
+        %sum = arith.addf %lhs, %rhs : f32
+        tt.reduce.return %sum : f32
+    }) : (tensor<16x16xf32, #target>) -> tensor<16xf32, #reduced>
+    %first = arith.mulf %reduction, %reference : tensor<16xf32, #reduced>
+    %second = arith.addf %reduction, %reference : tensor<16xf32, #reduced>
+    %third = arith.subf %reduction, %reference : tensor<16xf32, #reduced>
+    tt.return %first, %second, %third : tensor<16xf32, #reduced>, tensor<16xf32, #reduced>, tensor<16xf32, #reduced>
+  }
+}
