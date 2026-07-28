@@ -175,7 +175,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_track_proxy_accesses
     ttng.arrive_barrier %bar, 1, %true : !ttg.memdesc<1xi64, #proxy_bar_shared, #proxy_smem, mutable>
     // CHECK: ttng.wait_barrier
-    // CHECK: tt.call @__triton_consan_transfer_proxy_accesses
+    // CHECK: tt.call @__triton_consan_complete_barrier_wait
     ttng.wait_barrier %bar, %c0, %true : !ttg.memdesc<1xi64, #proxy_bar_shared, #proxy_smem, mutable>
     // CHECK: tt.call @__triton_consan_fence_proxy_accesses
     ttng.fence_async_shared {bCluster = false}

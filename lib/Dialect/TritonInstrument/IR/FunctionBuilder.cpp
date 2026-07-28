@@ -2918,13 +2918,18 @@ void FunctionBuilder::createTrackProxyAccessesCall(ImplicitLocOpBuilder &b,
       });
 }
 
-void FunctionBuilder::createTransferProxyAccessesCall(ImplicitLocOpBuilder &b,
-                                                      Value mbar, int thread,
-                                                      Value pred,
-                                                      Operation *insertPoint) {
-  if (auxData.barriers.empty() || auxData.proxyAccessVisibility.empty() ||
-      auxData.proxyAccessTracking.empty())
+void FunctionBuilder::createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b,
+                                                    Value mbar, int thread,
+                                                    Value pred,
+                                                    Operation *insertPoint) {
+  if (auxData.barriers.empty())
     return;
+  if (auxData.proxyAccessVisibility.empty() ||
+      auxData.proxyAccessTracking.empty()) {
+    createClearWaitingCall(b, mbar, thread, pred, insertPoint);
+    return;
+  }
+  const bool clearWaiting = !auxData.waiting.empty();
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   ValueType barriers = auxData.barriers.at(insertPoint);
@@ -2941,11 +2946,25 @@ void FunctionBuilder::createTransferProxyAccessesCall(ImplicitLocOpBuilder &b,
       barriers.value,
       visibility.value,
       tracking.value};
+  ManglingArgs specializationArgs;
+  specializationArgs.append(barriersType);
+  specializationArgs.append(visibilityType);
+  specializationArgs.append(trackingType);
+  specializationArgs.append(static_cast<uint64_t>(clearWaiting));
+
+  RankedTensorType waitingType;
+  if (clearWaiting) {
+    ValueType waiting = auxData.waiting.at(insertPoint);
+    waitingType = cast<RankedTensorType>(waiting.type);
+    args.push_back(waiting.value);
+    specializationArgs.append(waitingType);
+  }
+
   createCallToCachedFunction(
-      b, "transfer_proxy_accesses", args, /*assertInfo=*/std::nullopt,
-      {barriersType, visibilityType, trackingType},
-      [visibilityType, trackingType](ImplicitLocOpBuilder &fb,
-                                     Block *entryBlock) {
+      b, "complete_barrier_wait", args, /*assertInfo=*/std::nullopt,
+      specializationArgs,
+      [clearWaiting, visibilityType, trackingType,
+       waitingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
@@ -2956,26 +2975,28 @@ void FunctionBuilder::createTransferProxyAccessesCall(ImplicitLocOpBuilder &b,
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
+        Value descriptor = createBufferDescriptor(fb, mbarOffset, lengthVal);
+        Value barriersEqBar =
+            createCmpIntTensorScalar(fb, barriers, descriptor);
+        Value currentCTA = createCurrentCTAMask(fb);
+
         Value visibility = tti::createLoadScratchMemory(
             fb, fb.getLoc(), visibilityPtr, visibilityType);
         Value tracking = tti::createLoadScratchMemory(
             fb, fb.getLoc(), trackingPtr, trackingType);
-        Value descriptor = createBufferDescriptor(fb, mbarOffset, lengthVal);
-        Value barriersEqBar =
-            createCmpIntTensorScalar(fb, barriers, descriptor);
-        barriersEqBar =
+        Value proxyBarrierMask =
             convertAndBroadcast(fb, barriersEqBar, {3}, trackingType);
-        Value currentCTA = createCurrentCTAMask(fb);
         Value barrierCTAMask =
             createCTASetMask(fb, trackingType, /*dim=*/2, currentCTA);
         Value selected =
-            arith::AndIOp::create(fb, barriersEqBar, barrierCTAMask);
+            arith::AndIOp::create(fb, proxyBarrierMask, barrierCTAMask);
         Value zeroTracking =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, trackingType);
         Value frontier =
             arith::SelectOp::create(fb, selected, tracking, zeroTracking);
         frontier = reduce<arith::OrIOp>(fb, frontier, {2, 3});
-        frontier = convertAndBroadcast(fb, frontier, {0, 1, 4}, visibilityType);
+        frontier =
+            convertAndBroadcast(fb, frontier, {0, 1, 4}, visibilityType);
 
         Value targetMask =
             createCTASetMask(fb, visibilityType, /*dim=*/2, currentCTA);
@@ -2987,6 +3008,43 @@ void FunctionBuilder::createTransferProxyAccessesCall(ImplicitLocOpBuilder &b,
             arith::SelectOp::create(fb, targetMask, withFrontier, visibility);
         createMaskedStoreScratchMemory(fb, fb.getLoc(), visibilityPtr, updated,
                                        visibilityType, targetMask);
+
+        if (clearWaiting) {
+          Value waitingPtr = entryBlock->getArgument(7);
+          Value waiting = tti::createLoadScratchMemory(
+              fb, fb.getLoc(), waitingPtr, waitingType);
+          Value waitingBarrierMask =
+              convertAndBroadcast(fb, barriersEqBar, {1}, waitingType);
+          Value ctaMask =
+              createLeadCTAEffectMask(fb, waitingType, currentCTA);
+          waitingBarrierMask =
+              arith::AndIOp::create(fb, waitingBarrierMask, ctaMask);
+
+          Value bitsPerThread =
+              arith::ConstantIntOp::create(fb, WaitingBits::bitsPerThread, 32);
+          Value flagBit =
+              arith::ConstantIntOp::create(fb, WaitingBits::flagBit, 32);
+          Value phaseBit =
+              arith::ConstantIntOp::create(fb, WaitingBits::phaseBit, 32);
+          Value one = arith::ConstantIntOp::create(fb, 1, 32);
+          Value minusOne = arith::ConstantIntOp::create(fb, -1, 32);
+          Value baseTimesBits =
+              arith::MulIOp::create(fb, threadVal, bitsPerThread);
+          Value flagShift = arith::AddIOp::create(fb, baseTimesBits, flagBit);
+          Value phaseShift = arith::AddIOp::create(fb, baseTimesBits, phaseBit);
+          Value flagMask = arith::ShLIOp::create(fb, one, flagShift);
+          Value phaseMask = arith::ShLIOp::create(fb, one, phaseShift);
+          Value bits = arith::OrIOp::create(fb, flagMask, phaseMask);
+          Value clearMask = arith::XOrIOp::create(fb, bits, minusOne);
+          Value clearMaskTensor =
+              triton::SplatOp::create(fb, waitingType, clearMask);
+          Value clearedWaiting =
+              arith::AndIOp::create(fb, waiting, clearMaskTensor);
+          Value updated = arith::SelectOp::create(
+              fb, waitingBarrierMask, clearedWaiting, waiting);
+          createMaskedStoreScratchMemory(fb, fb.getLoc(), waitingPtr, updated,
+                                         waitingType, ctaMask);
+        }
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
