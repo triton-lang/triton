@@ -974,6 +974,71 @@ def test_warpgroup_mma(ASYNC):
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
 
 
+@gluon.jit
+def warpgroup_mma_wait_multi_warpgroup_kernel(a_ptr, b0_ptr, b1_ptr, out_ptr, D: ttgl.constexpr, NBLK: ttgl.constexpr,
+                                              WG: ttgl.constexpr):
+    M: ttgl.constexpr = 64 * WG
+    c_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout([3, 0], warps_per_cta=[4 * WG, 1], instr_shape=[16, 64, 16])
+    smem_b: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([D, D], ttgl.bfloat16)
+    smem_a: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([M, D], ttgl.bfloat16)
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4 * WG, 1], [1, 0])
+
+    a_smem = ttgl.allocate_shared_memory(ttgl.bfloat16, [M, D], smem_a)
+    b0_smem = ttgl.allocate_shared_memory(ttgl.bfloat16, [D, D], smem_b)
+    b1_smem = ttgl.allocate_shared_memory(ttgl.bfloat16, [D, D], smem_b)
+
+    rows = ttgl.arange(0, D, layout=ttgl.SliceLayout(1, layout))
+    cols = ttgl.arange(0, D, layout=ttgl.SliceLayout(0, layout))
+    offs = rows[:, None] * D + cols[None, :]
+    aoffs = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None] * D + cols[None, :]
+
+    acc = ttgl.zeros([M, D], ttgl.float32, c_layout)
+    inflight = hopper.warpgroup_mma_init(acc)
+
+    async_copy.async_copy_global_to_shared(a_smem, a_ptr + aoffs)
+    async_copy.commit_group()
+
+    for i in tl.range(0, NBLK):
+        async_copy.async_copy_global_to_shared(b0_smem, b0_ptr + i * D * D + offs)
+        acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=(inflight, ))
+        async_copy.async_copy_global_to_shared(b1_smem, b1_ptr + i * D * D + offs)
+        async_copy.commit_group()
+        async_copy.wait_group(0)
+        hopper.fence_async_shared()
+        acc = hopper.warpgroup_mma(a_smem, b0_smem, acc, use_acc=True, is_async=True)
+        acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=(acc, ))
+        inflight = hopper.warpgroup_mma(a_smem, b1_smem, acc, use_acc=True, is_async=True)
+    acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=(inflight, ))
+
+    out_r = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, c_layout))
+    out_c = ttgl.arange(0, D, layout=ttgl.SliceLayout(0, c_layout))
+    pid = ttgl.program_id(0)
+    ttgl.store(out_ptr + pid.to(ttgl.int64) * (M * D) + out_r[:, None] * D + out_c[None, :], acc)
+
+
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
+def test_warpgroup_mma_wait_synchronizes_warpgroups():
+    torch.manual_seed(0)
+    d, num_warp_groups = 64, 2
+    m = 64 * num_warp_groups
+    num_blocks, grid = 512, 528
+
+    b0 = torch.randint(-3, 4, (num_blocks, d, d), device="cuda", dtype=torch.float32)
+    b1 = torch.randint(-3, 4, (num_blocks, d, d), device="cuda", dtype=torch.float32)
+    expected = (b0.sum(dim=(0, 1)) + b1.sum(dim=(0, 1)))[None, :].expand(m, d)
+    assert expected.abs().max() < 2**24
+
+    a = torch.ones((m, d), device="cuda", dtype=torch.bfloat16)
+    b0 = b0.to(torch.bfloat16)
+    b1 = b1.to(torch.bfloat16)
+
+    for _ in range(5):
+        out = torch.empty((grid, m, d), dtype=torch.float32, device="cuda")
+        warpgroup_mma_wait_multi_warpgroup_kernel[(grid, )](a, b0, b1, out, D=d, NBLK=num_blocks, WG=num_warp_groups,
+                                                            num_warps=4 * num_warp_groups)
+        torch.testing.assert_close(out, expected[None, :, :].expand_as(out), atol=0, rtol=0)
+
+
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tcgen05_mma_two_ctas_transposed_lhs_shared_layout():
     torch.manual_seed(0)
@@ -1842,6 +1907,34 @@ def test_tmem_copy_2d():
     warps = torch.chunk(z_tri, chunks=4, dim=0)
     for warp in warps:
         torch.testing.assert_close(x_res, warp)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tmem_pipeline_stage_subslice_index_reinterpret():
+
+    @gluon.jit
+    def kernel(inp, out):
+        parent = allocate_tensor_memory(ttgl.float32, [5, 128, 64], TensorMemoryLayout([128, 64], col_stride=1))
+        layout: ttgl.constexpr = parent.index(0).get_reg_layout()
+        rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))[:, None]
+        cols = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, layout))[None, :]
+        for stage in ttgl.static_range(5):
+            parent.index(stage).store(ttgl.load(inp + stage * 8192 + rows * 64 + cols))
+        stages = parent.slice(2, 2, dim=0)
+        first = stages._reinterpret().index(0)
+        first.store(first.load() + 11.0)
+        second = stages.slice(1, 1, dim=0).index(0)
+        second.store(second.load() + 7.0)
+        for stage in ttgl.static_range(5):
+            ttgl.store(out + stage * 8192 + rows * 64 + cols, parent.index(stage).load(layout))
+
+    inp = torch.arange(5 * 128 * 64, device="cuda", dtype=torch.int32).remainder(64).float().reshape(5, 128, 64)
+    out = torch.empty_like(inp)
+    kernel[(1, )](inp, out, num_warps=4)
+    expected = inp.clone()
+    expected[2] += 11
+    expected[3] += 7
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
 
 
 @pytest.mark.parametrize("M, N, BLOCK_M, BLOCK_N", [(256, 128, 128, 128), (128, 256, 64, 128)])
@@ -4987,7 +5080,7 @@ def test_clc_basic(num_ctas):
         mbarrier.init(clc_mbar, count=1)
 
         # Large shared memory allocation to force 1 block per SM
-        dummy = ttgl.allocate_shared_memory(ttgl.int64, [smem_size // 8 - 32], clc_mbar.layout)
+        dummy = ttgl.allocate_shared_memory(ttgl.int64, [smem_size // 8 - 32, 1], clc_mbar.layout)
 
         clc.try_cancel(clc_result, clc_mbar)
         mbarrier.expect(clc_mbar, 16, from_cta=0x0)

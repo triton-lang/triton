@@ -19,6 +19,61 @@ tt.func @async_store_wait(%arg: tensor<32x16xf16, #AL>) {
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: @warpgroup_wait_followed_by_cta_barrier
+tt.func @warpgroup_wait_followed_by_cta_barrier(%acc: tensor<256xf32, #blocked>, %value: i32) {
+  %c1 = arith.constant 1 : i32
+  // CHECK: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32, warpGroupLocal}
+  // CHECK-NEXT: arith.addi
+  // CHECK-NEXT: ttg.barrier local
+  %wait = ttng.warp_group_dot_wait %acc {pendings = 0 : i32} : tensor<256xf32, #blocked>
+  %next = arith.addi %value, %c1 : i32
+  ttg.barrier local
+  tt.return
+}
+
+// CHECK-LABEL: @warpgroup_wait_followed_by_barrier_expect
+tt.func @warpgroup_wait_followed_by_barrier_expect(%acc: tensor<256xf32, #blocked>, %value: i32) {
+  %true = arith.constant true
+  %c1 = arith.constant 1 : i32
+  %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+  // CHECK: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32, warpGroupLocal}
+  // CHECK-NEXT: arith.addi
+  // CHECK-NEXT: ttng.barrier_expect
+  %wait = ttng.warp_group_dot_wait %acc {pendings = 0 : i32} : tensor<256xf32, #blocked>
+  %next = arith.addi %value, %c1 : i32
+  ttng.barrier_expect %barrier, 8, %true : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+  tt.return
+}
+
+// CHECK-LABEL: @warpgroup_wait_before_memory_effect
+tt.func @warpgroup_wait_before_memory_effect(%acc: tensor<256xf32, #blocked>) {
+  %allocation = ttg.local_alloc : () -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
+  // CHECK: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+  // CHECK-NEXT: ttg.local_store
+  %wait = ttng.warp_group_dot_wait %acc {pendings = 0 : i32} : tensor<256xf32, #blocked>
+  ttg.local_store %acc, %allocation : tensor<256xf32, #blocked> -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
+  ttg.barrier local
+  tt.return
+}
+
+// CHECK-LABEL: @warpgroup_wait_before_barrier_invalidation
+tt.func @warpgroup_wait_before_barrier_invalidation(%acc: tensor<256xf32, #blocked>) {
+  %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+  // CHECK: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+  // CHECK-NEXT: ttng.inval_barrier
+  %wait = ttng.warp_group_dot_wait %acc {pendings = 0 : i32} : tensor<256xf32, #blocked>
+  ttng.inval_barrier %barrier : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+  tt.return
+}
+}
+
+// -----
+
 #barrier_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 
@@ -59,6 +114,7 @@ tt.func @tma_special_cases(%arg1: !tt.tensordesc<256x64xf16, #shared>, %arg2: !t
   %c0 = arith.constant 0 : i32
   %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
+  %gather_alloc = ttg.local_alloc : () -> !ttg.memdesc<32x64xf16, #shared, #ttg.shared_memory, mutable>
   //      CHECK: ttng.init_barrier
   // CHECK-NEXT: ttng.init_barrier
   ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
@@ -97,7 +153,7 @@ tt.func @tma_special_cases(%arg1: !tt.tensordesc<256x64xf16, #shared>, %arg2: !t
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.async_tma_gather
   // CHECK-NEXT: ttng.wait_barrier
-  %view = ttg.memdesc_subslice %alloc [0, 0]  : !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<32x64xf16, #shared, #ttg.shared_memory, mutable>
+  %view = ttg.memdesc_subslice %gather_alloc [0, 0]  : !ttg.memdesc<32x64xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<32x64xf16, #shared, #ttg.shared_memory, mutable>
   ttng.barrier_expect %barrier, 49152, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
   ttng.async_tma_gather %arg2[%cx, %c0] %view, %barrier, %true : !tt.tensordesc<1x64xf16, #shared>, tensor<32xi32>, i32, !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>, !ttg.memdesc<32x64xf16, #shared, #ttg.shared_memory, mutable>, i1
   ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
