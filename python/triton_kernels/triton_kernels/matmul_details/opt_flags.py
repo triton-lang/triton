@@ -411,7 +411,19 @@ def make_default_opt_flags_nvidia(
 
     if constraints.get("num_stages", None):
         num_stages = constraints["num_stages"]
-    elif is_large_ragged_nvfp4:
+    elif is_large_ragged_nvfp4 and not any(
+        key in constraints
+        for key in (
+            "block_m",
+            "block_n",
+            "block_k",
+            "num_warps",
+            "is_persistent",
+            "split_k",
+            "max_allowable_mn",
+            "epilogue_subtile",
+        )
+    ):
         num_stages = 3 if epilogue_reduction_n == 1 else 2
     assert num_stages >= 1
     ret = OptFlags(

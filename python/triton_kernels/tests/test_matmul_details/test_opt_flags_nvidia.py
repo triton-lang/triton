@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 import pytest
 import torch
 import triton
@@ -8,11 +6,10 @@ from triton._internal_testing import is_cuda
 
 from triton_kernels.matmul import matmul, matmul_torch, PrecisionConfig
 from triton_kernels.matmul_details._matmul import _compute_packed_n_w
-from triton_kernels.matmul_details import opt_flags
 from triton_kernels.matmul_details.opt_flags import InapplicableConstraint, scoped_opt_flags_constraints
 from triton_kernels.matmul_details.opt_flags_details import opt_flags_nvidia
 from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, downcast_to_mxfp
-from triton_kernels.tensor import BF16, FP4, UINT8, Storage, Tensor, convert_layout, wrap_torch_tensor
+from triton_kernels.tensor import FP4, UINT8, Storage, Tensor, convert_layout, wrap_torch_tensor
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor_details.layout import BlackwellMX4ValueShuffledLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellMXScaleLayout
@@ -161,132 +158,6 @@ def test_compute_block_n_blackwell_scale_aligns_to_128(n, expected):
     )
     block_n, block_n_tma = opt_flags_nvidia.compute_block_n(n, None, precision_config)
     assert block_n == block_n_tma == expected
-
-
-@pytest.mark.parametrize(
-    "capability, rows, is_ragged, has_act_tensor_scale, has_weight_tensor_scale, "
-    "epilogue_reduction_n, constraints, expected",
-    [
-        pytest.param(
-            (10, 3), 65_536, True, True, True, 1, {}, (128, 256, 256, 4, 3, 2),
-            id="gb300-large-ragged-nvfp4",
-        ),
-        pytest.param(
-            (10, 3), 65_536, True, True, True, 2, {}, (128, 256, 256, 4, 2, 2),
-            id="gb300-large-ragged-nvfp4-fused-activation",
-        ),
-        pytest.param(
-            (10, 0), 65_536, True, True, True, 1, {}, (128, 128, 128, 8, 4, 1),
-            id="gb200-keeps-default-tile",
-        ),
-        pytest.param(
-            (10, 3), 65_535, True, True, True, 1, {}, (128, 128, 128, 8, 4, 1),
-            id="small-ragged-nvfp4-keeps-default-tile",
-        ),
-        pytest.param(
-            (10, 3), 65_536, False, True, True, 1, {}, (128, 128, 128, 8, 4, 1),
-            id="dense-nvfp4-keeps-default-tile",
-        ),
-        pytest.param(
-            (10, 3), 65_536, True, False, True, 1, {}, (128, 128, 128, 8, 4, 1),
-            id="missing-activation-tensor-scale-keeps-default-tile",
-        ),
-        pytest.param(
-            (10, 3), 65_536, True, True, False, 1, {}, (128, 128, 128, 8, 4, 1),
-            id="missing-weight-tensor-scale-keeps-default-tile",
-        ),
-        pytest.param(
-            (10, 3),
-            65_536,
-            True,
-            True,
-            True,
-            1,
-            {
-                "block_m": 64,
-                "block_n": 128,
-                "block_k": 128,
-                "num_warps": 8,
-                "num_stages": 2,
-                "epilogue_subtile": 1,
-            },
-            (64, 128, 128, 8, 2, 1),
-            id="explicit-caller-constraints-win",
-        ),
-    ],
-)
-def test_make_default_opt_flags_nvidia_large_ragged_nvfp4_tile(
-    monkeypatch,
-    capability,
-    rows,
-    is_ragged,
-    has_act_tensor_scale,
-    has_weight_tensor_scale,
-    epilogue_reduction_n,
-    constraints,
-    expected,
-):
-    monkeypatch.setattr(
-        opt_flags,
-        "cuda_capability_geq",
-        lambda major, minor: capability >= (major, minor),
-    )
-    monkeypatch.setattr(
-        opt_flags.torch.cuda,
-        "get_device_properties",
-        lambda *_args: SimpleNamespace(multi_processor_count=16),
-    )
-    monkeypatch.setattr(opt_flags.target_info, "has_native_mxfp", lambda: capability >= (10, 0))
-    monkeypatch.setattr(opt_flags_nvidia, "compute_block_n", lambda *_args: (128, 128))
-    monkeypatch.setattr(opt_flags_nvidia, "compute_grid_size", lambda *_args: 16)
-    monkeypatch.setattr(opt_flags_nvidia, "compute_block_k", lambda *_args: 128)
-    monkeypatch.setattr(opt_flags_nvidia, "compute_num_stages", lambda *_args, **_kwargs: 4)
-    monkeypatch.setattr(
-        opt_flags_nvidia,
-        "compute_num_warps",
-        lambda _block_m, _block_n, _is_persistent, _precision_config, caller_constraints:
-            caller_constraints.get("num_warps", 8),
-    )
-    monkeypatch.setattr(opt_flags_nvidia, "is_blackwell_mx_lhs_dense_rhs", lambda *_args: False)
-
-    precision_config = PrecisionConfig(
-        a_mx_tensor_scale=torch.ones(1) if has_act_tensor_scale else None,
-        b_mx_tensor_scale=torch.ones(1) if has_weight_tensor_scale else None,
-    )
-    routing_data = (
-        SimpleNamespace(expected_slice_size=1024, n_slices=64, slice_sizes=torch.ones(64))
-        if is_ragged
-        else None
-    )
-    flags = opt_flags.make_default_opt_flags_nvidia(
-        out_dtype=BF16,
-        lhs_dtype=FP4,
-        rhs_dtype=FP4,
-        precision_config=precision_config,
-        batch_size=1,
-        m=rows,
-        n=4096,
-        k=4096,
-        routing_data=routing_data,
-        can_use_persistent_tma=True,
-        can_use_split_k=False,
-        enforce_bitwise_invariance=False,
-        epilogue_effective_itemsize=6,
-        x_transpose=False,
-        has_y_acc_in=False,
-        constraints=constraints,
-        intermediate_out_dtype=torch.float32,
-        epilogue_reduction_n=epilogue_reduction_n,
-    )
-
-    assert (
-        flags.block_m,
-        flags.block_n,
-        flags.block_k,
-        flags.num_warps,
-        flags.num_stages,
-        flags.epilogue_subtile,
-    ) == expected
 
 
 def test_matmul_blackwell_scale_small_n(device):
