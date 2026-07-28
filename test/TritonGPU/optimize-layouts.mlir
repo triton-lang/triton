@@ -475,3 +475,39 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %first, %second, %third : tensor<16xf32, #reduced>, tensor<16xf32, #reduced>, tensor<16xf32, #reduced>
   }
 }
+
+// -----
+
+// Keep both branches and their three fixed consumers in the globally selected
+// result layout. The source argument is an immutable layout boundary, so its
+// required conversion must not be removed.
+//
+// BASELINE-LABEL: @layout_conflict_conditional_fanout
+// BASELINE-COUNT-4: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @layout_conflict_conditional_fanout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @layout_conflict_conditional_fanout(%condition: i1, %target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>) {
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %selected = scf.if %condition -> (tensor<16x16xf32, #target>) {
+      %then = arith.addf %converted, %target : tensor<16x16xf32, #target>
+      scf.yield %then : tensor<16x16xf32, #target>
+    } else {
+      %else = arith.subf %converted, %target : tensor<16x16xf32, #target>
+      scf.yield %else : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %selected, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %selected, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %selected, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
+  }
+}

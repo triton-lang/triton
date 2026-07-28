@@ -285,16 +285,21 @@ static bool supportsGlobalLayoutAssignment(FuncOp funcOp) {
     if (isa<ExpandDimsOp, TransOp>(op))
       return WalkResult::advance();
 
+    // Conditional results have no loop-carried layout constraint. Their
+    // existing result and yield rewrites preserve both branch result types.
+    if (isa<scf::IfOp>(op))
+      return WalkResult::advance();
+
     // A single-output reduction has a uniquely inferable sliced result. A
     // multi-output reduction still needs all of its results selected together.
     if (auto reduce = dyn_cast<ReduceOp>(op))
       return reduce->getNumResults() == 1 ? WalkResult::advance()
                                            : WalkResult::interrupt();
 
-    // Joins, multi-result splits, and tied control-flow values still require
-    // joint component constraints. In particular, independently selecting
-    // adjacent joins can recreate conversions throughout an exact-order tree.
-    if (isa<scf::ForOp, scf::WhileOp, scf::IfOp, JoinOp, SplitOp>(op))
+    // Joins, multi-result splits, and loop-carried values still require joint
+    // component constraints. In particular, independently selecting adjacent
+    // joins can recreate conversions throughout an exact-order tree.
+    if (isa<scf::ForOp, scf::WhileOp, JoinOp, SplitOp>(op))
       return WalkResult::interrupt();
 
     if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
