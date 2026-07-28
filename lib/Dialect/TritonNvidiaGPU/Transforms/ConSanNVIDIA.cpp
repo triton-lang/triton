@@ -75,7 +75,8 @@ public:
     return std::nullopt;
   }
 
-  std::optional<WaitOpInfo> getWaitOpInfo(Operation *op) const override {
+  std::optional<WaitOpInfo>
+  getWaitOpInfo(Operation *op, const tti::AuxDataMap &) const override {
     if (auto tmaStoreWaitOp = dyn_cast<ttng::TMAStoreWaitOp>(op))
       return WaitOpInfo{tti::CommitKind::TmaStore,
                         static_cast<int>(tmaStoreWaitOp.getPendings()),
@@ -115,6 +116,15 @@ public:
       mask = getBarrierMask(waitOp.getAlloc());
     if (auto invalOp = dyn_cast<ttng::InvalBarrierOp>(op))
       mask = getBarrierMask(invalOp.getAlloc());
+    if (isa<ttng::BarrierExpectOp, ttng::ArriveBarrierOp>(op)) {
+      std::optional<uint32_t> fromCTA;
+      if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))
+        fromCTA = expectOp.getFromCTA();
+      else
+        fromCTA = cast<ttng::ArriveBarrierOp>(op).getFromCTA();
+      if (fromCTA)
+        mask = ~*fromCTA & (ttg::lookupNumCTAs(op) - 1);
+    }
     if (auto loadOp = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
       if (loadOp.getMulticast())
         mask = getBlockBroadcastMask(loadOp.getResult().getType());
@@ -140,9 +150,7 @@ public:
 
   std::optional<MemEffectsOpInfo>
   getMemEffectsOpInfo(Operation *op) const override {
-    auto info = ConSanTargetHooks::getMemEffectsOpInfo(op);
-    if (info)
-      return info;
+    std::optional<MemEffectsOpInfo> info;
     if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
@@ -301,10 +309,11 @@ public:
       info->barriers.push_back(
           {arriveOp.getBarrier(), nullptr, (int)arriveOp.getCount()});
     }
-    return info;
+    return info ? info : ConSanTargetHooks::getMemEffectsOpInfo(op);
   }
 
-  SmallVector<CommitKindDesc> getOutstandingReadCommitKinds() const override {
+  SmallVector<CommitKindDesc>
+  getOutstandingReadCommitKinds(const tti::AuxDataMap &) const override {
     return {{tti::CommitKind::Wgmma, "warpgroup_mma operand read"},
             {tti::CommitKind::TmaStore, "async_copy_shared_to_global"}};
   }

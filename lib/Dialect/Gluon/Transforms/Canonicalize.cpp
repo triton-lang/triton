@@ -61,6 +61,8 @@ void Canonicalize::runOnOperation() {
   IntToPtrOp::getCanonicalizationPatterns(patterns, ctx);
   ttg::WarpSpecializeOp::getCanonicalizationPatterns(patterns, ctx);
   ttg::WarpSpecializePartitionsOp::getCanonicalizationPatterns(patterns, ctx);
+  ttng::BarrierExpectOp::getCanonicalizationPatterns(patterns, ctx);
+  ttng::ArriveBarrierOp::getCanonicalizationPatterns(patterns, ctx);
 
   (void)applyPatternsGreedily(getOperation(), std::move(patterns));
 }

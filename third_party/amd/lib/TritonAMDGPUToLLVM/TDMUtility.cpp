@@ -186,6 +186,11 @@ analyzeGatherScatterLayout(RankedTensorType indicesType) {
 
 } // namespace
 
+int getTDMEffectiveWarps(int numWarps, std::optional<uint32_t> warpUsedHint) {
+  return warpUsedHint ? static_cast<int>(llvm::popcount(*warpUsedHint))
+                      : numWarps;
+}
+
 std::pair<SmallVector<unsigned>, unsigned>
 distributeTDMWarpsAlignToPartition(ArrayRef<int64_t> blockShape, int numWarps,
                                    Attribute encoding) {
@@ -897,6 +902,8 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
 
   // Update group0 with addresses
   Value ldsAddr = b.ptrtoint(i32_ty, dstPtr);
+  if (!pred)
+    pred = vecGet(b, groups[0], 0);
 
   // Pure form inherits pred from the descriptor (group0[0]); the per-warp
   // active mask below still applies.
@@ -1199,6 +1206,28 @@ int64_t computePerPartitionSliceStride(
   return stride;
 }
 
+// Emit the raw TDM intrinsic call from already-filled descriptor groups.
+// Pads the group operands to the fixed 4 x <4xi32> + 1 x <8xi32> ABI, appends
+// the aux-bits operand, and selects the load/store intrinsic name.  Both the
+// standalone and fused emitters go through here so the intrinsic operand ABI
+// is defined in one place.
+void emitTDMRawIntrinsic(RewriterBase &rewriter, Location loc,
+                         ArrayRef<Value> inputGroups, bool isLoad,
+                         int32_t auxBits) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto v4i32Ty = VectorType::get(4, rewriter.getI32Type());
+  auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
+  SmallVector<Value, 6> groups(inputGroups.begin(), inputGroups.end());
+  // Pad to 4 vector groups (intrinsic always takes 4 group operands).
+  while (groups.size() < 4)
+    groups.push_back(LLVM::ZeroOp::create(rewriter, loc, v4i32Ty));
+  groups.push_back(LLVM::ZeroOp::create(rewriter, loc, v8i32Ty)); // group4
+  groups.push_back(b.i32_val(auxBits));
+  const char *intrinsicName = isLoad ? "llvm.amdgcn.tensor.load.to.lds"
+                                     : "llvm.amdgcn.tensor.store.from.lds";
+  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, {}, groups);
+}
+
 // Emit a single TDM intrinsic (load or store) for the given block shape.
 // This handles both the 2D (d2 intrinsic) and >2D (full intrinsic) cases.
 void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
@@ -1214,10 +1243,6 @@ void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
                       int32_t auxBits,
                       std::optional<uint32_t> warpUsedHint = std::nullopt,
                       bool isPureForm = false) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto v4i32Ty = VectorType::get(4, rewriter.getI32Type());
-  auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
-
   SmallVector<Value, 4> groups(desc.begin(),
                                desc.begin() + (numDims > 2 ? 4 : 2));
   fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
@@ -1226,14 +1251,7 @@ void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
                     barrier, instrSharedLayout, ctaId, !isLoad, warpsPerCTA,
                     warpUsedHint, isPureForm);
 
-  // Pad to 4 vector groups (intrinsic always takes 4 group operands).
-  while (groups.size() < 4)
-    groups.push_back(LLVM::ZeroOp::create(rewriter, loc, v4i32Ty));
-  groups.push_back(LLVM::ZeroOp::create(rewriter, loc, v8i32Ty)); // group4
-  groups.push_back(b.i32_val(auxBits));
-  const char *intrinsicName = isLoad ? "llvm.amdgcn.tensor.load.to.lds"
-                                     : "llvm.amdgcn.tensor.store.from.lds";
-  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, {}, groups);
+  emitTDMRawIntrinsic(rewriter, loc, groups, isLoad, auxBits);
 }
 
 } // namespace
@@ -1262,11 +1280,10 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
 
   auto partitionedEnc = dyn_cast<PartitionedSharedEncodingAttr>(encoding);
 
-  // With a hint, derive the distribution from K = popcount(hint) instead
-  // of numWarps; verifier guarantees single-instruction emission (incl.
-  // partitioned encodings).  Inactive warps become HW no-ops via
-  // fillTDMDescriptor's free-variable-mask predication (XOR-anchored at i0).
-  int effectiveWarps = warpUsedHint ? llvm::popcount(*warpUsedHint) : numWarps;
+  // With a hint, derive the descriptor distribution from K = popcount(hint)
+  // instead of numWarps; verifier guarantees single-instruction emission
+  // (incl. partitioned encodings).
+  int effectiveWarps = getTDMEffectiveWarps(numWarps, warpUsedHint);
 
   auto [warpsPerCTA, numTDMInstructions] =
       distributeTDMWarpsAlignToPartition(blockShape, effectiveWarps, encoding);
@@ -1640,5 +1657,90 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
         b.select(combinedPred, b.add(localOffset, tileOffset), b.i64_val(0));
   }
   return offsets;
+}
+
+// ---------------------------------------------------------------------------
+// TDM fused copy emit.
+
+namespace {
+
+// Fill one member descriptor for the fused load emit.
+SmallVector<Value, 4>
+fillFusedTDMDescriptorMember(RewriterBase &rewriter, Location loc,
+                             const LLVMTypeConverter *typeConverter,
+                             const TDMFusedLoadMemberInfo &m, int numWarps,
+                             Value ctaId, uint32_t hint) {
+  int effectiveWarps = static_cast<int>(llvm::popcount(hint));
+  auto [warpsPerCTA, numTDMInstructions] =
+      ::mlir::LLVM::AMD::distributeTDMWarpsAlignToPartition(
+          m.shapePerCTA, effectiveWarps, m.sharedEncoding);
+  assert(numTDMInstructions == 1 &&
+         "verifier guarantees single-instruction emission for hinted ops");
+  (void)numTDMInstructions;
+
+  SmallVector<Value, 4> filled(m.desc.begin(), m.desc.end());
+  SmallVector<Value> offsets(m.copyOffsets.begin(), m.copyOffsets.end());
+  fillTDMDescriptor(rewriter, loc, typeConverter, m.elementType, m.shapePerCTA,
+                    numWarps, m.padInterval, m.padAmount, filled, offsets,
+                    m.dstPtrs, m.pred, m.multicastMask, /*barrierPtr=*/Value(),
+                    m.sharedLayout, ctaId, /*isStore=*/false, warpsPerCTA,
+                    hint);
+  return filled;
+}
+
+// Returns a wave-uniform i1 (all lanes agree, since it depends only on warpId):
+// true for the waves whose warp belongs to `hint`, i.e. bit `warpId` is set.
+// Drives the per-member `select` that picks this wave's descriptor.
+Value buildTDMFusedMemberActivePredicate(RewriterBase &rewriter, Location loc,
+                                         uint32_t hint) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto [_laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  Value bit = b.and_(b.lshr(b.i32_val(hint), warpId), b.i32_val(1));
+  return b.icmp_ne(bit, b.i32_val(0));
+}
+
+} // namespace
+
+// Emit one fused TDM load for a group.  Store fusion is not supported.
+void emitTDMLoadFused(RewriterBase &rewriter, Location loc,
+                      const LLVMTypeConverter *typeConverter,
+                      ArrayRef<TDMFusedLoadMemberInfo> members, int numWarps,
+                      Value ctaId, int32_t auxBits,
+                      ArrayRef<uint32_t> memberHints) {
+  size_t N = members.size();
+  assert(N >= 2 && N <= 4 && members.size() == N && memberHints.size() == N &&
+         "fused TDM load invariants");
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  // The fused op verifier guarantees a uniform rank across members, so every
+  // member shares this descriptor group count (2 for rank <= 2, otherwise 4).
+  size_t numGroups = members.front().desc.size();
+  ArrayRef<uint32_t> hintPerMember = memberHints;
+
+  SmallVector<SmallVector<Value, 4>, 4> filledPerMember(N);
+  for (size_t i = 0; i < N; ++i)
+    filledPerMember[i] =
+        fillFusedTDMDescriptorMember(rewriter, loc, typeConverter, members[i],
+                                     numWarps, ctaId, hintPerMember[i]);
+
+  // Build predicates for all but the last member; the last is the default.
+  SmallVector<Value, 4> memberActive(N - 1);
+  for (size_t s = 0; s + 1 < N; ++s)
+    memberActive[s] =
+        buildTDMFusedMemberActivePredicate(rewriter, loc, hintPerMember[s]);
+
+  // Pick the descriptor for this wave with a scalar select chain.
+  // FIXME(perf): descriptor groups that are loop-invariant across members
+  // (e.g. identical across the group) produce redundant selects; hoist those
+  // out of the per-group loop instead of rebuilding a full chain for each.
+  SmallVector<Value, 6> args(numGroups);
+  for (size_t g = 0; g < numGroups; ++g) {
+    Value acc = filledPerMember[N - 1][g];
+    for (size_t s = N - 1; s-- > 0;)
+      acc = b.select(memberActive[s], filledPerMember[s][g], acc);
+    args[g] = acc;
+  }
+
+  emitTDMRawIntrinsic(rewriter, loc, args, /*isLoad=*/true, auxBits);
 }
 } // namespace mlir::LLVM::AMD

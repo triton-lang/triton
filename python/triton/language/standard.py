@@ -440,23 +440,28 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
     log_n: core.constexpr = _log2(x.shape[_dim])
     log_k: core.constexpr = log_n if k is None else _log2(k)
 
-    n_dims: core.constexpr = _log2(x.numel)
+    if log_k == 0:
+        # k == 1 (or a length-1 dim): the general path below would reduce the
+        # hypercube to a 0-d scalar, so emit a plain reduce instead.
+        x = max(x, axis=_dim, keep_dims=True) if descending else min(x, axis=_dim, keep_dims=True)
+    else:
+        n_dims: core.constexpr = _log2(x.numel)
 
-    # reshape to hypercube:
-    h = core.reshape(x, [2] * n_dims if n_dims else [1])
+        # reshape to hypercube:
+        h = core.reshape(x, [2] * n_dims if n_dims else [1])
 
-    # run first log_k bitonic sort iterations:
-    for i in core.static_range(1, log_k + 1):
-        h = _bitonic_merge_hypercube(h, i, 2 if i < log_n else descending)
+        # run first log_k bitonic sort iterations:
+        for i in core.static_range(1, log_k + 1):
+            h = _bitonic_merge_hypercube(h, i, 2 if i < log_n else descending)
 
-    # select top k elements using bitonic top-k
-    # https://www.doc.ic.ac.uk/~hlgr/pdfs/MassivelyParallelTopK.pdf
-    for i in core.static_range(log_k + 1, log_n + 1):
-        h = max(h, axis=(_log2(h.numel) - 1 - log_k)) if descending else min(h, axis=(_log2(h.numel) - 1 - log_k))
-        h = _bitonic_merge_hypercube(h, log_k, 2 if i < log_n else descending)
+        # select top k elements using bitonic top-k
+        # https://www.doc.ic.ac.uk/~hlgr/pdfs/MassivelyParallelTopK.pdf
+        for i in core.static_range(log_k + 1, log_n + 1):
+            h = max(h, axis=(_log2(h.numel) - 1 - log_k)) if descending else min(h, axis=(_log2(h.numel) - 1 - log_k))
+            h = _bitonic_merge_hypercube(h, log_k, 2 if i < log_n else descending)
 
-    # reshape back:
-    x = core.reshape(h, x.shape[:-1] + [2**log_k])
+        # reshape back:
+        x = core.reshape(h, x.shape[:-1] + [2**log_k])
     return x
 
 
@@ -571,8 +576,10 @@ def squeeze(x, dim: core.constexpr):
     :param dim: the index of the dimension to remove
     :type dim: int
     """
-    core.static_assert(x.shape[dim] == 1)
-    return x.reshape(x.shape[:dim] + x.shape[dim + 1:])
+    core.static_assert(-len(x.shape) <= dim and dim < len(x.shape))
+    _dim: core.constexpr = dim + len(x.shape) if dim < 0 else dim
+    core.static_assert(x.shape[_dim] == 1)
+    return x.reshape(x.shape[:_dim] + x.shape[_dim + 1:])
 
 
 @jit
@@ -587,4 +594,7 @@ def unsqueeze(x, dim: core.constexpr):
     :param dim: the index at which the new dimension is inserted
     :type dim: int
     """
-    return x.reshape(x.shape[:dim] + (1, ) + x.shape[dim:])
+    ndim: core.constexpr = len(x.shape) + 1
+    core.static_assert(-ndim <= dim and dim < ndim)
+    _dim: core.constexpr = dim + ndim if dim < 0 else dim
+    return x.reshape(x.shape[:_dim] + (1, ) + x.shape[_dim:])

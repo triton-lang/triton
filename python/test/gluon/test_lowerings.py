@@ -214,12 +214,14 @@ def test_atomic_poll_two_ctas(warp_specialize, device):
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
-def test_cluster_barrier_in_warp_specialize(device):
+@pytest.mark.parametrize("num_ctas", [2, 4])
+def test_cluster_barrier_in_warp_specialize(device, num_ctas):
     BLOCK = ttgl.constexpr(128)
 
     @gluon.jit
     def partition(out, offset: ttgl.constexpr):
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[0]])
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0],
+                                                    cga_layout=_make_cga_broadcast(1, ttgl.num_ctas()))
         offs = offset + ttgl.arange(0, BLOCK, layout=layout)
         ttgl.barrier(cluster=True)
         ttgl.store(out + offs, offs)
@@ -232,10 +234,10 @@ def test_cluster_barrier_in_warp_specialize(device):
         ], [4])
 
     out = torch.empty((2 * BLOCK.value, ), device=device, dtype=torch.int32)
-    compiled = kernel[(1, )](out, num_warps=4, num_ctas=2)
+    compiled = kernel[(1, )](out, num_warps=4, num_ctas=num_ctas)
 
     ptx = compiled.asm["ptx"]
-    assert ptx.count("mbarrier.arrive.release.cluster.shared::cluster.b64") >= 2
+    assert ptx.count("mbarrier.arrive.release.cluster.shared::cluster") == 2
     assert "mapa" not in ptx
     torch.testing.assert_close(out, torch.arange(2 * BLOCK.value, device=device, dtype=torch.int32))
 
@@ -592,7 +594,9 @@ def _make_shared_layout(kind, shape):
         inner = ttgl.SwizzledSharedLayout(vec=4, per_phase=2, max_phase=4, order=order)
         return PartitionedSharedLayout(num_partitions=2, num_groups=1, partition_dim=0, partition_layout=inner)
     if kind == "partitioned_padded":
-        inner = ttgl.PaddedSharedLayout.with_identity_for(interval_padding_pairs=[[16, 4]], shape=list(shape),
+        piece_shape = list(shape)
+        piece_shape[0] //= 2
+        inner = ttgl.PaddedSharedLayout.with_identity_for(interval_padding_pairs=[[16, 4]], shape=piece_shape,
                                                           order=order)
         return PartitionedSharedLayout(num_partitions=2, num_groups=1, partition_dim=0, partition_layout=inner)
     raise ValueError(f"Unknown shared layout kind: {kind}")
@@ -2078,9 +2082,11 @@ def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, shared_layout_cfg, dev
             padded_bytes = ((M * N * (pad_interval + pad_amount)) // pad_interval) * elem_size
             if padded_bytes >= get_hip_lds_size():
                 pytest.skip(f"Partitioned-padded allocation ({padded_bytes} B) exceeds LDS ({get_hip_lds_size()} B)")
+            piece_shape = [M, N]
+            piece_shape[partition_dim] //= num_partitions * num_groups
             inner_layout = ttgl.PaddedSharedLayout.with_identity_for(
                 interval_padding_pairs=[[pad_interval, pad_amount]],
-                shape=[M, N],
+                shape=piece_shape,
                 order=[1, 0],
             )
         shared_layout = PartitionedSharedLayout(
@@ -2240,9 +2246,11 @@ def test_partitioned_shared_layout(M, K, num_partitions, num_groups, partition_d
             order=[1, 0],
         )
     elif partition_layout_type == "padded":
+        piece_shape = [M, K]
+        piece_shape[partition_dim] //= num_partitions * num_groups
         inner_layout = ttgl.PaddedSharedLayout.with_identity_for(
             interval_padding_pairs=[[16, 4]],
-            shape=[M, K],
+            shape=piece_shape,
             order=[1, 0],
         )
     else:

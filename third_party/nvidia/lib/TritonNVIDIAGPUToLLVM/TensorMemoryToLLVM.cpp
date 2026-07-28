@@ -670,18 +670,18 @@ static LogicalResult copySharedToTmem(ConversionPatternRewriter &rewriter,
   auto cvt = tmemLl.invertAndCompose(shmemLl);
 
   auto bitwidth = srcTy.getElementType().getIntOrFloatBitWidth();
-  uint32_t holeMask = 0;
+  uint64_t holeMask = 0;
   // Zero col bases are physical holes. Compact them for the SMEM descriptor,
   // then skip the corresponding physical TMEM ranges when issuing copies.
   if (isa<TensorMemoryEncodingAttr>(dstTy.getEncoding())) {
-    for (auto [i, basis] : llvm::enumerate(tmemLl.getBases().lookup(kCol))) {
-      if (llvm::all_of(basis, [](int32_t component) { return component == 0; }))
-        holeMask |= uint32_t{1} << i;
-    }
+    unsigned colBits = tmemLl.getInDimSizeLog2(kCol);
+    auto outDims = llvm::to_vector(tmemLl.getOutDimNames());
+    holeMask = ~getInputBasisMask(tmemLl, kCol, outDims) &
+               llvm::maskTrailingOnes<uint64_t>(colBits);
   }
   auto compact = holeMask ? cvt.removeZeroBasesAlongDim(kCol) : cvt;
   unsigned contiguousCols = holeMask
-                                ? uint32_t{1} << llvm::countr_zero(holeMask)
+                                ? uint64_t{1} << llvm::countr_zero(holeMask)
                                 : compact.getInDimSize(kCol);
   auto atom = getTMemCopyAtom(
       compact.resizeInDim(

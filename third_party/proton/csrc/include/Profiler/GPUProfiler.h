@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <stdexcept>
 #include <thread>
@@ -41,6 +42,9 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
                              std::string &periodicFlushingFormat,
                              const std::vector<std::string> &modeAndOptions,
                              const char *profilerName);
+
+int64_t
+computeTimestampOffsetNs(const std::function<void(uint64_t *)> &getTimestamp);
 } // namespace detail
 
 // Singleton<ConcreteProfilerT>: Each concrete GPU profiler, e.g.,
@@ -48,6 +52,7 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
 template <typename ConcreteProfilerT>
 class GPUProfiler : public Profiler,
                     public OpInterface,
+                    public TimestampAlignmentInterface,
                     public Singleton<ConcreteProfilerT> {
 public:
   GPUProfiler() = default;

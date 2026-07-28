@@ -74,3 +74,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @async_copy_oversubscribed_warp_gfx950(%arg0: tensor<16x2x!tt.ptr<f32>, #blocked>) {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<16x2xf32, #shared, #smem, mutable>
+    // A 16x2 tile has fewer elements than lanes in a gfx950 warp, so direct-to-LDS cannot produce coalesced warp writes.
+    // expected-error@+1 {{failed to legalize operation 'ttg.async_copy_global_to_local' that was explicitly marked illegal}}
+    %1 = ttg.async_copy_global_to_local %arg0, %0 : tensor<16x2x!tt.ptr<f32>, #blocked> -> <16x2xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}

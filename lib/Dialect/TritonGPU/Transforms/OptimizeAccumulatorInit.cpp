@@ -69,6 +69,29 @@ bool dotSupportsAccInitFlag(Operation *op) {
   return false;
 }
 
+// Return true if the allocation's initial contents reach the MMA unchanged.
+// Any intervening write invalidates useD=false.
+bool accumulatorInitReachesMMA(triton::nvidia_gpu::MMAv5OpInterface mma) {
+  auto alloc =
+      mma.getAccumulator().getDefiningOp<triton::nvidia_gpu::TMEMAllocOp>();
+  if (!alloc)
+    return false;
+  Value token = mma.getAccDep();
+  Value allocToken = alloc.getToken();
+  if (!token || !allocToken)
+    return false;
+
+  while (token != allocToken) {
+    // TMEM loads advance the token without modifying the accumulator.
+    auto load = token.getDefiningOp<triton::nvidia_gpu::TMEMLoadOp>();
+    if (!load || token != load.getToken() ||
+        load.getSrc() != alloc.getResult() || !load.getDep())
+      return false;
+    token = load.getDep();
+  }
+  return true;
+}
+
 std::pair<Value, Operation *> getAccumulatorUseAndDef(Operation *op) {
   assert(isa<DotOpInterface>(op) &&
          "Expected an op which implements a DotOpInterface");
@@ -208,6 +231,11 @@ public:
       // Find the accumulator
       auto [accUse, accDef] = getAccumulatorUseAndDef(mmaOp);
       if (!accUse || !accDef) {
+        continue;
+      }
+      if (auto tc05MmaOp =
+              dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(mmaOp);
+          tc05MmaOp && !accumulatorInitReachesMMA(tc05MmaOp)) {
         continue;
       }
       if (isConstantZeroTensor(accUse)) {

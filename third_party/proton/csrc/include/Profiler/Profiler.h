@@ -17,6 +17,12 @@
 
 namespace proton {
 
+class TimestampAlignmentInterface {
+public:
+  virtual ~TimestampAlignmentInterface() = default;
+  virtual int64_t getTimestampOffsetNs() const = 0;
+};
+
 /// A profiler contains utilities provided by the profiler library to
 /// collect and analyze performance data.
 class Profiler : public MetricInterface {

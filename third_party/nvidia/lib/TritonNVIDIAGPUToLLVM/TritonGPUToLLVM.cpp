@@ -113,8 +113,8 @@ struct ConvertTritonGPUToLLVM
     if (enableConcurrencySanitizer) {
       auto hooks = mlir::triton::instrument::createConSanHooks("nvidia");
       assert(hooks && "no ConSan hooks registered for nvidia");
-      if (failed(mlir::triton::instrument::runConcurrencySanitizer(
-              mod, hooks.get())))
+      if (failed(
+              mlir::triton::instrument::runConcurrencySanitizer(mod, *hooks)))
         return signalPassFailure();
       mlir::PassManager cleanupPm(context);
       cleanupPm.addPass(mlir::triton::gluon::createGluonCanonicalize());
@@ -206,8 +206,8 @@ struct ConvertTritonGPUToLLVM
         typeConverter, patterns, benefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, benefit);
-    mlir::triton::NVIDIA::populateTCGen5MMAOpToLLVMPattern(typeConverter,
-                                                           patterns, benefit);
+    mlir::triton::NVIDIA::populateTCGen5MMAOpToLLVMPattern(
+        typeConverter, patterns, benefit, targetInfo);
     mlir::triton::NVIDIA::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
                                                         benefit);
     mlir::triton::populateInstrumentationToLLVMPatterns(typeConverter, patterns,

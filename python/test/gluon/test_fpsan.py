@@ -2022,6 +2022,66 @@ def test_dot_explicit_and_implicit_upcasts_match(device, src_type, mid_type, m, 
     _assert_payload_equal(explicit, explicit_expected)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA dot acceleration")
+@pytest.mark.parametrize("homomorphic_casts", [
+    pytest.param(False, id="non-homomorphic", marks=pytest.mark.xfail(
+        strict=True, reason="FPSan downcasts are non-homomorphic by default")),
+    pytest.param(True, id="homomorphic"),
+])
+def test_bf16_dot_sharding(device, homomorphic_casts, fresh_knobs):
+    _require_cuda_backend(device)
+    if torch.cuda.get_device_capability()[0] < 8:
+        pytest.skip("dot acceleration requires Ampere or newer")
+
+    M = N = K = 64
+    HALF = K // 2
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @triton.jit
+    def dot(a, b, out, K_START: tl.constexpr, BLOCK_K: tl.constexpr):
+        rows = tl.arange(0, 64)[:, None]
+        cols = tl.arange(0, 64)[None, :]
+        ka = tl.arange(0, BLOCK_K)[None, :] + K_START
+        kb = tl.arange(0, BLOCK_K)[:, None] + K_START
+        av = tl.load(a + rows * 64 + ka)
+        bv = tl.load(b + kb * 64 + cols)
+        tl.store(out + rows * 64 + cols, tl.dot(av, bv).to(tl.bfloat16))
+
+    @triton.jit
+    def add(left, right, out):
+        offsets = tl.arange(0, 4096)
+        tl.store(out + offsets, tl.load(left + offsets) + tl.load(right + offsets))
+
+    # The two non-zero products are 0x00ff * 0x0101 = 0xffff and 1.
+    # The whole dot therefore narrows 0x00010000 once, while sharding narrows
+    # 0xffff and 1 separately and adds them in the BF16 payload ring.
+    a_payload = np.zeros((M, K), dtype=np.uint64)
+    b_payload = np.zeros((K, N), dtype=np.uint64)
+    a_payload[:, 0] = 0x00FF
+    b_payload[0, :] = 0x0101
+    a_payload[:, HALF] = 1
+    b_payload[HALF, :] = 1
+    a_bits = _unmix_payload_to_float_bits(a_payload, "bf16")
+    b_bits = _unmix_payload_to_float_bits(b_payload, "bf16")
+    _, aw = _as_float_bits_tensor(a_bits, "bf16")
+    _, bw = _as_float_bits_tensor(b_bits, "bf16")
+    whole, wholew = _as_float_bits_tensor(np.empty((M, N), dtype=np.int16), "bf16")
+    left, leftw = _as_float_bits_tensor(np.empty((M, N), dtype=np.int16), "bf16")
+    right, rightw = _as_float_bits_tensor(np.empty((M, N), dtype=np.int16), "bf16")
+    split, splitw = _as_float_bits_tensor(np.empty((M, N), dtype=np.int16), "bf16")
+
+    # Ensure toggling the knob cannot reuse an in-process cached kernel.
+    fresh_knobs.compilation.fpsan_homomorphic_casts = False
+    dot[(1, )](aw, bw, wholew, K_START=0, BLOCK_K=K, num_warps=4)
+    fresh_knobs.compilation.fpsan_homomorphic_casts = homomorphic_casts
+
+    dot[(1, )](aw, bw, wholew, K_START=0, BLOCK_K=K, num_warps=4)
+    dot[(1, )](aw, bw, leftw, K_START=0, BLOCK_K=HALF, num_warps=4)
+    dot[(1, )](aw, bw, rightw, K_START=HALF, BLOCK_K=HALF, num_warps=4)
+    add[(1, )](leftw, rightw, splitw, num_warps=4)
+    torch.testing.assert_close(whole, split, atol=0, rtol=0)
+
+
 @pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA MMA v2")
 @pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k", "instr_m"), _MMA_V2_CASES)
 def test_mma_v2(device, type_a, type_b, acc_type, m, n, k, instr_m, fresh_knobs):

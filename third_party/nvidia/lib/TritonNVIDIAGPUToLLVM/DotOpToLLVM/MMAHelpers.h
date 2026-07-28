@@ -153,7 +153,7 @@ public:
     if (failed(desc))
       return failure();
 
-    Value baseb128 = b.zext(i64_ty, b.and_(baseSrcb128, b.i32_val(0x3FFF)));
+    Value baseb128 = b.zext(i64_ty, b.and_(baseSrcb128, b.i32_val(0x7FFF)));
     return DotOpMmaSmemLoader{*desc, baseb128, ll};
   }
 

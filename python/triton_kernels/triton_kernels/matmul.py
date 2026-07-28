@@ -539,7 +539,14 @@ def matmul(a, b, bias,
     c_has_tma = (
         opt_flags.is_persistent and (scatter_indx is None or has_scatter_tma)
         and is_tma_compliant(c)
-        and (c_acc_in is None or c_acc_is_c)
+        and (
+            # On Blackwell, c_acc_in makes the persistent kernel issue one
+            # output descriptor load per epilogue subtile before the descriptor
+            # store. For large dW accumulation this serializes the epilogue; the
+            # pointer load/store path is faster while retaining TMA for A/B.
+            c_acc_in is None
+            or (c_acc_is_c and not target_info.cuda_capability_geq(10, 0))
+        )
         and fused_comm is None
         and (
             precision_config.c_value_pack_factor == 1
