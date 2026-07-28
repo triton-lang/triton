@@ -1184,3 +1184,254 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %first, %second, %third, %opaque : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<256xf32, #flat>
   }
 }
+
+// -----
+
+// Keep unsupported operations and protected control-flow protocols local.
+// A legal gather, concatenation, histogram, or unusual while shape must not
+// force unrelated components back to legacy layout assignment.
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#cat_source = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#cat_result = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // BASELINE-LABEL: @opaque_gather_independent_fanout
+  // BASELINE-COUNT-1: ttg.convert_layout
+  // BASELINE: tt.gather
+  // BASELINE-COUNT-3: ttg.convert_layout
+  // BASELINE-NOT: ttg.convert_layout
+  // BASELINE: tt.return
+  // OPTIMIZED-LABEL: @opaque_gather_independent_fanout
+  // OPTIMIZED: tt.gather
+  // OPTIMIZED-COUNT-1: ttg.convert_layout
+  // OPTIMIZED-NOT: ttg.convert_layout
+  // OPTIMIZED: tt.return
+  tt.func public @opaque_gather_independent_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>, %indices: tensor<16x16xi32, #target>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %opaque = tt.gather %target[%indices] {axis = 1 : i32} : (tensor<16x16xf32, #target>, tensor<16x16xi32, #target>) -> tensor<16x16xf32, #target>
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %opaque : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
+  }
+
+  // BASELINE-LABEL: @opaque_efficient_gather_independent_fanout
+  // BASELINE-COUNT-1: ttg.convert_layout
+  // BASELINE: tt.gather {{.*}}efficient_layout
+  // BASELINE-COUNT-3: ttg.convert_layout
+  // BASELINE-NOT: ttg.convert_layout
+  // BASELINE: tt.return
+  // OPTIMIZED-LABEL: @opaque_efficient_gather_independent_fanout
+  // OPTIMIZED: tt.gather {{.*}}efficient_layout
+  // OPTIMIZED-COUNT-1: ttg.convert_layout
+  // OPTIMIZED-NOT: ttg.convert_layout
+  // OPTIMIZED: tt.return
+  tt.func public @opaque_efficient_gather_independent_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>, %indices: tensor<16x16xi32, #target>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %opaque = tt.gather %target[%indices] {axis = 1 : i32, efficient_layout} : (tensor<16x16xf32, #target>, tensor<16x16xi32, #target>) -> tensor<16x16xf32, #target>
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %opaque : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
+  }
+
+  // BASELINE-LABEL: @opaque_scan_independent_fanout
+  // BASELINE-COUNT-1: ttg.convert_layout
+  // BASELINE: tt.scan
+  // BASELINE-COUNT-3: ttg.convert_layout
+  // BASELINE-NOT: ttg.convert_layout
+  // BASELINE: tt.return
+  // OPTIMIZED-LABEL: @opaque_scan_independent_fanout
+  // OPTIMIZED: tt.scan
+  // OPTIMIZED-COUNT-1: ttg.convert_layout
+  // OPTIMIZED-NOT: ttg.convert_layout
+  // OPTIMIZED: tt.return
+  tt.func public @opaque_scan_independent_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %opaque = "tt.scan"(%target) <{axis = 1 : i32, reverse = false}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %sum = arith.addf %lhs, %rhs : f32
+      tt.scan.return %sum : f32
+    }) : (tensor<16x16xf32, #target>) -> tensor<16x16xf32, #target>
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %opaque : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
+  }
+
+  // BASELINE-LABEL: @opaque_cat_independent_fanout
+  // BASELINE-COUNT-1: ttg.convert_layout
+  // BASELINE: tt.cat
+  // BASELINE-COUNT-3: ttg.convert_layout
+  // BASELINE-NOT: ttg.convert_layout
+  // BASELINE: tt.return
+  // OPTIMIZED-LABEL: @opaque_cat_independent_fanout
+  // OPTIMIZED: tt.cat
+  // OPTIMIZED-COUNT-1: ttg.convert_layout
+  // OPTIMIZED-NOT: ttg.convert_layout
+  // OPTIMIZED: tt.return
+  tt.func public @opaque_cat_independent_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>, %cat_input: tensor<16xf32, #cat_source>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<32xf32, #cat_result>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %opaque = tt.cat %cat_input, %cat_input : tensor<16xf32, #cat_source> -> tensor<32xf32, #cat_result>
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %opaque : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<32xf32, #cat_result>
+  }
+
+  // BASELINE-LABEL: @opaque_histogram_independent_fanout
+  // BASELINE-COUNT-1: ttg.convert_layout
+  // BASELINE: tt.histogram
+  // BASELINE-COUNT-3: ttg.convert_layout
+  // BASELINE-NOT: ttg.convert_layout
+  // BASELINE: tt.return
+  // OPTIMIZED-LABEL: @opaque_histogram_independent_fanout
+  // OPTIMIZED: tt.histogram
+  // OPTIMIZED-COUNT-1: ttg.convert_layout
+  // OPTIMIZED-NOT: ttg.convert_layout
+  // OPTIMIZED: tt.return
+  tt.func public @opaque_histogram_independent_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>, %indices: tensor<128xi32, #cat_source>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16xi32, #cat_source>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %opaque = tt.histogram %indices : tensor<128xi32, #cat_source> -> tensor<16xi32, #cat_source>
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %opaque : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16xi32, #cat_source>
+  }
+
+  // BASELINE-LABEL: @opaque_gather_loop_independent_fanout
+  // BASELINE-COUNT-1: ttg.convert_layout
+  // BASELINE: tt.gather
+  // BASELINE-COUNT-3: ttg.convert_layout
+  // BASELINE-NOT: ttg.convert_layout
+  // BASELINE: tt.return
+  // OPTIMIZED-LABEL: @opaque_gather_loop_independent_fanout
+  // OPTIMIZED: tt.gather
+  // OPTIMIZED-COUNT-1: ttg.convert_layout
+  // OPTIMIZED-NOT: ttg.convert_layout
+  // OPTIMIZED: tt.return
+  tt.func public @opaque_gather_loop_independent_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>, %indices: tensor<16x16xi32, #target>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %opaque = scf.for %iv = %zero to %four step %one iter_args(%acc = %target) -> (tensor<16x16xf32, #target>) {
+      %gathered = tt.gather %acc[%indices] {axis = 1 : i32, efficient_layout} : (tensor<16x16xf32, #target>, tensor<16x16xi32, #target>) -> tensor<16x16xf32, #target>
+      scf.yield %gathered : tensor<16x16xf32, #target>
+    }
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %opaque : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
+  }
+
+  // BASELINE-LABEL: @opaque_multi_scan_independent_fanout
+  // BASELINE-COUNT-1: ttg.convert_layout
+  // BASELINE: tt.scan
+  // BASELINE-COUNT-3: ttg.convert_layout
+  // BASELINE-NOT: ttg.convert_layout
+  // BASELINE: tt.return
+  // OPTIMIZED-LABEL: @opaque_multi_scan_independent_fanout
+  // OPTIMIZED: tt.scan
+  // OPTIMIZED-COUNT-1: ttg.convert_layout
+  // OPTIMIZED-NOT: ttg.convert_layout
+  // OPTIMIZED: tt.return
+  tt.func public @opaque_multi_scan_independent_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %opaque:2 = "tt.scan"(%target, %target) <{axis = 1 : i32, reverse = false}> ({
+    ^bb0(%lhs0: f32, %lhs1: f32, %rhs0: f32, %rhs1: f32):
+      %sum0 = arith.addf %lhs0, %rhs0 : f32
+      %sum1 = arith.addf %lhs1, %rhs1 : f32
+      tt.scan.return %sum0, %sum1 : f32, f32
+    }) : (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>)
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %opaque#0, %opaque#1 : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
+  }
+
+  // A before-region tensor without a corresponding result is valid SCF.
+  // Both layout passes must preserve its loop contract without indexing past
+  // the while results or disabling the independent global fanout.
+  // BASELINE-LABEL: @opaque_while_extra_tensor_independent_fanout
+  // BASELINE-COUNT-1: ttg.convert_layout
+  // BASELINE: scf.while
+  // BASELINE-COUNT-3: ttg.convert_layout
+  // BASELINE-NOT: ttg.convert_layout
+  // BASELINE: tt.return
+  // OPTIMIZED-LABEL: @opaque_while_extra_tensor_independent_fanout
+  // OPTIMIZED: scf.while
+  // OPTIMIZED-COUNT-1: ttg.convert_layout
+  // OPTIMIZED-NOT: ttg.convert_layout
+  // OPTIMIZED: tt.return
+  tt.func public @opaque_while_extra_tensor_independent_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>, %initial: tensor<16x16xf32, #target>, %condition: i1) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %opaque = scf.while (%acc = %initial, %extra = %target) : (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>) -> tensor<16x16xf32, #target> {
+      scf.condition(%condition) %acc : tensor<16x16xf32, #target>
+    } do {
+    ^bb0(%acc: tensor<16x16xf32, #target>):
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next, %target : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
+    }
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %opaque : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
+  }
+
+}

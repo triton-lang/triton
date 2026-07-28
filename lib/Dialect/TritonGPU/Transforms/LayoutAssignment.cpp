@@ -268,15 +268,39 @@ static bool isFixedLayoutBoundary(Operation *op) {
     if (reshape.getAllowReorder() || reshape.getEfficientLayout())
       return true;
 
-  return isa<ReturnOp, LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp,
-             DotOpInterface, DescriptorOpInterface,
-             triton::nvidia_gpu::TMEMLoadOp>(op) ||
-         !isMemoryEffectFree(op);
+  // Gather has distinct source and index encodings. Preserve both contracts
+  // instead of treating its result layout as a requirement on every operand.
+  if (isa<ReturnOp, LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp, GatherOp,
+          DotOpInterface, DescriptorOpInterface,
+          triton::nvidia_gpu::TMEMLoadOp>(op) ||
+      !isMemoryEffectFree(op))
+    return true;
+
+  if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
+      op->hasTrait<OpTrait::Elementwise>() ||
+      isa<ConvertLayoutOp, arith::ConstantOp, MakeRangeOp, SplatOp,
+          ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp, ReduceOp>(op))
+    return false;
+
+  // Preserve unfamiliar tensor producers locally. Operations such as
+  // concatenate and histogram can still participate when their existing
+  // result layout is explicitly supported by the layout legality interface.
+  for (Value result : op->getResults())
+    if (auto tensorType = dyn_cast<RankedTensorType>(result.getType()))
+      if (!canUseResultEncoding(op, tensorType.getEncoding()))
+        return true;
+  return false;
 }
 
-static bool isHardwareProtocolLoop(Operation *op) {
+static bool isProtectedLayoutLoop(Operation *op) {
   if (!isa<scf::ForOp, scf::WhileOp>(op))
     return false;
+
+  if (auto whileOp = dyn_cast<scf::WhileOp>(op))
+    for (auto [index, argument] : llvm::enumerate(whileOp.getBeforeArguments()))
+      if (index >= whileOp.getNumResults() &&
+          isa<RankedTensorType>(argument.getType()))
+        return true;
 
   WalkResult body = op->walk([&](Operation *nested) {
     if (nested != op && isFixedLayoutBoundary(nested) &&
@@ -287,72 +311,13 @@ static bool isHardwareProtocolLoop(Operation *op) {
   return body.wasInterrupted();
 }
 
-static bool hasHardwareProtocolLoop(FuncOp funcOp) {
+static bool hasProtectedLayoutLoop(FuncOp funcOp) {
   WalkResult result = funcOp.walk([&](Operation *op) {
-    if (isHardwareProtocolLoop(op))
+    if (isProtectedLayoutLoop(op))
       return WalkResult::interrupt();
     return WalkResult::advance();
   });
   return result.wasInterrupted();
-}
-
-static bool supportsGlobalLayoutAssignment(FuncOp funcOp) {
-  WalkResult result = funcOp.walk([&](Operation *op) {
-    if (isa<scf::ForOp, scf::WhileOp>(op)) {
-      if (auto whileOp = dyn_cast<scf::WhileOp>(op)) {
-        for (auto [index, argument] :
-             llvm::enumerate(whileOp.getBeforeArguments()))
-          if (isa<RankedTensorType>(argument.getType()) &&
-              index >= whileOp.getNumResults())
-            return WalkResult::interrupt();
-      }
-      return WalkResult::advance();
-    }
-
-    bool hasTensorResult = llvm::any_of(op->getResults(), [](Value result) {
-      return isa<RankedTensorType>(result.getType());
-    });
-    if (!hasTensorResult)
-      return WalkResult::advance();
-
-    // Exact-order reshapes remain in the costed graph. Permuting and efficient
-    // reshapes are fixed local boundaries; neither contract should prevent
-    // global assignment in unrelated components.
-    if (isa<ReshapeOp>(op))
-      return WalkResult::advance();
-    if (isa<ExpandDimsOp, TransOp>(op))
-      return WalkResult::advance();
-
-    // Conditional results have no loop-carried layout constraint. Their
-    // existing result and yield rewrites preserve both branch result types.
-    if (isa<scf::IfOp>(op))
-      return WalkResult::advance();
-
-    // Joins and splits share exact-order layout relations. Resolve both split
-    // results against the same inferred parent rather than independently.
-    if (isa<JoinOp, SplitOp>(op))
-      return WalkResult::advance();
-
-    // Every reduction result shares the same inferred source layout. Keep
-    // multi-result reductions in the graph as a single coupled component.
-    if (isa<ReduceOp>(op))
-      return WalkResult::advance();
-
-    // Hardware and effectful results keep their established encodings. Their
-    // presence must not disable global assignment for unrelated components.
-    if (isFixedLayoutBoundary(op))
-      return WalkResult::advance();
-
-    if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
-        op->hasTrait<OpTrait::Elementwise>() ||
-        isa<ConvertLayoutOp, arith::ConstantOp, MakeRangeOp, SplatOp, LoadOp,
-            DotOpInterface, DescriptorOpInterface,
-            triton::nvidia_gpu::TMEMLoadOp>(op))
-      return WalkResult::advance();
-
-    return WalkResult::interrupt();
-  });
-  return !result.wasInterrupted();
 }
 
 void LayoutPropagation::initAnchorLayout() {
@@ -372,14 +337,14 @@ void LayoutPropagation::initAnchorLayout() {
 
   if (strategy == LayoutAssignmentStrategy::Global) {
     funcOp.walk([&](Operation *op) {
-      if (!isHardwareProtocolLoop(op))
+      if (!isProtectedLayoutLoop(op))
         return;
 
-      // Tensor-core, tensor-memory, descriptor, atomic, and synchronization
-      // loops have jointly chosen layouts. Preserve the complete established
+      // Hardware, opaque-operation, and structurally constrained while loops
+      // have jointly chosen layouts. Preserve the complete established
       // protocol, including loop initializers, results, region arguments, and
-      // every tensor value produced inside the protected loop. Values in
-      // independent components remain available to global assignment.
+      // every tensor value produced inside the protected loop. Independent
+      // components remain available to global assignment.
       for (Value operand : op->getOperands())
         addAnchor(operand);
 
@@ -477,7 +442,8 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
       auto parent = yieldOp->getParentOp();
       SmallVector<Value> valuesToPropagate;
-      if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(parent))
+      if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(parent) &&
+          use.getOperandNumber() < parent->getNumResults())
         valuesToPropagate.push_back(parent->getResult(use.getOperandNumber()));
       if (auto forOp = dyn_cast<scf::ForOp>(parent))
         valuesToPropagate.push_back(
@@ -558,6 +524,10 @@ SmallVector<Value> LayoutPropagation::propagateToOperands(Value value,
     Operation *parent = blockArg.getOwner()->getParentOp();
     if (!isa<scf::ForOp, scf::WhileOp>(parent))
       continue;
+
+    if (auto whileOp = dyn_cast<scf::WhileOp>(parent))
+      if (blockArg.getArgNumber() >= whileOp.getNumResults())
+        continue;
 
     unsigned firstIterArg = isa<scf::ForOp>(parent) ? 1 : 0;
     if (blockArg.getArgNumber() < firstIterArg)
@@ -2407,16 +2377,11 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
   // Propagate fixed anchor layouts across complete functions and structured
   // control flow before resolving competing assignments.
   module.walk([&](FuncOp funcOp) {
-    LayoutAssignmentStrategy functionStrategy = strategy;
-    if (functionStrategy == LayoutAssignmentStrategy::Global &&
-        !supportsGlobalLayoutAssignment(funcOp))
-      functionStrategy = LayoutAssignmentStrategy::Legacy;
-
-    if (functionStrategy == LayoutAssignmentStrategy::Global &&
-        hasHardwareProtocolLoop(funcOp)) {
-      // Establish the same hardware-owned loop layouts as the legacy pass
-      // before freezing that protocol for global assignment. The second
-      // assignment can still optimize every independent component.
+    if (strategy == LayoutAssignmentStrategy::Global &&
+        hasProtectedLayoutLoop(funcOp)) {
+      // Establish the legacy layout for each hardware or opaque loop before
+      // freezing its complete protocol. Keep the rest of the function under
+      // global assignment instead of falling back wholesale.
       LayoutPropagation legacyPropagation(funcOp,
                                           LayoutAssignmentStrategy::Legacy);
       legacyPropagation.initAnchorLayout();
@@ -2425,7 +2390,7 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
       legacyPropagation.rewrite();
     }
 
-    LayoutPropagation propagation(funcOp, functionStrategy);
+    LayoutPropagation propagation(funcOp, strategy);
     propagation.initAnchorLayout();
     propagation.propagateLayout();
     propagation.resolveConflicts();
