@@ -93,8 +93,6 @@ struct RocprofilerRuntimeState {
   rocprofiler_context_id_t profilingContext{};
   rocprofiler_buffer_id_t kernelBuffer{};
   rocprofiler_callback_thread_t callbackThread{};
-  rocprofiler_client_finalize_t finalizeFunc = nullptr;
-  rocprofiler_client_id_t *clientId{nullptr};
   bool configured{false};
   bool codeObjectStarted{false};
   bool profilingStarted{false};
@@ -1084,9 +1082,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
 
 namespace {
 
-int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
+int protonToolInit(rocprofiler_client_finalize_t, void *toolData) {
   auto *state = static_cast<RocprofilerRuntimeState *>(toolData);
-  state->finalizeFunc = finiFunc;
 
   // Context 1: lightweight, always-active context for code object tracking.
   // Captures kernel_id -> name mappings as kernels are compiled.
@@ -1224,9 +1221,6 @@ void protonToolFini(void *toolData) {
     }
   }
   rocprofiler::flushBuffer<false>(state->kernelBuffer);
-  if (state->finalizeFunc && state->clientId) {
-    state->finalizeFunc(*state->clientId);
-  }
 }
 
 rocprofiler_tool_configure_result_t *
@@ -1234,7 +1228,6 @@ protonConfigure(uint32_t version, const char *runtimeVersion, uint32_t priority,
                 rocprofiler_client_id_t *id) {
   auto &state = getRuntimeState();
   id->name = "ProtonRocprofSDK";
-  state.clientId = id;
   static rocprofiler_tool_configure_result_t config{
       sizeof(rocprofiler_tool_configure_result_t), &protonToolInit,
       &protonToolFini, static_cast<void *>(&state)};
