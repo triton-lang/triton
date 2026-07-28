@@ -737,6 +737,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
             hook(*args, **kwargs)
 
         kernel_cache, kernel_key_cache, target, backend, binder = self.device_caches[device]
+        if target.backend in ("cuda", "hip") and knobs.compilation.optimize_layouts:
+            kwargs.setdefault("optimize_layouts", True)
         # specialization is list[tuple[str, Any]], where first element of tuple is
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)

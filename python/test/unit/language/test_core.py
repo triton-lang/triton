@@ -7278,3 +7278,108 @@ def test_libdevice_rint(dtype_str, device):
     rint_kernel[(triton.cdiv(numel, BLOCK_SIZE), )](res_out, x_tri, numel, BLOCK_SIZE)
     ref_out = np.rint(x_np)
     np.testing.assert_allclose(to_numpy(res_out), ref_out, rtol=0, atol=0, equal_nan=True)
+
+
+@triton.jit
+def _optimize_layouts_exact_order_join_chain_kernel(out_ptr, a0, a1, x0, x1, INDEXED: tl.constexpr):
+    va0 = tl.full((128, ), a0, tl.int32)
+    va1 = tl.full((128, ), a1, tl.int32)
+    vx0 = tl.full((128, ), x0, tl.int32)
+    vx1 = tl.full((128, ), x1, tl.int32)
+
+    if INDEXED:
+        source_indices = tl.arange(0, 128)
+        va0 = va0 ^ source_indices
+        va1 = va1 + source_indices
+        vx0 = vx0 ^ source_indices
+        vx1 = vx1 ^ source_indices
+
+    pair_a = tl.join(tl.reshape(va0, (1, 128)), tl.reshape(va1, (1, 128)))
+    pair_x0 = tl.join(tl.reshape(vx0, (1, 128)), tl.reshape(vx0, (1, 128)))
+    xor_256 = tl.reshape(pair_a, (256, )) ^ tl.reshape(pair_x0, (256, ))
+
+    chain_512 = tl.join(tl.reshape(pair_a, (1, 256)), tl.reshape(xor_256, (1, 256)))
+    pair_x1 = tl.join(tl.reshape(vx1, (1, 128)), tl.reshape(vx1, (1, 128)))
+    repeat_x1 = tl.join(tl.reshape(pair_x1, (1, 256)), tl.reshape(pair_x1, (1, 256)))
+    xor_512 = tl.reshape(chain_512, (512, )) ^ tl.reshape(repeat_x1, (512, ))
+
+    chain_1024 = tl.join(tl.reshape(chain_512, (1, 512)), tl.reshape(xor_512, (1, 512)))
+    repeat_a = tl.join(tl.reshape(va0, (1, 128)), tl.reshape(va0, (1, 128)))
+    repeat_a = tl.join(tl.reshape(repeat_a, (1, 256)), tl.reshape(repeat_a, (1, 256)))
+    repeat_a = tl.join(tl.reshape(repeat_a, (1, 512)), tl.reshape(repeat_a, (1, 512)))
+    xor_1024 = tl.reshape(chain_1024, (1024, )) ^ tl.reshape(repeat_a, (1024, ))
+
+    result = tl.join(tl.reshape(chain_1024, (1, 1024)), tl.reshape(xor_1024, (1, 1024)))
+    offsets = tl.program_id(0) * 2048 + tl.arange(0, 2048)
+    tl.store(out_ptr + offsets, tl.reshape(result, (2048, )))
+
+
+@pytest.mark.parametrize("optimize_layouts", [False, True])
+@pytest.mark.parametrize("indexed", [False, True])
+@pytest.mark.parametrize(
+    "values",
+    [
+        (17, 23, 41, 73),
+        (-17, 23, -41, 73),
+        (0, -1, 0x13579BDF, -0x13579BDF),
+        (0x7FFFFFFF, -0x7FFFFFFF, 0x12345678, -0x12345678),
+    ],
+)
+def test_optimize_layouts_exact_order_join_chain(device, optimize_layouts, indexed, values):
+    check_cuda_or_hip(device)
+
+    result = torch.empty((2048, ), device=device, dtype=torch.int32)
+    compiled = _optimize_layouts_exact_order_join_chain_kernel[(1, )](result, *values, INDEXED=indexed, num_warps=4,
+                                                                      optimize_layouts=optimize_layouts)
+
+    indices = torch.arange(2048, device=device, dtype=torch.int32)
+    source_indices = indices >> 4
+    va0 = torch.full_like(indices, values[0])
+    va1 = torch.full_like(indices, values[1])
+    vx0 = torch.full_like(indices, values[2])
+    vx1 = torch.full_like(indices, values[3])
+    if indexed:
+        va0 = va0 ^ source_indices
+        va1 = va1 + source_indices
+        vx0 = vx0 ^ source_indices
+        vx1 = vx1 ^ source_indices
+
+    a = torch.where((indices & 8) != 0, va1, va0)
+    first = a ^ vx0
+    second = torch.where((indices & 4) != 0, first, a)
+    third = torch.where((indices & 2) != 0, second ^ vx1, second)
+    expected = torch.where((indices & 1) != 0, third ^ va0, third)
+
+    torch.testing.assert_close(result, expected, rtol=0, atol=0)
+    assert compiled.metadata.optimize_layouts is optimize_layouts
+    if optimize_layouts:
+        assert "ttg.convert_layout" not in compiled.asm["ttgir"]
+
+
+def test_optimize_layouts_knob_selects_distinct_jit_kernel(device):
+    check_cuda_or_hip(device)
+    values = (17, 23, 41, 73)
+    baseline_output = torch.empty((2048, ), device=device, dtype=torch.int32)
+    optimized_output = torch.empty_like(baseline_output)
+    override_output = torch.empty_like(baseline_output)
+
+    with triton.knobs.compilation.scope():
+        triton.knobs.compilation.optimize_layouts = False
+        baseline = _optimize_layouts_exact_order_join_chain_kernel[(1, )](baseline_output, *values, INDEXED=True,
+                                                                          num_warps=4)
+
+        triton.knobs.compilation.optimize_layouts = True
+        optimized = _optimize_layouts_exact_order_join_chain_kernel[(1, )](optimized_output, *values, INDEXED=True,
+                                                                           num_warps=4)
+        explicit_override = _optimize_layouts_exact_order_join_chain_kernel[(1, )](override_output, *values,
+                                                                                   INDEXED=True, num_warps=4,
+                                                                                   optimize_layouts=False)
+
+    assert baseline.metadata.optimize_layouts is False
+    assert optimized.metadata.optimize_layouts is True
+    assert explicit_override.metadata.optimize_layouts is False
+    assert baseline.hash != optimized.hash
+    assert explicit_override.hash != optimized.hash
+    assert "ttg.convert_layout" not in optimized.asm["ttgir"]
+    torch.testing.assert_close(optimized_output, baseline_output, rtol=0, atol=0)
+    torch.testing.assert_close(override_output, baseline_output, rtol=0, atol=0)

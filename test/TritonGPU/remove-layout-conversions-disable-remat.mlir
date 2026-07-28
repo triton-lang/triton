@@ -1,5 +1,7 @@
 // RUN: triton-opt %s -tritongpu-remove-layout-conversions | FileCheck %s --check-prefix=DEFAULT
 // RUN: triton-opt %s -tritongpu-remove-layout-conversions='disable-remat-splitting=true' | FileCheck %s --check-prefix=NO-SPLIT
+// RUN: triton-opt %s -tritongpu-optimize-layouts | FileCheck %s --check-prefix=DEFAULT
+// RUN: triton-opt %s -tritongpu-optimize-layouts='disable-remat-splitting=true' | FileCheck %s --check-prefix=NO-SPLIT
 
 // DEFAULT-LABEL: @nested_convert_single_use
 // DEFAULT: %[[RESHAPE:.+]] = tt.reshape

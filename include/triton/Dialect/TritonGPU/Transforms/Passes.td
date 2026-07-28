@@ -269,6 +269,29 @@ def TritonGPURemoveLayoutConversions : Pass<"tritongpu-remove-layout-conversions
   ];
 }
 
+def TritonGPUOptimizeLayouts : Pass<"tritongpu-optimize-layouts", "mlir::ModuleOp"> {
+  let summary = "optimize distributed layouts and layout conversion placement";
+
+  let description = [{
+    Optimize distributed tensor layouts while preserving the layout constraints
+    of function boundaries, loads, stores, and matrix operations. The pass
+    retains the incumbent layout optimization as a compatibility baseline,
+    shares dominating layout conversions, and rematerializes bounded,
+    scalar-rooted, side-effect-free tensor graphs in their required layouts.
+    Exact-order reshapes retain their original ordering semantics.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+
+  let options = [
+    Option<"disableRematSplitting", "disable-remat-splitting",
+           "bool", /*default*/"false",
+           "prevent incumbent rematerialization from splitting or duplicating "
+           "convert-layout work">
+  ];
+}
+
 def TritonGPUOptimizeThreadLocality : Pass<"tritongpu-optimize-thread-locality", "mlir::ModuleOp"> {
   let summary = "Reduce the cost of synchronization between threads in an SM";
 

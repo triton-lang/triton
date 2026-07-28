@@ -117,6 +117,7 @@ def test_read_env(truthy, falsey, fresh_knobs_including_libraries, monkeypatch):
     fresh_knobs = fresh_knobs_including_libraries
     # bool defaulting to False
     assert not fresh_knobs.runtime.debug
+    assert not fresh_knobs.compilation.optimize_layouts
     # bool defaulting to True
     assert fresh_knobs.language.default_fp_fusion
     # str defaulting to None
@@ -130,6 +131,7 @@ def test_read_env(truthy, falsey, fresh_knobs_including_libraries, monkeypatch):
 
     monkeypatch.setenv("TRITON_DEFAULT_FP_FUSION", falsey)
     monkeypatch.setenv("TRITON_DEBUG", truthy)
+    monkeypatch.setenv("TRITON_OPTIMIZE_LAYOUTS", truthy)
     monkeypatch.setenv("USE_IR_LOC", "ttir")
     monkeypatch.setenv("TRITON_CACHE_DIR", "/tmp/triton_cache")
     monkeypatch.setenv("TRITON_HOME", "/tmp/triton_home")
@@ -139,6 +141,7 @@ def test_read_env(truthy, falsey, fresh_knobs_including_libraries, monkeypatch):
 
     triton.knobs.refresh_knobs()
     assert fresh_knobs.runtime.debug
+    assert fresh_knobs.compilation.optimize_layouts
     assert not fresh_knobs.language.default_fp_fusion
     assert fresh_knobs.compilation.use_ir_loc == "ttir"
     assert fresh_knobs.cache.home_dir == "/tmp/triton_home"

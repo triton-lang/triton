@@ -82,6 +82,9 @@ void init_triton_passes_ttgpuir(py::module_ &m) {
                      createTritonGPURemoveLayoutConversions);
   ADD_PASS_OPTION_WRAPPER_1("add_remove_layout_conversions",
                             createTritonGPURemoveLayoutConversions, bool);
+  ADD_PASS_WRAPPER_0("add_optimize_layouts", createTritonGPUOptimizeLayouts);
+  ADD_PASS_OPTION_WRAPPER_1("add_optimize_layouts",
+                            createTritonGPUOptimizeLayouts, bool);
   ADD_PASS_WRAPPER_0("add_reduce_data_duplication",
                      createTritonGPUReduceDataDuplication);
   ADD_PASS_WRAPPER_0("add_allocate_warp_groups",
