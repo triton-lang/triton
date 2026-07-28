@@ -1,4 +1,10 @@
 // RUN: triton-opt %s -allow-unregistered-dialect -tritongpu-optimize-partition-warps | FileCheck %s
+// RUN: triton-opt %s -allow-unregistered-dialect -tritongpu-optimize-partition-warps='optimize-layouts=true' | FileCheck %s
+// RUN: triton-opt %s -allow-unregistered-dialect -tritongpu-optimize-partition-warps='optimize-layouts=true' --mlir-print-ir-after-all -o /dev/null 2>&1 | FileCheck %s --check-prefix=GLOBAL-PARTITION-PIPELINE
+
+// GLOBAL-PARTITION-PIPELINE-NOT: TritonGPURemoveLayoutConversions
+// GLOBAL-PARTITION-PIPELINE: IR Dump After TritonGPUOptimizeLayouts
+// GLOBAL-PARTITION-PIPELINE-NOT: TritonGPURemoveLayoutConversions
 
 #blocked8 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
 #blocked4 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>

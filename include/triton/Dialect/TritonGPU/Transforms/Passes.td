@@ -145,6 +145,11 @@ def TritonGPUOptimizePartitionWarps : Pass<"tritongpu-optimize-partition-warps",
     of `ttg.warp_specialize` ops and attempts to reduce the number of warps
     assigned to them and optimize the register usage of the partitions.
   }];
+
+  let options = [
+    Option<"optimizeLayouts", "optimize-layouts", "bool", /*default*/"false",
+           "use the global layout optimizer when reassigning partition layouts">
+  ];
 }
 
 def TritonGPUPartitionScheduling : Pass<"tritongpu-partition-scheduling", "mlir::ModuleOp"> {
