@@ -292,7 +292,7 @@ public:
       Attribute sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(context);
       auto sharedBufferType = triton::gpu::MemDescType::get(
-          {allocBufferSize / 4}, builder.getI32Type(), encoding,
+          {allocBufferSize / 4, 1}, builder.getI32Type(), encoding,
           sharedMemorySpace, /*mutable_memory=*/true);
       buffer =
           triton::gpu::LocalAllocOp::create(builder, loc, sharedBufferType);
