@@ -7,7 +7,8 @@ namespace llvm {
 // Pass to pre-process LLVM IR before optimization and break up phi of struct.
 // Breaking up those phis into elementary types allows better optimizations
 // downstream.
-struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
+struct BreakStructPhiNodesPass
+    : OptionalPassInfoMixin<BreakStructPhiNodesPass> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 
   static StringRef name() { return "BreakStructPhiNodesPass"; }
