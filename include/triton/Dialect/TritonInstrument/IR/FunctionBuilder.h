@@ -132,9 +132,10 @@ public:
   // waiting bits for the barrier.
   void createInvalidateBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
                                         Value pred, Operation *insertPoint);
-  // verifyAndUpdateBarrierState: Validate and apply an arrive count and a
-  // tx-count delta using one snapshot of the tracked barrier state. Triggers
-  // an assertion without modifying the state when either count is invalid.
+  // verifyAndUpdateBarrierState: Validate barrier initialization, an arrive
+  // count, and a tx-count delta using one snapshot of the tracked barrier
+  // state. Preserve independent initialization and underflow assertions and
+  // do not modify invalid state.
   void createVerifyAndUpdateBarrierStateCall(ImplicitLocOpBuilder &b,
                                              Value mbar, int count, Value pred,
                                              Operation *insertPoint,

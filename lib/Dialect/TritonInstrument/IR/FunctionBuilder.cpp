@@ -1244,12 +1244,9 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
   SmallVector<Value> args = {mbarOffset,       lengthVal,    countVal,
                              txCountVal,       pred,         barriersVal,
                              barrierStatesVal, recipientCTAs};
-  AssertInfo assertInfo{
-      "Barrier arrive underflow: current count or tx-count would become "
-      "invalid",
-      b.getI1Type()};
-  createCallToCachedFunction(
-      b, "verify_and_update_barrier_state", args, assertInfo,
+  AssertInfo statusInfo{"", b.getI32Type()};
+  Value status = createCallToCachedFunction(
+      b, "verify_and_update_barrier_state", args, statusInfo,
       {barriersType, barrierStatesType},
       [barrierStatesType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
@@ -1270,6 +1267,19 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
 
         Value zero32 =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, barrierStatesType);
+        Value initialized =
+            arith::CmpIOp::create(fb, arith::CmpIPredicate::ne, states, zero32);
+        auto condType = cast<RankedTensorType>(initialized.getType());
+        Value vTrue = tti::createConstIntTensor(fb, fb.getLoc(), 1, condType);
+        initialized = arith::SelectOp::create(fb, mask, initialized, vTrue);
+        Value ctaMask =
+            createCTASetMask(fb, condType, /*dim=*/0, recipientCTAs);
+        initialized = arith::SelectOp::create(fb, ctaMask, initialized, vTrue);
+        Value predTensor = triton::SplatOp::create(fb, condType, pred);
+        initialized =
+            arith::SelectOp::create(fb, predTensor, initialized, vTrue);
+        Value allInitialized = reduceAll<arith::AndIOp>(fb, initialized);
+
         Value maskFF = tti::createConstIntTensor(
             fb, fb.getLoc(), BarrierBits::countMask, barrierStatesType);
         Value shiftCurrentTensor = tti::createConstIntTensor(
@@ -1322,19 +1332,13 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
                                   newTxCountMasked, maxTxCount));
         Value valid =
             arith::AndIOp::create(fb, arrivalsNonNegative, txCountInRange);
-        Value vTrue = tti::createConstIntTensor(
-            fb, fb.getLoc(), 1, cast<RankedTensorType>(valid.getType()));
-        auto condType = cast<RankedTensorType>(valid.getType());
-        Value ctaMask =
-            createCTASetMask(fb, condType, /*dim=*/0, recipientCTAs);
         valid = arith::SelectOp::create(fb, ctaMask, valid, vTrue);
-        Value predTensor = triton::SplatOp::create(
-            fb, cast<RankedTensorType>(valid.getType()), pred);
         Value predicatedValid =
             arith::SelectOp::create(fb, predTensor, valid, vTrue);
 
         Value allValid = reduceAll<arith::AndIOp>(fb, predicatedValid);
-        Value shouldUpdate = arith::AndIOp::create(fb, pred, allValid);
+        Value shouldUpdate = arith::AndIOp::create(
+            fb, pred, arith::AndIOp::create(fb, allInitialized, allValid));
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, shouldUpdate);
         fb.setInsertionPointToStart(ifBlock);
 
@@ -1382,8 +1386,26 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
                                           barrierStatesType, recipientCTAs);
 
         fb.setInsertionPointToEnd(thenBlock);
-        triton::ReturnOp::create(fb, allValid);
-      });
+        Value initializedBit =
+            arith::ExtUIOp::create(fb, fb.getI32Type(), allInitialized);
+        Value validBit = arith::ExtUIOp::create(fb, fb.getI32Type(), allValid);
+        Value shift = arith::ConstantIntOp::create(fb, 1, 32);
+        validBit = arith::ShLIOp::create(fb, validBit, shift);
+        Value status = arith::OrIOp::create(fb, initializedBit, validBit);
+        triton::ReturnOp::create(fb, status);
+      },
+      /*emitAssert=*/false);
+
+  Value initialized = arith::TruncIOp::create(b, b.getI1Type(), status);
+  tti::createAssertInThread(
+      b, initialized,
+      "Barrier used before initialization or after invalidation");
+  Value shift = arith::ConstantIntOp::create(b, 1, 32);
+  Value valid = arith::TruncIOp::create(
+      b, b.getI1Type(), arith::ShRUIOp::create(b, status, shift));
+  tti::createAssertInThread(b, valid,
+                            "Barrier arrive underflow: current count or "
+                            "tx-count would become invalid");
 }
 
 void FunctionBuilder::createPublishWriteVisibilityCall(

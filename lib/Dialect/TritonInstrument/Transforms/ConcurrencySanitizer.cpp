@@ -1057,8 +1057,9 @@ private:
       Value barrier = barrierInfo.barrier;
       Value combinedPred = tti::maybeAnd(b, barrierInfo.pred, pred);
       Value recipientCTAs = getBarrierRecipientCTAs(b, op);
-      funcBuilder.createVerifyBarrierInitializedCall(b, barrier, combinedPred,
-                                                     op, recipientCTAs);
+      if (barrierInfo.count == 0 && barrierInfo.txCount == 0)
+        funcBuilder.createVerifyBarrierInitializedCall(b, barrier, combinedPred,
+                                                       op, recipientCTAs);
       if (barrierInfo.trackingMode ==
           MemEffectsOpInfo::BarrierTrackingMode::Frontier) {
         // If the op has barriers, we treat it as a commit emitted for each
