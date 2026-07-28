@@ -397,8 +397,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
     // CHECK: tt.call @__triton_consan_track_visible_writes
     // CHECK: tt.call @__triton_consan_track_visible_reads
-    // CHECK: tt.call @__triton_consan_verify_barrier_arrive
-    // CHECK: tt.call @__triton_consan_update_barrier_state
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     // CHECK: tti.experimental_lock_release
     %phase = amdg.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> i32
     ttg.local_load %0 : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
@@ -431,8 +431,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   tt.func public @amdg_arrive_barrier_without_init() {
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
-    // CHECK: tt.call @__triton_consan_verify_barrier_arrive
-    // CHECK: tt.call @__triton_consan_update_barrier_state
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     %phase = amdg.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> i32
     tt.return
   }
@@ -473,8 +473,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_clear_read_tracking
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
     // CHECK: tt.call @__triton_consan_track_visible_writes
-    // CHECK: tt.call @__triton_consan_verify_barrier_arrive
-    // CHECK: tt.call @__triton_consan_update_barrier_state
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     %1 = amdg.async_tdm_copy_global_to_local %desc into %0, barrier = %bar : !tt.tensordesc<32x32xf32>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     tt.return
   }
@@ -510,8 +510,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_clear_read_tracking
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
     // CHECK: tt.call @__triton_consan_track_visible_writes
-    // CHECK: tt.call @__triton_consan_verify_barrier_arrive
-    // CHECK: tt.call @__triton_consan_update_barrier_state
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     %0 = amdg.async_tdm_copy_global_to_local %a into %a_smem, barrier = %bar : !tt.tensordesc<32x32xf32>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
 
     // Second TDM copy: same full instrumentation
@@ -523,8 +523,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_clear_read_tracking
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
     // CHECK: tt.call @__triton_consan_track_visible_writes
-    // CHECK: tt.call @__triton_consan_verify_barrier_arrive
-    // CHECK: tt.call @__triton_consan_update_barrier_state
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     %1 = amdg.async_tdm_copy_global_to_local %b into %b_smem, barrier = %bar : !tt.tensordesc<32x32xf32>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
 
     %c0_phase = arith.constant 0 : i32
@@ -553,7 +553,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_check_outstanding_commits_excl_self
     // CHECK: tt.call @__triton_consan_stage_access_for_commit
     // CHECK: tt.call @__triton_consan_commit_accesses
-    // CHECK-NOT: tt.call @__triton_consan_verify_barrier_arrive
+    // CHECK-NOT: tt.call @__triton_consan_verify_and_update_barrier_state
     %1 = amdg.async_tdm_copy_global_to_local %desc into %0 : !tt.tensordesc<32x32xf32> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     tt.return
   }
@@ -624,8 +624,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
     // CHECK: tt.call @__triton_consan_track_visible_writes
     // CHECK: tt.call @__triton_consan_track_visible_reads
-    // CHECK: tt.call @__triton_consan_verify_barrier_arrive
-    // CHECK: tt.call @__triton_consan_update_barrier_state
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     // CHECK-NOT: tt.call @__triton_consan_stage_access_for_commit
     amdg.async_tdm_copy_local_to_global %desc from %0, barrier = %bar : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !tt.tensordesc<32x32xf32>
     tt.return
