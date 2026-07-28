@@ -648,10 +648,9 @@ Value castFloatPayloadToType(PatternRewriter &rewriter, Location loc, Value v,
     return arith::TruncIOp::create(rewriter, loc, targetTy, v);
 
   assert(srcWidth <= 64 && "expected at most a 64-bit floating-point payload");
-  uint64_t digit = uint64_t{3511} & ((uint64_t{1} << dstWidth) - 1);
-  uint64_t repeatedMultiplier = 0;
-  for (unsigned shift = 0; shift < srcWidth; shift += dstWidth)
-    repeatedMultiplier |= digit << shift;
+  uint64_t dstMask = (uint64_t{1} << dstWidth) - 1;
+  uint64_t repeatedMultiplier =
+      (uint64_t{3511} & dstMask) * (~uint64_t{0} / dstMask);
 
   Value low = arith::TruncIOp::create(rewriter, loc, targetTy, v);
   Value canonical = arith::ExtSIOp::create(rewriter, loc, v.getType(), low);

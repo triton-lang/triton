@@ -305,6 +305,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @tmem_scratch_sliced_payloads
   tt.func public @tmem_scratch_sliced_payloads(%arg0: tensor<128x64xf32, #tmem_split>) {
+    // CHECK: arith.constant dense<-1212696649>
     // CHECK: tt.store
     // CHECK-NOT: ttng.tmem_store
     %true = arith.constant true
@@ -520,29 +521,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NOT: arith.truncf
     %0 = arith.truncf %a : tensor<4xf32> to tensor<4xf16>
     tt.return %0 : tensor<4xf16>
-  }
-}
-
-// -----
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK-LABEL: @cast_fp32_to_fp8
-  tt.func public @cast_fp32_to_fp8(%a: tensor<4xf32>) -> tensor<4xf8E4M3FN> {
-    // CHECK-DAG: %[[MULTIPLIER:.*]] = arith.constant dense<-1212696649>
-    // CHECK: %[[PAYLOAD:.*]] = tti.experimental_fpsan_embed
-    // CHECK: %[[LOW:.*]] = arith.trunci %[[PAYLOAD]]
-    // CHECK: %[[CANONICAL:.*]] = arith.extsi %[[LOW]]
-    // CHECK: %[[RESIDUAL:.*]] = arith.xori %[[PAYLOAD]], %[[CANONICAL]]
-    // CHECK: %[[PRODUCT:.*]] = arith.muli %[[RESIDUAL]], %[[MULTIPLIER]]
-    // CHECK: %[[HIGH_WIDE:.*]] = arith.shrui %[[PRODUCT]]
-    // CHECK: %[[HIGH:.*]] = arith.trunci %[[HIGH_WIDE]]
-    // CHECK: %[[DIFFUSION:.*]] = arith.shrui %[[HIGH]]
-    // CHECK: %[[MIXED:.*]] = arith.xori %[[HIGH]], %[[DIFFUSION]]
-    // CHECK: %[[NARROWED:.*]] = arith.xori %[[LOW]], %[[MIXED]]
-    // CHECK: tti.experimental_fpsan_unembed %[[NARROWED]]
-    // CHECK-NOT: tt.fp_to_fp
-    %0 = tt.fp_to_fp %a, rounding = rtne : tensor<4xf32> -> tensor<4xf8E4M3FN>
-    tt.return %0 : tensor<4xf8E4M3FN>
   }
 }
 

@@ -369,8 +369,8 @@ Supported operations:
 Rewrite:
 
 - signed integer extension when widening
-- when narrowing, mix every discarded high payload bit into the retained bits
-  with a wide multiply and ``unembed`` the result
+- when narrowing, fold the discarded high payload bits into the retained bits,
+  then truncate and ``unembed``
 - optionally, set ``TRITON_FPSAN_HOMOMORPHIC_CASTS=1`` to use simple payload
   truncation when narrowing; this preserves addition across independently
   downcast partial reductions
