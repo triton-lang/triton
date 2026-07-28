@@ -115,6 +115,11 @@ private:
   uint64_t
   getAssignmentCost(Value value, Attribute encoding,
                     const DenseMap<Value, Attribute> &assignments) const;
+  uint64_t
+  getGlobalAssignmentCost(const DenseMap<Value, Attribute> &assignments) const;
+  bool buildGlobalComponentProposal(
+      Value seed, Attribute encoding,
+      DenseMap<Value, Attribute> &assignments) const;
 
   // map from value to layout information.
   llvm::MapVector<Value, LayoutInfo> layouts;
@@ -290,16 +295,20 @@ static bool supportsGlobalLayoutAssignment(FuncOp funcOp) {
     if (isa<scf::IfOp>(op))
       return WalkResult::advance();
 
+    // Join operands and result share an exact-order layout relation. Resolve
+    // them against the whole function rather than each conversion in isolation.
+    if (isa<JoinOp>(op))
+      return WalkResult::advance();
+
     // A single-output reduction has a uniquely inferable sliced result. A
     // multi-output reduction still needs all of its results selected together.
     if (auto reduce = dyn_cast<ReduceOp>(op))
       return reduce->getNumResults() == 1 ? WalkResult::advance()
                                            : WalkResult::interrupt();
 
-    // Joins, multi-result splits, and loop-carried values still require joint
-    // component constraints. In particular, independently selecting adjacent
-    // joins can recreate conversions throughout an exact-order tree.
-    if (isa<scf::ForOp, scf::WhileOp, JoinOp, SplitOp>(op))
+    // Multi-result splits and loop-carried values require joint component
+    // constraints before their encodings can be changed safely.
+    if (isa<scf::ForOp, scf::WhileOp, SplitOp>(op))
       return WalkResult::interrupt();
 
     if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
@@ -742,6 +751,100 @@ uint64_t LayoutPropagation::getAssignmentCost(
   return cost;
 }
 
+uint64_t LayoutPropagation::getGlobalAssignmentCost(
+    const DenseMap<Value, Attribute> &assignments) const {
+  uint64_t cost = 0;
+  for (const auto &[value, info] : layouts) {
+    Attribute encoding = getAssignedEncoding(value, assignments);
+    if (encoding)
+      cost += getAssignmentCost(value, encoding, assignments);
+  }
+  return cost;
+}
+
+bool LayoutPropagation::buildGlobalComponentProposal(
+    Value seed, Attribute encoding,
+    DenseMap<Value, Attribute> &assignments) const {
+  constexpr unsigned maxComponentValues = 512;
+  DenseMap<Value, Attribute> requested;
+  SmallVector<std::pair<Value, Attribute>, 32> worklist;
+
+  auto request = [&](Value value, Attribute candidate) {
+    auto type = dyn_cast<RankedTensorType>(value.getType());
+    if (!type || !candidate)
+      return true;
+
+    auto found = layouts.find(value);
+    if (found == layouts.end() ||
+        !found->second.encodings.contains(candidate))
+      return true;
+
+    // A physical input or memory boundary remains fixed. Its disagreement is
+    // represented by a conversion on the component boundary.
+    if (fixedLayouts.contains(value) && candidate != type.getEncoding())
+      return true;
+
+    if (auto existing = requested.find(value); existing != requested.end())
+      return existing->second == candidate;
+    if (requested.size() >= maxComponentValues)
+      return false;
+
+    requested.try_emplace(value, candidate);
+    worklist.emplace_back(value, candidate);
+    return true;
+  };
+
+  auto isLayoutComponent = [](Operation *op) {
+    return op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
+           op->hasTrait<OpTrait::Elementwise>() ||
+           isa<JoinOp, ConvertLayoutOp, ReshapeOp, TransOp, ExpandDimsOp,
+               ReduceOp>(op);
+  };
+
+  if (!request(seed, encoding) || !requested.contains(seed))
+    return false;
+
+  while (!worklist.empty()) {
+    auto [value, candidate] = worklist.pop_back_val();
+    assignments[value] = candidate;
+
+    if (Operation *producer = value.getDefiningOp()) {
+      if (isLayoutComponent(producer) &&
+          !isFixedLayoutBoundary(producer)) {
+        Attribute source = isa<ConvertLayoutOp>(producer)
+                               ? candidate
+                               : inferSrcEncoding(producer, candidate);
+        if (source) {
+          for (Value operand : producer->getOperands())
+            if (!request(operand, source))
+              return false;
+        }
+      }
+    }
+
+    for (OpOperand &use : value.getUses()) {
+      Operation *user = use.getOwner();
+      if (!isLayoutComponent(user) || isFixedLayoutBoundary(user))
+        continue;
+
+      Attribute destination = isa<ConvertLayoutOp>(user)
+                                  ? candidate
+                                  : inferDstEncoding(user, candidate);
+      if (!destination)
+        continue;
+
+      for (Value result : user->getResults())
+        if (!request(result, destination))
+          return false;
+    }
+  }
+
+  for (const auto &[value, candidate] : requested)
+    if (!canAssignEncoding(value, candidate, assignments))
+      return false;
+  return true;
+}
+
 void LayoutPropagation::resolveGlobalConflicts() {
   DenseMap<Value, Attribute> assignments;
   for (auto &[value, info] : layouts) {
@@ -753,19 +856,71 @@ void LayoutPropagation::resolveGlobalConflicts() {
     assignments.try_emplace(value, original);
   }
 
+  bool hasJoinConstraints = false;
+  funcOp.walk([&](JoinOp) { hasJoinConstraints = true; });
+
+  if (hasJoinConstraints) {
+    constexpr unsigned maxComponentIterations = 4;
+    constexpr unsigned maxComponentProposals = 128;
+    uint64_t currentCost = getGlobalAssignmentCost(assignments);
+
+    for (unsigned iteration = 0; iteration < maxComponentIterations;
+         ++iteration) {
+      bool changed = false;
+      unsigned proposalCount = 0;
+
+      for (const auto &[value, info] : layouts) {
+        for (Attribute candidate : info.encodings) {
+          if (proposalCount++ >= maxComponentProposals)
+            break;
+          if (fixedLayouts.contains(value) &&
+              candidate !=
+                  cast<RankedTensorType>(value.getType()).getEncoding())
+            continue;
+
+          DenseMap<Value, Attribute> proposal = assignments;
+          if (!buildGlobalComponentProposal(value, candidate, proposal))
+            continue;
+
+          uint64_t proposalCost = getGlobalAssignmentCost(proposal);
+          if (proposalCost >= currentCost)
+            continue;
+
+          assignments = std::move(proposal);
+          currentCost = proposalCost;
+          changed = true;
+        }
+        if (proposalCount >= maxComponentProposals)
+          break;
+      }
+
+      if (!changed)
+        break;
+    }
+  }
+
   auto improve = [&](auto &&values) {
     bool changed = false;
     for (auto &[value, info] : values) {
       if (fixedLayouts.contains(value) || info.encodings.size() <= 1)
         continue;
 
-      Attribute best = assignments.lookup(value);
-      uint64_t bestCost = getAssignmentCost(value, best, assignments);
+      Attribute original = assignments.lookup(value);
+      Attribute best = original;
+      uint64_t bestCost = hasJoinConstraints
+                              ? getGlobalAssignmentCost(assignments)
+                              : getAssignmentCost(value, best, assignments);
       for (Attribute candidate : info.encodings) {
         if (!canAssignEncoding(value, candidate, assignments))
           continue;
-        uint64_t candidateCost =
-            getAssignmentCost(value, candidate, assignments);
+        uint64_t candidateCost;
+        if (hasJoinConstraints) {
+          assignments[value] = candidate;
+          candidateCost = getGlobalAssignmentCost(assignments);
+          assignments[value] = original;
+        } else {
+          candidateCost = getAssignmentCost(value, candidate, assignments);
+        }
         if (candidateCost < bestCost) {
           best = candidate;
           bestCost = candidateCost;

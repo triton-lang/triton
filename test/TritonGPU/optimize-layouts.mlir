@@ -511,3 +511,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %first, %second, %third : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
   }
 }
+
+// -----
+
+// An exact-order join must use one legal encoding for both of its inputs.
+// Price the complete join component and its three fixed consumers together;
+// the source argument still requires one physical layout conversion.
+//
+// BASELINE-LABEL: @layout_conflict_join_fanout
+// BASELINE-COUNT-4: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @layout_conflict_join_fanout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#joined = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 32, 1], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @layout_conflict_join_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>) -> (tensor<16x16x2xf32, #joined>, tensor<16x16x2xf32, #joined>, tensor<16x16x2xf32, #joined>) {
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %mixed = tt.join %converted, %target : tensor<16x16xf32, #target> -> tensor<16x16x2xf32, #joined>
+    %reference = tt.join %target, %target : tensor<16x16xf32, #target> -> tensor<16x16x2xf32, #joined>
+    %first = arith.mulf %mixed, %reference : tensor<16x16x2xf32, #joined>
+    %second = arith.addf %mixed, %reference : tensor<16x16x2xf32, #joined>
+    %third = arith.subf %mixed, %reference : tensor<16x16x2xf32, #joined>
+    tt.return %first, %second, %third : tensor<16x16x2xf32, #joined>, tensor<16x16x2xf32, #joined>, tensor<16x16x2xf32, #joined>
+  }
+}
