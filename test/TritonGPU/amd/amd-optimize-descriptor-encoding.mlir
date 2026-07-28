@@ -221,3 +221,22 @@ tt.func public @descriptor_fallback(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32,
   tt.return
 }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-DAG: #[[$PADDED_AT_LIMIT:.*]] = #ttg.padded_shared<[512:+8] {order = [1, 0], shape = [1, 512]}>
+// CHECK-LABEL: @descriptor_load_rank_reduced_pad
+tt.func public @descriptor_load_rank_reduced_pad(%arg0: !tt.ptr<i16>, %arg1: i64) -> tensor<512xi16, #blocked> {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c512_i32 = arith.constant 512 : i32
+  // CHECK: tt.make_tensor_descriptor {{.*}} : <i16>, <1x512xi16, #[[$PADDED_AT_LIMIT]]>
+  %0 = tt.make_tensor_descriptor %arg0, [%c1_i32, %c512_i32], [%arg1, %c1_i64] : <i16>, <1x512xi16>
+  // CHECK: tt.descriptor_load {{.*}} : !tt.tensordesc<1x512xi16, #[[$PADDED_AT_LIMIT]]> -> tensor<512xi16
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32] : !tt.tensordesc<1x512xi16> -> tensor<512xi16, #blocked>
+  tt.return %1 : tensor<512xi16, #blocked>
+}
+}
