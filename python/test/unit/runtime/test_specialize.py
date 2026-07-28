@@ -183,12 +183,13 @@ def test_specialize_impl(input_generator, backend, is_const, specialize_value, a
     [
         ("", False, 1_000_001, ()),
         ("consan", False, 1_000_000, ("--opt-level", "1")),
-        ("consan", False, 1_000_001, ("--Ofast-compile", "min")),
+        ("consan", False, 1_000_001, ("--opt-level", "1")),
         ("iisan,consan", False, 1_000_000, ("--opt-level", "1")),
-        ("iisan,consan", False, 1_000_001, ("--Ofast-compile", "min")),
+        ("iisan,consan", False, 1_000_001, ("--opt-level", "1")),
         ("consan", True, 1_000_001, ("--opt-level", "0")),
         ("fpsan", False, 1_000_001, ("--opt-level", "2")),
-        ("gsan", False, 1_000_001, ()),
+        ("gsan", False, 1_000_001, ("--opt-level", "2")),
+        ("gsan", True, 1_000_001, ("--opt-level", "0")),
     ],
 )
 def test_sanitizer_ptxas_compilation_options(instrumentation_mode, disable_optimization, ptx_size, expected_option,
@@ -213,9 +214,9 @@ def test_sanitizer_ptxas_compilation_options(instrumentation_mode, disable_optim
     assert backend.make_cubin(ptx, {}, options, 100) == b"compiled cubin"
     assert len(commands) == 1
     command = commands[0]
+    assert "--Ofast-compile" not in command
     if expected_option:
         option_index = command.index(expected_option[0])
         assert tuple(command[option_index:option_index + 2]) == expected_option
     else:
-        assert "--Ofast-compile" not in command
         assert "--opt-level" not in command

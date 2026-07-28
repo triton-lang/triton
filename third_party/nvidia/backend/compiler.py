@@ -540,16 +540,12 @@ class CUDABackend(BaseBackend):
             # Accept more ptxas options if provided
             ptx_extra_options = opt.ptx_options.split(" ") if opt.ptx_options else []
 
-            # Fast compilation avoids pathological register allocation time on
-            # very large ConSan modules, but can substantially slow ordinary
-            # kernels. Keep ptxas O1 unless the generated PTX exceeds 1 MB.
+            # Fast compilation can miscompile ConSan barrier instrumentation.
+            # Keep its safe optimization level independent of PTX size.
             if not knobs.nvidia.disable_ptxas_opt:
                 if "consan" in opt.instrumentation_mode:
-                    if len(src) > 1_000_000:
-                        ptx_extra_options += ["--Ofast-compile", "min"]
-                    else:
-                        ptx_extra_options += ["--opt-level", "1"]
-                elif "fpsan" in opt.instrumentation_mode:
+                    ptx_extra_options += ["--opt-level", "1"]
+                elif any(mode in opt.instrumentation_mode for mode in ["fpsan", "gsan"]):
                     ptx_extra_options += ["--opt-level", "2"]
 
             # Add --regAllocOptLevel=2 to work around ptxas 13.x bug
