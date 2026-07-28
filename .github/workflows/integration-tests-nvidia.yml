@@ -93,12 +93,14 @@ jobs:
           PYTEST_PLUGINS: triton._ci_timing
           TRITON_CI_TIMING_DIR: ${{ startsWith(matrix.config.runner_type, 'nvidia-gb200') && '/tmp/triton-ci-timing' || '' }}
           TRITON_CI_TIMING_LABEL: triton-tests
+          TRITON_CI_TIMING_GPU: "0"
         run: make NUM_PROCS=24 test-unit
       - name: Run gluon tests
         env:
           PYTEST_PLUGINS: triton._ci_timing
           TRITON_CI_TIMING_DIR: ${{ startsWith(matrix.config.runner_type, 'nvidia-gb200') && '/tmp/triton-ci-timing' || '' }}
           TRITON_CI_TIMING_LABEL: gluon-tests
+          TRITON_CI_TIMING_GPU: "0"
         run: make NUM_PROCS=24 test-gluon
       - name: Upload GB200 timing
         if: ${{ always() && startsWith(matrix.config.runner_type, 'nvidia-gb200') }}

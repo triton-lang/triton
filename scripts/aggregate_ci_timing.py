@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import heapq
 import json
 import tempfile
 from collections import defaultdict
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator
 
+try:
+    import ijson
+except ImportError:
+    ijson = None
 
 Interval = tuple[int, int]
 CALIBRATION_SCOPE = "__triton_ci_timing_calibration__"
@@ -50,42 +55,134 @@ def clip_intervals(intervals: Iterable[Interval], windows: Iterable[Interval]) -
     return intersect_intervals(intervals, windows)
 
 
-def load_trace(summary_path: Path, summary: dict) -> tuple[list[Interval], int, list[str]]:
-    errors: list[str] = []
+def iter_trace_events(trace_path: Path) -> Iterator[dict]:
+    if ijson is not None:
+        with trace_path.open("rb") as stream:
+            yield from ijson.items(stream, "traceEvents.item", use_float=True)
+        return
+    yield from json.loads(trace_path.read_text()).get("traceEvents", [])
+
+
+def iter_trace_intervals(
+    summary_path: Path,
+    summary: dict,
+    stats: dict[str, int],
+    errors: list[str],
+) -> Iterator[Interval]:
     calibration = summary.get("calibration")
     if not calibration:
-        return [], 0, [f"{summary_path}: missing calibration"]
+        errors.append(f"{summary_path}: missing calibration")
+        return
 
     trace_path = summary_path.parent / Path(summary["profile"]).name
     if not trace_path.exists():
-        return [], 0, [f"{trace_path}: missing trace"]
+        errors.append(f"{trace_path}: missing trace")
+        return
     try:
-        trace = json.loads(trace_path.read_text())
+        events = iter_trace_events(trace_path)
+        stream_count = 0
+        trace_anchor_us: float | None = None
+        mono_anchor_ns = (int(calibration["enter_before_ns"]) + int(calibration["enter_after_ns"])) // 2
+        buffered: list[Interval] = []
+        last_start_ns: int | None = None
+        for event in events:
+            if event.get("ph") == "M":
+                name = event.get("args", {}).get("name", "")
+                if isinstance(name, str) and name.startswith("GPU Stream "):
+                    stream_count += 1
+                continue
+            if event.get("name") == CALIBRATION_SCOPE and event.get("cat") == "scope" and event.get("ph") == "X":
+                if trace_anchor_us is not None:
+                    errors.append(f"{trace_path}: multiple calibration events")
+                    return
+                trace_anchor_us = float(event["ts"])
+                continue
+            if event.get("cat") != "kernel" or event.get("ph") != "X":
+                continue
+            if trace_anchor_us is None:
+                errors.append(f"{trace_path}: kernel event precedes calibration")
+                return
+            start_ns = mono_anchor_ns + round((float(event["ts"]) - trace_anchor_us) * 1000)
+            duration_ns = max(0, round(float(event["dur"]) * 1000))
+            interval = (start_ns, start_ns + duration_ns)
+            stats["raw_gpu_ns"] += duration_ns
+            stats["kernel_events"] += 1
+            if stream_count > 1:
+                buffered.append(interval)
+            else:
+                if last_start_ns is not None and start_ns < last_start_ns:
+                    errors.append(f"{trace_path}: single-stream events are not time ordered")
+                    return
+                last_start_ns = start_ns
+                yield interval
     except Exception as exc:
-        return [], 0, [f"{trace_path}: {exc}"]
+        errors.append(f"{trace_path}: {exc}")
+        return
 
-    events = trace.get("traceEvents", [])
-    calibration_events = [
-        event
-        for event in events
-        if event.get("name") == CALIBRATION_SCOPE and event.get("cat") == "scope" and event.get("ph") == "X"
-    ]
-    if len(calibration_events) != 1:
-        return [], 0, [f"{trace_path}: expected one calibration event, found {len(calibration_events)}"]
+    if trace_anchor_us is None:
+        errors.append(f"{trace_path}: missing calibration event")
+        return
+    yield from sorted(buffered)
 
-    calibration_event = calibration_events[0]
-    trace_anchor_us = float(calibration_event["ts"])
-    mono_anchor_ns = (int(calibration["enter_before_ns"]) + int(calibration["enter_after_ns"])) // 2
-    intervals: list[Interval] = []
-    raw_ns = 0
-    for event in events:
-        if event.get("cat") != "kernel" or event.get("ph") != "X":
-            continue
-        start_ns = mono_anchor_ns + round((float(event["ts"]) - trace_anchor_us) * 1000)
-        duration_ns = max(0, round(float(event["dur"]) * 1000))
-        intervals.append((start_ns, start_ns + duration_ns))
-        raw_ns += duration_ns
-    return intervals, raw_ns, errors
+
+def load_trace(summary_path: Path, summary: dict) -> tuple[list[Interval], int, list[str]]:
+    errors: list[str] = []
+    stats = {"raw_gpu_ns": 0, "kernel_events": 0}
+    intervals = list(iter_trace_intervals(summary_path, summary, stats, errors))
+    return intervals, stats["raw_gpu_ns"], errors
+
+
+def stream_gpu_stats(
+    traces: list[tuple[Path, dict]],
+    windows: list[Interval],
+    compile_intervals: list[Interval],
+) -> tuple[int, int, int, int, list[str]]:
+    errors: list[str] = []
+    stats = {"raw_gpu_ns": 0, "kernel_events": 0}
+    streams = [iter_trace_intervals(path, summary, stats, errors) for path, summary in traces]
+
+    gpu_ns = 0
+    overlap_ns = 0
+    window_index = 0
+    compile_index = 0
+
+    def consume(start: int, end: int) -> None:
+        nonlocal gpu_ns, overlap_ns, window_index, compile_index
+        while window_index < len(windows) and windows[window_index][1] <= start:
+            window_index += 1
+        index = window_index
+        while index < len(windows) and windows[index][0] < end:
+            clipped_start = max(start, windows[index][0])
+            clipped_end = min(end, windows[index][1])
+            if clipped_end > clipped_start:
+                gpu_ns += clipped_end - clipped_start
+                while compile_index < len(compile_intervals) and compile_intervals[compile_index][1] <= clipped_start:
+                    compile_index += 1
+                compile_scan = compile_index
+                while compile_scan < len(compile_intervals) and compile_intervals[compile_scan][0] < clipped_end:
+                    overlap_start = max(clipped_start, compile_intervals[compile_scan][0])
+                    overlap_end = min(clipped_end, compile_intervals[compile_scan][1])
+                    if overlap_end > overlap_start:
+                        overlap_ns += overlap_end - overlap_start
+                    if compile_intervals[compile_scan][1] >= clipped_end:
+                        break
+                    compile_scan += 1
+                compile_index = compile_scan
+            index += 1
+
+    current: Interval | None = None
+    for start, end in heapq.merge(*streams, key=lambda interval: interval[0]):
+        if current is None:
+            current = (start, end)
+        elif start <= current[1]:
+            current = (current[0], max(current[1], end))
+        else:
+            consume(*current)
+            current = (start, end)
+    if current is not None:
+        consume(*current)
+
+    return gpu_ns, overlap_ns, stats["raw_gpu_ns"], stats["kernel_events"], errors
 
 
 def analyze(root: Path) -> dict:
@@ -104,6 +201,7 @@ def analyze(root: Path) -> dict:
         by_invocation[summary["invocation"]].append(summary)
 
     invocation_windows: dict[str, Interval] = {}
+    invocation_test_windows: dict[str, Interval] = {}
     for invocation, group in by_invocation.items():
         owners = [item for item in group if item["role"] in ("controller", "main")]
         candidates = owners or group
@@ -111,24 +209,29 @@ def analyze(root: Path) -> dict:
         ends = [int(item["mono_end_ns"]) for item in candidates if item.get("mono_end_ns") is not None]
         if starts and ends:
             invocation_windows[invocation] = (min(starts), max(ends))
+            workers = [item for item in group if item["role"] == "worker"]
+            test_candidates = workers or candidates
+            test_ends = [
+                int(item["mono_tests_end_ns"]) for item in test_candidates if item.get("mono_tests_end_ns") is not None
+            ]
+            invocation_test_windows[invocation] = (min(starts), max(test_ends) if test_ends else max(ends))
         else:
             errors.append(f"{invocation}: missing session window")
 
     groups: dict[str, dict[str, list | int]] = defaultdict(
         lambda: {
             "windows": [],
+            "full_windows": [],
             "compile": [],
-            "gpu": [],
+            "traces": [],
             "raw_compile_ns": 0,
-            "raw_gpu_ns": 0,
             "compile_events": 0,
             "cache_hits": 0,
             "cache_misses": 0,
             "ir_init_ns": 0,
             "lowering_ns": 0,
             "store_ns": 0,
-        }
-    )
+        })
 
     seen_windows: set[tuple[str, str]] = set()
     for path, summary in summaries:
@@ -137,7 +240,8 @@ def analyze(root: Path) -> dict:
         invocation = summary["invocation"]
         window = invocation_windows.get(invocation)
         if window is not None and (label, invocation) not in seen_windows:
-            group["windows"].append(window)
+            group["full_windows"].append(window)
+            group["windows"].append(invocation_test_windows[invocation])
             seen_windows.add((label, invocation))
 
         for event in summary.get("compile_events", []):
@@ -151,30 +255,33 @@ def analyze(root: Path) -> dict:
             group["lowering_ns"] += lowering
             group["store_ns"] += store
 
-        if summary["role"] != "controller" and not summary.get("errors"):
-            gpu_intervals, raw_gpu_ns, trace_errors = load_trace(path, summary)
-            group["gpu"].extend(gpu_intervals)
-            group["raw_gpu_ns"] += raw_gpu_ns
-            errors.extend(trace_errors)
+        if summary["role"] != "controller" and not summary.get("errors") and summary.get("profile"):
+            group["traces"].append((path, summary))
 
     results: dict[str, dict[str, int | float]] = {}
     for label, group in sorted(groups.items()):
         windows = union_intervals(group["windows"])
         compile_intervals = clip_intervals(group["compile"], windows)
-        gpu_intervals = clip_intervals(group["gpu"], windows)
         compile_ns = duration(compile_intervals)
-        gpu_ns = duration(gpu_intervals)
-        overlap_ns = duration(intersect_intervals(compile_intervals, gpu_intervals))
+        gpu_ns, overlap_ns, raw_gpu_ns, kernel_events, trace_errors = stream_gpu_stats(
+            group["traces"],
+            windows,
+            compile_intervals,
+        )
+        errors.extend(trace_errors)
         wall_ns = duration(windows)
+        full_wall_ns = duration(group["full_windows"])
         host_ns = max(0, wall_ns - compile_ns - gpu_ns + overlap_ns)
         results[label] = {
             "wall_ns": wall_ns,
+            "worker_shutdown_tail_ns": max(0, full_wall_ns - wall_ns),
             "compile_only_ns": compile_ns - overlap_ns,
             "gpu_only_ns": gpu_ns - overlap_ns,
             "compile_gpu_overlap_ns": overlap_ns,
             "host_remainder_ns": host_ns,
             "raw_compile_worker_ns": int(group["raw_compile_ns"]),
-            "raw_gpu_kernel_ns": int(group["raw_gpu_ns"]),
+            "raw_gpu_kernel_ns": raw_gpu_ns,
+            "gpu_kernel_events": kernel_events,
             "compile_events": int(group["compile_events"]),
             "cache_hits": int(group["cache_hits"]),
             "cache_misses": int(group["cache_misses"]),
@@ -199,19 +306,18 @@ def format_duration(ns: int) -> str:
 
 
 def print_table(analysis: dict) -> None:
-    headers = ["Suite", "Wall", "Compile only", "GPU only", "Overlap", "Host remainder"]
+    headers = ["Suite", "Test wall", "Compile only", "GPU only", "Overlap", "Host remainder", "Worker shutdown"]
     rows: list[list[str]] = []
     for label, result in analysis["results"].items():
-        rows.append(
-            [
-                label,
-                format_duration(result["wall_ns"]),
-                format_duration(result["compile_only_ns"]),
-                format_duration(result["gpu_only_ns"]),
-                format_duration(result["compile_gpu_overlap_ns"]),
-                format_duration(result["host_remainder_ns"]),
-            ]
-        )
+        rows.append([
+            label,
+            format_duration(result["wall_ns"]),
+            format_duration(result["compile_only_ns"]),
+            format_duration(result["gpu_only_ns"]),
+            format_duration(result["compile_gpu_overlap_ns"]),
+            format_duration(result["host_remainder_ns"]),
+            format_duration(result["worker_shutdown_tail_ns"]),
+        ])
 
     widths = [len(header) for header in headers]
     for row in rows:
@@ -224,14 +330,9 @@ def print_table(analysis: dict) -> None:
     print("│ " + " │ ".join(header.ljust(width) for header, width in zip(headers, widths)) + " │")
     print(fence("├", "┼", "┤"))
     for row in rows:
-        print(
-            "│ "
-            + " │ ".join(
-                cell.ljust(width) if index == 0 else cell.rjust(width)
-                for index, (cell, width) in enumerate(zip(row, widths))
-            )
-            + " │"
-        )
+        print("│ " + " │ ".join(
+            cell.ljust(width) if index == 0 else cell.rjust(width)
+            for index, (cell, width) in enumerate(zip(row, widths))) + " │")
     print(fence("└", "┴", "┘"))
 
 
@@ -252,15 +353,12 @@ def self_test() -> None:
         summary_path = root / "summary.json"
         trace_path = root / "gpu.chrome_trace"
         trace_path.write_text(
-            json.dumps(
-                {
-                    "traceEvents": [
-                        {"name": CALIBRATION_SCOPE, "cat": "scope", "ph": "X", "ts": 1000.0, "dur": 10.0},
-                        {"name": "kernel", "cat": "kernel", "ph": "X", "ts": 2000.0, "dur": 500.0},
-                    ]
-                }
-            )
-        )
+            json.dumps({
+                "traceEvents": [
+                    {"name": CALIBRATION_SCOPE, "cat": "scope", "ph": "X", "ts": 1000.0, "dur": 10.0},
+                    {"name": "kernel", "cat": "kernel", "ph": "X", "ts": 2000.0, "dur": 500.0},
+                ]
+            }))
         summary = {
             "profile": str(trace_path),
             "calibration": {

@@ -10,7 +10,6 @@ from typing import Any, Callable
 
 import pytest
 
-
 _CALIBRATION_SCOPE = "__triton_ci_timing_calibration__"
 _STATE: "_TimingState | None" = None
 
@@ -20,6 +19,7 @@ def _safe_component(value: str) -> str:
 
 
 class _TimingState:
+
     def __init__(self, config: Any, root: Path) -> None:
         worker_input = getattr(config, "workerinput", None)
         if worker_input is not None:
@@ -37,6 +37,7 @@ class _TimingState:
         self.output_dir = root / _safe_component(self.label) / _safe_component(self.invocation) / process_name
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.profile_base = self.output_dir / "gpu"
+        self.profile_gpu = os.environ.get("TRITON_CI_TIMING_GPU", "1") != "0"
 
         self.compile_events: list[list[int]] = []
         self.compile_lock = threading.Lock()
@@ -89,7 +90,7 @@ class _TimingState:
         self.wall_start_ns = time.time_ns()
         self.mono_start_ns = time.monotonic_ns()
         self.install_compilation_listener()
-        if self.role == "controller":
+        if self.role == "controller" or not self.profile_gpu:
             return
 
         try:
@@ -152,7 +153,7 @@ class _TimingState:
             "mono_end_ns": self.mono_end_ns,
             "exit_status": self.exit_status,
             "calibration": self.calibration,
-            "profile": str(self.profile_base.with_suffix(".chrome_trace")),
+            "profile": str(self.profile_base.with_suffix(".chrome_trace")) if self.profile_gpu else None,
             "errors": self.errors,
             # Each event is [start, end, cache_hit, ir_init, lowering, store], all times in ns.
             "compile_events": compile_events,
