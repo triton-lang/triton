@@ -773,3 +773,289 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %first, %second, %third : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
   }
 }
+
+// -----
+
+// A tensor-core accumulation loop owns the dot operand and accumulator
+// layouts. Protect that complete protocol without forcing an independent
+// loop-carried fanout in the same function back to legacy layout assignment.
+//
+// BASELINE-LABEL: @hardware_dot_loop_independent_fanout
+// BASELINE-COUNT-1: ttg.convert_layout
+// BASELINE: tt.dot
+// BASELINE-COUNT-3: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @hardware_dot_loop_independent_fanout
+// OPTIMIZED: tt.dot
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 8]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
+#dot_b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @hardware_dot_loop_independent_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>, %lhs: tensor<16x16xf16, #dot_a>, %rhs: tensor<16x16xf16, #dot_b>, %initial: tensor<16x16xf32, #mma>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #mma>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %hardware = scf.for %iv = %zero to %four step %one iter_args(%acc = %initial) -> (tensor<16x16xf32, #mma>) {
+      %next = tt.dot %lhs, %rhs, %acc : tensor<16x16xf16, #dot_a> * tensor<16x16xf16, #dot_b> -> tensor<16x16xf32, #mma>
+      scf.yield %next : tensor<16x16xf32, #mma>
+    }
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %hardware : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #mma>
+  }
+}
+
+// -----
+
+// A tensor-memory load has a hardware-owned result encoding. Keep that load
+// and its loop-carried accumulator unchanged while globally optimizing an
+// unrelated expression in the same function.
+//
+// BASELINE-LABEL: @hardware_tmem_loop_independent_fanout
+// BASELINE-COUNT-1: ttg.convert_layout
+// BASELINE: ttng.tmem_load
+// BASELINE-COUNT-3: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @hardware_tmem_loop_independent_fanout
+// OPTIMIZED: ttng.tmem_load
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#tmem_result = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0]], block = []}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @hardware_tmem_loop_independent_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>, %memory: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, %initial: tensor<128x128xf32, #tmem_result>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<128x128xf32, #tmem_result>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %hardware = scf.for %iv = %zero to %four step %one iter_args(%acc = %initial) -> (tensor<128x128xf32, #tmem_result>) {
+      %loaded = ttng.tmem_load %memory : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #tmem_result>
+      %next = arith.addf %acc, %loaded : tensor<128x128xf32, #tmem_result>
+      scf.yield %next : tensor<128x128xf32, #tmem_result>
+    }
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %hardware : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<128x128xf32, #tmem_result>
+  }
+}
+
+// -----
+
+// Atomic pointer, value, mask, result, and loop-carried layouts are one
+// protocol. Protect them without disabling the independent global component.
+//
+// BASELINE-LABEL: @hardware_atomic_loop_independent_fanout
+// BASELINE-COUNT-1: ttg.convert_layout
+// BASELINE: tt.atomic_rmw
+// BASELINE-COUNT-3: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @hardware_atomic_loop_independent_fanout
+// OPTIMIZED: tt.atomic_rmw
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @hardware_atomic_loop_independent_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>, %counter: !tt.ptr<i32>, %initial: tensor<16x16xi32, #target>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xi32, #target>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %true = arith.constant true
+    %mask = tt.splat %true : i1 -> tensor<16x16xi1, #target>
+    %ptrs = tt.splat %counter : !tt.ptr<i32> -> tensor<16x16x!tt.ptr<i32>, #target>
+    %hardware = scf.for %iv = %zero to %four step %one iter_args(%acc = %initial) -> (tensor<16x16xi32, #target>) {
+      %next = tt.atomic_rmw add, relaxed, gpu, %ptrs, %acc, %mask : (tensor<16x16x!tt.ptr<i32>, #target>, tensor<16x16xi32, #target>, tensor<16x16xi1, #target>) -> tensor<16x16xi32, #target>
+      scf.yield %next : tensor<16x16xi32, #target>
+    }
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %hardware : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xi32, #target>
+  }
+}
+
+// -----
+
+// Descriptor loads own both their TMA descriptor and result encoding. Freeze
+// the complete descriptor loop without sacrificing an independent component.
+//
+// BASELINE-LABEL: @hardware_descriptor_loop_independent_fanout
+// BASELINE-COUNT-1: ttg.convert_layout
+// BASELINE: tt.descriptor_load
+// BASELINE-COUNT-3: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @hardware_descriptor_loop_independent_fanout
+// OPTIMIZED: tt.descriptor_load
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @hardware_descriptor_loop_independent_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>, %descriptor: !tt.tensordesc<128x64xf16, #nvmma_128>, %initial: tensor<128x64xf16, #target>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<128x64xf16, #target>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %coord = arith.constant 0 : i32
+    %hardware = scf.for %iv = %zero to %four step %one iter_args(%acc = %initial) -> (tensor<128x64xf16, #target>) {
+      %loaded = tt.descriptor_load %descriptor[%coord, %coord] : !tt.tensordesc<128x64xf16, #nvmma_128> -> tensor<128x64xf16, #target>
+      %next = arith.addf %acc, %loaded : tensor<128x64xf16, #target>
+      scf.yield %next : tensor<128x64xf16, #target>
+    }
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %hardware : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<128x64xf16, #target>
+  }
+}
+
+// -----
+
+// Synchronization cannot be rematerialized, moved across the loop, or treated
+// as an ordinary memory boundary. Preserve the barrier and its loop while
+// reducing the independent fanout to its single necessary conversion.
+//
+// BASELINE-LABEL: @hardware_barrier_loop_independent_fanout
+// BASELINE-COUNT-1: ttg.convert_layout
+// BASELINE: ttg.barrier local
+// BASELINE-COUNT-3: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @hardware_barrier_loop_independent_fanout
+// OPTIMIZED: ttg.barrier local
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @hardware_barrier_loop_independent_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>, %initial: tensor<16x16xf32, #target>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %hardware = scf.for %iv = %zero to %four step %one iter_args(%acc = %initial) -> (tensor<16x16xf32, #target>) {
+      ttg.barrier local
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %hardware : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
+  }
+}
+
+// -----
+
+// A protected while protocol ties the initializer, before and after arguments,
+// condition, back-edge, atomic result, and loop result. Protect that entire
+// cycle while independently optimizing the ordinary for-loop component.
+//
+// BASELINE-LABEL: @hardware_atomic_while_independent_fanout
+// BASELINE-COUNT-1: ttg.convert_layout
+// BASELINE: tt.atomic_rmw
+// BASELINE-COUNT-3: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @hardware_atomic_while_independent_fanout
+// OPTIMIZED: tt.atomic_rmw
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @hardware_atomic_while_independent_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>, %counter: !tt.ptr<i32>, %initial: tensor<16x16xi32, #target>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xi32, #target>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %zero_i32 = arith.constant 0 : i32
+    %one_i32 = arith.constant 1 : i32
+    %four_i32 = arith.constant 4 : i32
+    %true = arith.constant true
+    %mask = tt.splat %true : i1 -> tensor<16x16xi1, #target>
+    %ptrs = tt.splat %counter : !tt.ptr<i32> -> tensor<16x16x!tt.ptr<i32>, #target>
+    %hardware:2 = scf.while (%acc = %initial, %iteration = %zero_i32) : (tensor<16x16xi32, #target>, i32) -> (tensor<16x16xi32, #target>, i32) {
+      %continue = arith.cmpi slt, %iteration, %four_i32 : i32
+      scf.condition(%continue) %acc, %iteration : tensor<16x16xi32, #target>, i32
+    } do {
+    ^bb0(%acc: tensor<16x16xi32, #target>, %iteration: i32):
+      %next = tt.atomic_rmw add, relaxed, gpu, %ptrs, %acc, %mask : (tensor<16x16x!tt.ptr<i32>, #target>, tensor<16x16xi32, #target>, tensor<16x16xi1, #target>) -> tensor<16x16xi32, #target>
+      %next_iteration = arith.addi %iteration, %one_i32 : i32
+      scf.yield %next, %next_iteration : tensor<16x16xi32, #target>, i32
+    }
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %hardware#0 : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xi32, #target>
+  }
+}

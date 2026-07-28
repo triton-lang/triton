@@ -270,20 +270,31 @@ static bool isFixedLayoutBoundary(Operation *op) {
          !isMemoryEffectFree(op);
 }
 
+static bool isHardwareProtocolLoop(Operation *op) {
+  if (!isa<scf::ForOp, scf::WhileOp>(op))
+    return false;
+
+  WalkResult body = op->walk([&](Operation *nested) {
+    if (nested != op && isFixedLayoutBoundary(nested) &&
+        !isa<LoadOp, StoreOp>(nested))
+      return WalkResult::interrupt();
+    return WalkResult::advance();
+  });
+  return body.wasInterrupted();
+}
+
+static bool hasHardwareProtocolLoop(FuncOp funcOp) {
+  WalkResult result = funcOp.walk([&](Operation *op) {
+    if (isHardwareProtocolLoop(op))
+      return WalkResult::interrupt();
+    return WalkResult::advance();
+  });
+  return result.wasInterrupted();
+}
+
 static bool supportsGlobalLayoutAssignment(FuncOp funcOp) {
   WalkResult result = funcOp.walk([&](Operation *op) {
     if (isa<scf::ForOp, scf::WhileOp>(op)) {
-      // Ordinary loads and stores remain fixed at their individual use
-      // boundaries. Matrix, tensor-memory, atomic, and synchronization
-      // protocols still require the complete loop's established assignment.
-      WalkResult body = op->walk([&](Operation *nested) {
-        if (nested != op && isFixedLayoutBoundary(nested) &&
-            !isa<LoadOp, StoreOp>(nested))
-          return WalkResult::interrupt();
-        return WalkResult::advance();
-      });
-      if (body.wasInterrupted())
-        return WalkResult::interrupt();
       if (auto whileOp = dyn_cast<scf::WhileOp>(op)) {
         for (auto [index, argument] :
              llvm::enumerate(whileOp.getBeforeArguments()))
@@ -327,6 +338,11 @@ static bool supportsGlobalLayoutAssignment(FuncOp funcOp) {
     if (isa<ReduceOp>(op))
       return WalkResult::advance();
 
+    // Hardware and effectful results keep their established encodings. Their
+    // presence must not disable global assignment for unrelated components.
+    if (isFixedLayoutBoundary(op))
+      return WalkResult::advance();
+
     if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         op->hasTrait<OpTrait::Elementwise>() ||
         isa<ConvertLayoutOp, arith::ConstantOp, MakeRangeOp, SplatOp, LoadOp,
@@ -352,6 +368,30 @@ void LayoutPropagation::initAnchorLayout() {
   // calling tt.load.
   for (auto arg : funcOp.getArguments()) {
     addAnchor(arg);
+  }
+
+  if (strategy == LayoutAssignmentStrategy::Global) {
+    funcOp.walk([&](Operation *op) {
+      if (!isHardwareProtocolLoop(op))
+        return;
+
+      // Tensor-core, tensor-memory, descriptor, atomic, and synchronization
+      // loops have jointly chosen layouts. Preserve the complete established
+      // protocol, including loop initializers, results, region arguments, and
+      // every tensor value produced inside the protected loop. Values in
+      // independent components remain available to global assignment.
+      for (Value operand : op->getOperands())
+        addAnchor(operand);
+
+      op->walk([&](Operation *nested) {
+        for (Value result : nested->getResults())
+          addAnchor(result);
+        for (Region &region : nested->getRegions())
+          for (Block &block : region)
+            for (BlockArgument argument : block.getArguments())
+              addAnchor(argument);
+      });
+    });
   }
 
   funcOp.walk([&](Operation *op) {
@@ -2371,6 +2411,19 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
     if (functionStrategy == LayoutAssignmentStrategy::Global &&
         !supportsGlobalLayoutAssignment(funcOp))
       functionStrategy = LayoutAssignmentStrategy::Legacy;
+
+    if (functionStrategy == LayoutAssignmentStrategy::Global &&
+        hasHardwareProtocolLoop(funcOp)) {
+      // Establish the same hardware-owned loop layouts as the legacy pass
+      // before freezing that protocol for global assignment. The second
+      // assignment can still optimize every independent component.
+      LayoutPropagation legacyPropagation(funcOp,
+                                          LayoutAssignmentStrategy::Legacy);
+      legacyPropagation.initAnchorLayout();
+      legacyPropagation.propagateLayout();
+      legacyPropagation.resolveConflicts();
+      legacyPropagation.rewrite();
+    }
 
     LayoutPropagation propagation(funcOp, functionStrategy);
     propagation.initAnchorLayout();
