@@ -1278,7 +1278,6 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
         Value predTensor = triton::SplatOp::create(fb, condType, pred);
         initialized =
             arith::SelectOp::create(fb, predTensor, initialized, vTrue);
-        Value allInitialized = reduceAll<arith::AndIOp>(fb, initialized);
 
         Value maskFF = tti::createConstIntTensor(
             fb, fb.getLoc(), BarrierBits::countMask, barrierStatesType);
@@ -1336,7 +1335,23 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
         Value predicatedValid =
             arith::SelectOp::create(fb, predTensor, valid, vTrue);
 
-        Value allValid = reduceAll<arith::AndIOp>(fb, predicatedValid);
+        auto statusType = condType.clone(fb.getI32Type());
+        Value initializedBits =
+            arith::ExtUIOp::create(fb, statusType, initialized);
+        Value validBits =
+            arith::ExtUIOp::create(fb, statusType, predicatedValid);
+        Value statusShift =
+            tti::createConstIntTensor(fb, fb.getLoc(), 1, statusType);
+        validBits = arith::ShLIOp::create(fb, validBits, statusShift);
+        Value statusBits =
+            arith::OrIOp::create(fb, initializedBits, validBits);
+        Value packedStatus = reduceAll<arith::AndIOp>(fb, statusBits);
+        Value allInitialized =
+            arith::TruncIOp::create(fb, fb.getI1Type(), packedStatus);
+        Value validShift = arith::ConstantIntOp::create(fb, 1, 32);
+        Value allValid = arith::TruncIOp::create(
+            fb, fb.getI1Type(),
+            arith::ShRUIOp::create(fb, packedStatus, validShift));
         Value shouldUpdate = arith::AndIOp::create(
             fb, pred, arith::AndIOp::create(fb, allInitialized, allValid));
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, shouldUpdate);
@@ -1386,13 +1401,7 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
                                           barrierStatesType, recipientCTAs);
 
         fb.setInsertionPointToEnd(thenBlock);
-        Value initializedBit =
-            arith::ExtUIOp::create(fb, fb.getI32Type(), allInitialized);
-        Value validBit = arith::ExtUIOp::create(fb, fb.getI32Type(), allValid);
-        Value shift = arith::ConstantIntOp::create(fb, 1, 32);
-        validBit = arith::ShLIOp::create(fb, validBit, shift);
-        Value status = arith::OrIOp::create(fb, initializedBit, validBit);
-        triton::ReturnOp::create(fb, status);
+        triton::ReturnOp::create(fb, packedStatus);
       },
       /*emitAssert=*/false);
 
