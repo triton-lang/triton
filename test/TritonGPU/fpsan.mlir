@@ -152,7 +152,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
   // CHECK-LABEL: @dot_i8_wide_single_warp_tile
   tt.func public @dot_i8_wide_single_warp_tile() -> tensor<64x64xf32, #blocked> {
-    // CHECK: tensor<16x32x!tt.ptr<i32>
+    // CHECK: tensor<32x32x!tt.ptr<i32>
     %one = arith.constant 1.000000e+00 : f8E4M3FN
     %zero = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
     %a = tt.splat %one : f8E4M3FN -> tensor<64x32xf8E4M3FN, #dot_operand_a>
@@ -177,7 +177,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   // CHECK-LABEL: @dot_i8_mixed_single_warp_tiles
   tt.func public @dot_i8_mixed_single_warp_tiles() -> (tensor<64x32xf32, #blocked>, tensor<64x64xf32, #blocked>) {
     // CHECK-DAG: tensor<32x32x!tt.ptr<i32>
-    // CHECK-DAG: tensor<16x32x!tt.ptr<i32>
+    // CHECK-DAG: tensor<32x32x!tt.ptr<i32>
     %one = arith.constant 1.000000e+00 : f8E4M3FN
     %narrow_zero = arith.constant dense<0.000000e+00> : tensor<64x32xf32, #blocked>
     %wide_zero = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
@@ -187,6 +187,53 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %narrow = tt.dot %a, %narrow_b, %narrow_zero : tensor<64x32xf8E4M3FN, #dot_operand_a> * tensor<32x32xf8E4M3FN, #dot_operand_b> -> tensor<64x32xf32, #blocked>
     %wide = tt.dot %a, %wide_b, %wide_zero : tensor<64x32xf8E4M3FN, #dot_operand_a> * tensor<32x64xf8E4M3FN, #dot_operand_b> -> tensor<64x64xf32, #blocked>
     tt.return %narrow, %wide : tensor<64x32xf32, #blocked>, tensor<64x64xf32, #blocked>
+  }
+
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot_operand_b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @dot_i8_outlined_partition_budgets
+  tt.func public @dot_i8_outlined_partition_budgets() {
+    ttg.warp_specialize() attributes {requestedRegisters = array<i32: 24, 32>}
+    default {
+      ttg.warp_yield
+    }
+    partition0() num_warps(1) {
+      %out = tt.call @dot_i8_outlined_24() : () -> tensor<64x64xf32, #blocked>
+      ttg.warp_return
+    }
+    partition1() num_warps(1) {
+      %out = tt.call @dot_i8_outlined_32() : () -> tensor<64x64xf32, #blocked>
+      ttg.warp_return
+    } : () -> ()
+    tt.return
+  }
+
+  // CHECK-LABEL: tt.func private @dot_i8_outlined_24
+  tt.func private @dot_i8_outlined_24() -> tensor<64x64xf32, #blocked> attributes {"ttg.num-warps" = 1 : i32} {
+    // CHECK: tensor<16x32x!tt.ptr<i32>
+    %one = arith.constant 1.000000e+00 : f8E4M3FN
+    %c = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
+    %a = tt.splat %one : f8E4M3FN -> tensor<64x32xf8E4M3FN, #dot_operand_a>
+    %b = tt.splat %one : f8E4M3FN -> tensor<32x64xf8E4M3FN, #dot_operand_b>
+    %out = tt.dot %a, %b, %c : tensor<64x32xf8E4M3FN, #dot_operand_a> * tensor<32x64xf8E4M3FN, #dot_operand_b> -> tensor<64x64xf32, #blocked>
+    tt.return %out : tensor<64x64xf32, #blocked>
+  }
+
+  // CHECK-LABEL: tt.func private @dot_i8_outlined_32
+  tt.func private @dot_i8_outlined_32() -> tensor<64x64xf32, #blocked> attributes {"ttg.num-warps" = 1 : i32} {
+    // CHECK: tensor<32x32x!tt.ptr<i32>
+    %one = arith.constant 1.000000e+00 : f8E4M3FN
+    %c = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
+    %a = tt.splat %one : f8E4M3FN -> tensor<64x32xf8E4M3FN, #dot_operand_a>
+    %b = tt.splat %one : f8E4M3FN -> tensor<32x64xf8E4M3FN, #dot_operand_b>
+    %out = tt.dot %a, %b, %c : tensor<64x32xf8E4M3FN, #dot_operand_a> * tensor<32x64xf8E4M3FN, #dot_operand_b> -> tensor<64x64xf32, #blocked>
+    tt.return %out : tensor<64x64xf32, #blocked>
   }
 }
 

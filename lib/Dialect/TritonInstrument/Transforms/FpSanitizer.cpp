@@ -73,9 +73,50 @@ bool canUseI8MmaTile(int64_t m, int64_t n, int numWarps) {
          (m / kI8MmaM) * (n / kI8MmaN) >= numWarps;
 }
 
+int64_t getMmaEmulationRegisterBudget(PatternRewriter &rewriter,
+                                      Operation *op) {
+  int64_t defaultBudget = ttg::lookupThreadsPerWarp(rewriter);
+  auto getPartitionBudget = [](Operation *operation) -> std::optional<int64_t> {
+    auto partitions =
+        operation->getParentOfType<ttg::WarpSpecializePartitionsOp>();
+    if (!partitions)
+      return std::nullopt;
+    auto requestedRegisters = partitions.getParentOp().getRequestedRegisters();
+    if (!requestedRegisters)
+      return std::nullopt;
+
+    Region *region = operation->getParentRegion();
+    while (region && region->getParentOp() != partitions.getOperation())
+      region = region->getParentRegion();
+    if (!region || region->getRegionNumber() >= requestedRegisters->size())
+      return std::nullopt;
+
+    int64_t requested = (*requestedRegisters)[region->getRegionNumber()];
+    return requested > 0 ? std::optional<int64_t>(requested) : std::nullopt;
+  };
+
+  if (auto budget = getPartitionBudget(op))
+    return *budget;
+
+  auto func = op->getParentOfType<tt::FuncOp>();
+  auto module = op->getParentOfType<ModuleOp>();
+  if (!func || !module)
+    return defaultBudget;
+
+  std::optional<int64_t> budget;
+  module.walk([&](tt::CallOp call) {
+    if (call.getCallee() != func.getSymName())
+      return;
+    int64_t callBudget =
+        getPartitionBudget(call.getOperation()).value_or(defaultBudget);
+    budget = budget ? std::min(*budget, callBudget) : callBudget;
+  });
+  return budget.value_or(defaultBudget);
+}
+
 std::pair<int64_t, int64_t> getMmaEmulationTileShape(PatternRewriter &rewriter,
-                                                     int64_t m, int64_t n,
-                                                     int64_t k,
+                                                     Operation *op, int64_t m,
+                                                     int64_t n, int64_t k,
                                                      IntegerType accElem) {
   std::pair<int64_t, int64_t> tile = {std::min<int64_t>(kTileM, m),
                                       std::min<int64_t>(kTileN, n)};
@@ -85,22 +126,29 @@ std::pair<int64_t, int64_t> getMmaEmulationTileShape(PatternRewriter &rewriter,
     return tile;
 
   int64_t threadsPerWarp = ttg::lookupThreadsPerWarp(rewriter);
-  // When one accumulator dimension fits within a warp, expanding the tile
-  // along the other dimension reduces emulation loop trips. When both
-  // dimensions exceed a warp, cap the tile more tightly to limit the number
-  // of simultaneously live accumulator limbs and generated integer MMAs.
-  int64_t maxRegistersPerThread =
-      std::min(m, n) <= threadsPerWarp ? threadsPerWarp : threadsPerWarp / 2;
-  int64_t maxTileArea = maxRegistersPerThread * threadsPerWarp * numWarps /
-                        (accElem.getWidth() == 64 ? 2 : 1);
+  int64_t registerBudget = getMmaEmulationRegisterBudget(rewriter, op);
+  int numCTAs = ttg::lookupNumCTAs(rewriter.getInsertionBlock()->getParentOp());
+  auto workElem = accElem.getWidth() == 64 ? accElem : rewriter.getI32Type();
   for (int64_t tileM = kI8MmaM; tileM <= m; tileM *= 2) {
     if ((m % tileM) != 0)
       continue;
     for (int64_t tileN = kI8MmaN; tileN <= n; tileN *= 2) {
-      if ((n % tileN) == 0 && tileM <= 2 * tileN && tileN <= 2 * tileM &&
-          canUseI8MmaTile(tileM, tileN, numWarps) &&
-          tileM * tileN <= maxTileArea &&
-          tileM * tileN > tile.first * tile.second)
+      if ((n % tileN) != 0 || tileM > 2 * tileN || tileN > 2 * tileM ||
+          !canUseI8MmaTile(tileM, tileN, numWarps) ||
+          tileM * tileN <= tile.first * tile.second)
+        continue;
+
+      SmallVector<int64_t> tileShape{tileM, tileN};
+      auto blocked = ttg::getDefaultBlockedEncoding(
+          rewriter.getContext(), tileShape, numWarps, threadsPerWarp, numCTAs);
+      auto mmaLayout = ttg::NvidiaMmaEncodingAttr::get(
+          rewriter.getContext(), /*versionMajor=*/2, /*versionMinor=*/0,
+          ttg::getMmaV2WarpsPerCTA(tileShape, numWarps),
+          ttg::getCGALayout(blocked), SmallVector<unsigned>{kI8MmaM, kI8MmaN});
+      auto workTileTy = RankedTensorType::get(tileShape, workElem, mmaLayout);
+      int64_t accumulatorRegisters =
+          ttg::getTotalElemsPerThread(workTileTy) * (workElem.getWidth() / 32);
+      if (accumulatorRegisters <= registerBudget)
         tile = {tileM, tileN};
     }
   }
@@ -2171,7 +2219,8 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
     Value predInt = arith::ConstantOp::create(
         rewriter, loc, rewriter.getIntegerAttr(accElem, 1));
 
-    auto [tileM, tileN] = getMmaEmulationTileShape(rewriter, m, n, k, accElem);
+    auto [tileM, tileN] =
+        getMmaEmulationTileShape(rewriter, op.getOperation(), m, n, k, accElem);
 
     // Use optimized blocked layouts for emulation tiles instead of the
     // original dot encodings.  Encodings like AMDWmmaEncodingAttr impose
@@ -2325,7 +2374,8 @@ struct DotScaledPattern : public OpRewritePattern<tt::DotScaledOp> {
     Value predInt = arith::ConstantOp::create(
         rewriter, loc, rewriter.getIntegerAttr(accElem, 1));
 
-    auto [tileM, tileN] = getMmaEmulationTileShape(rewriter, m, n, k, accElem);
+    auto [tileM, tileN] =
+        getMmaEmulationTileShape(rewriter, op.getOperation(), m, n, k, accElem);
 
     auto accLayout = getOptimizedBlockedEncoding(rewriter, {tileM, tileN},
                                                  cTy.getElementType());
@@ -2687,7 +2737,8 @@ struct WarpGroupDotPattern : public OpRewritePattern<ttng::WarpGroupDotOp> {
     if (!aScratch || !bScratch || !dPtr)
       return emitFpSanCodegenError(op.getOperation());
 
-    auto [tileM, tileN] = getMmaEmulationTileShape(rewriter, m, n, k, accElem);
+    auto [tileM, tileN] =
+        getMmaEmulationTileShape(rewriter, op.getOperation(), m, n, k, accElem);
 
     auto accTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, tileN},
                                                      cTy.getElementType());
@@ -2773,7 +2824,8 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
         arith::ExtUIOp::create(rewriter, loc, accElem, op.getPred());
 
     rewriter.setInsertionPoint(op);
-    auto [tileM, tileN] = getMmaEmulationTileShape(rewriter, m, n, k, accElem);
+    auto [tileM, tileN] =
+        getMmaEmulationTileShape(rewriter, op.getOperation(), m, n, k, accElem);
     auto accTileLayout =
         getOptimizedBlockedEncoding(rewriter, {tileM, tileN}, accElem);
     auto accTileTy =
@@ -2937,7 +2989,8 @@ struct TCGen5MMAScaledPattern
     if (!bScaleScratch)
       return emitFpSanCodegenError(op.getOperation());
 
-    auto [tileM, tileN] = getMmaEmulationTileShape(rewriter, m, n, k, accElem);
+    auto [tileM, tileN] =
+        getMmaEmulationTileShape(rewriter, op.getOperation(), m, n, k, accElem);
 
     auto accTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, tileN},
                                                      dMemTy.getElementType());
