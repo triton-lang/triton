@@ -1,6 +1,10 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-remove-layout-conversions | FileCheck %s --check-prefixes=BASELINE,TREE
 // RUN: triton-opt %s -split-input-file -tritongpu-optimize-layouts | FileCheck %s --check-prefixes=OPTIMIZED,TREE
 // RUN: triton-opt %s -split-input-file -tritongpu-optimize-layouts -tritongpu-optimize-layouts | FileCheck %s --check-prefixes=OPTIMIZED,TREE
+// RUN: triton-opt %s -split-input-file -tritongpu-optimize-layouts --mlir-print-ir-after-all -o /dev/null 2>&1 | FileCheck %s --check-prefix=PASS-PIPELINE
+
+// PASS-PIPELINE-NOT: TritonGPURemoveLayoutConversions
+// PASS-PIPELINE: IR Dump After TritonGPUOptimizeLayouts
 
 // Reduced from the exact-order stochastic-rounding handoff. Unlike adding
 // allow_reorder to the reshapes, optimizing the whole scalar-rooted expression

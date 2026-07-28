@@ -4,11 +4,11 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
-#include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/LayoutAssignment.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/DenseMap.h"
@@ -647,13 +647,7 @@ public:
   void runOnOperation() override {
     ModuleOp module = getOperation();
 
-    // Keep the incumbent assignment as an independently measurable floor
-    // until the global optimizer has matched its full workload coverage.
-    OpPassManager incumbent;
-    TritonGPURemoveLayoutConversionsOptions options;
-    options.disableRematSplitting = disableRematSplitting;
-    incumbent.addPass(createTritonGPURemoveLayoutConversions(options));
-    if (failed(runPipeline(incumbent, module)))
+    if (failed(optimizeDistributedLayouts(module, disableRematSplitting)))
       return signalPassFailure();
 
     shareDominatingConversions(module);

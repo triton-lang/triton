@@ -275,9 +275,10 @@ def TritonGPUOptimizeLayouts : Pass<"tritongpu-optimize-layouts", "mlir::ModuleO
   let description = [{
     Optimize distributed tensor layouts while preserving the layout constraints
     of function boundaries, loads, stores, and matrix operations. The pass
-    retains the incumbent layout optimization as a compatibility baseline,
-    shares dominating layout conversions, and rematerializes bounded,
-    scalar-rooted, side-effect-free tensor graphs in their required layouts.
+    independently runs whole-function layout assignment and structured
+    control-flow rematerialization, shares dominating layout conversions, and
+    rematerializes bounded, scalar-rooted, side-effect-free tensor graphs in
+    their required layouts.
     Exact-order reshapes retain their original ordering semantics.
   }];
 
@@ -287,7 +288,7 @@ def TritonGPUOptimizeLayouts : Pass<"tritongpu-optimize-layouts", "mlir::ModuleO
   let options = [
     Option<"disableRematSplitting", "disable-remat-splitting",
            "bool", /*default*/"false",
-           "prevent incumbent rematerialization from splitting or duplicating "
+           "prevent rematerialization from splitting or duplicating "
            "convert-layout work">
   ];
 }

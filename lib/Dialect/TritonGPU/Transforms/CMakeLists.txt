@@ -7,6 +7,7 @@ add_triton_library(TritonGPUTransforms
   DecomposeScaledBlocked.cpp
   DescriptorMemoryLayouts.cpp
   HoistTMEMAlloc.cpp
+  LayoutAssignment.cpp
   ReduceDataDuplication.cpp
   OptimizeAccumulatorInit.cpp
   OptimizeDotOperands.cpp
