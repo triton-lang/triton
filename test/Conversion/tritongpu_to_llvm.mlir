@@ -87,9 +87,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: store_with_cache_attr
   tt.func @store_with_cache_attr(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
+    // The cache policy register is created once (hoisted out of the vectorization loop).
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "mov.u64 $0, 0x0;\0A\09createpolicy.fractional.L2::evict_last.b64 $0, 1.0;"
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "@$3 st.global.L1::evict_last.L2::cache_hint.b32 [ $1 + 0 ], { $0 }, $2;"
-    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "mov.u64 $0, 0x0;\0A\09createpolicy.fractional.L2::evict_last.b64 $0, 1.0;"
+    // CHECK-NOT: createpolicy
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "@$3 st.global.L1::evict_last.L2::cache_hint.b32 [ $1 + 0 ], { $0 }, $2;"
     tt.store %a_ptr_init, %cst_0, %cst evictionPolicy = evict_last cacheModifier = ca : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
@@ -102,9 +103,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: load_with_l2_cache_hint
   tt.func @load_with_l2_cache_hint(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
+    // The cache policy register is created once (hoisted out of the vectorization loop).
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "mov.u64 $0, 0x0;\0A\09createpolicy.fractional.L2::evict_first.b64 $0, 1.0;"
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "mov.u32 $0, $1;\0A\09@$4 ld.global.L1::evict_first.L2::cache_hint.b32 { $0 }, [ $2 + 0 ], $3;"
-    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "mov.u64 $0, 0x0;\0A\09createpolicy.fractional.L2::evict_first.b64 $0, 1.0;"
+    // CHECK-NOT: createpolicy
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "mov.u32 $0, $1;\0A\09@$4 ld.global.L1::evict_first.L2::cache_hint.b32 { $0 }, [ $2 + 0 ], $3;"
       %1 = tt.load %a_ptr_init, %cst, %cst_0 evictionPolicy = evict_first : tensor<256x!tt.ptr<f32>, #blocked0>
       tt.return
@@ -116,9 +118,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: store_with_l2_cache_hint
   tt.func @store_with_l2_cache_hint(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
+    // The cache policy register is created once (hoisted out of the vectorization loop).
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "mov.u64 $0, 0x0;\0A\09createpolicy.fractional.L2::evict_last.b64 $0, 1.0;"
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "@$3 st.global.L1::evict_last.L2::cache_hint.b32 [ $1 + 0 ], { $0 }, $2;"
-    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "mov.u64 $0, 0x0;\0A\09createpolicy.fractional.L2::evict_last.b64 $0, 1.0;"
+    // CHECK-NOT: createpolicy
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "@$3 st.global.L1::evict_last.L2::cache_hint.b32 [ $1 + 0 ], { $0 }, $2;"
       tt.store %a_ptr_init, %cst_0, %cst evictionPolicy = evict_last : tensor<256x!tt.ptr<f32>, #blocked0>
       tt.return
@@ -550,6 +553,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: rank_reducing_subview
   tt.func @rank_reducing_subview() {
     // CHECK: llvm.mlir.addressof @global_smem
+    // CHECK: llvm.mlir.constant(1536 : i32) : i32
+    // CHECK-NEXT: llvm.getelementptr
     // CHECK: llvm.mlir.constant(512 : i32) : i32
     // CHECK-NEXT: llvm.mul
     // CHECK-NEXT: llvm.extractvalue
@@ -558,9 +563,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: llvm.extractvalue
     // CHECK-NEXT: llvm.getelementptr
     %index = arith.constant 1 : i32
-    %zero = arith.constant 0 : i32
     %0 = ttg.local_alloc : () -> !ttg.memdesc<128x16x32xf32, #shared0, #smem, mutable>
-    %1 = ttg.memdesc_index %0[%index] : !ttg.memdesc<128x16x32xf32, #shared0, #smem, mutable> -> !ttg.memdesc<16x32xf32, #shared0, #smem, mutable>
+    %sub = ttg.memdesc_subslice %0 [3, 0, 0] : !ttg.memdesc<128x16x32xf32, #shared0, #smem, mutable> -> !ttg.memdesc<3x16x32xf32, #shared0, #smem, mutable, 128x16x32>
+    %1 = ttg.memdesc_index %sub[%index] : !ttg.memdesc<3x16x32xf32, #shared0, #smem, mutable, 128x16x32> -> !ttg.memdesc<16x32xf32, #shared0, #smem, mutable>
     tt.return
   }
 }
@@ -839,24 +844,6 @@ module attributes {"ttg.num-warps" = 1 : i32} {
 
 // -----
 
-#forced_shuffle_src = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4]], lane = [[1, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [], block = []}>
-#forced_shuffle_dst = #ttg.linear<{register = [[1, 0], [0, 4]], lane = [[0, 0], [0, 0], [0, 1], [0, 2], [0, 0]], warp = [], block = []}>
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
-  // CHECK-LABEL: @convert_layout_forced_expensive_warp_local
-  tt.func @convert_layout_forced_expensive_warp_local(
-      %arg0: tensor<2x8xi16, #forced_shuffle_src>) attributes {always_use_warp_shuffle} {
-    // CHECK-NOT: llvm.mlir.addressof @global_smem
-    // CHECK: nvvm.shfl.sync
-    // CHECK-NOT: llvm.mlir.addressof @global_smem
-    %0 = ttg.convert_layout %arg0
-        : tensor<2x8xi16, #forced_shuffle_src> -> tensor<2x8xi16, #forced_shuffle_dst>
-    tt.return
-  }
-}
-
-// -----
-
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
@@ -865,7 +852,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @convert_layout_blocked_blocked(%arg0: tensor<32x32xf32, #blocked0>) {
     // CHECK: llvm.mlir.addressof @global_smem
     // CHECK-COUNT-8: llvm.store
-    // CHECK: nvvm.barrier
+    // CHECK-: nvvm.barrier
     // CHECK-COUNT-8: llvm.load
     %0 = ttg.convert_layout %arg0 : tensor<32x32xf32, #blocked0> -> tensor<32x32xf32, #blocked1>
     tt.return

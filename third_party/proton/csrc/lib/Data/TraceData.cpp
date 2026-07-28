@@ -383,7 +383,7 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
     for (const auto &[_, event] : events) {
       if (event.hasCpuTimeRange()) { // CPU scope event
         cpuScopeEvents[event.threadId].emplace_back(
-            event.id,
+            event.id, event.scopeId,
             event.metricSet.flexibleMetrics.empty()
                 ? nullptr
                 : &event.metricSet.flexibleMetrics,

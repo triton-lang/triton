@@ -239,7 +239,7 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
 def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                                               AllTypesMatch<["inputs", "outputs"]>]> {
   let summary = "warp group dot wait";
-  let arguments = (ins Variadic<TTG_TensorOrMemDesc>:$inputs, I32Attr:$pendings);
+  let arguments = (ins Variadic<TTG_TensorOrMemDesc>:$inputs, I32Attr:$pendings, UnitAttr:$warpGroupLocal);
   let results = (outs Variadic<TTG_TensorOrMemDesc>:$outputs);
   let description = [{
     Waits until there are $pendings or fewer outstanding async dot operations.
@@ -248,6 +248,11 @@ def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterface
     waiting on. For example, if there are N pending async dot ops and we wait
     until one remains pending, then $inputs must include the results of the
     first N - 1 dot ops.
+
+    The `warpGroupLocal` attribute specifies that we only wait for the local
+    warp group, and if num_warps > 4 then shared memory inputs may still be in
+    use by other warp groups. This is useful when only the result register
+    values need to be ready and the shared memory inputs will not be overwritten.
   }];
 
   let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
@@ -298,15 +303,26 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
   let description = [{
     This signals the barrier that `size` bytes are expected to be copied. The
     associated barrier wait will block until the expected number of bytes has
-    been copied.
+    been copied. The optional `fromCTA` attribute is a CTA-ID
+    basis-selection mask: set bits are preserved and unset bits are zeroed
+    when selecting the CTA that routes the arrival to each per-CTA barrier.
   }];
 
   let hasVerifier = 1;
+  let hasCanonicalizeMethod = 1;
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$alloc,
     I32Attr:$size,
-    I1:$pred
+    I1:$pred,
+    OptionalAttr<I32Attr>:$fromCTA
   );
+
+  let builders = [
+    OpBuilder<(ins "Value":$alloc, "uint32_t":$size, "Value":$pred), [{
+      build($_builder, $_state, alloc, $_builder.getI32IntegerAttr(size), pred,
+            /*fromCTA=*/IntegerAttr());
+    }]>
+  ];
 
   let assemblyFormat = [{
     $alloc `,` $size attr-dict `,` $pred `:` qualified(type($alloc))
@@ -323,8 +339,8 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
     Blocks the program progress until the mbarrier object in `alloc` completes
     its current phase.
 
-    This lowers a waitloop using the PTX instruction
-    mbarrier.try_wait.parity{.acquire.cluster}.shared::cta.b64.
+    This lowers a waitloop using PTX instruction
+    mbarrier.try_wait.parity.shared::cta.b64.
 
     Accepts an optional list of memory dependencies. If present, it is assumed
     that any of the dependencies may be accessed until the barrier completes.
@@ -372,30 +388,35 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
     of at least 1 and decreases the pending arrival count of the mbarrier by
     the specified count.
 
-    When `ctaMask` is non-zero, the arrive is multicast across the cluster.
+    When `multicastCTA` is non-zero, the arrive is multicast across the cluster.
     Each bit set in the mask identifies a CTA ID dimension to multicast
     along. CTA IDs `a` and `b` belong to the same equivalence class iff
-    `a & ~ctaMask == b & ~ctaMask`; all CTAs in a class multicast to each
-    other. Multicast requires `numCTAs > 1`, `0 < ctaMask <= numCTAs - 1`,
+    `a & ~multicastCTA == b & ~multicastCTA`; all CTAs in a class multicast to each
+    other. Multicast requires `numCTAs > 1`, `0 < multicastCTA <= numCTAs - 1`,
     and the barrier must have the identity CGA layout `[[1], [2], ...]`. The
-    default value of `ctaMask` is 0 (no multicast).
+    default value of `multicastCTA` is 0 (no multicast).
 
-    The operation accepts an optional predicate.
+    The operation accepts an optional predicate and `fromCTA` attribute. The
+    latter is a CTA-ID basis-selection mask: set bits are preserved and unset
+    bits are zeroed when selecting the CTA that routes the arrival to each
+    per-CTA barrier. A non-identity `fromCTA` cannot be combined with
+    multicast.
 
     Example:
 
     ```mlir
     ttng.arrive_barrier %barrier, 2 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ttng.arrive_barrier %barrier, 1, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
-    ttng.arrive_barrier %barrier, 1 {ctaMask = 1 : i32} : !ttg.memdesc<2xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %barrier, 1 {multicastCTA = 1 : i32} : !ttg.memdesc<2xi64, #shared, #smem, mutable>
     ```
   }];
 
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$alloc,
     I32Attr:$count,
-    DefaultValuedOptionalAttr<I32Attr, "0">:$ctaMask,
-    Optional<I1>:$pred
+    Optional<I1>:$pred,
+    OptionalAttr<I32Attr>:$fromCTA,
+    DefaultValuedOptionalAttr<I32Attr, "0">:$multicastCTA
   );
 
   let assemblyFormat = [{
@@ -404,18 +425,21 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
 
   let builders = [
     OpBuilder<(ins "Value":$alloc, "uint32_t":$count), [{
-      build($_builder, $_state, alloc, count, /*ctaMask=*/0u, /*pred=*/Value());
+      build($_builder, $_state, alloc, count, /*pred=*/Value(),
+            /*fromCTA=*/IntegerAttr(), /*multicastCTA=*/0u);
     }]>,
     OpBuilder<(ins "Value":$alloc, "uint32_t":$count, "Value":$pred), [{
-      build($_builder, $_state, alloc, count, /*ctaMask=*/0u, pred);
+      build($_builder, $_state, alloc, count, pred, /*fromCTA=*/IntegerAttr(),
+            /*multicastCTA=*/0u);
     }]>
   ];
 
   let extraClassDeclaration = [{
-    bool isMulticast() { return getCtaMask() != 0; }
+    bool isMulticast() { return getMulticastCTA() != 0; }
   }];
 
   let hasVerifier = 1;
+  let hasCanonicalizeMethod = 1;
 }
 
 def TTNG_AsyncCopyMbarrierArriveOp : TTNG_Op<"async_copy_mbarrier_arrive", [
@@ -1001,8 +1025,9 @@ def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure,
   let description = [{
     This operation takes a subslice of a tensor memory allocation and returns a
     new descriptor containing the address and a view of the subslice.
-    This is similar to ttg.memdesc_subslice and can slice either dimension of a
-    2D tensor memory descriptor, including non-contiguous views within a CTA.
+    This is similar to ttg.memdesc_subslice and can slice either physical-layout
+    dimension or the leading pipeline dimension of an ordinary descriptor. Scale
+    descriptors support their two physical-layout dimensions.
   }];
   let arguments = (ins TTG_MemDescType:$src, I32Attr:$offset,
                        DefaultValuedAttr<I32Attr, "1">:$dim);

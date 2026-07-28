@@ -234,21 +234,18 @@ upcast4xMxfp8_HW(RewriterBase &rewriter, Location loc, ArrayRef<Value> xVals,
 //
 // 3) for `opSel` used in the rocdl.cvt.scale.pk8
 //
-// From the SP guide, the `opSel` is defined as:
+// Scale selection for v_cvt_scale_pk8 is driven by opSel and four Vscale bytes.
+// For the modes used here, byte 0 holds the local lane's scale. For F4/F6
+// opSel=0, lanes 0..15 read byte 0 and lanes 16..31 read byte 1, so
+// crossLaneScale (when present) is packed into byte 1. For F8, opSel=0 uses
+// byte 0 for both lane halves when the scale layout is lane^16-broadcast;
+// otherwise opSel=8 selects Block16 mode and byte 1 supplies the lane^16 scale.
 //
-// OPSEL[0:2]  |  Lane0..15 of SRC0         | Lane16..31 of SRC0
-// -----------------------------------------------------------
-// 000         |  Lane0..15 of Vscale[7:0]  | <-- same
-//
-// which means if OPSEL is zero, hardware requires every lane and lane+16 share
-// the same scale. In the meantime, as comments for parameter `inputVals`,
-// `lane` and `lane+16` hold one row of input tile,
-//
-// In the end, `opSel` is zero.
 template <typename ConvertOp>
 SmallVector<Value, 8> upcast8xMxfp8fp4_HW(RewriterBase &rewriter, Location loc,
                                           ArrayRef<Value> inputVals, int idx,
-                                          ArrayRef<Value> scales) {
+                                          ArrayRef<Value> scales, int scaleIdx,
+                                          Value crossLaneScale = Value()) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   bool toFp16 = (std::is_same_v<ConvertOp, ROCDL::CvtPkScalePk8F16Fp8Op> ||
@@ -268,15 +265,18 @@ SmallVector<Value, 8> upcast8xMxfp8fp4_HW(RewriterBase &rewriter, Location loc,
       fromFP4 ? b.bitcast(packedVec, i32_ty)
               : b.bitcast(packedVec, vec_ty(i32_ty, packedSize / sizeof(int)));
 
+  assert(scaleIdx >= 0 && scaleIdx < static_cast<int>(scales.size()));
+  Value localScale = scales[scaleIdx];
+  Value partnerScale = crossLaneScale ? crossLaneScale : localScale;
+  unsigned scaleSel = !fromFP4 && crossLaneScale ? 8 : 0;
   Value packedScale = b.undef(vec_ty(i8_ty, 4));
-  auto scaleIdx = fromFP4 ? (idx + idx) : idx;
-  for (int ii : llvm::seq(4))
-    packedScale =
-        b.insert_element(packedScale, scales[scaleIdx], b.i32_val(ii));
+  packedScale = b.insert_element(packedScale, localScale, b.i32_val(0));
+  if (fromFP4 || crossLaneScale)
+    packedScale = b.insert_element(packedScale, partnerScale, b.i32_val(1));
   Value scaleInt32 = b.bitcast(packedScale, i32_ty);
-  auto res = ConvertOp::create(rewriter, loc, resType, packedVec, scaleInt32,
-                               /*opSel*/ 0)
-                 .getRes();
+  auto res =
+      ConvertOp::create(rewriter, loc, resType, packedVec, scaleInt32, scaleSel)
+          .getRes();
   Value elements = b.bitcast(res, vec_ty(resElemType, 8));
 
   SmallVector<Value, 8> results;

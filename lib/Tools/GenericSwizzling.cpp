@@ -437,9 +437,10 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   auto kReg = StringAttr::get(ctx, "register");
 
   auto regsNotZero = [kReg](const LinearLayout &ll) {
-    return llvm::all_of(
-        ll.getBases().lookup(kReg),
-        [](const std::vector<int32_t> &basis) { return basis[0] != 0; });
+    auto outDims = llvm::to_vector(ll.getOutDimNames());
+    unsigned regBits = ll.getInDimSizeLog2(kReg);
+    return getInputBasisMask(ll, kReg, outDims) ==
+           llvm::maskTrailingOnes<uint64_t>(regBits);
   };
   assert(
       regsNotZero(src) &&

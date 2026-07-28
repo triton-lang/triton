@@ -99,27 +99,22 @@ class TensorMemoryScalesLayout:
 
     Args:
         cga_layout (Optional[List[List[int]]]): CGA layout bases. Defaults to [].
-        block_rep_order (str): Order of repeated scale blocks. Must be either
-            ``"mnThenK"`` or ``"kThenMn"``. Defaults to ``"mnThenK"``.
     """
     cga_layout: List[List[int]] = field(default_factory=list)
-    block_rep_order: str = "mnThenK"
 
     def __post_init__(self):
         super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
-        super().__setattr__("block_rep_order", _unwrap_if_constexpr(self.block_rep_order))
         assert all(len(basis) == 2 for basis in self.cga_layout)
-        assert self.block_rep_order in ("mnThenK", "kThenMn")
 
     def _to_ir(self, builder):
-        return builder.get_tensor_memory_scales_layout([list(basis) for basis in self.cga_layout], self.block_rep_order)
+        return builder.get_tensor_memory_scales_layout([list(basis) for basis in self.cga_layout])
 
     def mangle(self) -> str:
         cga_layout_str = "_".join("~".join(map(str, basis)) for basis in self.cga_layout)
-        return f"TLS{self.block_rep_order}_{cga_layout_str}TLS"
+        return f"TLS{cga_layout_str}TLS"
 
     def __hash__(self):
-        return hash((tuple(tuple(b) for b in self.cga_layout), self.block_rep_order))
+        return hash(tuple(tuple(b) for b in self.cga_layout))
 
 
 @dataclass(frozen=True)
@@ -376,7 +371,7 @@ class tensor_memory_descriptor(base_value):
         Args:
             start (int): The starting index for subslice.
             length (int): The length of the subslice.
-            dim (int): The dimension to slice (default: 1).
+            dim (int): The dimension to slice, including a leading pipeline-stage dimension (default: 1).
 
         Returns:
             tensor_memory_descriptor: Descriptor for the subslice.
@@ -386,7 +381,7 @@ class tensor_memory_descriptor(base_value):
         dim = _unwrap_if_constexpr(dim)
         _check(isinstance(start, int), lambda: "start must be a constant int")
         _check(isinstance(length, int), lambda: "length must be a constant int")
-        _check(isinstance(dim, int) and dim in (0, 1), lambda: "dim must be 0 or 1")
+        _check(isinstance(dim, int) and dim in range(len(self.shape)), lambda: "invalid slice dimension")
         shape = list(self.shape)
         shape[dim] = length
         layout = self.type.layout

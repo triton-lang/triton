@@ -250,14 +250,8 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
   return b.or_(orPart, xorPart, /*disjoint=*/true);
 }
 
-FailureOr<bool> cvtAlwaysUseWarpShuffle(ConvertLayoutOp cvt) {
-  if (cvtUsesForcedWarpShuffle(cvt))
-    return true;
-  if (!cvtIsWarpShuffleForced(cvt))
-    return false;
-  cvt.emitError("'always_use_warp_shuffle' requires a warp-local layout "
-                "conversion");
-  return failure();
+bool cvtAlwaysUseWarpShuffle(ConvertLayoutOp cvt) {
+  return cvt->getParentOp()->hasAttrOfType<UnitAttr>("always_use_warp_shuffle");
 }
 
 Value maybeAnd(OpBuilder &builder, Location loc, Value a, Value b) {
@@ -1230,6 +1224,28 @@ void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
   }
 }
 
+Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
+                                  Value resultVal,
+                                  ConversionPatternRewriter &rewriter,
+                                  TritonLLVMOpBuilder &b, Value threadPred,
+                                  const TargetInfoBase &targetInfo) {
+  if (!op->hasAttr("allocation.offset"))
+    return resultVal;
+
+  auto loc = op->getLoc();
+  Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+  targetInfo.storeShared(rewriter, loc, smemBase, resultVal, threadPred);
+  if (triton::gpu::lookupNumCTAs(op) == 1) {
+    targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+    return targetInfo.loadShared(rewriter, loc, smemBase, valueElemTy,
+                                 b.true_val());
+  }
+
+  targetInfo.clusterBarrier(loc, rewriter, op);
+  return targetInfo.loadDShared(rewriter, loc, smemBase, b.i32_val(0),
+                                valueElemTy, b.true_val());
+}
+
 llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx) {
   // Mask where all elements are redundant
   auto kReg = str_attr("reg");
@@ -1424,11 +1440,10 @@ SmallVector<Type> SharedMemoryObject::getTypes() const {
 std::pair<uint64_t, uint64_t> SharedMemoryObject::getMaskSpanOffsetsAndBlocks(
     triton::gpu::MemDescType srcTy) {
   auto ctx = srcTy.getContext();
-  auto shape = srcTy.getShape();
-  auto allocShape = srcTy.getAllocShape();
-  assert(allocShape.size() >= shape.size());
-  assert(allocShape.size() - shape.size() <= 1);
-  allocShape = allocShape.take_back(shape.size());
+  auto encoding = srcTy.getEncoding();
+  auto shape = triton::gpu::dropPipeliningDim(srcTy.getShape(), encoding);
+  auto allocShape =
+      triton::gpu::dropPipeliningDim(srcTy.getAllocShape(), encoding);
 
   // Early exist when there is no subview
   if (allocShape == shape) {
@@ -1487,9 +1502,11 @@ std::pair<Value, Value> SharedMemoryObject::getShmemOffsetAndBlock(
     ll = triton::gpu::toLinearLayout(srcTy);
   }
 
-  auto dimNames = standardOutDimNames(ctx, offsets.size());
+  auto layoutOffsets =
+      triton::gpu::dropPipeliningDim(ArrayRef(offsets), srcTy.getEncoding());
+  auto dimNames = standardOutDimNames(ctx, layoutOffsets.size());
   SmallVector<std::pair<StringAttr, Value>> logicalOffsets;
-  for (auto [dim, offset] : llvm::zip(dimNames, offsets)) {
+  for (auto [dim, offset] : llvm::zip(dimNames, layoutOffsets)) {
     logicalOffsets.push_back({dim, offset});
   }
 

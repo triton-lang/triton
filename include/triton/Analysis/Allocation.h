@@ -150,11 +150,6 @@ public:
     return bufferSet.at(bufferId).kind == BufferT::BufferKind::Virtual;
   }
 
-  /// Returns if the given buffer is compiler-owned operation scratch.
-  bool isScratchBuffer(BufferId bufferId) const {
-    return bufferSet.at(bufferId).kind == BufferT::BufferKind::Scratch;
-  }
-
   /// Returns if the given buffer is an explicit buffer.
   bool isExplicitBuffer(BufferId bufferId) const {
     return bufferSet.at(bufferId).kind == BufferT::BufferKind::Explicit;
@@ -169,9 +164,9 @@ public:
 private:
   /// A class that represents a shared memory buffer
   struct BufferT {
-    /// Explicit: SSA-visible shared-memory allocations such as ttg.local_alloc.
-    /// Scratch: compiler-owned shared memory used by an operation or function.
-    /// Virtual: a caller's view of a callee's shared-memory frame.
+    /// Explicit: ttg.local_alloc
+    /// Scratch: ttg.convert_layout
+    /// Virtual: triton.call
     enum class BufferKind { Explicit, Scratch, Virtual };
 
     BufferKind kind;

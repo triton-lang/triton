@@ -42,8 +42,8 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-DAG: %[[ADDR2:.*]] = llvm.select %[[P2]], %{{.*}}, %[[ADDR1]]
     // CHECK-DAG: %[[P3:.*]] = llvm.icmp "eq" %[[WARPID]], %{{.*}}
     // CHECK-DAG: %[[ADDR3:.*]] = llvm.select %[[P3]], %{{.*}}, %[[ADDR2]]
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<96xi32, #shared, #smem, mutable>
-    %3 = proton_gpu.segment_alloc %0 : !ttg.memdesc<96xi32, #shared, #smem, mutable> -> !proton_gpu.segment<384, #smem, warp, [0, 1, 2]>
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<96x1xi32, #shared, #smem, mutable>
+    %3 = proton_gpu.segment_alloc %0 : !ttg.memdesc<96x1xi32, #shared, #smem, mutable> -> !proton_gpu.segment<384, #smem, warp, [0, 1, 2]>
     tt.return %3 : !proton_gpu.segment<384, #smem, warp, [0, 1, 2]>
   }
 }

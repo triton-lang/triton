@@ -630,6 +630,9 @@ def _matmul(
             INDEX_TYPE=index_type,
         )
         mask_n_scale = offs_y_n_scale < N_MX_BLOCK
+        if Y_MX_SCALE_LAYOUT == "BLACKWELL_ACT_SCALE" and not OUT_N_TILE_ALIGNED:
+            out_scale = tl.where(mask_n_scale[None, :], out_scale, 0)
+            mask_n_scale = offs_y_n_scale < tl.cdiv(N_MX_BLOCK, 4) * 4
         scale_store_mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n_scale[None, :]
         tl.store(YActualScalePtrs, out_scale, mask=scale_store_mask)
     else:

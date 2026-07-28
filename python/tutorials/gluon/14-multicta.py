@@ -308,8 +308,8 @@ if __name__ == "__main__" and is_hopper_or_newer():
 # part of the kernel before entering warp specialization.
 #
 # Final note on synchronization.
-# cluster.arrive / cluster.wait (i.e., CGA barriers, the cluster equivalent of bar.sync for CTAs) must be
-# executed by all threads in the kernel. As a result, they cannot be used inside a warp_specialize block.
+# Cluster barriers (i.e., CGA barriers, the cluster equivalent of bar.sync for CTAs) must be executed by all
+# threads in the kernel. As a result, they cannot be used inside a warp_specialize block.
 #
 # Moreover, operations such as convert_layout, reduce, sum, max, etc., emit CGA barriers when they cross CTAs.
 # Therefore, these operations are also not allowed inside a warp_specialize block whenever they may span multiple
@@ -846,7 +846,7 @@ def matmul_clc_partition(p):
         mbarrier.wait(p.clc_consumed_bars.index(consumed_state.index), consumed_state.phase, pred=(i >= acc_stages))
         barrier = p.clc_barriers.index(state.index)
         result = p.clc_result_buffers.index(state.index)
-        mbarrier.expect(barrier, 16)
+        mbarrier.expect(barrier, 16, from_cta=0x0)
         clc.try_cancel(result, barrier)
         mbarrier.wait(barrier, state.phase)
         clc_res = clc.load_result(result)

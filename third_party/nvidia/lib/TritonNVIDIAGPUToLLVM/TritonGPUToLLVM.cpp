@@ -113,8 +113,8 @@ struct ConvertTritonGPUToLLVM
     if (enableConcurrencySanitizer) {
       auto hooks = mlir::triton::instrument::createConSanHooks("nvidia");
       assert(hooks && "no ConSan hooks registered for nvidia");
-      if (failed(mlir::triton::instrument::runConcurrencySanitizer(
-              mod, hooks.get())))
+      if (failed(
+              mlir::triton::instrument::runConcurrencySanitizer(mod, *hooks)))
         return signalPassFailure();
       mlir::PassManager cleanupPm(context);
       cleanupPm.addPass(mlir::triton::gluon::createGluonCanonicalize());
@@ -174,17 +174,8 @@ struct ConvertTritonGPUToLLVM
                                                targetInfo, benefit);
     mlir::triton::populateGatherOpToLLVMPatterns(typeConverter, patterns,
                                                  targetInfo, benefit);
-    bool isCrossCluster =
-        computeCapability >= 90 &&
-        triton::gpu::TritonGPUDialect::getNumCTAs(mod) >= 2 &&
-        mod.walk([](Operation *op) {
-             return ttng::isDistributedMultiCTAOp(op, /*isRead=*/true)
-                        ? WalkResult::interrupt()
-                        : WalkResult::advance();
-           })
-            .wasInterrupted();
     populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit,
-                                    targetInfo, isCrossCluster);
+                                    targetInfo);
     populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit,
                                      targetInfo);
     mlir::triton::populateHistogramOpToLLVMPatterns(typeConverter, patterns,

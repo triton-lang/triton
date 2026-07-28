@@ -148,13 +148,21 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   int sm_clock_rate;
   int mem_clock_rate;
   int mem_bus_width;
+  int major;
+  int minor;
+
+  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+      &major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device));
+  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+      &minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device));
 
   // XXX: remove attribute enum def once latest cuda.h is in use
   int CU_DEVICE_ATTRIBUTE_MAX_OVERSIZED_SHARED_MEMORY_PER_BLOCK = 150;
-  if (CUDA_SUCCESS !=
-      cuDeviceGetAttribute(
-          &max_shared_mem,
-          CU_DEVICE_ATTRIBUTE_MAX_OVERSIZED_SHARED_MEMORY_PER_BLOCK, device)) {
+  if (major == 10 && minor == 7) {
+    CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+        &max_shared_mem,
+        CU_DEVICE_ATTRIBUTE_MAX_OVERSIZED_SHARED_MEMORY_PER_BLOCK, device));
+  } else {
     CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
         &max_shared_mem, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
         device));
@@ -253,6 +261,20 @@ static PyObject *getDefaultStream(PyObject *self, PyObject *args) {
 
   // CUDA default stream is always 0.
   return PyLong_FromUnsignedLongLong(0);
+}
+
+static PyObject *isStreamCapturing(PyObject *self, PyObject *args) {
+  uint64_t stream;
+  if (!PyArg_ParseTuple(args, "K", &stream)) {
+    return NULL;
+  }
+
+  CUstreamCaptureStatus status;
+  CUDA_CHECK_AND_RETURN_NULL(cuStreamIsCapturing((CUstream)stream, &status));
+  return PyBool_FromLong(status != CU_STREAM_CAPTURE_STATUS_NONE);
+
+cleanup:
+  return NULL;
 }
 
 static PyObject *loadBinary(PyObject *self, PyObject *args) {
@@ -1534,6 +1556,8 @@ static PyMethodDef ModuleMethods[] = {
      "Set the current CUDA device index"},
     {"get_default_stream", getDefaultStream, METH_VARARGS,
      "Get the CUDA default stream for torch-free launches"},
+    {"is_stream_capturing", isStreamCapturing, METH_VARARGS,
+     "Check whether a CUDA stream is being captured"},
     {"cuOccupancyMaxActiveClusters", occupancyMaxActiveClusters, METH_VARARGS,
      "Python interface for cuOccupancyMaxActiveClusters function"},
     {"set_printf_fifo_size", setPrintfFifoSize, METH_VARARGS,

@@ -52,7 +52,7 @@ struct ConvertProtonAMDGPUToLLVM
     ModuleOp mod = getOperation();
     auto tritonTargetInfo = mlir::triton::AMD::TargetInfo(gfxArch);
     auto protonTargetInfo =
-        mlir::triton::proton::gpu::AMD::TargetInfo(tritonTargetInfo, gfxArch);
+        mlir::triton::proton::gpu::AMD::TargetInfo(tritonTargetInfo);
     mlir::LowerToLLVMOptions option(context);
     TritonGPUToLLVMTypeConverter typeConverter(context, option,
                                                tritonTargetInfo);

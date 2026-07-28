@@ -33,6 +33,12 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       %release = tt.atomic_rmw add, release, sys, %ptr, %c1, %true : (!tt.ptr<i32>, i32, i1) -> i32
       // CHECK: tt.atomic_rmw {{.*}} {ttg.mbar_offset = 8 : i32}
       %acquire = tt.atomic_rmw add, acquire, sys, %ptr, %c1, %true : (!tt.ptr<i32>, i32, i1) -> i32
+      // CHECK: tti.experimental_gsan_atomic_cas {{.*}} {ttg.mbar_offset = 8 : i32}
+      %gsan_cas = tti.experimental_gsan_atomic_cas acq_rel, gpu, %ptr, %c0, %c1 : (!tt.ptr<i32>, i32, i32) -> i32
+      tt.store %ptr, %gsan_cas : !tt.ptr<i32>
+      // CHECK: tti.experimental_gsan_atomic_rmw {{.*}}ttg.mbar_offset = 8 : i32
+      %gsan_rmw = tti.experimental_gsan_atomic_rmw add, relaxed, sys, %ptr, %c1, %true {allocation.offset = 0 : i32} : (!tt.ptr<i32>, i32, i1) -> i32
+      tt.store %ptr, %gsan_rmw : !tt.ptr<i32>
       %ptrs = tt.splat %ptr : !tt.ptr<i32> -> tensor<128x!tt.ptr<i32>, #blockedBroadcast>
       %zeros = arith.constant dense<0> : tensor<128xi32, #blockedBroadcast>
       %ones = arith.constant dense<1> : tensor<128xi32, #blockedBroadcast>

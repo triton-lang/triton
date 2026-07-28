@@ -272,25 +272,19 @@ ColumnAction ReduceOpHelper::moveAxisBasesToFront(const LinearLayout &layout,
                                                   int axis, bool isVectorized) {
   auto *ctx = layout.getOutDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
-  const auto &bases = layout.getBases().lookup(kReg);
-  if (bases.empty())
-    return ColumnAction::identity(kReg, bases.size());
+  size_t numBases = layout.getInDimSizeLog2(kReg);
+  if (numBases == 0)
+    return ColumnAction::identity(kReg, numBases);
+  auto outDims = llvm::to_vector(layout.getOutDimNames());
+  uint64_t axisBases = getInputBasisMask(layout, kReg, {outDims[axis]});
 
   // We keep the first basis where it is if it's vectorized to pack it without
-  // PRMT/MOV, and then we move the rest of the bases that don't move the axis
-  // to the front after it
-  SmallVector<size_t> perm;
-  if (isVectorized)
-    perm.push_back(0);
-  SmallVector<size_t> back;
-  for (size_t i = isVectorized ? 1 : 0; i < bases.size(); ++i) {
-    if (bases[i][axis] != 0)
-      perm.push_back(i);
-    else
-      back.push_back(i);
-  }
-  perm.append(back.begin(), back.end());
-  return ColumnAction(perm, kReg, bases.size());
+  // PRMT/MOV, and then stably move the other axis bases to the front.
+  auto permutation = llvm::to_vector(llvm::seq<size_t>(numBases));
+  std::stable_partition(
+      permutation.begin() + isVectorized, permutation.end(),
+      [&](size_t i) { return axisBases & (uint64_t{1} << i); });
+  return ColumnAction(permutation, kReg, numBases);
 }
 
 LinearLayout
@@ -334,62 +328,45 @@ LinearLayout ReduceOpHelper::getInterLayout(const LinearLayout &layout,
   auto &laneBases = bases[kLane];
   auto &warpBases = bases[kWarp];
   auto &blockBases = bases[kBlock];
+  auto outDims = llvm::to_vector(layout.getOutDimNames());
+  uint64_t warpAxisBases = getInputBasisMask(layout, kWarp, {outDims[axis]});
+  uint64_t blockAxisBases = getInputBasisMask(layout, kBlock, {outDims[axis]});
+  uint64_t allLaneBases = llvm::maskTrailingOnes<uint64_t>(laneBases.size());
+  uint64_t zeroLaneBases =
+      allLaneBases & ~getInputBasisMask(layout, kLane, outDims);
+  unsigned totalAxisBases =
+      llvm::popcount(warpAxisBases) + llvm::popcount(blockAxisBases);
 
-  auto collectAxisBases = [&](ArrayRef<std::vector<int32_t>> bases) {
-    SmallVector<unsigned> out;
-    for (unsigned i = 0; i < bases.size(); ++i) {
-      if (bases[i][axis] != 0)
-        out.push_back(i);
-    }
-    return out;
+  auto swapAxisBasesIntoLanes = [&](uint64_t availableLanes,
+                                    bool includeBlock) {
+    auto swapSelectedBases = [&](auto &srcBases, uint64_t selectedBases) {
+      while (selectedBases && availableLanes) {
+        unsigned srcIdx = llvm::countr_zero(selectedBases);
+        unsigned laneIdx = llvm::countr_zero(availableLanes);
+        std::swap(laneBases[laneIdx], srcBases[srcIdx]);
+        selectedBases &= selectedBases - 1;
+        availableLanes &= availableLanes - 1;
+      }
+    };
+    swapSelectedBases(warpBases, warpAxisBases);
+    if (includeBlock)
+      swapSelectedBases(blockBases, blockAxisBases);
+    return LinearLayout(std::move(bases), outDims);
   };
-
-  SmallVector<unsigned> warpAxisBases = collectAxisBases(warpBases);
-  SmallVector<unsigned> blockAxisBases = collectAxisBases(blockBases);
-
-  SmallVector<unsigned> zeroLaneBases;
-  for (unsigned i = 0; i < laneBases.size(); ++i) {
-    if (llvm::all_of(laneBases[i], [](int32_t v) { return v == 0; }))
-      zeroLaneBases.push_back(i);
-  }
-
-  auto totalAxisBases = warpAxisBases.size() + blockAxisBases.size();
 
   // First try to place all warp/block axis bases into lane bases that are
   // currently zero. If we can do this we will be able to perform the full
   // reduction with just one convert_layout
-  if (zeroLaneBases.size() >= totalAxisBases) {
-    unsigned laneIdx = 0;
-    for (unsigned idx : warpAxisBases) {
-      std::swap(laneBases[zeroLaneBases[laneIdx]], warpBases[idx]);
-      ++laneIdx;
-    }
-    for (unsigned idx : blockAxisBases) {
-      std::swap(laneBases[zeroLaneBases[laneIdx]], blockBases[idx]);
-      ++laneIdx;
-    }
-    return LinearLayout(std::move(bases), to_vector(layout.getOutDimNames()));
-  }
+  if (llvm::popcount(zeroLaneBases) >= totalAxisBases)
+    return swapAxisBasesIntoLanes(zeroLaneBases, /*includeBlock=*/true);
 
   // If we can fit all the bases inside the lane dimension, we can perform the
   // reduction with two convert_layouts
   // The first cvt to move the relevant bases to the lane dimension
   // The second to move all the bases we moved out of the lane dimension back to
   // their original positions
-  if (warpAxisBases.size() + blockAxisBases.size() <= laneBases.size()) {
-    assert(totalAxisBases <= laneBases.size() &&
-           "unexpected lane base count for axis layout");
-    unsigned laneIdx = 0;
-    for (unsigned idx : warpAxisBases) {
-      std::swap(laneBases[laneIdx], warpBases[idx]);
-      ++laneIdx;
-    }
-    for (unsigned idx : blockAxisBases) {
-      std::swap(laneBases[laneIdx], blockBases[idx]);
-      ++laneIdx;
-    }
-    return LinearLayout(std::move(bases), to_vector(layout.getOutDimNames()));
-  }
+  if (totalAxisBases <= laneBases.size())
+    return swapAxisBasesIntoLanes(allLaneBases, /*includeBlock=*/true);
 
   // Assumptions (easily relaxed if AMD needs it)
   // We assume that
@@ -402,16 +379,8 @@ LinearLayout ReduceOpHelper::getInterLayout(const LinearLayout &layout,
   assert(blockBases.size() <= laneBases.size());
   assert(warpBases.size() + blockBases.size() <= 2 * laneBases.size());
 
-  // Otherwise, fit as many warp bases as possible into the lane dimension
-  unsigned laneIdx = 0;
-  for (unsigned idx : warpAxisBases) {
-    std::swap(laneBases[laneIdx], warpBases[idx]);
-    ++laneIdx;
-    if (laneIdx >= laneBases.size())
-      break;
-  }
-
-  return LinearLayout(std::move(bases), to_vector(layout.getOutDimNames()));
+  // Otherwise, fit as many warp bases as possible into the lane dimension.
+  return swapAxisBasesIntoLanes(allLaneBases, /*includeBlock=*/false);
 }
 
 LinearLayout ReduceOpHelper::reducedRegLaneLayout(RankedTensorType srcTy,
@@ -561,8 +530,8 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
                           int bitwidth);
 
 DecomposedWarpConversion
-getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
-                                  RankedTensorType dstTy, int bitwidth) {
+getWarpLayoutConvertDecomposition(const LinearLayout &srcLayout,
+                                  const LinearLayout &dstLayout, int bitwidth) {
   // Two layouts, ll_src and ll_dst, representing the same tensor can be
   // viewed as surjections of GF(2) vector spaces:
   //
@@ -598,22 +567,15 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   // `pLane`. Finally, we determine any selectors needed for byte permute
   // instructions in place of `selp` instructions when packing registers.
 
-  // We remove any broadcasting in the register dimensions of the layouts before
-  // forming the permutation `P` as the components of the decomposition directly
-  // inform the number of emitted instructions, and leaving broadcasting in
-  // would unnecessarily inflate the count.
-  auto srcLayout = toLinearLayout(srcTy);
-  auto dstLayout = toLinearLayout(dstTy);
-  auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
-  auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
-  srcLayout = removeBroadcastSrc.apply(srcLayout);
-  dstLayout = removeBroadcastDst.apply(dstLayout);
+  assert(actionRemoveBroadcastedRegs(srcLayout).isIdentity() &&
+         actionRemoveBroadcastedRegs(dstLayout).isIdentity() &&
+         "expected layouts without broadcasted registers");
 
   // We want to describe the conversion from `srcLayout` to `dstLayout` as a
   // permutation. Since this requires that each input dimension have the same
   // size in each of the layouts, we first pad the lane and register dimensions
   // with zero vectors if needed.
-  auto *ctx = srcTy.getContext();
+  auto *ctx = srcLayout.getInDimNames().begin()->getContext();
   StringAttr kReg = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
 
@@ -629,26 +591,8 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   auto outDimNames = llvm::to_vector(srcLayout.getOutDimNames());
   auto S = srcLayout.sublayout(inDimNames, outDimNames);
   auto T = dstLayout.sublayout(inDimNames, outDimNames);
-  // Conditionally pad.
-  if (nSrcRegBases != nDstRegBases || nSrcLaneBases != nDstLaneBases) {
-    auto padWithZeros = [&](const LinearLayout &ll) {
-      auto newBases = ll.getBases();
-      auto padDim = [&](StringAttr dim, int dimSize) {
-        auto &dimBases = newBases[dim];
-        dimBases.reserve(dimSize);
-        for (int i = ll.getInDimSizeLog2(dim); i < dimSize; ++i)
-          dimBases.emplace_back(outDimNames.size(), 0);
-      };
-      padDim(kReg, nRegBases);
-      padDim(kLane, nLaneBases);
-      // Surjectivity is not expected in general since we do not consider
-      // the 'warp' and 'block' dimensions of the original layouts.
-      return LinearLayout(std::move(newBases), ll.getOutDims(),
-                          /*requireSurjective=*/false);
-    };
-    S = padWithZeros(S);
-    T = padWithZeros(T);
-  }
+  S = S.resizeInDim(kReg, 1 << nRegBases).resizeInDim(kLane, 1 << nLaneBases);
+  T = T.resizeInDim(kReg, 1 << nRegBases).resizeInDim(kLane, 1 << nLaneBases);
 
   // We compute T^transpose \circ S, which serves as a skeleton for `P`, then
   // fill in zero columns, prioritizing producing fixed points. As we only need
@@ -1052,13 +996,9 @@ unsigned ScanLoweringHelper::getAxisThreadStride() {
   auto encoding = getEncoding();
   auto ll = encoding.getLinearLayout();
   auto kThread = StringAttr::get(encoding.getContext(), "lane");
-  const auto &bases = ll.getBases().lookup(kThread);
-  unsigned axis = getAxis();
-  for (unsigned i = 0; i < bases.size(); ++i) {
-    if (bases[i][axis] != 0)
-      return 1 << i;
-  }
-  return 1;
+  auto outDims = llvm::to_vector(ll.getOutDimNames());
+  uint64_t bases = getInputBasisMask(ll, kThread, {outDims[getAxis()]});
+  return bases ? uint64_t{1} << llvm::countr_zero(bases) : 1;
 }
 
 unsigned ScanLoweringHelper::getAxisBlockStride() {
@@ -1271,11 +1211,8 @@ bool supportMMA(Value value, int version) {
 // distributed shared memory. If it's also the identity on kWarp, we can
 // transfer via warp-shuffles, and if it's the identity on kLane just have to
 // reorder the registers.
-LinearLayout minimalCvtLayout(Type srcTy_, Type dstTy_) {
-  auto srcTy = cast<triton::gpu::TensorOrMemDesc>(srcTy_);
-  auto dstTy = cast<triton::gpu::TensorOrMemDesc>(dstTy_);
-  LinearLayout srcLayout = toLinearLayout(srcTy);
-  LinearLayout dstLayout = toLinearLayout(dstTy);
+LinearLayout minimalCvtLayout(const LinearLayout &srcLayout,
+                              const LinearLayout &dstLayout) {
   auto sDims = to_vector(srcLayout.getInDimNames());
   auto dDims = to_vector(dstLayout.getInDimNames());
   SmallVector<StringAttr> dims;
@@ -1300,6 +1237,12 @@ LinearLayout minimalCvtLayout(Type srcTy_, Type dstTy_) {
   return comp;
 }
 
+LinearLayout minimalCvtLayout(Type srcTy_, Type dstTy_) {
+  auto srcTy = cast<triton::gpu::TensorOrMemDesc>(srcTy_);
+  auto dstTy = cast<triton::gpu::TensorOrMemDesc>(dstTy_);
+  return minimalCvtLayout(toLinearLayout(srcTy), toLinearLayout(dstTy));
+}
+
 bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
   auto layout = minimalCvtLayout(srcTy, dstTy);
   MLIRContext *ctx = srcTy.getContext();
@@ -1315,29 +1258,12 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
   auto kLane = StringAttr::get(ctx, "lane");
   if (to_vector(layout.getOutDimNames()) ==
       SmallVector<StringAttr, 2>{kRegister, kLane}) {
-    auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy, 32);
+    auto srcLayout = toLinearLayout(srcTy).removeZeroBasesAlongDim(kRegister);
+    auto dstLayout = toLinearLayout(dstTy).removeZeroBasesAlongDim(kRegister);
+    auto factors = getWarpLayoutConvertDecomposition(srcLayout, dstLayout, 32);
     return (factors.mixedTranspositions.size() < 2);
   }
   return false;
-}
-
-bool cvtCanUseWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
-  auto layout = minimalCvtLayout(srcTy, dstTy);
-  MLIRContext *ctx = srcTy.getContext();
-  auto kBlock = StringAttr::get(ctx, "block");
-  auto kWarp = StringAttr::get(ctx, "warp");
-  auto dims = layout.getInDimNames();
-  return !llvm::is_contained(dims, kBlock) && !llvm::is_contained(dims, kWarp);
-}
-
-bool cvtIsWarpShuffleForced(triton::gpu::ConvertLayoutOp cvt) {
-  auto func = cvt->getParentOfType<FunctionOpInterface>();
-  return func->hasAttrOfType<UnitAttr>("always_use_warp_shuffle");
-}
-
-bool cvtUsesForcedWarpShuffle(triton::gpu::ConvertLayoutOp cvt) {
-  return cvtIsWarpShuffleForced(cvt) &&
-         cvtCanUseWarpShuffle(cvt.getSrc().getType(), cvt.getType());
 }
 
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {

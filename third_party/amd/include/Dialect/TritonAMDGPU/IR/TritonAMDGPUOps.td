@@ -584,6 +584,12 @@ def ScaledUpcastFp4Op : TT_AMDGPU_Op<"scaled_upcast_fp4", [Pure, DeclareOpInterf
         `:` type($input) `,` type($scale) `->` type($output)
   }];
 
+  let extraClassDeclaration = [{
+    static std::optional<mlir::triton::LinearLayout>
+    computeScaleLayout(const mlir::triton::LinearLayout &outputLayout,
+                       int64_t axis, int64_t elementsPerScale);
+  }];
+
   let hasVerifier = 1;
 }
 

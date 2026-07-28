@@ -572,18 +572,7 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
 static LinearLayout projectAwayOutDim(const LinearLayout &layout,
                                       StringAttr dim) {
-  auto ctx = layout.getOutDimNames().begin()->getContext();
-  auto bases = layout.getBases();
-  auto idx = layout.getOutDimIndex(dim);
-  for (auto inDim : layout.getInDimNames()) {
-    auto &inDimBases = bases[inDim];
-    for (auto &basis : inDimBases) {
-      basis[idx] = 0;
-    }
-  }
-
-  auto outDimNames = standardOutDimNames(ctx, layout.getOutDims().size());
-  return LinearLayout(std::move(bases), outDimNames);
+  return layout.resizeOutDim(dim, 1);
 }
 
 LinearLayout chooseWmmaCTALinearLayout(MLIRContext *ctx, unsigned rank,
@@ -1150,17 +1139,7 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto sliceLL = removeStandardDim(parentLL, getDim());
 
   // Step 3: Along the "register" dim, remove any all-zero bases.
-  auto bases = sliceLL.getBases();
-  std::vector<std::vector<int>> newRegBases;
-  for (const auto &basis : bases[S("register")]) {
-    if (llvm::any_of(basis, [](int b) { return b != 0; })) {
-      newRegBases.push_back(basis);
-    }
-  }
-  bases[S("register")] = newRegBases;
-
-  return LinearLayout(std::move(bases),
-                      llvm::to_vector(sliceLL.getOutDimNames()));
+  return sliceLL.removeZeroBasesAlongDim(S("register"));
 }
 
 LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
@@ -1391,9 +1370,10 @@ LinearLayout toLinearLayout(RankedTensorType type) {
 LinearLayout toLinearLayout(MemDescType type) {
   // For TMEM we instantiate the subview directly. This is possible
   // as TMEM has no swizzling.
-  if (isa<TensorMemoryEncodingAttr>(type.getEncoding())) {
-    auto shape = type.getShape().take_back(2);
-    auto allocShape = type.getAllocShape().take_back(2);
+  if (isa<nvidia_gpu::TensorMemorySpaceAttr>(type.getMemorySpace())) {
+    auto shape = dropPipeliningDim(type.getShape(), type.getEncoding());
+    auto allocShape =
+        dropPipeliningDim(type.getAllocShape(), type.getEncoding());
     auto ll = toLinearLayout(allocShape, type.getEncoding());
     auto outDims = llvm::to_vector(ll.getOutDimNames());
     // Trim the shape
@@ -1401,20 +1381,19 @@ LinearLayout toLinearLayout(MemDescType type) {
       ll = ll.resizeOutDim(dim, size);
 
     auto kCol = StringAttr::get(type.getContext(), "col");
-    int nColBases = ll.getInDimSizeLog2(kCol);
     int bitwidth = type.getElementType().getIntOrFloatBitWidth();
     int minColBases = llvm::Log2_32(32 / bitwidth);
-    while (nColBases > minColBases &&
-           llvm::all_of(ll.getBasis(kCol, nColBases - 1),
-                        [](int32_t v) { return v == 0; }))
-      --nColBases;
+    uint64_t nonZeroColBases = getInputBasisMask(ll, kCol, outDims);
+    int nColBases =
+        std::max(minColBases, int(llvm::bit_width(nonZeroColBases)));
     return ll.resizeInDim(kCol, 1u << nColBases);
   }
   // Shared memory needs the allocation shape so that invertAndCompose can trim
   // subviews. We also remove the first dimension of the allocation shape if
   // there was a call to memdesc_index.
-  auto shape = type.getAllocShape().take_back(type.getRank());
-  return toLinearLayout(shape, type.getEncoding());
+  return toLinearLayout(
+      dropPipeliningDim(type.getAllocShape(), type.getEncoding()),
+      type.getEncoding());
 }
 
 LinearLayout toLinearLayout(TensorOrMemDesc type) {
@@ -1448,8 +1427,9 @@ LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding) {
 }
 
 LinearLayout paddedLinearLayout(MemDescType type) {
-  auto shape = type.getAllocShape().take_back(type.getRank());
-  return paddedLinearLayout(shape, type.getEncoding());
+  return paddedLinearLayout(
+      dropPipeliningDim(type.getAllocShape(), type.getEncoding()),
+      type.getEncoding());
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
@@ -1458,10 +1438,7 @@ LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
 
   StringAttr kBlock = S("block");
   assert(layout.hasInDim(kBlock));
-  auto bases = layout.getBases();
-  bases[kBlock] = {};
-  return LinearLayout(std::move(bases),
-                      llvm::to_vector<4>(layout.getOutDimNames()));
+  return layout.resizeInDim(kBlock, 1);
 }
 
 LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
