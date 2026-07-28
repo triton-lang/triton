@@ -24,7 +24,8 @@ class Autotuner(KernelInterface):
         """
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
             'perf_model': performance model used to predicate running time with different configs, returns running time
-            'top_k': number of configs to bench
+            'top_k': number of configs to bench (a positive integer), or fraction of configs to bench
+                (a float in (0.0, 1.0])
             'early_config_prune': a function used to prune configs. It should have the signature
                 `prune_configs_by( configs: List[triton.Config], named_args: Dict[str, Any], **kwargs: Dict[str, Any]) -> List[triton.Config]:`
                 and return pruned configs. It should return at least one config.
@@ -290,15 +291,20 @@ class Autotuner(KernelInterface):
                     "No valid autotuner configs after pruning. `early_config_prune` should return at least one config.")
         if self.perf_model:
             top_k = self.configs_top_k
-            if isinstance(top_k, float) and top_k <= 1.0:
+            top_k_error = ("Error while pruning configs, top_k must be a positive integer or a float in the "
+                           "range (0.0, 1.0]")
+            if isinstance(top_k, bool) or not isinstance(top_k, (float, int)):
+                raise TypeError(top_k_error)
+            elif isinstance(top_k, float):
+                if not 0.0 < top_k <= 1.0:
+                    raise ValueError(top_k_error)
                 # Keep at least one config: a small fraction over a small config
                 # set rounds down to zero, which would prune everything and crash
                 # the later min() on an empty set. early_config_prune already
                 # guarantees at least one config; mirror that here.
                 top_k = max(1, int(len(pruned_configs) * top_k))
-            elif not isinstance(top_k, int):
-                # Slice index must be an integer
-                raise TypeError("Error while pruning configs, top_k must be either 1) a float <= 1.0 or 2) an int")
+            elif top_k <= 0:
+                raise ValueError(top_k_error)
 
             if len(pruned_configs) > top_k:
                 est_timing = {
@@ -439,7 +445,8 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     :type key: list[str]
     :param prune_configs_by: a dict of functions that are used to prune configs, fields:
         'perf_model': performance model used to predicate running time with different configs, returns running time
-        'top_k': number of configs to bench
+        'top_k': number of configs to bench (a positive integer), or fraction of configs to bench
+            (a float in (0.0, 1.0])
         'early_config_prune': a function used to prune configs. It should have the signature
                 `prune_configs_by( configs: List[triton.Config], named_args: Dict[str, Any], **kwargs: Dict[str, Any]) -> List[triton.Config]:`
                 and return pruned configs. It should return at least one config.

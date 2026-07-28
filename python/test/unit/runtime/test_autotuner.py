@@ -310,6 +310,52 @@ def test_prune_configs_fractional_top_k_after_early_prune():
     assert benchmarked == [1, 2, 3]
 
 
+@pytest.mark.parametrize(
+    ("top_k", "error_type"),
+    [
+        (0, ValueError),
+        (-1, ValueError),
+        (0.0, ValueError),
+        (-0.5, ValueError),
+        (1.1, ValueError),
+        (float("nan"), ValueError),
+        (float("inf"), ValueError),
+        (float("-inf"), ValueError),
+        (True, TypeError),
+        (False, TypeError),
+        (None, TypeError),
+        ("1", TypeError),
+    ],
+)
+def test_prune_configs_rejects_invalid_top_k(top_k, error_type):
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': block_size}) for block_size in range(1, 4)]
+
+    class Kernel:
+
+        def __init__(self):
+            self.fn = lambda: None
+
+        def run(self, **kwargs):
+            pass
+
+    tuner = triton.runtime.Autotuner(
+        Kernel(),
+        arg_names=[],
+        configs=configs,
+        key=[],
+        reset_to_zero=None,
+        restore_value=None,
+        do_bench=lambda kernel_call, quantiles: [1.0] * 3,
+        prune_configs_by={
+            'perf_model': lambda **kwargs: kwargs['BLOCK_SIZE'],
+            'top_k': top_k,
+        },
+    )
+
+    with pytest.raises(error_type, match="top_k must be a positive integer or a float in the range"):
+        tuner.run()
+
+
 def test_config_ir_override_changes_disk_cache_key():
     # Autotuner derives persisted result-cache keys from Config.__str__().
     first = triton.Config(kwargs={"BLOCK_SIZE": 32}, ir_override="first.ttir")
