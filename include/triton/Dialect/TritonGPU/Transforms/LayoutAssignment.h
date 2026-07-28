@@ -6,6 +6,10 @@
 
 namespace mlir::triton::gpu {
 
+/// Keep the incumbent's conflict choices for compatibility, or assign layouts
+/// by the physical cost of the complete producer/consumer graph.
+enum class LayoutAssignmentStrategy { Legacy, Global };
+
 /// Assign distributed tensor layouts across functions and structured control
 /// flow, rematerialize profitable backward slices, hoist expensive
 /// conversions, and remove dead layout conversions and loop arguments.
@@ -15,7 +19,8 @@ namespace mlir::triton::gpu {
 /// one engine lets both pass entry points preserve the same hard boundaries and
 /// control-flow invariants.
 LogicalResult optimizeDistributedLayouts(ModuleOp module,
-                                         bool disableRematSplitting);
+                                         bool disableRematSplitting,
+                                         LayoutAssignmentStrategy strategy);
 
 } // namespace mlir::triton::gpu
 

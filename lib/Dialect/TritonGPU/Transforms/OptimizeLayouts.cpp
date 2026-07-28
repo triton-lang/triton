@@ -647,7 +647,8 @@ public:
   void runOnOperation() override {
     ModuleOp module = getOperation();
 
-    if (failed(optimizeDistributedLayouts(module, disableRematSplitting)))
+    if (failed(optimizeDistributedLayouts(module, disableRematSplitting,
+                                          LayoutAssignmentStrategy::Global)))
       return signalPassFailure();
 
     shareDominatingConversions(module);

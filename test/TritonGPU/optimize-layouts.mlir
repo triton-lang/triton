@@ -306,3 +306,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return %0, %1 : tensor<128xi32, #target>, tensor<128xi32, #target>
   }
 }
+
+// -----
+
+// The target input and all three function results are fixed boundaries. The
+// legacy first-layout choice performs the arithmetic in the other input's
+// layout, converting the target and then each result independently. Global
+// conflict resolution must keep the three consumers in their target layout and
+// materialize the unavoidable conversion exactly once.
+//
+// BASELINE-LABEL: @layout_conflict_fanout
+// BASELINE-COUNT-4: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @layout_conflict_fanout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @layout_conflict_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>) {
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %mixed = arith.addf %converted, %target : tensor<16x16xf32, #target>
+    %first = arith.mulf %mixed, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %mixed, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %mixed, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
+  }
+}

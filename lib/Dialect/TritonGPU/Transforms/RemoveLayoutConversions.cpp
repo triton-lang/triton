@@ -16,8 +16,8 @@ public:
       TritonGPURemoveLayoutConversionsBase;
 
   void runOnOperation() override {
-    if (failed(
-            optimizeDistributedLayouts(getOperation(), disableRematSplitting)))
+    if (failed(optimizeDistributedLayouts(getOperation(), disableRematSplitting,
+                                          LayoutAssignmentStrategy::Legacy)))
       signalPassFailure();
   }
 };

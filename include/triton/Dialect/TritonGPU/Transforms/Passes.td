@@ -275,10 +275,11 @@ def TritonGPUOptimizeLayouts : Pass<"tritongpu-optimize-layouts", "mlir::ModuleO
   let description = [{
     Optimize distributed tensor layouts while preserving the layout constraints
     of function boundaries, loads, stores, and matrix operations. The pass
-    independently runs whole-function layout assignment and structured
-    control-flow rematerialization, shares dominating layout conversions, and
-    rematerializes bounded, scalar-rooted, side-effect-free tensor graphs in
-    their required layouts.
+    independently propagates layout constraints in both directions and uses
+    physical conversion costs to resolve supported producer/consumer graphs.
+    It preserves the established structured-control-flow assignment, shares
+    dominating layout conversions, and rematerializes bounded, scalar-rooted,
+    side-effect-free tensor graphs in their required layouts.
     Exact-order reshapes retain their original ordering semantics.
   }];
 

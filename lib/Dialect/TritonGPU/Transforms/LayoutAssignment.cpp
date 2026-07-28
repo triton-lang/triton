@@ -25,7 +25,7 @@
 
 namespace mlir::triton::gpu {
 
-#define DEBUG_TYPE "tritongpu-remove-layout-conversions"
+#define DEBUG_TYPE "tritongpu-layout-assignment"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -61,7 +61,8 @@ public:
     LayoutInfo() {}
     llvm::SmallSetVector<Attribute, 8> encodings;
   };
-  LayoutPropagation(FuncOp F) : funcOp(F) {}
+  LayoutPropagation(FuncOp F, LayoutAssignmentStrategy strategy)
+      : funcOp(F), strategy(strategy) {}
   // Find the anchor ops and set their layout in the data structure.
   void initAnchorLayout();
   // Recursively Propagate the layout to all the users of the anchor ops until
@@ -69,12 +70,16 @@ public:
   void propagateLayout();
   // Add layouts given in `Info` to the uses of `value`.
   SmallVector<Value> propagateToUsers(Value value, LayoutInfo &info);
+  // Propagate consumer layout requirements back to their tensor producers.
+  SmallVector<Value> propagateToOperands(Value value, LayoutInfo &info);
   // Set the encoding to all the values and fill out the values with new layout
   // in `changed`.
   void setEncoding(ValueRange values, LayoutInfo &info,
                    SmallVector<Value> &changed, Operation *op);
+  bool addEncoding(Value value, Attribute encoding);
   // Resolve cases where a value has multiple layouts associated to it.
   void resolveConflicts();
+  void resolveGlobalConflicts();
   // Rewrite the IR for the full module.
   void rewrite();
   // Rewrite the IR for a region.
@@ -99,11 +104,25 @@ public:
   void dump();
 
 private:
+  bool canAssignEncoding(Value value, Attribute encoding,
+                         const DenseMap<Value, Attribute> &assignments) const;
+  Attribute
+  getAssignedEncoding(Value value,
+                      const DenseMap<Value, Attribute> &assignments) const;
+  SmallVector<Attribute, 4>
+  getUseEncodings(OpOperand &use,
+                  const DenseMap<Value, Attribute> &assignments) const;
+  uint64_t
+  getAssignmentCost(Value value, Attribute encoding,
+                    const DenseMap<Value, Attribute> &assignments) const;
+
   // map from value to layout information.
   llvm::MapVector<Value, LayoutInfo> layouts;
+  DenseSet<Value> fixedLayouts;
   // original encodings of tensor values rewritten in place.
   DenseMap<Value, Attribute> originalEncodings;
   FuncOp funcOp;
+  LayoutAssignmentStrategy strategy;
 };
 
 class LayoutRematerialization {
@@ -235,10 +254,50 @@ bool isLayoutAnchor(Operation *op) {
   return false;
 }
 
+static bool isFixedLayoutBoundary(Operation *op) {
+  if (isa<scf::ForOp, scf::WhileOp, scf::IfOp, scf::YieldOp, scf::ConditionOp>(
+          op))
+    return false;
+
+  return isa<ReturnOp, LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp,
+             DotOpInterface, DescriptorOpInterface,
+             triton::nvidia_gpu::TMEMLoadOp>(op) ||
+         !isMemoryEffectFree(op);
+}
+
+static bool supportsGlobalLayoutAssignment(FuncOp funcOp) {
+  WalkResult result = funcOp.walk([&](Operation *op) {
+    bool hasTensorResult = llvm::any_of(op->getResults(), [](Value result) {
+      return isa<RankedTensorType>(result.getType());
+    });
+    if (!hasTensorResult)
+      return WalkResult::advance();
+
+    // Structural operations need joint legality constraints: choosing one
+    // result independently can invalidate an exact-order reshape, split, or
+    // tied loop value. Keep the proven whole-function assignment until those
+    // coupled candidates are solved as a single component.
+    if (isa<scf::ForOp, scf::WhileOp, scf::IfOp, ReshapeOp, JoinOp, SplitOp,
+            ExpandDimsOp, ReduceOp, TransOp>(op))
+      return WalkResult::interrupt();
+
+    if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
+        op->hasTrait<OpTrait::Elementwise>() ||
+        isa<ConvertLayoutOp, arith::ConstantOp, MakeRangeOp, SplatOp, LoadOp,
+            DotOpInterface, DescriptorOpInterface,
+            triton::nvidia_gpu::TMEMLoadOp>(op))
+      return WalkResult::advance();
+
+    return WalkResult::interrupt();
+  });
+  return !result.wasInterrupted();
+}
+
 void LayoutPropagation::initAnchorLayout() {
   auto addAnchor = [&](Value v) {
     if (auto tensorType = dyn_cast<RankedTensorType>(v.getType())) {
       layouts.insert({v, LayoutInfo(tensorType.getEncoding())});
+      fixedLayouts.insert(v);
     }
   };
 
@@ -255,7 +314,35 @@ void LayoutPropagation::initAnchorLayout() {
         addAnchor(result);
       }
     }
+
+    if (strategy != LayoutAssignmentStrategy::Global ||
+        !isFixedLayoutBoundary(op))
+      return;
+
+    for (Value operand : op->getOperands()) {
+      if (auto tensorType = dyn_cast<RankedTensorType>(operand.getType()))
+        addEncoding(operand, tensorType.getEncoding());
+    }
   });
+}
+
+bool LayoutPropagation::addEncoding(Value value, Attribute encoding) {
+  auto tensorType = dyn_cast<RankedTensorType>(value.getType());
+  if (!tensorType || !encoding)
+    return false;
+
+  if (strategy == LayoutAssignmentStrategy::Global) {
+    if (fixedLayouts.contains(value) && encoding != tensorType.getEncoding())
+      return false;
+
+    constexpr unsigned maxGlobalLayoutCandidates = 16;
+    LayoutInfo &info = layouts[value];
+    if (!info.encodings.contains(encoding) &&
+        info.encodings.size() >= maxGlobalLayoutCandidates)
+      return false;
+  }
+
+  return layouts[value].encodings.insert(encoding);
 }
 
 void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
@@ -275,7 +362,7 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
         dstEncoding = inferDstEncoding(op, encoding);
       }
       if (dstEncoding)
-        hasChanged |= layouts[value].encodings.insert(dstEncoding);
+        hasChanged |= addEncoding(value, dstEncoding);
     }
     if (hasChanged)
       changed.push_back(value);
@@ -351,6 +438,48 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
   return changed;
 }
 
+SmallVector<Value> LayoutPropagation::propagateToOperands(Value value,
+                                                          LayoutInfo &info) {
+  SmallVector<Value> changed;
+
+  auto addCandidates = [&](ValueRange values, Attribute encoding) {
+    for (Value operand : values)
+      if (addEncoding(operand, encoding))
+        changed.push_back(operand);
+  };
+
+  for (Attribute encoding : info.encodings) {
+    if (auto result = dyn_cast<OpResult>(value)) {
+      Operation *op = result.getOwner();
+      if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(op)) {
+        addCandidates(getTiedArgs(op, result.getResultNumber()), encoding);
+        continue;
+      }
+
+      Attribute operandEncoding =
+          isa<ConvertLayoutOp>(op) ? encoding : inferSrcEncoding(op, encoding);
+      if (operandEncoding)
+        addCandidates(op->getOperands(), operandEncoding);
+      continue;
+    }
+
+    auto blockArg = dyn_cast<BlockArgument>(value);
+    if (!blockArg)
+      continue;
+    Operation *parent = blockArg.getOwner()->getParentOp();
+    if (!isa<scf::ForOp, scf::WhileOp>(parent))
+      continue;
+
+    unsigned firstIterArg = isa<scf::ForOp>(parent) ? 1 : 0;
+    if (blockArg.getArgNumber() < firstIterArg)
+      continue;
+    addCandidates(getTiedArgs(parent, blockArg.getArgNumber() - firstIterArg),
+                  encoding);
+  }
+
+  return changed;
+}
+
 void LayoutPropagation::propagateLayout() {
   SmallVector<Value> queue;
   for (auto it : layouts) {
@@ -361,6 +490,11 @@ void LayoutPropagation::propagateLayout() {
     LayoutInfo info = layouts[currentValue];
     queue.pop_back();
     SmallVector<Value> changed = propagateToUsers(currentValue, info);
+    if (strategy == LayoutAssignmentStrategy::Global) {
+      SmallVector<Value> producerChanges =
+          propagateToOperands(currentValue, info);
+      changed.append(producerChanges.begin(), producerChanges.end());
+    }
 
     LLVM_DEBUG({
       DBGS() << "propagateLayout considering " << currentValue << ", which has "
@@ -375,6 +509,9 @@ void LayoutPropagation::propagateLayout() {
 }
 
 void LayoutPropagation::resolveConflicts() {
+  if (strategy == LayoutAssignmentStrategy::Global)
+    return resolveGlobalConflicts();
+
   for (auto &it : layouts) {
     Operation *op = it.first.getDefiningOp();
     LayoutInfo &info = it.second;
@@ -392,6 +529,267 @@ void LayoutPropagation::resolveConflicts() {
         break;
       }
     }
+    info.encodings.clear();
+    info.encodings.insert(encoding);
+  }
+}
+
+static uint64_t getLayoutTransitionCost(Value value, Attribute sourceEncoding,
+                                        Attribute resultEncoding) {
+  if (!sourceEncoding || !resultEncoding || sourceEncoding == resultEncoding)
+    return 0;
+
+  auto tensorType = dyn_cast<RankedTensorType>(value.getType());
+  if (!tensorType)
+    return 0;
+
+  RankedTensorType sourceType = tensorType.cloneWithEncoding(sourceEncoding);
+  RankedTensorType resultType = tensorType.cloneWithEncoding(resultEncoding);
+  if (cvtReordersRegisters(sourceType, resultType))
+    return 1;
+
+  int64_t elementCount = std::max<int64_t>(32, tensorType.getNumElements());
+  int64_t elementBitWidth = 32;
+  if (tensorType.getElementType().isIntOrFloat())
+    elementBitWidth = std::max<int64_t>(
+        32, tensorType.getElementType().getIntOrFloatBitWidth());
+  uint64_t byteCount = (elementCount * elementBitWidth) / 8;
+
+  if (cvtNeedsWarpShuffle(sourceType, resultType))
+    return 4 * byteCount;
+  return 32 * byteCount;
+}
+
+static uint64_t getLayoutExecutionWeight(Operation *op) {
+  uint64_t weight = 1;
+  for (Operation *parent = op->getParentOp(); parent;
+       parent = parent->getParentOp()) {
+    if (isa<scf::ForOp, scf::WhileOp>(parent))
+      weight = std::min<uint64_t>(256, 4 * weight);
+  }
+  return weight;
+}
+
+bool LayoutPropagation::canAssignEncoding(
+    Value value, Attribute encoding,
+    const DenseMap<Value, Attribute> &assignments) const {
+  auto tensorType = dyn_cast<RankedTensorType>(value.getType());
+  if (!tensorType || !encoding)
+    return false;
+
+  if (encoding == tensorType.getEncoding())
+    return true;
+
+  Operation *op = value.getDefiningOp();
+  if (!op)
+    return false;
+  if (auto constant = dyn_cast<arith::ConstantOp>(op))
+    return isa<DenseElementsAttr>(constant.getValue());
+  if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(op) ||
+      canUseResultEncoding(op, encoding) || inferSrcEncoding(op, encoding))
+    return true;
+
+  for (Value operand : op->getOperands()) {
+    if (!isa<RankedTensorType>(operand.getType()))
+      continue;
+    if (inferDstEncoding(op, getAssignedEncoding(operand, assignments)) ==
+        encoding)
+      return true;
+  }
+  return false;
+}
+
+Attribute LayoutPropagation::getAssignedEncoding(
+    Value value, const DenseMap<Value, Attribute> &assignments) const {
+  if (auto it = assignments.find(value); it != assignments.end())
+    return it->second;
+  if (auto tensorType = dyn_cast<RankedTensorType>(value.getType()))
+    return tensorType.getEncoding();
+  return {};
+}
+
+SmallVector<Attribute, 4> LayoutPropagation::getUseEncodings(
+    OpOperand &use, const DenseMap<Value, Attribute> &assignments) const {
+  Operation *user = use.getOwner();
+  SmallVector<Attribute, 4> encodings;
+
+  auto addEncoding = [&](Value value) {
+    if (Attribute encoding = getAssignedEncoding(value, assignments))
+      if (!llvm::is_contained(encodings, encoding))
+        encodings.push_back(encoding);
+  };
+
+  if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+    if (Value result = forOp.getTiedLoopResult(&use))
+      addEncoding(result);
+    return encodings;
+  }
+  if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
+    if (use.getOperandNumber() < whileOp.getBeforeArguments().size())
+      addEncoding(whileOp.getBeforeArguments()[use.getOperandNumber()]);
+    return encodings;
+  }
+  if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+    Operation *parent = yieldOp->getParentOp();
+    unsigned index = use.getOperandNumber();
+    if (auto whileOp = dyn_cast<scf::WhileOp>(parent))
+      addEncoding(whileOp.getBeforeArguments()[index]);
+    else if (isa<scf::ForOp, scf::IfOp>(parent))
+      addEncoding(parent->getResult(index));
+    return encodings;
+  }
+  if (auto conditionOp = dyn_cast<scf::ConditionOp>(user)) {
+    if (use.getOperandNumber() != 0) {
+      auto whileOp = cast<scf::WhileOp>(conditionOp->getParentOp());
+      addEncoding(whileOp.getResult(use.getOperandNumber() - 1));
+    }
+    return encodings;
+  }
+
+  if (isFixedLayoutBoundary(user)) {
+    if (auto type = dyn_cast<RankedTensorType>(use.get().getType()))
+      encodings.push_back(type.getEncoding());
+    return encodings;
+  }
+
+  for (Value result : user->getResults()) {
+    if (!isa<RankedTensorType>(result.getType()))
+      continue;
+    Attribute resultEncoding = getAssignedEncoding(result, assignments);
+    Attribute operandEncoding = isa<ConvertLayoutOp>(user)
+                                    ? resultEncoding
+                                    : inferSrcEncoding(user, resultEncoding);
+    if (operandEncoding && !llvm::is_contained(encodings, operandEncoding))
+      encodings.push_back(operandEncoding);
+  }
+
+  if (encodings.empty())
+    if (auto type = dyn_cast<RankedTensorType>(use.get().getType()))
+      encodings.push_back(type.getEncoding());
+  return encodings;
+}
+
+uint64_t LayoutPropagation::getAssignmentCost(
+    Value value, Attribute encoding,
+    const DenseMap<Value, Attribute> &assignments) const {
+  uint64_t cost = 0;
+  DenseMap<Attribute, uint64_t> userWeights;
+
+  for (OpOperand &use : value.getUses()) {
+    uint64_t weight = getLayoutExecutionWeight(use.getOwner());
+    for (Attribute required : getUseEncodings(use, assignments)) {
+      auto [it, inserted] = userWeights.try_emplace(required, weight);
+      if (!inserted)
+        it->second = std::max(it->second, weight);
+    }
+  }
+
+  for (const auto &[required, weight] : userWeights)
+    cost += getLayoutTransitionCost(value, encoding, required) * weight;
+
+  Operation *definingOp = value.getDefiningOp();
+  if (!definingOp)
+    return cost;
+
+  uint64_t weight = getLayoutExecutionWeight(definingOp);
+  if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(definingOp)) {
+    auto result = cast<OpResult>(value);
+    for (Value tied : getTiedArgs(definingOp, result.getResultNumber())) {
+      if (tied == value || !isa<RankedTensorType>(tied.getType()))
+        continue;
+      cost += getLayoutTransitionCost(
+                  tied, getAssignedEncoding(tied, assignments), encoding) *
+              weight;
+    }
+    return cost;
+  }
+
+  Attribute operandEncoding = isa<ConvertLayoutOp>(definingOp)
+                                  ? encoding
+                                  : inferSrcEncoding(definingOp, encoding);
+  if (!operandEncoding)
+    return cost;
+
+  for (Value operand : definingOp->getOperands()) {
+    if (!isa<RankedTensorType>(operand.getType()))
+      continue;
+    cost += getLayoutTransitionCost(operand,
+                                    getAssignedEncoding(operand, assignments),
+                                    operandEncoding) *
+            weight;
+  }
+  return cost;
+}
+
+void LayoutPropagation::resolveGlobalConflicts() {
+  DenseMap<Value, Attribute> assignments;
+  for (auto &[value, info] : layouts) {
+    if (info.encodings.empty())
+      continue;
+
+    Attribute original = cast<RankedTensorType>(value.getType()).getEncoding();
+    info.encodings.insert(original);
+    assignments.try_emplace(value, original);
+  }
+
+  auto improve = [&](auto &&values) {
+    bool changed = false;
+    for (auto &[value, info] : values) {
+      if (fixedLayouts.contains(value) || info.encodings.size() <= 1)
+        continue;
+
+      Attribute best = assignments.lookup(value);
+      uint64_t bestCost = getAssignmentCost(value, best, assignments);
+      for (Attribute candidate : info.encodings) {
+        if (!canAssignEncoding(value, candidate, assignments))
+          continue;
+        uint64_t candidateCost =
+            getAssignmentCost(value, candidate, assignments);
+        if (candidateCost < bestCost) {
+          best = candidate;
+          bestCost = candidateCost;
+        }
+      }
+
+      if (best != assignments.lookup(value)) {
+        assignments[value] = best;
+        changed = true;
+      }
+    }
+    return changed;
+  };
+
+  constexpr unsigned maxAssignmentIterations = 8;
+  for (unsigned iteration = 0; iteration < maxAssignmentIterations;
+       ++iteration) {
+    bool changed = improve(llvm::reverse(layouts));
+    changed |= improve(layouts);
+    if (!changed)
+      break;
+  }
+
+  // A later producer assignment can invalidate a join or exact-order reshape.
+  // Original encodings are verifier-proven and therefore provide a safe
+  // fallback while the selected graph converges.
+  for (unsigned iteration = 0; iteration < maxAssignmentIterations;
+       ++iteration) {
+    bool changed = false;
+    for (const auto &[value, info] : layouts) {
+      Attribute encoding = assignments.lookup(value);
+      if (canAssignEncoding(value, encoding, assignments))
+        continue;
+      assignments[value] =
+          cast<RankedTensorType>(value.getType()).getEncoding();
+      changed = true;
+    }
+    if (!changed)
+      break;
+  }
+
+  for (auto &[value, info] : layouts) {
+    Attribute encoding = assignments.lookup(value);
+    if (!encoding)
+      continue;
     info.encodings.clear();
     info.encodings.insert(encoding);
   }
@@ -657,6 +1055,11 @@ void LayoutPropagation::rewriteOp(Operation *op) {
     Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
     if (canUseResultEncoding(op, encoding)) {
       setEncodingInPlace(op->getResult(0), encoding);
+      if (auto constant = dyn_cast<arith::ConstantOp>(op)) {
+        auto elements = cast<DenseElementsAttr>(constant.getValue());
+        auto resultType = cast<RankedTensorType>(constant.getType());
+        constant.setValueAttr(elements.reshape(resultType));
+      }
     } else if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
                op->hasTrait<OpTrait::Elementwise>() ||
                isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
@@ -1615,13 +2018,19 @@ LogicalResult cleanupLayoutConversions(ModuleOp module) {
 } // namespace
 
 LogicalResult optimizeDistributedLayouts(ModuleOp module,
-                                         bool disableRematSplitting) {
+                                         bool disableRematSplitting,
+                                         LayoutAssignmentStrategy strategy) {
   MLIRContext *context = module.getContext();
 
   // Propagate fixed anchor layouts across complete functions and structured
   // control flow before resolving competing assignments.
-  module.walk([](FuncOp funcOp) {
-    LayoutPropagation propagation(funcOp);
+  module.walk([&](FuncOp funcOp) {
+    LayoutAssignmentStrategy functionStrategy = strategy;
+    if (functionStrategy == LayoutAssignmentStrategy::Global &&
+        !supportsGlobalLayoutAssignment(funcOp))
+      functionStrategy = LayoutAssignmentStrategy::Legacy;
+
+    LayoutPropagation propagation(funcOp, functionStrategy);
     propagation.initAnchorLayout();
     propagation.propagateLayout();
     propagation.resolveConflicts();
