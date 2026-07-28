@@ -52,8 +52,6 @@ namespace {
 constexpr int kMaxMbarV1InitCount = (1 << 9) - 1;
 
 bool supportsMbarV1Layout(const NVIDIA::TargetInfo &targetInfo) {
-  // Hopper is compiled with an older PTX toolchain by default. Require PTX
-  // 9.3, selected by the CUDA 13.3 toolchain, in addition to hardware support.
   return targetInfo.getTargetFeatures().supportsMbarV1Layout() &&
          targetInfo.getPtxVersion() >= 93;
 }
@@ -208,6 +206,8 @@ struct InitBarrierOpConversion
     std::string ptx;
     // The expected arrival count has only 9 bits in the v1 layout. Preserve
     // v0 for barriers whose count cannot be represented by v1.
+    // The v1 layout is only needed when the conditonal phase is queried.
+    // But for simplicity we always use it when possible.
     if (supportsMbarV1Layout(*targetInfo) && initCount <= kMaxMbarV1InitCount) {
       ptx = "@$0 mbarrier.init.layout::v1.shared::cta.b64 [$1], " +
             std::to_string(initCount) + ";";
