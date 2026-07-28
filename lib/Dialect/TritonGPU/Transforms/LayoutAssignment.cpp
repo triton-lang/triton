@@ -273,12 +273,21 @@ static bool supportsGlobalLayoutAssignment(FuncOp funcOp) {
     if (!hasTensorResult)
       return WalkResult::advance();
 
-    // Structural operations need joint legality constraints: choosing one
-    // result independently can invalidate an exact-order reshape, split, or
-    // tied loop value. Keep the proven whole-function assignment until those
-    // coupled candidates are solved as a single component.
-    if (isa<scf::ForOp, scf::WhileOp, scf::IfOp, ReshapeOp, JoinOp, SplitOp,
-            ExpandDimsOp, ReduceOp, TransOp>(op))
+    // Exact-order reshapes, transposes, and dimension expansion each have a
+    // single result whose source layout can be inferred from a proposed
+    // result. Keep them in the costed graph so consumer pressure propagates
+    // across the view instead of abandoning the complete function.
+    if (auto reshape = dyn_cast<ReshapeOp>(op)) {
+      if (reshape.getAllowReorder() || reshape.getEfficientLayout())
+        return WalkResult::interrupt();
+      return WalkResult::advance();
+    }
+    if (isa<ExpandDimsOp, TransOp>(op))
+      return WalkResult::advance();
+
+    // Multi-result splits, join compatibility, reductions, and tied
+    // control-flow values still require joint component constraints.
+    if (isa<scf::ForOp, scf::WhileOp, scf::IfOp, JoinOp, SplitOp, ReduceOp>(op))
       return WalkResult::interrupt();
 
     if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||

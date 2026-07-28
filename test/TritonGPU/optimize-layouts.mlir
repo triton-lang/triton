@@ -338,3 +338,103 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %first, %second, %third : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
   }
 }
+
+// -----
+
+// A layout-preserving transpose changes the encoding as well as the logical
+// axes. It must not turn off global conflict resolution for the rest of the
+// expression or move a shared-memory conversion to each fixed result.
+//
+// BASELINE-LABEL: @layout_conflict_transpose_fanout
+// BASELINE-COUNT-4: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @layout_conflict_transpose_fanout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @layout_conflict_transpose_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>) {
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %mixed = arith.addf %converted, %target : tensor<16x16xf32, #target>
+    %transposed = tt.trans %mixed {order = array<i32: 1, 0>} : tensor<16x16xf32, #target> -> tensor<16x16xf32, #source>
+    %restored = tt.trans %transposed {order = array<i32: 1, 0>} : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %first = arith.mulf %restored, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %restored, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %restored, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
+  }
+}
+
+// -----
+
+// Flattening and restoring a tensor must preserve logical element order. The
+// globally cheapest physical conversion is still the single conversion at the
+// input, not one conversion for each result; no allow_reorder is introduced.
+//
+// BASELINE-LABEL: @layout_conflict_exact_reshape_fanout
+// BASELINE-COUNT-5: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @layout_conflict_exact_reshape_fanout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED-NOT: allow_reorder
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#flat_target = #ttg.linear<{register = [[16], [32], [64], [128]], lane = [[1], [2], [4], [8], [0]], warp = [[0], [0]], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @layout_conflict_exact_reshape_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>) {
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %mixed = arith.addf %converted, %target : tensor<16x16xf32, #target>
+    %flattened = tt.reshape %mixed : tensor<16x16xf32, #target> -> tensor<256xf32, #flat_target>
+    %restored = tt.reshape %flattened : tensor<256xf32, #flat_target> -> tensor<16x16xf32, #target>
+    %first = arith.mulf %restored, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %restored, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %restored, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
+  }
+}
+
+// -----
+
+// Dimension expansion ties a sliced source encoding to its parent encoding.
+// Resolve that constraint across the full producer/consumer graph rather than
+// performing a shared-memory conversion separately for each expanded result.
+//
+// BASELINE-LABEL: @layout_conflict_expand_dims_fanout
+// BASELINE-COUNT-4: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @layout_conflict_expand_dims_fanout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source_parent = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 2, 1]}>
+#target_parent = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 1, 4], order = [2, 0, 1]}>
+#source = #ttg.slice<{dim = 1, parent = #source_parent}>
+#target = #ttg.slice<{dim = 1, parent = #target_parent}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @layout_conflict_expand_dims_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>) -> (tensor<16x1x16xf32, #target_parent>, tensor<16x1x16xf32, #target_parent>, tensor<16x1x16xf32, #target_parent>) {
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %mixed = arith.addf %converted, %target : tensor<16x16xf32, #target>
+    %expanded = tt.expand_dims %mixed {axis = 1 : i32} : tensor<16x16xf32, #target> -> tensor<16x1x16xf32, #target_parent>
+    %target_expanded = tt.expand_dims %target {axis = 1 : i32} : tensor<16x16xf32, #target> -> tensor<16x1x16xf32, #target_parent>
+    %first = arith.mulf %expanded, %target_expanded : tensor<16x1x16xf32, #target_parent>
+    %second = arith.addf %expanded, %target_expanded : tensor<16x1x16xf32, #target_parent>
+    %third = arith.subf %expanded, %target_expanded : tensor<16x1x16xf32, #target_parent>
+    tt.return %first, %second, %third : tensor<16x1x16xf32, #target_parent>, tensor<16x1x16xf32, #target_parent>, tensor<16x1x16xf32, #target_parent>
+  }
+}
