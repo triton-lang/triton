@@ -1059,3 +1059,128 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %first, %second, %third, %hardware#0 : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xi32, #target>
   }
 }
+
+// -----
+
+// Existing permuting reshapes retain their exact source, result, and
+// allow_reorder contract. They must not force an independent loop component
+// back to the legacy assignment or introduce new permutation permissions.
+//
+// BASELINE-LABEL: @opaque_reorder_independent_fanout
+// BASELINE-COUNT-1: ttg.convert_layout
+// BASELINE: tt.reshape {{.*}} allow_reorder
+// BASELINE-COUNT-3: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @opaque_reorder_independent_fanout
+// OPTIMIZED: tt.reshape {{.*}} allow_reorder
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#flat = #ttg.linear<{register = [[16], [32], [64], [128]], lane = [[1], [2], [4], [8], [0]], warp = [[0], [0]], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @opaque_reorder_independent_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<256xf32, #flat>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %opaque = tt.reshape %target allow_reorder : tensor<16x16xf32, #target> -> tensor<256xf32, #flat>
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %opaque : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<256xf32, #flat>
+  }
+}
+
+// -----
+
+// An efficient exact-order reshape is a local boundary as well. Preserve its
+// efficient_layout attribute without introducing allow_reorder.
+//
+// BASELINE-LABEL: @opaque_efficient_independent_fanout
+// BASELINE-COUNT-1: ttg.convert_layout
+// BASELINE: tt.reshape {{.*}} efficient_layout
+// BASELINE-COUNT-3: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @opaque_efficient_independent_fanout
+// OPTIMIZED: tt.reshape {{.*}} efficient_layout
+// OPTIMIZED-NOT: allow_reorder
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#flat = #ttg.linear<{register = [[16], [32], [64], [128]], lane = [[1], [2], [4], [8], [0]], warp = [[0], [0]], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @opaque_efficient_independent_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<256xf32, #flat>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %opaque = tt.reshape %target efficient_layout : tensor<16x16xf32, #target> -> tensor<256xf32, #flat>
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %opaque : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<256xf32, #flat>
+  }
+}
+
+// -----
+
+// Preserve a reshape carrying both contracts without propagating either
+// permission into the independent globally optimized loop.
+//
+// BASELINE-LABEL: @opaque_reorder_efficient_independent_fanout
+// BASELINE-COUNT-1: ttg.convert_layout
+// BASELINE: tt.reshape {{.*}} allow_reorder efficient_layout
+// BASELINE-COUNT-3: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @opaque_reorder_efficient_independent_fanout
+// OPTIMIZED: tt.reshape {{.*}} allow_reorder efficient_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#flat = #ttg.linear<{register = [[16], [32], [64], [128]], lane = [[1], [2], [4], [8], [0]], warp = [[0], [0]], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @opaque_reorder_efficient_independent_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<256xf32, #flat>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %opaque = tt.reshape %target allow_reorder efficient_layout : tensor<16x16xf32, #target> -> tensor<256xf32, #flat>
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third, %opaque : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<256xf32, #flat>
+  }
+}

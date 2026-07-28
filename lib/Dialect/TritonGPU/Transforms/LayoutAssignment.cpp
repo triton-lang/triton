@@ -264,6 +264,10 @@ static bool isFixedLayoutBoundary(Operation *op) {
           op))
     return false;
 
+  if (auto reshape = dyn_cast<ReshapeOp>(op))
+    if (reshape.getAllowReorder() || reshape.getEfficientLayout())
+      return true;
+
   return isa<ReturnOp, LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp,
              DotOpInterface, DescriptorOpInterface,
              triton::nvidia_gpu::TMEMLoadOp>(op) ||
@@ -311,15 +315,11 @@ static bool supportsGlobalLayoutAssignment(FuncOp funcOp) {
     if (!hasTensorResult)
       return WalkResult::advance();
 
-    // Exact-order reshapes, transposes, and dimension expansion have a single
-    // result whose source layout can be inferred from a proposed result. Keep
-    // them in the costed graph so consumer pressure propagates across the
-    // operation instead of abandoning the complete function.
-    if (auto reshape = dyn_cast<ReshapeOp>(op)) {
-      if (reshape.getAllowReorder() || reshape.getEfficientLayout())
-        return WalkResult::interrupt();
+    // Exact-order reshapes remain in the costed graph. Permuting and efficient
+    // reshapes are fixed local boundaries; neither contract should prevent
+    // global assignment in unrelated components.
+    if (isa<ReshapeOp>(op))
       return WalkResult::advance();
-    }
     if (isa<ExpandDimsOp, TransOp>(op))
       return WalkResult::advance();
 
