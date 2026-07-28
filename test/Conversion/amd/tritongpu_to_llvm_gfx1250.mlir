@@ -34,6 +34,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
 #inner_padded = #ttg.padded_shared<[128:+4] {order = [1, 0], shape = [16, 16]}>
 #partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner_padded}>
+#inner_padded_piece = #ttg.padded_shared<[128:+4] {order = [1, 0], shape = [4, 16]}>
+#partitioned_piece = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner_padded_piece}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // GFX1250-LABEL: partitioned_shared_padded_local_alloc
@@ -42,6 +44,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     // GFX1250-COUNT-4: llvm.store {{.*}} : vector<{{[0-9]+}}xf16>, !llvm.ptr<3>
     %0 = ttg.local_alloc %arg0 : (tensor<16x16xf16, #blocked>) -> !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable>
     tt.return
+  }
+
+  // GFX1250-LABEL: partitioned_shared_padded_multibuffer_index
+  tt.func @partitioned_shared_padded_multibuffer_index(%index: i32) {
+    %parent = ttg.local_alloc : () -> !ttg.memdesc<2x16x16xf16, #partitioned_piece, #smem, mutable>
+    // GFX1250: llvm.mlir.constant(128 : i32)
+    // GFX1250: llvm.getelementptr
+    %view = ttg.memdesc_index %parent[%index] : !ttg.memdesc<2x16x16xf16, #partitioned_piece, #smem, mutable> -> !ttg.memdesc<16x16xf16, #partitioned_piece, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
+#inner_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner_shared}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // GFX1250-LABEL: partitioned_shared_multibuffer_subslice
+  tt.func @partitioned_shared_multibuffer_subslice() -> tensor<16x16xf16, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<5x16x16xf16, #partitioned, #smem, mutable>
+    // GFX1250: [[STAGE_OFFSET:%.*]] = llvm.mlir.constant(256 : i32)
+    // GFX1250-COUNT-2: llvm.getelementptr {{.*}}[[STAGE_OFFSET]]
+    %1 = ttg.memdesc_subslice %0 [2, 0, 0] : !ttg.memdesc<5x16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<3x16x16xf16, #partitioned, #smem, mutable, 5x16x16>
+    %2 = ttg.memdesc_index %1[%c0] : !ttg.memdesc<3x16x16xf16, #partitioned, #smem, mutable, 5x16x16> -> !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable>
+    // GFX1250: llvm.load
+    %3 = ttg.local_load %2 : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> tensor<16x16xf16, #blocked>
+    tt.return %3 : tensor<16x16xf16, #blocked>
   }
 }
 

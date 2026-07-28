@@ -469,6 +469,28 @@ if(TRITON_BUILD_PYTHON_MODULE)
     "${TRITON_WHEEL_DIR}/FileCheck"
     COPYONLY)
 
+  # Install Triton headers and TableGen definitions into the wheel staging
+  # directory so that downstream projects can use Triton as a C++ library
+  # without a separate cmake --install step.
+  set(_TRITON_WHEEL_INCLUDE "${TRITON_WHEEL_DIR}/include")
+  install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
+    COMPONENT wheel_headers
+    DESTINATION "${_TRITON_WHEEL_INCLUDE}"
+    FILES_MATCHING PATTERN "*.h")
+  install(DIRECTORY ${PROJECT_BINARY_DIR}/include/
+    COMPONENT wheel_headers
+    DESTINATION "${_TRITON_WHEEL_INCLUDE}"
+    FILES_MATCHING PATTERN "*.h" PATTERN "*.h.inc")
+  install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
+    COMPONENT wheel_headers
+    DESTINATION "${_TRITON_WHEEL_INCLUDE}"
+    FILES_MATCHING PATTERN "*.td")
+  install(DIRECTORY ${PROJECT_SOURCE_DIR}/python/
+    COMPONENT wheel_headers
+    DESTINATION "${_TRITON_WHEEL_INCLUDE}/python"
+    FILES_MATCHING PATTERN "*.h"
+    PATTERN "triton" EXCLUDE)
+
   # Build plugins when building libtriton since they depend on libtriton.
   if(TRITON_EXT_ENABLED)
     add_subdirectory(examples/plugins)
