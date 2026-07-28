@@ -92,6 +92,79 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %41 : tensor<32x64xi32, #mma>
   }
 
+  // Explicitly permitting a reshape to reorder does not turn it into an opaque
+  // physical-layout boundary. The incumbent already removes every conversion
+  // in this original handoff variant, so the global pass must retain that
+  // zero-conversion result without dropping the existing permission.
+  //
+  // BASELINE-LABEL: @stochastic_rounding_allow_reorder_join_chain
+  // BASELINE-NOT: ttg.convert_layout
+  // BASELINE: tt.reshape {{.*}} allow_reorder
+  // BASELINE-NOT: ttg.convert_layout
+  // BASELINE: tt.return
+  //
+  // OPTIMIZED-LABEL: @stochastic_rounding_allow_reorder_join_chain
+  // OPTIMIZED-NOT: ttg.convert_layout
+  // OPTIMIZED: tt.reshape {{.*}} allow_reorder
+  // OPTIMIZED-NOT: ttg.convert_layout
+  // OPTIMIZED: tt.return
+  tt.func @stochastic_rounding_allow_reorder_join_chain(%arg0: i32, %arg1: i32, %arg2: i32, %arg3: i32) -> tensor<32x64xi32, #mma> {
+    %a0 = tt.splat %arg0 : i32 -> tensor<128xi32, #blocked1>
+    %a1 = tt.splat %arg1 : i32 -> tensor<128xi32, #blocked1>
+    %x0 = tt.splat %arg2 : i32 -> tensor<128xi32, #blocked1>
+    %x1 = tt.splat %arg3 : i32 -> tensor<128xi32, #blocked1>
+
+    %0 = tt.reshape %a0 : tensor<128xi32, #blocked1> -> tensor<1x128xi32, #blocked2>
+    %1 = tt.reshape %a1 : tensor<128xi32, #blocked1> -> tensor<1x128xi32, #blocked2>
+    %2 = tt.join %0, %1 : tensor<1x128xi32, #blocked2> -> tensor<1x128x2xi32, #blocked3>
+    %3 = ttg.convert_layout %2 : tensor<1x128x2xi32, #blocked3> -> tensor<1x128x2xi32, #blocked4>
+    %4 = tt.reshape %3 allow_reorder : tensor<1x128x2xi32, #blocked4> -> tensor<256xi32, #blocked1>
+
+    %5 = tt.reshape %x0 : tensor<128xi32, #blocked1> -> tensor<1x128xi32, #blocked2>
+    %6 = tt.join %5, %5 : tensor<1x128xi32, #blocked2> -> tensor<1x128x2xi32, #blocked3>
+    %7 = ttg.convert_layout %6 : tensor<1x128x2xi32, #blocked3> -> tensor<1x128x2xi32, #blocked4>
+    %8 = tt.reshape %7 allow_reorder : tensor<1x128x2xi32, #blocked4> -> tensor<256xi32, #blocked1>
+
+    %9 = arith.xori %4, %8 : tensor<256xi32, #blocked1>
+    %10 = tt.reshape %3 allow_reorder : tensor<1x128x2xi32, #blocked4> -> tensor<1x256xi32, #blocked2>
+    %11 = tt.reshape %9 : tensor<256xi32, #blocked1> -> tensor<1x256xi32, #blocked2>
+    %12 = tt.join %10, %11 : tensor<1x256xi32, #blocked2> -> tensor<1x256x2xi32, #blocked3>
+    %13 = ttg.convert_layout %12 : tensor<1x256x2xi32, #blocked3> -> tensor<1x256x2xi32, #linear1>
+    %14 = tt.reshape %13 : tensor<1x256x2xi32, #linear1> -> tensor<512xi32, #linear2>
+
+    %15 = tt.reshape %x1 : tensor<128xi32, #blocked1> -> tensor<1x128xi32, #blocked2>
+    %16 = tt.join %15, %15 : tensor<1x128xi32, #blocked2> -> tensor<1x128x2xi32, #blocked3>
+    %17 = ttg.convert_layout %16 : tensor<1x128x2xi32, #blocked3> -> tensor<1x128x2xi32, #blocked4>
+    %18 = tt.reshape %17 allow_reorder : tensor<1x128x2xi32, #blocked4> -> tensor<1x256xi32, #blocked2>
+    %19 = tt.join %18, %18 : tensor<1x256xi32, #blocked2> -> tensor<1x256x2xi32, #blocked3>
+    %20 = ttg.convert_layout %19 : tensor<1x256x2xi32, #blocked3> -> tensor<1x256x2xi32, #linear1>
+    %21 = tt.reshape %20 : tensor<1x256x2xi32, #linear1> -> tensor<512xi32, #linear2>
+
+    %22 = arith.xori %14, %21 : tensor<512xi32, #linear2>
+    %23 = tt.reshape %13 : tensor<1x256x2xi32, #linear1> -> tensor<1x512xi32, #linear3>
+    %24 = tt.reshape %22 : tensor<512xi32, #linear2> -> tensor<1x512xi32, #linear3>
+    %25 = tt.join %23, %24 : tensor<1x512xi32, #linear3> -> tensor<1x512x2xi32, #linear4>
+    %26 = tt.reshape %25 : tensor<1x512x2xi32, #linear4> -> tensor<1024xi32, #linear5>
+
+    %27 = tt.reshape %a0 : tensor<128xi32, #blocked1> -> tensor<1x128xi32, #blocked2>
+    %28 = tt.join %27, %27 : tensor<1x128xi32, #blocked2> -> tensor<1x128x2xi32, #blocked3>
+    %29 = ttg.convert_layout %28 : tensor<1x128x2xi32, #blocked3> -> tensor<1x128x2xi32, #blocked4>
+    %30 = tt.reshape %29 allow_reorder : tensor<1x128x2xi32, #blocked4> -> tensor<1x256xi32, #blocked2>
+    %31 = tt.join %30, %30 : tensor<1x256xi32, #blocked2> -> tensor<1x256x2xi32, #blocked3>
+    %32 = ttg.convert_layout %31 : tensor<1x256x2xi32, #blocked3> -> tensor<1x256x2xi32, #linear1>
+    %33 = tt.reshape %32 : tensor<1x256x2xi32, #linear1> -> tensor<1x512xi32, #linear3>
+    %34 = tt.join %33, %33 : tensor<1x512xi32, #linear3> -> tensor<1x512x2xi32, #linear4>
+    %35 = tt.reshape %34 : tensor<1x512x2xi32, #linear4> -> tensor<1024xi32, #linear5>
+
+    %36 = arith.xori %26, %35 : tensor<1024xi32, #linear5>
+    %37 = tt.reshape %25 : tensor<1x512x2xi32, #linear4> -> tensor<1x1024xi32, #linear6>
+    %38 = tt.reshape %36 : tensor<1024xi32, #linear5> -> tensor<1x1024xi32, #linear6>
+    %39 = tt.join %37, %38 : tensor<1x1024xi32, #linear6> -> tensor<1x1024x2xi32, #linear7>
+    %40 = tt.reshape %39 allow_reorder : tensor<1x1024x2xi32, #linear7> -> tensor<32x64xi32, #blocked>
+    %41 = ttg.convert_layout %40 : tensor<32x64xi32, #blocked> -> tensor<32x64xi32, #mma>
+    tt.return %41 : tensor<32x64xi32, #mma>
+  }
+
   // Production stochastic rounding starts from a logical range and shared
   // random-number arithmetic in a nested region. The range and scalar splats
   // dominate the region from the enclosing function block.

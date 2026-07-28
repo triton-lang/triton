@@ -2376,18 +2376,37 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
 
   // Propagate fixed anchor layouts across complete functions and structured
   // control flow before resolving competing assignments.
-  module.walk([&](FuncOp funcOp) {
+  WalkResult propagationResult = module.walk([&](FuncOp funcOp) -> WalkResult {
+    bool hasConvertiblePermutingReshape =
+        strategy == LayoutAssignmentStrategy::Global &&
+        funcOp
+            .walk([](ReshapeOp reshape) {
+              if (reshape.getAllowReorder() && !reshape.getEfficientLayout() &&
+                  reshape.getSrc().getDefiningOp<ConvertLayoutOp>())
+                return WalkResult::interrupt();
+              return WalkResult::advance();
+            })
+            .wasInterrupted();
+
     if (strategy == LayoutAssignmentStrategy::Global &&
-        hasProtectedLayoutLoop(funcOp)) {
-      // Establish the legacy layout for each hardware or opaque loop before
-      // freezing its complete protocol. Keep the rest of the function under
-      // global assignment instead of falling back wholesale.
+        (hasProtectedLayoutLoop(funcOp) || hasConvertiblePermutingReshape)) {
+      // Establish the incumbent layout for protected protocols and permuting
+      // views before optimizing the remaining components globally.
       LayoutPropagation legacyPropagation(funcOp,
                                           LayoutAssignmentStrategy::Legacy);
       legacyPropagation.initAnchorLayout();
       legacyPropagation.propagateLayout();
       legacyPropagation.resolveConflicts();
       legacyPropagation.rewrite();
+
+      if (hasConvertiblePermutingReshape) {
+        // Preserve conversions the incumbent can fold through an explicitly
+        // permuting reshape before global assignment fixes that boundary.
+        RewritePatternSet patterns(context);
+        ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
+        if (failed(applyPatternsGreedily(funcOp, std::move(patterns))))
+          return WalkResult::interrupt();
+      }
     }
 
     LayoutPropagation propagation(funcOp, strategy);
@@ -2395,7 +2414,11 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
     propagation.propagateLayout();
     propagation.resolveConflicts();
     propagation.rewrite();
+
+    return WalkResult::advance();
   });
+  if (propagationResult.wasInterrupted())
+    return failure();
 
   LLVM_DEBUG({
     DBGS() << "Module after propagating layouts forward:\n";
