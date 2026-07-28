@@ -624,6 +624,18 @@ def _host_tma_reduce_add_kernel(desc, src_ptr, src_stride_0, src_stride_1, BLOCK
     desc.atomic_add([0, 0], src)
 
 
+@triton.jit
+def _masked_tensor_access_kernel(target_ptr, scratch_ptr, first_active, last_active, STORE: tl.constexpr,
+                                 BLOCK: tl.constexpr):
+    offsets = tl.arange(0, BLOCK)
+    mask = (offsets >= first_active) & (offsets < last_active)
+    if STORE:
+        tl.store(target_ptr + offsets, offsets + BLOCK, mask=mask)
+    else:
+        values = tl.load(target_ptr + offsets, mask=mask, other=0)
+        tl.store(scratch_ptr + offsets, values, mask=mask)
+
+
 def _shadow_cells_for_tensor(tensor: torch.Tensor):
     assert tensor.ndim >= 1
     if tensor.ndim > 1:
@@ -657,6 +669,35 @@ def _assert_shadow_mask(before, after, changed_mask: torch.Tensor, *, access_kin
                     assert after_cell.write_clock.epoch != 0
             else:
                 assert after_cell == before_cell
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("store", [False, True], ids=["load", "store"])
+@pytest.mark.parametrize(
+    "first_active, last_active",
+    [(0, 0), (0, 1), (5, 21), (0, 32), (32, 32)],
+    ids=["empty", "first", "interior", "all", "past-end"],
+)
+def test_masked_tensor_access_updates_only_active_shadow(with_gsan, store, first_active, last_active):
+    block = 32
+    target = torch.arange(block, dtype=torch.int32, device="cuda")
+    scratch = torch.full_like(target, -1)
+    expected = target.clone() if store else scratch.clone()
+    if store:
+        expected[first_active:last_active] = torch.arange(first_active, last_active, device="cuda") + block
+    else:
+        expected[first_active:last_active] = target[first_active:last_active]
+
+    shadow_before = [_shadow_cells_for_tensor(target)]
+    _masked_tensor_access_kernel[(1, )](target, scratch, first_active, last_active, STORE=store, BLOCK=block,
+                                        num_warps=1)
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(target if store else scratch, expected)
+    changed_mask = torch.zeros((1, block), dtype=torch.bool)
+    changed_mask[0, first_active:last_active] = True
+    shadow_after = [_shadow_cells_for_tensor(target)]
+    _assert_shadow_mask(shadow_before, shadow_after, changed_mask, access_kind="write" if store else "read")
 
 
 def _masked_store_change_mask(storage: torch.Tensor, m_size: int, n_size: int, row_idx: int,
