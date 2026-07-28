@@ -2902,7 +2902,9 @@ void FunctionBuilder::createVerifyProxyAccessCall(ImplicitLocOpBuilder &b,
         fenced = arith::AndIOp::create(fb, fenced, seenMask);
         Value notFenced = arith::XOrIOp::create(fb, fenced, seenMask);
         Value missing = arith::AndIOp::create(fb, seen, notFenced);
-        Value missingAny = reduceAll<arith::OrIOp>(fb, missing);
+        Value missingBits =
+            arith::CmpIOp::create(fb, arith::CmpIPredicate::ne, missing, zero);
+        Value missingAny = reduceAll<arith::OrIOp>(fb, missingBits);
         Value zeroScalar = arith::ConstantOp::create(
             fb, missingAny.getType(),
             fb.getIntegerAttr(missingAny.getType(), 0));

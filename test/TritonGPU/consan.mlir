@@ -180,6 +180,13 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #proxy_smem = #ttg.shared_memory
 #proxy_blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 4104 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK: tt.func private @__triton_consan_verify_proxy_access_noalias_nw1
+  // CHECK: arith.xori {{.*}} : tensor<{{.*}}xi64
+  // CHECK-NEXT: %[[MISSING_PROXY_BITS:.*]] = arith.andi {{.*}} : tensor<{{.*}}xi64
+  // CHECK-NEXT: %[[HAS_MISSING_PROXY_BITS:.*]] = arith.cmpi ne, %[[MISSING_PROXY_BITS]], {{.*}} : tensor<{{.*}}xi64
+  // CHECK-NEXT: %[[MISSING_PROXY_PREDICATES:.*]] = tt.reshape %[[HAS_MISSING_PROXY_BITS]]{{.*}} -> tensor<{{.*}}xi1
+  // CHECK: "tt.reduce"(%[[MISSING_PROXY_PREDICATES]])
+  // CHECK: arith.ori {{.*}} : i1
   // CHECK-LABEL: @proxy_fence_state_transitions
   tt.func public @proxy_fence_state_transitions(%out: !tt.tensordesc<32x32xf32, #proxy_shared>) {
     %c0 = arith.constant 0 : i32
