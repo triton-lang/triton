@@ -112,6 +112,8 @@ private:
   SmallVector<Attribute, 4>
   getUseEncodings(OpOperand &use,
                   const DenseMap<Value, Attribute> &assignments) const;
+  uint64_t getLayoutTransitionCost(Value value, Attribute sourceEncoding,
+                                   Attribute resultEncoding) const;
   uint64_t
   getAssignmentCost(Value value, Attribute encoding,
                     const DenseMap<Value, Attribute> &assignments) const;
@@ -129,6 +131,7 @@ private:
   DenseSet<Value> fixedLayouts;
   // original encodings of tensor values rewritten in place.
   DenseMap<Value, Attribute> originalEncodings;
+  mutable DenseMap<std::pair<Type, Type>, uint64_t> layoutTransitionCosts;
   FuncOp funcOp;
   LayoutAssignmentStrategy strategy;
 };
@@ -279,6 +282,12 @@ static bool isFixedLayoutBoundary(Operation *op) {
 
   if (auto reshape = dyn_cast<ReshapeOp>(op))
     if (reshape.getAllowReorder() || reshape.getEfficientLayout())
+      return true;
+
+  // Packed assembly observes which register elements are grouped together.
+  // Relayout across the instruction can therefore change its logical results.
+  if (auto inlineAsm = dyn_cast<ElementwiseInlineAsmOp>(op))
+    if (inlineAsm.getPackedElement() > 1)
       return true;
 
   // High-rank pairwise reductions implement register-level sorting networks.
@@ -685,8 +694,8 @@ void LayoutPropagation::resolveConflicts() {
   }
 }
 
-static uint64_t getLayoutTransitionCost(Value value, Attribute sourceEncoding,
-                                        Attribute resultEncoding) {
+uint64_t LayoutPropagation::getLayoutTransitionCost(
+    Value value, Attribute sourceEncoding, Attribute resultEncoding) const {
   if (!sourceEncoding || !resultEncoding || sourceEncoding == resultEncoding)
     return 0;
 
@@ -696,8 +705,13 @@ static uint64_t getLayoutTransitionCost(Value value, Attribute sourceEncoding,
 
   RankedTensorType sourceType = tensorType.cloneWithEncoding(sourceEncoding);
   RankedTensorType resultType = tensorType.cloneWithEncoding(resultEncoding);
+  auto [cached, inserted] = layoutTransitionCosts.try_emplace(
+      std::pair<Type, Type>{sourceType, resultType}, 0);
+  if (!inserted)
+    return cached->second;
+
   if (cvtReordersRegisters(sourceType, resultType))
-    return 1;
+    return cached->second = 1;
 
   // Cross-lane traffic scales with the physical element width, so prefer a
   // conversion after narrowing when both placements are otherwise equivalent.
@@ -709,8 +723,8 @@ static uint64_t getLayoutTransitionCost(Value value, Attribute sourceEncoding,
   uint64_t byteCount = (elementCount * elementBitWidth) / 8;
 
   if (cvtNeedsWarpShuffle(sourceType, resultType))
-    return 4 * byteCount;
-  return 32 * byteCount;
+    return cached->second = 4 * byteCount;
+  return cached->second = 32 * byteCount;
 }
 
 static uint64_t getLayoutRegisterPressureCost(Value value, Attribute encoding) {
@@ -2615,6 +2629,15 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
   WalkResult propagationResult = module.walk([&](FuncOp funcOp) -> WalkResult {
     bool hasProtectedLoop = strategy == LayoutAssignmentStrategy::Global &&
                             hasProtectedLayoutLoop(funcOp);
+    bool hasProtectedPackedAssembly =
+        strategy == LayoutAssignmentStrategy::Global &&
+        funcOp
+            .walk([](ElementwiseInlineAsmOp inlineAsm) {
+              if (inlineAsm.getPackedElement() > 1)
+                return WalkResult::interrupt();
+              return WalkResult::advance();
+            })
+            .wasInterrupted();
     bool hasProtectedStore =
         hasProtectedLoop &&
         funcOp
@@ -2646,11 +2669,11 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
             .wasInterrupted();
 
     if (strategy == LayoutAssignmentStrategy::Global &&
-        (hasProtectedLoop || hasProtectedReductionNetwork ||
-         hasConvertiblePermutingReshape)) {
-      // Establish the incumbent layout for protected hardware and reduction
-      // protocols and permuting views before optimizing the remaining
-      // components globally.
+        (hasProtectedLoop || hasProtectedPackedAssembly ||
+         hasProtectedReductionNetwork || hasConvertiblePermutingReshape)) {
+      // Establish the incumbent layout for protected hardware, packed
+      // register assembly, reduction protocols, and permuting views before
+      // optimizing the remaining components globally.
       LayoutPropagation legacyPropagation(funcOp,
                                           LayoutAssignmentStrategy::Legacy);
       legacyPropagation.initAnchorLayout();

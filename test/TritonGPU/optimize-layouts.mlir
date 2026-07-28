@@ -1824,3 +1824,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 
 }
+
+// -----
+
+// Packed inline assembly operates on groups of register elements, so moving
+// its layout conversion across the instruction can change the resulting
+// logical values. Preserve both packed results in their original layout.
+//
+// BASELINE-LABEL: @packed_inline_asm_register_grouping
+// BASELINE-SAME: %[[BASE_INPUT:[a-zA-Z0-9_]+]]: tensor<16x16xi8, #[[BASE_LAYOUT:[a-zA-Z0-9_]+]]>
+// BASELINE: tt.elementwise_inline_asm {{.*}}packed_element = 4{{.*}} %[[BASE_INPUT]] : tensor<16x16xi8, #[[BASE_LAYOUT]]> -> tensor<16x16xi8, #[[BASE_LAYOUT]]>, tensor<16x16xi8, #[[BASE_LAYOUT]]>
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @packed_inline_asm_register_grouping
+// OPTIMIZED-SAME: %[[PACKED_INPUT:[a-zA-Z0-9_]+]]: tensor<16x16xi8, #[[PACKED_LAYOUT:[a-zA-Z0-9_]+]]>
+// OPTIMIZED: tt.elementwise_inline_asm {{.*}}packed_element = 4{{.*}} %[[PACKED_INPUT]] : tensor<16x16xi8, #[[PACKED_LAYOUT]]> -> tensor<16x16xi8, #[[PACKED_LAYOUT]]>, tensor<16x16xi8, #[[PACKED_LAYOUT]]>
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @packed_inline_asm_register_grouping(%source: tensor<16x16xi8, #source>, %target: tensor<16x16xi8, #target>) -> (tensor<16x16xi8, #target>, tensor<16x16xi8, #target>) {
+    %packed:2 = tt.elementwise_inline_asm "prmt.b32 $0, $2, 0, 0x5140; prmt.b32 $1, $2, 0, 0x7362;" {constraints = "=r,=r,r", packed_element = 4 : i32, pure = true} %source : tensor<16x16xi8, #source> -> tensor<16x16xi8, #source>, tensor<16x16xi8, #source>
+    %left = ttg.convert_layout %packed#0 : tensor<16x16xi8, #source> -> tensor<16x16xi8, #target>
+    %right = ttg.convert_layout %packed#1 : tensor<16x16xi8, #source> -> tensor<16x16xi8, #target>
+    %left_result = arith.xori %left, %target : tensor<16x16xi8, #target>
+    %right_result = arith.addi %right, %target : tensor<16x16xi8, #target>
+    tt.return %left_result, %right_result : tensor<16x16xi8, #target>, tensor<16x16xi8, #target>
+  }
+}
