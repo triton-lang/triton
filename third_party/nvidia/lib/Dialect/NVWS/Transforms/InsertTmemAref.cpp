@@ -418,7 +418,9 @@ struct TMEMAref {
     buffer = {};
   }
   void release(OpBuilder &b, Location loc) {
-    assert(asyncOp[partitionId]);
+    auto asyncOpIt = asyncOp.find(partitionId);
+    assert(asyncOpIt != asyncOp.end() && asyncOpIt->second);
+    AsyncOp currentAsyncOp = *asyncOpIt->second;
     StageCluster stageCluster;
     if (partitionId)
       stageCluster = stageClusters[*partitionId];
@@ -426,13 +428,13 @@ struct TMEMAref {
       createInto<ArefPutExitOp>(
           b, loc, {partitionId, stageCluster}, aref, token,
           b.getArrayAttr(SmallVector<Attribute>{
-              AsyncOpAttr::get(b.getContext(), *asyncOp[partitionId])}));
+              AsyncOpAttr::get(b.getContext(), currentAsyncOp)}));
       kind = GET;
     } else {
       createInto<ArefGetExitOp>(
           b, loc, {partitionId, stageCluster}, aref, token,
           b.getArrayAttr(SmallVector<Attribute>{
-              AsyncOpAttr::get(b.getContext(), *asyncOp[partitionId])}));
+              AsyncOpAttr::get(b.getContext(), currentAsyncOp)}));
       kind = PUT;
     }
   }

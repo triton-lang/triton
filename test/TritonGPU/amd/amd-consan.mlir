@@ -228,6 +228,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: %[[THREAD_MASK:.*]] = arith.constant 1 : i64
     // CHECK: %[[OUTSTANDING_NUM:.*]] = arith.constant 42 : i32
     // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_writes{{.*}}(%[[THREAD_BIT]], %[[THREAD_MASK]], %[[OUTSTANDING_NUM]]
+    // CHECK-NOT: tt.call @__triton_consan_clear_outstanding_commits_transfer_
+    // CHECK: ttg.async_wait
     %shmem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf16, #shared, #smem, mutable>
     ttg.async_wait {num = 42 : i32}
     ttg.local_load %shmem : !ttg.memdesc<32x32xf16, #shared, #smem, mutable> -> tensor<32x32xf16, #blocked>
@@ -965,6 +967,248 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       ttg.local_load %arg1 : !ttg.memdesc<32xf32, #shared, #smem, mutable> -> tensor<32xf32>
       ttg.warp_return
     } : (!ttg.memdesc<32xf32, #shared, #smem, mutable>, !ttg.memdesc<32xf32, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #shared, #smem, mutable>) -> ()
+    tt.return
+  }
+}
+
+// -----
+
+// Partitioned padded allocations have several simultaneous physical bases.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
+#inner_padded = #ttg.padded_shared<[128:+4] {order = [1, 0], shape = [16, 16]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner_padded}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.shared = 66592 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 2 : i32} {
+  // CHECK-LABEL: @partitioned_padded_local_load_store
+  // CHECK: ttg.local_alloc {allocation.offset = [0 : i32, 65536 : i32]}
+  // CHECK: tt.call @__triton_consan_verify_write_visibility
+  // CHECK: tt.call @__triton_consan_verify_read_visibility
+  // CHECK: ttg.local_store
+  // CHECK: tt.call @__triton_consan_verify_write_visibility
+  // CHECK: ttg.local_load
+  tt.func public @partitioned_padded_local_load_store(%value: tensor<16x16xf16, #blocked>) {
+    %buffer = ttg.local_alloc {allocation.offset = [0 : i32, 65536 : i32]} : () -> !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable>
+    ttg.local_store %value, %buffer : tensor<16x16xf16, #blocked> -> !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable>
+    %loaded = ttg.local_load %buffer : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> tensor<16x16xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// Each partitioned subview has its own sanitizer lane; runtime descriptor
+// selection must retain the physical base and state mask of either piece.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
+#inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.shared = 66592 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 2 : i32} {
+  // CHECK-LABEL: @partitioned_shared_subslice_masks
+  // CHECK: arith.constant dense<[true, false]> : tensor<2xi1
+  // CHECK: tt.call @__triton_consan_verify_write_visibility
+  // CHECK: tt.call @__triton_consan_verify_read_visibility
+  // CHECK: ttg.local_store
+  // CHECK: arith.constant dense<[false, true]> : tensor<2xi1
+  // CHECK: tt.call @__triton_consan_verify_write_visibility
+  // CHECK: ttg.local_load
+  // CHECK: tti.experimental_memdesc_to_i32
+  // CHECK: tti.experimental_memory_offset_to_i32 0, shared_mem
+  // CHECK: tti.experimental_memory_offset_to_i32 65536, shared_mem
+  // CHECK: ttg.local_load
+  tt.func public @partitioned_shared_subslice_masks(%value: tensor<4x16xf16, #blocked>, %choose: i1) {
+    %buffer = ttg.local_alloc {allocation.offset = [0 : i32, 65536 : i32]} : () -> !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable>
+    %first = ttg.memdesc_subslice %buffer [0, 0] : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<4x16xf16, #partitioned, #smem, mutable, 16x16>
+    %second = ttg.memdesc_subslice %buffer [4, 0] : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<4x16xf16, #partitioned, #smem, mutable, 16x16>
+    ttg.local_store %value, %first : tensor<4x16xf16, #blocked> -> !ttg.memdesc<4x16xf16, #partitioned, #smem, mutable, 16x16>
+    %loaded = ttg.local_load %second : !ttg.memdesc<4x16xf16, #partitioned, #smem, mutable, 16x16> -> tensor<4x16xf16, #blocked>
+    %selected = arith.select %choose, %first, %second : !ttg.memdesc<4x16xf16, #partitioned, #smem, mutable, 16x16>
+    %dynamic = ttg.local_load %selected : !ttg.memdesc<4x16xf16, #partitioned, #smem, mutable, 16x16> -> tensor<4x16xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// A fused TDM load must track every physical destination independently.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 16384 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @fused_tdm_tracks_all_destinations
+  // CHECK: arith.constant dense<[true, false]> : tensor<2xi1
+  // CHECK: tt.call @__triton_consan_verify_write_visibility
+  // CHECK: tt.call @__triton_consan_verify_read_visibility
+  // CHECK: tt.call @__triton_consan_stage_access_for_commit
+  // CHECK: arith.constant dense<[false, true]> : tensor<2xi1
+  // CHECK: tt.call @__triton_consan_verify_write_visibility
+  // CHECK: tt.call @__triton_consan_verify_read_visibility
+  // CHECK: tt.call @__triton_consan_stage_access_for_commit
+  // CHECK: tt.call @__triton_consan_commit_accesses
+  // CHECK: amdg.async_tdm_fused_copy_global_to_local
+  tt.func public @fused_tdm_tracks_all_destinations(%desc0: !tt.tensordesc<64x64xf16, #shared>, %desc1: !tt.tensordesc<64x64xf16, #shared>) {
+    %first = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    %second = ttg.local_alloc {allocation.offset = 8192 : i32} : () -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    %token = amdg.async_tdm_fused_copy_global_to_local %desc0, %desc1 into %first, %second {warp_used_hints = array<i32: 3, 12>} : !tt.tensordesc<64x64xf16, #shared>, !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Direct-to-LDS buffer loads participate in ordinary asynchronous-copy
+// commit groups instead of being treated as synchronous shared-memory writes.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @buffer_load_to_local_tracks_async_commit
+  tt.func public @buffer_load_to_local_tracks_async_commit(%ptr: !tt.ptr<f32>, %offsets: tensor<32x64xi32, #blocked>) {
+    %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x64xf32, #shared, #smem, mutable>
+    // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK: tt.call @__triton_consan_verify_read_visibility
+    // CHECK: tt.call @__triton_consan_stage_access_for_commit
+    // CHECK: amdg.buffer_load_to_local
+    %token = amdg.buffer_load_to_local %ptr[%offsets] into %buffer : <f32>[tensor<32x64xi32, #blocked>] -> <32x64xf32, #shared, #smem, mutable>
+    // CHECK: tt.call @__triton_consan_commit_accesses
+    // CHECK: ttg.async_commit_group
+    %group = ttg.async_commit_group tokens %token
+    // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_writes
+    // CHECK-NOT: tt.call @__triton_consan_clear_outstanding_commits_transfer_
+    // CHECK: ttg.async_wait
+    %wait = ttg.async_wait %group {num = 0 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+// Packed transposed LDS loads receive the synchronous read instrumentation
+// described by their declared memory effects.
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [2, 2], instrShape = [32, 32, 16], isTransposed = true}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 1024 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @packed_transposed_load_tracks_read
+  tt.func public @packed_transposed_load_tracks_read() {
+    %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16x64xi8, #shared, #smem, mutable>
+    // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK: tt.call @__triton_consan_set_read_visibility
+    // CHECK: amdg.local_load_packed_tranposed
+    %value = amdg.local_load_packed_tranposed %buffer : !ttg.memdesc<16x64xi8, #shared, #smem, mutable> -> tensor<32x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>
+    tt.return
+  }
+}
+
+// -----
+
+// An asynchronous LDS-to-global store is an outstanding shared-memory read;
+// a following write must check it and the native wait must publish both sides.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 4096 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @async_copy_local_to_global_tracks_reads
+  tt.func public @async_copy_local_to_global_tracks_reads(%dst: tensor<32x32x!tt.ptr<f32>, #blocked>, %value: tensor<32x32xf32, #blocked>) {
+    %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK: tt.call @__triton_consan_stage_access_for_commit
+    // CHECK: amdg.async_copy_local_to_global
+    %token = amdg.async_copy_local_to_global %buffer, %dst : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+    // CHECK: tt.call @__triton_consan_commit_accesses
+    // CHECK: ttg.async_commit_group
+    %group = ttg.async_commit_group tokens %token
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits
+    // CHECK: "Accessing buffer with pending access. Pending access type: async_copy_shared_to_global"
+    // CHECK: ttg.local_store
+    ttg.local_store %value, %buffer : tensor<32x32xf32, #blocked> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    // CHECK-NOT: tt.call @__triton_consan_clear_outstanding_commits_transfer_writes
+    // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_both
+    // CHECK-NOT: tt.call @__triton_consan_clear_outstanding_commits_transfer_
+    // CHECK: ttg.async_wait
+    %wait = ttg.async_wait %group {num = 0 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+// Lowered AMD waits retain the same read-and-write completion behavior.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 4096 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @lowered_async_wait_transfers_reads
+  tt.func public @lowered_async_wait_transfers_reads(%dst: tensor<32x32x!tt.ptr<f32>, #blocked>) {
+    %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    %token = amdg.async_copy_local_to_global %buffer, %dst : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+    %group = ttg.async_commit_group tokens %token
+    // CHECK-NOT: tt.call @__triton_consan_clear_outstanding_commits_transfer_writes
+    // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_both
+    // CHECK-NOT: tt.call @__triton_consan_clear_outstanding_commits_transfer_
+    // CHECK: amdg.async_wait
+    amdg.async_wait {"ttg.num_commit_groups" = 0 : i64, num_inst = 0 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+// TDM gather and scatter use the TDM commit class and transfer both their
+// outstanding writes and reads when the TDM wait completes.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+#idx_parent = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @tdm_gather_scatter_track_commits
+  tt.func public @tdm_gather_scatter_track_commits(%desc: !tt.tensordesc<64x128xf16>, %rows: tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>) {
+    %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<256x128xf16, #shared, #smem, mutable>
+    // CHECK: tt.call @__triton_consan_stage_access_for_commit
+    // CHECK: tt.call @__triton_consan_commit_accesses
+    // CHECK: amdg.async_tdm_gather
+    %gather = amdg.async_tdm_gather %desc[%rows] to %buffer : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
+    // CHECK: tt.call @__triton_consan_stage_access_for_commit
+    // CHECK: tt.call @__triton_consan_commit_accesses
+    // CHECK: amdg.async_tdm_scatter
+    %scatter = amdg.async_tdm_scatter %desc[%rows] from %buffer : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
+    // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_both
+    // CHECK: amdg.async_tdm_wait
+    %wait = amdg.async_tdm_wait %scatter {num = 0 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+// Barrier-completing TDM gather and scatter publish their own accesses through
+// the real barrier instead of creating implicit TDM commit groups.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#barrier_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+#idx_parent = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @tdm_gather_scatter_track_barrier
+  tt.func public @tdm_gather_scatter_track_barrier(%desc: !tt.tensordesc<64x128xf16>, %rows: tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>) {
+    %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<256x128xf16, #shared, #smem, mutable>
+    %barrier = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+    amdg.init_barrier %barrier, 8 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+    // CHECK: tt.call @__triton_consan_verify_barrier_arrive
+    // CHECK: tt.call @__triton_consan_update_barrier_state
+    // CHECK-NOT: tt.call @__triton_consan_commit_accesses
+    // CHECK: amdg.async_tdm_gather
+    %gather = amdg.async_tdm_gather %desc[%rows] to %buffer, barrier = %barrier : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
+    // CHECK: tt.call @__triton_consan_verify_barrier_arrive
+    // CHECK: tt.call @__triton_consan_update_barrier_state
+    // CHECK-NOT: tt.call @__triton_consan_commit_accesses
+    // CHECK: amdg.async_tdm_scatter
+    %scatter = amdg.async_tdm_scatter %desc[%rows] from %buffer, barrier = %barrier : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
     tt.return
   }
 }
