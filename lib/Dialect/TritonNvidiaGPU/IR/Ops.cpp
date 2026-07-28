@@ -173,27 +173,6 @@ std::optional<unsigned> getPackedArithFp4Axis(PackedArithOp op) {
   return axis;
 }
 
-static bool arePackedFp4LayoutsCompatible(RankedTensorType srcType,
-                                          RankedTensorType resultType,
-                                          unsigned axis) {
-  auto *dialect =
-      resultType.getEncoding()
-          .getDialect()
-          .getRegisteredInterface<triton::DialectInferLayoutInterface>();
-  if (!dialect)
-    return false;
-
-  Attribute inferredSrcEncoding;
-  if (failed(dialect->inferFp4ToFpOpEncoding(
-          resultType.getShape(), axis, resultType.getEncoding(),
-          inferredSrcEncoding, /*fwdInference=*/false, std::nullopt)))
-    return false;
-
-  return areLayoutsEquivalent(srcType.getShape(),
-                              cast<LayoutEncodingTrait>(inferredSrcEncoding),
-                              cast<LayoutEncodingTrait>(srcType.getEncoding()));
-}
-
 LogicalResult PackedArithOp::verify() {
   unsigned expectedOperands = getOpKind() == PackedArithOpKind::FMA ? 3 : 2;
   if (getNumOperands() != expectedOperands)
@@ -233,13 +212,30 @@ LogicalResult PackedArithOp::verify() {
     return emitOpError() << "result layout must provide a multiple of "
                          << packWidth << " unique elements per thread";
 
+  Attribute canonicalFp4Encoding;
+  if (fp4Axis) {
+    auto *dialect =
+        tensorType.getEncoding()
+            .getDialect()
+            .getRegisteredInterface<triton::DialectInferLayoutInterface>();
+    if (dialect &&
+        failed(dialect->inferFp4ToFpOpEncoding(
+            tensorType.getShape(), *fp4Axis, tensorType.getEncoding(),
+            canonicalFp4Encoding, /*fwdInference=*/false, std::nullopt)))
+      canonicalFp4Encoding = {};
+  }
+
   for (auto [index, operand] : llvm::enumerate(getOperands())) {
     auto operandType = cast<RankedTensorType>(operand.getType());
     const auto &operandInfo = *instruction->operands[index];
     if (operandInfo.isFP4()) {
       if (!isa_and_nonnull<DistributedEncodingTrait>(
               operandType.getEncoding()) ||
-          !arePackedFp4LayoutsCompatible(operandType, tensorType, *fp4Axis))
+          !canonicalFp4Encoding ||
+          !areLayoutsEquivalent(
+              operandType.getShape(),
+              cast<LayoutEncodingTrait>(canonicalFp4Encoding),
+              cast<LayoutEncodingTrait>(operandType.getEncoding())))
         return emitOpError() << "fp4 operand " << index
                              << " must have a layout compatible with the "
                                 "result";
