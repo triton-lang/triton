@@ -128,9 +128,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %out : tensor<16x8xf64, #blocked>
   }
 
-  // CHECK-LABEL: @dot_i8_single_warp_tile
-  tt.func public @dot_i8_single_warp_tile() -> tensor<64x64xf32, #blocked> {
+  // CHECK-LABEL: @dot_i8_narrow_single_warp_tile
+  tt.func public @dot_i8_narrow_single_warp_tile() -> tensor<64x32xf32, #blocked> {
     // CHECK: tensor<32x32x!tt.ptr<i32>
+    %one = arith.constant 1.000000e+00 : f8E4M3FN
+    %zero = arith.constant dense<0.000000e+00> : tensor<64x32xf32, #blocked>
+    %a = tt.splat %one : f8E4M3FN -> tensor<64x32xf8E4M3FN, #dot_operand_a>
+    %b = tt.splat %one : f8E4M3FN -> tensor<32x32xf8E4M3FN, #dot_operand_b>
+    %out = tt.dot %a, %b, %zero : tensor<64x32xf8E4M3FN, #dot_operand_a> * tensor<32x32xf8E4M3FN, #dot_operand_b> -> tensor<64x32xf32, #blocked>
+    tt.return %out : tensor<64x32xf32, #blocked>
+  }
+
+  // CHECK-LABEL: @dot_i8_transposed_narrow_single_warp_tile
+  tt.func public @dot_i8_transposed_narrow_single_warp_tile() -> tensor<32x64xf32, #blocked> {
+    // CHECK: tensor<32x32x!tt.ptr<i32>
+    %one = arith.constant 1.000000e+00 : f8E4M3FN
+    %zero = arith.constant dense<0.000000e+00> : tensor<32x64xf32, #blocked>
+    %a = tt.splat %one : f8E4M3FN -> tensor<32x32xf8E4M3FN, #dot_operand_a>
+    %b = tt.splat %one : f8E4M3FN -> tensor<32x64xf8E4M3FN, #dot_operand_b>
+    %out = tt.dot %a, %b, %zero : tensor<32x32xf8E4M3FN, #dot_operand_a> * tensor<32x64xf8E4M3FN, #dot_operand_b> -> tensor<32x64xf32, #blocked>
+    tt.return %out : tensor<32x64xf32, #blocked>
+  }
+
+  // CHECK-LABEL: @dot_i8_wide_single_warp_tile
+  tt.func public @dot_i8_wide_single_warp_tile() -> tensor<64x64xf32, #blocked> {
+    // CHECK: tensor<16x32x!tt.ptr<i32>
     %one = arith.constant 1.000000e+00 : f8E4M3FN
     %zero = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
     %a = tt.splat %one : f8E4M3FN -> tensor<64x32xf8E4M3FN, #dot_operand_a>
@@ -139,29 +161,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %out : tensor<64x64xf32, #blocked>
   }
 
-  // CHECK-LABEL: @dot_i8_two_mma_single_warp_tile
-  tt.func public @dot_i8_two_mma_single_warp_tile() -> tensor<64x64xf32, #blocked> {
+  // CHECK-LABEL: @dot_i8_three_narrow_single_warp_tiles
+  tt.func public @dot_i8_three_narrow_single_warp_tiles() -> tensor<64x32xf32, #blocked> {
     // CHECK: tensor<32x32x!tt.ptr<i32>
     %one = arith.constant 1.000000e+00 : f8E4M3FN
-    %zero = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
+    %zero = arith.constant dense<0.000000e+00> : tensor<64x32xf32, #blocked>
     %a = tt.splat %one : f8E4M3FN -> tensor<64x32xf8E4M3FN, #dot_operand_a>
-    %b = tt.splat %one : f8E4M3FN -> tensor<32x64xf8E4M3FN, #dot_operand_b>
-    %first = tt.dot %a, %b, %zero : tensor<64x32xf8E4M3FN, #dot_operand_a> * tensor<32x64xf8E4M3FN, #dot_operand_b> -> tensor<64x64xf32, #blocked>
-    %out = tt.dot %a, %b, %first : tensor<64x32xf8E4M3FN, #dot_operand_a> * tensor<32x64xf8E4M3FN, #dot_operand_b> -> tensor<64x64xf32, #blocked>
-    tt.return %out : tensor<64x64xf32, #blocked>
+    %b = tt.splat %one : f8E4M3FN -> tensor<32x32xf8E4M3FN, #dot_operand_b>
+    %first = tt.dot %a, %b, %zero : tensor<64x32xf8E4M3FN, #dot_operand_a> * tensor<32x32xf8E4M3FN, #dot_operand_b> -> tensor<64x32xf32, #blocked>
+    %second = tt.dot %a, %b, %first : tensor<64x32xf8E4M3FN, #dot_operand_a> * tensor<32x32xf8E4M3FN, #dot_operand_b> -> tensor<64x32xf32, #blocked>
+    %out = tt.dot %a, %b, %second : tensor<64x32xf8E4M3FN, #dot_operand_a> * tensor<32x32xf8E4M3FN, #dot_operand_b> -> tensor<64x32xf32, #blocked>
+    tt.return %out : tensor<64x32xf32, #blocked>
   }
 
-  // CHECK-LABEL: @dot_i8_dense_single_warp_tile
-  tt.func public @dot_i8_dense_single_warp_tile() -> tensor<64x64xf32, #blocked> {
-    // CHECK: tensor<16x32x!tt.ptr<i32>
+  // CHECK-LABEL: @dot_i8_mixed_single_warp_tiles
+  tt.func public @dot_i8_mixed_single_warp_tiles() -> (tensor<64x32xf32, #blocked>, tensor<64x64xf32, #blocked>) {
+    // CHECK-DAG: tensor<32x32x!tt.ptr<i32>
+    // CHECK-DAG: tensor<16x32x!tt.ptr<i32>
     %one = arith.constant 1.000000e+00 : f8E4M3FN
-    %zero = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
+    %narrow_zero = arith.constant dense<0.000000e+00> : tensor<64x32xf32, #blocked>
+    %wide_zero = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
     %a = tt.splat %one : f8E4M3FN -> tensor<64x32xf8E4M3FN, #dot_operand_a>
-    %b = tt.splat %one : f8E4M3FN -> tensor<32x64xf8E4M3FN, #dot_operand_b>
-    %first = tt.dot %a, %b, %zero : tensor<64x32xf8E4M3FN, #dot_operand_a> * tensor<32x64xf8E4M3FN, #dot_operand_b> -> tensor<64x64xf32, #blocked>
-    %second = tt.dot %a, %b, %first : tensor<64x32xf8E4M3FN, #dot_operand_a> * tensor<32x64xf8E4M3FN, #dot_operand_b> -> tensor<64x64xf32, #blocked>
-    %out = tt.dot %a, %b, %second : tensor<64x32xf8E4M3FN, #dot_operand_a> * tensor<32x64xf8E4M3FN, #dot_operand_b> -> tensor<64x64xf32, #blocked>
-    tt.return %out : tensor<64x64xf32, #blocked>
+    %narrow_b = tt.splat %one : f8E4M3FN -> tensor<32x32xf8E4M3FN, #dot_operand_b>
+    %wide_b = tt.splat %one : f8E4M3FN -> tensor<32x64xf8E4M3FN, #dot_operand_b>
+    %narrow = tt.dot %a, %narrow_b, %narrow_zero : tensor<64x32xf8E4M3FN, #dot_operand_a> * tensor<32x32xf8E4M3FN, #dot_operand_b> -> tensor<64x32xf32, #blocked>
+    %wide = tt.dot %a, %wide_b, %wide_zero : tensor<64x32xf8E4M3FN, #dot_operand_a> * tensor<32x64xf8E4M3FN, #dot_operand_b> -> tensor<64x64xf32, #blocked>
+    tt.return %narrow, %wide : tensor<64x32xf32, #blocked>, tensor<64x64xf32, #blocked>
   }
 }
 

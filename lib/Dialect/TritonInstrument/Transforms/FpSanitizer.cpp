@@ -59,29 +59,6 @@ constexpr int64_t kI8MmaM = 16;
 constexpr int64_t kI8MmaN = 8;
 constexpr int64_t kI8MmaK = 32;
 
-class MmaEmulationPolicy {
-public:
-  explicit MmaEmulationPolicy(ModuleOp module) {
-    for (auto func : module.getOps<tt::FuncOp>()) {
-      unsigned mmaCount = 0;
-      func.walk([&](tt::DotOpInterface) { ++mmaCount; });
-      mmaCounts[func.getOperation()] = mmaCount;
-    }
-  }
-
-  int64_t getMaxRegistersPerThread(Operation *op) const {
-    if (auto func = op->getParentOfType<tt::FuncOp>()) {
-      auto it = mmaCounts.find(func.getOperation());
-      if (it != mmaCounts.end() && it->second <= 2)
-        return 32;
-    }
-    return 16;
-  }
-
-private:
-  DenseMap<Operation *, unsigned> mmaCounts;
-};
-
 bool supportsI8DotDecomposition(PatternRewriter &rewriter,
                                 IntegerType accElem) {
   auto moduleOp =
@@ -96,10 +73,10 @@ bool canUseI8MmaTile(int64_t m, int64_t n, int numWarps) {
          (m / kI8MmaM) * (n / kI8MmaN) >= numWarps;
 }
 
-std::pair<int64_t, int64_t>
-getMmaEmulationTileShape(PatternRewriter &rewriter, int64_t m, int64_t n,
-                         int64_t k, IntegerType accElem, Operation *mmaOp,
-                         const MmaEmulationPolicy &policy) {
+std::pair<int64_t, int64_t> getMmaEmulationTileShape(PatternRewriter &rewriter,
+                                                     int64_t m, int64_t n,
+                                                     int64_t k,
+                                                     IntegerType accElem) {
   std::pair<int64_t, int64_t> tile = {std::min<int64_t>(kTileM, m),
                                       std::min<int64_t>(kTileN, n)};
   int64_t numWarps =
@@ -107,10 +84,14 @@ getMmaEmulationTileShape(PatternRewriter &rewriter, int64_t m, int64_t n,
   if (!supportsI8DotDecomposition(rewriter, accElem) || (k % kI8MmaK) != 0)
     return tile;
 
-  // Sparse MMA kernels need larger tiles to avoid multiplying emulation loop
-  // iterations. Keep the smaller tile for functions with many MMA operations,
-  // where expanding each accumulator increases compilation and register cost.
-  int64_t maxTileArea = policy.getMaxRegistersPerThread(mmaOp) * 32 * numWarps /
+  int64_t threadsPerWarp = ttg::lookupThreadsPerWarp(rewriter);
+  // When one accumulator dimension fits within a warp, expanding the tile
+  // along the other dimension reduces emulation loop trips. When both
+  // dimensions exceed a warp, cap the tile more tightly to limit the number
+  // of simultaneously live accumulator limbs and generated integer MMAs.
+  int64_t maxRegistersPerThread =
+      std::min(m, n) <= threadsPerWarp ? threadsPerWarp : threadsPerWarp / 2;
+  int64_t maxTileArea = maxRegistersPerThread * threadsPerWarp * numWarps /
                         (accElem.getWidth() == 64 ? 2 : 1);
   for (int64_t tileM = kI8MmaM; tileM <= m; tileM *= 2) {
     if ((m % tileM) != 0)
@@ -2116,8 +2097,7 @@ struct Fp4ToFpPattern : public OpRewritePattern<ttg::Fp4ToFpOp> {
 };
 
 struct DotPattern : public OpRewritePattern<tt::DotOp> {
-  DotPattern(MLIRContext *ctx, const MmaEmulationPolicy *mmaPolicy)
-      : OpRewritePattern(ctx), mmaPolicy(mmaPolicy) {}
+  using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(tt::DotOp op,
                                 PatternRewriter &rewriter) const override {
@@ -2191,8 +2171,7 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
     Value predInt = arith::ConstantOp::create(
         rewriter, loc, rewriter.getIntegerAttr(accElem, 1));
 
-    auto [tileM, tileN] = getMmaEmulationTileShape(
-        rewriter, m, n, k, accElem, op.getOperation(), *mmaPolicy);
+    auto [tileM, tileN] = getMmaEmulationTileShape(rewriter, m, n, k, accElem);
 
     // Use optimized blocked layouts for emulation tiles instead of the
     // original dot encodings.  Encodings like AMDWmmaEncodingAttr impose
@@ -2282,14 +2261,10 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
     rewriter.replaceOp(op, out);
     return success();
   }
-
-private:
-  const MmaEmulationPolicy *mmaPolicy;
 };
 
 struct DotScaledPattern : public OpRewritePattern<tt::DotScaledOp> {
-  DotScaledPattern(MLIRContext *ctx, const MmaEmulationPolicy *mmaPolicy)
-      : OpRewritePattern(ctx), mmaPolicy(mmaPolicy) {}
+  using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(tt::DotScaledOp op,
                                 PatternRewriter &rewriter) const override {
@@ -2350,8 +2325,7 @@ struct DotScaledPattern : public OpRewritePattern<tt::DotScaledOp> {
     Value predInt = arith::ConstantOp::create(
         rewriter, loc, rewriter.getIntegerAttr(accElem, 1));
 
-    auto [tileM, tileN] = getMmaEmulationTileShape(
-        rewriter, m, n, k, accElem, op.getOperation(), *mmaPolicy);
+    auto [tileM, tileN] = getMmaEmulationTileShape(rewriter, m, n, k, accElem);
 
     auto accLayout = getOptimizedBlockedEncoding(rewriter, {tileM, tileN},
                                                  cTy.getElementType());
@@ -2424,9 +2398,6 @@ struct DotScaledPattern : public OpRewritePattern<tt::DotScaledOp> {
     rewriter.replaceOp(op, out);
     return success();
   }
-
-private:
-  const MmaEmulationPolicy *mmaPolicy;
 };
 
 struct TMEMLoadPattern : public OpRewritePattern<ttng::TMEMLoadOp> {
@@ -2657,8 +2628,7 @@ private:
 };
 
 struct WarpGroupDotPattern : public OpRewritePattern<ttng::WarpGroupDotOp> {
-  WarpGroupDotPattern(MLIRContext *ctx, const MmaEmulationPolicy *mmaPolicy)
-      : OpRewritePattern(ctx), mmaPolicy(mmaPolicy) {}
+  using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(ttng::WarpGroupDotOp op,
                                 PatternRewriter &rewriter) const override {
@@ -2717,8 +2687,7 @@ struct WarpGroupDotPattern : public OpRewritePattern<ttng::WarpGroupDotOp> {
     if (!aScratch || !bScratch || !dPtr)
       return emitFpSanCodegenError(op.getOperation());
 
-    auto [tileM, tileN] = getMmaEmulationTileShape(
-        rewriter, m, n, k, accElem, op.getOperation(), *mmaPolicy);
+    auto [tileM, tileN] = getMmaEmulationTileShape(rewriter, m, n, k, accElem);
 
     auto accTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, tileN},
                                                      cTy.getElementType());
@@ -2751,15 +2720,11 @@ struct WarpGroupDotPattern : public OpRewritePattern<ttng::WarpGroupDotOp> {
     rewriter.replaceOp(op, out);
     return success();
   }
-
-private:
-  const MmaEmulationPolicy *mmaPolicy;
 };
 
 struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
-  TCGen5MMAPattern(MLIRContext *ctx, TmemScratchManager *scratch,
-                   const MmaEmulationPolicy *mmaPolicy)
-      : OpRewritePattern(ctx), scratch(scratch), mmaPolicy(mmaPolicy) {}
+  TCGen5MMAPattern(MLIRContext *ctx, TmemScratchManager *scratch)
+      : OpRewritePattern(ctx), scratch(scratch) {}
 
   LogicalResult matchAndRewrite(ttng::TCGen5MMAOp op,
                                 PatternRewriter &rewriter) const override {
@@ -2808,8 +2773,7 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
         arith::ExtUIOp::create(rewriter, loc, accElem, op.getPred());
 
     rewriter.setInsertionPoint(op);
-    auto [tileM, tileN] = getMmaEmulationTileShape(
-        rewriter, m, n, k, accElem, op.getOperation(), *mmaPolicy);
+    auto [tileM, tileN] = getMmaEmulationTileShape(rewriter, m, n, k, accElem);
     auto accTileLayout =
         getOptimizedBlockedEncoding(rewriter, {tileM, tileN}, accElem);
     auto accTileTy =
@@ -2881,14 +2845,12 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
 
 private:
   TmemScratchManager *scratch;
-  const MmaEmulationPolicy *mmaPolicy;
 };
 
 struct TCGen5MMAScaledPattern
     : public OpRewritePattern<ttng::TCGen5MMAScaledOp> {
-  TCGen5MMAScaledPattern(MLIRContext *ctx, TmemScratchManager *scratch,
-                         const MmaEmulationPolicy *mmaPolicy)
-      : OpRewritePattern(ctx), scratch(scratch), mmaPolicy(mmaPolicy) {}
+  TCGen5MMAScaledPattern(MLIRContext *ctx, TmemScratchManager *scratch)
+      : OpRewritePattern(ctx), scratch(scratch) {}
 
   LogicalResult matchAndRewrite(ttng::TCGen5MMAScaledOp op,
                                 PatternRewriter &rewriter) const override {
@@ -2975,8 +2937,7 @@ struct TCGen5MMAScaledPattern
     if (!bScaleScratch)
       return emitFpSanCodegenError(op.getOperation());
 
-    auto [tileM, tileN] = getMmaEmulationTileShape(
-        rewriter, m, n, k, accElem, op.getOperation(), *mmaPolicy);
+    auto [tileM, tileN] = getMmaEmulationTileShape(rewriter, m, n, k, accElem);
 
     auto accTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, tileN},
                                                      dMemTy.getElementType());
@@ -3062,7 +3023,6 @@ struct TCGen5MMAScaledPattern
 
 private:
   TmemScratchManager *scratch;
-  const MmaEmulationPolicy *mmaPolicy;
 };
 
 template <typename OpTy> struct UnaryPattern : public OpRewritePattern<OpTy> {
@@ -3226,7 +3186,6 @@ public:
     getOperation()->setAttr(ttng::AttrTwoCTAsName,
                             BoolAttr::get(&getContext(), twoCTAs));
 
-    MmaEmulationPolicy mmaPolicy(getOperation());
     TmemScratchManager scratch(twoCTAs);
     RewritePatternSet patterns(&getContext());
     patterns.add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
@@ -3241,7 +3200,7 @@ public:
                  Exp2OpPattern, CosOpPattern, SinOpPattern, ExtFOpPattern,
                  TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern>(&getContext());
     patterns.add<DotPattern, DotScaledPattern, WarpGroupDotPattern>(
-        &getContext(), &mmaPolicy);
+        &getContext());
     patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
     patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);
     patterns.add<UnaryPattern<math::SqrtOp>>(&getContext(), UnaryOpId::Sqrt);
@@ -3255,8 +3214,8 @@ public:
         &getContext());
     patterns.add<TMEMLoadPattern, TMEMStorePattern, TMEMCopyPattern>(
         &getContext(), &scratch);
-    patterns.add<TCGen5MMAPattern, TCGen5MMAScaledPattern>(
-        &getContext(), &scratch, &mmaPolicy);
+    patterns.add<TCGen5MMAPattern, TCGen5MMAScaledPattern>(&getContext(),
+                                                           &scratch);
     patterns.add<TCGen5CommitPattern>(&getContext(), twoCTAs);
 
     LogicalResult result =
