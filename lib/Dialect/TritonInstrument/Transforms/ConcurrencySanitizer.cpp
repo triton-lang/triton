@@ -959,10 +959,7 @@ private:
         }
       }
       if (barrierInfo.count > 0 || barrierInfo.txCount != 0) {
-        funcBuilder.createVerifyBarrierArriveCall(
-            b, barrier, barrierInfo.count, combinedPred, op, recipientCTAs,
-            barrierInfo.txCount);
-        funcBuilder.createUpdateBarrierStateCall(
+        funcBuilder.createVerifyAndUpdateBarrierStateCall(
             b, barrier, barrierInfo.count, combinedPred, op, recipientCTAs,
             barrierInfo.txCount);
       }

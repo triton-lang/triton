@@ -1221,7 +1221,7 @@ void FunctionBuilder::createInvalidateBarrierStateCall(ImplicitLocOpBuilder &b,
       });
 }
 
-void FunctionBuilder::createVerifyBarrierArriveCall(
+void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
     ImplicitLocOpBuilder &b, Value mbar, int count, Value pred,
     Operation *insertPoint, Value recipientCTAs, int txCount) {
   assert(count >= 0 && (uint64_t)count <= BarrierBits::countMask &&
@@ -1255,7 +1255,7 @@ void FunctionBuilder::createVerifyBarrierArriveCall(
       "invalid",
       b.getI1Type()};
   createCallToCachedFunction(
-      b, "verify_barrier_arrive", args, assertInfo,
+      b, "verify_and_update_barrier_state", args, assertInfo,
       {barriersType, barrierStatesType},
       [barrierStatesType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
@@ -1339,124 +1339,37 @@ void FunctionBuilder::createVerifyBarrierArriveCall(
         Value predicatedValid =
             arith::SelectOp::create(fb, predTensor, valid, vTrue);
 
-        triton::ReturnOp::create(fb,
-                                 reduceAll<arith::AndIOp>(fb, predicatedValid));
-      });
-}
-
-void FunctionBuilder::createUpdateBarrierStateCall(
-    ImplicitLocOpBuilder &b, Value mbar, int count, Value pred,
-    Operation *insertPoint, Value recipientCTAs, int txCount) {
-  assert(count >= 0 && (uint64_t)count <= BarrierBits::countMask &&
-         "barrier update count exceeds barrier state capacity");
-  assert(txCount >= BarrierBits::txCountMin &&
-         txCount <= BarrierBits::txCountMax &&
-         "barrier tx-count delta exceeds barrier state capacity");
-
-  if (auxData.barriers.empty() || auxData.barrierStates.empty()) {
-    return;
-  }
-  if (!pred) {
-    pred = arith::ConstantIntOp::create(b, 1, 1);
-  }
-  Value countVal = arith::ConstantIntOp::create(b, count, 32);
-  Value txCountVal = arith::ConstantIntOp::create(b, txCount, 64);
-  Value barriersVal = auxData.barriers.at(insertPoint).value;
-  auto barriersType =
-      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
-  Value barrierStatesVal = auxData.barrierStates.at(insertPoint).value;
-  auto barrierStatesType =
-      cast<RankedTensorType>(auxData.barrierStates.at(insertPoint).type);
-  uint32_t length = getMemDescLength(mbar);
-  Value mbarOffset = tti::ExperimentalMemDescToI32Op::create(b, mbar);
-  Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
-  SmallVector<Value> args = {mbarOffset,       lengthVal,    countVal,
-                             txCountVal,       pred,         barriersVal,
-                             barrierStatesVal, recipientCTAs};
-  createCallToCachedFunction(
-      b, "update_barrier_state", args,
-      /*assertInfo=*/std::nullopt, {barriersType, barrierStatesType},
-      [barrierStatesType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
-        Value mbarOffset = entryBlock->getArgument(0);
-        Value lengthVal = entryBlock->getArgument(1);
-        Value count = entryBlock->getArgument(2);
-        Value txCount = entryBlock->getArgument(3);
-        Value pred = entryBlock->getArgument(4);
-
-        Value barriers = entryBlock->getArgument(5);
-        Value statesPtr = entryBlock->getArgument(6);
-        Value recipientCTAs = entryBlock->getArgument(7);
-
-        auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
+        Value allValid = reduceAll<arith::AndIOp>(fb, predicatedValid);
+        Value shouldUpdate = arith::AndIOp::create(fb, pred, allValid);
+        auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, shouldUpdate);
         fb.setInsertionPointToStart(ifBlock);
 
-        Value states = tti::createLoadScratchMemory(fb, fb.getLoc(), statesPtr,
-                                                    barrierStatesType);
-        Value descriptor = createBufferDescriptor(fb, mbarOffset, lengthVal);
-        Value mask = createCmpIntTensorScalar(fb, barriers, descriptor);
-        mask = convertAndBroadcast(fb, mask, {1}, barrierStatesType);
-
-        Value zero32 =
-            tti::createConstIntTensor(fb, fb.getLoc(), 0, barrierStatesType);
         Value one32 =
             tti::createConstIntTensor(fb, fb.getLoc(), 1, barrierStatesType);
-        Value maskFF = tti::createConstIntTensor(
-            fb, fb.getLoc(), BarrierBits::countMask, barrierStatesType);
         Value shiftInitTensor = tti::createConstIntTensor(
             fb, fb.getLoc(), BarrierBits::initCountLsb, barrierStatesType);
-        Value shiftCurrentTensor = tti::createConstIntTensor(
-            fb, fb.getLoc(), BarrierBits::currentCountLsb, barrierStatesType);
-        Value shiftTxTensor = tti::createConstIntTensor(
-            fb, fb.getLoc(), BarrierBits::txCountLsb, barrierStatesType);
-        Value shiftTxSignTensor = tti::createConstIntTensor(
-            fb, fb.getLoc(), 64 - BarrierBits::txCountBitWidth,
-            barrierStatesType);
-
         Value phase = arith::AndIOp::create(fb, states, one32);
         Value initCount = arith::ShRUIOp::create(fb, states, shiftInitTensor);
         initCount = arith::AndIOp::create(fb, initCount, maskFF);
-        Value currentCount =
-            arith::ShRUIOp::create(fb, states, shiftCurrentTensor);
-        currentCount = arith::AndIOp::create(fb, currentCount, maskFF);
-        Value currentTxCount =
-            arith::ShRUIOp::create(fb, states, shiftTxTensor);
-        currentTxCount =
-            arith::ShLIOp::create(fb, currentTxCount, shiftTxSignTensor);
-        currentTxCount =
-            arith::ShRSIOp::create(fb, currentTxCount, shiftTxSignTensor);
-
-        Value countMask =
-            arith::ConstantIntOp::create(fb, BarrierBits::countMask, 64);
-        Value countWide = adjustIntegerWidth(
-            fb, count, cast<IntegerType>(barrierStatesType.getElementType()));
-        Value maskedCount = arith::AndIOp::create(fb, countWide, countMask);
-        Value arriveCount =
-            triton::SplatOp::create(fb, barrierStatesType, maskedCount);
-        Value txCountTensor =
-            triton::SplatOp::create(fb, barrierStatesType, txCount);
-
-        Value newCurrent = arith::SubIOp::create(fb, currentCount, arriveCount);
-        Value newCurrentMasked =
+        Value updatedCurrent =
             arith::SelectOp::create(fb, mask, newCurrent, currentCount);
-        Value newTxCount =
-            arith::AddIOp::create(fb, currentTxCount, txCountTensor);
-        Value newTxCountMasked =
+        Value updatedTxCount =
             arith::SelectOp::create(fb, mask, newTxCount, currentTxCount);
 
         Value zeroCond = arith::AndIOp::create(
             fb,
-            arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
-                                  newCurrentMasked, zero32),
-            arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
-                                  newTxCountMasked, zero32));
+            arith::CmpIOp::create(fb, arith::CmpIPredicate::eq, updatedCurrent,
+                                  zero32),
+            arith::CmpIOp::create(fb, arith::CmpIPredicate::eq, updatedTxCount,
+                                  zero32));
         zeroCond = arith::AndIOp::create(fb, zeroCond, mask);
         Value zeroCondI32 =
             arith::ExtUIOp::create(fb, barrierStatesType, zeroCond);
         Value newPhase = arith::XOrIOp::create(fb, phase, zeroCondI32);
         Value newCurrentValue =
-            arith::SelectOp::create(fb, zeroCond, initCount, newCurrentMasked);
+            arith::SelectOp::create(fb, zeroCond, initCount, updatedCurrent);
         Value newTxCountValue =
-            arith::SelectOp::create(fb, zeroCond, zero32, newTxCountMasked);
+            arith::SelectOp::create(fb, zeroCond, zero32, updatedTxCount);
 
         Value initField = arith::ShLIOp::create(fb, initCount, shiftInitTensor);
         Value currentField =
@@ -1475,7 +1388,7 @@ void FunctionBuilder::createUpdateBarrierStateCall(
                                           barrierStatesType, recipientCTAs);
 
         fb.setInsertionPointToEnd(thenBlock);
-        triton::ReturnOp::create(fb);
+        triton::ReturnOp::create(fb, allValid);
       });
 }
 

@@ -91,11 +91,11 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: %[[EXPECT_BASE:.*]] = arith.andi %[[EXPECT_RECIPIENT_CTA]], %[[EXPECT_FIXED]] : i32
     // CHECK: %[[EXPECT_PATTERN:.*]] = arith.constant 5 : i32
     // CHECK: %[[EXPECT_RECIPIENTS:.*]] = arith.shli %[[EXPECT_PATTERN]], %[[EXPECT_BASE]] : i32
-    // CHECK: tt.call @__triton_consan_verify_barrier_arrive{{.*}}({{.*}}%[[EXPECT_PRED]]{{.*}}%[[EXPECT_RECIPIENTS]])
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state{{.*}}({{.*}}%[[EXPECT_PRED]]{{.*}}%[[EXPECT_RECIPIENTS]])
     // CHECK: ttng.barrier_expect
     ttng.barrier_expect %bar, 16 {fromCTA = 5 : i32}, %true : !ttg.memdesc<8xi64, #barrier_fromCTA, #smem_fromCTA, mutable>
 
-    // CHECK: tt.call @__triton_consan_verify_barrier_arrive
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
     // CHECK: ttng.arrive_barrier
     ttng.arrive_barrier %bar, 1, %true {fromCTA = 5 : i32} : !ttg.memdesc<8xi64, #barrier_fromCTA, #smem_fromCTA, mutable>
     tt.return
@@ -485,8 +485,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
     // CHECK: tt.call @__triton_consan_track_visible_writes
     // CHECK: tt.call @__triton_consan_track_visible_reads
-    // CHECK: tt.call @__triton_consan_verify_barrier_arrive
-    // CHECK: tt.call @__triton_consan_update_barrier_state
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     // CHECK: tt.call @__triton_consan_verify_write_visibility
     // CHECK: tt.call @__triton_consan_verify_read_visibility
     // CHECK: tt.call @__triton_consan_set_write_visibility
@@ -494,8 +494,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_clear_read_visibility
     // CHECK: tt.call @__triton_consan_clear_read_tracking
     // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer
-    // CHECK: tt.call @__triton_consan_verify_barrier_arrive
-    // CHECK: tt.call @__triton_consan_update_barrier_state
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     ttng.async_tma_copy_global_to_local %arg0[%c0_i32, %c0_i32] %0, %bar, %true : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     tt.return
   }
@@ -594,11 +594,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttng.tw
     // CHECK: scf.for
     scf.for %i = %c0 to %c2 step %c1 {
       // CHECK: arith.constant 4096 : i64
-      // CHECK: tt.call @__triton_consan_verify_barrier_arrive
+      // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
       // CHECK: ttng.barrier_expect
       ttng.barrier_expect %bar, 4096, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       // CHECK: arith.constant -8192 : i64
-      // CHECK: tt.call @__triton_consan_verify_barrier_arrive
+      // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
       // CHECK: ttng.async_tma_gather
       ttng.async_tma_gather %desc[%x_offsets, %c0_i32] %result, %bar, %true {multicast} : !tt.tensordesc<1x32xf32, #shared>, tensor<32xi32, #offsets>, i32, !ttg.memdesc<1xi64, #shared1, #smem, mutable>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, i1
     }
@@ -630,8 +630,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
     // CHECK: tt.call @__triton_consan_init_barrier_state
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
-    // CHECK: tt.call @__triton_consan_verify_barrier_arrive
-    // CHECK: tt.call @__triton_consan_update_barrier_state
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     // CHECK: ttng.barrier_expect
     // CHECK-COUNT-2: tt.call @__triton_consan_track_barrier_write_for_buffer
     ttng.async_tma_copy_global_to_local %a[%c0_i32, %c0_i32] %a_smem, %bar, %true : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
@@ -919,8 +919,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
     // CHECK: tt.call @__triton_consan_track_visible_writes
     // CHECK: tt.call @__triton_consan_track_visible_reads
-    // CHECK: tt.call @__triton_consan_verify_barrier_arrive
-    // CHECK: tt.call @__triton_consan_update_barrier_state
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     // CHECK: tti.experimental_lock_release
     ttng.arrive_barrier %bar, 2, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttg.local_load %0 : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
@@ -955,8 +955,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %true = arith.constant true
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
-    // CHECK: tt.call @__triton_consan_verify_barrier_arrive
-    // CHECK: tt.call @__triton_consan_update_barrier_state
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     ttng.arrive_barrier %bar, 1, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     tt.return
   }
@@ -1104,8 +1104,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
     // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BAR]] :
     // CHECK: tt.call @__triton_consan_track_visible_reads{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[TM_READ_VISIBILITY_GLOB]], %{{[^,]+}}
-    // CHECK: tt.call @__triton_consan_verify_barrier_arrive
-    // CHECK: tt.call @__triton_consan_update_barrier_state
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     // CHECK: tti.experimental_lock_release
     // CHECK: ttng.tc_gen5_mma %[[A]], %[[B]], %[[ACC]][], {{.*}}, {{.*}}, %[[BAR]]
     %c0_i32 = arith.constant 0 : i32
@@ -1142,8 +1142,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_track_visible_reads
     // CHECK: tt.call @__triton_consan_track_visible_writes
     // CHECK: tt.call @__triton_consan_track_visible_reads
-    // CHECK: tt.call @__triton_consan_verify_barrier_arrive
-    // CHECK: tt.call @__triton_consan_update_barrier_state
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     ttng.tc_gen5_commit %bar : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttg.local_load %0 : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #blocked>
     ttng.tmem_load %result : !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf16>
