@@ -7,6 +7,7 @@ from ..blackwell.tma import (
     async_atomic_min,
     async_atomic_or,
     async_atomic_xor,
+    async_load_im2col,
     async_store,
     make_tensor_descriptor,
     store_wait,
@@ -14,7 +15,6 @@ from ..blackwell.tma import (
     tensor_descriptor_type,
 )
 from ..hopper.tma import (
-    _convert_im2col_offsets,
     _emit_alignment_check,
     tensor_descriptor_im2col,
     tensor_descriptor_im2col_type,
@@ -92,44 +92,6 @@ def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, 
         pred.handle,
         multicast,
         None,
-        report_validity,
-    )
-
-
-@builtin
-def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, multicast=False, report_validity="none",
-                      _semantic=None):
-    """
-    Load data from global memory to shared memory using TMA in im2col mode.
-
-    Args:
-        tensor_desc: Tensor descriptor (im2col).
-        coord: Coordinates in the source tensor.
-        offsets: Im2col offsets (must be i16 values).
-        barrier: Barrier for synchronization.
-        result: Destination memory descriptor.
-        pred: Predicate for conditional execution.
-        multicast: Enable multicast.
-        report_validity: Optional payload validity mode. See
-            :func:`async_load` for the supported values and barrier semantics.
-    """
-    if _semantic.builder.options.enable_iisan:
-        _emit_alignment_check(tensor_desc, coord, "async_load", "innermost coordinate", _semantic=_semantic)
-
-    coord = _semantic._convert_to_ir_values(coord, require_i64=False)
-    pred = _semantic.to_tensor(pred)
-    multicast = _unwrap_if_constexpr(multicast)
-    offsets_ir = _convert_im2col_offsets(offsets, _semantic)
-    report_validity = _semantic._str_to_report_validity(report_validity)
-
-    _semantic.builder.create_async_tma_copy_global_to_local(
-        tensor_desc.handle,
-        coord,
-        barrier.handle,
-        result.handle,
-        pred.handle,
-        multicast,
-        offsets_ir,
         report_validity,
     )
 
