@@ -123,7 +123,8 @@ def _unmix_payload_u32_to_f32_bits_i32(v_u32: np.ndarray) -> np.ndarray:
 
 
 def _cast_float_payload_u64(payload, src_bitwidth: int, dst_bitwidth: int) -> np.ndarray:
-    x = payload.astype(np.uint64) & _low_mask_u64(src_bitwidth)
+    src_mask = _low_mask_u64(src_bitwidth)
+    x = payload.astype(np.uint64) & src_mask
     if dst_bitwidth == src_bitwidth:
         return x
 
@@ -132,11 +133,20 @@ def _cast_float_payload_u64(payload, src_bitwidth: int, dst_bitwidth: int) -> np
         extension = _low_mask_u64(dst_bitwidth) ^ _low_mask_u64(src_bitwidth)
         return np.where((x & sign) != 0, x | extension, x) & _low_mask_u64(dst_bitwidth)
 
-    normalized = np.where((x & sign) != 0, (~x) & _low_mask_u64(src_bitwidth), x)
-    high = normalized >> np.uint64(dst_bitwidth)
+    dst_mask = _low_mask_u64(dst_bitwidth)
+    low = x & dst_mask
+    low_sign = np.uint64(1 << (dst_bitwidth - 1))
+    extension = src_mask ^ dst_mask
+    canonical = np.where((low & low_sign) != 0, low | extension, low)
+    residual = x ^ canonical
+    digit = np.uint64(3511) & dst_mask
+    multiplier = np.uint64(0)
+    for shift in range(0, src_bitwidth, dst_bitwidth):
+        multiplier |= digit << np.uint64(shift)
     with np.errstate(over="ignore"):
-        folded = x ^ (high * np.uint64(3511))
-    return folded & _low_mask_u64(dst_bitwidth)
+        high = ((residual * multiplier) & src_mask) >> np.uint64(src_bitwidth - dst_bitwidth)
+    high ^= high >> np.uint64(dst_bitwidth // 2)
+    return (low ^ high) & dst_mask
 
 
 @pytest.mark.parametrize(("src_bitwidth", "dst_bitwidth"), [(8, 16), (8, 32), (16, 32), (16, 64), (32, 64)])
@@ -147,6 +157,52 @@ def test_float_payload_upcast_downcast_identity(src_bitwidth, dst_bitwidth):
     widened = _cast_float_payload_u64(payload, src_bitwidth, dst_bitwidth)
     narrowed = _cast_float_payload_u64(widened, dst_bitwidth, src_bitwidth)
     np.testing.assert_array_equal(narrowed, payload)
+
+
+@pytest.mark.parametrize(("src_bitwidth", "dst_bitwidth"), [
+    (16, 8),
+    (32, 8),
+    (32, 16),
+    (64, 8),
+    (64, 16),
+    (64, 32),
+])
+def test_float_payload_downcast_mixes_every_discarded_bit(src_bitwidth, dst_bitwidth):
+    rng = np.random.default_rng(src_bitwidth * 257 + dst_bitwidth)
+    src_mask = _low_mask_u64(src_bitwidth)
+    payload = rng.integers(0, np.iinfo(np.uint64).max, size=512, dtype=np.uint64) & src_mask
+    payload[:5] = np.asarray([0, 1, src_mask, 1 << (src_bitwidth - 1), 1 << (dst_bitwidth - 1)], dtype=np.uint64)
+    expected = _cast_float_payload_u64(payload, src_bitwidth, dst_bitwidth)
+
+    for bit in range(dst_bitwidth, src_bitwidth):
+        flipped = payload ^ (np.uint64(1) << np.uint64(bit))
+        actual = _cast_float_payload_u64(flipped, src_bitwidth, dst_bitwidth)
+        assert np.all(actual != expected), f"{src_bitwidth}-to-{dst_bitwidth} discarded bit {bit}"
+
+
+def test_float_payload_downcast_exhaustively_mixes_discarded_bits():
+    payload = np.arange(1 << 16, dtype=np.uint64)
+    expected = _cast_float_payload_u64(payload, 16, 8)
+
+    for bit in range(8, 16):
+        flipped = payload ^ (np.uint64(1) << np.uint64(bit))
+        actual = _cast_float_payload_u64(flipped, 16, 8)
+        assert np.all(actual != expected), f"discarded bit {bit}"
+
+
+@pytest.mark.parametrize(("src_bitwidth", "dst_bitwidth"), [
+    (16, 8),
+    (32, 8),
+    (32, 16),
+    (64, 8),
+    (64, 16),
+    (64, 32),
+])
+def test_float_payload_downcast_distinguishes_top_chunk(src_bitwidth, dst_bitwidth):
+    count = min(1 << dst_bitwidth, 1 << 16)
+    payload = np.arange(count, dtype=np.uint64) << np.uint64(src_bitwidth - dst_bitwidth)
+    narrowed = _cast_float_payload_u64(payload, src_bitwidth, dst_bitwidth)
+    assert np.unique(narrowed).size == count
 
 
 @pytest.mark.parametrize(("src_bitwidth", "dst_bitwidth", "x", "y"), [
@@ -1520,6 +1576,52 @@ def test_fma_payload_semantics(device, fresh_knobs):
         z.cpu().numpy().astype(np.int32, copy=False),
     )
     _assert_payload_equal(out_np, exp_np)
+
+
+@gluon.jit
+def _cast_payload_kernel(x_ptr, out_ptr, n_elements, DST_DTYPE: gl.constexpr, BLOCK: gl.constexpr,
+                         THREADS_PER_WARP: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    gl.store(out_ptr + offs, x.to(DST_DTYPE), mask=mask)
+
+
+@pytest.mark.parametrize(("src_dtype", "dst_dtype"), [
+    ("f16", "e4m3"),
+    ("f32", "e4m3"),
+    ("f32", "f16"),
+    ("f64", "e4m3"),
+    ("f64", "f16"),
+    ("f64", "f32"),
+])
+def test_cast_payload_mixes_every_discarded_bit(device, src_dtype, dst_dtype, fresh_knobs):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    src_bitwidth = _float_dtype_info(src_dtype)[0]
+    dst_bitwidth, _, dst_storage_dtype, _, _, dst_gl_dtype = _float_dtype_info(dst_dtype)
+    baselines = np.asarray(
+        [0, 1, _low_mask_u64(src_bitwidth), 1 << (src_bitwidth - 1), 1 << (dst_bitwidth - 1)],
+        dtype=np.uint64,
+    )
+    payload = np.concatenate(
+        [baselines] + [baselines ^ (np.uint64(1) << np.uint64(bit)) for bit in range(dst_bitwidth, src_bitwidth)])
+    input_bits = _unmix_payload_to_float_bits(payload, src_dtype)
+    _, xw = _as_float_bits_tensor(input_bits, src_dtype)
+    out, outw = _as_float_bits_tensor(np.empty(payload.shape, dtype=dst_storage_dtype), dst_dtype)
+
+    block = 128
+    grid = (triton.cdiv(payload.size, block), )
+    _cast_payload_kernel[grid](xw, outw, payload.size, DST_DTYPE=dst_gl_dtype, BLOCK=block,
+                               THREADS_PER_WARP=THREADS_PER_WARP)
+
+    _assert_payload_equal(out, _cast_float_bits(input_bits, src_dtype, dst_dtype))
+    actual = _mix_float_bits(out.cpu().numpy(), dst_dtype).reshape(-1, baselines.size)
+    assert np.all(actual[1:] != actual[0])
 
 
 @gluon.jit
