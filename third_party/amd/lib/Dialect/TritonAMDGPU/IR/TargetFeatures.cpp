@@ -239,6 +239,10 @@ bool TargetFeatures::supportsTDM() const { return isGFX1250(); }
 
 bool TargetFeatures::supportsMultiCTALaunch() const { return isGFX1250(); }
 
+unsigned TargetFeatures::getMaxMulticastMaskPopcount() const {
+  return isGFX1250() ? 5 : 1;
+}
+
 bool TargetFeatures::supportsClusterLoadBitWidth(int bitWidth) const {
   if (getISAFamily() == ISAFamily::GFX1250) {
     return llvm::is_contained({32, 64, 128}, bitWidth);

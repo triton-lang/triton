@@ -747,6 +747,10 @@ bool TargetInfo::supportsMultiCTALaunch() const {
   return targetFeatures.supportsMultiCTALaunch();
 }
 
+unsigned TargetInfo::getMaxMulticastMaskPopcount() const {
+  return targetFeatures.getMaxMulticastMaskPopcount();
+}
+
 bool TargetInfo::supportsTDM() const { return targetFeatures.supportsTDM(); }
 
 bool TargetInfo::supportsClusterLoadBitWidth(int biwWidth) const {
