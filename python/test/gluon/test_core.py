@@ -974,6 +974,71 @@ def test_warpgroup_mma(ASYNC):
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
 
 
+@gluon.jit
+def warpgroup_mma_wait_multi_warpgroup_kernel(a_ptr, b0_ptr, b1_ptr, out_ptr, D: ttgl.constexpr, NBLK: ttgl.constexpr,
+                                              WG: ttgl.constexpr):
+    M: ttgl.constexpr = 64 * WG
+    c_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout([3, 0], warps_per_cta=[4 * WG, 1], instr_shape=[16, 64, 16])
+    smem_b: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([D, D], ttgl.bfloat16)
+    smem_a: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([M, D], ttgl.bfloat16)
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4 * WG, 1], [1, 0])
+
+    a_smem = ttgl.allocate_shared_memory(ttgl.bfloat16, [M, D], smem_a)
+    b0_smem = ttgl.allocate_shared_memory(ttgl.bfloat16, [D, D], smem_b)
+    b1_smem = ttgl.allocate_shared_memory(ttgl.bfloat16, [D, D], smem_b)
+
+    rows = ttgl.arange(0, D, layout=ttgl.SliceLayout(1, layout))
+    cols = ttgl.arange(0, D, layout=ttgl.SliceLayout(0, layout))
+    offs = rows[:, None] * D + cols[None, :]
+    aoffs = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None] * D + cols[None, :]
+
+    acc = ttgl.zeros([M, D], ttgl.float32, c_layout)
+    inflight = hopper.warpgroup_mma_init(acc)
+
+    async_copy.async_copy_global_to_shared(a_smem, a_ptr + aoffs)
+    async_copy.commit_group()
+
+    for i in tl.range(0, NBLK):
+        async_copy.async_copy_global_to_shared(b0_smem, b0_ptr + i * D * D + offs)
+        acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=(inflight, ))
+        async_copy.async_copy_global_to_shared(b1_smem, b1_ptr + i * D * D + offs)
+        async_copy.commit_group()
+        async_copy.wait_group(0)
+        hopper.fence_async_shared()
+        acc = hopper.warpgroup_mma(a_smem, b0_smem, acc, use_acc=True, is_async=True)
+        acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=(acc, ))
+        inflight = hopper.warpgroup_mma(a_smem, b1_smem, acc, use_acc=True, is_async=True)
+    acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=(inflight, ))
+
+    out_r = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, c_layout))
+    out_c = ttgl.arange(0, D, layout=ttgl.SliceLayout(0, c_layout))
+    pid = ttgl.program_id(0)
+    ttgl.store(out_ptr + pid.to(ttgl.int64) * (M * D) + out_r[:, None] * D + out_c[None, :], acc)
+
+
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
+def test_warpgroup_mma_wait_synchronizes_warpgroups():
+    torch.manual_seed(0)
+    d, num_warp_groups = 64, 2
+    m = 64 * num_warp_groups
+    num_blocks, grid = 512, 528
+
+    b0 = torch.randint(-3, 4, (num_blocks, d, d), device="cuda", dtype=torch.float32)
+    b1 = torch.randint(-3, 4, (num_blocks, d, d), device="cuda", dtype=torch.float32)
+    expected = (b0.sum(dim=(0, 1)) + b1.sum(dim=(0, 1)))[None, :].expand(m, d)
+    assert expected.abs().max() < 2**24
+
+    a = torch.ones((m, d), device="cuda", dtype=torch.bfloat16)
+    b0 = b0.to(torch.bfloat16)
+    b1 = b1.to(torch.bfloat16)
+
+    for _ in range(5):
+        out = torch.empty((grid, m, d), dtype=torch.float32, device="cuda")
+        warpgroup_mma_wait_multi_warpgroup_kernel[(grid, )](a, b0, b1, out, D=d, NBLK=num_blocks, WG=num_warp_groups,
+                                                            num_warps=4 * num_warp_groups)
+        torch.testing.assert_close(out, expected[None, :, :].expand_as(out), atol=0, rtol=0)
+
+
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tcgen05_mma_two_ctas_transposed_lhs_shared_layout():
     torch.manual_seed(0)

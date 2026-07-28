@@ -126,7 +126,8 @@ Value reduce(ImplicitLocOpBuilder &b, Value tensor, ArrayRef<int> axes) {
   for (int axis : axes) {
     assert(axis >= 0 && axis < tensorType.getRank() &&
            "invalid reduction axis");
-    assert(reducedAxes.insert(axis).second && "duplicate reduction axis");
+    assert(!reducedAxes.contains(axis) && "duplicate reduction axis");
+    reducedAxes.insert(axis);
   }
 
   SmallVector<int32_t> transposeOrder;
