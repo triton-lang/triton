@@ -544,7 +544,9 @@ class CodeGenerator(ast.NodeVisitor):
 
         results = []
         for item in iter:
-            self.set_value(comp.target.id, item)
+            if isinstance(comp.target, ast.Tuple):
+                item = self._sanitize_target_value(comp.target, item, sanitize_leaf=False)
+            self.assignTarget(comp.target, item)
             # Apply the comprehension's `if` filters (the conditions are constexpr).
             if all(self.visit(cond) for cond in comp.ifs):
                 results.append(self.visit(node.elt))
@@ -734,8 +736,8 @@ class CodeGenerator(ast.NodeVisitor):
         assert isinstance(target, ast.Name)
         self.set_value(self.visit(target), value)
 
-    def visit_Assign(self, node):
-        # construct values to assign
+    def _sanitize_target_value(self, target, value, sanitize_leaf=True):
+
         def _sanitize_value(value):
             if isinstance(value, language.tuple):
                 return _apply_to_tuple_values(value, _sanitize_value)
@@ -747,36 +749,38 @@ class CodeGenerator(ast.NodeVisitor):
                 value = self.semantic.to_tensor(value)
             return value
 
-        def _sanitize_target_value(target, value):
-            if isinstance(target, ast.Tuple) and isinstance(value, language.tuple):
-                if any(isinstance(elt, ast.Starred) for elt in target.elts):
-                    raise NotImplementedError("starred assignment targets are not supported")
-                num_targets, num_values = len(target.elts), len(value.values)
-                if num_targets != num_values:
-                    # Match CPython's errors for mismatched unpacking.
-                    if num_values > num_targets:
-                        message = f"too many values to unpack (expected {num_targets})"
-                    else:
-                        message = f"not enough values to unpack (expected {num_targets}, got {num_values})"
-                    raise ValueError(message)
-                vals = [_sanitize_target_value(elt, val) for elt, val in zip(target.elts, value.values)]
-                vals = [constexpr(val) if val is None else val for val in vals]
-                types = [val.type for val in vals]
-                return language.tuple(vals, language.tuple_type(types, value.type.fields))
-            if isinstance(target, ast.Name):
-                annotation = self.pending_annotations.pop(target.id, None)
-                if annotation == constexpr:
-                    return normalize_value(value)
-            return _sanitize_value(value)
+        if isinstance(target, ast.Tuple):
+            if not isinstance(value, language.tuple):
+                raise TypeError("cannot unpack non-iterable value")
+            if any(isinstance(elt, ast.Starred) for elt in target.elts):
+                raise NotImplementedError("starred assignment targets are not supported")
+            num_targets, num_values = len(target.elts), len(value.values)
+            if num_targets != num_values:
+                # Match CPython's errors for mismatched unpacking.
+                if num_values > num_targets:
+                    message = f"too many values to unpack (expected {num_targets})"
+                else:
+                    message = f"not enough values to unpack (expected {num_targets}, got {num_values})"
+                raise ValueError(message)
+            vals = [self._sanitize_target_value(elt, val, sanitize_leaf) for elt, val in zip(target.elts, value.values)]
+            vals = [constexpr(val) if val is None else val for val in vals]
+            types = [val.type for val in vals]
+            return language.tuple(vals, language.tuple_type(types, value.type.fields))
+        if isinstance(target, ast.Name):
+            annotation = self.pending_annotations.pop(target.id, None)
+            if annotation == constexpr:
+                return normalize_value(value)
+        return _sanitize_value(value) if sanitize_leaf else value
 
+    def visit_Assign(self, node):
         targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
         assert len(targets) == 1
         target = targets[0]
         if isinstance(target, ast.Name):
             with self._name_loc_prefix(target.id):
-                values = _sanitize_target_value(target, self.visit(node.value))
+                values = self._sanitize_target_value(target, self.visit(node.value))
         else:
-            values = _sanitize_target_value(target, self.visit(node.value))
+            values = self._sanitize_target_value(target, self.visit(node.value))
         self.assignTarget(target, values)
 
     def visit_AugAssign(self, node):
