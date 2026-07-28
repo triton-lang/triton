@@ -342,8 +342,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// A store in either while region is a protocol boundary. Preserve the legacy
-// assignment until effectful loop components can be rewritten as one unit.
+// A store remains a fixed memory boundary inside the globally assigned while
+// component. Preserve its pointer and value layouts without recreating a
+// conversion for every loop-result consumer.
 //
 // BASELINE-LABEL: @layout_conflict_effectful_while_fanout
 // BASELINE-COUNT-5: ttg.convert_layout
@@ -351,8 +352,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // BASELINE: tt.return
 //
 // OPTIMIZED-LABEL: @layout_conflict_effectful_while_fanout
-// OPTIMIZED-COUNT-5: ttg.convert_layout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
 // OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.store
 // OPTIMIZED: tt.return
 
 #source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
@@ -735,10 +737,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// Memory and synchronization inside a loop are hardware-protocol boundaries.
-// Preserve the existing assignment until the complete loop body can be
-// proven safe to rewrite; changing a persistent matmul's scale-store loop
-// independently corrupts the quantized output.
+// Memory and synchronization remain fixed hardware-protocol boundaries inside
+// a globally assigned loop. Preserve the store's pointer and value layouts
+// while sharing the loop-carried conversion across every result consumer.
 //
 // BASELINE-LABEL: @layout_conflict_effectful_for_fanout
 // BASELINE-COUNT-5: ttg.convert_layout
@@ -746,8 +747,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // BASELINE: tt.return
 //
 // OPTIMIZED-LABEL: @layout_conflict_effectful_for_fanout
-// OPTIMIZED-COUNT-5: ttg.convert_layout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
 // OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.store
 // OPTIMIZED: tt.return
 
 #source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>

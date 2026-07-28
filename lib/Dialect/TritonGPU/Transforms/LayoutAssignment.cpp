@@ -273,8 +273,12 @@ static bool isFixedLayoutBoundary(Operation *op) {
 static bool supportsGlobalLayoutAssignment(FuncOp funcOp) {
   WalkResult result = funcOp.walk([&](Operation *op) {
     if (isa<scf::ForOp, scf::WhileOp>(op)) {
+      // Ordinary loads and stores remain fixed at their individual use
+      // boundaries. Matrix, tensor-memory, atomic, and synchronization
+      // protocols still require the complete loop's established assignment.
       WalkResult body = op->walk([&](Operation *nested) {
-        if (nested != op && isFixedLayoutBoundary(nested))
+        if (nested != op && isFixedLayoutBoundary(nested) &&
+            !isa<LoadOp, StoreOp>(nested))
           return WalkResult::interrupt();
         return WalkResult::advance();
       });

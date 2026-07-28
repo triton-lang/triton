@@ -7333,6 +7333,47 @@ def test_optimize_layouts_while_carried_values(device, optimize_layouts, iterati
 
 
 @triton.jit
+def _optimize_layouts_effectful_loop_kernel(out_ptr, scratch_ptr, in_ptr, iterations, USE_WHILE: tl.constexpr,
+                                             BLOCK_SIZE: tl.constexpr):
+    offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    accumulator = tl.load(in_ptr + offsets)
+    if USE_WHILE:
+        iteration = 0
+        while iteration < iterations:
+            accumulator += offsets
+            tl.store(scratch_ptr + offsets, accumulator)
+            iteration += 1
+    else:
+        for _ in range(iterations):
+            accumulator += offsets
+            tl.store(scratch_ptr + offsets, accumulator)
+    tl.store(out_ptr + offsets, accumulator)
+
+
+@pytest.mark.parametrize("optimize_layouts", [False, True])
+@pytest.mark.parametrize("use_while", [False, True])
+@pytest.mark.parametrize("iterations", [0, 1, 4, 17])
+def test_optimize_layouts_effectful_loop_boundaries(device, optimize_layouts, use_while, iterations):
+    check_cuda_or_hip(device)
+
+    source = torch.arange(512, device=device, dtype=torch.int32)
+    result = torch.empty_like(source)
+    scratch = torch.full_like(source, -1)
+    compiled = _optimize_layouts_effectful_loop_kernel[(4,)](
+        result, scratch, source, iterations, USE_WHILE=use_while,
+        BLOCK_SIZE=128, num_warps=4, optimize_layouts=optimize_layouts,
+    )
+
+    expected = source + source * iterations
+    torch.testing.assert_close(result, expected, rtol=0, atol=0)
+    if iterations:
+        torch.testing.assert_close(scratch, expected, rtol=0, atol=0)
+    else:
+        torch.testing.assert_close(scratch, torch.full_like(source, -1), rtol=0, atol=0)
+    assert compiled.metadata.optimize_layouts is optimize_layouts
+
+
+@triton.jit
 def _optimize_layouts_split_kernel(left_ptr, right_ptr, in_ptr, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
     values = tl.load(in_ptr + offsets)
