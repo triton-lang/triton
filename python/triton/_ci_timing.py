@@ -38,12 +38,14 @@ class _TimingState:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.profile_base = self.output_dir / "gpu"
         self.profile_gpu = os.environ.get("TRITON_CI_TIMING_GPU", "1") != "0"
+        self.profile_phase_tests = int(os.environ.get("TRITON_CI_TIMING_PHASE_TESTS", "10"))
+        self.profile_phase = 0
+        self.profile_test_count = 0
 
         self.compile_events: list[list[int]] = []
         self.compile_lock = threading.Lock()
         self.listener_wrappers: list[Callable[..., None]] = []
         self.errors: list[str] = []
-        self.calibration: dict[str, int] | None = None
         self.proton_session: int | None = None
         self.mono_start_ns: int | None = None
         self.mono_tests_end_ns: int | None = None
@@ -52,6 +54,63 @@ class _TimingState:
         self.wall_end_ns: int | None = None
         self.exit_status: int | None = None
         self.finished = False
+
+    @staticmethod
+    def write_json(destination: Path, payload: dict[str, Any]) -> None:
+        temporary = destination.with_suffix(destination.suffix + ".tmp")
+        temporary.write_text(json.dumps(payload, separators=(",", ":")))
+        os.replace(temporary, destination)
+
+    def record_calibration(self) -> None:
+        import triton.profiler as proton
+
+        enter_before_ns = time.monotonic_ns()
+        proton.enter_scope(_CALIBRATION_SCOPE)
+        enter_after_ns = time.monotonic_ns()
+        time.sleep(0.002)
+        exit_before_ns = time.monotonic_ns()
+        proton.exit_scope(_CALIBRATION_SCOPE)
+        exit_after_ns = time.monotonic_ns()
+        calibration = {
+            "enter_before_ns": enter_before_ns,
+            "enter_after_ns": enter_after_ns,
+            "exit_before_ns": exit_before_ns,
+            "exit_after_ns": exit_after_ns,
+        }
+        profile_name = f"{self.profile_base.name}.part_{self.profile_phase}.chrome_trace"
+        sidecar = self.output_dir / f"{self.profile_base.name}.part_{self.profile_phase}.profile.json"
+        self.write_json(
+            sidecar,
+            {
+                "schema_version": 1,
+                "kind": "gpu_profile_phase",
+                "label": self.label,
+                "invocation": self.invocation,
+                "role": self.role,
+                "worker_id": self.worker_id,
+                "pid": os.getpid(),
+                "runner_type": os.environ.get("RUNNER_TYPE"),
+                "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+                "phase": self.profile_phase,
+                "calibration": calibration,
+                "profile": str(self.output_dir / profile_name),
+            },
+        )
+
+    def advance_profile_phase(self) -> None:
+        if self.proton_session is None or self.profile_phase_tests <= 0:
+            return
+        self.profile_test_count += 1
+        if self.profile_test_count % self.profile_phase_tests != 0:
+            return
+        try:
+            import triton.profiler as proton
+
+            self.profile_phase = proton.data.advance_phase(session=self.proton_session)
+            self.record_calibration()
+        except Exception:
+            self.errors.append("proton phase advance failed:\n" + traceback.format_exc())
+            self.profile_phase_tests = 0
 
     def install_compilation_listener(self) -> None:
         from triton import knobs
@@ -101,20 +160,9 @@ class _TimingState:
                 backend="cupti",
                 context="shadow",
                 data="trace",
+                mode="periodic_flushing:format=chrome_trace",
             )
-            enter_before_ns = time.monotonic_ns()
-            proton.enter_scope(_CALIBRATION_SCOPE)
-            enter_after_ns = time.monotonic_ns()
-            time.sleep(0.002)
-            exit_before_ns = time.monotonic_ns()
-            proton.exit_scope(_CALIBRATION_SCOPE)
-            exit_after_ns = time.monotonic_ns()
-            self.calibration = {
-                "enter_before_ns": enter_before_ns,
-                "enter_after_ns": enter_after_ns,
-                "exit_before_ns": exit_before_ns,
-                "exit_after_ns": exit_after_ns,
-            }
+            self.record_calibration()
         except Exception:
             self.errors.append("proton start failed:\n" + traceback.format_exc())
 
@@ -145,6 +193,7 @@ class _TimingState:
             "role": self.role,
             "worker_id": self.worker_id,
             "pid": os.getpid(),
+            "runner_type": os.environ.get("RUNNER_TYPE"),
             "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
             "wall_start_ns": self.wall_start_ns,
             "wall_end_ns": self.wall_end_ns,
@@ -152,16 +201,16 @@ class _TimingState:
             "mono_tests_end_ns": self.mono_tests_end_ns,
             "mono_end_ns": self.mono_end_ns,
             "exit_status": self.exit_status,
-            "calibration": self.calibration,
-            "profile": str(self.profile_base.with_suffix(".chrome_trace")) if self.profile_gpu else None,
+            "calibration": None,
+            "profile": None,
+            "profile_phase_tests": self.profile_phase_tests if self.profile_gpu else None,
+            "profile_phases": self.profile_phase + 1 if self.profile_gpu else 0,
             "errors": self.errors,
             # Each event is [start, end, cache_hit, ir_init, lowering, store], all times in ns.
             "compile_events": compile_events,
         }
         destination = self.output_dir / "summary.json"
-        temporary = destination.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(payload, separators=(",", ":")))
-        os.replace(temporary, destination)
+        self.write_json(destination, payload)
 
 
 def pytest_configure(config: Any) -> None:
@@ -196,6 +245,11 @@ def pytest_runtest_call(item: Any) -> None:
 def pytest_runtest_teardown(item: Any) -> None:
     if _STATE is not None:
         _STATE.install_compilation_listener()
+
+
+def pytest_runtest_logfinish(nodeid: str, location: tuple[str, int | None, str]) -> None:
+    if _STATE is not None:
+        _STATE.advance_profile_phase()
 
 
 def pytest_sessionfinish(session: Any, exitstatus: int) -> None:

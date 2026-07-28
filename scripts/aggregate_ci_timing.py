@@ -78,6 +78,9 @@ def iter_trace_intervals(
     if not trace_path.exists():
         errors.append(f"{trace_path}: missing trace")
         return
+    if trace_path.stat().st_size == 0:
+        errors.append(f"{trace_path}: empty trace")
+        return
     try:
         events = iter_trace_events(trace_path)
         stream_count = 0
@@ -187,12 +190,22 @@ def stream_gpu_stats(
 
 def analyze(root: Path) -> dict:
     summaries: list[tuple[Path, dict]] = []
+    profile_phases: list[tuple[Path, dict]] = []
     errors: list[str] = []
     for path in sorted(root.rglob("summary.json")):
         try:
             summary = json.loads(path.read_text())
             summaries.append((path, summary))
             errors.extend(f"{path}: {error}" for error in summary.get("errors", []))
+        except Exception as exc:
+            errors.append(f"{path}: {exc}")
+    for path in sorted(root.rglob("*.profile.json")):
+        try:
+            profile = json.loads(path.read_text())
+            if profile.get("kind") != "gpu_profile_phase":
+                errors.append(f"{path}: unexpected profile sidecar kind")
+                continue
+            profile_phases.append((path, profile))
         except Exception as exc:
             errors.append(f"{path}: {exc}")
 
@@ -258,6 +271,9 @@ def analyze(root: Path) -> dict:
         if summary["role"] != "controller" and not summary.get("errors") and summary.get("profile"):
             group["traces"].append((path, summary))
 
+    for path, profile in profile_phases:
+        groups[profile["label"]]["traces"].append((path, profile))
+
     results: dict[str, dict[str, int | float]] = {}
     for label, group in sorted(groups.items()):
         windows = union_intervals(group["windows"])
@@ -293,6 +309,55 @@ def analyze(root: Path) -> dict:
     return {
         "schema_version": 1,
         "summaries": len(summaries),
+        "profile_phases": len(profile_phases),
+        "results": results,
+        "errors": errors,
+    }
+
+
+def combine_analyses(compile_analysis: dict, gpu_analysis: dict) -> dict:
+    errors = [f"compile: {error}" for error in compile_analysis["errors"]]
+    errors.extend(f"gpu: {error}" for error in gpu_analysis["errors"])
+    results: dict[str, dict[str, int | float]] = {}
+    labels = sorted(set(compile_analysis["results"]) | set(gpu_analysis["results"]))
+    for label in labels:
+        if label not in compile_analysis["results"]:
+            errors.append(f"{label}: missing compile-only result")
+            continue
+        if label not in gpu_analysis["results"]:
+            errors.append(f"{label}: missing GPU-trace result")
+            continue
+        compile_result = compile_analysis["results"][label]
+        gpu_result = gpu_analysis["results"][label]
+        compile_ns = compile_result["compile_only_ns"] + compile_result["compile_gpu_overlap_ns"]
+        gpu_ns = gpu_result["gpu_only_ns"] + gpu_result["compile_gpu_overlap_ns"]
+        overlap_ns = min(gpu_result["compile_gpu_overlap_ns"], compile_ns, gpu_ns)
+        wall_ns = compile_result["wall_ns"]
+        results[label] = {
+            "wall_ns": wall_ns,
+            "worker_shutdown_tail_ns": compile_result["worker_shutdown_tail_ns"],
+            "compile_only_ns": compile_ns - overlap_ns,
+            "gpu_only_ns": gpu_ns - overlap_ns,
+            "compile_gpu_overlap_ns": overlap_ns,
+            "host_remainder_ns": max(0, wall_ns - compile_ns - gpu_ns + overlap_ns),
+            "raw_compile_worker_ns": compile_result["raw_compile_worker_ns"],
+            "raw_gpu_kernel_ns": gpu_result["raw_gpu_kernel_ns"],
+            "gpu_kernel_events": gpu_result["gpu_kernel_events"],
+            "compile_events": compile_result["compile_events"],
+            "cache_hits": compile_result["cache_hits"],
+            "cache_misses": compile_result["cache_misses"],
+            "ir_init_worker_ns": compile_result["ir_init_worker_ns"],
+            "lowering_worker_ns": compile_result["lowering_worker_ns"],
+            "store_worker_ns": compile_result["store_worker_ns"],
+            "gpu_trace_wall_ns": gpu_result["wall_ns"],
+            "gpu_trace_compile_active_ns": gpu_result["compile_only_ns"] + gpu_result["compile_gpu_overlap_ns"],
+        }
+    return {
+        "schema_version": 1,
+        "combined_from_independent_runs": True,
+        "compile_summaries": compile_analysis["summaries"],
+        "gpu_summaries": gpu_analysis["summaries"],
+        "profile_phases": gpu_analysis["profile_phases"],
         "results": results,
         "errors": errors,
     }
@@ -371,10 +436,41 @@ def self_test() -> None:
         assert gpu_intervals == [(11_000_050, 11_500_050)]
         assert raw_ns == 500_000
 
+    compile_result = {
+        "wall_ns": 100,
+        "worker_shutdown_tail_ns": 1,
+        "compile_only_ns": 40,
+        "compile_gpu_overlap_ns": 0,
+        "raw_compile_worker_ns": 50,
+        "compile_events": 2,
+        "cache_hits": 1,
+        "cache_misses": 1,
+        "ir_init_worker_ns": 5,
+        "lowering_worker_ns": 40,
+        "store_worker_ns": 5,
+    }
+    gpu_result = {
+        "wall_ns": 120,
+        "compile_only_ns": 50,
+        "gpu_only_ns": 10,
+        "compile_gpu_overlap_ns": 20,
+        "raw_gpu_kernel_ns": 35,
+        "gpu_kernel_events": 3,
+    }
+    combined = combine_analyses(
+        {"summaries": 1, "profile_phases": 0, "results": {"test": compile_result}, "errors": []},
+        {"summaries": 1, "profile_phases": 2, "results": {"test": gpu_result}, "errors": []},
+    )
+    assert combined["results"]["test"]["compile_only_ns"] == 20
+    assert combined["results"]["test"]["gpu_only_ns"] == 10
+    assert combined["results"]["test"]["compile_gpu_overlap_ns"] == 20
+    assert combined["results"]["test"]["host_remainder_ns"] == 50
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("root", nargs="?", type=Path)
+    parser.add_argument("--gpu-root", type=Path)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
@@ -384,6 +480,8 @@ def main() -> None:
     if args.root is None:
         parser.error("root is required unless --self-test is used")
     result = analyze(args.root)
+    if args.gpu_root is not None:
+        result = combine_analyses(result, analyze(args.gpu_root))
     if args.json:
         print(json.dumps(result, indent=2))
     else:

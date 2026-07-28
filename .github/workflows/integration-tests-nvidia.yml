@@ -9,14 +9,16 @@ on:
 
 jobs:
   integration-tests-nvidia:
-    name: integration-tests-nvidia (${{ matrix.config.name }})
+    name: integration-tests-nvidia (${{ matrix.config.name }}, timing-${{ matrix.timing_mode }})
     runs-on: ${{ matrix.config.runs_on }}
     timeout-minutes: 120
-    # Let A100 and H100 continue even if GB200 fails, as it's a bit flaky
+    # GB200 is allowed to fail because it is a bit flaky.
     continue-on-error: ${{ startsWith(matrix.config.runner_type, 'nvidia-gb200') }}
     strategy:
+      fail-fast: false
       matrix:
         config: ${{ fromJson(inputs.matrix) }}
+        timing_mode: [compile, gpu]
     env:
       RUNNER_TYPE: ${{ matrix.config.runner_type }}
       TRITON_BUILD_WITH_CCACHE: "true"
@@ -87,44 +89,67 @@ jobs:
       - name: CCache Stats
         run: ccache --print-stats
       - name: Run lit tests
+        if: ${{ matrix.timing_mode == 'compile' }}
         run: make test-lit
+      - name: Record timing target
+        run: |
+          mkdir -p /tmp/triton-ci-timing
+          printf 'head_sha=%s\nrunner_type=%s\ntiming_mode=%s\n' \
+            "$GITHUB_SHA" "$RUNNER_TYPE" "${{ matrix.timing_mode }}" \
+            > /tmp/triton-ci-timing/target.txt
+          nvidia-smi -q -x > /tmp/triton-ci-timing/nvidia-smi-before.xml
       - name: Run triton tests
         env:
           PYTEST_PLUGINS: triton._ci_timing
-          TRITON_CI_TIMING_DIR: ${{ startsWith(matrix.config.runner_type, 'nvidia-gb200') && '/tmp/triton-ci-timing' || '' }}
+          TRITON_CI_TIMING_DIR: /tmp/triton-ci-timing
           TRITON_CI_TIMING_LABEL: triton-tests
-          TRITON_CI_TIMING_GPU: "0"
+          TRITON_CI_TIMING_GPU: ${{ matrix.timing_mode == 'gpu' && '1' || '0' }}
+          TRITON_CI_TIMING_PHASE_TESTS: "10"
+          TRITON_PROFILE_BUFFER_SIZE: "4194304"
+          TRITON_CACHE_DIR: /tmp/triton-ci-cache-${{ matrix.timing_mode }}
         run: make NUM_PROCS=24 test-unit
       - name: Run gluon tests
         env:
           PYTEST_PLUGINS: triton._ci_timing
-          TRITON_CI_TIMING_DIR: ${{ startsWith(matrix.config.runner_type, 'nvidia-gb200') && '/tmp/triton-ci-timing' || '' }}
+          TRITON_CI_TIMING_DIR: /tmp/triton-ci-timing
           TRITON_CI_TIMING_LABEL: gluon-tests
-          TRITON_CI_TIMING_GPU: "0"
+          TRITON_CI_TIMING_GPU: ${{ matrix.timing_mode == 'gpu' && '1' || '0' }}
+          TRITON_CI_TIMING_PHASE_TESTS: "10"
+          TRITON_PROFILE_BUFFER_SIZE: "4194304"
+          TRITON_CACHE_DIR: /tmp/triton-ci-cache-${{ matrix.timing_mode }}
         run: make NUM_PROCS=24 test-gluon
-      - name: Upload GB200 timing
-        if: ${{ always() && startsWith(matrix.config.runner_type, 'nvidia-gb200') }}
+      - name: Record final GPU state
+        if: ${{ always() }}
+        run: nvidia-smi -q -x > /tmp/triton-ci-timing/nvidia-smi-after.xml
+      - name: Upload NVIDIA timing
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: gb200-ci-timing-${{ github.run_id }}-${{ github.run_attempt }}
+          name: nvidia-ci-timing-${{ matrix.config.name }}-${{ matrix.timing_mode }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: /tmp/triton-ci-timing
           if-no-files-found: error
           retention-days: 3
       - name: Run gsan tests
+        if: ${{ matrix.timing_mode == 'compile' }}
         run: make NUM_PROCS=24 test-gsan
       - name: Run interpreter tests
-        if: ${{ matrix.config.runner_type == 'nvidia-h100' }}
+        if: ${{ matrix.timing_mode == 'compile' && matrix.config.runner_type == 'nvidia-h100' }}
         run: make test-interpret
       - name: Run regression tests
+        if: ${{ matrix.timing_mode == 'compile' }}
         run: make test-regression
       - name: Run microbenchmark tests
+        if: ${{ matrix.timing_mode == 'compile' }}
         # Microbenchmark never fail but running them gives us an easy way to track performance changes.
         run: make test-microbenchmark
       - name: Run C++ unittests
+        if: ${{ matrix.timing_mode == 'compile' }}
         run: make test-cpp
       - name: Run Proton tests
+        if: ${{ matrix.timing_mode == 'compile' }}
         run: make test-proton
       - name: Inspect cache directories
+        if: ${{ matrix.timing_mode == 'compile' }}
         run: |
           mkdir -p ~/.triton
           du -h -d 1 ~/.triton
@@ -132,7 +157,7 @@ jobs:
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
       - name: Save build dependencies cache
-        if: github.ref == 'refs/heads/main'
+        if: ${{ matrix.timing_mode == 'compile' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@v4
         with:
           path: |
