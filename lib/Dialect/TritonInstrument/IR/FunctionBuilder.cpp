@@ -499,6 +499,9 @@ void FunctionBuilder::createFillGlobalTensorCall(ImplicitLocOpBuilder &b,
                                                  Value ptr,
                                                  RankedTensorType type,
                                                  Value scalar) {
+  type = tti::getIntTensorType(
+      b.getInsertionBlock()->getParent(), {type.getNumElements()},
+      type.getElementType().getIntOrFloatBitWidth());
   createCallToCachedFunction(
       b, "fill_global_tensor", {ptr, scalar}, /*assertInfo=*/std::nullopt,
       {type}, [type](ImplicitLocOpBuilder &fb, Block *entryBlock) {
