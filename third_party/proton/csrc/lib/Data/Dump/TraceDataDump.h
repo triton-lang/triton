@@ -36,9 +36,13 @@ std::string buildFlexibleMetricEventName(
 struct CycleEvent {
   std::vector<Context> contexts;
   const CycleMetric *cycleMetric;
+  const DataEntry::FlexibleMetricMap *flexibleMetrics;
 
-  CycleEvent(const CycleMetric *metric, std::vector<Context> contexts)
-      : contexts(std::move(contexts)), cycleMetric(metric) {}
+  CycleEvent(const CycleMetric *metric,
+             const DataEntry::FlexibleMetricMap *metrics,
+             std::vector<Context> contexts)
+      : contexts(std::move(contexts)), cycleMetric(metric),
+        flexibleMetrics(metrics) {}
 };
 
 struct KernelEvent {

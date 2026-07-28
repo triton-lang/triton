@@ -28,6 +28,8 @@ struct ScheduleBufferStorePass
     auto endStoreMap = llvm::SmallDenseMap<int, CircularStoreOp, 8>();
 
     func.walk([&](CircularStoreOp store) {
+      if (store.getEventType() != EventType::SCOPE || store.getMetric())
+        return;
       if (store.getIsStart())
         startStoreList.push_back(store);
       else

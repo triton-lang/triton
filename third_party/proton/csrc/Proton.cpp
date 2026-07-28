@@ -141,11 +141,17 @@ static void initProton(nanobind::module_ &m) {
         [](uint64_t functionId, const std::string &functionName,
            const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
            const std::vector<std::pair<size_t, size_t>> &scopeIdParents,
-           const std::string &metadataPath) {
+           const std::string &metadataPath,
+           const std::vector<std::pair<size_t, std::string>> &scopeIdMetrics) {
           SessionManager::instance().initFunctionMetadata(
               functionId, functionName, scopeIdNames, scopeIdParents,
-              metadataPath);
-        });
+              metadataPath, scopeIdMetrics);
+        },
+        nanobind::arg("function_id"), nanobind::arg("function_name"),
+        nanobind::arg("scope_id_names"), nanobind::arg("scope_id_parents"),
+        nanobind::arg("metadata_path"),
+        nanobind::arg("scope_id_metrics") =
+            std::vector<std::pair<size_t, std::string>>{});
   m.def("destroy_function_metadata", [](uint64_t functionId) {
     SessionManager::instance().destroyFunctionMetadata(functionId);
   });

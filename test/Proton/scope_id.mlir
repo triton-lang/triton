@@ -67,6 +67,28 @@ module {
 // -----
 
 module {
+  // expected-remark @below {{extended_events}}
+  tt.func @extended_events() {
+    // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
+    proton.record start "outer"
+    // expected-remark @below {{scope id = 1}}
+    // expected-remark @below {{scope parent id = 0}}
+    %token = proton.async_record start "async" : i32
+    proton.async_record end %token : i32
+    // expected-remark @below {{scope id = 2}}
+    // expected-remark @below {{scope parent id = 0}}
+    proton.mark "ready"
+    // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
+    proton.record end "outer"
+    tt.return
+  }
+}
+
+// -----
+
+module {
   // expected-remark @below {{inner}}
   tt.func @inner() {
     // expected-remark @below {{scope id = 0}}

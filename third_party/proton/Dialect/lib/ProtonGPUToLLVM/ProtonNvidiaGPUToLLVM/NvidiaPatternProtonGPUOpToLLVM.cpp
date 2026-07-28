@@ -24,28 +24,15 @@ namespace {
 //  | warp 7 data (N/3 bytes)                       |
 //  +-----------------------------------------------+
 
-struct CircularStoreOpConversion
-    : public ConvertOpToLLVMPattern<
-          mlir::triton::proton::gpu::CircularStoreOp> {
-  explicit CircularStoreOpConversion(
-      LLVMTypeConverter &typeConverter,
-      const proton::gpu::TargetInfoBase &targetInfo, PatternBenefit benefit)
-      : mlir::ConvertOpToLLVMPattern<
-            mlir::triton::proton::gpu::CircularStoreOp>(typeConverter, benefit),
-        targetInfo(targetInfo) {}
-
-  LogicalResult
-  matchAndRewrite(mlir::triton::proton::gpu::CircularStoreOp op,
-                  OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-
-    auto dataPack =
-        lowerCircularStoreOpHelper(op, adaptor.getSegment(), rewriter);
-
+LogicalResult storeDataPacks(
+    Operation *op, ArrayRef<proton::gpu::CircularStoreDataPack> dataPacks,
+    ConversionPatternRewriter &rewriter,
+    const proton::gpu::TargetInfoBase &targetInfo) {
+  auto loc = op->getLoc();
+  for (const auto &dataPack : dataPacks) {
     uint32_t addrSpace = dataPack.addrSpace;
     if (addrSpace == 1) {
-      auto mod = op.getOperation()->getParentOfType<ModuleOp>();
+      auto mod = op->getParentOfType<ModuleOp>();
       int numWarps = proton::gpu::getTotalNumWarps(mod);
       PTXBuilder builder;
       auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -87,8 +74,54 @@ struct CircularStoreOpConversion
     } else {
       llvm::report_fatal_error("unsupported address space in circular store");
     }
-    rewriter.eraseOp(op);
-    return success();
+  }
+  rewriter.eraseOp(op);
+  return success();
+}
+
+struct CircularStoreOpConversion
+    : public ConvertOpToLLVMPattern<
+          mlir::triton::proton::gpu::CircularStoreOp> {
+  explicit CircularStoreOpConversion(
+      LLVMTypeConverter &typeConverter,
+      const proton::gpu::TargetInfoBase &targetInfo, PatternBenefit benefit)
+      : mlir::ConvertOpToLLVMPattern<
+            mlir::triton::proton::gpu::CircularStoreOp>(typeConverter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::triton::proton::gpu::CircularStoreOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto dataPacks = lowerCircularStoreOpHelper(
+        op, adaptor.getSegment(), adaptor.getCounter(), adaptor.getMetric(),
+        rewriter);
+    return storeDataPacks(op, dataPacks, rewriter, targetInfo);
+  }
+
+protected:
+  const proton::gpu::TargetInfoBase &targetInfo;
+};
+
+struct CircularStoreDynamicOpConversion
+    : public ConvertOpToLLVMPattern<
+          mlir::triton::proton::gpu::CircularStoreDynamicOp> {
+  explicit CircularStoreDynamicOpConversion(
+      LLVMTypeConverter &typeConverter,
+      const proton::gpu::TargetInfoBase &targetInfo, PatternBenefit benefit)
+      : mlir::ConvertOpToLLVMPattern<
+            mlir::triton::proton::gpu::CircularStoreDynamicOp>(typeConverter,
+                                                                benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::triton::proton::gpu::CircularStoreDynamicOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto dataPacks = lowerCircularStoreOpHelper(
+        op, adaptor.getSegment(), adaptor.getCounter(), adaptor.getScopeId(),
+        rewriter);
+    return storeDataPacks(op, dataPacks, rewriter, targetInfo);
   }
 
 protected:
@@ -102,6 +135,7 @@ void populateProtonGPUOpNvidiaPatterns(LLVMTypeConverter &typeConverter,
                                        RewritePatternSet &patterns,
                                        const TargetInfo &targetInfo,
                                        PatternBenefit benefit) {
-  patterns.add<CircularStoreOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<CircularStoreOpConversion, CircularStoreDynamicOpConversion>(
+      typeConverter, targetInfo, benefit);
 }
 } // namespace mlir::triton::proton::gpu::NVIDIA

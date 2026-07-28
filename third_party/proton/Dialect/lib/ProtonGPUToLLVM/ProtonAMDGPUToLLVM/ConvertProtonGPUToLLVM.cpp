@@ -50,6 +50,30 @@ struct ConvertProtonAMDGPUToLLVM
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     ModuleOp mod = getOperation();
+    WalkResult unsupported = mod.walk([&](Operation *op) {
+      if (isa<mlir::triton::proton::gpu::CircularStoreDynamicOp>(op)) {
+        op->emitError(
+            "in-kernel metrics, async scopes, and markers are only supported "
+            "on NVIDIA");
+        return WalkResult::interrupt();
+      }
+      if (auto store =
+              dyn_cast<mlir::triton::proton::gpu::CircularStoreOp>(op);
+          store &&
+          (store.getEventType() !=
+               mlir::triton::proton::EventType::SCOPE ||
+           store.getMetric())) {
+        store.emitError(
+            "in-kernel metrics, async scopes, and markers are only supported "
+            "on NVIDIA");
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (unsupported.wasInterrupted()) {
+      signalPassFailure();
+      return;
+    }
     auto tritonTargetInfo = mlir::triton::AMD::TargetInfo(gfxArch);
     auto protonTargetInfo =
         mlir::triton::proton::gpu::AMD::TargetInfo(tritonTargetInfo);

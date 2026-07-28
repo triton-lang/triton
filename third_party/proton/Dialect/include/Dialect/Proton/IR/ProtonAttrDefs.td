@@ -16,6 +16,35 @@ def MetricTypeAttr : I32EnumAttr<
   }];
 }
 
+def MetricValueTypeAttr : I32EnumAttr<
+  "MetricValueType", "The scalar type of an in-kernel metric",
+  [
+    I32EnumAttrCase<"NONE", 0, "none">,
+    I32EnumAttrCase<"BOOL", 1, "bool">,
+    I32EnumAttrCase<"I8", 2, "i8">,
+    I32EnumAttrCase<"I16", 3, "i16">,
+    I32EnumAttrCase<"I32", 4, "i32">,
+    I32EnumAttrCase<"U8", 5, "u8">,
+    I32EnumAttrCase<"U16", 6, "u16">,
+    I32EnumAttrCase<"U32", 7, "u32">,
+    I32EnumAttrCase<"F16", 8, "f16">,
+    I32EnumAttrCase<"BF16", 9, "bf16">,
+    I32EnumAttrCase<"F32", 10, "f32">
+  ]> {
+  let cppNamespace = "::mlir::triton::proton";
+}
+
+def EventTypeAttr : I32EnumAttr<
+  "EventType", "The kind of an in-kernel profiling event",
+  [
+    I32EnumAttrCase<"SCOPE", 0, "scope">,
+    I32EnumAttrCase<"ASYNC", 1, "async">,
+    I32EnumAttrCase<"MARK", 2, "mark">,
+    I32EnumAttrCase<"METRIC", 3, "metric">
+  ]> {
+  let cppNamespace = "::mlir::triton::proton";
+}
+
 def SamplingStrategyAttr : I32EnumAttr<
   "SamplingStrategy", "The strategy for sampling the profiling data",
   [

@@ -108,6 +108,55 @@ with pl.scope("compute"):
     ...
 ```
 
+Synchronous scopes can capture one runtime scalar metric:
+
+```python
+value = tl.load(value_ptr)
+with pl.scope("compute", metrics={"work_items (pty)": value}):
+    ...
+
+# Equivalent operator form.
+pl.enter_scope("compute", metrics={"work_items (pty)": value})
+...
+pl.exit_scope("compute")
+```
+
+The `metrics` argument is a compile-time dictionary with exactly one string
+key and one runtime scalar value. Metric names use the same aggregation
+suffixes as Proton's host API: no suffix is inclusive, `(exc)` is exclusive,
+and `(pty)` is a property. Supported values are `bool`, signed or unsigned
+integers up to 32 bits, `fp16`, `bf16`, and `fp32`. Pointers, block values,
+64-bit values, and multiple metrics are rejected during compilation.
+
+Asynchronous work can be measured by retaining a 32-bit token:
+
+```python
+token = pl.start_scope("async_copy")
+issue_async_copy(...)
+...
+pl.end_scope(token)
+```
+
+The start timestamp is recorded immediately. The token identifies the static
+start site, so a profiled warp may have at most one outstanding instance from a
+given `start_scope` call site. This form is useful when unrelated work occurs
+between issue and completion.
+
+Instantaneous events use:
+
+```python
+pl.mark("tile_ready")
+```
+
+Markers appear as instant events in timeline traces and as count-only nodes in
+Hatchet output.
+
+Metrics, asynchronous scopes, and markers are currently supported only by the
+NVIDIA backend. Existing metric-free `enter_scope`/`exit_scope` scopes remain
+available on NVIDIA and AMD. A metric-free record occupies the original 8
+bytes; only a metric-bearing scope start emits an additional tagged 8-byte
+record, preserving circular-buffer capacity when metric capture is omitted.
+
 Advanced users can insert `proton.record start` and `proton.record end`
 directly in TTIR or TTGIR.
 

@@ -345,6 +345,7 @@ public:
     InitTime,
     PreFinalTime,
     PostFinalTime,
+    IsMarker,
     Count,
   };
 
@@ -355,7 +356,8 @@ public:
               const std::string &kernelName, uint64_t blockId,
               uint64_t processorId, uint64_t unitId, uint64_t deviceId,
               uint64_t deviceType, uint64_t timeShiftCost, uint64_t initTime,
-              uint64_t preFinalTime, uint64_t postFinalTime)
+              uint64_t preFinalTime, uint64_t postFinalTime,
+              bool isMarker = false)
       : CycleMetric() {
     this->values[StartCycle] = startCycle;
     this->values[EndCycle] = endCycle;
@@ -372,6 +374,7 @@ public:
     this->values[InitTime] = initTime;
     this->values[PreFinalTime] = preFinalTime;
     this->values[PostFinalTime] = postFinalTime;
+    this->values[IsMarker] = static_cast<uint64_t>(isMarker);
   }
 
   const std::string &getName() const override { return name; }
@@ -393,15 +396,15 @@ public:
 private:
   const static inline bool PROPERTY[CycleMetricKind::Count] = {
       false, false, false, false, true,  true,  true, true,
-      true,  true,  true,  true,  false, false, false};
+      true,  true,  true,  true,  false, false, false, true};
   const static inline bool EXCLUSIVE[CycleMetricKind::Count] = {
       false, false, true, true, true,  true,  true, true,
-      true,  true,  true, true, false, false, false};
+      true,  true,  true, true, false, false, false, true};
   static constexpr std::string_view VALUE_NAMES[CycleMetricKind::Count] = {
       "start_cycle", "end_cycle",      "cycles",         "normalized_cycles",
       "kernel_id",   "kernel_name",    "block_id",       "processor_id",
       "unit_id",     "device_id",      "device_type",    "time_shift_cost",
-      "init_time",   "pre_final_time", "post_final_time"};
+      "init_time",   "pre_final_time", "post_final_time", "is_marker"};
   const static inline std::string name = "CycleMetric";
 };
 

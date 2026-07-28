@@ -65,14 +65,34 @@ SegmentObject SegmentObject::fromStruct(Location loc, Value segmentStruct,
 namespace triton {
 namespace proton::gpu {
 
-CircularStoreDataPack
-lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
-                           ConversionPatternRewriter &rewriter) {
-  auto loc = op.getLoc();
-  auto mod = op.getOperation()->getParentOfType<ModuleOp>();
+namespace {
+
+Value encodeMetric(Value metric, MetricValueType metricType,
+                   TritonLLVMOpBuilder &b) {
+  auto i32Type = IntegerType::get(metric.getContext(), 32);
+  auto i16Type = IntegerType::get(metric.getContext(), 16);
+  if (metricType == MetricValueType::F32)
+    return b.bitcast(metric, i32Type);
+  if (metricType == MetricValueType::F16 ||
+      metricType == MetricValueType::BF16)
+    return b.zext(i32Type, b.bitcast(metric, i16Type));
+
+  auto intType = cast<IntegerType>(metric.getType());
+  if (intType.getWidth() == 32)
+    return metric;
+  return b.zext(i32Type, metric);
+}
+
+SmallVector<CircularStoreDataPack> lowerCircularStore(
+    Operation *op, SegmentType segmentType, Value segmentStruct, Value counter,
+    Value scopeId, bool isStart, EventType eventType, Value metric,
+    MetricValueType metricType, ConversionPatternRewriter &rewriter) {
+  auto loc = op->getLoc();
+  auto mod = op->getParentOfType<ModuleOp>();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   const int bytesPerEntry = proton::gpu::getBytesPerClockEntry();
   const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
+  const int numEntries = metric ? 2 : 1;
 
   auto segmentObj =
       LLVM::SegmentObject::fromStruct(loc, segmentStruct, rewriter);
@@ -82,41 +102,39 @@ lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
 
   // Update the index (could be register promoted).
   Value curIdx = b.load(i32_ty, indexPtr);
-  Value newIdx = b.add(curIdx, b.i32_val(wordsPerEntry));
+  Value newIdx = b.add(curIdx, b.i32_val(wordsPerEntry * numEntries));
 
   // Compute the segment size in word (4 bytes).
   int selectedWarpNum = getTotalNumWarps(mod);
-  auto segmentType = op.getSegment().getType();
   auto selectedIds = segmentType.getSelectIds();
   if (!selectedIds.empty())
     selectedWarpNum = selectedIds.size();
   const int bufferSizeInBytes = segmentType.getNBytes();
   const int segmentWordSize = bufferSizeInBytes / selectedWarpNum / 4;
 
-  // Compute the actual base offset (with urem as circular buffer).
-  Value tagOffset =
-      b.add(segmentBase, b.urem(curIdx, b.i32_val(segmentWordSize)));
-
-  // Store the counter into buffer.
   auto bufferBaseType = bufferBase.getType();
-  Value vecPtr = b.gep(bufferBaseType, i32_ty, bufferBase, tagOffset);
 
   // Constructing the tag and clock (8 byte)
   // =======================================
   // tag and upper clock (4 bytes):
   // 31: start or end (1 bit)
   // 30:23 scope id (8 bits)
-  // 22:11 reserved (12 bits)
+  // 22:20 event type (3 bits)
+  // 19:16 metric type (4 bits)
+  // 15:11 reserved (5 bits)
   // 10:0  64-bit clock bit 32:42 (11 bits)
   // =======================================
   // lower clock (4 bytes):
   // 31:0 64-bit clock bit 0:31
   // =======================================
-  Value clock = op.getCounter();
+  Value clock = counter;
   auto clkTy = mlir::cast<IntegerType>(clock.getType());
-  uint32_t maskedScopeId = op.getScopeId() & 0xff;
-  Value tag = op.getIsStart() ? b.i32_val(maskedScopeId << 23)
-                              : b.i32_val(1 << 31 | maskedScopeId << 23);
+  Value maskedScopeId = b.and_(scopeId, b.i32_val(0xff));
+  Value tag = b.or_(
+      b.shl(maskedScopeId, b.i32_val(23)),
+      b.i32_val(static_cast<uint32_t>(eventType) << 20 |
+                static_cast<uint32_t>(metricType) << 16 |
+                (isStart ? 0u : (1u << 31))));
   Value valsVec;
   if (clkTy.getWidth() == 64) {
     auto clkVecTy = vec_ty(i32_ty, 2);
@@ -156,7 +174,53 @@ lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
   uint32_t addrSpace =
       cast<LLVM::LLVMPointerType>(bufferBaseType).getAddressSpace();
 
-  return {isWriter, valsVec, vecPtr, addrSpace};
+  auto getRecordPtr = [&](int entryIndex) {
+    Value entryIdx =
+        entryIndex == 0
+            ? curIdx
+            : b.add(curIdx, b.i32_val(entryIndex * wordsPerEntry));
+    Value tagOffset =
+        b.add(segmentBase, b.urem(entryIdx, b.i32_val(segmentWordSize)));
+    return b.gep(bufferBaseType, i32_ty, bufferBase, tagOffset);
+  };
+
+  SmallVector<CircularStoreDataPack> dataPacks;
+  dataPacks.push_back(
+      {isWriter, valsVec, getRecordPtr(/*entryIndex=*/0), addrSpace});
+  if (metric) {
+    Value metricTag = b.or_(
+        b.shl(maskedScopeId, b.i32_val(23)),
+        b.i32_val(static_cast<uint32_t>(EventType::METRIC) << 20 |
+                  static_cast<uint32_t>(metricType) << 16));
+    Value metricRecord = packLLVector(
+        loc, {metricTag, encodeMetric(metric, metricType, b)}, rewriter);
+    dataPacks.push_back(
+        {isWriter, metricRecord, getRecordPtr(/*entryIndex=*/1), addrSpace});
+  }
+  return dataPacks;
+}
+
+} // namespace
+
+SmallVector<CircularStoreDataPack>
+lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
+                           Value counter, Value metric,
+                           ConversionPatternRewriter &rewriter) {
+  auto b = TritonLLVMOpBuilder(op.getLoc(), rewriter);
+  return lowerCircularStore(
+      op, op.getSegment().getType(), segmentStruct, counter,
+      b.i32_val(op.getScopeId()), op.getIsStart(), op.getEventType(), metric,
+      op.getMetricType(), rewriter);
+}
+
+SmallVector<CircularStoreDataPack>
+lowerCircularStoreOpHelper(CircularStoreDynamicOp op, Value segmentStruct,
+                           Value counter, Value scopeId,
+                           ConversionPatternRewriter &rewriter) {
+  return lowerCircularStore(op, op.getSegment().getType(), segmentStruct,
+                            counter, scopeId, op.getIsStart(),
+                            op.getEventType(), Value(), MetricValueType::NONE,
+                            rewriter);
 }
 
 SmallVector<FunctionOpInterface> getTritonFunctions(ModuleOp mod) {

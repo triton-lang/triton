@@ -41,8 +41,14 @@ struct CircularStoreDataPack {
   uint32_t addrSpace;
 };
 
-CircularStoreDataPack
+SmallVector<CircularStoreDataPack>
 lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
+                           Value counter, Value metric,
+                           ConversionPatternRewriter &rewriter);
+
+SmallVector<CircularStoreDataPack>
+lowerCircularStoreOpHelper(CircularStoreDynamicOp op, Value segmentStruct,
+                           Value counter, Value scopeId,
                            ConversionPatternRewriter &rewriter);
 
 SmallVector<FunctionOpInterface> getTritonFunctions(ModuleOp mod);

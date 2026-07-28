@@ -36,10 +36,44 @@ def PT_RecordOp : PT_Op<"record", [
   }];
   let arguments = (
     ins UnitAttr: $isStart,
-    StrAttr: $name
+    StrAttr: $name,
+    Optional<AnyType>: $metric,
+    OptionalAttr<StrAttr>: $metricName,
+    DefaultValuedAttr<MetricValueTypeAttr, "MetricValueType::NONE">: $metricType
   );
 
-  let assemblyFormat = "(`start` $isStart^):(`end`)? $name attr-dict";
+  let assemblyFormat = [{
+    (`start` $isStart^):(`end`)? $name
+    (`metric` $metricName `=` $metric^ `:` type($metric))? attr-dict
+  }];
+
+  let hasVerifier = 1;
+}
+
+def PT_AsyncRecordOp : PT_Op<"async_record", [
+  MemoryEffects<[MemRead<DefaultResource>, MemWrite<DefaultResource>]>
+]> {
+  let summary = "Start or end an asynchronous scope";
+  let arguments = (ins
+    UnitAttr:$isStart,
+    OptionalAttr<StrAttr>:$name,
+    Optional<I32>:$inputToken
+  );
+  let results = (outs Optional<I32>:$resultToken);
+  let assemblyFormat = [{
+    (`start` $isStart^ $name `:` type($resultToken)):
+    (`end` $inputToken `:` type($inputToken))?
+    attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def PT_MarkOp : PT_Op<"mark", [
+  MemoryEffects<[MemRead<DefaultResource>, MemWrite<DefaultResource>]>
+]> {
+  let summary = "Record an instantaneous timestamp";
+  let arguments = (ins StrAttr:$name);
+  let assemblyFormat = "$name attr-dict";
 }
 
 #endif // PROTON_OPS

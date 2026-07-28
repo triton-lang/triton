@@ -31,8 +31,13 @@ struct CircularStoreOpConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    auto dataPack =
-        lowerCircularStoreOpHelper(op, adaptor.getSegment(), rewriter);
+    auto dataPacks = lowerCircularStoreOpHelper(
+        op, adaptor.getSegment(), adaptor.getCounter(), adaptor.getMetric(),
+        rewriter);
+    if (dataPacks.size() != 1)
+      return op.emitOpError(
+          "in-kernel metrics are only supported on NVIDIA");
+    auto &dataPack = dataPacks.front();
 
     uint32_t addrSpace = dataPack.addrSpace;
     if (addrSpace == 1) {

@@ -47,14 +47,39 @@ def PTG_CircularStoreOp : PTG_Op<"circular_store", [
     PTG_SegmentType:$segment,
     AnyTypeOf<[I32, I64]>:$counter,
     UnitAttr:$isStart,
-    I32Attr:$scopeId
+    I32Attr:$scopeId,
+    Optional<AnyType>:$metric,
+    DefaultValuedAttr<EventTypeAttr, "EventType::SCOPE">:$eventType,
+    DefaultValuedAttr<MetricValueTypeAttr, "MetricValueType::NONE">:$metricType
   );
 
   let hasVerifier = 1;
 
   let assemblyFormat = [{
-    (`start` $isStart^):(`end`)? $segment `,` $counter attr-dict `:`
+    (`start` $isStart^):(`end`)? $segment `,` $counter
+    (`metric` $metric^ `:` type($metric))? attr-dict `:`
     qualified(type($segment)) `,` type($counter)
+  }];
+}
+
+def PTG_CircularStoreDynamicOp : PTG_Op<"circular_store_dynamic", [
+    MemoryEffects<[MemRead<DefaultResource>, MemWrite<DefaultResource>]>
+]> {
+  let summary = "Store an event with a runtime scope identifier";
+
+  let arguments = (ins
+    PTG_SegmentType:$segment,
+    AnyTypeOf<[I32, I64]>:$counter,
+    I32:$scopeId,
+    UnitAttr:$isStart,
+    DefaultValuedAttr<EventTypeAttr, "EventType::ASYNC">:$eventType
+  );
+
+  let hasVerifier = 1;
+
+  let assemblyFormat = [{
+    (`start` $isStart^):(`end`)? $segment `,` $counter `,` $scopeId attr-dict
+    `:` qualified(type($segment)) `,` type($counter)
   }];
 }
 

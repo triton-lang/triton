@@ -14,6 +14,9 @@ constexpr uint32_t kWordsPerEntry = 2;
 enum class ParseState { START, END, INIT };
 
 struct CircularLayoutParserConfig : public ParserConfig {
+  // Trace layout version. Version 1 uses all 23 low tag bits for the clock;
+  // version 2 reserves seven of those bits for event and metric types.
+  uint32_t version = 2;
   // The total number of unit (e.g., num of warps) in CTA
   size_t totalUnits = 0;
   // Scratch memory size in bytes per CTA (scratchMemSize = metadata_size +
@@ -37,6 +40,7 @@ struct CircularLayoutParserResult {
     uint32_t count = 0;
 
     std::vector<ProfileEvent> profileEvents;
+    std::vector<std::shared_ptr<CycleEntry>> markers;
   };
 
   struct BlockTrace {

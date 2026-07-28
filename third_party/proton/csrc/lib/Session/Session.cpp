@@ -273,13 +273,14 @@ void SessionManager::initFunctionMetadata(
     uint64_t functionId, const std::string &functionName,
     const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
     const std::vector<std::pair<size_t, size_t>> &scopeIdParents,
-    const std::string &metadataPath) {
+    const std::string &metadataPath,
+    const std::vector<std::pair<size_t, std::string>> &scopeIdMetrics) {
   std::lock_guard<std::mutex> lock(mutex);
   executeInterface(instrumentationInterfaceCounts,
                    [&](auto *instrumentationInterface) {
                      instrumentationInterface->initFunctionMetadata(
                          functionId, functionName, scopeIdNames, scopeIdParents,
-                         metadataPath);
+                         metadataPath, scopeIdMetrics);
                    });
 }
 

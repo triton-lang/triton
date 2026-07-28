@@ -14,6 +14,7 @@ namespace proton {
 
 struct KernelMetadata {
   std::map<int, std::string> scopeName;
+  std::map<int, std::string> scopeMetricName;
   std::string kernelName;
   std::vector<std::string> callStack;
 };

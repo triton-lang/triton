@@ -57,10 +57,22 @@ template <typename T, typename OP> bool hasOperator(T *o) {
   return exist;
 }
 
+template <typename T> bool hasProtonEvent(T *o) {
+  bool exists = false;
+  o->walk([&](Operation *op) {
+    if (isa<proton::RecordOp, proton::AsyncRecordOp, proton::MarkOp>(op)) {
+      exists = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return exists;
+}
+
 void instrumentWarpSpecializeOps(FuncOp func, Value buffer, Value profileMem) {
   for (auto wsOp : func.getOps<triton::gpu::WarpSpecializeOp>()) {
     auto loc = wsOp.getLoc();
-    if (hasOperator<Operation, proton::RecordOp>(wsOp.getOperation())) {
+    if (hasProtonEvent(wsOp.getOperation())) {
       auto partOp = wsOp.getPartitionOp();
       partOp->insertOperands(partOp->getNumOperands(), {buffer, profileMem});
       for (Region *region : wsOp.getPartitionRegions()) {
@@ -79,11 +91,62 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
       clockExtension ? mlir::IntegerType::get(builder.getContext(), 64)
                      : mlir::IntegerType::get(builder.getContext(), 32);
 
-  // Replace all proton::RecordOp in the worker warps.
+  auto lowerEvent = [&](Operation *op, Value targetSegment) -> LogicalResult {
+    builder.setInsertionPoint(op);
+    Value counter = gpu::ReadCounterOp::create(builder, op->getLoc(), clkType,
+                                               metricType);
+
+    if (auto record = dyn_cast<proton::RecordOp>(op)) {
+      int scopeId = scopeInfo.getOpScopeId(record);
+      if (scopeId > 255)
+        return record.emitOpError("scope id exceeds the 8-bit encoding");
+      gpu::CircularStoreOp::create(
+          builder, record.getLoc(), targetSegment, counter,
+          record.getIsStart(), scopeId, record.getMetric(), EventType::SCOPE,
+          record.getMetricType());
+      record.erase();
+      return success();
+    }
+    if (auto asyncRecord = dyn_cast<proton::AsyncRecordOp>(op)) {
+      if (asyncRecord.getIsStart()) {
+        int scopeId = scopeInfo.getOpScopeId(asyncRecord);
+        if (scopeId > 255)
+          return asyncRecord.emitOpError(
+              "scope id exceeds the 8-bit encoding");
+        gpu::CircularStoreOp::create(
+            builder, asyncRecord.getLoc(), targetSegment, counter, true,
+            scopeId, Value(), EventType::ASYNC, MetricValueType::NONE);
+        Value token = arith::ConstantIntOp::create(
+            builder, asyncRecord.getLoc(), scopeId, 32);
+        asyncRecord.getResultToken().replaceAllUsesWith(token);
+      } else {
+        gpu::CircularStoreDynamicOp::create(
+            builder, asyncRecord.getLoc(), targetSegment, counter,
+            asyncRecord.getInputToken(), false, EventType::ASYNC);
+      }
+      asyncRecord.erase();
+      return success();
+    }
+    if (auto mark = dyn_cast<proton::MarkOp>(op)) {
+      int scopeId = scopeInfo.getOpScopeId(mark);
+      if (scopeId > 255)
+        return mark.emitOpError("scope id exceeds the 8-bit encoding");
+      gpu::CircularStoreOp::create(
+          builder, mark.getLoc(), targetSegment, counter, true, scopeId,
+          Value(), EventType::MARK, MetricValueType::NONE);
+      mark.erase();
+      return success();
+    }
+    return success();
+  };
+
+  bool loweringFailed = false;
+
+  // Replace all Proton events in the worker warps.
   func->walk([&](triton::gpu::WarpSpecializePartitionsOp partitions) {
     for (auto &partition : partitions.getPartitionRegions()) {
       auto loc = partitions.getLoc();
-      if (hasOperator<Region, proton::RecordOp>(&partition)) {
+      if (hasProtonEvent(&partition)) {
         Block &block = partition.front();
         builder.setInsertionPointToStart(&block);
         int argNum = block.getNumArguments();
@@ -97,16 +160,13 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
         // Restore warp-level context before profiling.
         gpu::RestoreCtxOp::create(builder, loc, newSegment, profileMemArg);
 
-        // Replace all proton::RecordOp.
-        partition.walk([&](proton::RecordOp record) {
-          builder.setInsertionPoint(record);
-
-          Value counter = gpu::ReadCounterOp::create(builder, record.getLoc(),
-                                                     clkType, metricType);
-          int scopeId = scopeInfo.getOpScopeId(record);
-          gpu::CircularStoreOp::create(builder, record.getLoc(), newSegment,
-                                       counter, record.getIsStart(), scopeId);
-          record.erase();
+        // Replace all Proton events.
+        partition.walk([&](Operation *op) {
+          if (!isa<proton::RecordOp, proton::AsyncRecordOp,
+                   proton::MarkOp>(op))
+            return;
+          if (failed(lowerEvent(op, newSegment)))
+            loweringFailed = true;
         });
 
         // Finalize and save warp-level context before each warp returns.
@@ -123,20 +183,20 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
     }
   });
 
-  // Replace all proton::RecordOp in the master warps. For the master warps, we
+  if (loweringFailed)
+    return failure();
+
+  // Replace all Proton events in the master warps. For the master warps, we
   // don't need to restore warp-level context and we save the context in the end
   // of kernel (right before FinalizeOp).
-  func->walk([&](proton::RecordOp record) {
-    builder.setInsertionPoint(record);
-    Value counter = gpu::ReadCounterOp::create(builder, record.getLoc(),
-                                               clkType, metricType);
-    int scopeId = scopeInfo.getOpScopeId(record);
-    gpu::CircularStoreOp::create(builder, record.getLoc(), segment, counter,
-                                 record.getIsStart(), scopeId);
-    record.erase();
+  func->walk([&](Operation *op) {
+    if (!isa<proton::RecordOp, proton::AsyncRecordOp, proton::MarkOp>(op))
+      return;
+    if (failed(lowerEvent(op, segment)))
+      loweringFailed = true;
   });
 
-  return success();
+  return loweringFailed ? failure() : success();
 }
 
 int getAllocSharedMemSize(int maxSharedMemSize, int sharedMemUsed,
@@ -368,9 +428,9 @@ public:
 
     FuncOp func = *m.getOps<triton::FuncOp>().begin();
 
-    // Check if there are any proton records to process
-    if (!hasOperator<Operation, proton::RecordOp>(func.getOperation())) {
-      return; // No proton records to process, silently return
+    // Check if there are any Proton events to process.
+    if (!hasProtonEvent(func.getOperation())) {
+      return; // No Proton events to process, silently return.
     }
 
     // Validate profile scratch alignment

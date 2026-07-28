@@ -130,6 +130,24 @@ convertToTimelineTrace(std::vector<CycleEvent> &cycleEvents) {
     return getInt64Value(event.cycleMetric, CycleMetric::EndCycle);
   };
 
+  auto isMarker = [&](const CycleEvent &event) {
+    return getInt64Value(event.cycleMetric, CycleMetric::IsMarker) != 0;
+  };
+
+  auto getScalarMetric = [](const MetricValueType &value)
+      -> std::optional<EntryMetricValue> {
+    return std::visit(
+        [](auto &&v) -> std::optional<EntryMetricValue> {
+          using T = std::decay_t<decltype(v)>;
+          if constexpr (std::is_same_v<T, uint64_t> ||
+                        std::is_same_v<T, int64_t> ||
+                        std::is_same_v<T, double>)
+            return EntryMetricValue(v);
+          return std::nullopt;
+        },
+        value);
+  };
+
   auto &sortedEvents = cycleEvents;
   std::sort(sortedEvents.begin(), sortedEvents.end(),
             [&](const CycleEvent &a, const CycleEvent &b) {
@@ -217,6 +235,22 @@ convertToTimelineTrace(std::vector<CycleEvent> &cycleEvents) {
           startEntry->cycle = getStartCycle(event);
           startEntry->isStart = true;
           startEntry->scopeId = scopeNameToId[scopeName];
+
+          if (event.flexibleMetrics && event.flexibleMetrics->size() == 1) {
+            const auto &[metricName, metric] =
+                *event.flexibleMetrics->begin();
+            if (auto value = getScalarMetric(metric.getValues()[0])) {
+              startEntry->metric = *value;
+              startEntry->metricName = metricName;
+            }
+          }
+
+          if (isMarker(event)) {
+            startEntry->eventType = EntryEventType::MARK;
+            unitTrace.markers.push_back(startEntry);
+            eventIndex++;
+            continue;
+          }
 
           auto endEntry = std::make_shared<CycleEntry>();
           endEntry->cycle = getEndCycle(event);

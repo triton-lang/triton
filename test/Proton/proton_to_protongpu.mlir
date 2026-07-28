@@ -12,6 +12,28 @@ module {
 
 // -----
 
+module attributes {"ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: extended_events
+  tt.func @extended_events() {
+    // CHECK-DAG: %[[TOKEN:.*]] = arith.constant 1 : i32
+    %metric = arith.constant 7 : i32
+    // CHECK: %[[METRIC_CLOCK:.*]] = proton_gpu.read_counter : i32
+    // CHECK: proton_gpu.circular_store start %{{.*}}, %[[METRIC_CLOCK]] metric %{{.*}} : i32 {metricType = 4 : i32, scopeId = 0 : i32}
+    // CHECK: proton_gpu.circular_store end %{{.*}}, %{{.*}} {scopeId = 0 : i32}
+    // CHECK: proton_gpu.circular_store start %{{.*}}, %{{.*}} {eventType = 1 : i32, scopeId = 1 : i32}
+    // CHECK: proton_gpu.circular_store_dynamic end %{{.*}}, %{{.*}}, %[[TOKEN]]
+    // CHECK: proton_gpu.circular_store start %{{.*}}, %{{.*}} {eventType = 2 : i32, scopeId = 2 : i32}
+    proton.record start "measured" metric "value (pty)" = %metric : i32 {metricType = 4 : i32}
+    proton.record end "measured"
+    %token = proton.async_record start "async" : i32
+    proton.async_record end %token : i32
+    proton.mark "ready"
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: simple_record
   // CHECK-SELECTIVE-LABEL: tt.func @simple_record

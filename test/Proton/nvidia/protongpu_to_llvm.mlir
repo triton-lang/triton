@@ -52,6 +52,33 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: extended_event_lowering
+  llvm.func @extended_event_lowering() {
+    // A metric start consumes two records (four words).
+    // CHECK-DAG: llvm.mlir.constant(4 : i32)
+    // CHECK-DAG: llvm.bitcast %{{.*}} : f32 to i32
+    // Metric type bits on the scope header and metric-extension tag.
+    // CHECK-DAG: llvm.mlir.constant(655360 : i32)
+    // CHECK-DAG: llvm.mlir.constant(3801088 : i32)
+    // Metric start (two stores), async end, and marker.
+    // CHECK-COUNT-4: st.shared::cta.v2.b32
+    %buffer = ttg.local_alloc : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
+    %segment = proton_gpu.segment_alloc %buffer : !ttg.memdesc<256xi32, #shared, #smem, mutable> -> !proton_gpu.segment<1024, #smem, warp>
+    %clock = arith.constant 123 : i32
+    %metric = arith.constant 1.5 : f32
+    proton_gpu.circular_store start %segment, %clock metric %metric : f32 {metricType = 10 : i32, scopeId = 1 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
+    %token = arith.constant 1 : i32
+    proton_gpu.circular_store_dynamic end %segment, %clock, %token : !proton_gpu.segment<1024, #smem, warp>, i32
+    proton_gpu.circular_store start %segment, %clock {eventType = 2 : i32, scopeId = 2 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
+    llvm.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: convert_circular_smem_store_nested
   llvm.func @convert_circular_smem_store_nested() {
@@ -64,7 +91,8 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-DAG: scf.for
     // CHECK-DAG: scf.for
     // CHECK-DAG: %[[CYCLE1:.*]] = llvm.inline_asm has_side_effects{{.*}}%clock
-    // CHECK-DAG: %[[INDEX:.*]] = llvm.urem
+    // CHECK-DAG: %[[NESTED_CUR_INDEX:.*]] = llvm.load
+    // CHECK-DAG: %[[INDEX:.*]] = llvm.urem %[[NESTED_CUR_INDEX]],
     // CHECK-DAG: %[[SMEM_OFFSET:.*]] = llvm.add {{.*}}, %[[INDEX]]
     // CHECK-DAG: %[[SMEM_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[SMEM_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i32
     // CHECK-DAG: llvm.inline_asm has_side_effects{{.*}}st.shared::cta.v2.b32{{.*}}%[[SMEM_PTR]], %{{.*}}, %{{.*}}, %{{.*}}
@@ -98,7 +126,8 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-DAG: %[[P2:.*]] = llvm.icmp "eq" %[[WARPID]], %{{.*}}
     // CHECK-DAG: %[[ADDR2:.*]] = llvm.select %[[P2]], %{{.*}}, %[[ADDR1]]
     // CHECK-DAG: %[[CYCLE1:.*]] = llvm.inline_asm has_side_effects{{.*}}%clock
-    // CHECK-DAG: %[[INDEX:.*]] = llvm.urem
+    // CHECK-DAG: %[[FLAT_CUR_INDEX:.*]] = llvm.load
+    // CHECK-DAG: %[[INDEX:.*]] = llvm.urem %[[FLAT_CUR_INDEX]],
     // CHECK-DAG: %[[SMEM_OFFSET:.*]] = llvm.add %{{.*}} %[[INDEX]]
     // CHECK-DAG: %[[SMEM_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[SMEM_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i32
     // CHECK-DAG: llvm.inline_asm has_side_effects{{.*}}st.shared::cta.v2.b32{{.*}}%[[SMEM_PTR]], %{{.*}}, %{{.*}}, %{{.*}}
