@@ -706,6 +706,14 @@ private:
         funcBuilder.createVerifyBarrierInitializedCall(b, barrier, pred, op,
                                                        currentCTAMask(b));
         funcBuilder.createInvalidateBarrierStateCall(b, barrier, pred, op);
+        for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
+          funcBuilder.createClearBarrierWriteTrackingCall(b, barrier, pred,
+                                                          memType, op);
+          funcBuilder.createClearBarrierReadTrackingCall(b, barrier, pred,
+                                                         memType, op);
+        }
+        funcBuilder.createClearBarrierProxyAccessTrackingCall(b, barrier, pred,
+                                                              op);
       }
       if (auto asyncCommitGroupOp = dyn_cast<ttg::AsyncCommitGroupOp>(op)) {
         if (!auxData.commits[CommitKind::AsyncCp].empty())
@@ -831,7 +839,8 @@ private:
           wb, alloc, getThreadPeersMask(thread, auxData.threadLayout), pred,
           memType, op);
     }
-    funcBuilder.createCompleteBarrierWaitCall(wb, alloc, baseThread, pred, op);
+    funcBuilder.createCompleteBarrierWaitCall(wb, alloc, baseThread, pred,
+                                              op);
     tti::ExperimentalLockReleaseOp::create(wb, lock, pred);
   }
 

@@ -128,8 +128,8 @@ public:
   void createInitBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
                                   int count, Value pred,
                                   Operation *insertPoint);
-  // invalidateBarrierState: clear the tracked barrier lifecycle state, waiting
-  // bits, and shared, tensor, and proxy tracking for the same barrier row.
+  // invalidateBarrierState: clear the tracked barrier lifecycle state and any
+  // waiting bits for the barrier.
   void createInvalidateBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
                                         Value pred, Operation *insertPoint);
   // verifyAndUpdateBarrierState: Validate barrier initialization, an arrive
@@ -168,6 +168,16 @@ public:
                                             Operation *insertPoint,
                                             Value barrierCTAs,
                                             Value effectCTAs);
+  // clearBarrierWriteTracking: clear all write tracking associated with the
+  // given barrier row.
+  void createClearBarrierWriteTrackingCall(ImplicitLocOpBuilder &b, Value mbar,
+                                           Value pred, MemType memType,
+                                           Operation *insertPoint);
+  // clearBarrierReadTracking: clear all read tracking associated with the
+  // given barrier row.
+  void createClearBarrierReadTrackingCall(ImplicitLocOpBuilder &b, Value mbar,
+                                          Value pred, MemType memType,
+                                          Operation *insertPoint);
   // transferVisibleAccesses: transfer the barrier's independently tracked
   // write and read visibility to all threads in threadMask.
   void createTransferVisibleAccessesCall(ImplicitLocOpBuilder &b, Value mbar,
@@ -227,6 +237,11 @@ public:
   void createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b, Value mbar,
                                      int thread, Value pred,
                                      Operation *insertPoint);
+  // clearBarrierProxyAccessTracking: clear packed proxy state associated with
+  // an invalidated barrier.
+  void createClearBarrierProxyAccessTrackingCall(ImplicitLocOpBuilder &b,
+                                                 Value mbar, Value pred,
+                                                 Operation *insertPoint);
   // verifyProxyAccess: assert that every generic-proxy access visible to the
   // issuing base thread has crossed fence.proxy.async.
   void createVerifyProxyAccessCall(ImplicitLocOpBuilder &b, Value buf,
