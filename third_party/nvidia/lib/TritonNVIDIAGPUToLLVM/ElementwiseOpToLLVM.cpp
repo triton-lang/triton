@@ -673,7 +673,7 @@ struct PackedArithOpConversion
     Location loc = op.getLoc();
     auto tensorType = op.getResult().getType();
     auto spec = nvidia_gpu::getPackedArithInstructionSpec(op);
-    if (!spec)
+    if (failed(spec))
       return rewriter.notifyMatchFailure(op, "unsupported packed signature");
     const auto &resultInfo = *spec->result;
     unsigned packWidth = resultInfo.lanes;
@@ -681,22 +681,11 @@ struct PackedArithOpConversion
     if (spec->ptx94 && targetInfo.getPtxVersion() < 94)
       return op.emitError("requires PTX ISA 9.4 or newer");
 
-    auto fp4Axis = nvidia_gpu::getPackedArithFp4Axis(op);
-    std::optional<ColumnAction> resultAction;
-    if (fp4Axis)
-      resultAction = nvidia_gpu::getPackedArithRegisterAction(
-          tensorType, *fp4Axis, packWidth);
-
     SmallVector<SmallVector<Value>> operandValues;
     for (auto [index, operand] : llvm::enumerate(adaptor.getOperands())) {
       unsigned operandPackWidth = spec->operands[index]->storageLanes();
       SmallVector<Value> values =
           unpackUniqueTensorElements(loc, operand, rewriter);
-      if (fp4Axis)
-        values = nvidia_gpu::getPackedArithRegisterAction(
-                     cast<RankedTensorType>(op->getOperand(index).getType()),
-                     *fp4Axis, operandPackWidth)
-                     ->apply(values);
       if (values.size() != packCount * operandPackWidth)
         return rewriter.notifyMatchFailure(
             op, "packed operand has the wrong number of unique elements");
@@ -742,8 +731,6 @@ struct PackedArithOpConversion
                          unpackLLVector(loc, resultVector, rewriter));
     }
 
-    if (resultAction)
-      packedResults = resultAction->inverse().apply(packedResults);
     rewriter.replaceOp(op, packUniqueTensorElements(loc, getTypeConverter(),
                                                     packedResults, rewriter,
                                                     tensorType));

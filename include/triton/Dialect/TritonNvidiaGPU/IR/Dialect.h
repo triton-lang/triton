@@ -76,12 +76,9 @@ struct PackedArithInstructionSpec {
   bool ptx94;
 };
 
-std::optional<PackedArithInstructionSpec>
+FailureOr<PackedArithInstructionSpec>
 getPackedArithInstructionSpec(PackedArithOp op);
 std::optional<unsigned> getPackedArithFp4Axis(PackedArithOp op);
-std::optional<ColumnAction>
-getPackedArithRegisterAction(RankedTensorType tensorType, unsigned axis,
-                             unsigned packWidth);
 
 constexpr static char AttrTwoCTAsName[] = "ttng.two-ctas";
 

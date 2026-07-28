@@ -2101,14 +2101,11 @@ struct Fp4ToFpPattern : public OpRewritePattern<ttg::Fp4ToFpOp> {
   }
 };
 
-template <ttng::PackedArithOpKind Kind, typename IntOp>
 struct PackedArithPattern : public OpRewritePattern<ttng::PackedArithOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(ttng::PackedArithOp op,
                                 PatternRewriter &rewriter) const override {
-    if (op.getOpKind() != Kind)
-      return failure();
     auto resultTy = op.getType();
     auto resultIntTy = cast<RankedTensorType>(getIntTypeLike(resultTy));
     auto loc = op.getLoc();
@@ -2137,11 +2134,29 @@ struct PackedArithPattern : public OpRewritePattern<ttng::PackedArithOp> {
     }
 
     Value lhs = payloads[0], rhs = payloads[1];
-    if constexpr (Kind == ttng::PackedArithOpKind::FMA) {
+    Value result;
+    using Kind = ttng::PackedArithOpKind;
+    switch (op.getOpKind()) {
+    case Kind::ADD:
+      result = arith::AddIOp::create(rewriter, loc, lhs, rhs);
+      break;
+    case Kind::SUB:
+      result = arith::SubIOp::create(rewriter, loc, lhs, rhs);
+      break;
+    case Kind::MUL:
+      result = arith::MulIOp::create(rewriter, loc, lhs, rhs);
+      break;
+    case Kind::FMA:
       lhs = arith::MulIOp::create(rewriter, loc, lhs, rhs);
-      rhs = payloads[2];
+      result = arith::AddIOp::create(rewriter, loc, lhs, payloads[2]);
+      break;
+    case Kind::MIN:
+      result = arith::MinSIOp::create(rewriter, loc, lhs, rhs);
+      break;
+    case Kind::MAX:
+      result = arith::MaxSIOp::create(rewriter, loc, lhs, rhs);
+      break;
     }
-    Value result = IntOp::create(rewriter, loc, lhs, rhs);
     rewriter.replaceOp(op, unembedToFloat(rewriter, loc, result, resultTy));
     return success();
   }
@@ -3252,15 +3267,8 @@ public:
                  ClampFOpPattern, NegFOpPattern, DivFOpPattern,
                  PreciseDivFOpPattern, RemFOpPattern, FmaPattern, ExpOpPattern,
                  Exp2OpPattern, CosOpPattern, SinOpPattern, ExtFOpPattern,
-                 TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern, DotPattern,
-                 DotScaledPattern>(&getContext());
-    using PackedKind = ttng::PackedArithOpKind;
-    patterns.add<PackedArithPattern<PackedKind::ADD, arith::AddIOp>,
-                 PackedArithPattern<PackedKind::SUB, arith::SubIOp>,
-                 PackedArithPattern<PackedKind::MUL, arith::MulIOp>,
-                 PackedArithPattern<PackedKind::FMA, arith::AddIOp>,
-                 PackedArithPattern<PackedKind::MIN, arith::MinSIOp>,
-                 PackedArithPattern<PackedKind::MAX, arith::MaxSIOp>>(
+                 TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern,
+                 PackedArithPattern, DotPattern, DotScaledPattern>(
         &getContext());
     patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
     patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);

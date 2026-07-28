@@ -1599,6 +1599,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#fp4 = #ttg.linear<{register = [[1], [2]], lane = [[4], [8], [16], [32], [64]], warp = [[128], [256]], block = []}>
+#result = #ttg.linear<{register = [[2], [1], [4]], lane = [[8], [16], [32], [64], [128]], warp = [[256], [512]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_fp4_noncanonical_register_order(
+      %a: tensor<512xi8, #fp4>,
+      %b: tensor<1024xf8E4M3FN, #result>) {
+    // expected-error @below {{'ttng.packed_arith' op fp4 operand 0 must have a layout compatible with the result}}
+    %0 = ttng.packed_arith add %a, %b : (tensor<512xi8, #fp4>, tensor<1024xf8E4M3FN, #result>) -> tensor<1024xf8E4M3FN, #result>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   tt.func @packed_arith_fp6_is_unsupported(

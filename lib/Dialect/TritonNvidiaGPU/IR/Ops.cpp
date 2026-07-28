@@ -87,21 +87,21 @@ static const PackedArithTypeInfo *getPackedArithTypeInfo(Type elementType) {
   return nullptr;
 }
 
-std::optional<PackedArithInstructionSpec>
+FailureOr<PackedArithInstructionSpec>
 getPackedArithInstructionSpec(PackedArithOp op) {
   auto kind = op.getOpKind();
   if (op.getNumOperands() != (kind == PackedArithOpKind::FMA ? 3u : 2u))
-    return std::nullopt;
+    return failure();
 
   const auto *result = getPackedArithTypeInfo(op.getType().getElementType());
   if (!result)
-    return std::nullopt;
+    return failure();
   SmallVector<const PackedArithTypeInfo *, 3> operands;
   for (Value operand : op.getOperands()) {
     const auto *info = getPackedArithTypeInfo(
         cast<RankedTensorType>(operand.getType()).getElementType());
     if (!info)
-      return std::nullopt;
+      return failure();
     operands.push_back(info);
   }
 
@@ -145,7 +145,7 @@ getPackedArithInstructionSpec(PackedArithOp op) {
         result, std::move(operands), signature.modifiers,
         signature.operandSuffixes, signature.ptx94};
   }
-  return std::nullopt;
+  return failure();
 }
 
 std::optional<unsigned> getPackedArithFp4Axis(PackedArithOp op) {
@@ -173,31 +173,25 @@ std::optional<unsigned> getPackedArithFp4Axis(PackedArithOp op) {
   return axis;
 }
 
-std::optional<ColumnAction>
-getPackedArithRegisterAction(RankedTensorType tensorType, unsigned axis,
-                             unsigned packWidth) {
-  auto layout = toLinearLayout(tensorType);
-  layout = actionRemoveBroadcastedRegs(layout).apply(layout);
-  auto kReg = StringAttr::get(tensorType.getContext(), "register");
-  auto outDims = llvm::to_vector(layout.getOutDimNames());
-  if (axis >= outDims.size())
-    return std::nullopt;
-  auto packedLanes = LinearLayout::identity1D(packWidth, kReg, outDims[axis]);
-  return regPermForDivide(layout, packedLanes, /*left=*/true);
-}
-
 static bool arePackedFp4LayoutsCompatible(RankedTensorType srcType,
                                           RankedTensorType resultType,
                                           unsigned axis) {
-  auto srcLayout = toLinearLayout(srcType);
-  auto resultLayout = toLinearLayout(resultType);
-  srcLayout = actionRemoveBroadcastedRegs(srcLayout).apply(srcLayout);
-  resultLayout = actionRemoveBroadcastedRegs(resultLayout).apply(resultLayout);
-  auto reg = StringAttr::get(srcType.getContext(), "register");
-  auto dims = llvm::to_vector(resultLayout.getOutDimNames());
-  auto expected = LinearLayout::identity1D(2, reg, dims[axis]) * srcLayout;
-  auto action = regPermForDivide(resultLayout, expected, /*left=*/true);
-  return action && action->apply(resultLayout) == expected;
+  auto *dialect =
+      resultType.getEncoding()
+          .getDialect()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>();
+  if (!dialect)
+    return false;
+
+  Attribute inferredSrcEncoding;
+  if (failed(dialect->inferFp4ToFpOpEncoding(
+          resultType.getShape(), axis, resultType.getEncoding(),
+          inferredSrcEncoding, /*fwdInference=*/false, std::nullopt)))
+    return false;
+
+  return areLayoutsEquivalent(srcType.getShape(),
+                              cast<LayoutEncodingTrait>(inferredSrcEncoding),
+                              cast<LayoutEncodingTrait>(srcType.getEncoding()));
 }
 
 LogicalResult PackedArithOp::verify() {
@@ -215,7 +209,7 @@ LogicalResult PackedArithOp::verify() {
     return emitOpError("requires a distributed tensor layout");
 
   auto instruction = getPackedArithInstructionSpec(*this);
-  if (!instruction) {
+  if (failed(instruction)) {
     auto diag = emitOpError()
                 << "unsupported " << stringifyPackedArithOpKind(getOpKind())
                 << " signature " << resultInfo->suffix << " <- (";
@@ -238,11 +232,6 @@ LogicalResult PackedArithOp::verify() {
   if (resultRegisters < packWidth || resultRegisters % packWidth != 0)
     return emitOpError() << "result layout must provide a multiple of "
                          << packWidth << " unique elements per thread";
-  if (fp4Axis && !getPackedArithRegisterAction(tensorType, *fp4Axis, packWidth))
-    return emitOpError()
-           << "result layout cannot provide " << packWidth
-           << " fp4-aligned elements per thread along inferred axis "
-           << *fp4Axis;
 
   for (auto [index, operand] : llvm::enumerate(getOperands())) {
     auto operandType = cast<RankedTensorType>(operand.getType());
@@ -254,12 +243,6 @@ LogicalResult PackedArithOp::verify() {
         return emitOpError() << "fp4 operand " << index
                              << " must have a layout compatible with the "
                                 "result";
-      if (!getPackedArithRegisterAction(operandType, *fp4Axis,
-                                        operandInfo.storageLanes()))
-        return emitOpError()
-               << "fp4 operand " << index << " layout cannot provide "
-               << operandInfo.storageLanes()
-               << " packed bytes per thread along inferred axis " << *fp4Axis;
       continue;
     }
     if (operandType.getShape() != tensorType.getShape())
