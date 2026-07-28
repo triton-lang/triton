@@ -117,9 +117,9 @@ private:
                     const DenseMap<Value, Attribute> &assignments) const;
   uint64_t
   getGlobalAssignmentCost(const DenseMap<Value, Attribute> &assignments) const;
-  bool buildGlobalComponentProposal(
-      Value seed, Attribute encoding,
-      DenseMap<Value, Attribute> &assignments) const;
+  bool
+  buildGlobalComponentProposal(Value seed, Attribute encoding,
+                               DenseMap<Value, Attribute> &assignments) const;
 
   // map from value to layout information.
   llvm::MapVector<Value, LayoutInfo> layouts;
@@ -272,6 +272,16 @@ static bool isFixedLayoutBoundary(Operation *op) {
 
 static bool supportsGlobalLayoutAssignment(FuncOp funcOp) {
   WalkResult result = funcOp.walk([&](Operation *op) {
+    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+      WalkResult body = forOp.walk([&](Operation *nested) {
+        if (nested != forOp.getOperation() && isFixedLayoutBoundary(nested))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      });
+      return body.wasInterrupted() ? WalkResult::interrupt()
+                                   : WalkResult::advance();
+    }
+
     bool hasTensorResult = llvm::any_of(op->getResults(), [](Value result) {
       return isa<RankedTensorType>(result.getType());
     });
@@ -304,11 +314,11 @@ static bool supportsGlobalLayoutAssignment(FuncOp funcOp) {
     // multi-output reduction still needs all of its results selected together.
     if (auto reduce = dyn_cast<ReduceOp>(op))
       return reduce->getNumResults() == 1 ? WalkResult::advance()
-                                           : WalkResult::interrupt();
+                                          : WalkResult::interrupt();
 
-    // Multi-result splits and loop-carried values require joint component
-    // constraints before their encodings can be changed safely.
-    if (isa<scf::ForOp, scf::WhileOp, SplitOp>(op))
+    // While regions and multi-result splits require their own joint rewrite
+    // contracts before their encodings can be changed safely.
+    if (isa<scf::WhileOp, SplitOp>(op))
       return WalkResult::interrupt();
 
     if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
@@ -348,6 +358,9 @@ void LayoutPropagation::initAnchorLayout() {
     if (strategy != LayoutAssignmentStrategy::Global ||
         !isFixedLayoutBoundary(op))
       return;
+
+    for (Value result : op->getResults())
+      addAnchor(result);
 
     for (Value operand : op->getOperands()) {
       if (auto tensorType = dyn_cast<RankedTensorType>(operand.getType()))
@@ -578,11 +591,13 @@ static uint64_t getLayoutTransitionCost(Value value, Attribute sourceEncoding,
   if (cvtReordersRegisters(sourceType, resultType))
     return 1;
 
+  // Cross-lane traffic scales with the physical element width, so prefer a
+  // conversion after narrowing when both placements are otherwise equivalent.
   int64_t elementCount = std::max<int64_t>(32, tensorType.getNumElements());
   int64_t elementBitWidth = 32;
   if (tensorType.getElementType().isIntOrFloat())
     elementBitWidth = std::max<int64_t>(
-        32, tensorType.getElementType().getIntOrFloatBitWidth());
+        8, tensorType.getElementType().getIntOrFloatBitWidth());
   uint64_t byteCount = (elementCount * elementBitWidth) / 8;
 
   if (cvtNeedsWarpShuffle(sourceType, resultType))
@@ -606,6 +621,21 @@ bool LayoutPropagation::canAssignEncoding(
   auto tensorType = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorType || !encoding)
     return false;
+
+  if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+    auto forOp = dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp());
+    if (!forOp || blockArg.getArgNumber() == 0)
+      return encoding == tensorType.getEncoding();
+    return getAssignedEncoding(forOp.getResult(blockArg.getArgNumber() - 1),
+                               assignments) == encoding;
+  }
+
+  if (auto result = dyn_cast<OpResult>(value)) {
+    if (auto forOp = dyn_cast<scf::ForOp>(result.getOwner()))
+      return getAssignedEncoding(
+                 forOp.getRegionIterArg(result.getResultNumber()),
+                 assignments) == encoding;
+  }
 
   if (encoding == tensorType.getEncoding())
     return true;
@@ -775,8 +805,7 @@ bool LayoutPropagation::buildGlobalComponentProposal(
       return true;
 
     auto found = layouts.find(value);
-    if (found == layouts.end() ||
-        !found->second.encodings.contains(candidate))
+    if (found == layouts.end() || !found->second.encodings.contains(candidate))
       return true;
 
     // A physical input or memory boundary remains fixed. Its disagreement is
@@ -801,6 +830,14 @@ bool LayoutPropagation::buildGlobalComponentProposal(
                ReduceOp>(op);
   };
 
+  auto requestForComponent = [&](scf::ForOp forOp, unsigned resultIndex,
+                                 Attribute candidate) {
+    for (Value tied : getTiedArgs(forOp, resultIndex))
+      if (!request(tied, candidate))
+        return false;
+    return true;
+  };
+
   if (!request(seed, encoding) || !requested.contains(seed))
     return false;
 
@@ -809,8 +846,12 @@ bool LayoutPropagation::buildGlobalComponentProposal(
     assignments[value] = candidate;
 
     if (Operation *producer = value.getDefiningOp()) {
-      if (isLayoutComponent(producer) &&
-          !isFixedLayoutBoundary(producer)) {
+      if (auto forOp = dyn_cast<scf::ForOp>(producer)) {
+        auto result = cast<OpResult>(value);
+        if (!requestForComponent(forOp, result.getResultNumber(), candidate))
+          return false;
+      }
+      if (isLayoutComponent(producer) && !isFixedLayoutBoundary(producer)) {
         Attribute source = isa<ConvertLayoutOp>(producer)
                                ? candidate
                                : inferSrcEncoding(producer, candidate);
@@ -820,10 +861,32 @@ bool LayoutPropagation::buildGlobalComponentProposal(
               return false;
         }
       }
+    } else if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+      if (auto forOp =
+              dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp())) {
+        if (blockArg.getArgNumber() != 0 &&
+            !requestForComponent(forOp, blockArg.getArgNumber() - 1, candidate))
+          return false;
+      }
     }
 
     for (OpOperand &use : value.getUses()) {
       Operation *user = use.getOwner();
+      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+        if (Value result = forOp.getTiedLoopResult(&use)) {
+          if (!requestForComponent(
+                  forOp, cast<OpResult>(result).getResultNumber(), candidate))
+            return false;
+        }
+        continue;
+      }
+      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+        if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp())) {
+          if (!requestForComponent(forOp, use.getOperandNumber(), candidate))
+            return false;
+        }
+        continue;
+      }
       if (!isLayoutComponent(user) || isFixedLayoutBoundary(user))
         continue;
 
@@ -857,11 +920,32 @@ void LayoutPropagation::resolveGlobalConflicts() {
   }
 
   bool hasJoinConstraints = false;
-  funcOp.walk([&](JoinOp) { hasJoinConstraints = true; });
+  bool hasForConstraints = false;
+  bool hasTensorMemoryConstraints = false;
+  bool hasReductionConstraints = false;
+  funcOp.walk([&](Operation *op) {
+    if (isa<JoinOp>(op))
+      hasJoinConstraints = true;
+    if (isa<scf::ForOp>(op))
+      hasForConstraints = true;
+    if (isa<triton::nvidia_gpu::TMEMLoadOp>(op))
+      hasTensorMemoryConstraints = true;
+    if (isa<ReduceOp>(op))
+      hasReductionConstraints = true;
+  });
+  constexpr unsigned maxFullObjectiveValues = 256;
+  // Keep reductions in their accumulator layout until a narrower output can
+  // cross the tensor-memory boundary without a full-precision exchange.
+  bool hasTensorMemoryReductionConstraints =
+      hasTensorMemoryConstraints && hasReductionConstraints;
+  bool useFullGlobalObjective =
+      (hasJoinConstraints || hasTensorMemoryReductionConstraints) &&
+      layouts.size() <= maxFullObjectiveValues;
 
-  if (hasJoinConstraints) {
+  if (hasJoinConstraints || hasForConstraints ||
+      hasTensorMemoryReductionConstraints) {
     constexpr unsigned maxComponentIterations = 4;
-    constexpr unsigned maxComponentProposals = 128;
+    const unsigned maxComponentProposals = useFullGlobalObjective ? 128 : 32;
     uint64_t currentCost = getGlobalAssignmentCost(assignments);
 
     for (unsigned iteration = 0; iteration < maxComponentIterations;
@@ -907,14 +991,14 @@ void LayoutPropagation::resolveGlobalConflicts() {
 
       Attribute original = assignments.lookup(value);
       Attribute best = original;
-      uint64_t bestCost = hasJoinConstraints
+      uint64_t bestCost = useFullGlobalObjective
                               ? getGlobalAssignmentCost(assignments)
                               : getAssignmentCost(value, best, assignments);
       for (Attribute candidate : info.encodings) {
         if (!canAssignEncoding(value, candidate, assignments))
           continue;
         uint64_t candidateCost;
-        if (hasJoinConstraints) {
+        if (useFullGlobalObjective) {
           assignments[value] = candidate;
           candidateCost = getGlobalAssignmentCost(assignments);
           assignments[value] = original;

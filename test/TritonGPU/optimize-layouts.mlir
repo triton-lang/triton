@@ -546,10 +546,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// A loop result and its region iter_arg cannot be assigned independently.
-// Keep the verifier-proven fallback until complete loop-body rewrite ownership
-// is available; enabling the isolated layout relation is insufficient for
-// production matmul and attention operations.
+// A loop result and its region iter_arg must be assigned as one component.
+// Hoist the single required conversion to the fixed source boundary instead
+// of recreating three conversions for the result's fixed consumers.
 //
 // BASELINE-LABEL: @layout_conflict_for_fanout
 // BASELINE-COUNT-4: ttg.convert_layout
@@ -557,7 +556,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // BASELINE: tt.return
 //
 // OPTIMIZED-LABEL: @layout_conflict_for_fanout
-// OPTIMIZED-COUNT-4: ttg.convert_layout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
 // OPTIMIZED-NOT: ttg.convert_layout
 // OPTIMIZED: tt.return
 
@@ -572,6 +571,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
     %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
       %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      scf.yield %next : tensor<16x16xf32, #target>
+    }
+    %first = arith.mulf %result, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
+  }
+}
+
+// -----
+
+// Memory and synchronization inside a loop are hardware-protocol boundaries.
+// Preserve the existing assignment until the complete loop body can be
+// proven safe to rewrite; changing a persistent matmul's scale-store loop
+// independently corrupts the quantized output.
+//
+// BASELINE-LABEL: @layout_conflict_effectful_for_fanout
+// BASELINE-COUNT-5: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @layout_conflict_effectful_for_fanout
+// OPTIMIZED-COUNT-5: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @layout_conflict_effectful_for_fanout(%ptr: !tt.ptr<f32>, %target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<16x16x!tt.ptr<f32>, #target>
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result = scf.for %iv = %zero to %four step %one iter_args(%acc = %converted) -> (tensor<16x16xf32, #target>) {
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      tt.store %ptrs, %next : tensor<16x16x!tt.ptr<f32>, #target>
       scf.yield %next : tensor<16x16xf32, #target>
     }
     %first = arith.mulf %result, %target : tensor<16x16xf32, #target>

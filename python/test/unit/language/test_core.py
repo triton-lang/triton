@@ -7281,6 +7281,69 @@ def test_libdevice_rint(dtype_str, device):
 
 
 @triton.jit
+def _optimize_layouts_loop_carried_kernel(out_ptr, in_ptr, iterations, BLOCK_SIZE: tl.constexpr):
+    offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    accumulator = tl.load(in_ptr + offsets)
+    for _ in range(iterations):
+        accumulator += offsets
+    tl.store(out_ptr + offsets, accumulator)
+
+
+@pytest.mark.parametrize("optimize_layouts", [False, True])
+@pytest.mark.parametrize("iterations", [0, 1, 4, 17])
+def test_optimize_layouts_loop_carried_values(device, optimize_layouts, iterations):
+    check_cuda_or_hip(device)
+
+    source = torch.arange(512, device=device, dtype=torch.int32)
+    result = torch.empty_like(source)
+    compiled = _optimize_layouts_loop_carried_kernel[(4, )](
+        result, source, iterations, BLOCK_SIZE=128, num_warps=4,
+        optimize_layouts=optimize_layouts,
+    )
+
+    torch.testing.assert_close(result, source + source * iterations, rtol=0, atol=0)
+    assert compiled.metadata.optimize_layouts is optimize_layouts
+
+
+@triton.jit
+def _optimize_layouts_tmem_softmax_kernel(out_ptr, lhs_ptr, rhs_ptr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+                                           BLOCK_K: tl.constexpr):
+    rows = tl.arange(0, BLOCK_M)
+    columns = tl.arange(0, BLOCK_N)
+    contraction = tl.arange(0, BLOCK_K)
+    lhs = tl.load(lhs_ptr + rows[:, None] * BLOCK_K + contraction[None, :])
+    rhs = tl.load(rhs_ptr + contraction[:, None] * BLOCK_N + columns[None, :])
+    accumulator = tl.dot(lhs, rhs, out_dtype=tl.float32)
+    accumulator -= tl.max(accumulator, axis=1)[:, None]
+    numerator = tl.exp(accumulator)
+    probabilities = numerator / tl.sum(numerator, axis=1)[:, None]
+    offsets = rows[:, None] * BLOCK_N + columns[None, :]
+    tl.store(out_ptr + offsets, probabilities.to(tl.float16))
+
+
+@pytest.mark.parametrize("optimize_layouts", [False, True])
+def test_optimize_layouts_tmem_softmax_codegen(device, optimize_layouts):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] != 10:
+        pytest.skip("requires Blackwell tensor-memory dot instructions")
+
+    lhs = torch.randn((128, 64), device=device, dtype=torch.float16) * 0.1
+    rhs = torch.randn((64, 128), device=device, dtype=torch.float16) * 0.1
+    result = torch.empty((128, 128), device=device, dtype=torch.float16)
+    compiled = _optimize_layouts_tmem_softmax_kernel[(1, )](
+        result, lhs, rhs, BLOCK_M=128, BLOCK_N=128, BLOCK_K=64, num_warps=8,
+        optimize_layouts=optimize_layouts,
+    )
+
+    expected = torch.softmax(lhs.float() @ rhs.float(), dim=1).half()
+    torch.testing.assert_close(result, expected, rtol=1e-2, atol=2e-3)
+    assert compiled.metadata.optimize_layouts is optimize_layouts
+    pattern = (r"tcgen05\.ld\.sync\.aligned\.16x32bx2\.x64\.b32"
+               r"(?:(?!st\.shared).)*"
+               r"cvt\.rn\.f16x2\.f32")
+    assert re.search(pattern, compiled.asm["ptx"], flags=re.DOTALL)
+
+
+@triton.jit
 def _optimize_layouts_exact_order_join_chain_kernel(out_ptr, a0, a1, x0, x1, INDEXED: tl.constexpr):
     va0 = tl.full((128, ), a0, tl.int32)
     va1 = tl.full((128, ), a1, tl.int32)
