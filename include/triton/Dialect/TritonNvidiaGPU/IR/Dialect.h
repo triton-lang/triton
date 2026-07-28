@@ -73,12 +73,10 @@ struct PackedArithInstructionSpec {
   SmallVector<const PackedArithTypeInfo *, 3> operands;
   StringRef modifiers;
   unsigned operandSuffixes;
-  bool ptx94;
 };
 
-FailureOr<PackedArithInstructionSpec>
-getPackedArithInstructionSpec(PackedArithOp op);
-std::optional<unsigned> getPackedArithFp4Axis(PackedArithOp op);
+PackedArithInstructionSpec getPackedArithInstructionSpec(PackedArithOp op);
+unsigned getPackedArithFp4Axis(PackedArithOp op);
 
 constexpr static char AttrTwoCTAsName[] = "ttng.two-ctas";
 

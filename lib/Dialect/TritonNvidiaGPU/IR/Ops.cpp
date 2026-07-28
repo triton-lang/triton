@@ -62,7 +62,6 @@ struct PackedArithSignatureRule {
   StringRef operandTypes[3];
   llvm::StringLiteral modifiers;
   unsigned operandSuffixes;
-  bool ptx94;
 };
 } // namespace
 
@@ -87,8 +86,8 @@ static const PackedArithTypeInfo *getPackedArithTypeInfo(Type elementType) {
   return nullptr;
 }
 
-FailureOr<PackedArithInstructionSpec>
-getPackedArithInstructionSpec(PackedArithOp op) {
+static FailureOr<PackedArithInstructionSpec>
+resolvePackedArithInstructionSpec(PackedArithOp op) {
   auto kind = op.getOpKind();
   if (op.getNumOperands() != (kind == PackedArithOpKind::FMA ? 3u : 2u))
     return failure();
@@ -107,20 +106,20 @@ getPackedArithInstructionSpec(PackedArithOp op) {
 
   // clang-format off
   static constexpr PackedArithSignatureRule signatures[] = {
-      // operations       result           operands                     modifiers  suffixes  PTX 9.4
-      {"add sub mul",    X2,              {"=", "="},                  "",        0,        false},
-      {"fma",            X2,              {"=", "=", "="},             "rn",      0,        false},
-      {"min max",        Half,            {"=", "="},                  "",        0,        false},
-      {"add sub",        "f",             {Half, "f"},                 "",        2,        true},
-      {"add sub",        "h",             {"f", "f"},                  "rz.ftz",  2,        true},
-      {"add sub",        "b",             {"f", "f"},                  "rz",      2,        true},
-      {"mul",            "h",             {"f", "f"},                  "ftz.rz",  2,        true},
-      {"mul",            "b",             {"f", "f"},                  "rz",      2,        true},
-      {"mul",            Half,            {"=", "!"},                  "",        2,        true},
-      {"fma",            "f",             {Half, "f", "f"},            "rn",      3,        true},
-      {"add sub",        AlternateResult, {Alternate, "="},            "",        1,        true},
-      {"mul",            AlternateResult, {Alternate, Alternate},      "",        2,        true},
-      {"fma",            AlternateResult, {Alternate, Alternate, "="}, "",        2,        true},
+      // operations       result           operands                     modifiers  suffixes
+      {"add sub mul",    X2,              {"=", "="},                  "",        0},
+      {"fma",            X2,              {"=", "=", "="},             "rn",      0},
+      {"min max",        Half,            {"=", "="},                  "",        0},
+      {"add sub",        "f",             {Half, "f"},                 "",        2},
+      {"add sub",        "h",             {"f", "f"},                  "rz.ftz",  2},
+      {"add sub",        "b",             {"f", "f"},                  "rz",      2},
+      {"mul",            "h",             {"f", "f"},                  "ftz.rz",  2},
+      {"mul",            "b",             {"f", "f"},                  "rz",      2},
+      {"mul",            Half,            {"=", "!"},                  "",        2},
+      {"fma",            "f",             {Half, "f", "f"},            "rn",      3},
+      {"add sub",        AlternateResult, {Alternate, "="},            "",        1},
+      {"mul",            AlternateResult, {Alternate, Alternate},      "",        2},
+      {"fma",            AlternateResult, {Alternate, Alternate, "="}, "",        2},
   };
   // clang-format on
 
@@ -141,14 +140,20 @@ getPackedArithInstructionSpec(PackedArithOp op) {
           return matches(std::get<1>(pair), std::get<0>(pair));
         }))
       continue;
-    return PackedArithInstructionSpec{
-        result, std::move(operands), signature.modifiers,
-        signature.operandSuffixes, signature.ptx94};
+    return PackedArithInstructionSpec{result, std::move(operands),
+                                      signature.modifiers,
+                                      signature.operandSuffixes};
   }
   return failure();
 }
 
-std::optional<unsigned> getPackedArithFp4Axis(PackedArithOp op) {
+PackedArithInstructionSpec getPackedArithInstructionSpec(PackedArithOp op) {
+  auto spec = resolvePackedArithInstructionSpec(op);
+  assert(succeeded(spec) && "expected a verified packed arithmetic operation");
+  return std::move(*spec);
+}
+
+static std::optional<unsigned> inferPackedArithFp4Axis(PackedArithOp op) {
   auto resultShape = op.getType().getShape();
   std::optional<unsigned> axis;
   for (Value operand : op.getOperands()) {
@@ -173,6 +178,13 @@ std::optional<unsigned> getPackedArithFp4Axis(PackedArithOp op) {
   return axis;
 }
 
+unsigned getPackedArithFp4Axis(PackedArithOp op) {
+  auto axis = inferPackedArithFp4Axis(op);
+  assert(axis && "expected a verified packed arithmetic operation with an "
+                 "FP4 operand");
+  return *axis;
+}
+
 LogicalResult PackedArithOp::verify() {
   unsigned expectedOperands = getOpKind() == PackedArithOpKind::FMA ? 3 : 2;
   if (getNumOperands() != expectedOperands)
@@ -187,7 +199,7 @@ LogicalResult PackedArithOp::verify() {
   if (!isa_and_nonnull<DistributedEncodingTrait>(tensorType.getEncoding()))
     return emitOpError("requires a distributed tensor layout");
 
-  auto instruction = getPackedArithInstructionSpec(*this);
+  auto instruction = resolvePackedArithInstructionSpec(*this);
   if (failed(instruction)) {
     auto diag = emitOpError()
                 << "unsupported " << stringifyPackedArithOpKind(getOpKind())
@@ -200,7 +212,7 @@ LogicalResult PackedArithOp::verify() {
     return diag << ")";
   }
 
-  std::optional<unsigned> fp4Axis = getPackedArithFp4Axis(*this);
+  std::optional<unsigned> fp4Axis = inferPackedArithFp4Axis(*this);
   if (!fp4Axis && llvm::any_of(instruction->operands,
                                [](auto *info) { return info->isFP4(); }))
     return emitOpError("requires every fp4 operand to have the result shape "

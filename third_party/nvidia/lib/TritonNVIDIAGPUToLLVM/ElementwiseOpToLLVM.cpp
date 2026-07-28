@@ -661,11 +661,7 @@ struct ExpOpConversionApprox
 
 struct PackedArithOpConversion
     : ConvertOpToLLVMPattern<nvidia_gpu::PackedArithOp> {
-  PackedArithOpConversion(LLVMTypeConverter &typeConverter,
-                          const NVIDIA::TargetInfo &targetInfo,
-                          PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
-  }
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(nvidia_gpu::PackedArithOp op, OpAdaptor adaptor,
@@ -673,24 +669,14 @@ struct PackedArithOpConversion
     Location loc = op.getLoc();
     auto tensorType = op.getResult().getType();
     auto spec = nvidia_gpu::getPackedArithInstructionSpec(op);
-    if (failed(spec))
-      return rewriter.notifyMatchFailure(op, "unsupported packed signature");
-    const auto &resultInfo = *spec->result;
+    const auto &resultInfo = *spec.result;
     unsigned packWidth = resultInfo.lanes;
     unsigned packCount = getUniqueElemsPerThread(tensorType) / packWidth;
-    if (spec->ptx94 && targetInfo.getPtxVersion() < 94)
-      return op.emitError("requires PTX ISA 9.4 or newer");
 
     SmallVector<SmallVector<Value>> operandValues;
-    for (auto [index, operand] : llvm::enumerate(adaptor.getOperands())) {
-      unsigned operandPackWidth = spec->operands[index]->storageLanes();
-      SmallVector<Value> values =
-          unpackUniqueTensorElements(loc, operand, rewriter);
-      if (values.size() != packCount * operandPackWidth)
-        return rewriter.notifyMatchFailure(
-            op, "packed operand has the wrong number of unique elements");
-      operandValues.push_back(std::move(values));
-    }
+    for (Value operand : adaptor.getOperands())
+      operandValues.push_back(
+          unpackUniqueTensorElements(loc, operand, rewriter));
 
     Type resultRegisterType = int_ty(resultInfo.registerBits);
     Type resultVectorType =
@@ -706,7 +692,7 @@ struct PackedArithOpConversion
           "=" +
           NVIDIA::getPtxRegisterSizeCode(resultInfo.registerBits, false)));
       for (auto [index, values] : llvm::enumerate(operandValues)) {
-        const auto &info = *spec->operands[index];
+        const auto &info = *spec.operands[index];
         unsigned width = info.storageLanes();
         auto lanes = ArrayRef(values).slice(packIndex * width, width);
         Value packed = b.bitcast(packLLVector(loc, lanes, rewriter),
@@ -717,10 +703,10 @@ struct PackedArithOpConversion
 
       auto &instruction =
           *ptxBuilder.create(stringifyPackedArithOpKind(op.getOpKind()).str());
-      instruction.o(spec->modifiers.str(), !spec->modifiers.empty())
+      instruction.o(spec.modifiers.str(), !spec.modifiers.empty())
           .o(resultInfo.suffix.str());
       for (const auto *info :
-           ArrayRef(spec->operands).take_front(spec->operandSuffixes))
+           ArrayRef(spec.operands).take_front(spec.operandSuffixes))
         instruction.o(info->suffix.str());
       instruction(asmOperands);
 
@@ -736,9 +722,6 @@ struct PackedArithOpConversion
                                                     tensorType));
     return success();
   }
-
-private:
-  const NVIDIA::TargetInfo &targetInfo;
 };
 
 struct ClampFOpConversion
@@ -928,7 +911,7 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
                                    computeCapability, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
-  patterns.add<PackedArithOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<PackedArithOpConversion>(typeConverter, benefit);
 
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
