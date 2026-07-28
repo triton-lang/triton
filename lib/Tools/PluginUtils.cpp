@@ -135,9 +135,9 @@ const std::vector<Op> TritonPlugin::listOps() const {
   std::vector<Op> ops;
   for (auto i = 0; i < info->numOps; ++i) {
     const auto op = &info->ops[i];
-    if (op->addOp) {
+    if (op->addOp || op->addOpWithPyArg) {
       LLVM_DEBUG(llvm::dbgs() << "Listing custom op " << op->name << "\n");
-      ops.push_back(Op(op->name, op->addOp));
+      ops.push_back(Op(op->name, op->addOp, op->addOpWithPyArg));
     }
   }
   return ops;

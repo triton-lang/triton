@@ -11,3 +11,7 @@ add_triton_library(TritonTools
   MLIRLLVMDialect
   f2reduce
 )
+
+if(TRITON_BUILD_PYTHON_MODULE)
+  target_link_libraries(TritonTools PUBLIC nanobind-static)
+endif()

@@ -23,6 +23,9 @@
 #include <cstdint>
 #include <vector>
 
+struct _object;
+typedef _object PyObject;
+
 /// Identifies the API version understood by this plugin.
 ///
 /// This version should be incremented for ABI-breaking changes in the structs
@@ -44,6 +47,8 @@ using AddPassCallback = void (*)(mlir::PassManager *,
 using RegisterPassCallback = void (*)();
 using RegisterDialectCallback = void (*)(mlir::DialectRegistry *);
 using AddOpCallback = void (*)(TritonOpBuilder &, std::vector<mlir::Value> &);
+using AddOpWithPyArgCallback = PyObject *(*)(TritonOpBuilder &, PyObject *,
+                                             PyObject *);
 
 /// Information provided by a plugin for loading its passes.
 struct PassInfo {
@@ -64,6 +69,7 @@ struct DialectInfo {
 struct OpInfo {
   const char *name;
   AddOpCallback addOp;
+  AddOpWithPyArgCallback addOpWithPyArg = nullptr;
 };
 
 /// Container for all plugin information; this is returned by the plugin
@@ -106,10 +112,13 @@ struct Pass {
 /// A helper structure for storing information about a pass registered by a
 /// plugin.
 struct Op {
-  Op(const char *name, AddOpCallback addOp) : name(name), addOp(addOp) {}
+  Op(const char *name, AddOpCallback addOp,
+     AddOpWithPyArgCallback addOpWithPyArg)
+      : name(name), addOp(addOp), addOpWithPyArg(addOpWithPyArg) {}
 
   const char *name;
   const AddOpCallback addOp;
+  const AddOpWithPyArgCallback addOpWithPyArg;
 };
 
 /// A loaded Triton plugin.
