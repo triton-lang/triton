@@ -2,6 +2,7 @@
 #define TRITON_ANALYSIS_BUFFER_REGION_H
 
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <tuple>
 #include <utility>
@@ -200,9 +201,13 @@ struct RegionInfo {
 // BufferRegionAnalysis (Sparse Forward Dataflow)
 //===----------------------------------------------------------------------===//
 //
-// Produces a RegionInfo lattice for each MemDesc/ptr-like SSA value,
-// and also collects a global list of all discovered BufferRegions.
+// Produces a RegionInfo lattice for each MemDesc/ptr-like SSA value.
 //
+enum class BufferRegionType { Shared, Tensor, Barrier, NumTypes };
+
+bool isUsedAsBarrier(Value value);
+std::optional<BufferRegionType> getBufferRegionType(Value value);
+
 class BufferRegionAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
                                  dataflow::Lattice<RegionInfo>> {
 
@@ -212,8 +217,6 @@ public:
   using Base::getLatticeElement;
   using Base::SparseForwardDataFlowAnalysis;
 
-  enum RegionType { SHARED_MEMORY, TENSOR_MEMORY, BARRIER, NUM_REGION_TYPES };
-
   struct MemoryAccess {
     Value value;
     bool isWrite;
@@ -221,21 +224,10 @@ public:
 
   static llvm::SmallVector<MemoryAccess> getMemoryAccesses(Operation *op);
 
-  // ------------------------------
-  // Public API for ConSan
-  // ------------------------------
-
-  /// Return all unique exact regions discovered by the analysis.
-  llvm::SmallVector<BufferRegion>
-  getAllUsedBufferRegions(RegionType type) const {
-    return llvm::to_vector(usedBufferRegions[type]);
+  /// Return the region information for a value after the solver has run.
+  const RegionInfo &getRegionInfo(Value value) {
+    return getLatticeElement(value)->getValue();
   }
-
-  bool hasUnknownUsedBufferRegions(RegionType type) const {
-    return usedUnknownBufferRegions[type];
-  }
-
-  void calculateUsedBufferRegions(Operation *op);
 
   // ------------------------------
   // Required overrides
@@ -254,11 +246,30 @@ public:
   LogicalResult initialize(Operation *top) override;
 
 private:
-  // Global registry of all regions
-  std::set<BufferRegion> usedBufferRegions[NUM_REGION_TYPES];
-  bool usedUnknownBufferRegions[NUM_REGION_TYPES] = {};
   llvm::DenseMap<std::pair<Type, uint32_t>, AddressSet> footprintCache;
 };
+
+/// Exact regions and unknown-region presence used under an operation.
+struct UsedBufferRegions {
+  llvm::SmallVector<BufferRegion> getRegions(BufferRegionType type) const {
+    return llvm::to_vector(regions[static_cast<unsigned>(type)]);
+  }
+
+  bool hasUnknown(BufferRegionType type) const {
+    return unknown[static_cast<unsigned>(type)];
+  }
+
+private:
+  friend UsedBufferRegions
+  calculateUsedBufferRegions(Operation *op, BufferRegionAnalysis &analysis);
+
+  std::set<BufferRegion>
+      regions[static_cast<unsigned>(BufferRegionType::NumTypes)];
+  bool unknown[static_cast<unsigned>(BufferRegionType::NumTypes)] = {};
+};
+
+UsedBufferRegions calculateUsedBufferRegions(Operation *op,
+                                             BufferRegionAnalysis &analysis);
 
 } // namespace mlir::triton
 

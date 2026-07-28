@@ -688,7 +688,7 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
     if (!memType)
       return;
     candidates[static_cast<int>(*memType)].push_back(
-        {value, analysis->getLatticeElement(value)->getValue()});
+        {value, analysis->getRegionInfo(value)});
   };
   module.walk([&](Operation *op) {
     auto info = hooks.getMemEffectsOpInfo(op);
@@ -704,18 +704,16 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
       collectCandidates(effect.buf);
   });
 
-  analysis->calculateUsedBufferRegions(module);
-  barrierRegions = analysis->getAllUsedBufferRegions(
-      BufferRegionAnalysis::RegionType::BARRIER);
+  UsedBufferRegions used = calculateUsedBufferRegions(module, *analysis);
+  barrierRegions = used.getRegions(BufferRegionType::Barrier);
 
   for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
     int iMemType = (int)memType;
-    auto regionType = memType == MemType::SHARED_MEM
-                          ? BufferRegionAnalysis::SHARED_MEMORY
-                          : BufferRegionAnalysis::TENSOR_MEMORY;
-    SmallVector<BufferRegion> regions =
-        analysis->getAllUsedBufferRegions(regionType);
-    bool hasUnknown = analysis->hasUnknownUsedBufferRegions(regionType);
+    BufferRegionType regionType = memType == MemType::SHARED_MEM
+                                      ? BufferRegionType::Shared
+                                      : BufferRegionType::Tensor;
+    SmallVector<BufferRegion> regions = used.getRegions(regionType);
+    bool hasUnknown = used.hasUnknown(regionType);
     if (regions.empty() && !hasUnknown)
       continue;
 

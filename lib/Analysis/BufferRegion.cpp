@@ -1,8 +1,5 @@
 #include "triton/Analysis/BufferRegion.h"
 
-#include <limits>
-#include <optional>
-
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Matchers.h"
@@ -13,6 +10,8 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/MathExtras.h"
+#include <limits>
+#include <optional>
 
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
@@ -260,13 +259,6 @@ uint32_t getMemDescStorageOffset(ttg::MemDescType ty, unsigned index) {
   return applySharedPadding(static_cast<uint32_t>(unpadded), ty);
 }
 
-bool isUsedAsBarrier(Value v) {
-  return llvm::any_of(v.getUsers(), [&](Operation *user) {
-    auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(user);
-    return barrierOp && llvm::is_contained(barrierOp.getBarriers(), v);
-  });
-}
-
 struct MemDescSubsliceOffsets {
   uint32_t byteOffset = 0;
   uint32_t partitionOffset = 0;
@@ -332,22 +324,29 @@ getMemDescSubsliceUnpaddedOffsets(ttg::MemDescSubsliceOp op) {
                                 partitionOffset, blockOffset};
 }
 
-std::optional<triton::BufferRegionAnalysis::RegionType> getRegionType(Value v) {
-  if (isUsedAsBarrier(v))
-    return triton::BufferRegionAnalysis::RegionType::BARRIER;
-  auto type = dyn_cast<ttg::MemDescType>(v.getType());
-  if (!type)
-    return std::nullopt;
-  if (isa<ttg::SharedMemorySpaceAttr>(type.getMemorySpace()))
-    return triton::BufferRegionAnalysis::RegionType::SHARED_MEMORY;
-  if (isa<ttng::TensorMemorySpaceAttr>(type.getMemorySpace()))
-    return triton::BufferRegionAnalysis::RegionType::TENSOR_MEMORY;
-  return std::nullopt;
-}
-
 } // namespace
 
 namespace mlir::triton {
+
+bool isUsedAsBarrier(Value value) {
+  return llvm::any_of(value.getUsers(), [&](Operation *user) {
+    auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(user);
+    return barrierOp && llvm::is_contained(barrierOp.getBarriers(), value);
+  });
+}
+
+std::optional<BufferRegionType> getBufferRegionType(Value value) {
+  if (isUsedAsBarrier(value))
+    return BufferRegionType::Barrier;
+  auto type = dyn_cast<ttg::MemDescType>(value.getType());
+  if (!type)
+    return std::nullopt;
+  if (isa<ttg::SharedMemorySpaceAttr>(type.getMemorySpace()))
+    return BufferRegionType::Shared;
+  if (isa<ttng::TensorMemorySpaceAttr>(type.getMemorySpace()))
+    return BufferRegionType::Tensor;
+  return std::nullopt;
+}
 
 AddressSet AddressSet::fromRange(uint32_t begin, uint32_t length) {
   uint64_t end = static_cast<uint64_t>(begin) + length;
@@ -650,20 +649,22 @@ LogicalResult BufferRegionAnalysis::visitOperation(
   return success();
 }
 
-void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
+UsedBufferRegions calculateUsedBufferRegions(Operation *op,
+                                             BufferRegionAnalysis &analysis) {
+  UsedBufferRegions used;
   op->walk([&](Operation *op) {
-    for (const MemoryAccess &access : getMemoryAccesses(op)) {
-      std::optional<RegionType> regionType = getRegionType(access.value);
-      if (!regionType)
+    for (const auto &access : BufferRegionAnalysis::getMemoryAccesses(op)) {
+      std::optional<BufferRegionType> type = getBufferRegionType(access.value);
+      if (!type)
         continue;
-      const RegionInfo &regionInfo =
-          getLatticeElement(access.value)->getValue();
-      if (regionInfo.isUnknown())
-        usedUnknownBufferRegions[*regionType] = true;
+      unsigned index = static_cast<unsigned>(*type);
+      const RegionInfo &regionInfo = analysis.getRegionInfo(access.value);
+      used.unknown[index] |= regionInfo.isUnknown();
       for (const BufferRegionView &view : regionInfo.views)
-        usedBufferRegions[*regionType].insert(view.region);
+        used.regions[index].insert(view.region);
     }
   });
+  return used;
 }
 
 SmallVector<BufferRegionAnalysis::MemoryAccess>

@@ -53,15 +53,16 @@ struct TestBufferRegionPass
         solver->load<triton::BufferRegionAnalysis>();
     if (failed(solver->initializeAndRun(moduleOp)))
       return signalPassFailure();
-    analysis->calculateUsedBufferRegions(moduleOp);
 
+    tt::UsedBufferRegions used =
+        tt::calculateUsedBufferRegions(moduleOp, *analysis);
     moduleOp.walk([&](Operation *op) {
       for (const auto &access :
            triton::BufferRegionAnalysis::getMemoryAccesses(op)) {
         if (!llvm::is_contained(op->getOperands(), access.value))
           continue;
         emitRegionInfo(op->getLoc(), "Buffers",
-                       analysis->getLatticeElement(access.value)->getValue());
+                       analysis->getRegionInfo(access.value));
         break;
       }
     });
@@ -73,17 +74,13 @@ struct TestBufferRegionPass
     });
 
     for (Operation *anchor : anchors) {
-      auto emitAllRegions = [&](tt::BufferRegionAnalysis::RegionType type,
-                                StringRef label) {
-        emitRegionList(anchor->getLoc(), label,
-                       analysis->getAllUsedBufferRegions(type));
+      auto emitAllRegions = [&](tt::BufferRegionType type, StringRef label) {
+        emitRegionList(anchor->getLoc(), label, used.getRegions(type));
       };
 
-      emitAllRegions(tt::BufferRegionAnalysis::SHARED_MEMORY,
-                     "All Shared Regions");
-      emitAllRegions(tt::BufferRegionAnalysis::TENSOR_MEMORY,
-                     "All Tensor Regions");
-      emitAllRegions(tt::BufferRegionAnalysis::BARRIER, "All Barrier Regions");
+      emitAllRegions(tt::BufferRegionType::Shared, "All Shared Regions");
+      emitAllRegions(tt::BufferRegionType::Tensor, "All Tensor Regions");
+      emitAllRegions(tt::BufferRegionType::Barrier, "All Barrier Regions");
     }
   }
 };
@@ -146,7 +143,7 @@ struct TestBufferRegionAliasPass
                     "memdesc operand/result");
       return failure();
     }
-    return analysis->getLatticeElement(*memdesc)->getValue();
+    return analysis->getRegionInfo(*memdesc);
   }
 
   static bool mayAlias(const tt::RegionInfo &lhs, const tt::RegionInfo &rhs) {
