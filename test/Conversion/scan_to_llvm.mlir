@@ -47,15 +47,12 @@ tt.func private @test_2d_grouped(%arg0: tensor<16x1xi32, #layout_2d>) -> tensor<
 
 // CHECK-LABEL: @test_1d_reversed
 tt.func private @test_1d_reversed(%arg0: tensor<8xi32, #layout>) -> tensor<8xi32, #layout> {
-  // CHECK: [[FLIP0:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 %{{.*}}, i32 8, i32 31)
-  // CHECK: [[FLIP1:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[FLIP0]], i32 4, i32 31)
-  // CHECK: [[FLIP2:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[FLIP1]], i32 2, i32 31)
-  // CHECK: [[FLIP3:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[FLIP2]], i32 1, i32 31)
-  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.up.i32
-  // CHECK: [[UNFLIP0:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 %{{.*}}, i32 8, i32 31)
-  // CHECK: [[UNFLIP1:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[UNFLIP0]], i32 4, i32 31)
-  // CHECK: [[UNFLIP2:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[UNFLIP1]], i32 2, i32 31)
-  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[UNFLIP2]], i32 1, i32 31)
+  // CHECK-NOT: @llvm.nvvm.shfl.sync.bfly.i32
+  // CHECK: [[FLIPPED:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 %{{.*}}, i32 15, i32 31)
+  // CHECK-NEXT: [[FIRST_SCAN:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.up.i32(i32 -1, i32 [[FLIPPED]], i32 1, i32 0)
+  // CHECK-NOT: @llvm.nvvm.shfl.sync.bfly.i32
+  // CHECK: [[UNFLIPPED:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 %{{.*}}, i32 15, i32 31)
+  // CHECK-NEXT: ret i32 [[UNFLIPPED]]
   %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = true}> ({
   ^bb0(%arg1: i32, %arg2: i32):
     %1 = arith.addi %arg1, %arg2 : i32
