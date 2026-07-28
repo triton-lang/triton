@@ -71,6 +71,10 @@ def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, 
               16-byte chunk and match ``0x8``.
             - ``"per_elem_1B"``: match each byte against ``0xff``.
 
+            Given the lack of a dedicated fp4 type in Triton, we cannot infer
+            the right sentinal value for a given buffer data type. So for now,
+            the report_validity kind needs to be passed explicitly as a string.
+
             A sentinel match prevents the mbarrier conditional phase from
             completing. Use ``rubin.mbarrier.wait(..., conditional=True)`` to
             consume the load and ``rubin.mbarrier.test_wait_validity(...)`` to

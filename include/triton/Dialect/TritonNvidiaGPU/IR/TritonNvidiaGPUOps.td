@@ -390,10 +390,6 @@ def TTNG_BarrierTestWaitReportOp : TTNG_Op<"barrier_test_wait_report", [
     Performs a single non-blocking test of the requested primary mbarrier phase
     and returns both its completion predicate and report predicate as scalar
     `i32` values.
-
-    The report predicate is meaningful only when `waitComplete` is non-zero.
-    Frontends must gate it with completion before interpreting the report.
-    This operation is supported only by Rubin report-validity barriers.
   }];
 
   let arguments = (ins
@@ -541,12 +537,10 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
         - General rule: number of offsets = coord.size() - 2
       - See: https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-im2col-mode
 
-    `reportValidity` selects an optional TMA validity-reporting mechanism. A
-    matching sentinel still allows the primary mbarrier phase to complete, but
-    prevents the conditional phase from completing. This lets software retry
-    the load without releasing consumers waiting on the conditional phase.
-
-    The supported modes inspect:
+    `reportValidity` selects an optional TMA validity-reporting mechanism. The conditonal
+    phase in the provided barrier is flipped when the loaded data is deemed to be valid -
+    when a bit pattern encoding an invalid value does not match none of sampled elements
+    in the loaded data. The supported modes inspect:
     - `per_16B_fp32`: one sampled FP32 element per aligned 16-byte chunk,
       matching the `-0` bit pattern `0x80000000`.
     - `per_16B_fp16`: one sampled FP16 element per aligned 16-byte chunk,
@@ -556,7 +550,6 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
     - `per_16B_fp4`: one sampled FP4 element per aligned 16-byte chunk,
       matching `0x8`.
     - `per_elem_1B`: every byte, matching `0xff`.
-
   }];
 
   let hasVerifier = 1;

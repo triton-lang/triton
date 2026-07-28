@@ -750,7 +750,8 @@ struct CLCGetProgramIdOpConversion
 void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit, NVIDIA::TargetInfo &targetInfo) {
-  bool supportsMBarrierMulticast = targetInfo.getComputeCapability() == 107;
+  bool supportsMBarrierMulticast =
+      targetInfo.getTargetFeatures().supportsMbarMulticast();
   patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
   patterns.add<
       GridDependencyOpConversion<triton::GridDependencyWaitOp>,
