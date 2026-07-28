@@ -395,8 +395,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_init_barrier_state
     // CHECK: tti.experimental_lock_acquire
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
-    // CHECK: tt.call @__triton_consan_track_visible_writes
-    // CHECK: tt.call @__triton_consan_track_visible_reads
+    // CHECK: tt.call @__triton_consan_track_visible_accesses
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     // CHECK: tti.experimental_lock_release
@@ -472,7 +471,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_clear_read_visibility
     // CHECK: tt.call @__triton_consan_clear_read_tracking
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
-    // CHECK: tt.call @__triton_consan_track_visible_writes
+    // CHECK: tt.call @__triton_consan_track_visible_accesses
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     %1 = amdg.async_tdm_copy_global_to_local %desc into %0, barrier = %bar : !tt.tensordesc<32x32xf32>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
@@ -509,7 +508,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_clear_read_visibility
     // CHECK: tt.call @__triton_consan_clear_read_tracking
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
-    // CHECK: tt.call @__triton_consan_track_visible_writes
+    // CHECK: tt.call @__triton_consan_track_visible_accesses
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     %0 = amdg.async_tdm_copy_global_to_local %a into %a_smem, barrier = %bar : !tt.tensordesc<32x32xf32>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
@@ -522,7 +521,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_clear_read_visibility
     // CHECK: tt.call @__triton_consan_clear_read_tracking
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
-    // CHECK: tt.call @__triton_consan_track_visible_writes
+    // CHECK: tt.call @__triton_consan_track_visible_accesses
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     %1 = amdg.async_tdm_copy_global_to_local %b into %b_smem, barrier = %bar : !tt.tensordesc<32x32xf32>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
@@ -622,8 +621,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_write_visibility
     // CHECK: tt.call @__triton_consan_set_read_visibility
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
-    // CHECK: tt.call @__triton_consan_track_visible_writes
-    // CHECK: tt.call @__triton_consan_track_visible_reads
+    // CHECK: tt.call @__triton_consan_track_visible_accesses
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     // CHECK-NOT: tt.call @__triton_consan_stage_access_for_commit

@@ -550,8 +550,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     ttng.barrier_expect %bar, 4096, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_init_barrier_state
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
-    // CHECK: tt.call @__triton_consan_track_visible_writes
-    // CHECK: tt.call @__triton_consan_track_visible_reads
+    // CHECK: tt.call @__triton_consan_track_visible_accesses
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     // CHECK: tt.call @__triton_consan_verify_write_visibility
@@ -982,8 +981,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_init_barrier_state
     // CHECK: tti.experimental_lock_acquire
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
-    // CHECK: tt.call @__triton_consan_track_visible_writes
-    // CHECK: tt.call @__triton_consan_track_visible_reads
+    // CHECK: tt.call @__triton_consan_track_visible_accesses
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     // CHECK: tti.experimental_lock_release
@@ -1067,18 +1065,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_clear_read_visibility{{.*}}%[[TM_READ_VISIBILITY_GLOB]]
     // CHECK: tt.call @__triton_consan_clear_read_tracking
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
-    // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
     // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BAR:.*]] :
-    // CHECK: tt.call @__triton_consan_track_visible_writes{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[SM_WRITE_VISIBILITY_GLOB]], %[[SM_WRITE_TRACKING_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
+    // CHECK: tt.call @__triton_consan_track_visible_accesses{{.*}}%[[BAR_I64]]{{.*}}%[[TC_BIT]]{{.*}}%[[BARRIERS]]{{.*}}%[[SM_WRITE_VISIBILITY_GLOB]]{{.*}}%[[SM_WRITE_TRACKING_GLOB]]{{.*}}%[[SM_READ_VISIBILITY_GLOB]], %{{[^,)]+}}) : {{.*}}!tt.ptr<i8>, !tt.ptr<i64>, !tt.ptr<i64>) -> ()
     // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BAR]] :
-    // CHECK: tt.call @__triton_consan_track_visible_reads{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[SM_READ_VISIBILITY_GLOB]], %{{[^,]+}}
     // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
-    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BAR]] :
-    // CHECK: tt.call @__triton_consan_track_visible_writes{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[TM_WRITE_VISIBILITY_GLOB]], %[[TM_WRITE_TRACKING_GLOB]]
-    // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
-    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BAR]] :
-    // CHECK: tt.call @__triton_consan_track_visible_reads{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[TM_READ_VISIBILITY_GLOB]], %{{[^,]+}}
+    // CHECK: tt.call @__triton_consan_track_visible_accesses{{.*}}%[[BAR_I64]]{{.*}}%[[TC_BIT]]{{.*}}%[[BARRIERS]]{{.*}}%[[TM_WRITE_VISIBILITY_GLOB]]{{.*}}%[[TM_WRITE_TRACKING_GLOB]]{{.*}}%[[TM_READ_VISIBILITY_GLOB]], %{{[^,)]+}}) : {{.*}}!tt.ptr<i8>, !tt.ptr<i64>, !tt.ptr<i64>) -> ()
     // CHECK: ttng.tc_gen5_mma
     %c0_i32 = arith.constant 0 : i32
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
@@ -1133,18 +1125,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_clear_read_visibility{{.*}}%[[TM_READ_VISIBILITY_GLOB]]
     // CHECK: tt.call @__triton_consan_clear_read_tracking
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
-    // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
     // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BAR:.*]] :
-    // CHECK: tt.call @__triton_consan_track_visible_writes{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[SM_WRITE_VISIBILITY_GLOB]], %[[SM_WRITE_TRACKING_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
+    // CHECK: tt.call @__triton_consan_track_visible_accesses{{.*}}%[[BAR_I64]]{{.*}}%[[TC_BIT]]{{.*}}%[[BARRIERS]]{{.*}}%[[SM_WRITE_VISIBILITY_GLOB]]{{.*}}%[[SM_WRITE_TRACKING_GLOB]]{{.*}}%[[SM_READ_VISIBILITY_GLOB]], %{{[^,)]+}}) : {{.*}}!tt.ptr<i8>, !tt.ptr<i64>, !tt.ptr<i64>) -> ()
     // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BAR]] :
-    // CHECK: tt.call @__triton_consan_track_visible_reads{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[SM_READ_VISIBILITY_GLOB]], %{{[^,]+}}
     // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
-    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BAR]] :
-    // CHECK: tt.call @__triton_consan_track_visible_writes{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[TM_WRITE_VISIBILITY_GLOB]], %[[TM_WRITE_TRACKING_GLOB]]
-    // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
-    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i32 %[[BAR]] :
-    // CHECK: tt.call @__triton_consan_track_visible_reads{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[TM_READ_VISIBILITY_GLOB]], %{{[^,]+}}
+    // CHECK: tt.call @__triton_consan_track_visible_accesses{{.*}}%[[BAR_I64]]{{.*}}%[[TC_BIT]]{{.*}}%[[BARRIERS]]{{.*}}%[[TM_WRITE_VISIBILITY_GLOB]]{{.*}}%[[TM_WRITE_TRACKING_GLOB]]{{.*}}%[[TM_READ_VISIBILITY_GLOB]], %{{[^,)]+}}) : {{.*}}!tt.ptr<i8>, !tt.ptr<i64>, !tt.ptr<i64>) -> ()
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     // CHECK: tti.experimental_lock_release
@@ -1179,10 +1165,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_init_barrier_state
     %true = arith.constant true
-    // CHECK: tt.call @__triton_consan_track_visible_writes
-    // CHECK: tt.call @__triton_consan_track_visible_reads
-    // CHECK: tt.call @__triton_consan_track_visible_writes
-    // CHECK: tt.call @__triton_consan_track_visible_reads
+    // CHECK: tt.call @__triton_consan_track_visible_accesses
+    // CHECK: tt.call @__triton_consan_track_visible_accesses
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     ttng.tc_gen5_commit %bar : !ttg.memdesc<1xi64, #shared1, #smem, mutable>

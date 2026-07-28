@@ -1072,9 +1072,7 @@ private:
         // If the op has barriers, we treat it as a commit emitted for each
         // barrier.
         for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
-          funcBuilder.createTrackVisibleWritesCall(
-              b, barrier, thread, combinedPred, memType, op, recipientCTAs);
-          funcBuilder.createTrackVisibleReadsCall(
+          funcBuilder.createTrackVisibleAccessesCall(
               b, barrier, thread, combinedPred, memType, op, recipientCTAs);
         }
         funcBuilder.createTrackProxyAccessesCall(

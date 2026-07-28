@@ -167,16 +167,12 @@ public:
   void createClearReadTrackingCall(ImplicitLocOpBuilder &b, Value bufferMask,
                                    Value pred, MemType memType,
                                    Operation *insertPoint, Value effectCTAs);
-  // trackVisibleWrites: snapshot buffers currently visible to the thread into
-  // the tracking table for a barrier.
-  void createTrackVisibleWritesCall(ImplicitLocOpBuilder &b, Value mbar,
-                                    int thread, Value pred, MemType memType,
-                                    Operation *insertPoint, Value barrierCTAs);
-  // trackVisibleReads: snapshot buffers currently visible to the thread into
-  // the read tracking table for a barrier.
-  void createTrackVisibleReadsCall(ImplicitLocOpBuilder &b, Value mbar,
-                                   int thread, Value pred, MemType memType,
-                                   Operation *insertPoint, Value barrierCTAs);
+  // trackVisibleAccesses: snapshot the available read and write visibility
+  // frontiers into their independent barrier tracking tables.
+  void createTrackVisibleAccessesCall(ImplicitLocOpBuilder &b, Value mbar,
+                                      int thread, Value pred, MemType memType,
+                                      Operation *insertPoint,
+                                      Value barrierCTAs);
   // trackBarrierWriteForBuffer: mark a specific buffer as tracked by a
   // barrier in the write-tracking table.
   void createTrackBarrierWriteForBufferCall(ImplicitLocOpBuilder &b, Value mbar,
