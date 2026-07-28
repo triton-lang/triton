@@ -533,13 +533,6 @@ class CodeGenerator(ast.NodeVisitor):
         elts = language.tuple([self.visit(elt) for elt in node.elts])
         return elts
 
-    def visit_Dict(self, node: ast.Dict):
-        if any(key is None for key in node.keys):
-            raise self._unsupported(node, "dictionary unpacking is not supported")
-        keys = [_unwrap_if_constexpr(self.visit(key)) for key in node.keys]
-        values = [self.visit(value) for value in node.values]
-        return dict(zip(keys, values))
-
     def visit_ListComp(self, node: ast.ListComp):
         if len(node.generators) != 1:
             raise ValueError("nested comprehensions are not supported")

@@ -58,9 +58,16 @@ def _metric(metrics, semantic):
     metrics = tl._unwrap_if_constexpr(metrics)
     if metrics is None:
         return None
-    if not isinstance(metrics, dict) or len(metrics) != 1:
-        raise ValueError("metrics must be a compile-time dict with exactly one entry")
-    metric_name, metric_value = next(iter(metrics.items()))
+    if isinstance(metrics, dict):
+        if len(metrics) != 1:
+            raise ValueError("metrics must contain exactly one entry")
+        metric_name, metric_value = next(iter(metrics.items()))
+    elif isinstance(metrics, (tuple, tl.tuple)):
+        if len(metrics) != 2:
+            raise ValueError("metrics must be a (name, value) pair")
+        metric_name, metric_value = metrics
+    else:
+        raise TypeError("metrics must be a (name, value) pair")
     metric_name = _unwrap_name(metric_name, "metric name")
     metric_value = semantic.to_tensor(tl._unwrap_if_constexpr(metric_value))
     if metric_value.type.is_block() or metric_value.dtype.is_ptr():

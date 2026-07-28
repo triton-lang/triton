@@ -112,17 +112,17 @@ Synchronous scopes can capture one runtime scalar metric:
 
 ```python
 value = tl.load(value_ptr)
-with pl.scope("compute", metrics={"work_items (pty)": value}):
+with pl.scope("compute", metrics=("work_items (pty)", value)):
     ...
 
 # Equivalent operator form.
-pl.enter_scope("compute", metrics={"work_items (pty)": value})
+pl.enter_scope("compute", metrics=("work_items (pty)", value))
 ...
 pl.exit_scope("compute")
 ```
 
-The `metrics` argument is a compile-time dictionary with exactly one string
-key and one runtime scalar value. Metric names use the same aggregation
+The `metrics` argument is a compile-time `(name, value)` pair containing one
+string name and one runtime scalar value. Metric names use the same aggregation
 suffixes as Proton's host API: no suffix is inclusive, `(exc)` is exclusive,
 and `(pty)` is a property. Supported values are `bool`, signed or unsigned
 integers up to 32 bits, `fp16`, `bf16`, and `fp32`. Pointers, block values,

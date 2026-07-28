@@ -206,9 +206,9 @@ def test_extended_events(tmp_path: pathlib.Path):
         token = pl.start_scope("async")
         value += 1
         pl.end_scope(token)
-        with pl.scope("measured", metrics={"value (pty)": value}):
+        with pl.scope("measured", metrics=("value (pty)", value)):
             value += 1
-        with pl.scope("measured", metrics={"other (pty)": value}):
+        with pl.scope("measured", metrics=("other (pty)", value)):
             value += 1
         pl.mark("ready")
         tl.store(x_ptr, value)
@@ -270,7 +270,7 @@ def test_gluon_extended_events(tmp_path: pathlib.Path):
         token = pl.start_scope("async")
         value += 1
         pl.end_scope(token)
-        with pl.scope("measured", metrics={"value": value}):
+        with pl.scope("measured", metrics=("value", value)):
             value += 1
         pl.mark("ready")
         gl.store(x_ptr, value)
