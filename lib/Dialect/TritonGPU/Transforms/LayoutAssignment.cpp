@@ -272,14 +272,22 @@ static bool isFixedLayoutBoundary(Operation *op) {
 
 static bool supportsGlobalLayoutAssignment(FuncOp funcOp) {
   WalkResult result = funcOp.walk([&](Operation *op) {
-    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      WalkResult body = forOp.walk([&](Operation *nested) {
-        if (nested != forOp.getOperation() && isFixedLayoutBoundary(nested))
+    if (isa<scf::ForOp, scf::WhileOp>(op)) {
+      WalkResult body = op->walk([&](Operation *nested) {
+        if (nested != op && isFixedLayoutBoundary(nested))
           return WalkResult::interrupt();
         return WalkResult::advance();
       });
-      return body.wasInterrupted() ? WalkResult::interrupt()
-                                   : WalkResult::advance();
+      if (body.wasInterrupted())
+        return WalkResult::interrupt();
+      if (auto whileOp = dyn_cast<scf::WhileOp>(op)) {
+        for (auto [index, argument] :
+             llvm::enumerate(whileOp.getBeforeArguments()))
+          if (isa<RankedTensorType>(argument.getType()) &&
+              index >= whileOp.getNumResults())
+            return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
     }
 
     bool hasTensorResult = llvm::any_of(op->getResults(), [](Value result) {
@@ -305,21 +313,15 @@ static bool supportsGlobalLayoutAssignment(FuncOp funcOp) {
     if (isa<scf::IfOp>(op))
       return WalkResult::advance();
 
-    // Join operands and result share an exact-order layout relation. Resolve
-    // them against the whole function rather than each conversion in isolation.
-    if (isa<JoinOp>(op))
+    // Joins and splits share exact-order layout relations. Resolve both split
+    // results against the same inferred parent rather than independently.
+    if (isa<JoinOp, SplitOp>(op))
       return WalkResult::advance();
 
-    // A single-output reduction has a uniquely inferable sliced result. A
-    // multi-output reduction still needs all of its results selected together.
-    if (auto reduce = dyn_cast<ReduceOp>(op))
-      return reduce->getNumResults() == 1 ? WalkResult::advance()
-                                          : WalkResult::interrupt();
-
-    // While regions and multi-result splits require their own joint rewrite
-    // contracts before their encodings can be changed safely.
-    if (isa<scf::WhileOp, SplitOp>(op))
-      return WalkResult::interrupt();
+    // Every reduction result shares the same inferred source layout. Keep
+    // multi-result reductions in the graph as a single coupled component.
+    if (isa<ReduceOp>(op))
+      return WalkResult::advance();
 
     if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         op->hasTrait<OpTrait::Elementwise>() ||
@@ -623,11 +625,20 @@ bool LayoutPropagation::canAssignEncoding(
     return false;
 
   if (auto blockArg = dyn_cast<BlockArgument>(value)) {
-    auto forOp = dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp());
-    if (!forOp || blockArg.getArgNumber() == 0)
-      return encoding == tensorType.getEncoding();
-    return getAssignedEncoding(forOp.getResult(blockArg.getArgNumber() - 1),
-                               assignments) == encoding;
+    Operation *parent = blockArg.getOwner()->getParentOp();
+    if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
+      if (blockArg.getArgNumber() == 0)
+        return encoding == tensorType.getEncoding();
+      return getAssignedEncoding(forOp.getResult(blockArg.getArgNumber() - 1),
+                                 assignments) == encoding;
+    }
+    if (auto whileOp = dyn_cast<scf::WhileOp>(parent)) {
+      if (blockArg.getArgNumber() >= whileOp.getNumResults())
+        return encoding == tensorType.getEncoding();
+      return getAssignedEncoding(whileOp.getResult(blockArg.getArgNumber()),
+                                 assignments) == encoding;
+    }
+    return encoding == tensorType.getEncoding();
   }
 
   if (auto result = dyn_cast<OpResult>(value)) {
@@ -635,6 +646,26 @@ bool LayoutPropagation::canAssignEncoding(
       return getAssignedEncoding(
                  forOp.getRegionIterArg(result.getResultNumber()),
                  assignments) == encoding;
+    if (auto whileOp = dyn_cast<scf::WhileOp>(result.getOwner()))
+      return getAssignedEncoding(
+                 whileOp.getBeforeArguments()[result.getResultNumber()],
+                 assignments) == encoding &&
+             getAssignedEncoding(
+                 whileOp.getAfterArguments()[result.getResultNumber()],
+                 assignments) == encoding;
+    if (auto splitOp = dyn_cast<SplitOp>(result.getOwner())) {
+      Value sibling = result.getResultNumber() == 0 ? splitOp.getOutRHS()
+                                                    : splitOp.getOutLHS();
+      return getAssignedEncoding(sibling, assignments) == encoding &&
+             static_cast<bool>(inferSrcEncoding(splitOp, encoding));
+    }
+    if (auto reduceOp = dyn_cast<ReduceOp>(result.getOwner())) {
+      for (Value sibling : reduceOp->getResults())
+        if (isa<RankedTensorType>(sibling.getType()) &&
+            getAssignedEncoding(sibling, assignments) != encoding)
+          return false;
+      return static_cast<bool>(inferSrcEncoding(reduceOp, encoding));
+    }
   }
 
   if (encoding == tensorType.getEncoding())
@@ -826,15 +857,21 @@ bool LayoutPropagation::buildGlobalComponentProposal(
   auto isLayoutComponent = [](Operation *op) {
     return op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
            op->hasTrait<OpTrait::Elementwise>() ||
-           isa<JoinOp, ConvertLayoutOp, ReshapeOp, TransOp, ExpandDimsOp,
-               ReduceOp>(op);
+           isa<JoinOp, SplitOp, ConvertLayoutOp, ReshapeOp, TransOp,
+               ExpandDimsOp, ReduceOp>(op);
   };
 
-  auto requestForComponent = [&](scf::ForOp forOp, unsigned resultIndex,
-                                 Attribute candidate) {
-    for (Value tied : getTiedArgs(forOp, resultIndex))
+  auto requestLoopComponent = [&](Operation *loopOp, unsigned resultIndex,
+                                  Attribute candidate) {
+    for (Value tied : getTiedArgs(loopOp, resultIndex))
       if (!request(tied, candidate))
         return false;
+    if (auto whileOp = dyn_cast<scf::WhileOp>(loopOp)) {
+      auto yield =
+          cast<scf::YieldOp>(whileOp.getAfter().front().getTerminator());
+      if (!request(yield.getOperand(resultIndex), candidate))
+        return false;
+    }
     return true;
   };
 
@@ -846,9 +883,19 @@ bool LayoutPropagation::buildGlobalComponentProposal(
     assignments[value] = candidate;
 
     if (Operation *producer = value.getDefiningOp()) {
-      if (auto forOp = dyn_cast<scf::ForOp>(producer)) {
+      if (auto splitOp = dyn_cast<SplitOp>(producer)) {
+        if (!request(splitOp.getOutLHS(), candidate) ||
+            !request(splitOp.getOutRHS(), candidate))
+          return false;
+      }
+      if (auto reduceOp = dyn_cast<ReduceOp>(producer))
+        for (Value sibling : reduceOp->getResults())
+          if (!request(sibling, candidate))
+            return false;
+      if (isa<scf::ForOp, scf::WhileOp>(producer)) {
         auto result = cast<OpResult>(value);
-        if (!requestForComponent(forOp, result.getResultNumber(), candidate))
+        if (!requestLoopComponent(producer, result.getResultNumber(),
+                                  candidate))
           return false;
       }
       if (isLayoutComponent(producer) && !isFixedLayoutBoundary(producer)) {
@@ -862,10 +909,15 @@ bool LayoutPropagation::buildGlobalComponentProposal(
         }
       }
     } else if (auto blockArg = dyn_cast<BlockArgument>(value)) {
-      if (auto forOp =
-              dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp())) {
+      Operation *parent = blockArg.getOwner()->getParentOp();
+      if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
         if (blockArg.getArgNumber() != 0 &&
-            !requestForComponent(forOp, blockArg.getArgNumber() - 1, candidate))
+            !requestLoopComponent(forOp, blockArg.getArgNumber() - 1,
+                                  candidate))
+          return false;
+      } else if (auto whileOp = dyn_cast<scf::WhileOp>(parent)) {
+        if (blockArg.getArgNumber() < whileOp.getNumResults() &&
+            !requestLoopComponent(whileOp, blockArg.getArgNumber(), candidate))
           return false;
       }
     }
@@ -874,15 +926,32 @@ bool LayoutPropagation::buildGlobalComponentProposal(
       Operation *user = use.getOwner();
       if (auto forOp = dyn_cast<scf::ForOp>(user)) {
         if (Value result = forOp.getTiedLoopResult(&use)) {
-          if (!requestForComponent(
+          if (!requestLoopComponent(
                   forOp, cast<OpResult>(result).getResultNumber(), candidate))
             return false;
         }
         continue;
       }
+      if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
+        if (use.getOperandNumber() < whileOp.getNumResults() &&
+            !requestLoopComponent(whileOp, use.getOperandNumber(), candidate))
+          return false;
+        continue;
+      }
       if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp())) {
-          if (!requestForComponent(forOp, use.getOperandNumber(), candidate))
+        Operation *parent = yieldOp->getParentOp();
+        if (isa<scf::ForOp, scf::WhileOp>(parent) &&
+            use.getOperandNumber() < parent->getNumResults()) {
+          if (!requestLoopComponent(parent, use.getOperandNumber(), candidate))
+            return false;
+        }
+        continue;
+      }
+      if (auto condition = dyn_cast<scf::ConditionOp>(user)) {
+        if (use.getOperandNumber() != 0) {
+          auto whileOp = cast<scf::WhileOp>(condition->getParentOp());
+          if (!requestLoopComponent(whileOp, use.getOperandNumber() - 1,
+                                    candidate))
             return false;
         }
         continue;
@@ -920,14 +989,21 @@ void LayoutPropagation::resolveGlobalConflicts() {
   }
 
   bool hasJoinConstraints = false;
-  bool hasForConstraints = false;
+  bool hasSplitConstraints = false;
+  bool hasMultiResultReductionConstraints = false;
+  bool hasLoopConstraints = false;
   bool hasTensorMemoryConstraints = false;
   bool hasReductionConstraints = false;
   funcOp.walk([&](Operation *op) {
     if (isa<JoinOp>(op))
       hasJoinConstraints = true;
-    if (isa<scf::ForOp>(op))
-      hasForConstraints = true;
+    if (isa<SplitOp>(op))
+      hasSplitConstraints = true;
+    if (auto reduceOp = dyn_cast<ReduceOp>(op))
+      if (reduceOp->getNumResults() > 1)
+        hasMultiResultReductionConstraints = true;
+    if (isa<scf::ForOp, scf::WhileOp>(op))
+      hasLoopConstraints = true;
     if (isa<triton::nvidia_gpu::TMEMLoadOp>(op))
       hasTensorMemoryConstraints = true;
     if (isa<ReduceOp>(op))
@@ -938,11 +1014,13 @@ void LayoutPropagation::resolveGlobalConflicts() {
   // cross the tensor-memory boundary without a full-precision exchange.
   bool hasTensorMemoryReductionConstraints =
       hasTensorMemoryConstraints && hasReductionConstraints;
-  bool useFullGlobalObjective =
-      (hasJoinConstraints || hasTensorMemoryReductionConstraints) &&
-      layouts.size() <= maxFullObjectiveValues;
+  bool useFullGlobalObjective = (hasJoinConstraints || hasSplitConstraints ||
+                                 hasMultiResultReductionConstraints ||
+                                 hasTensorMemoryReductionConstraints) &&
+                                layouts.size() <= maxFullObjectiveValues;
 
-  if (hasJoinConstraints || hasForConstraints ||
+  if (hasJoinConstraints || hasSplitConstraints ||
+      hasMultiResultReductionConstraints || hasLoopConstraints ||
       hasTensorMemoryReductionConstraints) {
     constexpr unsigned maxComponentIterations = 4;
     const unsigned maxComponentProposals = useFullGlobalObjective ? 128 : 32;

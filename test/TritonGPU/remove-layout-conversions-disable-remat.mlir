@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -tritongpu-remove-layout-conversions | FileCheck %s --check-prefix=DEFAULT
 // RUN: triton-opt %s -tritongpu-remove-layout-conversions='disable-remat-splitting=true' | FileCheck %s --check-prefix=NO-SPLIT
-// RUN: triton-opt %s -tritongpu-optimize-layouts | FileCheck %s --check-prefix=DEFAULT
-// RUN: triton-opt %s -tritongpu-optimize-layouts='disable-remat-splitting=true' | FileCheck %s --check-prefix=NO-SPLIT
+// RUN: triton-opt %s -tritongpu-optimize-layouts | FileCheck %s --check-prefix=GLOBAL
+// RUN: triton-opt %s -tritongpu-optimize-layouts='disable-remat-splitting=true' | FileCheck %s --check-prefix=GLOBAL-NO-SPLIT
 
 // DEFAULT-LABEL: @nested_convert_single_use
 // DEFAULT: %[[RESHAPE:.+]] = tt.reshape
@@ -16,6 +16,20 @@
 // NO-SPLIT-NEXT: %[[LHS:.+]], %[[RHS:.+]] = tt.split %[[INPUT_CONVERT]]
 // NO-SPLIT-NEXT: %[[ASM:.+]] = tt.elementwise_inline_asm {{.*}} %[[LHS]], %[[RHS]]
 // NO-SPLIT-NEXT: tt.return %[[ASM]]
+
+// GLOBAL-LABEL: @nested_convert_single_use
+// GLOBAL: %[[INPUT:.+]] = ttg.convert_layout %arg0
+// GLOBAL-NEXT: %[[RESHAPE:.+]] = tt.reshape %[[INPUT]]
+// GLOBAL-NEXT: %[[LHS:.+]], %[[RHS:.+]] = tt.split %[[RESHAPE]]
+// GLOBAL-NEXT: %[[ASM:.+]] = tt.elementwise_inline_asm {{.*}} %[[LHS]], %[[RHS]]
+// GLOBAL-NEXT: tt.return %[[ASM]]
+
+// GLOBAL-NO-SPLIT-LABEL: @nested_convert_single_use
+// GLOBAL-NO-SPLIT: %[[INPUT:.+]] = ttg.convert_layout %arg0
+// GLOBAL-NO-SPLIT-NEXT: %[[RESHAPE:.+]] = tt.reshape %[[INPUT]]
+// GLOBAL-NO-SPLIT-NEXT: %[[LHS:.+]], %[[RHS:.+]] = tt.split %[[RESHAPE]]
+// GLOBAL-NO-SPLIT-NEXT: %[[ASM:.+]] = tt.elementwise_inline_asm {{.*}} %[[LHS]], %[[RHS]]
+// GLOBAL-NO-SPLIT-NEXT: tt.return %[[ASM]]
 
 // DEFAULT-LABEL: @nested_convert_multi_use
 // DEFAULT: %[[RESHAPE:.+]] = tt.reshape
@@ -33,20 +47,55 @@
 // NO-SPLIT-NEXT: %[[OUTPUT_CONVERT:.+]] = ttg.convert_layout %[[ASM]]
 // NO-SPLIT-NEXT: tt.return %[[OUTPUT_CONVERT]], %[[OUTPUT_CONVERT]], %[[ASM]]
 
+// GLOBAL-LABEL: @nested_convert_multi_use
+// GLOBAL: %[[ORIGINAL_INPUT:.+]] = ttg.convert_layout %arg0
+// GLOBAL-NEXT: %[[TARGET_INPUT:.+]] = ttg.convert_layout %arg0
+// GLOBAL-NEXT: %[[ORIGINAL_RESHAPE:.+]] = tt.reshape %[[ORIGINAL_INPUT]]
+// GLOBAL-NEXT: %[[TARGET_RESHAPE:.+]] = tt.reshape %[[TARGET_INPUT]]
+// GLOBAL-NEXT: %[[ORIGINAL_LHS:.+]], %[[ORIGINAL_RHS:.+]] = tt.split %[[ORIGINAL_RESHAPE]]
+// GLOBAL-NEXT: %[[TARGET_LHS:.+]], %[[TARGET_RHS:.+]] = tt.split %[[TARGET_RESHAPE]]
+// GLOBAL-NEXT: %[[ORIGINAL:.+]] = tt.elementwise_inline_asm {{.*}} %[[ORIGINAL_LHS]], %[[ORIGINAL_RHS]]
+// GLOBAL-NEXT: %[[TARGET:.+]] = tt.elementwise_inline_asm {{.*}} %[[TARGET_LHS]], %[[TARGET_RHS]]
+// GLOBAL-NEXT: tt.return %[[TARGET]], %[[TARGET]], %[[ORIGINAL]]
+
+// GLOBAL-NO-SPLIT-LABEL: @nested_convert_multi_use
+// GLOBAL-NO-SPLIT: %[[INPUT:.+]] = ttg.convert_layout %arg0
+// GLOBAL-NO-SPLIT-NEXT: %[[RESHAPE:.+]] = tt.reshape %[[INPUT]]
+// GLOBAL-NO-SPLIT-NEXT: %[[LHS:.+]], %[[RHS:.+]] = tt.split %[[RESHAPE]]
+// GLOBAL-NO-SPLIT-NEXT: %[[ASM:.+]] = tt.elementwise_inline_asm {{.*}} %[[LHS]], %[[RHS]]
+// GLOBAL-NO-SPLIT-NEXT: %[[ORIGINAL:.+]] = ttg.convert_layout %[[ASM]]
+// GLOBAL-NO-SPLIT-NEXT: %[[TARGET:.+]] = ttg.convert_layout %[[ASM]]
+// GLOBAL-NO-SPLIT-NEXT: tt.return %[[TARGET]], %[[TARGET]], %[[ORIGINAL]]
+
 // NO-SPLIT-LABEL: @hoist_broadcast
 // NO-SPLIT: %[[CONVERT:.+]] = ttg.convert_layout %arg0
 // NO-SPLIT-NEXT: %[[BROADCAST:.+]] = tt.broadcast %[[CONVERT]]
 // NO-SPLIT-NEXT: tt.return %[[BROADCAST]]
+
+// GLOBAL-NO-SPLIT-LABEL: @hoist_broadcast
+// GLOBAL-NO-SPLIT: %[[CONVERT:.+]] = ttg.convert_layout %arg0
+// GLOBAL-NO-SPLIT-NEXT: %[[BROADCAST:.+]] = tt.broadcast %[[CONVERT]]
+// GLOBAL-NO-SPLIT-NEXT: tt.return %[[BROADCAST]]
 
 // NO-SPLIT-LABEL: @hoist_ext
 // NO-SPLIT: %[[CONVERT:.+]] = ttg.convert_layout %arg0
 // NO-SPLIT-NEXT: %[[EXT:.+]] = arith.extui %[[CONVERT]]
 // NO-SPLIT-NEXT: tt.return %[[EXT]]
 
+// GLOBAL-NO-SPLIT-LABEL: @hoist_ext
+// GLOBAL-NO-SPLIT: %[[CONVERT:.+]] = ttg.convert_layout %arg0
+// GLOBAL-NO-SPLIT-NEXT: %[[EXT:.+]] = arith.extui %[[CONVERT]]
+// GLOBAL-NO-SPLIT-NEXT: tt.return %[[EXT]]
+
 // NO-SPLIT-LABEL: @reject_hoist_broadcast_multi_use
 // NO-SPLIT: %[[BROADCAST:.+]] = tt.broadcast %arg0
 // NO-SPLIT-NEXT: %[[CONVERT:.+]] = ttg.convert_layout %[[BROADCAST]]
 // NO-SPLIT-NEXT: tt.return %[[CONVERT]], %[[BROADCAST]]
+
+// GLOBAL-NO-SPLIT-LABEL: @reject_hoist_broadcast_multi_use
+// GLOBAL-NO-SPLIT: %[[BROADCAST:.+]] = tt.broadcast %arg0
+// GLOBAL-NO-SPLIT-NEXT: %[[CONVERT:.+]] = ttg.convert_layout %[[BROADCAST]]
+// GLOBAL-NO-SPLIT-NEXT: tt.return %[[CONVERT]], %[[BROADCAST]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0], CGALayout = [[0, 1]]}>
 #src = #ttg.linear<{register = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]], lane = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], warp = [[0, 32], [0, 64], [0, 128]], block = [[0, 256]]}>

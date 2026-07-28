@@ -231,6 +231,159 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// Both results of tt.split share one inferred parent layout. Optimize their
+// fixed consumers together and keep the sole conversion on the source side.
+//
+// BASELINE-LABEL: @layout_conflict_split_fanout
+// BASELINE: tt.split
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @layout_conflict_split_fanout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED: tt.split
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#split_target = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 32, 1], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @layout_conflict_split_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16x2xf32, #source>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>) {
+    %converted = ttg.convert_layout %source : tensor<16x16x2xf32, #source> -> tensor<16x16x2xf32, #split_target>
+    %left, %right = tt.split %converted : tensor<16x16x2xf32, #split_target> -> tensor<16x16xf32, #target>
+    %left_first = arith.addf %left, %target : tensor<16x16xf32, #target>
+    %left_second = arith.mulf %left, %target : tensor<16x16xf32, #target>
+    %right_first = arith.addf %right, %target : tensor<16x16xf32, #target>
+    %right_second = arith.subf %right, %target : tensor<16x16xf32, #target>
+    tt.return %left_first, %left_second, %right_first, %right_second : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
+  }
+}
+
+// -----
+
+// A value-and-index reduction must select one sliced layout for both outputs.
+// Keep their fixed consumers in the same component and leave only the
+// immutable source conversion.
+//
+// BASELINE-LABEL: @layout_conflict_multi_reduce_fanout
+// BASELINE: "tt.reduce"
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @layout_conflict_multi_reduce_fanout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED: "tt.reduce"
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#reduced = #ttg.slice<{dim = 1, parent = #target}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @layout_conflict_multi_reduce_fanout(%target: tensor<16x16xf32, #target>, %indices: tensor<16x16xi32, #target>, %source: tensor<16x16xf32, #source>, %reference: tensor<16xf32, #reduced>, %index_reference: tensor<16xi32, #reduced>) -> (tensor<16xf32, #reduced>, tensor<16xf32, #reduced>, tensor<16xi32, #reduced>, tensor<16xi32, #reduced>) {
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %mixed = arith.addf %converted, %target : tensor<16x16xf32, #target>
+    %result:2 = "tt.reduce"(%mixed, %indices) <{axis = 1 : i32}> ({
+      ^bb0(%left_value: f32, %left_index: i32, %right_value: f32, %right_index: i32):
+        %take_left = arith.cmpf oge, %left_value, %right_value : f32
+        %value = arith.select %take_left, %left_value, %right_value : f32
+        %index = arith.select %take_left, %left_index, %right_index : i32
+        tt.reduce.return %value, %index : f32, i32
+    }) : (tensor<16x16xf32, #target>, tensor<16x16xi32, #target>) -> (tensor<16xf32, #reduced>, tensor<16xi32, #reduced>)
+    %first = arith.addf %result#0, %reference : tensor<16xf32, #reduced>
+    %second = arith.mulf %result#0, %reference : tensor<16xf32, #reduced>
+    %third = arith.addi %result#1, %index_reference : tensor<16xi32, #reduced>
+    %fourth = arith.subi %result#1, %index_reference : tensor<16xi32, #reduced>
+    tt.return %first, %second, %third, %fourth : tensor<16xf32, #reduced>, tensor<16xf32, #reduced>, tensor<16xi32, #reduced>, tensor<16xi32, #reduced>
+  }
+}
+
+// -----
+
+// A while loop ties its initializer, before argument, condition yield, after
+// argument, back-edge yield, and result. Keep the whole cycle in one encoding
+// and place its only conversion at the immutable source boundary.
+//
+// BASELINE-LABEL: @layout_conflict_while_fanout
+// BASELINE-COUNT-4: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @layout_conflict_while_fanout
+// OPTIMIZED-COUNT-1: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @layout_conflict_while_fanout(%target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>) {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    %four = arith.constant 4 : i32
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result:2 = scf.while (%acc = %converted, %iteration = %zero) : (tensor<16x16xf32, #target>, i32) -> (tensor<16x16xf32, #target>, i32) {
+      %continue = arith.cmpi slt, %iteration, %four : i32
+      scf.condition(%continue) %acc, %iteration : tensor<16x16xf32, #target>, i32
+    } do {
+    ^bb0(%acc: tensor<16x16xf32, #target>, %iteration: i32):
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      %next_iteration = arith.addi %iteration, %one : i32
+      scf.yield %next, %next_iteration : tensor<16x16xf32, #target>, i32
+    }
+    %first = arith.mulf %result#0, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result#0, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result#0, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
+  }
+}
+
+// -----
+
+// A store in either while region is a protocol boundary. Preserve the legacy
+// assignment until effectful loop components can be rewritten as one unit.
+//
+// BASELINE-LABEL: @layout_conflict_effectful_while_fanout
+// BASELINE-COUNT-5: ttg.convert_layout
+// BASELINE-NOT: ttg.convert_layout
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @layout_conflict_effectful_while_fanout
+// OPTIMIZED-COUNT-5: ttg.convert_layout
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @layout_conflict_effectful_while_fanout(%ptr: !tt.ptr<f32>, %target: tensor<16x16xf32, #target>, %source: tensor<16x16xf32, #source>) -> (tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>) {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    %four = arith.constant 4 : i32
+    %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<16x16x!tt.ptr<f32>, #target>
+    %converted = ttg.convert_layout %source : tensor<16x16xf32, #source> -> tensor<16x16xf32, #target>
+    %result:2 = scf.while (%acc = %converted, %iteration = %zero) : (tensor<16x16xf32, #target>, i32) -> (tensor<16x16xf32, #target>, i32) {
+      %continue = arith.cmpi slt, %iteration, %four : i32
+      scf.condition(%continue) %acc, %iteration : tensor<16x16xf32, #target>, i32
+    } do {
+    ^bb0(%acc: tensor<16x16xf32, #target>, %iteration: i32):
+      %next = arith.addf %acc, %target : tensor<16x16xf32, #target>
+      tt.store %ptrs, %next : tensor<16x16x!tt.ptr<f32>, #target>
+      %next_iteration = arith.addi %iteration, %one : i32
+      scf.yield %next, %next_iteration : tensor<16x16xf32, #target>, i32
+    }
+    %first = arith.mulf %result#0, %target : tensor<16x16xf32, #target>
+    %second = arith.addf %result#0, %target : tensor<16x16xf32, #target>
+    %third = arith.subf %result#0, %target : tensor<16x16xf32, #target>
+    tt.return %first, %second, %third : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
+  }
+}
+
+// -----
+
 // The result encoding is a hard boundary. The remaining conversion must not
 // be removed merely to improve a conversion count.
 //
