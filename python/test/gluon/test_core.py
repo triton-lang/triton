@@ -5655,9 +5655,9 @@ def test_tma_validcheck_multi_stage():
             layout=smem_layout,
         )
 
-        PRIMARY_PHASE = ttgl.constexpr(0)
-        DONE = ttgl.constexpr(1)
-        NUM_STAGE_STATE_FIELDS = ttgl.constexpr(2)
+        PRIMARY_PHASE: ttgl.constexpr = 0
+        DONE: ttgl.constexpr = 1
+        NUM_STAGE_STATE_FIELDS: ttgl.constexpr = 2
 
         # Keep track of state[num_stages][num_states] as a one-dimensional
         # shared-memory array.
