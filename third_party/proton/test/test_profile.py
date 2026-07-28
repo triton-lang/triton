@@ -1839,7 +1839,7 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
         assert scope_b_frame["metrics"]["sum"] == 40.0
 
     assert len(data) > 1
-    cuda_devices = data[1].get("HIP", {})
+    cuda_devices = data[1].get("HIP", {}) if is_hip() else data[1].get("CUDA", {})
     assert len(cuda_devices) >= 2
 
 
