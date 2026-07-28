@@ -324,6 +324,52 @@ jobs:
           ccache --zero-stats
           pip install --cache-dir /triton-data/pip-cache -r python/requirements.txt
           pip install --cache-dir /triton-data/pip-cache -r python/test-requirements.txt
+          ROCM_SDK_PATHS_FILE="$(mktemp)"
+          python3 - > "$ROCM_SDK_PATHS_FILE" <<'PY'
+          import importlib
+          import pathlib
+
+          roots = {}
+          for name in ("_rocm_sdk_core", "_rocm_sdk_devel"):
+              try:
+                  module = importlib.import_module(name)
+              except ImportError:
+                  continue
+              roots[name] = pathlib.Path(module.__file__).resolve().parent
+
+          header = next((
+              path
+              for root in roots.values()
+              for path in root.rglob("rocprofiler-sdk/pc_sampling.h")
+          ), None)
+          core_root = roots.get("_rocm_sdk_core")
+          runtime_library = next(core_root.rglob("librocprofiler-sdk.so*"), None) if core_root else None
+          devel_root = roots.get("_rocm_sdk_devel")
+          devel_library = devel_root / "lib" if devel_root else None
+
+          print(header.parents[1] if header else "")
+          print(runtime_library.parent if runtime_library else "")
+          print(devel_library if devel_library and devel_library.is_dir() else "")
+          PY
+          ROCM_SDK_INCLUDE="$(sed -n '1p' "$ROCM_SDK_PATHS_FILE")"
+          ROCM_SDK_LIB="$(sed -n '2p' "$ROCM_SDK_PATHS_FILE")"
+          ROCM_SDK_DEVEL_LIB="$(sed -n '3p' "$ROCM_SDK_PATHS_FILE")"
+          rm -f "$ROCM_SDK_PATHS_FILE"
+          if [ ! -f "$ROCM_SDK_INCLUDE/rocprofiler-sdk/pc_sampling.h" ]; then
+            echo "rocprofiler-sdk PC sampling headers were not found"
+            exit 1
+          fi
+          if [ ! -f "$ROCM_SDK_LIB/librocprofiler-sdk.so" ] &&
+             ! ls "$ROCM_SDK_LIB"/librocprofiler-sdk.so.* > /dev/null 2>&1; then
+            echo "rocprofiler-sdk runtime library was not found"
+            exit 1
+          fi
+          echo "ROCM_SDK_INCLUDE=$ROCM_SDK_INCLUDE"
+          echo "ROCM_SDK_LIB=$ROCM_SDK_LIB"
+          echo "ROCM_SDK_DEVEL_LIB=$ROCM_SDK_DEVEL_LIB"
+          export TRITON_ROCPROFILER_SDK_INCLUDE_PATH="$ROCM_SDK_INCLUDE"
+          export TRITON_ROCPROFILER_SDK_LIB_PATH="$ROCM_SDK_LIB"
+          export TRITON_ROCPROFILER_SDK_DEVEL_LIB_PATH="$ROCM_SDK_DEVEL_LIB"
           make dev-install
       - name: Print ccache stats
         run: ccache --print-stats
