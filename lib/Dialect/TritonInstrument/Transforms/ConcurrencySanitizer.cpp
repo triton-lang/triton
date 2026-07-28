@@ -835,10 +835,7 @@ private:
     wb.setInsertionPointAfter(op);
     tti::ExperimentalLockAcquireOp::create(wb, lock, pred);
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
-      funcBuilder.createTransferVisibleWritesCall(
-          wb, alloc, getThreadPeersMask(thread, auxData.threadLayout), pred,
-          memType, op);
-      funcBuilder.createTransferVisibleReadsCall(
+      funcBuilder.createTransferVisibleAccessesCall(
           wb, alloc, getThreadPeersMask(thread, auxData.threadLayout), pred,
           memType, op);
     }

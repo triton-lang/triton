@@ -177,16 +177,12 @@ public:
   void createClearBarrierReadTrackingCall(ImplicitLocOpBuilder &b, Value mbar,
                                           Value pred, MemType memType,
                                           Operation *insertPoint);
-  // transferVisibleWrites: transfer write visibility tracked by a barrier to
-  // all threads in threadMask.
-  void createTransferVisibleWritesCall(ImplicitLocOpBuilder &b, Value mbar,
-                                       uint64_t threadMask, Value pred,
-                                       MemType memType, Operation *insertPoint);
-  // transferVisibleReads: transfer read visibility tracked by a barrier to all
-  // threads in threadMask.
-  void createTransferVisibleReadsCall(ImplicitLocOpBuilder &b, Value mbar,
-                                      uint64_t threadMask, Value pred,
-                                      MemType memType, Operation *insertPoint);
+  // transferVisibleAccesses: transfer the barrier's independently tracked
+  // write and read visibility to all threads in threadMask.
+  void createTransferVisibleAccessesCall(ImplicitLocOpBuilder &b, Value mbar,
+                                         uint64_t threadMask, Value pred,
+                                         MemType memType,
+                                         Operation *insertPoint);
   // verifyWriteVisibility: ensure the thread either sees the latest write or no
   // other thread is writing the buffer.
   void createVerifyWriteVisibilityCall(ImplicitLocOpBuilder &b, Value buf,
