@@ -4,14 +4,15 @@ import triton
 
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton.experimental.gluon.language.nvidia import rubin
-
-mbarrier = rubin.mbarrier
-tma = rubin.tma
+from triton.experimental.gluon.language.nvidia.rubin import mbarrier, tma, fence_async_shared
 
 
-# Keep publication and retry entirely within one kernel. This preserves the
-# invalid-first behavior under test without relying on host stream scheduling.
+# In the following tests, the shared buffer is initialized with invalid data.
+# To make the tests interesting, we want to ensure that the TMA warp reads
+# the invalid data at least once, before the buffer is filled with valid data.
+# A simple, atomic-based handshake protocol is used for that purpose. We found that
+# this is more robust than having the kernel running and waiting for the valid data in
+# a separate stream while the buffer is filled with valid data in the default stream.
 @gluon.jit
 def request_data_update(flag_ptr):
     ttgl.atomic_cas(flag_ptr, 0, 1)
@@ -48,6 +49,8 @@ def test_tma_check_valid(report_validity):
             done, valid = mbarrier.test_wait_validity(bar, primary_phase)
 
             if done == 1 and valid == 0:
+                # After the first call to request_data_update, the input buffer is filled with valid data.
+                # This warp keeps retrying TMA until valid data is loaded.
                 request_data_update(need_update_ptr)
                 primary_phase ^= 1
                 mbarrier.expect(bar, input_desc.block_type.nbytes)
@@ -59,12 +62,16 @@ def test_tma_check_valid(report_validity):
         xindex = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(1, block_layout))[:, None]
         yindex = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(0, block_layout))[None, :]
 
+        # Wait for the conditonal phase to flip - TMA has finished AND the data is valid
         mbarrier.wait(bar, 0, conditional=True)
         val = smem.load(block_layout)
         ttgl.store(output_ptr + yindex + xindex * XBLOCK, val)
 
     @gluon.jit
     def data_init_warp(input_ptr, valid_input_ptr, need_update_ptr, XBLOCK: ttgl.constexpr):
+        # This is a contrived warp solely for a testing purpose. It ensures that
+        # the shared buffer is filled with valid data only after the TMA warp loads
+        # invalid data.
         copy_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0])
         copy_width: ttgl.constexpr = 32
         numel: ttgl.constexpr = XBLOCK * XBLOCK
@@ -164,10 +171,13 @@ def test_tma_check_valid(report_validity):
 
 
 def test_multi_stage():
-    PRIMARY_PHASE = ttgl.constexpr(0)
-    DONE = ttgl.constexpr(1)
-    NUM_STAGE_STATE_FIELDS = ttgl.constexpr(2)
+    # Pipelining of loads becomes challenging in the presence of TMA retry - now the TMA warp
+    # needs to wait for the completion of TMA that it has issued, and retry if necessary.
+    # What's demonstrated here is the most naive solution, involving per-stage state management
+    # in the TMA warp. Improving on this solution is left for future work.
 
+    # Helpers for loading and storing per-stage scalar quantities. Since Gluon does not support
+    # local array, we use SMEM for the storage.
     @gluon.jit
     def store_scalar(smem, value):
         scalar_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0])
@@ -209,8 +219,11 @@ def test_multi_stage():
             layout=smem_layout,
         )
 
-        # Gluon has no mutable local arrays, so flatten all per-stage state
-        # into shared memory as field * num_stages + stage.
+        PRIMARY_PHASE = ttgl.constexpr(0)
+        DONE = ttgl.constexpr(1)
+        NUM_STAGE_STATE_FIELDS = ttgl.constexpr(2)
+
+        # Keep track of state[num_stages][num_states] as an 1D "array"
         stage_state = ttgl.allocate_shared_memory(
             ttgl.int32,
             [NUM_STAGE_STATE_FIELDS * num_stages, 1],
@@ -244,18 +257,22 @@ def test_multi_stage():
             num_done = 0
             while num_done != num_stages:
                 for stage in ttgl.static_range(num_stages):
+                    # Has this stage observed valid data in this batch?
                     if load_stage_state(stage_state, DONE, stage, num_stages) == 0:
                         cur_full_bar = bar_full.index(stage)
                         primary_phase = load_stage_state(stage_state, PRIMARY_PHASE, stage, num_stages)
                         attempt_done, data_valid = mbarrier.test_wait_validity(cur_full_bar, primary_phase)
 
                         if attempt_done == 1:
+                            # TMA has completed for this primary phase and the stage
                             store_stage_state(stage_state, PRIMARY_PHASE, stage, num_stages, primary_phase ^ 1)
 
                             if data_valid:
                                 num_done += 1
                                 store_stage_state(stage_state, DONE, stage, num_stages, 1)
                             else:
+                                # The primary phase has advanced but need a retry, check validity after the next
+                                # primary phase has completed
                                 request_data_update(need_update_ptr)
                                 mbarrier.expect(cur_full_bar, input_desc.block_type.nbytes)
                                 tma.async_load(
@@ -314,7 +331,7 @@ def test_multi_stage():
                 value = smem.slice(stage, 1, dim=0).load(block_layout)
                 value = ttgl.reshape(value, [block_size])
 
-                rubin.fence_async_shared()
+                fence_async_shared()
                 mbarrier.arrive(bar_empty.index(stage), count=1)
                 ttgl.store(output_ptr + offset, value)
                 offset += block_size
