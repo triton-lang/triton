@@ -549,6 +549,61 @@ GSAN_DEVICE void tensorLoad(ThreadState *state, const char *stackPtr,
   rwLockReleaseRead(state->lock);
 }
 
+GSAN_DEVICE void
+rectangularTMAAccess(ThreadState *state, uintptr_t base, __INT64_TYPE__ shape0,
+                     __INT64_TYPE__ shape1, __INT64_TYPE__ stride0,
+                     __INT64_TYPE__ coord0, __INT64_TYPE__ coord1,
+                     int blockRows, int blockCols, int numThreads,
+                     int bytesPerElem, bool pred, bool isStore, Location loc) {
+  if (!pred)
+    return;
+
+  __INT64_TYPE__ firstRow = coord0 < 0 ? 0 : coord0;
+  __INT64_TYPE__ endRow = coord0 + blockRows;
+  if (endRow > shape0)
+    endRow = shape0;
+  __INT64_TYPE__ firstCol = coord1 < 0 ? 0 : coord1;
+  __INT64_TYPE__ endCol = coord1 + blockCols;
+  if (endCol > shape1)
+    endCol = shape1;
+  if (firstRow >= endRow || firstCol >= endCol)
+    return;
+
+  uintptr_t firstByte =
+      base + static_cast<uintptr_t>(firstRow * stride0 + firstCol) *
+                 static_cast<uintptr_t>(bytesPerElem);
+  uintptr_t endByte =
+      base + static_cast<uintptr_t>(firstRow * stride0 + endCol) *
+                 static_cast<uintptr_t>(bytesPerElem);
+  Range firstRange = roundRange(Range{firstByte, endByte});
+  uintptr_t cellsPerRow =
+      (firstRange.end - firstRange.start) / kShadowMemGranularityBytes;
+  uintptr_t numCells = static_cast<uintptr_t>(endRow - firstRow) * cellsPerRow;
+  uintptr_t index = getThreadIdxX() % static_cast<uint32_t>(numThreads);
+  if (index >= numCells)
+    return;
+
+  rwLockAcquireRead(state->lock);
+  for (; index < numCells; index += static_cast<uintptr_t>(numThreads)) {
+    uintptr_t row = index / cellsPerRow;
+    uintptr_t col = index % cellsPerRow;
+    uintptr_t rowBase =
+        base +
+        (static_cast<uintptr_t>(firstRow) + row) *
+            static_cast<uintptr_t>(stride0) *
+            static_cast<uintptr_t>(bytesPerElem) +
+        static_cast<uintptr_t>(firstCol) * static_cast<uintptr_t>(bytesPerElem);
+    uintptr_t shadowCell =
+        (rowBase & ~static_cast<uintptr_t>(kShadowMemGranularityBytes - 1)) +
+        col * kShadowMemGranularityBytes;
+    if (isStore)
+      writeRange(state, shadowCell, kShadowMemGranularityBytes, loc);
+    else
+      readRange(state, shadowCell, kShadowMemGranularityBytes, loc);
+  }
+  rwLockReleaseRead(state->lock);
+}
+
 GSAN_DEVICE void initAtomicEventState(AtomicEventState *event) {
   event->threadState = nullptr;
   event->numCells = 0;
@@ -711,6 +766,34 @@ __triton_gsan_store_tensor(void *globalState, const char *stackPtr,
   auto *threadState =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
   gsan::tensorStore(threadState, stackPtr, numElems, bytesPerElem, loc);
+}
+
+extern "C" GSAN_DEVICE void __triton_gsan_load_tma(
+    void *globalState, const void *base, __INT64_TYPE__ shape0,
+    __INT64_TYPE__ shape1, __INT64_TYPE__ stride0, __INT64_TYPE__ coord0,
+    __INT64_TYPE__ coord1, int blockRows, int blockCols, int numThreads,
+    int bytesPerElem, int pred, const char *file, unsigned line) {
+  auto loc = gsan::Location{file, line};
+  auto *state =
+      gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
+  gsan::rectangularTMAAccess(state, reinterpret_cast<gsan::uintptr_t>(base),
+                             shape0, shape1, stride0, coord0, coord1, blockRows,
+                             blockCols, numThreads, bytesPerElem, pred != 0,
+                             /*isStore=*/false, loc);
+}
+
+extern "C" GSAN_DEVICE void __triton_gsan_store_tma(
+    void *globalState, const void *base, __INT64_TYPE__ shape0,
+    __INT64_TYPE__ shape1, __INT64_TYPE__ stride0, __INT64_TYPE__ coord0,
+    __INT64_TYPE__ coord1, int blockRows, int blockCols, int numThreads,
+    int bytesPerElem, int pred, const char *file, unsigned line) {
+  auto loc = gsan::Location{file, line};
+  auto *state =
+      gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
+  gsan::rectangularTMAAccess(state, reinterpret_cast<gsan::uintptr_t>(base),
+                             shape0, shape1, stride0, coord0, coord1, blockRows,
+                             blockCols, numThreads, bytesPerElem, pred != 0,
+                             /*isStore=*/true, loc);
 }
 
 extern "C" GSAN_DEVICE void

@@ -710,9 +710,14 @@ def test_masked_tensor_access_updates_only_active_shadow(store, first_active, la
 
 
 def _masked_store_change_mask(storage: torch.Tensor, m_size: int, n_size: int, row_idx: int,
-                              col_idx: int) -> torch.Tensor:
+                              col_idx: int, block: int) -> torch.Tensor:
     changed_mask = torch.zeros(storage.shape, dtype=torch.bool)
-    changed_mask[row_idx:m_size, col_idx:n_size] = True
+    first_row = max(row_idx, 0)
+    last_row = min(row_idx + block, m_size)
+    first_col = max(col_idx, 0)
+    last_col = min(col_idx + block, n_size)
+    if first_row < last_row and first_col < last_col:
+        changed_mask[first_row:last_row, first_col:last_col] = True
     return changed_mask
 
 
@@ -779,33 +784,38 @@ def test_gluon_async_copy_updates_shadow(with_gsan):
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-def test_tma_masked_store_updates_shadow(with_gsan, with_allocator):
+@pytest.mark.parametrize(
+    ("row_idx", "col_idx"),
+    [(5, 8), (0, 0), (34, 8), (5, 36), (40, 8), (5, 40)],
+    ids=["partial", "origin", "last-row", "last-column", "empty-row", "empty-column"],
+)
+def test_tma_masked_store_updates_shadow(with_gsan, with_allocator, row_idx, col_idx):
     block = 32
     m_size = 35
     n_size = 37
     padded_m = 40
     padded_n = 40
-    row_idx = 5
-    col_idx = 8
-    valid_rows = m_size - row_idx
-    valid_cols = n_size - col_idx
+    first_row = max(row_idx, 0)
+    last_row = min(row_idx + block, m_size)
+    first_col = max(col_idx, 0)
+    last_col = min(col_idx + block, n_size)
     target_storage = torch.zeros((padded_m, padded_n), dtype=torch.int32, device="cuda")
     target = target_storage[:m_size, :n_size]
     shadow0 = _shadow_cells_for_tensor(target_storage)
-    changed_mask = _masked_store_change_mask(target_storage, m_size, n_size, row_idx, col_idx)
+    changed_mask = _masked_store_change_mask(target_storage, m_size, n_size, row_idx, col_idx, block)
 
     _device_tma_masked_store_kernel[(1, )](target, m_size, n_size, row_idx, col_idx, target.stride(0), BLOCK=block)
     torch.cuda.synchronize()
 
     expected = torch.zeros_like(target)
-    expected[row_idx:, col_idx:] = 1
+    if first_row < last_row and first_col < last_col:
+        expected[first_row:last_row, first_col:last_col] = 1
     torch.testing.assert_close(target, expected)
 
     shadow1 = _shadow_cells_for_tensor(target_storage)
     _assert_shadow_mask(shadow0, shadow1, changed_mask, access_kind="write")
-    assert target_storage[m_size, col_idx].item() == 0
-    assert valid_rows < block
-    assert valid_cols < block
+    if 0 <= first_col < padded_n:
+        assert target_storage[m_size, first_col].item() == 0
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")

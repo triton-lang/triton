@@ -32,6 +32,9 @@ static constexpr StringLiteral kGSanLoadTensorRuntimeFn =
     "__triton_gsan_load_tensor";
 static constexpr StringLiteral kGSanStoreTensorRuntimeFn =
     "__triton_gsan_store_tensor";
+static constexpr StringLiteral kGSanLoadTMARuntimeFn = "__triton_gsan_load_tma";
+static constexpr StringLiteral kGSanStoreTMARuntimeFn =
+    "__triton_gsan_store_tma";
 static constexpr StringLiteral kGSanAtomicTensorRuntimeFn =
     "__triton_gsan_atomic_tensor";
 static constexpr StringLiteral kGSanAtomicBeginRuntimeFn =
@@ -53,6 +56,11 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
   SmallVector<Type> argTys;
   if (funcName == kGSanInitRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanLoadTMARuntimeFn ||
+             funcName == kGSanStoreTMARuntimeFn) {
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i64_ty,      i64_ty, i64_ty,
+              i64_ty,      i64_ty,      i32_ty,      i32_ty, i32_ty,
+              i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanLoadTensorRuntimeFn ||
              funcName == kGSanStoreTensorRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty, ptr_ty(ctx), i32_ty};
@@ -387,6 +395,41 @@ decodeTensorDescStrides(ConversionPatternRewriter &rewriter, Location loc,
 ////////////////////////////////////////////
 // Patterns
 ////////////////////////////////////////////
+
+struct GSanTMAAccessOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanTMAAccessOp> {
+  using ConvertOpToLLVMPattern<
+      tti::ExperimentalGSanTMAAccessOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanTMAAccessOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto globalState = getGSanGlobalStateArg(op, rewriter, loc);
+    if (failed(globalState))
+      return failure();
+
+    TritonLLVMOpBuilder b(loc, rewriter);
+    auto runtimeFunc = getOrCreateGSanRuntimeFunction(
+        rewriter,
+        op.getIsStore() ? kGSanStoreTMARuntimeFn : kGSanLoadTMARuntimeFn);
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    Value base = adaptor.getBase();
+    if (base.getType() != ptr_ty(rewriter.getContext()))
+      base = b.addrspacecast(ptr_ty(rewriter.getContext()), base);
+
+    b.call(runtimeFunc,
+           ValueRange{
+               *globalState, base, adaptor.getShape0(), adaptor.getShape1(),
+               adaptor.getStride0(), adaptor.getCoord0(), adaptor.getCoord1(),
+               b.i32_val(op.getBlockRows()), b.i32_val(op.getBlockCols()),
+               b.i32_val(op.getNumThreads()), b.i32_val(op.getElemBytes()),
+               b.zext(i32_ty, adaptor.getPred()), sourceLoc.file,
+               sourceLoc.line});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
 
 struct GSanTensorAccessOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalGSanTensorAccessOp> {
@@ -849,6 +892,7 @@ void mlir::triton::populateGSanToLLVMPatterns(
     const TargetInfoBase &targetInfo) {
   patterns.add<GSanInitOpConversion>(typeConverter);
   patterns.add<GSanTensorDescInfoOpConversion>(typeConverter);
+  patterns.add<GSanTMAAccessOpConversion>(typeConverter);
   patterns.add<GSanAtomicPollOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanAtomicCASOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanAtomicRMWOpConversion>(typeConverter, targetInfo);

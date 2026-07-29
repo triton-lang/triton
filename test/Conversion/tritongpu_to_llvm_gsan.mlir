@@ -59,10 +59,11 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x64xf16, #shared_f16, #smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
-    // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<32 x i64>, array<32 x i8>)>
-    // CHECK: %[[COUNT:.*]] = llvm.mlir.constant(32 : i32) : i32
-    // CHECK: %[[BYTES:.*]] = llvm.mlir.constant(4 : i32) : i32
-    // CHECK: llvm.call @__triton_gsan_load_tensor(%{{.*}}, %{{.*}}, %[[COUNT]], %[[BYTES]], %{{.*}}, %{{.*}})
+    // CHECK-NOT: llvm.alloca
+    // CHECK: %[[ROWS:.*]] = llvm.mlir.constant(32 : i32) : i32
+    // CHECK: %[[COLS:.*]] = llvm.mlir.constant(64 : i32) : i32
+    // CHECK: %[[THREADS:.*]] = llvm.mlir.constant(32 : i32) : i32
+    // CHECK: llvm.call @__triton_gsan_load_tma(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[ROWS]], %[[COLS]], %[[THREADS]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}})
     ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<32x64xf16, #shared_f16>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared_f16, #smem, mutable>
     tt.return
   }
@@ -81,11 +82,53 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x64xf16, #shared_f16, #smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 16384 : i32} : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
-    // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<32 x i64>, array<32 x i8>)>
-    // CHECK: %[[COUNT_4W:.*]] = llvm.mlir.constant(32 : i32) : i32
-    // CHECK: %[[BYTES_4W:.*]] = llvm.mlir.constant(4 : i32) : i32
-    // CHECK: llvm.call @__triton_gsan_load_tensor(%{{.*}}, %{{.*}}, %[[COUNT_4W]], %[[BYTES_4W]], %{{.*}}, %{{.*}})
+    // CHECK-NOT: llvm.alloca
+    // CHECK: %[[ROWS_4W:.*]] = llvm.mlir.constant(128 : i32) : i32
+    // CHECK: %[[COLS_4W:.*]] = llvm.mlir.constant(64 : i32) : i32
+    // CHECK: %[[THREADS_4W:.*]] = llvm.mlir.constant(128 : i32) : i32
+    // CHECK: llvm.call @__triton_gsan_load_tma(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[ROWS_4W]], %[[COLS_4W]], %[[THREADS_4W]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}})
     ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<128x64xf16, #shared_f16>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared_f16, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared_f8 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func @tma_f8_gsan_runtime_loop
+  tt.func @tma_f8_gsan_runtime_loop(%desc: !tt.tensordesc<128x256xf8E4M3FN, #shared_f8>) {
+    %true = arith.constant true
+    %c0_i32 = arith.constant 0 : i32
+    %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x256xf8E4M3FN, #shared_f8, #smem, mutable>
+    %barrier = ttg.local_alloc {allocation.offset = 32768 : i32} : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
+    // CHECK-NOT: llvm.alloca
+    // CHECK: %[[F8_ROWS:.*]] = llvm.mlir.constant(128 : i32) : i32
+    // CHECK: %[[F8_COLS:.*]] = llvm.mlir.constant(256 : i32) : i32
+    // CHECK: %[[F8_THREADS:.*]] = llvm.mlir.constant(32 : i32) : i32
+    // CHECK: %[[F8_BYTES:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK: llvm.call @__triton_gsan_load_tma(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[F8_ROWS]], %[[F8_COLS]], %[[F8_THREADS]], %[[F8_BYTES]], %{{.*}}, %{{.*}}, %{{.*}})
+    ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<128x256xf8E4M3FN, #shared_f8>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<128x256xf8E4M3FN, #shared_f8, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared_f16 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func @tma_f16_gsan_store_runtime_loop
+  tt.func @tma_f16_gsan_store_runtime_loop(%desc: !tt.tensordesc<32x64xf16, #shared_f16>) {
+    %c0_i32 = arith.constant 0 : i32
+    %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x64xf16, #shared_f16, #smem, mutable>
+    // CHECK-NOT: llvm.alloca
+    // CHECK: llvm.call @__triton_gsan_store_tma
+    ttng.async_tma_copy_local_to_global %desc[%c0_i32, %c0_i32] %buf : !tt.tensordesc<32x64xf16, #shared_f16>, !ttg.memdesc<32x64xf16, #shared_f16, #smem, mutable>
     tt.return
   }
 }

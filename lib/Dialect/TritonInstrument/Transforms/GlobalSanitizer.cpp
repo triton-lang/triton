@@ -350,6 +350,31 @@ static std::pair<Value, Value> createGatherScatterAccess(
   return std::make_pair(ptrs, mask);
 }
 
+static bool instrumentRectangularTMAAccess(OpBuilder &builder, Location loc,
+                                           const DescriptorInfo &desc,
+                                           ArrayRef<int64_t> blockShape,
+                                           ValueRange offsets, Value pred,
+                                           bool isStore) {
+  if (blockShape.size() != 2 || offsets.size() != 2)
+    return false;
+
+  Type elemTy = cast<tt::PointerType>(desc.base.getType()).getPointeeType();
+  if (!elemTy.isIntOrFloat() || elemTy.getIntOrFloatBitWidth() % 8 != 0)
+    return false;
+
+  int numWarps = ttg::lookupNumWarps(builder.getInsertionBlock()->getParent());
+  int numThreads = numWarps * ttg::lookupThreadsPerWarp(builder);
+  Value active = pred ? pred : arith::ConstantIntOp::create(builder, loc, 1, 1);
+  ExperimentalGSanTMAAccessOp::create(
+      builder, loc, desc.base, desc.shape[0], desc.shape[1], desc.strides[0],
+      offsets[0], offsets[1], active, builder.getI32IntegerAttr(blockShape[0]),
+      builder.getI32IntegerAttr(blockShape[1]),
+      builder.getI32IntegerAttr(numThreads),
+      builder.getI32IntegerAttr(elemTy.getIntOrFloatBitWidth() / 8),
+      builder.getBoolAttr(isStore));
+  return true;
+}
+
 static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
   if (isa<ttng::TensorDescIm2ColType>(op.getDesc().getType()))
     return;
@@ -359,6 +384,10 @@ static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
   auto blockShape = op.getDesc().getType().getShape();
 
   auto offsets = castToI64(builder, op.getLoc(), op.getCoord());
+  if (instrumentRectangularTMAAccess(builder, op.getLoc(), desc, blockShape,
+                                     offsets, op.getPred(),
+                                     /*isStore=*/false))
+    return;
   auto access = createTiledAccess(builder, op.getLoc(), desc, blockShape,
                                   offsets, op.getPred());
   ExperimentalGSanTensorAccessOp::create(builder, op.getLoc(), access.first,
@@ -372,6 +401,9 @@ static void instrumentAsyncTMAStore(Operation *op, Value descValue,
   auto blockShape = cast<tt::TensorDescType>(descValue.getType()).getShape();
 
   auto offsets = castToI64(builder, op->getLoc(), coords);
+  if (instrumentRectangularTMAAccess(builder, op->getLoc(), desc, blockShape,
+                                     offsets, Value(), /*isStore=*/true))
+    return;
   auto access = createTiledAccess(builder, op->getLoc(), desc, blockShape,
                                   offsets, std::nullopt);
   ExperimentalGSanTensorAccessOp::create(builder, op->getLoc(), access.first,

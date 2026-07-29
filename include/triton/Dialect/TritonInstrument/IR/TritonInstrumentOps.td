@@ -122,6 +122,29 @@ def TTI_ExperimentalGSanTensorDescInfoOp
   }];
 }
 
+def TTI_ExperimentalGSanTMAAccessOp
+    : TTI_Op<"experimental_gsan_tma_access"> {
+  let summary = "Instrument a rectangular TMA load/store access for GSan";
+  let description = [{
+    Records the exact in-bounds shadow cells of a two-dimensional rectangular
+    TMA access without materializing a tensor of pointers and masks. The
+    producer partition's actual thread count distributes the runtime work.
+  }];
+  let arguments = (ins
+    Arg<TT_Ptr, "", [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$base,
+    I64:$shape0, I64:$shape1, I64:$stride0,
+    I64:$coord0, I64:$coord1, I1:$pred,
+    I32Attr:$blockRows, I32Attr:$blockCols,
+    I32Attr:$numThreads, I32Attr:$elemBytes, BoolAttr:$isStore
+  );
+  let assemblyFormat = [{
+    $base `[` $coord0 `,` $coord1 `]`
+    `shape` `(` $shape0 `,` $shape1 `)`
+    `stride` $stride0 `,` $pred `,` $isStore
+    attr-dict `:` qualified(type($base))
+  }];
+}
+
 def TTI_ExperimentalGSanTensorAccessOp
     : TTI_Op<"experimental_gsan_tensor_access",
              [TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
