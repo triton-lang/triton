@@ -1077,11 +1077,7 @@ getMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
 struct AsyncTMACopyGlobalToLocalOpConversion
     : public ConvertOpToLLVMPattern<
           triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp> {
-  AsyncTMACopyGlobalToLocalOpConversion(const LLVMTypeConverter &converter,
-                                        int computeCapability,
-                                        PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(converter, benefit),
-        computeCapability(computeCapability) {}
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp op,
@@ -1165,10 +1161,6 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       return op.emitError(
           "TMA destination and completion barrier must belong to the same "
           "CTA or a CTA pair");
-    if (affineBlockMask && computeCapability < 100)
-      return op.emitError(
-          "TMA destination and completion barrier must belong to the same "
-          "CTA before Blackwell");
     // Use a cross-CTA mbarrier pointer when the barrier mask is set.
     bool crossCTABarrier = barrierMask != 0;
     if (crossCTABarrier) {
@@ -1275,7 +1267,6 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     rewriter.eraseOp(op);
     return success();
   }
-  int computeCapability;
 };
 
 LogicalResult convertTMAStoreLikeOp(Operation *op,
@@ -1816,9 +1807,8 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
       typeConverter, targetInfo, computeCapability, axisInfoAnalysis, benefit);
   patterns.add<AsyncCommitGroupOpConversion, AsyncWaitOpConversion,
                AsyncCopyMbarrierArriveOpConversion>(typeConverter, benefit);
-  patterns.add<AsyncTMACopyGlobalToLocalOpConversion>(
-      typeConverter, computeCapability, benefit);
-  patterns.add<AsyncTMACopyLocalToGlobalOpConversion,
+  patterns.add<AsyncTMACopyGlobalToLocalOpConversion,
+               AsyncTMACopyLocalToGlobalOpConversion,
                AsyncTMAReduceOpConversion, AsyncTMAGatherOpConversion,
                AsyncTMAScatterOpConversion, TMAStoreWaitOpConversion>(
       typeConverter, benefit);
