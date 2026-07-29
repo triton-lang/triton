@@ -639,16 +639,6 @@ void init_gluon_ir(py::module_ &m) {
              check(ty.getEncoding(), "expected a tensor with an encoding");
              return layoutToGluon(ty.getEncoding(), self.isRubin());
            })
-      .def("get_packed_arith_fp4_layout",
-           [](GluonOpBuilder &self, Value operand, Type elementType,
-              int axis) -> py::object {
-             auto operandType = dyn_cast<RankedTensorType>(operand.getType());
-             check(operandType, "expected a distributed FP4 tensor");
-             auto resultType = ttg::inferFp4ToFpResultType(
-                 operandType, elementType, axis, self.getLastLoc());
-             check(succeeded(resultType), "cannot infer packed FP4 layout");
-             return layoutToGluon(resultType->getEncoding(), self.isRubin());
-           })
       .def("get_gluon_layout_from_memdesc",
            [](GluonOpBuilder &self, Value memdesc) -> py::object {
              auto ty = dyn_cast<ttg::MemDescType>(memdesc.getType());
@@ -700,27 +690,32 @@ void init_gluon_ir(py::module_ &m) {
       .def("create_packed_arith",
            [](GluonOpBuilder &self, Type resultType,
               const std::string &operation,
-              const std::vector<Value> &operands) -> Value {
+              std::vector<Value> operands) -> Value {
              auto kind = ttng::symbolizePackedArithOpKind(operation);
              check(kind.has_value(), "unknown packed arithmetic operation");
-             auto resultTensorType = cast<RankedTensorType>(resultType);
-             SmallVector<Value> normalized;
-             for (Value operand : operands) {
-               auto operandType = cast<RankedTensorType>(operand.getType());
-               if (isa<Float8E4M3FNType, Float8E5M2Type>(
-                       resultTensorType.getElementType()) &&
-                   operandType.getElementType().isInteger(8) &&
-                   operandType.getShape() == resultTensorType.getShape()) {
-                 auto scaleType = RankedTensorType::get(
-                     operandType.getShape(),
-                     Float8E8M0FNUType::get(self.getContext()),
-                     operandType.getEncoding());
-                 operand = self.create<arith::BitcastOp>(scaleType, operand);
-               }
-               normalized.push_back(operand);
+             auto resultTensorType = dyn_cast<RankedTensorType>(resultType);
+             if (!resultTensorType) {
+               auto operandType =
+                   cast<RankedTensorType>(operands.front().getType());
+               auto inferred = ttg::inferFp4ToFpResultType(
+                   operandType, resultType, operandType.getRank() - 1,
+                   self.getLastLoc());
+               check(succeeded(inferred), "cannot infer packed FP4 layout");
+               resultTensorType = *inferred;
              }
-             return self.create<ttng::PackedArithOp>(resultType, *kind,
-                                                     normalized);
+             for (Value &operand : operands) {
+               auto operandType = cast<RankedTensorType>(operand.getType());
+               if (!isa<Float8E4M3FNType, Float8E5M2Type>(
+                       resultTensorType.getElementType()) ||
+                   !operandType.getElementType().isInteger(8) ||
+                   operandType.getShape() != resultTensorType.getShape())
+                 continue;
+               operand = self.create<arith::BitcastOp>(
+                   operandType.clone(Float8E8M0FNUType::get(self.getContext())),
+                   operand);
+             }
+             return self.create<ttng::PackedArithOp>(resultTensorType, *kind,
+                                                     operands);
            })
       .def("create_fp4_to_fp",
            [](GluonOpBuilder &self, Value src, Type elemType,

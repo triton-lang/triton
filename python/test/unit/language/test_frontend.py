@@ -26,30 +26,6 @@ def anchor(v):
     pass
 
 
-@filecheck_test
-@triton.jit
-def test_inline_lambda_reduce():
-    # CHECK-LABEL: test_inline_lambda_reduce
-    values = tl.arange(0, 16)
-    # CHECK: "tt.reduce"
-    # CHECK: arith.addi
-    # CHECK: tt.reduce.return
-    result = tl.reduce(values, axis=0, combine_fn=lambda lhs, rhs: lhs + rhs)
-    anchor(result)
-
-
-@filecheck_test
-@triton.jit
-def test_inline_lambda_capture():
-    # CHECK-LABEL: test_inline_lambda_capture
-    # CHECK: tt.make_range
-    values = tl.arange(0, 16)
-    offset = tl.full((), 3, tl.int32)
-    # CHECK: arith.addi
-    result = (lambda value, /, *, increment=offset: value + increment + offset)(values)
-    anchor(result)
-
-
 @triton.aggregate
 class Pair:
     first: tl.tensor

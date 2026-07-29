@@ -622,6 +622,17 @@ def _subtiled_qk_load(config, s_tmem, use_tmem_red: gl.constexpr):
 
 
 @gluon.jit
+def _combine_add2(a, b, c, d):
+    parent: gl.constexpr = gl.BlockedLayout([1, 2], [1, 32], [1, gl.num_warps()], [1, 0],
+                                            cga_layout=[[0, 0]] * (gl.num_ctas().bit_length() - 1))
+    layout: gl.constexpr = gl.SliceLayout(0, parent)
+    lanes = gl.arange(0, 2, layout=layout)
+    lhs = gl.where(lanes == 0, a, b)
+    rhs = gl.where(lanes == 0, c, d)
+    return gl.split(bw.add2(lhs, rhs))
+
+
+@gluon.jit
 def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
                         s_consumer, corr_producer, exp_turnstile, corr_bar,  #
                         offs_m, m_i, l_i, STAGE: gl.constexpr, use_tmem_red: gl.constexpr):
@@ -665,11 +676,7 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         if config.use_exp2_turnstile:
             mbarrier.arrive(exp_bar, count=1)
 
-        p0, p1 = gl.reduce(
-            _split_n(p),
-            axis=1,
-            combine_fn=lambda a, b, c, d: gl.split(bw.add2(gl.join(a, b), gl.join(c, d))),
-        )
+        p0, p1 = gl.reduce(_split_n(p), axis=1, combine_fn=_combine_add2)
         l_ij = gl.join(p0, p1)
         l_ij = gl.convert_layout(l_ij, l_i.type.layout, assert_trivial=True)
         alpha = gl.convert_layout(alpha, gl.SliceLayout(1, l_i.type.layout), assert_trivial=True)

@@ -71,13 +71,19 @@ def packed_arith(operation, *operands, dtype=None, _semantic=None):
     operands = tuple(_semantic.to_tensor(operand) for operand in operands)
     _check(any(isinstance(operand.type, ttgl.distributed_type) for operand in operands),
            lambda: "packed arithmetic requires at least one distributed tensor operand")
-    floating = tuple(operand for operand in operands
-                     if isinstance(operand.type, ttgl.distributed_type) and operand.dtype.is_floating())
+    floating = [
+        operand for operand in operands
+        if isinstance(operand.type, ttgl.distributed_type) and operand.dtype.is_floating()
+    ]
+    reference = max(floating, key=lambda operand: operand.numel.value, default=None)
     dtype = _unwrap_if_constexpr(dtype)
 
-    if floating:
-        reference = max(floating, key=lambda operand: operand.numel.value)
-        reference_type = reference.type
+    if reference is None:
+        _check(dtype is not None, lambda: "packed FP4 operands require an explicit result dtype")
+        shape = list(operands[0].type.shape)
+        shape[-1] *= 2
+    else:
+        shape = reference.type.shape
         if dtype is None:
             addend = operands[-1]
             dtype = addend.dtype if operation in ("add", "sub", "fma") and addend.dtype.is_fp8() else reference.dtype
@@ -85,23 +91,12 @@ def packed_arith(operation, *operands, dtype=None, _semantic=None):
                 if not operand.dtype.is_floating() or (dtype.is_fp8() and operand.dtype.is_fp8()):
                     continue
                 dtype = _semantic.computation_type_impl(dtype, False, operand.dtype, not operand.type.is_block(), False)
-    else:
-        _check(dtype is not None, lambda: "packed FP4 operands require an explicit result dtype")
-        _check(isinstance(dtype, ttgl.dtype), lambda: f"expected 'dtype' to be a dtype but got {dtype}")
-        reference = None
-        shape = list(operands[0].type.shape)
-        axis = len(shape) - 1
-        shape[axis] *= 2
-        builder = _semantic.builder
-        layout = builder.get_packed_arith_fp4_layout(operands[0].handle, dtype.to_ir(builder), axis)
-        reference_type = ttgl.distributed_type(dtype, shape, layout)
 
     _check(isinstance(dtype, ttgl.dtype), lambda: f"expected 'dtype' to be a dtype but got {dtype}")
-    result_type = reference_type.with_element_ty(dtype)
     normalized = []
     for operand in operands:
         is_packed_fp4 = (isinstance(operand.type, ttgl.distributed_type) and operand.dtype.is_int()
-                         and operand.dtype.primitive_bitwidth == 8 and operand.type.shape != reference_type.shape)
+                         and operand.dtype.primitive_bitwidth == 8 and operand.type.shape != shape)
         if not is_packed_fp4:
             _check(reference is not None, lambda: "packed FP4 operands require a floating-point tensor operand")
             if not operand.type.is_block():
@@ -110,7 +105,11 @@ def packed_arith(operation, *operands, dtype=None, _semantic=None):
         normalized.append(operand.handle)
 
     builder = _semantic.builder
-    handle = builder.create_packed_arith(result_type.to_ir(builder), operation, normalized)
+    result_type = None if reference is None else reference.type.with_element_ty(dtype)
+    result_ir_type = dtype.to_ir(builder) if result_type is None else result_type.to_ir(builder)
+    handle = builder.create_packed_arith(result_ir_type, operation, normalized)
+    if result_type is None:
+        result_type = ttgl.distributed_type(dtype, shape, builder.get_gluon_layout_from_tensor(handle))
     return ttgl.tensor(handle, result_type)
 
 

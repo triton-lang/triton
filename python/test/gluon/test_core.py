@@ -2539,31 +2539,29 @@ def test_padded_shared_layout_subslice(interval_pairs, shared_layout, slice_m_of
 
 
 @gluon.jit
-def _packed_arith_reduce_add(a0, a1, b0, b1):
-    return ttgl.split(blackwell.add2(ttgl.join(a0, a1), ttgl.join(b0, b1)))
+def _combine_add2(a, b, c, d):
+    parent: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [1, 32], [1, ttgl.num_warps()], [1, 0],
+                                                cga_layout=[[0, 0]] * (ttgl.num_ctas().bit_length() - 1))
+    layout: ttgl.constexpr = ttgl.SliceLayout(0, parent)
+    lanes = ttgl.arange(0, 2, layout=layout)
+    lhs = ttgl.where(lanes == 0, a, b)
+    rhs = ttgl.where(lanes == 0, c, d)
+    return ttgl.split(blackwell.add2(lhs, rhs))
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
-@pytest.mark.parametrize("inline_lambda", [False, True], ids=["jit-function", "inline-lambda"])
-def test_packed_arith_reduction(dtype, inline_lambda):
+def test_packed_arith_reduction(dtype):
 
     @gluon.jit
-    def kernel(a_ptr, b_ptr, out_a_ptr, out_b_ptr, inline_lambda: ttgl.constexpr):
+    def kernel(a_ptr, b_ptr, out_a_ptr, out_b_ptr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
         offs_m = ttgl.arange(0, 128, ttgl.SliceLayout(1, layout))
         offs_n = ttgl.arange(0, 128, ttgl.SliceLayout(0, layout))
         offsets = offs_m[:, None] * 128 + offs_n[None, :]
         a = ttgl.load(a_ptr + offsets)
         b = ttgl.load(b_ptr + offsets)
-        if inline_lambda:
-            a, b = ttgl.reduce(
-                (a, b),
-                axis=1,
-                combine_fn=lambda x, y, z, w: ttgl.split(blackwell.add2(ttgl.join(x, y), ttgl.join(z, w))),
-            )
-        else:
-            a, b = ttgl.reduce((a, b), axis=1, combine_fn=_packed_arith_reduce_add)
+        a, b = ttgl.reduce((a, b), axis=1, combine_fn=_combine_add2)
         ttgl.store(out_a_ptr + offs_m, a)
         ttgl.store(out_b_ptr + offs_m, b)
 
@@ -2572,7 +2570,7 @@ def test_packed_arith_reduction(dtype, inline_lambda):
     b = torch.randint(-1, 2, (128, 128), device="cuda").to(dtype)
     out_a = torch.empty(128, device="cuda", dtype=dtype)
     out_b = torch.empty_like(out_a)
-    compiled = kernel[(1, )](a, b, out_a, out_b, inline_lambda)
+    compiled = kernel[(1, )](a, b, out_a, out_b)
 
     torch.testing.assert_close(out_a, a.sum(dim=1), atol=0, rtol=0)
     torch.testing.assert_close(out_b, b.sum(dim=1), atol=0, rtol=0)

@@ -150,24 +150,9 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         handle = self.builder.create_expand_dims(input.handle, axis)
         return self._wrap_handle_infer_layout(handle, input.type.scalar, dst_shape)
 
-    def join(self, a: TensorTy, b: TensorTy, generator=None) -> TensorTy:
+    def join(self, a: TensorTy, b: TensorTy) -> TensorTy:
         a, b = self.broadcast_impl_value(a, b)
-        if not a.shape:
-            num_warps = self.builder.options.num_warps
-            if generator is not None:
-                num_warps = ttgl._unwrap_if_constexpr(self.num_warps(generator))
-            parent = ttgl.BlockedLayout(
-                [1, 2],
-                [1, self.builder.options.warp_size],
-                [1, num_warps],
-                [1, 0],
-                cga_layout=[[0, 0] for _ in range(self.builder.options.num_ctas.bit_length() - 1)],
-            )
-            layout = SliceLayout(1, parent)
-            a, b = self.splat(a, [1], layout), self.splat(b, [1], layout)
-            value = self._wrap_tensor_infer_layout(super().join(a, b))
-            value = self.reshape(value, [2], can_reorder=False)
-            return self.convert_layout(value, SliceLayout(0, parent), assert_trivial=True)
+        _check(a.shape != [], lambda: "Cannot join scalars in gluon")
         value = super().join(a, b)
         return self._wrap_tensor_infer_layout(value)
 

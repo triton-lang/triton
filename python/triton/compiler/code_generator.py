@@ -291,13 +291,6 @@ class BoundJITMethod:
     __func__: JITFunction
 
 
-@dataclass(frozen=True, eq=False)
-class _InlineJITLambda:
-    node: ast.Lambda
-    captures: Dict[str, Any]
-    signature: inspect.Signature
-
-
 class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, function_name, jit_fn: JITFunction, *, options, codegen_fns,
@@ -803,29 +796,6 @@ class CodeGenerator(ast.NodeVisitor):
         # Named expressions are simple and can only be of the form x := value
         self.visit_Assign(ast.Assign(targets=[node.target], value=node.value))
         return self.dereference_name(node.target.id)
-
-    def visit_Lambda(self, node: ast.Lambda):
-        if node.args.vararg is not None or node.args.kwarg is not None:
-            raise self._unsupported(node, "inline lambdas do not support variadic arguments")
-
-        positional = node.args.posonlyargs + node.args.args
-        defaults = [inspect.Parameter.empty] * (len(positional) - len(node.args.defaults))
-        defaults += [self.visit(default) for default in node.args.defaults]
-        parameters = [
-            inspect.Parameter(
-                argument.arg,
-                inspect.Parameter.POSITIONAL_ONLY
-                if index < len(node.args.posonlyargs) else inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                default=default,
-            ) for index, (argument, default) in enumerate(zip(positional, defaults))
-        ]
-        parameters.extend(
-            inspect.Parameter(
-                argument.arg,
-                inspect.Parameter.KEYWORD_ONLY,
-                default=inspect.Parameter.empty if default is None else self.visit(default),
-            ) for argument, default in zip(node.args.kwonlyargs, node.args.kw_defaults))
-        return _InlineJITLambda(node, dict(self.lscope), inspect.Signature(parameters))
 
     def visit_Name(self, node):
         if type(node.ctx) is ast.Store:
@@ -1438,17 +1408,7 @@ class CodeGenerator(ast.NodeVisitor):
         msg = self.visit(node.msg) if node.msg is not None else ""
         return language.core.device_assert(test, msg, _semantic=self.semantic)
 
-    def call_JitFunction(self, fn: Union[JITFunction, _InlineJITLambda], args, kwargs, caller_context=None):
-        if isinstance(fn, _InlineJITLambda):
-            bound_args = fn.signature.bind(*args, **kwargs)
-            bound_args.apply_defaults()
-            previous_scope = self.lscope
-            self.lscope = fn.captures | {name: normalize_value(value) for name, value in bound_args.arguments.items()}
-            try:
-                return self.visit(fn.node.body)
-            finally:
-                self.lscope = previous_scope
-
+    def call_JitFunction(self, fn: JITFunction, args, kwargs, caller_context=None):
         bound_args = fn.signature.bind(*args, **kwargs)
         bound_args.apply_defaults()
         args = bound_args.arguments
@@ -1502,8 +1462,6 @@ class CodeGenerator(ast.NodeVisitor):
 
         if isinstance(fn, JITFunction):
             _check_fn_args(node, fn, args)
-            return self.call_JitFunction(fn, args, kws)
-        if isinstance(fn, _InlineJITLambda):
             return self.call_JitFunction(fn, args, kws)
         if (hasattr(fn, '__self__') and _is_triton_value(fn.__self__)) or language.core.is_builtin(fn) or isinstance(
                 fn, ConstexprFunction):

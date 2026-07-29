@@ -125,6 +125,7 @@ device_print = builtin(tl_core.device_print)
 expand_dims = builtin(tl_core.expand_dims)
 gather = builtin(tl_core.gather)
 inline_asm_elementwise = builtin(tl_core.inline_asm_elementwise)
+join = builtin(tl_core.join)
 load = builtin(tl_core.load)
 map_elementwise = builtin(tl_core.map_elementwise)
 max_constancy = builtin(tl_core.max_constancy)
@@ -146,12 +147,6 @@ sub = builtin(tl_core.sub)
 to_tensor = builtin(tl_core.to_tensor)
 expect_zero = builtin(tl_core.expect_zero)
 where = builtin(tl_core.where)
-
-
-@builtin
-def join(a, b, _semantic=None, _generator=None):
-    """Join two tensors, including scalars, along a new minor dimension."""
-    return _semantic.join(a, b, _generator)
 
 
 class distributed_type(block_type):
