@@ -21,6 +21,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/ADT/DenseMap.h"
 #include <deque>
 
 namespace mlir::triton::gpu {
@@ -979,7 +980,7 @@ uint64_t LayoutPropagation::getAssignmentCost(
   if (Operation *definingOp = value.getDefiningOp())
     cost += getLayoutRegisterPressureCost(value, encoding) *
             getLayoutExecutionWeight(definingOp);
-  DenseMap<Attribute, uint64_t> userWeights;
+  llvm::SmallDenseMap<Attribute, uint64_t, 8> userWeights;
 
   for (OpOperand &use : value.getUses()) {
     uint64_t weight = getLayoutExecutionWeight(use.getOwner());
@@ -1410,7 +1411,8 @@ void LayoutPropagation::resolveGlobalConflicts() {
                               ? getAffectedAssignmentCost({value}, assignments)
                               : getAssignmentCost(value, best, assignments);
       for (Attribute candidate : info.encodings) {
-        if (!canAssignEncoding(value, candidate, assignments))
+        if (candidate == original ||
+            !canAssignEncoding(value, candidate, assignments))
           continue;
         uint64_t candidateCost;
         if (useFullGlobalObjective) {
