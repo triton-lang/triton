@@ -1,8 +1,6 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --verify-diagnostics
 
-// GFX942 does not support 128-bit direct-to-LDS loads. The lowering must report
-// an actionable diagnostic (not a bare "failed to legalize" / a downstream
-// unrealized_conversion_cast).
+// GFX942 does not support vectorization > 4bytes for direct-to-LDS loads
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>

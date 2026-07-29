@@ -72,9 +72,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     // GFX950: rocdl.raw.ptr.buffer.load.async.lds
     // GFX950-NOT: rocdl.raw.ptr.buffer.load.async.lds
 
-    // GFX942 does not support 128-bit direct-to-LDS loads, so this now fails at
-    // legalization with an actionable diagnostic instead of silently surviving
-    // conversion (which used to fail much later in LLVM-IR translation).
+    // GFX942 does not support vectorization > 4bytes so we cannot lower it
     // expected-error@+2 {{cannot lower 'amdg.buffer_load_to_local' to a direct-to-LDS copy}}
     // expected-error@+1 {{failed to legalize operation 'amdg.buffer_load_to_local' that was explicitly marked illegal}}
     %8 = amdg.buffer_load_to_local %arg1[%7] into %arg2 : <f16>[tensor<64x64xi32, #blocked>]  -> <64x64xf16, #shared, #smem, mutable>
@@ -106,9 +104,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // GFX950: rocdl.raw.ptr.buffer.load.async.lds
     // GFX950-NOT: rocdl.raw.ptr.buffer.load.async.lds
 
-    // GFX942 does not support 128-bit direct-to-LDS loads, so this now fails at
-    // legalization with an actionable diagnostic instead of silently surviving
-    // conversion (which used to fail much later in LLVM-IR translation).
+    // GFX942 does not support vectorization > 4bytes so we cannot lower it
     // expected-error@+2 {{cannot lower 'amdg.buffer_load_to_local' to a direct-to-LDS copy}}
     // expected-error@+1 {{failed to legalize operation 'amdg.buffer_load_to_local' that was explicitly marked illegal}}
     %8 = amdg.buffer_load_to_local %arg1[%7] into %arg2 : <f16>[tensor<256x8xi32, #blocked>]  -> <256x8xf16, #shared, #smem, mutable>
@@ -323,9 +319,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     // GFX950: rocdl.raw.ptr.buffer.load.async.lds
     // GFX950-NOT: rocdl.raw.ptr.buffer.load.async.lds
 
-    // GFX942 does not support 128-bit direct-to-LDS loads, so this now fails at
-    // legalization with an actionable diagnostic instead of silently surviving
-    // conversion (which used to fail much later in LLVM-IR translation).
+    // GFX942 does not support vectorization > 4bytes so we cannot lower it
     // expected-error@+2 {{cannot lower 'amdg.buffer_load_to_local' to a direct-to-LDS copy}}
     // expected-error@+1 {{failed to legalize operation 'amdg.buffer_load_to_local' that was explicitly marked illegal}}
     %8 = amdg.buffer_load_to_local %arg1[%7] into %arg2 : <f16>[tensor<64x64xi32, #blocked>]  -> <64x64xf16, #shared, #smem, mutable>

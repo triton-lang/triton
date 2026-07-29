@@ -286,41 +286,29 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
       ModuleAxisInfoAnalysis &axisAnalysisPass)
       : LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
-  // Emit an actionable diagnostic when a direct-to-LDS load cannot be lowered,
-  // and return failure(). |reason| is the low-level cause from
-  // canLoadDirectToLDS; |vecFromPtr| is the vector size the pointer/offset
-  // alignment allowed before the mask was applied, and |maskAlign| is the
-  // alignment the predication mask allowed (equal to |vecFromPtr| when there is
-  // no mask). The message reports both facts and gives targeted guidance,
-  // blaming the mask when it -- rather than the pointer alignment -- forced the
-  // vector size down.
-  LogicalResult emitDirectToLdsError(Operation *op, StringRef opName,
-                                     StringRef reason, unsigned vecFromPtr,
-                                     unsigned maskAlign, bool hasMask) const {
-    InFlightDiagnostic diag = op->emitError()
-                              << "cannot lower '" << opName
-                              << "' to a direct-to-LDS copy: " << reason << ".";
-    if (hasMask)
-      diag << " (pointer/offset alignment allows a vector of " << vecFromPtr
-           << " element(s); the mask allows " << maskAlign << ".)";
-    else
-      diag << " (pointer/offset alignment allows a vector of " << vecFromPtr
-           << " element(s).)";
+  // Like `getMaskElemsAndUpdateVeclen` but also records the vector sizes the
+  // pointers/offsets and the mask each allow in `vecInfo`
+  SmallVector<Value> getMaskElemsAndDirectToLdsVec(
+      ConversionPatternRewriter &rewriter, Location loc, Value llMask,
+      Value mask, unsigned &vec, LLVM::AMD::DirectToLdsVecInfo &vecInfo) const {
+    vecInfo.fromPtr = vec;
+    SmallVector<Value> maskElems =
+        getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
+    vecInfo.fromMask = mask ? getMaskAlignment(mask) : vec;
+    return maskElems;
+  }
 
-    if (hasMask && maskAlign < vecFromPtr) {
-      diag
-          << " The mask is the limiting factor: a direct-to-LDS copy transfers "
-             "each lane's whole vector in a single transaction, so every "
-             "vector-width group of mask values must be identical. Align the "
-             "mask boundary to the vector width, or peel the ragged remainder "
-             "into a separate (non-direct-to-LDS) load.";
-    } else {
-      diag
-          << " If the source is under-aligned, increase the provable alignment "
-             "(e.g. tl.multiple_of on the base pointer, or ensure the leading "
-             "dimensions are aligned) so a wider vector can be used.";
-    }
-    return failure();
+  LogicalResult
+  checkCanLoadDirectToLDS(Operation *op, RankedTensorType srcTy,
+                          Attribute dstEnc, ArrayRef<int64_t> dstAllocShape,
+                          unsigned &vec,
+                          LLVM::AMD::DirectToLdsVecInfo vecInfo) const {
+    std::string reason;
+    if (LLVM::AMD::canLoadDirectToLDS(targetInfo, srcTy, dstEnc, dstAllocShape,
+                                      vec, vecInfo, &reason))
+      return success();
+    return op->emitError() << "cannot lower '" << op->getName()
+                           << "' to a direct-to-LDS copy: " << reason;
   }
 
   // For each load emit the computation to get the lane id offset which holds
@@ -799,10 +787,9 @@ struct BufferLoadToLocalOpConversion
     //     mask bits are the same.  For example if N=2, the mask must be
     //     [x, x, y, y, ...].
     unsigned vec = getVectorSize(ptr, offset, axisAnalysisPass);
-    unsigned vecFromPtr = vec;
-    SmallVector<Value> maskElems =
-        getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
-    unsigned maskAlign = mask ? getMaskAlignment(mask) : vecFromPtr;
+    LLVM::AMD::DirectToLdsVecInfo vecInfo;
+    SmallVector<Value> maskElems = getMaskElemsAndDirectToLdsVec(
+        rewriter, loc, llMask, mask, vec, vecInfo);
 
     SmallVector<Value> offsetElems =
         unpackTensorElements(loc, llOffset, rewriter, offset.getType());
@@ -818,14 +805,9 @@ struct BufferLoadToLocalOpConversion
     // If the op has a contiguity hint use it to increase the vector size.
     vec = std::max(vec, op.getContiguity());
 
-    std::string failureReason;
-    if (!LLVM::AMD::canLoadDirectToLDS(targetInfo, ptrType, dstEnc,
-                                       dstTy.getAllocShape(), vec,
-                                       &failureReason)) {
-      return emitDirectToLdsError(op, "amdg.buffer_load_to_local",
-                                  failureReason, vecFromPtr, maskAlign,
-                                  static_cast<bool>(mask));
-    }
+    if (failed(checkCanLoadDirectToLDS(op, ptrType, dstEnc,
+                                       dstTy.getAllocShape(), vec, vecInfo)))
+      return failure();
 
     // For swizzled layouts we need to use the non swizzled layout to compute
     // the LDS addresses since we gather into LDS
@@ -969,11 +951,9 @@ struct AsyncCopyGlobalToLocalOpConversion
     //     mask bits are the same.  For example if N=2, the mask must be
     //     [x, x, y, y, ...].
     unsigned vec = getVectorSize(op.getSrc(), axisAnalysisPass);
-    unsigned vecFromPtr = vec;
-    auto maskElements = getMaskElemsAndUpdateVeclen(
-        rewriter, loc, adaptor.getMask(), op.getMask(), vec);
-    unsigned maskAlign =
-        op.getMask() ? getMaskAlignment(op.getMask()) : vecFromPtr;
+    LLVM::AMD::DirectToLdsVecInfo vecInfo;
+    auto maskElements = getMaskElemsAndDirectToLdsVec(
+        rewriter, loc, adaptor.getMask(), op.getMask(), vec, vecInfo);
 
     auto srcElems = unpackTensorElements(loc, adaptor.getSrc(), rewriter,
                                          op.getSrc().getType());
@@ -985,14 +965,9 @@ struct AsyncCopyGlobalToLocalOpConversion
     // If the op has a contiguity hint use it to increase the vector size.
     vec = std::max(vec, op.getContiguity());
 
-    std::string failureReason;
-    if (!LLVM::AMD::canLoadDirectToLDS(targetInfo, srcTy, dstEnc,
-                                       dstTy.getAllocShape(), vec,
-                                       &failureReason)) {
-      return emitDirectToLdsError(op, "ttg.async_copy_global_to_local",
-                                  failureReason, vecFromPtr, maskAlign,
-                                  static_cast<bool>(op.getMask()));
-    }
+    if (failed(checkCanLoadDirectToLDS(op, srcTy, dstEnc, dstTy.getAllocShape(),
+                                       vec, vecInfo)))
+      return failure();
 
     // For swizzled layouts we need to use the non swizzled layout to compute
     // the LDS addresses since we gather into LDS

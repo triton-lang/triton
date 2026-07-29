@@ -1,11 +1,5 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --verify-diagnostics
 
-// A direct-to-LDS copy transfers each lane's whole vector in a single
-// transaction, so the predication mask must be aligned to the vector width.
-// When it is not (its true/false boundary is a runtime value, giving per-element
-// alignment) the load cannot be lowered, and the diagnostic must blame the mask
-// rather than the pointer alignment.
-
 // ---- async_copy: pointer allows a 2xf16 (32-bit) vector, mask forces it to 1 ----
 #blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 2, perPhase = 1, maxPhase = 1, order = [1, 0]}>
