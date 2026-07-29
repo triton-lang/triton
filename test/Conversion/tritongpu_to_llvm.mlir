@@ -2563,6 +2563,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// CHECK-DAG: llvm.mlir.global internal constant @assertMessage_{{[0-9]+}}("first consecutive assertion\00")
+// CHECK-DAG: llvm.mlir.global internal constant @assertMessage_{{[0-9]+}}("second consecutive assertion\00")
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func @consecutive_scalar_asserts(
+  tt.func public @consecutive_scalar_asserts(%first: i1, %second: i1) {
+    // CHECK: llvm.cond_br %{{.*}}, ^[[FIRST_FAIL:bb[0-9]+]], ^[[FIRST_CONTINUE:bb[0-9]+]]
+    // CHECK: ^[[FIRST_FAIL]]:
+    // CHECK: llvm.call @__assertfail
+    // CHECK: llvm.br ^[[FIRST_CONTINUE]]
+    tt.assert %first, "first consecutive assertion" : i1
+    // CHECK: ^[[FIRST_CONTINUE]]:
+    // CHECK: llvm.cond_br %{{.*}}, ^[[SECOND_FAIL:bb[0-9]+]], ^[[SECOND_CONTINUE:bb[0-9]+]]
+    // CHECK: ^[[SECOND_FAIL]]:
+    // CHECK: llvm.call @__assertfail
+    // CHECK: llvm.br ^[[SECOND_CONTINUE]]
+    tt.assert %second, "second consecutive assertion" : i1
+    // CHECK: ^[[SECOND_CONTINUE]]:
+    // CHECK-NEXT: llvm.return
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @log1pf_scan(%39: tensor<32x16xf32, #blocked>) {
