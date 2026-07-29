@@ -414,8 +414,8 @@ module {
 // -----
 
 module {
-  // expected-remark @below {{event}}
-  tt.func @event() {
+  // expected-remark @below {{extended_events}}
+  tt.func @extended_events() {
     // expected-remark @below {{scope id = 0}}
     // expected-remark @below {{scope parent id = -1}}
     proton.record start "outer"
@@ -434,6 +434,9 @@ module {
     // expected-remark @below {{scope id = 2}}
     // expected-remark @below {{scope parent id = 0}}
     proton.record end "inner"
+    // expected-remark @below {{scope id = 4}}
+    // expected-remark @below {{scope parent id = 0}}
+    proton.mark "ready"
     // expected-remark @below {{scope id = 0}}
     // expected-remark @below {{scope parent id = -1}}
     proton.record end "outer"

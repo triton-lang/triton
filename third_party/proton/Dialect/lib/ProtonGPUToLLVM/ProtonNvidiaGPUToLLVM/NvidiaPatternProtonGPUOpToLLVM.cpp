@@ -24,24 +24,13 @@ namespace {
 //  | warp 7 data (N/3 bytes)                       |
 //  +-----------------------------------------------+
 
-struct CircularStoreOpConversion
-    : public ConvertOpToLLVMPattern<
-          mlir::triton::proton::gpu::CircularStoreOp> {
-  explicit CircularStoreOpConversion(
-      LLVMTypeConverter &typeConverter,
-      const proton::gpu::TargetInfoBase &targetInfo, PatternBenefit benefit)
-      : mlir::ConvertOpToLLVMPattern<
-            mlir::triton::proton::gpu::CircularStoreOp>(typeConverter, benefit),
-        targetInfo(targetInfo) {}
-
-  LogicalResult
-  matchAndRewrite(mlir::triton::proton::gpu::CircularStoreOp op,
-                  OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto dataPack =
-        lowerCircularStore(op, adaptor.getSegment(), adaptor.getCounter(),
-                           adaptor.getDynamicScopeId(), rewriter);
+LogicalResult
+storeDataPacks(Operation *op,
+               ArrayRef<proton::gpu::CircularStoreDataPack> dataPacks,
+               ConversionPatternRewriter &rewriter,
+               const proton::gpu::TargetInfoBase &targetInfo) {
+  auto loc = op->getLoc();
+  for (const auto &dataPack : dataPacks) {
     uint32_t addrSpace = dataPack.addrSpace;
     if (addrSpace == 1) {
       auto mod = op->getParentOfType<ModuleOp>();
@@ -62,7 +51,7 @@ struct CircularStoreOpConversion
         builder.launch(rewriter, loc, void_ty(rewriter.getContext()));
       } else {
         // Non-vectorized version for num_warps=1 to handle potential
-        // misalignment.
+        // misalignment
         auto stInst = builder.create<>("st")->o("global").o("cg").b(32);
 
         auto unPackedVals = unpackLLVector(loc, dataPack.record, rewriter);
@@ -86,8 +75,99 @@ struct CircularStoreOpConversion
     } else {
       llvm::report_fatal_error("unsupported address space in circular store");
     }
+  }
+  rewriter.eraseOp(op);
+  return success();
+}
+
+struct CircularStoreOpConversion
+    : public ConvertOpToLLVMPattern<
+          mlir::triton::proton::gpu::CircularStoreOp> {
+  explicit CircularStoreOpConversion(
+      LLVMTypeConverter &typeConverter,
+      const proton::gpu::TargetInfoBase &targetInfo, PatternBenefit benefit)
+      : mlir::ConvertOpToLLVMPattern<
+            mlir::triton::proton::gpu::CircularStoreOp>(typeConverter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::triton::proton::gpu::CircularStoreOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto dataPacks = lowerCircularStore(
+        op, adaptor.getSegment(), adaptor.getCounter(),
+        adaptor.getDynamicScopeId(), adaptor.getMetric(), rewriter);
+    for (const auto &dataPack : dataPacks) {
+      uint32_t addrSpace = dataPack.addrSpace;
+      if (addrSpace == 1) {
+        auto mod = op->getParentOfType<ModuleOp>();
+        int numWarps = proton::gpu::getTotalNumWarps(mod);
+        PTXBuilder builder;
+        auto b = TritonLLVMOpBuilder(loc, rewriter);
+        if (numWarps > 1) {
+          auto stInst = builder.create<>("st")->o("global").o("cg").v(2).b(32);
+          auto *ptrOpr = builder.newAddrOperand(dataPack.ptr, "l");
+
+          PTXBuilder::Operand *valOpr;
+          SmallVector<std::pair<Value, std::string>> vecVals;
+          auto unPackedVals = unpackLLVector(loc, dataPack.record, rewriter);
+          vecVals.push_back({unPackedVals[0], "r"});
+          vecVals.push_back({unPackedVals[1], "r"});
+          valOpr = builder.newListOperand(vecVals);
+          stInst(ptrOpr, valOpr).predicate(dataPack.isWriter, "b");
+          builder.launch(rewriter, loc, void_ty(rewriter.getContext()));
+        } else {
+          // Non-vectorized version for num_warps=1 to handle potential
+          // misalignment
+          auto stInst = builder.create<>("st")->o("global").o("cg").b(32);
+
+          auto unPackedVals = unpackLLVector(loc, dataPack.record, rewriter);
+
+          // First store: write first 32-bit value at base address
+          auto *ptrOpr0 = builder.newAddrOperand(dataPack.ptr, "l", 0);
+          auto *valOpr0 = builder.newOperand(unPackedVals[0], "r");
+          stInst(ptrOpr0, valOpr0).predicate(dataPack.isWriter, "b");
+
+          // Second store: write second 32-bit value at offset +4 bytes
+          auto *ptrOpr1 = builder.newAddrOperand(dataPack.ptr, "l", 4);
+          auto *valOpr1 = builder.newOperand(unPackedVals[1], "r");
+          stInst(ptrOpr1, valOpr1).predicate(dataPack.isWriter, "b");
+
+          builder.launch(rewriter, loc, void_ty(rewriter.getContext()));
+        }
+      } else if (addrSpace == 3) {
+        targetInfo.getTritonTargetInfo().storeDShared(
+            rewriter, loc, dataPack.ptr, Value(), dataPack.record,
+            /*pred=*/dataPack.isWriter);
+      } else {
+        llvm::report_fatal_error("unsupported address space in circular store");
+      }
+    }
     rewriter.eraseOp(op);
     return success();
+  }
+
+protected:
+  const proton::gpu::TargetInfoBase &targetInfo;
+};
+
+struct CircularMarkOpConversion
+    : public ConvertOpToLLVMPattern<mlir::triton::proton::gpu::CircularMarkOp> {
+  explicit CircularMarkOpConversion(
+      LLVMTypeConverter &typeConverter,
+      const proton::gpu::TargetInfoBase &targetInfo, PatternBenefit benefit)
+      : mlir::ConvertOpToLLVMPattern<mlir::triton::proton::gpu::CircularMarkOp>(
+            typeConverter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::triton::proton::gpu::CircularMarkOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto dataPacks = lowerCircularMarkOpHelper(op, adaptor.getSegment(),
+                                               adaptor.getCounter(), rewriter);
+    return storeDataPacks(op, dataPacks, rewriter, targetInfo);
   }
 
 protected:
@@ -101,6 +181,7 @@ void populateProtonGPUOpNvidiaPatterns(LLVMTypeConverter &typeConverter,
                                        RewritePatternSet &patterns,
                                        const TargetInfo &targetInfo,
                                        PatternBenefit benefit) {
-  patterns.add<CircularStoreOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<CircularStoreOpConversion, CircularMarkOpConversion>(
+      typeConverter, targetInfo, benefit);
 }
 } // namespace mlir::triton::proton::gpu::NVIDIA

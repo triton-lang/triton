@@ -54,7 +54,7 @@ bool CircularLayoutParser::parseMetadata() {
     countVec.push_back(decoder.decode<I32Entry>()->value);
   }
 
-  // Each event is 8 bytes
+  // Each physical record is 8 bytes. A metric-bearing start uses two records.
   int maxCountPerUnit = bt.bufSize / getConfig().uidVec.size() / 8;
 
   for (auto uid : getConfig().uidVec) {
@@ -66,7 +66,7 @@ bool CircularLayoutParser::parseMetadata() {
     if (numEvent > maxCountPerUnit) {
       std::cerr << "Warning (cta" << bt.blockId << ", warp" << uid
                 << "): first " << numEvent - maxCountPerUnit
-                << " events are dropped due to insufficient buffer size ("
+                << " records are dropped due to insufficient buffer size ("
                 << maxCountPerUnit << "/" << numEvent << ")" << std::endl;
     }
 
@@ -93,17 +93,63 @@ void CircularLayoutParser::parseProfileEvents() {
 
 void CircularLayoutParser::parseSegment(
     int segmentByteSize, CircularLayoutParserResult::Trace &trace) {
+  const uint32_t segmentStart = buffer.position();
+  const uint32_t capacity = segmentByteSize / (kWordSize * kWordsPerEntry);
+  if (capacity == 0)
+    return;
+  const uint32_t totalEntries = trace.count / kWordsPerEntry;
+  const uint32_t numEntries = std::min(totalEntries, capacity);
+  const uint32_t oldestEntry =
+      totalEntries > capacity && trace.count % kWordsPerEntry == 0
+          ? totalEntries % capacity
+          : 0;
 
-  int idealSize = trace.count * kWordSize;
-  int byteSize = std::min(idealSize, segmentByteSize);
-  const int maxNumEntries = byteSize / (kWordSize * kWordsPerEntry);
+  std::vector<std::shared_ptr<CycleEntry>> entries;
+  entries.reserve(numEntries);
+  for (uint32_t i = 0; i < numEntries; ++i) {
+    const uint32_t physicalEntry = (oldestEntry + i) % capacity;
+    buffer.seek(segmentStart + physicalEntry * kWordSize * kWordsPerEntry);
+    auto entry = decoder.decode<CycleEntry>();
+    if (getConfig().version == 1) {
+      entry->eventType = EntryEventType::SCOPE;
+      entry->metricType = EntryMetricType::NONE;
+    }
+    entries.push_back(std::move(entry));
+  }
 
   std::unordered_map<int, CircularLayoutParserResult::ProfileEvent> activeEvent;
   std::unordered_map<int, ParseState> scopeState;
 
-  for (int i = 0; i < maxNumEntries; i++) {
+  for (size_t i = 0; i < entries.size(); ++i) {
     try {
-      auto entry = decoder.decode<CycleEntry>();
+      auto entry = entries[i];
+      if (entry->eventType == EntryEventType::METRIC) {
+        throw ScopeMisMatchException("Orphan in-kernel metric record");
+      }
+      if (entry->metricType != EntryMetricType::NONE) {
+        if (i + 1 < entries.size()) {
+          auto extension = entries[i + 1];
+          if (extension->eventType == EntryEventType::METRIC &&
+              extension->scopeId == entry->scopeId &&
+              extension->metricType == entry->metricType) {
+            entry->metric =
+                decodeMetricValue(entry->metricType, extension->rawValue);
+            ++i;
+          } else {
+            reportException(ScopeMisMatchException(
+                                "Missing in-kernel metric extension record"),
+                            segmentStart + i * kWordSize * kWordsPerEntry);
+          }
+        } else {
+          reportException(ScopeMisMatchException(
+                              "Missing in-kernel metric extension record"),
+                          segmentStart + i * kWordSize * kWordsPerEntry);
+        }
+      }
+      if (entry->eventType == EntryEventType::MARK) {
+        trace.markers.push_back(entry);
+        continue;
+      }
       if (!activeEvent.count(entry->scopeId)) {
         activeEvent[entry->scopeId] =
             CircularLayoutParserResult::ProfileEvent();
@@ -136,7 +182,7 @@ void CircularLayoutParser::parseSegment(
         }
       }
     } catch (const ScopeMisMatchException &e) {
-      reportException(e, buffer.position());
+      reportException(e, segmentStart + i * kWordSize * kWordsPerEntry);
     } catch (const ClockOverflowException &e) {
       reportException(e, buffer.position());
     }
@@ -188,6 +234,10 @@ void shift(CircularLayoutParserResult::Trace &trace, const uint64_t cost,
     if (event.second->cycle >= timeBase)
       event.second->cycle -= cost;
   }
+  for (auto &marker : trace.markers) {
+    if (marker->cycle >= timeBase)
+      marker->cycle -= cost;
+  }
 }
 } // namespace
 
@@ -196,7 +246,8 @@ proton::readCircularLayoutTrace(ByteSpan &buffer, bool applyTimeShift) {
   CircularLayoutParserConfig config;
   auto decoder = EntryDecoder(buffer);
   uint32_t version = decoder.decode<I32Entry>()->value;
-  assert(version == 1 && "Version mismatch");
+  assert((version == 1 || version == 2) && "Version mismatch");
+  config.version = version;
   buffer.skip(8);
   uint32_t payloadOffset = decoder.decode<I32Entry>()->value;
   [[maybe_unused]] uint32_t payloadSize = decoder.decode<I32Entry>()->value;
@@ -242,6 +293,10 @@ void proton::timeShift(const uint64_t cost,
         if (event.second->cycle < event.first->cycle) {
           event.second->cycle = event.first->cycle + cost / 2;
         }
+      }
+      for (auto &marker : trace.markers) {
+        const uint64_t markerTimeBase = marker->cycle;
+        shift(trace, cost, markerTimeBase);
       }
     }
   }

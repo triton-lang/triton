@@ -36,10 +36,18 @@ def PT_RecordOp : PT_Op<"record", [
   }];
   let arguments = (
     ins UnitAttr: $isStart,
-    StrAttr: $name
+    StrAttr: $name,
+    Optional<AnyType>: $metric,
+    OptionalAttr<StrAttr>: $metricName,
+    DefaultValuedAttr<MetricValueTypeAttr, "MetricValueType::NONE">: $metricType
   );
 
-  let assemblyFormat = "(`start` $isStart^):(`end`)? $name attr-dict";
+  let assemblyFormat = [{
+    (`start` $isStart^):(`end`)? $name
+    (`metric` $metricName `=` $metric^ `:` type($metric))? attr-dict
+  }];
+
+  let hasVerifier = 1;
 }
 
 def PT_EventOp : PT_Op<"event", [
@@ -70,6 +78,14 @@ def PT_AllocateEventOp : PT_Op<"allocate_event", [
   let arguments = (ins StrAttr:$name);
   let results = (outs I32:$event);
   let assemblyFormat = "$name attr-dict `:` type($event)";
+}
+
+def PT_MarkOp : PT_Op<"mark", [
+  MemoryEffects<[MemRead<DefaultResource>, MemWrite<DefaultResource>]>
+]> {
+  let summary = "Record an instantaneous timestamp";
+  let arguments = (ins StrAttr:$name);
+  let assemblyFormat = "$name attr-dict";
 }
 
 #endif // PROTON_OPS

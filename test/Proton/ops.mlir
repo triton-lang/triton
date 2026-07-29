@@ -1,4 +1,4 @@
-// RUN: triton-opt --split-input-file %s | FileCheck %s
+// RUN: triton-opt --split-input-file %s --verify-diagnostics | FileCheck %s
 
 module {
   // CHECK-LABEL: proton_record
@@ -23,6 +23,33 @@ module {
     %event = proton.allocate_event "async" : i32
     proton.event start %event : i32
     proton.event end %event : i32
+    tt.return
+  }
+}
+
+// -----
+
+module {
+  tt.func @invalid_metric_type() {
+    %metric = arith.constant 7 : i64
+    // expected-error @below {{metric operand type does not match metric type}}
+    proton.record start "measured" metric "value" = %metric : i64 {metricType = 4 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+module {
+  // CHECK-LABEL: metric_and_mark
+  tt.func @metric_and_mark() {
+    %metric = arith.constant 7 : i32
+    // CHECK: proton.record start "measured" metric "value (pty)" = %{{.*}} : i32 {metricType = 4 : i32}
+    // CHECK: proton.record end "measured"
+    // CHECK: proton.mark "ready"
+    proton.record start "measured" metric "value (pty)" = %metric : i32 {metricType = 4 : i32}
+    proton.record end "measured"
+    proton.mark "ready"
     tt.return
   }
 }

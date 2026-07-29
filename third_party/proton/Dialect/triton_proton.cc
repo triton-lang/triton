@@ -26,6 +26,20 @@ void init_triton_proton(py::module_ &m) {
       .value("CYCLE", proton::MetricType::CYCLE)
       .export_values();
 
+  py::enum_<proton::MetricValueType>(m, "METRIC_VALUE_TYPE")
+      .value("NONE", proton::MetricValueType::NONE)
+      .value("BOOL", proton::MetricValueType::BOOL)
+      .value("I8", proton::MetricValueType::I8)
+      .value("I16", proton::MetricValueType::I16)
+      .value("I32", proton::MetricValueType::I32)
+      .value("U8", proton::MetricValueType::U8)
+      .value("U16", proton::MetricValueType::U16)
+      .value("U32", proton::MetricValueType::U32)
+      .value("F16", proton::MetricValueType::F16)
+      .value("BF16", proton::MetricValueType::BF16)
+      .value("F32", proton::MetricValueType::F32)
+      .export_values();
+
   py::enum_<proton::SamplingStrategy>(m, "SAMPLING_STRATEGY")
       .value("NONE", proton::SamplingStrategy::NONE)
       .value("SELECTIVE", proton::SamplingStrategy::SELECTIVE)
@@ -71,13 +85,30 @@ void init_triton_proton(py::module_ &m) {
     return proton::ModuleScopeIdAllocation(module).getScopeIdParents();
   });
 
+  m.def("get_scope_id_metrics", [](mlir::ModuleOp &module) {
+    return proton::ModuleScopeIdAllocation(module).getScopeIdMetrics();
+  });
+
   // Proton operations
   m.def("create_proton_record",
         [](TritonOpBuilder &opBuilder, bool isStart,
            const std::string &name) -> void {
           auto nameAttr = mlir::StringAttr::get(opBuilder.getContext(),
                                                 llvm::StringRef(name));
-          opBuilder.create<proton::RecordOp>(isStart, nameAttr);
+          opBuilder.create<proton::RecordOp>(isStart, nameAttr, mlir::Value(),
+                                             mlir::StringAttr(),
+                                             proton::MetricValueType::NONE);
+        });
+
+  m.def("create_proton_metric_record",
+        [](TritonOpBuilder &opBuilder, const std::string &name,
+           const std::string &metricName, mlir::Value metric,
+           proton::MetricValueType metricType) -> void {
+          auto nameAttr = mlir::StringAttr::get(opBuilder.getContext(), name);
+          auto metricNameAttr =
+              mlir::StringAttr::get(opBuilder.getContext(), metricName);
+          opBuilder.create<proton::RecordOp>(true, nameAttr, metric,
+                                             metricNameAttr, metricType);
         });
 
   m.def(
@@ -98,6 +129,12 @@ void init_triton_proton(py::module_ &m) {
   m.def("create_proton_end_event",
         [](TritonOpBuilder &opBuilder, mlir::Value event) -> void {
           opBuilder.create<proton::EventOp>(false, event);
+        });
+
+  m.def("create_proton_mark",
+        [](TritonOpBuilder &opBuilder, const std::string &name) -> void {
+          auto nameAttr = mlir::StringAttr::get(opBuilder.getContext(), name);
+          opBuilder.create<proton::MarkOp>(nameAttr);
         });
 
   m.def("add_convert_proton_to_protongpu",

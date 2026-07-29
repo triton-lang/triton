@@ -60,7 +60,8 @@ template <typename T, typename OP> bool hasOperator(T *o) {
 template <typename T> bool hasProtonEvent(T *o) {
   bool exists = false;
   o->walk([&](Operation *op) {
-    if (isa<proton::RecordOp, proton::EventOp, proton::AllocateEventOp>(op)) {
+    if (isa<proton::RecordOp, proton::EventOp, proton::AllocateEventOp,
+            proton::MarkOp>(op)) {
       exists = true;
       return WalkResult::interrupt();
     }
@@ -103,15 +104,23 @@ void lowerEvent(OpBuilder &builder, Operation *op, Value targetSegment,
     int scopeId = scopeInfo.getOpScopeId(record);
     gpu::CircularStoreOp::create(builder, record.getLoc(), targetSegment,
                                  counter, Value(), record.getIsStart(),
-                                 builder.getI32IntegerAttr(scopeId));
+                                 builder.getI32IntegerAttr(scopeId),
+                                 record.getMetric(), record.getMetricType());
     record.erase();
     return;
   }
   if (auto event = dyn_cast<proton::EventOp>(op)) {
     gpu::CircularStoreOp::create(builder, event.getLoc(), targetSegment,
                                  counter, event.getEvent(), event.getIsStart(),
-                                 IntegerAttr());
+                                 IntegerAttr(), Value(), MetricValueType::NONE);
     event.erase();
+    return;
+  }
+  if (auto mark = dyn_cast<proton::MarkOp>(op)) {
+    int scopeId = scopeInfo.getOpScopeId(mark);
+    gpu::CircularMarkOp::create(builder, mark.getLoc(), targetSegment, counter,
+                                builder.getI32IntegerAttr(scopeId));
+    mark.erase();
   }
 }
 
@@ -143,8 +152,8 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
 
         // Replace all Proton events.
         partition.walk([&](Operation *op) {
-          if (!isa<proton::RecordOp, proton::EventOp, proton::AllocateEventOp>(
-                  op))
+          if (!isa<proton::RecordOp, proton::EventOp, proton::AllocateEventOp,
+                   proton::MarkOp>(op))
             return;
           lowerEvent(builder, op, newSegment, clkType, metricType, scopeInfo);
         });
@@ -167,7 +176,8 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
   // don't need to restore warp-level context and we save the context in the end
   // of kernel (right before FinalizeOp).
   func->walk([&](Operation *op) {
-    if (!isa<proton::RecordOp, proton::EventOp, proton::AllocateEventOp>(op))
+    if (!isa<proton::RecordOp, proton::EventOp, proton::AllocateEventOp,
+             proton::MarkOp>(op))
       return;
     lowerEvent(builder, op, segment, clkType, metricType, scopeInfo);
   });

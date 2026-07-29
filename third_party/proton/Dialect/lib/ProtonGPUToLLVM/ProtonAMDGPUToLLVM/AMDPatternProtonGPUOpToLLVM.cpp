@@ -29,9 +29,12 @@ struct CircularStoreOpConversion
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto dataPack =
-        lowerCircularStore(op, adaptor.getSegment(), adaptor.getCounter(),
-                           adaptor.getDynamicScopeId(), rewriter);
+    auto dataPacks = lowerCircularStore(
+        op, adaptor.getSegment(), adaptor.getCounter(),
+        adaptor.getDynamicScopeId(), adaptor.getMetric(), rewriter);
+    if (dataPacks.size() != 1)
+      return op.emitOpError("in-kernel metrics are only supported on NVIDIA");
+    const auto &dataPack = dataPacks.front();
     uint32_t addrSpace = dataPack.addrSpace;
     if (addrSpace == 1) {
       // TODO(crobeck): see what buffer ops performance looks like here for

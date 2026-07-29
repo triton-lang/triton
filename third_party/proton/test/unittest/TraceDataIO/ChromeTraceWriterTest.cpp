@@ -209,3 +209,75 @@ TEST_F(ChromeTraceWriterTest, MultiKernel) {
   EXPECT_DOUBLE_EQ(data["traceEvents"][2]["ts"], 10000.0);
   EXPECT_DOUBLE_EQ(data["traceEvents"][2]["dur"], 400.0);
 }
+
+TEST_F(ChromeTraceWriterTest, ExtendedEvents) {
+  auto metadata = std::make_shared<KernelMetadata>();
+  metadata->kernelName = "kernel";
+  metadata->scopeName = {{1, "measured"}, {2, "ready"}};
+  metadata->scopeMetricName = {{1, "value (pty)"}, {2, "count"}};
+
+  auto result = createDefaultResult(1, 1, 1);
+  auto &block = result->blockTraces[0];
+  block.blockId = 0;
+  block.procId = 0;
+  block.initTime = 0;
+  auto &trace = block.traces[0];
+  trace.uid = 0;
+  trace.profileEvents[0].first->cycle = 100;
+  trace.profileEvents[0].first->scopeId = 1;
+  trace.profileEvents[0].first->metric = int64_t{-7};
+  trace.profileEvents[0].second->cycle = 200;
+  trace.profileEvents[0].second->scopeId = 1;
+  auto marker = std::make_shared<CycleEntry>();
+  marker->cycle = 150;
+  marker->scopeId = 2;
+  marker->eventType = EntryEventType::MARK;
+  marker->metric = uint64_t{1};
+  trace.markers.push_back(marker);
+
+  std::vector<KernelTrace> kernelTrace = {{result, metadata}};
+  StreamChromeTraceWriter(kernelTrace, chromeTracePath).dump();
+  auto data = readJsonTrace(chromeTracePath);
+  ASSERT_EQ(data["traceEvents"].size(), 2);
+  EXPECT_EQ(data["traceEvents"][0]["ph"], "X");
+  EXPECT_EQ(data["traceEvents"][0]["args"]["metrics"]["value (pty)"], -7);
+  EXPECT_EQ(data["traceEvents"][1]["ph"], "i");
+  EXPECT_EQ(data["traceEvents"][1]["s"], "t");
+  EXPECT_EQ(data["traceEvents"][1]["args"]["metrics"]["count"], 1);
+  EXPECT_FALSE(data["traceEvents"][1].contains("dur"));
+}
+
+TEST_F(ChromeTraceWriterTest, EntryMetricNamesOverrideScopeMetadata) {
+  auto metadata = std::make_shared<KernelMetadata>();
+  metadata->kernelName = "kernel";
+  metadata->scopeName = {{1, "same"}};
+  metadata->scopeMetricName = {{1, "stale"}};
+
+  auto result = createDefaultResult(1, 1, 2);
+  auto &block = result->blockTraces[0];
+  block.blockId = 0;
+  block.procId = 0;
+  block.initTime = 0;
+  auto &events = block.traces[0].profileEvents;
+  events[0].first->cycle = 100;
+  events[0].first->scopeId = 1;
+  events[0].first->metric = int64_t{7};
+  events[0].first->metricName = "first";
+  events[0].second->cycle = 110;
+  events[0].second->scopeId = 1;
+  events[1].first->cycle = 120;
+  events[1].first->scopeId = 1;
+  events[1].first->metric = int64_t{8};
+  events[1].first->metricName = "second";
+  events[1].second->cycle = 130;
+  events[1].second->scopeId = 1;
+
+  std::vector<KernelTrace> kernelTrace = {{result, metadata}};
+  StreamChromeTraceWriter(kernelTrace, chromeTracePath).dump();
+  auto data = readJsonTrace(chromeTracePath);
+  ASSERT_EQ(data["traceEvents"].size(), 2);
+  EXPECT_EQ(data["traceEvents"][0]["args"]["metrics"]["first"], 7);
+  EXPECT_FALSE(data["traceEvents"][0]["args"]["metrics"].contains("stale"));
+  EXPECT_EQ(data["traceEvents"][1]["args"]["metrics"]["second"], 8);
+  EXPECT_FALSE(data["traceEvents"][1]["args"]["metrics"].contains("stale"));
+}

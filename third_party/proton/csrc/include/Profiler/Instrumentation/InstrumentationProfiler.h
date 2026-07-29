@@ -38,7 +38,9 @@ protected:
       uint64_t functionId, const std::string &functionName,
       const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
       const std::vector<std::pair<size_t, size_t>> &scopeIdParentIds,
-      const std::string &metadataPath) override;
+      const std::string &metadataPath,
+      const std::vector<std::pair<size_t, std::string>> &scopeIdMetrics)
+      override;
   void destroyFunctionMetadata(uint64_t functionId) override;
   void enterInstrumentedOp(uint64_t streamId, uint64_t functionId,
                            uint8_t *buffer, size_t size) override;
@@ -64,6 +66,8 @@ private:
   uint8_t *hostBuffer{nullptr};
   // functionId -> scopeId -> scopeName
   std::map<uint64_t, std::map<size_t, std::string>> functionScopeIdNames;
+  // functionId -> scopeId -> metric name
+  std::map<uint64_t, std::map<size_t, std::string>> functionScopeIdMetrics;
   // functionId -> scopeId -> contexts
   std::map<uint64_t, std::map<size_t, std::vector<Context>>>
       functionScopeIdContexts;

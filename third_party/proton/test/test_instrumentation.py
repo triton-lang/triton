@@ -295,6 +295,92 @@ def test_gluon_event(tmp_path: pathlib.Path):
     assert events_per_warp and set(events_per_warp.values()) == {3}
 
 
+@pytest.mark.skipif(not is_cuda(), reason="extended in-kernel events are NVIDIA-only")
+def test_extended_events(tmp_path: pathlib.Path):
+
+    @triton.jit
+    def kernel(x_ptr):
+        value = tl.load(x_ptr)
+        with pl.scope("measured", metrics=("value (pty)", value)):
+            value += 1
+        with pl.scope("measured", metrics=("other (pty)", value)):
+            value += 1
+        pl.mark("ready")
+        tl.store(x_ptr, value)
+
+    def find_node(node, name):
+        if node["frame"]["name"] == name:
+            return node
+        for child in node.get("children", []):
+            if result := find_node(child, name):
+                return result
+        return None
+
+    x = torch.tensor([5], device="cuda", dtype=torch.int32)
+    tree_path = tmp_path / "extended_events.hatchet"
+    proton.start(str(tree_path.with_suffix("")), backend="instrumentation")
+    kernel[(1, )](x, num_warps=1)
+    proton.finalize()
+
+    with tree_path.open("rb") as f:
+        tree = json.load(f)[0]
+    measured_node = find_node(tree, "measured")
+    marker_node = find_node(tree, "ready")
+    assert measured_node["metrics"]["value"] == 5
+    assert marker_node["metrics"] == {"count": 1}
+
+    trace_path = tmp_path / "extended_events.chrome_trace"
+    proton.start(
+        str(trace_path.with_suffix("")),
+        backend="instrumentation",
+        data="trace",
+    )
+    kernel[(1, )](x, num_warps=1)
+    proton.finalize()
+
+    with trace_path.open("rb") as f:
+        events = json.load(f)["traceEvents"]
+    measured_events = [event for event in events if event["name"] == "measured"]
+    marker_event = next(event for event in events if event["name"] == "ready")
+    assert len(measured_events) == 2
+    assert measured_events[0]["args"]["metrics"] == {"value (pty)": 7}
+    assert measured_events[1]["args"]["metrics"] == {"other (pty)": 8}
+    assert marker_event["ph"] == "i"
+    assert "dur" not in marker_event
+    assert marker_event["args"]["metrics"]["count"] == 1
+
+
+@pytest.mark.skipif(not is_cuda(), reason="extended in-kernel events are NVIDIA-only")
+def test_gluon_extended_events(tmp_path: pathlib.Path):
+
+    @gluon.jit
+    def kernel(x_ptr):
+        value = gl.load(x_ptr)
+        with pl.scope("measured", metrics=("value", value)):
+            value += 1
+        pl.mark("ready")
+        gl.store(x_ptr, value)
+
+    x = torch.tensor([3], device="cuda", dtype=torch.int32)
+    output_path = tmp_path / "gluon_extended_events.hatchet"
+    proton.start(str(output_path.with_suffix("")), backend="instrumentation")
+    kernel[(1, )](x, num_warps=1)
+    proton.finalize()
+
+    def find_node(node, name):
+        if node["frame"]["name"] == name:
+            return node
+        for child in node.get("children", []):
+            if result := find_node(child, name):
+                return result
+        return None
+
+    with output_path.open("rb") as f:
+        tree = json.load(f)[0]
+    assert find_node(tree, "measured")["metrics"]["value"] == 3
+    assert find_node(tree, "ready")["metrics"] == {"count": 1}
+
+
 def test_select_ids(tmp_path: pathlib.Path):
     from contextlib import contextmanager
 

@@ -21,6 +21,14 @@ uint64_t getMinInitTime(const std::vector<KernelTrace> &streamTrace) {
   return minInitTime;
 }
 
+const std::string *getMetricName(const CycleEntry &entry,
+                                 const KernelMetadata &metadata) {
+  if (entry.metricName)
+    return &*entry.metricName;
+  auto it = metadata.scopeMetricName.find(entry.scopeId);
+  return it == metadata.scopeMetricName.end() ? nullptr : &it->second;
+}
+
 } // namespace
 
 StreamTraceWriter::StreamTraceWriter(
@@ -80,6 +88,10 @@ void populateTraceInfo(std::shared_ptr<CircularLayoutParserResult> result,
       for (auto &event : trace.profileEvents)
         if (event.first->cycle < minCycle)
           minCycle = event.first->cycle;
+    for (auto &trace : bt.traces)
+      for (auto &marker : trace.markers)
+        if (marker->cycle < minCycle)
+          minCycle = marker->cycle;
     blockToMinCycle[bt.blockId] = minCycle;
 
     // Group block traces by proc id
@@ -238,10 +250,58 @@ void StreamChromeTraceWriter::writeKernel(json &object,
           args["Frequency (MHz)"] = freq;
           element["args"] = args;
           element["args"]["call_stack"] = callStack;
+          if (event.first->metric) {
+            const auto *metricName = getMetricName(*event.first, *metadata);
+            if (metricName) {
+              std::visit(
+                  [&](auto value) {
+                    element["args"]["metrics"][*metricName] = value;
+                  },
+                  *event.first->metric);
+            }
+          }
 
           object["traceEvents"].push_back(element);
 
           eventIdx++;
+        }
+
+        for (auto &marker : trace.markers) {
+          int scopeId = marker->scopeId;
+          if (!metadata->scopeName.count(scopeId))
+            name = "mark_" + std::to_string(scopeId);
+          else
+            name = metadata->scopeName.at(scopeId);
+          pid = metadata->kernelName + " Core" + std::to_string(procId) +
+                " CTA" + std::to_string(ctaId);
+          tid = "warp " + std::to_string(warpId) + " (markers)";
+          category = metadata->kernelName;
+          const double freq = 1000.0;
+          int64_t cycleAdjust =
+              static_cast<int64_t>(bt->initTime - minInitTime) -
+              static_cast<int64_t>(blockToMinCycle[ctaId]);
+          int64_t ts = static_cast<int64_t>(marker->cycle) + cycleAdjust;
+
+          json element;
+          element["name"] = name;
+          element["cat"] = category;
+          element["ph"] = "i";
+          element["s"] = "t";
+          element["pid"] = pid;
+          element["tid"] = tid;
+          element["ts"] = static_cast<double>(ts) / freq;
+          element["args"]["call_stack"] = callStack;
+          if (marker->metric) {
+            const auto *metricName = getMetricName(*marker, *metadata);
+            if (metricName) {
+              std::visit(
+                  [&](auto value) {
+                    element["args"]["metrics"][*metricName] = value;
+                  },
+                  *marker->metric);
+            }
+          }
+          object["traceEvents"].push_back(std::move(element));
         }
       }
     }

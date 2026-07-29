@@ -115,7 +115,8 @@ public:
       uint64_t functionId, const std::string &functionName,
       const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
       const std::vector<std::pair<size_t, size_t>> &scopeIdParents,
-      const std::string &metadataPath);
+      const std::string &metadataPath,
+      const std::vector<std::pair<size_t, std::string>> &scopeIdMetrics = {});
   void destroyFunctionMetadata(uint64_t functionId);
 
   void enterInstrumentedOp(uint64_t streamId, uint64_t functionId,

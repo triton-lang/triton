@@ -124,6 +124,12 @@ void ScopeIdAllocation::liveness() {
       ++scopeId;
       return;
     }
+    if (auto mark = dyn_cast<MarkOp>(op)) {
+      idToNameMap[scopeId] = mark.getName();
+      opToIdMap[op] = scopeId;
+      ++scopeId;
+      return;
+    }
     auto recordOp = dyn_cast<RecordOp>(op);
     if (!recordOp)
       return;
@@ -136,6 +142,8 @@ void ScopeIdAllocation::liveness() {
                                           << "'");
       opToIdMap[recordOp] = scopeId;
       idToOpMap[scopeId] = recordOp;
+      if (auto metricName = recordOp.getMetricNameAttr())
+        idToMetricNameMap[scopeId] = metricName.getValue();
       scopeId++;
     } else {
       auto &[existingId, isStart] = nameToIdMap[name];
@@ -150,6 +158,8 @@ void ScopeIdAllocation::liveness() {
                                                     << existingId);
         opToIdMap[recordOp] = existingId;
         idToOpMap[existingId] = recordOp;
+        if (auto metricName = recordOp.getMetricNameAttr())
+          idToMetricNameMap[existingId] = metricName.getValue();
         nameToIdMap.erase(name);
       }
     }
@@ -289,10 +299,12 @@ void ScopeIdAllocation::dominance() {
       }
     }
   }
-
-  // An asynchronous event inherits the innermost synchronous scope active at
-  // its allocation site. Its start and end endpoints may execute elsewhere.
-  funcOp->walk<WalkOrder::PreOrder>([&](AllocateEventOp eventOp) {
+  // Static events inherit the innermost synchronous scope active at their
+  // program point. Start and end endpoints may execute elsewhere relative to
+  // an AllocateEventOp.
+  funcOp->walk<WalkOrder::PreOrder>([&](Operation *eventOp) {
+    if (!isa<AllocateEventOp, MarkOp>(eventOp))
+      return;
     for (int j = sortedStartRecordOps.size() - 1; j >= 0; --j) {
       auto *parentStartOp = sortedStartRecordOps[j];
       auto parentScopeId = opToIdMap.lookup(parentStartOp);
@@ -387,10 +399,15 @@ ModuleScopeIdAllocation::ModuleScopeIdAllocation(ModuleOp moduleOp)
       p.second += offset;
     }
     scopeIdParents[funcOp] = std::move(parents);
+    // Metric names
+    auto metrics = funcMap.lookup(funcOp).getScopeIdMetrics();
+    for (auto &p : metrics)
+      p.first += offset;
+    scopeIdMetrics[funcOp] = std::move(metrics);
   }
 
   moduleOp.walk([&](Operation *op) {
-    if (!isa<RecordOp, AllocateEventOp>(op))
+    if (!isa<RecordOp, AllocateEventOp, MarkOp>(op))
       return;
     if (getOpScopeId(op) > 255)
       op->emitError("scope id exceeds the 8-bit encoding");
@@ -426,6 +443,19 @@ ScopeIdAllocation::ScopeIdParent
 ModuleScopeIdAllocation::getScopeIdParents() const {
   ScopeIdAllocation::ScopeIdParent combined;
   for (auto &entry : scopeIdParents)
+    combined.insert(combined.end(), entry.second.begin(), entry.second.end());
+  return combined;
+}
+
+ScopeIdAllocation::ScopeIdMetric
+ModuleScopeIdAllocation::getScopeIdMetrics(triton::FuncOp funcOp) const {
+  return scopeIdMetrics.lookup(funcOp);
+}
+
+ScopeIdAllocation::ScopeIdMetric
+ModuleScopeIdAllocation::getScopeIdMetrics() const {
+  ScopeIdAllocation::ScopeIdMetric combined;
+  for (auto &entry : scopeIdMetrics)
     combined.insert(combined.end(), entry.second.begin(), entry.second.end());
   return combined;
 }

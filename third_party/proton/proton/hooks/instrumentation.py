@@ -17,7 +17,7 @@ from ..state import metadata_state
 from .. import mode
 
 # TODO(fywkevin): add support for major.minor
-VERSION = 1
+VERSION = 2
 
 
 class CudaAllocator:
@@ -244,7 +244,9 @@ class InstrumentationHook(Hook):
 
             scope_id_names = triton_proton.get_scope_id_names(module)
             scope_id_parents = triton_proton.get_scope_id_parents(module)
-            libproton.init_function_metadata(function, name, scope_id_names, scope_id_parents, metadata_path)
+            scope_id_metrics = triton_proton.get_scope_id_metrics(module)
+            libproton.init_function_metadata(function, name, scope_id_names, scope_id_parents, metadata_path,
+                                             scope_id_metrics)
         else:
             raise RuntimeError(f"IR path not found in metadata for function {function}")
 

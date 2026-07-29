@@ -108,9 +108,31 @@ with pl.scope("compute"):
     ...
 ```
 
-Asynchronous operations such as asynchronous memory transfers and matrix multiplications can be measured with an opaque event.
-Allocation does not record a timestamp but instead only associates the event with a name.
-The same event can be passed across loops, functions, and warp specialized regions to identify the start and the end of an asynchronous operation.
+Synchronous scopes can capture one runtime scalar metric:
+
+```python
+value = tl.load(value_ptr)
+with pl.scope("compute", metrics=("work_items (pty)", value)):
+    ...
+
+# Equivalent operator form.
+pl.enter_scope("compute", metrics=("work_items (pty)", value))
+...
+pl.exit_scope("compute")
+```
+
+The `metrics` argument is a compile-time `(name, value)` pair containing one
+string name and one runtime scalar value. Metric names use the same aggregation
+suffixes as Proton's host API: no suffix is inclusive, `(exc)` is exclusive,
+and `(pty)` is a property. Supported values are `bool`, signed or unsigned
+integers up to 32 bits, `fp16`, `bf16`, and `fp32`. Pointers, block values,
+64-bit values, and multiple metrics are rejected during compilation.
+
+Asynchronous operations such as asynchronous memory transfers and matrix
+multiplications can be measured with an opaque event. Allocation does not
+record a timestamp but instead only associates the event with a name. The same
+event can be passed across loops, functions, and warp specialized regions to
+identify the start and the end of an asynchronous operation.
 
 ```python
 event = pl.allocate_event("async_copy")
@@ -119,6 +141,20 @@ issue_async_copy(...)
 ...
 pl.end_event(event)
 ```
+
+Instantaneous events use:
+
+```python
+pl.mark("tile_ready")
+```
+
+Markers appear as instant events in timeline traces and as count-only nodes in
+Hatchet output.
+
+Metrics and markers are currently supported only by the NVIDIA backend. A
+metric-free record occupies the original 8 bytes; only a metric-bearing scope
+start emits an additional tagged 8-byte record, preserving circular-buffer
+capacity when metric capture is omitted.
 
 Advanced users can insert `proton.record start`, `proton.record end`,
 `proton.allocate_event` and `proton.event` directly in TTIR or

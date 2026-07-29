@@ -21,12 +21,14 @@ public:
   using ScopeIdName = std::vector<std::pair<ScopeId, std::string>>;
   // id -> parent id
   using ScopeIdParent = std::vector<std::pair<ScopeId, ScopeId>>;
+  // id -> metric name
+  using ScopeIdMetric = std::vector<std::pair<ScopeId, std::string>>;
 
   ScopeIdAllocation() = default;
   explicit ScopeIdAllocation(FunctionOpInterface op) : funcOp(op) { run(); }
 
   ScopeId getOpScopeId(Operation *op) const {
-    assert((isa<RecordOp, AllocateEventOp>(op)) &&
+    assert((isa<RecordOp, AllocateEventOp, MarkOp>(op)) &&
            "operation does not have a static scope id");
     return opToIdMap.lookup(op);
   }
@@ -41,6 +43,13 @@ public:
 
   ScopeIdParent getScopeIdParents() const { return scopeParentIds; }
 
+  ScopeIdMetric getScopeIdMetrics() const {
+    ScopeIdMetric scopeIdMetrics;
+    for (const auto &[id, name] : idToMetricNameMap)
+      scopeIdMetrics.push_back({id, name.str()});
+    return scopeIdMetrics;
+  }
+
   size_t getNumScopes() const { return idToNameMap.size(); }
 
 private:
@@ -54,6 +63,7 @@ private:
 
   FunctionOpInterface funcOp;
   llvm::DenseMap<ScopeId, StringRef> idToNameMap;
+  llvm::DenseMap<ScopeId, StringRef> idToMetricNameMap;
   llvm::DenseMap<Operation *, ScopeId> opToIdMap;
   ScopeIdParent scopeParentIds;
 };
@@ -67,6 +77,8 @@ public:
       llvm::DenseMap<FunctionOpInterface, ScopeIdAllocation::ScopeIdName>;
   using ScopeIdParentMap =
       llvm::DenseMap<FunctionOpInterface, ScopeIdAllocation::ScopeIdParent>;
+  using ScopeIdMetricMap =
+      llvm::DenseMap<FunctionOpInterface, ScopeIdAllocation::ScopeIdMetric>;
 
   explicit ModuleScopeIdAllocation(ModuleOp moduleOp);
 
@@ -76,12 +88,16 @@ public:
   ScopeIdAllocation::ScopeIdParent
   getScopeIdParents(triton::FuncOp funcOp) const;
   ScopeIdAllocation::ScopeIdParent getScopeIdParents() const;
+  ScopeIdAllocation::ScopeIdMetric
+  getScopeIdMetrics(triton::FuncOp funcOp) const;
+  ScopeIdAllocation::ScopeIdMetric getScopeIdMetrics() const;
 
 private:
   FuncOffsetMapT funcScopeIdMap;
   // Precomputed per-function mappings
   ScopeIdNameMap scopeIdNames;
   ScopeIdParentMap scopeIdParents;
+  ScopeIdMetricMap scopeIdMetrics;
 };
 
 } // namespace triton::proton

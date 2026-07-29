@@ -1,5 +1,6 @@
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
 #include "Backend/Backend.h"
+#include "Data/TraceData.h"
 #include "Device.h"
 #include "Runtime/Runtime.h"
 #include "TraceDataIO/CircularLayoutParser.h"
@@ -145,7 +146,8 @@ void InstrumentationProfiler::initFunctionMetadata(
     uint64_t functionId, const std::string &functionName,
     const std::vector<std::pair<size_t, std::string>> &scopeIdPairs,
     const std::vector<std::pair<size_t, size_t>> &scopeIdParentPairs,
-    const std::string &metadataPath) {
+    const std::string &metadataPath,
+    const std::vector<std::pair<size_t, std::string>> &scopeIdMetricPairs) {
   if (functionScopeIdNames.count(functionId)) {
     throw makeInvalidArgument(
         "Duplicate function id: " + std::to_string(functionId) +
@@ -161,6 +163,12 @@ void InstrumentationProfiler::initFunctionMetadata(
           functionName);
     }
     functionScopeIdNames[functionId][scopeId] = scopeName;
+  }
+  for (const auto &[scopeId, metricName] : scopeIdMetricPairs) {
+    if (!functionScopeIdNames[functionId].count(scopeId))
+      throw makeInvalidArgument("Metric references unknown scope id: " +
+                                std::to_string(scopeId));
+    functionScopeIdMetrics[functionId][scopeId] = metricName;
   }
   // Synthesize the calling contexts
   std::map<size_t, size_t> scopeIdParentMap;
@@ -192,6 +200,7 @@ void InstrumentationProfiler::initFunctionMetadata(
 
 void InstrumentationProfiler::destroyFunctionMetadata(uint64_t functionId) {
   functionScopeIdNames.erase(functionId);
+  functionScopeIdMetrics.erase(functionId);
   functionScopeIdContexts.erase(functionId);
   functionNames.erase(functionId);
   functionMetadata.erase(functionId);
@@ -246,6 +255,7 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
       timeShiftCost = getTimeShiftCost(*circularLayoutConfig);
   }
   auto &scopeIdContexts = functionScopeIdContexts[functionId];
+  auto &scopeIdMetrics = functionScopeIdMetrics[functionId];
 
   runtime->synchronizeStream(reinterpret_cast<void *>(streamId));
   runtime->processHostBuffer(
@@ -273,6 +283,37 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
                     static_cast<uint64_t>(runtime->getDeviceType()),
                     timeShiftCost, blockTrace.initTime, blockTrace.preFinalTime,
                     blockTrace.postFinalTime));
+                if (event.first->metric &&
+                    scopeIdMetrics.count(event.first->scopeId)) {
+                  auto metricValue = std::visit(
+                      [](auto value) -> MetricValueType { return value; },
+                      *event.first->metric);
+                  entry.upsertFlexibleMetric(
+                      scopeIdMetrics.at(event.first->scopeId), metricValue);
+                }
+              }
+            }
+            for (auto &marker : trace.markers) {
+              auto &contexts = scopeIdContexts[marker->scopeId];
+              for (const auto &[data, baseEntry] : dataToEntryMap) {
+                auto kernelId = baseEntry.id;
+                auto entry = data->addOp(baseEntry.phase, kernelId, contexts);
+                entry.upsertFlexibleMetric("count",
+                                           MetricValueType(uint64_t{1}));
+                // Tree output intentionally keeps marker nodes count-only.
+                // Trace output additionally needs the exact device timestamp.
+                if (dynamic_cast<TraceData *>(data)) {
+                  entry.upsertMetric(std::make_unique<CycleMetric>(
+                      marker->cycle, marker->cycle, 0, 0.0, kernelId,
+                      functionName, blockTrace.blockId, blockTrace.procId,
+                      trace.uid,
+                      static_cast<uint64_t>(
+                          reinterpret_cast<uintptr_t>(device)),
+                      static_cast<uint64_t>(runtime->getDeviceType()),
+                      timeShiftCost, blockTrace.initTime,
+                      blockTrace.preFinalTime, blockTrace.postFinalTime,
+                      /*isMarker=*/true));
+                }
               }
             }
           }

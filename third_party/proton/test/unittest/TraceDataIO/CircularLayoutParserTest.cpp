@@ -109,6 +109,93 @@ TEST_F(CircularLayoutParserTest, SingleEvent) {
   EXPECT_EQ(event.second->cycle, 8192);
 }
 
+TEST_F(CircularLayoutParserTest, MetricAndMarker) {
+  auto append32 = [&](uint32_t word) {
+    for (int i = 0; i < 4; ++i)
+      testData.push_back((word >> (i * 8)) & 0xff);
+  };
+  auto append64 = [&](uint64_t word) {
+    append32(word);
+    append32(word >> 32);
+  };
+
+  append32(kPreamble);
+  append32(1);        // block id
+  append32(3);        // processor id
+  append32(32);       // buffer size
+  append64(10);       // init
+  append64(20);       // pre-final
+  append64(30);       // post-final
+  append32(8);        // four two-word records
+  append32(4u << 16); // metric-bearing scope start
+  append32(100);
+  append32((3u << 20) | (4u << 16)); // I32 metric extension
+  append32(static_cast<uint32_t>(-7));
+  append32(1u << 31); // scope end
+  append32(200);
+  append32((1u << 23) | (2u << 20)); // marker
+  append32(150);
+
+  config.numBlocks = 1;
+  config.totalUnits = 1;
+  config.scratchMemSize = testData.size();
+  config.uidVec = {0};
+  auto buffer = ByteSpan(testData.data(), testData.size());
+  CircularLayoutParser parser(buffer, config);
+  parser.parse();
+
+  auto &trace = parser.getResult()->blockTraces[0].traces[0];
+  ASSERT_EQ(trace.profileEvents.size(), 1);
+  ASSERT_TRUE(trace.profileEvents[0].first->metric);
+  EXPECT_EQ(std::get<int64_t>(*trace.profileEvents[0].first->metric), -7);
+  ASSERT_EQ(trace.markers.size(), 1);
+  EXPECT_EQ(trace.markers[0]->scopeId, 1);
+  EXPECT_EQ(trace.markers[0]->cycle, 150);
+}
+
+TEST_F(CircularLayoutParserTest, LegacyReservedBits) {
+  auto append32 = [&](uint32_t word) {
+    for (int i = 0; i < 4; ++i)
+      testData.push_back((word >> (i * 8)) & 0xff);
+  };
+  auto append64 = [&](uint64_t word) {
+    append32(word);
+    append32(word >> 32);
+  };
+
+  constexpr uint32_t clockUpper = 0x005a1234;
+  append32(kPreamble);
+  append32(1);  // block id
+  append32(3);  // processor id
+  append32(16); // buffer size
+  append64(10); // init
+  append64(20); // pre-final
+  append64(30); // post-final
+  append32(4);  // two two-word records
+  append32((2u << 23) | clockUpper);
+  append32(100);
+  append32((1u << 31) | (2u << 23) | clockUpper);
+  append32(200);
+
+  config.version = 1;
+  config.numBlocks = 1;
+  config.totalUnits = 1;
+  config.scratchMemSize = testData.size();
+  config.uidVec = {0};
+  auto buffer = ByteSpan(testData.data(), testData.size());
+  CircularLayoutParser parser(buffer, config);
+  parser.parse();
+
+  auto &events = parser.getResult()->blockTraces[0].traces[0].profileEvents;
+  ASSERT_EQ(events.size(), 1);
+  const uint64_t expectedUpper = static_cast<uint64_t>(clockUpper & 0x7ff)
+                                 << 32;
+  EXPECT_EQ(events[0].first->cycle, expectedUpper | 100);
+  EXPECT_EQ(events[0].second->cycle, expectedUpper | 200);
+  EXPECT_EQ(events[0].first->eventType, EntryEventType::SCOPE);
+  EXPECT_EQ(events[0].first->metricType, EntryMetricType::NONE);
+}
+
 TEST_F(CircularLayoutParserTest, StartAfterStart) {
   testData = {
       // header
@@ -272,4 +359,19 @@ TEST_F(CircularLayoutParserTest, TimeShift) {
   EXPECT_EQ(event0.second->cycle, 49);
   EXPECT_EQ(event1.first->cycle, 40);
   EXPECT_EQ(event1.second->cycle, 72);
+}
+
+TEST_F(CircularLayoutParserTest, MarkerTimeShift) {
+  auto result = std::make_shared<CircularLayoutParserResult>();
+  auto &trace = result->blockTraces.emplace_back().traces.emplace_back();
+  auto first = std::make_shared<CycleEntry>();
+  first->cycle = 100;
+  auto second = std::make_shared<CycleEntry>();
+  second->cycle = 120;
+  trace.markers = {first, second};
+
+  timeShift(/*cost=*/7, result);
+
+  EXPECT_EQ(first->cycle, 93);
+  EXPECT_EQ(second->cycle, 106);
 }

@@ -34,6 +34,7 @@ class PTG_Op<string mnemonic, list<Trait> traits = []> :
 //===----------------------------------------------------------------------===//
 
 def PTG_CircularStoreOp : PTG_Op<"circular_store", [
+    AttrSizedOperandSegments,
     MemoryEffects<[MemRead<DefaultResource>, MemWrite<DefaultResource>]>
 ]> {
   let summary = "Store the value into a circular buffer";
@@ -50,7 +51,9 @@ def PTG_CircularStoreOp : PTG_Op<"circular_store", [
     AnyTypeOf<[I32, I64]>:$counter,
     Optional<I32>:$dynamicScopeId,
     UnitAttr:$isStart,
-    OptionalAttr<I32Attr>:$scopeId
+    OptionalAttr<I32Attr>:$scopeId,
+    Optional<AnyType>:$metric,
+    DefaultValuedAttr<MetricValueTypeAttr, "MetricValueType::NONE">:$metricType
   );
 
   let hasVerifier = 1;
@@ -58,7 +61,27 @@ def PTG_CircularStoreOp : PTG_Op<"circular_store", [
   let assemblyFormat = [{
     (`start` $isStart^):(`end`)? $segment `,` $counter
     (`,` $dynamicScopeId^)?
-    attr-dict `:` qualified(type($segment)) `,` type($counter)
+    (`metric` $metric^ `:` type($metric))? attr-dict `:`
+    qualified(type($segment)) `,` type($counter)
+  }];
+}
+
+def PTG_CircularMarkOp : PTG_Op<"circular_mark", [
+    MemoryEffects<[MemRead<DefaultResource>, MemWrite<DefaultResource>]>
+]> {
+  let summary = "Store an instantaneous event into a circular buffer";
+
+  let arguments = (ins
+    PTG_SegmentType:$segment,
+    AnyTypeOf<[I32, I64]>:$counter,
+    I32Attr:$scopeId
+  );
+
+  let hasVerifier = 1;
+
+  let assemblyFormat = [{
+    $segment `,` $counter attr-dict `:`
+    qualified(type($segment)) `,` type($counter)
   }];
 }
 

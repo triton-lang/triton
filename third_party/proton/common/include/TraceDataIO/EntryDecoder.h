@@ -6,6 +6,9 @@
 #include <cstdint>
 #include <iostream>
 #include <memory>
+#include <optional>
+#include <string>
+#include <variant>
 
 namespace proton {
 
@@ -61,6 +64,29 @@ struct I64Entry : public EntryBase {
 
 template <> void decodeFn<I64Entry>(ByteSpan &buffer, I64Entry &entry);
 
+enum class EntryEventType : uint8_t {
+  SCOPE = 0,
+  ASYNC = 1,
+  MARK = 2,
+  METRIC = 3,
+};
+
+enum class EntryMetricType : uint8_t {
+  NONE = 0,
+  BOOL = 1,
+  I8 = 2,
+  I16 = 3,
+  I32 = 4,
+  U8 = 5,
+  U16 = 6,
+  U32 = 7,
+  F16 = 8,
+  BF16 = 9,
+  F32 = 10,
+};
+
+using EntryMetricValue = std::variant<uint64_t, int64_t, double>;
+
 struct CycleEntry : public EntryBase {
   CycleEntry() = default;
 
@@ -69,9 +95,16 @@ struct CycleEntry : public EntryBase {
   uint64_t cycle = 0;
   bool isStart = true;
   int32_t scopeId = 0;
+  EntryEventType eventType = EntryEventType::SCOPE;
+  EntryMetricType metricType = EntryMetricType::NONE;
+  uint32_t rawValue = 0;
+  std::optional<EntryMetricValue> metric;
+  std::optional<std::string> metricName;
 };
 
 template <> void decodeFn<CycleEntry>(ByteSpan &buffer, CycleEntry &entry);
+
+EntryMetricValue decodeMetricValue(EntryMetricType type, uint32_t rawValue);
 
 } // namespace proton
 

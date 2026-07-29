@@ -13,14 +13,22 @@ module {
 // -----
 
 module attributes {"ttg.num-warps" = 1 : i32} {
-  // CHECK-LABEL: event
-  tt.func @event() {
-    // CHECK-DAG: %[[EVENT:.*]] = arith.constant 0 : i32
+  // CHECK-LABEL: extended_events
+  tt.func @extended_events() {
+    // CHECK-DAG: %[[EVENT:.*]] = arith.constant 1 : i32
+    %metric = arith.constant 7 : i32
+    // CHECK: %[[METRIC_CLOCK:.*]] = proton_gpu.read_counter : i32
+    // CHECK: proton_gpu.circular_store start %{{.*}}, %[[METRIC_CLOCK]] metric %{{.*}} : i32 {metricType = 4 : i32, scopeId = 0 : i32}
+    // CHECK: proton_gpu.circular_store end %{{.*}}, %{{.*}} {scopeId = 0 : i32}
     // CHECK: proton_gpu.circular_store start %{{.*}}, %{{.*}}, %[[EVENT]]
     // CHECK: proton_gpu.circular_store end %{{.*}}, %{{.*}}, %[[EVENT]]
+    // CHECK: proton_gpu.circular_mark %{{.*}}, %{{.*}} {scopeId = 2 : i32}
+    proton.record start "measured" metric "value (pty)" = %metric : i32 {metricType = 4 : i32}
+    proton.record end "measured"
     %event = proton.allocate_event "async" : i32
     proton.event start %event : i32
     proton.event end %event : i32
+    proton.mark "ready"
     tt.return
   }
 }
