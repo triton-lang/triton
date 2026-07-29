@@ -1260,6 +1260,17 @@ void runDeadIterArgElimination(Operation *top) {
   // The op we are running on must not have any results, because the liveness
   // analysis will not consider their users.
   assert(top->hasTrait<OpTrait::ZeroResults>() && "op cannot have results");
+
+  WalkResult hasIterArgs = top->walk([](Operation *op) {
+    if (auto loopLike = dyn_cast<LoopLikeOpInterface>(op)) {
+      if (!loopLike.getRegionIterArgs().empty())
+        return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  if (!hasIterArgs.wasInterrupted())
+    return;
+
   dataflow::RunLivenessAnalysis la{top};
 
   // We just replace users of the block arg with their corresponding init value.
