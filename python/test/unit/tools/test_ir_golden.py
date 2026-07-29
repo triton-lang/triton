@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -165,9 +166,11 @@ def test_triton_opt_reproducer_runs_without_python(monkeypatch: pytest.MonkeyPat
     result = replay_reproducer_shard(path, executable, expected_sha256=descriptor["expected_sha256"],
                                      compressed_sha256=descriptor["sha256"])
     assert result["sha256"] == descriptor["expected_sha256"]
-    command = ('zstd -dc "$1" | "$2" --mlir-disable-threading --run-reproducer --split-input-file - | '
+    command = ('zstd -dc "$1" | "$2" --mlir-disable-threading --mlir-diagnostic-verbosity-level=errors '
+               '--run-reproducer --split-input-file - | '
                'sha256sum --check "${1%.mlir.zst}.sha256"') if compressed else (
-                   '"$2" --mlir-disable-threading --run-reproducer --split-input-file "$1" | '
+                   '"$2" --mlir-disable-threading --mlir-diagnostic-verbosity-level=errors '
+                   '--run-reproducer --split-input-file "$1" | '
                    'sha256sum --check "${1%.mlir}.sha256"')
     pipeline = subprocess.run(["bash", "-o", "pipefail", "-c", command, "_",
                                str(path), executable], capture_output=True, text=True, check=False)
@@ -189,6 +192,16 @@ def test_triton_opt_reproducer_detects_corrupt_input_and_output(tmp_path: Path) 
         with pytest.raises(GoldenCorpusError, match="golden output changed"):
             replay_reproducer_shard(path, executable, expected_sha256="incorrect")
     assert descriptor["checksum"] == "synthetic.sha256"
+
+
+def test_triton_opt_reproducer_canonicalizes_independent_deallocations(tmp_path: Path) -> None:
+    expected = "  ttg.local_dealloc %2 : type\n  ttg.local_dealloc %1 : type\n"
+    descriptor = write_reproducer_shard(
+        tmp_path / "synthetic.mlir",
+        [{"id": "synthetic", "strategy": "legacy", "language": "triton", "source": "module {}\n", "expected": expected}
+         ])
+    canonical = "  ttg.local_dealloc %1 : type\n  ttg.local_dealloc %2 : type\n\n"
+    assert descriptor["expected_sha256"] == hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def test_triton_opt_export_and_replay_commands(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

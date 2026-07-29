@@ -291,14 +291,15 @@ def write_reproducer_shard(path: Path, reproductions: list[dict[str, Any]]) -> d
         header = {key: reproduction[key] for key in ("id", "strategy", "language")}
         chunks.append("// IR-GOLDEN: " + json.dumps(header, sort_keys=True) + "\n" +
                       reproduction["source"].rstrip("\n"))
-        outputs.append(reproduction["expected"])
+        outputs.append(normalize_ttgir(reproduction["expected"]))
     data = (REPRODUCER_SPLIT.join(chunks) + "\n").encode()
     stored = _compress(data) if path.name.endswith(".mlir.zst") else data
     if not (path.name.endswith(".mlir") or path.name.endswith(".mlir.zst")):
         raise GoldenCorpusError("Triton-opt reproducer shards must end in .mlir or .mlir.zst")
     if len(stored) >= MAX_SHARD_BYTES:
         raise GoldenCorpusError(f"Reproducer shard {path.name} exceeds the {MAX_SHARD_BYTES:,}-byte limit")
-    expected = (REPRODUCER_SPLIT.join(outputs) + "\n").encode()
+    expected_text = REPRODUCER_SPLIT.join(outputs) + "\n"
+    expected = ("\n".join(ttgir_dependency_signature(expected_text)) + "\n").encode()
     expected_sha256 = _sha256(expected)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(stored)
@@ -322,14 +323,17 @@ def replay_reproducer_shard(path: str | Path, triton_opt: str = "triton-opt", *,
     if compressed_sha256 is not None and _sha256(data) != compressed_sha256:
         raise GoldenCorpusError(f"Triton-opt reproducer shard {source.name} failed its SHA-256 check")
     try:
-        result = subprocess.run([triton_opt, "--mlir-disable-threading", "--run-reproducer", "--split-input-file", "-"],
-                                input=_decompress(data), capture_output=True, check=False)
+        result = subprocess.run([
+            triton_opt, "--mlir-disable-threading", "--mlir-diagnostic-verbosity-level=errors", "--run-reproducer",
+            "--split-input-file", "-"
+        ], input=_decompress(data), capture_output=True, check=False)
     except OSError as error:
         raise GoldenCorpusError(f"Cannot execute triton-opt: {error}") from error
     if result.returncode:
         raise GoldenCorpusError(f"Triton-opt replay failed for {source.name}: "
                                 f"{result.stderr.decode(errors='replace').strip()}")
-    actual_sha256 = _sha256(result.stdout)
+    normalized = normalize_ttgir(result.stdout.decode())
+    actual_sha256 = _sha256(("\n".join(ttgir_dependency_signature(normalized)) + "\n").encode())
     if expected_sha256 is not None and actual_sha256 != expected_sha256:
         raise GoldenCorpusError(f"Triton-opt golden output changed for {source.name}: "
                                 f"expected {expected_sha256}, observed {actual_sha256}")
