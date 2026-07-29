@@ -24,6 +24,12 @@ SCHEMA_VERSION = 1
 STRATEGIES = ("legacy", "global")
 MAX_SHARD_BYTES = 12_000_000
 _FUNCTION = re.compile(r"\btt\.func(?:\s+(?:public|private))?\s+@([^\s(]+)")
+_SSA_VALUE = re.compile(r"%[-.$A-Za-z0-9_]+(?:#\d+)?")
+_ASSIGNMENT = re.compile(r"^(\s*)(%[-.$A-Za-z0-9_]+(?::\d+)?)\s*=\s*(.*)$")
+_PURE_OPERATIONS = {
+    "tt.addptr", "tt.broadcast", "tt.expand_dims", "tt.join", "tt.make_range", "tt.reshape", "tt.split", "tt.splat",
+    "tt.trans", "ttg.convert_layout"
+}
 
 
 class GoldenCorpusError(RuntimeError):
@@ -87,6 +93,73 @@ def ir_metrics(text: str) -> dict[str, int]:
 
 def function_names(text: str) -> list[str]:
     return _FUNCTION.findall(text)
+
+
+def normalize_ttgir(text: str) -> str:
+    """Stabilize independent deallocation order without changing real operations."""
+    lines = text.splitlines(keepends=True)
+    result = []
+    position = 0
+    while position < len(lines):
+        match = re.match(r"^\s*ttg\.local_dealloc\s+(%[^\s:]+)", lines[position])
+        if match is None:
+            result.append(lines[position])
+            position += 1
+            continue
+        group = []
+        operands = []
+        while position < len(lines):
+            current = re.match(r"^\s*ttg\.local_dealloc\s+(%[^\s:]+)", lines[position])
+            if current is None:
+                break
+            group.append(lines[position])
+            operands.append(current.group(1))
+            position += 1
+        result.extend(sorted(group) if len(operands) == len(set(operands)) else group)
+    return "".join(result)
+
+
+def ttgir_dependency_signature(text: str) -> tuple[str, ...]:
+    """Compare complete IR while ignoring only independent, pure SSA scheduling."""
+    known_values: dict[str, str] = {}
+    pure_operations = []
+    signature = []
+
+    def replace_values(value: str) -> str:
+
+        def substitute(match: re.Match[str]) -> str:
+            original = match.group(0)
+            name, separator, index = original.partition("#")
+            replacement = known_values.get(name, name)
+            return replacement + (separator + index if separator else "")
+
+        return _SSA_VALUE.sub(substitute, value)
+
+    def flush() -> None:
+        if pure_operations:
+            signature.extend(sorted(pure_operations))
+            pure_operations.clear()
+
+    for line in text.splitlines():
+        assignment = _ASSIGNMENT.match(line)
+        if assignment is None:
+            flush()
+            signature.append(replace_values(line))
+            continue
+        indent, result, expression = assignment.groups()
+        rewritten = replace_values(expression)
+        operation = expression.split(None, 1)[0]
+        if operation.startswith(("arith.", "math.")) or operation in _PURE_OPERATIONS:
+            identity = hashlib.sha256(rewritten.encode()).hexdigest()
+            known_values[result.split(":", 1)[0]] = "%value_" + identity
+            pure_operations.append(indent + rewritten)
+        else:
+            flush()
+            identity = hashlib.sha256(rewritten.encode()).hexdigest()
+            known_values[result.split(":", 1)[0]] = "%value_" + identity
+            signature.append(indent + "%effect_" + identity + " = " + rewritten)
+    flush()
+    return tuple(signature)
 
 
 def _backend(target: dict[str, Any]):
@@ -163,7 +236,7 @@ def compile_case(payload: dict[str, Any], strategy: str) -> tuple[str, dict[str,
                 output = backend.gluon_to_ttgir(module, stage_metadata, options, int(target["arch"]))
         except Exception as error:
             raise GoldenCorpusError(f"The {strategy} {language} TTGIR pipeline failed: {error}") from error
-        normalized = output.str_nodebug()
+        normalized = normalize_ttgir(output.str_nodebug())
     if "tensordesc_meta" not in stage_metadata:
         raise GoldenCorpusError("The TTGIR pipeline did not finish")
     return normalized, ir_metrics(normalized)
@@ -192,7 +265,7 @@ def verify_payload(payload: dict[str, Any], strategies: tuple[str, ...] = STRATE
         if _sha256(expected.encode()) != reference.get("sha256"):
             raise GoldenCorpusError(f"The frozen {strategy} TTGIR reference is corrupt")
         actual, metrics = compile_case(payload, strategy)
-        if actual != expected:
+        if actual != expected and ttgir_dependency_signature(actual) != ttgir_dependency_signature(expected):
             raise GoldenCorpusError(f"The {strategy} TTGIR golden changed: expected {reference['sha256']}, "
                                     f"observed {_sha256(actual.encode())}")
         if metrics != reference.get("metrics"):
@@ -283,7 +356,8 @@ class GoldenCorpus:
         if not isinstance(shards, list) or not isinstance(cases, list):
             raise GoldenCorpusError("The golden corpus manifest has no case or shard index")
         self.shards = {entry["id"]: entry for entry in shards}
-        self.cases = [GoldenCase.from_json(entry) for entry in cases]
+        self.cases = sorted((GoldenCase.from_json(entry) for entry in cases), key=lambda case:
+                            (case.shard, case.case_id))
         if len(self.shards) != len(shards):
             raise GoldenCorpusError("The golden corpus contains duplicate shard identifiers")
         seen = set()
