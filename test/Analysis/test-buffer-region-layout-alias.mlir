@@ -471,8 +471,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
-// Callee allocations are relative to their call frame. Translate every
-// possible frame before comparing incoming descriptors with local storage.
+// Callee allocations are relative to their own frame. Incoming descriptors
+// remain disjoint from callee-local storage across direct and indirect callers.
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 
@@ -499,6 +499,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %other = ttg.local_alloc {allocation.offset = 64 : i32} : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
     tt.call @callee_local_is_disjoint_from_argument(%incoming) {allocation.offset = 128 : i32} : (!ttg.memdesc<16xi32, #shared, #smem, mutable>) -> ()
     tt.call @forward_to_callee(%other) {allocation.offset = 128 : i32} : (!ttg.memdesc<16xi32, #shared, #smem, mutable>) -> ()
+    tt.return
+  }
+
+  tt.func public @another_call_with_disjoint_allocation_frame() {
+    %incoming = ttg.local_alloc {allocation.offset = 128 : i32} : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    tt.call @callee_local_is_disjoint_from_argument(%incoming) {allocation.offset = 0 : i32} : (!ttg.memdesc<16xi32, #shared, #smem, mutable>) -> ()
     tt.return
   }
 }

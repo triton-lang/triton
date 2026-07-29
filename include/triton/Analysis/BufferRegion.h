@@ -2,6 +2,7 @@
 #define TRITON_ANALYSIS_BUFFER_REGION_H
 
 #include <cstdint>
+#include <functional>
 #include <set>
 #include <tuple>
 #include <utility>
@@ -45,8 +46,6 @@ public:
     return addresses == other.addresses;
   }
   bool operator<(const AddressSet &other) const {
-    if (addresses == other.addresses)
-      return false;
     auto lhs = begin();
     auto rhs = other.begin();
     while (lhs != end() && rhs != other.end()) {
@@ -113,6 +112,18 @@ struct BufferRegionView {
   llvm::SmallVector<uint32_t, 2> partitionBases;
   uint32_t affinePartitionOffset = 0;
   uint32_t affineCTAOffset = 0;
+  /// The function whose shared-memory allocation frame owns this region.
+  Operation *allocationFrame = nullptr;
+
+  bool intersects(const BufferRegionView &other) const {
+    return allocationFrame == other.allocationFrame &&
+           region.intersects(other.region);
+  }
+
+  bool contains(const BufferRegionView &other) const {
+    return allocationFrame == other.allocationFrame &&
+           region.contains(other.region);
+  }
 
 private:
   auto key() const {
@@ -122,10 +133,12 @@ private:
 
 public:
   bool operator==(const BufferRegionView &other) const {
-    return key() == other.key();
+    return allocationFrame == other.allocationFrame && key() == other.key();
   }
 
   bool operator<(const BufferRegionView &other) const {
+    if (allocationFrame != other.allocationFrame)
+      return std::less<Operation *>{}(allocationFrame, other.allocationFrame);
     return key() < other.key();
   }
 };
@@ -213,10 +226,7 @@ public:
   using Base =
       dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<RegionInfo>>;
   using Base::getLatticeElement;
-
-  explicit BufferRegionAnalysis(DataFlowSolver &solver,
-                                bool sharedMemoryOnly = false)
-      : Base(solver), sharedMemoryOnly(sharedMemoryOnly) {}
+  using Base::SparseForwardDataFlowAnalysis;
 
   enum RegionType { SHARED_MEMORY, TENSOR_MEMORY, BARRIER, NUM_REGION_TYPES };
 
@@ -231,9 +241,6 @@ public:
   const RegionInfo &getRegionInfo(Value value) {
     return getLatticeElement(value)->getValue();
   }
-
-  /// Return every absolute allocation base of the function containing `op`.
-  llvm::ArrayRef<uint32_t> getFunctionFrameBases(Operation *op) const;
 
   // ------------------------------
   // Public API for ConSan
@@ -268,8 +275,6 @@ public:
   LogicalResult initialize(Operation *top) override;
 
 private:
-  bool sharedMemoryOnly;
-  llvm::DenseMap<Operation *, llvm::SmallVector<uint32_t, 2>> functionFrames;
   // Global registry of all regions
   std::set<BufferRegion> usedBufferRegions[NUM_REGION_TYPES];
   bool usedUnknownBufferRegions[NUM_REGION_TYPES] = {};

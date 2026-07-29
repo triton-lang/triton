@@ -89,7 +89,7 @@ private:
 struct BlockInfo {
   using SliceMapT = std::map<AllocationSlice, std::set<Operation *>>;
   using RegionMapT =
-      std::map<std::optional<triton::BufferRegion>, std::set<Operation *>>;
+      std::map<std::optional<triton::BufferRegionView>, std::set<Operation *>>;
 
   SliceMapT syncReadSlices;
   SliceMapT syncWriteSlices;

@@ -332,7 +332,7 @@ private:
         continue;
       const triton::RegionInfo &argumentRegions =
           regions.getRegionInfo(argument);
-      auto add = [&](std::optional<triton::BufferRegion> region) {
+      auto add = [&](std::optional<triton::BufferRegionView> region) {
         info.syncReadRegions[region].insert(currentFunction.getOperation());
         info.syncWriteRegions[std::move(region)].insert(
             currentFunction.getOperation());
@@ -341,7 +341,7 @@ private:
         add(std::nullopt);
       else
         for (const triton::BufferRegionView &view : argumentRegions.views)
-          add(view.region);
+          add(view);
     }
     return info;
   }
@@ -364,6 +364,28 @@ private:
       if (auto callee =
               dyn_cast_or_null<FunctionOpInterface>(call.resolveCallable())) {
         generic = funcBlockInfoMap->lookup(callee);
+        auto callOffset = call->getAttrOfType<IntegerAttr>("allocation.offset");
+        uint32_t offset = callOffset ? callOffset.getInt() : 0;
+        auto translateCalleeRegions = [&](BlockInfo::RegionMapT &accesses) {
+          BlockInfo::RegionMapT translated;
+          for (const auto &[original, operations] : accesses) {
+            std::optional<triton::BufferRegionView> view = original;
+            if (view && view->allocationFrame == callee.getOperation()) {
+              view->region.baseOffset += offset;
+              for (auto &[cta, addresses] : view->region.ctaAddresses)
+                addresses = addresses.translated(offset);
+              view->storageBase += offset;
+              for (uint32_t &base : view->partitionBases)
+                base += offset;
+              view->allocationFrame = function.getOperation();
+            }
+            auto &destination = translated[std::move(view)];
+            destination.insert(operations.begin(), operations.end());
+          }
+          accesses = std::move(translated);
+        };
+        translateCalleeRegions(generic.syncReadRegions);
+        translateCalleeRegions(generic.syncWriteRegions);
         if (!generic.reachesFunctionEntry)
           blockInfo->sync();
         else
@@ -395,7 +417,7 @@ private:
             return;
           }
           for (const triton::BufferRegionView &view : info.views)
-            regions[view.region].insert(op);
+            regions[view].insert(op);
         };
 
         if (proxyWrite)
@@ -412,10 +434,8 @@ private:
 
       if (auto offset = op->getAttrOfType<IntegerAttr>("allocation.offset")) {
         ScratchInfo scratchInfo = getScratchInfo(op);
-        for (uint32_t frame : regions.getFunctionFrameBases(op)) {
-          if (!scratchInfo.size)
-            continue;
-          uint32_t base = frame + offset.getInt();
+        if (scratchInfo.size) {
+          uint32_t base = offset.getInt();
           triton::AddressSet addresses =
               triton::AddressSet::fromRange(base, scratchInfo.size);
           SmallVector<triton::BufferRegion::CTAAddresses, 2> ctaAddresses;
@@ -423,8 +443,14 @@ private:
               scratchInfo.crossCTA ? triton::gpu::lookupNumCTAs(op) : 1;
           for (unsigned cta = 0; cta < numCTAs; ++cta)
             ctaAddresses.emplace_back(cta, addresses);
-          triton::BufferRegion scratch{base, scratchInfo.size,
-                                       std::move(ctaAddresses)};
+          triton::BufferRegionView scratch{
+              {base, scratchInfo.size, std::move(ctaAddresses)},
+              base,
+              /*affineOffset=*/0,
+              /*partitionBases=*/{},
+              /*affinePartitionOffset=*/0,
+              /*affineCTAOffset=*/0,
+              function.getOperation()};
           // Lowered scratch operations both write and read their allocation.
           generic.syncReadRegions[scratch].insert(op);
           generic.syncWriteRegions[std::move(scratch)].insert(op);
@@ -523,8 +549,7 @@ public:
     }
 
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-    auto *regions =
-        solver->load<triton::BufferRegionAnalysis>(/*sharedMemoryOnly=*/true);
+    auto *regions = solver->load<triton::BufferRegionAnalysis>();
     if (failed(solver->initializeAndRun(mod)))
       return signalPassFailure();
     BufferRegionProxyFenceProvider provider(mod, *regions);
