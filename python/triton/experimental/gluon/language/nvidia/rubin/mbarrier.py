@@ -1,4 +1,5 @@
 from triton.language import core as tl
+import triton._C.libtriton.gluon_ir as gluon_ir
 
 from ..._core import _unwrap_if_constexpr, builtin
 from ..hopper.mbarrier import (
@@ -22,7 +23,7 @@ __all__ = [
 
 
 @builtin
-def wait(mbarrier, phase, pred=True, conditional=False, deps=(), _semantic=None):
+def wait(mbarrier, phase, pred=True, phase_type="primary", deps=(), _semantic=None):
     """
     Wait until the mbarrier object completes the requested phase.
 
@@ -30,15 +31,21 @@ def wait(mbarrier, phase, pred=True, conditional=False, deps=(), _semantic=None)
         mbarrier (shared_memory_descriptor): The barrier object to wait on.
         phase (int): The phase/parity value to wait for.
         pred (bool): Predicate. Operation is skipped if predicate is False. Defaults to True.
-        conditional (bool): If True, wait on the conditional phase used by
-            TMA report-validity operations. Defaults to False.
+        phase_type (str): Barrier phase type to wait on. Supported values are
+            ``"primary"`` and ``"conditional"``. Defaults to ``"primary"``.
         deps (Sequence[shared_memory_descriptor]): Dependent allocations barrier is waiting on. Used to track liveness of dependent allocations. Defaults to ().
     """
-    conditional = _unwrap_if_constexpr(conditional)
+    phase_type = _unwrap_if_constexpr(phase_type)
+    if phase_type == "primary":
+        phase_type = gluon_ir.MBARRIER_PHASE_TYPE.PRIMARY
+    elif phase_type == "conditional":
+        phase_type = gluon_ir.MBARRIER_PHASE_TYPE.CONDITIONAL
+    else:
+        raise ValueError(f"unsupported mbarrier phase type: {phase_type}")
     phase = _semantic.to_tensor(phase)
     pred = _semantic.to_tensor(pred)
     deps = [x.handle for x in deps]
-    _semantic.builder.create_mbarrier_wait(mbarrier.handle, phase.handle, pred.handle, deps, conditional)
+    _semantic.builder.create_mbarrier_wait(mbarrier.handle, phase.handle, pred.handle, deps, phase_type)
 
 
 @builtin

@@ -1426,7 +1426,7 @@ def rubin_tma_validity_kernel(input_desc, XBLOCK: ttgl.constexpr):
     rubin.tma.async_load(input_desc, [0, 0], bar, smem, report_validity="per_16B_fp16")
     done, valid = rubin.mbarrier.test_wait_validity(bar, 0)
     _ = done + valid
-    rubin.mbarrier.wait(bar, 0, conditional=True)
+    rubin.mbarrier.wait(bar, 0, phase_type="conditional")
 
     rubin.mbarrier.invalidate(bar)
 
@@ -1447,7 +1447,7 @@ def test_rubin_tma_validity_ir():
     assert ir.count("ttng.barrier_test_wait_report") == 1
     assert "arith.xori" in ir and "arith.andi" in ir
     assert "arith.addi" in ir
-    assert "ttng.wait_barrier" in ir and ", true :" in ir
+    assert "ttng.wait_barrier" in ir and ", conditional :" in ir
 
 
 @pytest.mark.parametrize("target", [HOPPER_TARGET, BLACKWELL_TARGET])

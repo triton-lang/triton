@@ -76,7 +76,8 @@ def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, 
             the report_validity kind needs to be passed explicitly as a string.
 
             A sentinel match prevents the mbarrier conditional phase from
-            completing. Use ``rubin.mbarrier.wait(..., conditional=True)`` to
+            completing. Use
+            ``rubin.mbarrier.wait(..., phase_type="conditional")`` to
             consume the load and ``rubin.mbarrier.test_wait_validity(...)`` to
             decide whether to retry it.
     """

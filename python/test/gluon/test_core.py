@@ -5502,7 +5502,7 @@ def test_tma_validcheck(report_validity):
 
         # Wait for the conditional phase to flip: TMA has finished and the
         # data is valid.
-        rubin.mbarrier.wait(bar, 0, conditional=True)
+        rubin.mbarrier.wait(bar, 0, phase_type="conditional")
         val = smem.load(block_layout)
         ttgl.store(output_ptr + yindex + xindex * XBLOCK, val)
 
@@ -5763,7 +5763,7 @@ def test_tma_validcheck_multi_stage():
 
         for _ in range(num_iter // num_stages):
             for stage in ttgl.static_range(num_stages):
-                rubin.mbarrier.wait(bar_full.index(stage), phase, conditional=True)
+                rubin.mbarrier.wait(bar_full.index(stage), phase, phase_type="conditional")
 
                 value = smem.slice(stage, 1, dim=0).load(block_layout)
                 value = ttgl.reshape(value, [block_size])

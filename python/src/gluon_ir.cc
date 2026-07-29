@@ -359,6 +359,11 @@ void init_gluon_ir(py::module_ &m) {
       .value("MAX", ttng::TMEMLoadReduceModifier::MAX)
       .export_values();
 
+  py::enum_<ttng::MBarrierPhaseType>(m, "MBARRIER_PHASE_TYPE")
+      .value("PRIMARY", ttng::MBarrierPhaseType::PRIMARY)
+      .value("CONDITIONAL", ttng::MBarrierPhaseType::CONDITIONAL)
+      .export_values();
+
   py::class_<GluonOpBuilder, TritonOpBuilder>(m, "GluonOpBuilder",
                                               py::dynamic_attr())
       .def(py::init<MLIRContext *, std::string>(), py::arg("context"),
@@ -954,12 +959,13 @@ void init_gluon_ir(py::module_ &m) {
       .def(
           "create_mbarrier_wait",
           [](GluonOpBuilder &self, Value memDesc, Value phase, Value pred,
-             std::vector<Value> &deps, bool conditional) {
-            self.create<ttng::WaitBarrierOp>(memDesc, phase, pred, conditional,
+             std::vector<Value> &deps, ttng::MBarrierPhaseType phaseType) {
+            self.create<ttng::WaitBarrierOp>(memDesc, phase, pred, phaseType,
                                              deps);
           },
           py::arg("memDesc"), py::arg("phase"), py::arg("pred"),
-          py::arg("deps"), py::arg("conditional") = false)
+          py::arg("deps"),
+          py::arg("phase_type") = ttng::MBarrierPhaseType::PRIMARY)
       .def("create_mbarrier_test_wait_report",
            [](GluonOpBuilder &self, Value memDesc, Value phase,
               Value pred) -> std::pair<Value, Value> {

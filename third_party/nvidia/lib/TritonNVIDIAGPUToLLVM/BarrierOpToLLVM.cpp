@@ -383,7 +383,9 @@ struct WaitBarrierOpConversion
       }
     } else {
       std::string phaseType;
-      if (supportsMbarV1Layout(*targetInfo) && op.getConditional())
+      if (supportsMbarV1Layout(*targetInfo) &&
+          op.getPhaseType() ==
+              triton::nvidia_gpu::MBarrierPhaseType::CONDITIONAL)
         phaseType = ".phase_type::conditional";
 
       if (!predicated) {

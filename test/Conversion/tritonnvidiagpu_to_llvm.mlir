@@ -28,7 +28,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @conditional_barrier_wait(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>, %phase: i32, %pred: i1) {
     // PTX93: mbarrier.try_wait.parity.phase_type::conditional.shared::cta.b64
     // RUBIN: mbarrier.try_wait.parity.phase_type::conditional.shared::cta.b64
-    ttng.wait_barrier %alloc, %phase, %pred, true : !ttg.memdesc<1xi64, #shared0, #smem>
+    ttng.wait_barrier %alloc, %phase, %pred, conditional : !ttg.memdesc<1xi64, #shared0, #smem>
     tt.return
   }
 }

@@ -337,9 +337,9 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
     This lowers a waitloop using PTX instruction
     mbarrier.try_wait.parity.shared::cta.b64.
 
-    `phase` is the phase/parity value to wait for. If `conditional` is false,
-    the op waits on the barrier's primary phase. If `conditional` is true, the
-    op waits on the conditional phase used by TMA report-validity operations.
+    `phase` is the phase/parity value to wait for. `phaseType` selects either
+    the barrier's primary phase or its conditional phase. In particular, the latter
+    is used by TMA report-validity operations.
 
     Accepts an optional list of memory dependencies. If present, it is assumed
     that any of the dependencies may be accessed until the barrier completes.
@@ -352,7 +352,8 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$alloc,
     I32:$phase,
     Optional<I1>:$pred,
-    DefaultValuedAttr<BoolAttr, "false">:$conditional,
+    DefaultValuedAttr<TTNG_MBarrierPhaseTypeAttr,
+                      "::mlir::triton::nvidia_gpu::MBarrierPhaseType::PRIMARY">:$phaseType,
     Variadic<TTG_MemDescType>:$deps
   );
 
@@ -360,22 +361,23 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
     OpBuilder<(ins "Value":$alloc, "Value":$phase),
     [{
     build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr),
-          /*conditional=*/false, /*deps=*/{});
+          /*phaseType=*/MBarrierPhaseType::PRIMARY, /*deps=*/{});
     }]>,
     OpBuilder<(ins "Value":$alloc, "Value":$phase, "Value":$pred),
     [{
-    build($_builder, $_state, alloc, phase, pred, /*conditional=*/false,
+    build($_builder, $_state, alloc, phase, pred,
+          /*phaseType=*/MBarrierPhaseType::PRIMARY,
           /*deps=*/{});
     }]>,
     OpBuilder<(ins "Value":$alloc, "Value":$phase, "ValueRange":$deps),
     [{
     build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr),
-          /*conditional=*/false, deps);
+          /*phaseType=*/MBarrierPhaseType::PRIMARY, deps);
     }]>,
   ];
 
   let assemblyFormat = [{
-    $alloc `,` $phase (`,` $pred^)? (`,` $conditional^)? (`deps` $deps^)?
+    $alloc `,` $phase (`,` $pred^)? (`,` $phaseType^)? (`deps` $deps^)?
     attr-dict `:` qualified(type($alloc)) (`,` type($deps)^)?
   }];
   let hasVerifier = 1;
