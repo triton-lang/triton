@@ -5,7 +5,33 @@ import torch
 
 import triton
 import triton.language as tl
+from triton._compile_warmup import compile_warmup_only
 from triton.backends.driver import GPUDriver, expand_signature, wrap_handle_tensordesc_impl
+
+
+def test_compile_warmup_only_intercepts_launches():
+    launches = []
+
+    class Kernel(triton.KernelInterface):
+
+        def warmup(self, *args, grid, **kwargs):
+            launches.append((args, grid, kwargs))
+            return "compiled"
+
+    kernel = Kernel()
+    previous_getitem = triton.KernelInterface.__getitem__
+    previous_assert_close = torch.testing.assert_close
+
+    with compile_warmup_only():
+        tensor = torch.empty(16, device="cuda")
+        result = kernel[(2, )](tensor, BLOCK_SIZE=16)
+        torch.testing.assert_close(tensor, tensor)
+
+    assert result == "compiled"
+    assert type(tensor).__name__ == "FakeTensor"
+    assert launches == [((tensor, ), (2, ), {"BLOCK_SIZE": 16})]
+    assert triton.KernelInterface.__getitem__ is previous_getitem
+    assert torch.testing.assert_close is previous_assert_close
 
 
 def test_is_lazy():

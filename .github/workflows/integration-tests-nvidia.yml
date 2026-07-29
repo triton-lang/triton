@@ -88,6 +88,13 @@ jobs:
         run: ccache --print-stats
       - name: Run lit tests
         run: make test-lit
+      - name: Warm Triton compile cache
+        run: |
+          warmup_procs=$(nproc)
+          if (( warmup_procs > 64 )); then
+            warmup_procs=64
+          fi
+          make WARMUP_PROCS="$warmup_procs" test-warmup
       - name: Run triton tests
         run: make NUM_PROCS=24 test-unit
       - name: Run gluon tests

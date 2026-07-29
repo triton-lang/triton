@@ -50,6 +50,15 @@ test-gluon: all
 	$(PYTEST) -n $(NUM_PROCS) python/test/gluon/ python/tutorials/gluon/
 	PYTHONPATH="$(TRITON_KERNELS_PATH)" $(PYTEST) -n 2 python/examples/gluon/
 
+WARMUP_PROCS ?= $(NUM_PROCS)
+
+.PHONY: test-warmup
+test-warmup: all
+	$(PYTEST) -s --tb=short -n $(WARMUP_PROCS) --dist=worksteal --warmup-only \
+		python/test/unit/language/test_matmul.py::test_simple_matmul
+	$(PYTEST) -s --tb=short -n $(WARMUP_PROCS) --dist=worksteal --warmup-only \
+		python/test/gluon/test_core.py::test_mma_shared_inputs
+
 .PHONY: test-gsan
 test-gsan: all
 	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -n $(NUM_PROCS) python/test/gsan
