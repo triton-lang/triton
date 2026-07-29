@@ -40,6 +40,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
+#false_wait_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#false_wait_smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 8 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: tt.func public @statically_false_barrier_wait
+  tt.func public @statically_false_barrier_wait() {
+    // CHECK: %[[FALSE:.*]] = arith.constant false
+    %false = arith.constant false
+    %true = arith.constant true
+    %phase = arith.constant 0 : i32
+    %bar = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi64, #false_wait_shared, #false_wait_smem, mutable>
+    // CHECK: ttng.init_barrier
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #false_wait_shared, #false_wait_smem, mutable>
+    // CHECK-NOT: tti.experimental_lock_acquire
+    // CHECK-NOT: tt.call @__triton_consan_
+    // CHECK-NOT: tti.experimental_lock_release
+    // CHECK: ttng.wait_barrier {{.*}}%[[FALSE]]
+    ttng.wait_barrier %bar, %phase, %false : !ttg.memdesc<1xi64, #false_wait_shared, #false_wait_smem, mutable>
+    // CHECK: tti.experimental_lock_acquire
+    // CHECK: tt.call @__triton_consan_verify_barrier_initialized
+    // CHECK: tt.call @__triton_consan_set_waiting
+    // CHECK: tt.call @__triton_consan_check_all_active_waiting
+    // CHECK: ttng.wait_barrier
+    ttng.wait_barrier %bar, %phase, %true : !ttg.memdesc<1xi64, #false_wait_shared, #false_wait_smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 #smem = #ttg.shared_memory

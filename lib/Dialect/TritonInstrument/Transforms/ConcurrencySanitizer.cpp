@@ -1,5 +1,6 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -816,6 +817,9 @@ private:
   void instrumentBarrierWait(Operation *op, Value alloc, Value phase,
                              Value pred, int thread, int baseThread,
                              tti::FunctionBuilder &funcBuilder) {
+    if (pred && matchPattern(pred, m_Zero()))
+      return;
+
     ImplicitLocOpBuilder wb(op->getLoc(), op);
     pred = tti::maybeAnd(wb, pred, hooks->getIssuerCTAPred(wb, op));
     Value lock = auxData.lock.at(op).value;
