@@ -160,7 +160,10 @@ private:
 
 class LayoutRematerialization {
 public:
-  LayoutRematerialization(FuncOp F) : funcOp(F) {}
+  LayoutRematerialization(FuncOp F,
+                          bool preserveSharedReductionRematerialization = false)
+      : funcOp(F), preserveSharedReductionRematerialization(
+                       preserveSharedReductionRematerialization) {}
   ~LayoutRematerialization();
 
   // Map the original value to the remat'ed one.
@@ -237,6 +240,7 @@ private:
   // block args or results of an scf op).
   DenseMap<Value, DenseMap<Attribute, Value>> rematMapping;
   FuncOp funcOp;
+  bool preserveSharedReductionRematerialization;
   DominanceInfo domInfo;
   PostDominanceInfo postDomInfo;
 };
@@ -293,8 +297,42 @@ static bool isProtectedLayoutReduction(Operation *op) {
     return false;
 
   auto sourceType = dyn_cast<RankedTensorType>(reduce->getOperand(0).getType());
-  return sourceType && sourceType.getRank() >= 4 &&
-         sourceType.getDimSize(reduce.getAxis()) == 2;
+  if (!sourceType || sourceType.getRank() < 4)
+    return false;
+  if (sourceType.getDimSize(reduce.getAxis()) == 2)
+    return true;
+
+  // A shared reduction can determine both a compact scale and the tensor
+  // quantized with that scale. Keep the complete reduction in the layout
+  // established by the memory boundaries instead of duplicating its network
+  // for the independent stores.
+  DenseSet<Operation *> visited;
+  DenseSet<Operation *> stores;
+  SmallVector<Value, 16> worklist;
+  for (Value result : reduce->getResults())
+    worklist.push_back(result);
+
+  constexpr unsigned maxSharedReductionUsers = 128;
+  while (!worklist.empty()) {
+    Value value = worklist.pop_back_val();
+    for (OpOperand &use : value.getUses()) {
+      Operation *user = use.getOwner();
+      if (auto store = dyn_cast<StoreOp>(user)) {
+        if (store.getValue() == value && stores.insert(user).second &&
+            stores.size() >= 2)
+          return true;
+        continue;
+      }
+      if (!isMemoryEffectFree(user) || !visited.insert(user).second)
+        continue;
+      if (visited.size() > maxSharedReductionUsers)
+        return false;
+      for (Value result : user->getResults())
+        if (isa<RankedTensorType>(result.getType()))
+          worklist.push_back(result);
+    }
+  }
+  return false;
 }
 
 static bool isFixedLayoutBoundary(Operation *op) {
@@ -389,6 +427,7 @@ void LayoutPropagation::initAnchorLayout() {
   if (strategy == LayoutAssignmentStrategy::Global) {
     DenseSet<Value> protectedReductionValues;
     SmallVector<Value> reductionWorklist;
+    bool hasSharedReductionMemoryBoundaries = false;
     auto addProtectedReductionValue = [&](Value value) {
       auto tensorType = dyn_cast<RankedTensorType>(value.getType());
       if (!tensorType || tensorType.getRank() < 4 ||
@@ -401,6 +440,10 @@ void LayoutPropagation::initAnchorLayout() {
     funcOp.walk([&](ReduceOp reduce) {
       if (!isProtectedLayoutReduction(reduce.getOperation()))
         return;
+      auto sourceType =
+          cast<RankedTensorType>(reduce->getOperand(0).getType());
+      if (sourceType.getDimSize(reduce.getAxis()) != 2)
+        hasSharedReductionMemoryBoundaries = true;
       for (Value operand : reduce->getOperands())
         addProtectedReductionValue(operand);
       for (Value result : reduce->getResults())
@@ -422,6 +465,14 @@ void LayoutPropagation::initAnchorLayout() {
       protectReductionComponent(value.getDefiningOp());
       for (OpOperand &use : value.getUses())
         protectReductionComponent(use.getOwner());
+    }
+
+    if (hasSharedReductionMemoryBoundaries) {
+      funcOp.walk([&](LoadOp load) {
+        addAnchor(load.getPtr());
+        if (Value mask = load.getMask())
+          addAnchor(mask);
+      });
     }
 
     funcOp.walk([&](Operation *op) {
@@ -742,6 +793,8 @@ uint64_t LayoutPropagation::getLayoutTransitionCost(
   if (tensorType.getElementType().isIntOrFloat())
     elementBitWidth = std::max<int64_t>(
         8, tensorType.getElementType().getIntOrFloatBitWidth());
+  else if (isa<PointerType>(tensorType.getElementType()))
+    elementBitWidth = 64;
   uint64_t byteCount = (elementCount * elementBitWidth) / 8;
 
   if (cvtNeedsWarpShuffle(sourceType, resultType))
@@ -771,6 +824,8 @@ LayoutPropagation::getLayoutRegisterPressureCost(Value value,
   if (tensorType.getElementType().isIntOrFloat())
     elementBytes = std::max<uint64_t>(
         1, (tensorType.getElementType().getIntOrFloatBitWidth() + 7) / 8);
+  else if (isa<PointerType>(tensorType.getElementType()))
+    elementBytes = 8;
 
   // Concentrating a distributed tile into registers serializes work that
   // could otherwise be performed by a warp. Price that work alongside the
@@ -1332,9 +1387,14 @@ void LayoutPropagation::resolveGlobalConflicts() {
   bool hasMultiResultReductionConstraints = false;
   bool hasLoopConstraints = false;
   bool hasTensorMemoryConstraints = false;
+  unsigned tensorLoadBoundaryCount = 0;
   bool hasReductionConstraints = false;
   bool hasProtectedReductionConstraints = false;
   funcOp.walk([&](Operation *op) {
+    if (auto load = dyn_cast<LoadOp>(op))
+      if (load->getNumResults() == 1 &&
+          isa<RankedTensorType>(load->getResult(0).getType()))
+        ++tensorLoadBoundaryCount;
     if (isa<JoinOp>(op))
       hasJoinConstraints = true;
     if (isa<SplitOp>(op))
@@ -1351,6 +1411,10 @@ void LayoutPropagation::resolveGlobalConflicts() {
     if (isa<triton::nvidia_gpu::TMEMLoadOp>(op))
       hasTensorMemoryConstraints = true;
   });
+  bool hasMemoryFanoutConstraints =
+      tensorLoadBoundaryCount >= 2 && !hasJoinConstraints &&
+      !hasSplitConstraints && !hasReductionConstraints &&
+      !hasLoopConstraints && !hasTensorMemoryConstraints;
   constexpr unsigned maxFullObjectiveValues = 256;
   // Keep reductions in their accumulator layout until a narrower output can
   // cross the tensor-memory boundary without a full-precision exchange.
@@ -1358,7 +1422,7 @@ void LayoutPropagation::resolveGlobalConflicts() {
       hasTensorMemoryConstraints && hasReductionConstraints;
   bool useFullGlobalObjective =
       (hasJoinConstraints || hasSplitConstraints || hasReductionConstraints ||
-       hasMultiResultReductionConstraints ||
+       hasMultiResultReductionConstraints || hasMemoryFanoutConstraints ||
        hasTensorMemoryReductionConstraints) &&
       layouts.size() <= maxFullObjectiveValues;
   LDBG("resolving " << layouts.size() << " layout values with "
@@ -1367,7 +1431,7 @@ void LayoutPropagation::resolveGlobalConflicts() {
 
   if (hasJoinConstraints || hasSplitConstraints || hasReductionConstraints ||
       hasMultiResultReductionConstraints || hasLoopConstraints ||
-      hasTensorMemoryReductionConstraints) {
+      hasMemoryFanoutConstraints || hasTensorMemoryReductionConstraints) {
     constexpr unsigned maxComponentIterations = 4;
     const unsigned maxComponentProposals = useFullGlobalObjective ? 128 : 32;
     const bool pruneRedundantReductionProposals =
@@ -2166,7 +2230,8 @@ static unsigned getCostFactor(Value result, Attribute rematEncoding) {
 /// newCvtCost.
 bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
                        const DenseMap<Value, Attribute> &layout,
-                       int64_t newCvtCost, bool disableRematSplitting) {
+                       int64_t newCvtCost, bool disableRematSplitting,
+                       bool preserveSharedReductionRematerialization = false) {
   // Identify all operations in the slice
   SetVector<Operation *> sliceOps;
   for (Value v : slice) {
@@ -2250,6 +2315,13 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
       return nonSliceOnlyValues.contains(v);
     });
 
+    if (preserveSharedReductionRematerialization &&
+        isOpUsedOutsideSlice && isa<ReduceOp>(op)) {
+      LDBG("  skipped rematerialization because it would duplicate a shared "
+           "reduction");
+      return false;
+    }
+
     if (isa<arith::ConstantOp>(op)) {
       // special-case: arith.constant has zero cost
       continue;
@@ -2332,7 +2404,8 @@ bool LayoutRematerialization::backwardRematerialization(
 
   // 2. Determine whether rematerialisation is beneficial.
   if (!isRematBeneficial(convertOp, slice, layout, /*newCvtCost=*/0,
-                         disableRematSplitting)) {
+                         disableRematSplitting,
+                         preserveSharedReductionRematerialization)) {
     LDBG("  skipped rematerialization because it is not beneficial");
     return false;
   }
@@ -2680,10 +2753,12 @@ bool LayoutRematerialization::hoistConvertIntoConditionals(
   return true;
 }
 
-bool backwardRematerialization(ModuleOp module, bool disableRematSplitting) {
+bool backwardRematerialization(ModuleOp module, bool disableRematSplitting,
+                               bool preserveSharedReductionRematerialization) {
   bool changed = false;
   module.walk([&](FuncOp funcOp) {
-    LayoutRematerialization layoutRemat(funcOp);
+    LayoutRematerialization layoutRemat(funcOp,
+                                        preserveSharedReductionRematerialization);
     changed |= layoutRemat.backwardRematerialization(disableRematSplitting);
   });
   return changed;
@@ -2831,7 +2906,9 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
 
   bool changed;
   do {
-    changed = backwardRematerialization(module, disableRematSplitting);
+    changed = backwardRematerialization(
+        module, disableRematSplitting,
+        strategy == LayoutAssignmentStrategy::Global);
     LLVM_DEBUG({
       DBGS() << "Module after backward remat:\n";
       module.dump();
