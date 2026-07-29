@@ -94,7 +94,8 @@ void AllocationSlice::print(raw_ostream &os) const {
 
 void MembarOrFenceAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
   FunctionOpInterface funcOp =
-      dyn_cast<FunctionOpInterface>(allocation->getOperation());
+      function ? function
+               : dyn_cast<FunctionOpInterface>(allocation->getOperation());
   OpBuilder builder(funcOp.getContext());
   resolve(funcOp, &funcBlockInfoMap, &builder);
 }
@@ -122,7 +123,9 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
   DenseMap<VirtualBlock, BlockInfo> outputBlockInfoMap;
   std::deque<VirtualBlock> blockList;
   // Start the analysis from the entry block of the function.
-  blockList.emplace_back(&funcOp.getBlocks().front(), Block::iterator());
+  VirtualBlock entryBlock(&funcOp.getBlocks().front(), Block::iterator());
+  inputBlockInfoMap.try_emplace(entryBlock, getEntryBlockInfo());
+  blockList.push_back(entryBlock);
 
   // A fixed point algorithm
   while (!blockList.empty()) {

@@ -78,7 +78,10 @@ def TritonGPUProxyFenceInsertion : Pass<"triton-nvidia-gpu-proxy-fence-insertion
   let options = [
     Option<"computeCapability", "compute-capability",
            "int32_t", /*default*/"90",
-           "device compute capability">
+           "device compute capability">,
+    Option<"useBufferRegionAliasAnalysis", "use-buffer-region-alias-analysis",
+           "bool", /*default*/"true",
+           "Use exact physical buffer regions instead of allocation slices">
   ];
 }
 

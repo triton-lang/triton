@@ -6,6 +6,7 @@
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -501,6 +502,42 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions,
 }
 
 LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
+  if (auto module = dyn_cast<ModuleOp>(top)) {
+    DenseMap<Operation *, SmallVector<std::pair<Operation *, uint32_t>, 2>>
+        calls;
+    DenseSet<Operation *> called;
+    module.walk([&](CallOpInterface call) {
+      auto caller = call->getParentOfType<FunctionOpInterface>();
+      auto callee =
+          dyn_cast_or_null<FunctionOpInterface>(call.resolveCallable());
+      if (!caller || !callee)
+        return;
+      auto offset = call->getAttrOfType<IntegerAttr>("allocation.offset");
+      calls[caller.getOperation()].emplace_back(callee.getOperation(),
+                                                offset ? offset.getInt() : 0);
+      called.insert(callee.getOperation());
+    });
+
+    SmallVector<std::pair<Operation *, uint32_t>> worklist;
+    module.walk([&](FunctionOpInterface function) {
+      if (!called.contains(function.getOperation())) {
+        functionFrames[function.getOperation()].push_back(0);
+        worklist.emplace_back(function.getOperation(), 0);
+      }
+    });
+    while (!worklist.empty()) {
+      auto [caller, base] = worklist.pop_back_val();
+      for (auto [callee, offset] : calls[caller]) {
+        uint32_t calleeBase = base + offset;
+        auto &frames = functionFrames[callee];
+        if (llvm::is_contained(frames, calleeBase))
+          continue;
+        frames.push_back(calleeBase);
+        worklist.emplace_back(callee, calleeBase);
+      }
+    }
+  }
+
   // Mark all warp-specialize partitions as live.
   LogicalResult status = Base::initialize(top);
   if (failed(status))
@@ -517,6 +554,17 @@ LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
     }
   });
   return success();
+}
+
+ArrayRef<uint32_t>
+BufferRegionAnalysis::getFunctionFrameBases(Operation *op) const {
+  static const uint32_t zero = 0;
+  auto function = op->getParentOfType<FunctionOpInterface>();
+  if (!function)
+    return ArrayRef<uint32_t>(zero);
+  auto it = functionFrames.find(function.getOperation());
+  return it == functionFrames.end() ? ArrayRef<uint32_t>(zero)
+                                    : ArrayRef<uint32_t>(it->second);
 }
 
 LogicalResult BufferRegionAnalysis::visitOperation(
@@ -546,15 +594,19 @@ LogicalResult BufferRegionAnalysis::visitOperation(
         getAllocationOffsets(localAllocOp);
     if (failed(offsets))
       return failure();
-    ArrayRef<uint32_t> partitionBases = offsets->size() > 1
-                                            ? ArrayRef<uint32_t>(*offsets)
-                                            : ArrayRef<uint32_t>();
-    regionInfo.views.insert(getMemDescView(offsets->front(), /*affineOffset=*/0,
-                                           localAllocOp.getType(),
-                                           &footprintCache, partitionBases));
+    for (uint32_t frame : getFunctionFrameBases(op)) {
+      SmallVector<uint32_t, 2> bases = advancePartitionBases(*offsets, frame);
+      ArrayRef<uint32_t> partitionBases =
+          bases.size() > 1 ? ArrayRef<uint32_t>(bases) : ArrayRef<uint32_t>();
+      regionInfo.views.insert(getMemDescView(bases.front(), /*affineOffset=*/0,
+                                             localAllocOp.getType(),
+                                             &footprintCache, partitionBases));
+    }
     return propagateRegions(regionInfo);
   }
   if (auto tmemAllocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
+    if (sharedMemoryOnly)
+      return propagateRegions(RegionInfo::getPessimisticValueState());
     regionInfo.views.insert(
         getMemDescView(getAllocationOffset(tmemAllocOp), /*affineOffset=*/0,
                        tmemAllocOp.getType(), &footprintCache));
@@ -677,7 +729,8 @@ BufferRegionAnalysis::getMemoryAccesses(Operation *op) {
   memoryEffects.getEffects(effects);
   for (const MemoryEffects::EffectInstance &effect : effects) {
     bool isWrite = isa<MemoryEffects::Write>(effect.getEffect());
-    if (!isWrite && !isa<MemoryEffects::Read>(effect.getEffect()))
+    bool isRead = isa<MemoryEffects::Read>(effect.getEffect());
+    if (!isWrite && !isRead)
       continue;
     if (effect.getResource() != ttg::SharedMemory::get() &&
         effect.getResource() != ttng::TensorMemory::get())
@@ -689,9 +742,11 @@ BufferRegionAnalysis::getMemoryAccesses(Operation *op) {
       return access.value == value;
     });
     if (existing == accesses.end())
-      accesses.push_back({value, isWrite});
-    else
+      accesses.push_back({value, isWrite, isRead});
+    else {
       existing->isWrite |= isWrite;
+      existing->isRead |= isRead;
+    }
   }
   return accesses;
 }

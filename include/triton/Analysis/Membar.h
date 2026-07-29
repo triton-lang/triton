@@ -2,9 +2,11 @@
 #define TRITON_ANALYSIS_MEMBAR_H
 
 #include "Allocation.h"
+#include "BufferRegion.h"
 
 #include "llvm/Support/raw_ostream.h"
 #include <functional>
+#include <optional>
 #include <set>
 #include <tuple>
 
@@ -86,9 +88,14 @@ private:
 
 struct BlockInfo {
   using SliceMapT = std::map<AllocationSlice, std::set<Operation *>>;
+  using RegionMapT =
+      std::map<std::optional<triton::BufferRegion>, std::set<Operation *>>;
 
   SliceMapT syncReadSlices;
   SliceMapT syncWriteSlices;
+  RegionMapT syncReadRegions;
+  RegionMapT syncWriteRegions;
+  bool reachesFunctionEntry = false;
 
   BlockInfo() = default;
 
@@ -101,6 +108,15 @@ struct BlockInfo {
     for (auto &slice : other.syncWriteSlices)
       syncWriteSlices[slice.first].insert(slice.second.begin(),
                                           slice.second.end());
+
+    for (auto &region : other.syncReadRegions)
+      syncReadRegions[region.first].insert(region.second.begin(),
+                                           region.second.end());
+
+    for (auto &region : other.syncWriteRegions)
+      syncWriteRegions[region.first].insert(region.second.begin(),
+                                            region.second.end());
+    reachesFunctionEntry |= other.reachesFunctionEntry;
     return *this;
   }
 
@@ -148,12 +164,18 @@ struct BlockInfo {
   void sync() {
     syncReadSlices.clear();
     syncWriteSlices.clear();
+    syncReadRegions.clear();
+    syncWriteRegions.clear();
+    reachesFunctionEntry = false;
   }
 
   /// Compares two BlockInfo objects.
   bool operator==(const BlockInfo &other) const {
     return syncReadSlices == other.syncReadSlices &&
-           syncWriteSlices == other.syncWriteSlices;
+           syncWriteSlices == other.syncWriteSlices &&
+           syncReadRegions == other.syncReadRegions &&
+           syncWriteRegions == other.syncWriteRegions &&
+           reachesFunctionEntry == other.reachesFunctionEntry;
   }
 
   bool operator!=(const BlockInfo &other) const { return !(*this == other); }
@@ -227,6 +249,8 @@ public:
   MembarOrFenceAnalysis() = default;
   explicit MembarOrFenceAnalysis(Allocation *allocation, MembarFilterFn filter)
       : allocation(allocation), filter(filter) {}
+  explicit MembarOrFenceAnalysis(FunctionOpInterface function)
+      : function(function) {}
 
   virtual ~MembarOrFenceAnalysis() = default;
 
@@ -235,6 +259,8 @@ public:
   void run(FuncBlockInfoMapT &funcBlockInfoMap);
 
 protected:
+  virtual BlockInfo getEntryBlockInfo() const { return BlockInfo(); }
+
   /// Applies the barrier analysis based on the SCF dialect, in which each
   /// region has a single basic block only.
   /// Example:
@@ -262,6 +288,7 @@ protected:
                       OpBuilder *builder) = 0;
 
   Allocation *allocation = nullptr;
+  FunctionOpInterface function;
   MembarFilterFn filter = nullptr;
 };
 

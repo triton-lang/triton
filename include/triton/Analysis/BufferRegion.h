@@ -9,6 +9,7 @@
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVector.h"
@@ -44,6 +45,8 @@ public:
     return addresses == other.addresses;
   }
   bool operator<(const AddressSet &other) const {
+    if (addresses == other.addresses)
+      return false;
     auto lhs = begin();
     auto rhs = other.begin();
     while (lhs != end() && rhs != other.end()) {
@@ -210,16 +213,27 @@ public:
   using Base =
       dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<RegionInfo>>;
   using Base::getLatticeElement;
-  using Base::SparseForwardDataFlowAnalysis;
+
+  explicit BufferRegionAnalysis(DataFlowSolver &solver,
+                                bool sharedMemoryOnly = false)
+      : Base(solver), sharedMemoryOnly(sharedMemoryOnly) {}
 
   enum RegionType { SHARED_MEMORY, TENSOR_MEMORY, BARRIER, NUM_REGION_TYPES };
 
   struct MemoryAccess {
     Value value;
     bool isWrite;
+    bool isRead = false;
   };
 
   static llvm::SmallVector<MemoryAccess> getMemoryAccesses(Operation *op);
+
+  const RegionInfo &getRegionInfo(Value value) {
+    return getLatticeElement(value)->getValue();
+  }
+
+  /// Return every absolute allocation base of the function containing `op`.
+  llvm::ArrayRef<uint32_t> getFunctionFrameBases(Operation *op) const;
 
   // ------------------------------
   // Public API for ConSan
@@ -254,6 +268,8 @@ public:
   LogicalResult initialize(Operation *top) override;
 
 private:
+  bool sharedMemoryOnly;
+  llvm::DenseMap<Operation *, llvm::SmallVector<uint32_t, 2>> functionFrames;
   // Global registry of all regions
   std::set<BufferRegion> usedBufferRegions[NUM_REGION_TYPES];
   bool usedUnknownBufferRegions[NUM_REGION_TYPES] = {};
