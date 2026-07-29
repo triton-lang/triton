@@ -1586,10 +1586,7 @@ void FunctionBuilder::createSetReadVisibilityCall(
         Value relationMask =
             createLeadCTAEffectMask(fb, readVisibilityType, effectCTAs);
         Value threadCTAMask =
-            createCTASetMask(fb, readVisibilityType, /*dim=*/2, effectCTAs);
-        threadCTAMask = arith::AndIOp::create(
-            fb, threadCTAMask,
-            createCTASetMask(fb, readVisibilityType, /*dim=*/4, effectCTAs));
+            createCTASetMask(fb, readVisibilityType, /*dim=*/4, effectCTAs);
         Value sameCTA = arith::CmpIOp::create(
             fb, arith::CmpIPredicate::eq,
             createDimIndices(fb, readVisibilityType, /*dim=*/2),
