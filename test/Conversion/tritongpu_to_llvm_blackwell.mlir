@@ -1465,3 +1465,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     tt.return
   }
 }
+
+// -----
+
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CGALayout = [[1, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @tma_load_remote_cta
+  // CHECK: nvvm.mapa
+  // CHECK: cp.async.bulk.tensor.2d.cta_group::2.shared::cluster.global
+  tt.func @tma_load_remote_cta(%desc: !tt.tensordesc<128x64xi32, #shared>, %parent: !ttg.memdesc<256x64xi32, #shared, #smem, mutable>, %bar: !ttg.memdesc<2xi64, #barrier, #smem>, %x: i32, %pred: i1) {
+    %view = ttg.memdesc_subslice %parent [128, 0] : !ttg.memdesc<256x64xi32, #shared, #smem, mutable> -> !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>
+    ttng.async_tma_copy_global_to_local %desc[%x, %x] %view, %bar, %pred : !tt.tensordesc<128x64xi32, #shared>, !ttg.memdesc<2xi64, #barrier, #smem> -> !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>
+    tt.return
+  }
+}
+
+// -----
+
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2]]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CGALayout = [[1, 0], [0, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @tma_load_remote_cta_in_four_cta_cluster
+  // CHECK: nvvm.mapa
+  // CHECK: cp.async.bulk.tensor.2d.cta_group::2.shared::cluster.global
+  tt.func @tma_load_remote_cta_in_four_cta_cluster(%desc: !tt.tensordesc<128x64xi32, #shared>, %parent: !ttg.memdesc<256x64xi32, #shared, #smem, mutable>, %bar: !ttg.memdesc<4xi64, #barrier, #smem>, %x: i32, %pred: i1) {
+    %view = ttg.memdesc_subslice %parent [128, 0] : !ttg.memdesc<256x64xi32, #shared, #smem, mutable> -> !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>
+    ttng.async_tma_copy_global_to_local %desc[%x, %x] %view, %bar, %pred : !tt.tensordesc<128x64xi32, #shared>, !ttg.memdesc<4xi64, #barrier, #smem> -> !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>
+    tt.return
+  }
+}

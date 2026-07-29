@@ -1077,7 +1077,11 @@ getMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
 struct AsyncTMACopyGlobalToLocalOpConversion
     : public ConvertOpToLLVMPattern<
           triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  AsyncTMACopyGlobalToLocalOpConversion(const LLVMTypeConverter &converter,
+                                        int computeCapability,
+                                        PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        computeCapability(computeCapability) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp op,
@@ -1106,7 +1110,12 @@ struct AsyncTMACopyGlobalToLocalOpConversion
         typeConverter->convertType(barrierTy.getElementType()), rewriter);
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getResult(), llvmElemTy, rewriter);
-    Value dstBase = dstMemObj.getShmemAffineBase(loc, rewriter, dstTy);
+    auto [affineOffset, affineBlockOffset] =
+        dstMemObj.getShmemOffsetAndBlock(loc, rewriter, dstTy);
+    Value dstBase = b.gep(dstMemObj.getBase().getType(), llvmElemTy,
+                          dstMemObj.getBase(), affineOffset);
+    uint64_t affineBlockMask =
+        LLVM::SharedMemoryObject::getMaskSpanOffsetsAndBlocks(dstTy).second;
 
     auto voidTy = void_ty(op->getContext());
     auto id = getThreadId(rewriter, loc);
@@ -1126,12 +1135,15 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy, tmaMode);
     auto smemLayout = ttg::toLinearLayout(smemTy);
-    auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
+    auto msgToShared =
+        invertAndComposeBlockLocal(smemLayout, msgToPackedOffset);
     auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, smemTy);
 
     auto ctx = op.getContext();
     auto kMsg = str_attr("msg");
     auto kBlock = str_attr("block");
+    bool crossCTAAccess =
+        affineBlockMask || !msgToShared.isIdentityOnOutDim(kBlock);
     const auto numCopies = msgToOffset.getInDimSize(kMsg);
     auto ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
     // We multicast if the flag is on and the block layout has broadcasting
@@ -1151,6 +1163,20 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     uint32_t barrierMask =
         toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
+    uint64_t completionMask = barrierMask | affineBlockMask;
+    unsigned blockOutput = msgToShared.getOutDimIndex(kBlock);
+    for (const auto &[dim, bases] : msgToShared.getBases())
+      for (auto [index, basis] : llvm::enumerate(bases))
+        completionMask |=
+            basis[blockOutput] ^ (dim == kBlock ? uint64_t{1} << index : 0);
+    if (crossCTAAccess && (completionMask & ~uint64_t{1}))
+      return op.emitError(
+          "TMA destination and completion barrier must belong to the same "
+          "CTA or a CTA pair");
+    if (crossCTAAccess && completionMask && computeCapability < 100)
+      return op.emitError(
+          "TMA destination and completion barrier must belong to the same "
+          "CTA before Blackwell");
     // Use a cross-CTA mbarrier pointer when the barrier mask is set.
     bool crossCTABarrier = barrierMask != 0;
     if (crossCTABarrier) {
@@ -1159,7 +1185,9 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     }
 
     std::string ctaGroup;
-    if (getModuleTwoCTAs(op)) {
+    if (crossCTAAccess && completionMask) {
+      ctaGroup = "cta_group::2.";
+    } else if (getModuleTwoCTAs(op)) {
       auto oneCTACGALayout = ttg::CGAEncodingAttr::get1DLayout(
           op->getContext(), ttg::lookupNumCTAs(op));
       bool oneCTABarrier =
@@ -1182,18 +1210,25 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       ::mlir::triton::PTXBuilder ptxBuilderTMA;
       Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
       Value copyIdxVal = b.add(warpID, b.i32_val(copyIdx));
-      Value shMemOffset =
-          applyLinearLayout(loc, rewriter, msgToShared,
-                            {{kMsg, copyIdxVal}, {kBlock, ctaId}})[0]
-              .second;
+      auto sharedAddress = applyLinearLayout(
+          loc, rewriter, msgToShared, {{kMsg, copyIdxVal}, {kBlock, ctaId}});
+      Value shMemOffset = sharedAddress[0].second;
       Value shMemPtr = b.gep(elemPtrTy, llvmElemTy, dstBase, shMemOffset);
+      if (crossCTAAccess) {
+        Value targetCTA = b.xor_(sharedAddress[1].second, affineBlockOffset);
+        shMemPtr = NVVM::MapaOp::create(rewriter, loc,
+                                        ptr_ty(rewriter.getContext(), 7),
+                                        shMemPtr, targetCTA);
+      }
       SmallVector<PTXBuilder::Operand *> operands = {
           ptxBuilderTMA.newOperand(boxPred, "b"),
           ptxBuilderTMA.newOperand(shMemPtr, "r"),
           ptxBuilderTMA.newOperand(adaptor.getDesc(), "l")};
       std::string tmaInst =
           "@$0 cp.async.bulk.tensor." + std::to_string(rank) + "d." + ctaGroup +
-          "shared::" + ((crossCTABarrier || multicast) ? "cluster" : "cta") +
+          "shared::" +
+          ((crossCTABarrier || multicast || crossCTAAccess) ? "cluster"
+                                                            : "cta") +
           ".global" + (isIm2Col ? ".im2col" : "") +
           ".mbarrier::complete_tx::bytes";
       if (multicast)
@@ -1248,6 +1283,9 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     rewriter.eraseOp(op);
     return success();
   }
+
+private:
+  int computeCapability;
 };
 
 LogicalResult convertTMAStoreLikeOp(Operation *op,
@@ -1788,8 +1826,9 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
       typeConverter, targetInfo, computeCapability, axisInfoAnalysis, benefit);
   patterns.add<AsyncCommitGroupOpConversion, AsyncWaitOpConversion,
                AsyncCopyMbarrierArriveOpConversion>(typeConverter, benefit);
-  patterns.add<AsyncTMACopyGlobalToLocalOpConversion,
-               AsyncTMACopyLocalToGlobalOpConversion,
+  patterns.add<AsyncTMACopyGlobalToLocalOpConversion>(
+      typeConverter, computeCapability, benefit);
+  patterns.add<AsyncTMACopyLocalToGlobalOpConversion,
                AsyncTMAReduceOpConversion, AsyncTMAGatherOpConversion,
                AsyncTMAScatterOpConversion, TMAStoreWaitOpConversion>(
       typeConverter, benefit);

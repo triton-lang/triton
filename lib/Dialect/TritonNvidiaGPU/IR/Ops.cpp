@@ -721,6 +721,15 @@ static LogicalResult verifyAsyncTMAStoreOp(Operation *op,
   // do not support fp4_padded operands.
   if (isFp4Padded(srcEnc))
     return op->emitOpError("does not support fp4_padded operands");
+  auto shape = dropPipeliningDim(srcType.getShape(), srcEnc);
+  auto allocation = toLinearLayout(
+      dropPipeliningDim(srcType.getAllocShape(), srcEnc), srcEnc);
+  auto block = StringAttr::get(op->getContext(), "block");
+  for (const auto &basis : allocation.getBases().lookup(block))
+    for (auto [component, size] : llvm::zip_equal(basis, shape))
+      if (component >= size)
+        return op->emitOpError(
+            "source subview may have an origin in another CTA");
   return verifyTMAEncoding(op, desc.getType(), srcEnc);
 }
 
