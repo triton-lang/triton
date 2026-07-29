@@ -58,6 +58,8 @@ class FnName(Enum):
 
 @dataclass(frozen=True)
 class FusedComm:
+    # [n_peers] for values-only output, or [2, n_peers] with value handles
+    # followed by MX scale handles.
     out_handles: torch.Tensor
     # Map from the kernel output coord to the destination shard idx and coord.
     # Used like:
@@ -284,8 +286,6 @@ def matmul(a, b, bias,
         fused_activation = FusedActivation(FnSpecs.default(), tuple())
     if epilogue is None:
         epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
-    if fused_comm is not None and precision_config.c_mx_scale is not None:
-        raise NotImplementedError("fused comm with output MX scales is not supported")
     n_slices = max(1, b.shape[0]) if a_ragged_metadata is None else a_ragged_metadata.n_slices
     # unpack b scale
     b_scale = precision_config.b_mx_scale
@@ -637,7 +637,8 @@ def matmul(a, b, bias,
     # is True the fast code path, stride(-2) == 1 takes precedence, e.g., vs.
     # w_transpose = w_storage.data.stride()[-1] != 1
     fused_comm_kwargs = {
-        "pYPtrs": fused_comm.out_handles,
+        "pYPtrs": fused_comm.out_handles[0] if fused_comm.out_handles.ndim == 2 else fused_comm.out_handles,
+        "pYScalePtrs": fused_comm.out_handles[1] if fused_comm.out_handles.ndim == 2 else None,
         "map_dst_coord": fused_comm.map_dst_coord,
         "all_writes_issued": fused_comm.all_writes_issued,
         "reduce_rank": fused_comm.reduce_rank,

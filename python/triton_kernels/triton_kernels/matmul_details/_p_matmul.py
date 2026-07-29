@@ -123,6 +123,7 @@ def _p_matmul(
              FLATTEN_LOOPS: tl.constexpr = True,
              W_SHUFFLED: tl.constexpr = False,
              pYPtrs=None,
+             pYScalePtrs=None,
              map_dst_coord=None,
              all_writes_issued=None,
              reduce_rank=0,
@@ -756,16 +757,36 @@ def _p_matmul(
                     offs_kzmn = pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
                     tl.store(YPtr + offs_kzmn, out, mask=mask)
             else:
-                tl.static_assert(not is_out_fp4, "FP4 outputs are not supported with fused comms")
                 tl.static_assert(Y_TMA_MODE is None, "TMA is not supported with fused comms")
                 offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
                 mask_n = offs_y_n < yN
+                if is_out_fp4:
+                    offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N // 2)
+                    mask_n = offs_y_n < tl.cdiv(yN, 2)
                 mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
 
                 dst_shard_idx, dst_y_m, dst_y_n = map_dst_coord.fn(
                     start_m1 + off_m1 if WriteBackIndx is None else None, offs_y_m,
                     out_off_n, offs_y_n,
                     *map_dst_coord.captured)
+                if pYScalePtrs is not None:
+                    tl.static_assert(is_out_microscaled)
+                    _, dst_scale_m, dst_scale_n = map_dst_coord.fn(
+                        start_m1 + off_m1 if WriteBackIndx is None else None,
+                        offs_y_m,
+                        out_off_n * 2 // MX_BLOCK_SIZE,
+                        offs_y_n_scale,
+                        *map_dst_coord.captured,
+                    )
+                    scale_offsets = (
+                        pid_k1.to(index_type) * stride_y_mx_k
+                        + start_z1.to(index_type) * stride_y_mx_z
+                        + dst_scale_m.to(index_type)[:, None]
+                        * stride_y_mx_m
+                        * n_reduce_shards
+                        + reduce_rank * stride_y_mx_m
+                        + dst_scale_n[None, :] * stride_y_mx_n
+                    )
                 offs_kzmn = (
                     pid_k1.to(index_type) * stride_y_k +
                     start_z1.to(index_type) * stride_y_z +
@@ -783,6 +804,15 @@ def _p_matmul(
                     else:
                         tl.multiple_of(peer_Y_ptr, [16, 16])
                     tl.store(peer_Y_ptr + offs_kzmn, out, mask=mask)
+                    if pYScalePtrs is not None:
+                        peer_scale_ptr = tl.load(pYScalePtrs + peer).to(
+                            tl.pointer_type(YActualScale.dtype.element_ty)
+                        )
+                        tl.store(
+                            peer_scale_ptr + scale_offsets,
+                            out_scale,
+                            mask=scale_store_mask,
+                        )
 
 
     # Update the flexpoint scales
