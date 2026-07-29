@@ -1082,7 +1082,7 @@ def test_rubin_namespace_extends_blackwell():
     assert rubin.TensorMemoryLayout is blackwell.TensorMemoryLayout
     assert rubin.allocate_tensor_memory is blackwell.allocate_tensor_memory
     assert rubin.tcgen05_mma_scaled is blackwell.tcgen05_mma_scaled
-    assert rubin.tma is blackwell.tma
+    assert rubin.tma is not blackwell.tma
     assert rubin.mbarrier is not blackwell.mbarrier
     assert rubin.mbarrier.allocate_mbarrier is blackwell.mbarrier.allocate_mbarrier
 
