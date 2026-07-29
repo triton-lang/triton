@@ -1081,7 +1081,6 @@ def test_rubin_namespace_extends_blackwell():
     assert ttgl.nvidia.rubin is rubin
     assert rubin.TensorMemoryLayout is blackwell.TensorMemoryLayout
     assert rubin.allocate_tensor_memory is blackwell.allocate_tensor_memory
-    assert rubin.packed_arith is blackwell.packed_arith
     assert rubin.add2 is blackwell.add2
     assert rubin.fma2 is blackwell.fma2
     assert rubin.tcgen05_mma_scaled is blackwell.tcgen05_mma_scaled
@@ -1090,6 +1089,8 @@ def test_rubin_namespace_extends_blackwell():
     assert rubin.mbarrier.allocate_mbarrier is blackwell.mbarrier.allocate_mbarrier
     assert not hasattr(blackwell, "float2")
     assert not hasattr(rubin, "float2")
+    assert not hasattr(blackwell, "packed_arith")
+    assert not hasattr(rubin, "packed_arith")
     assert not hasattr(blackwell, "add4")
     assert not hasattr(blackwell, "fma4")
 
@@ -1163,8 +1164,7 @@ def test_packed_arith_reduce_warp_specialized_frontend(target):
 
 @gluon.jit
 def _packed_arith_frontend_kernel(operation: ttgl.constexpr, lhs_dtype: ttgl.constexpr, rhs_dtype: ttgl.constexpr,
-                                  result_dtype: ttgl.constexpr, use_rubin: ttgl.constexpr,
-                                  use_convenience: ttgl.constexpr, use_x4: ttgl.constexpr):
+                                  result_dtype: ttgl.constexpr, use_rubin: ttgl.constexpr, use_x4: ttgl.constexpr):
     layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
     lhs = ttgl.full([256], 1.0, lhs_dtype, layout)
     rhs = ttgl.full([256], 2.0, rhs_dtype, layout)
@@ -1180,7 +1180,7 @@ def _packed_arith_frontend_kernel(operation: ttgl.constexpr, lhs_dtype: ttgl.con
                 result = rubin.mul4(lhs, rhs, dtype=result_dtype)
             else:
                 result = rubin.fma4(lhs, rhs, acc, dtype=result_dtype)
-        elif use_convenience:
+        else:
             if operation == "add":
                 result = rubin.add2(lhs, rhs, dtype=result_dtype)
             elif operation == "sub":
@@ -1189,11 +1189,7 @@ def _packed_arith_frontend_kernel(operation: ttgl.constexpr, lhs_dtype: ttgl.con
                 result = rubin.mul2(lhs, rhs, dtype=result_dtype)
             else:
                 result = rubin.fma2(lhs, rhs, acc, dtype=result_dtype)
-        elif operation == "fma":
-            result = rubin.packed_arith(operation, lhs, rhs, acc, dtype=result_dtype)
-        else:
-            result = rubin.packed_arith(operation, lhs, rhs, dtype=result_dtype)
-    elif use_convenience:
+    else:
         if operation == "add":
             result = blackwell.add2(lhs, rhs, dtype=result_dtype)
         elif operation == "sub":
@@ -1206,10 +1202,6 @@ def _packed_arith_frontend_kernel(operation: ttgl.constexpr, lhs_dtype: ttgl.con
             result = blackwell.min2(lhs, rhs, dtype=result_dtype)
         else:
             result = blackwell.max2(lhs, rhs, dtype=result_dtype)
-    elif operation == "fma":
-        result = blackwell.packed_arith(operation, lhs, rhs, acc, dtype=result_dtype)
-    else:
-        result = blackwell.packed_arith(operation, lhs, rhs, dtype=result_dtype)
 
     if result_dtype is not None:
         ttgl.static_assert(result.dtype == result_dtype)
@@ -1217,7 +1209,6 @@ def _packed_arith_frontend_kernel(operation: ttgl.constexpr, lhs_dtype: ttgl.con
         ttgl.static_assert(result.dtype == lhs_dtype)
 
 
-@pytest.mark.parametrize("use_convenience", [False, True], ids=["generic", "convenience"])
 @pytest.mark.parametrize(
     "operation, dtype",
     [
@@ -1227,15 +1218,13 @@ def _packed_arith_frontend_kernel(operation: ttgl.constexpr, lhs_dtype: ttgl.con
         if dtype is not ttgl.float32 or operation not in ("min", "max")
     ],
 )
-def test_packed_arith_frontend(operation, dtype, use_convenience):
-    module = run_parser(_packed_arith_frontend_kernel,
-                        *make_args(operation, dtype, dtype, None, False, use_convenience, False),
+def test_packed_arith_frontend(operation, dtype):
+    module = run_parser(_packed_arith_frontend_kernel, *make_args(operation, dtype, dtype, None, False, False),
                         target=BLACKWELL_TARGET)
     text = module.str_nodebug()
     assert f"ttng.packed_arith {operation}" in text
 
 
-@pytest.mark.parametrize("use_convenience", [False, True], ids=["generic", "convenience"])
 @pytest.mark.parametrize(
     "operation, lhs_dtype, rhs_dtype, result_dtype, expected_dtype",
     [
@@ -1247,11 +1236,9 @@ def test_packed_arith_frontend(operation, dtype, use_convenience):
         pytest.param("fma", ttgl.float16, ttgl.float32, None, "f32", id="mixed-fma"),
     ],
 )
-def test_rubin_packed_arith_mixed_frontend(operation, lhs_dtype, rhs_dtype, result_dtype, expected_dtype,
-                                           use_convenience):
+def test_rubin_packed_arith_mixed_frontend(operation, lhs_dtype, rhs_dtype, result_dtype, expected_dtype):
     module = run_parser(_packed_arith_frontend_kernel,
-                        *make_args(operation, lhs_dtype, rhs_dtype, result_dtype, True, use_convenience, False),
-                        target=RUBIN_TARGET)
+                        *make_args(operation, lhs_dtype, rhs_dtype, result_dtype, True, False), target=RUBIN_TARGET)
     text = module.str_nodebug()
     assert f"ttng.packed_arith {operation}" in text
     assert re.search(rf"ttng\.packed_arith {operation} .* -> tensor<256x{expected_dtype},", text)
@@ -1260,7 +1247,7 @@ def test_rubin_packed_arith_mixed_frontend(operation, lhs_dtype, rhs_dtype, resu
 @pytest.mark.parametrize("operation", ["add", "sub", "mul", "fma"])
 @pytest.mark.parametrize("dtype", [ttgl.float8e4nv, ttgl.float8e5], ids=["e4m3", "e5m2"])
 def test_rubin_packed_arith_x4_frontend(operation, dtype):
-    module = run_parser(_packed_arith_frontend_kernel, *make_args(operation, dtype, dtype, None, True, True, True),
+    module = run_parser(_packed_arith_frontend_kernel, *make_args(operation, dtype, dtype, None, True, True),
                         target=RUBIN_TARGET)
     text = module.str_nodebug()
     assert f"ttng.packed_arith {operation}" in text
@@ -1286,29 +1273,6 @@ def _rubin_packed_mixed_fp8_frontend_kernel(operation: ttgl.constexpr):
 def test_rubin_packed_arith_mixed_fp8_frontend(operation):
     module = run_parser(_rubin_packed_mixed_fp8_frontend_kernel, *make_args(operation), target=RUBIN_TARGET)
     assert re.search(rf"ttng\.packed_arith {operation} .* -> tensor<256xf8E4M3FN,", module.str_nodebug())
-
-
-@gluon.jit
-def _rubin_packed_scale_frontend_kernel(operation: ttgl.constexpr):
-    layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
-    scale = ttgl.full([256], 127, ttgl.uint8, layout)
-    value = ttgl.full([256], 2.0, ttgl.float8e4nv, layout)
-    if operation == "add":
-        result = rubin.add4(scale, value)
-    elif operation == "mul":
-        result = rubin.mul4(scale, value)
-    else:
-        result = rubin.fma4(scale, value, value)
-    ttgl.static_assert(result.dtype == ttgl.float8e4nv)
-
-
-@pytest.mark.parametrize("operation", ["add", "mul", "fma"])
-def test_rubin_packed_arith_ue8m0_frontend(operation):
-    module = run_parser(_rubin_packed_scale_frontend_kernel, *make_args(operation), target=RUBIN_TARGET)
-    text = module.str_nodebug()
-    assert "arith.bitcast" in text
-    assert "tensor<256xf8E8M0FNU," in text
-    assert f"ttng.packed_arith {operation}" in text
 
 
 @gluon.jit
@@ -1352,11 +1316,7 @@ def test_packed_arith_scalar_broadcast_frontend(dtype):
 def _packed_arith_invalid_frontend_kernel(case: ttgl.constexpr):
     layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
     value = ttgl.full([256], 1.0, ttgl.float32, layout)
-    if case == "operation":
-        blackwell.packed_arith("div", value, value)
-    elif case == "arity":
-        blackwell.packed_arith("fma", value, value)
-    elif case == "dtype":
+    if case == "dtype":
         blackwell.add2(value, value, dtype="float32")
     else:
         blackwell.add2(1.0, 2.0)
@@ -1365,8 +1325,6 @@ def _packed_arith_invalid_frontend_kernel(case: ttgl.constexpr):
 @pytest.mark.parametrize(
     "case, message",
     [
-        ("operation", "unknown packed arithmetic operation"),
-        ("arity", "packed arithmetic fma expects 3 operands but got 2"),
         ("dtype", "expected 'dtype' to be a dtype"),
         ("scalars", "packed arithmetic requires at least one distributed tensor operand"),
     ],

@@ -11,7 +11,6 @@
 #include <optional>
 #include <stdexcept>
 
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectRegistry.h"
@@ -702,17 +701,6 @@ void init_gluon_ir(py::module_ &m) {
                    self.getLastLoc());
                check(succeeded(inferred), "cannot infer packed FP4 layout");
                resultTensorType = *inferred;
-             }
-             for (Value &operand : operands) {
-               auto operandType = cast<RankedTensorType>(operand.getType());
-               if (!isa<Float8E4M3FNType, Float8E5M2Type>(
-                       resultTensorType.getElementType()) ||
-                   !operandType.getElementType().isInteger(8) ||
-                   operandType.getShape() != resultTensorType.getShape())
-                 continue;
-               operand = self.create<arith::BitcastOp>(
-                   operandType.clone(Float8E8M0FNUType::get(self.getContext())),
-                   operand);
              }
              return self.create<ttng::PackedArithOp>(resultTensorType, *kind,
                                                      operands);

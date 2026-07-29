@@ -7,6 +7,7 @@ from triton.experimental.gluon.language._core import _unwrap_if_constexpr, built
 from ..blackwell import (
     TensorMemoryLayout,
     _TensorMemoryLinearLayout,
+    _packed_arith,
     add2,
     allocate_tensor_memory,
     async_copy,
@@ -18,7 +19,6 @@ from ..blackwell import (
     min2,
     mma_v2,
     mul2,
-    packed_arith,
     sub2,
     tensor_memory_descriptor,
     tensor_memory_descriptor_type,
@@ -48,7 +48,6 @@ __all__ = [
     "mma_v2",
     "mul2",
     "mul4",
-    "packed_arith",
     "sub2",
     "sub4",
     "tensor_memory_descriptor",
@@ -68,25 +67,25 @@ __all__ = [
 @builtin
 def add4(lhs, rhs, dtype=None, _semantic=None):
     """Add four-lane FP8 or FP4 operands with a Rubin packed instruction."""
-    return packed_arith("add", lhs, rhs, dtype=dtype, _semantic=_semantic)
+    return _packed_arith("add", (lhs, rhs), dtype, _semantic)
 
 
 @builtin
 def sub4(lhs, rhs, dtype=None, _semantic=None):
     """Subtract four-lane FP8 or FP4 operands with a Rubin packed instruction."""
-    return packed_arith("sub", lhs, rhs, dtype=dtype, _semantic=_semantic)
+    return _packed_arith("sub", (lhs, rhs), dtype, _semantic)
 
 
 @builtin
 def mul4(lhs, rhs, dtype=None, _semantic=None):
     """Multiply four-lane FP8 or FP4 operands with a Rubin packed instruction."""
-    return packed_arith("mul", lhs, rhs, dtype=dtype, _semantic=_semantic)
+    return _packed_arith("mul", (lhs, rhs), dtype, _semantic)
 
 
 @builtin
 def fma4(lhs, rhs, acc, dtype=None, _semantic=None):
     """Perform a Rubin four-lane packed FP8 or FP4 fused multiply-add."""
-    return packed_arith("fma", lhs, rhs, acc, dtype=dtype, _semantic=_semantic)
+    return _packed_arith("fma", (lhs, rhs, acc), dtype, _semantic)
 
 
 @dataclass(frozen=True, eq=True)

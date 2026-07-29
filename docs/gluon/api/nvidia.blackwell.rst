@@ -26,7 +26,6 @@ NVIDIA Blackwell
     min2
     mma_v2
     mul2
-    packed_arith
     sub2
     tensor_memory_descriptor
     tensor_memory_descriptor_type

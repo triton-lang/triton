@@ -31,7 +31,6 @@ __all__ = [
     "min2",
     "mma_v2",
     "mul2",
-    "packed_arith",
     "sub2",
     "tensor_memory_descriptor",
     "tensor_memory_descriptor_type",
@@ -42,33 +41,9 @@ __all__ = [
 ]
 
 
-@builtin
-def packed_arith(operation, *operands, dtype=None, _semantic=None):
-    """Apply a native packed arithmetic instruction to distributed tensors.
-
-    Args:
-        operation (str): One of ``"add"``, ``"sub"``, ``"mul"``,
-            ``"fma"``, ``"min"``, or ``"max"``.
-        operands (tensor): Two operands, or three for ``"fma"``. Scalars
-            and singleton dimensions are broadcast to the result shape. An
-            ``int8`` tensor with half the result extent represents packed FP4;
-            a same-shape 8-bit tensor represents raw UE8M0 scale values.
-        dtype (dtype, optional): Result element type. By default, infer the
-            result type from the floating-point operands.
-
-    Returns:
-        tensor: The elementwise result in the reference operand's layout.
-    """
-    operation = _unwrap_if_constexpr(operation)
-    _check(isinstance(operation, str), lambda: "packed arithmetic operation must be a string")
-    _check(operation in ("add", "sub", "mul", "fma", "min", "max"),
-           lambda: f"unknown packed arithmetic operation: {operation}")
-    expected = 3 if operation == "fma" else 2
-    _check(
-        len(operands) == expected,
-        lambda: f"packed arithmetic {operation} expects {expected} operands but got {len(operands)}")
-
-    operands = tuple(_semantic.to_tensor(operand) for operand in operands)
+def _packed_arith(operation, operands, dtype, semantic):
+    """Build packed arithmetic with inferred result types and FP4 layouts."""
+    operands = tuple(semantic.to_tensor(operand) for operand in operands)
     _check(any(isinstance(operand.type, ttgl.distributed_type) for operand in operands),
            lambda: "packed arithmetic requires at least one distributed tensor operand")
     floating = [
@@ -90,7 +65,7 @@ def packed_arith(operation, *operands, dtype=None, _semantic=None):
             for operand in operands:
                 if not operand.dtype.is_floating() or (dtype.is_fp8() and operand.dtype.is_fp8()):
                     continue
-                dtype = _semantic.computation_type_impl(dtype, False, operand.dtype, not operand.type.is_block(), False)
+                dtype = semantic.computation_type_impl(dtype, False, operand.dtype, not operand.type.is_block(), False)
 
     _check(isinstance(dtype, ttgl.dtype), lambda: f"expected 'dtype' to be a dtype but got {dtype}")
     normalized = []
@@ -100,53 +75,51 @@ def packed_arith(operation, *operands, dtype=None, _semantic=None):
         if not is_packed_fp4:
             _check(reference is not None, lambda: "packed FP4 operands require a floating-point tensor operand")
             if not operand.type.is_block():
-                operand = _semantic.cast(operand, dtype)
-            _, operand = _semantic.broadcast_impl_value(reference, operand)
+                operand = semantic.cast(operand, dtype)
+            _, operand = semantic.broadcast_impl_value(reference, operand)
         normalized.append(operand.handle)
 
-    builder = _semantic.builder
-    result_type = None if reference is None else reference.type.with_element_ty(dtype)
-    result_ir_type = dtype.to_ir(builder) if result_type is None else result_type.to_ir(builder)
+    builder = semantic.builder
+    result_type = dtype if reference is None else reference.type.with_element_ty(dtype)
+    result_ir_type = result_type.to_ir(builder)
     handle = builder.create_packed_arith(result_ir_type, operation, normalized)
-    if result_type is None:
-        result_type = ttgl.distributed_type(dtype, shape, builder.get_gluon_layout_from_tensor(handle))
-    return ttgl.tensor(handle, result_type)
+    return semantic._wrap_handle_infer_layout(handle, dtype, shape)
 
 
 @builtin
 def add2(lhs, rhs, dtype=None, _semantic=None):
     """Add two tensors using a native two-lane packed instruction."""
-    return packed_arith("add", lhs, rhs, dtype=dtype, _semantic=_semantic)
+    return _packed_arith("add", (lhs, rhs), dtype, _semantic)
 
 
 @builtin
 def sub2(lhs, rhs, dtype=None, _semantic=None):
     """Subtract two tensors using a native two-lane packed instruction."""
-    return packed_arith("sub", lhs, rhs, dtype=dtype, _semantic=_semantic)
+    return _packed_arith("sub", (lhs, rhs), dtype, _semantic)
 
 
 @builtin
 def mul2(lhs, rhs, dtype=None, _semantic=None):
     """Multiply two tensors using a native two-lane packed instruction."""
-    return packed_arith("mul", lhs, rhs, dtype=dtype, _semantic=_semantic)
+    return _packed_arith("mul", (lhs, rhs), dtype, _semantic)
 
 
 @builtin
 def fma2(lhs, rhs, acc, dtype=None, _semantic=None):
     """Perform a native two-lane packed fused multiply-add."""
-    return packed_arith("fma", lhs, rhs, acc, dtype=dtype, _semantic=_semantic)
+    return _packed_arith("fma", (lhs, rhs, acc), dtype, _semantic)
 
 
 @builtin
 def min2(lhs, rhs, dtype=None, _semantic=None):
     """Select the minimum with a native packed half-precision instruction."""
-    return packed_arith("min", lhs, rhs, dtype=dtype, _semantic=_semantic)
+    return _packed_arith("min", (lhs, rhs), dtype, _semantic)
 
 
 @builtin
 def max2(lhs, rhs, dtype=None, _semantic=None):
     """Select the maximum with a native packed half-precision instruction."""
-    return packed_arith("max", lhs, rhs, dtype=dtype, _semantic=_semantic)
+    return _packed_arith("max", (lhs, rhs), dtype, _semantic)
 
 
 @dataclass(frozen=True, eq=True)

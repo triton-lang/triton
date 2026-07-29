@@ -30,7 +30,6 @@ NVIDIA Rubin
     mma_v2
     mul2
     mul4
-    packed_arith
     sub2
     sub4
     tensor_memory_descriptor

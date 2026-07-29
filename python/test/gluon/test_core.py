@@ -2584,9 +2584,8 @@ def test_packed_arith_reduction(dtype):
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("op", ["add", "sub", "mul", "fma", "min", "max"])
-@pytest.mark.parametrize("use_convenience", [False, True], ids=["packed-arith", "convenience"])
 @pytest.mark.parametrize("explicit_dtype", [False, True], ids=["inferred-dtype", "explicit-dtype"])
-def test_packed_arith(op, dtype, use_convenience, explicit_dtype):
+def test_packed_arith(op, dtype, explicit_dtype):
     if dtype == torch.float32 and op in ("min", "max"):
         pytest.skip("packed float32 does not support min or max")
 
@@ -2595,7 +2594,6 @@ def test_packed_arith(op, dtype, use_convenience, explicit_dtype):
     BLOCK_N = ttgl.constexpr(128)
     threads_per_warp = ttgl.constexpr(THREADS_PER_WARP)
     op = ttgl.constexpr(op)
-    use_convenience = ttgl.constexpr(use_convenience)
     explicit_dtype = ttgl.constexpr(explicit_dtype)
 
     @gluon.jit
@@ -2613,23 +2611,18 @@ def test_packed_arith(op, dtype, use_convenience, explicit_dtype):
         c = ttgl.load(c_ptr + offs_m * BLOCK_N + offs_n)
         result_dtype: ttgl.constexpr = a.dtype if explicit_dtype else None
 
-        if use_convenience:
-            if op == "add":
-                out = blackwell.add2(a, b, dtype=result_dtype)
-            elif op == "sub":
-                out = blackwell.sub2(a, b, dtype=result_dtype)
-            elif op == "mul":
-                out = blackwell.mul2(a, b, dtype=result_dtype)
-            elif op == "fma":
-                out = blackwell.fma2(a, b, c, dtype=result_dtype)
-            elif op == "min":
-                out = blackwell.min2(a, b, dtype=result_dtype)
-            else:
-                out = blackwell.max2(a, b, dtype=result_dtype)
+        if op == "add":
+            out = blackwell.add2(a, b, dtype=result_dtype)
+        elif op == "sub":
+            out = blackwell.sub2(a, b, dtype=result_dtype)
+        elif op == "mul":
+            out = blackwell.mul2(a, b, dtype=result_dtype)
         elif op == "fma":
-            out = blackwell.packed_arith(op, a, b, c, dtype=result_dtype)
+            out = blackwell.fma2(a, b, c, dtype=result_dtype)
+        elif op == "min":
+            out = blackwell.min2(a, b, dtype=result_dtype)
         else:
-            out = blackwell.packed_arith(op, a, b, dtype=result_dtype)
+            out = blackwell.max2(a, b, dtype=result_dtype)
 
         ttgl.store(out_ptr + offs_m * BLOCK_N + offs_n, out)
 
@@ -2665,9 +2658,7 @@ def test_packed_arith(op, dtype, use_convenience, explicit_dtype):
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
-@pytest.mark.parametrize("use_convenience", [False, True], ids=["packed-arith", "convenience"])
-def test_packed_arith_chains(dtype, use_convenience):
-    use_convenience = ttgl.constexpr(use_convenience)
+def test_packed_arith_chains(dtype):
 
     @gluon.jit
     def kernel(a_ptr, b_ptr, c_ptr, out_ptr):
@@ -2677,16 +2668,10 @@ def test_packed_arith_chains(dtype, use_convenience):
         b = ttgl.load(b_ptr + offsets)
         c = ttgl.load(c_ptr + offsets)
 
-        if use_convenience:
-            value = blackwell.add2(a, b)
-            value = blackwell.sub2(value, b)
-            value = blackwell.mul2(value, b)
-            value = blackwell.fma2(value, b, c)
-        else:
-            value = blackwell.packed_arith("add", a, b)
-            value = blackwell.packed_arith("sub", value, b)
-            value = blackwell.packed_arith("mul", value, b)
-            value = blackwell.packed_arith("fma", value, b, c)
+        value = blackwell.add2(a, b)
+        value = blackwell.sub2(value, b)
+        value = blackwell.mul2(value, b)
+        value = blackwell.fma2(value, b, c)
 
         ttgl.store(out_ptr + offsets, value)
 
