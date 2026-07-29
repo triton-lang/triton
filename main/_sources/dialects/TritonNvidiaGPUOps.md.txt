@@ -671,6 +671,47 @@ Interfaces: `MBarrierOpInterface`
 
 
 
+### `ttng.packed_arith` (triton::nvidia_gpu::PackedArithOp)
+
+_Apply elementwise arithmetic using a packed PTX instruction_
+
+Syntax:
+
+```
+operation ::= `ttng.packed_arith` $op_kind $operands attr-dict `:` functional-type($operands, $result)
+```
+
+Applies packed x2, mixed-precision, and FP8/FP4/UE8M0 x4 arithmetic.
+Instruction types, modifiers, and grouping are inferred from tensor types.
+FP4 uses lower-nibble-first i8 values along the inferred halved dimension.
+
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>op_kind</code></td><td>::mlir::triton::nvidia_gpu::PackedArithOpKindAttr</td><td>packed arithmetic operation</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `operands` | variadic of ranked tensor of packed arithmetic operand element values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | ranked tensor of packed arithmetic result element values |
+
+
+
 ### `ttng.reinterpret_tensor_descriptor` (triton::nvidia_gpu::ReinterpretTensorDescOp)
 
 _Reinterpret a pointer as a tensor descriptor_
