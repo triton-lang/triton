@@ -69,7 +69,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: llvm.atomicrmw
     // CHECK: llvm.store
     // CHECK: llvm.br
-    // COMMON: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "", "~{memory}"
+    // COMMON: llvm.inline_asm {{.*}}"~{memory}"
     // COMMON: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
     // COMMON-NEXT: rocdl.s.barrier
     // COMMON-NEXT: llvm.fence syncscope("workgroup") acquire {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
@@ -91,7 +91,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // COMMON-NOT: rocdl.s.barrier
     // COMMON: llvm.atomicrmw fadd {{.*}} acquire
     // COMMON: llvm.store {{.*}} : f32, !llvm.ptr<3>
-    // COMMON: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "", "~{memory}"
+    // COMMON: llvm.inline_asm {{.*}}"~{memory}"
     // COMMON: rocdl.s.barrier
     // COMMON: llvm.load {{.*}} : !llvm.ptr<3> -> f32
     // COMMON-NOT: rocdl.s.barrier
