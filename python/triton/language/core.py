@@ -2908,7 +2908,7 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
     :type input: Tensor
     :param axis: the dimension along which the reduction should be done. If None, reduce all dimensions
     :type axis: int | None
-    :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit)
+    :param combine_fn: an inline lambda or @triton.jit function combining two groups of scalar tensors
     :type combine_fn: Callable
     :param keep_dims: if true, keep the reduced dimensions with length 1
     :type keep_dims: bool

@@ -665,8 +665,12 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         if config.use_exp2_turnstile:
             mbarrier.arrive(exp_bar, count=1)
 
-        p0, p1 = _split_n(p)
-        l_ij = gl.join(gl.sum(p0, axis=1), gl.sum(p1, axis=1))
+        p0, p1 = gl.reduce(
+            _split_n(p),
+            axis=1,
+            combine_fn=lambda a, b, c, d: gl.split(bw.add2(gl.join(a, b), gl.join(c, d))),
+        )
+        l_ij = gl.join(p0, p1)
         l_ij = gl.convert_layout(l_ij, l_i.type.layout, assert_trivial=True)
         alpha = gl.convert_layout(alpha, gl.SliceLayout(1, l_i.type.layout), assert_trivial=True)
         l_i = bw.fma2(l_i, gl.join(alpha, alpha), l_ij)

@@ -1098,6 +1098,73 @@ def test_rubin_namespace_extends_blackwell():
 
 
 @gluon.jit
+def _packed_arith_pair_add(a0, a1, b0, b1):
+    return ttgl.split(blackwell.add2(ttgl.join(a0, a1), ttgl.join(b0, b1)))
+
+
+@gluon.jit
+def _packed_arith_reduce_frontend_kernel(out, dtype: ttgl.constexpr, layout: ttgl.constexpr,
+                                         inline_lambda: ttgl.constexpr = False):
+    a = ttgl.full([16, 16], 1, dtype, layout)
+    b = ttgl.full([16, 16], 2, dtype, layout)
+    if inline_lambda:
+        a, b = ttgl.reduce(
+            (a, b),
+            axis=1,
+            combine_fn=lambda x, y, z, w: ttgl.split(blackwell.add2(ttgl.join(x, y), ttgl.join(z, w))),
+        )
+    else:
+        a, b = ttgl.reduce((a, b), axis=1, combine_fn=_packed_arith_pair_add)
+    ttgl.static_assert(a.dtype == dtype)
+    ttgl.static_assert(b.dtype == dtype)
+    offsets = ttgl.arange(0, 16, ttgl.SliceLayout(1, layout))
+    ttgl.store(out + offsets, a + b)
+
+
+@pytest.mark.parametrize("target", [BLACKWELL_TARGET, RUBIN_TARGET], ids=["blackwell", "rubin"])
+@pytest.mark.parametrize("dtype", [ttgl.float32, ttgl.float16, ttgl.bfloat16], ids=["f32", "f16", "bf16"])
+@pytest.mark.parametrize("num_ctas", [1, 2, 4], ids=["1cta", "2ctas", "4ctas"])
+@pytest.mark.parametrize("inline_lambda", [False, True], ids=["jit-function", "inline-lambda"])
+def test_packed_arith_reduce_frontend(target, dtype, num_ctas, inline_lambda):
+    cga_layout = [[0, 0] for _ in range(num_ctas.bit_length() - 1)]
+    layout = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0], cga_layout=cga_layout)
+    module = run_parser(_packed_arith_reduce_frontend_kernel,
+                        *make_args(MockTensor(dtype), dtype, layout, inline_lambda, num_ctas=num_ctas), target=target)
+    text = module.str_nodebug()
+    assert '"tt.reduce"' in text
+    assert "ttng.packed_arith add" in text
+    assert "elementwise_inline_asm" not in text
+
+
+@gluon.jit
+def _packed_arith_reduce_default(out):
+    return
+
+
+@gluon.jit
+def _packed_arith_reduce_worker(out):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+    _packed_arith_reduce_frontend_kernel(out, ttgl.float32, layout)
+
+
+@gluon.jit
+def _packed_arith_reduce_warp_specialized(out):
+    ttgl.warp_specialize(
+        [(_packed_arith_reduce_default, (out, )), (_packed_arith_reduce_worker, (out, ))],
+        [4],
+    )
+
+
+@pytest.mark.parametrize("target", [BLACKWELL_TARGET, RUBIN_TARGET], ids=["blackwell", "rubin"])
+def test_packed_arith_reduce_warp_specialized_frontend(target):
+    module = run_parser(_packed_arith_reduce_warp_specialized, *make_args(MockTensor(ttgl.float32), num_warps=8),
+                        target=target)
+    text = module.str_nodebug()
+    assert "num_warps(4)" in text
+    assert "ttng.packed_arith add" in text
+
+
+@gluon.jit
 def _packed_arith_frontend_kernel(operation: ttgl.constexpr, lhs_dtype: ttgl.constexpr, rhs_dtype: ttgl.constexpr,
                                   result_dtype: ttgl.constexpr, use_rubin: ttgl.constexpr,
                                   use_convenience: ttgl.constexpr, use_x4: ttgl.constexpr):
@@ -2323,6 +2390,27 @@ def test_split_join():
     c, d = ttgl.split(res)
     ttgl.static_assert(c.type.layout == ttgl.SliceLayout(1, expect_layout))
     ttgl.static_assert(d.type.layout == ttgl.SliceLayout(1, expect_layout))
+
+
+@gluon.jit
+def _scalar_split_join_kernel(dtype: ttgl.constexpr):
+    a = ttgl.full([], 1, dtype)
+    b = ttgl.full([], 2, dtype)
+    pair = ttgl.join(a, b)
+    lhs, rhs = ttgl.split(pair)
+    ttgl.static_assert(pair.shape == [2])
+    ttgl.static_assert(lhs.dtype == dtype)
+    ttgl.static_assert(rhs.dtype == dtype)
+
+
+@pytest.mark.parametrize("target", ALL_TARGETS)
+@pytest.mark.parametrize("dtype", [ttgl.int32, ttgl.float32], ids=["int32", "float32"])
+def test_scalar_split_join(target, dtype):
+    module = run_parser(_scalar_split_join_kernel, *make_args(dtype), target=target)
+    text = module.str_nodebug()
+    assert "tt.join" in text
+    assert "tt.split" in text
+    assert "tt.unsplat" in text
 
 
 @filecheck_test
