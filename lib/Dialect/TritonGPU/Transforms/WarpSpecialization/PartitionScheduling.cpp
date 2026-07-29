@@ -1592,7 +1592,13 @@ private:
       // rewrite results
       for (auto newOp : newOps) {
         auto oldOp = mapping[newOp];
-        for (auto &use : oldOp->getUses()) {
+        // use.set() below unlinks the use from oldOp's use-chain while we
+        // are iterating that same chain, so without early-increment
+        // iteration only the first matching use is visited. The remaining
+        // same-partition users would keep pointing at the old
+        // multi-partition op, which insert-aref cannot handle (see the
+        // FIXME at the top of this function).
+        for (auto &use : llvm::make_early_inc_range(oldOp->getUses())) {
           auto user = use.getOwner();
           assert(user);
           auto userPartitions = getPartitionIds(user);

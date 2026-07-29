@@ -238,6 +238,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+    // CHECK-LABEL: buffer_atomic_rmw_fadd_acquire
+    // No release fence before the atomic for acquire ordering
+    // CHECK-NOT: llvm.fence syncscope("agent") release
+    // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.fadd"({{.*}}) : (f32, !llvm.ptr<8>, i32, i32, i32) -> f32
+    // CHECK: llvm.fence syncscope("agent") acquire
+    tt.func public @buffer_atomic_rmw_fadd_acquire(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offsets : tensor<64xi32, #blocked0>{tt.divisibility=16:i32}, %values : tensor<64xf32, #blocked0>) {
+        %ret = amdg.buffer_atomic_rmw fadd, acquire, gpu, %values, %arg0[%offsets] : tensor<64xf32, #blocked0>
+        tt.return
+    }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+    // CHECK-LABEL: buffer_atomic_rmw_fadd_release
+    // CHECK: llvm.fence syncscope("agent") release
+    // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.fadd"({{.*}}) : (f32, !llvm.ptr<8>, i32, i32, i32) -> f32
+    // No acquire fence after the atomic for release ordering
+    // CHECK-NOT: llvm.fence syncscope("agent") acquire
+    tt.func public @buffer_atomic_rmw_fadd_release(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offsets : tensor<64xi32, #blocked0>{tt.divisibility=16:i32}, %values : tensor<64xf32, #blocked0>) {
+        %ret = amdg.buffer_atomic_rmw fadd, release, gpu, %values, %arg0[%offsets] : tensor<64xf32, #blocked0>
+        tt.return
+    }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
     // CHECK-LABEL: buffer_atomic_rmw_fmax_f32

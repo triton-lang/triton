@@ -435,7 +435,8 @@ unpackInputs(Location loc, triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 }
 
 // Flip the srcValues. Both reverses the chunks and reverses the lanes.
-// Lane reversal is done with a butterfly shuffle flip (divide and flip).
+// Lane reversal is done with a single butterfly shuffle: for power-of-two
+// warp sizes, `lane ^ (iWarpSize - 1)` equals `(iWarpSize - 1) - lane`.
 SmallVector<SmallVector<Value>>
 flipSrcValues(Location loc, triton::ScanOp op,
               ConversionPatternRewriter &rewriter,
@@ -445,10 +446,8 @@ flipSrcValues(Location loc, triton::ScanOp op,
   for (int i = 0; i < srcValues.size(); ++i) {
     int revIndex = srcValues.size() - i - 1;
     for (unsigned j = 0; j < op.getNumOperands(); ++j) {
-      for (unsigned k = iWarpSize / 2; k >= 1; k = k / 2) {
-        srcValues[revIndex][j] =
-            targetInfo.shuffleXor(rewriter, loc, srcValues[revIndex][j], k);
-      }
+      srcValues[revIndex][j] = targetInfo.shuffleXor(
+          rewriter, loc, srcValues[revIndex][j], iWarpSize - 1);
       values[i].push_back(srcValues[revIndex][j]);
     }
   }
