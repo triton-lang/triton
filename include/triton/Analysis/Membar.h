@@ -9,6 +9,7 @@
 #include <optional>
 #include <set>
 #include <tuple>
+#include <type_traits>
 
 namespace mlir {
 
@@ -86,21 +87,16 @@ private:
   Allocation::BufferId bufferId;
 };
 
-struct BlockInfo {
-  using SliceMapT = std::map<AllocationSlice, std::set<Operation *>>;
-  using RegionMapT =
-      std::map<std::optional<triton::BufferRegionView>, std::set<Operation *>>;
+template <typename AccessT> struct BlockInfoBase {
+  using SliceMapT = std::map<AccessT, std::set<Operation *>>;
 
   SliceMapT syncReadSlices;
   SliceMapT syncWriteSlices;
-  RegionMapT syncReadRegions;
-  RegionMapT syncWriteRegions;
-  bool reachesFunctionEntry = false;
 
-  BlockInfo() = default;
+  BlockInfoBase() = default;
 
   /// Unions two BlockInfo objects.
-  BlockInfo &join(const BlockInfo &other) {
+  BlockInfoBase &join(const BlockInfoBase &other) {
     for (auto &slice : other.syncReadSlices)
       syncReadSlices[slice.first].insert(slice.second.begin(),
                                          slice.second.end());
@@ -108,15 +104,6 @@ struct BlockInfo {
     for (auto &slice : other.syncWriteSlices)
       syncWriteSlices[slice.first].insert(slice.second.begin(),
                                           slice.second.end());
-
-    for (auto &region : other.syncReadRegions)
-      syncReadRegions[region.first].insert(region.second.begin(),
-                                           region.second.end());
-
-    for (auto &region : other.syncWriteRegions)
-      syncWriteRegions[region.first].insert(region.second.begin(),
-                                            region.second.end());
-    reachesFunctionEntry |= other.reachesFunctionEntry;
     return *this;
   }
 
@@ -144,7 +131,7 @@ struct BlockInfo {
   }
 
   /// Returns true if Slices in two BlockInfo objects are intersected.
-  bool isIntersected(const BlockInfo &other, MembarFilterFn filter,
+  bool isIntersected(const BlockInfoBase &other, MembarFilterFn filter,
                      Allocation *allocation,
                      MembarSliceFilterFn sliceFilter = nullptr) const {
     return /*RAW*/ isIntersected(syncWriteSlices, other.syncReadSlices,
@@ -164,21 +151,17 @@ struct BlockInfo {
   void sync() {
     syncReadSlices.clear();
     syncWriteSlices.clear();
-    syncReadRegions.clear();
-    syncWriteRegions.clear();
-    reachesFunctionEntry = false;
   }
 
   /// Compares two BlockInfo objects.
-  bool operator==(const BlockInfo &other) const {
+  bool operator==(const BlockInfoBase &other) const {
     return syncReadSlices == other.syncReadSlices &&
-           syncWriteSlices == other.syncWriteSlices &&
-           syncReadRegions == other.syncReadRegions &&
-           syncWriteRegions == other.syncWriteRegions &&
-           reachesFunctionEntry == other.reachesFunctionEntry;
+           syncWriteSlices == other.syncWriteSlices;
   }
 
-  bool operator!=(const BlockInfo &other) const { return !(*this == other); }
+  bool operator!=(const BlockInfoBase &other) const {
+    return !(*this == other);
+  }
 
 private:
   bool isIntersected(const SliceMapT &lhsSlices, const SliceMapT &rhsSlices,
@@ -186,18 +169,30 @@ private:
                      MembarSliceFilterFn sliceFilter,
                      Allocation *allocation) const {
     for (auto &lhs : lhsSlices)
-      for (auto &rhs : rhsSlices)
-        if (lhs.first.intersects(rhs.first))
-          if (!sliceFilter || !sliceFilter(lhs.first, rhs.first, lhsIsRead,
-                                           rhsIsRead, allocation))
-            for (auto lhsOp : lhs.second)
-              for (auto rhsOp : rhs.second)
-                if (!filter ||
-                    !filter(lhsOp, rhsOp, lhsIsRead, rhsIsRead, allocation))
-                  return true;
+      for (auto &rhs : rhsSlices) {
+        if constexpr (std::is_same_v<AccessT, AllocationSlice>) {
+          if (!lhs.first.intersects(rhs.first))
+            continue;
+          if (sliceFilter && sliceFilter(lhs.first, rhs.first, lhsIsRead,
+                                         rhsIsRead, allocation))
+            continue;
+        } else if (lhs.first && rhs.first &&
+                   !lhs.first->intersects(*rhs.first)) {
+          continue;
+        }
+        for (Operation *lhsOp : lhs.second)
+          for (Operation *rhsOp : rhs.second)
+            if (!filter ||
+                !filter(lhsOp, rhsOp, lhsIsRead, rhsIsRead, allocation))
+              return true;
+      }
     return false;
   }
 };
+
+using BlockInfo = BlockInfoBase<AllocationSlice>;
+using BufferRegionBlockInfo =
+    BlockInfoBase<std::optional<triton::BufferRegionView>>;
 
 inline BlockInfo translateBlockInfoToCallsite(const BlockInfo &calleeBlockInfo,
                                               size_t callOffset) {
@@ -228,11 +223,13 @@ bool containsLocalBarrier(Operation *op);
 //===----------------------------------------------------------------------===//
 
 // Common class to analyze membar and fence placement.
-class MembarOrFenceAnalysis {
+template <typename AliasAnalysisT, typename BlockInfoT>
+class MembarOrFenceAnalysisBase {
   using VirtualBlock = std::pair<Block *, Block::iterator>;
 
 public:
-  using FuncBlockInfoMapT = triton::CallGraph<BlockInfo>::FuncDataMapT;
+  using FuncBlockInfoMapT =
+      typename triton::CallGraph<BlockInfoT>::FuncDataMapT;
   /// Creates a new Membar analysis that generates the shared memory barrier
   /// in the following circumstances:
   /// - RAW: If a shared memory write is followed by a shared memory read, and
@@ -246,20 +243,20 @@ public:
   /// a shared memory read. If the temporary storage is written but not read,
   /// it is considered as the problem of the operation itself but not the membar
   /// analysis.
-  MembarOrFenceAnalysis() = default;
-  explicit MembarOrFenceAnalysis(Allocation *allocation, MembarFilterFn filter)
-      : allocation(allocation), filter(filter) {}
-  explicit MembarOrFenceAnalysis(FunctionOpInterface function)
-      : function(function) {}
+  MembarOrFenceAnalysisBase() = default;
+  MembarOrFenceAnalysisBase(FunctionOpInterface function,
+                            AliasAnalysisT *allocation,
+                            MembarFilterFn filter = nullptr)
+      : allocation(allocation), function(function), filter(filter) {}
 
-  virtual ~MembarOrFenceAnalysis() = default;
+  virtual ~MembarOrFenceAnalysisBase() = default;
 
   /// Runs the membar analysis to the given operation, inserts a barrier if
   /// necessary.
   void run(FuncBlockInfoMapT &funcBlockInfoMap);
 
 protected:
-  virtual BlockInfo getEntryBlockInfo() const { return BlockInfo(); }
+  virtual BlockInfoT getEntryBlockInfo() const { return BlockInfoT(); }
 
   /// Applies the barrier analysis based on the SCF dialect, in which each
   /// region has a single basic block only.
@@ -283,13 +280,24 @@ protected:
                        SmallVector<VirtualBlock> &successors);
 
   /// Updates the BlockInfo operation based on the operation.
-  virtual void update(Operation *operation, BlockInfo *blockInfo,
+  virtual void update(Operation *operation, BlockInfoT *blockInfo,
                       FuncBlockInfoMapT *funcBlockInfoMap,
                       OpBuilder *builder) = 0;
 
-  Allocation *allocation = nullptr;
+  AliasAnalysisT *allocation = nullptr;
   FunctionOpInterface function;
   MembarFilterFn filter = nullptr;
+};
+
+class MembarOrFenceAnalysis
+    : public MembarOrFenceAnalysisBase<Allocation, BlockInfo> {
+public:
+  using Base = MembarOrFenceAnalysisBase<Allocation, BlockInfo>;
+
+  MembarOrFenceAnalysis() = default;
+  explicit MembarOrFenceAnalysis(Allocation *allocation, MembarFilterFn filter)
+      : Base(cast<FunctionOpInterface>(allocation->getOperation()), allocation,
+             filter) {}
 };
 
 class MembarAnalysis : public MembarOrFenceAnalysis {

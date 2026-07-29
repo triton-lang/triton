@@ -114,113 +114,6 @@ ProxyFenceScope getProxyFenceScope(Operation *op) {
   return ProxyFenceScope::CTA;
 }
 
-//===----------------------------------------------------------------------===//
-// Proxy Fence Analysis
-//===----------------------------------------------------------------------===//
-template <ProxyFenceScope scope>
-class ProxyFenceAnalysis : public MembarOrFenceAnalysis {
-
-public:
-  explicit ProxyFenceAnalysis(Allocation *allocation, MembarFilterFn filter)
-      : MembarOrFenceAnalysis(allocation, filter) {}
-
-private:
-  /// Updates the BlockInfo operation based on the operation.
-  virtual void update(Operation *operation, BlockInfo *blockInfo,
-                      FuncBlockInfoMapT *funcBlockInfoMap,
-                      OpBuilder *builder) override;
-
-  void insertFence(Operation *operation, OpBuilder *builder);
-};
-
-template <ProxyFenceScope scope>
-void ProxyFenceAnalysis<scope>::insertFence(Operation *op, OpBuilder *builder) {
-  OpBuilder::InsertionGuard g(*builder);
-  triton::nvidia_gpu::FenceAsyncSharedOp::create(
-      *builder, op->getLoc(), scope == ProxyFenceScope::Cluster);
-}
-
-template <ProxyFenceScope scope>
-void ProxyFenceAnalysis<scope>::update(Operation *op, BlockInfo *blockInfo,
-                                       FuncBlockInfoMapT *funcBlockInfoMap,
-                                       OpBuilder *builder) {
-  if (auto fence = dyn_cast<triton::nvidia_gpu::FenceAsyncSharedOp>(op)) {
-    // A cluster fence covers both frontiers, while a CTA fence only covers the
-    // CTA frontier.
-    if (scope == ProxyFenceScope::CTA || fence.getBCluster())
-      blockInfo->sync();
-    return;
-  }
-  BlockInfo curBlockInfo;
-  BlockInfo proxyBlockInfo;
-  bool isProxyOp = (isAsyncProxyWrite(op) || isAsyncProxyRead(op)) &&
-                   getProxyFenceScope(op) == scope;
-
-  auto scratchBufferId = Allocation::InvalidBufferId;
-  if (isa<triton::CallOp>(op)) {
-    // Inter-function dependencies
-    auto callOpInterface = dyn_cast<CallOpInterface>(op);
-    if (auto callee =
-            dyn_cast<FunctionOpInterface>(callOpInterface.resolveCallable()))
-      curBlockInfo = funcBlockInfoMap->lookup(callee);
-  } else {
-    // Intra-function dependencies
-    if (auto memoryEffectOpInterface = dyn_cast<MemoryEffectOpInterface>(op)) {
-      // Explicit buffer
-      SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>>
-          effectInstances;
-      memoryEffectOpInterface.getEffects(effectInstances);
-      for (auto effectInstance : effectInstances) {
-        if (auto value = effectInstance.getValue()) {
-          for (auto bufferId : allocation->getAllBufferIdsWithAliases(value)) {
-            if (bufferId != Allocation::InvalidBufferId) {
-              auto interval = allocation->getAllocatedInterval(bufferId);
-              auto slice = AllocationSlice(value, interval, bufferId);
-
-              if (isAsyncProxyWrite(op) && value == getSmemDest(op)) {
-                if (isProxyOp)
-                  proxyBlockInfo.syncWriteSlices[slice].insert(op);
-              } else if (isAsyncProxyRead(op) &&
-                         isAsyncProxyReadSource(op, value)) {
-                // Safe fallback for async-proxy reads from shared memory when
-                // the earlier FenceInsertionPass did not place a fence.
-                if (isProxyOp)
-                  proxyBlockInfo.syncReadSlices[slice].insert(op);
-              } else if (isa<MemoryEffects::Write>(
-                             effectInstance.getEffect())) {
-                curBlockInfo.syncWriteSlices[slice].insert(op);
-              } else if (isa<MemoryEffects::Read>(effectInstance.getEffect())) {
-                curBlockInfo.syncReadSlices[slice].insert(op);
-              }
-            }
-          }
-        }
-      }
-    }
-    scratchBufferId = allocation->getBufferId(op);
-  }
-
-  // Scratch buffer operations consist of a series of shared memory operations
-  // starting from a shared memory write, followed by a series of shared memory
-  // read/write operations, mark them as a read.
-  if (scratchBufferId != Allocation::InvalidBufferId) {
-    auto interval = allocation->getAllocatedInterval(scratchBufferId);
-    auto scratchSlice = AllocationSlice(interval);
-    curBlockInfo.syncReadSlices[scratchSlice].insert(op);
-  }
-  if (isProxyOp) {
-    if (proxyBlockInfo.isIntersected(*blockInfo, filter, allocation)) {
-      builder->setInsertionPoint(op);
-      insertFence(op, builder);
-      blockInfo->sync();
-    }
-  }
-
-  // Update the region info, even if barrier is inserted, we have to maintain
-  // the current op's read/write buffers.
-  blockInfo->join(curBlockInfo);
-}
-
 bool isBarrierDescriptor(Value value) {
   return llvm::any_of(value.getUsers(), [&](Operation *user) {
     auto barrier = dyn_cast<triton::gpu::MBarrierOpInterface>(user);
@@ -286,67 +179,175 @@ ScratchInfo getScratchInfo(Operation *op) {
   return {size};
 }
 
-bool hasRegionIntersection(const BlockInfo::RegionMapT &lhs,
-                           const BlockInfo::RegionMapT &rhs) {
-  for (const auto &[lhsRegion, lhsOps] : lhs)
-    for (const auto &[rhsRegion, rhsOps] : rhs) {
-      if (lhsRegion && rhsRegion && !lhsRegion->intersects(*rhsRegion))
-        continue;
-      for (Operation *lhsOp : lhsOps)
-        for (Operation *rhsOp : rhsOps)
-          if (!ignoreOpForProxyFence(rhsOp))
-            return true;
-    }
-  return false;
-}
+template <typename AliasAnalysisT> struct ProxyFenceAliasTraits;
 
-bool hasRegionHazard(const BlockInfo &proxy, const BlockInfo &generic) {
-  return hasRegionIntersection(proxy.syncWriteRegions,
-                               generic.syncReadRegions) ||
-         hasRegionIntersection(proxy.syncReadRegions,
-                               generic.syncWriteRegions) ||
-         hasRegionIntersection(proxy.syncWriteRegions,
-                               generic.syncWriteRegions);
-}
+template <> struct ProxyFenceAliasTraits<ModuleAllocation> {
+  using BlockInfoT = BlockInfo;
+  using AccessT = AllocationSlice;
 
-template <ProxyFenceScope scope>
-class BufferRegionProxyFenceAnalysis : public MembarOrFenceAnalysis {
+  static Allocation *getAllocation(ModuleAllocation &analysis,
+                                   FunctionOpInterface function) {
+    return analysis.getFuncData(function);
+  }
+
+  static bool accepts(Value) { return true; }
+
+  static bool isProxyRead(Operation *op, Value value) {
+    return isAsyncProxyRead(op) && isAsyncProxyReadSource(op, value);
+  }
+
+  static SmallVector<AccessT> getRegions(ModuleAllocation &analysis,
+                                         FunctionOpInterface function,
+                                         Value value) {
+    Allocation *allocation = getAllocation(analysis, function);
+    SmallVector<AccessT> regions;
+    for (Allocation::BufferId id :
+         allocation->getAllBufferIdsWithAliases(value))
+      if (id != Allocation::InvalidBufferId)
+        regions.emplace_back(value, allocation->getAllocatedInterval(id), id);
+    return regions;
+  }
+
+  static SmallVector<AccessT> getScratchRegions(ModuleAllocation &analysis,
+                                                FunctionOpInterface function,
+                                                Operation *op) {
+    Allocation *allocation = getAllocation(analysis, function);
+    Allocation::BufferId id = allocation->getBufferId(op);
+    if (id == Allocation::InvalidBufferId)
+      return {};
+    return {AccessT(allocation->getAllocatedInterval(id))};
+  }
+
+  static void translate(BlockInfoT &, CallOpInterface, FunctionOpInterface,
+                        FunctionOpInterface) {}
+};
+
+template <> struct ProxyFenceAliasTraits<triton::BufferRegionAnalysis> {
+  using BlockInfoT = BufferRegionBlockInfo;
+  using AccessT = std::optional<triton::BufferRegionView>;
+
+  static Allocation *getAllocation(triton::BufferRegionAnalysis &,
+                                   FunctionOpInterface) {
+    return nullptr;
+  }
+
+  static bool accepts(Value value) {
+    return isSharedMemoryDescriptor(value) && !isBarrierDescriptor(value);
+  }
+
+  static bool isProxyRead(Operation *op, Value value) {
+    if (isAsyncProxyRead(op) && isAsyncProxyReadSource(op, value))
+      return true;
+    if (auto scaled = dyn_cast<triton::nvidia_gpu::TCGen5MMAScaledOp>(op))
+      return value == scaled.getAScale() || value == scaled.getBScale();
+    return false;
+  }
+
+  static SmallVector<AccessT> getRegions(triton::BufferRegionAnalysis &analysis,
+                                         FunctionOpInterface, Value value) {
+    const triton::RegionInfo &info = analysis.getRegionInfo(value);
+    if (info.isUnknown())
+      return {std::nullopt};
+    SmallVector<AccessT> regions;
+    for (const triton::BufferRegionView &view : info.views)
+      regions.push_back(view);
+    return regions;
+  }
+
+  static SmallVector<AccessT> getScratchRegions(triton::BufferRegionAnalysis &,
+                                                FunctionOpInterface function,
+                                                Operation *op) {
+    auto offset = op->getAttrOfType<IntegerAttr>("allocation.offset");
+    if (!offset)
+      return {};
+    ScratchInfo info = getScratchInfo(op);
+    if (!info.size)
+      return {};
+    uint32_t base = offset.getInt();
+    triton::AddressSet addresses =
+        triton::AddressSet::fromRange(base, info.size);
+    SmallVector<triton::BufferRegion::CTAAddresses, 2> ctaAddresses;
+    unsigned numCTAs = info.crossCTA ? triton::gpu::lookupNumCTAs(op) : 1;
+    for (unsigned cta = 0; cta < numCTAs; ++cta)
+      ctaAddresses.emplace_back(cta, addresses);
+    return {triton::BufferRegionView{{base, info.size, std::move(ctaAddresses)},
+                                     base,
+                                     /*affineOffset=*/0,
+                                     /*partitionBases=*/{},
+                                     /*affinePartitionOffset=*/0,
+                                     /*affineCTAOffset=*/0,
+                                     function.getOperation()}};
+  }
+
+  static void translate(BlockInfoT &info, CallOpInterface call,
+                        FunctionOpInterface caller,
+                        FunctionOpInterface callee) {
+    auto callOffset = call->getAttrOfType<IntegerAttr>("allocation.offset");
+    uint32_t offset = callOffset ? callOffset.getInt() : 0;
+    auto translateAccesses = [&](BlockInfoT::SliceMapT &accesses) {
+      BlockInfoT::SliceMapT translated;
+      for (const auto &[original, operations] : accesses) {
+        AccessT view = original;
+        if (view && view->allocationFrame == callee.getOperation()) {
+          view->region.baseOffset += offset;
+          for (auto &[cta, addresses] : view->region.ctaAddresses)
+            addresses = addresses.translated(offset);
+          view->storageBase += offset;
+          for (uint32_t &base : view->partitionBases)
+            base += offset;
+          view->allocationFrame = caller.getOperation();
+        }
+        auto &destination = translated[std::move(view)];
+        destination.insert(operations.begin(), operations.end());
+      }
+      accesses = std::move(translated);
+    };
+    translateAccesses(info.syncReadSlices);
+    translateAccesses(info.syncWriteSlices);
+  }
+};
+
+template <ProxyFenceScope scope, typename AliasAnalysisT>
+class ProxyFenceAnalysis
+    : public MembarOrFenceAnalysisBase<
+          AliasAnalysisT,
+          typename ProxyFenceAliasTraits<AliasAnalysisT>::BlockInfoT> {
+  using Traits = ProxyFenceAliasTraits<AliasAnalysisT>;
+  using BlockInfoT = typename Traits::BlockInfoT;
+  using Base = MembarOrFenceAnalysisBase<AliasAnalysisT, BlockInfoT>;
+  using FuncBlockInfoMapT = typename Base::FuncBlockInfoMapT;
+
 public:
-  BufferRegionProxyFenceAnalysis(FunctionOpInterface function,
-                                 triton::BufferRegionAnalysis &regions,
-                                 bool assumeArgumentAccesses)
-      : MembarOrFenceAnalysis(function), regions(regions),
+  ProxyFenceAnalysis(FunctionOpInterface function, AliasAnalysisT *analysis,
+                     bool assumeArgumentAccesses)
+      : Base(function, analysis, filterFn),
         assumeArgumentAccesses(assumeArgumentAccesses) {}
 
 private:
-  BlockInfo getEntryBlockInfo() const override {
-    BlockInfo info;
-    info.reachesFunctionEntry = true;
-    // Kernel entrypoints cannot receive memory descriptors. Standalone test
-    // functions may, but they have no caller whose accesses need modeling.
-    if (!assumeArgumentAccesses)
-      return info;
-    FunctionOpInterface currentFunction = function;
-    for (Value argument : currentFunction.getArguments()) {
-      if (!isSharedMemoryDescriptor(argument) || isBarrierDescriptor(argument))
-        continue;
-      const triton::RegionInfo &argumentRegions =
-          regions.getRegionInfo(argument);
-      auto add = [&](std::optional<triton::BufferRegionView> region) {
-        info.syncReadRegions[region].insert(currentFunction.getOperation());
-        info.syncWriteRegions[std::move(region)].insert(
-            currentFunction.getOperation());
-      };
-      if (argumentRegions.isUnknown())
-        add(std::nullopt);
-      else
-        for (const triton::BufferRegionView &view : argumentRegions.views)
-          add(view);
+  BlockInfoT getEntryBlockInfo() const override {
+    BlockInfoT info;
+    if constexpr (std::is_same_v<AliasAnalysisT,
+                                 triton::BufferRegionAnalysis>) {
+      // Kernel entrypoints cannot receive memory descriptors. Standalone test
+      // functions may, but they have no caller whose accesses need modeling.
+      if (!assumeArgumentAccesses)
+        return info;
+      FunctionOpInterface function = this->function;
+      for (Value argument : function.getArguments()) {
+        if (!Traits::accepts(argument))
+          continue;
+        for (typename Traits::AccessT region :
+             Traits::getRegions(*this->allocation, function, argument)) {
+          info.syncReadSlices[region].insert(function.getOperation());
+          info.syncWriteSlices[std::move(region)].insert(
+              function.getOperation());
+        }
+      }
     }
     return info;
   }
 
-  void update(Operation *op, BlockInfo *blockInfo,
+  void update(Operation *op, BlockInfoT *blockInfo,
               FuncBlockInfoMapT *funcBlockInfoMap,
               OpBuilder *builder) override {
     if (auto fence = dyn_cast<triton::nvidia_gpu::FenceAsyncSharedOp>(op)) {
@@ -355,8 +356,8 @@ private:
       return;
     }
 
-    BlockInfo generic;
-    BlockInfo proxy;
+    BlockInfoT generic;
+    BlockInfoT proxy;
     bool isProxy = (isAsyncProxyWrite(op) || isAsyncProxyRead(op)) &&
                    getProxyFenceScope(op) == scope;
 
@@ -364,101 +365,47 @@ private:
       if (auto callee =
               dyn_cast_or_null<FunctionOpInterface>(call.resolveCallable())) {
         generic = funcBlockInfoMap->lookup(callee);
-        auto callOffset = call->getAttrOfType<IntegerAttr>("allocation.offset");
-        uint32_t offset = callOffset ? callOffset.getInt() : 0;
-        auto translateCalleeRegions = [&](BlockInfo::RegionMapT &accesses) {
-          BlockInfo::RegionMapT translated;
-          for (const auto &[original, operations] : accesses) {
-            std::optional<triton::BufferRegionView> view = original;
-            if (view && view->allocationFrame == callee.getOperation()) {
-              view->region.baseOffset += offset;
-              for (auto &[cta, addresses] : view->region.ctaAddresses)
-                addresses = addresses.translated(offset);
-              view->storageBase += offset;
-              for (uint32_t &base : view->partitionBases)
-                base += offset;
-              view->allocationFrame = function.getOperation();
-            }
-            auto &destination = translated[std::move(view)];
-            destination.insert(operations.begin(), operations.end());
-          }
-          accesses = std::move(translated);
-        };
-        translateCalleeRegions(generic.syncReadRegions);
-        translateCalleeRegions(generic.syncWriteRegions);
-        if (!generic.reachesFunctionEntry)
-          blockInfo->sync();
-        else
-          generic.reachesFunctionEntry = blockInfo->reachesFunctionEntry;
+        Traits::translate(generic, call, this->function, callee);
       }
     } else {
       for (const triton::BufferRegionAnalysis::MemoryAccess &access :
            triton::BufferRegionAnalysis::getMemoryAccesses(op)) {
-        if (!isSharedMemoryDescriptor(access.value) ||
-            isBarrierDescriptor(access.value))
+        if (!Traits::accepts(access.value))
           continue;
 
         bool proxyWrite =
             isAsyncProxyWrite(op) && access.value == getSmemDest(op);
-        bool proxyRead =
-            isAsyncProxyRead(op) && isAsyncProxyReadSource(op, access.value);
-        // Scaled MMA can consume its scale descriptors directly from shared
-        // memory through the same async proxy as its A/B operands.
-        if (auto scaled = dyn_cast<triton::nvidia_gpu::TCGen5MMAScaledOp>(op))
-          proxyRead |= access.value == scaled.getAScale() ||
-                       access.value == scaled.getBScale();
+        bool proxyRead = Traits::isProxyRead(op, access.value);
         if ((proxyWrite || proxyRead) && !isProxy)
           continue;
 
-        const triton::RegionInfo &info = regions.getRegionInfo(access.value);
-        auto add = [&](BlockInfo::RegionMapT &regions) {
-          if (info.isUnknown()) {
-            regions[std::nullopt].insert(op);
-            return;
+        for (typename Traits::AccessT region : Traits::getRegions(
+                 *this->allocation, this->function, access.value)) {
+          if (proxyWrite)
+            proxy.syncWriteSlices[region].insert(op);
+          else if (proxyRead)
+            proxy.syncReadSlices[region].insert(op);
+          else {
+            if (access.isRead)
+              generic.syncReadSlices[region].insert(op);
+            if (access.isWrite)
+              generic.syncWriteSlices[std::move(region)].insert(op);
           }
-          for (const triton::BufferRegionView &view : info.views)
-            regions[view].insert(op);
-        };
-
-        if (proxyWrite)
-          add(proxy.syncWriteRegions);
-        else if (proxyRead)
-          add(proxy.syncReadRegions);
-        else {
-          if (access.isRead)
-            add(generic.syncReadRegions);
-          if (access.isWrite)
-            add(generic.syncWriteRegions);
         }
       }
 
-      if (auto offset = op->getAttrOfType<IntegerAttr>("allocation.offset")) {
-        ScratchInfo scratchInfo = getScratchInfo(op);
-        if (scratchInfo.size) {
-          uint32_t base = offset.getInt();
-          triton::AddressSet addresses =
-              triton::AddressSet::fromRange(base, scratchInfo.size);
-          SmallVector<triton::BufferRegion::CTAAddresses, 2> ctaAddresses;
-          unsigned numCTAs =
-              scratchInfo.crossCTA ? triton::gpu::lookupNumCTAs(op) : 1;
-          for (unsigned cta = 0; cta < numCTAs; ++cta)
-            ctaAddresses.emplace_back(cta, addresses);
-          triton::BufferRegionView scratch{
-              {base, scratchInfo.size, std::move(ctaAddresses)},
-              base,
-              /*affineOffset=*/0,
-              /*partitionBases=*/{},
-              /*affinePartitionOffset=*/0,
-              /*affineCTAOffset=*/0,
-              function.getOperation()};
-          // Lowered scratch operations both write and read their allocation.
-          generic.syncReadRegions[scratch].insert(op);
-          generic.syncWriteRegions[std::move(scratch)].insert(op);
-        }
+      for (typename Traits::AccessT scratch :
+           Traits::getScratchRegions(*this->allocation, this->function, op)) {
+        generic.syncReadSlices[scratch].insert(op);
+        if constexpr (std::is_same_v<AliasAnalysisT,
+                                     triton::BufferRegionAnalysis>)
+          generic.syncWriteSlices[std::move(scratch)].insert(op);
       }
     }
 
-    if (isProxy && hasRegionHazard(proxy, *blockInfo)) {
+    if (isProxy && proxy.isIntersected(*blockInfo, this->filter,
+                                       Traits::getAllocation(*this->allocation,
+                                                             this->function))) {
       builder->setInsertionPoint(op);
       triton::nvidia_gpu::FenceAsyncSharedOp::create(
           *builder, op->getLoc(), scope == ProxyFenceScope::Cluster);
@@ -467,43 +414,52 @@ private:
     blockInfo->join(generic);
   }
 
-  triton::BufferRegionAnalysis &regions;
   bool assumeArgumentAccesses;
 };
 
-class BufferRegionProxyFenceProvider : public triton::CallGraph<BlockInfo> {
+template <typename AliasAnalysisT>
+class ProxyFenceProvider
+    : public triton::CallGraph<
+          typename ProxyFenceAliasTraits<AliasAnalysisT>::BlockInfoT> {
+  using Traits = ProxyFenceAliasTraits<AliasAnalysisT>;
+  using BlockInfoT = typename Traits::BlockInfoT;
+
 public:
-  BufferRegionProxyFenceProvider(ModuleOp module,
-                                 triton::BufferRegionAnalysis &regions)
-      : triton::CallGraph<BlockInfo>(module), regions(regions) {}
+  ProxyFenceProvider(ModuleOp module, AliasAnalysisT &analysis)
+      : triton::CallGraph<BlockInfoT>(module), analysis(analysis) {}
 
   template <ProxyFenceScope scope> void run() {
-    funcMap.clear();
-    walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+    this->funcMap.clear();
+    this->template walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
         [](CallOpInterface, FunctionOpInterface) {},
         [&](FunctionOpInterface function) {
-          auto [it, inserted] = funcMap.try_emplace(function);
+          auto [it, inserted] = this->funcMap.try_emplace(function);
           if (!inserted)
             return;
-          BufferRegionProxyFenceAnalysis<scope>(function, regions,
-                                                !isRoot(function))
-              .run(funcMap);
-          auto removeAssumedAccesses = [&](BlockInfo::RegionMapT &accesses) {
-            for (auto region = accesses.begin(); region != accesses.end();) {
-              region->second.erase(function.getOperation());
-              if (region->second.empty())
-                region = accesses.erase(region);
-              else
-                ++region;
-            }
-          };
-          removeAssumedAccesses(it->second.syncReadRegions);
-          removeAssumedAccesses(it->second.syncWriteRegions);
+          ProxyFenceAnalysis<scope, AliasAnalysisT>(function, &analysis,
+                                                    !this->isRoot(function))
+              .run(this->funcMap);
+          if constexpr (std::is_same_v<AliasAnalysisT,
+                                       triton::BufferRegionAnalysis>) {
+            auto removeAssumedAccesses =
+                [&](typename BlockInfoT::SliceMapT &accesses) {
+                  for (auto region = accesses.begin();
+                       region != accesses.end();) {
+                    region->second.erase(function.getOperation());
+                    if (region->second.empty())
+                      region = accesses.erase(region);
+                    else
+                      ++region;
+                  }
+                };
+            removeAssumedAccesses(it->second.syncReadSlices);
+            removeAssumedAccesses(it->second.syncWriteSlices);
+          }
         });
   }
 
 private:
-  triton::BufferRegionAnalysis &regions;
+  AliasAnalysisT &analysis;
 };
 } // namespace
 
@@ -536,15 +492,10 @@ public:
       return;
     if (!useBufferRegionAliasAnalysis) {
       ModuleAllocation allocation(mod);
-      if (hasClusterProxyOp) {
-        ModuleMembarOrFenceAnalysis<
-            ProxyFenceAnalysis<ProxyFenceScope::Cluster>>
-            clusterAnalysis(&allocation, filterFn);
-        clusterAnalysis.run();
-      }
-      ModuleMembarOrFenceAnalysis<ProxyFenceAnalysis<ProxyFenceScope::CTA>>
-          ctaAnalysis(&allocation, filterFn);
-      ctaAnalysis.run();
+      ProxyFenceProvider provider(mod, allocation);
+      if (hasClusterProxyOp)
+        provider.run<ProxyFenceScope::Cluster>();
+      provider.run<ProxyFenceScope::CTA>();
       return;
     }
 
@@ -552,7 +503,7 @@ public:
     auto *regions = solver->load<triton::BufferRegionAnalysis>();
     if (failed(solver->initializeAndRun(mod)))
       return signalPassFailure();
-    BufferRegionProxyFenceProvider provider(mod, *regions);
+    ProxyFenceProvider provider(mod, *regions);
     if (hasClusterProxyOp)
       provider.run<ProxyFenceScope::Cluster>();
     provider.run<ProxyFenceScope::CTA>();

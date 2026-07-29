@@ -92,17 +92,17 @@ void AllocationSlice::print(raw_ostream &os) const {
   }
 }
 
-void MembarOrFenceAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
-  FunctionOpInterface funcOp =
-      function ? function
-               : dyn_cast<FunctionOpInterface>(allocation->getOperation());
-  OpBuilder builder(funcOp.getContext());
-  resolve(funcOp, &funcBlockInfoMap, &builder);
+template <typename AliasAnalysisT, typename BlockInfoT>
+void MembarOrFenceAnalysisBase<AliasAnalysisT, BlockInfoT>::run(
+    FuncBlockInfoMapT &funcBlockInfoMap) {
+  OpBuilder builder(function.getContext());
+  resolve(function, &funcBlockInfoMap, &builder);
 }
 
-void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
-                                    FuncBlockInfoMapT *funcBlockInfoMap,
-                                    OpBuilder *builder) {
+template <typename AliasAnalysisT, typename BlockInfoT>
+void MembarOrFenceAnalysisBase<AliasAnalysisT, BlockInfoT>::resolve(
+    FunctionOpInterface funcOp, FuncBlockInfoMapT *funcBlockInfoMap,
+    OpBuilder *builder) {
   // Initialize the blockList. Operations are organized into "virtual blocks",
   // which represent segments of straight-line code analyzed by each iteration
   // of the dataflow analysis. Virtual blocks abstract over both control flow
@@ -119,8 +119,8 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
   // Entry virtual blocks are represented by a null iterator. Populate the
   // blockList with the entry virtual blocks in the function. Then, each
   // iteration scans until a terminator or region branch operation is found.
-  DenseMap<VirtualBlock, BlockInfo> inputBlockInfoMap;
-  DenseMap<VirtualBlock, BlockInfo> outputBlockInfoMap;
+  DenseMap<VirtualBlock, BlockInfoT> inputBlockInfoMap;
+  DenseMap<VirtualBlock, BlockInfoT> outputBlockInfoMap;
   std::deque<VirtualBlock> blockList;
   // Start the analysis from the entry block of the function.
   VirtualBlock entryBlock(&funcOp.getBlocks().front(), Block::iterator());
@@ -165,11 +165,11 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
   }
 
   // Update the final dangling buffers that haven't been synced
-  BlockInfo &funcBlockInfo = (*funcBlockInfoMap)[funcOp];
+  BlockInfoT &funcBlockInfo = (*funcBlockInfoMap)[funcOp];
   funcOp.walk<WalkOrder::PreOrder>([&](triton::ReturnOp returnOp) {
     // A basic block can be broken into several virtual blocks. Find all virtual
     // blocks that belong to the basic block containing the return.
-    SmallVector<std::pair<VirtualBlock, BlockInfo>> virtualBlocks;
+    SmallVector<std::pair<VirtualBlock, BlockInfoT>> virtualBlocks;
     for (auto &[block, blockInfo] : outputBlockInfoMap) {
       if (block.first == returnOp->getBlock())
         virtualBlocks.emplace_back(block, blockInfo);
@@ -188,7 +188,8 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
   });
 }
 
-void MembarOrFenceAnalysis::visitTerminator(
+template <typename AliasAnalysisT, typename BlockInfoT>
+void MembarOrFenceAnalysisBase<AliasAnalysisT, BlockInfoT>::visitTerminator(
     Operation *op, SmallVector<VirtualBlock> &successors) {
   if (isa<BranchOpInterface>(op)) {
     // Collect the block successors of the branch.
@@ -240,6 +241,11 @@ void MembarOrFenceAnalysis::visitTerminator(
     return;
   llvm_unreachable("Unknown terminator encountered in membar analysis");
 }
+
+template class MembarOrFenceAnalysisBase<Allocation, BlockInfo>;
+template class MembarOrFenceAnalysisBase<ModuleAllocation, BlockInfo>;
+template class MembarOrFenceAnalysisBase<triton::BufferRegionAnalysis,
+                                         BufferRegionBlockInfo>;
 
 void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
   OpBuilder::InsertionGuard g(*builder);
