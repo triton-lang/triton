@@ -1,5 +1,7 @@
 import pathlib
+import pytest
 import triton
+from triton.backends.compiler import GPUTarget
 from triton.compiler import IRSource, make_backend
 from triton._C.libtriton import ir
 
@@ -90,3 +92,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
     # now test compilation
     triton.compile(str(temp_file), target=target)
+
+
+@pytest.mark.skipif(target.backend != "cuda", reason="PTX compilation requires the NVIDIA backend")
+def test_ptx_compilation(tmp_path: pathlib.Path) -> None:
+    sample_ptx = r"""
+.version 8.0
+.target sm_80
+.address_size 64
+
+.visible .entry minimal_kernel()
+{
+    ret;
+}
+"""
+    temp_file = tmp_path / "minimal_kernel.ptx"
+    temp_file.write_text(sample_ptx)
+
+    compiled = triton.compile(str(temp_file), target=GPUTarget("cuda", 80, 32))
+
+    assert compiled.name == "minimal_kernel"
+    assert compiled.metadata.shared == 0
+    assert compiled.asm["ptx"] == sample_ptx
+    assert compiled.asm["cubin"]

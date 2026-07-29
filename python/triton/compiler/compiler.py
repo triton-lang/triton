@@ -115,6 +115,8 @@ class IRSource:
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
     def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
+        if self.ext == "ptx":
+            return self.src
         self.module.context = context
         return self.module
 
@@ -285,6 +287,9 @@ def compile(src, target=None, options=None, _env_vars=None):
         **options.__dict__,
         **env_vars,
     }
+    if isinstance(src, IRSource) and src.ext == "ptx":
+        metadata["name"] = src.name
+        metadata["shared"] = 0
     metadata["triton_version"] = __version__
     # run compilation pipeline  and populate metadata
     stages = dict()
