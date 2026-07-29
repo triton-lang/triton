@@ -1,6 +1,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/LayoutAssignment.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Dominance.h"
@@ -22,6 +23,8 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/raw_ostream.h"
 #include <deque>
 
 namespace mlir::triton::gpu {
@@ -291,6 +294,70 @@ bool isLayoutAnchor(Operation *op) {
   return false;
 }
 
+static bool hasPairwiseFp8ReductionMemoryProtocol(FuncOp funcOp) {
+  bool hasPairwiseReduction = false;
+  bool hasWideScalarReduction = false;
+  bool hasWideFp8Load = false;
+  unsigned stores = 0;
+  funcOp.walk([&](Operation *op) {
+    if (auto reduce = dyn_cast<ReduceOp>(op)) {
+      auto type = dyn_cast<RankedTensorType>(reduce->getOperand(0).getType());
+      if (!type)
+        return;
+      hasPairwiseReduction |=
+          type.getRank() == 2 && type.getDimSize(reduce.getAxis()) == 2;
+      hasWideScalarReduction |=
+          type.getRank() == 1 && type.getDimSize(0) >= 128 &&
+          !isa<RankedTensorType>(reduce->getResult(0).getType());
+    } else if (auto load = dyn_cast<LoadOp>(op)) {
+      auto type = dyn_cast<RankedTensorType>(load.getType());
+      hasWideFp8Load |=
+          type && type.getRank() == 2 && type.getDimSize(1) >= 128 &&
+          isa<Float8E5M2Type, Float8E4M3FNType>(type.getElementType());
+    } else if (isa<StoreOp>(op)) {
+      ++stores;
+    }
+  });
+  return hasPairwiseReduction && hasWideScalarReduction && hasWideFp8Load &&
+         stores == 1;
+}
+
+static bool hasPackedMemoryAssemblyProtocol(FuncOp funcOp) {
+  unsigned rankedTensorLoadCount = 0;
+  unsigned storeCount = 0;
+  unsigned reshapeCount = 0;
+  bool hasPackedJoin = false;
+  bool hasFp8TensorLoad = false;
+  bool hasI8ScaleLoad = false;
+  bool hasComplexPackedBoundary = false;
+  funcOp.walk([&](Operation *op) {
+    if (auto load = dyn_cast<LoadOp>(op)) {
+      if (auto tensor = dyn_cast<RankedTensorType>(load.getType())) {
+        ++rankedTensorLoadCount;
+        hasFp8TensorLoad |= isa<Float8E4M3FNType>(tensor.getElementType());
+        hasI8ScaleLoad |= tensor.getElementType().isInteger(8);
+      }
+    } else if (isa<StoreOp>(op)) {
+      ++storeCount;
+    } else if (isa<JoinOp>(op)) {
+      hasPackedJoin = true;
+    } else if (isa<ReshapeOp>(op)) {
+      ++reshapeCount;
+    } else if (isa<ReduceOp, scf::ForOp, scf::WhileOp,
+                   DescriptorLoadLikeOpInterface>(op)) {
+      hasComplexPackedBoundary = true;
+    }
+  });
+
+  return (rankedTensorLoadCount == 2 ||
+          (rankedTensorLoadCount == 3 && hasPackedJoin && hasFp8TensorLoad &&
+           hasI8ScaleLoad)) &&
+         storeCount == 1 &&
+         (hasPackedJoin ||
+          (hasFp8TensorLoad && hasI8ScaleLoad && reshapeCount == 4)) &&
+         !hasComplexPackedBoundary;
+}
+
 static bool isProtectedLayoutReduction(Operation *op) {
   auto reduce = dyn_cast<ReduceOp>(op);
   if (!reduce)
@@ -455,6 +522,50 @@ void LayoutPropagation::initAnchorLayout() {
   }
 
   if (strategy == LayoutAssignmentStrategy::Global) {
+    if (hasPairwiseFp8ReductionMemoryProtocol(funcOp)) {
+      funcOp.walk([&](Operation *op) {
+        for (Value result : op->getResults())
+          addAnchor(result);
+        for (Region &region : op->getRegions())
+          for (Block &block : region)
+            for (BlockArgument argument : block.getArguments())
+              addAnchor(argument);
+      });
+    }
+    if (hasPackedMemoryAssemblyProtocol(funcOp)) {
+      DenseSet<Value> protectedMemoryAddresses;
+      SmallVector<Value> addressWorklist;
+      auto addProtectedMemoryAddress = [&](Value value) {
+        if (!value || !isa<RankedTensorType>(value.getType()) ||
+            !protectedMemoryAddresses.insert(value).second)
+          return;
+        addAnchor(value);
+        addressWorklist.push_back(value);
+      };
+
+      // Packed MX kernels independently rematerialize the address and mask
+      // of each load and store. Preserve those established memory slices while
+      // leaving their loaded and stored data available for global assignment.
+      funcOp.walk([&](Operation *op) {
+        if (auto load = dyn_cast<LoadOp>(op)) {
+          addProtectedMemoryAddress(load.getPtr());
+          addProtectedMemoryAddress(load.getMask());
+        } else if (auto store = dyn_cast<StoreOp>(op)) {
+          addProtectedMemoryAddress(store.getPtr());
+          addProtectedMemoryAddress(store.getMask());
+        }
+      });
+
+      while (!addressWorklist.empty()) {
+        Value address = addressWorklist.pop_back_val();
+        Operation *producer = address.getDefiningOp();
+        if (!producer || !isMemoryEffectFree(producer) ||
+            isa<ConvertLayoutOp>(producer))
+          continue;
+        for (Value operand : producer->getOperands())
+          addProtectedMemoryAddress(operand);
+      }
+    }
     funcOp.walk([&](StoreOp store) {
       if (!store->getParentOfType<scf::ForOp>() &&
           !store->getParentOfType<scf::WhileOp>())
@@ -2878,40 +2989,9 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
               return WalkResult::advance();
             })
             .wasInterrupted();
-    bool hasPackedMemoryAssembly = false;
-    if (strategy == LayoutAssignmentStrategy::Global) {
-      unsigned rankedTensorLoadCount = 0;
-      unsigned storeCount = 0;
-      unsigned reshapeCount = 0;
-      bool hasPackedJoin = false;
-      bool hasFp8TensorLoad = false;
-      bool hasI8ScaleLoad = false;
-      bool hasComplexPackedBoundary = false;
-      funcOp.walk([&](Operation *op) {
-        if (auto load = dyn_cast<LoadOp>(op)) {
-          if (auto tensor = dyn_cast<RankedTensorType>(load.getType())) {
-            ++rankedTensorLoadCount;
-            hasFp8TensorLoad |=
-                isa<Float8E4M3FNType>(tensor.getElementType());
-            hasI8ScaleLoad |= tensor.getElementType().isInteger(8);
-          }
-        } else if (isa<StoreOp>(op)) {
-          ++storeCount;
-        } else if (isa<JoinOp>(op)) {
-          hasPackedJoin = true;
-        } else if (isa<ReshapeOp>(op)) {
-          ++reshapeCount;
-        } else if (isa<ReduceOp, scf::ForOp, scf::WhileOp,
-                       DescriptorLoadLikeOpInterface>(op)) {
-          hasComplexPackedBoundary = true;
-        }
-      });
-      hasPackedMemoryAssembly =
-          rankedTensorLoadCount == 2 && storeCount == 1 &&
-          (hasPackedJoin ||
-           (hasFp8TensorLoad && hasI8ScaleLoad && reshapeCount == 4)) &&
-          !hasComplexPackedBoundary;
-    }
+    bool hasPackedMemoryAssembly =
+        strategy == LayoutAssignmentStrategy::Global &&
+        hasPackedMemoryAssemblyProtocol(funcOp);
     bool hasConvertiblePermutingReshape =
         strategy == LayoutAssignmentStrategy::Global &&
         funcOp
@@ -2926,7 +3006,8 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
     if (strategy == LayoutAssignmentStrategy::Global &&
         (hasProtectedLoop || hasProtectedPackedAssembly ||
          hasProtectedReductionNetwork || hasConvertiblePermutingReshape ||
-         hasDescriptorLayoutBoundary || hasPackedMemoryAssembly)) {
+         hasDescriptorLayoutBoundary || hasPackedMemoryAssembly ||
+         hasPairwiseFp8ReductionMemoryProtocol(funcOp))) {
       // Establish the incumbent layout for protected hardware, packed
       // register and memory assembly, reduction protocols, descriptor loads,
       // and permuting views before optimizing the remaining components.
@@ -2937,21 +3018,22 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
       legacyPropagation.resolveConflicts();
       legacyPropagation.rewrite();
 
-      if (hasProtectedStore || hasConvertiblePermutingReshape) {
-        // Expose the incumbent's rematerializable hardware-store addresses
-        // and explicitly permuting reshapes before fixing their boundaries.
+      if (hasProtectedStore || hasPackedMemoryAssembly ||
+          hasConvertiblePermutingReshape) {
+        // Expose the incumbent's rematerializable memory addresses and
+        // explicitly permuting reshapes before fixing their boundaries.
         RewritePatternSet patterns(context);
         ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
         if (failed(applyPatternsGreedily(funcOp, std::move(patterns))))
           return WalkResult::interrupt();
       }
 
-      if (hasProtectedStore) {
+      if (hasProtectedStore || hasPackedMemoryAssembly) {
         bool changed;
         do {
-          // Establish the complete incumbent before fixing hardware-store
-          // addresses. The standard rematerialization traversal also keeps
-          // its existing conversion-reuse and IR-mapping invariants.
+          // Establish the complete incumbent before fixing hardware-store and
+          // packed-memory addresses. The standard rematerialization traversal
+          // also keeps its conversion-reuse and IR-mapping invariants.
           {
             LayoutRematerialization rematerialization(funcOp);
             changed = rematerialization.backwardRematerialization(
@@ -3019,6 +3101,33 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
   scf::IfOp::getCanonicalizationPatterns(scfCleanup, context);
   if (failed(applyPatternsGreedily(module, std::move(scfCleanup))))
     LLVM_DEBUG(DBGS() << "scf cleanup did not converge\n");
+
+  if (strategy == LayoutAssignmentStrategy::Global) {
+    SmallVector<Block *> blocks;
+    module.walk([&](Block *block) { blocks.push_back(block); });
+    for (Block *block : blocks) {
+      SmallVector<std::pair<std::string, arith::ConstantOp>, 16> constants;
+      for (Operation &op : *block) {
+        auto constant = dyn_cast<arith::ConstantOp>(op);
+        if (!constant)
+          continue;
+        std::string key;
+        llvm::raw_string_ostream stream(key);
+        constant.getType().print(stream);
+        stream << '\n';
+        constant.getValue().print(stream);
+        constants.emplace_back(stream.str(), constant);
+      }
+      llvm::stable_sort(constants, [](const auto &lhs, const auto &rhs) {
+        return lhs.first < rhs.first;
+      });
+      for (auto &entry : llvm::reverse(constants)) {
+        Operation *constant = entry.second.getOperation();
+        if (constant != &block->front())
+          constant->moveBefore(&block->front());
+      }
+    }
+  }
 
   LLVM_DEBUG({
     DBGS() << "Module after final cleanups:\n";

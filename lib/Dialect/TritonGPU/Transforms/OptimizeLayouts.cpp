@@ -647,18 +647,29 @@ public:
   void runOnOperation() override {
     ModuleOp module = getOperation();
 
-    if (failed(optimizeDistributedLayouts(module, disableRematSplitting,
-                                          LayoutAssignmentStrategy::Global)))
-      return signalPassFailure();
+    for (unsigned iteration = 0; iteration < 2; ++iteration) {
+      unsigned originalConversions = 0;
+      module.walk([&](ConvertLayoutOp) { ++originalConversions; });
 
-    shareDominatingConversions(module);
-    optimizeStoreRootedConversions(module);
-    optimizeScalarRootedConversions(module);
+      if (failed(optimizeDistributedLayouts(module, disableRematSplitting,
+                                            LayoutAssignmentStrategy::Global)))
+        return signalPassFailure();
 
-    RewritePatternSet patterns(&getContext());
-    ConvertLayoutOp::getCanonicalizationPatterns(patterns, &getContext());
-    if (failed(applyPatternsGreedily(module, std::move(patterns))))
-      signalPassFailure();
+      shareDominatingConversions(module);
+      optimizeStoreRootedConversions(module);
+      optimizeScalarRootedConversions(module);
+
+      RewritePatternSet patterns(&getContext());
+      ConvertLayoutOp::getCanonicalizationPatterns(patterns, &getContext());
+      if (failed(applyPatternsGreedily(module, std::move(patterns))))
+        return signalPassFailure();
+
+      unsigned remainingConversions = 0;
+      module.walk([&](ConvertLayoutOp) { ++remainingConversions; });
+      if (remainingConversions == 0 ||
+          remainingConversions >= originalConversions)
+        break;
+    }
   }
 };
 
