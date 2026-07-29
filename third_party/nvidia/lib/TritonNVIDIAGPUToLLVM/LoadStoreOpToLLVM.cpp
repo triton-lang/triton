@@ -1177,15 +1177,15 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     }
 
     std::string ctaGroup;
-    if (affineBlockMask) {
-      ctaGroup = "cta_group::2.";
-    } else if (getModuleTwoCTAs(op)) {
+    if (getModuleTwoCTAs(op)) {
       auto oneCTACGALayout = ttg::CGAEncodingAttr::get1DLayout(
           op->getContext(), ttg::lookupNumCTAs(op));
       bool oneCTABarrier =
           getCGALayout(barrierTy.getEncoding()) == oneCTACGALayout;
       ctaGroup = oneCTABarrier ? "cta_group::1." : "cta_group::2.";
     }
+    if (affineBlockMask)
+      ctaGroup = "cta_group::2.";
 
     // The bounding box inner dimension must be less than or equal to the
     // swizzle size.
@@ -1275,8 +1275,6 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     rewriter.eraseOp(op);
     return success();
   }
-
-private:
   int computeCapability;
 };
 
