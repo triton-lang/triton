@@ -63,6 +63,9 @@ def run_parser(kernel_fn, args=(), kwargs={}, target=stub_target):
     )
 
     bound_args, specialization, options = binder(*args, **kwargs)
+    # Reproduce run()'s frontend lifting of host-constructed aggregates whose
+    # runtime members become kernel parameters (a no-op for other kernels).
+    kernel_fn._specialize_host_aggregates(backend, bound_args, specialization)
     options, signature, constexprs, attrs = kernel_fn._pack_args(backend, kwargs, bound_args, specialization, options)
     source_cls = GluonASTSource if kernel_fn.is_gluon() else ASTSource
     src = source_cls(kernel_fn, signature, constexprs, attrs)

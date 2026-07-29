@@ -376,12 +376,19 @@ class KernelInterface(Generic[T]):
 
 
 def serialize_specialization_data(name, signature, constants, attrs, options, key, target):
-    constants = {
-        key: str(value) if value.__class__.__name__ == "dtype" else {"constexpr": value.value}
-        if value.__class__.__name__ == "constexpr" else {"jit_function": f"{value.module}:{value.fn.__qualname__}"}
-        if value.__class__.__name__ == "JITFunction" else value
-        for key, value in constants.items()
-    }
+
+    def serialize_constant(value):
+        if value.__class__.__name__ == "dtype":
+            return str(value)
+        if value.__class__.__name__ == "constexpr":
+            return {"constexpr": value.value}
+        if value.__class__.__name__ == "JITFunction":
+            return {"jit_function": f"{value.module}:{value.fn.__qualname__}"}
+        if isinstance(value, HostConstexprAggregate):
+            return {"constexpr_aggregate": value.cache_key}
+        return value
+
+    constants = {key: serialize_constant(value) for key, value in constants.items()}
 
     import json
     obj = {
@@ -589,6 +596,66 @@ class JitFunctionInfo:
     jit_function: JITFunction
 
 
+def _capture_repr(value: Any) -> str:
+    """A stable, value-based representation of a runtime/compile-time member, used
+    to key the compilation cache (so the same aggregate configured with the same
+    compile-time members reuses a compiled kernel)."""
+    if isinstance(value, JITCallable):
+        return value.cache_key
+    # Avoid hashing tensor contents; capture only the structural identity.
+    if hasattr(value, "shape") and hasattr(value, "dtype") and hasattr(value, "data_ptr"):
+        return f"tensor({tuple(value.shape)},{value.dtype})"
+    return repr(value)
+
+
+def aggregate_cache_key(base_cls, const_bindings, runtime_names) -> str:
+    parts = [f"{base_cls.__module__}.{base_cls.__qualname__}"]
+    # Only compile-time (constexpr) members and the runtime member *layout* affect
+    # the cache key; runtime member values are passed as kernel parameters.
+    for name in sorted(const_bindings):
+        parts.append(f"{name}={_capture_repr(const_bindings[name])}")
+    parts.append("rt=" + ",".join(runtime_names))
+    return "aggregate:" + "|".join(parts)
+
+
+class HostConstexprAggregate:
+    """Stable wrapper for a host-constructed ``@triton.aggregate`` passed as a
+    ``constexpr`` kernel argument.
+
+    The aggregate's runtime (non-constexpr) data members -- e.g. ``tl.tensor`` or
+    ``tl.tensor_descriptor`` fields -- are lifted to runtime kernel parameters
+    (``runtime_names``/``runtime_values``), while its ``tl.constexpr`` members are
+    baked into the kernel (``const_bindings``).  Changing a runtime member's value
+    therefore reuses the same compiled kernel.
+    """
+
+    def __init__(self, value):
+        from triton.language.core import constexpr
+        self.base_cls = type(value)
+        self.field_order = list(getattr(value, "__aggregate_fields__"))
+        annotations = type(value).__annotations__
+        self.runtime_names = []
+        self.runtime_values = []
+        self.const_bindings = {}
+        for name in self.field_order:
+            member = getattr(value, name)
+            if annotations.get(name) is constexpr:
+                self.const_bindings[name] = member.value if isinstance(member, constexpr) else member
+            else:
+                self.runtime_names.append(name)
+                self.runtime_values.append(member)
+        self.cache_key = aggregate_cache_key(self.base_cls, self.const_bindings, self.runtime_names)
+
+    def __repr__(self) -> str:
+        return self.cache_key
+
+    def __hash__(self) -> int:
+        return hash(self.cache_key)
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, HostConstexprAggregate) and self.cache_key == other.cache_key
+
+
 def compute_cache_key(kernel_key_cache, specialization, options):
     key = (tuple(specialization), str(options))
     cache_key = kernel_key_cache.get(key, None)
@@ -723,6 +790,38 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
         return options, signature, constexprs, attrs
 
+    def _specialize_host_aggregates(self, backend, bound_args, specialization):
+        """Lift the runtime data members of any host-constructed ``@triton.aggregate``
+        passed as a ``constexpr`` argument to runtime kernel parameters, mutating
+        ``bound_args`` and ``specialization`` in place.
+
+        Such an aggregate may carry runtime data members (tl.tensor /
+        tl.tensor_descriptor). Those members are appended to the argument as a tuple
+        ``(aggregate, *members)`` so they flow through the existing tuple-argument
+        machinery (signature, launcher, IR), while the kernel reconstructs the
+        aggregate against them. Only the aggregate's compile-time (tl.constexpr)
+        members specialize the kernel.
+        """
+        for i in self.constexprs:
+            name = self.arg_names[i]
+            val = bound_args.get(name)
+            if not getattr(val, "__triton_aggregate__", False):
+                continue
+            wrapper = HostConstexprAggregate(val)
+            if not wrapper.runtime_values:
+                # A pure compile-time aggregate already works as a baked constant.
+                continue
+            cap_types = []
+            cap_attrs = []
+            for cap in wrapper.runtime_values:
+                ty, attr = native_specialize_impl(backend, cap, False, True, True)
+                cap_types.append(ty)
+                cap_attrs.append(attr)
+            bound_args[name] = (wrapper, *wrapper.runtime_values)
+            # The wrapper sits in the (otherwise attribute) slot of the constexpr
+            # element so its identity participates in the cache key.
+            specialization[i] = (("constexpr", *cap_types), (wrapper, *cap_attrs))
+
     def run(self, *args, grid, warmup, **kwargs):
         kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
         kwargs["instrumentation_mode"] = knobs.compilation.instrumentation_mode
@@ -740,6 +839,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
         # specialization is list[tuple[str, Any]], where first element of tuple is
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
+
+        self._specialize_host_aggregates(backend, bound_args, specialization)
 
         # add a cache field to the kernel specializations for kernel specific
         # pass pipelines

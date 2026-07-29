@@ -245,6 +245,187 @@ def test_starred_varargs():
     consume_varargs(*dims)
 
 
+@triton.aggregate
+class _CopyDescPolicy:
+    src: tl.tensor_descriptor
+    dst: tl.tensor_descriptor
+    scale: tl.constexpr
+
+    @triton.constexpr_function
+    def __init__(self, src, dst, scale):
+        self.src = src
+        self.dst = dst
+        self.scale = tl.constexpr(scale)
+
+    @triton.jit
+    def run(self, off_m, off_n):
+        self.dst.store([off_m, off_n], self.src.load([off_m, off_n]) * self.scale)
+
+
+@triton.jit
+def _host_agg_kernel(policy: tl.constexpr, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+    policy.run(tl.program_id(0) * M_BLOCK, tl.program_id(1) * N_BLOCK)
+
+
+def _compile_host_agg_signature(policy, M_BLOCK, N_BLOCK):
+    """Drive the frontend (no GPU) to obtain the Triton signature for a kernel
+    taking a host-constructed aggregate, exercising the same constexpr-aggregate
+    lifting that ``JITFunction.run`` performs."""
+    from triton.compiler import make_backend
+    from triton._filecheck import stub_target
+    from triton.runtime.jit import create_function_from_signature
+
+    backend = make_backend(stub_target)
+    binder = create_function_from_signature(_host_agg_kernel.signature, _host_agg_kernel.params, backend)
+    kwargs = {"sanitize_overflow": False}
+    bound_args, specialization, options = binder(policy, M_BLOCK, N_BLOCK, **kwargs)
+    _host_agg_kernel._specialize_host_aggregates(backend, bound_args, specialization)
+    _, signature, _, _ = _host_agg_kernel._pack_args(backend, kwargs, bound_args, specialization, options)
+    return signature
+
+
+def test_host_aggregate_tensor_descriptor_members():
+    # A host-constructed aggregate with `tl.tensor_descriptor` data members passed
+    # as a `tl.constexpr` argument: its descriptor members are lifted to runtime
+    # kernel parameters (like host-lambda captures) while the constexpr member is
+    # baked in. This checks the generated kernel interface/signature only, so it
+    # needs no GPU -- the descriptors are built from CPU tensors.
+    torch = pytest.importorskip("torch")
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    M, N = 32, 128
+    M_BLOCK, N_BLOCK = 8, 32
+    src = TensorDescriptor.from_tensor(torch.randn((M, N)), [M_BLOCK, N_BLOCK])
+    dst = TensorDescriptor.from_tensor(torch.zeros((M, N)), [M_BLOCK, N_BLOCK])
+    policy = _CopyDescPolicy(src, dst, 2.0)
+
+    # Signature: `policy` expands to a tuple whose leading element is the baked
+    # constexpr aggregate and whose remaining elements are the two lifted
+    # descriptor members; the constexpr `scale` does not appear, and the other
+    # constexpr block sizes stay baked.
+    signature = _compile_host_agg_signature(policy, M_BLOCK, N_BLOCK)
+    sig = signature["policy"]
+    assert sig[0] == "constexpr"
+    assert len(sig) == 3
+    assert all("tensordesc" in s for s in sig[1:])
+    assert signature["M_BLOCK"] == "constexpr"
+    assert signature["N_BLOCK"] == "constexpr"
+
+    # Interface: the generated kernel takes the two descriptors as runtime
+    # parameters, while the constexpr scale is baked in as a constant.
+    module = run_parser(_host_agg_kernel, args=(policy, M_BLOCK, N_BLOCK))
+    module_str = module.str_nodebug()
+    interface = next(line for line in module_str.splitlines() if "tt.func public @_host_agg_kernel" in line)
+    assert interface.count("!tt.tensordesc<8x32xf32>") == 2
+    # scale=2.0 was folded into the body, so it is not a kernel parameter.
+    assert " f32," not in interface and not interface.rstrip().endswith(" f32)")
+    assert "arith.constant 2.000000e+00 : f32" in module_str
+
+
+@triton.aggregate
+class _BiasAdd:
+    # Runtime member (lifted to a kernel param) + compile-time member (baked in).
+    bias: tl.tensor
+    n_cols: tl.constexpr
+
+    @triton.constexpr_function
+    def __init__(self, bias, n_cols):
+        self.bias = bias
+        self.n_cols = tl.constexpr(n_cols)
+
+    @triton.jit
+    def apply(self, acc, offs_n):
+        b = tl.load(self.bias + offs_n, mask=offs_n < self.n_cols, other=0.0)
+        return acc + b[None, :]
+
+
+@triton.aggregate
+class _BiasAddScale(_BiasAdd):
+    # A derived aggregate adding *both* kinds of data member on top of the
+    # inherited ones: a runtime `tl.tensor` scale and a compile-time `tl.constexpr`
+    # output scale. Inheritance keeps the parent fields first, so the field order
+    # is (bias, n_cols, scale, out_scale).
+    scale: tl.tensor
+    out_scale: tl.constexpr
+
+    @triton.constexpr_function
+    def __init__(self, bias, n_cols, scale, out_scale):
+        self.bias = bias
+        self.n_cols = tl.constexpr(n_cols)
+        self.scale = scale
+        self.out_scale = tl.constexpr(out_scale)
+
+    @triton.jit
+    def apply(self, acc, offs_n):
+        # Reuse the base epilogue, then apply the runtime and compile-time scales.
+        return _BiasAdd.apply(self, acc, offs_n) * self.scale * self.out_scale
+
+
+@triton.jit
+def _host_bias_kernel(out_ptr, epilogue: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+    offs_m = tl.arange(0, BLOCK_M)
+    offs_n = tl.arange(0, BLOCK_N)
+    acc = tl.zeros((BLOCK_M, BLOCK_N), tl.float32)
+    acc = epilogue.apply(acc, offs_n)
+    tl.store(out_ptr + offs_m[:, None] * BLOCK_N + offs_n[None, :], acc)
+
+
+def _frontend_signature(kernel, args):
+    """Drive the frontend (no GPU) to obtain the Triton signature for a kernel
+    taking a host-constructed aggregate, exercising the constexpr-aggregate
+    lifting that ``JITFunction.run`` performs."""
+    from triton.compiler import make_backend
+    from triton._filecheck import stub_target
+    from triton.runtime.jit import create_function_from_signature
+
+    backend = make_backend(stub_target)
+    binder = create_function_from_signature(kernel.signature, kernel.params, backend)
+    kwargs = {"sanitize_overflow": False}
+    bound_args, specialization, options = binder(*args, **kwargs)
+    kernel._specialize_host_aggregates(backend, bound_args, specialization)
+    _, signature, _, _ = kernel._pack_args(backend, kwargs, bound_args, specialization, options)
+    return signature
+
+
+def test_host_aggregate_derived_tensor_and_constexpr_members():
+    # A host-constructed *derived* aggregate mixing runtime (`tl.tensor`) and
+    # compile-time (`tl.constexpr`) data members, passed as a `tl.constexpr`
+    # argument. Its runtime members (a bias pointer and a scalar scale) are lifted
+    # to runtime kernel parameters, while its constexpr members (n_cols, out_scale)
+    # are baked in. This checks the generated kernel interface/signature only, so
+    # it needs no GPU.
+    torch = pytest.importorskip("torch")
+
+    N = 128
+    BLOCK_M, BLOCK_N = 16, N
+    bias = torch.randn((N, ))
+    epilogue = _BiasAddScale(bias, N, 0.5, 2.0)
+
+    # Signature: `epilogue` expands to a tuple whose leading element is the baked
+    # constexpr aggregate and whose remaining elements are the two lifted runtime
+    # members (bias pointer + scalar scale), in field order. The constexpr members
+    # (n_cols, out_scale) do not appear, and the block sizes stay baked.
+    signature = _frontend_signature(_host_bias_kernel, (bias, epilogue, BLOCK_M, BLOCK_N))
+    sig = signature["epilogue"]
+    assert sig[0] == "constexpr"
+    assert len(sig) == 3
+    assert sig[1] == "*fp32"  # the runtime `bias` pointer member
+    assert sig[2] == "fp32"  # the runtime scalar `scale` member
+    assert signature["BLOCK_M"] == "constexpr"
+    assert signature["BLOCK_N"] == "constexpr"
+
+    # Interface: the generated kernel takes the bias pointer and the scalar scale
+    # as runtime parameters, while the constexpr scales are folded into the body.
+    module = run_parser(_host_bias_kernel, args=(bias, epilogue, BLOCK_M, BLOCK_N))
+    module_str = module.str_nodebug()
+    interface = next(line for line in module_str.splitlines() if "tt.func public @_host_bias_kernel" in line)
+    # out_ptr + bias pointer = two pointer params; the scalar scale is an f32 param.
+    assert interface.count("!tt.ptr<f32>") == 2
+    assert " f32" in interface
+    # out_scale=2.0 was folded into the body, so it is a constant, not a parameter.
+    assert "arith.constant 2.000000e+00 : f32" in module_str
+
+
 @triton.jit
 def accumulate(a, b):
     return a + b
