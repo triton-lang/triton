@@ -165,9 +165,9 @@ def test_triton_opt_reproducer_runs_without_python(monkeypatch: pytest.MonkeyPat
     result = replay_reproducer_shard(path, executable, expected_sha256=descriptor["expected_sha256"],
                                      compressed_sha256=descriptor["sha256"])
     assert result["sha256"] == descriptor["expected_sha256"]
-    command = ('zstd -dc "$1" | "$2" --run-reproducer --split-input-file - | '
+    command = ('zstd -dc "$1" | "$2" --mlir-disable-threading --run-reproducer --split-input-file - | '
                'sha256sum --check "${1%.mlir.zst}.sha256"') if compressed else (
-                   '"$2" --run-reproducer --split-input-file "$1" | '
+                   '"$2" --mlir-disable-threading --run-reproducer --split-input-file "$1" | '
                    'sha256sum --check "${1%.mlir}.sha256"')
     pipeline = subprocess.run(["bash", "-o", "pipefail", "-c", command, "_",
                                str(path), executable], capture_output=True, text=True, check=False)

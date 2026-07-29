@@ -322,8 +322,8 @@ def replay_reproducer_shard(path: str | Path, triton_opt: str = "triton-opt", *,
     if compressed_sha256 is not None and _sha256(data) != compressed_sha256:
         raise GoldenCorpusError(f"Triton-opt reproducer shard {source.name} failed its SHA-256 check")
     try:
-        result = subprocess.run([triton_opt, "--run-reproducer", "--split-input-file", "-"], input=_decompress(data),
-                                capture_output=True, check=False)
+        result = subprocess.run([triton_opt, "--mlir-disable-threading", "--run-reproducer", "--split-input-file", "-"],
+                                input=_decompress(data), capture_output=True, check=False)
     except OSError as error:
         raise GoldenCorpusError(f"Cannot execute triton-opt: {error}") from error
     if result.returncode:
