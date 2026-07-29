@@ -3389,6 +3389,10 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
         Input elements of size less than 4 bytes are packed into 4-byte
         registers.
 
+        When :code:`is_pure` is false, each logical group of packed elements
+        executes once, even if its tensor layout replicates those elements
+        across physical threads.
+
         This op does not support empty :code:`dtype` -- the inline asm must
         return at least one tensor, even if you don't need it.  You can work
         around this by returning a dummy tensor of arbitrary type; it shouldn't

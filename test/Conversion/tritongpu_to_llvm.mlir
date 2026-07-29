@@ -2099,6 +2099,37 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
+#replicated = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: inline_asm_replicated_side_effect_dead_result
+  // CHECK: llvm.cond_br
+  // CHECK: llvm.inline_asm has_side_effects
+  // CHECK-SAME: "red.global.add.u32 [$1], 1; mov.u32 $0, 0;"
+  // CHECK-NOT: st.shared
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.return
+  tt.func public @inline_asm_replicated_side_effect_dead_result(%ptrs: tensor<32x!tt.ptr<i32>, #replicated>) {
+    %unused = tt.elementwise_inline_asm "red.global.add.u32 [$1], 1; mov.u32 $0, 0;" {constraints = "=r,l", packed_element = 1 : i32, pure = false} %ptrs : tensor<32x!tt.ptr<i32>, #replicated> -> tensor<32xi32, #replicated>
+    tt.return
+  }
+
+  // CHECK-LABEL: inline_asm_replicated_side_effect_live_result
+  // CHECK: llvm.cond_br
+  // CHECK: llvm.inline_asm has_side_effects
+  // CHECK-SAME: "red.global.add.u32 [$1], 1; mov.u32 $0, 7;"
+  // CHECK: st.shared
+  // CHECK: nvvm.barrier
+  // CHECK: llvm.load
+  // CHECK: llvm.return
+  tt.func public @inline_asm_replicated_side_effect_live_result(%ptrs: tensor<32x!tt.ptr<i32>, #replicated>, %out: tensor<32x!tt.ptr<i32>, #replicated>) {
+    %result = tt.elementwise_inline_asm "red.global.add.u32 [$1], 1; mov.u32 $0, 7;" {constraints = "=r,l", packed_element = 1 : i32, pure = false} %ptrs : tensor<32x!tt.ptr<i32>, #replicated> -> tensor<32xi32, #replicated>
+    tt.store %out, %result : tensor<32x!tt.ptr<i32>, #replicated>
+    tt.return
+  }
+}
+
+// -----
+
 //  CHECK-LABEL: reduce_slice
 //  CHECK-NOT: st.shared
 //  CHECK-NOT: ld.shared

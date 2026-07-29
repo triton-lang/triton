@@ -198,9 +198,13 @@ struct ElementwiseInlineAsmOpConversion
     : public ConvertOpToLLVMPattern<ElementwiseInlineAsmOp> {
   using Base = ConvertOpToLLVMPattern<ElementwiseInlineAsmOp>;
 
-  using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
   typedef typename Base::OpAdaptor OpAdaptor;
+
+  explicit ElementwiseInlineAsmOpConversion(LLVMTypeConverter &typeConverter,
+                                            const TargetInfoBase &targetInfo,
+                                            PatternBenefit benefit = 1)
+      : Base(typeConverter, benefit), targetInfo(targetInfo) {}
 
   // If operand size is smaller than 32 bits, pack in groups of 32 bits.
   SmallVector<Value> packOperands(ElementwiseInlineAsmOp op,
@@ -236,7 +240,8 @@ struct ElementwiseInlineAsmOpConversion
   SmallVector<SmallVector<Value>>
   createDestOps(ElementwiseInlineAsmOp op, OpAdaptor adaptor,
                 ConversionPatternRewriter &rewriter,
-                MultipleOperandsRange operands, Location loc) const {
+                MultipleOperandsRange operands, Location loc,
+                Value threadPred) const {
     auto ctx = op->getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -269,18 +274,46 @@ struct ElementwiseInlineAsmOpConversion
     Type asmRetType =
         asmRetTypes.size() > 1 ? struct_ty(asmRetTypes) : asmRetTypes[0];
 
-    Value asmResults = LLVM::InlineAsmOp::create(
-                           rewriter, loc, asmRetType,
-                           /*operands=*/packedOperands,
-                           /*asm_string=*/op.getAsmString(),
-                           /*constraints=*/op.getConstraints(),
-                           /*has_side_effects=*/!op.getPure(),
-                           /*is_align_stack=*/false, LLVM::TailCallKind::None,
-                           /*asm_dialect=*/
-                           LLVM::AsmDialectAttr::get(rewriter.getContext(),
-                                                     LLVM::AsmDialect::AD_ATT),
-                           /*operand_attrs=*/ArrayAttr())
-                           ->getResult(0);
+    auto emitInlineAsm = [&]() -> Value {
+      return LLVM::InlineAsmOp::create(
+                 rewriter, loc, asmRetType,
+                 /*operands=*/packedOperands,
+                 /*asm_string=*/op.getAsmString(),
+                 /*constraints=*/op.getConstraints(),
+                 /*has_side_effects=*/!op.getPure(),
+                 /*is_align_stack=*/false, LLVM::TailCallKind::None,
+                 /*asm_dialect=*/
+                 LLVM::AsmDialectAttr::get(rewriter.getContext(),
+                                           LLVM::AsmDialect::AD_ATT),
+                 /*operand_attrs=*/ArrayAttr())
+          ->getResult(0);
+    };
+
+    Value asmResults;
+    if (!threadPred) {
+      asmResults = emitInlineAsm();
+    } else {
+      Block *currentBlock = rewriter.getInsertionBlock();
+      Block *continuation =
+          currentBlock->splitBlock(rewriter.getInsertionPoint());
+      Region *region = currentBlock->getParent();
+      Block *asmBlock =
+          rewriter.createBlock(region, Region::iterator(continuation));
+      BlockArgument mergedResult = continuation->addArgument(asmRetType, loc);
+
+      rewriter.setInsertionPointToEnd(currentBlock);
+      Value undef = b.undef(asmRetType);
+      LLVM::CondBrOp::create(rewriter, loc, threadPred, asmBlock, ValueRange{},
+                             continuation, ValueRange{undef});
+
+      rewriter.setInsertionPointToEnd(asmBlock);
+      Value executedResult = emitInlineAsm();
+      LLVM::BrOp::create(rewriter, loc, ValueRange{executedResult},
+                         continuation);
+
+      rewriter.setInsertionPointToStart(continuation);
+      asmResults = mergedResult;
+    }
 
     // asmResults is a flat struct; pack its values into
     // [return_value][op.getPackedElement()].
@@ -329,6 +362,11 @@ struct ElementwiseInlineAsmOpConversion
     assert(all_of(unpackedOperands, [&](auto &operands) {
       return operands.size() == numElemsPerThread;
     }));
+    if (!op.getPure() && numElemsPerThread % op.getPackedElement() != 0) {
+      return op.emitError(
+          "side-effecting inline asm requires packed_element to divide the "
+          "number of unique elements per thread");
+    }
     if (numElemsPerThread % op.getPackedElement() != 0) {
       // Pad with the undef for each operand to have a multiple of
       // op.getPackedElement() elements.
@@ -338,6 +376,20 @@ struct ElementwiseInlineAsmOpConversion
         for (int i = 0; i < numPaddedValue; i++) {
           operands.push_back(b.undef(operands[0].getType()));
         }
+      }
+    }
+
+    Value threadPred;
+    if (!op.getPure()) {
+      auto freeVarMasks = getFreeVariableMasks(resultTy);
+      auto *ctx = op->getContext();
+      bool hasThreadReplication =
+          freeVarMasks.lookup(StringAttr::get(ctx, "lane")) != 0 ||
+          freeVarMasks.lookup(StringAttr::get(ctx, "warp")) != 0 ||
+          freeVarMasks.lookup(StringAttr::get(ctx, "block")) != 0;
+      if (hasThreadReplication) {
+        threadPred = emitRedundantThreadPredicate(freeVarMasks, rewriter, loc,
+                                                  targetInfo);
       }
     }
 
@@ -358,7 +410,7 @@ struct ElementwiseInlineAsmOpConversion
           block[j].push_back(os[i + j]);
         }
       }
-      auto cur = createDestOps(op, adaptor, rewriter, block, loc);
+      auto cur = createDestOps(op, adaptor, rewriter, block, loc, threadPred);
       assert(cur.size() == unpackedResults.size());
       for (unsigned j = 0; j < cur.size(); j++) {
         unpackedResults[j].insert(unpackedResults[j].end(), cur[j].begin(),
@@ -368,6 +420,44 @@ struct ElementwiseInlineAsmOpConversion
     for (auto &results : unpackedResults) {
       results.resize(numElemsPerThread);
     }
+
+    SmallVector<unsigned> usedResultIndices;
+    if (threadPred) {
+      for (auto [index, result] : llvm::enumerate(op->getResults())) {
+        if (!result.use_empty())
+          usedResultIndices.push_back(index);
+      }
+      if (!usedResultIndices.empty() && !op->hasAttr("allocation.offset")) {
+        return op.emitError(
+            "missing shared-memory allocation for replicated inline asm "
+            "result");
+      }
+    }
+
+    for (auto [broadcastIndex, resultIndex] :
+         llvm::enumerate(usedResultIndices)) {
+      Type originalResultTy = op->getResult(resultIndex).getType();
+      Type valueElemTy = getTypeConverter()->convertType(
+          getElementTypeOrSelf(originalResultTy));
+      if (auto tensorTy = dyn_cast<RankedTensorType>(originalResultTy)) {
+        unpackedResults[resultIndex] = broadcastTensorResult(
+            op, tensorTy, rewriter, unpackedResults[resultIndex], valueElemTy,
+            b, threadPred, targetInfo);
+      } else {
+        assert(unpackedResults[resultIndex].size() == 1);
+        unpackedResults[resultIndex][0] = broadcastScalarAtomicResult(
+            op, valueElemTy, unpackedResults[resultIndex][0], rewriter, b,
+            threadPred, targetInfo);
+      }
+
+      if (broadcastIndex + 1 != usedResultIndices.size()) {
+        if (lookupNumCTAs(op) == 1)
+          targetInfo.barrier(loc, rewriter, AddrSpace::Local);
+        else
+          targetInfo.clusterBarrier(loc, rewriter, op);
+      }
+    }
+
     // Reorder and pack the results.
     SmallVector<Value> outs;
     for (int i = 0; i < unpackedResults.size(); i++) {
@@ -379,6 +469,9 @@ struct ElementwiseInlineAsmOpConversion
     rewriter.replaceOp(op, outs);
     return success();
   }
+
+private:
+  const TargetInfoBase &targetInfo;
 };
 
 struct AbsIOpConversion
@@ -706,7 +799,8 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
                                     benefit);
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
                                               benefit);
-  patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, benefit);
+  patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, targetInfo,
+                                                 benefit);
   patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SelectOpConversion>(typeConverter, axisInfoAnalysis, benefit);

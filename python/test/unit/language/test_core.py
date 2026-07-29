@@ -5466,6 +5466,56 @@ def test_inline_asm_with_pointers(num_ctas, device):
     np.testing.assert_equal(y_ref, to_numpy(y_tri))
 
 
+def test_inline_asm_replicated_side_effects(device):
+    if not is_cuda():
+        pytest.skip('test_inline_asm is only supported in CUDA')
+
+    @triton.jit
+    def kernel(cells, output, N: tl.constexpr):
+        offsets = tl.arange(0, N)
+        result = tl.inline_asm_elementwise(
+            "red.global.add.u32 [$1], 1; mov.u32 $0, 7;",
+            "=r,l",
+            [cells + offsets],
+            dtype=tl.int32,
+            is_pure=False,
+            pack=1,
+        )
+        tl.store(output + offsets, result)
+
+    N = 32
+    cells = torch.zeros(N, dtype=torch.int32, device=device)
+    output = torch.empty_like(cells)
+    kernel[(1, )](cells, output, N=N, num_warps=4)
+
+    torch.testing.assert_close(cells, torch.ones_like(cells))
+    torch.testing.assert_close(output, torch.full_like(output, 7))
+
+
+def test_inline_asm_side_effect_pack_misaligned(device, capfd):
+    if not is_cuda():
+        pytest.skip('test_inline_asm is only supported in CUDA')
+
+    @triton.jit
+    def kernel(cells, N: tl.constexpr):
+        offsets = tl.arange(0, N)
+        tl.inline_asm_elementwise(
+            "red.global.add.u32 [$2], 1; red.global.add.u32 [$3], 1; "
+            "mov.u32 $0, 0; mov.u32 $1, 0;",
+            "=r,=r,l,l",
+            [cells + offsets],
+            dtype=tl.int32,
+            is_pure=False,
+            pack=2,
+        )
+
+    cells = torch.empty(32, dtype=torch.int32, device=device)
+    with pytest.raises(RuntimeError, match="PassManager::run failed"):
+        kernel.warmup(cells=cells, N=32, grid=(1, ), num_warps=4)
+
+    assert "side-effecting inline asm requires packed_element" in capfd.readouterr().err
+
+
 def test_inline_asm_multiple_outputs(device):
     if not is_cuda():
         pytest.skip('test_inline_asm is only supported in CUDA')
