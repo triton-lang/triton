@@ -2221,10 +2221,8 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
       buffersEqBuf = arith::AndIOp::create(fb, buffersEqBuf, relationMask);
       Value writeVisibilityZero =
           tti::createConstIntTensor(fb, fb.getLoc(), 0, writeVisibilityType);
-      Value bufVisibility = arith::SelectOp::create(
-          fb, buffersEqBuf, writeVisibility, writeVisibilityZero);
       Value noOneIsWriting = arith::CmpIOp::create(
-          fb, arith::CmpIPredicate::eq, bufVisibility, writeVisibilityZero);
+          fb, arith::CmpIPredicate::eq, writeVisibility, writeVisibilityZero);
       Value threadI64 = arith::ExtUIOp::create(fb, fb.getI64Type(), threadVal);
       Value threadMask =
           triton::SplatOp::create(fb, writeVisibilityType, threadI64);
@@ -2233,7 +2231,7 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
       Value bufferThreadBit =
           arith::ShLIOp::create(fb, buffersEqBufExt, threadMask);
       Value bufferHasVisibility =
-          arith::AndIOp::create(fb, bufVisibility, bufferThreadBit);
+          arith::AndIOp::create(fb, writeVisibility, bufferThreadBit);
       bufferHasVisibility = arith::CmpIOp::create(
           fb, arith::CmpIPredicate::eq, bufferHasVisibility, bufferThreadBit);
       Value writeVisible =
