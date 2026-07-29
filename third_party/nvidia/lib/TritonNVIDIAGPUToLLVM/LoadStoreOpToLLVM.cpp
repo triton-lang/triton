@@ -1142,8 +1142,6 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     auto ctx = op.getContext();
     auto kMsg = str_attr("msg");
     auto kBlock = str_attr("block");
-    bool crossCTAAccess =
-        affineBlockMask || !msgToShared.isIdentityOnOutDim(kBlock);
     const auto numCopies = msgToOffset.getInDimSize(kMsg);
     auto ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
     // We multicast if the flag is on and the block layout has broadcasting
@@ -1163,17 +1161,11 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     uint32_t barrierMask =
         toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
-    uint64_t completionMask = barrierMask | affineBlockMask;
-    unsigned blockOutput = msgToShared.getOutDimIndex(kBlock);
-    for (const auto &[dim, bases] : msgToShared.getBases())
-      for (auto [index, basis] : llvm::enumerate(bases))
-        completionMask |=
-            basis[blockOutput] ^ (dim == kBlock ? uint64_t{1} << index : 0);
-    if (crossCTAAccess && (completionMask & ~uint64_t{1}))
+    if (affineBlockMask && ((barrierMask | affineBlockMask) & ~uint64_t{1}))
       return op.emitError(
           "TMA destination and completion barrier must belong to the same "
           "CTA or a CTA pair");
-    if (crossCTAAccess && completionMask && computeCapability < 100)
+    if (affineBlockMask && computeCapability < 100)
       return op.emitError(
           "TMA destination and completion barrier must belong to the same "
           "CTA before Blackwell");
@@ -1185,7 +1177,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     }
 
     std::string ctaGroup;
-    if (crossCTAAccess && completionMask) {
+    if (affineBlockMask) {
       ctaGroup = "cta_group::2.";
     } else if (getModuleTwoCTAs(op)) {
       auto oneCTACGALayout = ttg::CGAEncodingAttr::get1DLayout(
@@ -1214,7 +1206,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
           loc, rewriter, msgToShared, {{kMsg, copyIdxVal}, {kBlock, ctaId}});
       Value shMemOffset = sharedAddress[0].second;
       Value shMemPtr = b.gep(elemPtrTy, llvmElemTy, dstBase, shMemOffset);
-      if (crossCTAAccess) {
+      if (affineBlockMask) {
         Value targetCTA = b.xor_(sharedAddress[1].second, affineBlockOffset);
         shMemPtr = NVVM::MapaOp::create(rewriter, loc,
                                         ptr_ty(rewriter.getContext(), 7),
@@ -1227,8 +1219,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       std::string tmaInst =
           "@$0 cp.async.bulk.tensor." + std::to_string(rank) + "d." + ctaGroup +
           "shared::" +
-          ((crossCTABarrier || multicast || crossCTAAccess) ? "cluster"
-                                                            : "cta") +
+          ((crossCTABarrier || multicast || affineBlockMask) ? "cluster"
+                                                             : "cta") +
           ".global" + (isIm2Col ? ".im2col" : "") +
           ".mbarrier::complete_tx::bytes";
       if (multicast)

@@ -722,8 +722,7 @@ static LogicalResult verifyAsyncTMAStoreOp(Operation *op,
   if (isFp4Padded(srcEnc))
     return op->emitOpError("does not support fp4_padded operands");
   auto shape = dropPipeliningDim(srcType.getShape(), srcEnc);
-  auto allocation = toLinearLayout(
-      dropPipeliningDim(srcType.getAllocShape(), srcEnc), srcEnc);
+  auto allocation = toLinearLayout(srcType);
   auto block = StringAttr::get(op->getContext(), "block");
   for (const auto &basis : allocation.getBases().lookup(block))
     for (auto [component, size] : llvm::zip_equal(basis, shape))

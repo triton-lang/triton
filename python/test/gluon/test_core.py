@@ -3512,7 +3512,7 @@ def test_shared_subslice_two_ctas(op):
 
 
 @gluon.jit
-def cross_cta_tma_load_kernel(in_desc, out, cga_layout: ttgl.constexpr):
+def cross_cta_tma_kernel(desc, out, cga_layout: ttgl.constexpr, MODE: ttgl.constexpr):
     alloc_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 8], [4, 1], [1, 0], cga_layout=cga_layout)
     shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 32, rank=2, cga_layout=cga_layout)
     parent = ttgl.allocate_shared_memory(
@@ -3522,17 +3522,22 @@ def cross_cta_tma_load_kernel(in_desc, out, cga_layout: ttgl.constexpr):
         value=ttgl.full([256, 64], -5, ttgl.int32, layout=alloc_layout),
     )
     tile = parent.slice(128, 128, dim=0)
-    bar = mbarrier.allocate_mbarrier()
-    mbarrier.init(bar, count=1)
-    mbarrier.expect(bar, in_desc.nbytes_per_cta)
-    tma.async_load(in_desc, [0, 0], bar, tile)
-    mbarrier.wait(bar, phase=0)
-    ttgl.barrier(cluster=True)
-    result = parent.load(alloc_layout)
-    rows = ttgl.arange(0, 256)[:, None]
-    cols = ttgl.arange(0, 64)[None, :]
-    offsets = ttgl.set_auto_layout(rows * 64 + cols, result.type.layout)
-    ttgl.store(out + offsets, result)
+    if MODE == "load":
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        mbarrier.expect(bar, desc.nbytes_per_cta)
+        tma.async_load(desc, [0, 0], bar, tile)
+        mbarrier.wait(bar, phase=0)
+        ttgl.barrier(cluster=True)
+        result = parent.load(alloc_layout)
+        rows = ttgl.arange(0, 256)[:, None]
+        cols = ttgl.arange(0, 64)[None, :]
+        offsets = ttgl.set_auto_layout(rows * 64 + cols, result.type.layout)
+        ttgl.store(out + offsets, result)
+    elif MODE == "store":
+        tma.async_store(desc, [0, 0], tile)
+    else:
+        tma.async_atomic_add(desc, [0, 0], tile)
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell CTA-pair completion")
@@ -3543,7 +3548,7 @@ def test_cross_cta_tma_load(cga_layout):
     layout = ttgl.NVMMASharedLayout(128, 32, rank=2, cga_layout=cga_layout)
     desc = TensorDescriptor.from_tensor(inp, [128, 64], layout)
 
-    compiled = cross_cta_tma_load_kernel[(1, )](desc, out, cga_layout, num_warps=4, num_ctas=1 << len(cga_layout))
+    compiled = cross_cta_tma_kernel[(1, )](desc, out, cga_layout, "load", num_warps=4, num_ctas=1 << len(cga_layout))
     assert "mapa.shared::cluster" in compiled.asm["ptx"]
     assert "cp.async.bulk.tensor.2d.cta_group::2.shared::cluster.global" in compiled.asm["ptx"]
     torch.testing.assert_close(out, torch.cat((torch.full_like(inp, -5), inp)), atol=0, rtol=0)
@@ -3558,26 +3563,9 @@ def test_cross_cta_tma_load_rejects_nonpeer_barrier(capfd):
     desc = TensorDescriptor.from_tensor(inp, [128, 64], layout)
 
     with pytest.raises(RuntimeError, match="PassManager::run failed"):
-        cross_cta_tma_load_kernel.warmup(desc, out, cga_layout, grid=(1, ), num_warps=4, num_ctas=4)
+        cross_cta_tma_kernel.warmup(desc, out, cga_layout, MODE="load", grid=(1, ), num_warps=4, num_ctas=4)
     captured = capfd.readouterr()
     assert "TMA destination and completion barrier must belong to the same CTA or a CTA pair" in captured.err
-
-
-@gluon.jit
-def cross_cta_tma_store_kernel(out_desc, REDUCE: ttgl.constexpr):
-    alloc_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 8], [4, 1], [1, 0], cga_layout=((1, 0), ))
-    shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 32, rank=2, cga_layout=((1, 0), ))
-    parent = ttgl.allocate_shared_memory(
-        ttgl.int32,
-        [256, 64],
-        shared_layout,
-        value=ttgl.full([256, 64], 1, ttgl.int32, layout=alloc_layout),
-    )
-    tile = parent.slice(128, 128, dim=0)
-    if REDUCE:
-        tma.async_atomic_add(out_desc, [0, 0], tile)
-    else:
-        tma.async_store(out_desc, [0, 0], tile)
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
@@ -3588,7 +3576,8 @@ def test_cross_cta_tma_store_rejected(reduce, capfd):
     desc = TensorDescriptor.from_tensor(out, [128, 64], layout)
 
     with pytest.raises(RuntimeError, match="error encountered during parsing"):
-        cross_cta_tma_store_kernel.warmup(desc, REDUCE=reduce, grid=(1, ), num_warps=4, num_ctas=2)
+        cross_cta_tma_kernel.warmup(desc, out, ((1, 0), ), MODE="reduce" if reduce else "store", grid=(1, ),
+                                    num_warps=4, num_ctas=2)
     captured = capfd.readouterr()
     assert "source subview may have an origin in another CTA" in captured.out + captured.err
 

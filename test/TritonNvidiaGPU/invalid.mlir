@@ -1660,13 +1660,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.async_tma_copy_local_to_global %desc[%x, %x] %view : !tt.tensordesc<128x64xi32, #shared>, !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>
     tt.return
   }
-}
-
-// -----
-
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CGALayout = [[1, 0]]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   tt.func @tma_reduce_rejects_remote_source(%desc: !tt.tensordesc<128x64xi32, #shared>, %x: i32) {
     %parent = ttg.local_alloc : () -> !ttg.memdesc<256x64xi32, #shared, #smem, mutable>
     %view = ttg.memdesc_subslice %parent [128, 0] : !ttg.memdesc<256x64xi32, #shared, #smem, mutable> -> !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>
