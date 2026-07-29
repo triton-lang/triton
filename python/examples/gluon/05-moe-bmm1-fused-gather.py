@@ -8,7 +8,6 @@ import triton.experimental.gluon as gluon
 import triton.experimental.gluon.language as gl
 import triton.experimental.gluon.language.nvidia.blackwell as blackwell
 import triton.experimental.gluon.language.nvidia.blackwell.tma as tma
-from triton.experimental.gluon.language.nvidia.blackwell import float2
 import triton.experimental.gluon.language.nvidia.hopper.mbarrier as mbarrier
 import triton.language.extra.libdevice as libdevice
 from triton.testing import do_bench_cudagraph
@@ -130,16 +129,11 @@ def alloc_ring_barriers(
 
 @gluon.jit
 def pack_e4m3x2(values):
+    lhs, rhs = gl.split(values.reshape((values.shape[0], values.shape[1] // 2, 2)))
     return gl.inline_asm_elementwise(
-        """
-        {
-            .reg .f32 lane<2>;
-            mov.b64 {lane0, lane1}, $1;
-            cvt.rn.satfinite.e4m3x2.f32 $0, lane1, lane0;
-        }
-        """,
-        "=h,l",
-        [values.value],
+        "cvt.rn.satfinite.e4m3x2.f32 $0, $2, $1;",
+        "=h,r,r",
+        [lhs, rhs],
         dtype=gl.int16,
         is_pure=True,
         pack=1,
@@ -172,12 +166,6 @@ def _split_m(values):
 
 
 @gluon.jit
-def _split_m_float2(values):
-    lhs, rhs = _split_m(values.value)
-    return float2.Float2Tensor(lhs), float2.Float2Tensor(rhs)
-
-
-@gluon.jit
 def split_m_subtiles(values, subtile_factor: gl.constexpr):
     # For epilogue subtiling.
     subtiles = (values, )
@@ -185,7 +173,7 @@ def split_m_subtiles(values, subtile_factor: gl.constexpr):
         if (1 << split_level) < subtile_factor:
             next_subtiles = ()
             for subtile_idx in gl.static_range(1 << split_level):
-                lhs, rhs = _split_m_float2(subtiles[subtile_idx])
+                lhs, rhs = _split_m(subtiles[subtile_idx])
                 next_subtiles += (lhs, rhs)
             subtiles = next_subtiles
     return subtiles
@@ -472,8 +460,8 @@ def store_packed_out(
 
 
 @gluon.jit
-def _swiglu_step1(acc_packed, limit):
-    gelu, linear = float2.unpack2(acc_packed)
+def _swiglu_step1(acc, limit):
+    gelu, linear = gl.split(acc.reshape((acc.shape[0], acc.shape[1] // 2, 2)))
     gelu = gl.minimum(gelu.to(gl.float32), limit)
     linear = gl.clamp(linear.to(gl.float32), -limit, limit)
     return gelu, linear
@@ -483,14 +471,12 @@ def _swiglu_step1(acc_packed, limit):
 def _swiglu_step2(gelu, linear, alpha):
     den = 1.0 + libdevice.exp(-alpha * gelu)
     activated = gelu / den
-    activated_packed = float2.pack(activated, axis=1)
-    linear_packed = float2.pack(linear, axis=1)
-    return float2.fma(activated_packed, linear_packed, activated_packed)
+    return blackwell.fma2(activated, linear, activated)
 
 
 @gluon.jit
 def pack_fp8_out_fragment(out_packed, out_recip):
-    scaled_out_packed = out_packed * float2.full_like(out_packed, out_recip)
+    scaled_out_packed = blackwell.mul2(out_packed, out_recip)
     return pack_e4m3x2(scaled_out_packed)
 
 
@@ -571,11 +557,7 @@ def apply_bias_and_scale(
     mbarrier.arrive(acc_empty_bar)
     idx, phase = advance(idx, phase, p.acc_num_bufs)
     acc = gl.convert_layout(acc_regs, split_layout)
-    acc_packed = float2.pack(acc, axis=1)
-    bias_packed = float2.pack(bias, axis=1)
-    bias_packed = float2.Float2Tensor(gl.convert_layout(bias_packed.value, acc_packed.value.type.layout))
-    acc_packed = float2.fma(acc_packed, float2.full_like(acc_packed, acc_scale), bias_packed)
-    return idx, phase, acc_packed
+    return idx, phase, blackwell.fma2(acc, acc_scale, bias)
 
 
 @gluon.jit

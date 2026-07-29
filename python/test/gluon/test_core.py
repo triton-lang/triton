@@ -27,6 +27,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mma_v2
 from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
+from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia import rubin
 from triton.experimental.gluon.language.nvidia.blackwell import tma as blackwell_tma
@@ -41,7 +42,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_mma_scaled,
     tcgen05_commit,
     tcgen05_copy,
-    float2,
     clc,
 )
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
@@ -2539,12 +2539,21 @@ def test_padded_shared_layout_subslice(interval_pairs, shared_layout, slice_m_of
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("op, tol", [("add", 0), ("sub", 0), ("mul", 0), ("fma", 1e-6)])
-def test_float2(op, tol):
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("op", ["add", "sub", "mul", "fma", "min", "max"])
+@pytest.mark.parametrize("use_convenience", [False, True], ids=["packed-arith", "convenience"])
+@pytest.mark.parametrize("explicit_dtype", [False, True], ids=["inferred-dtype", "explicit-dtype"])
+def test_packed_arith(op, dtype, use_convenience, explicit_dtype):
+    if dtype == torch.float32 and op in ("min", "max"):
+        pytest.skip("packed float32 does not support min or max")
+
+    op_name = op
     BLOCK_M = ttgl.constexpr(128)
     BLOCK_N = ttgl.constexpr(128)
     threads_per_warp = ttgl.constexpr(THREADS_PER_WARP)
     op = ttgl.constexpr(op)
+    use_convenience = ttgl.constexpr(use_convenience)
+    explicit_dtype = ttgl.constexpr(explicit_dtype)
 
     @gluon.jit
     def kernel(a_ptr, b_ptr, c_ptr, out_ptr):
@@ -2559,30 +2568,36 @@ def test_float2(op, tol):
         a = ttgl.load(a_ptr + offs_m * BLOCK_N + offs_n)
         b = ttgl.load(b_ptr + offs_m * BLOCK_N + offs_n)
         c = ttgl.load(c_ptr + offs_m * BLOCK_N + offs_n)
-        a = float2.pack(a, axis=1)
-        b = float2.pack(b, axis=1)
-        c = float2.pack(c, axis=1)
+        result_dtype: ttgl.constexpr = a.dtype if explicit_dtype else None
 
-        if op == "add":
-            out = a + b
-        elif op == "sub":
-            out = a - b
-        elif op == "mul":
-            out = a * b
+        if use_convenience:
+            if op == "add":
+                out = blackwell.add2(a, b, dtype=result_dtype)
+            elif op == "sub":
+                out = blackwell.sub2(a, b, dtype=result_dtype)
+            elif op == "mul":
+                out = blackwell.mul2(a, b, dtype=result_dtype)
+            elif op == "fma":
+                out = blackwell.fma2(a, b, c, dtype=result_dtype)
+            elif op == "min":
+                out = blackwell.min2(a, b, dtype=result_dtype)
+            else:
+                out = blackwell.max2(a, b, dtype=result_dtype)
         elif op == "fma":
-            out = float2.fma(a, b, c)
+            out = blackwell.packed_arith(op, a, b, c, dtype=result_dtype)
+        else:
+            out = blackwell.packed_arith(op, a, b, dtype=result_dtype)
 
-        out = float2.unpack(out, axis=1)
         ttgl.store(out_ptr + offs_m * BLOCK_N + offs_n, out)
 
     torch.manual_seed(0)
     shape = [BLOCK_M.value, BLOCK_N.value]
-    a = torch.rand(shape, dtype=torch.float32, device="cuda")
-    b = torch.rand(shape, dtype=torch.float32, device="cuda")
-    c = torch.rand(shape, dtype=torch.float32, device="cuda")
-    out = torch.empty(shape, dtype=torch.float32, device="cuda")
+    a = torch.rand(shape, dtype=dtype, device="cuda")
+    b = torch.rand(shape, dtype=dtype, device="cuda")
+    c = torch.rand(shape, dtype=dtype, device="cuda")
+    out = torch.empty_like(a)
 
-    kernel[(1, )](a, b, c, out)
+    compiled = kernel[(1, )](a, b, c, out)
     if op == "add":
         ref = a + b
     elif op == "sub":
@@ -2590,8 +2605,73 @@ def test_float2(op, tol):
     elif op == "mul":
         ref = a * b
     elif op == "fma":
-        ref = a * b + c
-    torch.testing.assert_close(ref, out, atol=tol, rtol=tol)
+        ref = torch.addcmul(c, a, b)
+    elif op == "min":
+        ref = torch.minimum(a, b)
+    else:
+        ref = torch.maximum(a, b)
+
+    tolerance = {torch.float32: 1e-6, torch.float16: 1e-3, torch.bfloat16: 1e-2}[dtype]
+    torch.testing.assert_close(ref, out, atol=tolerance, rtol=tolerance)
+
+    suffix = {torch.float32: "f32x2", torch.float16: "f16x2", torch.bfloat16: "bf16x2"}[dtype]
+    modifier = ".rn" if op_name == "fma" else ""
+    assert f"{op_name}{modifier}.{suffix}" in compiled.asm["ptx"]
+    assert f"ttng.packed_arith {op_name}" in compiled.asm["ttgir"]
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("use_convenience", [False, True], ids=["packed-arith", "convenience"])
+def test_packed_arith_chains(dtype, use_convenience):
+    use_convenience = ttgl.constexpr(use_convenience)
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+        offsets = ttgl.arange(0, 256, layout=layout)
+        a = ttgl.load(a_ptr + offsets)
+        b = ttgl.load(b_ptr + offsets)
+        c = ttgl.load(c_ptr + offsets)
+
+        if use_convenience:
+            value = blackwell.add2(a, b)
+            value = blackwell.sub2(value, b)
+            value = blackwell.mul2(value, b)
+            value = blackwell.fma2(value, b, c)
+        else:
+            value = blackwell.packed_arith("add", a, b)
+            value = blackwell.packed_arith("sub", value, b)
+            value = blackwell.packed_arith("mul", value, b)
+            value = blackwell.packed_arith("fma", value, b, c)
+
+        ttgl.store(out_ptr + offsets, value)
+
+    torch.manual_seed(0)
+    a = torch.rand(256, dtype=dtype, device="cuda")
+    b = torch.rand_like(a)
+    c = torch.rand_like(a)
+    out = torch.empty_like(a)
+    compiled = kernel[(1, )](a, b, c, out)
+
+    reference = torch.addcmul(c, ((a + b) - b) * b, b)
+    tolerance = {torch.float32: 1e-6, torch.float16: 1e-3, torch.bfloat16: 1e-2}[dtype]
+    torch.testing.assert_close(reference, out, atol=tolerance, rtol=tolerance)
+
+    suffix = {torch.float32: "f32x2", torch.float16: "f16x2", torch.bfloat16: "bf16x2"}[dtype]
+    pattern = rf"\b(add|sub|mul|fma)(?:\.rn)?\.{suffix}\s+(%[\w.$]+),\s*([^;]+);"
+    instructions = re.findall(pattern, compiled.asm["ptx"])
+    groups = [[instruction
+               for instruction in instructions
+               if instruction[0] == operation]
+              for operation in ("add", "sub", "mul", "fma")]
+    assert all(len(group) == 2 for group in groups)
+    assert [instruction[0] for instruction in instructions
+            ] == [operation for operation in ("add", "sub", "mul", "fma") for _ in range(2)]
+    for previous, current in zip(groups, groups[1:]):
+        registers = {instruction[1] for instruction in previous}
+        assert all(registers.intersection(re.findall(r"%[\w.$]+", instruction[2])) for instruction in current)
+    assert "prmt.b32" not in compiled.asm["ptx"]
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")

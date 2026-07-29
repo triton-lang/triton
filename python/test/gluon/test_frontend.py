@@ -1081,13 +1081,236 @@ def test_rubin_namespace_extends_blackwell():
     assert ttgl.nvidia.rubin is rubin
     assert rubin.TensorMemoryLayout is blackwell.TensorMemoryLayout
     assert rubin.allocate_tensor_memory is blackwell.allocate_tensor_memory
+    assert rubin.packed_arith is blackwell.packed_arith
+    assert rubin.add2 is blackwell.add2
+    assert rubin.fma2 is blackwell.fma2
     assert rubin.tcgen05_mma_scaled is blackwell.tcgen05_mma_scaled
     assert rubin.tma is blackwell.tma
     assert rubin.mbarrier is not blackwell.mbarrier
     assert rubin.mbarrier.allocate_mbarrier is blackwell.mbarrier.allocate_mbarrier
+    assert not hasattr(blackwell, "float2")
+    assert not hasattr(rubin, "float2")
+    assert not hasattr(blackwell, "add4")
+    assert not hasattr(blackwell, "fma4")
 
     with pytest.raises(TypeError, match="block_rep_order"):
         blackwell.TensorMemoryScalesLayout(block_rep_order="kThenMn")
+
+
+@gluon.jit
+def _packed_arith_frontend_kernel(operation: ttgl.constexpr, lhs_dtype: ttgl.constexpr, rhs_dtype: ttgl.constexpr,
+                                  result_dtype: ttgl.constexpr, use_rubin: ttgl.constexpr,
+                                  use_convenience: ttgl.constexpr, use_x4: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+    lhs = ttgl.full([256], 1.0, lhs_dtype, layout)
+    rhs = ttgl.full([256], 2.0, rhs_dtype, layout)
+    acc = ttgl.full([256], 3.0, rhs_dtype if result_dtype is None else result_dtype, layout)
+
+    if use_rubin:
+        if use_x4:
+            if operation == "add":
+                result = rubin.add4(lhs, rhs, dtype=result_dtype)
+            elif operation == "sub":
+                result = rubin.sub4(lhs, rhs, dtype=result_dtype)
+            elif operation == "mul":
+                result = rubin.mul4(lhs, rhs, dtype=result_dtype)
+            else:
+                result = rubin.fma4(lhs, rhs, acc, dtype=result_dtype)
+        elif use_convenience:
+            if operation == "add":
+                result = rubin.add2(lhs, rhs, dtype=result_dtype)
+            elif operation == "sub":
+                result = rubin.sub2(lhs, rhs, dtype=result_dtype)
+            elif operation == "mul":
+                result = rubin.mul2(lhs, rhs, dtype=result_dtype)
+            else:
+                result = rubin.fma2(lhs, rhs, acc, dtype=result_dtype)
+        elif operation == "fma":
+            result = rubin.packed_arith(operation, lhs, rhs, acc, dtype=result_dtype)
+        else:
+            result = rubin.packed_arith(operation, lhs, rhs, dtype=result_dtype)
+    elif use_convenience:
+        if operation == "add":
+            result = blackwell.add2(lhs, rhs, dtype=result_dtype)
+        elif operation == "sub":
+            result = blackwell.sub2(lhs, rhs, dtype=result_dtype)
+        elif operation == "mul":
+            result = blackwell.mul2(lhs, rhs, dtype=result_dtype)
+        elif operation == "fma":
+            result = blackwell.fma2(lhs, rhs, acc, dtype=result_dtype)
+        elif operation == "min":
+            result = blackwell.min2(lhs, rhs, dtype=result_dtype)
+        else:
+            result = blackwell.max2(lhs, rhs, dtype=result_dtype)
+    elif operation == "fma":
+        result = blackwell.packed_arith(operation, lhs, rhs, acc, dtype=result_dtype)
+    else:
+        result = blackwell.packed_arith(operation, lhs, rhs, dtype=result_dtype)
+
+    if result_dtype is not None:
+        ttgl.static_assert(result.dtype == result_dtype)
+    elif lhs_dtype == rhs_dtype:
+        ttgl.static_assert(result.dtype == lhs_dtype)
+
+
+@pytest.mark.parametrize("use_convenience", [False, True], ids=["generic", "convenience"])
+@pytest.mark.parametrize(
+    "operation, dtype",
+    [
+        pytest.param(operation, dtype, id=f"{operation}-{dtype}")
+        for dtype in (ttgl.float32, ttgl.float16, ttgl.bfloat16)
+        for operation in ("add", "sub", "mul", "fma", "min", "max")
+        if dtype is not ttgl.float32 or operation not in ("min", "max")
+    ],
+)
+def test_packed_arith_frontend(operation, dtype, use_convenience):
+    module = run_parser(_packed_arith_frontend_kernel,
+                        *make_args(operation, dtype, dtype, None, False, use_convenience, False),
+                        target=BLACKWELL_TARGET)
+    text = module.str_nodebug()
+    assert f"ttng.packed_arith {operation}" in text
+
+
+@pytest.mark.parametrize("use_convenience", [False, True], ids=["generic", "convenience"])
+@pytest.mark.parametrize(
+    "operation, lhs_dtype, rhs_dtype, result_dtype, expected_dtype",
+    [
+        pytest.param("add", ttgl.float16, ttgl.float32, None, "f32", id="upcast-f16"),
+        pytest.param("add", ttgl.bfloat16, ttgl.float32, None, "f32", id="upcast-bf16"),
+        pytest.param("sub", ttgl.float32, ttgl.float32, ttgl.float16, "f16", id="downcast-f16"),
+        pytest.param("mul", ttgl.float32, ttgl.float32, ttgl.bfloat16, "bf16", id="downcast-bf16"),
+        pytest.param("mul", ttgl.float16, ttgl.bfloat16, None, "f16", id="cross-half"),
+        pytest.param("fma", ttgl.float16, ttgl.float32, None, "f32", id="mixed-fma"),
+    ],
+)
+def test_rubin_packed_arith_mixed_frontend(operation, lhs_dtype, rhs_dtype, result_dtype, expected_dtype,
+                                           use_convenience):
+    module = run_parser(_packed_arith_frontend_kernel,
+                        *make_args(operation, lhs_dtype, rhs_dtype, result_dtype, True, use_convenience, False),
+                        target=RUBIN_TARGET)
+    text = module.str_nodebug()
+    assert f"ttng.packed_arith {operation}" in text
+    assert re.search(rf"ttng\.packed_arith {operation} .* -> tensor<256x{expected_dtype},", text)
+
+
+@pytest.mark.parametrize("operation", ["add", "sub", "mul", "fma"])
+@pytest.mark.parametrize("dtype", [ttgl.float8e4nv, ttgl.float8e5], ids=["e4m3", "e5m2"])
+def test_rubin_packed_arith_x4_frontend(operation, dtype):
+    module = run_parser(_packed_arith_frontend_kernel, *make_args(operation, dtype, dtype, None, True, True, True),
+                        target=RUBIN_TARGET)
+    text = module.str_nodebug()
+    assert f"ttng.packed_arith {operation}" in text
+
+
+@gluon.jit
+def _rubin_packed_mixed_fp8_frontend_kernel(operation: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+    lhs = ttgl.full([256], 1.0, ttgl.float8e5, layout)
+    rhs = ttgl.full([256], 2.0, ttgl.float8e4nv, layout)
+    if operation == "add":
+        result = rubin.add4(lhs, rhs)
+    elif operation == "sub":
+        result = rubin.sub4(lhs, rhs)
+    elif operation == "mul":
+        result = rubin.mul4(lhs, rhs, dtype=ttgl.float8e4nv)
+    else:
+        result = rubin.fma4(lhs, lhs, rhs)
+    ttgl.static_assert(result.dtype == ttgl.float8e4nv)
+
+
+@pytest.mark.parametrize("operation", ["add", "sub", "mul", "fma"])
+def test_rubin_packed_arith_mixed_fp8_frontend(operation):
+    module = run_parser(_rubin_packed_mixed_fp8_frontend_kernel, *make_args(operation), target=RUBIN_TARGET)
+    assert re.search(rf"ttng\.packed_arith {operation} .* -> tensor<256xf8E4M3FN,", module.str_nodebug())
+
+
+@gluon.jit
+def _rubin_packed_scale_frontend_kernel(operation: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+    scale = ttgl.full([256], 127, ttgl.uint8, layout)
+    value = ttgl.full([256], 2.0, ttgl.float8e4nv, layout)
+    if operation == "add":
+        result = rubin.add4(scale, value)
+    elif operation == "mul":
+        result = rubin.mul4(scale, value)
+    else:
+        result = rubin.fma4(scale, value, value)
+    ttgl.static_assert(result.dtype == ttgl.float8e4nv)
+
+
+@pytest.mark.parametrize("operation", ["add", "mul", "fma"])
+def test_rubin_packed_arith_ue8m0_frontend(operation):
+    module = run_parser(_rubin_packed_scale_frontend_kernel, *make_args(operation), target=RUBIN_TARGET)
+    text = module.str_nodebug()
+    assert "arith.bitcast" in text
+    assert "tensor<256xf8E8M0FNU," in text
+    assert f"ttng.packed_arith {operation}" in text
+
+
+@gluon.jit
+def _rubin_packed_fp4_frontend_kernel(only_fp4: ttgl.constexpr):
+    fp4_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+    packed_layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+    lhs = ttgl.full([128], 1, ttgl.int8, fp4_layout)
+    if only_fp4:
+        rhs = ttgl.full([128], 2, ttgl.int8, fp4_layout)
+        result = rubin.mul4(lhs, rhs, dtype=ttgl.float8e4nv)
+    else:
+        rhs = ttgl.full([256], 2.0, ttgl.float8e4nv, packed_layout)
+        result = rubin.add4(lhs, rhs)
+    ttgl.static_assert(result.dtype == ttgl.float8e4nv)
+
+
+@pytest.mark.parametrize("only_fp4", [False, True], ids=["mixed-fp4", "two-fp4-operands"])
+def test_rubin_packed_arith_fp4_frontend(only_fp4):
+    module = run_parser(_rubin_packed_fp4_frontend_kernel, *make_args(only_fp4), target=RUBIN_TARGET)
+    operation = "mul" if only_fp4 else "add"
+    text = module.str_nodebug()
+    assert f"ttng.packed_arith {operation}" in text
+    assert "ttg.fp4_to_fp" not in text
+
+
+@gluon.jit
+def _packed_arith_scalar_frontend_kernel(dtype: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+    value = ttgl.full([256], 1.0, dtype, layout)
+    result = blackwell.fma2(value, 2.0, 3.0)
+    ttgl.static_assert(result.dtype == dtype)
+
+
+@pytest.mark.parametrize("dtype", [ttgl.float32, ttgl.float16, ttgl.bfloat16])
+def test_packed_arith_scalar_broadcast_frontend(dtype):
+    module = run_parser(_packed_arith_scalar_frontend_kernel, *make_args(dtype), target=BLACKWELL_TARGET)
+    assert "ttng.packed_arith fma" in module.str_nodebug()
+
+
+@gluon.jit
+def _packed_arith_invalid_frontend_kernel(case: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+    value = ttgl.full([256], 1.0, ttgl.float32, layout)
+    if case == "operation":
+        blackwell.packed_arith("div", value, value)
+    elif case == "arity":
+        blackwell.packed_arith("fma", value, value)
+    elif case == "dtype":
+        blackwell.add2(value, value, dtype="float32")
+    else:
+        blackwell.add2(1.0, 2.0)
+
+
+@pytest.mark.parametrize(
+    "case, message",
+    [
+        ("operation", "unknown packed arithmetic operation"),
+        ("arity", "packed arithmetic fma expects 3 operands but got 2"),
+        ("dtype", "expected 'dtype' to be a dtype"),
+        ("scalars", "packed arithmetic requires at least one distributed tensor operand"),
+    ],
+)
+def test_packed_arith_frontend_errors(case, message):
+    with pytest.raises(CompilationError) as exc:
+        run_parser(_packed_arith_invalid_frontend_kernel, *make_args(case), target=BLACKWELL_TARGET)
+    assert message in str(exc.value.__cause__)
 
 
 @gluon.jit

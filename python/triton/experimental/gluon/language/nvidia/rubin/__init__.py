@@ -2,18 +2,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from triton.experimental.gluon.language._core import _unwrap_if_constexpr
+from triton.experimental.gluon.language._core import _unwrap_if_constexpr, builtin
 
 from ..blackwell import (
     TensorMemoryLayout,
     _TensorMemoryLinearLayout,
+    add2,
     allocate_tensor_memory,
     async_copy,
     async_store,
     clc,
     fence_async_shared,
-    float2,
+    fma2,
+    max2,
+    min2,
     mma_v2,
+    mul2,
+    packed_arith,
+    sub2,
     tensor_memory_descriptor,
     tensor_memory_descriptor_type,
     tcgen05_commit,
@@ -27,14 +33,24 @@ from ..blackwell import TensorMemoryScalesLayout as _BlackwellTensorMemoryScales
 from . import mbarrier
 
 __all__ = [
+    "add2",
+    "add4",
     "allocate_tensor_memory",
     "async_copy",
     "async_store",
     "clc",
     "fence_async_shared",
-    "float2",
+    "fma2",
+    "fma4",
     "mbarrier",
+    "max2",
+    "min2",
     "mma_v2",
+    "mul2",
+    "mul4",
+    "packed_arith",
+    "sub2",
+    "sub4",
     "tensor_memory_descriptor",
     "tensor_memory_descriptor_type",
     "tcgen05_commit",
@@ -47,6 +63,30 @@ __all__ = [
     "tma",
     "_TensorMemoryLinearLayout",
 ]
+
+
+@builtin
+def add4(lhs, rhs, dtype=None, _semantic=None):
+    """Add four-lane FP8 or FP4 operands with a Rubin packed instruction."""
+    return packed_arith("add", lhs, rhs, dtype=dtype, _semantic=_semantic)
+
+
+@builtin
+def sub4(lhs, rhs, dtype=None, _semantic=None):
+    """Subtract four-lane FP8 or FP4 operands with a Rubin packed instruction."""
+    return packed_arith("sub", lhs, rhs, dtype=dtype, _semantic=_semantic)
+
+
+@builtin
+def mul4(lhs, rhs, dtype=None, _semantic=None):
+    """Multiply four-lane FP8 or FP4 operands with a Rubin packed instruction."""
+    return packed_arith("mul", lhs, rhs, dtype=dtype, _semantic=_semantic)
+
+
+@builtin
+def fma4(lhs, rhs, acc, dtype=None, _semantic=None):
+    """Perform a Rubin four-lane packed FP8 or FP4 fused multiply-add."""
+    return packed_arith("fma", lhs, rhs, acc, dtype=dtype, _semantic=_semantic)
 
 
 @dataclass(frozen=True, eq=True)
