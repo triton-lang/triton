@@ -4,6 +4,8 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/TypeUtilities.h"
+#include "mlir/Interfaces/InferIntRangeInterface.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -11,6 +13,7 @@
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -32,6 +35,90 @@ namespace {
 static constexpr const char kGSanGlobalStateArgAttr[] = "tti.gsan_global_state";
 static constexpr const char kDisableSetMaxRegisterAttr[] =
     "tti.disable_setmaxregister";
+
+class OperationLocalIntegerRanges {
+public:
+  bool isProvablyInactive(Value mask) {
+    if (!mask)
+      return false;
+    auto range = infer(mask);
+    if (!range)
+      return false;
+    auto constant = range->getConstantValue();
+    return constant && constant->isZero();
+  }
+
+private:
+  std::optional<ConstantIntRanges> infer(Value value) {
+    if (auto known = knownRanges.find(value); known != knownRanges.end())
+      return known->second;
+    if (unknownRanges.contains(value) || !visiting.insert(value).second)
+      return std::nullopt;
+
+    auto remember = [&](std::optional<ConstantIntRanges> range)
+        -> std::optional<ConstantIntRanges> {
+      visiting.erase(value);
+      if (range)
+        knownRanges.try_emplace(value, *range);
+      else
+        unknownRanges.insert(value);
+      return range;
+    };
+
+    Type elementType = getElementTypeOrSelf(value.getType());
+    unsigned bitWidth = ConstantIntRanges::getStorageBitwidth(elementType);
+    Operation *operation = value.getDefiningOp();
+    if (!bitWidth || !operation)
+      return remember(std::nullopt);
+
+    if (auto constant = dyn_cast<arith::ConstantOp>(operation)) {
+      if (auto integer = dyn_cast<IntegerAttr>(constant.getValue()))
+        return remember(ConstantIntRanges::constant(integer.getValue()));
+      if (auto elements = dyn_cast<DenseIntElementsAttr>(constant.getValue());
+          elements && elements.isSplat())
+        return remember(
+            ConstantIntRanges::constant(elements.getSplatValue<APInt>()));
+      return remember(std::nullopt);
+    }
+
+    if (auto range = dyn_cast<tt::MakeRangeOp>(operation)) {
+      APInt first(bitWidth, range.getStartAttr().getInt(), /*isSigned=*/true);
+      APInt last(bitWidth, range.getEndAttr().getInt() - 1,
+                 /*isSigned=*/true);
+      return remember(ConstantIntRanges::range(first, last,
+                                               /*isSigned=*/true));
+    }
+
+    if (isa<tt::SplatOp, tt::BroadcastOp, tt::ExpandDimsOp, tt::ReshapeOp,
+            tt::TransOp, ttg::ConvertLayoutOp>(operation))
+      return remember(infer(operation->getOperand(0)));
+
+    auto inferrable = dyn_cast<InferIntRangeInterface>(operation);
+    if (!inferrable)
+      return remember(std::nullopt);
+
+    SmallVector<IntegerValueRange> operandRanges;
+    operandRanges.reserve(operation->getNumOperands());
+    for (Value operand : operation->getOperands()) {
+      if (auto range = infer(operand))
+        operandRanges.emplace_back(*range);
+      else
+        operandRanges.push_back(IntegerValueRange::getMaxRange(operand));
+    }
+
+    std::optional<ConstantIntRanges> result;
+    inferrable.inferResultRangesFromOptional(
+        operandRanges, [&](Value resultValue, const IntegerValueRange &range) {
+          if (resultValue == value && !range.isUninitialized())
+            result = range.getValue();
+        });
+    return remember(result);
+  }
+
+  DenseMap<Value, ConstantIntRanges> knownRanges;
+  DenseSet<Value> unknownRanges;
+  DenseSet<Value> visiting;
+};
 
 struct DescriptorInfo {
   Value base;
@@ -424,18 +511,25 @@ public:
       callOp.erase();
     }
 
+    OperationLocalIntegerRanges integerRanges;
     module.walk([&](Operation *op) {
       IRRewriter b(op);
       mlir::TypeSwitch<Operation *>(op)
           .Case([&](tt::LoadOp op) {
+            if (integerRanges.isProvablyInactive(op.getMask()))
+              return;
             ExperimentalGSanTensorAccessOp::create(
                 b, op.getLoc(), op.getPtr(), op.getMask(), /*isStore=*/false);
           })
           .Case([&](tt::StoreOp op) {
+            if (integerRanges.isProvablyInactive(op.getMask()))
+              return;
             ExperimentalGSanTensorAccessOp::create(
                 b, op.getLoc(), op.getPtr(), op.getMask(), /*isStore=*/true);
           })
           .Case([&](ttg::AsyncCopyGlobalToLocalOp op) {
+            if (integerRanges.isProvablyInactive(op.getMask()))
+              return;
             ExperimentalGSanTensorAccessOp::create(
                 b, op.getLoc(), op.getSrc(), op.getMask(), /*isStore=*/false);
           })

@@ -20,6 +20,62 @@ module attributes {"ttg.num-warps" = 1 : i32} {
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+
+module attributes {"ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: tt.func @range_proven_inactive
+  tt.func @range_proven_inactive(%ptrs: tensor<128x!tt.ptr<f32>, #blocked>,
+                                 %dynamic_mask: tensor<128xi1, #blocked>,
+                                 %other: tensor<128xf32, #blocked>,
+                                 %vals: tensor<128xf32, #blocked>) {
+    %zero = arith.constant dense<0> : tensor<128xi32, #blocked>
+    %range = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32, #blocked>
+    %out_of_range = arith.cmpi slt, %range, %zero : tensor<128xi32, #blocked>
+    %inactive = arith.andi %dynamic_mask, %out_of_range : tensor<128xi1, #blocked>
+    // CHECK-NOT: tti.experimental_gsan_tensor_access
+    // CHECK: tt.load
+    %loaded = tt.load %ptrs, %inactive, %other : tensor<128x!tt.ptr<f32>, #blocked>
+    // CHECK-NOT: tti.experimental_gsan_tensor_access
+    // CHECK: tt.store
+    tt.store %ptrs, %vals, %inactive : tensor<128x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: tt.func @range_proven_active
+  tt.func @range_proven_active(%ptrs: tensor<128x!tt.ptr<f32>, #blocked>,
+                               %other: tensor<128xf32, #blocked>,
+                               %vals: tensor<128xf32, #blocked>) {
+    %zero = arith.constant dense<0> : tensor<128xi32, #blocked>
+    %range = tt.make_range {start = -128 : i32, end = 0 : i32} : tensor<128xi32, #blocked>
+    %active = arith.cmpi slt, %range, %zero : tensor<128xi32, #blocked>
+    // CHECK: tti.experimental_gsan_tensor_access %{{.*}}, false, %{{.*}}
+    // CHECK-NEXT: tt.load
+    %loaded = tt.load %ptrs, %active, %other : tensor<128x!tt.ptr<f32>, #blocked>
+    // CHECK: tti.experimental_gsan_tensor_access %{{.*}}, true, %{{.*}}
+    // CHECK-NEXT: tt.store
+    tt.store %ptrs, %vals, %active : tensor<128x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: tt.func @range_partially_active
+  tt.func @range_partially_active(%ptrs: tensor<128x!tt.ptr<f32>, #blocked>,
+                                  %other: tensor<128xf32, #blocked>,
+                                  %vals: tensor<128xf32, #blocked>) {
+    %zero = arith.constant dense<0> : tensor<128xi32, #blocked>
+    %range = tt.make_range {start = -64 : i32, end = 64 : i32} : tensor<128xi32, #blocked>
+    %active = arith.cmpi slt, %range, %zero : tensor<128xi32, #blocked>
+    // CHECK: tti.experimental_gsan_tensor_access %{{.*}}, false, %{{.*}}
+    // CHECK-NEXT: tt.load
+    %loaded = tt.load %ptrs, %active, %other : tensor<128x!tt.ptr<f32>, #blocked>
+    // CHECK: tti.experimental_gsan_tensor_access %{{.*}}, true, %{{.*}}
+    // CHECK-NEXT: tt.store
+    tt.store %ptrs, %vals, %active : tensor<128x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: tt.func @instrumented_atomic_poll
   tt.func @instrumented_atomic_poll(%ptr: !tt.ptr<i32>, %expected: i32) {
