@@ -2297,6 +2297,22 @@ triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
   return amendedFuncOp;
 }
 
+void handlePointerContractArgs(triton::FuncOp funcOp,
+                               LLVM::LLVMFuncOp &llvmFuncOp) {
+  // Map the tt.noalias caller contract to LLVM noalias on pointer args. Arg
+  // indices align with llvmFuncOp's leading args (scratch args are appended
+  // after), matching handleArgPtrDatatype.
+  MLIRContext *ctx = funcOp.getContext();
+  FunctionType fty = funcOp.getFunctionType();
+  for (unsigned i = 0; i < fty.getNumInputs(); ++i) {
+    if (!isa<triton::PointerType>(fty.getInput(i)))
+      continue;
+    if (funcOp.getArgAttr(i, "tt.noalias"))
+      llvmFuncOp.setArgAttr(i, LLVM::LLVMDialect::getNoAliasAttrName(),
+                            UnitAttr::get(ctx));
+  }
+}
+
 void handleArgPtrDatatype(triton::FuncOp funcOp, LLVM::LLVMFuncOp &llvmFuncOp) {
   // The convertion from triton::PointerType to LLVM::LLVMPointerType losts
   // the pointee datatype information.
