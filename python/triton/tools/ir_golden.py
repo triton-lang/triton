@@ -282,6 +282,7 @@ def write_reproducer_shard(path: Path, reproductions: list[dict[str, Any]]) -> d
         raise GoldenCorpusError("A triton-opt reproducer shard cannot be empty")
     chunks = []
     outputs = []
+    logical_replays = 0
     for reproduction in reproductions:
         for key in ("id", "strategy", "language", "source", "expected"):
             if not isinstance(reproduction.get(key), str):
@@ -289,6 +290,14 @@ def write_reproducer_shard(path: Path, reproductions: list[dict[str, Any]]) -> d
         if reproduction["strategy"] not in STRATEGIES:
             raise GoldenCorpusError(f"Unsupported layout strategy: {reproduction['strategy']}")
         header = {key: reproduction[key] for key in ("id", "strategy", "language")}
+        covered = reproduction.get("strategies", [reproduction["strategy"]])
+        if not isinstance(covered, list) or not covered or any(strategy not in STRATEGIES for strategy in covered):
+            raise GoldenCorpusError("A triton-opt reproducer has invalid covered layout strategies")
+        if len(covered) != len(set(covered)) or reproduction["strategy"] not in covered:
+            raise GoldenCorpusError("A triton-opt reproducer has duplicate or inconsistent covered strategies")
+        if len(covered) > 1:
+            header["strategies"] = covered
+        logical_replays += len(covered)
         chunks.append("// IR-GOLDEN: " + json.dumps(header, sort_keys=True) + "\n" +
                       reproduction["source"].rstrip("\n"))
         outputs.append(normalize_ttgir(reproduction["expected"]))
@@ -307,8 +316,8 @@ def write_reproducer_shard(path: Path, reproductions: list[dict[str, Any]]) -> d
     checksum_path = path.with_name(shard_id + ".sha256")
     checksum_path.write_text(f"{expected_sha256}  -\n")
     return {
-        "id": shard_id, "path": path.name, "sha256": _sha256(stored), "bytes": len(stored), "replays":
-        len(reproductions), "expected_sha256": expected_sha256, "checksum": checksum_path.name
+        "id": shard_id, "path": path.name, "sha256": _sha256(stored), "bytes": len(stored), "replays": logical_replays,
+        "executions": len(reproductions), "expected_sha256": expected_sha256, "checksum": checksum_path.name
     }
 
 
@@ -589,15 +598,24 @@ def _verify_worker(arguments: tuple[str, dict[str, Any], tuple[str, ...]]) -> di
     }
 
 
-def _reproducer_worker(arguments: tuple[str, dict[str, Any], str]) -> dict[str, Any]:
-    root, descriptor, strategy = arguments
+def _reproducer_worker(arguments: tuple[str, dict[str, Any], tuple[str, ...]]) -> list[dict[str, Any]]:
+    root, descriptor, strategies = arguments
     corpus = _worker_corpus(root)
     case = GoldenCase.from_json(descriptor)
-    source, expected = triton_opt_reproducer(corpus.payload(case), strategy)
-    return {
-        "id": case.case_id, "strategy": strategy, "language": case.language, "family": case.family, "kernel":
-        case.kernel, "arch": case.arch, "source": source, "expected": expected
-    }
+    payload = corpus.payload(case)
+    reproductions = []
+    for strategy in strategies:
+        source, expected = triton_opt_reproducer(payload, strategy)
+        reproductions.append({
+            "id": case.case_id, "strategy": strategy, "language": case.language, "family": case.family, "kernel":
+            case.kernel, "arch": case.arch, "source": source, "expected": expected
+        })
+    if len(reproductions) == 2 and case.language == "gluon" and reproductions[0]["source"] == reproductions[1][
+            "source"] and normalize_ttgir(reproductions[0]["expected"]) == normalize_ttgir(
+                reproductions[1]["expected"]):
+        reproductions[0]["strategies"] = list(strategies)
+        return reproductions[:1]
+    return reproductions
 
 
 def _replay_reproducer_worker(arguments: tuple[str, dict[str, Any], str]) -> dict[str, Any]:
@@ -616,14 +634,15 @@ def _descriptor(case: GoldenCase) -> dict[str, Any]:
 
 def export_triton_opt_reproducers(corpus: GoldenCorpus, selected: list[GoldenCase], destination: str | Path, *,
                                   strategies: tuple[str, ...] = STRATEGIES, workers: int = 1,
-                                  max_uncompressed_bytes: int = 8_000_000, compress: bool = False) -> dict[str, Any]:
+                                  max_uncompressed_bytes: int = 8_000_000, max_replays_per_shard: int = 128,
+                                  compress: bool = False) -> dict[str, Any]:
     """Freeze executable pass pipelines without exposing production IR in Triton."""
     root = Path(destination)
     if root.exists() and not root.is_dir():
         raise GoldenCorpusError(f"The triton-opt destination is not a directory: {root}")
     if (root / "manifest.json").exists():
         raise GoldenCorpusError(f"The triton-opt destination already contains a frozen manifest: {root}")
-    if workers < 1 or max_uncompressed_bytes < 1:
+    if workers < 1 or max_uncompressed_bytes < 1 or max_replays_per_shard < 1:
         raise GoldenCorpusError("Triton-opt export requires positive worker and shard limits")
     for strategy in strategies:
         if strategy not in STRATEGIES:
@@ -648,12 +667,17 @@ def export_triton_opt_reproducers(corpus: GoldenCorpus, selected: list[GoldenCas
             flush(reproductions[:midpoint])
             flush(reproductions[midpoint:])
             return
-        descriptor["languages"] = dict(collections.Counter(item["language"] for item in reproductions))
-        descriptor["strategies"] = dict(collections.Counter(item["strategy"] for item in reproductions))
+        descriptor["languages"] = dict(
+            collections.Counter(item["language"]
+                                for item in reproductions
+                                for _ in item.get("strategies", [item["strategy"]])))
+        descriptor["strategies"] = dict(
+            collections.Counter(strategy for item in reproductions
+                                for strategy in item.get("strategies", [item["strategy"]])))
         descriptor["architectures"] = sorted({item["arch"] for item in reproductions})
         descriptors.append(descriptor)
 
-    jobs = ((str(corpus.root), _descriptor(case), strategy) for case in selected for strategy in strategies)
+    jobs = ((str(corpus.root), _descriptor(case), strategies) for case in selected)
     if workers == 1:
         results = map(_reproducer_worker, jobs)
         executor = contextlib.nullcontext()
@@ -664,18 +688,20 @@ def export_triton_opt_reproducers(corpus: GoldenCorpus, selected: list[GoldenCas
         if pool is not None:
             results = pool.map(_reproducer_worker, jobs, chunksize=4)
         assert results is not None
-        for reproduction in results:
-            identity = (reproduction["id"], reproduction["strategy"])
-            if identity in completed:
-                raise GoldenCorpusError(f"Duplicate triton-opt replay case: {identity}")
-            completed.add(identity)
-            size = len(reproduction["source"].encode())
-            if pending and pending_bytes + size > max_uncompressed_bytes:
-                flush(pending)
-                pending = []
-                pending_bytes = 0
-            pending.append(reproduction)
-            pending_bytes += size
+        for reproductions in results:
+            for reproduction in reproductions:
+                for strategy in reproduction.get("strategies", [reproduction["strategy"]]):
+                    identity = (reproduction["id"], strategy)
+                    if identity in completed:
+                        raise GoldenCorpusError(f"Duplicate triton-opt replay case: {identity}")
+                    completed.add(identity)
+                size = len(reproduction["source"].encode())
+                if pending and (pending_bytes + size > max_uncompressed_bytes or len(pending) >= max_replays_per_shard):
+                    flush(pending)
+                    pending = []
+                    pending_bytes = 0
+                pending.append(reproduction)
+                pending_bytes += size
         flush(pending)
     expected_replays = len(selected) * len(strategies)
     if len(completed) != expected_replays:
@@ -683,7 +709,8 @@ def export_triton_opt_reproducers(corpus: GoldenCorpus, selected: list[GoldenCas
     source_manifest = (corpus.root / "manifest.json").read_bytes()
     manifest = {
         "schema_version": SCHEMA_VERSION, "source_manifest_sha256": _sha256(source_manifest), "cases": len(selected),
-        "replays": expected_replays, "strategies": list(strategies), "shards": descriptors
+        "replays": expected_replays, "executions": sum(item["executions"] for item in descriptors), "strategies":
+        list(strategies), "max_replays_per_shard": max_replays_per_shard, "shards": descriptors
     }
     manifest_bytes = _json_bytes(manifest)
     if len(manifest_bytes) >= MAX_SHARD_BYTES:
@@ -731,7 +758,10 @@ def main(argv: list[str] | None = None) -> int:
         strategies = STRATEGIES if args.strategy == "both" else (args.strategy, )
         manifest = export_triton_opt_reproducers(corpus, selected, args.output, strategies=strategies,
                                                  workers=args.workers, compress=args.compress_opt)
-        report = {"cases": manifest["cases"], "replays": manifest["replays"], "shards": len(manifest["shards"])}
+        report = {
+            "cases": manifest["cases"], "replays": manifest["replays"], "executions": manifest["executions"], "shards":
+            len(manifest["shards"])
+        }
     elif args.command == "replay-opt":
         if args.output is None:
             parser.error("replay-opt requires --output")
@@ -751,7 +781,8 @@ def main(argv: list[str] | None = None) -> int:
             with concurrent.futures.ProcessPoolExecutor(max_workers=args.workers) as executor:
                 results = list(executor.map(_replay_reproducer_worker, jobs, chunksize=1))
         report = {
-            "cases": manifest["cases"], "replays": manifest["replays"], "shards": len(results), "workers": args.workers
+            "cases": manifest["cases"], "replays": manifest["replays"], "executions":
+            manifest.get("executions", manifest["replays"]), "shards": len(results), "workers": args.workers
         }
     else:
         strategies = STRATEGIES if args.strategy == "both" else (args.strategy, )

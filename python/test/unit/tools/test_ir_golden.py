@@ -11,9 +11,10 @@ from types import SimpleNamespace
 import pytest
 
 from triton.tools.ir_golden import (SCHEMA_VERSION, GoldenCorpus, GoldenCorpusError, capture_compilations,
-                                    compilation_capture_listener, freeze_payload, function_names, ir_metrics, main,
-                                    normalize_source, normalize_ttgir, replay_reproducer_shard, triton_opt_reproducer,
-                                    ttgir_dependency_signature, verify_payload, write_reproducer_shard, write_shard)
+                                    compilation_capture_listener, export_triton_opt_reproducers, freeze_payload,
+                                    function_names, ir_metrics, main, normalize_source, normalize_ttgir,
+                                    replay_reproducer_shard, triton_opt_reproducer, ttgir_dependency_signature,
+                                    verify_payload, write_reproducer_shard, write_shard)
 
 TARGET = {"backend": "cuda", "arch": 80, "warp_size": 32}
 TTIR = 'module { tt.func public @copy(%arg0: !tt.ptr<f32>) { tt.return } }'
@@ -204,6 +205,46 @@ def test_triton_opt_reproducer_canonicalizes_independent_deallocations(tmp_path:
     assert descriptor["expected_sha256"] == hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def test_triton_opt_reproducer_covers_identical_layout_strategies_once(tmp_path: Path) -> None:
+    payload = freeze_payload(make_payload("gluon"))
+    source, expected = triton_opt_reproducer(payload, "legacy")
+    path = tmp_path / "synthetic.mlir"
+    descriptor = write_reproducer_shard(path, [{
+        "id": payload["id"], "strategy": "legacy", "strategies": ["legacy", "global"], "language": "gluon", "source":
+        source, "expected": expected
+    }])
+    assert descriptor["executions"] == 1
+    assert descriptor["replays"] == 2
+    assert json.loads(
+        path.read_text().splitlines()[0].removeprefix("// IR-GOLDEN: "))["strategies"] == ["legacy", "global"]
+
+
+def test_triton_opt_instrumented_gluon_preserves_distinct_layout_pipelines(tmp_path: Path) -> None:
+    payload = make_payload("gluon")
+    payload["metadata"]["instrumentation_mode"] = "consan"
+    payload = freeze_payload(payload)
+    reproductions = []
+    for strategy in ("legacy", "global"):
+        source, expected = triton_opt_reproducer(payload, strategy)
+        reproductions.append(
+            {"id": payload["id"], "strategy": strategy, "language": "gluon", "source": source, "expected": expected})
+    assert "tritongpu-remove-layout-conversions" in reproductions[0]["source"]
+    assert "tritongpu-optimize-layouts" in reproductions[1]["source"]
+    descriptor = write_reproducer_shard(tmp_path / "instrumented.mlir", reproductions)
+    assert descriptor["executions"] == descriptor["replays"] == 2
+
+
+def test_triton_opt_export_balances_pipeline_batches(tmp_path: Path) -> None:
+    corpus_path = tmp_path / "corpus"
+    corpus_path.mkdir()
+    corpus = make_corpus(corpus_path)
+    manifest = export_triton_opt_reproducers(corpus, corpus.cases, tmp_path / "balanced", max_replays_per_shard=1)
+    assert manifest["replays"] == 4
+    assert manifest["executions"] == 3
+    assert len(manifest["shards"]) == 3
+    assert max(shard["executions"] for shard in manifest["shards"]) == 1
+
+
 def test_triton_opt_export_and_replay_commands(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     executable = os.environ.get("TRITON_OPT") or shutil.which("triton-opt")
     if executable is None:
@@ -213,14 +254,14 @@ def test_triton_opt_export_and_replay_commands(tmp_path: Path, capsys: pytest.Ca
     make_corpus(corpus)
     destination = tmp_path / "reproducers"
     assert main(["export-opt", "--corpus", str(corpus), "--output", str(destination), "--workers", "1"]) == 0
-    assert json.loads(capsys.readouterr().out) == {"cases": 2, "replays": 4, "shards": 1}
+    assert json.loads(capsys.readouterr().out) == {"cases": 2, "replays": 4, "executions": 3, "shards": 1}
     assert (destination / "replay-00000.mlir").is_file()
     assert main([
         "replay-opt", "--corpus",
         str(corpus), "--output",
         str(destination), "--workers", "1", "--triton-opt", executable
     ]) == 0
-    assert json.loads(capsys.readouterr().out) == {"cases": 2, "replays": 4, "shards": 1, "workers": 1}
+    assert json.loads(capsys.readouterr().out) == {"cases": 2, "replays": 4, "executions": 3, "shards": 1, "workers": 1}
 
 
 def test_capture_listener_records_cache_hits_and_misses(tmp_path: Path) -> None:
