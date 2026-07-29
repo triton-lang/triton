@@ -111,6 +111,9 @@ private:
     Attribute proposedEncoding;
   };
 
+  Attribute getCachedSourceEncoding(Operation *op, Attribute encoding) const;
+  Attribute getCachedDestinationEncoding(Operation *op,
+                                         Attribute encoding) const;
   bool canAssignEncoding(Value value, Attribute encoding,
                          const DenseMap<Value, Attribute> &assignments) const;
   Attribute
@@ -142,6 +145,10 @@ private:
   DenseSet<Value> fixedLayouts;
   // original encodings of tensor values rewritten in place.
   DenseMap<Value, Attribute> originalEncodings;
+  mutable DenseMap<std::pair<Operation *, Attribute>, Attribute>
+      inferredSourceEncodings;
+  mutable DenseMap<std::pair<Operation *, Attribute>, Attribute>
+      inferredDestinationEncodings;
   mutable DenseMap<std::pair<Type, Type>, uint64_t> layoutTransitionCosts;
   mutable DenseMap<std::pair<Type, Attribute>, uint64_t>
       layoutRegisterPressureCosts;
@@ -820,6 +827,25 @@ uint64_t LayoutPropagation::getLayoutExecutionWeight(Operation *op) const {
   return weight;
 }
 
+Attribute LayoutPropagation::getCachedSourceEncoding(Operation *op,
+                                                     Attribute encoding) const {
+  auto [cached, inserted] = inferredSourceEncodings.try_emplace(
+      std::pair<Operation *, Attribute>{op, encoding}, Attribute{});
+  if (inserted)
+    cached->second = inferSrcEncoding(op, encoding);
+  return cached->second;
+}
+
+Attribute
+LayoutPropagation::getCachedDestinationEncoding(Operation *op,
+                                                Attribute encoding) const {
+  auto [cached, inserted] = inferredDestinationEncodings.try_emplace(
+      std::pair<Operation *, Attribute>{op, encoding}, Attribute{});
+  if (inserted)
+    cached->second = inferDstEncoding(op, encoding);
+  return cached->second;
+}
+
 bool LayoutPropagation::canAssignEncoding(
     Value value, Attribute encoding,
     const DenseMap<Value, Attribute> &assignments) const {
@@ -860,14 +886,14 @@ bool LayoutPropagation::canAssignEncoding(
       Value sibling = result.getResultNumber() == 0 ? splitOp.getOutRHS()
                                                     : splitOp.getOutLHS();
       return getAssignedEncoding(sibling, assignments) == encoding &&
-             static_cast<bool>(inferSrcEncoding(splitOp, encoding));
+             static_cast<bool>(getCachedSourceEncoding(splitOp, encoding));
     }
     if (auto reduceOp = dyn_cast<ReduceOp>(result.getOwner())) {
       for (Value sibling : reduceOp->getResults())
         if (isa<RankedTensorType>(sibling.getType()) &&
             getAssignedEncoding(sibling, assignments) != encoding)
           return false;
-      return static_cast<bool>(inferSrcEncoding(reduceOp, encoding));
+      return static_cast<bool>(getCachedSourceEncoding(reduceOp, encoding));
     }
   }
 
@@ -880,14 +906,15 @@ bool LayoutPropagation::canAssignEncoding(
   if (auto constant = dyn_cast<arith::ConstantOp>(op))
     return isa<DenseElementsAttr>(constant.getValue());
   if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(op) ||
-      canUseResultEncoding(op, encoding) || inferSrcEncoding(op, encoding))
+      canUseResultEncoding(op, encoding) ||
+      getCachedSourceEncoding(op, encoding))
     return true;
 
   for (Value operand : op->getOperands()) {
     if (!isa<RankedTensorType>(operand.getType()))
       continue;
-    if (inferDstEncoding(op, getAssignedEncoding(operand, assignments)) ==
-        encoding)
+    if (getCachedDestinationEncoding(
+            op, getAssignedEncoding(operand, assignments)) == encoding)
       return true;
   }
   return false;
@@ -962,7 +989,8 @@ SmallVector<Attribute, 4> LayoutPropagation::getUseEncodings(
     Attribute resultEncoding = getAssignedEncoding(result, assignments);
     Attribute operandEncoding = isa<ConvertLayoutOp>(user)
                                     ? resultEncoding
-                                    : inferSrcEncoding(user, resultEncoding);
+                                    : getCachedSourceEncoding(user,
+                                                              resultEncoding);
     if (operandEncoding && !llvm::is_contained(encodings, operandEncoding))
       encodings.push_back(operandEncoding);
   }
@@ -1016,7 +1044,8 @@ uint64_t LayoutPropagation::getAssignmentCost(
 
   Attribute operandEncoding = isa<ConvertLayoutOp>(definingOp)
                                   ? encoding
-                                  : inferSrcEncoding(definingOp, encoding);
+                                  : getCachedSourceEncoding(definingOp,
+                                                            encoding);
   if (!operandEncoding)
     return cost;
 
@@ -1195,7 +1224,7 @@ bool LayoutPropagation::buildGlobalComponentProposal(
       if (isLayoutComponent(producer) && !isFixedLayoutBoundary(producer)) {
         Attribute source = isa<ConvertLayoutOp>(producer)
                                ? candidate
-                               : inferSrcEncoding(producer, candidate);
+                               : getCachedSourceEncoding(producer, candidate);
         if (source) {
           for (Value operand : producer->getOperands())
             if (!request(operand, source))
@@ -1255,7 +1284,8 @@ bool LayoutPropagation::buildGlobalComponentProposal(
 
       Attribute destination = isa<ConvertLayoutOp>(user)
                                   ? candidate
-                                  : inferDstEncoding(user, candidate);
+                                  : getCachedDestinationEncoding(user,
+                                                                 candidate);
       if (!destination)
         continue;
 
