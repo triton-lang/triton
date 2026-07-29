@@ -362,8 +362,29 @@ Value reshapeAndBroadcast(OpBuilder &b, Location loc, Value tensor,
     reshapeShape[dstDim] = tensorType.getShape()[srcDim];
   }
 
-  if (!llvm::equal(tensorType.getShape(), reshapeShape))
-    tensor = ReshapeOp::create(b, loc, reshapeShape, tensor);
+  if (!llvm::equal(tensorType.getShape(), reshapeShape)) {
+    Attribute expandedEncoding = tensorType.getEncoding();
+    bool canExpandSlices = static_cast<bool>(expandedEncoding);
+    for (int dim = 0; canExpandSlices && dim < dstType.getRank(); ++dim) {
+      if (llvm::is_contained(keptDims, dim))
+        continue;
+      auto sliceEncoding = dyn_cast<SliceEncodingAttr>(expandedEncoding);
+      if (!sliceEncoding || sliceEncoding.getDim() != dim) {
+        canExpandSlices = false;
+        break;
+      }
+      expandedEncoding = sliceEncoding.getParent();
+    }
+
+    if (canExpandSlices && expandedEncoding == dstType.getEncoding()) {
+      for (int dim = 0; dim < dstType.getRank(); ++dim) {
+        if (!llvm::is_contained(keptDims, dim))
+          tensor = ExpandDimsOp::create(b, loc, tensor, dim);
+      }
+    } else {
+      tensor = ReshapeOp::create(b, loc, reshapeShape, tensor);
+    }
+  }
 
   tensorType = cast<RankedTensorType>(tensor.getType());
   auto broadcastSrcType = RankedTensorType::get(

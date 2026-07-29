@@ -9,6 +9,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK-DAG: #[[BUFS_L:.*]] = #ttg.linear<{register = [], lane = {{\[}}[0], [0], [0], [0], [0]], warp = [], block = []}>
   // CHECK-DAG: #[[BUFS_THREADS_L:.*]] = #ttg.linear<{register = [], lane = {{\[}}[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]], warp = [], block = []}>
   // CHECK-DAG: #[[BUFS_BARS_L:.*]] = #ttg.linear<{register = [], lane = {{\[}}[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [], block = []}>
+  // CHECK-LABEL: tt.func private @__triton_consan_check_all_active_waiting
+  // CHECK: %[[SLICE_RANGE:.*]] = tt.make_range
+  // CHECK: %[[SLICED_OFFSET:.*]] = arith.muli %[[SLICE_RANGE]]
+  // CHECK-NOT: tt.reshape
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK-NEXT: %[[EXPANDED_ROW:.*]] = tt.expand_dims %[[SLICED_OFFSET]] {axis = 1 : i32}
+  // CHECK-NEXT: tt.expand_dims %[[EXPANDED_ROW]] {axis = 2 : i32}
   // CHECK-LABEL: tt.func private @__triton_consan_verify_write_visibility_noalias
   // CHECK: %[[WRITE_VISIBILITY:.*]] = tt.load
   // CHECK: arith.cmpi eq, %[[WRITE_VISIBILITY]],
