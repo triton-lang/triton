@@ -28,9 +28,6 @@ __all__ = [
     "async_atomic_min",
     "async_atomic_or",
     "async_atomic_xor",
-    "async_copy_global_to_shared",
-    "async_copy_global_to_shared_im2col",
-    "async_copy_shared_to_global",
     "async_gather",
     "async_load",
     "async_load_im2col",
@@ -99,8 +96,3 @@ def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, 
         None,
         report_validity,
     )
-
-
-async_copy_global_to_shared = async_load
-async_copy_global_to_shared_im2col = async_load_im2col
-async_copy_shared_to_global = async_store
