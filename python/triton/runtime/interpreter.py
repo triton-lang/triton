@@ -734,6 +734,16 @@ class InterpreterBuilder:
         # But unexpectedly int64 values are being returned causing
         # tl.store to write 8 bytes instead of 4 bytes which lead to silent data corruption
         dummy_weights = np.ones_like(data.data, dtype=data.data.dtype)
+        # np.histogram takes the dtype of its result from `weights` and otherwise
+        # defaults to int64, which made tl.store write 8 bytes instead of 4 and
+        # silently corrupt the neighbouring data. Deriving the weights dtype from
+        # the *input* instead fixed that, but overshot for sub-32-bit integer
+        # inputs: the count itself was then accumulated in int8/int16 and wrapped
+        # (a true count of 300 came back as 44 for an int8 input).
+        # tl.histogram always yields an int32 result regardless of the input dtype
+        # (see semantic.py), and the GPU accumulates with an i32 atomic add, so
+        # count in int32 here to match both.
+        dummy_weights = np.ones_like(data.data, dtype=np.int32)
 
         # force all masked elements to zero
         data = np.where(mask.data, data.data, np.zeros_like(data.data))
