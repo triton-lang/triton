@@ -2382,6 +2382,8 @@ void FunctionBuilder::createPublishClusterVisibilityCall(
       {writeVisibilityType, readVisibilityType, (uint64_t)partitionScoped},
       [writeVisibilityType, readVisibilityType,
        numBaseThreads = auxData.threadLayout.numBaseThreads,
+       onlySynchronousThreads = auxData.threadLayout.totalNumThreads ==
+                                auxData.threadLayout.numBaseThreads,
        partitionScoped](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value pred = entryBlock->getArgument(0);
         Value threadVal = entryBlock->getArgument(1);
@@ -2419,6 +2421,8 @@ void FunctionBuilder::createPublishClusterVisibilityCall(
               zeroWrites);
           syncWrites = arith::SelectOp::create(fb, hasThreadWrite, peersMask,
                                                zeroWrites);
+        } else if (onlySynchronousThreads) {
+          syncWrites = writeVisibility;
         } else {
           // Top-level cluster barriers represent all synchronous threads. A
           // base-thread bit distinguishes synchronous work from async-only
@@ -2456,6 +2460,11 @@ void FunctionBuilder::createPublishClusterVisibilityCall(
               fb, threadPeersMaskVal, readVisibilityType, /*columnDim=*/3);
           readsForCluster = arith::SelectOp::create(fb, peerColumns,
                                                     readsForThread, zeroReads);
+        } else if (onlySynchronousThreads) {
+          readsForCluster = reduce<arith::OrIOp>(fb, readVisibility,
+                                                 {2, 3, 4});
+          readsForCluster = convertAndBroadcast(fb, readsForCluster, {0, 1},
+                                                readVisibilityType);
         } else {
           uint64_t baseThreadMask = (1ULL << numBaseThreads) - 1;
           Value readBaseMask = tti::createConstIntTensor(
