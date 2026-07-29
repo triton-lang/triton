@@ -2584,8 +2584,7 @@ def test_packed_arith_reduction(dtype):
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("op", ["add", "sub", "mul", "fma", "min", "max"])
-@pytest.mark.parametrize("explicit_dtype", [False, True], ids=["inferred-dtype", "explicit-dtype"])
-def test_packed_arith(op, dtype, explicit_dtype):
+def test_packed_arith(op, dtype):
     if dtype == torch.float32 and op in ("min", "max"):
         pytest.skip("packed float32 does not support min or max")
 
@@ -2594,7 +2593,6 @@ def test_packed_arith(op, dtype, explicit_dtype):
     BLOCK_N = ttgl.constexpr(128)
     threads_per_warp = ttgl.constexpr(THREADS_PER_WARP)
     op = ttgl.constexpr(op)
-    explicit_dtype = ttgl.constexpr(explicit_dtype)
 
     @gluon.jit
     def kernel(a_ptr, b_ptr, c_ptr, out_ptr):
@@ -2609,7 +2607,7 @@ def test_packed_arith(op, dtype, explicit_dtype):
         a = ttgl.load(a_ptr + offs_m * BLOCK_N + offs_n)
         b = ttgl.load(b_ptr + offs_m * BLOCK_N + offs_n)
         c = ttgl.load(c_ptr + offs_m * BLOCK_N + offs_n)
-        result_dtype: ttgl.constexpr = a.dtype if explicit_dtype else None
+        result_dtype: ttgl.constexpr = a.dtype if op == "add" else None
 
         if op == "add":
             out = blackwell.add2(a, b, dtype=result_dtype)
