@@ -78,24 +78,17 @@ jobs:
         echo "LLVM installation directory name: ${INSTALL_DIR}"
         echo "llvm_install_dir=${INSTALL_DIR}" >> ${GITHUB_ENV}
 
-    - name: Check LLVM Build Availability
+    - name: Check LLVM Build Does Not Exist
       shell: bash
       run: |
         URL="https://oaitriton.blob.core.windows.net/public/llvm-builds/${{ env.llvm_install_dir }}.tar.gz"
         HTTP_STATUS="$(curl --head --silent --show-error --output /dev/null --write-out "%{http_code}" "${URL}")"
-        if [ "${HTTP_STATUS}" = "200" ]; then
-          echo "LLVM build already exists: ${URL}"
-          echo "LLVM_BUILD_EXISTS=true" >> "${GITHUB_ENV}"
-        elif [ "${HTTP_STATUS}" = "404" ]; then
-          echo "LLVM build does not exist yet: ${URL}"
-          echo "LLVM_BUILD_EXISTS=false" >> "${GITHUB_ENV}"
-        else
-          echo "LLVM build availability could not be checked: ${URL} returned ${HTTP_STATUS}"
+        if [ "${HTTP_STATUS}" != "404" ]; then
+          echo "LLVM build already exists or could not be checked: ${URL} returned ${HTTP_STATUS}"
           exit 1
         fi
 
     - name: Checkout LLVM
-      if: env.LLVM_BUILD_EXISTS != 'true'
       uses: actions/checkout@v6
       with:
         repository: ${{ env.llvm_repository }}
@@ -103,19 +96,18 @@ jobs:
         ref: ${{ env.llvm_commit_hash }}
 
     - name: Set up Python
-      if: env.LLVM_BUILD_EXISTS != 'true' && matrix.config.target-os != 'almalinux'
+      if: matrix.config.target-os != 'almalinux'
       uses: actions/setup-python@v6
       with:
         python-version: 3.11
 
     - name: Set up MSVC
-      if: env.LLVM_BUILD_EXISTS != 'true' && matrix.config.target-os == 'windows'
+      if: matrix.config.target-os == 'windows'
       uses: ilammy/msvc-dev-cmd@v1.13.0
       with:
         arch: ${{ matrix.config.msvc_arch }}
 
     - name: Install Prerequisites
-      if: env.LLVM_BUILD_EXISTS != 'true'
       shell: bash
       run: |
         python3 -m pip install cmake ninja sccache
@@ -123,7 +115,6 @@ jobs:
         rm -rf ${{ env.SCCACHE_DIR }}/*
 
     - name: Enable Cache
-      if: env.LLVM_BUILD_EXISTS != 'true'
       uses: actions/cache@v4
       with:
         path: ${{ env.SCCACHE_DIR }}
@@ -131,7 +122,7 @@ jobs:
         restore-keys: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-
 
     - name: Free disk space on Ubuntu
-      if: env.LLVM_BUILD_EXISTS != 'true' && matrix.config.arch == 'x64' && matrix.config.target-os == 'ubuntu'
+      if: matrix.config.arch == 'x64' && matrix.config.target-os == 'ubuntu'
       run: |
         df -h
         echo "Removing large packages"
@@ -142,7 +133,7 @@ jobs:
         df -h
 
     - name: Configure, Build, Test, and Install LLVM (Ubuntu, CentOS, and macOS)
-      if: env.LLVM_BUILD_EXISTS != 'true' && (matrix.config.target-os == 'ubuntu' || matrix.config.target-os == 'almalinux' || matrix.config.target-os == 'macos')
+      if: matrix.config.target-os == 'ubuntu' || matrix.config.target-os == 'almalinux' || matrix.config.target-os == 'macos'
       run: >
         cmake -GNinja -Bllvm-project/build
         -DCMAKE_BUILD_TYPE=Release
@@ -167,7 +158,7 @@ jobs:
         tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
 
     - name: Configure, Build, Test, and Install LLVM (Windows)
-      if: env.LLVM_BUILD_EXISTS != 'true' && matrix.config.target-os == 'windows'
+      if: matrix.config.target-os == 'windows'
       run: >
         cmake -GNinja -Bllvm-project/build
         -DCMAKE_BUILD_TYPE=Release
@@ -191,7 +182,6 @@ jobs:
 
 
     - name: Upload Build Artifacts
-      if: env.LLVM_BUILD_EXISTS != 'true'
       uses: actions/upload-artifact@v7
       with:
         name: llvm-${{ matrix.config.target-os }}-${{ matrix.config.arch }}
@@ -199,7 +189,7 @@ jobs:
           ${{ github.workspace }}/llvm-*-${{ matrix.config.target-os }}-${{ matrix.config.arch }}-*.tar.gz
 
     - name: Azure login
-      if: env.LLVM_BUILD_EXISTS != 'true' && github.repository == 'triton-lang/triton' && github.ref_name == 'main'
+      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'main' }}
       uses: azure/login@v2
       with:
         client-id: ${{ secrets.AZURE_CLIENT_ID_LLVM }}
@@ -207,7 +197,7 @@ jobs:
         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_LLVM }}
 
     - name: Upload LLVM Artifacts to Azure
-      if: env.LLVM_BUILD_EXISTS != 'true' && github.repository == 'triton-lang/triton' && github.ref_name == 'main'
+      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'main' }}
       shell: bash -el {0}
       run: |
         sha256sum "${{ env.llvm_install_dir }}.tar.gz"
@@ -218,12 +208,11 @@ jobs:
         echo "Blob URL: ${URL}"
 
     - name: Azure Logout
-      if: env.LLVM_BUILD_EXISTS != 'true' && github.repository == 'triton-lang/triton' && github.ref_name == 'main'
+      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'main' }}
       run: |
         az logout
         az cache purge
         az account clear
 
     - name: Dump Sccache Statistics
-      if: env.LLVM_BUILD_EXISTS != 'true'
       run: sccache --show-stats
