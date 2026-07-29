@@ -534,10 +534,15 @@ public:
                 b, op.getLoc(), op.getSrc(), op.getMask(), /*isStore=*/false);
           })
           .Case([&](ttng::AsyncTMACopyGlobalToLocalOp op) {
+            if (integerRanges.isProvablyInactive(op.getPred()))
+              return;
             instrumentAsyncTMALoad(op);
           })
-          .Case(
-              [&](ttng::AsyncTMAGatherOp op) { instrumentAsyncTMAGather(op); })
+          .Case([&](ttng::AsyncTMAGatherOp op) {
+            if (integerRanges.isProvablyInactive(op.getPred()))
+              return;
+            instrumentAsyncTMAGather(op);
+          })
           .Case([&](ttng::AsyncTMACopyLocalToGlobalOp op) {
             instrumentAsyncTMAStore(op, op.getDesc(), op.getCoord());
           })
