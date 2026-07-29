@@ -681,6 +681,205 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#wide = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#narrow = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:103", "ttg.threads-per-warp" = 32 : i32} {
+  // A scalar result has no distributed layout. The reduction still needs to
+  // account for lane communication, but does not require an input conversion.
+  //
+  // BASELINE-LABEL: @predicate_reduction_avoids_shared_conversion
+  // BASELINE-NOT: ttg.convert_layout
+  // BASELINE: arith.extui
+  // BASELINE: "tt.reduce"
+  // BASELINE-NOT: ttg.convert_layout
+  // BASELINE: tt.return
+  //
+  // OPTIMIZED-LABEL: @predicate_reduction_avoids_shared_conversion
+  // OPTIMIZED-NOT: ttg.convert_layout
+  // OPTIMIZED: arith.extui
+  // OPTIMIZED: "tt.reduce"
+  // OPTIMIZED-NOT: ttg.convert_layout
+  // OPTIMIZED: tt.return
+  tt.func public @predicate_reduction_avoids_shared_conversion(
+      %predicate: tensor<4096xi1, #wide>) -> i32 {
+    %converted = ttg.convert_layout %predicate : tensor<4096xi1, #wide> -> tensor<4096xi1, #narrow>
+    %extended = arith.extui %converted : tensor<4096xi1, #narrow> to tensor<4096xi32, #narrow>
+    %result = "tt.reduce"(%extended) <{axis = 0 : i32}> ({
+    ^bb0(%lhs: i32, %rhs: i32):
+      %sum = arith.addi %lhs, %rhs : i32
+      tt.reduce.return %sum : i32
+    }) : (tensor<4096xi32, #narrow>) -> i32
+    tt.return %result : i32
+  }
+
+  // Scalar consumers must not weaken the atomic flag's fixed memory contract.
+  //
+  // BASELINE-LABEL: @predicate_comparison_reduction_avoids_shared_conversion
+  // BASELINE: arith.cmpf
+  // BASELINE-NOT: ttg.convert_layout
+  // BASELINE: arith.extui
+  // BASELINE: "tt.reduce"
+  // BASELINE: tt.atomic_rmw or
+  // BASELINE: tt.return
+  //
+  // OPTIMIZED-LABEL: @predicate_comparison_reduction_avoids_shared_conversion
+  // OPTIMIZED: arith.cmpf
+  // OPTIMIZED-NOT: ttg.convert_layout
+  // OPTIMIZED: arith.extui
+  // OPTIMIZED: "tt.reduce"
+  // OPTIMIZED: tt.atomic_rmw or
+  // OPTIMIZED: tt.return
+  tt.func public @predicate_comparison_reduction_avoids_shared_conversion(
+      %lhs: tensor<4096xbf16, #wide>,
+      %rhs: tensor<4096xbf16, #wide>,
+      %flag: !tt.ptr<i32>) {
+    %ones = arith.constant dense<true> : tensor<4096xi1, #wide>
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    %enabled = arith.constant true
+    %lhs_f32 = arith.extf %lhs : tensor<4096xbf16, #wide> to tensor<4096xf32, #wide>
+    %rhs_f32 = arith.extf %rhs : tensor<4096xbf16, #wide> to tensor<4096xf32, #wide>
+    %equal = arith.cmpf oeq, %lhs_f32, %rhs_f32 : tensor<4096xf32, #wide>
+    %different = arith.xori %equal, %ones : tensor<4096xi1, #wide>
+    %converted = ttg.convert_layout %different : tensor<4096xi1, #wide> -> tensor<4096xi1, #narrow>
+    %extended = arith.extui %converted : tensor<4096xi1, #narrow> to tensor<4096xi32, #narrow>
+    %result = "tt.reduce"(%extended) <{axis = 0 : i32}> ({
+    ^bb0(%lhs_sum: i32, %rhs_sum: i32):
+      %sum = arith.addi %lhs_sum, %rhs_sum : i32
+      tt.reduce.return %sum : i32
+    }) : (tensor<4096xi32, #narrow>) -> i32
+    %any = arith.cmpi ne, %result, %zero : i32
+    scf.if %any {
+      %old = tt.atomic_rmw or, acq_rel, gpu, %flag, %one, %enabled : (!tt.ptr<i32>, i32, i1) -> i32
+    }
+    tt.return
+  }
+
+  // Multi-result scalar reductions still require all their tensor inputs to
+  // share one encoding. Remove both conversions only when both fixed sources
+  // already have the same layout.
+  //
+  // BASELINE-LABEL: @paired_scalar_reduction_removes_both_conversions
+  // BASELINE-NOT: ttg.convert_layout
+  // BASELINE: "tt.reduce"
+  // BASELINE: tt.return
+  //
+  // OPTIMIZED-LABEL: @paired_scalar_reduction_removes_both_conversions
+  // OPTIMIZED-NOT: ttg.convert_layout
+  // OPTIMIZED: "tt.reduce"
+  // OPTIMIZED: tt.return
+  tt.func public @paired_scalar_reduction_removes_both_conversions(
+      %values: tensor<4096xf32, #wide>,
+      %indices: tensor<4096xi32, #wide>) -> (f32, i32) {
+    %narrow_values = ttg.convert_layout %values : tensor<4096xf32, #wide> -> tensor<4096xf32, #narrow>
+    %narrow_indices = ttg.convert_layout %indices : tensor<4096xi32, #wide> -> tensor<4096xi32, #narrow>
+    %result:2 = "tt.reduce"(%narrow_values, %narrow_indices) <{axis = 0 : i32}> ({
+    ^bb0(%left_value: f32, %left_index: i32, %right_value: f32, %right_index: i32):
+      %take_left = arith.cmpf oge, %left_value, %right_value : f32
+      %value = arith.select %take_left, %left_value, %right_value : f32
+      %index = arith.select %take_left, %left_index, %right_index : i32
+      tt.reduce.return %value, %index : f32, i32
+    }) : (tensor<4096xf32, #narrow>, tensor<4096xi32, #narrow>) -> (f32, i32)
+    tt.return %result#0, %result#1 : f32, i32
+  }
+
+  // Inputs with genuinely different fixed layouts retain the one conversion
+  // needed to satisfy the reduction's same-operand-encoding invariant.
+  //
+  // BASELINE-LABEL: @paired_scalar_reduction_preserves_required_conversion
+  // BASELINE-COUNT-1: ttg.convert_layout
+  // BASELINE: "tt.reduce"
+  // BASELINE-NOT: ttg.convert_layout
+  // BASELINE: tt.return
+  //
+  // OPTIMIZED-LABEL: @paired_scalar_reduction_preserves_required_conversion
+  // OPTIMIZED-COUNT-1: ttg.convert_layout
+  // OPTIMIZED: "tt.reduce"
+  // OPTIMIZED-NOT: ttg.convert_layout
+  // OPTIMIZED: tt.return
+  tt.func public @paired_scalar_reduction_preserves_required_conversion(
+      %values: tensor<4096xf32, #wide>,
+      %indices: tensor<4096xi32, #narrow>) -> (f32, i32) {
+    %narrow_values = ttg.convert_layout %values : tensor<4096xf32, #wide> -> tensor<4096xf32, #narrow>
+    %result:2 = "tt.reduce"(%narrow_values, %indices) <{axis = 0 : i32}> ({
+    ^bb0(%left_value: f32, %left_index: i32, %right_value: f32, %right_index: i32):
+      %take_left = arith.cmpf oge, %left_value, %right_value : f32
+      %value = arith.select %take_left, %left_value, %right_value : f32
+      %index = arith.select %take_left, %left_index, %right_index : i32
+      tt.reduce.return %value, %index : f32, i32
+    }) : (tensor<4096xf32, #narrow>, tensor<4096xi32, #narrow>) -> (f32, i32)
+    tt.return %result#0, %result#1 : f32, i32
+  }
+
+  // Both reductions consume the same producer, so removing the conversion
+  // must not duplicate that producer or insert one conversion per reduction.
+  //
+  // BASELINE-LABEL: @shared_scalar_reduction_fanout_avoids_duplication
+  // BASELINE-NOT: ttg.convert_layout
+  // BASELINE-COUNT-2: "tt.reduce"
+  // BASELINE-NOT: ttg.convert_layout
+  // BASELINE: tt.return
+  //
+  // OPTIMIZED-LABEL: @shared_scalar_reduction_fanout_avoids_duplication
+  // OPTIMIZED-NOT: ttg.convert_layout
+  // OPTIMIZED-COUNT-2: "tt.reduce"
+  // OPTIMIZED-NOT: ttg.convert_layout
+  // OPTIMIZED: tt.return
+  tt.func public @shared_scalar_reduction_fanout_avoids_duplication(
+      %predicate: tensor<4096xi1, #wide>) -> (i32, i32) {
+    %converted = ttg.convert_layout %predicate : tensor<4096xi1, #wide> -> tensor<4096xi1, #narrow>
+    %extended = arith.extui %converted : tensor<4096xi1, #narrow> to tensor<4096xi32, #narrow>
+    %sum = "tt.reduce"(%extended) <{axis = 0 : i32}> ({
+    ^bb0(%sum_lhs: i32, %sum_rhs: i32):
+      %result = arith.addi %sum_lhs, %sum_rhs : i32
+      tt.reduce.return %result : i32
+    }) : (tensor<4096xi32, #narrow>) -> i32
+    %maximum = "tt.reduce"(%extended) <{axis = 0 : i32}> ({
+    ^bb0(%max_lhs: i32, %max_rhs: i32):
+      %result = arith.maxui %max_lhs, %max_rhs : i32
+      tt.reduce.return %result : i32
+    }) : (tensor<4096xi32, #narrow>) -> i32
+    tt.return %sum, %maximum : i32, i32
+  }
+
+  // Hoisting across a scalar loop must retain its execution semantics without
+  // charging the reduction for a nonexistent result layout.
+  //
+  // BASELINE-LABEL: @loop_scalar_reduction_avoids_conversion
+  // BASELINE-NOT: ttg.convert_layout
+  // BASELINE: scf.for
+  // BASELINE: "tt.reduce"
+  // BASELINE: tt.return
+  //
+  // OPTIMIZED-LABEL: @loop_scalar_reduction_avoids_conversion
+  // OPTIMIZED-NOT: ttg.convert_layout
+  // OPTIMIZED: scf.for
+  // OPTIMIZED: "tt.reduce"
+  // OPTIMIZED: tt.return
+  tt.func public @loop_scalar_reduction_avoids_conversion(
+      %predicate: tensor<4096xi1, #wide>) -> i32 {
+    %zero = arith.constant 0 : i32
+    %start = arith.constant 0 : index
+    %stop = arith.constant 4 : index
+    %step = arith.constant 1 : index
+    %converted = ttg.convert_layout %predicate : tensor<4096xi1, #wide> -> tensor<4096xi1, #narrow>
+    %extended = arith.extui %converted : tensor<4096xi1, #narrow> to tensor<4096xi32, #narrow>
+    %result = scf.for %iteration = %start to %stop step %step iter_args(%accumulator = %zero) -> i32 {
+      %sum = "tt.reduce"(%extended) <{axis = 0 : i32}> ({
+      ^bb0(%lhs: i32, %rhs: i32):
+        %combined = arith.addi %lhs, %rhs : i32
+        tt.reduce.return %combined : i32
+      }) : (tensor<4096xi32, #narrow>) -> i32
+      %next = arith.addi %accumulator, %sum : i32
+      scf.yield %next : i32
+    }
+    tt.return %result : i32
+  }
+}
+
+// -----
+
 // The target input and all three function results are fixed boundaries. The
 // legacy first-layout choice performs the arithmetic in the other input's
 // layout, converting the target and then each result independently. Global

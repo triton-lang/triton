@@ -901,6 +901,12 @@ Attribute LayoutPropagation::getAssignedEncoding(
   return {};
 }
 
+bool reduceToScalar(Operation *op) {
+  // For reductions returning a scalar we can change the src encoding without
+  // affecting the output.
+  return isa<ReduceOp>(op) && !isa<RankedTensorType>(op->getResultTypes()[0]);
+}
+
 SmallVector<Attribute, 4> LayoutPropagation::getUseEncodings(
     OpOperand &use, const DenseMap<Value, Attribute> &assignments) const {
   Operation *user = use.getOwner();
@@ -938,6 +944,10 @@ SmallVector<Attribute, 4> LayoutPropagation::getUseEncodings(
     }
     return encodings;
   }
+
+  // A scalar reduction has no result layout to impose on its input.
+  if (reduceToScalar(user))
+    return encodings;
 
   if (isFixedLayoutBoundary(user)) {
     if (auto type = dyn_cast<RankedTensorType>(use.get().getType()))
@@ -1476,12 +1486,6 @@ void LayoutPropagation::dump() {
 }
 
 void LayoutPropagation::rewrite() { rewriteRegion(funcOp->getRegion(0)); }
-
-bool reduceToScalar(Operation *op) {
-  // For reductions returning a scalar we can change the src encoding without
-  // affecting the output.
-  return isa<ReduceOp>(op) && !isa<RankedTensorType>(op->getResultTypes()[0]);
-}
 
 void LayoutPropagation::rewriteRegion(Region &region) {
   std::deque<Region *> queue = {&region};
