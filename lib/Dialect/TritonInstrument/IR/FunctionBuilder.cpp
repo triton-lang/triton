@@ -1643,7 +1643,6 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
   };
   ManglingArgs specializationArgs;
   specializationArgs.append(barriersType);
-  specializationArgs.append(static_cast<uint64_t>(memType));
   specializationArgs.append(static_cast<uint64_t>(trackWrites));
   specializationArgs.append(static_cast<uint64_t>(trackReads));
 
@@ -1841,8 +1840,7 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
 static void createClearBarrierTrackingCall(ImplicitLocOpBuilder &b,
                                            StringRef functionName, Value mbar,
                                            Value pred, ValueType barriers,
-                                           ValueType tracking,
-                                           std::optional<MemType> memType) {
+                                           ValueType tracking) {
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   auto barriersType = cast<RankedTensorType>(barriers.type);
@@ -1852,8 +1850,6 @@ static void createClearBarrierTrackingCall(ImplicitLocOpBuilder &b,
       arith::ConstantIntOp::create(b, getMemDescLength(mbar), 32), pred,
       barriers.value, tracking.value};
   ManglingArgs specializationArgs{barriersType, trackingType};
-  if (memType)
-    specializationArgs.append(static_cast<uint64_t>(*memType));
   createCallToCachedFunction(
       b, functionName.str(), args, /*assertInfo=*/std::nullopt,
       specializationArgs,
@@ -1900,7 +1896,7 @@ void FunctionBuilder::createClearBarrierWriteTrackingCall(
   createClearBarrierTrackingCall(
       b, "clear_barrier_write_tracking", mbar, pred,
       auxData.barriers.at(insertPoint),
-      auxData.writeTracking[(int)memType].at(insertPoint), memType);
+      auxData.writeTracking[(int)memType].at(insertPoint));
 }
 
 void FunctionBuilder::createClearBarrierReadTrackingCall(
@@ -1913,7 +1909,7 @@ void FunctionBuilder::createClearBarrierReadTrackingCall(
   createClearBarrierTrackingCall(
       b, "clear_barrier_read_tracking", mbar, pred,
       auxData.barriers.at(insertPoint),
-      auxData.readTracking[(int)memType].at(insertPoint), memType);
+      auxData.readTracking[(int)memType].at(insertPoint));
 }
 
 void FunctionBuilder::createTransferVisibleAccessesCall(
@@ -1943,7 +1939,6 @@ void FunctionBuilder::createTransferVisibleAccessesCall(
   };
   ManglingArgs specializationArgs;
   specializationArgs.append(barriersType);
-  specializationArgs.append(static_cast<uint64_t>(memType));
   specializationArgs.append(static_cast<uint64_t>(transferWrites));
   specializationArgs.append(static_cast<uint64_t>(transferReads));
 
@@ -2385,8 +2380,7 @@ void FunctionBuilder::createPublishClusterVisibilityCall(
   createCallToCachedFunction(
       b, "publish_cluster_visibility", args,
       /*assertInfo=*/std::nullopt,
-      {writeVisibilityType, readVisibilityType, (uint64_t)memType,
-       (uint64_t)partitionScoped},
+      {writeVisibilityType, readVisibilityType, (uint64_t)partitionScoped},
       [writeVisibilityType, readVisibilityType,
        numBaseThreads = auxData.threadLayout.numBaseThreads,
        partitionScoped](ImplicitLocOpBuilder &fb, Block *entryBlock) {
@@ -2923,8 +2917,7 @@ void FunctionBuilder::createClearBarrierProxyAccessTrackingCall(
          "barrier descriptors must exist when clearing proxy tracking");
   createClearBarrierTrackingCall(b, "clear_barrier_proxy_tracking", mbar, pred,
                                  auxData.barriers.at(insertPoint),
-                                 auxData.proxyAccessTracking.at(insertPoint),
-                                 std::nullopt);
+                                 auxData.proxyAccessTracking.at(insertPoint));
 }
 
 void FunctionBuilder::createVerifyProxyAccessCall(ImplicitLocOpBuilder &b,
