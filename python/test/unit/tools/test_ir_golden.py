@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,8 +11,8 @@ import pytest
 
 from triton.tools.ir_golden import (SCHEMA_VERSION, GoldenCorpus, GoldenCorpusError, capture_compilations,
                                     compilation_capture_listener, freeze_payload, function_names, ir_metrics, main,
-                                    normalize_source, normalize_ttgir, ttgir_dependency_signature, verify_payload,
-                                    write_shard)
+                                    normalize_source, normalize_ttgir, replay_reproducer_shard, triton_opt_reproducer,
+                                    ttgir_dependency_signature, verify_payload, write_reproducer_shard, write_shard)
 
 TARGET = {"backend": "cuda", "arch": 80, "warp_size": 32}
 TTIR = 'module { tt.func public @copy(%arg0: !tt.ptr<f32>) { tt.return } }'
@@ -116,6 +118,96 @@ def test_golden_filters_and_inventory(tmp_path: Path, capsys: pytest.CaptureFixt
     make_corpus(tmp_path)
     assert main(["inventory", "--corpus", str(tmp_path), "--language", "gluon"]) == 0
     assert json.loads(capsys.readouterr().out) == {"cases": 1, "families": {"synthetic": 1}, "languages": {"gluon": 1}}
+
+
+@pytest.mark.parametrize("language", ("triton", "gluon"))
+@pytest.mark.parametrize("strategy", ("legacy", "global"))
+def test_triton_opt_reproducer_captures_exact_compiler_pipeline(monkeypatch: pytest.MonkeyPatch, language: str,
+                                                                strategy: str) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "-1")
+    payload = freeze_payload(make_payload(language))
+    monkeypatch.setenv("TRITON_REPRODUCER_PATH", "previous-reproducer")
+    reproducer, output = triton_opt_reproducer(payload, strategy)
+    assert "mlir_reproducer" in reproducer
+    assert "pipeline:" in reproducer
+    assert ("gluon-inline" if language == "gluon" else "convert-triton-to-tritongpu") in reproducer
+    if language == "triton":
+        expected_pass = "tritongpu-optimize-layouts" if strategy == "global" else "tritongpu-remove-layout-conversions"
+        assert expected_pass in reproducer
+    assert normalize_ttgir(output) == payload["goldens"][strategy]["ttgir"]
+    assert os.environ["TRITON_REPRODUCER_PATH"] == "previous-reproducer"
+
+
+def test_triton_opt_reproducer_rejects_changed_golden() -> None:
+    payload = freeze_payload(make_payload())
+    payload["goldens"]["legacy"]["sha256"] = "incorrect"
+    with pytest.raises(GoldenCorpusError, match="reference is corrupt"):
+        triton_opt_reproducer(payload, "legacy")
+
+
+@pytest.mark.parametrize("language", ("triton", "gluon"))
+@pytest.mark.parametrize("compressed", (False, True))
+def test_triton_opt_reproducer_runs_without_python(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, language: str,
+                                                   compressed: bool) -> None:
+    executable = os.environ.get("TRITON_OPT") or shutil.which("triton-opt")
+    if executable is None:
+        pytest.skip("triton-opt is unavailable")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "-1")
+    payload = freeze_payload(make_payload(language))
+    reproductions = []
+    for strategy in ("legacy", "global"):
+        source, expected = triton_opt_reproducer(payload, strategy)
+        reproductions.append(
+            {"id": payload["id"], "strategy": strategy, "language": language, "source": source, "expected": expected})
+    path = tmp_path / ("synthetic.mlir.zst" if compressed else "synthetic.mlir")
+    descriptor = write_reproducer_shard(path, reproductions)
+    assert descriptor["replays"] == 2
+    result = replay_reproducer_shard(path, executable, expected_sha256=descriptor["expected_sha256"],
+                                     compressed_sha256=descriptor["sha256"])
+    assert result["sha256"] == descriptor["expected_sha256"]
+    command = ('zstd -dc "$1" | "$2" --run-reproducer --split-input-file - | '
+               'sha256sum --check "${1%.mlir.zst}.sha256"') if compressed else (
+                   '"$2" --run-reproducer --split-input-file "$1" | '
+                   'sha256sum --check "${1%.mlir}.sha256"')
+    pipeline = subprocess.run(["bash", "-o", "pipefail", "-c", command, "_",
+                               str(path), executable], capture_output=True, text=True, check=False)
+    assert pipeline.returncode == 0, pipeline.stderr
+    assert "OK" in pipeline.stdout
+
+
+def test_triton_opt_reproducer_detects_corrupt_input_and_output(tmp_path: Path) -> None:
+    payload = freeze_payload(make_payload())
+    source, expected = triton_opt_reproducer(payload, "legacy")
+    path = tmp_path / "synthetic.mlir.zst"
+    descriptor = write_reproducer_shard(
+        path,
+        [{"id": payload["id"], "strategy": "legacy", "language": "triton", "source": source, "expected": expected}])
+    with pytest.raises(GoldenCorpusError, match="SHA-256"):
+        replay_reproducer_shard(path, compressed_sha256="incorrect")
+    executable = os.environ.get("TRITON_OPT") or shutil.which("triton-opt")
+    if executable is not None:
+        with pytest.raises(GoldenCorpusError, match="golden output changed"):
+            replay_reproducer_shard(path, executable, expected_sha256="incorrect")
+    assert descriptor["checksum"] == "synthetic.sha256"
+
+
+def test_triton_opt_export_and_replay_commands(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    executable = os.environ.get("TRITON_OPT") or shutil.which("triton-opt")
+    if executable is None:
+        pytest.skip("triton-opt is unavailable")
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    make_corpus(corpus)
+    destination = tmp_path / "reproducers"
+    assert main(["export-opt", "--corpus", str(corpus), "--output", str(destination), "--workers", "1"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"cases": 2, "replays": 4, "shards": 1}
+    assert (destination / "replay-00000.mlir").is_file()
+    assert main([
+        "replay-opt", "--corpus",
+        str(corpus), "--output",
+        str(destination), "--workers", "1", "--triton-opt", executable
+    ]) == 0
+    assert json.loads(capsys.readouterr().out) == {"cases": 2, "replays": 4, "shards": 1, "workers": 1}
 
 
 def test_capture_listener_records_cache_hits_and_misses(tmp_path: Path) -> None:

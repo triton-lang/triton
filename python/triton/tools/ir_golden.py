@@ -23,6 +23,7 @@ from typing import Any, Callable, Iterator
 SCHEMA_VERSION = 1
 STRATEGIES = ("legacy", "global")
 MAX_SHARD_BYTES = 12_000_000
+REPRODUCER_SPLIT = "\n// -----\n"
 _FUNCTION = re.compile(r"\btt\.func(?:\s+(?:public|private))?\s+@([^\s(]+)")
 _SSA_VALUE = re.compile(r"%[-.$A-Za-z0-9_]+(?:#\d+)?")
 _ASSIGNMENT = re.compile(r"^(\s*)(%[-.$A-Za-z0-9_]+(?::\d+)?)\s*=\s*(.*)$")
@@ -215,7 +216,7 @@ def _options(backend: Any, metadata: dict[str, Any], launch: dict[str, Any], str
         raise GoldenCorpusError(f"Cannot reconstruct production compiler options: {error}") from error
 
 
-def compile_case(payload: dict[str, Any], strategy: str) -> tuple[str, dict[str, int]]:
+def compile_case(payload: dict[str, Any], strategy: str, *, normalize: bool = True) -> tuple[str, dict[str, int]]:
     target = payload.get("target")
     metadata = payload.get("metadata")
     launch = payload.get("launch")
@@ -236,10 +237,103 @@ def compile_case(payload: dict[str, Any], strategy: str) -> tuple[str, dict[str,
                 output = backend.gluon_to_ttgir(module, stage_metadata, options, int(target["arch"]))
         except Exception as error:
             raise GoldenCorpusError(f"The {strategy} {language} TTGIR pipeline failed: {error}") from error
-        normalized = normalize_ttgir(output.str_nodebug())
+        output_text = output.str_nodebug()
     if "tensordesc_meta" not in stage_metadata:
         raise GoldenCorpusError("The TTGIR pipeline did not finish")
-    return normalized, ir_metrics(normalized)
+    result = normalize_ttgir(output_text) if normalize else output_text
+    return result, ir_metrics(result)
+
+
+def triton_opt_reproducer(payload: dict[str, Any], strategy: str) -> tuple[str, str]:
+    """Capture the actual compiler pass pipeline as a standalone MLIR reproducer."""
+    previous = os.environ.get("TRITON_REPRODUCER_PATH")
+    with tempfile.TemporaryDirectory(prefix="triton-ir-golden-") as directory:
+        prefix = Path(directory) / "golden"
+        os.environ["TRITON_REPRODUCER_PATH"] = str(prefix)
+        try:
+            output, _ = compile_case(payload, strategy, normalize=False)
+        finally:
+            if previous is None:
+                os.environ.pop("TRITON_REPRODUCER_PATH", None)
+            else:
+                os.environ["TRITON_REPRODUCER_PATH"] = previous
+        stage = "make_ttgir" if payload["language"] == "triton" else "gluon_to_ttgir"
+        path = prefix.with_name(f"{prefix.name}.{stage}.repro.mlir")
+        try:
+            reproducer = path.read_text()
+        except OSError as error:
+            raise GoldenCorpusError(f"The compiler did not emit its {stage} pass pipeline") from error
+    if "mlir_reproducer" not in reproducer or not re.search(r'\bpipeline:\s*"', reproducer):
+        raise GoldenCorpusError("The compiler reproducer has no executable pass pipeline")
+    reference = payload.get("goldens", {}).get(strategy)
+    if isinstance(reference, dict):
+        expected = reference.get("ttgir")
+        normalized = normalize_ttgir(output)
+        if not isinstance(expected, str) or _sha256(expected.encode()) != reference.get("sha256"):
+            raise GoldenCorpusError(f"The frozen {strategy} TTGIR reference is corrupt")
+        if normalized != expected and ttgir_dependency_signature(normalized) != ttgir_dependency_signature(expected):
+            raise GoldenCorpusError(f"The {strategy} reproducer no longer matches its frozen TTGIR golden")
+    return reproducer, output
+
+
+def write_reproducer_shard(path: Path, reproductions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Write directly executable, split-input MLIR and its frozen output digest."""
+    if not reproductions:
+        raise GoldenCorpusError("A triton-opt reproducer shard cannot be empty")
+    chunks = []
+    outputs = []
+    for reproduction in reproductions:
+        for key in ("id", "strategy", "language", "source", "expected"):
+            if not isinstance(reproduction.get(key), str):
+                raise GoldenCorpusError(f"A triton-opt reproducer is missing {key}")
+        if reproduction["strategy"] not in STRATEGIES:
+            raise GoldenCorpusError(f"Unsupported layout strategy: {reproduction['strategy']}")
+        header = {key: reproduction[key] for key in ("id", "strategy", "language")}
+        chunks.append("// IR-GOLDEN: " + json.dumps(header, sort_keys=True) + "\n" +
+                      reproduction["source"].rstrip("\n"))
+        outputs.append(reproduction["expected"])
+    data = (REPRODUCER_SPLIT.join(chunks) + "\n").encode()
+    stored = _compress(data) if path.name.endswith(".mlir.zst") else data
+    if not (path.name.endswith(".mlir") or path.name.endswith(".mlir.zst")):
+        raise GoldenCorpusError("Triton-opt reproducer shards must end in .mlir or .mlir.zst")
+    if len(stored) >= MAX_SHARD_BYTES:
+        raise GoldenCorpusError(f"Reproducer shard {path.name} exceeds the {MAX_SHARD_BYTES:,}-byte limit")
+    expected = (REPRODUCER_SPLIT.join(outputs) + "\n").encode()
+    expected_sha256 = _sha256(expected)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(stored)
+    shard_id = path.name.removesuffix(".mlir.zst").removesuffix(".mlir")
+    checksum_path = path.with_name(shard_id + ".sha256")
+    checksum_path.write_text(f"{expected_sha256}  -\n")
+    return {
+        "id": shard_id, "path": path.name, "sha256": _sha256(stored), "bytes": len(stored), "replays":
+        len(reproductions), "expected_sha256": expected_sha256, "checksum": checksum_path.name
+    }
+
+
+def replay_reproducer_shard(path: str | Path, triton_opt: str = "triton-opt", *, expected_sha256: str | None = None,
+                            compressed_sha256: str | None = None) -> dict[str, Any]:
+    """Run all embedded pipelines directly in one triton-opt process."""
+    source = Path(path)
+    try:
+        data = source.read_bytes()
+    except OSError as error:
+        raise GoldenCorpusError(f"Triton-opt reproducer shard {source} is missing") from error
+    if compressed_sha256 is not None and _sha256(data) != compressed_sha256:
+        raise GoldenCorpusError(f"Triton-opt reproducer shard {source.name} failed its SHA-256 check")
+    try:
+        result = subprocess.run([triton_opt, "--run-reproducer", "--split-input-file", "-"], input=_decompress(data),
+                                capture_output=True, check=False)
+    except OSError as error:
+        raise GoldenCorpusError(f"Cannot execute triton-opt: {error}") from error
+    if result.returncode:
+        raise GoldenCorpusError(f"Triton-opt replay failed for {source.name}: "
+                                f"{result.stderr.decode(errors='replace').strip()}")
+    actual_sha256 = _sha256(result.stdout)
+    if expected_sha256 is not None and actual_sha256 != expected_sha256:
+        raise GoldenCorpusError(f"Triton-opt golden output changed for {source.name}: "
+                                f"expected {expected_sha256}, observed {actual_sha256}")
+    return {"path": source.name, "sha256": actual_sha256}
 
 
 def freeze_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -491,6 +585,24 @@ def _verify_worker(arguments: tuple[str, dict[str, Any], tuple[str, ...]]) -> di
     }
 
 
+def _reproducer_worker(arguments: tuple[str, dict[str, Any], str]) -> dict[str, Any]:
+    root, descriptor, strategy = arguments
+    corpus = _worker_corpus(root)
+    case = GoldenCase.from_json(descriptor)
+    source, expected = triton_opt_reproducer(corpus.payload(case), strategy)
+    return {
+        "id": case.case_id, "strategy": strategy, "language": case.language, "family": case.family, "kernel":
+        case.kernel, "arch": case.arch, "source": source, "expected": expected
+    }
+
+
+def _replay_reproducer_worker(arguments: tuple[str, dict[str, Any], str]) -> dict[str, Any]:
+    root, descriptor, executable = arguments
+    return replay_reproducer_shard(
+        Path(root) / descriptor["path"], executable, expected_sha256=descriptor["expected_sha256"],
+        compressed_sha256=descriptor["sha256"])
+
+
 def _descriptor(case: GoldenCase) -> dict[str, Any]:
     return {
         "id": case.case_id, "kernel": case.kernel, "family": case.family, "language": case.language, "arch": case.arch,
@@ -498,9 +610,87 @@ def _descriptor(case: GoldenCase) -> dict[str, Any]:
     }
 
 
+def export_triton_opt_reproducers(corpus: GoldenCorpus, selected: list[GoldenCase], destination: str | Path, *,
+                                  strategies: tuple[str, ...] = STRATEGIES, workers: int = 1,
+                                  max_uncompressed_bytes: int = 8_000_000, compress: bool = False) -> dict[str, Any]:
+    """Freeze executable pass pipelines without exposing production IR in Triton."""
+    root = Path(destination)
+    if root.exists() and not root.is_dir():
+        raise GoldenCorpusError(f"The triton-opt destination is not a directory: {root}")
+    if (root / "manifest.json").exists():
+        raise GoldenCorpusError(f"The triton-opt destination already contains a frozen manifest: {root}")
+    if workers < 1 or max_uncompressed_bytes < 1:
+        raise GoldenCorpusError("Triton-opt export requires positive worker and shard limits")
+    for strategy in strategies:
+        if strategy not in STRATEGIES:
+            raise GoldenCorpusError(f"Unsupported layout strategy: {strategy}")
+    root.mkdir(parents=True, exist_ok=True)
+    pending = []
+    pending_bytes = 0
+    descriptors = []
+    completed = set()
+
+    def flush(reproductions: list[dict[str, Any]]) -> None:
+        if not reproductions:
+            return
+        suffix = ".mlir.zst" if compress else ".mlir"
+        path = root / f"replay-{len(descriptors):05d}{suffix}"
+        try:
+            descriptor = write_reproducer_shard(path, reproductions)
+        except GoldenCorpusError as error:
+            if "exceeds" not in str(error) or len(reproductions) < 2:
+                raise
+            midpoint = len(reproductions) // 2
+            flush(reproductions[:midpoint])
+            flush(reproductions[midpoint:])
+            return
+        descriptor["languages"] = dict(collections.Counter(item["language"] for item in reproductions))
+        descriptor["strategies"] = dict(collections.Counter(item["strategy"] for item in reproductions))
+        descriptor["architectures"] = sorted({item["arch"] for item in reproductions})
+        descriptors.append(descriptor)
+
+    jobs = ((str(corpus.root), _descriptor(case), strategy) for case in selected for strategy in strategies)
+    if workers == 1:
+        results = map(_reproducer_worker, jobs)
+        executor = contextlib.nullcontext()
+    else:
+        executor = concurrent.futures.ProcessPoolExecutor(max_workers=workers)
+        results = None
+    with executor as pool:
+        if pool is not None:
+            results = pool.map(_reproducer_worker, jobs, chunksize=4)
+        assert results is not None
+        for reproduction in results:
+            identity = (reproduction["id"], reproduction["strategy"])
+            if identity in completed:
+                raise GoldenCorpusError(f"Duplicate triton-opt replay case: {identity}")
+            completed.add(identity)
+            size = len(reproduction["source"].encode())
+            if pending and pending_bytes + size > max_uncompressed_bytes:
+                flush(pending)
+                pending = []
+                pending_bytes = 0
+            pending.append(reproduction)
+            pending_bytes += size
+        flush(pending)
+    expected_replays = len(selected) * len(strategies)
+    if len(completed) != expected_replays:
+        raise GoldenCorpusError("The triton-opt export did not cover every selected strategy and case")
+    source_manifest = (corpus.root / "manifest.json").read_bytes()
+    manifest = {
+        "schema_version": SCHEMA_VERSION, "source_manifest_sha256": _sha256(source_manifest), "cases": len(selected),
+        "replays": expected_replays, "strategies": list(strategies), "shards": descriptors
+    }
+    manifest_bytes = _json_bytes(manifest)
+    if len(manifest_bytes) >= MAX_SHARD_BYTES:
+        raise GoldenCorpusError("The triton-opt manifest exceeds the hosted repository file limit")
+    (root / "manifest.json").write_bytes(manifest_bytes)
+    return manifest
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("replay", "refresh", "inventory"))
+    parser.add_argument("command", choices=("replay", "refresh", "inventory", "export-opt", "replay-opt"))
     parser.add_argument("--corpus", type=Path, default=Path(value) if
                         (value := os.environ.get("TRITON_PRODUCTION_IR_CORPUS")) else None)
     parser.add_argument("--family")
@@ -509,6 +699,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--arch", type=int)
     parser.add_argument("--strategy", choices=(*STRATEGIES, "both"), default="both")
     parser.add_argument("--workers", type=int, default=min(32, os.cpu_count() or 1))
+    parser.add_argument("--output", type=Path, help="directory for executable triton-opt reproducer shards")
+    parser.add_argument("--triton-opt", default="triton-opt", help="path to the standalone triton-opt executable")
+    parser.add_argument("--compress-opt", action="store_true", help="store exported MLIR as Zstandard streams")
     parser.add_argument("--accept", action="store_true", help="explicitly permit rewriting frozen references")
     args = parser.parse_args(argv)
     if args.corpus is None:
@@ -528,6 +721,34 @@ def main(argv: list[str] | None = None) -> int:
         if not args.accept:
             parser.error("refresh requires --accept")
         report = {"refreshed": corpus.refresh(selected)}
+    elif args.command == "export-opt":
+        if args.output is None:
+            parser.error("export-opt requires --output")
+        strategies = STRATEGIES if args.strategy == "both" else (args.strategy, )
+        manifest = export_triton_opt_reproducers(corpus, selected, args.output, strategies=strategies,
+                                                 workers=args.workers, compress=args.compress_opt)
+        report = {"cases": manifest["cases"], "replays": manifest["replays"], "shards": len(manifest["shards"])}
+    elif args.command == "replay-opt":
+        if args.output is None:
+            parser.error("replay-opt requires --output")
+        try:
+            manifest = json.loads((args.output / "manifest.json").read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            raise GoldenCorpusError(f"The triton-opt reproducer manifest cannot be read: {error}") from error
+        if manifest.get("schema_version") != SCHEMA_VERSION or not isinstance(manifest.get("shards"), list):
+            raise GoldenCorpusError("The triton-opt reproducer manifest is invalid")
+        current_manifest_sha256 = _sha256((corpus.root / "manifest.json").read_bytes())
+        if manifest.get("source_manifest_sha256") != current_manifest_sha256:
+            raise GoldenCorpusError("The triton-opt reproducers were generated from a different golden corpus")
+        jobs = ((str(args.output), descriptor, args.triton_opt) for descriptor in manifest["shards"])
+        if args.workers == 1:
+            results = [_replay_reproducer_worker(job) for job in jobs]
+        else:
+            with concurrent.futures.ProcessPoolExecutor(max_workers=args.workers) as executor:
+                results = list(executor.map(_replay_reproducer_worker, jobs, chunksize=1))
+        report = {
+            "cases": manifest["cases"], "replays": manifest["replays"], "shards": len(results), "workers": args.workers
+        }
     else:
         strategies = STRATEGIES if args.strategy == "both" else (args.strategy, )
         jobs = [(str(corpus.root), _descriptor(case), strategies) for case in selected]
