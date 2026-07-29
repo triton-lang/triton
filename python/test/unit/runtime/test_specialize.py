@@ -1,6 +1,8 @@
 import numpy
 import pytest
 import torch
+import triton
+import triton.language as tl
 from collections import namedtuple
 from triton._C.libtriton import native_specialize_impl
 from triton.runtime.jit import MockTensor, JITCallable
@@ -176,6 +178,62 @@ def test_specialize_impl(input_generator, backend, is_const, specialize_value, a
         result = native_specialize_impl(backend, arg, is_const, specialize_value, align)
         expected = reference_specialize_impl(backend, arg, is_const, specialize_value, align)
         assert result == expected
+
+
+@triton.jit
+def _sanitizer_llvm_pipeline_kernel(output):
+    tl.store(output, 1)
+
+
+@triton.jit
+def _sanitizer_llvm_tma_pipeline_kernel(output):
+    descriptor = tl.make_tensor_descriptor(output, [16, 16], [16, 1], [16, 16])
+    descriptor.store([0, 0], tl.full((16, 16), 1, dtype=tl.int32))
+
+
+@pytest.mark.parametrize(
+    ("instrumentation_mode", "contains_tma", "expected_level"),
+    [
+        ("", False, "OPTIMIZE_O3"),
+        ("consan", False, "OPTIMIZE_O1"),
+        ("iisan,consan", False, "OPTIMIZE_O1"),
+        ("fpsan", False, "OPTIMIZE_O1"),
+        ("gsan", False, "OPTIMIZE_O1"),
+        ("gsan", True, "OPTIMIZE_O2"),
+        ("gsan,consan", False, "OPTIMIZE_O1"),
+        ("gsan,fpsan", False, "OPTIMIZE_O1"),
+        ("gsan,consan", True, "OPTIMIZE_O1"),
+        ("gsan,fpsan", True, "OPTIMIZE_O1"),
+    ],
+)
+def test_sanitizer_llvm_optimization_level(instrumentation_mode, contains_tma, expected_level, monkeypatch):
+    import triton.backends.nvidia.compiler as cuda_compiler
+
+    class OptimizationObserved(Exception):
+        pass
+
+    observed = []
+
+    def observe_optimization(module, level, *, disable_slp_vectorizer, disable_vector_combine):
+        observed.append((level, disable_slp_vectorizer, disable_vector_combine))
+        raise OptimizationObserved
+
+    monkeypatch.setattr(cuda_compiler.llvm, "optimize_module", observe_optimization)
+    kernel = _sanitizer_llvm_tma_pipeline_kernel if contains_tma else _sanitizer_llvm_pipeline_kernel
+    source = triton.compiler.ASTSource(kernel, {"output": "*i32"})
+
+    with pytest.raises(OptimizationObserved):
+        triton.compile(
+            source,
+            target=GPUTarget("cuda", 100, 32),
+            options={"instrumentation_mode": instrumentation_mode},
+        )
+
+    assert len(observed) == 1
+    level, disable_slp_vectorizer, disable_vector_combine = observed[0]
+    assert level is getattr(cuda_compiler.llvm, expected_level)
+    assert disable_slp_vectorizer is bool(instrumentation_mode)
+    assert disable_vector_combine is bool(instrumentation_mode)
 
 
 @pytest.mark.parametrize(
