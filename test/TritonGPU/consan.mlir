@@ -1134,8 +1134,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_init_barrier_state
     %true = arith.constant true
-    // CHECK: tt.call @__triton_consan_track_visible_accesses
-    // CHECK: tt.call @__triton_consan_track_visible_accesses
+    // Identical shared- and tensor-memory tracking layouts reuse one helper.
+    // CHECK: tt.call @[[TRACK_VISIBLE:__triton_consan_track_visible_accesses[^ (]*]]
+    // CHECK: tt.call @[[TRACK_VISIBLE]]
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     ttng.tc_gen5_commit %bar : !ttg.memdesc<1xi64, #shared1, #smem, mutable>

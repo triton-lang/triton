@@ -1677,7 +1677,6 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
   };
   ManglingArgs specializationArgs;
   specializationArgs.append(barriersType);
-  specializationArgs.append(static_cast<uint64_t>(memType));
   specializationArgs.append(static_cast<uint64_t>(trackWrites));
   specializationArgs.append(static_cast<uint64_t>(trackReads));
 
@@ -1912,7 +1911,7 @@ void FunctionBuilder::createClearBarrierWriteTrackingCall(
   createCallToCachedFunction(
       b, "clear_barrier_write_tracking", args,
       /*assertInfo=*/std::nullopt,
-      {barriersType, writeTrackingType, (uint64_t)memType},
+      {barriersType, writeTrackingType},
       [writeTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
@@ -1973,7 +1972,7 @@ void FunctionBuilder::createClearBarrierReadTrackingCall(
   createCallToCachedFunction(
       b, "clear_barrier_read_tracking", args,
       /*assertInfo=*/std::nullopt,
-      {barriersType, readTrackingType, (uint64_t)memType},
+      {barriersType, readTrackingType},
       [readTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
@@ -2035,7 +2034,6 @@ void FunctionBuilder::createTransferVisibleAccessesCall(
   };
   ManglingArgs specializationArgs;
   specializationArgs.append(barriersType);
-  specializationArgs.append(static_cast<uint64_t>(memType));
   specializationArgs.append(static_cast<uint64_t>(transferWrites));
   specializationArgs.append(static_cast<uint64_t>(transferReads));
 
@@ -2553,8 +2551,7 @@ void FunctionBuilder::createPublishClusterVisibilityCall(
   createCallToCachedFunction(
       b, "publish_cluster_visibility", args,
       /*assertInfo=*/std::nullopt,
-      {writeVisibilityType, readVisibilityType, (uint64_t)memType,
-       (uint64_t)partitionScoped},
+      {writeVisibilityType, readVisibilityType, (uint64_t)partitionScoped},
       [writeVisibilityType, readVisibilityType,
        numBaseThreads = auxData.threadLayout.numBaseThreads,
        partitionScoped](ImplicitLocOpBuilder &fb, Block *entryBlock) {
