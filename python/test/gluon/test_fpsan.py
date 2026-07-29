@@ -123,7 +123,8 @@ def _unmix_payload_u32_to_f32_bits_i32(v_u32: np.ndarray) -> np.ndarray:
 
 
 def _cast_float_payload_u64(payload, src_bitwidth: int, dst_bitwidth: int) -> np.ndarray:
-    x = payload.astype(np.uint64) & _low_mask_u64(src_bitwidth)
+    src_mask = _low_mask_u64(src_bitwidth)
+    x = payload.astype(np.uint64) & src_mask
     if dst_bitwidth == src_bitwidth:
         return x
 
@@ -132,11 +133,17 @@ def _cast_float_payload_u64(payload, src_bitwidth: int, dst_bitwidth: int) -> np
         extension = _low_mask_u64(dst_bitwidth) ^ _low_mask_u64(src_bitwidth)
         return np.where((x & sign) != 0, x | extension, x) & _low_mask_u64(dst_bitwidth)
 
-    normalized = np.where((x & sign) != 0, (~x) & _low_mask_u64(src_bitwidth), x)
-    high = normalized >> np.uint64(dst_bitwidth)
+    dst_mask = _low_mask_u64(dst_bitwidth)
+    low = x & dst_mask
+    low_sign = np.uint64(1 << (dst_bitwidth - 1))
+    extension = src_mask ^ dst_mask
+    canonical = np.where((low & low_sign) != 0, low | extension, low)
+    residual = x ^ canonical
+    multiplier = (np.uint64(3511) & dst_mask) * (src_mask // dst_mask)
     with np.errstate(over="ignore"):
-        folded = x ^ (high * np.uint64(3511))
-    return folded & _low_mask_u64(dst_bitwidth)
+        high = ((residual * multiplier) & src_mask) >> np.uint64(src_bitwidth - dst_bitwidth)
+    high ^= high >> np.uint64(dst_bitwidth // 2)
+    return (low ^ high) & dst_mask
 
 
 @pytest.mark.parametrize(("src_bitwidth", "dst_bitwidth"), [(8, 16), (8, 32), (16, 32), (16, 64), (32, 64)])
@@ -147,6 +154,20 @@ def test_float_payload_upcast_downcast_identity(src_bitwidth, dst_bitwidth):
     widened = _cast_float_payload_u64(payload, src_bitwidth, dst_bitwidth)
     narrowed = _cast_float_payload_u64(widened, dst_bitwidth, src_bitwidth)
     np.testing.assert_array_equal(narrowed, payload)
+
+
+@pytest.mark.parametrize(("src_bitwidth", "dst_bitwidth"), [(16, 8), (32, 8), (32, 16), (64, 8), (64, 16), (64, 32)])
+def test_float_payload_downcast_mixes_every_discarded_bit(src_bitwidth, dst_bitwidth):
+    rng = np.random.default_rng(src_bitwidth * 257 + dst_bitwidth)
+    src_mask = _low_mask_u64(src_bitwidth)
+    payload = rng.integers(0, np.iinfo(np.uint64).max, size=512, dtype=np.uint64) & src_mask
+    payload[:5] = np.asarray([0, 1, src_mask, 1 << (src_bitwidth - 1), 1 << (dst_bitwidth - 1)], dtype=np.uint64)
+    expected = _cast_float_payload_u64(payload, src_bitwidth, dst_bitwidth)
+
+    for bit in range(dst_bitwidth, src_bitwidth):
+        flipped = payload ^ (np.uint64(1) << np.uint64(bit))
+        actual = _cast_float_payload_u64(flipped, src_bitwidth, dst_bitwidth)
+        assert np.all(actual != expected), f"{src_bitwidth}-to-{dst_bitwidth} discarded bit {bit}"
 
 
 @pytest.mark.parametrize(("src_bitwidth", "dst_bitwidth", "x", "y"), [

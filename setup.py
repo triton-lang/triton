@@ -340,6 +340,7 @@ class CMakeBuild(build_ext):
             "TRITON_PARALLEL_LINK_JOBS",
             "TRITON_OFFLINE_BUILD",
             "TRITON_LLVM_SYSTEM_SUFFIX",
+            "TRITON_STABLE_ABI",
             "LLVM_SYSPATH",
             "JSON_SYSPATH",
             "TRITON_CUDACRT_PATH",
@@ -474,6 +475,11 @@ def add_links(external_only):
 
 
 class plugin_bdist_wheel(bdist_wheel):
+
+    def get_tag(self):
+        if check_env_flag("TRITON_STABLE_ABI"):
+            return "cp312", "abi3", super().get_tag()[2]
+        return super().get_tag()
 
     def run(self):
         add_links(external_only=True)
