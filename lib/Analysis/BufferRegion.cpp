@@ -6,6 +6,7 @@
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -225,7 +226,7 @@ MemDescFootprint getMemDescAddresses(
 }
 
 triton::BufferRegionView getMemDescView(
-    Operation *allocationFrame, uint32_t storageBase, uint32_t affineOffset,
+    uint32_t allocationFrame, uint32_t storageBase, uint32_t affineOffset,
     ttg::MemDescType ty,
     llvm::DenseMap<std::pair<Type, uint32_t>, triton::AddressSet> *cache,
     ArrayRef<uint32_t> partitionBases = {}, uint32_t affinePartitionOffset = 0,
@@ -504,6 +505,11 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions,
 }
 
 LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
+  top->walk([&](Operation *operation) {
+    if (isa<FunctionOpInterface, CallOpInterface>(operation))
+      operationIds.try_emplace(operation, operationIds.size() + 1);
+  });
+
   // Mark all warp-specialize partitions as live.
   LogicalResult status = Base::initialize(top);
   if (failed(status))
@@ -553,14 +559,16 @@ LogicalResult BufferRegionAnalysis::visitOperation(
                                             ? ArrayRef<uint32_t>(*offsets)
                                             : ArrayRef<uint32_t>();
     regionInfo.views.insert(getMemDescView(
-        op->getParentOfType<FunctionOpInterface>().getOperation(),
+        getOperationId(
+            op->getParentOfType<FunctionOpInterface>().getOperation()),
         offsets->front(), /*affineOffset=*/0, localAllocOp.getType(),
         &footprintCache, partitionBases));
     return propagateRegions(regionInfo);
   }
   if (auto tmemAllocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
     regionInfo.views.insert(getMemDescView(
-        op->getParentOfType<FunctionOpInterface>().getOperation(),
+        getOperationId(
+            op->getParentOfType<FunctionOpInterface>().getOperation()),
         getAllocationOffset(tmemAllocOp), /*affineOffset=*/0,
         tmemAllocOp.getType(), &footprintCache));
     return propagateRegions(regionInfo);

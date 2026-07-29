@@ -2,7 +2,6 @@
 #define TRITON_ANALYSIS_BUFFER_REGION_H
 
 #include <cstdint>
-#include <functional>
 #include <set>
 #include <tuple>
 #include <utility>
@@ -112,8 +111,8 @@ struct BufferRegionView {
   llvm::SmallVector<uint32_t, 2> partitionBases;
   uint32_t affinePartitionOffset = 0;
   uint32_t affineCTAOffset = 0;
-  /// The function whose shared-memory allocation frame owns this region.
-  Operation *allocationFrame = nullptr;
+  /// Deterministically interned identity of the owning allocation frame.
+  uint32_t allocationFrame = 0;
 
   bool intersects(const BufferRegionView &other) const {
     return allocationFrame == other.allocationFrame &&
@@ -127,18 +126,16 @@ struct BufferRegionView {
 
 private:
   auto key() const {
-    return std::tie(region, storageBase, affineOffset, affinePartitionOffset,
-                    affineCTAOffset, partitionBases);
+    return std::tie(allocationFrame, region, storageBase, affineOffset,
+                    affinePartitionOffset, affineCTAOffset, partitionBases);
   }
 
 public:
   bool operator==(const BufferRegionView &other) const {
-    return allocationFrame == other.allocationFrame && key() == other.key();
+    return key() == other.key();
   }
 
   bool operator<(const BufferRegionView &other) const {
-    if (allocationFrame != other.allocationFrame)
-      return std::less<Operation *>{}(allocationFrame, other.allocationFrame);
     return key() < other.key();
   }
 };
@@ -242,6 +239,10 @@ public:
     return getLatticeElement(value)->getValue();
   }
 
+  uint32_t getOperationId(Operation *operation) const {
+    return operationIds.lookup(operation);
+  }
+
   // ------------------------------
   // Public API for ConSan
   // ------------------------------
@@ -279,6 +280,7 @@ private:
   std::set<BufferRegion> usedBufferRegions[NUM_REGION_TYPES];
   bool usedUnknownBufferRegions[NUM_REGION_TYPES] = {};
   llvm::DenseMap<std::pair<Type, uint32_t>, AddressSet> footprintCache;
+  llvm::DenseMap<Operation *, uint32_t> operationIds;
 };
 
 } // namespace mlir::triton
