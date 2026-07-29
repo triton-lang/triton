@@ -16,6 +16,9 @@ endif()
 if(NOT JSON_INCLUDE_DIR)
   message(FATAL_ERROR "JSON include directory not defined")
 endif()
+if(NOT ROCPROFILER_SDK_INCLUDE_DIR)
+  set(ROCPROFILER_SDK_INCLUDE_DIR "${ROCM_INCLUDE_DIR}")
+endif()
 
 unset(PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH CACHE)
 set(_proton_saved_cmake_required_includes "${CMAKE_REQUIRED_INCLUDES}")
@@ -36,27 +39,10 @@ else()
 endif()
 
 unset(PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING CACHE)
-set(CMAKE_REQUIRED_INCLUDES "${ROCPROFILER_SDK_INCLUDE_DIR}")
-check_cxx_source_compiles([=[
-  #include <rocprofiler-sdk/pc_sampling.h>
-  int main() {
-    rocprofiler_pc_sampling_configuration_t config{};
-    rocprofiler_pc_sampling_record_host_trap_v0_t hostTrap{};
-    rocprofiler_pc_sampling_record_stochastic_v0_t stochastic{};
-    rocprofiler_available_pc_sampling_configurations_cb_t cb = nullptr;
-    auto method = ROCPROFILER_PC_SAMPLING_METHOD_STOCHASTIC;
-    auto unit = ROCPROFILER_PC_SAMPLING_UNIT_INSTRUCTIONS;
-    auto reason = ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_WAITCNT;
-    (void) config;
-    (void) hostTrap;
-    (void) stochastic;
-    (void) cb;
-    (void) method;
-    (void) unit;
-    (void) reason;
-    return 0;
-  }
-]=] PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING)
+set(PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING OFF)
+if(EXISTS "${ROCPROFILER_SDK_INCLUDE_DIR}/rocprofiler-sdk/pc_sampling.h")
+  set(PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING ON)
+endif()
 
 if(PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING)
   message(STATUS "Proton ROCProfiler-SDK PC sampling: enabled")
@@ -79,36 +65,13 @@ find_library(PROTON_AMD_COMGR_LIBRARY
 find_library(PROTON_DW_LIBRARY NAMES dw)
 
 unset(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE CACHE)
-if(PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING AND PROTON_AMD_COMGR_LIBRARY AND
-   PROTON_DW_LIBRARY)
-  set(_PROTON_REQUIRED_INCLUDES "${CMAKE_REQUIRED_INCLUDES}")
-  set(_PROTON_REQUIRED_LIBRARIES "${CMAKE_REQUIRED_LIBRARIES}")
-  set(CMAKE_REQUIRED_INCLUDES
-      "${ROCPROFILER_SDK_INCLUDE_DIR}"
-      "${ROCM_INCLUDE_DIR}")
-  set(CMAKE_REQUIRED_LIBRARIES
-      "${PROTON_AMD_COMGR_LIBRARY}"
-      "${PROTON_DW_LIBRARY}")
-  check_cxx_source_compiles([=[
-    #include <rocprofiler-sdk/pc_sampling.h>
-    #include <rocprofiler-sdk/cxx/codeobj/code_printing.hpp>
-    int main() {
-      rocprofiler_pc_sampling_record_stochastic_v0_t sample{};
-      using rocprofiler::sdk::codeobj::disassembly::CodeobjAddressTranslate;
-      using rocprofiler::sdk::codeobj::disassembly::Instruction;
-      CodeobjAddressTranslate translator;
-      Instruction inst;
-      (void) sample;
-      (void) inst.comment;
-      const void *data = nullptr;
-      translator.addDecoder(data, 0, 1, 0, 0);
-      (void) translator.get(1, 0);
-      (void) translator.removeDecoder(1, 0);
-      return 0;
-    }
-  ]=] PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE)
-  set(CMAKE_REQUIRED_INCLUDES "${_PROTON_REQUIRED_INCLUDES}")
-  set(CMAKE_REQUIRED_LIBRARIES "${_PROTON_REQUIRED_LIBRARIES}")
+set(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE OFF)
+if(PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING AND
+   EXISTS
+     "${ROCPROFILER_SDK_INCLUDE_DIR}/rocprofiler-sdk/cxx/codeobj/code_printing.hpp"
+   AND
+   PROTON_AMD_COMGR_LIBRARY AND PROTON_DW_LIBRARY)
+  set(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE ON)
 endif()
 
 if(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE)

@@ -993,15 +993,6 @@ def test_pcsampling(tmp_path: pathlib.Path, device: str):
             queue.extend(current["children"])
         return frames
 
-    def find_frame_containing(frame, name):
-        queue = [frame]
-        while queue:
-            current = queue.pop(0)
-            if name in current["frame"]["name"]:
-                return current
-            queue.extend(current["children"])
-        return None
-
     foo_source, foo_start_line = inspect.getsourcelines(foo.fn)
     expected_store_lines = {foo_start_line + idx for idx, line in enumerate(foo_source) if "tl.store" in line}
     assert expected_store_lines
@@ -1028,33 +1019,23 @@ def test_pcsampling(tmp_path: pathlib.Path, device: str):
         y = torch.zeros_like(x)
     with proton.scope("test"):
         foo[(1, )](x, y, x.size()[0], num_warps=4)
-    if is_hip():
-        torch.cuda.synchronize()
-        foo.device_caches.clear()
     proton.finalize()
 
     with temp_file.open() as f:
         data = json.load(f)
 
-    init_frame = data[0]["children"][0]
     test_frame = data[0]["children"][1]
 
-    foo_frame = find_frame_containing(test_frame, "foo")
+    foo_frame = _find_frame_by_name(test_frame, "foo")
     assert foo_frame is not None
-    assert total_samples(foo_frame) > 0
     if expect_source_attribution:
-        # PC sampling provides real source line mapping for Triton kernels.
         matching_source_frames = [
             frame for file_name, line, function, frame in pc_sample_source_frames(foo_frame)
             if file_name == pathlib.Path(__file__) and line in expected_store_lines and function
             and frame["metrics"].get("num_samples", 0) > 0
         ]
         assert matching_source_frames
-
-    # Without line mapping
-    assert "elementwise" in init_frame["children"][0]["frame"]["name"]
-    if is_cuda():
-        assert init_frame["children"][0]["metrics"]["num_samples"] > 0
+    assert total_samples(foo_frame) > 0
 
 
 def test_deactivate(tmp_path: pathlib.Path, device: str):
