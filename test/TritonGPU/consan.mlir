@@ -9,6 +9,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK-DAG: #[[BUFS_L:.*]] = #ttg.linear<{register = [], lane = {{\[}}[0], [0], [0], [0], [0]], warp = [], block = []}>
   // CHECK-DAG: #[[BUFS_THREADS_L:.*]] = #ttg.linear<{register = [], lane = {{\[}}[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]], warp = [], block = []}>
   // CHECK-DAG: #[[BUFS_BARS_L:.*]] = #ttg.linear<{register = [], lane = {{\[}}[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [], block = []}>
+  // CHECK-LABEL: tt.func private @__triton_consan_verify_write_visibility_noalias
+  // CHECK: %[[WRITE_VISIBILITY:.*]] = tt.load
+  // CHECK: arith.cmpi eq, %[[WRITE_VISIBILITY]],
+  // CHECK: %[[SELECTED_THREAD_BIT:.*]] = arith.shli
+  // CHECK: %[[VISIBLE_THREAD_BITS:.*]] = arith.andi %[[WRITE_VISIBILITY]], %[[SELECTED_THREAD_BIT]]
+  // CHECK: arith.cmpi eq, %[[VISIBLE_THREAD_BITS]], %[[SELECTED_THREAD_BIT]]
   // CHECK: @single_local_alloc
   tt.func public @single_local_alloc() {
     // CHECK: %[[WRITE_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 8 : i32, shared_cluster_state, third_party_allocation, tt.divisibility = 16 : i64} : !tt.ptr<i64>
