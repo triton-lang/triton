@@ -90,8 +90,10 @@ void lowerEvent(OpBuilder &builder, Operation *op, Value targetSegment,
   builder.setInsertionPoint(op);
   if (auto eventAlloc = dyn_cast<proton::AllocateEventOp>(op)) {
     int scopeId = scopeInfo.getOpScopeId(eventAlloc);
-    Value event =
-        arith::ConstantIntOp::create(builder, eventAlloc.getLoc(), scopeId, 32);
+    uint32_t encodedEvent = gpu::encodeEventTag(
+        scopeId, /*isStart=*/true, EventType::ASYNC, MetricValueType::NONE);
+    Value event = arith::ConstantIntOp::create(builder, eventAlloc.getLoc(),
+                                               encodedEvent, 32);
     eventAlloc.getEvent().replaceAllUsesWith(event);
     eventAlloc.erase();
     return;

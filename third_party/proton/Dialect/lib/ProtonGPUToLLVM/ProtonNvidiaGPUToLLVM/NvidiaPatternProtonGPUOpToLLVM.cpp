@@ -38,7 +38,8 @@ storeDataPacks(Operation *op,
       PTXBuilder builder;
       auto b = TritonLLVMOpBuilder(loc, rewriter);
       if (numWarps > 1) {
-        auto stInst = builder.create<>("st")->o("global").o("cg").v(2).b(32);
+        auto stInst =
+            builder.create<>("st")->o("weak").o("global").o("cg").v(2).b(32);
         auto *ptrOpr = builder.newAddrOperand(dataPack.ptr, "l");
 
         PTXBuilder::Operand *valOpr;
@@ -52,7 +53,8 @@ storeDataPacks(Operation *op,
       } else {
         // Non-vectorized version for num_warps=1 to handle potential
         // misalignment
-        auto stInst = builder.create<>("st")->o("global").o("cg").b(32);
+        auto stInst =
+            builder.create<>("st")->o("weak").o("global").o("cg").b(32);
 
         auto unPackedVals = unpackLLVector(loc, dataPack.record, rewriter);
 
@@ -69,9 +71,17 @@ storeDataPacks(Operation *op,
         builder.launch(rewriter, loc, void_ty(rewriter.getContext()));
       }
     } else if (addrSpace == 3) {
-      targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, dataPack.ptr,
-                                                    Value(), dataPack.record,
-                                                    /*pred=*/dataPack.isWriter);
+      PTXBuilder builder;
+      auto stInst =
+          builder.create<>("st")->o("weak").o("shared::cta").v(2).b(32);
+      auto *ptrOpr = builder.newAddrOperand(dataPack.ptr, "r");
+
+      SmallVector<std::pair<Value, std::string>> vecVals;
+      for (Value value : unpackLLVector(loc, dataPack.record, rewriter))
+        vecVals.push_back({value, "r"});
+      auto *valOpr = builder.newListOperand(vecVals);
+      stInst(ptrOpr, valOpr).predicate(dataPack.isWriter, "b");
+      builder.launch(rewriter, loc, void_ty(rewriter.getContext()));
     } else {
       llvm::report_fatal_error("unsupported address space in circular store");
     }
@@ -106,7 +116,8 @@ struct CircularStoreOpConversion
         PTXBuilder builder;
         auto b = TritonLLVMOpBuilder(loc, rewriter);
         if (numWarps > 1) {
-          auto stInst = builder.create<>("st")->o("global").o("cg").v(2).b(32);
+          auto stInst =
+              builder.create<>("st")->o("weak").o("global").o("cg").v(2).b(32);
           auto *ptrOpr = builder.newAddrOperand(dataPack.ptr, "l");
 
           PTXBuilder::Operand *valOpr;
@@ -120,7 +131,8 @@ struct CircularStoreOpConversion
         } else {
           // Non-vectorized version for num_warps=1 to handle potential
           // misalignment
-          auto stInst = builder.create<>("st")->o("global").o("cg").b(32);
+          auto stInst =
+              builder.create<>("st")->o("weak").o("global").o("cg").b(32);
 
           auto unPackedVals = unpackLLVector(loc, dataPack.record, rewriter);
 
@@ -137,9 +149,17 @@ struct CircularStoreOpConversion
           builder.launch(rewriter, loc, void_ty(rewriter.getContext()));
         }
       } else if (addrSpace == 3) {
-        targetInfo.getTritonTargetInfo().storeDShared(
-            rewriter, loc, dataPack.ptr, Value(), dataPack.record,
-            /*pred=*/dataPack.isWriter);
+        PTXBuilder builder;
+        auto stInst =
+            builder.create<>("st")->o("weak").o("shared::cta").v(2).b(32);
+        auto *ptrOpr = builder.newAddrOperand(dataPack.ptr, "r");
+
+        SmallVector<std::pair<Value, std::string>> vecVals;
+        for (Value value : unpackLLVector(loc, dataPack.record, rewriter))
+          vecVals.push_back({value, "r"});
+        auto *valOpr = builder.newListOperand(vecVals);
+        stInst(ptrOpr, valOpr).predicate(dataPack.isWriter, "b");
+        builder.launch(rewriter, loc, void_ty(rewriter.getContext()));
       } else {
         llvm::report_fatal_error("unsupported address space in circular store");
       }

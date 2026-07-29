@@ -67,13 +67,6 @@ namespace proton::gpu {
 
 namespace {
 
-enum class EventType : uint32_t {
-  SCOPE = 0,
-  ASYNC = 1,
-  MARK = 2,
-  METRIC = 3,
-};
-
 Value encodeMetric(Value metric, MetricValueType metricType,
                    TritonLLVMOpBuilder &b) {
   auto i32Type = IntegerType::get(metric.getContext(), 32);
@@ -89,10 +82,11 @@ Value encodeMetric(Value metric, MetricValueType metricType,
   return b.zext(i32Type, metric);
 }
 
-SmallVector<CircularStoreDataPack> lowerCircularEvent(
-    Operation *op, SegmentType segmentType, Value segmentStruct, Value counter,
-    Value scopeId, bool isStart, EventType eventType, Value metric,
-    MetricValueType metricType, ConversionPatternRewriter &rewriter) {
+SmallVector<CircularStoreDataPack>
+lowerCircularEvent(Operation *op, SegmentType segmentType, Value segmentStruct,
+                   Value counter, Value tag, Value metric, Value metricTag,
+                   MetricValueType metricType,
+                   ConversionPatternRewriter &rewriter) {
   auto loc = op->getLoc();
   auto mod = op->getParentOfType<ModuleOp>();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -135,11 +129,6 @@ SmallVector<CircularStoreDataPack> lowerCircularEvent(
   // =======================================
   Value clock = counter;
   auto clkTy = mlir::cast<IntegerType>(clock.getType());
-  Value maskedScopeId = b.and_(scopeId, b.i32_val(0xff));
-  Value tag = b.or_(b.shl(maskedScopeId, b.i32_val(23)),
-                    b.i32_val(static_cast<uint32_t>(eventType) << 20 |
-                              static_cast<uint32_t>(metricType) << 16 |
-                              (isStart ? 0u : (1u << 31))));
   Value valsVec;
   if (clkTy.getWidth() == 64) {
     auto clkVecTy = vec_ty(i32_ty, 2);
@@ -192,10 +181,6 @@ SmallVector<CircularStoreDataPack> lowerCircularEvent(
   dataPacks.push_back(
       {isWriter, valsVec, getRecordPtr(/*entryIndex=*/0), addrSpace});
   if (metric) {
-    Value metricTag =
-        b.or_(b.shl(maskedScopeId, b.i32_val(23)),
-              b.i32_val(static_cast<uint32_t>(EventType::METRIC) << 20 |
-                        static_cast<uint32_t>(metricType) << 16));
     Value metricRecord = packLLVector(
         loc, {metricTag, encodeMetric(metric, metricType, b)}, rewriter);
     dataPacks.push_back(
@@ -211,22 +196,33 @@ lowerCircularStore(CircularStoreOp op, Value segmentStruct, Value counter,
                    Value dynamicScopeId, Value metric,
                    ConversionPatternRewriter &rewriter) {
   auto b = TritonLLVMOpBuilder(op.getLoc(), rewriter);
-  Value scopeId = dynamicScopeId;
-  if (!scopeId)
-    scopeId = b.i32_val(op.getScopeIdAttr().getInt());
-  return lowerCircularEvent(
-      op, op.getSegment().getType(), segmentStruct, counter, scopeId,
-      op.getIsStart(), dynamicScopeId ? EventType::ASYNC : EventType::SCOPE,
-      metric, op.getMetricType(), rewriter);
+  Value tag;
+  Value metricTag;
+  if (dynamicScopeId) {
+    tag = op.getIsStart() ? dynamicScopeId
+                          : b.or_(dynamicScopeId, b.i32_val(1u << 31));
+  } else {
+    auto scopeId = op.getScopeIdAttr().getInt();
+    tag = b.i32_val(encodeEventTag(scopeId, op.getIsStart(), EventType::SCOPE,
+                                   op.getMetricType()));
+    if (metric)
+      metricTag = b.i32_val(encodeEventTag(
+          scopeId, /*isStart=*/true, EventType::METRIC, op.getMetricType()));
+  }
+  return lowerCircularEvent(op, op.getSegment().getType(), segmentStruct,
+                            counter, tag, metric, metricTag, op.getMetricType(),
+                            rewriter);
 }
 
 SmallVector<CircularStoreDataPack>
 lowerCircularMarkOpHelper(CircularMarkOp op, Value segmentStruct, Value counter,
                           ConversionPatternRewriter &rewriter) {
   auto b = TritonLLVMOpBuilder(op.getLoc(), rewriter);
+  Value tag = b.i32_val(encodeEventTag(op.getScopeIdAttr().getInt(),
+                                       /*isStart=*/true, EventType::MARK,
+                                       MetricValueType::NONE));
   return lowerCircularEvent(op, op.getSegment().getType(), segmentStruct,
-                            counter, b.i32_val(op.getScopeIdAttr().getInt()),
-                            /*isStart=*/true, EventType::MARK, Value(),
+                            counter, tag, Value(), Value(),
                             MetricValueType::NONE, rewriter);
 }
 

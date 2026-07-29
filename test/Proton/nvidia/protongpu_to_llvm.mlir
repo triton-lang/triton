@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file -convert-proton-nvidia-gpu-to-llvm -cse --verify-diagnostics | FileCheck %s
+// RUN: triton-opt %s -split-input-file -convert-proton-nvidia-gpu-to-llvm -cse --verify-diagnostics | FileCheck --check-prefix=CHECK-TAGS %s
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -54,21 +55,32 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: extended_event_lowering
+  // CHECK-TAGS-LABEL: extended_event_lowering
+  // CHECK-TAGS-NOT: llvm.shl
+  // CHECK-TAGS-NOT: llvm.mlir.constant(255 : i32)
+  // CHECK-TAGS: llvm.return
   llvm.func @extended_event_lowering() {
     // A metric start consumes two records (four words).
-    // CHECK-DAG: llvm.mlir.constant(4 : i32)
-    // CHECK-DAG: llvm.bitcast %{{.*}} : f32 to i32
-    // Metric type bits on the scope header and metric-extension tag.
-    // CHECK-DAG: llvm.mlir.constant(655360 : i32)
-    // CHECK-DAG: llvm.mlir.constant(3801088 : i32)
-    // Metric start (two stores), async end, and marker.
-    // CHECK-COUNT-4: st.shared::cta.v2.b32
+    // CHECK: llvm.mlir.constant(9043968 : i32)
+    // CHECK: llvm.mlir.constant(12189696 : i32)
+    // CHECK: llvm.mlir.constant(4 : i32)
+    // Complete static tags are folded into constants.
+    // CHECK: llvm.bitcast %{{.*}} : f32 to i32
+    // CHECK: st.weak.shared::cta.v2.b32
+    // CHECK: st.weak.shared::cta.v2.b32
+    // The async end only adds the end bit to its pre-encoded token.
+    // CHECK: llvm.mlir.constant(9437184 : i32)
+    // CHECK: llvm.mlir.constant(-2147483648 : i32)
+    // CHECK: llvm.or
+    // CHECK: st.weak.shared::cta.v2.b32
+    // CHECK: llvm.mlir.constant(18874368 : i32)
+    // CHECK: st.weak.shared::cta.v2.b32
     %buffer = ttg.local_alloc : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
     %segment = proton_gpu.segment_alloc %buffer : !ttg.memdesc<256xi32, #shared, #smem, mutable> -> !proton_gpu.segment<1024, #smem, warp>
     %clock = arith.constant 123 : i32
     %metric = arith.constant 1.5 : f32
     proton_gpu.circular_store start %segment, %clock metric %metric : f32 {metricType = 10 : i32, scopeId = 1 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
-    %token = arith.constant 1 : i32
+    %token = arith.constant 9437184 : i32
     proton_gpu.circular_store end %segment, %clock, %token : !proton_gpu.segment<1024, #smem, warp>, i32
     proton_gpu.circular_mark %segment, %clock {scopeId = 2 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
     llvm.return
@@ -95,7 +107,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-DAG: %[[INDEX:.*]] = llvm.urem %[[NESTED_CUR_INDEX]],
     // CHECK-DAG: %[[SMEM_OFFSET:.*]] = llvm.add {{.*}}, %[[INDEX]]
     // CHECK-DAG: %[[SMEM_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[SMEM_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i32
-    // CHECK-DAG: llvm.inline_asm has_side_effects{{.*}}st.shared::cta.v2.b32{{.*}}%[[SMEM_PTR]], %{{.*}}, %{{.*}}, %{{.*}}
+    // CHECK-DAG: llvm.inline_asm has_side_effects{{.*}}st.weak.shared::cta.v2.b32{{.*}}%[[SMEM_PTR]], %{{.*}}, %{{.*}}, %{{.*}}
     // CHECK-DAG: llvm.extractvalue {{.*}}[0] : !llvm.struct<(ptr<3>, i32)>
     %c4 = arith.constant 4 : index
     %c1 = arith.constant 1 : index
@@ -130,7 +142,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-DAG: %[[INDEX:.*]] = llvm.urem %[[FLAT_CUR_INDEX]],
     // CHECK-DAG: %[[SMEM_OFFSET:.*]] = llvm.add %{{.*}} %[[INDEX]]
     // CHECK-DAG: %[[SMEM_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[SMEM_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i32
-    // CHECK-DAG: llvm.inline_asm has_side_effects{{.*}}st.shared::cta.v2.b32{{.*}}%[[SMEM_PTR]], %{{.*}}, %{{.*}}, %{{.*}}
+    // CHECK-DAG: llvm.inline_asm has_side_effects{{.*}}st.weak.shared::cta.v2.b32{{.*}}%[[SMEM_PTR]], %{{.*}}, %{{.*}}, %{{.*}}
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
     %3 = proton_gpu.segment_alloc %0 : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.segment<2048, #smem, warp, [0, 1]>
     %8 = proton_gpu.read_counter : i32
@@ -230,7 +242,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: use_clock64
   // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "mov.u32 $0, %clock;", "=r"  : () -> i32
   // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "mov.u32 $0, %clock_hi;", "=r"  : () -> i32
-  // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@$3 st.shared::cta.v2.b32{{.*}}(!llvm.ptr<3>, i32, i32, i1)
+  // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@$3 st.weak.shared::cta.v2.b32{{.*}}(!llvm.ptr<3>, i32, i32, i1)
   llvm.func @use_clock64() {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
     %3 = proton_gpu.segment_alloc %0 : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.segment<2048, #smem, warp, [0, 1]>

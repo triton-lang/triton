@@ -15,7 +15,8 @@ module {
 module attributes {"ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: extended_events
   tt.func @extended_events() {
-    // CHECK-DAG: %[[EVENT:.*]] = arith.constant 1 : i32
+    // The async event is the pre-encoded static portion of the event tag.
+    // CHECK-DAG: %[[EVENT:.*]] = arith.constant 9437184 : i32
     %metric = arith.constant 7 : i32
     // CHECK: %[[METRIC_CLOCK:.*]] = proton_gpu.read_counter : i32
     // CHECK: proton_gpu.circular_store start %{{.*}}, %[[METRIC_CLOCK]] metric %{{.*}} : i32 {metricType = 4 : i32, scopeId = 0 : i32}
