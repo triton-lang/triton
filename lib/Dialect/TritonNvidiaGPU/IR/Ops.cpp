@@ -764,11 +764,6 @@ static LogicalResult verifyAsyncTMAGatherScatterOp(Operation *op,
     return op->emitOpError("result tensor element type must match block (")
            << blockType.getElementType() << "), but got " << memDescType;
 
-  ArrayRef<int64_t> allocShape = memDescType.getAllocShape();
-  if (allocShape.size() < 2 ||
-      memDescType.getShape() != allocShape.take_back(2))
-    return op->emitOpError("memdesc shape must match alloc shape");
-
   auto xOffsetsType = cast<RankedTensorType>(indicesType);
   if (xOffsetsType.getEncoding()) {
     auto xCoordsLayout = triton::gpu::toLinearLayout(xOffsetsType);
