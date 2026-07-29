@@ -239,6 +239,10 @@ static void analyzePipelineDependencies(ArrayRef<BlockInfo> clusterInfo,
               clusterInfo[dst], mlir::triton::AMD::membarFilter, allocation))
         continue;
       bars[barrierLoc] = true;
+      if (std::getenv("TRITON_WP_DEBUG"))
+        llvm::errs() << "[wp] LDS hazard: cluster " << src << " -> cluster "
+                     << dst << " (dist " << dist << ") => LOCAL barrier at slot "
+                     << barrierLoc << "\n";
       LDBG("cluster " << src << " need fence to " << dst
                       << " placing barrier at " << barrierLoc);
     }
@@ -396,9 +400,24 @@ private:
       existingBarrierMap.erase(bottomBar);
     }
 
+    if (std::getenv("TRITON_WP_DEBUG")) {
+      for (int i = 0; i < numClusters; i++) {
+        llvm::errs() << "[wp] cluster " << i << " stage=";
+        if (auto s = clusterOps[i]->getAttrOfType<StringAttr>(
+                "triton.warp_pipeline.stage"))
+          llvm::errs() << s.getValue();
+        llvm::errs() << " LDS-effects:\n";
+        clusterInfo[i].dump();
+      }
+    }
+
     // 3. Circular dependency analysis (wrap-around for loop pipelines).
     analyzePipelineDependencies(clusterInfo, bars, allocation,
                                 /*circular=*/true);
+    if (std::getenv("TRITON_WP_DEBUG"))
+      for (int i = 0; i < numClusters; i++)
+        llvm::errs() << "[wp] cluster " << i
+                     << " needLocal(barrier-before-it)=" << bars[i] << "\n";
 
     // 4. Materializing final cluster-scope barriers.  For each cluster index:
     //  • If there is a pre-existing barrier at that location, we wrap it with
@@ -411,15 +430,15 @@ private:
     //  • Cluster 0 is a special case: if no top-of-loop barrier existed,
     //    the first cluster barrier must be inserted just before the loop’s
     //    terminator, forming the wrap-around dependency.
+    // PROTOTYPE(top-barrier): place the loop-carried wrap-around barrier
+    // (cluster 0, no pre-existing top barrier) at the TOP of the loop body
+    // (before cluster 0) instead of just before the yield. The top barrier's
+    // setprio primes cluster 0's priority every iteration, so the separate
+    // before-loop priming is dropped. Effect: the loop-control (induction /
+    // back-edge) runs after the last stage with no trailing barrier, and the
+    // first stage's MFMA leads the region right after the top barrier.
+    (void)terminatorOp;
     for (int i = 0; i < numClusters; i++) {
-      if (i == 0 && !hasTopBarrier) {
-        // Prime the first iteration's priority.  The loop-carried cluster-0
-        // barrier sits at the bottom of the loop body, so it only controls
-        // the next iteration.
-        b.setInsertionPoint(forOp);
-        emitClusterPriority(b, loc, clusterOps[i], anyHasPriority);
-      }
-
       if (auto exBar = existingBarrierMap.find(i);
           exBar != existingBarrierMap.end()) {
         // FIXME: If bars[i] is true, wrapping a non-LOCAL pre-existing
@@ -429,14 +448,48 @@ private:
         wrapExistingBarrier(b, loc, clusterOps[i], exBar->second,
                             anyHasPriority);
       } else {
+        // before cluster i (i == 0 -> top of the loop body)
         b.setInsertionPoint(clusterOps[i]);
-        // The first one wraps back to the last of the loop
-        if (i == 0 && !hasTopBarrier) {
-          // inserts just before yield (=End of the loop).
-          b.setInsertionPoint(terminatorOp);
-        }
         emitClusterPriority(b, loc, clusterOps[i], anyHasPriority);
-        emitClusterBarrier(b, loc, /*needLocal=*/bars[i]);
+        // Wrap-around slot (cluster 0, no pre-existing top barrier): force a HARD
+        // LDS drain here.
+        //
+        // The LOCAL barrier's release fence *does* ask for the drain, but
+        // SIMemoryLegalizer materializes it as S_WAITCNT_soft -- an ADVISORY wait
+        // that SIInsertWaitcnts may relax. At every other cluster boundary the
+        // soft wait survives as s_waitcnt lgkmcnt(0), but at the loop header
+        // SIInsertWaitcnts deletes it and re-places minimal per-consumer waits
+        // instead (lgkmcnt(14), 13, 12, ... before each mfma), because the first
+        // mfma only needs 2 of the 16 backedge-carried ds_reads. The result is a
+        // staggered s_waitcnt stream *inside* the first (MFMA) stage.
+        //
+        // No fence/barrier can prevent that -- everything the memory model emits
+        // is soft. So emit an explicit amdgpu.memory_counter_wait(ds = 0), which
+        // lowers to a HARD s_waitcnt (lgkmcnt(0) on gfx9, s_wait_dscnt 0 on
+        // gfx12+) that SIInsertWaitcnts must honor. The drain then lands at the
+        // mem->dot boundary, right before the barrier and after the loop-control
+        // scalars, leaving the MFMA stage free of any lgkmcnt.
+        //
+        // Set TRITON_WP_NO_WRAP_DRAIN to opt out (restores the staggered form).
+        if (i == 0 && !hasTopBarrier &&
+            !std::getenv("TRITON_WP_NO_WRAP_DRAIN"))
+          mlir::triton::amdgpu::MemoryCounterWaitOp::create(
+              b, loc, /*load=*/nullptr, /*store=*/nullptr,
+              /*ds=*/b.getI32IntegerAttr(0));
+        // Always emit a LOCAL cluster barrier (ds_wait + s_barrier ->
+        // "lgkmcnt(0); s_barrier"), never a bare s_barrier. LOCAL strictly
+        // dominates bare, so this is always correctness-safe. `bars[i]` (from
+        // analyzePipelineDependencies) is the *minimal* set of slots that need a
+        // LOCAL barrier; emitting LOCAL everywhere is a superset. The reason is
+        // performance: a bare barrier lets the backend hoist a progressive
+        // s_waitcnt lgkmcnt(N..0) into the following MFMA stage, and each wait
+        // costs a 4-cyc MFMA co-exec slot and stalls the matrix unit (di/dt).
+        // A LOCAL barrier instead drains once with a single lgkmcnt(0) at the
+        // mem-stage end, hidden by inter-wave scheduling (measured +21 TFLOPS /
+        // +4.8pp MFMA-eff on the gfx950 FAv3 kernel). The DOT clusters have no
+        // LDS effects, so the extra barriers only order the mem clusters, which
+        // the minimal placement already had to do -- just at an arbitrary slot.
+        emitClusterBarrier(b, loc, /*needLocal=*/true);
       }
     }
 
