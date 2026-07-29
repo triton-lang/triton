@@ -172,6 +172,23 @@ LogicalResult emitFence(Operation *op, ConversionPatternRewriter &rewriter,
   return success();
 }
 
+// Stops LLVM's MachineSink from sinking loads past a barrier that follows.
+// Workaround for https://github.com/llvm/llvm-project/issues/181708.
+void emitMachineSinkBarrierFence(ConversionPatternRewriter &rewriter,
+                                 Location loc) {
+  auto asmDialectAttr = LLVM::AsmDialectAttr::get(rewriter.getContext(),
+                                                  LLVM::AsmDialect::AD_ATT);
+  auto asmTy = LLVM::LLVMVoidType::get(rewriter.getContext());
+  LLVM::InlineAsmOp::create(
+      rewriter, loc, asmTy,
+      /*operands=*/ValueRange{},
+      /*asm_string=*/"",
+      /*constraints=*/"~{memory}",
+      /*has_side_effects=*/true,
+      /*is_align_stack=*/false, LLVM::TailCallKind::None, asmDialectAttr,
+      /*operand_attrs=*/ArrayAttr::get(rewriter.getContext(), {}));
+}
+
 Value emitRedundantThreadPredicateNonNull(
     const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
     ConversionPatternRewriter &rewriter, Location loc,
@@ -2392,49 +2409,9 @@ struct AtomicRMWOpConversion
                   loc, rewriter, targetInfo, op.getOperation()))
             : std::nullopt;
 
-    // Emit a compiler fence to prevent LLVM's MachineSink from sinking
-    // preceding LDS loads (e.g., from ConvertLayoutOps that feed into this
-    // atomic) past barriers introduced by the atomic lowering below.
-    //
-    // Root cause: MachineSink's isSafeToMove() only sets SawStore for
-    // instructions with mayStore(), not for UnmodeledSideEffects. AMDGPU
-    // barriers have UnmodeledSideEffects but not mayStore(), so loads can
-    // be sunk past them into successor blocks.
-    //
-    // When buffer atomics are not enabled for the target (see
-    // ConvertToBufferOps.cpp), this AtomicRMWOp lowering path is used instead.
-    // emitAtomicRMW() below creates a condBr that splits the current block to
-    // mask which threads execute the atomic. Without this fence, preceding LDS
-    // loads (from ConvertLayoutOps or reduce cross-warp communication) can be
-    // sunk past barriers in the successor blocks. On targets where buffer
-    // atomics ARE enabled (e.g., gfx950), LLVM replaces the condBr with buffer
-    // atomic OOB offset masking, eliminating the block split entirely and
-    // avoiding this issue.
-    //
-    // This inline asm has mayStore()=true via the "~{memory}" constraint,
-    // which sets SawStore in MachineSink's bottom-up walk, preventing any
-    // preceding loads from being sunk past this point.
-    //
-    // This is the only fence needed: emitAtomicRMW() is the only lowering
-    // pattern that creates a condBr splitting a block with preceding LDS
-    // loads where successor blocks contain barriers. If new lowering
-    // patterns with similar structure are added, they will need their own
-    // fence.
-    //
-    // This is a workaround for
-    // https://github.com/llvm/llvm-project/issues/181708.
+    // Needed on GFX1250 because buffer atomics don't remove the condBr there.
     if (tensorTy && targetInfo.getISAFamily() == ISAFamily::GFX1250) {
-      auto asmDialectAttr = LLVM::AsmDialectAttr::get(rewriter.getContext(),
-                                                      LLVM::AsmDialect::AD_ATT);
-      auto asmTy = LLVM::LLVMVoidType::get(rewriter.getContext());
-      LLVM::InlineAsmOp::create(
-          rewriter, loc, asmTy,
-          /*operands=*/ValueRange{},
-          /*asm_string=*/"",
-          /*constraints=*/"~{memory}",
-          /*has_side_effects=*/true,
-          /*is_align_stack=*/false, LLVM::TailCallKind::None, asmDialectAttr,
-          /*operand_attrs=*/ArrayAttr::get(rewriter.getContext(), {}));
+      emitMachineSinkBarrierFence(rewriter, loc);
     }
 
     SmallVector<Value> resultVals(elemsPerThread);
@@ -2497,6 +2474,11 @@ struct AtomicRMWOpConversion
             return success();
           }
           Value atomPtr = *atomicSharedMemBase;
+
+          // Scalar atomics never use buffer atomics, so they always hit the
+          // same condBr-then-barrier pattern the fence above protects.
+          // Needed here on every target, not just GFX1250.
+          emitMachineSinkBarrierFence(rewriter, loc);
           b.barrier(triton::gpu::AddrSpace::Local);
           Value ret = b.load(valueElemTy, atomPtr);
 
