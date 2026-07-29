@@ -190,34 +190,46 @@ getInstrumentationEncoding(OpBuilder &builder, ArrayRef<int64_t> shape,
                                        order, base.getCGALayout());
 }
 
-static DescriptorInfo getDescriptorInfo(Value desc, OpBuilder &builder) {
-  if (!isa<tt::TensorDescType>(desc.getType())) {
-    std::string msg;
-    llvm::raw_string_ostream stream(msg);
-    stream << "GSan: Unsupported descriptor type" << desc.getType();
-    llvm::report_fatal_error(msg.c_str());
+class DescriptorInfoCache {
+public:
+  DescriptorInfo get(Value desc, OpBuilder &builder) {
+    auto &blockInfos = infos[builder.getInsertionBlock()];
+    if (auto cached = blockInfos.find(desc); cached != blockInfos.end())
+      return cached->second;
+
+    if (!isa<tt::TensorDescType>(desc.getType())) {
+      std::string msg;
+      llvm::raw_string_ostream stream(msg);
+      stream << "GSan: Unsupported descriptor type" << desc.getType();
+      llvm::report_fatal_error(msg.c_str());
+    }
+    auto descTy = cast<tt::TensorDescType>(desc.getType());
+
+    auto elemTy = descTy.getSignlessBlockType().getElementType();
+    auto basePtrTy = tt::getPointerType(elemTy);
+    unsigned rank = descTy.getShape().size();
+    SmallVector<Type> resultTypes;
+    resultTypes.reserve(1 + 2 * rank);
+    resultTypes.push_back(basePtrTy);
+    resultTypes.append(rank, builder.getI64Type());
+    resultTypes.append(rank, builder.getI64Type());
+
+    auto info = ExperimentalGSanTensorDescInfoOp::create(builder, desc.getLoc(),
+                                                         resultTypes, desc);
+    auto results = info->getResults();
+
+    DescriptorInfo descriptorInfo;
+    descriptorInfo.base = results.front();
+    descriptorInfo.shape.assign(results.begin() + 1,
+                                results.begin() + 1 + rank);
+    descriptorInfo.strides.assign(results.begin() + 1 + rank, results.end());
+    blockInfos.try_emplace(desc, descriptorInfo);
+    return descriptorInfo;
   }
-  auto descTy = cast<tt::TensorDescType>(desc.getType());
 
-  auto elemTy = descTy.getSignlessBlockType().getElementType();
-  auto basePtrTy = tt::getPointerType(elemTy);
-  unsigned rank = descTy.getShape().size();
-  SmallVector<Type> resultTypes;
-  resultTypes.reserve(1 + 2 * rank);
-  resultTypes.push_back(basePtrTy);
-  resultTypes.append(rank, builder.getI64Type());
-  resultTypes.append(rank, builder.getI64Type());
-
-  auto info = ExperimentalGSanTensorDescInfoOp::create(builder, desc.getLoc(),
-                                                       resultTypes, desc);
-  auto results = info->getResults();
-
-  DescriptorInfo descriptorInfo;
-  descriptorInfo.base = results.front();
-  descriptorInfo.shape.assign(results.begin() + 1, results.begin() + 1 + rank);
-  descriptorInfo.strides.assign(results.begin() + 1 + rank, results.end());
-  return descriptorInfo;
-}
+private:
+  DenseMap<Block *, DenseMap<Value, DescriptorInfo>> infos;
+};
 
 static Value createExpandedOffsetRange(OpBuilder &builder, Location loc,
                                        RankedTensorType fullI64Type,
@@ -375,12 +387,13 @@ static bool instrumentRectangularTMAAccess(OpBuilder &builder, Location loc,
   return true;
 }
 
-static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
+static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op,
+                                   DescriptorInfoCache &descriptorInfos) {
   if (isa<ttng::TensorDescIm2ColType>(op.getDesc().getType()))
     return;
 
   OpBuilder builder(op);
-  auto desc = getDescriptorInfo(op.getDesc(), builder);
+  auto desc = descriptorInfos.get(op.getDesc(), builder);
   auto blockShape = op.getDesc().getType().getShape();
 
   auto offsets = castToI64(builder, op.getLoc(), op.getCoord());
@@ -395,9 +408,10 @@ static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
 }
 
 static void instrumentAsyncTMAStore(Operation *op, Value descValue,
-                                    ValueRange coords) {
+                                    ValueRange coords,
+                                    DescriptorInfoCache &descriptorInfos) {
   OpBuilder builder(op);
-  auto desc = getDescriptorInfo(descValue, builder);
+  auto desc = descriptorInfos.get(descValue, builder);
   auto blockShape = cast<tt::TensorDescType>(descValue.getType()).getShape();
 
   auto offsets = castToI64(builder, op->getLoc(), coords);
@@ -410,9 +424,10 @@ static void instrumentAsyncTMAStore(Operation *op, Value descValue,
                                          access.second, /*isStore=*/true);
 }
 
-static void instrumentAsyncTMAReduce(ttng::AsyncTMAReduceOp op) {
+static void instrumentAsyncTMAReduce(ttng::AsyncTMAReduceOp op,
+                                     DescriptorInfoCache &descriptorInfos) {
   OpBuilder builder(op);
-  auto desc = getDescriptorInfo(op.getDesc(), builder);
+  auto desc = descriptorInfos.get(op.getDesc(), builder);
   auto blockShape = op.getDesc().getType().getShape();
 
   auto offsets = castToI64(builder, op.getLoc(), op.getCoord());
@@ -435,9 +450,10 @@ static void instrumentAtomicPoll(tt::AtomicPollOp op) {
     ttng::ClusterBarrierOp::create(builder, op.getLoc());
 }
 
-static void instrumentAsyncTMAGather(ttng::AsyncTMAGatherOp op) {
+static void instrumentAsyncTMAGather(ttng::AsyncTMAGatherOp op,
+                                     DescriptorInfoCache &descriptorInfos) {
   OpBuilder builder(op);
-  auto desc = getDescriptorInfo(op.getDesc(), builder);
+  auto desc = descriptorInfos.get(op.getDesc(), builder);
 
   auto access = createGatherScatterAccess(builder, op.getLoc(), desc,
                                           op.getResult().getType().getShape(),
@@ -451,9 +467,10 @@ static void instrumentAsyncTMAGather(ttng::AsyncTMAGatherOp op) {
                                          mask, /*isStore=*/false);
 }
 
-static void instrumentAsyncTMAScatter(ttng::AsyncTMAScatterOp op) {
+static void instrumentAsyncTMAScatter(ttng::AsyncTMAScatterOp op,
+                                      DescriptorInfoCache &descriptorInfos) {
   OpBuilder builder(op);
-  auto desc = getDescriptorInfo(op.getDesc(), builder);
+  auto desc = descriptorInfos.get(op.getDesc(), builder);
 
   auto access = createGatherScatterAccess(builder, op.getLoc(), desc,
                                           op.getSrc().getType().getShape(),
@@ -544,6 +561,7 @@ public:
     }
 
     OperationLocalIntegerRanges integerRanges;
+    DescriptorInfoCache descriptorInfos;
     module.walk([&](Operation *op) {
       IRRewriter b(op);
       mlir::TypeSwitch<Operation *>(op)
@@ -568,20 +586,22 @@ public:
           .Case([&](ttng::AsyncTMACopyGlobalToLocalOp op) {
             if (integerRanges.isProvablyInactive(op.getPred()))
               return;
-            instrumentAsyncTMALoad(op);
+            instrumentAsyncTMALoad(op, descriptorInfos);
           })
           .Case([&](ttng::AsyncTMAGatherOp op) {
             if (integerRanges.isProvablyInactive(op.getPred()))
               return;
-            instrumentAsyncTMAGather(op);
+            instrumentAsyncTMAGather(op, descriptorInfos);
           })
           .Case([&](ttng::AsyncTMACopyLocalToGlobalOp op) {
-            instrumentAsyncTMAStore(op, op.getDesc(), op.getCoord());
+            instrumentAsyncTMAStore(op, op.getDesc(), op.getCoord(),
+                                    descriptorInfos);
           })
-          .Case(
-              [&](ttng::AsyncTMAReduceOp op) { instrumentAsyncTMAReduce(op); })
+          .Case([&](ttng::AsyncTMAReduceOp op) {
+            instrumentAsyncTMAReduce(op, descriptorInfos);
+          })
           .Case([&](ttng::AsyncTMAScatterOp op) {
-            instrumentAsyncTMAScatter(op);
+            instrumentAsyncTMAScatter(op, descriptorInfos);
           })
           .Case([&](tt::AtomicRMWOp op) {
             auto newOp = ExperimentalGSanAtomicRMWOp::create(
