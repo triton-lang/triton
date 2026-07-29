@@ -1106,10 +1106,6 @@ struct AsyncTMACopyGlobalToLocalOpConversion
         typeConverter->convertType(barrierTy.getElementType()), rewriter);
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getResult(), llvmElemTy, rewriter);
-    auto [affineOffset, affineBlockOffset] =
-        dstMemObj.getShmemOffsetAndBlock(loc, rewriter, dstTy);
-    Value dstBase = b.gep(dstMemObj.getBase().getType(), llvmElemTy,
-                          dstMemObj.getBase(), affineOffset);
     uint64_t affineBlockMask =
         LLVM::SharedMemoryObject::getMaskSpanOffsetsAndBlocks(dstTy).second;
 
@@ -1188,14 +1184,13 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       Value boxPred =
           b.and_(pred, b.icmp_ult(id, b.i32_val(numWarpsToCopy * warpSize)));
       ::mlir::triton::PTXBuilder ptxBuilderTMA;
-      Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
       Value copyIdxVal = b.add(warpID, b.i32_val(copyIdx));
       auto sharedAddress = applyLinearLayout(
           loc, rewriter, msgToShared, {{kMsg, copyIdxVal}, {kBlock, ctaId}});
-      Value shMemOffset = sharedAddress[0].second;
-      Value shMemPtr = b.gep(elemPtrTy, llvmElemTy, dstBase, shMemOffset);
+      auto [shMemPtr, targetCTA] = materializeLocalAddrs(
+          loc, dstTy, dstMemObj, llvmElemTy,
+          {{sharedAddress[0].second, sharedAddress[1].second}}, rewriter)[0];
       if (affineBlockMask) {
-        Value targetCTA = b.xor_(sharedAddress[1].second, affineBlockOffset);
         shMemPtr = NVVM::MapaOp::create(rewriter, loc,
                                         ptr_ty(rewriter.getContext(), 7),
                                         shMemPtr, targetCTA);
@@ -1466,14 +1461,9 @@ static LogicalResult iterateGatherScatterIndices(
   if (enc.getFp4Padded())
     yOffsetValue = b.mul(yOffsetValue, b.i32_val(2));
   Type llvmElemTy = typeConverter.convertType(smemType.getElementType());
-  Type elemPtrTy = ptr_ty(ctx, /*addrspace=*/3);
   auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, smemObjValue,
                                                        llvmElemTy, rewriter);
-  auto [affineOffset, affineBlockOffset] =
-      smemObj.getShmemOffsetAndBlock(loc, rewriter, smemType);
-  Value smemBase =
-      b.gep(elemPtrTy, llvmElemTy, smemObj.getBase(), affineOffset);
-  bool crossCTADestination =
+  bool crossCTA =
       LLVM::SharedMemoryObject::getMaskSpanOffsetsAndBlocks(smemType).second;
 
   unsigned threadsPerWarp = xCoordsLayout.getInDimSize(kLane);
@@ -1543,10 +1533,10 @@ static LogicalResult iterateGatherScatterIndices(
                                        {kMsg, msgIdVal}});
       assert(result.size() == 2 && result.front().first == "offset" &&
              result.back().first == "block");
-      Value shMemOffset = result.front().second;
-      Value shMemPtr = b.gep(elemPtrTy, llvmElemTy, smemBase, shMemOffset);
-      if (crossCTADestination) {
-        Value targetCTA = b.xor_(result.back().second, affineBlockOffset);
+      auto [shMemPtr, targetCTA] = materializeLocalAddrs(
+          loc, smemType, smemObj, llvmElemTy,
+          {{result.front().second, result.back().second}}, rewriter)[0];
+      if (crossCTA) {
         shMemPtr = NVVM::MapaOp::create(rewriter, loc, ptr_ty(ctx, 7), shMemPtr,
                                         targetCTA);
       }
@@ -1602,10 +1592,9 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
     barrierPtr =
         LLVM::NVIDIA::getLeaderAddress(loc, rewriter, barrierPtr, barrierTy);
   }
-  bool crossCTADestination =
-      LLVM::SharedMemoryObject::getMaskSpanOffsetsAndBlocks(
-          op.getResult().getType())
-          .second;
+  bool crossCTA = LLVM::SharedMemoryObject::getMaskSpanOffsetsAndBlocks(
+                      op.getResult().getType())
+                      .second;
 
   std::string ctaGroup;
   if (getModuleTwoCTAs(op)) {
@@ -1615,7 +1604,7 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
         getCGALayout(barrierTy.getEncoding()) == oneCTACGALayout;
     ctaGroup = oneCTABarrier ? ".cta_group::1" : ".cta_group::2";
   }
-  if (crossCTADestination)
+  if (crossCTA)
     ctaGroup = ".cta_group::2";
 
   // Callback to generate the gather4 instruction.
@@ -1624,8 +1613,7 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
     std::string tmaInst = "@$0 cp.async.bulk.tensor.2d.tile::gather4";
     tmaInst += ctaGroup;
     tmaInst += ".shared::";
-    tmaInst += (crossCTABarrier || multicast || crossCTADestination) ? "cluster"
-                                                                     : "cta";
+    tmaInst += (crossCTABarrier || multicast || crossCTA) ? "cluster" : "cta";
     tmaInst += ".global.mbarrier::complete_tx::bytes";
     if (multicast)
       tmaInst += ".multicast::cluster";

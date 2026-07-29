@@ -460,45 +460,33 @@ def test_tma_gather_scatter_multi_cta(cga_layout):
 
 
 @gluon.jit
-def tma_gather_scatter_subslice_kernel(in_desc, out_desc, gather_idx_ptr, scatter_idx_ptr, parent_out,
-                                       KIND: ttgl.constexpr):
-    if KIND == "row":
-        cga_layout: ttgl.constexpr = ()
-    else:
-        cga_layout: ttgl.constexpr = ((1, 0), )
+def tma_gather_scatter_subslice_kernel(in_desc, out_desc, parent_out, KIND: ttgl.constexpr):
+    cga_layout: ttgl.constexpr = () if KIND == "row" else ((1, 0), )
     shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 16, rank=2, cga_layout=cga_layout)
     parent_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 8], [4, 1], [1, 0], cga_layout=cga_layout)
     indices_layout: ttgl.constexpr = ttgl.SliceLayout(
         1, ttgl.BlockedLayout([4, 1], [1, 32], [4, 1], [0, 1], cga_layout=cga_layout))
+    shape: ttgl.constexpr = (64, 256) if KIND == "column" else (128, 128)
+    parent = ttgl.allocate_shared_memory(ttgl.float16, shape, shared_layout,
+                                         value=ttgl.full(shape, -7, ttgl.float16, layout=parent_layout))
+    dim: ttgl.constexpr = 1 if KIND == "column" else 0
+    tile = parent.slice(shape[dim] // 2, shape[dim] // 2, dim=dim)
 
-    if KIND == "column":
-        parent = ttgl.allocate_shared_memory(ttgl.float16, [64, 256], shared_layout,
-                                             value=ttgl.full([64, 256], -7, ttgl.float16, layout=parent_layout))
-        tile = parent.slice(128, 128, dim=1)
-    else:
-        parent = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], shared_layout,
-                                             value=ttgl.full([128, 128], -7, ttgl.float16, layout=parent_layout))
-        tile = parent.slice(64, 64, dim=0)
-
-    gather_idx = ttgl.load(gather_idx_ptr + ttgl.arange(0, 64, layout=indices_layout))
+    indices = ttgl.arange(0, 64, layout=indices_layout)
     barrier = mbarrier.allocate_mbarrier()
     mbarrier.init(barrier, count=1)
     mbarrier.expect(barrier, tile.nbytes_per_cta)
-    blackwell_tma.async_gather(in_desc, gather_idx, 0, barrier, tile)
+    blackwell_tma.async_gather(in_desc, 63 - indices, 0, barrier, tile)
     mbarrier.wait(barrier, phase=0, deps=[tile])
     if KIND != "row":
         ttgl.barrier(cluster=True)
 
     if KIND != "remote":
-        scatter_idx = ttgl.load(scatter_idx_ptr + ttgl.arange(0, 64, layout=indices_layout))
-        blackwell_tma.async_scatter(out_desc, scatter_idx, 0, tile)
+        blackwell_tma.async_scatter(out_desc, (indices + 1) % 64, 0, tile)
         tma.store_wait(0)
 
     values = parent.load(parent_layout)
-    if KIND == "column":
-        offsets = ttgl.arange(0, 64)[:, None] * 256 + ttgl.arange(0, 256)[None, :]
-    else:
-        offsets = ttgl.arange(0, 128)[:, None] * 128 + ttgl.arange(0, 128)[None, :]
+    offsets = ttgl.arange(0, shape[0])[:, None] * shape[1] + ttgl.arange(0, shape[1])[None, :]
     ttgl.store(parent_out + ttgl.set_auto_layout(offsets, values.type.layout), values)
 
 
@@ -508,17 +496,15 @@ def test_tma_gather_scatter_subslice(kind):
     values = torch.arange(64 * 128, dtype=torch.float16, device="cuda").reshape(64, 128)
     scatter_out = torch.zeros_like(values)
     parent_out = torch.empty((64, 256) if kind == "column" else (128, 128), dtype=torch.float16, device="cuda")
-    gather_idx = torch.arange(63, -1, -1, dtype=torch.int32, device="cuda")
-    scatter_idx = (torch.arange(64, dtype=torch.int32, device="cuda") + 1) % 64
     cga_layout = () if kind == "row" else ((1, 0), )
     shared_layout = ttgl.NVMMASharedLayout(128, 16, rank=2, cga_layout=cga_layout)
     in_desc = TensorDescriptor.from_tensor(values, [1, 128], shared_layout)
     out_desc = TensorDescriptor.from_tensor(scatter_out, [1, 128], shared_layout)
 
-    compiled = tma_gather_scatter_subslice_kernel[(1, )](in_desc, out_desc, gather_idx, scatter_idx, parent_out, kind,
-                                                         num_warps=4, num_ctas=1 << len(cga_layout))
+    compiled = tma_gather_scatter_subslice_kernel[(1, )](in_desc, out_desc, parent_out, kind, num_warps=4,
+                                                         num_ctas=1 << len(cga_layout))
 
-    gathered = values[gather_idx.to(torch.int64)]
+    gathered = values.flip(0)
     expected_parent = torch.full_like(parent_out, -7)
     if kind == "column":
         expected_parent[:, 128:] = gathered
@@ -528,9 +514,7 @@ def test_tma_gather_scatter_subslice(kind):
         assert "mapa.shared::cluster" in compiled.asm["ptx"]
         assert "tile::gather4.cta_group::2.shared::cluster" in compiled.asm["ptx"]
     else:
-        expected_scatter = torch.zeros_like(values)
-        expected_scatter[scatter_idx.to(torch.int64)] = gathered
-        torch.testing.assert_close(scatter_out, expected_scatter, atol=0, rtol=0)
+        torch.testing.assert_close(scatter_out, gathered.roll(1, 0), atol=0, rtol=0)
     torch.testing.assert_close(parent_out, expected_parent, atol=0, rtol=0)
 
 
@@ -3590,12 +3574,8 @@ def test_shared_subslice_two_ctas(op):
 def cross_cta_tma_kernel(desc, out, cga_layout: ttgl.constexpr, MODE: ttgl.constexpr):
     alloc_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 8], [4, 1], [1, 0], cga_layout=cga_layout)
     shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 32, rank=2, cga_layout=cga_layout)
-    parent = ttgl.allocate_shared_memory(
-        ttgl.int32,
-        [256, 64],
-        shared_layout,
-        value=ttgl.full([256, 64], -5, ttgl.int32, layout=alloc_layout),
-    )
+    parent = ttgl.allocate_shared_memory(ttgl.int32, [256, 64], shared_layout,
+                                         value=ttgl.full([256, 64], -5, ttgl.int32, layout=alloc_layout))
     tile = parent.slice(128, 128, dim=0)
     if MODE == "load":
         bar = mbarrier.allocate_mbarrier()
@@ -3605,9 +3585,8 @@ def cross_cta_tma_kernel(desc, out, cga_layout: ttgl.constexpr, MODE: ttgl.const
         mbarrier.wait(bar, phase=0)
         ttgl.barrier(cluster=True)
         result = parent.load(alloc_layout)
-        rows = ttgl.arange(0, 256)[:, None]
-        cols = ttgl.arange(0, 64)[None, :]
-        offsets = ttgl.set_auto_layout(rows * 64 + cols, result.type.layout)
+        offsets = ttgl.arange(0, 256)[:, None] * 64 + ttgl.arange(0, 64)[None, :]
+        offsets = ttgl.set_auto_layout(offsets, result.type.layout)
         ttgl.store(out + offsets, result)
     elif MODE == "store":
         tma.async_store(desc, [0, 0], tile)
@@ -3616,17 +3595,13 @@ def cross_cta_tma_kernel(desc, out, cga_layout: ttgl.constexpr, MODE: ttgl.const
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
-@pytest.mark.parametrize(
-    "mode,cga_layout",
-    [
-        ("load", ((1, 0), )),
-        ("load", ((1, 0), (0, 0))),
-        ("load", ((0, 0), (1, 0))),
-        ("store", ((1, 0), )),
-        ("reduce", ((1, 0), )),
-    ],
-    ids=["two-ctas", "four-ctas", "nonpeer", "store", "reduce"],
-)
+@pytest.mark.parametrize("mode,cga_layout", [
+    ("load", ((1, 0), )),
+    ("load", ((1, 0), (0, 0))),
+    ("load", ((0, 0), (1, 0))),
+    ("store", ((1, 0), )),
+    ("reduce", ((1, 0), )),
+], ids=["two-ctas", "four-ctas", "nonpeer", "store", "reduce"])
 def test_cross_cta_tma(mode, cga_layout, capfd):
     if mode == "load" and not is_blackwell():
         pytest.skip("Requires Blackwell CTA-pair completion")
