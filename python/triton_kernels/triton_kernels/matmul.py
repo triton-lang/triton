@@ -620,6 +620,8 @@ def matmul(a, b, bias,
     out_matmul_scale_strides = out_matmul_scale.storage.data.stride() if out_matmul_has_mx else (None, None, None, None)
     out_matmul_scale_strides = pad_strides(out_matmul_scale_strides, 4)
     out_matmul_scale_layout = None if out_matmul_scale is None else out_matmul_scale.storage.layout.name
+    if fused_comm is not None and fused_comm.out_handles.ndim == 2 and out_matmul_scale_layout != "STRIDED":
+        raise NotImplementedError("fused comm MX scale handles require strided output scales")
     if (
         scatter_indx is not None
         and out_matmul_scale is not None

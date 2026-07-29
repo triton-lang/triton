@@ -201,7 +201,6 @@ def _p_matmul(
     else:
         is_x_fp4: tl.constexpr = False
     is_out_microscaled: tl.constexpr = stride_y_mx_z is not None
-    is_out_fp4: tl.constexpr = is_out_microscaled and Y_VALUE_PACK_FACTOR == 2
 
     if RAGGED_DIMENSION == "M":
         useful_grid_m = tl.load(XBlockOffs + N_SLICES)
@@ -226,6 +225,7 @@ def _p_matmul(
         SUBTILE_FACTOR: tl.constexpr = EPILOGUE_SUBTILE
     EPILOGUE_BLOCK_N: tl.constexpr = BLOCK_N // SUBTILE_FACTOR
     OUT_BLOCK_N: tl.constexpr = EPILOGUE_BLOCK_N // ACTIVATION_REDUCTION_N
+    OUT_VALUE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // Y_VALUE_PACK_FACTOR
     yN = N // ACTIVATION_REDUCTION_N
 
     num_blocks = batch_size * useful_grid_m * grid_n * SPLIT_K
@@ -728,10 +728,10 @@ def _p_matmul(
                     out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtr.dtype.element_ty, pid=len(accs)*tile_id1 + a_i)
 
             out = out.to(YPtr.dtype.element_ty)
-            if is_out_fp4:
-                out_off_n = out_off_n // 2
-                offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N // 2)
-                mask_n = offs_y_n < tl.cdiv(yN, 2)
+            out_off_n = out_off_n // Y_VALUE_PACK_FACTOR
+            offs_y_n = out_off_n + tl.arange(0, OUT_VALUE_BLOCK_N)
+            mask_n = offs_y_n < tl.cdiv(yN, Y_VALUE_PACK_FACTOR)
+            mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
 
             if pYPtrs is None:
                 if USE_SCATTER_TMA:
@@ -748,22 +748,10 @@ def _p_matmul(
                     store_ragged(Y, start_m1, eM1, [pid_k, off_m1, out_off_n], out, ragged_dim=1)
                 else:
                     tl.static_assert(Y_TMA_MODE is None)
-                    offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
-                    mask_n = offs_y_n < yN
-                    if is_out_fp4:
-                        offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N // 2)
-                        mask_n = offs_y_n < tl.cdiv(yN, 2)
-                    mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
                     offs_kzmn = pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
                     tl.store(YPtr + offs_kzmn, out, mask=mask)
             else:
                 tl.static_assert(Y_TMA_MODE is None, "TMA is not supported with fused comms")
-                offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
-                mask_n = offs_y_n < yN
-                if is_out_fp4:
-                    offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N // 2)
-                    mask_n = offs_y_n < tl.cdiv(yN, 2)
-                mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
 
                 dst_shard_idx, dst_y_m, dst_y_n = map_dst_coord.fn(
                     start_m1 + off_m1 if WriteBackIndx is None else None, offs_y_m,
@@ -774,17 +762,14 @@ def _p_matmul(
                     _, dst_scale_m, dst_scale_n = map_dst_coord.fn(
                         start_m1 + off_m1 if WriteBackIndx is None else None,
                         offs_y_m,
-                        out_off_n * 2 // MX_BLOCK_SIZE,
+                        out_off_n * Y_VALUE_PACK_FACTOR // MX_BLOCK_SIZE,
                         offs_y_n_scale,
                         *map_dst_coord.captured,
                     )
                     scale_offsets = (
                         pid_k1.to(index_type) * stride_y_mx_k
                         + start_z1.to(index_type) * stride_y_mx_z
-                        + dst_scale_m.to(index_type)[:, None]
-                        * stride_y_mx_m
-                        * n_reduce_shards
-                        + reduce_rank * stride_y_mx_m
+                        + (dst_scale_m.to(index_type) * n_reduce_shards + reduce_rank)[:, None] * stride_y_mx_m
                         + dst_scale_n[None, :] * stride_y_mx_n
                     )
                 offs_kzmn = (

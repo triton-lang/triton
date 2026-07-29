@@ -211,6 +211,7 @@ def _matmul(
             W_SLICE_SIZES_DIVISIBILITY: tl.constexpr =  _W_SLICE_SIZES_DIVISIBILITY // (BLOCK_K // PACKED_BLOCK_K_W)
 
     OUT_BLOCK_N: tl.constexpr = BLOCK_N // ACTIVATION_REDUCTION_N
+    OUT_VALUE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // Y_VALUE_PACK_FACTOR
     yN = N // ACTIVATION_REDUCTION_N
 
     pid = tl.program_id(0)
@@ -571,12 +572,10 @@ def _matmul(
 
     if is_out_fp4:
         tl.static_assert(Y_TMA_MODE is None, "FP4 outputs are only supported without output TMA")
-        offs_y_n_store = pid_n * (OUT_BLOCK_N // 2) + tl.arange(0, OUT_BLOCK_N // 2)
-        YPtrs = Y + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n_store.to(index_type)[None, :] * stride_y_n
-        mask_store = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & (offs_y_n_store[None, :] < tl.cdiv(yN, 2))
-    else:
-        YPtrs = Y + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
-        mask_store = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
+    offs_y_n_store = pid_n * OUT_VALUE_BLOCK_N + tl.arange(0, OUT_VALUE_BLOCK_N)
+    YPtrs = Y + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n_store.to(index_type)[None, :] * stride_y_n
+    mask_n_store = offs_y_n_store < tl.cdiv(yN, Y_VALUE_PACK_FACTOR)
+    mask_store = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n_store[None, :]
     mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
 
     if OutAcc is not None:
@@ -647,17 +646,9 @@ def _matmul(
         tl.store(YPtrs, out, mask=mask_store)
     else:
         tl.static_assert(Y_TMA_MODE is None, "TMA is not supported with fused comms")
-        if is_out_fp4:
-            fused_off_n = (OUT_BLOCK_N // 2) * pid_n
-            fused_offs_y_n = offs_y_n_store
-            fused_mask = mask_store
-        else:
-            fused_off_n = OUT_BLOCK_N * pid_n
-            fused_offs_y_n = offs_y_n
-            fused_mask = mask
         dst_shard_idx, dst_y_m, dst_y_n = map_dst_coord.fn(
             off_m if WriteBackIndx is None else None, offs_y_m,
-            fused_off_n, fused_offs_y_n,
+            OUT_VALUE_BLOCK_N * pid_n, offs_y_n_store,
             *map_dst_coord.captured)
         if pYScalePtrs is not None:
             tl.static_assert(is_out_microscaled)
@@ -669,10 +660,7 @@ def _matmul(
                 *map_dst_coord.captured,
             )
             scale_offsets = (
-                dst_scale_m.to(index_type)[:, None]
-                * stride_y_mx_m
-                * n_reduce_shards
-                + reduce_rank * stride_y_mx_m
+                (dst_scale_m.to(index_type) * n_reduce_shards + reduce_rank)[:, None] * stride_y_mx_m
                 + dst_scale_n[None, :] * stride_y_mx_n
             )
         offs_mn = (
@@ -689,7 +677,7 @@ def _matmul(
                 tl.multiple_of(peer_Y_ptr, 16)
             else:
                 tl.multiple_of(peer_Y_ptr, [16, 16])
-            tl.store(peer_Y_ptr + offs_mn, out, mask=fused_mask)
+            tl.store(peer_Y_ptr + offs_mn, out, mask=mask_store)
             if pYScalePtrs is not None:
                 peer_scale_ptr = tl.load(pYScalePtrs + peer).to(
                     tl.pointer_type(YActualScale.dtype.element_ty)
