@@ -42,4 +42,34 @@ def PT_RecordOp : PT_Op<"record", [
   let assemblyFormat = "(`start` $isStart^):(`end`)? $name attr-dict";
 }
 
+def PT_AsyncRecordOp : PT_Op<"async_record", [
+  MemoryEffects<[MemRead<DefaultResource>, MemWrite<DefaultResource>]>
+]> {
+  let summary = "Record an asynchronous event";
+  let description = [{
+    Record the timestamp at which an asynchronous transaction starts or ends.
+    The token identifies the corresponding endpoints even when they execute in
+    different regions.
+  }];
+  let arguments = (ins UnitAttr:$isStart, I32:$token);
+  let assemblyFormat = [{
+    (`start` $isStart^):(`end`)? $token attr-dict `:` type($token)
+  }];
+}
+
+def PT_AllocateAsyncTokenOp : PT_Op<"allocate_async_token", [
+  MemoryEffects<[MemWrite<DefaultResource>]>
+]> {
+  let summary = "Allocate a named asynchronous scope token";
+  let description = [{
+    Allocate a static correlation identity for an asynchronous scope without
+    recording a timestamp. Each token operation remains distinct even when
+    names are reused; its write effect prevents common-subexpression
+    elimination from merging those identities.
+  }];
+  let arguments = (ins StrAttr:$name);
+  let results = (outs I32:$token);
+  let assemblyFormat = "$name attr-dict `:` type($token)";
+}
+
 #endif // PROTON_OPS

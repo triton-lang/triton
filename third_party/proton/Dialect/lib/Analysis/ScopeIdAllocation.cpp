@@ -117,7 +117,16 @@ void ScopeIdAllocation::liveness() {
   llvm::DenseMap<ScopeId, RecordOp> idToOpMap;
   ScopeId scopeId = 0;
 
-  funcOp->walk<WalkOrder::PreOrder>([&](RecordOp recordOp) {
+  funcOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
+    if (auto asyncToken = dyn_cast<AllocateAsyncTokenOp>(op)) {
+      idToNameMap[scopeId] = asyncToken.getName();
+      opToIdMap[op] = scopeId;
+      ++scopeId;
+      return;
+    }
+    auto recordOp = dyn_cast<RecordOp>(op);
+    if (!recordOp)
+      return;
     auto name = recordOp.getName();
     LDBG("Processing RecordOp: " << recordOp);
     if (!nameToIdMap.contains(name)) {

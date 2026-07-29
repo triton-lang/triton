@@ -65,12 +65,16 @@ SegmentObject SegmentObject::fromStruct(Location loc, Value segmentStruct,
 namespace triton {
 namespace proton::gpu {
 
-CircularStoreDataPack
-lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
-                           ConversionPatternRewriter &rewriter) {
+CircularStoreDataPack lowerCircularStore(CircularStoreOp op,
+                                         Value segmentStruct, Value counter,
+                                         Value dynamicScopeId,
+                                         ConversionPatternRewriter &rewriter) {
   auto loc = op.getLoc();
-  auto mod = op.getOperation()->getParentOfType<ModuleOp>();
+  auto mod = op->getParentOfType<ModuleOp>();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value scopeId = dynamicScopeId;
+  if (!scopeId)
+    scopeId = b.i32_val(op.getScopeIdAttr().getInt());
   const int bytesPerEntry = proton::gpu::getBytesPerClockEntry();
   const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
 
@@ -93,12 +97,9 @@ lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
   const int bufferSizeInBytes = segmentType.getNBytes();
   const int segmentWordSize = bufferSizeInBytes / selectedWarpNum / 4;
 
-  // Compute the actual base offset (with urem as circular buffer).
+  auto bufferBaseType = bufferBase.getType();
   Value tagOffset =
       b.add(segmentBase, b.urem(curIdx, b.i32_val(segmentWordSize)));
-
-  // Store the counter into buffer.
-  auto bufferBaseType = bufferBase.getType();
   Value vecPtr = b.gep(bufferBaseType, i32_ty, bufferBase, tagOffset);
 
   // Constructing the tag and clock (8 byte)
@@ -112,11 +113,11 @@ lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
   // lower clock (4 bytes):
   // 31:0 64-bit clock bit 0:31
   // =======================================
-  Value clock = op.getCounter();
+  Value clock = counter;
   auto clkTy = mlir::cast<IntegerType>(clock.getType());
-  uint32_t maskedScopeId = op.getScopeId() & 0xff;
-  Value tag = op.getIsStart() ? b.i32_val(maskedScopeId << 23)
-                              : b.i32_val(1 << 31 | maskedScopeId << 23);
+  Value maskedScopeId = b.and_(scopeId, b.i32_val(0xff));
+  Value tag = b.or_(b.shl(maskedScopeId, b.i32_val(23)),
+                    b.i32_val(op.getIsStart() ? 0u : (1u << 31)));
   Value valsVec;
   if (clkTy.getWidth() == 64) {
     auto clkVecTy = vec_ty(i32_ty, 2);

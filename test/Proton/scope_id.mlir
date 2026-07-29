@@ -410,3 +410,221 @@ module {
     cf.cond_br %cond, ^loop(%next : index), ^exit
   }
 }
+
+// -----
+
+module {
+  // expected-remark @below {{scf_loop_alternating_scope_ends}}
+  tt.func @scf_loop_alternating_scope_ends() {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %c10 = arith.constant 10 : index
+    // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
+    proton.record start "scope0"
+    scf.for %i = %c0 to %c10 step %c1 {
+      %has_previous = arith.cmpi sgt, %i, %c0 : index
+      scf.if %has_previous {
+        %remainder = arith.remui %i, %c2 : index
+        %is_odd = arith.cmpi eq, %remainder, %c1 : index
+        scf.if %is_odd {
+          // expected-remark @below {{scope id = 0}}
+          // expected-remark @below {{scope parent id = -1}}
+          proton.record end "scope0"
+        } else {
+          // expected-remark @below {{scope id = 1}}
+          // expected-remark @below {{scope parent id = -1}}
+          proton.record end "scope1"
+        }
+      }
+      // expected-error @below {{The scope name 'scope1' is started without being closed}}
+      // expected-remark @below {{scope id = 1}}
+      // expected-remark @below {{scope parent id = -1}}
+      proton.record start "scope1"
+    }
+    // expected-error @below {{The scope name 'scope1' is not properly closed (missing start record)}}
+    // expected-error @below {{The scope name 'scope1' is closed without being opened}}
+    // expected-remark @below {{scope id = 2}}
+    // expected-remark @below {{scope parent id = -1}}
+    proton.record end "scope1"
+    tt.return
+  }
+}
+
+// -----
+
+module {
+  // expected-remark @below {{async_scope}}
+  tt.func @async_scope() {
+    // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
+    proton.record start "outer"
+    // expected-remark @below {{scope id = 1}}
+    // expected-remark @below {{scope parent id = -1}}
+    %token = proton.allocate_async_token "async" : i32
+    proton.async_record start %token : i32
+    proton.async_record end %token : i32
+    // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
+    proton.record end "outer"
+    tt.return
+  }
+}
+
+// -----
+
+module {
+  // Unlike synchronous scopes, async tokens with the same name identify
+  // independent static sites and do not need structurally paired endpoints.
+  // expected-remark @below {{async_scope_conditional}}
+  tt.func @async_scope_conditional(%cond: i1) {
+    // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
+    %token = proton.allocate_async_token "async" : i32
+    proton.async_record start %token : i32
+    scf.if %cond {
+      proton.async_record end %token : i32
+    } else {
+      // expected-remark @below {{scope id = 1}}
+      // expected-remark @below {{scope parent id = -1}}
+      %other = proton.allocate_async_token "async" : i32
+      proton.async_record start %other : i32
+      proton.async_record end %other : i32
+    }
+    tt.return
+  }
+}
+
+// -----
+
+module {
+  // Each branch ends the token for one pipeline slot and carries its
+  // replacement to a later loop iteration.
+  // expected-remark @below {{async_scope_loop_alternating_tokens}}
+  tt.func @async_scope_loop_alternating_tokens() {
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %c10 = arith.constant 10 : index
+    // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
+    %initial0 = proton.allocate_async_token "async_copy0" : i32
+    proton.async_record start %initial0 : i32
+    // expected-remark @below {{scope id = 1}}
+    // expected-remark @below {{scope parent id = -1}}
+    %initial1 = proton.allocate_async_token "async_op1" : i32
+    proton.async_record start %initial1 : i32
+    %final0, %final1 = scf.for %i = %c1 to %c10 step %c1
+        iter_args(%token0 = %initial0, %token1 = %initial1) -> (i32, i32) {
+      %remainder = arith.remui %i, %c2 : index
+      %is_odd = arith.cmpi eq, %remainder, %c1 : index
+      %next0, %next1 = scf.if %is_odd -> (i32, i32) {
+        proton.async_record end %token0 : i32
+        // expected-remark @below {{scope id = 2}}
+        // expected-remark @below {{scope parent id = -1}}
+        %new0 = proton.allocate_async_token "async_copy0" : i32
+        proton.async_record start %new0 : i32
+        scf.yield %new0, %token1 : i32, i32
+      } else {
+        proton.async_record end %token1 : i32
+        // expected-remark @below {{scope id = 3}}
+        // expected-remark @below {{scope parent id = -1}}
+        %new1 = proton.allocate_async_token "async_op1" : i32
+        proton.async_record start %new1 : i32
+        scf.yield %token0, %new1 : i32, i32
+      }
+      scf.yield %next0, %next1 : i32, i32
+    }
+    proton.async_record end %final0 : i32
+    proton.async_record end %final1 : i32
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // The token produced in one iteration is ended in the next iteration, around
+  // a real async global-to-shared copy.
+  // expected-remark @below {{async_scope_loop_carried_copy}}
+  tt.func @async_scope_loop_carried_copy(
+      %input: tensor<64x16x!tt.ptr<i8>, #blocked>,
+      %view: !ttg.memdesc<64x16xi8, #shared, #smem, mutable>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c3 = arith.constant 3 : index
+    // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
+    %initial = proton.allocate_async_token "copy" : i32
+    proton.async_record start %initial : i32
+    %final = scf.for %i = %c0 to %c3 step %c1
+        iter_args(%token = %initial) -> (i32) {
+      %is_first = arith.cmpi eq, %i, %c0 : index
+      %next = scf.if %is_first -> (i32) {
+        scf.yield %token : i32
+      } else {
+        proton.async_record end %token : i32
+        // expected-remark @below {{scope id = 1}}
+        // expected-remark @below {{scope parent id = -1}}
+        %new_token = proton.allocate_async_token "copy" : i32
+        proton.async_record start %new_token : i32
+        scf.yield %new_token : i32
+      }
+      %copy = ttg.async_copy_global_to_local %input, %view :
+          tensor<64x16x!tt.ptr<i8>, #blocked> ->
+          <64x16xi8, #shared, #smem, mutable>
+      %group = ttg.async_commit_group tokens %copy
+      scf.yield %next : i32
+    }
+    proton.async_record end %final : i32
+    tt.return
+  }
+}
+
+// -----
+
+#shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
+  // As with the copy pipeline, the runtime token crosses loop iterations. The
+  // equivalent same-name synchronous starts are diagnosed as duplicate starts.
+  // expected-remark @below {{async_scope_loop_mma}}
+  tt.func @async_scope_loop_mma(
+      %a: !ttg.memdesc<128x128xf16, #shared_a, #ttg.shared_memory>,
+      %b: !ttg.memdesc<128x128xf16, #shared_b, #ttg.shared_memory>,
+      %c: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+      %use_acc: i1, %pred: i1) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c3 = arith.constant 3 : index
+    // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
+    %initial = proton.allocate_async_token "mma" : i32
+    proton.async_record start %initial : i32
+    %final = scf.for %i = %c0 to %c3 step %c1
+        iter_args(%token = %initial) -> (i32) {
+      %has_previous = arith.cmpi sgt, %i, %c0 : index
+      %next = scf.if %has_previous -> (i32) {
+        proton.async_record end %token : i32
+        // expected-remark @below {{scope id = 1}}
+        // expected-remark @below {{scope parent id = -1}}
+        %new_token = proton.allocate_async_token "mma" : i32
+        proton.async_record start %new_token : i32
+        scf.yield %new_token : i32
+      } else {
+        scf.yield %token : i32
+      }
+      ttng.tc_gen5_mma %a, %b, %c, %use_acc, %pred {is_async} :
+          !ttg.memdesc<128x128xf16, #shared_a, #ttg.shared_memory>,
+          !ttg.memdesc<128x128xf16, #shared_b, #ttg.shared_memory>,
+          !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      scf.yield %next : i32
+    }
+    proton.async_record end %final : i32
+    tt.return
+  }
+}

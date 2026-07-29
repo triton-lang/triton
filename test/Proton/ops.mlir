@@ -14,6 +14,21 @@ module {
 
 // -----
 
+module {
+  // CHECK-LABEL: async_scope
+  tt.func @async_scope() {
+    // CHECK: %[[TOKEN:.*]] = proton.allocate_async_token "async" : i32
+    // CHECK: proton.async_record start %[[TOKEN]] : i32
+    // CHECK: proton.async_record end %[[TOKEN]] : i32
+    %token = proton.allocate_async_token "async" : i32
+    proton.async_record start %token : i32
+    proton.async_record end %token : i32
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32} {

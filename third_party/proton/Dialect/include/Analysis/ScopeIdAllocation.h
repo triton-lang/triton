@@ -26,10 +26,9 @@ public:
   explicit ScopeIdAllocation(FunctionOpInterface op) : funcOp(op) { run(); }
 
   ScopeId getOpScopeId(Operation *op) const {
-    if (auto recordOp = dyn_cast<RecordOp>(op)) {
-      return opToIdMap.lookup(recordOp);
-    }
-    llvm_unreachable("unexpected operation type");
+    assert((isa<RecordOp, AllocateAsyncTokenOp>(op)) &&
+           "operation does not have a static scope id");
+    return opToIdMap.lookup(op);
   }
 
   ScopeIdName getScopeIdNames() const {

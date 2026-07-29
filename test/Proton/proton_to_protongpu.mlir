@@ -12,6 +12,21 @@ module {
 
 // -----
 
+module attributes {"ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: async_scope
+  tt.func @async_scope() {
+    // CHECK-DAG: %[[TOKEN:.*]] = arith.constant 0 : i32
+    // CHECK: proton_gpu.circular_store start %{{.*}}, %{{.*}}, %[[TOKEN]]
+    // CHECK: proton_gpu.circular_store end %{{.*}}, %{{.*}}, %[[TOKEN]]
+    %token = proton.allocate_async_token "async" : i32
+    proton.async_record start %token : i32
+    proton.async_record end %token : i32
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: simple_record
   // CHECK-SELECTIVE-LABEL: tt.func @simple_record

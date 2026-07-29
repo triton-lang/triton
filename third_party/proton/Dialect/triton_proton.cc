@@ -80,6 +80,22 @@ void init_triton_proton(py::module_ &m) {
           opBuilder.create<proton::RecordOp>(isStart, nameAttr);
         });
 
+  m.def(
+      "create_proton_allocate_async_token",
+      [](TritonOpBuilder &opBuilder, const std::string &name) -> mlir::Value {
+        auto nameAttr = mlir::StringAttr::get(opBuilder.getContext(), name);
+        auto op = opBuilder.create<proton::AllocateAsyncTokenOp>(
+            mlir::TypeRange{mlir::IntegerType::get(opBuilder.getContext(), 32)},
+            nameAttr);
+        return op.getToken();
+      });
+
+  m.def(
+      "create_proton_async_record",
+      [](TritonOpBuilder &opBuilder, bool isStart, mlir::Value token) -> void {
+        opBuilder.create<proton::AsyncRecordOp>(isStart, token);
+      });
+
   m.def("add_convert_proton_to_protongpu",
         [](mlir::PassManager &pm, proton::MetricType &metricType,
            proton::SamplingStrategy samplingStrategy,
