@@ -128,39 +128,6 @@ def alloc_ring_barriers(
 
 
 @gluon.jit
-def pack_e4m3x2(values):
-    lhs, rhs = gl.split(values.reshape((values.shape[0], values.shape[1] // 2, 2)))
-    return gl.inline_asm_elementwise(
-        "cvt.rn.satfinite.e4m3x2.f32 $0, $2, $1;",
-        "=h,r,r",
-        [lhs, rhs],
-        dtype=gl.int16,
-        is_pure=True,
-        pack=1,
-    )
-
-
-@gluon.jit
-def pack_u16x2(x0, x1):
-    return gl.inline_asm_elementwise(
-        """
-        mov.b32 $0, { $1, $2 };
-        """,
-        "=r,h,h",
-        [x0, x1],
-        dtype=gl.int32,
-        is_pure=True,
-        pack=1,
-    )
-
-
-@gluon.jit
-def pack_fp8x4(values):
-    lhs, rhs = gl.split(values.reshape((values.shape[0], values.shape[1] // 2, 2)))
-    return pack_u16x2(lhs, rhs)
-
-
-@gluon.jit
 def _split_m(values):
     return gl.split(values.reshape((2, values.shape[0] // 2, values.shape[1])).permute((1, 2, 0)))
 
@@ -438,25 +405,24 @@ def mma_partition(p: PartitionArgs):
 
 
 @gluon.jit
-def store_packed_out(
+def store_out(
     p: PartitionArgs,
-    packed_out,
+    values,
     off_m,
-    out_off_n_packed,
+    out_off_n,
     shape_m,
     slice_offset,
 ):
-    values = pack_fp8x4(packed_out)
     layout: gl.constexpr = values.type.layout
     offs_m = off_m + gl.arange(0, values.shape[0], layout=gl.SliceLayout(1, layout))
-    offs_n = out_off_n_packed + gl.arange(0, values.shape[1], layout=gl.SliceLayout(0, layout))
+    offs_n = out_off_n + gl.arange(0, values.shape[1], layout=gl.SliceLayout(0, layout))
     mask_m = gl.expand_dims(offs_m < shape_m, 1)
-    mask_n = gl.expand_dims(offs_n < (p.out_desc.shape[1] + 3) // 4, 0)
-    mask = mask_m & mask_n
-    ptrs = p.out_ptr.cast(gl.pointer_type(gl.int32), bitcast=True)
-    ptrs = ptrs + gl.expand_dims(slice_offset + offs_m, 1) * (p.out_desc.strides[0] // 4)
+    mask_n = gl.expand_dims(offs_n < p.out_desc.shape[1], 0)
+    mask = gl.max_constancy(mask_m & mask_n, [1, 4])
+    ptrs = p.out_ptr + gl.expand_dims(slice_offset + offs_m, 1) * p.out_desc.strides[0]
     ptrs = ptrs + gl.expand_dims(offs_n, 0) * p.out_desc.strides[1]
-    gl.store(ptrs, values, mask=mask)
+    ptrs = gl.max_contiguous(gl.multiple_of(ptrs, [1, 4]), [1, 4])
+    gl.store(ptrs, gl.convert_layout(values, ptrs.type.layout), mask=mask)
 
 
 @gluon.jit
@@ -475,17 +441,11 @@ def _swiglu_step2(gelu, linear, alpha):
 
 
 @gluon.jit
-def pack_fp8_out_fragment(out_packed, out_recip):
-    scaled_out_packed = blackwell.mul2(out_packed, out_recip)
-    return pack_e4m3x2(scaled_out_packed)
-
-
-@gluon.jit
-def get_store_layout(p: PartitionArgs):
+def get_store_layout(p: PartitionArgs, elements_per_thread: gl.constexpr):
     frag_rows: gl.constexpr = p.BLOCK_M // p.SWIGLU_SUBTILE_FACTOR
     local_cga_layout: gl.constexpr = ((0, 1), ) if p.USE_2CTA else ()
     return gl.BlockedLayout(
-        [frag_rows // gl.num_warps(), 2],
+        [frag_rows // gl.num_warps(), elements_per_thread],
         [1, 32],
         [gl.num_warps(), 1],
         [1, 0],
@@ -499,7 +459,7 @@ def epilogue_direct_store(
     acc_packed,
     out_recip,
     off_m,
-    out_off_n_packed,
+    out_off_n,
     shape_m,
     slice_offset,
     store_layout: gl.constexpr,
@@ -508,13 +468,16 @@ def epilogue_direct_store(
     acc_packed_subtiles = split_m_subtiles(acc_packed, p.SWIGLU_SUBTILE_FACTOR)
     for frag_idx in gl.static_range(p.SWIGLU_SUBTILE_FACTOR):
         gelu, linear = _swiglu_step1(acc_packed_subtiles[frag_idx], p.SWIGLU_LIMIT)
-        out_packed = _swiglu_step2(gelu, linear, p.SWIGLU_ALPHA)
-        packed_fp8 = gl.convert_layout(pack_fp8_out_fragment(out_packed, out_recip), store_layout)
-        store_packed_out(
+        out = _swiglu_step2(gelu, linear, p.SWIGLU_ALPHA)
+        out = blackwell.mul2(out, out_recip)
+        if not p.FORCE_EPILOGUE_WARPS_N1 and gl.num_warps() >= 8 and p.BLOCK_N >= 256:
+            out = gl.convert_layout(out, get_store_layout(p, 2))
+        out = gl.convert_layout(out.to(gl.float8e4nv), store_layout)
+        store_out(
             p,
-            packed_fp8,
+            out,
             off_m + frag_idx * frag_rows,
-            out_off_n_packed,
+            out_off_n,
             shape_m,
             slice_offset,
         )
@@ -581,13 +544,13 @@ def epilogue_partition(p: PartitionArgs, acc_fpsan_probe_ptr: gl.tensor | None):
         cga_layout=split_cga_layout,
     )
     bias_layout: gl.constexpr = gl.SliceLayout(0, split_layout)
-    store_layout: gl.constexpr = get_store_layout(p)
+    store_layout: gl.constexpr = get_store_layout(p, 4)
 
     for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
         pid_m, pid_n, slice_idx, slice_offset = p.apply_block_schedule(block_id)
         off_m = pid_m * p.BLOCK_M
         shape_m = gl.load(p.x_slice_sizes + slice_idx)
-        out_off_n_packed = pid_n * (p.BLOCK_N // p.REDUCTION_N // 4)
+        out_off_n = pid_n * (p.BLOCK_N // p.REDUCTION_N)
         idx, phase, acc_packed = apply_bias_and_scale(
             p,
             acc_fpsan_probe_ptr,
@@ -607,7 +570,7 @@ def epilogue_partition(p: PartitionArgs, acc_fpsan_probe_ptr: gl.tensor | None):
             acc_packed,
             out_recip,
             off_m,
-            out_off_n_packed,
+            out_off_n,
             shape_m,
             slice_offset,
             store_layout,
