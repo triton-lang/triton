@@ -181,6 +181,45 @@ tt.func @optimize_broadcast(%arg0: i32, %arg1: !tt.tensordesc<128x128xf32, #shar
   tt.return
 }
 
+// Regression test: when a multi-partition op has more than one user in the
+// same partition, ALL of those users must be redirected to that partition's
+// clone and the original multi-partition op must be erased. A use-list
+// iterator invalidation in cloneMultiPartitionDataOps used to redirect only
+// the first user, leaving a stale multi-partition op behind that crashed
+// insert-aref (assert(consumers.size() > 0)).
+// CHECK-LABEL: @clone_multi_partition_repeated_users
+tt.func @clone_multi_partition_repeated_users(%arg0: i32, %arg1: !tt.tensordesc<128x128xf32, #shared_f32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  // CHECK: scf.for
+  scf.for %i = %c0_i32 to %arg0 step %c1_i32 : i32 {
+    %md = tt.descriptor_load %arg1[%c0_i32, %c0_i32] {ttg.partition = array<i32: 1>} : !tt.tensordesc<128x128xf32, #shared_f32> -> tensor<128x128xf32, #load_blocked>
+    %smem = ttg.local_alloc %md {ttg.partition = array<i32: 1>} : (tensor<128x128xf32, #load_blocked>) -> !ttg.memdesc<128x128xf32, #shared_f32, #smem>
+    %tmp = ttg.local_load %smem {ttg.partition = array<i32: 1>} : !ttg.memdesc<128x128xf32, #shared_f32, #smem> -> tensor<128x128xf32, #load_blocked>
+    "use_memdesc"(%tmp) {ttg.partition = array<i32: 1>} : (tensor<128x128xf32, #load_blocked>) -> ()
+
+    // CHECK: [[X:%.*]] = "producer"{{.*}}partition = array<i32: 0>
+    %x = "producer"() {ttg.partition = array<i32: 0>, data} : () -> tensor<128xf32>
+
+    // CHECK-DAG: [[X0_P0:%.*]] = tt.expand_dims [[X]] {{.*}}partition = array<i32: 0>
+    // CHECK-DAG: [[X0_P1:%.*]] = tt.expand_dims [[X]] {{.*}}partition = array<i32: 1>
+    %x0 = tt.expand_dims %x {axis = 0 : i32} : tensor<128xf32> -> tensor<1x128xf32>
+    // CHECK-DAG: [[X1_P0:%.*]] = tt.broadcast [[X0_P0]] {{.*}}partition = array<i32: 0>
+    // CHECK-DAG: [[X1_P1:%.*]] = tt.broadcast [[X0_P1]] {{.*}}partition = array<i32: 1>
+    %x1 = tt.broadcast %x0 : tensor<1x128xf32> -> tensor<128x128xf32>
+
+    // Both partition-0 users must consume the partition-0 clone.
+    // CHECK: "use_a"([[X1_P0]]) {{.*}}partition = array<i32: 0>
+    "use_a"(%x1) {ttg.partition = array<i32: 0>, data} : (tensor<128x128xf32>) -> ()
+    // CHECK: "use_b"([[X1_P0]]) {{.*}}partition = array<i32: 0>
+    "use_b"(%x1) {ttg.partition = array<i32: 0>, data} : (tensor<128x128xf32>) -> ()
+    // CHECK: "use"([[X1_P1]]) {{.*}}partition = array<i32: 1>
+    "use"(%x1) {ttg.partition = array<i32: 1>, data} : (tensor<128x128xf32>) -> ()
+    // CHECK-NEXT: ttg.partition = array<i32: 0, 1>
+  } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32], ttg.warp_specialize.tag = 0 : i32}
+  tt.return
+}
+
 // CHECK-LABEL: @no_partitions
 tt.func @no_partitions(%arg0: i32) {
   %c0_i32 = arith.constant 0 : i32

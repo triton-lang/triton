@@ -19,6 +19,7 @@ enum class ISAFamily {
   RDNA1,
   RDNA2,
   RDNA3,
+  RDNA4m,
   RDNA4,
   GFX1250,
 };
@@ -73,6 +74,7 @@ public:
 
   bool supportsTDM() const;
   bool supportsMultiCTALaunch() const;
+  unsigned getMaxMulticastMaskPopcount() const;
   bool supportsClusterLoadBitWidth(int bitWidth) const;
 
   bool supportsBufferAtomicRMW() const;

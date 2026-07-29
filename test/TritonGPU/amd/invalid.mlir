@@ -646,6 +646,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// Dropping a non-unit descriptor dimension is not rank reduction and must not
+// make otherwise different swizzled layouts compatible.
+#non_unit_desc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#non_unit_alloc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @tdm_load_non_unit_dimension_is_not_rank_reduction(
+    %tensorDesc: !tt.tensordesc<2x32xf16, #non_unit_desc>,
+    %memDesc: !ttg.memdesc<64xf16, #non_unit_alloc, #smem, mutable>
+  ) {
+    // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
+    %token = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<2x32xf16, #non_unit_desc> -> !ttg.memdesc<64xf16, #non_unit_alloc, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 // scaled_upcast_fp4: scale and output rank mismatch.
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
   tt.func @scaled_upcast_fp4_rank_mismatch(%x: tensor<16x32xi8>, %s: tensor<64xi8>) {

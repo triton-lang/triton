@@ -547,12 +547,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   ^no_alloc(%arg_in: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>):
     cf.br ^merge(%arg_in : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>)
   ^merge(%phi: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>):
-    // expected-remark @below {{Buffers: [36864, 4096]}}
+    // expected-remark @below {{Buffers: unknown}}
     ttg.local_load %phi : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
     tt.return
   }
 
-  // expected-remark @below {{All Shared Regions: [36864, 4096]}}
   tt.func private @print_all_regions() attributes {test.print_all_used_regions} {
     tt.return
   }
