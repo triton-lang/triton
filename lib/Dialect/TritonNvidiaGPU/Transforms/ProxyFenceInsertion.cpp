@@ -65,7 +65,11 @@ bool isAsyncProxyReadSource(Operation *op, Value value) {
     return value == warpGroupDotOp.getA() || value == warpGroupDotOp.getB();
   }
   if (auto mma = dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(op)) {
-    return value == mma.getA() || value == mma.getB();
+    if (value == mma.getA() || value == mma.getB())
+      return true;
+    if (auto scaled = dyn_cast<triton::nvidia_gpu::TCGen5MMAScaledOp>(op))
+      return value == scaled.getAScale() || value == scaled.getBScale();
+    return false;
   }
   if (auto tmemCopyOp = dyn_cast<triton::nvidia_gpu::TMEMCopyOp>(op)) {
     return value == tmemCopyOp.getSrc();
@@ -108,6 +112,18 @@ ProxyFenceScope getProxyFenceScope(Operation *op) {
   return ProxyFenceScope::CTA;
 }
 
+bool isSharedMemoryDescriptor(Value value) {
+  auto type = dyn_cast<triton::gpu::MemDescType>(value.getType());
+  return type && isa<triton::gpu::SharedMemorySpaceAttr>(type.getMemorySpace());
+}
+
+bool isBarrierDescriptor(Value value) {
+  return llvm::any_of(value.getUsers(), [&](Operation *user) {
+    auto barrier = dyn_cast<triton::gpu::MBarrierOpInterface>(user);
+    return barrier && llvm::is_contained(barrier.getBarriers(), value);
+  });
+}
+
 //===----------------------------------------------------------------------===//
 // Proxy Fence Analysis
 //===----------------------------------------------------------------------===//
@@ -115,17 +131,42 @@ template <ProxyFenceScope scope>
 class ProxyFenceAnalysis : public MembarOrFenceAnalysis {
 
 public:
-  explicit ProxyFenceAnalysis(Allocation *allocation, MembarFilterFn filter)
-      : MembarOrFenceAnalysis(allocation, filter) {}
+  ProxyFenceAnalysis(Allocation *allocation, MembarFilterFn filter,
+                     bool assumeArgumentAccesses)
+      : MembarOrFenceAnalysis(allocation, filter),
+        assumeArgumentAccesses(assumeArgumentAccesses) {}
 
 private:
+  BlockInfo getEntryBlockInfo() const override;
+
   /// Updates the BlockInfo operation based on the operation.
   virtual void update(Operation *operation, BlockInfo *blockInfo,
                       FuncBlockInfoMapT *funcBlockInfoMap,
                       OpBuilder *builder) override;
 
   void insertFence(Operation *operation, OpBuilder *builder);
+
+  bool assumeArgumentAccesses;
 };
+
+template <ProxyFenceScope scope>
+BlockInfo ProxyFenceAnalysis<scope>::getEntryBlockInfo() const {
+  BlockInfo info;
+  if (!assumeArgumentAccesses)
+    return info;
+
+  FunctionOpInterface function =
+      cast<FunctionOpInterface>(allocation->getOperation());
+  AllocationSlice unknown(Interval<size_t>(
+      0, static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
+  for (Value argument : function.getArguments()) {
+    if (!isSharedMemoryDescriptor(argument) || isBarrierDescriptor(argument))
+      continue;
+    info.syncReadSlices[unknown].insert(function.getOperation());
+    info.syncWriteSlices[unknown].insert(function.getOperation());
+  }
+  return info;
+}
 
 template <ProxyFenceScope scope>
 void ProxyFenceAnalysis<scope>::insertFence(Operation *op, OpBuilder *builder) {
@@ -155,8 +196,12 @@ void ProxyFenceAnalysis<scope>::update(Operation *op, BlockInfo *blockInfo,
     // Inter-function dependencies
     auto callOpInterface = dyn_cast<CallOpInterface>(op);
     if (auto callee =
-            dyn_cast<FunctionOpInterface>(callOpInterface.resolveCallable()))
+            dyn_cast<FunctionOpInterface>(callOpInterface.resolveCallable())) {
       curBlockInfo = funcBlockInfoMap->lookup(callee);
+      if (auto offset = op->getAttrOfType<IntegerAttr>("allocation.offset"))
+        curBlockInfo.join(
+            translateBlockInfoToCallsite(curBlockInfo, offset.getInt()));
+    }
   } else {
     // Intra-function dependencies
     if (auto memoryEffectOpInterface = dyn_cast<MemoryEffectOpInterface>(op)) {
@@ -166,26 +211,33 @@ void ProxyFenceAnalysis<scope>::update(Operation *op, BlockInfo *blockInfo,
       memoryEffectOpInterface.getEffects(effectInstances);
       for (auto effectInstance : effectInstances) {
         if (auto value = effectInstance.getValue()) {
-          for (auto bufferId : allocation->getAllBufferIdsWithAliases(value)) {
-            if (bufferId != Allocation::InvalidBufferId) {
-              auto interval = allocation->getAllocatedInterval(bufferId);
-              auto slice = AllocationSlice(value, interval, bufferId);
-
-              if (isAsyncProxyWrite(op) && value == getSmemDest(op)) {
-                if (isProxyOp)
-                  proxyBlockInfo.syncWriteSlices[slice].insert(op);
-              } else if (isAsyncProxyRead(op) &&
-                         isAsyncProxyReadSource(op, value)) {
-                // Safe fallback for async-proxy reads from shared memory when
-                // the earlier FenceInsertionPass did not place a fence.
-                if (isProxyOp)
-                  proxyBlockInfo.syncReadSlices[slice].insert(op);
-              } else if (isa<MemoryEffects::Write>(
-                             effectInstance.getEffect())) {
-                curBlockInfo.syncWriteSlices[slice].insert(op);
-              } else if (isa<MemoryEffects::Read>(effectInstance.getEffect())) {
-                curBlockInfo.syncReadSlices[slice].insert(op);
-              }
+          if (!isSharedMemoryDescriptor(value) || isBarrierDescriptor(value))
+            continue;
+          auto bufferIds = allocation->getAllBufferIdsWithAliases(value);
+          if (bufferIds.empty())
+            bufferIds.insert(Allocation::InvalidBufferId);
+          for (auto bufferId : bufferIds) {
+            AllocationSlice slice =
+                bufferId == Allocation::InvalidBufferId
+                    ? AllocationSlice(Interval<size_t>(
+                          0, static_cast<size_t>(
+                                 std::numeric_limits<uint32_t>::max())))
+                    : AllocationSlice(
+                          value, allocation->getAllocatedInterval(bufferId),
+                          bufferId);
+            if (isAsyncProxyWrite(op) && value == getSmemDest(op)) {
+              if (isProxyOp)
+                proxyBlockInfo.syncWriteSlices[slice].insert(op);
+            } else if (isAsyncProxyRead(op) &&
+                       isAsyncProxyReadSource(op, value)) {
+              // Safe fallback for async-proxy reads from shared memory when
+              // the earlier FenceInsertionPass did not place a fence.
+              if (isProxyOp)
+                proxyBlockInfo.syncReadSlices[slice].insert(op);
+            } else if (isa<MemoryEffects::Write>(effectInstance.getEffect())) {
+              curBlockInfo.syncWriteSlices[slice].insert(op);
+            } else if (isa<MemoryEffects::Read>(effectInstance.getEffect())) {
+              curBlockInfo.syncReadSlices[slice].insert(op);
             }
           }
         }
@@ -201,6 +253,7 @@ void ProxyFenceAnalysis<scope>::update(Operation *op, BlockInfo *blockInfo,
     auto interval = allocation->getAllocatedInterval(scratchBufferId);
     auto scratchSlice = AllocationSlice(interval);
     curBlockInfo.syncReadSlices[scratchSlice].insert(op);
+    curBlockInfo.syncWriteSlices[std::move(scratchSlice)].insert(op);
   }
   if (isProxyOp) {
     if (proxyBlockInfo.isIntersected(*blockInfo, filter, allocation)) {
@@ -214,6 +267,40 @@ void ProxyFenceAnalysis<scope>::update(Operation *op, BlockInfo *blockInfo,
   // the current op's read/write buffers.
   blockInfo->join(curBlockInfo);
 }
+
+class ProxyFenceProvider : public triton::CallGraph<BlockInfo> {
+public:
+  ProxyFenceProvider(ModuleOp module, ModuleAllocation &allocation)
+      : triton::CallGraph<BlockInfo>(module), allocation(allocation) {}
+
+  template <ProxyFenceScope scope> void run() {
+    funcMap.clear();
+    walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+        [](CallOpInterface, FunctionOpInterface) {},
+        [&](FunctionOpInterface function) {
+          auto [it, inserted] = funcMap.try_emplace(function);
+          if (!inserted)
+            return;
+          ProxyFenceAnalysis<scope>(allocation.getFuncData(function), filterFn,
+                                    !isRoot(function))
+              .run(funcMap);
+          auto removeAssumedAccesses = [&](BlockInfo::SliceMapT &accesses) {
+            for (auto access = accesses.begin(); access != accesses.end();) {
+              access->second.erase(function.getOperation());
+              if (access->second.empty())
+                access = accesses.erase(access);
+              else
+                ++access;
+            }
+          };
+          removeAssumedAccesses(it->second.syncReadSlices);
+          removeAssumedAccesses(it->second.syncWriteSlices);
+        });
+  }
+
+private:
+  ModuleAllocation &allocation;
+};
 } // namespace
 
 struct ProxyFenceInsertionPass
@@ -230,6 +317,7 @@ public:
     // This pass does not depend on the amount of shared memory allocated
     // so we can use the default allocation analysis scratch size function
     ModuleAllocation allocation(mod);
+    ProxyFenceProvider provider(mod, allocation);
     // Keep independent frontiers for cluster- and CTA-scoped fences. Run the
     // cluster analysis first so the CTA analysis can observe any cluster
     // fences it inserts.
@@ -241,13 +329,9 @@ public:
            })
             .wasInterrupted();
     if (hasClusterProxyOp) {
-      ModuleMembarOrFenceAnalysis<ProxyFenceAnalysis<ProxyFenceScope::Cluster>>
-          clusterAnalysis(&allocation, filterFn);
-      clusterAnalysis.run();
+      provider.run<ProxyFenceScope::Cluster>();
     }
-    ModuleMembarOrFenceAnalysis<ProxyFenceAnalysis<ProxyFenceScope::CTA>>
-        ctaAnalysis(&allocation, filterFn);
-    ctaAnalysis.run();
+    provider.run<ProxyFenceScope::CTA>();
   }
 };
 

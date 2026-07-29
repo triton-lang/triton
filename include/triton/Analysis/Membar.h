@@ -235,6 +235,8 @@ public:
   void run(FuncBlockInfoMapT &funcBlockInfoMap);
 
 protected:
+  virtual BlockInfo getEntryBlockInfo() const { return BlockInfo(); }
+
   /// Applies the barrier analysis based on the SCF dialect, in which each
   /// region has a single basic block only.
   /// Example:

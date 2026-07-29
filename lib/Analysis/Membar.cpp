@@ -122,7 +122,9 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
   DenseMap<VirtualBlock, BlockInfo> outputBlockInfoMap;
   std::deque<VirtualBlock> blockList;
   // Start the analysis from the entry block of the function.
-  blockList.emplace_back(&funcOp.getBlocks().front(), Block::iterator());
+  VirtualBlock entryBlock(&funcOp.getBlocks().front(), Block::iterator());
+  inputBlockInfoMap.try_emplace(entryBlock, getEntryBlockInfo());
+  blockList.push_back(entryBlock);
 
   // A fixed point algorithm
   while (!blockList.empty()) {
