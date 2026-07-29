@@ -73,6 +73,7 @@ public:
 
   bool supportsTDM() const;
   bool supportsMultiCTALaunch() const;
+  unsigned getMaxMulticastMaskPopcount() const;
   bool supportsClusterLoadBitWidth(int bitWidth) const;
 
   bool supportsBufferAtomicRMW() const;
