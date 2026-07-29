@@ -405,6 +405,15 @@ def mma_partition(p: PartitionArgs):
 
 
 @gluon.jit
+def pack_fp8_pairs(values):
+    fp8 = values.to(gl.float8e4nv)
+    low, high = gl.split(fp8.reshape((fp8.shape[0], fp8.shape[1] // 2, 2)))
+    low = low.to(gl.uint8, bitcast=True)
+    high = high.to(gl.uint8, bitcast=True)
+    return low.to(gl.uint16) | (high.to(gl.uint16) << 8)
+
+
+@gluon.jit
 def store_out(
     p: PartitionArgs,
     values,
@@ -415,13 +424,14 @@ def store_out(
 ):
     layout: gl.constexpr = values.type.layout
     offs_m = off_m + gl.arange(0, values.shape[0], layout=gl.SliceLayout(1, layout))
-    offs_n = out_off_n + gl.arange(0, values.shape[1], layout=gl.SliceLayout(0, layout))
+    offs_n = out_off_n // 2 + gl.arange(0, values.shape[1], layout=gl.SliceLayout(0, layout))
     mask_m = gl.expand_dims(offs_m < shape_m, 1)
-    mask_n = gl.expand_dims(offs_n < p.out_desc.shape[1], 0)
-    mask = gl.max_constancy(mask_m & mask_n, [1, 4])
-    ptrs = p.out_ptr + gl.expand_dims(slice_offset + offs_m, 1) * p.out_desc.strides[0]
+    mask_n = gl.expand_dims(offs_n < (p.out_desc.shape[1] + 1) // 2, 0)
+    mask = gl.max_constancy(mask_m & mask_n, [1, 2])
+    ptrs = p.out_ptr.cast(gl.pointer_type(gl.uint16), bitcast=True)
+    ptrs = ptrs + gl.expand_dims(slice_offset + offs_m, 1) * (p.out_desc.strides[0] // 2)
     ptrs = ptrs + gl.expand_dims(offs_n, 0) * p.out_desc.strides[1]
-    ptrs = gl.max_contiguous(gl.multiple_of(ptrs, [1, 4]), [1, 4])
+    ptrs = gl.max_contiguous(gl.multiple_of(ptrs, [1, 4]), [1, 2])
     gl.store(ptrs, gl.convert_layout(values, ptrs.type.layout), mask=mask)
 
 
@@ -441,11 +451,11 @@ def _swiglu_step2(gelu, linear, alpha):
 
 
 @gluon.jit
-def get_store_layout(p: PartitionArgs, elements_per_thread: gl.constexpr):
+def get_store_layout(p: PartitionArgs):
     frag_rows: gl.constexpr = p.BLOCK_M // p.SWIGLU_SUBTILE_FACTOR
     local_cga_layout: gl.constexpr = ((0, 1), ) if p.USE_2CTA else ()
     return gl.BlockedLayout(
-        [frag_rows // gl.num_warps(), elements_per_thread],
+        [frag_rows // gl.num_warps(), 2],
         [1, 32],
         [gl.num_warps(), 1],
         [1, 0],
@@ -470,9 +480,7 @@ def epilogue_direct_store(
         gelu, linear = _swiglu_step1(acc_packed_subtiles[frag_idx], p.SWIGLU_LIMIT)
         out = _swiglu_step2(gelu, linear, p.SWIGLU_ALPHA)
         out = blackwell.mul2(out, out_recip)
-        if not p.FORCE_EPILOGUE_WARPS_N1 and gl.num_warps() >= 8 and p.BLOCK_N >= 256:
-            out = gl.convert_layout(out, get_store_layout(p, 2))
-        out = gl.convert_layout(out.to(gl.float8e4nv), store_layout)
+        out = gl.convert_layout(pack_fp8_pairs(out), store_layout)
         store_out(
             p,
             out,
@@ -544,7 +552,7 @@ def epilogue_partition(p: PartitionArgs, acc_fpsan_probe_ptr: gl.tensor | None):
         cga_layout=split_cga_layout,
     )
     bias_layout: gl.constexpr = gl.SliceLayout(0, split_layout)
-    store_layout: gl.constexpr = get_store_layout(p, 4)
+    store_layout: gl.constexpr = get_store_layout(p)
 
     for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
         pid_m, pid_n, slice_idx, slice_offset = p.apply_block_schedule(block_id)
