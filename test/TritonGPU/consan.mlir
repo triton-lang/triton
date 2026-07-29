@@ -1998,6 +1998,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #smem_cluster_publish = #ttg.shared_memory
 #blocked_cluster_publish = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // All logical threads in this module are synchronous. The cluster
+  // publication must still propagate both visibility frontiers, but it need
+  // not filter either frontier against nonexistent asynchronous threads.
+  // CHECK-LABEL: tt.func private @__triton_consan_publish_cluster_visibility{{.*}}_I0
+  // CHECK-NOT: arith.cmpi ne
+  // CHECK: tt.return
   // CHECK-LABEL: @cluster_barrier_publish_protocol
   tt.func public @cluster_barrier_publish_protocol() {
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared_cluster_publish, #smem_cluster_publish, mutable>
