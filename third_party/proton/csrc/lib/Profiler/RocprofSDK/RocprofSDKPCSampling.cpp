@@ -130,16 +130,6 @@ void flushBuffers(const std::vector<rocprofiler_buffer_id_t> &buffers) {
     rocprofiler::flushBuffer<CheckSuccess>(buffer);
 }
 
-std::string normalizeKernelName(std::string name) {
-  // AMDGPU ELF objects append ".kd" (kernel descriptor) to symbol names.
-  // Strip it so user-visible kernel names match the source.
-  const std::string suffix = ".kd";
-  if (name.size() > suffix.size() &&
-      name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0)
-    name.resize(name.size() - suffix.size());
-  return name;
-}
-
 template <typename SampleT>
 rocprofiler_pc_t getSamplePC(const SampleT *sample) {
   if (sample->size >= offsetof(SampleT, pc) + sizeof(sample->pc))
@@ -176,27 +166,15 @@ const char *rocprofilerStatusName(rocprofiler_status_t status) {
   }
 }
 
-void mergePCSamplingAccum(RocprofSDKPCSampling::PCSamplingAccum &dst,
-                          const RocprofSDKPCSampling::PCSamplingAccum &src) {
-  for (int i = 0; i < PCSamplingMetric::PCSamplingMetricKind::Count; ++i)
-    dst.values[i] += src.values[i];
-}
+} // namespace
 
-std::string trim(std::string value) {
-  auto begin = std::find_if_not(value.begin(), value.end(), [](char c) {
-    return std::isspace(static_cast<unsigned char>(c));
-  });
-  auto end = std::find_if_not(value.rbegin(), value.rend(), [](char c) {
-               return std::isspace(static_cast<unsigned char>(c));
-             }).base();
-  if (begin >= end)
-    return {};
-  return std::string(begin, end);
-}
+RocprofSDKPCSampling::RocprofSDKPCSampling() = default;
+
+RocprofSDKPCSampling::~RocprofSDKPCSampling() = default;
 
 std::optional<RocprofSDKPCSampling::SourceLocation>
-parseSourceLocationComment(const std::string &comment,
-                           const std::string &fallbackFunction) {
+RocprofSDKPCSampling::parseSourceLocationComment(
+    const std::string &comment, const std::string &fallbackFunction) {
   auto separator = comment.find(" -> ");
   auto fileLine = trim(comment.substr(0, separator));
   if (fileLine.empty())
@@ -206,7 +184,7 @@ parseSourceLocationComment(const std::string &comment,
   if (lastColon == std::string::npos)
     return std::nullopt;
 
-  RocprofSDKPCSampling::SourceLocation location;
+  SourceLocation location;
   location.file = fileLine.substr(0, lastColon);
   auto line = fileLine.substr(lastColon + 1);
   auto begin = line.data();
@@ -219,12 +197,6 @@ parseSourceLocationComment(const std::string &comment,
   location.function = fallbackFunction;
   return location;
 }
-
-} // namespace
-
-RocprofSDKPCSampling::RocprofSDKPCSampling() = default;
-
-RocprofSDKPCSampling::~RocprofSDKPCSampling() = default;
 
 void RocprofSDKPCSampling::configure(rocprofiler_buffer_tracing_cb_t callback) {
   pcSamplingConfigurationFailureReason.clear();
@@ -288,7 +260,7 @@ void RocprofSDKPCSampling::configure(rocprofiler_buffer_tracing_cb_t callback) {
       rocprofiler::assignCallbackThread<true>(pcSamplingBuffer,
                                               pcSamplingThread);
       pcSamplingBuffers.push_back(pcSamplingBuffer);
-      pcSamplingConfigured = true;
+      pcSamplingServiceConfigured = true;
     } else {
       failureDetails << " agent " << agent.agentId.handle
                      << " status=" << rocprofilerStatusName(cfgStatus) << "("
@@ -304,7 +276,7 @@ void RocprofSDKPCSampling::configure(rocprofiler_buffer_tracing_cb_t callback) {
     }
   }
 
-  if (!pcSamplingConfigured) {
+  if (!pcSamplingServiceConfigured) {
     if (failedConfigCount == unsupportedConfigCount) {
       pcSamplingConfigurationFailureReason =
           "rocprofiler-sdk PC sampling service is not available for the "
@@ -341,7 +313,8 @@ void RocprofSDKPCSampling::warnIfSourceLocationsUnavailable() {
 }
 
 void RocprofSDKPCSampling::recordCodeObjectLoad(
-    const rocprofiler_callback_tracing_code_object_load_data_t &load) {
+    const rocprofiler_callback_tracing_code_object_load_data_t &load,
+    bool pcSamplingModeEnabled) {
   if (load.code_object_id == ROCPROFILER_CODE_OBJECT_ID_NONE)
     return;
 
@@ -360,7 +333,7 @@ void RocprofSDKPCSampling::recordCodeObjectLoad(
     clearSourceLocationCache(load.code_object_id);
   }
 
-  if (pcSamplingEnabled) {
+  if (pcSamplingModeEnabled) {
     if (load.storage_type == ROCPROFILER_CODE_OBJECT_STORAGE_TYPE_MEMORY) {
       if (load.memory_base != 0 && load.memory_size != 0 &&
           load.memory_size <= MaxCodeObjectImageSize) {
@@ -408,13 +381,21 @@ void RocprofSDKPCSampling::recordKernelSymbol(
     return;
 
   KernelSymbolInfo info;
-  info.name = normalizeKernelName(symbol.kernel_name);
+  info.name = symbol.kernel_name;
+  // AMDGPU ELF objects append ".kd" (kernel descriptor) to symbol names.
+  // Strip it so user-visible kernel names match the source.
+  const std::string suffix = ".kd";
+  if (info.name.size() > suffix.size() &&
+      info.name.compare(info.name.size() - suffix.size(), suffix.size(),
+                        suffix) == 0)
+    info.name.resize(info.name.size() - suffix.size());
   info.codeObjectId = symbol.code_object_id;
   kernelSymbols[symbol.kernel_id] = std::move(info);
 }
 
-void RocprofSDKPCSampling::start() {
-  if (pcSamplingEnabled && pcSamplingConfigured && !pcSamplingStarted) {
+void RocprofSDKPCSampling::start(bool pcSamplingModeEnabled) {
+  if (pcSamplingModeEnabled && pcSamplingServiceConfigured &&
+      !pcSamplingStarted) {
     rocprofiler::startContext<true>(pcSamplingContext);
     pcSamplingStarted = true;
   }
@@ -436,12 +417,9 @@ void RocprofSDKPCSampling::flushBuffersNoThrow() {
   proton::flushBuffers<false>(pcSamplingBuffers);
 }
 
-void RocprofSDKPCSampling::recordTarget(uint64_t dispatchId, uint64_t kernelId,
-                                        const DataToEntryMap &dataToEntry,
-                                        bool needsKernelChild) {
-  if (dispatchId == 0)
-    return;
-
+void RocprofSDKPCSampling::recordResolvedTarget(
+    uint64_t dispatchId, uint64_t kernelId, const DataToEntryMap &dataToEntry,
+    bool needsKernelChild) {
   PCSamplingTarget target;
   KernelSymbolInfo symbol;
   if (kernelSymbols.withRead(kernelId,
@@ -674,7 +652,8 @@ void RocprofSDKPCSampling::flushAccum() {
         resolveSourceLocation(key.codeObjectId, key.pcOffset, target);
     if (!sourceLocation) {
       auto &unresolved = unresolvedAccum[key.dispatchId];
-      mergePCSamplingAccum(unresolved, accum);
+      for (int i = 0; i < PCSamplingMetric::PCSamplingMetricKind::Count; ++i)
+        unresolved.values[i] += accum.values[i];
       continue;
     }
 
@@ -742,8 +721,10 @@ void RocprofSDKPCSampling::warnIfInvalidInterval() {}
 void RocprofSDKPCSampling::warnIfSourceLocationsUnavailable() {}
 
 void RocprofSDKPCSampling::recordCodeObjectLoad(
-    const rocprofiler_callback_tracing_code_object_load_data_t &load) {
+    const rocprofiler_callback_tracing_code_object_load_data_t &load,
+    bool pcSamplingModeEnabled) {
   (void)load;
+  (void)pcSamplingModeEnabled;
 }
 
 void RocprofSDKPCSampling::recordCodeObjectUnload(uint64_t codeObjectId) {
@@ -756,7 +737,9 @@ void RocprofSDKPCSampling::recordKernelSymbol(
   (void)symbol;
 }
 
-void RocprofSDKPCSampling::start() {}
+void RocprofSDKPCSampling::start(bool pcSamplingModeEnabled) {
+  (void)pcSamplingModeEnabled;
+}
 
 void RocprofSDKPCSampling::stop() {}
 
@@ -766,9 +749,9 @@ void RocprofSDKPCSampling::flushBuffers() {}
 
 void RocprofSDKPCSampling::flushBuffersNoThrow() {}
 
-void RocprofSDKPCSampling::recordTarget(uint64_t dispatchId, uint64_t kernelId,
-                                        const DataToEntryMap &dataToEntry,
-                                        bool needsKernelChild) {
+void RocprofSDKPCSampling::recordResolvedTarget(
+    uint64_t dispatchId, uint64_t kernelId, const DataToEntryMap &dataToEntry,
+    bool needsKernelChild) {
   (void)dispatchId;
   (void)kernelId;
   (void)dataToEntry;
