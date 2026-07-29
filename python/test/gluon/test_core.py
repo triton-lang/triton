@@ -3540,46 +3540,40 @@ def cross_cta_tma_kernel(desc, out, cga_layout: ttgl.constexpr, MODE: ttgl.const
         tma.async_atomic_add(desc, [0, 0], tile)
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell CTA-pair completion")
-@pytest.mark.parametrize("cga_layout", [((1, 0), ), ((1, 0), (0, 0))], ids=["two-ctas", "four-ctas"])
-def test_cross_cta_tma_load(cga_layout):
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize(
+    "mode,cga_layout",
+    [
+        ("load", ((1, 0), )),
+        ("load", ((1, 0), (0, 0))),
+        ("load", ((0, 0), (1, 0))),
+        ("store", ((1, 0), )),
+        ("reduce", ((1, 0), )),
+    ],
+    ids=["two-ctas", "four-ctas", "nonpeer", "store", "reduce"],
+)
+def test_cross_cta_tma(mode, cga_layout, capfd):
+    if mode == "load" and not is_blackwell():
+        pytest.skip("Requires Blackwell CTA-pair completion")
     inp = torch.arange(128 * 64, device="cuda", dtype=torch.int32).reshape(128, 64)
     out = torch.full((256, 64), -1, device="cuda", dtype=torch.int32)
     layout = ttgl.NVMMASharedLayout(128, 32, rank=2, cga_layout=cga_layout)
     desc = TensorDescriptor.from_tensor(inp, [128, 64], layout)
 
-    compiled = cross_cta_tma_kernel[(1, )](desc, out, cga_layout, "load", num_warps=4, num_ctas=1 << len(cga_layout))
-    assert "mapa.shared::cluster" in compiled.asm["ptx"]
-    assert "cp.async.bulk.tensor.2d.cta_group::2.shared::cluster.global" in compiled.asm["ptx"]
-    torch.testing.assert_close(out, torch.cat((torch.full_like(inp, -5), inp)), atol=0, rtol=0)
-
-
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_cross_cta_tma_load_rejects_nonpeer_barrier(capfd):
-    inp = torch.arange(128 * 64, device="cuda", dtype=torch.int32).reshape(128, 64)
-    out = torch.empty((256, 64), device="cuda", dtype=torch.int32)
-    cga_layout = ((0, 0), (1, 0))
-    layout = ttgl.NVMMASharedLayout(128, 32, rank=2, cga_layout=cga_layout)
-    desc = TensorDescriptor.from_tensor(inp, [128, 64], layout)
-
-    with pytest.raises(RuntimeError, match="PassManager::run failed"):
-        cross_cta_tma_kernel.warmup(desc, out, cga_layout, MODE="load", grid=(1, ), num_warps=4, num_ctas=4)
-    captured = capfd.readouterr()
-    assert "TMA destination and completion barrier must belong to the same CTA or a CTA pair" in captured.err
-
-
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
-@pytest.mark.parametrize("reduce", [False, True], ids=["store", "reduce"])
-def test_cross_cta_tma_store_rejected(reduce, capfd):
-    out = torch.zeros((128, 64), device="cuda", dtype=torch.int32)
-    layout = ttgl.NVMMASharedLayout(128, 32, rank=2, cga_layout=((1, 0), ))
-    desc = TensorDescriptor.from_tensor(out, [128, 64], layout)
-
-    with pytest.raises(RuntimeError, match="error encountered during parsing"):
-        cross_cta_tma_kernel.warmup(desc, out, ((1, 0), ), MODE="reduce" if reduce else "store", grid=(1, ),
-                                    num_warps=4, num_ctas=2)
-    captured = capfd.readouterr()
-    assert "source subview may have an origin in another CTA" in captured.out + captured.err
+    if mode != "load":
+        with pytest.raises(RuntimeError, match="error encountered during parsing"):
+            cross_cta_tma_kernel.warmup(desc, out, cga_layout, MODE=mode, grid=(1, ), num_warps=4, num_ctas=2)
+        assert "source subview may have an origin in another CTA" in "".join(capfd.readouterr())
+    elif cga_layout[0] == (0, 0):
+        with pytest.raises(RuntimeError, match="PassManager::run failed"):
+            cross_cta_tma_kernel.warmup(desc, out, cga_layout, MODE=mode, grid=(1, ), num_warps=4, num_ctas=4)
+        captured = capfd.readouterr()
+        assert "TMA destination and completion barrier must belong to the same CTA or a CTA pair" in captured.err
+    else:
+        compiled = cross_cta_tma_kernel[(1, )](desc, out, cga_layout, mode, num_warps=4, num_ctas=1 << len(cga_layout))
+        assert "mapa.shared::cluster" in compiled.asm["ptx"]
+        assert "cp.async.bulk.tensor.2d.cta_group::2.shared::cluster.global" in compiled.asm["ptx"]
+        torch.testing.assert_close(out, torch.cat((torch.full_like(inp, -5), inp)), atol=0, rtol=0)
 
 
 @gluon.jit
