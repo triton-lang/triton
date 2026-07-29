@@ -3565,10 +3565,10 @@ def test_cross_cta_tma(mode, cga_layout, capfd):
             cross_cta_tma_kernel.warmup(desc, out, cga_layout, MODE=mode, grid=(1, ), num_warps=4, num_ctas=2)
         assert "source subview may have an origin in another CTA" in "".join(capfd.readouterr())
     elif cga_layout[0] == (0, 0):
-        with pytest.raises(RuntimeError, match="PassManager::run failed"):
+        with pytest.raises(RuntimeError, match="error encountered during parsing"):
             cross_cta_tma_kernel.warmup(desc, out, cga_layout, MODE=mode, grid=(1, ), num_warps=4, num_ctas=4)
-        captured = capfd.readouterr()
-        assert "TMA destination and completion barrier must belong to the same CTA or a CTA pair" in captured.err
+        assert "TMA destination and completion barrier must belong to the same CTA or a CTA pair" in "".join(
+            capfd.readouterr())
     else:
         compiled = cross_cta_tma_kernel[(1, )](desc, out, cga_layout, mode, num_warps=4, num_ctas=1 << len(cga_layout))
         assert "mapa.shared::cluster" in compiled.asm["ptx"]

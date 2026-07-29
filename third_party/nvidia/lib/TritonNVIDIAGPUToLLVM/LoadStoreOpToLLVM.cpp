@@ -1157,10 +1157,6 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     uint32_t barrierMask =
         toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
-    if (affineBlockMask && ((barrierMask | affineBlockMask) & ~uint64_t{1}))
-      return op.emitError(
-          "TMA destination and completion barrier must belong to the same "
-          "CTA or a CTA pair");
     // Use a cross-CTA mbarrier pointer when the barrier mask is set.
     bool crossCTABarrier = barrierMask != 0;
     if (crossCTABarrier) {
