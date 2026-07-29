@@ -57,13 +57,6 @@ constexpr const char *UnknownKernelName = "<unknown>";
 
 struct RocprofSDKProfilerPimpl;
 
-std::string dirname(std::string path) {
-  auto pos = path.rfind('/');
-  if (pos == std::string::npos)
-    return "";
-  return path.substr(0, pos);
-}
-
 std::string findLoadedLibPath(const char *libName, const char *symbolName) {
   void *handle = dlopen(libName, RTLD_NOLOAD | RTLD_LAZY);
   if (!handle)
@@ -82,9 +75,11 @@ std::string findLoadedLibPath(const char *libName, const char *symbolName) {
 void promoteRocprofilerLibraries() {
   std::string libDir = getStrEnv(rocprofiler::ExternLibRocprofiler::pathEnv);
   if (libDir.empty()) {
-    libDir =
-        dirname(findLoadedLibPath("librocprofiler-register.so",
-                                  "rocprofiler_register_library_api_table"));
+    auto path = findLoadedLibPath("librocprofiler-register.so",
+                                  "rocprofiler_register_library_api_table");
+    auto pos = path.rfind('/');
+    if (pos != std::string::npos)
+      libDir = path.substr(0, pos);
   }
 
   void *sdkHandle = nullptr;
@@ -774,6 +769,7 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
 
   KernelPhaseTracker kernelPhaseTracker;
   RocprofSDKPCSampling pcSampling;
+  bool pcSamplingModeEnabled{false};
 
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
   // Captured graph metadata keyed by the HIP graph handle returned by
@@ -798,28 +794,6 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
   // ROCPROFILER_CALLBACK_TRACING_HIP_GRAPH.
   ThreadSafeMap<uint64_t, GraphState> graphStates;
 #endif
-
-  void recordPCSamplingTarget(uint64_t dispatchId, uint64_t correlationId,
-                              uint64_t kernelId, bool isGraph,
-                              size_t graphExternId = Scope::DummyScopeId) {
-    if (dispatchId == 0)
-      return;
-
-    size_t externId = graphExternId;
-    if (externId == Scope::DummyScopeId &&
-        !profiler.correlation.corrIdToExternId.withRead(
-            correlationId, [&](const size_t &value) { externId = value; }))
-      return;
-    if (externId == Scope::DummyScopeId)
-      return;
-
-    if (!profiler.correlation.externIdToState.withRead(
-            externId, [&](const ExternIdState &state) {
-              pcSampling.recordTarget(dispatchId, kernelId, state.dataToEntry,
-                                      isGraph || state.isMissingName);
-            }))
-      return;
-  }
 };
 
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
@@ -1236,7 +1210,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::codeObjectCallback(
         static_cast<rocprofiler_callback_tracing_code_object_load_data_t *>(
             record.payload);
     if (record.phase == ROCPROFILER_CALLBACK_PHASE_LOAD)
-      impl->pcSampling.recordCodeObjectLoad(*payload);
+      impl->pcSampling.recordCodeObjectLoad(*payload,
+                                            impl->pcSamplingModeEnabled);
     else if (record.phase == ROCPROFILER_CALLBACK_PHASE_UNLOAD)
       impl->pcSampling.recordCodeObjectUnload(payload->code_object_id);
     return;
@@ -1287,16 +1262,21 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
       impl->corrIdToStreamId.withRead(
           record->correlation_id.internal,
           [&](const uint64_t &sid) { streamId = sid; });
+      size_t graphExternId = Scope::DummyScopeId;
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
-      if (record->correlation_id.external.ptr != nullptr) {
+      auto *graphCorrelation = static_cast<GraphDispatchCorrelation *>(
+          record->correlation_id.external.ptr);
+      if (graphCorrelation != nullptr)
+        graphExternId = graphCorrelation->externId;
+#endif
+      impl->pcSampling.recordTarget(
+          record->dispatch_info.dispatch_id, record->correlation_id.internal,
+          record->dispatch_info.kernel_id, graphExternId,
+          correlation.corrIdToExternId, correlation.externIdToState);
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
+      if (graphCorrelation != nullptr) {
         // For now, it's only graph dispatch records that carry external
         // correlation data.
-        auto *graphCorrelation = static_cast<GraphDispatchCorrelation *>(
-            record->correlation_id.external.ptr);
-        impl->recordPCSamplingTarget(
-            record->dispatch_info.dispatch_id, record->correlation_id.internal,
-            record->dispatch_info.kernel_id, /*isGraph=*/true,
-            graphCorrelation->externId);
         processGraphKernelRecord(
             correlation.externIdToState, impl->kernelPhaseTracker, dataPhases,
             kernelName, record, *graphCorrelation, streamId);
@@ -1307,17 +1287,11 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
         record->correlation_id.external.ptr = nullptr;
         record->correlation_id.external.value = 0;
       } else {
-        impl->recordPCSamplingTarget(
-            record->dispatch_info.dispatch_id, record->correlation_id.internal,
-            record->dispatch_info.kernel_id, /*isGraph=*/false);
         processKernelRecord(
             profiler, correlation.corrIdToExternId, correlation.externIdToState,
             impl->kernelPhaseTracker, dataPhases, kernelName, record, streamId);
       }
 #else
-      impl->recordPCSamplingTarget(
-          record->dispatch_info.dispatch_id, record->correlation_id.internal,
-          record->dispatch_info.kernel_id, /*isGraph=*/false);
       processKernelRecord(profiler, correlation.corrIdToExternId,
                           correlation.externIdToState, impl->kernelPhaseTracker,
                           dataPhases, kernelName, record, streamId);
@@ -1521,7 +1495,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStart() {
       rocprofiler::startContext<true>(state.profilingContext);
       state.profilingStarted = true;
     }
-    pcSampling.start();
+    pcSampling.start(pcSamplingModeEnabled);
     bool nvtx = getBoolEnv("TRITON_ENABLE_NVTX", true);
     state.nvtxEnabled.store(nvtx, std::memory_order_relaxed);
     if (nvtx)
@@ -1608,8 +1582,8 @@ void RocprofSDKProfiler::doSetMode(
     const std::vector<std::string> &modeAndOptions) {
   auto mode = modeAndOptions.empty() ? std::string() : modeAndOptions[0];
   auto *impl = static_cast<RocprofSDKProfilerPimpl *>(pImpl.get());
-  impl->pcSampling.setEnabled(proton::toLower(mode) == "pcsampling");
-  if (impl->pcSampling.isEnabled()) {
+  impl->pcSamplingModeEnabled = proton::toLower(mode) == "pcsampling";
+  if (impl->pcSamplingModeEnabled) {
     impl->pcSampling.warnIfInvalidInterval();
     if (!impl->pcSampling.isConfigured()) {
       throw std::runtime_error(

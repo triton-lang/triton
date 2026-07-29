@@ -43,15 +43,13 @@ public:
 
   void configure(rocprofiler_buffer_tracing_cb_t callback);
 
-  void setEnabled(bool enabled) { pcSamplingEnabled = enabled; }
-  bool isEnabled() const { return pcSamplingEnabled; }
-  bool isConfigured() const { return pcSamplingConfigured; }
+  bool isConfigured() const { return pcSamplingServiceConfigured; }
   const std::string &configurationFailureReason() const {
     return pcSamplingConfigurationFailureReason;
   }
   bool isStarted() const { return pcSamplingStarted; }
 
-  void start();
+  void start(bool pcSamplingModeEnabled);
   void stop();
   void stopNoThrow();
   void flushBuffers();
@@ -60,18 +58,40 @@ public:
   void warnIfSourceLocationsUnavailable();
 
   void recordCodeObjectLoad(
-      const rocprofiler_callback_tracing_code_object_load_data_t &load);
+      const rocprofiler_callback_tracing_code_object_load_data_t &load,
+      bool pcSamplingModeEnabled);
   void recordCodeObjectUnload(uint64_t codeObjectId);
   void recordKernelSymbol(
       const rocprofiler_callback_tracing_code_object_kernel_symbol_register_data_t
           &symbol);
 
-  void recordTarget(uint64_t dispatchId, uint64_t kernelId,
-                    const DataToEntryMap &dataToEntry, bool needsKernelChild);
+  template <typename CorrIdToExternIdMap, typename ExternIdToStateMap>
+  void recordTarget(uint64_t dispatchId, uint64_t correlationId,
+                    uint64_t kernelId, size_t graphExternId,
+                    CorrIdToExternIdMap &corrIdToExternId,
+                    ExternIdToStateMap &externIdToState) {
+    if (dispatchId == 0)
+      return;
+
+    size_t externId = graphExternId;
+    if (externId == Scope::DummyScopeId &&
+        !corrIdToExternId.withRead(
+            correlationId, [&](const size_t &value) { externId = value; }))
+      return;
+    if (externId == Scope::DummyScopeId)
+      return;
+
+    externIdToState.withRead(externId, [&](const auto &state) {
+      recordResolvedTarget(dispatchId, kernelId, state.dataToEntry,
+                           graphExternId != Scope::DummyScopeId ||
+                               state.isMissingName);
+    });
+  }
   void processBuffer(rocprofiler_record_header_t **headers, size_t numHeaders,
                      uint64_t dropCount);
   void flushAccum();
 
+private:
   struct PCSamplingAccum {
     uint64_t values[PCSamplingMetric::PCSamplingMetricKind::Count] = {};
   };
@@ -113,7 +133,6 @@ public:
     }
   };
 
-private:
   struct PCSamplingKey {
     uint64_t dispatchId{0};
     uint64_t codeObjectId{0};
@@ -151,6 +170,12 @@ private:
 
   static std::unique_ptr<PCSamplingMetric>
   makePCSamplingMetric(const PCSamplingAccum &accum);
+  static std::optional<SourceLocation>
+  parseSourceLocationComment(const std::string &comment,
+                             const std::string &fallbackFunction);
+  void recordResolvedTarget(uint64_t dispatchId, uint64_t kernelId,
+                            const DataToEntryMap &dataToEntry,
+                            bool needsKernelChild);
 
   void accumulate(PCSamplingMetric::PCSamplingMetricKind stallKind,
                   bool isStalled, uint64_t dispatchId, uint64_t codeObjectId,
@@ -164,8 +189,9 @@ private:
   void releaseUnloadedCodeObject(uint64_t codeObjectId);
   void removeSourceLocationDecoder(const CodeObjectInfo &info);
 
-  bool pcSamplingEnabled{false};
-  bool pcSamplingConfigured{false};
+  // Set when rocprofiler_force_configure successfully configures the service
+  // for at least one GPU agent.
+  bool pcSamplingServiceConfigured{false};
   bool pcSamplingStarted{false};
   bool intervalWarningEmitted{false};
   bool sourceLocationWarningEmitted{false};
