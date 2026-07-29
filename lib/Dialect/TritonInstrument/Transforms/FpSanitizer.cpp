@@ -625,11 +625,10 @@ Value castSignedIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
   return v;
 }
 
-// Widening a floating-point payload is signed extension. Narrowing folds the
-// discarded high bits into the retained low bits before truncation. Values
-// produced by signed extension have uniform discarded bits, so normalizing by
-// the source sign makes `high` zero and narrowing remains a left inverse of
-// widening.
+// Widening a floating-point payload is signed extension. When narrowing, the
+// xor with the sign extension of the retained low bits vanishes for widened
+// payloads. A repeated odd multiplier folds every discarded residual bit into
+// the high word; a final xor shift diffuses it into the retained low bits.
 Value castFloatPayloadToType(PatternRewriter &rewriter, Location loc, Value v,
                              Type targetTy) {
   if (v.getType() == targetTy)
@@ -648,19 +647,26 @@ Value castFloatPayloadToType(PatternRewriter &rewriter, Location loc, Value v,
   if (homomorphicCasts && homomorphicCasts.getValue())
     return arith::TruncIOp::create(rewriter, loc, targetTy, v);
 
-  Value signShift = getUIntConstantLike(rewriter, loc, v.getType(),
-                                        static_cast<uint64_t>(srcWidth - 1));
-  Value sign = arith::ShRUIOp::create(rewriter, loc, v, signShift);
-  Value zero = getIntConstantLike(rewriter, loc, v.getType(), 0);
-  Value signMask = arith::SubIOp::create(rewriter, loc, zero, sign);
-  Value normalized = arith::XOrIOp::create(rewriter, loc, v, signMask);
-  Value highShift = getUIntConstantLike(rewriter, loc, v.getType(),
-                                        static_cast<uint64_t>(dstWidth));
-  Value high = arith::ShRUIOp::create(rewriter, loc, normalized, highShift);
-  Value multiplier = getIntConstantLike(rewriter, loc, v.getType(), 3511);
-  Value foldedHigh = arith::MulIOp::create(rewriter, loc, high, multiplier);
-  Value folded = arith::XOrIOp::create(rewriter, loc, v, foldedHigh);
-  return arith::TruncIOp::create(rewriter, loc, targetTy, folded);
+  assert(srcWidth <= 64 && "expected at most a 64-bit floating-point payload");
+  uint64_t dstMask = (uint64_t{1} << dstWidth) - 1;
+  uint64_t repeatedMultiplier =
+      (uint64_t{3511} & dstMask) * (~uint64_t{0} / dstMask);
+
+  Value low = arith::TruncIOp::create(rewriter, loc, targetTy, v);
+  Value canonical = arith::ExtSIOp::create(rewriter, loc, v.getType(), low);
+  Value residual = arith::XOrIOp::create(rewriter, loc, v, canonical);
+  Value multiplier =
+      getUIntConstantLike(rewriter, loc, v.getType(), repeatedMultiplier);
+  Value product = arith::MulIOp::create(rewriter, loc, residual, multiplier);
+  Value highShift = getUIntConstantLike(
+      rewriter, loc, v.getType(), static_cast<uint64_t>(srcWidth - dstWidth));
+  Value highWide = arith::ShRUIOp::create(rewriter, loc, product, highShift);
+  Value high = arith::TruncIOp::create(rewriter, loc, targetTy, highWide);
+  Value diffusionShift = getUIntConstantLike(
+      rewriter, loc, targetTy, static_cast<uint64_t>(dstWidth / 2));
+  Value diffusion = arith::ShRUIOp::create(rewriter, loc, high, diffusionShift);
+  Value mixed = arith::XOrIOp::create(rewriter, loc, high, diffusion);
+  return arith::XOrIOp::create(rewriter, loc, low, mixed);
 }
 
 Value castScalarIntToIntLike(PatternRewriter &rewriter, Location loc,

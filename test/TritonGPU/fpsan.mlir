@@ -407,6 +407,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @tmem_scratch_sliced_payloads
   tt.func public @tmem_scratch_sliced_payloads(%arg0: tensor<128x64xf32, #tmem_split>) {
+    // CHECK: arith.constant dense<-1212696649>
     // CHECK: tt.store
     // CHECK-NOT: ttng.tmem_store
     %true = arith.constant true
@@ -607,15 +608,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @cast_truncf
   tt.func public @cast_truncf(%a: tensor<4xf32>) -> tensor<4xf16> {
-    // CHECK-DAG: %[[MULTIPLIER:.*]] = arith.constant dense<3511>
+    // CHECK-DAG: %[[MULTIPLIER:.*]] = arith.constant dense<230100407>
     // CHECK: %[[PAYLOAD:.*]] = tti.experimental_fpsan_embed
-    // CHECK: %[[SIGN:.*]] = arith.shrui %[[PAYLOAD]]
-    // CHECK: %[[SIGN_MASK:.*]] = arith.subi {{.*}}, %[[SIGN]]
-    // CHECK: %[[NORMALIZED:.*]] = arith.xori %[[PAYLOAD]], %[[SIGN_MASK]]
-    // CHECK: %[[HIGH:.*]] = arith.shrui %[[NORMALIZED]]
-    // CHECK: %[[FOLDED_HIGH:.*]] = arith.muli %[[HIGH]], %[[MULTIPLIER]]
-    // CHECK: %[[FOLDED:.*]] = arith.xori %[[PAYLOAD]], %[[FOLDED_HIGH]]
-    // CHECK: %[[NARROWED:.*]] = arith.trunci %[[FOLDED]]
+    // CHECK: %[[LOW:.*]] = arith.trunci %[[PAYLOAD]]
+    // CHECK: %[[CANONICAL:.*]] = arith.extsi %[[LOW]]
+    // CHECK: %[[RESIDUAL:.*]] = arith.xori %[[PAYLOAD]], %[[CANONICAL]]
+    // CHECK: %[[PRODUCT:.*]] = arith.muli %[[RESIDUAL]], %[[MULTIPLIER]]
+    // CHECK: %[[HIGH_WIDE:.*]] = arith.shrui %[[PRODUCT]]
+    // CHECK: %[[HIGH:.*]] = arith.trunci %[[HIGH_WIDE]]
+    // CHECK: %[[DIFFUSION:.*]] = arith.shrui %[[HIGH]]
+    // CHECK: %[[MIXED:.*]] = arith.xori %[[HIGH]], %[[DIFFUSION]]
+    // CHECK: %[[NARROWED:.*]] = arith.xori %[[LOW]], %[[MIXED]]
     // CHECK: tti.experimental_fpsan_unembed %[[NARROWED]]
     // CHECK-NOT: arith.truncf
     %0 = arith.truncf %a : tensor<4xf32> to tensor<4xf16>
