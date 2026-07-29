@@ -921,6 +921,9 @@ private:
       }
     }
     for (const auto &barrierInfo : opInfo->barriers) {
+      if (barrierInfo.pred && matchPattern(barrierInfo.pred, m_Zero()))
+        continue;
+
       Value barrier = barrierInfo.barrier;
       Value combinedPred = tti::maybeAnd(b, barrierInfo.pred, pred);
       Value recipientCTAs = getBarrierRecipientCTAs(b, op);

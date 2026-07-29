@@ -40,6 +40,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
+#false_completion_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#false_completion_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#false_completion_smem = #ttg.shared_memory
+#false_completion_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 2>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65552 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: tt.func public @statically_false_completion_barrier
+  tt.func public @statically_false_completion_barrier() {
+    // CHECK: %[[FALSE:.*]] = arith.constant false
+    %false = arith.constant false
+    %true = arith.constant true
+    %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #false_completion_shared, #false_completion_smem, mutable>
+    %b = ttg.local_alloc {allocation.offset = 32768 : i32} : () -> !ttg.memdesc<128x128xf16, #false_completion_shared, #false_completion_smem, mutable>
+    %inactive_barrier = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #false_completion_barrier, #false_completion_smem, mutable>
+    %active_barrier = ttg.local_alloc {allocation.offset = 65544 : i32} : () -> !ttg.memdesc<1xi64, #false_completion_barrier, #false_completion_smem, mutable>
+    ttng.init_barrier %inactive_barrier, 1 : !ttg.memdesc<1xi64, #false_completion_barrier, #false_completion_smem, mutable>
+    ttng.init_barrier %active_barrier, 1 : !ttg.memdesc<1xi64, #false_completion_barrier, #false_completion_smem, mutable>
+    %acc = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #false_completion_tmem, #ttng.tensor_memory, mutable>
+    // The MMA remains live and retains all operand race checks. Only the
+    // constant-false completion notification is unreachable.
+    // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK-COUNT-2: tt.call @__triton_consan_track_visible_accesses
+    // CHECK: tt.call @__triton_consan_track_proxy_accesses
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK-NOT: tt.call @__triton_consan_track_visible_accesses
+    // CHECK-NOT: tt.call @__triton_consan_track_proxy_accesses
+    // CHECK-NOT: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK: ttng.tc_gen5_mma {{.*}}[%[[FALSE]]], {{.*}}[{{.*}}]
+    ttng.tc_gen5_mma %a, %b, %acc[], %true, %true, %inactive_barrier[%false], %active_barrier[%true] {is_async} : !ttg.memdesc<128x128xf16, #false_completion_shared, #false_completion_smem, mutable>, !ttg.memdesc<128x128xf16, #false_completion_shared, #false_completion_smem, mutable>, !ttg.memdesc<128x128xf16, #false_completion_tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #false_completion_barrier, #false_completion_smem, mutable>, !ttg.memdesc<1xi64, #false_completion_barrier, #false_completion_smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #false_wait_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #false_wait_smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 8 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
