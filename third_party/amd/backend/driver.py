@@ -322,6 +322,9 @@ class HIPLauncher(object):
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
         launcher = triton.runtime.driver.active.utils.launch
         expanded_signature = expand_signature(signature.values(), tensordesc_meta, "tensordesc")
+        # Number of top-level kernel arguments *before* tensor-descriptor
+        # expansion; this is exactly what `__call__` receives in `*args`.
+        self.num_kernel_args = len(signature)
         self.arg_annotations = annotate_arguments(expanded_signature)
         self.kernel_signature = make_kernel_signature(expanded_signature)
         self.launch = wrap_handle_tensordesc(launcher, signature, tensordesc_meta)
@@ -367,17 +370,20 @@ class HIPLauncher(object):
             profile_scratch = allocate_default_profile_scratch(self.profile_scratch_size, self.profile_scratch_align)
 
         # Guard against a stale/mismatched compiled kernel being reused for a
-        # different kernel signature. The C launcher walks `args` and
-        # `arg_annotations` in lock-step; when their lengths differ it reads
-        # misaligned data and fails with a cryptic "'tuple' object cannot be
-        # interpreted as an integer" TypeError (or, worse, silently corrupts
-        # memory / segfaults). Fail loudly with an actionable message instead.
-        if len(args) != len(self.arg_annotations):
+        # different kernel signature. The launcher expands each argument
+        # according to the compile-time signature; when the number of runtime
+        # arguments does not match what the kernel was compiled for, the
+        # expansion reads misaligned data and fails with a cryptic "'tuple'
+        # object cannot be interpreted as an integer" TypeError (or, worse,
+        # silently corrupts memory / segfaults). Fail loudly with an actionable
+        # message instead. `num_kernel_args` is the pre-expansion count, so this
+        # stays correct for kernels that take tensor descriptors.
+        if len(args) != self.num_kernel_args:
             raise ValueError(
                 "AMD kernel launch argument mismatch: received "
                 f"{len(args)} runtime argument(s) but this compiled kernel was "
-                f"built for {len(self.arg_annotations)}. This usually means a "
-                "stale or mismatched compiled kernel (e.g. from an external "
+                f"built for {self.num_kernel_args}. This usually means a stale "
+                "or mismatched compiled kernel (e.g. from an external "
                 "launcher/kernel cache) is being reused for a different kernel "
                 "signature.")
 
