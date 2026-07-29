@@ -9,6 +9,7 @@
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SparseBitVector.h"
@@ -26,7 +27,6 @@ public:
   AddressSet() = default;
 
   static AddressSet fromRange(uint32_t begin, uint32_t length);
-  static AddressSet fromAddresses(llvm::ArrayRef<uint32_t> addresses);
 
   void set(uint32_t address);
   void insert(const AddressSet &other);
@@ -36,7 +36,6 @@ public:
   auto begin() const { return addresses.begin(); }
   auto end() const { return addresses.end(); }
   bool empty() const { return addresses.empty(); }
-  bool contains(uint32_t address) const;
   bool intersects(const AddressSet &other) const;
   bool contains(const AddressSet &other) const;
   AddressSet translated(uint32_t delta) const;
@@ -65,47 +64,66 @@ private:
 //===----------------------------------------------------------------------===//
 
 struct BufferRegion {
+  using CTAAddresses = std::pair<uint32_t, AddressSet>;
+
   /// Runtime descriptor key. It deliberately does not define geometry:
   /// distinct sparse views may have the same key.
   uint32_t baseOffset = 0;
   uint32_t length = 0;
-  AddressSet addresses;
-
-  /// Internal view provenance used while composing nested views.
-  uint32_t storageBase = 0;
-  uint32_t affineOffset = 0;
-
-  BufferRegion() = default;
-  BufferRegion(uint32_t baseOffset, uint32_t length)
-      : baseOffset(baseOffset), length(length),
-        addresses(AddressSet::fromRange(baseOffset, length)),
-        storageBase(baseOffset) {}
-  BufferRegion(uint32_t baseOffset, uint32_t length, AddressSet addresses,
-               uint32_t storageBase, uint32_t affineOffset)
-      : baseOffset(baseOffset), length(length), addresses(std::move(addresses)),
-        storageBase(storageBase), affineOffset(affineOffset) {}
+  llvm::SmallVector<CTAAddresses, 2> ctaAddresses;
 
   bool intersects(const BufferRegion &other) const {
-    return addresses.intersects(other.addresses);
+    return llvm::any_of(ctaAddresses, [&](const CTAAddresses &lhs) {
+      return llvm::any_of(other.ctaAddresses, [&](const CTAAddresses &rhs) {
+        return lhs.first == rhs.first && lhs.second.intersects(rhs.second);
+      });
+    });
   }
   bool contains(const BufferRegion &other) const {
-    return addresses.contains(other.addresses);
+    return llvm::all_of(other.ctaAddresses, [&](const CTAAddresses &rhs) {
+      return llvm::any_of(ctaAddresses, [&](const CTAAddresses &lhs) {
+        return lhs.first == rhs.first && lhs.second.contains(rhs.second);
+      });
+    });
   }
 
   bool operator==(const BufferRegion &other) const {
-    return baseOffset == other.baseOffset && length == other.length &&
-           addresses == other.addresses && storageBase == other.storageBase &&
-           affineOffset == other.affineOffset;
+    return std::tie(baseOffset, length, ctaAddresses) ==
+           std::tie(other.baseOffset, other.length, other.ctaAddresses);
   }
 
   bool operator<(const BufferRegion &other) const {
-    return std::tie(baseOffset, length, addresses, storageBase, affineOffset) <
-           std::tie(other.baseOffset, other.length, other.addresses,
-                    other.storageBase, other.affineOffset);
+    return std::tie(baseOffset, length, ctaAddresses) <
+           std::tie(other.baseOffset, other.length, other.ctaAddresses);
   }
 
   template <typename T> void print(T &os) const {
     os << "[" << baseOffset << ", " << length << "]";
+  }
+};
+
+/// A physical region and the provenance required to compose descriptor views.
+struct BufferRegionView {
+  BufferRegion region;
+  uint32_t storageBase = 0;
+  uint32_t affineOffset = 0;
+  llvm::SmallVector<uint32_t, 2> partitionBases;
+  uint32_t affinePartitionOffset = 0;
+  uint32_t affineCTAOffset = 0;
+
+private:
+  auto key() const {
+    return std::tie(region, storageBase, affineOffset, affinePartitionOffset,
+                    affineCTAOffset, partitionBases);
+  }
+
+public:
+  bool operator==(const BufferRegionView &other) const {
+    return key() == other.key();
+  }
+
+  bool operator<(const BufferRegionView &other) const {
+    return key() < other.key();
   }
 };
 
@@ -118,43 +136,64 @@ struct BufferRegion {
 struct BufferStatePlan {
   unsigned numLanes = 0;
   llvm::SmallVector<llvm::SmallBitVector> regionMasks;
+  llvm::SmallBitVector unknownMask;
 };
 
-BufferStatePlan createBufferStatePlan(llvm::ArrayRef<BufferRegion> regions);
+BufferStatePlan createBufferStatePlan(llvm::ArrayRef<BufferRegion> regions,
+                                      bool includeUnknown = false);
 
 //===----------------------------------------------------------------------===//
 // RegionInfo lattice
 //===----------------------------------------------------------------------===//
 //
-// This wraps a set of BufferRegions and provides lattice semantics
+// This wraps a set of descriptor views and provides lattice semantics.
 //
 struct RegionInfo {
-  using RegionList = std::set<BufferRegion>;
-  RegionList regions;
+  enum class Kind { Uninitialized, Exact, Unknown };
+  using ViewList = std::set<BufferRegionView>;
+
+  Kind kind = Kind::Uninitialized;
+  ViewList views;
 
   RegionInfo() = default;
-  RegionInfo(const RegionList &r) : regions(r) {}
+  RegionInfo(ViewList views) : kind(Kind::Exact), views(std::move(views)) {}
 
-  // Lattice join: union of regions
+  bool isUnknown() const { return kind == Kind::Unknown; }
+
   static RegionInfo join(const RegionInfo &lhs, const RegionInfo &rhs) {
+    if (lhs.isUnknown() || rhs.isUnknown())
+      return getPessimisticValueState();
+    if (lhs.kind == Kind::Uninitialized)
+      return rhs;
+    if (rhs.kind == Kind::Uninitialized)
+      return lhs;
     RegionInfo result = lhs;
-    result.regions.insert(rhs.regions.begin(), rhs.regions.end());
+    result.views.insert(rhs.views.begin(), rhs.views.end());
     return result;
   }
 
   bool operator==(const RegionInfo &other) const {
-    return regions == other.regions;
+    return kind == other.kind && views == other.views;
   }
 
   template <typename T> void print(T &os) const {
-    llvm::interleaveComma(regions, os,
-                          [&](const BufferRegion &r) { r.print(os); });
+    if (isUnknown()) {
+      os << "unknown";
+      return;
+    }
+    llvm::interleaveComma(views, os, [&](const BufferRegionView &view) {
+      view.region.print(os);
+    });
   }
 
   static RegionInfo getPessimisticValueState(MLIRContext *context = nullptr) {
-    return RegionInfo(); // means "unknown / empty"
+    RegionInfo result;
+    result.kind = Kind::Unknown;
+    return result;
   }
-  static RegionInfo getPessimisticValueState(Value) { return RegionInfo(); }
+  static RegionInfo getPessimisticValueState(Value) {
+    return getPessimisticValueState();
+  }
 };
 
 //===----------------------------------------------------------------------===//
@@ -175,7 +214,12 @@ public:
 
   enum RegionType { SHARED_MEMORY, TENSOR_MEMORY, BARRIER, NUM_REGION_TYPES };
 
-  static bool isMemoryAccessOperation(Operation *op);
+  struct MemoryAccess {
+    Value value;
+    bool isWrite;
+  };
+
+  static llvm::SmallVector<MemoryAccess> getMemoryAccesses(Operation *op);
 
   // ------------------------------
   // Public API for ConSan
@@ -185,6 +229,10 @@ public:
   llvm::SmallVector<BufferRegion>
   getAllUsedBufferRegions(RegionType type) const {
     return llvm::to_vector(usedBufferRegions[type]);
+  }
+
+  bool hasUnknownUsedBufferRegions(RegionType type) const {
+    return usedUnknownBufferRegions[type];
   }
 
   void calculateUsedBufferRegions(Operation *op);
@@ -208,9 +256,8 @@ public:
 private:
   // Global registry of all regions
   std::set<BufferRegion> usedBufferRegions[NUM_REGION_TYPES];
+  bool usedUnknownBufferRegions[NUM_REGION_TYPES] = {};
   llvm::DenseMap<std::pair<Type, uint32_t>, AddressSet> footprintCache;
-
-  static void verifyOpIsSupported(Operation *op);
 };
 
 } // namespace mlir::triton

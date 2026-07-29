@@ -88,6 +88,8 @@ ISAFamily TargetFeatures::getISAFamily() const {
   // RDNA ISA cases.
   if (major == 12 && minor == 0)
     return ISAFamily::RDNA4;
+  if (major == 11 && minor == 7)
+    return ISAFamily::RDNA4m;
   if (major == 11)
     return ISAFamily::RDNA3;
   if (major == 10 && minor == 3)
@@ -239,6 +241,10 @@ bool TargetFeatures::supportsTDM() const { return isGFX1250(); }
 
 bool TargetFeatures::supportsMultiCTALaunch() const { return isGFX1250(); }
 
+unsigned TargetFeatures::getMaxMulticastMaskPopcount() const {
+  return isGFX1250() ? 5 : 1;
+}
+
 bool TargetFeatures::supportsClusterLoadBitWidth(int bitWidth) const {
   if (getISAFamily() == ISAFamily::GFX1250) {
     return llvm::is_contained({32, 64, 128}, bitWidth);
@@ -336,6 +342,7 @@ bool isRDNA(ISAFamily isaFamily) {
   case ISAFamily::RDNA1:
   case ISAFamily::RDNA2:
   case ISAFamily::RDNA3:
+  case ISAFamily::RDNA4m:
   case ISAFamily::RDNA4:
     return true;
   default:
