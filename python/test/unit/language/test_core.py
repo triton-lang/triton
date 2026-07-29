@@ -3194,6 +3194,31 @@ def test_histogram_silent_data_corruption(device):
     histogram_kernel[(1, )](x, z)
     assert z[1] == 1, f"Second element shouldn't be affected, expected_buffer=[1, 1], actual_buffer={z}"
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str, M", [("int8", 300), ("int16", 70000), ("int32", 300)])
+def test_histogram_narrow_input_dtype(dtype_str, M, device):
+    # The bin count must not depend on the width of the input element type:
+    # tl.histogram always returns int32. Counts >= 2**8 / 2**16 used to wrap when
+    # they were accumulated in the input dtype.
+    if M > 4096 and not is_interpreter():
+        pytest.skip("block size needed to exceed the int16 modulus is impractical on device")
+
+    @triton.jit
+    def histogram_kernel(x_ptr, z_ptr, M: tl.constexpr, N: tl.constexpr):
+        offset1 = tl.arange(0, M)
+        offset2 = tl.arange(0, N)
+        x = tl.load(x_ptr + offset1)
+        z = tl.histogram(x, N)
+        tl.store(z_ptr + offset2, z)
+
+    N = 2
+    # M elements all landing in bin 0, so the expected count is exactly M.
+    x = torch.zeros((triton.next_power_of_2(M), ), device=device, dtype=getattr(torch, dtype_str))
+    x[M:] = 1
+    z = torch.empty(N, dtype=torch.int32, device=device)
+    histogram_kernel[(1, )](x, z, M=triton.next_power_of_2(M), N=N)
+    assert z[0] == M, f"expected bin 0 count {M}, got {z[0].item()}"
+
 
 # ------------------------
 # test histogram with mask
