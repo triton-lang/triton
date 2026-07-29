@@ -149,7 +149,7 @@ LogicalResult emitFence(Operation *op, ConversionPatternRewriter &rewriter,
   // LLVM::FenceOp lowering will emit the required cache ops and s_waitcnt
   // vmcnt(0) instrs
 
-  auto [emitReleaseFence, emitAcquireFence] = getOrderingFlags(memOrdering);
+  auto [emitAcquireFence, emitReleaseFence] = getOrderingFlags(memOrdering);
   if (MemSyncScope::SYSTEM == memScope)
     return rewriter.notifyMatchFailure(
         op, "System memory scope is not supported for Buffer Atomic Ops");
