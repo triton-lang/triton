@@ -391,9 +391,39 @@ static bool isProtectedLayoutLoop(Operation *op) {
           isa<RankedTensorType>(argument.getType()))
         return true;
 
+  unsigned functionLoadCount = 0;
+  unsigned functionStoreCount = 0;
+  if (auto parentFunction = op->getParentOfType<FuncOp>())
+    parentFunction.walk([&](Operation *nested) {
+      if (isa<LoadOp>(nested))
+        ++functionLoadCount;
+      else if (isa<StoreOp>(nested))
+        ++functionStoreCount;
+    });
+
   WalkResult body = op->walk([&](Operation *nested) {
-    if (nested != op && isFixedLayoutBoundary(nested) &&
-        !isa<LoadOp, StoreOp>(nested))
+    if (nested == op || !isFixedLayoutBoundary(nested))
+      return WalkResult::advance();
+    if (!isa<LoadOp, StoreOp>(nested))
+      return WalkResult::interrupt();
+
+    // A single masked load/store is one memory protocol. Count the complete
+    // function so independent copy loops retain their global layout freedom.
+    if (functionLoadCount != 1 || functionStoreCount != 1)
+      return WalkResult::advance();
+    auto store = dyn_cast<StoreOp>(nested);
+    if (!store || !store.getMask())
+      return WalkResult::advance();
+    auto stripLayoutConversions = [](Value value) {
+      while (auto convert = value.getDefiningOp<ConvertLayoutOp>())
+        value = convert.getSrc();
+      return value;
+    };
+    auto load =
+        stripLayoutConversions(store.getValue()).getDefiningOp<LoadOp>();
+    if (load && load.getMask() &&
+        stripLayoutConversions(load.getMask()) ==
+            stripLayoutConversions(store.getMask()))
       return WalkResult::interrupt();
     return WalkResult::advance();
   });
@@ -425,6 +455,14 @@ void LayoutPropagation::initAnchorLayout() {
   }
 
   if (strategy == LayoutAssignmentStrategy::Global) {
+    funcOp.walk([&](StoreOp store) {
+      if (!store->getParentOfType<scf::ForOp>() &&
+          !store->getParentOfType<scf::WhileOp>())
+        return;
+      addAnchor(store.getPtr());
+      if (Value mask = store.getMask())
+        addAnchor(mask);
+    });
     DenseSet<Value> protectedReductionValues;
     SmallVector<Value> reductionWorklist;
     bool hasSharedReductionMemoryBoundaries = false;
@@ -2831,6 +2869,49 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
               return WalkResult::advance();
             })
             .wasInterrupted();
+    bool hasDescriptorLayoutBoundary =
+        strategy == LayoutAssignmentStrategy::Global &&
+        funcOp
+            .walk([](Operation *op) {
+              if (isa<DescriptorLoadLikeOpInterface>(op))
+                return WalkResult::interrupt();
+              return WalkResult::advance();
+            })
+            .wasInterrupted();
+    bool hasPackedMemoryAssembly = false;
+    if (strategy == LayoutAssignmentStrategy::Global) {
+      unsigned rankedTensorLoadCount = 0;
+      unsigned storeCount = 0;
+      unsigned reshapeCount = 0;
+      bool hasPackedJoin = false;
+      bool hasFp8TensorLoad = false;
+      bool hasI8ScaleLoad = false;
+      bool hasComplexPackedBoundary = false;
+      funcOp.walk([&](Operation *op) {
+        if (auto load = dyn_cast<LoadOp>(op)) {
+          if (auto tensor = dyn_cast<RankedTensorType>(load.getType())) {
+            ++rankedTensorLoadCount;
+            hasFp8TensorLoad |=
+                isa<Float8E4M3FNType>(tensor.getElementType());
+            hasI8ScaleLoad |= tensor.getElementType().isInteger(8);
+          }
+        } else if (isa<StoreOp>(op)) {
+          ++storeCount;
+        } else if (isa<JoinOp>(op)) {
+          hasPackedJoin = true;
+        } else if (isa<ReshapeOp>(op)) {
+          ++reshapeCount;
+        } else if (isa<ReduceOp, scf::ForOp, scf::WhileOp,
+                       DescriptorLoadLikeOpInterface>(op)) {
+          hasComplexPackedBoundary = true;
+        }
+      });
+      hasPackedMemoryAssembly =
+          rankedTensorLoadCount == 2 && storeCount == 1 &&
+          (hasPackedJoin ||
+           (hasFp8TensorLoad && hasI8ScaleLoad && reshapeCount == 4)) &&
+          !hasComplexPackedBoundary;
+    }
     bool hasConvertiblePermutingReshape =
         strategy == LayoutAssignmentStrategy::Global &&
         funcOp
@@ -2844,10 +2925,11 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
 
     if (strategy == LayoutAssignmentStrategy::Global &&
         (hasProtectedLoop || hasProtectedPackedAssembly ||
-         hasProtectedReductionNetwork || hasConvertiblePermutingReshape)) {
+         hasProtectedReductionNetwork || hasConvertiblePermutingReshape ||
+         hasDescriptorLayoutBoundary || hasPackedMemoryAssembly)) {
       // Establish the incumbent layout for protected hardware, packed
-      // register assembly, reduction protocols, and permuting views before
-      // optimizing the remaining components globally.
+      // register and memory assembly, reduction protocols, descriptor loads,
+      // and permuting views before optimizing the remaining components.
       LayoutPropagation legacyPropagation(funcOp,
                                           LayoutAssignmentStrategy::Legacy);
       legacyPropagation.initAnchorLayout();
