@@ -560,7 +560,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @exp_ops
   tt.func public @exp_ops(%a: tensor<4xf32>) -> (tensor<4xf32>, tensor<4xf32>) {
-    // CHECK-DAG: arith.constant dense<594471359>
+    // CHECK-DAG: arith.constant dense<648190581>
     // CHECK-DAG: arith.constant dense<1>
     // CHECK: tti.experimental_fpsan_embed
     // CHECK: arith.muli
@@ -671,7 +671,7 @@ tt.func public @extern_unary_fallback(%a: tensor<4xf32>) -> tensor<4xf32> {
 
 // CHECK-LABEL: @extern_exp_known
 tt.func public @extern_exp_known(%a: tensor<4xf32>) -> tensor<4xf32> {
-  // CHECK-DAG: arith.constant dense<594471359>
+  // CHECK-DAG: arith.constant dense<648190581>
   // CHECK-DAG: arith.constant dense<1>
   // CHECK: tti.experimental_fpsan_embed
   // CHECK: arith.muli
