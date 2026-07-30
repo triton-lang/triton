@@ -3142,10 +3142,8 @@ private:
       if (!isa<DenseElementsAttr>(constant.getValue()))
         return failure();
     } else {
-      if (!(op->hasTrait<OpTrait::Elementwise>() ||
-            op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
-            isa<triton::ReshapeOp, triton::JoinOp, triton::ExpandDimsOp,
-                triton::TransOp, triton::BroadcastOp>(op)))
+      if ((!isLayoutTransform(op) && !isa<triton::BroadcastOp>(op)) ||
+          isa<ReduceOp, SplitOp>(op))
         return failure();
 
       operandEncoding = inferSrcEncoding(op, encoding);
@@ -3160,15 +3158,15 @@ private:
         return failure();
     }
 
-    plannedValues.try_emplace(key, operandEncoding);
+    plannedValues.try_emplace(key, operandEncoding, Value{});
     return success();
   }
 
   Value materialize(Value value, Attribute encoding, OpBuilder &builder) {
     LayoutValue key{value, encoding};
-    if (auto found = materializedValues.find(key);
-        found != materializedValues.end())
-      return found->second;
+    auto &[operandEncoding, materialized] = plannedValues.find(key)->second;
+    if (materialized)
+      return materialized;
 
     Operation *operation = value.getDefiningOp();
     Value result;
@@ -3183,7 +3181,6 @@ private:
             builder, constant.getLoc(), newType, elements.reshape(newType));
       } else {
         IRMapping mapping;
-        Attribute operandEncoding = plannedValues.lookup(key);
         for (Value operand : operation->getOperands())
           if (isa<RankedTensorType>(operand.getType()))
             mapping.map(operand,
@@ -3193,13 +3190,11 @@ private:
         result = replacement->getResult(0);
       }
     }
-    materializedValues.try_emplace(key, result);
-    return result;
+    return materialized = result;
   }
 
   ConvertLayoutOp root;
-  DenseMap<LayoutValue, Attribute> plannedValues;
-  DenseMap<LayoutValue, Value> materializedValues;
+  DenseMap<LayoutValue, std::pair<Attribute, Value>> plannedValues;
   SetVector<Operation *> originalOperations;
 };
 
@@ -3288,7 +3283,8 @@ public:
 
     unsigned plannedArithmetic = 0;
     for (const auto &planned : plannedValues)
-      plannedArithmetic += !isStructuralOrLeaf(planned.first.getDefiningOp());
+      plannedArithmetic +=
+          !isStructuralOrLeaf(planned.first.first.getDefiningOp());
 
     // A shared random-number producer can feed multiple joins. Keep the
     // incumbent if direct evaluation would duplicate that arithmetic at
@@ -3400,7 +3396,7 @@ private:
       }
     }
 
-    plannedValues.insert(key);
+    plannedValues.try_emplace(key, Value{});
     return success();
   }
 
@@ -3426,8 +3422,9 @@ private:
 
   Value materialize(Value value, unsigned depth, OpBuilder &builder) {
     IndexedValue key{value, depth};
-    if (auto it = materializedValues.find(key); it != materializedValues.end())
-      return it->second;
+    Value &materialized = plannedValues.find(key)->second;
+    if (materialized)
+      return materialized;
 
     Operation *op = value.getDefiningOp();
     Value result;
@@ -3477,8 +3474,7 @@ private:
       }
     }
 
-    materializedValues.try_emplace(key, result);
-    return result;
+    return materialized = result;
   }
 
   Operation *insertionPoint;
@@ -3486,8 +3482,7 @@ private:
   RankedTensorType target;
   Attribute flatEncoding;
   Value indices;
-  DenseSet<IndexedValue> plannedValues;
-  DenseMap<IndexedValue, Value> materializedValues;
+  DenseMap<IndexedValue, Value> plannedValues;
   DenseMap<unsigned, Value> joinConditions;
   SetVector<Operation *> originalOperations;
 };
