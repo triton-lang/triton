@@ -97,8 +97,7 @@ public:
   };
 
   void addNode(Value value, ArrayRef<Attribute> candidates, bool fixed) {
-    unsigned index = nodes.size();
-    indices.try_emplace(value, index);
+    indices.try_emplace(value, nodes.size());
     nodes.push_back({value, candidates, fixed});
     components.grow(nodes.size());
   }
@@ -188,9 +187,9 @@ public:
         proposeComponent;
   };
 
-  void solve(const LayoutConstraintGraph &graph,
-             const LayoutSearchPolicy &policy, Assignment &assignments,
-             const Callbacks &callbacks) const;
+  static void solve(const LayoutConstraintGraph &graph,
+                    const LayoutSearchPolicy &policy, Assignment &assignments,
+                    const Callbacks &callbacks);
 };
 
 struct LayoutMemoryProfile;
@@ -1476,7 +1475,7 @@ bool LayoutPropagation::buildGlobalComponentProposal(
     SmallVectorImpl<LayoutValue> &changes) const {
   constexpr unsigned maxComponentValues = 512;
   LayoutAssignment requested;
-  SmallVector<std::pair<Value, Attribute>, 32> worklist;
+  SmallVector<Value, 32> worklist;
 
   auto rollback = [&]() {
     for (const auto &[value, original] : llvm::reverse(changes))
@@ -1505,7 +1504,7 @@ bool LayoutPropagation::buildGlobalComponentProposal(
       return false;
 
     requested.try_emplace(value, candidate);
-    worklist.emplace_back(value, candidate);
+    worklist.push_back(value);
     return true;
   };
 
@@ -1527,7 +1526,8 @@ bool LayoutPropagation::buildGlobalComponentProposal(
     return false;
 
   while (!worklist.empty()) {
-    auto [value, candidate] = worklist.pop_back_val();
+    Value value = worklist.pop_back_val();
+    Attribute candidate = requested.lookup(value);
     Attribute original = assignments.lookup(value);
     if (original != candidate) {
       changes.push_back({value, original});
@@ -1606,7 +1606,7 @@ bool LayoutPropagation::buildGlobalComponentProposal(
 void LayoutAssignmentSolver::solve(const LayoutConstraintGraph &graph,
                                    const LayoutSearchPolicy &policy,
                                    Assignment &assignments,
-                                   const Callbacks &callbacks) const {
+                                   const Callbacks &callbacks) {
   const bool useFullObjective = policy.fullObjective;
   if (policy.componentSearch) {
     constexpr unsigned maxComponentIterations = 4;
@@ -1801,7 +1801,7 @@ void LayoutPropagation::resolveGlobalConflicts() {
                       << (policy.fullObjective ? "the full" : "the bounded")
                       << " global objective");
 
-    LayoutAssignmentSolver().solve(
+    LayoutAssignmentSolver::solve(
         graph, policy, assignments,
         {[&](Value value, Attribute encoding, const auto &current) {
            return canAssignEncoding(value, encoding, current);
@@ -3699,9 +3699,7 @@ public:
                rewritePlan(ScalarJoinExpressionPlan(convert));
       });
 
-      RewritePatternSet patterns(&getContext());
-      ConvertLayoutOp::getCanonicalizationPatterns(patterns, &getContext());
-      if (failed(applyPatternsGreedily(module, std::move(patterns))))
+      if (failed(cleanupLayoutConversions(module)))
         return signalPassFailure();
 
       unsigned remainingConversions = 0;
