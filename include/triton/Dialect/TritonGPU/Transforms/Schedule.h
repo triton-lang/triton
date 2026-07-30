@@ -28,7 +28,7 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
 }; // namespace gpu
 
 /// Pipeline the TMA stores in the loop.
-bool pipelineTMAStores(scf::ForOp forOp);
+bool pipelineTMAStores(scf::ForOp forOp, int numStages);
 
 /// This does post-processing on the pipelined loop to try to pipeline wgmma
 /// ops.
