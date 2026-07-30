@@ -65,6 +65,7 @@ private:
     while (!worklist.empty()) {
       VirtualBlock block = worklist.front();
       worklist.pop_front();
+      // Make a copy of the inputblockInfo but not update
       StateT state = inputs[block];
       SmallVector<VirtualBlock> successors;
       Block::iterator begin = block.second.isValid() ? std::next(block.second)
@@ -82,6 +83,8 @@ private:
       }
 
       auto output = outputs.find(block);
+      // If we have seen the block before and the inputBlockInfo is the same as
+      // the outputBlockInfo, we skip the successors
       if (output != outputs.end() && state == output->second)
         continue;
       // Update the current block. The block transfer function is not monotonic,
@@ -93,6 +96,7 @@ private:
       }
     }
 
+    // Update the final dangling buffers that haven't been synced
     StateT &summary = (*funcMap)[function];
     for (Block &exit : function.getBlocks()) {
       if (!exit.getTerminator()->hasTrait<OpTrait::ReturnLike>())
