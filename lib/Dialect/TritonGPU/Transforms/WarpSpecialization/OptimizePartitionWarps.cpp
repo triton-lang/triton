@@ -125,17 +125,15 @@ static LogicalResult relayoutWarps(ModuleAxisInfoAnalysis &axisInfo,
   });
 
   pm.clear();
+  auto addLayoutOptimization = [&] {
+    pm.addPass(optimizeLayouts ? createTritonGPUOptimizeLayouts()
+                               : createTritonGPURemoveLayoutConversions());
+  };
   pm.addPass(createTritonGPUCoalesce());
-  if (optimizeLayouts)
-    pm.addPass(createTritonGPUOptimizeLayouts());
-  else
-    pm.addPass(createTritonGPURemoveLayoutConversions());
+  addLayoutOptimization();
   pm.addPass(createTritonGPUOptimizeThreadLocality());
   pm.addPass(createTritonGPUAccelerateMatmul());
-  if (optimizeLayouts)
-    pm.addPass(createTritonGPUOptimizeLayouts());
-  else
-    pm.addPass(createTritonGPURemoveLayoutConversions());
+  addLayoutOptimization();
   if (failed(runPipeline(pm, *container)))
     return failure();
 
