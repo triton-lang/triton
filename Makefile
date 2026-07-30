@@ -43,7 +43,7 @@ test-unit: all
 
 .PHONY: test-plugins
 test-plugins: all
-	$(PYTEST) -vvv python/test/unit/plugins
+	TRITON_CI_CACHE_PHASE=plugins $(PYTEST) -vvv python/test/unit/plugins
 
 .PHONY: test-gluon
 test-gluon: all
@@ -54,6 +54,12 @@ WARMUP_PROCS ?= $(NUM_PROCS)
 
 .PHONY: test-warmup
 test-warmup: all
+	TRITON_CI_CACHE_PHASE=warmup-unit $(PYTEST) -s --tb=short -n $(WARMUP_PROCS) --dist=worksteal --warmup-only \
+		python/test/unit/language/test_core.py \
+		python/test/unit/language/test_matmul.py \
+		python/test/unit/language/test_warp_specialization.py \
+		python/test/unit/language/test_tensor_descriptor.py \
+		python/test/unit/language/test_standard.py
 	TRITON_CI_CACHE_PHASE=warmup-triton-kernels $(PYTEST) -s --tb=short -n $(WARMUP_PROCS) --dist=worksteal --warmup-only \
 		python/triton_kernels/tests/test_matmul.py::test_op
 ifeq ($(RUNNER_TYPE),nvidia-gb200)
@@ -63,11 +69,11 @@ endif
 
 .PHONY: test-gsan
 test-gsan: all
-	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -n $(NUM_PROCS) python/test/gsan
+	TRITON_CI_CACHE_PHASE=gsan TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -n $(NUM_PROCS) python/test/gsan
 
 .PHONY: test-regression
 test-regression: all
-	$(PYTEST) -n $(NUM_PROCS) python/test/regression
+	TRITON_CI_CACHE_PHASE=regression $(PYTEST) -n $(NUM_PROCS) python/test/regression
 
 .PHONY: test-microbenchmark
 test-microbenchmark: all
@@ -75,25 +81,25 @@ test-microbenchmark: all
 
 .PHONY: test-interpret
 test-interpret: all
-	cd python/test/unit && TRITON_INTERPRET=1 $(PYTEST) -n 16 -m interpreter cuda language/test_core.py language/test_standard.py \
+	cd python/test/unit && TRITON_CI_CACHE_PHASE=interpreter TRITON_INTERPRET=1 $(PYTEST) -n 16 -m interpreter cuda language/test_core.py language/test_standard.py \
 		language/test_random.py language/test_subprocess.py language/test_line_info.py \
 		language/test_tuple.py runtime/test_launch.py runtime/test_autotuner.py::test_kwargs[False] \
 		../../tutorials/06-fused-attention.py::test_op --device=cpu
 
 .PHONY: test-proton
 test-proton: all
-	$(PYTEST) -n 8 third_party/proton/test --ignore=third_party/proton/test/test_override.py -k "not test_overhead and not test_hw_trace"
-	$(PYTEST) third_party/proton/test/test_profile.py::test_hw_trace
-	$(PYTEST) third_party/proton/test/test_override.py
-	$(PYTEST) third_party/proton/test/test_instrumentation.py::test_overhead
+	TRITON_CI_CACHE_PHASE=proton $(PYTEST) -n 8 third_party/proton/test --ignore=third_party/proton/test/test_override.py -k "not test_overhead and not test_hw_trace"
+	TRITON_CI_CACHE_PHASE=proton-hw-trace $(PYTEST) third_party/proton/test/test_profile.py::test_hw_trace
+	TRITON_CI_CACHE_PHASE=proton-override $(PYTEST) third_party/proton/test/test_override.py
+	TRITON_CI_CACHE_PHASE=proton-overhead $(PYTEST) third_party/proton/test/test_instrumentation.py::test_overhead
 
 .PHONY: test-python
 test-python: test-unit test-plugins test-regression test-interpret test-proton
 
 .PHONY: test-nogpu
 test-nogpu: test-lit test-cpp
-	$(PYTEST) python/test/gluon/test_frontend.py
-	$(PYTEST) python/test/unit/language/test_frontend.py
+	TRITON_CI_CACHE_PHASE=gluon-frontend $(PYTEST) python/test/gluon/test_frontend.py
+	TRITON_CI_CACHE_PHASE=triton-frontend $(PYTEST) python/test/unit/language/test_frontend.py
 
 .PHONY: test
 test: test-lit test-cpp test-python

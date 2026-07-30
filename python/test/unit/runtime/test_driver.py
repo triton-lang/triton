@@ -11,6 +11,7 @@ from triton._compile_warmup import (
     _require_complete_warmup,
     _warmup_test_case,
     compile_warmup_only,
+    pytest_collection_modifyitems,
     summarize_compile_trace,
 )
 from triton.backends.nvidia.compiler import CUDABackend
@@ -89,6 +90,27 @@ def test_compilation_trace_matches_warmup_cache_hits(tmp_path):
     }
     with pytest.raises(SystemExit, match="not complete cache hits"):
         _require_complete_warmup(report)
+
+
+def test_compile_warmup_skips_unsupported_fake_tensor_specializations():
+    items = []
+    for module_path, originalname in [
+        ("/checkout/python/test/unit/language/test_core.py", "test_atomic_cas"),
+        ("/checkout/python/test/unit/language/test_matmul.py", "test_block_scale_fp4"),
+        ("/checkout/python/test/unit/language/test_standard.py", "test_maximum_minium"),
+        ("/checkout/python/test/unit/language/test_core.py", "test_dot"),
+    ]:
+        item = SimpleNamespace(
+            module=SimpleNamespace(__file__=module_path),
+            originalname=originalname,
+            markers=[],
+        )
+        item.add_marker = item.markers.append
+        items.append(item)
+
+    pytest_collection_modifyitems(SimpleNamespace(getoption=lambda _: True), items)
+
+    assert [bool(item.markers) for item in items] == [True, True, True, False]
 
 
 def test_compile_warmup_replaces_triton_kernels_reference(monkeypatch):

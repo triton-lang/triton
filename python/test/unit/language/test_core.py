@@ -2167,7 +2167,10 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
 
     # "Random" number used inside the kernel to determine how we spell the cast.
     # This way we don't have to increase the number of tests.
-    arg_hash = hash((dtype_x, dtype_z, bitcast, size, num_ctas))
+    # Keep the selected spelling stable across the separate warmup and GPU
+    # pytest processes. Python's hash of strings is randomized per process.
+    arg_hash = sum(
+        (index + 1) * ord(char) for index, char in enumerate(repr((dtype_x, dtype_z, bitcast, size, num_ctas))))
 
     dtype_z_np = dtype_z if dtype_z != 'bool' else 'bool_'
     # triton result

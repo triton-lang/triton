@@ -147,6 +147,31 @@ class CompilationTrace:
 @contextmanager
 def _warmup_test_case(item):
     module_path = str(getattr(item.module, "__file__", ""))
+    if module_path.endswith("/python/test/unit/language/test_core.py") and item.originalname in {
+            "test_bin_op",
+            "test_bitwise_op",
+            "test_cast",
+            "test_compare_op",
+            "test_floordiv",
+            "test_math_divide_op",
+            "test_shift_op",
+    }:
+        previous_to_numpy = item.module.to_numpy
+        previous_assertions = {
+            name: getattr(item.module.np.testing, name)
+            for name in ("assert_", "assert_allclose", "assert_array_equal", "assert_equal")
+        }
+        item.module.to_numpy = lambda tensor: item.module.np.empty(tuple(tensor.shape))
+        for name in previous_assertions:
+            setattr(item.module.np.testing, name, lambda *args, **kwargs: None)
+        try:
+            yield
+        finally:
+            item.module.to_numpy = previous_to_numpy
+            for name, assertion in previous_assertions.items():
+                setattr(item.module.np.testing, name, assertion)
+        return
+
     if not module_path.endswith("/triton_kernels/tests/test_matmul.py") or item.originalname != "test_op":
         yield
         return
@@ -236,6 +261,43 @@ def pytest_addoption(parser):
     parser.addoption("--warmup-only", action="store_true", help="compile Triton launches without executing GPU kernels")
 
 
+def pytest_collection_modifyitems(config, items):
+    if not config.getoption("--warmup-only"):
+        return
+    unsupported_specializations = {
+        "/python/test/unit/language/test_core.py": {
+            "test_argmax_argmin_tie_break_fast_with_nan",
+            "test_argmax_argmin_with_nan",
+            "test_atomic_cas",
+            "test_constexpr_if_return",
+            "test_full",
+            "test_globaltimer",
+            "test_if_return",
+            "test_max_min_with_nan",
+            "test_num_threads",
+            "test_short_circuiting",
+            "test_smid",
+            "test_sum_dtype",
+            "test_unsplat",
+            "test_where",
+            "test_where_broadcast",
+        },
+        "/python/test/unit/language/test_matmul.py": {
+            "test_block_scale_fp4",
+            "test_mxfp8_mxfp4_matmul",
+        },
+        "/python/test/unit/language/test_standard.py": {
+            "test_maximum_minium",
+        },
+    }
+    for item in items:
+        module_path = str(getattr(item.module, "__file__", ""))
+        for suffix, originalnames in unsupported_specializations.items():
+            if module_path.endswith(suffix) and item.originalname in originalnames:
+                item.add_marker(pytest.mark.skip(reason="FakeTensor does not reproduce this kernel specialization"))
+                break
+
+
 @pytest.fixture(scope="session", autouse=True)
 def compile_warmup(request):
     if not request.config.getoption("--warmup-only"):
@@ -254,12 +316,13 @@ def pytest_runtest_call(item):
         triton.knobs.compilation.listener = CompilationTrace(directory, phase, item.nodeid)
     try:
         if item.config.getoption("--warmup-only"):
-            from torch._subclasses.fake_tensor import DataDependentOutputException, DynamicOutputShapeException
-
             with _warmup_test_case(item):
                 try:
                     return (yield)
-                except (DataDependentOutputException, DynamicOutputShapeException):
+                # Warmup is best-effort; the runtime test and exact per-test
+                # cache audit remain authoritative. FakeTensor can fail on
+                # data-dependent checks after compiling useful device kernels.
+                except (Exception, pytest.fail.Exception):
                     return
         return (yield)
     finally:

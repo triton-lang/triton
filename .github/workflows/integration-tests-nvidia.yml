@@ -99,6 +99,7 @@ jobs:
             warmup_procs=64
           fi
           make WARMUP_PROCS="$warmup_procs" test-warmup
+          python3 -m triton._compile_warmup report --phase warmup-unit
           python3 -m triton._compile_warmup report --phase warmup-triton-kernels
           if [[ "$RUNNER_TYPE" == "nvidia-gb200" ]]; then
             python3 -m triton._compile_warmup report --phase warmup-gluon
@@ -106,7 +107,10 @@ jobs:
       - name: Run triton tests
         run: |
           make NUM_PROCS=24 test-unit
+          python3 -m triton._compile_warmup report --phase unit --require-complete-warmup
           python3 -m triton._compile_warmup report --phase triton-kernels --require-complete-warmup
+          python3 -m triton._compile_warmup report --phase attention
+          python3 -m triton._compile_warmup report --phase instrumentation
       - name: Run gluon tests
         run: |
           make NUM_PROCS=24 test-gluon
@@ -115,20 +119,32 @@ jobs:
           else
             python3 -m triton._compile_warmup report --phase gluon
           fi
+          python3 -m triton._compile_warmup report --phase gluon-examples
       - name: Run gsan tests
-        run: make NUM_PROCS=24 test-gsan
+        run: |
+          make NUM_PROCS=24 test-gsan
+          python3 -m triton._compile_warmup report --phase gsan
       - name: Run interpreter tests
         if: ${{ matrix.config.runner_type == 'nvidia-h100' }}
-        run: make test-interpret
+        run: |
+          make test-interpret
+          python3 -m triton._compile_warmup report --phase interpreter
       - name: Run regression tests
-        run: make test-regression
+        run: |
+          make test-regression
+          python3 -m triton._compile_warmup report --phase regression
       - name: Run microbenchmark tests
         # Microbenchmark never fail but running them gives us an easy way to track performance changes.
         run: make test-microbenchmark
       - name: Run C++ unittests
         run: make test-cpp
       - name: Run Proton tests
-        run: make test-proton
+        run: |
+          make test-proton
+          python3 -m triton._compile_warmup report --phase proton
+          python3 -m triton._compile_warmup report --phase proton-hw-trace
+          python3 -m triton._compile_warmup report --phase proton-override
+          python3 -m triton._compile_warmup report --phase proton-overhead
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
