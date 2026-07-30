@@ -8,10 +8,13 @@ import pytest
 import torch
 import triton
 import triton.language as tl
+from triton.experimental import gluon
+from triton.experimental.gluon import language as gl
+from triton.experimental.gluon.language.nvidia import hopper
 
 from triton._internal_testing import is_blackwell, is_cuda, is_hopper_or_newer, run_in_process
 from triton.experimental.gsan import create_mem_pool
-from triton.experimental.gsan._testing_utils import atomic_poll
+from triton.experimental.gsan._testing_utils import atomic_poll, shadow_cell_from_address
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 pytestmark = pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
@@ -255,6 +258,23 @@ def _mixed_scope_release_rmw_kernel(counter_ptr, ready_ptr):
         tl.atomic_add(counter_ptr, 1, sem="release", scope="sys")
 
 
+@gluon.jit
+def _gluon_cluster_barrier_kernel(payload_ptr, out_ptr, RELAXED: gl.constexpr):
+    data_layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
+
+    offsets = gl.arange(0, 256, data_layout)
+    payload_ptrs = payload_ptr + offsets * 0
+    out_ptrs = out_ptr + offsets * 0
+    gl.barrier(cluster=True)
+    gl.store(payload_ptrs, 1, mask=offsets == 0)
+    if RELAXED:
+        hopper.cluster.barrier(relaxed=True)
+    else:
+        gl.barrier(cluster=True)
+    value = gl.load(payload_ptrs, mask=offsets == 128, other=0)
+    gl.store(out_ptrs, value, mask=offsets == 128)
+
+
 def _cuda_byte_allocator(size: int, _align: int, _stream):
     return torch.empty(size, dtype=torch.int8, device="cuda")
 
@@ -330,6 +350,20 @@ def _run_mixed_scope_release_rmw_case() -> None:
     counter = torch.zeros(1, dtype=torch.int32, device="cuda")
     ready = torch.zeros(1, dtype=torch.int32, device="cuda")
     _mixed_scope_release_rmw_kernel[(2, )](counter, ready, num_warps=1)
+
+
+@run_with_gsan
+def _run_gluon_relaxed_cluster_barrier_case() -> None:
+    probe_payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    probe_out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    _gluon_cluster_barrier_kernel[(1, )](probe_payload, probe_out, RELAXED=False, num_warps=4, num_ctas=2)
+    torch.cuda.synchronize()
+    probe_cell = shadow_cell_from_address(probe_payload.data_ptr())
+    assert probe_cell.write_clock.thread_id != probe_cell.read_clocks[0].thread_id
+
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    _gluon_cluster_barrier_kernel[(1, )](payload, out, RELAXED=True, num_warps=4, num_ctas=2)
 
 
 @run_with_gsan
@@ -559,6 +593,17 @@ def test_mixed_scope_release_rmw_accumulation():
         source_function=_mixed_scope_release_rmw_kernel.fn,
         marker='tl.atomic_add(counter_ptr, 1, sem="release", scope="sys")',
         error="GSan detected atomic release accumulation with mixed scopes, which is not supported.",
+    )
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
+def test_relaxed_cluster_barrier_does_not_synchronize_vector_clocks():
+    _run_failure_case(
+        "relaxed_cluster_barrier",
+        runner=_run_gluon_relaxed_cluster_barrier_case,
+        source_function=_gluon_cluster_barrier_kernel.fn,
+        marker="value = gl.load(payload_ptr",
+        error="Read after write race detected",
     )
 
 

@@ -1,7 +1,10 @@
+// RUN: triton-opt %s -split-input-file --set-minimum-shared-memory='minimum-size=123456' | FileCheck %s --check-prefix=CHECK-SHARED
 // RUN: triton-opt %s -split-input-file -tritoninstrument-global-sanitizer --allocate-shared-memory-nv --convert-triton-gpu-to-llvm | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-SHARED: module attributes {
+  // CHECK-SHARED-DAG: ttg.shared = 123456 : i32
   // CHECK-LABEL: llvm.func @load_store
   // CHECK: llvm.call @__triton_gsan_init({{.*}}) : (!llvm.ptr, !llvm.ptr, i64, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
   // CHECK: nvvm.barrier
@@ -42,6 +45,32 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
   // CHECK: nvvm.barrier
   tt.func @atomic_poll(%ptr: !tt.ptr<i32>, %expected: i32) {
     %matched = tt.atomic_poll acquire, sys, %ptr, %expected : !tt.ptr<i32>, i32 -> i1
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.profile_scratch_memory_size" = 128 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: llvm.func @cluster_barrier
+  // CHECK: %[[NUM_CTAS:.*]] = llvm.mlir.constant(2 : i64) : i64
+  // CHECK: %[[CLUSTER_BASE:.*]] = llvm.mul %{{.*}}, %[[NUM_CTAS]] : i64
+  // CHECK: %[[PROFILE_BYTES:.*]] = llvm.mlir.constant(128 : i64) : i64
+  // CHECK: %{{.*}} = llvm.mul %[[CLUSTER_BASE]], %[[PROFILE_BYTES]] : i64
+  // CHECK: %[[SCRATCH:.*]] = llvm.getelementptr %{{.*}}[%{{.*}}] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, i8
+  // CHECK: %[[ELECT_INIT:.*]] = nvvm.elect.sync -> i1
+  // CHECK: %[[CTA_RANK_INIT:.*]] = nvg.cluster_id
+  // CHECK: %[[INIT_SCRATCH:.*]] = llvm.addrspacecast %[[SCRATCH]] : !llvm.ptr<1> to !llvm.ptr
+  // CHECK: llvm.call @__triton_gsan_cluster_barrier_init(%[[INIT_SCRATCH]], %{{.*}}) : (!llvm.ptr, i32) -> ()
+  // CHECK: %[[ELECT_SYNC:.*]] = nvvm.elect.sync -> i1
+  // CHECK: %[[CTA_RANK_SYNC:.*]] = nvg.cluster_id
+  // CHECK: %[[SYNC_SCRATCH:.*]] = llvm.addrspacecast %[[SCRATCH]] : !llvm.ptr<1> to !llvm.ptr
+  // CHECK: %[[TWO:.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK: llvm.call @__triton_gsan_cluster_barrier_sync(%{{.*}}, %[[SYNC_SCRATCH]], %{{.*}}, %[[TWO]], %[[CTA_RANK_SYNC]], %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, i32, !llvm.ptr, i32) -> ()
+  tt.func @cluster_barrier() {
+    %scratch = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 128 : i32, shared_cluster_state, third_party_allocation, ttg.global_scratch_memory_offset = 0 : i32} : !tt.ptr<i8>
+    tti.experimental_gsan_cluster_barrier_init %scratch : <i8>
+    tti.experimental_gsan_cluster_barrier_sync %scratch : <i8>
     tt.return
   }
 }
