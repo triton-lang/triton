@@ -92,14 +92,14 @@ public:
 
   struct Node {
     Value value;
-    SmallVector<Attribute, 8> candidates;
+    ArrayRef<Attribute> candidates;
     bool fixed;
   };
 
   void addNode(Value value, ArrayRef<Attribute> candidates, bool fixed) {
     unsigned index = nodes.size();
     indices.try_emplace(value, index);
-    nodes.push_back({value, llvm::to_vector<8>(candidates), fixed});
+    nodes.push_back({value, candidates, fixed});
     components.grow(nodes.size());
   }
 
@@ -654,6 +654,29 @@ static bool isProtectedLayoutLoop(Operation *op, unsigned functionLoads,
     return WalkResult::advance();
   });
   return body.wasInterrupted();
+}
+
+static std::pair<Operation *, unsigned>
+getControlFlowComponent(OpOperand &use, bool includeConditionals = false) {
+  Operation *user = use.getOwner();
+  unsigned index = use.getOperandNumber();
+  if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+    if (Value result = forOp.getTiedLoopResult(&use))
+      return {forOp, cast<OpResult>(result).getResultNumber()};
+  } else if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
+    if (index < whileOp.getNumResults())
+      return {whileOp, index};
+  } else if (auto yield = dyn_cast<scf::YieldOp>(user)) {
+    Operation *parent = yield->getParentOp();
+    if (index < parent->getNumResults() &&
+        (isa<scf::ForOp, scf::WhileOp>(parent) ||
+         (includeConditionals && isa<scf::IfOp>(parent))))
+      return {parent, index};
+  } else if (auto condition = dyn_cast<scf::ConditionOp>(user)) {
+    if (index)
+      return {condition->getParentOp(), index - 1};
+  }
+  return {nullptr, 0};
 }
 
 void LayoutConstraintGraph::addOperation(Operation *operation) {
@@ -1470,18 +1493,9 @@ uint64_t LayoutPropagation::getAffectedAssignmentCost(
     for (OpOperand &use : changed.getUses()) {
       Operation *user = use.getOwner();
       addOperation(user);
-      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        if (Value result = forOp.getTiedLoopResult(&use))
-          addControlFlow(forOp, cast<OpResult>(result).getResultNumber());
-      } else if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
-        addControlFlow(whileOp, use.getOperandNumber());
-      } else if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        addControlFlow(yieldOp->getParentOp(), use.getOperandNumber());
-      } else if (auto conditionOp = dyn_cast<scf::ConditionOp>(user)) {
-        if (use.getOperandNumber() != 0)
-          addControlFlow(conditionOp->getParentOp(),
-                         use.getOperandNumber() - 1);
-      }
+      auto [controlFlow, index] =
+          getControlFlowComponent(use, /*includeConditionals=*/true);
+      addControlFlow(controlFlow, index);
     }
   }
 
@@ -1597,38 +1611,12 @@ bool LayoutPropagation::buildGlobalComponentProposal(
 
     for (OpOperand &use : value.getUses()) {
       Operation *user = use.getOwner();
-      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        if (Value result = forOp.getTiedLoopResult(&use)) {
-          if (!requestLoopComponent(
-                  forOp, cast<OpResult>(result).getResultNumber(), candidate))
-            return rollback();
-        }
+      auto [loop, index] = getControlFlowComponent(use);
+      if (loop && !requestLoopComponent(loop, index, candidate))
+        return rollback();
+      if (loop || isa<scf::ForOp, scf::WhileOp, scf::YieldOp,
+                      scf::ConditionOp>(user))
         continue;
-      }
-      if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
-        if (use.getOperandNumber() < whileOp.getNumResults() &&
-            !requestLoopComponent(whileOp, use.getOperandNumber(), candidate))
-          return rollback();
-        continue;
-      }
-      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        Operation *parent = yieldOp->getParentOp();
-        if (isa<scf::ForOp, scf::WhileOp>(parent) &&
-            use.getOperandNumber() < parent->getNumResults()) {
-          if (!requestLoopComponent(parent, use.getOperandNumber(), candidate))
-            return rollback();
-        }
-        continue;
-      }
-      if (auto condition = dyn_cast<scf::ConditionOp>(user)) {
-        if (use.getOperandNumber() != 0) {
-          auto whileOp = cast<scf::WhileOp>(condition->getParentOp());
-          if (!requestLoopComponent(whileOp, use.getOperandNumber() - 1,
-                                    candidate))
-            return rollback();
-        }
-        continue;
-      }
       if (!isLayoutTransform(user) || isFixedLayoutBoundary(user))
         continue;
 
@@ -1854,27 +1842,23 @@ void LayoutPropagation::resolveGlobalConflicts() {
                                                     : "the bounded")
                       << " global objective");
 
-    auto isLegal = [&](Value value, Attribute encoding,
-                       const auto &current) {
-      return canAssignEncoding(value, encoding, current);
-    };
-    auto valueCost = [&](Value value, Attribute encoding,
-                         const auto &current) {
-      return getAssignmentCost(value, encoding, current);
-    };
-    auto fullCost = [&](const auto &current) {
-      return getGlobalAssignmentCost(current);
-    };
-    auto affectedCost = [&](ArrayRef<Value> changed, const auto &current) {
-      return getAffectedAssignmentCost(changed, current);
-    };
-    auto propose = [&](Value value, Attribute encoding, auto &current,
-                       SmallVectorImpl<LayoutAssignmentChange> &changes) {
-      return buildGlobalComponentProposal(value, encoding, current, changes);
-    };
-    LayoutAssignmentSolver::Callbacks callbacks{
-        isLegal, valueCost, fullCost, affectedCost, propose};
-    LayoutAssignmentSolver().solve(graph, policy, assignments, callbacks);
+    LayoutAssignmentSolver().solve(
+        graph, policy, assignments,
+        {[&](Value value, Attribute encoding, const auto &current) {
+           return canAssignEncoding(value, encoding, current);
+         },
+         [&](Value value, Attribute encoding, const auto &current) {
+           return getAssignmentCost(value, encoding, current);
+         },
+         [&](const auto &current) { return getGlobalAssignmentCost(current); },
+         [&](ArrayRef<Value> changed, const auto &current) {
+           return getAffectedAssignmentCost(changed, current);
+         },
+         [&](Value value, Attribute encoding, auto &current,
+             SmallVectorImpl<LayoutAssignmentChange> &changes) {
+           return buildGlobalComponentProposal(value, encoding, current,
+                                               changes);
+         }});
   }
 
   for (auto &[value, info] : layouts) {
