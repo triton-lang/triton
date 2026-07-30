@@ -84,19 +84,17 @@ void instrumentWarpSpecializeOps(FuncOp func, Value buffer, Value profileMem) {
   }
 }
 
-LogicalResult lowerEvent(OpBuilder &builder, Operation *op, Value targetSegment,
-                         IntegerType clkType, MetricType metricType,
-                         ModuleScopeIdAllocation &scopeInfo) {
+void lowerEvent(OpBuilder &builder, Operation *op, Value targetSegment,
+                IntegerType clkType, MetricType metricType,
+                ModuleScopeIdAllocation &scopeInfo) {
   builder.setInsertionPoint(op);
   if (auto asyncToken = dyn_cast<proton::AllocateAsyncTokenOp>(op)) {
     int scopeId = scopeInfo.getOpScopeId(asyncToken);
-    if (scopeId > 255)
-      return asyncToken.emitOpError("scope id exceeds the 8-bit encoding");
     Value token =
         arith::ConstantIntOp::create(builder, asyncToken.getLoc(), scopeId, 32);
     asyncToken.getToken().replaceAllUsesWith(token);
     asyncToken.erase();
-    return success();
+    return;
   }
 
   Value counter =
@@ -104,22 +102,18 @@ LogicalResult lowerEvent(OpBuilder &builder, Operation *op, Value targetSegment,
 
   if (auto record = dyn_cast<proton::RecordOp>(op)) {
     int scopeId = scopeInfo.getOpScopeId(record);
-    if (scopeId > 255)
-      return record.emitOpError("scope id exceeds the 8-bit encoding");
     gpu::CircularStoreOp::create(builder, record.getLoc(), targetSegment,
                                  counter, Value(), record.getIsStart(),
                                  builder.getI32IntegerAttr(scopeId));
     record.erase();
-    return success();
+    return;
   }
   if (auto asyncRecord = dyn_cast<proton::AsyncRecordOp>(op)) {
     gpu::CircularStoreOp::create(builder, asyncRecord.getLoc(), targetSegment,
                                  counter, asyncRecord.getToken(),
                                  asyncRecord.getIsStart(), IntegerAttr());
     asyncRecord.erase();
-    return success();
   }
-  return success();
 }
 
 LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
@@ -129,8 +123,6 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
   mlir::IntegerType clkType =
       clockExtension ? mlir::IntegerType::get(builder.getContext(), 64)
                      : mlir::IntegerType::get(builder.getContext(), 32);
-
-  bool loweringFailed = false;
 
   // Replace all Proton events in the worker warps.
   func->walk([&](triton::gpu::WarpSpecializePartitionsOp partitions) {
@@ -155,9 +147,7 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
           if (!isa<proton::RecordOp, proton::AsyncRecordOp,
                    proton::AllocateAsyncTokenOp>(op))
             return;
-          if (failed(lowerEvent(builder, op, newSegment, clkType, metricType,
-                                scopeInfo)))
-            loweringFailed = true;
+          lowerEvent(builder, op, newSegment, clkType, metricType, scopeInfo);
         });
 
         // Finalize and save warp-level context before each warp returns.
@@ -174,9 +164,6 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
     }
   });
 
-  if (loweringFailed)
-    return failure();
-
   // Replace all Proton events in the master warps. For the master warps, we
   // don't need to restore warp-level context and we save the context in the end
   // of kernel (right before FinalizeOp).
@@ -184,12 +171,10 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
     if (!isa<proton::RecordOp, proton::AsyncRecordOp,
              proton::AllocateAsyncTokenOp>(op))
       return;
-    if (failed(
-            lowerEvent(builder, op, segment, clkType, metricType, scopeInfo)))
-      loweringFailed = true;
+    lowerEvent(builder, op, segment, clkType, metricType, scopeInfo);
   });
 
-  return loweringFailed ? failure() : success();
+  return success();
 }
 
 int getAllocSharedMemSize(int maxSharedMemSize, int sharedMemUsed,
@@ -249,6 +234,8 @@ public:
 
     OpBuilder builder(context);
     builder.setInsertionPointToStart(&func.getBody().front());
+
+    ModuleScopeIdAllocation &scopeInfo = getAnalysis<ModuleScopeIdAllocation>();
 
     int numWarps = gpu::getTotalNumWarps(mod);
 
@@ -371,8 +358,6 @@ public:
       mlir::emitError(loc, "buffer-type not supported");
       return failure();
     }
-
-    ModuleScopeIdAllocation &scopeInfo = getAnalysis<ModuleScopeIdAllocation>();
 
     if (hasOperator<Operation, triton::gpu::WarpSpecializeOp>(
             func.getOperation()))

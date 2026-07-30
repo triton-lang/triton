@@ -373,6 +373,13 @@ ModuleScopeIdAllocation::ModuleScopeIdAllocation(ModuleOp moduleOp)
     }
     scopeIdParents[funcOp] = std::move(parents);
   }
+
+  moduleOp.walk([&](Operation *op) {
+    if (!isa<RecordOp, AllocateAsyncTokenOp>(op))
+      return;
+    if (getOpScopeId(op) > 255)
+      op->emitError("scope id exceeds the 8-bit encoding");
+  });
 }
 
 ScopeIdAllocation::ScopeId
