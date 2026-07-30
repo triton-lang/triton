@@ -26,7 +26,6 @@ jobs:
       PROTON_SKIP_PC_SAMPLING_TEST: 1
       PYTHON: "python3"
       CCACHE_COMPRESS: "true"
-      TRITON_CI_COMPILE_TRACE_DIR: ${{ runner.temp }}/triton-ci-compile-trace
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -91,6 +90,9 @@ jobs:
         run: make test-lit
       - name: Warm Triton compile cache
         run: |
+          trace_dir="$RUNNER_TEMP/triton-ci-compile-trace"
+          echo "TRITON_CI_COMPILE_TRACE_DIR=$trace_dir" >> "$GITHUB_ENV"
+          export TRITON_CI_COMPILE_TRACE_DIR="$trace_dir"
           warmup_procs=$(nproc)
           if (( warmup_procs > 64 )); then
             warmup_procs=64
