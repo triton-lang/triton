@@ -1121,12 +1121,34 @@ createTmemOperandScratch(PatternRewriter &rewriter, Location loc,
   return ScratchInfo{ptr, tensorTy};
 }
 
+static ttng::TMEMAllocOp getTmemOperandAllocation(Value memdesc) {
+  while (Operation *def = memdesc.getDefiningOp()) {
+    if (auto alloc = dyn_cast<ttng::TMEMAllocOp>(def))
+      return alloc;
+    if (!def->hasTrait<OpTrait::MemDescViewTrait>())
+      return {};
+    memdesc = def->getOperand(0);
+  }
+  return {};
+}
+
 std::optional<MmaOperandSource> createMmaOperandSource(
     PatternRewriter &rewriter, Location loc, TmemScratchManager &scratch,
     Value memdesc, ttg::MemDescType memTy, bool isTmem, RankedTensorType tileTy,
-    Region *scope, int64_t rowStride, int64_t stride) {
+    Value accumulator, Region *scope, int64_t rowStride, int64_t stride) {
   if (!isTmem)
     return MmaOperandSource{Value(), memdesc, tileTy, rowStride, stride};
+
+  auto sourceAlloc = getTmemOperandAllocation(memdesc);
+  auto accumulatorAlloc = getTmemOperandAllocation(accumulator);
+  if (sourceAlloc && accumulatorAlloc && sourceAlloc != accumulatorAlloc) {
+    auto info = scratch.getOrCreate(memdesc, rewriter, scope);
+    if (!info || info->scaleSourceType || info->tensorType.getRank() != 2)
+      return std::nullopt;
+    return MmaOperandSource{info->ptr, Value(), tileTy, rowStride,
+                            info->tensorType.getShape().front()};
+  }
+
   auto info =
       createTmemOperandScratch(rewriter, loc, scratch, memdesc, memTy, scope);
   if (!info)
@@ -2844,11 +2866,11 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
     auto bTileTy = RankedTensorType::get({k, tileN}, bTileElem, bTileLayout);
 
     auto aSource = createMmaOperandSource(rewriter, loc, *scratch, op.getA(),
-                                          aMemTy, aIsTmem, aTileTy, scope,
-                                          /*rowStride=*/1, /*stride=*/m);
+                                          aMemTy, aIsTmem, aTileTy, op.getD(),
+                                          scope, /*rowStride=*/1, /*stride=*/m);
     auto bSource = createMmaOperandSource(rewriter, loc, *scratch, op.getB(),
-                                          bMemTy, bIsTmem, bTileTy, scope,
-                                          /*rowStride=*/1, /*stride=*/k);
+                                          bMemTy, bIsTmem, bTileTy, op.getD(),
+                                          scope, /*rowStride=*/1, /*stride=*/k);
     if (!aSource || !bSource)
       return emitFpSanCodegenError(op.getOperation());
 
@@ -3006,11 +3028,11 @@ struct TCGen5MMAScaledPattern
                                          bMemTy.getElementType(), bTileLayout);
 
     auto aSource = createMmaOperandSource(rewriter, loc, *scratch, op.getA(),
-                                          aMemTy, aIsTmem, aTileTy, scope,
-                                          /*rowStride=*/1, /*stride=*/m);
-    auto bSource = createMmaOperandSource(rewriter, loc, *scratch, op.getB(),
-                                          bMemTy, bIsTmem, bTileTy, scope,
-                                          /*rowStride=*/1, /*stride=*/bPackedK);
+                                          aMemTy, aIsTmem, aTileTy, op.getD(),
+                                          scope, /*rowStride=*/1, /*stride=*/m);
+    auto bSource = createMmaOperandSource(
+        rewriter, loc, *scratch, op.getB(), bMemTy, bIsTmem, bTileTy, op.getD(),
+        scope, /*rowStride=*/1, /*stride=*/bPackedK);
     if (!aSource || !bSource)
       return emitFpSanCodegenError(op.getOperation());
 

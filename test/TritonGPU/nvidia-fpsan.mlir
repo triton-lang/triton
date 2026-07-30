@@ -104,6 +104,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
+#tmem_a = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem_d = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.tensor_memory_size = 0 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @tcgen05_mma_tmem_a_aliases_d
+  tt.func public @tcgen05_mma_tmem_a_aliases_d() {
+    // CHECK: %[[D_SCRATCH:.*]] = ttg.global_scratch_alloc
+    // CHECK: tt.load
+    // CHECK: %[[A_SNAPSHOT:.*]] = ttg.global_scratch_alloc
+    // CHECK: tt.store
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK: tti.experimental_local_gather
+    // CHECK: tti.dot_i8
+    // CHECK-NOT: ttng.tc_gen5_mma
+    %true = arith.constant true
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem_d, #ttng.tensor_memory, mutable>
+    %a = ttg.memdesc_reinterpret %d : !ttg.memdesc<128x128xf32, #tmem_d, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf16, #tmem_a, #ttng.tensor_memory, mutable>
+    %b = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 8192 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttng.tc_gen5_mma %a, %b, %d, %true, %true, %bar[%true] {is_async} : !ttg.memdesc<128x128xf16, #tmem_a, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem_d, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.tensor_memory_size = 0 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tcgen05_mma
@@ -139,9 +167,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.tensor_memory_size = 0 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tcgen05_mma_tmem_a_shared_b
   tt.func public @tcgen05_mma_tmem_a_shared_b() {
-    // CHECK: ttg.global_scratch_alloc
-    // CHECK: tt.store
+    // CHECK: %[[A_SCRATCH:.*]] = ttg.global_scratch_alloc
+    // CHECK: %[[D_SCRATCH:.*]] = ttg.global_scratch_alloc
+    // CHECK-NOT: ttg.global_scratch_alloc
     // CHECK: ttg.barrier global_read|global_write
+    // CHECK: tt.load
     // CHECK: tti.experimental_local_gather
     // CHECK: tti.dot_i8
     // CHECK-NOT: ttng.tc_gen5_mma
