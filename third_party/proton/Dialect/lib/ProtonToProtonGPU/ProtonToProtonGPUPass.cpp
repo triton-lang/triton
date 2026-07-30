@@ -84,6 +84,44 @@ void instrumentWarpSpecializeOps(FuncOp func, Value buffer, Value profileMem) {
   }
 }
 
+LogicalResult lowerEvent(OpBuilder &builder, Operation *op, Value targetSegment,
+                         IntegerType clkType, MetricType metricType,
+                         ModuleScopeIdAllocation &scopeInfo) {
+  builder.setInsertionPoint(op);
+  if (auto asyncToken = dyn_cast<proton::AllocateAsyncTokenOp>(op)) {
+    int scopeId = scopeInfo.getOpScopeId(asyncToken);
+    if (scopeId > 255)
+      return asyncToken.emitOpError("scope id exceeds the 8-bit encoding");
+    Value token =
+        arith::ConstantIntOp::create(builder, asyncToken.getLoc(), scopeId, 32);
+    asyncToken.getToken().replaceAllUsesWith(token);
+    asyncToken.erase();
+    return success();
+  }
+
+  Value counter =
+      gpu::ReadCounterOp::create(builder, op->getLoc(), clkType, metricType);
+
+  if (auto record = dyn_cast<proton::RecordOp>(op)) {
+    int scopeId = scopeInfo.getOpScopeId(record);
+    if (scopeId > 255)
+      return record.emitOpError("scope id exceeds the 8-bit encoding");
+    gpu::CircularStoreOp::create(builder, record.getLoc(), targetSegment,
+                                 counter, Value(), record.getIsStart(),
+                                 builder.getI32IntegerAttr(scopeId));
+    record.erase();
+    return success();
+  }
+  if (auto asyncRecord = dyn_cast<proton::AsyncRecordOp>(op)) {
+    gpu::CircularStoreOp::create(builder, asyncRecord.getLoc(), targetSegment,
+                                 counter, asyncRecord.getToken(),
+                                 asyncRecord.getIsStart(), IntegerAttr());
+    asyncRecord.erase();
+    return success();
+  }
+  return success();
+}
+
 LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
                                     Value segment, MetricType metricType,
                                     ModuleScopeIdAllocation &scopeInfo,
@@ -91,42 +129,6 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
   mlir::IntegerType clkType =
       clockExtension ? mlir::IntegerType::get(builder.getContext(), 64)
                      : mlir::IntegerType::get(builder.getContext(), 32);
-
-  auto lowerEvent = [&](Operation *op, Value targetSegment) -> LogicalResult {
-    builder.setInsertionPoint(op);
-    if (auto asyncToken = dyn_cast<proton::AllocateAsyncTokenOp>(op)) {
-      int scopeId = scopeInfo.getOpScopeId(asyncToken);
-      if (scopeId > 255)
-        return asyncToken.emitOpError("scope id exceeds the 8-bit encoding");
-      Value token = arith::ConstantIntOp::create(builder, asyncToken.getLoc(),
-                                                 scopeId, 32);
-      asyncToken.getToken().replaceAllUsesWith(token);
-      asyncToken.erase();
-      return success();
-    }
-
-    Value counter =
-        gpu::ReadCounterOp::create(builder, op->getLoc(), clkType, metricType);
-
-    if (auto record = dyn_cast<proton::RecordOp>(op)) {
-      int scopeId = scopeInfo.getOpScopeId(record);
-      if (scopeId > 255)
-        return record.emitOpError("scope id exceeds the 8-bit encoding");
-      gpu::CircularStoreOp::create(builder, record.getLoc(), targetSegment,
-                                   counter, Value(), record.getIsStart(),
-                                   builder.getI32IntegerAttr(scopeId));
-      record.erase();
-      return success();
-    }
-    if (auto asyncRecord = dyn_cast<proton::AsyncRecordOp>(op)) {
-      gpu::CircularStoreOp::create(builder, asyncRecord.getLoc(), targetSegment,
-                                   counter, asyncRecord.getToken(),
-                                   asyncRecord.getIsStart(), IntegerAttr());
-      asyncRecord.erase();
-      return success();
-    }
-    return success();
-  };
 
   bool loweringFailed = false;
 
@@ -153,7 +155,8 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
           if (!isa<proton::RecordOp, proton::AsyncRecordOp,
                    proton::AllocateAsyncTokenOp>(op))
             return;
-          if (failed(lowerEvent(op, newSegment)))
+          if (failed(lowerEvent(builder, op, newSegment, clkType, metricType,
+                                scopeInfo)))
             loweringFailed = true;
         });
 
@@ -181,7 +184,8 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
     if (!isa<proton::RecordOp, proton::AsyncRecordOp,
              proton::AllocateAsyncTokenOp>(op))
       return;
-    if (failed(lowerEvent(op, segment)))
+    if (failed(
+            lowerEvent(builder, op, segment, clkType, metricType, scopeInfo)))
       loweringFailed = true;
   });
 
