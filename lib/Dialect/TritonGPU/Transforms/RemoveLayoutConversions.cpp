@@ -139,49 +139,31 @@ private:
 /// Search limits and high-cost graph features are policy, not graph legality.
 class LayoutSearchPolicy {
   using G = LayoutConstraintGraph;
+  const bool memoryFanout;
 
 public:
   explicit LayoutSearchPolicy(const LayoutConstraintGraph &graph)
-      : graph(graph) {}
+      : memoryFanout(graph.getTensorLoadBoundaryCount() >= 2 &&
+                     !graph.has(G::Join | G::Split | G::Reduction | G::Loop |
+                                G::TensorMemory)),
+        fullObjective((graph.has(G::Join | G::Split | G::Reduction) ||
+                       memoryFanout) &&
+                      graph.getNodes().size() <= 256),
+        componentSearch(graph.has(G::Join | G::Split | G::Reduction |
+                                  G::Loop) ||
+                        memoryFanout),
+        exactComponentSearch(fullObjective &&
+                             graph.getTensorLoadBoundaryCount() > 0 &&
+                             !graph.has(G::Store) &&
+                             graph.getNodes().size() <= 64),
+        pruneRedundantReductionProposals(
+            graph.has(G::Reduction) && !graph.has(G::ProtectedReduction)),
+        maxComponentProposals(fullObjective ? 128 : 32) {}
 
-  bool hasMemoryFanoutConstraints() const {
-    return graph.getTensorLoadBoundaryCount() >= 2 &&
-           !graph.has(G::Join | G::Split | G::Reduction | G::Loop |
-                      G::TensorMemory);
-  }
-
-  bool useFullObjective() const {
-    constexpr unsigned maxFullObjectiveValues = 256;
-    return (graph.has(G::Join | G::Split | G::Reduction) ||
-            hasMemoryFanoutConstraints()) &&
-           graph.getNodes().size() <= maxFullObjectiveValues;
-  }
-
-  bool useComponentSearch() const {
-    return graph.has(G::Join | G::Split | G::Reduction | G::Loop) ||
-           hasMemoryFanoutConstraints();
-  }
-
-  unsigned maxComponentProposals() const {
-    return useFullObjective() ? 128 : 32;
-  }
-
-  bool useExactComponentSearch() const {
-    constexpr unsigned maxExactGraphValues = 64;
-    return useFullObjective() &&
-           graph.getTensorLoadBoundaryCount() > 0 &&
-           !graph.has(G::Store) &&
-           graph.getNodes().size() <= maxExactGraphValues;
-  }
-
-  unsigned maxExactComponentStates() const { return 256; }
-
-  bool pruneRedundantReductionProposals() const {
-    return graph.has(G::Reduction) && !graph.has(G::ProtectedReduction);
-  }
-
-private:
-  const LayoutConstraintGraph &graph;
+  const bool fullObjective, componentSearch, exactComponentSearch,
+      pruneRedundantReductionProposals;
+  const unsigned maxComponentProposals;
+  static constexpr unsigned maxExactComponentStates = 256;
 };
 
 using LayoutAssignmentChange = std::pair<Value, Attribute>;
@@ -618,9 +600,6 @@ static bool isFixedLayoutBoundary(Operation *op) {
 
 static bool isProtectedLayoutLoop(Operation *op, unsigned functionLoads,
                                   unsigned functionStores) {
-  if (!isa<scf::ForOp, scf::WhileOp>(op))
-    return false;
-
   if (auto whileOp = dyn_cast<scf::WhileOp>(op))
     for (auto [index, argument] : llvm::enumerate(whileOp.getBeforeArguments()))
       if (index >= whileOp.getNumResults() &&
@@ -1642,12 +1621,12 @@ void LayoutAssignmentSolver::solve(const LayoutConstraintGraph &graph,
                                    const LayoutSearchPolicy &policy,
                                    Assignment &assignments,
                                    const Callbacks &callbacks) const {
-  const bool useFullObjective = policy.useFullObjective();
-  if (policy.useComponentSearch()) {
+  const bool useFullObjective = policy.fullObjective;
+  if (policy.componentSearch) {
     constexpr unsigned maxComponentIterations = 4;
-    const unsigned maxComponentProposals = policy.maxComponentProposals();
+    const unsigned maxComponentProposals = policy.maxComponentProposals;
     const bool pruneRedundantReductionProposals =
-        policy.pruneRedundantReductionProposals();
+        policy.pruneRedundantReductionProposals;
     for (unsigned iteration = 0; iteration < maxComponentIterations;
          ++iteration) {
       bool changed = false;
@@ -1761,7 +1740,7 @@ void LayoutAssignmentSolver::solve(const LayoutConstraintGraph &graph,
       break;
   }
 
-  if (!policy.useExactComponentSearch())
+  if (!policy.exactComponentSearch)
     return;
 
   // Coordinate descent cannot change jointly constrained encodings when every
@@ -1773,9 +1752,9 @@ void LayoutAssignmentSolver::solve(const LayoutConstraintGraph &graph,
     unsigned states = 1;
     for (unsigned index : component)
       if ((states *= graph.getNodes()[index].candidates.size()) >
-          policy.maxExactComponentStates())
+          policy.maxExactComponentStates)
         break;
-    if (states > policy.maxExactComponentStates())
+    if (states > policy.maxExactComponentStates)
       continue;
 
     uint64_t bestCost = callbacks.fullCost(assignments);
@@ -1833,8 +1812,7 @@ void LayoutPropagation::resolveGlobalConflicts() {
     funcOp.walk([&](Operation *op) { graph.addOperation(op); });
     LayoutSearchPolicy policy(graph);
     LDBG("resolving " << layouts.size() << " layout values with "
-                      << (policy.useFullObjective() ? "the full"
-                                                    : "the bounded")
+                      << (policy.fullObjective ? "the full" : "the bounded")
                       << " global objective");
 
     LayoutAssignmentSolver().solve(
@@ -3244,12 +3222,11 @@ class ScalarJoinExpressionPlan {
 public:
   explicit ScalarJoinExpressionPlan(ConvertLayoutOp root)
       : insertionPoint(root.getOperation()), rootValue(root.getSrc()),
-        target(root.getType()), conversionRoot(root) {}
+        target(root.getType()) {}
 
   explicit ScalarJoinExpressionPlan(triton::StoreOp root)
       : insertionPoint(root.getOperation()), rootValue(root.getValue()),
-        target(dyn_cast<RankedTensorType>(root.getValue().getType())),
-        storeRoot(root) {}
+        target(dyn_cast<RankedTensorType>(root.getValue().getType())) {}
 
   LogicalResult analyze() {
     if (!target || !target.getEncoding() || !target.hasStaticShape())
@@ -3269,7 +3246,7 @@ public:
             flatEncoding, /*allowReorder=*/false, insertionPoint->getLoc())))
       return failure();
 
-    if (storeRoot && !rootValue.hasOneUse())
+    if (isa<triton::StoreOp>(insertionPoint) && !rootValue.hasOneUse())
       return failure();
 
     if (failed(plan(rootValue, 0)))
@@ -3286,8 +3263,8 @@ public:
           !cvtReordersRegisters(convert.getSrc().getType(), convert.getType());
     };
 
-    if (conversionRoot)
-      classifyConversion(conversionRoot);
+    if (auto conversion = dyn_cast<ConvertLayoutOp>(insertionPoint))
+      classifyConversion(conversion);
 
     for (Operation *op : originalOperations) {
       if (auto convert = dyn_cast<ConvertLayoutOp>(op))
@@ -3348,11 +3325,12 @@ public:
                << "[" DEBUG_TYPE "] evaluating " << originalOperations.size()
                << " scalar-rooted operations from exact logical index bits\n");
 
-    if (conversionRoot) {
-      conversionRoot.getResult().replaceAllUsesWith(replacement);
-      conversionRoot.erase();
+    if (auto conversion = dyn_cast<ConvertLayoutOp>(insertionPoint)) {
+      conversion.getResult().replaceAllUsesWith(replacement);
+      conversion.erase();
     } else {
-      storeRoot.getValueMutable().assign(replacement);
+      cast<triton::StoreOp>(insertionPoint).getValueMutable().assign(
+          replacement);
     }
     for (Operation *op : originalOperations) {
       if (isOpTriviallyDead(op))
@@ -3513,8 +3491,6 @@ private:
   Operation *insertionPoint;
   Value rootValue;
   RankedTensorType target;
-  ConvertLayoutOp conversionRoot;
-  triton::StoreOp storeRoot;
   Attribute flatEncoding;
   Value indices;
   DenseSet<IndexedValue> plannedValues;
