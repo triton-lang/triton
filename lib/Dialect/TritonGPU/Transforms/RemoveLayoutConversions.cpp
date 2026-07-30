@@ -114,7 +114,7 @@ public:
   }
 
 private:
-  void addContract(ArrayRef<Value> values) {
+  template <typename Range> void addContract(Range &&values) {
     std::optional<unsigned> previous;
     for (Value value : values) {
       auto found = indices.find(value);
@@ -192,6 +192,8 @@ public:
              const Callbacks &callbacks) const;
 };
 
+struct LayoutMemoryProfile;
+
 // The current algorithm works by analyzing the IR and doing a one-shot rewrite
 // based on the analysis. The algorithm is as follows.
 //
@@ -213,8 +215,9 @@ public:
 class LayoutPropagation {
 public:
   using LayoutInfo = llvm::SmallSetVector<Attribute, 8>;
-  LayoutPropagation(FuncOp F, LayoutAssignmentStrategy strategy)
-      : funcOp(F), strategy(strategy) {}
+  LayoutPropagation(FuncOp F, LayoutAssignmentStrategy strategy,
+                    const LayoutMemoryProfile *profile = nullptr)
+      : funcOp(F), strategy(strategy), memoryProfile(profile) {}
   // Find the anchor ops and set their layout in the data structure.
   void initAnchorLayout();
   // Recursively Propagate the layout to all the users of the anchor ops until
@@ -290,6 +293,7 @@ private:
   LayoutCostModel costModel;
   FuncOp funcOp;
   LayoutAssignmentStrategy strategy;
+  const LayoutMemoryProfile *memoryProfile;
 };
 
 class LayoutRematerialization {
@@ -690,11 +694,9 @@ void LayoutConstraintGraph::addOperation(Operation *operation) {
     return;
   }
 
-  if (isLayoutTransform(operation)) {
-    SmallVector<Value, 8> values(operation->getOperands());
-    llvm::append_range(values, operation->getResults());
-    addContract(values);
-  }
+  if (isLayoutTransform(operation))
+    addContract(llvm::concat<Value>(operation->getOperands(),
+                                    operation->getResults()));
 }
 
 SmallVector<SmallVector<unsigned, 8>, 8>
@@ -724,7 +726,15 @@ void LayoutPropagation::initAnchorLayout() {
   }
 
   if (strategy == LayoutAssignmentStrategy::Global) {
-    LayoutMemoryProfile memory = getLayoutMemoryProfile(funcOp);
+    const LayoutMemoryProfile &memory = *memoryProfile;
+    auto anchorOperationValues = [&](Operation *op) {
+      for (Value result : op->getResults())
+        addAnchor(result);
+      for (Region &region : op->getRegions())
+        for (Block &block : region)
+          for (BlockArgument argument : block.getArguments())
+            addAnchor(argument);
+    };
     auto protectMemoryAddresses = [&](bool includeLoads) {
       DenseSet<Value> visited;
       SmallVector<Value> worklist;
@@ -755,16 +765,8 @@ void LayoutPropagation::initAnchorLayout() {
       }
     };
 
-    if (memory.hasPairwiseReductionProtocol()) {
-      funcOp.walk([&](Operation *op) {
-        for (Value result : op->getResults())
-          addAnchor(result);
-        for (Region &region : op->getRegions())
-          for (Block &block : region)
-            for (BlockArgument argument : block.getArguments())
-              addAnchor(argument);
-      });
-    }
+    if (memory.hasPairwiseReductionProtocol())
+      funcOp.walk(anchorOperationValues);
     if (memory.hasPackedAssemblyProtocol()) {
       // Packed MX kernels independently rematerialize the address and mask
       // of each load and store. Preserve those established memory slices while
@@ -798,20 +800,18 @@ void LayoutPropagation::initAnchorLayout() {
           cast<RankedTensorType>(reduce->getOperand(0).getType());
       if (sourceType.getDimSize(reduce.getAxis()) != 2)
         hasSharedReductionMemoryBoundaries = true;
-      for (Value operand : reduce->getOperands())
-        addProtectedReductionValue(operand);
-      for (Value result : reduce->getResults())
-        addProtectedReductionValue(result);
+      for (Value value : llvm::concat<Value>(reduce->getOperands(),
+                                             reduce->getResults()))
+        addProtectedReductionValue(value);
     });
 
     auto protectReductionComponent = [&](Operation *op) {
       if (!op || !isMemoryEffectFree(op) || isa<ConvertLayoutOp>(op) ||
           (isFixedLayoutBoundary(op) && !isProtectedLayoutReduction(op)))
         return;
-      for (Value operand : op->getOperands())
-        addProtectedReductionValue(operand);
-      for (Value result : op->getResults())
-        addProtectedReductionValue(result);
+      for (Value value :
+           llvm::concat<Value>(op->getOperands(), op->getResults()))
+        addProtectedReductionValue(value);
     };
 
     while (!reductionWorklist.empty()) {
@@ -838,14 +838,7 @@ void LayoutPropagation::initAnchorLayout() {
       for (Value operand : op->getOperands())
         addAnchor(operand);
 
-      op->walk([&](Operation *nested) {
-        for (Value result : nested->getResults())
-          addAnchor(result);
-        for (Region &region : nested->getRegions())
-          for (Block &block : region)
-            for (BlockArgument argument : block.getArguments())
-              addAnchor(argument);
-      });
+      op->walk(anchorOperationValues);
     }
 
     if (!memory.protectedLoops.empty()) {
@@ -3595,9 +3588,10 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
           }
         } while (changed);
       }
+      memory = getLayoutMemoryProfile(funcOp);
     }
 
-    LayoutPropagation propagation(funcOp, strategy);
+    LayoutPropagation propagation(funcOp, strategy, global ? &memory : nullptr);
     propagation.initAnchorLayout();
     propagation.propagateLayout();
     propagation.resolveConflicts();
