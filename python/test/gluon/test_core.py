@@ -995,13 +995,13 @@ def warpgroup_mma_wait_multi_warpgroup_kernel(a_ptr, b0_ptr, b1_ptr, out_ptr, D:
     acc = ttgl.zeros([M, D], ttgl.float32, c_layout)
     inflight = hopper.warpgroup_mma_init(acc)
 
-    async_copy.async_copy_global_to_shared(a_smem, a_ptr + aoffs)
+    async_copy.async_load(a_smem, a_ptr + aoffs)
     async_copy.commit_group()
 
     for i in tl.range(0, NBLK):
-        async_copy.async_copy_global_to_shared(b0_smem, b0_ptr + i * D * D + offs)
+        async_copy.async_load(b0_smem, b0_ptr + i * D * D + offs)
         acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=(inflight, ))
-        async_copy.async_copy_global_to_shared(b1_smem, b1_ptr + i * D * D + offs)
+        async_copy.async_load(b1_smem, b1_ptr + i * D * D + offs)
         async_copy.commit_group()
         async_copy.wait_group(0)
         hopper.fence_async_shared()
