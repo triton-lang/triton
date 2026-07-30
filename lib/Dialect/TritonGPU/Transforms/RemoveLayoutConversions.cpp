@@ -908,17 +908,17 @@ bool LayoutPropagation::addEncoding(Value value, Attribute encoding) {
   if (!tensorType || !encoding)
     return false;
 
+  LayoutInfo &info = layouts[value];
   if (strategy == LayoutAssignmentStrategy::Global) {
     if (fixedLayouts.contains(value) && encoding != tensorType.getEncoding())
       return false;
 
     constexpr unsigned maxGlobalLayoutCandidates = 16;
-    LayoutInfo &info = layouts[value];
     if (!info.contains(encoding) && info.size() >= maxGlobalLayoutCandidates)
       return false;
   }
 
-  return layouts[value].insert(encoding);
+  return info.insert(encoding);
 }
 
 void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
@@ -1382,7 +1382,8 @@ uint64_t LayoutPropagation::getAssignmentCost(
     Value value, Attribute encoding,
     const DenseMap<Value, Attribute> &assignments) const {
   uint64_t cost = 0;
-  if (Operation *definingOp = value.getDefiningOp())
+  Operation *definingOp = value.getDefiningOp();
+  if (definingOp)
     cost += costModel.getRegisterPressureCost(value, encoding) *
             costModel.getExecutionWeight(definingOp);
   llvm::SmallDenseMap<Attribute, uint64_t, 8> userWeights;
@@ -1403,7 +1404,6 @@ uint64_t LayoutPropagation::getAssignmentCost(
   for (const auto &[required, weight] : userWeights)
     cost += costModel.getTransitionCost(value, encoding, required) * weight;
 
-  Operation *definingOp = value.getDefiningOp();
   if (!definingOp)
     return cost;
 
@@ -1648,8 +1648,6 @@ void LayoutAssignmentSolver::solve(const LayoutConstraintGraph &graph,
     const unsigned maxComponentProposals = policy.maxComponentProposals();
     const bool pruneRedundantReductionProposals =
         policy.pruneRedundantReductionProposals();
-    uint64_t currentCost = callbacks.fullCost(assignments);
-
     for (unsigned iteration = 0; iteration < maxComponentIterations;
          ++iteration) {
       bool changed = false;
@@ -1690,7 +1688,6 @@ void LayoutAssignmentSolver::solve(const LayoutConstraintGraph &graph,
 
           for (auto &[changed, original] : proposal)
             std::swap(assignments[changed], original);
-          currentCost -= previousCost - affectedProposalCost;
           changed = true;
         }
         if (proposalCount >= maxComponentProposals)
@@ -1822,8 +1819,6 @@ void LayoutPropagation::resolveGlobalConflicts() {
   DenseMap<Value, Attribute> assignments;
   bool hasFlexibleLayouts = false;
   for (auto &[value, info] : layouts) {
-    if (info.empty())
-      continue;
     Attribute original = cast<RankedTensorType>(value.getType()).getEncoding();
     info.insert(original);
     assignments.try_emplace(value, original);
@@ -1863,8 +1858,6 @@ void LayoutPropagation::resolveGlobalConflicts() {
 
   for (auto &[value, info] : layouts) {
     Attribute encoding = assignments.lookup(value);
-    if (!encoding)
-      continue;
     info.clear();
     info.insert(encoding);
   }
@@ -3207,32 +3200,28 @@ private:
       return found->second;
 
     Operation *operation = value.getDefiningOp();
+    Value result;
     if (auto convert = dyn_cast<ConvertLayoutOp>(operation)) {
-      Value replacement = materialize(convert.getSrc(), encoding, builder);
-      materializedValues.try_emplace(key, replacement);
-      return replacement;
+      result = materialize(convert.getSrc(), encoding, builder);
+    } else {
+      auto newType =
+          cast<RankedTensorType>(value.getType()).cloneWithEncoding(encoding);
+      if (auto constant = dyn_cast<arith::ConstantOp>(operation)) {
+        auto elements = cast<DenseElementsAttr>(constant.getValue());
+        result = arith::ConstantOp::create(
+            builder, constant.getLoc(), newType, elements.reshape(newType));
+      } else {
+        IRMapping mapping;
+        Attribute operandEncoding = plannedValues.lookup(key);
+        for (Value operand : operation->getOperands())
+          if (isa<RankedTensorType>(operand.getType()))
+            mapping.map(operand,
+                        materialize(operand, operandEncoding, builder));
+        Operation *replacement = builder.clone(*operation, mapping);
+        replacement->getResult(0).setType(newType);
+        result = replacement->getResult(0);
+      }
     }
-
-    auto oldType = cast<RankedTensorType>(value.getType());
-    RankedTensorType newType = oldType.cloneWithEncoding(encoding);
-    if (auto constant = dyn_cast<arith::ConstantOp>(operation)) {
-      auto elements = cast<DenseElementsAttr>(constant.getValue());
-      Value replacement = arith::ConstantOp::create(
-          builder, constant.getLoc(), newType, elements.reshape(newType));
-      materializedValues.try_emplace(key, replacement);
-      return replacement;
-    }
-
-    IRMapping mapping;
-    Attribute operandEncoding = plannedValues.lookup(key);
-    for (Value operand : operation->getOperands()) {
-      if (isa<RankedTensorType>(operand.getType()))
-        mapping.map(operand, materialize(operand, operandEncoding, builder));
-    }
-
-    Operation *replacement = builder.clone(*operation, mapping);
-    replacement->getResult(0).setType(newType);
-    Value result = replacement->getResult(0);
     materializedValues.try_emplace(key, result);
     return result;
   }
@@ -3286,12 +3275,13 @@ public:
     if (failed(plan(rootValue, 0)))
       return failure();
 
-    unsigned conversions = conversionRoot ? 1 : 0;
+    unsigned conversions = 0;
     unsigned joins = 0;
     unsigned originalArithmetic = 0;
     bool hasCommunication = false;
 
     auto classifyConversion = [&](ConvertLayoutOp convert) {
+      ++conversions;
       hasCommunication |=
           !cvtReordersRegisters(convert.getSrc().getType(), convert.getType());
     };
@@ -3300,10 +3290,8 @@ public:
       classifyConversion(conversionRoot);
 
     for (Operation *op : originalOperations) {
-      if (auto convert = dyn_cast<ConvertLayoutOp>(op)) {
-        ++conversions;
+      if (auto convert = dyn_cast<ConvertLayoutOp>(op))
         classifyConversion(convert);
-      }
       joins += isa<triton::JoinOp>(op);
       originalArithmetic += !isStructuralOrLeaf(op);
 
@@ -3314,14 +3302,12 @@ public:
       if (isRematerializableLeaf(op))
         continue;
 
-      for (Operation *user : op->getUsers()) {
-        if (user == insertionPoint) {
-          if (op->getResult(0) != rootValue)
-            return failure();
-        } else if (!originalOperations.contains(user)) {
-          return failure();
-        }
-      }
+      if (llvm::any_of(op->getUsers(), [&](Operation *user) {
+            return user == insertionPoint
+                       ? op->getResult(0) != rootValue
+                       : !originalOperations.contains(user);
+          }))
+        return failure();
     }
 
     // Index evaluation introduces integer instructions and live values. Do
