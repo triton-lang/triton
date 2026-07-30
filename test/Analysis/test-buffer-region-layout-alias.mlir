@@ -471,6 +471,46 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+// Callee allocations are relative to their own frame. Incoming descriptors
+// remain disjoint from callee-local storage across direct and indirect callers.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: frame_a_argument vs frame_a_argument: alias=true
+// CHECK: frame_a_argument vs frame_b_local: alias=false
+// CHECK: frame_b_local vs frame_b_local: alias=true
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 256 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  tt.func private @callee_local_is_disjoint_from_argument(
+      %incoming: !ttg.memdesc<16xi32, #shared, #smem, mutable>) {
+    %local = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    %0 = ttg.local_load %incoming {test.region_name = "frame_a_argument"} : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
+    %1 = ttg.local_load %local {test.region_name = "frame_b_local"} : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
+    tt.return
+  }
+
+  tt.func private @forward_to_callee(
+      %incoming: !ttg.memdesc<16xi32, #shared, #smem, mutable>) {
+    tt.call @callee_local_is_disjoint_from_argument(%incoming) {allocation.offset = 64 : i32} : (!ttg.memdesc<16xi32, #shared, #smem, mutable>) -> ()
+    tt.return
+  }
+
+  tt.func public @call_with_disjoint_allocation_frame() {
+    %incoming = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    %other = ttg.local_alloc {allocation.offset = 64 : i32} : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    tt.call @callee_local_is_disjoint_from_argument(%incoming) {allocation.offset = 128 : i32} : (!ttg.memdesc<16xi32, #shared, #smem, mutable>) -> ()
+    tt.call @forward_to_callee(%other) {allocation.offset = 128 : i32} : (!ttg.memdesc<16xi32, #shared, #smem, mutable>) -> ()
+    tt.return
+  }
+
+  tt.func public @another_call_with_disjoint_allocation_frame() {
+    %incoming = ttg.local_alloc {allocation.offset = 128 : i32} : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    tt.call @callee_local_is_disjoint_from_argument(%incoming) {allocation.offset = 0 : i32} : (!ttg.memdesc<16xi32, #shared, #smem, mutable>) -> ()
+    tt.return
+  }
+}
+
+// -----
+
 // An externally supplied descriptor is unknown, not an empty physical region.
 // It may alias an in-function allocation and certainly aliases itself.
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
