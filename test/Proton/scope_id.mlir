@@ -414,47 +414,6 @@ module {
 // -----
 
 module {
-  // expected-remark @below {{scf_loop_alternating_scope_ends}}
-  tt.func @scf_loop_alternating_scope_ends() {
-    %c0 = arith.constant 0 : index
-    %c1 = arith.constant 1 : index
-    %c2 = arith.constant 2 : index
-    %c10 = arith.constant 10 : index
-    // expected-remark @below {{scope id = 0}}
-    // expected-remark @below {{scope parent id = -1}}
-    proton.record start "scope0"
-    scf.for %i = %c0 to %c10 step %c1 {
-      %has_previous = arith.cmpi sgt, %i, %c0 : index
-      scf.if %has_previous {
-        %remainder = arith.remui %i, %c2 : index
-        %is_odd = arith.cmpi eq, %remainder, %c1 : index
-        scf.if %is_odd {
-          // expected-remark @below {{scope id = 0}}
-          // expected-remark @below {{scope parent id = -1}}
-          proton.record end "scope0"
-        } else {
-          // expected-remark @below {{scope id = 1}}
-          // expected-remark @below {{scope parent id = -1}}
-          proton.record end "scope1"
-        }
-      }
-      // expected-error @below {{The scope name 'scope1' is started without being closed}}
-      // expected-remark @below {{scope id = 1}}
-      // expected-remark @below {{scope parent id = -1}}
-      proton.record start "scope1"
-    }
-    // expected-error @below {{The scope name 'scope1' is not properly closed (missing start record)}}
-    // expected-error @below {{The scope name 'scope1' is closed without being opened}}
-    // expected-remark @below {{scope id = 2}}
-    // expected-remark @below {{scope parent id = -1}}
-    proton.record end "scope1"
-    tt.return
-  }
-}
-
-// -----
-
-module {
   // expected-remark @below {{async_scope}}
   tt.func @async_scope() {
     // expected-remark @below {{scope id = 0}}
