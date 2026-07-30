@@ -967,7 +967,7 @@ def test_tensor_descriptor_batched_gemm_3d_tma(device):
 
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("ndim", [3, 4, 5])
-@pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128])
+@pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128, 1024])
 def test_tensor_descriptor_rank_reducing_load(dtype_str, ndim, INNER_BLOCK, device):
 
     @triton.jit

@@ -50,7 +50,8 @@
 namespace py = nanobind;
 
 namespace llvm {
-struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
+struct BreakStructPhiNodesPass
+    : OptionalPassInfoMixin<BreakStructPhiNodesPass> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
   static StringRef name() { return "BreakStructPhiNodesPass"; }
 };
@@ -361,12 +362,20 @@ std::string translateLLVMIRToASM(
     }
   }
 
+  // Set up target information before inlining so target-specific inline
+  // compatibility checks use the backend's TTI.
+  module.setTargetTriple(Triple(triple));
+  auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
+  module.setDataLayout(machine->createDataLayout());
+
   // inline everything
   for (llvm::Function &f : module.functions())
     if (!f.hasFnAttribute(llvm::Attribute::NoInline))
       f.addFnAttr(llvm::Attribute::AlwaysInline);
   // verify and store llvm
   llvm::legacy::PassManager pm;
+  pm.add(llvm::createTargetTransformInfoWrapperPass(
+      machine->getTargetIRAnalysis()));
   pm.add(llvm::createAlwaysInlinerLegacyPass());
   pm.add(llvm::createVerifierPass());
 
@@ -387,11 +396,6 @@ std::string translateLLVMIRToASM(
     timePassesStr.clear();
   }
 
-  // create machine
-  module.setTargetTriple(Triple(triple));
-  auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
-  // set data layout
-  module.setDataLayout(machine->createDataLayout());
   if (canonicalizeGEP && !disableLLVMOpt) {
     // The NVPTX pipeline otherwise exposes many equivalent GEPs to SLSR
     // without eliminating them first.
