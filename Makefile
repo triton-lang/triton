@@ -34,12 +34,12 @@ test-cpp:
 
 .PHONY: test-unit
 test-unit: all
-	cd python/test/unit && $(PYTEST) -n $(NUM_PROCS) --ignore-glob='plugins/*'
-	$(PYTEST) -n 6 python/triton_kernels/tests/
+	cd python/test/unit && TRITON_CI_CACHE_PHASE=unit $(PYTEST) -n $(NUM_PROCS) --ignore-glob='plugins/*'
+	TRITON_CI_CACHE_PHASE=triton-kernels $(PYTEST) -n 6 python/triton_kernels/tests/
 	# Run attention separately to avoid out of gpu memory
-	$(PYTEST) python/tutorials/06-fused-attention.py
+	TRITON_CI_CACHE_PHASE=attention $(PYTEST) python/tutorials/06-fused-attention.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
-		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
+		TRITON_CI_CACHE_PHASE=instrumentation $(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
 
 .PHONY: test-plugins
 test-plugins: all
@@ -47,16 +47,16 @@ test-plugins: all
 
 .PHONY: test-gluon
 test-gluon: all
-	$(PYTEST) -n $(NUM_PROCS) python/test/gluon/ python/tutorials/gluon/
-	PYTHONPATH="$(TRITON_KERNELS_PATH)" $(PYTEST) -n 2 python/examples/gluon/
+	TRITON_CI_CACHE_PHASE=gluon $(PYTEST) -n $(NUM_PROCS) python/test/gluon/ python/tutorials/gluon/
+	PYTHONPATH="$(TRITON_KERNELS_PATH)" TRITON_CI_CACHE_PHASE=gluon-examples $(PYTEST) -n 2 python/examples/gluon/
 
 WARMUP_PROCS ?= $(NUM_PROCS)
 
 .PHONY: test-warmup
 test-warmup: all
-	$(PYTEST) -s --tb=short -n $(WARMUP_PROCS) --dist=worksteal --warmup-only \
-		python/test/unit/language/test_matmul.py::test_simple_matmul
-	$(PYTEST) -s --tb=short -n $(WARMUP_PROCS) --dist=worksteal --warmup-only \
+	TRITON_CI_CACHE_PHASE=warmup-triton-kernels $(PYTEST) -s --tb=short -n $(WARMUP_PROCS) --dist=worksteal --warmup-only \
+		python/triton_kernels/tests/test_matmul.py::test_op
+	TRITON_CI_CACHE_PHASE=warmup-gluon $(PYTEST) -s --tb=short -n $(WARMUP_PROCS) --dist=worksteal --warmup-only \
 		python/test/gluon/test_core.py::test_mma_shared_inputs
 
 .PHONY: test-gsan

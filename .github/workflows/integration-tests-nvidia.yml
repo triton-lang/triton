@@ -26,6 +26,7 @@ jobs:
       PROTON_SKIP_PC_SAMPLING_TEST: 1
       PYTHON: "python3"
       CCACHE_COMPRESS: "true"
+      TRITON_CI_COMPILE_TRACE_DIR: ${{ runner.temp }}/triton-ci-compile-trace
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -95,10 +96,18 @@ jobs:
             warmup_procs=64
           fi
           make WARMUP_PROCS="$warmup_procs" test-warmup
+          python3 -m triton._compile_warmup report --phase warmup-triton-kernels
+          python3 -m triton._compile_warmup report --phase warmup-gluon
       - name: Run triton tests
-        run: make NUM_PROCS=24 test-unit
+        run: |
+          make NUM_PROCS=24 test-unit
+          python3 -m triton._compile_warmup report --phase triton-kernels --require-warmed-hits
       - name: Run gluon tests
-        run: make NUM_PROCS=24 test-gluon
+        run: |
+          make NUM_PROCS=24 test-gluon
+          if [[ "$RUNNER_TYPE" != "nvidia-a100" ]]; then
+            python3 -m triton._compile_warmup report --phase gluon --require-warmed-hits
+          fi
       - name: Run gsan tests
         run: make NUM_PROCS=24 test-gsan
       - name: Run interpreter tests

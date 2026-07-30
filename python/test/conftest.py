@@ -10,19 +10,6 @@ def pytest_configure(config):
 
 def pytest_addoption(parser):
     parser.addoption("--device", action="store", default="cuda")
-    parser.addoption("--warmup-only", action="store_true")
-
-
-@pytest.fixture(scope="session", autouse=True)
-def compile_warmup(request):
-    if not request.config.getoption("--warmup-only"):
-        yield
-        return
-
-    from triton._compile_warmup import compile_warmup_only
-
-    with compile_warmup_only():
-        yield
 
 
 @pytest.fixture

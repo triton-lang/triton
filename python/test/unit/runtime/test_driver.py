@@ -1,11 +1,19 @@
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
+import pytest
 import torch
 
 import triton
 import triton.language as tl
-from triton._compile_warmup import compile_warmup_only
+from triton._compile_warmup import (
+    CompilationTrace,
+    _WarmupComplete,
+    _warmup_test_case,
+    compile_warmup_only,
+    summarize_compile_trace,
+)
+from triton.backends.nvidia.compiler import CUDABackend
 from triton.backends.driver import GPUDriver, expand_signature, wrap_handle_tensordesc_impl
 
 
@@ -32,6 +40,67 @@ def test_compile_warmup_only_intercepts_launches():
     assert launches == [((tensor, ), (2, ), {"BLOCK_SIZE": 16})]
     assert triton.KernelInterface.__getitem__ is previous_getitem
     assert torch.testing.assert_close is previous_assert_close
+
+
+def test_compile_warmup_preserves_tensor_view_alignment():
+    with compile_warmup_only():
+        tensor = torch.empty(16, device="cpu", dtype=torch.float32)
+        view = tensor[1:]
+
+        assert tensor.data_ptr() % 256 == 0
+        assert view.data_ptr() == tensor.data_ptr() + tensor.element_size()
+        assert CUDABackend.get_tensor_specialization(tensor, align=True) == "D"
+        assert CUDABackend.get_tensor_specialization(view, align=True) == ""
+
+
+def test_compilation_trace_matches_warmup_cache_hits(tmp_path):
+    times = SimpleNamespace(total=125_000)
+    source = SimpleNamespace(name="kernel", fn=SimpleNamespace(_fn_name="package.kernel"), hash=lambda: "source")
+    warmup = CompilationTrace(str(tmp_path), "warmup-triton-kernels")
+    runtime = CompilationTrace(str(tmp_path), "triton-kernels")
+
+    warmup(src=source, metadata={"hash": "warmed"}, metadata_group={}, times=times, cache_hit=False)
+    runtime(src=source, metadata={"hash": "warmed"}, metadata_group={}, times=times, cache_hit=True)
+    runtime(src=source, metadata={"hash": "different"}, metadata_group={}, times=times, cache_hit=False)
+
+    report = summarize_compile_trace(str(tmp_path), "triton-kernels")
+
+    assert report == {
+        "phases": {
+            "triton-kernels": {
+                "events": 2,
+                "disk_hits": 1,
+                "disk_misses": 1,
+                "warmed_hits": 1,
+                "warmed_misses": 0,
+                "compile_seconds": 0.125,
+            },
+        },
+        "warmup_hashes": 1,
+    }
+
+
+def test_compile_warmup_skips_triton_kernels_reference():
+    import triton_kernels.testing as testing
+
+    reference = object()
+    module = SimpleNamespace(__file__="/checkout/python/triton_kernels/tests/test_matmul.py", matmul_torch=reference)
+    item = SimpleNamespace(module=module, originalname="test_op", callspec=SimpleNamespace(params={}))
+    previous_alloc_rand = testing.alloc_rand
+    previous_make_slice_sizes = testing.make_slice_sizes
+
+    with compile_warmup_only(), _warmup_test_case(item):
+        allocation = testing.alloc_rand((4, 8), device="cpu", dtype=torch.float32)
+        slice_sizes = testing.make_slice_sizes(3, 12, device="cpu")
+
+        assert allocation.shape == (4, 8)
+        assert slice_sizes.shape == (3, )
+        with pytest.raises(_WarmupComplete):
+            module.matmul_torch()
+
+    assert module.matmul_torch is reference
+    assert testing.alloc_rand is previous_alloc_rand
+    assert testing.make_slice_sizes is previous_make_slice_sizes
 
 
 def test_is_lazy():
