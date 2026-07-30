@@ -208,7 +208,7 @@ def tma_kernel(desc):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
     value = ttgl.full(desc.block_shape, 0, desc.dtype, layout)
     alloc = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout, value)
-    tma.async_copy_shared_to_global(desc, [0, 0], alloc)
+    tma.async_store(desc, [0, 0], alloc)
     tma.store_wait(0)
     alloc._keep_alive()
 
@@ -238,7 +238,7 @@ def tma_im2col_kernel(in_desc, out_desc):
     tma.async_load_im2col(in_desc, [0, 0, 0, 0], [0, 0], bar, smem)
     mbarrier.wait(bar, phase=0)
     mbarrier.invalidate(bar)
-    tma.async_copy_shared_to_global(out_desc, [0, 0], smem)
+    tma.async_store(out_desc, [0, 0], smem)
     tma.store_wait(pendings=0)
 
 
@@ -289,7 +289,7 @@ def tma_round_f32_to_tf32_kernel(in_desc, out_desc):
     tma.async_load(in_desc, [0, 0], bar, smem)
     mbarrier.wait(bar, phase=0, deps=[smem])
     mbarrier.invalidate(bar)
-    tma.async_copy_shared_to_global(out_desc, [0, 0], smem)
+    tma.async_store(out_desc, [0, 0], smem)
     tma.store_wait(0)
     smem._keep_alive()
 
@@ -338,7 +338,7 @@ def tma_multicast_copy_kernel(in_desc, out_desc):
     tma.async_load(in_desc, [0, 0], bar, smem, multicast=True)
     mbarrier.wait(bar, phase=0, deps=[smem])
 
-    tma.async_copy_shared_to_global(out_desc, [0, 0], smem)
+    tma.async_store(out_desc, [0, 0], smem)
     tma.store_wait(0)
 
     mbarrier.invalidate(bar)
@@ -394,7 +394,7 @@ def tma_gather_scatter_kernel(in_desc, gather_out_desc, scatter_out_desc, gather
     mbarrier.invalidate(bar)
 
     scatter_offsets = ttgl.load(scatter_idx_ptr + ttgl.arange(0, BLOCK_M, layout=x_offsets_layout))
-    tma.async_copy_shared_to_global(gather_out_desc, [0, 0], smem)
+    tma.async_store(gather_out_desc, [0, 0], smem)
     blackwell_tma.async_scatter(scatter_out_desc, scatter_offsets, 0, smem)
     tma.store_wait(0)
 
@@ -713,7 +713,7 @@ def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK:
     xindex = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(1, block_layout))[:, None]
     yindex = ttgl.arange(0, YBLOCK, ttgl.SliceLayout(0, block_layout))[None, :]
     mask = xindex < xnumel
-    async_copy.async_copy_global_to_shared(
+    async_copy.async_load(
         smem,
         inp + xindex * YBLOCK + yindex,
         mask,
@@ -869,7 +869,7 @@ def test_device_tma_store():
             block_shape=[XBLOCK, XBLOCK],
             layout=smem_layout,
         )
-        tma.async_copy_shared_to_global(out_desc, [0, 0], alloc)
+        tma.async_store(out_desc, [0, 0], alloc)
         tma.store_wait(0)
         alloc._keep_alive()
 
@@ -2338,7 +2338,7 @@ def test_tma_slice():
         blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
         smem_slice0.store(ttgl.zeros((XBLOCK, YBLOCK), dtype=ttgl.float32, layout=blocked))
 
-        tma.async_copy_shared_to_global(out_desc, [0, 0], smem_slice1)
+        tma.async_store(out_desc, [0, 0], smem_slice1)
         tma.store_wait(0)
 
     input = torch.rand((XBLOCK, YBLOCK), dtype=torch.float32, device="cuda")
@@ -5403,7 +5403,7 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     acc = acc.to(c_desc.dtype)
     acc_smem = ttgl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
     acc_smem.store(acc)
-    tma.async_copy_shared_to_global(c_desc, [off_m, off_n], acc_smem)
+    tma.async_store(c_desc, [off_m, off_n], acc_smem)
     tma.store_wait(0)
 
 

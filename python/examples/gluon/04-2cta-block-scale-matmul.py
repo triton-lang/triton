@@ -618,7 +618,7 @@ def mma_scaled_epilogue_partition(p):
             acc = acc_sub.load().to(p.c_desc.dtype)
             tma.store_wait(pendings=subtile_stages - 1)
             acc_smem.store(acc)
-            tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + EPILOGUE_BLOCK_N * s], acc_smem)
+            tma.async_store(p.c_desc, [off_m, off_n + EPILOGUE_BLOCK_N * s], acc_smem)
             sub_acc_state = sub_acc_state.next()
         mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
         acc_state = acc_state.next()

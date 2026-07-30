@@ -755,10 +755,10 @@ def _attn_fwd_epilogue(config, chnls, descs, M, STAGE: gl.constexpr):
         prog = scheduler.get_program(pid)
 
         o0_smem, o0_bar, epi_consumer = epi_consumer.acquire()
-        tma.async_copy_shared_to_global(desc_o, [prog.qo_offset_y + config.SPLIT_M * 0, 0], o0_smem)
+        tma.async_store(desc_o, [prog.qo_offset_y + config.SPLIT_M * 0, 0], o0_smem)
 
         o1_smem, o1_bar, epi_consumer = epi_consumer.acquire()
-        tma.async_copy_shared_to_global(desc_o, [prog.qo_offset_y + config.SPLIT_M * 1, 0], o1_smem)
+        tma.async_store(desc_o, [prog.qo_offset_y + config.SPLIT_M * 1, 0], o1_smem)
 
         tma.store_wait(1)
         mbarrier.arrive(o0_bar, count=1)

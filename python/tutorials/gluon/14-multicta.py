@@ -395,7 +395,7 @@ def two_cta_tcgen05_kernel(a_desc, b_desc, c_desc):
 
     c_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_shape, c_desc.layout)
     c_smem.store(acc.load().to(c_desc.dtype))
-    tma.async_copy_shared_to_global(c_desc, [0, 0], c_smem)
+    tma.async_store(c_desc, [0, 0], c_smem)
 
 
 def run_two_cta_tcgen05(a, b, c):
@@ -514,7 +514,7 @@ def tma_multicast_copy_kernel(in_desc, out_desc):
     tma.async_load(in_desc, [0, 0], bar, smem, multicast=True)
     mbarrier.wait(bar, phase=0, deps=[smem])
 
-    tma.async_copy_shared_to_global(out_desc, [0, 0], smem)
+    tma.async_store(out_desc, [0, 0], smem)
 
 
 def run_tma_multicast_copy(inp, out):
@@ -590,7 +590,7 @@ def tma_tcgen05_kernel(a_desc, b_desc, out_desc, NUM_K_TILES: gl.constexpr, acc_
 
     out_smem = gl.allocate_shared_memory(out_desc.dtype, out_desc.block_shape, out_desc.layout)
     out_smem.store(acc_tmem.load().to(out_desc.dtype))
-    tma.async_copy_shared_to_global(out_desc, [0, 0], out_smem)
+    tma.async_store(out_desc, [0, 0], out_smem)
 
 
 def tma_tcgen05_example(a, b):
@@ -953,7 +953,7 @@ def matmul_epilogue_partition(p):
             acc = acc_sub.load().to(dtype)
             tma.store_wait(pendings=subtile_stages - 1)
             acc_smem.store(acc)
-            tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + split_tile_n * s], acc_smem)
+            tma.async_store(p.c_desc, [off_m, off_n + split_tile_n * s], acc_smem)
             sub_acc_state = sub_acc_state.next()
         mbarrier.arrive(p.acc_empty_bars.index(acc_state.index))
         acc_state = acc_state.next()
