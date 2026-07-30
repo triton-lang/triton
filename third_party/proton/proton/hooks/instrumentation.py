@@ -299,7 +299,7 @@ class InstrumentationHook(Hook):
             total_unit = data["num_warps"]
             uid_num = total_unit if self.mode.sampling_strategy == triton_proton.SAMPLING_STRATEGY.NONE else len(
                 sampled_warps)
-            block_num = int(alloc_size / scratch_mem_size)
+            block_num = alloc_size // scratch_mem_size if scratch_mem_size else 0
 
             # Binary trace layout:
             # +------------------+
@@ -351,5 +351,6 @@ class InstrumentationHook(Hook):
             InstrumentationHook.host_buffer = torch.empty(header_size + alloc_size, dtype=torch.uint8, device="cpu")
             config_portion = InstrumentationHook.host_buffer[:header_size]
             config_portion.copy_(torch.tensor(list(header_bytes), dtype=torch.uint8))
-            data_portion = InstrumentationHook.host_buffer[header_size:].view_as(self.buffer)
-            data_portion.copy_(self.buffer.cpu())
+            if self.buffer is not None:
+                data_portion = InstrumentationHook.host_buffer[header_size:].view_as(self.buffer)
+                data_portion.copy_(self.buffer.cpu())

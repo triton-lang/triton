@@ -2081,3 +2081,126 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     tt.return
   }
 }
+
+// -----
+
+// Cross-CTA subviews must direct every local memory access to the CTA that
+// owns its physical bytes. Runtime selection conservatively reaches both.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 512 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
+  // CHECK-LABEL: @cross_cta_affine_subslice_recipients
+  tt.func public @cross_cta_affine_subslice_recipients(%choose: i1) {
+    // CHECK: %[[AFFINE_PARENT:.*]] = ttg.local_alloc
+    %parent = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x32xi32, #shared, #smem, mutable>
+    // CHECK: %[[LOCAL_VIEW:.*]] = ttg.memdesc_subslice %[[AFFINE_PARENT]][0, 0]
+    %local = ttg.memdesc_subslice %parent [0, 0] : !ttg.memdesc<4x32xi32, #shared, #smem, mutable> -> !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>
+    // CHECK: %[[REMOTE_VIEW:.*]] = ttg.memdesc_subslice %[[AFFINE_PARENT]][2, 0]
+    %remote = ttg.memdesc_subslice %parent [2, 0] : !ttg.memdesc<4x32xi32, #shared, #smem, mutable> -> !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>
+    // CHECK: arith.select {{.*}}, %[[LOCAL_VIEW]], %[[REMOTE_VIEW]]
+    %selected = arith.select %choose, %local, %remote : !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>
+    %indices = arith.constant dense<0> : tensor<2x32xi32, #blocked>
+    %values = arith.constant dense<1> : tensor<2x32xi32, #blocked>
+    // CHECK: ttng.cluster_barrier
+    ttng.cluster_barrier
+    // CHECK: %[[LOCAL_CTAS:.*]] = arith.constant 1 : i32
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[LOCAL_CTAS]])
+    // CHECK: ttg.local_load
+    %l = ttg.local_load %local : !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32> -> tensor<2x32xi32, #blocked>
+    // CHECK: %[[REMOTE_CTAS:.*]] = arith.constant 2 : i32
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[REMOTE_CTAS]])
+    // CHECK: ttg.local_load
+    %r = ttg.local_load %remote : !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32> -> tensor<2x32xi32, #blocked>
+    // CHECK: %[[SELECTED_CTAS:.*]] = arith.constant 3 : i32
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[SELECTED_CTAS]])
+    // CHECK: ttg.local_load
+    %s = ttg.local_load %selected : !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32> -> tensor<2x32xi32, #blocked>
+    // CHECK: %[[STORE_CTAS:.*]] = arith.constant 2 : i32
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[STORE_CTAS]])
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[STORE_CTAS]])
+    // CHECK: ttg.local_store
+    ttg.local_store %values, %remote : tensor<2x32xi32, #blocked> -> !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>
+    // CHECK: %[[GATHER_CTAS:.*]] = arith.constant 2 : i32
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[GATHER_CTAS]])
+    // CHECK: ttg.local_gather
+    %g = ttg.local_gather %remote[%indices] {axis = 1 : i32} : !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>, tensor<2x32xi32, #blocked> -> tensor<2x32xi32, #blocked>
+    // CHECK: %[[SCATTER_CTAS:.*]] = arith.constant 2 : i32
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]])
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]])
+    // CHECK: ttg.local_scatter
+    ttg.local_scatter %remote[%indices], %values {axis = 1 : i32} : !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>, tensor<2x32xi32, #blocked>, tensor<2x32xi32, #blocked>
+    // CHECK: %[[ATOMIC_CTAS:.*]] = arith.constant 2 : i32
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]])
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]])
+    // CHECK: ttg.local_atomic_scatter_rmw
+    %a = ttg.local_atomic_scatter_rmw add, %remote[%indices], %values {axis = 1 : i32} : (!ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>, tensor<2x32xi32, #blocked>, tensor<2x32xi32, #blocked>) -> tensor<2x32xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// A known allocation and an external descriptor share the known state lane;
+// the unknown descriptor additionally covers its dedicated wildcard lane.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @known_and_unknown_descriptor_state
+  tt.func public @known_and_unknown_descriptor_state(%incoming: !ttg.memdesc<16xi32, #shared, #smem, mutable>) {
+    // CHECK: %[[KNOWN:.*]] = ttg.local_alloc
+    %known = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    // CHECK: arith.constant dense<[true, false]> : tensor<2xi1
+    // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK: ttg.local_load %[[KNOWN]]
+    %0 = ttg.local_load %known : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
+    // CHECK: arith.constant dense<true> : tensor<2xi1
+    // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK: ttg.local_load %arg0
+    %1 = ttg.local_load %incoming : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
+    tt.return
+  }
+}
+
+// -----
+
+// An unknown-only module still allocates sanitizer state without fabricating
+// or dynamically comparing a physical allocation base.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @unknown_only_descriptor_state
+  tt.func public @unknown_only_descriptor_state(%incoming: !ttg.memdesc<16xi32, #shared, #smem, mutable>) {
+    // CHECK: arith.constant dense<true> : tensor<1xi1
+    // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK-NOT: tti.experimental_memdesc_to_i32
+    // CHECK: ttg.local_load %arg0
+    %0 = ttg.local_load %incoming : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
+    tt.return
+  }
+}
+
+// -----
+
+// A warp-group wait forwards descriptor provenance to its result while
+// separately preserving its asynchronous read-completion semantics.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @warp_group_wait_preserves_descriptor
+  tt.func public @warp_group_wait_preserves_descriptor() {
+    // CHECK: %[[BUFFER:.*]] = ttg.local_alloc
+    %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_reads
+    // CHECK: %[[WAITED:.*]] = ttng.warp_group_dot_wait %[[BUFFER]]
+    %waited = ttng.warp_group_dot_wait %buffer {pendings = 0 : i32} : !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK: ttg.local_load %[[WAITED]]
+    %value = ttg.local_load %waited : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
+    tt.return
+  }
+}

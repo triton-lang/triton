@@ -625,11 +625,10 @@ Value castSignedIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
   return v;
 }
 
-// Widening a floating-point payload is signed extension. Narrowing folds the
-// discarded high bits into the retained low bits before truncation. Values
-// produced by signed extension have uniform discarded bits, so normalizing by
-// the source sign makes `high` zero and narrowing remains a left inverse of
-// widening.
+// Widening a floating-point payload is signed extension. When narrowing, the
+// xor with the sign extension of the retained low bits vanishes for widened
+// payloads. A repeated odd multiplier folds every discarded residual bit into
+// the high word; a final xor shift diffuses it into the retained low bits.
 Value castFloatPayloadToType(PatternRewriter &rewriter, Location loc, Value v,
                              Type targetTy) {
   if (v.getType() == targetTy)
@@ -648,19 +647,26 @@ Value castFloatPayloadToType(PatternRewriter &rewriter, Location loc, Value v,
   if (homomorphicCasts && homomorphicCasts.getValue())
     return arith::TruncIOp::create(rewriter, loc, targetTy, v);
 
-  Value signShift = getUIntConstantLike(rewriter, loc, v.getType(),
-                                        static_cast<uint64_t>(srcWidth - 1));
-  Value sign = arith::ShRUIOp::create(rewriter, loc, v, signShift);
-  Value zero = getIntConstantLike(rewriter, loc, v.getType(), 0);
-  Value signMask = arith::SubIOp::create(rewriter, loc, zero, sign);
-  Value normalized = arith::XOrIOp::create(rewriter, loc, v, signMask);
-  Value highShift = getUIntConstantLike(rewriter, loc, v.getType(),
-                                        static_cast<uint64_t>(dstWidth));
-  Value high = arith::ShRUIOp::create(rewriter, loc, normalized, highShift);
-  Value multiplier = getIntConstantLike(rewriter, loc, v.getType(), 3511);
-  Value foldedHigh = arith::MulIOp::create(rewriter, loc, high, multiplier);
-  Value folded = arith::XOrIOp::create(rewriter, loc, v, foldedHigh);
-  return arith::TruncIOp::create(rewriter, loc, targetTy, folded);
+  assert(srcWidth <= 64 && "expected at most a 64-bit floating-point payload");
+  uint64_t dstMask = (uint64_t{1} << dstWidth) - 1;
+  uint64_t repeatedMultiplier =
+      (uint64_t{3511} & dstMask) * (~uint64_t{0} / dstMask);
+
+  Value low = arith::TruncIOp::create(rewriter, loc, targetTy, v);
+  Value canonical = arith::ExtSIOp::create(rewriter, loc, v.getType(), low);
+  Value residual = arith::XOrIOp::create(rewriter, loc, v, canonical);
+  Value multiplier =
+      getUIntConstantLike(rewriter, loc, v.getType(), repeatedMultiplier);
+  Value product = arith::MulIOp::create(rewriter, loc, residual, multiplier);
+  Value highShift = getUIntConstantLike(
+      rewriter, loc, v.getType(), static_cast<uint64_t>(srcWidth - dstWidth));
+  Value highWide = arith::ShRUIOp::create(rewriter, loc, product, highShift);
+  Value high = arith::TruncIOp::create(rewriter, loc, targetTy, highWide);
+  Value diffusionShift = getUIntConstantLike(
+      rewriter, loc, targetTy, static_cast<uint64_t>(dstWidth / 2));
+  Value diffusion = arith::ShRUIOp::create(rewriter, loc, high, diffusionShift);
+  Value mixed = arith::XOrIOp::create(rewriter, loc, high, diffusion);
+  return arith::XOrIOp::create(rewriter, loc, low, mixed);
 }
 
 Value castScalarIntToIntLike(PatternRewriter &rewriter, Location loc,
@@ -841,7 +847,7 @@ Value fpsanExp(PatternRewriter &rewriter, Location loc, Value input) {
 
   auto inputI = embedToInt(rewriter, loc, input);
   auto rcpLog2 =
-      getU32ConstantLike(rewriter, loc, inputI.getType(), 0x236ee9bfu);
+      getU32ConstantLike(rewriter, loc, inputI.getType(), 0x26a29a75u);
   auto scaledI = arith::MulIOp::create(rewriter, loc, inputI, rcpLog2);
   return fpsanExp2FromInt(rewriter, loc, scaledI, input.getType());
 }
@@ -1272,6 +1278,9 @@ Value scaleI8ToComputePayload(PatternRewriter &rewriter, Location loc,
 Value castDotScaledScaleToComputePayload(PatternRewriter &rewriter,
                                          Location loc, Value scaleSlice,
                                          FloatType computeElem) {
+  if (isa<Float8E8M0FNUType>(getElementTypeOrSelf(scaleSlice.getType())))
+    scaleSlice = arith::BitcastOp::create(
+        rewriter, loc, getIntTypeLike(scaleSlice.getType()), scaleSlice);
   Type computeIntTy =
       getTypeWithElement(scaleSlice.getType(),
                          IntegerType::get(rewriter.getContext(),
@@ -2097,6 +2106,62 @@ struct Fp4ToFpPattern : public OpRewritePattern<ttg::Fp4ToFpOp> {
     Value result = unpackPackedFp4Tensor(rewriter, loc, op.getSrc(),
                                          op.getAxis(), dstIntTy);
     rewriter.replaceOp(op, unembedToFloat(rewriter, loc, result, dstTy));
+    return success();
+  }
+};
+
+struct PackedArithPattern : public OpRewritePattern<ttng::PackedArithOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttng::PackedArithOp op,
+                                PatternRewriter &rewriter) const override {
+    auto resultTy = op.getType();
+    auto resultIntTy = cast<RankedTensorType>(getIntTypeLike(resultTy));
+    auto loc = op.getLoc();
+
+    SmallVector<Value> payloads;
+    for (Value operand : op.getOperands()) {
+      auto operandTy = cast<RankedTensorType>(operand.getType());
+      if (operandTy.getElementType().isInteger(8)) {
+        payloads.push_back(unpackPackedFp4Tensor(
+            rewriter, loc, operand, ttng::getPackedArithFp4Axis(op),
+            resultIntTy));
+        continue;
+      }
+
+      Value payload = castDotScaledScaleToComputePayload(
+          rewriter, loc, operand, cast<FloatType>(resultTy.getElementType()));
+      if (payload.getType() != resultIntTy)
+        payload =
+            ttg::ConvertLayoutOp::create(rewriter, loc, resultIntTy, payload);
+      payloads.push_back(payload);
+    }
+
+    Value lhs = payloads[0], rhs = payloads[1];
+    Value result;
+    using Kind = ttng::PackedArithOpKind;
+    switch (op.getOpKind()) {
+    case Kind::ADD:
+      result = arith::AddIOp::create(rewriter, loc, lhs, rhs);
+      break;
+    case Kind::SUB:
+      result = arith::SubIOp::create(rewriter, loc, lhs, rhs);
+      break;
+    case Kind::MUL:
+      result = arith::MulIOp::create(rewriter, loc, lhs, rhs);
+      break;
+    case Kind::FMA:
+      lhs = arith::MulIOp::create(rewriter, loc, lhs, rhs);
+      result = arith::AddIOp::create(rewriter, loc, lhs, payloads[2]);
+      break;
+    case Kind::MIN:
+      result = arith::MinSIOp::create(rewriter, loc, lhs, rhs);
+      break;
+    case Kind::MAX:
+      result = arith::MaxSIOp::create(rewriter, loc, lhs, rhs);
+      break;
+    }
+    rewriter.replaceOp(op, unembedToFloat(rewriter, loc, result, resultTy));
     return success();
   }
 };
@@ -3206,8 +3271,9 @@ public:
                  ClampFOpPattern, NegFOpPattern, DivFOpPattern,
                  PreciseDivFOpPattern, RemFOpPattern, FmaPattern, ExpOpPattern,
                  Exp2OpPattern, CosOpPattern, SinOpPattern, ExtFOpPattern,
-                 TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern, DotPattern,
-                 DotScaledPattern>(&getContext());
+                 TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern,
+                 PackedArithPattern, DotPattern, DotScaledPattern>(
+        &getContext());
     patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
     patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);
     patterns.add<UnaryPattern<math::SqrtOp>>(&getContext(), UnaryOpId::Sqrt);

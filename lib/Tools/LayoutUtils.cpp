@@ -271,15 +271,17 @@ LinearLayout renameLinearLayoutDims(
     llvm::DenseMap<StringAttr, StringAttr> result;
     for (auto [oldDim, newDim] : renames) {
       assert(existing.contains(oldDim) && "dimension to rename does not exist");
-      assert(result.try_emplace(oldDim, newDim).second &&
-             "dimension renamed more than once");
+      assert(!result.contains(oldDim) && "dimension renamed more than once");
+      result.try_emplace(oldDim, newDim);
     }
 
     llvm::SmallDenseSet<StringAttr> finalNames;
     for (StringAttr dim : dimNames) {
       StringAttr renamed = result.lookup(dim);
-      assert(finalNames.insert(renamed ? renamed : dim).second &&
+      StringAttr finalName = renamed ? renamed : dim;
+      assert(!finalNames.contains(finalName) &&
              "renaming creates duplicate dimensions");
+      finalNames.insert(finalName);
     }
     return result;
   };
