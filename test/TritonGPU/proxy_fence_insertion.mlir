@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -triton-nvidia-gpu-proxy-fence-insertion='use-buffer-region-alias-analysis=false' --split-input-file -allow-unregistered-dialect | FileCheck %s --check-prefixes=CHECK,LEGACY
-// RUN: triton-opt %s -triton-nvidia-gpu-proxy-fence-insertion --split-input-file -allow-unregistered-dialect | FileCheck %s --check-prefixes=CHECK,REGION
+// RUN: triton-opt %s -triton-nvidia-gpu-proxy-fence-insertion --split-input-file -allow-unregistered-dialect | FileCheck %s --check-prefixes=CHECK,LEGACY
+// RUN: triton-opt %s -triton-nvidia-gpu-buffer-region-proxy-fence-insertion --split-input-file -allow-unregistered-dialect | FileCheck %s --check-prefixes=CHECK,REGION
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
