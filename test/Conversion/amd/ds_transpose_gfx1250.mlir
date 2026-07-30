@@ -65,6 +65,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 
+  // CHECK-LABEL: b4_packed_dim0
+  tt.func @b4_packed_dim0(%arg0: !ttg.memdesc<32x128xi8, #shared, #smem, mutable>, %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // CHECK-COUNT-8: llvm.call_intrinsic "llvm.amdgcn.ds.load.tr4.b64"(%{{.*}}) : (!llvm.ptr<3>) -> vector<2xi32>
+    // CHECK-NOT: ds.load.tr4.b64
+    %1 = amdg.local_load_packed_transposed %arg0 : !ttg.memdesc<32x128xi8, #shared, #smem, mutable> -> tensor<64x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma_b8, kWidth = 16}>>
+
+    %ptr1 = tt.splat %arg1 : !tt.ptr<i8> -> tensor<64x64x!tt.ptr<i8>, #ttg.dot_op<{opIdx = 0, parent = #mma_b8, kWidth = 16}>>
+    tt.store %ptr1, %1 : tensor<64x64x!tt.ptr<i8>, #ttg.dot_op<{opIdx = 0, parent = #mma_b8, kWidth = 16}>>
+    tt.return
+  }
+
+  // CHECK-LABEL: b4_packed_dim1
+  tt.func @b4_packed_dim1(%arg0: !ttg.memdesc<128x32xi8, #shared1, #smem, mutable>, %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // CHECK-COUNT-8: llvm.call_intrinsic "llvm.amdgcn.ds.load.tr4.b64"(%{{.*}}) : (!llvm.ptr<3>) -> vector<2xi32>
+    // CHECK-NOT: ds.load.tr4.b64
+    %1 = amdg.local_load_packed_transposed %arg0 : !ttg.memdesc<128x32xi8, #shared1, #smem, mutable> -> tensor<64x64xi8, #ttg.dot_op<{opIdx = 1, parent = #mma_b8, kWidth = 16}>>
+
+    %ptr1 = tt.splat %arg1 : !tt.ptr<i8> -> tensor<64x64x!tt.ptr<i8>, #ttg.dot_op<{opIdx = 1, parent = #mma_b8, kWidth = 16}>>
+    tt.store %ptr1, %1 : tensor<64x64x!tt.ptr<i8>, #ttg.dot_op<{opIdx = 1, parent = #mma_b8, kWidth = 16}>>
+    tt.return
+  }
+
   //  CHECK-LABEL: no_ds_read_tr
   tt.func @no_ds_read_tr(%arg0: !ttg.memdesc<128x64xi8, #shared1, #smem, mutable>, %arg1: !ttg.memdesc<64x128xi8, #shared, #smem, mutable>, %arg2: !tt.ptr<i8> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
     // CHECK-COUNT-8: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<16xi8>
