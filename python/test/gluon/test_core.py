@@ -5783,28 +5783,15 @@ def test_tma_validcheck_multi_stage():
     # primary phase and progress independently for each stage. This test
     # demonstrates a simple per-stage state-management scheme.
 
-    # Gluon does not support local arrays, so per-stage scalar state is kept in
-    # shared memory.
     @gluon.jit
-    def store_scalar(smem, value):
-        scalar_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0])
-        zero = ttgl.zeros([1], ttgl.int32, scalar_layout)
-        smem.store(ttgl.full_like(zero, value))
-
-    @gluon.jit
-    def load_scalar(smem):
-        scalar_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0])
-        return smem.load(scalar_layout).item()
-
-    @gluon.jit
-    def store_stage_state(stage_state, field: ttgl.constexpr, stage, num_stages: ttgl.constexpr, value):
-        slot: ttgl.constexpr = field * num_stages
-        store_scalar(stage_state.index(slot + stage), value)
-
-    @gluon.jit
-    def load_stage_state(stage_state, field: ttgl.constexpr, stage, num_stages: ttgl.constexpr):
-        slot: ttgl.constexpr = field * num_stages
-        return load_scalar(stage_state.index(slot + stage))
+    def tuple_replace(values, index: ttgl.constexpr, value, size: ttgl.constexpr):
+        result = ()
+        for i in ttgl.static_range(size):
+            if i == index:
+                result += (value, )
+            else:
+                result += (values[i], )
+        return result
 
     @gluon.jit
     def tma_warp(
@@ -5826,23 +5813,9 @@ def test_tma_validcheck_multi_stage():
             layout=smem_layout,
         )
 
-        PRIMARY_PHASE: ttgl.constexpr = 0
-        BLOCKS_COPIED: ttgl.constexpr = 1
-        STAGE_FULL: ttgl.constexpr = 2
-        NUM_STAGE_STATE_FIELDS: ttgl.constexpr = 3
-
-        # Keep track of state[num_stages][num_states] as a one-dimensional
-        # shared-memory array.
-        stage_state = ttgl.allocate_shared_memory(
-            ttgl.int32,
-            [NUM_STAGE_STATE_FIELDS * num_stages, 1],
-            rubin.mbarrier.MBarrierLayout(),
-        )
-
-        for i in range(num_stages):
-            store_stage_state(stage_state, PRIMARY_PHASE, i, num_stages, 0)
-            store_stage_state(stage_state, BLOCKS_COPIED, i, num_stages, 0)
-            store_stage_state(stage_state, STAGE_FULL, i, num_stages, 0)
+        primary_phases = (0, ) * num_stages
+        blocks_copied_by_stage = (0, ) * num_stages
+        stages_full = (0, ) * num_stages
 
         num_blocks = num_elems // block_size
         blocks_per_stage = num_blocks // num_stages
@@ -5865,12 +5838,12 @@ def test_tma_validcheck_multi_stage():
             # Advance every stage once, so a slow stage does not prevent later
             # stages from completing, retrying, or refilling.
             for stage in ttgl.static_range(num_stages):
-                blocks_copied = load_stage_state(stage_state, BLOCKS_COPIED, stage, num_stages)
-                stage_full = load_stage_state(stage_state, STAGE_FULL, stage, num_stages)
+                blocks_copied = blocks_copied_by_stage[stage]
+                stage_full = stages_full[stage]
 
                 if stage_full == 0:
                     # The previous TMA this stage issued hasn't completed or turned out to be invalid
-                    primary_phase = load_stage_state(stage_state, PRIMARY_PHASE, stage, num_stages)
+                    primary_phase = primary_phases[stage]
                     attempt_done, data_valid = rubin.mbarrier.test_wait_validity(
                         bar_full.index(stage),
                         primary_phase,
@@ -5878,13 +5851,14 @@ def test_tma_validcheck_multi_stage():
 
                     if attempt_done == 1:
                         primary_phase ^= 1
-                        store_stage_state(stage_state, PRIMARY_PHASE, stage, num_stages, primary_phase)
+                        primary_phases = tuple_replace(primary_phases, stage, primary_phase, num_stages)
 
                         if data_valid == 1:
                             blocks_copied += 1
                             num_copied += 1
-                            store_stage_state(stage_state, BLOCKS_COPIED, stage, num_stages, blocks_copied)
-                            store_stage_state(stage_state, STAGE_FULL, stage, num_stages, 1)
+                            blocks_copied_by_stage = tuple_replace(blocks_copied_by_stage, stage, blocks_copied,
+                                                                   num_stages)
+                            stages_full = tuple_replace(stages_full, stage, 1, num_stages)
                             stage_full = 1
                         else:
                             request_tma_validcheck_data_update(need_update_ptr)
@@ -5914,7 +5888,7 @@ def test_tma_validcheck_multi_stage():
                             smem.slice(stage, 1, dim=0),
                             report_validity=REPORT_VALIDITY,
                         )
-                        store_stage_state(stage_state, STAGE_FULL, stage, num_stages, 0)
+                        stages_full = tuple_replace(stages_full, stage, 0, num_stages)
 
     @gluon.jit
     def data_init_warp(
