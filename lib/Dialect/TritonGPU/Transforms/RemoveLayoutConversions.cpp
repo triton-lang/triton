@@ -105,9 +105,6 @@ public:
   bool hasProtectedReductionConstraints() const {
     return protectedReductionConstraints;
   }
-  bool hasMultiResultReductionConstraints() const {
-    return multiResultReductionConstraints;
-  }
   bool hasLoopConstraints() const { return loopConstraints; }
   bool hasTensorMemoryConstraints() const { return tensorMemoryConstraints; }
   bool hasStoreBoundaries() const { return storeBoundaries; }
@@ -135,7 +132,6 @@ private:
   bool splitConstraints = false;
   bool reductionConstraints = false;
   bool protectedReductionConstraints = false;
-  bool multiResultReductionConstraints = false;
   bool loopConstraints = false;
   bool tensorMemoryConstraints = false;
   bool storeBoundaries = false;
@@ -155,26 +151,17 @@ public:
            !graph.hasTensorMemoryConstraints();
   }
 
-  bool hasTensorMemoryReductionConstraints() const {
-    return graph.hasTensorMemoryConstraints() && graph.hasReductionConstraints();
-  }
-
   bool useFullObjective() const {
     constexpr unsigned maxFullObjectiveValues = 256;
     return (graph.hasJoinConstraints() || graph.hasSplitConstraints() ||
-            graph.hasReductionConstraints() ||
-            graph.hasMultiResultReductionConstraints() ||
-            hasMemoryFanoutConstraints() ||
-            hasTensorMemoryReductionConstraints()) &&
+            graph.hasReductionConstraints() || hasMemoryFanoutConstraints()) &&
            graph.getNodes().size() <= maxFullObjectiveValues;
   }
 
   bool useComponentSearch() const {
     return graph.hasJoinConstraints() || graph.hasSplitConstraints() ||
-           graph.hasReductionConstraints() ||
-           graph.hasMultiResultReductionConstraints() ||
-           graph.hasLoopConstraints() || hasMemoryFanoutConstraints() ||
-           hasTensorMemoryReductionConstraints();
+           graph.hasReductionConstraints() || graph.hasLoopConstraints() ||
+           hasMemoryFanoutConstraints();
   }
 
   unsigned maxComponentProposals() const {
@@ -311,12 +298,6 @@ private:
   SmallVector<Attribute, 4>
   getUseEncodings(OpOperand &use,
                   const DenseMap<Value, Attribute> &assignments) const;
-  uint64_t getLayoutTransitionCost(Value value, Attribute sourceEncoding,
-                                   Attribute resultEncoding) const;
-  uint64_t getLayoutRegisterPressureCost(Value value, Attribute encoding) const;
-  uint64_t getLayoutReductionCost(Value value, Attribute encoding,
-                                  unsigned axis) const;
-  uint64_t getLayoutExecutionWeight(Operation *op) const;
   uint64_t
   getAssignmentCost(Value value, Attribute encoding,
                     const DenseMap<Value, Attribute> &assignments) const;
@@ -712,10 +693,9 @@ void LayoutConstraintGraph::addOperation(Operation *operation,
   splitConstraints |= isa<SplitOp>(operation);
   loopConstraints |= isa<scf::ForOp, scf::WhileOp>(operation);
   tensorMemoryConstraints |= isa<triton::nvidia_gpu::TMEMLoadOp>(operation);
-  if (auto reduce = dyn_cast<ReduceOp>(operation)) {
+  if (isa<ReduceOp>(operation)) {
     reductionConstraints = true;
     protectedReductionConstraints |= protectedReduction;
-    multiResultReductionConstraints |= reduce->getNumResults() > 1;
   }
 
   if (fixedBoundary) {
@@ -1318,27 +1298,6 @@ uint64_t LayoutCostModel::getExecutionWeight(Operation *op) const {
   return weight;
 }
 
-uint64_t LayoutPropagation::getLayoutTransitionCost(
-    Value value, Attribute sourceEncoding, Attribute resultEncoding) const {
-  return costModel.getTransitionCost(value, sourceEncoding, resultEncoding);
-}
-
-uint64_t
-LayoutPropagation::getLayoutRegisterPressureCost(Value value,
-                                                 Attribute encoding) const {
-  return costModel.getRegisterPressureCost(value, encoding);
-}
-
-uint64_t LayoutPropagation::getLayoutReductionCost(Value value,
-                                                   Attribute encoding,
-                                                   unsigned axis) const {
-  return costModel.getReductionCost(value, encoding, axis);
-}
-
-uint64_t LayoutPropagation::getLayoutExecutionWeight(Operation *op) const {
-  return costModel.getExecutionWeight(op);
-}
-
 Attribute LayoutPropagation::getCachedSourceEncoding(Operation *op,
                                                      Attribute encoding) const {
   auto [cached, inserted] = inferredSourceEncodings.try_emplace(
@@ -1518,15 +1477,16 @@ uint64_t LayoutPropagation::getAssignmentCost(
     const DenseMap<Value, Attribute> &assignments) const {
   uint64_t cost = 0;
   if (Operation *definingOp = value.getDefiningOp())
-    cost += getLayoutRegisterPressureCost(value, encoding) *
-            getLayoutExecutionWeight(definingOp);
+    cost += costModel.getRegisterPressureCost(value, encoding) *
+            costModel.getExecutionWeight(definingOp);
   llvm::SmallDenseMap<Attribute, uint64_t, 8> userWeights;
 
   for (OpOperand &use : value.getUses()) {
-    uint64_t weight = getLayoutExecutionWeight(use.getOwner());
+    uint64_t weight = costModel.getExecutionWeight(use.getOwner());
     if (auto reduce = dyn_cast<ReduceOp>(use.getOwner()))
       cost +=
-          getLayoutReductionCost(value, encoding, reduce.getAxis()) * weight;
+          costModel.getReductionCost(value, encoding, reduce.getAxis()) *
+          weight;
     for (Attribute required : getUseEncodings(use, assignments)) {
       auto [it, inserted] = userWeights.try_emplace(required, weight);
       if (!inserted)
@@ -1535,21 +1495,23 @@ uint64_t LayoutPropagation::getAssignmentCost(
   }
 
   for (const auto &[required, weight] : userWeights)
-    cost += getLayoutTransitionCost(value, encoding, required) * weight;
+    cost += costModel.getTransitionCost(value, encoding, required) * weight;
 
   Operation *definingOp = value.getDefiningOp();
   if (!definingOp)
     return cost;
 
-  uint64_t weight = getLayoutExecutionWeight(definingOp);
+  uint64_t weight = costModel.getExecutionWeight(definingOp);
   if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(definingOp)) {
     auto result = cast<OpResult>(value);
     for (Value tied : getTiedArgs(definingOp, result.getResultNumber())) {
       if (tied == value || !isa<RankedTensorType>(tied.getType()))
         continue;
-      cost += getLayoutTransitionCost(
-                  tied, getAssignedEncoding(tied, assignments), encoding) *
-              weight;
+      cost +=
+          costModel.getTransitionCost(tied,
+                                      getAssignedEncoding(tied, assignments),
+                                      encoding) *
+          weight;
     }
     return cost;
   }
@@ -1564,9 +1526,9 @@ uint64_t LayoutPropagation::getAssignmentCost(
   for (Value operand : definingOp->getOperands()) {
     if (!isa<RankedTensorType>(operand.getType()))
       continue;
-    cost += getLayoutTransitionCost(operand,
-                                    getAssignedEncoding(operand, assignments),
-                                    operandEncoding) *
+    cost += costModel.getTransitionCost(
+                operand, getAssignedEncoding(operand, assignments),
+                operandEncoding) *
             weight;
   }
   return cost;
@@ -1576,12 +1538,12 @@ uint64_t LayoutPropagation::getAssignmentLowerBound(Value value,
                                                    Attribute encoding) const {
   uint64_t cost = 0;
   if (Operation *definingOp = value.getDefiningOp())
-    cost += getLayoutRegisterPressureCost(value, encoding) *
-            getLayoutExecutionWeight(definingOp);
+    cost += costModel.getRegisterPressureCost(value, encoding) *
+            costModel.getExecutionWeight(definingOp);
   for (OpOperand &use : value.getUses())
     if (auto reduce = dyn_cast<ReduceOp>(use.getOwner()))
-      cost += getLayoutReductionCost(value, encoding, reduce.getAxis()) *
-              getLayoutExecutionWeight(use.getOwner());
+      cost += costModel.getReductionCost(value, encoding, reduce.getAxis()) *
+              costModel.getExecutionWeight(use.getOwner());
   return cost;
 }
 
@@ -3351,13 +3313,8 @@ public:
   explicit ScalarRootedLayoutPlan(ConvertLayoutOp root) : root(root) {}
 
   LogicalResult analyze() {
-    if (failed(plan(root.getSrc(), root.getType().getEncoding()))) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "[" DEBUG_TYPE "] producer graph cannot be assigned the "
-                    "required layout for "
-                 << root << '\n');
+    if (failed(plan(root.getSrc(), root.getType().getEncoding())))
       return failure();
-    }
 
     unsigned originalMaterializations = 0;
     for (Operation *op : originalOperations) {
@@ -3367,12 +3324,8 @@ public:
       for (Value result : op->getResults()) {
         for (Operation *user : result.getUsers()) {
           if (user != root.getOperation() &&
-              !originalOperations.contains(user)) {
-            LLVM_DEBUG(llvm::dbgs()
-                       << "[" DEBUG_TYPE "] retaining live shared producer "
-                       << *op << '\n');
+              !originalOperations.contains(user))
             return failure();
-          }
         }
       }
     }
@@ -3383,13 +3336,8 @@ public:
 
     // Do not turn layout optimization into expression duplication. This also
     // keeps graph-shaped joins from growing exponentially.
-    if (newMaterializations > originalMaterializations) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "[" DEBUG_TYPE "] rejecting expression duplication: "
-                 << originalMaterializations << " original operations, "
-                 << newMaterializations << " planned operations\n");
+    if (newMaterializations > originalMaterializations)
       return failure();
-    }
 
     return success();
   }
@@ -3399,11 +3347,6 @@ public:
     Value replacement =
         materialize(root.getSrc(), root.getType().getEncoding(), builder);
     assert(replacement && "a validated layout plan must materialize");
-
-    LLVM_DEBUG(llvm::dbgs()
-               << "[" DEBUG_TYPE "] rematerializing "
-               << originalOperations.size()
-               << " scalar-rooted operations without layout conversions\n");
 
     root.getResult().replaceAllUsesWith(replacement);
     root.erase();
@@ -3419,33 +3362,20 @@ private:
 
   LogicalResult plan(Value value, Attribute encoding) {
     auto type = dyn_cast<RankedTensorType>(value.getType());
-    if (!type || !encoding) {
-      LLVM_DEBUG(llvm::dbgs() << "[" DEBUG_TYPE "] expected an encoded tensor: "
-                              << value << '\n');
+    if (!type || !encoding)
       return failure();
-    }
 
     LayoutValue key{value, encoding};
     if (plannedValues.contains(key))
       return success();
     if (plannedValues.size() >= maxPlannedValues ||
-        !active.insert(key).second) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "[" DEBUG_TYPE "] bounded or cyclic producer graph at "
-                 << value << '\n');
+        !active.insert(key).second)
       return failure();
-    }
 
     Operation *op = value.getDefiningOp();
     if (!op || op->getBlock() != root->getBlock() || op->getNumResults() != 1 ||
-        !isMemoryEffectFree(op)) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "[" DEBUG_TYPE
-                 << "] producer is not a single-result pure operation in the "
-                    "conversion block: "
-                 << value << '\n');
+        !isMemoryEffectFree(op))
       return failure();
-    }
 
     originalOperations.insert(op);
 
@@ -3462,29 +3392,18 @@ private:
       // Their tensor contents are defined by scalar operands or logical
       // indices, so their distributed result layout can be chosen directly.
     } else if (auto constant = dyn_cast<arith::ConstantOp>(op)) {
-      if (!isa<DenseElementsAttr>(constant.getValue())) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "[" DEBUG_TYPE "] unsupported tensor constant: " << *op
-                   << '\n');
+      if (!isa<DenseElementsAttr>(constant.getValue()))
         return failure();
-      }
     } else {
       if (!(op->hasTrait<OpTrait::Elementwise>() ||
             op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
             isa<triton::ReshapeOp, triton::JoinOp, triton::ExpandDimsOp,
-                triton::TransOp, triton::BroadcastOp>(op))) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "[" DEBUG_TYPE "] unsupported producer: " << *op << '\n');
+                triton::TransOp, triton::BroadcastOp>(op)))
         return failure();
-      }
 
       operandEncoding = inferSrcEncoding(op, encoding);
-      if (!operandEncoding) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "[" DEBUG_TYPE "] cannot infer a legal source encoding "
-                   << "for " << *op << " from " << encoding << '\n');
+      if (!operandEncoding)
         return failure();
-      }
     }
 
     for (Value operand : op->getOperands()) {
@@ -3589,20 +3508,13 @@ public:
       return failure();
 
     unsigned conversions = conversionRoot ? 1 : 0;
-    unsigned warpShuffleConversions = 0;
-    unsigned sharedMemoryConversions = 0;
     unsigned joins = 0;
     unsigned originalArithmetic = 0;
+    bool hasCommunication = false;
 
     auto classifyConversion = [&](ConvertLayoutOp convert) {
-      auto sourceType = convert.getSrc().getType();
-      auto resultType = convert.getType();
-      if (cvtReordersRegisters(sourceType, resultType))
-        return;
-      if (cvtNeedsWarpShuffle(sourceType, resultType))
-        ++warpShuffleConversions;
-      else
-        ++sharedMemoryConversions;
+      hasCommunication |=
+          !cvtReordersRegisters(convert.getSrc().getType(), convert.getType());
     };
 
     if (conversionRoot)
@@ -3639,8 +3551,7 @@ public:
     // Index evaluation introduces integer instructions and live values. Do
     // not replace a single conversion, or a chain consisting entirely of
     // thread-local register permutations, with that extra arithmetic.
-    if (joins == 0 || conversions < 2 ||
-        (warpShuffleConversions == 0 && sharedMemoryConversions == 0))
+    if (joins == 0 || conversions < 2 || !hasCommunication)
       return failure();
 
     unsigned plannedArithmetic = 0;
@@ -3951,60 +3862,34 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
   // Propagate fixed anchor layouts across complete functions and structured
   // control flow before resolving competing assignments.
   WalkResult propagationResult = module.walk([&](FuncOp funcOp) -> WalkResult {
-    bool hasProtectedLoop = strategy == LayoutAssignmentStrategy::Global &&
-                            hasProtectedLayoutLoop(funcOp);
-    bool hasProtectedPackedAssembly =
-        strategy == LayoutAssignmentStrategy::Global &&
-        funcOp
-            .walk([](ElementwiseInlineAsmOp inlineAsm) {
-              if (inlineAsm.getPackedElement() > 1)
-                return WalkResult::interrupt();
-              return WalkResult::advance();
-            })
-            .wasInterrupted();
-    bool hasProtectedStore =
-        hasProtectedLoop &&
-        funcOp
-            .walk([](Operation *op) {
-              if (isa<StoreOp, DescriptorStoreLikeOpInterface,
-                      triton::nvidia_gpu::TMAStoreLikeOpInterface>(op))
-                return WalkResult::interrupt();
-              return WalkResult::advance();
-            })
-            .wasInterrupted();
-    bool hasProtectedReductionNetwork =
-        strategy == LayoutAssignmentStrategy::Global &&
-        funcOp
-            .walk([](ReduceOp reduce) {
-              if (isProtectedLayoutReduction(reduce.getOperation()))
-                return WalkResult::interrupt();
-              return WalkResult::advance();
-            })
-            .wasInterrupted();
-    bool hasDescriptorLayoutBoundary =
-        strategy == LayoutAssignmentStrategy::Global &&
-        funcOp
-            .walk([](Operation *op) {
-              if (isa<DescriptorLoadLikeOpInterface>(op))
-                return WalkResult::interrupt();
-              return WalkResult::advance();
-            })
-            .wasInterrupted();
+    bool global = strategy == LayoutAssignmentStrategy::Global;
+    bool hasProtectedLoop = global && hasProtectedLayoutLoop(funcOp);
+    bool hasProtectedPackedAssembly = false;
+    bool hasProtectedStore = false;
+    bool hasProtectedReductionNetwork = false;
+    bool hasDescriptorLayoutBoundary = false;
+    bool hasConvertiblePermutingReshape = false;
+    if (global)
+      funcOp.walk([&](Operation *op) {
+        if (auto inlineAsm = dyn_cast<ElementwiseInlineAsmOp>(op))
+          hasProtectedPackedAssembly |= inlineAsm.getPackedElement() > 1;
+        hasProtectedStore |=
+            hasProtectedLoop &&
+            isa<StoreOp, DescriptorStoreLikeOpInterface,
+                triton::nvidia_gpu::TMAStoreLikeOpInterface>(op);
+        if (auto reduce = dyn_cast<ReduceOp>(op))
+          hasProtectedReductionNetwork |=
+              isProtectedLayoutReduction(reduce.getOperation());
+        hasDescriptorLayoutBoundary |= isa<DescriptorLoadLikeOpInterface>(op);
+        if (auto reshape = dyn_cast<ReshapeOp>(op))
+          hasConvertiblePermutingReshape |=
+              reshape.getAllowReorder() && !reshape.getEfficientLayout() &&
+              reshape.getSrc().getDefiningOp<ConvertLayoutOp>();
+      });
     bool hasPackedMemoryAssembly =
-        strategy == LayoutAssignmentStrategy::Global &&
-        hasPackedMemoryAssemblyProtocol(funcOp);
-    bool hasConvertiblePermutingReshape =
-        strategy == LayoutAssignmentStrategy::Global &&
-        funcOp
-            .walk([](ReshapeOp reshape) {
-              if (reshape.getAllowReorder() && !reshape.getEfficientLayout() &&
-                  reshape.getSrc().getDefiningOp<ConvertLayoutOp>())
-                return WalkResult::interrupt();
-              return WalkResult::advance();
-            })
-            .wasInterrupted();
+        global && hasPackedMemoryAssemblyProtocol(funcOp);
 
-    if (strategy == LayoutAssignmentStrategy::Global &&
+    if (global &&
         (hasProtectedLoop || hasProtectedPackedAssembly ||
          hasProtectedReductionNetwork || hasConvertiblePermutingReshape ||
          hasDescriptorLayoutBoundary || hasPackedMemoryAssembly ||
