@@ -76,6 +76,25 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}
 
 // -----
 
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: tt.func @cluster_barriers
+  tt.func @cluster_barriers() {
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 128 : i32, shared_cluster_state, third_party_allocation, tt.divisibility = 16 : i64} : !tt.ptr<i8>
+    // CHECK-NEXT: tti.experimental_gsan_cluster_barrier_init %[[SCRATCH]] : <i8>
+    // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+    // CHECK: ttng.cluster_barrier
+    // CHECK-NEXT: tti.experimental_gsan_cluster_barrier_sync %[[SCRATCH]] : <i8>
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+    // CHECK-NOT: tti.experimental_gsan_cluster_barrier_sync
+    ttng.cluster_barrier
+    ttng.cluster_barrier {relaxed = true}
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory

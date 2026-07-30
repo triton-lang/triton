@@ -107,6 +107,20 @@ struct AtomicEventState {
   uint8_t numCells;
 };
 
+static constexpr int kMaxClusterCTAs = 16;
+static constexpr int kClusterBarrierScratchBytes = 128;
+
+struct alignas(16) ClusterBarrierState {
+  uint32_t lock;
+  uint32_t arrivalCount;
+  uint32_t publicationCount;
+  uint32_t generation;
+  uint32_t registrationGeneration;
+  thread_id_t threadIds[kMaxClusterCTAs];
+  epoch_t tokens[kMaxClusterCTAs];
+};
+static_assert(sizeof(ClusterBarrierState) <= kClusterBarrierScratchBytes);
+
 // Place the thread state for each device at a fixed stride for ease of
 // address calculation.
 static constexpr uintptr_t kPerDeviceStateStride = 1ull << 30;

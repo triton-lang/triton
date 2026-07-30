@@ -11,6 +11,7 @@
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -34,6 +35,7 @@ static constexpr const char kGSanStreamClockArgAttr[] = "tti.gsan_stream_clock";
 static constexpr const char kGSanKernelIdArgAttr[] = "tti.gsan_kernel_id";
 static constexpr const char kDisableSetMaxRegisterAttr[] =
     "tti.disable_setmaxregister";
+static constexpr int64_t kGSanClusterBarrierScratchBytes = 128;
 
 struct DescriptorInfo {
   Value base;
@@ -365,6 +367,42 @@ static Value getGSanStateForCall(tt::CallOp callOp, Value gsanState) {
   return partitionRegion->getArgument(captureIdx);
 }
 
+static void instrumentClusterBarriers(ModuleOp module) {
+  DenseMap<Region *, SmallVector<ttng::ClusterBarrierOp>> barriersByGroup;
+  SmallVector<Region *> groups;
+  module.walk([&](ttng::ClusterBarrierOp barrier) {
+    if (barrier.getRelaxed())
+      return;
+    Region *group = getClusterBarrierGroupRegion(barrier);
+    auto [it, inserted] = barriersByGroup.try_emplace(group);
+    if (inserted)
+      groups.push_back(group);
+    it->second.push_back(barrier);
+  });
+
+  for (Region *group : groups) {
+    auto &barriers = barriersByGroup[group];
+    Location loc = barriers.front().getLoc();
+    Block &entry = group->front();
+    OpBuilder initBuilder(&entry, entry.begin());
+    Type ptrTy = tt::PointerType::get(initBuilder.getI8Type(), 1);
+    Value scratch = createThirdPartyScratchAlloc(
+        initBuilder, loc, ptrTy, kGSanClusterBarrierScratchBytes,
+        /*alignment=*/16, /*sharedClusterState=*/true);
+    ExperimentalGSanClusterBarrierInitOp::create(initBuilder, loc, scratch);
+    ttng::ClusterBarrierOp::create(initBuilder, loc, /*relaxed=*/true);
+
+    for (ttng::ClusterBarrierOp barrier : barriers) {
+      OpBuilder syncBuilder(barrier);
+      syncBuilder.setInsertionPointAfter(barrier);
+      ExperimentalGSanClusterBarrierSyncOp::create(syncBuilder,
+                                                   barrier.getLoc(), scratch);
+      ttng::ClusterBarrierOp::create(syncBuilder, barrier.getLoc(),
+                                     /*relaxed=*/false);
+    }
+  }
+}
+
 class GlobalSanitizerPass
     : public impl::TritonInstrumentGlobalSanitizerBase<GlobalSanitizerPass> {
 public:
@@ -446,6 +484,10 @@ public:
       callOp->replaceAllUsesWith(newCallOp->getResults());
       callOp.erase();
     }
+
+    // Collect original barriers before inserting any internal barriers so the
+    // initialization and trailing barriers are not recursively instrumented.
+    instrumentClusterBarriers(module);
 
     module.walk([&](Operation *op) {
       IRRewriter b(op);

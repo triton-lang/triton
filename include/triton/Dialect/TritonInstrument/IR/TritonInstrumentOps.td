@@ -137,6 +137,31 @@ def TTI_ExperimentalGSanGridDependencyWaitOp
   let assemblyFormat = "attr-dict";
 }
 
+def TTI_ExperimentalGSanClusterBarrierInitOp
+    : TTI_Op<"experimental_gsan_cluster_barrier_init",
+             [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Initialize a GSan cluster-barrier rendezvous";
+  let description = [{
+    Initializes cluster-shared profile scratch used to synchronize GSan vector
+    clocks. This operation is internal to GSan instrumentation.
+  }];
+  let arguments = (ins TT_Ptr:$scratch);
+  let assemblyFormat = "$scratch attr-dict `:` type($scratch)";
+}
+
+def TTI_ExperimentalGSanClusterBarrierSyncOp
+    : TTI_Op<"experimental_gsan_cluster_barrier_sync",
+             [MemoryEffects<[MemRead<GlobalMemory>,
+                             MemWrite<GlobalMemory>]>]> {
+  let summary = "Synchronize GSan clocks at a cluster barrier";
+  let description = [{
+    Joins the vector clocks of all CTAs participating in a non-relaxed cluster
+    barrier. This operation is internal to GSan instrumentation.
+  }];
+  let arguments = (ins TT_Ptr:$scratch);
+  let assemblyFormat = "$scratch attr-dict `:` type($scratch)";
+}
+
 def TTI_ExperimentalGSanTensorDescInfoOp
     : TTI_Op<"experimental_gsan_tensordesc_info", [Pure]> {
   let summary = "Decode GSan descriptor metadata from a native tensor descriptor";
