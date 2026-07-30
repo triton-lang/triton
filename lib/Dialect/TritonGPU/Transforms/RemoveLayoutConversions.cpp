@@ -80,6 +80,16 @@ private:
 /// remain independent consumers of this graph.
 class LayoutConstraintGraph {
 public:
+  enum Feature : unsigned {
+    Join = 1 << 0,
+    Split = 1 << 1,
+    Reduction = 1 << 2,
+    ProtectedReduction = 1 << 3,
+    Loop = 1 << 4,
+    TensorMemory = 1 << 5,
+    Store = 1 << 6,
+  };
+
   struct Node {
     Value value;
     SmallVector<Attribute, 8> candidates;
@@ -100,15 +110,7 @@ public:
   ArrayRef<Contract> getContracts() const { return contracts; }
   SmallVector<SmallVector<unsigned, 8>, 8> getConnectedComponents() const;
 
-  bool hasJoinConstraints() const { return joinConstraints; }
-  bool hasSplitConstraints() const { return splitConstraints; }
-  bool hasReductionConstraints() const { return reductionConstraints; }
-  bool hasProtectedReductionConstraints() const {
-    return protectedReductionConstraints;
-  }
-  bool hasLoopConstraints() const { return loopConstraints; }
-  bool hasTensorMemoryConstraints() const { return tensorMemoryConstraints; }
-  bool hasStoreBoundaries() const { return storeBoundaries; }
+  bool has(unsigned feature) const { return features & feature; }
   unsigned getTensorLoadBoundaryCount() const {
     return tensorLoadBoundaryCount;
   }
@@ -126,39 +128,33 @@ private:
   SmallVector<Node, 32> nodes;
   SmallVector<Contract, 32> contracts;
   DenseMap<Value, unsigned> indices;
-  bool joinConstraints = false;
-  bool splitConstraints = false;
-  bool reductionConstraints = false;
-  bool protectedReductionConstraints = false;
-  bool loopConstraints = false;
-  bool tensorMemoryConstraints = false;
-  bool storeBoundaries = false;
+  unsigned features = 0;
   unsigned tensorLoadBoundaryCount = 0;
 };
 
 /// Search limits and high-cost graph features are policy, not graph legality.
 class LayoutSearchPolicy {
+  using G = LayoutConstraintGraph;
+
 public:
   explicit LayoutSearchPolicy(const LayoutConstraintGraph &graph)
       : graph(graph) {}
 
   bool hasMemoryFanoutConstraints() const {
     return graph.getTensorLoadBoundaryCount() >= 2 &&
-           !graph.hasJoinConstraints() && !graph.hasSplitConstraints() &&
-           !graph.hasReductionConstraints() && !graph.hasLoopConstraints() &&
-           !graph.hasTensorMemoryConstraints();
+           !graph.has(G::Join | G::Split | G::Reduction | G::Loop |
+                      G::TensorMemory);
   }
 
   bool useFullObjective() const {
     constexpr unsigned maxFullObjectiveValues = 256;
-    return (graph.hasJoinConstraints() || graph.hasSplitConstraints() ||
-            graph.hasReductionConstraints() || hasMemoryFanoutConstraints()) &&
+    return (graph.has(G::Join | G::Split | G::Reduction) ||
+            hasMemoryFanoutConstraints()) &&
            graph.getNodes().size() <= maxFullObjectiveValues;
   }
 
   bool useComponentSearch() const {
-    return graph.hasJoinConstraints() || graph.hasSplitConstraints() ||
-           graph.hasReductionConstraints() || graph.hasLoopConstraints() ||
+    return graph.has(G::Join | G::Split | G::Reduction | G::Loop) ||
            hasMemoryFanoutConstraints();
   }
 
@@ -170,15 +166,14 @@ public:
     constexpr unsigned maxExactGraphValues = 64;
     return useFullObjective() &&
            graph.getTensorLoadBoundaryCount() > 0 &&
-           !graph.hasStoreBoundaries() &&
+           !graph.has(G::Store) &&
            graph.getNodes().size() <= maxExactGraphValues;
   }
 
   unsigned maxExactComponentStates() const { return 256; }
 
   bool pruneRedundantReductionProposals() const {
-    return graph.hasReductionConstraints() &&
-           !graph.hasProtectedReductionConstraints();
+    return graph.has(G::Reduction) && !graph.has(G::ProtectedReduction);
   }
 
 private:
@@ -454,68 +449,74 @@ bool isLayoutAnchor(Operation *op) {
   return false;
 }
 
-static bool hasPairwiseFp8ReductionMemoryProtocol(FuncOp funcOp) {
-  bool hasPairwiseReduction = false;
-  bool hasWideScalarReduction = false;
-  bool hasWideFp8Load = false;
-  unsigned stores = 0;
-  funcOp.walk([&](Operation *op) {
-    if (auto reduce = dyn_cast<ReduceOp>(op)) {
-      auto type = dyn_cast<RankedTensorType>(reduce->getOperand(0).getType());
-      if (!type)
-        return;
-      hasPairwiseReduction |=
-          type.getRank() == 2 && type.getDimSize(reduce.getAxis()) == 2;
-      hasWideScalarReduction |=
-          type.getRank() == 1 && type.getDimSize(0) >= 128 &&
-          !isa<RankedTensorType>(reduce->getResult(0).getType());
-    } else if (auto load = dyn_cast<LoadOp>(op)) {
-      auto type = dyn_cast<RankedTensorType>(load.getType());
-      hasWideFp8Load |=
-          type && type.getRank() == 2 && type.getDimSize(1) >= 128 &&
-          isa<Float8E5M2Type, Float8E4M3FNType>(type.getElementType());
-    } else if (isa<StoreOp>(op)) {
-      ++stores;
-    }
-  });
-  return hasPairwiseReduction && hasWideScalarReduction && hasWideFp8Load &&
-         stores == 1;
-}
+static bool isProtectedLayoutReduction(Operation *op);
 
-static bool hasPackedMemoryAssemblyProtocol(FuncOp funcOp) {
-  unsigned rankedTensorLoadCount = 0;
-  unsigned storeCount = 0;
-  unsigned reshapeCount = 0;
-  bool hasPackedJoin = false;
-  bool hasFp8TensorLoad = false;
-  bool hasI8ScaleLoad = false;
-  bool hasComplexPackedBoundary = false;
+struct LayoutMemoryProfile {
+  unsigned tensorLoads = 0, stores = 0, reshapes = 0;
+  bool pairwiseReduction = false, wideScalarReduction = false;
+  bool wideFp8Load = false, fp8Load = false, i8Load = false;
+  bool join = false, complexBoundary = false;
+  bool packedAssembly = false, protectedReduction = false;
+  bool descriptorLoad = false, permutingReshape = false, hardwareStore = false;
+
+  bool hasPairwiseReductionProtocol() const {
+    return pairwiseReduction && wideScalarReduction && wideFp8Load &&
+           stores == 1;
+  }
+
+  bool hasPackedAssemblyProtocol() const {
+    return (tensorLoads == 2 ||
+            (tensorLoads == 3 && join && fp8Load && i8Load)) &&
+           stores == 1 && (join || (fp8Load && i8Load && reshapes == 4)) &&
+           !complexBoundary;
+  }
+};
+
+static LayoutMemoryProfile getLayoutMemoryProfile(FuncOp funcOp) {
+  LayoutMemoryProfile profile;
   funcOp.walk([&](Operation *op) {
     if (auto load = dyn_cast<LoadOp>(op)) {
       if (auto tensor = dyn_cast<RankedTensorType>(load.getType())) {
-        ++rankedTensorLoadCount;
-        hasFp8TensorLoad |= isa<Float8E4M3FNType>(tensor.getElementType());
-        hasI8ScaleLoad |= tensor.getElementType().isInteger(8);
+        ++profile.tensorLoads;
+        profile.fp8Load |= isa<Float8E4M3FNType>(tensor.getElementType());
+        profile.i8Load |= tensor.getElementType().isInteger(8);
+        profile.wideFp8Load |=
+            tensor.getRank() == 2 && tensor.getDimSize(1) >= 128 &&
+            isa<Float8E5M2Type, Float8E4M3FNType>(tensor.getElementType());
       }
     } else if (isa<StoreOp>(op)) {
-      ++storeCount;
+      ++profile.stores;
+      profile.hardwareStore = true;
     } else if (isa<JoinOp>(op)) {
-      hasPackedJoin = true;
-    } else if (isa<ReshapeOp>(op)) {
-      ++reshapeCount;
-    } else if (isa<ReduceOp, scf::ForOp, scf::WhileOp,
-                   DescriptorLoadLikeOpInterface>(op)) {
-      hasComplexPackedBoundary = true;
+      profile.join = true;
+    } else if (auto reshape = dyn_cast<ReshapeOp>(op)) {
+      ++profile.reshapes;
+      profile.permutingReshape |=
+          reshape.getAllowReorder() && !reshape.getEfficientLayout() &&
+          reshape.getSrc().getDefiningOp<ConvertLayoutOp>();
+    } else if (auto reduce = dyn_cast<ReduceOp>(op)) {
+      profile.complexBoundary = true;
+      profile.protectedReduction |= isProtectedLayoutReduction(op);
+      if (auto tensor =
+              dyn_cast<RankedTensorType>(reduce->getOperand(0).getType())) {
+        profile.pairwiseReduction |=
+            tensor.getRank() == 2 && tensor.getDimSize(reduce.getAxis()) == 2;
+        profile.wideScalarReduction |=
+            tensor.getRank() == 1 && tensor.getDimSize(0) >= 128 &&
+            !isa<RankedTensorType>(reduce->getResult(0).getType());
+      }
+    } else if (auto inlineAsm = dyn_cast<ElementwiseInlineAsmOp>(op)) {
+      profile.packedAssembly |= inlineAsm.getPackedElement() > 1;
+    } else if (isa<DescriptorLoadLikeOpInterface>(op)) {
+      profile.descriptorLoad = profile.complexBoundary = true;
+    } else if (isa<DescriptorStoreLikeOpInterface,
+                   triton::nvidia_gpu::TMAStoreLikeOpInterface>(op)) {
+      profile.hardwareStore = true;
+    } else if (isa<scf::ForOp, scf::WhileOp>(op)) {
+      profile.complexBoundary = true;
     }
   });
-
-  return (rankedTensorLoadCount == 2 ||
-          (rankedTensorLoadCount == 3 && hasPackedJoin && hasFp8TensorLoad &&
-           hasI8ScaleLoad)) &&
-         storeCount == 1 &&
-         (hasPackedJoin ||
-          (hasFp8TensorLoad && hasI8ScaleLoad && reshapeCount == 4)) &&
-         !hasComplexPackedBoundary;
+  return profile;
 }
 
 static bool isProtectedLayoutReduction(Operation *op) {
@@ -677,16 +678,21 @@ void LayoutConstraintGraph::addOperation(Operation *operation) {
         isa<RankedTensorType>(load->getResult(0).getType()))
       ++tensorLoadBoundaryCount;
   } else if (isa<StoreOp>(operation)) {
-    storeBoundaries = true;
+    features |= Store;
   }
 
-  joinConstraints |= isa<JoinOp>(operation);
-  splitConstraints |= isa<SplitOp>(operation);
-  loopConstraints |= isa<scf::ForOp, scf::WhileOp>(operation);
-  tensorMemoryConstraints |= isa<triton::nvidia_gpu::TMEMLoadOp>(operation);
+  if (isa<JoinOp>(operation))
+    features |= Join;
+  if (isa<SplitOp>(operation))
+    features |= Split;
+  if (isa<scf::ForOp, scf::WhileOp>(operation))
+    features |= Loop;
+  if (isa<triton::nvidia_gpu::TMEMLoadOp>(operation))
+    features |= TensorMemory;
   if (isa<ReduceOp>(operation)) {
-    reductionConstraints = true;
-    protectedReductionConstraints |= isProtectedLayoutReduction(operation);
+    features |= Reduction;
+    if (isProtectedLayoutReduction(operation))
+      features |= ProtectedReduction;
   }
 
   if (isFixedLayoutBoundary(operation))
@@ -746,6 +752,7 @@ void LayoutPropagation::initAnchorLayout() {
   }
 
   if (strategy == LayoutAssignmentStrategy::Global) {
+    LayoutMemoryProfile memory = getLayoutMemoryProfile(funcOp);
     auto protectMemoryAddresses = [&](bool includeLoads) {
       DenseSet<Value> visited;
       SmallVector<Value> worklist;
@@ -776,7 +783,7 @@ void LayoutPropagation::initAnchorLayout() {
       }
     };
 
-    if (hasPairwiseFp8ReductionMemoryProtocol(funcOp)) {
+    if (memory.hasPairwiseReductionProtocol()) {
       funcOp.walk([&](Operation *op) {
         for (Value result : op->getResults())
           addAnchor(result);
@@ -786,7 +793,7 @@ void LayoutPropagation::initAnchorLayout() {
               addAnchor(argument);
       });
     }
-    if (hasPackedMemoryAssemblyProtocol(funcOp)) {
+    if (memory.hasPackedAssemblyProtocol()) {
       // Packed MX kernels independently rematerialize the address and mask
       // of each load and store. Preserve those established memory slices while
       // leaving their loaded and stored data available for global assignment.
@@ -1823,14 +1830,10 @@ void LayoutAssignmentSolver::solve(const LayoutConstraintGraph &graph,
     if (component.size() < 2)
       continue;
     unsigned states = 1;
-    for (unsigned index : component) {
-      unsigned candidates = graph.getNodes()[index].candidates.size();
-      if (states > policy.maxExactComponentStates() / candidates) {
-        states = policy.maxExactComponentStates() + 1;
+    for (unsigned index : component)
+      if ((states *= graph.getNodes()[index].candidates.size()) >
+          policy.maxExactComponentStates())
         break;
-      }
-      states *= candidates;
-    }
     if (states > policy.maxExactComponentStates())
       continue;
 
@@ -3140,16 +3143,16 @@ void hoistConvert(ModuleOp module, bool disableRematSplitting) {
   });
 }
 
-LogicalResult cleanupLayoutConversions(ModuleOp module) {
-  MLIRContext *context = module.getContext();
+LogicalResult cleanupLayoutConversions(Operation *operation) {
+  MLIRContext *context = operation->getContext();
   RewritePatternSet patterns(context);
   ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
-  if (failed(applyPatternsGreedily(module, std::move(patterns))))
+  if (failed(applyPatternsGreedily(operation, std::move(patterns))))
     return failure();
 
   LLVM_DEBUG({
     DBGS() << "Module after canonicalizing:\n";
-    module.dump();
+    operation->dump();
   });
   return success();
 }
@@ -3173,13 +3176,9 @@ public:
       if (!isa<ConvertLayoutOp>(op))
         ++originalMaterializations;
 
-      for (Value result : op->getResults()) {
-        for (Operation *user : result.getUsers()) {
-          if (user != root.getOperation() &&
-              !originalOperations.contains(user))
-            return failure();
-        }
-      }
+      for (Operation *user : op->getUsers())
+        if (user != root.getOperation() && !originalOperations.contains(user))
+          return failure();
     }
 
     unsigned newMaterializations = 0;
@@ -3377,15 +3376,12 @@ public:
       if (isRematerializableLeaf(op))
         continue;
 
-      for (Value result : op->getResults()) {
-        for (Operation *user : result.getUsers()) {
-          if (user == insertionPoint) {
-            if (result != rootValue)
-              return failure();
-            continue;
-          }
-          if (!originalOperations.contains(user))
+      for (Operation *user : op->getUsers()) {
+        if (user == insertionPoint) {
+          if (op->getResult(0) != rootValue)
             return failure();
+        } else if (!originalOperations.contains(user)) {
+          return failure();
         }
       }
     }
@@ -3653,37 +3649,17 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
   // control flow before resolving competing assignments.
   WalkResult propagationResult = module.walk([&](FuncOp funcOp) -> WalkResult {
     bool global = strategy == LayoutAssignmentStrategy::Global;
+    LayoutMemoryProfile memory =
+        global ? getLayoutMemoryProfile(funcOp) : LayoutMemoryProfile{};
     bool hasProtectedLoop = global && hasProtectedLayoutLoop(funcOp);
-    bool hasProtectedPackedAssembly = false;
-    bool hasProtectedStore = false;
-    bool hasProtectedReductionNetwork = false;
-    bool hasDescriptorLayoutBoundary = false;
-    bool hasConvertiblePermutingReshape = false;
-    if (global)
-      funcOp.walk([&](Operation *op) {
-        if (auto inlineAsm = dyn_cast<ElementwiseInlineAsmOp>(op))
-          hasProtectedPackedAssembly |= inlineAsm.getPackedElement() > 1;
-        hasProtectedStore |=
-            hasProtectedLoop &&
-            isa<StoreOp, DescriptorStoreLikeOpInterface,
-                triton::nvidia_gpu::TMAStoreLikeOpInterface>(op);
-        if (auto reduce = dyn_cast<ReduceOp>(op))
-          hasProtectedReductionNetwork |=
-              isProtectedLayoutReduction(reduce.getOperation());
-        hasDescriptorLayoutBoundary |= isa<DescriptorLoadLikeOpInterface>(op);
-        if (auto reshape = dyn_cast<ReshapeOp>(op))
-          hasConvertiblePermutingReshape |=
-              reshape.getAllowReorder() && !reshape.getEfficientLayout() &&
-              reshape.getSrc().getDefiningOp<ConvertLayoutOp>();
-      });
-    bool hasPackedMemoryAssembly =
-        global && hasPackedMemoryAssemblyProtocol(funcOp);
+    bool hasProtectedStore = hasProtectedLoop && memory.hardwareStore;
+    bool hasPackedMemoryAssembly = global && memory.hasPackedAssemblyProtocol();
 
     if (global &&
-        (hasProtectedLoop || hasProtectedPackedAssembly ||
-         hasProtectedReductionNetwork || hasConvertiblePermutingReshape ||
-         hasDescriptorLayoutBoundary || hasPackedMemoryAssembly ||
-         hasPairwiseFp8ReductionMemoryProtocol(funcOp))) {
+        (hasProtectedLoop || memory.packedAssembly ||
+         memory.protectedReduction || memory.permutingReshape ||
+         memory.descriptorLoad || hasPackedMemoryAssembly ||
+         memory.hasPairwiseReductionProtocol())) {
       // Establish the incumbent layout for protected hardware, packed
       // register and memory assembly, reduction protocols, descriptor loads,
       // and permuting views before optimizing the remaining components.
@@ -3695,12 +3671,10 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
       legacyPropagation.rewrite();
 
       if (hasProtectedStore || hasPackedMemoryAssembly ||
-          hasConvertiblePermutingReshape) {
+          memory.permutingReshape) {
         // Expose the incumbent's rematerializable memory addresses and
         // explicitly permuting reshapes before fixing their boundaries.
-        RewritePatternSet patterns(context);
-        ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
-        if (failed(applyPatternsGreedily(funcOp, std::move(patterns))))
+        if (failed(cleanupLayoutConversions(funcOp)))
           return WalkResult::interrupt();
       }
 
@@ -3716,9 +3690,7 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
                 disableRematSplitting);
           }
           if (changed) {
-            RewritePatternSet patterns(context);
-            ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
-            if (failed(applyPatternsGreedily(funcOp, std::move(patterns))))
+            if (failed(cleanupLayoutConversions(funcOp)))
               return WalkResult::interrupt();
           }
         } while (changed);
@@ -3766,9 +3738,7 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
 
   runDeadIterArgElimination(module);
 
-  RewritePatternSet convertCleanup(context);
-  ConvertLayoutOp::getCanonicalizationPatterns(convertCleanup, context);
-  if (failed(applyPatternsGreedily(module, std::move(convertCleanup))))
+  if (failed(cleanupLayoutConversions(module)))
     return failure();
 
   // Structured-control-flow canonicalization is best effort.
