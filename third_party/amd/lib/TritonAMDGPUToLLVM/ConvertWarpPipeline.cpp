@@ -291,12 +291,16 @@ static bool hasDotOp(Block *block) {
   return foundDot;
 }
 
+// On CDNA4 four-stage pingpong attention kernels benefit from placing the
+// cluster-0 wraparound barrier at the loop head, while keeping the `setprio` at
+// section ends.  We limit this to matching on CDNA4 without explicit barrier
+// placement in the source, and with the four-stage pingpong design.
 static bool shouldPlaceBackedgeBarrierAtHead(
-    const mlir::triton::AMD::TargetInfo &targetInfo,
-    ArrayRef<Operation *> clusterOps, ArrayRef<Block *> clusterBlocks,
-    ArrayRef<bool> bars, bool hasTopBarrier, bool hasBottomBarrier) {
-  if (targetInfo.getArch() != "gfx950" || hasTopBarrier || hasBottomBarrier ||
-      clusterOps.size() != 4 || bars.empty() || !bars[0])
+    triton::amdgpu::ISAFamily isaFamily, ArrayRef<Operation *> clusterOps,
+    ArrayRef<Block *> clusterBlocks, ArrayRef<bool> bars, bool hasTopBarrier,
+    bool hasBottomBarrier) {
+  if (isaFamily != triton::amdgpu::ISAFamily::CDNA4 || hasTopBarrier ||
+      hasBottomBarrier || clusterOps.size() != 4 || bars.empty() || !bars[0])
     return false;
 
   for (auto [i, clusterOp] : llvm::enumerate(clusterOps)) {
@@ -352,11 +356,11 @@ class ConvertPipelinedForPattern : public OpRewritePattern<scf::ForOp> {
 public:
   ConvertPipelinedForPattern(MLIRContext *ctx, ModuleAllocation &moduleAlloc,
                              int threadsPerPipelineGroup,
-                             const mlir::triton::AMD::TargetInfo &targetInfo)
+                             triton::amdgpu::ISAFamily isaFamily)
       : OpRewritePattern<scf::ForOp>(ctx, /*benefit=*/2),
         moduleAllocation(moduleAlloc),
-        threadsPerPipelineGroup(threadsPerPipelineGroup),
-        targetInfo(targetInfo) {}
+        threadsPerPipelineGroup(threadsPerPipelineGroup), isaFamily(isaFamily) {
+  }
 
   LogicalResult matchAndRewrite(scf::ForOp forOp,
                                 PatternRewriter &rewriter) const override {
@@ -437,7 +441,7 @@ private:
     // 3. Circular dependency analysis (wrap-around for loop pipelines).
     analyzePipelineDependencies(clusterInfo, bars, allocation,
                                 /*circular=*/true);
-    if (shouldPlaceBackedgeBarrierAtHead(targetInfo, clusterOps, clusterBlocks,
+    if (shouldPlaceBackedgeBarrierAtHead(isaFamily, clusterOps, clusterBlocks,
                                          bars, hasTopBarrier, hasBottomBarrier))
       hasTopBarrier = true;
 
@@ -501,7 +505,7 @@ private:
 
   ModuleAllocation &moduleAllocation;
   int threadsPerPipelineGroup;
-  const mlir::triton::AMD::TargetInfo &targetInfo;
+  triton::amdgpu::ISAFamily isaFamily;
 };
 
 class InlineWarpPipelineExecuteRegionPattern
@@ -1021,7 +1025,8 @@ public:
     };
     ModuleAllocation moduleAllocation(m, allocationFn, partitionSize);
 
-    if (targetInfo.getISAFamily() == triton::amdgpu::ISAFamily::Unknown) {
+    auto isaFamily = targetInfo.getISAFamily();
+    if (isaFamily == triton::amdgpu::ISAFamily::Unknown) {
       m.emitError("unsupported target: '") << gfxArch.getValue() << "'";
       return signalPassFailure();
     }
@@ -1048,7 +1053,7 @@ public:
     RewritePatternSet patternFor(&getContext());
     RewritePatternSet patternInline(&getContext());
     patternFor.add<ConvertPipelinedForPattern>(
-        &getContext(), moduleAllocation, threadsPerPipelineGroup, targetInfo);
+        &getContext(), moduleAllocation, threadsPerPipelineGroup, isaFamily);
     patternInline.add<InlineWarpPipelineExecuteRegionPattern>(&getContext());
 
     if (failed(applyPatternsGreedily(m, std::move(patternFor))))
