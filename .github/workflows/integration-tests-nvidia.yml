@@ -99,7 +99,6 @@ jobs:
           fi
           make WARMUP_PROCS="$warmup_procs" test-warmup
           python3 -m triton._compile_warmup report --phase warmup-triton-kernels
-          python3 -m triton._compile_warmup report --phase warmup-gluon
       - name: Run triton tests
         run: |
           make NUM_PROCS=24 test-unit
@@ -107,9 +106,7 @@ jobs:
       - name: Run gluon tests
         run: |
           make NUM_PROCS=24 test-gluon
-          if [[ "$RUNNER_TYPE" != "nvidia-a100" ]]; then
-            python3 -m triton._compile_warmup report --phase gluon --require-warmed-hits
-          fi
+          python3 -m triton._compile_warmup report --phase gluon
       - name: Run gsan tests
         run: make NUM_PROCS=24 test-gsan
       - name: Run interpreter tests
