@@ -162,7 +162,7 @@ MemDescFootprint getMemDescAddresses(
   for (auto [dim, dimSize] : llvm::zip_equal(dims, shape)) {
     unsigned numBits = llvm::Log2_64(dimSize);
     for (unsigned bit = 0; bit < numBits; ++bit) {
-      auto basis = [&](StringAttr name) {
+      auto basis = [&, dim = dim](StringAttr name) {
         return inverse.hasOutDim(name)
                    ? static_cast<uint32_t>(inverse.getBasis(dim, bit, name))
                    : 0;
