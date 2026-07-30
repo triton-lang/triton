@@ -230,12 +230,7 @@ public:
 //    analysis phase.
 class LayoutPropagation {
 public:
-  // Structure to keep track of the layout associated to a value.
-  struct LayoutInfo {
-    LayoutInfo(Attribute encoding) { encodings.insert(encoding); }
-    LayoutInfo() {}
-    llvm::SmallSetVector<Attribute, 8> encodings;
-  };
+  using LayoutInfo = llvm::SmallSetVector<Attribute, 8>;
   LayoutPropagation(FuncOp F, LayoutAssignmentStrategy strategy)
       : funcOp(F), strategy(strategy) {}
   // Find the anchor ops and set their layout in the data structure.
@@ -714,7 +709,7 @@ LayoutConstraintGraph::getConnectedComponents() const {
 void LayoutPropagation::initAnchorLayout() {
   auto addAnchor = [&](Value v) {
     if (auto tensorType = dyn_cast<RankedTensorType>(v.getType())) {
-      layouts.insert({v, LayoutInfo(tensorType.getEncoding())});
+      layouts[v].insert(tensorType.getEncoding());
       fixedLayouts.insert(v);
     }
   };
@@ -896,12 +891,11 @@ bool LayoutPropagation::addEncoding(Value value, Attribute encoding) {
 
     constexpr unsigned maxGlobalLayoutCandidates = 16;
     LayoutInfo &info = layouts[value];
-    if (!info.encodings.contains(encoding) &&
-        info.encodings.size() >= maxGlobalLayoutCandidates)
+    if (!info.contains(encoding) && info.size() >= maxGlobalLayoutCandidates)
       return false;
   }
 
-  return layouts[value].encodings.insert(encoding);
+  return layouts[value].insert(encoding);
 }
 
 void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
@@ -911,7 +905,7 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
     if (!isa<RankedTensorType>(value.getType()))
       continue;
     bool hasChanged = false;
-    for (auto encoding : info.encodings) {
+    for (auto encoding : info) {
       Attribute dstEncoding;
       if (isa<ConvertLayoutOp>(op)) {
         // Try to remove the convert by making the dst encoding match the source
@@ -1008,7 +1002,7 @@ SmallVector<Value> LayoutPropagation::propagateToOperands(Value value,
         changed.push_back(operand);
   };
 
-  for (Attribute encoding : info.encodings) {
+  for (Attribute encoding : info) {
     if (auto result = dyn_cast<OpResult>(value)) {
       Operation *op = result.getOwner();
       if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(op)) {
@@ -1062,8 +1056,8 @@ void LayoutPropagation::propagateLayout() {
 
     LLVM_DEBUG({
       DBGS() << "propagateLayout considering " << currentValue << ", which has "
-             << info.encodings.size() << " candidate encoding(s):\n";
-      for (Attribute encoding : info.encodings)
+             << info.size() << " candidate encoding(s):\n";
+      for (Attribute encoding : info)
         DBGS() << "  " << encoding << "\n";
       DBGS() << "changed: " << changed.size() << "\n";
     });
@@ -1079,22 +1073,22 @@ void LayoutPropagation::resolveConflicts() {
   for (auto &it : layouts) {
     Operation *op = it.first.getDefiningOp();
     LayoutInfo &info = it.second;
-    if (info.encodings.size() <= 1)
+    if (info.size() <= 1)
       continue;
     // Hacky resolve, prefer block encoding.
     // TODO: add a proper heuristic.
-    Attribute encoding = *info.encodings.begin();
+    Attribute encoding = *info.begin();
     bool isLoadOrStore =
         op && isa<LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp>(op);
-    for (Attribute e : info.encodings) {
+    for (Attribute e : info) {
       if ((isLoadOrStore && isa<BlockedEncodingAttr>(e)) ||
           (!isLoadOrStore && isa<MmaEncodingTrait>(e))) {
         encoding = e;
         break;
       }
     }
-    info.encodings.clear();
-    info.encodings.insert(encoding);
+    info.clear();
+    info.insert(encoding);
   }
 }
 
@@ -1518,7 +1512,7 @@ bool LayoutPropagation::buildGlobalComponentProposal(
       return true;
 
     auto found = layouts.find(value);
-    if (found == layouts.end() || !found->second.encodings.contains(candidate))
+    if (found == layouts.end() || !found->second.contains(candidate))
       return true;
 
     // A physical input or memory boundary remains fixed. Its disagreement is
@@ -1840,20 +1834,19 @@ void LayoutPropagation::resolveGlobalConflicts() {
   DenseMap<Value, Attribute> assignments;
   bool hasFlexibleLayouts = false;
   for (auto &[value, info] : layouts) {
-    if (info.encodings.empty())
+    if (info.empty())
       continue;
     Attribute original = cast<RankedTensorType>(value.getType()).getEncoding();
-    info.encodings.insert(original);
+    info.insert(original);
     assignments.try_emplace(value, original);
     hasFlexibleLayouts |=
-        !fixedLayouts.contains(value) && info.encodings.size() > 1;
+        !fixedLayouts.contains(value) && info.size() > 1;
   }
 
   if (hasFlexibleLayouts) {
     LayoutConstraintGraph graph;
     for (const auto &[value, info] : layouts)
-      graph.addNode(value, info.encodings.getArrayRef(),
-                    fixedLayouts.contains(value));
+      graph.addNode(value, info.getArrayRef(), fixedLayouts.contains(value));
     funcOp.walk([&](Operation *op) { graph.addOperation(op); });
     LayoutSearchPolicy policy(graph);
     LDBG("resolving " << layouts.size() << " layout values with "
@@ -1888,8 +1881,8 @@ void LayoutPropagation::resolveGlobalConflicts() {
     Attribute encoding = assignments.lookup(value);
     if (!encoding)
       continue;
-    info.encodings.clear();
-    info.encodings.insert(encoding);
+    info.clear();
+    info.insert(encoding);
   }
 }
 
@@ -1900,7 +1893,7 @@ void LayoutPropagation::dump() {
     flags.skipRegions();
     it.first.print(llvm::errs(), flags);
     llvm::errs() << " \n encoding:\n";
-    for (auto encoding : it.second.encodings) {
+    for (auto encoding : it.second) {
       encoding.print(llvm::errs());
       llvm::errs() << "\n";
     }
@@ -1924,11 +1917,11 @@ void LayoutPropagation::rewriteRegion(Region &region) {
         if (it == layouts.end())
           continue;
         LayoutInfo &info = it->second;
-        assert(info.encodings.size() == 1 &&
+        assert(info.size() == 1 &&
                "we should have resolved to a single encoding");
         auto encoding = cast<RankedTensorType>(result.getType()).getEncoding();
         // If the encoding is already what we want skip.
-        if (encoding == *info.encodings.begin())
+        if (encoding == *info.begin())
           continue;
         needRewrite = true;
       }
@@ -2001,7 +1994,7 @@ void LayoutPropagation::rewriteGenericOpInPlace(Operation *op,
       auto it = layouts.find(operand);
       if (it == layouts.end())
         continue;
-      Attribute enc = it->second.encodings[0];
+      Attribute enc = it->second[0];
       if (inferDstEncoding(op, enc) == encoding) {
         operandEnc = enc;
         break;
@@ -2033,7 +2026,7 @@ void LayoutPropagation::rewriteForOp(scf::ForOp forOp) {
     auto it = layouts.find(result);
     if (it == layouts.end())
       continue;
-    Attribute encoding = it->second.encodings[0];
+    Attribute encoding = it->second[0];
     Value convertedOperand = getValueAs(operand, encoding);
     forOp.getInitArgsMutable()[i].assign(convertedOperand);
     setEncodingInPlace(result, encoding);
@@ -2047,7 +2040,7 @@ void LayoutPropagation::rewriteWhileOp(scf::WhileOp whileOp) {
     auto it = layouts.find(beforeArg);
     if (it == layouts.end())
       continue;
-    Attribute encoding = it->second.encodings[0];
+    Attribute encoding = it->second[0];
     Value convertedOperand = getValueAs(operand, encoding);
     whileOp->setOperand(i, convertedOperand);
     setEncodingInPlace(beforeArg, encoding);
@@ -2058,7 +2051,7 @@ void LayoutPropagation::rewriteWhileOp(scf::WhileOp whileOp) {
     auto it = layouts.find(result);
     if (it == layouts.end())
       continue;
-    Attribute encoding = it->second.encodings[0];
+    Attribute encoding = it->second[0];
     setEncodingInPlace(result, encoding);
     setEncodingInPlace(afterArg, encoding);
   }
@@ -2069,7 +2062,7 @@ void LayoutPropagation::rewriteIfOp(scf::IfOp ifOp) {
     auto it = layouts.find(ifOp.getResult(i));
     if (it == layouts.end())
       continue;
-    Attribute encoding = *(it->second.encodings.begin());
+    Attribute encoding = *(it->second.begin());
     setEncodingInPlace(ifOp.getResult(i), encoding);
   }
 }
@@ -2112,7 +2105,7 @@ void LayoutPropagation::rewriteReduceToScalar(Operation *reduceOp) {
   for (Value operand : reduceOp->getOperands()) {
     auto it = layouts.find(operand);
     if (it != layouts.end()) {
-      srcEncoding = it->second.encodings[0];
+      srcEncoding = it->second[0];
       break;
     }
   }
@@ -2131,7 +2124,7 @@ void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
   auto it = layouts.find(operand);
   if (it == layouts.end())
     return;
-  srcEncoding = it->second.encodings[0];
+  srcEncoding = it->second[0];
   Value newOperand = getValueAs(operand, srcEncoding);
   assertOp->setOperand(0, newOperand);
 }
@@ -2144,7 +2137,7 @@ void LayoutPropagation::rewriteOp(Operation *op) {
   else if (auto ifOp = dyn_cast<scf::IfOp>(op))
     rewriteIfOp(ifOp);
   else {
-    Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
+    Attribute encoding = *layouts[op->getResult(0)].begin();
     if (canUseResultEncoding(op, encoding)) {
       setEncodingInPlace(op->getResult(0), encoding);
       if (auto constant = dyn_cast<arith::ConstantOp>(op)) {
