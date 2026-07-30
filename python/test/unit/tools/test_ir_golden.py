@@ -278,6 +278,15 @@ def test_golden_audit_filters_exact_case(tmp_path: Path, capsys: pytest.CaptureF
     }
 
 
+def test_golden_audit_accepts_multiple_exact_cases(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    corpus = make_corpus(tmp_path)
+    first, second = corpus.cases
+    assert main([
+        "audit", "--corpus", str(tmp_path), "--case-id", first.case_id, "--case-id", second.case_id, "--workers", "1"
+    ]) == 0
+    assert json.loads(capsys.readouterr().out)["classifications"] == {"identical": 2}
+
+
 def test_golden_filters_and_inventory(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     make_corpus(tmp_path)
     assert main(["inventory", "--corpus", str(tmp_path), "--language", "gluon"]) == 0

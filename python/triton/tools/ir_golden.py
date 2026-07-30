@@ -1013,7 +1013,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--kernel")
     parser.add_argument("--language", choices=("triton", "gluon"))
     parser.add_argument("--arch", type=int)
-    parser.add_argument("--case-id", help="select one exact content-addressed corpus case")
+    parser.add_argument("--case-id", action="append", help="select exact content-addressed corpus cases; repeatable")
     parser.add_argument("--strategy", choices=(*STRATEGIES, "both"), default="both")
     parser.add_argument("--workers", type=int, default=min(32, os.cpu_count() or 1))
     parser.add_argument("--output", type=Path, help="directory for executable triton-opt reproducer shards")
@@ -1027,8 +1027,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.workers < 1:
         parser.error("--workers must be positive")
     corpus = GoldenCorpus(args.corpus)
-    selected = corpus.select(family=args.family, kernel=args.kernel, language=args.language, arch=args.arch,
-                             case_id=args.case_id)
+    selected = corpus.select(family=args.family, kernel=args.kernel, language=args.language, arch=args.arch)
+    if args.case_id:
+        requested_ids = set(args.case_id)
+        if len(requested_ids) != len(args.case_id):
+            parser.error("--case-id values must be distinct")
+        selected = [case for case in selected if case.case_id in requested_ids]
+        if {case.case_id for case in selected} != requested_ids:
+            raise GoldenCorpusError("One or more requested case identifiers do not exist in the selected corpus")
     if not selected:
         raise GoldenCorpusError("No golden cases match the requested filters")
     if args.command == "inventory":
@@ -1041,8 +1047,8 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("refresh requires --accept")
         if args.strategy != "global":
             parser.error("refresh requires --strategy global; legacy references are immutable")
-        if args.case_id is None:
-            parser.error("refresh requires an exact --case-id")
+        if not args.case_id:
+            parser.error("refresh requires at least one exact --case-id")
         if args.evidence is None:
             parser.error("refresh requires --evidence")
         try:
