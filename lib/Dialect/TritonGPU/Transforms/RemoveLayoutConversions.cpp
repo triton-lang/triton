@@ -96,18 +96,16 @@ public:
     bool fixed;
   };
 
-  using Contract = SmallVector<Value, 4>;
-
   void addNode(Value value, ArrayRef<Attribute> candidates, bool fixed) {
     unsigned index = nodes.size();
     indices.try_emplace(value, index);
     nodes.push_back({value, llvm::to_vector<8>(candidates), fixed});
+    components.grow(nodes.size());
   }
 
   void addOperation(Operation *operation);
 
   ArrayRef<Node> getNodes() const { return nodes; }
-  ArrayRef<Contract> getContracts() const { return contracts; }
   SmallVector<SmallVector<unsigned, 8>, 8> getConnectedComponents() const;
 
   bool has(unsigned feature) const { return features & feature; }
@@ -117,17 +115,23 @@ public:
 
 private:
   void addContract(ArrayRef<Value> values) {
-    Contract tracked;
-    for (Value value : values)
-      if (indices.contains(value) && !llvm::is_contained(tracked, value))
-        tracked.push_back(value);
-    if (!tracked.empty())
-      contracts.push_back(std::move(tracked));
+    std::optional<unsigned> previous;
+    for (Value value : values) {
+      auto found = indices.find(value);
+      if (found == indices.end())
+        continue;
+      unsigned current = found->second;
+      if (nodes[current].fixed)
+        continue;
+      if (previous)
+        components.join(*previous, current);
+      previous = current;
+    }
   }
 
   SmallVector<Node, 32> nodes;
-  SmallVector<Contract, 32> contracts;
   DenseMap<Value, unsigned> indices;
+  mutable llvm::IntEqClasses components;
   unsigned features = 0;
   unsigned tensorLoadBoundaryCount = 0;
 };
@@ -707,27 +711,13 @@ void LayoutConstraintGraph::addOperation(Operation *operation) {
 
 SmallVector<SmallVector<unsigned, 8>, 8>
 LayoutConstraintGraph::getConnectedComponents() const {
-  llvm::IntEqClasses classes(nodes.size());
-
-  for (const Contract &contract : contracts) {
-    std::optional<unsigned> previous;
-    for (Value value : contract) {
-      unsigned current = indices.lookup(value);
-      if (nodes[current].fixed)
-        continue;
-      if (previous)
-        classes.join(*previous, current);
-      previous = current;
-    }
-  }
-
-  classes.compress();
-  SmallVector<SmallVector<unsigned, 8>, 8> components(classes.getNumClasses());
+  components.compress();
+  SmallVector<SmallVector<unsigned, 8>, 8> result(components.getNumClasses());
   for (unsigned index = 0; index < nodes.size(); ++index) {
     if (!nodes[index].fixed && nodes[index].candidates.size() > 1)
-      components[classes[index]].push_back(index);
+      result[components[index]].push_back(index);
   }
-  return components;
+  return result;
 }
 
 void LayoutPropagation::initAnchorLayout() {
@@ -1880,8 +1870,7 @@ void LayoutPropagation::resolveGlobalConflicts() {
     LDBG("resolving " << layouts.size() << " layout values with "
                       << (policy.useFullObjective() ? "the full"
                                                     : "the bounded")
-                      << " global objective across "
-                      << graph.getContracts().size() << " constraints");
+                      << " global objective");
 
     auto isLegal = [&](Value value, Attribute encoding,
                        const auto &current) {
@@ -3634,12 +3623,12 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
     bool global = strategy == LayoutAssignmentStrategy::Global;
     LayoutMemoryProfile memory =
         global ? getLayoutMemoryProfile(funcOp) : LayoutMemoryProfile{};
-    bool hasProtectedLoop = global && !memory.protectedLoops.empty();
-    bool hasProtectedStore = hasProtectedLoop && memory.hardwareStore;
-    bool hasPackedMemoryAssembly = global && memory.hasPackedAssemblyProtocol();
+    bool hasProtectedStore =
+        !memory.protectedLoops.empty() && memory.hardwareStore;
+    bool hasPackedMemoryAssembly = memory.hasPackedAssemblyProtocol();
 
     if (global &&
-        (hasProtectedLoop || memory.packedAssembly ||
+        (!memory.protectedLoops.empty() || memory.packedAssembly ||
          memory.protectedReduction || memory.permutingReshape ||
          memory.descriptorLoad || hasPackedMemoryAssembly ||
          memory.hasPairwiseReductionProtocol())) {
