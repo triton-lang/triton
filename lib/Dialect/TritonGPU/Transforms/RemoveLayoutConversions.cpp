@@ -279,9 +279,8 @@ public:
   void dump();
 
 private:
-  Attribute getCachedSourceEncoding(Operation *op, Attribute encoding) const;
-  Attribute getCachedDestinationEncoding(Operation *op,
-                                         Attribute encoding) const;
+  template <bool source>
+  Attribute getCachedEncoding(Operation *op, Attribute encoding) const;
   bool canAssignEncoding(Value value, Attribute encoding,
                          const DenseMap<Value, Attribute> &assignments) const;
   Attribute
@@ -450,6 +449,7 @@ bool isLayoutAnchor(Operation *op) {
 }
 
 static bool isProtectedLayoutReduction(Operation *op);
+static bool isProtectedLayoutLoop(Operation *op);
 
 struct LayoutMemoryProfile {
   unsigned tensorLoads = 0, stores = 0, reshapes = 0;
@@ -458,6 +458,7 @@ struct LayoutMemoryProfile {
   bool join = false, complexBoundary = false;
   bool packedAssembly = false, protectedReduction = false;
   bool descriptorLoad = false, permutingReshape = false, hardwareStore = false;
+  SmallVector<Operation *, 4> protectedLoops;
 
   bool hasPairwiseReductionProtocol() const {
     return pairwiseReduction && wideScalarReduction && wideFp8Load &&
@@ -514,6 +515,8 @@ static LayoutMemoryProfile getLayoutMemoryProfile(FuncOp funcOp) {
       profile.hardwareStore = true;
     } else if (isa<scf::ForOp, scf::WhileOp>(op)) {
       profile.complexBoundary = true;
+      if (isProtectedLayoutLoop(op))
+        profile.protectedLoops.push_back(op);
     }
   });
   return profile;
@@ -661,15 +664,6 @@ static bool isProtectedLayoutLoop(Operation *op) {
     return WalkResult::advance();
   });
   return body.wasInterrupted();
-}
-
-static bool hasProtectedLayoutLoop(FuncOp funcOp) {
-  WalkResult result = funcOp.walk([&](Operation *op) {
-    if (isProtectedLayoutLoop(op))
-      return WalkResult::interrupt();
-    return WalkResult::advance();
-  });
-  return result.wasInterrupted();
 }
 
 void LayoutConstraintGraph::addOperation(Operation *operation) {
@@ -857,10 +851,7 @@ void LayoutPropagation::initAnchorLayout() {
       });
     }
 
-    funcOp.walk([&](Operation *op) {
-      if (!isProtectedLayoutLoop(op))
-        return;
-
+    for (Operation *op : memory.protectedLoops) {
       // Hardware, opaque-operation, and structurally constrained while loops
       // have jointly chosen layouts. Preserve the complete established
       // protocol, including loop initializers, results, region arguments, and
@@ -877,9 +868,9 @@ void LayoutPropagation::initAnchorLayout() {
             for (BlockArgument argument : block.getArguments())
               addAnchor(argument);
       });
-    });
+    }
 
-    if (hasProtectedLayoutLoop(funcOp)) {
+    if (!memory.protectedLoops.empty()) {
       // Tensor-core and tensor-memory loops establish separately
       // rematerialized, coalesced store indices. Preserve that complete
       // address-and-mask slice without constraining stored data or unrelated
@@ -1222,22 +1213,15 @@ uint64_t LayoutCostModel::getExecutionWeight(Operation *op) const {
   return weight;
 }
 
-Attribute LayoutPropagation::getCachedSourceEncoding(Operation *op,
-                                                     Attribute encoding) const {
-  auto [cached, inserted] = inferredSourceEncodings.try_emplace(
+template <bool source>
+Attribute LayoutPropagation::getCachedEncoding(Operation *op,
+                                               Attribute encoding) const {
+  auto &cache = source ? inferredSourceEncodings : inferredDestinationEncodings;
+  auto [cached, inserted] = cache.try_emplace(
       std::pair<Operation *, Attribute>{op, encoding}, Attribute{});
   if (inserted)
-    cached->second = inferSrcEncoding(op, encoding);
-  return cached->second;
-}
-
-Attribute
-LayoutPropagation::getCachedDestinationEncoding(Operation *op,
-                                                Attribute encoding) const {
-  auto [cached, inserted] = inferredDestinationEncodings.try_emplace(
-      std::pair<Operation *, Attribute>{op, encoding}, Attribute{});
-  if (inserted)
-    cached->second = inferDstEncoding(op, encoding);
+    cached->second = source ? inferSrcEncoding(op, encoding)
+                            : inferDstEncoding(op, encoding);
   return cached->second;
 }
 
@@ -1281,14 +1265,14 @@ bool LayoutPropagation::canAssignEncoding(
       Value sibling = result.getResultNumber() == 0 ? splitOp.getOutRHS()
                                                     : splitOp.getOutLHS();
       return getAssignedEncoding(sibling, assignments) == encoding &&
-             static_cast<bool>(getCachedSourceEncoding(splitOp, encoding));
+             static_cast<bool>(getCachedEncoding<true>(splitOp, encoding));
     }
     if (auto reduceOp = dyn_cast<ReduceOp>(result.getOwner())) {
       for (Value sibling : reduceOp->getResults())
         if (isa<RankedTensorType>(sibling.getType()) &&
             getAssignedEncoding(sibling, assignments) != encoding)
           return false;
-      return static_cast<bool>(getCachedSourceEncoding(reduceOp, encoding));
+      return static_cast<bool>(getCachedEncoding<true>(reduceOp, encoding));
     }
   }
 
@@ -1302,13 +1286,13 @@ bool LayoutPropagation::canAssignEncoding(
     return isa<DenseElementsAttr>(constant.getValue());
   if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(op) ||
       canUseResultEncoding(op, encoding) ||
-      getCachedSourceEncoding(op, encoding))
+      getCachedEncoding<true>(op, encoding))
     return true;
 
   for (Value operand : op->getOperands()) {
     if (!isa<RankedTensorType>(operand.getType()))
       continue;
-    if (getCachedDestinationEncoding(
+    if (getCachedEncoding<false>(
             op, getAssignedEncoding(operand, assignments)) == encoding)
       return true;
   }
@@ -1384,7 +1368,7 @@ SmallVector<Attribute, 4> LayoutPropagation::getUseEncodings(
     Attribute resultEncoding = getAssignedEncoding(result, assignments);
     Attribute operandEncoding = isa<ConvertLayoutOp>(user)
                                     ? resultEncoding
-                                    : getCachedSourceEncoding(user,
+                                    : getCachedEncoding<true>(user,
                                                               resultEncoding);
     if (operandEncoding && !llvm::is_contained(encodings, operandEncoding))
       encodings.push_back(operandEncoding);
@@ -1442,7 +1426,7 @@ uint64_t LayoutPropagation::getAssignmentCost(
 
   Attribute operandEncoding = isa<ConvertLayoutOp>(definingOp)
                                   ? encoding
-                                  : getCachedSourceEncoding(definingOp,
+                                  : getCachedEncoding<true>(definingOp,
                                                             encoding);
   if (!operandEncoding)
     return cost;
@@ -1615,7 +1599,7 @@ bool LayoutPropagation::buildGlobalComponentProposal(
       if (isLayoutTransform(producer) && !isFixedLayoutBoundary(producer)) {
         Attribute source = isa<ConvertLayoutOp>(producer)
                                ? candidate
-                               : getCachedSourceEncoding(producer, candidate);
+                               : getCachedEncoding<true>(producer, candidate);
         if (source) {
           for (Value operand : producer->getOperands())
             if (!request(operand, source))
@@ -1675,8 +1659,7 @@ bool LayoutPropagation::buildGlobalComponentProposal(
 
       Attribute destination = isa<ConvertLayoutOp>(user)
                                   ? candidate
-                                  : getCachedDestinationEncoding(user,
-                                                                 candidate);
+                                  : getCachedEncoding<false>(user, candidate);
       if (!destination)
         continue;
 
@@ -3651,7 +3634,7 @@ LogicalResult optimizeDistributedLayouts(ModuleOp module,
     bool global = strategy == LayoutAssignmentStrategy::Global;
     LayoutMemoryProfile memory =
         global ? getLayoutMemoryProfile(funcOp) : LayoutMemoryProfile{};
-    bool hasProtectedLoop = global && hasProtectedLayoutLoop(funcOp);
+    bool hasProtectedLoop = global && !memory.protectedLoops.empty();
     bool hasProtectedStore = hasProtectedLoop && memory.hardwareStore;
     bool hasPackedMemoryAssembly = global && memory.hasPackedAssemblyProtocol();
 
