@@ -5,6 +5,7 @@ import os
 import tempfile
 import warnings
 from contextlib import contextmanager
+from dataclasses import replace
 
 import pytest
 import torch
@@ -118,9 +119,10 @@ def compile_warmup_only():
 
 class CompilationTrace:
 
-    def __init__(self, directory, phase):
+    def __init__(self, directory, phase, test=None):
         self.directory = directory
         self.phase = phase
+        self.test = test
         os.makedirs(directory, exist_ok=True)
         self.path = os.path.join(directory, f"{phase}-{os.getpid()}.jsonl")
 
@@ -129,6 +131,7 @@ class CompilationTrace:
         kernel = getattr(function, "_fn_name", src.name)
         record = {
             "phase": self.phase,
+            "test": self.test,
             "kernel": kernel,
             "hash": metadata["hash"],
             "source_hash": src.hash(),
@@ -141,14 +144,6 @@ class CompilationTrace:
             output.write(json.dumps(record, sort_keys=True) + "\n")
 
 
-class _WarmupComplete(Exception):
-    """Stop a warmup test once its production kernels have been compiled."""
-
-
-def _finish_before_reference(*args, **kwargs):
-    raise _WarmupComplete()
-
-
 @contextmanager
 def _warmup_test_case(item):
     module_path = str(getattr(item.module, "__file__", ""))
@@ -157,29 +152,83 @@ def _warmup_test_case(item):
         return
 
     parameters = getattr(getattr(item, "callspec", None), "params", {})
-    if parameters.get("inner_expt_opt") is not None:
-        pytest.skip("warmup cannot infer data-dependent ragged padding")
+    if parameters["inner_expt_opt"] is not None and 0 in (
+            parameters["m"],
+            parameters["n"],
+            parameters["k"],
+    ):
+        pytest.skip("zero-sized inner-expert kernels specialize differently with FakeTensor")
 
     import triton_kernels.testing as testing
+    import triton_kernels.tensor_details.layout_details.blackwell_scale as blackwell_scale
 
     previous_alloc_rand = testing.alloc_rand
+    previous_assert_close = testing.assert_close
     previous_make_slice_sizes = testing.make_slice_sizes
+    previous_pad_ragged_tensor = testing.pad_ragged_tensor
+    previous_module_assert_close = item.module.assert_close
     previous_matmul_torch = item.module.matmul_torch
+    previous_is_fake = blackwell_scale.is_fake
+    slice_sizes = {}
 
     def alloc_rand(shape, device, dtype, requires_grad=False):
         return torch.empty(shape, device=device, dtype=dtype, requires_grad=requires_grad)
 
     def make_slice_sizes(n_slices, total_size, device="cuda"):
-        return torch.empty((max(n_slices, 0), ), dtype=torch.int32, device=device)
+        from torch._subclasses.fake_tensor import unset_fake_temporarily
+
+        with unset_fake_temporarily():
+            values = testing._make_slice_sizes_cpu(n_slices, total_size).tolist()
+        result = torch.empty((max(n_slices, 0), ), dtype=torch.int32, device=device)
+        slice_sizes[id(result)] = values
+        return result
+
+    def pad_ragged_tensor(tensor, metadata, hbm_swizzling, transpose):
+        multiple = 128 if hbm_swizzling else 64
+        dimension = 1 if transpose else 0
+        shape = list(tensor.shape)
+        values = slice_sizes[id(metadata.slice_sizes)]
+        shape[dimension] = sum(triton.cdiv(value, multiple) * multiple for value in values)
+        padded = torch.empty(shape, dtype=tensor.dtype, device=tensor.device)
+        metadata = replace(
+            metadata,
+            slice_offs=metadata.block_offs(multiple) * multiple,
+            slice_sizes_divisibility=multiple,
+        )
+        return padded, metadata
+
+    def matmul_torch(*args, **kwargs):
+        try:
+            # Compile reference-path device helpers until FakeTensor reaches a
+            # data-dependent operation. The production matmul has already been
+            # warmed, so the shape-only result below can finish the test path.
+            return previous_matmul_torch(*args, **kwargs)
+        except Exception:
+            output_dtype = item.module.DType(parameters["output_dtype_str"] or parameters["act_dtype_str"])
+            act_dtype = item.module.DType(parameters["act_dtype_str"])
+            reference_dtype = torch.float32 if output_dtype.is_nvfp4 or parameters["inner_expt_opt"] is not None else (
+                torch.bfloat16 if act_dtype.has_mx_scale else act_dtype.torch_dtype)
+            shape = ((parameters["n_slices"], )
+                     if parameters["mode"] == "batched" or parameters["inner_expt_opt"] is not None else tuple())
+            shape += (parameters["m"], parameters["n"])
+            return torch.empty(shape, dtype=reference_dtype, device="cuda")
 
     testing.alloc_rand = alloc_rand
+    testing.assert_close = lambda *args, **kwargs: None
     testing.make_slice_sizes = make_slice_sizes
-    item.module.matmul_torch = _finish_before_reference
+    testing.pad_ragged_tensor = pad_ragged_tensor
+    blackwell_scale.is_fake = lambda tensor: False
+    item.module.assert_close = lambda *args, **kwargs: None
+    item.module.matmul_torch = matmul_torch
     try:
         yield
     finally:
+        blackwell_scale.is_fake = previous_is_fake
         item.module.matmul_torch = previous_matmul_torch
+        item.module.assert_close = previous_module_assert_close
+        testing.pad_ragged_tensor = previous_pad_ragged_tensor
         testing.make_slice_sizes = previous_make_slice_sizes
+        testing.assert_close = previous_assert_close
         testing.alloc_rand = previous_alloc_rand
 
 
@@ -202,13 +251,15 @@ def pytest_runtest_call(item):
     phase = os.environ.get("TRITON_CI_CACHE_PHASE", "unclassified")
     previous_listener = triton.knobs.compilation.listener
     if directory:
-        triton.knobs.compilation.listener = CompilationTrace(directory, phase)
+        triton.knobs.compilation.listener = CompilationTrace(directory, phase, item.nodeid)
     try:
         if item.config.getoption("--warmup-only"):
+            from torch._subclasses.fake_tensor import DataDependentOutputException, DynamicOutputShapeException
+
             with _warmup_test_case(item):
                 try:
                     return (yield)
-                except _WarmupComplete:
+                except (DataDependentOutputException, DynamicOutputShapeException):
                     return
         return (yield)
     finally:
@@ -224,7 +275,9 @@ def summarize_compile_trace(directory, phase=None):
             with open(os.path.join(directory, name), encoding="utf-8") as source:
                 records.extend(json.loads(line) for line in source if line.strip())
 
-    warmed_hashes = {record["hash"] for record in records if record["phase"].startswith("warmup-")}
+    warmup_records = [record for record in records if record["phase"].startswith("warmup-")]
+    all_warmed_hashes = {record["hash"] for record in warmup_records}
+    all_warmed_tests = {record.get("test") for record in warmup_records if record.get("test") is not None}
     phases = sorted({record["phase"] for record in records})
     summaries = {}
     for name in phases:
@@ -232,15 +285,54 @@ def summarize_compile_trace(directory, phase=None):
             continue
         events = [record for record in records if record["phase"] == name]
         misses = [record for record in events if not record["cache_hit"]]
+        is_warmup_phase = name.startswith("warmup-")
+        matching_warmup_records = [record for record in warmup_records
+                                   if record["phase"] == f"warmup-{name}"] if not is_warmup_phase else []
+        warmed_hashes = {record["hash"] for record in matching_warmup_records}
+        warmed_tests = {record.get("test") for record in matching_warmup_records if record.get("test") is not None}
+        warmed_test_events = [] if is_warmup_phase else [
+            record for record in events if record.get("test") in warmed_tests
+        ]
+        warmed_test_hits = [
+            record for record in warmed_test_events if record["cache_hit"] and record["hash"] in warmed_hashes
+        ]
+        incomplete_tests = {
+            record["test"]
+            for record in warmed_test_events
+            if not record["cache_hit"] or record["hash"] not in warmed_hashes
+        }
+        used_warmup_hashes = {record["hash"] for record in events if record["hash"] in warmed_hashes}
         summaries[name] = {
             "events": len(events),
             "disk_hits": sum(record["cache_hit"] for record in events),
             "disk_misses": len(misses),
             "warmed_hits": sum(record["cache_hit"] and record["hash"] in warmed_hashes for record in events),
             "warmed_misses": sum(not record["cache_hit"] and record["hash"] in warmed_hashes for record in events),
+            "warmed_test_events": len(warmed_test_events),
+            "warmed_test_hits": len(warmed_test_hits),
+            "warmed_test_misses": len(warmed_test_events) - len(warmed_test_hits),
+            "incomplete_warmed_test_count": len(incomplete_tests),
+            "incomplete_warmed_tests": sorted(incomplete_tests)[:20],
+            "unused_warmup_hashes": len(warmed_hashes - used_warmup_hashes),
             "compile_seconds": round(sum(record["duration_us"] for record in misses) / 1_000_000, 3),
         }
-    return {"phases": summaries, "warmup_hashes": len(warmed_hashes)}
+    return {
+        "phases": summaries,
+        "warmup_hashes": len(all_warmed_hashes),
+        "warmup_tests": len(all_warmed_tests),
+    }
+
+
+def _require_complete_warmup(report):
+    if not report["phases"] or not any(summary["warmed_test_events"] for summary in report["phases"].values()):
+        raise SystemExit("warmup did not produce any compiler events in warmed runtime tests")
+    incomplete = {
+        phase: summary["incomplete_warmed_tests"]
+        for phase, summary in report["phases"].items()
+        if summary["warmed_test_misses"]
+    }
+    if incomplete:
+        raise SystemExit(f"warmed runtime tests were not complete cache hits: {json.dumps(incomplete, sort_keys=True)}")
 
 
 def _main():
@@ -248,6 +340,7 @@ def _main():
     parser.add_argument("command", choices=["report"])
     parser.add_argument("--phase")
     parser.add_argument("--require-warmed-hits", action="store_true")
+    parser.add_argument("--require-complete-warmup", action="store_true")
     parser.add_argument("--directory", default=os.environ.get("TRITON_CI_COMPILE_TRACE_DIR"))
     args = parser.parse_args()
     if args.directory is None:
@@ -256,6 +349,8 @@ def _main():
     print(f"TRITON_CI_COMPILE_TRACE {json.dumps(report, sort_keys=True)}")
     if args.require_warmed_hits and not any(summary["warmed_hits"] for summary in report["phases"].values()):
         raise SystemExit("warmup did not produce any runtime disk-cache hits")
+    if args.require_complete_warmup:
+        _require_complete_warmup(report)
 
 
 if __name__ == "__main__":

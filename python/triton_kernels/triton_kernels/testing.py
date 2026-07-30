@@ -238,25 +238,30 @@ def alloc_rand(shape, device, dtype, requires_grad=False):
     return ret
 
 
-def make_slice_sizes(n_slices, total_size, device="cuda"):
-    torch.manual_seed(0)
+def _make_slice_sizes_cpu(n_slices, total_size):
     dtype = torch.int32
     if total_size < 0:
         raise ValueError("total_size must be non-negative")
     if n_slices <= 0:
-        return torch.zeros((0, ), dtype=dtype, device=device)
+        return torch.zeros((0, ), dtype=dtype)
     if total_size == 0:
-        return torch.zeros((n_slices, ), dtype=dtype, device=device)
+        return torch.zeros((n_slices, ), dtype=dtype)
     # always set one slice size to zero
-    probs = torch.ones(n_slices, device=device) / n_slices
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(0)
+    probs = torch.ones(n_slices) / n_slices
     if n_slices > 1:
         probs[2] += probs[1]
         probs[1] = 0.
-    assignments = torch.multinomial(probs, total_size, replacement=True)
+    assignments = torch.multinomial(probs, total_size, replacement=True, generator=generator)
     counts = torch.bincount(assignments, minlength=n_slices).to(dtype)
     assert counts.sum().item() == total_size
     assert len(counts) == n_slices
     return counts
+
+
+def make_slice_sizes(n_slices, total_size, device="cuda"):
+    return _make_slice_sizes_cpu(n_slices, total_size).to(device)
 
 
 def pad_rows_to_multiples(A, indices, multiple=128, pad_value=float('nan')):

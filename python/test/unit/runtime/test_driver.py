@@ -8,7 +8,7 @@ import triton
 import triton.language as tl
 from triton._compile_warmup import (
     CompilationTrace,
-    _WarmupComplete,
+    _require_complete_warmup,
     _warmup_test_case,
     compile_warmup_only,
     summarize_compile_trace,
@@ -56,10 +56,12 @@ def test_compile_warmup_preserves_tensor_view_alignment():
 def test_compilation_trace_matches_warmup_cache_hits(tmp_path):
     times = SimpleNamespace(total=125_000)
     source = SimpleNamespace(name="kernel", fn=SimpleNamespace(_fn_name="package.kernel"), hash=lambda: "source")
-    warmup = CompilationTrace(str(tmp_path), "warmup-triton-kernels")
-    runtime = CompilationTrace(str(tmp_path), "triton-kernels")
+    warmup = CompilationTrace(str(tmp_path), "warmup-triton-kernels", "test_matmul.py::test_op[0]")
+    unrelated_warmup = CompilationTrace(str(tmp_path), "warmup-gluon", "test_core.py::test_mma[0]")
+    runtime = CompilationTrace(str(tmp_path), "triton-kernels", "test_matmul.py::test_op[0]")
 
     warmup(src=source, metadata={"hash": "warmed"}, metadata_group={}, times=times, cache_hit=False)
+    unrelated_warmup(src=source, metadata={"hash": "gluon"}, metadata_group={}, times=times, cache_hit=False)
     runtime(src=source, metadata={"hash": "warmed"}, metadata_group={}, times=times, cache_hit=True)
     runtime(src=source, metadata={"hash": "different"}, metadata_group={}, times=times, cache_hit=False)
 
@@ -73,27 +75,74 @@ def test_compilation_trace_matches_warmup_cache_hits(tmp_path):
                 "disk_misses": 1,
                 "warmed_hits": 1,
                 "warmed_misses": 0,
+                "warmed_test_events": 2,
+                "warmed_test_hits": 1,
+                "warmed_test_misses": 1,
+                "incomplete_warmed_test_count": 1,
+                "incomplete_warmed_tests": ["test_matmul.py::test_op[0]"],
+                "unused_warmup_hashes": 0,
                 "compile_seconds": 0.125,
             },
         },
-        "warmup_hashes": 1,
+        "warmup_hashes": 2,
+        "warmup_tests": 2,
     }
+    with pytest.raises(SystemExit, match="not complete cache hits"):
+        _require_complete_warmup(report)
 
 
-def test_compile_warmup_skips_triton_kernels_reference(monkeypatch):
+def test_compile_warmup_replaces_triton_kernels_reference(monkeypatch):
     package = ModuleType("triton_kernels")
+    package.__path__ = []
     testing = ModuleType("triton_kernels.testing")
+    tensor_details = ModuleType("triton_kernels.tensor_details")
+    tensor_details.__path__ = []
+    layout_details = ModuleType("triton_kernels.tensor_details.layout_details")
+    layout_details.__path__ = []
+    blackwell_scale = ModuleType("triton_kernels.tensor_details.layout_details.blackwell_scale")
+    blackwell_scale.is_fake = lambda tensor: True
     testing.alloc_rand = lambda *args, **kwargs: None
+    testing.assert_close = lambda *args, **kwargs: None
     testing.make_slice_sizes = lambda *args, **kwargs: None
+    testing._make_slice_sizes_cpu = lambda n_slices, total_size: torch.zeros(n_slices, dtype=torch.int32)
+    testing.pad_ragged_tensor = lambda *args, **kwargs: None
     package.testing = testing
     monkeypatch.setitem(sys.modules, "triton_kernels", package)
     monkeypatch.setitem(sys.modules, "triton_kernels.testing", testing)
+    monkeypatch.setitem(sys.modules, "triton_kernels.tensor_details", tensor_details)
+    monkeypatch.setitem(sys.modules, "triton_kernels.tensor_details.layout_details", layout_details)
+    monkeypatch.setitem(sys.modules, "triton_kernels.tensor_details.layout_details.blackwell_scale", blackwell_scale)
 
-    reference = object()
-    module = SimpleNamespace(__file__="/checkout/python/triton_kernels/tests/test_matmul.py", matmul_torch=reference)
-    item = SimpleNamespace(module=module, originalname="test_op", callspec=SimpleNamespace(params={}))
+    def reference(*args, **kwargs):
+        return torch.empty((4, 8), dtype=torch.float32)
+
+    module_assert_close = object()
+    module = SimpleNamespace(
+        __file__="/checkout/python/triton_kernels/tests/test_matmul.py",
+        assert_close=module_assert_close,
+        matmul_torch=reference,
+    )
+    item = SimpleNamespace(
+        module=module,
+        originalname="test_op",
+        callspec=SimpleNamespace(
+            params={
+                "m": 4,
+                "n": 8,
+                "n_slices": 1,
+                "mode": "plain",
+                "inner_expt_opt": None,
+                "output_dtype_str": None,
+                "act_dtype_str": "float32",
+                "swiglu_opts": None,
+            }),
+    )
+    module.DType = lambda _: SimpleNamespace(is_nvfp4=False, has_mx_scale=False, torch_dtype=torch.float32)
     previous_alloc_rand = testing.alloc_rand
+    previous_assert_close = testing.assert_close
     previous_make_slice_sizes = testing.make_slice_sizes
+    previous_pad_ragged_tensor = testing.pad_ragged_tensor
+    previous_is_fake = blackwell_scale.is_fake
 
     with compile_warmup_only(), _warmup_test_case(item):
         allocation = testing.alloc_rand((4, 8), device="cpu", dtype=torch.float32)
@@ -101,12 +150,17 @@ def test_compile_warmup_skips_triton_kernels_reference(monkeypatch):
 
         assert allocation.shape == (4, 8)
         assert slice_sizes.shape == (3, )
-        with pytest.raises(_WarmupComplete):
-            module.matmul_torch()
+        reference_output = module.matmul_torch()
+        assert reference_output.shape == (4, 8)
+        assert reference_output.dtype == torch.float32
 
     assert module.matmul_torch is reference
+    assert module.assert_close is module_assert_close
     assert testing.alloc_rand is previous_alloc_rand
+    assert testing.assert_close is previous_assert_close
     assert testing.make_slice_sizes is previous_make_slice_sizes
+    assert testing.pad_ragged_tensor is previous_pad_ragged_tensor
+    assert blackwell_scale.is_fake is previous_is_fake
 
 
 def test_is_lazy():
