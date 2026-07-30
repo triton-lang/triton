@@ -657,6 +657,18 @@ getControlFlowComponent(OpOperand &use, bool includeConditionals = false) {
   return {nullptr, 0};
 }
 
+static LLVM_ATTRIBUTE_ALWAYS_INLINE std::pair<Operation *, unsigned>
+getControlFlowComponent(BlockArgument argument) {
+  Operation *parent = argument.getOwner()->getParentOp();
+  unsigned index = argument.getArgNumber();
+  if (auto loop = dyn_cast<scf::ForOp>(parent); loop && index)
+    return {loop, index - 1};
+  if (auto loop = dyn_cast<scf::WhileOp>(parent);
+      loop && index < loop.getNumResults())
+    return {loop, index};
+  return {nullptr, 0};
+}
+
 void LayoutConstraintGraph::addOperation(Operation *operation) {
   if (auto load = dyn_cast<LoadOp>(operation)) {
     if (load->getNumResults() == 1 &&
@@ -1010,19 +1022,9 @@ SmallVector<Value> LayoutPropagation::propagateToOperands(Value value,
     auto blockArg = dyn_cast<BlockArgument>(value);
     if (!blockArg)
       continue;
-    Operation *parent = blockArg.getOwner()->getParentOp();
-    if (!isa<scf::ForOp, scf::WhileOp>(parent))
-      continue;
-
-    if (auto whileOp = dyn_cast<scf::WhileOp>(parent))
-      if (blockArg.getArgNumber() >= whileOp.getNumResults())
-        continue;
-
-    unsigned firstIterArg = isa<scf::ForOp>(parent) ? 1 : 0;
-    if (blockArg.getArgNumber() < firstIterArg)
-      continue;
-    addCandidates(getTiedArgs(parent, blockArg.getArgNumber() - firstIterArg),
-                  encoding);
+    auto [loop, index] = getControlFlowComponent(blockArg);
+    if (loop)
+      addCandidates(getTiedArgs(loop, index), encoding);
   }
 
   return changed;
@@ -1197,20 +1199,10 @@ bool LayoutPropagation::canAssignEncoding(
     return false;
 
   if (auto blockArg = dyn_cast<BlockArgument>(value)) {
-    Operation *parent = blockArg.getOwner()->getParentOp();
-    if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
-      if (blockArg.getArgNumber() == 0)
-        return encoding == tensorType.getEncoding();
-      return getAssignedEncoding(forOp.getResult(blockArg.getArgNumber() - 1),
-                                 assignments) == encoding;
-    }
-    if (auto whileOp = dyn_cast<scf::WhileOp>(parent)) {
-      if (blockArg.getArgNumber() >= whileOp.getNumResults())
-        return encoding == tensorType.getEncoding();
-      return getAssignedEncoding(whileOp.getResult(blockArg.getArgNumber()),
-                                 assignments) == encoding;
-    }
-    return encoding == tensorType.getEncoding();
+    auto [loop, index] = getControlFlowComponent(blockArg);
+    return loop ? getAssignedEncoding(loop->getResult(index), assignments) ==
+                      encoding
+                : encoding == tensorType.getEncoding();
   }
 
   if (auto result = dyn_cast<OpResult>(value)) {
@@ -1445,13 +1437,8 @@ uint64_t LayoutPropagation::getAffectedAssignmentCost(
       if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(producer))
         addControlFlow(producer, cast<OpResult>(changed).getResultNumber());
     } else if (auto blockArgument = dyn_cast<BlockArgument>(changed)) {
-      Operation *parent = blockArgument.getOwner()->getParentOp();
-      if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
-        if (blockArgument.getArgNumber() != 0)
-          addControlFlow(forOp, blockArgument.getArgNumber() - 1);
-      } else if (auto whileOp = dyn_cast<scf::WhileOp>(parent)) {
-        addControlFlow(whileOp, blockArgument.getArgNumber());
-      }
+      auto [loop, index] = getControlFlowComponent(blockArgument);
+      addControlFlow(loop, index);
     }
 
     for (OpOperand &use : changed.getUses()) {
@@ -1561,17 +1548,9 @@ bool LayoutPropagation::buildGlobalComponentProposal(
         }
       }
     } else if (auto blockArg = dyn_cast<BlockArgument>(value)) {
-      Operation *parent = blockArg.getOwner()->getParentOp();
-      if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
-        if (blockArg.getArgNumber() != 0 &&
-            !requestLoopComponent(forOp, blockArg.getArgNumber() - 1,
-                                  candidate))
-          return rollback();
-      } else if (auto whileOp = dyn_cast<scf::WhileOp>(parent)) {
-        if (blockArg.getArgNumber() < whileOp.getNumResults() &&
-            !requestLoopComponent(whileOp, blockArg.getArgNumber(), candidate))
-          return rollback();
-      }
+      auto [loop, index] = getControlFlowComponent(blockArg);
+      if (loop && !requestLoopComponent(loop, index, candidate))
+        return rollback();
     }
 
     for (OpOperand &use : value.getUses()) {
