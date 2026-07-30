@@ -438,19 +438,20 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions,
 }
 
 BufferRegionView
-BufferRegionAnalysis::getMemDescView(Type type, uint32_t allocationFrame,
-                                     uint32_t storageBase,
-                                     ArrayRef<uint32_t> partitionBases) {
+BufferRegionAnalysis::getAllocView(Value allocation, uint32_t storageBase,
+                                   ArrayRef<uint32_t> partitionBases) {
   BufferRegionView view;
   view.storageBase = storageBase;
   view.partitionBases = llvm::to_vector<2>(partitionBases);
-  view.allocationFrame = allocationFrame;
-  return getMemDescView(type, view);
+  view.allocationFrame = getOperationId(
+      allocation.getDefiningOp()->getParentOfType<FunctionOpInterface>());
+  return getSubView(allocation.getType(), view);
 }
 
-BufferRegionView BufferRegionAnalysis::getMemDescView(
-    Type type, const BufferRegionView &view, uint32_t storageOffset,
-    uint32_t byteOffset, uint32_t partitionOffset, uint32_t ctaOffset) {
+BufferRegionView
+BufferRegionAnalysis::getSubView(Type type, const BufferRegionView &view,
+                                 uint32_t storageOffset, uint32_t byteOffset,
+                                 uint32_t partitionOffset, uint32_t ctaOffset) {
   auto ty = cast<ttg::MemDescType>(type);
   uint32_t storageBase = view.storageBase + storageOffset;
   SmallVector<uint32_t, 2> partitionBases =
@@ -478,11 +479,6 @@ BufferRegionView BufferRegionAnalysis::getMemDescView(
   result.affinePartitionOffset = affinePartitionOffset;
   result.affineCTAOffset = affineCTAOffset;
   return result;
-}
-
-uint32_t BufferRegionAnalysis::getAllocationFrame(Operation *operation) const {
-  return getOperationId(
-      operation->getParentOfType<FunctionOpInterface>().getOperation());
 }
 
 LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
@@ -538,15 +534,13 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     ArrayRef<uint32_t> partitionBases = offsets->size() > 1
                                             ? ArrayRef<uint32_t>(*offsets)
                                             : ArrayRef<uint32_t>();
-    regionInfo.views.insert(getMemDescView(localAllocOp.getType(),
-                                           getAllocationFrame(op),
-                                           offsets->front(), partitionBases));
+    regionInfo.views.insert(getAllocView(localAllocOp.getResult(),
+                                         offsets->front(), partitionBases));
     return propagateRegions(regionInfo);
   }
   if (auto tmemAllocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
-    regionInfo.views.insert(getMemDescView(tmemAllocOp.getType(),
-                                           getAllocationFrame(op),
-                                           getAllocationOffset(tmemAllocOp)));
+    regionInfo.views.insert(getAllocView(tmemAllocOp.getResult(),
+                                         getAllocationOffset(tmemAllocOp)));
     return propagateRegions(regionInfo);
   }
   if (auto memdescIndexOp = dyn_cast<ttg::MemDescIndexOp>(op)) {
@@ -569,7 +563,7 @@ LogicalResult BufferRegionAnalysis::visitOperation(
         uint32_t stageOffset =
             getMemDescStorageOffset(memdescIndexOp.getType(), i);
         regionInfo.views.insert(
-            getMemDescView(memdescIndexOp.getType(), view, stageOffset));
+            getSubView(memdescIndexOp.getType(), view, stageOffset));
       }
     }
 
@@ -582,10 +576,10 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     MemDescSubsliceOffsets relativeOffset =
         getMemDescSubsliceUnpaddedOffsets(memdescSubsliceOp);
     for (const BufferRegionView &view : in.views)
-      regionInfo.views.insert(getMemDescView(
-          memdescSubsliceOp.getType(), view, /*storageOffset=*/0,
-          relativeOffset.byteOffset, relativeOffset.partitionOffset,
-          relativeOffset.ctaOffset));
+      regionInfo.views.insert(
+          getSubView(memdescSubsliceOp.getType(), view, /*storageOffset=*/0,
+                     relativeOffset.byteOffset, relativeOffset.partitionOffset,
+                     relativeOffset.ctaOffset));
     return propagateRegions(regionInfo);
   }
   if (auto tmemSubsliceOp = dyn_cast<ttng::TMEMSubSliceOp>(op)) {
@@ -596,8 +590,8 @@ LogicalResult BufferRegionAnalysis::visitOperation(
         tmemSubsliceOp.getSrc().getType(), tmemSubsliceOp.getOffset(),
         tmemSubsliceOp.getDim());
     for (const BufferRegionView &view : in.views)
-      regionInfo.views.insert(getMemDescView(
-          tmemSubsliceOp.getType(), view, /*storageOffset=*/0, relativeOffset));
+      regionInfo.views.insert(getSubView(tmemSubsliceOp.getType(), view,
+                                         /*storageOffset=*/0, relativeOffset));
     return propagateRegions(regionInfo);
   }
   if (auto selectOp = dyn_cast<arith::SelectOp>(op)) {
@@ -612,7 +606,7 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     if (in.isUnknown())
       return propagateRegions(in);
     for (const BufferRegionView &view : in.views)
-      regionInfo.views.insert(getMemDescView(reinterpretOp.getType(), view));
+      regionInfo.views.insert(getSubView(reinterpretOp.getType(), view));
     return propagateRegions(regionInfo);
   }
   if (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp>(op))
