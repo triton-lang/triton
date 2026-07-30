@@ -30,6 +30,14 @@ struct CircularLayoutParserResult {
   using ProfileEvent =
       std::pair<std::shared_ptr<CycleEntry>, std::shared_ptr<CycleEntry>>;
 
+  struct AsyncEndpoint {
+    uint32_t uid = 0;
+    std::shared_ptr<CycleEntry> entry;
+  };
+
+  // Async endpoints may be recorded by different warps in the same CTA.
+  using AsyncLink = std::pair<AsyncEndpoint, AsyncEndpoint>;
+
   struct Trace {
     uint32_t uid = 0;
 
@@ -37,6 +45,7 @@ struct CircularLayoutParserResult {
     uint32_t count = 0;
 
     std::vector<ProfileEvent> profileEvents;
+    std::vector<std::shared_ptr<CycleEntry>> asyncRecords;
   };
 
   struct BlockTrace {
@@ -47,6 +56,7 @@ struct CircularLayoutParserResult {
     uint64_t preFinalTime = 0;
     uint64_t postFinalTime = 0;
     std::vector<Trace> traces;
+    std::vector<AsyncLink> asyncLinks;
   };
 
   std::vector<BlockTrace> blockTraces;
@@ -67,6 +77,7 @@ private:
   bool parseMetadata();
   void parseProfileEvents();
   void parseSegment(int byteSize, CircularLayoutParserResult::Trace &trace);
+  void pairAsyncRecords(CircularLayoutParserResult::BlockTrace &blockTrace);
   void parseBlock();
 
   std::shared_ptr<CircularLayoutParserResult> result = nullptr;

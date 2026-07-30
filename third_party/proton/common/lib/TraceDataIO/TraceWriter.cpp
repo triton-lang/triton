@@ -59,9 +59,10 @@ void StreamChromeTraceWriter::write(std::ostream &outfile) {
   json object = {{"displayTimeUnit", "ns"}, {"traceEvents", json::array()}};
 
   const auto minInitTime = getMinInitTime(streamTrace);
+  uint64_t nextFlowId = 1;
 
   for (const auto &kernelTrace : streamTrace) {
-    writeKernel(object, kernelTrace, minInitTime);
+    writeKernel(object, kernelTrace, minInitTime, nextFlowId);
   }
   outfile << object.dump() << "\n";
 }
@@ -80,6 +81,10 @@ void populateTraceInfo(std::shared_ptr<CircularLayoutParserResult> result,
       for (auto &event : trace.profileEvents)
         if (event.first->cycle < minCycle)
           minCycle = event.first->cycle;
+    for (auto &trace : bt.traces)
+      for (auto &record : trace.asyncRecords)
+        if (record->cycle < minCycle)
+          minCycle = record->cycle;
     blockToMinCycle[bt.blockId] = minCycle;
 
     // Group block traces by proc id
@@ -162,7 +167,8 @@ std::vector<int> assignLineIds(
 
 void StreamChromeTraceWriter::writeKernel(json &object,
                                           const KernelTrace &kernelTrace,
-                                          const uint64_t minInitTime) {
+                                          const uint64_t minInitTime,
+                                          uint64_t &nextFlowId) {
   auto result = kernelTrace.first;
   auto metadata = kernelTrace.second;
 
@@ -188,12 +194,29 @@ void StreamChromeTraceWriter::writeKernel(json &object,
   for (auto &[procId, blockVec] : procToBlockTraces) {
     for (auto *bt : blockVec) {
       int ctaId = bt->blockId;
+      std::map<uint32_t, std::vector<CircularLayoutParserResult::ProfileEvent>>
+          eventsByWarp;
+      for (const auto &trace : bt->traces)
+        eventsByWarp[trace.uid].insert(eventsByWarp[trace.uid].end(),
+                                       trace.profileEvents.begin(),
+                                       trace.profileEvents.end());
+      for (const auto &link : bt->asyncLinks) {
+        if (link.first.uid == link.second.uid)
+          eventsByWarp[link.first.uid].emplace_back(link.first.entry,
+                                                    link.second.entry);
+      }
+      std::map<const CycleEntry *, int> eventLineIds;
+      for (const auto &warpEvents : eventsByWarp) {
+        const auto &events = warpEvents.second;
+        auto lineIds = assignLineIds(events);
+        for (size_t i = 0; i < events.size(); ++i)
+          eventLineIds[events[i].first.get()] = lineIds[i];
+      }
+
       for (auto &trace : bt->traces) {
         int warpId = trace.uid;
-        auto lineInfo = assignLineIds(trace.profileEvents);
-        int eventIdx = 0;
         for (auto &event : trace.profileEvents) {
-          int lineId = lineInfo[eventIdx];
+          int lineId = eventLineIds.at(event.first.get());
           int scopeId = event.first->scopeId;
           if (!scopeColor.count(scopeId)) {
             scopeColor[scopeId] = curColorIndex;
@@ -240,9 +263,69 @@ void StreamChromeTraceWriter::writeKernel(json &object,
           element["args"]["call_stack"] = callStack;
 
           object["traceEvents"].push_back(element);
-
-          eventIdx++;
         }
+      }
+
+      for (const auto &link : bt->asyncLinks) {
+        int scopeId = link.first.entry->scopeId;
+        if (!scopeColor.count(scopeId)) {
+          scopeColor[scopeId] = curColorIndex;
+          curColorIndex = (curColorIndex + 1) % kChromeColor.size();
+        }
+        const std::string &color = kChromeColor[scopeColor[scopeId]];
+        if (!metadata->scopeName.count(scopeId))
+          name = "async_scope_" + std::to_string(scopeId);
+        else
+          name = metadata->scopeName.at(scopeId);
+        pid = metadata->kernelName + " Core" + std::to_string(procId) + " CTA" +
+              std::to_string(ctaId);
+        category = "flow";
+        const double freq = 1000.0;
+        int64_t cycleAdjust = static_cast<int64_t>(bt->initTime - minInitTime) -
+                              static_cast<int64_t>(blockToMinCycle[ctaId]);
+
+        if (link.first.uid == link.second.uid) {
+          int64_t ts =
+              static_cast<int64_t>(link.first.entry->cycle) + cycleAdjust;
+          int64_t dur = static_cast<int64_t>(link.second.entry->cycle) -
+                        link.first.entry->cycle;
+          json element;
+          element["cname"] = color;
+          element["name"] = name;
+          element["cat"] = "async";
+          element["ph"] = "X";
+          element["pid"] = pid;
+          element["tid"] =
+              "warp " + std::to_string(link.first.uid) + " (line " +
+              std::to_string(eventLineIds.at(link.first.entry.get())) + ")";
+          element["ts"] = static_cast<double>(ts) / freq;
+          element["dur"] = static_cast<double>(dur) / freq;
+          element["args"]["call_stack"] = callStack;
+          object["traceEvents"].push_back(std::move(element));
+          continue;
+        }
+
+        const uint64_t flowId = nextFlowId++;
+        auto writeEndpoint = [&](const auto &endpoint, bool isStart) {
+          int64_t ts =
+              static_cast<int64_t>(endpoint.entry->cycle) + cycleAdjust;
+          json element;
+          element["cname"] = color;
+          element["name"] = name;
+          element["cat"] = category;
+          element["ph"] = "X";
+          element["dur"] = 0;
+          element["bind_id"] = flowId;
+          element[isStart ? "flow_out" : "flow_in"] = true;
+          element["pid"] = pid;
+          element["tid"] = "warp " + std::to_string(endpoint.uid) + " (line 0)";
+          element["ts"] = static_cast<double>(ts) / freq;
+          element["args"]["call_stack"] = callStack;
+          object["traceEvents"].push_back(std::move(element));
+        };
+
+        writeEndpoint(link.first, true);
+        writeEndpoint(link.second, false);
       }
     }
   }

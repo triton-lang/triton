@@ -240,8 +240,11 @@ def test_event(tmp_path: pathlib.Path):
 
     with trace_path.open("rb") as f:
         events = json.load(f)["traceEvents"]
-    event = next(event for event in events if event["name"] == "async")
-    assert event["ph"] == "X" and event["dur"] > 0
+    async_events = [event for event in events if event["name"] == "async"]
+    assert len(async_events) == 1
+    assert async_events[0]["ph"] == "X"
+    assert async_events[0]["dur"] > 0
+    assert "bind_id" not in async_events[0]
 
 
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="requires Ampere or newer")
@@ -287,12 +290,14 @@ def test_gluon_event(tmp_path: pathlib.Path):
 
     with trace_path.open("rb") as f:
         events = json.load(f)["traceEvents"]
-    events = [event for event in events if event["name"] == "async_copy"]
-    events_per_warp = {}
-    for event in events:
+    async_events = [event for event in events if event["name"] == "async_copy"]
+    events_by_warp = {}
+    for event in async_events:
         assert event["ph"] == "X" and event["dur"] > 0
-        events_per_warp[event["tid"]] = events_per_warp.get(event["tid"], 0) + 1
-    assert events_per_warp and set(events_per_warp.values()) == {3}
+        assert "bind_id" not in event
+        events_by_warp.setdefault(event["tid"], []).append(event)
+    assert events_by_warp
+    assert set(map(len, events_by_warp.values())) == {3}
 
 
 def test_select_ids(tmp_path: pathlib.Path):

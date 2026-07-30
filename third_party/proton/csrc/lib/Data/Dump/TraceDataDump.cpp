@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <sstream>
 #include <type_traits>
@@ -122,6 +123,10 @@ convertToTimelineTrace(std::vector<CycleEvent> &cycleEvents) {
     return getInt64Value(event.cycleMetric, CycleMetric::UnitId);
   };
 
+  auto getEndUnitId = [&](const CycleEvent &event) {
+    return getInt64Value(event.cycleMetric, CycleMetric::EndUnitId);
+  };
+
   auto getStartCycle = [&](const CycleEvent &event) {
     return getInt64Value(event.cycleMetric, CycleMetric::StartCycle);
   };
@@ -130,6 +135,9 @@ convertToTimelineTrace(std::vector<CycleEvent> &cycleEvents) {
     return getInt64Value(event.cycleMetric, CycleMetric::EndCycle);
   };
 
+  auto isAsync = [&](const CycleEvent &event) {
+    return getInt64Value(event.cycleMetric, CycleMetric::IsAsync) != 0;
+  };
   auto &sortedEvents = cycleEvents;
   std::sort(sortedEvents.begin(), sortedEvents.end(),
             [&](const CycleEvent &a, const CycleEvent &b) {
@@ -223,11 +231,41 @@ convertToTimelineTrace(std::vector<CycleEvent> &cycleEvents) {
           endEntry->isStart = false;
           endEntry->scopeId = scopeNameToId[scopeName];
 
+          if (isAsync(event)) {
+            startEntry->isAsync = true;
+            endEntry->isAsync = true;
+            blockTrace.asyncLinks.push_back(
+                {{currentUid, startEntry},
+                 {static_cast<uint32_t>(getEndUnitId(event)), endEntry}});
+            eventIndex++;
+            continue;
+          }
+
           unitTrace.profileEvents.emplace_back(startEntry, endEntry);
           eventIndex++;
         }
         blockTrace.traces.push_back(std::move(unitTrace));
       }
+
+      auto addAsyncRecord = [&](uint32_t uid,
+                                const std::shared_ptr<CycleEntry> &entry) {
+        auto traceIt =
+            std::find_if(blockTrace.traces.begin(), blockTrace.traces.end(),
+                         [&](const auto &trace) { return trace.uid == uid; });
+        if (traceIt == blockTrace.traces.end()) {
+          blockTrace.traces.emplace_back();
+          traceIt = std::prev(blockTrace.traces.end());
+          traceIt->uid = uid;
+        }
+        traceIt->asyncRecords.push_back(entry);
+      };
+      for (auto &link : blockTrace.asyncLinks) {
+        addAsyncRecord(link.first.uid, link.first.entry);
+        addAsyncRecord(link.second.uid, link.second.entry);
+      }
+      std::sort(
+          blockTrace.traces.begin(), blockTrace.traces.end(),
+          [](const auto &lhs, const auto &rhs) { return lhs.uid < rhs.uid; });
       parserResult->blockTraces.push_back(std::move(blockTrace));
     }
     std::vector<std::string> callStack;

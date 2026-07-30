@@ -89,6 +89,7 @@ void CircularLayoutParser::parseProfileEvents() {
     parseSegment(segmentByteSize, trace);
     position += segmentByteSize;
   }
+  pairAsyncRecords(bt);
 }
 
 void CircularLayoutParser::parseSegment(
@@ -104,6 +105,10 @@ void CircularLayoutParser::parseSegment(
   for (int i = 0; i < maxNumEntries; i++) {
     try {
       auto entry = decoder.decode<CycleEntry>();
+      if (entry->isAsync) {
+        trace.asyncRecords.push_back(entry);
+        continue;
+      }
       if (!activeEvent.count(entry->scopeId)) {
         activeEvent[entry->scopeId] =
             CircularLayoutParserResult::ProfileEvent();
@@ -140,6 +145,61 @@ void CircularLayoutParser::parseSegment(
     } catch (const ClockOverflowException &e) {
       reportException(e, buffer.position());
     }
+  }
+}
+
+void CircularLayoutParser::pairAsyncRecords(
+    CircularLayoutParserResult::BlockTrace &blockTrace) {
+  using AsyncEndpoint = CircularLayoutParserResult::AsyncEndpoint;
+  std::vector<AsyncEndpoint> endpoints;
+  for (auto &trace : blockTrace.traces) {
+    for (auto &entry : trace.asyncRecords)
+      endpoints.push_back({trace.uid, entry});
+  }
+  std::stable_sort(endpoints.begin(), endpoints.end(),
+                   [](const AsyncEndpoint &lhs, const AsyncEndpoint &rhs) {
+                     return lhs.entry->cycle < rhs.entry->cycle;
+                   });
+
+  // A static token may be executed by several warps. Keep one outstanding
+  // instance per token and warp, prefer a same-warp end, and otherwise connect
+  // the end to the oldest producer in another warp.
+  std::unordered_map<int, std::vector<AsyncEndpoint>> active;
+  for (auto &endpoint : endpoints) {
+    const int scopeId = endpoint.entry->scopeId;
+    auto &activeEndpoints = active[scopeId];
+    if (endpoint.entry->isStart) {
+      auto sameWarp =
+          std::find_if(activeEndpoints.begin(), activeEndpoints.end(),
+                       [&](const AsyncEndpoint &active) {
+                         return active.uid == endpoint.uid;
+                       });
+      if (sameWarp != activeEndpoints.end()) {
+        reportException(
+            ScopeMisMatchException("Async scope mismatch: start after start"),
+            buffer.position());
+        continue;
+      }
+      activeEndpoints.push_back(endpoint);
+      continue;
+    }
+    if (activeEndpoints.empty()) {
+      reportException(
+          ScopeMisMatchException("Async scope mismatch: end after end"),
+          buffer.position());
+      active.erase(scopeId);
+      continue;
+    }
+    auto startIt = std::find_if(activeEndpoints.begin(), activeEndpoints.end(),
+                                [&](const AsyncEndpoint &active) {
+                                  return active.uid == endpoint.uid;
+                                });
+    if (startIt == activeEndpoints.end())
+      startIt = activeEndpoints.begin();
+    blockTrace.asyncLinks.emplace_back(*startIt, endpoint);
+    activeEndpoints.erase(startIt);
+    if (activeEndpoints.empty())
+      active.erase(scopeId);
   }
 }
 
@@ -187,6 +247,10 @@ void shift(CircularLayoutParserResult::Trace &trace, const uint64_t cost,
       event.first->cycle -= cost;
     if (event.second->cycle >= timeBase)
       event.second->cycle -= cost;
+  }
+  for (auto &record : trace.asyncRecords) {
+    if (record->cycle >= timeBase)
+      record->cycle -= cost;
   }
 }
 } // namespace
@@ -242,6 +306,10 @@ void proton::timeShift(const uint64_t cost,
         if (event.second->cycle < event.first->cycle) {
           event.second->cycle = event.first->cycle + cost / 2;
         }
+      }
+      for (auto &record : trace.asyncRecords) {
+        const uint64_t recordTimeBase = record->cycle;
+        shift(trace, cost, recordTimeBase);
       }
     }
   }
