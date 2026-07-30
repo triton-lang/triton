@@ -460,6 +460,65 @@ def test_tma_gather_scatter_multi_cta(cga_layout):
 
 
 @gluon.jit
+def tma_gather_scatter_subslice_kernel(in_desc, out_desc, parent_out, KIND: ttgl.constexpr):
+    cga_layout: ttgl.constexpr = () if KIND == "row" else ((1, 0), )
+    shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 16, rank=2, cga_layout=cga_layout)
+    parent_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 8], [4, 1], [1, 0], cga_layout=cga_layout)
+    indices_layout: ttgl.constexpr = ttgl.SliceLayout(
+        1, ttgl.BlockedLayout([4, 1], [1, 32], [4, 1], [0, 1], cga_layout=cga_layout))
+    shape: ttgl.constexpr = (64, 256) if KIND == "column" else (128, 128)
+    parent = ttgl.allocate_shared_memory(ttgl.float16, shape, shared_layout,
+                                         value=ttgl.full(shape, -7, ttgl.float16, layout=parent_layout))
+    dim: ttgl.constexpr = 1 if KIND == "column" else 0
+    tile = parent.slice(shape[dim] // 2, shape[dim] // 2, dim=dim)
+
+    indices = ttgl.arange(0, 64, layout=indices_layout)
+    barrier = mbarrier.allocate_mbarrier()
+    mbarrier.init(barrier, count=1)
+    mbarrier.expect(barrier, tile.nbytes_per_cta)
+    blackwell_tma.async_gather(in_desc, 63 - indices, 0, barrier, tile)
+    mbarrier.wait(barrier, phase=0, deps=[tile])
+    if KIND != "row":
+        ttgl.barrier(cluster=True)
+
+    if KIND != "remote":
+        blackwell_tma.async_scatter(out_desc, (indices + 1) % 64, 0, tile)
+        tma.store_wait(0)
+
+    values = parent.load(parent_layout)
+    offsets = ttgl.arange(0, shape[0])[:, None] * shape[1] + ttgl.arange(0, shape[1])[None, :]
+    ttgl.store(parent_out + ttgl.set_auto_layout(offsets, values.type.layout), values)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("kind", ["row", "column", "remote"])
+def test_tma_gather_scatter_subslice(kind):
+    values = torch.arange(64 * 128, dtype=torch.float16, device="cuda").reshape(64, 128)
+    scatter_out = torch.zeros_like(values)
+    parent_out = torch.empty((64, 256) if kind == "column" else (128, 128), dtype=torch.float16, device="cuda")
+    cga_layout = () if kind == "row" else ((1, 0), )
+    shared_layout = ttgl.NVMMASharedLayout(128, 16, rank=2, cga_layout=cga_layout)
+    in_desc = TensorDescriptor.from_tensor(values, [1, 128], shared_layout)
+    out_desc = TensorDescriptor.from_tensor(scatter_out, [1, 128], shared_layout)
+
+    compiled = tma_gather_scatter_subslice_kernel[(1, )](in_desc, out_desc, parent_out, kind, num_warps=4,
+                                                         num_ctas=1 << len(cga_layout))
+
+    gathered = values.flip(0)
+    expected_parent = torch.full_like(parent_out, -7)
+    if kind == "column":
+        expected_parent[:, 128:] = gathered
+    else:
+        expected_parent[64:] = gathered
+    if kind == "remote":
+        assert "mapa.shared::cluster" in compiled.asm["ptx"]
+        assert "tile::gather4.cta_group::2.shared::cluster" in compiled.asm["ptx"]
+    else:
+        torch.testing.assert_close(scatter_out, gathered.roll(1, 0), atol=0, rtol=0)
+    torch.testing.assert_close(parent_out, expected_parent, atol=0, rtol=0)
+
+
+@gluon.jit
 def tcgen05_mma_multicast_commit_kernel(a_desc, b_desc, out_ptrs, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
                                         acc_tmem_layout: ttgl.constexpr, blocked_c: ttgl.constexpr):
     smem_a = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
@@ -3615,6 +3674,62 @@ def test_shared_subslice_two_ctas(op):
             assert "red.shared::cluster.cluster.relaxed.inc.u32" in ptx
             torch.testing.assert_close(result, inp[2:4], atol=0, rtol=0)
         torch.testing.assert_close(final, expected, atol=0, rtol=0)
+
+
+@gluon.jit
+def cross_cta_tma_kernel(desc, out, cga_layout: ttgl.constexpr, MODE: ttgl.constexpr):
+    alloc_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 8], [4, 1], [1, 0], cga_layout=cga_layout)
+    shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 32, rank=2, cga_layout=cga_layout)
+    parent = ttgl.allocate_shared_memory(ttgl.int32, [256, 64], shared_layout,
+                                         value=ttgl.full([256, 64], -5, ttgl.int32, layout=alloc_layout))
+    tile = parent.slice(128, 128, dim=0)
+    if MODE == "load":
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        mbarrier.expect(bar, desc.nbytes_per_cta)
+        tma.async_load(desc, [0, 0], bar, tile)
+        mbarrier.wait(bar, phase=0)
+        ttgl.barrier(cluster=True)
+        result = parent.load(alloc_layout)
+        offsets = ttgl.arange(0, 256)[:, None] * 64 + ttgl.arange(0, 64)[None, :]
+        offsets = ttgl.set_auto_layout(offsets, result.type.layout)
+        ttgl.store(out + offsets, result)
+    elif MODE == "store":
+        tma.async_store(desc, [0, 0], tile)
+    else:
+        tma.async_atomic_add(desc, [0, 0], tile)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize("mode,cga_layout", [
+    ("load", ((1, 0), )),
+    ("load", ((1, 0), (0, 0))),
+    ("load", ((0, 0), (1, 0))),
+    ("store", ((1, 0), )),
+    ("reduce", ((1, 0), )),
+], ids=["two-ctas", "four-ctas", "nonpeer", "store", "reduce"])
+def test_cross_cta_tma(mode, cga_layout, capfd):
+    if mode == "load" and not is_blackwell():
+        pytest.skip("Requires Blackwell CTA-pair completion")
+    inp = torch.arange(128 * 64, device="cuda", dtype=torch.int32).reshape(128, 64)
+    out = torch.full((256, 64), -1, device="cuda", dtype=torch.int32)
+    layout = ttgl.NVMMASharedLayout(128, 32, rank=2, cga_layout=cga_layout)
+    desc = TensorDescriptor.from_tensor(inp, [128, 64], layout)
+
+    if mode != "load":
+        with pytest.raises(RuntimeError, match="error encountered during parsing"):
+            cross_cta_tma_kernel.warmup(desc, out, cga_layout, MODE=mode, grid=(1, ), num_warps=4, num_ctas=2)
+        assert "source subview may have an origin in another CTA" in "".join(capfd.readouterr())
+    elif cga_layout[0] == (0, 0):
+        with pytest.raises(RuntimeError, match="error encountered during parsing"):
+            cross_cta_tma_kernel.warmup(desc, out, cga_layout, MODE=mode, grid=(1, ), num_warps=4, num_ctas=4)
+        assert "TMA destination and completion barrier must belong to the same CTA or a CTA pair" in "".join(
+            capfd.readouterr())
+    else:
+        compiled = cross_cta_tma_kernel[(1, )](desc, out, cga_layout, mode, num_warps=4, num_ctas=1 << len(cga_layout))
+        assert "mapa.shared::cluster" in compiled.asm["ptx"]
+        assert "cp.async.bulk.tensor.2d.cta_group::2.shared::cluster.global" in compiled.asm["ptx"]
+        torch.testing.assert_close(out, torch.cat((torch.full_like(inp, -5), inp)), atol=0, rtol=0)
 
 
 @gluon.jit
