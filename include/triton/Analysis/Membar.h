@@ -3,6 +3,7 @@
 
 #include "Allocation.h"
 #include "CallGraph.h"
+#include "Function.h"
 
 #include "llvm/Support/raw_ostream.h"
 #include <functional>
@@ -207,11 +208,11 @@ bool containsLocalBarrier(Operation *op);
 //===----------------------------------------------------------------------===//
 
 // Common class to analyze membar and fence placement.
-class MembarOrFenceAnalysis {
-  using VirtualBlock = std::pair<Block *, Block::iterator>;
-
+class MembarOrFenceAnalysis
+    : public triton::PostOrderFunctionAnalysis<BlockInfo> {
 public:
-  using FuncBlockInfoMapT = triton::CallGraph<BlockInfo>::FuncDataMapT;
+  using Base = triton::PostOrderFunctionAnalysis<BlockInfo>;
+  using FuncBlockInfoMapT = Base::FuncMapT;
   /// Creates a new Membar analysis that generates the shared memory barrier
   /// in the following circumstances:
   /// - RAW: If a shared memory write is followed by a shared memory read, and
@@ -236,27 +237,6 @@ public:
   void run(FuncBlockInfoMapT &funcBlockInfoMap);
 
 protected:
-  /// Applies the barrier analysis based on the SCF dialect, in which each
-  /// region has a single basic block only.
-  /// Example:
-  /// region1
-  ///   op1
-  ///   op2 (scf.if)
-  ///      region2
-  ///        op3
-  ///        op4
-  ///      region3
-  ///        op5
-  ///        op6
-  ///   op7
-  /// TODO: Explain why we don't use ForwardAnalysis:
-  void resolve(FunctionOpInterface funcOp, FuncBlockInfoMapT *funcBlockInfoMap,
-               OpBuilder *builder);
-
-  /// Collects the successors of the terminator
-  void visitTerminator(Operation *operation,
-                       SmallVector<VirtualBlock> &successors);
-
   /// Updates the BlockInfo operation based on the operation.
   virtual void update(Operation *operation, BlockInfo *blockInfo,
                       FuncBlockInfoMapT *funcBlockInfoMap,
