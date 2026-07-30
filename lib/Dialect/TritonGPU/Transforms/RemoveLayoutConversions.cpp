@@ -184,11 +184,7 @@ private:
   const LayoutConstraintGraph &graph;
 };
 
-struct LayoutAssignmentChange {
-  Value value;
-  Attribute originalEncoding;
-  Attribute proposedEncoding;
-};
+using LayoutAssignmentChange = std::pair<Value, Attribute>;
 
 /// The solver owns only candidate search, objective comparison, convergence,
 /// and rollback. Operation legality, graph construction, and physical costs
@@ -453,10 +449,11 @@ bool isLayoutAnchor(Operation *op) {
 }
 
 static bool isProtectedLayoutReduction(Operation *op);
-static bool isProtectedLayoutLoop(Operation *op);
+static bool isProtectedLayoutLoop(Operation *op, unsigned functionLoads,
+                                  unsigned functionStores);
 
 struct LayoutMemoryProfile {
-  unsigned tensorLoads = 0, stores = 0, reshapes = 0;
+  unsigned loads = 0, tensorLoads = 0, stores = 0, reshapes = 0;
   bool pairwiseReduction = false, wideScalarReduction = false;
   bool wideFp8Load = false, fp8Load = false, i8Load = false;
   bool join = false, complexBoundary = false;
@@ -481,6 +478,7 @@ static LayoutMemoryProfile getLayoutMemoryProfile(FuncOp funcOp) {
   LayoutMemoryProfile profile;
   funcOp.walk([&](Operation *op) {
     if (auto load = dyn_cast<LoadOp>(op)) {
+      ++profile.loads;
       if (auto tensor = dyn_cast<RankedTensorType>(load.getType())) {
         ++profile.tensorLoads;
         profile.fp8Load |= isa<Float8E4M3FNType>(tensor.getElementType());
@@ -519,9 +517,11 @@ static LayoutMemoryProfile getLayoutMemoryProfile(FuncOp funcOp) {
       profile.hardwareStore = true;
     } else if (isa<scf::ForOp, scf::WhileOp>(op)) {
       profile.complexBoundary = true;
-      if (isProtectedLayoutLoop(op))
-        profile.protectedLoops.push_back(op);
+      profile.protectedLoops.push_back(op);
     }
+  });
+  llvm::erase_if(profile.protectedLoops, [&](Operation *op) {
+    return !isProtectedLayoutLoop(op, profile.loads, profile.stores);
   });
   return profile;
 }
@@ -621,7 +621,8 @@ static bool isFixedLayoutBoundary(Operation *op) {
   return false;
 }
 
-static bool isProtectedLayoutLoop(Operation *op) {
+static bool isProtectedLayoutLoop(Operation *op, unsigned functionLoads,
+                                  unsigned functionStores) {
   if (!isa<scf::ForOp, scf::WhileOp>(op))
     return false;
 
@@ -631,16 +632,6 @@ static bool isProtectedLayoutLoop(Operation *op) {
           isa<RankedTensorType>(argument.getType()))
         return true;
 
-  unsigned functionLoadCount = 0;
-  unsigned functionStoreCount = 0;
-  if (auto parentFunction = op->getParentOfType<FuncOp>())
-    parentFunction.walk([&](Operation *nested) {
-      if (isa<LoadOp>(nested))
-        ++functionLoadCount;
-      else if (isa<StoreOp>(nested))
-        ++functionStoreCount;
-    });
-
   WalkResult body = op->walk([&](Operation *nested) {
     if (nested == op || !isFixedLayoutBoundary(nested))
       return WalkResult::advance();
@@ -649,7 +640,7 @@ static bool isProtectedLayoutLoop(Operation *op) {
 
     // A single masked load/store is one memory protocol. Count the complete
     // function so independent copy loops retain their global layout freedom.
-    if (functionLoadCount != 1 || functionStoreCount != 1)
+    if (functionLoads != 1 || functionStores != 1)
       return WalkResult::advance();
     auto store = dyn_cast<StoreOp>(nested);
     if (!store || !store.getMask())
@@ -1515,8 +1506,8 @@ bool LayoutPropagation::buildGlobalComponentProposal(
   SmallVector<std::pair<Value, Attribute>, 32> worklist;
 
   auto rollback = [&]() {
-    for (const LayoutAssignmentChange &change : llvm::reverse(changes))
-      assignments[change.value] = change.originalEncoding;
+    for (const auto &[value, original] : llvm::reverse(changes))
+      assignments[value] = original;
     changes.clear();
     return false;
   };
@@ -1566,7 +1557,7 @@ bool LayoutPropagation::buildGlobalComponentProposal(
     auto [value, candidate] = worklist.pop_back_val();
     Attribute original = assignments.lookup(value);
     if (original != candidate) {
-      changes.push_back({value, original, candidate});
+      changes.push_back({value, original});
       assignments[value] = candidate;
     }
 
@@ -1704,22 +1695,20 @@ void LayoutAssignmentSolver::solve(const LayoutConstraintGraph &graph,
             continue;
 
           SmallVector<Value, 32> changedValues;
-          for (const LayoutAssignmentChange &change : proposal)
-            changedValues.push_back(change.value);
+          for (const auto &[changed, original] : proposal)
+            changedValues.push_back(changed);
           uint64_t affectedProposalCost =
               callbacks.affectedCost(changedValues, assignments);
-          for (const LayoutAssignmentChange &change : llvm::reverse(proposal))
-            assignments[change.value] = change.originalEncoding;
+          for (auto &[changed, original] : proposal)
+            std::swap(assignments[changed], original);
           uint64_t previousCost =
               callbacks.affectedCost(changedValues, assignments);
-          uint64_t proposalCost =
-              currentCost - previousCost + affectedProposalCost;
-          if (proposalCost >= currentCost)
+          if (affectedProposalCost >= previousCost)
             continue;
 
-          for (const LayoutAssignmentChange &change : proposal)
-            assignments[change.value] = change.proposedEncoding;
-          currentCost = proposalCost;
+          for (auto &[changed, original] : proposal)
+            std::swap(assignments[changed], original);
+          currentCost -= previousCost - affectedProposalCost;
           changed = true;
         }
         if (proposalCount >= maxComponentProposals)
