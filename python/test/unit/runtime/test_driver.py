@@ -9,6 +9,7 @@ import triton
 import triton.language as tl
 from triton._compile_warmup import (
     CompilationTrace,
+    _main,
     _require_complete_warmup,
     _warmup_test_case,
     compile_warmup_only,
@@ -169,6 +170,24 @@ def test_compilation_trace_grades_attempted_warmup_tests(tmp_path):
     assert report["phases"]["unit"]["incomplete_warmed_tests"] == ["test_core.py::test_missing"]
 
 
+def test_compilation_trace_reports_multiple_phases(tmp_path, monkeypatch, capsys):
+    times = SimpleNamespace(total=125_000)
+    source = SimpleNamespace(name="kernel", fn=SimpleNamespace(_fn_name="package.kernel"), hash=lambda: "source")
+    for phase in ("unit", "attention"):
+        listener = CompilationTrace(str(tmp_path), phase, f"{phase}::test")
+        listener(src=source, metadata={"hash": phase}, metadata_group={}, times=times, cache_hit=True)
+    monkeypatch.setattr(sys, "argv",
+                        ["warmup", "report", "--directory",
+                         str(tmp_path), "--phase", "unit", "--phase", "attention"])
+
+    _main()
+
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 2
+    assert '"phases": {"unit":' in lines[0]
+    assert '"phases": {"attention":' in lines[1]
+
+
 def test_compile_warmup_skips_unsupported_fake_tensor_specializations():
     items = []
     for module_path, originalname in [
@@ -205,6 +224,28 @@ def test_compile_warmup_skips_zero_sized_inner_experts():
     pytest_collection_modifyitems(SimpleNamespace(getoption=lambda _: True), items)
 
     assert [bool(item.markers) for item in items] == [True, False, False]
+
+
+def test_compile_warmup_replaces_preshuffled_mxfp_conversion():
+    from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
+
+    item = SimpleNamespace(
+        module=SimpleNamespace(
+            __file__="/checkout/python/test/unit/language/test_matmul.py",
+            MXFP4Tensor=MXFP4Tensor,
+            MXScaleTensor=MXScaleTensor,
+        ),
+        originalname="test_preshuffle_scale_mxfp_cdna4",
+    )
+    previous_conversion = MXFP4Tensor.to
+
+    with compile_warmup_only(), _warmup_test_case(item):
+        value = MXFP4Tensor(size=(8, ), device="cuda").random().to(torch.float32)
+
+        assert type(value).__name__ == "FakeTensor"
+        assert value.shape == (8, )
+
+    assert MXFP4Tensor.to is previous_conversion
 
 
 def test_compile_warmup_replaces_triton_kernels_reference(monkeypatch):

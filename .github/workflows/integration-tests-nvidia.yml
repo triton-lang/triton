@@ -99,29 +99,23 @@ jobs:
             warmup_procs=64
           fi
           make WARMUP_PROCS="$warmup_procs" test-warmup
-          python3 -m triton._compile_warmup report --phase warmup-unit
-          python3 -m triton._compile_warmup report --phase warmup-triton-kernels
-          python3 -m triton._compile_warmup report --phase warmup-attention
+          warmup_reports=(--phase warmup-unit --phase warmup-triton-kernels --phase warmup-attention)
           if [[ "$RUNNER_TYPE" == "nvidia-gb200" ]]; then
-            python3 -m triton._compile_warmup report --phase warmup-gluon
-            python3 -m triton._compile_warmup report --phase warmup-gluon-examples
+            warmup_reports+=(--phase warmup-gluon --phase warmup-gluon-examples)
           fi
+          python3 -m triton._compile_warmup report "${warmup_reports[@]}"
       - name: Run triton tests
         run: |
           make NUM_PROCS=24 test-unit
-          python3 -m triton._compile_warmup report --phase unit --require-complete-warmup
-          python3 -m triton._compile_warmup report --phase triton-kernels --require-complete-warmup
-          python3 -m triton._compile_warmup report --phase attention --require-complete-warmup
+          python3 -m triton._compile_warmup report --phase unit --phase triton-kernels --phase attention --require-complete-warmup
           python3 -m triton._compile_warmup report --phase instrumentation
       - name: Run gluon tests
         run: |
           make NUM_PROCS=24 test-gluon
           if [[ "$RUNNER_TYPE" == "nvidia-gb200" ]]; then
-            python3 -m triton._compile_warmup report --phase gluon --require-complete-warmup
-            python3 -m triton._compile_warmup report --phase gluon-examples --require-complete-warmup
+            python3 -m triton._compile_warmup report --phase gluon --phase gluon-examples --require-complete-warmup
           else
-            python3 -m triton._compile_warmup report --phase gluon
-            python3 -m triton._compile_warmup report --phase gluon-examples
+            python3 -m triton._compile_warmup report --phase gluon --phase gluon-examples
           fi
       - name: Run gsan tests
         run: |

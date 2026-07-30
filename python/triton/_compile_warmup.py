@@ -183,6 +183,7 @@ def _warmup_test_case(item):
     if module_path.endswith("/python/test/unit/language/test_matmul.py") and item.originalname in {
             "test_block_scale_fp4",
             "test_mxfp8_mxfp4_matmul",
+            "test_preshuffle_scale_mxfp_cdna4",
     }:
         fp4_type = item.module.MXFP4Tensor
         scale_type = item.module.MXScaleTensor
@@ -512,19 +513,27 @@ def _require_complete_warmup(report):
 def _main():
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=["report"])
-    parser.add_argument("--phase")
+    parser.add_argument("--phase", action="append")
     parser.add_argument("--require-warmed-hits", action="store_true")
     parser.add_argument("--require-complete-warmup", action="store_true")
     parser.add_argument("--directory", default=os.environ.get("TRITON_CI_COMPILE_TRACE_DIR"))
     args = parser.parse_args()
     if args.directory is None:
         parser.error("set TRITON_CI_COMPILE_TRACE_DIR or pass --directory")
-    report = summarize_compile_trace(args.directory, args.phase)
-    print(f"TRITON_CI_COMPILE_TRACE {json.dumps(report, sort_keys=True)}")
-    if args.require_warmed_hits and not any(summary["warmed_hits"] for summary in report["phases"].values()):
-        raise SystemExit("warmup did not produce any runtime disk-cache hits")
-    if args.require_complete_warmup:
-        _require_complete_warmup(report)
+    complete_report = summarize_compile_trace(args.directory)
+    if args.phase:
+        reports = [{
+            **complete_report,
+            "phases": {phase: complete_report["phases"][phase]} if phase in complete_report["phases"] else {},
+        } for phase in args.phase]
+    else:
+        reports = [complete_report]
+    for report in reports:
+        print(f"TRITON_CI_COMPILE_TRACE {json.dumps(report, sort_keys=True)}")
+        if args.require_warmed_hits and not any(summary["warmed_hits"] for summary in report["phases"].values()):
+            raise SystemExit("warmup did not produce any runtime disk-cache hits")
+        if args.require_complete_warmup:
+            _require_complete_warmup(report)
 
 
 if __name__ == "__main__":
