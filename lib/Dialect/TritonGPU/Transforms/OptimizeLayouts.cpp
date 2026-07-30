@@ -25,7 +25,6 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/IntEqClasses.h"
-#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
@@ -165,28 +164,21 @@ public:
 using LayoutAssignment = DenseMap<Value, Attribute>;
 using LayoutValue = std::pair<Value, Attribute>;
 
+struct LayoutSlice {
+  SetVector<Value> values;
+  LayoutAssignment encodings;
+  DenseMap<LayoutValue, Value> rematerializations;
+};
+
 /// The solver owns only candidate search, objective comparison, convergence,
 /// and rollback. Operation legality, graph construction, and physical costs
 /// are supplied separately, so heuristics cannot leak into its core algorithm.
 class LayoutAssignmentSolver {
 public:
-  using Assignment = LayoutAssignment;
-
-  struct Callbacks {
-    llvm::function_ref<bool(Value, Attribute, const Assignment &)> isLegal;
-    llvm::function_ref<uint64_t(Value, Attribute, const Assignment &)>
-        valueCost;
-    llvm::function_ref<uint64_t(const Assignment &)> fullCost;
-    llvm::function_ref<uint64_t(ArrayRef<Value>, const Assignment &)>
-        affectedCost;
-    llvm::function_ref<bool(Value, Attribute, Assignment &,
-                            SmallVectorImpl<LayoutValue> &)>
-        proposeComponent;
-  };
-
+  template <typename Problem>
   static void solve(const LayoutConstraintGraph &graph,
-                    const LayoutSearchPolicy &policy, Assignment &assignments,
-                    const Callbacks &callbacks);
+                    const LayoutSearchPolicy &policy,
+                    LayoutAssignment &assignments, Problem &problem);
 };
 
 struct LayoutMemoryProfile;
@@ -242,8 +234,8 @@ public:
   void rewriteForOp(scf::ForOp forOp);
   void rewriteWhileOp(scf::WhileOp whileOp);
   void rewriteIfOp(scf::IfOp ifOp);
-  void rewriteYieldOp(scf::YieldOp yieldOp);
-  void rewriteConditionOp(scf::ConditionOp conditionOp);
+  void rewriteControlFlowOperands(Operation *operation, ValueRange targets,
+                                  unsigned firstOperand = 0);
   void rewriteReduceToScalar(Operation *reduceOp);
   void rewriteAssertOp(AssertOp assertOp);
   Attribute getEncodingBeforeRewrite(Value value) const;
@@ -252,10 +244,17 @@ public:
   // Return the mapped value in the given encoding. This will insert a convert
   // if the encoding is different than the encoding decided at resolve time.
   Value getValueAs(Value value, Attribute encoding);
-  // Dump the current stage of layout information.
-  void dump();
 
 private:
+  friend class LayoutAssignmentSolver;
+
+  template <typename Rewrite>
+  void rewriteAssignedValues(ValueRange values, Rewrite rewrite) {
+    for (auto [index, value] : llvm::enumerate(values))
+      if (auto it = layouts.find(value); it != layouts.end())
+        rewrite(index, value, it->second[0]);
+  }
+
   template <bool source>
   Attribute getCachedEncoding(Operation *op, Attribute encoding) const;
   bool canAssignEncoding(Value value, Attribute encoding,
@@ -298,24 +297,12 @@ public:
 
   // Map the original value to the remat'ed one.
   void addRematValue(Value old, Attribute encoding, Value newV);
-  // Get the remat'ed value in the given encoding, if one already exists and
-  // is different then the layout conversion root.
-  Value getRematValue(Value value, Attribute encoding) const {
-    return rematMapping.lookup(value).lookup(encoding);
-  }
-
-  bool backwardRematerialization(bool disableRematSplitting);
 
   /// Rematerialize the backward slice leading up to \p convertOp to produce the
   /// result layout directly if it is possible and profitable to do so.
   /// \return true if \p convertOp was eliminated, false otherwise.
   bool backwardRematerialization(ConvertLayoutOp convertOp,
                                  bool disableRematSplitting);
-
-  // TODO: Merge the three hoistConvert*(); functions as they are duplicate code
-  void hoistConvertDotOperand();
-  void hoistConvertOnTopOfExtOrBroadcast(bool disableRematSplitting);
-  void hoistConvertIntoConditionals();
 
   /// Attempt to hoist \p convertOp above operations that make the tensor larger
   /// and costlier to convert (e.g. ExtFOp and BroadcastOp). If this is
@@ -333,31 +320,33 @@ public:
 
   bool hoistConvertDotOperand(ConvertLayoutOp convertOp);
 
-  void rewriteSlice(
-      SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
-      const DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
-      ConvertLayoutOp convertOp, IRMapping &mapping);
-  void rewriteSlice(
-      SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
-      const DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
-      ConvertLayoutOp convertOp);
+  void rewriteSlice(LayoutSlice &slice, ConvertLayoutOp convertOp,
+                    IRMapping &mapping);
+  void rewriteSlice(LayoutSlice &slice, ConvertLayoutOp convertOp);
 
-  /// Invokes the utility function getConvertBackwardSlice with a callback for
-  /// checking whether a rematerialization for a particular value already
-  /// exists. Any value that has an existing rematerialization for all of its
-  /// uses will have that rematerialization inserted in \p existingRemats, and
-  /// will not have its operands traversed for inclusion in \p slice.
-  LogicalResult getConvertBackwardSlice(
-      OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
-      DenseMap<Value, Attribute> &layout,
-      DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
-      std::function<bool(Operation *)> stopPropagation);
-
+  /// Analyze a backward slice transactionally, reusing dominating existing
+  /// materializations and optionally requiring every producer to be movable.
   LogicalResult getRematerializableSlice(
-      OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
-      DenseMap<Value, Attribute> &layout,
-      DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
-      std::function<bool(Operation *)> stopPropagation = nullptr);
+      OpOperand &root, Attribute rootEncoding, LayoutSlice &slice,
+      std::function<bool(Operation *)> stopPropagation = nullptr,
+      bool requireRematerializable = true);
+
+  template <typename Rewrite, typename... Args>
+  bool rewriteConversions(Rewrite rewrite, Args... args) {
+    SmallVector<ConvertLayoutOp> conversions;
+    funcOp.walk(
+        [&](ConvertLayoutOp convert) { conversions.push_back(convert); });
+    bool changed = false;
+    for (ConvertLayoutOp convert : conversions) {
+      if ((this->*rewrite)(convert, args...)) {
+        changed = true;
+      } else {
+        addRematValue(convert.getSrc(), convert.getType().getEncoding(),
+                      convert.getResult());
+      }
+    }
+    return changed;
+  }
 
 private:
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
@@ -904,14 +893,9 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
       continue;
     bool hasChanged = false;
     for (auto encoding : info) {
-      Attribute dstEncoding;
-      if (isa<ConvertLayoutOp>(op)) {
-        // Try to remove the convert by making the dst encoding match the source
-        // encoding.
-        dstEncoding = encoding;
-      } else {
-        dstEncoding = inferDstEncoding(op, encoding);
-      }
+      // A conversion disappears when its destination matches its source.
+      Attribute dstEncoding =
+          isa<ConvertLayoutOp>(op) ? encoding : inferDstEncoding(op, encoding);
       if (dstEncoding)
         hasChanged |= addEncoding(value, dstEncoding);
     }
@@ -967,22 +951,17 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       setEncoding(result, info, changed, user);
       continue;
     }
-    if (auto gatherOp = dyn_cast<GatherOp>(user)) {
-      // Propagate the layout through the indices only, and if the layout does
-      // not have an efficient layout set.
-      if (!gatherOp.getEfficientLayout() &&
-          &use == &gatherOp.getIndicesMutable()) {
-        setEncoding(gatherOp.getResult(), info, changed, user);
-        continue;
-      }
+    // Gather propagates only through its unconstrained index operand.
+    if (auto gatherOp = dyn_cast<GatherOp>(user);
+        gatherOp && !gatherOp.getEfficientLayout() &&
+        &use == &gatherOp.getIndicesMutable()) {
+      setEncoding(gatherOp.getResult(), info, changed, user);
+      continue;
     }
     if (auto reshapeOp = dyn_cast<ReshapeOp>(user);
         reshapeOp && reshapeOp.getEfficientLayout())
       continue;
-    if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
-        user->hasTrait<OpTrait::Elementwise>() ||
-        isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-            ConvertLayoutOp>(user)) {
+    if (isLayoutTransform(user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -1101,12 +1080,10 @@ uint64_t LayoutCostModel::getTransitionCost(
 
   // Cross-lane traffic scales with the physical element width, so prefer a
   // conversion after narrowing when both placements are otherwise equivalent.
-  int64_t elementCount = std::max<int64_t>(32, tensorType.getNumElements());
-  uint64_t byteCount = elementCount * getElementBytes(tensorType);
-
-  if (cvtNeedsWarpShuffle(sourceType, resultType))
-    return cached->second = 4 * byteCount;
-  return cached->second = 32 * byteCount;
+  uint64_t byteCount = std::max<int64_t>(32, tensorType.getNumElements()) *
+                       getElementBytes(tensorType);
+  return cached->second =
+             (cvtNeedsWarpShuffle(sourceType, resultType) ? 4 : 32) * byteCount;
 }
 
 uint64_t LayoutCostModel::getRegisterPressureCost(Value value,
@@ -1129,9 +1106,8 @@ uint64_t LayoutCostModel::getRegisterPressureCost(Value value,
   // Concentrating a distributed tile into registers serializes work that
   // could otherwise be performed by a warp. Price that work alongside the
   // warp-sized exchange used for physical layout transitions.
-  cached->second =
-      32 * (assignedElements - originalElements) * getElementBytes(tensorType);
-  return cached->second;
+  return cached->second = 32 * (assignedElements - originalElements) *
+                          getElementBytes(tensorType);
 }
 
 uint64_t LayoutCostModel::getReductionCost(Value value, Attribute encoding,
@@ -1157,23 +1133,18 @@ uint64_t LayoutCostModel::getReductionCost(Value value, Attribute encoding,
   // A warp-local reduction exchanges only the participating lanes. Splitting
   // its axis across warps additionally requires shared-memory exchange and
   // CTA-wide synchronization, even when the IR has no explicit conversion.
-  cached->second = rows * getElementBytes(tensorType) *
-                   ((lanes - 1) + 32 * lanes * (warps - 1));
-  return cached->second;
+  return cached->second = rows * getElementBytes(tensorType) *
+                          ((lanes - 1) + 32 * lanes * (warps - 1));
 }
 
 uint64_t LayoutCostModel::getExecutionWeight(Operation *op) const {
   auto [cached, inserted] = executionWeights.try_emplace(op, 1);
-  if (!inserted)
-    return cached->second;
-
-  uint64_t &weight = cached->second;
-  for (Operation *parent = op->getParentOp(); parent;
-       parent = parent->getParentOp()) {
-    if (isa<scf::ForOp, scf::WhileOp>(parent))
-      weight = std::min<uint64_t>(256, 4 * weight);
-  }
-  return weight;
+  if (inserted)
+    for (Operation *parent = op->getParentOp(); parent;
+         parent = parent->getParentOp())
+      if (isa<scf::ForOp, scf::WhileOp>(parent))
+        cached->second = std::min<uint64_t>(256, 4 * cached->second);
+  return cached->second;
 }
 
 template <bool source>
@@ -1277,9 +1248,14 @@ SmallVector<Attribute, 4> LayoutPropagation::getUseEncodings(
         encodings.push_back(encoding);
   };
 
-  if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-    if (Value result = forOp.getTiedLoopResult(&use))
-      addEncoding(result);
+  if (auto [controlFlow, index] =
+          getControlFlowComponent(use, /*includeConditionals=*/true);
+      controlFlow) {
+    if (auto whileOp = dyn_cast<scf::WhileOp>(controlFlow);
+        whileOp && (controlFlow == user || isa<scf::YieldOp>(user)))
+      addEncoding(whileOp.getBeforeArguments()[index]);
+    else
+      addEncoding(controlFlow->getResult(index));
     return encodings;
   }
   if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
@@ -1288,21 +1264,12 @@ SmallVector<Attribute, 4> LayoutPropagation::getUseEncodings(
     return encodings;
   }
   if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-    Operation *parent = yieldOp->getParentOp();
-    unsigned index = use.getOperandNumber();
-    if (auto whileOp = dyn_cast<scf::WhileOp>(parent))
-      addEncoding(whileOp.getBeforeArguments()[index]);
-    else if (isa<scf::ForOp, scf::IfOp>(parent))
-      addEncoding(parent->getResult(index));
+    if (auto whileOp = dyn_cast<scf::WhileOp>(yieldOp->getParentOp()))
+      addEncoding(whileOp.getBeforeArguments()[use.getOperandNumber()]);
     return encodings;
   }
-  if (auto conditionOp = dyn_cast<scf::ConditionOp>(user)) {
-    if (use.getOperandNumber() != 0) {
-      auto whileOp = cast<scf::WhileOp>(conditionOp->getParentOp());
-      addEncoding(whileOp.getResult(use.getOperandNumber() - 1));
-    }
+  if (isa<scf::ForOp, scf::ConditionOp>(user))
     return encodings;
-  }
 
   // A scalar reduction has no result layout to impose on its input.
   if (reduceToScalar(user))
@@ -1578,10 +1545,11 @@ bool LayoutPropagation::buildGlobalComponentProposal(
   return true;
 }
 
+template <typename Problem>
 void LayoutAssignmentSolver::solve(const LayoutConstraintGraph &graph,
                                    const LayoutSearchPolicy &policy,
-                                   Assignment &assignments,
-                                   const Callbacks &callbacks) {
+                                   LayoutAssignment &assignments,
+                                   Problem &problem) {
   const bool useFullObjective = policy.fullObjective;
   if (policy.componentSearch) {
     constexpr unsigned maxComponentIterations = 4;
@@ -1609,8 +1577,8 @@ void LayoutAssignmentSolver::solve(const LayoutConstraintGraph &graph,
             continue;
 
           SmallVector<LayoutValue, 32> proposal;
-          if (!callbacks.proposeComponent(value, candidate, assignments,
-                                          proposal) ||
+          if (!problem.buildGlobalComponentProposal(value, candidate,
+                                                    assignments, proposal) ||
               proposal.empty())
             continue;
 
@@ -1618,11 +1586,11 @@ void LayoutAssignmentSolver::solve(const LayoutConstraintGraph &graph,
           for (const auto &[changed, original] : proposal)
             changedValues.push_back(changed);
           uint64_t affectedProposalCost =
-              callbacks.affectedCost(changedValues, assignments);
+              problem.getAffectedAssignmentCost(changedValues, assignments);
           for (auto &[changed, original] : proposal)
             std::swap(assignments[changed], original);
           uint64_t previousCost =
-              callbacks.affectedCost(changedValues, assignments);
+              problem.getAffectedAssignmentCost(changedValues, assignments);
           if (affectedProposalCost >= previousCost)
             continue;
 
@@ -1647,20 +1615,23 @@ void LayoutAssignmentSolver::solve(const LayoutConstraintGraph &graph,
 
       Attribute original = assignments.lookup(value);
       Attribute best = original;
-      uint64_t bestCost = useFullObjective
-                              ? callbacks.affectedCost({value}, assignments)
-                              : callbacks.valueCost(value, best, assignments);
+      uint64_t bestCost =
+          useFullObjective
+              ? problem.getAffectedAssignmentCost({value}, assignments)
+              : problem.getAssignmentCost(value, best, assignments);
       for (Attribute candidate : node.candidates) {
         if (candidate == original ||
-            !callbacks.isLegal(value, candidate, assignments))
+            !problem.canAssignEncoding(value, candidate, assignments))
           continue;
         uint64_t candidateCost;
         if (useFullObjective) {
           assignments[value] = candidate;
-          candidateCost = callbacks.affectedCost({value}, assignments);
+          candidateCost =
+              problem.getAffectedAssignmentCost({value}, assignments);
           assignments[value] = original;
         } else {
-          candidateCost = callbacks.valueCost(value, candidate, assignments);
+          candidateCost =
+              problem.getAssignmentCost(value, candidate, assignments);
         }
         if (candidateCost < bestCost) {
           best = candidate;
@@ -1691,7 +1662,8 @@ void LayoutAssignmentSolver::solve(const LayoutConstraintGraph &graph,
     bool changed = false;
     for (const LayoutConstraintGraph::Node &node : graph.getNodes()) {
       Value value = node.value;
-      if (callbacks.isLegal(value, assignments.lookup(value), assignments))
+      if (problem.canAssignEncoding(value, assignments.lookup(value),
+                                    assignments))
         continue;
       assignments[value] =
           cast<RankedTensorType>(value.getType()).getEncoding();
@@ -1718,7 +1690,7 @@ void LayoutAssignmentSolver::solve(const LayoutConstraintGraph &graph,
     if (states > policy.maxExactComponentStates)
       continue;
 
-    uint64_t bestCost = callbacks.fullCost(assignments);
+    uint64_t bestCost = problem.getGlobalAssignmentCost(assignments);
     SmallVector<Attribute, 8> bestAssignments;
     for (unsigned index : component)
       bestAssignments.push_back(
@@ -1727,10 +1699,10 @@ void LayoutAssignmentSolver::solve(const LayoutConstraintGraph &graph,
     auto search = [&](auto &&self, unsigned position) -> void {
       if (position == component.size()) {
         for (const LayoutConstraintGraph::Node &node : graph.getNodes())
-          if (!callbacks.isLegal(node.value, assignments.lookup(node.value),
-                                 assignments))
+          if (!problem.canAssignEncoding(
+                  node.value, assignments.lookup(node.value), assignments))
             return;
-        uint64_t candidateCost = callbacks.fullCost(assignments);
+        uint64_t candidateCost = problem.getGlobalAssignmentCost(assignments);
         if (candidateCost >= bestCost)
           return;
         bestCost = candidateCost;
@@ -1776,44 +1748,13 @@ void LayoutPropagation::resolveGlobalConflicts() {
                       << (policy.fullObjective ? "the full" : "the bounded")
                       << " global objective");
 
-    LayoutAssignmentSolver::solve(
-        graph, policy, assignments,
-        {[&](Value value, Attribute encoding, const auto &current) {
-           return canAssignEncoding(value, encoding, current);
-         },
-         [&](Value value, Attribute encoding, const auto &current) {
-           return getAssignmentCost(value, encoding, current);
-         },
-         [&](const auto &current) { return getGlobalAssignmentCost(current); },
-         [&](ArrayRef<Value> changed, const auto &current) {
-           return getAffectedAssignmentCost(changed, current);
-         },
-         [&](Value value, Attribute encoding, auto &current,
-             SmallVectorImpl<LayoutValue> &changes) {
-           return buildGlobalComponentProposal(value, encoding, current,
-                                               changes);
-         }});
+    LayoutAssignmentSolver::solve(graph, policy, assignments, *this);
   }
 
   for (auto &[value, info] : layouts) {
     Attribute encoding = assignments.lookup(value);
     info.clear();
     info.insert(encoding);
-  }
-}
-
-void LayoutPropagation::dump() {
-  for (auto it : layouts) {
-    llvm::errs() << "Value: ";
-    OpPrintingFlags flags;
-    flags.skipRegions();
-    it.first.print(llvm::errs(), flags);
-    llvm::errs() << " \n encoding:\n";
-    for (auto encoding : it.second) {
-      encoding.print(llvm::errs());
-      llvm::errs() << "\n";
-    }
-    llvm::errs() << "--\n";
   }
 }
 
@@ -1825,30 +1766,27 @@ void LayoutPropagation::rewriteRegion(Region &region) {
     Region *currentRegion = queue.front();
     queue.pop_front();
     for (Operation &op : currentRegion->getOps()) {
-      bool needRewrite = false;
-      SmallVector<Value> results = op.getResults();
-      for (Value result : results) {
+      bool needRewrite = llvm::any_of(op.getResults(), [&](Value result) {
         auto it = layouts.find(result);
-        // If we haven't mapped this value skip.
         if (it == layouts.end())
-          continue;
+          return false;
         LayoutInfo &info = it->second;
         assert(info.size() == 1 &&
                "we should have resolved to a single encoding");
-        auto encoding = cast<RankedTensorType>(result.getType()).getEncoding();
-        // If the encoding is already what we want skip.
-        if (encoding == *info.begin())
-          continue;
-        needRewrite = true;
-      }
+        return cast<RankedTensorType>(result.getType()).getEncoding() !=
+               *info.begin();
+      });
       if (needRewrite) {
         rewriteOp(&op);
-        for (Region &R : op.getRegions())
-          queue.push_back(&R);
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(&op)) {
-        rewriteYieldOp(yieldOp);
+        Operation *parent = yieldOp->getParentOp();
+        if (auto whileOp = dyn_cast<scf::WhileOp>(parent))
+          rewriteControlFlowOperands(yieldOp, whileOp.getBeforeArguments());
+        else if (isa<scf::ForOp, scf::IfOp>(parent))
+          rewriteControlFlowOperands(yieldOp, parent->getResults());
       } else if (auto conditionOp = dyn_cast<scf::ConditionOp>(&op)) {
-        rewriteConditionOp(conditionOp);
+        auto whileOp = cast<scf::WhileOp>(conditionOp->getParentOp());
+        rewriteControlFlowOperands(conditionOp, whileOp.getResults(), 1);
       } else if (reduceToScalar(&op)) {
         rewriteReduceToScalar(&op);
       } else if (auto assertOp = dyn_cast<AssertOp>(&op)) {
@@ -1864,16 +1802,16 @@ void LayoutPropagation::rewriteRegion(Region &region) {
           Value newOperand = getValueAs(operand.get(), encoding);
           op.setOperand(operand.getOperandNumber(), newOperand);
         }
-        for (Region &R : op.getRegions())
-          queue.push_back(&R);
       }
+      for (Region &nested : op.getRegions())
+        queue.push_back(&nested);
     }
   }
 }
 
 Value LayoutPropagation::getValueAs(Value value, Attribute encoding) {
   if (auto tensorType = dyn_cast<RankedTensorType>(value.getType())) {
-    if (cast<RankedTensorType>(value.getType()).getEncoding() == encoding)
+    if (tensorType.getEncoding() == encoding)
       return value;
     OpBuilder rewriter(value.getContext());
     rewriter.setInsertionPointAfterValue(value);
@@ -1897,8 +1835,7 @@ Attribute LayoutPropagation::getEncodingBeforeRewrite(Value value) const {
 
 void LayoutPropagation::setEncodingInPlace(Value value, Attribute encoding) {
   auto tensorType = cast<RankedTensorType>(value.getType());
-  if (!originalEncodings.count(value))
-    originalEncodings[value] = tensorType.getEncoding();
+  originalEncodings.try_emplace(value, tensorType.getEncoding());
   value.setType(tensorType.cloneWithEncoding(encoding));
 }
 
@@ -1924,97 +1861,55 @@ void LayoutPropagation::rewriteGenericOpInPlace(Operation *op,
     op->setOperand(operand.getOperandNumber(),
                    getValueAs(operand.get(), operandEnc));
   }
-  for (Value result : op->getResults()) {
-    auto tensorType = dyn_cast<RankedTensorType>(result.getType());
-    if (!tensorType)
-      continue;
-    setEncodingInPlace(result, encoding);
-  }
+  for (Value result : op->getResults())
+    if (isa<RankedTensorType>(result.getType()))
+      setEncodingInPlace(result, encoding);
 }
 
 void LayoutPropagation::rewriteForOp(scf::ForOp forOp) {
-  for (auto [i, operand, result, regionArg] :
-       llvm::enumerate(forOp.getInitArgs(), forOp.getResults(),
-                       forOp.getRegionIterArgs())) {
-    auto resultTy = dyn_cast<RankedTensorType>(result.getType());
-    if (!resultTy)
-      continue;
-    auto it = layouts.find(result);
-    if (it == layouts.end())
-      continue;
-    Attribute encoding = it->second[0];
-    Value convertedOperand = getValueAs(operand, encoding);
-    forOp.getInitArgsMutable()[i].assign(convertedOperand);
+  rewriteAssignedValues(forOp.getResults(), [&](unsigned index, Value result,
+                                                Attribute encoding) {
+    forOp.getInitArgsMutable()[index].assign(
+        getValueAs(forOp.getInitArgs()[index], encoding));
     setEncodingInPlace(result, encoding);
-    setEncodingInPlace(regionArg, encoding);
-  }
+    setEncodingInPlace(forOp.getRegionIterArg(index), encoding);
+  });
 }
 
 void LayoutPropagation::rewriteWhileOp(scf::WhileOp whileOp) {
-  for (auto [i, operand, beforeArg] :
-       llvm::enumerate(whileOp->getOperands(), whileOp.getBeforeArguments())) {
-    auto it = layouts.find(beforeArg);
-    if (it == layouts.end())
-      continue;
-    Attribute encoding = it->second[0];
-    Value convertedOperand = getValueAs(operand, encoding);
-    whileOp->setOperand(i, convertedOperand);
-    setEncodingInPlace(beforeArg, encoding);
-  }
-
-  for (auto [result, afterArg] :
-       llvm::zip(whileOp.getResults(), whileOp.getAfterArguments())) {
-    auto it = layouts.find(result);
-    if (it == layouts.end())
-      continue;
-    Attribute encoding = it->second[0];
+  rewriteAssignedValues(
+      whileOp.getBeforeArguments(),
+      [&](unsigned index, Value argument, Attribute encoding) {
+        whileOp->setOperand(index,
+                            getValueAs(whileOp->getOperand(index), encoding));
+        setEncodingInPlace(argument, encoding);
+      });
+  rewriteAssignedValues(whileOp.getResults(), [&](unsigned index, Value result,
+                                                  Attribute encoding) {
     setEncodingInPlace(result, encoding);
-    setEncodingInPlace(afterArg, encoding);
-  }
+    setEncodingInPlace(whileOp.getAfterArguments()[index], encoding);
+  });
 }
 
 void LayoutPropagation::rewriteIfOp(scf::IfOp ifOp) {
-  for (unsigned i = 0, e = ifOp->getNumResults(); i < e; ++i) {
-    auto it = layouts.find(ifOp.getResult(i));
-    if (it == layouts.end())
-      continue;
-    Attribute encoding = *(it->second.begin());
-    setEncodingInPlace(ifOp.getResult(i), encoding);
-  }
+  rewriteAssignedValues(ifOp.getResults(),
+                        [&](unsigned, Value result, Attribute encoding) {
+                          setEncodingInPlace(result, encoding);
+                        });
 }
 
-void LayoutPropagation::rewriteYieldOp(scf::YieldOp yieldOp) {
-  Operation *parentOp = yieldOp->getParentOp();
-  for (OpOperand &operand : yieldOp->getOpOperands()) {
-    Type yieldType = operand.get().getType();
-    if (isa<scf::ForOp, scf::IfOp>(parentOp))
-      yieldType = parentOp->getResult(operand.getOperandNumber()).getType();
-    if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp))
-      yieldType =
-          whileOp.getBeforeArguments()[operand.getOperandNumber()].getType();
-    auto tensorType = dyn_cast<RankedTensorType>(yieldType);
-    if (!tensorType)
-      continue;
-    Value newOperand = getValueAs(operand.get(), tensorType.getEncoding());
-    yieldOp->setOperand(operand.getOperandNumber(), newOperand);
-  }
-}
-
-void LayoutPropagation::rewriteConditionOp(scf::ConditionOp conditionOp) {
-  scf::WhileOp whileOp = cast<scf::WhileOp>(conditionOp->getParentOp());
-  for (unsigned i = 1; i < conditionOp->getNumOperands(); ++i) {
-    OpOperand &operand = conditionOp->getOpOperand(i);
-    Type argType = whileOp->getResult(operand.getOperandNumber() - 1).getType();
-    auto tensorType = dyn_cast<RankedTensorType>(argType);
-    if (!tensorType)
-      continue;
-    Value newOperand = getValueAs(operand.get(), tensorType.getEncoding());
-    conditionOp->setOperand(operand.getOperandNumber(), newOperand);
-  }
+void LayoutPropagation::rewriteControlFlowOperands(Operation *operation,
+                                                   ValueRange targets,
+                                                   unsigned firstOperand) {
+  for (auto [index, target] : llvm::enumerate(targets))
+    if (auto type = dyn_cast<RankedTensorType>(target.getType())) {
+      unsigned operand = firstOperand + index;
+      operation->setOperand(operand, getValueAs(operation->getOperand(operand),
+                                                type.getEncoding()));
+    }
 }
 
 void LayoutPropagation::rewriteReduceToScalar(Operation *reduceOp) {
-  OpBuilder rewriter(reduceOp);
   Attribute srcEncoding;
   // Since all the operands need to have the same encoding pick the first one
   // and use it for all the operands.
@@ -2034,15 +1929,12 @@ void LayoutPropagation::rewriteReduceToScalar(Operation *reduceOp) {
 }
 
 void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
-  Attribute srcEncoding;
   // Only need to deal with the first operand which is the condition tensor.
   Value operand = assertOp->getOperand(0);
   auto it = layouts.find(operand);
   if (it == layouts.end())
     return;
-  srcEncoding = it->second[0];
-  Value newOperand = getValueAs(operand, srcEncoding);
-  assertOp->setOperand(0, newOperand);
+  assertOp->setOperand(0, getValueAs(operand, it->second[0]));
 }
 
 void LayoutPropagation::rewriteOp(Operation *op) {
@@ -2061,11 +1953,8 @@ void LayoutPropagation::rewriteOp(Operation *op) {
         auto resultType = cast<RankedTensorType>(constant.getType());
         constant.setValueAttr(elements.reshape(resultType));
       }
-    } else if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
-               op->hasTrait<OpTrait::Elementwise>() ||
-               isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-                   GatherOp, ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(
-                   op)) {
+    } else if (isLayoutTransform(op) ||
+               isa<GatherOp, nvidia_gpu::WarpGroupDotWaitOp>(op)) {
       rewriteGenericOpInPlace(op, encoding);
     } else {
       llvm::report_fatal_error("unexpected op in rewrite");
@@ -2112,10 +2001,10 @@ void LayoutRematerialization::updateRematMapping(
   }
 }
 
-void LayoutRematerialization::rewriteSlice(
-    SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
-    const DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
-    ConvertLayoutOp convertOp, IRMapping &mapping) {
+void LayoutRematerialization::rewriteSlice(LayoutSlice &state,
+                                           ConvertLayoutOp convertOp,
+                                           IRMapping &mapping) {
+  auto &[slice, layout, existingRemats] = state;
   for (const auto &[value, encoding] : layout) {
     if (Value remat = existingRemats.lookup({value, encoding}))
       mapping.map(value, remat);
@@ -2162,9 +2051,9 @@ void LayoutRematerialization::rewriteSlice(
       for (auto arg : forOp.getRegionIterArgs()) {
         if (slice.count(arg)) {
           OpOperand &initVal = *forOp.getTiedLoopInit(arg);
-          argMapping.push_back(std::make_pair(
+          argMapping.emplace_back(
               forOp.getTiedLoopResult(&initVal).getResultNumber(),
-              forOp.getInitArgs().size() + newOperands.size()));
+              forOp.getInitArgs().size() + newOperands.size());
           newOperands.push_back(mapping.lookup(initVal.get()));
         }
       }
@@ -2206,18 +2095,13 @@ void LayoutRematerialization::rewriteSlice(
       }
       scf::IfOp newIfOp =
           replaceIfOpWithNewSignature(builder, ifOp, newTypes, replacements);
-      unsigned oldIdx = 0;
       unsigned newIdx = ifOp.getNumResults();
-      for (auto res : ifOp.getResults()) {
-        if (slice.count(res)) {
-          // Why can't we use res instead of ifOp.getResult(oldIdx)?
-          mapping.map(ifOp.getResult(oldIdx), newIfOp.getResult(newIdx));
-          addRematValue(ifOp.getResult(oldIdx), layout[res],
-                        newIfOp.getResult(newIdx));
+      for (Value result : ifOp.getResults())
+        if (slice.count(result)) {
+          mapping.map(result, newIfOp.getResult(newIdx));
+          addRematValue(result, layout[result], newIfOp.getResult(newIdx));
           ++newIdx;
         }
-        ++oldIdx;
-      }
       deadOps.push_back(ifOp.getOperation());
       continue;
     }
@@ -2272,22 +2156,21 @@ void LayoutRematerialization::rewriteSlice(
     op->erase();
 }
 
-void LayoutRematerialization::rewriteSlice(
-    SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
-    const DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
-    ConvertLayoutOp convertOp) {
+void LayoutRematerialization::rewriteSlice(LayoutSlice &slice,
+                                           ConvertLayoutOp convertOp) {
   IRMapping mapping;
-  rewriteSlice(slice, layout, existingRemats, convertOp, mapping);
+  rewriteSlice(slice, convertOp, mapping);
 }
 
-LogicalResult LayoutRematerialization::getConvertBackwardSlice(
-    OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
-    DenseMap<Value, Attribute> &layout,
-    DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
-    std::function<bool(Operation *)> stopPropagation) {
+LogicalResult LayoutRematerialization::getRematerializableSlice(
+    OpOperand &root, Attribute rootEncoding, LayoutSlice &state,
+    std::function<bool(Operation *)> stopPropagation,
+    bool requireRematerializable) {
+  LayoutSlice candidate = state;
+  auto &[slice, layout, existingRemats] = candidate;
   // Allow re-using existing conversions for a value if it dominates the use.
   auto getExistingConversion = [&](OpOperand &value, Attribute encoding) {
-    Value remat = getRematValue(value.get(), encoding);
+    Value remat = rematMapping.lookup(value.get()).lookup(encoding);
     if (!remat)
       return Value();
     // `value` can be replaced with an existing rematerialization if it
@@ -2297,105 +2180,23 @@ LogicalResult LayoutRematerialization::getConvertBackwardSlice(
       existingRemats.try_emplace({value.get(), encoding}, remat);
       return remat;
     }
-    // FIXME: If the current user is a conversion, then we know it will become
-    // a no-op when its operand is replaced with `remat`, but we need to check
-    // that its users are all dominated by `remat` so the IR is valid.
-    // if (isa<ConvertLayoutOp>(user) && remat.getDefiningOp() &&
-    //     domInfo.properlyDominates(user, remat.getDefiningOp())) {
-    //   for (Operation *op : user->getUsers()) {
-    //     if (!domInfo.dominates(remat, op))
-    //       return Value();
-    //   }
-    //   return remat;
-    // }
-
     // There is an existing rematerialization, but it doesn't dominate all the
     // uses we care about, so ensure it isn't used.
     existingRemats[{value.get(), encoding}] = Value();
     return Value();
   };
 
-  return mlir::getConvertBackwardSlice(root, slice, rootEncoding, layout,
-                                       stopPropagation, getExistingConversion);
-}
-
-LogicalResult LayoutRematerialization::getRematerializableSlice(
-    OpOperand &root, Attribute rootEncoding, SetVector<Value> &sliceArg,
-    DenseMap<Value, Attribute> &layoutArg,
-    DenseMap<std::pair<Value, Attribute>, Value> &existingRematsArg,
-    std::function<bool(Operation *)> stopPropagation) {
-  // Operate on copies of the input, we do not want to modify them unless we
-  // have succeeded.
-  auto slice = sliceArg;
-  auto layout = layoutArg;
-  auto existingRemats = existingRematsArg;
-  LogicalResult result = getConvertBackwardSlice(
-      root, rootEncoding, slice, layout, existingRemats, stopPropagation);
-  if (result.failed())
+  if (failed(mlir::getConvertBackwardSlice(root, slice, rootEncoding, layout,
+                                           stopPropagation,
+                                           getExistingConversion)))
     return failure();
 
-  // Check if all the operations in the slice can be rematerialized.
-  for (Value v : slice) {
-    if (Operation *op = v.getDefiningOp()) {
-      if (!canBeRemat(op))
+  if (requireRematerializable)
+    for (Value value : slice)
+      if (Operation *op = value.getDefiningOp(); op && !canBeRemat(op))
         return failure();
-    }
-  }
-  sliceArg = std::move(slice);
-  layoutArg = std::move(layout);
-  existingRematsArg = std::move(existingRemats);
+  state = std::move(candidate);
   return success();
-}
-
-bool LayoutRematerialization::backwardRematerialization(
-    bool disableRematSplitting) {
-  bool changed = false;
-  // Go through each ConvertLayoutOp.
-  SmallVector<ConvertLayoutOp> convertOps;
-  funcOp.walk(
-      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
-  for (ConvertLayoutOp convertOp : convertOps) {
-    if (!backwardRematerialization(convertOp, disableRematSplitting)) {
-      // If the conversion didn't get removed, consider it for reuse in future
-      // backward slices.
-      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
-                    convertOp.getResult());
-    } else {
-      changed = true;
-    }
-  }
-  return changed;
-}
-
-void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
-    bool disableRematSplitting) {
-  // Go through each ConvertLayoutOp.
-  SmallVector<ConvertLayoutOp> convertOps;
-  funcOp.walk(
-      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
-  for (ConvertLayoutOp convertOp : convertOps) {
-    if (!hoistConvertOnTopOfExtOrBroadcast(convertOp, disableRematSplitting)) {
-      // If the conversion didn't get removed, consider it for reuse in future
-      // backward slices.
-      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
-                    convertOp.getResult());
-    }
-  }
-}
-
-void LayoutRematerialization::hoistConvertIntoConditionals() {
-  // Go through each ConvertLayoutOp.
-  SmallVector<ConvertLayoutOp> convertOps;
-  funcOp.walk(
-      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
-  for (ConvertLayoutOp convertOp : convertOps) {
-    if (!hoistConvertIntoConditionals(convertOp)) {
-      // If the conversion didn't get removed, consider it for reuse in future
-      // backward slices.
-      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
-                    convertOp.getResult());
-    }
-  }
 }
 
 static bool isExpensiveMathOp(Operation *op) {
@@ -2414,22 +2215,15 @@ static bool isExpensiveMathOp(Operation *op) {
 
 static int64_t getByteCount(Value result, int64_t minElementCount = 0,
                             int64_t minBitWidth = 0) {
-  int64_t elementCount = 0;
-  int64_t dtypeBitWidth = 0;
+  int64_t elementCount = 0, bitWidth = 0;
   if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
     elementCount = tensorTy.getNumElements();
-    auto elemType = tensorTy.getElementType();
-    if (elemType.isIntOrFloat()) {
-      dtypeBitWidth = elemType.getIntOrFloatBitWidth();
-    }
+    if (Type element = tensorTy.getElementType(); element.isIntOrFloat())
+      bitWidth = element.getIntOrFloatBitWidth();
   }
-  if (elementCount < minElementCount) {
-    elementCount = minElementCount;
-  }
-  if (dtypeBitWidth < minBitWidth) {
-    dtypeBitWidth = minBitWidth;
-  }
-  return (elementCount * dtypeBitWidth) >> 3;
+  return (std::max(elementCount, minElementCount) *
+          std::max(bitWidth, minBitWidth)) >>
+         3;
 }
 
 /// Compute the cost of a ConvertLayoutOp with source \p convertSrc and result
@@ -2470,11 +2264,9 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
                        bool preserveSharedReductionRematerialization = false) {
   // Identify all operations in the slice
   SetVector<Operation *> sliceOps;
-  for (Value v : slice) {
-    if (Operation *op = v.getDefiningOp()) {
-      sliceOps.insert(op);
-    }
-  }
+  for (Value value : slice)
+    if (Operation *operation = value.getDefiningOp())
+      sliceOps.insert(operation);
 
   // Determine which values used by operations outside the slice. We can use
   // this to determine whether they will actually survive and therefore need to
@@ -2622,17 +2414,14 @@ bool LayoutRematerialization::backwardRematerialization(
   RankedTensorType targetType = convertOp.getType();
   if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
     return false;
-  Value oldV = convertOp.getSrc();
-  LDBG("check backward remat with source " << oldV << " encoding "
+  LDBG("check backward remat with source " << convertOp.getSrc() << " encoding "
                                            << targetType.getEncoding());
   // 1. Take a backward slice of all the tensor dependencies that can be
   // rematerialized.
-  SetVector<Value> slice;
-  DenseMap<Value, Attribute> layout;
-  DenseMap<std::pair<Value, Attribute>, Value> existingRemats;
+  LayoutSlice state;
+  auto &[slice, layout, existingRemats] = state;
   LogicalResult result = getRematerializableSlice(
-      convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout,
-      existingRemats);
+      convertOp.getSrcMutable(), targetType.getEncoding(), state);
   if (result.failed()) {
     LDBG("  getRematerializableSlice failed");
     return false;
@@ -2653,23 +2442,8 @@ bool LayoutRematerialization::backwardRematerialization(
   });
 
   // 3. Rewrite the slice.
-  rewriteSlice(slice, layout, existingRemats, convertOp);
+  rewriteSlice(state, convertOp);
   return true;
-}
-
-void LayoutRematerialization::hoistConvertDotOperand() {
-  // Go through each ConvertLayoutOp.
-  SmallVector<ConvertLayoutOp> convertOps;
-  funcOp.walk(
-      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
-  for (ConvertLayoutOp convertOp : convertOps) {
-    if (!hoistConvertDotOperand(convertOp)) {
-      // If the conversion didn't get removed, consider it for reuse in future
-      // backward slices.
-      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
-                    convertOp.getResult());
-    }
-  }
 }
 
 bool LayoutRematerialization::hoistConvertDotOperand(
@@ -2683,27 +2457,20 @@ bool LayoutRematerialization::hoistConvertDotOperand(
     if (!parent)
       return false;
 
-    // Find all the dot-like ops in the for loop that have a dot operand
-    // encoding on the lhs and check if any of them post-dominates the load +
-    // cvt
-    SmallVector<Operation *> dotLikeOps;
-    parent->walk([&](Operation *op) {
-      if (!isa<mlir::triton::DotOpInterface>(op))
-        return;
-      auto opType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
-      if (!opType)
-        return;
-      auto dotEnc = dyn_cast<DotOperandEncodingAttr>(opType.getEncoding());
-      if (!dotEnc)
-        return;
-      if (isa<MmaEncodingTrait>(dotEnc.getParent()))
-        dotLikeOps.push_back(op);
-    });
-    if (dotLikeOps.empty())
-      return false;
-    return llvm::any_of(dotLikeOps, [&](Operation *dot) {
-      return postDomInfo.postDominates(dot, convertOp);
-    });
+    // Stop at the first MMA dot that post-dominates the load and conversion.
+    return parent
+        ->walk([&](Operation *operation) {
+          if (isa<mlir::triton::DotOpInterface>(operation))
+            if (auto type = dyn_cast<RankedTensorType>(
+                    operation->getOperand(0).getType()))
+              if (auto encoding =
+                      dyn_cast<DotOperandEncodingAttr>(type.getEncoding()))
+                if (isa<MmaEncodingTrait>(encoding.getParent()) &&
+                    postDomInfo.postDominates(operation, convertOp))
+                  return WalkResult::interrupt();
+          return WalkResult::advance();
+        })
+        .wasInterrupted();
   };
 
   // We move convert #dot_operand next to their loads. This is done
@@ -2723,13 +2490,12 @@ bool LayoutRematerialization::hoistConvertDotOperand(
   // data movement between threads
   auto stop = std::not_fn(noDataMovement);
 
-  SetVector<Value> slice;
-  DenseMap<Value, Attribute> layout;
-  DenseMap<std::pair<Value, Attribute>, Value> existingRemats;
+  LayoutSlice state;
+  auto &[slice, layout, existingRemats] = state;
   // Set-up the conversion "cache"
-  LogicalResult result = getConvertBackwardSlice(
-      convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout,
-      existingRemats, stop);
+  LogicalResult result = getRematerializableSlice(
+      convertOp.getSrcMutable(), targetType.getEncoding(), state, stop,
+      /*requireRematerializable=*/false);
   if (result.failed())
     return false;
 
@@ -2780,7 +2546,8 @@ bool LayoutRematerialization::hoistConvertDotOperand(
       DBGS() << "    " << v << '\n';
   });
 
-  rewriteSlice(innerSlice, layout, existingRemats, convertOp, mapping);
+  state.values = std::move(innerSlice);
+  rewriteSlice(state, convertOp, mapping);
   return true;
 }
 
@@ -2806,12 +2573,11 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     return false;
   };
   // 1. Take a backward slice of all the tensor dependencies.
-  SetVector<Value> slice;
-  DenseMap<Value, Attribute> layout;
-  DenseMap<std::pair<Value, Attribute>, Value> existingRemats;
-  LogicalResult result = getRematerializableSlice(
-      convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout,
-      existingRemats, isExtOrBroadcastOp);
+  LayoutSlice state;
+  auto &[slice, layout, existingRemats] = state;
+  LogicalResult result = getRematerializableSlice(convertOp.getSrcMutable(),
+                                                  targetType.getEncoding(),
+                                                  state, isExtOrBroadcastOp);
   if (result.failed())
     return false;
 
@@ -2829,8 +2595,8 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
 
     // If we can rematerialize the rest of the ext slice we can ignore this ext
     // as it won't need a convert.
-    if (succeeded(getRematerializableSlice(op->getOpOperand(0), srcEncoding,
-                                           slice, layout, existingRemats)))
+    if (succeeded(
+            getRematerializableSlice(op->getOpOperand(0), srcEncoding, state)))
       continue;
 
     // Only apply it if there is a single ext op otherwise we would have to
@@ -2869,7 +2635,7 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   mapping.map(extOrBroadcastOp->getResult(0), newExtOrBroadcast->getResult(0));
   slice.remove(extOrBroadcastOp->getResult(0));
   // 3. Rewrite the slice.
-  rewriteSlice(slice, layout, existingRemats, convertOp, mapping);
+  rewriteSlice(state, convertOp, mapping);
   return true;
 }
 
@@ -2877,13 +2643,12 @@ bool LayoutRematerialization::hoistConvertIntoConditionals(
     ConvertLayoutOp convertOp) {
   // Take the backward slice of tensor dependencies rooted at the conversion,
   // stopping at conditionals. This subslice is used to initialize the analysis.
-  SetVector<Value> slice;
-  DenseMap<Value, Attribute> layout;
-  DenseMap<std::pair<Value, Attribute>, Value> existingRemats;
+  LayoutSlice state;
+  auto &[slice, layout, existingRemats] = state;
   auto isIfOp = [](Operation *op) { return isa<scf::IfOp>(op); };
   if (failed(getRematerializableSlice(convertOp.getSrcMutable(),
-                                      convertOp.getType().getEncoding(), slice,
-                                      layout, existingRemats, isIfOp)))
+                                      convertOp.getType().getEncoding(), state,
+                                      isIfOp)))
     return false;
 
   // These are the conditional edges above which conversions should be hoisted.
@@ -2915,21 +2680,17 @@ bool LayoutRematerialization::hoistConvertIntoConditionals(
     OpOperand &thenRes = thenYield.getResultsMutable()[resIdx];
     OpOperand &elseRes = elseYield.getResultsMutable()[resIdx];
 
-    auto newSlice = slice;
-    auto newLayout = layout;
-    auto newExistingRemats = existingRemats;
+    LayoutSlice candidate = state;
 
-    LogicalResult thenResult = getRematerializableSlice(
-        thenRes, rootLayout, newSlice, newLayout, newExistingRemats, isIfOp);
-    LogicalResult elseResult = getRematerializableSlice(
-        elseRes, rootLayout, newSlice, newLayout, newExistingRemats, isIfOp);
+    LogicalResult thenResult =
+        getRematerializableSlice(thenRes, rootLayout, candidate, isIfOp);
+    LogicalResult elseResult =
+        getRematerializableSlice(elseRes, rootLayout, candidate, isIfOp);
 
     // If propagation across both edges of this conditional succeeded, then we
     // don't need to hoist across it. Merge into the current slice.
     if (succeeded(thenResult) && succeeded(elseResult)) {
-      slice = std::move(newSlice);
-      layout = std::move(newLayout);
-      existingRemats = std::move(newExistingRemats);
+      state = std::move(candidate);
       continue;
     }
 
@@ -2948,9 +2709,7 @@ bool LayoutRematerialization::hoistConvertIntoConditionals(
       continue;
     }
 
-    slice = std::move(newSlice);
-    layout = std::move(newLayout);
-    existingRemats = std::move(newExistingRemats);
+    state = std::move(candidate);
     // The layout conversion can be rematerialized along one edge but not the
     // other. We can hoist the conversion into the other branch. Push this
     // into the subslice list for analysis.
@@ -2985,7 +2744,7 @@ bool LayoutRematerialization::hoistConvertIntoConditionals(
     OpBuilder b(edge->getOwner());
     hoistRemat(b, edge->get(), layout.at(result));
   }
-  rewriteSlice(slice, layout, existingRemats, convertOp, mapping);
+  rewriteSlice(state, convertOp, mapping);
   return true;
 }
 
@@ -2995,21 +2754,25 @@ bool backwardRematerialization(ModuleOp module, bool disableRematSplitting,
   module.walk([&](FuncOp funcOp) {
     LayoutRematerialization layoutRemat(funcOp,
                                         preserveSharedReductionRematerialization);
-    changed |= layoutRemat.backwardRematerialization(disableRematSplitting);
+    changed |= layoutRemat.rewriteConversions(
+        &LayoutRematerialization::backwardRematerialization,
+        disableRematSplitting);
   });
   return changed;
 }
 
 void hoistConvert(ModuleOp module, bool disableRematSplitting) {
-  SmallVector<ConvertLayoutOp> convertOps;
   module.walk([&](FuncOp funcOp) {
-    LayoutRematerialization(funcOp).hoistConvertOnTopOfExtOrBroadcast(
+    LayoutRematerialization(funcOp).rewriteConversions(
+        &LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast,
         disableRematSplitting);
     if (disableRematSplitting)
       return;
 
-    LayoutRematerialization(funcOp).hoistConvertIntoConditionals();
-    LayoutRematerialization(funcOp).hoistConvertDotOperand();
+    LayoutRematerialization(funcOp).rewriteConversions(
+        &LayoutRematerialization::hoistConvertIntoConditionals);
+    LayoutRematerialization(funcOp).rewriteConversions(
+        &LayoutRematerialization::hoistConvertDotOperand);
   });
 }
 
@@ -3036,39 +2799,67 @@ static bool hasExternalExpressionUsers(Operation *op,
   });
 }
 
+template <typename Key, typename Materialization> class ScalarExpressionState {
+protected:
+  explicit ScalarExpressionState(Operation *insertionPoint)
+      : insertionPoint(insertionPoint) {}
+
+  Operation *recordOperation(Value value, bool permitEnclosingBlock = false) {
+    Operation *operation = value.getDefiningOp();
+    if (plannedValues.size() >= 512 || !operation ||
+        operation->getNumResults() != 1 || !isMemoryEffectFree(operation) ||
+        (operation->getBlock() != insertionPoint->getBlock() &&
+         !permitEnclosingBlock))
+      return nullptr;
+    originalOperations.insert(operation);
+    return operation;
+  }
+
+  template <typename Structural>
+  bool duplicatesArithmetic(Structural structural) {
+    auto isArithmetic = [&](Operation *operation) {
+      return !structural(operation);
+    };
+    return llvm::count_if(plannedValues, [&](const auto &planned) {
+             return isArithmetic(planned.first.first.getDefiningOp());
+           }) > llvm::count_if(originalOperations, isArithmetic);
+  }
+
+  void eraseDeadOriginalOperations() {
+    for (Operation *operation : originalOperations)
+      if (isOpTriviallyDead(operation))
+        operation->erase();
+  }
+
+  Operation *insertionPoint;
+  DenseMap<Key, Materialization> plannedValues;
+  SetVector<Operation *> originalOperations;
+};
+
 /// Plan an entire pure tensor expression before changing the IR. A conversion
 /// can be removed only when its complete producer graph can be regenerated in
 /// the required layout, every tensor leaf is layout-independent, and none of
 /// the original expression needs to remain alive for another user.
-class ScalarRootedLayoutPlan {
+class ScalarRootedLayoutPlan
+    : private ScalarExpressionState<LayoutValue, std::pair<Attribute, Value>> {
 public:
-  explicit ScalarRootedLayoutPlan(ConvertLayoutOp root) : root(root) {}
+  explicit ScalarRootedLayoutPlan(ConvertLayoutOp root)
+      : ScalarExpressionState(root.getOperation()), root(root) {}
 
   LogicalResult analyze() {
     if (failed(plan(root.getSrc(), root.getType().getEncoding())))
       return failure();
 
-    unsigned originalMaterializations = 0;
-    for (Operation *op : originalOperations) {
-      if (!isa<ConvertLayoutOp>(op))
-        ++originalMaterializations;
-
-      if (hasExternalExpressionUsers(op, originalOperations,
-                                     root.getOperation()))
-        return failure();
-    }
-
-    unsigned newMaterializations = 0;
-    for (const auto &entry : plannedValues)
-      newMaterializations +=
-          !isa<ConvertLayoutOp>(entry.first.first.getDefiningOp());
+    if (llvm::any_of(originalOperations, [&](Operation *operation) {
+          return hasExternalExpressionUsers(operation, originalOperations,
+                                            root.getOperation());
+        }))
+      return failure();
 
     // Do not turn layout optimization into expression duplication. This also
     // keeps graph-shaped joins from growing exponentially.
-    if (newMaterializations > originalMaterializations)
-      return failure();
-
-    return success();
+    return success(!duplicatesArithmetic(
+        [](Operation *operation) { return isa<ConvertLayoutOp>(operation); }));
   }
 
   void rewrite() {
@@ -3080,15 +2871,10 @@ public:
     root.getResult().replaceAllUsesWith(replacement);
     root.erase();
 
-    for (Operation *op : originalOperations) {
-      if (isOpTriviallyDead(op))
-        op->erase();
-    }
+    eraseDeadOriginalOperations();
   }
 
 private:
-  static constexpr unsigned maxPlannedValues = 512;
-
   LogicalResult plan(Value value, Attribute encoding) {
     auto type = dyn_cast<RankedTensorType>(value.getType());
     if (!type || !encoding)
@@ -3097,15 +2883,9 @@ private:
     LayoutValue key{value, encoding};
     if (plannedValues.contains(key))
       return success();
-    if (plannedValues.size() >= maxPlannedValues)
+    Operation *op = recordOperation(value);
+    if (!op)
       return failure();
-
-    Operation *op = value.getDefiningOp();
-    if (!op || op->getBlock() != root->getBlock() || op->getNumResults() != 1 ||
-        !isMemoryEffectFree(op))
-      return failure();
-
-    originalOperations.insert(op);
 
     Attribute operandEncoding;
     if (isa<ConvertLayoutOp>(op)) {
@@ -3169,8 +2949,6 @@ private:
   }
 
   ConvertLayoutOp root;
-  DenseMap<LayoutValue, std::pair<Attribute, Value>> plannedValues;
-  SetVector<Operation *> originalOperations;
 };
 
 /// Exact-order joins interleave their operands. Their result layout therefore
@@ -3181,14 +2959,15 @@ private:
 /// the expression can be emitted directly in its required result layout. A
 /// range in a join operand observes the remaining high index bits after the
 /// join choices along its path have been removed.
-class ScalarJoinExpressionPlan {
+class ScalarJoinExpressionPlan
+    : private ScalarExpressionState<std::pair<Value, unsigned>, Value> {
 public:
   explicit ScalarJoinExpressionPlan(ConvertLayoutOp root)
-      : insertionPoint(root.getOperation()), rootValue(root.getSrc()),
+      : ScalarExpressionState(root.getOperation()), rootValue(root.getSrc()),
         target(root.getType()) {}
 
   explicit ScalarJoinExpressionPlan(triton::StoreOp root)
-      : insertionPoint(root.getOperation()), rootValue(root.getValue()),
+      : ScalarExpressionState(root.getOperation()), rootValue(root.getValue()),
         target(dyn_cast<RankedTensorType>(root.getValue().getType())) {}
 
   LogicalResult analyze() {
@@ -3217,7 +2996,6 @@ public:
 
     unsigned conversions = 0;
     unsigned joins = 0;
-    unsigned originalArithmetic = 0;
     bool hasCommunication = false;
 
     auto classifyConversion = [&](ConvertLayoutOp convert) {
@@ -3233,7 +3011,6 @@ public:
       if (auto convert = dyn_cast<ConvertLayoutOp>(op))
         classifyConversion(convert);
       joins += isa<triton::JoinOp>(op);
-      originalArithmetic += !isStructuralOrLeaf(op);
 
       // In production stochastic-rounding kernels these inexpensive leaves
       // can live in an enclosing loop or function block and have other users.
@@ -3251,18 +3028,10 @@ public:
     if (joins == 0 || conversions < 2 || !hasCommunication)
       return failure();
 
-    unsigned plannedArithmetic = 0;
-    for (const auto &planned : plannedValues)
-      plannedArithmetic +=
-          !isStructuralOrLeaf(planned.first.first.getDefiningOp());
-
     // A shared random-number producer can feed multiple joins. Keep the
     // incumbent if direct evaluation would duplicate that arithmetic at
     // different join depths.
-    if (plannedArithmetic > originalArithmetic)
-      return failure();
-
-    return success();
+    return success(!duplicatesArithmetic(isStructuralOrLeaf));
   }
 
   void rewrite() {
@@ -3291,15 +3060,11 @@ public:
       cast<triton::StoreOp>(insertionPoint).getValueMutable().assign(
           replacement);
     }
-    for (Operation *op : originalOperations) {
-      if (isOpTriviallyDead(op))
-        op->erase();
-    }
+    eraseDeadOriginalOperations();
   }
 
 private:
   using IndexedValue = std::pair<Value, unsigned>;
-  static constexpr unsigned maxPlannedValues = 512;
   static constexpr unsigned maxJoinDepth = 30;
 
   static bool isRematerializableLeaf(Operation *op) {
@@ -3320,16 +3085,11 @@ private:
     IndexedValue key{value, depth};
     if (plannedValues.contains(key))
       return success();
-    if (plannedValues.size() >= maxPlannedValues)
+    Operation *producer = value.getDefiningOp();
+    Operation *op =
+        recordOperation(value, producer && isRematerializableLeaf(producer));
+    if (!op)
       return failure();
-
-    Operation *op = value.getDefiningOp();
-    if (!op || op->getNumResults() != 1 || !isMemoryEffectFree(op) ||
-        (op->getBlock() != insertionPoint->getBlock() &&
-         !isRematerializableLeaf(op)))
-      return failure();
-
-    originalOperations.insert(op);
 
     if (isa<ConvertLayoutOp, triton::ReshapeOp>(op)) {
       auto reshape = dyn_cast<triton::ReshapeOp>(op);
@@ -3447,14 +3207,11 @@ private:
     return materialized = result;
   }
 
-  Operation *insertionPoint;
   Value rootValue;
   RankedTensorType target;
   Attribute flatEncoding;
   Value indices;
-  DenseMap<IndexedValue, Value> plannedValues;
   DenseMap<unsigned, Value> joinConditions;
-  SetVector<Operation *> originalOperations;
 };
 
 /// A layout conversion is pure. One materialization can therefore serve every
@@ -3462,10 +3219,7 @@ private:
 static void shareDominatingConversions(ModuleOp module) {
   DominanceInfo dominance(module);
   DenseMap<LayoutValue, SmallVector<ConvertLayoutOp>> available;
-  SmallVector<ConvertLayoutOp> conversions;
-  module.walk([&](ConvertLayoutOp convert) { conversions.push_back(convert); });
-
-  for (ConvertLayoutOp convert : conversions) {
+  module.walk([&](ConvertLayoutOp convert) {
     LayoutValue key{convert.getSrc(), convert.getType().getEncoding()};
     auto &candidates = available[key];
     auto candidate = llvm::find_if(candidates, [&](ConvertLayoutOp existing) {
@@ -3474,11 +3228,11 @@ static void shareDominatingConversions(ModuleOp module) {
     });
     if (candidate == candidates.end()) {
       candidates.push_back(convert);
-      continue;
+      return;
     }
     convert.getResult().replaceAllUsesWith(candidate->getResult());
     convert.erase();
-  }
+  });
 }
 
 /// Rebuild the root worklist after each rewrite because a successful whole-
@@ -3539,7 +3293,8 @@ static LogicalResult optimizeDistributedLayouts(ModuleOp module,
           // also keeps its conversion-reuse and IR-mapping invariants.
           {
             LayoutRematerialization rematerialization(funcOp);
-            changed = rematerialization.backwardRematerialization(
+            changed = rematerialization.rewriteConversions(
+                &LayoutRematerialization::backwardRematerialization,
                 disableRematSplitting);
           }
           if (changed) {
