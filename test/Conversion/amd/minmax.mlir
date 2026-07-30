@@ -1,5 +1,6 @@
 // RUN: triton-opt %s --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 | FileCheck %s
 // RUN: triton-opt %s --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s
+// RUN: triton-opt %s --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
 
