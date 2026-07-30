@@ -2550,8 +2550,7 @@ def async_copy_kernel(inp, xnumel, XBLOCK: ttgl.constexpr):
     mask = ttgl.max_constancy(xindex < xnumel, 2)
 
     async_copy.async_load(smem, inp + xindex)
-    async_copy.async_load(smem, inp + xindex, mask, cache_modifier=".ca", eviction_policy="evict_last",
-                                           volatile=True)
+    async_copy.async_load(smem, inp + xindex, mask, cache_modifier=".ca", eviction_policy="evict_last", volatile=True)
 
     mbar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     async_copy.mbarrier_arrive(mbar)
