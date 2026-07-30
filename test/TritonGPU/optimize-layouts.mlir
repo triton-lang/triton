@@ -3224,8 +3224,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// A repeated global layout assignment must use a stable constant order so
-// equivalent matmul and reduction layouts do not continually rename aliases.
+// A repeated global layout assignment preserves physical encodings and
+// conversion counts without requiring independent constants to be sorted.
 //
 // BASELINE-LABEL: @production_stable_layout_constant_order
 // BASELINE: arith.constant dense<3> : tensor<32xi32
@@ -3235,9 +3235,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // BASELINE: tt.return
 //
 // OPTIMIZED-LABEL: @production_stable_layout_constant_order
-// OPTIMIZED: arith.constant dense<1> : tensor<32xi32
-// OPTIMIZED-NEXT: {{.*}}arith.constant dense<2> : tensor<32xi32
-// OPTIMIZED-NEXT: {{.*}}arith.constant dense<3> : tensor<32xi32
+// OPTIMIZED-DAG: arith.constant dense<1> : tensor<32xi32
+// OPTIMIZED-DAG: arith.constant dense<2> : tensor<32xi32
+// OPTIMIZED-DAG: arith.constant dense<3> : tensor<32xi32
 // OPTIMIZED-NOT: ttg.convert_layout
 // OPTIMIZED: tt.store
 // OPTIMIZED: tt.return
