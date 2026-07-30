@@ -186,7 +186,7 @@ struct RegionInfo {
     });
   }
 
-  static RegionInfo getPessimisticValueState(MLIRContext *context = nullptr) {
+  static RegionInfo getPessimisticValueState() {
     RegionInfo result;
     result.kind = Kind::Unknown;
     return result;
