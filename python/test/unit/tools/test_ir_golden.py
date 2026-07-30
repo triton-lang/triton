@@ -10,10 +10,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from triton.tools import ir_golden
 from triton.tools.ir_golden import (SCHEMA_VERSION, GoldenCorpus, GoldenCorpusError, capture_compilations,
-                                    compilation_capture_listener, export_triton_opt_reproducers, freeze_payload,
-                                    function_names, ir_metrics, main, normalize_source, normalize_ttgir,
-                                    replay_reproducer_shard, triton_opt_reproducer, ttgir_dependency_signature,
+                                    classify_golden_change, compilation_capture_listener,
+                                    export_triton_opt_reproducers, freeze_payload, function_names, ir_metrics, main,
+                                    normalize_source, normalize_ttgir, replay_reproducer_shard,
+                                    triton_opt_reproducer, ttgir_dependency_signature, validate_golden_evidence,
                                     verify_payload, write_reproducer_shard, write_shard)
 
 TARGET = {"backend": "cuda", "arch": 80, "warp_size": 32}
@@ -21,6 +23,29 @@ TTIR = 'module { tt.func public @copy(%arg0: !tt.ptr<f32>) { tt.return } }'
 GLUON = ('module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, '
          'ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} '
          '{ tt.func public @copy(%arg0: !tt.ptr<f32>) { tt.return } }')
+LAYOUT_BEFORE = ("#source = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], "
+                 "order = [0]}>\n"
+                 "#target = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], "
+                 "order = [0]}>\n"
+                 "module {\n"
+                 "  tt.func public @copy(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>) {\n"
+                 "    %0 = tt.load %arg0 : tensor<32xf32, #source>\n"
+                 "    %1 = ttg.convert_layout %0 : tensor<32xf32, #source> -> tensor<32xf32, #target>\n"
+                 "    tt.store %arg1, %1 : tensor<32xf32, #target>\n"
+                 "    tt.return\n"
+                 "  }\n"
+                 "}\n")
+LAYOUT_AFTER = ("#source = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], "
+                "order = [0]}>\n"
+                "#target = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], "
+                "order = [0]}>\n"
+                "module {\n"
+                "  tt.func public @copy(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>) {\n"
+                "    %0 = tt.load %arg0 : tensor<32xf32, #target>\n"
+                "    tt.store %arg1, %0 : tensor<32xf32, #target>\n"
+                "    tt.return\n"
+                "  }\n"
+                "}\n")
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
@@ -62,6 +87,28 @@ def make_corpus(root: Path, languages: tuple[str, ...] = ("triton", "gluon")) ->
     (root / "manifest.json").write_text(
         json.dumps({"schema_version": SCHEMA_VERSION, "shards": [shard], "cases": cases}))
     return GoldenCorpus(root)
+
+
+def make_evidence(payload: dict, expected: str, actual: str, *, kind: str = "structural-improvement") -> dict:
+    source = payload.get("canonical_source", payload["source"])
+    evidence = {
+        "case_id": payload["id"], "source_sha256": payload.get("canonical_source_sha256",
+                                                                   hashlib.sha256(source.encode()).hexdigest()),
+        "previous_global_sha256": hashlib.sha256(expected.encode()).hexdigest(),
+        "candidate_global_sha256": hashlib.sha256(actual.encode()).hexdigest(),
+        "target_arch": payload["target"]["arch"], "baseline_compiler_commit": "a" * 40,
+        "candidate_compiler_commit": "b" * 40, "rationale": "Remove a redundant physical layout conversion",
+        "legacy_unchanged": True, "correctness_passed": True, "kind": kind
+    }
+    if kind == "gpu-benchmark":
+        evidence.update({
+            "gpu_uuid": "GPU-synthetic", "driver_version": "580.0", "gpu_arch": payload["target"]["arch"],
+            "prepared_input_sha256": "c" * 64, "baseline_cubin_sha256": "d" * 64,
+            "candidate_cubin_sha256": "e" * 64, "repetitions": 300,
+            "baseline_samples_ns": [1050, 1055, 1048, 1052, 1051],
+            "candidate_samples_ns": [910, 912, 911, 913, 909]
+        })
+    return evidence
 
 
 @pytest.mark.parametrize("language", ("triton", "gluon"))
@@ -113,7 +160,122 @@ def test_golden_refresh_requires_explicit_acceptance(tmp_path: Path) -> None:
     make_corpus(tmp_path)
     with pytest.raises(SystemExit):
         main(["refresh", "--corpus", str(tmp_path)])
-    assert main(["refresh", "--corpus", str(tmp_path), "--accept"]) == 0
+    with pytest.raises(SystemExit):
+        main(["refresh", "--corpus", str(tmp_path), "--accept"])
+    with pytest.raises(SystemExit):
+        main(["refresh", "--corpus", str(tmp_path), "--accept", "--strategy", "global"])
+
+
+def test_golden_classifies_fewer_layout_conversions() -> None:
+    result = classify_golden_change(LAYOUT_BEFORE, LAYOUT_AFTER)
+    assert result.classification == "fewer-conversions"
+    assert result.expected_metrics["conversions"] == 1
+    assert result.actual_metrics["conversions"] == 0
+
+
+def test_golden_rejects_changed_observable_operations() -> None:
+    result = classify_golden_change(LAYOUT_BEFORE, LAYOUT_AFTER.replace("tt.store", "tt.load"))
+    assert result.classification == "regression"
+    assert "observable" in result.reason
+
+
+def test_golden_rejects_changed_computation() -> None:
+    result = classify_golden_change(LAYOUT_BEFORE, LAYOUT_AFTER.replace("tensor<32xf32", "tensor<16xf32"))
+    assert result.classification == "regression"
+    assert "attributes" in result.reason
+
+
+def test_golden_evidence_requires_exact_case_and_legacy_parity() -> None:
+    payload = make_payload()
+    evidence = make_evidence(payload, LAYOUT_BEFORE, LAYOUT_AFTER)
+    validate_golden_evidence(payload, LAYOUT_BEFORE, LAYOUT_AFTER, evidence)
+    evidence["legacy_unchanged"] = False
+    with pytest.raises(GoldenCorpusError, match="unchanged legacy"):
+        validate_golden_evidence(payload, LAYOUT_BEFORE, LAYOUT_AFTER, evidence)
+
+
+def test_golden_evidence_rejects_unproven_layout_changes() -> None:
+    payload = make_payload()
+    candidate = LAYOUT_BEFORE.replace("#source> -> tensor<32xf32, #target>",
+                                      "#source> -> tensor<32xf32, #source>")
+    candidate = candidate.replace("tt.store %arg1, %1 : tensor<32xf32, #target>",
+                                  "tt.store %arg1, %1 : tensor<32xf32, #source>")
+    assert classify_golden_change(LAYOUT_BEFORE, candidate).classification == "layout-change"
+    evidence = make_evidence(payload, LAYOUT_BEFORE, candidate, kind="gpu-benchmark")
+    validate_golden_evidence(payload, LAYOUT_BEFORE, candidate, evidence)
+    evidence["repetitions"] = 299
+    with pytest.raises(GoldenCorpusError, match="300 CUDA-graph"):
+        validate_golden_evidence(payload, LAYOUT_BEFORE, candidate, evidence)
+
+
+def test_golden_evidence_rejects_insignificant_gpu_speedup() -> None:
+    payload = make_payload()
+    candidate = LAYOUT_BEFORE.replace("#source> -> tensor<32xf32, #target>",
+                                      "#source> -> tensor<32xf32, #source>")
+    candidate = candidate.replace("tt.store %arg1, %1 : tensor<32xf32, #target>",
+                                  "tt.store %arg1, %1 : tensor<32xf32, #source>")
+    evidence = make_evidence(payload, LAYOUT_BEFORE, candidate, kind="gpu-benchmark")
+    evidence["candidate_samples_ns"] = [1040, 1080, 1030, 1065, 1055]
+    with pytest.raises(GoldenCorpusError, match="statistically significant"):
+        validate_golden_evidence(payload, LAYOUT_BEFORE, candidate, evidence)
+
+
+def test_global_golden_refresh_preserves_legacy_and_records_history(monkeypatch: pytest.MonkeyPatch,
+                                                                    tmp_path: Path) -> None:
+    corpus = make_corpus(tmp_path, ("triton",))
+    case = corpus.cases[0]
+    payload = corpus.payload(case)
+    legacy = dict(payload["goldens"]["legacy"])
+    payload["goldens"]["global"] = {
+        "ttgir": LAYOUT_BEFORE, "sha256": hashlib.sha256(LAYOUT_BEFORE.encode()).hexdigest(),
+        "metrics": ir_metrics(LAYOUT_BEFORE)
+    }
+    monkeypatch.setattr(ir_golden, "compile_case", lambda source, strategy: (LAYOUT_AFTER, ir_metrics(LAYOUT_AFTER)))
+    evidence = make_evidence(payload, LAYOUT_BEFORE, LAYOUT_AFTER)
+    assert corpus.refresh([case], strategy="global", evidence={case.case_id: evidence}) == 1
+    refreshed = GoldenCorpus(tmp_path).payload(case)
+    assert refreshed["goldens"]["legacy"] == legacy
+    assert refreshed["goldens"]["global"]["ttgir"] == LAYOUT_AFTER
+    history = json.loads((tmp_path / "global-golden-history.jsonl").read_text())
+    assert history["case_id"] == case.case_id
+    assert history["evidence"]["candidate_compiler_commit"] == "b" * 40
+
+
+def test_global_refresh_updates_only_affected_standalone_checksums(monkeypatch: pytest.MonkeyPatch,
+                                                                    tmp_path: Path) -> None:
+    corpus = make_corpus(tmp_path, ("triton",))
+    destination = tmp_path / "triton-opt-reproducers"
+    original = export_triton_opt_reproducers(corpus, corpus.cases, destination, workers=1)
+    previous_checksum = original["shards"][0]["expected_sha256"]
+    case = corpus.cases[0]
+    payload = corpus.payload(case)
+    payload["goldens"]["global"] = {
+        "ttgir": LAYOUT_BEFORE, "sha256": hashlib.sha256(LAYOUT_BEFORE.encode()).hexdigest(),
+        "metrics": ir_metrics(LAYOUT_BEFORE)
+    }
+    monkeypatch.setattr(ir_golden, "compile_case", lambda source, strategy: (LAYOUT_AFTER, ir_metrics(LAYOUT_AFTER)))
+    evidence = make_evidence(payload, LAYOUT_BEFORE, LAYOUT_AFTER)
+    assert corpus.refresh([case], strategy="global", evidence={case.case_id: evidence}) == 1
+    updated = json.loads((destination / "manifest.json").read_text())
+    assert updated["shards"][0]["expected_sha256"] != previous_checksum
+    assert updated["source_manifest_sha256"] == hashlib.sha256((tmp_path / "manifest.json").read_bytes()).hexdigest()
+    assert (destination / updated["shards"][0]["checksum"]).read_text().startswith(
+        updated["shards"][0]["expected_sha256"])
+
+
+def test_golden_refresh_rejects_legacy_updates(tmp_path: Path) -> None:
+    corpus = make_corpus(tmp_path, ("triton",))
+    with pytest.raises(GoldenCorpusError, match="legacy is immutable"):
+        corpus.refresh(corpus.cases, strategy="legacy", evidence={})
+
+
+def test_golden_audit_filters_exact_case(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    corpus = make_corpus(tmp_path)
+    case = corpus.select(language="triton")[0]
+    assert main(["audit", "--corpus", str(tmp_path), "--case-id", case.case_id, "--workers", "1"]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "cases": 1, "classifications": {"identical": 1}, "changes": []
+    }
 
 
 def test_golden_filters_and_inventory(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -310,6 +472,18 @@ def test_golden_signature_stabilizes_independent_pure_operations() -> None:
               "  %3 = tt.expand_dims %1 {axis = 0 : i32} : tensor<8xi32> -> tensor<1x8xi32>\n"
               "  tt.store %arg0, %3 : tensor<1x8xi32>\n")
     assert ttgir_dependency_signature(first) == ttgir_dependency_signature(second)
+
+
+def test_golden_signature_stabilizes_independent_constants_and_ssa_names() -> None:
+    first = ("  %first = arith.constant 1 : i32\n"
+             "  %second = arith.constant 2 : i32\n"
+             "  %sum = arith.addi %first, %second : i32\n"
+             "  tt.store %arg0, %sum : i32\n")
+    second = ("  %x = arith.constant 2 : i32\n"
+              "  %y = arith.constant 1 : i32\n"
+              "  %z = arith.addi %y, %x : i32\n"
+              "  tt.store %arg0, %z : i32\n")
+    assert classify_golden_change(first, second).classification == "equivalent"
 
 
 def test_golden_signature_preserves_layout_changes() -> None:

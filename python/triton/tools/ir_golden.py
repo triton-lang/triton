@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import statistics
 import subprocess
 import tarfile
 import tempfile
@@ -27,6 +28,9 @@ REPRODUCER_SPLIT = "\n// -----\n"
 _FUNCTION = re.compile(r"\btt\.func(?:\s+(?:public|private))?\s+@([^\s(]+)")
 _SSA_VALUE = re.compile(r"%[-.$A-Za-z0-9_]+(?:#\d+)?")
 _ASSIGNMENT = re.compile(r"^(\s*)(%[-.$A-Za-z0-9_]+(?::\d+)?)\s*=\s*(.*)$")
+_LAYOUT_ALIAS = re.compile(r"^(#[A-Za-z_.$][\w.$]*)\s*=\s*(#ttg\..*)$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _PURE_OPERATIONS = {
     "tt.addptr", "tt.broadcast", "tt.expand_dims", "tt.join", "tt.make_range", "tt.reshape", "tt.split", "tt.splat",
     "tt.trans", "ttg.convert_layout"
@@ -35,6 +39,16 @@ _PURE_OPERATIONS = {
 
 class GoldenCorpusError(RuntimeError):
     """An IR corpus is incomplete, corrupt, or no longer matches its goldens."""
+
+
+@dataclasses.dataclass(frozen=True)
+class GoldenComparison:
+    """A fail-closed classification of a candidate global TTGIR change."""
+
+    classification: str
+    reason: str
+    expected_metrics: dict[str, int]
+    actual_metrics: dict[str, int]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -161,6 +175,181 @@ def ttgir_dependency_signature(text: str) -> tuple[str, ...]:
             signature.append(indent + "%effect_" + identity + " = " + rewritten)
     flush()
     return tuple(signature)
+
+
+def _layout_aliases(text: str) -> dict[str, str]:
+    return {
+        match.group(1): match.group(2)
+        for line in text.splitlines()
+        if (match := _LAYOUT_ALIAS.match(line.strip())) is not None
+    }
+
+
+def _replace_layout_aliases(text: str, aliases: dict[str, str], *, preserve_identity: bool) -> str:
+    for alias in sorted(aliases, key=len, reverse=True):
+        replacement = "#layout_" + _sha256(aliases[alias].encode()) if preserve_identity else "#layout"
+        text = re.sub(re.escape(alias) + r"(?![\w.$])", replacement, text)
+    return text
+
+
+def _conversion_transitions(text: str) -> collections.Counter[str]:
+    aliases = _layout_aliases(text)
+    transitions: collections.Counter[str] = collections.Counter()
+    for line in text.splitlines():
+        assignment = _ASSIGNMENT.match(line)
+        if assignment is None:
+            continue
+        expression = assignment.group(3)
+        if not expression.startswith("ttg.convert_layout "):
+            continue
+        transition = expression.partition(" : ")[2]
+        if not transition or " -> " not in transition:
+            raise GoldenCorpusError("A layout conversion has no complete source/destination types")
+        transitions[_replace_layout_aliases(transition, aliases, preserve_identity=True)] += 1
+    return transitions
+
+
+def _layout_agnostic_signature(text: str) -> tuple[str, ...]:
+    """Keep operation/dataflow identity while treating layout conversions as transparent."""
+    aliases = _layout_aliases(text)
+    values: dict[str, str] = {}
+    pure_operations: list[str] = []
+    signature: list[str] = []
+
+    def replace_values(line: str) -> str:
+        return _SSA_VALUE.sub(lambda match: values.get(match.group(0), match.group(0)), line)
+
+    def flush() -> None:
+        if pure_operations:
+            signature.extend(sorted(pure_operations))
+            pure_operations.clear()
+
+    for line in text.splitlines():
+        if _LAYOUT_ALIAS.match(line.strip()):
+            continue
+        assignment = _ASSIGNMENT.match(line)
+        if assignment is None:
+            flush()
+            signature.append(_replace_layout_aliases(replace_values(line), aliases, preserve_identity=False))
+            continue
+
+        indent, result, expression = assignment.groups()
+        result = result.split(":", 1)[0]
+        operation = expression.split(None, 1)[0]
+        if operation == "ttg.convert_layout":
+            operand = _SSA_VALUE.search(expression)
+            if operand is None:
+                raise GoldenCorpusError("A layout conversion has no source SSA value")
+            values[result] = values.get(operand.group(0), operand.group(0))
+            continue
+
+        rewritten = _replace_layout_aliases(replace_values(expression), aliases, preserve_identity=False)
+        identity = "%value_" + _sha256(rewritten.encode())
+        values[result] = identity
+        if operation.startswith(("arith.", "math.")) or operation in _PURE_OPERATIONS:
+            pure_operations.append(indent + rewritten)
+        else:
+            flush()
+            signature.append(indent + identity + " = " + rewritten)
+    flush()
+    return tuple(signature)
+
+
+def classify_golden_change(expected: str, actual: str) -> GoldenComparison:
+    """Accept only structural equivalence, conversion elimination, or benchmarkable relayout."""
+    expected_metrics = ir_metrics(expected)
+    actual_metrics = ir_metrics(actual)
+    if actual == expected:
+        return GoldenComparison("identical", "The frozen TTGIR is unchanged", expected_metrics, actual_metrics)
+    if ttgir_dependency_signature(normalize_ttgir(actual)) == ttgir_dependency_signature(normalize_ttgir(expected)):
+        return GoldenComparison("equivalent", "Only independent operation scheduling or SSA names changed",
+                                expected_metrics, actual_metrics)
+    if function_names(actual) != function_names(expected):
+        return GoldenComparison("regression", "Function symbols or their ordering changed", expected_metrics,
+                                actual_metrics)
+    for operation in ("reductions", "loads", "stores"):
+        if actual_metrics[operation] != expected_metrics[operation]:
+            return GoldenComparison("regression", f"The number of observable {operation} changed", expected_metrics,
+                                    actual_metrics)
+    if _layout_agnostic_signature(actual) != _layout_agnostic_signature(expected):
+        return GoldenComparison("regression", "Non-conversion operations, attributes, or SSA dependencies changed",
+                                expected_metrics, actual_metrics)
+
+    expected_transitions = _conversion_transitions(expected)
+    actual_transitions = _conversion_transitions(actual)
+    if (actual_metrics["conversions"] < expected_metrics["conversions"] and
+            all(count <= expected_transitions[transition] for transition, count in actual_transitions.items())):
+        return GoldenComparison("fewer-conversions", "Existing physical layout conversions were removed",
+                                expected_metrics, actual_metrics)
+    return GoldenComparison("layout-change", "Layout conversion types, placement, or count changed", expected_metrics,
+                            actual_metrics)
+
+
+def validate_golden_evidence(payload: dict[str, Any], expected: str, actual: str, evidence: dict[str, Any]) -> None:
+    """Require complete, case-bound provenance before a global golden may change."""
+    if not isinstance(evidence, dict):
+        raise GoldenCorpusError("A global golden update requires a machine-readable evidence record")
+    comparison = classify_golden_change(expected, actual)
+    if comparison.classification not in {"fewer-conversions", "layout-change"}:
+        raise GoldenCorpusError(f"The global golden change is not an improvement: {comparison.reason}")
+
+    source = payload.get("canonical_source", payload.get("source"))
+    if not isinstance(source, str):
+        raise GoldenCorpusError("A golden case has no canonical source for evidence binding")
+    source_sha256 = payload.get("canonical_source_sha256", _sha256(source.encode()))
+    bindings = {
+        "case_id": payload.get("id"),
+        "source_sha256": source_sha256,
+        "previous_global_sha256": _sha256(expected.encode()),
+        "candidate_global_sha256": _sha256(actual.encode()),
+        "target_arch": int(payload.get("target", {}).get("arch", -1)),
+    }
+    for key, required in bindings.items():
+        if evidence.get(key) != required:
+            raise GoldenCorpusError(f"Golden evidence has an incorrect {key}")
+    for key in ("baseline_compiler_commit", "candidate_compiler_commit"):
+        if not isinstance(evidence.get(key), str) or _COMMIT.fullmatch(evidence[key]) is None:
+            raise GoldenCorpusError(f"Golden evidence has no valid {key}")
+    if not isinstance(evidence.get("rationale"), str) or not evidence["rationale"].strip():
+        raise GoldenCorpusError("Golden evidence requires an explicit improvement rationale")
+    if evidence.get("legacy_unchanged") is not True or evidence.get("correctness_passed") is not True:
+        raise GoldenCorpusError("Golden evidence must establish correctness and unchanged legacy output")
+
+    if comparison.classification == "fewer-conversions":
+        if evidence.get("kind") != "structural-improvement":
+            raise GoldenCorpusError("Conversion elimination requires structural-improvement evidence")
+        return
+
+    if evidence.get("kind") != "gpu-benchmark":
+        raise GoldenCorpusError("Changed layout conversions require exact-target GPU benchmark evidence")
+    if not isinstance(evidence.get("gpu_uuid"), str) or not evidence["gpu_uuid"]:
+        raise GoldenCorpusError("GPU benchmark evidence has no GPU identity")
+    if not isinstance(evidence.get("driver_version"), str) or not evidence["driver_version"]:
+        raise GoldenCorpusError("GPU benchmark evidence has no driver identity")
+    gpu_arch = evidence.get("gpu_arch")
+    target_arch = bindings["target_arch"]
+    if gpu_arch != target_arch and not (target_arch == 100 and gpu_arch == 103):
+        raise GoldenCorpusError("GPU benchmark evidence was not collected on the required architecture")
+    for key in ("prepared_input_sha256", "baseline_cubin_sha256", "candidate_cubin_sha256"):
+        if not isinstance(evidence.get(key), str) or _SHA256.fullmatch(evidence[key]) is None:
+            raise GoldenCorpusError(f"GPU benchmark evidence has no valid {key}")
+    if evidence["baseline_cubin_sha256"] == evidence["candidate_cubin_sha256"]:
+        raise GoldenCorpusError("GPU benchmark variants unexpectedly produced the same executable")
+    if not isinstance(evidence.get("repetitions"), int) or evidence["repetitions"] < 300:
+        raise GoldenCorpusError("Decision-grade GPU benchmarks require at least 300 CUDA-graph repetitions")
+    baseline = evidence.get("baseline_samples_ns")
+    candidate = evidence.get("candidate_samples_ns")
+    if (not isinstance(baseline, list) or not isinstance(candidate, list) or len(baseline) != len(candidate)
+            or len(baseline) < 5 or any(not isinstance(value, (int, float)) or value <= 0
+                                        for value in (*baseline, *candidate))):
+        raise GoldenCorpusError("GPU benchmark evidence requires at least five valid paired timing samples")
+    speedups = [original / optimized for original, optimized in zip(baseline, candidate)]
+    mean_speedup = statistics.fmean(speedups)
+    critical_values = {5: 2.776, 6: 2.571, 7: 2.447, 8: 2.365, 9: 2.306, 10: 2.262}
+    critical = critical_values.get(len(speedups), 1.96 if len(speedups) > 30 else 2.262)
+    lower_bound = mean_speedup - critical * statistics.stdev(speedups) / len(speedups)**0.5
+    if lower_bound <= 1:
+        raise GoldenCorpusError("GPU benchmark does not demonstrate a reproducible statistically significant speedup")
 
 
 def _backend(target: dict[str, Any]):
@@ -476,11 +665,12 @@ class GoldenCorpus:
             seen.add(case.case_id)
 
     def select(self, *, family: str | None = None, kernel: str | None = None, language: str | None = None,
-               arch: int | None = None) -> list[GoldenCase]:
+               arch: int | None = None, case_id: str | None = None) -> list[GoldenCase]:
         return [
             case for case in self.cases
             if (family is None or case.family == family) and (kernel is None or case.kernel == kernel) and (
-                language is None or case.language == language) and (arch is None or case.arch == arch)
+                language is None or case.language == language) and (arch is None or case.arch == arch) and
+            (case_id is None or case.case_id == case_id)
         ]
 
     @functools.lru_cache(maxsize=8)
@@ -519,15 +709,87 @@ class GoldenCorpus:
             raise GoldenCorpusError(f"Golden case {case.case_id} has inconsistent archive metadata")
         return payload
 
-    def refresh(self, selected: list[GoldenCase]) -> int:
+    def _refresh_standalone_reproducers(self, changed_ids: set[str], previous_manifest_sha256: str) -> None:
+        directory = self.root / "triton-opt-reproducers"
+        manifest_path = directory / "manifest.json"
+        if not manifest_path.exists():
+            return
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            raise GoldenCorpusError(f"The standalone reproducer manifest cannot be read: {error}") from error
+        if manifest.get("source_manifest_sha256") != previous_manifest_sha256:
+            raise GoldenCorpusError("Standalone reproducers do not match the original frozen golden corpus")
+        index = {case.case_id: case for case in self.cases}
+        for descriptor in manifest.get("shards", []):
+            path = directory / descriptor["path"]
+            data = path.read_bytes()
+            if _sha256(data) != descriptor.get("sha256"):
+                raise GoldenCorpusError(f"Standalone reproducer shard {path.name} is corrupt")
+            identities = []
+            for chunk in _decompress(data).decode().rstrip("\n").split(REPRODUCER_SPLIT):
+                header = chunk.partition("\n")[0]
+                if not header.startswith("// IR-GOLDEN: "):
+                    raise GoldenCorpusError(f"Standalone reproducer {path.name} has no case identity")
+                identities.append(json.loads(header.removeprefix("// IR-GOLDEN: ")))
+            if not any(identity.get("id") in changed_ids and
+                       "global" in identity.get("strategies", [identity.get("strategy")]) for identity in identities):
+                continue
+
+            outputs = []
+            for identity in identities:
+                try:
+                    payload = self.payload(index[identity["id"]])
+                    covered = identity.get("strategies", [identity["strategy"]])
+                    references = [payload["goldens"][strategy]["ttgir"] for strategy in covered]
+                except (KeyError, TypeError) as error:
+                    raise GoldenCorpusError(f"Standalone reproducer {path.name} has inconsistent case coverage") from error
+                if any(ttgir_dependency_signature(reference) != ttgir_dependency_signature(references[0])
+                       for reference in references[1:]):
+                    raise GoldenCorpusError("A shared standalone pipeline no longer has identical legacy/global output")
+                outputs.append(normalize_ttgir(references[0]))
+            output = REPRODUCER_SPLIT.join(outputs) + "\n"
+            expected = _sha256(("\n".join(ttgir_dependency_signature(output)) + "\n").encode())
+            descriptor["expected_sha256"] = expected
+            (directory / descriptor["checksum"]).write_text(f"{expected}  -\n")
+
+        manifest["source_manifest_sha256"] = _sha256((self.root / "manifest.json").read_bytes())
+        manifest_path.write_bytes(_json_bytes(manifest))
+
+    def refresh(self, selected: list[GoldenCase], *, strategy: str, evidence: dict[str, dict[str, Any]]) -> int:
+        if strategy != "global":
+            raise GoldenCorpusError("Only global golden references may be refreshed; legacy is immutable")
+        if not isinstance(evidence, dict):
+            raise GoldenCorpusError("A global golden refresh requires case-indexed provenance evidence")
         selected_ids = {case.case_id for case in selected}
+        if set(evidence) != selected_ids:
+            raise GoldenCorpusError("Golden evidence must cover exactly the selected case identifiers")
+        previous_manifest_sha256 = _sha256((self.root / "manifest.json").read_bytes())
+        replacements = {}
+        records = []
+        for case in selected:
+            payload = self.payload(case)
+            references = payload.get("goldens", {})
+            reference = references.get("global", {})
+            expected = reference.get("ttgir")
+            if not isinstance(expected, str) or _sha256(expected.encode()) != reference.get("sha256"):
+                raise GoldenCorpusError(f"The frozen global golden for {case.case_id} is corrupt")
+            actual, metrics = compile_case(payload, "global")
+            validate_golden_evidence(payload, expected, actual, evidence[case.case_id])
+            replacements[case.case_id] = {"ttgir": actual, "sha256": _sha256(actual.encode()), "metrics": metrics}
+            records.append({
+                "case_id": case.case_id, "previous_global_sha256": reference["sha256"],
+                "candidate_global_sha256": replacements[case.case_id]["sha256"], "evidence": evidence[case.case_id]
+            })
         changed = 0
         for shard_id in sorted({case.shard for case in selected}):
             original = self._read_shard(shard_id)
             updated = {}
             for member, payload in original.items():
                 if payload["id"] in selected_ids:
-                    payload = freeze_payload(payload)
+                    payload = dict(payload)
+                    payload["goldens"] = dict(payload["goldens"])
+                    payload["goldens"]["global"] = replacements[payload["id"]]
                     changed += 1
                 updated[member] = payload
             entry = self.shards[shard_id]
@@ -535,6 +797,11 @@ class GoldenCorpus:
             entry.update(replacement)
         self._read_shard.cache_clear()
         (self.root / "manifest.json").write_bytes(_json_bytes(self.manifest))
+        self._refresh_standalone_reproducers(selected_ids, previous_manifest_sha256)
+        ledger = self.root / "global-golden-history.jsonl"
+        with ledger.open("a", encoding="utf-8") as handle:
+            for record in sorted(records, key=lambda item: item["case_id"]):
+                handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
         return changed
 
 
@@ -595,6 +862,24 @@ def _verify_worker(arguments: tuple[str, dict[str, Any], tuple[str, ...]]) -> di
     metrics = verify_payload(corpus.payload(case), strategies)
     return {
         "id": case.case_id, "kernel": case.kernel, "family": case.family, "language": case.language, "metrics": metrics
+    }
+
+
+def _audit_worker(arguments: tuple[str, dict[str, Any]]) -> dict[str, Any]:
+    root, descriptor = arguments
+    corpus = _worker_corpus(root)
+    case = GoldenCase.from_json(descriptor)
+    payload = corpus.payload(case)
+    reference = payload.get("goldens", {}).get("global", {})
+    expected = reference.get("ttgir")
+    if not isinstance(expected, str) or _sha256(expected.encode()) != reference.get("sha256"):
+        raise GoldenCorpusError(f"The frozen global reference for {case.case_id} is corrupt")
+    actual, _ = compile_case(payload, "global")
+    comparison = classify_golden_change(expected, actual)
+    return {
+        "id": case.case_id, "family": case.family, "language": case.language, "arch": case.arch,
+        "classification": comparison.classification, "reason": comparison.reason,
+        "expected_metrics": comparison.expected_metrics, "actual_metrics": comparison.actual_metrics
     }
 
 
@@ -721,26 +1006,29 @@ def export_triton_opt_reproducers(corpus: GoldenCorpus, selected: list[GoldenCas
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("replay", "refresh", "inventory", "export-opt", "replay-opt"))
+    parser.add_argument("command", choices=("replay", "refresh", "inventory", "export-opt", "replay-opt", "audit"))
     parser.add_argument("--corpus", type=Path, default=Path(value) if
                         (value := os.environ.get("TRITON_PRODUCTION_IR_CORPUS")) else None)
     parser.add_argument("--family")
     parser.add_argument("--kernel")
     parser.add_argument("--language", choices=("triton", "gluon"))
     parser.add_argument("--arch", type=int)
+    parser.add_argument("--case-id", help="select one exact content-addressed corpus case")
     parser.add_argument("--strategy", choices=(*STRATEGIES, "both"), default="both")
     parser.add_argument("--workers", type=int, default=min(32, os.cpu_count() or 1))
     parser.add_argument("--output", type=Path, help="directory for executable triton-opt reproducer shards")
     parser.add_argument("--triton-opt", default="triton-opt", help="path to the standalone triton-opt executable")
     parser.add_argument("--compress-opt", action="store_true", help="store exported MLIR as Zstandard streams")
     parser.add_argument("--accept", action="store_true", help="explicitly permit rewriting frozen references")
+    parser.add_argument("--evidence", type=Path, help="case-indexed JSON provenance for accepted global improvements")
     args = parser.parse_args(argv)
     if args.corpus is None:
         parser.error("--corpus or TRITON_PRODUCTION_IR_CORPUS is required")
     if args.workers < 1:
         parser.error("--workers must be positive")
     corpus = GoldenCorpus(args.corpus)
-    selected = corpus.select(family=args.family, kernel=args.kernel, language=args.language, arch=args.arch)
+    selected = corpus.select(family=args.family, kernel=args.kernel, language=args.language, arch=args.arch,
+                             case_id=args.case_id)
     if not selected:
         raise GoldenCorpusError("No golden cases match the requested filters")
     if args.command == "inventory":
@@ -751,7 +1039,17 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "refresh":
         if not args.accept:
             parser.error("refresh requires --accept")
-        report = {"refreshed": corpus.refresh(selected)}
+        if args.strategy != "global":
+            parser.error("refresh requires --strategy global; legacy references are immutable")
+        if args.case_id is None:
+            parser.error("refresh requires an exact --case-id")
+        if args.evidence is None:
+            parser.error("refresh requires --evidence")
+        try:
+            evidence = json.loads(args.evidence.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            raise GoldenCorpusError(f"Cannot read golden refresh evidence: {error}") from error
+        report = {"refreshed": corpus.refresh(selected, strategy="global", evidence=evidence)}
     elif args.command == "export-opt":
         if args.output is None:
             parser.error("export-opt requires --output")
@@ -783,6 +1081,18 @@ def main(argv: list[str] | None = None) -> int:
         report = {
             "cases": manifest["cases"], "replays": manifest["replays"], "executions":
             manifest.get("executions", manifest["replays"]), "shards": len(results), "workers": args.workers
+        }
+    elif args.command == "audit":
+        jobs = [(str(corpus.root), _descriptor(case)) for case in selected]
+        if args.workers == 1:
+            results = [_audit_worker(job) for job in jobs]
+        else:
+            with concurrent.futures.ProcessPoolExecutor(max_workers=args.workers) as executor:
+                results = list(executor.map(_audit_worker, jobs, chunksize=max(1, len(jobs) // (args.workers * 8))))
+        report = {
+            "cases": len(results), "classifications": dict(collections.Counter(item["classification"]
+                                                                                  for item in results)),
+            "changes": [item for item in results if item["classification"] not in {"identical", "equivalent"}]
         }
     else:
         strategies = STRATEGIES if args.strategy == "both" else (args.strategy, )
