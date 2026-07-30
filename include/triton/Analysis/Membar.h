@@ -208,8 +208,7 @@ bool containsLocalBarrier(Operation *op);
 // Shared Memory Barrier Analysis
 //===----------------------------------------------------------------------===//
 
-/// Common allocation and filtering state for postorder memory-synchronization
-/// analyses.
+// Common class to analyze membar and fence placement.
 class MembarOrFenceAnalysis
     : public triton::PostOrderFunctionAnalysis<BlockInfo> {
 public:
@@ -223,22 +222,34 @@ protected:
 
 class MembarAnalysis : public MembarOrFenceAnalysis {
 public:
+  /// Creates a new Membar analysis that generates the shared memory barrier
+  /// in the following circumstances:
+  /// - RAW: If a shared memory write is followed by a shared memory read, and
+  /// their addresses are intersected, a barrier is inserted.
+  /// - WAR: If a shared memory read is followed by a shared memory write, and
+  /// their addresses are intersected, a barrier is inserted.
+  /// The following circumstances do not require a barrier:
+  /// - WAW: not possible because overlapped memory allocation is not allowed.
+  /// - RAR: no write is performed.
+  /// Temporary storage of operations such as Reduce are considered as both
+  /// a shared memory read. If the temporary storage is written but not read,
+  /// it is considered as the problem of the operation itself but not the membar
+  /// analysis.
   using MembarOrFenceAnalysis::MembarOrFenceAnalysis;
 
 private:
-  /// Inserts a local barrier when the current access conflicts with an
-  /// unsynchronized access: read-after-write, write-after-read, or
-  /// write-after-write. Read-after-read accesses remain on the frontier.
+  /// Updates the BlockInfo operation based on the operation.
   void update(Operation *operation, BlockInfo *blockInfo, FuncMapT *funcMap,
               OpBuilder *builder) override;
 
   void insertBarrier(Operation *operation, OpBuilder *builder);
 };
 
-/// Runs one synchronization analysis per function in callgraph postorder.
-/// Each function summary contains the unsynchronized access frontier at its
-/// exits, so callers can incorporate callee effects without placing barriers
-/// unconditionally around every call.
+/// Postorder traversal on the callgraph to insert membar instructions
+/// of each function.
+/// Each function maintains a BlockInfo map that includes all potential buffers
+/// after returning. This way users do not have to explicitly insert membars
+/// before and after function calls, but might be a bit conservative.
 template <typename AnalysisT>
 class ModuleMembarOrFenceAnalysis : public triton::CallGraph<BlockInfo> {
 public:
