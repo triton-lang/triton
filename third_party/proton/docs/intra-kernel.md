@@ -108,9 +108,9 @@ with pl.scope("compute"):
     ...
 ```
 
-Asynchronous work can be measured with an opaque token. Allocation does not
-record a timestamp, so the token can be allocated outside the regions that
-record the transaction endpoints:
+Asynchronous operations such as asynchronous memory transfers and matrix multiplications can be measured with an opaque token.
+Allocation does not record a timestamp but instead only associates it with a scope name.
+The same token can be passed across loops, functions, and warp specialized regions to identify the start and the end of an asynchronous operation.
 
 ```python
 token = pl.allocate_async_token("async_copy")
@@ -119,13 +119,6 @@ issue_async_copy(...)
 ...
 pl.exit_async_scope(token)
 ```
-
-The token identifies a static asynchronous transaction, so a profiled warp may
-have at most one outstanding instance for a given token. The same token can be
-passed across loops or regions and reused for non-overlapping transactions.
-
-Asynchronous scopes and existing `enter_scope`/`exit_scope` scopes are
-supported on NVIDIA and AMD.
 
 Advanced users can insert `proton.record start`, `proton.record end`,
 `proton.allocate_async_token` and `proton.async_record` directly in TTIR or
