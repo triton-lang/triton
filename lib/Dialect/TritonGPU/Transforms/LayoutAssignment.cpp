@@ -35,9 +35,25 @@ namespace mlir::triton::gpu {
 
 namespace {
 
-// -----------------------------------------------------------------------------
-//
-// -----------------------------------------------------------------------------
+/// Hardware-sensitive profitability decisions are deliberately separate from
+/// legality, candidate discovery, graph search, and rewriting. Both the solver
+/// and rematerialization can therefore evolve without embedding policy in the
+/// fundamental layout constraints.
+class LayoutCostModel {
+public:
+  uint64_t getTransitionCost(Value value, Attribute sourceEncoding,
+                             Attribute resultEncoding) const;
+  uint64_t getRegisterPressureCost(Value value, Attribute encoding) const;
+  uint64_t getReductionCost(Value value, Attribute encoding,
+                            unsigned axis) const;
+  uint64_t getExecutionWeight(Operation *op) const;
+
+private:
+  mutable DenseMap<std::pair<Type, Type>, uint64_t> transitionCosts;
+  mutable DenseMap<std::pair<Type, Attribute>, uint64_t> registerPressureCosts;
+  mutable DenseMap<std::pair<Type, unsigned>, uint64_t> reductionCosts;
+  mutable DenseMap<Operation *, uint64_t> executionWeights;
+};
 
 // The current algorithm works by analyzing the IR and doing a one-shot rewrite
 // based on the analysis. The algorithm is as follows.
@@ -152,11 +168,7 @@ private:
       inferredSourceEncodings;
   mutable DenseMap<std::pair<Operation *, Attribute>, Attribute>
       inferredDestinationEncodings;
-  mutable DenseMap<std::pair<Type, Type>, uint64_t> layoutTransitionCosts;
-  mutable DenseMap<std::pair<Type, Attribute>, uint64_t>
-      layoutRegisterPressureCosts;
-  mutable DenseMap<std::pair<Type, unsigned>, uint64_t> layoutReductionCosts;
-  mutable DenseMap<Operation *, uint64_t> layoutExecutionWeights;
+  LayoutCostModel costModel;
   FuncOp funcOp;
   LayoutAssignmentStrategy strategy;
 };
@@ -916,7 +928,7 @@ void LayoutPropagation::resolveConflicts() {
   }
 }
 
-uint64_t LayoutPropagation::getLayoutTransitionCost(
+uint64_t LayoutCostModel::getTransitionCost(
     Value value, Attribute sourceEncoding, Attribute resultEncoding) const {
   if (!sourceEncoding || !resultEncoding || sourceEncoding == resultEncoding)
     return 0;
@@ -927,7 +939,7 @@ uint64_t LayoutPropagation::getLayoutTransitionCost(
 
   RankedTensorType sourceType = tensorType.cloneWithEncoding(sourceEncoding);
   RankedTensorType resultType = tensorType.cloneWithEncoding(resultEncoding);
-  auto [cached, inserted] = layoutTransitionCosts.try_emplace(
+  auto [cached, inserted] = transitionCosts.try_emplace(
       std::pair<Type, Type>{sourceType, resultType}, 0);
   if (!inserted)
     return cached->second;
@@ -951,14 +963,13 @@ uint64_t LayoutPropagation::getLayoutTransitionCost(
   return cached->second = 32 * byteCount;
 }
 
-uint64_t
-LayoutPropagation::getLayoutRegisterPressureCost(Value value,
+uint64_t LayoutCostModel::getRegisterPressureCost(Value value,
                                                  Attribute encoding) const {
   auto tensorType = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorType || !encoding || !value.getDefiningOp())
     return 0;
 
-  auto [cached, inserted] = layoutRegisterPressureCosts.try_emplace(
+  auto [cached, inserted] = registerPressureCosts.try_emplace(
       std::pair<Type, Attribute>{tensorType, encoding}, 0);
   if (!inserted)
     return cached->second;
@@ -983,9 +994,8 @@ LayoutPropagation::getLayoutRegisterPressureCost(Value value,
   return cached->second;
 }
 
-uint64_t LayoutPropagation::getLayoutReductionCost(Value value,
-                                                   Attribute encoding,
-                                                   unsigned axis) const {
+uint64_t LayoutCostModel::getReductionCost(Value value, Attribute encoding,
+                                          unsigned axis) const {
   auto tensorType = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorType || !encoding || axis >= tensorType.getRank())
     return 0;
@@ -995,7 +1005,7 @@ uint64_t LayoutPropagation::getLayoutReductionCost(Value value,
     return 0;
 
   RankedTensorType assignedType = tensorType.cloneWithEncoding(encoding);
-  auto [cached, inserted] = layoutReductionCosts.try_emplace(
+  auto [cached, inserted] = reductionCosts.try_emplace(
       std::pair<Type, unsigned>{assignedType, axis}, 0);
   if (!inserted)
     return cached->second;
@@ -1017,8 +1027,8 @@ uint64_t LayoutPropagation::getLayoutReductionCost(Value value,
   return cached->second;
 }
 
-uint64_t LayoutPropagation::getLayoutExecutionWeight(Operation *op) const {
-  auto [cached, inserted] = layoutExecutionWeights.try_emplace(op, 1);
+uint64_t LayoutCostModel::getExecutionWeight(Operation *op) const {
+  auto [cached, inserted] = executionWeights.try_emplace(op, 1);
   if (!inserted)
     return cached->second;
 
@@ -1029,6 +1039,27 @@ uint64_t LayoutPropagation::getLayoutExecutionWeight(Operation *op) const {
       weight = std::min<uint64_t>(256, 4 * weight);
   }
   return weight;
+}
+
+uint64_t LayoutPropagation::getLayoutTransitionCost(
+    Value value, Attribute sourceEncoding, Attribute resultEncoding) const {
+  return costModel.getTransitionCost(value, sourceEncoding, resultEncoding);
+}
+
+uint64_t
+LayoutPropagation::getLayoutRegisterPressureCost(Value value,
+                                                 Attribute encoding) const {
+  return costModel.getRegisterPressureCost(value, encoding);
+}
+
+uint64_t LayoutPropagation::getLayoutReductionCost(Value value,
+                                                   Attribute encoding,
+                                                   unsigned axis) const {
+  return costModel.getReductionCost(value, encoding, axis);
+}
+
+uint64_t LayoutPropagation::getLayoutExecutionWeight(Operation *op) const {
+  return costModel.getExecutionWeight(op);
 }
 
 Attribute LayoutPropagation::getCachedSourceEncoding(Operation *op,
