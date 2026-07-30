@@ -9,6 +9,7 @@
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVector.h"
@@ -110,11 +111,23 @@ struct BufferRegionView {
   llvm::SmallVector<uint32_t, 2> partitionBases;
   uint32_t affinePartitionOffset = 0;
   uint32_t affineCTAOffset = 0;
+  /// Deterministically interned identity of the owning allocation frame.
+  uint32_t allocationFrame = 0;
+
+  bool intersects(const BufferRegionView &other) const {
+    return allocationFrame == other.allocationFrame &&
+           region.intersects(other.region);
+  }
+
+  bool contains(const BufferRegionView &other) const {
+    return allocationFrame == other.allocationFrame &&
+           region.contains(other.region);
+  }
 
 private:
   auto key() const {
-    return std::tie(region, storageBase, affineOffset, affinePartitionOffset,
-                    affineCTAOffset, partitionBases);
+    return std::tie(allocationFrame, region, storageBase, affineOffset,
+                    affinePartitionOffset, affineCTAOffset, partitionBases);
   }
 
 public:
@@ -221,6 +234,10 @@ public:
 
   static llvm::SmallVector<MemoryAccess> getMemoryAccesses(Operation *op);
 
+  uint32_t getOperationId(Operation *operation) const {
+    return operationIds.lookup(operation);
+  }
+
   // ------------------------------
   // Public API for ConSan
   // ------------------------------
@@ -254,7 +271,8 @@ public:
   LogicalResult initialize(Operation *top) override;
 
 private:
-  BufferRegionView getMemDescView(Type type, uint32_t storageBase,
+  BufferRegionView getMemDescView(Type type, uint32_t allocationFrame,
+                                  uint32_t storageBase,
                                   llvm::ArrayRef<uint32_t> partitionBases = {});
   BufferRegionView getMemDescView(Type type, const BufferRegionView &view,
                                   uint32_t storageOffset = 0,
@@ -266,6 +284,7 @@ private:
   std::set<BufferRegion> usedBufferRegions[NUM_REGION_TYPES];
   bool usedUnknownBufferRegions[NUM_REGION_TYPES] = {};
   llvm::DenseMap<std::pair<Type, uint32_t>, AddressSet> footprintCache;
+  llvm::DenseMap<Operation *, uint32_t> operationIds;
 };
 
 } // namespace mlir::triton

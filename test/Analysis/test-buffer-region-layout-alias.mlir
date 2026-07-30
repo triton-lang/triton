@@ -511,6 +511,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
+// A descriptor returned through a callee retains its caller allocation frame.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: return_frame_a_direct vs return_frame_a_direct: alias=true
+// CHECK: return_frame_a_direct vs return_frame_a_returned: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true
+// CHECK: return_frame_a_direct vs return_frame_b_local: alias=false
+// CHECK: return_frame_a_returned vs return_frame_b_local: alias=false
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  tt.func private @return_argument(
+      %incoming: !ttg.memdesc<16xi32, #shared, #smem, mutable>)
+      -> !ttg.memdesc<16xi32, #shared, #smem, mutable> {
+    %local = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    %0 = ttg.local_load %local {test.region_name = "return_frame_b_local"} : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
+    tt.return %incoming : !ttg.memdesc<16xi32, #shared, #smem, mutable>
+  }
+
+  tt.func public @returned_argument_preserves_allocation_frame() {
+    %direct = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    %returned = tt.call @return_argument(%direct) : (!ttg.memdesc<16xi32, #shared, #smem, mutable>) -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    %0 = ttg.local_load %direct {test.region_name = "return_frame_a_direct"} : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
+    %1 = ttg.local_load %returned {test.region_name = "return_frame_a_returned"} : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
+    tt.return
+  }
+}
+
+// -----
+
 // An externally supplied descriptor is unknown, not an empty physical region.
 // It may alias an in-function allocation and certainly aliases itself.
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>

@@ -3,6 +3,8 @@
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -436,11 +438,17 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions,
 }
 
 BufferRegionView
-BufferRegionAnalysis::getMemDescView(Type type, uint32_t storageBase,
+BufferRegionAnalysis::getMemDescView(Type type, uint32_t allocationFrame,
+                                     uint32_t storageBase,
                                      ArrayRef<uint32_t> partitionBases) {
-  return getMemDescView(
-      type,
-      BufferRegionView{{}, storageBase, 0, llvm::to_vector<2>(partitionBases)});
+  return getMemDescView(type,
+                        BufferRegionView{{},
+                                         storageBase,
+                                         0,
+                                         llvm::to_vector<2>(partitionBases),
+                                         0,
+                                         0,
+                                         allocationFrame});
 }
 
 BufferRegionView BufferRegionAnalysis::getMemDescView(
@@ -470,10 +478,16 @@ BufferRegionView BufferRegionAnalysis::getMemDescView(
           affineOffset,
           std::move(partitionBases),
           affinePartitionOffset,
-          affineCTAOffset};
+          affineCTAOffset,
+          view.allocationFrame};
 }
 
 LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
+  top->walk([&](Operation *operation) {
+    if (isa<FunctionOpInterface, CallOpInterface>(operation))
+      operationIds.try_emplace(operation, operationIds.size() + 1);
+  });
+
   // Mark all warp-specialize partitions as live.
   if (failed(Base::initialize(top)))
     return failure();
@@ -521,13 +535,19 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     ArrayRef<uint32_t> partitionBases = offsets->size() > 1
                                             ? ArrayRef<uint32_t>(*offsets)
                                             : ArrayRef<uint32_t>();
-    regionInfo.views.insert(getMemDescView(localAllocOp.getType(),
-                                           offsets->front(), partitionBases));
+    regionInfo.views.insert(getMemDescView(
+        localAllocOp.getType(),
+        getOperationId(
+            op->getParentOfType<FunctionOpInterface>().getOperation()),
+        offsets->front(), partitionBases));
     return propagateRegions(regionInfo);
   }
   if (auto tmemAllocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
-    regionInfo.views.insert(getMemDescView(tmemAllocOp.getType(),
-                                           getAllocationOffset(tmemAllocOp)));
+    regionInfo.views.insert(getMemDescView(
+        tmemAllocOp.getType(),
+        getOperationId(
+            op->getParentOfType<FunctionOpInterface>().getOperation()),
+        getAllocationOffset(tmemAllocOp)));
     return propagateRegions(regionInfo);
   }
   if (auto memdescIndexOp = dyn_cast<ttg::MemDescIndexOp>(op)) {
