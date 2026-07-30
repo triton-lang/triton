@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import warnings
+import weakref
 from contextlib import contextmanager
 from dataclasses import replace
 
@@ -22,13 +23,14 @@ class _FakeCudaTensorMode(TorchFunctionMode):
     """Preserve CUDA allocation alignment and view offsets in fake pointers."""
 
     _STORAGE_ALIGNMENT = 256
-    _STORAGE_STRIDE = 1 << 40
+    _STORAGE_STRIDE = 1 << 20
 
     def __init__(self):
         from torch._subclasses.fake_tensor import FakeTensorMode
 
         self.fake_mode = FakeTensorMode(allow_fallback_kernels=False, allow_non_fake_inputs=True)
-        self.storage_pointers = {}
+        self.storage_pointers = weakref.WeakKeyDictionary()
+        self.next_storage_pointer = self._STORAGE_STRIDE + self._STORAGE_ALIGNMENT
 
     def __enter__(self):
         self.fake_mode.__enter__()
@@ -48,13 +50,11 @@ class _FakeCudaTensorMode(TorchFunctionMode):
         if getattr(func, "__name__", "") == "data_ptr":
             tensor = args[0]
             storage = tensor.untyped_storage()
-            storage_id = id(storage)
-            entry = self.storage_pointers.get(storage_id)
-            if entry is None:
-                pointer = (len(self.storage_pointers) + 1) * self._STORAGE_STRIDE + self._STORAGE_ALIGNMENT
-                self.storage_pointers[storage_id] = (storage, pointer)
-            else:
-                _, pointer = entry
+            pointer = self.storage_pointers.get(storage)
+            if pointer is None:
+                pointer = self.next_storage_pointer
+                self.next_storage_pointer += self._STORAGE_STRIDE
+                self.storage_pointers[storage] = pointer
             return _SyntheticDataPtr(pointer + tensor.storage_offset() * tensor.element_size())
         return func(*args, **(kwargs or {}))
 
@@ -117,6 +117,39 @@ def compile_warmup_only():
         triton.KernelInterface.__getitem__ = previous_getitem
 
 
+@contextmanager
+def process_pool_compile_warmup(*, workers, directory, phase):
+    """Capture tests once and compile their exact launches in spawned workers."""
+    from functools import partial
+
+    from triton._compile_warmup_pool import ProcessPoolWarmupDispatcher
+
+    previous_getitem = triton.KernelInterface.__getitem__
+    previous_assert_close = torch.testing.assert_close
+    dispatcher = ProcessPoolWarmupDispatcher(max_workers=workers, trace_directory=directory, phase=phase)
+    dispatcher.current_test = None
+
+    def getitem(kernel, grid):
+        return partial(dispatcher.dispatch, kernel=kernel, grid=grid, test=dispatcher.current_test)
+
+    triton.KernelInterface.__getitem__ = getitem
+    torch.testing.assert_close = lambda *args, **kwargs: None
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="Accessing the data pointer of FakeTensor.*",
+            )
+            with _FakeCudaTensorMode():
+                try:
+                    yield dispatcher
+                finally:
+                    dispatcher.finish()
+    finally:
+        torch.testing.assert_close = previous_assert_close
+        triton.KernelInterface.__getitem__ = previous_getitem
+
+
 class CompilationTrace:
 
     def __init__(self, directory, phase, test=None):
@@ -147,6 +180,43 @@ class CompilationTrace:
 @contextmanager
 def _warmup_test_case(item):
     module_path = str(getattr(item.module, "__file__", ""))
+    if module_path.endswith("/python/test/unit/language/test_matmul.py") and item.originalname in {
+            "test_block_scale_fp4",
+            "test_mxfp8_mxfp4_matmul",
+    }:
+        fp4_type = item.module.MXFP4Tensor
+        scale_type = item.module.MXScaleTensor
+        previous_fp4_to = fp4_type.to
+        previous_scale_from_float = scale_type._from_float
+        previous_scale_random = scale_type.random
+        previous_scale_to = scale_type.to
+
+        def fp4_to(instance, dtype):
+            return torch.empty(instance.data.shape, dtype=dtype, device=instance.data.device)
+
+        def scale_from_float(instance, values):
+            return torch.empty_like(values, dtype=torch.uint8)
+
+        def scale_random(instance, low=None, high=None):
+            instance.data = torch.empty(instance.size, dtype=torch.uint8, device=instance.device)
+            return instance
+
+        def scale_to(instance, dtype):
+            return torch.empty(instance.data.shape, dtype=dtype, device=instance.data.device)
+
+        fp4_type.to = fp4_to
+        scale_type._from_float = scale_from_float
+        scale_type.random = scale_random
+        scale_type.to = scale_to
+        try:
+            yield
+        finally:
+            scale_type.to = previous_scale_to
+            scale_type.random = previous_scale_random
+            scale_type._from_float = previous_scale_from_float
+            fp4_type.to = previous_fp4_to
+        return
+
     if module_path.endswith("/python/test/unit/language/test_core.py") and item.originalname in {
             "test_bin_op",
             "test_bitwise_op",
@@ -177,13 +247,6 @@ def _warmup_test_case(item):
         return
 
     parameters = getattr(getattr(item, "callspec", None), "params", {})
-    if parameters["inner_expt_opt"] is not None and 0 in (
-            parameters["m"],
-            parameters["n"],
-            parameters["k"],
-    ):
-        pytest.skip("zero-sized inner-expert kernels specialize differently with FakeTensor")
-
     import triton_kernels.testing as testing
     import triton_kernels.tensor_details.layout_details.blackwell_scale as blackwell_scale
 
@@ -259,6 +322,12 @@ def _warmup_test_case(item):
 
 def pytest_addoption(parser):
     parser.addoption("--warmup-only", action="store_true", help="compile Triton launches without executing GPU kernels")
+    parser.addoption(
+        "--warmup-workers",
+        type=int,
+        default=1,
+        help="number of spawned compiler processes used by --warmup-only",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
@@ -282,16 +351,22 @@ def pytest_collection_modifyitems(config, items):
             "test_where",
             "test_where_broadcast",
         },
-        "/python/test/unit/language/test_matmul.py": {
-            "test_block_scale_fp4",
-            "test_mxfp8_mxfp4_matmul",
-        },
         "/python/test/unit/language/test_standard.py": {
             "test_maximum_minium",
         },
     }
     for item in items:
         module_path = str(getattr(item.module, "__file__", ""))
+        if module_path.endswith("/triton_kernels/tests/test_matmul.py") and item.originalname == "test_op":
+            parameters = item.callspec.params
+            if parameters["inner_expt_opt"] is not None and 0 in (
+                    parameters["m"],
+                    parameters["n"],
+                    parameters["k"],
+            ):
+                item.add_marker(
+                    pytest.mark.skip(reason="zero-sized inner-expert kernels specialize differently with FakeTensor"))
+                continue
         for suffix, originalnames in unsupported_specializations.items():
             if module_path.endswith(suffix) and item.originalname in originalnames:
                 item.add_marker(pytest.mark.skip(reason="FakeTensor does not reproduce this kernel specialization"))
@@ -303,8 +378,15 @@ def compile_warmup(request):
     if not request.config.getoption("--warmup-only"):
         yield
         return
-    with compile_warmup_only():
-        yield
+    directory = os.environ.get("TRITON_CI_COMPILE_TRACE_DIR")
+    phase = os.environ.get("TRITON_CI_CACHE_PHASE", "unclassified")
+    workers = request.config.getoption("--warmup-workers")
+    with process_pool_compile_warmup(workers=workers, directory=directory, phase=phase) as dispatcher:
+        request.config._triton_warmup_dispatcher = dispatcher
+        try:
+            yield
+        finally:
+            del request.config._triton_warmup_dispatcher
 
 
 @pytest.hookimpl(wrapper=True)
@@ -314,6 +396,12 @@ def pytest_runtest_call(item):
     previous_listener = triton.knobs.compilation.listener
     if directory:
         triton.knobs.compilation.listener = CompilationTrace(directory, phase, item.nodeid)
+    dispatcher = getattr(item.config, "_triton_warmup_dispatcher", None)
+    previous_test = None
+    if dispatcher is not None:
+        previous_test = dispatcher.current_test
+        dispatcher.current_test = item.nodeid
+        dispatcher.record_test(item.nodeid)
     try:
         if item.config.getoption("--warmup-only"):
             with _warmup_test_case(item):
@@ -322,25 +410,46 @@ def pytest_runtest_call(item):
                 # Warmup is best-effort; the runtime test and exact per-test
                 # cache audit remain authoritative. FakeTensor can fail on
                 # data-dependent checks after compiling useful device kernels.
-                except (Exception, pytest.fail.Exception):
+                except (Exception, pytest.fail.Exception) as error:
+                    if os.environ.get("TRITON_WARMUP_DEBUG"):
+                        import traceback
+
+                        warnings.warn(
+                            f"Warmup stopped early for {item.nodeid}: {type(error).__name__}: {error}\n"
+                            f"{traceback.format_exc()}",
+                            stacklevel=2,
+                        )
                     return
         return (yield)
     finally:
+        if dispatcher is not None:
+            dispatcher.current_test = previous_test
         triton.knobs.compilation.listener = previous_listener
 
 
 def summarize_compile_trace(directory, phase=None):
     records = []
+    attempted_tests = {}
     if os.path.isdir(directory):
         for name in sorted(os.listdir(directory)):
-            if not name.endswith(".jsonl"):
-                continue
-            with open(os.path.join(directory, name), encoding="utf-8") as source:
-                records.extend(json.loads(line) for line in source if line.strip())
+            path = os.path.join(directory, name)
+            if name.endswith(".jsonl"):
+                with open(path, encoding="utf-8") as source:
+                    records.extend(json.loads(line) for line in source if line.strip())
+            elif name.endswith(".tests"):
+                with open(path, encoding="utf-8") as source:
+                    for line in source:
+                        if not line.strip():
+                            continue
+                        attempted = json.loads(line)
+                        attempted_tests.setdefault(attempted["phase"], set()).add(attempted["test"])
 
     warmup_records = [record for record in records if record["phase"].startswith("warmup-")]
     all_warmed_hashes = {record["hash"] for record in warmup_records}
-    all_warmed_tests = {record.get("test") for record in warmup_records if record.get("test") is not None}
+    all_warmed_tests = {record.get("test")
+                        for record in warmup_records
+                        if record.get("test") is not None} | set().union(
+                            *(tests for name, tests in attempted_tests.items() if name.startswith("warmup-")))
     phases = sorted({record["phase"] for record in records})
     summaries = {}
     for name in phases:
@@ -353,6 +462,8 @@ def summarize_compile_trace(directory, phase=None):
                                    if record["phase"] == f"warmup-{name}"] if not is_warmup_phase else []
         warmed_hashes = {record["hash"] for record in matching_warmup_records}
         warmed_tests = {record.get("test") for record in matching_warmup_records if record.get("test") is not None}
+        if not is_warmup_phase:
+            warmed_tests.update(attempted_tests.get(f"warmup-{name}", set()))
         warmed_test_events = [] if is_warmup_phase else [
             record for record in events if record.get("test") in warmed_tests
         ]

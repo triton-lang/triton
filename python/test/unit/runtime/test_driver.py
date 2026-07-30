@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from types import ModuleType, SimpleNamespace
 import pytest
 import torch
+import cloudpickle
 
 import triton
 import triton.language as tl
@@ -14,8 +15,14 @@ from triton._compile_warmup import (
     pytest_collection_modifyitems,
     summarize_compile_trace,
 )
+from triton._compile_warmup_pool import ProcessPoolWarmupDispatcher, _jit_callable_import_path, _jit_dumps
 from triton.backends.nvidia.compiler import CUDABackend
 from triton.backends.driver import GPUDriver, expand_signature, wrap_handle_tensordesc_impl
+
+
+@triton.jit
+def _compile_warmup_importable_kernel(output):
+    tl.store(output, 1)
 
 
 def test_compile_warmup_only_intercepts_launches():
@@ -52,6 +59,61 @@ def test_compile_warmup_preserves_tensor_view_alignment():
         assert view.data_ptr() == tensor.data_ptr() + tensor.element_size()
         assert CUDABackend.get_tensor_specialization(tensor, align=True) == "D"
         assert CUDABackend.get_tensor_specialization(view, align=True) == ""
+
+
+def test_compile_warmup_process_pool_requires_workers():
+    with pytest.raises(ValueError, match="max_workers must be >= 1"):
+        ProcessPoolWarmupDispatcher(max_workers=0, trace_directory=None, phase="warmup-test")
+
+
+def test_compile_warmup_serializes_local_jit_function():
+
+    @triton.jit
+    def kernel(output, value: tl.constexpr):
+        tl.store(output, value)
+
+    restored = cloudpickle.loads(_jit_dumps(kernel))
+
+    assert restored.src == kernel.src
+    assert restored.__name__ == kernel.__name__
+
+
+def test_compile_warmup_serializes_patched_source_globals():
+
+    @triton.jit
+    def helper(value):
+        return value + 1
+
+    @triton.jit
+    def kernel(output, value: tl.constexpr):
+        tl.store(output, value)
+
+    global_name = "_compile_warmup_serialization_helper"
+    kernel.fn.__globals__[global_name] = helper
+    kernel._unsafe_update_src(kernel.src.replace("tl.store(output, value)", f"tl.store(output, {global_name}(value))"))
+    try:
+        restored = cloudpickle.loads(_jit_dumps(kernel))
+        assert restored.cache_key == kernel.cache_key
+    finally:
+        del kernel.fn.__globals__[global_name]
+
+
+def test_compile_warmup_serializes_wrapped_module_jit_function(monkeypatch):
+    function = _compile_warmup_importable_kernel
+    monkeypatch.setattr(sys.modules[__name__], function.__name__, SimpleNamespace(fn=function))
+
+    assert _jit_callable_import_path(function) is None
+    restored = cloudpickle.loads(_jit_dumps(function))
+    assert restored.cache_key == function.cache_key
+
+
+def test_compile_warmup_serializes_generated_module_jit_function(monkeypatch):
+    function = _compile_warmup_importable_kernel
+    monkeypatch.setattr(sys.modules[__name__], "__file__", "/missing/generated_test_driver.py")
+
+    assert _jit_callable_import_path(function) is None
+    restored = cloudpickle.loads(_jit_dumps(function))
+    assert restored.cache_key == function.cache_key
 
 
 def test_compilation_trace_matches_warmup_cache_hits(tmp_path):
@@ -92,6 +154,21 @@ def test_compilation_trace_matches_warmup_cache_hits(tmp_path):
         _require_complete_warmup(report)
 
 
+def test_compilation_trace_grades_attempted_warmup_tests(tmp_path):
+    attempted = tmp_path / "warmup-unit-1.tests"
+    attempted.write_text('{"phase": "warmup-unit", "test": "test_core.py::test_missing"}\n')
+    times = SimpleNamespace(total=125_000)
+    source = SimpleNamespace(name="kernel", fn=SimpleNamespace(_fn_name="package.kernel"), hash=lambda: "source")
+    runtime = CompilationTrace(str(tmp_path), "unit", "test_core.py::test_missing")
+    runtime(src=source, metadata={"hash": "cold"}, metadata_group={}, times=times, cache_hit=False)
+
+    report = summarize_compile_trace(str(tmp_path), "unit")
+
+    assert report["warmup_tests"] == 1
+    assert report["phases"]["unit"]["warmed_test_misses"] == 1
+    assert report["phases"]["unit"]["incomplete_warmed_tests"] == ["test_core.py::test_missing"]
+
+
 def test_compile_warmup_skips_unsupported_fake_tensor_specializations():
     items = []
     for module_path, originalname in [
@@ -110,7 +187,24 @@ def test_compile_warmup_skips_unsupported_fake_tensor_specializations():
 
     pytest_collection_modifyitems(SimpleNamespace(getoption=lambda _: True), items)
 
-    assert [bool(item.markers) for item in items] == [True, True, True, False]
+    assert [bool(item.markers) for item in items] == [True, False, True, False]
+
+
+def test_compile_warmup_skips_zero_sized_inner_experts():
+    items = []
+    for m, inner_expt_opt in [(0, "pad_a"), (4, "pad_a"), (0, None)]:
+        item = SimpleNamespace(
+            module=SimpleNamespace(__file__="/checkout/python/triton_kernels/tests/test_matmul.py"),
+            originalname="test_op",
+            callspec=SimpleNamespace(params={"m": m, "n": 8, "k": 16, "inner_expt_opt": inner_expt_opt}),
+            markers=[],
+        )
+        item.add_marker = item.markers.append
+        items.append(item)
+
+    pytest_collection_modifyitems(SimpleNamespace(getoption=lambda _: True), items)
+
+    assert [bool(item.markers) for item in items] == [True, False, False]
 
 
 def test_compile_warmup_replaces_triton_kernels_reference(monkeypatch):

@@ -52,19 +52,24 @@ test-gluon: all
 
 WARMUP_PROCS ?= $(NUM_PROCS)
 
+# Broad scalar-language capture is slower than compiling under runtime xdist,
+# so prewarm only the compile-dense unit tests.
 .PHONY: test-warmup
 test-warmup: all
-	TRITON_CI_CACHE_PHASE=warmup-unit $(PYTEST) -s --tb=short -n $(WARMUP_PROCS) --dist=worksteal --warmup-only \
-		python/test/unit/language/test_core.py \
+	TRITON_CI_CACHE_PHASE=warmup-unit $(PYTEST) -s --tb=short --warmup-only --warmup-workers $(WARMUP_PROCS) \
 		python/test/unit/language/test_matmul.py \
-		python/test/unit/language/test_warp_specialization.py \
-		python/test/unit/language/test_tensor_descriptor.py \
-		python/test/unit/language/test_standard.py
-	TRITON_CI_CACHE_PHASE=warmup-triton-kernels $(PYTEST) -s --tb=short -n $(WARMUP_PROCS) --dist=worksteal --warmup-only \
+		python/test/unit/language/test_core.py::test_gather
+	TRITON_CI_CACHE_PHASE=warmup-triton-kernels $(PYTEST) -s --tb=short --warmup-only --warmup-workers $(WARMUP_PROCS) \
 		python/triton_kernels/tests/test_matmul.py::test_op
+	TRITON_CI_CACHE_PHASE=warmup-attention $(PYTEST) -s --tb=short --warmup-only --warmup-workers $(WARMUP_PROCS) \
+		python/tutorials/06-fused-attention.py::test_op
 ifeq ($(RUNNER_TYPE),nvidia-gb200)
-	TRITON_CI_CACHE_PHASE=warmup-gluon $(PYTEST) -s --tb=short -n $(WARMUP_PROCS) --dist=worksteal --warmup-only \
+	TRITON_CI_CACHE_PHASE=warmup-gluon $(PYTEST) -s --tb=short --warmup-only --warmup-workers $(WARMUP_PROCS) \
 		python/test/gluon/test_core.py::test_mma_shared_inputs
+	PYTHONPATH="$(TRITON_KERNELS_PATH)" TRITON_CI_CACHE_PHASE=warmup-gluon-examples \
+		$(PYTEST) -s --tb=short --warmup-only --warmup-workers $(WARMUP_PROCS) \
+		python/examples/gluon/01-attention-forward.py::test_op \
+		python/examples/gluon/01-attention-forward.py::test_op_consan
 endif
 
 .PHONY: test-gsan
