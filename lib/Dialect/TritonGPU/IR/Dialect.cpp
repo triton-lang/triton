@@ -503,7 +503,22 @@ SmallVector<unsigned> getMmaV2WarpsPerCTA(ArrayRef<int64_t> shape,
 }
 
 unsigned getNumCTAs(Attribute layout) {
-  return product<unsigned>(getCTAsPerCGA(layout));
+  auto kBlock = StringAttr::get(layout.getContext(), "block");
+
+  // Every block basis contributes one CTA-id bit, including broadcast bases.
+  // Read that input dimension directly instead of decomposing all of its bases
+  // into per-output-dimension counts only to multiply those counts again.
+  if (auto linearLayout = dyn_cast<LinearEncodingTrait>(layout))
+    return linearLayout.getLinearLayout().getInDimSize(kBlock);
+  if (auto sharedLinearLayout = dyn_cast<SharedLinearEncodingAttr>(layout))
+    return sharedLinearLayout.getLinearLayout().getInDimSize(kBlock);
+  if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
+    if (auto slicedLinearLayout = getSlicedLinearEncoding(sliceLayout))
+      return slicedLinearLayout.getLinearLayout().getInDimSize(kBlock);
+  }
+  if (auto ttgLayout = dyn_cast<LayoutEncodingTrait>(layout))
+    return ttgLayout.getCGALayout().getLinearLayout().getInDimSize(kBlock);
+  llvm_unreachable("Unimplemented usage of getNumCTAs");
 }
 
 static SmallVector<unsigned> orderPerDimImpl(const LinearLayout &ll,

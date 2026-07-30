@@ -455,6 +455,17 @@ protected:
   MLIRContext ctx;
 };
 
+TEST_F(LinearEncodingTest, SharedLinearCTACountIncludesBroadcastBases) {
+  auto kOffset = StringAttr::get(&ctx, "offset");
+  auto kBlock = StringAttr::get(&ctx, "block");
+  auto kDim = StringAttr::get(&ctx, "dim0");
+  LinearLayout layout({{kOffset, {{1}, {2}}}, {kBlock, {{0}, {4}}}},
+                      {kDim});
+  auto sharedLinear = SharedLinearEncodingAttr::get(&ctx, std::move(layout),
+                                                    /*layoutAlignment=*/16);
+  EXPECT_EQ(getNumCTAs(sharedLinear), 4u);
+}
+
 TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
   // Define a tensor shape
   auto rank = 2;
@@ -490,6 +501,19 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
       auto linearLayout = distributedEncoding.toLinearLayout(shape);
       auto linearEncoding =
           triton::gpu::LinearEncodingAttr::get(&ctx, linearLayout);
+
+      // The CTA count includes broadcast block bases and is unchanged when a
+      // legacy distributed encoding, including a slice, becomes linear.
+      unsigned expectedNumCTAs = 1;
+      for (unsigned count : getCTAsPerCGA(distributedEncoding))
+        expectedNumCTAs *= count;
+      ASSERT_EQ(getNumCTAs(distributedEncoding), expectedNumCTAs);
+      ASSERT_EQ(getNumCTAs(distributedEncoding), getNumCTAs(linearEncoding));
+      if (!isa<triton::gpu::SliceEncodingAttr>(distributedEncoding)) {
+        auto slicedLinear =
+            triton::gpu::SliceEncodingAttr::get(&ctx, 0, linearEncoding);
+        ASSERT_EQ(getNumCTAs(slicedLinear), getNumCTAs(linearEncoding));
+      }
 
       // Test that the canonical form of the LinearLayout is indeed canonical
       // by expanding it to the original shape
