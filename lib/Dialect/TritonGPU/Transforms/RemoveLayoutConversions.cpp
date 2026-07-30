@@ -166,14 +166,15 @@ public:
   static constexpr unsigned maxExactComponentStates = 256;
 };
 
-using LayoutAssignmentChange = std::pair<Value, Attribute>;
+using LayoutAssignment = DenseMap<Value, Attribute>;
+using LayoutValue = std::pair<Value, Attribute>;
 
 /// The solver owns only candidate search, objective comparison, convergence,
 /// and rollback. Operation legality, graph construction, and physical costs
 /// are supplied separately, so heuristics cannot leak into its core algorithm.
 class LayoutAssignmentSolver {
 public:
-  using Assignment = DenseMap<Value, Attribute>;
+  using Assignment = LayoutAssignment;
 
   struct Callbacks {
     llvm::function_ref<bool(Value, Attribute, const Assignment &)> isLegal;
@@ -183,7 +184,7 @@ public:
     llvm::function_ref<uint64_t(ArrayRef<Value>, const Assignment &)>
         affectedCost;
     llvm::function_ref<bool(Value, Attribute, Assignment &,
-                            SmallVectorImpl<LayoutAssignmentChange> &)>
+                            SmallVectorImpl<LayoutValue> &)>
         proposeComponent;
   };
 
@@ -262,30 +263,25 @@ private:
   template <bool source>
   Attribute getCachedEncoding(Operation *op, Attribute encoding) const;
   bool canAssignEncoding(Value value, Attribute encoding,
-                         const DenseMap<Value, Attribute> &assignments) const;
-  Attribute
-  getAssignedEncoding(Value value,
-                      const DenseMap<Value, Attribute> &assignments) const;
+                         const LayoutAssignment &assignments) const;
+  Attribute getAssignedEncoding(Value value,
+                                const LayoutAssignment &assignments) const;
   SmallVector<Attribute, 4>
-  getUseEncodings(OpOperand &use,
-                  const DenseMap<Value, Attribute> &assignments) const;
-  uint64_t
-  getAssignmentCost(Value value, Attribute encoding,
-                    const DenseMap<Value, Attribute> &assignments) const;
-  uint64_t
-  getGlobalAssignmentCost(const DenseMap<Value, Attribute> &assignments) const;
-  uint64_t getAffectedAssignmentCost(
-      ArrayRef<Value> changed,
-      const DenseMap<Value, Attribute> &assignments) const;
+  getUseEncodings(OpOperand &use, const LayoutAssignment &assignments) const;
+  uint64_t getAssignmentCost(Value value, Attribute encoding,
+                             const LayoutAssignment &assignments) const;
+  uint64_t getGlobalAssignmentCost(const LayoutAssignment &assignments) const;
+  uint64_t getAffectedAssignmentCost(ArrayRef<Value> changed,
+                                     const LayoutAssignment &assignments) const;
   bool buildGlobalComponentProposal(
-      Value seed, Attribute encoding, DenseMap<Value, Attribute> &assignments,
-      SmallVectorImpl<LayoutAssignmentChange> &changes) const;
+      Value seed, Attribute encoding, LayoutAssignment &assignments,
+      SmallVectorImpl<LayoutValue> &changes) const;
 
   // map from value to layout information.
   llvm::MapVector<Value, LayoutInfo> layouts;
   DenseSet<Value> fixedLayouts;
   // original encodings of tensor values rewritten in place.
-  DenseMap<Value, Attribute> originalEncodings;
+  LayoutAssignment originalEncodings;
   mutable DenseMap<std::pair<Operation *, Attribute>, Attribute>
       inferredSourceEncodings;
   mutable DenseMap<std::pair<Operation *, Attribute>, Attribute>
@@ -1196,8 +1192,7 @@ Attribute LayoutPropagation::getCachedEncoding(Operation *op,
 }
 
 bool LayoutPropagation::canAssignEncoding(
-    Value value, Attribute encoding,
-    const DenseMap<Value, Attribute> &assignments) const {
+    Value value, Attribute encoding, const LayoutAssignment &assignments) const {
   auto tensorType = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorType || !encoding)
     return false;
@@ -1270,7 +1265,7 @@ bool LayoutPropagation::canAssignEncoding(
 }
 
 Attribute LayoutPropagation::getAssignedEncoding(
-    Value value, const DenseMap<Value, Attribute> &assignments) const {
+    Value value, const LayoutAssignment &assignments) const {
   if (auto it = assignments.find(value); it != assignments.end())
     return it->second;
   if (auto tensorType = dyn_cast<RankedTensorType>(value.getType()))
@@ -1285,7 +1280,7 @@ bool reduceToScalar(Operation *op) {
 }
 
 SmallVector<Attribute, 4> LayoutPropagation::getUseEncodings(
-    OpOperand &use, const DenseMap<Value, Attribute> &assignments) const {
+    OpOperand &use, const LayoutAssignment &assignments) const {
   Operation *user = use.getOwner();
   SmallVector<Attribute, 4> encodings;
 
@@ -1351,8 +1346,7 @@ SmallVector<Attribute, 4> LayoutPropagation::getUseEncodings(
 }
 
 uint64_t LayoutPropagation::getAssignmentCost(
-    Value value, Attribute encoding,
-    const DenseMap<Value, Attribute> &assignments) const {
+    Value value, Attribute encoding, const LayoutAssignment &assignments) const {
   uint64_t cost = 0;
   Operation *definingOp = value.getDefiningOp();
   if (definingOp)
@@ -1413,7 +1407,7 @@ uint64_t LayoutPropagation::getAssignmentCost(
 }
 
 uint64_t LayoutPropagation::getGlobalAssignmentCost(
-    const DenseMap<Value, Attribute> &assignments) const {
+    const LayoutAssignment &assignments) const {
   uint64_t cost = 0;
   for (const auto &[value, info] : layouts) {
     Attribute encoding = getAssignedEncoding(value, assignments);
@@ -1424,8 +1418,7 @@ uint64_t LayoutPropagation::getGlobalAssignmentCost(
 }
 
 uint64_t LayoutPropagation::getAffectedAssignmentCost(
-    ArrayRef<Value> changedValues,
-    const DenseMap<Value, Attribute> &assignments) const {
+    ArrayRef<Value> changedValues, const LayoutAssignment &assignments) const {
   llvm::SmallSetVector<Value, 32> affected;
   auto addValue = [&](Value value) {
     if (layouts.find(value) != layouts.end())
@@ -1479,10 +1472,10 @@ uint64_t LayoutPropagation::getAffectedAssignmentCost(
 }
 
 bool LayoutPropagation::buildGlobalComponentProposal(
-    Value seed, Attribute encoding, DenseMap<Value, Attribute> &assignments,
-    SmallVectorImpl<LayoutAssignmentChange> &changes) const {
+    Value seed, Attribute encoding, LayoutAssignment &assignments,
+    SmallVectorImpl<LayoutValue> &changes) const {
   constexpr unsigned maxComponentValues = 512;
-  DenseMap<Value, Attribute> requested;
+  LayoutAssignment requested;
   SmallVector<std::pair<Value, Attribute>, 32> worklist;
 
   auto rollback = [&]() {
@@ -1640,7 +1633,7 @@ void LayoutAssignmentSolver::solve(const LayoutConstraintGraph &graph,
                   cast<RankedTensorType>(value.getType()).getEncoding())
             continue;
 
-          SmallVector<LayoutAssignmentChange, 32> proposal;
+          SmallVector<LayoutValue, 32> proposal;
           if (!callbacks.proposeComponent(value, candidate, assignments,
                                           proposal) ||
               proposal.empty())
@@ -1788,7 +1781,7 @@ void LayoutAssignmentSolver::solve(const LayoutConstraintGraph &graph,
 }
 
 void LayoutPropagation::resolveGlobalConflicts() {
-  DenseMap<Value, Attribute> assignments;
+  LayoutAssignment assignments;
   bool hasFlexibleLayouts = false;
   for (auto &[value, info] : layouts) {
     Attribute original = cast<RankedTensorType>(value.getType()).getEncoding();
@@ -1821,7 +1814,7 @@ void LayoutPropagation::resolveGlobalConflicts() {
            return getAffectedAssignmentCost(changed, current);
          },
          [&](Value value, Attribute encoding, auto &current,
-             SmallVectorImpl<LayoutAssignmentChange> &changes) {
+             SmallVectorImpl<LayoutValue> &changes) {
            return buildGlobalComponentProposal(value, encoding, current,
                                                changes);
          }});
@@ -3059,7 +3052,14 @@ LogicalResult cleanupLayoutConversions(Operation *operation) {
   return success();
 }
 
-using LayoutValue = std::pair<Value, Attribute>;
+static bool hasExternalExpressionUsers(Operation *op,
+                                       SetVector<Operation *> &operations,
+                                       Operation *root, Value rootValue = {}) {
+  return llvm::any_of(op->getUsers(), [&](Operation *user) {
+    return user == root ? rootValue && op->getResult(0) != rootValue
+                        : !operations.contains(user);
+  });
+}
 
 /// Plan an entire pure tensor expression before changing the IR. A conversion
 /// can be removed only when its complete producer graph can be regenerated in
@@ -3078,9 +3078,9 @@ public:
       if (!isa<ConvertLayoutOp>(op))
         ++originalMaterializations;
 
-      for (Operation *user : op->getUsers())
-        if (user != root.getOperation() && !originalOperations.contains(user))
-          return failure();
+      if (hasExternalExpressionUsers(op, originalOperations,
+                                     root.getOperation()))
+        return failure();
     }
 
     unsigned newMaterializations = 0;
@@ -3264,14 +3264,9 @@ public:
       // can live in an enclosing loop or function block and have other users.
       // Recreating a splat, constant, or logical range does not duplicate the
       // random-number arithmetic or require ownership of the original leaf.
-      if (isRematerializableLeaf(op))
-        continue;
-
-      if (llvm::any_of(op->getUsers(), [&](Operation *user) {
-            return user == insertionPoint
-                       ? op->getResult(0) != rootValue
-                       : !originalOperations.contains(user);
-          }))
+      if (!isRematerializableLeaf(op) &&
+          hasExternalExpressionUsers(op, originalOperations, insertionPoint,
+                                     rootValue))
         return failure();
     }
 
