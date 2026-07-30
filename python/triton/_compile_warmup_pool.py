@@ -253,6 +253,23 @@ def _preload_with_compile_context(function, name, key, serialized_target, serial
     )
 
 
+@contextmanager
+def _compile_lock(directory, digest):
+    if directory is None:
+        yield
+        return
+    import fcntl
+
+    lock_dir = os.path.join(directory, "triton-warmup-locks")
+    os.makedirs(lock_dir, mode=0o700, exist_ok=True)
+    with open(os.path.join(lock_dir, f"{digest}.lock"), "a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
 def _warmup_kernel(kernel, args, grid, kwargs):
     from triton.runtime.autotuner import Autotuner
 
@@ -288,13 +305,14 @@ def _compile_trace(directory, phase, test):
 
 
 def _preload_worker(module_name, qualified_name, fn_bytes, compile_context_bytes, kernel_repr, instrumentation_mode,
-                    environment, trace_directory, phase, test):
+                    environment, trace_directory, phase, test, digest):
     """Load one JIT function and populate the shared disk cache."""
     try:
         with (
                 _instrumentation_mode(instrumentation_mode),
                 _cache_invalidating_environment(environment),
                 _compile_trace(trace_directory, phase, test),
+                _compile_lock(trace_directory, digest),
         ):
             if module_name is not None and qualified_name is not None:
                 function = _load_jit_callable(module_name, qualified_name)
@@ -349,20 +367,23 @@ class ProcessPoolWarmupDispatcher:
         self._executor = ProcessPoolExecutor(max_workers=max_workers, mp_context=context)
         self._trace_directory = trace_directory
         self._phase = phase
+        self.current_phase = phase
         self._capture_lock = threading.Lock()
         self._pending = []
         self._attempted_tests = set()
         self._serialized_keys = set()
         self._submitted_keys = set()
 
-    def record_test(self, test):
-        if self._trace_directory is None or test is None or test in self._attempted_tests:
+    def record_test(self, test, phase=None):
+        phase = phase or self.current_phase
+        attempted_test = (phase, test)
+        if self._trace_directory is None or test is None or attempted_test in self._attempted_tests:
             return
-        self._attempted_tests.add(test)
+        self._attempted_tests.add(attempted_test)
         os.makedirs(self._trace_directory, exist_ok=True)
-        path = os.path.join(self._trace_directory, f"{self._phase}-{os.getpid()}.tests")
+        path = os.path.join(self._trace_directory, f"{phase}-{os.getpid()}.tests")
         with open(path, "a", encoding="utf-8") as output:
-            output.write(json.dumps({"phase": self._phase, "test": test}, sort_keys=True) + "\n")
+            output.write(json.dumps({"phase": phase, "test": test}, sort_keys=True) + "\n")
 
     def dispatch(self, *args, kernel, grid, test, **kwargs):
         from triton._C.libtriton import get_cache_invalidating_env_vars
@@ -385,9 +406,10 @@ class ProcessPoolWarmupDispatcher:
                     f"Falling back to in-process warmup for {kernel}: {error!r}",
                     stacklevel=2,
                 )
-                with _compile_trace(self._trace_directory, self._phase, test):
+                with _compile_trace(self._trace_directory, self.current_phase, test):
                     return _warmup_kernel(kernel, args, grid, kwargs)
-            self.record_test(test)
+            phase = self.current_phase
+            self.record_test(test, phase)
             for capture in captures:
                 digest = hashlib.sha256(instrumentation_mode.encode() + b"\0" + capture.digest_payload()).hexdigest()
                 if digest in self._submitted_keys:
@@ -403,10 +425,11 @@ class ProcessPoolWarmupDispatcher:
                     instrumentation_mode,
                     capture.environment,
                     self._trace_directory,
-                    self._phase,
+                    phase,
                     capture.test,
+                    digest,
                 )
-                self._pending.append((future, capture, instrumentation_mode))
+                self._pending.append((future, capture, instrumentation_mode, phase, digest))
 
     def _capture_preloads(self, instrumentation_mode, environment, kernel, args, grid, kwargs, test):
         from triton.runtime import jit as triton_jit
@@ -521,7 +544,7 @@ class ProcessPoolWarmupDispatcher:
         try:
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", message="Accessing the data pointer of FakeTensor.*")
-                for future, capture, instrumentation_mode in self._pending:
+                for future, capture, instrumentation_mode, phase, digest in self._pending:
                     try:
                         future.result()
                     except _CompilationFailedError as error:
@@ -536,7 +559,8 @@ class ProcessPoolWarmupDispatcher:
                             with (
                                     _instrumentation_mode(instrumentation_mode),
                                     _cache_invalidating_environment(capture.environment),
-                                    _compile_trace(self._trace_directory, self._phase, capture.test),
+                                    _compile_trace(self._trace_directory, phase, capture.test),
+                                    _compile_lock(self._trace_directory, digest),
                             ):
                                 compile_context = cloudpickle.loads(capture.compile_context_bytes)
                                 _preload_with_compile_context(capture.function, *compile_context)

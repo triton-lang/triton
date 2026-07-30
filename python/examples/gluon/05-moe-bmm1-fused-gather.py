@@ -1396,7 +1396,7 @@ def prepare_case(c: MLPConfig, batch_size: int, device: str, seed: int = 0, unif
                  reference: bool = False, p: KernelConfig | None = None) -> PreparedCase:
     torch.manual_seed(seed)
 
-    local_rank = int(torch.randint(0, c.num_expert_shards, size=()).item())
+    local_rank = seed % c.num_expert_shards
     k, n = c.hidden_size, c.intermediate_size
     n_expts_local = c.num_experts // c.num_expert_shards
     ragged_metadata, gather_indx = init_routing_data(c, batch_size, local_rank, device, uniform_routing)
@@ -1405,8 +1405,8 @@ def prepare_case(c: MLPConfig, batch_size: int, device: str, seed: int = 0, unif
     w, w_scale = alloc_randn_fp4((n_expts_local, k, n), device=device, p=p)
     bias = alloc_randn((n_expts_local, n), dtype=torch.float32, device=device)
 
-    swiglu_alpha = float(torch.rand((), device=device).item()) / 5 + 1.0
-    swiglu_limit = float(torch.rand((), device=device).item()) / 5 + 1.3
+    swiglu_alpha = 1.1
+    swiglu_limit = 1.4
     fused_activation = FusedActivation(
         FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2),
         (swiglu_alpha, swiglu_limit),

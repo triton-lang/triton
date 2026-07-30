@@ -61,7 +61,7 @@ class _FakeCudaTensorMode(TorchFunctionMode):
 
 @contextmanager
 def _coordinate_compiles():
-    """Ensure xdist workers compile each exact specialization only once."""
+    """Ensure concurrent pytest workers compile each exact specialization only once."""
     import fcntl
     from triton.runtime.jit import JITFunction
 
@@ -72,8 +72,6 @@ def _coordinate_compiles():
     previous_do_compile = JITFunction._do_compile
 
     def do_compile(kernel, key, signature, device, constexprs, options, attrs, warmup):
-        if not warmup:
-            return previous_do_compile(kernel, key, signature, device, constexprs, options, attrs, warmup)
         digest = hashlib.sha256(f"{kernel.cache_key}\0{key}".encode()).hexdigest()
         with open(os.path.join(lock_dir, f"{digest}.lock"), "a+b") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
@@ -180,6 +178,24 @@ class CompilationTrace:
 @contextmanager
 def _warmup_test_case(item):
     module_path = str(getattr(item.module, "__file__", ""))
+    if module_path.endswith("/python/examples/gluon/05-moe-bmm1-fused-gather.py") and item.originalname in {
+            "test_op",
+            "test_op_consan",
+            "test_op_fpsan",
+    }:
+        import triton_kernels.tensor_details.layout_details.blackwell_scale as blackwell_scale
+
+        previous_assert_close = item.module.assert_close
+        previous_is_fake = blackwell_scale.is_fake
+        item.module.assert_close = lambda *args, **kwargs: None
+        blackwell_scale.is_fake = lambda tensor: False
+        try:
+            yield
+        finally:
+            blackwell_scale.is_fake = previous_is_fake
+            item.module.assert_close = previous_assert_close
+        return
+
     if module_path.endswith("/python/test/unit/language/test_matmul.py") and item.originalname in {
             "test_block_scale_fp4",
             "test_mxfp8_mxfp4_matmul",
@@ -329,6 +345,27 @@ def pytest_addoption(parser):
         default=1,
         help="number of spawned compiler processes used by --warmup-only",
     )
+    parser.addoption(
+        "--warmup-phase",
+        action="append",
+        default=[],
+        metavar="PATH=PHASE",
+        help="attribute tests under PATH to PHASE instead of TRITON_CI_CACHE_PHASE",
+    )
+
+
+def _cache_phase_for_item(item):
+    phase = os.environ.get("TRITON_CI_CACHE_PHASE", "unclassified")
+    root = os.path.abspath(str(item.config.rootpath))
+    path = os.path.relpath(os.path.abspath(str(item.path)), root)
+    for rule in item.config.getoption("--warmup-phase"):
+        prefix, separator, configured_phase = rule.rpartition("=")
+        if not separator or not prefix or not configured_phase:
+            raise pytest.UsageError(f"invalid --warmup-phase {rule!r}; expected PATH=PHASE")
+        prefix = os.path.normpath(prefix)
+        if path == prefix or path.startswith(prefix + os.sep):
+            phase = configured_phase
+    return phase
 
 
 def pytest_collection_modifyitems(config, items):
@@ -375,6 +412,15 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture(scope="session", autouse=True)
+def coordinate_runtime_compiles(request):
+    if request.config.getoption("--warmup-only") or not os.environ.get("TRITON_CI_COMPILE_TRACE_DIR"):
+        yield
+        return
+    with _coordinate_compiles():
+        yield
+
+
+@pytest.fixture(scope="session", autouse=True)
 def compile_warmup(request):
     if not request.config.getoption("--warmup-only"):
         yield
@@ -393,16 +439,19 @@ def compile_warmup(request):
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_call(item):
     directory = os.environ.get("TRITON_CI_COMPILE_TRACE_DIR")
-    phase = os.environ.get("TRITON_CI_CACHE_PHASE", "unclassified")
+    phase = _cache_phase_for_item(item)
     previous_listener = triton.knobs.compilation.listener
     if directory:
         triton.knobs.compilation.listener = CompilationTrace(directory, phase, item.nodeid)
     dispatcher = getattr(item.config, "_triton_warmup_dispatcher", None)
     previous_test = None
+    previous_phase = None
     if dispatcher is not None:
         previous_test = dispatcher.current_test
+        previous_phase = dispatcher.current_phase
         dispatcher.current_test = item.nodeid
-        dispatcher.record_test(item.nodeid)
+        dispatcher.current_phase = phase
+        dispatcher.record_test(item.nodeid, phase)
     try:
         if item.config.getoption("--warmup-only"):
             with _warmup_test_case(item):
@@ -425,6 +474,7 @@ def pytest_runtest_call(item):
     finally:
         if dispatcher is not None:
             dispatcher.current_test = previous_test
+            dispatcher.current_phase = previous_phase
         triton.knobs.compilation.listener = previous_listener
 
 

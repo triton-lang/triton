@@ -46,9 +46,15 @@ test-plugins: all
 	TRITON_CI_CACHE_PHASE=plugins $(PYTEST) -vvv python/test/unit/plugins
 
 .PHONY: test-gluon
+ifeq ($(RUNNER_TYPE),nvidia-gb200)
+GLUON_EXAMPLE_PROCS ?= 8
+else
+GLUON_EXAMPLE_PROCS ?= 2
+endif
 test-gluon: all
 	TRITON_CI_CACHE_PHASE=gluon $(PYTEST) -n $(NUM_PROCS) python/test/gluon/ python/tutorials/gluon/
-	PYTHONPATH="$(TRITON_KERNELS_PATH)" TRITON_CI_CACHE_PHASE=gluon-examples $(PYTEST) -n 2 python/examples/gluon/
+	PYTHONPATH="$(TRITON_KERNELS_PATH)" TRITON_CI_CACHE_PHASE=gluon-examples \
+		$(PYTEST) -n $(GLUON_EXAMPLE_PROCS) python/examples/gluon/
 
 WARMUP_PROCS ?= $(NUM_PROCS)
 WARMUP_CAPTURE_PROCS ?= 4
@@ -57,23 +63,73 @@ WARMUP_CAPTURE_PROCS ?= 4
 # so prewarm only the compile-dense unit tests.
 .PHONY: test-warmup
 test-warmup: all
-	TRITON_CI_CACHE_PHASE=warmup-unit $(PYTEST) -s --tb=short --warmup-only --warmup-workers $(WARMUP_PROCS) \
+	@set -e; \
+	warmup_unit_procs=$$(( $(WARMUP_PROCS) / 8 )); \
+	warmup_attention_procs=$$(( $(WARMUP_PROCS) / 16 )); \
+	if [ "$$warmup_unit_procs" -lt 1 ]; then warmup_unit_procs=1; fi; \
+	if [ "$$warmup_attention_procs" -lt 1 ]; then warmup_attention_procs=1; fi; \
+	if [ "$(RUNNER_TYPE)" = "nvidia-gb200" ]; then \
+		warmup_unit_procs=$$(( $(WARMUP_PROCS) / 24 )); \
+		warmup_group_procs=$$(( $(WARMUP_PROCS) * 11 / 24 )); \
+		if [ "$$warmup_unit_procs" -lt 1 ]; then warmup_unit_procs=1; fi; \
+		if [ "$$warmup_group_procs" -lt 1 ]; then warmup_group_procs=1; fi; \
+		warmup_triton_kernels_procs=$$(( $(WARMUP_PROCS) - warmup_unit_procs - warmup_group_procs )); \
+	elif [ "$(RUNNER_TYPE)" = "nvidia-h100" ]; then \
+		warmup_group_procs=$$(( $(WARMUP_PROCS) * 3 / 16 )); \
+		if [ "$$warmup_group_procs" -lt 1 ]; then warmup_group_procs=1; fi; \
+		warmup_triton_kernels_procs=$$(( $(WARMUP_PROCS) - warmup_unit_procs - warmup_group_procs )); \
+	else \
+		warmup_group_procs=$$warmup_attention_procs; \
+		warmup_triton_kernels_procs=$$(( $(WARMUP_PROCS) - warmup_unit_procs - warmup_group_procs )); \
+	fi; \
+	if [ "$$warmup_triton_kernels_procs" -lt 1 ]; then warmup_triton_kernels_procs=1; fi; \
+	warmup_triton_kernels_worker_procs=$$(( \
+		(warmup_triton_kernels_procs + $(WARMUP_CAPTURE_PROCS) - 1) / $(WARMUP_CAPTURE_PROCS) )); \
+	TRITON_CI_CACHE_PHASE=warmup-unit $(PYTEST) -s --tb=short \
+		--warmup-only --warmup-workers "$$warmup_unit_procs" \
 		python/test/unit/language/test_matmul.py \
-		python/test/unit/language/test_core.py::test_gather
-	TRITON_CI_CACHE_PHASE=warmup-triton-kernels $(PYTEST) -s --tb=short -n $(WARMUP_CAPTURE_PROCS) --dist=worksteal \
-		--warmup-only --warmup-workers $$((($(WARMUP_PROCS) + $(WARMUP_CAPTURE_PROCS) - 1) / $(WARMUP_CAPTURE_PROCS))) \
-		python/triton_kernels/tests/test_matmul.py::test_op
-	TRITON_CI_CACHE_PHASE=warmup-attention $(PYTEST) -s --tb=short --warmup-only --warmup-workers $(WARMUP_PROCS) \
-		python/tutorials/06-fused-attention.py::test_op
-ifeq ($(RUNNER_TYPE),nvidia-gb200)
-	TRITON_CI_CACHE_PHASE=warmup-gluon $(PYTEST) -s --tb=short -n $(WARMUP_CAPTURE_PROCS) --dist=worksteal \
-		--warmup-only --warmup-workers $$((($(WARMUP_PROCS) + $(WARMUP_CAPTURE_PROCS) - 1) / $(WARMUP_CAPTURE_PROCS))) \
-		python/test/gluon/test_core.py::test_mma_shared_inputs
-	PYTHONPATH="$(TRITON_KERNELS_PATH)" TRITON_CI_CACHE_PHASE=warmup-gluon-examples \
-		$(PYTEST) -s --tb=short --warmup-only --warmup-workers $(WARMUP_PROCS) \
-		python/examples/gluon/01-attention-forward.py::test_op \
-		python/examples/gluon/01-attention-forward.py::test_op_consan
-endif
+		python/test/unit/language/test_core.py::test_gather & \
+	warmup_unit_pid=$$!; \
+	TRITON_CI_CACHE_PHASE=warmup-triton-kernels $(PYTEST) -s --tb=short \
+		-n $(WARMUP_CAPTURE_PROCS) --dist=worksteal \
+		--warmup-only --warmup-workers "$$warmup_triton_kernels_worker_procs" \
+		python/triton_kernels/tests/test_matmul.py::test_op & \
+	warmup_triton_kernels_pid=$$!; \
+	if [ "$(RUNNER_TYPE)" = "nvidia-gb200" ]; then \
+		warmup_group_worker_procs=$$(( \
+			(warmup_group_procs + $(WARMUP_CAPTURE_PROCS) - 1) / $(WARMUP_CAPTURE_PROCS) )); \
+		PYTHONPATH="$(TRITON_KERNELS_PATH)" TRITON_CI_CACHE_PHASE=warmup-gluon \
+			$(PYTEST) -s --tb=short -n $(WARMUP_CAPTURE_PROCS) --dist=worksteal \
+			--warmup-only --warmup-workers "$$warmup_group_worker_procs" \
+			--warmup-phase python/tutorials/06-fused-attention.py=warmup-attention \
+			--warmup-phase python/examples/gluon=warmup-gluon-examples \
+			python/examples/gluon/01-attention-forward.py::test_op_consan \
+			python/examples/gluon/05-moe-bmm1-fused-gather.py::test_op_consan \
+			python/tutorials/06-fused-attention.py::test_op \
+			python/test/gluon/test_core.py::test_mma_shared_inputs \
+			python/examples/gluon/01-attention-forward.py::test_op \
+			python/examples/gluon/03-matmul-multicta.py::test_matmul_matches_torch \
+			python/examples/gluon/05-moe-bmm1-fused-gather.py::test_op & \
+	elif [ "$(RUNNER_TYPE)" = "nvidia-h100" ]; then \
+		warmup_group_worker_procs=$$(( \
+			(warmup_group_procs + $(WARMUP_CAPTURE_PROCS) - 1) / $(WARMUP_CAPTURE_PROCS) )); \
+		TRITON_CI_CACHE_PHASE=warmup-gluon \
+			$(PYTEST) -s --tb=short -n $(WARMUP_CAPTURE_PROCS) --dist=worksteal \
+			--warmup-only --warmup-workers "$$warmup_group_worker_procs" \
+			--warmup-phase python/tutorials/06-fused-attention.py=warmup-attention \
+			python/tutorials/06-fused-attention.py::test_op \
+			python/test/gluon/test_core.py::test_mma_shared_inputs & \
+	else \
+		TRITON_CI_CACHE_PHASE=warmup-attention $(PYTEST) -s --tb=short \
+			--warmup-only --warmup-workers "$$warmup_group_procs" \
+			python/tutorials/06-fused-attention.py::test_op & \
+	fi; \
+	warmup_group_pid=$$!; \
+	warmup_status=0; \
+	if ! wait "$$warmup_unit_pid"; then warmup_status=1; fi; \
+	if ! wait "$$warmup_triton_kernels_pid"; then warmup_status=1; fi; \
+	if ! wait "$$warmup_group_pid"; then warmup_status=1; fi; \
+	exit "$$warmup_status"
 
 .PHONY: test-gsan
 test-gsan: all

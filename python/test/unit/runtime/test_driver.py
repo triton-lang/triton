@@ -1,5 +1,6 @@
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import pytest
 import torch
@@ -9,6 +10,7 @@ import triton
 import triton.language as tl
 from triton._compile_warmup import (
     CompilationTrace,
+    _cache_phase_for_item,
     _main,
     _require_complete_warmup,
     _warmup_test_case,
@@ -65,6 +67,25 @@ def test_compile_warmup_preserves_tensor_view_alignment():
 def test_compile_warmup_process_pool_requires_workers():
     with pytest.raises(ValueError, match="max_workers must be >= 1"):
         ProcessPoolWarmupDispatcher(max_workers=0, trace_directory=None, phase="warmup-test")
+
+
+def test_compile_warmup_attributes_combined_session_phases(monkeypatch):
+    monkeypatch.setenv("TRITON_CI_CACHE_PHASE", "warmup-default")
+    config = SimpleNamespace(
+        rootpath=Path("/checkout"),
+        getoption=lambda _: [
+            "python/tutorials/06-fused-attention.py=warmup-attention",
+            "python/examples/gluon=warmup-gluon-examples",
+        ],
+    )
+
+    attention = SimpleNamespace(config=config, path=Path("/checkout/python/tutorials/06-fused-attention.py"))
+    example = SimpleNamespace(config=config, path=Path("/checkout/python/examples/gluon/01-attention-forward.py"))
+    unit = SimpleNamespace(config=config, path=Path("/checkout/python/test/unit/language/test_core.py"))
+
+    assert _cache_phase_for_item(attention) == "warmup-attention"
+    assert _cache_phase_for_item(example) == "warmup-gluon-examples"
+    assert _cache_phase_for_item(unit) == "warmup-default"
 
 
 def test_compile_warmup_serializes_local_jit_function():
@@ -246,6 +267,25 @@ def test_compile_warmup_replaces_preshuffled_mxfp_conversion():
         assert value.shape == (8, )
 
     assert MXFP4Tensor.to is previous_conversion
+
+
+def test_compile_warmup_replaces_gluon_moe_fake_checks():
+    import triton_kernels.tensor_details.layout_details.blackwell_scale as blackwell_scale
+
+    module_assert_close = object()
+    module = SimpleNamespace(
+        __file__="/checkout/python/examples/gluon/05-moe-bmm1-fused-gather.py",
+        assert_close=module_assert_close,
+    )
+    item = SimpleNamespace(module=module, originalname="test_op")
+    previous_is_fake = blackwell_scale.is_fake
+
+    with _warmup_test_case(item):
+        assert module.assert_close is not module_assert_close
+        assert not blackwell_scale.is_fake(object())
+
+    assert module.assert_close is module_assert_close
+    assert blackwell_scale.is_fake is previous_is_fake
 
 
 def test_compile_warmup_replaces_triton_kernels_reference(monkeypatch):

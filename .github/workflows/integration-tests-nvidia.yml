@@ -95,13 +95,15 @@ jobs:
           echo "TRITON_CI_COMPILE_TRACE_DIR=$trace_dir" >> "$GITHUB_ENV"
           export TRITON_CI_COMPILE_TRACE_DIR="$trace_dir"
           warmup_procs=$(nproc)
-          if (( warmup_procs > 64 )); then
-            warmup_procs=64
+          if (( warmup_procs > 96 )); then
+            warmup_procs=96
           fi
           make WARMUP_PROCS="$warmup_procs" test-warmup
           warmup_reports=(--phase warmup-unit --phase warmup-triton-kernels --phase warmup-attention)
           if [[ "$RUNNER_TYPE" == "nvidia-gb200" ]]; then
             warmup_reports+=(--phase warmup-gluon --phase warmup-gluon-examples)
+          elif [[ "$RUNNER_TYPE" == "nvidia-h100" ]]; then
+            warmup_reports+=(--phase warmup-gluon)
           fi
           python3 -m triton._compile_warmup report "${warmup_reports[@]}"
       - name: Run triton tests
@@ -114,6 +116,8 @@ jobs:
           make NUM_PROCS=24 test-gluon
           if [[ "$RUNNER_TYPE" == "nvidia-gb200" ]]; then
             python3 -m triton._compile_warmup report --phase gluon --phase gluon-examples --require-complete-warmup
+          elif [[ "$RUNNER_TYPE" == "nvidia-h100" ]]; then
+            python3 -m triton._compile_warmup report --phase gluon --require-complete-warmup
           else
             python3 -m triton._compile_warmup report --phase gluon --phase gluon-examples
           fi
