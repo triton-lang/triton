@@ -304,6 +304,59 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// A reduction producer and its multiple reduced results form one constrained
+// component. Exact assignment can jointly keep both loads in their physical
+// layout instead of paying conversions before every reduction.
+//
+// BASELINE-LABEL: @exact_coupled_reduction_layouts
+// BASELINE: "tt.reduce"
+// BASELINE: "tt.reduce"
+// BASELINE: tt.return
+//
+// OPTIMIZED-LABEL: @exact_coupled_reduction_layouts
+// OPTIMIZED: tt.load
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.load
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: "tt.reduce"
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: "tt.reduce"
+// OPTIMIZED-NOT: ttg.convert_layout
+// OPTIMIZED: tt.return
+
+#memory = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#exchange = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#memory_result = #ttg.slice<{dim = 1, parent = #memory}>
+#exchange_result = #ttg.slice<{dim = 1, parent = #exchange}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @exact_coupled_reduction_layouts(%left_ptr: tensor<64x64x!tt.ptr<f16>, #memory>, %right_ptr: tensor<64x64x!tt.ptr<f16>, #memory>) -> (tensor<64xf32, #memory_result>, tensor<64xf32, #memory_result>) {
+    %left_half = tt.load %left_ptr : tensor<64x64x!tt.ptr<f16>, #memory>
+    %right_half = tt.load %right_ptr : tensor<64x64x!tt.ptr<f16>, #memory>
+    %left_exchange = ttg.convert_layout %left_half : tensor<64x64xf16, #memory> -> tensor<64x64xf16, #exchange>
+    %right_exchange = ttg.convert_layout %right_half : tensor<64x64xf16, #memory> -> tensor<64x64xf16, #exchange>
+    %left = arith.extf %left_exchange : tensor<64x64xf16, #exchange> to tensor<64x64xf32, #exchange>
+    %right = arith.extf %right_exchange : tensor<64x64xf16, #exchange> to tensor<64x64xf32, #exchange>
+    %square = arith.mulf %left, %left : tensor<64x64xf32, #exchange>
+    %product = arith.mulf %left, %right : tensor<64x64xf32, #exchange>
+    %norm = "tt.reduce"(%square) <{axis = 1 : i32}> ({
+    ^bb0(%first: f32, %second: f32):
+      %sum = arith.addf %first, %second : f32
+      tt.reduce.return %sum : f32
+    }) : (tensor<64x64xf32, #exchange>) -> tensor<64xf32, #exchange_result>
+    %dot = "tt.reduce"(%product) <{axis = 1 : i32}> ({
+    ^bb0(%first: f32, %second: f32):
+      %sum = arith.addf %first, %second : f32
+      tt.reduce.return %sum : f32
+    }) : (tensor<64x64xf32, #exchange>) -> tensor<64xf32, #exchange_result>
+    %norm_result = ttg.convert_layout %norm : tensor<64xf32, #exchange_result> -> tensor<64xf32, #memory_result>
+    %dot_result = ttg.convert_layout %dot : tensor<64xf32, #exchange_result> -> tensor<64xf32, #memory_result>
+    tt.return %norm_result, %dot_result : tensor<64xf32, #memory_result>, tensor<64xf32, #memory_result>
+  }
+}
+
+// -----
+
 // Keep both coalesced inputs, conditional branches, and row reductions in
 // their existing zero-copy layout. A competing vector-layout consumer must
 // not move either 64x64 operand into an inter-warp reduction layout. The

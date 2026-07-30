@@ -23,9 +23,11 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <deque>
+#include <limits>
 
 namespace mlir::triton::gpu {
 
@@ -87,6 +89,7 @@ public:
 
   ArrayRef<Node> getNodes() const { return nodes; }
   ArrayRef<Contract> getContracts() const { return contracts; }
+  SmallVector<SmallVector<unsigned, 8>, 8> getConnectedComponents() const;
 
   bool hasJoinConstraints() const { return joinConstraints; }
   bool hasSplitConstraints() const { return splitConstraints; }
@@ -99,6 +102,7 @@ public:
   }
   bool hasLoopConstraints() const { return loopConstraints; }
   bool hasTensorMemoryConstraints() const { return tensorMemoryConstraints; }
+  bool hasStoreBoundaries() const { return storeBoundaries; }
   unsigned getTensorLoadBoundaryCount() const {
     return tensorLoadBoundaryCount;
   }
@@ -126,6 +130,7 @@ private:
   bool multiResultReductionConstraints = false;
   bool loopConstraints = false;
   bool tensorMemoryConstraints = false;
+  bool storeBoundaries = false;
   unsigned tensorLoadBoundaryCount = 0;
 };
 
@@ -168,6 +173,16 @@ public:
     return useFullObjective() ? 128 : 32;
   }
 
+  bool useExactComponentSearch() const {
+    constexpr unsigned maxExactGraphValues = 64;
+    return useFullObjective() &&
+           graph.getTensorLoadBoundaryCount() > 0 &&
+           !graph.hasStoreBoundaries() &&
+           graph.getNodes().size() <= maxExactGraphValues;
+  }
+
+  unsigned maxExactComponentStates() const { return 256; }
+
   bool pruneRedundantReductionProposals() const {
     return graph.hasReductionConstraints() &&
            !graph.hasProtectedReductionConstraints();
@@ -175,6 +190,37 @@ public:
 
 private:
   const LayoutConstraintGraph &graph;
+};
+
+struct LayoutAssignmentChange {
+  Value value;
+  Attribute originalEncoding;
+  Attribute proposedEncoding;
+};
+
+/// The solver owns only candidate search, objective comparison, convergence,
+/// and rollback. Operation legality, graph construction, and physical costs
+/// are supplied separately, so heuristics cannot leak into its core algorithm.
+class LayoutAssignmentSolver {
+public:
+  using Assignment = DenseMap<Value, Attribute>;
+
+  struct Callbacks {
+    llvm::function_ref<bool(Value, Attribute, const Assignment &)> isLegal;
+    llvm::function_ref<uint64_t(Value, Attribute, const Assignment &)>
+        valueCost;
+    llvm::function_ref<uint64_t(Value, Attribute)> lowerBound;
+    llvm::function_ref<uint64_t(const Assignment &)> fullCost;
+    llvm::function_ref<uint64_t(ArrayRef<Value>, const Assignment &)>
+        affectedCost;
+    llvm::function_ref<bool(Value, Attribute, Assignment &,
+                            SmallVectorImpl<LayoutAssignmentChange> &)>
+        proposeComponent;
+  };
+
+  void solve(const LayoutConstraintGraph &graph,
+             const LayoutSearchPolicy &policy, Assignment &assignments,
+             const Callbacks &callbacks) const;
 };
 
 // The current algorithm works by analyzing the IR and doing a one-shot rewrite
@@ -246,12 +292,6 @@ public:
   void dump();
 
 private:
-  struct GlobalAssignmentChange {
-    Value value;
-    Attribute originalEncoding;
-    Attribute proposedEncoding;
-  };
-
   Attribute getCachedSourceEncoding(Operation *op, Attribute encoding) const;
   Attribute getCachedDestinationEncoding(Operation *op,
                                          Attribute encoding) const;
@@ -272,6 +312,7 @@ private:
   uint64_t
   getAssignmentCost(Value value, Attribute encoding,
                     const DenseMap<Value, Attribute> &assignments) const;
+  uint64_t getAssignmentLowerBound(Value value, Attribute encoding) const;
   uint64_t
   getGlobalAssignmentCost(const DenseMap<Value, Attribute> &assignments) const;
   uint64_t getAffectedAssignmentCost(
@@ -279,7 +320,7 @@ private:
       const DenseMap<Value, Attribute> &assignments) const;
   bool buildGlobalComponentProposal(
       Value seed, Attribute encoding, DenseMap<Value, Attribute> &assignments,
-      SmallVectorImpl<GlobalAssignmentChange> &changes) const;
+      SmallVectorImpl<LayoutAssignmentChange> &changes) const;
 
   // map from value to layout information.
   llvm::MapVector<Value, LayoutInfo> layouts;
@@ -652,6 +693,7 @@ void LayoutConstraintGraph::addOperation(Operation *operation,
     if (Value mask = load.getMask())
       addContract(ContractKind::Boundary, operation, {mask}, ValueRole::Mask);
   } else if (auto store = dyn_cast<StoreOp>(operation)) {
+    storeBoundaries = true;
     addContract(ContractKind::Boundary, operation, {store.getPtr()},
                 ValueRole::Address);
     if (Value mask = store.getMask())
@@ -696,6 +738,53 @@ void LayoutConstraintGraph::addOperation(Operation *operation,
             : ContractKind::Transform;
     addContract(kind, operation, values);
   }
+}
+
+SmallVector<SmallVector<unsigned, 8>, 8>
+LayoutConstraintGraph::getConnectedComponents() const {
+  SmallVector<unsigned, 32> parents;
+  for (unsigned index = 0; index < nodes.size(); ++index)
+    parents.push_back(index);
+
+  auto find = [&](unsigned index) {
+    while (parents[index] != index) {
+      parents[index] = parents[parents[index]];
+      index = parents[index];
+    }
+    return index;
+  };
+
+  for (const Contract &contract : contracts) {
+    if (contract.kind == ContractKind::Boundary)
+      continue;
+    std::optional<unsigned> previous;
+    for (Value value : contract.values) {
+      unsigned current = indices.lookup(value);
+      if (nodes[current].fixed)
+        continue;
+      if (previous) {
+        unsigned lhs = find(*previous);
+        unsigned rhs = find(current);
+        if (lhs != rhs)
+          parents[rhs] = lhs;
+      }
+      previous = current;
+    }
+  }
+
+  DenseMap<unsigned, unsigned> componentIndices;
+  SmallVector<SmallVector<unsigned, 8>, 8> components;
+  for (unsigned index = 0; index < nodes.size(); ++index) {
+    if (nodes[index].fixed || nodes[index].candidates.size() <= 1)
+      continue;
+    unsigned root = find(index);
+    auto [component, inserted] =
+        componentIndices.try_emplace(root, components.size());
+    if (inserted)
+      components.emplace_back();
+    components[component->second].push_back(index);
+  }
+  return components;
 }
 
 void LayoutPropagation::initAnchorLayout() {
@@ -1475,6 +1564,19 @@ uint64_t LayoutPropagation::getAssignmentCost(
   return cost;
 }
 
+uint64_t LayoutPropagation::getAssignmentLowerBound(Value value,
+                                                   Attribute encoding) const {
+  uint64_t cost = 0;
+  if (Operation *definingOp = value.getDefiningOp())
+    cost += getLayoutRegisterPressureCost(value, encoding) *
+            getLayoutExecutionWeight(definingOp);
+  for (OpOperand &use : value.getUses())
+    if (auto reduce = dyn_cast<ReduceOp>(use.getOwner()))
+      cost += getLayoutReductionCost(value, encoding, reduce.getAxis()) *
+              getLayoutExecutionWeight(use.getOwner());
+  return cost;
+}
+
 uint64_t LayoutPropagation::getGlobalAssignmentCost(
     const DenseMap<Value, Attribute> &assignments) const {
   uint64_t cost = 0;
@@ -1552,13 +1654,13 @@ uint64_t LayoutPropagation::getAffectedAssignmentCost(
 
 bool LayoutPropagation::buildGlobalComponentProposal(
     Value seed, Attribute encoding, DenseMap<Value, Attribute> &assignments,
-    SmallVectorImpl<GlobalAssignmentChange> &changes) const {
+    SmallVectorImpl<LayoutAssignmentChange> &changes) const {
   constexpr unsigned maxComponentValues = 512;
   DenseMap<Value, Attribute> requested;
   SmallVector<std::pair<Value, Attribute>, 32> worklist;
 
   auto rollback = [&]() {
-    for (const GlobalAssignmentChange &change : llvm::reverse(changes))
+    for (const LayoutAssignmentChange &change : llvm::reverse(changes))
       assignments[change.value] = change.originalEncoding;
     changes.clear();
     return false;
@@ -1716,98 +1818,59 @@ bool LayoutPropagation::buildGlobalComponentProposal(
   return true;
 }
 
-void LayoutPropagation::resolveGlobalConflicts() {
-  DenseMap<Value, Attribute> assignments;
-  bool hasFlexibleLayouts = false;
-  for (auto &[value, info] : layouts) {
-    if (info.encodings.empty())
-      continue;
-
-    Attribute original = cast<RankedTensorType>(value.getType()).getEncoding();
-    info.encodings.insert(original);
-    assignments.try_emplace(value, original);
-    hasFlexibleLayouts |=
-        !fixedLayouts.contains(value) && info.encodings.size() > 1;
-  }
-
-  // Original encodings already form the only legal assignment.
-  if (!hasFlexibleLayouts) {
-    for (auto &[value, info] : layouts) {
-      Attribute encoding = assignments.lookup(value);
-      if (!encoding)
-        continue;
-      info.encodings.clear();
-      info.encodings.insert(encoding);
-    }
-    return;
-  }
-
-  LayoutConstraintGraph graph;
-  for (const auto &[value, info] : layouts) {
-    SmallVector<Attribute, 8> candidates;
-    llvm::append_range(candidates, info.encodings);
-    graph.addNode(value, candidates, fixedLayouts.contains(value));
-  }
-  funcOp.walk([&](Operation *op) {
-    graph.addOperation(op, isFixedLayoutBoundary(op),
-                       isProtectedLayoutReduction(op));
-  });
-  LayoutSearchPolicy policy(graph);
-  bool useFullGlobalObjective = policy.useFullObjective();
-  LDBG("resolving " << layouts.size() << " layout values with "
-                    << (useFullGlobalObjective ? "the full" : "the bounded")
-                    << " global objective across "
-                    << graph.getContracts().size() << " constraints");
-
+void LayoutAssignmentSolver::solve(const LayoutConstraintGraph &graph,
+                                   const LayoutSearchPolicy &policy,
+                                   Assignment &assignments,
+                                   const Callbacks &callbacks) const {
+  const bool useFullObjective = policy.useFullObjective();
   if (policy.useComponentSearch()) {
     constexpr unsigned maxComponentIterations = 4;
     const unsigned maxComponentProposals = policy.maxComponentProposals();
     const bool pruneRedundantReductionProposals =
         policy.pruneRedundantReductionProposals();
-    uint64_t currentCost = getGlobalAssignmentCost(assignments);
+    uint64_t currentCost = callbacks.fullCost(assignments);
 
     for (unsigned iteration = 0; iteration < maxComponentIterations;
          ++iteration) {
       bool changed = false;
       unsigned proposalCount = 0;
-
-      for (const auto &[value, info] : layouts) {
+      for (const LayoutConstraintGraph::Node &node : graph.getNodes()) {
+        Value value = node.value;
         if (pruneRedundantReductionProposals &&
-            (fixedLayouts.contains(value) || info.encodings.size() <= 1))
+            (node.fixed || node.candidates.size() <= 1))
           continue;
-        for (Attribute candidate : info.encodings) {
+        for (Attribute candidate : node.candidates) {
           if (pruneRedundantReductionProposals &&
               candidate == assignments.lookup(value))
             continue;
           if (proposalCount++ >= maxComponentProposals)
             break;
-          if (fixedLayouts.contains(value) &&
+          if (node.fixed &&
               candidate !=
                   cast<RankedTensorType>(value.getType()).getEncoding())
             continue;
 
-          SmallVector<GlobalAssignmentChange, 32> proposal;
-          if (!buildGlobalComponentProposal(value, candidate, assignments,
-                                            proposal) ||
+          SmallVector<LayoutAssignmentChange, 32> proposal;
+          if (!callbacks.proposeComponent(value, candidate, assignments,
+                                          proposal) ||
               proposal.empty())
             continue;
 
           SmallVector<Value, 32> changedValues;
-          for (const GlobalAssignmentChange &change : proposal)
+          for (const LayoutAssignmentChange &change : proposal)
             changedValues.push_back(change.value);
-
           uint64_t affectedProposalCost =
-              getAffectedAssignmentCost(changedValues, assignments);
-          for (const GlobalAssignmentChange &change : llvm::reverse(proposal))
+              callbacks.affectedCost(changedValues, assignments);
+          for (const LayoutAssignmentChange &change : llvm::reverse(proposal))
             assignments[change.value] = change.originalEncoding;
           uint64_t previousCost =
-              getAffectedAssignmentCost(changedValues, assignments);
+              callbacks.affectedCost(changedValues, assignments);
           uint64_t proposalCost =
               currentCost - previousCost + affectedProposalCost;
           if (proposalCost >= currentCost)
             continue;
 
-          for (const GlobalAssignmentChange &change : proposal)
+          for (const LayoutAssignmentChange &change : proposal)
             assignments[change.value] = change.proposedEncoding;
           currentCost = proposalCost;
           changed = true;
@@ -1815,41 +1878,40 @@ void LayoutPropagation::resolveGlobalConflicts() {
         if (proposalCount >= maxComponentProposals)
           break;
       }
-
       if (!changed)
         break;
     }
   }
 
-  auto improve = [&](auto &&values) {
+  auto improve = [&](auto &&nodes) {
     bool changed = false;
-    for (auto &[value, info] : values) {
-      if (fixedLayouts.contains(value) || info.encodings.size() <= 1)
+    for (const LayoutConstraintGraph::Node &node : nodes) {
+      Value value = node.value;
+      if (node.fixed || node.candidates.size() <= 1)
         continue;
 
       Attribute original = assignments.lookup(value);
       Attribute best = original;
-      uint64_t bestCost = useFullGlobalObjective
-                              ? getAffectedAssignmentCost({value}, assignments)
-                              : getAssignmentCost(value, best, assignments);
-      for (Attribute candidate : info.encodings) {
+      uint64_t bestCost = useFullObjective
+                              ? callbacks.affectedCost({value}, assignments)
+                              : callbacks.valueCost(value, best, assignments);
+      for (Attribute candidate : node.candidates) {
         if (candidate == original ||
-            !canAssignEncoding(value, candidate, assignments))
+            !callbacks.isLegal(value, candidate, assignments))
           continue;
         uint64_t candidateCost;
-        if (useFullGlobalObjective) {
+        if (useFullObjective) {
           assignments[value] = candidate;
-          candidateCost = getAffectedAssignmentCost({value}, assignments);
+          candidateCost = callbacks.affectedCost({value}, assignments);
           assignments[value] = original;
         } else {
-          candidateCost = getAssignmentCost(value, candidate, assignments);
+          candidateCost = callbacks.valueCost(value, candidate, assignments);
         }
         if (candidateCost < bestCost) {
           best = candidate;
           bestCost = candidateCost;
         }
       }
-
       if (best != assignments.lookup(value)) {
         assignments[value] = best;
         changed = true;
@@ -1861,21 +1923,20 @@ void LayoutPropagation::resolveGlobalConflicts() {
   constexpr unsigned maxAssignmentIterations = 8;
   for (unsigned iteration = 0; iteration < maxAssignmentIterations;
        ++iteration) {
-    bool changed = improve(llvm::reverse(layouts));
-    changed |= improve(layouts);
+    bool changed = improve(llvm::reverse(graph.getNodes()));
+    changed |= improve(graph.getNodes());
     if (!changed)
       break;
   }
 
-  // A later producer assignment can invalidate a join or exact-order reshape.
-  // Original encodings are verifier-proven and therefore provide a safe
-  // fallback while the selected graph converges.
+  // Keep convergence local to the constrained values; original encodings are
+  // verifier-proven and remain the safe incumbent for any invalid assignment.
   for (unsigned iteration = 0; iteration < maxAssignmentIterations;
        ++iteration) {
     bool changed = false;
-    for (const auto &[value, info] : layouts) {
-      Attribute encoding = assignments.lookup(value);
-      if (canAssignEncoding(value, encoding, assignments))
+    for (const LayoutConstraintGraph::Node &node : graph.getNodes()) {
+      Value value = node.value;
+      if (callbacks.isLegal(value, assignments.lookup(value), assignments))
         continue;
       assignments[value] =
           cast<RankedTensorType>(value.getType()).getEncoding();
@@ -1883,6 +1944,151 @@ void LayoutPropagation::resolveGlobalConflicts() {
     }
     if (!changed)
       break;
+  }
+
+  if (!policy.useExactComponentSearch())
+    return;
+
+  // Coordinate descent cannot change jointly constrained encodings when every
+  // intermediate assignment is illegal. Solve bounded connected components
+  // exactly, pruning with the nonnegative register/reduction objective floor.
+  for (const SmallVector<unsigned, 8> &component :
+       graph.getConnectedComponents()) {
+    if (component.size() < 2)
+      continue;
+    unsigned states = 1;
+    for (unsigned index : component) {
+      unsigned candidates = graph.getNodes()[index].candidates.size();
+      if (states > policy.maxExactComponentStates() / candidates) {
+        states = policy.maxExactComponentStates() + 1;
+        break;
+      }
+      states *= candidates;
+    }
+    if (states > policy.maxExactComponentStates())
+      continue;
+
+    DenseSet<Value> active;
+    for (unsigned index : component)
+      active.insert(graph.getNodes()[index].value);
+
+    uint64_t fixedLowerBound = 0;
+    uint64_t variableLowerBound = 0;
+    SmallVector<uint64_t, 8> minimumCosts;
+    for (const LayoutConstraintGraph::Node &node : graph.getNodes()) {
+      if (!active.contains(node.value)) {
+        fixedLowerBound +=
+            callbacks.lowerBound(node.value, assignments.lookup(node.value));
+        continue;
+      }
+      uint64_t minimum = std::numeric_limits<uint64_t>::max();
+      for (Attribute candidate : node.candidates)
+        minimum = std::min(minimum,
+                           callbacks.lowerBound(node.value, candidate));
+      minimumCosts.push_back(minimum);
+      variableLowerBound += minimum;
+    }
+
+    uint64_t bestCost = callbacks.fullCost(assignments);
+    SmallVector<Attribute, 8> bestAssignments;
+    for (unsigned index : component)
+      bestAssignments.push_back(
+          assignments.lookup(graph.getNodes()[index].value));
+
+    auto search = [&](auto &&self, unsigned position,
+                      uint64_t assignedLowerBound,
+                      uint64_t remainingLowerBound) -> void {
+      if (fixedLowerBound + assignedLowerBound + remainingLowerBound >=
+          bestCost)
+        return;
+      if (position == component.size()) {
+        for (const LayoutConstraintGraph::Node &node : graph.getNodes())
+          if (!callbacks.isLegal(node.value, assignments.lookup(node.value),
+                                 assignments))
+            return;
+        uint64_t candidateCost = callbacks.fullCost(assignments);
+        if (candidateCost >= bestCost)
+          return;
+        bestCost = candidateCost;
+        for (auto [index, value] : llvm::enumerate(component))
+          bestAssignments[index] =
+              assignments.lookup(graph.getNodes()[value].value);
+        return;
+      }
+
+      const LayoutConstraintGraph::Node &node =
+          graph.getNodes()[component[position]];
+      Attribute original = assignments.lookup(node.value);
+      remainingLowerBound -= minimumCosts[position];
+      for (Attribute candidate : node.candidates) {
+        assignments[node.value] = candidate;
+        self(self, position + 1,
+             assignedLowerBound + callbacks.lowerBound(node.value, candidate),
+             remainingLowerBound);
+      }
+      assignments[node.value] = original;
+    };
+    search(search, 0, 0, variableLowerBound);
+    for (auto [index, value] : llvm::enumerate(component))
+      assignments[graph.getNodes()[value].value] = bestAssignments[index];
+  }
+}
+
+void LayoutPropagation::resolveGlobalConflicts() {
+  DenseMap<Value, Attribute> assignments;
+  bool hasFlexibleLayouts = false;
+  for (auto &[value, info] : layouts) {
+    if (info.encodings.empty())
+      continue;
+    Attribute original = cast<RankedTensorType>(value.getType()).getEncoding();
+    info.encodings.insert(original);
+    assignments.try_emplace(value, original);
+    hasFlexibleLayouts |=
+        !fixedLayouts.contains(value) && info.encodings.size() > 1;
+  }
+
+  if (hasFlexibleLayouts) {
+    LayoutConstraintGraph graph;
+    for (const auto &[value, info] : layouts) {
+      SmallVector<Attribute, 8> candidates;
+      llvm::append_range(candidates, info.encodings);
+      graph.addNode(value, candidates, fixedLayouts.contains(value));
+    }
+    funcOp.walk([&](Operation *op) {
+      graph.addOperation(op, isFixedLayoutBoundary(op),
+                         isProtectedLayoutReduction(op));
+    });
+    LayoutSearchPolicy policy(graph);
+    LDBG("resolving " << layouts.size() << " layout values with "
+                      << (policy.useFullObjective() ? "the full"
+                                                    : "the bounded")
+                      << " global objective across "
+                      << graph.getContracts().size() << " constraints");
+
+    auto isLegal = [&](Value value, Attribute encoding,
+                       const auto &current) {
+      return canAssignEncoding(value, encoding, current);
+    };
+    auto valueCost = [&](Value value, Attribute encoding,
+                         const auto &current) {
+      return getAssignmentCost(value, encoding, current);
+    };
+    auto lowerBound = [&](Value value, Attribute encoding) {
+      return getAssignmentLowerBound(value, encoding);
+    };
+    auto fullCost = [&](const auto &current) {
+      return getGlobalAssignmentCost(current);
+    };
+    auto affectedCost = [&](ArrayRef<Value> changed, const auto &current) {
+      return getAffectedAssignmentCost(changed, current);
+    };
+    auto propose = [&](Value value, Attribute encoding, auto &current,
+                       SmallVectorImpl<LayoutAssignmentChange> &changes) {
+      return buildGlobalComponentProposal(value, encoding, current, changes);
+    };
+    LayoutAssignmentSolver::Callbacks callbacks{
+        isLegal, valueCost, lowerBound, fullCost, affectedCost, propose};
+    LayoutAssignmentSolver().solve(graph, policy, assignments, callbacks);
   }
 
   for (auto &[value, info] : layouts) {
