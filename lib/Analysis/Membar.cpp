@@ -91,12 +91,6 @@ void AllocationSlice::print(raw_ostream &os) const {
   }
 }
 
-void MembarOrFenceAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
-  FunctionOpInterface funcOp =
-      dyn_cast<FunctionOpInterface>(allocation->getOperation());
-  Base::run(funcOp, funcBlockInfoMap);
-}
-
 void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
   OpBuilder::InsertionGuard g(*builder);
   triton::gpu::BarrierOp::create(*builder, op->getLoc(),
@@ -221,19 +215,18 @@ static bool hasSyncPointBeforeMemoryEffect(Operation *op,
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
-                            FuncBlockInfoMapT *funcBlockInfoMap,
-                            OpBuilder *builder) {
+                            FuncMapT *funcMap, OpBuilder *builder) {
   // A later CTA-wide synchronization can also synchronize this wait, provided
   // no memory is accessed before reaching it.
   if (auto wgWait = dyn_cast<ttng::WarpGroupDotWaitOp>(op)) {
     if (!wgWait.getWarpGroupLocal() &&
         triton::gpu::lookupNumWarps(wgWait) > 4 &&
-        hasSyncPointBeforeMemoryEffect(wgWait, allocation)) {
+        hasSyncPointBeforeMemoryEffect(wgWait, &allocation)) {
       wgWait->setAttr("warpGroupLocal", builder->getUnitAttr());
     }
   }
 
-  auto barrierStages = getLocalBarrierStages(op, allocation);
+  auto barrierStages = getLocalBarrierStages(op, &allocation);
   if (barrierStages.beforeMemoryEffects) {
     // Model a leading local barrier before handling the operation's effects.
     blockInfo->sync();
@@ -243,7 +236,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   // point before memory is accessed, insert a barrier op and sync. This avoids
   // redundant barriers by deferring the barrier to the later sync point.
   if (op->hasTrait<mlir::OpTrait::MemWaitOpTrait>() &&
-      !hasSyncPointBeforeMemoryEffect(op, allocation)) {
+      !hasSyncPointBeforeMemoryEffect(op, &allocation)) {
     builder->setInsertionPointAfter(op);
     insertBarrier(op, builder);
     blockInfo->sync();
@@ -251,17 +244,17 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   }
 
   BlockInfo curBlockInfo;
-  auto scratchBufferId = getScratchBufferId(op, allocation);
+  auto scratchBufferId = getScratchBufferId(op, &allocation);
   if (isa<triton::CallOp>(op)) {
     // Inter-function dependencies
     auto callOpInterface = dyn_cast<CallOpInterface>(op);
     if (auto callee =
             dyn_cast<FunctionOpInterface>(callOpInterface.resolveCallable())) {
-      auto calleeBlockInfo = funcBlockInfoMap->lookup(callee);
-      auto callBufferId = allocation->getBufferId(op);
+      auto calleeBlockInfo = funcMap->lookup(callee);
+      auto callBufferId = allocation.getBufferId(op);
       size_t callOffset = 0;
       if (callBufferId != Allocation::InvalidBufferId)
-        callOffset = allocation->getAllocatedInterval(callBufferId).start();
+        callOffset = allocation.getAllocatedInterval(callBufferId).start();
       curBlockInfo = translateBlockInfoToCallsite(calleeBlockInfo, callOffset);
     }
   } else {
@@ -273,9 +266,9 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       memoryEffectOpInterface.getEffects(effectInstances);
       for (auto effectInstance : effectInstances) {
         if (auto value = effectInstance.getValue()) {
-          for (auto bufferId : allocation->getAllBufferIdsWithAliases(value)) {
+          for (auto bufferId : allocation.getAllBufferIdsWithAliases(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
-              auto interval = allocation->getAllocatedInterval(bufferId);
+              auto interval = allocation.getAllocatedInterval(bufferId);
               auto slice = AllocationSlice(value, interval, bufferId);
 
               if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
@@ -302,11 +295,11 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           "scratch buffer operations should not have any shared memory "
           "dependencies");
     }
-    auto interval = allocation->getAllocatedInterval(scratchBufferId);
+    auto interval = allocation.getAllocatedInterval(scratchBufferId);
     auto scratchSlice = AllocationSlice(interval);
     curBlockInfo.syncWriteSlices[scratchSlice].insert(op);
     auto insertCTABarrier =
-        blockInfo->isIntersected(curBlockInfo, filter, allocation);
+        blockInfo->isIntersected(curBlockInfo, filter, &allocation);
     if (insertCTABarrier) {
       builder->setInsertionPoint(op);
       insertBarrier(op, builder);
@@ -322,7 +315,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       curBlockInfo.sync();
     }
     curBlockInfo.syncReadSlices[scratchSlice].insert(op);
-  } else if (blockInfo->isIntersected(curBlockInfo, filter, allocation)) {
+  } else if (blockInfo->isIntersected(curBlockInfo, filter, &allocation)) {
     builder->setInsertionPoint(op);
     insertBarrier(op, builder);
     blockInfo->sync();

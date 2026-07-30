@@ -9,6 +9,7 @@
 #include <functional>
 #include <set>
 #include <tuple>
+#include <utility>
 
 namespace mlir {
 
@@ -207,58 +208,25 @@ bool containsLocalBarrier(Operation *op);
 // Shared Memory Barrier Analysis
 //===----------------------------------------------------------------------===//
 
-// Common class to analyze membar and fence placement.
+/// Common state for postorder memory-synchronization analyses.
 class MembarOrFenceAnalysis
     : public triton::PostOrderFunctionAnalysis<BlockInfo> {
 public:
-  using Base = triton::PostOrderFunctionAnalysis<BlockInfo>;
-  using FuncBlockInfoMapT = Base::FuncMapT;
-  /// Creates a new Membar analysis that generates the shared memory barrier
-  /// in the following circumstances:
-  /// - RAW: If a shared memory write is followed by a shared memory read, and
-  /// their addresses are intersected, a barrier is inserted.
-  /// - WAR: If a shared memory read is followed by a shared memory write, and
-  /// their addresses are intersected, a barrier is inserted.
-  /// The following circumstances do not require a barrier:
-  /// - WAW: not possible because overlapped memory allocation is not allowed.
-  /// - RAR: no write is performed.
-  /// Temporary storage of operations such as Reduce are considered as both
-  /// a shared memory read. If the temporary storage is written but not read,
-  /// it is considered as the problem of the operation itself but not the membar
-  /// analysis.
-  MembarOrFenceAnalysis() = default;
-  explicit MembarOrFenceAnalysis(Allocation *allocation, MembarFilterFn filter)
-      : allocation(allocation), filter(filter) {}
-
-  virtual ~MembarOrFenceAnalysis() = default;
-
-  /// Runs the membar analysis to the given operation, inserts a barrier if
-  /// necessary.
-  void run(FuncBlockInfoMapT &funcBlockInfoMap);
+  MembarOrFenceAnalysis(Allocation &allocation, MembarFilterFn filter)
+      : allocation(allocation), filter(std::move(filter)) {}
 
 protected:
-  /// Updates the BlockInfo operation based on the operation.
-  virtual void update(Operation *operation, BlockInfo *blockInfo,
-                      FuncBlockInfoMapT *funcBlockInfoMap,
-                      OpBuilder *builder) = 0;
-
-  Allocation *allocation = nullptr;
-  MembarFilterFn filter = nullptr;
+  Allocation &allocation;
+  MembarFilterFn filter;
 };
 
 class MembarAnalysis : public MembarOrFenceAnalysis {
 public:
-  MembarAnalysis() = default;
-  explicit MembarAnalysis(Allocation *allocation, MembarFilterFn filter)
-      : MembarOrFenceAnalysis(allocation, filter) {}
-
-  ~MembarAnalysis() override = default;
+  using MembarOrFenceAnalysis::MembarOrFenceAnalysis;
 
 private:
-  /// Updates the BlockInfo operation based on the operation.
-  virtual void update(Operation *operation, BlockInfo *blockInfo,
-                      FuncBlockInfoMapT *funcBlockInfoMap,
-                      OpBuilder *builder) override;
+  void update(Operation *operation, BlockInfo *blockInfo, FuncMapT *funcMap,
+              OpBuilder *builder) override;
 
   void insertBarrier(Operation *operation, OpBuilder *builder);
 };
@@ -268,13 +236,13 @@ private:
 /// Each function maintains a BlockInfo map that includes all potential buffers
 /// after returning. This way users do not have to explicitly insert membars
 /// before and after function calls, but might be a bit conservative.
-template <typename AnalysisType>
+template <typename AnalysisT>
 class ModuleMembarOrFenceAnalysis : public triton::CallGraph<BlockInfo> {
 public:
-  ModuleMembarOrFenceAnalysis(ModuleAllocation *moduleAllocation,
+  ModuleMembarOrFenceAnalysis(ModuleAllocation &moduleAllocation,
                               MembarFilterFn filter = nullptr)
-      : triton::CallGraph<BlockInfo>(moduleAllocation->getModuleOp()),
-        moduleAllocation(moduleAllocation), filter(filter) {}
+      : triton::CallGraph<BlockInfo>(moduleAllocation.getModuleOp()),
+        moduleAllocation(moduleAllocation), filter(std::move(filter)) {}
 
   void run() {
     walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
@@ -282,21 +250,19 @@ public:
         [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
         // Post-order walk callback
         [&](FunctionOpInterface funcOp) {
-          auto *allocation = moduleAllocation->getFuncData(funcOp);
-          auto [it, inserted] = funcMap.try_emplace(funcOp, BlockInfo());
-          if (inserted) {
-            AnalysisType analysis(allocation, filter);
-            analysis.run(funcMap);
-          }
+          auto &allocation = *moduleAllocation.getFuncData(funcOp);
+          if (!funcMap.try_emplace(funcOp).second)
+            return;
+          AnalysisT(allocation, filter).run(funcOp, funcMap);
         });
   }
 
 private:
-  ModuleAllocation *moduleAllocation;
+  ModuleAllocation &moduleAllocation;
   MembarFilterFn filter;
 };
 
-typedef ModuleMembarOrFenceAnalysis<MembarAnalysis> ModuleMembarAnalysis;
+using ModuleMembarAnalysis = ModuleMembarOrFenceAnalysis<MembarAnalysis>;
 
 } // namespace mlir
 
