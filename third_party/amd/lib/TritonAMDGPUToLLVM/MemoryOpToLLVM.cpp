@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
+#include <type_traits>
 
 using mlir::triton::amdgpu::ISAFamily;
 using ::mlir::triton::gpu::MemDescType;
@@ -420,18 +421,21 @@ lowerDsReadTr(Operation *op,
   return success();
 }
 
-class TransLocalLoadOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp> {
+template <typename OpTy>
+class TransLocalLoadOpConversion : public ConvertOpToLLVMPattern<OpTy> {
+  static constexpr bool isPackedTransposed =
+      std::is_same_v<OpTy, triton::amdgpu::LocalLoadPackedTransposedOp>;
+
 public:
   TransLocalLoadOpConversion(const LLVMTypeConverter &converter,
                              const AMD::TargetInfo &targetInfo,
                              PatternBenefit benefit = 2)
-      : ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp>(converter, benefit),
+      : ConvertOpToLLVMPattern<OpTy>(converter, benefit),
         targetInfo(targetInfo) {}
-  using OpAdaptor = typename triton::gpu::LocalLoadOp::Adaptor;
+  using OpAdaptor = typename OpTy::Adaptor;
 
   LogicalResult
-  matchAndRewrite(triton::gpu::LocalLoadOp op, OpAdaptor adaptor,
+  matchAndRewrite(OpTy op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto ctx = rewriter.getContext();
     auto loc = op.getLoc();
@@ -442,143 +446,63 @@ public:
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
     unsigned bitWidth = llvmElemTy.getIntOrFloatBitWidth();
 
-    // FP4 is represented as i8 and, when packed along K, can be
-    // transposed using ds_read_tr8 which doesn't change packing.
-    if (bitWidth != 16 && bitWidth != 8) {
-      return failure();
+    unsigned logicalBitWidth = bitWidth;
+    if constexpr (isPackedTransposed) {
+      // FP4 is represented as packed elements inside i8 values.
+      if (bitWidth != 8)
+        return failure();
+      // FP4 packed along M/N are not supported yet on GFX1250
+      if (targetInfo.getISAFamily() == ISAFamily::GFX1250)
+        return failure();
+      logicalBitWidth = 4;
+    } else {
+      // FP4 is represented as i8 and, when packed along K, can be
+      // transposed using ds_read_tr8 which doesn't change packing.
+      if (bitWidth != 16 && bitWidth != 8)
+        return failure();
     }
-    auto ldsParamsVec = targetInfo.queryLDSTransLoadParams(bitWidth);
-    if (ldsParamsVec.empty())
-      return failure();
-    if (SharedMemoryObject::getMaskSpanOffsetsAndBlocks(srcTy).second != 0)
-      return failure();
-
-    LinearLayout sharedLL = triton::gpu::toLinearLayoutIgnoringPadding(srcTy);
-    LinearLayout cvtDstLL =
-        triton::gpu::toLinearLayout(dstTy).invertAndCompose(sharedLL);
-    auto kBlock = StringAttr::get(ctx, "block");
-    auto maybeSublayout = cvtDstLL.quotient({kBlock});
-    if (!maybeSublayout) {
-      return failure();
-    }
-    cvtDstLL = maybeSublayout.value();
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
-                                                         llvmElemTy, rewriter);
-    SmallVector<Value> smemBases = llvm::to_vector(smemObj.getBases());
-    auto affineOffset = smemObj.getShmemOffset(loc, rewriter, srcTy);
-    auto maskSpanAffineOffset = smemObj.getMaskSpanOffsets(srcTy);
-    auto paddingShifts = getPaddedSharedShifts(srcTy.getEncoding(),
-                                               srcTy.getElementTypeBitWidth(),
-                                               /*offsetInBytes=*/true);
-
-    for (const auto &ldsParams : ldsParamsVec) {
-      if (triton::gpu::isPaddedEncoding(srcTy.getEncoding()) &&
-          triton::gpu::getMinInterval(srcTy.getEncoding()) <
-              ldsParams.tileSize) {
-        continue;
-      }
-
-      llvm::SmallVector<Value> values;
-      auto result =
-          lowerDsReadTr(op, ldsParams, loc, cvtDstLL, bitWidth, values,
-                        smemBases, affineOffset, maskSpanAffineOffset,
-                        paddingShifts, llvmElemTy, rewriter, targetInfo);
-      if (failed(result))
-        continue;
-
-      auto value =
-          packTensorElements(loc, typeConverter, values, rewriter, dstTy);
-
-      rewriter.replaceOp(op, value);
-      return success();
-    }
-    return failure();
-  }
-
-private:
-  const AMD::TargetInfo &targetInfo;
-};
-
-class LocalLoadPackedTransposedOpConversion
-    : public ConvertOpToLLVMPattern<
-          triton::amdgpu::LocalLoadPackedTransposedOp> {
-public:
-  LocalLoadPackedTransposedOpConversion(const LLVMTypeConverter &converter,
-                                        const AMD::TargetInfo &targetInfo,
-                                        PatternBenefit benefit = 2)
-      : ConvertOpToLLVMPattern<triton::amdgpu::LocalLoadPackedTransposedOp>(
-            converter, benefit),
-        targetInfo(targetInfo) {}
-  using OpAdaptor =
-      typename triton::amdgpu::LocalLoadPackedTransposedOp::Adaptor;
-
-  LogicalResult
-  matchAndRewrite(triton::amdgpu::LocalLoadPackedTransposedOp op,
-                  OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto loc = op.getLoc();
-    MemDescType srcTy = op.getSrc().getType();
-    RankedTensorType dstTy = op.getType();
-    auto typeConverter = this->getTypeConverter();
-    auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
-    unsigned bitWidth = llvmElemTy.getIntOrFloatBitWidth();
-
-    // FP4 is represented as packed elements inside i8 values.
-    if (bitWidth != 8) {
-      return failure();
-    }
-    // FP4 packed along M/N are not supported yet on GFX1250
-    if (targetInfo.getISAFamily() == ISAFamily::GFX1250) {
-      return failure();
-    }
-    auto ldsParamsVec = targetInfo.queryLDSTransLoadParams(/*bitWidth=*/4);
+    auto ldsParamsVec = targetInfo.queryLDSTransLoadParams(logicalBitWidth);
     if (ldsParamsVec.empty())
       return failure();
     if (SharedMemoryObject::getMaskSpanOffsetsAndBlocks(srcTy).second != 0)
       return failure();
 
     auto dstLL = triton::gpu::toLinearLayout(dstTy);
-    LinearLayout sharedLL;
-    if (triton::gpu::isPaddedEncoding(srcTy.getEncoding())) {
-      sharedLL = triton::gpu::paddedLinearLayout(srcTy);
-    } else {
-      sharedLL = triton::gpu::toLinearLayout(srcTy);
-    }
+    LinearLayout sharedLL = triton::gpu::toLinearLayoutIgnoringPadding(srcTy);
 
-    // Perform factorization and address routing in logical fp4 coordinates.
-    std::optional<StringAttr> srcPackedDim;
-    std::optional<StringAttr> dstPackedDim;
-    auto srcShape = srcTy.getShape();
-    auto dstShape = dstTy.getShape();
-    assert(srcShape.size() == dstShape.size());
-    auto outDimNames = llvm::to_vector(sharedLL.getOutDimNames());
+    if constexpr (isPackedTransposed) {
+      // Perform factorization and address routing in logical fp4 coordinates.
+      std::optional<StringAttr> srcPackedDim;
+      std::optional<StringAttr> dstPackedDim;
+      auto srcShape = srcTy.getShape();
+      auto dstShape = dstTy.getShape();
+      assert(srcShape.size() == dstShape.size());
+      auto outDimNames = llvm::to_vector(sharedLL.getOutDimNames());
 
-    for (unsigned dim = 0; dim < srcShape.size(); ++dim) {
-      if (srcShape[dim] * 2 == dstShape[dim]) {
-        srcPackedDim = outDimNames[dim];
-        continue;
+      for (unsigned dim = 0; dim < srcShape.size(); ++dim) {
+        if (srcShape[dim] * 2 == dstShape[dim]) {
+          srcPackedDim = outDimNames[dim];
+          continue;
+        }
+        if (dstShape[dim] * 2 == srcShape[dim]) {
+          dstPackedDim = outDimNames[dim];
+          continue;
+        }
+        if (srcShape[dim] != dstShape[dim])
+          return failure();
       }
-      if (dstShape[dim] * 2 == srcShape[dim]) {
-        dstPackedDim = outDimNames[dim];
-        continue;
-      }
-      if (srcShape[dim] != dstShape[dim])
+      if (!srcPackedDim || !dstPackedDim)
         return failure();
+
+      auto kReg = str_attr("register");
+      auto kOffset = str_attr("offset");
+      sharedLL = LinearLayout::identity1D(2, kOffset, *srcPackedDim) * sharedLL;
+      dstLL = LinearLayout::identity1D(2, kReg, *dstPackedDim) * dstLL;
     }
-    if (!srcPackedDim || !dstPackedDim)
-      return failure();
 
-    auto kReg = str_attr("register");
-    auto kOffset = str_attr("offset");
-    auto logicalSharedLL =
-        LinearLayout::identity1D(2, kOffset, *srcPackedDim) * sharedLL;
-    auto logicalDstLL =
-        LinearLayout::identity1D(2, kReg, *dstPackedDim) * dstLL;
-    auto cvtDstLL = logicalDstLL.invertAndCompose(logicalSharedLL);
-
-    auto kBlock = str_attr("block");
-    auto maybeSublayout = cvtDstLL.quotient(kBlock);
+    auto cvtDstLL = dstLL.invertAndCompose(sharedLL);
+    auto kBlock = StringAttr::get(ctx, "block");
+    auto maybeSublayout = cvtDstLL.quotient({kBlock});
     if (!maybeSublayout)
       return failure();
     cvtDstLL = maybeSublayout.value();
@@ -601,8 +525,8 @@ public:
 
       SmallVector<Value> values;
       auto result =
-          lowerDsReadTr(op, ldsParams, loc, cvtDstLL, /*logicalBitWidth=*/4,
-                        values, smemBases, affineOffset, maskSpanAffineOffset,
+          lowerDsReadTr(op, ldsParams, loc, cvtDstLL, logicalBitWidth, values,
+                        smemBases, affineOffset, maskSpanAffineOffset,
                         paddingShifts, llvmElemTy, rewriter, targetInfo);
       if (failed(result))
         continue;
@@ -876,10 +800,11 @@ void mlir::triton::AMD::populateMemoryOpToLLVMPatterns(
   PatternBenefit transBenefit = PatternBenefit(benefit.getBenefit() + 1);
   PatternBenefit barrierBenefit = PatternBenefit(benefit.getBenefit() + 1);
 
-  patterns.add<TransLocalLoadOpConversion>(typeConverter, targetInfo,
-                                           transBenefit);
-  patterns.add<LocalLoadPackedTransposedOpConversion>(typeConverter, targetInfo,
-                                                      benefit);
+  patterns.add<TransLocalLoadOpConversion<triton::gpu::LocalLoadOp>>(
+      typeConverter, targetInfo, transBenefit);
+  patterns.add<
+      TransLocalLoadOpConversion<triton::amdgpu::LocalLoadPackedTransposedOp>>(
+      typeConverter, targetInfo, benefit);
   patterns.add<LocalAtomicScatterRMWOpConversion>(typeConverter, targetInfo,
                                                   benefit.getBenefit() + 1);
   patterns.add<BarrierOpConversion, MemoryCounterWaitOpConversion>(
