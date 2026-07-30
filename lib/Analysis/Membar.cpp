@@ -265,6 +265,8 @@ bool containsLocalBarrier(Operation *op) {
     return true;
   if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op))
     return barrier.hasLocal();
+  if (auto wgWait = dyn_cast<ttng::WarpGroupDotWaitOp>(op))
+    return !wgWait.getWarpGroupLocal() && triton::gpu::lookupNumWarps(op) > 4;
   return false;
 }
 
@@ -362,6 +364,16 @@ static bool hasSyncPointBeforeMemoryEffect(Operation *op,
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
+  // A later CTA-wide synchronization can also synchronize this wait, provided
+  // no memory is accessed before reaching it.
+  if (auto wgWait = dyn_cast<ttng::WarpGroupDotWaitOp>(op)) {
+    if (!wgWait.getWarpGroupLocal() &&
+        triton::gpu::lookupNumWarps(wgWait) > 4 &&
+        hasSyncPointBeforeMemoryEffect(wgWait, allocation)) {
+      wgWait->setAttr("warpGroupLocal", builder->getUnitAttr());
+    }
+  }
+
   auto barrierStages = getLocalBarrierStages(op, allocation);
   if (barrierStages.beforeMemoryEffects) {
     // Model a leading local barrier before handling the operation's effects.
