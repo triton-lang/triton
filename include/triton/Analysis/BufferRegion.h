@@ -254,6 +254,14 @@ public:
   LogicalResult initialize(Operation *top) override;
 
 private:
+  BufferRegionView getMemDescView(Type type, uint32_t storageBase,
+                                  llvm::ArrayRef<uint32_t> partitionBases = {});
+  BufferRegionView getMemDescView(Type type, const BufferRegionView &view,
+                                  uint32_t storageOffset = 0,
+                                  uint32_t byteOffset = 0,
+                                  uint32_t partitionOffset = 0,
+                                  uint32_t ctaOffset = 0);
+
   // Global registry of all regions
   std::set<BufferRegion> usedBufferRegions[NUM_REGION_TYPES];
   bool usedUnknownBufferRegions[NUM_REGION_TYPES] = {};
