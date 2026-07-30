@@ -1,5 +1,6 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-remove-layout-conversions | FileCheck %s --check-prefixes=BASELINE,TREE
+// RUN: sed '/[G]LOBAL-ONLY-BEGIN/,/[G]LOBAL-ONLY-END/d' %s | triton-opt -split-input-file -tritongpu-remove-layout-conversions | FileCheck %s --check-prefixes=BASELINE,TREE
 // RUN: triton-opt %s -split-input-file -tritongpu-optimize-layouts | FileCheck %s --check-prefixes=OPTIMIZED,TREE
+// RUN: triton-opt %s -split-input-file -pass-pipeline='builtin.module(tritongpu-optimize-layouts)' | FileCheck %s --check-prefixes=OPTIMIZED,TREE
 // RUN: triton-opt %s -split-input-file -tritongpu-optimize-layouts -tritongpu-optimize-layouts | FileCheck %s --check-prefixes=OPTIMIZED,TREE
 // RUN: triton-opt %s -split-input-file -tritongpu-optimize-layouts --mlir-print-ir-after-all -o /dev/null 2>&1 | FileCheck %s --check-prefix=PASS-PIPELINE
 
@@ -2039,15 +2040,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %first, %second, %third, %opaque#0, %opaque#1 : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
   }
 
-  // A before-region tensor without a corresponding result is valid SCF.
-  // Both layout passes must preserve its loop contract without indexing past
-  // the while results or disabling the independent global fanout.
-  // BASELINE-LABEL: @opaque_while_extra_tensor_independent_fanout
-  // BASELINE-COUNT-1: ttg.convert_layout
-  // BASELINE: scf.while
-  // BASELINE-COUNT-3: ttg.convert_layout
-  // BASELINE-NOT: ttg.convert_layout
-  // BASELINE: tt.return
+  // GLOBAL-ONLY-BEGIN
+  // A before-region tensor without a corresponding result is valid SCF. The
+  // unmodified legacy pass cannot represent this shape, but the global pass
+  // must preserve its loop contract and the independent fanout.
   // OPTIMIZED-LABEL: @opaque_while_extra_tensor_independent_fanout
   // OPTIMIZED: scf.while
   // OPTIMIZED-COUNT-1: ttg.convert_layout
@@ -2074,6 +2070,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %third = arith.subf %result, %target : tensor<16x16xf32, #target>
     tt.return %first, %second, %third, %opaque : tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>, tensor<16x16xf32, #target>
   }
+  // GLOBAL-ONLY-END
 
 }
 

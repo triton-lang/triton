@@ -1,6 +1,5 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Dominance.h"
@@ -11,6 +10,7 @@
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
@@ -22,177 +22,22 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/IntEqClasses.h"
-#include "llvm/ADT/STLFunctionalExtras.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/MathExtras.h"
-#include "llvm/Support/raw_ostream.h"
 #include <deque>
-#include <limits>
 
 namespace mlir::triton::gpu {
 
-#define GEN_PASS_DEF_TRITONGPUOPTIMIZELAYOUTS
 #define GEN_PASS_DEF_TRITONGPUREMOVELAYOUTCONVERSIONS
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-enum class LayoutAssignmentStrategy { Legacy, Global };
-
-#define DEBUG_TYPE "tritongpu-layout-assignment"
+#define DEBUG_TYPE "tritongpu-remove-layout-conversions"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace {
 
-/// Hardware-sensitive profitability decisions are deliberately separate from
-/// legality, candidate discovery, graph search, and rewriting. Both the solver
-/// and rematerialization can therefore evolve without embedding policy in the
-/// fundamental layout constraints.
-class LayoutCostModel {
-public:
-  uint64_t getTransitionCost(Value value, Attribute sourceEncoding,
-                             Attribute resultEncoding) const;
-  uint64_t getRegisterPressureCost(Value value, Attribute encoding) const;
-  uint64_t getReductionCost(Value value, Attribute encoding,
-                            unsigned axis) const;
-  uint64_t getExecutionWeight(Operation *op) const;
-
-private:
-  static uint64_t getElementBytes(RankedTensorType type) {
-    Type element = type.getElementType();
-    if (isa<PointerType>(element))
-      return 8;
-    return element.isIntOrFloat()
-               ? std::max<uint64_t>(1, (element.getIntOrFloatBitWidth() + 7) / 8)
-               : 4;
-  }
-
-  mutable DenseMap<std::pair<Type, Type>, uint64_t> transitionCosts;
-  mutable DenseMap<std::pair<Type, Attribute>, uint64_t> registerPressureCosts;
-  mutable DenseMap<std::pair<Type, unsigned>, uint64_t> reductionCosts;
-  mutable DenseMap<Operation *, uint64_t> executionWeights;
-};
-
-/// Operation contracts describe layout relationships without choosing which
-/// legal relationship is fastest. Candidate discovery and profitability policy
-/// remain independent consumers of this graph.
-class LayoutConstraintGraph {
-public:
-  enum Feature : unsigned {
-    Join = 1 << 0,
-    Split = 1 << 1,
-    Reduction = 1 << 2,
-    ProtectedReduction = 1 << 3,
-    Loop = 1 << 4,
-    TensorMemory = 1 << 5,
-    Store = 1 << 6,
-  };
-
-  struct Node {
-    Value value;
-    ArrayRef<Attribute> candidates;
-    bool fixed;
-  };
-
-  void addNode(Value value, ArrayRef<Attribute> candidates, bool fixed) {
-    indices.try_emplace(value, nodes.size());
-    nodes.push_back({value, candidates, fixed});
-    components.grow(nodes.size());
-  }
-
-  void addOperation(Operation *operation);
-
-  ArrayRef<Node> getNodes() const { return nodes; }
-  SmallVector<SmallVector<unsigned, 8>, 8> getConnectedComponents() const;
-
-  bool has(unsigned feature) const { return features & feature; }
-  unsigned getTensorLoadBoundaryCount() const {
-    return tensorLoadBoundaryCount;
-  }
-
-private:
-  template <typename Range> void addContract(Range &&values) {
-    std::optional<unsigned> previous;
-    for (Value value : values) {
-      auto found = indices.find(value);
-      if (found == indices.end())
-        continue;
-      unsigned current = found->second;
-      if (nodes[current].fixed)
-        continue;
-      if (previous)
-        components.join(*previous, current);
-      previous = current;
-    }
-  }
-
-  SmallVector<Node, 32> nodes;
-  DenseMap<Value, unsigned> indices;
-  mutable llvm::IntEqClasses components;
-  unsigned features = 0;
-  unsigned tensorLoadBoundaryCount = 0;
-};
-
-/// Search limits and high-cost graph features are policy, not graph legality.
-class LayoutSearchPolicy {
-  using G = LayoutConstraintGraph;
-  const bool memoryFanout;
-
-public:
-  explicit LayoutSearchPolicy(const LayoutConstraintGraph &graph)
-      : memoryFanout(graph.getTensorLoadBoundaryCount() >= 2 &&
-                     !graph.has(G::Join | G::Split | G::Reduction | G::Loop |
-                                G::TensorMemory)),
-        fullObjective((graph.has(G::Join | G::Split | G::Reduction) ||
-                       memoryFanout) &&
-                      graph.getNodes().size() <= 256),
-        componentSearch(graph.has(G::Join | G::Split | G::Reduction |
-                                  G::Loop) ||
-                        memoryFanout),
-        exactComponentSearch(fullObjective &&
-                             graph.getTensorLoadBoundaryCount() > 0 &&
-                             !graph.has(G::Store) &&
-                             graph.getNodes().size() <= 64),
-        pruneRedundantReductionProposals(
-            graph.has(G::Reduction) && !graph.has(G::ProtectedReduction)),
-        maxComponentProposals(fullObjective ? 128 : 32) {}
-
-  const bool fullObjective, componentSearch, exactComponentSearch,
-      pruneRedundantReductionProposals;
-  const unsigned maxComponentProposals;
-  static constexpr unsigned maxExactComponentStates = 256;
-};
-
-using LayoutAssignment = DenseMap<Value, Attribute>;
-using LayoutValue = std::pair<Value, Attribute>;
-
-/// The solver owns only candidate search, objective comparison, convergence,
-/// and rollback. Operation legality, graph construction, and physical costs
-/// are supplied separately, so heuristics cannot leak into its core algorithm.
-class LayoutAssignmentSolver {
-public:
-  using Assignment = LayoutAssignment;
-
-  struct Callbacks {
-    llvm::function_ref<bool(Value, Attribute, const Assignment &)> isLegal;
-    llvm::function_ref<uint64_t(Value, Attribute, const Assignment &)>
-        valueCost;
-    llvm::function_ref<uint64_t(const Assignment &)> fullCost;
-    llvm::function_ref<uint64_t(ArrayRef<Value>, const Assignment &)>
-        affectedCost;
-    llvm::function_ref<bool(Value, Attribute, Assignment &,
-                            SmallVectorImpl<LayoutValue> &)>
-        proposeComponent;
-  };
-
-  static void solve(const LayoutConstraintGraph &graph,
-                    const LayoutSearchPolicy &policy, Assignment &assignments,
-                    const Callbacks &callbacks);
-};
-
-struct LayoutMemoryProfile;
+// -----------------------------------------------------------------------------
+//
+// -----------------------------------------------------------------------------
 
 // The current algorithm works by analyzing the IR and doing a one-shot rewrite
 // based on the analysis. The algorithm is as follows.
@@ -214,10 +59,13 @@ struct LayoutMemoryProfile;
 //    analysis phase.
 class LayoutPropagation {
 public:
-  using LayoutInfo = llvm::SmallSetVector<Attribute, 8>;
-  LayoutPropagation(FuncOp F, LayoutAssignmentStrategy strategy,
-                    const LayoutMemoryProfile *profile = nullptr)
-      : funcOp(F), strategy(strategy), memoryProfile(profile) {}
+  // Structure to keep track of the layout associated to a value.
+  struct LayoutInfo {
+    LayoutInfo(Attribute encoding) { encodings.insert(encoding); }
+    LayoutInfo() {}
+    llvm::SmallSetVector<Attribute, 8> encodings;
+  };
+  LayoutPropagation(FuncOp F) : funcOp(F) {}
   // Find the anchor ops and set their layout in the data structure.
   void initAnchorLayout();
   // Recursively Propagate the layout to all the users of the anchor ops until
@@ -225,16 +73,12 @@ public:
   void propagateLayout();
   // Add layouts given in `Info` to the uses of `value`.
   SmallVector<Value> propagateToUsers(Value value, LayoutInfo &info);
-  // Propagate consumer layout requirements back to their tensor producers.
-  SmallVector<Value> propagateToOperands(Value value, LayoutInfo &info);
   // Set the encoding to all the values and fill out the values with new layout
   // in `changed`.
   void setEncoding(ValueRange values, LayoutInfo &info,
                    SmallVector<Value> &changed, Operation *op);
-  bool addEncoding(Value value, Attribute encoding);
   // Resolve cases where a value has multiple layouts associated to it.
   void resolveConflicts();
-  void resolveGlobalConflicts();
   // Rewrite the IR for the full module.
   void rewrite();
   // Rewrite the IR for a region.
@@ -259,44 +103,16 @@ public:
   void dump();
 
 private:
-  template <bool source>
-  Attribute getCachedEncoding(Operation *op, Attribute encoding) const;
-  bool canAssignEncoding(Value value, Attribute encoding,
-                         const LayoutAssignment &assignments) const;
-  Attribute getAssignedEncoding(Value value,
-                                const LayoutAssignment &assignments) const;
-  SmallVector<Attribute, 4>
-  getUseEncodings(OpOperand &use, const LayoutAssignment &assignments) const;
-  uint64_t getAssignmentCost(Value value, Attribute encoding,
-                             const LayoutAssignment &assignments) const;
-  uint64_t getGlobalAssignmentCost(const LayoutAssignment &assignments) const;
-  uint64_t getAffectedAssignmentCost(ArrayRef<Value> changed,
-                                     const LayoutAssignment &assignments) const;
-  bool buildGlobalComponentProposal(
-      Value seed, Attribute encoding, LayoutAssignment &assignments,
-      SmallVectorImpl<LayoutValue> &changes) const;
-
   // map from value to layout information.
   llvm::MapVector<Value, LayoutInfo> layouts;
-  DenseSet<Value> fixedLayouts;
   // original encodings of tensor values rewritten in place.
-  LayoutAssignment originalEncodings;
-  mutable DenseMap<std::pair<Operation *, Attribute>, Attribute>
-      inferredSourceEncodings;
-  mutable DenseMap<std::pair<Operation *, Attribute>, Attribute>
-      inferredDestinationEncodings;
-  LayoutCostModel costModel;
+  DenseMap<Value, Attribute> originalEncodings;
   FuncOp funcOp;
-  LayoutAssignmentStrategy strategy;
-  const LayoutMemoryProfile *memoryProfile;
 };
 
 class LayoutRematerialization {
 public:
-  LayoutRematerialization(FuncOp F,
-                          bool preserveSharedReductionRematerialization = false)
-      : funcOp(F), preserveSharedReductionRematerialization(
-                       preserveSharedReductionRematerialization) {}
+  LayoutRematerialization(FuncOp F) : funcOp(F) {}
   ~LayoutRematerialization();
 
   // Map the original value to the remat'ed one.
@@ -373,7 +189,6 @@ private:
   // block args or results of an scf op).
   DenseMap<Value, DenseMap<Attribute, Value>> rematMapping;
   FuncOp funcOp;
-  bool preserveSharedReductionRematerialization;
   DominanceInfo domInfo;
   PostDominanceInfo postDomInfo;
 };
@@ -424,304 +239,10 @@ bool isLayoutAnchor(Operation *op) {
   return false;
 }
 
-static bool isProtectedLayoutReduction(Operation *op);
-static bool isProtectedLayoutLoop(Operation *op, unsigned functionLoads,
-                                  unsigned functionStores);
-
-struct LayoutMemoryProfile {
-  unsigned loads = 0, tensorLoads = 0, stores = 0, reshapes = 0;
-  bool pairwiseReduction = false, wideScalarReduction = false;
-  bool wideFp8Load = false, fp8Load = false, i8Load = false;
-  bool join = false, complexBoundary = false;
-  bool packedAssembly = false, protectedReduction = false;
-  bool descriptorLoad = false, permutingReshape = false, hardwareStore = false;
-  SmallVector<Operation *, 4> protectedLoops;
-
-  bool hasPairwiseReductionProtocol() const {
-    return pairwiseReduction && wideScalarReduction && wideFp8Load &&
-           stores == 1;
-  }
-
-  bool hasPackedAssemblyProtocol() const {
-    return (tensorLoads == 2 ||
-            (tensorLoads == 3 && join && fp8Load && i8Load)) &&
-           stores == 1 && (join || (fp8Load && i8Load && reshapes == 4)) &&
-           !complexBoundary;
-  }
-};
-
-static LayoutMemoryProfile getLayoutMemoryProfile(FuncOp funcOp) {
-  LayoutMemoryProfile profile;
-  funcOp.walk([&](Operation *op) {
-    if (auto load = dyn_cast<LoadOp>(op)) {
-      ++profile.loads;
-      if (auto tensor = dyn_cast<RankedTensorType>(load.getType())) {
-        ++profile.tensorLoads;
-        profile.fp8Load |= isa<Float8E4M3FNType>(tensor.getElementType());
-        profile.i8Load |= tensor.getElementType().isInteger(8);
-        profile.wideFp8Load |=
-            tensor.getRank() == 2 && tensor.getDimSize(1) >= 128 &&
-            isa<Float8E5M2Type, Float8E4M3FNType>(tensor.getElementType());
-      }
-    } else if (isa<StoreOp>(op)) {
-      ++profile.stores;
-      profile.hardwareStore = true;
-    } else if (isa<JoinOp>(op)) {
-      profile.join = true;
-    } else if (auto reshape = dyn_cast<ReshapeOp>(op)) {
-      ++profile.reshapes;
-      profile.permutingReshape |=
-          reshape.getAllowReorder() && !reshape.getEfficientLayout() &&
-          reshape.getSrc().getDefiningOp<ConvertLayoutOp>();
-    } else if (auto reduce = dyn_cast<ReduceOp>(op)) {
-      profile.complexBoundary = true;
-      profile.protectedReduction |= isProtectedLayoutReduction(op);
-      if (auto tensor =
-              dyn_cast<RankedTensorType>(reduce->getOperand(0).getType())) {
-        profile.pairwiseReduction |=
-            tensor.getRank() == 2 && tensor.getDimSize(reduce.getAxis()) == 2;
-        profile.wideScalarReduction |=
-            tensor.getRank() == 1 && tensor.getDimSize(0) >= 128 &&
-            !isa<RankedTensorType>(reduce->getResult(0).getType());
-      }
-    } else if (auto inlineAsm = dyn_cast<ElementwiseInlineAsmOp>(op)) {
-      profile.packedAssembly |= inlineAsm.getPackedElement() > 1;
-    } else if (isa<DescriptorLoadLikeOpInterface>(op)) {
-      profile.descriptorLoad = profile.complexBoundary = true;
-    } else if (isa<DescriptorStoreLikeOpInterface,
-                   triton::nvidia_gpu::TMAStoreLikeOpInterface>(op)) {
-      profile.hardwareStore = true;
-    } else if (isa<scf::ForOp, scf::WhileOp>(op)) {
-      profile.complexBoundary = true;
-      profile.protectedLoops.push_back(op);
-    }
-  });
-  llvm::erase_if(profile.protectedLoops, [&](Operation *op) {
-    return !isProtectedLayoutLoop(op, profile.loads, profile.stores);
-  });
-  return profile;
-}
-
-static bool isProtectedLayoutReduction(Operation *op) {
-  auto reduce = dyn_cast<ReduceOp>(op);
-  if (!reduce)
-    return false;
-
-  auto sourceType = dyn_cast<RankedTensorType>(reduce->getOperand(0).getType());
-  if (!sourceType || sourceType.getRank() < 4)
-    return false;
-  if (sourceType.getDimSize(reduce.getAxis()) == 2)
-    return true;
-
-  // A shared reduction can determine both a compact scale and the tensor
-  // quantized with that scale. Keep the complete reduction in the layout
-  // established by the memory boundaries instead of duplicating its network
-  // for the independent stores.
-  DenseSet<Operation *> visited;
-  DenseSet<Operation *> stores;
-  SmallVector<Value, 16> worklist;
-  for (Value result : reduce->getResults())
-    worklist.push_back(result);
-
-  constexpr unsigned maxSharedReductionUsers = 128;
-  while (!worklist.empty()) {
-    Value value = worklist.pop_back_val();
-    for (OpOperand &use : value.getUses()) {
-      Operation *user = use.getOwner();
-      if (auto store = dyn_cast<StoreOp>(user)) {
-        if (store.getValue() == value && stores.insert(user).second &&
-            stores.size() >= 2)
-          return true;
-        continue;
-      }
-      if (!isMemoryEffectFree(user) || !visited.insert(user).second)
-        continue;
-      if (visited.size() > maxSharedReductionUsers)
-        return false;
-      for (Value result : user->getResults())
-        if (isa<RankedTensorType>(result.getType()))
-          worklist.push_back(result);
-    }
-  }
-  return false;
-}
-
-static bool isLayoutTransform(Operation *op) {
-  return op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
-         op->hasTrait<OpTrait::Elementwise>() ||
-         isa<JoinOp, SplitOp, ConvertLayoutOp, ReshapeOp, TransOp, ExpandDimsOp,
-             ReduceOp>(op);
-}
-
-static bool isFixedLayoutBoundary(Operation *op) {
-  if (isa<scf::ForOp, scf::WhileOp, scf::IfOp, scf::YieldOp, scf::ConditionOp>(
-          op))
-    return false;
-
-  if (auto reshape = dyn_cast<ReshapeOp>(op))
-    if (reshape.getAllowReorder() || reshape.getEfficientLayout())
-      return true;
-
-  // Packed assembly observes which register elements are grouped together.
-  // Relayout across the instruction can therefore change its logical results.
-  if (auto inlineAsm = dyn_cast<ElementwiseInlineAsmOp>(op))
-    if (inlineAsm.getPackedElement() > 1)
-      return true;
-
-  // High-rank pairwise reductions implement register-level sorting networks.
-  // Their reduction axes jointly determine how values are distributed across
-  // registers, lanes, and warps; changing one stage independently can
-  // duplicate the network and introduce a conversion at every stage.
-  if (isProtectedLayoutReduction(op))
-    return true;
-
-  // Gather has distinct source and index encodings. Preserve both contracts
-  // instead of treating its result layout as a requirement on every operand.
-  if (isa<ReturnOp, LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp, GatherOp,
-          DotOpInterface, DescriptorOpInterface,
-          triton::nvidia_gpu::TMEMLoadOp>(op) ||
-      !isMemoryEffectFree(op))
-    return true;
-
-  if (isLayoutTransform(op) ||
-      isa<arith::ConstantOp, MakeRangeOp, SplatOp>(op))
-    return false;
-
-  // Preserve unfamiliar tensor producers locally. Operations such as
-  // concatenate and histogram can still participate when their existing
-  // result layout is explicitly supported by the layout legality interface.
-  for (Value result : op->getResults())
-    if (auto tensorType = dyn_cast<RankedTensorType>(result.getType()))
-      if (!canUseResultEncoding(op, tensorType.getEncoding()))
-        return true;
-  return false;
-}
-
-static bool isProtectedLayoutLoop(Operation *op, unsigned functionLoads,
-                                  unsigned functionStores) {
-  if (auto whileOp = dyn_cast<scf::WhileOp>(op))
-    for (auto [index, argument] : llvm::enumerate(whileOp.getBeforeArguments()))
-      if (index >= whileOp.getNumResults() &&
-          isa<RankedTensorType>(argument.getType()))
-        return true;
-
-  WalkResult body = op->walk([&](Operation *nested) {
-    if (nested == op || !isFixedLayoutBoundary(nested))
-      return WalkResult::advance();
-    if (!isa<LoadOp, StoreOp>(nested))
-      return WalkResult::interrupt();
-
-    // A single masked load/store is one memory protocol. Count the complete
-    // function so independent copy loops retain their global layout freedom.
-    if (functionLoads != 1 || functionStores != 1)
-      return WalkResult::advance();
-    auto store = dyn_cast<StoreOp>(nested);
-    if (!store || !store.getMask())
-      return WalkResult::advance();
-    auto stripLayoutConversions = [](Value value) {
-      while (auto convert = value.getDefiningOp<ConvertLayoutOp>())
-        value = convert.getSrc();
-      return value;
-    };
-    auto load =
-        stripLayoutConversions(store.getValue()).getDefiningOp<LoadOp>();
-    if (load && load.getMask() &&
-        stripLayoutConversions(load.getMask()) ==
-            stripLayoutConversions(store.getMask()))
-      return WalkResult::interrupt();
-    return WalkResult::advance();
-  });
-  return body.wasInterrupted();
-}
-
-static std::pair<Operation *, unsigned>
-getControlFlowComponent(OpOperand &use, bool includeConditionals = false) {
-  Operation *user = use.getOwner();
-  unsigned index = use.getOperandNumber();
-  if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-    if (Value result = forOp.getTiedLoopResult(&use))
-      return {forOp, cast<OpResult>(result).getResultNumber()};
-  } else if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
-    if (index < whileOp.getNumResults())
-      return {whileOp, index};
-  } else if (auto yield = dyn_cast<scf::YieldOp>(user)) {
-    Operation *parent = yield->getParentOp();
-    if (index < parent->getNumResults() &&
-        (isa<scf::ForOp, scf::WhileOp>(parent) ||
-         (includeConditionals && isa<scf::IfOp>(parent))))
-      return {parent, index};
-  } else if (auto condition = dyn_cast<scf::ConditionOp>(user)) {
-    if (index)
-      return {condition->getParentOp(), index - 1};
-  }
-  return {nullptr, 0};
-}
-
-static LLVM_ATTRIBUTE_ALWAYS_INLINE std::pair<Operation *, unsigned>
-getControlFlowComponent(BlockArgument argument) {
-  Operation *parent = argument.getOwner()->getParentOp();
-  unsigned index = argument.getArgNumber();
-  if (auto loop = dyn_cast<scf::ForOp>(parent); loop && index)
-    return {loop, index - 1};
-  if (auto loop = dyn_cast<scf::WhileOp>(parent);
-      loop && index < loop.getNumResults())
-    return {loop, index};
-  return {nullptr, 0};
-}
-
-void LayoutConstraintGraph::addOperation(Operation *operation) {
-  if (auto load = dyn_cast<LoadOp>(operation)) {
-    if (load->getNumResults() == 1 &&
-        isa<RankedTensorType>(load->getResult(0).getType()))
-      ++tensorLoadBoundaryCount;
-  } else if (isa<StoreOp>(operation)) {
-    features |= Store;
-  }
-
-  if (isa<JoinOp>(operation))
-    features |= Join;
-  if (isa<SplitOp>(operation))
-    features |= Split;
-  if (isa<scf::ForOp, scf::WhileOp>(operation))
-    features |= Loop;
-  if (isa<triton::nvidia_gpu::TMEMLoadOp>(operation))
-    features |= TensorMemory;
-  if (isa<ReduceOp>(operation)) {
-    features |= Reduction;
-    if (isProtectedLayoutReduction(operation))
-      features |= ProtectedReduction;
-  }
-
-  if (isFixedLayoutBoundary(operation))
-    return;
-
-  if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(operation)) {
-    for (unsigned index = 0; index < operation->getNumResults(); ++index)
-      addContract(getTiedArgs(operation, index));
-    return;
-  }
-
-  if (isLayoutTransform(operation))
-    addContract(llvm::concat<Value>(operation->getOperands(),
-                                    operation->getResults()));
-}
-
-SmallVector<SmallVector<unsigned, 8>, 8>
-LayoutConstraintGraph::getConnectedComponents() const {
-  components.compress();
-  SmallVector<SmallVector<unsigned, 8>, 8> result(components.getNumClasses());
-  for (unsigned index = 0; index < nodes.size(); ++index) {
-    if (!nodes[index].fixed && nodes[index].candidates.size() > 1)
-      result[components[index]].push_back(index);
-  }
-  return result;
-}
-
 void LayoutPropagation::initAnchorLayout() {
   auto addAnchor = [&](Value v) {
     if (auto tensorType = dyn_cast<RankedTensorType>(v.getType())) {
-      layouts[v].insert(tensorType.getEncoding());
-      fixedLayouts.insert(v);
+      layouts.insert({v, LayoutInfo(tensorType.getEncoding())});
     }
   };
 
@@ -732,172 +253,13 @@ void LayoutPropagation::initAnchorLayout() {
     addAnchor(arg);
   }
 
-  if (strategy == LayoutAssignmentStrategy::Global) {
-    const LayoutMemoryProfile &memory = *memoryProfile;
-    auto anchorOperationValues = [&](Operation *op) {
-      for (Value result : op->getResults())
-        addAnchor(result);
-      for (Region &region : op->getRegions())
-        for (Block &block : region)
-          for (BlockArgument argument : block.getArguments())
-            addAnchor(argument);
-    };
-    auto protectMemoryAddresses = [&](bool includeLoads) {
-      DenseSet<Value> visited;
-      SmallVector<Value> worklist;
-      auto protect = [&](Value value) {
-        if (value && isa<RankedTensorType>(value.getType()) &&
-            visited.insert(value).second) {
-          addAnchor(value);
-          worklist.push_back(value);
-        }
-      };
-
-      funcOp.walk([&](Operation *op) {
-        if (auto load = dyn_cast<LoadOp>(op); load && includeLoads) {
-          protect(load.getPtr());
-          protect(load.getMask());
-        } else if (auto store = dyn_cast<StoreOp>(op)) {
-          protect(store.getPtr());
-          protect(store.getMask());
-        }
-      });
-
-      while (!worklist.empty()) {
-        Operation *producer = worklist.pop_back_val().getDefiningOp();
-        if (producer && isMemoryEffectFree(producer) &&
-            !isa<ConvertLayoutOp>(producer))
-          for (Value operand : producer->getOperands())
-            protect(operand);
-      }
-    };
-
-    if (memory.hasPairwiseReductionProtocol())
-      funcOp.walk(anchorOperationValues);
-    if (memory.hasPackedAssemblyProtocol()) {
-      // Packed MX kernels independently rematerialize the address and mask
-      // of each load and store. Preserve those established memory slices while
-      // leaving their loaded and stored data available for global assignment.
-      protectMemoryAddresses(/*includeLoads=*/true);
-    }
-    funcOp.walk([&](StoreOp store) {
-      if (!store->getParentOfType<scf::ForOp>() &&
-          !store->getParentOfType<scf::WhileOp>())
-        return;
-      addAnchor(store.getPtr());
-      if (Value mask = store.getMask())
-        addAnchor(mask);
-    });
-    DenseSet<Value> protectedReductionValues;
-    SmallVector<Value> reductionWorklist;
-    bool hasSharedReductionMemoryBoundaries = false;
-    auto addProtectedReductionValue = [&](Value value) {
-      auto tensorType = dyn_cast<RankedTensorType>(value.getType());
-      if (!tensorType || tensorType.getRank() < 4 ||
-          !protectedReductionValues.insert(value).second)
-        return;
-      addAnchor(value);
-      reductionWorklist.push_back(value);
-    };
-
-    funcOp.walk([&](ReduceOp reduce) {
-      if (!isProtectedLayoutReduction(reduce.getOperation()))
-        return;
-      auto sourceType =
-          cast<RankedTensorType>(reduce->getOperand(0).getType());
-      if (sourceType.getDimSize(reduce.getAxis()) != 2)
-        hasSharedReductionMemoryBoundaries = true;
-      for (Value value : llvm::concat<Value>(reduce->getOperands(),
-                                             reduce->getResults()))
-        addProtectedReductionValue(value);
-    });
-
-    auto protectReductionComponent = [&](Operation *op) {
-      if (!op || !isMemoryEffectFree(op) || isa<ConvertLayoutOp>(op) ||
-          (isFixedLayoutBoundary(op) && !isProtectedLayoutReduction(op)))
-        return;
-      for (Value value :
-           llvm::concat<Value>(op->getOperands(), op->getResults()))
-        addProtectedReductionValue(value);
-    };
-
-    while (!reductionWorklist.empty()) {
-      Value value = reductionWorklist.pop_back_val();
-      protectReductionComponent(value.getDefiningOp());
-      for (OpOperand &use : value.getUses())
-        protectReductionComponent(use.getOwner());
-    }
-
-    if (hasSharedReductionMemoryBoundaries) {
-      funcOp.walk([&](LoadOp load) {
-        addAnchor(load.getPtr());
-        if (Value mask = load.getMask())
-          addAnchor(mask);
-      });
-    }
-
-    for (Operation *op : memory.protectedLoops) {
-      // Hardware, opaque-operation, and structurally constrained while loops
-      // have jointly chosen layouts. Preserve the complete established
-      // protocol, including loop initializers, results, region arguments, and
-      // every tensor value produced inside the protected loop. Independent
-      // components remain available to global assignment.
-      for (Value operand : op->getOperands())
-        addAnchor(operand);
-
-      op->walk(anchorOperationValues);
-    }
-
-    if (!memory.protectedLoops.empty()) {
-      // Tensor-core and tensor-memory loops establish separately
-      // rematerialized, coalesced store indices. Preserve that complete
-      // address-and-mask slice without constraining stored data or unrelated
-      // layout components.
-      protectMemoryAddresses(/*includeLoads=*/false);
-    }
-  }
-
   funcOp.walk([&](Operation *op) {
     if (isLayoutAnchor(op)) {
       for (auto result : op->getResults()) {
         addAnchor(result);
       }
     }
-
-    if (strategy != LayoutAssignmentStrategy::Global ||
-        !isFixedLayoutBoundary(op))
-      return;
-
-    for (Value result : op->getResults())
-      addAnchor(result);
-
-    for (Value operand : op->getOperands()) {
-      if (isProtectedLayoutReduction(op)) {
-        addAnchor(operand);
-      } else if (auto tensorType =
-                     dyn_cast<RankedTensorType>(operand.getType())) {
-        addEncoding(operand, tensorType.getEncoding());
-      }
-    }
   });
-}
-
-bool LayoutPropagation::addEncoding(Value value, Attribute encoding) {
-  auto tensorType = dyn_cast<RankedTensorType>(value.getType());
-  if (!tensorType || !encoding)
-    return false;
-
-  LayoutInfo &info = layouts[value];
-  if (strategy == LayoutAssignmentStrategy::Global) {
-    if (fixedLayouts.contains(value) && encoding != tensorType.getEncoding())
-      return false;
-
-    constexpr unsigned maxGlobalLayoutCandidates = 16;
-    if (!info.contains(encoding) && info.size() >= maxGlobalLayoutCandidates)
-      return false;
-  }
-
-  return info.insert(encoding);
 }
 
 void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
@@ -907,7 +269,7 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
     if (!isa<RankedTensorType>(value.getType()))
       continue;
     bool hasChanged = false;
-    for (auto encoding : info) {
+    for (auto encoding : info.encodings) {
       Attribute dstEncoding;
       if (isa<ConvertLayoutOp>(op)) {
         // Try to remove the convert by making the dst encoding match the source
@@ -917,7 +279,7 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
         dstEncoding = inferDstEncoding(op, encoding);
       }
       if (dstEncoding)
-        hasChanged |= addEncoding(value, dstEncoding);
+        hasChanged |= layouts[value].encodings.insert(dstEncoding);
     }
     if (hasChanged)
       changed.push_back(value);
@@ -943,8 +305,7 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
       auto parent = yieldOp->getParentOp();
       SmallVector<Value> valuesToPropagate;
-      if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(parent) &&
-          use.getOperandNumber() < parent->getNumResults())
+      if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(parent))
         valuesToPropagate.push_back(parent->getResult(use.getOperandNumber()));
       if (auto forOp = dyn_cast<scf::ForOp>(parent))
         valuesToPropagate.push_back(
@@ -994,42 +355,6 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
   return changed;
 }
 
-SmallVector<Value> LayoutPropagation::propagateToOperands(Value value,
-                                                          LayoutInfo &info) {
-  SmallVector<Value> changed;
-
-  auto addCandidates = [&](ValueRange values, Attribute encoding) {
-    for (Value operand : values)
-      if (addEncoding(operand, encoding))
-        changed.push_back(operand);
-  };
-
-  for (Attribute encoding : info) {
-    if (auto result = dyn_cast<OpResult>(value)) {
-      Operation *op = result.getOwner();
-      if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(op)) {
-        addCandidates(getTiedArgs(op, result.getResultNumber()), encoding);
-        continue;
-      }
-
-      Attribute operandEncoding =
-          isa<ConvertLayoutOp>(op) ? encoding : inferSrcEncoding(op, encoding);
-      if (operandEncoding)
-        addCandidates(op->getOperands(), operandEncoding);
-      continue;
-    }
-
-    auto blockArg = dyn_cast<BlockArgument>(value);
-    if (!blockArg)
-      continue;
-    auto [loop, index] = getControlFlowComponent(blockArg);
-    if (loop)
-      addCandidates(getTiedArgs(loop, index), encoding);
-  }
-
-  return changed;
-}
-
 void LayoutPropagation::propagateLayout() {
   SmallVector<Value> queue;
   for (auto it : layouts) {
@@ -1040,16 +365,11 @@ void LayoutPropagation::propagateLayout() {
     LayoutInfo info = layouts[currentValue];
     queue.pop_back();
     SmallVector<Value> changed = propagateToUsers(currentValue, info);
-    if (strategy == LayoutAssignmentStrategy::Global) {
-      SmallVector<Value> producerChanges =
-          propagateToOperands(currentValue, info);
-      changed.append(producerChanges.begin(), producerChanges.end());
-    }
 
     LLVM_DEBUG({
       DBGS() << "propagateLayout considering " << currentValue << ", which has "
-             << info.size() << " candidate encoding(s):\n";
-      for (Attribute encoding : info)
+             << info.encodings.size() << " candidate encoding(s):\n";
+      for (Attribute encoding : info.encodings)
         DBGS() << "  " << encoding << "\n";
       DBGS() << "changed: " << changed.size() << "\n";
     });
@@ -1059,750 +379,25 @@ void LayoutPropagation::propagateLayout() {
 }
 
 void LayoutPropagation::resolveConflicts() {
-  if (strategy == LayoutAssignmentStrategy::Global)
-    return resolveGlobalConflicts();
-
   for (auto &it : layouts) {
     Operation *op = it.first.getDefiningOp();
     LayoutInfo &info = it.second;
-    if (info.size() <= 1)
+    if (info.encodings.size() <= 1)
       continue;
     // Hacky resolve, prefer block encoding.
     // TODO: add a proper heuristic.
-    Attribute encoding = *info.begin();
+    Attribute encoding = *info.encodings.begin();
     bool isLoadOrStore =
         op && isa<LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp>(op);
-    for (Attribute e : info) {
+    for (Attribute e : info.encodings) {
       if ((isLoadOrStore && isa<BlockedEncodingAttr>(e)) ||
           (!isLoadOrStore && isa<MmaEncodingTrait>(e))) {
         encoding = e;
         break;
       }
     }
-    info.clear();
-    info.insert(encoding);
-  }
-}
-
-uint64_t LayoutCostModel::getTransitionCost(
-    Value value, Attribute sourceEncoding, Attribute resultEncoding) const {
-  if (!sourceEncoding || !resultEncoding || sourceEncoding == resultEncoding)
-    return 0;
-
-  auto tensorType = dyn_cast<RankedTensorType>(value.getType());
-  if (!tensorType)
-    return 0;
-
-  RankedTensorType sourceType = tensorType.cloneWithEncoding(sourceEncoding);
-  RankedTensorType resultType = tensorType.cloneWithEncoding(resultEncoding);
-  auto [cached, inserted] = transitionCosts.try_emplace(
-      std::pair<Type, Type>{sourceType, resultType}, 0);
-  if (!inserted)
-    return cached->second;
-
-  if (cvtReordersRegisters(sourceType, resultType))
-    return cached->second = 1;
-
-  // Cross-lane traffic scales with the physical element width, so prefer a
-  // conversion after narrowing when both placements are otherwise equivalent.
-  int64_t elementCount = std::max<int64_t>(32, tensorType.getNumElements());
-  uint64_t byteCount = elementCount * getElementBytes(tensorType);
-
-  if (cvtNeedsWarpShuffle(sourceType, resultType))
-    return cached->second = 4 * byteCount;
-  return cached->second = 32 * byteCount;
-}
-
-uint64_t LayoutCostModel::getRegisterPressureCost(Value value,
-                                                 Attribute encoding) const {
-  auto tensorType = dyn_cast<RankedTensorType>(value.getType());
-  if (!tensorType || !encoding || !value.getDefiningOp())
-    return 0;
-
-  auto [cached, inserted] = registerPressureCosts.try_emplace(
-      std::pair<Type, Attribute>{tensorType, encoding}, 0);
-  if (!inserted)
-    return cached->second;
-
-  uint64_t originalElements = getUniqueElemsPerThread(tensorType);
-  uint64_t assignedElements =
-      getUniqueElemsPerThread(encoding, tensorType.getShape());
-  if (assignedElements <= originalElements)
-    return cached->second;
-
-  // Concentrating a distributed tile into registers serializes work that
-  // could otherwise be performed by a warp. Price that work alongside the
-  // warp-sized exchange used for physical layout transitions.
-  cached->second =
-      32 * (assignedElements - originalElements) * getElementBytes(tensorType);
-  return cached->second;
-}
-
-uint64_t LayoutCostModel::getReductionCost(Value value, Attribute encoding,
-                                          unsigned axis) const {
-  auto tensorType = dyn_cast<RankedTensorType>(value.getType());
-  if (!tensorType || !encoding || axis >= tensorType.getRank())
-    return 0;
-
-  int64_t axisSize = tensorType.getDimSize(axis);
-  if (axisSize <= 1)
-    return 0;
-
-  RankedTensorType assignedType = tensorType.cloneWithEncoding(encoding);
-  auto [cached, inserted] = reductionCosts.try_emplace(
-      std::pair<Type, unsigned>{assignedType, axis}, 0);
-  if (!inserted)
-    return cached->second;
-
-  uint64_t rows = tensorType.getNumElements() / axisSize;
-  uint64_t lanes = getThreadsPerWarp(encoding, tensorType.getShape())[axis];
-  uint64_t warps = getWarpsPerCTA(encoding, tensorType.getShape())[axis];
-
-  // A warp-local reduction exchanges only the participating lanes. Splitting
-  // its axis across warps additionally requires shared-memory exchange and
-  // CTA-wide synchronization, even when the IR has no explicit conversion.
-  cached->second = rows * getElementBytes(tensorType) *
-                   ((lanes - 1) + 32 * lanes * (warps - 1));
-  return cached->second;
-}
-
-uint64_t LayoutCostModel::getExecutionWeight(Operation *op) const {
-  auto [cached, inserted] = executionWeights.try_emplace(op, 1);
-  if (!inserted)
-    return cached->second;
-
-  uint64_t &weight = cached->second;
-  for (Operation *parent = op->getParentOp(); parent;
-       parent = parent->getParentOp()) {
-    if (isa<scf::ForOp, scf::WhileOp>(parent))
-      weight = std::min<uint64_t>(256, 4 * weight);
-  }
-  return weight;
-}
-
-template <bool source>
-Attribute LayoutPropagation::getCachedEncoding(Operation *op,
-                                               Attribute encoding) const {
-  auto &cache = source ? inferredSourceEncodings : inferredDestinationEncodings;
-  auto [cached, inserted] = cache.try_emplace(
-      std::pair<Operation *, Attribute>{op, encoding}, Attribute{});
-  if (inserted)
-    cached->second = source ? inferSrcEncoding(op, encoding)
-                            : inferDstEncoding(op, encoding);
-  return cached->second;
-}
-
-bool LayoutPropagation::canAssignEncoding(
-    Value value, Attribute encoding, const LayoutAssignment &assignments) const {
-  auto tensorType = dyn_cast<RankedTensorType>(value.getType());
-  if (!tensorType || !encoding)
-    return false;
-
-  if (auto blockArg = dyn_cast<BlockArgument>(value)) {
-    auto [loop, index] = getControlFlowComponent(blockArg);
-    return loop ? getAssignedEncoding(loop->getResult(index), assignments) ==
-                      encoding
-                : encoding == tensorType.getEncoding();
-  }
-
-  if (auto result = dyn_cast<OpResult>(value)) {
-    if (auto forOp = dyn_cast<scf::ForOp>(result.getOwner()))
-      return getAssignedEncoding(
-                 forOp.getRegionIterArg(result.getResultNumber()),
-                 assignments) == encoding;
-    if (auto whileOp = dyn_cast<scf::WhileOp>(result.getOwner()))
-      return getAssignedEncoding(
-                 whileOp.getBeforeArguments()[result.getResultNumber()],
-                 assignments) == encoding &&
-             getAssignedEncoding(
-                 whileOp.getAfterArguments()[result.getResultNumber()],
-                 assignments) == encoding;
-    if (auto splitOp = dyn_cast<SplitOp>(result.getOwner())) {
-      Value sibling = result.getResultNumber() == 0 ? splitOp.getOutRHS()
-                                                    : splitOp.getOutLHS();
-      return getAssignedEncoding(sibling, assignments) == encoding &&
-             static_cast<bool>(getCachedEncoding<true>(splitOp, encoding));
-    }
-    if (auto reduceOp = dyn_cast<ReduceOp>(result.getOwner())) {
-      for (Value sibling : reduceOp->getResults())
-        if (isa<RankedTensorType>(sibling.getType()) &&
-            getAssignedEncoding(sibling, assignments) != encoding)
-          return false;
-      return static_cast<bool>(getCachedEncoding<true>(reduceOp, encoding));
-    }
-  }
-
-  if (encoding == tensorType.getEncoding())
-    return true;
-
-  Operation *op = value.getDefiningOp();
-  if (!op)
-    return false;
-  if (auto constant = dyn_cast<arith::ConstantOp>(op))
-    return isa<DenseElementsAttr>(constant.getValue());
-  if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(op) ||
-      canUseResultEncoding(op, encoding) ||
-      getCachedEncoding<true>(op, encoding))
-    return true;
-
-  for (Value operand : op->getOperands()) {
-    if (!isa<RankedTensorType>(operand.getType()))
-      continue;
-    if (getCachedEncoding<false>(
-            op, getAssignedEncoding(operand, assignments)) == encoding)
-      return true;
-  }
-  return false;
-}
-
-Attribute LayoutPropagation::getAssignedEncoding(
-    Value value, const LayoutAssignment &assignments) const {
-  if (auto it = assignments.find(value); it != assignments.end())
-    return it->second;
-  if (auto tensorType = dyn_cast<RankedTensorType>(value.getType()))
-    return tensorType.getEncoding();
-  return {};
-}
-
-bool reduceToScalar(Operation *op) {
-  // For reductions returning a scalar we can change the src encoding without
-  // affecting the output.
-  return isa<ReduceOp>(op) && !isa<RankedTensorType>(op->getResultTypes()[0]);
-}
-
-SmallVector<Attribute, 4> LayoutPropagation::getUseEncodings(
-    OpOperand &use, const LayoutAssignment &assignments) const {
-  Operation *user = use.getOwner();
-  SmallVector<Attribute, 4> encodings;
-
-  auto addEncoding = [&](Value value) {
-    if (Attribute encoding = getAssignedEncoding(value, assignments))
-      if (!llvm::is_contained(encodings, encoding))
-        encodings.push_back(encoding);
-  };
-
-  if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-    if (Value result = forOp.getTiedLoopResult(&use))
-      addEncoding(result);
-    return encodings;
-  }
-  if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
-    if (use.getOperandNumber() < whileOp.getBeforeArguments().size())
-      addEncoding(whileOp.getBeforeArguments()[use.getOperandNumber()]);
-    return encodings;
-  }
-  if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-    Operation *parent = yieldOp->getParentOp();
-    unsigned index = use.getOperandNumber();
-    if (auto whileOp = dyn_cast<scf::WhileOp>(parent))
-      addEncoding(whileOp.getBeforeArguments()[index]);
-    else if (isa<scf::ForOp, scf::IfOp>(parent))
-      addEncoding(parent->getResult(index));
-    return encodings;
-  }
-  if (auto conditionOp = dyn_cast<scf::ConditionOp>(user)) {
-    if (use.getOperandNumber() != 0) {
-      auto whileOp = cast<scf::WhileOp>(conditionOp->getParentOp());
-      addEncoding(whileOp.getResult(use.getOperandNumber() - 1));
-    }
-    return encodings;
-  }
-
-  // A scalar reduction has no result layout to impose on its input.
-  if (reduceToScalar(user))
-    return encodings;
-
-  if (isFixedLayoutBoundary(user)) {
-    if (auto type = dyn_cast<RankedTensorType>(use.get().getType()))
-      encodings.push_back(type.getEncoding());
-    return encodings;
-  }
-
-  for (Value result : user->getResults()) {
-    if (!isa<RankedTensorType>(result.getType()))
-      continue;
-    Attribute resultEncoding = getAssignedEncoding(result, assignments);
-    Attribute operandEncoding = isa<ConvertLayoutOp>(user)
-                                    ? resultEncoding
-                                    : getCachedEncoding<true>(user,
-                                                              resultEncoding);
-    if (operandEncoding && !llvm::is_contained(encodings, operandEncoding))
-      encodings.push_back(operandEncoding);
-  }
-
-  if (encodings.empty())
-    if (auto type = dyn_cast<RankedTensorType>(use.get().getType()))
-      encodings.push_back(type.getEncoding());
-  return encodings;
-}
-
-uint64_t LayoutPropagation::getAssignmentCost(
-    Value value, Attribute encoding, const LayoutAssignment &assignments) const {
-  uint64_t cost = 0;
-  Operation *definingOp = value.getDefiningOp();
-  if (definingOp)
-    cost += costModel.getRegisterPressureCost(value, encoding) *
-            costModel.getExecutionWeight(definingOp);
-  llvm::SmallDenseMap<Attribute, uint64_t, 8> userWeights;
-
-  for (OpOperand &use : value.getUses()) {
-    uint64_t weight = costModel.getExecutionWeight(use.getOwner());
-    if (auto reduce = dyn_cast<ReduceOp>(use.getOwner()))
-      cost +=
-          costModel.getReductionCost(value, encoding, reduce.getAxis()) *
-          weight;
-    for (Attribute required : getUseEncodings(use, assignments)) {
-      auto [it, inserted] = userWeights.try_emplace(required, weight);
-      if (!inserted)
-        it->second = std::max(it->second, weight);
-    }
-  }
-
-  for (const auto &[required, weight] : userWeights)
-    cost += costModel.getTransitionCost(value, encoding, required) * weight;
-
-  if (!definingOp)
-    return cost;
-
-  uint64_t weight = costModel.getExecutionWeight(definingOp);
-  if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(definingOp)) {
-    auto result = cast<OpResult>(value);
-    for (Value tied : getTiedArgs(definingOp, result.getResultNumber())) {
-      if (tied == value || !isa<RankedTensorType>(tied.getType()))
-        continue;
-      cost +=
-          costModel.getTransitionCost(tied,
-                                      getAssignedEncoding(tied, assignments),
-                                      encoding) *
-          weight;
-    }
-    return cost;
-  }
-
-  Attribute operandEncoding = isa<ConvertLayoutOp>(definingOp)
-                                  ? encoding
-                                  : getCachedEncoding<true>(definingOp,
-                                                            encoding);
-  if (!operandEncoding)
-    return cost;
-
-  for (Value operand : definingOp->getOperands()) {
-    if (!isa<RankedTensorType>(operand.getType()))
-      continue;
-    cost += costModel.getTransitionCost(
-                operand, getAssignedEncoding(operand, assignments),
-                operandEncoding) *
-            weight;
-  }
-  return cost;
-}
-
-uint64_t LayoutPropagation::getGlobalAssignmentCost(
-    const LayoutAssignment &assignments) const {
-  uint64_t cost = 0;
-  for (const auto &[value, info] : layouts) {
-    Attribute encoding = getAssignedEncoding(value, assignments);
-    if (encoding)
-      cost += getAssignmentCost(value, encoding, assignments);
-  }
-  return cost;
-}
-
-uint64_t LayoutPropagation::getAffectedAssignmentCost(
-    ArrayRef<Value> changedValues, const LayoutAssignment &assignments) const {
-  llvm::SmallSetVector<Value, 32> affected;
-  auto addValue = [&](Value value) {
-    if (layouts.find(value) != layouts.end())
-      affected.insert(value);
-  };
-  auto addOperation = [&](Operation *op) {
-    if (!op)
-      return;
-    for (Value operand : op->getOperands())
-      addValue(operand);
-    for (Value result : op->getResults())
-      addValue(result);
-  };
-  auto addControlFlow = [&](Operation *op, unsigned resultIndex) {
-    if (!op || resultIndex >= op->getNumResults())
-      return;
-    for (Value tied : getTiedArgs(op, resultIndex))
-      addValue(tied);
-  };
-
-  for (Value changed : changedValues) {
-    addValue(changed);
-    if (Operation *producer = changed.getDefiningOp()) {
-      addOperation(producer);
-      if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(producer))
-        addControlFlow(producer, cast<OpResult>(changed).getResultNumber());
-    } else if (auto blockArgument = dyn_cast<BlockArgument>(changed)) {
-      auto [loop, index] = getControlFlowComponent(blockArgument);
-      addControlFlow(loop, index);
-    }
-
-    for (OpOperand &use : changed.getUses()) {
-      Operation *user = use.getOwner();
-      addOperation(user);
-      auto [controlFlow, index] =
-          getControlFlowComponent(use, /*includeConditionals=*/true);
-      addControlFlow(controlFlow, index);
-    }
-  }
-
-  uint64_t cost = 0;
-  for (Value value : affected)
-    if (Attribute encoding = getAssignedEncoding(value, assignments))
-      cost += getAssignmentCost(value, encoding, assignments);
-  return cost;
-}
-
-bool LayoutPropagation::buildGlobalComponentProposal(
-    Value seed, Attribute encoding, LayoutAssignment &assignments,
-    SmallVectorImpl<LayoutValue> &changes) const {
-  constexpr unsigned maxComponentValues = 512;
-  LayoutAssignment requested;
-  SmallVector<Value, 32> worklist;
-
-  auto rollback = [&]() {
-    for (const auto &[value, original] : llvm::reverse(changes))
-      assignments[value] = original;
-    changes.clear();
-    return false;
-  };
-
-  auto request = [&](Value value, Attribute candidate) {
-    auto type = dyn_cast<RankedTensorType>(value.getType());
-    if (!type || !candidate)
-      return true;
-
-    auto found = layouts.find(value);
-    if (found == layouts.end() || !found->second.contains(candidate))
-      return true;
-
-    // A physical input or memory boundary remains fixed. Its disagreement is
-    // represented by a conversion on the component boundary.
-    if (fixedLayouts.contains(value) && candidate != type.getEncoding())
-      return true;
-
-    if (auto existing = requested.find(value); existing != requested.end())
-      return existing->second == candidate;
-    if (requested.size() >= maxComponentValues)
-      return false;
-
-    requested.try_emplace(value, candidate);
-    worklist.push_back(value);
-    return true;
-  };
-
-  auto requestLoopComponent = [&](Operation *loopOp, unsigned resultIndex,
-                                  Attribute candidate) {
-    for (Value tied : getTiedArgs(loopOp, resultIndex))
-      if (!request(tied, candidate))
-        return false;
-    if (auto whileOp = dyn_cast<scf::WhileOp>(loopOp)) {
-      auto yield =
-          cast<scf::YieldOp>(whileOp.getAfter().front().getTerminator());
-      if (!request(yield.getOperand(resultIndex), candidate))
-        return false;
-    }
-    return true;
-  };
-
-  if (!request(seed, encoding) || !requested.contains(seed))
-    return false;
-
-  while (!worklist.empty()) {
-    Value value = worklist.pop_back_val();
-    Attribute candidate = requested.lookup(value);
-    Attribute original = assignments.lookup(value);
-    if (original != candidate) {
-      changes.push_back({value, original});
-      assignments[value] = candidate;
-    }
-
-    if (Operation *producer = value.getDefiningOp()) {
-      if (auto splitOp = dyn_cast<SplitOp>(producer)) {
-        if (!request(splitOp.getOutLHS(), candidate) ||
-            !request(splitOp.getOutRHS(), candidate))
-          return rollback();
-      }
-      if (auto reduceOp = dyn_cast<ReduceOp>(producer))
-        for (Value sibling : reduceOp->getResults())
-          if (!request(sibling, candidate))
-            return rollback();
-      if (isa<scf::ForOp, scf::WhileOp>(producer)) {
-        auto result = cast<OpResult>(value);
-        if (!requestLoopComponent(producer, result.getResultNumber(),
-                                  candidate))
-          return rollback();
-      }
-      if (isLayoutTransform(producer) && !isFixedLayoutBoundary(producer)) {
-        Attribute source = isa<ConvertLayoutOp>(producer)
-                               ? candidate
-                               : getCachedEncoding<true>(producer, candidate);
-        if (source) {
-          for (Value operand : producer->getOperands())
-            if (!request(operand, source))
-              return rollback();
-        }
-      }
-    } else if (auto blockArg = dyn_cast<BlockArgument>(value)) {
-      auto [loop, index] = getControlFlowComponent(blockArg);
-      if (loop && !requestLoopComponent(loop, index, candidate))
-        return rollback();
-    }
-
-    for (OpOperand &use : value.getUses()) {
-      Operation *user = use.getOwner();
-      auto [loop, index] = getControlFlowComponent(use);
-      if (loop && !requestLoopComponent(loop, index, candidate))
-        return rollback();
-      if (loop || isa<scf::ForOp, scf::WhileOp, scf::YieldOp,
-                      scf::ConditionOp>(user))
-        continue;
-      if (!isLayoutTransform(user) || isFixedLayoutBoundary(user))
-        continue;
-
-      Attribute destination = isa<ConvertLayoutOp>(user)
-                                  ? candidate
-                                  : getCachedEncoding<false>(user, candidate);
-      if (!destination)
-        continue;
-
-      for (Value result : user->getResults())
-        if (!request(result, destination))
-          return rollback();
-    }
-  }
-
-  for (const auto &[value, candidate] : requested)
-    if (!canAssignEncoding(value, candidate, assignments))
-      return rollback();
-  return true;
-}
-
-void LayoutAssignmentSolver::solve(const LayoutConstraintGraph &graph,
-                                   const LayoutSearchPolicy &policy,
-                                   Assignment &assignments,
-                                   const Callbacks &callbacks) {
-  const bool useFullObjective = policy.fullObjective;
-  if (policy.componentSearch) {
-    constexpr unsigned maxComponentIterations = 4;
-    const unsigned maxComponentProposals = policy.maxComponentProposals;
-    const bool pruneRedundantReductionProposals =
-        policy.pruneRedundantReductionProposals;
-    for (unsigned iteration = 0; iteration < maxComponentIterations;
-         ++iteration) {
-      bool changed = false;
-      unsigned proposalCount = 0;
-      for (const LayoutConstraintGraph::Node &node : graph.getNodes()) {
-        Value value = node.value;
-        if (pruneRedundantReductionProposals &&
-            (node.fixed || node.candidates.size() <= 1))
-          continue;
-        for (Attribute candidate : node.candidates) {
-          if (pruneRedundantReductionProposals &&
-              candidate == assignments.lookup(value))
-            continue;
-          if (proposalCount++ >= maxComponentProposals)
-            break;
-          if (node.fixed &&
-              candidate !=
-                  cast<RankedTensorType>(value.getType()).getEncoding())
-            continue;
-
-          SmallVector<LayoutValue, 32> proposal;
-          if (!callbacks.proposeComponent(value, candidate, assignments,
-                                          proposal) ||
-              proposal.empty())
-            continue;
-
-          SmallVector<Value, 32> changedValues;
-          for (const auto &[changed, original] : proposal)
-            changedValues.push_back(changed);
-          uint64_t affectedProposalCost =
-              callbacks.affectedCost(changedValues, assignments);
-          for (auto &[changed, original] : proposal)
-            std::swap(assignments[changed], original);
-          uint64_t previousCost =
-              callbacks.affectedCost(changedValues, assignments);
-          if (affectedProposalCost >= previousCost)
-            continue;
-
-          for (auto &[changed, original] : proposal)
-            std::swap(assignments[changed], original);
-          changed = true;
-        }
-        if (proposalCount >= maxComponentProposals)
-          break;
-      }
-      if (!changed)
-        break;
-    }
-  }
-
-  auto improve = [&](auto &&nodes) {
-    bool changed = false;
-    for (const LayoutConstraintGraph::Node &node : nodes) {
-      Value value = node.value;
-      if (node.fixed || node.candidates.size() <= 1)
-        continue;
-
-      Attribute original = assignments.lookup(value);
-      Attribute best = original;
-      uint64_t bestCost = useFullObjective
-                              ? callbacks.affectedCost({value}, assignments)
-                              : callbacks.valueCost(value, best, assignments);
-      for (Attribute candidate : node.candidates) {
-        if (candidate == original ||
-            !callbacks.isLegal(value, candidate, assignments))
-          continue;
-        uint64_t candidateCost;
-        if (useFullObjective) {
-          assignments[value] = candidate;
-          candidateCost = callbacks.affectedCost({value}, assignments);
-          assignments[value] = original;
-        } else {
-          candidateCost = callbacks.valueCost(value, candidate, assignments);
-        }
-        if (candidateCost < bestCost) {
-          best = candidate;
-          bestCost = candidateCost;
-        }
-      }
-      if (best != assignments.lookup(value)) {
-        assignments[value] = best;
-        changed = true;
-      }
-    }
-    return changed;
-  };
-
-  constexpr unsigned maxAssignmentIterations = 8;
-  for (unsigned iteration = 0; iteration < maxAssignmentIterations;
-       ++iteration) {
-    bool changed = improve(llvm::reverse(graph.getNodes()));
-    changed |= improve(graph.getNodes());
-    if (!changed)
-      break;
-  }
-
-  // Keep convergence local to the constrained values; original encodings are
-  // verifier-proven and remain the safe incumbent for any invalid assignment.
-  for (unsigned iteration = 0; iteration < maxAssignmentIterations;
-       ++iteration) {
-    bool changed = false;
-    for (const LayoutConstraintGraph::Node &node : graph.getNodes()) {
-      Value value = node.value;
-      if (callbacks.isLegal(value, assignments.lookup(value), assignments))
-        continue;
-      assignments[value] =
-          cast<RankedTensorType>(value.getType()).getEncoding();
-      changed = true;
-    }
-    if (!changed)
-      break;
-  }
-
-  if (!policy.exactComponentSearch)
-    return;
-
-  // Coordinate descent cannot change jointly constrained encodings when every
-  // intermediate assignment is illegal. Search the bounded components exactly.
-  for (const SmallVector<unsigned, 8> &component :
-       graph.getConnectedComponents()) {
-    if (component.size() < 2)
-      continue;
-    unsigned states = 1;
-    for (unsigned index : component)
-      if ((states *= graph.getNodes()[index].candidates.size()) >
-          policy.maxExactComponentStates)
-        break;
-    if (states > policy.maxExactComponentStates)
-      continue;
-
-    uint64_t bestCost = callbacks.fullCost(assignments);
-    SmallVector<Attribute, 8> bestAssignments;
-    for (unsigned index : component)
-      bestAssignments.push_back(
-          assignments.lookup(graph.getNodes()[index].value));
-
-    auto search = [&](auto &&self, unsigned position) -> void {
-      if (position == component.size()) {
-        for (const LayoutConstraintGraph::Node &node : graph.getNodes())
-          if (!callbacks.isLegal(node.value, assignments.lookup(node.value),
-                                 assignments))
-            return;
-        uint64_t candidateCost = callbacks.fullCost(assignments);
-        if (candidateCost >= bestCost)
-          return;
-        bestCost = candidateCost;
-        for (auto [index, value] : llvm::enumerate(component))
-          bestAssignments[index] =
-              assignments.lookup(graph.getNodes()[value].value);
-        return;
-      }
-
-      const LayoutConstraintGraph::Node &node =
-          graph.getNodes()[component[position]];
-      Attribute original = assignments.lookup(node.value);
-      for (Attribute candidate : node.candidates) {
-        assignments[node.value] = candidate;
-        self(self, position + 1);
-      }
-      assignments[node.value] = original;
-    };
-    search(search, 0);
-    for (auto [index, value] : llvm::enumerate(component))
-      assignments[graph.getNodes()[value].value] = bestAssignments[index];
-  }
-}
-
-void LayoutPropagation::resolveGlobalConflicts() {
-  LayoutAssignment assignments;
-  bool hasFlexibleLayouts = false;
-  for (auto &[value, info] : layouts) {
-    Attribute original = cast<RankedTensorType>(value.getType()).getEncoding();
-    info.insert(original);
-    assignments.try_emplace(value, original);
-    hasFlexibleLayouts |=
-        !fixedLayouts.contains(value) && info.size() > 1;
-  }
-
-  if (hasFlexibleLayouts) {
-    LayoutConstraintGraph graph;
-    for (const auto &[value, info] : layouts)
-      graph.addNode(value, info.getArrayRef(), fixedLayouts.contains(value));
-    funcOp.walk([&](Operation *op) { graph.addOperation(op); });
-    LayoutSearchPolicy policy(graph);
-    LDBG("resolving " << layouts.size() << " layout values with "
-                      << (policy.fullObjective ? "the full" : "the bounded")
-                      << " global objective");
-
-    LayoutAssignmentSolver::solve(
-        graph, policy, assignments,
-        {[&](Value value, Attribute encoding, const auto &current) {
-           return canAssignEncoding(value, encoding, current);
-         },
-         [&](Value value, Attribute encoding, const auto &current) {
-           return getAssignmentCost(value, encoding, current);
-         },
-         [&](const auto &current) { return getGlobalAssignmentCost(current); },
-         [&](ArrayRef<Value> changed, const auto &current) {
-           return getAffectedAssignmentCost(changed, current);
-         },
-         [&](Value value, Attribute encoding, auto &current,
-             SmallVectorImpl<LayoutValue> &changes) {
-           return buildGlobalComponentProposal(value, encoding, current,
-                                               changes);
-         }});
-  }
-
-  for (auto &[value, info] : layouts) {
-    Attribute encoding = assignments.lookup(value);
-    info.clear();
-    info.insert(encoding);
+    info.encodings.clear();
+    info.encodings.insert(encoding);
   }
 }
 
@@ -1813,7 +408,7 @@ void LayoutPropagation::dump() {
     flags.skipRegions();
     it.first.print(llvm::errs(), flags);
     llvm::errs() << " \n encoding:\n";
-    for (auto encoding : it.second) {
+    for (auto encoding : it.second.encodings) {
       encoding.print(llvm::errs());
       llvm::errs() << "\n";
     }
@@ -1822,6 +417,12 @@ void LayoutPropagation::dump() {
 }
 
 void LayoutPropagation::rewrite() { rewriteRegion(funcOp->getRegion(0)); }
+
+bool reduceToScalar(Operation *op) {
+  // For reductions returning a scalar we can change the src encoding without
+  // affecting the output.
+  return isa<ReduceOp>(op) && !isa<RankedTensorType>(op->getResultTypes()[0]);
+}
 
 void LayoutPropagation::rewriteRegion(Region &region) {
   std::deque<Region *> queue = {&region};
@@ -1837,11 +438,11 @@ void LayoutPropagation::rewriteRegion(Region &region) {
         if (it == layouts.end())
           continue;
         LayoutInfo &info = it->second;
-        assert(info.size() == 1 &&
+        assert(info.encodings.size() == 1 &&
                "we should have resolved to a single encoding");
         auto encoding = cast<RankedTensorType>(result.getType()).getEncoding();
         // If the encoding is already what we want skip.
-        if (encoding == *info.begin())
+        if (encoding == *info.encodings.begin())
           continue;
         needRewrite = true;
       }
@@ -1914,7 +515,7 @@ void LayoutPropagation::rewriteGenericOpInPlace(Operation *op,
       auto it = layouts.find(operand);
       if (it == layouts.end())
         continue;
-      Attribute enc = it->second[0];
+      Attribute enc = it->second.encodings[0];
       if (inferDstEncoding(op, enc) == encoding) {
         operandEnc = enc;
         break;
@@ -1946,7 +547,7 @@ void LayoutPropagation::rewriteForOp(scf::ForOp forOp) {
     auto it = layouts.find(result);
     if (it == layouts.end())
       continue;
-    Attribute encoding = it->second[0];
+    Attribute encoding = it->second.encodings[0];
     Value convertedOperand = getValueAs(operand, encoding);
     forOp.getInitArgsMutable()[i].assign(convertedOperand);
     setEncodingInPlace(result, encoding);
@@ -1960,7 +561,7 @@ void LayoutPropagation::rewriteWhileOp(scf::WhileOp whileOp) {
     auto it = layouts.find(beforeArg);
     if (it == layouts.end())
       continue;
-    Attribute encoding = it->second[0];
+    Attribute encoding = it->second.encodings[0];
     Value convertedOperand = getValueAs(operand, encoding);
     whileOp->setOperand(i, convertedOperand);
     setEncodingInPlace(beforeArg, encoding);
@@ -1971,7 +572,7 @@ void LayoutPropagation::rewriteWhileOp(scf::WhileOp whileOp) {
     auto it = layouts.find(result);
     if (it == layouts.end())
       continue;
-    Attribute encoding = it->second[0];
+    Attribute encoding = it->second.encodings[0];
     setEncodingInPlace(result, encoding);
     setEncodingInPlace(afterArg, encoding);
   }
@@ -1982,7 +583,7 @@ void LayoutPropagation::rewriteIfOp(scf::IfOp ifOp) {
     auto it = layouts.find(ifOp.getResult(i));
     if (it == layouts.end())
       continue;
-    Attribute encoding = *(it->second.begin());
+    Attribute encoding = *(it->second.encodings.begin());
     setEncodingInPlace(ifOp.getResult(i), encoding);
   }
 }
@@ -2025,7 +626,7 @@ void LayoutPropagation::rewriteReduceToScalar(Operation *reduceOp) {
   for (Value operand : reduceOp->getOperands()) {
     auto it = layouts.find(operand);
     if (it != layouts.end()) {
-      srcEncoding = it->second[0];
+      srcEncoding = it->second.encodings[0];
       break;
     }
   }
@@ -2044,7 +645,7 @@ void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
   auto it = layouts.find(operand);
   if (it == layouts.end())
     return;
-  srcEncoding = it->second[0];
+  srcEncoding = it->second.encodings[0];
   Value newOperand = getValueAs(operand, srcEncoding);
   assertOp->setOperand(0, newOperand);
 }
@@ -2057,14 +658,9 @@ void LayoutPropagation::rewriteOp(Operation *op) {
   else if (auto ifOp = dyn_cast<scf::IfOp>(op))
     rewriteIfOp(ifOp);
   else {
-    Attribute encoding = *layouts[op->getResult(0)].begin();
+    Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
     if (canUseResultEncoding(op, encoding)) {
       setEncodingInPlace(op->getResult(0), encoding);
-      if (auto constant = dyn_cast<arith::ConstantOp>(op)) {
-        auto elements = cast<DenseElementsAttr>(constant.getValue());
-        auto resultType = cast<RankedTensorType>(constant.getType());
-        constant.setValueAttr(elements.reshape(resultType));
-      }
     } else if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
                op->hasTrait<OpTrait::Elementwise>() ||
                isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
@@ -2470,8 +1066,7 @@ static unsigned getCostFactor(Value result, Attribute rematEncoding) {
 /// newCvtCost.
 bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
                        const DenseMap<Value, Attribute> &layout,
-                       int64_t newCvtCost, bool disableRematSplitting,
-                       bool preserveSharedReductionRematerialization = false) {
+                       int64_t newCvtCost, bool disableRematSplitting) {
   // Identify all operations in the slice
   SetVector<Operation *> sliceOps;
   for (Value v : slice) {
@@ -2555,13 +1150,6 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
       return nonSliceOnlyValues.contains(v);
     });
 
-    if (preserveSharedReductionRematerialization &&
-        isOpUsedOutsideSlice && isa<ReduceOp>(op)) {
-      LDBG("  skipped rematerialization because it would duplicate a shared "
-           "reduction");
-      return false;
-    }
-
     if (isa<arith::ConstantOp>(op)) {
       // special-case: arith.constant has zero cost
       continue;
@@ -2644,8 +1232,7 @@ bool LayoutRematerialization::backwardRematerialization(
 
   // 2. Determine whether rematerialisation is beneficial.
   if (!isRematBeneficial(convertOp, slice, layout, /*newCvtCost=*/0,
-                         disableRematSplitting,
-                         preserveSharedReductionRematerialization)) {
+                         disableRematSplitting)) {
     LDBG("  skipped rematerialization because it is not beneficial");
     return false;
   }
@@ -2993,12 +1580,10 @@ bool LayoutRematerialization::hoistConvertIntoConditionals(
   return true;
 }
 
-bool backwardRematerialization(ModuleOp module, bool disableRematSplitting,
-                               bool preserveSharedReductionRematerialization) {
+bool backwardRematerialization(ModuleOp module, bool disableRematSplitting) {
   bool changed = false;
   module.walk([&](FuncOp funcOp) {
-    LayoutRematerialization layoutRemat(funcOp,
-                                        preserveSharedReductionRematerialization);
+    LayoutRematerialization layoutRemat(funcOp);
     changed |= layoutRemat.backwardRematerialization(disableRematSplitting);
   });
   return changed;
@@ -3016,679 +1601,7 @@ void hoistConvert(ModuleOp module, bool disableRematSplitting) {
     LayoutRematerialization(funcOp).hoistConvertDotOperand();
   });
 }
-
-LogicalResult cleanupLayoutConversions(Operation *operation) {
-  MLIRContext *context = operation->getContext();
-  RewritePatternSet patterns(context);
-  ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
-  if (failed(applyPatternsGreedily(operation, std::move(patterns))))
-    return failure();
-
-  LLVM_DEBUG({
-    DBGS() << "Module after canonicalizing:\n";
-    operation->dump();
-  });
-  return success();
-}
-
-static bool hasExternalExpressionUsers(Operation *op,
-                                       SetVector<Operation *> &operations,
-                                       Operation *root, Value rootValue = {}) {
-  return llvm::any_of(op->getUsers(), [&](Operation *user) {
-    return user == root ? rootValue && op->getResult(0) != rootValue
-                        : !operations.contains(user);
-  });
-}
-
-/// Plan an entire pure tensor expression before changing the IR. A conversion
-/// can be removed only when its complete producer graph can be regenerated in
-/// the required layout, every tensor leaf is layout-independent, and none of
-/// the original expression needs to remain alive for another user.
-class ScalarRootedLayoutPlan {
-public:
-  explicit ScalarRootedLayoutPlan(ConvertLayoutOp root) : root(root) {}
-
-  LogicalResult analyze() {
-    if (failed(plan(root.getSrc(), root.getType().getEncoding())))
-      return failure();
-
-    unsigned originalMaterializations = 0;
-    for (Operation *op : originalOperations) {
-      if (!isa<ConvertLayoutOp>(op))
-        ++originalMaterializations;
-
-      if (hasExternalExpressionUsers(op, originalOperations,
-                                     root.getOperation()))
-        return failure();
-    }
-
-    unsigned newMaterializations = 0;
-    for (const auto &entry : plannedValues)
-      newMaterializations +=
-          !isa<ConvertLayoutOp>(entry.first.first.getDefiningOp());
-
-    // Do not turn layout optimization into expression duplication. This also
-    // keeps graph-shaped joins from growing exponentially.
-    if (newMaterializations > originalMaterializations)
-      return failure();
-
-    return success();
-  }
-
-  void rewrite() {
-    OpBuilder builder(root);
-    Value replacement =
-        materialize(root.getSrc(), root.getType().getEncoding(), builder);
-    assert(replacement && "a validated layout plan must materialize");
-
-    root.getResult().replaceAllUsesWith(replacement);
-    root.erase();
-
-    for (Operation *op : originalOperations) {
-      if (isOpTriviallyDead(op))
-        op->erase();
-    }
-  }
-
-private:
-  static constexpr unsigned maxPlannedValues = 512;
-
-  LogicalResult plan(Value value, Attribute encoding) {
-    auto type = dyn_cast<RankedTensorType>(value.getType());
-    if (!type || !encoding)
-      return failure();
-
-    LayoutValue key{value, encoding};
-    if (plannedValues.contains(key))
-      return success();
-    if (plannedValues.size() >= maxPlannedValues)
-      return failure();
-
-    Operation *op = value.getDefiningOp();
-    if (!op || op->getBlock() != root->getBlock() || op->getNumResults() != 1 ||
-        !isMemoryEffectFree(op))
-      return failure();
-
-    originalOperations.insert(op);
-
-    Attribute operandEncoding;
-    if (isa<ConvertLayoutOp>(op)) {
-      operandEncoding = encoding;
-    } else if (isa<triton::SplatOp, triton::MakeRangeOp>(op)) {
-      // Their tensor contents are defined by scalar operands or logical
-      // indices, so their distributed result layout can be chosen directly.
-    } else if (auto constant = dyn_cast<arith::ConstantOp>(op)) {
-      if (!isa<DenseElementsAttr>(constant.getValue()))
-        return failure();
-    } else {
-      if ((!isLayoutTransform(op) && !isa<triton::BroadcastOp>(op)) ||
-          isa<ReduceOp, SplitOp>(op))
-        return failure();
-
-      operandEncoding = inferSrcEncoding(op, encoding);
-      if (!operandEncoding)
-        return failure();
-    }
-
-    for (Value operand : op->getOperands()) {
-      if (!isa<RankedTensorType>(operand.getType()))
-        continue;
-      if (!operandEncoding || failed(plan(operand, operandEncoding)))
-        return failure();
-    }
-
-    plannedValues.try_emplace(key, operandEncoding, Value{});
-    return success();
-  }
-
-  Value materialize(Value value, Attribute encoding, OpBuilder &builder) {
-    LayoutValue key{value, encoding};
-    auto &[operandEncoding, materialized] = plannedValues.find(key)->second;
-    if (materialized)
-      return materialized;
-
-    Operation *operation = value.getDefiningOp();
-    Value result;
-    if (auto convert = dyn_cast<ConvertLayoutOp>(operation)) {
-      result = materialize(convert.getSrc(), encoding, builder);
-    } else {
-      auto newType =
-          cast<RankedTensorType>(value.getType()).cloneWithEncoding(encoding);
-      if (auto constant = dyn_cast<arith::ConstantOp>(operation)) {
-        auto elements = cast<DenseElementsAttr>(constant.getValue());
-        result = arith::ConstantOp::create(
-            builder, constant.getLoc(), newType, elements.reshape(newType));
-      } else {
-        IRMapping mapping;
-        for (Value operand : operation->getOperands())
-          if (isa<RankedTensorType>(operand.getType()))
-            mapping.map(operand,
-                        materialize(operand, operandEncoding, builder));
-        Operation *replacement = builder.clone(*operation, mapping);
-        replacement->getResult(0).setType(newType);
-        result = replacement->getResult(0);
-      }
-    }
-    return materialized = result;
-  }
-
-  ConvertLayoutOp root;
-  DenseMap<LayoutValue, std::pair<Attribute, Value>> plannedValues;
-  SetVector<Operation *> originalOperations;
-};
-
-/// Exact-order joins interleave their operands. Their result layout therefore
-/// cannot always be inferred backward: the join dimension may be distributed
-/// over lanes. For a graph rooted in scalar splats, constants, and logical
-/// ranges, evaluate the join choices from the bits of each logical result
-/// index instead. Exact-order reshapes preserve that flat logical index, so
-/// the expression can be emitted directly in its required result layout. A
-/// range in a join operand observes the remaining high index bits after the
-/// join choices along its path have been removed.
-class ScalarJoinExpressionPlan {
-public:
-  explicit ScalarJoinExpressionPlan(ConvertLayoutOp root)
-      : insertionPoint(root.getOperation()), rootValue(root.getSrc()),
-        target(root.getType()) {}
-
-  explicit ScalarJoinExpressionPlan(triton::StoreOp root)
-      : insertionPoint(root.getOperation()), rootValue(root.getValue()),
-        target(dyn_cast<RankedTensorType>(root.getValue().getType())) {}
-
-  LogicalResult analyze() {
-    if (!target || !target.getEncoding() || !target.hasStaticShape())
-      return failure();
-    int64_t size = target.getNumElements();
-    if (size <= 0 || size > std::numeric_limits<int32_t>::max() ||
-        !llvm::isPowerOf2_64(static_cast<uint64_t>(size)))
-      return failure();
-
-    auto *interface =
-        target.getEncoding()
-            .getDialect()
-            .getRegisteredInterface<triton::DialectInferLayoutInterface>();
-    if (!interface ||
-        failed(interface->inferReshapeOpEncoding(
-            target.getShape(), target.getEncoding(), ArrayRef<int64_t>{size},
-            flatEncoding, /*allowReorder=*/false, insertionPoint->getLoc())))
-      return failure();
-
-    if (isa<triton::StoreOp>(insertionPoint) && !rootValue.hasOneUse())
-      return failure();
-
-    if (failed(plan(rootValue, 0)))
-      return failure();
-
-    unsigned conversions = 0;
-    unsigned joins = 0;
-    unsigned originalArithmetic = 0;
-    bool hasCommunication = false;
-
-    auto classifyConversion = [&](ConvertLayoutOp convert) {
-      ++conversions;
-      hasCommunication |=
-          !cvtReordersRegisters(convert.getSrc().getType(), convert.getType());
-    };
-
-    if (auto conversion = dyn_cast<ConvertLayoutOp>(insertionPoint))
-      classifyConversion(conversion);
-
-    for (Operation *op : originalOperations) {
-      if (auto convert = dyn_cast<ConvertLayoutOp>(op))
-        classifyConversion(convert);
-      joins += isa<triton::JoinOp>(op);
-      originalArithmetic += !isStructuralOrLeaf(op);
-
-      // In production stochastic-rounding kernels these inexpensive leaves
-      // can live in an enclosing loop or function block and have other users.
-      // Recreating a splat, constant, or logical range does not duplicate the
-      // random-number arithmetic or require ownership of the original leaf.
-      if (!isRematerializableLeaf(op) &&
-          hasExternalExpressionUsers(op, originalOperations, insertionPoint,
-                                     rootValue))
-        return failure();
-    }
-
-    // Index evaluation introduces integer instructions and live values. Do
-    // not replace a single conversion, or a chain consisting entirely of
-    // thread-local register permutations, with that extra arithmetic.
-    if (joins == 0 || conversions < 2 || !hasCommunication)
-      return failure();
-
-    unsigned plannedArithmetic = 0;
-    for (const auto &planned : plannedValues)
-      plannedArithmetic +=
-          !isStructuralOrLeaf(planned.first.first.getDefiningOp());
-
-    // A shared random-number producer can feed multiple joins. Keep the
-    // incumbent if direct evaluation would duplicate that arithmetic at
-    // different join depths.
-    if (plannedArithmetic > originalArithmetic)
-      return failure();
-
-    return success();
-  }
-
-  void rewrite() {
-    OpBuilder builder(insertionPoint);
-    Location loc = insertionPoint->getLoc();
-    auto rangeType = RankedTensorType::get({target.getNumElements()},
-                                           builder.getI32Type(), flatEncoding);
-    Value range = triton::MakeRangeOp::create(
-        builder, loc, rangeType, 0,
-        static_cast<int32_t>(target.getNumElements()));
-    auto indexType = RankedTensorType::get(
-        target.getShape(), builder.getI32Type(), target.getEncoding());
-    indices = triton::ReshapeOp::create(builder, loc, indexType, range);
-
-    Value replacement = materialize(rootValue, 0, builder);
-    assert(replacement && "a validated join expression must materialize");
-
-    LLVM_DEBUG(llvm::dbgs()
-               << "[" DEBUG_TYPE "] evaluating " << originalOperations.size()
-               << " scalar-rooted operations from exact logical index bits\n");
-
-    if (auto conversion = dyn_cast<ConvertLayoutOp>(insertionPoint)) {
-      conversion.getResult().replaceAllUsesWith(replacement);
-      conversion.erase();
-    } else {
-      cast<triton::StoreOp>(insertionPoint).getValueMutable().assign(
-          replacement);
-    }
-    for (Operation *op : originalOperations) {
-      if (isOpTriviallyDead(op))
-        op->erase();
-    }
-  }
-
-private:
-  using IndexedValue = std::pair<Value, unsigned>;
-  static constexpr unsigned maxPlannedValues = 512;
-  static constexpr unsigned maxJoinDepth = 30;
-
-  static bool isRematerializableLeaf(Operation *op) {
-    return isa<triton::SplatOp, triton::MakeRangeOp, arith::ConstantOp>(op);
-  }
-
-  static bool isStructuralOrLeaf(Operation *op) {
-    return isRematerializableLeaf(op) ||
-           isa<ConvertLayoutOp, triton::ReshapeOp, triton::JoinOp>(op);
-  }
-
-  LogicalResult plan(Value value, unsigned depth) {
-    auto type = dyn_cast<RankedTensorType>(value.getType());
-    if (!type || !type.hasStaticShape() || depth > maxJoinDepth ||
-        (target.getNumElements() >> depth) != type.getNumElements())
-      return failure();
-
-    IndexedValue key{value, depth};
-    if (plannedValues.contains(key))
-      return success();
-    if (plannedValues.size() >= maxPlannedValues)
-      return failure();
-
-    Operation *op = value.getDefiningOp();
-    if (!op || op->getNumResults() != 1 || !isMemoryEffectFree(op) ||
-        (op->getBlock() != insertionPoint->getBlock() &&
-         !isRematerializableLeaf(op)))
-      return failure();
-
-    originalOperations.insert(op);
-
-    if (isa<ConvertLayoutOp, triton::ReshapeOp>(op)) {
-      auto reshape = dyn_cast<triton::ReshapeOp>(op);
-      if ((reshape && reshape.getAllowReorder()) ||
-          failed(plan(op->getOperand(0), depth)))
-        return failure();
-    } else if (auto join = dyn_cast<triton::JoinOp>(op)) {
-      RankedTensorType resultType = join.getType();
-      if (resultType.getShape().empty() || resultType.getShape().back() != 2 ||
-          failed(plan(join.getLhs(), depth + 1)) ||
-          failed(plan(join.getRhs(), depth + 1)))
-        return failure();
-    } else if (auto splat = dyn_cast<triton::SplatOp>(op)) {
-      if (isa<RankedTensorType>(splat.getSrc().getType()))
-        return failure();
-    } else if (auto range = dyn_cast<triton::MakeRangeOp>(op)) {
-      if (!range.getType().getElementType().isInteger(32))
-        return failure();
-    } else if (auto constant = dyn_cast<arith::ConstantOp>(op)) {
-      auto elements = dyn_cast<DenseElementsAttr>(constant.getValue());
-      if (!elements || !elements.isSplat())
-        return failure();
-    } else {
-      if (!op->hasTrait<OpTrait::Elementwise>())
-        return failure();
-      for (Value operand : op->getOperands()) {
-        auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
-        if (!tensorType)
-          continue;
-        if (tensorType.getShape() !=
-                cast<RankedTensorType>(value.getType()).getShape() ||
-            failed(plan(operand, depth)))
-          return failure();
-      }
-    }
-
-    plannedValues.try_emplace(key, Value{});
-    return success();
-  }
-
-  Value createIndexConstant(OpBuilder &builder, Location loc, int32_t value) {
-    auto type = cast<RankedTensorType>(indices.getType());
-    return arith::ConstantOp::create(
-        builder, loc, type,
-        DenseElementsAttr::get(type, builder.getI32IntegerAttr(value)));
-  }
-
-  Value getJoinCondition(unsigned depth, OpBuilder &builder, Location loc) {
-    if (auto it = joinConditions.find(depth); it != joinConditions.end())
-      return it->second;
-
-    Value mask = createIndexConstant(builder, loc, int32_t{1} << depth);
-    Value zero = createIndexConstant(builder, loc, 0);
-    Value masked = arith::AndIOp::create(builder, loc, indices, mask);
-    Value condition = arith::CmpIOp::create(
-        builder, loc, arith::CmpIPredicate::ne, masked, zero);
-    joinConditions.try_emplace(depth, condition);
-    return condition;
-  }
-
-  Value materialize(Value value, unsigned depth, OpBuilder &builder) {
-    IndexedValue key{value, depth};
-    Value &materialized = plannedValues.find(key)->second;
-    if (materialized)
-      return materialized;
-
-    Operation *op = value.getDefiningOp();
-    Value result;
-    if (isa<ConvertLayoutOp, triton::ReshapeOp>(op)) {
-      result = materialize(op->getOperand(0), depth, builder);
-    } else if (auto join = dyn_cast<triton::JoinOp>(op)) {
-      Value lhs = materialize(join.getLhs(), depth + 1, builder);
-      Value rhs = materialize(join.getRhs(), depth + 1, builder);
-      Value condition = getJoinCondition(depth, builder, join.getLoc());
-      result =
-          arith::SelectOp::create(builder, join.getLoc(), condition, rhs, lhs);
-    } else if (auto range = dyn_cast<triton::MakeRangeOp>(op)) {
-      result = indices;
-      if (depth != 0) {
-        Value shift = createIndexConstant(builder, range.getLoc(), depth);
-        result = arith::ShRUIOp::create(builder, range.getLoc(), result, shift);
-      }
-
-      int64_t start = range.getStartAttr().getInt();
-      if (start != 0) {
-        Value offset = createIndexConstant(builder, range.getLoc(), start);
-        result = arith::AddIOp::create(builder, range.getLoc(), result, offset);
-      }
-    } else {
-      RankedTensorType oldType = cast<RankedTensorType>(value.getType());
-      auto newType = RankedTensorType::get(
-          target.getShape(), oldType.getElementType(), target.getEncoding());
-
-      if (auto splat = dyn_cast<triton::SplatOp>(op)) {
-        result = triton::SplatOp::create(builder, splat.getLoc(), newType,
-                                         splat.getSrc());
-      } else if (auto constant = dyn_cast<arith::ConstantOp>(op)) {
-        auto oldElements = cast<DenseElementsAttr>(constant.getValue());
-        auto newElements = DenseElementsAttr::get(
-            newType, oldElements.getSplatValue<Attribute>());
-        result = arith::ConstantOp::create(builder, constant.getLoc(), newType,
-                                           newElements);
-      } else {
-        IRMapping mapping;
-        for (Value operand : op->getOperands()) {
-          if (isa<RankedTensorType>(operand.getType()))
-            mapping.map(operand, materialize(operand, depth, builder));
-        }
-        Operation *replacement = builder.clone(*op, mapping);
-        replacement->getResult(0).setType(newType);
-        result = replacement->getResult(0);
-      }
-    }
-
-    return materialized = result;
-  }
-
-  Operation *insertionPoint;
-  Value rootValue;
-  RankedTensorType target;
-  Attribute flatEncoding;
-  Value indices;
-  DenseMap<IndexedValue, Value> plannedValues;
-  DenseMap<unsigned, Value> joinConditions;
-  SetVector<Operation *> originalOperations;
-};
-
-/// A layout conversion is pure. One materialization can therefore serve every
-/// dominated request for the same source value and destination encoding.
-static void shareDominatingConversions(ModuleOp module) {
-  DominanceInfo dominance(module);
-  DenseMap<LayoutValue, SmallVector<ConvertLayoutOp>> available;
-  SmallVector<ConvertLayoutOp> conversions;
-  module.walk([&](ConvertLayoutOp convert) { conversions.push_back(convert); });
-
-  for (ConvertLayoutOp convert : conversions) {
-    LayoutValue key{convert.getSrc(), convert.getType().getEncoding()};
-    auto &candidates = available[key];
-    auto candidate = llvm::find_if(candidates, [&](ConvertLayoutOp existing) {
-      return dominance.properlyDominates(existing.getResult(),
-                                        convert.getOperation());
-    });
-    if (candidate == candidates.end()) {
-      candidates.push_back(convert);
-      continue;
-    }
-    convert.getResult().replaceAllUsesWith(candidate->getResult());
-    convert.erase();
-  }
-}
-
-/// Rebuild the root worklist after each rewrite because a successful whole-
-/// expression plan can erase other roots and their producers.
-template <typename Root, typename Rewrite>
-static void optimizeRootedConversions(ModuleOp module, Rewrite rewrite) {
-  bool changed;
-  do {
-    changed = false;
-    SmallVector<Root> roots;
-    module.walk([&](Root root) { roots.push_back(root); });
-    for (Root root : llvm::reverse(roots))
-      if ((changed = rewrite(root)))
-        break;
-  } while (changed);
-}
-
 } // namespace
-
-LogicalResult optimizeDistributedLayouts(ModuleOp module,
-                                         bool disableRematSplitting,
-                                         LayoutAssignmentStrategy strategy) {
-  MLIRContext *context = module.getContext();
-
-  // Propagate fixed anchor layouts across complete functions and structured
-  // control flow before resolving competing assignments.
-  WalkResult propagationResult = module.walk([&](FuncOp funcOp) -> WalkResult {
-    bool global = strategy == LayoutAssignmentStrategy::Global;
-    LayoutMemoryProfile memory =
-        global ? getLayoutMemoryProfile(funcOp) : LayoutMemoryProfile{};
-    bool hasProtectedStore =
-        !memory.protectedLoops.empty() && memory.hardwareStore;
-    bool hasPackedMemoryAssembly = memory.hasPackedAssemblyProtocol();
-
-    if (global &&
-        (!memory.protectedLoops.empty() || memory.packedAssembly ||
-         memory.protectedReduction || memory.permutingReshape ||
-         memory.descriptorLoad || hasPackedMemoryAssembly ||
-         memory.hasPairwiseReductionProtocol())) {
-      // Establish the incumbent layout for protected hardware, packed
-      // register and memory assembly, reduction protocols, descriptor loads,
-      // and permuting views before optimizing the remaining components.
-      LayoutPropagation legacyPropagation(funcOp,
-                                          LayoutAssignmentStrategy::Legacy);
-      legacyPropagation.initAnchorLayout();
-      legacyPropagation.propagateLayout();
-      legacyPropagation.resolveConflicts();
-      legacyPropagation.rewrite();
-
-      if (hasProtectedStore || hasPackedMemoryAssembly ||
-          memory.permutingReshape) {
-        // Expose the incumbent's rematerializable memory addresses and
-        // explicitly permuting reshapes before fixing their boundaries.
-        if (failed(cleanupLayoutConversions(funcOp)))
-          return WalkResult::interrupt();
-      }
-
-      if (hasProtectedStore || hasPackedMemoryAssembly) {
-        bool changed;
-        do {
-          // Establish the complete incumbent before fixing hardware-store and
-          // packed-memory addresses. The standard rematerialization traversal
-          // also keeps its conversion-reuse and IR-mapping invariants.
-          {
-            LayoutRematerialization rematerialization(funcOp);
-            changed = rematerialization.backwardRematerialization(
-                disableRematSplitting);
-          }
-          if (changed) {
-            if (failed(cleanupLayoutConversions(funcOp)))
-              return WalkResult::interrupt();
-          }
-        } while (changed);
-      }
-      memory = getLayoutMemoryProfile(funcOp);
-    }
-
-    LayoutPropagation propagation(funcOp, strategy, global ? &memory : nullptr);
-    propagation.initAnchorLayout();
-    propagation.propagateLayout();
-    propagation.resolveConflicts();
-    propagation.rewrite();
-
-    return WalkResult::advance();
-  });
-  if (propagationResult.wasInterrupted())
-    return failure();
-
-  LLVM_DEBUG({
-    DBGS() << "Module after propagating layouts forward:\n";
-    module.dump();
-  });
-
-  if (failed(cleanupLayoutConversions(module)))
-    return failure();
-
-  bool changed;
-  do {
-    changed = backwardRematerialization(
-        module, disableRematSplitting,
-        strategy == LayoutAssignmentStrategy::Global);
-    LLVM_DEBUG({
-      DBGS() << "Module after backward remat:\n";
-      module.dump();
-    });
-
-    if (failed(cleanupLayoutConversions(module)))
-      return failure();
-  } while (changed);
-
-  hoistConvert(module, disableRematSplitting);
-  LLVM_DEBUG({
-    DBGS() << "Module after hoisting converts:\n";
-    module.dump();
-  });
-
-  runDeadIterArgElimination(module);
-
-  if (failed(cleanupLayoutConversions(module)))
-    return failure();
-
-  // Structured-control-flow canonicalization is best effort.
-  RewritePatternSet scfCleanup(context);
-  scf::ForOp::getCanonicalizationPatterns(scfCleanup, context);
-  scf::IfOp::getCanonicalizationPatterns(scfCleanup, context);
-  if (failed(applyPatternsGreedily(module, std::move(scfCleanup))))
-    LLVM_DEBUG(DBGS() << "scf cleanup did not converge\n");
-
-  if (strategy == LayoutAssignmentStrategy::Global) {
-    SmallVector<Block *> blocks;
-    module.walk([&](Block *block) { blocks.push_back(block); });
-    for (Block *block : blocks) {
-      SmallVector<std::pair<std::string, arith::ConstantOp>, 16> constants;
-      for (Operation &op : *block) {
-        auto constant = dyn_cast<arith::ConstantOp>(op);
-        if (!constant)
-          continue;
-        std::string key;
-        llvm::raw_string_ostream stream(key);
-        constant.getType().print(stream);
-        stream << '\n';
-        constant.getValue().print(stream);
-        constants.emplace_back(stream.str(), constant);
-      }
-      llvm::stable_sort(constants, [](const auto &lhs, const auto &rhs) {
-        return lhs.first < rhs.first;
-      });
-      for (auto &entry : llvm::reverse(constants)) {
-        Operation *constant = entry.second.getOperation();
-        if (constant != &block->front())
-          constant->moveBefore(&block->front());
-      }
-    }
-  }
-
-  LLVM_DEBUG({
-    DBGS() << "Module after final cleanups:\n";
-    module.dump();
-  });
-
-  return success();
-}
-
-class TritonGPUOptimizeLayoutsPass
-    : public impl::TritonGPUOptimizeLayoutsBase<TritonGPUOptimizeLayoutsPass> {
-public:
-  using impl::TritonGPUOptimizeLayoutsBase<
-      TritonGPUOptimizeLayoutsPass>::TritonGPUOptimizeLayoutsBase;
-
-  void runOnOperation() override {
-    ModuleOp module = getOperation();
-
-    for (unsigned iteration = 0; iteration < 2; ++iteration) {
-      unsigned originalConversions = 0;
-      module.walk([&](ConvertLayoutOp) { ++originalConversions; });
-
-      if (failed(optimizeDistributedLayouts(module, disableRematSplitting,
-                                            LayoutAssignmentStrategy::Global)))
-        return signalPassFailure();
-
-      shareDominatingConversions(module);
-      auto rewritePlan = [](auto &&plan) {
-        if (failed(plan.analyze()))
-          return false;
-        plan.rewrite();
-        return true;
-      };
-      optimizeRootedConversions<triton::StoreOp>(module, [&](auto store) {
-        return rewritePlan(ScalarJoinExpressionPlan(store));
-      });
-      optimizeRootedConversions<ConvertLayoutOp>(module, [&](auto convert) {
-        return rewritePlan(ScalarRootedLayoutPlan(convert)) ||
-               rewritePlan(ScalarJoinExpressionPlan(convert));
-      });
-
-      if (failed(cleanupLayoutConversions(module)))
-        return signalPassFailure();
-
-      unsigned remainingConversions = 0;
-      module.walk([&](ConvertLayoutOp) { ++remainingConversions; });
-      if (remainingConversions == 0 ||
-          remainingConversions >= originalConversions)
-        break;
-    }
-  }
-};
 
 class TritonGPURemoveLayoutConversionsPass
     : public impl::TritonGPURemoveLayoutConversionsBase<
@@ -3698,10 +1611,89 @@ public:
       TritonGPURemoveLayoutConversionsPass>::
       TritonGPURemoveLayoutConversionsBase;
 
-  void runOnOperation() override {
-    if (failed(optimizeDistributedLayouts(getOperation(), disableRematSplitting,
-                                          LayoutAssignmentStrategy::Legacy)))
+  // Cleanup convert ops.
+  void cleanupConvertOps() {
+    MLIRContext *context = &getContext();
+    ModuleOp m = getOperation();
+    RewritePatternSet cleanUpPatterns(context);
+    ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns, context);
+    if (applyPatternsGreedily(m, std::move(cleanUpPatterns)).failed()) {
       signalPassFailure();
+    }
+
+    LLVM_DEBUG({
+      DBGS() << "Module after canonicalizing:\n";
+      m.dump();
+    });
+  }
+
+  void runOnOperation() override {
+    MLIRContext *context = &getContext();
+    ModuleOp m = getOperation();
+
+    // 1. Propagate layout forward starting from "anchor" ops.
+    m.walk([](FuncOp funcOp) {
+      LayoutPropagation layoutPropagation(funcOp);
+      layoutPropagation.initAnchorLayout();
+      layoutPropagation.propagateLayout();
+      layoutPropagation.resolveConflicts();
+      layoutPropagation.rewrite();
+    });
+
+    LLVM_DEBUG({
+      DBGS() << "Module after propagating layouts forward:\n";
+      m.dump();
+    });
+
+    cleanupConvertOps();
+
+    bool changed = false;
+    do {
+      changed = false;
+      // 2. For remaining convert ops, try to rematerialize the slice of
+      // producer operation to avoid having to convert.
+      changed = backwardRematerialization(m, disableRematSplitting);
+      LLVM_DEBUG({
+        DBGS() << "Module after backward remat:\n";
+        m.dump();
+      });
+
+      // Cleanup dummy converts created during backward remat.
+      cleanupConvertOps();
+    } while (changed);
+
+    // 3. For remaining converts, try to hoist them above cast generating
+    // larger size types in order to reduce the cost of the convert op.
+    hoistConvert(m, disableRematSplitting);
+    LLVM_DEBUG({
+      DBGS() << "Module after hoisting converts:\n";
+      m.dump();
+    });
+
+    // 4. Prepare dead iter args to be cleaned up by dead code elimination in
+    // the pattern rewriter below.
+    runDeadIterArgElimination(m);
+
+    // 5. Apply clean up patterns to remove dead convert and dead code generated
+    // by the previous transformations.
+    // scf canonicalization is best effort and doesn't need to converge
+    RewritePatternSet convertCleanup(context);
+    ConvertLayoutOp::getCanonicalizationPatterns(convertCleanup, context);
+    if (applyPatternsGreedily(m, std::move(convertCleanup)).failed()) {
+      signalPassFailure();
+    }
+
+    RewritePatternSet scfCleanup(context);
+    scf::ForOp::getCanonicalizationPatterns(scfCleanup, context);
+    scf::IfOp::getCanonicalizationPatterns(scfCleanup, context);
+    if (applyPatternsGreedily(m, std::move(scfCleanup)).failed()) {
+      LLVM_DEBUG(DBGS() << "scf cleanup did not converge\n");
+    }
+
+    LLVM_DEBUG({
+      DBGS() << "Module after final cleanups:\n";
+      m.dump();
+    });
   }
 };
 
