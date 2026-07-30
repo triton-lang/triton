@@ -2,6 +2,7 @@
 #define TRITON_ANALYSIS_MEMBAR_H
 
 #include "Allocation.h"
+#include "CallGraph.h"
 
 #include "llvm/Support/raw_ostream.h"
 #include <functional>
