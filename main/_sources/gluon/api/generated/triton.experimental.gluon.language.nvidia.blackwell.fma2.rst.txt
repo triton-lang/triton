@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.nvidia.blackwell.fma2
+========================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell
+
+.. autofunction:: fma2

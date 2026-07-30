@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.nvidia.blackwell.mul2
+========================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell
+
+.. autofunction:: mul2

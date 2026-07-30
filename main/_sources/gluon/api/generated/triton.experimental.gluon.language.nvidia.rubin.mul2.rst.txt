@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.nvidia.rubin.mul2
+====================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.rubin
+
+.. autofunction:: mul2

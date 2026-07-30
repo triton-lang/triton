@@ -80,9 +80,15 @@
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.clc.html">triton.experimental.gluon.language.nvidia.blackwell.clc</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.mbarrier.html">triton.experimental.gluon.language.nvidia.blackwell.mbarrier</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.tma.html">triton.experimental.gluon.language.nvidia.blackwell.tma</a></li>
+<li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.add2.html">triton.experimental.gluon.language.nvidia.blackwell.add2</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.allocate_tensor_memory.html">triton.experimental.gluon.language.nvidia.blackwell.allocate_tensor_memory</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.fence_async_shared.html">triton.experimental.gluon.language.nvidia.blackwell.fence_async_shared</a></li>
+<li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.fma2.html">triton.experimental.gluon.language.nvidia.blackwell.fma2</a></li>
+<li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.max2.html">triton.experimental.gluon.language.nvidia.blackwell.max2</a></li>
+<li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.min2.html">triton.experimental.gluon.language.nvidia.blackwell.min2</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.mma_v2.html">triton.experimental.gluon.language.nvidia.blackwell.mma_v2</a></li>
+<li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.mul2.html">triton.experimental.gluon.language.nvidia.blackwell.mul2</a></li>
+<li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.sub2.html">triton.experimental.gluon.language.nvidia.blackwell.sub2</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor.html">triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor_type.html">triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor_type</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryLayout.html">triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryLayout</a></li>
@@ -154,14 +160,32 @@
 </table>
 <table class="autosummary longtable docutils align-default">
 <tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.allocate_tensor_memory.html#triton.experimental.gluon.language.nvidia.blackwell.allocate_tensor_memory" title="triton.experimental.gluon.language.nvidia.blackwell.allocate_tensor_memory"><code class="xref py py-obj docutils literal notranslate"><span class="pre">allocate_tensor_memory</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.add2.html#triton.experimental.gluon.language.nvidia.blackwell.add2" title="triton.experimental.gluon.language.nvidia.blackwell.add2"><code class="xref py py-obj docutils literal notranslate"><span class="pre">add2</span></code></a></p></td>
+<td><p>Add two tensors using a native two-lane packed instruction.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.allocate_tensor_memory.html#triton.experimental.gluon.language.nvidia.blackwell.allocate_tensor_memory" title="triton.experimental.gluon.language.nvidia.blackwell.allocate_tensor_memory"><code class="xref py py-obj docutils literal notranslate"><span class="pre">allocate_tensor_memory</span></code></a></p></td>
 <td><p>Allocate tensor memory.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.fence_async_shared.html#triton.experimental.gluon.language.nvidia.blackwell.fence_async_shared" title="triton.experimental.gluon.language.nvidia.blackwell.fence_async_shared"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fence_async_shared</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.fence_async_shared.html#triton.experimental.gluon.language.nvidia.blackwell.fence_async_shared" title="triton.experimental.gluon.language.nvidia.blackwell.fence_async_shared"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fence_async_shared</span></code></a></p></td>
 <td><p>Issue a fence to complete asynchronous shared memory operations.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.fma2.html#triton.experimental.gluon.language.nvidia.blackwell.fma2" title="triton.experimental.gluon.language.nvidia.blackwell.fma2"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fma2</span></code></a></p></td>
+<td><p>Perform a native two-lane packed fused multiply-add.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.max2.html#triton.experimental.gluon.language.nvidia.blackwell.max2" title="triton.experimental.gluon.language.nvidia.blackwell.max2"><code class="xref py py-obj docutils literal notranslate"><span class="pre">max2</span></code></a></p></td>
+<td><p>Select the maximum with a native packed half-precision instruction.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.min2.html#triton.experimental.gluon.language.nvidia.blackwell.min2" title="triton.experimental.gluon.language.nvidia.blackwell.min2"><code class="xref py py-obj docutils literal notranslate"><span class="pre">min2</span></code></a></p></td>
+<td><p>Select the minimum with a native packed half-precision instruction.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.mma_v2.html#triton.experimental.gluon.language.nvidia.blackwell.mma_v2" title="triton.experimental.gluon.language.nvidia.blackwell.mma_v2"><code class="xref py py-obj docutils literal notranslate"><span class="pre">mma_v2</span></code></a></p></td>
 <td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.mul2.html#triton.experimental.gluon.language.nvidia.blackwell.mul2" title="triton.experimental.gluon.language.nvidia.blackwell.mul2"><code class="xref py py-obj docutils literal notranslate"><span class="pre">mul2</span></code></a></p></td>
+<td><p>Multiply two tensors using a native two-lane packed instruction.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.sub2.html#triton.experimental.gluon.language.nvidia.blackwell.sub2" title="triton.experimental.gluon.language.nvidia.blackwell.sub2"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sub2</span></code></a></p></td>
+<td><p>Subtract two tensors using a native two-lane packed instruction.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor.html#triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor" title="triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">tensor_memory_descriptor</span></code></a></p></td>
 <td><p>Represents a tensor memory descriptor handle for Tensor Core Gen5 operations.</p></td>

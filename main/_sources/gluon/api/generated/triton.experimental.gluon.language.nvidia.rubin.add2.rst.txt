@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.nvidia.rubin.add2
+====================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.rubin
+
+.. autofunction:: add2

@@ -15,6 +15,7 @@ from dataclasses import dataclass, fields
 
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
+from triton.experimental.gluon.language.nvidia import blackwell as bw
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.hopper import fence_async_shared
 from triton.experimental.gluon.language.nvidia.blackwell import (
@@ -27,9 +28,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_mma,
     tcgen05_mma_barrier_count,
     tcgen05_commit,
-    float2,
 )
-from triton.experimental.gluon.language.nvidia.blackwell.float2 import Float2Tensor
 
 # ===-----------------------------------------------------------------------===#
 # Layout Utilities
@@ -630,6 +629,17 @@ def _subtiled_qk_load(config, s_tmem, use_tmem_red: gl.constexpr):
 
 
 @gluon.jit
+def _combine_add2(a, b, c, d):
+    parent: gl.constexpr = gl.BlockedLayout([1, 2], [1, 32], [1, gl.num_warps()], [1, 0],
+                                            cga_layout=[[0, 0]] * (gl.num_ctas().bit_length() - 1))
+    layout: gl.constexpr = gl.SliceLayout(0, parent)
+    lanes = gl.arange(0, 2, layout=layout)
+    lhs = gl.where(lanes == 0, a, b)
+    rhs = gl.where(lanes == 0, c, d)
+    return gl.split(bw.add2(lhs, rhs))
+
+
+@gluon.jit
 def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
                         s_consumer, corr_producer, exp_turnstile, corr_bar,  #
                         offs_m, m_i, l_i, STAGE: gl.constexpr, use_tmem_red: gl.constexpr):
@@ -654,10 +664,7 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         alpha_tmem.store(gl.convert_layout(alpha.expand_dims(1), config.alpha_2d_layout))
         mbarrier.arrive(corr_bar, count=1)
 
-        rowmax = float2.pack(-m_ij[:, None].broadcast_to(qk.shape), axis=1)
-        qk = float2.pack(qk, axis=1)
-        qk = float2.fma(qk, float2.full_like(qk, config.qk_scale), rowmax)
-        qk = float2.unpack(qk, axis=1)
+        qk = bw.fma2(qk, config.qk_scale, -m_ij[:, None])
 
         # Force the softmax partitions to take turns in the EX2 section. This
         # prevents contention for the EX2 unit and improves utilization.
@@ -676,10 +683,11 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         if config.use_exp2_turnstile:
             mbarrier.arrive(exp_bar, count=1)
 
-        l_ij = float2.pack2(*_split_n(p)).sum(axis=1)
-        l_ij = Float2Tensor(gl.convert_layout(l_ij.value, l_i.value.type.layout, assert_trivial=True))
-        alpha = gl.convert_layout(alpha, l_i.value.type.layout, assert_trivial=True)
-        l_i = float2.fma(l_i, float2.pack2(alpha, alpha), l_ij)
+        p0, p1 = gl.reduce(_split_n(p), axis=1, combine_fn=_combine_add2)
+        l_ij = gl.join(p0, p1)
+        l_ij = gl.convert_layout(l_ij, l_i.type.layout, assert_trivial=True)
+        alpha = gl.convert_layout(alpha, gl.SliceLayout(1, l_i.type.layout), assert_trivial=True)
+        l_i = bw.fma2(l_i, gl.join(alpha, alpha), l_ij)
         m_i = m_ij
 
     return m_i, l_i, corr_bar, s_consumer, corr_producer, exp_turnstile
@@ -703,9 +711,9 @@ def _softmax_tile(tile_id: gl.constexpr, config, M, desc_o, STAGE: gl.constexpr,
         offs_m += gl.arange(tile_id * config.SPLIT_M, (1 + tile_id) * config.SPLIT_M)
 
         m_i = gl.full([config.SPLIT_M], -float("inf"), gl.float32, qk_slice_dim1)
-        # Accumulate into 2 row-sums so the reduction can be performed with FADD2.
+        # Keep the two row sums adjacent so their updates use packed FMA2.
         l_i = gl.full([config.SPLIT_M], 0.0, gl.float32, gl.SliceLayout(1, sum_layout))
-        l_i = float2.pack2(l_i, l_i)
+        l_i = gl.join(l_i, l_i)
 
         if STAGE & 1:
             m_i, l_i, corr_bar, s_consumer, corr_producer, exp_turnstile = _softmax_inner_loop(  #
@@ -715,7 +723,7 @@ def _softmax_tile(tile_id: gl.constexpr, config, M, desc_o, STAGE: gl.constexpr,
             m_i, l_i, corr_bar, s_consumer, corr_producer, exp_turnstile = _softmax_inner_loop(  #
                 tile_id, config, prog, s_consumer, corr_producer, exp_turnstile, corr_bar,  #
                 offs_m, m_i, l_i, STAGE=2, use_tmem_red=use_tmem_red)
-        l_i0, l_i1 = float2.unpack2(l_i)
+        l_i0, l_i1 = gl.split(l_i)
         l_i = l_i0 + l_i1
 
         s_tmem, s_bar, s_consumer = s_consumer.acquire()
@@ -776,12 +784,11 @@ def _attn_fwd_correction_rescale(config, s_tmem, corr_consumer, o_consumer):
     mbarrier.arrive(corr_bar, count=1)
     alpha = gl.convert_layout(alpha.reshape([config.SPLIT_M]), alpha_layout)
 
-    alpha = float2.pack(alpha[:, None].broadcast_to(config.o_shape[0], config.SPLIT_D), axis=1)
+    alpha = alpha[:, None].broadcast_to(config.o_shape[0], config.SPLIT_D)
     for i in gl.static_range(config.SPLIT_D_FACTOR):
         o_ref = o_tmem.slice(i * config.SPLIT_D, config.SPLIT_D)
-        o = float2.pack(o_ref.load(config.o_splitn_layout), axis=1)
-        o = o * alpha
-        o_ref.store(float2.unpack(o, axis=1))
+        o = bw.mul2(o_ref.load(config.o_splitn_layout), alpha)
+        o_ref.store(o)
     mbarrier.arrive(o_bar, count=1)
     return corr_consumer, o_consumer
 
@@ -811,12 +818,11 @@ def _attn_fwd_correction_epilogue(config, prog, s_tmem, M, corr_consumer, epi_pr
                      "Block shape is too small for the swizzle byte size in NVMMA Shared Layout")
     SPLIT_N: gl.constexpr = o_smem.type.shape[1] // SPLIT_N_FACTOR
 
-    scale = float2.pack((1 / l_i)[:, None].broadcast_to(config.o_shape[0], SPLIT_N), axis=1)
+    scale = (1 / l_i)[:, None].broadcast_to(config.o_shape[0], SPLIT_N)
     for i in gl.static_range(SPLIT_N_FACTOR):
         o_ref = o_tmem.slice(i * SPLIT_N, SPLIT_N)
-        o = float2.pack(o_ref.load(config.o_splitn_layout), axis=1)
-        o = o * scale
-        o_smem.slice(i * SPLIT_N, SPLIT_N, dim=1).store(float2.unpack(o, axis=1).to(config.dtype))
+        o = bw.mul2(o_ref.load(config.o_splitn_layout), scale)
+        o_smem.slice(i * SPLIT_N, SPLIT_N, dim=1).store(o.to(config.dtype))
 
     fence_async_shared()
     mbarrier.arrive(epi_bar, count=1)

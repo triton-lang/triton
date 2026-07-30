@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.nvidia.blackwell.min2
+========================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell
+
+.. autofunction:: min2

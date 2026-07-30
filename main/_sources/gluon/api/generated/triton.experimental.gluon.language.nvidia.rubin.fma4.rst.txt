@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.nvidia.rubin.fma4
+====================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.rubin
+
+.. autofunction:: fma4
