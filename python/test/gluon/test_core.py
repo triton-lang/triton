@@ -5780,8 +5780,8 @@ def test_tma_validcheck(report_validity):
 @pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
 def test_tma_validcheck_multi_stage():
     # Pipelining loads with TMA retries requires the TMA warp to track the
-    # primary phase and completion state independently for each stage. This
-    # test demonstrates a simple per-stage state-management scheme.
+    # primary phase and progress independently for each stage. This test
+    # demonstrates a simple per-stage state-management scheme.
 
     # Gluon does not support local arrays, so per-stage scalar state is kept in
     # shared memory.
@@ -5827,8 +5827,9 @@ def test_tma_validcheck_multi_stage():
         )
 
         PRIMARY_PHASE: ttgl.constexpr = 0
-        DONE: ttgl.constexpr = 1
-        NUM_STAGE_STATE_FIELDS: ttgl.constexpr = 2
+        BLOCKS_COPIED: ttgl.constexpr = 1
+        STAGE_FULL: ttgl.constexpr = 2
+        NUM_STAGE_STATE_FIELDS: ttgl.constexpr = 3
 
         # Keep track of state[num_stages][num_states] as a one-dimensional
         # shared-memory array.
@@ -5840,58 +5841,80 @@ def test_tma_validcheck_multi_stage():
 
         for i in range(num_stages):
             store_stage_state(stage_state, PRIMARY_PHASE, i, num_stages, 0)
+            store_stage_state(stage_state, BLOCKS_COPIED, i, num_stages, 0)
+            store_stage_state(stage_state, STAGE_FULL, i, num_stages, 0)
 
-        offset = 0
-        num_iter = num_elems // block_size
-        acquire_phase = 0
+        num_blocks = num_elems // block_size
+        blocks_per_stage = num_blocks // num_stages
 
-        for _ in range(num_iter // num_stages):
-            acquire_phase ^= 1
+        # Prime the pipeline.
+        for stage in ttgl.static_range(num_stages):
+            cur_full_bar = bar_full.index(stage)
+            rubin.mbarrier.wait(bar_empty.index(stage), 1)
+            rubin.mbarrier.expect(cur_full_bar, input_desc.block_type.nbytes)
+            rubin.tma.async_load(
+                input_desc,
+                [0, block_size * stage],
+                cur_full_bar,
+                smem.slice(stage, 1, dim=0),
+                report_validity=REPORT_VALIDITY,
+            )
 
-            # Acquire and initially fill every stage in this batch.
+        num_copied = 0
+        while num_copied != num_blocks:
+            # Advance every stage once, so a slow stage does not prevent later
+            # stages from completing, retrying, or refilling.
             for stage in ttgl.static_range(num_stages):
-                cur_full_bar = bar_full.index(stage)
-                rubin.mbarrier.wait(bar_empty.index(stage), acquire_phase)
-                rubin.mbarrier.expect(cur_full_bar, input_desc.block_type.nbytes)
-                rubin.tma.async_load(
-                    input_desc,
-                    [0, offset + block_size * stage],
-                    cur_full_bar,
-                    smem.slice(stage, 1, dim=0),
-                    report_validity=REPORT_VALIDITY,
-                )
-                store_stage_state(stage_state, DONE, stage, num_stages, 0)
+                blocks_copied = load_stage_state(stage_state, BLOCKS_COPIED, stage, num_stages)
+                stage_full = load_stage_state(stage_state, STAGE_FULL, stage, num_stages)
 
-            num_done = 0
-            while num_done != num_stages:
-                for stage in ttgl.static_range(num_stages):
-                    # Has this stage observed valid data in this batch?
-                    if load_stage_state(stage_state, DONE, stage, num_stages) == 0:
-                        cur_full_bar = bar_full.index(stage)
-                        primary_phase = load_stage_state(stage_state, PRIMARY_PHASE, stage, num_stages)
-                        attempt_done, data_valid = rubin.mbarrier.test_wait_validity(cur_full_bar, primary_phase)
+                if stage_full == 0:
+                    # The previous TMA this stage issued hasn't completed or turned out to be invalid
+                    primary_phase = load_stage_state(stage_state, PRIMARY_PHASE, stage, num_stages)
+                    attempt_done, data_valid = rubin.mbarrier.test_wait_validity(
+                        bar_full.index(stage),
+                        primary_phase,
+                    )
 
-                        if attempt_done == 1:
-                            # TMA completed for this primary phase.
-                            store_stage_state(stage_state, PRIMARY_PHASE, stage, num_stages, primary_phase ^ 1)
+                    if attempt_done == 1:
+                        primary_phase ^= 1
+                        store_stage_state(stage_state, PRIMARY_PHASE, stage, num_stages, primary_phase)
 
-                            if data_valid:
-                                num_done += 1
-                                store_stage_state(stage_state, DONE, stage, num_stages, 1)
-                            else:
-                                # The primary phase advanced but the data was
-                                # invalid. Retry and check the next phase.
-                                request_tma_validcheck_data_update(need_update_ptr)
-                                rubin.mbarrier.expect(cur_full_bar, input_desc.block_type.nbytes)
-                                rubin.tma.async_load(
-                                    input_desc,
-                                    [0, offset + block_size * stage],
-                                    cur_full_bar,
-                                    smem.slice(stage, 1, dim=0),
-                                    report_validity=REPORT_VALIDITY,
-                                )
+                        if data_valid == 1:
+                            blocks_copied += 1
+                            num_copied += 1
+                            store_stage_state(stage_state, BLOCKS_COPIED, stage, num_stages, blocks_copied)
+                            store_stage_state(stage_state, STAGE_FULL, stage, num_stages, 1)
+                            stage_full = 1
+                        else:
+                            request_tma_validcheck_data_update(need_update_ptr)
+                            rubin.mbarrier.expect(bar_full.index(stage), input_desc.block_type.nbytes)
+                            rubin.tma.async_load(
+                                input_desc,
+                                [0, block_size * (blocks_copied * num_stages + stage)],
+                                bar_full.index(stage),
+                                smem.slice(stage, 1, dim=0),
+                                report_validity=REPORT_VALIDITY,
+                            )
 
-            offset += num_stages * block_size
+                if stage_full == 1 and blocks_copied != blocks_per_stage:
+                    # Attempt issuing TMA for the next block for this stage. Check the empty barrier without blocking
+                    # The non-blocking wait allows each producer stage to advance independently. Since the consumer
+                    # process stages in a fixed order, a blocking wait in the producer can easily create a deadlock
+                    # between the producer and the consumer.
+                    acquire_phase = (blocks_copied + 1) & 1
+                    empty_ready, _ = rubin.mbarrier.test_wait_validity(bar_empty.index(stage), acquire_phase)
+
+                    if empty_ready == 1:
+                        rubin.mbarrier.expect(bar_full.index(stage), input_desc.block_type.nbytes)
+                        rubin.tma.async_load(
+                            input_desc,
+                            [0, block_size * (blocks_copied * num_stages + stage)],
+                            bar_full.index(stage),
+                            smem.slice(stage, 1, dim=0),
+                            report_validity=REPORT_VALIDITY,
+                        )
+                        store_stage_state(stage_state, STAGE_FULL, stage, num_stages, 0)
 
     @gluon.jit
     def data_init_warp(
