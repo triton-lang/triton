@@ -55,6 +55,128 @@ private:
   mutable DenseMap<Operation *, uint64_t> executionWeights;
 };
 
+/// Operation contracts describe layout relationships without choosing which
+/// legal relationship is fastest. Candidate discovery and profitability policy
+/// remain independent consumers of this graph.
+class LayoutConstraintGraph {
+public:
+  enum class ContractKind { Equality, Transform, Boundary, ControlFlow };
+  enum class ValueRole { Data, Address, Mask, Hardware };
+
+  struct Node {
+    Value value;
+    SmallVector<Attribute, 8> candidates;
+    bool fixed;
+  };
+
+  struct Contract {
+    ContractKind kind;
+    Operation *operation;
+    SmallVector<Value, 4> values;
+    ValueRole role;
+  };
+
+  void addNode(Value value, ArrayRef<Attribute> candidates, bool fixed) {
+    unsigned index = nodes.size();
+    indices.try_emplace(value, index);
+    nodes.push_back({value, llvm::to_vector<8>(candidates), fixed});
+  }
+
+  void addOperation(Operation *operation, bool fixedBoundary,
+                    bool protectedReduction);
+
+  ArrayRef<Node> getNodes() const { return nodes; }
+  ArrayRef<Contract> getContracts() const { return contracts; }
+
+  bool hasJoinConstraints() const { return joinConstraints; }
+  bool hasSplitConstraints() const { return splitConstraints; }
+  bool hasReductionConstraints() const { return reductionConstraints; }
+  bool hasProtectedReductionConstraints() const {
+    return protectedReductionConstraints;
+  }
+  bool hasMultiResultReductionConstraints() const {
+    return multiResultReductionConstraints;
+  }
+  bool hasLoopConstraints() const { return loopConstraints; }
+  bool hasTensorMemoryConstraints() const { return tensorMemoryConstraints; }
+  unsigned getTensorLoadBoundaryCount() const {
+    return tensorLoadBoundaryCount;
+  }
+
+private:
+  bool contains(Value value) const { return indices.contains(value); }
+  void addContract(ContractKind kind, Operation *operation,
+                   ArrayRef<Value> values,
+                   ValueRole role = ValueRole::Data) {
+    SmallVector<Value, 4> tracked;
+    for (Value value : values)
+      if (contains(value) && !llvm::is_contained(tracked, value))
+        tracked.push_back(value);
+    if (!tracked.empty())
+      contracts.push_back({kind, operation, std::move(tracked), role});
+  }
+
+  SmallVector<Node, 32> nodes;
+  SmallVector<Contract, 32> contracts;
+  DenseMap<Value, unsigned> indices;
+  bool joinConstraints = false;
+  bool splitConstraints = false;
+  bool reductionConstraints = false;
+  bool protectedReductionConstraints = false;
+  bool multiResultReductionConstraints = false;
+  bool loopConstraints = false;
+  bool tensorMemoryConstraints = false;
+  unsigned tensorLoadBoundaryCount = 0;
+};
+
+/// Search limits and high-cost graph features are policy, not graph legality.
+class LayoutSearchPolicy {
+public:
+  explicit LayoutSearchPolicy(const LayoutConstraintGraph &graph)
+      : graph(graph) {}
+
+  bool hasMemoryFanoutConstraints() const {
+    return graph.getTensorLoadBoundaryCount() >= 2 &&
+           !graph.hasJoinConstraints() && !graph.hasSplitConstraints() &&
+           !graph.hasReductionConstraints() && !graph.hasLoopConstraints() &&
+           !graph.hasTensorMemoryConstraints();
+  }
+
+  bool hasTensorMemoryReductionConstraints() const {
+    return graph.hasTensorMemoryConstraints() && graph.hasReductionConstraints();
+  }
+
+  bool useFullObjective() const {
+    constexpr unsigned maxFullObjectiveValues = 256;
+    return (graph.hasJoinConstraints() || graph.hasSplitConstraints() ||
+            graph.hasReductionConstraints() ||
+            graph.hasMultiResultReductionConstraints() ||
+            hasMemoryFanoutConstraints() ||
+            hasTensorMemoryReductionConstraints()) &&
+           graph.getNodes().size() <= maxFullObjectiveValues;
+  }
+
+  bool useComponentSearch() const {
+    return graph.hasJoinConstraints() || graph.hasSplitConstraints() ||
+           graph.hasReductionConstraints() ||
+           graph.hasMultiResultReductionConstraints() ||
+           graph.hasLoopConstraints() || hasMemoryFanoutConstraints() ||
+           hasTensorMemoryReductionConstraints();
+  }
+
+  unsigned maxComponentProposals() const {
+    return useFullObjective() ? 128 : 32;
+  }
+
+  bool pruneRedundantReductionProposals() const {
+    return graph.hasReductionConstraints() &&
+           !graph.hasProtectedReductionConstraints();
+  }
+
+private:
+  const LayoutConstraintGraph &graph;
+};
+
 // The current algorithm works by analyzing the IR and doing a one-shot rewrite
 // based on the analysis. The algorithm is as follows.
 //
@@ -516,6 +638,64 @@ static bool hasProtectedLayoutLoop(FuncOp funcOp) {
     return WalkResult::advance();
   });
   return result.wasInterrupted();
+}
+
+void LayoutConstraintGraph::addOperation(Operation *operation,
+                                         bool fixedBoundary,
+                                         bool protectedReduction) {
+  if (auto load = dyn_cast<LoadOp>(operation)) {
+    if (load->getNumResults() == 1 &&
+        isa<RankedTensorType>(load->getResult(0).getType()))
+      ++tensorLoadBoundaryCount;
+    addContract(ContractKind::Boundary, operation, {load.getPtr()},
+                ValueRole::Address);
+    if (Value mask = load.getMask())
+      addContract(ContractKind::Boundary, operation, {mask}, ValueRole::Mask);
+  } else if (auto store = dyn_cast<StoreOp>(operation)) {
+    addContract(ContractKind::Boundary, operation, {store.getPtr()},
+                ValueRole::Address);
+    if (Value mask = store.getMask())
+      addContract(ContractKind::Boundary, operation, {mask}, ValueRole::Mask);
+  }
+
+  joinConstraints |= isa<JoinOp>(operation);
+  splitConstraints |= isa<SplitOp>(operation);
+  loopConstraints |= isa<scf::ForOp, scf::WhileOp>(operation);
+  tensorMemoryConstraints |= isa<triton::nvidia_gpu::TMEMLoadOp>(operation);
+  if (auto reduce = dyn_cast<ReduceOp>(operation)) {
+    reductionConstraints = true;
+    protectedReductionConstraints |= protectedReduction;
+    multiResultReductionConstraints |= reduce->getNumResults() > 1;
+  }
+
+  if (fixedBoundary) {
+    SmallVector<Value, 8> values(operation->getOperands());
+    llvm::append_range(values, operation->getResults());
+    addContract(ContractKind::Boundary, operation, values,
+                ValueRole::Hardware);
+    return;
+  }
+
+  if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(operation)) {
+    for (unsigned index = 0; index < operation->getNumResults(); ++index)
+      addContract(ContractKind::ControlFlow, operation,
+                  getTiedArgs(operation, index));
+    return;
+  }
+
+  if (operation->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
+      operation->hasTrait<OpTrait::Elementwise>() ||
+      isa<JoinOp, SplitOp, ConvertLayoutOp, ReshapeOp, TransOp, ExpandDimsOp,
+          ReduceOp>(operation)) {
+    SmallVector<Value, 8> values(operation->getOperands());
+    llvm::append_range(values, operation->getResults());
+    ContractKind kind =
+        operation->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
+                operation->hasTrait<OpTrait::Elementwise>()
+            ? ContractKind::Equality
+            : ContractKind::Transform;
+    addContract(kind, operation, values);
+  }
 }
 
 void LayoutPropagation::initAnchorLayout() {
@@ -1562,60 +1742,28 @@ void LayoutPropagation::resolveGlobalConflicts() {
     return;
   }
 
-  bool hasJoinConstraints = false;
-  bool hasSplitConstraints = false;
-  bool hasMultiResultReductionConstraints = false;
-  bool hasLoopConstraints = false;
-  bool hasTensorMemoryConstraints = false;
-  unsigned tensorLoadBoundaryCount = 0;
-  bool hasReductionConstraints = false;
-  bool hasProtectedReductionConstraints = false;
+  LayoutConstraintGraph graph;
+  for (const auto &[value, info] : layouts) {
+    SmallVector<Attribute, 8> candidates;
+    llvm::append_range(candidates, info.encodings);
+    graph.addNode(value, candidates, fixedLayouts.contains(value));
+  }
   funcOp.walk([&](Operation *op) {
-    if (auto load = dyn_cast<LoadOp>(op))
-      if (load->getNumResults() == 1 &&
-          isa<RankedTensorType>(load->getResult(0).getType()))
-        ++tensorLoadBoundaryCount;
-    if (isa<JoinOp>(op))
-      hasJoinConstraints = true;
-    if (isa<SplitOp>(op))
-      hasSplitConstraints = true;
-    if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
-      hasReductionConstraints = true;
-      if (isProtectedLayoutReduction(op))
-        hasProtectedReductionConstraints = true;
-      if (reduceOp->getNumResults() > 1)
-        hasMultiResultReductionConstraints = true;
-    }
-    if (isa<scf::ForOp, scf::WhileOp>(op))
-      hasLoopConstraints = true;
-    if (isa<triton::nvidia_gpu::TMEMLoadOp>(op))
-      hasTensorMemoryConstraints = true;
+    graph.addOperation(op, isFixedLayoutBoundary(op),
+                       isProtectedLayoutReduction(op));
   });
-  bool hasMemoryFanoutConstraints =
-      tensorLoadBoundaryCount >= 2 && !hasJoinConstraints &&
-      !hasSplitConstraints && !hasReductionConstraints &&
-      !hasLoopConstraints && !hasTensorMemoryConstraints;
-  constexpr unsigned maxFullObjectiveValues = 256;
-  // Keep reductions in their accumulator layout until a narrower output can
-  // cross the tensor-memory boundary without a full-precision exchange.
-  bool hasTensorMemoryReductionConstraints =
-      hasTensorMemoryConstraints && hasReductionConstraints;
-  bool useFullGlobalObjective =
-      (hasJoinConstraints || hasSplitConstraints || hasReductionConstraints ||
-       hasMultiResultReductionConstraints || hasMemoryFanoutConstraints ||
-       hasTensorMemoryReductionConstraints) &&
-      layouts.size() <= maxFullObjectiveValues;
+  LayoutSearchPolicy policy(graph);
+  bool useFullGlobalObjective = policy.useFullObjective();
   LDBG("resolving " << layouts.size() << " layout values with "
                     << (useFullGlobalObjective ? "the full" : "the bounded")
-                    << " global objective");
+                    << " global objective across "
+                    << graph.getContracts().size() << " constraints");
 
-  if (hasJoinConstraints || hasSplitConstraints || hasReductionConstraints ||
-      hasMultiResultReductionConstraints || hasLoopConstraints ||
-      hasMemoryFanoutConstraints || hasTensorMemoryReductionConstraints) {
+  if (policy.useComponentSearch()) {
     constexpr unsigned maxComponentIterations = 4;
-    const unsigned maxComponentProposals = useFullGlobalObjective ? 128 : 32;
+    const unsigned maxComponentProposals = policy.maxComponentProposals();
     const bool pruneRedundantReductionProposals =
-        hasReductionConstraints && !hasProtectedReductionConstraints;
+        policy.pruneRedundantReductionProposals();
     uint64_t currentCost = getGlobalAssignmentCost(assignments);
 
     for (unsigned iteration = 0; iteration < maxComponentIterations;
