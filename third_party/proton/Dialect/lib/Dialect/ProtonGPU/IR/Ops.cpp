@@ -18,24 +18,16 @@ namespace triton {
 namespace proton {
 namespace gpu {
 
-namespace {
-LogicalResult verifySegment(Operation *op, SegmentType segmentType) {
-  auto selectedIds = segmentType.getSelectIds();
-  auto bufferSizeInBytes = segmentType.getNBytes();
-  auto mod = op->getParentOfType<ModuleOp>();
-  int numWarps = getTotalNumWarps(mod);
-  int segmentNum = selectedIds.empty() ? numWarps : selectedIds.size();
-  if (!llvm::isPowerOf2_32(bufferSizeInBytes / segmentNum))
-    return op->emitOpError("profiling buffer segment size must be power of 2");
-  return success();
-}
-} // namespace
-
 // -- CircularRecordOp --
 LogicalResult CircularStoreOp::verify() {
   auto segmentType = getSegment().getType();
-  if (failed(verifySegment(getOperation(), segmentType)))
-    return failure();
+  auto selectedIds = segmentType.getSelectIds();
+  auto bufferSizeInBytes = segmentType.getNBytes();
+  auto mod = getOperation()->getParentOfType<ModuleOp>();
+  int numWarps = getTotalNumWarps(mod);
+  int segmentNum = selectedIds.empty() ? numWarps : selectedIds.size();
+  if (!llvm::isPowerOf2_32(bufferSizeInBytes / segmentNum))
+    return emitOpError("profiling buffer segment size must be power of 2");
 
   if (static_cast<bool>(getScopeIdAttr()) ==
       static_cast<bool>(getDynamicScopeId()))
