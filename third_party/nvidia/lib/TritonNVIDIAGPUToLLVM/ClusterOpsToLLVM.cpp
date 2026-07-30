@@ -248,8 +248,6 @@ struct ClusterBarrierOpConversion
     if (targetInfo.getTargetFeatures().supportsMbarMulticast()) {
       Value ctaId = NVVM::ClusterId::create(rewriter, loc, i32_ty);
       // Exclude the issuing CTA: the mbarriers expect numCTAs - 1 arrivals.
-      // Create the operands in separate statements: nesting them would leave
-      // op creation order up to the host compiler's argument evaluation order.
       Value allCTAsMask = b.i32_val((1u << numCTAs) - 1);
       Value selfMask = b.shl(b.i32_val(1), ctaId);
       Value peerMask = b.xor_(allCTAsMask, selfMask);
