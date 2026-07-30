@@ -2,15 +2,18 @@
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 #include "triton/Tools/Sys/GetEnv.h"
+#include "triton/Version.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/MIRParser/MIRParser.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
@@ -27,6 +30,7 @@
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/VCSRevision.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
@@ -650,6 +654,22 @@ void init_triton_llvm(py::module_ &m) {
         return llvmMod;
       },
       py::keep_alive<0, 2>(), py::call_guard<py::gil_scoped_release>());
+
+  // Add Triton and LLVM versions to the module.
+  m.def("add_version_info", [](llvm::Module *mod) {
+    llvm::LLVMContext &ctx = mod->getContext();
+    // Use llvm.ident metadata so the versions appear in the asm as well.
+    auto *ident = mod->getOrInsertNamedMetadata("llvm.ident");
+    auto addIdent = [&](llvm::StringRef s) {
+      ident->addOperand(llvm::MDNode::get(ctx, {llvm::MDString::get(ctx, s)}));
+    };
+    addIdent("Triton version " TRITON_VERSION);
+#ifdef LLVM_REVISION
+    addIdent("LLVM version " LLVM_VERSION_STRING " (" LLVM_REVISION ")");
+#else
+    addIdent("LLVM version " LLVM_VERSION_STRING);
+#endif
+  });
 
   m.def("attach_datalayout", [](llvm::Module *mod, const std::string triple,
                                 const std::string proc,
