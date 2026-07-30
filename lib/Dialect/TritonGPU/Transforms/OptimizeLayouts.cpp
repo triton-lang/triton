@@ -257,6 +257,13 @@ private:
 
   template <bool source>
   Attribute getCachedEncoding(Operation *op, Attribute encoding) const;
+  template <bool source>
+  Attribute getContractEncoding(Operation *operation,
+                                Attribute encoding) const {
+    return isa<ConvertLayoutOp>(operation)
+               ? encoding
+               : getCachedEncoding<source>(operation, encoding);
+  }
   bool canAssignEncoding(Value value, Attribute encoding,
                          const LayoutAssignment &assignments) const;
   Attribute getAssignedEncoding(Value value,
@@ -620,40 +627,105 @@ static bool isProtectedLayoutLoop(Operation *op, unsigned functionLoads,
   return body.wasInterrupted();
 }
 
-static std::pair<Operation *, unsigned>
-getControlFlowComponent(OpOperand &use, bool includeConditionals = false) {
-  Operation *user = use.getOwner();
-  unsigned index = use.getOperandNumber();
-  if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-    if (Value result = forOp.getTiedLoopResult(&use))
-      return {forOp, cast<OpResult>(result).getResultNumber()};
-  } else if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
-    if (index < whileOp.getNumResults())
-      return {whileOp, index};
-  } else if (auto yield = dyn_cast<scf::YieldOp>(user)) {
-    Operation *parent = yield->getParentOp();
-    if (index < parent->getNumResults() &&
-        (isa<scf::ForOp, scf::WhileOp>(parent) ||
-         (includeConditionals && isa<scf::IfOp>(parent))))
-      return {parent, index};
-  } else if (auto condition = dyn_cast<scf::ConditionOp>(user)) {
-    if (index)
-      return {condition->getParentOp(), index - 1};
+struct LayoutOperationContract {
+  static bool isControlFlow(Operation *operation) {
+    return isa<scf::ForOp, scf::WhileOp, scf::YieldOp, scf::ConditionOp>(
+        operation);
   }
-  return {nullptr, 0};
-}
 
-static LLVM_ATTRIBUTE_ALWAYS_INLINE std::pair<Operation *, unsigned>
-getControlFlowComponent(BlockArgument argument) {
-  Operation *parent = argument.getOwner()->getParentOp();
-  unsigned index = argument.getArgNumber();
-  if (auto loop = dyn_cast<scf::ForOp>(parent); loop && index)
-    return {loop, index - 1};
-  if (auto loop = dyn_cast<scf::WhileOp>(parent);
-      loop && index < loop.getNumResults())
-    return {loop, index};
-  return {nullptr, 0};
-}
+  static std::pair<Operation *, unsigned>
+  component(OpOperand &use, bool includeConditionals = false) {
+    Operation *operation = use.getOwner();
+    unsigned index = use.getOperandNumber();
+    if (auto loop = dyn_cast<scf::ForOp>(operation)) {
+      if (Value result = loop.getTiedLoopResult(&use))
+        return {loop, cast<OpResult>(result).getResultNumber()};
+    } else if (auto loop = dyn_cast<scf::WhileOp>(operation)) {
+      if (index < loop.getNumResults())
+        return {loop, index};
+    } else if (auto yield = dyn_cast<scf::YieldOp>(operation)) {
+      Operation *parent = yield->getParentOp();
+      if (index < parent->getNumResults() &&
+          (isa<scf::ForOp, scf::WhileOp>(parent) ||
+           (includeConditionals && isa<scf::IfOp>(parent))))
+        return {parent, index};
+    } else if (auto condition = dyn_cast<scf::ConditionOp>(operation)) {
+      if (index)
+        return {condition->getParentOp(), index - 1};
+    }
+    return {nullptr, 0};
+  }
+
+  static LLVM_ATTRIBUTE_ALWAYS_INLINE std::pair<Operation *, unsigned>
+  component(BlockArgument argument) {
+    Operation *parent = argument.getOwner()->getParentOp();
+    unsigned index = argument.getArgNumber();
+    if (auto loop = dyn_cast<scf::ForOp>(parent); loop && index)
+      return {loop, index - 1};
+    if (auto loop = dyn_cast<scf::WhileOp>(parent);
+        loop && index < loop.getNumResults())
+      return {loop, index};
+    return {nullptr, 0};
+  }
+
+  static SmallVector<Value, 4> successors(OpOperand &use) {
+    Operation *operation = use.getOwner();
+    unsigned index = use.getOperandNumber();
+    if (auto loop = dyn_cast<scf::ForOp>(operation)) {
+      if (Value result = loop.getTiedLoopResult(&use))
+        return {loop.getTiedLoopRegionIterArg(&use), result};
+    } else if (auto loop = dyn_cast<scf::WhileOp>(operation)) {
+      return {loop.getBeforeArguments()[index]};
+    } else if (auto yield = dyn_cast<scf::YieldOp>(operation)) {
+      Operation *parent = yield->getParentOp();
+      SmallVector<Value, 4> values;
+      if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(parent) &&
+          index < parent->getNumResults())
+        values.push_back(parent->getResult(index));
+      if (auto loop = dyn_cast<scf::ForOp>(parent))
+        values.push_back(loop.getRegionIterArg(index));
+      if (auto loop = dyn_cast<scf::WhileOp>(parent))
+        values.push_back(loop.getBeforeArguments()[index]);
+      return values;
+    } else if (auto condition = dyn_cast<scf::ConditionOp>(operation)) {
+      if (index) {
+        auto loop = cast<scf::WhileOp>(condition->getParentOp());
+        return {loop.getAfterArguments()[index - 1], loop.getResult(index - 1)};
+      }
+    } else if (auto wait =
+                   dyn_cast<nvidia_gpu::WarpGroupDotWaitOp>(operation)) {
+      return {wait->getResult(index)};
+    } else if (auto gather = dyn_cast<GatherOp>(operation)) {
+      if (!gather.getEfficientLayout() && &use == &gather.getIndicesMutable())
+        return {gather.getResult()};
+    } else if (auto reshape = dyn_cast<ReshapeOp>(operation);
+               reshape && reshape.getEfficientLayout()) {
+      return {};
+    } else if (isLayoutTransform(operation)) {
+      return SmallVector<Value, 4>(operation->result_begin(),
+                                   operation->result_end());
+    }
+    return {};
+  }
+
+  static Value requiredEncodingValue(OpOperand &use) {
+    Operation *user = use.getOwner();
+    if (auto [owner, index] = component(use, /*includeConditionals=*/true);
+        owner) {
+      if (auto loop = dyn_cast<scf::WhileOp>(owner);
+          loop && (owner == user || isa<scf::YieldOp>(user)))
+        return loop.getBeforeArguments()[index];
+      return owner->getResult(index);
+    }
+    if (auto loop = dyn_cast<scf::WhileOp>(user))
+      if (use.getOperandNumber() < loop.getBeforeArguments().size())
+        return loop.getBeforeArguments()[use.getOperandNumber()];
+    if (auto yield = dyn_cast<scf::YieldOp>(user))
+      if (auto loop = dyn_cast<scf::WhileOp>(yield->getParentOp()))
+        return loop.getBeforeArguments()[use.getOperandNumber()];
+    return {};
+  }
+};
 
 void LayoutConstraintGraph::addOperation(Operation *operation) {
   if (auto load = dyn_cast<LoadOp>(operation)) {
@@ -895,7 +967,7 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
     for (auto encoding : info) {
       // A conversion disappears when its destination matches its source.
       Attribute dstEncoding =
-          isa<ConvertLayoutOp>(op) ? encoding : inferDstEncoding(op, encoding);
+          getContractEncoding</*source=*/false>(op, encoding);
       if (dstEncoding)
         hasChanged |= addEncoding(value, dstEncoding);
     }
@@ -909,61 +981,10 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
   SmallVector<Value> changed;
   for (OpOperand &use : value.getUses()) {
     Operation *user = use.getOwner();
-    if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-      Value arg = forOp.getTiedLoopRegionIterArg(&use);
-      Value result = forOp.getTiedLoopResult(&use);
-      setEncoding({arg, result}, info, changed, user);
-      continue;
-    }
-    if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
-      Value arg = whileOp.getBeforeArguments()[use.getOperandNumber()];
-      setEncoding({arg}, info, changed, user);
-      continue;
-    }
-    if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-      auto parent = yieldOp->getParentOp();
-      SmallVector<Value> valuesToPropagate;
-      if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(parent) &&
-          use.getOperandNumber() < parent->getNumResults())
-        valuesToPropagate.push_back(parent->getResult(use.getOperandNumber()));
-      if (auto forOp = dyn_cast<scf::ForOp>(parent))
-        valuesToPropagate.push_back(
-            forOp.getRegionIterArg(use.getOperandNumber()));
-      if (auto whileOp = dyn_cast<scf::WhileOp>(parent))
-        valuesToPropagate.push_back(
-            whileOp.getBeforeArguments()[use.getOperandNumber()]);
-      if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(parent))
-        setEncoding(valuesToPropagate, info, changed, user);
-      continue;
-    }
-    if (auto conditionOp = dyn_cast<scf::ConditionOp>(user)) {
-      auto whileOp = cast<scf::WhileOp>(conditionOp->getParentOp());
-      // Skip arg 0 as it is the condition.
-      unsigned argIndex = use.getOperandNumber() - 1;
-      Value afterArg = whileOp.getAfterArguments()[argIndex];
-      Value result = whileOp->getResult(argIndex);
-      setEncoding({afterArg, result}, info, changed, user);
-      continue;
-    }
-    if (auto dotWaitOp = dyn_cast<nvidia_gpu::WarpGroupDotWaitOp>(user)) {
-      unsigned opIndex = use.getOperandNumber();
-      Value result = dotWaitOp->getResult(opIndex);
-      setEncoding(result, info, changed, user);
-      continue;
-    }
-    // Gather propagates only through its unconstrained index operand.
-    if (auto gatherOp = dyn_cast<GatherOp>(user);
-        gatherOp && !gatherOp.getEfficientLayout() &&
-        &use == &gatherOp.getIndicesMutable()) {
-      setEncoding(gatherOp.getResult(), info, changed, user);
-      continue;
-    }
-    if (auto reshapeOp = dyn_cast<ReshapeOp>(user);
-        reshapeOp && reshapeOp.getEfficientLayout())
-      continue;
-    if (isLayoutTransform(user)) {
-      setEncoding(user->getResults(), info, changed, user);
-      continue;
+    if (SmallVector<Value, 4> targets =
+            LayoutOperationContract::successors(use);
+        !targets.empty()) {
+      setEncoding(targets, info, changed, user);
     }
   }
   return changed;
@@ -988,7 +1009,7 @@ SmallVector<Value> LayoutPropagation::propagateToOperands(Value value,
       }
 
       Attribute operandEncoding =
-          isa<ConvertLayoutOp>(op) ? encoding : inferSrcEncoding(op, encoding);
+          getContractEncoding</*source=*/true>(op, encoding);
       if (operandEncoding)
         addCandidates(op->getOperands(), operandEncoding);
       continue;
@@ -997,7 +1018,7 @@ SmallVector<Value> LayoutPropagation::propagateToOperands(Value value,
     auto blockArg = dyn_cast<BlockArgument>(value);
     if (!blockArg)
       continue;
-    auto [loop, index] = getControlFlowComponent(blockArg);
+    auto [loop, index] = LayoutOperationContract::component(blockArg);
     if (loop)
       addCandidates(getTiedArgs(loop, index), encoding);
   }
@@ -1166,7 +1187,7 @@ bool LayoutPropagation::canAssignEncoding(
     return false;
 
   if (auto blockArg = dyn_cast<BlockArgument>(value)) {
-    auto [loop, index] = getControlFlowComponent(blockArg);
+    auto [loop, index] = LayoutOperationContract::component(blockArg);
     return loop ? getAssignedEncoding(loop->getResult(index), assignments) ==
                       encoding
                 : encoding == tensorType.getEncoding();
@@ -1248,27 +1269,11 @@ SmallVector<Attribute, 4> LayoutPropagation::getUseEncodings(
         encodings.push_back(encoding);
   };
 
-  if (auto [controlFlow, index] =
-          getControlFlowComponent(use, /*includeConditionals=*/true);
-      controlFlow) {
-    if (auto whileOp = dyn_cast<scf::WhileOp>(controlFlow);
-        whileOp && (controlFlow == user || isa<scf::YieldOp>(user)))
-      addEncoding(whileOp.getBeforeArguments()[index]);
-    else
-      addEncoding(controlFlow->getResult(index));
+  if (Value required = LayoutOperationContract::requiredEncodingValue(use)) {
+    addEncoding(required);
     return encodings;
   }
-  if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
-    if (use.getOperandNumber() < whileOp.getBeforeArguments().size())
-      addEncoding(whileOp.getBeforeArguments()[use.getOperandNumber()]);
-    return encodings;
-  }
-  if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-    if (auto whileOp = dyn_cast<scf::WhileOp>(yieldOp->getParentOp()))
-      addEncoding(whileOp.getBeforeArguments()[use.getOperandNumber()]);
-    return encodings;
-  }
-  if (isa<scf::ForOp, scf::ConditionOp>(user))
+  if (LayoutOperationContract::isControlFlow(user))
     return encodings;
 
   // A scalar reduction has no result layout to impose on its input.
@@ -1285,10 +1290,8 @@ SmallVector<Attribute, 4> LayoutPropagation::getUseEncodings(
     if (!isa<RankedTensorType>(result.getType()))
       continue;
     Attribute resultEncoding = getAssignedEncoding(result, assignments);
-    Attribute operandEncoding = isa<ConvertLayoutOp>(user)
-                                    ? resultEncoding
-                                    : getCachedEncoding<true>(user,
-                                                              resultEncoding);
+    Attribute operandEncoding =
+        getContractEncoding</*source=*/true>(user, resultEncoding);
     if (operandEncoding && !llvm::is_contained(encodings, operandEncoding))
       encodings.push_back(operandEncoding);
   }
@@ -1342,10 +1345,8 @@ uint64_t LayoutPropagation::getAssignmentCost(
     return cost;
   }
 
-  Attribute operandEncoding = isa<ConvertLayoutOp>(definingOp)
-                                  ? encoding
-                                  : getCachedEncoding<true>(definingOp,
-                                                            encoding);
+  Attribute operandEncoding =
+      getContractEncoding</*source=*/true>(definingOp, encoding);
   if (!operandEncoding)
     return cost;
 
@@ -1400,7 +1401,7 @@ uint64_t LayoutPropagation::getAffectedAssignmentCost(
       if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(producer))
         addControlFlow(producer, cast<OpResult>(changed).getResultNumber());
     } else if (auto blockArgument = dyn_cast<BlockArgument>(changed)) {
-      auto [loop, index] = getControlFlowComponent(blockArgument);
+      auto [loop, index] = LayoutOperationContract::component(blockArgument);
       addControlFlow(loop, index);
     }
 
@@ -1408,7 +1409,7 @@ uint64_t LayoutPropagation::getAffectedAssignmentCost(
       Operation *user = use.getOwner();
       addOperation(user);
       auto [controlFlow, index] =
-          getControlFlowComponent(use, /*includeConditionals=*/true);
+          LayoutOperationContract::component(use, /*includeConditionals=*/true);
       addControlFlow(controlFlow, index);
     }
   }
@@ -1501,9 +1502,8 @@ bool LayoutPropagation::buildGlobalComponentProposal(
           return rollback();
       }
       if (isLayoutTransform(producer) && !isFixedLayoutBoundary(producer)) {
-        Attribute source = isa<ConvertLayoutOp>(producer)
-                               ? candidate
-                               : getCachedEncoding<true>(producer, candidate);
+        Attribute source =
+            getContractEncoding</*source=*/true>(producer, candidate);
         if (source) {
           for (Value operand : producer->getOperands())
             if (!request(operand, source))
@@ -1511,25 +1511,23 @@ bool LayoutPropagation::buildGlobalComponentProposal(
         }
       }
     } else if (auto blockArg = dyn_cast<BlockArgument>(value)) {
-      auto [loop, index] = getControlFlowComponent(blockArg);
+      auto [loop, index] = LayoutOperationContract::component(blockArg);
       if (loop && !requestLoopComponent(loop, index, candidate))
         return rollback();
     }
 
     for (OpOperand &use : value.getUses()) {
       Operation *user = use.getOwner();
-      auto [loop, index] = getControlFlowComponent(use);
+      auto [loop, index] = LayoutOperationContract::component(use);
       if (loop && !requestLoopComponent(loop, index, candidate))
         return rollback();
-      if (loop || isa<scf::ForOp, scf::WhileOp, scf::YieldOp,
-                      scf::ConditionOp>(user))
+      if (loop || LayoutOperationContract::isControlFlow(user))
         continue;
       if (!isLayoutTransform(user) || isFixedLayoutBoundary(user))
         continue;
 
-      Attribute destination = isa<ConvertLayoutOp>(user)
-                                  ? candidate
-                                  : getCachedEncoding<false>(user, candidate);
+      Attribute destination =
+          getContractEncoding</*source=*/false>(user, candidate);
       if (!destination)
         continue;
 
@@ -2790,268 +2788,105 @@ LogicalResult cleanupLayoutConversions(Operation *operation) {
   return success();
 }
 
-static bool hasExternalExpressionUsers(Operation *op,
-                                       SetVector<Operation *> &operations,
-                                       Operation *root, Value rootValue = {}) {
-  return llvm::any_of(op->getUsers(), [&](Operation *user) {
-    return user == root ? rootValue && op->getResult(0) != rootValue
-                        : !operations.contains(user);
-  });
-}
+using ExpressionCoordinate = std::pair<Value, std::pair<Attribute, unsigned>>;
 
-template <typename Key, typename Materialization> class ScalarExpressionState {
-protected:
-  explicit ScalarExpressionState(Operation *insertionPoint)
-      : insertionPoint(insertionPoint) {}
-
-  Operation *recordOperation(Value value, bool permitEnclosingBlock = false) {
-    Operation *operation = value.getDefiningOp();
-    if (plannedValues.size() >= 512 || !operation ||
-        operation->getNumResults() != 1 || !isMemoryEffectFree(operation) ||
-        (operation->getBlock() != insertionPoint->getBlock() &&
-         !permitEnclosingBlock))
-      return nullptr;
-    originalOperations.insert(operation);
-    return operation;
-  }
-
-  template <typename Structural>
-  bool duplicatesArithmetic(Structural structural) {
-    auto isArithmetic = [&](Operation *operation) {
-      return !structural(operation);
-    };
-    return llvm::count_if(plannedValues, [&](const auto &planned) {
-             return isArithmetic(planned.first.first.getDefiningOp());
-           }) > llvm::count_if(originalOperations, isArithmetic);
-  }
-
-  void eraseDeadOriginalOperations() {
-    for (Operation *operation : originalOperations)
-      if (isOpTriviallyDead(operation))
-        operation->erase();
-  }
-
-  Operation *insertionPoint;
-  DenseMap<Key, Materialization> plannedValues;
-  SetVector<Operation *> originalOperations;
-};
-
-/// Plan an entire pure tensor expression before changing the IR. A conversion
-/// can be removed only when its complete producer graph can be regenerated in
-/// the required layout, every tensor leaf is layout-independent, and none of
-/// the original expression needs to remain alive for another user.
-class ScalarRootedLayoutPlan
-    : private ScalarExpressionState<LayoutValue, std::pair<Attribute, Value>> {
+/// Plan scalar-rooted tensor expressions in either distributed-layout or
+/// logical-index coordinates. Logical-index evaluation additionally supports
+/// exact-order joins and reshapes whose layouts cannot be inferred backward.
+class ScalarExpressionPlan {
 public:
-  explicit ScalarRootedLayoutPlan(ConvertLayoutOp root)
-      : ScalarExpressionState(root.getOperation()), root(root) {}
+  explicit ScalarExpressionPlan(ConvertLayoutOp root, bool indexed = false)
+      : insertionPoint(root.getOperation()), rootValue(root.getSrc()),
+        target(root.getType()), indexed(indexed) {}
+
+  explicit ScalarExpressionPlan(triton::StoreOp root)
+      : insertionPoint(root.getOperation()), rootValue(root.getValue()),
+        target(dyn_cast<RankedTensorType>(root.getValue().getType())),
+        indexed(true) {}
 
   LogicalResult analyze() {
-    if (failed(plan(root.getSrc(), root.getType().getEncoding())))
+    if (!target || !target.getEncoding())
       return failure();
-
-    if (llvm::any_of(originalOperations, [&](Operation *operation) {
-          return hasExternalExpressionUsers(operation, originalOperations,
-                                            root.getOperation());
-        }))
-      return failure();
-
-    // Do not turn layout optimization into expression duplication. This also
-    // keeps graph-shaped joins from growing exponentially.
-    return success(!duplicatesArithmetic(
-        [](Operation *operation) { return isa<ConvertLayoutOp>(operation); }));
-  }
-
-  void rewrite() {
-    OpBuilder builder(root);
-    Value replacement =
-        materialize(root.getSrc(), root.getType().getEncoding(), builder);
-    assert(replacement && "a validated layout plan must materialize");
-
-    root.getResult().replaceAllUsesWith(replacement);
-    root.erase();
-
-    eraseDeadOriginalOperations();
-  }
-
-private:
-  LogicalResult plan(Value value, Attribute encoding) {
-    auto type = dyn_cast<RankedTensorType>(value.getType());
-    if (!type || !encoding)
-      return failure();
-
-    LayoutValue key{value, encoding};
-    if (plannedValues.contains(key))
-      return success();
-    Operation *op = recordOperation(value);
-    if (!op)
-      return failure();
-
-    Attribute operandEncoding;
-    if (isa<ConvertLayoutOp>(op)) {
-      operandEncoding = encoding;
-    } else if (isa<triton::SplatOp, triton::MakeRangeOp>(op)) {
-      // Their tensor contents are defined by scalar operands or logical
-      // indices, so their distributed result layout can be chosen directly.
-    } else if (auto constant = dyn_cast<arith::ConstantOp>(op)) {
-      if (!isa<DenseElementsAttr>(constant.getValue()))
+    if (indexed) {
+      if (!target.hasStaticShape())
         return failure();
-    } else {
-      if ((!isLayoutTransform(op) && !isa<triton::BroadcastOp>(op)) ||
-          isa<ReduceOp, SplitOp>(op))
+      int64_t size = target.getNumElements();
+      if (size <= 0 || size > std::numeric_limits<int32_t>::max() ||
+          !llvm::isPowerOf2_64(static_cast<uint64_t>(size)))
         return failure();
 
-      operandEncoding = inferSrcEncoding(op, encoding);
-      if (!operandEncoding)
+      auto *interface =
+          target.getEncoding()
+              .getDialect()
+              .getRegisteredInterface<triton::DialectInferLayoutInterface>();
+      if (!interface ||
+          failed(interface->inferReshapeOpEncoding(
+              target.getShape(), target.getEncoding(), ArrayRef<int64_t>{size},
+              flatEncoding, /*allowReorder=*/false,
+              insertionPoint->getLoc())) ||
+          (isa<triton::StoreOp>(insertionPoint) && !rootValue.hasOneUse()))
         return failure();
     }
 
-    for (Value operand : op->getOperands()) {
-      if (!isa<RankedTensorType>(operand.getType()))
-        continue;
-      if (!operandEncoding || failed(plan(operand, operandEncoding)))
-        return failure();
-    }
-
-    plannedValues.try_emplace(key, operandEncoding, Value{});
-    return success();
-  }
-
-  Value materialize(Value value, Attribute encoding, OpBuilder &builder) {
-    LayoutValue key{value, encoding};
-    auto &[operandEncoding, materialized] = plannedValues.find(key)->second;
-    if (materialized)
-      return materialized;
-
-    Operation *operation = value.getDefiningOp();
-    Value result;
-    if (auto convert = dyn_cast<ConvertLayoutOp>(operation)) {
-      result = materialize(convert.getSrc(), encoding, builder);
-    } else {
-      auto newType =
-          cast<RankedTensorType>(value.getType()).cloneWithEncoding(encoding);
-      if (auto constant = dyn_cast<arith::ConstantOp>(operation)) {
-        auto elements = cast<DenseElementsAttr>(constant.getValue());
-        result = arith::ConstantOp::create(
-            builder, constant.getLoc(), newType, elements.reshape(newType));
-      } else {
-        IRMapping mapping;
-        for (Value operand : operation->getOperands())
-          if (isa<RankedTensorType>(operand.getType()))
-            mapping.map(operand,
-                        materialize(operand, operandEncoding, builder));
-        Operation *replacement = builder.clone(*operation, mapping);
-        replacement->getResult(0).setType(newType);
-        result = replacement->getResult(0);
-      }
-    }
-    return materialized = result;
-  }
-
-  ConvertLayoutOp root;
-};
-
-/// Exact-order joins interleave their operands. Their result layout therefore
-/// cannot always be inferred backward: the join dimension may be distributed
-/// over lanes. For a graph rooted in scalar splats, constants, and logical
-/// ranges, evaluate the join choices from the bits of each logical result
-/// index instead. Exact-order reshapes preserve that flat logical index, so
-/// the expression can be emitted directly in its required result layout. A
-/// range in a join operand observes the remaining high index bits after the
-/// join choices along its path have been removed.
-class ScalarJoinExpressionPlan
-    : private ScalarExpressionState<std::pair<Value, unsigned>, Value> {
-public:
-  explicit ScalarJoinExpressionPlan(ConvertLayoutOp root)
-      : ScalarExpressionState(root.getOperation()), rootValue(root.getSrc()),
-        target(root.getType()) {}
-
-  explicit ScalarJoinExpressionPlan(triton::StoreOp root)
-      : ScalarExpressionState(root.getOperation()), rootValue(root.getValue()),
-        target(dyn_cast<RankedTensorType>(root.getValue().getType())) {}
-
-  LogicalResult analyze() {
-    if (!target || !target.getEncoding() || !target.hasStaticShape())
-      return failure();
-    int64_t size = target.getNumElements();
-    if (size <= 0 || size > std::numeric_limits<int32_t>::max() ||
-        !llvm::isPowerOf2_64(static_cast<uint64_t>(size)))
+    if (failed(plan(rootValue, target.getEncoding(), 0)))
       return failure();
 
-    auto *interface =
-        target.getEncoding()
-            .getDialect()
-            .getRegisteredInterface<triton::DialectInferLayoutInterface>();
-    if (!interface ||
-        failed(interface->inferReshapeOpEncoding(
-            target.getShape(), target.getEncoding(), ArrayRef<int64_t>{size},
-            flatEncoding, /*allowReorder=*/false, insertionPoint->getLoc())))
-      return failure();
-
-    if (isa<triton::StoreOp>(insertionPoint) && !rootValue.hasOneUse())
-      return failure();
-
-    if (failed(plan(rootValue, 0)))
-      return failure();
-
-    unsigned conversions = 0;
-    unsigned joins = 0;
+    unsigned conversions = 0, joins = 0;
     bool hasCommunication = false;
-
     auto classifyConversion = [&](ConvertLayoutOp convert) {
       ++conversions;
       hasCommunication |=
           !cvtReordersRegisters(convert.getSrc().getType(), convert.getType());
     };
+    if (indexed)
+      if (auto conversion = dyn_cast<ConvertLayoutOp>(insertionPoint))
+        classifyConversion(conversion);
 
-    if (auto conversion = dyn_cast<ConvertLayoutOp>(insertionPoint))
-      classifyConversion(conversion);
-
-    for (Operation *op : originalOperations) {
-      if (auto convert = dyn_cast<ConvertLayoutOp>(op))
-        classifyConversion(convert);
-      joins += isa<triton::JoinOp>(op);
-
-      // In production stochastic-rounding kernels these inexpensive leaves
-      // can live in an enclosing loop or function block and have other users.
-      // Recreating a splat, constant, or logical range does not duplicate the
-      // random-number arithmetic or require ownership of the original leaf.
-      if (!isRematerializableLeaf(op) &&
-          hasExternalExpressionUsers(op, originalOperations, insertionPoint,
-                                     rootValue))
-        return failure();
+    for (Operation *operation : originalOperations) {
+      if (indexed) {
+        if (auto conversion = dyn_cast<ConvertLayoutOp>(operation))
+          classifyConversion(conversion);
+        joins += isa<triton::JoinOp>(operation);
+      }
+      // Inexpensive scalar leaves may belong to an enclosing expression.
+      if (!indexed || !isRematerializableLeaf(operation))
+        if (llvm::any_of(operation->getUsers(), [&](Operation *user) {
+              return user == insertionPoint
+                         ? indexed && operation->getResult(0) != rootValue
+                         : !originalOperations.contains(user);
+            }))
+          return failure();
     }
 
-    // Index evaluation introduces integer instructions and live values. Do
-    // not replace a single conversion, or a chain consisting entirely of
-    // thread-local register permutations, with that extra arithmetic.
-    if (joins == 0 || conversions < 2 || !hasCommunication)
+    if (indexed && (joins == 0 || conversions < 2 || !hasCommunication))
       return failure();
 
-    // A shared random-number producer can feed multiple joins. Keep the
-    // incumbent if direct evaluation would duplicate that arithmetic at
-    // different join depths.
-    return success(!duplicatesArithmetic(isStructuralOrLeaf));
+    auto isArithmetic = [&](Operation *operation) {
+      return indexed ? !isStructuralOrLeaf(operation)
+                     : !isa<ConvertLayoutOp>(operation);
+    };
+    return success(llvm::count_if(plannedValues, [&](const auto &planned) {
+                     return isArithmetic(planned.first.first.getDefiningOp());
+                   }) <= llvm::count_if(originalOperations, isArithmetic));
   }
 
   void rewrite() {
     OpBuilder builder(insertionPoint);
-    Location loc = insertionPoint->getLoc();
-    auto rangeType = RankedTensorType::get({target.getNumElements()},
-                                           builder.getI32Type(), flatEncoding);
-    Value range = triton::MakeRangeOp::create(
-        builder, loc, rangeType, 0,
-        static_cast<int32_t>(target.getNumElements()));
-    auto indexType = RankedTensorType::get(
-        target.getShape(), builder.getI32Type(), target.getEncoding());
-    indices = triton::ReshapeOp::create(builder, loc, indexType, range);
+    if (indexed) {
+      Location loc = insertionPoint->getLoc();
+      auto rangeType = RankedTensorType::get(
+          {target.getNumElements()}, builder.getI32Type(), flatEncoding);
+      Value range = triton::MakeRangeOp::create(
+          builder, loc, rangeType, 0,
+          static_cast<int32_t>(target.getNumElements()));
+      auto indexType = RankedTensorType::get(
+          target.getShape(), builder.getI32Type(), target.getEncoding());
+      indices = triton::ReshapeOp::create(builder, loc, indexType, range);
+    }
 
-    Value replacement = materialize(rootValue, 0, builder);
-    assert(replacement && "a validated join expression must materialize");
-
-    LLVM_DEBUG(llvm::dbgs()
-               << "[" DEBUG_TYPE "] evaluating " << originalOperations.size()
-               << " scalar-rooted operations from exact logical index bits\n");
+    Value replacement =
+        materialize(rootValue, target.getEncoding(), 0, builder);
+    assert(replacement && "a validated expression plan must materialize");
 
     if (auto conversion = dyn_cast<ConvertLayoutOp>(insertionPoint)) {
       conversion.getResult().replaceAllUsesWith(replacement);
@@ -3060,73 +2895,94 @@ public:
       cast<triton::StoreOp>(insertionPoint).getValueMutable().assign(
           replacement);
     }
-    eraseDeadOriginalOperations();
+    for (Operation *operation : originalOperations)
+      if (isOpTriviallyDead(operation))
+        operation->erase();
   }
 
 private:
-  using IndexedValue = std::pair<Value, unsigned>;
   static constexpr unsigned maxJoinDepth = 30;
 
-  static bool isRematerializableLeaf(Operation *op) {
-    return isa<triton::SplatOp, triton::MakeRangeOp, arith::ConstantOp>(op);
+  static bool isRematerializableLeaf(Operation *operation) {
+    return isa<triton::SplatOp, triton::MakeRangeOp, arith::ConstantOp>(
+        operation);
   }
 
-  static bool isStructuralOrLeaf(Operation *op) {
-    return isRematerializableLeaf(op) ||
-           isa<ConvertLayoutOp, triton::ReshapeOp, triton::JoinOp>(op);
+  static bool isStructuralOrLeaf(Operation *operation) {
+    return isRematerializableLeaf(operation) ||
+           isa<ConvertLayoutOp, triton::ReshapeOp, triton::JoinOp>(operation);
   }
 
-  LogicalResult plan(Value value, unsigned depth) {
+  LogicalResult plan(Value value, Attribute encoding, unsigned depth) {
     auto type = dyn_cast<RankedTensorType>(value.getType());
-    if (!type || !type.hasStaticShape() || depth > maxJoinDepth ||
-        (target.getNumElements() >> depth) != type.getNumElements())
+    if (!type || !encoding ||
+        (indexed &&
+         (!type.hasStaticShape() || depth > maxJoinDepth ||
+          (target.getNumElements() >> depth) != type.getNumElements())))
       return failure();
 
-    IndexedValue key{value, depth};
+    ExpressionCoordinate key{value, {encoding, depth}};
     if (plannedValues.contains(key))
       return success();
-    Operation *producer = value.getDefiningOp();
-    Operation *op =
-        recordOperation(value, producer && isRematerializableLeaf(producer));
-    if (!op)
+    Operation *operation = value.getDefiningOp();
+    if (plannedValues.size() >= 512 || !operation ||
+        operation->getNumResults() != 1 || !isMemoryEffectFree(operation) ||
+        (operation->getBlock() != insertionPoint->getBlock() &&
+         (!indexed || !isRematerializableLeaf(operation))))
       return failure();
+    originalOperations.insert(operation);
 
-    if (isa<ConvertLayoutOp, triton::ReshapeOp>(op)) {
-      auto reshape = dyn_cast<triton::ReshapeOp>(op);
-      if ((reshape && reshape.getAllowReorder()) ||
-          failed(plan(op->getOperand(0), depth)))
+    Attribute operandEncoding;
+    bool joined = false, sameShape = false;
+    if (isa<ConvertLayoutOp>(operation) ||
+        (indexed && isa<triton::ReshapeOp>(operation))) {
+      if (auto reshape = dyn_cast<triton::ReshapeOp>(operation);
+          reshape && reshape.getAllowReorder())
         return failure();
-    } else if (auto join = dyn_cast<triton::JoinOp>(op)) {
+      operandEncoding = encoding;
+    } else if (indexed && isa<triton::JoinOp>(operation)) {
+      auto join = cast<triton::JoinOp>(operation);
       RankedTensorType resultType = join.getType();
       if (resultType.getShape().empty() || resultType.getShape().back() != 2 ||
-          failed(plan(join.getLhs(), depth + 1)) ||
-          failed(plan(join.getRhs(), depth + 1)))
+          failed(plan(join.getLhs(), encoding, depth + 1)) ||
+          failed(plan(join.getRhs(), encoding, depth + 1)))
         return failure();
-    } else if (auto splat = dyn_cast<triton::SplatOp>(op)) {
-      if (isa<RankedTensorType>(splat.getSrc().getType()))
+      joined = true;
+    } else if (auto splat = dyn_cast<triton::SplatOp>(operation)) {
+      if (indexed && isa<RankedTensorType>(splat.getSrc().getType()))
         return failure();
-    } else if (auto range = dyn_cast<triton::MakeRangeOp>(op)) {
-      if (!range.getType().getElementType().isInteger(32))
+    } else if (auto range = dyn_cast<triton::MakeRangeOp>(operation)) {
+      if (indexed && !range.getType().getElementType().isInteger(32))
         return failure();
-    } else if (auto constant = dyn_cast<arith::ConstantOp>(op)) {
+    } else if (auto constant = dyn_cast<arith::ConstantOp>(operation)) {
       auto elements = dyn_cast<DenseElementsAttr>(constant.getValue());
-      if (!elements || !elements.isSplat())
+      if (!elements || (indexed && !elements.isSplat()))
         return failure();
+    } else if (indexed) {
+      if (!operation->hasTrait<OpTrait::Elementwise>())
+        return failure();
+      operandEncoding = encoding;
+      sameShape = true;
     } else {
-      if (!op->hasTrait<OpTrait::Elementwise>())
+      if ((!isLayoutTransform(operation) &&
+           !isa<triton::BroadcastOp>(operation)) ||
+          isa<ReduceOp, SplitOp>(operation) ||
+          !(operandEncoding = inferSrcEncoding(operation, encoding)))
         return failure();
-      for (Value operand : op->getOperands()) {
-        auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
-        if (!tensorType)
-          continue;
-        if (tensorType.getShape() !=
-                cast<RankedTensorType>(value.getType()).getShape() ||
-            failed(plan(operand, depth)))
-          return failure();
-      }
     }
 
-    plannedValues.try_emplace(key, Value{});
+    if (!joined)
+      for (Value operand : operation->getOperands()) {
+        auto operandType = dyn_cast<RankedTensorType>(operand.getType());
+        if (!operandType)
+          continue;
+        if (!operandEncoding ||
+            (sameShape && operandType.getShape() != type.getShape()) ||
+            failed(plan(operand, operandEncoding, depth)))
+          return failure();
+      }
+
+    plannedValues.try_emplace(key, operandEncoding, Value{});
     return success();
   }
 
@@ -3138,9 +2994,8 @@ private:
   }
 
   Value getJoinCondition(unsigned depth, OpBuilder &builder, Location loc) {
-    if (auto it = joinConditions.find(depth); it != joinConditions.end())
-      return it->second;
-
+    if (auto found = joinConditions.find(depth); found != joinConditions.end())
+      return found->second;
     Value mask = createIndexConstant(builder, loc, int32_t{1} << depth);
     Value zero = createIndexConstant(builder, loc, 0);
     Value masked = arith::AndIOp::create(builder, loc, indices, mask);
@@ -3150,67 +3005,76 @@ private:
     return condition;
   }
 
-  Value materialize(Value value, unsigned depth, OpBuilder &builder) {
-    IndexedValue key{value, depth};
-    Value &materialized = plannedValues.find(key)->second;
+  Value materialize(Value value, Attribute encoding, unsigned depth,
+                    OpBuilder &builder) {
+    ExpressionCoordinate key{value, {encoding, depth}};
+    auto &[operandEncoding, materialized] = plannedValues.find(key)->second;
     if (materialized)
       return materialized;
 
-    Operation *op = value.getDefiningOp();
+    Operation *operation = value.getDefiningOp();
     Value result;
-    if (isa<ConvertLayoutOp, triton::ReshapeOp>(op)) {
-      result = materialize(op->getOperand(0), depth, builder);
-    } else if (auto join = dyn_cast<triton::JoinOp>(op)) {
-      Value lhs = materialize(join.getLhs(), depth + 1, builder);
-      Value rhs = materialize(join.getRhs(), depth + 1, builder);
+    if (isa<ConvertLayoutOp>(operation) ||
+        (indexed && isa<triton::ReshapeOp>(operation))) {
+      result = materialize(operation->getOperand(0), encoding, depth, builder);
+    } else if (indexed && isa<triton::JoinOp>(operation)) {
+      auto join = cast<triton::JoinOp>(operation);
+      Value lhs = materialize(join.getLhs(), encoding, depth + 1, builder);
+      Value rhs = materialize(join.getRhs(), encoding, depth + 1, builder);
       Value condition = getJoinCondition(depth, builder, join.getLoc());
       result =
           arith::SelectOp::create(builder, join.getLoc(), condition, rhs, lhs);
-    } else if (auto range = dyn_cast<triton::MakeRangeOp>(op)) {
+    } else if (indexed && isa<triton::MakeRangeOp>(operation)) {
+      auto range = cast<triton::MakeRangeOp>(operation);
       result = indices;
       if (depth != 0) {
         Value shift = createIndexConstant(builder, range.getLoc(), depth);
         result = arith::ShRUIOp::create(builder, range.getLoc(), result, shift);
       }
-
-      int64_t start = range.getStartAttr().getInt();
-      if (start != 0) {
+      if (int64_t start = range.getStartAttr().getInt(); start != 0) {
         Value offset = createIndexConstant(builder, range.getLoc(), start);
         result = arith::AddIOp::create(builder, range.getLoc(), result, offset);
       }
     } else {
       RankedTensorType oldType = cast<RankedTensorType>(value.getType());
-      auto newType = RankedTensorType::get(
-          target.getShape(), oldType.getElementType(), target.getEncoding());
-
-      if (auto splat = dyn_cast<triton::SplatOp>(op)) {
+      RankedTensorType newType =
+          indexed ? RankedTensorType::get(target.getShape(),
+                                          oldType.getElementType(), encoding)
+                  : oldType.cloneWithEncoding(encoding);
+      if (indexed && isa<triton::SplatOp>(operation)) {
+        auto splat = cast<triton::SplatOp>(operation);
         result = triton::SplatOp::create(builder, splat.getLoc(), newType,
                                          splat.getSrc());
-      } else if (auto constant = dyn_cast<arith::ConstantOp>(op)) {
-        auto oldElements = cast<DenseElementsAttr>(constant.getValue());
-        auto newElements = DenseElementsAttr::get(
-            newType, oldElements.getSplatValue<Attribute>());
+      } else if (auto constant = dyn_cast<arith::ConstantOp>(operation)) {
+        auto elements = cast<DenseElementsAttr>(constant.getValue());
+        auto newElements =
+            indexed ? DenseElementsAttr::get(
+                          newType, elements.getSplatValue<Attribute>())
+                    : elements.reshape(newType);
         result = arith::ConstantOp::create(builder, constant.getLoc(), newType,
                                            newElements);
       } else {
         IRMapping mapping;
-        for (Value operand : op->getOperands()) {
+        for (Value operand : operation->getOperands())
           if (isa<RankedTensorType>(operand.getType()))
-            mapping.map(operand, materialize(operand, depth, builder));
-        }
-        Operation *replacement = builder.clone(*op, mapping);
+            mapping.map(operand,
+                        materialize(operand, operandEncoding, depth, builder));
+        Operation *replacement = builder.clone(*operation, mapping);
         replacement->getResult(0).setType(newType);
         result = replacement->getResult(0);
       }
     }
-
     return materialized = result;
   }
 
+  Operation *insertionPoint;
   Value rootValue;
   RankedTensorType target;
+  bool indexed;
   Attribute flatEncoding;
   Value indices;
+  DenseMap<ExpressionCoordinate, std::pair<Attribute, Value>> plannedValues;
+  SetVector<Operation *> originalOperations;
   DenseMap<unsigned, Value> joinConditions;
 };
 
@@ -3413,11 +3277,11 @@ public:
         return true;
       };
       optimizeRootedConversions<triton::StoreOp>(module, [&](auto store) {
-        return rewritePlan(ScalarJoinExpressionPlan(store));
+        return rewritePlan(ScalarExpressionPlan(store));
       });
       optimizeRootedConversions<ConvertLayoutOp>(module, [&](auto convert) {
-        return rewritePlan(ScalarRootedLayoutPlan(convert)) ||
-               rewritePlan(ScalarJoinExpressionPlan(convert));
+        return rewritePlan(ScalarExpressionPlan(convert)) ||
+               rewritePlan(ScalarExpressionPlan(convert, /*indexed=*/true));
       });
 
       if (failed(cleanupLayoutConversions(module)))
