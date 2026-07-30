@@ -1,6 +1,6 @@
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 import pytest
 import torch
 
@@ -80,8 +80,14 @@ def test_compilation_trace_matches_warmup_cache_hits(tmp_path):
     }
 
 
-def test_compile_warmup_skips_triton_kernels_reference():
-    import triton_kernels.testing as testing
+def test_compile_warmup_skips_triton_kernels_reference(monkeypatch):
+    package = ModuleType("triton_kernels")
+    testing = ModuleType("triton_kernels.testing")
+    testing.alloc_rand = lambda *args, **kwargs: None
+    testing.make_slice_sizes = lambda *args, **kwargs: None
+    package.testing = testing
+    monkeypatch.setitem(sys.modules, "triton_kernels", package)
+    monkeypatch.setitem(sys.modules, "triton_kernels.testing", testing)
 
     reference = object()
     module = SimpleNamespace(__file__="/checkout/python/triton_kernels/tests/test_matmul.py", matmul_torch=reference)
