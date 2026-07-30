@@ -2587,6 +2587,61 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// CHECK-DAG: llvm.mlir.global internal constant @assertMessage_{{[0-9]+}}("shared assertion\00")
+// CHECK-DAG: llvm.mlir.global internal constant @assertMessage_{{[0-9]+}}("different assertion\00")
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 5 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func @shared_cuda_assertion_failures(
+  tt.func public @shared_cuda_assertion_failures(%first: i1, %second: i1, %third: i1, %fourth: i1) {
+    ttg.warp_specialize(%first, %second, %third, %fourth)
+    // CHECK: default {
+    default {
+      // CHECK: llvm.cond_br %{{.*}}, ^[[DEFAULT_FAIL:bb[0-9]+]], ^[[DEFAULT_CONTINUE:bb[0-9]+]]
+      tt.assert %first, "shared assertion" : i1 loc("shared_source":31:1)
+      // CHECK: ^[[DEFAULT_CONTINUE]]:
+      // CHECK-NEXT: ttg.warp_yield
+      // CHECK: ^[[DEFAULT_FAIL]]:
+      // CHECK: llvm.call @__assertfail
+      // CHECK-NEXT: llvm.unreachable
+      ttg.warp_yield
+    }
+    // CHECK: partition0(
+    partition0(%partition_first: i1, %partition_second: i1, %partition_third: i1, %partition_fourth: i1) num_warps(1) {
+      // CHECK: llvm.cond_br %{{.*}}, ^[[SHARED_FAIL:bb[0-9]+]], ^[[FIRST_CONTINUE:bb[0-9]+]]
+      tt.assert %partition_first, "shared assertion" : i1 loc("shared_source":31:1)
+      // CHECK: ^[[FIRST_CONTINUE]]:
+      // CHECK: llvm.cond_br %{{.*}}, ^[[SHARED_FAIL]], ^[[SECOND_CONTINUE:bb[0-9]+]]
+      tt.assert %partition_second, "shared assertion" : i1 loc("shared_source":31:1)
+      // CHECK: ^[[SECOND_CONTINUE]]:
+      // CHECK: llvm.cond_br %{{.*}}, ^[[OTHER_LOCATION:bb[0-9]+]], ^[[THIRD_CONTINUE:bb[0-9]+]]
+      tt.assert %partition_third, "shared assertion" : i1 loc("shared_source":32:1)
+      // CHECK: ^[[THIRD_CONTINUE]]:
+      // CHECK: llvm.cond_br %{{.*}}, ^[[OTHER_DIAGNOSTIC:bb[0-9]+]], ^[[FOURTH_CONTINUE:bb[0-9]+]]
+      tt.assert %partition_fourth, "different assertion" : i1 loc("shared_source":31:1)
+      // CHECK: ^[[FOURTH_CONTINUE]]:
+      // CHECK-NEXT: ttg.warp_return
+      // CHECK: ^[[SHARED_FAIL]]:
+      // CHECK: llvm.mlir.addressof @[[SHARED_MESSAGE:assertMessage_[0-9]+]]
+      // CHECK: llvm.mlir.constant(31 : i32)
+      // CHECK: llvm.call @__assertfail
+      // CHECK-NEXT: llvm.unreachable
+      // CHECK: ^[[OTHER_LOCATION]]:
+      // CHECK: llvm.mlir.addressof @[[SHARED_MESSAGE]]
+      // CHECK: llvm.mlir.constant(32 : i32)
+      // CHECK: llvm.call @__assertfail
+      // CHECK-NEXT: llvm.unreachable
+      // CHECK: ^[[OTHER_DIAGNOSTIC]]:
+      // CHECK: llvm.mlir.addressof @[[OTHER_MESSAGE:assertMessage_[0-9]+]]
+      // CHECK: llvm.mlir.constant(31 : i32)
+      // CHECK: llvm.call @__assertfail
+      // CHECK-NEXT: llvm.unreachable
+      ttg.warp_return
+    } : (i1, i1, i1, i1) -> ()
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @log1pf_scan(%39: tensor<32x16xf32, #blocked>) {

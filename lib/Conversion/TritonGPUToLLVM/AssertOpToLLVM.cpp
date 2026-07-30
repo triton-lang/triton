@@ -2,6 +2,8 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/StringMap.h"
 
 namespace {
 
@@ -68,6 +70,38 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
       line = fileLineColLoc.getLine();
     }
 
+    if (targetInfo.isCuda() &&
+        op->getParentOfType<triton::gpu::WarpSpecializeOp>()) {
+      Block *previousBlock = rewriter.getInsertionBlock();
+      Region *region = previousBlock->getParent();
+      std::string diagnostic = message.str();
+      diagnostic.push_back('\0');
+      diagnostic.append(file);
+      diagnostic.push_back('\0');
+      diagnostic.append(func);
+      diagnostic.push_back('\0');
+      diagnostic.append(std::to_string(line));
+
+      // Keep failure paths inside their owning warp-specialization region.
+      // CUDA's assertion function is noreturn, so identical diagnostics within
+      // the same region can share one terminal failure block.
+      Block *&failureBlock = failureBlocks[region][diagnostic];
+      if (!failureBlock) {
+        OpBuilder::InsertionGuard guard(rewriter);
+        failureBlock = rewriter.createBlock(region);
+        targetInfo.assertFail(rewriter, loc, message, file, func, line);
+        LLVM::UnreachableOp::create(rewriter, loc);
+      }
+
+      Block *continueBlock =
+          rewriter.splitBlock(previousBlock, rewriter.getInsertionPoint());
+      rewriter.setInsertionPointToEnd(previousBlock);
+      LLVM::CondBrOp::create(rewriter, loc, condition, failureBlock,
+                             continueBlock);
+      rewriter.setInsertionPointToStart(continueBlock);
+      return;
+    }
+
     auto [prevBlock, ifBlock, thenBlock] =
         createIfBlock(rewriter, loc, condition);
 
@@ -80,6 +114,7 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
 
 protected:
   const TargetInfoBase &targetInfo;
+  mutable llvm::DenseMap<Region *, llvm::StringMap<Block *>> failureBlocks;
 };
 
 } // namespace
