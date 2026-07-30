@@ -56,10 +56,33 @@ Value createMemDescToI32(RewriterBase &rewriter, Location loc,
 
 struct AssertUniformOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalAssertUniformOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  explicit AssertUniformOpConversion(LLVMTypeConverter &typeConverter,
+                                     const TargetInfoBase &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter), targetInfo(targetInfo) {}
+
   LogicalResult
   matchAndRewrite(tti::ExperimentalAssertUniformOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (targetInfo.isCuda() && op->getParentOfType<ttg::WarpSpecializeOp>()) {
+      SmallVector<Operation *> futureAssertions;
+      for (Operation *next = op->getNextNode(); next;
+           next = next->getNextNode()) {
+        if (isa<tti::ExperimentalAssertUniformOp>(next))
+          futureAssertions.push_back(next);
+      }
+
+      // Split the actual remaining assertion boundaries backwards so each
+      // intervening operation moves once instead of once per preceding assert.
+      OpBuilder::InsertionGuard guard(rewriter);
+      for (Operation *future : llvm::reverse(futureAssertions)) {
+        Block *previous = future->getBlock();
+        Block *continuation =
+            rewriter.splitBlock(previous, future->getIterator());
+        rewriter.setInsertionPointToEnd(previous);
+        LLVM::BrOp::create(rewriter, future->getLoc(), continuation);
+      }
+    }
+
     TritonLLVMIRRewriter b(op.getLoc(), rewriter);
     Value tid = getThreadId(b, op.getLoc());
     Value threadIdIsNotZero = b.icmp_ne(tid, b.i32_val(0));
@@ -68,6 +91,9 @@ struct AssertUniformOpConversion
     rewriter.eraseOp(op);
     return success();
   }
+
+private:
+  const TargetInfoBase &targetInfo;
 };
 
 struct BufferDescriptorsOpConversion
@@ -443,7 +469,7 @@ private:
 void mlir::triton::populateInstrumentationToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const TargetInfoBase &targetInfo) {
-  patterns.add<AssertUniformOpConversion>(typeConverter);
+  patterns.add<AssertUniformOpConversion>(typeConverter, targetInfo);
   patterns.add<BufferDescriptorsOpConversion>(typeConverter);
   patterns.add<LockAcquireOpConversion>(typeConverter, targetInfo);
   patterns.add<LockReleaseOpConversion>(typeConverter, targetInfo);

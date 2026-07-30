@@ -51,6 +51,38 @@ tt.func private @experimental_assert_uniform(%arg0: i1) {
 
 // -----
 
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 5 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-LABEL: llvm.func internal @warp_partition_uniform_assertions(
+tt.func private @warp_partition_uniform_assertions(%first: i1, %second: i1) {
+  ttg.warp_specialize(%first, %second) attributes {warpGroupStartIds = array<i32: 4>}
+  default {
+    ttg.warp_yield
+  }
+  // CHECK: partition0(
+  partition0(%partition_first: i1, %partition_second: i1) num_warps(1) {
+    // CHECK: llvm.cond_br %{{.*}}, ^[[FIRST_FAILURE:bb[0-9]+]], ^[[FIRST_CONTINUE:bb[0-9]+]]
+    tti.experimental_assert_uniform %partition_first, "first partition assertion"
+    // CHECK: ^[[FIRST_CONTINUE]]:
+    // CHECK: llvm.xor
+    %between = arith.xori %partition_first, %partition_second : i1
+    // CHECK: llvm.cond_br %{{.*}}, ^[[SECOND_FAILURE:bb[0-9]+]], ^[[SECOND_CONTINUE:bb[0-9]+]]
+    tti.experimental_assert_uniform %between, "second partition assertion"
+    // CHECK: ^[[SECOND_CONTINUE]]:
+    // CHECK-NEXT: ttg.warp_return
+    ttg.warp_return
+    // CHECK: ^[[FIRST_FAILURE]]:
+    // CHECK: llvm.call @__assertfail
+    // CHECK-NEXT: llvm.unreachable
+    // CHECK: ^[[SECOND_FAILURE]]:
+    // CHECK: llvm.call @__assertfail
+    // CHECK-NEXT: llvm.unreachable
+  } : (i1, i1) -> ()
+  tt.return
+}
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #smem = #ttg.shared_memory
