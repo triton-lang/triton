@@ -269,8 +269,19 @@ def test_compile_warmup_replaces_preshuffled_mxfp_conversion():
     assert MXFP4Tensor.to is previous_conversion
 
 
-def test_compile_warmup_replaces_gluon_moe_fake_checks():
-    import triton_kernels.tensor_details.layout_details.blackwell_scale as blackwell_scale
+def test_compile_warmup_replaces_gluon_moe_fake_checks(monkeypatch):
+    package = ModuleType("triton_kernels")
+    package.__path__ = []
+    tensor_details = ModuleType("triton_kernels.tensor_details")
+    tensor_details.__path__ = []
+    layout_details = ModuleType("triton_kernels.tensor_details.layout_details")
+    layout_details.__path__ = []
+    blackwell_scale = ModuleType("triton_kernels.tensor_details.layout_details.blackwell_scale")
+    blackwell_scale.is_fake = lambda tensor: True
+    monkeypatch.setitem(sys.modules, "triton_kernels", package)
+    monkeypatch.setitem(sys.modules, "triton_kernels.tensor_details", tensor_details)
+    monkeypatch.setitem(sys.modules, "triton_kernels.tensor_details.layout_details", layout_details)
+    monkeypatch.setitem(sys.modules, "triton_kernels.tensor_details.layout_details.blackwell_scale", blackwell_scale)
 
     module_assert_close = object()
     module = SimpleNamespace(
