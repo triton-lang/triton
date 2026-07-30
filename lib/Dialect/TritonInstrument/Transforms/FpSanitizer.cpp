@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 #include <cassert>
@@ -1122,14 +1123,46 @@ createTmemOperandScratch(PatternRewriter &rewriter, Location loc,
 }
 
 static ttng::TMEMAllocOp getTmemOperandAllocation(Value memdesc) {
-  while (Operation *def = memdesc.getDefiningOp()) {
-    if (auto alloc = dyn_cast<ttng::TMEMAllocOp>(def))
-      return alloc;
-    if (!def->hasTrait<OpTrait::MemDescViewTrait>())
+  SmallVector<Value> worklist{memdesc};
+  llvm::DenseSet<Value> visited;
+  ttng::TMEMAllocOp allocation;
+
+  while (!worklist.empty()) {
+    Value value = worklist.pop_back_val();
+    if (!visited.insert(value).second)
+      continue;
+
+    if (auto arg = dyn_cast<BlockArgument>(value)) {
+      Operation *parent = arg.getOwner()->getParentOp();
+      if (auto partitions = dyn_cast<ttg::WarpSpecializePartitionsOp>(parent)) {
+        worklist.push_back(
+            partitions.getExplicitCaptures()[arg.getArgNumber()]);
+        continue;
+      }
+      if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
+        unsigned argNumber = arg.getArgNumber();
+        if (argNumber == 0)
+          return {};
+        unsigned iterNumber = argNumber - 1;
+        worklist.push_back(forOp.getInitArgs()[iterNumber]);
+        worklist.push_back(forOp.getYieldedValues()[iterNumber]);
+        continue;
+      }
       return {};
-    memdesc = def->getOperand(0);
+    }
+
+    Operation *def = value.getDefiningOp();
+    if (auto alloc = dyn_cast_or_null<ttng::TMEMAllocOp>(def)) {
+      if (allocation && allocation != alloc)
+        return {};
+      allocation = alloc;
+      continue;
+    }
+    if (!def || !def->hasTrait<OpTrait::MemDescViewTrait>())
+      return {};
+    worklist.push_back(def->getOperand(0));
   }
-  return {};
+  return allocation;
 }
 
 std::optional<MmaOperandSource> createMmaOperandSource(

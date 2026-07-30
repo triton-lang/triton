@@ -183,6 +183,58 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     ttng.tc_gen5_mma %a, %b, %d, %true, %true, %bar[%true] {is_async} : !ttg.memdesc<128x128xf16, #tmem_a, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem_d, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     tt.return
   }
+
+  // CHECK-LABEL: @tcgen05_mma_tmem_loop_carried_distinct_allocations
+  tt.func public @tcgen05_mma_tmem_loop_carried_distinct_allocations() {
+    // CHECK: %[[A_SCRATCH:.*]] = ttg.global_scratch_alloc
+    // CHECK: %[[D_SCRATCH:.*]] = ttg.global_scratch_alloc
+    // CHECK: scf.for
+    // CHECK-NOT: ttg.global_scratch_alloc
+    // CHECK: tti.experimental_local_gather
+    // CHECK: tti.dot_i8
+    // CHECK-NOT: ttng.tc_gen5_mma
+    %true = arith.constant true
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %a = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #tmem_a, #ttng.tensor_memory, mutable>
+    %b = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem_d, #ttng.tensor_memory, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 8192 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    %a_out, %d_out = scf.for %iv = %c0 to %c2 step %c1 iter_args(%a_iter = %a, %d_iter = %d) -> (!ttg.memdesc<128x128xf16, #tmem_a, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x128xf32, #tmem_d, #ttng.tensor_memory, mutable>) {
+      ttng.tc_gen5_mma %a_iter, %b, %d_iter, %true, %true, %bar[%true] {is_async} : !ttg.memdesc<128x128xf16, #tmem_a, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem_d, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+      scf.yield %a_iter, %d_iter : !ttg.memdesc<128x128xf16, #tmem_a, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x128xf32, #tmem_d, #ttng.tensor_memory, mutable>
+    }
+    tt.return
+  }
+
+  // CHECK-LABEL: @tcgen05_mma_tmem_loop_carried_may_alias_accumulator
+  tt.func public @tcgen05_mma_tmem_loop_carried_may_alias_accumulator() {
+    // CHECK: %[[A_SCRATCH:.*]] = ttg.global_scratch_alloc
+    // CHECK: %[[D_SCRATCH:.*]] = ttg.global_scratch_alloc
+    // CHECK: scf.for
+    // CHECK: tt.load
+    // CHECK: %[[A_SNAPSHOT:.*]] = ttg.global_scratch_alloc
+    // CHECK: tt.store
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK: tti.experimental_local_gather
+    // CHECK: tti.dot_i8
+    // CHECK-NOT: ttng.tc_gen5_mma
+    %true = arith.constant true
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %a = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #tmem_a, #ttng.tensor_memory, mutable>
+    %b = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem_d, #ttng.tensor_memory, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 8192 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    %a_out, %d_out = scf.for %iv = %c0 to %c2 step %c1 iter_args(%a_iter = %a, %d_iter = %d) -> (!ttg.memdesc<128x128xf16, #tmem_a, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x128xf32, #tmem_d, #ttng.tensor_memory, mutable>) {
+      ttng.tc_gen5_mma %a_iter, %b, %d_iter, %true, %true, %bar[%true] {is_async} : !ttg.memdesc<128x128xf16, #tmem_a, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem_d, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+      %alias = ttg.memdesc_reinterpret %d_iter : !ttg.memdesc<128x128xf32, #tmem_d, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf16, #tmem_a, #ttng.tensor_memory, mutable>
+      scf.yield %alias, %d_iter : !ttg.memdesc<128x128xf16, #tmem_a, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x128xf32, #tmem_d, #ttng.tensor_memory, mutable>
+    }
+    tt.return
+  }
 }
 
 // -----
@@ -365,6 +417,60 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       ttg.local_store %val, %arg1 : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
       ttg.warp_return
     } : (!ttg.memdesc<1xi64, #shared1, #smem, mutable>, !ttg.memdesc<128x128xf32, #shared, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+    tt.return
+  }
+
+  // CHECK-LABEL: @ws_partition_tmem_mma_distinct_allocations
+  tt.func public @ws_partition_tmem_mma_distinct_allocations() {
+    // CHECK: %[[A_SCRATCH:.*]] = ttg.global_scratch_alloc
+    // CHECK: %[[D_SCRATCH:.*]] = ttg.global_scratch_alloc
+    // CHECK: ttg.warp_specialize(
+    // CHECK: partition0(
+    // CHECK-NOT: ttg.global_scratch_alloc
+    // CHECK: tti.experimental_local_gather
+    // CHECK: tti.dot_i8
+    // CHECK-NOT: ttng.tc_gen5_mma
+    %a = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %b = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttg.warp_specialize(%a, %b, %d, %bar) attributes {actualRegisters = array<i32: 32, 32>, allocation.offset = 512 : i32, requestedRegisters = array<i32: 32>, warpGroupStartIds = array<i32: 4>}
+    default {
+      ttg.warp_yield
+    }
+    partition0(%a_arg: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, %b_arg: !ttg.memdesc<128x128xf32, #shared, #smem, mutable>, %d_arg: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, %bar_arg: !ttg.memdesc<1xi64, #shared1, #smem, mutable>) num_warps(4) {
+      %true = arith.constant true
+      ttng.tc_gen5_mma %a_arg, %b_arg, %d_arg, %true, %true, %bar_arg[%true] {is_async} : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x128xf32, #shared, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+      ttg.warp_return
+    } : (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x128xf32, #shared, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>) -> ()
+    tt.return
+  }
+
+  // CHECK-LABEL: @ws_partition_tmem_mma_source_aliases_accumulator
+  tt.func public @ws_partition_tmem_mma_source_aliases_accumulator() {
+    // CHECK: %[[D_SCRATCH:.*]] = ttg.global_scratch_alloc
+    // CHECK: ttg.warp_specialize(
+    // CHECK: partition0(
+    // CHECK: tt.load
+    // CHECK: %[[A_SNAPSHOT:.*]] = ttg.global_scratch_alloc
+    // CHECK: tt.store
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK: tti.experimental_local_gather
+    // CHECK: tti.dot_i8
+    // CHECK-NOT: ttng.tc_gen5_mma
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %a = ttg.memdesc_reinterpret %d : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %b = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttg.warp_specialize(%a, %b, %d, %bar) attributes {actualRegisters = array<i32: 32, 32>, allocation.offset = 512 : i32, requestedRegisters = array<i32: 32>, warpGroupStartIds = array<i32: 4>}
+    default {
+      ttg.warp_yield
+    }
+    partition0(%a_arg: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, %b_arg: !ttg.memdesc<128x128xf32, #shared, #smem, mutable>, %d_arg: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, %bar_arg: !ttg.memdesc<1xi64, #shared1, #smem, mutable>) num_warps(4) {
+      %true = arith.constant true
+      ttng.tc_gen5_mma %a_arg, %b_arg, %d_arg, %true, %true, %bar_arg[%true] {is_async} : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x128xf32, #shared, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+      ttg.warp_return
+    } : (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x128xf32, #shared, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>) -> ()
     tt.return
   }
 }
