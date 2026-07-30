@@ -1605,7 +1605,7 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr):
 
     mbarrier.invalidate(bar)
 
-    tma.async_copy_shared_to_global(input_desc, [0, 0], smem)
+    tma.async_store(input_desc, [0, 0], smem)
     tma.store_wait(0)
 
 
@@ -2549,9 +2549,8 @@ def async_copy_kernel(inp, xnumel, XBLOCK: ttgl.constexpr):
     xindex = ttgl.arange(0, XBLOCK, block_layout)
     mask = ttgl.max_constancy(xindex < xnumel, 2)
 
-    async_copy.async_copy_global_to_shared(smem, inp + xindex)
-    async_copy.async_copy_global_to_shared(smem, inp + xindex, mask, cache_modifier=".ca", eviction_policy="evict_last",
-                                           volatile=True)
+    async_copy.async_load(smem, inp + xindex)
+    async_copy.async_load(smem, inp + xindex, mask, cache_modifier=".ca", eviction_policy="evict_last", volatile=True)
 
     mbar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     async_copy.mbarrier_arrive(mbar)
@@ -4986,7 +4985,7 @@ def test_nv_tma_descriptor_store_kernel(target):
             layout=smem_layout,
         )
         smem = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], smem_layout)
-        tma.async_copy_shared_to_global(input_desc, [0, 0], smem)
+        tma.async_store(input_desc, [0, 0], smem)
         tma.store_wait(0)
         tma.store_wait(0, read_only=True)
 

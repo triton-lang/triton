@@ -726,7 +726,7 @@ def _gluon_async_copy_masked_kernel(out_ptr, in_ptr, n_elements, start_idx, BLOC
 
     offsets = start_idx + gl.arange(0, BLOCK, block_layout)
     mask = offsets < n_elements
-    async_copy.async_copy_global_to_shared(smem, in_ptr + offsets, mask=mask)
+    async_copy.async_load(smem, in_ptr + offsets, mask=mask)
     async_copy.commit_group()
     async_copy.wait_group(0)
 
