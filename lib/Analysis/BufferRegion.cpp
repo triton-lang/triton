@@ -441,14 +441,11 @@ BufferRegionView
 BufferRegionAnalysis::getMemDescView(Type type, uint32_t allocationFrame,
                                      uint32_t storageBase,
                                      ArrayRef<uint32_t> partitionBases) {
-  return getMemDescView(type,
-                        BufferRegionView{{},
-                                         storageBase,
-                                         0,
-                                         llvm::to_vector<2>(partitionBases),
-                                         0,
-                                         0,
-                                         allocationFrame});
+  BufferRegionView view;
+  view.storageBase = storageBase;
+  view.partitionBases = llvm::to_vector<2>(partitionBases);
+  view.allocationFrame = allocationFrame;
+  return getMemDescView(type, view);
 }
 
 BufferRegionView BufferRegionAnalysis::getMemDescView(
@@ -473,19 +470,25 @@ BufferRegionView BufferRegionAnalysis::getMemDescView(
                         (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace())
                              ? affineOffset
                              : applySharedPadding(affineOffset, ty));
-  return {{baseOffset, getMemDescSize(ty), std::move(footprint)},
-          storageBase,
-          affineOffset,
-          std::move(partitionBases),
-          affinePartitionOffset,
-          affineCTAOffset,
-          view.allocationFrame};
+  BufferRegionView result = view;
+  result.region = {baseOffset, getMemDescSize(ty), std::move(footprint)};
+  result.storageBase = storageBase;
+  result.affineOffset = affineOffset;
+  result.partitionBases = std::move(partitionBases);
+  result.affinePartitionOffset = affinePartitionOffset;
+  result.affineCTAOffset = affineCTAOffset;
+  return result;
+}
+
+uint32_t BufferRegionAnalysis::getAllocationFrame(Operation *operation) const {
+  return getOperationId(
+      operation->getParentOfType<FunctionOpInterface>().getOperation());
 }
 
 LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
   top->walk([&](Operation *operation) {
     if (isa<FunctionOpInterface, CallOpInterface>(operation))
-      operationIds.try_emplace(operation, operationIds.size() + 1);
+      operationInterner.insert(operation);
   });
 
   // Mark all warp-specialize partitions as live.
@@ -535,19 +538,15 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     ArrayRef<uint32_t> partitionBases = offsets->size() > 1
                                             ? ArrayRef<uint32_t>(*offsets)
                                             : ArrayRef<uint32_t>();
-    regionInfo.views.insert(getMemDescView(
-        localAllocOp.getType(),
-        getOperationId(
-            op->getParentOfType<FunctionOpInterface>().getOperation()),
-        offsets->front(), partitionBases));
+    regionInfo.views.insert(getMemDescView(localAllocOp.getType(),
+                                           getAllocationFrame(op),
+                                           offsets->front(), partitionBases));
     return propagateRegions(regionInfo);
   }
   if (auto tmemAllocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
-    regionInfo.views.insert(getMemDescView(
-        tmemAllocOp.getType(),
-        getOperationId(
-            op->getParentOfType<FunctionOpInterface>().getOperation()),
-        getAllocationOffset(tmemAllocOp)));
+    regionInfo.views.insert(getMemDescView(tmemAllocOp.getType(),
+                                           getAllocationFrame(op),
+                                           getAllocationOffset(tmemAllocOp)));
     return propagateRegions(regionInfo);
   }
   if (auto memdescIndexOp = dyn_cast<ttg::MemDescIndexOp>(op)) {

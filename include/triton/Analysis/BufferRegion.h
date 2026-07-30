@@ -14,6 +14,7 @@
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SparseBitVector.h"
+#include "llvm/ADT/UniqueVector.h"
 
 namespace mlir::triton {
 
@@ -235,7 +236,7 @@ public:
   static llvm::SmallVector<MemoryAccess> getMemoryAccesses(Operation *op);
 
   uint32_t getOperationId(Operation *operation) const {
-    return operationIds.lookup(operation);
+    return operationInterner.idFor(operation);
   }
 
   // ------------------------------
@@ -279,12 +280,13 @@ private:
                                   uint32_t byteOffset = 0,
                                   uint32_t partitionOffset = 0,
                                   uint32_t ctaOffset = 0);
+  uint32_t getAllocationFrame(Operation *operation) const;
 
   // Global registry of all regions
   std::set<BufferRegion> usedBufferRegions[NUM_REGION_TYPES];
   bool usedUnknownBufferRegions[NUM_REGION_TYPES] = {};
   llvm::DenseMap<std::pair<Type, uint32_t>, AddressSet> footprintCache;
-  llvm::DenseMap<Operation *, uint32_t> operationIds;
+  llvm::UniqueVector<Operation *> operationInterner;
 };
 
 } // namespace mlir::triton
