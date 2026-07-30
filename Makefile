@@ -56,6 +56,10 @@ WARMUP_PROCS ?= $(NUM_PROCS)
 test-warmup: all
 	TRITON_CI_CACHE_PHASE=warmup-triton-kernels $(PYTEST) -s --tb=short -n $(WARMUP_PROCS) --dist=worksteal --warmup-only \
 		python/triton_kernels/tests/test_matmul.py::test_op
+ifeq ($(RUNNER_TYPE),nvidia-gb200)
+	TRITON_CI_CACHE_PHASE=warmup-gluon $(PYTEST) -s --tb=short -n $(WARMUP_PROCS) --dist=worksteal --warmup-only \
+		python/test/gluon/test_core.py::test_mma_shared_inputs
+endif
 
 .PHONY: test-gsan
 test-gsan: all
