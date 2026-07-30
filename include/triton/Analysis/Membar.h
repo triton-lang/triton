@@ -208,7 +208,8 @@ bool containsLocalBarrier(Operation *op);
 // Shared Memory Barrier Analysis
 //===----------------------------------------------------------------------===//
 
-/// Common state for postorder memory-synchronization analyses.
+/// Common allocation and filtering state for postorder memory-synchronization
+/// analyses.
 class MembarOrFenceAnalysis
     : public triton::PostOrderFunctionAnalysis<BlockInfo> {
 public:
@@ -225,17 +226,19 @@ public:
   using MembarOrFenceAnalysis::MembarOrFenceAnalysis;
 
 private:
+  /// Inserts a local barrier when the current access conflicts with an
+  /// unsynchronized access: read-after-write, write-after-read, or
+  /// write-after-write. Read-after-read accesses remain on the frontier.
   void update(Operation *operation, BlockInfo *blockInfo, FuncMapT *funcMap,
               OpBuilder *builder) override;
 
   void insertBarrier(Operation *operation, OpBuilder *builder);
 };
 
-/// Postorder traversal on the callgraph to insert membar instructions
-/// of each function.
-/// Each function maintains a BlockInfo map that includes all potential buffers
-/// after returning. This way users do not have to explicitly insert membars
-/// before and after function calls, but might be a bit conservative.
+/// Runs one synchronization analysis per function in callgraph postorder.
+/// Each function summary contains the unsynchronized access frontier at its
+/// exits, so callers can incorporate callee effects without placing barriers
+/// unconditionally around every call.
 template <typename AnalysisT>
 class ModuleMembarOrFenceAnalysis : public triton::CallGraph<BlockInfo> {
 public:

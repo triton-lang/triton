@@ -39,10 +39,12 @@ protected:
 private:
   void resolve(FunctionOpInterface function, FuncMapT *funcMap,
                OpBuilder *builder) {
-    // Operations are organized into virtual blocks: straight-line segments
-    // ending at a region branch or basic-block terminator. The iterator points
-    // to the operation before the segment, and an invalid iterator represents
-    // the beginning of a block.
+    // A virtual block is a straight-line segment ending at a region branch or
+    // basic-block terminator. Splitting basic blocks this way lets one
+    // worklist handle both block successors (BranchOpInterface) and nested
+    // region control flow (RegionBranchOpInterface). The iterator points to
+    // the operation before the segment; an invalid iterator denotes the
+    // beginning of the block.
     DenseMap<VirtualBlock, StateT> inputs;
     DenseMap<VirtualBlock, StateT> outputs;
     std::deque<VirtualBlock> worklist;
@@ -56,6 +58,8 @@ private:
       Block::iterator begin = block.second.isValid() ? std::next(block.second)
                                                      : block.first->begin();
       for (Operation &operation : llvm::make_range(begin, block.first->end())) {
+        // Branch-like operations can have their own effects, so apply the
+        // transfer function before following their successors.
         update(&operation, &state, funcMap, builder);
         if (operation.hasTrait<OpTrait::IsTerminator>() ||
             isa<RegionBranchOpInterface>(operation)) {
@@ -67,6 +71,8 @@ private:
       auto output = outputs.find(block);
       if (output != outputs.end() && state == output->second)
         continue;
+      // A transfer may clear state at a synchronization point, so replace the
+      // previous output instead of joining with it.
       outputs[block] = state;
       for (VirtualBlock successor : successors) {
         inputs[successor].join(state);
@@ -78,6 +84,8 @@ private:
     for (Block &exit : function.getBlocks()) {
       if (!exit.getTerminator()->hasTrait<OpTrait::ReturnLike>())
         continue;
+      // A basic block may contain several virtual blocks. Its return is in the
+      // final segment, whose starting iterator follows all the others.
       SmallVector<std::pair<VirtualBlock, StateT>> exitBlocks;
       for (auto &[block, state] : outputs)
         if (block.first == &exit)
@@ -100,6 +108,8 @@ private:
     }
 
     if (auto branch = dyn_cast<RegionBranchOpInterface>(operation)) {
+      // A region branch either enters one of its regions or continues after
+      // the operation in its parent block.
       SmallVector<RegionSuccessor> regions;
       branch.getSuccessorRegions(RegionBranchPoint::parent(), regions);
       for (RegionSuccessor &region : regions) {
@@ -112,8 +122,12 @@ private:
       return;
     }
 
+    // ReturnLike unexpectedly implements RegionBranchTerminatorOpInterface,
+    // so only query region successors when the parent is a region branch.
     auto branch = dyn_cast<RegionBranchTerminatorOpInterface>(operation);
     if (branch && isa<RegionBranchOpInterface>(branch->getParentOp())) {
+      // A region terminator either enters another region of its parent or
+      // continues after the parent operation.
       SmallVector<Attribute> operands(branch->getNumOperands());
       SmallVector<RegionSuccessor> regions;
       branch.getSuccessorRegions(operands, regions);
