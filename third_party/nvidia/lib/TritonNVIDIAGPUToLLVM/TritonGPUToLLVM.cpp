@@ -133,14 +133,16 @@ struct ConvertTritonGPUToLLVM
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
     TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
+    ConversionConfig config;
+    config.allowPatternRollback = false;
 
     // Lower functions
     TritonLLVMFunctionConversionTarget funcTarget(*context);
     RewritePatternSet funcPatterns(context);
     mlir::triton::populateFuncOpConversionPattern(
         typeConverter, funcPatterns, targetInfo, patternBenefitDefault);
-    if (failed(
-            applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+    if (failed(applyPartialConversion(mod, funcTarget, std::move(funcPatterns),
+                                      config)))
       return signalPassFailure();
 
     // initSharedMemory is run before the conversion of call and ret ops,
@@ -217,7 +219,8 @@ struct ConvertTritonGPUToLLVM
                                              axisInfoAnalysis, targetInfo);
 
     TritonLLVMConversionTarget convTarget(*context);
-    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
+    if (failed(
+            applyPartialConversion(mod, convTarget, std::move(patterns), config)))
       return signalPassFailure();
 
     // Lower CF ops separately to avoid breaking analysis.
@@ -229,7 +232,8 @@ struct ConvertTritonGPUToLLVM
     RewritePatternSet cfPatterns(context);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           cfPatterns);
-    if (failed(applyPartialConversion(mod, cfTarget, std::move(cfPatterns))))
+    if (failed(
+            applyPartialConversion(mod, cfTarget, std::move(cfPatterns), config)))
       return signalPassFailure();
 
     // Fold CTAId when there is only 1 CTA.

@@ -100,6 +100,8 @@ struct ConvertTritonAMDGPUToLLVM
 
     TritonAMDGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
     TritonLLVMConversionTarget convTarget(*context);
+    ConversionConfig config;
+    config.allowPatternRollback = false;
 
     // Allocate shared memory and set barrier
     auto allocationFn = [&targetInfo](Operation *op) {
@@ -123,8 +125,8 @@ struct ConvertTritonAMDGPUToLLVM
           typeConverter, funcPatterns, targetInfo, patternBenefitDefault);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
-      if (failed(
-              applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+      if (failed(applyPartialConversion(mod, funcTarget,
+                                        std::move(funcPatterns), config)))
         return signalPassFailure();
     }
 
@@ -137,8 +139,8 @@ struct ConvertTritonAMDGPUToLLVM
     {
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
-      if (failed(
-              applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+      if (failed(applyPartialConversion(mod, funcTarget,
+                                        std::move(funcPatterns), config)))
         return signalPassFailure();
     }
 
@@ -243,7 +245,8 @@ struct ConvertTritonAMDGPUToLLVM
                                                         targetInfo);
     mlir::triton::populateFpSanToLLVMPatterns(typeConverter, patterns);
 
-    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
+    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns),
+                                      config))) {
       return signalPassFailure();
     }
 
