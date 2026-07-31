@@ -295,6 +295,19 @@ def test_compile_warmup_replaces_scaled_dot_finite_check():
     assert torch.Tensor.isfinite is previous_isfinite
 
 
+def test_compile_warmup_replaces_triton_kernels_reduce_value_checks():
+    item = SimpleNamespace(
+        module=SimpleNamespace(__file__="/checkout/python/triton_kernels/tests/test_reduce.py"),
+        originalname="test_op",
+    )
+    previous_allclose = torch.allclose
+
+    with compile_warmup_only(), _warmup_test_case(item):
+        assert torch.allclose(torch.empty(4, device="cuda"), torch.empty(4, device="cuda"))
+
+    assert torch.allclose is previous_allclose
+
+
 @pytest.mark.parametrize("warp_counts", [(2, 4), (2, 2, 2)])
 def test_compile_warmup_materializes_gluon_reduce_warp_count(warp_counts):
     layouts = SimpleNamespace(warps_per_cta=lambda layout, shape: warp_counts)

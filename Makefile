@@ -62,6 +62,7 @@ WARMUP_AUXILIARY_CAPTURE_PROCS ?= 2
 WARMUP_UNIT_TESTS := \
 	python/test/unit/language/test_matmul.py \
 	python/test/unit/language/test_core.py::test_gather
+WARMUP_TRITON_KERNEL_TESTS := python/triton_kernels/tests/test_matmul.py::test_op
 
 ifneq ($(filter nvidia-h100 nvidia-gb200,$(RUNNER_TYPE)),)
 WARMUP_UNIT_TESTS := \
@@ -72,6 +73,9 @@ WARMUP_UNIT_TESTS := \
 	python/test/unit/language/test_core.py::test_dot3d \
 	python/test/unit/language/test_core.py::test_gather \
 	python/test/unit/language/test_standard.py::test_sort
+ifeq ($(RUNNER_TYPE),nvidia-gb200)
+WARMUP_TRITON_KERNEL_TESTS += python/triton_kernels/tests/test_reduce.py::test_op
+endif
 endif
 
 # Broad scalar-language capture is slower than compiling under runtime xdist,
@@ -114,7 +118,7 @@ test-warmup: all
 	TRITON_CI_CACHE_PHASE=warmup-triton-kernels $(PYTEST) -s --tb=short \
 		-n $(WARMUP_CAPTURE_PROCS) --dist=worksteal \
 		--warmup-only --warmup-workers "$$warmup_triton_kernels_worker_procs" \
-		python/triton_kernels/tests/test_matmul.py::test_op & \
+		$(WARMUP_TRITON_KERNEL_TESTS) & \
 	warmup_triton_kernels_pid=$$!; \
 	if [ "$(RUNNER_TYPE)" = "nvidia-gb200" ]; then \
 		warmup_group_worker_procs=$$(( \
