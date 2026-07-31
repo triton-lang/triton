@@ -2370,30 +2370,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
-#scratch_src = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
-#scratch_dst = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
-#scratch_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#scratch_smem = #ttg.shared_memory
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 4096 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
-  // CHECK-LABEL: @layout_conversion_checks_barrier_lifetime
-  tt.func public @layout_conversion_checks_barrier_lifetime(
-      %input: tensor<32x32xf32, #scratch_src>) {
-    %bar = ttg.local_alloc {allocation.offset = 0 : i32}
-        : () -> !ttg.memdesc<1xi64, #scratch_barrier, #scratch_smem, mutable>
-    ttng.init_barrier %bar, 1
-        : !ttg.memdesc<1xi64, #scratch_barrier, #scratch_smem, mutable>
-    // CHECK: tt.call @__triton_consan_verify_barrier_memory_available
-    // CHECK: ttg.convert_layout
-    %converted = ttg.convert_layout %input
-        {allocation.offset = 0 : i32, allocation.size = 4096 : i32}
-        : tensor<32x32xf32, #scratch_src> -> tensor<32x32xf32, #scratch_dst>
-    tt.return
-  }
-}
-
-// -----
-
 // A warp-group wait forwards descriptor provenance to its result while
 // separately preserving its asynchronous read-completion semantics.
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>

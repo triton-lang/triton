@@ -22,7 +22,8 @@ def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 //
 
 class TTI_Op<string mnemonic, list<Trait> traits = []> :
-    Op<TritonInstrument_Dialect, mnemonic, traits> {
+    Op<TritonInstrument_Dialect, mnemonic, traits>,
+    VerifySharedMemoryEffects<arguments, traits> {
 }
 
 def TTI_ExperimentalAssertUniformOp : TTI_Op<"experimental_assert_uniform", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {

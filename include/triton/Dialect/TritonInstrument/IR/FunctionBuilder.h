@@ -122,8 +122,8 @@ public:
   void createVerifyBarrierInitializedCall(ImplicitLocOpBuilder &b, Value mbar,
                                           Value pred, Operation *insertPoint,
                                           Value recipientCTAs);
-  // verifyBarrierMemoryAvailable: reject shared-memory scratch that overlaps
-  // any initialized barrier whose storage has not been invalidated.
+  // verifyBarrierMemoryAvailable: reject shared-memory accesses that overlap
+  // initialized barrier storage.
   void createVerifyBarrierMemoryAvailableCall(ImplicitLocOpBuilder &b,
                                               uint32_t offset, uint32_t length,
                                               Value pred,

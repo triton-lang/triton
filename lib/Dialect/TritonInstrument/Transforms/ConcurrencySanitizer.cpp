@@ -773,15 +773,6 @@ private:
         return WalkResult::advance();
       }
 
-      if (!auxData.barriers.empty()) {
-        auto offset = op->getAttrOfType<IntegerAttr>("allocation.offset");
-        auto size = op->getAttrOfType<IntegerAttr>("allocation.size");
-        if (offset && size)
-          funcBuilder.createVerifyBarrierMemoryAvailableCall(
-              b, offset.getInt(), size.getInt(), hooks.getIssuerCTAPred(b, op),
-              op, currentCTAMask(b));
-      }
-
       if (failed(instrumentMemEffects(b, op, thread, funcBuilder))) {
         b.setListener(nullptr);
         return WalkResult::interrupt();
