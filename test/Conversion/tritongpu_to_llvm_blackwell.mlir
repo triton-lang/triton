@@ -1506,4 +1506,30 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
     ttng.async_tma_copy_global_to_local %desc[%x, %x] %view, %bar, %pred : !tt.tensordesc<128x64xi32, #shared>, !ttg.memdesc<4xi64, #barrier, #smem> -> !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>
     tt.return
   }
+
+  // CHECK-LABEL: @tma_multicast_remote_cta
+  // CHECK: %[[DST:[^ ]+]] = nvvm.mapa %{{.*}}, %[[CTA:[^ ]+]] :
+  // CHECK: %[[SHIFT:[^ ]+]] = llvm.and %[[CTA]], %{{.*}} : i32
+  // CHECK: %[[MASK:[^ ]+]] = llvm.shl %{{.*}}, %[[SHIFT]] : i32
+  // CHECK: cp.async.bulk.tensor.2d.cta_group::2.shared::cluster.global.mbarrier::complete_tx::bytes.multicast::cluster
+  // CHECK-SAME: %[[DST]], {{.*}}, %[[MASK]]
+  tt.func @tma_multicast_remote_cta(%desc: !tt.tensordesc<128x64xi32, #shared>, %parent: !ttg.memdesc<256x64xi32, #shared, #smem, mutable>, %bar: !ttg.memdesc<4xi64, #barrier, #smem>, %x: i32, %pred: i1) {
+    %view = ttg.memdesc_subslice %parent [128, 0] : !ttg.memdesc<256x64xi32, #shared, #smem, mutable> -> !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>
+    ttng.async_tma_copy_global_to_local %desc[%x, %x] %view, %bar, %pred {multicast} : !tt.tensordesc<128x64xi32, #shared>, !ttg.memdesc<4xi64, #barrier, #smem> -> !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>
+    tt.return
+  }
+}
+
+// -----
+
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CGALayout = [[0, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @tma_im2col_multicast
+  // CHECK: cp.async.bulk.tensor.4d.shared::cluster.global.im2col.mbarrier::complete_tx::bytes.multicast::cluster [$1], [$2, {$3, $4, $5, $6}], [$7], {$8, $9}, $10;
+  tt.func @tma_im2col_multicast(%desc: !ttng.tensordesc_im2col<128x64xi32, #shared>, %dst: !ttg.memdesc<128x64xi32, #shared, #smem, mutable>, %bar: !ttg.memdesc<2xi64, #barrier, #smem>, %x: i32, %offset: i16, %pred: i1) {
+    ttng.async_tma_copy_global_to_local %desc[%x, %x, %x, %x] offsets = [%offset, %offset] %dst, %bar, %pred {multicast} : !ttng.tensordesc_im2col<128x64xi32, #shared>, !ttg.memdesc<2xi64, #barrier, #smem> -> !ttg.memdesc<128x64xi32, #shared, #smem, mutable>
+    tt.return
+  }
 }

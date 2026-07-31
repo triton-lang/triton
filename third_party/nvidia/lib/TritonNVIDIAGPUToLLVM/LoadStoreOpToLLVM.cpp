@@ -1138,13 +1138,10 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     auto ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
     // We multicast if the flag is on and the block layout has broadcasting
     bool multicast = op.getMulticast();
-    Value multicastMask;
+    uint32_t maskCGABroadcast =
+        smemLayout.getFreeVariableMasks().lookup(kBlock);
     Value barrierPtr = barrierMemObj.getBase();
     if (multicast) {
-      uint32_t maskCGABroadcast =
-          smemLayout.getFreeVariableMasks().lookup(kBlock);
-      multicastMask =
-          LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, maskCGABroadcast);
       // If we multicast, we emit the full message from the representative CTA
       // meaning the CTA with the lowest CTA id in a multicast group.
       auto ctaIdInGroup = b.and_(ctaId, b.i32_val(maskCGABroadcast));
@@ -1230,10 +1227,6 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       }
       operands.push_back(ptxBuilderTMA.newOperand(barrierPtr, "r"));
       tmaInst += "}], [$" + std::to_string(operandIdx++) + "]";
-      if (multicast) {
-        operands.push_back(ptxBuilderTMA.newOperand(multicastMask, "h"));
-        tmaInst += ", $" + std::to_string(operandIdx++);
-      }
       if (isIm2Col) {
         auto im2colOffsets = adaptor.getOffsets();
         if (!im2colOffsets.empty()) {
@@ -1248,6 +1241,12 @@ struct AsyncTMACopyGlobalToLocalOpConversion
           }
           tmaInst += "}";
         }
+      }
+      if (multicast) {
+        auto multicastMask = LLVM::NVIDIA::createTMAMulticastMask(
+            loc, rewriter, maskCGABroadcast, targetCTA);
+        operands.push_back(ptxBuilderTMA.newOperand(multicastMask, "h"));
+        tmaInst += ", $" + std::to_string(operandIdx++);
       }
       tmaInst += ";";
 
@@ -1426,7 +1425,7 @@ static LogicalResult iterateGatherScatterIndices(
     mlir::TypedValue<RankedTensorType> xCoords,
     mlir::TypedValue<ttg::MemDescType> smem, Value smemObjValue,
     Value xOffsetsValue, Value yOffsetValue, Value pred,
-    function_ref<void(Value, Value, Value, ArrayRef<Value>)> callback) {
+    function_ref<void(Value, Value, Value, Value, ArrayRef<Value>)> callback) {
   MLIRContext *ctx = op->getContext();
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -1484,9 +1483,17 @@ static LogicalResult iterateGatherScatterIndices(
   unsigned msgSize = innerBlockSize / numMessagesPerRow;
   LinearLayout msgToCol =
       LinearLayout::strided1D(numMessagesPerRow, msgSize, kMsg, kDim1);
-  LinearLayout msgLayout = xCoordsLayout * msgToCol;
   LinearLayout msgToOffset =
       getMsgToPackedOffsetLayout(smemType, ttg::TMAMode::Tiled);
+  LinearLayout msgLayout = xCoordsLayout * msgToCol;
+  auto msgBases = msgLayout.getBases();
+  for (auto [bit, basis] : llvm::enumerate(msgBases[kBlock]))
+    basis.back() = msgToOffset.getBasis(kBlock, bit, kDim1);
+  auto msgOutDims = msgLayout.getOutDims();
+  msgOutDims[msgLayout.getOutDimIndex(kDim1)].second =
+      smemType.getShape().back();
+  msgLayout = LinearLayout(std::move(msgBases), msgOutDims,
+                           /*requireSurjective=*/false);
 
   // `gather4` will put the segments of the 4 rows consecutively in
   // shared memory. However, if the 4 rows are smaller than the shared memory
@@ -1542,7 +1549,8 @@ static LogicalResult iterateGatherScatterIndices(
       }
       Value yOffset = b.add(yOffsetValue, b.i32_val(msgId * msgSize));
 
-      callback(pred, shMemPtr, yOffset, ArrayRef(xOffsets).slice(regId, 4));
+      callback(pred, shMemPtr, targetCTA, yOffset,
+               ArrayRef(xOffsets).slice(regId, 4));
     };
   }
 
@@ -1573,13 +1581,11 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
   auto kBlock = StringAttr::get(op.getContext(), "block");
   bool multicast = op.getMulticast();
   Value pred = adaptor.getPred();
-  Value multicastMask;
+  uint32_t maskCGABroadcast = 0;
   if (multicast) {
-    uint32_t maskCGABroadcast = ttg::toLinearLayout(op.getResult().getType())
-                                    .getFreeVariableMasks()
-                                    .lookup(kBlock);
-    multicastMask =
-        LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, maskCGABroadcast);
+    maskCGABroadcast = ttg::toLinearLayout(op.getResult().getType())
+                           .getFreeVariableMasks()
+                           .lookup(kBlock);
     Value ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
     Value ctaIdInGroup = b.and_(ctaId, b.i32_val(maskCGABroadcast));
     pred = b.and_(pred, b.icmp_eq(ctaIdInGroup, b.i32_val(0)));
@@ -1608,8 +1614,8 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
     ctaGroup = ".cta_group::2";
 
   // Callback to generate the gather4 instruction.
-  auto callback = [&](Value pred, Value shMemPtr, Value yOffset,
-                      ArrayRef<Value> xOffsets) {
+  auto callback = [&](Value pred, Value shMemPtr, Value targetCTA,
+                      Value yOffset, ArrayRef<Value> xOffsets) {
     std::string tmaInst = "@$0 cp.async.bulk.tensor.2d.tile::gather4";
     tmaInst += ctaGroup;
     tmaInst += ".shared::";
@@ -1634,8 +1640,11 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
     for (Value xOffset : xOffsets)
       operands.push_back(ptxBuilder.newOperand(xOffset, "r"));
     operands.push_back(ptxBuilder.newOperand(barrierPtr, "r"));
-    if (multicast)
+    if (multicast) {
+      auto multicastMask = LLVM::NVIDIA::createTMAMulticastMask(
+          loc, rewriter, maskCGABroadcast, targetCTA);
       operands.push_back(ptxBuilder.newOperand(multicastMask, "h"));
+    }
 
     auto &tma = *ptxBuilder.create(tmaInst);
     tma(operands, /*attachOnlyMLIRArgs=*/true);
@@ -1681,7 +1690,7 @@ LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
   }
 
   // Callback to generate the scatter4 instruction.
-  auto callback = [&](Value pred, Value shMemPtr, Value yOffset,
+  auto callback = [&](Value pred, Value shMemPtr, Value, Value yOffset,
                       ArrayRef<Value> xOffsets) {
     std::string tmaInst = "@$0 cp.async.bulk.tensor.2d.tile::scatter4.global"
                           ".shared::cta.bulk_group "
