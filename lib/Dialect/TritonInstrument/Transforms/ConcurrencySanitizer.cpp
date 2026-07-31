@@ -2,7 +2,6 @@
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Transforms/Passes.h"
-#include "triton/Analysis/Allocation.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
@@ -774,15 +773,13 @@ private:
         return WalkResult::advance();
       }
 
-      if (!auxData.barriers.empty() &&
-          !isa<ttg::LocalAllocOp, ttng::TMEMAllocOp>(op)) {
-        if (auto offset = op->getAttrOfType<IntegerAttr>("allocation.offset")) {
-          unsigned scratchSize = defaultAllocationAnalysisScratchSizeFn(op);
-          if (scratchSize)
-            funcBuilder.createVerifyBarrierMemoryAvailableCall(
-                b, offset.getInt(), scratchSize, hooks.getIssuerCTAPred(b, op),
-                op, currentCTAMask(b));
-        }
+      if (!auxData.barriers.empty()) {
+        auto offset = op->getAttrOfType<IntegerAttr>("allocation.offset");
+        auto size = op->getAttrOfType<IntegerAttr>("allocation.size");
+        if (offset && size)
+          funcBuilder.createVerifyBarrierMemoryAvailableCall(
+              b, offset.getInt(), size.getInt(), hooks.getIssuerCTAPred(b, op),
+              op, currentCTAMask(b));
       }
 
       if (failed(instrumentMemEffects(b, op, thread, funcBuilder))) {

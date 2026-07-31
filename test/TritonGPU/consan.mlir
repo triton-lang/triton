@@ -2200,7 +2200,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
         : !ttg.memdesc<1xi64, #scratch_barrier, #scratch_smem, mutable>
     // CHECK: tt.call @__triton_consan_verify_barrier_memory_available
     // CHECK: ttg.convert_layout
-    %converted = ttg.convert_layout %input {allocation.offset = 0 : i32}
+    %converted = ttg.convert_layout %input
+        {allocation.offset = 0 : i32, allocation.size = 4096 : i32}
         : tensor<32x32xf32, #scratch_src> -> tensor<32x32xf32, #scratch_dst>
     tt.return
   }
