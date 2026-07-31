@@ -2119,10 +2119,8 @@ SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
 std::tuple<Block *, Block *, Block *> createIfBlock(RewriterBase &b,
                                                     Location loc, Value cnd) {
   Block *prevBlock = b.getInsertionBlock();
-  Block *ifBlock = prevBlock->splitBlock(b.getInsertionPoint());
-
-  // Split a block after the call.
-  Block *thenBlock = ifBlock->splitBlock(ifBlock->begin());
+  Block *thenBlock = prevBlock->splitBlock(b.getInsertionPoint());
+  Block *ifBlock = b.createBlock(thenBlock);
   b.setInsertionPointToEnd(ifBlock);
   LLVM::BrOp::create(b, loc, thenBlock);
   b.setInsertionPointToEnd(prevBlock);
