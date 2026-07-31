@@ -95,13 +95,11 @@ test-warmup: all
 			$(WARMUP_PROCS) - warmup_unit_procs - warmup_group_procs - warmup_auxiliary_procs )); \
 	elif [ "$(RUNNER_TYPE)" = "nvidia-h100" ]; then \
 		warmup_unit_procs=$$(( $(WARMUP_PROCS) / 8 )); \
-		warmup_group_procs=$$(( $(WARMUP_PROCS) * 3 / 14 )); \
-		warmup_auxiliary_procs=$$(( $(WARMUP_PROCS) / 14 )); \
+		warmup_group_procs=$$(( $(WARMUP_PROCS) * 2 / 7 )); \
 		if [ "$$warmup_unit_procs" -lt 1 ]; then warmup_unit_procs=1; fi; \
 		if [ "$$warmup_group_procs" -lt 1 ]; then warmup_group_procs=1; fi; \
-		if [ "$$warmup_auxiliary_procs" -lt 1 ]; then warmup_auxiliary_procs=1; fi; \
 		warmup_triton_kernels_procs=$$(( \
-			$(WARMUP_PROCS) - warmup_unit_procs - warmup_group_procs - warmup_auxiliary_procs )); \
+			$(WARMUP_PROCS) - warmup_unit_procs - warmup_group_procs )); \
 	else \
 		warmup_group_procs=$$warmup_attention_procs; \
 		warmup_triton_kernels_procs=$$(( $(WARMUP_PROCS) - warmup_unit_procs - warmup_group_procs )); \
@@ -140,8 +138,13 @@ test-warmup: all
 			$(PYTEST) -s --tb=short -n $(WARMUP_CAPTURE_PROCS) --dist=worksteal \
 			--warmup-only --warmup-workers "$$warmup_group_worker_procs" \
 			--warmup-phase python/tutorials/06-fused-attention.py=warmup-attention \
+			--warmup-phase python/test/regression=warmup-regression \
 			python/tutorials/06-fused-attention.py::test_op \
-			python/test/gluon/test_core.py::test_mma_shared_inputs & \
+			python/test/gluon/test_core.py::test_mma_shared_inputs \
+			python/test/gluon/test_lowerings.py::test_convert1d_layouts \
+			python/test/gluon/test_lowerings.py::test_convert2d_layouts \
+			python/test/gluon/test_lowerings.py::test_reduce_layouts \
+			python/test/regression & \
 	else \
 		TRITON_CI_CACHE_PHASE=warmup-attention $(PYTEST) -s --tb=short \
 			--warmup-only --warmup-workers "$$warmup_group_procs" \
