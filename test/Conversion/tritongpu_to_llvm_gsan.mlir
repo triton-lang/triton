@@ -143,6 +143,25 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
 
 // -----
 
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: llvm.func @atomic_cluster_sync
+  // CHECK: llvm.call @__triton_gsan_cluster_barrier_init
+  // CHECK: llvm.call @__triton_gsan_cluster_barrier_sync
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  // CHECK: llvm.call @__triton_gsan_cluster_barrier_sync
+  tt.func @atomic_cluster_sync(%ptr: !tt.ptr<i32>) {
+    %one = arith.constant 1 : i32
+    %release = tt.atomic_rmw add, release, gpu, %ptr, %one : (!tt.ptr<i32>, i32) -> i32
+    %acquire = tt.atomic_rmw add, acquire, gpu, %ptr, %one : (!tt.ptr<i32>, i32) -> i32
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.target" = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: llvm.func @gsan_atomic_ordering_two_ctas
   // CHECK: llvm.call @__triton_gsan_init
@@ -163,6 +182,27 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32
     %c0 = arith.constant 0 : i32
     %rmw = tt.atomic_rmw add, acq_rel, gpu, %ptr, %val, %mask : (!tt.ptr<i32>, i32, i1) -> i32
     %cas = tt.atomic_cas acq_rel, gpu, %ptr, %c0, %val : (!tt.ptr<i32>, i32, i32) -> i32
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: llvm.func @atomic_cluster_sync_warp_specialized
+  // CHECK: llvm.call @__triton_gsan_cluster_barrier_init
+  // CHECK: llvm.call @__triton_gsan_cluster_barrier_sync
+  // CHECK: atom.global.gpu.release
+  tt.func @atomic_cluster_sync_warp_specialized(%ptr: !tt.ptr<i32>) {
+    ttg.warp_specialize()
+    default {
+      %one = arith.constant 1 : i32
+      %release = tt.atomic_rmw add, release, gpu, %ptr, %one : (!tt.ptr<i32>, i32) -> i32
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      ttg.warp_return
+    } : () -> ()
     tt.return
   }
 }
@@ -228,6 +268,35 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32
     %c0 = arith.constant 0 : i32
     %rmw = tt.atomic_rmw add, relaxed, gpu, %ptr, %val, %mask : (!tt.ptr<i32>, i32, i1) -> i32
     %cas = tt.atomic_cas relaxed, gpu, %ptr, %c0, %val : (!tt.ptr<i32>, i32, i32) -> i32
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: llvm.func @relaxed_atomic_has_no_cluster_sync
+  // CHECK-NOT: __triton_gsan_cluster_barrier
+  // CHECK: llvm.return
+  tt.func @relaxed_atomic_has_no_cluster_sync(%ptr: !tt.ptr<i32>) {
+    %one = arith.constant 1 : i32
+    %relaxed = tt.atomic_rmw add, relaxed, gpu, %ptr, %one : (!tt.ptr<i32>, i32) -> i32
+    tt.return
+  }
+}
+
+// -----
+
+#blockedSplitM = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
+#blockedSplitN = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: llvm.func @convert_layout_cluster_sync
+  // CHECK: llvm.call @__triton_gsan_cluster_barrier_init
+  // CHECK: llvm.call @__triton_gsan_cluster_barrier_sync
+  tt.func @convert_layout_cluster_sync() {
+    %value = arith.constant dense<0.000000e+00> : tensor<256x128xf16, #blockedSplitM>
+    %converted = ttg.convert_layout %value : tensor<256x128xf16, #blockedSplitM> -> tensor<256x128xf16, #blockedSplitN>
     tt.return
   }
 }

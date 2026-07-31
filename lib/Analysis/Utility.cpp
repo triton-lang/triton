@@ -15,6 +15,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -1303,4 +1304,43 @@ bool isCvtDimSync(const triton::LinearLayout &srcLayout,
         .isIdentityOnOutDim(dim);
   }
 }
+
+namespace triton::nvidia_gpu {
+
+static bool atomicNeedsClusterBarrier(Operation *op) {
+  if (isa<AtomicPollOp>(op))
+    return gpu::lookupNumCTAs(op) != 1;
+  auto atomic = dyn_cast<AtomicOpInterface>(op);
+  if (!atomic || gpu::lookupNumCTAs(op) == 1)
+    return false;
+
+  auto sem = atomic.getMemSemantic();
+  if (sem == MemSemantic::RELEASE || sem == MemSemantic::ACQUIRE_RELEASE ||
+      (sem == MemSemantic::ACQUIRE && !op->hasAttr("allocation.offset")))
+    return true;
+
+  if (op->getResult(0).use_empty())
+    return false;
+  auto tensorTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+  if (!tensorTy)
+    return true;
+  auto kBlock = StringAttr::get(op->getContext(), "block");
+  return gpu::toLinearLayout(tensorTy).getFreeVariableMasks().lookup(kBlock);
+}
+
+bool needsClusterBarrier(Operation *op) {
+  if (isa<ClusterBarrierOp>(op))
+    return true;
+  if (auto cvt = dyn_cast<gpu::ConvertLayoutOp>(op)) {
+    auto kBlock = StringAttr::get(op->getContext(), "block");
+    return !isCvtDimSync(gpu::toLinearLayout(cvt.getSrc().getType()),
+                         gpu::toLinearLayout(cvt.getType()), kBlock);
+  }
+  if (auto reduce = dyn_cast<ReduceOp>(op))
+    return !ReduceOpHelper(reduce).isReduceWithinCTA();
+  return atomicNeedsClusterBarrier(op);
+}
+
+} // namespace triton::nvidia_gpu
+
 } // namespace mlir

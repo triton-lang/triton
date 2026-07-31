@@ -379,6 +379,39 @@ def test_gluon_cluster_barrier_synchronizes_vector_clocks(with_gsan):
 
 
 @gluon.jit
+def _gluon_atomic_cluster_sync_kernel(payload_ptr, counter_ptr, out_ptr):
+    data_layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
+
+    offsets = gl.arange(0, 256, data_layout)
+    payload_ptrs = payload_ptr + offsets * 0
+    out_ptrs = out_ptr + offsets * 0
+    gl.store(payload_ptrs, 1, mask=offsets == 0)
+    gl.atomic_add(counter_ptr, 1, sem="release", scope="gpu")
+    value = gl.load(payload_ptrs, mask=offsets == 128, other=0)
+    gl.store(out_ptrs, value, mask=offsets == 128)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
+def test_gluon_cluster_synchronizing_atomic_synchronizes_vector_clocks(with_gsan):
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
+    out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+
+    _gluon_atomic_cluster_sync_kernel[(1, )](payload, counter, out, num_warps=4, num_ctas=2)
+    torch.cuda.synchronize()
+
+    assert counter.item() == 1
+    assert out.item() == 1
+    payload_cell = shadow_cell_from_address(payload.data_ptr())
+    producer_tid = payload_cell.write_clock.thread_id
+    producer_epoch = payload_cell.write_clock.epoch
+    consumer_tid = payload_cell.read_clocks[0].thread_id
+    assert consumer_tid != producer_tid
+    consumer_state = thread_state_from_smid(consumer_tid)
+    assert consumer_state.vector_clock[producer_tid] >= producer_epoch
+
+
+@gluon.jit
 def _gluon_ws_cluster_barrier_partition(payload_ptr, out_ptr, partition_offset: gl.constexpr):
     data_layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
 
