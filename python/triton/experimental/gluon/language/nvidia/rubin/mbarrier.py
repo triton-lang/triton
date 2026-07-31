@@ -54,6 +54,14 @@ def test_wait(mbarrier, phase, pred=True, phase_type="primary", _semantic=None):
     """
     Test an mbarrier phase once without blocking.
 
+    This operation is CTA-local: it neither synchronizes CTAs nor broadcasts
+    its result between them, so it may be executed by a lead CTA alone.
+    ``pred`` must be uniform among the participating threads. If the current
+    warp-specialized partition contains multiple warps, all of them must
+    execute this operation convergently. In two-CTA TMA mode, both CTAs issue
+    the transfer but only the lead CTA's barrier is signaled, so call this
+    operation only from the lead CTA.
+
     Args:
         mbarrier (shared_memory_descriptor): The barrier object to test.
         phase (int): The phase/parity value to test.
@@ -84,6 +92,14 @@ def test_wait(mbarrier, phase, pred=True, phase_type="primary", _semantic=None):
 def test_wait_validity(mbarrier, phase, pred=True, _semantic=None):
     """
     Test primary completion and validity of a report-validity TMA attempt.
+
+    This operation is CTA-local: it neither synchronizes CTAs nor broadcasts
+    its results between them, so it may be executed by a lead CTA alone.
+    ``pred`` must be uniform among the participating threads. If the current
+    warp-specialized partition contains multiple warps, all of them must
+    execute this operation convergently. In two-CTA TMA mode, both CTAs issue
+    the transfer but only the lead CTA's barrier is signaled, so call this
+    operation only from the lead CTA.
 
     Args:
         mbarrier (shared_memory_descriptor): The report-validity barrier to test.

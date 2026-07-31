@@ -429,6 +429,13 @@ def TTNG_BarrierTestWaitOp : TTNG_Op<"barrier_test_wait", [
 
     `phaseType` selects either the barrier's primary phase or its conditional
     phase. The latter requires the mbarrier v1 layout.
+
+    This operation is CTA-local and does not synchronize or broadcast its
+    result across CTAs. Its predicate must be uniform among the participating
+    threads. When multiple warps participate, they must execute the operation
+    convergently so the result can be broadcast within the warp group. In
+    two-CTA TMA mode, both CTAs issue the transfer but only the lead CTA's
+    barrier is signaled, so the barrier should be queried only by the lead CTA.
   }];
 
   let arguments = (ins
@@ -456,6 +463,13 @@ def TTNG_BarrierTestWaitReportOp : TTNG_Op<"barrier_test_wait_report", [
     Performs a single non-blocking test of the requested primary mbarrier phase
     and returns both its completion predicate and report predicate as scalar
     `i1` values.
+
+    This operation is CTA-local and does not synchronize or broadcast its
+    results across CTAs. Its predicate must be uniform among the participating
+    threads. When multiple warps participate, they must execute the operation
+    convergently so the results can be broadcast within the warp group. In
+    two-CTA TMA mode, both CTAs issue the transfer but only the lead CTA's
+    barrier is signaled, so the barrier should be queried only by the lead CTA.
   }];
 
   let arguments = (ins

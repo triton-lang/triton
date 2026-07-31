@@ -59,11 +59,14 @@ bool supportsMbarV1Layout(const NVIDIA::TargetInfo &targetInfo) {
 Value createMbarrierTestWriterPredicate(Operation *op,
                                         ConversionPatternRewriter &rewriter,
                                         const NVIDIA::TargetInfo &targetInfo) {
-  if (ttg::lookupNumWarps(op) == 1 && ttg::lookupNumCTAs(op) == 1)
+  if (ttg::lookupNumWarps(op) == 1)
     return {};
 
   auto loc = op->getLoc();
   auto freeVarMasks = getFreeVariableMasks(op->getResult(0).getType());
+  // The result is broadcast through CTA-local shared memory, so elect one
+  // writer per CTA rather than one writer across the cluster.
+  freeVarMasks[str_attr("block")] = 0;
   return ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter, loc,
                                            targetInfo);
 }
@@ -77,11 +80,11 @@ SmallVector<Value> broadcastMbarrierTestResults(
              results,
              [](Value result) { return result.getType().isInteger(1); }) &&
          "expected one to eight predicate results");
-  if (ttg::lookupNumWarps(op) == 1 && ttg::lookupNumCTAs(op) == 1)
+  if (ttg::lookupNumWarps(op) == 1)
     return SmallVector<Value>(results);
 
   assert(op->hasAttr("allocation.offset") &&
-         "multi-warp or multi-CTA mbarrier test requires shared scratch");
+         "multi-warp mbarrier test requires shared scratch");
   Value packed = b.zext(i8_ty, results.front());
   for (auto [index, result] : llvm::enumerate(results.drop_front())) {
     Value bit = b.zext(i8_ty, result);
@@ -92,15 +95,9 @@ SmallVector<Value> broadcastMbarrierTestResults(
   Value scratch =
       LLVM::getSharedMemoryBase(op->getLoc(), rewriter, targetInfo, op);
   targetInfo.storeShared(rewriter, op->getLoc(), scratch, packed, writerPred);
-  if (ttg::lookupNumCTAs(op) == 1) {
-    targetInfo.barrier(op->getLoc(), rewriter, ttg::AddrSpace::Local);
-    packed = targetInfo.loadShared(rewriter, op->getLoc(), scratch, i8_ty,
-                                   b.true_val());
-  } else {
-    targetInfo.clusterBarrier(op->getLoc(), rewriter, op);
-    packed = targetInfo.loadDShared(rewriter, op->getLoc(), scratch,
-                                    b.i32_val(0), i8_ty, b.true_val());
-  }
+  targetInfo.barrier(op->getLoc(), rewriter, ttg::AddrSpace::Local);
+  packed = targetInfo.loadShared(rewriter, op->getLoc(), scratch, i8_ty,
+                                 b.true_val());
 
   SmallVector<Value> broadcast;
   broadcast.reserve(results.size());
