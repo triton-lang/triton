@@ -234,7 +234,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             layout = AutoLayout()
         return self.splat(scalar, shape, layout)
 
-    def convert_layout(self, value, layout, assert_trivial=False):
+    def convert_layout(self, value, layout, assert_trivial=False, force_warp_shuffle=False):
         ty = value.type
         _check(isinstance(ty, ttgl.distributed_type),
                lambda: f"expected convert_layout input to be a distributed_type but got: {ty!r}")
@@ -246,7 +246,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             raise TypeError(f"layout conversion from {ty.layout} to {layout} is not trivial.\n"
                             f"The linear layouts are:\n{self.to_linear_layout(ty.layout, ty.shape)}\n"
                             f"{self.to_linear_layout(layout, ty.shape)}")
-        handle = self.builder.create_convert_layout(ret_ty_ir, value.handle)
+        handle = self.builder.create_convert_layout(ret_ty_ir, value.handle, force_warp_shuffle)
         return ttgl.tensor(handle, ret_ty)
 
     def allocate_shared(self, element_ty, shape, layout, value):

@@ -22,6 +22,13 @@ tt.func @convert_layout_swizzled(%arg0: tensor<256x256xi32, #blocked1>) {
   tt.return
 }
 
+// CHECK-LABEL: @convert_layout_forced_warp_shuffle
+tt.func @convert_layout_forced_warp_shuffle(%arg0: tensor<256x256xi32, #blocked1>) {
+  // CHECK-NEXT: %0 = ttg.convert_layout %arg0 {force_warp_shuffle}
+  %0 = ttg.convert_layout %arg0 {force_warp_shuffle} : tensor<256x256xi32, #blocked1> -> tensor<256x256xi32, #blocked2>
+  tt.return
+}
+
 }
 
 // -----

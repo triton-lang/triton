@@ -58,11 +58,12 @@ struct ConvertLayoutOpConversion
       return op.emitError("ConvertLayoutOp  supports GenericLinearEncoding "
                           " only when the conversion is transfer between "
                           "values in the same thread.");
-    bool alwaysUseWarpShuffle = cvtAlwaysUseWarpShuffle(op);
     assert(to_vector(conversion.getInDimNames()) ==
            to_vector(conversion.getOutDimNames()));
     if (llvm::is_contained(dims, kBlock) || llvm::is_contained(dims, kWarp)) {
-      assert(!alwaysUseWarpShuffle);
+      if (op.getForceWarpShuffle())
+        return op.emitError(
+            "force_warp_shuffle requires a conversion within one warp");
       // Transfer between values in the same CTA, or across CTAs. We move values
       // through (distributed) shared memory.
       transferSwizzlingLocalMem(op, adaptor.getSrc(), srcLayout, dstLayout,
@@ -72,7 +73,7 @@ struct ConvertLayoutOpConversion
       // Case 3. Transfer between values in the same warp, in which case we try
       //         to move values using warp shuffles, though if the pattern is
       //         expensive enough we fall back to using shared memory
-      if (cvtNeedsWarpShuffle(srcTy, dstTy) || alwaysUseWarpShuffle)
+      if (cvtNeedsWarpShuffle(op))
         return transferWithinWarp(op, srcLayout, dstLayout, adaptor, rewriter);
 
       transferSwizzlingLocalMem(op, adaptor.getSrc(), srcLayout, dstLayout,

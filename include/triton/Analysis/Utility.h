@@ -275,10 +275,12 @@ bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy);
 // Conversion from `srcTy` to `dstTy` involves data exchange across threads
 // within a warp.  No data exchange across warps or blocks is needed.
 bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
+bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op);
 
 // Conversion from `srcTy` to `dstTy` involves data exchange across threads,
 // warps, and possibly blocks.
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
+bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op);
 
 // TODO: Move utility functions that belong to ConvertLayoutOp to class
 // ConvertLayoutOpHelper in the future

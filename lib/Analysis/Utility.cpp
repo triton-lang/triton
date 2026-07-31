@@ -1266,9 +1266,19 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
   return false;
 }
 
+bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op) {
+  return op.getForceWarpShuffle() ||
+         cvtNeedsWarpShuffle(op.getSrc().getType(), op.getType());
+}
+
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
   return !cvtReordersRegisters(srcTy, dstTy) &&
          !cvtNeedsWarpShuffle(srcTy, dstTy);
+}
+
+bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op) {
+  return !op.getForceWarpShuffle() &&
+         cvtNeedsSharedMemory(op.getSrc().getType(), op.getType());
 }
 
 std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
