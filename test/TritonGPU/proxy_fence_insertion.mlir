@@ -23,41 +23,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
-#store_blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 0]]}>
-#store_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CGALayout = [[0, 0]]}>
-#store_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
-#store_smem = #ttg.shared_memory
-
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  // st.async executes asynchronously but accesses shared memory through the
-  // generic proxy, so consuming its destination through TMA needs a fence.
-  // CHECK-LABEL: @async_shared_store_uses_generic_proxy
-  tt.func @async_shared_store_uses_generic_proxy(
-      %value: tensor<32x32xf32, #store_blocked>,
-      %desc: !tt.tensordesc<32x32xf32, #store_shared>) {
-    %c0 = arith.constant 0 : i32
-    %dst = ttg.local_alloc {allocation.offset = 0 : i32}
-        : () -> !ttg.memdesc<32x32xf32, #store_shared, #store_smem, mutable>
-    %completion = ttg.local_alloc {allocation.offset = 4096 : i32}
-        : () -> !ttg.memdesc<2xi64, #store_barrier, #store_smem, mutable>
-    ttng.init_barrier %completion, 1
-        : !ttg.memdesc<2xi64, #store_barrier, #store_smem, mutable>
-    // CHECK: ttng.async_shared_store
-    // CHECK-NEXT: ttng.fence_async_shared {bCluster = false}
-    // CHECK-NEXT: ttng.async_tma_copy_local_to_global
-    ttng.async_shared_store %value, %dst, %completion
-        : tensor<32x32xf32, #store_blocked>
-        -> !ttg.memdesc<32x32xf32, #store_shared, #store_smem, mutable>,
-           !ttg.memdesc<2xi64, #store_barrier, #store_smem, mutable>
-    ttng.async_tma_copy_local_to_global %desc[%c0, %c0] %dst
-        : !tt.tensordesc<32x32xf32, #store_shared>,
-          !ttg.memdesc<32x32xf32, #store_shared, #store_smem, mutable>
-    tt.return
-  }
-}
-
-// -----
-
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
@@ -409,87 +374,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
     ttng.cluster_barrier
     ttng.fence_async_shared {bCluster = false}
     ttng.tmem_copy %src, %dst : !ttg.memdesc<128x128xf32, #shared, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-    tt.return
-  }
-}
-
-// -----
-
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
-#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#smem = #ttg.shared_memory
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK-LABEL: @invalidated_barrier_storage_requires_proxy_fence
-  tt.func @invalidated_barrier_storage_requires_proxy_fence(
-      %desc: !tt.tensordesc<64x64xf32, #shared>,
-      %completion: !ttg.memdesc<1xi64, #barrier, #smem, mutable>) {
-    %c0 = arith.constant 0 : i32
-    %true = arith.constant true
-    %old_barrier = ttg.local_alloc {allocation.offset = 0 : i32}
-        : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
-    ttng.init_barrier %old_barrier, 1
-        : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
-    // CHECK: ttng.inval_barrier
-    // CHECK: ttng.fence_async_shared {bCluster = false}
-    // CHECK-NEXT: ttng.async_tma_copy_global_to_local
-    ttng.inval_barrier %old_barrier
-        : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
-    ttg.local_dealloc %old_barrier
-        : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
-    %payload = ttg.local_alloc {allocation.offset = 0 : i32}
-        : () -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
-    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %payload,
-        %completion, %true : !tt.tensordesc<64x64xf32, #shared>,
-        !ttg.memdesc<1xi64, #barrier, #smem, mutable>
-        -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
-    tt.return
-  }
-
-  // CHECK-LABEL: @disjoint_invalidated_barrier_needs_no_proxy_fence
-  tt.func @disjoint_invalidated_barrier_needs_no_proxy_fence(
-      %desc: !tt.tensordesc<64x64xf32, #shared>,
-      %completion: !ttg.memdesc<1xi64, #barrier, #smem, mutable>) {
-    %c0 = arith.constant 0 : i32
-    %true = arith.constant true
-    %old_barrier = ttg.local_alloc {allocation.offset = 16384 : i32}
-        : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
-    %payload = ttg.local_alloc {allocation.offset = 0 : i32}
-        : () -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
-    ttng.init_barrier %old_barrier, 1
-        : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
-    // CHECK: ttng.inval_barrier
-    // CHECK-NOT: ttng.fence_async_shared
-    // CHECK: ttng.async_tma_copy_global_to_local
-    ttng.inval_barrier %old_barrier
-        : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
-    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %payload,
-        %completion, %true : !tt.tensordesc<64x64xf32, #shared>,
-        !ttg.memdesc<1xi64, #barrier, #smem, mutable>
-        -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
-    tt.return
-  }
-
-  // CHECK-LABEL: @barrier_arrival_is_not_a_generic_proxy_access
-  tt.func @barrier_arrival_is_not_a_generic_proxy_access(
-      %desc: !tt.tensordesc<64x64xf32, #shared>) {
-    %c0 = arith.constant 0 : i32
-    %true = arith.constant true
-    %completion = ttg.local_alloc {allocation.offset = 16384 : i32}
-        : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
-    %payload = ttg.local_alloc {allocation.offset = 0 : i32}
-        : () -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
-    ttng.init_barrier %completion, 1
-        : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
-    // CHECK: ttng.arrive_barrier
-    // CHECK-NOT: ttng.fence_async_shared
-    // CHECK: ttng.async_tma_copy_global_to_local
-    ttng.arrive_barrier %completion, 1, %true
-        : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
-    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %payload,
-        %completion, %true : !tt.tensordesc<64x64xf32, #shared>,
-        !ttg.memdesc<1xi64, #barrier, #smem, mutable>
-        -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
     tt.return
   }
 }

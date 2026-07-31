@@ -129,23 +129,26 @@ public:
   virtual std::optional<MemEffectsOpInfo>
   getMemEffectsOpInfo(Operation *op) const {
     namespace ttg = triton::gpu;
-    MemEffectsOpInfo info;
-    if (isa<ttg::AsyncCopyGlobalToLocalOp>(op)) {
+    if (auto copyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
+      MemEffectsOpInfo info;
       info.trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
       info.commitKind = CommitKind::AsyncCp;
-    } else {
-      info.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+      info.operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
+                                       copyOp.getResult());
+      return info;
     }
+
+    MemEffectsOpInfo info;
+    info.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+    auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op);
     for (const auto &access : BufferRegionAnalysis::getMemoryAccesses(op)) {
-      if (access.kind == BufferRegionAnalysis::MemoryAccessKind::Barrier)
+      if (barrierOp &&
+          llvm::is_contained(barrierOp.getBarriers(), access.value))
         continue;
-      info.operandEffects.emplace_back(
-          access.isWrite ? MemEffectsOpInfo::Effects::Write
-                         : MemEffectsOpInfo::Effects::Read,
-          access.value, "",
-          access.kind == BufferRegionAnalysis::MemoryAccessKind::Async
-              ? MemEffectsOpInfo::Effects::Proxy::Async
-              : MemEffectsOpInfo::Effects::Proxy::Generic);
+      info.operandEffects.emplace_back(access.isWrite
+                                           ? MemEffectsOpInfo::Effects::Write
+                                           : MemEffectsOpInfo::Effects::Read,
+                                       access.value);
     }
     if (info.operandEffects.empty())
       return std::nullopt;
