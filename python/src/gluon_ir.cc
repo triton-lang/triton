@@ -742,12 +742,8 @@ void init_gluon_ir(py::module_ &m) {
              self.create<ttg::AsyncWaitOp>(tokens, num);
            })
       .def("create_convert_layout",
-           [](GluonOpBuilder &self, Type resultTy, Value value,
-              bool forceWarpShuffle) -> Value {
-             auto op = self.create<ttg::ConvertLayoutOp>(resultTy, value);
-             if (forceWarpShuffle)
-               op.setForceWarpShuffleAttr(UnitAttr::get(self.getContext()));
-             return op;
+           [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
+             return self.create<ttg::ConvertLayoutOp>(resultTy, value);
            })
       .def("create_local_alloc",
            [](GluonOpBuilder &self, Type resultTy) -> Value {

@@ -552,7 +552,7 @@ def arange(start, end, layout=None, _semantic=None):
 
 
 @builtin
-def convert_layout(value, layout, assert_trivial=False, force_warp_shuffle=False, _semantic=None):
+def convert_layout(value, layout, assert_trivial=False, _semantic=None):
     """
     Convert a tensor to a different distributed layout.
 
@@ -560,14 +560,12 @@ def convert_layout(value, layout, assert_trivial=False, force_warp_shuffle=False
         value (tensor): The input tensor.
         layout (DistributedLayout): The target layout.
         assert_trivial (bool): If True, asserts that the conversion is trivial (no data movement).
-        force_warp_shuffle (bool): If True, requires lowering without shared memory.
 
     Returns:
         tensor: The tensor with the new layout.
     """
     layout = _unwrap_if_constexpr(layout)
-    force_warp_shuffle = _unwrap_if_constexpr(force_warp_shuffle)
-    return _semantic.convert_layout(value, layout, assert_trivial, force_warp_shuffle)
+    return _semantic.convert_layout(value, layout, assert_trivial)
 
 
 @builtin

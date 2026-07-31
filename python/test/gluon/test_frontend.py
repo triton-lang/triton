@@ -143,19 +143,6 @@ def test_convert_layout_assert_trivial():
     ttgl.convert_layout(value, equiv_layout, assert_trivial=True)
 
 
-@filecheck_test
-@gluon.jit
-def test_convert_layout_force_warp_shuffle():
-    # CHECK: test_convert_layout_force_warp_shuffle
-    src_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
-    dst_parent: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
-    dst_layout: ttgl.constexpr = ttgl.SliceLayout(1, dst_parent)
-
-    value = ttgl.arange(0, 128, layout=src_layout)
-    # CHECK: ttg.convert_layout {{.*}} {force_warp_shuffle}
-    ttgl.convert_layout(value, dst_layout, force_warp_shuffle=True)
-
-
 @pytest.mark.parametrize("target", ALL_TARGETS)
 def test_convert_layout_not_trivial(target):
 

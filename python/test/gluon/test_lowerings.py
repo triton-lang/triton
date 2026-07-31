@@ -1412,7 +1412,7 @@ def test_convert_warp_local_layouts(M, N, src_layout, dst_layout, dtype, device)
 
 
 @pytest.mark.skipif(is_hip(), reason="Assumes 32 threads per warp")
-def test_regress_warp_shuffle_convert_layout():
+def test_regress_warp_shuffle_convert_layout(tmp_path):
     rows = 2
     cols = 8
     # We have previously incorrectly lowered a layout conversion between these
@@ -1438,12 +1438,12 @@ def test_regress_warp_shuffle_convert_layout():
     out_axis1_layout = ttgl.SliceLayout(dim=0, parent=dst_layout)
 
     @gluon.jit
-    def load_cvt_store(out_ptr, in_ptr, force_warp_shuffle: ttgl.constexpr):
+    def load_cvt_store(out_ptr, in_ptr):
         offs0 = ttgl.arange(0, 2, layout=axis0_layout)[:, None]
         offs1 = ttgl.arange(0, 8, layout=axis1_layout)[None, :]
         offsets = offs0 * 8 + offs1
         x = ttgl.load(in_ptr + offsets)
-        y = ttgl.convert_layout(x, dst_layout, force_warp_shuffle=force_warp_shuffle)
+        y = ttgl.convert_layout(x, dst_layout)
 
         out_offs0 = ttgl.arange(0, 2, layout=out_axis0_layout)[:, None]
         out_offs1 = ttgl.arange(0, 8, layout=out_axis1_layout)[None, :]
@@ -1455,8 +1455,21 @@ def test_regress_warp_shuffle_convert_layout():
     ref = torch.zeros_like(x)
     out = torch.zeros_like(x)
 
-    load_cvt_store[(1, 1, 1)](ref, x, False, num_warps=1)
-    load_cvt_store[(1, 1, 1)](out, x, True, num_warps=1)
+    # Extract the TTGIR and force using warp shuffles for lowering the
+    # convert_layout.
+    compiled_load_cvt_store = load_cvt_store.warmup(ref, x, grid=(1, 1, 1), num_warps=1)
+    ttgir = compiled_load_cvt_store.asm["ttgir"]
+    cvt_line = next(line for line in ttgir.splitlines() if "ttg.convert_layout" in line)
+    forced_cvt_line = cvt_line.replace(" : ", " {force_warp_shuffle} : ", 1)
+    ttgir = ttgir.replace(cvt_line, forced_cvt_line, 1)
+
+    temp_file = tmp_path / "test_override_ttgir_force_warp_shuffle.ttgir"
+    temp_file.write_text(ttgir)
+
+    load_cvt_store_warp_shuffle = triton.compile(str(temp_file))
+
+    load_cvt_store[(1, 1, 1)](ref, x, num_warps=1)
+    load_cvt_store_warp_shuffle[(1, 1, 1)](out, x)
 
     assert torch.equal(ref, x)
     assert torch.equal(out, x)
