@@ -111,16 +111,6 @@ jobs:
           make NUM_PROCS=24 test-unit
           python3 -m triton._compile_warmup report --phase unit --phase triton-kernels --phase attention --require-complete-warmup
           python3 -m triton._compile_warmup report --phase instrumentation
-      - name: Run gluon tests
-        run: |
-          make NUM_PROCS=24 test-gluon
-          if [[ "$RUNNER_TYPE" == "nvidia-gb200" ]]; then
-            python3 -m triton._compile_warmup report --phase gluon --phase gluon-examples --require-complete-warmup
-          elif [[ "$RUNNER_TYPE" == "nvidia-h100" ]]; then
-            python3 -m triton._compile_warmup report --phase gluon --require-complete-warmup
-          else
-            python3 -m triton._compile_warmup report --phase gluon --phase gluon-examples
-          fi
       - name: Run gsan tests
         run: |
           make NUM_PROCS=24 test-gsan
@@ -146,6 +136,18 @@ jobs:
           python3 -m triton._compile_warmup report --phase proton-hw-trace
           python3 -m triton._compile_warmup report --phase proton-override
           python3 -m triton._compile_warmup report --phase proton-overhead
+      # Keep the high-parallelism Gluon examples last so their worker teardown
+      # cannot delay unrelated GPU suites.
+      - name: Run gluon tests
+        run: |
+          make NUM_PROCS=24 test-gluon
+          if [[ "$RUNNER_TYPE" == "nvidia-gb200" ]]; then
+            python3 -m triton._compile_warmup report --phase gluon --phase gluon-examples --require-complete-warmup
+          elif [[ "$RUNNER_TYPE" == "nvidia-h100" ]]; then
+            python3 -m triton._compile_warmup report --phase gluon --require-complete-warmup
+          else
+            python3 -m triton._compile_warmup report --phase gluon --phase gluon-examples
+          fi
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
