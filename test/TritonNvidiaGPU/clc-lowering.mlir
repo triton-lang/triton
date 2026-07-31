@@ -11,12 +11,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-NEXT: ttng.init_barrier %[[BARRIER]], 1
     // CHECK: %[[PHASE0:.*]] = arith.constant 0 : i32
     // CHECK: %[[ONE:.*]] = arith.constant 1 : i32
-    // CHECK: scf.while ({{.*}} = %[[PHASE0]])
-    scf.while (%pid_x = %pid_x0, %pid_y = %pid_y0, %pid_z = %pid_z0, %work = %work0) : (i32, i32, i32, i1) -> (i32, i32, i32, i1) {
-      scf.condition(%work) %pid_x, %pid_y, %pid_z, %work : i32, i32, i32, i1
+    // CHECK: scf.while ({{.*}}, %[[BEFORE_PHASE:.*]] = %[[PHASE0]])
+    scf.while (%pid_x = %pid_x0, %pid_y = %pid_y0, %pid_z = %pid_z0, %work = %work0) : (i32, i32, i32, i1) -> (i32, i32, i32) {
+      // CHECK: scf.condition({{.*}}) {{.*}}, %[[BEFORE_PHASE]] : i32, i32, i32, i32
+      scf.condition(%work) %pid_x, %pid_y, %pid_z : i32, i32, i32
     } do {
     // CHECK: ^bb0({{.*}}, %[[PHASE:[A-Za-z0-9_]+]]: i32):
-    ^bb0(%pid_x: i32, %pid_y: i32, %pid_z: i32, %work: i1):
+    ^bb0(%pid_x: i32, %pid_y: i32, %pid_z: i32):
       // CHECK: ttng.barrier_expect %[[BARRIER]], 16 {fromCTA = 0 : i32}, {{.*}}
       // CHECK-NEXT: ttng.clc_try_cancel %[[RESPONSE]], %[[BARRIER]]
       %response = ttg.clc_try_cancel : tensor<2xi64, #regs>
