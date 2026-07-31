@@ -228,7 +228,7 @@ to issue async tranfers:</p>
 
     <span class="c1"># Since the TMA store reads from shared memory, we don&#39;t even need to load</span>
     <span class="c1"># the result into registers. We can just store the result directly.</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">out_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">pid</span> <span class="o">*</span> <span class="n">XBLOCK</span><span class="p">],</span> <span class="n">smem</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">out_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">pid</span> <span class="o">*</span> <span class="n">XBLOCK</span><span class="p">],</span> <span class="n">smem</span><span class="p">)</span>
 
     <span class="c1"># Unlike TMA reads, the completion of TMA stores is tracked by commit</span>
     <span class="c1"># groups, just like async copies. Each async TMA store is implicitly</span>
@@ -261,7 +261,7 @@ to use the <code class="docutils literal notranslate"><span class="pre">read_onl
         <span class="c1"># TMA to write it to HBM.</span>
         <span class="n">smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">offsets</span> <span class="o">+</span> <span class="mi">1000</span><span class="p">)</span>
         <span class="n">fence_async_shared</span><span class="p">()</span>
-        <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">message_desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">smem</span><span class="p">)</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">message_desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">smem</span><span class="p">)</span>
 
         <span class="c1"># Before signaling CTA 1, wait for the TMA write to become visible in HBM.</span>
         <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">read_only</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
@@ -344,14 +344,14 @@ examples of hazards that require fences:</p>
 <span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="n">desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">bar</span><span class="p">,</span> <span class="n">smem</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>Without the fence, async_copy_global_to_shared can start copying into <code class="docutils literal notranslate"><span class="pre">smem</span></code>
+<p>Without the fence, async_load can start copying into <code class="docutils literal notranslate"><span class="pre">smem</span></code>
 while the shared memory load is still in progress.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
 <span class="n">fence_async_shared</span><span class="p">()</span>
-<span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">smem</span><span class="p">)</span>
+<span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">smem</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>Without the fence, async_copy_shared_to_global can start copying from <code class="docutils literal notranslate"><span class="pre">smem</span></code>
+<p>Without the fence, async_store can start copying from <code class="docutils literal notranslate"><span class="pre">smem</span></code>
 before the shared memory store is complete.</p>
 <p>Note that certain cases imply total completion of a memory transaction and
 do not require a fence. For example, waiting on the result of a TMA load:</p>
@@ -368,7 +368,7 @@ specifically to the TMA read barrier, a fence is still needed in this case:</p>
 <span class="n">mbarrier</span><span class="o">.</span><span class="n">arrive</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
 <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">phase</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 <span class="n">fence_async_shared</span><span class="p">()</span>
-<span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">smem</span><span class="p">)</span>
+<span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">smem</span><span class="p">)</span>
 </pre></div>
 </div>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
@@ -400,7 +400,7 @@ specifically to the TMA read barrier, a fence is still needed in this case:</p>
     <span class="n">c_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">c_val</span><span class="p">)</span>
     <span class="n">fence_async_shared</span><span class="p">()</span>
     <span class="c1"># Issue the store without waiting for it.</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">xoff</span><span class="p">,</span> <span class="n">yoff</span><span class="p">],</span> <span class="n">c_smem</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">xoff</span><span class="p">,</span> <span class="n">yoff</span><span class="p">],</span> <span class="n">c_smem</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">read_index</span> <span class="o">+</span> <span class="mi">1</span>
 
 
@@ -523,7 +523,7 @@ triple buffering uses 224 KB, just barely fitting.</p>
 <p>Note the following restrctions for TMA operations:</p>
 <ul class="simple">
 <li><p>The innermost coordinate must be 16-byte aligned. For example, for dtype float16,
-an async_copy_global_to_shared with coordinates [8, 4] is illegal, but [4, 8] is legal.</p></li>
+an async_load with coordinates [8, 4] is illegal, but [4, 8] is legal.</p></li>
 <li><p>If the shared memory layout is fp4_padded, the innermost coordinate must be 128-byte aligned.</p></li>
 </ul>
 <p>Main takeaways:</p>

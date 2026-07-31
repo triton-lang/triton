@@ -209,8 +209,8 @@ spatial access window:
 [0, 0] to [H-1, W-1], TMA fills with the padding value.
 </pre></div>
 </div>
-<p>async_copy_global_to_shared_im2col:
-async_copy_global_to_shared_im2col(tensor_desc, coord, offsets, barrier, result)
+<p>async_load_im2col:
+async_load_im2col(tensor_desc, coord, offsets, barrier, result)
 - coord: [batch_idx, start_h, start_w, channel_start] start coords
 - offsets: [h_offset, w_offset] spatial offsets (i16)</p>
 <div class="highlight-none notranslate"><div class="highlight"><pre><span></span>Starting position (the first pixel): (batch_idx, start_h + h_offset, start_w + w_offset, channel_start)
@@ -368,7 +368,7 @@ Stacking these multiple loads across output positions forms A:
   | e  f  h  i |
 
 In the real kernel, this is executed in the K-loop as one
-async_copy_global_to_shared_im2col per (r, s, ci_block).
+async_load_im2col per (r, s, ci_block).
 </pre></div>
 </div>
 </section>
@@ -400,7 +400,7 @@ configuration and load coordinates differ.</p>
     <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">phase</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">mbarrier</span><span class="o">.</span><span class="n">invalidate</span><span class="p">(</span><span class="n">bar</span><span class="p">)</span>
 
-    <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">out_desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">smem</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">out_desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">smem</span><span class="p">)</span>
     <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 
 
@@ -1040,7 +1040,7 @@ index arithmetic.</p>
                     <span class="n">acc</span> <span class="o">+=</span> <span class="n">A_tile</span> <span class="o">@</span> <span class="n">B_tile</span><span class="o">^</span><span class="n">T</span>
 
         <span class="c1"># Store output tile via TMA</span>
-        <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>Key insight: we never materialize the full im2col matrix; address generation
@@ -1093,7 +1093,7 @@ tensor memory) without any code changes.</p>
     <span class="n">c_smem</span> <span class="o">=</span> <span class="n">ttgl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="n">out_desc</span><span class="o">.</span><span class="n">block_shape</span><span class="p">,</span> <span class="n">out_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
     <span class="n">c_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">acc</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">))</span>
     <span class="n">fence_async_shared</span><span class="p">()</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">out_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">offs_m</span><span class="p">,</span> <span class="n">offs_n</span><span class="p">],</span> <span class="n">c_smem</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">out_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">offs_m</span><span class="p">,</span> <span class="n">offs_n</span><span class="p">],</span> <span class="n">c_smem</span><span class="p">)</span>
     <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 
 

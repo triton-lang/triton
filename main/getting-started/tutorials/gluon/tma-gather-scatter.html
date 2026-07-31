@@ -151,7 +151,7 @@ descriptor is <code class="docutils literal notranslate"><span class="pre">[1,</
 <p>Where <code class="docutils literal notranslate"><span class="pre">src.shape</span></code> must be <code class="docutils literal notranslate"><span class="pre">(x_offsets.shape[0],</span> <span class="pre">BLOCK_Y)</span></code>. In other words,
 scatter writes <code class="docutils literal notranslate"><span class="pre">src</span></code> to the tensor descriptor starting at <code class="docutils literal notranslate"><span class="pre">y_offset</span></code> but to
 separately-indexed rows of size <code class="docutils literal notranslate"><span class="pre">BLOCK_Y</span></code>.</p>
-<p>Like <code class="docutils literal notranslate"><span class="pre">async_copy_global_to_shared</span></code> and <code class="docutils literal notranslate"><span class="pre">async_copy_shared_to_global</span></code>,
+<p>Like <code class="docutils literal notranslate"><span class="pre">async_load</span></code> and <code class="docutils literal notranslate"><span class="pre">async_store</span></code>,
 <code class="docutils literal notranslate"><span class="pre">async_gather</span></code> and <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code> access shared memory through the async
 proxy, so fences need to be inserted as appropriate.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
@@ -535,8 +535,8 @@ that triggered the illegal instruction error:</p>
     <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">input_ref</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">async_gather</span></code> and <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code> can be pipelined just like <code class="docutils literal notranslate"><span class="pre">async_copy_global_to_shared</span></code>
-and <code class="docutils literal notranslate"><span class="pre">async_copy_shared_to_global</span></code>. To demonstrate this, we will write a matmul kernel
+<p><code class="docutils literal notranslate"><span class="pre">async_gather</span></code> and <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code> can be pipelined just like <code class="docutils literal notranslate"><span class="pre">async_load</span></code>
+and <code class="docutils literal notranslate"><span class="pre">async_store</span></code>. To demonstrate this, we will write a matmul kernel
 that has a fused gather and fused scatter along the M dimension:
 <code class="docutils literal notranslate"><span class="pre">out[out_scatter_indx,</span> <span class="pre">:]</span> <span class="pre">=</span> <span class="pre">X[X_gather_indx,</span> <span class="pre">:]</span> <span class="pre">&#64;</span> <span class="pre">W</span></code>.</p>
 <p>Recall in <code class="docutils literal notranslate"><span class="pre">06-tcgen05-mma</span></code> that we demonstrated how to write matmul kernels
@@ -561,7 +561,7 @@ latency of the global loads.</p>
     <span class="n">producer</span> <span class="o">+=</span> <span class="mi">1</span>
     <span class="n">bar</span> <span class="o">=</span> <span class="n">bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
 
-    <span class="c1"># The W tensor tile is loaded using a regular `async_copy_global_to_shared`.</span>
+    <span class="c1"># The W tensor tile is loaded using a regular `async_load`.</span>
     <span class="n">mbarrier</span><span class="o">.</span><span class="n">expect</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">W_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span> <span class="o">+</span> <span class="n">BLOCK_M</span> <span class="o">*</span> <span class="n">X_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span><span class="p">)</span>
     <span class="n">tma</span><span class="o">.</span><span class="n">async_gather</span><span class="p">(</span><span class="n">X_desc</span><span class="p">,</span> <span class="n">offs_x_m</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">bar</span><span class="p">,</span> <span class="n">x_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">),</span> <span class="n">pred</span><span class="p">)</span>
     <span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="n">W_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">k</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">bar</span><span class="p">,</span> <span class="n">w_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">index</span><span class="p">),</span> <span class="n">pred</span><span class="p">)</span>
@@ -735,7 +735,7 @@ particularly for the loads as they are on the critical path.</p>
 </div>
 <p>The main takeaway from this tutorial is understanding how to use <code class="docutils literal notranslate"><span class="pre">async_gather</span></code>
 and <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code>. These instructions provide a middle-ground between
-block DMAs like <code class="docutils literal notranslate"><span class="pre">async_copy_global_to_shared</span></code> and <code class="docutils literal notranslate"><span class="pre">async_copy_shared_to_global</span></code>
+block DMAs like <code class="docutils literal notranslate"><span class="pre">async_load</span></code> and <code class="docutils literal notranslate"><span class="pre">async_store</span></code>
 and regular global loads and stores (<code class="docutils literal notranslate"><span class="pre">gl.load</span></code> and <code class="docutils literal notranslate"><span class="pre">gl.store</span></code>) by allowing
 separately-indexed columns while maintaining the performance of TMAs.</p>
 <p>Keep in mind the following:</p>
@@ -744,7 +744,7 @@ separately-indexed columns while maintaining the performance of TMAs.</p>
 <code class="docutils literal notranslate"><span class="pre">gl.store</span></code> when they can be used, but this is not always the case. Plus, TMA
 instructions use shared memory.</p></li>
 <li><p>Sometimes using <code class="docutils literal notranslate"><span class="pre">async_gather</span></code> or <code class="docutils literal notranslate"><span class="pre">async_scatter</span></code> instead of block DMA
-instructions like <code class="docutils literal notranslate"><span class="pre">async_copy_global_to_shared</span></code> and <code class="docutils literal notranslate"><span class="pre">async_copy_shared_to_global</span></code>
+instructions like <code class="docutils literal notranslate"><span class="pre">async_load</span></code> and <code class="docutils literal notranslate"><span class="pre">async_store</span></code>
 is actually faster, but these situations are rare.</p></li>
 </ul>
 <p>In general, you should consider these instructions when writing kernels and

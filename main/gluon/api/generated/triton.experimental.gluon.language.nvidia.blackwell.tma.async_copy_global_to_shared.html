@@ -146,23 +146,8 @@
 <h1>triton.experimental.gluon.language.nvidia.blackwell.tma.async_copy_global_to_shared<a class="headerlink" href="#triton-experimental-gluon-language-nvidia-blackwell-tma-async-copy-global-to-shared" title="Link to this heading"></a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.nvidia.blackwell.tma.async_copy_global_to_shared">
-<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.blackwell.tma.</span></span><span class="sig-name descname"><span class="pre">async_copy_global_to_shared</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tensor_desc</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">coord</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">barrier</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">result</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pred</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">multicast</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.blackwell.tma.async_copy_global_to_shared" title="Link to this definition"></a></dt>
-<dd><p>Load data from global memory to shared memory using TMA.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>tensor_desc</strong> – Tensor descriptor (tiled)</p></li>
-<li><p><strong>coord</strong> – Coordinates in the source tensor</p></li>
-<li><p><strong>barrier</strong> – Barrier for synchronization. In a two-CTA kernel, use a
-two-CTA barrier when this TMA load feeds a tcgen05 op; otherwise
-use a barrier allocated with <code class="docutils literal notranslate"><span class="pre">two_ctas=False</span></code>.</p></li>
-<li><p><strong>result</strong> – Destination memory descriptor</p></li>
-<li><p><strong>pred</strong> – Predicate for conditional execution</p></li>
-<li><p><strong>multicast</strong> – Enable multicast</p></li>
-</ul>
-</dd>
-</dl>
-</dd></dl>
+<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.blackwell.tma.</span></span><span class="sig-name descname"><span class="pre">async_copy_global_to_shared</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.blackwell.tma.async_copy_global_to_shared" title="Link to this definition"></a></dt>
+<dd></dd></dl>
 
 </section>
 

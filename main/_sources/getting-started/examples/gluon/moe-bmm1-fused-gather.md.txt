@@ -341,8 +341,8 @@ def load_weights(p: PartitionArgs):
 
             mbarrier.wait(w_empty_bar, phase, pred=issued >= p.w_num_bufs)
             mbarrier.expect(w_ready_bar, bytes_per_stage)
-            tma.async_copy_global_to_shared(p.w_desc, [slice_idx, tile_k, pid_n, 0, 0], w_ready_bar, w_buf)
-            tma.async_copy_global_to_shared(
+            tma.async_load(p.w_desc, [slice_idx, tile_k, pid_n, 0, 0], w_ready_bar, w_buf)
+            tma.async_load(
                 p.scale_desc,
                 [0, scale_idx, off_k_scale, 0, 0],
                 w_ready_bar,

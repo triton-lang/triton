@@ -365,7 +365,7 @@ kernel launched with grid size (1, ) that performs MMA on a small tensor.</p>
     <span class="n">acc</span> <span class="o">=</span> <span class="n">acc_tmem</span><span class="o">.</span><span class="n">load</span><span class="p">()</span>
     <span class="n">d_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">acc</span><span class="p">)</span>
     <span class="n">fence_async_shared</span><span class="p">()</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">d_desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">d_smem</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">d_desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">d_smem</span><span class="p">)</span>
     <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 
 
@@ -468,7 +468,7 @@ will process one block of the accumulator.</p>
     <span class="n">c_smem</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">c_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
     <span class="n">c_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">acc</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">))</span>
     <span class="n">fence_async_shared</span><span class="p">()</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">c_smem</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">c_smem</span><span class="p">)</span>
     <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 
 
@@ -704,7 +704,7 @@ completion. We can use this to build a fine-grained pipelining schedule.</p>
     <span class="n">ub</span> <span class="o">=</span> <span class="n">ub_tmem</span><span class="o">.</span><span class="n">load</span><span class="p">()</span>
     <span class="n">c_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">ub</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">))</span>
     <span class="n">fence_async_shared</span><span class="p">()</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">c_smem</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">c_smem</span><span class="p">)</span>
 
     <span class="c1"># Wait VBN, VB epilogue</span>
     <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">vb_bar</span><span class="p">,</span> <span class="n">epilogue_phase</span><span class="p">)</span>
@@ -712,7 +712,7 @@ completion. We can use this to build a fine-grained pipelining schedule.</p>
     <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">c_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">vb</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">))</span>
     <span class="n">fence_async_shared</span><span class="p">()</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span> <span class="o">+</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">c_smem</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span> <span class="o">+</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">c_smem</span><span class="p">)</span>
     <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 
 

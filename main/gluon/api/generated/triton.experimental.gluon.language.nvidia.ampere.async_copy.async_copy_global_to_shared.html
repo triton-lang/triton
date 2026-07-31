@@ -132,21 +132,8 @@
 <h1>triton.experimental.gluon.language.nvidia.ampere.async_copy.async_copy_global_to_shared<a class="headerlink" href="#triton-experimental-gluon-language-nvidia-ampere-async-copy-async-copy-global-to-shared" title="Link to this heading"></a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.nvidia.ampere.async_copy.async_copy_global_to_shared">
-<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.ampere.async_copy.</span></span><span class="sig-name descname"><span class="pre">async_copy_global_to_shared</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">smem</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_modifier</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eviction_policy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">volatile</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.ampere.async_copy.async_copy_global_to_shared" title="Link to this definition"></a></dt>
-<dd><p>Asynchronously load elements from global memory to shared memory.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>smem</strong> (<a class="reference internal" href="triton.experimental.gluon.language.shared_memory_descriptor.html#triton.experimental.gluon.language.shared_memory_descriptor" title="triton.experimental.gluon.language.shared_memory_descriptor"><em>shared_memory_descriptor</em></a>) – Destination shared memory descriptor.</p></li>
-<li><p><strong>pointer</strong> (<a class="reference internal" href="triton.experimental.gluon.language.tensor.html#triton.experimental.gluon.language.tensor" title="triton.experimental.gluon.language.tensor"><em>tensor</em></a>) – Source pointer tensor.</p></li>
-<li><p><strong>mask</strong> (<a class="reference internal" href="triton.experimental.gluon.language.tensor.html#triton.experimental.gluon.language.tensor" title="triton.experimental.gluon.language.tensor"><em>tensor</em></a><em>, </em><em>optional</em>) – Mask tensor for predicated loads. Defaults to None.</p></li>
-<li><p><strong>cache_modifier</strong> (<em>str</em>) – Cache modifier specifier. Defaults to “”.</p></li>
-<li><p><strong>eviction_policy</strong> (<em>str</em>) – Eviction policy specifier. Defaults to “”.</p></li>
-<li><p><strong>volatile</strong> (<em>bool</em>) – Whether the load is volatile. Defaults to False.</p></li>
-</ul>
-</dd>
-</dl>
-</dd></dl>
+<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.ampere.async_copy.</span></span><span class="sig-name descname"><span class="pre">async_copy_global_to_shared</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.ampere.async_copy.async_copy_global_to_shared" title="Link to this definition"></a></dt>
+<dd></dd></dl>
 
 </section>
 

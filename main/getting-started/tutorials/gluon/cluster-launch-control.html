@@ -310,7 +310,7 @@ so we can directly compare the benifits of dynamic scheduling.</p>
         <span class="n">c</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">take_result</span><span class="p">()</span>
         <span class="n">c_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">c</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">))</span>
         <span class="n">fence_async_shared</span><span class="p">()</span>
-        <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">c_smem</span><span class="p">)</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">c_smem</span><span class="p">)</span>
         <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
         <span class="n">scheduler</span> <span class="o">=</span> <span class="n">scheduler</span><span class="o">.</span><span class="n">advance</span><span class="p">()</span>
 
