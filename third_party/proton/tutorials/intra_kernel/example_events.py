@@ -1,17 +1,25 @@
 """
 Event-based intra-kernel profiling for pipelined TCGen05 matmul.
 
-This example adapts ``python/tutorials/gluon/06-tcgen05.py`` and records the
-lifetimes of asynchronous TMA and TCGen05 MMA transactions. Unlike a regular
-Proton scope, an event can start in one loop iteration and end at the matching
-barrier wait in a later iteration.
+This example adapts ``python/tutorials/gluon/06-tcgen05.py`` and
+``python/tutorials/gluon/08-warp-specialization.py`` and records the lifetimes
+of asynchronous TMA and TCGen05 MMA transactions. Unlike a regular Proton
+scope, an event can start in one loop iteration and end at the matching barrier
+wait in a later iteration.
 
-Run on a Blackwell GPU:
+Run either example on a Blackwell GPU:
 
     python3 example_events.py
+    python3 example_events.py -ws
 
-Open ``tcgen05-events.chrome_trace`` in Perfetto or ``chrome://tracing``.
+The warp-specialized matmul uses scopes for synchronous issue and wait regions.
+It also starts TMA and TCGen05 events in producer partitions and ends them in
+consumer partitions, so its trace contains flows across warps.
+Open the resulting ``*.chrome_trace`` file in Perfetto or
+``chrome://tracing``.
 """
+
+import argparse
 
 import torch
 import triton
@@ -55,6 +63,110 @@ def end_buffered_event(index, event0, event1):
         pl.end_event(event0)
     else:
         pl.end_event(event1)
+
+
+@gluon.jit
+def ws_epilogue_partition(a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, load_ready_bars, acc_tmem,
+                          mma_done_bar, tma_event0, tma_event1, mma_event0, mma_event1, off_m, off_n):
+    with pl.scope("ws_mma_wait"):
+        mbarrier.wait(mma_done_bar, phase=0)
+        # No later buffer-reuse wait observes the final two MMAs, so drain
+        # their events after the barrier that tracks all preceding MMA work.
+        pl.end_event(mma_event0)
+        if gl.cdiv(a_desc.shape[1], a_desc.block_type.shape[1]) > 1:
+            pl.end_event(mma_event1)
+
+    with pl.scope("ws_epilogue_store"):
+        c_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
+        c_smem.store(acc_tmem.load().to(c_desc.dtype))
+        fence_async_shared()
+        tma.async_store(c_desc, [off_m, off_n], c_smem)
+        tma.store_wait(pendings=0)
+
+
+@gluon.jit
+def ws_load_partition(a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, load_ready_bars, acc_tmem, mma_done_bar,
+                      tma_event0, tma_event1, mma_event0, mma_event1, off_m, off_n):
+    block_k: gl.constexpr = a_desc.block_type.shape[1]
+    num_buffers: gl.constexpr = a_bufs.type.shape[0]
+    for tile in range(gl.cdiv(a_desc.shape[1], block_k)):
+        index = tile % num_buffers
+        phase = tile // num_buffers & 1
+        with pl.scope("ws_load_empty_wait"):
+            mbarrier.wait(load_empty_bars.index(index), phase ^ 1)
+            # Reusing this buffer proves that its previous MMA completed.
+            if tile >= num_buffers:
+                end_buffered_event(index, mma_event0, mma_event1)
+
+        with pl.scope("ws_load_ready_issue"):
+            ready_bar = load_ready_bars.index(index)
+            mbarrier.expect(ready_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
+            start_buffered_event(index, tma_event0, tma_event1)
+            k = tile * block_k
+            tma.async_load(a_desc, [off_m, k], ready_bar, a_bufs.index(index))
+            tma.async_load(b_desc, [k, off_n], ready_bar, b_bufs.index(index))
+
+
+@gluon.jit
+def ws_mma_partition(a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, load_ready_bars, acc_tmem, mma_done_bar,
+                     tma_event0, tma_event1, mma_event0, mma_event1, off_m, off_n):
+    block_k: gl.constexpr = a_desc.block_type.shape[1]
+    num_buffers: gl.constexpr = a_bufs.type.shape[0]
+    use_acc = False
+    for tile in range(gl.cdiv(a_desc.shape[1], block_k)):
+        index = tile % num_buffers
+        phase = tile // num_buffers & 1
+        with pl.scope("ws_load_ready_wait"):
+            mbarrier.wait(load_ready_bars.index(index), phase)
+            end_buffered_event(index, tma_event0, tma_event1)
+        with pl.scope("ws_load_empty_issue"):
+            start_buffered_event(index, mma_event0, mma_event1)
+            tcgen05_mma(a_bufs.index(index), b_bufs.index(index), acc_tmem, use_acc=use_acc)
+            tcgen05_commit(load_empty_bars.index(index))
+        use_acc = True
+    with pl.scope("ws_mma_issue"):
+        tcgen05_commit(mma_done_bar)
+
+
+@gluon.jit
+def warp_specialized_matmul_kernel(a_desc, b_desc, c_desc, num_warps: gl.constexpr):
+    block_m: gl.constexpr = c_desc.block_type.shape[0]
+    block_n: gl.constexpr = c_desc.block_type.shape[1]
+    dtype: gl.constexpr = a_desc.dtype
+    num_buffers: gl.constexpr = 2
+
+    a_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + a_desc.block_type.shape, a_desc.layout)
+    b_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + b_desc.block_type.shape, b_desc.layout)
+    load_empty_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
+    load_ready_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
+    for i in gl.static_range(num_buffers):
+        mbarrier.init(load_empty_bars.index(i), count=1)
+        mbarrier.init(load_ready_bars.index(i), count=1)
+
+    tmem_layout: gl.constexpr = TensorMemoryLayout([block_m, block_n], col_stride=1)
+    acc_tmem = allocate_tensor_memory(gl.float32, [block_m, block_n], tmem_layout)
+    mma_done_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+    mbarrier.init(mma_done_bar, count=1)
+
+    tma_event0 = pl.allocate_event("ws_tma_load[0]")
+    tma_event1 = pl.allocate_event("ws_tma_load[1]")
+    # MMAs using different operand buffers may be in flight concurrently.
+    mma_event0 = pl.allocate_event("ws_tcgen05_mma[0]")
+    mma_event1 = pl.allocate_event("ws_tcgen05_mma[1]")
+    off_m = gl.program_id(axis=0) * block_m
+    off_n = gl.program_id(axis=1) * block_n
+    partition_args = (a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, load_ready_bars, acc_tmem, mma_done_bar,
+                      tma_event0, tma_event1, mma_event0, mma_event1, off_m, off_n)
+
+    # As in python/tutorials/gluon/08-warp-specialization.py, the epilogue is
+    # the default partition while TMA loading and MMA issue run in worker
+    # partitions. Four warps per partition make each start/end pair cross from
+    # one set of warp lines to another in the trace.
+    gl.warp_specialize([
+        (ws_epilogue_partition, partition_args),
+        (ws_load_partition, partition_args),
+        (ws_mma_partition, partition_args),
+    ], [4, 4], [24, 24])
 
 
 @gluon.jit
@@ -224,21 +336,45 @@ def matmul(a, b, c, block_m, block_n, block_k, num_warps):
     matmul_kernel[grid](a_desc, b_desc, c_desc, num_warps=num_warps)
 
 
+def warp_specialized_matmul(a, b, c, block_m, block_n, block_k, num_warps):
+    a_layout = gl.NVMMASharedLayout.get_default_for([block_m, block_k], gl.float16)
+    b_layout = gl.NVMMASharedLayout.get_default_for([block_k, block_n], gl.float16)
+    c_layout = gl.NVMMASharedLayout.get_default_for([block_m, block_n], gl.float16)
+    a_desc = TensorDescriptor.from_tensor(a, [block_m, block_k], a_layout)
+    b_desc = TensorDescriptor.from_tensor(b, [block_k, block_n], b_layout)
+    c_desc = TensorDescriptor.from_tensor(c, [block_m, block_n], c_layout)
+    grid = (triton.cdiv(c.shape[0], block_m), triton.cdiv(c.shape[1], block_n))
+    warp_specialized_matmul_kernel[grid](a_desc, b_desc, c_desc, num_warps=num_warps)
+
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("-ws", "--warp-specialized", action="store_true", help="profile a warp-specialized matmul")
+    args = parser.parse_args()
+
     if not is_blackwell():
         raise RuntimeError("This tutorial requires a Blackwell NVIDIA GPU")
 
     torch.manual_seed(0)
     m, n, k = 2048, 2048, 2048
     block_m, block_n, block_k = 128, 128, 128
-    a = torch.randn(m, k, device="cuda", dtype=torch.float16)
-    b = torch.randn(k, n, device="cuda", dtype=torch.float16)
-    c = torch.empty(m, n, device="cuda", dtype=torch.float16)
-
     mode = proton.mode.Default(optimizations="clock32,time_shift")
-    proton.start("tcgen05-events", data="trace", backend="instrumentation", mode=mode)
-    matmul(a, b, c, block_m, block_n, block_k, num_warps=4)
-    proton.finalize()
-
-    torch.testing.assert_close(a @ b, c, rtol=1e-3, atol=1e-1)
-    print("Wrote tcgen05-events.chrome_trace")
+    if args.warp_specialized:
+        a = torch.randn(m, k, device="cuda", dtype=torch.float16)
+        b = torch.randn(k, n, device="cuda", dtype=torch.float16)
+        c = torch.empty(m, n, device="cuda", dtype=torch.float16)
+        trace_name = "warp-specialized-events"
+        proton.start(trace_name, data="trace", backend="instrumentation", mode=mode)
+        warp_specialized_matmul(a, b, c, block_m, block_n, block_k, num_warps=4)
+        proton.finalize()
+        torch.testing.assert_close(a @ b, c, rtol=1e-3, atol=1e-1)
+    else:
+        a = torch.randn(m, k, device="cuda", dtype=torch.float16)
+        b = torch.randn(k, n, device="cuda", dtype=torch.float16)
+        c = torch.empty(m, n, device="cuda", dtype=torch.float16)
+        trace_name = "tcgen05-events"
+        proton.start(trace_name, data="trace", backend="instrumentation", mode=mode)
+        matmul(a, b, c, block_m, block_n, block_k, num_warps=4)
+        proton.finalize()
+        torch.testing.assert_close(a @ b, c, rtol=1e-3, atol=1e-1)
+    print(f"Wrote {trace_name}.chrome_trace")
