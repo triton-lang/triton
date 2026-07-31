@@ -95,15 +95,19 @@ jobs:
           echo "TRITON_CI_COMPILE_TRACE_DIR=$trace_dir" >> "$GITHUB_ENV"
           export TRITON_CI_COMPILE_TRACE_DIR="$trace_dir"
           warmup_procs=$(nproc)
-          if (( warmup_procs > 96 )); then
-            warmup_procs=96
+          warmup_limit=96
+          if [[ "$RUNNER_TYPE" == "nvidia-h100" || "$RUNNER_TYPE" == "nvidia-gb200" ]]; then
+            warmup_limit=112
+          fi
+          if (( warmup_procs > warmup_limit )); then
+            warmup_procs=$warmup_limit
           fi
           make WARMUP_PROCS="$warmup_procs" test-warmup
           warmup_reports=(--phase warmup-unit --phase warmup-triton-kernels --phase warmup-attention)
           if [[ "$RUNNER_TYPE" == "nvidia-gb200" ]]; then
-            warmup_reports+=(--phase warmup-gluon --phase warmup-gluon-examples)
+            warmup_reports+=(--phase warmup-gluon --phase warmup-gluon-examples --phase warmup-regression)
           elif [[ "$RUNNER_TYPE" == "nvidia-h100" ]]; then
-            warmup_reports+=(--phase warmup-gluon)
+            warmup_reports+=(--phase warmup-gluon --phase warmup-regression)
           fi
           python3 -m triton._compile_warmup report "${warmup_reports[@]}"
       - name: Run triton tests
@@ -123,7 +127,11 @@ jobs:
       - name: Run regression tests
         run: |
           make test-regression
-          python3 -m triton._compile_warmup report --phase regression
+          if [[ "$RUNNER_TYPE" == "nvidia-gb200" || "$RUNNER_TYPE" == "nvidia-h100" ]]; then
+            python3 -m triton._compile_warmup report --phase regression --require-complete-warmup
+          else
+            python3 -m triton._compile_warmup report --phase regression
+          fi
       - name: Run microbenchmark tests
         # Microbenchmark never fail but running them gives us an easy way to track performance changes.
         run: make test-microbenchmark

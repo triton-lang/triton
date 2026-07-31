@@ -269,6 +269,52 @@ def test_compile_warmup_replaces_preshuffled_mxfp_conversion():
     assert MXFP4Tensor.to is previous_conversion
 
 
+def test_compile_warmup_replaces_warp_specialization_cublas():
+    previous_cublas = object()
+    module = SimpleNamespace(
+        __file__="/checkout/python/test/unit/language/test_warp_specialization.py",
+        cublas=previous_cublas,
+    )
+    item = SimpleNamespace(module=module, originalname="test_warp_specialize_tma_matmul")
+
+    with _warmup_test_case(item):
+        assert module.cublas is not previous_cublas
+        assert module.cublas.matmul(object(), object(), object()) is None
+
+    assert module.cublas is previous_cublas
+
+
+def test_compile_warmup_replaces_scaled_dot_finite_check():
+    module = SimpleNamespace(__file__="/checkout/python/test/unit/language/test_core.py")
+    item = SimpleNamespace(module=module, originalname="test_scaled_dot")
+    previous_isfinite = torch.Tensor.isfinite
+
+    with compile_warmup_only(), _warmup_test_case(item):
+        assert torch.empty(4, device="cuda").isfinite().all()
+
+    assert torch.Tensor.isfinite is previous_isfinite
+
+
+@pytest.mark.parametrize("warp_counts", [(2, 4), (2, 2, 2)])
+def test_compile_warmup_materializes_gluon_reduce_warp_count(warp_counts):
+    layouts = SimpleNamespace(warps_per_cta=lambda layout, shape: warp_counts)
+    module = SimpleNamespace(
+        __file__="/checkout/python/test/gluon/test_lowerings.py",
+        ttgl=SimpleNamespace(_layouts=layouts),
+    )
+    item = SimpleNamespace(
+        module=module,
+        originalname="test_reduce_layouts",
+        callspec=SimpleNamespace(params={"M": 64, "N": 128, "src_layout": object()}),
+    )
+    previous_prod = torch.prod
+
+    with compile_warmup_only(), _warmup_test_case(item):
+        assert torch.prod(torch.empty(len(warp_counts), device="cpu")) == 8
+
+    assert torch.prod is previous_prod
+
+
 def test_compile_warmup_replaces_gluon_moe_fake_checks(monkeypatch):
     package = ModuleType("triton_kernels")
     package.__path__ = []

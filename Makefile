@@ -58,6 +58,21 @@ test-gluon: all
 
 WARMUP_PROCS ?= $(NUM_PROCS)
 WARMUP_CAPTURE_PROCS ?= 4
+WARMUP_AUXILIARY_CAPTURE_PROCS ?= 2
+WARMUP_UNIT_TESTS := \
+	python/test/unit/language/test_matmul.py \
+	python/test/unit/language/test_core.py::test_gather
+
+ifneq ($(filter nvidia-h100 nvidia-gb200,$(RUNNER_TYPE)),)
+WARMUP_UNIT_TESTS := \
+	python/test/unit/language/test_matmul.py \
+	python/test/unit/language/test_warp_specialization.py \
+	python/test/unit/language/test_core.py::test_scaled_dot \
+	python/test/unit/language/test_core.py::test_dot \
+	python/test/unit/language/test_core.py::test_dot3d \
+	python/test/unit/language/test_core.py::test_gather \
+	python/test/unit/language/test_standard.py::test_sort
+endif
 
 # Broad scalar-language capture is slower than compiling under runtime xdist,
 # so prewarm only the compile-dense unit tests.
@@ -66,18 +81,27 @@ test-warmup: all
 	@set -e; \
 	warmup_unit_procs=$$(( $(WARMUP_PROCS) / 8 )); \
 	warmup_attention_procs=$$(( $(WARMUP_PROCS) / 16 )); \
+	warmup_auxiliary_procs=0; \
 	if [ "$$warmup_unit_procs" -lt 1 ]; then warmup_unit_procs=1; fi; \
 	if [ "$$warmup_attention_procs" -lt 1 ]; then warmup_attention_procs=1; fi; \
 	if [ "$(RUNNER_TYPE)" = "nvidia-gb200" ]; then \
-		warmup_unit_procs=$$(( $(WARMUP_PROCS) / 24 )); \
-		warmup_group_procs=$$(( $(WARMUP_PROCS) * 11 / 24 )); \
+		warmup_unit_procs=$$(( $(WARMUP_PROCS) / 8 )); \
+		warmup_group_procs=$$(( $(WARMUP_PROCS) * 11 / 28 )); \
+		warmup_auxiliary_procs=$$(( $(WARMUP_PROCS) / 14 )); \
 		if [ "$$warmup_unit_procs" -lt 1 ]; then warmup_unit_procs=1; fi; \
 		if [ "$$warmup_group_procs" -lt 1 ]; then warmup_group_procs=1; fi; \
-		warmup_triton_kernels_procs=$$(( $(WARMUP_PROCS) - warmup_unit_procs - warmup_group_procs )); \
+		if [ "$$warmup_auxiliary_procs" -lt 1 ]; then warmup_auxiliary_procs=1; fi; \
+		warmup_triton_kernels_procs=$$(( \
+			$(WARMUP_PROCS) - warmup_unit_procs - warmup_group_procs - warmup_auxiliary_procs )); \
 	elif [ "$(RUNNER_TYPE)" = "nvidia-h100" ]; then \
-		warmup_group_procs=$$(( $(WARMUP_PROCS) * 3 / 16 )); \
+		warmup_unit_procs=$$(( $(WARMUP_PROCS) / 8 )); \
+		warmup_group_procs=$$(( $(WARMUP_PROCS) * 3 / 14 )); \
+		warmup_auxiliary_procs=$$(( $(WARMUP_PROCS) / 14 )); \
+		if [ "$$warmup_unit_procs" -lt 1 ]; then warmup_unit_procs=1; fi; \
 		if [ "$$warmup_group_procs" -lt 1 ]; then warmup_group_procs=1; fi; \
-		warmup_triton_kernels_procs=$$(( $(WARMUP_PROCS) - warmup_unit_procs - warmup_group_procs )); \
+		if [ "$$warmup_auxiliary_procs" -lt 1 ]; then warmup_auxiliary_procs=1; fi; \
+		warmup_triton_kernels_procs=$$(( \
+			$(WARMUP_PROCS) - warmup_unit_procs - warmup_group_procs - warmup_auxiliary_procs )); \
 	else \
 		warmup_group_procs=$$warmup_attention_procs; \
 		warmup_triton_kernels_procs=$$(( $(WARMUP_PROCS) - warmup_unit_procs - warmup_group_procs )); \
@@ -87,8 +111,7 @@ test-warmup: all
 		(warmup_triton_kernels_procs + $(WARMUP_CAPTURE_PROCS) - 1) / $(WARMUP_CAPTURE_PROCS) )); \
 	TRITON_CI_CACHE_PHASE=warmup-unit $(PYTEST) -s --tb=short \
 		--warmup-only --warmup-workers "$$warmup_unit_procs" \
-		python/test/unit/language/test_matmul.py \
-		python/test/unit/language/test_core.py::test_gather & \
+		$(WARMUP_UNIT_TESTS) & \
 	warmup_unit_pid=$$!; \
 	TRITON_CI_CACHE_PHASE=warmup-triton-kernels $(PYTEST) -s --tb=short \
 		-n $(WARMUP_CAPTURE_PROCS) --dist=worksteal \
@@ -125,10 +148,26 @@ test-warmup: all
 			python/tutorials/06-fused-attention.py::test_op & \
 	fi; \
 	warmup_group_pid=$$!; \
+	warmup_auxiliary_pid=; \
+	if [ "$$warmup_auxiliary_procs" -gt 0 ]; then \
+		warmup_auxiliary_worker_procs=$$(( \
+			(warmup_auxiliary_procs + $(WARMUP_AUXILIARY_CAPTURE_PROCS) - 1) / \
+			$(WARMUP_AUXILIARY_CAPTURE_PROCS) )); \
+		TRITON_CI_CACHE_PHASE=warmup-gluon $(PYTEST) -s --tb=short \
+			-n $(WARMUP_AUXILIARY_CAPTURE_PROCS) --dist=worksteal \
+			--warmup-only --warmup-workers "$$warmup_auxiliary_worker_procs" \
+			--warmup-phase python/test/regression=warmup-regression \
+			python/test/gluon/test_lowerings.py::test_convert1d_layouts \
+			python/test/gluon/test_lowerings.py::test_convert2d_layouts \
+			python/test/gluon/test_lowerings.py::test_reduce_layouts \
+			python/test/regression & \
+		warmup_auxiliary_pid=$$!; \
+	fi; \
 	warmup_status=0; \
 	if ! wait "$$warmup_unit_pid"; then warmup_status=1; fi; \
 	if ! wait "$$warmup_triton_kernels_pid"; then warmup_status=1; fi; \
 	if ! wait "$$warmup_group_pid"; then warmup_status=1; fi; \
+	if [ -n "$$warmup_auxiliary_pid" ] && ! wait "$$warmup_auxiliary_pid"; then warmup_status=1; fi; \
 	exit "$$warmup_status"
 
 .PHONY: test-gsan
