@@ -11,6 +11,7 @@ PYTEST := $(PYTHON) -m pytest
 LLVM_BUILD_PATH ?= "$(ROOT_DIR)/.llvm-project/build"
 NUM_PROCS ?= 8
 TRITON_KERNELS_PATH := $(ROOT_DIR)/python/triton_kernels$(if $(PYTHONPATH),:$(PYTHONPATH))
+FAST_NVIDIA_RUNNER := $(filter nvidia-h100 nvidia-gb200,$(RUNNER_TYPE))
 
 # Incremental builds
 
@@ -34,8 +35,23 @@ test-cpp:
 
 .PHONY: test-unit
 test-unit: all
+ifneq ($(FAST_NVIDIA_RUNNER),)
+	@set -e; \
+	cd python/test/unit; \
+	TRITON_CI_CACHE_PHASE=unit $(PYTEST) -n $(NUM_PROCS) \
+		--ignore-glob='plugins/*' --ignore=test_debug.py --ignore=language/test_subprocess.py & \
+	unit_main_pid=$$!; \
+	TRITON_CI_CACHE_PHASE=unit $(PYTEST) -n $(UNIT_DEBUG_PROCS) \
+		test_debug.py language/test_subprocess.py & \
+	unit_subprocess_pid=$$!; \
+	unit_status=0; \
+	if ! wait "$$unit_main_pid"; then unit_status=1; fi; \
+	if ! wait "$$unit_subprocess_pid"; then unit_status=1; fi; \
+	exit "$$unit_status"
+else
 	cd python/test/unit && TRITON_CI_CACHE_PHASE=unit $(PYTEST) -n $(NUM_PROCS) --ignore-glob='plugins/*'
-	TRITON_CI_CACHE_PHASE=triton-kernels $(PYTEST) -n 6 python/triton_kernels/tests/
+endif
+	TRITON_CI_CACHE_PHASE=triton-kernels $(PYTEST) -n $(TRITON_KERNEL_PROCS) python/triton_kernels/tests/
 	# Run attention separately to avoid out of gpu memory
 	TRITON_CI_CACHE_PHASE=attention $(PYTEST) python/tutorials/06-fused-attention.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
@@ -46,18 +62,38 @@ test-plugins: all
 	TRITON_CI_CACHE_PHASE=plugins $(PYTEST) -vvv python/test/unit/plugins
 
 .PHONY: test-gluon
+ifneq ($(FAST_NVIDIA_RUNNER),)
+TRITON_KERNEL_PROCS ?= 3
+UNIT_DEBUG_PROCS ?= 4
+GLUON_PROCS ?= 8
+GLUON_CONSAN_PROCS ?= 4
+GLUON_FPSAN_PROCS ?= 8
+else
+TRITON_KERNEL_PROCS ?= 6
+GLUON_PROCS ?= $(NUM_PROCS)
+endif
 ifeq ($(RUNNER_TYPE),nvidia-gb200)
 GLUON_EXAMPLE_PROCS ?= 8
 else
 GLUON_EXAMPLE_PROCS ?= 2
 endif
 test-gluon: all
-	TRITON_CI_CACHE_PHASE=gluon $(PYTEST) -n $(NUM_PROCS) python/test/gluon/ python/tutorials/gluon/
+	TRITON_CI_CACHE_PHASE=gluon $(PYTEST) -n $(GLUON_PROCS) \
+		python/test/gluon/ python/tutorials/gluon/ \
+		$(if $(FAST_NVIDIA_RUNNER),--ignore=python/test/gluon/test_consan.py --ignore=python/test/gluon/test_fpsan.py)
+ifneq ($(FAST_NVIDIA_RUNNER),)
+	TRITON_CI_CACHE_PHASE=gluon $(PYTEST) -n $(GLUON_CONSAN_PROCS) python/test/gluon/test_consan.py
+	TRITON_CI_CACHE_PHASE=gluon $(PYTEST) -n $(GLUON_FPSAN_PROCS) python/test/gluon/test_fpsan.py
+endif
 	PYTHONPATH="$(TRITON_KERNELS_PATH)" TRITON_CI_CACHE_PHASE=gluon-examples \
 		$(PYTEST) -n $(GLUON_EXAMPLE_PROCS) python/examples/gluon/
 
 WARMUP_PROCS ?= $(NUM_PROCS)
+ifneq ($(FAST_NVIDIA_RUNNER),)
+WARMUP_CAPTURE_PROCS ?= 2
+else
 WARMUP_CAPTURE_PROCS ?= 4
+endif
 WARMUP_AUXILIARY_CAPTURE_PROCS ?= 2
 WARMUP_UNIT_TESTS := \
 	python/test/unit/language/test_matmul.py \
@@ -72,14 +108,13 @@ WARMUP_UNIT_TESTS := \
 	python/test/unit/language/test_core.py::test_dot \
 	python/test/unit/language/test_core.py::test_dot3d \
 	python/test/unit/language/test_core.py::test_gather \
-	python/test/unit/language/test_standard.py::test_sort
-ifeq ($(RUNNER_TYPE),nvidia-h100)
-WARMUP_UNIT_TESTS += \
 	python/test/unit/language/test_core.py::test_scan2d \
-	python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_reduce
-endif
+	python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_reduce \
+	python/test/unit/language/test_standard.py::test_sort
 ifeq ($(RUNNER_TYPE),nvidia-gb200)
-WARMUP_TRITON_KERNEL_TESTS += python/triton_kernels/tests/test_reduce.py::test_op
+WARMUP_TRITON_KERNEL_TESTS += \
+	python/triton_kernels/tests/test_reduce.py::test_op \
+	python/triton_kernels/tests/test_topk.py::test_topk
 endif
 endif
 
@@ -139,6 +174,7 @@ test-warmup: all
 			python/test/gluon/test_core.py::test_mma_shared_inputs \
 			python/examples/gluon/01-attention-forward.py::test_op \
 			python/examples/gluon/03-matmul-multicta.py::test_matmul_matches_torch \
+			python/examples/gluon/04-2cta-block-scale-matmul.py::test_mma_scaled_warp_specialized \
 			python/examples/gluon/05-moe-bmm1-fused-gather.py::test_op & \
 	elif [ "$(RUNNER_TYPE)" = "nvidia-h100" ]; then \
 		warmup_group_worker_procs=$$(( \

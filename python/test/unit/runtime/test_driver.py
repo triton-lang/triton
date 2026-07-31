@@ -420,6 +420,25 @@ def test_compile_warmup_replaces_gluon_moe_fake_checks(monkeypatch):
     assert blackwell_scale.is_fake is previous_is_fake
 
 
+@pytest.mark.parametrize("format,packed_width,scale_width", [("mxfp8", 32, 1), ("mxfp4", 16, 1), ("nvfp4", 16, 2)])
+def test_compile_warmup_replaces_gluon_block_scaled_inputs(format, packed_width, scale_width):
+    previous_generator = object()
+    module = SimpleNamespace(
+        __file__="/checkout/python/examples/gluon/04-2cta-block-scale-matmul.py",
+        random_quantized_tensor=previous_generator,
+    )
+    item = SimpleNamespace(module=module, originalname="test_mma_scaled_warp_specialized")
+
+    with compile_warmup_only(), _warmup_test_case(item):
+        values, scales, reference = module.random_quantized_tensor(8, 32, format)
+        assert values.shape == (8, packed_width)
+        assert scales.shape == (8, scale_width)
+        assert reference.shape == (8, 32)
+        assert type(reference).__name__ == "FakeTensor"
+
+    assert module.random_quantized_tensor is previous_generator
+
+
 def test_compile_warmup_replaces_triton_kernels_reference(monkeypatch):
     package = ModuleType("triton_kernels")
     package.__path__ = []

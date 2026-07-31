@@ -206,26 +206,42 @@ def compute_actual_scale(x, dtype, per_batch_scale=False):
 def normalize_blocks(x, BLOCK_SIZE=None):
     if BLOCK_SIZE is None:
         BLOCK_SIZE = int(MXFP_BLOCK_SIZE)
-    x_ndim = x.ndim
-    if x_ndim == 2:
-        x = x.unsqueeze(0)
-    for e, i, j in itertools.product(range(x.shape[0]), range(0, x.shape[1], BLOCK_SIZE),
-                                     range(0, x.shape[2], BLOCK_SIZE)):
-        i_end = min(i + BLOCK_SIZE, x.shape[1])
-        j_end = min(j + BLOCK_SIZE, x.shape[2])
-        block = x[e, i:i_end, j:j_end]
-        m_abs = block.abs().max()
-        i_len = i_end - i
-        j_len = j_end - j
-        min_len = min(i_len, j_len)
-        signs = torch.randint(0, 2, (max(i_len, j_len), ), device=x.device) * 2 - 1
-        block.diagonal(dim1=-2, dim2=-1)[:] = signs[:min_len] * m_abs
-        if j_len > i_len:
-            block[i_len - 1, i_len:] = signs[min_len:] * m_abs
-        elif i_len > j_len:
-            block[j_len:, j_len - 1] = signs[min_len:] * m_abs
-    if x_ndim == 2:
-        x = x.squeeze(0)
+    if x.numel() == 0:
+        return x
+
+    batched = x.unsqueeze(0) if x.ndim == 2 else x
+    batch_size, rows, cols = batched.shape
+    row_padding = (-rows) % BLOCK_SIZE
+    col_padding = (-cols) % BLOCK_SIZE
+    padded = torch.nn.functional.pad(batched, (0, col_padding, 0, row_padding))
+    row_blocks, col_blocks = padded.shape[-2] // BLOCK_SIZE, padded.shape[-1] // BLOCK_SIZE
+    blocks = padded.view(batch_size, row_blocks, BLOCK_SIZE, col_blocks, BLOCK_SIZE).permute(0, 1, 3, 2, 4)
+
+    block_maxima = blocks.abs().amax(dim=(-2, -1))
+    random_signs = []
+    for _, row_start, col_start in itertools.product(range(batch_size), range(0, rows, BLOCK_SIZE),
+                                                     range(0, cols, BLOCK_SIZE)):
+        count = max(min(BLOCK_SIZE, rows - row_start), min(BLOCK_SIZE, cols - col_start))
+        signs = torch.randint(0, 2, (count, ), device=x.device)
+        if count < BLOCK_SIZE:
+            signs = torch.nn.functional.pad(signs, (0, BLOCK_SIZE - count))
+        random_signs.append(signs)
+    signs = torch.stack(random_signs).view(batch_size, row_blocks, col_blocks, BLOCK_SIZE) * 2 - 1
+
+    block_heights = (rows - torch.arange(row_blocks, device=x.device) * BLOCK_SIZE).clamp(max=BLOCK_SIZE)
+    block_widths = (cols - torch.arange(col_blocks, device=x.device) * BLOCK_SIZE).clamp(max=BLOCK_SIZE)
+    height = block_heights[None, :, None, None, None]
+    width = block_widths[None, None, :, None, None]
+    row = torch.arange(BLOCK_SIZE, device=x.device)[None, None, None, :, None]
+    col = torch.arange(BLOCK_SIZE, device=x.device)[None, None, None, None, :]
+
+    diagonal = (row == col) & (row < height) & (col < width)
+    extra_row = (width > height) & (row == height - 1) & (col >= height) & (col < width)
+    extra_col = (height > width) & (col == width - 1) & (row >= width) & (row < height)
+    sign_values = torch.where(width > height, signs[..., None, :], signs[..., :, None])
+    replacements = sign_values * block_maxima[..., None, None]
+    blocks.copy_(torch.where(diagonal | extra_row | extra_col, replacements, blocks))
+    batched.copy_(padded[:, :rows, :cols])
     return x
 
 

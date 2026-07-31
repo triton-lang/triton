@@ -258,6 +258,26 @@ def _warmup_test_case(item):
             torch.allclose = previous_allclose
         return
 
+    if (module_path.endswith("/python/examples/gluon/04-2cta-block-scale-matmul.py")
+            and item.originalname == "test_mma_scaled_warp_specialized"):
+        previous_random_quantized_tensor = item.module.random_quantized_tensor
+
+        def random_quantized_tensor(rows, cols, format):
+            vector_size = 16 if format == "nvfp4" else 32
+            value_dtype = torch.float8_e4m3fn if format == "mxfp8" else torch.uint8
+            scale_dtype = torch.float8_e4m3fn if format == "nvfp4" else torch.uint8
+            values = torch.empty((rows, cols if format == "mxfp8" else cols // 2), dtype=value_dtype, device="cuda")
+            scales = torch.empty((rows, cols // vector_size), dtype=scale_dtype, device="cuda")
+            reference = torch.empty((rows, cols), dtype=torch.float32, device="cuda")
+            return values, scales, reference
+
+        item.module.random_quantized_tensor = random_quantized_tensor
+        try:
+            yield
+        finally:
+            item.module.random_quantized_tensor = previous_random_quantized_tensor
+        return
+
     if module_path.endswith("/python/examples/gluon/05-moe-bmm1-fused-gather.py") and item.originalname in {
             "test_op",
             "test_op_consan",

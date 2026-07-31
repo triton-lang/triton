@@ -15,7 +15,7 @@ from triton_kernels.matmul import matmul_set_idle_sms, matmul, matmul_torch
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp8_fn, quantize_nvfp4_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 # testing utilities
-from triton_kernels.testing import assert_close, make_random_tensor
+from triton_kernels.testing import assert_close, make_random_tensor, normalize_blocks
 # target-specific utilities
 from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250
 from triton_kernels.swiglu import swiglu, swiglu_fn
@@ -56,6 +56,33 @@ class DType:
 def opt_flags_scope(request):
     yield
     opt_flags.reset_opt_flags_constraints()
+
+
+@pytest.mark.parametrize("shape", [(0, 32), (3, 5), (5, 3), (33, 65), (65, 33), (35, 35), (2, 33, 65)])
+def test_normalize_blocks(shape, device):
+    values = torch.randn(shape, dtype=torch.bfloat16, device=device)
+    original = values.clone()
+
+    assert normalize_blocks(values) is values
+    actual_batches = values.unsqueeze(0) if values.ndim == 2 else values
+    original_batches = original.unsqueeze(0) if original.ndim == 2 else original
+
+    for actual, expected in zip(actual_batches, original_batches):
+        for row_start in range(0, actual.shape[0], int(MXFP_BLOCK_SIZE)):
+            for col_start in range(0, actual.shape[1], int(MXFP_BLOCK_SIZE)):
+                result = actual[row_start:row_start + int(MXFP_BLOCK_SIZE), col_start:col_start + int(MXFP_BLOCK_SIZE)]
+                source = expected[row_start:row_start + int(MXFP_BLOCK_SIZE), col_start:col_start + int(MXFP_BLOCK_SIZE)]
+                rows, cols = result.shape
+                row = torch.arange(rows, device=device)[:, None]
+                col = torch.arange(cols, device=device)[None, :]
+                changed = row == col
+                if cols > rows:
+                    changed |= (row == rows - 1) & (col >= rows)
+                elif rows > cols:
+                    changed |= (col == cols - 1) & (row >= cols)
+
+                torch.testing.assert_close(result[~changed], source[~changed])
+                torch.testing.assert_close(result[changed].abs(), source.abs().max().expand_as(result[changed]))
 
 
 def make_constraints(block_m, split_k, is_persistent, epilogue_subtile, hbm_swizzling, weight_dtype_str, num_warps):
