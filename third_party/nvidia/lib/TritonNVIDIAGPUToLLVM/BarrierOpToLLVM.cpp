@@ -56,6 +56,67 @@ bool supportsMbarV1Layout(const NVIDIA::TargetInfo &targetInfo) {
          targetInfo.getPtxVersion() >= 93;
 }
 
+Value createMbarrierTestWriterPredicate(Operation *op,
+                                        ConversionPatternRewriter &rewriter,
+                                        const NVIDIA::TargetInfo &targetInfo) {
+  if (ttg::lookupNumWarps(op) == 1 && ttg::lookupNumCTAs(op) == 1)
+    return {};
+
+  auto loc = op->getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value id = getThreadId(rewriter, loc);
+  Value pred = b.icmp_eq(id, b.i32_val(0));
+  if (ttg::lookupNumCTAs(op) > 1) {
+    Value ctaId = targetInfo.getClusterCTAId(rewriter, loc);
+    Value cta0 = b.icmp_eq(ctaId, b.i32_val(0));
+    pred = b.and_(pred, cta0);
+  }
+  return pred;
+}
+
+SmallVector<Value> broadcastMbarrierTestResults(
+    Operation *op, ArrayRef<Value> results, Value writerPred,
+    ConversionPatternRewriter &rewriter, TritonLLVMOpBuilder &b,
+    const NVIDIA::TargetInfo &targetInfo) {
+  assert(!results.empty() && results.size() <= 8 &&
+         llvm::all_of(
+             results,
+             [](Value result) { return result.getType().isInteger(1); }) &&
+         "expected one to eight predicate results");
+  if (ttg::lookupNumWarps(op) == 1 && ttg::lookupNumCTAs(op) == 1)
+    return SmallVector<Value>(results);
+
+  assert(op->hasAttr("allocation.offset") &&
+         "multi-warp or multi-CTA mbarrier test requires shared scratch");
+  Value packed = b.zext(i8_ty, results.front());
+  for (auto [index, result] : llvm::enumerate(results.drop_front())) {
+    Value bit = b.zext(i8_ty, result);
+    bit = b.shl(bit, b.i8_val(index + 1));
+    packed = b.or_(packed, bit);
+  }
+
+  Value scratch =
+      LLVM::getSharedMemoryBase(op->getLoc(), rewriter, targetInfo, op);
+  targetInfo.storeShared(rewriter, op->getLoc(), scratch, packed, writerPred);
+  if (ttg::lookupNumCTAs(op) == 1) {
+    targetInfo.barrier(op->getLoc(), rewriter, ttg::AddrSpace::Local);
+    packed = targetInfo.loadShared(rewriter, op->getLoc(), scratch, i8_ty,
+                                   b.true_val());
+  } else {
+    targetInfo.clusterBarrier(op->getLoc(), rewriter, op);
+    packed = targetInfo.loadDShared(rewriter, op->getLoc(), scratch,
+                                    b.i32_val(0), i8_ty, b.true_val());
+  }
+
+  SmallVector<Value> broadcast;
+  broadcast.reserve(results.size());
+  for (unsigned index = 0; index < results.size(); ++index) {
+    Value bit = b.and_(packed, b.i8_val(1 << index));
+    broadcast.push_back(b.icmp_ne(bit, b.i8_val(0)));
+  }
+  return broadcast;
+}
+
 template <typename OpTy>
 struct GridDependencyOpConversion : public ConvertOpToLLVMPattern<OpTy> {
   using ConvertOpToLLVMPattern<OpTy>::ConvertOpToLLVMPattern;
@@ -452,6 +513,10 @@ struct BarrierTestWaitOpConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto pred = adaptor.getPred();
+    Value writerPred =
+        createMbarrierTestWriterPredicate(op, rewriter, *targetInfo);
+    if (writerPred)
+      pred = pred ? b.and_(pred, writerPred) : writerPred;
     if (auto leaderPred =
             LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
       pred = pred ? b.and_(pred, *leaderPred) : *leaderPred;
@@ -489,7 +554,9 @@ struct BarrierTestWaitOpConversion
     auto &test = *ptxBuilder.create(ptx);
     test(operands, /*onlyAttachMLIRArgs=*/true);
     Value complete = ptxBuilder.launch(rewriter, loc, rewriter.getI1Type());
-    rewriter.replaceOp(op, complete);
+    auto results = broadcastMbarrierTestResults(op, {complete}, writerPred,
+                                                rewriter, b, *targetInfo);
+    rewriter.replaceOp(op, results);
     return success();
   }
 };
@@ -520,6 +587,10 @@ struct BarrierTestWaitReportOpConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto pred = adaptor.getPred();
+    Value writerPred =
+        createMbarrierTestWriterPredicate(op, rewriter, *targetInfo);
+    if (writerPred)
+      pred = pred ? b.and_(pred, writerPred) : writerPred;
     if (auto leaderPred =
             LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
       pred = pred ? b.and_(pred, *leaderPred) : *leaderPred;
@@ -555,8 +626,12 @@ struct BarrierTestWaitReportOpConversion
     test(operands, /*onlyAttachMLIRArgs=*/true);
     SmallVector<Type> resultTypes(2, rewriter.getI1Type());
     Value packed = ptxBuilder.launch(rewriter, loc, struct_ty(resultTypes));
-    rewriter.replaceOp(op, {b.extract_val(rewriter.getI1Type(), packed, 0),
-                            b.extract_val(rewriter.getI1Type(), packed, 1)});
+    SmallVector<Value> results = {
+        b.extract_val(rewriter.getI1Type(), packed, 0),
+        b.extract_val(rewriter.getI1Type(), packed, 1)};
+    results = broadcastMbarrierTestResults(op, results, writerPred, rewriter, b,
+                                           *targetInfo);
+    rewriter.replaceOp(op, results);
     return success();
   }
 };

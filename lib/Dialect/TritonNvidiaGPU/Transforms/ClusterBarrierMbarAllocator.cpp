@@ -23,8 +23,8 @@ namespace mlir::triton::nvidia_gpu {
 
 namespace {
 
-bool atomicNeedsClusterBarrier(Operation *op) {
-  if (isa<AtomicPollOp>(op))
+bool operationNeedsClusterBarrier(Operation *op) {
+  if (isa<AtomicPollOp, BarrierTestWaitOp, BarrierTestWaitReportOp>(op))
     return gpu::lookupNumCTAs(op) != 1;
   auto atomic = dyn_cast<AtomicOpInterface>(op);
   if (!atomic || gpu::lookupNumCTAs(op) == 1)
@@ -64,7 +64,7 @@ bool needsClusterBarrier(Operation *op) {
   }
   if (auto reduce = dyn_cast<ReduceOp>(op))
     return !ReduceOpHelper(reduce).isReduceWithinCTA();
-  return atomicNeedsClusterBarrier(op);
+  return operationNeedsClusterBarrier(op);
 }
 
 void runClusterBarrierMbarAllocator(ModuleOp mod) {
