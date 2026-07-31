@@ -42,15 +42,16 @@ private:
     // Initialize the blockList. Operations are organized into "virtual blocks",
     // which represent segments of straight-line code analyzed by each iteration
     // of the dataflow analysis. Virtual blocks abstract over both control flow
-    // represented by basic blocks and block successors (i.e. `BranchOpInterface`)
-    // and control flow represented by regions (i.e. `RegionBranchOpInterface`).
+    // represented by basic blocks and block successors (i.e.
+    // `BranchOpInterface`) and control flow represented by regions (i.e.
+    // `RegionBranchOpInterface`).
     //
     // A virtual block consists of a parent block and a starting iterator, where
-    // the virtual block starts on the operation *after* the starting iterator. A
-    // null iterator is used to represent the beginning of the block. The virtual
-    // block ends at any region branch operation or the basic block terminator.
-    // Thus, basic blocks are broken up into multiple virtual blocks at each
-    // region operation.
+    // the virtual block starts on the operation *after* the starting iterator.
+    // A null iterator is used to represent the beginning of the block. The
+    // virtual block ends at any region branch operation or the basic block
+    // terminator. Thus, basic blocks are broken up into multiple virtual blocks
+    // at each region operation.
     //
     // Entry virtual blocks are represented by a null iterator. Populate the
     // blockList with the entry virtual blocks in the function. Then, each
@@ -72,8 +73,9 @@ private:
                                                      : block.first->begin();
       for (Operation &operation : llvm::make_range(begin, block.first->end())) {
         // Update inputBlockInfo based on the current operation. Note that we do
-        // this before we process terminators and branch-like ops, because some of
-        // them (e.g. WarpSpecializePartitionsOp) may have synchronizing effects.
+        // this before we process terminators and branch-like ops, because some
+        // of them (e.g. WarpSpecializePartitionsOp) may have synchronizing
+        // effects.
         update(&operation, &state, funcMap, builder);
         if (operation.hasTrait<OpTrait::IsTerminator>() ||
             isa<RegionBranchOpInterface>(operation)) {
@@ -101,8 +103,8 @@ private:
     for (Block &exit : function.getBlocks()) {
       if (!exit.getTerminator()->hasTrait<OpTrait::ReturnLike>())
         continue;
-      // A basic block can be broken into several virtual blocks. Find all virtual
-      // blocks that belong to the basic block containing the return.
+      // A basic block can be broken into several virtual blocks. Find all
+      // virtual blocks that belong to the basic block containing the return.
       SmallVector<std::pair<VirtualBlock, StateT>> exitBlocks;
       for (auto &[block, state] : outputs)
         if (block.first == &exit)
