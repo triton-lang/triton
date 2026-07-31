@@ -5650,14 +5650,14 @@ def test_tma_validcheck(report_validity):
         rubin.tma.async_load(input_desc, [0, 0], bar, smem, report_validity=REPORT_VALIDITY)
 
         primary_phase = 0
-        done = 0
-        valid = 0
+        done = False
+        valid = False
 
         # Retry after each completed attempt that reports invalid data.
-        while done != 1 or valid != 1:
+        while not done or not valid:
             done, valid = rubin.mbarrier.test_wait_validity(bar, primary_phase)
 
-            if done == 1 and valid == 0:
+            if done and not valid:
                 # After the first request, the input buffer is filled with
                 # valid data. Keep retrying TMA until valid data is loaded.
                 request_tma_validcheck_data_update(need_update_ptr)
