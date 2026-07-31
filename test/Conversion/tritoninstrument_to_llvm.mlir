@@ -73,8 +73,7 @@ tt.func private @experimental_lock_release(
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_memdesc_to_i32
-// CHECK: %[[BASE:.*]] = llvm.extractvalue %arg0[0]
-// CHECK: llvm.ptrtoint %[[BASE]] : !llvm.ptr<3> to i32
+// CHECK:  llvm.ptrtoint %1 : !llvm.ptr<3> to i32
 tt.func private @experimental_memdesc_to_i32(
   %memdesc: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
 ) {

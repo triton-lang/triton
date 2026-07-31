@@ -209,6 +209,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   unsigned M = 4 * instrMNK[0];
   unsigned N = instrMNK[1];
   unsigned K = instrMNK[2];
+  bool zeroAcc = isZeroConst(c);
   auto warpSize = mmaEncoding.getWarpsPerCTA();
   auto shapePerCTATile = SmallVector<unsigned>{instrMNK[0] * warpSize[0],
                                                instrMNK[1] * warpSize[1]};
@@ -247,11 +248,6 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   bool transB = !bLoader->getDescriptor().transposed;
 
   auto fc = unpackTensorElements(loc, loadedC, rewriter, dTensorTy);
-  bool zeroAcc = llvm::all_of(fc, [](Value value) {
-    value = getUnderlyingConvertedValue(value);
-    return matchPattern(value, m_Zero()) ||
-           matchPattern(value, m_AnyZeroFloat());
-  });
 
   triton::nvgpu::WGMMAEltType eltTypeC = getMmaRetType(d);
   triton::nvgpu::WGMMAEltType eltTypeA = getMmaOperandType(a, allowTF32);

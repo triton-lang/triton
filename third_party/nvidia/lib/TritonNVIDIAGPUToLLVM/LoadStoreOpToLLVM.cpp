@@ -577,8 +577,7 @@ struct AtomicRMWOpConversion
            (elementType.isF16() || elementType.isBF16() || elementType.isF32());
   }
 
-  bool isPromotableToNVPTXLD(triton::AtomicRMWOp op,
-                             Value convertedValue) const {
+  bool isPromotableToNVPTXLD(triton::AtomicRMWOp op) const {
     if (disableLDAcquireLowering)
       return false;
 
@@ -599,9 +598,25 @@ struct AtomicRMWOpConversion
       return false;
     if (isa<RankedTensorType>(op.getType()))
       return false;
-    convertedValue = getUnderlyingConvertedValue(convertedValue);
-    return matchPattern(convertedValue, m_Zero()) ||
-           matchPattern(convertedValue, m_AnyZeroFloat());
+    if (!op.getVal().getDefiningOp())
+      return false;
+    if (!isa<arith::ConstantOp>(op.getVal().getDefiningOp()))
+      return false;
+
+    auto constOp = cast<arith::ConstantOp>(op.getVal().getDefiningOp());
+    if (!isa<FloatAttr>(constOp.getValueAttr()) &&
+        !isa<IntegerAttr>(constOp.getValueAttr()))
+      return false;
+
+    if (auto attr = dyn_cast_or_null<FloatAttr>(constOp.getValueAttr()))
+      if (!attr.getValue().isZero())
+        return false;
+
+    if (auto attr = dyn_cast_or_null<IntegerAttr>(constOp.getValueAttr()))
+      if (!attr.getValue().isZero())
+        return false;
+
+    return true;
   }
 
 public:
@@ -689,8 +704,7 @@ public:
             {triton::MemSyncScope::GPU, triton::nvgpu::MemSyncScope::GPU},
             {triton::MemSyncScope::SYSTEM,
              triton::nvgpu::MemSyncScope::SYSTEM}};
-    const bool doPTXLDPromotion =
-        !useRed && isPromotableToNVPTXLD(op, llVal) &&
+    const bool doPTXLDPromotion = !useRed && isPromotableToNVPTXLD(op) &&
                                   vec == 1 && packed == 1 &&
                                   ScopeMap.count(op.getScope());
 

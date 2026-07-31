@@ -1067,32 +1067,6 @@ SmallVector<Value> unpackUniqueTensorElements(Location loc, Value llvmStruct,
   return unpackLLElements(loc, llvmStruct, rewriter);
 }
 
-Value getUnderlyingConvertedValue(Value value) {
-  while (true) {
-    if (auto bitcast = value.getDefiningOp<LLVM::BitcastOp>()) {
-      if (bitcast.getArg().getType() == value.getType()) {
-        value = bitcast.getArg();
-        continue;
-      }
-    }
-
-    auto extract = value.getDefiningOp<LLVM::ExtractValueOp>();
-    if (!extract)
-      return value;
-
-    Value container = extract.getContainer();
-    while (auto insert = container.getDefiningOp<LLVM::InsertValueOp>()) {
-      if (insert.getPosition() == extract.getPosition()) {
-        value = insert.getValue();
-        break;
-      }
-      container = insert.getContainer();
-    }
-    if (value == extract.getResult())
-      return value;
-  }
-}
-
 SmallVector<Value> unpackTensorElements(Location loc, Value llvmStruct,
                                         RewriterBase &rewriter,
                                         Type originalType) {

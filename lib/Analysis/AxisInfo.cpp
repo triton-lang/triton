@@ -1299,8 +1299,7 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber,
 
 void AxisInfo::initDimVectorFromHint(Attribute attr, DimVectorT *vec) {
   if (auto int_attr = dyn_cast_or_null<IntegerAttr>(attr))
-    std::fill(vec->begin(), vec->end(),
-              int_attr.getValue().getZExtValue());
+    *vec = DimVectorT(1, int_attr.getValue().getZExtValue());
   if (auto dense_attr = dyn_cast_or_null<DenseElementsAttr>(attr)) {
     auto vals = dense_attr.getValues<int>();
     *vec = DimVectorT(vals.begin(), vals.end());

@@ -713,10 +713,6 @@ SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
 SmallVector<Value> unpackUniqueTensorElements(Location loc, Value llvmStruct,
                                               RewriterBase &rewriter);
 
-/// Looks through the LLVM aggregate packing and no-op bitcasts introduced when
-/// a converted value is materialized for an unconverted user.
-Value getUnderlyingConvertedValue(Value value);
-
 /// Unpack the values in \p llvmStruct into a vector using the layout from
 /// \p originalType.
 SmallVector<Value> unpackTensorElements(Location loc, Value llvmStruct,

@@ -22,6 +22,14 @@ using namespace mlir::triton::gpu;
 using namespace mlir::triton::NVIDIA;
 using namespace mlir::LLVM::NVIDIA;
 
+bool isConstI32OneTensor(Value value) {
+  DenseElementsAttr constant;
+  return matchPattern(value, m_Constant(&constant)) &&
+         constant.getElementType().isInteger(32) &&
+         llvm::all_of(constant.getValues<APInt>(),
+                      [](const APInt &value) { return value.isOne(); });
+}
+
 Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
                     Value ptr, bool returnOld, bool isCluster,
                     Value pred = Value()) {
@@ -450,12 +458,9 @@ public:
     LocalAtomicScatterRMWInfo &info = *lowering;
 
     RMWOp rmwOp = op.getAtomicRmwOp();
-    bool isI32Inc =
-        rmwOp == RMWOp::ADD &&
-        info.valuesTy.getElementType().isInteger(32) &&
-        llvm::all_of(info.values, [](Value value) {
-          return matchPattern(getUnderlyingConvertedValue(value), m_One());
-        });
+    bool isI32Inc = rmwOp == RMWOp::ADD &&
+                    info.valuesTy.getElementType().isInteger(32) &&
+                    isConstI32OneTensor(op.getValues());
     bool returnOld = !op.getResult().use_empty();
 
     SmallVector<Value> results;

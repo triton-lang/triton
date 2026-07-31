@@ -133,8 +133,15 @@ struct ConvertTritonGPUToLLVM
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
     TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
-    ConversionConfig config;
-    config.allowPatternRollback = false;
+
+    // Lower functions
+    TritonLLVMFunctionConversionTarget funcTarget(*context);
+    RewritePatternSet funcPatterns(context);
+    mlir::triton::populateFuncOpConversionPattern(
+        typeConverter, funcPatterns, targetInfo, patternBenefitDefault);
+    if (failed(
+            applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+      return signalPassFailure();
 
     // initSharedMemory is run before the conversion of call and ret ops,
     // because the call op has to know the shared memory base address of each
@@ -144,8 +151,6 @@ struct ConvertTritonGPUToLLVM
 
     RewritePatternSet patterns(context);
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
-    mlir::triton::populateFuncOpConversionPattern(
-        typeConverter, patterns, targetInfo, patternBenefitDefault);
     mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, benefit);
     mlir::triton::NVIDIA::populateTensorMemorySubviewOpToLLVMPattern(
@@ -212,8 +217,7 @@ struct ConvertTritonGPUToLLVM
                                              axisInfoAnalysis, targetInfo);
 
     TritonLLVMConversionTarget convTarget(*context);
-    if (failed(
-            applyPartialConversion(mod, convTarget, std::move(patterns), config)))
+    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
 
     // Lower CF ops separately to avoid breaking analysis.
@@ -225,8 +229,7 @@ struct ConvertTritonGPUToLLVM
     RewritePatternSet cfPatterns(context);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           cfPatterns);
-    if (failed(
-            applyPartialConversion(mod, cfTarget, std::move(cfPatterns), config)))
+    if (failed(applyPartialConversion(mod, cfTarget, std::move(cfPatterns))))
       return signalPassFailure();
 
     // Fold CTAId when there is only 1 CTA.
