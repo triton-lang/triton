@@ -272,14 +272,11 @@ triton::LinearLayout minimalCvtLayout(Type srcTy, Type dstTy);
 // There is no need for data exchange across threads, warps, or blocks.
 bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy);
 
-// Conversion from `srcTy` to `dstTy` involves data exchange across threads
-// within a warp.  No data exchange across warps or blocks is needed.
-bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
+// The conversion involves data exchange across threads within a warp, or is
+// explicitly forced to use warp shuffles.
 bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op);
 
-// Conversion from `srcTy` to `dstTy` involves data exchange across threads,
-// warps, and possibly blocks.
-bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
+// The conversion requires data exchange through shared memory.
 bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op);
 
 // TODO: Move utility functions that belong to ConvertLayoutOp to class

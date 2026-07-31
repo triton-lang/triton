@@ -1251,7 +1251,11 @@ bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
   return outDims.empty() || ArrayRef(outDims) == ArrayRef({kRegister});
 }
 
-bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
+bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op) {
+  if (op.getForceWarpShuffle())
+    return true;
+  auto srcTy = op.getSrc().getType();
+  auto dstTy = op.getType();
   auto layout = minimalCvtLayout(srcTy, dstTy);
   MLIRContext *ctx = srcTy.getContext();
   auto kRegister = StringAttr::get(ctx, "register");
@@ -1266,19 +1270,9 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
   return false;
 }
 
-bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op) {
-  return op.getForceWarpShuffle() ||
-         cvtNeedsWarpShuffle(op.getSrc().getType(), op.getType());
-}
-
-bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
-  return !cvtReordersRegisters(srcTy, dstTy) &&
-         !cvtNeedsWarpShuffle(srcTy, dstTy);
-}
-
 bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op) {
-  return !op.getForceWarpShuffle() &&
-         cvtNeedsSharedMemory(op.getSrc().getType(), op.getType());
+  return !cvtReordersRegisters(op.getSrc().getType(), op.getType()) &&
+         !cvtNeedsWarpShuffle(op);
 }
 
 std::unique_ptr<DataFlowSolver> createDataFlowSolver() {

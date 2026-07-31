@@ -15,8 +15,6 @@ namespace mlir::triton::AMD {
 unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
                                         RankedTensorType dstTy,
                                         TargetInfoBase &targetInfo) {
-  if (!cvtNeedsSharedMemory(srcTy, dstTy))
-    return 0;
   int numBanks = targetInfo.getSharedMemoryBanks();
   auto srcLayout = gpu::toLinearLayout(srcTy);
   auto dstLayout = gpu::toLinearLayout(dstTy);
