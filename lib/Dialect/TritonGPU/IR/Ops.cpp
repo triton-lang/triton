@@ -43,6 +43,17 @@ static void printOffsets(mlir::OpAsmPrinter &p, mlir::Operation *op,
 
 namespace mlir::triton::gpu {
 
+LogicalResult CLCTryCancelOp::verify() {
+  auto tensorType = dyn_cast<RankedTensorType>(getResponse().getType());
+  if (!tensorType || tensorType.getRank() != 1)
+    return emitOpError("response must be a rank-one tensor");
+  if (tensorType.getShape() != ArrayRef<int64_t>{2})
+    return emitOpError("response must have shape [2]");
+  if (!tensorType.getElementType().isInteger(64))
+    return emitOpError("response element type must be i64");
+  return success();
+}
+
 namespace {
 
 template <typename T> bool hasEncoding(Value value) {

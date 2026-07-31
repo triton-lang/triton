@@ -228,6 +228,10 @@ def supports_ws():
     return torch.cuda.get_device_capability()[0] >= 9
 
 
+def supports_clc():
+    return is_cuda() and torch.cuda.get_device_capability()[0] >= 10
+
+
 def tma_skip_msg(byval_only=False):
     if byval_only:
         return "Requires __grid_constant__ TMA support (NVIDIA Hopper or higher, CUDA 12.0 or higher)"

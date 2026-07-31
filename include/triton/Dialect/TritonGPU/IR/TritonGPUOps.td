@@ -29,6 +29,13 @@ class TTG_Op<string mnemonic, list<Trait> traits = []> :
        !listconcat(traits, [VerifyTensorLayoutsTrait, VerifyMemDescLayoutsTrait])> {
 }
 
+def TTG_CLCTryCancelOp : TTG_Op<"clc_try_cancel"> {
+  let summary = "Request cancellation of a pending cluster";
+  let results = (outs TT_Tensor:$response);
+  let assemblyFormat = "attr-dict `:` type($response)";
+  let hasVerifier = 1;
+}
+
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
                                  [SameOperandsAndResultShape,
                                   SameOperandsAndResultElementType,

@@ -122,6 +122,7 @@ class CUDAOptions:
     enable_reflect_ftz: bool = True  # ftz in libdevice
     launch_cooperative_grid: bool = False
     launch_pdl: bool = False
+    clc: bool = False
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4b15")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
@@ -193,6 +194,9 @@ class CUDABackend(BaseBackend):
         args = {'arch': knobs.runtime.override_arch or f"sm{self.target.arch}"}
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})
         capability = int(self._parse_arch(args["arch"]))
+
+        if args.get("clc", False) and capability < 100:
+            raise ValueError(f"clc=True requires NVIDIA SM100+ (Blackwell); current target is sm_{capability}")
 
         if args.get("num_ctas", 1) > 1 and capability < 90:
             raise ValueError((f"num_ctas > 1 requires NVIDIA SM90+ (Hopper). "
@@ -268,6 +272,8 @@ class CUDABackend(BaseBackend):
         dump_enabled = pm.enable_debug()
         emuTF32 = (capability // 10 >= 8)
         passes.ttir.add_convert_to_ttgpuir(pm, f"cuda:{capability}", opt.num_warps, 32, opt.num_ctas)
+        if opt.clc:
+            nvidia.passes.ttnvgpuir.add_to_clc(pm)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
         passes.ttgpuir.add_f32_dot_tc(pm, emuTF32)
@@ -300,6 +306,7 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
             passes.ttgpuir.add_schedule_loops(pm)
             passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
+            nvidia.passes.ttnvgpuir.add_lower_clc(pm)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_optimize_partition_warps(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
