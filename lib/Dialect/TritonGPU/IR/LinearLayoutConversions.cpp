@@ -1975,9 +1975,8 @@ namespace mlir {
 // it does not need distributed shared memory. If it is also the identity on
 // warp, it can transfer via warp shuffles, and if it is the identity on lane,
 // it only needs to reorder registers.
-triton::LinearLayout
-minimalCvtLayout(const triton::LinearLayout &srcLayout,
-                 const triton::LinearLayout &dstLayout) {
+triton::LinearLayout minimalCvtLayout(const triton::LinearLayout &srcLayout,
+                                      const triton::LinearLayout &dstLayout) {
   auto srcDims = llvm::to_vector(srcLayout.getInDimNames());
   auto dstDims = llvm::to_vector(dstLayout.getInDimNames());
   SmallVector<StringAttr> commonDims;
