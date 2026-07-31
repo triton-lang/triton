@@ -19,6 +19,10 @@
 #partitioned_dim1 = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 1, partitionLayout = #inner_ps_dim1}>
 #inner_ps_b8_dim1 = #ttg.padded_shared<[512:+16] {order = [1, 0], shape = [64, 8]}>
 #partitioned_b8_dim1 = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 4, partitionDim = 1, partitionLayout = #inner_ps_b8_dim1}>
+#inner_ps_b4_padded_dim0 = #ttg.padded_shared<[512:+16] {order = [0, 1], shape = [16, 128]}>
+#partitioned_b4_padded_dim0 = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #inner_ps_b4_padded_dim0}>
+#inner_ps_b4_dim1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned_b4_dim1 = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 1, partitionLayout = #inner_ps_b4_dim1}>
 
 #linear_ds_tr_tile_out = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[0, 0], [0, 0]], block = []}>
 #linear_ds_tr_tile_invalid = #ttg.linear<{register = [[0, 1], [0, 2], [0, 8], [0, 4]], lane = [[1, 0], [4, 0], [2, 0], [8, 0], [16, 0]], warp = [[0, 0], [0, 0]], block = []}>
@@ -81,6 +85,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK-COUNT-8: llvm.call_intrinsic "llvm.amdgcn.ds.load.tr4.b64"(%{{.*}}) : (!llvm.ptr<3>) -> vector<2xi32>
     // CHECK-NOT: ds.load.tr4.b64
     %1 = amdg.local_load_packed_transposed %arg0 : !ttg.memdesc<128x32xi8, #shared1, #smem, mutable> -> tensor<64x64xi8, #ttg.dot_op<{opIdx = 1, parent = #mma_b8, kWidth = 16}>>
+
+    %ptr1 = tt.splat %arg1 : !tt.ptr<i8> -> tensor<64x64x!tt.ptr<i8>, #ttg.dot_op<{opIdx = 1, parent = #mma_b8, kWidth = 16}>>
+    tt.store %ptr1, %1 : tensor<64x64x!tt.ptr<i8>, #ttg.dot_op<{opIdx = 1, parent = #mma_b8, kWidth = 16}>>
+    tt.return
+  }
+
+  // CHECK-LABEL: b4_packed_partitioned_padded_dim0
+  tt.func @b4_packed_partitioned_padded_dim0(%arg0: !ttg.memdesc<32x128xi8, #partitioned_b4_padded_dim0, #smem, mutable>, %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // CHECK: vector<2x!llvm.ptr<3>>
+    // CHECK: llvm.extractelement %{{.*}}[%{{.*}} : i32] : vector<2x!llvm.ptr<3>>
+    // CHECK-COUNT-8: llvm.call_intrinsic "llvm.amdgcn.ds.load.tr4.b64"(%{{.*}}) : (!llvm.ptr<3>) -> vector<2xi32>
+    // CHECK-NOT: ds.load.tr4.b64
+    %1 = amdg.local_load_packed_transposed %arg0 : !ttg.memdesc<32x128xi8, #partitioned_b4_padded_dim0, #smem, mutable> -> tensor<64x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma_b8, kWidth = 16}>>
+
+    %ptr1 = tt.splat %arg1 : !tt.ptr<i8> -> tensor<64x64x!tt.ptr<i8>, #ttg.dot_op<{opIdx = 0, parent = #mma_b8, kWidth = 16}>>
+    tt.store %ptr1, %1 : tensor<64x64x!tt.ptr<i8>, #ttg.dot_op<{opIdx = 0, parent = #mma_b8, kWidth = 16}>>
+    tt.return
+  }
+
+  // CHECK-LABEL: b4_packed_partitioned_dim1
+  tt.func @b4_packed_partitioned_dim1(%arg0: !ttg.memdesc<128x32xi8, #partitioned_b4_dim1, #smem, mutable>, %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // CHECK: vector<2x!llvm.ptr<3>>
+    // CHECK: llvm.extractelement %{{.*}}[%{{.*}} : i32] : vector<2x!llvm.ptr<3>>
+    // CHECK-COUNT-8: llvm.call_intrinsic "llvm.amdgcn.ds.load.tr4.b64"(%{{.*}}) : (!llvm.ptr<3>) -> vector<2xi32>
+    // CHECK-NOT: ds.load.tr4.b64
+    %1 = amdg.local_load_packed_transposed %arg0 : !ttg.memdesc<128x32xi8, #partitioned_b4_dim1, #smem, mutable> -> tensor<64x64xi8, #ttg.dot_op<{opIdx = 1, parent = #mma_b8, kWidth = 16}>>
 
     %ptr1 = tt.splat %arg1 : !tt.ptr<i8> -> tensor<64x64x!tt.ptr<i8>, #ttg.dot_op<{opIdx = 1, parent = #mma_b8, kWidth = 16}>>
     tt.store %ptr1, %1 : tensor<64x64x!tt.ptr<i8>, #ttg.dot_op<{opIdx = 1, parent = #mma_b8, kWidth = 16}>>
