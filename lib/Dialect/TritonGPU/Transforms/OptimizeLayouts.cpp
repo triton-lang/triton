@@ -28,7 +28,6 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
-#include <deque>
 #include <limits>
 
 namespace mlir::triton::gpu {
@@ -42,7 +41,14 @@ namespace mlir::triton::gpu {
 
 namespace {
 
-struct LayoutSlice;
+using LayoutAssignment = DenseMap<Value, Attribute>;
+using LayoutValue = std::pair<Value, Attribute>;
+
+struct LayoutSlice {
+  SetVector<Value> values;
+  LayoutAssignment encodings;
+  DenseMap<LayoutValue, Value> rematerializations;
+};
 
 /// Hardware-sensitive profitability decisions are deliberately separate from
 /// legality, candidate discovery, graph search, and rewriting. Both the solver
@@ -83,15 +89,6 @@ private:
   mutable DenseMap<Operation *, uint64_t> executionWeights;
 };
 
-using LayoutAssignment = DenseMap<Value, Attribute>;
-using LayoutValue = std::pair<Value, Attribute>;
-
-struct LayoutSlice {
-  SetVector<Value> values;
-  LayoutAssignment encodings;
-  DenseMap<LayoutValue, Value> rematerializations;
-};
-
 class LayoutOptimizationAnalysis;
 class LayoutOptimizationPolicy;
 
@@ -100,6 +97,16 @@ class LayoutOptimizationPolicy;
 /// graph solves those alternatives independently of the rewrite policy.
 class LayoutMaterializationGraph {
 public:
+  enum class Action : uint8_t {
+    BackwardSlice,
+    Narrowing,
+    Conditional,
+    DotOperand,
+    DominatingReuse,
+    StoreExpression,
+    ConversionExpression,
+  };
+
   enum Feature : unsigned {
     Join = 1 << 0,
     Split = 1 << 1,
@@ -127,6 +134,25 @@ public:
     Expression,
   };
 
+  explicit LayoutMaterializationGraph(LayoutOptimizationAnalysis &problem)
+      : problem(problem) {}
+
+  void build();
+  void solveAssignments(const LayoutOptimizationPolicy &policy,
+                        LayoutAssignment &assignments);
+  unsigned size() const { return constraints.size(); }
+  bool has(unsigned feature) const { return features & feature; }
+  unsigned tensorLoads() const { return tensorLoadBoundaryCount; }
+
+  void clear();
+  void analyze();
+  Value materialize(Value value, Attribute encoding, Operation *placement);
+  LogicalResult materialize(ArrayRef<Action> actions,
+                            bool preserveSharedReductions = false);
+
+private:
+  using Key = std::pair<std::pair<LayoutValue, unsigned>, Operation *>;
+
   struct Alternative {
     Kind kind;
     SmallVector<unsigned, 4> operands;
@@ -151,41 +177,16 @@ public:
     Value materialized;
   };
 
-  explicit LayoutMaterializationGraph(LayoutOptimizationAnalysis &problem)
-      : problem(problem) {}
+  struct Expression {
+    Operation *root;
+    RankedTensorType target;
+    bool indexed;
+    Attribute flatEncoding;
+    Value indices;
+    SetVector<Operation *> operations;
+    DenseMap<unsigned, Value> joinConditions{};
+  };
 
-  void clearConstraints() {
-    constraints.clear();
-    constraintIndices.clear();
-    components.clear();
-    features = 0;
-    tensorLoadBoundaryCount = 0;
-  }
-  void addNode(Value value, ArrayRef<Attribute> candidates, bool fixed) {
-    constraintIndices.try_emplace(value, constraints.size());
-    constraints.push_back({value, candidates, fixed});
-    components.grow(constraints.size());
-  }
-  void addOperation(Operation *operation);
-  void solveAssignments(const LayoutOptimizationPolicy &policy,
-                        LayoutAssignment &assignments);
-  ArrayRef<Node> getNodes() const { return constraints; }
-  SmallVector<SmallVector<unsigned, 8>, 8> getConnectedComponents() const;
-  bool has(unsigned feature) const { return features & feature; }
-  unsigned getTensorLoadBoundaryCount() const {
-    return tensorLoadBoundaryCount;
-  }
-
-  void clear();
-  void clearExisting() {
-    existing.clear();
-    sharedConversions.clear();
-  }
-  void analyze();
-  Value materialize(Value value, Attribute encoding, Operation *placement);
-  Value lookupExisting(Value value, Attribute encoding) const {
-    return existing.lookup(value).lookup(encoding);
-  }
   void remember(Value value, Attribute encoding, Value materialized);
   void updateExisting(ArrayRef<std::tuple<Value, Value>> replacements);
   bool reuse(ConvertLayoutOp conversion);
@@ -197,23 +198,8 @@ public:
   void materialize(ConvertLayoutOp conversion, LayoutSlice &slice,
                    IRMapping *mapping = nullptr);
   bool materialize(Operation *root, bool indexed);
-
-private:
-  using Key = std::pair<std::pair<LayoutValue, unsigned>, Operation *>;
-
-  struct Expression {
-    Expression(Operation *root, RankedTensorType target, bool indexed)
-        : root(root), target(target), indexed(indexed) {}
-
-    Operation *root;
-    RankedTensorType target;
-    bool indexed;
-    Attribute flatEncoding;
-    Value indices;
-    SetVector<Operation *> operations;
-    DenseMap<unsigned, Value> joinConditions;
-  };
-
+  bool materialize(Operation *root, Action action,
+                   bool preserveSharedReductions);
   unsigned request(Value value, Attribute encoding, Operation *placement,
                    const LayoutAssignment &assignments, unsigned depth = 0);
   LogicalResult requestExpression(Value value, Attribute encoding,
@@ -223,14 +209,16 @@ private:
   Value materializeExpression(Materialization &node,
                               const Alternative &alternative,
                               OpBuilder &builder);
+  bool feedsMemoryProtocol(Value value) const;
+  bool hoist(ConvertLayoutOp conversion, Action action);
   void solve();
   Value materialize(unsigned node, OpBuilder *builder = nullptr);
 
   template <typename Range> void addContract(Range &&values) {
     std::optional<unsigned> previous;
     for (Value value : values) {
-      auto found = constraintIndices.find(value);
-      if (found == constraintIndices.end())
+      auto found = indices.find({{{value, Attribute{}}, 0}, nullptr});
+      if (found == indices.end())
         continue;
       unsigned current = found->second;
       if (constraints[current].fixed)
@@ -243,7 +231,6 @@ private:
 
   LayoutOptimizationAnalysis &problem;
   SmallVector<Node, 32> constraints;
-  DenseMap<Value, unsigned> constraintIndices;
   mutable llvm::IntEqClasses components;
   unsigned features = 0;
   unsigned tensorLoadBoundaryCount = 0;
@@ -261,35 +248,18 @@ class LayoutOptimizationPolicy {
   using G = LayoutMaterializationGraph;
 
 public:
-  enum class Action : uint8_t {
-    BackwardSlice,
-    Narrowing,
-    Conditional,
-    DotOperand,
-    DominatingReuse,
-    StoreExpression,
-    ConversionExpression,
-  };
-
-  struct Stage {
-    ArrayRef<Action> actions;
-    bool preserveSharedReductions = false;
-    bool fixedPoint = false;
-  };
-
   LayoutOptimizationPolicy() = default;
   explicit LayoutOptimizationPolicy(const LayoutMaterializationGraph &graph) {
-    bool memoryFanout = graph.getTensorLoadBoundaryCount() >= 2 &&
+    bool memoryFanout = graph.tensorLoads() >= 2 &&
                         !graph.has(G::Join | G::Split | G::Reduction | G::Loop |
                                    G::TensorMemory);
     fullObjective =
         (graph.has(G::Join | G::Split | G::Reduction) || memoryFanout) &&
-        graph.getNodes().size() <= 256;
+        graph.size() <= 256;
     componentSearch =
         graph.has(G::Join | G::Split | G::Reduction | G::Loop) || memoryFanout;
-    exactComponentSearch =
-        fullObjective && graph.getTensorLoadBoundaryCount() > 0 &&
-        !graph.has(G::Store) && graph.getNodes().size() <= 64;
+    exactComponentSearch = fullObjective && graph.tensorLoads() > 0 &&
+                           !graph.has(G::Store) && graph.size() <= 64;
     pruneRedundantReductionProposals =
         graph.has(G::Reduction) && !graph.has(G::ProtectedReduction);
     maxComponentProposals = fullObjective ? 128 : 32;
@@ -316,25 +286,16 @@ struct LayoutMemoryProfile;
 class LayoutOptimizationAnalysis {
 public:
   explicit LayoutOptimizationAnalysis(FuncOp function)
-      : funcOp(function), materializationGraph(*this) {}
-  static LogicalResult optimize(ModuleOp module, bool disableSplitting);
+      : funcOp(function), graph(*this) {}
+  LogicalResult run(bool disableSplitting);
 
 private:
   using LayoutInfo = llvm::SmallSetVector<Attribute, 8>;
   friend class LayoutMaterializationGraph;
-  using MaterializationAction = LayoutOptimizationPolicy::Action;
-  using MaterializationPolicy = LayoutOptimizationPolicy::Stage;
+  using Action = LayoutMaterializationGraph::Action;
 
-  LogicalResult run(bool disableSplitting);
-  LogicalResult runIteration(bool disableSplitting);
-  LogicalResult optimizeMaterializations(MaterializationPolicy policy);
-  bool applyMaterializationAction(ConvertLayoutOp conversion,
-                                  MaterializationAction action,
-                                  bool preserveSharedReductions);
   LogicalResult cleanup();
-  void assignLayouts(bool optimize,
-                     const LayoutMemoryProfile *profile = nullptr);
-  bool feedsMemoryProtocol(Value value) const;
+  void assignLayouts(const LayoutMemoryProfile *profile = nullptr);
   // Find the anchor ops and set their layout in the data structure.
   void initAnchorLayout();
   // Recursively Propagate the layout to all the users of the anchor ops until
@@ -353,8 +314,6 @@ private:
   void rewriteReduceToScalar(Operation *reduceOp);
   void setEncodingInPlace(Value value, Attribute encoding);
   void rewriteGenericOpInPlace(Operation *op, Attribute encoding);
-  bool hoistConversion(ConvertLayoutOp conversion,
-                       MaterializationAction action);
 
   template <typename Rewrite>
   void rewriteAssignedValues(ValueRange values, Rewrite rewrite) {
@@ -380,7 +339,6 @@ private:
   getUseEncodings(OpOperand &use, const LayoutAssignment &assignments) const;
   uint64_t getAssignmentCost(Value value, Attribute encoding,
                              const LayoutAssignment &assignments) const;
-  uint64_t getGlobalAssignmentCost(const LayoutAssignment &assignments) const;
   uint64_t getAffectedAssignmentCost(ArrayRef<Value> changed,
                                      const LayoutAssignment &assignments) const;
   bool buildGlobalComponentProposal(
@@ -392,17 +350,15 @@ private:
   DenseSet<Value> fixedLayouts;
   // original encodings of tensor values rewritten in place.
   LayoutAssignment originalEncodings;
-  mutable DenseMap<std::pair<Operation *, Attribute>, Attribute>
-      inferredSourceEncodings;
-  mutable DenseMap<std::pair<Operation *, Attribute>, Attribute>
-      inferredDestinationEncodings;
+  mutable DenseMap<std::pair<std::pair<Operation *, Attribute>, unsigned>,
+                   Attribute>
+      inferredEncodings;
   LayoutCostModel costModel;
   LayoutOptimizationPolicy policy;
   FuncOp funcOp;
   bool disableRematSplitting = false;
-  bool optimizeLayouts = false;
   const LayoutMemoryProfile *memoryProfile = nullptr;
-  LayoutMaterializationGraph materializationGraph;
+  LayoutMaterializationGraph graph;
   DominanceInfo domInfo;
   PostDominanceInfo postDomInfo;
 };
@@ -429,58 +385,6 @@ bool isLayoutAnchor(Operation *op) {
     return reshape.getAllowReorder();
 
   return false;
-}
-
-static bool isProtectedLayoutReduction(Operation *op);
-static bool isProtectedLayoutLoop(Operation *op, unsigned functionLoads,
-                                  unsigned functionStores);
-static unsigned getLayoutOperationFeatures(Operation *operation);
-
-struct LayoutMemoryProfile {
-  using G = LayoutMaterializationGraph;
-  unsigned loads = 0, tensorLoads = 0, stores = 0, reshapes = 0;
-  unsigned features = 0;
-  SmallVector<Operation *, 4> protectedLoops;
-
-  bool has(unsigned required) const {
-    return (features & required) == required;
-  }
-
-  bool hasPairwiseReductionProtocol() const {
-    return has(G::PairwiseReduction | G::WideScalarReduction |
-               G::WideFp8Load) &&
-           stores == 1;
-  }
-
-  bool hasPackedAssemblyProtocol() const {
-    return (tensorLoads == 2 ||
-            (tensorLoads == 3 && has(G::Join | G::Fp8Load | G::I8Load))) &&
-           stores == 1 &&
-           (has(G::Join) || (has(G::Fp8Load | G::I8Load) && reshapes == 4)) &&
-           !has(G::ComplexBoundary);
-  }
-};
-
-static LayoutMemoryProfile getLayoutMemoryProfile(FuncOp funcOp) {
-  LayoutMemoryProfile profile;
-  funcOp.walk([&](Operation *op) {
-    profile.features |= getLayoutOperationFeatures(op);
-    if (auto load = dyn_cast<LoadOp>(op)) {
-      ++profile.loads;
-      if (isa<RankedTensorType>(load.getType()))
-        ++profile.tensorLoads;
-    } else if (isa<StoreOp>(op)) {
-      ++profile.stores;
-    } else if (isa<ReshapeOp>(op)) {
-      ++profile.reshapes;
-    } else if (isa<scf::ForOp, scf::WhileOp>(op)) {
-      profile.protectedLoops.push_back(op);
-    }
-  });
-  llvm::erase_if(profile.protectedLoops, [&](Operation *op) {
-    return !isProtectedLayoutLoop(op, profile.loads, profile.stores);
-  });
-  return profile;
 }
 
 static bool isProtectedLayoutReduction(Operation *op) {
@@ -660,6 +564,51 @@ static bool isProtectedLayoutLoop(Operation *op, unsigned functionLoads,
   return body.wasInterrupted();
 }
 
+struct LayoutMemoryProfile {
+  using G = LayoutMaterializationGraph;
+  unsigned loads = 0, tensorLoads = 0, stores = 0, reshapes = 0;
+  unsigned features = 0;
+  SmallVector<Operation *, 4> protectedLoops;
+
+  explicit LayoutMemoryProfile(FuncOp funcOp) {
+    funcOp.walk([&](Operation *op) {
+      features |= getLayoutOperationFeatures(op);
+      if (auto load = dyn_cast<LoadOp>(op)) {
+        ++loads;
+        if (isa<RankedTensorType>(load.getType()))
+          ++tensorLoads;
+      } else if (isa<StoreOp>(op)) {
+        ++stores;
+      } else if (isa<ReshapeOp>(op)) {
+        ++reshapes;
+      } else if (isa<scf::ForOp, scf::WhileOp>(op)) {
+        protectedLoops.push_back(op);
+      }
+    });
+    llvm::erase_if(protectedLoops, [&](Operation *op) {
+      return !isProtectedLayoutLoop(op, loads, stores);
+    });
+  }
+
+  bool has(unsigned required) const {
+    return (features & required) == required;
+  }
+
+  bool hasPairwiseReductionProtocol() const {
+    return has(G::PairwiseReduction | G::WideScalarReduction |
+               G::WideFp8Load) &&
+           stores == 1;
+  }
+
+  bool hasPackedAssemblyProtocol() const {
+    return (tensorLoads == 2 ||
+            (tensorLoads == 3 && has(G::Join | G::Fp8Load | G::I8Load))) &&
+           stores == 1 &&
+           (has(G::Join) || (has(G::Fp8Load | G::I8Load) && reshapes == 4)) &&
+           !has(G::ComplexBoundary);
+  }
+};
+
 struct LayoutOperationContract {
   static bool isControlFlow(Operation *operation) {
     return isa<scf::ForOp, scf::WhileOp, scf::YieldOp, scf::ConditionOp>(
@@ -786,55 +735,47 @@ struct LayoutOperationContract {
   }
 };
 
-void LayoutMaterializationGraph::addOperation(Operation *operation) {
-  features |= getLayoutOperationFeatures(operation);
-  if (auto load = dyn_cast<LoadOp>(operation)) {
-    if (load->getNumResults() == 1 &&
-        isa<RankedTensorType>(load->getResult(0).getType()))
-      ++tensorLoadBoundaryCount;
+void LayoutMaterializationGraph::build() {
+  clear();
+  constraints.clear();
+  components.clear();
+  features = problem.memoryProfile->features;
+  tensorLoadBoundaryCount = problem.memoryProfile->tensorLoads;
+  for (const auto &[value, layouts] : problem.layouts) {
+    indices.try_emplace({{{value, Attribute{}}, 0}, nullptr},
+                        constraints.size());
+    constraints.push_back(
+        {value, layouts.getArrayRef(), problem.fixedLayouts.contains(value)});
+    components.grow(constraints.size());
   }
 
-  if (isFixedLayoutBoundary(operation))
-    return;
-
-  if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(operation)) {
-    for (unsigned index = 0; index < operation->getNumResults(); ++index)
-      addContract(getTiedArgs(operation, index));
-    return;
-  }
-
-  if (isLayoutTransform(operation))
-    addContract(llvm::concat<Value>(operation->getOperands(),
-                                    operation->getResults()));
-}
-
-SmallVector<SmallVector<unsigned, 8>, 8>
-LayoutMaterializationGraph::getConnectedComponents() const {
-  components.compress();
-  SmallVector<SmallVector<unsigned, 8>, 8> result(components.getNumClasses());
-  for (unsigned index = 0; index < constraints.size(); ++index) {
-    if (!constraints[index].fixed && constraints[index].candidates.size() > 1)
-      result[components[index]].push_back(index);
-  }
-  return result;
+  problem.funcOp.walk([&](Operation *operation) {
+    if (isFixedLayoutBoundary(operation))
+      return;
+    if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(operation)) {
+      for (unsigned index = 0; index < operation->getNumResults(); ++index)
+        addContract(getTiedArgs(operation, index));
+    } else if (isLayoutTransform(operation)) {
+      addContract(llvm::concat<Value>(operation->getOperands(),
+                                      operation->getResults()));
+    }
+  });
 }
 
 void LayoutOptimizationAnalysis::assignLayouts(
-    bool optimize, const LayoutMemoryProfile *profile) {
+    const LayoutMemoryProfile *profile) {
   layouts.clear();
   fixedLayouts.clear();
   originalEncodings.clear();
-  inferredSourceEncodings.clear();
-  inferredDestinationEncodings.clear();
-  optimizeLayouts = optimize;
+  inferredEncodings.clear();
   memoryProfile = profile;
   initAnchorLayout();
   propagateLayout();
   resolveConflicts();
-  if (optimizeLayouts)
-    materializationGraph.analyze();
+  if (memoryProfile)
+    graph.analyze();
   else
-    materializationGraph.clear();
+    graph.clear();
   rewrite();
 }
 
@@ -852,7 +793,7 @@ void LayoutOptimizationAnalysis::initAnchorLayout() {
   for (Value arg : funcOp.getArguments())
     addAnchor(arg);
 
-  if (optimizeLayouts) {
+  if (memoryProfile) {
     const LayoutMemoryProfile &memory = *memoryProfile;
     auto anchorOperationValues = [&](Operation *op) {
       for (Value result : op->getResults())
@@ -982,7 +923,7 @@ void LayoutOptimizationAnalysis::initAnchorLayout() {
       for (Value result : op->getResults())
         addAnchor(result);
 
-    if (!optimizeLayouts || !isFixedLayoutBoundary(op))
+    if (!memoryProfile || !isFixedLayoutBoundary(op))
       return;
 
     for (Value result : op->getResults())
@@ -1005,7 +946,7 @@ bool LayoutOptimizationAnalysis::addEncoding(Value value, Attribute encoding) {
     return false;
 
   LayoutInfo &info = layouts[value];
-  if (optimizeLayouts) {
+  if (memoryProfile) {
     if (fixedLayouts.contains(value) && encoding != tensorType.getEncoding())
       return false;
 
@@ -1037,7 +978,7 @@ void LayoutOptimizationAnalysis::propagateLayout() {
           if (added)
             changed.push_back(successor);
         });
-    if (optimizeLayouts)
+    if (memoryProfile)
       for (Attribute encoding : info)
         LayoutOperationContract::visitPredecessors(
             currentValue, [&](Value predecessor, Operation *operation) {
@@ -1062,7 +1003,7 @@ void LayoutOptimizationAnalysis::propagateLayout() {
 }
 
 void LayoutOptimizationAnalysis::resolveConflicts() {
-  if (optimizeLayouts)
+  if (memoryProfile)
     return resolveGlobalConflicts();
 
   for (auto &it : layouts) {
@@ -1184,7 +1125,7 @@ uint64_t LayoutCostModel::getExecutionWeight(Operation *op) const {
 
 uint64_t LayoutCostModel::getProducerCost(Operation *producer, Value value,
                                           Attribute encoding) const {
-  if (isa<arith::ConstantOp, triton::SplatOp, triton::MakeRangeOp>(producer))
+  if (isa<arith::ConstantOp, SplatOp, MakeRangeOp>(producer))
     return 0;
   uint64_t arithmetic =
       (isExpensiveMathOp(producer) ? 8 : 1) * getByteCount(value);
@@ -1196,9 +1137,10 @@ template <bool source>
 Attribute
 LayoutOptimizationAnalysis::getCachedEncoding(Operation *op,
                                               Attribute encoding) const {
-  auto &cache = source ? inferredSourceEncodings : inferredDestinationEncodings;
-  auto [cached, inserted] = cache.try_emplace(
-      std::pair<Operation *, Attribute>{op, encoding}, Attribute{});
+  auto [cached, inserted] = inferredEncodings.try_emplace(
+      std::pair<std::pair<Operation *, Attribute>, unsigned>{{op, encoding},
+                                                             source},
+      Attribute{});
   if (inserted)
     cached->second = source ? inferSrcEncoding(op, encoding)
                             : inferDstEncoding(op, encoding);
@@ -1388,17 +1330,6 @@ uint64_t LayoutOptimizationAnalysis::getAssignmentCost(
   return cost;
 }
 
-uint64_t LayoutOptimizationAnalysis::getGlobalAssignmentCost(
-    const LayoutAssignment &assignments) const {
-  uint64_t cost = 0;
-  for (const auto &[value, info] : layouts) {
-    Attribute encoding = getAssignedEncoding(value, assignments);
-    if (encoding)
-      cost += getAssignmentCost(value, encoding, assignments);
-  }
-  return cost;
-}
-
 uint64_t LayoutOptimizationAnalysis::getAffectedAssignmentCost(
     ArrayRef<Value> changedValues, const LayoutAssignment &assignments) const {
   llvm::SmallSetVector<Value, 32> affected;
@@ -1567,7 +1498,7 @@ void LayoutMaterializationGraph::solveAssignments(
          ++iteration) {
       bool changed = false;
       unsigned proposalCount = 0;
-      for (const Node &node : getNodes()) {
+      for (const Node &node : constraints) {
         Value value = node.value;
         if (pruneRedundantReductionProposals &&
             (node.fixed || node.candidates.size() <= 1))
@@ -1653,8 +1584,8 @@ void LayoutMaterializationGraph::solveAssignments(
   constexpr unsigned maxAssignmentIterations = 8;
   for (unsigned iteration = 0; iteration < maxAssignmentIterations;
        ++iteration) {
-    bool changed = improve(llvm::reverse(getNodes()));
-    changed |= improve(getNodes());
+    bool changed = improve(llvm::reverse(constraints));
+    changed |= improve(constraints);
     if (!changed)
       break;
   }
@@ -1664,7 +1595,7 @@ void LayoutMaterializationGraph::solveAssignments(
   for (unsigned iteration = 0; iteration < maxAssignmentIterations;
        ++iteration) {
     bool changed = false;
-    for (const Node &node : getNodes()) {
+    for (const Node &node : constraints) {
       Value value = node.value;
       if (problem.canAssignEncoding(value, assignments.lookup(value),
                                     assignments))
@@ -1680,40 +1611,55 @@ void LayoutMaterializationGraph::solveAssignments(
   if (!policy.exactComponentSearch)
     return;
 
+  auto globalCost = [&] {
+    uint64_t cost = 0;
+    for (const Node &node : constraints)
+      if (Attribute encoding = assignments.lookup(node.value))
+        cost += problem.getAssignmentCost(node.value, encoding, assignments);
+    return cost;
+  };
+
+  components.compress();
+  SmallVector<SmallVector<unsigned, 8>, 8> connected(
+      components.getNumClasses());
+  for (auto [index, node] : llvm::enumerate(constraints))
+    if (!node.fixed && node.candidates.size() > 1)
+      connected[components[index]].push_back(index);
+
   // Coordinate descent cannot change jointly constrained encodings when every
   // intermediate assignment is illegal. Search the bounded components exactly.
-  for (const SmallVector<unsigned, 8> &component : getConnectedComponents()) {
+  for (const SmallVector<unsigned, 8> &component : connected) {
     if (component.size() < 2)
       continue;
     unsigned states = 1;
     for (unsigned index : component)
-      if ((states *= getNodes()[index].candidates.size()) >
+      if ((states *= constraints[index].candidates.size()) >
           policy.maxExactComponentStates)
         break;
     if (states > policy.maxExactComponentStates)
       continue;
 
-    uint64_t bestCost = problem.getGlobalAssignmentCost(assignments);
+    uint64_t bestCost = globalCost();
     SmallVector<Attribute, 8> bestAssignments;
     for (unsigned index : component)
-      bestAssignments.push_back(assignments.lookup(getNodes()[index].value));
+      bestAssignments.push_back(assignments.lookup(constraints[index].value));
 
     auto search = [&](auto &&self, unsigned position) -> void {
       if (position == component.size()) {
-        for (const Node &node : getNodes())
+        for (const Node &node : constraints)
           if (!problem.canAssignEncoding(
                   node.value, assignments.lookup(node.value), assignments))
             return;
-        uint64_t candidateCost = problem.getGlobalAssignmentCost(assignments);
+        uint64_t candidateCost = globalCost();
         if (candidateCost >= bestCost)
           return;
         bestCost = candidateCost;
         for (auto [index, value] : llvm::enumerate(component))
-          bestAssignments[index] = assignments.lookup(getNodes()[value].value);
+          bestAssignments[index] = assignments.lookup(constraints[value].value);
         return;
       }
 
-      const Node &node = getNodes()[component[position]];
+      const Node &node = constraints[component[position]];
       Attribute original = assignments.lookup(node.value);
       for (Attribute candidate : node.candidates) {
         assignments[node.value] = candidate;
@@ -1723,7 +1669,7 @@ void LayoutMaterializationGraph::solveAssignments(
     };
     search(search, 0);
     for (auto [index, value] : llvm::enumerate(component))
-      assignments[getNodes()[value].value] = bestAssignments[index];
+      assignments[constraints[value].value] = bestAssignments[index];
   }
 }
 
@@ -1739,11 +1685,7 @@ void LayoutOptimizationAnalysis::resolveGlobalConflicts() {
   }
 
   if (hasFlexibleLayouts) {
-    LayoutMaterializationGraph &graph = materializationGraph;
-    graph.clearConstraints();
-    for (const auto &[value, info] : layouts)
-      graph.addNode(value, info.getArrayRef(), fixedLayouts.contains(value));
-    funcOp.walk([&](Operation *op) { graph.addOperation(op); });
+    graph.build();
     policy = LayoutOptimizationPolicy(graph);
     LDBG("resolving " << layouts.size() << " layout values with "
                       << (policy.fullObjective ? "the full" : "the bounded")
@@ -1760,11 +1702,9 @@ void LayoutOptimizationAnalysis::resolveGlobalConflicts() {
 }
 
 void LayoutOptimizationAnalysis::rewrite() {
-  std::deque<Region *> queue = {&funcOp->getRegion(0)};
-  while (!queue.empty()) {
-    Region *currentRegion = queue.front();
-    queue.pop_front();
-    for (Operation &op : currentRegion->getOps()) {
+  SmallVector<Region *, 8> regions{&funcOp->getRegion(0)};
+  for (unsigned index = 0; index < regions.size(); ++index) {
+    for (Operation &op : regions[index]->getOps()) {
       bool needRewrite = llvm::any_of(op.getResults(), [&](Value result) {
         auto it = layouts.find(result);
         if (it == layouts.end())
@@ -1791,8 +1731,8 @@ void LayoutOptimizationAnalysis::rewrite() {
       } else if (auto assertOp = dyn_cast<AssertOp>(&op)) {
         Value operand = assertOp->getOperand(0);
         if (auto it = layouts.find(operand); it != layouts.end())
-          assertOp->setOperand(0, materializationGraph.materialize(
-                                      operand, it->second[0], assertOp));
+          assertOp->setOperand(
+              0, graph.materialize(operand, it->second[0], assertOp));
       } else {
         // If we don't need to rewrite the op we still need to remap the
         // operands.
@@ -1804,13 +1744,12 @@ void LayoutOptimizationAnalysis::rewrite() {
           if (!encoding)
             encoding =
                 cast<RankedTensorType>(operand.get().getType()).getEncoding();
-          Value newOperand =
-              materializationGraph.materialize(operand.get(), encoding, &op);
+          Value newOperand = graph.materialize(operand.get(), encoding, &op);
           op.setOperand(operand.getOperandNumber(), newOperand);
         }
       }
       for (Region &nested : op.getRegions())
-        queue.push_back(&nested);
+        regions.push_back(&nested);
     }
   }
 }
@@ -1820,7 +1759,7 @@ Value LayoutMaterializationGraph::materialize(Value value, Attribute encoding,
   if (auto tensorType = dyn_cast<RankedTensorType>(value.getType())) {
     if (tensorType.getEncoding() == encoding)
       return value;
-    if (problem.optimizeLayouts && placement)
+    if (problem.memoryProfile && placement)
       if (auto found = indices.find({{{value, encoding}, 0}, placement});
           found != indices.end())
         return materialize(found->second);
@@ -1857,9 +1796,8 @@ void LayoutOptimizationAnalysis::rewriteGenericOpInPlace(Operation *op,
     assert(operandEnc);
   }
   for (OpOperand &operand : op->getOpOperands()) {
-    op->setOperand(
-        operand.getOperandNumber(),
-        materializationGraph.materialize(operand.get(), operandEnc, op));
+    op->setOperand(operand.getOperandNumber(),
+                   graph.materialize(operand.get(), operandEnc, op));
   }
   for (Value result : op->getResults())
     if (isa<RankedTensorType>(result.getType()))
@@ -1870,8 +1808,8 @@ void LayoutOptimizationAnalysis::rewriteControlFlow(Operation *operation) {
   if (auto loop = dyn_cast<scf::ForOp>(operation)) {
     rewriteAssignedValues(loop.getResults(), [&](unsigned index, Value result,
                                                  Attribute encoding) {
-      loop.getInitArgsMutable()[index].assign(materializationGraph.materialize(
-          loop.getInitArgs()[index], encoding, loop));
+      loop.getInitArgsMutable()[index].assign(
+          graph.materialize(loop.getInitArgs()[index], encoding, loop));
       setEncodingInPlace(result, encoding);
       setEncodingInPlace(loop.getRegionIterArg(index), encoding);
     });
@@ -1882,8 +1820,8 @@ void LayoutOptimizationAnalysis::rewriteControlFlow(Operation *operation) {
     rewriteAssignedValues(
         loop.getBeforeArguments(),
         [&](unsigned index, Value argument, Attribute encoding) {
-          loop->setOperand(index, materializationGraph.materialize(
-                                      loop->getOperand(index), encoding, loop));
+          loop->setOperand(index, graph.materialize(loop->getOperand(index),
+                                                    encoding, loop));
           setEncodingInPlace(argument, encoding);
         });
     rewriteAssignedValues(loop.getResults(), [&](unsigned index, Value result,
@@ -1905,9 +1843,9 @@ void LayoutOptimizationAnalysis::rewriteControlFlowOperands(
   for (auto [index, target] : llvm::enumerate(targets))
     if (auto type = dyn_cast<RankedTensorType>(target.getType())) {
       unsigned operand = firstOperand + index;
-      operation->setOperand(operand, materializationGraph.materialize(
-                                         operation->getOperand(operand),
-                                         type.getEncoding(), operation));
+      operation->setOperand(operand,
+                            graph.materialize(operation->getOperand(operand),
+                                              type.getEncoding(), operation));
     }
 }
 
@@ -1925,8 +1863,7 @@ void LayoutOptimizationAnalysis::rewriteReduceToScalar(Operation *reduceOp) {
   if (!srcEncoding)
     return;
   for (OpOperand &operand : reduceOp->getOpOperands()) {
-    Value newOperand =
-        materializationGraph.materialize(operand.get(), srcEncoding, reduceOp);
+    Value newOperand = graph.materialize(operand.get(), srcEncoding, reduceOp);
     reduceOp->setOperand(operand.getOperandNumber(), newOperand);
   }
 }
@@ -1988,6 +1925,8 @@ void LayoutMaterializationGraph::clear() {
   indices.clear();
   candidates.clear();
   nodes.clear();
+  existing.clear();
+  sharedConversions.clear();
   expression.reset();
 }
 
@@ -2088,7 +2027,7 @@ unsigned LayoutMaterializationGraph::request(
   Operation *producer = value.getDefiningOp();
   bool memoryProtocol =
       placement && isa<ConvertLayoutOp>(placement) &&
-      problem.feedsMemoryProtocol(cast<ConvertLayoutOp>(placement).getResult());
+      feedsMemoryProtocol(cast<ConvertLayoutOp>(placement).getResult());
   if (!problem.policy.allowProducer(value, producer, placement,
                                     problem.fixedLayouts.contains(value),
                                     memoryProtocol, depth, nodes.size()))
@@ -2150,7 +2089,7 @@ void LayoutMaterializationGraph::solve() {
     evaluate(evaluate, index);
 }
 
-bool LayoutOptimizationAnalysis::feedsMemoryProtocol(Value value) const {
+bool LayoutMaterializationGraph::feedsMemoryProtocol(Value value) const {
   DenseSet<Value> visited;
   SmallVector<Value, 16> worklist{value};
   while (!worklist.empty()) {
@@ -2262,21 +2201,20 @@ void LayoutMaterializationGraph::materialize(ConvertLayoutOp convertOp,
       opsToRewrite.insert(producer);
       if (auto ifOp = dyn_cast<scf::IfOp>(producer)) {
         unsigned operandIdx = cast<OpResult>(v).getResultNumber();
-        opsToRewrite.insert(ifOp.thenYield().getOperation());
-        yieldOperandsMap[ifOp.thenYield()].push_back(operandIdx);
-        opsToRewrite.insert(ifOp.elseYield().getOperation());
-        yieldOperandsMap[ifOp.elseYield()].push_back(operandIdx);
+        for (scf::YieldOp yield : {ifOp.thenYield(), ifOp.elseYield()}) {
+          opsToRewrite.insert(yield);
+          yieldOperandsMap[yield].push_back(operandIdx);
+        }
       }
     } else {
       BlockArgument blockArg = cast<BlockArgument>(v);
-      Operation *parentOp = blockArg.getOwner()->getParentOp();
-      if (auto loopOp = cast<LoopLikeOpInterface>(parentOp)) {
-        opsToRewrite.insert(loopOp.getOperation());
-        OpOperand *operand = loopOp.getTiedLoopYieldedValue(blockArg);
-        auto yieldOp = blockArg.getOwner()->getTerminator();
-        yieldOperandsMap[yieldOp].push_back(operand->getOperandNumber());
-        opsToRewrite.insert(yieldOp);
-      }
+      auto loopOp =
+          cast<LoopLikeOpInterface>(blockArg.getOwner()->getParentOp());
+      opsToRewrite.insert(loopOp.getOperation());
+      OpOperand *operand = loopOp.getTiedLoopYieldedValue(blockArg);
+      auto yieldOp = blockArg.getOwner()->getTerminator();
+      yieldOperandsMap[yieldOp].push_back(operand->getOperandNumber());
+      opsToRewrite.insert(yieldOp);
     }
   }
   opsToRewrite = mlir::topologicalSort(opsToRewrite);
@@ -2382,9 +2320,8 @@ void LayoutMaterializationGraph::materialize(ConvertLayoutOp convertOp,
                             mapping.lookup(convertOp.getSrc()));
 
   updateExisting(replacements);
-  for (auto &kv : replacements) {
-    builder.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
-  }
+  for (auto [old, replacement] : replacements)
+    builder.replaceAllUsesWith(old, replacement);
 
   convertOp->erase();
   for (Operation *op : deadOps)
@@ -2399,7 +2336,7 @@ LogicalResult LayoutMaterializationGraph::plan(
   auto &[slice, layout, existingRemats] = candidate;
   // Allow re-using existing conversions for a value if it dominates the use.
   auto getExistingConversion = [&](OpOperand &value, Attribute encoding) {
-    Value remat = lookupExisting(value.get(), encoding);
+    Value remat = existing.lookup(value.get()).lookup(encoding);
     if (!remat)
       return Value();
     // `value` can be replaced with an existing rematerialization if it
@@ -2613,8 +2550,8 @@ bool LayoutCostModel::isRematerializationBeneficial(
   return convertLayoutCost >= rematerialisationCost;
 }
 
-bool LayoutOptimizationAnalysis::hoistConversion(ConvertLayoutOp convertOp,
-                                                 MaterializationAction action) {
+bool LayoutMaterializationGraph::hoist(ConvertLayoutOp convertOp,
+                                       Action action) {
   auto noDataMovement = [](Operation *op) {
     return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
            isa<BroadcastOp, Fp4ToFpOp, ConvertLayoutOp, UpcastFpOpInterface>(
@@ -2633,10 +2570,9 @@ bool LayoutOptimizationAnalysis::hoistConversion(ConvertLayoutOp convertOp,
   };
 
   Attribute target = convertOp.getType().getEncoding();
-  if (action == MaterializationAction::Narrowing &&
-      isa<DotOperandEncodingAttr>(target))
+  if (action == Action::Narrowing && isa<DotOperandEncodingAttr>(target))
     return false;
-  if (action == MaterializationAction::DotOperand) {
+  if (action == Action::DotOperand) {
     Operation *parent = convertOp->getParentOp();
     if (!parent ||
         !parent
@@ -2647,7 +2583,8 @@ bool LayoutOptimizationAnalysis::hoistConversion(ConvertLayoutOp convertOp,
                    if (auto layout =
                            dyn_cast<DotOperandEncodingAttr>(type.getEncoding()))
                      if (isa<MmaEncodingTrait>(layout.getParent()) &&
-                         postDomInfo.postDominates(operation, convertOp))
+                         problem.postDomInfo.postDominates(operation,
+                                                           convertOp))
                        return WalkResult::interrupt();
                return WalkResult::advance();
              })
@@ -2656,23 +2593,21 @@ bool LayoutOptimizationAnalysis::hoistConversion(ConvertLayoutOp convertOp,
   }
 
   auto stop = [&](Operation *op) {
-    if (action == MaterializationAction::Narrowing)
+    if (action == Action::Narrowing)
       return isNarrowing(op);
-    if (action == MaterializationAction::Conditional)
+    if (action == Action::Conditional)
       return isa<scf::IfOp>(op);
     return !noDataMovement(op);
   };
 
   LayoutSlice state;
   auto &[slice, layout, existingRemats] = state;
-  if (failed(materializationGraph.plan(convertOp.getSrcMutable(), target, state,
-                                       stop,
-                                       /*requireRematerializable=*/action !=
-                                           MaterializationAction::DotOperand)))
+  if (failed(plan(convertOp.getSrcMutable(), target, state, stop,
+                  /*requireRematerializable=*/action != Action::DotOperand)))
     return false;
 
   IRMapping mapping;
-  if (action == MaterializationAction::DotOperand) {
+  if (action == Action::DotOperand) {
     OpBuilder builder(convertOp.getContext());
     SetVector<Value> innerSlice;
     for (Value v : slice) {
@@ -2702,9 +2637,9 @@ bool LayoutOptimizationAnalysis::hoistConversion(ConvertLayoutOp convertOp,
       if (!isa<RankedTensorType>(producer->getResult(0).getType()))
         continue;
       mapping.map(producer->getResult(0),
-                  materializationGraph.materialize(
-                      builder, convertOp.getLoc(), producer->getResult(0),
-                      layout[producer->getResult(0)]));
+                  materialize(builder, convertOp.getLoc(),
+                              producer->getResult(0),
+                              layout[producer->getResult(0)]));
     }
 
     if (innerSlice.empty())
@@ -2717,7 +2652,7 @@ bool LayoutOptimizationAnalysis::hoistConversion(ConvertLayoutOp convertOp,
     });
 
     state.values = std::move(innerSlice);
-  } else if (action == MaterializationAction::Narrowing) {
+  } else if (action == Action::Narrowing) {
     Operation *extOrBroadcastOp = nullptr;
     unsigned sliceSize = slice.size();
     for (unsigned i = 0; i < sliceSize; i++) {
@@ -2732,8 +2667,7 @@ bool LayoutOptimizationAnalysis::hoistConversion(ConvertLayoutOp convertOp,
 
       // If we can rematerialize the rest of the ext slice we can ignore this
       // ext as it won't need a convert.
-      if (succeeded(materializationGraph.plan(op->getOpOperand(0), srcEncoding,
-                                              state)))
+      if (succeeded(plan(op->getOpOperand(0), srcEncoding, state)))
         continue;
 
       // Only apply it if there is a single ext op otherwise we would have to
@@ -2750,17 +2684,17 @@ bool LayoutOptimizationAnalysis::hoistConversion(ConvertLayoutOp convertOp,
     if (!srcEncoding)
       return false;
     Value operand = extOrBroadcastOp->getOperand(0);
-    int64_t newCvtCost = costModel.getTransitionCost(
+    int64_t newCvtCost = problem.costModel.getTransitionCost(
         operand, cast<RankedTensorType>(operand.getType()).getEncoding(),
         srcEncoding, /*rematerialization=*/true);
-    if (!costModel.isRematerializationBeneficial(convertOp, state, newCvtCost,
-                                                 disableRematSplitting))
+    if (!problem.costModel.isRematerializationBeneficial(
+            convertOp, state, newCvtCost, problem.disableRematSplitting))
       return false;
     // Move the convert before the ext op and rewrite the slice.
     OpBuilder builder(extOrBroadcastOp);
-    Value newConvertOp = materializationGraph.materialize(
-        builder, convertOp.getLoc(), extOrBroadcastOp->getOperand(0),
-        srcEncoding);
+    Value newConvertOp =
+        materialize(builder, convertOp.getLoc(),
+                    extOrBroadcastOp->getOperand(0), srcEncoding);
     Operation *newExtOrBroadcast = builder.clone(*extOrBroadcastOp);
     newExtOrBroadcast->setOperand(0, newConvertOp);
     newExtOrBroadcast->getResult(0).setType(
@@ -2794,10 +2728,8 @@ bool LayoutOptimizationAnalysis::hoistConversion(ConvertLayoutOp convertOp,
       OpOperand *edges[] = {&ifOp.thenYield().getResultsMutable()[resIdx],
                             &ifOp.elseYield().getResultsMutable()[resIdx]};
       LayoutSlice candidate = state;
-      bool first = succeeded(
-          materializationGraph.plan(*edges[0], rootLayout, candidate, stop));
-      bool second = succeeded(
-          materializationGraph.plan(*edges[1], rootLayout, candidate, stop));
+      bool first = succeeded(plan(*edges[0], rootLayout, candidate, stop));
+      bool second = succeeded(plan(*edges[1], rootLayout, candidate, stop));
       if (first == second) {
         if (first)
           state = std::move(candidate);
@@ -2828,8 +2760,7 @@ bool LayoutOptimizationAnalysis::hoistConversion(ConvertLayoutOp convertOp,
     // Rematerialize failed hoists right before the condtional, and hoist those
     // that succeeded into the branch and then rewrite the slice.
     auto hoistRemat = [&](OpBuilder &b, Value v, Attribute encoding) {
-      Value newCvt =
-          materializationGraph.materialize(b, convertOp.getLoc(), v, encoding);
+      Value newCvt = materialize(b, convertOp.getLoc(), v, encoding);
       mapping.map(v, newCvt);
       slice.remove(v);
     };
@@ -2843,7 +2774,7 @@ bool LayoutOptimizationAnalysis::hoistConversion(ConvertLayoutOp convertOp,
       hoistRemat(b, edge->get(), layout.at(result));
     }
   }
-  materializationGraph.materialize(convertOp, state, &mapping);
+  materialize(convertOp, state, &mapping);
   return true;
 }
 
@@ -2862,8 +2793,7 @@ LogicalResult LayoutOptimizationAnalysis::cleanup() {
 }
 
 static bool isExpressionLeaf(Operation *operation) {
-  return isa<triton::SplatOp, triton::MakeRangeOp, arith::ConstantOp>(
-      operation);
+  return isa<SplatOp, MakeRangeOp, arith::ConstantOp>(operation);
 }
 
 LogicalResult LayoutMaterializationGraph::requestExpression(Value value,
@@ -2901,23 +2831,23 @@ LogicalResult LayoutMaterializationGraph::requestExpression(Value value,
   };
 
   if (isa<ConvertLayoutOp>(operation) ||
-      (expression->indexed && isa<triton::ReshapeOp>(operation))) {
-    if (auto reshape = dyn_cast<triton::ReshapeOp>(operation);
+      (expression->indexed && isa<ReshapeOp>(operation))) {
+    if (auto reshape = dyn_cast<ReshapeOp>(operation);
         reshape && reshape.getAllowReorder())
       return failure();
     operandEncoding = encoding;
-  } else if (expression->indexed && isa<triton::JoinOp>(operation)) {
-    auto join = cast<triton::JoinOp>(operation);
+  } else if (expression->indexed && isa<JoinOp>(operation)) {
+    auto join = cast<JoinOp>(operation);
     RankedTensorType resultType = join.getType();
     if (resultType.getShape().empty() || resultType.getShape().back() != 2 ||
         failed(addOperand(join.getLhs(), encoding, depth + 1)) ||
         failed(addOperand(join.getRhs(), encoding, depth + 1)))
       return failure();
     joined = true;
-  } else if (auto splat = dyn_cast<triton::SplatOp>(operation)) {
+  } else if (auto splat = dyn_cast<SplatOp>(operation)) {
     if (expression->indexed && isa<RankedTensorType>(splat.getSrc().getType()))
       return failure();
-  } else if (auto range = dyn_cast<triton::MakeRangeOp>(operation)) {
+  } else if (auto range = dyn_cast<MakeRangeOp>(operation)) {
     if (expression->indexed && !range.getType().getElementType().isInteger(32))
       return failure();
   } else if (auto constant = dyn_cast<arith::ConstantOp>(operation)) {
@@ -2929,8 +2859,7 @@ LogicalResult LayoutMaterializationGraph::requestExpression(Value value,
       return failure();
     operandEncoding = encoding;
     sameShape = true;
-  } else if ((!isLayoutTransform(operation) &&
-              !isa<triton::BroadcastOp>(operation)) ||
+  } else if ((!isLayoutTransform(operation) && !isa<BroadcastOp>(operation)) ||
              isa<ReduceOp, SplitOp>(operation) ||
              !(operandEncoding = inferSrcEncoding(operation, encoding))) {
     return failure();
@@ -2968,11 +2897,11 @@ Value LayoutMaterializationGraph::materializeExpression(
     Materialization &node, const Alternative &alternative, OpBuilder &builder) {
   Operation *operation = node.value.getDefiningOp();
   if (isa<ConvertLayoutOp>(operation) ||
-      (expression->indexed && isa<triton::ReshapeOp>(operation)))
+      (expression->indexed && isa<ReshapeOp>(operation)))
     return materialize(alternative.operands.front(), &builder);
 
-  if (expression->indexed && isa<triton::JoinOp>(operation)) {
-    auto join = cast<triton::JoinOp>(operation);
+  if (expression->indexed && isa<JoinOp>(operation)) {
+    auto join = cast<JoinOp>(operation);
     Value lhs = materialize(alternative.operands[0], &builder);
     Value rhs = materialize(alternative.operands[1], &builder);
     auto [condition, inserted] =
@@ -2990,8 +2919,8 @@ Value LayoutMaterializationGraph::materializeExpression(
                                    rhs, lhs);
   }
 
-  if (expression->indexed && isa<triton::MakeRangeOp>(operation)) {
-    auto range = cast<triton::MakeRangeOp>(operation);
+  if (expression->indexed && isa<MakeRangeOp>(operation)) {
+    auto range = cast<MakeRangeOp>(operation);
     Value result = expression->indices;
     if (node.depth != 0)
       result = arith::ShRUIOp::create(
@@ -3010,10 +2939,9 @@ Value LayoutMaterializationGraph::materializeExpression(
           ? RankedTensorType::get(expression->target.getShape(),
                                   oldType.getElementType(), node.encoding)
           : oldType.cloneWithEncoding(node.encoding);
-  if (expression->indexed && isa<triton::SplatOp>(operation)) {
-    auto splat = cast<triton::SplatOp>(operation);
-    return triton::SplatOp::create(builder, splat.getLoc(), newType,
-                                   splat.getSrc());
+  if (expression->indexed && isa<SplatOp>(operation)) {
+    auto splat = cast<SplatOp>(operation);
+    return SplatOp::create(builder, splat.getLoc(), newType, splat.getSrc());
   }
   if (auto constant = dyn_cast<arith::ConstantOp>(operation)) {
     auto elements = cast<DenseElementsAttr>(constant.getValue());
@@ -3043,13 +2971,13 @@ bool LayoutMaterializationGraph::materialize(Operation *root, bool indexed) {
     value = conversion.getSrc();
     target = conversion.getType();
   } else {
-    auto store = cast<triton::StoreOp>(root);
+    auto store = cast<StoreOp>(root);
     value = store.getValue();
     target = dyn_cast<RankedTensorType>(value.getType());
   }
   if (!target || !target.getEncoding())
     return false;
-  expression.emplace(root, target, indexed);
+  expression.emplace(Expression{root, target, indexed});
 
   if (indexed) {
     if (!target.hasStaticShape())
@@ -3067,7 +2995,7 @@ bool LayoutMaterializationGraph::materialize(Operation *root, bool indexed) {
             target.getShape(), target.getEncoding(), ArrayRef<int64_t>{size},
             expression->flatEncoding, /*allowReorder=*/false,
             root->getLoc())) ||
-        (isa<triton::StoreOp>(root) && !value.hasOneUse()))
+        (isa<StoreOp>(root) && !value.hasOneUse()))
       return false;
   }
 
@@ -3088,7 +3016,7 @@ bool LayoutMaterializationGraph::materialize(Operation *root, bool indexed) {
     if (indexed) {
       if (auto conversion = dyn_cast<ConvertLayoutOp>(operation))
         classify(conversion);
-      joins += isa<triton::JoinOp>(operation);
+      joins += isa<JoinOp>(operation);
     }
     if (!indexed || !isExpressionLeaf(operation))
       if (llvm::any_of(operation->getUsers(), [&](Operation *user) {
@@ -3101,11 +3029,9 @@ bool LayoutMaterializationGraph::materialize(Operation *root, bool indexed) {
     return false;
 
   auto isArithmetic = [&](Operation *operation) {
-    return indexed
-               ? !isExpressionLeaf(operation) &&
-                     !isa<ConvertLayoutOp, triton::ReshapeOp, triton::JoinOp>(
-                         operation)
-               : !isa<ConvertLayoutOp>(operation);
+    return indexed ? !isExpressionLeaf(operation) &&
+                         !isa<ConvertLayoutOp, ReshapeOp, JoinOp>(operation)
+                   : !isa<ConvertLayoutOp>(operation);
   };
   if (llvm::count_if(nodes, [&](const Materialization &node) {
         return isArithmetic(node.value.getDefiningOp());
@@ -3118,13 +3044,13 @@ bool LayoutMaterializationGraph::materialize(Operation *root, bool indexed) {
     auto rangeType =
         RankedTensorType::get({target.getNumElements()}, builder.getI32Type(),
                               expression->flatEncoding);
-    Value range = triton::MakeRangeOp::create(
-        builder, root->getLoc(), rangeType, 0,
-        static_cast<int32_t>(target.getNumElements()));
+    Value range =
+        MakeRangeOp::create(builder, root->getLoc(), rangeType, 0,
+                            static_cast<int32_t>(target.getNumElements()));
     auto indexType = RankedTensorType::get(
         target.getShape(), builder.getI32Type(), target.getEncoding());
     expression->indices =
-        triton::ReshapeOp::create(builder, root->getLoc(), indexType, range);
+        ReshapeOp::create(builder, root->getLoc(), indexType, range);
   }
   unsigned rootNode =
       indices.find({{{value, target.getEncoding()}, 0}, root})->second;
@@ -3133,7 +3059,7 @@ bool LayoutMaterializationGraph::materialize(Operation *root, bool indexed) {
     conversion.getResult().replaceAllUsesWith(replacement);
     conversion.erase();
   } else {
-    cast<triton::StoreOp>(root).getValueMutable().assign(replacement);
+    cast<StoreOp>(root).getValueMutable().assign(replacement);
   }
   for (Operation *operation : expression->operations)
     if (isOpTriviallyDead(operation))
@@ -3144,180 +3070,144 @@ bool LayoutMaterializationGraph::materialize(Operation *root, bool indexed) {
 /// Every physical rewrite is an alternative in the same policy-ordered
 /// worklist. Root collection restarts only when an expression consumes other
 /// roots; conversion sweeps retain dominance-safe reuse between alternatives.
-bool LayoutOptimizationAnalysis::applyMaterializationAction(
-    ConvertLayoutOp conversion, MaterializationAction action,
-    bool preserveSharedReductions) {
+bool LayoutMaterializationGraph::materialize(Operation *root, Action action,
+                                             bool preserveSharedReductions) {
+  auto conversion = dyn_cast<ConvertLayoutOp>(root);
   switch (action) {
-  case MaterializationAction::BackwardSlice: {
+  case Action::BackwardSlice: {
     RankedTensorType target = conversion.getType();
     if (isa<DotOperandEncodingAttr>(target.getEncoding()))
       return false;
     LayoutSlice slice;
-    if (failed(materializationGraph.plan(conversion.getSrcMutable(),
-                                         target.getEncoding(), slice)) ||
-        !costModel.isRematerializationBeneficial(
-            conversion, slice, /*newConversionCost=*/0, disableRematSplitting,
-            preserveSharedReductions))
+    if (failed(plan(conversion.getSrcMutable(), target.getEncoding(), slice)) ||
+        !problem.costModel.isRematerializationBeneficial(
+            conversion, slice, /*newConversionCost=*/0,
+            problem.disableRematSplitting, preserveSharedReductions))
       return false;
-    materializationGraph.materialize(conversion, slice);
+    materialize(conversion, slice);
     return true;
   }
-  case MaterializationAction::Narrowing:
-  case MaterializationAction::Conditional:
-  case MaterializationAction::DotOperand:
-    return hoistConversion(conversion, action);
-  case MaterializationAction::DominatingReuse:
-    return materializationGraph.reuse(conversion);
-  case MaterializationAction::ConversionExpression:
-    return materializationGraph.materialize(conversion, /*indexed=*/false) ||
-           materializationGraph.materialize(conversion, /*indexed=*/true);
-  case MaterializationAction::StoreExpression:
-    llvm_unreachable("store expressions do not have conversion roots");
+  case Action::Narrowing:
+  case Action::Conditional:
+  case Action::DotOperand:
+    return hoist(conversion, action);
+  case Action::DominatingReuse:
+    return reuse(conversion);
+  case Action::ConversionExpression:
+    return materialize(conversion, /*indexed=*/false) ||
+           materialize(conversion, /*indexed=*/true);
+  case Action::StoreExpression:
+    return materialize(root, /*indexed=*/true);
   }
   llvm_unreachable("unknown materialization action");
 }
 
-LogicalResult LayoutOptimizationAnalysis::optimizeMaterializations(
-    MaterializationPolicy policy) {
-  for (MaterializationAction action : policy.actions) {
+LogicalResult
+LayoutMaterializationGraph::materialize(ArrayRef<Action> actions,
+                                        bool preserveSharedReductions) {
+  for (Action action : actions) {
     bool repeat;
     do {
-      materializationGraph.clearExisting();
-      domInfo.invalidate();
-      postDomInfo.invalidate();
+      problem.domInfo.invalidate();
+      problem.postDomInfo.invalidate();
       bool changed = false;
 
-      bool expression = action == MaterializationAction::StoreExpression ||
-                        action == MaterializationAction::ConversionExpression;
+      bool expression = action == Action::StoreExpression ||
+                        action == Action::ConversionExpression;
       SmallVector<Operation *> roots;
-      funcOp.walk([&](Operation *root) {
-        if (action == MaterializationAction::StoreExpression
-                ? isa<triton::StoreOp>(root)
-                : isa<ConvertLayoutOp>(root))
+      problem.funcOp.walk([&](Operation *root) {
+        if (action == Action::StoreExpression ? isa<StoreOp>(root)
+                                              : isa<ConvertLayoutOp>(root))
           roots.push_back(root);
       });
       if (expression)
         std::reverse(roots.begin(), roots.end());
 
       for (Operation *root : roots) {
-        bool rewritten;
-        if (auto store = dyn_cast<triton::StoreOp>(root)) {
-          rewritten = materializationGraph.materialize(store, /*indexed=*/true);
-        } else {
-          auto conversion = cast<ConvertLayoutOp>(root);
-          rewritten = applyMaterializationAction(
-              conversion, action, policy.preserveSharedReductions);
-          if (!rewritten && action != MaterializationAction::DominatingReuse)
-            materializationGraph.remember(conversion.getSrc(),
-                                          conversion.getType().getEncoding(),
-                                          conversion.getResult());
-        }
+        bool rewritten = materialize(root, action, preserveSharedReductions);
+        if (!rewritten && action != Action::DominatingReuse)
+          if (auto conversion = dyn_cast<ConvertLayoutOp>(root))
+            remember(conversion.getSrc(), conversion.getType().getEncoding(),
+                     conversion.getResult());
         changed |= rewritten;
         if (expression && rewritten)
           break;
       }
 
-      materializationGraph.clearExisting();
-      repeat = changed && (policy.fixedPoint || expression);
-      if (action == MaterializationAction::BackwardSlice &&
-          (changed || policy.preserveSharedReductions) && failed(cleanup()))
+      clear();
+      repeat = changed && (action == Action::BackwardSlice || expression);
+      if (action == Action::BackwardSlice &&
+          (changed || preserveSharedReductions) && failed(problem.cleanup()))
         return failure();
     } while (repeat);
   }
   return success();
 }
 
-LogicalResult LayoutOptimizationAnalysis::runIteration(bool disableSplitting) {
-  disableRematSplitting = disableSplitting;
-  costModel = LayoutCostModel();
-  LayoutMemoryProfile memory = getLayoutMemoryProfile(funcOp);
-  bool hasProtectedStore =
-      !memory.protectedLoops.empty() &&
-      memory.has(LayoutMaterializationGraph::HardwareStore);
-  bool hasPackedMemoryAssembly = memory.hasPackedAssemblyProtocol();
-
-  if (!memory.protectedLoops.empty() ||
-      (memory.features & (LayoutMaterializationGraph::PackedAssembly |
-                          LayoutMaterializationGraph::ProtectedReduction |
-                          LayoutMaterializationGraph::PermutingReshape |
-                          LayoutMaterializationGraph::DescriptorLoad)) ||
-      hasPackedMemoryAssembly || memory.hasPairwiseReductionProtocol()) {
-    assignLayouts(/*optimize=*/false);
-    if ((hasProtectedStore || hasPackedMemoryAssembly ||
-         memory.has(LayoutMaterializationGraph::PermutingReshape)) &&
-        failed(cleanup()))
-      return failure();
-
-    constexpr MaterializationAction backward[] = {
-        MaterializationAction::BackwardSlice};
-    if ((hasProtectedStore || hasPackedMemoryAssembly) &&
-        failed(optimizeMaterializations({backward,
-                                         /*preserveSharedReductions=*/false,
-                                         /*fixedPoint=*/true})))
-      return failure();
-    memory = getLayoutMemoryProfile(funcOp);
-  }
-
-  assignLayouts(/*optimize=*/true, &memory);
-  if (failed(cleanup()))
-    return failure();
-
-  constexpr MaterializationAction backward[] = {
-      MaterializationAction::BackwardSlice};
-  if (failed(
-          optimizeMaterializations({backward, /*preserveSharedReductions=*/true,
-                                    /*fixedPoint=*/true})))
-    return failure();
-
-  constexpr MaterializationAction hoisting[] = {
-      MaterializationAction::Narrowing, MaterializationAction::Conditional,
-      MaterializationAction::DotOperand};
-  if (failed(optimizeMaterializations(
-          {ArrayRef(hoisting).take_front(disableSplitting ? 1 : 3)})))
-    return failure();
-
-  runDeadIterArgElimination(funcOp);
-  if (failed(cleanup()))
-    return failure();
-
-  RewritePatternSet controlFlow(funcOp.getContext());
-  scf::ForOp::getCanonicalizationPatterns(controlFlow, funcOp.getContext());
-  scf::IfOp::getCanonicalizationPatterns(controlFlow, funcOp.getContext());
-  if (failed(applyPatternsGreedily(funcOp, std::move(controlFlow))))
-    LLVM_DEBUG(DBGS() << "scf cleanup did not converge\n");
-
-  constexpr MaterializationAction finishing[] = {
-      MaterializationAction::DominatingReuse,
-      MaterializationAction::StoreExpression,
-      MaterializationAction::ConversionExpression};
-  if (failed(optimizeMaterializations({finishing})))
-    return failure();
-  return cleanup();
-}
-
 LogicalResult LayoutOptimizationAnalysis::run(bool disableSplitting) {
+  using G = LayoutMaterializationGraph;
+  disableRematSplitting = disableSplitting;
+  constexpr Action backward[] = {Action::BackwardSlice};
   for (unsigned iteration = 0; iteration < 2; ++iteration) {
     unsigned original = 0, remaining = 0;
     funcOp.walk([&](ConvertLayoutOp) { ++original; });
-    if (failed(runIteration(disableSplitting)))
+    costModel = LayoutCostModel();
+    LayoutMemoryProfile memory(funcOp);
+    bool hasProtectedStore =
+        !memory.protectedLoops.empty() && memory.has(G::HardwareStore);
+    bool hasPackedMemoryAssembly = memory.hasPackedAssemblyProtocol();
+
+    if (!memory.protectedLoops.empty() ||
+        (memory.features & (G::PackedAssembly | G::ProtectedReduction |
+                            G::PermutingReshape | G::DescriptorLoad)) ||
+        hasPackedMemoryAssembly || memory.hasPairwiseReductionProtocol()) {
+      assignLayouts();
+      if ((hasProtectedStore || hasPackedMemoryAssembly ||
+           memory.has(G::PermutingReshape)) &&
+          failed(cleanup()))
+        return failure();
+
+      if ((hasProtectedStore || hasPackedMemoryAssembly) &&
+          failed(graph.materialize(backward,
+                                   /*preserveSharedReductions=*/false)))
+        return failure();
+      memory = LayoutMemoryProfile(funcOp);
+    }
+
+    assignLayouts(&memory);
+    if (failed(cleanup()))
+      return failure();
+
+    if (failed(graph.materialize(backward,
+                                 /*preserveSharedReductions=*/true)))
+      return failure();
+
+    constexpr Action hoisting[] = {Action::Narrowing, Action::Conditional,
+                                   Action::DotOperand};
+    if (failed(graph.materialize(
+            ArrayRef(hoisting).take_front(disableSplitting ? 1 : 3))))
+      return failure();
+
+    runDeadIterArgElimination(funcOp);
+    if (failed(cleanup()))
+      return failure();
+
+    RewritePatternSet controlFlow(funcOp.getContext());
+    scf::ForOp::getCanonicalizationPatterns(controlFlow, funcOp.getContext());
+    scf::IfOp::getCanonicalizationPatterns(controlFlow, funcOp.getContext());
+    if (failed(applyPatternsGreedily(funcOp, std::move(controlFlow))))
+      LLVM_DEBUG(DBGS() << "scf cleanup did not converge\n");
+
+    constexpr Action finishing[] = {Action::DominatingReuse,
+                                    Action::StoreExpression,
+                                    Action::ConversionExpression};
+    if (failed(graph.materialize(finishing)) || failed(cleanup()))
       return failure();
     funcOp.walk([&](ConvertLayoutOp) { ++remaining; });
     if (!remaining || remaining >= original)
       break;
   }
   return success();
-}
-
-LogicalResult LayoutOptimizationAnalysis::optimize(ModuleOp module,
-                                                   bool disableSplitting) {
-  return success(!module
-                      .walk([&](FuncOp function) {
-                        LayoutOptimizationAnalysis analysis(function);
-                        return failed(analysis.run(disableSplitting))
-                                   ? WalkResult::interrupt()
-                                   : WalkResult::advance();
-                      })
-                      .wasInterrupted());
 }
 
 } // namespace
@@ -3329,8 +3219,14 @@ public:
       TritonGPUOptimizeLayoutsPass>::TritonGPUOptimizeLayoutsBase;
 
   void runOnOperation() override {
-    if (failed(LayoutOptimizationAnalysis::optimize(getOperation(),
-                                                    disableRematSplitting)))
+    if (getOperation()
+            .walk([&](FuncOp function) {
+              return failed(LayoutOptimizationAnalysis(function).run(
+                         disableRematSplitting))
+                         ? WalkResult::interrupt()
+                         : WalkResult::advance();
+            })
+            .wasInterrupted())
       signalPassFailure();
   }
 };
