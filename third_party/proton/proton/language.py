@@ -67,8 +67,9 @@ class Event(tl.base_value):
         self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
 
 
-def DummyEvent(Event):
+class DummyEvent(Event):
     """Dummy event that does nothing when passed to :func:`start_event` or :func:`end_event`."""
+
     def __init__(self):
         super().__init__(handle=None)
 
