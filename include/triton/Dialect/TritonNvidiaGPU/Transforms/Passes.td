@@ -82,26 +82,6 @@ def TritonGPUProxyFenceInsertion : Pass<"triton-nvidia-gpu-proxy-fence-insertion
   ];
 }
 
-def TritonGPUBufferRegionProxyFenceInsertion : Pass<"triton-nvidia-gpu-buffer-region-proxy-fence-insertion", "mlir::ModuleOp"> {
-  let summary = "Insert proxy fences using fine-grained buffer regions";
-
-  let description = [{
-    Insert shared-memory fences between generic and asynchronous proxy
-    operations using fine-grained physical buffer-region alias analysis.
-  }];
-
-  let dependentDialects = [
-    "mlir::triton::gpu::TritonGPUDialect",
-    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
-  ];
-
-  let options = [
-    Option<"computeCapability", "compute-capability",
-           "int32_t", /*default*/"90",
-           "device compute capability">
-  ];
-}
-
 def TritonNvidiaGPUTMemBarrierInsertionPass : Pass<"triton-nvidia-gpu-tmem-barrier-insertion", "mlir::ModuleOp"> {
   let summary = "Insert barriers to order tensor-memory reuse";
 
