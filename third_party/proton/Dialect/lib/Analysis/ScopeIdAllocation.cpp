@@ -1,6 +1,8 @@
 #include "Analysis/ScopeIdAllocation.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 
+#include <deque>
+
 namespace mlir {
 namespace triton::proton {
 

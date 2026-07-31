@@ -62,12 +62,7 @@ public:
     if (SharedMemoryObject::getMaskSpanOffsetsAndBlocks(srcTy).second != 0)
       return failure();
 
-    LinearLayout sharedLL;
-    if (triton::gpu::isPaddedEncoding(srcTy.getEncoding())) {
-      sharedLL = triton::gpu::paddedLinearLayout(srcTy);
-    } else {
-      sharedLL = triton::gpu::toLinearLayout(srcTy);
-    }
+    LinearLayout sharedLL = triton::gpu::toLinearLayoutIgnoringPadding(srcTy);
     LinearLayout cvtDstLL =
         triton::gpu::toLinearLayout(dstTy).invertAndCompose(sharedLL);
     auto kBlock = StringAttr::get(ctx, "block");
@@ -725,7 +720,7 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::BarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (targetInfo.getIsaVersion().Major < 9)
+    if (!mlir::triton::amdgpu::isCDNA(targetInfo.getISAFamily()))
       return failure();
     // Check no other memory addrspaces are selected.
     // TensorRead/Write are allowed but noop.

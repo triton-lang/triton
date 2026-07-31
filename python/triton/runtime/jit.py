@@ -589,6 +589,19 @@ class JitFunctionInfo:
     jit_function: JITFunction
 
 
+def _replace_jit_callables(obj):
+    if isinstance(obj, list):
+        return [_replace_jit_callables(arg) for arg in obj]
+    elif is_namedtuple(obj):
+        results = [_replace_jit_callables(arg) for arg in obj]
+        return obj.__class__(*results)
+    elif isinstance(obj, tuple):
+        return tuple(_replace_jit_callables(arg) for arg in obj)
+    elif isinstance(obj, JITCallable):
+        return obj.cache_key
+    return obj
+
+
 def compute_cache_key(kernel_key_cache, specialization, options):
     key = (tuple(specialization), str(options))
     cache_key = kernel_key_cache.get(key, None)
@@ -596,19 +609,7 @@ def compute_cache_key(kernel_key_cache, specialization, options):
         return cache_key
 
     # Replace JITCallable objects with their hash, so the cache key will change if the src is updated
-    def replace_callables(obj):
-        if isinstance(obj, list):
-            return [replace_callables(arg) for arg in obj]
-        elif is_namedtuple(obj):
-            results = [replace_callables(arg) for arg in obj]
-            return obj.__class__(*results)
-        elif isinstance(obj, tuple):
-            return tuple(replace_callables(arg) for arg in obj)
-        elif isinstance(obj, JITCallable):
-            return obj.cache_key
-        return obj
-
-    cache_key = str(replace_callables(specialization)) + str(options)
+    cache_key = str(_replace_jit_callables(specialization)) + str(options)
     kernel_key_cache[key] = cache_key
     return cache_key
 

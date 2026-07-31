@@ -37,7 +37,8 @@ jobs:
         - {runner: 'AlmaLinux 8 ARM64', runs_on: 'ubuntu-22.04-arm', target-os: 'almalinux', arch: 'arm64', container: 'almalinux:8.10-20250411'}
         - {runner: 'MacOS X64', runs_on: 'macos-15-intel', target-os: 'macos', arch: 'x64'}
         - {runner: 'MacOS ARM64', runs_on: 'macos-15', target-os: 'macos', arch: 'arm64'}
-        - {runner: 'Windows 2022', runs_on: 'windows-2022', target-os: 'windows', arch: 'x64'}
+        - {runner: 'Windows 2022', runs_on: 'windows-2022', target-os: 'windows', arch: 'x64', msvc_arch: 'amd64'}
+        - {runner: 'Windows 11 ARM64', runs_on: 'windows-11-arm', target-os: 'windows', arch: 'arm64', msvc_arch: 'arm64'}
 
     steps:
 
@@ -101,10 +102,10 @@ jobs:
         python-version: 3.11
 
     - name: Set up MSVC
-      if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'windows')
+      if: matrix.config.target-os == 'windows'
       uses: ilammy/msvc-dev-cmd@v1.13.0
       with:
-        arch: amd64
+        arch: ${{ matrix.config.msvc_arch }}
 
     - name: Install Prerequisites
       shell: bash
@@ -157,7 +158,7 @@ jobs:
         tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
 
     - name: Configure, Build, Test, and Install LLVM (Windows)
-      if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'windows')
+      if: matrix.config.target-os == 'windows'
       run: >
         cmake -GNinja -Bllvm-project/build
         -DCMAKE_BUILD_TYPE=Release

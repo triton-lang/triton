@@ -24,7 +24,7 @@ The rules are a bit different when they involve a scalar. By scalar here we mean
 
 When an operation involves a tensor and a scalar:
 
-1. If the scalar is of a kind lower or equal to the tensor, it will not participate in the promotion: ``(uint8, int) -> uint8``
+1. If the scalar is of a kind lower or equal to the tensor, it does not participate in the promotion, and the remaining promotion rules are applied to the tensor's dtype: ``(uint8, int) -> uint8``
 
 2. If the scalar is of a higher kind, we choose the lowest dtype in which it fits among ``int32`` < ``uint32`` < ``int64`` < ``uint64`` for ints and ``float32`` < ``float64`` for floats. Then, both the tensor and the scalar are promoted to this dtype: ``(int16, 4.0) -> float32``
 
