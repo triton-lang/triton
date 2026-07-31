@@ -5817,8 +5817,9 @@ def test_tma_validcheck_multi_stage():
         blocks_copied_by_stage = (0, ) * num_stages
         stages_full = (0, ) * num_stages
 
-        num_blocks = num_elems // block_size
-        blocks_per_stage = num_blocks // num_stages
+        num_blocks: ttgl.constexpr = num_elems // block_size
+        ttgl.static_assert(num_blocks % num_stages == 0, "num_blocks must be divisible by num_stages")
+        blocks_per_stage: ttgl.constexpr = num_blocks // num_stages
 
         # Prime the pipeline.
         for stage in ttgl.static_range(num_stages):

@@ -461,7 +461,7 @@ struct BarrierTestWaitOpConversion
 
     ::mlir::triton::PTXBuilder ptxBuilder;
     SmallVector<::mlir::triton::PTXBuilder::Operand *, 4> operands = {
-        ptxBuilder.newOperand("=r"),
+        ptxBuilder.newOperand("=b"),
         ptxBuilder.newOperand(smemObj.getBase(), "r"),
         ptxBuilder.newOperand(adaptor.getPhase(), "r")};
 
@@ -469,12 +469,10 @@ struct BarrierTestWaitOpConversion
     if (predicated) {
       ptx = R"(
 {
-	.reg .pred complete;
-	mov.u32 $0, 0;
+	mov.pred $0, 0;
 	@!$3 bra.uni skipTest;
 	mbarrier.test_wait.parity)" +
-            phaseType + R"(.shared::cta.b64 complete, [$1], $2;
-	selp.u32 $0, 1, 0, complete;
+            phaseType + R"(.shared::cta.b64 $0, [$1], $2;
 	skipTest:
 }
 )";
@@ -482,17 +480,15 @@ struct BarrierTestWaitOpConversion
     } else {
       ptx = R"(
 {
-	.reg .pred complete;
 	mbarrier.test_wait.parity)" +
-            phaseType + R"(.shared::cta.b64 complete, [$1], $2;
-	selp.u32 $0, 1, 0, complete;
+            phaseType + R"(.shared::cta.b64 $0, [$1], $2;
 }
 )";
     }
 
     auto &test = *ptxBuilder.create(ptx);
     test(operands, /*onlyAttachMLIRArgs=*/true);
-    Value complete = ptxBuilder.launch(rewriter, loc, rewriter.getI32Type());
+    Value complete = ptxBuilder.launch(rewriter, loc, rewriter.getI1Type());
     rewriter.replaceOp(op, complete);
     return success();
   }
@@ -531,7 +527,7 @@ struct BarrierTestWaitReportOpConversion
 
     ::mlir::triton::PTXBuilder ptxBuilder;
     SmallVector<::mlir::triton::PTXBuilder::Operand *, 5> operands = {
-        ptxBuilder.newOperand("=r"), ptxBuilder.newOperand("=r"),
+        ptxBuilder.newOperand("=b"), ptxBuilder.newOperand("=b"),
         ptxBuilder.newOperand(smemObj.getBase(), "r"),
         ptxBuilder.newOperand(adaptor.getPhase(), "r")};
 
@@ -539,14 +535,10 @@ struct BarrierTestWaitReportOpConversion
     if (predicated) {
       ptx = R"(
 {
-	.reg .pred complete;
-	.reg .pred reported;
-	mov.u32 $0, 0;
-	mov.u32 $1, 0;
+	mov.pred $0, 0;
+	mov.pred $1, 0;
 	@!$4 bra.uni skipTest;
-	mbarrier.test_wait.parity.phase_type::primary.shared::cta.b64 complete|reported, [$2], $3;
-	selp.u32 $0, 1, 0, complete;
-	selp.u32 $1, 1, 0, reported;
+	mbarrier.test_wait.parity.phase_type::primary.shared::cta.b64 $0|$1, [$2], $3;
 	skipTest:
 }
 )";
@@ -554,21 +546,17 @@ struct BarrierTestWaitReportOpConversion
     } else {
       ptx = R"(
 {
-	.reg .pred complete;
-	.reg .pred reported;
-	mbarrier.test_wait.parity.phase_type::primary.shared::cta.b64 complete|reported, [$2], $3;
-	selp.u32 $0, 1, 0, complete;
-	selp.u32 $1, 1, 0, reported;
+	mbarrier.test_wait.parity.phase_type::primary.shared::cta.b64 $0|$1, [$2], $3;
 }
 )";
     }
 
     auto &test = *ptxBuilder.create(ptx);
     test(operands, /*onlyAttachMLIRArgs=*/true);
-    SmallVector<Type> resultTypes(2, rewriter.getI32Type());
+    SmallVector<Type> resultTypes(2, rewriter.getI1Type());
     Value packed = ptxBuilder.launch(rewriter, loc, struct_ty(resultTypes));
-    rewriter.replaceOp(op, {b.extract_val(rewriter.getI32Type(), packed, 0),
-                            b.extract_val(rewriter.getI32Type(), packed, 1)});
+    rewriter.replaceOp(op, {b.extract_val(rewriter.getI1Type(), packed, 0),
+                            b.extract_val(rewriter.getI1Type(), packed, 1)});
     return success();
   }
 };

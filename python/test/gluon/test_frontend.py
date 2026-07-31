@@ -1620,7 +1620,7 @@ def rubin_tma_validity_kernel(input_desc, XBLOCK: ttgl.constexpr):
     _ = rubin.mbarrier.test_wait(bar, 0)
     _ = rubin.mbarrier.test_wait(bar, 0, phase_type="conditional")
     done, valid = rubin.mbarrier.test_wait_validity(bar, 0)
-    _ = done + valid
+    _ = done & valid
     rubin.mbarrier.wait(bar, 0, phase_type="conditional")
 
     rubin.mbarrier.invalidate(bar)
@@ -1643,7 +1643,6 @@ def test_rubin_tma_validity_ir():
     assert "ttng.barrier_test_wait" in ir and ", conditional :" in ir
     assert ir.count("ttng.barrier_test_wait_report") == 1
     assert "arith.xori" in ir and "arith.andi" in ir
-    assert "arith.addi" in ir
     assert "ttng.wait_barrier" in ir and ", conditional :" in ir
 
 

@@ -64,8 +64,8 @@ def test_wait(mbarrier, phase, pred=True, phase_type="primary", _semantic=None):
             used by TMA report-validity barriers. Defaults to ``"primary"``.
 
     Returns:
-        tensor: Scalar int32 tensor containing 1 if the requested phase has
-            completed, otherwise 0.
+        tensor: Scalar int1 tensor that is true if the requested phase has
+            completed.
     """
     phase_type = _unwrap_if_constexpr(phase_type)
     if phase_type == "primary":
@@ -77,7 +77,7 @@ def test_wait(mbarrier, phase, pred=True, phase_type="primary", _semantic=None):
     phase = _semantic.to_tensor(phase)
     pred = _semantic.to_tensor(pred)
     handle = _semantic.builder.create_mbarrier_test_wait(mbarrier.handle, phase.handle, pred.handle, phase_type)
-    return _semantic.tensor(handle, tl.int32)
+    return _semantic.tensor(handle, tl.int1)
 
 
 @builtin
@@ -88,11 +88,11 @@ def test_wait_validity(mbarrier, phase, pred=True, _semantic=None):
     Args:
         mbarrier (shared_memory_descriptor): The report-validity barrier to test.
         phase (int): The primary phase/parity value to test.
-        pred (bool): Predicate. If False, both results are zero. Defaults to True.
+        pred (bool): Predicate. If False, both results are false. Defaults to True.
 
     Returns:
-        tuple[tensor, tensor]: Scalar int32 tensors ``(done, valid)``. ``done``
-            is one after primary completion. ``valid`` is one only when the
+        tuple[tensor, tensor]: Scalar int1 tensors ``(done, valid)``. ``done``
+            is true after primary completion. ``valid`` is true only when the
             attempt is complete and produced no validity report.
     """
     phase = _semantic.to_tensor(phase)
@@ -102,10 +102,9 @@ def test_wait_validity(mbarrier, phase, pred=True, _semantic=None):
         phase.handle,
         pred.handle,
     )
-    done = _semantic.tensor(done_handle, tl.int32)
-    reported = _semantic.tensor(reported_handle, tl.int32)
-    one = _semantic.to_tensor(1)
-    valid = _semantic.and_(done, _semantic.xor_(reported, one))
+    done = _semantic.tensor(done_handle, tl.int1)
+    reported = _semantic.tensor(reported_handle, tl.int1)
+    valid = _semantic.and_(done, _semantic.not_(reported))
     return done, valid
 
 

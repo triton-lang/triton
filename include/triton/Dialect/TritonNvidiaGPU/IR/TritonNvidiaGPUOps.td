@@ -438,7 +438,7 @@ def TTNG_BarrierTestWaitOp : TTNG_Op<"barrier_test_wait", [
     DefaultValuedAttr<TTNG_MBarrierPhaseTypeAttr,
                       "::mlir::triton::nvidia_gpu::MBarrierPhaseType::PRIMARY">:$phaseType
   );
-  let results = (outs I32:$waitComplete);
+  let results = (outs I1:$waitComplete);
 
   let assemblyFormat = [{
     $alloc `,` $phase (`,` $pred^)? (`,` $phaseType^)? attr-dict `:`
@@ -455,7 +455,7 @@ def TTNG_BarrierTestWaitReportOp : TTNG_Op<"barrier_test_wait_report", [
   let description = [{
     Performs a single non-blocking test of the requested primary mbarrier phase
     and returns both its completion predicate and report predicate as scalar
-    `i32` values.
+    `i1` values.
   }];
 
   let arguments = (ins
@@ -463,7 +463,7 @@ def TTNG_BarrierTestWaitReportOp : TTNG_Op<"barrier_test_wait_report", [
     I32:$phase,
     Optional<I1>:$pred
   );
-  let results = (outs I32:$waitComplete, I32:$reportPredicate);
+  let results = (outs I1:$waitComplete, I1:$reportPredicate);
 
   let assemblyFormat = [{
     $alloc `,` $phase (`,` $pred^)? attr-dict `:` qualified(type($alloc))
