@@ -271,20 +271,29 @@ public:
         update(callOp, callee);
       });
     }
+    moduleOp.walk([&](Operation *op) {
+      for (OpOperand &operand : op->getOpOperands()) {
+        if (AxisInfo *axisInfo = getAxisInfo(operand.get()))
+          operandAxisInfo.try_emplace(&operand, *axisInfo);
+      }
+    });
   }
 
   AxisInfo *getAxisInfo(Value value) {
     auto funcOp =
         value.getParentRegion()->getParentOfType<FunctionOpInterface>();
     auto *axisInfoMap = getFuncData(funcOp);
-    if (!axisInfoMap) {
-      return nullptr;
+    if (axisInfoMap) {
+      auto it = axisInfoMap->find(value);
+      if (it != axisInfoMap->end())
+        return &(it->second);
     }
-    auto it = axisInfoMap->find(value);
-    if (it == axisInfoMap->end()) {
-      return nullptr;
+    for (OpOperand &use : value.getUses()) {
+      auto it = operandAxisInfo.find(&use);
+      if (it != operandAxisInfo.end())
+        return &it->second;
     }
-    return &(it->second);
+    return nullptr;
   }
 
   unsigned getContiguity(Value value);
@@ -306,6 +315,8 @@ public:
   unsigned getMaskAlignment(Value mask);
 
 private:
+  DenseMap<OpOperand *, AxisInfo> operandAxisInfo;
+
   void initialize(FunctionOpInterface funcOp, AxisInfoAnalysis::LoadCallback);
   void update(CallOpInterface callOp, FunctionOpInterface funcOp);
 };

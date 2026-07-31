@@ -39,17 +39,6 @@ using namespace mlir;
 
 namespace {
 
-class TritonLLVMFunctionConversionTarget : public ConversionTarget {
-public:
-  explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx)
-      : ConversionTarget(ctx) {
-    addLegalDialect<LLVM::LLVMDialect>();
-    addLegalDialect<ROCDL::ROCDLDialect>();
-    addLegalDialect<mlir::scf::SCFDialect>();
-    addLegalOp<mlir::UnrealizedConversionCastOp>();
-  }
-};
-
 class TritonLLVMConversionTarget : public ConversionTarget {
 public:
   explicit TritonLLVMConversionTarget(MLIRContext &ctx)
@@ -117,32 +106,10 @@ struct ConvertTritonAMDGPUToLLVM
                                     mlir::triton::AMD::membarFilter);
     membarPass.run();
 
-    // Lower functions
-    {
-      TritonLLVMFunctionConversionTarget funcTarget(*context);
-      RewritePatternSet funcPatterns(context);
-      mlir::triton::AMD::populateFuncOpConversionPattern(
-          typeConverter, funcPatterns, targetInfo, patternBenefitDefault);
-      mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
-                                                            funcPatterns);
-      if (failed(applyPartialConversion(mod, funcTarget,
-                                        std::move(funcPatterns), config)))
-        return signalPassFailure();
-    }
-
     // initSharedMemory is run before the conversion of call and ret ops,
     // because the call op has to know the shared memory base address of each
     // function
     initSharedMemory(typeConverter);
-
-    // Convert call and ret ops
-    {
-      TritonLLVMFunctionConversionTarget funcTarget(*context);
-      RewritePatternSet funcPatterns(context);
-      if (failed(applyPartialConversion(mod, funcTarget,
-                                        std::move(funcPatterns), config)))
-        return signalPassFailure();
-    }
 
     AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
 
@@ -154,6 +121,8 @@ struct ConvertTritonAMDGPUToLLVM
 
     RewritePatternSet patterns(context);
     int commonBenefit = patternBenefitPrioritizeOverLLVMConversions;
+    mlir::triton::AMD::populateFuncOpConversionPattern(
+        typeConverter, patterns, targetInfo, patternBenefitDefault);
     // Make benefit for AMD specific patterns higher so they apply before common
     // patterns
     int AMDBenefit = commonBenefit + 1;

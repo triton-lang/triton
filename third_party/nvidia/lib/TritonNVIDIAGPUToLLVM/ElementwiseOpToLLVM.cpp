@@ -736,72 +736,49 @@ struct ClampFOpConversion
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
         computeCapability(computeCapability) {}
 
-  bool isClipPattern(ClampFOp op) const {
+  bool isClipPattern(MultipleOperandsRange operands) const {
     // min.xorsign.abs requires hopper or newer
-    if (computeCapability < 90) {
+    if (computeCapability < 90)
       return false;
-    }
 
-    // Pattern matching the sequence of clamp(x, -limit, limit) to generate
-    // more efficient PTX code. NOTE: This pattern matching is not general
-    // enough, but it is sufficient. We detect only two cases here:
-    // 1. where the "-limit" is computed as 0 - limit:
-    //   %cst = arith.constant dense<0.000000e+00>
-    //   %8 = tt.load %7, %2
-    //   %11 = arith.subf %cst, %8
-    //   %12 = tt.clamp %5, %11, %8
-    // 2. where "-limit" and "limit" are constants.
-    //   %cst_6 = arith.constant dense<-6.0000e+00>
-    //   %cst_7 = arith.constant dense<6.0000e+00>
-    //   %160 = tt.clamp %158, %cst_6, %cst_7
-
-    auto getSplatInitializer = [](Value v) -> std::optional<double> {
-      DenseTypedElementsAttr denseAttr;
-      if (matchPattern(v, m_Constant(&denseAttr))) {
-        if (denseAttr.isSplat()) {
-          return denseAttr.getSplatValue<APFloat>().convertToDouble();
-        }
-        return std::nullopt;
-      }
+    Value lower = getUnderlyingConvertedValue(operands[0][1]);
+    Value upper = getUnderlyingConvertedValue(operands[0][2]);
+    auto isSameValue = [](Value lhs, Value rhs) {
+      lhs = getUnderlyingConvertedValue(lhs);
+      rhs = getUnderlyingConvertedValue(rhs);
+      if (lhs == rhs)
+        return true;
+      auto lhsExtract = lhs.getDefiningOp<LLVM::ExtractValueOp>();
+      auto rhsExtract = rhs.getDefiningOp<LLVM::ExtractValueOp>();
+      return lhsExtract && rhsExtract &&
+             lhsExtract.getContainer() == rhsExtract.getContainer() &&
+             lhsExtract.getPosition() == rhsExtract.getPosition();
+    };
+    auto getInitializer = [](Value value) -> std::optional<double> {
+      value = getUnderlyingConvertedValue(value);
       FloatAttr floatAttr;
-      if (matchPattern(v, m_Constant(&floatAttr))) {
+      if (matchPattern(value, m_Constant(&floatAttr)))
         return floatAttr.getValue().convertToDouble();
-      }
       return std::nullopt;
     };
 
-    // clampf %x (negf %max) %max
-    if (auto negOp = op.getOperand(1).getDefiningOp<arith::NegFOp>()) {
-      if (negOp.getOperand() == op.getOperand(2)) {
-        return true;
-      }
-    }
-    auto lowerSplat = op.getOperand(1).getDefiningOp<SplatOp>();
-    auto upperSplat = op.getOperand(2).getDefiningOp<SplatOp>();
-    if (lowerSplat && upperSplat) {
-      auto negOp = lowerSplat.getSrc().getDefiningOp<arith::NegFOp>();
-      if (negOp && negOp.getOperand() == upperSplat.getSrc())
+    if (auto negOp = lower.getDefiningOp<LLVM::FNegOp>()) {
+      if (isSameValue(negOp.getOperand(), upper))
         return true;
     }
 
-    // clampf %x (sub 0.0 %max) %max
-    if (auto subOp = op.getOperand(1).getDefiningOp<arith::SubFOp>()) {
-      if (subOp.getOperand(1) == op.getOperand(2)) {
-        auto initializer = getSplatInitializer(subOp.getOperand(0));
-        if (initializer.has_value() && initializer.value() == 0.0) {
-          return true;
-        }
-      }
+    if (auto subOp = lower.getDefiningOp<LLVM::FSubOp>()) {
+      Value lhs = getUnderlyingConvertedValue(subOp.getLhs());
+      Value rhs = getUnderlyingConvertedValue(subOp.getRhs());
+      auto initializer = getInitializer(lhs);
+      if (isSameValue(rhs, upper) && initializer && *initializer == 0.0)
+        return true;
     }
 
-    // clampf %x, %min, %max (where min = -max = constant)
-    auto initializer1 = getSplatInitializer(op.getOperand(1));
-    auto initializer2 = getSplatInitializer(op.getOperand(2));
-    if (initializer1.has_value() && initializer2.has_value() &&
-        initializer1.value() == -initializer2.value()) {
-      return true;
-    }
-    return false;
+    auto lowerInitializer = getInitializer(lower);
+    auto upperInitializer = getInitializer(upper);
+    return lowerInitializer && upperInitializer &&
+           *lowerInitializer == -*upperInitializer;
   }
 
   SmallVector<Value> emitOptimization(ClampFOp op,
@@ -831,7 +808,7 @@ struct ClampFOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    if (isClipPattern(op)) {
+    if (isClipPattern(operands)) {
       return emitOptimization(op, rewriter, elemTy, operands, loc);
     }
     return {};

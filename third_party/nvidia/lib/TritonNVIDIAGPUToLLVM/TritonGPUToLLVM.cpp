@@ -136,15 +136,6 @@ struct ConvertTritonGPUToLLVM
     ConversionConfig config;
     config.allowPatternRollback = false;
 
-    // Lower functions
-    TritonLLVMFunctionConversionTarget funcTarget(*context);
-    RewritePatternSet funcPatterns(context);
-    mlir::triton::populateFuncOpConversionPattern(
-        typeConverter, funcPatterns, targetInfo, patternBenefitDefault);
-    if (failed(applyPartialConversion(mod, funcTarget, std::move(funcPatterns),
-                                      config)))
-      return signalPassFailure();
-
     // initSharedMemory is run before the conversion of call and ret ops,
     // because the call op has to know the shared memory base address of each
     // function
@@ -153,6 +144,8 @@ struct ConvertTritonGPUToLLVM
 
     RewritePatternSet patterns(context);
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
+    mlir::triton::populateFuncOpConversionPattern(
+        typeConverter, patterns, targetInfo, patternBenefitDefault);
     mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, benefit);
     mlir::triton::NVIDIA::populateTensorMemorySubviewOpToLLVMPattern(
