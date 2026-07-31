@@ -63,15 +63,9 @@ Value createMbarrierTestWriterPredicate(Operation *op,
     return {};
 
   auto loc = op->getLoc();
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value id = getThreadId(rewriter, loc);
-  Value pred = b.icmp_eq(id, b.i32_val(0));
-  if (ttg::lookupNumCTAs(op) > 1) {
-    Value ctaId = targetInfo.getClusterCTAId(rewriter, loc);
-    Value cta0 = b.icmp_eq(ctaId, b.i32_val(0));
-    pred = b.and_(pred, cta0);
-  }
-  return pred;
+  auto freeVarMasks = getFreeVariableMasks(op->getResult(0).getType());
+  return ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter, loc,
+                                           targetInfo);
 }
 
 SmallVector<Value> broadcastMbarrierTestResults(
