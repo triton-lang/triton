@@ -5,7 +5,7 @@
 #smem = #ttg.shared_memory
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
-  // CHECK-LABEL: tt.func private @__triton_consan_verify_write_visibility_noalias
+  // CHECK-LABEL: tt.func private @__triton_consan_verify_write_visibility_
   // CHECK: %[[WRITE_VISIBILITY:.*]] = tt.load
   // CHECK: arith.cmpi eq, %[[WRITE_VISIBILITY]],
   // CHECK: %[[SELECTED_THREAD_BIT:.*]] = arith.shli
@@ -1217,13 +1217,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<256x128xf16, #shared, #smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
     amdg.init_barrier %barrier, 8 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
-    // CHECK: tt.call @__triton_consan_verify_barrier_arrive
-    // CHECK: tt.call @__triton_consan_update_barrier_state
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier used before initialization or after invalidation"
+    // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier arrive underflow: current count or tx-count would become invalid"
+    // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     // CHECK-NOT: tt.call @__triton_consan_commit_accesses
     // CHECK: amdg.async_tdm_gather
     %gather = amdg.async_tdm_gather %desc[%rows] to %buffer, barrier = %barrier : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
-    // CHECK: tt.call @__triton_consan_verify_barrier_arrive
-    // CHECK: tt.call @__triton_consan_update_barrier_state
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier used before initialization or after invalidation"
+    // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier arrive underflow: current count or tx-count would become invalid"
+    // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     // CHECK-NOT: tt.call @__triton_consan_commit_accesses
     // CHECK: amdg.async_tdm_scatter
     %scatter = amdg.async_tdm_scatter %desc[%rows] from %buffer, barrier = %barrier : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
