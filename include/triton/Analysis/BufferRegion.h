@@ -214,9 +214,13 @@ public:
 
   enum RegionType { SHARED_MEMORY, TENSOR_MEMORY, BARRIER, NUM_REGION_TYPES };
 
+  enum class MemoryAccessKind { Generic, Async, Barrier, Tensor };
+
   struct MemoryAccess {
     Value value;
     bool isWrite;
+    bool isRead;
+    MemoryAccessKind kind;
   };
 
   static llvm::SmallVector<MemoryAccess> getMemoryAccesses(Operation *op);
