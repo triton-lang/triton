@@ -204,6 +204,34 @@ def _warmup_test_case(item):
             torch.Tensor.isfinite = previous_isfinite
         return
 
+    if module_path.endswith("/python/test/unit/language/test_core.py") and item.originalname == "test_scan2d":
+        if item.callspec.params["op"] != "cummax":
+            yield
+            return
+        previous_cummax = torch.cummax
+
+        def shape_only_cummax(tensor, *args, **kwargs):
+            indices = item.module.np.zeros(tuple(tensor.shape), dtype=item.module.np.int64)
+            return SimpleNamespace(indices=SimpleNamespace(numpy=lambda: indices))
+
+        torch.cummax = shape_only_cummax
+        try:
+            yield
+        finally:
+            torch.cummax = previous_cummax
+        return
+
+    if (module_path.endswith("/python/test/unit/language/test_tensor_descriptor.py")
+            and item.originalname == "test_tensor_descriptor_reduce"):
+        kind = item.callspec.params["kind"]
+        previous_reduce = item.module.REDUCE_OP[kind]
+        item.module.REDUCE_OP[kind] = lambda input_tensor, output_tensor: output_tensor
+        try:
+            yield
+        finally:
+            item.module.REDUCE_OP[kind] = previous_reduce
+        return
+
     if module_path.endswith("/python/test/gluon/test_lowerings.py") and item.originalname == "test_reduce_layouts":
         parameters = item.callspec.params
         previous_prod = torch.prod
@@ -456,6 +484,16 @@ def pytest_collection_modifyitems(config, items):
             ):
                 item.add_marker(
                     pytest.mark.skip(reason="zero-sized inner-expert kernels specialize differently with FakeTensor"))
+                continue
+        if (module_path.endswith("/python/test/unit/language/test_tensor_descriptor.py")
+                and item.originalname == "test_tensor_descriptor_reduce"):
+            parameters = item.callspec.params
+            dtype = getattr(item.module.tl, parameters["dtype_str"])
+            native = item.module.is_cuda() and torch.cuda.get_device_capability()[0] >= 9
+            supported_dtypes = (item.module.NATIVE_SUPPORTED_REDUCE_DTYPES[parameters["kind"]]
+                                if native else item.module.FALLBACK_SUPPORTED_REDUCE_DTYPES[parameters["kind"]])
+            if dtype not in supported_dtypes:
+                item.add_marker(pytest.mark.skip(reason="tensor-descriptor atomic reduction cannot compile"))
                 continue
         for suffix, originalnames in unsupported_specializations.items():
             if module_path.endswith(suffix) and item.originalname in originalnames:

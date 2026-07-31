@@ -73,6 +73,11 @@ WARMUP_UNIT_TESTS := \
 	python/test/unit/language/test_core.py::test_dot3d \
 	python/test/unit/language/test_core.py::test_gather \
 	python/test/unit/language/test_standard.py::test_sort
+ifeq ($(RUNNER_TYPE),nvidia-h100)
+WARMUP_UNIT_TESTS += \
+	python/test/unit/language/test_core.py::test_scan2d \
+	python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_reduce
+endif
 ifeq ($(RUNNER_TYPE),nvidia-gb200)
 WARMUP_TRITON_KERNEL_TESTS += python/triton_kernels/tests/test_reduce.py::test_op
 endif

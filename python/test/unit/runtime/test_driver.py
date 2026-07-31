@@ -247,6 +247,33 @@ def test_compile_warmup_skips_zero_sized_inner_experts():
     assert [bool(item.markers) for item in items] == [True, False, False]
 
 
+def test_compile_warmup_skips_unsupported_tensor_descriptor_reductions(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda: (10, 0))
+    supported_dtype = object()
+    unsupported_dtype = object()
+    module = SimpleNamespace(
+        __file__="/checkout/python/test/unit/language/test_tensor_descriptor.py",
+        is_cuda=lambda: True,
+        tl=SimpleNamespace(float32=supported_dtype, float64=unsupported_dtype),
+        NATIVE_SUPPORTED_REDUCE_DTYPES={"add": {supported_dtype}},
+        FALLBACK_SUPPORTED_REDUCE_DTYPES={"add": set()},
+    )
+    items = []
+    for dtype_str in ("float32", "float64"):
+        item = SimpleNamespace(
+            module=module,
+            originalname="test_tensor_descriptor_reduce",
+            callspec=SimpleNamespace(params={"kind": "add", "dtype_str": dtype_str}),
+            markers=[],
+        )
+        item.add_marker = item.markers.append
+        items.append(item)
+
+    pytest_collection_modifyitems(SimpleNamespace(getoption=lambda _: True), items)
+
+    assert [bool(item.markers) for item in items] == [False, True]
+
+
 def test_compile_warmup_replaces_preshuffled_mxfp_conversion():
     from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
@@ -293,6 +320,41 @@ def test_compile_warmup_replaces_scaled_dot_finite_check():
         assert torch.empty(4, device="cuda").isfinite().all()
 
     assert torch.Tensor.isfinite is previous_isfinite
+
+
+def test_compile_warmup_replaces_scan_cummax_reference():
+    import numpy as np
+
+    module = SimpleNamespace(__file__="/checkout/python/test/unit/language/test_core.py", np=np)
+    item = SimpleNamespace(module=module, originalname="test_scan2d", callspec=SimpleNamespace(params={"op": "cummax"}))
+    previous_cummax = torch.cummax
+
+    with compile_warmup_only(), _warmup_test_case(item):
+        indices = torch.cummax(torch.empty((2, 3)), axis=1).indices.numpy()
+
+        assert indices.shape == (2, 3)
+        assert indices.dtype == np.int64
+
+    assert torch.cummax is previous_cummax
+
+
+def test_compile_warmup_replaces_tensor_descriptor_reduction_reference():
+    previous_reduce = lambda input_tensor, output_tensor: input_tensor
+    module = SimpleNamespace(
+        __file__="/checkout/python/test/unit/language/test_tensor_descriptor.py",
+        REDUCE_OP={"min": previous_reduce},
+    )
+    item = SimpleNamespace(
+        module=module,
+        originalname="test_tensor_descriptor_reduce",
+        callspec=SimpleNamespace(params={"kind": "min"}),
+    )
+    output_tensor = object()
+
+    with _warmup_test_case(item):
+        assert module.REDUCE_OP["min"](object(), output_tensor) is output_tensor
+
+    assert module.REDUCE_OP["min"] is previous_reduce
 
 
 def test_compile_warmup_replaces_triton_kernels_reduce_value_checks():
