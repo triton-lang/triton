@@ -233,8 +233,6 @@ public:
     OpBuilder builder(context);
     builder.setInsertionPointToStart(&func.getBody().front());
 
-    ModuleScopeIdAllocation &scopeInfo = getAnalysis<ModuleScopeIdAllocation>();
-
     int numWarps = gpu::getTotalNumWarps(mod);
 
     llvm::SmallVector<int32_t, 8> selectIdVec;
@@ -356,6 +354,8 @@ public:
       mlir::emitError(loc, "buffer-type not supported");
       return failure();
     }
+
+    ModuleScopeIdAllocation &scopeInfo = getAnalysis<ModuleScopeIdAllocation>();
 
     if (hasOperator<Operation, triton::gpu::WarpSpecializeOp>(
             func.getOperation()))
