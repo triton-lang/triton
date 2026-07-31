@@ -17,6 +17,7 @@ __all__ = [
     "init",
     "invalidate",
     "MBarrierLayout",
+    "test_wait",
     "test_wait_validity",
     "wait",
 ]
@@ -46,6 +47,37 @@ def wait(mbarrier, phase, pred=True, phase_type="primary", deps=(), _semantic=No
     pred = _semantic.to_tensor(pred)
     deps = [x.handle for x in deps]
     _semantic.builder.create_mbarrier_wait(mbarrier.handle, phase.handle, pred.handle, deps, phase_type)
+
+
+@builtin
+def test_wait(mbarrier, phase, pred=True, phase_type="primary", _semantic=None):
+    """
+    Test an mbarrier phase once without blocking.
+
+    Args:
+        mbarrier (shared_memory_descriptor): The barrier object to test.
+        phase (int): The phase/parity value to test.
+        pred (bool): Predicate. Operation is skipped if predicate is False.
+            Defaults to True.
+        phase_type (str): Barrier phase type to test. Supported values are
+            ``"primary"`` and ``"conditional"``. The conditional phase is
+            used by TMA report-validity barriers. Defaults to ``"primary"``.
+
+    Returns:
+        tensor: Scalar int32 tensor containing 1 if the requested phase has
+            completed, otherwise 0.
+    """
+    phase_type = _unwrap_if_constexpr(phase_type)
+    if phase_type == "primary":
+        phase_type = gluon_ir.MBARRIER_PHASE_TYPE.PRIMARY
+    elif phase_type == "conditional":
+        phase_type = gluon_ir.MBARRIER_PHASE_TYPE.CONDITIONAL
+    else:
+        raise ValueError(f"unsupported mbarrier phase type: {phase_type}")
+    phase = _semantic.to_tensor(phase)
+    pred = _semantic.to_tensor(pred)
+    handle = _semantic.builder.create_mbarrier_test_wait(mbarrier.handle, phase.handle, pred.handle, phase_type)
+    return _semantic.tensor(handle, tl.int32)
 
 
 @builtin

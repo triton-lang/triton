@@ -417,6 +417,36 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
   let hasVerifier = 1;
 }
 
+def TTNG_BarrierTestWaitOp : TTNG_Op<"barrier_test_wait", [
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
+    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
+  let summary = "perform a non-blocking parity test on an mbarrier";
+
+  let description = [{
+    Tests whether the mbarrier object in `alloc` has completed the requested
+    phase and returns `1` on success or `0` otherwise. Unlike
+    `ttng.wait_barrier`, this operation performs a single non-blocking query.
+
+    `phaseType` selects either the barrier's primary phase or its conditional
+    phase. The latter requires the mbarrier v1 layout.
+  }];
+
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$alloc,
+    I32:$phase,
+    Optional<I1>:$pred,
+    DefaultValuedAttr<TTNG_MBarrierPhaseTypeAttr,
+                      "::mlir::triton::nvidia_gpu::MBarrierPhaseType::PRIMARY">:$phaseType
+  );
+  let results = (outs I32:$waitComplete);
+
+  let assemblyFormat = [{
+    $alloc `,` $phase (`,` $pred^)? (`,` $phaseType^)? attr-dict `:`
+    qualified(type($alloc)) `->` type($waitComplete)
+  }];
+  let hasVerifier = 1;
+}
+
 def TTNG_BarrierTestWaitReportOp : TTNG_Op<"barrier_test_wait_report", [
     DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
     DeclareOpInterfaceMethods<PredicatedOpInterface>]> {

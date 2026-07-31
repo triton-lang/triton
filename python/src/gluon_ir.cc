@@ -985,6 +985,15 @@ void init_gluon_ir(py::module_ &m) {
           py::arg("memDesc"), py::arg("phase"), py::arg("pred"),
           py::arg("deps"),
           py::arg("phase_type") = ttng::MBarrierPhaseType::PRIMARY)
+      .def(
+          "create_mbarrier_test_wait",
+          [](GluonOpBuilder &self, Value memDesc, Value phase, Value pred,
+             ttng::MBarrierPhaseType phaseType) -> Value {
+            return self.create<ttng::BarrierTestWaitOp>(memDesc, phase, pred,
+                                                        phaseType);
+          },
+          py::arg("memDesc"), py::arg("phase"), py::arg("pred"),
+          py::arg("phase_type") = ttng::MBarrierPhaseType::PRIMARY)
       .def("create_mbarrier_test_wait_report",
            [](GluonOpBuilder &self, Value memDesc, Value phase,
               Value pred) -> std::pair<Value, Value> {

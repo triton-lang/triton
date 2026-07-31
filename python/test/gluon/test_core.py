@@ -5877,7 +5877,7 @@ def test_tma_validcheck_multi_stage():
                     # process stages in a fixed order, a blocking wait in the producer can easily create a deadlock
                     # between the producer and the consumer.
                     acquire_phase = (blocks_copied + 1) & 1
-                    empty_ready, _ = rubin.mbarrier.test_wait_validity(bar_empty.index(stage), acquire_phase)
+                    empty_ready = rubin.mbarrier.test_wait(bar_empty.index(stage), acquire_phase)
 
                     if empty_ready == 1:
                         rubin.mbarrier.expect(bar_full.index(stage), input_desc.block_type.nbytes)
