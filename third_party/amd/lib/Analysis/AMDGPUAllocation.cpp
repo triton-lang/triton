@@ -12,9 +12,12 @@
 
 namespace mlir::triton::AMD {
 
-unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
-                                        RankedTensorType dstTy,
+unsigned getConvertLayoutScratchInBytes(gpu::ConvertLayoutOp op,
                                         TargetInfoBase &targetInfo) {
+  if (!cvtNeedsSharedMemory(op))
+    return 0;
+  auto srcTy = op.getSrc().getType();
+  auto dstTy = op.getType();
   int numBanks = targetInfo.getSharedMemoryBanks();
   auto srcLayout = gpu::toLinearLayout(srcTy);
   auto dstLayout = gpu::toLinearLayout(dstTy);
@@ -66,11 +69,7 @@ unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
   }
 
   if (auto cvtLayout = dyn_cast<mlir::triton::gpu::ConvertLayoutOp>(op)) {
-    if (!cvtNeedsSharedMemory(cvtLayout))
-      return 0;
-    auto srcTy = cvtLayout.getSrc().getType();
-    auto dstTy = cvtLayout.getType();
-    return getConvertLayoutScratchInBytes(srcTy, dstTy, targetInfo);
+    return getConvertLayoutScratchInBytes(cvtLayout, targetInfo);
   }
 
   if (auto ws = dyn_cast<mlir::triton::gpu::WarpSpecializeOp>(op)) {
