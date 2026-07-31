@@ -67,13 +67,6 @@ class Event(tl.base_value):
         self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
 
 
-class DummyEvent(Event):
-    """Dummy event that does nothing when passed to :func:`start_event` or :func:`end_event`."""
-
-    def __init__(self):
-        super().__init__(handle=None)
-
-
 def _check_supported_semantic(semantic):
     if not isinstance(semantic, tuple(_SEMANTICS)):
         raise TypeError(f"Unsupported semantic type: {type(semantic)}. "
@@ -110,7 +103,7 @@ def exit_scope(name: tl.constexpr, _semantic=None):
 @builtin
 def allocate_event(name: tl.constexpr, _semantic=None):
     if not flags.instrumentation_on:
-        return DummyEvent()
+        return Event(handle=None)
     _check_supported_semantic(_semantic)
     name = tl._unwrap_if_constexpr(name)
     handle = triton_proton.create_proton_allocate_event(_semantic.builder, name)
