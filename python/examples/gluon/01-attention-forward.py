@@ -383,7 +383,7 @@ class AttentionProgram:
 @gluon.jit
 def _borrow_s_as_p(config, s_tmem):
     cols: gl.constexpr = s_tmem.dtype.primitive_bitwidth // config.dtype.primitive_bitwidth
-    p_tmem = s_tmem._reinterpret(config.dtype, [config.SPLIT_M, cols * config.BLOCK_N], config.p_tmem_layout)
+    p_tmem = s_tmem.reinterpret(config.dtype, [config.SPLIT_M, cols * config.BLOCK_N], config.p_tmem_layout)
     return p_tmem.slice(0, config.BLOCK_N)
 
 
@@ -391,7 +391,7 @@ def _borrow_s_as_p(config, s_tmem):
 def _borrow_s_as_alpha(config, s_tmem):
     alpha_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M_PER_CTA, 1], col_stride=1,
                                                     cga_layout=config.CGA_LAYOUT, two_ctas=gl.num_ctas() > 1)
-    alpha_tmem = s_tmem._reinterpret(layout=alpha_layout)
+    alpha_tmem = s_tmem.reinterpret(layout=alpha_layout)
     return alpha_tmem.slice(config.BLOCK_N // 2, 1)
 
 
@@ -399,7 +399,7 @@ def _borrow_s_as_alpha(config, s_tmem):
 def _borrow_s_for_epilogue(config, s_tmem):
     layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M_PER_CTA, 1], col_stride=1, cga_layout=config.CGA_LAYOUT,
                                               two_ctas=gl.num_ctas() > 1)
-    s_tmem = s_tmem._reinterpret(layout=layout)
+    s_tmem = s_tmem.reinterpret(layout=layout)
     m_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 1, 1)
     l_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 2, 1)
     return m_i_tmem, l_i_tmem
@@ -886,7 +886,7 @@ def attention_kernel(  #
 
     q_chnl = get_desc_channel(desc_q, num_buffers=2)
     kv_chnl = get_desc_channel(desc_k, num_buffers=config.num_kv_buffers)
-    v_mem = kv_chnl.mem._reinterpret(layout=desc_v.layout)
+    v_mem = kv_chnl.mem.reinterpret(layout=desc_v.layout)
     o_chnl = TensorMemoryChannel.alloc(config.o_shape, gl.float32, config.o_tmem_layout, num_buffers=2,
                                        producer_two_ctas=gl.num_ctas() > 1)
     epi_chnl = SharedMemoryChannel.alloc(config.o_shape, config.dtype, gl.constexpr(desc_o.layout), num_buffers=2)

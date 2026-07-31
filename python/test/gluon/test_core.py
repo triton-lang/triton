@@ -1935,7 +1935,7 @@ def test_tmem_copy_2d():
         smem = ttgl.allocate_shared_memory(ttgl.int8, (smem_h, smem_w), layout=smem_layout)
         tmem_pool_layout: ttgl.constexpr = TensorMemoryLayout((num_rows, 256), col_stride=1)
         tmem_pool = allocate_tensor_memory(ttgl.float32, (num_rows, 512), layout=tmem_pool_layout)
-        tmem = tmem_pool.slice(480, num_cols)._reinterpret(ttgl.int8, (smem_h, smem_w), tmem_layout)
+        tmem = tmem_pool.slice(480, num_cols).reinterpret(ttgl.int8, (smem_h, smem_w), tmem_layout)
 
         barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.constexpr(mbarrier.MBarrierLayout()))
         mbarrier.init(barrier, count=1)
@@ -1945,7 +1945,7 @@ def test_tmem_copy_2d():
         tcgen05_commit(barrier)
         mbarrier.wait(barrier, phase=0)
         tmem_alias: ttgl.constexpr = TensorMemoryLayout((num_rows, num_cols), col_stride=1)
-        tmem = tmem._reinterpret(shape=(num_rows, num_cols), layout=tmem_alias)
+        tmem = tmem.reinterpret(shape=(num_rows, num_cols), layout=tmem_alias)
         value = tmem.load(blocked)
         ttgl.store(ttgl.set_auto_layout(out_ptrs, blocked), value)
 
@@ -1980,7 +1980,7 @@ def test_tmem_pipeline_stage_subslice_index_reinterpret():
         for stage in ttgl.static_range(5):
             parent.index(stage).store(ttgl.load(inp + stage * 8192 + rows * 64 + cols))
         stages = parent.slice(2, 2, dim=0)
-        first = stages._reinterpret().index(0)
+        first = stages.reinterpret().index(0)
         first.store(first.load() + 11.0)
         second = stages.slice(1, 1, dim=0).index(0)
         second.store(second.load() + 7.0)
@@ -2050,7 +2050,7 @@ def test_tmem_source_layout_contiguous_subslice():
 
         view = parent.slice(208, 256)
         view_layout: ttgl.constexpr = TensorMemoryLayout([128, 256], col_stride=1)
-        view = view._reinterpret(ttgl.float32, [128, 256], view_layout)
+        view = view.reinterpret(ttgl.float32, [128, 256], view_layout)
         view.store(view.load() + 7.0)
         ttgl.store(out + rows * 512 + cols, parent.load(parent_layout))
 
@@ -2169,13 +2169,13 @@ def test_tmem_subslice_block_m_64():
         s_tmem.store(s)
         o_tmem.store(s)
 
-        p_tmem_parent = s_tmem._reinterpret(ttgl.float16, [BLOCK_M, 2 * N], tmem_layout)
+        p_tmem_parent = s_tmem.reinterpret(ttgl.float16, [BLOCK_M, 2 * N], tmem_layout)
         p_tmem = p_tmem_parent.slice(0, N)
         p_tmem.store(ttgl.full((BLOCK_M, N), 0.0, dtype=ttgl.float16, layout=layout))
 
         d1_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, 2), col_stride=1)
 
-        d1_tmem_parent = s_tmem._reinterpret(layout=d1_tmem_layout)
+        d1_tmem_parent = s_tmem.reinterpret(layout=d1_tmem_layout)
         m_tmem = d1_tmem_parent.slice(N // 2, 2)
         d1_layout: ttgl.constexpr = m_tmem.get_reg_layout()
         m_tmem.store(ttgl.full((BLOCK_M, 2), 2.0, dtype=ttgl.float32, layout=d1_layout))
@@ -2358,7 +2358,7 @@ def test_slice_reinterpret():
         smem_layout_2d: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
         smem = ttgl.allocate_shared_memory(ttgl.int8, [BLOCK], smem_layout_1d)
         smem_slice0 = smem.slice(0, SPLIT_BLOCK)
-        smem_i32 = smem._reinterpret(ttgl.int32, [2 * XBLOCK, YBLOCK], smem_layout_2d)
+        smem_i32 = smem.reinterpret(ttgl.int32, [2 * XBLOCK, YBLOCK], smem_layout_2d)
         smem_slice1 = smem_i32.slice(XBLOCK, XBLOCK, dim=0)
 
         offs = ttgl.arange(0, XBLOCK)[:, None] * YBLOCK + ttgl.arange(0, YBLOCK)[None, :]
@@ -3149,7 +3149,7 @@ def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_
         mbarrier.init(bar, count=1)
         if A_FP4_PADDED:
             padded_layout: ttgl.constexpr = TensorMemoryLayout([M, A_K_INPUT], col_stride=1, fp4_padded=True)
-            a_tmem = a_tmem._reinterpret(a.dtype.element_ty, [M, A_K_INPUT], padded_layout)
+            a_tmem = a_tmem.reinterpret(a.dtype.element_ty, [M, A_K_INPUT], padded_layout)
         if B_IS_FP4:
             b_smem = b_smem.permute((1, 0))
         tcgen05_mma_scaled(a_tmem, b_smem, acc_tmem, a_scale_tmem, b_scale_tmem, A_FORMAT, B_FORMAT, use_acc=False,
@@ -3533,7 +3533,7 @@ def shared_gather_cga_kernel(
     # Seed each physical CTA with distinct layout-derived values, then view the
     # same allocation through the CGA layout under test.
     seed = ttgl.allocate_shared_memory(ttgl.int32, [block], seed_layout, value=offsets)
-    smem = seed._reinterpret(shape=[CTA_TILE << NUM_SHARD_BITS], layout=shared_layout)
+    smem = seed.reinterpret(shape=[CTA_TILE << NUM_SHARD_BITS], layout=shared_layout)
     ttgl.barrier(cluster=True)
 
     cta = offsets // CTA_TILE
