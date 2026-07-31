@@ -273,10 +273,10 @@ def async_mma_scaled_impl(a_smem, b_smem, a_scale_smem, b_scale_smem, acc_tmem, 
     a_scale_layout: gl.constexpr = TensorMemoryScalesLayout(cga_layout=[[1, 0]] if two_ctas else [])
     b_scale_layout: gl.constexpr = TensorMemoryScalesLayout(cga_layout=[[0, 0]] if two_ctas else [])
     a_scale_tmem = tmem_pool.slice(tmem_plan.a_scale_offset,
-                                   tmem_plan.a_scale_cols)._reinterpret(dtype=a_scale.dtype, shape=a_scale.shape,
+                                   tmem_plan.a_scale_cols).reinterpret(dtype=a_scale.dtype, shape=a_scale.shape,
                                                                           layout=a_scale_layout)
     b_scale_tmem = tmem_pool.slice(tmem_plan.b_scale_offset,
-                                   tmem_plan.b_scale_cols)._reinterpret(dtype=b_scale.dtype, shape=b_scale.shape,
+                                   tmem_plan.b_scale_cols).reinterpret(dtype=b_scale.dtype, shape=b_scale.shape,
                                                                           layout=b_scale_layout)
 
     tcgen05_copy(a_scale, a_scale_tmem)

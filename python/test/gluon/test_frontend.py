@@ -478,7 +478,7 @@ def shared_memory_cast_kernel():
     smem = ttgl.allocate_shared_memory(ttgl.float16, [32, 1, 4, 64], layout_b)
     smem.reshape((128, 64))
 
-    smem._reinterpret(ttgl.int8, [16384], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+    smem.reinterpret(ttgl.int8, [16384], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
 
 
 @pytest.mark.parametrize("target", ALL_TARGETS)
@@ -926,7 +926,7 @@ def test_reinterpret_parent_then_multibuffer_subslice():
     b_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(32, 16, rank=2)
     arena = ttgl.allocate_shared_memory(ttgl.float16, [7, 8, 32], a_layout)
     # CHECK: [[B_PARENT:%.*]] = ttg.memdesc_reinterpret {{.*}} -> !ttg.memdesc<14x8x16xf16
-    b_parent = arena._reinterpret(ttgl.float16, [14, 8, 16], b_layout)
+    b_parent = arena.reinterpret(ttgl.float16, [14, 8, 16], b_layout)
     # CHECK: [[A_SUB:%.*]] = ttg.memdesc_subslice {{.*}}[0, 0, 0]
     a_stages = arena.slice(0, 3, dim=0)
     # CHECK: [[B_SUB:%.*]] = ttg.memdesc_subslice [[B_PARENT]][6, 0, 0] {{.*}} -> !ttg.memdesc<4x8x16xf16
