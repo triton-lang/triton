@@ -973,6 +973,47 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+#lifetime_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#lifetime_smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @amd_payload_rejects_live_barrier_storage
+  tt.func public @amd_payload_rejects_live_barrier_storage() {
+    %payload = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<16xi32, #lifetime_shared, #lifetime_smem, mutable>
+    %barrier = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<1xi64, #lifetime_shared, #lifetime_smem, mutable>
+    amdg.init_barrier %barrier, 1
+        : !ttg.memdesc<1xi64, #lifetime_shared, #lifetime_smem, mutable>
+    // CHECK: tt.call @__triton_consan_verify_barrier_memory_available
+    // CHECK: ttg.local_load
+    %value = ttg.local_load %payload
+        : !ttg.memdesc<16xi32, #lifetime_shared, #lifetime_smem, mutable>
+        -> tensor<16xi32>
+    tt.return
+  }
+}
+
+// -----
+
+#lifetime_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#lifetime_smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 8 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @amd_copy_completion_requires_initialized_barrier
+  tt.func public @amd_copy_completion_requires_initialized_barrier() {
+    %barrier = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    // CHECK: tt.call @__triton_consan_verify_barrier_initialized
+    // CHECK: amdg.async_copy_mbarrier_arrive
+    amdg.async_copy_mbarrier_arrive %barrier
+        : !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 // Partitioned padded allocations have several simultaneous physical bases.
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
 #inner_padded = #ttg.padded_shared<[128:+4] {order = [1, 0], shape = [16, 16]}>
