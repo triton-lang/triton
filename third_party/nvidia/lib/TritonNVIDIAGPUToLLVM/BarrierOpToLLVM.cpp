@@ -63,6 +63,7 @@ Value createMbarrierTestWriterPredicate(Operation *op,
     return {};
 
   auto loc = op->getLoc();
+  auto ctx = op->getContext();
   auto freeVarMasks = getFreeVariableMasks(op->getResult(0).getType());
   // The result is broadcast through CTA-local shared memory, so elect one
   // writer per CTA rather than one writer across the cluster.
