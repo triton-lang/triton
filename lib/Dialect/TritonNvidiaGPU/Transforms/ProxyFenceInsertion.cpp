@@ -1,4 +1,5 @@
 #include "triton/Analysis/Allocation.h"
+#include "triton/Analysis/BufferRegion.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -30,55 +31,17 @@ namespace nvidia_gpu {
 
 namespace {
 
-bool isAsyncProxyWrite(Operation *op) {
-  return isa<triton::nvidia_gpu::TMALoadLikeOpInterface,
-             triton::nvidia_gpu::CLCTryCancelOp>(op);
-}
-
-Value getSmemDest(Operation *op) {
-  if (auto tmaLoad = dyn_cast<triton::nvidia_gpu::TMALoadLikeOpInterface>(op)) {
-    return tmaLoad.getResult();
-  }
-  if (auto clcTryCancelOp = dyn_cast<triton::nvidia_gpu::CLCTryCancelOp>(op)) {
-    return clcTryCancelOp.getResult();
-  }
-  return Value();
-}
-
-bool isAsyncProxyRead(Operation *op) {
-  return isa<triton::nvidia_gpu::WarpGroupDotOp,
-             triton::nvidia_gpu::MMAv5OpInterface,
-             triton::nvidia_gpu::TMEMCopyOp,
-             triton::nvidia_gpu::TMAStoreLikeOpInterface>(op);
-}
-
-bool isAsyncProxyReadSource(Operation *op, Value value) {
-  auto memDescType = dyn_cast<triton::gpu::MemDescType>(value.getType());
-  if (!memDescType ||
-      !isa<triton::gpu::SharedMemorySpaceAttr>(memDescType.getMemorySpace()))
-    return false;
-  if (auto tmaStore =
-          dyn_cast<triton::nvidia_gpu::TMAStoreLikeOpInterface>(op)) {
-    return value == tmaStore.getSrc();
-  }
-  if (auto warpGroupDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
-    return value == warpGroupDotOp.getA() || value == warpGroupDotOp.getB();
-  }
-  if (auto mma = dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(op)) {
-    return value == mma.getA() || value == mma.getB();
-  }
-  if (auto tmemCopyOp = dyn_cast<triton::nvidia_gpu::TMEMCopyOp>(op)) {
-    return value == tmemCopyOp.getSrc();
-  }
-  return false;
-}
-
 bool ignoreOpForProxyFence(Operation *op) {
-  return isAsyncProxyRead(op) || isAsyncProxyWrite(op) ||
-         isa<triton::nvidia_gpu::ArriveBarrierOp,
-             triton::nvidia_gpu::TMEMCopyOp, triton::nvidia_gpu::WaitBarrierOp,
-             triton::nvidia_gpu::InitBarrierOp,
-             triton::nvidia_gpu::InvalBarrierOp>(op);
+  auto accesses = BufferRegionAnalysis::getMemoryAccesses(op);
+  bool hasSpecialAccess = false;
+  for (const auto &access : accesses) {
+    if (access.kind == BufferRegionAnalysis::MemoryAccessKind::Generic)
+      return false;
+    hasSpecialAccess |=
+        access.kind == BufferRegionAnalysis::MemoryAccessKind::Async ||
+        access.kind == BufferRegionAnalysis::MemoryAccessKind::Barrier;
+  }
+  return hasSpecialAccess;
 }
 
 bool filterFn(Operation *op, Operation *other, bool /*opIsRead*/,
@@ -147,8 +110,14 @@ void ProxyFenceAnalysis<scope>::update(Operation *op, BlockInfo *blockInfo,
   }
   BlockInfo curBlockInfo;
   BlockInfo proxyBlockInfo;
-  bool isProxyOp = (isAsyncProxyWrite(op) || isAsyncProxyRead(op)) &&
-                   getProxyFenceScope(op) == scope;
+  auto accesses = BufferRegionAnalysis::getMemoryAccesses(op);
+  bool isProxyOp =
+      llvm::any_of(accesses,
+                   [](const auto &access) {
+                     return access.kind ==
+                            BufferRegionAnalysis::MemoryAccessKind::Async;
+                   }) &&
+      getProxyFenceScope(op) == scope;
 
   auto scratchBufferId = Allocation::InvalidBufferId;
   if (isa<triton::CallOp>(op)) {
@@ -159,36 +128,29 @@ void ProxyFenceAnalysis<scope>::update(Operation *op, BlockInfo *blockInfo,
       curBlockInfo = funcBlockInfoMap->lookup(callee);
   } else {
     // Intra-function dependencies
-    if (auto memoryEffectOpInterface = dyn_cast<MemoryEffectOpInterface>(op)) {
-      // Explicit buffer
-      SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>>
-          effectInstances;
-      memoryEffectOpInterface.getEffects(effectInstances);
-      for (auto effectInstance : effectInstances) {
-        if (auto value = effectInstance.getValue()) {
-          for (auto bufferId : allocation->getAllBufferIdsWithAliases(value)) {
-            if (bufferId != Allocation::InvalidBufferId) {
-              auto interval = allocation->getAllocatedInterval(bufferId);
-              auto slice = AllocationSlice(value, interval, bufferId);
-
-              if (isAsyncProxyWrite(op) && value == getSmemDest(op)) {
-                if (isProxyOp)
-                  proxyBlockInfo.syncWriteSlices[slice].insert(op);
-              } else if (isAsyncProxyRead(op) &&
-                         isAsyncProxyReadSource(op, value)) {
-                // Safe fallback for async-proxy reads from shared memory when
-                // the earlier FenceInsertionPass did not place a fence.
-                if (isProxyOp)
-                  proxyBlockInfo.syncReadSlices[slice].insert(op);
-              } else if (isa<MemoryEffects::Write>(
-                             effectInstance.getEffect())) {
-                curBlockInfo.syncWriteSlices[slice].insert(op);
-              } else if (isa<MemoryEffects::Read>(effectInstance.getEffect())) {
-                curBlockInfo.syncReadSlices[slice].insert(op);
-              }
-            }
-          }
-        }
+    // Explicit buffers are classified by their memory effects rather than
+    // operation-specific proxy lists.
+    for (const auto &access : accesses) {
+      if (access.kind == BufferRegionAnalysis::MemoryAccessKind::Barrier ||
+          access.kind == BufferRegionAnalysis::MemoryAccessKind::Tensor)
+        continue;
+      for (auto bufferId :
+           allocation->getAllBufferIdsWithAliases(access.value)) {
+        if (bufferId == Allocation::InvalidBufferId)
+          continue;
+        auto interval = allocation->getAllocatedInterval(bufferId);
+        auto slice = AllocationSlice(access.value, interval, bufferId);
+        BlockInfo &effects =
+            access.kind == BufferRegionAnalysis::MemoryAccessKind::Async
+                ? proxyBlockInfo
+                : curBlockInfo;
+        if (access.kind == BufferRegionAnalysis::MemoryAccessKind::Async &&
+            !isProxyOp)
+          continue;
+        if (access.isWrite)
+          effects.syncWriteSlices[slice].insert(op);
+        if (access.isRead)
+          effects.syncReadSlices[slice].insert(op);
       }
     }
     scratchBufferId = allocation->getBufferId(op);

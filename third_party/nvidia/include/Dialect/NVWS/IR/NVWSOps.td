@@ -33,6 +33,7 @@ include "mlir/Interfaces/ViewLikeInterface.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUMemoryEffects.td"
 include "NVWSDialect.td"
 include "NVWSTypes.td"
 include "NVWSAttrDefs.td"
@@ -291,7 +292,6 @@ def NVWS_ConsumerReleaseOp : NVWS_Op<"consumer_release"> {
 }
 
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
-def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
 
 def NVWS_DescriptorLoadOp : NVWS_Op<"descriptor_load", [NVWS_DescriptorLoadOpInterface]> {
   let summary = "Load from descriptor and store into shared memory";
@@ -303,7 +303,7 @@ def NVWS_DescriptorLoadOp : NVWS_Op<"descriptor_load", [NVWS_DescriptorLoadOpInt
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
     Variadic<I32>:$indices,
     I32Attr:$txCount,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
+    Arg<TTG_MemDescType, "", GenericSharedWrite>:$result,
     DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
   );
@@ -330,7 +330,7 @@ def NVWS_DescriptorGatherOp : NVWS_Op<"descriptor_gather", [NVWS_DescriptorLoadO
     RankedTensorOf<[I32]>:$x_offsets,
     I32:$y_offset,
     I32Attr:$txCount,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result
+    Arg<TTG_MemDescType, "", GenericSharedWrite>:$result
   );
 
   let assemblyFormat = [{

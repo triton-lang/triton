@@ -1,3 +1,4 @@
+#include "triton/Analysis/BufferRegion.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -37,11 +38,16 @@ public:
       return;
     ModuleOp mod = getOperation();
     mod.walk([&](DotOpInterface dotOp) {
-      Value a = dotOp.getA();
-      Value b = dotOp.getB();
-      SmallVector<Operation *> copyRegToSharedOpsA = findCopyRegToSharedOps(a);
-      SmallVector<Operation *> copyRegToSharedOpsB = findCopyRegToSharedOps(b);
-      if (copyRegToSharedOpsA.empty() && copyRegToSharedOpsB.empty())
+      SmallVector<Operation *> copyRegToSharedOps;
+      for (const auto &access :
+           BufferRegionAnalysis::getMemoryAccesses(dotOp.getOperation())) {
+        if (access.kind != BufferRegionAnalysis::MemoryAccessKind::Async ||
+            !access.isRead)
+          continue;
+        llvm::append_range(copyRegToSharedOps,
+                           findCopyRegToSharedOps(access.value));
+      }
+      if (copyRegToSharedOps.empty())
         return WalkResult::advance();
 
       OpBuilder builder(dotOp);
@@ -50,12 +56,7 @@ public:
       // If there is all the dependencies are outside of the loop try to hoist
       // the fence.
       while (auto loopOp = fence->getParentOfType<LoopLikeOpInterface>()) {
-        if (!copyRegToSharedOpsA.empty() &&
-            llvm::any_of(copyRegToSharedOpsA,
-                         [&](Operation *op) { return loopOp->isAncestor(op); }))
-          break;
-        if (!copyRegToSharedOpsB.empty() &&
-            llvm::any_of(copyRegToSharedOpsB,
+        if (llvm::any_of(copyRegToSharedOps,
                          [&](Operation *op) { return loopOp->isAncestor(op); }))
           break;
         loopOp.moveOutOfLoop(fence);
@@ -104,7 +105,13 @@ private:
                  user->hasTrait<OpTrait::MemDescViewTrait>()) {
             user = *user->getUsers().begin();
           }
-          if (isa<ttg::LocalStoreOp>(user)) {
+          if (llvm::any_of(BufferRegionAnalysis::getMemoryAccesses(user),
+                           [](const auto &access) {
+                             return access.kind ==
+                                        BufferRegionAnalysis::MemoryAccessKind::
+                                            Generic &&
+                                    access.isWrite;
+                           })) {
             result.insert(user);
             return;
           }

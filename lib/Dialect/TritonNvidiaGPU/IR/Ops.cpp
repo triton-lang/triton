@@ -338,9 +338,11 @@ void WarpGroupDotOp::getEffects(
   auto &a = getAMutable();
   auto &b = getBMutable();
   if (isa<MemDescType>(a.get().getType()))
-    effects.emplace_back(MemoryEffects::Read::get(), &a, SharedMemory::get());
+    addSharedMemoryEffects<MemoryEffects::Read>(effects, &a,
+                                                AsyncSharedMemory::get());
   if (isa<MemDescType>(b.get().getType()))
-    effects.emplace_back(MemoryEffects::Read::get(), &b, SharedMemory::get());
+    addSharedMemoryEffects<MemoryEffects::Read>(effects, &b,
+                                                AsyncSharedMemory::get());
 }
 
 bool WarpGroupDotOp::needsPartialAccumulator() {
@@ -1244,18 +1246,18 @@ void TCGen5MMAOp::getEffects(
                        TensorMemory::get());
 
   if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
-    effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
-                         SharedMemory::get());
+    addSharedMemoryEffects<MemoryEffects::Read>(effects, &getAMutable(),
+                                                AsyncSharedMemory::get());
 
   } else {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
                          TensorMemory::get());
   }
-  effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
-                       SharedMemory::get());
+  addSharedMemoryEffects<MemoryEffects::Read>(effects, &getBMutable(),
+                                              AsyncSharedMemory::get());
   for (auto &barrierMutable : getBarriersMutable())
-    effects.emplace_back(MemoryEffects::Write::get(), &barrierMutable,
-                         SharedMemory::get());
+    addSharedMemoryEffects<MemoryEffects::Write>(effects, &barrierMutable,
+                                                 BarrierSharedMemory::get());
 }
 
 Value TCGen5MMAOp::useAccumulator() { return getUseD(); }
@@ -1504,22 +1506,22 @@ void TCGen5MMAScaledOp::getEffects(
                        TensorMemory::get());
 
   if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
-    effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
-                         SharedMemory::get());
+    addSharedMemoryEffects<MemoryEffects::Read>(effects, &getAMutable(),
+                                                AsyncSharedMemory::get());
 
   } else {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
                          TensorMemory::get());
   }
-  effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
-                       SharedMemory::get());
+  addSharedMemoryEffects<MemoryEffects::Read>(effects, &getBMutable(),
+                                              AsyncSharedMemory::get());
   effects.emplace_back(MemoryEffects::Read::get(), &getAScaleMutable(),
                        TensorMemory::get());
   effects.emplace_back(MemoryEffects::Read::get(), &getBScaleMutable(),
                        TensorMemory::get());
   for (auto &barrierMutable : getBarriersMutable())
-    effects.emplace_back(MemoryEffects::Write::get(), &barrierMutable,
-                         SharedMemory::get());
+    addSharedMemoryEffects<MemoryEffects::Write>(effects, &barrierMutable,
+                                                 BarrierSharedMemory::get());
 }
 
 bool TCGen5MMAScaledOp::verifyDims() {

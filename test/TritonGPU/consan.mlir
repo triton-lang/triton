@@ -1497,7 +1497,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-LABEL: @local_load_barriers
   tt.func public @local_load_barriers() {
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
-    %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tti.experimental_lock_acquire
     // CHECK: arith.constant dense<true> : tensor<1xi1
@@ -2060,6 +2060,191 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %upper = ttg.memdesc_subslice %parent [8] : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> !ttg.memdesc<8xi32, #shared, #smem, mutable, 16>
     ttg.local_load %smaller : !ttg.memdesc<8xi32, #shared, #smem, mutable> -> tensor<8xi32>
     ttg.local_load %upper : !ttg.memdesc<8xi32, #shared, #smem, mutable, 16> -> tensor<8xi32>
+    tt.return
+  }
+}
+
+// -----
+
+#lifetime_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#lifetime_smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @generic_payload_rejects_live_barrier_storage
+  tt.func public @generic_payload_rejects_live_barrier_storage() {
+    %payload = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<16xi32, #lifetime_shared, #lifetime_smem, mutable>
+    %barrier = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<1xi64, #lifetime_shared, #lifetime_smem, mutable>
+    ttng.init_barrier %barrier, 1
+        : !ttg.memdesc<1xi64, #lifetime_shared, #lifetime_smem, mutable>
+    // The barrier bytes and the remaining payload bytes occupy two state lanes.
+    // CHECK: arith.constant dense<true> : tensor<2xi1
+    // CHECK: tt.call @__triton_consan_verify_barrier_memory_available
+    // CHECK: ttg.local_load
+    %value = ttg.local_load %payload
+        : !ttg.memdesc<16xi32, #lifetime_shared, #lifetime_smem, mutable>
+        -> tensor<16xi32>
+    tt.return
+  }
+}
+
+// -----
+
+#lifetime_payload = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#lifetime_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#lifetime_smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 4104 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @async_payload_rejects_live_barrier_storage
+  tt.func public @async_payload_rejects_live_barrier_storage(
+      %desc: !tt.tensordesc<32x32xf32, #lifetime_payload>) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %payload = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<32x32xf32, #lifetime_payload, #lifetime_smem, mutable>
+    %live = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    %completion = ttg.local_alloc {allocation.offset = 4096 : i32}
+        : () -> !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    ttng.init_barrier %live, 1
+        : !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    ttng.init_barrier %completion, 1
+        : !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    // CHECK: tt.call @__triton_consan_verify_barrier_memory_available
+    // CHECK: tt.call @__triton_consan_verify_proxy_access
+    // CHECK: ttng.async_tma_copy_global_to_local
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %payload,
+        %completion, %true : !tt.tensordesc<32x32xf32, #lifetime_payload>,
+        !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+        -> !ttg.memdesc<32x32xf32, #lifetime_payload, #lifetime_smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#lifetime_payload = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#lifetime_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#lifetime_smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 4104 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @initialization_checks_outstanding_async_payload_write
+  tt.func public @initialization_checks_outstanding_async_payload_write(
+      %desc: !tt.tensordesc<32x32xf32, #lifetime_payload>) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %payload = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<32x32xf32, #lifetime_payload, #lifetime_smem, mutable>
+    %completion = ttg.local_alloc {allocation.offset = 4096 : i32}
+        : () -> !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    %reuse = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    ttng.init_barrier %completion, 1
+        : !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    // CHECK: ttng.async_tma_copy_global_to_local
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %payload,
+        %completion, %true : !tt.tensordesc<32x32xf32, #lifetime_payload>,
+        !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+        -> !ttg.memdesc<32x32xf32, #lifetime_payload, #lifetime_smem, mutable>
+    // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK: tt.call @__triton_consan_verify_read_visibility
+    // CHECK: tt.call @__triton_consan_verify_barrier_can_init
+    // CHECK: ttng.init_barrier
+    ttng.init_barrier %reuse, 1
+        : !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#lifetime_payload = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#lifetime_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#lifetime_smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 4104 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @invalidation_is_a_generic_proxy_write
+  tt.func public @invalidation_is_a_generic_proxy_write(
+      %desc: !tt.tensordesc<32x32xf32, #lifetime_payload>) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %old = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    %completion = ttg.local_alloc {allocation.offset = 4096 : i32}
+        : () -> !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    %payload = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<32x32xf32, #lifetime_payload, #lifetime_smem, mutable>
+    ttng.init_barrier %old, 1
+        : !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    ttng.init_barrier %completion, 1
+        : !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    // CHECK: tt.call @__triton_consan_set_proxy_access
+    // CHECK: ttng.inval_barrier
+    ttng.inval_barrier %old
+        : !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    // CHECK: tt.call @__triton_consan_verify_proxy_access
+    // CHECK: ttng.async_tma_copy_global_to_local
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %payload,
+        %completion, %true : !tt.tensordesc<32x32xf32, #lifetime_payload>,
+        !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+        -> !ttg.memdesc<32x32xf32, #lifetime_payload, #lifetime_smem, mutable>
+    tt.return
+  }
+
+}
+
+// -----
+
+#lifetime_payload = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#lifetime_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#lifetime_smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 4104 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @invalidation_fence_orders_async_reuse
+  tt.func public @invalidation_fence_orders_async_reuse(
+      %desc: !tt.tensordesc<32x32xf32, #lifetime_payload>) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %old = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    %completion = ttg.local_alloc {allocation.offset = 4096 : i32}
+        : () -> !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    %payload = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<32x32xf32, #lifetime_payload, #lifetime_smem, mutable>
+    ttng.init_barrier %old, 1
+        : !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    ttng.init_barrier %completion, 1
+        : !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    ttng.inval_barrier %old
+        : !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    // CHECK: tt.call @__triton_consan_fence_proxy_accesses
+    // CHECK: ttng.fence_async_shared
+    ttng.fence_async_shared {bCluster = false}
+    // CHECK: tt.call @__triton_consan_verify_proxy_access
+    // CHECK: ttng.async_tma_copy_global_to_local
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %payload,
+        %completion, %true : !tt.tensordesc<32x32xf32, #lifetime_payload>,
+        !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+        -> !ttg.memdesc<32x32xf32, #lifetime_payload, #lifetime_smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#lifetime_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#lifetime_smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 8 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @copy_completion_requires_initialized_barrier
+  tt.func public @copy_completion_requires_initialized_barrier() {
+    %barrier = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    // CHECK: tt.call @__triton_consan_verify_barrier_initialized
+    // CHECK: ttng.async_copy_mbarrier_arrive
+    ttng.async_copy_mbarrier_arrive %barrier
+        : !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
     tt.return
   }
 }

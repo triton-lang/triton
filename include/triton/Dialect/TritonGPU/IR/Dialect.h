@@ -97,9 +97,52 @@ using LinearEncodingCache = Cache<CacheKey, LinearEncodingAttr>;
 
 namespace mlir::triton::gpu {
 struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
-  StringRef getName() const final { return "<SharedMemory>"; }
+  SharedMemory() = default;
+
+  StringRef getName() const override { return "<SharedMemory>"; }
   SideEffects::Resource *getParent() const override { return nullptr; }
+
+protected:
+  SharedMemory(TypeID id) : SideEffects::Resource::Base<SharedMemory>(id) {}
 };
+
+/// Ordinary shared-memory access, including cp.async and st.async payloads.
+struct GenericSharedMemory
+    : public SideEffects::Resource::Base<GenericSharedMemory, SharedMemory> {
+  StringRef getName() const override { return "<GenericSharedMemory>"; }
+  SideEffects::Resource *getParent() const override {
+    return SharedMemory::get();
+  }
+};
+
+/// TMA and tensor-core accesses through the NVIDIA async proxy.
+struct AsyncSharedMemory
+    : public SideEffects::Resource::Base<AsyncSharedMemory, SharedMemory> {
+  StringRef getName() const override { return "<AsyncSharedMemory>"; }
+  SideEffects::Resource *getParent() const override {
+    return SharedMemory::get();
+  }
+};
+
+/// Operations on an initialized barrier; barrier init/inval are generic.
+struct BarrierSharedMemory
+    : public SideEffects::Resource::Base<BarrierSharedMemory, SharedMemory> {
+  StringRef getName() const override { return "<BarrierSharedMemory>"; }
+  SideEffects::Resource *getParent() const override {
+    return SharedMemory::get();
+  }
+};
+
+/// Emit the parent effect as well so existing shared-memory analyses still see
+/// dependencies between accesses using different specialized resources.
+template <typename Effect, typename ValueT>
+void addSharedMemoryEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects,
+    ValueT value, SideEffects::Resource *resource) {
+  effects.emplace_back(Effect::get(), value, SharedMemory::get());
+  effects.emplace_back(Effect::get(), value, resource);
+}
 
 // Returns true iff every non-broadcast basis of `ll`, after flattening in and
 // out dimensions, maps to a single power-of-2 in the flattened output.

@@ -5,6 +5,7 @@ include "mlir/IR/OpBase.td"
 include "mlir/IR/EnumAttr.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUMemoryEffects.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
@@ -19,7 +20,6 @@ include "proton/Dialect/include/Dialect/ProtonGPU/IR/ProtonGPUTypes.td"
 //===----------------------------------------------------------------------===//
 
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
-def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
 
 //===----------------------------------------------------------------------===//
 // Base Class
@@ -97,7 +97,7 @@ def PTG_InitializeOp : PTG_Op<"initialize", [
 
 
 def PTG_FinalizeOp : PTG_Op<"finalize", [
-    MemoryEffects<[MemRead<SharedMemory>]>, // FIXME: it shouldn't always have shared memory effects
+    MemoryEffects<GenericSharedRead>, // FIXME: it shouldn't always have shared memory effects
     MemoryEffects<[MemRead<GlobalMemory>]>,
     MemoryEffects<[MemWrite<GlobalMemory>]>
 ]> {

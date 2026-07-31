@@ -978,8 +978,21 @@ private:
                                      tti::FunctionBuilder &funcBuilder) {
     int baseThread = getBaseThread(thread, auxData.threadLayout);
     std::optional<MemEffectsOpInfo> opInfo = hooks.getMemEffectsOpInfo(op);
+    for (const auto &access : BufferRegionAnalysis::getMemoryAccesses(op)) {
+      if (access.kind != BufferRegionAnalysis::MemoryAccessKind::Barrier)
+        continue;
+      if (opInfo && llvm::any_of(opInfo->barriers, [&](const auto &barrier) {
+            return barrier.barrier == access.value;
+          }))
+        continue;
+      funcBuilder.createVerifyBarrierInitializedCall(
+          b, access.value, hooks.getIssuerCTAPred(b, op), op,
+          getBarrierRecipientCTAs(b, op));
+    }
     if (!opInfo)
       return success();
+    bool isBarrierLifecycle = hooks.getBarrierInitInfo(op).has_value() ||
+                              hooks.getBarrierInvalidateInfo(op).has_value();
     Value pred = opInfo->pred;
     Value issuerCTAPred = hooks.getIssuerCTAPred(b, op);
     pred = tti::maybeAnd(b, pred, issuerCTAPred);
@@ -1003,6 +1016,8 @@ private:
           auxData.bufferCandidates[static_cast<int>(materialized.memType)];
       auto candidateIt = candidateMap.find(buf);
       if (candidateIt == candidateMap.end()) {
+        if (isBarrierLifecycle)
+          continue;
         op->emitError("missing buffer-region candidates for memdesc");
         return failure();
       }
@@ -1022,6 +1037,36 @@ private:
       Value bufferMask = materialized.bufferMask;
       Value effectCTAs = materialized.effectCTAs;
       MemType memType = materialized.memType;
+
+      if (memType == MemType::SHARED_MEM && !isBarrierLifecycle) {
+        const BufferStateCandidates &candidates = candidateIt->second;
+        auto verifyBarrierAvailable = [&](const BufferRegion &barrier,
+                                          Value candidatePred) {
+          funcBuilder.createVerifyBarrierMemoryAvailableCall(
+              b, barrier.baseOffset, barrier.length, candidatePred, op,
+              effectCTAs);
+        };
+        for (const auto &[barrier, barrierMask] : auxData.sharedBarrierMasks) {
+          if (candidates.unknown) {
+            verifyBarrierAvailable(barrier, pred);
+            continue;
+          }
+          for (const BufferStateCandidate &candidate : candidates.cases) {
+            if (!candidate.mask.anyCommon(barrierMask))
+              continue;
+            Value candidatePred = pred;
+            if (candidates.cases.size() > 1) {
+              Value base = tti::ExperimentalMemoryOffsetToI32Op::create(
+                  b, candidate.baseOffset, memType);
+              Value matchesBase = arith::CmpIOp::create(
+                  b, arith::CmpIPredicate::eq, runtimeBase, base);
+              candidatePred = tti::maybeAnd(b, candidatePred, matchesBase);
+            }
+            verifyBarrierAvailable(barrier, candidatePred);
+          }
+        }
+      }
+
       if (memType == MemType::SHARED_MEM) {
         if (effect.proxy == MemEffectsOpInfo::Effects::Proxy::Async) {
           funcBuilder.createVerifyProxyAccessCall(b, bufferMask, baseThread,

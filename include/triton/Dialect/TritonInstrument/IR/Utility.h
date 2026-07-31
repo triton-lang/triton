@@ -241,6 +241,11 @@ struct AuxDataMap {
   triton::BufferStatePlan bufferStatePlans[numMemTypes];
   DenseMap<Value, BufferStateCandidates> bufferCandidates[numMemTypes];
 
+  // Barrier footprints that overlap ordinary shared-memory accesses. Their
+  // masks use the same physical state lanes as the overlapping payloads.
+  SmallVector<std::pair<triton::BufferRegion, llvm::SmallBitVector>>
+      sharedBarrierMasks;
+
   // scratch pointer, i32
   // Shared-cluster lock used to serialize ConSan instrumentation updates.
   RegionToValueMap lock;
