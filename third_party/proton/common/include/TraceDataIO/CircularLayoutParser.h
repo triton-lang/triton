@@ -45,7 +45,7 @@ struct CircularLayoutParserResult {
     uint32_t count = 0;
 
     std::vector<ProfileEvent> profileEvents;
-    std::vector<std::shared_ptr<CycleEntry>> asyncRecords;
+    std::vector<std::shared_ptr<CycleEntry>> asyncEvents;
   };
 
   struct BlockTrace {
@@ -77,7 +77,7 @@ private:
   bool parseMetadata();
   void parseProfileEvents();
   void parseSegment(int byteSize, CircularLayoutParserResult::Trace &trace);
-  void pairAsyncRecords(CircularLayoutParserResult::BlockTrace &blockTrace);
+  void pairAsyncEvents(CircularLayoutParserResult::BlockTrace &blockTrace);
   void parseBlock();
 
   std::shared_ptr<CircularLayoutParserResult> result = nullptr;

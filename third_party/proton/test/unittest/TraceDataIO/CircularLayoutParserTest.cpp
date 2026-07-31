@@ -195,7 +195,7 @@ TEST_F(CircularLayoutParserTest, MultipleSegment) {
   }
 }
 
-TEST_F(CircularLayoutParserTest, AsyncRecordsPairAcrossWarps) {
+TEST_F(CircularLayoutParserTest, AsyncEventsPairAcrossWarps) {
   auto append32 = [&](uint32_t word) {
     for (int i = 0; i < 4; ++i)
       testData.push_back((word >> (i * 8)) & 0xff);
@@ -238,8 +238,8 @@ TEST_F(CircularLayoutParserTest, AsyncRecordsPairAcrossWarps) {
   ASSERT_EQ(block.traces.size(), 2);
   EXPECT_TRUE(block.traces[0].profileEvents.empty());
   EXPECT_TRUE(block.traces[1].profileEvents.empty());
-  EXPECT_EQ(block.traces[0].asyncRecords.size(), 2);
-  EXPECT_EQ(block.traces[1].asyncRecords.size(), 2);
+  EXPECT_EQ(block.traces[0].asyncEvents.size(), 2);
+  EXPECT_EQ(block.traces[1].asyncEvents.size(), 2);
   ASSERT_EQ(block.asyncLinks.size(), 2);
   EXPECT_EQ(block.asyncLinks[0].first.uid, 0);
   EXPECT_EQ(block.asyncLinks[0].second.uid, 1);
@@ -251,7 +251,7 @@ TEST_F(CircularLayoutParserTest, AsyncRecordsPairAcrossWarps) {
   EXPECT_EQ(block.asyncLinks[1].second.entry->cycle, 250);
 }
 
-TEST_F(CircularLayoutParserTest, AsyncRecordsPreferSameWarp) {
+TEST_F(CircularLayoutParserTest, AsyncEventsPreferSameWarp) {
   auto append32 = [&](uint32_t word) {
     for (int i = 0; i < 4; ++i)
       testData.push_back((word >> (i * 8)) & 0xff);
@@ -376,7 +376,7 @@ TEST_F(CircularLayoutParserTest, TimeShift) {
   EXPECT_EQ(event1.first->cycle, 40);
   EXPECT_EQ(event1.second->cycle, 72);
 }
-TEST_F(CircularLayoutParserTest, AsyncRecordTimeShift) {
+TEST_F(CircularLayoutParserTest, AsyncEventTimeShift) {
   auto result = std::make_shared<CircularLayoutParserResult>();
   auto &block = result->blockTraces.emplace_back();
   auto &startTrace = block.traces.emplace_back();
@@ -384,14 +384,14 @@ TEST_F(CircularLayoutParserTest, AsyncRecordTimeShift) {
   auto start = std::make_shared<CycleEntry>();
   start->cycle = 100;
   start->isAsync = true;
-  startTrace.asyncRecords.push_back(start);
+  startTrace.asyncEvents.push_back(start);
   auto &endTrace = block.traces.emplace_back();
   endTrace.uid = 1;
   auto end = std::make_shared<CycleEntry>();
   end->cycle = 120;
   end->isStart = false;
   end->isAsync = true;
-  endTrace.asyncRecords.push_back(end);
+  endTrace.asyncEvents.push_back(end);
   block.asyncLinks.push_back({{0, start}, {1, end}});
 
   timeShift(/*cost=*/7, result);

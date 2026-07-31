@@ -82,7 +82,7 @@ void populateTraceInfo(std::shared_ptr<CircularLayoutParserResult> result,
         if (event.first->cycle < minCycle)
           minCycle = event.first->cycle;
     for (auto &trace : bt.traces)
-      for (auto &record : trace.asyncRecords)
+      for (auto &record : trace.asyncEvents)
         if (record->cycle < minCycle)
           minCycle = record->cycle;
     blockToMinCycle[bt.blockId] = minCycle;
@@ -274,7 +274,7 @@ void StreamChromeTraceWriter::writeKernel(json &object,
         }
         const std::string &color = kChromeColor[scopeColor[scopeId]];
         if (!metadata->scopeName.count(scopeId))
-          name = "async_scope_" + std::to_string(scopeId);
+          name = "event_" + std::to_string(scopeId);
         else
           name = metadata->scopeName.at(scopeId);
         pid = metadata->kernelName + " Core" + std::to_string(procId) + " CTA" +

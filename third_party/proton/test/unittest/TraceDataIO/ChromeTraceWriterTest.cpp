@@ -246,8 +246,8 @@ TEST_F(ChromeTraceWriterTest, AsyncLinksAcrossWarps) {
     end->isStart = false;
     end->scopeId = 7;
     end->isAsync = true;
-    block.traces[0].asyncRecords.push_back(start);
-    block.traces[1].asyncRecords.push_back(end);
+    block.traces[0].asyncEvents.push_back(start);
+    block.traces[1].asyncEvents.push_back(end);
     block.asyncLinks.push_back({{2, start}, {5, end}});
   };
   addLink(100, 150);
@@ -309,8 +309,8 @@ TEST_F(ChromeTraceWriterTest, AsyncEventsOnSameWarpUseDurationSlices) {
     end->isStart = false;
     end->scopeId = scopeId;
     end->isAsync = true;
-    block.traces[0].asyncRecords.push_back(start);
-    block.traces[0].asyncRecords.push_back(end);
+    block.traces[0].asyncEvents.push_back(start);
+    block.traces[0].asyncEvents.push_back(end);
     block.asyncLinks.push_back({{2, start}, {2, end}});
   };
   addLink(7, 100, 200);

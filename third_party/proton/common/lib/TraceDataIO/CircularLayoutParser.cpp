@@ -89,7 +89,7 @@ void CircularLayoutParser::parseProfileEvents() {
     parseSegment(segmentByteSize, trace);
     position += segmentByteSize;
   }
-  pairAsyncRecords(bt);
+  pairAsyncEvents(bt);
 }
 
 void CircularLayoutParser::parseSegment(
@@ -106,7 +106,7 @@ void CircularLayoutParser::parseSegment(
     try {
       auto entry = decoder.decode<CycleEntry>();
       if (entry->isAsync) {
-        trace.asyncRecords.push_back(entry);
+        trace.asyncEvents.push_back(entry);
         continue;
       }
       if (!activeEvent.count(entry->scopeId)) {
@@ -148,12 +148,12 @@ void CircularLayoutParser::parseSegment(
   }
 }
 
-void CircularLayoutParser::pairAsyncRecords(
+void CircularLayoutParser::pairAsyncEvents(
     CircularLayoutParserResult::BlockTrace &blockTrace) {
   using AsyncEndpoint = CircularLayoutParserResult::AsyncEndpoint;
   std::vector<AsyncEndpoint> endpoints;
   for (auto &trace : blockTrace.traces) {
-    for (auto &entry : trace.asyncRecords)
+    for (auto &entry : trace.asyncEvents)
       endpoints.push_back({trace.uid, entry});
   }
   std::stable_sort(endpoints.begin(), endpoints.end(),
@@ -176,7 +176,7 @@ void CircularLayoutParser::pairAsyncRecords(
                        });
       if (sameWarp != activeEndpoints.end()) {
         reportException(
-            ScopeMisMatchException("Async scope mismatch: start after start"),
+            ScopeMisMatchException("Async event mismatch: start after start"),
             buffer.position());
         continue;
       }
@@ -185,7 +185,7 @@ void CircularLayoutParser::pairAsyncRecords(
     }
     if (activeEndpoints.empty()) {
       reportException(
-          ScopeMisMatchException("Async scope mismatch: end after end"),
+          ScopeMisMatchException("Async event mismatch: end after end"),
           buffer.position());
       active.erase(scopeId);
       continue;
@@ -248,7 +248,7 @@ void shift(CircularLayoutParserResult::Trace &trace, const uint64_t cost,
     if (event.second->cycle >= timeBase)
       event.second->cycle -= cost;
   }
-  for (auto &record : trace.asyncRecords) {
+  for (auto &record : trace.asyncEvents) {
     if (record->cycle >= timeBase)
       record->cycle -= cost;
   }
@@ -307,7 +307,7 @@ void proton::timeShift(const uint64_t cost,
           event.second->cycle = event.first->cycle + cost / 2;
         }
       }
-      for (auto &record : trace.asyncRecords) {
+      for (auto &record : trace.asyncEvents) {
         const uint64_t recordTimeBase = record->cycle;
         shift(trace, cost, recordTimeBase);
       }

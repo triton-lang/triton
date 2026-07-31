@@ -247,8 +247,8 @@ convertToTimelineTrace(std::vector<CycleEvent> &cycleEvents) {
         blockTrace.traces.push_back(std::move(unitTrace));
       }
 
-      auto addAsyncRecord = [&](uint32_t uid,
-                                const std::shared_ptr<CycleEntry> &entry) {
+      auto addAsyncEvent = [&](uint32_t uid,
+                               const std::shared_ptr<CycleEntry> &entry) {
         auto traceIt =
             std::find_if(blockTrace.traces.begin(), blockTrace.traces.end(),
                          [&](const auto &trace) { return trace.uid == uid; });
@@ -257,11 +257,11 @@ convertToTimelineTrace(std::vector<CycleEvent> &cycleEvents) {
           traceIt = std::prev(blockTrace.traces.end());
           traceIt->uid = uid;
         }
-        traceIt->asyncRecords.push_back(entry);
+        traceIt->asyncEvents.push_back(entry);
       };
       for (auto &link : blockTrace.asyncLinks) {
-        addAsyncRecord(link.first.uid, link.first.entry);
-        addAsyncRecord(link.second.uid, link.second.entry);
+        addAsyncEvent(link.first.uid, link.first.entry);
+        addAsyncEvent(link.second.uid, link.second.entry);
       }
       std::sort(
           blockTrace.traces.begin(), blockTrace.traces.end(),
