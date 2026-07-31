@@ -97,9 +97,12 @@ CircularStoreDataPack lowerCircularStore(CircularStoreOp op,
   const int bufferSizeInBytes = segmentType.getNBytes();
   const int segmentWordSize = bufferSizeInBytes / selectedWarpNum / 4;
 
-  auto bufferBaseType = bufferBase.getType();
+  // Compute the actual base offset (with urem as circular buffer).
   Value tagOffset =
       b.add(segmentBase, b.urem(curIdx, b.i32_val(segmentWordSize)));
+
+  // Store the counter into buffer.
+  auto bufferBaseType = bufferBase.getType();
   Value vecPtr = b.gep(bufferBaseType, i32_ty, bufferBase, tagOffset);
 
   // Constructing the tag and clock (8 byte)
