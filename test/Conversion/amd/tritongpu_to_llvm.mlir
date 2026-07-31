@@ -1,32 +1,31 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --convert-builtin-func-to-llvm | FileCheck %s --enable-var-scope --check-prefixes=CHECK,COMMON,TAGGED-BARRIER
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s --enable-var-scope --check-prefixes=GFX950,COMMON,TAGGED-BARRIER
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s --enable-var-scope --check-prefixes=GFX1250,COMMON,TAGGED-BARRIER
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx906 | FileCheck %s --enable-var-scope --check-prefixes=GFX906,COMMON
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --convert-builtin-func-to-llvm | FileCheck %s --enable-var-scope --check-prefixes=CHECK,COMMON
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s --enable-var-scope --check-prefixes=GFX950,COMMON
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s --enable-var-scope --check-prefixes=GFX1250,COMMON
 
-// TAGGED-BARRIER-DAG: [[$LOCAL_MMRA_TAG:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"local">
-// TAGGED-BARRIER-DAG: [[$GLOBAL_MMRA_TAG:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"global">
+// COMMON-DAG: [[$LOCAL_MMRA_TAG:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"local">
+// COMMON-DAG: [[$GLOBAL_MMRA_TAG:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"global">
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // COMMON-LABEL: lower_barrier
   tt.func @lower_barrier() {
-    // TAGGED-BARRIER: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
-    // TAGGED-BARRIER-NEXT: rocdl.s.barrier
-    // TAGGED-BARRIER-NEXT: llvm.fence syncscope("workgroup") acquire {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
+    // COMMON: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
+    // COMMON-NEXT: rocdl.s.barrier
+    // COMMON-NEXT: llvm.fence syncscope("workgroup") acquire {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
     ttg.barrier local
 
-    // TAGGED-BARRIER: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$GLOBAL_MMRA_TAG]]}
-    // TAGGED-BARRIER-NEXT: rocdl.s.barrier
-    // TAGGED-BARRIER-NEXT: llvm.fence syncscope("workgroup") acquire {llvm.mmra = [[$GLOBAL_MMRA_TAG]]}
+    // COMMON: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$GLOBAL_MMRA_TAG]]}
+    // COMMON-NEXT: rocdl.s.barrier
+    // COMMON-NEXT: llvm.fence syncscope("workgroup") acquire {llvm.mmra = [[$GLOBAL_MMRA_TAG]]}
     ttg.barrier global_read
 
-    // TAGGED-BARRIER: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$GLOBAL_MMRA_TAG]]}
-    // TAGGED-BARRIER-NEXT: rocdl.s.barrier
-    // TAGGED-BARRIER-NEXT: llvm.fence syncscope("workgroup") acquire {llvm.mmra = [[$GLOBAL_MMRA_TAG]]}
+    // COMMON: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$GLOBAL_MMRA_TAG]]}
+    // COMMON-NEXT: rocdl.s.barrier
+    // COMMON-NEXT: llvm.fence syncscope("workgroup") acquire {llvm.mmra = [[$GLOBAL_MMRA_TAG]]}
     ttg.barrier global_write
 
-    // TAGGED-BARRIER: llvm.fence syncscope("workgroup") release{{$}}
-    // TAGGED-BARRIER-NEXT: rocdl.s.barrier
-    // TAGGED-BARRIER-NEXT: llvm.fence syncscope("workgroup") acquire{{$}}
+    // COMMON: llvm.fence syncscope("workgroup") release{{$}}
+    // COMMON-NEXT: rocdl.s.barrier
+    // COMMON-NEXT: llvm.fence syncscope("workgroup") acquire{{$}}
     ttg.barrier local|global_read|global_write
 
     tt.return
@@ -44,7 +43,6 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
   // CHECK-DAG: llvm.getelementptr {{.*}}[768]
   // GFX950-DAG: llvm.mlir.constant(768 : i32)
   // GFX1250-DAG: llvm.mlir.constant(768 : i32)
-  // GFX906-DAG: llvm.mlir.constant(768 : i32)
   // COMMON: llvm.mul
   // COMMON: llvm.getelementptr
   tt.func @amd_pipeline_stage_subslice_index(%index: i32) {
@@ -70,9 +68,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: llvm.atomicrmw
     // CHECK: llvm.store
     // CHECK: llvm.br
-    // TAGGED-BARRIER: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
-    // TAGGED-BARRIER-NEXT: rocdl.s.barrier
-    // TAGGED-BARRIER-NEXT: llvm.fence syncscope("workgroup") acquire {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
+    // COMMON: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
+    // COMMON-NEXT: rocdl.s.barrier
+    // COMMON-NEXT: llvm.fence syncscope("workgroup") acquire {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
     // CHECK: llvm.load
     // CHECK: llvm.store
     %0 = tt.atomic_rmw fadd, relaxed, gpu, %arg0, %arg2, %arg1 : (!tt.ptr<f32>, f32, i1) -> f32
@@ -750,9 +748,9 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
     // CHECK-NOT: llvm.store
     %0 = ttg.local_alloc %arg0 : (tensor<32x32xf16, #blocked>) -> !ttg.memdesc<32x32xf16, #shared, #smem, mutable>
     %1 = ttg.memdesc_subslice %0 [16, 0]  : !ttg.memdesc<32x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x32xf16, #shared, #smem, mutable, 32x32>
-    // TAGGED-BARRIER: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
-    // TAGGED-BARRIER-NEXT: rocdl.s.barrier
-    // TAGGED-BARRIER-NEXT: llvm.fence syncscope("workgroup") acquire {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
+    // COMMON: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
+    // COMMON-NEXT: rocdl.s.barrier
+    // COMMON-NEXT: llvm.fence syncscope("workgroup") acquire {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
     // CHECK: %[[AFF_I8:.+]] = llvm.mul %{{.+}}, %[[SUBSLICE_CST2]] : i32
     // CHECK-NEXT: %[[AFF_SHR:.+]] = llvm.lshr %[[AFF_I8]], %[[SUBSLICE_CST6]] : i32
     // CHECK-NEXT: %[[AFF_SHL:.+]] = llvm.shl %[[AFF_SHR]], %[[SUBSLICE_CST3]] : i32
@@ -971,33 +969,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
   tt.func private @callee_zero_scratch() attributes {noinline = true} {
-    tt.return
-  }
-}
-
-// -----
-
-/// gfx906 has the same dot intrinsics as gfx908+ (HasDot1Insts) but not
-/// the compact VOP2 encoding (HasDot2Insts); LLVM handles this transparently.
-
-// GFX906-LABEL: v_dot_fp16_gfx906
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [2, 2], order = [1, 0]}>
-module attributes {"ttg.target" = "hip:gfx906", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  tt.func @v_dot_fp16_gfx906(%arg0: tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %arg1: tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>, %arg2: tensor<16x16xf32, #blocked>) {
-    // GFX906-COUNT-8: llvm.call_intrinsic "llvm.amdgcn.fdot2"
-    %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x16xf32, #blocked>
-    tt.return
-  }
-}
-
-// -----
-
-// GFX906-LABEL: v_dot_i8_gfx906
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [2, 2], order = [1, 0]}>
-module attributes {"ttg.target" = "hip:gfx906", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  tt.func @v_dot_i8_gfx906(%arg0: tensor<16x16xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %arg1: tensor<16x16xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>, %arg2: tensor<16x16xi32, #blocked>) {
-    // GFX906-COUNT-4: llvm.call_intrinsic "llvm.amdgcn.sdot4"
-    %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x16xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<16x16xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x16xi32, #blocked>
     tt.return
   }
 }
