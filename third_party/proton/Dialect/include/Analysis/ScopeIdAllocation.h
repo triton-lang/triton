@@ -26,7 +26,7 @@ public:
   explicit ScopeIdAllocation(FunctionOpInterface op) : funcOp(op) { run(); }
 
   ScopeId getOpScopeId(Operation *op) const {
-    assert((isa<RecordOp, AllocateAsyncTokenOp>(op)) &&
+    assert((isa<RecordOp, AllocateEventOp>(op)) &&
            "operation does not have a static scope id");
     return opToIdMap.lookup(op);
   }

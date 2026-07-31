@@ -108,20 +108,20 @@ with pl.scope("compute"):
     ...
 ```
 
-Asynchronous operations such as asynchronous memory transfers and matrix multiplications can be measured with an opaque token.
-Allocation does not record a timestamp but instead only associates it with a scope name.
-The same token can be passed across loops, functions, and warp specialized regions to identify the start and the end of an asynchronous operation.
+Asynchronous operations such as asynchronous memory transfers and matrix multiplications can be measured with an opaque event.
+Allocation does not record a timestamp but instead only associates the event with a name.
+The same event can be passed across loops, functions, and warp specialized regions to identify the start and the end of an asynchronous operation.
 
 ```python
-token = pl.allocate_async_token("async_copy")
-pl.enter_async_scope(token)
+event = pl.allocate_event("async_copy")
+pl.start_event(event)
 issue_async_copy(...)
 ...
-pl.exit_async_scope(token)
+pl.end_event(event)
 ```
 
 Advanced users can insert `proton.record start`, `proton.record end`,
-`proton.allocate_async_token` and `proton.async_record` directly in TTIR or
+`proton.allocate_event` and `proton.event` directly in TTIR or
 TTGIR.
 
 ## Understanding Timeline Traces

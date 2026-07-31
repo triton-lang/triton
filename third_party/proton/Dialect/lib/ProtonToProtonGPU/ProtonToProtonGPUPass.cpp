@@ -60,8 +60,7 @@ template <typename T, typename OP> bool hasOperator(T *o) {
 template <typename T> bool hasProtonEvent(T *o) {
   bool exists = false;
   o->walk([&](Operation *op) {
-    if (isa<proton::RecordOp, proton::AsyncRecordOp,
-            proton::AllocateAsyncTokenOp>(op)) {
+    if (isa<proton::RecordOp, proton::EventOp, proton::AllocateEventOp>(op)) {
       exists = true;
       return WalkResult::interrupt();
     }
@@ -88,12 +87,12 @@ void lowerEvent(OpBuilder &builder, Operation *op, Value targetSegment,
                 IntegerType clkType, MetricType metricType,
                 ModuleScopeIdAllocation &scopeInfo) {
   builder.setInsertionPoint(op);
-  if (auto asyncToken = dyn_cast<proton::AllocateAsyncTokenOp>(op)) {
-    int scopeId = scopeInfo.getOpScopeId(asyncToken);
-    Value token =
-        arith::ConstantIntOp::create(builder, asyncToken.getLoc(), scopeId, 32);
-    asyncToken.getToken().replaceAllUsesWith(token);
-    asyncToken.erase();
+  if (auto eventAlloc = dyn_cast<proton::AllocateEventOp>(op)) {
+    int scopeId = scopeInfo.getOpScopeId(eventAlloc);
+    Value event =
+        arith::ConstantIntOp::create(builder, eventAlloc.getLoc(), scopeId, 32);
+    eventAlloc.getEvent().replaceAllUsesWith(event);
+    eventAlloc.erase();
     return;
   }
 
@@ -108,11 +107,11 @@ void lowerEvent(OpBuilder &builder, Operation *op, Value targetSegment,
     record.erase();
     return;
   }
-  if (auto asyncRecord = dyn_cast<proton::AsyncRecordOp>(op)) {
-    gpu::CircularStoreOp::create(builder, asyncRecord.getLoc(), targetSegment,
-                                 counter, asyncRecord.getToken(),
-                                 asyncRecord.getIsStart(), IntegerAttr());
-    asyncRecord.erase();
+  if (auto event = dyn_cast<proton::EventOp>(op)) {
+    gpu::CircularStoreOp::create(builder, event.getLoc(), targetSegment,
+                                 counter, event.getEvent(), event.getIsStart(),
+                                 IntegerAttr());
+    event.erase();
   }
 }
 
@@ -144,8 +143,8 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
 
         // Replace all Proton events.
         partition.walk([&](Operation *op) {
-          if (!isa<proton::RecordOp, proton::AsyncRecordOp,
-                   proton::AllocateAsyncTokenOp>(op))
+          if (!isa<proton::RecordOp, proton::EventOp, proton::AllocateEventOp>(
+                  op))
             return;
           lowerEvent(builder, op, newSegment, clkType, metricType, scopeInfo);
         });
@@ -168,8 +167,7 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
   // don't need to restore warp-level context and we save the context in the end
   // of kernel (right before FinalizeOp).
   func->walk([&](Operation *op) {
-    if (!isa<proton::RecordOp, proton::AsyncRecordOp,
-             proton::AllocateAsyncTokenOp>(op))
+    if (!isa<proton::RecordOp, proton::EventOp, proton::AllocateEventOp>(op))
       return;
     lowerEvent(builder, op, segment, clkType, metricType, scopeInfo);
   });

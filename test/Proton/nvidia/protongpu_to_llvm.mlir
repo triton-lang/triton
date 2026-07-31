@@ -53,8 +53,8 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 1 : i32} {
-  // CHECK-LABEL: async_scope_lowering
-  llvm.func @async_scope_lowering() {
+  // CHECK-LABEL: event_lowering
+  llvm.func @event_lowering() {
     // CHECK-DAG: llvm.mlir.constant(2 : i32)
     // CHECK-COUNT-2: st.shared::cta.v2.b32
     %buffer = ttg.local_alloc : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>

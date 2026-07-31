@@ -19,46 +19,46 @@ These transformations can invalidate naïve instrumentation and lead to misleadi
 _SEMANTICS = {_ALL_SEMANTICS["gluon"]}
 
 
-class _AsyncScopeTokenType(tl.base_type):
-    """Frontend type for an async scope token.
+class _EventType(tl.base_type):
+    """Frontend type for an asynchronous event.
 
     Its IR representation is i32, but retaining a distinct frontend type keeps
-    tokens opaque when they are passed across loops or regions instead of
+    events opaque when they are passed across loops or regions instead of
     reconstructing them as generic tensors.
     """
 
     def _unflatten_ir(self, handles, cursor):
-        return AsyncScopeToken(handles[cursor]), cursor + 1
+        return Event(handles[cursor]), cursor + 1
 
     def _flatten_ir_types(self, builder, out):
         tl.int32._flatten_ir_types(builder, out)
 
     def __eq__(self, other):
-        return isinstance(other, _AsyncScopeTokenType)
+        return isinstance(other, _EventType)
 
     def __hash__(self):
-        return hash(_AsyncScopeTokenType)
+        return hash(_EventType)
 
     def mangle(self):
-        return "PAsyncScopeToken"
+        return "PEvent"
 
     def __str__(self):
-        return "proton.async_scope_token"
+        return "proton.event"
 
 
-_ASYNC_SCOPE_TOKEN_TYPE = _AsyncScopeTokenType()
+_EVENT_TYPE = _EventType()
 
 
-class AsyncScopeToken(tl.base_value):
-    """Opaque token returned by :func:`allocate_async_token`.
+class Event(tl.base_value):
+    """Opaque event returned by :func:`allocate_event`.
 
-    The token identifies a static asynchronous transaction and may only be
-    consumed by :func:`enter_async_scope` and :func:`exit_async_scope`.
+    The event identifies a static asynchronous transaction and may only be
+    consumed by :func:`start_event` and :func:`end_event`.
     """
 
     def __init__(self, handle):
         self.handle = handle
-        self.type = _ASYNC_SCOPE_TOKEN_TYPE
+        self.type = _EVENT_TYPE
 
     def _flatten_ir(self, handles):
         handles.append(self.handle)
@@ -101,33 +101,33 @@ def exit_scope(name: tl.constexpr, _semantic=None):
 
 
 @builtin
-def allocate_async_token(name: tl.constexpr, _semantic=None):
+def allocate_event(name: tl.constexpr, _semantic=None):
     if not flags.instrumentation_on:
         return 0
     _check_supported_semantic(_semantic)
     name = tl._unwrap_if_constexpr(name)
-    handle = triton_proton.create_proton_allocate_async_token(_semantic.builder, name)
-    return AsyncScopeToken(handle)
+    handle = triton_proton.create_proton_allocate_event(_semantic.builder, name)
+    return Event(handle)
 
 
 @builtin
-def enter_async_scope(token, _semantic=None):
+def start_event(event, _semantic=None):
     if not flags.instrumentation_on:
         return
     _check_supported_semantic(_semantic)
-    if not isinstance(token, AsyncScopeToken):
-        raise TypeError("expected a token returned by allocate_async_token")
-    triton_proton.create_proton_async_record(_semantic.builder, True, token.handle)
+    if not isinstance(event, Event):
+        raise TypeError("expected an event returned by allocate_event")
+    triton_proton.create_proton_start_event(_semantic.builder, event.handle)
 
 
 @builtin
-def exit_async_scope(token, _semantic=None):
+def end_event(event, _semantic=None):
     if not flags.instrumentation_on:
         return
     _check_supported_semantic(_semantic)
-    if not isinstance(token, AsyncScopeToken):
-        raise TypeError("expected a token returned by allocate_async_token")
-    triton_proton.create_proton_async_record(_semantic.builder, False, token.handle)
+    if not isinstance(event, Event):
+        raise TypeError("expected an event returned by allocate_event")
+    triton_proton.create_proton_end_event(_semantic.builder, event.handle)
 
 
 class scope:

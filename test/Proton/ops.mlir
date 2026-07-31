@@ -15,14 +15,14 @@ module {
 // -----
 
 module {
-  // CHECK-LABEL: async_scope
-  tt.func @async_scope() {
-    // CHECK: %[[TOKEN:.*]] = proton.allocate_async_token "async" : i32
-    // CHECK: proton.async_record start %[[TOKEN]] : i32
-    // CHECK: proton.async_record end %[[TOKEN]] : i32
-    %token = proton.allocate_async_token "async" : i32
-    proton.async_record start %token : i32
-    proton.async_record end %token : i32
+  // CHECK-LABEL: event
+  tt.func @event() {
+    // CHECK: %[[EVENT:.*]] = proton.allocate_event "async" : i32
+    // CHECK: proton.event start %[[EVENT]] : i32
+    // CHECK: proton.event end %[[EVENT]] : i32
+    %event = proton.allocate_event "async" : i32
+    proton.event start %event : i32
+    proton.event end %event : i32
     tt.return
   }
 }

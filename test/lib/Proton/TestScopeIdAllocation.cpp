@@ -37,7 +37,7 @@ struct TestScopeIdAllocationPass
         parentScopeIdMap.insert({childId, parentId});
       }
       funcOp.walk([&](Operation *op) {
-        if (!isa<RecordOp, AllocateAsyncTokenOp>(op))
+        if (!isa<RecordOp, AllocateEventOp>(op))
           return;
         auto scopeId = moduleScopeIdAllocation.getOpScopeId(op);
         mlir::emitRemark(op->getLoc()) << "scope id = " << scopeId;

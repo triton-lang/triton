@@ -118,8 +118,8 @@ void ScopeIdAllocation::liveness() {
   ScopeId scopeId = 0;
 
   funcOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
-    if (auto asyncToken = dyn_cast<AllocateAsyncTokenOp>(op)) {
-      idToNameMap[scopeId] = asyncToken.getName();
+    if (auto eventAlloc = dyn_cast<AllocateEventOp>(op)) {
+      idToNameMap[scopeId] = eventAlloc.getName();
       opToIdMap[op] = scopeId;
       ++scopeId;
       return;
@@ -375,7 +375,7 @@ ModuleScopeIdAllocation::ModuleScopeIdAllocation(ModuleOp moduleOp)
   }
 
   moduleOp.walk([&](Operation *op) {
-    if (!isa<RecordOp, AllocateAsyncTokenOp>(op))
+    if (!isa<RecordOp, AllocateEventOp>(op))
       return;
     if (getOpScopeId(op) > 255)
       op->emitError("scope id exceeds the 8-bit encoding");

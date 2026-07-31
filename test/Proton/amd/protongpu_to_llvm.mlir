@@ -19,8 +19,8 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 1 : i32} {
-  // CHECK-LABEL: convert_async_scope
-  llvm.func @convert_async_scope(%token: i32) {
+  // CHECK-LABEL: convert_event
+  llvm.func @convert_event(%token: i32) {
     %buffer = ttg.local_alloc : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
     %segment = proton_gpu.segment_alloc %buffer : !ttg.memdesc<256xi32, #shared, #smem, mutable> -> !proton_gpu.segment<1024, #smem, warp>
     %clock = arith.constant 123 : i32

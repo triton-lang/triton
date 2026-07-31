@@ -199,15 +199,15 @@ def test_record(method, fresh_knobs, tmp_path: pathlib.Path):
     assert "line: " in loc_line and "line: 0" not in loc_line
 
 
-def test_async_scope(tmp_path: pathlib.Path):
+def test_event(tmp_path: pathlib.Path):
 
     @triton.jit
     def kernel(x_ptr):
         value = tl.load(x_ptr)
-        token = pl.allocate_async_token("async")
-        pl.enter_async_scope(token)
+        event = pl.allocate_event("async")
+        pl.start_event(event)
         value += 1
-        pl.exit_async_scope(token)
+        pl.end_event(event)
         tl.store(x_ptr, value)
 
     def find_node(node, name):
@@ -219,7 +219,7 @@ def test_async_scope(tmp_path: pathlib.Path):
         return None
 
     x = torch.tensor([5], device="cuda", dtype=torch.int32)
-    tree_path = tmp_path / "async_scope.hatchet"
+    tree_path = tmp_path / "event.hatchet"
     proton.start(str(tree_path.with_suffix("")), backend="instrumentation")
     kernel[(1, )](x, num_warps=1)
     proton.finalize()
@@ -229,7 +229,7 @@ def test_async_scope(tmp_path: pathlib.Path):
     async_node = find_node(tree, "async")
     assert async_node["metrics"]["cycles"] > 0
 
-    trace_path = tmp_path / "async_scope.chrome_trace"
+    trace_path = tmp_path / "event.chrome_trace"
     proton.start(
         str(trace_path.with_suffix("")),
         backend="instrumentation",
@@ -240,12 +240,12 @@ def test_async_scope(tmp_path: pathlib.Path):
 
     with trace_path.open("rb") as f:
         events = json.load(f)["traceEvents"]
-    async_event = next(event for event in events if event["name"] == "async")
-    assert async_event["ph"] == "X" and async_event["dur"] > 0
+    event = next(event for event in events if event["name"] == "async")
+    assert event["ph"] == "X" and event["dur"] > 0
 
 
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="requires Ampere or newer")
-def test_gluon_async_scope(tmp_path: pathlib.Path):
+def test_gluon_event(tmp_path: pathlib.Path):
 
     @gluon.jit
     def kernel(output_ptr, input_ptr, BLOCK: gl.constexpr, NUM_TILES: gl.constexpr):
@@ -257,29 +257,29 @@ def test_gluon_async_scope(tmp_path: pathlib.Path):
         offsets = rows * BLOCK + cols
         tile_size: gl.constexpr = BLOCK * BLOCK
 
-        token = pl.allocate_async_token("async_copy")
-        pl.enter_async_scope(token)
+        event = pl.allocate_event("async_copy")
+        pl.start_event(event)
         async_copy.async_load(shared, input_ptr + offsets)
         async_copy.commit_group()
 
         for tile in tl.range(1, NUM_TILES):
             async_copy.wait_group(0)
-            pl.exit_async_scope(token)
+            pl.end_event(event)
             value = shared.load(blocked_layout)
             gl.store(output_ptr + (tile - 1) * tile_size + offsets, value)
 
-            pl.enter_async_scope(token)
+            pl.start_event(event)
             async_copy.async_load(shared, input_ptr + tile * tile_size + offsets)
             async_copy.commit_group()
 
         async_copy.wait_group(0)
-        pl.exit_async_scope(token)
+        pl.end_event(event)
         value = shared.load(blocked_layout)
         gl.store(output_ptr + (NUM_TILES - 1) * tile_size + offsets, value)
 
     input = torch.randn((3, 32, 32), device="cuda", dtype=torch.float32)
     output = torch.empty_like(input)
-    trace_path = tmp_path / "gluon_async_scope.chrome_trace"
+    trace_path = tmp_path / "gluon_event.chrome_trace"
     proton.start(str(trace_path.with_suffix("")), backend="instrumentation", data="trace")
     kernel[(1, )](output, input, BLOCK=32, NUM_TILES=3, num_warps=4)
     proton.finalize()
@@ -287,9 +287,9 @@ def test_gluon_async_scope(tmp_path: pathlib.Path):
 
     with trace_path.open("rb") as f:
         events = json.load(f)["traceEvents"]
-    async_events = [event for event in events if event["name"] == "async_copy"]
+    events = [event for event in events if event["name"] == "async_copy"]
     events_per_warp = {}
-    for event in async_events:
+    for event in events:
         assert event["ph"] == "X" and event["dur"] > 0
         events_per_warp[event["tid"]] = events_per_warp.get(event["tid"], 0) + 1
     assert events_per_warp and set(events_per_warp.values()) == {3}

@@ -13,14 +13,14 @@ module {
 // -----
 
 module attributes {"ttg.num-warps" = 1 : i32} {
-  // CHECK-LABEL: async_scope
-  tt.func @async_scope() {
-    // CHECK-DAG: %[[TOKEN:.*]] = arith.constant 0 : i32
-    // CHECK: proton_gpu.circular_store start %{{.*}}, %{{.*}}, %[[TOKEN]]
-    // CHECK: proton_gpu.circular_store end %{{.*}}, %{{.*}}, %[[TOKEN]]
-    %token = proton.allocate_async_token "async" : i32
-    proton.async_record start %token : i32
-    proton.async_record end %token : i32
+  // CHECK-LABEL: event
+  tt.func @event() {
+    // CHECK-DAG: %[[EVENT:.*]] = arith.constant 0 : i32
+    // CHECK: proton_gpu.circular_store start %{{.*}}, %{{.*}}, %[[EVENT]]
+    // CHECK: proton_gpu.circular_store end %{{.*}}, %{{.*}}, %[[EVENT]]
+    %event = proton.allocate_event "async" : i32
+    proton.event start %event : i32
+    proton.event end %event : i32
     tt.return
   }
 }
