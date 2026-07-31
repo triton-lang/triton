@@ -61,7 +61,7 @@ class _FakeCudaTensorMode(TorchFunctionMode):
 
 @contextmanager
 def _coordinate_compiles():
-    """Ensure concurrent pytest workers compile each exact specialization only once."""
+    """Ensure concurrent warmup workers compile each exact specialization only once."""
     import fcntl
     from triton.runtime.jit import JITFunction
 
@@ -72,6 +72,8 @@ def _coordinate_compiles():
     previous_do_compile = JITFunction._do_compile
 
     def do_compile(kernel, key, signature, device, constexprs, options, attrs, warmup):
+        if not warmup:
+            return previous_do_compile(kernel, key, signature, device, constexprs, options, attrs, warmup)
         digest = hashlib.sha256(f"{kernel.cache_key}\0{key}".encode()).hexdigest()
         with open(os.path.join(lock_dir, f"{digest}.lock"), "a+b") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
@@ -409,15 +411,6 @@ def pytest_collection_modifyitems(config, items):
             if module_path.endswith(suffix) and item.originalname in originalnames:
                 item.add_marker(pytest.mark.skip(reason="FakeTensor does not reproduce this kernel specialization"))
                 break
-
-
-@pytest.fixture(scope="session", autouse=True)
-def coordinate_runtime_compiles(request):
-    if request.config.getoption("--warmup-only") or not os.environ.get("TRITON_CI_COMPILE_TRACE_DIR"):
-        yield
-        return
-    with _coordinate_compiles():
-        yield
 
 
 @pytest.fixture(scope="session", autouse=True)
