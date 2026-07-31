@@ -289,6 +289,21 @@ void ScopeIdAllocation::dominance() {
       }
     }
   }
+
+  // An asynchronous event inherits the innermost synchronous scope active at
+  // its allocation site. Its start and end endpoints may execute elsewhere.
+  funcOp->walk<WalkOrder::PreOrder>([&](AllocateEventOp eventOp) {
+    for (int j = sortedStartRecordOps.size() - 1; j >= 0; --j) {
+      auto *parentStartOp = sortedStartRecordOps[j];
+      auto parentScopeId = opToIdMap.lookup(parentStartOp);
+      auto *parentEndOp = endRecordMap.lookup(parentScopeId);
+      if (parentEndOp && domInfo.dominates(parentStartOp, eventOp) &&
+          postDomInfo.postDominates(parentEndOp, eventOp)) {
+        scopeParentIds.push_back({opToIdMap.lookup(eventOp), parentScopeId});
+        break;
+      }
+    }
+  });
 }
 
 void ScopeIdAllocation::visitTerminator(Operation *op,

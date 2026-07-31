@@ -420,13 +420,24 @@ module {
     // expected-remark @below {{scope parent id = -1}}
     proton.record start "outer"
     // expected-remark @below {{scope id = 1}}
-    // expected-remark @below {{scope parent id = -1}}
+    // expected-remark @below {{scope parent id = 0}}
     %event = proton.allocate_event "async" : i32
     proton.event start %event : i32
-    proton.event end %event : i32
+    // expected-remark @below {{scope id = 2}}
+    // expected-remark @below {{scope parent id = 0}}
+    proton.record start "inner"
+    // expected-remark @below {{scope id = 3}}
+    // expected-remark @below {{scope parent id = 2}}
+    %nested_event = proton.allocate_event "nested_async" : i32
+    proton.event start %nested_event : i32
+    proton.event end %nested_event : i32
+    // expected-remark @below {{scope id = 2}}
+    // expected-remark @below {{scope parent id = 0}}
+    proton.record end "inner"
     // expected-remark @below {{scope id = 0}}
     // expected-remark @below {{scope parent id = -1}}
     proton.record end "outer"
+    proton.event end %event : i32
     tt.return
   }
 }
