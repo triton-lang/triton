@@ -258,16 +258,6 @@ bool supportMMA(triton::DotOpInterface op, int version);
 
 bool supportMMA(Value value, int version);
 
-// Conversion from `srcLayout` to `dstLayout` involving the minimum amount of
-// data transfer. The output will be such that layout.getInDimNames() ==
-// layout.getOutDimNames() and the conversion will not include kBlock (resp.
-// kWarp or kLane) if it can be avoided.
-triton::LinearLayout minimalCvtLayout(const triton::LinearLayout &srcLayout,
-                                      const triton::LinearLayout &dstLayout);
-
-// Type-based convenience overload for layouts that can be converted to LL.
-triton::LinearLayout minimalCvtLayout(Type srcTy, Type dstTy);
-
 // Conversion from `srcTy` to `dstTy` only involves reordering of registers.
 // There is no need for data exchange across threads, warps, or blocks.
 bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy);

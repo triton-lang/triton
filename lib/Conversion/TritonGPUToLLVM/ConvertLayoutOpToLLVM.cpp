@@ -61,9 +61,6 @@ struct ConvertLayoutOpConversion
     assert(to_vector(conversion.getInDimNames()) ==
            to_vector(conversion.getOutDimNames()));
     if (llvm::is_contained(dims, kBlock) || llvm::is_contained(dims, kWarp)) {
-      if (op.getForceWarpShuffle())
-        return op.emitError(
-            "force_warp_shuffle requires a conversion within one warp");
       // Transfer between values in the same CTA, or across CTAs. We move values
       // through (distributed) shared memory.
       transferSwizzlingLocalMem(op, adaptor.getSrc(), srcLayout, dstLayout,

@@ -1967,3 +1967,44 @@ LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
 }
 
 } // namespace mlir::triton::gpu
+
+namespace mlir {
+
+// We get the smallest submap of srcTy^{-1} * dstTy that is not the identity
+// under the common dimensions. If a transformation is the identity on block,
+// it does not need distributed shared memory. If it is also the identity on
+// warp, it can transfer via warp shuffles, and if it is the identity on lane,
+// it only needs to reorder registers.
+triton::LinearLayout
+minimalCvtLayout(const triton::LinearLayout &srcLayout,
+                 const triton::LinearLayout &dstLayout) {
+  auto srcDims = llvm::to_vector(srcLayout.getInDimNames());
+  auto dstDims = llvm::to_vector(dstLayout.getInDimNames());
+  SmallVector<StringAttr> commonDims;
+  for (int i = 0; i < std::min(srcDims.size(), dstDims.size()); ++i) {
+    auto srcDim = srcDims[srcDims.size() - i - 1];
+    auto dstDim = dstDims[dstDims.size() - i - 1];
+    if (srcDim != dstDim)
+      break;
+    commonDims.push_back(srcDim);
+  }
+
+  auto conversion = dstLayout.invertAndCompose(srcLayout);
+  // Try to quotient by the slower-moving subspace first.
+  for (auto dim : commonDims) {
+    auto quotient = conversion.quotient(dim);
+    if (!quotient)
+      break;
+    conversion = *quotient;
+  }
+  return conversion;
+}
+
+triton::LinearLayout minimalCvtLayout(Type srcTy, Type dstTy) {
+  auto src = cast<triton::gpu::TensorOrMemDesc>(srcTy);
+  auto dst = cast<triton::gpu::TensorOrMemDesc>(dstTy);
+  return minimalCvtLayout(triton::gpu::toLinearLayout(src),
+                          triton::gpu::toLinearLayout(dst));
+}
+
+} // namespace mlir
