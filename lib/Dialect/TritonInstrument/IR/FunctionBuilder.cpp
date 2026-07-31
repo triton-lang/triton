@@ -1063,6 +1063,83 @@ void FunctionBuilder::createVerifyBarrierInitializedCall(
       });
 }
 
+void FunctionBuilder::createVerifyBarrierMemoryAvailableCall(
+    ImplicitLocOpBuilder &b, uint32_t offset, uint32_t length, Value pred,
+    Operation *insertPoint, Value recipientCTAs) {
+  if (!pred)
+    pred = arith::ConstantIntOp::create(b, 1, 1);
+
+  Value barriersVal = auxData.barriers.at(insertPoint).value;
+  auto barriersType =
+      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
+  Value barrierStatesVal = auxData.barrierStates.at(insertPoint).value;
+  auto barrierStatesType =
+      cast<RankedTensorType>(auxData.barrierStates.at(insertPoint).type);
+  Value offsetVal = arith::ConstantIntOp::create(b, offset, 32);
+  Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
+  SmallVector<Value> args = {offsetVal,   lengthVal,        pred,
+                             barriersVal, barrierStatesVal, recipientCTAs};
+  AssertInfo assertInfo{"Shared memory reused before barrier invalidation",
+                        b.getI1Type()};
+
+  createCallToCachedFunction(
+      b, "verify_barrier_memory_available", args, assertInfo,
+      {barriersType, barrierStatesType},
+      [barriersType, barrierStatesType](ImplicitLocOpBuilder &fb,
+                                        Block *entryBlock) {
+        Value accessOffset = entryBlock->getArgument(0);
+        Value accessLength = entryBlock->getArgument(1);
+        Value pred = entryBlock->getArgument(2);
+        Value barriers = entryBlock->getArgument(3);
+        Value statesPtr = entryBlock->getArgument(4);
+        Value recipientCTAs = entryBlock->getArgument(5);
+
+        Value offsetMask = tti::createConstIntTensor(fb, fb.getLoc(),
+                                                     UINT32_MAX, barriersType);
+        Value shift =
+            tti::createConstIntTensor(fb, fb.getLoc(), 32, barriersType);
+        Value barrierOffsets = arith::AndIOp::create(fb, barriers, offsetMask);
+        Value barrierLengths = arith::ShRUIOp::create(fb, barriers, shift);
+        Value barrierEnds =
+            arith::AddIOp::create(fb, barrierOffsets, barrierLengths);
+
+        Value accessOffsetI64 =
+            arith::ExtUIOp::create(fb, fb.getI64Type(), accessOffset);
+        Value accessLengthI64 =
+            arith::ExtUIOp::create(fb, fb.getI64Type(), accessLength);
+        Value accessEndI64 =
+            arith::AddIOp::create(fb, accessOffsetI64, accessLengthI64);
+        Value accessOffsets =
+            triton::SplatOp::create(fb, barriersType, accessOffsetI64);
+        Value accessEnds =
+            triton::SplatOp::create(fb, barriersType, accessEndI64);
+        Value startsBeforeBarrierEnds = arith::CmpIOp::create(
+            fb, arith::CmpIPredicate::ult, accessOffsets, barrierEnds);
+        Value barriersStartBeforeEnd = arith::CmpIOp::create(
+            fb, arith::CmpIPredicate::ult, barrierOffsets, accessEnds);
+        Value overlaps = arith::AndIOp::create(fb, startsBeforeBarrierEnds,
+                                               barriersStartBeforeEnd);
+        overlaps = convertAndBroadcast(fb, overlaps, {1}, barrierStatesType);
+
+        Value states = tti::createLoadScratchMemory(fb, fb.getLoc(), statesPtr,
+                                                    barrierStatesType);
+        Value zero =
+            tti::createConstIntTensor(fb, fb.getLoc(), 0, barrierStatesType);
+        Value inactive =
+            arith::CmpIOp::create(fb, arith::CmpIPredicate::eq, states, zero);
+        auto condType = cast<RankedTensorType>(inactive.getType());
+        Value vTrue = tti::createConstIntTensor(fb, fb.getLoc(), 1, condType);
+        Value available =
+            arith::SelectOp::create(fb, overlaps, inactive, vTrue);
+        Value ctaMask =
+            createCTASetMask(fb, condType, /*dim=*/0, recipientCTAs);
+        available = arith::SelectOp::create(fb, ctaMask, available, vTrue);
+        Value predTensor = triton::SplatOp::create(fb, condType, pred);
+        available = arith::SelectOp::create(fb, predTensor, available, vTrue);
+        triton::ReturnOp::create(fb, reduceAll<arith::AndIOp>(fb, available));
+      });
+}
+
 void FunctionBuilder::createInitBarrierStateCall(ImplicitLocOpBuilder &b,
                                                  Value mbar, int count,
                                                  Value pred,

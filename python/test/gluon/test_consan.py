@@ -3118,6 +3118,50 @@ def test_barrier_underflow(device, run_wrapper, monkeypatch, num_ctas):
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.parametrize("NUM_CTAS", [1, 2])
+@pytest.mark.parametrize("WITH_INVALIDATE", [False, True])
+def test_barrier_scratch_reuse_requires_invalidate(WITH_INVALIDATE, NUM_CTAS, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_barrier_scratch_reuse_requires_invalidate,
+                                (WITH_INVALIDATE, NUM_CTAS, device, False, monkeypatch))
+        if WITH_INVALIDATE:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        else:
+            assert_expected_cuda_failure(result.exc)
+            assert "Shared memory reused before barrier invalidation" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(x, out, WITH_INVALIDATE: ttgl.constexpr):
+        cga_layout: ttgl.constexpr = default_cga_layout(ttgl.num_ctas(), 2)
+        src_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[4, 8],
+                                                        warps_per_cta=[4, 1], order=[1, 0], cga_layout=cga_layout)
+        dst_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[8, 4],
+                                                        warps_per_cta=[1, 4], order=[0, 1], cga_layout=cga_layout)
+        bar = mbarrier.allocate_mbarrier(batch=1)
+        mbarrier.init(bar.index(0), count=1)
+        if WITH_INVALIDATE:
+            mbarrier.invalidate(bar.index(0))
+
+        src_rows = ttgl.arange(0, 32, layout=ttgl.SliceLayout(1, src_layout))
+        src_cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, src_layout))
+        values = ttgl.load(x + src_rows[:, None] * 32 + src_cols[None, :])
+        converted = ttgl.convert_layout(values, dst_layout)
+        dst_rows = ttgl.arange(0, 32, layout=ttgl.SliceLayout(1, dst_layout))
+        dst_cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, dst_layout))
+        ttgl.store(out + dst_rows[:, None] * 32 + dst_cols[None, :], converted)
+
+    source = torch.randn((32, 32), device=device, dtype=torch.float32)
+    output = torch.empty_like(source)
+    kernel[(1, )](source, output, WITH_INVALIDATE=WITH_INVALIDATE, num_warps=4, num_ctas=NUM_CTAS)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("WITH_INVALIDATE", [False, True])
 def test_barrier_reinit_requires_invalidate(WITH_INVALIDATE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
