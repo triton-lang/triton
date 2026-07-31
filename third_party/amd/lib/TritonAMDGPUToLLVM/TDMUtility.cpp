@@ -1637,7 +1637,7 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
     // Predicate and emit prefetch
     Block *currentBlock = rewriter.getInsertionBlock();
     Block *afterPrefetch =
-        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+        currentBlock->splitBlock(rewriter.getInsertionPoint());
     Block *prefetchBlock = rewriter.createBlock(afterPrefetch);
     rewriter.setInsertionPointToEnd(currentBlock);
     LLVM::CondBrOp::create(rewriter, loc, combinedPred, prefetchBlock,
