@@ -305,6 +305,60 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#graph_source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#graph_target = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [0, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Materialization graphs are function-local even when one module contains
+  // multiple functions. A conversion from one sibling region cannot satisfy
+  // another sibling because neither region dominates the other.
+  //
+  // BASELINE-LABEL: @materialization_graph_sibling_regions
+  // OPTIMIZED-LABEL: @materialization_graph_sibling_regions
+  // OPTIMIZED: scf.if
+  // OPTIMIZED: ttg.convert_layout
+  // OPTIMIZED: scf.yield
+  // OPTIMIZED: else
+  // OPTIMIZED: ttg.convert_layout
+  // OPTIMIZED: scf.yield
+  // OPTIMIZED: tt.return
+  tt.func public @materialization_graph_sibling_regions(
+      %source: tensor<16x16xf32, #graph_source>,
+      %target: tensor<16x16xf32, #graph_target>,
+      %condition: i1) -> tensor<16x16xf32, #graph_target> {
+    %selected = scf.if %condition -> (tensor<16x16xf32, #graph_target>) {
+      %left = ttg.convert_layout %source : tensor<16x16xf32, #graph_source> -> tensor<16x16xf32, #graph_target>
+      %sum = arith.addf %left, %target : tensor<16x16xf32, #graph_target>
+      scf.yield %sum : tensor<16x16xf32, #graph_target>
+    } else {
+      %right = ttg.convert_layout %source : tensor<16x16xf32, #graph_source> -> tensor<16x16xf32, #graph_target>
+      %sum = arith.subf %right, %target : tensor<16x16xf32, #graph_target>
+      scf.yield %sum : tensor<16x16xf32, #graph_target>
+    }
+    tt.return %selected : tensor<16x16xf32, #graph_target>
+  }
+
+  // A previously materialized layout can be reused only when its result
+  // dominates the new use, including across distinct function analyses.
+  //
+  // BASELINE-LABEL: @materialization_graph_dominating_reuse
+  // OPTIMIZED-LABEL: @materialization_graph_dominating_reuse
+  // OPTIMIZED-COUNT-1: ttg.convert_layout
+  // OPTIMIZED: arith.addf
+  // OPTIMIZED: tt.return
+  tt.func public @materialization_graph_dominating_reuse(
+      %source: tensor<16x16xf32, #graph_source>,
+      %target: tensor<16x16xf32, #graph_target>) -> tensor<16x16xf32, #graph_target> {
+    %first = ttg.convert_layout %source : tensor<16x16xf32, #graph_source> -> tensor<16x16xf32, #graph_target>
+    %second = ttg.convert_layout %source : tensor<16x16xf32, #graph_source> -> tensor<16x16xf32, #graph_target>
+    %sum = arith.addf %first, %second : tensor<16x16xf32, #graph_target>
+    %result = arith.addf %sum, %target : tensor<16x16xf32, #graph_target>
+    tt.return %result : tensor<16x16xf32, #graph_target>
+  }
+}
+
+// -----
+
 // A reduction producer and its multiple reduced results form one constrained
 // component. Exact assignment can jointly keep both loads in their physical
 // layout instead of paying conversions before every reduction.

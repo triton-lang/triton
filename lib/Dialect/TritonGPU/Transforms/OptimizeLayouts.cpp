@@ -57,6 +57,8 @@ public:
   uint64_t getReductionCost(Value value, Attribute encoding,
                             unsigned axis) const;
   uint64_t getExecutionWeight(Operation *op) const;
+  uint64_t getProducerCost(Operation *producer, Value value,
+                           Attribute encoding) const;
   bool isRematerializationBeneficial(
       ConvertLayoutOp conversion, const LayoutSlice &slice,
       int64_t newConversionCost, bool disableSplitting,
@@ -190,6 +192,101 @@ struct LayoutSlice {
   DenseMap<LayoutValue, Value> rematerializations;
 };
 
+class LayoutOptimizationAnalysis;
+
+/// A physical tensor value is not identified by SSA value alone: multiple
+/// encodings can coexist at different dominance-safe insertion points. This
+/// graph solves those alternatives independently of the rewrite policy.
+class LayoutMaterializationGraph {
+public:
+  enum class Kind : uint8_t {
+    Existing,
+    Conversion,
+    SharedConversion,
+    Rematerialization,
+    BackwardSlice,
+  };
+
+  struct Alternative {
+    Kind kind;
+    SmallVector<unsigned, 4> operands;
+    uint64_t cost = 0;
+    Value existing;
+    unsigned plan = 0;
+  };
+
+  struct Node {
+    Value value;
+    Attribute encoding;
+    Operation *placement;
+    SmallVector<Alternative, 4> alternatives;
+    uint64_t cost = std::numeric_limits<uint64_t>::max();
+    unsigned choice = 0;
+    Value materialized;
+  };
+
+  explicit LayoutMaterializationGraph(LayoutOptimizationAnalysis &problem)
+      : problem(problem) {}
+
+  void clear();
+  void clearExisting() {
+    existing.clear();
+    sharedConversions.clear();
+  }
+  void analyze();
+  Value lookup(Value value, Attribute encoding, Operation *placement);
+  Value lookupExisting(Value value, Attribute encoding) const {
+    return existing.lookup(value).lookup(encoding);
+  }
+  void remember(Value value, Attribute encoding, Value materialized);
+  void updateExisting(ArrayRef<std::tuple<Value, Value>> replacements);
+  bool reuse(ConvertLayoutOp conversion);
+  bool rematerialize(ConvertLayoutOp conversion, LayoutSlice slice);
+
+private:
+  using Key = std::pair<LayoutValue, Operation *>;
+
+  unsigned request(Value value, Attribute encoding, Operation *placement,
+                   const LayoutAssignment &assignments, unsigned depth = 0);
+  void solve();
+  Value materialize(unsigned node);
+
+  LayoutOptimizationAnalysis &problem;
+  DenseMap<Key, unsigned> indices;
+  DenseMap<LayoutValue, SmallVector<unsigned, 4>> candidates;
+  DenseMap<Value, DenseMap<Attribute, Value>> existing;
+  DenseMap<LayoutValue, SmallVector<ConvertLayoutOp>> sharedConversions;
+  SmallVector<Node, 32> nodes;
+  SmallVector<LayoutSlice, 8> slices;
+};
+
+/// Hardware contracts and search priorities are interchangeable policy. The
+/// materialization graph itself only evaluates legal alternatives and costs.
+class LayoutMaterializationPolicy {
+public:
+  enum class Action : uint8_t {
+    BackwardSlice,
+    Narrowing,
+    Conditional,
+    DotOperand,
+    DominatingReuse,
+    StoreExpression,
+    ConversionExpression,
+  };
+
+  struct Stage {
+    ArrayRef<Action> actions;
+    bool preserveSharedReductions = false;
+    bool fixedPoint = false;
+  };
+
+  bool allowProducer(Value value, Operation *producer, Operation *placement,
+                     bool fixed, bool memoryProtocol, unsigned depth,
+                     unsigned states) const;
+  bool allowAlternative(LayoutMaterializationGraph::Kind kind,
+                        Operation *placement) const;
+};
+
 /// The solver owns only candidate search, objective comparison, convergence,
 /// and rollback. Operation legality, graph construction, and physical costs
 /// are supplied separately, so heuristics cannot leak into its core algorithm.
@@ -207,22 +304,27 @@ struct LayoutMemoryProfile;
 /// conversion materialization, scalar expressions, and bounded feedback.
 class LayoutOptimizationAnalysis {
 public:
-  explicit LayoutOptimizationAnalysis(FuncOp function) : funcOp(function) {}
+  explicit LayoutOptimizationAnalysis(FuncOp function)
+      : funcOp(function), materializationGraph(*this) {}
   static LogicalResult optimize(ModuleOp module, bool disableSplitting);
 
 private:
   using LayoutInfo = llvm::SmallSetVector<Attribute, 8>;
   friend class LayoutAssignmentSolver;
+  friend class LayoutMaterializationGraph;
   class ExpressionPlan;
-  using ConversionRewrite =
-      bool (LayoutOptimizationAnalysis::*)(ConvertLayoutOp);
+  using MaterializationAction = LayoutMaterializationPolicy::Action;
+  using MaterializationPolicy = LayoutMaterializationPolicy::Stage;
 
   LogicalResult run(bool disableSplitting);
-  LogicalResult rematerialize(bool preserveSharedReductions);
+  LogicalResult runIteration(bool disableSplitting);
+  LogicalResult optimizeMaterializations(MaterializationPolicy policy);
+  bool applyMaterializationAction(ConvertLayoutOp conversion,
+                                  MaterializationAction action);
   LogicalResult cleanup();
-  template <typename Root> void optimizeExpressions();
   void assignLayouts(bool optimize,
                      const LayoutMemoryProfile *profile = nullptr);
+  bool feedsMemoryProtocol(Value value) const;
   // Find the anchor ops and set their layout in the data structure.
   void initAnchorLayout();
   // Recursively Propagate the layout to all the users of the anchor ops until
@@ -251,44 +353,19 @@ private:
   void rewriteGenericOpInPlace(Operation *op, Attribute encoding);
   // Return the mapped value in the given encoding. This will insert a convert
   // if the encoding is different than the encoding decided at resolve time.
-  Value getValueAs(Value value, Attribute encoding);
-  void addRematValue(Value value, Attribute encoding, Value materialized);
-  bool backwardRematerialization(ConvertLayoutOp conversion);
+  Value getValueAs(Value value, Attribute encoding,
+                   Operation *placement = nullptr);
   bool hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp conversion);
   bool hoistConvertIntoConditionals(ConvertLayoutOp conversion);
   bool hoistConvertDotOperand(ConvertLayoutOp conversion);
   void rewriteSlice(LayoutSlice &slice, ConvertLayoutOp conversion,
                     IRMapping &mapping);
   void rewriteSlice(LayoutSlice &slice, ConvertLayoutOp conversion);
-  void shareDominatingConversions();
   LogicalResult
   getRematerializableSlice(OpOperand &root, Attribute encoding,
                            LayoutSlice &slice,
                            std::function<bool(Operation *)> stop = nullptr,
                            bool requireRematerializable = true);
-
-  bool rewriteConversions(bool preserveSharedReductions,
-                          ArrayRef<ConversionRewrite> rewrites) {
-    bool changed = false;
-    for (ConversionRewrite rewrite : rewrites) {
-      rematMapping.clear();
-      domInfo.invalidate();
-      postDomInfo.invalidate();
-      preserveSharedReductionRematerialization = preserveSharedReductions;
-      SmallVector<ConvertLayoutOp> conversions;
-      funcOp.walk([&](ConvertLayoutOp conversion) {
-        conversions.push_back(conversion);
-      });
-      for (ConvertLayoutOp conversion : conversions)
-        if ((this->*rewrite)(conversion))
-          changed = true;
-        else
-          addRematValue(conversion.getSrc(), conversion.getType().getEncoding(),
-                        conversion.getResult());
-      rematMapping.clear();
-    }
-    return changed;
-  }
 
   template <typename Rewrite>
   void rewriteAssignedValues(ValueRange values, Rewrite rewrite) {
@@ -320,7 +397,6 @@ private:
   bool buildGlobalComponentProposal(
       Value seed, Attribute encoding, LayoutAssignment &assignments,
       SmallVectorImpl<LayoutValue> &changes) const;
-  void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
 
   // map from value to layout information.
   llvm::MapVector<Value, LayoutInfo> layouts;
@@ -332,21 +408,16 @@ private:
   mutable DenseMap<std::pair<Operation *, Attribute>, Attribute>
       inferredDestinationEncodings;
   LayoutCostModel costModel;
+  LayoutMaterializationPolicy materializationPolicy;
   FuncOp funcOp;
   bool disableRematSplitting = false;
   bool optimizeLayouts = false;
   const LayoutMemoryProfile *memoryProfile = nullptr;
-  DenseMap<Value, DenseMap<Attribute, Value>> rematMapping;
+  LayoutMaterializationGraph materializationGraph;
   bool preserveSharedReductionRematerialization = false;
   DominanceInfo domInfo;
   PostDominanceInfo postDomInfo;
 };
-
-void LayoutOptimizationAnalysis::addRematValue(Value old, Attribute encoding,
-                                               Value newV) {
-  LDBG("addRematValue " << old << " encoding " << encoding << " " << newV);
-  rematMapping[old][encoding] = newV;
-}
 
 // Return true if the op is an op with a layout we don't want to change. We will
 // propagate the layout starting from anchor ops.
@@ -772,6 +843,10 @@ void LayoutOptimizationAnalysis::assignLayouts(
   initAnchorLayout();
   propagateLayout();
   resolveConflicts();
+  if (optimizeLayouts)
+    materializationGraph.analyze();
+  else
+    materializationGraph.clear();
   rewrite();
 }
 
@@ -1117,6 +1192,16 @@ uint64_t LayoutCostModel::getExecutionWeight(Operation *op) const {
       if (isa<scf::ForOp, scf::WhileOp>(parent))
         cached->second = std::min<uint64_t>(256, 4 * cached->second);
   return cached->second;
+}
+
+uint64_t LayoutCostModel::getProducerCost(Operation *producer, Value value,
+                                          Attribute encoding) const {
+  if (isa<arith::ConstantOp, triton::SplatOp, triton::MakeRangeOp>(producer))
+    return 0;
+  uint64_t arithmetic =
+      (isExpensiveMathOp(producer) ? 8 : 1) * getByteCount(value);
+  return (arithmetic + getRegisterPressureCost(value, encoding)) *
+         getExecutionWeight(producer);
 }
 
 template <bool source>
@@ -1735,7 +1820,7 @@ void LayoutOptimizationAnalysis::rewriteRegion(Region &region) {
           if (it == layouts.end())
             continue;
           Attribute encoding = getEncodingBeforeRewrite(operand.get());
-          Value newOperand = getValueAs(operand.get(), encoding);
+          Value newOperand = getValueAs(operand.get(), encoding, &op);
           op.setOperand(operand.getOperandNumber(), newOperand);
         }
       }
@@ -1745,10 +1830,15 @@ void LayoutOptimizationAnalysis::rewriteRegion(Region &region) {
   }
 }
 
-Value LayoutOptimizationAnalysis::getValueAs(Value value, Attribute encoding) {
+Value LayoutOptimizationAnalysis::getValueAs(Value value, Attribute encoding,
+                                             Operation *placement) {
   if (auto tensorType = dyn_cast<RankedTensorType>(value.getType())) {
     if (tensorType.getEncoding() == encoding)
       return value;
+    if (optimizeLayouts && placement)
+      if (Value materialized =
+              materializationGraph.lookup(value, encoding, placement))
+        return materialized;
     OpBuilder rewriter(value.getContext());
     rewriter.setInsertionPointAfterValue(value);
     auto tmpType = tensorType.cloneWithEncoding(encoding);
@@ -1797,7 +1887,7 @@ void LayoutOptimizationAnalysis::rewriteGenericOpInPlace(Operation *op,
   }
   for (OpOperand &operand : op->getOpOperands()) {
     op->setOperand(operand.getOperandNumber(),
-                   getValueAs(operand.get(), operandEnc));
+                   getValueAs(operand.get(), operandEnc, op));
   }
   for (Value result : op->getResults())
     if (isa<RankedTensorType>(result.getType()))
@@ -1808,7 +1898,7 @@ void LayoutOptimizationAnalysis::rewriteForOp(scf::ForOp forOp) {
   rewriteAssignedValues(forOp.getResults(), [&](unsigned index, Value result,
                                                 Attribute encoding) {
     forOp.getInitArgsMutable()[index].assign(
-        getValueAs(forOp.getInitArgs()[index], encoding));
+        getValueAs(forOp.getInitArgs()[index], encoding, forOp));
     setEncodingInPlace(result, encoding);
     setEncodingInPlace(forOp.getRegionIterArg(index), encoding);
   });
@@ -1818,8 +1908,8 @@ void LayoutOptimizationAnalysis::rewriteWhileOp(scf::WhileOp whileOp) {
   rewriteAssignedValues(
       whileOp.getBeforeArguments(),
       [&](unsigned index, Value argument, Attribute encoding) {
-        whileOp->setOperand(index,
-                            getValueAs(whileOp->getOperand(index), encoding));
+        whileOp->setOperand(
+            index, getValueAs(whileOp->getOperand(index), encoding, whileOp));
         setEncodingInPlace(argument, encoding);
       });
   rewriteAssignedValues(whileOp.getResults(), [&](unsigned index, Value result,
@@ -1842,7 +1932,7 @@ void LayoutOptimizationAnalysis::rewriteControlFlowOperands(
     if (auto type = dyn_cast<RankedTensorType>(target.getType())) {
       unsigned operand = firstOperand + index;
       operation->setOperand(operand, getValueAs(operation->getOperand(operand),
-                                                type.getEncoding()));
+                                                type.getEncoding(), operation));
     }
 }
 
@@ -1860,7 +1950,7 @@ void LayoutOptimizationAnalysis::rewriteReduceToScalar(Operation *reduceOp) {
   if (!srcEncoding)
     return;
   for (OpOperand &operand : reduceOp->getOpOperands()) {
-    Value newOperand = getValueAs(operand.get(), srcEncoding);
+    Value newOperand = getValueAs(operand.get(), srcEncoding, reduceOp);
     reduceOp->setOperand(operand.getOperandNumber(), newOperand);
   }
 }
@@ -1871,7 +1961,7 @@ void LayoutOptimizationAnalysis::rewriteAssertOp(AssertOp assertOp) {
   auto it = layouts.find(operand);
   if (it == layouts.end())
     return;
-  assertOp->setOperand(0, getValueAs(operand, it->second[0]));
+  assertOp->setOperand(0, getValueAs(operand, it->second[0], assertOp));
 }
 
 void LayoutOptimizationAnalysis::rewriteOp(Operation *op) {
@@ -1911,25 +2001,302 @@ bool canBeRemat(Operation *op) {
   return !isa<scf::WhileOp, scf::ConditionOp>(op);
 }
 
-void LayoutOptimizationAnalysis::updateRematMapping(
-    SmallVector<std::tuple<Value, Value>> &values) {
-  for (auto [old, newV] : values) {
-    auto it = rematMapping.find(old);
-    if (it == rematMapping.end())
+bool LayoutMaterializationPolicy::allowProducer(
+    Value value, Operation *producer, Operation *placement, bool fixed,
+    bool memoryProtocol, unsigned depth, unsigned states) const {
+  return depth < 32 && states < 4096 && producer && placement &&
+         producer->getBlock() == placement->getBlock() &&
+         producer->getNumResults() == 1 && producer->getNumRegions() == 0 &&
+         isMemoryEffectFree(producer) && canBeRemat(producer) &&
+         !isFixedLayoutBoundary(producer) && !fixed && value.hasOneUse() &&
+         !memoryProtocol &&
+         !isa<ConvertLayoutOp, ReduceOp, SplitOp, JoinOp>(producer);
+}
+
+bool LayoutMaterializationPolicy::allowAlternative(
+    LayoutMaterializationGraph::Kind kind, Operation *placement) const {
+  return kind != LayoutMaterializationGraph::Kind::Rematerialization ||
+         isa<ConvertLayoutOp>(placement);
+}
+
+void LayoutMaterializationGraph::clear() {
+  indices.clear();
+  candidates.clear();
+  nodes.clear();
+  slices.clear();
+}
+
+void LayoutMaterializationGraph::remember(Value value, Attribute encoding,
+                                          Value materialized) {
+  LDBG("materialized " << value << " encoding " << encoding << " "
+                       << materialized);
+  existing[value][encoding] = materialized;
+}
+
+bool LayoutMaterializationGraph::reuse(ConvertLayoutOp conversion) {
+  LayoutValue key{conversion.getSrc(), conversion.getType().getEncoding()};
+  auto &available = sharedConversions[key];
+  auto candidate = llvm::find_if(available, [&](ConvertLayoutOp existing) {
+    return problem.domInfo.properlyDominates(existing.getResult(),
+                                             conversion.getOperation());
+  });
+  if (candidate == available.end()) {
+    available.push_back(conversion);
+    return false;
+  }
+  conversion.getResult().replaceAllUsesWith(candidate->getResult());
+  conversion.erase();
+  return true;
+}
+
+void LayoutMaterializationGraph::analyze() {
+  clear();
+  problem.domInfo.invalidate();
+
+  LayoutAssignment assignments;
+  for (const auto &[value, layouts] : problem.layouts)
+    if (!layouts.empty())
+      assignments.try_emplace(value, layouts[0]);
+
+  problem.funcOp.walk([&](Operation *placement) {
+    for (OpOperand &use : placement->getOpOperands())
+      if (isa<RankedTensorType>(use.get().getType()))
+        for (Attribute encoding : problem.getUseEncodings(use, assignments))
+          request(use.get(), encoding, placement, assignments);
+  });
+  solve();
+}
+
+Value LayoutMaterializationGraph::lookup(Value value, Attribute encoding,
+                                         Operation *placement) {
+  auto found = indices.find({{value, encoding}, placement});
+  return found == indices.end() ? Value() : materialize(found->second);
+}
+
+unsigned LayoutMaterializationGraph::request(
+    Value value, Attribute encoding, Operation *placement,
+    const LayoutAssignment &assignments, unsigned depth) {
+  Key key{{value, encoding}, placement};
+  auto [entry, inserted] = indices.try_emplace(key, nodes.size());
+  if (!inserted)
+    return entry->second;
+
+  unsigned index = entry->second;
+  nodes.push_back({value, encoding, placement});
+  Attribute source = problem.getAssignedEncoding(value, assignments);
+  if (!source || source == encoding) {
+    nodes[index].alternatives.push_back({Kind::Existing, {}, 0, value});
+    return index;
+  }
+
+  unsigned original = request(value, source, placement, assignments, depth + 1);
+  nodes[index].alternatives.push_back(
+      {Kind::Conversion,
+       {original},
+       problem.costModel.getTransitionCost(value, source, encoding),
+       {}});
+
+  auto &available = candidates[{value, encoding}];
+  for (unsigned candidate : available) {
+    Operation *previous = nodes[candidate].placement;
+    if (previous && placement &&
+        problem.domInfo.properlyDominates(previous, placement)) {
+      nodes[index].alternatives.push_back(
+          {Kind::SharedConversion, {candidate}, 0, {}});
+      break;
+    }
+  }
+  available.push_back(index);
+
+  for (OpOperand &use : value.getUses()) {
+    auto existing = dyn_cast<ConvertLayoutOp>(use.getOwner());
+    if (existing && existing.getType().getEncoding() == encoding && placement &&
+        problem.domInfo.properlyDominates(existing.getResult(), placement)) {
+      nodes[index].alternatives.push_back(
+          {Kind::SharedConversion, {}, 0, existing.getResult()});
+      break;
+    }
+  }
+
+  Operation *producer = value.getDefiningOp();
+  bool memoryProtocol =
+      placement && isa<ConvertLayoutOp>(placement) &&
+      problem.feedsMemoryProtocol(cast<ConvertLayoutOp>(placement).getResult());
+  if (!problem.materializationPolicy.allowProducer(
+          value, producer, placement, problem.fixedLayouts.contains(value),
+          memoryProtocol, depth, nodes.size()))
+    return index;
+
+  Attribute operandEncoding =
+      problem.getCachedEncoding<true>(producer, encoding);
+  SmallVector<unsigned, 4> operands;
+  for (Value operand : producer->getOperands()) {
+    if (!isa<RankedTensorType>(operand.getType()))
       continue;
-    auto remats = std::move(it->second);
-    rematMapping.erase(it);
-    auto &newRemats = rematMapping[newV];
-    for (auto [encoding, replacedValue] : remats) {
-      // Loop through the replacement value to find the new version of remat
-      // value. This should be okay as the number of values should be small.
-      for (auto [before, after] : values) {
-        if (before == replacedValue) {
-          replacedValue = after;
+    if (!operandEncoding)
+      return index;
+    operands.push_back(
+        request(operand, operandEncoding, placement, assignments, depth + 1));
+  }
+
+  uint64_t cloneCost =
+      problem.costModel.getProducerCost(producer, value, encoding);
+  nodes[index].alternatives.push_back(
+      {Kind::Rematerialization, std::move(operands), cloneCost, {}});
+  return index;
+}
+
+void LayoutMaterializationGraph::solve() {
+  constexpr uint64_t infinite = std::numeric_limits<uint64_t>::max();
+  SmallVector<uint8_t, 32> state(nodes.size(), 0);
+  auto evaluate = [&](auto &&self, unsigned index) -> uint64_t {
+    Node &node = nodes[index];
+    if (state[index] == 2)
+      return node.cost;
+    if (state[index] == 1)
+      return infinite;
+    state[index] = 1;
+
+    for (auto [choice, alternative] : llvm::enumerate(node.alternatives)) {
+      if (!problem.materializationPolicy.allowAlternative(alternative.kind,
+                                                          node.placement))
+        continue;
+      uint64_t candidate = alternative.cost;
+      for (unsigned operand : alternative.operands) {
+        uint64_t cost = self(self, operand);
+        if (cost == infinite || candidate > infinite - cost) {
+          candidate = infinite;
+          break;
+        }
+        candidate += cost;
+      }
+      if (candidate < node.cost) {
+        node.cost = candidate;
+        node.choice = choice;
+      }
+    }
+
+    state[index] = 2;
+    return node.cost;
+  };
+
+  for (unsigned index = 0; index < nodes.size(); ++index)
+    evaluate(evaluate, index);
+}
+
+bool LayoutOptimizationAnalysis::feedsMemoryProtocol(Value value) const {
+  DenseSet<Value> visited;
+  SmallVector<Value, 16> worklist{value};
+  while (!worklist.empty()) {
+    Value current = worklist.pop_back_val();
+    if (!visited.insert(current).second)
+      continue;
+    for (OpOperand &use : current.getUses()) {
+      Operation *user = use.getOwner();
+      if (isa<StoreOp>(user)) {
+        if (use.getOperandNumber() != 1)
+          return true;
+        continue;
+      }
+      if (isa<LoadOp, AtomicRMWOp, AtomicCASOp, DescriptorLoadLikeOpInterface,
+              DescriptorStoreLikeOpInterface>(user))
+        return true;
+      if (isMemoryEffectFree(user))
+        for (Value result : user->getResults())
+          if (isa<RankedTensorType>(result.getType()))
+            worklist.push_back(result);
+    }
+  }
+  return false;
+}
+
+bool LayoutMaterializationGraph::rematerialize(ConvertLayoutOp conversion,
+                                               LayoutSlice slice) {
+  clear();
+  LayoutAssignment assignments;
+  unsigned node =
+      request(conversion.getSrc(), conversion.getType().getEncoding(),
+              conversion, assignments);
+  unsigned plan = slices.size();
+  slices.push_back(std::move(slice));
+  nodes[node].alternatives.insert(nodes[node].alternatives.begin(),
+                                  {Kind::BackwardSlice, {}, 0, {}, plan});
+  solve();
+  if (nodes[node].alternatives[nodes[node].choice].kind != Kind::BackwardSlice)
+    return false;
+  materialize(node);
+  return true;
+}
+
+Value LayoutMaterializationGraph::materialize(unsigned index) {
+  Node &node = nodes[index];
+  if (node.materialized)
+    return node.materialized;
+
+  Alternative &alternative = node.alternatives[node.choice];
+  if (alternative.kind == Kind::Existing)
+    return node.materialized = alternative.existing;
+  if (alternative.kind == Kind::SharedConversion)
+    return node.materialized = alternative.existing
+                                   ? alternative.existing
+                                   : materialize(alternative.operands.front());
+
+  if (alternative.kind == Kind::BackwardSlice) {
+    IRMapping mapping;
+    problem.rewriteSlice(slices[alternative.plan],
+                         cast<ConvertLayoutOp>(node.placement), mapping);
+    return node.materialized = mapping.lookup(node.value);
+  }
+
+  if (alternative.kind == Kind::Conversion) {
+    Value source = materialize(alternative.operands.front());
+    auto type = cast<RankedTensorType>(source.getType());
+    if (type.getEncoding() == node.encoding)
+      return node.materialized = source;
+    OpBuilder builder(source.getContext());
+    builder.setInsertionPointAfterValue(source);
+    return node.materialized =
+               ConvertLayoutOp::create(builder, source.getLoc(),
+                                       type.cloneWithEncoding(node.encoding),
+                                       source)
+                   .getResult();
+  }
+
+  Operation *producer = node.value.getDefiningOp();
+  OpBuilder builder(node.placement);
+  IRMapping mapping;
+  auto operands = alternative.operands.begin();
+  for (Value operand : producer->getOperands())
+    if (isa<RankedTensorType>(operand.getType()))
+      mapping.map(operand, materialize(*operands++));
+  Operation *replacement = builder.clone(*producer, mapping);
+  auto type = cast<RankedTensorType>(node.value.getType());
+  replacement->getResult(0).setType(type.cloneWithEncoding(node.encoding));
+  if (auto constant = dyn_cast<arith::ConstantOp>(replacement)) {
+    auto elements = cast<DenseElementsAttr>(constant.getValue());
+    constant.setValueAttr(
+        elements.reshape(cast<RankedTensorType>(constant.getType())));
+  }
+  return node.materialized = replacement->getResult(0);
+}
+
+void LayoutMaterializationGraph::updateExisting(
+    ArrayRef<std::tuple<Value, Value>> replacements) {
+  for (auto [old, replacement] : replacements) {
+    auto it = existing.find(old);
+    if (it == existing.end())
+      continue;
+    auto previous = std::move(it->second);
+    existing.erase(it);
+    auto &updated = existing[replacement];
+    for (auto [encoding, materialized] : previous) {
+      for (auto [before, after] : replacements) {
+        if (before == materialized) {
+          materialized = after;
           break;
         }
       }
-      newRemats[encoding] = replacedValue;
+      updated[encoding] = materialized;
     }
   }
 }
@@ -2006,10 +2373,12 @@ void LayoutOptimizationAnalysis::rewriteSlice(LayoutSlice &state,
         });
         // The result is not in the layout/slice, the argument is.
         Value oldArg = loopBody.getArgument(m.first + numIndVars);
-        addRematValue(newForOp.getResult(m.first), layout[oldArg],
-                      newForOp.getResult(m.second));
-        addRematValue(oldArg, layout[oldArg],
-                      loopBody.getArgument(m.second + numIndVars));
+        materializationGraph.remember(newForOp.getResult(m.first),
+                                      layout[oldArg],
+                                      newForOp.getResult(m.second));
+        materializationGraph.remember(
+            oldArg, layout[oldArg],
+            loopBody.getArgument(m.second + numIndVars));
       }
       continue;
     }
@@ -2025,7 +2394,8 @@ void LayoutOptimizationAnalysis::rewriteSlice(LayoutSlice &state,
       for (Value result : ifOp.getResults())
         if (slice.count(result)) {
           mapping.map(result, newIfOp.getResult(newIdx));
-          addRematValue(result, layout[result], newIfOp.getResult(newIdx));
+          materializationGraph.remember(result, layout[result],
+                                        newIfOp.getResult(newIdx));
           ++newIdx;
         }
       deadOps.push_back(ifOp.getOperation());
@@ -2052,8 +2422,8 @@ void LayoutOptimizationAnalysis::rewriteSlice(LayoutSlice &state,
       auto cvt = ConvertLayoutOp::create(builder, op->getLoc(), newType,
                                          newOp->getResult(0));
       mapping.map(op->getResult(0), cvt.getResult());
-      addRematValue(op->getResult(0), layout[op->getResult(0)],
-                    cvt.getResult());
+      materializationGraph.remember(op->getResult(0), layout[op->getResult(0)],
+                                    cvt.getResult());
       continue;
     }
     Operation *newOp = builder.clone(*op, mapping);
@@ -2064,7 +2434,7 @@ void LayoutOptimizationAnalysis::rewriteSlice(LayoutSlice &state,
       auto newType =
           cast<RankedTensorType>(old.getType()).cloneWithEncoding(it->second);
       newV.setType(newType);
-      addRematValue(old, it->second, newV);
+      materializationGraph.remember(old, it->second, newV);
     }
   }
   // Add the rewritten convert to the replacements so it is removed from the
@@ -2072,7 +2442,7 @@ void LayoutOptimizationAnalysis::rewriteSlice(LayoutSlice &state,
   replacements.emplace_back(convertOp.getResult(),
                             mapping.lookup(convertOp.getSrc()));
 
-  updateRematMapping(replacements);
+  materializationGraph.updateExisting(replacements);
   for (auto &kv : replacements) {
     builder.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
   }
@@ -2096,7 +2466,7 @@ LogicalResult LayoutOptimizationAnalysis::getRematerializableSlice(
   auto &[slice, layout, existingRemats] = candidate;
   // Allow re-using existing conversions for a value if it dominates the use.
   auto getExistingConversion = [&](OpOperand &value, Attribute encoding) {
-    Value remat = rematMapping.lookup(value.get()).lookup(encoding);
+    Value remat = materializationGraph.lookupExisting(value.get(), encoding);
     if (!remat)
       return Value();
     // `value` can be replaced with an existing rematerialization if it
@@ -2310,44 +2680,6 @@ bool LayoutCostModel::isRematerializationBeneficial(
   });
 
   return convertLayoutCost >= rematerialisationCost;
-}
-
-bool LayoutOptimizationAnalysis::backwardRematerialization(
-    ConvertLayoutOp convertOp) {
-  // DotOperand is hoisted by hoistDotOperand
-  RankedTensorType targetType = convertOp.getType();
-  if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
-    return false;
-  LDBG("check backward remat with source " << convertOp.getSrc() << " encoding "
-                                           << targetType.getEncoding());
-  // 1. Take a backward slice of all the tensor dependencies that can be
-  // rematerialized.
-  LayoutSlice state;
-  auto &[slice, layout, existingRemats] = state;
-  LogicalResult result = getRematerializableSlice(
-      convertOp.getSrcMutable(), targetType.getEncoding(), state);
-  if (result.failed()) {
-    LDBG("  getRematerializableSlice failed");
-    return false;
-  }
-
-  // 2. Determine whether rematerialisation is beneficial.
-  if (!costModel.isRematerializationBeneficial(
-          convertOp, state, /*newConversionCost=*/0, disableRematSplitting,
-          preserveSharedReductionRematerialization)) {
-    LDBG("  skipped rematerialization because it is not beneficial");
-    return false;
-  }
-
-  LLVM_DEBUG({
-    DBGS() << "  remat convert op " << convertOp << '\n';
-    for (Value v : slice)
-      DBGS() << "    " << v << '\n';
-  });
-
-  // 3. Rewrite the slice.
-  rewriteSlice(state, convertOp);
-  return true;
 }
 
 bool LayoutOptimizationAnalysis::hoistConvertDotOperand(
@@ -2940,65 +3272,104 @@ private:
   DenseMap<unsigned, Value> joinConditions;
 };
 
-/// A layout conversion is pure. One materialization can therefore serve every
-/// dominated request for the same source value and destination encoding.
-void LayoutOptimizationAnalysis::shareDominatingConversions() {
-  domInfo.invalidate();
-  DenseMap<LayoutValue, SmallVector<ConvertLayoutOp>> available;
-  funcOp.walk([&](ConvertLayoutOp convert) {
-    LayoutValue key{convert.getSrc(), convert.getType().getEncoding()};
-    auto &candidates = available[key];
-    auto candidate = llvm::find_if(candidates, [&](ConvertLayoutOp existing) {
-      return domInfo.properlyDominates(existing.getResult(),
-                                       convert.getOperation());
-    });
-    if (candidate == candidates.end()) {
-      candidates.push_back(convert);
-      return;
-    }
-    convert.getResult().replaceAllUsesWith(candidate->getResult());
-    convert.erase();
-  });
-}
-
-/// Rebuild the root worklist after each rewrite because a successful whole-
-/// expression plan can erase other roots and their producers.
-template <typename Root>
-void LayoutOptimizationAnalysis::optimizeExpressions() {
-  auto rewrite = [](auto &&plan) {
-    if (failed(plan.analyze()))
+/// Every physical rewrite is an alternative in the same policy-ordered
+/// worklist. Root collection restarts only when an expression consumes other
+/// roots; conversion sweeps retain dominance-safe reuse between alternatives.
+bool LayoutOptimizationAnalysis::applyMaterializationAction(
+    ConvertLayoutOp conversion, MaterializationAction action) {
+  switch (action) {
+  case MaterializationAction::BackwardSlice: {
+    RankedTensorType target = conversion.getType();
+    if (isa<DotOperandEncodingAttr>(target.getEncoding()))
       return false;
-    plan.rewrite();
-    return true;
-  };
-  for (;;) {
-    SmallVector<Root> roots;
-    funcOp.walk([&](Root root) { roots.push_back(root); });
-    if (!llvm::any_of(llvm::reverse(roots), [&](Root root) {
-          if constexpr (std::is_same_v<Root, triton::StoreOp>)
-            return rewrite(ExpressionPlan(root));
-          else
-            return rewrite(ExpressionPlan(root)) ||
-                   rewrite(ExpressionPlan(root, /*indexed=*/true));
-        }))
-      return;
+    LayoutSlice slice;
+    if (failed(getRematerializableSlice(conversion.getSrcMutable(),
+                                        target.getEncoding(), slice)) ||
+        !costModel.isRematerializationBeneficial(
+            conversion, slice, /*newConversionCost=*/0, disableRematSplitting,
+            preserveSharedReductionRematerialization))
+      return false;
+    return materializationGraph.rematerialize(conversion, std::move(slice));
   }
+  case MaterializationAction::Narrowing:
+    return hoistConvertOnTopOfExtOrBroadcast(conversion);
+  case MaterializationAction::Conditional:
+    return hoistConvertIntoConditionals(conversion);
+  case MaterializationAction::DotOperand:
+    return hoistConvertDotOperand(conversion);
+  case MaterializationAction::DominatingReuse:
+    return materializationGraph.reuse(conversion);
+  case MaterializationAction::ConversionExpression: {
+    auto rewrite = [](ExpressionPlan &&plan) {
+      if (failed(plan.analyze()))
+        return false;
+      plan.rewrite();
+      return true;
+    };
+    return rewrite(ExpressionPlan(conversion)) ||
+           rewrite(ExpressionPlan(conversion, /*indexed=*/true));
+  }
+  case MaterializationAction::StoreExpression:
+    llvm_unreachable("store expressions do not have conversion roots");
+  }
+  llvm_unreachable("unknown materialization action");
 }
 
-LogicalResult
-LayoutOptimizationAnalysis::rematerialize(bool preserveSharedReductions) {
-  bool changed;
-  do {
-    changed = rewriteConversions(
-        preserveSharedReductions,
-        {&LayoutOptimizationAnalysis::backwardRematerialization});
-    if ((changed || preserveSharedReductions) && failed(cleanup()))
-      return failure();
-  } while (changed);
+LogicalResult LayoutOptimizationAnalysis::optimizeMaterializations(
+    MaterializationPolicy policy) {
+  for (MaterializationAction action : policy.actions) {
+    bool repeat;
+    do {
+      materializationGraph.clearExisting();
+      domInfo.invalidate();
+      postDomInfo.invalidate();
+      preserveSharedReductionRematerialization =
+          policy.preserveSharedReductions;
+      bool changed = false;
+
+      bool expression = action == MaterializationAction::StoreExpression ||
+                        action == MaterializationAction::ConversionExpression;
+      SmallVector<Operation *> roots;
+      funcOp.walk([&](Operation *root) {
+        if (action == MaterializationAction::StoreExpression
+                ? isa<triton::StoreOp>(root)
+                : isa<ConvertLayoutOp>(root))
+          roots.push_back(root);
+      });
+      if (expression)
+        std::reverse(roots.begin(), roots.end());
+
+      for (Operation *root : roots) {
+        bool rewritten;
+        if (auto store = dyn_cast<triton::StoreOp>(root)) {
+          ExpressionPlan plan(store);
+          rewritten = succeeded(plan.analyze());
+          if (rewritten)
+            plan.rewrite();
+        } else {
+          auto conversion = cast<ConvertLayoutOp>(root);
+          rewritten = applyMaterializationAction(conversion, action);
+          if (!rewritten && action != MaterializationAction::DominatingReuse)
+            materializationGraph.remember(conversion.getSrc(),
+                                          conversion.getType().getEncoding(),
+                                          conversion.getResult());
+        }
+        changed |= rewritten;
+        if (expression && rewritten)
+          break;
+      }
+
+      materializationGraph.clearExisting();
+      repeat = changed && (policy.fixedPoint || expression);
+      if (action == MaterializationAction::BackwardSlice &&
+          (changed || policy.preserveSharedReductions) && failed(cleanup()))
+        return failure();
+    } while (repeat);
+  }
   return success();
 }
 
-LogicalResult LayoutOptimizationAnalysis::run(bool disableSplitting) {
+LogicalResult LayoutOptimizationAnalysis::runIteration(bool disableSplitting) {
   disableRematSplitting = disableSplitting;
   costModel = LayoutCostModel();
   LayoutMemoryProfile memory = getLayoutMemoryProfile(funcOp);
@@ -3018,8 +3389,12 @@ LogicalResult LayoutOptimizationAnalysis::run(bool disableSplitting) {
         failed(cleanup()))
       return failure();
 
+    constexpr MaterializationAction backward[] = {
+        MaterializationAction::BackwardSlice};
     if ((hasProtectedStore || hasPackedMemoryAssembly) &&
-        failed(rematerialize(/*preserveSharedReductions=*/false)))
+        failed(optimizeMaterializations({backward,
+                                         /*preserveSharedReductions=*/false,
+                                         /*fixedPoint=*/true})))
       return failure();
     memory = getLayoutMemoryProfile(funcOp);
   }
@@ -3028,15 +3403,19 @@ LogicalResult LayoutOptimizationAnalysis::run(bool disableSplitting) {
   if (failed(cleanup()))
     return failure();
 
-  if (failed(rematerialize(/*preserveSharedReductions=*/true)))
+  constexpr MaterializationAction backward[] = {
+      MaterializationAction::BackwardSlice};
+  if (failed(
+          optimizeMaterializations({backward, /*preserveSharedReductions=*/true,
+                                    /*fixedPoint=*/true})))
     return failure();
 
-  constexpr ConversionRewrite hoisting[] = {
-      &LayoutOptimizationAnalysis::hoistConvertOnTopOfExtOrBroadcast,
-      &LayoutOptimizationAnalysis::hoistConvertIntoConditionals,
-      &LayoutOptimizationAnalysis::hoistConvertDotOperand};
-  rewriteConversions(/*preserveSharedReductions=*/false,
-                     ArrayRef(hoisting).take_front(disableSplitting ? 1 : 3));
+  constexpr MaterializationAction hoisting[] = {
+      MaterializationAction::Narrowing, MaterializationAction::Conditional,
+      MaterializationAction::DotOperand};
+  if (failed(optimizeMaterializations(
+          {ArrayRef(hoisting).take_front(disableSplitting ? 1 : 3)})))
+    return failure();
 
   runDeadIterArgElimination(funcOp);
   if (failed(cleanup()))
@@ -3048,27 +3427,38 @@ LogicalResult LayoutOptimizationAnalysis::run(bool disableSplitting) {
   if (failed(applyPatternsGreedily(funcOp, std::move(controlFlow))))
     LLVM_DEBUG(DBGS() << "scf cleanup did not converge\n");
 
-  shareDominatingConversions();
-  optimizeExpressions<triton::StoreOp>();
-  optimizeExpressions<ConvertLayoutOp>();
+  constexpr MaterializationAction finishing[] = {
+      MaterializationAction::DominatingReuse,
+      MaterializationAction::StoreExpression,
+      MaterializationAction::ConversionExpression};
+  if (failed(optimizeMaterializations({finishing})))
+    return failure();
   return cleanup();
+}
+
+LogicalResult LayoutOptimizationAnalysis::run(bool disableSplitting) {
+  for (unsigned iteration = 0; iteration < 2; ++iteration) {
+    unsigned original = 0, remaining = 0;
+    funcOp.walk([&](ConvertLayoutOp) { ++original; });
+    if (failed(runIteration(disableSplitting)))
+      return failure();
+    funcOp.walk([&](ConvertLayoutOp) { ++remaining; });
+    if (!remaining || remaining >= original)
+      break;
+  }
+  return success();
 }
 
 LogicalResult LayoutOptimizationAnalysis::optimize(ModuleOp module,
                                                    bool disableSplitting) {
-  SmallVector<LayoutOptimizationAnalysis, 1> analyses;
-  module.walk([&](FuncOp function) { analyses.emplace_back(function); });
-  for (unsigned iteration = 0; iteration < 2; ++iteration) {
-    unsigned originalConversions = 0, remainingConversions = 0;
-    module.walk([&](ConvertLayoutOp) { ++originalConversions; });
-    for (LayoutOptimizationAnalysis &analysis : analyses)
-      if (failed(analysis.run(disableSplitting)))
-        return failure();
-    module.walk([&](ConvertLayoutOp) { ++remainingConversions; });
-    if (!remainingConversions || remainingConversions >= originalConversions)
-      break;
-  }
-  return success();
+  return success(!module
+                      .walk([&](FuncOp function) {
+                        LayoutOptimizationAnalysis analysis(function);
+                        return failed(analysis.run(disableSplitting))
+                                   ? WalkResult::interrupt()
+                                   : WalkResult::advance();
+                      })
+                      .wasInterrupted());
 }
 
 } // namespace
