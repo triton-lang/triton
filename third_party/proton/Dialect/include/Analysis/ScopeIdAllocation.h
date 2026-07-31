@@ -3,7 +3,8 @@
 
 #include "mlir/IR/Operation.h"
 #include "proton/Dialect/include/Dialect/Proton/IR/Dialect.h"
-#include "triton/Analysis/Utility.h"
+#include "triton/Analysis/CallGraph.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
 #include <cstddef>
