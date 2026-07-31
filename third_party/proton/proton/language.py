@@ -67,6 +67,12 @@ class Event(tl.base_value):
         self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
 
 
+def DummyEvent(Event):
+    """Dummy event that does nothing when passed to :func:`start_event` or :func:`end_event`."""
+    def __init__(self):
+        super().__init__(handle=None)
+
+
 def _check_supported_semantic(semantic):
     if not isinstance(semantic, tuple(_SEMANTICS)):
         raise TypeError(f"Unsupported semantic type: {type(semantic)}. "
@@ -103,31 +109,31 @@ def exit_scope(name: tl.constexpr, _semantic=None):
 @builtin
 def allocate_event(name: tl.constexpr, _semantic=None):
     if not flags.instrumentation_on:
-        return 0
+        return DummyEvent()
     _check_supported_semantic(_semantic)
     name = tl._unwrap_if_constexpr(name)
     handle = triton_proton.create_proton_allocate_event(_semantic.builder, name)
     return Event(handle)
 
 
-@builtin
-def start_event(event, _semantic=None):
+def record_event(event, is_start: tl.constexpr, _semantic=None):
     if not flags.instrumentation_on:
         return
     _check_supported_semantic(_semantic)
     if not isinstance(event, Event):
         raise TypeError("expected an event returned by allocate_event")
-    triton_proton.create_proton_start_event(_semantic.builder, event.handle)
+    is_start = tl._unwrap_if_constexpr(is_start)
+    triton_proton.create_proton_record_event(_semantic.builder, event.handle, is_start)
+
+
+@builtin
+def start_event(event, _semantic=None):
+    record_event(event, is_start=True, _semantic=_semantic)
 
 
 @builtin
 def end_event(event, _semantic=None):
-    if not flags.instrumentation_on:
-        return
-    _check_supported_semantic(_semantic)
-    if not isinstance(event, Event):
-        raise TypeError("expected an event returned by allocate_event")
-    triton_proton.create_proton_end_event(_semantic.builder, event.handle)
+    record_event(event, is_start=False, _semantic=_semantic)
 
 
 class scope:
