@@ -117,7 +117,7 @@ def record_event(event, is_start: tl.constexpr, _semantic=None):
     if not isinstance(event, Event):
         raise TypeError("expected an event returned by allocate_event")
     is_start = tl._unwrap_if_constexpr(is_start)
-    triton_proton.create_proton_record_event(_semantic.builder, event.handle, is_start)
+    triton_proton.create_proton_event(_semantic.builder, is_start, event.handle)
 
 
 @builtin

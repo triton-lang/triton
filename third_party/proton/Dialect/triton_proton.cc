@@ -90,15 +90,11 @@ void init_triton_proton(py::module_ &m) {
         return op.getEvent();
       });
 
-  m.def("create_proton_start_event",
-        [](TritonOpBuilder &opBuilder, mlir::Value event) -> void {
-          opBuilder.create<proton::EventOp>(true, event);
-        });
-
-  m.def("create_proton_end_event",
-        [](TritonOpBuilder &opBuilder, mlir::Value event) -> void {
-          opBuilder.create<proton::EventOp>(false, event);
-        });
+  m.def(
+      "create_proton_event",
+      [](TritonOpBuilder &opBuilder, bool isStart, mlir::Value event) -> void {
+        opBuilder.create<proton::EventOp>(isStart, event);
+      });
 
   m.def("add_convert_proton_to_protongpu",
         [](mlir::PassManager &pm, proton::MetricType &metricType,
