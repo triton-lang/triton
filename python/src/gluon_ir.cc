@@ -79,7 +79,11 @@ void printDiagStr(llvm::raw_ostream &os, const Diagnostic &diag) {
 }
 
 struct GluonOpBuilder : public TritonOpBuilder {
-  using TritonOpBuilder::TritonOpBuilder;
+  GluonOpBuilder(MLIRContext *context, std::string arch = "")
+      : TritonOpBuilder(context), arch(arch) {}
+
+  bool isRubin() const { return arch == "sm107"; }
+
   // Construct an attribute or type while calling its verifier. Error messages
   // are intercepted and sent back to Python via a C++ exception.
   template <typename AttrOrType, typename... ArgTs>
@@ -123,6 +127,9 @@ struct GluonOpBuilder : public TritonOpBuilder {
   getChecked(ArgTs &&...args) {
     return AttrOrType::get(std::forward<ArgTs>(args)...);
   }
+
+private:
+  std::string arch;
 };
 
 struct GluonLayouts {
@@ -133,6 +140,7 @@ struct GluonLayouts {
   py::handle DistributedLinearLayout;
   py::handle DotOperandLayout;
   py::handle NVMMADistributedLayout;
+  py::handle RubinTensorMemoryScalesLayout;
   py::handle TensorMemoryScalesLayout;
   py::handle TensorMemoryLayout;
   py::handle NVMMASharedLayout;
@@ -150,6 +158,8 @@ struct GluonLayouts {
         py::module::import("triton.experimental.gluon.language.amd._layouts");
     auto blackwellLayouts = py::module::import(
         "triton.experimental.gluon.language.nvidia.blackwell");
+    auto rubinLayouts =
+        py::module::import("triton.experimental.gluon.language.nvidia.rubin");
     AutoLayout = py::object(layouts.attr("AutoLayout")).release();
     CoalescedLayout = py::object(layouts.attr("CoalescedLayout")).release();
     BlockedLayout = py::object(layouts.attr("BlockedLayout")).release();
@@ -161,6 +171,8 @@ struct GluonLayouts {
         py::object(layouts.attr("NVMMADistributedLayout")).release();
     TensorMemoryScalesLayout =
         py::object(blackwellLayouts.attr("TensorMemoryScalesLayout")).release();
+    RubinTensorMemoryScalesLayout =
+        py::object(rubinLayouts.attr("TensorMemoryScalesLayout")).release();
     TensorMemoryLayout =
         py::object(blackwellLayouts.attr("TensorMemoryLayout")).release();
     NVMMASharedLayout = py::object(layouts.attr("NVMMASharedLayout")).release();
@@ -202,7 +214,7 @@ std::vector<llvm::ValueTypeFromRangeType<R>> toStdVector(R &&range) {
   return {range.begin(), range.end()};
 }
 
-py::object layoutToGluon(Attribute layout) {
+py::object layoutToGluon(Attribute layout, bool isRubin = false) {
   static GluonLayouts layouts;
   if (auto blocked = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
     auto cgaBases = getCgaLayoutBases(blocked.getCGALayout());
@@ -212,7 +224,7 @@ py::object layoutToGluon(Attribute layout) {
                                  toStdVector(blocked.getOrder()), cgaBases);
   } else if (auto sliced = dyn_cast<ttg::SliceEncodingAttr>(layout)) {
     return layouts.SliceLayout(sliced.getDim(),
-                               layoutToGluon(sliced.getParent()));
+                               layoutToGluon(sliced.getParent(), isRubin));
   } else if (auto linearEnc = dyn_cast<ttg::LinearEncodingTrait>(layout)) {
     const auto &ll = linearEnc.getLinearLayout();
     auto ctx = layout.getContext();
@@ -225,8 +237,9 @@ py::object layoutToGluon(Attribute layout) {
         ll.getBases().lookup(kWarp), ll.getBases().lookup(kBlock),
         toStdVector(ll.getOutDimSizes()));
   } else if (auto dotOp = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
-    return layouts.DotOperandLayout(
-        dotOp.getOpIdx(), layoutToGluon(dotOp.getParent()), dotOp.getKWidth());
+    return layouts.DotOperandLayout(dotOp.getOpIdx(),
+                                    layoutToGluon(dotOp.getParent(), isRubin),
+                                    dotOp.getKWidth());
   } else if (auto mma = dyn_cast<ttg::NvidiaMmaEncodingAttr>(layout)) {
     auto cgaBases = getCgaLayoutBases(mma.getCGALayout());
     return layouts.NVMMADistributedLayout(
@@ -299,19 +312,22 @@ py::object layoutToGluon(Attribute layout) {
   } else if (auto partitioned =
                  dyn_cast<ttg::PartitionedSharedEncodingAttr>(layout)) {
     py::object partitionLayout =
-        layoutToGluon(partitioned.getPartitionLayout());
+        layoutToGluon(partitioned.getPartitionLayout(), isRubin);
     return layouts.PartitionedSharedLayout(
         partitioned.getNumPartitions(), partitioned.getNumGroups(),
         partitioned.getPartitionDim(), partitionLayout);
   } else if (auto tmemScales =
                  dyn_cast<ttng::TensorMemoryScalesEncodingAttr>(layout)) {
-    StringRef blockRepOrder =
-        tmemScales.getBlockRepOrder() ==
-                ttng::TensorMemoryScalesBlockRepOrder::K_THEN_MN
-            ? "kThenMn"
-            : "mnThenK";
-    return layouts.TensorMemoryScalesLayout(
-        getCgaLayoutBases(tmemScales.getCGALayout()), blockRepOrder);
+    auto cgaLayout = getCgaLayoutBases(tmemScales.getCGALayout());
+    if (isRubin) {
+      const char *blockRepOrder =
+          tmemScales.getBlockRepOrder() ==
+                  ttng::TensorMemoryScalesBlockRepOrder::K_THEN_MN
+              ? "kThenMn"
+              : "mnThenK";
+      return layouts.RubinTensorMemoryScalesLayout(cgaLayout, blockRepOrder);
+    }
+    return layouts.TensorMemoryScalesLayout(cgaLayout);
   } else if (auto tmem = dyn_cast<ttng::TensorMemoryEncodingAttr>(layout)) {
     return layouts.TensorMemoryLayout(
         std::vector<unsigned>{tmem.getBlockM(), tmem.getBlockN()},
@@ -340,7 +356,8 @@ void init_gluon_ir(py::module &&m) {
 
   py::class_<GluonOpBuilder, TritonOpBuilder>(
       m, "GluonOpBuilder", py::module_local(), py::dynamic_attr())
-      .def(py::init<MLIRContext *>())
+      .def(py::init<MLIRContext *, std::string>(), py::arg("context"),
+           py::arg("arch") = "")
       .def("get_op_builder", &GluonOpBuilder::getBuilder, ret::reference)
       .def("get_distributed_ty",
            [](GluonOpBuilder &self, Type &elementType,
@@ -420,14 +437,14 @@ void init_gluon_ir(py::module &&m) {
              if (isa<ttg::DistributedEncodingTrait>(layout)) {
                auto attr =
                    ttg::LinearEncodingAttr::get(ctx, std::move(linearLayout));
-               return layoutToGluon(attr);
+               return layoutToGluon(attr, self.isRubin());
              }
              if (isa<ttg::SharedEncodingTrait>(layout)) {
                auto alignment =
                    cast<ttg::SharedEncodingTrait>(layout).getAlignment();
                auto attr = ttg::SharedLinearEncodingAttr::get(
                    ctx, std::move(linearLayout), alignment);
-               return layoutToGluon(attr);
+               return layoutToGluon(attr, self.isRubin());
              }
 
              // TensorMemory encodings: keep the LinearLayout but wrap as
@@ -614,13 +631,13 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Value tensor) -> py::object {
              auto ty = dyn_cast<RankedTensorType>(tensor.getType());
              check(ty.getEncoding(), "expected a tensor with an encoding");
-             return layoutToGluon(ty.getEncoding());
+             return layoutToGluon(ty.getEncoding(), self.isRubin());
            })
       .def("get_gluon_layout_from_memdesc",
            [](GluonOpBuilder &self, Value memdesc) -> py::object {
              auto ty = dyn_cast<ttg::MemDescType>(memdesc.getType());
              check(ty.getEncoding(), "expected a memdesc with an encoding");
-             return layoutToGluon(ty.getEncoding());
+             return layoutToGluon(ty.getEncoding(), self.isRubin());
            })
       .def("get_tensor_descriptor_layout_type",
            [](GluonOpBuilder &self, Type blockType, bool isSigned,
@@ -883,7 +900,8 @@ void init_gluon_ir(py::module &&m) {
               Value result = op.getResult();
               Value red = op.getRed();
               auto redTy = cast<RankedTensorType>(red.getType());
-              py::object redLayout = layoutToGluon(redTy.getEncoding());
+              py::object redLayout =
+                  layoutToGluon(redTy.getEncoding(), self.isRubin());
               return py::make_tuple(result, red, redLayout);
             }
             Value result = op.getResult();

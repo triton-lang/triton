@@ -1199,26 +1199,28 @@ LogicalResult TCGen5MMAScaledOp::verify() {
     // from both MN and K dimensions.
     return rowsPerCTA > 128 && scalesPerCTA > 4;
   };
-  if (isa<TensorMemorySpaceAttr>(aScaleType.getMemorySpace()) &&
-      isScaleBlockRepOrderRelevant(aScaleType)) {
+  auto verifyScaleEncoding = [&](MemDescType scaleType,
+                                 bool isA) -> LogicalResult {
+    if (!isa<TensorMemorySpaceAttr>(scaleType.getMemorySpace()))
+      return success();
+    bool isOrderRelevant = isScaleBlockRepOrderRelevant(scaleType);
     auto encoding =
-        dyn_cast<TensorMemoryScalesEncodingAttr>(aScaleType.getEncoding());
-    if (!encoding)
-      return emitOpError("A scales in tensor memory must use "
-                         "#ttng.tensor_memory_scales_encoding");
-    if (failed(verifyScaleBlockRepOrder(*this, encoding, /*isA=*/true)))
-      return failure();
-  }
-  if (isa<TensorMemorySpaceAttr>(bScaleType.getMemorySpace()) &&
-      isScaleBlockRepOrderRelevant(bScaleType)) {
-    auto encoding =
-        dyn_cast<TensorMemoryScalesEncodingAttr>(bScaleType.getEncoding());
-    if (!encoding)
-      return emitOpError("B scales in tensor memory must use "
-                         "#ttng.tensor_memory_scales_encoding");
-    if (failed(verifyScaleBlockRepOrder(*this, encoding, /*isA=*/false)))
-      return failure();
-  }
+        dyn_cast<TensorMemoryScalesEncodingAttr>(scaleType.getEncoding());
+    if (!encoding) {
+      if (!isOrderRelevant)
+        return success();
+      return emitOpError() << (isA ? "A" : "B")
+                           << " scales in tensor memory must use "
+                              "#ttng.tensor_memory_scales_encoding";
+    }
+    if (!isOrderRelevant && encoding.getBlockRepOrder() ==
+                                TensorMemoryScalesBlockRepOrder::MN_THEN_K)
+      return success();
+    return verifyScaleBlockRepOrder(*this, encoding, isA);
+  };
+  if (failed(verifyScaleEncoding(aScaleType, /*isA=*/true)) ||
+      failed(verifyScaleEncoding(bScaleType, /*isA=*/false)))
+    return failure();
   return success();
 }
 
