@@ -27,8 +27,6 @@ enum class ISAFamily {
 class TargetFeatures {
 public:
   struct LDSTransLoadParams {
-    // Number of lanes that cooperate in the instruction.
-    unsigned numLanesInShuffleGroup;
     // Number of bits that each lane reads per issued instruction.
     unsigned instBitWidth;
     // Number of elements that the instruction needs to be contiguous in LDS.

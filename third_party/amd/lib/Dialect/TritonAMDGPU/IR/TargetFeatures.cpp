@@ -185,8 +185,7 @@ TargetFeatures::queryLDSTransLoadParams(int bitWidth) const {
   for (const auto &config : configs) {
     if (config.isaFamily == isaFamily && config.bitWidth == bitWidth) {
       return LDSTransLoadParams{
-          static_cast<unsigned>(getWarpSize() / 4), config.instBitWidth,
-          config.instBitWidth / config.bitWidth,
+          config.instBitWidth, config.instBitWidth / config.bitWidth,
           config.leadingRegBases, config.leadingLaneBases};
     }
   }
