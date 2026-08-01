@@ -19,6 +19,7 @@
       ~tensor_memory_descriptor.load
       ~tensor_memory_descriptor.load_max
       ~tensor_memory_descriptor.load_min
+      ~tensor_memory_descriptor.reinterpret
       ~tensor_memory_descriptor.slice
       ~tensor_memory_descriptor.store
    

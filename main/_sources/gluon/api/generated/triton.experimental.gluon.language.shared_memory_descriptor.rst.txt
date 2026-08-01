@@ -25,6 +25,7 @@
       ~shared_memory_descriptor.index
       ~shared_memory_descriptor.load
       ~shared_memory_descriptor.permute
+      ~shared_memory_descriptor.reinterpret
       ~shared_memory_descriptor.reshape
       ~shared_memory_descriptor.scatter
       ~shared_memory_descriptor.slice

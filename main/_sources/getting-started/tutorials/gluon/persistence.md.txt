@@ -730,11 +730,11 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, c_half_desc, MMAI
         else:
             # Steal the next 2 B buffers for the epilogue.
             c0, c1 = c.reshape((BLOCK_M, 2, BLOCK_N // 2)).permute(0, 2, 1).split()
-            c0_buf = b_bufs.index(producer % (num_buffers + STEALB))._reinterpret(shape=c_half_desc.block_type.shape,
-                                                                                  layout=c_half_desc.layout)
+            c0_buf = b_bufs.index(producer % (num_buffers + STEALB)).reinterpret(shape=c_half_desc.block_type.shape,
+                                                                                 layout=c_half_desc.layout)
             c1_buf = b_bufs.index(
-                (producer + 1) % (num_buffers + STEALB))._reinterpret(shape=c_half_desc.block_type.shape,
-                                                                      layout=c_half_desc.layout)
+                (producer + 1) % (num_buffers + STEALB)).reinterpret(shape=c_half_desc.block_type.shape,
+                                                                     layout=c_half_desc.layout)
             c0_buf.store(c0)
             c1_buf.store(c1)
             fence_async_shared()

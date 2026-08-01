@@ -188,16 +188,19 @@
 <tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">permute</span></code>(self, order[, _semantic])</p></td>
 <td><p>Permute the dimensions of the shared memory descriptor.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">reshape</span></code>(self, shape[, _semantic])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">reinterpret</span></code>(self[, dtype, shape, layout, ...])</p></td>
+<td><p>Reinterpret the shared memory descriptor as a different dtype, shape, or layout.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">reshape</span></code>(self, shape[, _semantic])</p></td>
 <td><p>Reshape the shared memory descriptor to a new shape and layout.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">scatter</span></code>(self, values, indices, axis[, _semantic])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">scatter</span></code>(self, values, indices, axis[, _semantic])</p></td>
 <td><p>Scatter elements to shared memory along a specified axis using an indices tensor.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">slice</span></code>(self, start, length[, dim, _semantic])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">slice</span></code>(self, start, length[, dim, _semantic])</p></td>
 <td><p>Create a subview of shared memory by slicing along a given dimension.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">store</span></code>(self, value[, _semantic])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">store</span></code>(self, value[, _semantic])</p></td>
 <td><p>Store a tensor into shared memory.</p></td>
 </tr>
 </tbody>

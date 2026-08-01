@@ -190,6 +190,13 @@ Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterfac
 
 Effects: `MemoryEffects::Effect{}`
 
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>force_warp_shuffle</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
+</table>
+
 #### Operands:
 
 | Operand | Description |
