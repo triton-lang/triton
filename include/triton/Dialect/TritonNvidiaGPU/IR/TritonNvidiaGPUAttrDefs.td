@@ -47,6 +47,19 @@ def TTNG_TMEMLoadReduceModifierEnum : EnumAttr<TritonNvidiaGPU_Dialect, TTNG_TME
   let assemblyFormat = "`<` $value `>`";
 }
 
+def TTNG_PackedArithOpKindAttr : I32EnumAttr<
+    "PackedArithOpKind", "packed arithmetic operation",
+    [
+        I32EnumAttrCase<"ADD", 0, "add">,
+        I32EnumAttrCase<"SUB", 1, "sub">,
+        I32EnumAttrCase<"MUL", 2, "mul">,
+        I32EnumAttrCase<"FMA", 3, "fma">,
+        I32EnumAttrCase<"MIN", 4, "min">,
+        I32EnumAttrCase<"MAX", 5, "max">,
+    ]> {
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+}
+
 def TTNG_TensorMemoryScalesBlockRepOrderAttr : I32EnumAttr<
     "TensorMemoryScalesBlockRepOrder", "",
     [

@@ -49,6 +49,35 @@ class TTNG_Op<string mnemonic, list<Trait> traits = []> :
        !listconcat(traits, [VerifyTensorLayoutsTrait, VerifyMemDescLayoutsTrait])> {
 }
 
+def TTNG_PackedArithOperandElement : AnyTypeOf<[
+  I8, F8E8M0FNU, F8E4M3FN, F8E5M2, F16, BF16, F32
+], "packed arithmetic operand element">;
+def TTNG_PackedArithResultElement : AnyTypeOf<[
+  F8E4M3FN, F8E5M2, F16, BF16, F32
+], "packed arithmetic result element">;
+
+def TTNG_PackedArithOp : TTNG_Op<"packed_arith", [Pure]> {
+  let summary = "Apply elementwise arithmetic using a packed PTX instruction";
+
+  let description = [{
+    Applies packed x2, mixed-precision, and FP8/FP4/UE8M0 x4 arithmetic.
+    Instruction types, modifiers, and grouping are inferred from tensor types.
+    FP4 uses lower-nibble-first i8 values along the inferred halved dimension.
+  }];
+
+  let arguments = (ins
+    TTNG_PackedArithOpKindAttr:$op_kind,
+    Variadic<RankedTensorOf<[TTNG_PackedArithOperandElement]>>:$operands
+  );
+  let results = (outs RankedTensorOf<[TTNG_PackedArithResultElement]>:$result);
+
+  let assemblyFormat = [{
+    $op_kind $operands attr-dict `:` functional-type($operands, $result)
+  }];
+
+  let hasVerifier = 1;
+}
+
 def TTNG_FenceAsyncSharedOp : TTNG_Op<"fence_async_shared"> {
   let arguments = (ins BoolAttr:$bCluster);
 

@@ -1227,6 +1227,9 @@ Value scaleI8ToComputePayload(PatternRewriter &rewriter, Location loc,
 Value castDotScaledScaleToComputePayload(PatternRewriter &rewriter,
                                          Location loc, Value scaleSlice,
                                          FloatType computeElem) {
+  if (isa<Float8E8M0FNUType>(getElementTypeOrSelf(scaleSlice.getType())))
+    scaleSlice = arith::BitcastOp::create(
+        rewriter, loc, getIntTypeLike(scaleSlice.getType()), scaleSlice);
   Type computeIntTy =
       getTypeWithElement(scaleSlice.getType(),
                          IntegerType::get(rewriter.getContext(),
@@ -2032,6 +2035,62 @@ struct Fp4ToFpPattern : public OpRewritePattern<ttg::Fp4ToFpOp> {
     Value result = unpackPackedFp4Tensor(rewriter, loc, op.getSrc(),
                                          op.getAxis(), dstIntTy);
     rewriter.replaceOp(op, unembedToFloat(rewriter, loc, result, dstTy));
+    return success();
+  }
+};
+
+struct PackedArithPattern : public OpRewritePattern<ttng::PackedArithOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttng::PackedArithOp op,
+                                PatternRewriter &rewriter) const override {
+    auto resultTy = op.getType();
+    auto resultIntTy = cast<RankedTensorType>(getIntTypeLike(resultTy));
+    auto loc = op.getLoc();
+
+    SmallVector<Value> payloads;
+    for (Value operand : op.getOperands()) {
+      auto operandTy = cast<RankedTensorType>(operand.getType());
+      if (operandTy.getElementType().isInteger(8)) {
+        payloads.push_back(unpackPackedFp4Tensor(
+            rewriter, loc, operand, ttng::getPackedArithFp4Axis(op),
+            resultIntTy));
+        continue;
+      }
+
+      Value payload = castDotScaledScaleToComputePayload(
+          rewriter, loc, operand, cast<FloatType>(resultTy.getElementType()));
+      if (payload.getType() != resultIntTy)
+        payload =
+            ttg::ConvertLayoutOp::create(rewriter, loc, resultIntTy, payload);
+      payloads.push_back(payload);
+    }
+
+    Value lhs = payloads[0], rhs = payloads[1];
+    Value result;
+    using Kind = ttng::PackedArithOpKind;
+    switch (op.getOpKind()) {
+    case Kind::ADD:
+      result = arith::AddIOp::create(rewriter, loc, lhs, rhs);
+      break;
+    case Kind::SUB:
+      result = arith::SubIOp::create(rewriter, loc, lhs, rhs);
+      break;
+    case Kind::MUL:
+      result = arith::MulIOp::create(rewriter, loc, lhs, rhs);
+      break;
+    case Kind::FMA:
+      lhs = arith::MulIOp::create(rewriter, loc, lhs, rhs);
+      result = arith::AddIOp::create(rewriter, loc, lhs, payloads[2]);
+      break;
+    case Kind::MIN:
+      result = arith::MinSIOp::create(rewriter, loc, lhs, rhs);
+      break;
+    case Kind::MAX:
+      result = arith::MaxSIOp::create(rewriter, loc, lhs, rhs);
+      break;
+    }
+    rewriter.replaceOp(op, unembedToFloat(rewriter, loc, result, resultTy));
     return success();
   }
 };
@@ -3092,18 +3151,19 @@ public:
 
     TmemScratchManager scratch(twoCTAs);
     RewritePatternSet patterns(&getContext());
-    patterns.add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
-                 BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
-                 BinaryFloatToIntPattern<arith::MulFOp, arith::MulIOp>,
-                 BinaryFloatToIntPattern<arith::MinimumFOp, arith::MinSIOp>,
-                 BinaryFloatToIntPattern<arith::MaximumFOp, arith::MaxSIOp>,
-                 BinaryFloatToIntPattern<arith::MinNumFOp, arith::MinSIOp>,
-                 BinaryFloatToIntPattern<arith::MaxNumFOp, arith::MaxSIOp>,
-                 NegFOpPattern, DivFOpPattern, PreciseDivFOpPattern,
-                 RemFOpPattern, FmaPattern, ExpOpPattern, Exp2OpPattern,
-                 CosOpPattern, SinOpPattern, ExtFOpPattern, TruncFOpPattern,
-                 FpToFpPattern, Fp4ToFpPattern, DotPattern, DotScaledPattern>(
-        &getContext());
+    patterns
+        .add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
+             BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
+             BinaryFloatToIntPattern<arith::MulFOp, arith::MulIOp>,
+             BinaryFloatToIntPattern<arith::MinimumFOp, arith::MinSIOp>,
+             BinaryFloatToIntPattern<arith::MaximumFOp, arith::MaxSIOp>,
+             BinaryFloatToIntPattern<arith::MinNumFOp, arith::MinSIOp>,
+             BinaryFloatToIntPattern<arith::MaxNumFOp, arith::MaxSIOp>,
+             NegFOpPattern, DivFOpPattern, PreciseDivFOpPattern, RemFOpPattern,
+             FmaPattern, ExpOpPattern, Exp2OpPattern, CosOpPattern,
+             SinOpPattern, ExtFOpPattern, TruncFOpPattern, FpToFpPattern,
+             Fp4ToFpPattern, PackedArithPattern, DotPattern, DotScaledPattern>(
+            &getContext());
     patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
     patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);
     patterns.add<UnaryPattern<math::SqrtOp>>(&getContext(), UnaryOpId::Sqrt);
