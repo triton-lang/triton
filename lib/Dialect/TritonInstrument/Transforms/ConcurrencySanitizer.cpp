@@ -950,8 +950,7 @@ private:
           wb, alloc, getThreadPeersMask(thread, auxData.threadLayout), pred,
           memType, op);
     }
-    funcBuilder.createCompleteBarrierWaitCall(wb, alloc, baseThread, pred,
-                                              op);
+    funcBuilder.createCompleteBarrierWaitCall(wb, alloc, baseThread, pred, op);
     tti::ExperimentalLockReleaseOp::create(wb, lock, pred);
   }
 
@@ -1040,9 +1039,8 @@ private:
                       effect.operandName, effectCTAs, opInfo->commitKind);
         if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
           funcBuilder.createPublishWriteVisibilityCall(
-              b, bufferMask,
-              getThreadPeersMask(thread, auxData.threadLayout), pred, memType,
-              op, effectCTAs);
+              b, bufferMask, getThreadPeersMask(thread, auxData.threadLayout),
+              pred, memType, op, effectCTAs);
         }
         if (opInfo->trackingKind ==
             MemEffectsOpInfo::TrackingKind::CommitCount) {

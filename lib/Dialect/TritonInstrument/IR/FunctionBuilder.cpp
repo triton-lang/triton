@@ -489,9 +489,9 @@ void FunctionBuilder::createFillGlobalTensorCall(ImplicitLocOpBuilder &b,
                                                  Value ptr,
                                                  RankedTensorType type,
                                                  Value scalar) {
-  type = tti::getIntTensorType(
-      b.getInsertionBlock()->getParent(), {type.getNumElements()},
-      type.getElementType().getIntOrFloatBitWidth());
+  type = tti::getIntTensorType(b.getInsertionBlock()->getParent(),
+                               {type.getNumElements()},
+                               type.getElementType().getIntOrFloatBitWidth());
   createCallToCachedFunction(
       b, "fill_global_tensor", {ptr, scalar}, /*assertInfo=*/std::nullopt,
       {type}, [type](ImplicitLocOpBuilder &fb, Block *entryBlock) {
@@ -858,12 +858,11 @@ Value FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
         Value statusShift =
             tti::createConstIntTensor(fb, fb.getLoc(), 1, deadlockStatusType);
         noActiveBits = arith::ShLIOp::create(fb, noActiveBits, statusShift);
-        Value statusBits =
-            arith::OrIOp::create(fb, waitingBits, noActiveBits);
+        Value statusBits = arith::OrIOp::create(fb, waitingBits, noActiveBits);
         Value status = reduceAll<arith::AndIOp>(fb, statusBits);
         Value deadlockStatus = arith::ConstantIntOp::create(fb, 1, 32);
-        Value deadlocked = arith::CmpIOp::create(
-            fb, arith::CmpIPredicate::eq, status, deadlockStatus);
+        Value deadlocked = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
+                                                 status, deadlockStatus);
 
         Value vTrue = arith::ConstantOp::create(
             fb, deadlocked.getType(), fb.getIntegerAttr(fb.getI1Type(), 1));
@@ -1357,8 +1356,7 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
         Value statusShift =
             tti::createConstIntTensor(fb, fb.getLoc(), 1, statusType);
         validBits = arith::ShLIOp::create(fb, validBits, statusShift);
-        Value statusBits =
-            arith::OrIOp::create(fb, initializedBits, validBits);
+        Value statusBits = arith::OrIOp::create(fb, initializedBits, validBits);
         Value packedStatus = reduceAll<arith::AndIOp>(fb, statusBits);
         Value allInitialized =
             arith::TruncIOp::create(fb, fb.getI1Type(), packedStatus);
@@ -1527,8 +1525,7 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
           Value tablePtr = entryBlock->getArgument(nextArg++);
           Value table = tti::createLoadScratchMemory(fb, fb.getLoc(), tablePtr,
                                                      tableType);
-          Value tableMask =
-              convertAndBroadcast(fb, bufferMask, {1}, tableType);
+          Value tableMask = convertAndBroadcast(fb, bufferMask, {1}, tableType);
           Value ctaMask =
               createCTASetMask(fb, tableType, /*dim=*/0, effectCTAs);
           tableMask = arith::AndIOp::create(fb, tableMask, ctaMask);
@@ -2111,8 +2108,7 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
         Value writeVisibilityZero =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, writeVisibilityType);
         Value noOneIsWriting = arith::CmpIOp::create(
-            fb, arith::CmpIPredicate::eq, writeVisibility,
-            writeVisibilityZero);
+            fb, arith::CmpIPredicate::eq, writeVisibility, writeVisibilityZero);
         Value threadI64 =
             arith::ExtUIOp::create(fb, fb.getI64Type(), threadVal);
         Value threadMask =
@@ -2461,8 +2457,7 @@ void FunctionBuilder::createPublishClusterVisibilityCall(
           readsForCluster = arith::SelectOp::create(fb, peerColumns,
                                                     readsForThread, zeroReads);
         } else if (onlySynchronousThreads) {
-          readsForCluster = reduce<arith::OrIOp>(fb, readVisibility,
-                                                 {2, 3, 4});
+          readsForCluster = reduce<arith::OrIOp>(fb, readVisibility, {2, 3, 4});
           readsForCluster = convertAndBroadcast(fb, readsForCluster, {0, 1},
                                                 readVisibilityType);
         } else {
@@ -2861,8 +2856,7 @@ void FunctionBuilder::createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b,
         Value frontier =
             arith::SelectOp::create(fb, selected, tracking, zeroTracking);
         frontier = reduce<arith::OrIOp>(fb, frontier, {2, 3});
-        frontier =
-            convertAndBroadcast(fb, frontier, {0, 1, 4}, visibilityType);
+        frontier = convertAndBroadcast(fb, frontier, {0, 1, 4}, visibilityType);
 
         Value targetMask =
             createCTASetMask(fb, visibilityType, /*dim=*/2, currentCTA);
@@ -2877,12 +2871,11 @@ void FunctionBuilder::createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b,
 
         if (clearWaiting) {
           Value waitingPtr = entryBlock->getArgument(7);
-          Value waiting = tti::createLoadScratchMemory(
-              fb, fb.getLoc(), waitingPtr, waitingType);
+          Value waiting = tti::createLoadScratchMemory(fb, fb.getLoc(),
+                                                       waitingPtr, waitingType);
           Value waitingBarrierMask =
               convertAndBroadcast(fb, barriersEqBar, {1}, waitingType);
-          Value ctaMask =
-              createLeadCTAEffectMask(fb, waitingType, currentCTA);
+          Value ctaMask = createLeadCTAEffectMask(fb, waitingType, currentCTA);
           waitingBarrierMask =
               arith::AndIOp::create(fb, waitingBarrierMask, ctaMask);
 
@@ -2906,8 +2899,8 @@ void FunctionBuilder::createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b,
               triton::SplatOp::create(fb, waitingType, clearMask);
           Value clearedWaiting =
               arith::AndIOp::create(fb, waiting, clearMaskTensor);
-          Value updated = arith::SelectOp::create(
-              fb, waitingBarrierMask, clearedWaiting, waiting);
+          Value updated = arith::SelectOp::create(fb, waitingBarrierMask,
+                                                  clearedWaiting, waiting);
           createMaskedStoreScratchMemory(fb, fb.getLoc(), waitingPtr, updated,
                                          waitingType, ctaMask);
         }
