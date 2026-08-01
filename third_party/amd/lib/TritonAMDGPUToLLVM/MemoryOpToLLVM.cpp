@@ -30,13 +30,16 @@ static LLVM::FenceOp createAMDGPUMemoryFence(OpBuilder &builder, Location loc,
 }
 
 // Creates and returns the result Value of a single ds_read_tr* op for the
-// given (isaFamily, bitWidth).
+// given (isaFamily, logicalBitWidth).
 static Value createDsReadTr(Operation *op, RewriterBase &rewriter, Location loc,
                             Value vecAddr, VectorType vTy, ISAFamily isaFamily,
-                            unsigned bitWidth) {
-  // tr16 instructions return vectors of bf16/f16 while "tr8" instructions
-  // return vectors of i32. Generate the corresponding i32 vector type.
-  const auto numElemsI32 = (vTy.getNumElements() * bitWidth / 32);
+                            unsigned logicalBitWidth) {
+  // tr16 instructions return vectors of bf16/f16 while tr8 and tr4
+  // instructions return vectors of i32. Generate the corresponding i32 vector
+  // type.
+  const auto physicalBitWidth =
+      getIntOrFloatOrPtrBitWidth(vTy.getElementType());
+  const auto numElemsI32 = (vTy.getNumElements() * physicalBitWidth / 32);
   const auto vTyI32 = VectorType::get(numElemsI32, i32_ty);
 
   // GFX1250 uses opaque LLVM intrinsic calls; their results cannot be cast to
@@ -49,15 +52,21 @@ static Value createDsReadTr(Operation *op, RewriterBase &rewriter, Location loc,
 
   switch (isaFamily) {
   case ISAFamily::GFX1250:
-    if (bitWidth == 16)
+    if (logicalBitWidth == 16)
       return callIntrinsic("llvm.amdgcn.ds.load.tr16.b128", vTy);
-    return callIntrinsic("llvm.amdgcn.ds.load.tr8.b64", vTyI32);
+    if (logicalBitWidth == 8)
+      return callIntrinsic("llvm.amdgcn.ds.load.tr8.b64", vTyI32);
+    return {};
   case ISAFamily::CDNA4: {
     Value dsReadTr;
-    if (bitWidth == 16)
+    if (logicalBitWidth == 16)
       dsReadTr = ROCDL::ds_read_tr16_b64::create(rewriter, loc, vTy, vecAddr);
-    else
+    else if (logicalBitWidth == 8)
       dsReadTr = ROCDL::ds_read_tr8_b64::create(rewriter, loc, vTyI32, vecAddr);
+    else if (logicalBitWidth == 4)
+      dsReadTr = ROCDL::ds_read_tr4_b64::create(rewriter, loc, vTyI32, vecAddr);
+    else
+      return {};
     AMD::addLocalLoadNoAliasScope(
         op, cast<LLVM::AliasAnalysisOpInterface>(dsReadTr.getDefiningOp()));
     return dsReadTr;
@@ -72,14 +81,15 @@ static Value createDsReadTr(Operation *op, RewriterBase &rewriter, Location loc,
 // family does not support a ds_read_tr* instruction.
 SmallVector<Value> emitDsReadTr(Operation *op, Location loc, Value vecAddr,
                                 VectorType vTy, Type llvmElemTy,
+                                unsigned logicalBitWidth,
                                 ConversionPatternRewriter &rewriter,
                                 const ::triton::AMD::TargetInfo &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  const auto bitWidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
-  assert(bitWidth == 16 || bitWidth == 8);
+  const auto physicalBitWidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
+  assert(physicalBitWidth == 16 || physicalBitWidth == 8);
 
   Value dsReadTr = createDsReadTr(op, rewriter, loc, vecAddr, vTy,
-                                  targetInfo.getISAFamily(), bitWidth);
+                                  targetInfo.getISAFamily(), logicalBitWidth);
   if (!dsReadTr)
     return {};
 
@@ -93,9 +103,9 @@ SmallVector<Value> emitDsReadTr(Operation *op, Location loc, Value vecAddr,
 LogicalResult
 lowerDsReadTr(Operation *op,
               ::triton::AMD::TargetInfo::LDSTransLoadParams ldsParams,
-              Location loc, LinearLayout cvt, SmallVector<Value> &vals,
-              ArrayRef<Value> smemBases, Value affineOffset,
-              uint64_t maskSpanAffineOffset,
+              Location loc, LinearLayout cvt, unsigned logicalBitWidth,
+              SmallVector<Value> &vals, ArrayRef<Value> smemBases,
+              Value affineOffset, uint64_t maskSpanAffineOffset,
               ArrayRef<std::pair<unsigned, unsigned>> paddingShifts,
               Type llvmElemTy, ConversionPatternRewriter &rewriter,
               const ::triton::AMD::TargetInfo &targetInfo) {
@@ -113,6 +123,8 @@ lowerDsReadTr(Operation *op,
   auto kPartition = S("partition");
   auto smemPtrTy = ptr_ty(ctx, 3);
   auto bitWidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
+  auto logicalMaskSpanAffineOffset =
+      maskSpanAffineOffset * (bitWidth / logicalBitWidth);
 
   assert(!smemBases.empty() && "expected at least one smem base");
   LinearLayout cvtLayout = cvt;
@@ -179,11 +191,12 @@ lowerDsReadTr(Operation *op,
   auto reps = zerosLike(tile) * maybeQuot.value();
 
   // Sanity check
-  assert(fullTile.getInDimSize(kReg) * bitWidth == ldsParams.instBitWidth);
+  assert(fullTile.getInDimSize(kReg) * logicalBitWidth ==
+         ldsParams.instBitWidth);
 
   // If we are lowering a subslice, the subslice offsets shall not touch the
   // contiguous part of the tile
-  if (maskSpanAffineOffset & (tile.getOutDimSize(kOffset) - 1)) {
+  if (logicalMaskSpanAffineOffset & (tile.getOutDimSize(kOffset) - 1)) {
     return failure();
   }
 
@@ -204,6 +217,33 @@ lowerDsReadTr(Operation *op,
                     {kWarp, reps.getBases().lookup(kWarp)}},
                    {{kOffset, reps.getOutDimSize(kOffset)}}, false);
 
+  if (logicalBitWidth == 4) {
+    // Writing out the corresponding abstract maps for the above LinearLayouts:
+    //
+    // `cvtLayout`:                    G    :         D      ->     S
+    // `tile * maybeQuot`:          T ⊕ Q  :     L_C ⊕ D'  ->   C ⊕ S'
+    // `reps`:                      0 ⊕ Q  :     L_C ⊕ D'  ->   C ⊕ S'
+    // `addrLayout`: (0 ⊕ Q) o F^{-1} o i_A:         A      ->   C ⊕ S',
+    //
+    // we see that `reps` and `addrLayout`, though constructed using nibble
+    // coordinates, only have byte-aligned outputs. This allows us to safely
+    // convert to byte coordinates by halving the nibble-offset values with
+    // `logicalToI8` and dropping the low `kReg` basis in our layouts.
+    auto logicalToI8 = LinearLayout::zeros1D(2, kOffset, kOffset) *
+                       LinearLayout::identity1D(reps.getOutDimSize(kOffset) / 2,
+                                                kOffset, kOffset);
+    reps = reps.compose(logicalToI8);
+    addrLayout = addrLayout.compose(logicalToI8);
+
+    auto numLogicalRegBases = reps.getInDimSizeLog2(kReg);
+    ColumnAction dropNibbleBasis(
+        llvm::to_vector(llvm::seq<size_t>(1, numLogicalRegBases)), kReg,
+        numLogicalRegBases);
+    reps = dropNibbleBasis.apply(reps);
+    if (isPartitioned)
+      partitionLayout = dropNibbleBasis.apply(partitionLayout);
+  }
+
   // Matrix accesses are CTA-local. Model that with a trivial block output so
   // additive stride analysis always compares (offset, block) components.
   reps =
@@ -212,20 +252,21 @@ lowerDsReadTr(Operation *op,
 
   // Compute the bits that are moved by one instruction
   // Compute elements for which we can swap the xor by an add
+  auto elemsPerInstr = ldsParams.instBitWidth / bitWidth;
   auto [nAdditive, permStrides] =
       actionAdditiveStrides(reps, addrLayout, maskSpanAffineOffset,
-                            /*maskSpanBlocks=*/0, fullTile.getInDimSize(kReg));
+                            /*maskSpanBlocks=*/0, elemsPerInstr);
   reps = permStrides.apply(reps);
   if (isPartitioned) {
     partitionLayout = permStrides.apply(partitionLayout);
 
-    // One ds_read_tr* instruction produces `fullTile.getInDimSize(kReg)`
-    // consecutive register values from a single LDS base pointer. We only
+    // One ds_read_tr* instruction produces `elemsPerInstr` consecutive
+    // physical values along kReg from a single LDS base pointer. We only
     // select a partition once per instruction, so all of those register
     // positions must map to the same partition. For a LinearLayout that holds
     // iff the low log2(elemsPerInstr) register bases contribute 0 to
     // kPartition. Bail out if not, so a generic lowering can take over.
-    for (unsigned pos = 0; pos < numInstrRegBits; ++pos) {
+    for (unsigned pos = 0; pos < llvm::Log2_32(elemsPerInstr); ++pos) {
       if (partitionLayout.getBasis(kReg, pos, kPartition) != 0)
         return failure();
     }
@@ -336,11 +377,8 @@ lowerDsReadTr(Operation *op,
     regBase = b.xor_(regBase, affineOffsetI8);
   }
 
-  // Elements per op
-  auto elemsPerInstr = fullTile.getInDimSize(kReg);
-  auto elemsPerVec = ldsParams.instBitWidth / bitWidth;
-  auto vecTy = vec_ty(llvmElemTy, elemsPerVec);
-  for (int i = 0; i < cvtLayout.getInDimSize(kReg); i += nAdditive) {
+  auto vecTy = vec_ty(llvmElemTy, elemsPerInstr);
+  for (int i = 0; i < reps.getInDimSize(kReg); i += nAdditive) {
     auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
     auto regIdxI8 = regIdx * (bitWidth / 8);
     Value offset = b.xor_(regBase, b.i32_val(regIdxI8));
@@ -370,12 +408,13 @@ lowerDsReadTr(Operation *op,
       }
       auto vecAddr = b.gep(smemPtrTy, i8_ty, smemBaseVal, innerOffset,
                            LLVM::GEPNoWrapFlags::inbounds);
-      llvm::append_range(vals, emitDsReadTr(op, loc, vecAddr, vecTy, llvmElemTy,
-                                            rewriter, targetInfo));
+      llvm::append_range(vals,
+                         emitDsReadTr(op, loc, vecAddr, vecTy, llvmElemTy,
+                                      logicalBitWidth, rewriter, targetInfo));
     }
   }
   // apply all the inverse permutations in the reverse order
-  assert(vals.size() == cvtLayout.getInDimSize(kReg));
+  assert(vals.size() == reps.getInDimSize(kReg));
   vals = permStrides.inverse().apply(vals);
 
   return success();
@@ -441,9 +480,9 @@ public:
 
       llvm::SmallVector<Value> values;
       auto result =
-          lowerDsReadTr(op, ldsParams, loc, cvtDstLL, values, smemBases,
-                        affineOffset, maskSpanAffineOffset, paddingShifts,
-                        llvmElemTy, rewriter, targetInfo);
+          lowerDsReadTr(op, ldsParams, loc, cvtDstLL, bitWidth, values,
+                        smemBases, affineOffset, maskSpanAffineOffset,
+                        paddingShifts, llvmElemTy, rewriter, targetInfo);
       if (failed(result))
         continue;
 
@@ -477,12 +516,15 @@ public:
   matchAndRewrite(triton::amdgpu::LocalLoadPackedTransposedOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto ctx = rewriter.getContext();
+    auto loc = op.getLoc();
+    MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
     auto typeConverter = this->getTypeConverter();
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
     unsigned bitWidth = llvmElemTy.getIntOrFloatBitWidth();
 
-    // FP4 is represented as i8 and
+    // FP4 is represented as packed elements inside i8 values.
     if (bitWidth != 8) {
       return failure();
     }
@@ -490,105 +532,88 @@ public:
     if (targetInfo.getISAFamily() == ISAFamily::GFX1250) {
       return failure();
     }
-
-    return lowerSharedToDotOperandTransLL(op, adaptor, typeConverter, rewriter);
-  }
-
-private:
-  LogicalResult
-  lowerSharedToDotOperandTransLL(triton::amdgpu::LocalLoadPackedTransposedOp op,
-                                 OpAdaptor adaptor,
-                                 const LLVMTypeConverter *typeConverter,
-                                 ConversionPatternRewriter &rewriter) const {
-    auto ctx = rewriter.getContext();
-    auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto kBlock = str_attr("block");
-    auto dstTy = cast<RankedTensorType>(op.getType());
-    auto srcTy = cast<MemDescType>(op.getSrc().getType());
+    auto ldsParamsVec = targetInfo.queryLDSTransLoadParams(/*bitWidth=*/4);
+    if (ldsParamsVec.empty())
+      return failure();
     if (SharedMemoryObject::getMaskSpanOffsetsAndBlocks(srcTy).second != 0)
       return failure();
-    auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
-    auto bitWidth = llvmElemTy.getIntOrFloatBitWidth();
+
+    auto dstLL = triton::gpu::toLinearLayout(dstTy);
+    LinearLayout sharedLL;
+    if (triton::gpu::isPaddedEncoding(srcTy.getEncoding())) {
+      sharedLL = triton::gpu::paddedLinearLayout(srcTy);
+    } else {
+      sharedLL = triton::gpu::toLinearLayout(srcTy);
+    }
+
+    // Perform factorization and address routing in logical fp4 coordinates.
+    std::optional<StringAttr> srcPackedDim;
+    std::optional<StringAttr> dstPackedDim;
+    auto srcShape = srcTy.getShape();
+    auto dstShape = dstTy.getShape();
+    assert(srcShape.size() == dstShape.size());
+    auto outDimNames = llvm::to_vector(sharedLL.getOutDimNames());
+
+    for (unsigned dim = 0; dim < srcShape.size(); ++dim) {
+      if (srcShape[dim] * 2 == dstShape[dim]) {
+        srcPackedDim = outDimNames[dim];
+        continue;
+      }
+      if (dstShape[dim] * 2 == srcShape[dim]) {
+        dstPackedDim = outDimNames[dim];
+        continue;
+      }
+      if (srcShape[dim] != dstShape[dim])
+        return failure();
+    }
+    if (!srcPackedDim || !dstPackedDim)
+      return failure();
+
+    auto kReg = str_attr("register");
+    auto kOffset = str_attr("offset");
+    auto logicalSharedLL =
+        LinearLayout::identity1D(2, kOffset, *srcPackedDim) * sharedLL;
+    auto logicalDstLL =
+        LinearLayout::identity1D(2, kReg, *dstPackedDim) * dstLL;
+    auto cvtDstLL = logicalDstLL.invertAndCompose(logicalSharedLL);
+
+    auto kBlock = str_attr("block");
+    auto maybeSublayout = cvtDstLL.quotient(kBlock);
+    if (!maybeSublayout)
+      return failure();
+    cvtDstLL = maybeSublayout.value();
+
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
-    mlir::Type retTy = dstTy;
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    SmallVector<Value> smemBases = llvm::to_vector(smemObj.getBases());
     auto affineOffset = smemObj.getShmemOffset(loc, rewriter, srcTy);
     auto maskSpanAffineOffset = smemObj.getMaskSpanOffsets(srcTy);
-    auto paddingShifts = getPaddedSharedShifts(srcTy.getEncoding(), bitWidth,
+    auto paddingShifts = getPaddedSharedShifts(srcTy.getEncoding(),
+                                               srcTy.getElementTypeBitWidth(),
                                                /*offsetInBytes=*/true);
 
-    auto shape = srcTy.getShape();
-    auto ldsParamsVec = targetInfo.queryLDSTransLoadParams(bitWidth);
-    if (ldsParamsVec.size() != 1)
-      return failure();
-    const auto ldsTransLoadParams = &ldsParamsVec[0];
-    // FP4 are packed into i8 so the real bitWidth is different
-    auto llBitWidth = 4;
-    auto ldsTransLayout = triton::gpu::chooseDsReadTrLayout(
-        dstTy.getEncoding(), shape, llBitWidth,
-        ldsTransLoadParams->instBitWidth,
-        ldsTransLoadParams->numLanesInShuffleGroup);
-
-    // Check that we have computed a layout
-    if (!ldsTransLayout) {
-      return failure();
-    }
-    auto regLayout =
-        ldsTransLayout->removeZeroBasesAlongDim(str_attr("register"));
-
-    auto paddedEnc =
-        dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(srcTy.getEncoding());
-    LinearLayout cvt = LinearLayout::empty();
-    if (paddedEnc) {
-      const auto &sharedLL = paddedEnc.getLinearComponent();
-      cvt = regLayout.invertAndCompose(sharedLL);
-    } else {
-      auto sharedLL = triton::gpu::toLinearLayout(srcTy);
-      cvt = regLayout.invertAndCompose(sharedLL);
-    }
-    // Check that we will be able to vectorize the load.
-    // Need to have exactly ldsTransLoadParams->tileSize,
-    // otherwise we can't use ds_read_tr
-    auto [elemsPerVec, permutation] =
-        largestVectorisation(ctx, cvt, bitWidth, ldsTransLoadParams->tileSize);
-
-    if (paddedEnc)
-      elemsPerVec = std::min<int>(elemsPerVec, paddedEnc.getMinInterval());
-
-    if (elemsPerVec != ldsTransLoadParams->tileSize)
-      return failure();
-
-    assert(cvt.isTrivialOver({kBlock}) && "NYI");
-    auto lowerInst = [&](RewriterBase &rewriter, Location loc,
-                         ArrayRef<Value> inVals, Value vecAddr, int idx,
-                         VectorType vTy, Value ctaId) -> SmallVector<Value> {
-      assert(!ctaId && "NYI");
-      auto numElemsI32 = (vTy.getNumElements() * bitWidth / 32);
-      auto vTyI32 = VectorType::get(numElemsI32, i32_ty);
-      Value dsReadTr =
-          ROCDL::ds_read_tr4_b64::create(rewriter, loc, vTyI32, vecAddr);
-      Value vecVal = b.bitcast(dsReadTr, vTy);
-      SmallVector<Value> loadedVals;
-      for (int v = 0; v < vTy.getNumElements(); v++) {
-        loadedVals.push_back(
-            b.extract_element(llvmElemTy, vecVal, b.i32_val(v)));
+    for (const auto &ldsParams : ldsParamsVec) {
+      if (triton::gpu::isPaddedEncoding(srcTy.getEncoding()) &&
+          triton::gpu::getMinInterval(srcTy.getEncoding()) <
+              ldsParams.instBitWidth / bitWidth) {
+        continue;
       }
 
-      return loadedVals;
-    };
+      SmallVector<Value> values;
+      auto result =
+          lowerDsReadTr(op, ldsParams, loc, cvtDstLL, /*logicalBitWidth=*/4,
+                        values, smemBases, affineOffset, maskSpanAffineOffset,
+                        paddingShifts, llvmElemTy, rewriter, targetInfo);
+      if (failed(result))
+        continue;
 
-    SmallVector<Value> outVals = lowerLdSt(
-        loc, rewriter.getContext(), cvt, {}, // Input for store, output for load
-        llvmElemTy, smemObj.getBase(), paddingShifts, affineOffset,
-        maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
-        /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
-        ldsTransLoadParams->tileSize, lowerInst);
-    Value result =
-        packUniqueTensorElements(loc, typeConverter, outVals, rewriter, retTy);
-    rewriter.replaceOp(op, result);
-    return success();
+      auto value =
+          packTensorElements(loc, typeConverter, values, rewriter, dstTy);
+
+      rewriter.replaceOp(op, value);
+      return success();
+    }
+    return failure();
   }
 
 private:
