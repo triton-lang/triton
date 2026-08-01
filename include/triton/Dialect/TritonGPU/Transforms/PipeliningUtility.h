@@ -178,7 +178,8 @@ Value createIncrementModulo(OpBuilder &builder, Location loc, Value counter,
                             Value modulus, Value zero, Value one,
                             Value *outWrapCond = nullptr);
 
-scf::ForOp lowerTMADescriptors(scf::ForOp forOp, CoarseSchedule &schedule);
+LoopLikeOpInterface lowerTMADescriptors(LoopLikeOpInterface loop,
+                                        CoarseSchedule &schedule);
 
 DenseSet<Operation *>
 getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp,
