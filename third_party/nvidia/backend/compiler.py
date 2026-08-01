@@ -487,8 +487,18 @@ class CUDABackend(BaseBackend):
         else:
             cap_llvm = capability
 
-        proc = sm_arch_from_capability(cap_llvm)
-        features = get_features(opt, cap_llvm)
+        # On Blackwell (sm_100+), LLVM ISel folds fp16->fp32 arithmetic into
+        # mixed-precision PTX (add/sub.rn.f32.f16). This can raise per-thread
+        # register usage and cross an occupancy boundary (see triton #11127).
+        # As an opt-out, run codegen against sm_90a while still emitting a
+        # .target for the real capability (rewritten below), matching the
+        # ptxas target used by make_cubin.
+        codegen_cap = cap_llvm
+        if knobs.nvidia.disable_mixed_precision_fp and cap_llvm >= 100:
+            codegen_cap = 90
+
+        proc = sm_arch_from_capability(codegen_cap)
+        features = get_features(opt, codegen_cap)
         flags = ["nvptx-mad-wide-opt"]
         canonicalize_gep = "fpsan" in opt.instrumentation_mode
         ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False, canonicalize_gep)
