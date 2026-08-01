@@ -3,6 +3,7 @@ import triton.language as tl
 from triton.backends.compiler import GPUTarget
 import pytest
 import re
+from triton import knobs
 from triton.compiler import ASTSource
 
 
@@ -20,6 +21,46 @@ def test_compile_only_sm100() -> None:
     assert ".target sm_100a" in ptx
     assert ".address_size 64" in ptx
     assert k.asm["cubin"] != b""
+
+
+def test_disable_mixed_precision_fp_sm100() -> None:
+    # See triton #11127: on sm_100 LLVM folds fp16->fp32 arithmetic into
+    # mixed-precision PTX (add.rn.f32.f16), which can hurt occupancy. The
+    # TRITON_DISABLE_MIXED_PRECISION_FP knob runs codegen against sm_90a to
+    # suppress it, while still emitting PTX for the real target.
+
+    @triton.jit
+    def kernel_mixed(x, y, out):
+        idx = tl.arange(0, 128)
+        # fadd(f32, fpext(f16)) is the pattern LLVM folds into add.rn.f32.f16.
+        r = tl.load(y + idx) + tl.load(x + idx).to(tl.float32)
+        tl.store(out + idx, r)
+
+    signature = {"x": "*fp16", "y": "*fp32", "out": "*fp32"}
+
+    def compile_ptx(disable):
+        with knobs.nvidia.scope():
+            # The knob is not part of the compilation cache key, so force a
+            # recompile to observe both codegen paths in the same process.
+            knobs.compilation.always_compile = True
+            knobs.nvidia.disable_mixed_precision_fp = disable
+            k = triton.compile(ASTSource(fn=kernel_mixed, signature=signature, constexprs={}),
+                               target=GPUTarget("cuda", 100, 32))
+            return k.asm["ptx"]
+
+    ptx_mixed = compile_ptx(False)
+    ptx_expanded = compile_ptx(True)
+
+    # The emitted target must stay at the real capability regardless of the
+    # target used for codegen.
+    assert ".target sm_100a" in ptx_mixed
+    assert ".target sm_100a" in ptx_expanded
+    assert ".target sm_90" not in ptx_expanded
+
+    # If the mixed-precision op was selected on the default path, the knob must
+    # suppress it. Guarded so the test stays valid if selection heuristics change.
+    if "add.rn.f32.f16" in ptx_mixed:
+        assert "add.rn.f32.f16" not in ptx_expanded
 
 
 @pytest.mark.parametrize("element_type", ["f32", "f16", "bf16"])
