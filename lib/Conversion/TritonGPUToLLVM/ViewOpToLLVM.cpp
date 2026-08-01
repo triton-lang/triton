@@ -430,15 +430,14 @@ struct MemDescIndexOpConversion
     // reduced shape, so partitionDim=0 refers to the tensor's first dimension,
     // not the multi-buffer dimension that was just indexed away.
     //
-    // getAllocationShapePerCTA returns the correct number of fp4 elements that
+    // getAllocationElems returns the correct number of fp4 elements that
     // we need to skip when we have fp4Padded=True. getShapePerCTA does not
     // account for this.
-    auto allocShape = product(
-        getAllocationShapePerCTA(dstTy.getEncoding(), dstTy.getShape()));
-    int64_t stride = allocShape;
+    int64_t stride =
+        getAllocationElems(dstTy.getEncoding(), dstTy.getAllocShape());
     if (auto partEnc =
             dyn_cast<PartitionedSharedEncodingAttr>(dstTy.getEncoding())) {
-      stride = allocShape / partEnc.getNumPartitions();
+      stride /= partEnc.getNumPartitions();
     }
     Value offset = b.mul(op.getIndex(), b.i32_val(stride));
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
@@ -496,8 +495,8 @@ struct MemDescSubsliceOpConversion
 
     if (layoutOffsets.size() != opOffsetVals.size() &&
         opOffsetVals.front() != 0) {
-      int64_t stride = product(getAllocationShapePerCTA(
-          encoding, dropPipeliningDim(srcTy.getAllocShape(), encoding)));
+      int64_t stride = getAllocationElems(
+          encoding, dropPipeliningDim(srcTy.getAllocShape(), encoding));
       if (auto partEnc = dyn_cast<PartitionedSharedEncodingAttr>(encoding))
         stride /= partEnc.getNumPartitions();
       Value offset = b.i32_val(opOffsetVals.front() * stride);
@@ -534,9 +533,7 @@ struct MemDescSubsliceOpConversion
     // The offset component of (3) is already XORed in by getShmemOffset at
     // load time; only the partition component needs this fix.
     if (newBases.size() > 1) {
-      LinearLayout ll = triton::gpu::isPaddedEncoding(srcTy.getEncoding())
-                            ? triton::gpu::paddedLinearLayout(srcTy)
-                            : triton::gpu::toLinearLayout(srcTy);
+      LinearLayout ll = triton::gpu::toLinearLayoutIgnoringPadding(srcTy);
       auto kPartition = StringAttr::get(ctx, "partition");
       assert(ll.hasInDim(kPartition) &&
              "multiple bases require a partition input dim");

@@ -199,6 +199,10 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                               << " valueElemNBits = " << valueElemNBits << " "
                               << op.getType());
     SmallVector<Value> loadedVals;
+    // The L2 cache policy register is loop-invariant; create it once instead of
+    // re-emitting an identical createpolicy per vectorized load.
+    Value l2PolicyReg =
+        createCachePolicy(op.getEvict(), rewriter, loc, computeCapability);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       // TODO: optimization when ptr is GEP with constant offset
       size_t in_off = 0;
@@ -265,10 +269,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
       auto *addrOpr =
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
-
-      // Create L2 cache policy register if needed
-      Value l2PolicyReg =
-          createCachePolicy(op.getEvict(), rewriter, loc, computeCapability);
 
       // Define the instruction opcode
       auto &ld = ptxBuilder.create("ld")
@@ -400,6 +400,10 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                          loc, targetInfo);
     const int numVecs = elemsPerThread / vec;
+    // The L2 cache policy register is loop-invariant; create it once instead of
+    // re-emitting an identical createpolicy per vectorized store.
+    Value l2PolicyReg =
+        createCachePolicy(op.getEvict(), rewriter, loc, computeCapability);
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
       // TODO: optimization when ptr is AddPtr with constant offset
       size_t in_off = 0;
@@ -450,10 +454,6 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
 
       auto *asmAddr =
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
-
-      // Create L2 cache policy register if needed
-      Value l2PolicyReg =
-          createCachePolicy(op.getEvict(), rewriter, loc, computeCapability);
 
       auto &ptxStoreInstr =
           ptxBuilder.create("st")
@@ -1106,7 +1106,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
         typeConverter->convertType(barrierTy.getElementType()), rewriter);
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getResult(), llvmElemTy, rewriter);
-    Value dstBase = dstMemObj.getShmemAffineBase(loc, rewriter, dstTy);
+    uint64_t affineBlockMask =
+        LLVM::SharedMemoryObject::getMaskSpanOffsetsAndBlocks(dstTy).second;
 
     auto voidTy = void_ty(op->getContext());
     auto id = getThreadId(rewriter, loc);
@@ -1126,7 +1127,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy, tmaMode);
     auto smemLayout = ttg::toLinearLayout(smemTy);
-    auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
+    auto msgToShared =
+        invertAndComposeBlockLocal(smemLayout, msgToPackedOffset);
     auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, smemTy);
 
     auto ctx = op.getContext();
@@ -1166,6 +1168,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
           getCGALayout(barrierTy.getEncoding()) == oneCTACGALayout;
       ctaGroup = oneCTABarrier ? "cta_group::1." : "cta_group::2.";
     }
+    if (affineBlockMask)
+      ctaGroup = "cta_group::2.";
 
     // The bounding box inner dimension must be less than or equal to the
     // swizzle size.
@@ -1180,20 +1184,26 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       Value boxPred =
           b.and_(pred, b.icmp_ult(id, b.i32_val(numWarpsToCopy * warpSize)));
       ::mlir::triton::PTXBuilder ptxBuilderTMA;
-      Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
       Value copyIdxVal = b.add(warpID, b.i32_val(copyIdx));
-      Value shMemOffset =
-          applyLinearLayout(loc, rewriter, msgToShared,
-                            {{kMsg, copyIdxVal}, {kBlock, ctaId}})[0]
-              .second;
-      Value shMemPtr = b.gep(elemPtrTy, llvmElemTy, dstBase, shMemOffset);
+      auto sharedAddress = applyLinearLayout(
+          loc, rewriter, msgToShared, {{kMsg, copyIdxVal}, {kBlock, ctaId}});
+      auto [shMemPtr, targetCTA] = materializeLocalAddrs(
+          loc, dstTy, dstMemObj, llvmElemTy,
+          {{sharedAddress[0].second, sharedAddress[1].second}}, rewriter)[0];
+      if (affineBlockMask) {
+        shMemPtr = NVVM::MapaOp::create(rewriter, loc,
+                                        ptr_ty(rewriter.getContext(), 7),
+                                        shMemPtr, targetCTA);
+      }
       SmallVector<PTXBuilder::Operand *> operands = {
           ptxBuilderTMA.newOperand(boxPred, "b"),
           ptxBuilderTMA.newOperand(shMemPtr, "r"),
           ptxBuilderTMA.newOperand(adaptor.getDesc(), "l")};
       std::string tmaInst =
           "@$0 cp.async.bulk.tensor." + std::to_string(rank) + "d." + ctaGroup +
-          "shared::" + ((crossCTABarrier || multicast) ? "cluster" : "cta") +
+          "shared::" +
+          ((crossCTABarrier || multicast || affineBlockMask) ? "cluster"
+                                                             : "cta") +
           ".global" + (isIm2Col ? ".im2col" : "") +
           ".mbarrier::complete_tx::bytes";
       if (multicast)
@@ -1398,11 +1408,10 @@ static LinearLayout getUnswizzledLayout(triton::gpu::MemDescType type) {
     assert(isa<ttg::SwizzledSharedEncodingAttr>(type.getEncoding()));
     return ttg::toLinearLayout(type);
   }
-  assert(type.getShape() == type.getAllocShape().take_back(type.getRank()));
   // TMA gather/scatter only supports tiled mode
   return ttg::nvmmaSharedToLinearLayout(
-      type.getShape(), cast<NVMMASharedEncodingAttr>(type.getEncoding()),
-      ttg::TMAMode::Tiled, /*disableSwizzle=*/true);
+      ttg::dropPipeliningDim(type.getAllocShape(), type.getEncoding()),
+      mmaEncoding, ttg::TMAMode::Tiled, /*disableSwizzle=*/true);
 }
 
 // This function is shared between the TMA gather and scatter lowerings. It
@@ -1443,11 +1452,7 @@ static LogicalResult iterateGatherScatterIndices(
           "x offsets are not grouped by 4 contiguous elements");
   }
 
-  // TMA expects the memdesc shape to match the alloc shape.
   triton::gpu::MemDescType smemType = smem.getType();
-  ArrayRef<int64_t> allocShape = smemType.getAllocShape();
-  if (allocShape.size() < 2 || smemType.getShape() != allocShape.take_back(2))
-    return op->emitError("memdesc shape must match alloc shape");
   // `NVMMASharedEncodingAttr` means the core matrix tiles are placed next to
   // each other in shared memory, which lines up with how `gather4` loads data.
   auto enc = dyn_cast<NVMMASharedEncodingAttr>(smemType.getEncoding());
@@ -1456,10 +1461,10 @@ static LogicalResult iterateGatherScatterIndices(
   if (enc.getFp4Padded())
     yOffsetValue = b.mul(yOffsetValue, b.i32_val(2));
   Type llvmElemTy = typeConverter.convertType(smemType.getElementType());
-  Type elemPtrTy = ptr_ty(ctx, /*addrspace=*/3);
   auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, smemObjValue,
                                                        llvmElemTy, rewriter);
-  Value smemBase = smemObj.getShmemAffineBase(loc, rewriter, smemType);
+  bool crossCTA =
+      LLVM::SharedMemoryObject::getMaskSpanOffsetsAndBlocks(smemType).second;
 
   unsigned threadsPerWarp = xCoordsLayout.getInDimSize(kLane);
 
@@ -1488,7 +1493,8 @@ static LogicalResult iterateGatherScatterIndices(
   // swizzle tile size, e.g. [4, 32] vs. [8, 32], then, for example, the address
   // of the 0th element of row 4 will not be at the start of the segment.
   LinearLayout sharedLayout = getUnswizzledLayout(smemType);
-  LinearLayout msgToShared = msgLayout.invertAndCompose(sharedLayout);
+  LinearLayout msgToShared =
+      invertAndComposeBlockLocal(sharedLayout, msgLayout);
 
   // If there are too few rows, warps will have redundant data.
   auto freeVars = xCoordsLayout.getFreeVariableMasks();
@@ -1527,10 +1533,13 @@ static LogicalResult iterateGatherScatterIndices(
                                        {kMsg, msgIdVal}});
       assert(result.size() == 2 && result.front().first == "offset" &&
              result.back().first == "block");
-      Value shMemOffset = result.front().second;
-      // Because we checked that the memdesc's allocshape and shape match, we
-      // can ignore the strides and directly index into the shmem object.
-      Value shMemPtr = b.gep(elemPtrTy, llvmElemTy, smemBase, shMemOffset);
+      auto [shMemPtr, targetCTA] = materializeLocalAddrs(
+          loc, smemType, smemObj, llvmElemTy,
+          {{result.front().second, result.back().second}}, rewriter)[0];
+      if (crossCTA) {
+        shMemPtr = NVVM::MapaOp::create(rewriter, loc, ptr_ty(ctx, 7), shMemPtr,
+                                        targetCTA);
+      }
       Value yOffset = b.add(yOffsetValue, b.i32_val(msgId * msgSize));
 
       callback(pred, shMemPtr, yOffset, ArrayRef(xOffsets).slice(regId, 4));
@@ -1583,6 +1592,9 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
     barrierPtr =
         LLVM::NVIDIA::getLeaderAddress(loc, rewriter, barrierPtr, barrierTy);
   }
+  bool crossCTA = LLVM::SharedMemoryObject::getMaskSpanOffsetsAndBlocks(
+                      op.getResult().getType())
+                      .second;
 
   std::string ctaGroup;
   if (getModuleTwoCTAs(op)) {
@@ -1592,6 +1604,8 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
         getCGALayout(barrierTy.getEncoding()) == oneCTACGALayout;
     ctaGroup = oneCTABarrier ? ".cta_group::1" : ".cta_group::2";
   }
+  if (crossCTA)
+    ctaGroup = ".cta_group::2";
 
   // Callback to generate the gather4 instruction.
   auto callback = [&](Value pred, Value shMemPtr, Value yOffset,
@@ -1599,7 +1613,7 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
     std::string tmaInst = "@$0 cp.async.bulk.tensor.2d.tile::gather4";
     tmaInst += ctaGroup;
     tmaInst += ".shared::";
-    tmaInst += (crossCTABarrier || multicast) ? "cluster" : "cta";
+    tmaInst += (crossCTABarrier || multicast || crossCTA) ? "cluster" : "cta";
     tmaInst += ".global.mbarrier::complete_tx::bytes";
     if (multicast)
       tmaInst += ".multicast::cluster";

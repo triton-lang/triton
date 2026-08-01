@@ -5,6 +5,12 @@
 
 // -----
 
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+// expected-error @below {{tensor-memory element type bit width must be at least 8; got 1}}
+!i1_tmem = !ttg.memdesc<128x128xi1, #tmem, #ttng.tensor_memory>
+
+// -----
+
 #shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
@@ -1057,8 +1063,18 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func public @memdesc_reinterpret_changed_storage_size_tmem(%arg0: !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory>) {
-    // expected-error @+1 {{result logical storage size must not exceed source logical storage size}}
+    // expected-error @+1 {{result tensor-memory column footprint}}
     %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem_scales = #ttng.tensor_memory_scales_encoding<>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // expected-error @+1 {{tensor-memory scale descriptors must have rank 2; got 1}}
+  tt.func public @tmem_scales_rank_one(%arg0: !ttg.memdesc<16xi8, #tmem_scales, #ttng.tensor_memory, 128x16>) {
     tt.return
   }
 }
@@ -1070,7 +1086,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func public @memdesc_reinterpret_contiguous_subview_changed_storage_size_tmem(%arg0: !ttg.memdesc<256x512xf32, #tmem, #ttng.tensor_memory, mutable>) {
     %sub = ttng.tmem_subslice %arg0 {offset = 496 : i32} : !ttg.memdesc<256x512xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<256x16xf32, #tmem, #ttng.tensor_memory, mutable, 256x512>
-    // expected-error @+1 {{result logical storage size must not exceed source logical storage size}}
+    // expected-error @+1 {{result tensor-memory column footprint}}
     %0 = ttg.memdesc_reinterpret %sub : !ttg.memdesc<256x16xf32, #tmem, #ttng.tensor_memory, mutable, 256x512> -> !ttg.memdesc<256x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>
     tt.return
   }
@@ -1082,8 +1098,20 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func public @memdesc_reinterpret_tmem_scales_subview_expands(%arg0: !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory, mutable>) {
     %sub = ttng.tmem_subslice %arg0 {offset = 4 : i32} : !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory, mutable, 128x8>
-    // expected-error @+1 {{result logical storage size must not exceed source logical storage size}}
+    // expected-error @+1 {{result tensor-memory column footprint}}
     %0 = ttg.memdesc_reinterpret %sub : !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory, mutable, 128x8> -> !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem_scales = #ttng.tensor_memory_scales_encoding<>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func public @memdesc_reinterpret_tmem_scales_restores_sliced_rows(%arg0: !ttg.memdesc<16x4xi8, #tmem_scales, #ttng.tensor_memory, mutable>) {
+    %sub = ttng.tmem_subslice %arg0 {offset = 0 : i32, dim = 0 : i32} : !ttg.memdesc<16x4xi8, #tmem_scales, #ttng.tensor_memory, mutable> -> !ttg.memdesc<8x4xi8, #tmem_scales, #ttng.tensor_memory, mutable, 16x4>
+    // expected-error @+1 {{result accesses tensor-memory rows outside the source subview}}
+    %0 = ttg.memdesc_reinterpret %sub : !ttg.memdesc<8x4xi8, #tmem_scales, #ttng.tensor_memory, mutable, 16x4> -> !ttg.memdesc<16x4xi8, #tmem_scales, #ttng.tensor_memory, mutable>
     tt.return
   }
 }
@@ -1094,8 +1122,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func public @memdesc_reinterpret_noncontiguous_tmem_subview(%arg0: !ttg.memdesc<256x256xf32, #tmem, #ttng.tensor_memory, mutable>) {
     %sub = ttng.tmem_subslice %arg0 {offset = 128 : i32, dim = 0 : i32} : !ttg.memdesc<256x256xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable, 256x256>
-    // expected-error @+1 {{source subview must be contiguous}}
+    // expected-error @+1 {{result tensor-memory column footprint includes columns not owned by the source subview}}
     %0 = ttg.memdesc_reinterpret %sub : !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable, 256x256> -> !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func public @memdesc_reinterpret_tmem_pipeline_subview_gap(%arg0: !ttg.memdesc<5x128x128xf32, #tmem, #ttng.tensor_memory, mutable>) {
+    %stages = ttng.tmem_subslice %arg0 {offset = 0 : i32, dim = 0 : i32} : !ttg.memdesc<5x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable, 5x128x128>
+    %view = ttng.tmem_subslice %stages {offset = 0 : i32, dim = 2 : i32} : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable, 5x128x128> -> !ttg.memdesc<2x128x64xf32, #tmem, #ttng.tensor_memory, mutable, 5x128x128>
+    // expected-error @+1 {{result tensor-memory column footprint includes columns not owned by the source subview}}
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<2x128x64xf32, #tmem, #ttng.tensor_memory, mutable, 5x128x128> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     tt.return
   }
 }
@@ -1107,7 +1148,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func public @memdesc_reinterpret_tmem_subview_expands_rows(%arg0: !ttg.memdesc<64x128xf32, #tmem64, #ttng.tensor_memory, mutable>) {
     %sub = ttng.tmem_subslice %arg0 {offset = 64 : i32} : !ttg.memdesc<64x128xf32, #tmem64, #ttng.tensor_memory, mutable> -> !ttg.memdesc<64x64xf32, #tmem64, #ttng.tensor_memory, mutable, 64x128>
-    // expected-error @+1 {{result logical storage size must not exceed source logical storage size}}
+    // expected-error @+1 {{result tensor-memory row footprint (128) exceeds the source view (64)}}
     %0 = ttg.memdesc_reinterpret %sub : !ttg.memdesc<64x64xf32, #tmem64, #ttng.tensor_memory, mutable, 64x128> -> !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable>
     tt.return
   }
@@ -1130,10 +1171,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func public @tmem_subslice_rank_not_2() {
+  tt.func public @tmem_subslice_rank_mismatch() {
     %md = ttng.tmem_alloc : () -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-    // expected-error @+1 {{The result must be a 2D tensor memory buffer.}}
-    %sub = ttng.tmem_subslice %md {offset = 0 : i32} : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    // expected-error @+1 {{The source and result must both be 2D or 3D tensor memory buffers.}}
+    %sub = ttng.tmem_subslice %md {offset = 0 : i32} : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 2x128x128>
     tt.return
   }
 }
@@ -1144,7 +1185,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func public @tmem_subslice_rows_mismatch() {
     %md = ttng.tmem_alloc : () -> !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
-    // expected-error @+1 {{The result must have the same size as the source in the dimension that is not being sliced.}}
+    // expected-error @+1 {{The result must have the same size as the source in the dimensions that are not being sliced.}}
     %sub = ttng.tmem_subslice %md {offset = 0 : i32} : !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 256x128>
     tt.return
   }
@@ -1205,6 +1246,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func public @tmem_subslice_negative_offset(%md: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) {
     // expected-error @+1 {{The split offset may not exceed the source shape}}
     %sub = ttng.tmem_subslice %md {offset = -64 : i32} : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable, 128x128>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func public @tmem_subslice_stage_exceeds_view(
+      %source: !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable, 5x128x128>) {
+    // expected-error @+1 {{The split offset may not exceed the source shape}}
+    %expanded = ttng.tmem_subslice %source {offset = 1 : i32, dim = 0 : i32} :
+      !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable, 5x128x128> ->
+      !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable, 5x128x128>
     tt.return
   }
 }
@@ -1306,7 +1361,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func public @tmem_subslice_invalid_dim() {
     %md = ttng.tmem_alloc : () -> !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
-    // expected-error @+1 {{The slice dimension must be 0 or 1.}}
+    // expected-error @+1 {{The slice dimension must be within the descriptor rank.}}
     %sub = ttng.tmem_subslice %md {offset = 0 : i32, dim = 2 : i32} : !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 256x128>
     tt.return
   }
@@ -1318,7 +1373,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func public @tmem_subslice_negative_dim() {
     %md = ttng.tmem_alloc : () -> !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
-    // expected-error @+1 {{The slice dimension must be 0 or 1.}}
+    // expected-error @+1 {{The slice dimension must be within the descriptor rank.}}
     %sub = ttng.tmem_subslice %md {offset = 0 : i32, dim = -1 : i32} : !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 256x128>
     tt.return
   }
@@ -1365,6 +1420,254 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %src = ttg.local_alloc : () -> !ttg.memdesc<32x32xi64, #shared, #smem, mutable>
     // expected-error @below {{unsupported reduce kind add for element type 'si64'}}
     ttng.async_tma_reduce add, %arg0[%x, %x] %src : !tt.tensordesc<32x32xsi64, #shared>, !ttg.memdesc<32x32xi64, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_wrong_binary_arity(
+      %a: tensor<256xf32, #blocked>,
+      %b: tensor<256xf32, #blocked>,
+      %c: tensor<256xf32, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op add expects 2 operands but got 3}}
+    %0 = ttng.packed_arith add %a, %b, %c : (tensor<256xf32, #blocked>, tensor<256xf32, #blocked>, tensor<256xf32, #blocked>) -> tensor<256xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_wrong_fma_arity(
+      %a: tensor<256xf32, #blocked>,
+      %b: tensor<256xf32, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op fma expects 3 operands but got 2}}
+    %0 = ttng.packed_arith fma %a, %b : (tensor<256xf32, #blocked>, tensor<256xf32, #blocked>) -> tensor<256xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_insufficient_unique_elements(
+      %a: tensor<128xf32, #blocked>,
+      %b: tensor<128xf32, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op result layout must provide a multiple of 2 unique elements per thread}}
+    %0 = ttng.packed_arith add %a, %b : (tensor<128xf32, #blocked>, tensor<128xf32, #blocked>) -> tensor<128xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_unsupported_signature(
+      %f16: tensor<256xf16, #blocked>,
+      %f32: tensor<256xf32, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op unsupported add signature f16x2 <- (f16x2, f32x2)}}
+    %0 = ttng.packed_arith add %f16, %f32 : (tensor<256xf16, #blocked>, tensor<256xf32, #blocked>) -> tensor<256xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_invalid_alternate_result(
+      %a: tensor<256xi8, #blocked>,
+      %b: tensor<256xi8, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op result #0 must be ranked tensor of packed arithmetic result element values}}
+    %0 = ttng.packed_arith mul %a, %b : (tensor<256xi8, #blocked>, tensor<256xi8, #blocked>) -> tensor<256xi8, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_mixed_widths(
+      %a: tensor<256xf16, #blocked>,
+      %b: tensor<256xf8E4M3FN, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op unsupported add signature f32x2 <- (f16x2, e4m3x4)}}
+    %0 = ttng.packed_arith add %a, %b : (tensor<256xf16, #blocked>, tensor<256xf8E4M3FN, #blocked>) -> tensor<256xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_alternate_addend_must_match_result(
+      %a: tensor<256xf8E5M2, #blocked>,
+      %b: tensor<256xf8E5M2, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op unsupported add signature e4m3x4 <- (e5m2x4, e5m2x4)}}
+    %0 = ttng.packed_arith add %a, %b : (tensor<256xf8E5M2, #blocked>, tensor<256xf8E5M2, #blocked>) -> tensor<256xf8E4M3FN, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#fp4 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_alternate_fma_addend_must_match_result(
+      %a: tensor<128xi8, #fp4>,
+      %b: tensor<256xf8E4M3FN, #blocked>,
+      %c: tensor<256xf8E5M2, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op unsupported fma signature e4m3x4 <- (e2m1x4, e4m3x4, e5m2x4)}}
+    %0 = ttng.packed_arith fma %a, %b, %c : (tensor<128xi8, #fp4>, tensor<256xf8E4M3FN, #blocked>, tensor<256xf8E5M2, #blocked>) -> tensor<256xf8E4M3FN, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_x4_insufficient_unique_elements(
+      %a: tensor<2xf8E4M3FN, #blocked>,
+      %b: tensor<2xf8E4M3FN, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op result layout must provide a multiple of 4 unique elements per thread}}
+    %0 = ttng.packed_arith add %a, %b : (tensor<2xf8E4M3FN, #blocked>, tensor<2xf8E4M3FN, #blocked>) -> tensor<2xf8E4M3FN, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_f32x2_min_is_unsupported(
+      %a: tensor<256xf32, #blocked>,
+      %b: tensor<256xf32, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op unsupported min signature f32x2 <- (f32x2, f32x2)}}
+    %0 = ttng.packed_arith min %a, %b : (tensor<256xf32, #blocked>, tensor<256xf32, #blocked>) -> tensor<256xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_x4_max_is_unsupported(
+      %a: tensor<256xf8E4M3FN, #blocked>,
+      %b: tensor<256xf8E4M3FN, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op unsupported max signature e4m3x4 <- (e4m3x4, e4m3x4)}}
+    %0 = ttng.packed_arith max %a, %b : (tensor<256xf8E4M3FN, #blocked>, tensor<256xf8E4M3FN, #blocked>) -> tensor<256xf8E4M3FN, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_fp4_wrong_shape(
+      %a: tensor<256xi8, #blocked>,
+      %b: tensor<256xf8E4M3FN, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op requires every fp4 operand to have the result shape with the same single dimension halved}}
+    %0 = ttng.packed_arith add %a, %b : (tensor<256xi8, #blocked>, tensor<256xf8E4M3FN, #blocked>) -> tensor<256xf8E4M3FN, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#result = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#fp4 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#linear_fp4 = #ttg.linear<{register = [[1], [2]], lane = [[4], [8], [16], [32], [64]], warp = [[128], [256]], block = []}>
+#permuted = #ttg.linear<{register = [[2], [1], [4]], lane = [[8], [16], [32], [64], [128]], warp = [[256], [512]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_fp4_wrong_layout(
+      %a: tensor<128xi8, #fp4>,
+      %b: tensor<256xf8E4M3FN, #result>) {
+    // expected-error @below {{'ttng.packed_arith' op fp4 operand 0 must have a layout compatible with the result}}
+    %0 = ttng.packed_arith add %a, %b : (tensor<128xi8, #fp4>, tensor<256xf8E4M3FN, #result>) -> tensor<256xf8E4M3FN, #result>
+    tt.return
+  }
+
+  tt.func @packed_arith_fp4_noncanonical_register_order(
+      %a: tensor<512xi8, #linear_fp4>,
+      %b: tensor<1024xf8E4M3FN, #permuted>) {
+    // expected-error @below {{'ttng.packed_arith' op fp4 operand 0 must have a layout compatible with the result}}
+    %0 = ttng.packed_arith add %a, %b : (tensor<512xi8, #linear_fp4>, tensor<1024xf8E4M3FN, #permuted>) -> tensor<1024xf8E4M3FN, #permuted>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_fp6_is_unsupported(
+      %a: tensor<256xf6E3M2FN, #blocked>,
+      %b: tensor<256xf8E4M3FN, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op operand #0 must be variadic of ranked tensor of packed arithmetic operand element values}}
+    %0 = ttng.packed_arith add %a, %b : (tensor<256xf6E3M2FN, #blocked>, tensor<256xf8E4M3FN, #blocked>) -> tensor<256xf8E4M3FN, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_ue8m0_addend_must_match_result(
+      %a: tensor<256xf8E4M3FN, #blocked>,
+      %b: tensor<256xf8E8M0FNU, #blocked>) {
+    // expected-error @below {{'ttng.packed_arith' op unsupported add signature e4m3x4 <- (e4m3x4, ue8m0x4)}}
+    %0 = ttng.packed_arith add %a, %b : (tensor<256xf8E4M3FN, #blocked>, tensor<256xf8E8M0FNU, #blocked>) -> tensor<256xf8E4M3FN, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#result = #ttg.blocked<{sizePerThread = [4, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#fp4_axis0 = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#fp4_axis1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @packed_arith_fp4_operands_require_matching_axes(
+      %axis0: tensor<2x256xi8, #fp4_axis0>,
+      %axis1: tensor<4x128xi8, #fp4_axis1>) {
+    // expected-error @below {{'ttng.packed_arith' op requires every fp4 operand to have the result shape with the same single dimension halved}}
+    %0 = ttng.packed_arith mul %axis0, %axis1 : (tensor<2x256xi8, #fp4_axis0>, tensor<4x128xi8, #fp4_axis1>) -> tensor<4x256xf8E4M3FN, #result>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CGALayout = [[1, 0]]}>
+#blocked = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tma_store_rejects_remote_source(%desc: !tt.tensordesc<128x64xi32, #shared>, %view: !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>, %x: i32) {
+    // expected-error @below {{source subview may have an origin in another CTA}}
+    ttng.async_tma_copy_local_to_global %desc[%x, %x] %view : !tt.tensordesc<128x64xi32, #shared>, !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>
+    tt.return
+  }
+  tt.func @tma_reduce_rejects_remote_source(%desc: !tt.tensordesc<128x64xi32, #shared>, %view: !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>, %x: i32) {
+    // expected-error @below {{source subview may have an origin in another CTA}}
+    ttng.async_tma_reduce add, %desc[%x, %x] %view : !tt.tensordesc<128x64xi32, #shared>, !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>
+    tt.return
+  }
+
+  tt.func @tma_scatter_rejects_remote_source(%desc: !tt.tensordesc<1x64xi32, #shared>, %view: !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>, %indices: tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>, %y: i32) {
+    // expected-error @below {{source subview may have an origin in another CTA}}
+    ttng.async_tma_scatter %desc[%indices, %y] %view : !tt.tensordesc<1x64xi32, #shared>, tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>, i32, !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>
     tt.return
   }
 }

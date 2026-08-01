@@ -73,10 +73,8 @@ class TritonSemantic(Generic[TensorTy]):
         if a_is_scalar != b_is_scalar:
             scalar_ty, tensor_ty = (a_ty, b_ty) if a_is_scalar else (b_ty, a_ty)
             if scalar_ty.kind().value <= tensor_ty.kind().value:
-                # Upcast because of 2) below!
-                if div_or_mod and tensor_ty.is_floating():
-                    return tl.float32
-                return tensor_ty
+                # Ignore the scalar and apply the remaining promotion rules.
+                a_ty, b_ty = tensor_ty, tensor_ty
 
         # 1) if one operand is double, the other is implicitly
         #    converted to double
@@ -1815,6 +1813,12 @@ class TritonSemantic(Generic[TensorTy]):
 
     def debug_barrier(self) -> TensorTy:
         return self.tensor(self.builder.create_barrier(), tl.void)
+
+    def grid_dependency_wait(self) -> None:
+        self.builder.create_grid_dependency_wait()
+
+    def grid_dependency_launch_dependents(self) -> None:
+        self.builder.create_grid_dependency_launch_dependents()
 
     def device_print(self, prefix: str, args: List[TensorTy], hex: bool) -> TensorTy:
         # It makes sense visually for prefix to end in ": "; make it so.  Also,
