@@ -148,11 +148,11 @@ def warp_specialized_matmul_kernel(a_desc, b_desc, c_desc, num_warps: gl.constex
     mma_done_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(mma_done_bar, count=1)
 
-    tma_event0 = pl.allocate_event("ws_tma_load[0]")
-    tma_event1 = pl.allocate_event("ws_tma_load[1]")
+    tma_event0 = pl.allocate_event("ws_load[0]")
+    tma_event1 = pl.allocate_event("ws_load[1]")
     # MMAs using different operand buffers may be in flight concurrently.
-    mma_event0 = pl.allocate_event("ws_tcgen05_mma[0]")
-    mma_event1 = pl.allocate_event("ws_tcgen05_mma[1]")
+    mma_event0 = pl.allocate_event("ws_mma[0]")
+    mma_event1 = pl.allocate_event("ws_mma[1]")
     off_m = gl.program_id(axis=0) * block_m
     off_n = gl.program_id(axis=1) * block_n
     partition_args = (a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, load_ready_bars, acc_tmem, mma_done_bar,
