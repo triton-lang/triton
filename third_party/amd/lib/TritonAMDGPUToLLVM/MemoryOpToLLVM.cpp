@@ -70,10 +70,10 @@ static Value createDsReadTr(Operation *op, RewriterBase &rewriter, Location loc,
 // Emits a single ds_read_tr* operation at `vecAddr` and unpacks the loaded
 // vector into individual element Values. Returns an empty vector if the ISA
 // family does not support a ds_read_tr* instruction.
-SmallVector<Value>
-emitDsReadTr(Operation *op, Location loc, Value vecAddr, VectorType vTy,
-             Type llvmElemTy, ConversionPatternRewriter &rewriter,
-             const ::triton::AMD::TargetInfo &targetInfo) {
+SmallVector<Value> emitDsReadTr(Operation *op, Location loc, Value vecAddr,
+                                VectorType vTy, Type llvmElemTy,
+                                ConversionPatternRewriter &rewriter,
+                                const ::triton::AMD::TargetInfo &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   const auto bitWidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
   assert(bitWidth == 16 || bitWidth == 8);
@@ -134,65 +134,37 @@ lowerDsReadTr(Operation *op,
     basesVec = LLVM::buildBasePtrVector(loc, rewriter, smemBases);
   }
 
-  // Map onto offsets (contiguous part) and addr (non-contiguous part)
-  LinearLayout fullTile;
-  // Contiguous tile
-  LinearLayout tile;
-  // ds_read_tr*_b64 performs a cooperative transposed load across 16
-  // threads. The instruction processes an Nx16 tile (N=4 for 16-bit, N=8 for
-  // 8-bit). The loaded tile is re-packed/transposed where lane i will
-  // receive the i-th column.
+  // A ds_read_trK_bN instruction takes one LDS base address from each of the
+  // lanes in a warp, reads N / K contiguous K-bit elements from each base, and
+  // distributes the elements along the lanes in a manner that can be described
+  // by a bijective linear map
   //
-  // Loaded tile layout (input):     Register layout (output after transpose):
-  //     K0  K1  ... K15               R0  R1  R2  R3
-  // M0[ ............... ]    =>  T0 [ .   .   .   . ]
-  // M1[ ............... ]        T1 [ .   .   .   . ]
-  // M2[ ............... ]        ...
-  // M3[ ............... ]        T15[ .   .   .   . ]
+  //                           F: R ⊕ L  ->  C ⊕ A,
   //
-  // Each lane loads 64 contiguous bits from LDS. After the transpose,
-  // lane i receives column i from the input (elements strided by 16
-  // the loaded tile).
+  // where R and L are the destination register and lane index spaces, and C and
+  // A are the contiguous-offset and address-providing lane index spaces.
   //
-  // For example with N=4 (16-bit):
-  // - Lane 0 receives elements from column 0: originally at [t0,t4,t8,t12]
-  // - Lane 1 receives elements from column 1: originally at [t0,t4,t8,t12]
-  //   These are the second 16 bits loaded by the same lanes before repacking
-  // - Lane 4 receives elements from column 4: originally at [t1,t5,t9,t13]
+  // The LinearLayout `fullTile` describes this map. Its `tile` factor maps the
+  // first t := log2(N / K) bases of L to C. The bases mapped to A are an order-
+  // preserving interleaving of the bases of R and the remaining bases of L:
   //
-  // Note that there is no restriction on where elements are loaded
-  // from, only that each lane needs to load 64 contiguous bits from shared
-  // memory. We require N number of lanes to be contiguous since they read
-  // consecutive 64 bits loaded from the same lanes.
-  tile = LinearLayout::identity1D(ldsParams.tileSize, kLane, kOffset);
-  const auto isaFamily = targetInfo.getISAFamily();
-  const unsigned missingLanes =
-      targetInfo.getWarpSize() / tile.getInDimSize(kLane);
-  unsigned otherLanes = 1;
-  if (isaFamily == ISAFamily::CDNA4) {
-    otherLanes = (bitWidth == 8) ? 2 : 4;
-  } else if (ldsParams.tileKind ==
-             AMD::TargetInfo::TileKind::DoubleContiguity) {
-    otherLanes = 2;
-  }
-
-  switch (ldsParams.tileKind) {
-  case AMD::TargetInfo::TileKind::DoubleContiguity:
-    fullTile =
-        tile * LinearLayout::identity1D(ldsParams.tileSize / 2, kReg, kAddr) *
-        LinearLayout::identity1D(otherLanes, kLane, kAddr) *
-        LinearLayout::identity1D(2, kReg, kAddr) *
-        LinearLayout::identity1D(missingLanes / otherLanes, kLane, kAddr);
-    break;
-  case AMD::TargetInfo::TileKind::Standard:
-    fullTile =
-        tile * LinearLayout::identity1D(otherLanes, kLane, kAddr) *
-        LinearLayout::identity1D(ldsParams.tileSize, kReg, kAddr) *
-        LinearLayout::identity1D(missingLanes / otherLanes, kLane, kAddr);
-    break;
-  }
-  // Add warp dimension so we can invert and compose with reps later
-  fullTile *= LinearLayout::identity1D(1, kWarp, kAddr);
+  //                   R[0:a], L[t:t + b], R[a:t], L[t + b:p],
+  //
+  // where p := log2(lanesPerWarp), and a and b are instruction-specific
+  // parameters.
+  auto tile = LinearLayout::identity1D(ldsParams.tileSize, kLane, kOffset);
+  const unsigned numInstrRegBits = llvm::Log2_32(ldsParams.tileSize);
+  const unsigned numAddrLaneBits =
+      llvm::Log2_32(targetInfo.getWarpSize()) - numInstrRegBits;
+  auto fullTile =
+      tile *
+      LinearLayout::identity1D(1 << ldsParams.leadingRegBases, kReg, kAddr) *
+      LinearLayout::identity1D(1 << ldsParams.leadingLaneBases, kLane, kAddr) *
+      LinearLayout::identity1D(
+          1 << (numInstrRegBits - ldsParams.leadingRegBases), kReg, kAddr) *
+      LinearLayout::identity1D(
+          1 << (numAddrLaneBits - ldsParams.leadingLaneBases), kLane, kAddr) *
+      LinearLayout::identity1D(1, kWarp, kAddr);
 
   if (cvtLayout.getInDimSize(kReg) < fullTile.getInDimSize(kReg)) {
     return failure();
@@ -253,7 +225,6 @@ lowerDsReadTr(Operation *op,
     // positions must map to the same partition. For a LinearLayout that holds
     // iff the low log2(elemsPerInstr) register bases contribute 0 to
     // kPartition. Bail out if not, so a generic lowering can take over.
-    const unsigned numInstrRegBits = llvm::Log2_32(fullTile.getInDimSize(kReg));
     for (unsigned pos = 0; pos < numInstrRegBits; ++pos) {
       if (partitionLayout.getBasis(kReg, pos, kPartition) != 0)
         return failure();
@@ -264,8 +235,8 @@ lowerDsReadTr(Operation *op,
     // source lane issuing the load. For ds_read_tr* the hardware shuffles
     // data across lanes, so the two differ: we need to remap.
     //
-    // Example: ds_load_tr8_b64 on gfx1250 (DoubleContiguity), from the test
-    // `ds_transpose_partitioned_uses_double_contiguity`.
+    // Example: ds_load_tr8_b64 on gfx1250, from the test
+    // `ds_transpose_partitioned_remaps_lane`.
     //
     //  fullTile:
     //   - lane=1 -> (1, 0)
