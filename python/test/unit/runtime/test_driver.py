@@ -8,6 +8,7 @@ import cloudpickle
 
 import triton
 import triton.language as tl
+import triton._compile_warmup_pool as warmup_pool
 from triton._compile_warmup import (
     CompilationTrace,
     _cache_phase_for_item,
@@ -67,6 +68,22 @@ def test_compile_warmup_preserves_tensor_view_alignment():
 def test_compile_warmup_process_pool_requires_workers():
     with pytest.raises(ValueError, match="max_workers must be >= 1"):
         ProcessPoolWarmupDispatcher(max_workers=0, trace_directory=None, phase="warmup-test")
+
+
+def test_compile_warmup_balances_workers_by_capture_load(monkeypatch):
+    monkeypatch.setenv("TRITON_WARMUP_WORKER_WEIGHTS", "27,8")
+
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
+    assert warmup_pool._balanced_worker_count(35) == 27
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw1")
+    assert warmup_pool._balanced_worker_count(35) == 8
+
+    monkeypatch.setenv("TRITON_WARMUP_WORKER_WEIGHTS", "13,13,11,12")
+    workers = []
+    for worker in range(4):
+        monkeypatch.setenv("PYTEST_XDIST_WORKER", f"gw{worker}")
+        workers.append(warmup_pool._balanced_worker_count(49))
+    assert workers == [13, 13, 11, 12]
 
 
 def test_compile_warmup_attributes_combined_session_phases(monkeypatch):

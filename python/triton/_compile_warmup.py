@@ -173,6 +173,7 @@ class CompilationTrace:
             "cache_hit": cache_hit,
             "duration_us": times.total,
             "worker": os.environ.get("PYTEST_XDIST_WORKER", "main"),
+            "compiler_worker": os.environ.get("TRITON_WARMUP_COMPILER_WORKER"),
             "cache_dir": triton.knobs.cache.dir,
         }
         with open(self.path, "a", encoding="utf-8") as output:

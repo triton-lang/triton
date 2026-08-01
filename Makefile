@@ -91,10 +91,13 @@ endif
 WARMUP_PROCS ?= $(NUM_PROCS)
 ifneq ($(FAST_NVIDIA_RUNNER),)
 WARMUP_CAPTURE_PROCS ?= 2
+WARMUP_GROUP_CAPTURE_PROCS ?= 4
+WARMUP_UNIT_CAPTURE_PROCS ?= 2
 else
 WARMUP_CAPTURE_PROCS ?= 4
+WARMUP_GROUP_CAPTURE_PROCS ?= $(WARMUP_CAPTURE_PROCS)
+WARMUP_UNIT_CAPTURE_PROCS ?= 1
 endif
-WARMUP_AUXILIARY_CAPTURE_PROCS ?= 2
 WARMUP_UNIT_TESTS := \
 	python/test/unit/language/test_matmul.py \
 	python/test/unit/language/test_core.py::test_gather
@@ -126,45 +129,66 @@ test-warmup: all
 	warmup_unit_procs=$$(( $(WARMUP_PROCS) / 8 )); \
 	warmup_attention_procs=$$(( $(WARMUP_PROCS) / 16 )); \
 	warmup_auxiliary_procs=0; \
+	warmup_group_capture_procs=$(WARMUP_GROUP_CAPTURE_PROCS); \
+	warmup_unit_capture_args=; \
+	warmup_unit_weights=; \
+	warmup_triton_kernels_weights=; \
+	warmup_group_weights=; \
 	if [ "$$warmup_unit_procs" -lt 1 ]; then warmup_unit_procs=1; fi; \
 	if [ "$$warmup_attention_procs" -lt 1 ]; then warmup_attention_procs=1; fi; \
 	if [ "$(RUNNER_TYPE)" = "nvidia-gb200" ]; then \
-		warmup_unit_procs=$$(( $(WARMUP_PROCS) / 8 )); \
-		warmup_group_procs=$$(( $(WARMUP_PROCS) * 11 / 28 )); \
+		warmup_unit_procs=$$(( $(WARMUP_PROCS) * 5 / 28 )); \
+		warmup_group_procs=$$(( $(WARMUP_PROCS) * 7 / 16 )); \
 		warmup_auxiliary_procs=$$(( $(WARMUP_PROCS) / 14 )); \
-		if [ "$$warmup_unit_procs" -lt 1 ]; then warmup_unit_procs=1; fi; \
 		if [ "$$warmup_group_procs" -lt 1 ]; then warmup_group_procs=1; fi; \
 		if [ "$$warmup_auxiliary_procs" -lt 1 ]; then warmup_auxiliary_procs=1; fi; \
 		warmup_triton_kernels_procs=$$(( \
 			$(WARMUP_PROCS) - warmup_unit_procs - warmup_group_procs - warmup_auxiliary_procs )); \
+		warmup_triton_kernels_weights=27,8; \
+		warmup_unit_capture_args="-n $(WARMUP_UNIT_CAPTURE_PROCS) --dist=worksteal"; \
+		warmup_unit_weights=9,11; \
+		warmup_group_weights=13,13,11,12; \
 	elif [ "$(RUNNER_TYPE)" = "nvidia-h100" ]; then \
-		warmup_unit_procs=$$(( $(WARMUP_PROCS) / 8 )); \
-		warmup_group_procs=$$(( $(WARMUP_PROCS) * 2 / 7 )); \
-		if [ "$$warmup_unit_procs" -lt 1 ]; then warmup_unit_procs=1; fi; \
+		warmup_unit_procs=$$(( $(WARMUP_PROCS) / 6 )); \
+		warmup_group_procs=$$(( $(WARMUP_PROCS) / 3 )); \
 		if [ "$$warmup_group_procs" -lt 1 ]; then warmup_group_procs=1; fi; \
 		warmup_triton_kernels_procs=$$(( \
 			$(WARMUP_PROCS) - warmup_unit_procs - warmup_group_procs )); \
+		warmup_triton_kernels_weights=7,2; \
+		warmup_unit_capture_args="-n $(WARMUP_UNIT_CAPTURE_PROCS) --dist=worksteal"; \
+		warmup_unit_weights=1,1; \
+		warmup_group_weights=1,1,1,1; \
 	else \
 		warmup_group_procs=$$warmup_attention_procs; \
 		warmup_triton_kernels_procs=$$(( $(WARMUP_PROCS) - warmup_unit_procs - warmup_group_procs )); \
 	fi; \
 	if [ "$$warmup_triton_kernels_procs" -lt 1 ]; then warmup_triton_kernels_procs=1; fi; \
-	warmup_triton_kernels_worker_procs=$$(( \
-		(warmup_triton_kernels_procs + $(WARMUP_CAPTURE_PROCS) - 1) / $(WARMUP_CAPTURE_PROCS) )); \
-	TRITON_CI_CACHE_PHASE=warmup-unit $(PYTEST) -s --tb=short \
-		--warmup-only --warmup-workers "$$warmup_unit_procs" \
+	warmup_unit_worker_procs=$$warmup_unit_procs; \
+	if [ -n "$$warmup_triton_kernels_weights" ]; then \
+		warmup_triton_kernels_worker_procs=$$warmup_triton_kernels_procs; \
+		warmup_group_worker_procs=$$warmup_group_procs; \
+	else \
+		warmup_triton_kernels_worker_procs=$$(( \
+			(warmup_triton_kernels_procs + $(WARMUP_CAPTURE_PROCS) - 1) / \
+			$(WARMUP_CAPTURE_PROCS) )); \
+		warmup_group_worker_procs=$$warmup_group_procs; \
+	fi; \
+	TRITON_WARMUP_WORKER_WEIGHTS="$$warmup_unit_weights" \
+		TRITON_CI_CACHE_PHASE=warmup-unit $(PYTEST) -s --tb=short \
+		$$warmup_unit_capture_args \
+		--warmup-only --warmup-workers "$$warmup_unit_worker_procs" \
 		$(WARMUP_UNIT_TESTS) & \
 	warmup_unit_pid=$$!; \
-	TRITON_CI_CACHE_PHASE=warmup-triton-kernels $(PYTEST) -s --tb=short \
+	TRITON_WARMUP_WORKER_WEIGHTS="$$warmup_triton_kernels_weights" \
+		TRITON_CI_CACHE_PHASE=warmup-triton-kernels $(PYTEST) -s --tb=short \
 		-n $(WARMUP_CAPTURE_PROCS) --dist=worksteal \
 		--warmup-only --warmup-workers "$$warmup_triton_kernels_worker_procs" \
 		$(WARMUP_TRITON_KERNEL_TESTS) & \
 	warmup_triton_kernels_pid=$$!; \
 	if [ "$(RUNNER_TYPE)" = "nvidia-gb200" ]; then \
-		warmup_group_worker_procs=$$(( \
-			(warmup_group_procs + $(WARMUP_CAPTURE_PROCS) - 1) / $(WARMUP_CAPTURE_PROCS) )); \
-		PYTHONPATH="$(TRITON_KERNELS_PATH)" TRITON_CI_CACHE_PHASE=warmup-gluon \
-			$(PYTEST) -s --tb=short -n $(WARMUP_CAPTURE_PROCS) --dist=worksteal \
+		TRITON_WARMUP_WORKER_WEIGHTS="$$warmup_group_weights" \
+			PYTHONPATH="$(TRITON_KERNELS_PATH)" TRITON_CI_CACHE_PHASE=warmup-gluon \
+			$(PYTEST) -s --tb=short -n "$$warmup_group_capture_procs" --dist=worksteal \
 			--warmup-only --warmup-workers "$$warmup_group_worker_procs" \
 			--warmup-phase python/tutorials/06-fused-attention.py=warmup-attention \
 			--warmup-phase python/examples/gluon=warmup-gluon-examples \
@@ -177,10 +201,9 @@ test-warmup: all
 			python/examples/gluon/04-2cta-block-scale-matmul.py::test_mma_scaled_warp_specialized \
 			python/examples/gluon/05-moe-bmm1-fused-gather.py::test_op & \
 	elif [ "$(RUNNER_TYPE)" = "nvidia-h100" ]; then \
-		warmup_group_worker_procs=$$(( \
-			(warmup_group_procs + $(WARMUP_CAPTURE_PROCS) - 1) / $(WARMUP_CAPTURE_PROCS) )); \
-		TRITON_CI_CACHE_PHASE=warmup-gluon \
-			$(PYTEST) -s --tb=short -n $(WARMUP_CAPTURE_PROCS) --dist=worksteal \
+		TRITON_WARMUP_WORKER_WEIGHTS="$$warmup_group_weights" \
+			TRITON_CI_CACHE_PHASE=warmup-gluon \
+			$(PYTEST) -s --tb=short -n "$$warmup_group_capture_procs" --dist=worksteal \
 			--warmup-only --warmup-workers "$$warmup_group_worker_procs" \
 			--warmup-phase python/tutorials/06-fused-attention.py=warmup-attention \
 			--warmup-phase python/test/regression=warmup-regression \
@@ -196,26 +219,28 @@ test-warmup: all
 			python/tutorials/06-fused-attention.py::test_op & \
 	fi; \
 	warmup_group_pid=$$!; \
-	warmup_auxiliary_pid=; \
+	warmup_lowerings_pid=; \
+	warmup_regression_pid=; \
 	if [ "$$warmup_auxiliary_procs" -gt 0 ]; then \
-		warmup_auxiliary_worker_procs=$$(( \
-			(warmup_auxiliary_procs + $(WARMUP_AUXILIARY_CAPTURE_PROCS) - 1) / \
-			$(WARMUP_AUXILIARY_CAPTURE_PROCS) )); \
+		warmup_lowerings_procs=$$(( warmup_auxiliary_procs / 2 )); \
+		warmup_regression_procs=$$(( warmup_auxiliary_procs - warmup_lowerings_procs )); \
 		TRITON_CI_CACHE_PHASE=warmup-gluon $(PYTEST) -s --tb=short \
-			-n $(WARMUP_AUXILIARY_CAPTURE_PROCS) --dist=worksteal \
-			--warmup-only --warmup-workers "$$warmup_auxiliary_worker_procs" \
-			--warmup-phase python/test/regression=warmup-regression \
+			--warmup-only --warmup-workers "$$warmup_lowerings_procs" \
 			python/test/gluon/test_lowerings.py::test_convert1d_layouts \
 			python/test/gluon/test_lowerings.py::test_convert2d_layouts \
-			python/test/gluon/test_lowerings.py::test_reduce_layouts \
+			python/test/gluon/test_lowerings.py::test_reduce_layouts & \
+		warmup_lowerings_pid=$$!; \
+		TRITON_CI_CACHE_PHASE=warmup-regression $(PYTEST) -s --tb=short \
+			--warmup-only --warmup-workers "$$warmup_regression_procs" \
 			python/test/regression & \
-		warmup_auxiliary_pid=$$!; \
+		warmup_regression_pid=$$!; \
 	fi; \
 	warmup_status=0; \
 	if ! wait "$$warmup_unit_pid"; then warmup_status=1; fi; \
 	if ! wait "$$warmup_triton_kernels_pid"; then warmup_status=1; fi; \
 	if ! wait "$$warmup_group_pid"; then warmup_status=1; fi; \
-	if [ -n "$$warmup_auxiliary_pid" ] && ! wait "$$warmup_auxiliary_pid"; then warmup_status=1; fi; \
+	if [ -n "$$warmup_lowerings_pid" ] && ! wait "$$warmup_lowerings_pid"; then warmup_status=1; fi; \
+	if [ -n "$$warmup_regression_pid" ] && ! wait "$$warmup_regression_pid"; then warmup_status=1; fi; \
 	exit "$$warmup_status"
 
 .PHONY: test-gsan

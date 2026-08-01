@@ -1,4 +1,5 @@
 import ast
+import atexit
 import hashlib
 import importlib
 import io
@@ -6,8 +7,10 @@ import json
 import linecache
 import multiprocessing as mp
 import os
+import statistics
 import sys
 import threading
+import time
 import types
 import warnings
 from collections import deque
@@ -304,16 +307,51 @@ def _compile_trace(directory, phase, test):
         triton.knobs.compilation.listener = previous_listener
 
 
+_SHUTDOWN_STDERR_SILENCED = False
+
+
+def _balanced_worker_count(total):
+    weights = os.environ.get("TRITON_WARMUP_WORKER_WEIGHTS")
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "")
+    if not weights or not worker.startswith("gw"):
+        return total
+    weights = [int(weight) for weight in weights.split(",")]
+    index = int(worker[2:])
+    weight_sum = sum(weights)
+    previous = sum(weights[:index])
+    current = previous + weights[index]
+    previous_boundary = (total * previous + weight_sum - 1) // weight_sum
+    current_boundary = (total * current + weight_sum - 1) // weight_sum
+    return current_boundary - previous_boundary
+
+
+def _silence_worker_shutdown_stderr():
+    descriptor = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(descriptor, 2)
+    os.close(descriptor)
+
+
+def _silence_worker_shutdown_diagnostics():
+    global _SHUTDOWN_STDERR_SILENCED
+    if _SHUTDOWN_STDERR_SILENCED:
+        return
+    # Compilation failures are returned through the Future. Suppress only
+    # orderly interpreter-shutdown diagnostics: libtriton's nanobind teardown
+    # otherwise emits the same known leak report from every ephemeral worker.
+    atexit.register(_silence_worker_shutdown_stderr)
+    _SHUTDOWN_STDERR_SILENCED = True
+
+
 def _preload_worker(module_name, qualified_name, fn_bytes, compile_context_bytes, kernel_repr, instrumentation_mode,
-                    environment, trace_directory, phase, test, digest):
+                    environment, trace_directory, phase, test, digest, capture_worker):
     """Load one JIT function and populate the shared disk cache."""
+    previous_capture_worker = os.environ.get("PYTEST_XDIST_WORKER")
+    os.environ["PYTEST_XDIST_WORKER"] = capture_worker
+    _silence_worker_shutdown_diagnostics()
+    worker = os.getpid()
+    os.environ["TRITON_WARMUP_COMPILER_WORKER"] = str(worker)
     try:
-        with (
-                _instrumentation_mode(instrumentation_mode),
-                _cache_invalidating_environment(environment),
-                _compile_trace(trace_directory, phase, test),
-                _compile_lock(trace_directory, digest),
-        ):
+        with _instrumentation_mode(instrumentation_mode), _cache_invalidating_environment(environment):
             if module_name is not None and qualified_name is not None:
                 function = _load_jit_callable(module_name, qualified_name)
             elif fn_bytes is not None:
@@ -321,7 +359,11 @@ def _preload_worker(module_name, qualified_name, fn_bytes, compile_context_bytes
             else:
                 raise AssertionError("missing JIT function import and serialized payload")
             compile_context = cloudpickle.loads(compile_context_bytes)
-            _preload_with_compile_context(function, *compile_context)
+            with _compile_lock(trace_directory, digest):
+                start = time.monotonic()
+                with _compile_trace(trace_directory, phase, test):
+                    _preload_with_compile_context(function, *compile_context)
+            return worker, time.monotonic() - start
     except triton.compiler.errors.CompilationError as error:
         details = f"{type(error).__name__}: {error}"
         cause = error.__cause__
@@ -334,6 +376,11 @@ def _preload_worker(module_name, qualified_name, fn_bytes, compile_context_bytes
     except Exception as error:
         raise _UnsupportedPreloadError(
             f"Failed to load or preload {kernel_repr}: {type(error).__name__}: {error}") from error
+    finally:
+        if previous_capture_worker is None:
+            os.environ.pop("PYTEST_XDIST_WORKER", None)
+        else:
+            os.environ["PYTEST_XDIST_WORKER"] = previous_capture_worker
 
 
 @dataclass(frozen=True)
@@ -363,13 +410,16 @@ class ProcessPoolWarmupDispatcher:
     def __init__(self, *, max_workers, trace_directory, phase):
         if max_workers < 1:
             raise ValueError(f"max_workers must be >= 1, got {max_workers}")
+        max_workers = _balanced_worker_count(max_workers)
         context = mp.get_context("spawn")
         self._executor = ProcessPoolExecutor(max_workers=max_workers, mp_context=context)
+        self._max_workers = max_workers
         self._trace_directory = trace_directory
         self._phase = phase
         self.current_phase = phase
         self._capture_lock = threading.Lock()
         self._pending = []
+        self._first_submit = None
         self._attempted_tests = set()
         self._serialized_keys = set()
         self._submitted_keys = set()
@@ -415,6 +465,8 @@ class ProcessPoolWarmupDispatcher:
                 if digest in self._submitted_keys:
                     continue
                 self._submitted_keys.add(digest)
+                if self._first_submit is None:
+                    self._first_submit = time.monotonic()
                 future = self._executor.submit(
                     _preload_worker,
                     capture.module_name,
@@ -428,6 +480,7 @@ class ProcessPoolWarmupDispatcher:
                     phase,
                     capture.test,
                     digest,
+                    os.environ.get("PYTEST_XDIST_WORKER", "main"),
                 )
                 self._pending.append((future, capture, instrumentation_mode, phase, digest))
 
@@ -541,12 +594,14 @@ class ProcessPoolWarmupDispatcher:
 
     def finish(self):
         compilation_failures = []
+        worker_results = []
+        submitted = len(self._pending)
         try:
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", message="Accessing the data pointer of FakeTensor.*")
                 for future, capture, instrumentation_mode, phase, digest in self._pending:
                     try:
-                        future.result()
+                        worker_results.append(future.result())
                     except _CompilationFailedError as error:
                         compilation_failures.append(error)
                     except _UnsupportedPreloadError as error:
@@ -583,8 +638,33 @@ class ProcessPoolWarmupDispatcher:
                         stacklevel=2,
                     )
         finally:
+            self._executor.shutdown(wait=True)
+            end = time.monotonic()
+            elapsed = end - self._first_submit if self._first_submit is not None else 0.0
+            worker_seconds = {}
+            for worker, duration in worker_results:
+                worker_seconds[worker] = worker_seconds.get(worker, 0.0) + duration
+            task_seconds = sum(worker_seconds.values())
+            workers_used = len(worker_seconds)
+            maximum = max(worker_seconds.values(), default=0.0)
+            metrics = {
+                "phase": self._phase,
+                "capture_worker": os.environ.get("PYTEST_XDIST_WORKER", "main"),
+                "workers": self._max_workers,
+                "workers_used": workers_used,
+                "submitted": submitted,
+                "active_seconds": round(elapsed, 3),
+                "task_seconds": round(task_seconds, 3),
+                "effective_parallelism": round(task_seconds / elapsed, 3) if elapsed else 0.0,
+                "pool_utilization": round(task_seconds / (self._max_workers * elapsed), 4) if elapsed else 0.0,
+                "load_balance": round(task_seconds / (workers_used * maximum), 4) if workers_used and maximum else 0.0,
+                "worker_seconds_min": round(min(worker_seconds.values()), 3) if worker_seconds else 0.0,
+                "worker_seconds_median":
+                round(statistics.median(worker_seconds.values()), 3) if worker_seconds else 0.0,
+                "worker_seconds_max": round(maximum, 3),
+            }
+            print(f"TRITON_CI_WARMUP_POOL {json.dumps(metrics, sort_keys=True)}", flush=True)
             self._pending.clear()
             self._attempted_tests.clear()
             self._serialized_keys.clear()
             self._submitted_keys.clear()
-            self._executor.shutdown(wait=True)
