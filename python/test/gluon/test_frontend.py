@@ -670,6 +670,199 @@ def test_rubin_namespace_extends_blackwell():
 
 
 @gluon.jit
+def _combine_add2(a, b, c, d):
+    parent: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [1, 32], [1, ttgl.num_warps()], [1, 0],
+                                                cga_layout=[[0, 0]] * (ttgl.num_ctas().bit_length() - 1))
+    layout: ttgl.constexpr = ttgl.SliceLayout(0, parent)
+    lanes = ttgl.arange(0, 2, layout=layout)
+    lhs = ttgl.where(lanes == 0, a, b)
+    rhs = ttgl.where(lanes == 0, c, d)
+    return ttgl.split(blackwell.add2(lhs, rhs))
+
+
+@gluon.jit
+def _packed_arith_reduce_frontend_kernel(out, dtype: ttgl.constexpr, layout: ttgl.constexpr):
+    a = ttgl.full([16, 16], 1, dtype, layout)
+    b = ttgl.full([16, 16], 2, dtype, layout)
+    a, b = ttgl.reduce((a, b), axis=1, combine_fn=_combine_add2)
+    ttgl.static_assert(a.dtype == dtype)
+    ttgl.static_assert(b.dtype == dtype)
+    offsets = ttgl.arange(0, 16, ttgl.SliceLayout(1, layout))
+    ttgl.store(out + offsets, a + b)
+
+
+@pytest.mark.parametrize("num_ctas", [1, 2, 4], ids=["1cta", "2ctas", "4ctas"])
+def test_packed_arith_reduce_frontend(num_ctas):
+    cga_layout = [[0, 0] for _ in range(num_ctas.bit_length() - 1)]
+    layout = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0], cga_layout=cga_layout)
+    module = run_parser(_packed_arith_reduce_frontend_kernel,
+                        *make_args(MockTensor(ttgl.float32), ttgl.float32, layout, num_ctas=num_ctas),
+                        target=BLACKWELL_TARGET)
+    text = module.str_nodebug()
+    assert '"tt.reduce"' in text
+    assert "ttng.packed_arith add" in text
+    assert "elementwise_inline_asm" not in text
+
+
+@gluon.jit
+def _packed_arith_reduce_default(out):
+    return
+
+
+@gluon.jit
+def _packed_arith_reduce_worker(out):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+    _packed_arith_reduce_frontend_kernel(out, ttgl.float32, layout)
+
+
+@gluon.jit
+def _packed_arith_reduce_warp_specialized(out):
+    ttgl.warp_specialize(
+        [(_packed_arith_reduce_default, (out, )), (_packed_arith_reduce_worker, (out, ))],
+        [4],
+    )
+
+
+def test_packed_arith_reduce_warp_specialized_frontend():
+    module = run_parser(_packed_arith_reduce_warp_specialized, *make_args(MockTensor(ttgl.float32), num_warps=8),
+                        target=BLACKWELL_TARGET)
+    text = module.str_nodebug()
+    assert "num_warps(4)" in text
+    assert "ttng.packed_arith add" in text
+
+
+@gluon.jit
+def _packed_arith_frontend_kernel(operation: ttgl.constexpr, lhs_dtype: ttgl.constexpr, rhs_dtype: ttgl.constexpr,
+                                  result_dtype: ttgl.constexpr, use_x4: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+    lhs = ttgl.full([256], 1.0, lhs_dtype, layout)
+    rhs = ttgl.full([256], 2.0, rhs_dtype, layout)
+    acc = ttgl.full([256], 3.0, rhs_dtype if result_dtype is None else result_dtype, layout)
+
+    if use_x4:
+        if operation == "add":
+            result = rubin.add4(lhs, rhs, dtype=result_dtype)
+        elif operation == "sub":
+            result = rubin.sub4(lhs, rhs, dtype=result_dtype)
+        elif operation == "mul":
+            result = rubin.mul4(lhs, rhs, dtype=result_dtype)
+        else:
+            result = rubin.fma4(lhs, rhs, acc, dtype=result_dtype)
+    else:
+        if operation == "add":
+            result = blackwell.add2(lhs, rhs, dtype=result_dtype)
+        elif operation == "sub":
+            result = blackwell.sub2(lhs, rhs, dtype=result_dtype)
+        elif operation == "mul":
+            result = blackwell.mul2(lhs, rhs, dtype=result_dtype)
+        elif operation == "fma":
+            result = blackwell.fma2(lhs, rhs, acc, dtype=result_dtype)
+        elif operation == "min":
+            result = blackwell.min2(lhs, rhs, dtype=result_dtype)
+        else:
+            result = blackwell.max2(lhs, rhs, dtype=result_dtype)
+
+    if result_dtype is not None:
+        ttgl.static_assert(result.dtype == result_dtype)
+    elif lhs_dtype == rhs_dtype:
+        ttgl.static_assert(result.dtype == lhs_dtype)
+
+
+@pytest.mark.parametrize(
+    "operation, lhs_dtype, rhs_dtype, result_dtype, expected_dtype",
+    [
+        pytest.param("add", ttgl.float16, ttgl.float32, None, "f32", id="upcast-f16"),
+        pytest.param("add", ttgl.bfloat16, ttgl.float32, None, "f32", id="upcast-bf16"),
+        pytest.param("sub", ttgl.float32, ttgl.float32, ttgl.float16, "f16", id="downcast-f16"),
+        pytest.param("mul", ttgl.float32, ttgl.float32, ttgl.bfloat16, "bf16", id="downcast-bf16"),
+        pytest.param("mul", ttgl.float16, ttgl.bfloat16, None, "f16", id="cross-half"),
+        pytest.param("fma", ttgl.float16, ttgl.float32, None, "f32", id="mixed-fma"),
+    ],
+)
+def test_rubin_packed_arith_mixed_frontend(operation, lhs_dtype, rhs_dtype, result_dtype, expected_dtype):
+    module = run_parser(_packed_arith_frontend_kernel, *make_args(operation, lhs_dtype, rhs_dtype, result_dtype, False),
+                        target=RUBIN_TARGET)
+    text = module.str_nodebug()
+    assert f"ttng.packed_arith {operation}" in text
+    assert re.search(rf"ttng\.packed_arith {operation} .* -> tensor<256x{expected_dtype},", text)
+
+
+@pytest.mark.parametrize("operation", ["add", "sub", "mul", "fma"])
+@pytest.mark.parametrize(
+    "lhs_dtype, rhs_dtype, expected_dtype",
+    [
+        pytest.param(ttgl.float8e4nv, ttgl.float8e4nv, "f8E4M3FN", id="e4m3"),
+        pytest.param(ttgl.float8e5, ttgl.float8e5, "f8E5M2", id="e5m2"),
+        pytest.param(ttgl.float8e5, ttgl.float8e4nv, "f8E4M3FN", id="mixed-fp8"),
+    ],
+)
+def test_rubin_packed_arith_x4_frontend(operation, lhs_dtype, rhs_dtype, expected_dtype):
+    result_dtype = ttgl.float8e4nv if operation == "mul" and lhs_dtype != rhs_dtype else None
+    module = run_parser(_packed_arith_frontend_kernel, *make_args(operation, lhs_dtype, rhs_dtype, result_dtype, True),
+                        target=RUBIN_TARGET)
+    assert re.search(rf"ttng\.packed_arith {operation} .* -> tensor<256x{expected_dtype},", module.str_nodebug())
+
+
+@gluon.jit
+def _rubin_packed_fp4_frontend_kernel(only_fp4: ttgl.constexpr):
+    fp4_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+    packed_layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+    lhs = ttgl.full([128], 1, ttgl.int8, fp4_layout)
+    if only_fp4:
+        rhs = ttgl.full([128], 2, ttgl.int8, fp4_layout)
+        result = rubin.mul4(lhs, rhs, dtype=ttgl.float8e4nv)
+    else:
+        rhs = ttgl.full([256], 2.0, ttgl.float8e4nv, packed_layout)
+        result = rubin.add4(lhs, rhs)
+    ttgl.static_assert(result.dtype == ttgl.float8e4nv)
+
+
+@pytest.mark.parametrize("only_fp4", [False, True], ids=["mixed-fp4", "two-fp4-operands"])
+def test_rubin_packed_arith_fp4_frontend(only_fp4):
+    module = run_parser(_rubin_packed_fp4_frontend_kernel, *make_args(only_fp4), target=RUBIN_TARGET)
+    operation = "mul" if only_fp4 else "add"
+    text = module.str_nodebug()
+    assert f"ttng.packed_arith {operation}" in text
+    assert "ttg.fp4_to_fp" not in text
+
+
+@gluon.jit
+def _packed_arith_scalar_frontend_kernel():
+    layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+    value = ttgl.full([256], 1.0, ttgl.float16, layout)
+    result = blackwell.fma2(value, 2.0, 3.0)
+    ttgl.static_assert(result.dtype == ttgl.float16)
+
+
+def test_packed_arith_scalar_broadcast_frontend():
+    module = run_parser(_packed_arith_scalar_frontend_kernel, *make_args(), target=BLACKWELL_TARGET)
+    assert "ttng.packed_arith fma" in module.str_nodebug()
+
+
+@gluon.jit
+def _packed_arith_invalid_frontend_kernel(case: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+    value = ttgl.full([256], 1.0, ttgl.float32, layout)
+    if case == "dtype":
+        blackwell.add2(value, value, dtype="float32")
+    else:
+        blackwell.add2(1.0, 2.0)
+
+
+@pytest.mark.parametrize(
+    "case, message",
+    [
+        ("dtype", "expected 'dtype' to be a dtype"),
+        ("scalars", "packed arithmetic requires at least one distributed tensor operand"),
+    ],
+)
+def test_packed_arith_frontend_errors(case, message):
+    with pytest.raises(CompilationError) as exc:
+        run_parser(_packed_arith_invalid_frontend_kernel, *make_args(case), target=BLACKWELL_TARGET)
+    assert message in str(exc.value.__cause__)
+
+
+@gluon.jit
 def ampere_mbarrier_arrive_kernel():
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ampere_mbarrier.MBarrierLayout())
     ampere_mbarrier.init(bar, count=1)
