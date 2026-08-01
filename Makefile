@@ -77,16 +77,66 @@ GLUON_EXAMPLE_PROCS ?= 8
 else
 GLUON_EXAMPLE_PROCS ?= 2
 endif
+ifeq ($(RUNNER_TYPE),nvidia-gb200)
+# ConSan has a long, uneven tail, so split it using measured per-test durations.
+test-gluon: all
+	@set -e; \
+	( \
+		export CUDA_VISIBLE_DEVICES=0; \
+		TRITON_CI_CACHE_PHASE=gluon $(PYTEST) -n $(GLUON_PROCS) \
+			python/test/gluon/ python/tutorials/gluon/ \
+			--ignore=python/test/gluon/test_consan.py \
+			--ignore=python/test/gluon/test_fpsan.py; \
+		TRITON_CI_CACHE_PHASE=gluon $(PYTEST) -n $(GLUON_CONSAN_PROCS) \
+			--splits 2 --group 1 --splitting-algorithm least_duration \
+			--durations-path=python/test/gluon/consan_durations.json \
+			python/test/gluon/test_consan.py; \
+	) & \
+	gpu0_pid=$$!; \
+	( \
+		export CUDA_VISIBLE_DEVICES=1; \
+		TRITON_CI_CACHE_PHASE=gluon $(PYTEST) -n $(GLUON_CONSAN_PROCS) \
+			--splits 2 --group 2 --splitting-algorithm least_duration \
+			--durations-path=python/test/gluon/consan_durations.json \
+			python/test/gluon/test_consan.py; \
+		TRITON_CI_CACHE_PHASE=gluon $(PYTEST) -n $(GLUON_FPSAN_PROCS) \
+			python/test/gluon/test_fpsan.py; \
+		PYTHONPATH="$(TRITON_KERNELS_PATH)" TRITON_CI_CACHE_PHASE=gluon-examples \
+			$(PYTEST) -n $(GLUON_EXAMPLE_PROCS) python/examples/gluon/; \
+	) & \
+	gpu1_pid=$$!; \
+	status=0; \
+	if ! wait "$$gpu0_pid"; then status=1; fi; \
+	if ! wait "$$gpu1_pid"; then status=1; fi; \
+	exit "$$status"
+else ifeq ($(RUNNER_TYPE),nvidia-h100)
+test-gluon: all
+	@set -e; \
+	TRITON_CI_CACHE_PHASE=gluon $(PYTEST) -n $(GLUON_CONSAN_PROCS) \
+		python/test/gluon/test_consan.py & \
+	consan_pid=$$!; \
+	( \
+		TRITON_CI_CACHE_PHASE=gluon $(PYTEST) -n $(GLUON_PROCS) \
+			python/test/gluon/ python/tutorials/gluon/ \
+			--ignore=python/test/gluon/test_consan.py \
+			--ignore=python/test/gluon/test_fpsan.py; \
+		TRITON_CI_CACHE_PHASE=gluon $(PYTEST) -n $(GLUON_FPSAN_PROCS) \
+			python/test/gluon/test_fpsan.py; \
+		PYTHONPATH="$(TRITON_KERNELS_PATH)" TRITON_CI_CACHE_PHASE=gluon-examples \
+			$(PYTEST) -n $(GLUON_EXAMPLE_PROCS) python/examples/gluon/; \
+	) & \
+	other_pid=$$!; \
+	status=0; \
+	if ! wait "$$consan_pid"; then status=1; fi; \
+	if ! wait "$$other_pid"; then status=1; fi; \
+	exit "$$status"
+else
 test-gluon: all
 	TRITON_CI_CACHE_PHASE=gluon $(PYTEST) -n $(GLUON_PROCS) \
-		python/test/gluon/ python/tutorials/gluon/ \
-		$(if $(FAST_NVIDIA_RUNNER),--ignore=python/test/gluon/test_consan.py --ignore=python/test/gluon/test_fpsan.py)
-ifneq ($(FAST_NVIDIA_RUNNER),)
-	TRITON_CI_CACHE_PHASE=gluon $(PYTEST) -n $(GLUON_CONSAN_PROCS) python/test/gluon/test_consan.py
-	TRITON_CI_CACHE_PHASE=gluon $(PYTEST) -n $(GLUON_FPSAN_PROCS) python/test/gluon/test_fpsan.py
-endif
+		python/test/gluon/ python/tutorials/gluon/
 	PYTHONPATH="$(TRITON_KERNELS_PATH)" TRITON_CI_CACHE_PHASE=gluon-examples \
 		$(PYTEST) -n $(GLUON_EXAMPLE_PROCS) python/examples/gluon/
+endif
 
 WARMUP_PROCS ?= $(NUM_PROCS)
 ifneq ($(FAST_NVIDIA_RUNNER),)
@@ -114,11 +164,9 @@ WARMUP_UNIT_TESTS := \
 	python/test/unit/language/test_core.py::test_scan2d \
 	python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_reduce \
 	python/test/unit/language/test_standard.py::test_sort
-ifeq ($(RUNNER_TYPE),nvidia-gb200)
 WARMUP_TRITON_KERNEL_TESTS += \
 	python/triton_kernels/tests/test_reduce.py::test_op \
 	python/triton_kernels/tests/test_topk.py::test_topk
-endif
 endif
 
 # Broad scalar-language capture is slower than compiling under runtime xdist,
