@@ -198,4 +198,20 @@ LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
                                 std::optional<uint32_t> warpUsedHint = {});
 
 } // namespace mlir::triton::gpu
+
+namespace mlir {
+
+// Conversion from `srcLayout` to `dstLayout` involving the minimum amount of
+// data transfer. The output will be such that layout.getInDimNames() ==
+// layout.getOutDimNames() and the conversion will not include block (resp.
+// warp or lane) if it can be avoided.
+triton::LinearLayout minimalCvtLayout(const triton::LinearLayout &srcLayout,
+                                      const triton::LinearLayout &dstLayout);
+
+// Type-based convenience overload for layouts that can be converted to a
+// linear layout.
+triton::LinearLayout minimalCvtLayout(Type srcTy, Type dstTy);
+
+} // namespace mlir
+
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

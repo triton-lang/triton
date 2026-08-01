@@ -250,10 +250,6 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
   return b.or_(orPart, xorPart, /*disjoint=*/true);
 }
 
-bool cvtAlwaysUseWarpShuffle(ConvertLayoutOp cvt) {
-  return cvt->getParentOp()->hasAttrOfType<UnitAttr>("always_use_warp_shuffle");
-}
-
 Value maybeAnd(OpBuilder &builder, Location loc, Value a, Value b) {
   auto tb = TritonLLVMOpBuilder(loc, builder);
   if (a && b) {

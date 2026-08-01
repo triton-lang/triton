@@ -1205,44 +1205,6 @@ bool supportMMA(Value value, int version) {
          (elemTy.isInteger(8) && version >= 2);
 }
 
-// We get the smallest submap of srcTy^{-1} * dstTy that is not the identity
-// under the common dimensions. The idea here is that if we have a
-// transformation that's the identity on kBlock, we don't need to use
-// distributed shared memory. If it's also the identity on kWarp, we can
-// transfer via warp-shuffles, and if it's the identity on kLane just have to
-// reorder the registers.
-LinearLayout minimalCvtLayout(const LinearLayout &srcLayout,
-                              const LinearLayout &dstLayout) {
-  auto sDims = to_vector(srcLayout.getInDimNames());
-  auto dDims = to_vector(dstLayout.getInDimNames());
-  SmallVector<StringAttr> dims;
-  for (int i = 0; i < std::min(sDims.size(), dDims.size()); ++i) {
-    auto srcDim = sDims[sDims.size() - i - 1];
-    auto dstDim = dDims[dDims.size() - i - 1];
-    if (srcDim != dstDim) {
-      break;
-    }
-    dims.push_back(srcDim);
-  }
-
-  auto comp = dstLayout.invertAndCompose(srcLayout);
-  // We try to quotient by the slowers moving subspace first
-  for (auto dim : dims) {
-    auto quotient = comp.quotient(dim);
-    if (!quotient.has_value()) {
-      break;
-    }
-    comp = *quotient;
-  }
-  return comp;
-}
-
-LinearLayout minimalCvtLayout(Type srcTy_, Type dstTy_) {
-  auto srcTy = cast<triton::gpu::TensorOrMemDesc>(srcTy_);
-  auto dstTy = cast<triton::gpu::TensorOrMemDesc>(dstTy_);
-  return minimalCvtLayout(toLinearLayout(srcTy), toLinearLayout(dstTy));
-}
-
 bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
   auto layout = minimalCvtLayout(srcTy, dstTy);
   MLIRContext *ctx = srcTy.getContext();
@@ -1251,7 +1213,11 @@ bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
   return outDims.empty() || ArrayRef(outDims) == ArrayRef({kRegister});
 }
 
-bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
+bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op) {
+  if (op.getForceWarpShuffle())
+    return true;
+  auto srcTy = op.getSrc().getType();
+  auto dstTy = op.getType();
   auto layout = minimalCvtLayout(srcTy, dstTy);
   MLIRContext *ctx = srcTy.getContext();
   auto kRegister = StringAttr::get(ctx, "register");
@@ -1266,9 +1232,9 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
   return false;
 }
 
-bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
-  return !cvtReordersRegisters(srcTy, dstTy) &&
-         !cvtNeedsWarpShuffle(srcTy, dstTy);
+bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op) {
+  return !cvtReordersRegisters(op.getSrc().getType(), op.getType()) &&
+         !cvtNeedsWarpShuffle(op);
 }
 
 std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
