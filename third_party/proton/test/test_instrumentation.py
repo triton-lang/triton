@@ -300,6 +300,54 @@ def test_gluon_event(tmp_path: pathlib.Path):
     assert set(map(len, events_by_warp.values())) == {3}
 
 
+@pytest.mark.skipif(not supports_ws(), reason="requires warp specialization")
+def test_gluon_warp_specialized_event(tmp_path: pathlib.Path):
+
+    @gluon.jit
+    def consumer(barrier, event):
+        mbarrier.wait(barrier, phase=0)
+        pl.end_event(event)
+
+    @gluon.jit
+    def producer(barrier, event):
+        pl.start_event(event)
+        mbarrier.arrive(barrier, count=1)
+
+    @gluon.jit
+    def kernel():
+        barrier = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(barrier, count=1)
+        event = pl.allocate_event("warp_specialized")
+        gl.warp_specialize([
+            (consumer, (barrier, event)),
+            (producer, (barrier, event)),
+        ], [4], [24])
+
+    trace_path = tmp_path / "warp_specialized_event.chrome_trace"
+    proton.start(str(trace_path.with_suffix("")), backend="instrumentation", data="trace")
+    kernel[(1, )](num_warps=4)
+    proton.finalize()
+
+    with trace_path.open("rb") as f:
+        events = json.load(f)["traceEvents"]
+    async_events = [event for event in events if event["name"] == "warp_specialized"]
+    assert async_events
+
+    links = {}
+    for event in async_events:
+        assert event["ph"] == "X" and event["dur"] == 0
+        assert "bind_id" in event
+        links.setdefault(event["bind_id"], []).append(event)
+
+    assert len(links) == 4
+    for endpoints in links.values():
+        assert len(endpoints) == 2
+        start = next(event for event in endpoints if event.get("flow_out"))
+        end = next(event for event in endpoints if event.get("flow_in"))
+        assert start["tid"] != end["tid"]
+        assert start["ts"] <= end["ts"]
+
+
 def test_select_ids(tmp_path: pathlib.Path):
     from contextlib import contextmanager
 
