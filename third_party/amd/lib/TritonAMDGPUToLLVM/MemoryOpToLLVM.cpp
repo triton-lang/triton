@@ -57,6 +57,8 @@ static Value createDsReadTr(Operation *op, RewriterBase &rewriter, Location loc,
       return callIntrinsic("llvm.amdgcn.ds.load.tr16.b128", vTy);
     if (logicalBitWidth == 8)
       return callIntrinsic("llvm.amdgcn.ds.load.tr8.b64", vTyI32);
+    if (logicalBitWidth == 4)
+      return callIntrinsic("llvm.amdgcn.ds.load.tr4.b64", vTyI32);
     return {};
   case ISAFamily::CDNA4: {
     Value dsReadTr;
@@ -450,9 +452,6 @@ public:
     if constexpr (isPackedTransposed) {
       // FP4 is represented as packed elements inside i8 values.
       if (bitWidth != 8)
-        return failure();
-      // FP4 packed along M/N are not supported yet on GFX1250
-      if (targetInfo.getISAFamily() == ISAFamily::GFX1250)
         return failure();
       logicalBitWidth = 4;
     } else {
