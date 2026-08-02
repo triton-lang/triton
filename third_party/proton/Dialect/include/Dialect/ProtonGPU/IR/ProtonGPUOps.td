@@ -25,9 +25,8 @@ def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 // Base Class
 //===----------------------------------------------------------------------===//
 
-class PTG_Op<string mnemonic, list<Trait> traits = []> :
-    Op<ProtonGPU_Dialect, mnemonic, !listconcat(traits, [])>,
-    VerifySharedMemoryEffects<arguments, traits> {
+class PTG_Op<string mnemonic, list<Trait> traits = []>
+    : Op<ProtonGPU_Dialect, mnemonic, !listconcat(traits, [])> {
 }
 
 //===----------------------------------------------------------------------===//

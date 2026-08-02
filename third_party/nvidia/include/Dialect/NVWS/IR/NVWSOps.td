@@ -39,9 +39,8 @@ include "NVWSTypes.td"
 include "NVWSAttrDefs.td"
 include "NVWSOpInterfaces.td"
 
-class NVWS_Op<string mnemonic, list<Trait> traits = []> :
-    Op<NVWS_Dialect, mnemonic, traits>,
-    VerifySharedMemoryEffects<arguments, traits>;
+class NVWS_Op<string mnemonic, list<Trait> traits = []>
+    : Op<NVWS_Dialect, mnemonic, traits>;
 
 def NVWS_ArefCreateOp : NVWS_Op<"aref.create", [
     RangedTypesMatchWith<"input types match Aref output type",

@@ -46,8 +46,7 @@ def TensorMemory : Resource<"::mlir::triton::nvidia_gpu::TensorMemory">;
 
 class TTNG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonNvidiaGPU_Dialect, mnemonic,
-       !listconcat(traits, [VerifyTensorLayoutsTrait, VerifyMemDescLayoutsTrait])>,
-    VerifySharedMemoryEffects<arguments, traits> {
+       !listconcat(traits, [VerifyTensorLayoutsTrait, VerifyMemDescLayoutsTrait])> {
 }
 
 def TTNG_PackedArithOperandElement : AnyTypeOf<[
