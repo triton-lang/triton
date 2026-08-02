@@ -286,24 +286,42 @@ def _run_in_process_worker(client_fn, q, args, kwargs, env, stderr_file, compila
     q.put(_call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_listener))
 
 
-def _run_in_replenishing_process_worker(task_pipe, preload_module):
+def _run_in_replenishing_process_worker(task_pipe, preload_module, triton_key):
     importlib.import_module(preload_module)
-    client_fn, args, kwargs, env, stderr_file, compilation_listener = task_pipe.recv()
-    task_pipe.send(_call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_listener))
+    # The source tree is fixed for the pool lifetime; avoid rehashing it in each worker.
+    triton.runtime.cache.triton_key = lambda: triton_key
+    torch.cuda.synchronize()
+    while True:
+        try:
+            client_fn, args, kwargs, env, stderr_file, compilation_listener = task_pipe.recv()
+        except EOFError:
+            return
+        previous_environment = dict(os.environ)
+        try:
+            with knobs.compilation.scope(), knobs.runtime.scope(), knobs.cache.scope():
+                exc = _call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_listener)
+        finally:
+            os.environ.clear()
+            os.environ.update(previous_environment)
+        task_pipe.send(exc)
+        if exc is not None:
+            return
 
 
 class ReplenishingProcessPool:
 
     def __init__(self, preload_module):
         self.preload_module = preload_module
+        self.triton_key = triton.runtime.cache.triton_key()
         self.ctx = multiprocessing.get_context("forkserver")
+        self.worker = None
         self.spare = None
 
     def _start_process(self):
         task_pipe, child_pipe = self.ctx.Pipe()
         process = self.ctx.Process(
             target=_run_in_replenishing_process_worker,
-            args=(child_pipe, self.preload_module),
+            args=(child_pipe, self.preload_module, self.triton_key),
             daemon=True,
         )
         process.start()
@@ -311,40 +329,46 @@ class ReplenishingProcessPool:
         return process, task_pipe
 
     def start(self):
+        if self.worker is None:
+            self.worker = self._start_process()
         if self.spare is None:
             self.spare = self._start_process()
 
     def close(self):
-        if self.spare is None:
-            return
-        process, task_pipe = self.spare
-        task_pipe.close()
-        process.terminate()
-        process.join()
+        for current in (self.worker, self.spare):
+            if current is None:
+                continue
+            process, task_pipe = current
+            task_pipe.close()
+            process.terminate()
+            process.join()
+        self.worker = None
         self.spare = None
 
     def run(self, client_fn, args=(), kwargs=None, env=None):
         if kwargs is None:
             kwargs = {}
         self.start()
-        process, task_pipe = self.spare
-        self.spare = None
+        process, task_pipe = self.worker
         with tempfile.TemporaryDirectory() as tmpdir:
             stderr_file = os.path.join(tmpdir, "err.log")
             task_pipe.send((client_fn, args, kwargs, env, stderr_file, knobs.compilation.listener))
-            # Start the next clean process while this test is using the GPU.
-            self.start()
-            process.join()
+            try:
+                exc = task_pipe.recv()
+            except EOFError:
+                process.join()
+                with open(stderr_file, "r") as f:
+                    stderr = f.read()
+                print(stderr, file=sys.stderr)
+                raise RuntimeError(
+                    f"child process exited with code {process.exitcode} without returning a result") from None
             with open(stderr_file, "r") as f:
                 stderr = f.read()
-        try:
-            exc = task_pipe.recv()
-        except EOFError:
-            print(stderr, file=sys.stderr)
-            raise RuntimeError(
-                f"child process exited with code {process.exitcode} without returning a result") from None
-        finally:
+        if exc is not None:
+            process.join()
             task_pipe.close()
+            self.worker = self.spare
+            self.spare = self._start_process()
         return ProcessResult(exc, stderr)
 
 
