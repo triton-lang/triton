@@ -243,6 +243,7 @@ test-warmup: all
 			python/examples/gluon/01-attention-forward.py::test_op_consan \
 			python/examples/gluon/05-moe-bmm1-fused-gather.py::test_op_consan \
 			python/tutorials/06-fused-attention.py::test_op \
+			python/test/gluon/test_consan.py \
 			python/test/gluon/test_core.py::test_mma_shared_inputs \
 			python/examples/gluon/01-attention-forward.py::test_op \
 			python/examples/gluon/03-matmul-multicta.py::test_matmul_matches_torch \
@@ -256,6 +257,7 @@ test-warmup: all
 			--warmup-phase python/tutorials/06-fused-attention.py=warmup-attention \
 			--warmup-phase python/test/regression=warmup-regression \
 			python/tutorials/06-fused-attention.py::test_op \
+			python/test/gluon/test_consan.py \
 			python/test/gluon/test_core.py::test_mma_shared_inputs \
 			python/test/gluon/test_lowerings.py::test_convert1d_layouts \
 			python/test/gluon/test_lowerings.py::test_convert2d_layouts \

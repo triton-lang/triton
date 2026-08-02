@@ -1,3 +1,4 @@
+import importlib
 import multiprocessing
 import os
 import queue
@@ -254,7 +255,7 @@ class ProcessResult:
     driver_stderr_output: str
 
 
-def _run_in_process_worker(client_fn, q, args, kwargs, env, stderr_file):
+def _call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_listener):
     if env is not None:
         os.environ.update(env)
 
@@ -264,17 +265,87 @@ def _run_in_process_worker(client_fn, q, args, kwargs, env, stderr_file):
         os.dup2(tmp_stderr.fileno(), 2)
         exc = None
 
+        previous_listener = knobs.compilation.listener
+        knobs.compilation.listener = compilation_listener
         try:
-            client_fn(*args, **kwargs)
-            # Raise any CUDA errors
-            torch.cuda.synchronize()
-        except Exception as e:
-            exc = e
+            try:
+                client_fn(*args, **kwargs)
+                # Raise any CUDA errors
+                torch.cuda.synchronize()
+            except Exception as e:
+                exc = e
         finally:
+            knobs.compilation.listener = previous_listener
             sys.stderr.flush()
             os.dup2(saved_stderr_fd, 2)
             os.close(saved_stderr_fd)
-            q.put(exc)
+    return exc
+
+
+def _run_in_process_worker(client_fn, q, args, kwargs, env, stderr_file, compilation_listener):
+    q.put(_call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_listener))
+
+
+def _run_in_replenishing_process_worker(task_pipe, preload_module):
+    importlib.import_module(preload_module)
+    client_fn, args, kwargs, env, stderr_file, compilation_listener = task_pipe.recv()
+    task_pipe.send(_call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_listener))
+
+
+class ReplenishingProcessPool:
+
+    def __init__(self, preload_module):
+        self.preload_module = preload_module
+        self.ctx = multiprocessing.get_context("forkserver")
+        self.spare = None
+
+    def _start_process(self):
+        task_pipe, child_pipe = self.ctx.Pipe()
+        process = self.ctx.Process(
+            target=_run_in_replenishing_process_worker,
+            args=(child_pipe, self.preload_module),
+            daemon=True,
+        )
+        process.start()
+        child_pipe.close()
+        return process, task_pipe
+
+    def start(self):
+        if self.spare is None:
+            self.spare = self._start_process()
+
+    def close(self):
+        if self.spare is None:
+            return
+        process, task_pipe = self.spare
+        task_pipe.close()
+        process.terminate()
+        process.join()
+        self.spare = None
+
+    def run(self, client_fn, args=(), kwargs=None, env=None):
+        if kwargs is None:
+            kwargs = {}
+        self.start()
+        process, task_pipe = self.spare
+        self.spare = None
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stderr_file = os.path.join(tmpdir, "err.log")
+            task_pipe.send((client_fn, args, kwargs, env, stderr_file, knobs.compilation.listener))
+            # Start the next clean process while this test is using the GPU.
+            self.start()
+            process.join()
+            with open(stderr_file, "r") as f:
+                stderr = f.read()
+        try:
+            exc = task_pipe.recv()
+        except EOFError:
+            print(stderr, file=sys.stderr)
+            raise RuntimeError(
+                f"child process exited with code {process.exitcode} without returning a result") from None
+        finally:
+            task_pipe.close()
+        return ProcessResult(exc, stderr)
 
 
 def run_in_process(client_fn, args=(), kwargs=None, env=None):
@@ -285,7 +356,10 @@ def run_in_process(client_fn, args=(), kwargs=None, env=None):
     q = ctx.Queue()
     with tempfile.TemporaryDirectory() as tmpdir:
         stderr_file = os.path.join(tmpdir, "err.log")
-        process = ctx.Process(target=_run_in_process_worker, args=(client_fn, q, args, kwargs, env, stderr_file))
+        process = ctx.Process(
+            target=_run_in_process_worker,
+            args=(client_fn, q, args, kwargs, env, stderr_file, knobs.compilation.listener),
+        )
         process.start()
         process.join()
         with open(stderr_file, "r") as f:

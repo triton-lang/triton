@@ -496,6 +496,10 @@ def pytest_collection_modifyitems(config, items):
     }
     for item in items:
         module_path = str(getattr(item.module, "__file__", ""))
+        if (module_path.endswith("/python/test/gluon/test_consan.py")
+                and item.originalname == "test_consan_uses_profile_scratch"):
+            item.add_marker(pytest.mark.skip(reason="test intentionally compiles in an isolated temporary cache"))
+            continue
         if module_path.endswith("/triton_kernels/tests/test_matmul.py") and item.originalname == "test_op":
             parameters = item.callspec.params
             if parameters["inner_expt_opt"] is not None and 0 in (

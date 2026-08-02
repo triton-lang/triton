@@ -9,14 +9,37 @@ from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia import ampere
 from triton.experimental.gluon.language.nvidia.blackwell import allocate_tensor_memory, clc, mbarrier, tma
-from triton._internal_testing import is_cuda, run_in_process
+from triton._internal_testing import is_cuda, ReplenishingProcessPool, run_in_process as _run_in_process
+
+_process_pool = None
+
+
+def run_in_process(client_fn, args=(), kwargs=None, env=None):
+    if _process_pool is None:
+        return _run_in_process(client_fn, args, kwargs, env)
+    return _process_pool.run(client_fn, args, kwargs, env)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def consan_process_pool(request):
+    if request.config.getoption("--warmup-only") or os.environ.get("DISABLE_SUBPROCESS"):
+        yield
+        return
+    global _process_pool
+    _process_pool = ReplenishingProcessPool(__name__)
+    _process_pool.start()
+    try:
+        yield
+    finally:
+        _process_pool.close()
+        _process_pool = None
 
 
 @pytest.fixture
-def run_wrapper():
+def run_wrapper(request):
     # Use DISABLE_SUBPROCESS to run the tests in the main process
     # (useful for debugging but assert in any test will make all the tests fail)
-    return not os.environ.get("DISABLE_SUBPROCESS")
+    return not request.config.getoption("--warmup-only") and not os.environ.get("DISABLE_SUBPROCESS")
 
 
 @pytest.fixture(params=[1, 2, 4], ids=lambda num_ctas: f"{num_ctas}ctas")
@@ -122,7 +145,12 @@ def run_failing_kernel(device, enable_consan, mode, num_ctas):
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
-def test_cache_miss_knob(device, monkeypatch, num_ctas):
+def test_cache_miss_knob(device, monkeypatch, num_ctas, run_wrapper, fresh_knobs):
+    if not run_wrapper:
+        run_failing_kernel(device, False, "knob", num_ctas)
+        run_failing_kernel(device, True, "knob", num_ctas)
+        return
+
     # First run without consan
     run_in_process(run_failing_kernel, (device, False, "knob", num_ctas))
 
@@ -134,7 +162,12 @@ def test_cache_miss_knob(device, monkeypatch, num_ctas):
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
-def test_cache_miss_env(device, monkeypatch, num_ctas):
+def test_cache_miss_env(device, monkeypatch, num_ctas, run_wrapper):
+    if not run_wrapper:
+        run_failing_kernel(device, False, "env", num_ctas)
+        run_failing_kernel(device, True, "env", num_ctas)
+        return
+
     # First run without consan
     run_in_process(run_failing_kernel, (device, False, "env", num_ctas))
 

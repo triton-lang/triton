@@ -343,7 +343,7 @@ def _silence_worker_shutdown_diagnostics():
 
 
 def _preload_worker(module_name, qualified_name, fn_bytes, compile_context_bytes, kernel_repr, instrumentation_mode,
-                    environment, trace_directory, phase, test, digest, capture_worker):
+                    environment, cache_dir, trace_directory, phase, test, digest, capture_worker):
     """Load one JIT function and populate the shared disk cache."""
     previous_capture_worker = os.environ.get("PYTEST_XDIST_WORKER")
     os.environ["PYTEST_XDIST_WORKER"] = capture_worker
@@ -351,7 +351,12 @@ def _preload_worker(module_name, qualified_name, fn_bytes, compile_context_bytes
     worker = os.getpid()
     os.environ["TRITON_WARMUP_COMPILER_WORKER"] = str(worker)
     try:
-        with _instrumentation_mode(instrumentation_mode), _cache_invalidating_environment(environment):
+        with (
+                _instrumentation_mode(instrumentation_mode),
+                _cache_invalidating_environment(environment),
+                triton.knobs.cache.scope(),
+        ):
+            triton.knobs.cache.dir = cache_dir
             if module_name is not None and qualified_name is not None:
                 function = _load_jit_callable(module_name, qualified_name)
             elif fn_bytes is not None:
@@ -414,6 +419,7 @@ class ProcessPoolWarmupDispatcher:
         context = mp.get_context("spawn")
         self._executor = ProcessPoolExecutor(max_workers=max_workers, mp_context=context)
         self._max_workers = max_workers
+        self._cache_dir = triton.knobs.cache.dir
         self._trace_directory = trace_directory
         self._phase = phase
         self.current_phase = phase
@@ -476,6 +482,7 @@ class ProcessPoolWarmupDispatcher:
                     repr(kernel),
                     instrumentation_mode,
                     capture.environment,
+                    self._cache_dir,
                     self._trace_directory,
                     phase,
                     capture.test,
