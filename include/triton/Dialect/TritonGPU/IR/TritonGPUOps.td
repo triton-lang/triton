@@ -26,8 +26,7 @@ def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 
 class TTG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonGPU_Dialect, mnemonic,
-       !listconcat(traits, [VerifyTensorLayoutsTrait, VerifyMemDescLayoutsTrait])>,
-    VerifySharedMemoryEffects<arguments, traits> {
+       !listconcat(traits, [VerifyTensorLayoutsTrait, VerifyMemDescLayoutsTrait])> {
 }
 
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
