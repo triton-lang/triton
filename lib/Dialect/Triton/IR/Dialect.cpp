@@ -58,6 +58,22 @@ void TritonInlinerInterface::handleTerminator(Operation *op,
     valuesToRepl[it.index()].replaceAllUsesWith(it.value());
 }
 
+Value TritonInlinerInterface::handleResult(OpBuilder &, Operation *call,
+                                           Operation *, Value result,
+                                           DictionaryAttr) const {
+  Operation *definingOp = result.getDefiningOp();
+  if (!definingOp)
+    return result;
+
+  static constexpr llvm::StringLiteral hintAttrs[] = {
+      "tt.divisibility", "tt.contiguity", "tt.constancy"};
+  for (StringRef attrName : hintAttrs) {
+    if (Attribute attr = call->getDiscardableAttr(attrName))
+      definingOp->setDiscardableAttr(attrName, attr);
+  }
+  return result;
+}
+
 void TritonDialect::initialize() {
   registerTypes();
 

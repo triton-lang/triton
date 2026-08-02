@@ -1449,6 +1449,33 @@ def test_noinline_returns_tensor(device):
     assert torch.equal(z, x + y)
 
 
+def test_jit_call_result_preserves_hints(device):
+
+    @triton.jit
+    def get_ptrs(ptr, offsets):
+        return ptr + offsets
+
+    @triton.jit
+    def kernel(X, Z, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.arange(0, BLOCK_SIZE)
+        ptrs = get_ptrs(X, offsets)
+        ptrs = tl.multiple_of(ptrs, 16)
+        ptrs = tl.max_contiguous(ptrs, 16)
+        ptrs = tl.max_constancy(ptrs, 1)
+        tl.store(Z + offsets, tl.load(ptrs))
+
+    block_size = 128
+    x = torch.randn(block_size, device=device, dtype=torch.float32)
+    z = torch.empty_like(x)
+    compiled = kernel[(1, )](x, z, BLOCK_SIZE=block_size, num_warps=1)
+
+    assert torch.equal(z, x)
+    ttir = compiled.asm["ttir"]
+    ptrs_line = next(line for line in ttir.splitlines() if re.match(r"\s*%ptrs(?:_\d+)? = tt.addptr", line))
+    for hint in ("tt.divisibility", "tt.contiguity", "tt.constancy"):
+        assert hint in ptrs_line, ttir
+
+
 # ---------------
 # test atomics
 # ---------------
