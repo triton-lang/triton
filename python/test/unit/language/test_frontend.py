@@ -1,7 +1,10 @@
+import collections
 import functools
+import re
 import triton
 import triton.language as tl
 from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
+from triton.compiler.code_generator import CodeGenerator
 from triton.compiler.errors import CompilationError
 import pytest
 from typing import NamedTuple
@@ -1268,3 +1271,167 @@ def test_dot_fp16_accumulator():
         tl.dot(a, b, c)
 
     run_parser(fp16_acc_kernel)
+
+
+# ===-----------------------------------------------------------------------===#
+# Loop-carried variable lowering
+# ===-----------------------------------------------------------------------===#
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_swap_rebinds_yield():
+    # A swap leaves the scope entry for `a` holding b's pre-loop handle, so the
+    # yield has to be rebound onto the block arguments just like the body is.
+    # Otherwise the loop yields its pre-loop constants and never rotates.
+    # CHECK-LABEL: test_loop_carry_swap_rebinds_yield
+    a = 0.0
+    b = 1.0
+    # CHECK: %[[R:.*]]:2 = scf.for {{.*}} iter_args(%[[A:.*]] = {{.*}}, %[[B:.*]] = {{.*}})
+    for i in range(4):
+        # CHECK: scf.yield %[[B]], %[[A]]
+        a, b = b, a
+    anchor(a)
+    anchor(b)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_nested_for():
+    # CHECK-LABEL: test_loop_carry_nested_for
+    acc = 0.0
+    # CHECK: %[[OUT:.*]] = scf.for {{.*}} iter_args(%[[OA:.*]] = {{.*}}) -> (f32)
+    for i in range(4):
+        # CHECK: %[[IN:.*]] = scf.for {{.*}} iter_args(%[[IA:.*]] = %[[OA]]) -> (f32)
+        for j in range(4):
+            # CHECK: %[[SUM:.*]] = arith.addf %[[IA]]
+            acc = acc + 1.0
+            # CHECK: scf.yield %[[SUM]]
+        # CHECK: scf.yield %[[IN]]
+    anchor(acc)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_while_in_for():
+    # CHECK-LABEL: test_loop_carry_while_in_for
+    acc = 0.0
+    j = 0
+    # CHECK: scf.for
+    for i in range(4):
+        # CHECK: scf.while
+        while j < 4:
+            # CHECK: scf.yield
+            acc = acc + 1.0
+            j = j + 1
+    anchor(acc)
+    anchor(j)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_multiple_keeps_order():
+    # Each accumulator uses a distinct constant, so binding a livein to the
+    # wrong block argument cannot go unnoticed.
+    # CHECK-LABEL: test_loop_carry_multiple_keeps_order
+    x = 0.0
+    y = 1.0
+    z = 2.0
+    # CHECK: scf.for {{.*}} iter_args(%[[X:.*]] = {{.*}}, %[[Y:.*]] = {{.*}}, %[[Z:.*]] = {{.*}}) -> (f32, f32, f32)
+    for i in range(4):
+        # CHECK-DAG: %[[NX:.*]] = arith.addf %[[X]], %{{.*}}
+        x = x + 10.0
+        # CHECK-DAG: %[[NY:.*]] = arith.addf %[[Y]], %{{.*}}
+        y = y + 20.0
+        # CHECK-DAG: %[[NZ:.*]] = arith.addf %[[Z]], %{{.*}}
+        z = z + 30.0
+        # CHECK: scf.yield %[[NX]], %[[NY]], %[[NZ]]
+    anchor(x)
+    anchor(y)
+    anchor(z)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_unchanged_is_not_carried():
+    # `keep` is read in the loop but never rebound, so it must not become an
+    # iter_arg. The single result type is the assertion.
+    # CHECK-LABEL: test_loop_carry_unchanged_is_not_carried
+    acc = 0.0
+    keep = 5.0
+    # CHECK: scf.for {{.*}} iter_args(%[[A:.*]] = {{.*}}) -> (f32)
+    for i in range(4):
+        acc = acc + keep
+    anchor(acc)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_tuple():
+    # A tuple carry flattens to several block arguments and is reassembled on
+    # the way out.
+    # CHECK-LABEL: test_loop_carry_tuple
+    pair = (0.0, 1.0)
+    # CHECK: scf.for {{.*}} iter_args(%[[A:.*]] = {{.*}}, %[[B:.*]] = {{.*}}) -> (f32, f32)
+    for i in range(4):
+        # CHECK: scf.yield %[[B]], %[[A]]
+        pair = (pair[1], pair[0])
+    anchor(pair[0])
+    anchor(pair[1])
+
+
+@triton.jit
+def _loop_carry_for_location():
+    acc = 0.0
+    for i in range(4):
+        acc = acc + 1.0
+    anchor(acc)
+
+
+def test_loop_carry_yield_keeps_statement_location():
+    """`scf.yield` carries the body statement's source position.
+
+    Not a `@filecheck_test`: that harness checks `str_nodebug()`, which strips
+    the debug info under test, so a filecheck version would pass either way.
+    """
+    text = str(run_parser(_loop_carry_for_location))
+
+    ref = re.search(r"scf\.yield[^\n]*loc\(#(\w+)\)", text)
+    assert ref, "no scf.yield carrying a location"
+    resolved = re.search(rf"^#{ref.group(1)} = (.*)$", text, re.M)
+    assert resolved, f"location #{ref.group(1)} is not defined in the module"
+
+    loc = resolved.group(1)
+    # A source position ends in :line:col). A name location such as
+    # loc("acc"(#loc3)) means the yield inherited the last body value's
+    # location instead of the statement's.
+    assert re.search(r":\d+:\d+\)$", loc), \
+        f"scf.yield location is not a source position: {loc}"
+
+
+@triton.jit
+def _loop_carry_nest_depth_2():
+    acc = 0.0
+    for i in range(4):
+        for j in range(4):
+            acc = acc + 1.0
+    anchor(acc)
+
+
+def test_loop_carry_body_generated_once():
+    """Each loop body is lowered once, not 2**depth times."""
+    per_body = collections.Counter()
+    orig = CodeGenerator.visit_compound_statement
+
+    def counted(self, stmts):
+        per_body[id(stmts)] += 1
+        return orig(self, stmts)
+
+    CodeGenerator.visit_compound_statement = counted
+    try:
+        run_parser(_loop_carry_nest_depth_2)
+    finally:
+        CodeGenerator.visit_compound_statement = orig
+
+    worst = max(per_body.values())
+    assert worst == 1, f"a loop body was generated {worst} times"
