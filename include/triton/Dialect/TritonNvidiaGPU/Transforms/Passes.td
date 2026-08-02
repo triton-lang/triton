@@ -44,7 +44,7 @@ def TritonNvidiaGPUToCLCPass : Pass<"triton-nvidia-gpu-to-clc", "mlir::ModuleOp"
   let summary = "convert a Triton tile kernel to use Cluster Launch Control";
 
   let description = [{
-    Wraps a single public tile kernel in the abstract Triton CLC scheduling
+    Wraps the root function of a kernel in the abstract Triton CLC scheduling
     protocol and replaces logical program-ID reads with CLC generated values.
   }];
 
