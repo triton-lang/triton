@@ -67,14 +67,10 @@ def end_buffered_event(index, event0, event1):
 
 @gluon.jit
 def ws_epilogue_partition(a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, load_ready_bars, acc_tmem,
-                          mma_done_bar, tma_event0, tma_event1, mma_event0, mma_event1, off_m, off_n):
+                          mma_done_bar, tma_event0, tma_event1, mma_done_event, off_m, off_n):
     with pl.scope("ws_mma_wait"):
         mbarrier.wait(mma_done_bar, phase=0)
-        # No later buffer-reuse wait observes the final two MMAs, so drain
-        # their events after the barrier that tracks all preceding MMA work.
-        pl.end_event(mma_event0)
-        if gl.cdiv(a_desc.shape[1], a_desc.block_type.shape[1]) > 1:
-            pl.end_event(mma_event1)
+        pl.end_event(mma_done_event)
 
     with pl.scope("ws_epilogue_store"):
         c_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
@@ -86,7 +82,7 @@ def ws_epilogue_partition(a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bar
 
 @gluon.jit
 def ws_load_partition(a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, load_ready_bars, acc_tmem, mma_done_bar,
-                      tma_event0, tma_event1, mma_event0, mma_event1, off_m, off_n):
+                      tma_event0, tma_event1, mma_done_event, off_m, off_n):
     block_k: gl.constexpr = a_desc.block_type.shape[1]
     num_buffers: gl.constexpr = a_bufs.type.shape[0]
     for tile in range(gl.cdiv(a_desc.shape[1], block_k)):
@@ -94,9 +90,6 @@ def ws_load_partition(a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, l
         phase = tile // num_buffers & 1
         with pl.scope("ws_load_empty_wait"):
             mbarrier.wait(load_empty_bars.index(index), phase ^ 1)
-            # Reusing this buffer proves that its previous MMA completed.
-            if tile >= num_buffers:
-                end_buffered_event(index, mma_event0, mma_event1)
 
         with pl.scope("ws_load_ready_issue"):
             ready_bar = load_ready_bars.index(index)
@@ -109,7 +102,7 @@ def ws_load_partition(a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, l
 
 @gluon.jit
 def ws_mma_partition(a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, load_ready_bars, acc_tmem, mma_done_bar,
-                     tma_event0, tma_event1, mma_event0, mma_event1, off_m, off_n):
+                     tma_event0, tma_event1, mma_done_event, off_m, off_n):
     block_k: gl.constexpr = a_desc.block_type.shape[1]
     num_buffers: gl.constexpr = a_bufs.type.shape[0]
     use_acc = False
@@ -120,11 +113,11 @@ def ws_mma_partition(a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, lo
             mbarrier.wait(load_ready_bars.index(index), phase)
             end_buffered_event(index, tma_event0, tma_event1)
         with pl.scope("ws_load_empty_issue"):
-            start_buffered_event(index, mma_event0, mma_event1)
             tcgen05_mma(a_bufs.index(index), b_bufs.index(index), acc_tmem, use_acc=use_acc)
             tcgen05_commit(load_empty_bars.index(index))
         use_acc = True
     with pl.scope("ws_mma_issue"):
+        pl.start_event(mma_done_event)
         tcgen05_commit(mma_done_bar)
 
 
@@ -148,15 +141,13 @@ def warp_specialized_matmul_kernel(a_desc, b_desc, c_desc, num_warps: gl.constex
     mma_done_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(mma_done_bar, count=1)
 
-    tma_event0 = pl.allocate_event("ws_load[0]")
-    tma_event1 = pl.allocate_event("ws_load[1]")
-    # MMAs using different operand buffers may be in flight concurrently.
-    mma_event0 = pl.allocate_event("ws_mma[0]")
-    mma_event1 = pl.allocate_event("ws_mma[1]")
+    tma_event0 = pl.allocate_event("ws_load_event[0]")
+    tma_event1 = pl.allocate_event("ws_load_event[1]")
+    mma_done_event = pl.allocate_event("ws_mma_done_event")
     off_m = gl.program_id(axis=0) * block_m
     off_n = gl.program_id(axis=1) * block_n
     partition_args = (a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, load_ready_bars, acc_tmem, mma_done_bar,
-                      tma_event0, tma_event1, mma_event0, mma_event1, off_m, off_n)
+                      tma_event0, tma_event1, mma_done_event, off_m, off_n)
 
     # As in python/tutorials/gluon/08-warp-specialization.py, the epilogue is
     # the default partition while TMA loading and MMA issue run in worker
