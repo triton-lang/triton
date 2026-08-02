@@ -1329,9 +1329,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
       ctx, numPartitions, numGroupsInSlice, partitionedEnc.getPartitionDim(),
       partitionedEnc.getPartitionLayout());
   triton::LinearLayout sliceLayout =
-      triton::gpu::isPaddedEncoding(sliceEncoding)
-          ? triton::gpu::paddedLinearLayout(sliceShape, sliceEncoding)
-          : triton::gpu::toLinearLayout(sliceShape, sliceEncoding);
+      triton::gpu::toLinearLayoutIgnoringPadding(sliceShape, sliceEncoding);
 
   // Per-partition LDS stride between slices (accounts for padding).
   int64_t elementsPerSlice = computePerPartitionSliceStride(
@@ -1637,7 +1635,7 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
     // Predicate and emit prefetch
     Block *currentBlock = rewriter.getInsertionBlock();
     Block *afterPrefetch =
-        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+        currentBlock->splitBlock(rewriter.getInsertionPoint());
     Block *prefetchBlock = rewriter.createBlock(afterPrefetch);
     rewriter.setInsertionPointToEnd(currentBlock);
     LLVM::CondBrOp::create(rewriter, loc, combinedPred, prefetchBlock,

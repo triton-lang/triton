@@ -160,12 +160,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 
-  // b8 DoubleContiguity path on partitioned shared (partitionDim = 1, 2 partitions x 4 groups).
-  // The partition selector lands on a kLane basis that the ds_load_tr lane
-  // permutation moves, so the lowering remaps lanes before querying
-  // partitionLayout.
-  // CHECK-LABEL: ds_transpose_partitioned_uses_double_contiguity
-  tt.func @ds_transpose_partitioned_uses_double_contiguity(%arg0: !ttg.memdesc<64x64xi8, #partitioned_b8_dim1, #smem, mutable>, %arg2: !tt.ptr<i8> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+  // GFX1250 ds_load_tr8_b64 maps source lane bit 2 to destination lane bit 3.
+  // This test makes destination lane bit 3 select one of two LDS partitions, so
+  // the lowering must remap the source lane before querying partitionLayout.
+  // CHECK-LABEL: ds_transpose_partitioned_remaps_lane
+  tt.func @ds_transpose_partitioned_remaps_lane(%arg0: !ttg.memdesc<64x64xi8, #partitioned_b8_dim1, #smem, mutable>, %arg2: !tt.ptr<i8> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
     // CHECK-DAG: %[[C2:.*]] = llvm.mlir.constant(2 : i32) : i32
     // CHECK: vector<2x!llvm.ptr<3>>
     // CHECK: llvm.insertelement %{{.*}}, %{{.*}}[%{{.*}} : i32] : vector<2x!llvm.ptr<3>>

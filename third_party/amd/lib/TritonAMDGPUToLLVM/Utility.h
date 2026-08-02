@@ -50,9 +50,11 @@ Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis);
 
-// Emit the cta multicast mask for a given cta id based on the src layout
+// Emit the cta multicast mask for a given cta id based on the src layout.
+// Groups sharing data among more than maxMaskPopcount CTAs are split into
+// smaller subgroups because the hardware would otherwise drop the multicast.
 Value emitCtaMulticastMask(RewriterBase &rewriter, Location loc, Value blockId,
-                           const LinearLayout &cvt);
+                           const LinearLayout &cvt, unsigned maxMaskPopcount);
 
 std::pair<bool, bool>
 getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm, MemoryOp op);
