@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cassert>
 #include <iostream>
+#include <list>
 #include <unordered_map>
 
 using namespace proton;
@@ -161,44 +162,52 @@ void CircularLayoutParser::pairAsyncEvents(
                      return lhs.entry->cycle < rhs.entry->cycle;
                    });
 
-  // A static token may be executed by several warps. Keep one outstanding
-  // instance per token and warp, prefer a same-warp end, and otherwise connect
-  // the end to the oldest producer in another warp.
-  std::unordered_map<int, std::vector<AsyncEndpoint>> active;
+  using EndpointList = std::list<AsyncEndpoint>;
+  struct ActiveEndpoints {
+    EndpointList ordered;
+    std::unordered_map<uint32_t, EndpointList::iterator> byWarp;
+  };
+  std::unordered_map<int, ActiveEndpoints> active;
   for (auto &endpoint : endpoints) {
     const int scopeId = endpoint.entry->scopeId;
     auto &activeEndpoints = active[scopeId];
     if (endpoint.entry->isStart) {
-      auto sameWarp =
-          std::find_if(activeEndpoints.begin(), activeEndpoints.end(),
-                       [&](const AsyncEndpoint &active) {
-                         return active.uid == endpoint.uid;
-                       });
-      if (sameWarp != activeEndpoints.end()) {
+      // A warp cannot have two outstanding instances of the same static event
+      // because a later end would not identify which instance it completes.
+      if (activeEndpoints.byWarp.count(endpoint.uid)) {
         reportException(
             ScopeMisMatchException("Async event mismatch: start after start"),
             buffer.position());
         continue;
       }
-      activeEndpoints.push_back(endpoint);
+      auto startIt = activeEndpoints.ordered.insert(
+          activeEndpoints.ordered.end(), endpoint);
+      activeEndpoints.byWarp.emplace(endpoint.uid, startIt);
       continue;
     }
-    if (activeEndpoints.empty()) {
+    // An end without any start for this static event cannot be paired.
+    if (activeEndpoints.ordered.empty()) {
       reportException(
           ScopeMisMatchException("Async event mismatch: end after end"),
           buffer.position());
       active.erase(scopeId);
       continue;
     }
-    auto startIt = std::find_if(activeEndpoints.begin(), activeEndpoints.end(),
-                                [&](const AsyncEndpoint &active) {
-                                  return active.uid == endpoint.uid;
-                                });
-    if (startIt == activeEndpoints.end())
-      startIt = activeEndpoints.begin();
+
+    // Prefer a start from the ending warp so an event local to one warp is
+    // rendered as a duration slice.
+    auto sameWarp = activeEndpoints.byWarp.find(endpoint.uid);
+    auto startIt = sameWarp == activeEndpoints.byWarp.end()
+                       ? activeEndpoints.ordered.end()
+                       : sameWarp->second;
+    // Otherwise connect the end to the oldest producer in another warp.
+    if (startIt == activeEndpoints.ordered.end())
+      startIt = activeEndpoints.ordered.begin();
+
     blockTrace.asyncLinks.emplace_back(*startIt, endpoint);
-    activeEndpoints.erase(startIt);
-    if (activeEndpoints.empty())
+    activeEndpoints.byWarp.erase(startIt->uid);
+    activeEndpoints.ordered.erase(startIt);
+    if (activeEndpoints.ordered.empty())
       active.erase(scopeId);
   }
 }
