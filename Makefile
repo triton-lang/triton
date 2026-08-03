@@ -55,7 +55,7 @@ test-gsan: all
 
 .PHONY: test-regression
 test-regression: all
-	TRITON_CI_CACHE_PHASE=regression $(PYTEST) -n $(NUM_PROCS) python/test/regression
+	TRITON_CI_CACHE_PHASE=regression $(PYTEST) -p triton._compile_warmup -n $(NUM_PROCS) python/test/regression
 
 .PHONY: test-microbenchmark
 test-microbenchmark: all
