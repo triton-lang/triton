@@ -1237,6 +1237,60 @@ module attributes {"ttg.num-warps" = 2 : i32, "ttg.num-ctas" = 1 : i32} {
 
 // -----
 
+// Exact-order joins can be evaluated from their final logical element indices.
+// Keep the store's physical layout and remove the intermediate exchanges.
+// CHECK-LABEL: @remat_indexed_store_join_chain
+// CHECK: tt.make_range
+// CHECK: arith.shrui
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.store
+// CHECK: tt.return
+
+#scalar = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#row = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#joined = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 32, 1], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+#exchanged = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 16, 2], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+#wide = #ttg.linear<{register = [[0, 8, 0], [0, 16, 0]], lane = [[0, 0, 1], [0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 32, 0]], warp = [[0, 64, 0], [0, 128, 0]], block = []}>
+#output = #ttg.linear<{register = [[16], [32]], lane = [[1], [2], [4], [8], [64]], warp = [[128], [256]], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @remat_indexed_store_join_chain(%out: !tt.ptr<i32>, %left: i32, %right: i32, %seed: i32) {
+    %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #scalar>
+    %lhs_seed = tt.splat %left : i32 -> tensor<128xi32, #scalar>
+    %rhs_seed = tt.splat %right : i32 -> tensor<128xi32, #scalar>
+    %random_seed = tt.splat %seed : i32 -> tensor<128xi32, #scalar>
+    %lhs = arith.xori %lhs_seed, %range : tensor<128xi32, #scalar>
+    %rhs = arith.addi %rhs_seed, %range : tensor<128xi32, #scalar>
+    %random = arith.xori %random_seed, %range : tensor<128xi32, #scalar>
+
+    %lhs_row = tt.reshape %lhs : tensor<128xi32, #scalar> -> tensor<1x128xi32, #row>
+    %rhs_row = tt.reshape %rhs : tensor<128xi32, #scalar> -> tensor<1x128xi32, #row>
+    %first_join = tt.join %lhs_row, %rhs_row : tensor<1x128xi32, #row> -> tensor<1x128x2xi32, #joined>
+    %first_exchange = ttg.convert_layout %first_join : tensor<1x128x2xi32, #joined> -> tensor<1x128x2xi32, #exchanged>
+    %first_values = tt.reshape %first_exchange : tensor<1x128x2xi32, #exchanged> -> tensor<256xi32, #scalar>
+
+    %random_row = tt.reshape %random : tensor<128xi32, #scalar> -> tensor<1x128xi32, #row>
+    %second_join = tt.join %random_row, %random_row : tensor<1x128xi32, #row> -> tensor<1x128x2xi32, #joined>
+    %second_exchange = ttg.convert_layout %second_join : tensor<1x128x2xi32, #joined> -> tensor<1x128x2xi32, #exchanged>
+    %second_values = tt.reshape %second_exchange : tensor<1x128x2xi32, #exchanged> -> tensor<256xi32, #scalar>
+
+    %mixed = arith.xori %first_values, %second_values : tensor<256xi32, #scalar>
+    %upper = tt.reshape %first_exchange : tensor<1x128x2xi32, #exchanged> -> tensor<1x256xi32, #row>
+    %lower = tt.reshape %mixed : tensor<256xi32, #scalar> -> tensor<1x256xi32, #row>
+    %third_join = tt.join %upper, %lower : tensor<1x256xi32, #row> -> tensor<1x256x2xi32, #joined>
+    %third_exchange = ttg.convert_layout %third_join : tensor<1x256x2xi32, #joined> -> tensor<1x256x2xi32, #wide>
+    %value = tt.reshape %third_exchange : tensor<1x256x2xi32, #wide> -> tensor<512xi32, #output>
+
+    %offsets = tt.make_range {end = 512 : i32, start = 0 : i32} : tensor<512xi32, #output>
+    %base = tt.splat %out : !tt.ptr<i32> -> tensor<512x!tt.ptr<i32>, #output>
+    %address = tt.addptr %base, %offsets : tensor<512x!tt.ptr<i32>, #output>, tensor<512xi32, #output>
+    tt.store %address, %value : tensor<512x!tt.ptr<i32>, #output>
+    tt.return
+  }
+}
+
+// -----
+
 // CHECK-LABEL: reduce_cvt2
 // Match the reduction
 // CHECK-NOT: ttg.convert_layout

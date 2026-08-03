@@ -22,7 +22,9 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "llvm/Support/MathExtras.h"
 #include <deque>
+#include <limits>
 
 namespace mlir::triton::gpu {
 
@@ -1601,6 +1603,207 @@ void hoistConvert(ModuleOp module, bool disableRematSplitting) {
     LayoutRematerialization(funcOp).hoistConvertDotOperand();
   });
 }
+
+class IndexedStoreExpression {
+public:
+  explicit IndexedStoreExpression(StoreOp store) : store(store) {}
+
+  bool rewrite() {
+    target = dyn_cast<RankedTensorType>(store.getValue().getType());
+    if (!target || !target.hasStaticShape() || !store.getValue().hasOneUse())
+      return false;
+
+    int64_t size = target.getNumElements();
+    if (size <= 0 || size > std::numeric_limits<int32_t>::max() ||
+        !llvm::isPowerOf2_64(static_cast<uint64_t>(size)))
+      return false;
+
+    auto *interface =
+        target.getEncoding()
+            .getDialect()
+            .getRegisteredInterface<triton::DialectInferLayoutInterface>();
+    if (!interface ||
+        failed(interface->inferReshapeOpEncoding(
+            target.getShape(), target.getEncoding(), ArrayRef<int64_t>{size},
+            flatEncoding, /*allowReorder=*/false, store.getLoc())) ||
+        failed(plan(store.getValue(), 0)))
+      return false;
+
+    unsigned joins = 0;
+    unsigned conversions = 0;
+    bool communicates = false;
+    for (Operation *operation : operations) {
+      if (auto conversion = dyn_cast<ConvertLayoutOp>(operation)) {
+        ++conversions;
+        communicates |= !cvtReordersRegisters(conversion.getSrc().getType(),
+                                              conversion.getType());
+      }
+      joins += isa<JoinOp>(operation);
+      if (!isa<SplatOp, MakeRangeOp, arith::ConstantOp>(operation) &&
+          llvm::any_of(operation->getUsers(), [&](Operation *user) {
+            return user == store ? operation->getResult(0) != store.getValue()
+                                 : !operations.contains(user);
+          }))
+        return false;
+    }
+    if (!joins || conversions < 2 || !communicates)
+      return false;
+
+    OpBuilder builder(store);
+    auto flatType =
+        RankedTensorType::get({size}, builder.getI32Type(), flatEncoding);
+    Value range = MakeRangeOp::create(builder, store.getLoc(), flatType, 0,
+                                      static_cast<int32_t>(size));
+    auto indexType = RankedTensorType::get(
+        target.getShape(), builder.getI32Type(), target.getEncoding());
+    indices = ReshapeOp::create(builder, store.getLoc(), indexType, range);
+    store.getValueMutable().assign(materialize(store.getValue(), 0, builder));
+
+    for (Operation *operation : operations)
+      if (isOpTriviallyDead(operation))
+        operation->erase();
+    return true;
+  }
+
+private:
+  LogicalResult plan(Value value, unsigned depth) {
+    auto type = dyn_cast<RankedTensorType>(value.getType());
+    if (!type || depth > 30 ||
+        (target.getNumElements() >> depth) != type.getNumElements())
+      return failure();
+
+    auto [existing, inserted] = depths.try_emplace(value, depth);
+    if (!inserted)
+      return success(existing->second == depth);
+
+    Operation *operation = value.getDefiningOp();
+    if (!operation || operation->getNumResults() != 1 ||
+        !isMemoryEffectFree(operation) || operations.size() >= 512)
+      return failure();
+    bool leaf = isa<SplatOp, MakeRangeOp, arith::ConstantOp>(operation);
+    if (!leaf && operation->getBlock() != store->getBlock())
+      return failure();
+    operations.insert(operation);
+
+    if (auto conversion = dyn_cast<ConvertLayoutOp>(operation))
+      return plan(conversion.getSrc(), depth);
+    if (auto reshape = dyn_cast<ReshapeOp>(operation))
+      return reshape.getAllowReorder() ? failure()
+                                       : plan(reshape.getSrc(), depth);
+    if (auto join = dyn_cast<JoinOp>(operation)) {
+      if (type.getShape().empty() || type.getShape().back() != 2)
+        return failure();
+      return success(succeeded(plan(join.getLhs(), depth + 1)) &&
+                     succeeded(plan(join.getRhs(), depth + 1)));
+    }
+    if (auto splat = dyn_cast<SplatOp>(operation))
+      return success(!isa<RankedTensorType>(splat.getSrc().getType()));
+    if (auto range = dyn_cast<MakeRangeOp>(operation))
+      return success(range.getType().getElementType().isInteger(32));
+    if (auto constant = dyn_cast<arith::ConstantOp>(operation)) {
+      auto elements = dyn_cast<DenseElementsAttr>(constant.getValue());
+      return success(elements && elements.isSplat());
+    }
+    if (!operation->hasTrait<OpTrait::Elementwise>())
+      return failure();
+
+    for (Value operand : operation->getOperands())
+      if (auto argument = dyn_cast<RankedTensorType>(operand.getType());
+          argument && (argument.getShape() != type.getShape() ||
+                       failed(plan(operand, depth))))
+        return failure();
+    return success();
+  }
+
+  Value constant(OpBuilder &builder, Location location, int32_t value) {
+    auto type = cast<RankedTensorType>(indices.getType());
+    return arith::ConstantOp::create(
+        builder, location, type,
+        DenseElementsAttr::get(type, builder.getI32IntegerAttr(value)));
+  }
+
+  Value materialize(Value value, unsigned depth, OpBuilder &builder) {
+    if (Value existing = rewritten.lookup(value))
+      return existing;
+
+    Operation *operation = value.getDefiningOp();
+    if (auto conversion = dyn_cast<ConvertLayoutOp>(operation))
+      return rewritten[value] =
+                 materialize(conversion.getSrc(), depth, builder);
+    if (auto reshape = dyn_cast<ReshapeOp>(operation))
+      return rewritten[value] = materialize(reshape.getSrc(), depth, builder);
+
+    if (auto join = dyn_cast<JoinOp>(operation)) {
+      Value lhs = materialize(join.getLhs(), depth + 1, builder);
+      Value rhs = materialize(join.getRhs(), depth + 1, builder);
+      auto [predicate, inserted] = predicates.try_emplace(depth, Value());
+      if (inserted) {
+        Value mask = constant(builder, join.getLoc(), int32_t{1} << depth);
+        Value zero = constant(builder, join.getLoc(), 0);
+        Value masked =
+            arith::AndIOp::create(builder, join.getLoc(), indices, mask);
+        predicate->second = arith::CmpIOp::create(
+            builder, join.getLoc(), arith::CmpIPredicate::ne, masked, zero);
+      }
+      return rewritten[value] = arith::SelectOp::create(
+                 builder, join.getLoc(), predicate->second, rhs, lhs);
+    }
+
+    if (auto range = dyn_cast<MakeRangeOp>(operation)) {
+      Value result = indices;
+      if (depth)
+        result = arith::ShRUIOp::create(
+            builder, range.getLoc(), result,
+            constant(builder, range.getLoc(), static_cast<int32_t>(depth)));
+      if (int64_t start = range.getStartAttr().getInt(); start != 0)
+        result = arith::AddIOp::create(
+            builder, range.getLoc(), result,
+            constant(builder, range.getLoc(), static_cast<int32_t>(start)));
+      return rewritten[value] = result;
+    }
+
+    auto original = cast<RankedTensorType>(value.getType());
+    auto type = RankedTensorType::get(
+        target.getShape(), original.getElementType(), target.getEncoding());
+    if (auto splat = dyn_cast<SplatOp>(operation))
+      return rewritten[value] =
+                 SplatOp::create(builder, splat.getLoc(), type, splat.getSrc());
+    if (auto splat = dyn_cast<arith::ConstantOp>(operation)) {
+      auto elements = cast<DenseElementsAttr>(splat.getValue());
+      auto values =
+          DenseElementsAttr::get(type, elements.getSplatValue<Attribute>());
+      return rewritten[value] = arith::ConstantOp::create(
+                 builder, splat.getLoc(), type, values);
+    }
+
+    IRMapping mapping;
+    for (Value operand : operation->getOperands())
+      if (isa<RankedTensorType>(operand.getType()))
+        mapping.map(operand, materialize(operand, depth, builder));
+    Operation *replacement = builder.clone(*operation, mapping);
+    replacement->getResult(0).setType(type);
+    return rewritten[value] = replacement->getResult(0);
+  }
+
+  StoreOp store;
+  RankedTensorType target;
+  Attribute flatEncoding;
+  Value indices;
+  SetVector<Operation *> operations;
+  DenseMap<Value, unsigned> depths;
+  DenseMap<Value, Value> rewritten;
+  DenseMap<unsigned, Value> predicates;
+};
+
+bool rewriteIndexedStoreExpressions(ModuleOp module) {
+  SmallVector<StoreOp> stores;
+  module.walk([&](StoreOp store) { stores.push_back(store); });
+
+  bool changed = false;
+  for (StoreOp store : stores)
+    changed |= IndexedStoreExpression(store).rewrite();
+  return changed;
+}
 } // namespace
 
 class TritonGPURemoveLayoutConversionsPass
@@ -1689,6 +1892,9 @@ public:
     if (applyPatternsGreedily(m, std::move(scfCleanup)).failed()) {
       LLVM_DEBUG(DBGS() << "scf cleanup did not converge\n");
     }
+
+    if (rewriteIndexedStoreExpressions(m))
+      cleanupConvertOps();
 
     LLVM_DEBUG({
       DBGS() << "Module after final cleanups:\n";
