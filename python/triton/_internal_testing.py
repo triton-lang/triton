@@ -33,6 +33,51 @@ def is_interpreter():
     return os.environ.get('TRITON_INTERPRET', '0') == '1'
 
 
+def is_compile_warmup():
+    return knobs.runtime.compile_warmup
+
+
+def rand(*shape, **kwargs):
+    if is_compile_warmup():
+        return torch.empty(*shape, **kwargs)
+    return torch.rand(*shape, **kwargs)
+
+
+def randn(*shape, **kwargs):
+    if is_compile_warmup():
+        return torch.empty(*shape, **kwargs)
+    return torch.randn(*shape, **kwargs)
+
+
+def randint(low, high, size, **kwargs):
+    if is_compile_warmup():
+        return torch.empty(size, dtype=kwargs.get("dtype", torch.int64), device=kwargs.get("device"))
+    return torch.randint(low, high, size, **kwargs)
+
+
+def random_int(low, high, *, warmup_value=None, **kwargs):
+    if is_compile_warmup():
+        return low if warmup_value is None else warmup_value
+    return int(torch.randint(low, high, size=(), **kwargs).item())
+
+
+def random_float(*, warmup_value=0.5, **kwargs):
+    if is_compile_warmup():
+        return warmup_value
+    return float(torch.rand((), **kwargs).item())
+
+
+def reference_tensor(value, dtype):
+    if is_compile_warmup():
+        return torch.empty_like(value.data, dtype=dtype)
+    return value.to(dtype)
+
+
+def assert_close(*args, **kwargs):
+    if not is_compile_warmup():
+        torch.testing.assert_close(*args, **kwargs)
+
+
 def get_current_target():
     if is_interpreter():
         return None

@@ -9,9 +9,17 @@ from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia import ampere
 from triton.experimental.gluon.language.nvidia.blackwell import allocate_tensor_memory, clc, mbarrier, tma
-from triton._internal_testing import is_cuda, ReplenishingProcessPool, run_in_process as _run_in_process
+from triton._internal_testing import assert_close, is_compile_warmup, is_cuda, ReplenishingProcessPool, run_in_process as _run_in_process
+
+pytestmark = pytest.mark.enable_warmup(min_capability=9)
 
 _process_pool = None
+
+
+@pytest.fixture(autouse=True)
+def isolated_consan_knobs():
+    with knobs.compilation.scope(), knobs.runtime.scope():
+        yield
 
 
 def run_in_process(client_fn, args=(), kwargs=None, env=None):
@@ -22,7 +30,7 @@ def run_in_process(client_fn, args=(), kwargs=None, env=None):
 
 @pytest.fixture(scope="session", autouse=True)
 def consan_process_pool(request):
-    if request.config.getoption("--warmup-only") or os.environ.get("DISABLE_SUBPROCESS"):
+    if request.config.getoption("--warmup-only", default=False) or os.environ.get("DISABLE_SUBPROCESS"):
         yield
         return
     global _process_pool
@@ -39,7 +47,7 @@ def consan_process_pool(request):
 def run_wrapper(request):
     # Use DISABLE_SUBPROCESS to run the tests in the main process
     # (useful for debugging but assert in any test will make all the tests fail)
-    return not request.config.getoption("--warmup-only") and not os.environ.get("DISABLE_SUBPROCESS")
+    return not request.config.getoption("--warmup-only", default=False) and not os.environ.get("DISABLE_SUBPROCESS")
 
 
 @pytest.fixture(params=[1, 2, 4], ids=lambda num_ctas: f"{num_ctas}ctas")
@@ -164,8 +172,11 @@ def test_cache_miss_knob(device, monkeypatch, num_ctas, run_wrapper, fresh_knobs
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 def test_cache_miss_env(device, monkeypatch, num_ctas, run_wrapper):
     if not run_wrapper:
-        run_failing_kernel(device, False, "env", num_ctas)
-        run_failing_kernel(device, True, "env", num_ctas)
+        with knobs.compilation.scope(), knobs.runtime.scope():
+            monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "")
+            knobs.refresh_knobs()
+            run_failing_kernel(device, False, "env", num_ctas)
+            run_failing_kernel(device, True, "env", num_ctas)
         return
 
     # First run without consan
@@ -179,6 +190,7 @@ def test_cache_miss_env(device, monkeypatch, num_ctas, run_wrapper):
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.disable_warmup(reason="compiles into an intentionally isolated temporary cache")
 def test_consan_uses_profile_scratch(device, fresh_knobs, num_ctas):
     with knobs.cache.scope(), knobs.runtime.scope():
         knobs.cache.dir = tempfile.mkdtemp(prefix="triton-cache-")
@@ -191,8 +203,8 @@ def test_consan_uses_profile_scratch(device, fresh_knobs, num_ctas):
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("MEMORY_KIND", ["shared", "tensor"])
-def test_consan_initializes_allocations_with_nan(MEMORY_KIND, device, fresh_knobs, num_ctas):
-    fresh_knobs.compilation.instrumentation_mode = "consan"
+def test_consan_initializes_allocations_with_nan(MEMORY_KIND, device, num_ctas):
+    knobs.compilation.instrumentation_mode = "consan"
 
     @gluon.jit
     def kernel(output, MEMORY_KIND: ttgl.constexpr):
@@ -217,7 +229,8 @@ def test_consan_initializes_allocations_with_nan(MEMORY_KIND, device, fresh_knob
 
     output = torch.empty((XBLOCK.value * num_ctas, XBLOCK.value), device=device, dtype=torch.float32)
     kernel[(1, )](output, MEMORY_KIND=MEMORY_KIND, num_warps=4, num_ctas=num_ctas)
-    assert torch.isnan(output).all()
+    if not is_compile_warmup():
+        assert torch.isnan(output).all()
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
@@ -766,7 +779,7 @@ def test_local_indexed_cross_cta_visibility(OP, FAILURE, device, run_wrapper, mo
     if not FAILURE:
         peer = inp.reshape(2, 2, 16).flip(1).reshape(2, 32)
         expected = inp + peer if OP == "atomic" else peer
-        torch.testing.assert_close(out, expected)
+        assert_close(out, expected)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
@@ -2000,7 +2013,7 @@ def test_fence_async_shared_across_warp_specialize(FENCE_LOCATION, device, run_w
     output_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(output, [block_m, XBLOCK.value], shared_layout)
     ready = torch.zeros((1, ), device=device, dtype=torch.int32)
     kernel[(1, )](output_desc, ready, FENCE_LOCATION=FENCE_LOCATION, num_warps=4, num_ctas=num_ctas)
-    torch.testing.assert_close(output, torch.full_like(output, 42.0))
+    assert_close(output, torch.full_like(output, 42.0))
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
@@ -2802,7 +2815,7 @@ def test_cluster_barrier_warp_specialized_phase_snapshot(EXPLICIT_BARRIER, DEFAU
     output = torch.empty((num_ctas * 16, ), device=device, dtype=torch.int32)
     for _ in range(4):
         kernel[(num_ctas * 16, )](output, EXPLICIT_BARRIER, num_warps=DEFAULT_WARPS, num_ctas=num_ctas)
-    torch.testing.assert_close(output, torch.arange(num_ctas * 16, device=device, dtype=torch.int32))
+    assert_close(output, torch.arange(num_ctas * 16, device=device, dtype=torch.int32))
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
@@ -2979,7 +2992,7 @@ def test_deadlock_user_cluster_barrier_inside_warp_specialize(CLUSTER_PARTITION,
             ], [4], [32])
 
     compiled = kernel[(1, )](FAILURE, CLUSTER_PARTITION, num_warps=4, num_ctas=num_ctas)
-    if not FAILURE:
+    if not FAILURE and not is_compile_warmup():
         assert compiled.asm["ptx"].count("mbarrier.arrive.release.cluster.shared::cluster") >= 2
 
 

@@ -19,6 +19,8 @@ jobs:
         config: ${{ fromJson(inputs.matrix) }}
     env:
       RUNNER_TYPE: ${{ matrix.config.runner_type }}
+      NUM_GPUS: ${{ matrix.config.runner_type == 'nvidia-gb200' && '2' || '1' }}
+      WARMUP_MAX_PROCS: ${{ matrix.config.runner_type == 'nvidia-a100' && '96' || '112' }}
       TRITON_BUILD_WITH_CCACHE: "true"
       TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
       TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
@@ -95,67 +97,30 @@ jobs:
           echo "TRITON_CI_COMPILE_TRACE_DIR=$trace_dir" >> "$GITHUB_ENV"
           export TRITON_CI_COMPILE_TRACE_DIR="$trace_dir"
           warmup_procs=$(nproc)
-          warmup_limit=96
-          if [[ "$RUNNER_TYPE" == "nvidia-h100" || "$RUNNER_TYPE" == "nvidia-gb200" ]]; then
-            warmup_limit=112
-          fi
-          if (( warmup_procs > warmup_limit )); then
-            warmup_procs=$warmup_limit
+          if (( warmup_procs > WARMUP_MAX_PROCS )); then
+            warmup_procs=$WARMUP_MAX_PROCS
           fi
           make WARMUP_PROCS="$warmup_procs" test-warmup
-          warmup_reports=(--phase warmup-unit --phase warmup-triton-kernels --phase warmup-attention)
-          if [[ "$RUNNER_TYPE" == "nvidia-gb200" ]]; then
-            warmup_reports+=(--phase warmup-gluon --phase warmup-gluon-examples --phase warmup-regression)
-          elif [[ "$RUNNER_TYPE" == "nvidia-h100" ]]; then
-            warmup_reports+=(--phase warmup-gluon --phase warmup-regression)
-          fi
-          python3 -m triton._compile_warmup report "${warmup_reports[@]}"
       - name: Run triton tests
-        run: |
-          make NUM_PROCS=24 test-unit
-          python3 -m triton._compile_warmup report --phase unit --phase triton-kernels --phase attention --require-complete-warmup
-          python3 -m triton._compile_warmup report --phase instrumentation
+        run: make NUM_PROCS=24 test-unit
       - name: Run gsan tests
-        run: |
-          make NUM_PROCS=24 test-gsan
-          python3 -m triton._compile_warmup report --phase gsan
+        run: make NUM_PROCS=24 test-gsan
       - name: Run interpreter tests
         if: ${{ matrix.config.runner_type == 'nvidia-h100' }}
-        run: |
-          make test-interpret
-          python3 -m triton._compile_warmup report --phase interpreter
+        run: make test-interpret
       - name: Run regression tests
-        run: |
-          make test-regression
-          if [[ "$RUNNER_TYPE" == "nvidia-gb200" || "$RUNNER_TYPE" == "nvidia-h100" ]]; then
-            python3 -m triton._compile_warmup report --phase regression --require-complete-warmup
-          else
-            python3 -m triton._compile_warmup report --phase regression
-          fi
+        run: make test-regression
       - name: Run microbenchmark tests
         # Microbenchmark never fail but running them gives us an easy way to track performance changes.
         run: make test-microbenchmark
       - name: Run C++ unittests
         run: make test-cpp
       - name: Run Proton tests
-        run: |
-          make test-proton
-          python3 -m triton._compile_warmup report --phase proton
-          python3 -m triton._compile_warmup report --phase proton-hw-trace
-          python3 -m triton._compile_warmup report --phase proton-override
-          python3 -m triton._compile_warmup report --phase proton-overhead
-      # Keep the high-parallelism Gluon examples last so their worker teardown
-      # cannot delay unrelated GPU suites.
+        run: make test-proton
       - name: Run gluon tests
-        run: |
-          make NUM_PROCS=24 test-gluon
-          if [[ "$RUNNER_TYPE" == "nvidia-gb200" ]]; then
-            python3 -m triton._compile_warmup report --phase gluon --phase gluon-examples --require-complete-warmup
-          elif [[ "$RUNNER_TYPE" == "nvidia-h100" ]]; then
-            python3 -m triton._compile_warmup report --phase gluon --require-complete-warmup
-          else
-            python3 -m triton._compile_warmup report --phase gluon --phase gluon-examples
-          fi
+        run: make NUM_PROCS=24 NUM_GPUS="$NUM_GPUS" test-gluon
+      - name: Verify compile warmup completeness
+        run: python3 -m triton._test_runner report --require-complete
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton

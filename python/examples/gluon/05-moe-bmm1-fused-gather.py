@@ -11,6 +11,7 @@ import triton.experimental.gluon.language.nvidia.blackwell.tma as tma
 import triton.experimental.gluon.language.nvidia.hopper.mbarrier as mbarrier
 import triton.language.extra.libdevice as libdevice
 from triton.testing import do_bench_cudagraph
+from triton._internal_testing import random_float, random_int
 
 from triton_kernels.distributed import make_expt_dict_uniform
 from triton_kernels.matmul import (
@@ -1349,7 +1350,7 @@ def prepare_case(c: MLPConfig, batch_size: int, device: str, seed: int = 0, unif
                  reference: bool = False, p: KernelConfig | None = None) -> PreparedCase:
     torch.manual_seed(seed)
 
-    local_rank = seed % c.num_expert_shards
+    local_rank = random_int(0, c.num_expert_shards, warmup_value=seed % c.num_expert_shards)
     k, n = c.hidden_size, c.intermediate_size
     n_expts_local = c.num_experts // c.num_expert_shards
     ragged_metadata, gather_indx = init_routing_data(c, batch_size, local_rank, device, uniform_routing)
@@ -1358,8 +1359,8 @@ def prepare_case(c: MLPConfig, batch_size: int, device: str, seed: int = 0, unif
     w, w_scale = alloc_randn_fp4((n_expts_local, k, n), device=device, p=p)
     bias = alloc_randn((n_expts_local, n), dtype=torch.float32, device=device)
 
-    swiglu_alpha = 1.1
-    swiglu_limit = 1.4
+    swiglu_alpha = random_float(device=device) / 5 + 1.0
+    swiglu_limit = random_float(device=device) / 5 + 1.3
     fused_activation = FusedActivation(
         FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2),
         (swiglu_alpha, swiglu_limit),
@@ -1475,6 +1476,7 @@ def is_blackwell():
 @pytest.mark.parametrize("c", [GPT_OSS_120B_CONFIG])
 @pytest.mark.parametrize("batch_size", get_batch_sizes(GPT_OSS_120B_CONFIG))
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon MoE BMM1 fused-gather is only supported on Blackwell GPUs")
+@pytest.mark.disable_warmup(reason="random activation parameters specialize the kernel")
 def test_op(c: MLPConfig, batch_size: int):
     prepared = prepare_case(c, batch_size, device=f"cuda:{torch.cuda.current_device()}")
     ref_y, ref_precision = run_provider(prepared, "reference")
@@ -1503,6 +1505,7 @@ def test_op(c: MLPConfig, batch_size: int):
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon MoE BMM1 fused-gather is only supported on Blackwell GPUs")
+@pytest.mark.disable_warmup(reason="random activation parameters specialize the kernel")
 def test_op_consan():
     with triton.knobs.compilation.scope():
         triton.knobs.compilation.instrumentation_mode = "consan"

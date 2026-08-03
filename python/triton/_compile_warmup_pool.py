@@ -6,14 +6,14 @@ import io
 import json
 import linecache
 import multiprocessing as mp
+from multiprocessing.connection import Client, Listener
 import os
 import statistics
 import sys
+import tempfile
 import threading
 import time
 import types
-import warnings
-from collections import deque
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -256,23 +256,6 @@ def _preload_with_compile_context(function, name, key, serialized_target, serial
     )
 
 
-@contextmanager
-def _compile_lock(directory, digest):
-    if directory is None:
-        yield
-        return
-    import fcntl
-
-    lock_dir = os.path.join(directory, "triton-warmup-locks")
-    os.makedirs(lock_dir, mode=0o700, exist_ok=True)
-    with open(os.path.join(lock_dir, f"{digest}.lock"), "a+b") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
-
-
 def _warmup_kernel(kernel, args, grid, kwargs):
     from triton.runtime.autotuner import Autotuner
 
@@ -310,21 +293,6 @@ def _compile_trace(directory, phase, test):
 _SHUTDOWN_STDERR_SILENCED = False
 
 
-def _balanced_worker_count(total):
-    weights = os.environ.get("TRITON_WARMUP_WORKER_WEIGHTS")
-    worker = os.environ.get("PYTEST_XDIST_WORKER", "")
-    if not weights or not worker.startswith("gw"):
-        return total
-    weights = [int(weight) for weight in weights.split(",")]
-    index = int(worker[2:])
-    weight_sum = sum(weights)
-    previous = sum(weights[:index])
-    current = previous + weights[index]
-    previous_boundary = (total * previous + weight_sum - 1) // weight_sum
-    current_boundary = (total * current + weight_sum - 1) // weight_sum
-    return current_boundary - previous_boundary
-
-
 def _silence_worker_shutdown_stderr():
     descriptor = os.open(os.devnull, os.O_WRONLY)
     os.dup2(descriptor, 2)
@@ -343,7 +311,7 @@ def _silence_worker_shutdown_diagnostics():
 
 
 def _preload_worker(module_name, qualified_name, fn_bytes, compile_context_bytes, kernel_repr, instrumentation_mode,
-                    environment, cache_dir, trace_directory, phase, test, digest, capture_worker):
+                    environment, cache_dir, trace_directory, phase, test, capture_worker):
     """Load one JIT function and populate the shared disk cache."""
     previous_capture_worker = os.environ.get("PYTEST_XDIST_WORKER")
     os.environ["PYTEST_XDIST_WORKER"] = capture_worker
@@ -364,10 +332,9 @@ def _preload_worker(module_name, qualified_name, fn_bytes, compile_context_bytes
             else:
                 raise AssertionError("missing JIT function import and serialized payload")
             compile_context = cloudpickle.loads(compile_context_bytes)
-            with _compile_lock(trace_directory, digest):
-                start = time.monotonic()
-                with _compile_trace(trace_directory, phase, test):
-                    _preload_with_compile_context(function, *compile_context)
+            start = time.monotonic()
+            with _compile_trace(trace_directory, phase, test):
+                _preload_with_compile_context(function, *compile_context)
             return worker, time.monotonic() - start
     except triton.compiler.errors.CompilationError as error:
         details = f"{type(error).__name__}: {error}"
@@ -390,7 +357,6 @@ def _preload_worker(module_name, qualified_name, fn_bytes, compile_context_bytes
 
 @dataclass(frozen=True)
 class _CapturedPreload:
-    function: object
     module_name: str | None
     qualified_name: str | None
     fn_bytes: bytes | None
@@ -415,9 +381,12 @@ class ProcessPoolWarmupDispatcher:
     def __init__(self, *, max_workers, trace_directory, phase):
         if max_workers < 1:
             raise ValueError(f"max_workers must be >= 1, got {max_workers}")
-        max_workers = _balanced_worker_count(max_workers)
-        context = mp.get_context("spawn")
-        self._executor = ProcessPoolExecutor(max_workers=max_workers, mp_context=context)
+        coordinator = os.environ.get("TRITON_WARMUP_COORDINATOR")
+        self._connection = Client(coordinator, family="AF_UNIX") if coordinator else None
+        self._executor = None
+        if self._connection is None:
+            context = mp.get_context("spawn")
+            self._executor = ProcessPoolExecutor(max_workers=max_workers, mp_context=context)
         self._max_workers = max_workers
         self._cache_dir = triton.knobs.cache.dir
         self._trace_directory = trace_directory
@@ -428,6 +397,7 @@ class ProcessPoolWarmupDispatcher:
         self._first_submit = None
         self._attempted_tests = set()
         self._serialized_keys = set()
+        self._serialized_functions = {}
         self._submitted_keys = set()
 
     def record_test(self, test, phase=None):
@@ -447,34 +417,22 @@ class ProcessPoolWarmupDispatcher:
         with self._capture_lock:
             instrumentation_mode = triton.knobs.compilation.instrumentation_mode
             environment = get_cache_invalidating_env_vars()
-            try:
-                captures = self._capture_preloads(
-                    instrumentation_mode,
-                    environment,
-                    kernel,
-                    args,
-                    grid,
-                    kwargs,
-                    test,
-                )
-            except _UnsupportedPreloadError as error:
-                warnings.warn(
-                    f"Falling back to in-process warmup for {kernel}: {error!r}",
-                    stacklevel=2,
-                )
-                with _compile_trace(self._trace_directory, self.current_phase, test):
-                    return _warmup_kernel(kernel, args, grid, kwargs)
+            captures = self._capture_preloads(
+                instrumentation_mode,
+                environment,
+                kernel,
+                args,
+                grid,
+                kwargs,
+                test,
+            )
             phase = self.current_phase
             self.record_test(test, phase)
             for capture in captures:
                 digest = hashlib.sha256(instrumentation_mode.encode() + b"\0" + capture.digest_payload()).hexdigest()
                 if digest in self._submitted_keys:
                     continue
-                self._submitted_keys.add(digest)
-                if self._first_submit is None:
-                    self._first_submit = time.monotonic()
-                future = self._executor.submit(
-                    _preload_worker,
+                task = (
                     capture.module_name,
                     capture.qualified_name,
                     capture.fn_bytes,
@@ -486,59 +444,43 @@ class ProcessPoolWarmupDispatcher:
                     self._trace_directory,
                     phase,
                     capture.test,
-                    digest,
                     os.environ.get("PYTEST_XDIST_WORKER", "main"),
                 )
-                self._pending.append((future, capture, instrumentation_mode, phase, digest))
+                if self._connection is None:
+                    self._submit(digest, task)
+                else:
+                    self._submitted_keys.add(digest)
+                    self._connection.send((digest, task))
+
+    def _submit(self, digest, task):
+        if digest in self._submitted_keys:
+            return
+        self._submitted_keys.add(digest)
+        if self._first_submit is None:
+            self._first_submit = time.monotonic()
+        self._pending.append(self._executor.submit(_preload_worker, *task))
 
     def _capture_preloads(self, instrumentation_mode, environment, kernel, args, grid, kwargs, test):
-        from triton.runtime import jit as triton_jit
-
-        previous_hook = triton.knobs.runtime.jit_cache_hook
-        previous_serializer = triton_jit.serialize_specialization_data
+        previous_hook = triton.knobs.runtime.jit_specialization_hook
         captures = []
-        specializations = deque()
 
-        def serialize_specialization_data(name, signature, constants, attrs, options, key, target):
-            # Triton's JSON payload cannot represent some constexprs, including
-            # Gluon layouts. Keep the exact Python objects for the spawned
-            # compiler and return a harmless payload to let _call_hook proceed.
-            specializations.append((name, key, dict(target.__dict__), dict(options.__dict__)))
-            try:
-                return previous_serializer(name, signature, constants, attrs, options, key, target)
-            except TypeError as error:
-                if "not JSON serializable" not in str(error):
-                    raise
-                return json.dumps({"name": name, "process_pool_warmup": True})
-
-        def cache_hook(key, repr, compile, fn, is_manual_warmup, already_compiled=False):
+        def capture_specialization(*, fn, key, signature, target, device, constants, options, attrs, warmup):
             if previous_hook is not None:
-                previous_hook(
-                    key=key,
-                    repr=repr,
-                    compile=compile,
-                    fn=fn,
-                    is_manual_warmup=is_manual_warmup,
-                    already_compiled=already_compiled,
-                )
-            if not specializations:
-                raise _UnsupportedPreloadError(f"Triton did not provide specialization metadata for {fn.jit_function}")
-            name, compile_key, target, options = specializations.popleft()
-            configs = compile.get("configs", [{}])
+                previous_hook(fn=fn, key=key, signature=signature, target=target, device=device, constants=constants,
+                              options=options, attrs=attrs, warmup=warmup)
             captures.append((
-                fn.jit_function,
-                name,
-                compile_key,
-                target,
-                options,
-                compile.get("signature", {}),
-                compile.get("constants") or {},
-                configs[0],
+                fn,
+                fn._fn_name,
+                key,
+                dict(target.__dict__),
+                dict(options.__dict__),
+                signature,
+                constants,
+                attrs,
             ))
             return True
 
-        triton.knobs.runtime.jit_cache_hook = cache_hook
-        triton_jit.serialize_specialization_data = serialize_specialization_data
+        triton.knobs.runtime.jit_specialization_hook = capture_specialization
         try:
             try:
                 _warmup_kernel(kernel, args, grid, kwargs)
@@ -553,18 +495,15 @@ class ProcessPoolWarmupDispatcher:
                 raise OverflowError(
                     f"{error}; kernel={kernel}; args=[{', '.join(arg_details)}]; kwargs={kwargs}") from error
         finally:
-            triton_jit.serialize_specialization_data = previous_serializer
-            triton.knobs.runtime.jit_cache_hook = previous_hook
-
-        if specializations:
-            raise _UnsupportedPreloadError(
-                f"Triton produced {len(specializations)} specialization payloads without invoking the cache hook")
+            triton.knobs.runtime.jit_specialization_hook = previous_hook
         result = []
         for function, name, key, target, options, signature, constants, attrs in captures:
             # Triton's in-memory cache uses this exact key, which already
             # includes the specialization and compile options. Deduplicate
             # before cloudpickling the function and compile context.
-            serialized_key = (instrumentation_mode, tuple(sorted(environment.items())), id(function), key)
+            function_identity = id(function)
+            self._serialized_functions[function_identity] = function
+            serialized_key = (instrumentation_mode, tuple(sorted(environment.items())), function_identity, key)
             if serialized_key in self._serialized_keys:
                 continue
             self._serialized_keys.add(serialized_key)
@@ -589,7 +528,6 @@ class ProcessPoolWarmupDispatcher:
                     f"Unable to serialize compile context for {function}: {type(error).__name__}: {error}") from error
             result.append(
                 _CapturedPreload(
-                    function,
                     module_name,
                     qualified_name,
                     fn_bytes,
@@ -600,50 +538,15 @@ class ProcessPoolWarmupDispatcher:
         return result
 
     def finish(self):
-        compilation_failures = []
+        if self._connection is not None:
+            self._connection.close()
+            self._connection = None
+            return
         worker_results = []
         submitted = len(self._pending)
         try:
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", message="Accessing the data pointer of FakeTensor.*")
-                for future, capture, instrumentation_mode, phase, digest in self._pending:
-                    try:
-                        worker_results.append(future.result())
-                    except _CompilationFailedError as error:
-                        compilation_failures.append(error)
-                    except _UnsupportedPreloadError as error:
-                        warnings.warn(
-                            "Falling back to in-process preload after child failure: "
-                            f"{error!r}; cause={error.__cause__!r}",
-                            stacklevel=2,
-                        )
-                        try:
-                            with (
-                                    _instrumentation_mode(instrumentation_mode),
-                                    _cache_invalidating_environment(capture.environment),
-                                    _compile_trace(self._trace_directory, phase, capture.test),
-                                    _compile_lock(self._trace_directory, digest),
-                            ):
-                                compile_context = cloudpickle.loads(capture.compile_context_bytes)
-                                _preload_with_compile_context(capture.function, *compile_context)
-                        except Exception as fallback_error:
-                            warnings.warn(
-                                f"Skipping failed in-process warmup: {type(fallback_error).__name__}: "
-                                f"{fallback_error}",
-                                stacklevel=2,
-                            )
-                if compilation_failures:
-                    if os.environ.get("TRITON_WARMUP_DEBUG"):
-                        preview = "\n\n".join(str(error) for error in compilation_failures[:3])
-                    else:
-                        preview = "; ".join(str(error).splitlines()[0] for error in compilation_failures[:3])
-                    remaining = len(compilation_failures) - 3
-                    if remaining > 0:
-                        preview += f"; and {remaining} more"
-                    warnings.warn(
-                        f"{len(compilation_failures)} captured launches failed warmup compilation: {preview}",
-                        stacklevel=2,
-                    )
+            for future in self._pending:
+                worker_results.append(future.result())
         finally:
             self._executor.shutdown(wait=True)
             end = time.monotonic()
@@ -674,4 +577,57 @@ class ProcessPoolWarmupDispatcher:
             self._pending.clear()
             self._attempted_tests.clear()
             self._serialized_keys.clear()
+            self._serialized_functions.clear()
             self._submitted_keys.clear()
+
+
+class SharedWarmupCoordinator:
+    """Share one bounded compiler pool across every pytest capture worker."""
+
+    def __init__(self, *, max_workers, trace_directory):
+        self._directory = tempfile.TemporaryDirectory(prefix="triton-warmup-")
+        self.address = os.path.join(self._directory.name, "coordinator.sock")
+        self._listener = Listener(self.address, family="AF_UNIX")
+        self._dispatcher = ProcessPoolWarmupDispatcher(max_workers=max_workers, trace_directory=trace_directory,
+                                                       phase="warmup")
+        self._connections = []
+        self._accept_thread = threading.Thread(target=self._accept, daemon=True)
+        self._accept_thread.start()
+
+    def _accept(self):
+        while True:
+            connection = self._listener.accept()
+            try:
+                message = connection.recv()
+            except EOFError:
+                connection.close()
+                continue
+            if message is None:
+                connection.close()
+                return
+            thread = threading.Thread(target=self._consume, args=(connection, message), daemon=True)
+            self._connections.append(thread)
+            thread.start()
+
+    def _consume(self, connection, message):
+        try:
+            while True:
+                digest, task = message
+                with self._dispatcher._capture_lock:
+                    self._dispatcher._submit(digest, task)
+                message = connection.recv()
+        except EOFError:
+            connection.close()
+
+    def close(self):
+        stopper = Client(self.address, family="AF_UNIX")
+        stopper.send(None)
+        stopper.close()
+        self._accept_thread.join()
+        for thread in self._connections:
+            thread.join()
+        self._listener.close()
+        try:
+            self._dispatcher.finish()
+        finally:
+            self._directory.cleanup()

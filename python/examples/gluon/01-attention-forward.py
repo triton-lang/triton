@@ -7,6 +7,7 @@ import itertools
 from dataclasses import dataclass, fields
 
 from triton.experimental import gluon
+from triton._internal_testing import is_compile_warmup
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.nvidia import blackwell as bw
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
@@ -1173,6 +1174,7 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
 @pytest.mark.parametrize("use_tmem_red", [False, True] if is_blackwell_ultra() else [False])
 @pytest.mark.parametrize("cta_layout", [(), ((1, 0), ), ((1, 0), (2, 0))], ids=["1cta", "2ctas", "4ctas"])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
+@pytest.mark.enable_warmup(min_capability=10)
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cta_layout, profile=False):
     device = "cuda"
 
@@ -1191,6 +1193,8 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cta_layout, prof
     sm_scale = 0.5
 
     tri_out, _ = attention_forward(q, k, v, causal, sm_scale, use_tmem_red=use_tmem_red, cta_layout=cta_layout)
+    if is_compile_warmup():
+        return
     if dtype == torch.float8_e5m2:
         ref_out = torch.nn.functional.scaled_dot_product_attention(q.float(), k.float(), v.float(), scale=sm_scale,
                                                                    is_causal=causal)
@@ -1203,6 +1207,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cta_layout, prof
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
 @pytest.mark.parametrize("cta_layout", [(), ((1, 0), )], ids=["1cta", "2ctas"])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
+@pytest.mark.enable_warmup(min_capability=10)
 def test_op_consan(dtype, cta_layout):
     with triton.knobs.compilation.scope():
         triton.knobs.compilation.instrumentation_mode = "consan"
