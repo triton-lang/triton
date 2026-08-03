@@ -466,6 +466,8 @@ class CUDABackend(BaseBackend):
         llvm.optimize_module(
             llvm_mod,
             llvm.OPTIMIZE_O3,
+            proc,
+            features,
             disable_slp_vectorizer=capability == 80,
             expand_masked_div_rem=True,
         )

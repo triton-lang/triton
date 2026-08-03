@@ -736,6 +736,7 @@ void init_triton_llvm(py::module_ &m) {
         llvm::CodeGenOptLevel::None)};
     // set data layout
     mod->setDataLayout(machine->createDataLayout());
+    mod->setTargetTriple(targetTriple);
   });
 
   m.def(
