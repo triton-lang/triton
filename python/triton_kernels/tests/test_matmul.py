@@ -686,6 +686,59 @@ def test_mxfp8_act_scale_store_zeroes_partial_group(n, is_persistent, device):
         assert torch.all(unused_groups == 0xFF)
 
 
+@pytest.mark.parametrize("fuse_swiglu", [False, True])
+@pytest.mark.parametrize("swizzle_output_scale", [False, True])
+def test_persistent_mxfp8_aux_bf16_output(device, fuse_swiglu, swizzle_output_scale):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell or newer")
+
+    m, n, k = 128, 256, 256
+    x = torch.randn((m, k), dtype=torch.bfloat16, device=device)
+    w = torch.randn((k, n), dtype=torch.bfloat16, device=device)
+    bias = torch.randn((n,), dtype=torch.float32, device=device)
+    fused_activation = (
+        FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2), (1.1, 7.0))
+        if fuse_swiglu else None
+    )
+    out_columns = n // (2 if fuse_swiglu else 1)
+    aux_out = torch.empty((m, out_columns), dtype=torch.bfloat16, device=device)
+    epilogue = Epilogue(
+        FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn),
+        effective_itemsize=6.0,
+    )
+
+    def make_precision_config():
+        scale = torch.empty((m, triton.cdiv(out_columns, MXFP_BLOCK_SIZE.value)), dtype=torch.uint8, device=device)
+        if swizzle_output_scale:
+            scale = convert_layout(wrap_torch_tensor(scale), layout.BlackwellActMXScaleLayout(None))
+        return PrecisionConfig(out_dtype=torch.float8_e4m3fn, c_mx_scale=scale)
+
+    reference_precision = make_precision_config()
+    dual_precision = make_precision_config()
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": True, "split_k": 1}):
+        reference_bf16 = matmul(
+            x, w, bias, precision_config=PrecisionConfig(out_dtype=torch.bfloat16),
+            fused_activation=fused_activation,
+        )
+        reference_mxfp8 = matmul(
+            x, w, bias, precision_config=reference_precision, fused_activation=fused_activation,
+            epilogue=epilogue,
+        )
+        dual_mxfp8 = matmul(
+            x, w, bias, precision_config=dual_precision, fused_activation=fused_activation,
+            epilogue=epilogue, aux_out=aux_out,
+        )
+
+    torch.testing.assert_close(aux_out, reference_bf16, rtol=0, atol=0)
+    torch.testing.assert_close(dual_mxfp8.view(torch.uint8), reference_mxfp8.view(torch.uint8), rtol=0, atol=0)
+    reference_scale = reference_precision.c_mx_scale
+    dual_scale = dual_precision.c_mx_scale
+    if isinstance(reference_scale, Tensor):
+        reference_scale = convert_layout(reference_scale, layout.StridedLayout()).storage.data
+        dual_scale = convert_layout(dual_scale, layout.StridedLayout()).storage.data
+    torch.testing.assert_close(dual_scale, reference_scale, rtol=0, atol=0)
+
+
 def test_k_ragged_mxfp8_act_scale_swizzling(device):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("requires Blackwell or newer")

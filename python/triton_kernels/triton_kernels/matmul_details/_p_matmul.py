@@ -127,6 +127,7 @@ def _p_matmul(
              all_writes_issued=None,
              reduce_rank=0,
              n_reduce_shards: tl.constexpr = 1,
+             AuxOut=None,
              ):
     # tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
 
@@ -653,6 +654,9 @@ def _p_matmul(
                 offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
                 mask_n = offs_y_n < yN
                 out_mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
+                if AuxOut is not None:
+                    aux_offsets = offs_y_m.to(index_type)[:, None] * yN + offs_y_n[None, :]
+                    tl.store(AuxOut + aux_offsets, out.to(tl.bfloat16), mask=out_mask)
                 if PER_BATCH_OUT_SCALE:
                     ExpectedScale = YExpectedScale + start_z1
                 else:

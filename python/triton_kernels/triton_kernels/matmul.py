@@ -254,6 +254,7 @@ def matmul(a, b, bias,
     fused_activation: FusedActivation | None = None,
     epilogue: Epilogue | None = None,
     c_acc_in: torch.Tensor | None = None,
+    aux_out: torch.Tensor | None = None,
 ):
     """
     Y[:, :] = 0.
@@ -286,6 +287,19 @@ def matmul(a, b, bias,
         epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
     if fused_comm is not None and precision_config.c_mx_scale is not None:
         raise NotImplementedError("fused comm with output MX scales is not supported")
+    if aux_out is not None:
+        if precision_config.out_dtype != torch.float8_e4m3fn or precision_config.c_mx_scale is None:
+            raise ValueError("aux_out requires an MXFP8 primary output")
+        if is_input_batched or b_ragged_metadata is not None or scatter_indx is not None or fused_comm is not None:
+            raise NotImplementedError("aux_out only supports unbatched matmuls without scatter or fused communication")
+        if aux_out.dtype != torch.bfloat16 or aux_out.device != a.device or not aux_out.is_contiguous():
+            raise ValueError("aux_out must be a contiguous BF16 tensor on the input device")
+        expected_aux_shape = (
+            a.shape[-2] if gather_indx is None else gather_indx.shape[0],
+            b.shape[-1] // fused_activation.specs.reduction_n,
+        )
+        if tuple(aux_out.shape) != expected_aux_shape:
+            raise ValueError(f"aux_out.shape must be {expected_aux_shape}, got {tuple(aux_out.shape)}")
     n_slices = max(1, b.shape[0]) if a_ragged_metadata is None else a_ragged_metadata.n_slices
     # unpack b scale
     b_scale = precision_config.b_mx_scale
@@ -432,6 +446,8 @@ def matmul(a, b, bias,
         rhs_layout=b.storage.layout,
         epilogue_reduction_n=fused_activation.specs.reduction_n,
     )
+    if aux_out is not None and not opt_flags.is_persistent:
+        raise NotImplementedError("aux_out requires the persistent matmul kernel")
     if b_is_shuffled:
         if b.dtype.bitwidth != 4:
             raise ValueError("Shuffled weights are only supported for mxfp4 values")
@@ -645,6 +661,8 @@ def matmul(a, b, bias,
     } if fused_comm is not None else {}
     b_strides = b.storage.data.stride()[:3] if b_is_shuffled else b.storage.data.stride()
     extra_kernel_kwargs = {"W_SHUFFLED": b_is_shuffled} if opt_flags.is_persistent else {}
+    if aux_out is not None:
+        extra_kernel_kwargs["AuxOut"] = aux_out
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
     (kernels._p_matmul if opt_flags.is_persistent else kernels._matmul)[(grid,)](
                    c_tensor_or_tma, c.storage.data, *out_matmul.stride(),
