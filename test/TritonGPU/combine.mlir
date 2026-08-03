@@ -1291,6 +1291,37 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// A reduced bitmatrix payload needs one conversion, but its address and mask
+// already agree on a directly usable store layout.
+// CHECK-LABEL: @reuse_reduction_store_pointer_layout
+// CHECK: [[POINTER:%.*]] = tt.addptr
+// CHECK: [[VALUE:%.*]] = ttg.convert_layout
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.store [[POINTER]], [[VALUE]], %arg3
+
+#reduction = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [8, 4, 1], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
+#pointer = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#store = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @reuse_reduction_store_pointer_layout(%destination: !tt.ptr<i32>, %input: tensor<32x4x1xi32, #reduction>, %offsets: tensor<32x1xi32, #pointer>, %mask: tensor<32x1xi1, #pointer>) {
+    %reduced = "tt.reduce"(%input) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: i32, %rhs: i32):
+      %result = arith.ori %lhs, %rhs : i32
+      tt.reduce.return %result : i32
+    }) : (tensor<32x4x1xi32, #reduction>) -> tensor<32x1xi32, #ttg.slice<{dim = 1, parent = #reduction}>>
+    %base = tt.splat %destination : !tt.ptr<i32> -> tensor<32x1x!tt.ptr<i32>, #pointer>
+    %address = tt.addptr %base, %offsets : tensor<32x1x!tt.ptr<i32>, #pointer>, tensor<32x1xi32, #pointer>
+    %converted_address = ttg.convert_layout %address : tensor<32x1x!tt.ptr<i32>, #pointer> -> tensor<32x1x!tt.ptr<i32>, #store>
+    %converted_value = ttg.convert_layout %reduced : tensor<32x1xi32, #ttg.slice<{dim = 1, parent = #reduction}>> -> tensor<32x1xi32, #store>
+    %converted_mask = ttg.convert_layout %mask : tensor<32x1xi1, #pointer> -> tensor<32x1xi1, #store>
+    tt.store %converted_address, %converted_value, %converted_mask : tensor<32x1x!tt.ptr<i32>, #store>
+    tt.return
+  }
+}
+
+// -----
+
 // CHECK-LABEL: reduce_cvt2
 // Match the reduction
 // CHECK-NOT: ttg.convert_layout

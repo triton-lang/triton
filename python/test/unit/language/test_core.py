@@ -7376,3 +7376,67 @@ def test_remove_layout_conversions_exact_order_join_chain(device, indexed, value
 
     torch.testing.assert_close(result, expected, rtol=0, atol=0)
     assert "ttg.convert_layout" not in compiled.asm["ttgir"]
+
+
+@triton.jit
+def _remove_layout_conversions_reduction_store_kernel(
+    inputs,
+    indices,
+    values,
+    bitmatrix,
+    n_rows,
+    APPLY_SOFTMAX: tl.constexpr,
+):
+    rows = tl.program_id(0) * 32 + tl.arange(0, 32)
+    columns = tl.arange(0, 4)
+    mask = rows[:, None] < n_rows
+
+    selected = tl.load(indices + rows[:, None] * 4 + columns[None, :], mask=mask)
+    gathered = tl.load(inputs + rows[:, None] * 32 + selected, mask=mask)
+    if APPLY_SOFTMAX:
+        gathered = tl.softmax(gathered.to(tl.float32), dim=1, keep_dims=True).to(inputs.dtype.element_ty)
+    tl.store(values + rows[:, None] * 4 + columns[None, :], gathered, mask=mask)
+
+    word = tl.arange(0, 1)
+    packed = tl.where(
+        (selected // 32)[:, :, None] == word[None, None, :],
+        (1 << (selected % 32))[:, :, None],
+        0,
+    )
+    reduced = tl.reduce_or(packed, axis=1)
+    tl.store(bitmatrix + rows[:, None], reduced, mask=mask)
+
+
+@pytest.mark.parametrize("n_rows", [31, 257])
+@pytest.mark.parametrize("apply_softmax", [False, True])
+def test_remove_layout_conversions_reduction_store(device, n_rows, apply_softmax):
+    check_cuda_or_hip(device)
+
+    torch.manual_seed(0)
+    inputs = torch.randn((n_rows, 32), device=device, dtype=torch.float16)
+    indices = torch.randint(0, 32, (n_rows, 4), device=device, dtype=torch.int32)
+    values = torch.empty((n_rows, 4), device=device, dtype=torch.float16)
+    bitmatrix = torch.empty((n_rows, 1), device=device, dtype=torch.int32)
+
+    compiled = _remove_layout_conversions_reduction_store_kernel[(triton.cdiv(n_rows,
+                                                                              32), )](inputs, indices, values,
+                                                                                      bitmatrix, n_rows,
+                                                                                      APPLY_SOFTMAX=apply_softmax,
+                                                                                      num_warps=4)
+
+    expected_values = torch.gather(inputs, 1, indices.to(torch.int64))
+    if apply_softmax:
+        expected_values = torch.softmax(expected_values.float(), dim=1).half()
+    torch.testing.assert_close(values, expected_values, rtol=1e-3, atol=1e-3)
+
+    expected_bits = torch.zeros_like(bitmatrix)
+    for column in range(indices.shape[1]):
+        expected_bits[:, 0] |= 1 << indices[:, column]
+    torch.testing.assert_close(bitmatrix, expected_bits, rtol=0, atol=0)
+
+    ir = compiled.asm["ttgir"]
+    store = next(line for line in reversed(ir.splitlines()) if "tt.store" in line)
+    operands = re.search(r"tt\.store\s+(%\w+),\s+(%\w+),\s+(%\w+)", store)
+    assert operands
+    for operand in (operands.group(1), operands.group(3)):
+        assert not re.search(rf"{re.escape(operand)}\s*=\s*ttg\.convert_layout", ir)

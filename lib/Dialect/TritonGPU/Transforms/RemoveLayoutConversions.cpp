@@ -1795,13 +1795,47 @@ private:
   DenseMap<unsigned, Value> predicates;
 };
 
+bool rewriteReductionStoreLayout(StoreOp store) {
+  if (!store.getMask())
+    return false;
+
+  auto pointer = store.getPtr().getDefiningOp<ConvertLayoutOp>();
+  auto mask = store.getMask().getDefiningOp<ConvertLayoutOp>();
+  auto value = store.getValue().getDefiningOp<ConvertLayoutOp>();
+  if (!pointer || !mask || !value ||
+      !value.getSrc().getDefiningOp<ReduceOp>() ||
+      !pointer.getSrc().getDefiningOp<AddPtrOp>())
+    return false;
+
+  auto source = cast<RankedTensorType>(pointer.getSrc().getType());
+  auto predicate = cast<RankedTensorType>(mask.getSrc().getType());
+  auto payload = cast<RankedTensorType>(value.getSrc().getType());
+  Attribute encoding = source.getEncoding();
+  if (source.getRank() != 2 || source.getDimSize(1) != 1 ||
+      source.getShape() != payload.getShape() ||
+      predicate.getEncoding() != encoding ||
+      !payload.getElementType().isInteger(32))
+    return false;
+
+  OpBuilder builder(store);
+  auto result = ConvertLayoutOp::create(builder, store.getLoc(),
+                                        payload.cloneWithEncoding(encoding),
+                                        value.getSrc());
+  store.getPtrMutable().assign(pointer.getSrc());
+  store.getMaskMutable().assign(mask.getSrc());
+  store.getValueMutable().assign(result.getResult());
+  return true;
+}
+
 bool rewriteIndexedStoreExpressions(ModuleOp module) {
   SmallVector<StoreOp> stores;
   module.walk([&](StoreOp store) { stores.push_back(store); });
 
   bool changed = false;
-  for (StoreOp store : stores)
+  for (StoreOp store : stores) {
     changed |= IndexedStoreExpression(store).rewrite();
+    changed |= rewriteReductionStoreLayout(store);
+  }
   return changed;
 }
 } // namespace
