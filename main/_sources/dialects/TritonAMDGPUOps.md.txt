@@ -1096,14 +1096,14 @@ Interfaces: `MBarrierOpInterface`
 
 
 
-### `amdg.local_load_packed_tranposed` (triton::amdgpu::LocalLoadPackedTransposedOp)
+### `amdg.local_load_packed_transposed` (triton::amdgpu::LocalLoadPackedTransposedOp)
 
 _Load a transposed packed tensor from shared memory into a distributed tensor_
 
 Syntax:
 
 ```
-operation ::= `amdg.local_load_packed_tranposed` $src (`token` $token^)? attr-dict `:` qualified(type($src)) `->` type($result)
+operation ::= `amdg.local_load_packed_transposed` $src (`token` $token^)? attr-dict `:` qualified(type($src)) `->` type($result)
 ```
 
 Requires a M/N packed and M/N contiguous tensor in shared memory and will yield a K packed K contiguous tensor in registers.

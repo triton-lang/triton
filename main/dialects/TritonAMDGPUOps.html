@@ -204,7 +204,7 @@
 <li class="toctree-l4"><a class="reference internal" href="#id50">Operands:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#amdg-local-load-packed-tranposed-triton-amdgpu-localloadpackedtransposedop"><code class="docutils literal notranslate"><span class="pre">amdg.local_load_packed_tranposed</span></code> (triton::amdgpu::LocalLoadPackedTransposedOp)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#amdg-local-load-packed-transposed-triton-amdgpu-localloadpackedtransposedop"><code class="docutils literal notranslate"><span class="pre">amdg.local_load_packed_transposed</span></code> (triton::amdgpu::LocalLoadPackedTransposedOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id51">Operands:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id52">Results:</a></li>
 </ul>
@@ -1627,11 +1627,11 @@ number of arrives expected by the barrier.</p>
 </table>
 </section>
 </section>
-<section id="amdg-local-load-packed-tranposed-triton-amdgpu-localloadpackedtransposedop">
-<h2><code class="docutils literal notranslate"><span class="pre">amdg.local_load_packed_tranposed</span></code> (triton::amdgpu::LocalLoadPackedTransposedOp)<a class="headerlink" href="#amdg-local-load-packed-tranposed-triton-amdgpu-localloadpackedtransposedop" title="Link to this heading"></a></h2>
+<section id="amdg-local-load-packed-transposed-triton-amdgpu-localloadpackedtransposedop">
+<h2><code class="docutils literal notranslate"><span class="pre">amdg.local_load_packed_transposed</span></code> (triton::amdgpu::LocalLoadPackedTransposedOp)<a class="headerlink" href="#amdg-local-load-packed-transposed-triton-amdgpu-localloadpackedtransposedop" title="Link to this heading"></a></h2>
 <p><em>Load a transposed packed tensor from shared memory into a distributed tensor</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdg.local_load_packed_tranposed` $src (`token` $token^)? attr-dict `:` qualified(type($src)) `-&gt;` type($result)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdg.local_load_packed_transposed` $src (`token` $token^)? attr-dict `:` qualified(type($src)) `-&gt;` type($result)
 </pre></div>
 </div>
 <p>Requires a M/N packed and M/N contiguous tensor in shared memory and will yield a K packed K contiguous tensor in registers.
