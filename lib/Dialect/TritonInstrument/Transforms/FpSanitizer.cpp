@@ -1057,44 +1057,18 @@ static Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
                              ignoreCTA);
 }
 
-std::optional<ScratchInfo>
-createTmemOperandScratch(PatternRewriter &rewriter, Location loc,
-                         TmemScratchManager &scratch, Value memdesc,
-                         ttg::MemDescType memTy, Region *scope) {
-  auto layout = scratch.getScratchEncoding(rewriter, memdesc, memTy);
-  auto tensorTy =
-      RankedTensorType::get(memTy.getShape(), memTy.getElementType(), layout);
+std::optional<MmaOperandSource>
+createMmaOperandSource(PatternRewriter &rewriter, TmemScratchManager &scratch,
+                       Value memdesc, bool isTmem, RankedTensorType tileTy,
+                       Region *scope, int64_t rowStride, int64_t stride) {
+  if (!isTmem)
+    return MmaOperandSource{Value(), memdesc, tileTy, rowStride, stride};
+
   auto info = scratch.getOrCreate(memdesc, rewriter, scope);
   if (!info || info->scaleSourceType)
     return std::nullopt;
-  Value fullVal = loadScratchStrided2D(rewriter, loc, info->ptr, tensorTy,
-                                       info->tensorType.getShape().front());
-  if (!fullVal)
-    return std::nullopt;
-  int64_t elSize = memTy.getElementType().getIntOrFloatBitWidth() / 8;
-  int64_t alignment = std::max<int64_t>(elSize, 16);
-  int64_t sizeInBytes = product(memTy.getShape()) * elSize;
-  auto ptrTy = triton::getPointerType(
-      getScratchStorageElementType(memTy.getElementType()));
-  auto allocOp =
-      scratch.createScratchAlloc(rewriter, loc, ptrTy, sizeInBytes, alignment);
-  Value ptr = allocOp.getResult();
-  if (!storeFpSanScratchMemory(rewriter, loc, ptr, fullVal, tensorTy))
-    return std::nullopt;
-  return ScratchInfo{ptr, tensorTy};
-}
-
-std::optional<MmaOperandSource> createMmaOperandSource(
-    PatternRewriter &rewriter, Location loc, TmemScratchManager &scratch,
-    Value memdesc, ttg::MemDescType memTy, bool isTmem, RankedTensorType tileTy,
-    Region *scope, int64_t rowStride, int64_t stride) {
-  if (!isTmem)
-    return MmaOperandSource{Value(), memdesc, tileTy, rowStride, stride};
-  auto info =
-      createTmemOperandScratch(rewriter, loc, scratch, memdesc, memTy, scope);
-  if (!info)
-    return std::nullopt;
-  return MmaOperandSource{info->ptr, Value(), tileTy, rowStride, stride};
+  return MmaOperandSource{info->ptr, Value(), tileTy, rowStride,
+                          info->tensorType.getShape().front()};
 }
 
 std::optional<ScratchInfo> createWGMMAScratch(PatternRewriter &rewriter,
@@ -2859,11 +2833,11 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
         getOptimizedBlockedEncoding(rewriter, {k, tileN}, bTileElem);
     auto bTileTy = RankedTensorType::get({k, tileN}, bTileElem, bTileLayout);
 
-    auto aSource = createMmaOperandSource(rewriter, loc, *scratch, op.getA(),
-                                          aMemTy, aIsTmem, aTileTy, scope,
+    auto aSource = createMmaOperandSource(rewriter, *scratch, op.getA(),
+                                          aIsTmem, aTileTy, scope,
                                           /*rowStride=*/1, /*stride=*/m);
-    auto bSource = createMmaOperandSource(rewriter, loc, *scratch, op.getB(),
-                                          bMemTy, bIsTmem, bTileTy, scope,
+    auto bSource = createMmaOperandSource(rewriter, *scratch, op.getB(),
+                                          bIsTmem, bTileTy, scope,
                                           /*rowStride=*/1, /*stride=*/k);
     if (!aSource || !bSource)
       return emitFpSanCodegenError(op.getOperation());
@@ -3020,11 +2994,11 @@ struct TCGen5MMAScaledPattern
     auto bTileTy = RankedTensorType::get({bPackedK, tileN},
                                          bMemTy.getElementType(), bTileLayout);
 
-    auto aSource = createMmaOperandSource(rewriter, loc, *scratch, op.getA(),
-                                          aMemTy, aIsTmem, aTileTy, scope,
+    auto aSource = createMmaOperandSource(rewriter, *scratch, op.getA(),
+                                          aIsTmem, aTileTy, scope,
                                           /*rowStride=*/1, /*stride=*/m);
-    auto bSource = createMmaOperandSource(rewriter, loc, *scratch, op.getB(),
-                                          bMemTy, bIsTmem, bTileTy, scope,
+    auto bSource = createMmaOperandSource(rewriter, *scratch, op.getB(),
+                                          bIsTmem, bTileTy, scope,
                                           /*rowStride=*/1, /*stride=*/bPackedK);
     if (!aSource || !bSource)
       return emitFpSanCodegenError(op.getOperation());

@@ -2449,6 +2449,71 @@ def test_tcgen05_mma(device, use_acc, type_a, type_b, acc_type, m, n, k, fresh_k
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("use_acc", [False, True])
+@pytest.mark.parametrize("source_offset", [0, 64])
+def test_tcgen05_mma_tensor_memory_operand_scratch(device, use_acc, source_offset, fresh_knobs):
+    _require_cuda_backend(device)
+
+    m = n = k = 64
+    M = gl.constexpr(m)
+    N = gl.constexpr(n)
+    K = gl.constexpr(k)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr, SOURCE_OFFSET: gl.constexpr, USE_ACC: gl.constexpr):
+        layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0])
+        a_tmem_layout: gl.constexpr = TensorMemoryLayout((M, K), col_stride=1)
+        a_tmem = allocate_tensor_memory(gl.bfloat16, [M, 2 * K], layout=a_tmem_layout)
+        a_reg_layout: gl.constexpr = a_tmem.get_reg_layout()
+        a_rows = gl.arange(0, M, layout=gl.SliceLayout(1, a_reg_layout))[:, None]
+        a_cols = gl.arange(0, 2 * K, layout=gl.SliceLayout(0, a_reg_layout))[None, :]
+        a_tmem.store(gl.load(a_ptr + a_rows * (2 * K) + a_cols))
+        a_view = a_tmem.slice(SOURCE_OFFSET, K)
+
+        b_rows = gl.arange(0, N, layout=gl.SliceLayout(1, layout))[:, None]
+        b_cols = gl.arange(0, K, layout=gl.SliceLayout(0, layout))[None, :]
+        b = gl.load(b_ptr + b_rows * K + b_cols)
+        b_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([N, K], gl.bfloat16)
+        b_smem = gl.allocate_shared_memory(gl.bfloat16, [N, K], b_layout)
+        b_smem.store(b)
+
+        acc_layout: gl.constexpr = TensorMemoryLayout((M, N), col_stride=1)
+        acc_tmem = allocate_tensor_memory(gl.float32, [M, N], layout=acc_layout)
+        rows = gl.arange(0, M, layout=gl.SliceLayout(1, layout))[:, None]
+        cols = gl.arange(0, N, layout=gl.SliceLayout(0, layout))[None, :]
+        offsets = rows * N + cols
+        if USE_ACC:
+            c = gl.load(c_ptr + offsets)
+            acc_tmem.store(gl.convert_layout(c, acc_tmem.get_reg_layout()))
+
+        bar = gl.allocate_shared_memory(gl.int64, [1], gl.constexpr(mbarrier.MBarrierLayout()))
+        mbarrier.init(bar, count=1)
+        tcgen05_mma(a_view, b_smem.permute((1, 0)), acc_tmem, use_acc=USE_ACC, pred=True, mbarriers=[bar])
+        mbarrier.wait(bar, phase=0, deps=[b_smem])
+        mbarrier.invalidate(bar)
+        out = gl.convert_layout(acc_tmem.load(), layout)
+        gl.store(out_ptr + offsets, out)
+
+    rs = np.random.RandomState(43)
+    a_bits = _random_float_bits(rs, (m, 2 * k), "bf16")
+    b_bits = _random_float_bits(rs, (n, k), "bf16")
+    c_bits = _random_float_bits(rs, (m, n), "f32")
+    exp_bits = _mm_payload_bits(a_bits[:, source_offset:source_offset + k], b_bits.T, c_bits if use_acc else None,
+                                "bf16", "bf16", "f32")
+
+    _, aw = _as_float_bits_tensor(a_bits, "bf16")
+    _, bw = _as_float_bits_tensor(b_bits, "bf16")
+    _, cw = _as_float_bits_tensor(c_bits, "f32")
+    out, outw = _as_float_bits_tensor(np.empty((m, n), dtype=np.int32), "f32")
+    compiled = kernel[(1, )](aw, bw, cw, outw, SOURCE_OFFSET=source_offset, USE_ACC=use_acc, num_warps=4)
+
+    assert "ttng.tc_gen5_mma" not in compiled.asm["ttgir"]
+    assert compiled.asm["ttgir"].count("ttg.global_scratch_alloc") == 2
+    _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("partition_warps", [4, 2, 1])
 def test_tcgen05_mma_warp_specialize_partition(device, partition_warps, fresh_knobs):
     _require_cuda_backend(device)
