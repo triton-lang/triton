@@ -14,6 +14,8 @@ from triton._internal_testing import is_cuda, run_in_process
 from triton.experimental.gsan import _stream_sync, symmetric_memory
 from triton.experimental.gsan._testing_utils import atomic_poll, shadow_cell_from_address, shadow_tensor_for, SHADOW_GRANULARITY_BYTES
 
+pytestmark = pytest.mark.xdist_group("gsan-symmetric-memory")
+
 
 def _get_free_tcp_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:

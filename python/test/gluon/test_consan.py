@@ -153,7 +153,7 @@ def run_failing_kernel(device, enable_consan, mode, num_ctas):
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
-def test_cache_miss_knob(device, monkeypatch, num_ctas, run_wrapper, fresh_knobs):
+def test_cache_miss_knob(device, monkeypatch, num_ctas, run_wrapper):
     if not run_wrapper:
         run_failing_kernel(device, False, "knob", num_ctas)
         run_failing_kernel(device, True, "knob", num_ctas)
