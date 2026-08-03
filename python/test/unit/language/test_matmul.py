@@ -1119,15 +1119,19 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
     kernel_kwargs = {}
     if is_hip():
         kernel_kwargs["matrix_instr_nonkdim"] = nonKDim
+    if is_compile_warmup():
+        block_scale_fp4_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, stride_scale, a.stride(0), a.stride(1),
+                                     b.stride(0), b.stride(1), output.stride(0), output.stride(1), VEC_SIZE, BLOCK_M,
+                                     BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES, PACK_ALONG_K=pack_along_k,
+                                     **kernel_kwargs)
+        return
     k = block_scale_fp4_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, stride_scale, a.stride(0), a.stride(1),
                                      b.stride(0), b.stride(1), output.stride(0), output.stride(1), VEC_SIZE, BLOCK_M,
                                      BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES, PACK_ALONG_K=pack_along_k,
                                      **kernel_kwargs)
-    if is_compile_warmup():
-        return
     if is_hip_gfx1250() and not pack_along_k:
         assert "ds_load_tr4_b64" in k.asm["amdgcn"]
-    assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
+    torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
     nvfp4_fallback = BLOCK_M < 128
     if is_cuda() and torch.cuda.get_device_capability()[0] in (10, 12) and not nvfp4_fallback:
         ptx = k.asm["ptx"]
@@ -1317,12 +1321,16 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
     kernel_kwargs = {}
     if is_hip():
         kernel_kwargs["matrix_instr_nonkdim"] = nonKDim
+    if is_compile_warmup():
+        mxfp8_mxfp4_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, stride_scale, a.stride(0), a.stride(1),
+                                 b.stride(0), b.stride(1), output.stride(0), output.stride(1), not CONST_SCALE,
+                                 dtype_converter[A_DATA_TYPE], dtype_converter[B_DATA_TYPE], BLOCK_M, BLOCK_N, BLOCK_K,
+                                 PACK_B_ALONG_K=PACK_B_ALONG_K, NUM_STAGES=NUM_STAGES, **kernel_kwargs)
+        return
     out = mxfp8_mxfp4_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, stride_scale, a.stride(0), a.stride(1),
                                    b.stride(0), b.stride(1), output.stride(0), output.stride(1), not CONST_SCALE,
                                    dtype_converter[A_DATA_TYPE], dtype_converter[B_DATA_TYPE], BLOCK_M, BLOCK_N,
                                    BLOCK_K, PACK_B_ALONG_K=PACK_B_ALONG_K, NUM_STAGES=NUM_STAGES, **kernel_kwargs)
-    if is_compile_warmup():
-        return
     if is_hip_gfx1250() and B_DATA_TYPE == "float4" and not PACK_B_ALONG_K:
         assert "ds_load_tr4_b64" in out.asm["amdgcn"]
     if is_blackwell() and not is_rubin():
