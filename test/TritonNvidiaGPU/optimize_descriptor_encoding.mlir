@@ -86,6 +86,30 @@ tt.func public @descriptor_kernel_arg(%arg0: !tt.tensordesc<64x64xf16>, %arg1: i
 
 // -----
 
+// When a tensor descriptor's loaded value is placed into an fp4Padded
+// shared-memory allocation, ODE must assign that same fp4Padded = true encoding
+// to the tensor descriptor.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:120", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-DAG: #[[BLOCKED_FP4:.*]] = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+// CHECK-DAG: #[[FP4_PADDED:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+// CHECK: tt.func public @descriptor_arg_from_fp4_padded_use(%arg0: !tt.tensordesc<256x64xi8, #[[FP4_PADDED]]>)
+tt.func public @descriptor_arg_from_fp4_padded_use(%arg0: !tt.tensordesc<256x64xi8>) {
+  // CHECK: %[[LOAD:.*]] = tt.descriptor_load %arg0[{{.*}}] : !tt.tensordesc<256x64xi8, #[[FP4_PADDED]]> -> tensor<256x64xi8, #[[BLOCKED_FP4]]>
+  // CHECK: ttg.local_alloc %[[LOAD]] : (tensor<256x64xi8, #[[BLOCKED_FP4]]>) -> !ttg.memdesc<256x64xi8, #[[FP4_PADDED]], #smem>
+  %c0 = arith.constant 0 : i32
+  %0 = tt.descriptor_load %arg0[%c0, %c0] : !tt.tensordesc<256x64xi8> -> tensor<256x64xi8, #blocked>
+  %1 = ttg.local_alloc %0 : (tensor<256x64xi8, #blocked>) -> !ttg.memdesc<256x64xi8, #shared, #smem>
+  tt.return
+}
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16}>
 #smem = #ttg.shared_memory

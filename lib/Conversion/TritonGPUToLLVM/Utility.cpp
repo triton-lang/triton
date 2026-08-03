@@ -1066,7 +1066,8 @@ SmallVector<Value> unpackTensorElements(Location loc, Value llvmStruct,
                                         Type originalType) {
   if (auto tensorTy = dyn_cast<RankedTensorType>(originalType))
     return broadcastAs(unpackUniqueTensorElements(loc, llvmStruct, rewriter),
-                       triton::gpu::toLinearLayout(tensorTy));
+                       triton::gpu::toRegisterElementLinearLayout(
+                           tensorTy.getShape(), tensorTy.getEncoding()));
   return unpackLLElements(loc, llvmStruct, rewriter);
 }
 
@@ -1116,7 +1117,9 @@ Value packTensorElements(Location loc, const LLVMTypeConverter *typeConverter,
                          Type type) {
   if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
     auto uniqueResultVals =
-        actionRemoveBroadcastedRegs(triton::gpu::toLinearLayout(tensorTy))
+        actionRemoveBroadcastedRegs(
+            triton::gpu::toRegisterElementLinearLayout(tensorTy.getShape(),
+                                                       tensorTy.getEncoding()))
             .apply(resultVals);
     return packUniqueTensorElements(loc, typeConverter, uniqueResultVals,
                                     rewriter, type);

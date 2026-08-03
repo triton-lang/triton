@@ -152,7 +152,7 @@ warpsPerTileV3(DotOpInterface dotOp, const ArrayRef<int64_t> shape,
 // given value.
 static Value
 getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
-                          bool allowTranspose, bool isMMAv5Fp4Padded = false,
+                          bool allowTranspose, bool fp4Padded = false,
                           bool forceTranspose = false,
                           Operation *op = nullptr /*only for diagnostic*/) {
   OpBuilder::InsertionGuard g(rewriter);
@@ -192,7 +192,7 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
   auto CGALayout = getCGALayout(argType.getEncoding());
   auto newLayout = NVMMASharedEncodingAttr::get(
       argType.getContext(), argType.getShape(), newOrder, CGALayout,
-      argType.getElementType(), isMMAv5Fp4Padded);
+      argType.getElementType(), fp4Padded);
   auto newType = MemDescType::get(argType.getShape(), argType.getElementType(),
                                   newLayout, SharedMemorySpace);
   rewriter.setInsertionPointAfterValue(arg);
@@ -485,6 +485,25 @@ static Value convertDotOperandForMMA(Value v, int opIdx, int bitwidth,
   return ConvertLayoutOp::create(rewriter, v.getLoc(), newVType, v);
 }
 
+// This helper creates a `local_alloc` followed by a `local_load` for a packed
+// mxfp4 input. Thus, it stages a packed input through shared memory, and then
+// creates a fp4Unpacked dot operand. This is an optimisation for SM120.
+static Value stagePackedFp4OperandThroughSmem(Value v, int opIdx,
+                                              RankedTensorType newRetType,
+                                              PatternRewriter &rewriter) {
+  // Keep the packed (K) axis contiguous in SMEM for the dot operand.
+  Value smem = getSharedMemoryMMAOperand(v, rewriter, opIdx,
+                                         /*allowTranspose=*/false,
+                                         /*fp4Padded=*/true);
+  auto vType = cast<RankedTensorType>(v.getType());
+  auto dotEnc = DotOperandEncodingAttr::get(v.getContext(), opIdx,
+                                            newRetType.getEncoding(),
+                                            /*kWidth=*/2u,
+                                            /*fp4Unpacked=*/true);
+  auto regType = vType.cloneWithEncoding(dotEnc);
+  return LocalLoadOp::create(rewriter, v.getLoc(), regType, smem);
+}
+
 } // namespace
 
 class BlockedToMMA : public mlir::OpRewritePattern<DotOp> {
@@ -547,11 +566,11 @@ public:
                                     rewriter);
       } else {
         a = getSharedMemoryMMAOperand(a, rewriter, 0, allowTranspose,
-                                      /*isMMAv5Fp4Padded=*/false,
+                                      /*fp4Padded=*/false,
                                       /*forceTranspose=*/false, dotOp);
       }
       b = getSharedMemoryMMAOperand(b, rewriter, 1, allowTranspose,
-                                    /*isMMAv5Fp4Padded=*/false,
+                                    /*fp4Padded=*/false,
                                     /*forceTranspose=*/false, dotOp);
 
       newDot = triton::nvidia_gpu::WarpGroupDotOp::create(
@@ -737,6 +756,11 @@ public:
         mlir::isa<LinearEncodingAttr>(bScaleType.getEncoding())) {
       return failure();
     }
+
+    if (aScaleType.getElementType() != bScaleType.getElementType())
+      return failure();
+    bool isE4M3Scale = mlir::isa<Float8E4M3FNType>(aScaleType.getElementType());
+
     auto aElemType = dotOp.getAElemType();
     auto bElemType = dotOp.getBElemType();
     auto isFP8 = [&](ScaleDotElemType elemType) -> bool {
@@ -747,20 +771,26 @@ public:
       return elemType == ScaleDotElemType::E2M1;
     };
 
-    bool isFP4xFP4 = isFP4(aElemType) && isFP4(bElemType);
-    // TODO: Enable mixed-precision mxfp for sm120
-    if (!((isFP8(aElemType) && isFP8(bElemType)) || isFP4xFP4)) {
+    bool aFP8 = isFP8(aElemType), bFP8 = isFP8(bElemType);
+    bool aFP4 = isFP4(aElemType), bFP4 = isFP4(bElemType);
+    bool isFP4xFP4 = aFP4 && bFP4;
+    bool isMixedFp8Fp4 = (aFP8 && bFP4) || (aFP4 && bFP8);
+    if (!((aFP8 && bFP8) || isFP4xFP4 || isMixedFp8Fp4)) {
       return rewriter.notifyMatchFailure(
-          dotOp, "only FP8xFP8 and FP4xFP4 are supported on sm120");
+          dotOp, "this MMA lowering only supports FP8xFP8, FP4xFP4 and mixed "
+                 "FP8xFP4");
     }
-    if (isFP4xFP4 && (!dotOp.getLhsKPack() || !dotOp.getRhsKPack())) {
+    if (isE4M3Scale && !isFP4xFP4) {
       return rewriter.notifyMatchFailure(
-          dotOp, "SM120 native FP4xFP4 requires K-packed operands");
+          dotOp, "ue4m3 scales are only supported for FP4xFP4 MMA");
     }
 
-    auto scaleElemType = dotOp.getAScale().getType().getElementType();
-    if (scaleElemType != dotOp.getBScale().getType().getElementType()) {
-      return failure();
+    // The native paths unpack FP4 bytes along K. MN-packed FP4 operands must
+    // be decomposed instead.
+    if ((aFP4 && !dotOp.getLhsKPack()) || (bFP4 && !dotOp.getRhsKPack())) {
+      return rewriter.notifyMatchFailure(
+          dotOp, "FP4 operands in mixed-precision or FP4xFP4 MMA must be "
+                 "K-packed");
     }
 
     // Common MMA encoding creation
@@ -780,10 +810,19 @@ public:
     int bitwidthB = oldBType.getElementType().getIntOrFloatBitWidth();
     int minBitwidth = std::min(bitwidthA, bitwidthB);
 
-    Value newA = convertDotOperandForMMA(a, 0, minBitwidth,
-                                         mmaResult.newRetType, rewriter);
-    Value newB = convertDotOperandForMMA(b, 1, minBitwidth,
-                                         mmaResult.newRetType, rewriter);
+    // For mixed precision, the operand is staged through shared memory
+    // because we expect that this is consumed by the ldmatrix instruction
+    // later.
+    Value newA = (isMixedFp8Fp4 && aFP4)
+                     ? stagePackedFp4OperandThroughSmem(
+                           a, 0, mmaResult.newRetType, rewriter)
+                     : convertDotOperandForMMA(a, 0, minBitwidth,
+                                               mmaResult.newRetType, rewriter);
+    Value newB = (isMixedFp8Fp4 && bFP4)
+                     ? stagePackedFp4OperandThroughSmem(
+                           b, 1, mmaResult.newRetType, rewriter)
+                     : convertDotOperandForMMA(b, 1, minBitwidth,
+                                               mmaResult.newRetType, rewriter);
     const auto mmaWarps = mmaResult.mmaEnc.getWarpsPerCTA(); // [wM, wN]
     // Convert scales to Linear layout
     auto convertScale = [&](Value scale, int opIdx) -> Value {
@@ -893,12 +932,12 @@ public:
     // the packed axis, K, to be contiguous in SMEM
     a = getSharedMemoryMMAOperand(a, rewriter, 0,
                                   /*allowTranspose=*/!isAFP4,
-                                  /*isMMAv5Fp4Padded=*/isMMAv5Fp4PaddedLhs,
+                                  /*fp4Padded=*/isMMAv5Fp4PaddedLhs,
                                   /*forceTranspose=*/!dotOp.getLhsKPack(),
                                   dotOp);
     b = getSharedMemoryMMAOperand(b, rewriter, 1,
                                   /*allowTranspose=*/!isBFP4,
-                                  /*isMMAv5Fp4Padded=*/isMMAv5Fp4PaddedRhs,
+                                  /*fp4Padded=*/isMMAv5Fp4PaddedRhs,
                                   /*forceTranspose=*/!dotOp.getRhsKPack(),
                                   dotOp);
 

@@ -130,8 +130,9 @@ unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
 
 unsigned getUniqueElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
   auto kReg = StringAttr::get(layout.getContext(), "register");
+  auto linearLayout = toRegisterElementLinearLayout(shape, layout);
   auto strippedLayout =
-      toLinearLayout(shape, layout).removeZeroBasesAlongDim(kReg);
+      actionRemoveBroadcastedRegs(linearLayout).apply(linearLayout);
   return strippedLayout.getInDimSize(kReg);
 }
 
@@ -2863,9 +2864,10 @@ CGAEncodingAttr DotOperandEncodingAttr::getCGALayout() const {
   return CGAEncodingAttr::get(getContext(),
                               layout.resizeOutDim(dims[kDim].first, 1));
 }
+
 LogicalResult DotOperandEncodingAttr::verify(
     function_ref<::mlir::InFlightDiagnostic()> emitError, unsigned opIdx,
-    Attribute parent, unsigned kWidth) {
+    Attribute parent, unsigned kWidth, [[maybe_unused]] bool fp4Unpacked) {
   if (opIdx != 0 && opIdx != 1) {
     return emitError() << "ttg.dot_op opIdx parameter can be 0 or 1, got: "
                        << opIdx;

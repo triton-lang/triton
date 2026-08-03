@@ -78,10 +78,17 @@ LogicalResult lowerLdStMatrix(
     SmallVector<Value> &vals, // Input for stmatrix, output for ldmatrix
     SharedMemoryObject smemObj, ConversionPatternRewriter &rewriter,
     const NVIDIA::TargetInfo &targetInfo,
-    const LLVMTypeConverter *typeConverter) {
+    const LLVMTypeConverter *typeConverter, bool isFp4Padded = false) {
   auto *ctx = loc.getContext();
-  assert(regLayout.getFreeVariableMasks().lookup(str_attr("register")) == 0 &&
-         "expected register broadcasting to be removed by the caller");
+
+  // The unpacked FP4 register layout used with the padded-SMEM ldmatrix format
+  // is an exception here: its zero basis selects the low or high nibble of a
+  // packed byte, information that is absent from the tensor coordinate. The
+  // two register fields map to the same coordinate but contain different
+  // values, so they are not broadcast copies.
+  if (!isFp4Padded)
+    assert(regLayout.getFreeVariableMasks().lookup(str_attr("register")) == 0 &&
+           "expected register broadcasting to be removed by the caller");
   if (isa<PaddedSharedEncodingAttr>(memDescType.getEncoding())) {
     return failure();
   }
@@ -102,15 +109,83 @@ LogicalResult lowerLdStMatrix(
   auto affineOffset = smemObj.getShmemOffset(loc, rewriter, memDescType);
   auto maskSpanAffineOffset = smemObj.getMaskSpanOffsets(memDescType);
   auto llvmElemTy = typeConverter->convertType(memDescType.getElementType());
+  if (isFp4Padded)
+    return LLVM::NVIDIA::lowerLdStMatrix(
+        loc, cvt, /*transpose=*/false, vals, smemBase, affineOffset,
+        maskSpanAffineOffset, llvmElemTy, rewriter, targetInfo, isFp4Padded);
+
   for (bool transpose : {false, true}) {
     auto result = LLVM::NVIDIA::lowerLdStMatrix(
         loc, cvt, transpose, vals, smemBase, affineOffset, maskSpanAffineOffset,
-        llvmElemTy, rewriter, targetInfo);
+        llvmElemTy, rewriter, targetInfo, isFp4Padded);
     if (succeeded(result)) {
       return result;
     }
   }
   return failure();
+}
+
+// Lower a local_load whose result uses the fp4Unpacked mxfp4 dot encoding. The
+// source must use the fp4Padded NVMMA shared-memory encoding. First try the fp4
+// ldmatrix instruction; if the source and register layouts are not compatible
+// with that instruction, fall back to scalar loads.
+static LogicalResult lowerFp4UnpackedLocalLoad(
+    triton::gpu::LocalLoadOp op, triton::gpu::LocalLoadOp::Adaptor adaptor,
+    const LLVMTypeConverter *typeConverter, ConversionPatternRewriter &rewriter,
+    const NVIDIA::TargetInfo &targetInfo) {
+  auto loc = op.getLoc();
+  auto *ctx = op.getContext();
+  auto dstTy = op.getType();
+  auto dotEnc = cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+  MemDescType memDescType = op.getSrc().getType();
+  assert(
+      cast<NVMMASharedEncodingAttr>(memDescType.getEncoding()).getFp4Padded() &&
+      "fp4Unpacked local load requires fp4Padded shared memory");
+
+  Type llvmElemTy = typeConverter->convertType(dstTy.getElementType());
+  auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                       llvmElemTy, rewriter);
+
+  // First try to emit a fp4 ldmatrix.
+  SmallVector<Value> ldmatrixVals;
+  auto regLayout = toLinearLayout(dstTy);
+  auto result = lowerLdStMatrix(loc, regLayout, memDescType, ldmatrixVals,
+                                smemObj, rewriter, targetInfo, typeConverter,
+                                /*isFp4Padded=*/true);
+  if (succeeded(result)) {
+    Value packed =
+        packTensorElements(loc, typeConverter, ldmatrixVals, rewriter, dstTy);
+    rewriter.replaceOp(op, packed);
+    return success();
+  }
+
+  // If we can't emit a ldmatrix, fall back to scalar code.
+  auto packedEnc = DotOperandEncodingAttr::get(
+      ctx, dotEnc.getOpIdx(), dotEnc.getParent(), dotEnc.getKWidth(),
+      /*fp4Unpacked=*/false);
+  auto packedTy = dstTy.cloneWithEncoding(packedEnc);
+  auto packedRegLayout = toLinearLayout(packedTy);
+  auto sharedLayout = toLinearLayout(memDescType);
+
+  auto cvt = packedRegLayout.invertAndCompose(sharedLayout);
+  auto packedVals =
+      lowerLocalLdSt(loc, ctx, cvt, /*valsArray=*/{}, llvmElemTy, memDescType,
+                     smemObj, rewriter, targetInfo, op);
+
+  // Unpack each byte by extracting its low and high nibbles and placing them
+  // into separate bytes.
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  SmallVector<Value> outVals;
+  outVals.reserve(packedVals.size() * 2);
+  for (Value v : packedVals) {
+    Value lo = b.and_(v, b.i8_val(0x0f));
+    Value hi = b.and_(b.lshr(v, b.i8_val(4)), b.i8_val(0x0f));
+    outVals.push_back(lo);
+    outVals.push_back(hi);
+  }
+  rewriter.replaceOp(
+      op, packTensorElements(loc, typeConverter, outVals, rewriter, dstTy));
+  return success();
 }
 
 struct LocalLoadOpConversion
@@ -130,6 +205,14 @@ public:
     auto *ctx = op.getContext();
     MemDescType memDescType = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
+
+    // fp4Unpacked mxfp4 operand: expand the packed bytes into one 8-bit field
+    // per e2m1 value as part of the load.
+    if (auto dotEnc = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding()))
+      if (dotEnc.getFp4Unpacked())
+        return lowerFp4UnpackedLocalLoad(op, adaptor, getTypeConverter(),
+                                         rewriter, targetInfo);
+
     Type llvmElemTy = typeConverter->convertType(dstTy.getElementType());
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         op.getLoc(), adaptor.getSrc(), llvmElemTy, rewriter);
