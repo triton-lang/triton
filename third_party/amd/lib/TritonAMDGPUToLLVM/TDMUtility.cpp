@@ -1572,7 +1572,8 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
       b.mul(b.zext(i64_ty, tensorShape[0]), tensorStride[0]);
 
   // Calculate maximum allowed offset from tilePtr before going out of bounds
-  Value maxOffsetFromTile = b.sub(linearTensorSize, tileOffset);
+  Value maxInBoundsLocalOffset =
+      b.sub(b.sub(linearTensorSize, tileOffset), b.i64_val(1));
 
   // Prefetches 256 bytes into L2
   const int bytesPerPrefetch = 256;
@@ -1625,30 +1626,21 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
     // Compute the local offset from tile ptr for this prefetch based on the
     // computed indices
     Value localOffset = dot64(indices, scaledStride);
-    Value prefetchPtr = b.gep(globalPtrTy, elementType, tilePtr, localOffset);
 
     // Mask the prefetch if the offset is out of bounds
-    Value inBounds = b.icmp_slt(localOffset, maxOffsetFromTile);
+    Value inBounds = b.icmp_sle(localOffset, maxInBoundsLocalOffset);
     // Only predicate based in inBounds for non-speculative prefetches.
     Value combinedPred = isSpeculative ? pred : b.and_(pred, inBounds);
 
     // Predicate and emit prefetch
-    Block *currentBlock = rewriter.getInsertionBlock();
-    Block *afterPrefetch =
-        currentBlock->splitBlock(rewriter.getInsertionPoint());
-    Block *prefetchBlock = rewriter.createBlock(afterPrefetch);
-    rewriter.setInsertionPointToEnd(currentBlock);
-    LLVM::CondBrOp::create(rewriter, loc, combinedPred, prefetchBlock,
-                           afterPrefetch);
-
-    rewriter.setInsertionPointToStart(prefetchBlock);
+    // For OOB/pred we clamp the address to the last valid address
+    Value clampedLocalOffset =
+        b.select(combinedPred, localOffset, maxInBoundsLocalOffset);
+    Value prefetchPtr =
+        b.gep(globalPtrTy, elementType, tilePtr, clampedLocalOffset);
 
     ROCDL::GlobalPrefetchOp::create(rewriter, loc, prefetchPtr, hint, {}, {},
                                     {});
-
-    rewriter.setInsertionPointToEnd(prefetchBlock);
-    LLVM::BrOp::create(rewriter, loc, afterPrefetch);
-    rewriter.setInsertionPointToStart(afterPrefetch);
 
     // We return the offsets for unit testing
     offsets[reg] =
