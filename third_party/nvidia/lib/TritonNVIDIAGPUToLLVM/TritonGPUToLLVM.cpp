@@ -309,6 +309,18 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
       isa<ttng::WaitBarrierOp>(after))
     return true;
 
+  // Integer additions commute when neither atomic's previous value is used.
+  auto beforeAtomic = dyn_cast<triton::gpu::LocalAtomicScatterRMWOp>(before);
+  auto afterAtomic = dyn_cast<triton::gpu::LocalAtomicScatterRMWOp>(after);
+  if (beforeAtomic && afterAtomic &&
+      beforeAtomic.getAtomicRmwOp() == RMWOp::ADD &&
+      afterAtomic.getAtomicRmwOp() == RMWOp::ADD &&
+      beforeAtomic.getResult().use_empty() &&
+      afterAtomic.getResult().use_empty() &&
+      beforeAtomic.getDst().getType().getElementType().isInteger() &&
+      afterAtomic.getDst().getType().getElementType().isInteger())
+    return true;
+
   return false;
 }
 
