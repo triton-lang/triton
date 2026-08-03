@@ -752,13 +752,8 @@ LogicalResult LocalLoadPackedTransposedOp::verify() {
   if (!dotEnc)
     return emitOpError("only works with DotOperandEncodingAttr dst encoding");
 
-  auto sharedEnc =
-      dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
-  if (!sharedEnc)
-    return emitOpError(
-        "only works with SwizzledSharedEncodingAttr src encoding");
-
-  auto order = sharedEnc.getOrder();
+  auto order = triton::gpu::getOrder(srcTy);
+  ArrayRef<unsigned> orderRef(order);
   bool isA = dotEnc.getOpIdx() == 0;
 
   // operand A: [0, 1] / [1, 2, 0]
@@ -767,7 +762,7 @@ LogicalResult LocalLoadPackedTransposedOp::verify() {
 
   if (isA) {
     bool matchingOrderA =
-        order.equals({0, 1}) || (hasBatchDim && order.equals({1, 2, 0}));
+        orderRef.equals({0, 1}) || (hasBatchDim && orderRef.equals({1, 2, 0}));
     if (!matchingOrderA)
       return emitOpError("Order of dimensions don't match expected");
 
@@ -781,7 +776,7 @@ LogicalResult LocalLoadPackedTransposedOp::verify() {
           "Input and output dimensions don't match after packing changes");
   } else {
     bool matchingOrderB =
-        order.equals({1, 0}) || (hasBatchDim && order.equals({2, 1, 0}));
+        orderRef.equals({1, 0}) || (hasBatchDim && orderRef.equals({2, 1, 0}));
     if (!matchingOrderB)
       return emitOpError("Order of dimensions don't match expected");
 

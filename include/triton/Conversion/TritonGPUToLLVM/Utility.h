@@ -345,9 +345,6 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
 // Multiply a square layout with 1 input and output dimension with a vector
 Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x);
 
-// Whether the convert layout should be forced to use warp shuffles.
-bool cvtAlwaysUseWarpShuffle(triton::gpu::ConvertLayoutOp cvt);
-
 // Return a predicate that is true only if the current thread holds unique data,
 // according to freeVarsMask. The predicate may be null to indicate no
 // predication is required.
