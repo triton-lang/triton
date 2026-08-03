@@ -309,17 +309,29 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
       isa<ttng::WaitBarrierOp>(after))
     return true;
 
-  // Integer additions commute when neither atomic's previous value is used.
+  // Identical same-width integer reductions commute if old values are unused.
   auto beforeAtomic = dyn_cast<triton::gpu::LocalAtomicScatterRMWOp>(before);
   auto afterAtomic = dyn_cast<triton::gpu::LocalAtomicScatterRMWOp>(after);
-  if (beforeAtomic && afterAtomic &&
-      beforeAtomic.getAtomicRmwOp() == RMWOp::ADD &&
-      afterAtomic.getAtomicRmwOp() == RMWOp::ADD &&
-      beforeAtomic.getResult().use_empty() &&
+  if (beforeAtomic && afterAtomic && beforeAtomic.getResult().use_empty() &&
       afterAtomic.getResult().use_empty() &&
       beforeAtomic.getDst().getType().getElementType().isInteger() &&
-      afterAtomic.getDst().getType().getElementType().isInteger())
-    return true;
+      beforeAtomic.getDst().getType().getElementType() ==
+          afterAtomic.getDst().getType().getElementType() &&
+      beforeAtomic.getAtomicRmwOp() == afterAtomic.getAtomicRmwOp()) {
+    switch (beforeAtomic.getAtomicRmwOp()) {
+    case RMWOp::ADD:
+    case RMWOp::AND:
+    case RMWOp::OR:
+    case RMWOp::XOR:
+    case RMWOp::MAX:
+    case RMWOp::MIN:
+    case RMWOp::UMAX:
+    case RMWOp::UMIN:
+      return true;
+    default:
+      break;
+    }
+  }
 
   return false;
 }

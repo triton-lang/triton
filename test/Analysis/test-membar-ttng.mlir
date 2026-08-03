@@ -285,16 +285,87 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
     tt.return %second : tensor<128xi32, #blocked>
   }
 
-  // CHECK-LABEL: @unused_integer_atomic_max
-  tt.func @unused_integer_atomic_max(
+  // CHECK-LABEL: @unused_commutative_integer_atomics
+  tt.func @unused_commutative_integer_atomics(
       %indices: tensor<128xi32, #blocked>,
       %values: tensor<128xi32, #blocked>) {
     %shared = ttg.local_alloc : () -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    // CHECK: {{.*}}ttg.local_atomic_scatter_rmw and
+    // CHECK-NEXT: {{.*}}ttg.local_atomic_scatter_rmw and
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}}ttg.local_atomic_scatter_rmw or
+    // CHECK-NEXT: {{.*}}ttg.local_atomic_scatter_rmw or
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}}ttg.local_atomic_scatter_rmw xor
+    // CHECK-NEXT: {{.*}}ttg.local_atomic_scatter_rmw xor
+    // CHECK-NEXT: ttg.barrier local
     // CHECK: {{.*}}ttg.local_atomic_scatter_rmw max
+    // CHECK-NEXT: {{.*}}ttg.local_atomic_scatter_rmw max
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}}ttg.local_atomic_scatter_rmw min
+    // CHECK-NEXT: {{.*}}ttg.local_atomic_scatter_rmw min
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}}ttg.local_atomic_scatter_rmw umax
+    // CHECK-NEXT: {{.*}}ttg.local_atomic_scatter_rmw umax
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}}ttg.local_atomic_scatter_rmw umin
+    // CHECK-NEXT: {{.*}}ttg.local_atomic_scatter_rmw umin
+    %and0 = ttg.local_atomic_scatter_rmw and, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    %and1 = ttg.local_atomic_scatter_rmw and, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    %or0 = ttg.local_atomic_scatter_rmw or, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    %or1 = ttg.local_atomic_scatter_rmw or, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    %xor0 = ttg.local_atomic_scatter_rmw xor, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    %xor1 = ttg.local_atomic_scatter_rmw xor, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    %max0 = ttg.local_atomic_scatter_rmw max, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    %max1 = ttg.local_atomic_scatter_rmw max, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    %min0 = ttg.local_atomic_scatter_rmw min, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    %min1 = ttg.local_atomic_scatter_rmw min, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    %umax0 = ttg.local_atomic_scatter_rmw umax, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    %umax1 = ttg.local_atomic_scatter_rmw umax, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    %umin0 = ttg.local_atomic_scatter_rmw umin, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    %umin1 = ttg.local_atomic_scatter_rmw umin, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: @unused_mixed_integer_atomics
+  tt.func @unused_mixed_integer_atomics(
+      %indices: tensor<128xi32, #blocked>,
+      %values: tensor<128xi32, #blocked>) {
+    %shared = ttg.local_alloc : () -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    // CHECK: {{.*}}ttg.local_atomic_scatter_rmw add
     // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: {{.*}}ttg.local_atomic_scatter_rmw max
-    %first = ttg.local_atomic_scatter_rmw max, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
-    %second = ttg.local_atomic_scatter_rmw max, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    %add = ttg.local_atomic_scatter_rmw add, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    %max = ttg.local_atomic_scatter_rmw max, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: @unused_atomic_exchanges
+  tt.func @unused_atomic_exchanges(
+      %indices: tensor<128xi32, #blocked>,
+      %values: tensor<128xi32, #blocked>) {
+    %shared = ttg.local_alloc : () -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    // CHECK: {{.*}}ttg.local_atomic_scatter_rmw exch
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}}ttg.local_atomic_scatter_rmw exch
+    %first = ttg.local_atomic_scatter_rmw exch, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    %second = ttg.local_atomic_scatter_rmw exch, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: @unused_mixed_width_integer_atomic_adds
+  tt.func @unused_mixed_width_integer_atomic_adds(
+      %indices32: tensor<128xi32, #blocked>,
+      %values32: tensor<128xi32, #blocked>,
+      %indices64: tensor<64xi32, #blocked>,
+      %values64: tensor<64xi64, #blocked>) {
+    %shared32 = ttg.local_alloc : () -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    %shared64 = ttg.memdesc_reinterpret %shared32 : !ttg.memdesc<128xi32, #shared, #smem, mutable> -> !ttg.memdesc<64xi64, #shared, #smem, mutable>
+    // CHECK: {{.*}}ttg.local_atomic_scatter_rmw add
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}}ttg.local_atomic_scatter_rmw add
+    %narrow = ttg.local_atomic_scatter_rmw add, %shared32[%indices32], %values32 {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #smem, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    %wide = ttg.local_atomic_scatter_rmw add, %shared64[%indices64], %values64 {axis = 0 : i32} : (!ttg.memdesc<64xi64, #shared, #smem, mutable>, tensor<64xi64, #blocked>, tensor<64xi32, #blocked>) -> tensor<64xi64, #blocked>
     tt.return
   }
 
