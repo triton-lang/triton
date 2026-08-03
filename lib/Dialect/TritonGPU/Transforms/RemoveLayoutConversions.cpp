@@ -248,6 +248,52 @@ void LayoutPropagation::initAnchorLayout() {
     }
   };
 
+  auto addAddressAnchor = [&](ConvertLayoutOp conversion) {
+    if (!conversion)
+      return;
+    Value source = conversion.getSrc();
+    if (auto bitcast = source.getDefiningOp<BitcastOp>())
+      source = bitcast.getSrc();
+    auto address = source.getDefiningOp<AddPtrOp>();
+    auto type = address
+                    ? dyn_cast<RankedTensorType>(address.getOffset().getType())
+                    : RankedTensorType{};
+    if (!type || type.getRank() != 1 ||
+        llvm::count_if(address.getOffset().getUsers(),
+                       [](Operation *user) { return isa<AddPtrOp>(user); }) < 2)
+      return;
+
+    SmallVector<Value> worklist{address.getOffset()};
+    SmallVector<Value> ranges;
+    DenseSet<Value> visited;
+    while (!worklist.empty()) {
+      Value current = worklist.pop_back_val();
+      if (!visited.insert(current).second)
+        continue;
+      auto currentType = dyn_cast<RankedTensorType>(current.getType());
+      Operation *producer = current.getDefiningOp();
+      if (!currentType || currentType.getRank() != 1 ||
+          currentType.getShape() != type.getShape() || !producer ||
+          !currentType.getElementType().isInteger())
+        return;
+      if (isa<MakeRangeOp>(producer)) {
+        ranges.push_back(current);
+        continue;
+      }
+      if (isa<SplatOp, arith::ConstantOp>(producer))
+        continue;
+      if (!isa<arith::ArithDialect>(producer->getDialect()) ||
+          !isMemoryEffectFree(producer))
+        return;
+      for (Value operand : producer->getOperands())
+        if (isa<RankedTensorType>(operand.getType()))
+          worklist.push_back(operand);
+    }
+
+    for (Value range : ranges)
+      layouts.try_emplace(range, conversion.getType().getEncoding());
+  };
+
   // Consider function args as anchors.  This makes it easier to write tests --
   // you can pass a tensor with an encoding as an arg, instead of explicitly
   // calling tt.load.
@@ -261,6 +307,19 @@ void LayoutPropagation::initAnchorLayout() {
         addAnchor(result);
       }
     }
+
+    if (auto load = dyn_cast<LoadOp>(op)) {
+      auto conversion = load.getPtr().getDefiningOp<ConvertLayoutOp>();
+      auto argument = conversion ? dyn_cast<BlockArgument>(conversion.getSrc())
+                                 : BlockArgument{};
+      if (argument && argument.getArgNumber() > 0 &&
+          isa<scf::ForOp>(argument.getOwner()->getParentOp()) &&
+          isa<PointerType>(conversion.getType().getElementType()))
+        layouts.try_emplace(argument, conversion.getType().getEncoding());
+      addAddressAnchor(conversion);
+    }
+    if (auto store = dyn_cast<StoreOp>(op))
+      addAddressAnchor(store.getPtr().getDefiningOp<ConvertLayoutOp>());
   });
 }
 
@@ -1827,15 +1886,78 @@ bool rewriteReductionStoreLayout(StoreOp store) {
   return true;
 }
 
+bool rewriteConstantStoreLayout(StoreOp store) {
+  if (!store.getMask())
+    return false;
+
+  auto pointer = store.getPtr().getDefiningOp<ConvertLayoutOp>();
+  auto mask = store.getMask().getDefiningOp<ConvertLayoutOp>();
+  auto constant = store.getValue().getDefiningOp<arith::ConstantOp>();
+  if (!pointer || !mask || !constant)
+    return false;
+
+  auto source = cast<RankedTensorType>(pointer.getSrc().getType());
+  auto predicate = cast<RankedTensorType>(mask.getSrc().getType());
+  auto payload = cast<RankedTensorType>(constant.getType());
+  auto values = dyn_cast<DenseElementsAttr>(constant.getValue());
+  if (source.getRank() != 1 || source.getShape() != payload.getShape() ||
+      predicate.getEncoding() != source.getEncoding() || !values ||
+      !values.isSplat())
+    return false;
+
+  OpBuilder builder(store);
+  auto type = payload.cloneWithEncoding(source.getEncoding());
+  auto value = arith::ConstantOp::create(
+      builder, store.getLoc(), type,
+      DenseElementsAttr::get(type, values.getSplatValue<Attribute>()));
+  store.getPtrMutable().assign(pointer.getSrc());
+  store.getMaskMutable().assign(mask.getSrc());
+  store.getValueMutable().assign(value.getResult());
+  return true;
+}
+
+bool rewriteAtomicPointerLayout(AtomicRMWOp atomic) {
+  if (!atomic.getMask() || !atomic.getResult().use_empty())
+    return false;
+
+  auto pointer = atomic.getPtr().getDefiningOp<ConvertLayoutOp>();
+  auto mask = atomic.getMask().getDefiningOp<ConvertLayoutOp>();
+  if (!pointer || !mask || !pointer.getSrc().getDefiningOp<AddPtrOp>())
+    return false;
+
+  auto source = cast<RankedTensorType>(pointer.getSrc().getType());
+  auto predicate = cast<RankedTensorType>(mask.getSrc().getType());
+  auto payload = cast<RankedTensorType>(atomic.getVal().getType());
+  if (source.getRank() != 1 || source.getShape() != payload.getShape() ||
+      predicate.getEncoding() != source.getEncoding())
+    return false;
+
+  OpBuilder builder(atomic);
+  auto type = payload.cloneWithEncoding(source.getEncoding());
+  Value value = atomic.getVal();
+  if (payload.getEncoding() != source.getEncoding())
+    value = ConvertLayoutOp::create(builder, atomic.getLoc(), type, value);
+  atomic.getPtrMutable().assign(pointer.getSrc());
+  atomic.getMaskMutable().assign(mask.getSrc());
+  atomic.getValMutable().assign(value);
+  atomic.getResult().setType(type);
+  return true;
+}
+
 bool rewriteIndexedStoreExpressions(ModuleOp module) {
   SmallVector<StoreOp> stores;
   module.walk([&](StoreOp store) { stores.push_back(store); });
+  SmallVector<AtomicRMWOp> atomics;
+  module.walk([&](AtomicRMWOp atomic) { atomics.push_back(atomic); });
 
   bool changed = false;
   for (StoreOp store : stores) {
     changed |= IndexedStoreExpression(store).rewrite();
     changed |= rewriteReductionStoreLayout(store);
+    changed |= rewriteConstantStoreLayout(store);
   }
+  for (AtomicRMWOp atomic : atomics)
+    changed |= rewriteAtomicPointerLayout(atomic);
   return changed;
 }
 } // namespace

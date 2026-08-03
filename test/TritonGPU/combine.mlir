@@ -1322,6 +1322,121 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// CHECK-LABEL: @propagate_loop_memory_pointer
+// CHECK-NOT: ttg.convert_layout
+// CHECK: scf.for
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.load
+// CHECK: tt.store
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.return
+
+#loop_pointer = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#loop_memory = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @propagate_loop_memory_pointer(%source: !tt.ptr<f32>, %destination: !tt.ptr<f32>, %mask: tensor<256xi1, #loop_memory>) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %step = arith.constant dense<256> : tensor<256xi32, #loop_pointer>
+    %offsets = tt.make_range {start = 0 : i32, end = 256 : i32} : tensor<256xi32, #loop_pointer>
+    %base = tt.splat %source : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #loop_pointer>
+    %initial = tt.addptr %base, %offsets : tensor<256x!tt.ptr<f32>, #loop_pointer>, tensor<256xi32, #loop_pointer>
+    %store_offsets = tt.make_range {start = 0 : i32, end = 256 : i32} : tensor<256xi32, #loop_memory>
+    %store_base = tt.splat %destination : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #loop_memory>
+    %store_pointer = tt.addptr %store_base, %store_offsets : tensor<256x!tt.ptr<f32>, #loop_memory>, tensor<256xi32, #loop_memory>
+    %result = scf.for %iteration = %zero to %four step %one iter_args(%pointer = %initial) -> (tensor<256x!tt.ptr<f32>, #loop_pointer>) {
+      %converted = ttg.convert_layout %pointer : tensor<256x!tt.ptr<f32>, #loop_pointer> -> tensor<256x!tt.ptr<f32>, #loop_memory>
+      %value = tt.load %converted, %mask : tensor<256x!tt.ptr<f32>, #loop_memory>
+      tt.store %store_pointer, %value, %mask : tensor<256x!tt.ptr<f32>, #loop_memory>
+      %next = tt.addptr %pointer, %step : tensor<256x!tt.ptr<f32>, #loop_pointer>, tensor<256xi32, #loop_pointer>
+      scf.yield %next : tensor<256x!tt.ptr<f32>, #loop_pointer>
+    }
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: @propagate_shared_memory_address
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.load
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.load
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.store
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.return
+
+#shared_address = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared_memory = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @propagate_shared_memory_address(%lhs: !tt.ptr<i32>, %rhs: !tt.ptr<i32>, %out: !tt.ptr<i32>, %mask: tensor<256xi1, #shared_memory>) {
+    %indices = tt.make_range {start = 0 : i32, end = 256 : i32} : tensor<256xi32, #shared_address>
+    %two = arith.constant dense<2> : tensor<256xi32, #shared_address>
+    %offsets = arith.muli %indices, %two : tensor<256xi32, #shared_address>
+    %lhs_base = tt.splat %lhs : !tt.ptr<i32> -> tensor<256x!tt.ptr<i32>, #shared_address>
+    %lhs_pointer = tt.addptr %lhs_base, %offsets : tensor<256x!tt.ptr<i32>, #shared_address>, tensor<256xi32, #shared_address>
+    %lhs_converted = ttg.convert_layout %lhs_pointer : tensor<256x!tt.ptr<i32>, #shared_address> -> tensor<256x!tt.ptr<i32>, #shared_memory>
+    %lhs_value = tt.load %lhs_converted, %mask : tensor<256x!tt.ptr<i32>, #shared_memory>
+    %rhs_base = tt.splat %rhs : !tt.ptr<i32> -> tensor<256x!tt.ptr<i32>, #shared_address>
+    %rhs_pointer = tt.addptr %rhs_base, %offsets : tensor<256x!tt.ptr<i32>, #shared_address>, tensor<256xi32, #shared_address>
+    %rhs_converted = ttg.convert_layout %rhs_pointer : tensor<256x!tt.ptr<i32>, #shared_address> -> tensor<256x!tt.ptr<i32>, #shared_memory>
+    %rhs_value = tt.load %rhs_converted, %mask : tensor<256x!tt.ptr<i32>, #shared_memory>
+    %result = arith.addi %lhs_value, %rhs_value : tensor<256xi32, #shared_memory>
+    %out_base = tt.splat %out : !tt.ptr<i32> -> tensor<256x!tt.ptr<i32>, #shared_address>
+    %out_pointer = tt.addptr %out_base, %offsets : tensor<256x!tt.ptr<i32>, #shared_address>, tensor<256xi32, #shared_address>
+    %out_converted = ttg.convert_layout %out_pointer : tensor<256x!tt.ptr<i32>, #shared_address> -> tensor<256x!tt.ptr<i32>, #shared_memory>
+    tt.store %out_converted, %result, %mask : tensor<256x!tt.ptr<i32>, #shared_memory>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: @reuse_constant_store_pointer_layout
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.store %arg0, {{%.*}}, %arg1
+
+#constant_pointer = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#constant_store = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @reuse_constant_store_pointer_layout(%pointer: tensor<256x!tt.ptr<i32>, #constant_pointer>, %mask: tensor<256xi1, #constant_pointer>) {
+    %converted_pointer = ttg.convert_layout %pointer : tensor<256x!tt.ptr<i32>, #constant_pointer> -> tensor<256x!tt.ptr<i32>, #constant_store>
+    %converted_mask = ttg.convert_layout %mask : tensor<256xi1, #constant_pointer> -> tensor<256xi1, #constant_store>
+    %constant = arith.constant dense<1> : tensor<256xi32, #constant_store>
+    tt.store %converted_pointer, %constant, %converted_mask : tensor<256x!tt.ptr<i32>, #constant_store>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: @reuse_atomic_pointer_layout
+// CHECK: [[POINTER:%.*]] = tt.addptr
+// CHECK: [[VALUE:%.*]] = ttg.convert_layout %arg2
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.atomic_rmw add, relaxed, gpu, [[POINTER]], [[VALUE]], %arg1
+
+#atomic_pointer = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#atomic_value = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @reuse_atomic_pointer_layout(%destination: !tt.ptr<i32>, %mask: tensor<256xi1, #atomic_pointer>, %value: tensor<256xi32, #atomic_value>, %indices: tensor<256xi32, #atomic_pointer>) {
+    %base = tt.splat %destination : !tt.ptr<i32> -> tensor<256x!tt.ptr<i32>, #atomic_pointer>
+    %pointer = tt.addptr %base, %indices : tensor<256x!tt.ptr<i32>, #atomic_pointer>, tensor<256xi32, #atomic_pointer>
+    %converted_pointer = ttg.convert_layout %pointer : tensor<256x!tt.ptr<i32>, #atomic_pointer> -> tensor<256x!tt.ptr<i32>, #atomic_value>
+    %converted_mask = ttg.convert_layout %mask : tensor<256xi1, #atomic_pointer> -> tensor<256xi1, #atomic_value>
+    %result = tt.atomic_rmw add, relaxed, gpu, %converted_pointer, %value, %converted_mask : (tensor<256x!tt.ptr<i32>, #atomic_value>, tensor<256xi32, #atomic_value>, tensor<256xi1, #atomic_value>) -> tensor<256xi32, #atomic_value>
+    tt.return
+  }
+}
+
+// -----
+
 // CHECK-LABEL: reduce_cvt2
 // Match the reduction
 // CHECK-NOT: ttg.convert_layout
