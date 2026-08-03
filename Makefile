@@ -51,7 +51,7 @@ test-warmup: all
 
 .PHONY: test-gsan
 test-gsan: all
-	TRITON_CI_CACHE_PHASE=gsan TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -n $(NUM_PROCS) --dist=loadgroup python/test/gsan
+	$(PYTHON) -m triton._test_runner suite gsan --num-gpus $(NUM_GPUS) --num-procs $(NUM_PROCS)
 
 .PHONY: test-regression
 test-regression: all

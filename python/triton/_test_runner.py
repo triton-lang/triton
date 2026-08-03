@@ -31,12 +31,12 @@ def _pythonpath(environment):
     environment["PYTHONPATH"] = os.pathsep.join(entries)
 
 
-def _pytest(*arguments, workers=None, import_mode=None):
+def _pytest(*arguments, workers=None, import_mode=None, distribution="worksteal"):
     command = [sys.executable, "-m", "pytest", "-p", "triton._compile_warmup", "-s", "--tb=short"]
     if import_mode is not None:
         command.append(f"--import-mode={import_mode}")
     if workers is not None:
-        command.extend(("-n", str(workers), "--dist=worksteal"))
+        command.extend(("-n", str(workers), f"--dist={distribution}"))
     command.extend(arguments)
     return command
 
@@ -159,9 +159,28 @@ def _gluon(args):
                 phase="gluon-examples", num_gpus=args.num_gpus)
 
 
+def _gsan(args):
+    environment = _environment("gsan")
+    environment["TRITON_DISABLE_LINE_INFO"] = "0"
+    symmetric_memory = "python/test/gsan/test_symmetric_memory.py"
+
+    if args.num_gpus == 1:
+        return _run(_pytest("python/test/gsan", workers=args.num_procs, distribution="loadgroup"),
+                    environment=environment)
+
+    status = _run(
+        _pytest(f"--ignore={symmetric_memory}", "python/test/gsan", workers=args.num_procs, distribution="loadgroup"),
+        environment=environment)
+    if status:
+        return status
+    return _run(_pytest(symmetric_memory, workers=1, distribution="loadgroup"), environment=environment)
+
+
 def _suite(args):
     if args.name == "unit":
         return _unit(args)
+    if args.name == "gsan":
+        return _gsan(args)
     return _gluon(args)
 
 
@@ -186,7 +205,7 @@ def _main(argv=None):
     warmup.set_defaults(run=_warmup)
 
     suite = commands.add_parser("suite", help="execute a dynamically scheduled test suite")
-    suite.add_argument("name", choices=("unit", "gluon"))
+    suite.add_argument("name", choices=("unit", "gluon", "gsan"))
     suite.add_argument("--num-gpus", type=int, default=int(os.environ.get("NUM_GPUS", "1")))
     suite.add_argument("--num-procs", type=int, default=int(os.environ.get("NUM_PROCS", "8")))
     suite.add_argument("--gluon-procs", type=int, default=8)

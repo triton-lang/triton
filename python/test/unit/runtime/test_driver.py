@@ -189,6 +189,28 @@ def test_gluon_runner_skips_consan_pool_on_ampere(monkeypatch):
     assert "python/test/gluon/test_consan.py" not in commands[0]
 
 
+@pytest.mark.parametrize("num_gpus", [1, 2, 4])
+def test_gsan_runner_isolates_distributed_tests_when_multiple_gpus_are_visible(monkeypatch, num_gpus):
+    commands = []
+    monkeypatch.setattr(_test_runner, "_run", lambda command, **kwargs: commands.append((command, kwargs)) or 0)
+
+    assert _test_runner._gsan(SimpleNamespace(num_gpus=num_gpus, num_procs=24)) == 0
+    assert all(kwargs["environment"]["TRITON_CI_CACHE_PHASE"] == "gsan" for _, kwargs in commands)
+    assert all(kwargs["environment"]["TRITON_DISABLE_LINE_INFO"] == "0" for _, kwargs in commands)
+    assert all("--dist=loadgroup" in command for command, _ in commands)
+    assert commands[0][0][commands[0][0].index("-n") + 1] == "24"
+
+    symmetric_memory = "python/test/gsan/test_symmetric_memory.py"
+    if num_gpus == 1:
+        assert len(commands) == 1
+        assert f"--ignore={symmetric_memory}" not in commands[0][0]
+    else:
+        assert len(commands) == 2
+        assert f"--ignore={symmetric_memory}" in commands[0][0]
+        assert symmetric_memory in commands[1][0]
+        assert commands[1][0][commands[1][0].index("-n") + 1] == "1"
+
+
 def test_compile_warmup_selects_explicit_markers():
     enabled = SimpleNamespace(kwargs={})
     excluded = object()
