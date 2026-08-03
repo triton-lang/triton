@@ -604,6 +604,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// When an fp4 x fp4 dot has an MN-major operand, it uses mxf8f6f4. Both fp4
+// operands require the padded shared-memory packing format, including the
+// operand that remains K-packed.
+
+// CHECK-DAG: #[[$FP4_PADDED_B:.+]] = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+// CHECK-DAG: #[[$FP4_PADDED_A:.+]] = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+#fp4_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#fp4_blocked_k = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: mmav5_fp4_rhs_mn_packed
+  tt.func public @mmav5_fp4_rhs_mn_packed(%a: tensor<128x32xi8, #fp4_blocked_k>, %scale_a: tensor<128x2xi8, #fp4_blocked>, %b: tensor<64x64xi8, #fp4_blocked>, %scale_b: tensor<128x2xi8, #fp4_blocked>) -> tensor<128x128xf32, #fp4_blocked> {
+    // CHECK-DAG: %[[FP4_A:.+]] = ttg.local_alloc %{{.+}} : (tensor<128x32xi8, #{{.+}}>) -> !ttg.memdesc<128x32xi8, #[[$FP4_PADDED_A]], #smem>
+    // CHECK-DAG: %[[FP4_B:.+]] = ttg.local_alloc %{{.+}} : (tensor<64x64xi8, #{{.+}}>) -> !ttg.memdesc<64x64xi8, #[[$FP4_PADDED_B]], #smem>
+    // CHECK: ttng.tc_gen5_mma_scaled %[[FP4_A]], %[[FP4_B]],
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #fp4_blocked>
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false, rhs_k_pack = false} : tensor<128x32xi8, #fp4_blocked_k>, tensor<128x2xi8, #fp4_blocked> * tensor<64x64xi8, #fp4_blocked>, tensor<128x2xi8, #fp4_blocked> -> tensor<128x128xf32, #fp4_blocked>
+    tt.return %d : tensor<128x128xf32, #fp4_blocked>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
