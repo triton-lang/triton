@@ -6,6 +6,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "llvm/ADT/DenseSet.h"
 
@@ -82,13 +83,29 @@ static bool isTensorMemory(Value value) {
          isa<TensorMemorySpaceAttr>(memDescType.getMemorySpace());
 }
 
-static void appendRootAllocs(Value value, SmallVectorImpl<TMEMAllocOp> &allocs,
+// Offset of a view relative to the root allocation, in physical TMEM
+// coordinates (rows, 32-bit columns).
+struct TMemViewOffset {
+  int64_t row = 0;
+  int64_t col = 0;
+  bool known = true;
+};
+
+// A root allocation reached from a view, together with the view's offset
+// within it. Two views of one allocation can be physically disjoint, so the
+// offset is what lets the interval model tell them apart.
+struct RootAlloc {
+  TMEMAllocOp alloc;
+  TMemViewOffset offset;
+};
+
+static void appendRootAllocs(Value value, SmallVectorImpl<RootAlloc> &allocs,
                              bool &unknown) {
   DenseSet<Value> seen;
-  SmallVector<Value> worklist{value};
+  SmallVector<std::pair<Value, TMemViewOffset>> worklist{{value, {}}};
 
   while (!worklist.empty()) {
-    Value current = worklist.pop_back_val();
+    auto [current, offset] = worklist.pop_back_val();
     if (!seen.insert(current).second)
       continue;
 
@@ -108,25 +125,27 @@ static void appendRootAllocs(Value value, SmallVectorImpl<TMEMAllocOp> &allocs,
               std::distance(branch->getSuccessors().begin(), it);
           SuccessorOperands args = branch.getSuccessorOperands(successorIndex);
           worklist.push_back(
-              args.getForwardedOperands()[arg.getArgNumber() -
-                                          args.getProducedOperandCount()]);
+              {args.getForwardedOperands()[arg.getArgNumber() -
+                                           args.getProducedOperandCount()],
+               offset});
         }
         continue;
       }
 
       if (auto ws = dyn_cast<ttg::WarpSpecializePartitionsOp>(parentOp)) {
-        worklist.push_back(ws.getExplicitCaptures()[arg.getArgNumber()]);
+        worklist.push_back(
+            {ws.getExplicitCaptures()[arg.getArgNumber()], offset});
       } else if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
         unsigned idx = arg.getArgNumber() - 1;
-        worklist.push_back(forOp.getYieldedValues()[idx]);
-        worklist.push_back(forOp.getInits()[idx]);
+        worklist.push_back({forOp.getYieldedValues()[idx], offset});
+        worklist.push_back({forOp.getInits()[idx], offset});
       } else if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp)) {
         unsigned idx = arg.getArgNumber();
         if (arg.getParentRegion() == &whileOp.getAfter()) {
-          worklist.push_back(whileOp.getConditionOp().getArgs()[idx]);
+          worklist.push_back({whileOp.getConditionOp().getArgs()[idx], offset});
         } else {
-          worklist.push_back(whileOp.getYieldedValues()[idx]);
-          worklist.push_back(whileOp.getInits()[idx]);
+          worklist.push_back({whileOp.getYieldedValues()[idx], offset});
+          worklist.push_back({whileOp.getInits()[idx], offset});
         }
       } else {
         unknown = true;
@@ -142,22 +161,48 @@ static void appendRootAllocs(Value value, SmallVectorImpl<TMEMAllocOp> &allocs,
 
     unsigned resultIndex = cast<OpResult>(current).getResultNumber();
     if (auto alloc = dyn_cast<TMEMAllocOp>(defOp)) {
-      allocs.push_back(alloc);
-    } else if (defOp->hasTrait<OpTrait::MemDescViewTrait>()) {
-      worklist.push_back(defOp->getOperand(0));
+      allocs.push_back({alloc, offset});
+    } else if (auto index = dyn_cast<ttg::MemDescIndexOp>(defOp)) {
+      // Multi-buffered views advance the base pointer by one buffer's worth of
+      // 32-bit columns, matching MemDescIndexOpConversion.
+      APInt indexValue;
+      TMemViewOffset next = offset;
+      if (matchPattern(index.getIndex(), m_ConstantInt(&indexValue)))
+        next.col += indexValue.getSExtValue() *
+                    getTmemAllocSizes(index.getType()).numCols;
+      else
+        next.known = false;
+      worklist.push_back({index.getSrc(), next});
     } else if (auto slice = dyn_cast<TMEMSubSliceOp>(defOp)) {
-      worklist.push_back(slice.getSrc());
+      // getTMemSubSliceOffset packs the column offset in the low 16 bits and
+      // the row offset in the high 16 bits, as the lowering does.
+      uint32_t packed = getTMemSubSliceOffset(
+          slice.getSrc().getType(), slice.getOffset(), slice.getDim());
+      TMemViewOffset next = offset;
+      next.col += packed & 0xffff;
+      next.row += packed >> 16;
+      worklist.push_back({slice.getSrc(), next});
+    } else if (isa<ttg::MemDescReinterpretOp, ttg::MemDescTransOp,
+                   ttg::MemDescReshapeOp>(defOp)) {
+      // Pure reinterpretations do not move the base pointer.
+      worklist.push_back({defOp->getOperand(0), offset});
+    } else if (defOp->hasTrait<OpTrait::MemDescViewTrait>()) {
+      // Keep walking to the root, but do not pretend the offset is known.
+      TMemViewOffset next = offset;
+      next.known = false;
+      worklist.push_back({defOp->getOperand(0), next});
     } else if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
-      worklist.push_back(selectOp.getTrueValue());
-      worklist.push_back(selectOp.getFalseValue());
+      worklist.push_back({selectOp.getTrueValue(), offset});
+      worklist.push_back({selectOp.getFalseValue(), offset});
     } else if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
-      worklist.push_back(ifOp.thenYield().getOperand(resultIndex));
-      worklist.push_back(ifOp.elseYield().getOperand(resultIndex));
+      worklist.push_back({ifOp.thenYield().getOperand(resultIndex), offset});
+      worklist.push_back({ifOp.elseYield().getOperand(resultIndex), offset});
     } else if (auto forOp = dyn_cast<scf::ForOp>(defOp)) {
-      worklist.push_back(forOp.getYieldedValues()[resultIndex]);
-      worklist.push_back(forOp.getInits()[resultIndex]);
+      worklist.push_back({forOp.getYieldedValues()[resultIndex], offset});
+      worklist.push_back({forOp.getInits()[resultIndex], offset});
     } else if (auto whileOp = dyn_cast<scf::WhileOp>(defOp)) {
-      worklist.push_back(whileOp.getConditionOp().getArgs()[resultIndex]);
+      worklist.push_back(
+          {whileOp.getConditionOp().getArgs()[resultIndex], offset});
     } else {
       unknown = true;
     }
@@ -165,46 +210,54 @@ static void appendRootAllocs(Value value, SmallVectorImpl<TMEMAllocOp> &allocs,
 }
 
 static SmallVector<AllocationSlice> getTMemSlices(Value value) {
-  SmallVector<TMEMAllocOp> allocs;
+  SmallVector<RootAlloc> allocs;
   bool unknown = false;
   appendRootAllocs(value, allocs, unknown);
 
   SmallVector<AllocationSlice> slices;
-  if (unknown || allocs.empty()) {
+  auto everything = [&]() -> SmallVector<AllocationSlice> {
+    slices.clear();
     slices.emplace_back(
         Interval<size_t>(0, std::numeric_limits<size_t>::max()));
     return slices;
-  }
+  };
 
-  for (TMEMAllocOp alloc : allocs) {
+  if (unknown || allocs.empty())
+    return everything();
+
+  // The accessed extent is the view's own footprint, not the whole allocation.
+  auto viewTy = dyn_cast<ttg::MemDescType>(value.getType());
+  if (!viewTy)
+    return everything();
+  TMemAllocation viewSize = getTmemAllocSizes(viewTy);
+
+  for (RootAlloc &root : allocs) {
     auto colAttr =
-        alloc->getAttrOfType<IntegerAttr>("tensor_memory_col_offset");
+        root.alloc->getAttrOfType<IntegerAttr>("tensor_memory_col_offset");
     auto rowAttr =
-        alloc->getAttrOfType<IntegerAttr>("tensor_memory_row_offset");
-    if (!colAttr || !rowAttr) {
-      slices.clear();
-      slices.emplace_back(
-          Interval<size_t>(0, std::numeric_limits<size_t>::max()));
-      return slices;
-    }
+        root.alloc->getAttrOfType<IntegerAttr>("tensor_memory_row_offset");
+    if (!colAttr || !rowAttr)
+      return everything();
 
-    int64_t colOffset = colAttr.getInt();
-    int64_t rowOffset = rowAttr.getInt();
-    TMemAllocation allocSize = getTmemAllocSizes(alloc.getType());
+    TMemAllocation allocSize = getTmemAllocSizes(root.alloc.getType());
+    // Fall back to the whole allocation when the view offset is not statically
+    // known, so an unresolved view can never look narrower than it is.
+    bool useView = root.offset.known;
+    int64_t colOffset = colAttr.getInt() + (useView ? root.offset.col : 0);
+    int64_t rowOffset = rowAttr.getInt() + (useView ? root.offset.row : 0);
+    int64_t numRows = useView ? viewSize.numRows : allocSize.numRows;
+    int64_t numCols = useView ? viewSize.numCols : allocSize.numCols;
+
     if (rowOffset % kRowOffsetGranularity != 0 ||
-        allocSize.numRows % kAllocRowGranularity != 0) {
-      slices.clear();
-      slices.emplace_back(
-          Interval<size_t>(0, std::numeric_limits<size_t>::max()));
-      return slices;
-    }
+        numRows % kAllocRowGranularity != 0)
+      return everything();
 
     int64_t rowGroup = rowOffset / kRowOffsetGranularity;
-    int64_t numRowGroups = allocSize.numRows / kAllocRowGranularity;
+    int64_t numRowGroups = numRows / kAllocRowGranularity;
     for (int64_t row = 0; row < numRowGroups; ++row) {
       size_t start = static_cast<size_t>(rowGroup + row) * kFlattenedRowStride +
                      static_cast<size_t>(colOffset);
-      slices.emplace_back(Interval<size_t>(start, start + allocSize.numCols));
+      slices.emplace_back(Interval<size_t>(start, start + numCols));
     }
   }
   return slices;

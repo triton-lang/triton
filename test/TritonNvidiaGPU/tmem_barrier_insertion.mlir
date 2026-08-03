@@ -330,4 +330,111 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttng.tmem_copy %arg1, %0 : !ttg.memdesc<128x128xf32, #shared_copy, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
     tt.return
   }
+
+  // Two multi-buffered views of one allocation that land on different physical
+  // columns do not alias, so no barrier is needed between them.
+  // CHECK-LABEL: @ld_then_st_disjoint_buffers
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttng.tmem_store
+  // CHECK-NOT: ttg.barrier
+  tt.func @ld_then_st_disjoint_buffers(%arg0: tensor<128x128xf32, #blocked>) {
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %0 = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<2x128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttg.barrier local
+    %rd = ttg.memdesc_index %0[%c0] : !ttg.memdesc<2x128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %wr = ttg.memdesc_index %0[%c1] : !ttg.memdesc<2x128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %1 = ttng.tmem_load %rd : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    ttng.tmem_store %arg0, %wr, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // Same allocation, same buffer index: the views do alias and the WAR still
+  // needs ordering.
+  // CHECK-LABEL: @ld_then_st_same_buffer
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.tmem_store
+  tt.func @ld_then_st_same_buffer(%arg0: tensor<128x128xf32, #blocked>) {
+    %true = arith.constant true
+    %c1 = arith.constant 1 : i32
+    %0 = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<2x128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttg.barrier local
+    %rd = ttg.memdesc_index %0[%c1] : !ttg.memdesc<2x128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %wr = ttg.memdesc_index %0[%c1] : !ttg.memdesc<2x128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %1 = ttng.tmem_load %rd : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    ttng.tmem_store %arg0, %wr, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // A dynamic buffer index cannot prove disjointness: stay conservative.
+  // CHECK-LABEL: @ld_then_st_dynamic_buffer
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.tmem_store
+  tt.func @ld_then_st_dynamic_buffer(%arg0: tensor<128x128xf32, #blocked>, %idx: i32) {
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %0 = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<2x128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttg.barrier local
+    %rd = ttg.memdesc_index %0[%c0] : !ttg.memdesc<2x128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %wr = ttg.memdesc_index %0[%idx] : !ttg.memdesc<2x128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %1 = ttng.tmem_load %rd : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    ttng.tmem_store %arg0, %wr, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // tmem_subslice offsets are honoured too: two column subslices of one
+  // allocation that do not overlap need no barrier between them.
+  // CHECK-LABEL: @ld_then_st_disjoint_subslices
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttng.tmem_store
+  // CHECK-NOT: ttg.barrier
+  tt.func @ld_then_st_disjoint_subslices(%arg0: tensor<128x64xf32, #blocked>) {
+    %true = arith.constant true
+    %0 = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttg.barrier local
+    %rd = ttng.tmem_subslice %0 {offset = 0 : i32} : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable, 128x128>
+    %wr = ttng.tmem_subslice %0 {offset = 64 : i32} : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable, 128x128>
+    %1 = ttng.tmem_load %rd : !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable, 128x128> -> tensor<128x64xf32, #blocked>
+    ttng.tmem_store %arg0, %wr, %true : tensor<128x64xf32, #blocked> -> !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable, 128x128>
+    tt.return
+  }
+
+  // Overlapping subslices of one allocation still need the barrier.
+  // CHECK-LABEL: @ld_then_st_overlapping_subslices
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.tmem_store
+  tt.func @ld_then_st_overlapping_subslices(%arg0: tensor<128x64xf32, #blocked>) {
+    %true = arith.constant true
+    %0 = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttg.barrier local
+    %rd = ttng.tmem_subslice %0 {offset = 64 : i32} : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable, 128x128>
+    %wr = ttng.tmem_subslice %0 {offset = 64 : i32} : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable, 128x128>
+    %1 = ttng.tmem_load %rd : !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable, 128x128> -> tensor<128x64xf32, #blocked>
+    ttng.tmem_store %arg0, %wr, %true : tensor<128x64xf32, #blocked> -> !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable, 128x128>
+    tt.return
+  }
+
+  // memdesc_reinterpret does not move the base pointer, so the buffer offset
+  // underneath it still decides aliasing.
+  // CHECK-LABEL: @ld_then_st_reinterpret_disjoint_buffers
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttng.tmem_store
+  // CHECK-NOT: ttg.barrier
+  tt.func @ld_then_st_reinterpret_disjoint_buffers(%arg0: tensor<128x128xf32, #blocked>) {
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %0 = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<2x128x128xi32, #tmem128, #ttng.tensor_memory, mutable>
+    ttg.barrier local
+    %v = ttg.memdesc_reinterpret %0 : !ttg.memdesc<2x128x128xi32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<2x128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %rd = ttg.memdesc_index %v[%c0] : !ttg.memdesc<2x128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %wr = ttg.memdesc_index %v[%c1] : !ttg.memdesc<2x128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %1 = ttng.tmem_load %rd : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    ttng.tmem_store %arg0, %wr, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    tt.return
+  }
 }
