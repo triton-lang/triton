@@ -1097,8 +1097,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16x64xi8, #shared, #smem, mutable>
     // CHECK: tt.call @__triton_consan_verify_write_visibility
     // CHECK: tt.call @__triton_consan_set_read_visibility
-    // CHECK: amdg.local_load_packed_tranposed
-    %value = amdg.local_load_packed_tranposed %buffer : !ttg.memdesc<16x64xi8, #shared, #smem, mutable> -> tensor<32x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>
+    // CHECK: amdg.local_load_packed_transposed
+    %value = amdg.local_load_packed_transposed %buffer : !ttg.memdesc<16x64xi8, #shared, #smem, mutable> -> tensor<32x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>
     tt.return
   }
 }

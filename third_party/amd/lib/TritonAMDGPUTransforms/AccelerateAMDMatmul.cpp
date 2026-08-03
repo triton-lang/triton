@@ -906,6 +906,33 @@ private:
   const TargetFeatures &targetFeatures;
 };
 
+static triton::amdgpu::LocalLoadPackedTransposedOp
+createLocalLoadPackedTransposed(OpBuilder &builder, Location loc,
+                                TypedValue<RankedTensorType> value,
+                                DotOperandEncodingAttr dstEncoding,
+                                unsigned opIdx) {
+  auto srcType = value.getType();
+  SmallVector<int64_t> dstShape(srcType.getShape());
+  dstShape[opIdx] *= 2;
+  dstShape[1 - opIdx] /= 2;
+  auto dstType =
+      RankedTensorType::get(dstShape, srcType.getElementType(), dstEncoding);
+
+  SmallVector<unsigned> order = {opIdx, 1 - opIdx};
+  auto sharedMemorySpace =
+      triton::gpu::SharedMemorySpaceAttr::get(value.getContext());
+  auto tmpType = triton::gpu::MemDescType::get(
+      srcType.getShape(), srcType.getElementType(),
+      triton::gpu::SwizzledSharedEncodingAttr::get(
+          value.getContext(), dstEncoding, srcType.getShape(), order,
+          triton::gpu::getCGALayout(srcType.getEncoding()),
+          srcType.getElementType()),
+      sharedMemorySpace);
+  auto tmp = triton::gpu::LocalAllocOp::create(builder, loc, tmpType, value);
+  return triton::amdgpu::LocalLoadPackedTransposedOp::create(builder, loc,
+                                                             dstType, tmp);
+}
+
 class ScaledBlockedToScaledMFMAF8F6F4 final
     : public OpRewritePattern<triton::DotScaledOp> {
   int mfmaVersion;
@@ -1022,36 +1049,9 @@ public:
 
       bool kPacked = opIdx == 0 ? dotOp.getLhsKPack() : dotOp.getRhsKPack();
       if (kPacked == false) {
-        // This is FP4 with M/N packing. Create local alloc + local load here
-        // so we have control of the shared layout
-        // A, M packed: tensor<16x64xi8> --> 32x32
-        // B, N packed: tensor<64x16xi8> --> 32x32
-        SmallVector<int64_t> newShape(vType.getShape());
-        newShape[opIdx == 0 ? 0 : 1] = newShape[opIdx == 0 ? 0 : 1] * 2;
-        newShape[opIdx == 0 ? 1 : 0] = newShape[opIdx == 0 ? 1 : 0] / 2;
-        auto newVType =
-            RankedTensorType::get(newShape, vType.getElementType(), newEnc);
         OpBuilder builder(dotOp);
-        auto srcEncoding = vType.getEncoding();
-        auto originalOrder = triton::gpu::getOrderForMemory(vType);
-        SmallVector<unsigned> newOrder = originalOrder;
-        if (opIdx == 1) {
-          newOrder = {1, 0};
-        } else {
-          newOrder = {0, 1};
-        }
-        auto sharedMemorySpace =
-            triton::gpu::SharedMemorySpaceAttr::get(vType.getContext());
-        auto tmpType = triton::gpu::MemDescType::get(
-            vType.getShape(), vType.getElementType(),
-            triton::gpu::SwizzledSharedEncodingAttr::get(
-                v.getContext(), newEnc, vType.getShape(), newOrder,
-                triton::gpu::getCGALayout(srcEncoding), vType.getElementType()),
-            sharedMemorySpace);
-        auto tmp = triton::gpu::LocalAllocOp::create(builder, dotOp.getLoc(),
-                                                     tmpType, v);
-        auto newConvert = triton::amdgpu::LocalLoadPackedTransposedOp::create(
-            builder, dotOp.getLoc(), newVType, tmp);
+        auto newConvert = createLocalLoadPackedTransposed(
+            builder, dotOp.getLoc(), v, newEnc, opIdx);
         if (opIdx == 0) {
           aShape = newConvert.getType().getShape();
           aEncLL *= newEnc.toLinearLayout(aShape);
@@ -1224,6 +1224,25 @@ public:
       auto parent = isFp4 ? wmmaPackedEnc : wmmaEnc;
       auto vType = v.getType();
       auto newEnc = DotOperandEncodingAttr::get(ctx, opIdx, parent, 16);
+      bool kPacked = opIdx == 0 ? dotOp.getLhsKPack() : dotOp.getRhsKPack();
+      if (isFp4 && !kPacked) {
+        auto newConvert = createLocalLoadPackedTransposed(
+            rewriter, dotOp.getLoc(), v, newEnc, opIdx);
+
+        if (opIdx == 0) {
+          aShape = newConvert.getType().getShape();
+          aShapePerCTA =
+              ttg::getShapePerCTA(aCgaLayout.getCTASplitNum(), aShape);
+          aEncLL *= newEnc.toLinearLayout(aShapePerCTA);
+        } else {
+          bShape = newConvert.getType().getShape();
+          bShapePerCTA =
+              ttg::getShapePerCTA(bCgaLayout.getCTASplitNum(), bShape);
+          bEncLL *= newEnc.toLinearLayout(bShapePerCTA);
+        }
+        return newConvert;
+      }
+
       auto newVType = RankedTensorType::get(vType.getShape(),
                                             vType.getElementType(), newEnc);
       if (opIdx == 0)
@@ -1311,8 +1330,7 @@ public:
 
     auto newDot = triton::DotScaledOp::create(
         rewriter, dotOp.getLoc(), newRetType, a, b, newAcc, newAScale,
-        newBScale, aElemType, bElemType, dotOp.getFastMath(),
-        dotOp.getLhsKPack(), dotOp.getRhsKPack());
+        newBScale, aElemType, bElemType, dotOp.getFastMath());
 
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,
                                                       newDot);

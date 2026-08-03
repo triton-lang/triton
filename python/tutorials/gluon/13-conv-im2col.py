@@ -51,8 +51,8 @@ Access Boundary:
     The input tensor in global memory is NOT padded. When accessing outside
     [0, 0] to [H-1, W-1], TMA fills with the padding value.
 
-async_copy_global_to_shared_im2col:
-    async_copy_global_to_shared_im2col(tensor_desc, coord, offsets, barrier, result)
+async_load_im2col:
+    async_load_im2col(tensor_desc, coord, offsets, barrier, result)
     - coord: [batch_idx, start_h, start_w, channel_start] start coords
     - offsets: [h_offset, w_offset] spatial offsets (i16)
 
@@ -225,7 +225,7 @@ if __name__ == "__main__" and not t7.is_hopper_or_newer():
 #         | e  f  h  i |
 #
 #       In the real kernel, this is executed in the K-loop as one
-#       async_copy_global_to_shared_im2col per (r, s, ci_block).
+#       async_load_im2col per (r, s, ci_block).
 #
 # %%
 # Shared Kernel for All Examples
@@ -257,7 +257,7 @@ def tma_im2col_kernel(in_desc, out_desc, coord_n: int, coord_h: int, coord_w: in
     mbarrier.wait(bar, phase=0)
     mbarrier.invalidate(bar)
 
-    tma.async_copy_shared_to_global(out_desc, [0, 0], smem)
+    tma.async_store(out_desc, [0, 0], smem)
     tma.store_wait(pendings=0)
 
 
@@ -896,7 +896,7 @@ if __name__ == "__main__":
 #                     acc += A_tile @ B_tile^T
 #
 #         # Store output tile via TMA
-#         tma.async_copy_shared_to_global(...)
+#         tma.async_store(...)
 # ```
 #
 # Key insight: we never materialize the full im2col matrix; address generation
@@ -951,7 +951,7 @@ def store_output_tile(mma, dtype, out_desc, offs_m, offs_n):
     c_smem = ttgl.allocate_shared_memory(dtype, out_desc.block_shape, out_desc.layout)
     c_smem.store(acc.to(dtype))
     fence_async_shared()
-    tma.async_copy_shared_to_global(out_desc, [offs_m, offs_n], c_smem)
+    tma.async_store(out_desc, [offs_m, offs_n], c_smem)
     tma.store_wait(pendings=0)
 
 

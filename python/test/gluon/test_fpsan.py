@@ -72,7 +72,7 @@ def _mix_config(bitwidth: int, one_bits: int) -> tuple[np.uint64, np.uint64, np.
         sign_mask = np.uint64(1 << (bitwidth - 1))
         mag_mask = sign_mask - np.uint64(1)
         shift = int((one_bits & -one_bits).bit_length() - 1)
-        y = (np.uint64(one_bits) * np.uint64(922291)) & mag_mask
+        y = (np.uint64(one_bits) * np.uint64(14940041)) & mag_mask
         z = y ^ (y >> np.uint64(shift))
         mul_b_pos = _inv_odd_u64(z) & full_mask
         mul_b_neg = (mul_b_pos * mag_mask) & full_mask
@@ -95,7 +95,7 @@ def _mix_float_bits_to_payload_u64(bits, bitwidth: int, one_bits: int) -> np.nda
     x = bits.astype(np.uint64) & full_mask
     neg = (x & sign_mask) != 0
     sign = np.where(neg, sign_mask, np.uint64(0))
-    y = (((x ^ sign) * np.uint64(922291)) & mag_mask)
+    y = (((x ^ sign) * np.uint64(14940041)) & mag_mask)
     z = _xor_shift_right_u64(y, shift)
     factor = np.where(neg, mul_b_neg, mul_b_pos)
     return (((z * factor) & mag_mask) ^ sign) & full_mask
@@ -109,7 +109,7 @@ def _unmix_payload_u64_to_float_bits(payload, bitwidth: int, one_bits: int) -> n
     factor = np.where(neg, _inv_odd_u64(mul_b_neg), _inv_odd_u64(mul_b_pos))
     z = (((v ^ sign) * factor) & mag_mask)
     y = _inverse_xor_shift_right_u64(z, shift, bitwidth)
-    x = (y * _inv_odd_u64(np.uint64(922291))) & mag_mask
+    x = (y * _inv_odd_u64(np.uint64(14940041))) & mag_mask
     return (x ^ sign) & full_mask
 
 
@@ -120,6 +120,24 @@ def _mix_f32_bits_to_payload_u32(x_i32: np.ndarray) -> np.ndarray:
 def _unmix_payload_u32_to_f32_bits_i32(v_u32: np.ndarray) -> np.ndarray:
     assert v_u32.dtype == np.uint32
     return _u32_to_i32(_unmix_payload_u64_to_float_bits(v_u32, 32, 0x3F800000).astype(np.uint32))
+
+
+@pytest.mark.parametrize(("constant", "trailing_zeros"), [
+    (240.0, 0),
+    (448.0, 0),
+    (57344.0, 2),
+    (1 / 240, 0),
+    (1 / 448, 0),
+    (1.702, 0),
+    (2.5, 1),
+    (2.827, 0),
+    (1e-5, 0),
+    (1e-6, 0),
+])
+def test_float_payload_common_constant_valuation(constant, trailing_zeros):
+    bits = np.asarray([constant], dtype=np.float32).view(np.int32)
+    payload = int(_mix_f32_bits_to_payload_u32(bits)[0])
+    assert payload & -payload == 1 << trailing_zeros
 
 
 def _cast_float_payload_u64(payload, src_bitwidth: int, dst_bitwidth: int) -> np.ndarray:
@@ -399,7 +417,7 @@ def _expected_exp2_i64(x_i64: np.ndarray) -> np.ndarray:
 
 def _expected_exp_i32(x_i32: np.ndarray) -> np.ndarray:
     x = _mix_f32_bits_to_payload_u32(x_i32).astype(np.uint64)
-    rcp_log2 = np.uint64(0x236ee9bf)
+    rcp_log2 = np.uint64(0x26a29a75)
     scaled = ((x * rcp_log2) & np.uint64(0xFFFFFFFF)).astype(np.uint32)
     return _expected_exp2_i32(_unmix_payload_u32_to_f32_bits_i32(scaled))
 
@@ -3074,7 +3092,7 @@ def test_tmem_copy_scales_in_warp_specialize_partition(device, scale_shape, two_
         bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
         physical_layout: gl.constexpr = TensorMemoryLayout((TMEM_ROWS, TMEM_COLS), col_stride=1, cga_layout=cga_layout)
-        physical = tmem._reinterpret(shape=(TMEM_ROWS, TMEM_COLS), layout=physical_layout)
+        physical = tmem.reinterpret(shape=(TMEM_ROWS, TMEM_COLS), layout=physical_layout)
 
         gl.warp_specialize(
             [
@@ -3234,8 +3252,8 @@ def test_f32_loop_preserves_snan_payload(device, fresh_knobs):
     block = 128
     # The first two finite values sum to an sNaN; the zero row forces it through the next loop embed.
     input_bits = np.zeros((3, block), dtype=np.int32)
-    input_bits[0].fill(0x1B0F577C)
-    input_bits[1].fill(0x65E031B7)
+    input_bits[0].fill(0x1B0F5789)
+    input_bits[1].fill(0x4EBA6F3C)
     assert np.isfinite(input_bits.view(np.float32)).all()
     x = torch.tensor(input_bits, dtype=torch.int32, device="cuda")
     out = torch.empty((block, ), dtype=torch.int32, device="cuda")

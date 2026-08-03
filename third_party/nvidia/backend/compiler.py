@@ -468,6 +468,10 @@ class CUDABackend(BaseBackend):
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment") or 1
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
         metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
+
+        # Add Triton and LLVM versions to the dumped IR.
+        if knobs.compilation.dump_ir:
+            llvm.add_version_info(llvm_mod)
         ret = str(llvm_mod)
         del llvm_mod
         del context

@@ -187,8 +187,8 @@ struct LockAcquireOpConversion
     // Build: do { old = atom.global.acquire.cas.b32 [lock], 0, 1; } while (old
     // != 0);
     Block *prevBlock2 = b.getInsertionBlock();
-    Block *whileBlock = b.splitBlock(prevBlock2, b.getInsertionPoint());
-    Block *endBlock = b.splitBlock(whileBlock, whileBlock->begin());
+    Block *whileBlock = prevBlock2->splitBlock(b.getInsertionPoint());
+    Block *endBlock = whileBlock->splitBlock(whileBlock->begin());
     b.setInsertionPointToEnd(prevBlock2);
 
     Value elect;
@@ -389,9 +389,7 @@ computeLocalOffsetsWithLogicalOffsets(Location loc, ttg::MemDescType memDescTy,
                                       const TargetInfoBase &targetInfo) {
   MLIRContext *ctx = memDescTy.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto sharedLayout = ttg::isPaddedEncoding(memDescTy.getEncoding())
-                          ? ttg::paddedLinearLayout(memDescTy)
-                          : ttg::toLinearLayout(memDescTy);
+  auto sharedLayout = ttg::toLinearLayoutIgnoringPadding(memDescTy);
   LinearLayout invSharedLayout = sharedLayout.pseudoinvert();
   auto allDims = tt::standardOutDimNames(ctx, memDescTy.getRank());
   auto kOffset = str_attr("offset");
