@@ -1,5 +1,6 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Analysis/BufferRegion.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "llvm/Support/Signals.h"
 #include <gtest/gtest.h>
@@ -24,6 +25,29 @@ TEST(Analysis, reorder) {
     EXPECT_EQ(reordered[0], 20);
     EXPECT_EQ(reordered[1], 10);
     EXPECT_EQ(reordered[2], 30);
+  }
+}
+
+TEST(Analysis, SharedMemoryResourcesRetainParent) {
+  auto *shared = triton::gpu::SharedMemory::get();
+  MLIRContext context;
+  Block block;
+  BlockArgument value = block.addArgument(IntegerType::get(&context, 32),
+                                          UnknownLoc::get(&context));
+  for (auto *resource : {static_cast<SideEffects::Resource *>(
+                             triton::gpu::GenericSharedMemory::get()),
+                         static_cast<SideEffects::Resource *>(
+                             triton::gpu::AsyncSharedMemory::get()),
+                         static_cast<SideEffects::Resource *>(
+                             triton::gpu::BarrierSharedMemory::get())}) {
+    EXPECT_TRUE(resource->isSubresourceOf(shared));
+
+    SmallVector<MemoryEffects::EffectInstance> effects;
+    triton::gpu::addSharedMemoryEffects<MemoryEffects::Write>(effects, value,
+                                                              resource);
+    ASSERT_EQ(effects.size(), 2u);
+    EXPECT_EQ(effects[0].getResource(), shared);
+    EXPECT_EQ(effects[1].getResource(), resource);
   }
 }
 
