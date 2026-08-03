@@ -73,10 +73,8 @@ class TritonSemantic(Generic[TensorTy]):
         if a_is_scalar != b_is_scalar:
             scalar_ty, tensor_ty = (a_ty, b_ty) if a_is_scalar else (b_ty, a_ty)
             if scalar_ty.kind().value <= tensor_ty.kind().value:
-                # Upcast because of 2) below!
-                if div_or_mod and tensor_ty.is_floating():
-                    return tl.float32
-                return tensor_ty
+                # Ignore the scalar and apply the remaining promotion rules.
+                a_ty, b_ty = tensor_ty, tensor_ty
 
         # 1) if one operand is double, the other is implicitly
         #    converted to double
