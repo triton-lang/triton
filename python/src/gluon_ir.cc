@@ -1147,6 +1147,11 @@ void init_gluon_ir(py::module_ &m) {
              self.create<ttag::BufferLoadToLocalOp>(
                  dest, ptr, offsets, mask, other, stride, cacheModifier);
            })
+      .def("create_local_load_packed_transposed",
+           [](GluonOpBuilder &self, Type resultType, Value memDesc) -> Value {
+             return self.create<ttag::LocalLoadPackedTransposedOp>(resultType,
+                                                                   memDesc);
+           })
       .def("create_scaled_upcast_fp4",
            [](GluonOpBuilder &self, Value input, Value scale, Type elemType,
               int axis) -> Value {

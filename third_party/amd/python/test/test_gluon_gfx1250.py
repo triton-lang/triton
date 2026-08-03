@@ -1843,31 +1843,68 @@ def test_runtime_partitioned_tdm_load(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GROU
                              f"numPartitions={NUM_PARTITIONS}, numGroups={NUM_GROUPS}")
 
 
-_PARTITIONED_DS_LOAD_TR4_CASES = [
+_LOAD_SHARED_FP4_REPACKED_CASES = [
     pytest.param(
-        "partitioned_padded_dim0",
-        (32, 128),
-        "#ttg.blocked<{sizePerThread = [16, 2], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [0, 1]}>",
-        "#ttg.padded_shared<[512:+16] {order = [0, 1], shape = [16, 128]}>",
-        0,
-        0,
-        id="padded-dim0",
+        (128, 32),
+        ttgl.BlockedLayout([2, 16], [16, 2], [4, 1], [1, 0]),
+        ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0]),
+        ttgl.amd.AMDWMMALayout(3, False, [[0, 1], [1, 0]], [], [16, 16, 64]),
+        1,
+        id="swizzled",
     ),
     pytest.param(
-        "partitioned_swizzled_dim1",
+        (32, 128),
+        ttgl.BlockedLayout([16, 2], [2, 16], [1, 4], [0, 1]),
+        PartitionedSharedLayout(
+            2,
+            1,
+            0,
+            ttgl.PaddedSharedLayout.with_identity_for([[512, 16]], [16, 128], [0, 1]),
+        ),
+        ttgl.amd.AMDWMMALayout(3, True, [[0, 1], [1, 0]], [], [16, 16, 64]),
+        0,
+        id="partitioned-padded-dim0",
+    ),
+    pytest.param(
         (128, 32),
-        "#ttg.blocked<{sizePerThread = [2, 16], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>",
-        "#ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>",
+        ttgl.BlockedLayout([2, 16], [16, 2], [4, 1], [1, 0]),
+        PartitionedSharedLayout(2, 1, 1, ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])),
+        ttgl.amd.AMDWMMALayout(3, True, [[0, 1], [1, 0]], [], [16, 16, 64]),
         1,
-        1,
-        id="swizzled-dim1",
+        id="partitioned-swizzled-dim1",
     ),
 ]
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
-@pytest.mark.parametrize("name,src_shape,src_layout,inner_layout,partition_dim,op_idx", _PARTITIONED_DS_LOAD_TR4_CASES)
-def test_runtime_partitioned_ds_load_tr4(tmp_path, name, src_shape, src_layout, inner_layout, partition_dim, op_idx):
+@pytest.mark.parametrize("src_shape,src_layout,shared_layout,wmma_layout,op_idx", _LOAD_SHARED_FP4_REPACKED_CASES)
+def test_load_shared_fp4_repacked(src_shape, src_layout, shared_layout, wmma_layout, op_idx):
+
+    @gluon.jit
+    def kernel(
+        src_ptr,
+        dst_ptr,
+        src_rows: ttgl.constexpr,
+        src_cols: ttgl.constexpr,
+        src_layout: ttgl.constexpr,
+        shared_layout: ttgl.constexpr,
+        wmma_layout: ttgl.constexpr,
+        op_idx: ttgl.constexpr,
+    ):
+        out_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 32], [16, 2], [4, 1], [1, 0])
+        dot_layout: ttgl.constexpr = ttgl.DotOperandLayout(op_idx, wmma_layout, 16)
+
+        offs_m = ttgl.arange(0, src_rows, layout=ttgl.SliceLayout(1, src_layout))
+        offs_n = ttgl.arange(0, src_cols, layout=ttgl.SliceLayout(0, src_layout))
+        value = ttgl.load(src_ptr + offs_m[:, None] * src_cols + offs_n[None, :])
+        smem = ttgl.allocate_shared_memory(src_ptr.type.element_ty, [src_rows, src_cols], shared_layout, value)
+
+        value = ttgl.amd.gfx1250.load_shared_fp4_repacked(smem, dot_layout)
+        value = ttgl.convert_layout(value, out_layout)
+        out_m = ttgl.arange(0, 64, layout=ttgl.SliceLayout(1, out_layout))
+        out_n = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, out_layout))
+        ttgl.store(dst_ptr + out_m[:, None] * 64 + out_n[None, :], value)
+
     src = torch.randint(0, 256, src_shape, dtype=torch.uint8)
     if op_idx == 0:
         logical = torch.empty((64, 128), dtype=torch.uint8)
@@ -1880,59 +1917,10 @@ def test_runtime_partitioned_ds_load_tr4(tmp_path, name, src_shape, src_layout, 
         logical[:, 1::2] = src >> 4
         expected = logical[0::2, :] | (logical[1::2, :] << 4)
 
-    src_rows, src_cols = src_shape
-    ttgir = f"""
-#src = {src_layout}
-#out = #ttg.blocked<{{sizePerThread = [1, 32], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}}>
-#mma = #ttg.amd_wmma<{{version = 3, isTranspose = true, ctaLayout = {{warp = [[0, 1], [1, 0]]}}, instrShape = [16, 16, 64]}}>
-#inner = {inner_layout}
-#shared = #ttg.partitioned_shared<{{numPartitions = 2, numGroups = 1, partitionDim = {partition_dim}, partitionLayout = #inner}}>
-#smem = #ttg.shared_memory
-
-module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32}} {{
-  tt.func public @{name}(%src_ptr: !tt.ptr<i8> {{tt.divisibility = 16 : i32}}, %dst_ptr: !tt.ptr<i8> {{tt.divisibility = 16 : i32}}) attributes {{noinline = false}} {{
-    %src_stride_value = arith.constant {src_cols} : i32
-    %src_i = tt.make_range {{end = {src_rows} : i32, start = 0 : i32}} : tensor<{src_rows}xi32, #ttg.slice<{{dim = 1, parent = #src}}>>
-    %src_j = tt.make_range {{end = {src_cols} : i32, start = 0 : i32}} : tensor<{src_cols}xi32, #ttg.slice<{{dim = 0, parent = #src}}>>
-    %src_i_col = tt.expand_dims %src_i {{axis = 1 : i32}} : tensor<{src_rows}xi32, #ttg.slice<{{dim = 1, parent = #src}}>> -> tensor<{src_rows}x1xi32, #src>
-    %src_j_row = tt.expand_dims %src_j {{axis = 0 : i32}} : tensor<{src_cols}xi32, #ttg.slice<{{dim = 0, parent = #src}}>> -> tensor<1x{src_cols}xi32, #src>
-    %src_stride = tt.splat %src_stride_value : i32 -> tensor<{src_rows}x1xi32, #src>
-    %src_row_offset = arith.muli %src_i_col, %src_stride : tensor<{src_rows}x1xi32, #src>
-    %src_rows_broadcast = tt.broadcast %src_row_offset : tensor<{src_rows}x1xi32, #src> -> tensor<{src_rows}x{src_cols}xi32, #src>
-    %src_cols_broadcast = tt.broadcast %src_j_row : tensor<1x{src_cols}xi32, #src> -> tensor<{src_rows}x{src_cols}xi32, #src>
-    %src_offsets = arith.addi %src_rows_broadcast, %src_cols_broadcast : tensor<{src_rows}x{src_cols}xi32, #src>
-    %src_ptrs = tt.splat %src_ptr : !tt.ptr<i8> -> tensor<{src_rows}x{src_cols}x!tt.ptr<i8>, #src>
-    %src_addrs = tt.addptr %src_ptrs, %src_offsets : tensor<{src_rows}x{src_cols}x!tt.ptr<i8>, #src>, tensor<{src_rows}x{src_cols}xi32, #src>
-    %values = tt.load %src_addrs : tensor<{src_rows}x{src_cols}x!tt.ptr<i8>, #src>
-    %buffer = ttg.local_alloc %values : (tensor<{src_rows}x{src_cols}xi8, #src>) -> !ttg.memdesc<{src_rows}x{src_cols}xi8, #shared, #smem, mutable>
-    %packed = amdg.local_load_packed_transposed %buffer : !ttg.memdesc<{src_rows}x{src_cols}xi8, #shared, #smem, mutable> -> tensor<64x64xi8, #ttg.dot_op<{{opIdx = {op_idx}, parent = #mma, kWidth = 16}}>>
-    %result = ttg.convert_layout %packed : tensor<64x64xi8, #ttg.dot_op<{{opIdx = {op_idx}, parent = #mma, kWidth = 16}}>> -> tensor<64x64xi8, #out>
-
-    %dst_stride_value = arith.constant 64 : i32
-    %dst_i = tt.make_range {{end = 64 : i32, start = 0 : i32}} : tensor<64xi32, #ttg.slice<{{dim = 1, parent = #out}}>>
-    %dst_j = tt.make_range {{end = 64 : i32, start = 0 : i32}} : tensor<64xi32, #ttg.slice<{{dim = 0, parent = #out}}>>
-    %dst_i_col = tt.expand_dims %dst_i {{axis = 1 : i32}} : tensor<64xi32, #ttg.slice<{{dim = 1, parent = #out}}>> -> tensor<64x1xi32, #out>
-    %dst_j_row = tt.expand_dims %dst_j {{axis = 0 : i32}} : tensor<64xi32, #ttg.slice<{{dim = 0, parent = #out}}>> -> tensor<1x64xi32, #out>
-    %dst_stride = tt.splat %dst_stride_value : i32 -> tensor<64x1xi32, #out>
-    %dst_row_offset = arith.muli %dst_i_col, %dst_stride : tensor<64x1xi32, #out>
-    %dst_rows = tt.broadcast %dst_row_offset : tensor<64x1xi32, #out> -> tensor<64x64xi32, #out>
-    %dst_cols = tt.broadcast %dst_j_row : tensor<1x64xi32, #out> -> tensor<64x64xi32, #out>
-    %dst_offsets = arith.addi %dst_rows, %dst_cols : tensor<64x64xi32, #out>
-    %dst_ptrs = tt.splat %dst_ptr : !tt.ptr<i8> -> tensor<64x64x!tt.ptr<i8>, #out>
-    %dst_addrs = tt.addptr %dst_ptrs, %dst_offsets : tensor<64x64x!tt.ptr<i8>, #out>, tensor<64x64xi32, #out>
-    tt.store %dst_addrs, %result : tensor<64x64x!tt.ptr<i8>, #out>
-    tt.return
-  }}
-}}
-"""
-    ttgir_file = tmp_path / f"{name}.ttgir"
-    ttgir_file.write_text(ttgir)
-    kernel = triton.compile(str(ttgir_file))
-    assert "ds_load_tr4_b64" in kernel.asm["amdgcn"]
-
-    src_device = src.cuda()
     result = torch.empty((64, 64), dtype=torch.uint8, device="cuda")
-    kernel[(1, 1, 1)](src_device, result)
+    pgm = kernel[(1, )](src.cuda(), result, *src_shape, src_layout, shared_layout, wmma_layout, op_idx, num_warps=4)
+
+    assert "ds_load_tr4_b64" in pgm.asm["amdgcn"]
     torch.testing.assert_close(result.cpu(), expected, rtol=0, atol=0)
 
 
