@@ -96,6 +96,8 @@ using LinearEncodingCache = Cache<CacheKey, LinearEncodingAttr>;
 #include "triton/Dialect/TritonGPU/IR/Ops.h.inc"
 
 namespace mlir::triton::gpu {
+
+/// Memory effect resource that represents an access on shared memory.
 struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
   SharedMemory() = default;
 
@@ -106,7 +108,8 @@ protected:
   SharedMemory(TypeID id) : SideEffects::Resource::Base<SharedMemory>(id) {}
 };
 
-/// Ordinary shared-memory access, including cp.async and st.async payloads.
+/// Memory effect resource that represents an access on shared memory through
+/// the generic proxy. This includes `ttg.local_load` and `ttg.local_store`.
 struct GenericSharedMemory
     : public SideEffects::Resource::Base<GenericSharedMemory, SharedMemory> {
   StringRef getName() const override { return "<GenericSharedMemory>"; }
@@ -115,7 +118,9 @@ struct GenericSharedMemory
   }
 };
 
-/// TMA and tensor-core accesses through the NVIDIA async proxy.
+/// Memory effect resource that represents an access on shared memory through
+/// the async proxy. This typically includes asynchronous TMA and tensor core
+/// operations.
 struct AsyncSharedMemory
     : public SideEffects::Resource::Base<AsyncSharedMemory, SharedMemory> {
   StringRef getName() const override { return "<AsyncSharedMemory>"; }
@@ -124,7 +129,10 @@ struct AsyncSharedMemory
   }
 };
 
-/// Operations on an initialized barrier; barrier init/inval are generic.
+/// Memory effect resource that represents a barrier synchronization effect.
+/// Barrier synchronization reads and writes are considered atomic with respect
+/// to each other and unsynchronized with respect to other effects. This
+/// includes barrier arrive and wait operations.
 struct BarrierSharedMemory
     : public SideEffects::Resource::Base<BarrierSharedMemory, SharedMemory> {
   StringRef getName() const override { return "<BarrierSharedMemory>"; }
