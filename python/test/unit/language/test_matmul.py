@@ -751,7 +751,10 @@ def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A
     x, x_scales, x_scales_triton = generate_gemm_input(M, K, DTYPE_A)
     w, w_scales, w_scales_triton = generate_gemm_input(N, K, DTYPE_B)
 
-    torch_out = run_torch(x, w, x_scales, w_scales, torch.float32)
+    if is_compile_warmup():
+        torch_out = torch.empty((M, N), dtype=torch.float32, device=device)
+    else:
+        torch_out = run_torch(x, w, x_scales, w_scales, torch.float32)
 
     if DTYPE_A == "mxfp4":
         x = x.to_packed_tensor(dim=1)

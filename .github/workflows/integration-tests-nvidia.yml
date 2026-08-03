@@ -92,6 +92,7 @@ jobs:
       - name: Run lit tests
         run: make test-lit
       - name: Warm Triton compile cache
+        timeout-minutes: 10
         run: |
           trace_dir="$RUNNER_TEMP/triton-ci-compile-trace"
           echo "TRITON_CI_COMPILE_TRACE_DIR=$trace_dir" >> "$GITHUB_ENV"
