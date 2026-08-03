@@ -35,12 +35,19 @@ def test_mock_tensor_stride(shape):
 
 
 def test_mock_tensor_symbolic_stride():
-    from torch.fx.experimental.symbolic_shapes import ShapeEnv
 
-    size = ShapeEnv().create_unbacked_symint()
-    for shape in [(size, 4), (2, size, 4)]:
-        tensor = torch.empty(shape, device="meta")
-        assert mock_tensor_from_tensor(tensor).stride() == tensor.stride()
+    class MockSymInt:
+
+        def __sym_max__(self, other):
+            assert other == 1
+            return self
+
+        def __rmul__(self, other):
+            return ("mul", other, self)
+
+    size = MockSymInt()
+    assert MockTensor(torch.float32, (size, 4)).stride() == (4, 1)
+    assert MockTensor(torch.float32, (2, size, 4)).stride() == (("mul", 4, size), 4, 1)
 
 
 class MockJITCallable(JITCallable):
