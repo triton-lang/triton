@@ -57,7 +57,7 @@ static void registerTritonPluginPass() {
   });
 }
 
-static const char *PLUGIN_NAME = "TritonPlugin";
+static const char *PLUGIN_NAME = "triton-plugin";
 static const char *PASS_NAME = "plugin";
 static const char *VERSION = "0.1.0";
 
