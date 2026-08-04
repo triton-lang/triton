@@ -451,23 +451,18 @@ void extendXorSpan(uint32_t &span, uint32_t basis, int numCTAs) {
   }
 }
 
-LinearLayout getSharedLayout(ttg::MemDescType memDescTy) {
-  return ttg::isPaddedEncoding(memDescTy.getEncoding())
-             ? ttg::paddedLinearLayout(memDescTy)
-             : ttg::toLinearLayout(memDescTy);
-}
-
 LinearLayout getLocalLoadStoreConversion(ttg::MemDescType memDescTy,
                                          RankedTensorType regTy) {
-  return invertAndComposeBlockLocal(getSharedLayout(memDescTy),
-                                    ttg::toLinearLayout(regTy));
+  return invertAndComposeBlockLocal(
+      ttg::toLinearLayoutIgnoringPadding(memDescTy),
+      ttg::toLinearLayout(regTy));
 }
 
 LinearLayout getLocalGatherScatterConversion(ttg::MemDescType memDescTy,
                                              RankedTensorType regTy,
                                              unsigned axis) {
   MLIRContext *ctx = memDescTy.getContext();
-  LinearLayout sharedLayout = getSharedLayout(memDescTy);
+  LinearLayout sharedLayout = ttg::toLinearLayoutIgnoringPadding(memDescTy);
   SmallVector<StringAttr> allDims =
       standardOutDimNames(ctx, memDescTy.getRank());
   StringAttr axisDim = allDims[axis];
@@ -951,16 +946,11 @@ private:
     wb.setInsertionPointAfter(op);
     tti::ExperimentalLockAcquireOp::create(wb, lock, pred);
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
-      funcBuilder.createTransferVisibleWritesCall(
-          wb, alloc, getThreadPeersMask(thread, auxData.threadLayout), pred,
-          memType, op);
-      funcBuilder.createTransferVisibleReadsCall(
+      funcBuilder.createTransferVisibleAccessesCall(
           wb, alloc, getThreadPeersMask(thread, auxData.threadLayout), pred,
           memType, op);
     }
-    funcBuilder.createTransferProxyAccessesCall(wb, alloc, baseThread, pred,
-                                                op);
-    funcBuilder.createClearWaitingCall(wb, alloc, baseThread, pred, op);
+    funcBuilder.createCompleteBarrierWaitCall(wb, alloc, baseThread, pred, op);
     tti::ExperimentalLockReleaseOp::create(wb, lock, pred);
   }
 
@@ -1048,15 +1038,9 @@ private:
         addReadChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
                       effect.operandName, effectCTAs, opInfo->commitKind);
         if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
-          funcBuilder.createSetWriteVisibilityCall(
+          funcBuilder.createPublishWriteVisibilityCall(
               b, bufferMask, getThreadPeersMask(thread, auxData.threadLayout),
               pred, memType, op, effectCTAs);
-          funcBuilder.createClearWriteTrackingCall(b, bufferMask, pred, memType,
-                                                   op, effectCTAs);
-          funcBuilder.createClearReadVisibilityCall(b, bufferMask, pred,
-                                                    memType, op, effectCTAs);
-          funcBuilder.createClearReadTrackingCall(b, bufferMask, pred, memType,
-                                                  op, effectCTAs);
         }
         if (opInfo->trackingKind ==
             MemEffectsOpInfo::TrackingKind::CommitCount) {
@@ -1070,16 +1054,15 @@ private:
       Value barrier = barrierInfo.barrier;
       Value combinedPred = tti::maybeAnd(b, barrierInfo.pred, pred);
       Value recipientCTAs = getBarrierRecipientCTAs(b, op);
-      funcBuilder.createVerifyBarrierInitializedCall(b, barrier, combinedPred,
-                                                     op, recipientCTAs);
+      if (barrierInfo.count == 0 && barrierInfo.txCount == 0)
+        funcBuilder.createVerifyBarrierInitializedCall(b, barrier, combinedPred,
+                                                       op, recipientCTAs);
       if (barrierInfo.trackingMode ==
           MemEffectsOpInfo::BarrierTrackingMode::Frontier) {
         // If the op has barriers, we treat it as a commit emitted for each
         // barrier.
         for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
-          funcBuilder.createTrackVisibleWritesCall(
-              b, barrier, thread, combinedPred, memType, op, recipientCTAs);
-          funcBuilder.createTrackVisibleReadsCall(
+          funcBuilder.createTrackVisibleAccessesCall(
               b, barrier, thread, combinedPred, memType, op, recipientCTAs);
         }
         funcBuilder.createTrackProxyAccessesCall(
@@ -1102,10 +1085,7 @@ private:
         }
       }
       if (barrierInfo.count > 0 || barrierInfo.txCount != 0) {
-        funcBuilder.createVerifyBarrierArriveCall(
-            b, barrier, barrierInfo.count, combinedPred, op, recipientCTAs,
-            barrierInfo.txCount);
-        funcBuilder.createUpdateBarrierStateCall(
+        funcBuilder.createVerifyAndUpdateBarrierStateCall(
             b, barrier, barrierInfo.count, combinedPred, op, recipientCTAs,
             barrierInfo.txCount);
       }

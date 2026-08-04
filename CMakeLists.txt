@@ -8,7 +8,6 @@ endif()
 
 project(triton CXX C)
 include(CTest)
-include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
@@ -20,6 +19,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" ON)
+option(TRITON_STABLE_ABI "Build with Python Stable ABI (abi3) for Python 3.12+" OFF)
 option(TRITON_BUILD_UT "Build C++ Triton Unit Tests" ON)
 option(TRITON_BUILD_WITH_CCACHE "Build with ccache (if available)" ON)
 option(TRITON_OFFLINE_BUILD "Build without downloading dependencies" OFF)
@@ -330,6 +330,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   find_package(nanobind CONFIG REQUIRED HINTS "${Python3_SITELIB}")
   nanobind_build_library(nanobind-static)
+  if(TRITON_STABLE_ABI)
+    target_compile_definitions(nanobind-static PUBLIC Py_LIMITED_API=0x030C0000)
+  endif()
   target_link_libraries(nanobind-static PRIVATE Python3::Module)
 
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
@@ -416,6 +419,10 @@ if(TRITON_BUILD_PYTHON_MODULE)
                   ${PYTHON_SRC_PATH}/llvm.cc
                   ${PYTHON_SRC_PATH}/specialize.cc)
 
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(triton PRIVATE -Wno-array-bounds)
+  endif()
+
   # Link triton with its dependencies
   target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})
 
@@ -449,12 +456,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     file(GENERATE OUTPUT "${TRITON_EXPORT_SYMBOLS_FILE}"
       CONTENT "${TRITON_EXPORT_SYMBOLS_FILE_CONTENT}")
   endif()
-
-  install(TARGETS triton
-    COMPONENT libraries
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  )
 
   if (NOT DEFINED LLVM_SYSPATH)
       message(FATAL_ERROR "LLVM_SYSPATH must be set.")
@@ -530,24 +531,3 @@ if(TRITON_BUILD_UT)
     USES_TERMINAL
   )
 endif()
-
-################################################################################
-# Header installation
-################################################################################
-
-install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
-  COMPONENT headers
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-  FILES_MATCHING PATTERN "*.h")
-install(DIRECTORY ${PROJECT_BINARY_DIR}/include/
-  COMPONENT headers
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-  FILES_MATCHING PATTERN "*.h" PATTERN "*.h.inc")
-install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
-  COMPONENT headers
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-  FILES_MATCHING PATTERN "*.td")
-install(DIRECTORY ${PROJECT_SOURCE_DIR}/python/
-  COMPONENT headers
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/python
-  FILES_MATCHING PATTERN "*.h")
