@@ -1,8 +1,10 @@
 import pytest
 import torch
+import triton
 import triton.profiler as proton
 from triton.testing import cuda_graph_without_gc
 from triton_kernels.topk import topk, topk_torch
+from triton_kernels.topk_details._topk_forward import _topk_forward
 from triton_kernels.testing import assert_equal, assert_close
 from triton_kernels.distributed import SymmetricMemoryPool
 import torch.distributed as dist
@@ -26,6 +28,60 @@ def test_topk(n_rows, n_cols, k, apply_softmax, dtype):
     assert_equal(sparse_x_tri.mask.storage.data, sparse_x_ref.mask.storage.data)
     assert sparse_x_tri.mask.storage.data.stride() == sparse_x_ref.mask.storage.data.stride()
     assert sparse_x_tri.mask.storage.data.shape == sparse_x_ref.mask.storage.data.shape
+
+
+def test_topk_layout_optimization_preserves_bitonic_network():
+    torch.manual_seed(0)
+    n_rows, n_cols, k = 16_346, 128, 4
+    logits = torch.randn((n_rows, n_cols), dtype=torch.float32, device="cuda")
+    reference = topk_torch(logits, k, apply_softmax=True)
+    compiled_kernels = []
+
+    for optimize_layouts in (False, True):
+        values = torch.empty((n_rows, k), dtype=torch.float32, device="cuda")
+        indices = torch.empty((n_rows, k), dtype=torch.int16, device="cuda")
+        bit_words = torch.empty(
+            (triton.cdiv(n_cols, 32), triton.cdiv(n_rows, 32) * 32),
+            dtype=torch.uint32,
+            device="cuda",
+        )
+        bitmatrix = bit_words.transpose(0, 1)[:n_rows]
+
+        compiled = _topk_forward[(triton.cdiv(n_rows, 32), )](
+            logits,
+            logits.stride(0),
+            (values, ),
+            (indices, ),
+            values.stride(0),
+            False,
+            (bit_words, ),
+            bitmatrix.stride(0),
+            bitmatrix.stride(1),
+            n_rows,
+            n_cols,
+            0,
+            BLOCK_M=32,
+            BLOCK_N=32,
+            APPLY_SOFTMAX=True,
+            N_EXPTS_PAD=128,
+            N_EXPTS_ACT=k,
+            optimize_layouts=optimize_layouts,
+        )
+
+        torch.testing.assert_close(values, reference.vals)
+        torch.testing.assert_close(indices.to(torch.int32), reference.indx)
+        torch.testing.assert_close(bitmatrix, reference.mask.storage.data)
+        assert compiled.metadata.optimize_layouts is optimize_layouts
+        compiled_kernels.append(compiled)
+
+    incumbent, optimized = compiled_kernels
+    assert optimized.asm["ttir"] == incumbent.asm["ttir"]
+    assert optimized.asm["ttgir"].count('"tt.reduce"') <= incumbent.asm["ttgir"].count('"tt.reduce"')
+    assert optimized.asm["ttgir"].count("ttg.convert_layout") <= 2 * incumbent.asm["ttgir"].count("ttg.convert_layout")
+    assert optimized.metadata.shared <= incumbent.metadata.shared
+    assert len(optimized.asm["ptx"]) <= 2 * len(incumbent.asm["ptx"])
+    for instruction in ("bar.sync", "shfl.sync", "st.shared", "ld.shared"):
+        assert optimized.asm["ptx"].count(instruction) <= incumbent.asm["ptx"].count(instruction)
 
 
 @pytest.mark.parametrize("n_experts", [13, 33])

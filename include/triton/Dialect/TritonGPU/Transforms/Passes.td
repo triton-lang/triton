@@ -145,6 +145,11 @@ def TritonGPUOptimizePartitionWarps : Pass<"tritongpu-optimize-partition-warps",
     of `ttg.warp_specialize` ops and attempts to reduce the number of warps
     assigned to them and optimize the register usage of the partitions.
   }];
+
+  let options = [
+    Option<"optimizeLayouts", "optimize-layouts", "bool", /*default*/"false",
+           "use the global layout optimizer when reassigning partition layouts">
+  ];
 }
 
 def TritonGPUPartitionScheduling : Pass<"tritongpu-partition-scheduling", "mlir::ModuleOp"> {
@@ -256,6 +261,31 @@ def TritonGPURemoveLayoutConversions : Pass<"tritongpu-remove-layout-conversions
     `BlockedEncodingAttr` layout for "expensive" loads and stores
     (good for coalescing) and `NvidiaMmaEncodingAttr` otherwise
     (good for tensor ops).
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+
+  let options = [
+    Option<"disableRematSplitting", "disable-remat-splitting",
+           "bool", /*default*/"false",
+           "prevent rematerialization from splitting or duplicating "
+           "convert-layout work">
+  ];
+}
+
+def TritonGPUOptimizeLayouts : Pass<"tritongpu-optimize-layouts", "mlir::ModuleOp"> {
+  let summary = "optimize distributed layouts and layout conversion placement";
+
+  let description = [{
+    Optimize distributed tensor layouts while preserving the layout constraints
+    of function boundaries, loads, stores, and matrix operations. The pass
+    independently propagates layout constraints in both directions and uses
+    physical conversion costs to resolve supported producer/consumer graphs.
+    It preserves the established structured-control-flow assignment, shares
+    dominating layout conversions, and rematerializes bounded, scalar-rooted,
+    side-effect-free tensor graphs in their required layouts.
+    Exact-order reshapes retain their original ordering semantics.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",

@@ -134,6 +134,7 @@ class CUDAOptions:
     arch: str = None
     instrumentation_mode: str = ""
     fpsan_homomorphic_casts: bool = False
+    optimize_layouts: bool = False
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -212,6 +213,9 @@ class CUDABackend(BaseBackend):
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
 
+        if "optimize_layouts" not in opts:
+            args["optimize_layouts"] = knobs.compilation.optimize_layouts
+
         args["max_num_imprecise_acc_default"] = 2**30 if capability == 90 else 0
 
         return CUDAOptions(**args)
@@ -266,6 +270,8 @@ class CUDABackend(BaseBackend):
 
         pm = ir.pass_manager(mod.context)
         dump_enabled = pm.enable_debug()
+        layout_optimization = (passes.ttgpuir.add_optimize_layouts
+                               if opt.optimize_layouts else passes.ttgpuir.add_remove_layout_conversions)
         emuTF32 = (capability // 10 >= 8)
         passes.ttir.add_convert_to_ttgpuir(pm, f"cuda:{capability}", opt.num_warps, 32, opt.num_ctas)
         # optimize TTGIR
@@ -273,10 +279,10 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_f32_dot_tc(pm, emuTF32)
         # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
         nvidia.passes.ttnvgpuir.add_plan_cta(pm)
-        passes.ttgpuir.add_remove_layout_conversions(pm)
+        layout_optimization(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         passes.ttgpuir.add_accelerate_matmul(pm)
-        passes.ttgpuir.add_remove_layout_conversions(pm)
+        layout_optimization(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         nvidia.passes.ttnvgpuir.add_optimize_descriptor_encoding(pm)
         passes.ttir.add_loop_aware_cse(pm)
@@ -301,7 +307,7 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_schedule_loops(pm)
             passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
-            passes.ttgpuir.add_optimize_partition_warps(pm)
+            passes.ttgpuir.add_optimize_partition_warps(pm, opt.optimize_layouts)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
             # hoist again and allow hoisting out of if statements
             passes.ttgpuir.add_hoist_tmem_alloc(pm, True)
@@ -318,7 +324,7 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttnvgpuir.add_tmem_load_reduce(pm)
         if capability // 10 >= 9:
             nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
-        passes.ttgpuir.add_remove_layout_conversions(pm)
+        layout_optimization(pm)
         nvidia.passes.ttnvgpuir.add_interleave_tmem(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
@@ -331,7 +337,7 @@ class CUDABackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         if "fpsan" in opt.instrumentation_mode:
             passes.ttgpuir.add_fp_sanitizer(pm, opt.fpsan_homomorphic_casts)
-            passes.ttgpuir.add_remove_layout_conversions(pm, True)
+            layout_optimization(pm, True)
             passes.common.add_canonicalizer(pm)
             passes.common.add_cse(pm)
 
@@ -357,7 +363,10 @@ class CUDABackend(BaseBackend):
         if "fpsan" in options.instrumentation_mode:
             passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
         if any(mode in options.instrumentation_mode for mode in ["consan", "fpsan"]):
-            passes.ttgpuir.add_remove_layout_conversions(pm, True)
+            if options.optimize_layouts:
+                passes.ttgpuir.add_optimize_layouts(pm, True)
+            else:
+                passes.ttgpuir.add_remove_layout_conversions(pm, True)
             passes.common.add_canonicalizer(pm)
             passes.common.add_cse(pm)
 

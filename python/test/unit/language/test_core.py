@@ -7303,3 +7303,296 @@ def test_libdevice_rint(dtype_str, device):
     rint_kernel[(triton.cdiv(numel, BLOCK_SIZE), )](res_out, x_tri, numel, BLOCK_SIZE)
     ref_out = np.rint(x_np)
     np.testing.assert_allclose(to_numpy(res_out), ref_out, rtol=0, atol=0, equal_nan=True)
+
+
+@triton.jit
+def _optimize_layouts_loop_carried_kernel(out_ptr, in_ptr, iterations, BLOCK_SIZE: tl.constexpr):
+    offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    accumulator = tl.load(in_ptr + offsets)
+    for _ in range(iterations):
+        accumulator += offsets
+    tl.store(out_ptr + offsets, accumulator)
+
+
+@pytest.mark.parametrize("optimize_layouts", [False, True])
+@pytest.mark.parametrize("iterations", [0, 1, 4, 17])
+def test_optimize_layouts_loop_carried_values(device, optimize_layouts, iterations):
+    check_cuda_or_hip(device)
+
+    source = torch.arange(512, device=device, dtype=torch.int32)
+    result = torch.empty_like(source)
+    compiled = _optimize_layouts_loop_carried_kernel[(4, )](
+        result, source, iterations, BLOCK_SIZE=128, num_warps=4,
+        optimize_layouts=optimize_layouts,
+    )
+
+    torch.testing.assert_close(result, source + source * iterations, rtol=0, atol=0)
+    assert compiled.metadata.optimize_layouts is optimize_layouts
+
+
+@triton.jit
+def _optimize_layouts_while_carried_kernel(out_ptr, in_ptr, iterations, BLOCK_SIZE: tl.constexpr):
+    offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    accumulator = tl.load(in_ptr + offsets)
+    iteration = 0
+    while iteration < iterations:
+        accumulator += offsets
+        iteration += 1
+    tl.store(out_ptr + offsets, accumulator)
+
+
+@pytest.mark.parametrize("optimize_layouts", [False, True])
+@pytest.mark.parametrize("iterations", [0, 1, 4, 17])
+def test_optimize_layouts_while_carried_values(device, optimize_layouts, iterations):
+    check_cuda_or_hip(device)
+
+    source = torch.arange(512, device=device, dtype=torch.int32)
+    result = torch.empty_like(source)
+    compiled = _optimize_layouts_while_carried_kernel[(4, )](
+        result, source, iterations, BLOCK_SIZE=128, num_warps=4,
+        optimize_layouts=optimize_layouts,
+    )
+
+    torch.testing.assert_close(result, source + source * iterations, rtol=0, atol=0)
+    assert compiled.metadata.optimize_layouts is optimize_layouts
+
+
+@triton.jit
+def _optimize_layouts_effectful_loop_kernel(out_ptr, scratch_ptr, in_ptr, iterations, USE_WHILE: tl.constexpr,
+                                             BLOCK_SIZE: tl.constexpr):
+    offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    accumulator = tl.load(in_ptr + offsets)
+    if USE_WHILE:
+        iteration = 0
+        while iteration < iterations:
+            accumulator += offsets
+            tl.store(scratch_ptr + offsets, accumulator)
+            iteration += 1
+    else:
+        for _ in range(iterations):
+            accumulator += offsets
+            tl.store(scratch_ptr + offsets, accumulator)
+    tl.store(out_ptr + offsets, accumulator)
+
+
+@pytest.mark.parametrize("optimize_layouts", [False, True])
+@pytest.mark.parametrize("use_while", [False, True])
+@pytest.mark.parametrize("iterations", [0, 1, 4, 17])
+def test_optimize_layouts_effectful_loop_boundaries(device, optimize_layouts, use_while, iterations):
+    check_cuda_or_hip(device)
+
+    source = torch.arange(512, device=device, dtype=torch.int32)
+    result = torch.empty_like(source)
+    scratch = torch.full_like(source, -1)
+    compiled = _optimize_layouts_effectful_loop_kernel[(4,)](
+        result, scratch, source, iterations, USE_WHILE=use_while,
+        BLOCK_SIZE=128, num_warps=4, optimize_layouts=optimize_layouts,
+    )
+
+    expected = source + source * iterations
+    torch.testing.assert_close(result, expected, rtol=0, atol=0)
+    if iterations:
+        torch.testing.assert_close(scratch, expected, rtol=0, atol=0)
+    else:
+        torch.testing.assert_close(scratch, torch.full_like(source, -1), rtol=0, atol=0)
+    assert compiled.metadata.optimize_layouts is optimize_layouts
+
+
+@triton.jit
+def _optimize_layouts_split_kernel(left_ptr, right_ptr, in_ptr, BLOCK_SIZE: tl.constexpr):
+    offsets = tl.arange(0, BLOCK_SIZE)
+    values = tl.load(in_ptr + offsets)
+    pairs = tl.reshape(values, (BLOCK_SIZE // 2, 2), can_reorder=False)
+    left, right = tl.split(pairs)
+    result_offsets = tl.arange(0, BLOCK_SIZE // 2)
+    tl.store(left_ptr + result_offsets, left + 3 * right)
+    tl.store(right_ptr + result_offsets, right - left)
+
+
+@pytest.mark.parametrize("optimize_layouts", [False, True])
+def test_optimize_layouts_coupled_split_results(device, optimize_layouts):
+    check_cuda_or_hip(device)
+
+    source = torch.arange(256, device=device, dtype=torch.int32)
+    left = torch.empty((128,), device=device, dtype=torch.int32)
+    right = torch.empty_like(left)
+    compiled = _optimize_layouts_split_kernel[(1,)](
+        left, right, source, BLOCK_SIZE=256, num_warps=4,
+        optimize_layouts=optimize_layouts,
+    )
+
+    torch.testing.assert_close(left, source[::2] + 3 * source[1::2], rtol=0, atol=0)
+    torch.testing.assert_close(right, source[1::2] - source[::2], rtol=0, atol=0)
+    assert compiled.metadata.optimize_layouts is optimize_layouts
+
+
+@triton.jit
+def _optimize_layouts_argmax_kernel(value_ptr, index_ptr, in_ptr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+    rows = tl.arange(0, BLOCK_M)
+    columns = tl.arange(0, BLOCK_N)
+    offsets = rows[:, None] * BLOCK_N + columns[None, :]
+    values = tl.load(in_ptr + offsets)
+    maximum, indices = tl.max(values, axis=1, return_indices=True)
+    tl.store(value_ptr + rows, maximum)
+    tl.store(index_ptr + rows, indices)
+
+
+@pytest.mark.parametrize("optimize_layouts", [False, True])
+def test_optimize_layouts_coupled_reduction_results(device, optimize_layouts):
+    check_cuda_or_hip(device)
+
+    source = (torch.arange(512, device=device, dtype=torch.int32) * 7 % 19).reshape(16, 32)
+    maxima = torch.empty((16,), device=device, dtype=torch.int32)
+    indices = torch.empty_like(maxima)
+    compiled = _optimize_layouts_argmax_kernel[(1,)](
+        maxima, indices, source, BLOCK_M=16, BLOCK_N=32, num_warps=4,
+        optimize_layouts=optimize_layouts,
+    )
+
+    expected_maxima, expected_indices = torch.max(source, dim=1)
+    torch.testing.assert_close(maxima, expected_maxima, rtol=0, atol=0)
+    torch.testing.assert_close(indices, expected_indices.to(torch.int32), rtol=0, atol=0)
+    assert compiled.metadata.optimize_layouts is optimize_layouts
+
+
+@triton.jit
+def _optimize_layouts_tmem_softmax_kernel(out_ptr, lhs_ptr, rhs_ptr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+                                           BLOCK_K: tl.constexpr):
+    rows = tl.arange(0, BLOCK_M)
+    columns = tl.arange(0, BLOCK_N)
+    contraction = tl.arange(0, BLOCK_K)
+    lhs = tl.load(lhs_ptr + rows[:, None] * BLOCK_K + contraction[None, :])
+    rhs = tl.load(rhs_ptr + contraction[:, None] * BLOCK_N + columns[None, :])
+    accumulator = tl.dot(lhs, rhs, out_dtype=tl.float32)
+    accumulator -= tl.max(accumulator, axis=1)[:, None]
+    numerator = tl.exp(accumulator)
+    probabilities = numerator / tl.sum(numerator, axis=1)[:, None]
+    offsets = rows[:, None] * BLOCK_N + columns[None, :]
+    tl.store(out_ptr + offsets, probabilities.to(tl.float16))
+
+
+@pytest.mark.parametrize("optimize_layouts", [False, True])
+def test_optimize_layouts_tmem_softmax_codegen(device, optimize_layouts):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] != 10:
+        pytest.skip("requires Blackwell tensor-memory dot instructions")
+
+    lhs = torch.randn((128, 64), device=device, dtype=torch.float16) * 0.1
+    rhs = torch.randn((64, 128), device=device, dtype=torch.float16) * 0.1
+    result = torch.empty((128, 128), device=device, dtype=torch.float16)
+    compiled = _optimize_layouts_tmem_softmax_kernel[(1, )](
+        result, lhs, rhs, BLOCK_M=128, BLOCK_N=128, BLOCK_K=64, num_warps=8,
+        optimize_layouts=optimize_layouts,
+    )
+
+    expected = torch.softmax(lhs.float() @ rhs.float(), dim=1).half()
+    torch.testing.assert_close(result, expected, rtol=1e-2, atol=2e-3)
+    assert compiled.metadata.optimize_layouts is optimize_layouts
+    pattern = (r"tcgen05\.ld\.sync\.aligned\.16x32bx2\.x64\.b32"
+               r"(?:(?!st\.shared).)*"
+               r"cvt\.rn\.f16x2\.f32")
+    assert re.search(pattern, compiled.asm["ptx"], flags=re.DOTALL)
+
+
+@triton.jit
+def _optimize_layouts_exact_order_join_chain_kernel(out_ptr, a0, a1, x0, x1, INDEXED: tl.constexpr):
+    va0 = tl.full((128, ), a0, tl.int32)
+    va1 = tl.full((128, ), a1, tl.int32)
+    vx0 = tl.full((128, ), x0, tl.int32)
+    vx1 = tl.full((128, ), x1, tl.int32)
+
+    if INDEXED:
+        source_indices = tl.arange(0, 128)
+        va0 = va0 ^ source_indices
+        va1 = va1 + source_indices
+        vx0 = vx0 ^ source_indices
+        vx1 = vx1 ^ source_indices
+
+    pair_a = tl.join(tl.reshape(va0, (1, 128)), tl.reshape(va1, (1, 128)))
+    pair_x0 = tl.join(tl.reshape(vx0, (1, 128)), tl.reshape(vx0, (1, 128)))
+    xor_256 = tl.reshape(pair_a, (256, )) ^ tl.reshape(pair_x0, (256, ))
+
+    chain_512 = tl.join(tl.reshape(pair_a, (1, 256)), tl.reshape(xor_256, (1, 256)))
+    pair_x1 = tl.join(tl.reshape(vx1, (1, 128)), tl.reshape(vx1, (1, 128)))
+    repeat_x1 = tl.join(tl.reshape(pair_x1, (1, 256)), tl.reshape(pair_x1, (1, 256)))
+    xor_512 = tl.reshape(chain_512, (512, )) ^ tl.reshape(repeat_x1, (512, ))
+
+    chain_1024 = tl.join(tl.reshape(chain_512, (1, 512)), tl.reshape(xor_512, (1, 512)))
+    repeat_a = tl.join(tl.reshape(va0, (1, 128)), tl.reshape(va0, (1, 128)))
+    repeat_a = tl.join(tl.reshape(repeat_a, (1, 256)), tl.reshape(repeat_a, (1, 256)))
+    repeat_a = tl.join(tl.reshape(repeat_a, (1, 512)), tl.reshape(repeat_a, (1, 512)))
+    xor_1024 = tl.reshape(chain_1024, (1024, )) ^ tl.reshape(repeat_a, (1024, ))
+
+    result = tl.join(tl.reshape(chain_1024, (1, 1024)), tl.reshape(xor_1024, (1, 1024)))
+    offsets = tl.program_id(0) * 2048 + tl.arange(0, 2048)
+    tl.store(out_ptr + offsets, tl.reshape(result, (2048, )))
+
+
+@pytest.mark.parametrize("optimize_layouts", [False, True])
+@pytest.mark.parametrize("indexed", [False, True])
+@pytest.mark.parametrize(
+    "values",
+    [
+        (17, 23, 41, 73),
+        (-17, 23, -41, 73),
+        (0, -1, 0x13579BDF, -0x13579BDF),
+        (0x7FFFFFFF, -0x7FFFFFFF, 0x12345678, -0x12345678),
+    ],
+)
+def test_optimize_layouts_exact_order_join_chain(device, optimize_layouts, indexed, values):
+    check_cuda_or_hip(device)
+
+    result = torch.empty((2048, ), device=device, dtype=torch.int32)
+    compiled = _optimize_layouts_exact_order_join_chain_kernel[(1, )](result, *values, INDEXED=indexed, num_warps=4,
+                                                                      optimize_layouts=optimize_layouts)
+
+    indices = torch.arange(2048, device=device, dtype=torch.int32)
+    source_indices = indices >> 4
+    va0 = torch.full_like(indices, values[0])
+    va1 = torch.full_like(indices, values[1])
+    vx0 = torch.full_like(indices, values[2])
+    vx1 = torch.full_like(indices, values[3])
+    if indexed:
+        va0 = va0 ^ source_indices
+        va1 = va1 + source_indices
+        vx0 = vx0 ^ source_indices
+        vx1 = vx1 ^ source_indices
+
+    a = torch.where((indices & 8) != 0, va1, va0)
+    first = a ^ vx0
+    second = torch.where((indices & 4) != 0, first, a)
+    third = torch.where((indices & 2) != 0, second ^ vx1, second)
+    expected = torch.where((indices & 1) != 0, third ^ va0, third)
+
+    torch.testing.assert_close(result, expected, rtol=0, atol=0)
+    assert compiled.metadata.optimize_layouts is optimize_layouts
+    if optimize_layouts:
+        assert "ttg.convert_layout" not in compiled.asm["ttgir"]
+
+
+def test_optimize_layouts_knob_selects_distinct_jit_kernel(device):
+    check_cuda_or_hip(device)
+    values = (17, 23, 41, 73)
+    baseline_output = torch.empty((2048, ), device=device, dtype=torch.int32)
+    optimized_output = torch.empty_like(baseline_output)
+    override_output = torch.empty_like(baseline_output)
+
+    with triton.knobs.compilation.scope():
+        triton.knobs.compilation.optimize_layouts = False
+        baseline = _optimize_layouts_exact_order_join_chain_kernel[(1, )](baseline_output, *values, INDEXED=True,
+                                                                          num_warps=4)
+
+        triton.knobs.compilation.optimize_layouts = True
+        optimized = _optimize_layouts_exact_order_join_chain_kernel[(1, )](optimized_output, *values, INDEXED=True,
+                                                                           num_warps=4)
+        explicit_override = _optimize_layouts_exact_order_join_chain_kernel[(1, )](override_output, *values,
+                                                                                   INDEXED=True, num_warps=4,
+                                                                                   optimize_layouts=False)
+
+    assert baseline.metadata.optimize_layouts is False
+    assert optimized.metadata.optimize_layouts is True
+    assert explicit_override.metadata.optimize_layouts is False
+    assert baseline.hash != optimized.hash
+    assert explicit_override.hash != optimized.hash
+    assert "ttg.convert_layout" not in optimized.asm["ttgir"]
+    torch.testing.assert_close(optimized_output, baseline_output, rtol=0, atol=0)
+    torch.testing.assert_close(override_output, baseline_output, rtol=0, atol=0)

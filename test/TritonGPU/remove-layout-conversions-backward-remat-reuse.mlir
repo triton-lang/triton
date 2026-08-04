@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -tritongpu-remove-layout-conversions | FileCheck %s
+// RUN: triton-opt %s -tritongpu-optimize-layouts | FileCheck %s
 
 // CHECK-LABEL: @backward_remat_reuse
 // CHECK-COUNT-2: tt.broadcast

@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -tritongpu-remove-layout-conversions | FileCheck %s
+// RUN: triton-opt %s -tritongpu-optimize-layouts | FileCheck %s
 
 // Regression test for pytorch/pytorch#180908: long chains of scf.if results
 // that the cleanup phase of -tritongpu-remove-layout-conversions cannot

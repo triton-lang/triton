@@ -85,7 +85,8 @@ static void extractPartitionBody(OwningOpRef<ModuleOp> container,
 // Reset the layouts of operations in a region and re-run layout assignment.
 static LogicalResult relayoutWarps(ModuleAxisInfoAnalysis &axisInfo,
                                    Region *partition, int prevNumWarps,
-                                   int newNumWarps, RunPipelineFn runPipeline) {
+                                   int newNumWarps, bool optimizeLayouts,
+                                   RunPipelineFn runPipeline) {
   OwningOpRef<ModuleOp> container =
       takeIntoFunction(axisInfo, partition, prevNumWarps);
 
@@ -124,11 +125,15 @@ static LogicalResult relayoutWarps(ModuleAxisInfoAnalysis &axisInfo,
   });
 
   pm.clear();
+  auto addLayoutOptimization = [&] {
+    pm.addPass(optimizeLayouts ? createTritonGPUOptimizeLayouts()
+                               : createTritonGPURemoveLayoutConversions());
+  };
   pm.addPass(createTritonGPUCoalesce());
-  pm.addPass(createTritonGPURemoveLayoutConversions());
+  addLayoutOptimization();
   pm.addPass(createTritonGPUOptimizeThreadLocality());
   pm.addPass(createTritonGPUAccelerateMatmul());
-  pm.addPass(createTritonGPURemoveLayoutConversions());
+  addLayoutOptimization();
   if (failed(runPipeline(pm, *container)))
     return failure();
 
@@ -152,6 +157,7 @@ static unsigned getTensorNumI32Regs(RankedTensorType ty) {
 
 static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
                                                WarpSpecializeOp wsOp,
+                                               bool optimizeLayouts,
                                                RunPipelineFn runPipeline) {
   // Extremely rough estimate of the number of registers needed per partition.
   // For each partition, get the number of i32 registers used by the largest
@@ -266,7 +272,7 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
       continue;
     // We need to reassign layouts.
     if (failed(relayoutWarps(axisInfo, partition, prevNumWarps, newNumWarps,
-                             runPipeline)))
+                             optimizeLayouts, runPipeline)))
       return failure();
   }
   wsOp.setRequestedRegisters(estRegUsage);
@@ -312,7 +318,8 @@ void OptimizePartitionWarps::runOnOperation() {
   };
 
   for (auto wsOp : wsOps) {
-    if (failed(optimizePartitionNumWarps(axisInfo, wsOp, runPipelineFn))) {
+    if (failed(optimizePartitionNumWarps(axisInfo, wsOp, optimizeLayouts,
+                                         runPipelineFn))) {
       return signalPassFailure();
     }
   }
