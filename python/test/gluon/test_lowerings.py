@@ -5,7 +5,7 @@ import pytest
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton._internal_testing import is_blackwell, is_compile_warmup, is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
+from triton._internal_testing import assert_close, is_blackwell, is_compile_warmup, is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
 from triton._C.libtriton.gluon_ir import make_cga_layout
 from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
 from triton.experimental.gluon.language.nvidia.blackwell import TensorMemoryLayout, allocate_tensor_memory
@@ -951,8 +951,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, saniti
     z_ref = reduce_fn(x, dim=axis, keepdim=True)
     if epilogue_kind in ("expand_reduce2d", "reduce2d"):
         z_ref = reduce_fn(z_ref, dim=1 - axis, keepdim=True)
-    if not is_compile_warmup():
-        torch.testing.assert_close(z, z_ref.to(torch_dtype))
+    assert_close(z, z_ref.to(torch_dtype))
 
 
 @pytest.mark.parametrize("M", [32, 64, 128, 256])
@@ -1062,8 +1061,7 @@ def test_convert1d_layouts(M, src_layout, dst_layout, src_dim, dst_dim, is_bool,
     x = x.to(torch.bool) if is_bool else x
     y = torch.zeros((M, ), dtype=torch.int32, device=device)
     kernel[(1, )](x, y, M, src_layout, dst_layout, src_dim, dst_dim, num_warps=4)
-    if not is_compile_warmup():
-        torch.testing.assert_close(y, x.to(torch.int32))
+    assert_close(y, x.to(torch.int32))
 
 
 _2d_layouts = _filter_layouts([
@@ -1227,11 +1225,8 @@ def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layo
     x = torch.randn((M, N), dtype=torch_dtype, device=device)
     y = torch.zeros_like(x)
     compiled = kernel[(1, )](x, y, M, N, src_layout, dst_layout, interm_layout, num_ctas=num_ctas)
-    if is_compile_warmup():
-        return
-
-    torch.testing.assert_close(y, x, rtol=0, atol=0)
-    if src_ctas_per_cga != dst_ctas_per_cga:
+    assert_close(y, x, rtol=0, atol=0)
+    if src_ctas_per_cga != dst_ctas_per_cga and not is_compile_warmup():
         # Replicated values may be loaded from the local CTA.
         assert "st.shared::cluster" not in compiled.asm["ptx"]
 

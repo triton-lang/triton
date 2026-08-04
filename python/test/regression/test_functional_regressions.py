@@ -65,8 +65,7 @@ def test_chained_matmul(device):
         a, b, c, triton_result, m, n, k,  #
         block_m=block_m, block_n=block_n, block_k=block_k)
 
-    if not is_compile_warmup():
-        assert (torch_result == triton_result).all()
+    assert_close(torch_result, triton_result, rtol=0, atol=0)
 
 
 def test_vecmat(device):
@@ -243,8 +242,7 @@ def test_reverse_range(device):
     res = torch.empty((512, ), dtype=torch.float32, device=device)
     kernel[(1, )](data, res)
     ref = torch.flip(data[1:513], [0])
-    if not is_compile_warmup():
-        assert (res == ref).all()
+    assert_close(res, ref, rtol=0, atol=0)
 
 
 @triton.jit

@@ -17,6 +17,7 @@ import triton.language as tl
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 from triton._internal_testing import (
+    assert_close,
     integral_dtypes,
     int_dtypes,
     str_to_triton_dtype,
@@ -6996,8 +6997,7 @@ def test_gather(src_shape, indices_shape, axis, device):
     indices = torch.randint(0, src.shape[axis], indices_shape, device=device)
     ref = torch.gather(src, axis, indices)
     result = triton_gather(src, axis, indices)
-    if not is_compile_warmup():
-        torch.testing.assert_close(result, ref, rtol=0, atol=0)
+    assert_close(result, ref, rtol=0, atol=0)
 
 
 @triton.jit

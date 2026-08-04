@@ -11,25 +11,21 @@ target = triton.runtime.driver.active.get_current_target()
 start_method = 'fork' if 'fork' in multiprocessing.get_all_start_methods() else 'spawn'
 
 
-def write_process_id_to_stderr(environment_value=None):
-    if environment_value is None:
-        assert "TRITON_PROCESS_POOL_TEST" not in os.environ
-    else:
-        os.environ["TRITON_PROCESS_POOL_TEST"] = environment_value
+def write_process_id_to_stderr(fail=False):
+    assert "TRITON_PROCESS_POOL_TEST" not in os.environ
+    os.environ["TRITON_PROCESS_POOL_TEST"] = "modified"
+    if fail:
+        raise RuntimeError("expected process failure")
     os.write(2, str(os.getpid()).encode())
-
-
-def fail_in_process():
-    raise RuntimeError("expected process failure")
 
 
 def test_replenishing_process_pool_reuses_clean_processes() -> None:
     pool = ReplenishingProcessPool(__name__)
     pool.start()
     try:
-        first = pool.run(write_process_id_to_stderr, args=("modified", ))
+        first = pool.run(write_process_id_to_stderr)
         second = pool.run(write_process_id_to_stderr)
-        failed = pool.run(fail_in_process)
+        failed = pool.run(write_process_id_to_stderr, args=(True, ))
         replacement = pool.run(write_process_id_to_stderr)
     finally:
         pool.close()

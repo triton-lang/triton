@@ -505,7 +505,6 @@ class runtime_knobs(base_knobs):
     # Scoped hooks for shape-only launch capture and exact specialization data.
     launch_dispatcher: Optional[LaunchDispatcher] = None
     jit_specialization_hook: Optional[JITSpecializationHook] = None
-    compile_warmup: bool = False
 
     # Hook for inspecting compiler pipeline stages
     add_stages_inspection_hook: Optional[PipelineStagesHook] = None

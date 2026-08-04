@@ -261,18 +261,16 @@ def alloc_rand(shape, device, dtype, requires_grad=False):
     return ret
 
 
-def _make_slice_sizes_cpu(n_slices, total_size):
+def _make_slice_sizes(n_slices, total_size, device, generator=None):
     dtype = torch.int32
     if total_size < 0:
         raise ValueError("total_size must be non-negative")
     if n_slices <= 0:
-        return torch.zeros((0, ), dtype=dtype)
+        return torch.zeros((0, ), dtype=dtype, device=device)
     if total_size == 0:
-        return torch.zeros((n_slices, ), dtype=dtype)
+        return torch.zeros((n_slices, ), dtype=dtype, device=device)
     # always set one slice size to zero
-    generator = torch.Generator(device="cpu")
-    generator.manual_seed(0)
-    probs = torch.ones(n_slices) / n_slices
+    probs = torch.ones(n_slices, device=device) / n_slices
     if n_slices > 1:
         probs[2] += probs[1]
         probs[1] = 0.
@@ -288,28 +286,14 @@ def make_slice_sizes(n_slices, total_size, device="cuda"):
         from torch._subclasses.fake_tensor import unset_fake_temporarily
 
         with unset_fake_temporarily():
-            values = _make_slice_sizes_cpu(n_slices, total_size).tolist()
+            generator = torch.Generator(device="cpu").manual_seed(0)
+            values = _make_slice_sizes(n_slices, total_size, "cpu", generator).tolist()
         result = torch.empty((max(n_slices, 0), ), dtype=torch.int32, device=device)
         result._triton_warmup_values = values
         return result
 
     torch.manual_seed(0)
-    dtype = torch.int32
-    if total_size < 0:
-        raise ValueError("total_size must be non-negative")
-    if n_slices <= 0:
-        return torch.zeros((0, ), dtype=dtype, device=device)
-    if total_size == 0:
-        return torch.zeros((n_slices, ), dtype=dtype, device=device)
-    probabilities = torch.ones(n_slices, device=device) / n_slices
-    if n_slices > 1:
-        probabilities[2] += probabilities[1]
-        probabilities[1] = 0.
-    assignments = torch.multinomial(probabilities, total_size, replacement=True)
-    counts = torch.bincount(assignments, minlength=n_slices).to(dtype)
-    assert counts.sum().item() == total_size
-    assert len(counts) == n_slices
-    return counts
+    return _make_slice_sizes(n_slices, total_size, device)
 
 
 def pad_rows_to_multiples(A, indices, multiple=128, pad_value=float('nan')):
@@ -335,11 +319,8 @@ def pad_ragged_tensor(x, x_ragged_metadata, hbm_swizzling, transpose):
         shape = list(x.shape)
         values = x_ragged_metadata.slice_sizes._triton_warmup_values
         shape[dimension] = sum((value + multiple - 1) // multiple * multiple for value in values)
-        padded = torch.empty(shape, dtype=x.dtype, device=x.device)
-        metadata = replace(x_ragged_metadata, slice_offs=x_ragged_metadata.block_offs(multiple) * multiple,
-                           slice_sizes_divisibility=multiple)
-        return padded, metadata
-    if transpose:
+        y = torch.empty(shape, dtype=x.dtype, device=x.device)
+    elif transpose:
         y = pad_rows_to_multiples(x.T, x_ragged_metadata.slice_offs, multiple=multiple, pad_value=0).T.contiguous()
     else:
         y = pad_rows_to_multiples(x, x_ragged_metadata.slice_offs, multiple=multiple, pad_value=0).contiguous()

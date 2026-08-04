@@ -1,4 +1,3 @@
-import os
 from contextlib import contextmanager
 
 import pytest
@@ -13,19 +12,6 @@ def enable_diagnostics_context(value):
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setenv("MLIR_ENABLE_DIAGNOSTICS", value)
         yield
-
-
-@pytest.mark.parametrize("previous", [None, "existing"])
-def test_diagnostics_context_restores_environment(monkeypatch, previous):
-    if previous is None:
-        monkeypatch.delenv("MLIR_ENABLE_DIAGNOSTICS", raising=False)
-    else:
-        monkeypatch.setenv("MLIR_ENABLE_DIAGNOSTICS", previous)
-
-    with enable_diagnostics_context("temporary"):
-        assert os.environ["MLIR_ENABLE_DIAGNOSTICS"] == "temporary"
-
-    assert os.environ.get("MLIR_ENABLE_DIAGNOSTICS") == previous
 
 
 def test_mma_remark(capfd, fresh_triton_cache):

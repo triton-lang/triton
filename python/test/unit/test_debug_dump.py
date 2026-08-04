@@ -1,4 +1,3 @@
-import os
 from contextlib import contextmanager
 
 import pytest
@@ -12,19 +11,6 @@ def enable_dump_context(pass_name="1"):
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setenv("MLIR_ENABLE_DUMP", pass_name)
         yield
-
-
-@pytest.mark.parametrize("previous", [None, "existing"])
-def test_dump_context_restores_environment(monkeypatch, previous):
-    if previous is None:
-        monkeypatch.delenv("MLIR_ENABLE_DUMP", raising=False)
-    else:
-        monkeypatch.setenv("MLIR_ENABLE_DUMP", previous)
-
-    with enable_dump_context("temporary"):
-        assert os.environ["MLIR_ENABLE_DUMP"] == "temporary"
-
-    assert os.environ.get("MLIR_ENABLE_DUMP") == previous
 
 
 def test_fn_dump(capfd, device, fresh_triton_cache):

@@ -94,10 +94,8 @@ def _warmup(args):
                       import_mode="importlib")
     for path, phase in PHASES:
         command.extend(("--warmup-phase", f"{path}={phase}"))
-    command.extend(
-        args.targets
-        or ("python/test/unit/language", "python/triton_kernels/tests", "python/test/gluon", "python/tutorials/gluon",
-            "python/examples/gluon", "python/tutorials/06-fused-attention.py", "python/test/regression"))
+    command.extend(args.targets
+                   or ("python/test/unit/language" if path == "python/test/unit" else path for path, _ in PHASES))
     try:
         status = _run(command, environment=environment)
     finally:
@@ -139,9 +137,8 @@ def _unit(args):
 
 def _gluon(args):
     _validate_gpus(args.num_gpus)
-    capability = _capability()
     general_workers = min(args.num_procs, args.gluon_procs * args.num_gpus)
-    if capability >= 9:
+    if _capability() >= 9:
         general = _pytest("python/test/gluon/", "python/tutorials/gluon/", "--ignore=python/test/gluon/test_consan.py",
                           workers=general_workers)
         consan = _pytest("python/test/gluon/test_consan.py", workers=args.consan_procs * args.num_gpus)
@@ -164,24 +161,17 @@ def _gsan(args):
     environment["TRITON_DISABLE_LINE_INFO"] = "0"
     symmetric_memory = "python/test/gsan/test_symmetric_memory.py"
 
-    if args.num_gpus == 1:
-        return _run(_pytest("python/test/gsan", workers=args.num_procs, distribution="loadgroup"),
-                    environment=environment)
-
-    status = _run(
-        _pytest(f"--ignore={symmetric_memory}", "python/test/gsan", workers=args.num_procs, distribution="loadgroup"),
-        environment=environment)
-    if status:
+    targets = ("python/test/gsan", )
+    if args.num_gpus != 1:
+        targets = (f"--ignore={symmetric_memory}", *targets)
+    status = _run(_pytest(*targets, workers=args.num_procs, distribution="loadgroup"), environment=environment)
+    if status or args.num_gpus == 1:
         return status
     return _run(_pytest(symmetric_memory, workers=1, distribution="loadgroup"), environment=environment)
 
 
 def _suite(args):
-    if args.name == "unit":
-        return _unit(args)
-    if args.name == "gsan":
-        return _gsan(args)
-    return _gluon(args)
+    return {"unit": _unit, "gsan": _gsan, "gluon": _gluon}[args.name](args)
 
 
 def _report(args):

@@ -23,6 +23,8 @@ def isolated_consan_knobs():
 
 
 def run_in_process(client_fn, args=(), kwargs=None, env=None):
+    if is_compile_warmup() or os.environ.get("DISABLE_SUBPROCESS"):
+        return client_fn(*args, **(kwargs or {}))
     if _process_pool is None:
         return _run_in_process(client_fn, args, kwargs, env)
     return _process_pool.run(client_fn, args, kwargs, env)
@@ -154,39 +156,29 @@ def run_failing_kernel(device, enable_consan, mode, num_ctas):
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 def test_cache_miss_knob(device, monkeypatch, num_ctas, run_wrapper):
-    if not run_wrapper:
-        run_failing_kernel(device, False, "knob", num_ctas)
-        run_failing_kernel(device, True, "knob", num_ctas)
-        return
-
     # First run without consan
     run_in_process(run_failing_kernel, (device, False, "knob", num_ctas))
 
     # Then run with consan and assert that if fails
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     result = run_in_process(run_failing_kernel, (device, True, "knob", num_ctas))
-    assert result.exc is not None
-    assert any(msg in str(result.exc) for msg in ["device-side assert", "unspecified launch failure"])
+    if run_wrapper:
+        assert result.exc is not None
+        assert any(msg in str(result.exc) for msg in ["device-side assert", "unspecified launch failure"])
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 def test_cache_miss_env(device, monkeypatch, num_ctas, run_wrapper):
-    if not run_wrapper:
-        with knobs.compilation.scope(), knobs.runtime.scope():
-            monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "")
-            knobs.refresh_knobs()
-            run_failing_kernel(device, False, "env", num_ctas)
-            run_failing_kernel(device, True, "env", num_ctas)
-        return
-
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "")
     # First run without consan
     run_in_process(run_failing_kernel, (device, False, "env", num_ctas))
 
     # Then run with consan and assert that if fails
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     result = run_in_process(run_failing_kernel, (device, True, "env", num_ctas))
-    assert result.exc is not None
-    assert any(msg in str(result.exc) for msg in ["device-side assert", "unspecified launch failure"])
+    if run_wrapper:
+        assert result.exc is not None
+        assert any(msg in str(result.exc) for msg in ["device-side assert", "unspecified launch failure"])
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
@@ -229,8 +221,7 @@ def test_consan_initializes_allocations_with_nan(MEMORY_KIND, device, num_ctas):
 
     output = torch.empty((XBLOCK.value * num_ctas, XBLOCK.value), device=device, dtype=torch.float32)
     kernel[(1, )](output, MEMORY_KIND=MEMORY_KIND, num_warps=4, num_ctas=num_ctas)
-    if not is_compile_warmup():
-        assert torch.isnan(output).all()
+    assert_close(output, torch.full_like(output, float("nan")), equal_nan=True)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")

@@ -200,8 +200,8 @@ class PartitionArgs:
     SCALE_SIZE_INNER: gl.constexpr
     MXFP_BLOCK_SIZE: gl.constexpr
 
-    SWIGLU_ALPHA: gl.constexpr
-    SWIGLU_LIMIT: gl.constexpr
+    SWIGLU_ALPHA: gl.tensor
+    SWIGLU_LIMIT: gl.tensor
     REDUCTION_N: gl.constexpr
     FLEXPOINT_SATURATE_INF: gl.constexpr
 
@@ -586,7 +586,7 @@ def epilogue_partition(p: PartitionArgs, acc_fpsan_probe_ptr: gl.tensor | None):
         )
 
 
-@gluon.jit
+@gluon.jit(do_not_specialize=["SWIGLU_ALPHA", "SWIGLU_LIMIT"])
 def ws_matmul_kernel(
     x_desc: tma.tensor_descriptor,
     w_desc: tma.tensor_descriptor,
@@ -613,8 +613,8 @@ def ws_matmul_kernel(
     K: gl.constexpr,
     NUM_SLICES: gl.constexpr,
     #
-    SWIGLU_ALPHA: gl.constexpr,
-    SWIGLU_LIMIT: gl.constexpr,
+    SWIGLU_ALPHA,
+    SWIGLU_LIMIT,
     REDUCTION_N: gl.constexpr,
     #
     FLEXPOINT_SATURATE_INF: gl.constexpr,
@@ -1362,7 +1362,7 @@ def prepare_case(c: MLPConfig, batch_size: int, device: str, seed: int = 0, unif
     swiglu_alpha = random_float(device=device) / 5 + 1.0
     swiglu_limit = random_float(device=device) / 5 + 1.3
     fused_activation = FusedActivation(
-        FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2),
+        FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), fn_arg_do_not_specialize=("alpha", "limit"), reduction_n=2),
         (swiglu_alpha, swiglu_limit),
     )
 
@@ -1419,6 +1419,10 @@ def run_kernel(prepared: PreparedCase, kernel, precision_config: PrecisionConfig
 def run_provider(prepared: PreparedCase, provider: str) -> tuple[torch.Tensor, PrecisionConfig]:
     precision_config = make_precision_config(prepared)
     kernel = matmul if provider == "example" else reference_matmul
+    if provider != "example":
+        activation = prepared.fused_activation
+        prepared = replace(prepared, fused_activation=replace(activation,
+                                                              specs=replace(activation.specs, name="swiglu_dynamic")))
     y = run_kernel(prepared, kernel, precision_config, make_output_buffer(prepared))
     return y, precision_config
 
@@ -1476,7 +1480,7 @@ def is_blackwell():
 @pytest.mark.parametrize("c", [GPT_OSS_120B_CONFIG])
 @pytest.mark.parametrize("batch_size", get_batch_sizes(GPT_OSS_120B_CONFIG))
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon MoE BMM1 fused-gather is only supported on Blackwell GPUs")
-@pytest.mark.disable_warmup(reason="random activation parameters specialize the kernel")
+@pytest.mark.enable_warmup(min_capability=10)
 def test_op(c: MLPConfig, batch_size: int):
     prepared = prepare_case(c, batch_size, device=f"cuda:{torch.cuda.current_device()}")
     ref_y, ref_precision = run_provider(prepared, "reference")
@@ -1505,7 +1509,7 @@ def test_op(c: MLPConfig, batch_size: int):
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon MoE BMM1 fused-gather is only supported on Blackwell GPUs")
-@pytest.mark.disable_warmup(reason="random activation parameters specialize the kernel")
+@pytest.mark.enable_warmup(min_capability=10)
 def test_op_consan():
     with triton.knobs.compilation.scope():
         triton.knobs.compilation.instrumentation_mode = "consan"

@@ -1,4 +1,3 @@
-import argparse
 import json
 import os
 import warnings
@@ -10,10 +9,6 @@ import torch
 from torch.overrides import TorchFunctionMode
 
 import triton
-
-
-class _SyntheticDataPtr(int):
-    pass
 
 
 class _FakeCudaTensorMode(TorchFunctionMode):
@@ -52,7 +47,7 @@ class _FakeCudaTensorMode(TorchFunctionMode):
                 pointer = self.next_storage_pointer
                 self.next_storage_pointer += self._STORAGE_STRIDE
                 self.storage_pointers[storage] = pointer
-            return _SyntheticDataPtr(pointer + tensor.storage_offset() * tensor.element_size())
+            return pointer + tensor.storage_offset() * tensor.element_size()
         return func(*args, **(kwargs or {}))
 
 
@@ -65,13 +60,11 @@ def compile_warmup_only(dispatcher=None):
             return kernel.warmup(*args, grid=grid, **kwargs)
         return dispatcher.dispatch(*args, kernel=kernel, grid=grid, test=dispatcher.current_test, **kwargs)
 
-    with triton.knobs.runtime.scope():
-        triton.knobs.runtime.compile_warmup = True
+    with triton.knobs.runtime.scope(), warnings.catch_warnings():
         triton.knobs.runtime.launch_dispatcher = dispatch
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", message="Accessing the data pointer of FakeTensor.*")
-            with _FakeCudaTensorMode():
-                yield
+        warnings.filterwarnings("ignore", message="Accessing the data pointer of FakeTensor.*")
+        with _FakeCudaTensorMode():
+            yield
 
 
 @contextmanager
@@ -228,7 +221,7 @@ def pytest_runtest_call(item):
         triton.knobs.compilation.listener = previous_listener
 
 
-def summarize_compile_trace(directory, phase=None):
+def summarize_compile_trace(directory):
     records = []
     attempted_tests = {}
     if os.path.isdir(directory):
@@ -243,6 +236,10 @@ def summarize_compile_trace(directory, phase=None):
                         if line.strip():
                             attempted = json.loads(line)
                             attempted_tests.setdefault(attempted["phase"], set()).add(attempted["test"])
+
+    records_by_phase = {}
+    for record in records:
+        records_by_phase.setdefault(record["phase"], []).append(record)
 
     warmup_records = [record for record in records if record["phase"].startswith("warmup-")]
     all_warmed_hashes = {record["hash"] for record in warmup_records}
@@ -259,17 +256,13 @@ def summarize_compile_trace(directory, phase=None):
         if record["cache_hit"] and (record["cache_dir"], record["hash"]) in all_warmed_entries
     }
     summaries = {}
-    phase_names = {record["phase"] for record in records} | set(attempted_tests)
+    phase_names = set(records_by_phase) | set(attempted_tests)
     phase_names.update(name.removeprefix("warmup-") for name in tuple(phase_names) if name.startswith("warmup-"))
     for name in sorted(phase_names):
-        if phase is not None and name != phase:
-            continue
-        events = [record for record in records if record["phase"] == name]
+        events = records_by_phase.get(name, [])
         misses = [record for record in events if not record["cache_hit"]]
         is_warmup_phase = name.startswith("warmup-")
-        matching = [] if is_warmup_phase else [
-            record for record in warmup_records if record["phase"] == f"warmup-{name}"
-        ]
+        matching = [] if is_warmup_phase else records_by_phase.get(f"warmup-{name}", [])
         warmed_hashes = {record["hash"] for record in matching}
         warmed_tests = {record["test"] for record in matching if record.get("test") is not None}
         if not is_warmup_phase:
@@ -339,29 +332,3 @@ def _require_complete_warmup(report):
 
     if report.get("unused_warmup_hashes", 0):
         raise SystemExit(f"warmup produced {report['unused_warmup_hashes']} unused specializations")
-
-
-def _main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["report"])
-    parser.add_argument("--phase", action="append")
-    parser.add_argument("--require-warmed-hits", action="store_true")
-    parser.add_argument("--require-complete-warmup", action="store_true")
-    parser.add_argument("--directory", default=os.environ.get("TRITON_CI_COMPILE_TRACE_DIR"))
-    args = parser.parse_args()
-    if args.directory is None:
-        parser.error("set TRITON_CI_COMPILE_TRACE_DIR or pass --directory")
-
-    complete = summarize_compile_trace(args.directory)
-    reports = [{**complete, "phases": {name: complete["phases"][name]} if name in complete["phases"] else {}}
-               for name in args.phase] if args.phase else [complete]
-    for report in reports:
-        print(f"TRITON_CI_COMPILE_TRACE {json.dumps(report, sort_keys=True)}")
-        if args.require_warmed_hits and not any(summary["warmed_hits"] for summary in report["phases"].values()):
-            raise SystemExit("warmup did not produce any runtime disk-cache hits")
-        if args.require_complete_warmup:
-            _require_complete_warmup(report)
-
-
-if __name__ == "__main__":
-    _main()

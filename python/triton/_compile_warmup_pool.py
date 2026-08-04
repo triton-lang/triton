@@ -33,13 +33,6 @@ class _CompilationFailedError(_UnsupportedPreloadError):
 
 
 @contextmanager
-def _instrumentation_mode(instrumentation_mode):
-    with triton.knobs.compilation.scope():
-        triton.knobs.compilation.instrumentation_mode = instrumentation_mode
-        yield
-
-
-@contextmanager
 def _cache_invalidating_environment(environment):
     from triton._C.libtriton import get_cache_invalidating_env_vars
 
@@ -96,22 +89,13 @@ class _CodeGenFunction:
 
 
 def _iter_argument_expressions(function):
-    module = ast.parse(function.src)
-    target = None
-    for node in module.body:
-        if isinstance(node, ast.FunctionDef) and node.name == function.__name__:
-            target = node
-            break
+    target = next((node for node in ast.parse(function.src).body
+                   if isinstance(node, ast.FunctionDef) and node.name == function.__name__), None)
     if target is None:
         raise ValueError(f"Cannot find function {function.__name__} in source code of {function}")
     args = target.args
-    all_args = list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs)
-    if args.vararg is not None:
-        all_args.append(args.vararg)
-    if args.kwarg is not None:
-        all_args.append(args.kwarg)
-    for arg in all_args:
-        if arg.annotation is not None:
+    for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg):
+        if arg is not None and arg.annotation is not None:
             yield arg.annotation
     for default in args.defaults + args.kw_defaults:
         if default is not None:
@@ -133,20 +117,12 @@ def _restore_dynamic_source(python_function, src):
             )
 
 
-def _make_dynamic_jit_fn(jit_fn_type, args, src, starting_line_number):
+def _make_dynamic_jit_callable(callable_type, args, src, starting_line_number):
     python_function = args[0]
     if isinstance(python_function, _CodeGenFunction):
         python_function = python_function.jit_function.fn
     _restore_dynamic_source(python_function, src)
-    function = jit_fn_type(*args)
-    function._unsafe_update_src(src)
-    function.starting_line_number = starting_line_number
-    return function
-
-
-def _make_dynamic_constexpr_fn(constexpr_fn_type, python_function, src, starting_line_number):
-    _restore_dynamic_source(python_function, src)
-    function = constexpr_fn_type(python_function)
+    function = callable_type(*args)
     function._unsafe_update_src(src)
     function.starting_line_number = starting_line_number
     return function
@@ -192,28 +168,17 @@ class _JITFunctionPickler(CloudPickler):
             raise ValueError(f"Don't know how to pickle JITCallable subclass: {obj}")
         if (import_path := _jit_callable_import_path(obj)) is not None:
             return _load_jit_callable, import_path
-        if isinstance(obj, ConstexprFunction):
-            return _make_dynamic_constexpr_fn, (
-                type(obj),
-                obj.fn,
-                obj.src,
-                obj.starting_line_number,
-            )
-        return _make_dynamic_jit_fn, (
-            type(obj),
-            (
-                _CodeGenFunction(obj),
-                obj.version,
-                obj.do_not_specialize,
-                obj.do_not_specialize_on_alignment,
-                obj.debug,
-                obj.noinline,
-                obj._repr,
-                obj.launch_metadata,
-            ),
-            obj.src,
-            obj.starting_line_number,
+        args = (obj.fn, ) if isinstance(obj, ConstexprFunction) else (
+            _CodeGenFunction(obj),
+            obj.version,
+            obj.do_not_specialize,
+            obj.do_not_specialize_on_alignment,
+            obj.debug,
+            obj.noinline,
+            obj._repr,
+            obj.launch_metadata,
         )
+        return _make_dynamic_jit_callable, (type(obj), args, obj.src, obj.starting_line_number)
 
 
 def _jit_dumps(obj):
@@ -275,21 +240,6 @@ def _warmup_kernel(kernel, args, grid, kwargs):
         kernel.nargs = None
 
 
-@contextmanager
-def _compile_trace(directory, phase, test):
-    if directory is None:
-        yield
-        return
-    from triton._compile_warmup import CompilationTrace
-
-    previous_listener = triton.knobs.compilation.listener
-    triton.knobs.compilation.listener = CompilationTrace(directory, phase, test)
-    try:
-        yield
-    finally:
-        triton.knobs.compilation.listener = previous_listener
-
-
 _SHUTDOWN_STDERR_SILENCED = False
 
 
@@ -320,10 +270,11 @@ def _preload_worker(module_name, qualified_name, fn_bytes, compile_context_bytes
     os.environ["TRITON_WARMUP_COMPILER_WORKER"] = str(worker)
     try:
         with (
-                _instrumentation_mode(instrumentation_mode),
+                triton.knobs.compilation.scope(),
                 _cache_invalidating_environment(environment),
                 triton.knobs.cache.scope(),
         ):
+            triton.knobs.compilation.instrumentation_mode = instrumentation_mode
             triton.knobs.cache.dir = cache_dir
             if module_name is not None and qualified_name is not None:
                 function = _load_jit_callable(module_name, qualified_name)
@@ -332,9 +283,12 @@ def _preload_worker(module_name, qualified_name, fn_bytes, compile_context_bytes
             else:
                 raise AssertionError("missing JIT function import and serialized payload")
             compile_context = cloudpickle.loads(compile_context_bytes)
+            if trace_directory is not None:
+                from triton._compile_warmup import CompilationTrace
+
+                triton.knobs.compilation.listener = CompilationTrace(trace_directory, phase, test)
             start = time.monotonic()
-            with _compile_trace(trace_directory, phase, test):
-                _preload_with_compile_context(function, *compile_context)
+            _preload_with_compile_context(function, *compile_context)
             return worker, time.monotonic() - start
     except triton.compiler.errors.CompilationError as error:
         details = f"{type(error).__name__}: {error}"

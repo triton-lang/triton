@@ -29,10 +29,8 @@ def fresh_knobs():
 
     fresh, reset = _fresh_knobs_impl(skipped_attr={"build", "nvidia", "amd"})
     with knobs.amd.scope():
-        try:
-            yield fresh()
-        finally:
-            reset()
+        yield fresh()
+        reset()
 
 
 @pytest.fixture
@@ -48,7 +46,5 @@ def fresh_knobs_including_libraries():
     from triton._internal_testing import _fresh_knobs_impl
 
     fresh, reset = _fresh_knobs_impl()
-    try:
-        yield fresh()
-    finally:
-        reset()
+    yield fresh()
+    reset()

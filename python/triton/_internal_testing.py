@@ -34,19 +34,15 @@ def is_interpreter():
 
 
 def is_compile_warmup():
-    return knobs.runtime.compile_warmup
+    return knobs.runtime.launch_dispatcher is not None
 
 
 def rand(*shape, **kwargs):
-    if is_compile_warmup():
-        return torch.empty(*shape, **kwargs)
-    return torch.rand(*shape, **kwargs)
+    return (torch.empty if is_compile_warmup() else torch.rand)(*shape, **kwargs)
 
 
 def randn(*shape, **kwargs):
-    if is_compile_warmup():
-        return torch.empty(*shape, **kwargs)
-    return torch.randn(*shape, **kwargs)
+    return (torch.empty if is_compile_warmup() else torch.randn)(*shape, **kwargs)
 
 
 def randint(low, high, size, **kwargs):
@@ -68,9 +64,7 @@ def random_float(*, warmup_value=0.5, **kwargs):
 
 
 def reference_tensor(value, dtype):
-    if is_compile_warmup():
-        return torch.empty_like(value.data, dtype=dtype)
-    return value.to(dtype)
+    return torch.empty_like(value.data, dtype=dtype) if is_compile_warmup() else value.to(dtype)
 
 
 def assert_close(*args, **kwargs):
@@ -313,12 +307,11 @@ def _call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_list
         previous_listener = knobs.compilation.listener
         knobs.compilation.listener = compilation_listener
         try:
-            try:
-                client_fn(*args, **kwargs)
-                # Raise any CUDA errors
-                torch.cuda.synchronize()
-            except Exception as e:
-                exc = e
+            client_fn(*args, **kwargs)
+            # Raise any CUDA errors
+            torch.cuda.synchronize()
+        except Exception as e:
+            exc = e
         finally:
             knobs.compilation.listener = previous_listener
             sys.stderr.flush()
@@ -376,7 +369,6 @@ class ReplenishingProcessPool:
     def start(self):
         if self.worker is None:
             self.worker = self._start_process()
-        if self.spare is None:
             self.spare = self._start_process()
 
     def close(self):
