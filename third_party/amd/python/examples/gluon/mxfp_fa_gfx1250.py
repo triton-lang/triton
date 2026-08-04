@@ -690,64 +690,6 @@ class AttentionConfigBase:
                         SPLIT_K, SUBTILE, PINGPONG, P_K_WIDTH, P_SCALING, NUM_BUFFERS, NUM_WARPS, NUM_CTAS)
 
 
-# ===-----------------------------------------------------------------------===#
-# Global Scaled Attention Program
-# ===-----------------------------------------------------------------------===#
-
-
-@gluon.aggregate
-class GlobalScaledAttentionConfig(AttentionConfigBase):
-    q_layout: ttgl.constexpr
-    k_layout: ttgl.constexpr
-    p_layout: ttgl.constexpr
-    v_layout: ttgl.constexpr
-    acc_layout: ttgl.constexpr
-
-    @gluon.constexpr_function
-    def __init__(self, Q_TYPE, KV_TYPE, BATCH, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ,  #
-                 BLOCK_M, BLOCK_N, SPLIT_K, SUBTILE, PINGPONG, P_K_WIDTH, NUM_BUFFERS, NUM_WARPS, NUM_CTAS):
-        assert Q_TYPE in ['e5m2', 'e4m3']
-        assert KV_TYPE in ['e5m2', 'e4m3']
-        assert P_K_WIDTH == 16 or P_K_WIDTH == 8
-
-        self._init_base(Q_TYPE, KV_TYPE, BATCH, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ, BLOCK_M, BLOCK_N,
-                        SPLIT_K, SUBTILE, PINGPONG, P_K_WIDTH, False, NUM_BUFFERS, NUM_WARPS, NUM_CTAS)
-
-        shape = [BLOCK_M, min(BLOCK_N, HEAD_SZ)] if not SUBTILE else \
-                [BLOCK_M, min(BLOCK_N // 2, HEAD_SZ // 2)]
-
-        if SPLIT_K == 1:
-            assert NUM_CTAS == 1
-            wmma_layout = partial(get_wmma_layout,  #
-                                  num_warps=NUM_WARPS, warp_axis=0)
-
-            q_layout = ttgl.DotOperandLayout(0, wmma_layout(shape), k_width=16)
-            k_layout = ttgl.DotOperandLayout(1, wmma_layout(shape), k_width=16)
-            p_layout = ttgl.DotOperandLayout(0, wmma_layout(shape), k_width=P_K_WIDTH)
-            v_layout = ttgl.DotOperandLayout(1, wmma_layout(shape), k_width=P_K_WIDTH)
-
-            acc_layout = wmma_layout(shape)
-        else:
-            assert NUM_CTAS == SPLIT_K
-            wmma_layout = partial(get_wmma_layout,  #
-                                  num_warps=NUM_WARPS, warp_axis=1,  #
-                                  num_ctas=NUM_CTAS, cta_axis=0)
-            z = SPLIT_K
-
-            q_layout = ttgl.DotOperandLayout(0, wmma_layout([1, *shape]), k_width=16)
-            k_layout = ttgl.DotOperandLayout(1, wmma_layout([z, *shape]), k_width=16)
-            p_layout = ttgl.DotOperandLayout(0, wmma_layout([z, *shape]), k_width=P_K_WIDTH)
-            v_layout = ttgl.DotOperandLayout(1, wmma_layout([z, *shape]), k_width=P_K_WIDTH)
-
-            acc_layout = wmma_layout([z, *shape])
-
-        self.q_layout = ttgl.constexpr(q_layout)
-        self.k_layout = ttgl.constexpr(k_layout)
-        self.p_layout = ttgl.constexpr(p_layout)
-        self.v_layout = ttgl.constexpr(v_layout)
-        self.acc_layout = ttgl.constexpr(acc_layout)
-
-
 @gluon.aggregate
 class AttentionProgramBase:
     cfg: AttentionConfigBase
@@ -845,6 +787,64 @@ class AttentionProgramBase:
             acc = ttgl.full([cfg.SPLIT_K, cfg.BLOCK_M, cfg.HEAD_SZ], 0.0, ttgl.float32, cfg.acc_layout)
 
         return m_i, l_i, zero, acc
+
+
+# ===-----------------------------------------------------------------------===#
+# Global Scaled Attention Program
+# ===-----------------------------------------------------------------------===#
+
+
+@gluon.aggregate
+class GlobalScaledAttentionConfig(AttentionConfigBase):
+    q_layout: ttgl.constexpr
+    k_layout: ttgl.constexpr
+    p_layout: ttgl.constexpr
+    v_layout: ttgl.constexpr
+    acc_layout: ttgl.constexpr
+
+    @gluon.constexpr_function
+    def __init__(self, Q_TYPE, KV_TYPE, BATCH, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ,  #
+                 BLOCK_M, BLOCK_N, SPLIT_K, SUBTILE, PINGPONG, P_K_WIDTH, NUM_BUFFERS, NUM_WARPS, NUM_CTAS):
+        assert Q_TYPE in ['e5m2', 'e4m3']
+        assert KV_TYPE in ['e5m2', 'e4m3']
+        assert P_K_WIDTH == 16 or P_K_WIDTH == 8
+
+        self._init_base(Q_TYPE, KV_TYPE, BATCH, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ, BLOCK_M, BLOCK_N,
+                        SPLIT_K, SUBTILE, PINGPONG, P_K_WIDTH, False, NUM_BUFFERS, NUM_WARPS, NUM_CTAS)
+
+        shape = [BLOCK_M, min(BLOCK_N, HEAD_SZ)] if not SUBTILE else \
+                [BLOCK_M, min(BLOCK_N // 2, HEAD_SZ // 2)]
+
+        if SPLIT_K == 1:
+            assert NUM_CTAS == 1
+            wmma_layout = partial(get_wmma_layout,  #
+                                  num_warps=NUM_WARPS, warp_axis=0)
+
+            q_layout = ttgl.DotOperandLayout(0, wmma_layout(shape), k_width=16)
+            k_layout = ttgl.DotOperandLayout(1, wmma_layout(shape), k_width=16)
+            p_layout = ttgl.DotOperandLayout(0, wmma_layout(shape), k_width=P_K_WIDTH)
+            v_layout = ttgl.DotOperandLayout(1, wmma_layout(shape), k_width=P_K_WIDTH)
+
+            acc_layout = wmma_layout(shape)
+        else:
+            assert NUM_CTAS == SPLIT_K
+            wmma_layout = partial(get_wmma_layout,  #
+                                  num_warps=NUM_WARPS, warp_axis=1,  #
+                                  num_ctas=NUM_CTAS, cta_axis=0)
+            z = SPLIT_K
+
+            q_layout = ttgl.DotOperandLayout(0, wmma_layout([1, *shape]), k_width=16)
+            k_layout = ttgl.DotOperandLayout(1, wmma_layout([z, *shape]), k_width=16)
+            p_layout = ttgl.DotOperandLayout(0, wmma_layout([z, *shape]), k_width=P_K_WIDTH)
+            v_layout = ttgl.DotOperandLayout(1, wmma_layout([z, *shape]), k_width=P_K_WIDTH)
+
+            acc_layout = wmma_layout([z, *shape])
+
+        self.q_layout = ttgl.constexpr(q_layout)
+        self.k_layout = ttgl.constexpr(k_layout)
+        self.p_layout = ttgl.constexpr(p_layout)
+        self.v_layout = ttgl.constexpr(v_layout)
+        self.acc_layout = ttgl.constexpr(acc_layout)
 
 
 @gluon.aggregate
