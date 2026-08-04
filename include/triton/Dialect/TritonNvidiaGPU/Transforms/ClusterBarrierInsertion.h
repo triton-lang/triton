@@ -8,8 +8,6 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
-bool isDistributedMultiCTAOp(Operation *op, bool isRead);
-
 /// Inserts cluster barriers (cluster_barrier) using the provided
 /// shared-memory allocation analysis.
 void runClusterBarrierInsertion(ModuleAllocation &moduleAllocation,

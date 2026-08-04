@@ -1,6 +1,7 @@
 project(Proton LANGUAGES CXX)
 
 include(Backend.cmake)
+include(CheckCXXSourceCompiles)
 
 set(PROTON_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/csrc")
 set(PROTON_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/common")
@@ -14,6 +15,24 @@ if(NOT ROCM_INCLUDE_DIR)
 endif()
 if(NOT JSON_INCLUDE_DIR)
   message(FATAL_ERROR "JSON include directory not defined")
+endif()
+
+unset(PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH CACHE)
+set(_proton_saved_cmake_required_includes "${CMAKE_REQUIRED_INCLUDES}")
+set(CMAKE_REQUIRED_INCLUDES "${ROCPROFILER_SDK_INCLUDE_DIR};${ROCM_INCLUDE_DIR}")
+check_cxx_source_compiles([=[
+  #include <rocprofiler-sdk/fwd.h>
+  int main() {
+    auto op = ROCPROFILER_HIP_GRAPH_OPERATION_EXEC_LAUNCH;
+    return static_cast<int>(op);
+  }
+]=] PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH)
+set(CMAKE_REQUIRED_INCLUDES "${_proton_saved_cmake_required_includes}")
+
+if(PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH)
+  message(STATUS "Proton ROCProfiler-SDK HIP graph tracing: enabled")
+else()
+  message(STATUS "Proton ROCProfiler-SDK HIP graph tracing: disabled")
 endif()
 
 # ============ Dependencies =============
@@ -59,6 +78,13 @@ function(add_proton_library name)
 
   # If HIP is AMD-based
   target_compile_definitions(${name} PRIVATE __HIP_PLATFORM_AMD__)
+  if(PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH)
+    target_compile_definitions(${name} PRIVATE
+      PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH=1)
+  else()
+    target_compile_definitions(${name} PRIVATE
+      PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH=0)
+  endif()
 
   # Append this library name to the GLOBAL property "PROTON_LIBS"
   set_property(GLOBAL APPEND PROPERTY PROTON_LIBS ${name})

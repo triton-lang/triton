@@ -2,7 +2,7 @@ from triton.runtime.jit import constexpr_function
 from triton._C.libtriton.gluon_ir import get_amd_wmma_scale_layout as _get_wmma_scale_layout
 
 from ..._core import builtin, int8, uint8, int32, float8e4nv, tensor, _unwrap_if_constexpr
-from .._ops import _wmma, _verify_wmma, _mma_scaled, _scaled_upcast
+from .._ops import _load_shared_fp4_repacked, _wmma, _verify_wmma, _mma_scaled, _scaled_upcast
 from .._layouts import AMDWMMALayout
 from ..cdna3 import buffer_load, buffer_store
 from ._layouts import PartitionedSharedLayout, make_partitioned_dot_layouts
@@ -13,7 +13,7 @@ from . import cluster
 
 __all__ = [
     "async_copy", "tdm", "mbarrier", "cluster", "wmma", "wmma_scaled", "scaled_upcast", "buffer_load", "buffer_store",
-    "get_wmma_scale_layout", "PartitionedSharedLayout", "make_partitioned_dot_layouts"
+    "get_wmma_scale_layout", "PartitionedSharedLayout", "make_partitioned_dot_layouts", "load_shared_fp4_repacked"
 ]
 
 
@@ -113,17 +113,34 @@ def scaled_upcast(src, scale, elem_type, axis=None, _semantic=None):
     Upcast an fp4 or fp8 tensor and fold raw E8M0 scale payload into the
     GFX1250 scaled-upcast op.
 
-    The scale tensor must use raw E8M0 payload in `int8` or `uint8`, and must
-    already have the expanded output shape and scaled-upcast result layout.
-    For fp4 inputs, that is the canonical unpacked layout implied by `src`
-    and `axis`. `elem_type` must be `fp16` or `bf16`. GFX1250 keeps those
-    bytes in the native `cvt.scale.pk8` payload form.
+    The scale tensor must use raw E8M0 payload in `int8` or `uint8`.
+    For fp8, scale shape/layout match `src`.
+    For fp4, expanded or compact scales are supported along `axis` dimension.
+    Expanded scales are broadcasted to one scale value per upcast output value,
+    e.g. fp4 bytes `[M, K / 2]` -> output `[M, K]` with scale `[M, K]`.
+    Compact scales keep one scale value per native scale block, e.g. output
+    `[M, K]` with `axis=1` and scale block 32 uses scale `[M, K / 32]`.
+    `elem_type` must be `fp16` or `bf16`. GFX1250 keeps those bytes in the native
+    `cvt.scale.pk8` payload form.
     """
     axis = _unwrap_if_constexpr(axis)
     elem_type = _unwrap_if_constexpr(elem_type)
     assert scale.dtype in (int8, uint8), \
         f"Expected scale to use raw E8M0 payload in int8/uint8 but got {scale.dtype}"
     return _scaled_upcast(src, scale, elem_type, axis, _semantic)
+
+
+@builtin
+def load_shared_fp4_repacked(mem_desc, layout, _semantic=None):
+    """
+    Load M/N-packed fp4 bytes from shared memory into a K-packed WMMA dot operand layout.
+
+    The source shared memory descriptor must contain `int8` or `uint8` packed fp4
+    values. The destination shape is inferred from the source shape and dot
+    operand index in `layout`.
+    """
+    layout = _unwrap_if_constexpr(layout)
+    return _load_shared_fp4_repacked(mem_desc, layout, _semantic, parent_type=AMDWMMALayout)
 
 
 def _get_wmma_scale_layout_impl(*args, **kwargs):

@@ -19,6 +19,8 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
+namespace {
+
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
@@ -33,7 +35,7 @@ static bool hasTCGen5CommitCrossCTA(Operation *op) {
   return !ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op), descs).empty();
 }
 
-bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
+static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op)) {
     if (!isRead)
       return false;
@@ -56,11 +58,11 @@ bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
     return ttng::getModuleTwoCTAs(op);
   } else if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     return tma.getMulticast();
+  } else if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op)) {
+    return arrive.isMulticast();
   }
   return hasTCGen5CommitCrossCTA(op);
 }
-
-namespace {
 
 static bool isPreAllocAliasSliceFilter(const AllocationSlice &lhsSlice,
                                        const AllocationSlice &rhsSlice,
@@ -126,6 +128,12 @@ usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
   if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
     return aliasesTracked(store.getMbarrier());
   }
+  if (auto expect = dyn_cast<ttng::BarrierExpectOp>(op);
+      expect && expect.getFromCTA())
+    return aliasesTracked(expect.getBarrier());
+  if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op))
+    return (arrive.isMulticast() || arrive.getFromCTA()) &&
+           aliasesTracked(arrive.getAlloc());
   return false;
 }
 
@@ -330,17 +338,15 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
 
 class ClusterBarrierAnalysis : public MembarOrFenceAnalysis {
 public:
-  explicit ClusterBarrierAnalysis(Allocation *allocation, MembarFilterFn filter)
-      : MembarOrFenceAnalysis(allocation, filter) {}
+  using MembarOrFenceAnalysis::MembarOrFenceAnalysis;
 
 private:
-  void update(Operation *op, BlockInfo *blockInfo,
-              FuncBlockInfoMapT *funcBlockInfoMap, OpBuilder *builder) override;
+  void update(Operation *op, BlockInfo *blockInfo, FuncMapT *funcMap,
+              OpBuilder *builder) override;
 };
 
 void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
-                                    FuncBlockInfoMapT *funcBlockInfoMap,
-                                    OpBuilder *builder) {
+                                    FuncMapT *funcMap, OpBuilder *builder) {
   if (isa<ttng::ClusterBarrierOp, ttng::ClusterWaitOp>(op)) {
     blockInfo->sync();
     return;
@@ -366,11 +372,11 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
     auto callOpInterface = dyn_cast<CallOpInterface>(op);
     if (auto callee =
             dyn_cast<FunctionOpInterface>(callOpInterface.resolveCallable())) {
-      auto calleeBlockInfo = funcBlockInfoMap->lookup(callee);
-      auto callBufferId = allocation->getBufferId(op);
+      auto calleeBlockInfo = funcMap->lookup(callee);
+      auto callBufferId = allocation.getBufferId(op);
       size_t callOffset = 0;
       if (callBufferId != Allocation::InvalidBufferId)
-        callOffset = allocation->getAllocatedInterval(callBufferId).start();
+        callOffset = allocation.getAllocatedInterval(callBufferId).start();
       curBlockInfo = translateBlockInfoToCallsite(calleeBlockInfo, callOffset);
     }
   } else {
@@ -380,9 +386,9 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
       memEffects.getEffects(effectInstances);
       for (auto effectInstance : effectInstances) {
         if (auto value = effectInstance.getValue()) {
-          for (auto bufferId : allocation->getBufferIds(value)) {
+          for (auto bufferId : allocation.getBufferIds(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
-              auto interval = allocation->getAllocatedInterval(bufferId);
+              auto interval = allocation.getAllocatedInterval(bufferId);
               auto slice = AllocationSlice(value, interval, bufferId);
               if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
                 curBlockInfo.syncWriteSlices[slice].insert(op);
@@ -393,7 +399,7 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
         }
       }
     }
-    scratchBufferId = allocation->getBufferId(op);
+    scratchBufferId = allocation.getBufferId(op);
   }
 
   // Scratch buffer operations consist of a series of shared memory operations
@@ -408,12 +414,12 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
           "dependencies");
     }
 
-    auto interval = allocation->getAllocatedInterval(scratchBufferId);
+    auto interval = allocation.getAllocatedInterval(scratchBufferId);
     auto scratchSlice = AllocationSlice(interval);
     curBlockInfo.syncWriteSlices[scratchSlice].insert(op);
 
     auto insertClusterBarrierNeeded = blockInfo->isIntersected(
-        curBlockInfo, filter, allocation, isPreAllocAliasSliceFilter);
+        curBlockInfo, filter, &allocation, isPreAllocAliasSliceFilter);
     if (insertClusterBarrierNeeded) {
       builder->setInsertionPoint(op);
       ttng::ClusterBarrierOp::create(*builder, op->getLoc());
@@ -426,7 +432,7 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
       blockInfo->sync();
 
     curBlockInfo.syncReadSlices[scratchSlice].insert(op);
-  } else if (blockInfo->isIntersected(curBlockInfo, filter, allocation,
+  } else if (blockInfo->isIntersected(curBlockInfo, filter, &allocation,
                                       isPreAllocAliasSliceFilter)) {
     builder->setInsertionPoint(op);
     ttng::ClusterBarrierOp::create(*builder, op->getLoc());
@@ -455,8 +461,8 @@ void runClusterBarrierInsertion(ModuleAllocation &moduleAllocation,
     return !lhsDist && !rhsDist;
   };
 
-  ModuleMembarOrFenceAnalysis<ClusterBarrierAnalysis> analysis(
-      &moduleAllocation, filterFn);
+  ModuleMembarOrFenceAnalysis<ClusterBarrierAnalysis> analysis(moduleAllocation,
+                                                               filterFn);
   analysis.run();
 }
 

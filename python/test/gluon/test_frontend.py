@@ -1,12 +1,16 @@
 import expecttest
 import pytest
 import re
+from dataclasses import replace
 
 from triton.backends.compiler import GPUTarget
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
+from triton.experimental.gluon.language._core import _unwrap_if_constexpr, builtin
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
+from triton.experimental.gluon.language.nvidia import rubin
+from triton.experimental.gluon.language.nvidia.ampere import mbarrier as ampere_mbarrier
 from triton.experimental.gluon.language.nvidia.hopper import cluster
 from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, TensorMemoryScalesLayout, async_copy
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
@@ -32,6 +36,7 @@ PTRRANGE_PAT = re.compile('(, )?tt.pointer_range = 32 : i32')
 LIBDEVICE_PAT = re.compile('{libname = "", libpath = "", pure = true, symbol = "__.*"}')
 
 BLACKWELL_TARGET = GPUTarget("cuda", 100, 32)
+RUBIN_TARGET = GPUTarget("cuda", 107, 32)
 HOPPER_TARGET = GPUTarget("cuda", 90, 32)
 AMPERE_TARGET = GPUTarget("cuda", 80, 32)
 HIP_TARGET_RDNA3 = GPUTarget("hip", "gfx1100", 32)
@@ -215,6 +220,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+@gluon.jit
+def allocate_with_nvmma_layout(layout: ttgl.constexpr):
+    if layout.rank == 2:
+        shape: ttgl.constexpr = [16, 16]
+    else:
+        shape: ttgl.constexpr = [2, 16, 16]
+    smem = ttgl.allocate_shared_memory(ttgl.float16, shape, layout)
+    smem._keep_alive()
+
+
+@gluon.jit
+def nvmma_layout_rank_kernel():
+    rank2: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=32, element_bitwidth=16, rank=2)
+    rank3: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=32, element_bitwidth=16, rank=3)
+    allocate_with_nvmma_layout(rank2)
+    allocate_with_nvmma_layout(rank3)
+
+
+def test_nvmma_layout_rank_mangling():
+    module = run_parser(nvmma_layout_rank_kernel, target=HOPPER_TARGET)
+    module_text = module.str_nodebug()
+
+    assert module_text.count("tt.func private @test_frontend.allocate_with_nvmma_layout") == 2
+    assert "!ttg.memdesc<16x16xf16" in module_text
+    assert "!ttg.memdesc<2x16x16xf16" in module_text
 
 
 @filecheck_test
@@ -446,7 +478,7 @@ def shared_memory_cast_kernel():
     smem = ttgl.allocate_shared_memory(ttgl.float16, [32, 1, 4, 64], layout_b)
     smem.reshape((128, 64))
 
-    smem._reinterpret(ttgl.int8, [16384], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+    smem.reinterpret(ttgl.int8, [16384], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
 
 
 @pytest.mark.parametrize("target", ALL_TARGETS)
@@ -466,13 +498,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32 = arith.constant 0 : i32
     %1 = ttg.memdesc_index %0[%c0_i32] : !ttg.memdesc<2x256x128xi8, #shared, #smem, mutable> -> !ttg.memdesc<256x128xi8, #shared, #smem, mutable>
     %2 = ttg.memdesc_trans %1 {order = array<i32: 1, 0>} : !ttg.memdesc<256x128xi8, #shared, #smem, mutable> -> !ttg.memdesc<128x256xi8, #shared1, #smem, mutable>
-    tt.call @test_frontend.anchor_noinline__MDi8S128_256SLNVMMA_64_8_True_False__NVMMALAS128_256ASMD(%2) : (!ttg.memdesc<128x256xi8, #shared1, #smem, mutable>) -> ()
+    tt.call @test_frontend.anchor_noinline__MDi8S128_256SLNVMMA_64_8_2_True_False__NVMMALAS128_256ASMD(%2) : (!ttg.memdesc<128x256xi8, #shared1, #smem, mutable>) -> ()
     %3 = ttg.local_alloc : () -> !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable>
     %4 = ttg.memdesc_reshape %3 : !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared3, #smem, mutable>
     %5 = ttg.memdesc_reinterpret %3 : !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable> -> !ttg.memdesc<16384xi8, #shared4, #smem, mutable>
     tt.return
   }
-  tt.func private @test_frontend.anchor_noinline__MDi8S128_256SLNVMMA_64_8_True_False__NVMMALAS128_256ASMD(%arg0: !ttg.memdesc<128x256xi8, #shared1, #smem, mutable>) attributes {noinline = true} {
+  tt.func private @test_frontend.anchor_noinline__MDi8S128_256SLNVMMA_64_8_2_True_False__NVMMALAS128_256ASMD(%arg0: !ttg.memdesc<128x256xi8, #shared1, #smem, mutable>) attributes {noinline = true} {
     tt.return
   }
 }
@@ -500,6 +532,382 @@ class Pair:
     second: tl.tensor
 
 
+@gluon.aggregate
+class ForwardOnlyAggregate:
+    value: tl.tensor
+
+    @gluon.jit
+    def __add__(self, rhs):
+        return ForwardOnlyAggregate(self.value + rhs)
+
+    @gluon.jit
+    def logical_and(self, rhs):
+        return ForwardOnlyAggregate(self.value & rhs.value)
+
+
+@gluon.aggregate
+class NotImplementedAggregate:
+    value: tl.tensor
+
+    @gluon.constexpr_function
+    def __add__(self, rhs):
+        return NotImplemented
+
+
+@gluon.aggregate
+class ReflectedOnlyAggregate:
+    value: tl.tensor
+
+    @gluon.jit
+    def __radd__(self, lhs):
+        return ReflectedOnlyAggregate(lhs.value + self.value)
+
+
+@gluon.jit
+def operator_dispatch_optional_annotation(value: ttgl.tensor, other: ttgl.tensor | None = None):
+    return value
+
+
+def TensorTuple(shape, layout, minimum_padding_size=1):
+    """Prototype an aggregate for one irregular tensor dimension.
+
+    The irregular dimension is padded to a multiple of ``minimum_padding_size``
+    and binary-decomposed into power-of-two chunks. ``layout`` describes the
+    largest chunk. Smaller chunks retain its thread/warp/CTA topology and scale
+    ``size_per_thread`` along the irregular dimension when possible.
+    """
+
+    def is_power_of_two(value):
+        return value > 0 and value & (value - 1) == 0
+
+    shape = tuple(shape)
+    assert isinstance(layout, ttgl.BlockedLayout), "TensorTuple requires a BlockedLayout template"
+    assert len(shape) == layout.rank, "shape and layout ranks must match"
+    assert all(isinstance(dim, int) and dim > 0 for dim in shape), "shape dimensions must be positive integers"
+    assert isinstance(minimum_padding_size, int) and is_power_of_two(minimum_padding_size), \
+        "minimum_padding_size must be a positive power of two"
+
+    irregular_dims = [i for i, dim in enumerate(shape) if not is_power_of_two(dim)]
+    assert len(irregular_dims) == 1, "shape must have exactly one non-power-of-two dimension"
+    split_dim = irregular_dims[0]
+
+    def with_split_extent(extent):
+        return shape[:split_dim] + (extent, ) + shape[split_dim + 1:]
+
+    extent = shape[split_dim]
+    padded_extent = ((extent + minimum_padding_size - 1) // minimum_padding_size) * minimum_padding_size
+    chunks = tuple(1 << bit for bit in range(padded_extent.bit_length() - 1, -1, -1) if padded_extent & (1 << bit))
+    padding = padded_extent - extent
+    offsets = tuple(sum(chunks[:i]) for i in range(len(chunks)))
+    physical_shapes = tuple(with_split_extent(chunk) for chunk in chunks)
+    logical_shapes = tuple(with_split_extent(chunk) for chunk in chunks[:-1])
+    logical_shapes += (with_split_extent(chunks[-1] - padding), )
+
+    def derive_layout(chunk):
+        size_per_thread = list(layout.size_per_thread)
+        size_per_thread[split_dim] = max(1, size_per_thread[split_dim] * chunk // chunks[0])
+        return replace(layout, size_per_thread=size_per_thread)
+
+    layouts = tuple(derive_layout(chunk) for chunk in chunks)
+
+    jit_shape = ttgl.constexpr(shape)
+    jit_split_dim = ttgl.constexpr(split_dim)
+    jit_chunks = ttgl.constexpr(chunks)
+    jit_offsets = ttgl.constexpr(offsets)
+    jit_physical_shapes = ttgl.constexpr(physical_shapes)
+    jit_logical_shapes = ttgl.constexpr(logical_shapes)
+    jit_layouts = ttgl.constexpr(layouts)
+
+    @gluon.aggregate
+    class TensorTupleType:
+        values: ttgl.tuple
+
+        @gluon.jit
+        def arange(start: ttgl.constexpr = 0):
+            ttgl.static_assert(len(jit_shape) == 1, "arange requires a rank-1 TensorTuple")
+            values = ()
+            for i in ttgl.static_range(len(jit_chunks)):
+                value = ttgl.arange(
+                    start + jit_offsets[i],
+                    start + jit_offsets[i] + jit_chunks[i],
+                    layout=jit_layouts[i],
+                )
+                values += (value, )
+            return TensorTupleType(values)
+
+        @gluon.jit
+        def full(value, dtype: ttgl.constexpr):
+            values = ()
+            for i in ttgl.static_range(len(jit_chunks)):
+                values += (ttgl.full(jit_physical_shapes[i], value, dtype, jit_layouts[i]), )
+            return TensorTupleType(values)
+
+        @gluon.jit
+        def valid_mask():
+            ttgl.static_assert(len(jit_shape) == 1, "valid_mask requires a rank-1 TensorTuple")
+            values = ()
+            for i in ttgl.static_range(len(jit_chunks)):
+                offsets = ttgl.arange(
+                    jit_offsets[i],
+                    jit_offsets[i] + jit_chunks[i],
+                    layout=jit_layouts[i],
+                )
+                logical_end = jit_offsets[i] + jit_logical_shapes[i][jit_split_dim]
+                values += (offsets < logical_end, )
+            return TensorTupleType(values)
+
+        @gluon.jit
+        def _binary(self, rhs, method_name: ttgl.constexpr):
+            if isinstance(rhs, TensorTupleType):
+                rhs = rhs.values
+            else:
+                rhs = (rhs, ) * len(jit_chunks)
+            values = ()
+            for i in ttgl.static_range(len(jit_chunks)):
+                values += (getattr(self.values[i], method_name)(rhs[i]), )
+            return TensorTupleType(values)
+
+        @gluon.jit
+        def __add__(self, rhs):
+            return self._binary(rhs, "__add__")
+
+        @gluon.jit
+        def __radd__(self, lhs):
+            return self._binary(lhs, "__radd__")
+
+        @gluon.jit
+        def __sub__(self, rhs):
+            return self._binary(rhs, "__sub__")
+
+        @gluon.jit
+        def __rsub__(self, lhs):
+            return self._binary(lhs, "__rsub__")
+
+        @gluon.jit
+        def __mul__(self, rhs):
+            return self._binary(rhs, "__mul__")
+
+        @gluon.jit
+        def __rmul__(self, lhs):
+            return self._binary(lhs, "__rmul__")
+
+        @gluon.jit
+        def __truediv__(self, rhs):
+            return self._binary(rhs, "__truediv__")
+
+        @gluon.jit
+        def __rtruediv__(self, lhs):
+            return self._binary(lhs, "__rtruediv__")
+
+        @gluon.jit
+        def __lt__(self, rhs):
+            return self._binary(rhs, "__lt__")
+
+        @gluon.jit
+        def __le__(self, rhs):
+            return self._binary(rhs, "__le__")
+
+        @gluon.jit
+        def __gt__(self, rhs):
+            return self._binary(rhs, "__gt__")
+
+        @gluon.jit
+        def __ge__(self, rhs):
+            return self._binary(rhs, "__ge__")
+
+        @gluon.jit
+        def __and__(self, rhs):
+            return self._binary(rhs, "__and__")
+
+        @gluon.jit
+        def __or__(self, rhs):
+            return self._binary(rhs, "__or__")
+
+        @gluon.jit
+        def __neg__(self):
+            values = ()
+            for i in ttgl.static_range(len(jit_chunks)):
+                values += (-self.values[i], )
+            return TensorTupleType(values)
+
+    TensorTupleType.shape = shape
+    TensorTupleType.split_dim = split_dim
+    TensorTupleType.offsets = offsets
+    TensorTupleType.physical_shapes = physical_shapes
+    TensorTupleType.logical_shapes = logical_shapes
+    TensorTupleType.layouts = layouts
+    TensorTupleType.padding = padding
+    TensorTupleType.num_chunks = len(chunks)
+    return TensorTupleType
+
+
+_TENSOR_TUPLE_LAYOUT = ttgl.BlockedLayout([2], [32], [4], [0])
+_TENSOR_TUPLE_288 = TensorTuple((288, ), _TENSOR_TUPLE_LAYOUT, minimum_padding_size=64)
+
+
+@filecheck_test
+@gluon.jit
+def test_tensor_tuple_frontend_ir():
+    # CHECK-DAG: [[HEAD_LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    # CHECK-DAG: [[TAIL_LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    # CHECK-LABEL: tt.func public @test_tensor_tuple_frontend_ir()
+    # CHECK: [[OFFSETS:%.*]]:2 = tt.call {{.*}}TensorTupleType.arange
+    # CHECK: [[SCALAR:%.*]] = arith.constant 4 : i32
+    # CHECK: {{%.*}}:2 = tt.call {{.*}}TensorTupleType.__add__{{.*}}([[OFFSETS]]#0, [[OFFSETS]]#1, [[SCALAR]])
+    # CHECK: {{%.*}}:2 = tt.call {{.*}}TensorTupleType.__radd__{{.*}}([[OFFSETS]]#0, [[OFFSETS]]#1, [[SCALAR]])
+    # CHECK: {{%.*}}:2 = tt.call {{.*}}TensorTupleType.__rsub__{{.*}}([[OFFSETS]]#0, [[OFFSETS]]#1, [[SCALAR]])
+    # CHECK: {{%.*}}:2 = tt.call {{.*}}TensorTupleType.__gt__{{.*}}([[OFFSETS]]#0, [[OFFSETS]]#1, [[SCALAR]])
+
+    # CHECK-LABEL: tt.func private {{.*}}TensorTupleType.arange
+    # CHECK: [[HEAD_RANGE:%.*]] = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, [[HEAD_LAYOUT]]>
+    # CHECK-NEXT: [[TAIL_RANGE:%.*]] = tt.make_range {end = 320 : i32, start = 256 : i32} : tensor<64xi32, [[TAIL_LAYOUT]]>
+    # CHECK-NEXT: tt.return [[HEAD_RANGE]], [[TAIL_RANGE]]
+
+    # CHECK-LABEL: tt.func private {{.*}}TensorTupleType.valid_mask
+    # CHECK: [[VALID_HEAD_RANGE:%.*]] = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, [[HEAD_LAYOUT]]>
+    # CHECK: [[HEAD_END:%.*]] = arith.constant dense<256> : tensor<256xi32, [[HEAD_LAYOUT]]>
+    # CHECK: [[HEAD_MASK:%.*]] = arith.cmpi slt, [[VALID_HEAD_RANGE]], [[HEAD_END]]
+    # CHECK: [[VALID_TAIL_RANGE:%.*]] = tt.make_range {end = 320 : i32, start = 256 : i32} : tensor<64xi32, [[TAIL_LAYOUT]]>
+    # CHECK: [[TAIL_END:%.*]] = arith.constant dense<288> : tensor<64xi32, [[TAIL_LAYOUT]]>
+    # CHECK: [[TAIL_MASK:%.*]] = arith.cmpi slt, [[VALID_TAIL_RANGE]], [[TAIL_END]]
+    # CHECK: tt.return [[HEAD_MASK]], [[TAIL_MASK]]
+
+    # CHECK-LABEL: tt.func private {{.*}}TensorTupleType._binary{{.*}}__rsub__
+    # CHECK: [[SPLAT_LHS:%.*]] = tt.splat %arg2 : i32 -> tensor<256xi32, [[HEAD_LAYOUT]]>
+    # CHECK-NEXT: {{%.*}} = arith.subi [[SPLAT_LHS]], %arg0
+
+    # CHECK-LABEL: tt.func private {{.*}}TensorTupleType._binary{{.*}}__gt__
+    # CHECK: [[SPLAT_RHS:%.*]] = tt.splat %arg2 : i32 -> tensor<256xi32, [[HEAD_LAYOUT]]>
+    # CHECK-NEXT: {{%.*}} = arith.cmpi sgt, %arg0, [[SPLAT_RHS]]
+    offsets = _TENSOR_TUPLE_288.arange()
+    filled = _TENSOR_TUPLE_288.full(3, ttgl.int32)
+    values = -(2 * offsets + filled - offsets) / 2
+    masks = _TENSOR_TUPLE_288.valid_mask() & (offsets < 280)
+    scalar_tensor = ttgl.to_tensor(4)
+    tensor_rhs = offsets + scalar_tensor
+    tensor_lhs = scalar_tensor + offsets
+    reverse_sub = scalar_tensor - offsets
+    reflected_cmp = scalar_tensor < offsets
+    for i in ttgl.static_range(2):
+        anchor(values.values[i])
+        anchor(masks.values[i])
+        anchor(tensor_rhs.values[i])
+        anchor(tensor_lhs.values[i])
+        anchor(reverse_sub.values[i])
+        anchor(reflected_cmp.values[i])
+
+
+@filecheck_test
+@gluon.jit
+def test_operator_dispatch_ir():
+    # CHECK: [[LAYOUT:#.*]] = #ttg.blocked
+    # CHECK-LABEL: tt.func public @test_operator_dispatch_ir()
+    # CHECK: [[VALUE:%.*]] = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, [[LAYOUT]]>
+    # CHECK: {{%.*}} = arith.addi [[VALUE]], [[VALUE]]
+    # CHECK: [[ADD_RHS:%.*]] = arith.constant dense<4> : tensor<128xi32, [[LAYOUT]]>
+    # CHECK-NEXT: {{%.*}} = arith.addi [[VALUE]], [[ADD_RHS]]
+    # CHECK: [[ADD_LHS:%.*]] = arith.constant dense<4> : tensor<128xi32, [[LAYOUT]]>
+    # CHECK-NEXT: {{%.*}} = arith.addi [[ADD_LHS]], [[VALUE]]
+    # CHECK: [[SUB_RHS:%.*]] = arith.constant dense<4> : tensor<128xi32, [[LAYOUT]]>
+    # CHECK-NEXT: {{%.*}} = arith.subi [[VALUE]], [[SUB_RHS]]
+    # CHECK: [[SUB_LHS:%.*]] = arith.constant dense<4> : tensor<128xi32, [[LAYOUT]]>
+    # CHECK-NEXT: {{%.*}} = arith.subi [[SUB_LHS]], [[VALUE]]
+    # CHECK: [[CMP_RHS:%.*]] = arith.constant dense<4> : tensor<128xi32, [[LAYOUT]]>
+    # CHECK-NEXT: {{%.*}} = arith.cmpi slt, [[VALUE]], [[CMP_RHS]]
+    # CHECK: [[CMP_LHS:%.*]] = arith.constant dense<4> : tensor<128xi32, [[LAYOUT]]>
+    # CHECK-NEXT: {{%.*}} = arith.cmpi slt, [[CMP_LHS]], [[VALUE]]
+    # CHECK: [[ZERO:%.*]] = arith.constant dense<0> : tensor<128xi32, [[LAYOUT]]>
+    # CHECK-NEXT: {{%.*}} = arith.subi [[ZERO]], [[VALUE]]
+    # CHECK: [[ANNOTATED:%.*]] = tt.call @{{.*}}operator_dispatch_optional_annotation{{.*}}([[VALUE]])
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    value = ttgl.arange(0, 128, layout=layout)
+    scalar_tensor = ttgl.to_tensor(4)
+    pair = (value, ) + (value, )
+    ttgl.static_assert(3 + 4 == 7)
+    ttgl.static_assert(((3, 4) or (5, 6)) == (3, 4))
+    ttgl.static_assert(((3, 4) and (5, 6)) == (5, 6))
+    ttgl.static_assert(((3, 4) and ()) == ())
+    ttgl.static_assert((() or (5, 6)) == (5, 6))
+    anchor(value + value)
+    anchor(value + 4)
+    anchor(4 + value)
+    anchor(value - scalar_tensor)
+    anchor(scalar_tensor - value)
+    anchor(value < scalar_tensor)
+    anchor(scalar_tensor < value)
+    anchor(-value)
+    anchor(operator_dispatch_optional_annotation(value))
+    anchor(pair[1])
+
+
+@filecheck_test
+@gluon.jit
+def test_operator_dispatch_boolean_ir():
+    # CHECK: [[LAYOUT:#.*]] = #ttg.blocked
+    # CHECK-LABEL: tt.func public @test_operator_dispatch_boolean_ir()
+    # CHECK: [[VALUE:%.*]] = tt.make_range {{.*}} : tensor<128xi32, [[LAYOUT]]>
+    # CHECK: [[RESULT:%.*]] = tt.call {{.*}}ForwardOnlyAggregate.logical_and{{.*}}([[VALUE]], [[VALUE]])
+    # CHECK-LABEL: tt.func private {{.*}}ForwardOnlyAggregate.logical_and
+    # CHECK: [[AND:%.*]] = arith.andi %arg0, %arg1 : tensor<128xi32, [[LAYOUT]]>
+    # CHECK-NEXT: tt.return [[AND]]
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    value = ttgl.arange(0, 128, layout=layout)
+    result = ForwardOnlyAggregate(value) and ForwardOnlyAggregate(value)
+    anchor(result.value)
+
+
+@filecheck_test
+@gluon.jit
+def test_operator_dispatch_not_implemented_fallback_ir():
+    # CHECK-LABEL: tt.func public @test_operator_dispatch_not_implemented_fallback_ir()
+    # CHECK: [[VALUE:%.*]] = tt.make_range
+    # CHECK: {{%.*}} = tt.call {{.*}}ReflectedOnlyAggregate.__radd__{{.*}}([[VALUE]], [[VALUE]])
+    # CHECK-LABEL: tt.func private {{.*}}ReflectedOnlyAggregate.__radd__
+    # CHECK: [[RESULT:%.*]] = arith.addi %arg1, %arg0
+    # CHECK-NEXT: tt.return [[RESULT]]
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    value = ttgl.arange(0, 128, layout=layout)
+    result = NotImplementedAggregate(value) + ReflectedOnlyAggregate(value)
+    anchor(result.value)
+
+
+@gluon.jit
+def operator_dispatch_missing_reflected_kernel():
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    value = ttgl.arange(0, 128, layout=layout)
+    value + ForwardOnlyAggregate(value)
+
+
+@gluon.jit
+def operator_dispatch_not_implemented_kernel():
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    value = ttgl.arange(0, 128, layout=layout)
+    NotImplementedAggregate(value) + 1
+
+
+def test_tensor_tuple_metadata():
+    assert _TENSOR_TUPLE_288.physical_shapes == ((256, ), (64, ))
+    assert _TENSOR_TUPLE_288.logical_shapes == ((256, ), (32, ))
+    assert _TENSOR_TUPLE_288.offsets == (0, 256)
+    assert _TENSOR_TUPLE_288.padding == 32
+    assert _TENSOR_TUPLE_288.layouts[0].size_per_thread == [2]
+    assert _TENSOR_TUPLE_288.layouts[1].size_per_thread == [1]
+
+    layout_2d = ttgl.BlockedLayout([1, 4], [1, 32], [1, 4], [1, 0])
+    tensor_tuple_2d = TensorTuple((8, 317), layout_2d, minimum_padding_size=64)
+    assert tensor_tuple_2d.split_dim == 1
+    assert tensor_tuple_2d.physical_shapes == ((8, 256), (8, 64))
+    assert tensor_tuple_2d.logical_shapes == ((8, 256), (8, 61))
+    assert [layout.size_per_thread for layout in tensor_tuple_2d.layouts] == [[1, 4], [1, 1]]
+
+
+def test_operator_dispatch_errors():
+    with pytest.raises(CompilationError, match=r"unsupported operand type\(s\) for \+"):
+        run_parser(operator_dispatch_missing_reflected_kernel)
+    with pytest.raises(CompilationError, match=r"unsupported operand type\(s\) for \+"):
+        run_parser(operator_dispatch_not_implemented_kernel)
+
+
 @gluon.jit
 def anchor(x):
     pass
@@ -508,6 +916,25 @@ def anchor(x):
 @gluon.jit(noinline=True)
 def anchor_noinline(x):
     pass
+
+
+@filecheck_test
+@gluon.jit
+def test_reinterpret_parent_then_multibuffer_subslice():
+    # CHECK-LABEL: test_reinterpret_parent_then_multibuffer_subslice
+    a_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(64, 16, rank=2)
+    b_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(32, 16, rank=2)
+    arena = ttgl.allocate_shared_memory(ttgl.float16, [7, 8, 32], a_layout)
+    # CHECK: [[B_PARENT:%.*]] = ttg.memdesc_reinterpret {{.*}} -> !ttg.memdesc<14x8x16xf16
+    b_parent = arena.reinterpret(ttgl.float16, [14, 8, 16], b_layout)
+    # CHECK: [[A_SUB:%.*]] = ttg.memdesc_subslice {{.*}}[0, 0, 0]
+    a_stages = arena.slice(0, 3, dim=0)
+    # CHECK: [[B_SUB:%.*]] = ttg.memdesc_subslice [[B_PARENT]][6, 0, 0] {{.*}} -> !ttg.memdesc<4x8x16xf16
+    b_stages = b_parent.slice(6, 4, dim=0)
+    # CHECK: ttg.memdesc_index [[A_SUB]]
+    anchor_noinline(a_stages.index(0))
+    # CHECK: ttg.memdesc_index [[B_SUB]]
+    anchor_noinline(b_stages.index(0))
 
 
 @filecheck_test
@@ -637,6 +1064,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
+def mbarrier_from_cta_kernel():
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.expect(bar, 4, from_cta=5)
+    mbarrier.arrive(bar, count=1, from_cta=5)
+
+
+def test_mbarrier_from_cta():
+    mod = run_parser(mbarrier_from_cta_kernel, *make_args(num_ctas=8), target=HOPPER_TARGET)
+    ir = anonymize_ir(mod.str_nodebug())
+    assert re.search(r"ttng\.barrier_expect %\d+, 4 \{fromCTA = 5 : i32\}, %true", ir)
+    assert re.search(r"ttng\.arrive_barrier %\d+, 1, %true_\d+ \{fromCTA = 5 : i32\}", ir)
+
+
+def test_rubin_mbarrier_arrive_from_cta():
+
+    @gluon.jit
+    def kernel():
+        bar = rubin.mbarrier.allocate_mbarrier()
+        rubin.mbarrier.arrive(bar, from_cta=0)
+
+    mod = run_parser(kernel, *make_args(num_ctas=2), target=RUBIN_TARGET)
+    assert "fromCTA = 0 : i32" in anonymize_ir(mod.str_nodebug())
+
+
+@gluon.jit
 def async_shared_store_kernel():
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[0]])
     shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=[[0]])
@@ -650,6 +1102,279 @@ def async_shared_store_kernel():
 def test_async_shared_store(target):
     mod = run_parser(async_shared_store_kernel, *make_args(num_ctas=2), target=target)
     assert "ttng.async_shared_store" in anonymize_ir(mod.str_nodebug())
+
+
+def test_rubin_namespace_extends_blackwell():
+    assert ttgl.nvidia.rubin is rubin
+    assert rubin.TensorMemoryLayout is blackwell.TensorMemoryLayout
+    assert rubin.allocate_tensor_memory is blackwell.allocate_tensor_memory
+    assert rubin.tcgen05_mma_scaled is blackwell.tcgen05_mma_scaled
+    assert rubin.tma is blackwell.tma
+    assert rubin.mbarrier is not blackwell.mbarrier
+    assert rubin.mbarrier.allocate_mbarrier is blackwell.mbarrier.allocate_mbarrier
+
+    with pytest.raises(TypeError, match="block_rep_order"):
+        blackwell.TensorMemoryScalesLayout(block_rep_order="kThenMn")
+
+
+@gluon.jit
+def _combine_add2(a, b, c, d):
+    parent: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [1, 32], [1, ttgl.num_warps()], [1, 0],
+                                                cga_layout=[[0, 0]] * (ttgl.num_ctas().bit_length() - 1))
+    layout: ttgl.constexpr = ttgl.SliceLayout(0, parent)
+    lanes = ttgl.arange(0, 2, layout=layout)
+    lhs = ttgl.where(lanes == 0, a, b)
+    rhs = ttgl.where(lanes == 0, c, d)
+    return ttgl.split(blackwell.add2(lhs, rhs))
+
+
+@gluon.jit
+def _packed_arith_reduce_frontend_kernel(out, dtype: ttgl.constexpr, layout: ttgl.constexpr):
+    a = ttgl.full([16, 16], 1, dtype, layout)
+    b = ttgl.full([16, 16], 2, dtype, layout)
+    a, b = ttgl.reduce((a, b), axis=1, combine_fn=_combine_add2)
+    ttgl.static_assert(a.dtype == dtype)
+    ttgl.static_assert(b.dtype == dtype)
+    offsets = ttgl.arange(0, 16, ttgl.SliceLayout(1, layout))
+    ttgl.store(out + offsets, a + b)
+
+
+@pytest.mark.parametrize("num_ctas", [1, 2, 4], ids=["1cta", "2ctas", "4ctas"])
+def test_packed_arith_reduce_frontend(num_ctas):
+    cga_layout = [[0, 0] for _ in range(num_ctas.bit_length() - 1)]
+    layout = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0], cga_layout=cga_layout)
+    module = run_parser(_packed_arith_reduce_frontend_kernel,
+                        *make_args(MockTensor(ttgl.float32), ttgl.float32, layout, num_ctas=num_ctas),
+                        target=BLACKWELL_TARGET)
+    text = module.str_nodebug()
+    assert '"tt.reduce"' in text
+    assert "ttng.packed_arith add" in text
+    assert "elementwise_inline_asm" not in text
+
+
+@gluon.jit
+def _packed_arith_reduce_default(out):
+    return
+
+
+@gluon.jit
+def _packed_arith_reduce_worker(out):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+    _packed_arith_reduce_frontend_kernel(out, ttgl.float32, layout)
+
+
+@gluon.jit
+def _packed_arith_reduce_warp_specialized(out):
+    ttgl.warp_specialize(
+        [(_packed_arith_reduce_default, (out, )), (_packed_arith_reduce_worker, (out, ))],
+        [4],
+    )
+
+
+def test_packed_arith_reduce_warp_specialized_frontend():
+    module = run_parser(_packed_arith_reduce_warp_specialized, *make_args(MockTensor(ttgl.float32), num_warps=8),
+                        target=BLACKWELL_TARGET)
+    text = module.str_nodebug()
+    assert "num_warps(4)" in text
+    assert "ttng.packed_arith add" in text
+
+
+@gluon.jit
+def _packed_arith_frontend_kernel(operation: ttgl.constexpr, lhs_dtype: ttgl.constexpr, rhs_dtype: ttgl.constexpr,
+                                  result_dtype: ttgl.constexpr, use_x4: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+    lhs = ttgl.full([256], 1.0, lhs_dtype, layout)
+    rhs = ttgl.full([256], 2.0, rhs_dtype, layout)
+    acc = ttgl.full([256], 3.0, rhs_dtype if result_dtype is None else result_dtype, layout)
+
+    if use_x4:
+        if operation == "add":
+            result = rubin.add4(lhs, rhs, dtype=result_dtype)
+        elif operation == "sub":
+            result = rubin.sub4(lhs, rhs, dtype=result_dtype)
+        elif operation == "mul":
+            result = rubin.mul4(lhs, rhs, dtype=result_dtype)
+        else:
+            result = rubin.fma4(lhs, rhs, acc, dtype=result_dtype)
+    else:
+        if operation == "add":
+            result = blackwell.add2(lhs, rhs, dtype=result_dtype)
+        elif operation == "sub":
+            result = blackwell.sub2(lhs, rhs, dtype=result_dtype)
+        elif operation == "mul":
+            result = blackwell.mul2(lhs, rhs, dtype=result_dtype)
+        elif operation == "fma":
+            result = blackwell.fma2(lhs, rhs, acc, dtype=result_dtype)
+        elif operation == "min":
+            result = blackwell.min2(lhs, rhs, dtype=result_dtype)
+        else:
+            result = blackwell.max2(lhs, rhs, dtype=result_dtype)
+
+    if result_dtype is not None:
+        ttgl.static_assert(result.dtype == result_dtype)
+    elif lhs_dtype == rhs_dtype:
+        ttgl.static_assert(result.dtype == lhs_dtype)
+
+
+@pytest.mark.parametrize(
+    "operation, lhs_dtype, rhs_dtype, result_dtype, expected_dtype",
+    [
+        pytest.param("add", ttgl.float16, ttgl.float32, None, "f32", id="upcast-f16"),
+        pytest.param("add", ttgl.bfloat16, ttgl.float32, None, "f32", id="upcast-bf16"),
+        pytest.param("sub", ttgl.float32, ttgl.float32, ttgl.float16, "f16", id="downcast-f16"),
+        pytest.param("mul", ttgl.float32, ttgl.float32, ttgl.bfloat16, "bf16", id="downcast-bf16"),
+        pytest.param("mul", ttgl.float16, ttgl.bfloat16, None, "f16", id="cross-half"),
+        pytest.param("fma", ttgl.float16, ttgl.float32, None, "f32", id="mixed-fma"),
+    ],
+)
+def test_rubin_packed_arith_mixed_frontend(operation, lhs_dtype, rhs_dtype, result_dtype, expected_dtype):
+    module = run_parser(_packed_arith_frontend_kernel, *make_args(operation, lhs_dtype, rhs_dtype, result_dtype, False),
+                        target=RUBIN_TARGET)
+    text = module.str_nodebug()
+    assert f"ttng.packed_arith {operation}" in text
+    assert re.search(rf"ttng\.packed_arith {operation} .* -> tensor<256x{expected_dtype},", text)
+
+
+@pytest.mark.parametrize("operation", ["add", "sub", "mul", "fma"])
+@pytest.mark.parametrize(
+    "lhs_dtype, rhs_dtype, expected_dtype",
+    [
+        pytest.param(ttgl.float8e4nv, ttgl.float8e4nv, "f8E4M3FN", id="e4m3"),
+        pytest.param(ttgl.float8e5, ttgl.float8e5, "f8E5M2", id="e5m2"),
+        pytest.param(ttgl.float8e5, ttgl.float8e4nv, "f8E4M3FN", id="mixed-fp8"),
+    ],
+)
+def test_rubin_packed_arith_x4_frontend(operation, lhs_dtype, rhs_dtype, expected_dtype):
+    result_dtype = ttgl.float8e4nv if operation == "mul" and lhs_dtype != rhs_dtype else None
+    module = run_parser(_packed_arith_frontend_kernel, *make_args(operation, lhs_dtype, rhs_dtype, result_dtype, True),
+                        target=RUBIN_TARGET)
+    assert re.search(rf"ttng\.packed_arith {operation} .* -> tensor<256x{expected_dtype},", module.str_nodebug())
+
+
+@gluon.jit
+def _rubin_packed_fp4_frontend_kernel(only_fp4: ttgl.constexpr):
+    fp4_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+    packed_layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+    lhs = ttgl.full([128], 1, ttgl.int8, fp4_layout)
+    if only_fp4:
+        rhs = ttgl.full([128], 2, ttgl.int8, fp4_layout)
+        result = rubin.mul4(lhs, rhs, dtype=ttgl.float8e4nv)
+    else:
+        rhs = ttgl.full([256], 2.0, ttgl.float8e4nv, packed_layout)
+        result = rubin.add4(lhs, rhs)
+    ttgl.static_assert(result.dtype == ttgl.float8e4nv)
+
+
+@pytest.mark.parametrize("only_fp4", [False, True], ids=["mixed-fp4", "two-fp4-operands"])
+def test_rubin_packed_arith_fp4_frontend(only_fp4):
+    module = run_parser(_rubin_packed_fp4_frontend_kernel, *make_args(only_fp4), target=RUBIN_TARGET)
+    operation = "mul" if only_fp4 else "add"
+    text = module.str_nodebug()
+    assert f"ttng.packed_arith {operation}" in text
+    assert "ttg.fp4_to_fp" not in text
+
+
+@gluon.jit
+def _packed_arith_scalar_frontend_kernel():
+    layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+    value = ttgl.full([256], 1.0, ttgl.float16, layout)
+    result = blackwell.fma2(value, 2.0, 3.0)
+    ttgl.static_assert(result.dtype == ttgl.float16)
+
+
+def test_packed_arith_scalar_broadcast_frontend():
+    module = run_parser(_packed_arith_scalar_frontend_kernel, *make_args(), target=BLACKWELL_TARGET)
+    assert "ttng.packed_arith fma" in module.str_nodebug()
+
+
+@gluon.jit
+def _packed_arith_invalid_frontend_kernel(case: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+    value = ttgl.full([256], 1.0, ttgl.float32, layout)
+    if case == "dtype":
+        blackwell.add2(value, value, dtype="float32")
+    else:
+        blackwell.add2(1.0, 2.0)
+
+
+@pytest.mark.parametrize(
+    "case, message",
+    [
+        ("dtype", "expected 'dtype' to be a dtype"),
+        ("scalars", "packed arithmetic requires at least one distributed tensor operand"),
+    ],
+)
+def test_packed_arith_frontend_errors(case, message):
+    with pytest.raises(CompilationError) as exc:
+        run_parser(_packed_arith_invalid_frontend_kernel, *make_args(case), target=BLACKWELL_TARGET)
+    assert message in str(exc.value.__cause__)
+
+
+@gluon.jit
+def ampere_mbarrier_arrive_kernel():
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ampere_mbarrier.MBarrierLayout())
+    ampere_mbarrier.init(bar, count=1)
+    ampere_mbarrier.arrive(bar)
+    phase = 0
+    ampere_mbarrier.wait(bar, phase)
+    ampere_mbarrier.invalidate(bar)
+
+
+@pytest.mark.parametrize("target", [AMPERE_TARGET, HOPPER_TARGET, BLACKWELL_TARGET])
+def test_ampere_mbarrier_arrive(target):
+    # Smoke test that the Ampere mbarrier.arrive wrapper still wires through
+    # to the create_mbarrier_arrive binding after the multicast signature change.
+    run_parser(ampere_mbarrier_arrive_kernel, target=target)
+
+
+def test_mbarrier_arrive_multicast_not_exposed_on_blackwell():
+
+    @gluon.jit
+    def kernel():
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.arrive(bar, count=1, multicast_cta=0x1)
+
+    with pytest.raises(CompilationError, match="multicast_cta"):
+        run_parser(kernel, *make_args(num_ctas=2), target=BLACKWELL_TARGET)
+
+
+def test_mbarrier_arrive_multicast_negative_mask():
+
+    @gluon.jit
+    def kernel():
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], rubin.mbarrier.MBarrierLayout())
+        rubin.mbarrier.arrive(bar, count=1, multicast_cta=-1)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel, *make_args(num_ctas=2), target=RUBIN_TARGET)
+
+    assert "multicast_cta must be positive" in str(e.value)
+
+
+def test_mbarrier_arrive_multicast_mask_too_large():
+
+    @gluon.jit
+    def kernel():
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], rubin.mbarrier.MBarrierLayout())
+        rubin.mbarrier.arrive(bar, count=1, multicast_cta=2)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel, *make_args(num_ctas=2), target=RUBIN_TARGET)
+
+    assert "multicast_cta must be <= num_ctas - 1" in str(e.value)
+
+
+def test_mbarrier_arrive_multicast_non_int_mask():
+
+    @gluon.jit
+    def kernel():
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], rubin.mbarrier.MBarrierLayout())
+        rubin.mbarrier.arrive(bar, count=1, multicast_cta=1.5)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel, *make_args(num_ctas=2), target=RUBIN_TARGET)
+
+    assert "multicast_cta must be an int" in str(e.value)
 
 
 @gluon.jit
@@ -692,6 +1417,35 @@ def tcgen05_mma_scaled_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.con
     scale_b = blackwell.allocate_tensor_memory(ttgl.int8, [128, 32], scale_layout)
     acc = blackwell.allocate_tensor_memory(ttgl.float16, [128, 128], acc_layout)
     blackwell.tcgen05_mma_scaled(a, b, acc, scale_a, scale_b, "e5m2", "e5m2")
+
+
+@builtin
+def assert_tmem_scales_layout_roundtrip(memdesc, expected_layout, _semantic=None):
+    expected_layout = _unwrap_if_constexpr(expected_layout)
+    actual_layout = _semantic.builder.get_gluon_layout_from_memdesc(memdesc.handle)
+    assert actual_layout == expected_layout, f"expected {expected_layout}, got {actual_layout}"
+
+
+@gluon.jit
+def tmem_scales_layout_roundtrip_kernel(scale_layout: ttgl.constexpr):
+    scale = blackwell.allocate_tensor_memory(ttgl.int8, [128, 8], scale_layout)
+    assert_tmem_scales_layout_roundtrip(scale, scale_layout)
+
+
+@pytest.mark.parametrize(
+    "target,scale_layout",
+    [
+        pytest.param(BLACKWELL_TARGET, blackwell.TensorMemoryScalesLayout(), id="blackwell-mn-then-k"),
+        pytest.param(RUBIN_TARGET, rubin.TensorMemoryScalesLayout(), id="rubin-mn-then-k"),
+        pytest.param(
+            RUBIN_TARGET,
+            rubin.TensorMemoryScalesLayout(block_rep_order="kThenMn"),
+            id="rubin-k-then-mn",
+        ),
+    ],
+)
+def test_tmem_scales_layout_roundtrip(target, scale_layout):
+    run_parser(tmem_scales_layout_roundtrip_kernel, *make_args(scale_layout), target=target)
 
 
 def test_tcgen05_mma_scaled():
@@ -878,7 +1632,7 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr):
 
     mbarrier.invalidate(bar)
 
-    tma.async_copy_shared_to_global(input_desc, [0, 0], smem)
+    tma.async_store(input_desc, [0, 0], smem)
     tma.store_wait(0)
 
 
@@ -1096,6 +1850,21 @@ def test_tmem_subslice_noncontiguous():
     ir = run_parser(tmem_subslice_noncontiguous_kernel, target=BLACKWELL_TARGET).str_nodebug()
     assert "ttng.tmem_subslice" in ir
     assert "!ttg.memdesc<128x256xf32" in ir
+
+
+@gluon.jit
+def tmem_pipeline_stage_subslice_kernel():
+    layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 64], col_stride=1)
+    parent = blackwell.allocate_tensor_memory(ttgl.float32, [5, 128, 64], layout)
+    stages = parent.slice(2, 2, dim=0)
+    stages.slice(0, 32, dim=2)
+
+
+def test_tmem_pipeline_stage_subslice_constexpr():
+    ir = run_parser(tmem_pipeline_stage_subslice_kernel, target=BLACKWELL_TARGET).str_nodebug()
+    assert "dim = 0 : i32" in ir
+    assert "dim = 2 : i32" in ir
+    assert "mutable, 5x128x64>" in ir
 
 
 @filecheck_test
@@ -1744,26 +2513,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
-def cluster_arrive_wait_ops_kernel():
-    cluster.arrive()
-    cluster.wait()
-
-
-def test_cluster_arrive_wait_ops():
-    mod = run_parser(cluster_arrive_wait_ops_kernel, *make_args(num_ctas=2), target=HOPPER_TARGET)
-    expecttest.assert_expected_inline(
-        anonymize_ir(mod.str_nodebug()), """\
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @cluster_arrive_wait_ops_kernel() attributes {noinline = false} {
-    ttng.cluster_arrive
-    ttng.cluster_wait
-    tt.return
-  }
-}
-""")
-
-
-@gluon.jit
 def cluster_barrier_relaxed_kernel():
     cluster.barrier(relaxed=True)
 
@@ -1827,9 +2576,8 @@ def async_copy_kernel(inp, xnumel, XBLOCK: ttgl.constexpr):
     xindex = ttgl.arange(0, XBLOCK, block_layout)
     mask = ttgl.max_constancy(xindex < xnumel, 2)
 
-    async_copy.async_copy_global_to_shared(smem, inp + xindex)
-    async_copy.async_copy_global_to_shared(smem, inp + xindex, mask, cache_modifier=".ca", eviction_policy="evict_last",
-                                           volatile=True)
+    async_copy.async_load(smem, inp + xindex)
+    async_copy.async_load(smem, inp + xindex, mask, cache_modifier=".ca", eviction_policy="evict_last", volatile=True)
 
     mbar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     async_copy.mbarrier_arrive(mbar)
@@ -3744,6 +4492,14 @@ def test_mismatch_shape_and_layout_rank():
     assert "tensor shape and layout rank mismatch" in str(e.value.__cause__)
 
 
+def test_tma_descriptor_layout_rank():
+    tensor = MockTensor(ttgl.int32, (2, 32, 64))
+    layout = ttgl.NVMMASharedLayout(128, 32, rank=2)
+
+    with pytest.raises(AssertionError, match="layout rank must match block shape rank"):
+        TensorDescriptor.from_tensor(tensor, [2, 32, 64], layout)
+
+
 def test_non_scalar_loop_bounds():
 
     @gluon.jit
@@ -4264,7 +5020,7 @@ def test_nv_tma_descriptor_store_kernel(target):
             layout=smem_layout,
         )
         smem = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], smem_layout)
-        tma.async_copy_shared_to_global(input_desc, [0, 0], smem)
+        tma.async_store(input_desc, [0, 0], smem)
         tma.store_wait(0)
         tma.store_wait(0, read_only=True)
 

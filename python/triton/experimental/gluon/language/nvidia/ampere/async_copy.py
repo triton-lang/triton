@@ -39,8 +39,9 @@ def async_load(smem, pointer, mask=None, cache_modifier="", eviction_policy="", 
                                                         cache_modifier, eviction_policy, volatile)
 
 
-# Backward-compatible alias
-async_copy_global_to_shared = async_load
+@builtin
+def async_copy_global_to_shared(*args, _semantic=None, **kwargs):
+    raise RuntimeError("async_copy_global_to_shared has been removed; call async_load instead")
 
 
 @builtin

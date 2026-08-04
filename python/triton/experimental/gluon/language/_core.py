@@ -505,8 +505,8 @@ class shared_memory_descriptor(base_value):
         return _semantic.memdesc_reshape(self, shape)
 
     @builtin
-    def _reinterpret(self, dtype=None, shape=None, layout=None,
-                     _semantic: GluonSemantic = None) -> shared_memory_descriptor:
+    def reinterpret(self, dtype=None, shape=None, layout=None,
+                    _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         """
         Reinterpret the shared memory descriptor as a different dtype, shape, or layout.
 

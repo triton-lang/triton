@@ -35,6 +35,7 @@ from triton._internal_testing import (
     is_hip_cdna3,
     is_hip_cdna4,
     is_hip_rdna3,
+    is_hip_rdna4m,
     is_hip_rdna4,
     is_hip_gfx1250,
     is_xpu,
@@ -78,7 +79,7 @@ elif is_hip():
     # 0 is a special value for automatic heuristic
     if is_hip_cdna():
         mma_nonk_sizes = [0, 16, 32]
-    elif is_hip_rdna3() or is_hip_rdna4() or is_hip_gfx1250():
+    elif is_hip_rdna3() or is_hip_rdna4m() or is_hip_rdna4() or is_hip_gfx1250():
         mma_nonk_sizes = [16]
 else:
     THREADS_PER_WARP = 32
@@ -430,6 +431,36 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
             # fails with values where fmod(x, y) is roughly zero, but happens to
             # pass with the random values chosen for non-broadcast tests
             test_broadcast=(op != "%"), x_low=x_low, x_high=x_high, filter_y=filter_y, test_scalar=not skip_scalar_test)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("op", ['+', '-'])
+def test_int1_bin_op_wraparound(op, device):
+    # int1 is a 1-bit integer, so `+`/`-` wrap around mod 2 just like any other
+    # integer type. The GPU backend already does this; the interpreter must
+    # agree (see issue #10919, where `True + True` gave 0 on GPU but 1 in the
+    # interpreter).
+    @triton.jit
+    def kernel(X, Y, Z, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(X + off)
+        y = tl.load(Y + off)
+        z = GENERATE_TEST_HERE
+        tl.store(Z + off, z)
+
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'x {op} y'})
+
+    x = np.array([False, False, True, True])
+    y = np.array([False, True, False, True])
+    SIZE = x.size
+    wide = x.astype(np.int8) + y.astype(np.int8) if op == '+' else x.astype(np.int8) - y.astype(np.int8)
+    z_ref = np.mod(wide, 2).astype(bool)
+
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+    z_tri = to_triton(np.empty(SIZE, dtype=bool), device=device)
+    kernel[(1, )](x_tri, y_tri, z_tri, SIZE=SIZE)
+    np.testing.assert_array_equal(z_ref, to_numpy(z_tri))
 
 
 @pytest.mark.interpreter
@@ -3165,6 +3196,27 @@ def test_histogram_silent_data_corruption(device):
     assert z[1] == 1, f"Second element shouldn't be affected, expected_buffer=[1, 1], actual_buffer={z}"
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype, M", [(torch.int8, 128), (torch.int16, 32768)])
+def test_histogram_narrow_input_count_overflow(dtype, M, device):
+    if not is_interpreter():
+        pytest.skip("narrow integer histogram lowering is not supported yet")
+
+    @triton.jit
+    def histogram_kernel(x_ptr, z_ptr, M: tl.constexpr):
+        offsets = tl.arange(0, M)
+        x = tl.load(x_ptr + offsets)
+        z = tl.histogram(x, 2)
+        tl.store(z_ptr + tl.arange(0, 2), z)
+
+    x = torch.ones(M, device=device, dtype=dtype)
+    z = torch.empty(2, device=device, dtype=torch.int32)
+
+    histogram_kernel[(1, )](x, z, M=M)
+    expected = torch.tensor([0, M], device=device, dtype=torch.int32)
+    torch.testing.assert_close(z, expected)
+
+
 # ------------------------
 # test histogram with mask
 # ------------------------
@@ -3698,7 +3750,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                 pytest.skip("Only IEEE precision is supported for float64 dot")
 
         if is_hip():
-            if in_dtype in ("float8e5", "float8e4nv") and not (is_hip_gfx1250() or is_hip_cdna4() or is_hip_rdna4()):
+            if in_dtype in ("float8e5", "float8e4nv") and not (is_hip_gfx1250() or is_hip_cdna4() or is_hip_rdna4m()
+                                                               or is_hip_rdna4()):
                 pytest.skip(f"{in_dtype} only supported on CDNA4, RDNA4 and above")
             if in_dtype in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
                 pytest.skip(f"{in_dtype} only supported on CDNA3")
@@ -3919,7 +3972,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         else:
             assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f16.f16.f16', ptx)
     elif in_dtype == 'int8':
-        if is_tcgen5 and capability[0:2] != (10, 3):
+        if is_tcgen5 and capability[1] not in (3, 7):
             assert re.search(r'tcgen05.mma.cta_group::1.kind::i8', ptx)
         elif capability[0] == 7 and capability[1] == 5:  # Turing
             assert 'mma.sync.aligned.m8n8k16.row.col.satfinite.s32.s8.s8.s32' in ptx
@@ -3963,14 +4016,15 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
         is_SM120 = cc >= (12, 0)
     if is_hip():
-        if not (is_hip_cdna() or is_hip_rdna3() or is_hip_rdna4() or is_hip_gfx1250()):
+        if not (is_hip_cdna() or is_hip_rdna3() or is_hip_rdna4m() or is_hip_rdna4() or is_hip_gfx1250()):
             pytest.skip("scaled_dot only implemented for HIP CDNA, RDNA3, RDNA4 and above")
         if "e4m3" in (mxfp_type, normal_type):
-            if not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna3() or is_hip_rdna4() or is_hip_gfx1250()):
+            if not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna3() or is_hip_rdna4m() or is_hip_rdna4()
+                    or is_hip_gfx1250()):
                 pytest.skip(
                     f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3, CDNA4, RDNA3, RDNA4, and above"
                 )
-        if mma == 16 and K == 64 and not (is_hip_rdna4() or is_hip_rdna3() or is_hip_gfx1250()):
+        if mma == 16 and K == 64 and not (is_hip_rdna4() or is_hip_rdna4m() or is_hip_rdna3() or is_hip_gfx1250()):
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
     @triton.jit
@@ -4733,7 +4787,7 @@ def test_load_cache_modifier(cache, device):
                                             ".cg": "sc0 nt", \
                                             ".cs": "sc0 nt", \
                                             ".cv": "sc0 sc1"}
-            elif is_hip_rdna3():
+            elif is_hip_rdna3() or is_hip_rdna4m():
                 expected_cache_modifiers = {"": "", \
                                             ".ca": "", \
                                             ".cg": "glc", \
@@ -4758,7 +4812,7 @@ def test_load_cache_modifier(cache, device):
                                             ".cg": "nt", \
                                             ".cs": "nt", \
                                             ".cv": "sc0 sc1"}
-            elif is_hip_rdna3():
+            elif is_hip_rdna3() or is_hip_rdna4m():
                 expected_cache_modifiers = {"": "", \
                                             ".ca": "", \
                                             ".cg": "slc dlc", \
@@ -4905,7 +4959,7 @@ def test_store_cache_modifier(cache, device):
                                             ".cg": "", \
                                             ".cs": "sc0 nt", \
                                             ".wt": "sc0 sc1"}
-            elif is_hip_rdna3():
+            elif is_hip_rdna3() or is_hip_rdna4m():
                 expected_cache_modifiers = {"": "", \
                                             ".wb": "", \
                                             ".cg": "", \
@@ -4933,7 +4987,7 @@ def test_store_cache_modifier(cache, device):
                                             ".cg": "", \
                                             ".cs": "nt", \
                                             ".wt": "sc0 sc1"}
-            elif is_hip_rdna3():
+            elif is_hip_rdna3() or is_hip_rdna4m():
                 expected_cache_modifiers = {"": "", \
                                             ".wb": "", \
                                             ".cg": "", \
@@ -6213,7 +6267,8 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
         num_stages = 2
         if in_type_str in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
             pytest.skip(f"{in_type_str} only supported on CDNA3")
-        if in_type_str in ("float8e5", "float8e4nv") and not (is_hip_cdna4() or is_hip_rdna4() or is_hip_gfx1250()):
+        if in_type_str in ("float8e5", "float8e4nv") and not (is_hip_cdna4() or is_hip_rdna4m() or is_hip_rdna4()
+                                                              or is_hip_gfx1250()):
             pytest.skip(f"{in_type_str} only supported on CDNA4, RDNA4 and above")
 
     check_type_supported(in_type_str, device)
@@ -6902,7 +6957,7 @@ def gather_test_kernel_1d(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr, src_dim
     ([128, 64], [128, 128], 1),
 ])
 def test_gather(src_shape, indices_shape, axis, device):
-    if (is_hip_cdna2() or is_hip_cdna3() or is_hip_rdna3()
+    if (is_hip_cdna2() or is_hip_cdna3() or is_hip_rdna3() or is_hip_rdna4m()
             or is_hip_rdna4()) and src_shape == [128, 64] and indices_shape == [256, 64]:
         # This could be solved by reducing vectorization in general swizzling algorithm.
         # We will do this if any relevant workload suffers from large LDS consumption of the algorithm.

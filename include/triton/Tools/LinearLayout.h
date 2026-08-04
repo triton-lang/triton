@@ -535,6 +535,10 @@ public:
   // TODO(jlebar): Replace with divideLeft.
   int32_t getNumConsecutiveInOut() const;
 
+  // Returns the largest contiguous prefix of an output dimension contained in
+  // the image of this layout projected onto that dimension.
+  [[nodiscard]] int32_t contiguousElemsAlongOutputDim(StringAttr outDim) const;
+
   // Reorders the in/out dimensions of the layout.  This is mostly cosmetic
   // (affecting e.g. the order of getIn/OutDimNames), but it also affects the
   // behavior of reshape.
@@ -567,24 +571,17 @@ public:
     return reshapeOuts({{*getOutDimNames().begin(), getTotalOutDimSize()}});
   }
 
-  // Resizes the dimension to one that is smallre or equal to the given size.
-  // These operations are similar to `sublayout` but at a dimension level.
+  // Resize an input dimension. Shrinking drops its most-significant bases;
+  // growing appends zero bases, so the new input coordinates are broadcast.
+  // Resizing an output dimension may only shrink it. These operations are
+  // similar to `sublayout` but at a dimension level.
   [[nodiscard]] LinearLayout resizeInDim(StringAttr inDim,
                                          int32_t newSize) const;
   [[nodiscard]] LinearLayout resizeOutDim(StringAttr outDim,
                                           int32_t newSize) const;
 
   [[nodiscard]] LinearLayout renameInDim(StringAttr oldDim,
-                                         StringAttr newDim) const {
-    auto bases = getBases();
-    auto it = bases.find(oldDim);
-    assert(it != bases.end());
-    auto value = std::move(it->second);
-    bases.erase(it);
-    bases.insert({newDim, std::move(value)});
-    return LinearLayout(std::move(bases), getOutDims(),
-                        /*requireSurjective=*/isSurjective());
-  }
+                                         StringAttr newDim) const;
 
   // Concatenates two layouts by their in (resp. out) dimensions. The layouts
   // must have the same output (resp. input) dimensions and sizes and different
@@ -904,6 +901,13 @@ inline std::ostream &operator<<(std::ostream &os, const ColumnAction &action) {
 }
 
 std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout);
+
+// Find X such that X.compose(A) == B, equivalently A * X == B in matrix
+// notation. Returns nullopt when B's image is not contained in A's image or
+// when their output dimensions are incompatible, or when the augmented matrix
+// exceeds the existing 64-column solver capacity. Free variables in X are set
+// to zero.
+std::optional<LinearLayout> lstsq(const LinearLayout &A, const LinearLayout &B);
 
 } // namespace mlir::triton
 

@@ -345,9 +345,6 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
 // Multiply a square layout with 1 input and output dimension with a vector
 Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x);
 
-// Whether the convert layout should be forced to use warp shuffles.
-bool cvtAlwaysUseWarpShuffle(triton::gpu::ConvertLayoutOp cvt);
-
 // Return a predicate that is true only if the current thread holds unique data,
 // according to freeVarsMask. The predicate may be null to indicate no
 // predication is required.
@@ -747,6 +744,12 @@ std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering);
 /// staging already emits the required barrier after the atomic instruction.
 void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
                                   bool emitBarrierAfter, RewriterBase &rewriter,
+                                  const TargetInfoBase &targetInfo);
+
+Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
+                                  Value resultVal,
+                                  ConversionPatternRewriter &rewriter,
+                                  TritonLLVMOpBuilder &b, Value threadPred,
                                   const TargetInfoBase &targetInfo);
 
 llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx);

@@ -1945,174 +1945,6 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_rhs_kwidth4) {
             toLinearLayout({16, 16}, mfmaDotOp1_16));
 }
 
-TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_lhs_trans_fp4_mn_packed) {
-  auto parentMfma16 =
-      mfma(/*version=*/3, /*warps=*/{4, 1}, /*instrShape=*/{16, 16, 16},
-           /*isTransposed=*/false);
-  auto mfmaDotOp0_kwidth_16 =
-      mfmaDotOp(parentMfma16, /*opIdx=*/0, /*kWidth=*/16);
-  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp0_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16),
-            LinearLayout({{S("register"),
-                           {{1, 0},
-                            {2, 0},
-                            {4, 0},
-                            {0, 16},
-                            {0, 128},
-                            {32, 0},
-                            {64, 0},
-                            {128, 0}}},
-                          {S("lane"),
-                           {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 32}, {0, 64}}},
-                          {S("warp"), {{8, 0}, {16, 0}}},
-                          {S("block"), {}}},
-                         {S("dim0"), S("dim1")}));
-
-  // Dot operand for LDS transpose load based on transposed mfma layout has
-  // same layout as ordinary.
-  auto parentTMfma16 =
-      mfma(/*version=*/3, /*warps=*/{4, 1}, /*instrShape=*/{16, 16, 16},
-           /*isTransposed=*/true);
-  auto tmfmaDotOp0_kwidth_16 =
-      mfmaDotOp(parentTMfma16, /*opIdx=*/0, /*kWidth=*/16);
-
-  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp0_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16),
-            chooseDsReadTrLayout(mfmaDotOp0_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16));
-}
-
-TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_rhs_trans_fp4_mn_packed) {
-  auto parentMfma16 =
-      mfma(/*version=*/3, /*warps=*/{4, 1}, /*instrShape=*/{16, 16, 16},
-           /*isTransposed=*/false);
-
-  // double rated mfma with large enough shape
-  auto mfmaDotOp1_kwidth_16 =
-      mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/16);
-  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp1_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16),
-            LinearLayout({{S("register"),
-                           {{0, 1},
-                            {0, 2},
-                            {0, 4},
-                            {16, 0},
-                            {128, 0},
-                            {0, 8},
-                            {0, 16},
-                            {0, 32},
-                            {0, 64},
-                            {0, 128}}},
-                          {S("lane"),
-                           {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {32, 0}, {64, 0}}},
-                          {S("warp"), {{0, 0}, {0, 0}}},
-                          {S("block"), {}}},
-                         {S("dim0"), S("dim1")}));
-
-  // Dot operand for LDS transpose load based on transposed mfma layout has
-  // same layout as ordinary.
-  auto parentTMfma16 =
-      mfma(/*version=*/3, /*warps=*/{4, 1}, /*instrShape=*/{16, 16, 16},
-           /*isTransposed=*/true);
-
-  auto tmfmaDotOp1_kwidth_16 =
-      mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/16);
-
-  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp1_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16),
-            chooseDsReadTrLayout(mfmaDotOp1_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16));
-}
-
-TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_lhs_trans_fp4_mn_packed) {
-  auto parentMfma32 =
-      mfma(/*version=*/3, /*warps=*/{4, 1}, /*instrShape=*/{32, 32, 8},
-           /*isTransposed=*/false);
-  auto mfmaDotOp0_kwidth_16 =
-      mfmaDotOp(parentMfma32, /*opIdx=*/0, /*kWidth=*/16);
-  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp0_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16),
-            LinearLayout(
-                {{S("register"),
-                  {{1, 0},
-                   {2, 0},
-                   {4, 0},
-                   {0, 16},
-                   {0, 64},
-                   {0, 128},
-                   {64, 0},
-                   {128, 0}}},
-                 {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}, {0, 32}}},
-                 {S("warp"), {{16, 0}, {32, 0}}},
-                 {S("block"), {}}},
-                {S("dim0"), S("dim1")}));
-
-  // Dot operand for LDS transpose load based on transposed mfma layout has
-  // same layout as ordinary.
-  auto parentTMfma32 =
-      mfma(/*version=*/3, /*warps=*/{4, 1}, /*instrShape=*/{32, 32, 8},
-           /*isTransposed=*/true);
-  auto tmfmaDotOp0_kwidth_16 =
-      mfmaDotOp(parentTMfma32, /*opIdx=*/0, /*kWidth=*/16);
-
-  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp0_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16),
-            chooseDsReadTrLayout(mfmaDotOp0_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16));
-}
-
-TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_rhs_tran_fp4_mn_packeds) {
-  auto parentMfma16 =
-      mfma(/*version=*/3, /*warps=*/{4, 1}, /*instrShape=*/{32, 32, 8},
-           /*isTransposed=*/false);
-  auto mfmaDotOp1_kwidth_16 =
-      mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/16);
-
-  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp1_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16),
-            LinearLayout(
-                {{S("register"),
-                  {{0, 1},
-                   {0, 2},
-                   {0, 4},
-                   {16, 0},
-                   {64, 0},
-                   {128, 0},
-                   {0, 16},
-                   {0, 32},
-                   {0, 64},
-                   {0, 128}}},
-                 {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}, {32, 0}}},
-                 {S("warp"), {{0, 0}, {0, 0}}},
-                 {S("block"), {}}},
-                {S("dim0"), S("dim1")}));
-
-  // Dot operand for LDS transpose load based on transposed mfma layout has
-  // same layout as ordinary.
-  auto parentTMfma16 =
-      mfma(/*version=*/3, /*warps=*/{4, 1}, /*instrShape=*/{32, 32, 8},
-           /*isTransposed=*/true);
-  auto tmfmaDotOp1_kwidth_16 =
-      mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/16);
-
-  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp1_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16),
-            chooseDsReadTrLayout(mfmaDotOp1_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16));
-}
-
 TEST_F(LinearLayoutConversionsTest, WMMA_v1_2x4Warps) {
   auto legacy = wmma(/*warps=*/{2, 4}, /*version=*/1, /*transposed=*/false);
 
@@ -3425,6 +3257,32 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_CTASplit) {
   EXPECT_EQ(toLinearLayout({128, 128}, enc),
             toLinearLayout({128, 64}, enc1) *
                 LinearLayout::identity1D(2, kBlock, d1));
+}
+
+TEST_F(LinearLayoutConversionsTest, TensorMemoryScales_BlockRepOrder) {
+  auto d0 = S("dim0");
+  auto d1 = S("dim1");
+  auto kBlock = S("block");
+  auto kRow = S("row");
+  auto kCol = S("col");
+  auto cgaLayout = CGAEncodingAttr::get1CTALayout(&ctx, /*rank=*/2);
+  auto encKThenMn = TensorMemoryScalesEncodingAttr::get(
+      &ctx, cgaLayout, nvidia_gpu::TensorMemoryScalesBlockRepOrder::K_THEN_MN);
+  auto encMnThenK = TensorMemoryScalesEncodingAttr::get(
+      &ctx, cgaLayout, nvidia_gpu::TensorMemoryScalesBlockRepOrder::MN_THEN_K);
+
+  LinearLayout expectedKThenMn = LinearLayout::identity1D(32, kRow, d0) *
+                                 LinearLayout::zeros1D(4, kRow, d0) *
+                                 LinearLayout::identity1D(4, kCol, d1) *
+                                 LinearLayout::identity1D(2, kCol, d0) *
+                                 LinearLayout::identity1D(2, kCol, d0) *
+                                 LinearLayout::identity1D(2, kCol, d1) *
+                                 LinearLayout::identity1D(2, kCol, d0) *
+                                 LinearLayout::identity1D(1, kBlock, d0);
+  EXPECT_EQ(toLinearLayout({256, 8}, encKThenMn), expectedKThenMn);
+
+  EXPECT_NE(toLinearLayout({256, 8}, encKThenMn),
+            toLinearLayout({256, 8}, encMnThenK));
 }
 
 // Tests for SM120 DotScaled Scale Layout
