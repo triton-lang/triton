@@ -167,8 +167,7 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         return [1, self.B * self.N_pad // 128, self.K_pad // self.SWIZZLE_K, 2, 256]
 
     def swizzle_data(self, data):
-        need_torch = (data.device.type in ["cpu", "meta"] or data.dtype.itemsize != 1
-                      or (is_fake(data) and not getattr(data.fake_mode, "_triton_compile_warmup", False)))
+        need_torch = data.device.type in ["cpu", "meta"] or data.dtype.itemsize != 1 or is_fake(data)
 
         if need_torch:
             data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))

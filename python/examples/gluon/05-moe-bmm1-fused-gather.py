@@ -37,7 +37,7 @@ from triton_kernels.tensor_details.layout import (
     BlackwellMX4ValueShuffledLayout,
     make_default_matmul_mxfp4_w_scale_layout,
 )
-from triton_kernels.testing import alloc_rand, assert_close
+from triton_kernels.testing import alloc_rand, assert_close, convert_layout_for_testing
 from triton_kernels.topk import topk
 
 # ===-----------------------------------------------------------------------===#
@@ -1278,7 +1278,7 @@ def alloc_randn_fp4(shape: tuple[int, ...], device: str, p: KernelConfig | None)
     data_layout = BlackwellMX4ValueShuffledLayout(block_k=block_k, block_n=block_n)
     scale_layout = make_default_matmul_mxfp4_w_scale_layout(mx_axis=1, num_warps=num_warps)
     data = convert_layout(wrap_torch_tensor(data, dtype=FP4), data_layout)
-    scale = convert_layout(wrap_torch_tensor(scale), scale_layout)
+    scale = convert_layout_for_testing(wrap_torch_tensor(scale), scale_layout)
     return data, scale
 
 

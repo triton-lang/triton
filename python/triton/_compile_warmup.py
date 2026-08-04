@@ -21,7 +21,6 @@ class _FakeCudaTensorMode(TorchFunctionMode):
         from torch._subclasses.fake_tensor import FakeTensorMode
 
         self.fake_mode = FakeTensorMode(allow_fallback_kernels=False, allow_non_fake_inputs=True)
-        self.fake_mode._triton_compile_warmup = True
         self.storage_pointers = weakref.WeakKeyDictionary()
         self.next_storage_pointer = self._STORAGE_STRIDE + self._STORAGE_ALIGNMENT
 

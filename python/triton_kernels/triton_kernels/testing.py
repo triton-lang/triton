@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import torch
+import triton
 from triton._internal_testing import is_compile_warmup
 from triton_kernels.numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
@@ -330,6 +331,33 @@ def pad_ragged_tensor(x, x_ragged_metadata, hbm_swizzling, transpose):
     return y, y_ragged_metadata
 
 
+def convert_layout_for_testing(tensor, layout):
+    converted = convert_layout(tensor, layout)
+    if not is_compile_warmup() or converted is tensor:
+        return converted
+
+    from triton_kernels.tensor_details.layout_details.blackwell_scale import (
+        BlackwellMXScaleLayout,
+        _swizzle_blackwell_mx_scale,
+    )
+
+    data = tensor.storage.data
+    if (not isinstance(layout, BlackwellMXScaleLayout) or data.device.type in ["cpu", "meta"]
+            or data.dtype.itemsize != 1 or not converted.storage.data.numel()):
+        return converted
+
+    transformation = layout.make_transformation(tensor.shape, tensor.dtype == FP4)
+    data = torch.empty(tensor.shape, dtype=data.dtype, device=data.device)
+    data = data.reshape((transformation.B, transformation.K, transformation.N))
+    block_k = 64
+    grid = (transformation.B * triton.cdiv(transformation.N_pad, transformation.ALIGN_N) *
+            triton.cdiv(transformation.K_pad, block_k), )
+    _swizzle_blackwell_mx_scale[grid](data.view(torch.uint8), transformation.K, transformation.N,
+                                      transformation.K_pad, transformation.N_pad, *data.stride(),
+                                      converted.storage.data.view(torch.uint8), BLOCK_K=block_k, num_warps=4)
+    return converted
+
+
 def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtype, mxfp_dim, transpose,
                        squeeze_batch_dim, is_mx_rowmajor=False, value_hbm_swizzling=None, scale_hbm_swizzling=None):
     # allocate buffer
@@ -395,5 +423,5 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
             if callable(scale_hbm_swizzling):
                 # Segment metadata describes scale rows, never its inner axis.
                 scale_hbm_swizzling = scale_hbm_swizzling(ragged_metadata if ragged_dim == 0 else None)
-            scales = convert_layout(scales, scale_hbm_swizzling)
+            scales = convert_layout_for_testing(scales, scale_hbm_swizzling)
     return buffer, scales, ragged_metadata
