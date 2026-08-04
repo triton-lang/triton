@@ -1165,6 +1165,7 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
 # ===-----------------------------------------------------------------------===#
 
 
+@pytest.mark.enable_warmup(min_capability=10)
 @pytest.mark.parametrize("Z", [1, 4])
 @pytest.mark.parametrize("H", [32])
 @pytest.mark.parametrize("N_CTX", [1024, 2048, 4096, 8192])
@@ -1174,7 +1175,6 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
 @pytest.mark.parametrize("use_tmem_red", [False, True] if is_blackwell_ultra() else [False])
 @pytest.mark.parametrize("cga_layout", [(), ((1, 0), ), ((1, 0), (2, 0))], ids=["1cta", "2ctas", "4ctas"])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
-@pytest.mark.enable_warmup(min_capability=10)
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, profile=False):
     device = "cuda"
 
@@ -1193,21 +1193,23 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, prof
     sm_scale = 0.5
 
     tri_out, _ = attention_forward(q, k, v, causal, sm_scale, use_tmem_red=use_tmem_red, cga_layout=cga_layout)
-    if is_compile_warmup():
-        return
     if dtype == torch.float8_e5m2:
+        if is_compile_warmup():
+            return
         ref_out = torch.nn.functional.scaled_dot_product_attention(q.float(), k.float(), v.float(), scale=sm_scale,
                                                                    is_causal=causal)
         torch.testing.assert_close(ref_out.to(dtype).float(), tri_out.float(), atol=0.25, rtol=0.25)
     else:
+        if is_compile_warmup():
+            return
         ref_out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
         torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
 
 
+@pytest.mark.enable_warmup(min_capability=10)
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
 @pytest.mark.parametrize("cga_layout", [(), ((1, 0), )], ids=["1cta", "2ctas"])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
-@pytest.mark.enable_warmup(min_capability=10)
 def test_op_consan(dtype, cga_layout):
     with triton.knobs.compilation.scope():
         triton.knobs.compilation.instrumentation_mode = "consan"
