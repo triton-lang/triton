@@ -916,6 +916,10 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
     DenseMap<Value, Attribute> &layoutArg,
     DenseMap<std::pair<Value, Attribute>, Value> &existingRematsArg,
     std::function<bool(Operation *)> stopPropagation) {
+  // Operate on copies of the input, we do not want to modify them unless we
+  // have succeeded.
+  auto slice = sliceArg;
+  auto layout = layoutArg;
   auto existingRemats = existingRematsArg;
   LogicalResult result = getConvertBackwardSlice(
       root, rootEncoding, slice, layout, existingRemats, stopPropagation);
