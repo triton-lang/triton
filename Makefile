@@ -9,7 +9,8 @@ TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
 LLVM_BUILD_PATH ?= "$(ROOT_DIR)/.llvm-project/build"
 NUM_PROCS ?= 8
-TRITON_KERNELS_PATH := $(ROOT_DIR)/python/triton_kernels$(if $(PYTHONPATH),:$(PYTHONPATH))
+NUM_GPUS ?= 1
+WARMUP_PROCS ?= $(NUM_PROCS)
 
 # Incremental builds
 
@@ -33,29 +34,27 @@ test-cpp:
 
 .PHONY: test-unit
 test-unit: all
-	cd python/test/unit && $(PYTEST) -n $(NUM_PROCS) --ignore-glob='plugins/*'
-	$(PYTEST) -n 6 python/triton_kernels/tests/
-	# Run attention separately to avoid out of gpu memory
-	$(PYTEST) python/tutorials/06-fused-attention.py
-	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
-		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
+	$(PYTHON) -m triton._test_runner suite unit --num-procs $(NUM_PROCS)
 
 .PHONY: test-plugins
 test-plugins: all
-	$(PYTEST) -vvv python/test/unit/plugins
+	TRITON_CI_CACHE_PHASE=plugins $(PYTEST) -vvv python/test/unit/plugins
 
 .PHONY: test-gluon
 test-gluon: all
-	$(PYTEST) -n $(NUM_PROCS) python/test/gluon/ python/tutorials/gluon/
-	PYTHONPATH="$(TRITON_KERNELS_PATH)" $(PYTEST) -n 2 python/examples/gluon/
+	$(PYTHON) -m triton._test_runner suite gluon --num-gpus $(NUM_GPUS) --num-procs $(NUM_PROCS)
+
+.PHONY: test-warmup
+test-warmup: all
+	$(PYTHON) -m triton._test_runner warmup --warmup-procs $(WARMUP_PROCS)
 
 .PHONY: test-gsan
 test-gsan: all
-	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -n $(NUM_PROCS) python/test/gsan
+	$(PYTHON) -m triton._test_runner suite gsan --num-gpus $(NUM_GPUS) --num-procs $(NUM_PROCS)
 
 .PHONY: test-regression
 test-regression: all
-	$(PYTEST) -n $(NUM_PROCS) python/test/regression
+	TRITON_CI_CACHE_PHASE=regression $(PYTEST) -p triton._compile_warmup -n $(NUM_PROCS) python/test/regression
 
 .PHONY: test-microbenchmark
 test-microbenchmark: all
@@ -63,25 +62,25 @@ test-microbenchmark: all
 
 .PHONY: test-interpret
 test-interpret: all
-	cd python/test/unit && TRITON_INTERPRET=1 $(PYTEST) -n 16 -m interpreter cuda language/test_core.py language/test_standard.py \
+	cd python/test/unit && TRITON_CI_CACHE_PHASE=interpreter TRITON_INTERPRET=1 $(PYTEST) -n 16 -m interpreter cuda language/test_core.py language/test_standard.py \
 		language/test_random.py language/test_subprocess.py language/test_line_info.py \
 		language/test_tuple.py runtime/test_launch.py runtime/test_autotuner.py::test_kwargs[False] \
 		../../tutorials/06-fused-attention.py::test_op --device=cpu
 
 .PHONY: test-proton
 test-proton: all
-	$(PYTEST) -n 8 third_party/proton/test --ignore=third_party/proton/test/test_override.py -k "not test_overhead and not test_hw_trace"
-	$(PYTEST) third_party/proton/test/test_profile.py::test_hw_trace
-	$(PYTEST) third_party/proton/test/test_override.py
-	$(PYTEST) third_party/proton/test/test_instrumentation.py::test_overhead
+	TRITON_CI_CACHE_PHASE=proton $(PYTEST) -n 8 third_party/proton/test --ignore=third_party/proton/test/test_override.py -k "not test_overhead and not test_hw_trace"
+	TRITON_CI_CACHE_PHASE=proton-hw-trace $(PYTEST) third_party/proton/test/test_profile.py::test_hw_trace
+	TRITON_CI_CACHE_PHASE=proton-override $(PYTEST) third_party/proton/test/test_override.py
+	TRITON_CI_CACHE_PHASE=proton-overhead $(PYTEST) third_party/proton/test/test_instrumentation.py::test_overhead
 
 .PHONY: test-python
 test-python: test-unit test-plugins test-regression test-interpret test-proton
 
 .PHONY: test-nogpu
 test-nogpu: test-lit test-cpp
-	$(PYTEST) python/test/gluon/test_frontend.py
-	$(PYTEST) python/test/unit/language/test_frontend.py
+	TRITON_CI_CACHE_PHASE=gluon-frontend $(PYTEST) python/test/gluon/test_frontend.py
+	TRITON_CI_CACHE_PHASE=triton-frontend $(PYTEST) python/test/unit/language/test_frontend.py
 
 .PHONY: test
 test: test-lit test-cpp test-python

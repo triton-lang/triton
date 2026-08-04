@@ -152,7 +152,7 @@ def test_multiple_hooks() -> None:
     {"enable_fp_fusion": False},
     {"extern_libs": {}},
 ])
-def test_launch_with_options(options) -> None:
+def test_launch_with_options(options, monkeypatch) -> None:
     if "extern_libs" in options:
         # copied from tutorials/07-extern-functions.py
         current_dir = pathlib.Path(os.path.dirname(os.path.abspath(__file__)))
@@ -178,8 +178,8 @@ def test_launch_with_options(options) -> None:
     def kernel(x):
         pass
 
-    triton.knobs.runtime.jit_post_compile_hook = compile_info_hook
-    triton.knobs.runtime.jit_cache_hook = cache_hook
+    monkeypatch.setattr(triton.knobs.runtime, "jit_post_compile_hook", compile_info_hook)
+    monkeypatch.setattr(triton.knobs.runtime, "jit_cache_hook", cache_hook)
 
     # run first without options
     kernel[(1, 1, 1)](6)
@@ -202,9 +202,6 @@ def test_launch_with_options(options) -> None:
             assert compile_info[option_key] == tuple(option_val.items())
     else:
         assert compile_info[option_key] == option_val
-
-    triton.knobs.runtime.jit_post_compile_hook = None
-    triton.knobs.runtime.jit_cache_hook = None
 
 
 @pytest.mark.interpreter

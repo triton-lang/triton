@@ -4,6 +4,7 @@ import pytest
 import torch
 
 import triton
+from triton._internal_testing import assert_close
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.nvidia.blackwell import (
@@ -681,6 +682,7 @@ def matmul(a, b):
 @pytest.mark.parametrize("EPILOGUE_SIZE_N", [32])
 @pytest.mark.parametrize("SUBTILE_STAGES", [4])
 @pytest.mark.parametrize("M, N, K", [(100, 200, 200)])
+@pytest.mark.enable_warmup(min_capability=10)
 def test_matmul_matches_torch(
     M,
     N,
@@ -720,7 +722,7 @@ def test_matmul_matches_torch(
         )
     except triton.OutOfResources:
         pytest.skip("Out of resources")
-    torch.testing.assert_close(expected, actual, atol=1e-1, rtol=1e-2)
+    assert_close(expected, actual, atol=1e-1, rtol=1e-2)
 
 
 ########################################################
