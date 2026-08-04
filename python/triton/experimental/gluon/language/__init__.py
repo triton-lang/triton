@@ -23,6 +23,7 @@ from ._core import (
     float8e4nv,
     float8e4b8,
     float8e4b15,
+    float8e8m0fnu,
     float16,
     bfloat16,
     float32,
