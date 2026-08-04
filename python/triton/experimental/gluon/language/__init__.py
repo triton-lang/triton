@@ -53,6 +53,8 @@ from ._core import (
     device_assert,
     device_print,
     dot_fma,
+    experimental_fpsan_embed,
+    experimental_fpsan_unembed,
     expand_dims,
     full,
     fp4_to_fp,

@@ -576,6 +576,47 @@ def _payload_equal(a, b) -> bool:
 
 
 @gluon.jit
+def _fpsan_embed_kernel(x_ptr, out_ptr, BLOCK: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0])
+    offsets = gl.arange(0, BLOCK, layout=layout)
+    gl.store(out_ptr + offsets, gl.experimental_fpsan_embed(gl.load(x_ptr + offsets)))
+
+
+@gluon.jit
+def _fpsan_unembed_kernel(x_ptr, out_ptr, BLOCK: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0])
+    offsets = gl.arange(0, BLOCK, layout=layout)
+    gl.store(out_ptr + offsets, gl.experimental_fpsan_unembed(gl.load(x_ptr + offsets), out_ptr.dtype.element_ty))
+
+
+@pytest.mark.parametrize("dtype", _FLOAT_DTYPE_INFO)
+def test_explicit_fpsan_embed_unembed(device, dtype, fresh_knobs):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    bitwidth, _, np_storage_dtype, torch_storage_dtype, _, _ = _float_dtype_info(dtype)
+    bits = _random_float_bits(np.random.RandomState(bitwidth), (128, ), dtype)
+    input_storage, input_float = _as_float_bits_tensor(bits, dtype)
+    payload = torch.empty_like(input_storage)
+    output_storage, output_float = _as_float_bits_tensor(np.empty_like(bits), dtype)
+    options = {"BLOCK": bits.size, "THREADS_PER_WARP": THREADS_PER_WARP}
+    if is_cuda() and bitwidth == 8:
+        options["supported_fp8_dtypes"] = tuple(name for name in tl.dtype.FP_TYPES if name.startswith("fp8"))
+
+    _fpsan_embed_kernel[(1, )](input_float, payload, **options)
+    expected_payload = _mix_float_bits(bits, dtype).astype(np.dtype(f"u{bitwidth // 8}")).view(np_storage_dtype)
+    _assert_payload_equal(payload, expected_payload)
+
+    independent_payload = torch.tensor(_random_float_bits(np.random.RandomState(bitwidth + 1), bits.shape, dtype),
+                                       device="cuda", dtype=torch_storage_dtype)
+    _fpsan_unembed_kernel[(1, )](independent_payload, output_float, **options)
+    _assert_payload_equal(output_storage, _unmix_payload_to_float_bits(independent_payload.cpu().numpy(), dtype))
+
+    _fpsan_unembed_kernel[(1, )](payload, output_float, **options)
+    _assert_payload_equal(output_storage, bits)
+
+
+@gluon.jit
 def _binop_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.constexpr,
                   THREADS_PER_WARP: gl.constexpr):
     pid = gl.program_id(0)
