@@ -512,6 +512,7 @@ class nvidia_knobs(base_knobs):
 
     libdevice_path: env_opt_str = env_opt_str("TRITON_LIBDEVICE_PATH")
     libcuda_path: env_opt_str = env_opt_str("TRITON_LIBCUDA_PATH")
+    use_nvml_cuda_check: env_bool = env_bool("TRITON_NVML_BASED_CUDA_CHECK")
 
 
 class amd_knobs(base_knobs):

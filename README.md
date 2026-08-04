@@ -246,6 +246,8 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 - `LLVM_EXTRACT_DI_LOCAL_VARIABLES` emit full debug info, allowing for eval of values in gpu debuggers (ie cuda-gdb, rocm-gdb etc)
 - `TRITON_DEFAULT_BACKEND=<backend>` optionally sets the default backend used by Triton when
   constructing the active driver (i.e., `triton.runtime.driver.active`).
+- `TRITON_NVML_BASED_CUDA_CHECK=1` makes NVIDIA driver availability checks use NVML when possible
+  to avoid initializing CUDA before a process forks.
 
 > [!NOTE]
 > Some of these environment variables don't have a knob in `knobs.py`-- those are only relevant to the C++ layer(s), hence they don't exist in the python layer.
