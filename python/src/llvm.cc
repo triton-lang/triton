@@ -671,6 +671,11 @@ void init_triton_llvm(py::module_ &m) {
 #endif
   });
 
+  m.def("attach_target_triple",
+        [](llvm::Module *mod, const std::string triple) {
+          mod->setTargetTriple(llvm::Triple(triple));
+        });
+
   m.def("attach_datalayout", [](llvm::Module *mod, const std::string triple,
                                 const std::string proc,
                                 const std::string features) {
