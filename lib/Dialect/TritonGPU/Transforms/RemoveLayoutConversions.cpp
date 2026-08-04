@@ -911,32 +911,22 @@ LogicalResult LayoutRematerialization::getConvertBackwardSlice(
                                        stopPropagation, getExistingConversion);
 }
 
+
 LogicalResult LayoutRematerialization::getRematerializableSlice(
     OpOperand &root, Attribute rootEncoding, SetVector<Value> &sliceArg,
     DenseMap<Value, Attribute> &layoutArg,
     DenseMap<std::pair<Value, Attribute>, Value> &existingRematsArg,
     std::function<bool(Operation *)> stopPropagation) {
-  // Operate on copies of the input, we do not want to modify them unless we
-  // have succeeded.
-  auto slice = sliceArg;
-  auto layout = layoutArg;
   auto existingRemats = existingRematsArg;
-  LogicalResult result = getConvertBackwardSlice(
-      root, rootEncoding, slice, layout, existingRemats, stopPropagation);
-  if (result.failed())
-    return failure();
-
-  // Check if all the operations in the slice can be rematerialized.
-  for (Value v : slice) {
-    if (Operation *op = v.getDefiningOp()) {
-      if (!canBeRemat(op))
-        return failure();
-    }
-  }
-  sliceArg = std::move(slice);
-  layoutArg = std::move(layout);
-  existingRematsArg = std::move(existingRemats);
-  return success();
+  auto getExistingConversion = std::bind(
+      &LayoutRematerialization::getExistingConversion, this,
+      std::placeholders::_1, std::placeholders::_2, std::ref(existingRemats));
+  LogicalResult result =
+      mlir::getRematerializableSlice(root, sliceArg, rootEncoding, layoutArg,
+                                     stopPropagation, getExistingConversion);
+  if (succeeded(result))
+    existingRematsArg = std::move(existingRemats);
+  return result;
 }
 
 bool LayoutRematerialization::backwardRematerialization(

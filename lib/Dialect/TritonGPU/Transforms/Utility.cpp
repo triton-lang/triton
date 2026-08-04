@@ -1043,7 +1043,7 @@ LogicalResult getRematerializableSlice(
   LogicalResult result =
       getConvertBackwardSlice(root, slice, rootEncoding, layout,
                               stopPropagation, getExistingConversion);
-  if (result.failed() || slice.empty())
+  if (result.failed())
     return failure();
 
   // Check if all the operations in the slice can be rematerialized.
