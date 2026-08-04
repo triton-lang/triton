@@ -27,17 +27,17 @@ def _ensure_rocm_runtime():
                 triton.knobs.proton.rocprofiler_sdk_lib_path = library
         return
 
-    defaults = {
-        "TRITON_LIBHIP_PATH": libraries["amdhip64"],
-        "TRITON_HSA_RUNTIME_PATH": libraries["hsa-runtime64"],
-        "TRITON_ROCPROFILER_SDK_LIB_PATH": libraries["rocprofiler-sdk"],
-        "TRITON_ROCTRACER_LIB_PATH": libraries["roctracer64"],
-        "TRITON_ROCTX_LIB_PATH": libraries["roctx64"],
+    paths = {
+        "TRITON_LIBHIP_PATH": (triton.knobs.amd.libhip_path, libraries["amdhip64"]),
+        "TRITON_HSA_RUNTIME_PATH": (triton.knobs.proton.hsa_runtime_path, libraries["hsa-runtime64"]),
+        "TRITON_ROCPROFILER_SDK_LIB_PATH": (triton.knobs.proton.rocprofiler_sdk_lib_path, libraries["rocprofiler-sdk"]),
+        "TRITON_ROCTRACER_LIB_PATH": (triton.knobs.proton.roctracer_lib_path, libraries["roctracer64"]),
+        "TRITON_ROCTX_LIB_PATH": (triton.knobs.proton.roctx_lib_path, libraries["roctx64"]),
     }
-    explicit_overrides = {key for key in defaults if os.environ.get(key)}
-    for key, value in defaults.items():
+    explicit_overrides = {key for key in paths if os.environ.get(key) is not None}
+    for key, (_, default) in paths.items():
         if key not in explicit_overrides:
-            triton.knobs.setenv(key, value)
+            triton.knobs.setenv(key, default)
 
     # These libraries are also referenced transitively or by unqualified
     # soname. Load the exact TheRock files globally so the dynamic loader cannot
