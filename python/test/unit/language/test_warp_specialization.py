@@ -9,13 +9,6 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 
 pytestmark = pytest.mark.enable_warmup(min_capability=9)
 
-if not is_hip() and torch.cuda.is_available() and torch.cuda.get_device_capability()[0] in [9, 10, 11]:
-    from triton._C.libtriton import nvidia
-    cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
-    cublas = nvidia.cublas.CublasLt(cublas_workspace)
-else:
-    cublas = None
-
 
 def is_hopper_or_blackwell():
     return is_hopper() or is_blackwell()
@@ -306,7 +299,7 @@ def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_S
         return
 
     ref_out = torch.empty((M, N), dtype=dtype, device=device)
-    cublas.matmul(A, B, ref_out)
+    triton.testing.cublas().matmul(A, B, ref_out)
     torch.testing.assert_close(ref_out.to(torch.float16), C.to(torch.float16), atol=0.03, rtol=0.03)
 
     ttgir = kernel.asm["ttgir"]
@@ -447,7 +440,7 @@ def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE
         assert "ttg.warp_specialize" in ttgir
 
     ref_out = torch.empty((M, N), dtype=dtype, device=device)
-    cublas.matmul(A, B, ref_out)
+    triton.testing.cublas().matmul(A, B, ref_out)
     torch.testing.assert_close(ref_out.to(torch.float16), C.to(torch.float16), atol=0.03, rtol=0.03)
 
 
@@ -548,8 +541,6 @@ def test_warp_specialize_attention_forward(M, N, BLOCK_M, HEAD_DIM, num_stages, 
                                                   BLOCK_M, HEAD_DIM, False, num_stages=num_stages, num_warps=num_warps)
     attention_inner_loop_kernel[(M // BLOCK_M, )](desc_q, desc_k, desc_v, desc_acc, l_i, m_i, M, N, 0.5, BLOCK_M,
                                                   HEAD_DIM, True, num_stages=num_stages, num_warps=num_warps)
-    if is_compile_warmup():
-        return
 
     torch.testing.assert_close(acc.to(torch.float32), acc_ref.to(torch.float32), atol=0, rtol=0)
     torch.testing.assert_close(l_i.to(torch.float32), l_i_ref.to(torch.float32), atol=0, rtol=0)
@@ -651,8 +642,6 @@ def test_warp_specialize_attention_persistent_forward(M, N, BLOCK_M, HEAD_DIM, n
                                                        HEAD_DIM, True, num_stages=num_stages, num_warps=num_warps)
     attention_inner_loop_kernel[(M // BLOCK_M, )](desc_q, desc_k, desc_v, desc_acc_ref, l_i_ref, m_i_ref, M, N, 0.5,
                                                   BLOCK_M, HEAD_DIM, False, num_stages=num_stages, num_warps=num_warps)
-    if is_compile_warmup():
-        return
 
     torch.testing.assert_close(acc.to(torch.float32), acc_ref.to(torch.float32), atol=0, rtol=0)
     torch.testing.assert_close(l_i.to(torch.float32), l_i_ref.to(torch.float32), atol=0, rtol=0)
@@ -790,7 +779,5 @@ def test_grouped_gemm(M, N, K, group_size):
     ref_out = [torch.matmul(a, b) for a, b in zip(group_A, group_B)]
 
     tri_tma_out = group_gemm_tma_fn(group_A, group_B_T)
-    if is_compile_warmup():
-        return
     for i in range(group_size):
         assert torch.allclose(ref_out[i], tri_tma_out[i], atol=1e-2, rtol=1e-2)

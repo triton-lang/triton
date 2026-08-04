@@ -14,12 +14,9 @@ import pytest
 import torch
 
 import triton
-from triton._internal_testing import assert_close, is_compile_warmup
 import triton.experimental.gluon as gluon
 import triton.experimental.gluon.language as gl
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
-
-from triton._C.libtriton import nvidia
 
 from triton.experimental.gluon.nvidia.blackwell import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.blackwell import (
@@ -94,13 +91,6 @@ def get_split_dim(cga_layout, dim):
 def random_quantized_tensor(MN, K, format):
     assert format in ["mxfp4", "mxfp8", "nvfp4"]
     VEC_SIZE = 16 if format == "nvfp4" else 32
-    if is_compile_warmup():
-        is_fp8 = format == "mxfp8"
-        value = torch.empty((MN, K if is_fp8 else K // 2), device="cuda",
-                            dtype=torch.float8_e4m3fn if is_fp8 else torch.uint8)
-        scales = torch.empty((MN, K // VEC_SIZE), device="cuda",
-                             dtype=torch.float8_e4m3fn if format == "nvfp4" else torch.uint8)
-        return value, scales, torch.empty((MN, K), device="cuda", dtype=torch.float32)
 
     # Generate a random quantized tensor and its scale factors, assuming we are
     # scaling along the K dimension.
@@ -919,18 +909,12 @@ def test_mma_scaled_warp_specialized(M, N, K, a_format, b_format, num_ctas, BLOC
     C = mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, scheduler=scheduler, BLOCK_M=BLOCK_M,
                                     BLOCK_N=BLOCK_N, EPILOGUE_BLOCK_N=EPILOGUE_BLOCK_N, num_buffers=num_buffers,
                                     num_ctas=num_ctas)
-    assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
+    torch.testing.assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
 
 
 # ---------------------------------------------------------------------------
 # Benchmark
 # ---------------------------------------------------------------------------
-
-if is_blackwell():
-    cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
-    cublas = nvidia.cublas.CublasLt(cublas_workspace)
-else:
-    cublas = None
 
 CUBLAS_FORMATS = {"mxfp8", "nvfp4"}
 
@@ -940,9 +924,9 @@ def cublas_block_scaled_matmul(A, B, A_scale_flat, B_scale_flat, fmt):
     M, N = A.shape[0], B.shape[0]
     output = torch.empty((M, N), dtype=torch.float16, device="cuda")
     if fmt == "mxfp8":
-        cublas.block_scaled_matmul_mxfp8(A, B, output, A_scale_flat, B_scale_flat)
+        triton.testing.cublas().block_scaled_matmul_mxfp8(A, B, output, A_scale_flat, B_scale_flat)
     elif fmt == "nvfp4":
-        cublas.block_scaled_matmul_nvfp4(A, B, output, A_scale_flat, B_scale_flat)
+        triton.testing.cublas().block_scaled_matmul_nvfp4(A, B, output, A_scale_flat, B_scale_flat)
     else:
         raise ValueError(f"cuBLAS does not support format: {fmt}")
     return output

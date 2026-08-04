@@ -19,7 +19,6 @@ import os
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_compile_warmup
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
@@ -650,24 +649,20 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
     q = q.to(ref_dtype)
     k = k.to(ref_dtype)
     v = v.to(ref_dtype)
-    if is_compile_warmup():
-        if mode == "bwd":
-            dout = torch.randn_like(q)
-    else:
-        M = torch.tril(torch.ones((N_CTX, N_CTX), device=DEVICE))
-        p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
-        if causal:
-            p[:, :, M == 0] = float("-inf")
-        p = torch.softmax(p.float(), dim=-1)
-        p = p.to(ref_dtype)
-        # p = torch.exp(p)
-        ref_out = torch.matmul(p, v).half()
-        if mode == "bwd":
-            dout = torch.randn_like(q)
-            ref_out.backward(dout)
-            ref_dv, v.grad = v.grad.clone(), None
-            ref_dk, k.grad = k.grad.clone(), None
-            ref_dq, q.grad = q.grad.clone(), None
+    M = torch.tril(torch.ones((N_CTX, N_CTX), device=DEVICE))
+    p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
+    if causal:
+        p[:, :, M == 0] = float("-inf")
+    p = torch.softmax(p.float(), dim=-1)
+    p = p.to(ref_dtype)
+    # p = torch.exp(p)
+    ref_out = torch.matmul(p, v).half()
+    if mode == "bwd":
+        dout = torch.randn_like(q)
+        ref_out.backward(dout)
+        ref_dv, v.grad = v.grad.clone(), None
+        ref_dk, k.grad = k.grad.clone(), None
+        ref_dq, q.grad = q.grad.clone(), None
     # triton implementation
     if mode == "fwd" and "fp8" in provider:
         q = q.to(torch.float8_e5m2)
@@ -677,14 +672,10 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
         v = v.to(torch.float8_e5m2)
     tri_out = attention(q, k, v, causal, sm_scale, warp_specialize).half()
     if mode == "fwd":
-        if is_compile_warmup():
-            return
         atol = 3 if "fp8" in provider else 1e-2
         torch.testing.assert_close(tri_out, ref_out, atol=atol, rtol=0)
         return
     tri_out.backward(dout)
-    if is_compile_warmup():
-        return
     tri_dv, v.grad = v.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
     tri_dq, q.grad = q.grad.clone(), None

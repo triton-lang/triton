@@ -39,20 +39,6 @@ def is_compile_warmup():
     return _COMPILE_WARMUP_ACTIVE.get()
 
 
-def rand(*shape, **kwargs):
-    return (torch.empty if is_compile_warmup() else torch.rand)(*shape, **kwargs)
-
-
-def randn(*shape, **kwargs):
-    return (torch.empty if is_compile_warmup() else torch.randn)(*shape, **kwargs)
-
-
-def randint(low, high, size, **kwargs):
-    if is_compile_warmup():
-        return torch.empty(size, dtype=kwargs.get("dtype", torch.int64), device=kwargs.get("device"))
-    return torch.randint(low, high, size, **kwargs)
-
-
 def random_int(low, high, *, warmup_value=None, **kwargs):
     if is_compile_warmup():
         return low if warmup_value is None else warmup_value
@@ -63,15 +49,6 @@ def random_float(*, warmup_value=0.5, **kwargs):
     if is_compile_warmup():
         return warmup_value
     return float(torch.rand((), **kwargs).item())
-
-
-def reference_tensor(value, dtype):
-    return torch.empty_like(value.data, dtype=dtype) if is_compile_warmup() else value.to(dtype)
-
-
-def assert_close(*args, **kwargs):
-    if not is_compile_warmup():
-        torch.testing.assert_close(*args, **kwargs)
 
 
 def get_current_target():

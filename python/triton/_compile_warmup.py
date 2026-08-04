@@ -18,9 +18,10 @@ class _FakeCudaTensorMode(TorchFunctionMode):
     _STORAGE_STRIDE = 1 << 20
 
     def __init__(self):
-        from torch._subclasses.fake_tensor import FakeTensorMode
+        from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
 
         self.fake_mode = FakeTensorMode(allow_fallback_kernels=False, allow_non_fake_inputs=True)
+        self.fake_tensor_type = FakeTensor
         self.storage_pointers = weakref.WeakKeyDictionary()
         self.next_storage_pointer = self._STORAGE_STRIDE + self._STORAGE_ALIGNMENT
 
@@ -39,7 +40,8 @@ class _FakeCudaTensorMode(TorchFunctionMode):
             self.fake_mode.__exit__(exc_type, exc_value, traceback)
 
     def __torch_function__(self, func, types, args=(), kwargs=None):
-        if getattr(func, "__name__", "") == "data_ptr":
+        name = getattr(func, "__name__", "")
+        if name == "data_ptr":
             tensor = args[0]
             storage = tensor.untyped_storage()
             pointer = self.storage_pointers.get(storage)
@@ -48,13 +50,40 @@ class _FakeCudaTensorMode(TorchFunctionMode):
                 self.next_storage_pointer += self._STORAGE_STRIDE
                 self.storage_pointers[storage] = pointer
             return pointer + tensor.storage_offset() * tensor.element_size()
+        is_fake = any(isinstance(argument, self.fake_tensor_type) for argument in args)
+        if name in ("allclose", "equal") and is_fake:
+            return True
+        if name == "__bool__" and is_fake and args[0].dtype == torch.bool:
+            return getattr(args[0], "_triton_warmup_truth", True)
+        if name in ("all", "any") and is_fake:
+            result = func(*args, **(kwargs or {}))
+            if isinstance(result, torch.Tensor) and result.numel() == 1:
+                result._triton_warmup_truth = name == "all"
+            return result
         return func(*args, **(kwargs or {}))
 
 
 @contextmanager
 def compile_warmup_only(dispatcher=None):
     """Capture launch specializations without GPU allocations or kernel execution."""
+    from torch._subclasses.fake_tensor import FakeTensor
     from triton._internal_testing import _COMPILE_WARMUP_ACTIVE
+    from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
+
+    def fake_mxfp_to(tensor, dtype):
+        if isinstance(tensor.data, FakeTensor):
+            return torch.empty_like(tensor.data, dtype=dtype)
+        original = previous_fp4_to if isinstance(tensor, MXFP4Tensor) else previous_scale_to
+        return original(tensor, dtype)
+
+    def fake_scale_from_float(tensor, values):
+        if isinstance(values, FakeTensor):
+            return torch.empty_like(values, dtype=torch.uint8)
+        return previous_scale_from_float(tensor, values)
+
+    def fake_assert_close(*args, **kwargs):
+        if not any(isinstance(value, FakeTensor) for value in args):
+            previous_assert_close(*args, **kwargs)
 
     def dispatch(kernel, grid, *args, **kwargs):
         if dispatcher is None:
@@ -65,14 +94,26 @@ def compile_warmup_only(dispatcher=None):
         warnings.filterwarnings("ignore", message="Accessing the data pointer of FakeTensor.*")
         with _FakeCudaTensorMode():
             previous_getitem = triton.KernelInterface.__getitem__
+            previous_assert_close = torch.testing.assert_close
+            previous_fp4_to = MXFP4Tensor.to
+            previous_scale_to = MXScaleTensor.to
+            previous_scale_from_float = MXScaleTensor._from_float
             triton.KernelInterface.__getitem__ = lambda kernel, grid: lambda *args, **kwargs: dispatch(
                 kernel, grid, *args, **kwargs)
+            torch.testing.assert_close = fake_assert_close
+            MXFP4Tensor.to = fake_mxfp_to
+            MXScaleTensor.to = fake_mxfp_to
+            MXScaleTensor._from_float = fake_scale_from_float
             active_token = _COMPILE_WARMUP_ACTIVE.set(True)
             try:
                 yield
             finally:
                 _COMPILE_WARMUP_ACTIVE.reset(active_token)
                 triton.KernelInterface.__getitem__ = previous_getitem
+                torch.testing.assert_close = previous_assert_close
+                MXFP4Tensor.to = previous_fp4_to
+                MXScaleTensor.to = previous_scale_to
+                MXScaleTensor._from_float = previous_scale_from_float
 
 
 @contextmanager

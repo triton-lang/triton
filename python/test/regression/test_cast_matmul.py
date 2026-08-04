@@ -11,7 +11,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import assert_close, is_hip_cdna3, is_cuda, is_hip
+from triton._internal_testing import is_hip_cdna3, is_cuda, is_hip
 
 pytestmark = pytest.mark.enable_warmup(min_capability=9)
 
@@ -142,4 +142,4 @@ def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_d
         BLOCK_N=block_n,  #
         BLOCK_K=block_k)
 
-    assert_close(out_torch, out_triton, atol=0.3, rtol=0.01)
+    torch.testing.assert_close(out_torch, out_triton, atol=0.3, rtol=0.01)

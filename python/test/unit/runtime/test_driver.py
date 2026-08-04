@@ -19,7 +19,7 @@ from triton._compile_warmup import (
     summarize_compile_trace,
 )
 from triton._compile_warmup_pool import SharedWarmupCoordinator, _jit_dumps
-from triton._internal_testing import assert_close, is_compile_warmup, rand, randint, random_float, random_int, randn
+from triton._internal_testing import is_compile_warmup, random_float, random_int
 from triton import _test_runner
 from triton.backends.driver import GPUDriver, expand_signature, wrap_handle_tensordesc_impl
 from triton.backends.nvidia.compiler import CUDABackend
@@ -36,11 +36,15 @@ def test_compile_warmup_only_intercepts_launches():
 
     kernel = Kernel()
     previous_getitem = triton.KernelInterface.__getitem__
+    previous_assert_close = torch.testing.assert_close
     with compile_warmup_only():
         tensor = torch.empty(16, device="cuda")
         view = tensor[1:]
         result = kernel[(2, )](tensor, BLOCK_SIZE=16)
-        assert_close(tensor, tensor)
+        torch.testing.assert_close(tensor, tensor)
+        assert torch.allclose(tensor, tensor)
+        assert (tensor == tensor).all()
+        assert triton.testing.cublas() is None
         assert is_compile_warmup()
         assert view.data_ptr() == tensor.data_ptr() + tensor.element_size()
         assert CUDABackend.get_tensor_specialization(tensor, align=True) == "D"
@@ -51,13 +55,11 @@ def test_compile_warmup_only_intercepts_launches():
     assert launches == [((tensor, ), (2, ), {"BLOCK_SIZE": 16})]
     assert not is_compile_warmup()
     assert triton.KernelInterface.__getitem__ is previous_getitem
+    assert torch.testing.assert_close is previous_assert_close
 
 
 def test_compile_warmup_random_helpers_preserve_normal_randomness():
     for operation, original in (
-        (lambda: rand(4), lambda: torch.rand(4)),
-        (lambda: randn(4), lambda: torch.randn(4)),
-        (lambda: randint(0, 9, (4, )), lambda: torch.randint(0, 9, (4, ))),
         (lambda: random_int(0, 9), lambda: int(torch.randint(0, 9, size=()).item())),
         (random_float, lambda: float(torch.rand(()).item())),
     ):
@@ -68,9 +70,6 @@ def test_compile_warmup_random_helpers_preserve_normal_randomness():
         torch.testing.assert_close(torch.as_tensor(actual), torch.as_tensor(expected))
 
     with compile_warmup_only():
-        assert type(rand(4)).__name__ == "FakeTensor"
-        assert type(randn(4)).__name__ == "FakeTensor"
-        assert type(randint(0, 9, (4, ))).__name__ == "FakeTensor"
         assert random_int(2, 9) == 2
         assert random_float() == 0.5
 
