@@ -408,8 +408,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // Multi-chunk gather: 16 row indices lower to two TDM instructions.  Chunk 1's
 // LDS address is chunk 0 + a compile-time-constant byte delta (8 rows * 64 cols
-// * 2 bytes = 1024), and both chunks insert it into the same chunk-invariant
-// base descriptor (group0).
+// * 2 bytes = 1024), and chunk 1 updates the group0 descriptor produced for
+// chunk 0.
 #blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #slice = #ttg.slice<{dim = 1, parent = #blocked}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -418,11 +418,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: tdm_gather_multichunk
   // CHECK-DAG: %[[DELTA:.*]] = llvm.mlir.constant(1024 : i32) : i32
   // CHECK: %[[C0:.*]] = llvm.ptrtoint %{{.*}} : !llvm.ptr<3> to i32
-  // CHECK: llvm.insertelement %[[C0]], %[[G0:.*]][%{{.*}} : i32] : vector<4xi32>
-  // CHECK: "llvm.amdgcn.tensor.load.to.lds"
+  // CHECK: %[[G0_C0:.*]] = llvm.insertelement %[[C0]], %{{.*}}[%{{.*}} : i32] : vector<4xi32>
+  // CHECK: "llvm.amdgcn.tensor.load.to.lds"(%[[G0_C0]],
   // CHECK: %[[C1:.*]] = llvm.add %[[C0]], %[[DELTA]] : i32
-  // CHECK: llvm.insertelement %[[C1]], %[[G0]][%{{.*}} : i32] : vector<4xi32>
-  // CHECK: "llvm.amdgcn.tensor.load.to.lds"
+  // CHECK: %[[G0_C1:.*]] = llvm.insertelement %[[C1]], %[[G0_C0]][%{{.*}} : i32] : vector<4xi32>
+  // CHECK: "llvm.amdgcn.tensor.load.to.lds"(%[[G0_C1]],
   tt.func public @tdm_gather_multichunk(
     %tensorDesc: !tt.tensordesc<16x64xf16, #shared>,
     %memDesc: !ttg.memdesc<16x64xf16, #shared, #smem, mutable>,
@@ -437,8 +437,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // Padded multi-chunk gather: the chunk delta (8 rows) is a whole number of pad
 // intervals, so the byte delta carries the padding too --
-// (8*64 + (8*64/64)*4) * 2 bytes = 1088 -- and both chunks insert it into the
-// same chunk-invariant base descriptor (group0).
+// (8*64 + (8*64/64)*4) * 2 bytes = 1088 -- and chunk 1 updates the group0
+// descriptor produced for chunk 0.
 #blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #slice = #ttg.slice<{dim = 1, parent = #blocked}>
 #shared = #ttg.padded_shared<[64:+4] {order = [1, 0], shape = [16, 64]}>
@@ -447,11 +447,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: tdm_gather_multichunk_padded
   // CHECK-DAG: %[[DELTA:.*]] = llvm.mlir.constant(1088 : i32) : i32
   // CHECK: %[[C0:.*]] = llvm.ptrtoint %{{.*}} : !llvm.ptr<3> to i32
-  // CHECK: llvm.insertelement %[[C0]], %[[G0:.*]][%{{.*}} : i32] : vector<4xi32>
-  // CHECK: "llvm.amdgcn.tensor.load.to.lds"
+  // CHECK: %[[G0_C0:.*]] = llvm.insertelement %[[C0]], %{{.*}}[%{{.*}} : i32] : vector<4xi32>
+  // CHECK: "llvm.amdgcn.tensor.load.to.lds"(%[[G0_C0]],
   // CHECK: %[[C1:.*]] = llvm.add %[[C0]], %[[DELTA]] : i32
-  // CHECK: llvm.insertelement %[[C1]], %[[G0]][%{{.*}} : i32] : vector<4xi32>
-  // CHECK: "llvm.amdgcn.tensor.load.to.lds"
+  // CHECK: %[[G0_C1:.*]] = llvm.insertelement %[[C1]], %[[G0_C0]][%{{.*}} : i32] : vector<4xi32>
+  // CHECK: "llvm.amdgcn.tensor.load.to.lds"(%[[G0_C1]],
   tt.func public @tdm_gather_multichunk_padded(
     %tensorDesc: !tt.tensordesc<16x64xf16, #shared>,
     %memDesc: !ttg.memdesc<16x64xf16, #shared, #smem, mutable>,
