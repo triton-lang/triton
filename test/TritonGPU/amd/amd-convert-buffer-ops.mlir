@@ -1,6 +1,8 @@
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx942 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=COMMON,GFX942-ONLY,CDNA
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx950 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=COMMON,GFX950-PLUS,CDNA
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1250 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=COMMON,GFX950-PLUS
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx942 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=COMMON,GFX942-ONLY,CDNA,FMINMAX,FMINMAX-NO-F32,FMINMAX-F64,IMINMAX
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx950 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=COMMON,GFX950-PLUS,CDNA,FMINMAX,FMINMAX-NO-F32,FMINMAX-F64,IMINMAX
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1100 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=FMINMAX,FMINMAX-NO-F32,FMINMAX-NO-F64
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1200 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=FMINMAX,FMINMAX-F32,FMINMAX-NO-F64,IMINMAX
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1250 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=COMMON,GFX950-PLUS,FMINMAX,FMINMAX-F32,FMINMAX-F64,IMINMAX
 
 #blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
@@ -943,6 +945,110 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %19 = tt.splat %out_ptr : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>, #blocked>
     %20 = tt.addptr %19, %18 : tensor<64x!tt.ptr<f32>, #blocked>, tensor<64xi32, #blocked>
     %21 = tt.atomic_rmw fadd, relaxed, gpu, %20, %15, %cst : (tensor<64x!tt.ptr<f32>, #blocked>, tensor<64xf32, #blocked>, tensor<64xi1, #blocked>) -> tensor<64xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // FMINMAX-LABEL: atomic_max_f16
+  // FMINMAX-NOT: amdg.buffer_atomic_rmw
+  // FMINMAX: tt.atomic_rmw max
+  tt.func public @atomic_max_f16(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %values: tensor<1024xf16, #blocked>) {
+    %c1024_i32 = arith.constant 1024 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %3 = tt.addptr %arg0, %1 : !tt.ptr<f16>, i32
+    %4 = tt.splat %3 : !tt.ptr<f16> -> tensor<1024x!tt.ptr<f16>, #blocked>
+    %5 = tt.addptr %4, %2 : tensor<1024x!tt.ptr<f16>, #blocked>, tensor<1024xi32, #blocked>
+    %6 = tt.atomic_rmw max, acq_rel, gpu, %5, %values : (tensor<1024x!tt.ptr<f16>, #blocked>, tensor<1024xf16, #blocked>) -> tensor<1024xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // FMINMAX-LABEL: atomic_min_bf16
+  // FMINMAX-NOT: amdg.buffer_atomic_rmw
+  // FMINMAX: tt.atomic_rmw min
+  tt.func public @atomic_min_bf16(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %values: tensor<1024xbf16, #blocked>) {
+    %c1024_i32 = arith.constant 1024 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %3 = tt.addptr %arg0, %1 : !tt.ptr<bf16>, i32
+    %4 = tt.splat %3 : !tt.ptr<bf16> -> tensor<1024x!tt.ptr<bf16>, #blocked>
+    %5 = tt.addptr %4, %2 : tensor<1024x!tt.ptr<bf16>, #blocked>, tensor<1024xi32, #blocked>
+    %6 = tt.atomic_rmw min, acq_rel, gpu, %5, %values : (tensor<1024x!tt.ptr<bf16>, #blocked>, tensor<1024xbf16, #blocked>) -> tensor<1024xbf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // FMINMAX-F32-LABEL: atomic_max_f32
+  // FMINMAX-F32: amdg.buffer_atomic_rmw max
+  // FMINMAX-NO-F32-LABEL: atomic_max_f32
+  // FMINMAX-NO-F32-NOT: amdg.buffer_atomic_rmw
+  // FMINMAX-NO-F32: tt.atomic_rmw max
+  tt.func public @atomic_max_f32(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %values: tensor<1024xf32, #blocked>) {
+    %c1024_i32 = arith.constant 1024 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %3 = tt.addptr %arg0, %1 : !tt.ptr<f32>, i32
+    %4 = tt.splat %3 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %5 = tt.addptr %4, %2 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    %6 = tt.atomic_rmw max, acq_rel, gpu, %5, %values : (tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>) -> tensor<1024xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // FMINMAX-F64-LABEL: atomic_min_f64
+  // FMINMAX-F64: amdg.buffer_atomic_rmw min
+  // FMINMAX-NO-F64-LABEL: atomic_min_f64
+  // FMINMAX-NO-F64-NOT: amdg.buffer_atomic_rmw
+  // FMINMAX-NO-F64: tt.atomic_rmw min
+  tt.func public @atomic_min_f64(%arg0: !tt.ptr<f64> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %values: tensor<1024xf64, #blocked>) {
+    %c1024_i32 = arith.constant 1024 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %3 = tt.addptr %arg0, %1 : !tt.ptr<f64>, i32
+    %4 = tt.splat %3 : !tt.ptr<f64> -> tensor<1024x!tt.ptr<f64>, #blocked>
+    %5 = tt.addptr %4, %2 : tensor<1024x!tt.ptr<f64>, #blocked>, tensor<1024xi32, #blocked>
+    %6 = tt.atomic_rmw min, acq_rel, gpu, %5, %values : (tensor<1024x!tt.ptr<f64>, #blocked>, tensor<1024xf64, #blocked>) -> tensor<1024xf64, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // IMINMAX-LABEL: atomic_max_i32
+  // IMINMAX-NOT: amdg.buffer_atomic_rmw
+  // IMINMAX: tt.atomic_rmw max
+  tt.func public @atomic_max_i32(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %values: tensor<1024xi32, #blocked>) {
+    %c1024_i32 = arith.constant 1024 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %3 = tt.addptr %arg0, %1 : !tt.ptr<i32>, i32
+    %4 = tt.splat %3 : !tt.ptr<i32> -> tensor<1024x!tt.ptr<i32>, #blocked>
+    %5 = tt.addptr %4, %2 : tensor<1024x!tt.ptr<i32>, #blocked>, tensor<1024xi32, #blocked>
+    %6 = tt.atomic_rmw max, acq_rel, gpu, %5, %values : (tensor<1024x!tt.ptr<i32>, #blocked>, tensor<1024xi32, #blocked>) -> tensor<1024xi32, #blocked>
     tt.return
   }
 }
