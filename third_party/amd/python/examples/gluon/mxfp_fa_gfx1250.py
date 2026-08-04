@@ -3310,6 +3310,7 @@ def runtime_profile(ms, q_type, kv_type, block_scaling, batch, seqlen_q, seqlen_
     print("Runtime Profile:")
     print(f"- Average time: {ms * 1000:.2f} us")
     print(f"- TFLOPS:      {tflops:.2f}")
+    print(f"- Total bytes: {total_bytes / 1e6:.2f} MB")
     print(f"- Bandwidth:   {bandwidth_tb_s:.4f} TB/s")
     print("")
 
