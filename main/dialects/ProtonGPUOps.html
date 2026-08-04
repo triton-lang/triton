@@ -173,12 +173,15 @@
 <h2><code class="docutils literal notranslate"><span class="pre">proton_gpu.circular_store</span></code> (triton::proton::gpu::CircularStoreOp)<a class="headerlink" href="#proton-gpu-circular-store-triton-proton-gpu-circularstoreop" title="Link to this heading"></a></h2>
 <p><em>Store the value into a circular buffer</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `proton_gpu.circular_store` (`start` $isStart^):(`end`)? $segment `,` $counter attr-dict `:`
-              qualified(type($segment)) `,` type($counter)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `proton_gpu.circular_store` (`start` $isStart^):(`end`)? $segment `,` $counter
+              (`,` $dynamicScopeId^)?
+              attr-dict `:` qualified(type($segment)) `,` type($counter)
 </pre></div>
 </div>
 <p>Store a metric <code class="docutils literal notranslate"><span class="pre">counter</span></code> into a circular buffer backed by the internal memory <code class="docutils literal notranslate"><span class="pre">segment</span></code>.
-automatically updated. Older metric counters are dropped if the <code class="docutils literal notranslate"><span class="pre">segment</span></code> buffer is full.</p>
+<code class="docutils literal notranslate"><span class="pre">scopeId</span></code> contains a compile-time scope identifier, while <code class="docutils literal notranslate"><span class="pre">dynamicScopeId</span></code>
+contains a runtime scope identifier. Exactly one must be present. Older
+metric counters are dropped if the <code class="docutils literal notranslate"><span class="pre">segment</span></code> buffer is full.</p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource,</span> <span class="pre">MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
 <section id="attributes">
@@ -203,6 +206,9 @@ automatically updated. Older metric counters are dropped if the <code class="doc
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">counter</span></code></p></td>
 <td><p>32-bit signless integer or 64-bit signless integer</p></td>
+</tr>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">dynamicScopeId</span></code></p></td>
+<td><p>32-bit signless integer</p></td>
 </tr>
 </tbody>
 </table>

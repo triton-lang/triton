@@ -1,0 +1,32 @@
+triton.experimental.gluon.language.amd.cdna5.tdm.tensor\_descriptor\_type
+=========================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna5
+
+.. autoclass:: tdm.tensor_descriptor_type
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~tdm.tensor_descriptor_type.__init__
+      ~tdm.tensor_descriptor_type.mangle
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~tdm.tensor_descriptor_type.block_type
+      ~tdm.tensor_descriptor_type.shape_type
+      ~tdm.tensor_descriptor_type.strides_type
+      ~tdm.tensor_descriptor_type.layout
+   
+   

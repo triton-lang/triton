@@ -1,0 +1,31 @@
+﻿triton.experimental.gluon.language.amd.cdna5.mbarrier
+=====================================================
+
+.. automodule:: triton.experimental.gluon.language.amd.cdna5.mbarrier
+
+
+
+
+.. rubric:: Functions
+
+.. autosummary::
+   :toctree:
+   :nosignatures:
+
+   init
+   wait
+   arrive
+
+
+
+.. rubric:: Classes
+
+.. autosummary::
+   :toctree:
+   :nosignatures:
+
+   MBarrierLayout
+
+
+
+

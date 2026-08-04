@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.amd.cdna5.mbarrier.wait
+==========================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna5
+
+.. autofunction:: mbarrier.wait

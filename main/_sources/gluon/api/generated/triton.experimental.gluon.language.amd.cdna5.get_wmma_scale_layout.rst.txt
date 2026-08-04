@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.amd.cdna5.get\_wmma\_scale\_layout
+=====================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna5
+
+.. autofunction:: get_wmma_scale_layout

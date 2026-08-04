@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.amd.cdna5.tdm.async\_load\_fused
+===================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna5
+
+.. autofunction:: tdm.async_load_fused

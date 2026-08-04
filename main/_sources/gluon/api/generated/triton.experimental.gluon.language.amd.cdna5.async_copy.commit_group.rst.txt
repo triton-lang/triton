@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.amd.cdna5.async\_copy.commit\_group
+======================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna5
+
+.. autofunction:: async_copy.commit_group

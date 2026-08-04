@@ -153,7 +153,8 @@
 <dd class="field-even"><ul class="simple">
 <li><p><strong>arg1</strong> – the start value.</p></li>
 <li><p><strong>arg2</strong> – the end value.</p></li>
-<li><p><strong>step</strong> – the step value.</p></li>
+<li><p><strong>step</strong> – the step value. A negative step is supported only when it is a
+<code class="code docutils literal notranslate"><span class="pre">constexpr</span></code>; a runtime (non-<code class="code docutils literal notranslate"><span class="pre">constexpr</span></code>) step must be positive.</p></li>
 <li><p><strong>num_stages</strong> – <p>pipeline the loop into this many stages (so there are
 <code class="code docutils literal notranslate"><span class="pre">num_stages</span></code> iterations of the loop in flight at once).</p>
 <p>Note this is subtly different than passing <code class="code docutils literal notranslate"><span class="pre">num_stages</span></code> as a

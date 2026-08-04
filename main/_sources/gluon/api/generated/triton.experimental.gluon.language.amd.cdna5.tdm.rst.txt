@@ -1,0 +1,36 @@
+﻿triton.experimental.gluon.language.amd.cdna5.tdm
+================================================
+
+.. automodule:: triton.experimental.gluon.language.amd.cdna5.tdm
+
+
+
+
+.. rubric:: Functions
+
+.. autosummary::
+   :toctree:
+   :nosignatures:
+
+   update_tensor_descriptor
+   async_load
+   async_load_fused
+   async_wait
+   make_tensor_descriptor
+   prefetch
+   async_scatter
+
+
+
+.. rubric:: Classes
+
+.. autosummary::
+   :toctree:
+   :nosignatures:
+
+   tensor_descriptor
+   tensor_descriptor_type
+
+
+
+

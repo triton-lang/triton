@@ -1,0 +1,35 @@
+﻿triton.experimental.gluon.language.amd.cdna5.PartitionedSharedLayout
+====================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna5
+
+.. autoclass:: PartitionedSharedLayout
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~PartitionedSharedLayout.__init__
+      ~PartitionedSharedLayout.format_hardware_view
+      ~PartitionedSharedLayout.format_tensor_view
+      ~PartitionedSharedLayout.mangle
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~PartitionedSharedLayout.type
+      ~PartitionedSharedLayout.num_partitions
+      ~PartitionedSharedLayout.num_groups
+      ~PartitionedSharedLayout.partition_dim
+      ~PartitionedSharedLayout.partition_layout
+   
+   

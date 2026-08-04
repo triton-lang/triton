@@ -7,12 +7,15 @@ _Store the value into a circular buffer_
 Syntax:
 
 ```
-operation ::= `proton_gpu.circular_store` (`start` $isStart^):(`end`)? $segment `,` $counter attr-dict `:`
-              qualified(type($segment)) `,` type($counter)
+operation ::= `proton_gpu.circular_store` (`start` $isStart^):(`end`)? $segment `,` $counter
+              (`,` $dynamicScopeId^)?
+              attr-dict `:` qualified(type($segment)) `,` type($counter)
 ```
 
 Store a metric `counter` into a circular buffer backed by the internal memory `segment`.
-automatically updated. Older metric counters are dropped if the `segment` buffer is full.
+`scopeId` contains a compile-time scope identifier, while `dynamicScopeId`
+contains a runtime scope identifier. Exactly one must be present. Older
+metric counters are dropped if the `segment` buffer is full.
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
@@ -32,6 +35,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::Defa
 | :-----: | ----------- |
 | `segment` | A segment in the internal buffer |
 | `counter` | 32-bit signless integer or 64-bit signless integer |
+| `dynamicScopeId` | 32-bit signless integer |
 
 
 

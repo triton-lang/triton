@@ -1,0 +1,22 @@
+﻿triton.experimental.gluon.language.amd.cdna5.cluster
+====================================================
+
+.. automodule:: triton.experimental.gluon.language.amd.cdna5.cluster
+
+
+
+
+.. rubric:: Functions
+
+.. autosummary::
+   :toctree:
+   :nosignatures:
+
+   arrive
+   wait
+
+
+
+
+
+

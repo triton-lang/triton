@@ -1,0 +1,25 @@
+﻿triton.experimental.gluon.language.amd.cdna5.async\_copy
+========================================================
+
+.. automodule:: triton.experimental.gluon.language.amd.cdna5.async_copy
+
+
+
+
+.. rubric:: Functions
+
+.. autosummary::
+   :toctree:
+   :nosignatures:
+
+   global_to_shared
+   shared_to_global
+   commit_group
+   wait_group
+   mbarrier_arrive
+
+
+
+
+
+
