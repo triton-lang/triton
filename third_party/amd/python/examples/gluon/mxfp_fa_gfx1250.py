@@ -2545,6 +2545,7 @@ def mxfp_attn_epilogue(  #
             tdm.async_store(o_desc, [off_m * BLOCK_M, 0], o_smem)
 
         else:
+            # store partial output
             o_smem_layout: ttgl.constexpr = get_shared_layout(  #
                 shape=[SPLIT_K * BLOCK_M, HEAD_SZ],  #
                 num_ctas=NUM_CTAS, cta_axis=0,  #
@@ -2579,6 +2580,7 @@ def mxfp_attn_epilogue(  #
             cluster.arrive()
             cluster.wait()
 
+            # read back partial output
             softmax_layout: ttgl.constexpr = get_softmax_layout([SPLIT_K, BLOCK_M, HEAD_SZ], NUM_WARPS, NUM_CTAS)
 
             l_offs = expand_dims(ttgl.arange(0, SPLIT_K, get_slice_layout(softmax_layout, [1, 2])), -1) * BLOCK_M + \
