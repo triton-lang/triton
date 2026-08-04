@@ -306,7 +306,6 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
             passes.ttgpuir.add_schedule_loops(pm)
             passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
-            nvidia.passes.ttnvgpuir.add_lower_clc(pm)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_optimize_partition_warps(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
@@ -325,6 +324,8 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttnvgpuir.add_tmem_load_reduce(pm)
         if capability // 10 >= 9:
             nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
+        if capability // 10 >= 10:
+            nvidia.passes.ttnvgpuir.add_lower_clc(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         nvidia.passes.ttnvgpuir.add_interleave_tmem(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
