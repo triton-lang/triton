@@ -13,7 +13,6 @@ from triton.experimental.gluon.nvidia.blackwell import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     allocate_tensor_memory,
-    cluster,
     fence_async_shared,
     tensor_memory_descriptor,
     tensor_memory_descriptor_type,
@@ -953,10 +952,6 @@ def attention_kernel(  #
         (_attn_fwd_load, (config, chnls, descs, M, STAGE)),
         (_attn_fwd_epilogue, (config, chnls, descs, M, STAGE)),
     ], [4, 4, 1, 1, 1], [192, 192, 24, 24, 24])
-
-    if config.TWO_CTAS:
-        # Wait for peer CTAs to complete before invalidating mbarriers
-        cluster.barrier()
 
     q_chnl.release()
     kv_chnl.release()
