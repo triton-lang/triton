@@ -12,6 +12,7 @@ import triton.language as tl
 from triton import knobs
 from typing import Optional, Set, Union
 from dataclasses import dataclass
+from contextvars import ContextVar
 import pytest
 
 from numpy.random import RandomState
@@ -27,6 +28,7 @@ dtypes_with_bfloat16 = dtypes + ['bfloat16']
 torch_float8_dtypes = ['float8_e4m3fn', 'float8_e5m2']
 torch_dtypes = ['bool'] + int_dtypes + ['uint8'] + float_dtypes + ['bfloat16']
 tma_dtypes = sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"})
+_COMPILE_WARMUP_ACTIVE = ContextVar("triton_compile_warmup_active", default=False)
 
 
 def is_interpreter():
@@ -34,7 +36,7 @@ def is_interpreter():
 
 
 def is_compile_warmup():
-    return knobs.runtime.launch_dispatcher is not None
+    return _COMPILE_WARMUP_ACTIVE.get()
 
 
 def rand(*shape, **kwargs):

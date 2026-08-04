@@ -168,7 +168,7 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
 
     def swizzle_data(self, data):
         need_torch = (data.device.type in ["cpu", "meta"] or data.dtype.itemsize != 1
-                      or (is_fake(data) and triton.knobs.runtime.launch_dispatcher is None))
+                      or (is_fake(data) and not getattr(data.fake_mode, "_triton_compile_warmup", False)))
 
         if need_torch:
             data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))

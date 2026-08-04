@@ -371,9 +371,6 @@ class KernelInterface(Generic[T]):
         Hence JITFunction.__getitem__ returns a callable proxy that
         memorizes the grid.
         """
-        dispatcher = knobs.runtime.launch_dispatcher
-        if dispatcher is not None:
-            return lambda *args, **kwargs: dispatcher(self, grid, *args, **kwargs)
         return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
         # return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
 
@@ -881,12 +878,6 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
     def _do_compile(self, key, signature, device, constexprs, options, attrs, warmup):
         kernel_cache, _, target, backend, _ = self.device_caches[device]
-
-        specialization_hook = knobs.runtime.jit_specialization_hook
-        if specialization_hook is not None and specialization_hook(fn=self, key=key, signature=signature, target=target,
-                                                                   device=device, constants=constexprs, options=options,
-                                                                   attrs=attrs, warmup=warmup):
-            return None
 
         if self._call_hook(knobs.runtime.jit_cache_hook, key, signature, target, device, constexprs, options, [attrs],
                            warmup):

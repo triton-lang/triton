@@ -21,6 +21,7 @@ class _FakeCudaTensorMode(TorchFunctionMode):
         from torch._subclasses.fake_tensor import FakeTensorMode
 
         self.fake_mode = FakeTensorMode(allow_fallback_kernels=False, allow_non_fake_inputs=True)
+        self.fake_mode._triton_compile_warmup = True
         self.storage_pointers = weakref.WeakKeyDictionary()
         self.next_storage_pointer = self._STORAGE_STRIDE + self._STORAGE_ALIGNMENT
 
@@ -54,6 +55,7 @@ class _FakeCudaTensorMode(TorchFunctionMode):
 @contextmanager
 def compile_warmup_only(dispatcher=None):
     """Capture launch specializations without GPU allocations or kernel execution."""
+    from triton._internal_testing import _COMPILE_WARMUP_ACTIVE
 
     def dispatch(kernel, grid, *args, **kwargs):
         if dispatcher is None:
@@ -61,10 +63,17 @@ def compile_warmup_only(dispatcher=None):
         return dispatcher.dispatch(*args, kernel=kernel, grid=grid, test=dispatcher.current_test, **kwargs)
 
     with triton.knobs.runtime.scope(), warnings.catch_warnings():
-        triton.knobs.runtime.launch_dispatcher = dispatch
         warnings.filterwarnings("ignore", message="Accessing the data pointer of FakeTensor.*")
         with _FakeCudaTensorMode():
-            yield
+            previous_getitem = triton.KernelInterface.__getitem__
+            triton.KernelInterface.__getitem__ = lambda kernel, grid: lambda *args, **kwargs: dispatch(
+                kernel, grid, *args, **kwargs)
+            active_token = _COMPILE_WARMUP_ACTIVE.set(True)
+            try:
+                yield
+            finally:
+                _COMPILE_WARMUP_ACTIVE.reset(active_token)
+                triton.KernelInterface.__getitem__ = previous_getitem
 
 
 @contextmanager

@@ -415,26 +415,43 @@ class ProcessPoolWarmupDispatcher:
         self._pending.append(self._executor.submit(_preload_worker, *task))
 
     def _capture_preloads(self, instrumentation_mode, environment, kernel, args, grid, kwargs, test):
-        previous_hook = triton.knobs.runtime.jit_specialization_hook
+        from triton.runtime import jit
+
+        previous_hook = triton.knobs.runtime.jit_cache_hook
+        previous_serializer = jit.serialize_specialization_data
         captures = []
 
-        def capture_specialization(*, fn, key, signature, target, device, constants, options, attrs, warmup):
+        def serialize_specialization(name, signature, constants, attrs, options, key, target):
+            try:
+                return previous_serializer(name, signature, constants, attrs, options, key, target)
+            except TypeError as error:
+                if "not JSON serializable" not in str(error):
+                    raise
+                return json.dumps({"name": name, "options": options.__dict__, "target": target.__dict__})
+
+        def capture_specialization(*, key, repr, compile, fn, is_manual_warmup, already_compiled=False):
             if previous_hook is not None:
-                previous_hook(fn=fn, key=key, signature=signature, target=target, device=device, constants=constants,
-                              options=options, attrs=attrs, warmup=warmup)
+                previous_hook(key=key, repr=repr, compile=compile, fn=fn, is_manual_warmup=is_manual_warmup,
+                              already_compiled=already_compiled)
+            specialization = json.loads(compile["specialization_data"])
+            options = {
+                name: tuple(value) if isinstance(value, list) else value
+                for name, value in specialization["options"].items()
+            }
             captures.append((
-                fn,
-                fn._fn_name,
+                fn.jit_function,
+                specialization["name"],
                 key,
-                dict(target.__dict__),
-                dict(options.__dict__),
-                signature,
-                constants,
-                attrs,
+                specialization["target"],
+                options,
+                compile["signature"],
+                compile["constants"] or {},
+                compile.get("configs", [{}])[0],
             ))
             return True
 
-        triton.knobs.runtime.jit_specialization_hook = capture_specialization
+        triton.knobs.runtime.jit_cache_hook = capture_specialization
+        jit.serialize_specialization_data = serialize_specialization
         try:
             try:
                 _warmup_kernel(kernel, args, grid, kwargs)
@@ -449,7 +466,8 @@ class ProcessPoolWarmupDispatcher:
                 raise OverflowError(
                     f"{error}; kernel={kernel}; args=[{', '.join(arg_details)}]; kwargs={kwargs}") from error
         finally:
-            triton.knobs.runtime.jit_specialization_hook = previous_hook
+            jit.serialize_specialization_data = previous_serializer
+            triton.knobs.runtime.jit_cache_hook = previous_hook
         result = []
         for function, name, key, target, options, signature, constants, attrs in captures:
             # Triton's in-memory cache uses this exact key, which already

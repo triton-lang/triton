@@ -35,6 +35,7 @@ def test_compile_warmup_only_intercepts_launches():
             return "compiled"
 
     kernel = Kernel()
+    previous_getitem = triton.KernelInterface.__getitem__
     with compile_warmup_only():
         tensor = torch.empty(16, device="cuda")
         view = tensor[1:]
@@ -49,6 +50,7 @@ def test_compile_warmup_only_intercepts_launches():
     assert type(tensor).__name__ == "FakeTensor"
     assert launches == [((tensor, ), (2, ), {"BLOCK_SIZE": 16})]
     assert not is_compile_warmup()
+    assert triton.KernelInterface.__getitem__ is previous_getitem
 
 
 def test_compile_warmup_random_helpers_preserve_normal_randomness():

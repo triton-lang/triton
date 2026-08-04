@@ -468,19 +468,6 @@ class PipelineStagesHook(Protocol):
         ...
 
 
-class LaunchDispatcher(Protocol):
-
-    def __call__(self, kernel: Any, grid: Any, *args: Any, **kwargs: Any) -> Any:
-        ...
-
-
-class JITSpecializationHook(Protocol):
-
-    def __call__(self, *, fn: JITFunction, key: str, signature: dict, target: Any, device: int, constants: dict,
-                 options: Any, attrs: dict, warmup: bool) -> bool:
-        ...
-
-
 class runtime_knobs(base_knobs):
     interpret: env_bool = env_bool("TRITON_INTERPRET")
     # debug is on critical path for kernel launches
@@ -501,10 +488,6 @@ class runtime_knobs(base_knobs):
     # Hook to signal that a kernel is done compiling and inspect compiled function.
     # jit_cache_hook will always be called before compilation and jit_post_compile_hook after.
     jit_post_compile_hook: Optional[JITHook] = None
-
-    # Scoped hooks for shape-only launch capture and exact specialization data.
-    launch_dispatcher: Optional[LaunchDispatcher] = None
-    jit_specialization_hook: Optional[JITSpecializationHook] = None
 
     # Hook for inspecting compiler pipeline stages
     add_stages_inspection_hook: Optional[PipelineStagesHook] = None
