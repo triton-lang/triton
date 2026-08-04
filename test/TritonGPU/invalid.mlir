@@ -1,5 +1,18 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+#blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [0, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @force_warp_shuffle_cross_warp(%arg0: tensor<32x32xf32, #blocked0>) {
+    // expected-error@+1 {{force_warp_shuffle requires a conversion within one warp}}
+    %0 = ttg.convert_layout %arg0 {force_warp_shuffle} : tensor<32x32xf32, #blocked0> -> tensor<32x32xf32, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 // expected-error @+1 {{shape must have power-of-2 and non-zero dimensions; got 3, 4}}
@@ -326,6 +339,33 @@ tt.func public @memdesc_reinterpret_subview(%arg0: !ttg.memdesc<8x16xf16, #share
     // expected-error @+1 {{result shared-memory footprint includes offsets not owned by the source subview}}
     %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<8x16xf16, #shared, #smem, 16x16> -> !ttg.memdesc<8x16xf16, #shared, #smem>
     tt.return
+}
+
+// -----
+
+#shared_split = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
+#shared_broadcast = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @memdesc_reinterpret_shared_subview_slices_cta(%parent: !ttg.memdesc<8x16xf16, #shared_split, #smem, mutable>) {
+    %view = ttg.memdesc_subslice %parent [4, 0] : !ttg.memdesc<8x16xf16, #shared_split, #smem, mutable> -> !ttg.memdesc<4x16xf16, #shared_split, #smem, mutable, 8x16>
+    // expected-error @+1 {{cannot reinterpret a source subview sliced across CTAs}}
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<4x16xf16, #shared_split, #smem, mutable, 8x16> -> !ttg.memdesc<4x16xf16, #shared_broadcast, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem_split = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1, CGALayout = [[0, 1]]>
+#tmem_broadcast = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1, CGALayout = [[0, 0]]>
+#tmem = #ttng.tensor_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @memdesc_reinterpret_tmem_subview_slices_cta(%view: !ttg.memdesc<128x32xf32, #tmem_split, #tmem, mutable, 128x128>) {
+    // expected-error @+1 {{cannot reinterpret a source subview sliced across CTAs}}
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<128x32xf32, #tmem_split, #tmem, mutable, 128x128> -> !ttg.memdesc<128x32xf32, #tmem_broadcast, #tmem, mutable>
+    tt.return
+  }
 }
 
 // -----

@@ -5,7 +5,6 @@
 PYTHON ?= python3
 ROOT_DIR := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))
 BUILD_DIR := $(shell PYTHONPATH="$(ROOT_DIR)/python" $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
-INSTALL_DIR ?= $(dir $(BUILD_DIR))install
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
 LLVM_BUILD_PATH ?= "$(ROOT_DIR)/.llvm-project/build"
@@ -43,12 +42,7 @@ test-unit: all
 
 .PHONY: test-plugins
 test-plugins: all
-	TRITON_PLUGIN_PATHS=python/triton/plugins/libTritonPluginsTestLib.so \
-		$(PYTEST) -vvv python/test/unit/plugins/test_plugin.py
-	TRITON_PLUGIN_PATHS=python/triton/plugins/libMLIRDialectPlugin.so \
-		$(PYTEST) -vvv python/test/unit/plugins/test_dialect_plugin.py
-	TRITON_PLUGIN_PATHS=python/triton/plugins/libMLIRDialectPlugin.so \
-		$(PYTEST) -s -vvv python/test/unit/plugins/custom_ops.py
+	$(PYTEST) -vvv python/test/unit/plugins
 
 .PHONY: test-gluon
 test-gluon: all
@@ -122,12 +116,6 @@ dev-install-llvm:
 		LLVM_LIBRARY_DIR=$(LLVM_BUILD_PATH)/lib \
 		LLVM_SYSPATH=$(LLVM_BUILD_PATH) \
 	$(MAKE) dev-install
-
-# Package C++ artifacts
-
-.PHONY: install
-install:
-	cmake --install $(BUILD_DIR) --prefix $(INSTALL_DIR)
 
 # Updating lit tests
 

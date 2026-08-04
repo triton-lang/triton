@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/MathExtras.h"
@@ -398,6 +399,20 @@ struct CanonicalizeConvertFromConvert
   }
 };
 
+LogicalResult ConvertLayoutOp::verify() {
+  if (!getForceWarpShuffle())
+    return success();
+
+  auto conversion = minimalCvtLayout(getSrc().getType(), getType());
+  auto dims = conversion.getInDimNames();
+  auto warp = StringAttr::get(getContext(), "warp");
+  auto block = StringAttr::get(getContext(), "block");
+  if (llvm::is_contained(dims, warp) || llvm::is_contained(dims, block))
+    return emitOpError(
+        "force_warp_shuffle requires a conversion within one warp");
+  return success();
+}
+
 void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                                   MLIRContext *context) {
   patterns.add<CanonicalizeConvertFromConvert>(context);
@@ -713,16 +728,18 @@ LogicalResult MemDescReinterpretOp::verify() {
               srcTy.getMemorySpace()) &&
           "expected shared or tensor memory"));
 
-  auto allocationLayout = [](MemDescType ty) {
-    return isPaddedEncoding(ty.getEncoding())
-               ? paddedLinearLayout(ty)
-               : toLinearLayout(
-                     dropPipeliningDim(ty.getAllocShape(), ty.getEncoding()),
-                     ty.getEncoding());
-  };
+  auto srcAllocation = toLinearLayoutIgnoringPadding(
+      dropPipeliningDim(srcTy.getAllocShape(), srcEnc), srcEnc);
+  auto dstAllocation = toLinearLayoutIgnoringPadding(
+      dropPipeliningDim(dstTy.getAllocShape(), dstEnc), dstEnc);
+  auto srcShape = dropPipeliningDim(srcTy.getShape(), srcEnc);
+  auto blockDim = StringAttr::get(getContext(), "block");
+  for (const auto &basis : srcAllocation.getBases().lookup(blockDim))
+    for (auto [component, size] : llvm::zip_equal(basis, srcShape))
+      if (component >= size)
+        return emitError("cannot reinterpret a source subview sliced across "
+                         "CTAs");
 
-  auto srcAllocation = allocationLayout(srcTy);
-  auto dstAllocation = allocationLayout(dstTy);
   if (srcIsTmem) {
     auto srcAlloc = nvidia_gpu::getTmemAllocSizes(srcTy);
     auto dstAlloc = nvidia_gpu::getTmemAllocSizes(dstTy);
@@ -757,7 +774,6 @@ LogicalResult MemDescReinterpretOp::verify() {
   uint64_t dstStride = llvm::divideCeil(
       uint64_t(dstAllocation.getInDimSize(addressDim)) * dstElementBits,
       uint64_t(unitBits));
-  auto srcShape = dropPipeliningDim(srcTy.getShape(), srcEnc);
   auto dstShape = dropPipeliningDim(dstTy.getShape(), dstEnc);
   int64_t srcStages = product(srcTy.getShape().drop_back(srcShape.size()));
   int64_t dstStages = product(dstTy.getShape().drop_back(dstShape.size()));
@@ -1038,6 +1054,26 @@ LogicalResult LocalScatterOp::verify() {
 }
 
 // LocalAtomicScatterRMWOp
+bool LocalAtomicScatterRMWOp::isCommutative() {
+  if (!getResult().use_empty() ||
+      !getDst().getType().getElementType().isInteger())
+    return false;
+
+  switch (getAtomicRmwOp()) {
+  case RMWOp::ADD:
+  case RMWOp::AND:
+  case RMWOp::OR:
+  case RMWOp::XOR:
+  case RMWOp::MAX:
+  case RMWOp::MIN:
+  case RMWOp::UMAX:
+  case RMWOp::UMIN:
+    return true;
+  default:
+    return false;
+  }
+}
+
 LogicalResult LocalAtomicScatterRMWOp::verify() {
   auto dstTy = getDst().getType();
   auto valuesTy = cast<RankedTensorType>(getValues().getType());
@@ -1237,16 +1273,13 @@ LogicalResult MemDescSubsliceOp::verify() {
     return success();
 
   auto ctx = getContext();
-  LinearLayout ll;
   if (auto paddedEncoding = triton::gpu::getPaddedEncoding(srcEnc)) {
     if (paddedEncoding.getRank() < srcTy.getRank()) {
       return emitError("SubSlice of low rank PaddedSharedEncoding from higher "
                        "rank tensors is not supported yet");
     }
-    ll = triton::gpu::paddedLinearLayout(srcTy);
-  } else {
-    ll = triton::gpu::toLinearLayout(srcTy);
   }
+  LinearLayout ll = triton::gpu::toLinearLayoutIgnoringPadding(srcTy);
 
   auto llInv = ll.pseudoinvert();
   for (auto dim : splitDims) {

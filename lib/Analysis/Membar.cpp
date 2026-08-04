@@ -5,7 +5,6 @@
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
-#include <deque>
 
 namespace ttng = mlir::triton::nvidia_gpu;
 
@@ -92,152 +91,6 @@ void AllocationSlice::print(raw_ostream &os) const {
   }
 }
 
-void MembarOrFenceAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
-  FunctionOpInterface funcOp =
-      dyn_cast<FunctionOpInterface>(allocation->getOperation());
-  OpBuilder builder(funcOp.getContext());
-  resolve(funcOp, &funcBlockInfoMap, &builder);
-}
-
-void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
-                                    FuncBlockInfoMapT *funcBlockInfoMap,
-                                    OpBuilder *builder) {
-  // Initialize the blockList. Operations are organized into "virtual blocks",
-  // which represent segments of straight-line code analyzed by each iteration
-  // of the dataflow analysis. Virtual blocks abstract over both control flow
-  // represented by basic blocks and block successors (i.e. `BranchOpInterface`)
-  // and control flow represented by regions (i.e. `RegionBranchOpInterface`).
-  //
-  // A virtual block consists of a parent block and a starting iterator, where
-  // the virtual block starts on the operation *after* the starting iterator. A
-  // null iterator is used to represent the beginning of the block. The virtual
-  // block ends at any region branch operation or the basic block terminator.
-  // Thus, basic blocks are broken up into multiple virtual blocks at each
-  // region operation.
-  //
-  // Entry virtual blocks are represented by a null iterator. Populate the
-  // blockList with the entry virtual blocks in the function. Then, each
-  // iteration scans until a terminator or region branch operation is found.
-  DenseMap<VirtualBlock, BlockInfo> inputBlockInfoMap;
-  DenseMap<VirtualBlock, BlockInfo> outputBlockInfoMap;
-  std::deque<VirtualBlock> blockList;
-  // Start the analysis from the entry block of the function.
-  blockList.emplace_back(&funcOp.getBlocks().front(), Block::iterator());
-
-  // A fixed point algorithm
-  while (!blockList.empty()) {
-    VirtualBlock block = blockList.front();
-    blockList.pop_front();
-    // Make a copy of the inputblockInfo but not update
-    auto inputBlockInfo = inputBlockInfoMap[block];
-    SmallVector<VirtualBlock> successors;
-    Block::iterator startIt =
-        block.second.isValid() ? std::next(block.second) : block.first->begin();
-    for (Operation &op : llvm::make_range(startIt, block.first->end())) {
-      // Update inputBlockInfo based on the current operation. Note that we do
-      // this before we process terminators and branch-like ops, because some of
-      // them (e.g. WarpSpecializePartitionsOp) may have synchronizing effects.
-      update(&op, &inputBlockInfo, funcBlockInfoMap, builder);
-      if (op.hasTrait<OpTrait::IsTerminator>() ||
-          isa<RegionBranchOpInterface>(op)) {
-        visitTerminator(&op, successors);
-        break;
-      }
-    }
-    // Get the reference because we want to update if it changed
-    if (outputBlockInfoMap.count(block) &&
-        inputBlockInfo == outputBlockInfoMap[block]) {
-      // If we have seen the block before and the inputBlockInfo is the same as
-      // the outputBlockInfo, we skip the successors
-      continue;
-    }
-    // Update the current block. The block transfer function is not monotonic,
-    // so overwrite the output state entirely.
-    outputBlockInfoMap[block] = inputBlockInfo;
-    // Update the successors
-    for (VirtualBlock successor : successors) {
-      inputBlockInfoMap[successor].join(outputBlockInfoMap[block]);
-      blockList.emplace_back(successor);
-    }
-  }
-
-  // Update the final dangling buffers that haven't been synced
-  BlockInfo &funcBlockInfo = (*funcBlockInfoMap)[funcOp];
-  funcOp.walk<WalkOrder::PreOrder>([&](triton::ReturnOp returnOp) {
-    // A basic block can be broken into several virtual blocks. Find all virtual
-    // blocks that belong to the basic block containing the return.
-    SmallVector<std::pair<VirtualBlock, BlockInfo>> virtualBlocks;
-    for (auto &[block, blockInfo] : outputBlockInfoMap) {
-      if (block.first == returnOp->getBlock())
-        virtualBlocks.emplace_back(block, blockInfo);
-    }
-    // The return is a terminator, so the virtual block that contains this
-    // return starts after all other ones. Find it by comparing the start
-    // iterators of the virtual blocks.
-    auto maxIt = llvm::max_element(virtualBlocks, [&](auto &lhs, auto &rhs) {
-      assert(lhs.first.first == rhs.first.first);
-      Block::iterator lhsIt = lhs.first.second, rhsIt = rhs.first.second;
-      return !lhsIt.isValid() ||
-             (rhsIt.isValid() && lhsIt->isBeforeInBlock(&*rhsIt));
-    });
-
-    funcBlockInfo.join(maxIt->second);
-  });
-}
-
-void MembarOrFenceAnalysis::visitTerminator(
-    Operation *op, SmallVector<VirtualBlock> &successors) {
-  if (isa<BranchOpInterface>(op)) {
-    // Collect the block successors of the branch.
-    for (Block *successor : op->getSuccessors())
-      successors.emplace_back(successor, Block::iterator());
-    return;
-  }
-
-  if (auto br = dyn_cast<RegionBranchOpInterface>(op)) {
-    // The successors of an operation with regions can be queried via an
-    // interface. The operation branches to the entry blocks of its region
-    // successors. It can also branch to after itself.
-    SmallVector<RegionSuccessor> regions;
-    br.getSuccessorRegions(RegionBranchPoint::parent(), regions);
-    for (RegionSuccessor &region : regions) {
-      if (region.isOperation()) {
-        successors.emplace_back(br->getBlock(), br->getIterator());
-      } else {
-        Block &block = region.getSuccessor()->front();
-        successors.emplace_back(&block, Block::iterator());
-      }
-    }
-    return;
-  }
-
-  // FIXME: `ReturnLike` adds `RegionBranchTerminatorOpInterface` for some
-  // reason. Check that the parent is actually a `RegionBranchOpInterface`.
-  auto br = dyn_cast<RegionBranchTerminatorOpInterface>(op);
-  if (br && isa<RegionBranchOpInterface>(br->getParentOp())) {
-    // Check the successors of a region branch terminator. It can branch to
-    // another region of its parent operation or to after the parent op.
-    SmallVector<Attribute> operands(br->getNumOperands());
-    SmallVector<RegionSuccessor> regions;
-    br.getSuccessorRegions(operands, regions);
-    for (RegionSuccessor &region : regions) {
-      if (region.isOperation()) {
-        Operation *parent = br->getParentOp();
-        successors.emplace_back(parent->getBlock(), parent->getIterator());
-      } else {
-        Block &block = region.getSuccessor()->front();
-        successors.emplace_back(&block, Block::iterator());
-      }
-    }
-    return;
-  }
-
-  // Otherwise, it could be a return op
-  if (op->hasTrait<OpTrait::ReturnLike>())
-    return;
-  llvm_unreachable("Unknown terminator encountered in membar analysis");
-}
-
 void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
   OpBuilder::InsertionGuard g(*builder);
   triton::gpu::BarrierOp::create(*builder, op->getLoc(),
@@ -265,6 +118,8 @@ bool containsLocalBarrier(Operation *op) {
     return true;
   if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op))
     return barrier.hasLocal();
+  if (auto wgWait = dyn_cast<ttng::WarpGroupDotWaitOp>(op))
+    return !wgWait.getWarpGroupLocal() && triton::gpu::lookupNumWarps(op) > 4;
   return false;
 }
 
@@ -360,9 +215,18 @@ static bool hasSyncPointBeforeMemoryEffect(Operation *op,
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
-                            FuncBlockInfoMapT *funcBlockInfoMap,
-                            OpBuilder *builder) {
-  auto barrierStages = getLocalBarrierStages(op, allocation);
+                            FuncMapT *funcMap, OpBuilder *builder) {
+  // A later CTA-wide synchronization can also synchronize this wait, provided
+  // no memory is accessed before reaching it.
+  if (auto wgWait = dyn_cast<ttng::WarpGroupDotWaitOp>(op)) {
+    if (!wgWait.getWarpGroupLocal() &&
+        triton::gpu::lookupNumWarps(wgWait) > 4 &&
+        hasSyncPointBeforeMemoryEffect(wgWait, &allocation)) {
+      wgWait->setAttr("warpGroupLocal", builder->getUnitAttr());
+    }
+  }
+
+  auto barrierStages = getLocalBarrierStages(op, &allocation);
   if (barrierStages.beforeMemoryEffects) {
     // Model a leading local barrier before handling the operation's effects.
     blockInfo->sync();
@@ -372,7 +236,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   // point before memory is accessed, insert a barrier op and sync. This avoids
   // redundant barriers by deferring the barrier to the later sync point.
   if (op->hasTrait<mlir::OpTrait::MemWaitOpTrait>() &&
-      !hasSyncPointBeforeMemoryEffect(op, allocation)) {
+      !hasSyncPointBeforeMemoryEffect(op, &allocation)) {
     builder->setInsertionPointAfter(op);
     insertBarrier(op, builder);
     blockInfo->sync();
@@ -380,17 +244,17 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   }
 
   BlockInfo curBlockInfo;
-  auto scratchBufferId = getScratchBufferId(op, allocation);
+  auto scratchBufferId = getScratchBufferId(op, &allocation);
   if (isa<triton::CallOp>(op)) {
     // Inter-function dependencies
     auto callOpInterface = dyn_cast<CallOpInterface>(op);
     if (auto callee =
             dyn_cast<FunctionOpInterface>(callOpInterface.resolveCallable())) {
-      auto calleeBlockInfo = funcBlockInfoMap->lookup(callee);
-      auto callBufferId = allocation->getBufferId(op);
+      auto calleeBlockInfo = funcMap->lookup(callee);
+      auto callBufferId = allocation.getBufferId(op);
       size_t callOffset = 0;
       if (callBufferId != Allocation::InvalidBufferId)
-        callOffset = allocation->getAllocatedInterval(callBufferId).start();
+        callOffset = allocation.getAllocatedInterval(callBufferId).start();
       curBlockInfo = translateBlockInfoToCallsite(calleeBlockInfo, callOffset);
     }
   } else {
@@ -402,9 +266,9 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       memoryEffectOpInterface.getEffects(effectInstances);
       for (auto effectInstance : effectInstances) {
         if (auto value = effectInstance.getValue()) {
-          for (auto bufferId : allocation->getAllBufferIdsWithAliases(value)) {
+          for (auto bufferId : allocation.getAllBufferIdsWithAliases(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
-              auto interval = allocation->getAllocatedInterval(bufferId);
+              auto interval = allocation.getAllocatedInterval(bufferId);
               auto slice = AllocationSlice(value, interval, bufferId);
 
               if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
@@ -431,11 +295,11 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           "scratch buffer operations should not have any shared memory "
           "dependencies");
     }
-    auto interval = allocation->getAllocatedInterval(scratchBufferId);
+    auto interval = allocation.getAllocatedInterval(scratchBufferId);
     auto scratchSlice = AllocationSlice(interval);
     curBlockInfo.syncWriteSlices[scratchSlice].insert(op);
     auto insertCTABarrier =
-        blockInfo->isIntersected(curBlockInfo, filter, allocation);
+        blockInfo->isIntersected(curBlockInfo, filter, &allocation);
     if (insertCTABarrier) {
       builder->setInsertionPoint(op);
       insertBarrier(op, builder);
@@ -451,7 +315,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       curBlockInfo.sync();
     }
     curBlockInfo.syncReadSlices[scratchSlice].insert(op);
-  } else if (blockInfo->isIntersected(curBlockInfo, filter, allocation)) {
+  } else if (blockInfo->isIntersected(curBlockInfo, filter, &allocation)) {
     builder->setInsertionPoint(op);
     insertBarrier(op, builder);
     blockInfo->sync();

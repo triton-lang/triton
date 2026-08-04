@@ -7,7 +7,7 @@ from triton._C.libtriton.gluon_ir import (
 from ..._core import builtin, int8, uint8, _unwrap_if_constexpr
 from ..._layouts import DotOperandLayout
 from .._layouts import AMDMFMALayout
-from .._ops import _mma_scaled, _scaled_upcast
+from .._ops import _load_shared_fp4_repacked, _mma_scaled, _scaled_upcast
 from ..cdna3 import _buffer_atomic_rmw_impl, _convert_e8m0_scale_to_bf16
 from ..cdna3 import *  # NOQA: F403
 from ..cdna3 import __all__ as __cdna3_all
@@ -18,6 +18,7 @@ __all__ = [
     "async_copy",
     "mfma_scaled",
     "scaled_upcast",
+    "load_shared_fp4_repacked",
     "get_mfma_scale_layout",
     "compute_efficient_padded_shared_layout",
 ]
@@ -81,6 +82,19 @@ def scaled_upcast(src, scale, elem_type, axis=None, _semantic=None):
         f"Expected scale to use raw E8M0 payload in int8/uint8 but got {scale.dtype}"
     scale = _convert_e8m0_scale_to_bf16(scale, _semantic=_semantic)
     return _scaled_upcast(src, scale, elem_type, axis, _semantic)
+
+
+@builtin
+def load_shared_fp4_repacked(mem_desc, layout, _semantic=None):
+    """
+    Load M/N-packed fp4 bytes from shared memory into a K-packed MFMA dot operand layout.
+
+    The source shared memory descriptor must contain `int8` or `uint8` packed fp4
+    values. The destination shape is inferred from the source shape and dot
+    operand index in `layout`.
+    """
+    layout = _unwrap_if_constexpr(layout)
+    return _load_shared_fp4_repacked(mem_desc, layout, _semantic, parent_type=AMDMFMALayout)
 
 
 def _get_mfma_scale_layout_impl(*args, **kwargs):

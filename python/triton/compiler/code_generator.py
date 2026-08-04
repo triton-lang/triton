@@ -749,6 +749,16 @@ class CodeGenerator(ast.NodeVisitor):
 
         def _sanitize_target_value(target, value):
             if isinstance(target, ast.Tuple) and isinstance(value, language.tuple):
+                if any(isinstance(elt, ast.Starred) for elt in target.elts):
+                    raise NotImplementedError("starred assignment targets are not supported")
+                num_targets, num_values = len(target.elts), len(value.values)
+                if num_targets != num_values:
+                    # Match CPython's errors for mismatched unpacking.
+                    if num_values > num_targets:
+                        message = f"too many values to unpack (expected {num_targets})"
+                    else:
+                        message = f"not enough values to unpack (expected {num_targets}, got {num_values})"
+                    raise ValueError(message)
                 vals = [_sanitize_target_value(elt, val) for elt, val in zip(target.elts, value.values)]
                 vals = [constexpr(val) if val is None else val for val in vals]
                 types = [val.type for val in vals]
@@ -1286,7 +1296,8 @@ class CodeGenerator(ast.NodeVisitor):
             step = iter_args[2] if len(iter_args) > 2 else self.visit(ast.Constant(1))
         else:
             raise RuntimeError('Only `range` and `static_range` iterators are currently supported')
-        # handle negative constant step (not supported by scf.for in MLIR)
+        # handle negative constant step (not supported by scf.for in MLIR).
+        # Only a constexpr step can be normalized here; a runtime step must be positive.
         negative_step = False
         if _is_constexpr(step) and step.value < 0:
             step = constexpr(-step.value)

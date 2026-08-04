@@ -145,10 +145,10 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 2 : i32, "ttg.num-w
   }
 
   // CHECK-LABEL: @memdesc_reinterpret_shared_sharding
-  tt.func @memdesc_reinterpret_shared_sharding(%broadcast: !ttg.memdesc<8x16xf16, #shared_cga_00, #smem, mutable>, %sharded: !ttg.memdesc<8x16xf16, #shared_cga_10, #smem, mutable>) {
+  tt.func @memdesc_reinterpret_shared_sharding(%broadcast: !ttg.memdesc<8x16xf16, #shared_cga_00, #smem, mutable>) {
     %split = ttg.memdesc_reinterpret %broadcast : !ttg.memdesc<8x16xf16, #shared_cga_00, #smem, mutable> -> !ttg.memdesc<8x16xi16, #shared_cga_10, #smem, mutable>
-    %view = ttg.memdesc_subslice %sharded [0, 0] : !ttg.memdesc<8x16xf16, #shared_cga_10, #smem, mutable> -> !ttg.memdesc<4x16xf16, #shared_cga_10, #smem, mutable, 8x16>
-    %replicated = ttg.memdesc_reinterpret %view : !ttg.memdesc<4x16xf16, #shared_cga_10, #smem, mutable, 8x16> -> !ttg.memdesc<4x16xi16, #shared_cga_00, #smem, mutable>
+    %view = ttg.memdesc_subslice %broadcast [0, 0] : !ttg.memdesc<8x16xf16, #shared_cga_00, #smem, mutable> -> !ttg.memdesc<4x16xf16, #shared_cga_00, #smem, mutable, 8x16>
+    %split_view = ttg.memdesc_reinterpret %view : !ttg.memdesc<4x16xf16, #shared_cga_00, #smem, mutable, 8x16> -> !ttg.memdesc<4x16xi16, #shared_cga_10, #smem, mutable>
     tt.return
   }
 }
@@ -539,4 +539,17 @@ module attributes {"ttg.threads-per-warp" = 4 : i32, "ttg.num-warps" = 1 : i32} 
 tt.func @memdesc_shared_linear_nonpow2_complete_tiles(
     %arg0: !ttg.memdesc<48x256xi8, #shared_nonpow2_valid, #smem>) {
   tt.return
+  }
+
+// -----
+
+#mma_assert = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {register = [[0, 1], [2, 0]], warp = [[2, 2], [1, 0]]}, instrShape = [16, 16, 32]}>
+
+module attributes {"ttg.target" = "hip:gfx1260", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @assert_generic_wmma_slice_layout
+  tt.func @assert_generic_wmma_slice_layout(%cond: tensor<64xi1, #ttg.slice<{dim = 1, parent = #mma_assert}>>) {
+    // CHECK: tt.assert
+    tt.assert %cond, "assert generic wmma slice layout" : tensor<64xi1, #ttg.slice<{dim = 1, parent = #mma_assert}>>
+    tt.return
+  }
 }
