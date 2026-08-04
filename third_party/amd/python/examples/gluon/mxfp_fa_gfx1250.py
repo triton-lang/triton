@@ -3274,7 +3274,8 @@ def static_profile(kernel, grid):
         "scratch_size": int(re.search(r';\s+ScratchSize:\s+(\d+)', amdgcn).group(1)),
         "code_len_in_byte": int(re.search(r';\s+codeLenInByte\s+=\s+(\d+)', amdgcn).group(1)),
         "occupancy": int(re.search(r';\s+Occupancy:\s+(\d+)', amdgcn).group(1)),
-        "workgroups": grid[0] * grid[1] * grid[2],
+        "ctas": grid[0] * grid[1] * grid[2] * metadata["num_ctas"],
+        "warps": grid[0] * grid[1] * grid[2] * metadata["num_ctas"] * metadata["num_warps"],
         "shared_memory (MB)": int(metadata["shared"]) // 1024,
     }
 
