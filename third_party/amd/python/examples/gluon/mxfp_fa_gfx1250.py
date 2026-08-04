@@ -643,10 +643,12 @@ class AttentionConfigBase:
     HEAD_SZ: ttgl.constexpr
     BLOCK_M: ttgl.constexpr
     BLOCK_N: ttgl.constexpr
-    SPLIT_K: ttgl.constexpr
     NUM_BUFFERS: ttgl.constexpr
     NUM_WARPS: ttgl.constexpr
     NUM_CTAS: ttgl.constexpr
+    SPLIT_K: ttgl.constexpr
+    # How split-K partitions are distributed, either 'cta' or 'warp'.
+    SPLIT_K_MODE: ttgl.constexpr
     # Whether the layout convert between QK and P is trivial - no data movement. This can happen when we use
     # k_width=8 for P and V, which effectively makes QK and P have the same layout.
     CONVERT_LAYOUT_TRIVIAL: ttgl.constexpr
@@ -660,8 +662,10 @@ class AttentionConfigBase:
     PINGPONG: ttgl.constexpr
 
     @gluon.constexpr_function
-    def _init_base(self, Q_TYPE, KV_TYPE, BATCH, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ, BLOCK_M,
-                   BLOCK_N, SPLIT_K, SUBTILE, PINGPONG, P_K_WIDTH, P_SCALING, NUM_BUFFERS, NUM_WARPS, NUM_CTAS):
+    def _init_base(self, Q_TYPE, KV_TYPE, BATCH, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ,  #
+                   BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_WARPS, NUM_CTAS,  #
+                   SPLIT_K, SPLIT_K_MODE, SUBTILE, PINGPONG, P_K_WIDTH, P_SCALING):
+        assert SPLIT_K_MODE in ['cta', 'warp']
         self.Q_TYPE = ttgl.constexpr(Q_TYPE)
         self.P_TYPE = ttgl.constexpr(Q_TYPE)
         self.KV_TYPE = ttgl.constexpr(KV_TYPE)
@@ -673,10 +677,11 @@ class AttentionConfigBase:
         self.HEAD_SZ = ttgl.constexpr(HEAD_SZ)
         self.BLOCK_M = ttgl.constexpr(BLOCK_M)
         self.BLOCK_N = ttgl.constexpr(BLOCK_N)
-        self.SPLIT_K = ttgl.constexpr(SPLIT_K)
         self.NUM_BUFFERS = ttgl.constexpr(NUM_BUFFERS)
         self.NUM_WARPS = ttgl.constexpr(NUM_WARPS)
         self.NUM_CTAS = ttgl.constexpr(NUM_CTAS)
+        self.SPLIT_K = ttgl.constexpr(SPLIT_K)
+        self.SPLIT_K_MODE = ttgl.constexpr(SPLIT_K_MODE)
         self.CONVERT_LAYOUT_TRIVIAL = ttgl.constexpr(True if P_K_WIDTH == 8 else False)
         self.P_SCALING = ttgl.constexpr(P_SCALING)
         self.SUBTILE = ttgl.constexpr(SUBTILE)
@@ -684,10 +689,13 @@ class AttentionConfigBase:
         self.PINGPONG = ttgl.constexpr(PINGPONG)
 
     @gluon.constexpr_function
-    def __init__(self, Q_TYPE, KV_TYPE, BATCH, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ, BLOCK_M, BLOCK_N,
-                 SPLIT_K, SUBTILE, PINGPONG, P_K_WIDTH, P_SCALING, NUM_BUFFERS, NUM_WARPS, NUM_CTAS):
-        self._init_base(Q_TYPE, KV_TYPE, BATCH, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ, BLOCK_M, BLOCK_N,
-                        SPLIT_K, SUBTILE, PINGPONG, P_K_WIDTH, P_SCALING, NUM_BUFFERS, NUM_WARPS, NUM_CTAS)
+    def __init__(self, Q_TYPE, KV_TYPE, BATCH, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ,  #
+                 BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_WARPS, NUM_CTAS,  #
+                 SPLIT_K, SPLIT_K_MODE, SUBTILE, PINGPONG, P_K_WIDTH, P_SCALING):
+
+        self._init_base(Q_TYPE, KV_TYPE, BATCH, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ,  #
+                        BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_WARPS, NUM_CTAS,  #
+                        SPLIT_K, SPLIT_K_MODE, SUBTILE, PINGPONG, P_K_WIDTH, P_SCALING)
 
 
 @gluon.aggregate
@@ -804,13 +812,15 @@ class GlobalScaledAttentionConfig(AttentionConfigBase):
 
     @gluon.constexpr_function
     def __init__(self, Q_TYPE, KV_TYPE, BATCH, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ,  #
-                 BLOCK_M, BLOCK_N, SPLIT_K, SUBTILE, PINGPONG, P_K_WIDTH, NUM_BUFFERS, NUM_WARPS, NUM_CTAS):
+                 BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_WARPS, NUM_CTAS,  #
+                 SPLIT_K, SPLIT_K_MODE, SUBTILE, PINGPONG, P_K_WIDTH):
         assert Q_TYPE in ['e5m2', 'e4m3']
         assert KV_TYPE in ['e5m2', 'e4m3']
         assert P_K_WIDTH == 16 or P_K_WIDTH == 8
 
-        self._init_base(Q_TYPE, KV_TYPE, BATCH, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ, BLOCK_M, BLOCK_N,
-                        SPLIT_K, SUBTILE, PINGPONG, P_K_WIDTH, False, NUM_BUFFERS, NUM_WARPS, NUM_CTAS)
+        self._init_base(Q_TYPE, KV_TYPE, BATCH, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ,  #
+                        BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_WARPS, NUM_CTAS,  #
+                        SPLIT_K, SPLIT_K_MODE, SUBTILE, PINGPONG, P_K_WIDTH, False)
 
         shape = [BLOCK_M, min(BLOCK_N, HEAD_SZ)] if not SUBTILE else \
                 [BLOCK_M, min(BLOCK_N // 2, HEAD_SZ // 2)]
@@ -1556,12 +1566,14 @@ class BlockScaledAttentionConfig(AttentionConfigBase):
 
     @gluon.constexpr_function
     def __init__(self, Q_TYPE, KV_TYPE, BATCH, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ, P_SCALING,  #
-                 BLOCK_M, BLOCK_N, SPLIT_K, SUBTILE, PINGPONG, P_K_WIDTH, NUM_BUFFERS, NUM_WARPS, NUM_CTAS):
+                 BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_WARPS, NUM_CTAS,  #
+                 SPLIT_K, SPLIT_K_MODE, SUBTILE, PINGPONG, P_K_WIDTH):
         assert Q_TYPE in ['e5m2', 'e4m3']
         assert KV_TYPE in ['e5m2', 'e4m3', 'e2m1']
         assert P_K_WIDTH == 16 or (KV_TYPE != 'e2m1' and P_K_WIDTH == 8)
-        self._init_base(Q_TYPE, KV_TYPE, BATCH, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ, BLOCK_M, BLOCK_N,
-                        SPLIT_K, SUBTILE, PINGPONG, P_K_WIDTH, P_SCALING, NUM_BUFFERS, NUM_WARPS, NUM_CTAS)
+        self._init_base(Q_TYPE, KV_TYPE, BATCH, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ,  #
+                        BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_WARPS, NUM_CTAS,  #
+                        SPLIT_K, SPLIT_K_MODE, SUBTILE, PINGPONG, P_K_WIDTH, P_SCALING)
 
         packed = (KV_TYPE == 'e2m1')
         shape = [BLOCK_M, min(BLOCK_N, HEAD_SZ)] if not SUBTILE else \
@@ -2727,6 +2739,7 @@ def attn_fwd(  #
 
     # Decide optimal block size, number of warps, number of CTAs, and split-k
     split_k = 1
+    split_k_mode = 'cta'
     num_ctas = 1
     if seqlen_q == seqlen_k:
         # Prefill
@@ -2789,11 +2802,13 @@ def attn_fwd(  #
     if block_scaling:
         cfg = BlockScaledAttentionConfig(  #
             q_type, kv_type, batch, seqlen_q, seqlen_k, num_q_heads, num_k_heads, head_sz, p_scaling,  #
-            block_m, block_n, split_k, subtile, pingpong, p_k_width, num_buffers, num_warps, num_ctas)
+            block_m, block_n, num_buffers, num_warps, num_ctas,  #
+            split_k, split_k_mode, subtile, pingpong, p_k_width)
     else:
         cfg = GlobalScaledAttentionConfig(  #
             q_type, kv_type, batch, seqlen_q, seqlen_k, num_q_heads, num_k_heads, head_sz,  #
-            block_m, block_n, split_k, subtile, pingpong, p_k_width, num_buffers, num_warps, num_ctas)
+            block_m, block_n, num_buffers, num_warps, num_ctas,  #
+            split_k, split_k_mode, subtile, pingpong, p_k_width)
 
     if seqlen_q == seqlen_k:
         assert split_k == 1
