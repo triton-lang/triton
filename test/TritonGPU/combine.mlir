@@ -1322,6 +1322,98 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// Keep the wide rounding expression in the loaded layout, and exchange only
+// the narrowed i8 values at the physical packing boundary.
+// CHECK-LABEL: @pack_narrowed_values_in_load_layout
+// CHECK: [[LOADED:%.*]] = tt.load
+// CHECK-NOT: ttg.convert_layout
+// CHECK: arith.trunci
+// CHECK: [[PACKED:%.*]] = ttg.convert_layout {{.*}} : tensor<32x64x2xi8
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.split [[PACKED]]
+// CHECK: tt.store
+
+#pack_loaded = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
+#pack_random = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#pack_view = #ttg.blocked<{sizePerThread = [1, 8, 2], threadsPerWarp = [4, 8, 1], warpsPerCTA = [8, 1, 1], order = [2, 1, 0]}>
+#pack_output = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#pack_range = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @pack_narrowed_values_in_load_layout(%input: tensor<32x128x!tt.ptr<f32>, #pack_loaded>, %output: tensor<32x64x!tt.ptr<i8>, #pack_output>) {
+    %loaded = tt.load %input : tensor<32x128x!tt.ptr<f32>, #pack_loaded>
+    %bits = tt.bitcast %loaded : tensor<32x128xf32, #pack_loaded> -> tensor<32x128xi32, #pack_loaded>
+    %converted = ttg.convert_layout %bits : tensor<32x128xi32, #pack_loaded> -> tensor<32x128xi32, #pack_random>
+    %range = tt.make_range {start = 0 : i32, end = 4096 : i32} : tensor<4096xi32, #pack_range>
+    %random = tt.reshape %range allow_reorder : tensor<4096xi32, #pack_range> -> tensor<32x128xi32, #pack_random>
+    %mixed = arith.xori %converted, %random : tensor<32x128xi32, #pack_random>
+    %narrowed = arith.trunci %mixed : tensor<32x128xi32, #pack_random> to tensor<32x128xi8, #pack_random>
+    %pairs = tt.reshape %narrowed : tensor<32x128xi8, #pack_random> -> tensor<32x64x2xi8, #pack_view>
+    %left, %right = tt.split %pairs : tensor<32x64x2xi8, #pack_view> -> tensor<32x64xi8, #pack_output>
+    %packed = arith.ori %left, %right : tensor<32x64xi8, #pack_output>
+    tt.store %output, %packed : tensor<32x64x!tt.ptr<i8>, #pack_output>
+    tt.return
+  }
+}
+
+// -----
+
+// A selected floating value and its integer index share one packed i32 source.
+// Perform the layout exchange before unpacking instead of converting each
+// independently stored result.
+// CHECK-LABEL: @reuse_selected_value_and_index_layout
+// CHECK: [[SELECTED:%.*]] = arith.select
+// CHECK: [[CONVERTED:%.*]] = ttg.convert_layout [[SELECTED]]
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.store
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.store
+
+#selection_source = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [16, 1, 2], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
+#selection_result = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+#selection_store = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @reuse_selected_value_and_index_layout(%condition: tensor<32x1x2xi1, #selection_source>, %lhs: tensor<32x1x2xi32, #selection_source>, %rhs: tensor<32x1x2xi32, #selection_source>, %values: tensor<32x2x!tt.ptr<f16>, #selection_store>, %indices: tensor<32x2x!tt.ptr<i16>, #selection_store>, %mask: tensor<32x2xi1, #selection_store>) {
+    %selected = arith.select %condition, %lhs, %rhs : tensor<32x1x2xi1, #selection_source>, tensor<32x1x2xi32, #selection_source>
+    %flat = tt.reshape %selected : tensor<32x1x2xi32, #selection_source> -> tensor<32x2xi32, #selection_result>
+    %index = arith.trunci %flat : tensor<32x2xi32, #selection_result> to tensor<32x2xi16, #selection_result>
+    %score = tt.bitcast %index : tensor<32x2xi16, #selection_result> -> tensor<32x2xf16, #selection_result>
+    %converted_score = ttg.convert_layout %score : tensor<32x2xf16, #selection_result> -> tensor<32x2xf16, #selection_store>
+    %converted_index = ttg.convert_layout %index : tensor<32x2xi16, #selection_result> -> tensor<32x2xi16, #selection_store>
+    tt.store %values, %converted_score, %mask : tensor<32x2x!tt.ptr<f16>, #selection_store>
+    tt.store %indices, %converted_index, %mask : tensor<32x2x!tt.ptr<i16>, #selection_store>
+    tt.return
+  }
+}
+
+// -----
+
+// One float exchange can feed both its integer bitcast and its floating-point
+// validity predicate without separate i32 and i1 exchanges.
+// CHECK-LABEL: @reuse_float_bitcast_and_predicate_layout
+// CHECK: [[FLOAT:%.*]] = ttg.convert_layout %arg0 : tensor<32x128xf32
+// CHECK: [[BITS:%.*]] = tt.bitcast [[FLOAT]]
+// CHECK: [[PREDICATE:%.*]] = arith.cmpf oeq, [[FLOAT]], [[FLOAT]]
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.store %arg1, [[BITS]], [[PREDICATE]]
+
+#float_source = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
+#float_target = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @reuse_float_bitcast_and_predicate_layout(%source: tensor<32x128xf32, #float_source>, %pointer: tensor<32x128x!tt.ptr<i32>, #float_target>) {
+    %bits = tt.bitcast %source : tensor<32x128xf32, #float_source> -> tensor<32x128xi32, #float_source>
+    %converted_bits = ttg.convert_layout %bits : tensor<32x128xi32, #float_source> -> tensor<32x128xi32, #float_target>
+    %predicate = arith.cmpf oeq, %source, %source : tensor<32x128xf32, #float_source>
+    %converted_predicate = ttg.convert_layout %predicate : tensor<32x128xi1, #float_source> -> tensor<32x128xi1, #float_target>
+    tt.store %pointer, %converted_bits, %converted_predicate : tensor<32x128x!tt.ptr<i32>, #float_target>
+    tt.return
+  }
+}
+
+// -----
+
 // CHECK-LABEL: @propagate_loop_memory_pointer
 // CHECK-NOT: ttg.convert_layout
 // CHECK: scf.for

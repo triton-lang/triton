@@ -7379,6 +7379,80 @@ def test_remove_layout_conversions_exact_order_join_chain(device, indexed, value
 
 
 @triton.jit
+def _remove_layout_conversions_narrowed_pack_kernel(inputs, output, seed):
+    rows = tl.arange(0, 32)
+    columns = tl.arange(0, 128)
+    offsets = rows[:, None] * 128 + columns[None, :]
+    loaded = tl.load(inputs + offsets)
+
+    random_values = (tl.arange(0, 4096) << 8) | (seed & 255)
+    random = tl.reshape(random_values, (32, 128), can_reorder=True)
+    bits = loaded.to(tl.int32, bitcast=True)
+    narrowed = (bits ^ random).to(tl.int8)
+    left, right = tl.split(tl.reshape(narrowed, (32, 64, 2)))
+    packed = left | (right << 4)
+
+    output_offsets = rows[:, None] * 64 + tl.arange(0, 64)[None, :]
+    tl.store(output + output_offsets, packed)
+
+
+@pytest.mark.parametrize("seed", [0, 17, 0x13579BDF])
+def test_remove_layout_conversions_narrowed_pack(device, seed):
+    check_cuda_or_hip(device)
+
+    torch.manual_seed(0)
+    inputs = torch.randn((32, 128), device=device, dtype=torch.float32)
+    result = torch.empty((32, 64), device=device, dtype=torch.int8)
+    compiled = _remove_layout_conversions_narrowed_pack_kernel[(1, )](inputs, result, seed, num_warps=8)
+
+    narrowed = (inputs.view(torch.int32) ^ (seed & 255)).to(torch.int8)
+    expected = (narrowed[:, ::2] | (narrowed[:, 1::2].to(torch.int32) << 4)).to(torch.int8)
+    torch.testing.assert_close(result, expected, rtol=0, atol=0)
+
+    conversions = [line for line in compiled.asm["ttgir"].splitlines() if "ttg.convert_layout" in line]
+    assert all("xi32," not in line for line in conversions)
+
+
+@triton.jit
+def _remove_layout_conversions_selected_outputs_kernel(inputs, values, indices, n_rows):
+    rows = tl.program_id(0) * 32 + tl.arange(0, 32)
+    columns = tl.arange(0, 32)
+    mask = rows[:, None] < n_rows
+    loaded = tl.load(inputs + rows[:, None] * 32 + columns[None, :], mask=mask, other=0.)
+
+    bits = loaded.to(tl.int16, bitcast=True).to(tl.int32)
+    packed = (bits << 16) | columns[None, :]
+    sorted_values = tl.sort(packed, descending=True, dim=1)
+    positions = tl.broadcast_to(tl.arange(0, 2)[None, :], (32, 2))
+    selected = tl.gather(sorted_values, positions, axis=1)
+
+    scores = (selected >> 16).to(tl.int16).to(tl.float16, bitcast=True)
+    selected_indices = (selected & 65535).to(tl.int16)
+    output_offsets = rows[:, None] * 2 + tl.arange(0, 2)[None, :]
+    tl.store(values + output_offsets, scores, mask=mask)
+    tl.store(indices + output_offsets, selected_indices, mask=mask)
+
+
+@pytest.mark.parametrize("n_rows", [17, 33])
+def test_remove_layout_conversions_selected_outputs(device, n_rows):
+    check_cuda_or_hip(device)
+
+    columns = torch.arange(32, device=device, dtype=torch.float32)
+    rows = torch.arange(n_rows, device=device, dtype=torch.float32)
+    inputs = (columns[None, :] + rows[:, None] / 64).to(torch.float16)
+    values = torch.empty((n_rows, 2), device=device, dtype=torch.float16)
+    indices = torch.empty((n_rows, 2), device=device, dtype=torch.int16)
+    compiled = _remove_layout_conversions_selected_outputs_kernel[(triton.cdiv(n_rows, 32), )](inputs, values, indices,
+                                                                                               n_rows, num_warps=4)
+
+    expected_values, expected_indices = torch.topk(inputs, 2, dim=1)
+    torch.testing.assert_close(values, expected_values, rtol=0, atol=0)
+    torch.testing.assert_close(indices, expected_indices.to(torch.int16), rtol=0, atol=0)
+
+    assert compiled.asm["ttgir"].count("tt.store") == 2
+
+
+@triton.jit
 def _remove_layout_conversions_reduction_store_kernel(
     inputs,
     indices,

@@ -248,6 +248,14 @@ void LayoutPropagation::initAnchorLayout() {
     }
   };
 
+  auto peelConversions = [](Value value) {
+    while (auto conversion = value.getDefiningOp<ConvertLayoutOp>())
+      value = conversion.getSrc();
+    return value;
+  };
+
+  SmallVector<StoreOp, 8> stores;
+
   auto addAddressAnchor = [&](ConvertLayoutOp conversion) {
     if (!conversion)
       return;
@@ -318,9 +326,175 @@ void LayoutPropagation::initAnchorLayout() {
         layouts.try_emplace(argument, conversion.getType().getEncoding());
       addAddressAnchor(conversion);
     }
-    if (auto store = dyn_cast<StoreOp>(op))
+    if (auto store = dyn_cast<StoreOp>(op)) {
       addAddressAnchor(store.getPtr().getDefiningOp<ConvertLayoutOp>());
+      stores.push_back(store);
+    }
   });
+
+  auto dependsOn = [](Value value, Value target) {
+    SmallVector<Value, 16> worklist{value};
+    DenseSet<Value> visited;
+    while (!worklist.empty()) {
+      Value current = worklist.pop_back_val();
+      if (current == target)
+        return true;
+      if (!visited.insert(current).second)
+        continue;
+      Operation *producer = current.getDefiningOp();
+      if (!producer || !isMemoryEffectFree(producer) || visited.size() > 512)
+        continue;
+      for (Value operand : producer->getOperands())
+        if (isa<RankedTensorType>(operand.getType()))
+          worklist.push_back(operand);
+    }
+    return false;
+  };
+
+  // Keep a narrowing pack in its loaded layout until its physical split. An
+  // allow-reorder random input is otherwise independently anchored and pulls
+  // the complete 32-bit rounding expression into the output layout.
+  funcOp.walk([&](SplitOp split) {
+    auto result = dyn_cast<RankedTensorType>(split->getResult(0).getType());
+    if (!result || !result.getElementType().isInteger(8))
+      return;
+
+    Value input = peelConversions(split.getSrc());
+    auto view = input.getDefiningOp<ReshapeOp>();
+    auto truncate = view ? view.getSrc().getDefiningOp<arith::TruncIOp>()
+                         : arith::TruncIOp{};
+    auto source =
+        truncate ? dyn_cast<RankedTensorType>(truncate->getOperand(0).getType())
+                 : RankedTensorType{};
+    if (!view || view.getAllowReorder() || !source || source.getRank() != 2 ||
+        !source.getElementType().isInteger(32))
+      return;
+
+    Attribute loaded;
+    bool incompatibleLoads = false;
+    funcOp.walk([&](LoadOp load) {
+      auto type = dyn_cast<RankedTensorType>(load.getType());
+      if (!type || type.getShape() != source.getShape() ||
+          !isa<FloatType>(type.getElementType()))
+        return;
+      if (loaded && loaded != type.getEncoding()) {
+        incompatibleLoads = true;
+        return;
+      }
+      loaded = type.getEncoding();
+    });
+    if (!loaded || incompatibleLoads)
+      return;
+
+    Attribute output;
+    for (StoreOp store : stores) {
+      auto type = dyn_cast<RankedTensorType>(store.getValue().getType());
+      if (!type || type.getShape() != result.getShape() ||
+          !type.getElementType().isInteger(8))
+        continue;
+      if (!llvm::any_of(split->getResults(), [&](Value value) {
+            return dependsOn(store.getValue(), value);
+          }))
+        continue;
+      Attribute encoding =
+          cast<RankedTensorType>(store.getPtr().getType()).getEncoding();
+      if (output && output != encoding)
+        return;
+      output = encoding;
+    }
+    if (!output)
+      return;
+
+    SmallVector<Value, 32> worklist{truncate->getOperand(0)};
+    DenseSet<Value> visited;
+    SmallVector<ReshapeOp, 2> reordered;
+    while (!worklist.empty()) {
+      Value current = worklist.pop_back_val();
+      if (!visited.insert(current).second || visited.size() > 512)
+        continue;
+      auto type = dyn_cast<RankedTensorType>(current.getType());
+      Operation *producer = current.getDefiningOp();
+      if (!type || type.getShape() != source.getShape() || !producer ||
+          !isMemoryEffectFree(producer))
+        continue;
+      if (auto reshape = dyn_cast<ReshapeOp>(producer);
+          reshape && reshape.getAllowReorder()) {
+        reordered.push_back(reshape);
+        continue;
+      }
+      for (Value operand : producer->getOperands())
+        if (isa<RankedTensorType>(operand.getType()))
+          worklist.push_back(operand);
+    }
+    if (reordered.size() != 1)
+      return;
+
+    LayoutInfo &random = layouts[reordered.front().getResult()];
+    random.encodings.clear();
+    random.encodings.insert(loaded);
+    for (Value value : split->getResults())
+      layouts.try_emplace(value, LayoutInfo(output));
+  });
+
+  // Sibling selected-value/index stores agree on one hardware layout. Anchor
+  // their common packed selection after its high-rank reshape so that one
+  // upstream conversion can serve both stores and their softmax component.
+  auto selectionRoot = [&](StoreOp store) {
+    SmallVector<Value, 32> worklist{peelConversions(store.getValue())};
+    DenseSet<Value> visited;
+    SmallVector<ReshapeOp, 2> candidates;
+    while (!worklist.empty()) {
+      Value value = worklist.pop_back_val();
+      if (!visited.insert(value).second || visited.size() > 512)
+        continue;
+      Operation *producer = value.getDefiningOp();
+      if (!producer || !isMemoryEffectFree(producer))
+        continue;
+      if (auto reshape = dyn_cast<ReshapeOp>(producer)) {
+        auto target = dyn_cast<RankedTensorType>(reshape.getType());
+        auto source = dyn_cast<RankedTensorType>(reshape.getSrc().getType());
+        if (target && source && target.getRank() == 2 &&
+            source.getRank() > target.getRank() &&
+            target.getElementType().isInteger(32) &&
+            !reshape.getAllowReorder() &&
+            isa_and_nonnull<arith::SelectOp>(
+                reshape.getSrc().getDefiningOp())) {
+          candidates.push_back(reshape);
+          continue;
+        }
+      }
+      for (Value operand : producer->getOperands())
+        if (isa<RankedTensorType>(operand.getType()))
+          worklist.push_back(operand);
+    }
+    return candidates.size() == 1 ? candidates.front() : ReshapeOp{};
+  };
+
+  for (auto [index, first] : llvm::enumerate(stores)) {
+    auto firstType = dyn_cast<RankedTensorType>(first.getValue().getType());
+    if (!firstType || firstType.getRank() != 2 || !first.getMask())
+      continue;
+    for (StoreOp second : ArrayRef(stores).drop_front(index + 1)) {
+      auto secondType = dyn_cast<RankedTensorType>(second.getValue().getType());
+      if (!secondType || secondType.getShape() != firstType.getShape() ||
+          !second.getMask() ||
+          peelConversions(first.getMask()) !=
+              peelConversions(second.getMask()) ||
+          isa<FloatType>(firstType.getElementType()) ==
+              isa<FloatType>(secondType.getElementType()))
+        continue;
+
+      Attribute encoding =
+          cast<RankedTensorType>(first.getPtr().getType()).getEncoding();
+      if (encoding !=
+          cast<RankedTensorType>(second.getPtr().getType()).getEncoding())
+        continue;
+      ReshapeOp firstRoot = selectionRoot(first);
+      ReshapeOp secondRoot = selectionRoot(second);
+      if (firstRoot && firstRoot == secondRoot)
+        layouts.try_emplace(firstRoot.getResult(), LayoutInfo(encoding));
+    }
+  }
 }
 
 void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
@@ -1854,6 +2028,51 @@ private:
   DenseMap<unsigned, Value> predicates;
 };
 
+bool rewriteSharedFloatConversion(ConvertLayoutOp conversion) {
+  if (conversion.getResult().use_empty())
+    return false;
+
+  auto bits = conversion.getSrc().getDefiningOp<BitcastOp>();
+  auto source = bits ? dyn_cast<RankedTensorType>(bits.getSrc().getType())
+                     : RankedTensorType{};
+  auto integer =
+      bits ? dyn_cast<RankedTensorType>(bits.getType()) : RankedTensorType{};
+  if (!source || source.getRank() != 2 || !source.getElementType().isF32() ||
+      !integer || !integer.getElementType().isInteger(32))
+    return false;
+
+  Attribute target = conversion.getType().getEncoding();
+  for (Operation *user : bits.getSrc().getUsers()) {
+    auto comparison = dyn_cast<arith::CmpFOp>(user);
+    if (!comparison || comparison.getLhs() != bits.getSrc() ||
+        comparison.getRhs() != bits.getSrc() ||
+        !comparison.getResult().hasOneUse())
+      continue;
+
+    auto predicate =
+        dyn_cast<ConvertLayoutOp>(*comparison.getResult().user_begin());
+    if (!predicate || predicate.getType().getEncoding() != target ||
+        predicate->getBlock() != conversion->getBlock())
+      continue;
+
+    Operation *insertion = predicate->isBeforeInBlock(conversion)
+                               ? predicate.getOperation()
+                               : conversion.getOperation();
+    OpBuilder builder(insertion);
+    auto value = ConvertLayoutOp::create(builder, conversion.getLoc(),
+                                         source.cloneWithEncoding(target),
+                                         bits.getSrc());
+    auto convertedBits = BitcastOp::create(
+        builder, bits.getLoc(), integer.cloneWithEncoding(target), value);
+    auto convertedPredicate = arith::CmpFOp::create(
+        builder, comparison.getLoc(), comparison.getPredicate(), value, value);
+    conversion.getResult().replaceAllUsesWith(convertedBits.getResult());
+    predicate.getResult().replaceAllUsesWith(convertedPredicate.getResult());
+    return true;
+  }
+  return false;
+}
+
 bool rewriteReductionStoreLayout(StoreOp store) {
   if (!store.getMask())
     return false;
@@ -1945,12 +2164,17 @@ bool rewriteAtomicPointerLayout(AtomicRMWOp atomic) {
 }
 
 bool rewriteIndexedStoreExpressions(ModuleOp module) {
+  SmallVector<ConvertLayoutOp> conversions;
+  module.walk(
+      [&](ConvertLayoutOp conversion) { conversions.push_back(conversion); });
   SmallVector<StoreOp> stores;
   module.walk([&](StoreOp store) { stores.push_back(store); });
   SmallVector<AtomicRMWOp> atomics;
   module.walk([&](AtomicRMWOp atomic) { atomics.push_back(atomic); });
 
   bool changed = false;
+  for (ConvertLayoutOp conversion : conversions)
+    changed |= rewriteSharedFloatConversion(conversion);
   for (StoreOp store : stores) {
     changed |= IndexedStoreExpression(store).rewrite();
     changed |= rewriteReductionStoreLayout(store);
