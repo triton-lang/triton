@@ -495,6 +495,10 @@ def TTG_LocalAtomicScatterRMWOp : TTG_Op<"local_atomic_scatter_rmw", [
   );
   let results = (outs TT_Tensor:$result);
 
+  let extraClassDeclaration = [{
+    bool isCommutative();
+  }];
+
   let assemblyFormat = [{
     $atomic_rmw_op `,` $dst `[` $indices `]` `,` $values (`,` $mask^)? attr-dict `:`
     functional-type(operands, results)
