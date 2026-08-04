@@ -420,8 +420,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[C0:.*]] = llvm.ptrtoint %{{.*}} : !llvm.ptr<3> to i32
   // CHECK: %[[G0_C0:.*]] = llvm.insertelement %[[C0]], %{{.*}}[%{{.*}} : i32] : vector<4xi32>
   // CHECK: "llvm.amdgcn.tensor.load.to.lds"(%[[G0_C0]],
+  // CHECK: %[[G0_SEQ:.*]] = llvm.inline_asm has_side_effects {{.*}} "", "=s,0" %[[G0_C0]] : (vector<4xi32>) -> vector<4xi32>
   // CHECK: %[[C1:.*]] = llvm.add %[[C0]], %[[DELTA]] : i32
-  // CHECK: %[[G0_C1:.*]] = llvm.insertelement %[[C1]], %[[G0_C0]][%{{.*}} : i32] : vector<4xi32>
+  // CHECK: %[[G0_C1:.*]] = llvm.insertelement %[[C1]], %[[G0_SEQ]][%{{.*}} : i32] : vector<4xi32>
   // CHECK: "llvm.amdgcn.tensor.load.to.lds"(%[[G0_C1]],
   tt.func public @tdm_gather_multichunk(
     %tensorDesc: !tt.tensordesc<16x64xf16, #shared>,
@@ -449,8 +450,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[C0:.*]] = llvm.ptrtoint %{{.*}} : !llvm.ptr<3> to i32
   // CHECK: %[[G0_C0:.*]] = llvm.insertelement %[[C0]], %{{.*}}[%{{.*}} : i32] : vector<4xi32>
   // CHECK: "llvm.amdgcn.tensor.load.to.lds"(%[[G0_C0]],
+  // CHECK: %[[G0_SEQ:.*]] = llvm.inline_asm has_side_effects {{.*}} "", "=s,0" %[[G0_C0]] : (vector<4xi32>) -> vector<4xi32>
   // CHECK: %[[C1:.*]] = llvm.add %[[C0]], %[[DELTA]] : i32
-  // CHECK: %[[G0_C1:.*]] = llvm.insertelement %[[C1]], %[[G0_C0]][%{{.*}} : i32] : vector<4xi32>
+  // CHECK: %[[G0_C1:.*]] = llvm.insertelement %[[C1]], %[[G0_SEQ]][%{{.*}} : i32] : vector<4xi32>
   // CHECK: "llvm.amdgcn.tensor.load.to.lds"(%[[G0_C1]],
   tt.func public @tdm_gather_multichunk_padded(
     %tensorDesc: !tt.tensordesc<16x64xf16, #shared>,

@@ -23,6 +23,25 @@ Value vecSet(TritonLLVMOpBuilder &b, Value vec, int idx, Value val) {
   return b.insert_element(vec, val, b.i32_val(idx));
 }
 
+// Keep the carried group0 descriptor in one SGPR tuple across consecutive TDM
+// instructions. LLVM's AMDGPU DAG combiner otherwise expands each
+// insertelement from a shared BUILD_VECTOR into an independent REG_SEQUENCE,
+// so every chunk gets a separate tuple and copies the invariant descriptor
+// lanes. The empty side-effecting asm sequences each update after the previous
+// TDM intrinsic; tying its output to its input makes it instruction-free while
+// preventing that BUILD_VECTOR expansion.
+Value sequenceGroup0(RewriterBase &rewriter, Location loc, Value group0) {
+  auto *ctx = rewriter.getContext();
+  return LLVM::InlineAsmOp::create(
+             rewriter, loc, group0.getType(), ValueRange{group0},
+             /*asm_string=*/"", /*constraints=*/"=s,0",
+             /*has_side_effects=*/true, /*is_align_stack=*/false,
+             LLVM::TailCallKind::None,
+             LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
+             /*operand_attrs=*/ArrayAttr::get(ctx, {}))
+      .getRes();
+}
+
 // Add `byteOffset` to the 64-bit global address held in group0 dwords [2:3], in
 // place.  Viewing group0 as <2 x i64> and adding to lane 1 is a single i64 add
 // (the i32<->i64 bitcasts are free), saving the scalar-ALU a per-dword
@@ -1465,6 +1484,7 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
   Value g0 = baseGroup0;
   // Issue multiple TDM instructions if needed
   for (size_t instrIdx = 0; instrIdx < analysis.numInstructions; ++instrIdx) {
+    g0 = sequenceGroup0(rewriter, loc, g0);
     size_t startIdx = instrIdx * maxIndicesPerInstr;
     size_t endIdx = std::min(startIdx + maxIndicesPerInstr, numIndicesPerWarp);
 
