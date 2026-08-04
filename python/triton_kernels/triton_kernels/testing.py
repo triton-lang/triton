@@ -6,7 +6,8 @@ import sys
 import torch
 from triton._internal_testing import is_compile_warmup
 from triton_kernels.numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
-from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
+from triton_kernels.tensor import convert_layout as _convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
+from triton_kernels.tensor_details.layout import BlackwellMXScaleLayout
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 import itertools
 from dataclasses import replace
@@ -339,19 +340,17 @@ class _WarmupTensorProxy:
         return getattr(self.tensor, name)
 
 
-def convert_layout_for_testing(tensor, layout):
-    converted = convert_layout(tensor, layout)
+def convert_layout(tensor, layout, **layout_transformation_kwargs):
+    converted = _convert_layout(tensor, layout, **layout_transformation_kwargs)
     if not is_compile_warmup() or converted is tensor:
         return converted
-
-    from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellMXScaleLayout
 
     data = tensor.storage.data
     if (not isinstance(layout, BlackwellMXScaleLayout) or data.device.type in ["cpu", "meta"]
             or data.dtype.itemsize != 1 or not converted.storage.data.numel()):
         return converted
 
-    transformation = layout.make_transformation(tensor.shape, tensor.dtype == FP4)
+    transformation = layout.make_transformation(tensor.shape, tensor.dtype == FP4, **layout_transformation_kwargs)
     data = torch.empty(tensor.shape, dtype=data.dtype, device=data.device)
     transformation.swizzle_data(_WarmupTensorProxy(data))
     return converted
@@ -422,5 +421,5 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
             if callable(scale_hbm_swizzling):
                 # Segment metadata describes scale rows, never its inner axis.
                 scale_hbm_swizzling = scale_hbm_swizzling(ragged_metadata if ragged_dim == 0 else None)
-            scales = convert_layout_for_testing(scales, scale_hbm_swizzling)
+            scales = convert_layout(scales, scale_hbm_swizzling)
     return buffer, scales, ragged_metadata
