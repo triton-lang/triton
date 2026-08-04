@@ -2010,7 +2010,7 @@ def test_tmem_store_lut(rows):
         smem.store(value)
         fence_async_shared()
         tmem.store(smem.load(tmem.get_reg_layout()))
-        alias = tmem._reinterpret(shape=(num_rows, cols), layout=TensorMemoryLayout((num_rows, cols), col_stride=1))
+        alias = tmem.reinterpret(shape=(num_rows, cols), layout=TensorMemoryLayout((num_rows, cols), col_stride=1))
         out_layout: ttgl.constexpr = alias.get_reg_layout()
         ttgl.store(ttgl.set_auto_layout(out_ptrs, out_layout), alias.load(out_layout))
 
