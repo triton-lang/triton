@@ -2619,9 +2619,9 @@ def mxfp_attn_epilogue(  #
             tdm.async_wait(0)
 
             for i in ttgl.static_range(SPLIT_K):
-                _smem = o_smem.reshape([1, SPLIT_K * BLOCK_M, HEAD_SZ])
-                _smem = _smem.slice(i * BLOCK_M, BLOCK_M, 1)
-                o = _smem.load(softmax_layout)
+                o = o_smem.reshape([1, SPLIT_K * BLOCK_M, HEAD_SZ])\
+                          .slice(i * BLOCK_M, BLOCK_M, 1)\
+                          .load(softmax_layout)
                 acc += o * alpha_s[i][:, :, None]
 
             l_recip = 1 / l_i
