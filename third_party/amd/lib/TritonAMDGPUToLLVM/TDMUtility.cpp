@@ -1460,6 +1460,9 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
       baseGroup0, baseGroup1, pred, multicastMask, barrierPtr, cgaLayout, ctaId,
       use32BitIndices, isGather);
 
+  // Carry group0 forward so each chunk updates the descriptor produced for the
+  // preceding chunk rather than independently rebuilding it from the base.
+  Value g0 = baseGroup0;
   // Issue multiple TDM instructions if needed
   for (size_t instrIdx = 0; instrIdx < analysis.numInstructions; ++instrIdx) {
     size_t startIdx = instrIdx * maxIndicesPerInstr;
@@ -1469,7 +1472,6 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
     SmallVector<Value> batchIndices(effectiveRowIndices.begin() + startIdx,
                                     effectiveRowIndices.begin() + endIdx);
 
-    Value g0 = baseGroup0;
     Value g1 = baseGroup1;
     Value g2 = group2Zero;
     Value g3 = group3Zero;
