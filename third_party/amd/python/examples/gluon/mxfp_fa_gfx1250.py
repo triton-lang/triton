@@ -2781,12 +2781,6 @@ def attn_fwd(  #
         if seqlen_q == 1 and group_sz == 1 and num_warps == 1:
             if kv_type != 'e2m1' and head_sz == 128:
                 num_buffers = 2
-        # For MQA decode with split-k, we will increase the LDS usage for
-        # k partitions, which can also exceed the LDS limit for mxfp8 with
-        # head_sz=128.
-        if seqlen_q == 1 and split_k > 1:
-            if kv_type != 'e2m1' and head_sz == 128:
-                num_buffers = 2
 
     # When kv_type is mxfp8 (e4m3 or e5m2), we can use p_k_width of 8,
     # which makes QK and P share the same layout.
