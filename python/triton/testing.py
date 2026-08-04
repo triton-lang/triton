@@ -611,13 +611,14 @@ class Mark:
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
         result_dfs = []
+        if save_path:
+            # Create directory if it doesn't exist
+            os.makedirs(save_path, exist_ok=True)
         try:
             for bench in benchmarks:
                 result_dfs.append(self._run(bench, save_path, show_plots, print_data, **kwargs))
         finally:
             if save_path:
-                # Create directory if it doesn't exist
-                os.makedirs(save_path, exist_ok=True)
                 with open(os.path.join(save_path, "results.html"), "w") as html:
                     html.write("<html><body>\n")
                     for bench in benchmarks[:len(result_dfs)]:
