@@ -287,7 +287,13 @@ class HIPBackend(BaseBackend):
         use_block_pingpong = is_pingpong_schedule_enabled(options.arch, use_async_copy)
         amd.passes.ttgpuir.add_optimize_descriptor_encoding(pm)
         amd.passes.ttgpuir.add_schedule_loops(pm, options.num_stages)
-        amd.passes.ttgpuir.add_pipeline(pm, use_async_copy, use_block_pingpong)
+
+        use_l2_prefetch = knobs.amd.use_l2_prefetch
+        if use_l2_prefetch and not amd.supports_tdm(options.arch):
+            warnings.warn("The global L2 data prefetch is supported only with TDM.")
+            use_l2_prefetch = False
+
+        amd.passes.ttgpuir.add_pipeline(pm, use_async_copy, use_block_pingpong, use_l2_prefetch)
         if use_async_copy:
             amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
         amd.passes.ttgpuir.add_convert_to_tensor_ops(pm)
