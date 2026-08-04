@@ -180,6 +180,29 @@ def test_matmul_blackwell_scale_small_n(device):
     assert_close(ref_y, tri_y, maxtol=3e-2, rmstol=None)
 
 
+def test_matmul_clc(device):
+    if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
+        pytest.skip("requires CUDA")
+    if torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell or newer")
+
+    torch.manual_seed(0)
+    m, n, k = 4096, 1024, 128
+    a = torch.randn((m, k), device=device, dtype=torch.bfloat16)
+    b = torch.randn((k, n), device=device, dtype=torch.bfloat16)
+    with scoped_opt_flags_constraints({
+            "clc": True,
+            "block_m": 128,
+            "block_n": 128,
+            "block_k": 64,
+            "split_k": 1,
+    }):
+        tri_y = matmul(a, b, None)
+
+    ref_y = matmul_torch(a, b, None, precision_config=PrecisionConfig())
+    assert_close(ref_y, tri_y, maxtol=3e-2, rmstol=None)
+
+
 def test_matmul_blackwell_shuffled_mxfp4_weight(device):
     if device != "cuda" or not torch.cuda.is_available():
         pytest.skip("requires CUDA")
