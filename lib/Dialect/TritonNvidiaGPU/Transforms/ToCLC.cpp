@@ -47,13 +47,6 @@ static LogicalResult validateKernel(tt::FuncOp kernel) {
   if (!kernel.getBody().hasOneBlock())
     return kernel.emitError(
         "CLC conversion requires one top-level kernel block");
-
-  bool hasKernelPID = false;
-  kernel.walk([&](tt::GetProgramIdOp) { hasKernelPID = true; });
-  // CLC cannot remap block indices read directly from PTX %ctaid.
-  if (!hasKernelPID)
-    return kernel.emitError(
-        "CLC conversion requires at least one tt.get_program_id");
   return success();
 }
 
@@ -127,21 +120,24 @@ static void convertToCLC(tt::FuncOp kernel) {
   Value result = CLCLoadResultOp::create(builder, loc, responseBuffer);
   Value nextActive = CLCIsCanceledOp::create(builder, loc, result);
 
-  auto nextPID = scf::IfOp::create(builder, loc, pidTypes, nextActive,
-                                   /*withElseRegion=*/true);
-  builder.setInsertionPointToStart(nextPID.thenBlock());
-  SmallVector<Value> canceledPIDs;
-  for (unsigned axis : usedAxes) {
-    canceledPIDs.push_back(
-        CLCGetProgramIdOp::create(builder, loc, result, axis));
+  SmallVector<Value> nextState;
+  if (!usedAxes.empty()) {
+    auto nextPID = scf::IfOp::create(builder, loc, pidTypes, nextActive,
+                                     /*withElseRegion=*/true);
+    builder.setInsertionPointToStart(nextPID.thenBlock());
+    SmallVector<Value> canceledPIDs;
+    for (unsigned axis : usedAxes) {
+      canceledPIDs.push_back(
+          CLCGetProgramIdOp::create(builder, loc, result, axis));
+    }
+    scf::YieldOp::create(builder, loc, canceledPIDs);
+
+    builder.setInsertionPointToStart(nextPID.elseBlock());
+    scf::YieldOp::create(builder, loc, after->getArguments().drop_back());
+
+    builder.setInsertionPointAfter(nextPID);
+    nextState.append(nextPID.getResults().begin(), nextPID.getResults().end());
   }
-  scf::YieldOp::create(builder, loc, canceledPIDs);
-
-  builder.setInsertionPointToStart(nextPID.elseBlock());
-  scf::YieldOp::create(builder, loc, after->getArguments().drop_back());
-
-  builder.setInsertionPointAfter(nextPID);
-  SmallVector<Value> nextState(nextPID.getResults());
   nextState.push_back(nextActive);
   scf::YieldOp::create(builder, loc, nextState);
 }

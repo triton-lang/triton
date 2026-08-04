@@ -89,10 +89,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
-  // expected-error @+1 {{CLC conversion requires at least one tt.get_program_id}}
+  // CHECK-LABEL: tt.func public @no_pid
   tt.func public @no_pid(%out: !tt.ptr<i32>) {
+    // CHECK: scf.while
+    // CHECK: ttng.clc_try_cancel_sync
     %c0 = arith.constant 0 : i32
+    // CHECK: tt.store
     tt.store %out, %c0 : !tt.ptr<i32>
+    // CHECK: ttng.clc_load_result
+    // CHECK-NOT: scf.if
     tt.return
   }
 }
