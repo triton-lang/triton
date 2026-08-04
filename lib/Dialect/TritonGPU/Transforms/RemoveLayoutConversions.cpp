@@ -905,7 +905,6 @@ LogicalResult LayoutRematerialization::getConvertBackwardSlice(
                                        stopPropagation, getExistingConversion);
 }
 
-
 LogicalResult LayoutRematerialization::getRematerializableSlice(
     OpOperand &root, Attribute rootEncoding, SetVector<Value> &sliceArg,
     DenseMap<Value, Attribute> &layoutArg,
