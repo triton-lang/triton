@@ -86,10 +86,7 @@ std::pair<int64_t, int64_t> getMmaEmulationTileShape(PatternRewriter &rewriter,
   if (!supportsI8DotDecomposition(rewriter, accElem) || (k % kI8MmaK) != 0)
     return tile;
 
-  int64_t maxRegisterBudget =
-      op->getParentOfType<ttg::WarpSpecializePartitionsOp>() ? 64 : 32;
-  int64_t registerBudget =
-      std::min<int64_t>(ttng::getContextualMaxNReg(op), maxRegisterBudget);
+  int64_t registerBudget = std::min(ttng::getContextualMaxNReg(op), 32);
   int64_t maxTileArea =
       registerBudget * 32 * numWarps / (accElem.getWidth() == 64 ? 2 : 1);
   for (int64_t tileM = kI8MmaM; tileM <= m; tileM *= 2) {
