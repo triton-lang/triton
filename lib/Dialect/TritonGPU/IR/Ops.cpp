@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/MathExtras.h"
@@ -397,6 +398,20 @@ struct CanonicalizeConvertFromConvert
     return failure();
   }
 };
+
+LogicalResult ConvertLayoutOp::verify() {
+  if (!getForceWarpShuffle())
+    return success();
+
+  auto conversion = minimalCvtLayout(getSrc().getType(), getType());
+  auto dims = conversion.getInDimNames();
+  auto warp = StringAttr::get(getContext(), "warp");
+  auto block = StringAttr::get(getContext(), "block");
+  if (llvm::is_contained(dims, warp) || llvm::is_contained(dims, block))
+    return emitOpError(
+        "force_warp_shuffle requires a conversion within one warp");
+  return success();
+}
 
 void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                                   MLIRContext *context) {
@@ -1037,6 +1052,26 @@ LogicalResult LocalScatterOp::verify() {
 }
 
 // LocalAtomicScatterRMWOp
+bool LocalAtomicScatterRMWOp::isCommutative() {
+  if (!getResult().use_empty() ||
+      !getDst().getType().getElementType().isInteger())
+    return false;
+
+  switch (getAtomicRmwOp()) {
+  case RMWOp::ADD:
+  case RMWOp::AND:
+  case RMWOp::OR:
+  case RMWOp::XOR:
+  case RMWOp::MAX:
+  case RMWOp::MIN:
+  case RMWOp::UMAX:
+  case RMWOp::UMIN:
+    return true;
+  default:
+    return false;
+  }
+}
+
 LogicalResult LocalAtomicScatterRMWOp::verify() {
   auto dstTy = getDst().getType();
   auto valuesTy = cast<RankedTensorType>(getValues().getType());

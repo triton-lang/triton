@@ -4492,6 +4492,14 @@ def test_mismatch_shape_and_layout_rank():
     assert "tensor shape and layout rank mismatch" in str(e.value.__cause__)
 
 
+def test_tma_descriptor_layout_rank():
+    tensor = MockTensor(ttgl.int32, (2, 32, 64))
+    layout = ttgl.NVMMASharedLayout(128, 32, rank=2)
+
+    with pytest.raises(AssertionError, match="layout rank must match block shape rank"):
+        TensorDescriptor.from_tensor(tensor, [2, 32, 64], layout)
+
+
 def test_non_scalar_loop_bounds():
 
     @gluon.jit

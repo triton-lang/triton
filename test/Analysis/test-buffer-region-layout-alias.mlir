@@ -623,7 +623,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 1024 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32, "ttg.total-num-warps" = 4 : i32} {
   tt.func public @amd_packed_transposed_local_load_alias() {
     %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16x64xi8, #shared, #smem, mutable>
-    %packed = amdg.local_load_packed_tranposed %buffer {test.region_name = "amd_packed_a_transposed"} : !ttg.memdesc<16x64xi8, #shared, #smem, mutable> -> tensor<32x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>
+    %packed = amdg.local_load_packed_transposed %buffer {test.region_name = "amd_packed_a_transposed"} : !ttg.memdesc<16x64xi8, #shared, #smem, mutable> -> tensor<32x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>
     %plain = ttg.local_load %buffer {test.region_name = "amd_packed_b_local_load"} : !ttg.memdesc<16x64xi8, #shared, #smem, mutable> -> tensor<16x64xi8>
     tt.return
   }

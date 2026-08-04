@@ -663,7 +663,7 @@ def InThreadTransposeOp : TT_AMDGPU_Op<"in_thread_transpose", [Pure]> {
 // LocalLoadPackedTransposedOp
 //===----------------------------------------------------------------------===//
 
-def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_tranposed", [LocalLoadTrait]> {
+def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_transposed", [LocalLoadTrait]> {
     let summary = "Load a transposed packed tensor from shared memory into a distributed tensor";
     let description = [{
       Requires a M/N packed and M/N contiguous tensor in shared memory and will yield a K packed K contiguous tensor in registers.

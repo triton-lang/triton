@@ -1843,6 +1843,87 @@ def test_runtime_partitioned_tdm_load(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GROU
                              f"numPartitions={NUM_PARTITIONS}, numGroups={NUM_GROUPS}")
 
 
+_LOAD_SHARED_FP4_REPACKED_CASES = [
+    pytest.param(
+        (128, 32),
+        ttgl.BlockedLayout([2, 16], [16, 2], [4, 1], [1, 0]),
+        ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0]),
+        ttgl.amd.AMDWMMALayout(3, False, [[0, 1], [1, 0]], [], [16, 16, 64]),
+        1,
+        id="swizzled",
+    ),
+    pytest.param(
+        (32, 128),
+        ttgl.BlockedLayout([16, 2], [2, 16], [1, 4], [0, 1]),
+        PartitionedSharedLayout(
+            2,
+            1,
+            0,
+            ttgl.PaddedSharedLayout.with_identity_for([[512, 16]], [16, 128], [0, 1]),
+        ),
+        ttgl.amd.AMDWMMALayout(3, True, [[0, 1], [1, 0]], [], [16, 16, 64]),
+        0,
+        id="partitioned-padded-dim0",
+    ),
+    pytest.param(
+        (128, 32),
+        ttgl.BlockedLayout([2, 16], [16, 2], [4, 1], [1, 0]),
+        PartitionedSharedLayout(2, 1, 1, ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])),
+        ttgl.amd.AMDWMMALayout(3, True, [[0, 1], [1, 0]], [], [16, 16, 64]),
+        1,
+        id="partitioned-swizzled-dim1",
+    ),
+]
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("src_shape,src_layout,shared_layout,wmma_layout,op_idx", _LOAD_SHARED_FP4_REPACKED_CASES)
+def test_load_shared_fp4_repacked(src_shape, src_layout, shared_layout, wmma_layout, op_idx):
+
+    @gluon.jit
+    def kernel(
+        src_ptr,
+        dst_ptr,
+        src_rows: ttgl.constexpr,
+        src_cols: ttgl.constexpr,
+        src_layout: ttgl.constexpr,
+        shared_layout: ttgl.constexpr,
+        wmma_layout: ttgl.constexpr,
+        op_idx: ttgl.constexpr,
+    ):
+        out_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 32], [16, 2], [4, 1], [1, 0])
+        dot_layout: ttgl.constexpr = ttgl.DotOperandLayout(op_idx, wmma_layout, 16)
+
+        offs_m = ttgl.arange(0, src_rows, layout=ttgl.SliceLayout(1, src_layout))
+        offs_n = ttgl.arange(0, src_cols, layout=ttgl.SliceLayout(0, src_layout))
+        value = ttgl.load(src_ptr + offs_m[:, None] * src_cols + offs_n[None, :])
+        smem = ttgl.allocate_shared_memory(src_ptr.type.element_ty, [src_rows, src_cols], shared_layout, value)
+
+        value = ttgl.amd.gfx1250.load_shared_fp4_repacked(smem, dot_layout)
+        value = ttgl.convert_layout(value, out_layout)
+        out_m = ttgl.arange(0, 64, layout=ttgl.SliceLayout(1, out_layout))
+        out_n = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, out_layout))
+        ttgl.store(dst_ptr + out_m[:, None] * 64 + out_n[None, :], value)
+
+    src = torch.randint(0, 256, src_shape, dtype=torch.uint8)
+    if op_idx == 0:
+        logical = torch.empty((64, 128), dtype=torch.uint8)
+        logical[0::2, :] = src & 0x0F
+        logical[1::2, :] = src >> 4
+        expected = logical[:, 0::2] | (logical[:, 1::2] << 4)
+    else:
+        logical = torch.empty((128, 64), dtype=torch.uint8)
+        logical[:, 0::2] = src & 0x0F
+        logical[:, 1::2] = src >> 4
+        expected = logical[0::2, :] | (logical[1::2, :] << 4)
+
+    result = torch.empty((64, 64), dtype=torch.uint8, device="cuda")
+    pgm = kernel[(1, )](src.cuda(), result, *src_shape, src_layout, shared_layout, wmma_layout, op_idx, num_warps=4)
+
+    assert "ds_load_tr4_b64" in pgm.asm["amdgcn"]
+    torch.testing.assert_close(result.cpu(), expected, rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("DTYPE", list(_PARTITIONED_TDM_DTYPE_CONFIG.keys()))
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N,NUM_PARTITIONS,NUM_GROUPS,PARTITION_DIM", _PARTITIONED_TDM_PARAMS)
 def test_compile_partitioned_tdm_transpose_load(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GROUPS, PARTITION_DIM, DTYPE):

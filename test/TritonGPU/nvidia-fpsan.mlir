@@ -159,9 +159,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.tensor_memory_size = 0 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tcgen05_mma_tmem_a_shared_b
   tt.func public @tcgen05_mma_tmem_a_shared_b() {
-    // CHECK: ttg.global_scratch_alloc
-    // CHECK: tt.store
+    // CHECK: %[[A_SCRATCH:.*]] = ttg.global_scratch_alloc
+    // CHECK: %[[D_SCRATCH:.*]] = ttg.global_scratch_alloc
+    // CHECK-NOT: ttg.global_scratch_alloc
     // CHECK: ttg.barrier global_read|global_write
+    // CHECK: tt.load
     // CHECK: tti.experimental_local_gather
     // CHECK: tti.dot_i8
     // CHECK-NOT: ttng.tc_gen5_mma

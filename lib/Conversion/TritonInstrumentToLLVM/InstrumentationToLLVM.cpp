@@ -62,15 +62,10 @@ struct AssertUniformOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     TritonLLVMIRRewriter b(op.getLoc(), rewriter);
     Value tid = getThreadId(b, op.getLoc());
-    Value threadIdIsZero = b.icmp_eq(tid, b.i32_val(0));
-
-    auto [prevBlock, ifBlock, thenBlock] =
-        createIfBlock(rewriter, op.getLoc(), threadIdIsZero);
-    rewriter.setInsertionPointToStart(ifBlock);
-    AssertOp::create(rewriter, op.getLoc(), adaptor.getCondition(),
-                     adaptor.getMessage());
+    Value threadIdIsNotZero = b.icmp_ne(tid, b.i32_val(0));
+    Value condition = b.or_(threadIdIsNotZero, adaptor.getCondition());
+    AssertOp::create(rewriter, op.getLoc(), condition, adaptor.getMessage());
     rewriter.eraseOp(op);
-    rewriter.setInsertionPointToStart(thenBlock);
     return success();
   }
 };
@@ -187,8 +182,8 @@ struct LockAcquireOpConversion
     // Build: do { old = atom.global.acquire.cas.b32 [lock], 0, 1; } while (old
     // != 0);
     Block *prevBlock2 = b.getInsertionBlock();
-    Block *whileBlock = b.splitBlock(prevBlock2, b.getInsertionPoint());
-    Block *endBlock = b.splitBlock(whileBlock, whileBlock->begin());
+    Block *whileBlock = prevBlock2->splitBlock(b.getInsertionPoint());
+    Block *endBlock = whileBlock->splitBlock(whileBlock->begin());
     b.setInsertionPointToEnd(prevBlock2);
 
     Value elect;

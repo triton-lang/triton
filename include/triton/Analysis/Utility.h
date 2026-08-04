@@ -258,27 +258,16 @@ bool supportMMA(triton::DotOpInterface op, int version);
 
 bool supportMMA(Value value, int version);
 
-// Conversion from `srcLayout` to `dstLayout` involving the minimum amount of
-// data transfer. The output will be such that layout.getInDimNames() ==
-// layout.getOutDimNames() and the conversion will not include kBlock (resp.
-// kWarp or kLane) if it can be avoided.
-triton::LinearLayout minimalCvtLayout(const triton::LinearLayout &srcLayout,
-                                      const triton::LinearLayout &dstLayout);
-
-// Type-based convenience overload for layouts that can be converted to LL.
-triton::LinearLayout minimalCvtLayout(Type srcTy, Type dstTy);
-
 // Conversion from `srcTy` to `dstTy` only involves reordering of registers.
 // There is no need for data exchange across threads, warps, or blocks.
 bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy);
 
-// Conversion from `srcTy` to `dstTy` involves data exchange across threads
-// within a warp.  No data exchange across warps or blocks is needed.
-bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
+// The conversion involves data exchange across threads within a warp, or is
+// explicitly forced to use warp shuffles.
+bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op);
 
-// Conversion from `srcTy` to `dstTy` involves data exchange across threads,
-// warps, and possibly blocks.
-bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
+// The conversion requires data exchange through shared memory.
+bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op);
 
 // TODO: Move utility functions that belong to ConvertLayoutOp to class
 // ConvertLayoutOpHelper in the future
