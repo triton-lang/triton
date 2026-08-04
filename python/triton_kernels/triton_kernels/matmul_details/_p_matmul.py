@@ -290,7 +290,14 @@ def _p_matmul(
         if X_TMA_MODE is None:
             XBase = X + off_x_z.to(index_type) * stride_x_z
             offs_m = off_m + tl.arange(0, BLOCK_M)
-            offs_m = tl.max_contiguous(tl.multiple_of(offs_m % shape_m, BLOCK_M), BLOCK_M)
+            if tl.target_info.is_cuda():
+                # Avoid masked srem, which the NVPTX type legalizer cannot split.
+                offs_m = tl.inline_asm_elementwise(
+                    "rem.s32 $0, $1, $2;", "=r,r,r", [offs_m, shape_m],
+                    dtype=tl.int32, is_pure=True, pack=1)
+            else:
+                offs_m = offs_m % shape_m
+            offs_m = tl.max_contiguous(tl.multiple_of(offs_m, BLOCK_M), BLOCK_M)
             # no needs to bounds-check here because `offs_m` wraps around M dim
             if GatherIndx is not None:
                 tl.static_assert(HAS_GATHER)
