@@ -19,6 +19,7 @@ from triton._compile_warmup import (
     compile_warmup_only,
     pytest_collection_modifyitems,
     pytest_runtest_call,
+    pytest_xdist_setupnodes,
     summarize_compile_trace,
 )
 from triton._compile_warmup_pool import (
@@ -151,6 +152,28 @@ def test_compile_warmup_coordinator_propagates_compilation_errors(monkeypatch):
 def test_test_runner_preserves_default_import_mode_unless_matching_unified_warmup():
     assert "--import-mode=importlib" not in _test_runner._pytest("test.py", workers=1)
     assert "--import-mode=importlib" in _test_runner._pytest("test.py", workers=1, import_mode="importlib")
+
+
+@pytest.mark.parametrize(
+    ("num_gpus", "visible", "expected"),
+    [
+        (1, None, ["0", "0", "0"]),
+        (2, None, ["0", "1", "0", "1"]),
+        (2, "3,1", ["3", "1", "3", "1"]),
+        (4, "5,2,7,3", ["5", "2", "7", "3", "5"]),
+    ],
+)
+def test_compile_warmup_assigns_gpu_before_xdist_worker_initialization(monkeypatch, num_gpus, visible, expected):
+    monkeypatch.setenv("TRITON_TEST_NUM_GPUS", str(num_gpus))
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("TRITON_TEST_VISIBLE_GPUS", raising=False)
+    if visible is not None:
+        monkeypatch.setenv("TRITON_TEST_VISIBLE_GPUS", visible)
+    specs = [SimpleNamespace(env={}) for _ in expected]
+
+    pytest_xdist_setupnodes(None, specs)
+
+    assert [spec.env["CUDA_VISIBLE_DEVICES"] for spec in specs] == expected
 
 
 @pytest.mark.parametrize("num_gpus", [1, 2, 4, 8])

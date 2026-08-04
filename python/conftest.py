@@ -1,4 +1,3 @@
-import os
 import tempfile
 
 import pytest
@@ -6,22 +5,6 @@ import pytest
 
 def pytest_addoption(parser):
     parser.addoption("--device", action="store", default="cuda")
-
-
-def pytest_configure(config):
-    worker = os.environ.get("PYTEST_XDIST_WORKER", "")
-    requested = os.environ.get("TRITON_TEST_NUM_GPUS")
-    if not requested or not worker.startswith("gw"):
-        return
-
-    visible = os.environ.get("TRITON_TEST_VISIBLE_GPUS")
-    if visible is None:
-        visible = os.environ.get("CUDA_VISIBLE_DEVICES")
-    if visible:
-        devices = [device.strip() for device in visible.split(",") if device.strip()]
-    else:
-        devices = [str(index) for index in range(int(requested))]
-    os.environ["CUDA_VISIBLE_DEVICES"] = devices[int(worker[2:]) % int(requested)]
 
 
 @pytest.fixture

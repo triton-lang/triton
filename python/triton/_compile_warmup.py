@@ -123,6 +123,22 @@ def pytest_addoption(parser):
                      help="associate a test path with its runtime suite")
 
 
+@pytest.hookimpl(optionalhook=True)
+def pytest_xdist_setupnodes(config, specs):
+    requested = os.environ.get("TRITON_TEST_NUM_GPUS")
+    if not requested:
+        return
+
+    visible = os.environ.get("TRITON_TEST_VISIBLE_GPUS", os.environ.get("CUDA_VISIBLE_DEVICES"))
+    if visible:
+        devices = [device.strip() for device in visible.split(",") if device.strip()]
+    else:
+        devices = [str(index) for index in range(int(requested))]
+
+    for index, spec in enumerate(specs):
+        spec.env["CUDA_VISIBLE_DEVICES"] = devices[index % int(requested)]
+
+
 def _cache_phase_for_item(item):
     phase = os.environ.get("TRITON_CI_CACHE_PHASE", "unclassified")
     root = os.path.abspath(str(item.config.rootpath))
