@@ -161,13 +161,21 @@ def test_gsan_runner_isolates_distributed_tests_when_multiple_gpus_are_visible(m
 
     assert _test_runner._gsan(SimpleNamespace(num_gpus=num_gpus, num_procs=24)) == 0
     assert len(commands) == num_gpus
-    symmetric_memory = "python/test/gsan/test_symmetric_memory.py"
+    assert commands[0][0][commands[0][0].index("-n") + 1] == str(8 * num_gpus)
+    assert all(kwargs["timeout"] == 180 for _, kwargs in commands)
+    assert all(kwargs["environment"]["TRITON_TEST_PROCESS_TIMEOUT"] == "90" for _, kwargs in commands)
     if num_gpus == 1:
-        assert f"--ignore={symmetric_memory}" not in commands[0][0]
+        assert "not xdist_group" not in commands[0][0]
     else:
-        assert f"--ignore={symmetric_memory}" in commands[0][0]
-        assert symmetric_memory in commands[1][0]
+        assert "not xdist_group" in commands[0][0]
+        assert commands[0][1]["environment"]["TRITON_TEST_NUM_GPUS"] == str(num_gpus)
+        assert "xdist_group" in commands[1][0]
         assert commands[1][0][commands[1][0].index("-n") + 1] == "1"
+
+
+def test_gsan_runner_terminates_stalled_pytest_processes():
+    command = [sys.executable, "-c", "import time; time.sleep(60)"]
+    assert _test_runner._run(command, timeout=0.05) == 1
 
 
 def test_compile_warmup_selects_eligible_markers(monkeypatch):

@@ -1,7 +1,6 @@
 import importlib
 import multiprocessing
 import os
-import queue
 import re
 import tempfile
 import numpy as np
@@ -303,8 +302,8 @@ def _call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_list
     return exc
 
 
-def _run_in_process_worker(client_fn, q, args, kwargs, env, stderr_file, compilation_listener):
-    q.put(_call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_listener))
+def _run_in_process_worker(client_fn, result_pipe, args, kwargs, env, stderr_file, compilation_listener):
+    result_pipe.send(_call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_listener))
 
 
 def _run_in_replenishing_process_worker(task_pipe, preload_module, triton_key):
@@ -397,23 +396,40 @@ def run_in_process(client_fn, args=(), kwargs=None, env=None):
         kwargs = {}
 
     ctx = multiprocessing.get_context("forkserver")
-    q = ctx.Queue()
+    result_pipe, child_pipe = ctx.Pipe(duplex=False)
     with tempfile.TemporaryDirectory() as tmpdir:
         stderr_file = os.path.join(tmpdir, "err.log")
         process = ctx.Process(
             target=_run_in_process_worker,
-            args=(client_fn, q, args, kwargs, env, stderr_file, knobs.compilation.listener),
+            args=(client_fn, child_pipe, args, kwargs, env, stderr_file, knobs.compilation.listener),
         )
         process.start()
-        process.join()
+        child_pipe.close()
+        timeout = os.environ.get("TRITON_TEST_PROCESS_TIMEOUT")
+        timeout = None if timeout is None else float(timeout)
+        if not result_pipe.poll(timeout):
+            process.kill()
+            process.join()
+            result_pipe.close()
+            raise TimeoutError(f"test subprocess {client_fn.__name__} exceeded its {timeout}-second timeout")
+        try:
+            exc = result_pipe.recv()
+        except EOFError:
+            process.join()
+            with open(stderr_file, "r") as f:
+                stderr = f.read()
+            print(stderr, file=sys.stderr)
+            raise RuntimeError(
+                f"child process exited with code {process.exitcode} without returning a result") from None
+        finally:
+            result_pipe.close()
+        process.join(timeout)
+        if process.is_alive():
+            process.kill()
+            process.join()
+            raise TimeoutError(f"test subprocess {client_fn.__name__} exceeded its {timeout}-second timeout")
         with open(stderr_file, "r") as f:
             stderr = f.read()
-    exc = None
-    try:
-        exc = q.get(timeout=1)
-    except queue.Empty:
-        print(stderr, file=sys.stderr)
-        raise RuntimeError(f"child process exited with code {process.exitcode} without returning a result") from None
     return ProcessResult(exc, stderr)
 
 
