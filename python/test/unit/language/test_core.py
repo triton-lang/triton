@@ -17,6 +17,7 @@ import triton.language as tl
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 from triton._internal_testing import (
+    assert_close,
     integral_dtypes,
     int_dtypes,
     str_to_triton_dtype,
@@ -26,6 +27,7 @@ from triton._internal_testing import (
     dtypes,
     dtypes_with_bfloat16,
     is_cuda,
+    is_compile_warmup,
     is_interpreter,
     is_hopper,
     is_sm12x,
@@ -3010,6 +3012,7 @@ def roll(a1, b1_last, b1_cur, a2, b2_last, b2_cur):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("op, dtype_str, shape, axis, reverse, num_warps", scan_configs + negative_config)
+@pytest.mark.enable_warmup(min_capability=9)
 def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
     check_type_supported(dtype_str, device)
     if dtype_str == 'bfloat16':
@@ -3081,7 +3084,8 @@ def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
     elif op == 'cummax':
         # NumPy does not have cummax
         z = np.empty_like(x, dtype=np.int64)
-        z_ref = torch.cummax(torch.from_numpy(x_in.copy()), axis=axis).indices.numpy()
+        z_ref = np.empty_like(z) if is_compile_warmup() else torch.cummax(torch.from_numpy(x_in.copy()),
+                                                                          axis=axis).indices.numpy()
         if reverse:
             z_ref = x_in.shape[axis] - np.flip(z_ref, axis) - 1
     elif op == 'roll':
@@ -3135,6 +3139,8 @@ def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
     z_tri = to_triton(z, device=device)
     kernel[(1, )](x_tri, y_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis, num_warps=num_warps)
 
+    if is_compile_warmup():
+        return
     z_tri = to_numpy(z_tri)
     # compare
     if dtype_str not in int_dtypes:
@@ -3716,6 +3722,7 @@ def get_test_small_dots_cases():
     get_test_small_dots_cases() + \
     get_test_dot_small_fp64_cases())
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
+@pytest.mark.enable_warmup(min_capability=9)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size,
              num_ctas, device):
     if is_interpreter():
@@ -3864,6 +3871,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 
     pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1), y_tri, y_tri.stride(0), y_tri.stride(1), w_tri,
                          w_tri.stride(0), w_tri.stride(1), z_tri, z_tri.stride(0), z_tri.stride(1), **kern_kwargs)
+    if is_compile_warmup():
+        return
 
     # torch result
     if in_dtype == 'int8':
@@ -4005,6 +4014,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                           for normal_type in ["e4m3", "e5m2", "bf16", "fp16"]
                           for mma in (mma_nonk_sizes if is_hip() else [16])
                           for kpack in ([1, 2] if (is_hip() and not (is_hip_cdna4() or is_hip_gfx1250())) else [1])])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack, device):
     if is_interpreter() and normal_type != "fp16":
         pytest.skip("bfloat16 is not supported in the interpreter")
@@ -4158,7 +4168,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             comp_dtype = tl.float16 if comp_dtype == torch.float16 else tl.bfloat16
             mxfp_upcast_kernel[grid](v, scale, v_upcast, scale.numel(), e_bits, m_bits, comp_dtype, BLOCK_SIZE,
                                      num_warps=num_warps)
-            assert v_upcast.isfinite().all()
+            if not is_compile_warmup():
+                assert v_upcast.isfinite().all()
             if transposed:
                 v_upcast = v_upcast.mT
             return v_upcast
@@ -4248,6 +4259,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     pgm = dot_scale_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z, M, N, K, type_a, type_b,
                                   **kernel_kwargs)
     z_ref = dot_scale_ref(x, scale_x, y, scale_y, type_a, type_b)
+    if is_compile_warmup():
+        return
     # Bigger tolerance for AMD CDNA2 devices.
     # CDNA2 devices use reduced precision fp16 and bf16 and flush input and output denormal values
     # to zero. Detailed info is at:
@@ -4297,6 +4310,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
      for BLOCK_M, BLOCK_N in [(1, 32), (32, 2), (8, 8)]
      for M, N, K in [(32, 32, 32)]
      for in_dtype_str, out_dtype_str in [('float16', 'float16'), ('float32', 'float32')]])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str, device):
     if is_hip():
         # hip does not support tf32 precision, so use ieee for all tests
@@ -4408,6 +4422,8 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
         out_dtype=out_dtype,
         num_warps=num_warps,
     )
+    if is_compile_warmup():
+        return
 
     if in_dtype_str == 'int8':
         out_ref = np.matmul(x.astype(np.float32), y.astype(np.float32)).astype(np.int32)
@@ -6956,6 +6972,7 @@ def gather_test_kernel_1d(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr, src_dim
     ([128, 64], [256, 64], 0),
     ([128, 64], [128, 128], 1),
 ])
+@pytest.mark.enable_warmup
 def test_gather(src_shape, indices_shape, axis, device):
     if (is_hip_cdna2() or is_hip_cdna3() or is_hip_rdna3() or is_hip_rdna4m()
             or is_hip_rdna4()) and src_shape == [128, 64] and indices_shape == [256, 64]:
@@ -6980,7 +6997,7 @@ def test_gather(src_shape, indices_shape, axis, device):
     indices = torch.randint(0, src.shape[axis], indices_shape, device=device)
     ref = torch.gather(src, axis, indices)
     result = triton_gather(src, axis, indices)
-    torch.testing.assert_close(result, ref, rtol=0, atol=0)
+    assert_close(result, ref, rtol=0, atol=0)
 
 
 @triton.jit

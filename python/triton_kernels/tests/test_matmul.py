@@ -6,11 +6,11 @@ import pytest
 import torch
 from typing import Union
 import triton
-from triton._internal_testing import is_hopper
+from triton._internal_testing import is_compile_warmup, is_hopper
 # matmul utilities
 import triton_kernels.matmul_details.opt_flags as opt_flags
 from triton_kernels.matmul import FlexCtx, PrecisionConfig, FusedActivation, FnSpecs, FnName, Epilogue
-from triton_kernels.matmul import matmul_set_idle_sms, matmul, matmul_torch
+from triton_kernels.matmul import apply_precision, matmul_set_idle_sms, matmul, matmul_torch
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp8_fn, quantize_nvfp4_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
@@ -51,9 +51,9 @@ class DType:
         self.microblock_size = NVFP_BLOCK_SIZE.value if self.is_nvfp4 else MXFP_BLOCK_SIZE.value if self.has_mx_scale else None
 
 
-# Scope to ensure that the opt_flags_constraints are reset after the test
 @pytest.fixture
-def opt_flags_scope(request):
+def opt_flags_scope():
+    opt_flags.reset_opt_flags_constraints()
     yield
     opt_flags.reset_opt_flags_constraints()
 
@@ -308,6 +308,7 @@ def _build_test_op_cases():
 @pytest.mark.parametrize("do_gamma", [False,True])
 @pytest.mark.parametrize("is_persistent", [False,True])
 @pytest.mark.parametrize("num_warps", [4, 8] if is_hopper() else [None])
+@pytest.mark.enable_warmup
 def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, num_warps, n_slices,
             mode, act_dtype_str, weight_dtype_str, output_dtype_str, block_m, b_hbm_swizzling, shuffle_mxfp4_w_layout, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
@@ -330,6 +331,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             mode, act_dtype_str, weight_dtype_str, output_dtype_str, block_m, b_hbm_swizzling, shuffle_mxfp4_w_layout, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
             swiglu_opts, c_hbm_swizzling, device, opt_flags_scope):
+    if is_compile_warmup() and inner_expt_opt is not None and 0 in (m, n, k):
+        pytest.skip("zero-sized inner-expert kernels do not preserve FakeTensor specialization")
     a_dtype = DType(act_dtype_str)
     b_dtype = DType(weight_dtype_str)
     c_dtype = DType(output_dtype_str or act_dtype_str)
@@ -578,22 +581,33 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     # expected_scale inside downcast_to_mxfp_torch, so keep the reference in
     # float32 until that final downcast instead of letting matmul_torch
     # return bf16 and apply the output scale early.
-    ref_y = matmul_torch(
-        a.float() if c_dtype.is_nvfp4 and not a_dtype.is_nvfp4 else a,
-        b.float() if c_dtype.is_nvfp4 and not b_dtype.is_nvfp4 else b,
-        bias,
-        a_ragged_metadata,
-        b_ragged_metadata,
-        gather_indx,
-        scatter_indx,
+    reference_a = a.float() if c_dtype.is_nvfp4 and not a_dtype.is_nvfp4 else a
+    reference_b = b.float() if c_dtype.is_nvfp4 and not b_dtype.is_nvfp4 else b
+    reference_precision = (
         PrecisionConfig(
             a_mx_scale=a_scales,
             a_microblock_size=a_dtype.microblock_size,
             b_mx_scale=b_scale_tri,
             b_microblock_size=b_dtype.microblock_size,
-        ) if c_dtype.is_nvfp4 else precision_opt,
-        gammas=gammas,
+        ) if c_dtype.is_nvfp4 else precision_opt
     )
+    if is_compile_warmup():
+        apply_precision(reference_a, reference_b, reference_precision)
+        reference_dtype = (torch.float32 if c_dtype.is_nvfp4 or inner_expt_opt is not None
+                           else torch.bfloat16 if a_dtype.has_mx_scale else a_dtype.torch_dtype)
+        ref_y = torch.empty(c_shape[:-1] + (n,), dtype=reference_dtype, device=device)
+    else:
+        ref_y = matmul_torch(
+            reference_a,
+            reference_b,
+            bias,
+            a_ragged_metadata,
+            b_ragged_metadata,
+            gather_indx,
+            scatter_indx,
+            reference_precision,
+            gammas=gammas,
+        )
     if swiglu_opts is not None:
         ref_y = swiglu(ref_y, alpha=swiglu_opts[0], precision_config=SwiGLUPrecisionConfig(swiglu_opts[1]))
     if c_dtype.has_global_scale:
@@ -605,16 +619,17 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if isinstance(tri_y_scale, Tensor):
             tri_y_scale = convert_layout(tri_y_scale, layout.StridedLayout()).storage.data
         tri_y = upcast_from_mxfp(tri_y, tri_y_scale, target_dtype=torch.bfloat16, axis=-1).to(ref_y.dtype)
-        ref_target_dtype = ref_y.dtype
-        ref_y, ref_scale = downcast_to_mxfp_torch(
-            ref_y,
-            c_dtype.torch_dtype,
-            axis=-1,
-            scale_dtype=c_dtype.scale_dtype,
-            microblock_size=c_dtype.microblock_size,
-            expected_scale=precision_opt.flex_ctx.out_data.expected_scale,
-        )
-        ref_y = upcast_from_mxfp_torch(ref_y, ref_scale, target_dtype=ref_target_dtype, axis=-1)
+        if not is_compile_warmup():
+            ref_target_dtype = ref_y.dtype
+            ref_y, ref_scale = downcast_to_mxfp_torch(
+                ref_y,
+                c_dtype.torch_dtype,
+                axis=-1,
+                scale_dtype=c_dtype.scale_dtype,
+                microblock_size=c_dtype.microblock_size,
+                expected_scale=precision_opt.flex_ctx.out_data.expected_scale,
+            )
+            ref_y = upcast_from_mxfp_torch(ref_y, ref_scale, target_dtype=ref_target_dtype, axis=-1)
     maxtol, rmstol = None, None
     if c_dtype.is_nvfp4 and a_dtype.is_nvfp4 and b_dtype.is_nvfp4:
         maxtol, rmstol = 6e-1, 4e-2
@@ -625,7 +640,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     elif c_dtype.torch_dtype == torch.float64:
         maxtol, rmstol = 1e-12, 1e-12
     assert_close(ref_y, tri_y, maxtol=maxtol, rmstol=rmstol)
-    if c_dtype.has_global_scale:
+    if c_dtype.has_global_scale and not is_compile_warmup():
         assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
                f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
 

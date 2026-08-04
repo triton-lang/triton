@@ -8,6 +8,7 @@ from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4
 import triton
 import triton.language as tl
+from triton._internal_testing import assert_close, is_compile_warmup
 
 
 def init_mask(mask_mode, B, M, N, device):
@@ -63,6 +64,7 @@ def plus_a_reduce(x, a):
     "broadcast_n",  # broadcast over N: [B,M,1]
 ])
 @pytest.mark.parametrize("dim", [0, 1, 2])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
     # Check float8 hardware support
     if "float8" in dtype_str:
@@ -109,15 +111,15 @@ def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
     if is_mx:
         y_ref = upcast_from_mxfp_torch(y_ref, y_ref_mxscale, torch.float16, axis=-1)
         y_tri = upcast_from_mxfp_torch(y_tri, y_tri_mxscale, torch.float16, axis=-1)
-    assert torch.allclose(y_tri.float(), y_ref.float(), atol=1e-3, rtol=1e-3)
-    if is_flex:
+    assert_close(y_tri.float(), y_ref.float(), atol=1e-3, rtol=1e-3)
+    if is_flex and not is_compile_warmup():
         torch.allclose(y_flex_tri.actual_scale, y_flex_ref.actual_scale, atol=1e-3, rtol=1e-3)
     run_bwd = postprocess_fn is None and "float8" not in dtype_str
     if run_bwd:
         dy = torch.randn_like(y_tri)
         y_tri.backward(dy)
         y_ref.backward(dy)
-        assert torch.allclose(x_tri.grad.float(), x_ref.grad.float(), atol=1e-3, rtol=1e-3)
+        assert_close(x_tri.grad.float(), x_ref.grad.float(), atol=1e-3, rtol=1e-3)
 
 
 @pytest.mark.parametrize("B, M, N", [

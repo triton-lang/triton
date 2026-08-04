@@ -1,3 +1,4 @@
+import importlib
 import multiprocessing
 import os
 import queue
@@ -11,6 +12,7 @@ import triton.language as tl
 from triton import knobs
 from typing import Optional, Set, Union
 from dataclasses import dataclass
+from contextvars import ContextVar
 import pytest
 
 from numpy.random import RandomState
@@ -26,10 +28,50 @@ dtypes_with_bfloat16 = dtypes + ['bfloat16']
 torch_float8_dtypes = ['float8_e4m3fn', 'float8_e5m2']
 torch_dtypes = ['bool'] + int_dtypes + ['uint8'] + float_dtypes + ['bfloat16']
 tma_dtypes = sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"})
+_COMPILE_WARMUP_ACTIVE = ContextVar("triton_compile_warmup_active", default=False)
 
 
 def is_interpreter():
     return os.environ.get('TRITON_INTERPRET', '0') == '1'
+
+
+def is_compile_warmup():
+    return _COMPILE_WARMUP_ACTIVE.get()
+
+
+def rand(*shape, **kwargs):
+    return (torch.empty if is_compile_warmup() else torch.rand)(*shape, **kwargs)
+
+
+def randn(*shape, **kwargs):
+    return (torch.empty if is_compile_warmup() else torch.randn)(*shape, **kwargs)
+
+
+def randint(low, high, size, **kwargs):
+    if is_compile_warmup():
+        return torch.empty(size, dtype=kwargs.get("dtype", torch.int64), device=kwargs.get("device"))
+    return torch.randint(low, high, size, **kwargs)
+
+
+def random_int(low, high, *, warmup_value=None, **kwargs):
+    if is_compile_warmup():
+        return low if warmup_value is None else warmup_value
+    return int(torch.randint(low, high, size=(), **kwargs).item())
+
+
+def random_float(*, warmup_value=0.5, **kwargs):
+    if is_compile_warmup():
+        return warmup_value
+    return float(torch.rand((), **kwargs).item())
+
+
+def reference_tensor(value, dtype):
+    return torch.empty_like(value.data, dtype=dtype) if is_compile_warmup() else value.to(dtype)
+
+
+def assert_close(*args, **kwargs):
+    if not is_compile_warmup():
+        torch.testing.assert_close(*args, **kwargs)
 
 
 def get_current_target():
@@ -258,7 +300,7 @@ class ProcessResult:
     driver_stderr_output: str
 
 
-def _run_in_process_worker(client_fn, q, args, kwargs, env, stderr_file):
+def _call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_listener):
     if env is not None:
         os.environ.update(env)
 
@@ -268,6 +310,8 @@ def _run_in_process_worker(client_fn, q, args, kwargs, env, stderr_file):
         os.dup2(tmp_stderr.fileno(), 2)
         exc = None
 
+        previous_listener = knobs.compilation.listener
+        knobs.compilation.listener = compilation_listener
         try:
             client_fn(*args, **kwargs)
             # Raise any CUDA errors
@@ -275,10 +319,100 @@ def _run_in_process_worker(client_fn, q, args, kwargs, env, stderr_file):
         except Exception as e:
             exc = e
         finally:
+            knobs.compilation.listener = previous_listener
             sys.stderr.flush()
             os.dup2(saved_stderr_fd, 2)
             os.close(saved_stderr_fd)
-            q.put(exc)
+    return exc
+
+
+def _run_in_process_worker(client_fn, q, args, kwargs, env, stderr_file, compilation_listener):
+    q.put(_call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_listener))
+
+
+def _run_in_replenishing_process_worker(task_pipe, preload_module, triton_key):
+    importlib.import_module(preload_module)
+    # The source tree is fixed for the pool lifetime; avoid rehashing it in each worker.
+    triton.runtime.cache.triton_key = lambda: triton_key
+    torch.cuda.synchronize()
+    while True:
+        try:
+            client_fn, args, kwargs, env, stderr_file, compilation_listener = task_pipe.recv()
+        except EOFError:
+            return
+        previous_environment = dict(os.environ)
+        try:
+            with knobs.compilation.scope(), knobs.runtime.scope(), knobs.cache.scope():
+                exc = _call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_listener)
+        finally:
+            os.environ.clear()
+            os.environ.update(previous_environment)
+        task_pipe.send(exc)
+        if exc is not None:
+            return
+
+
+class ReplenishingProcessPool:
+
+    def __init__(self, preload_module):
+        self.preload_module = preload_module
+        self.triton_key = triton.runtime.cache.triton_key()
+        self.ctx = multiprocessing.get_context("forkserver")
+        self.worker = None
+        self.spare = None
+
+    def _start_process(self):
+        task_pipe, child_pipe = self.ctx.Pipe()
+        process = self.ctx.Process(
+            target=_run_in_replenishing_process_worker,
+            args=(child_pipe, self.preload_module, self.triton_key),
+            daemon=True,
+        )
+        process.start()
+        child_pipe.close()
+        return process, task_pipe
+
+    def start(self):
+        if self.worker is None:
+            self.worker = self._start_process()
+            self.spare = self._start_process()
+
+    def close(self):
+        for current in (self.worker, self.spare):
+            if current is None:
+                continue
+            process, task_pipe = current
+            task_pipe.close()
+            process.terminate()
+            process.join()
+        self.worker = None
+        self.spare = None
+
+    def run(self, client_fn, args=(), kwargs=None, env=None):
+        if kwargs is None:
+            kwargs = {}
+        self.start()
+        process, task_pipe = self.worker
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stderr_file = os.path.join(tmpdir, "err.log")
+            task_pipe.send((client_fn, args, kwargs, env, stderr_file, knobs.compilation.listener))
+            try:
+                exc = task_pipe.recv()
+            except EOFError:
+                process.join()
+                with open(stderr_file, "r") as f:
+                    stderr = f.read()
+                print(stderr, file=sys.stderr)
+                raise RuntimeError(
+                    f"child process exited with code {process.exitcode} without returning a result") from None
+            with open(stderr_file, "r") as f:
+                stderr = f.read()
+        if exc is not None:
+            process.join()
+            task_pipe.close()
+            self.worker = self.spare
+            self.spare = self._start_process()
+        return ProcessResult(exc, stderr)
 
 
 def run_in_process(client_fn, args=(), kwargs=None, env=None):
@@ -289,7 +423,10 @@ def run_in_process(client_fn, args=(), kwargs=None, env=None):
     q = ctx.Queue()
     with tempfile.TemporaryDirectory() as tmpdir:
         stderr_file = os.path.join(tmpdir, "err.log")
-        process = ctx.Process(target=_run_in_process_worker, args=(client_fn, q, args, kwargs, env, stderr_file))
+        process = ctx.Process(
+            target=_run_in_process_worker,
+            args=(client_fn, q, args, kwargs, env, stderr_file, knobs.compilation.listener),
+        )
         process.start()
         process.join()
         with open(stderr_file, "r") as f:
