@@ -9,7 +9,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %pid = tt.get_program_id x : i32
     // CHECK: scf.while
     // CHECK: scf.condition
-    // CHECK: %[[RESPONSE:.*]] = ttg.clc_try_cancel : tensor<2xi64, #[[REG_1CTA:[A-Za-z0-9_]+]]>
+    // CHECK: %[[RESPONSE:.*]] = ttng.clc_try_cancel_sync : tensor<2xi64, #[[REG_1CTA:[A-Za-z0-9_]+]]>
     // CHECK-NEXT: %[[MARKER:.*]] = ttg.local_alloc %[[RESPONSE]] {alignment = 16 : i32} : (tensor<2xi64, #[[REG_1CTA]]>) -> !ttg.memdesc<2xi64, #[[SHARED_1CTA:[A-Za-z0-9_]+]], {{.*}}, mutable>
     // CHECK: tt.get_num_programs x
     %num = tt.get_num_programs x : i32
@@ -36,7 +36,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-COUNT-1: tt.get_program_id x
     %pid0 = tt.get_program_id x : i32
     // CHECK: ^bb0(%[[PID:.*]]: i32, %{{.*}}: i1):
-    // CHECK: %[[RESPONSE_2CTA:.*]] = ttg.clc_try_cancel : tensor<2xi64, #[[REG_2CTA:[A-Za-z0-9_]+]]>
+    // CHECK: %[[RESPONSE_2CTA:.*]] = ttng.clc_try_cancel_sync : tensor<2xi64, #[[REG_2CTA:[A-Za-z0-9_]+]]>
     // CHECK-NEXT: %[[MARKER_2CTA:.*]] = ttg.local_alloc %[[RESPONSE_2CTA]] {alignment = 16 : i32} : (tensor<2xi64, #[[REG_2CTA]]>) -> !ttg.memdesc<2xi64, #[[SHARED_2CTA:[A-Za-z0-9_]+]], {{.*}}, mutable>
     %pid1 = tt.get_program_id x : i32
     // CHECK: arith.addi %[[PID]], %[[PID]]
@@ -58,7 +58,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-COUNT-1: tt.get_program_id y
     // CHECK-COUNT-1: tt.get_program_id z
     // CHECK: scf.while
-    // CHECK: %[[RESPONSE:.*]] = ttg.clc_try_cancel
+    // CHECK: %[[RESPONSE:.*]] = ttng.clc_try_cancel_sync
     // CHECK-NEXT: %[[MARKER:.*]] = ttg.local_alloc %[[RESPONSE]] {alignment = 16 : i32}
     %pid_x = tt.get_program_id x : i32
     %ptr_x = tt.addptr %out, %pid_x : !tt.ptr<i32>, i32
@@ -103,7 +103,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: tt.func public @first_kernel
   tt.func public @first_kernel(%out: !tt.ptr<i32>) {
     // CHECK: scf.while
-    // CHECK: ttg.clc_try_cancel
+    // CHECK: ttng.clc_try_cancel_sync
     %pid = tt.get_program_id x : i32
     %ptr = tt.addptr %out, %pid : !tt.ptr<i32>, i32
     tt.store %ptr, %pid : !tt.ptr<i32>
@@ -113,7 +113,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: tt.func public @second_kernel
   tt.func public @second_kernel(%out: !tt.ptr<i32>) {
     // CHECK: scf.while
-    // CHECK: ttg.clc_try_cancel
+    // CHECK: ttng.clc_try_cancel_sync
     %pid = tt.get_program_id y : i32
     %ptr = tt.addptr %out, %pid : !tt.ptr<i32>, i32
     tt.store %ptr, %pid : !tt.ptr<i32>

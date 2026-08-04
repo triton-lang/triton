@@ -38,7 +38,7 @@ static ttg::MemDescType getBarrierType(MLIRContext *ctx, unsigned numCTAs) {
                                /*mutableMemory=*/true);
 }
 
-static LogicalResult lowerSite(ttg::CLCTryCancelOp issue) {
+static LogicalResult lowerSite(ttng::CLCTryCancelSyncOp issue) {
   auto oldLoop = issue->getParentOfType<scf::WhileOp>();
   if (!oldLoop)
     return issue.emitOpError("expected to be nested in an scf.while");
@@ -117,10 +117,10 @@ public:
   using Base::Base;
 
   void runOnOperation() override {
-    SmallVector<ttg::CLCTryCancelOp> issues;
+    SmallVector<ttng::CLCTryCancelSyncOp> issues;
     getOperation().walk(
-        [&](ttg::CLCTryCancelOp issue) { issues.push_back(issue); });
-    for (ttg::CLCTryCancelOp issue : issues) {
+        [&](ttng::CLCTryCancelSyncOp issue) { issues.push_back(issue); });
+    for (ttng::CLCTryCancelSyncOp issue : issues) {
       if (ttg::lookupNumCTAs(issue) != 1) {
         issue.emitError("CLC lowering supports num_cta=1 at the moment");
         return signalPassFailure();

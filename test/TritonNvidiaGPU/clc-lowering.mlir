@@ -20,7 +20,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ^bb0(%pid_x: i32, %pid_y: i32, %pid_z: i32):
       // CHECK: ttng.barrier_expect %[[BARRIER]], 16 {fromCTA = 0 : i32}, {{.*}}
       // CHECK-NEXT: ttng.clc_try_cancel %[[RESPONSE]], %[[BARRIER]]
-      %response = ttg.clc_try_cancel : tensor<2xi64, #regs>
+      %response = ttng.clc_try_cancel_sync : tensor<2xi64, #regs>
       %marker = ttg.local_alloc %response {alignment = 16 : i32} : (tensor<2xi64, #regs>) -> !ttg.memdesc<2xi64, #shared, #smem, mutable>
       // CHECK: "tile"
       "tile"(%pid_x, %pid_y, %pid_z) : (i32, i32, i32) -> ()
@@ -68,7 +68,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
   tt.func @wrong_response_shape() {
     // expected-error @+1 {{response must have shape}}
-    %response = ttg.clc_try_cancel : tensor<4xi64>
+    %response = ttng.clc_try_cancel_sync : tensor<4xi64>
     tt.return
   }
 }
@@ -78,7 +78,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
   tt.func @wrong_response_element() {
     // expected-error @+1 {{response element type must be i64}}
-    %response = ttg.clc_try_cancel : tensor<2xf32>
+    %response = ttng.clc_try_cancel_sync : tensor<2xf32>
     tt.return
   }
 }
@@ -92,7 +92,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     } do {
     ^bb0(%active: i1):
       // expected-error @+1 {{expected response to have exactly one ttg.local_alloc user}}
-      %response = ttg.clc_try_cancel : tensor<2xi64>
+      %response = ttng.clc_try_cancel_sync : tensor<2xi64>
       scf.yield %active : i1
     }
     tt.return

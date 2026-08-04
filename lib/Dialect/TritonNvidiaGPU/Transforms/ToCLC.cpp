@@ -107,7 +107,7 @@ static void convertToCLC(tt::FuncOp kernel) {
   builder.setInsertionPointToStart(after);
   auto responseType = getResponseTensorType(kernel);
   Value response =
-      ttg::CLCTryCancelOp::create(builder, loc, responseType).getResponse();
+      CLCTryCancelSyncOp::create(builder, loc, responseType).getResponse();
   Value responseBuffer = ttg::LocalAllocOp::create(
       builder, loc, getResponseBufferType(ctx, ttg::lookupNumCTAs(kernel)),
       response, 16);
