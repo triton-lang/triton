@@ -1,6 +1,7 @@
 import os
 from contextlib import contextmanager
 
+import pytest
 import torch
 import triton
 import triton.language as tl
@@ -8,11 +9,22 @@ import triton.language as tl
 
 @contextmanager
 def enable_dump_context(pass_name="1"):
-    try:
-        os.environ["MLIR_ENABLE_DUMP"] = pass_name
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setenv("MLIR_ENABLE_DUMP", pass_name)
         yield
-    finally:
-        os.environ["MLIR_ENABLE_DUMP"] = "0"
+
+
+@pytest.mark.parametrize("previous", [None, "existing"])
+def test_dump_context_restores_environment(monkeypatch, previous):
+    if previous is None:
+        monkeypatch.delenv("MLIR_ENABLE_DUMP", raising=False)
+    else:
+        monkeypatch.setenv("MLIR_ENABLE_DUMP", previous)
+
+    with enable_dump_context("temporary"):
+        assert os.environ["MLIR_ENABLE_DUMP"] == "temporary"
+
+    assert os.environ.get("MLIR_ENABLE_DUMP") == previous
 
 
 def test_fn_dump(capfd, device, fresh_triton_cache):

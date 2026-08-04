@@ -51,9 +51,9 @@ class DType:
         self.microblock_size = NVFP_BLOCK_SIZE.value if self.is_nvfp4 else MXFP_BLOCK_SIZE.value if self.has_mx_scale else None
 
 
-# Scope to ensure that the opt_flags_constraints are reset after the test
 @pytest.fixture
-def opt_flags_scope(request):
+def opt_flags_scope():
+    opt_flags.reset_opt_flags_constraints()
     yield
     opt_flags.reset_opt_flags_constraints()
 
