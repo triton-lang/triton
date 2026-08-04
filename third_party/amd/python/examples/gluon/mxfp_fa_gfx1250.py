@@ -179,9 +179,9 @@ def get_softmax_layout(shape, num_warps, num_ctas):
 
     inner //= num_ctas
     return ttgl.BlockedLayout(  #
-        size_per_thread=[1, 1, inner // num_warps // 2],  #
+        size_per_thread=[1, num_warps, inner // 2],  #
         threads_per_warp=[1, 16, 2],  #
-        warps_per_cta=[1, 1, num_warps],  #
+        warps_per_cta=[1, num_warps, 1],  #
         order=[2, 1, 0],  #
         cga_layout=cga_layout)
 
