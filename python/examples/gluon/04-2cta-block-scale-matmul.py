@@ -14,6 +14,7 @@ import pytest
 import torch
 
 import triton
+from triton._internal_testing import assert_close, is_compile_warmup
 import triton.experimental.gluon as gluon
 import triton.experimental.gluon.language as gl
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
@@ -93,6 +94,13 @@ def get_split_dim(cga_layout, dim):
 def random_quantized_tensor(MN, K, format):
     assert format in ["mxfp4", "mxfp8", "nvfp4"]
     VEC_SIZE = 16 if format == "nvfp4" else 32
+    if is_compile_warmup():
+        is_fp8 = format == "mxfp8"
+        value = torch.empty((MN, K if is_fp8 else K // 2), device="cuda",
+                            dtype=torch.float8_e4m3fn if is_fp8 else torch.uint8)
+        scales = torch.empty((MN, K // VEC_SIZE), device="cuda",
+                             dtype=torch.float8_e4m3fn if format == "nvfp4" else torch.uint8)
+        return value, scales, torch.empty((MN, K), device="cuda", dtype=torch.float32)
 
     # Generate a random quantized tensor and its scale factors, assuming we are
     # scaling along the K dimension.
@@ -895,6 +903,7 @@ def mma_scaled_matmul(A, B, A_scale, B_scale, VEC_SIZE, out_dtype=torch.float16,
 ])
 @pytest.mark.parametrize("scheduler", [SCHEDULER_CLC, SCHEDULER_SPS])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.enable_warmup(min_capability=10)
 def test_mma_scaled_warp_specialized(M, N, K, a_format, b_format, num_ctas, BLOCK_N, EPILOGUE_BLOCK_N, num_buffers,
                                      scheduler):
     if a_format != b_format and K % 128 != 0:
@@ -910,7 +919,7 @@ def test_mma_scaled_warp_specialized(M, N, K, a_format, b_format, num_ctas, BLOC
     C = mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, scheduler=scheduler, BLOCK_M=BLOCK_M,
                                     BLOCK_N=BLOCK_N, EPILOGUE_BLOCK_N=EPILOGUE_BLOCK_N, num_buffers=num_buffers,
                                     num_ctas=num_ctas)
-    torch.testing.assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
+    assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
 
 
 # ---------------------------------------------------------------------------

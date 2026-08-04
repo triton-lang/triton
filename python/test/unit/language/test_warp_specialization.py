@@ -4,8 +4,10 @@ import pathlib
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_hip, is_hopper, is_blackwell
+from triton._internal_testing import is_compile_warmup, is_hip, is_hopper, is_blackwell
 from triton.tools.tensor_descriptor import TensorDescriptor
+
+pytestmark = pytest.mark.enable_warmup(min_capability=9)
 
 if not is_hip() and torch.cuda.is_available() and torch.cuda.get_device_capability()[0] in [9, 10, 11]:
     from triton._C.libtriton import nvidia
@@ -21,6 +23,7 @@ def is_hopper_or_blackwell():
 
 @pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
 @pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
+@pytest.mark.disable_warmup(reason="compiles an explicit IR fixture rather than a JIT launch")
 def test_warp_specialize_basic_ir(tmp_path: pathlib.Path):
     ir = """
     tt.func @kernel(%arg0: !tt.ptr<i32>) {
@@ -56,6 +59,7 @@ def test_warp_specialize_basic_ir(tmp_path: pathlib.Path):
 
 @pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.disable_warmup(reason="compiles an explicit IR fixture rather than a JIT launch")
 def test_warp_specialize_tmem_ir(tmp_path: pathlib.Path):
     ir = """
     #blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
@@ -124,6 +128,7 @@ def test_warp_specialize_tmem_ir(tmp_path: pathlib.Path):
 
 @pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
 @pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
+@pytest.mark.disable_warmup(reason="compiles an explicit IR fixture rather than a JIT launch")
 def test_warpgroup_reduction(tmp_path: pathlib.Path):
 
     def template(i, num_warps, in_ptr, out_ptr):
@@ -297,6 +302,8 @@ def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_S
     kernel = matmul_tma_ws_kernel[grid](A, B, C, *A.stride(), *B.stride(), *C.stride(), M, N, K, num_stages,
                                         BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M, num_warps=num_warps,
                                         USE_FP8=use_fp8, A_USE_TMA=a_use_tma, B_USE_TMA=b_use_tma)
+    if is_compile_warmup():
+        return
 
     ref_out = torch.empty((M, N), dtype=dtype, device=device)
     cublas.matmul(A, B, ref_out)
@@ -322,7 +329,7 @@ def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_S
 @pytest.mark.parametrize("a_use_tma", [False, True])
 @pytest.mark.parametrize("b_use_tma", [False, True])
 @pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
-def test_warp_specialize_tma_matmul_consan(M, N, K, num_stages, a_use_tma, b_use_tma, fresh_knobs):
+def test_warp_specialize_tma_matmul_consan(M, N, K, num_stages, a_use_tma, b_use_tma, fresh_compilation_knobs):
     if is_hopper():
         # FIXME: Hopper warp specialization generates incorrect debug info.
         triton.knobs.compilation.disable_line_info = True
@@ -423,6 +430,8 @@ def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE
                                                    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M, NUM_SMS,
                                                    num_warps=num_warps, USE_FP8=use_fp8, FLATTEN=flatten
                                                    and is_blackwell(), A_USE_TMA=a_use_tma, B_USE_TMA=b_use_tma)
+    if is_compile_warmup():
+        return
     ttgir = kernel.asm["ttgir"]
     if is_blackwell():
         assert "ttng.tc_gen5_mma" in ttgir
@@ -447,7 +456,7 @@ def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE
 @pytest.mark.parametrize("b_use_tma", [False, True])
 @pytest.mark.parametrize("flatten", [False, True] if is_blackwell() else [True])
 @pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
-def test_warp_specialize_tma_matmul_persistent_consan(M, N, K, a_use_tma, b_use_tma, flatten, fresh_knobs):
+def test_warp_specialize_tma_matmul_persistent_consan(M, N, K, a_use_tma, b_use_tma, flatten, fresh_compilation_knobs):
     if is_hopper():
         # FIXME: Hopper warp specialization generates incorrect debug info.
         triton.knobs.compilation.disable_line_info = True
@@ -539,6 +548,8 @@ def test_warp_specialize_attention_forward(M, N, BLOCK_M, HEAD_DIM, num_stages, 
                                                   BLOCK_M, HEAD_DIM, False, num_stages=num_stages, num_warps=num_warps)
     attention_inner_loop_kernel[(M // BLOCK_M, )](desc_q, desc_k, desc_v, desc_acc, l_i, m_i, M, N, 0.5, BLOCK_M,
                                                   HEAD_DIM, True, num_stages=num_stages, num_warps=num_warps)
+    if is_compile_warmup():
+        return
 
     torch.testing.assert_close(acc.to(torch.float32), acc_ref.to(torch.float32), atol=0, rtol=0)
     torch.testing.assert_close(l_i.to(torch.float32), l_i_ref.to(torch.float32), atol=0, rtol=0)
@@ -640,6 +651,8 @@ def test_warp_specialize_attention_persistent_forward(M, N, BLOCK_M, HEAD_DIM, n
                                                        HEAD_DIM, True, num_stages=num_stages, num_warps=num_warps)
     attention_inner_loop_kernel[(M // BLOCK_M, )](desc_q, desc_k, desc_v, desc_acc_ref, l_i_ref, m_i_ref, M, N, 0.5,
                                                   BLOCK_M, HEAD_DIM, False, num_stages=num_stages, num_warps=num_warps)
+    if is_compile_warmup():
+        return
 
     torch.testing.assert_close(acc.to(torch.float32), acc_ref.to(torch.float32), atol=0, rtol=0)
     torch.testing.assert_close(l_i.to(torch.float32), l_i_ref.to(torch.float32), atol=0, rtol=0)
@@ -750,7 +763,8 @@ def group_gemm_tma_fn(group_A, group_B):
     grid = lambda META: (META['NUM_SM'], )
     out = grouped_matmul_tma_kernel[grid](d_a_ptrs, d_b_ptrs, d_c_ptrs, M, N, K, d_g_lds, group_size, BLOCK_SIZE_M=128,
                                           BLOCK_SIZE_N=128, BLOCK_SIZE_K=64, NUM_SM=4, num_stages=3)
-    assert "ttg.warp_specialize" in out.asm["ttgir"]
+    if not is_compile_warmup():
+        assert "ttg.warp_specialize" in out.asm["ttgir"]
     return group_C
 
 
@@ -776,5 +790,7 @@ def test_grouped_gemm(M, N, K, group_size):
     ref_out = [torch.matmul(a, b) for a, b in zip(group_A, group_B)]
 
     tri_tma_out = group_gemm_tma_fn(group_A, group_B_T)
+    if is_compile_warmup():
+        return
     for i in range(group_size):
         assert torch.allclose(ref_out[i], tri_tma_out[i], atol=1e-2, rtol=1e-2)
