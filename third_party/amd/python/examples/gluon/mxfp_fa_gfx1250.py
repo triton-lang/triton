@@ -1008,6 +1008,7 @@ class AttentionEpilogue:
         ttgl.static_assert(cfg.SPLIT_K_MODE == 'cta')
 
         GROUP_SZ: ttgl.constexpr = cfg.NUM_Q_HEADS // cfg.NUM_K_HEADS
+        assert cfg.BLOCK_M == GROUP_SZ
 
         # Store partial output
         o_smem_layout: ttgl.constexpr = get_shared_layout(  #
@@ -2924,7 +2925,6 @@ def attn_fwd(  #
         m = torch.zeros_like(l, dtype=out_dtype)
 
         if split_k > 1:
-            assert block_m == group_sz
             o = o.repeat_interleave(split_k, dim=2)
             l = torch.unsqueeze(l, dim=-2).repeat_interleave(split_k, dim=-2)
             m = torch.zeros_like(l, dtype=out_dtype)
