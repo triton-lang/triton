@@ -4,7 +4,6 @@ import os
 import subprocess
 import sys
 import torch
-import triton
 from triton._internal_testing import is_compile_warmup
 from triton_kernels.numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
@@ -331,15 +330,21 @@ def pad_ragged_tensor(x, x_ragged_metadata, hbm_swizzling, transpose):
     return y, y_ragged_metadata
 
 
+class _WarmupTensorProxy:
+
+    def __init__(self, tensor):
+        self.tensor = tensor
+
+    def __getattr__(self, name):
+        return getattr(self.tensor, name)
+
+
 def convert_layout_for_testing(tensor, layout):
     converted = convert_layout(tensor, layout)
     if not is_compile_warmup() or converted is tensor:
         return converted
 
-    from triton_kernels.tensor_details.layout_details.blackwell_scale import (
-        BlackwellMXScaleLayout,
-        _swizzle_blackwell_mx_scale,
-    )
+    from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellMXScaleLayout
 
     data = tensor.storage.data
     if (not isinstance(layout, BlackwellMXScaleLayout) or data.device.type in ["cpu", "meta"]
@@ -348,13 +353,7 @@ def convert_layout_for_testing(tensor, layout):
 
     transformation = layout.make_transformation(tensor.shape, tensor.dtype == FP4)
     data = torch.empty(tensor.shape, dtype=data.dtype, device=data.device)
-    data = data.reshape((transformation.B, transformation.K, transformation.N))
-    block_k = 64
-    grid = (transformation.B * triton.cdiv(transformation.N_pad, transformation.ALIGN_N) *
-            triton.cdiv(transformation.K_pad, block_k), )
-    _swizzle_blackwell_mx_scale[grid](data.view(torch.uint8), transformation.K, transformation.N,
-                                      transformation.K_pad, transformation.N_pad, *data.stride(),
-                                      converted.storage.data.view(torch.uint8), BLOCK_K=block_k, num_warps=4)
+    transformation.swizzle_data(_WarmupTensorProxy(data))
     return converted
 
 
