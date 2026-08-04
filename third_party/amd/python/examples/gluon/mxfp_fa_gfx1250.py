@@ -2590,25 +2590,6 @@ def mxfp_attn_epilogue(  #
             l = buffer_load(l_ptr + l_off, l_offs)
             m = buffer_load(m_ptr + m_off, m_offs)
 
-            smem_layout: ttgl.constexpr = get_shared_layout(  #
-                shape=[BLOCK_M, HEAD_SZ],  #
-                num_ctas=NUM_CTAS, cta_axis=1,  #
-                padding=True)
-            o_off = SPLIT_K * GROUP_SZ * HEAD_SZ * (NUM_GROUPS * off_z + off_h)
-            o_desc = tdm.make_tensor_descriptor(  #
-                base=o_ptr + o_off,  #
-                shape=[SPLIT_K * GROUP_SZ, HEAD_SZ],  #
-                strides=[HEAD_SZ, 1],  #
-                block_shape=[BLOCK_M, HEAD_SZ],  #
-                layout=smem_layout)
-            o_smem = ttgl.allocate_shared_memory(  #
-                element_ty=o_ptr.dtype.element_ty,  #
-                shape=[SPLIT_K] + [BLOCK_M, HEAD_SZ],  #
-                layout=o_desc.layout)
-
-            for i in ttgl.static_range(SPLIT_K):
-                tdm.async_load(o_desc, [i * BLOCK_M, 0], o_smem.index(i))
-
             m_ij = max(m, 0)
             m_ij_scaled = m_ij * sm_scale
             m_diff = m * sm_scale - m_ij_scaled[None, :]
@@ -2616,10 +2597,31 @@ def mxfp_attn_epilogue(  #
             alpha_s = split_n(alpha, SPLIT_K)
             l_i = ttgl.sum(l * alpha, 0)
 
+            smem_layout: ttgl.constexpr = get_shared_layout(  #
+                shape=[SPLIT_K * BLOCK_M, HEAD_SZ],  #
+                num_ctas=NUM_CTAS, cta_axis=1,  #
+                padding=True)
+            o_off = SPLIT_K * GROUP_SZ * HEAD_SZ * (NUM_GROUPS * off_z + off_h)
+            o_desc = tdm.make_tensor_descriptor(  #
+                base=o_ptr + o_off,  #
+                shape=[SPLIT_K * GROUP_SZ, HEAD_SZ],  #
+                strides=[HEAD_SZ, 1],  #
+                block_shape=[SPLIT_K * BLOCK_M, HEAD_SZ],  #
+                layout=smem_layout)
+            o_smem = ttgl.allocate_shared_memory(  #
+                element_ty=o_ptr.dtype.element_ty,  #
+                shape=[SPLIT_K * BLOCK_M, HEAD_SZ],  #
+                layout=o_desc.layout)
+
+            tdm.async_load(o_desc, [0, 0], o_smem)
+
             acc = ttgl.full([1, BLOCK_M, HEAD_SZ], 0, ttgl.float32, softmax_layout)
+            tdm.async_wait(0)
+
             for i in ttgl.static_range(SPLIT_K):
-                tdm.async_wait(SPLIT_K - 1 - i)
-                o = o_smem.index(i).reshape([1, BLOCK_M, HEAD_SZ]).load(softmax_layout)
+                _smem = o_smem.reshape([1, SPLIT_K * BLOCK_M, HEAD_SZ])
+                _smem = _smem.slice(i * BLOCK_M, BLOCK_M, 1)
+                o = _smem.load(softmax_layout)
                 acc += o * alpha_s[i][:, :, None]
 
             l_recip = 1 / l_i
