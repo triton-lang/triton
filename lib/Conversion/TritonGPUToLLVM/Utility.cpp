@@ -250,10 +250,6 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
   return b.or_(orPart, xorPart, /*disjoint=*/true);
 }
 
-bool cvtAlwaysUseWarpShuffle(ConvertLayoutOp cvt) {
-  return cvt->getParentOp()->hasAttrOfType<UnitAttr>("always_use_warp_shuffle");
-}
-
 Value maybeAnd(OpBuilder &builder, Location loc, Value a, Value b) {
   auto tb = TritonLLVMOpBuilder(loc, builder);
   if (a && b) {
@@ -546,9 +542,7 @@ SmallVector<std::pair<Value, Value>> computeBlockLocalOffsets(
     RewriterBase &rewriter, const TargetInfoBase &targetInfo) {
   MLIRContext *ctx = memDescTy.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto sharedLayout = triton::gpu::isPaddedEncoding(memDescTy.getEncoding())
-                          ? paddedLinearLayout(memDescTy)
-                          : toLinearLayout(memDescTy);
+  auto sharedLayout = triton::gpu::toLinearLayoutIgnoringPadding(memDescTy);
   auto allDims = standardOutDimNames(ctx, memDescTy.getRank());
   auto kRegister = str_attr("register");
   auto kLane = str_attr("lane");
@@ -1449,10 +1443,8 @@ std::pair<uint64_t, uint64_t> SharedMemoryObject::getMaskSpanOffsetsAndBlocks(
   if (allocShape == shape) {
     return {0, 0};
   }
-  auto totalLl =
-      triton::gpu::isPaddedEncoding(srcTy.getEncoding())
-          ? triton::gpu::paddedLinearLayout(allocShape, srcTy.getEncoding())
-          : triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding());
+  auto totalLl = triton::gpu::toLinearLayoutIgnoringPadding(
+      allocShape, srcTy.getEncoding());
   // Map from dimNames to offset, block
   auto invLl = totalLl.pseudoinvert();
   SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
@@ -1495,12 +1487,7 @@ std::pair<Value, Value> SharedMemoryObject::getShmemOffsetAndBlock(
 
   // We return the offset without the padding. The padding will be added in the
   // lowering
-  LinearLayout ll;
-  if (triton::gpu::isPaddedEncoding(srcTy.getEncoding())) {
-    ll = triton::gpu::paddedLinearLayout(srcTy);
-  } else {
-    ll = triton::gpu::toLinearLayout(srcTy);
-  }
+  LinearLayout ll = triton::gpu::toLinearLayoutIgnoringPadding(srcTy);
 
   auto layoutOffsets =
       triton::gpu::dropPipeliningDim(ArrayRef(offsets), srcTy.getEncoding());
@@ -2085,7 +2072,7 @@ SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
   //                                              └─────────┘
   auto *curBlock = rewriter.getInsertionBlock();
   auto opPosition = rewriter.getInsertionPoint();
-  auto *remainingOpsBlock = rewriter.splitBlock(curBlock, opPosition);
+  auto *remainingOpsBlock = curBlock->splitBlock(opPosition);
 
   IRMapping regionMap;
   Region &parent = *curBlock->getParent();
@@ -2119,10 +2106,8 @@ SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
 std::tuple<Block *, Block *, Block *> createIfBlock(RewriterBase &b,
                                                     Location loc, Value cnd) {
   Block *prevBlock = b.getInsertionBlock();
-  Block *ifBlock = b.splitBlock(prevBlock, b.getInsertionPoint());
-
-  // Split a block after the call.
-  Block *thenBlock = b.splitBlock(ifBlock, ifBlock->begin());
+  Block *thenBlock = prevBlock->splitBlock(b.getInsertionPoint());
+  Block *ifBlock = b.createBlock(thenBlock);
   b.setInsertionPointToEnd(ifBlock);
   LLVM::BrOp::create(b, loc, thenBlock);
   b.setInsertionPointToEnd(prevBlock);

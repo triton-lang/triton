@@ -1,25 +1,29 @@
 """
-E2E test verifying that the compiler fence prevents MachineSink from sinking
-LDS loads past barriers in tensor atomic RMW lowering on gfx1250.
+Regression test for the gfx1250 tensor atomic RMW MachineSink miscompile.
 
 Background: When buffer atomics are not enabled, AtomicRMWOp lowering creates
 a condBr (s_cbranch) to mask which threads execute the atomic. LLVM's
-MachineSink can sink preceding LDS loads (from reduce cross-warp communication)
-past barriers into the condBr's successor blocks, causing incorrect results.
+MachineSink could sink preceding LDS loads (from reduce cross-warp
+communication) past barriers into the condBr's successor blocks, producing
+incorrect results (llvm/llvm-project#181708).
 
-The compiler fence (inline asm with ~{memory}) has mayStore()=true, which sets
-SawStore in MachineSink's bottom-up walk, preventing loads from being sunk.
+This was originally worked around in Triton with an inline-asm compiler fence
+(triton-lang/triton#9624). The underlying LLVM bug is now fixed upstream
+(llvm/llvm-project#182000), so the fence has been removed and correctness is
+provided by LLVM itself.
 
-This test compiles a kernel that exercises the vulnerable pattern:
+This test guards against a regression (e.g. an LLVM downgrade) reintroducing
+the sink. It compiles a kernel that exercises the vulnerable pattern:
   2D load -> tl.sum (reduce, uses LDS) -> tl.atomic_add
 
-It checks the AMDGCN assembly to verify that the last ds_load (LDS load
-from the reduce) appears BEFORE the s_cbranch (condBr from emitAtomicRMW),
-not after it. If MachineSink sinks the load, it would appear after the branch.
+and checks the AMDGCN assembly to verify that the last ds_load (LDS load from
+the reduce) appears BEFORE the s_cbranch (condBr from emitAtomicRMW), not
+after it. If the load were sunk, it would appear after the branch.
 
 When running on a gfx1250 GPU, it also verifies correctness of the result.
 
-See https://github.com/llvm/llvm-project/issues/181708.
+See https://github.com/llvm/llvm-project/issues/181708 and its fix
+https://github.com/llvm/llvm-project/pull/182000.
 """
 
 import re
@@ -79,7 +83,9 @@ def test_ds_load_not_sunk_past_cbranch():
     """Verify that ds_load from reduce is not sunk past s_cbranch from atomic.
 
     This tests the non-buffer-atomic code path (global_atomic + condBr thread
-    masking), which is the path vulnerable to the MachineSink bug.
+    masking), which is the path vulnerable to the MachineSink bug. With the LLVM
+    fix in place, the load stays before the branch even though Triton no longer
+    emits a compiler fence.
     """
 
     # Disable buffer atomics to exercise the global_atomic + condBr path
@@ -115,7 +121,7 @@ def test_ds_load_not_sunk_past_cbranch():
     assert last_ds_load < first_cbranch_after_last_ds_load, (
         f"ds_load (line {last_ds_load}) was sunk past s_cbranch "
         f"(line {first_cbranch_after_last_ds_load}). "
-        f"The compiler fence may not be working.\n"
+        f"The LLVM MachineSink fix (llvm/llvm-project#182000) may have regressed.\n"
         f"ds_load line: {lines[last_ds_load].strip()}\n"
         f"s_cbranch line: {lines[first_cbranch_after_last_ds_load].strip()}")
 

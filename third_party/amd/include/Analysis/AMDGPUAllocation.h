@@ -6,10 +6,13 @@
 
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 
+namespace mlir::triton::gpu {
+class ConvertLayoutOp;
+}
+
 namespace mlir::triton::AMD {
 
-unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
-                                        RankedTensorType dstTy,
+unsigned getConvertLayoutScratchInBytes(gpu::ConvertLayoutOp op,
                                         TargetInfoBase &targetInfo);
 
 unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,

@@ -87,8 +87,7 @@ public:
     }
 
     Block *currentBlock = rewriter.getInsertionBlock();
-    Block *afterLoad =
-        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    Block *afterLoad = currentBlock->splitBlock(rewriter.getInsertionPoint());
     afterLoad->addArgument({elemTy}, {loc});
 
     Block *trueBlock = rewriter.createBlock(afterLoad);
@@ -157,8 +156,7 @@ public:
     }
 
     Block *currentBlock = rewriter.getInsertionBlock();
-    Block *afterStore =
-        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    Block *afterStore = currentBlock->splitBlock(rewriter.getInsertionPoint());
     Block *trueBlock = rewriter.createBlock(afterStore);
     rewriter.setInsertionPointToEnd(currentBlock);
     LLVM::CondBrOp::create(rewriter, loc, mask, trueBlock, afterStore);

@@ -5,6 +5,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include "mlir/Support/LLVM.h"
+#include "triton/Analysis/CallGraph.h"
 #include "triton/Analysis/Utility.h"
 
 #include <algorithm>
