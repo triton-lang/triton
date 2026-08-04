@@ -2567,14 +2567,12 @@ TEST_F(LinearLayoutConversionsTest,
        WMMA_v3_32x16TransposedPartitionedCTAIsInjective) {
   auto cgaLayout = CGAEncodingAttr::get1CTALayout(&ctx, 2);
 
-  LinearLayout ctaLayout(
-      {{S("register"), {{0, 1}, {1, 0}}},
-       {S("warp"), {{4, 2}, {2, 0}, {4, 0}}}},
-      {S("dim0"), S("dim1")});
-  auto layout =
-      AMDWmmaEncodingAttr::get(&ctx, /*version=*/3, ctaLayout,
-                               /*isTransposed=*/true, cgaLayout,
-                               /*instrShape=*/{32, 16, 128});
+  LinearLayout ctaLayout({{S("register"), {{0, 1}, {1, 0}}},
+                          {S("warp"), {{4, 2}, {2, 0}, {4, 0}}}},
+                         {S("dim0"), S("dim1")});
+  auto layout = AMDWmmaEncodingAttr::get(&ctx, /*version=*/3, ctaLayout,
+                                         /*isTransposed=*/true, cgaLayout,
+                                         /*instrShape=*/{32, 16, 128});
 
   auto linear = toLinearLayout({128, 128}, layout);
   EXPECT_TRUE(linear.isInjective());
@@ -2583,10 +2581,9 @@ TEST_F(LinearLayoutConversionsTest,
   // Physical 32x16 CTA extents are wrong for the transposed layout's logical
   // 16x32 output tile. The N dimension is clipped when composed for a 128x128
   // accumulator, duplicating half the values and registers.
-  LinearLayout physicalCtaLayout(
-      {{S("register"), {{0, 1}, {0, 2}}},
-       {S("warp"), {{2, 4}, {1, 0}, {2, 0}}}},
-      {S("dim0"), S("dim1")});
+  LinearLayout physicalCtaLayout({{S("register"), {{0, 1}, {0, 2}}},
+                                  {S("warp"), {{2, 4}, {1, 0}, {2, 0}}}},
+                                 {S("dim0"), S("dim1")});
   auto physicalLayout =
       AMDWmmaEncodingAttr::get(&ctx, /*version=*/3, physicalCtaLayout,
                                /*isTransposed=*/true, cgaLayout,
