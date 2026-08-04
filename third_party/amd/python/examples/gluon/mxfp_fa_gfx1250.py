@@ -3273,7 +3273,6 @@ def static_profile(kernel, grid):
         "vgpr_spill_count": int(re.search(r'\.vgpr_spill_count:\s+(\d+)', amdgcn).group(1)),
         "scratch_size": int(re.search(r';\s+ScratchSize:\s+(\d+)', amdgcn).group(1)),
         "code_len_in_byte": int(re.search(r';\s+codeLenInByte\s+=\s+(\d+)', amdgcn).group(1)),
-        "occupancy": int(re.search(r';\s+Occupancy:\s+(\d+)', amdgcn).group(1)),
         "ctas": grid[0] * grid[1] * grid[2] * metadata["num_ctas"],
         "warps": grid[0] * grid[1] * grid[2] * metadata["num_ctas"] * metadata["num_warps"],
         "shared_memory (MB)": int(metadata["shared"]) // 1024,
