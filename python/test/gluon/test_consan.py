@@ -9,40 +9,15 @@ from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia import ampere
 from triton.experimental.gluon.language.nvidia.blackwell import allocate_tensor_memory, clc, mbarrier, tma
-from triton._internal_testing import is_compile_warmup, is_cuda, ReplenishingProcessPool, run_in_process as _run_in_process
+from triton._internal_testing import is_compile_warmup, is_cuda, run_in_process
 
-pytestmark = pytest.mark.enable_warmup(min_capability=9)
-
-_process_pool = None
+pytestmark = [pytest.mark.enable_warmup(min_capability=9), pytest.mark.usefixtures("process_pool")]
 
 
 @pytest.fixture(autouse=True)
 def isolated_consan_knobs():
     with knobs.compilation.scope(), knobs.runtime.scope():
         yield
-
-
-def run_in_process(client_fn, args=(), kwargs=None, env=None):
-    if is_compile_warmup() or os.environ.get("DISABLE_SUBPROCESS"):
-        return client_fn(*args, **(kwargs or {}))
-    if _process_pool is None:
-        return _run_in_process(client_fn, args, kwargs, env)
-    return _process_pool.run(client_fn, args, kwargs, env)
-
-
-@pytest.fixture(scope="session", autouse=True)
-def consan_process_pool(request):
-    if request.config.getoption("--warmup-only", default=False) or os.environ.get("DISABLE_SUBPROCESS"):
-        yield
-        return
-    global _process_pool
-    _process_pool = ReplenishingProcessPool(__name__)
-    _process_pool.start()
-    try:
-        yield
-    finally:
-        _process_pool.close()
-        _process_pool = None
 
 
 @pytest.fixture
