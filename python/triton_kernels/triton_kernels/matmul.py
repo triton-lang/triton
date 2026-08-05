@@ -589,11 +589,13 @@ def matmul(a, b, bias,
         b_scale_tensor_or_tma = None if b_scale is None else b_scale.storage.data
     # create tma descriptor for x_scale
     a_scale_has_tma = False
+    a_scale_tma_mode = None
     if a_has_mx and isinstance(a_scale.storage.layout, BlackwellActMXScaleLayout):
         # check if we can use tma for x scale
         assert opt_flags.is_persistent, "swizzled x scale is only supported for persistent case"
         assert opt_flags.block_m == 128 and opt_flags.block_k >= 128, "block_m and block_k must be at least 128 if x scale is swizzled"
         a_scale_has_tma = True
+        a_scale_tma_mode = "ragged" if a_scale.storage.layout.ragged_metadata is not None else "dense"
     if a_scale_has_tma:
         scale_block_k = opt_flags.block_k // mx_block_size
         a_scale_tma_block_size = [opt_flags.block_m, scale_block_k]
@@ -645,6 +647,8 @@ def matmul(a, b, bias,
     } if fused_comm is not None else {}
     b_strides = b.storage.data.stride()[:3] if b_is_shuffled else b.storage.data.stride()
     extra_kernel_kwargs = {"W_SHUFFLED": b_is_shuffled} if opt_flags.is_persistent else {}
+    if a_scale_tma_mode != a_tma_mode:
+        extra_kernel_kwargs["X_SCALE_TMA_MODE"] = a_scale_tma_mode
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
     (kernels._p_matmul if opt_flags.is_persistent else kernels._matmul)[(grid,)](
                    c_tensor_or_tma, c.storage.data, *out_matmul.stride(),

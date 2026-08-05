@@ -113,6 +113,7 @@ def _p_matmul(
              NUM_SMS: tl.constexpr,
              X_TMA_MODE: tl.constexpr,
              Y_TMA_MODE: tl.constexpr,
+             X_SCALE_TMA_MODE: tl.constexpr = None,
              Y_MX_SCALE_LAYOUT: tl.constexpr = None,
              OUT_N_TILE_ALIGNED: tl.constexpr = False,
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
@@ -382,9 +383,16 @@ def _p_matmul(
                     mask_m = off_m + tl.arange(0, BLOCK_M) < shape_m
                     x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & mask_m[:, None], other=0.0)
                 else: # use TMA for x scale load - only cover batched case for now
-                    if X_TMA_MODE == "dense":
+                    if X_SCALE_TMA_MODE is None:
+                        if X_TMA_MODE == "dense":
+                            off_m_scale = off_x_z * ((M + 127) // 128) + off_m // 128
+                        else:
+                            tl.static_assert(X_TMA_MODE == "ragged")
+                            off_m_scale = slice_block_off_m + off_m // 128
+                    elif X_SCALE_TMA_MODE == "dense":
                         off_m_scale = off_x_z * ((M + 127) // 128) + off_m // 128
                     else:
+                        tl.static_assert(X_SCALE_TMA_MODE == "ragged")
                         # slice_block_off_m points to the start of the current slice in the padded version
                         # + off_m points to the current block in the slice
                         off_m_scale = slice_block_off_m + off_m // 128
