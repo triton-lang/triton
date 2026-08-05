@@ -1075,7 +1075,7 @@ int RocprofSDKProfiler::RocprofSDKProfilerPimpl::graphNodeCorrelationCallback(
       });
   // We always invoke callbacks for each node in the graph so this is more
   // accurate than the CUPTI approach.
-  profiler.correlation.submit(/*numNodes=*/1);
+  profiler.correlation.submit(/*numNodes=*/1, internalCorrelationId);
   return 0;
 }
 #endif
