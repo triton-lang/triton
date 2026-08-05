@@ -13,6 +13,7 @@
 #include "triton/Dialect/TritonGPU/IR/Traits.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 
+#include <type_traits>
 #include <unordered_map>
 
 namespace mlir {
@@ -101,16 +102,15 @@ struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
   SideEffects::Resource *getParent() const override { return nullptr; }
 };
 
-template <typename Effect>
-MemoryEffects::EffectInstance makeShared(OpOperand *value, SharedKind kind) {
+template <typename Effect, typename ValueT>
+MemoryEffects::EffectInstance makeShared(ValueT value, SharedKind kind) {
+  Value effectValue;
+  if constexpr (std::is_same_v<ValueT, OpOperand *>)
+    effectValue = value->get();
+  else
+    effectValue = value;
   return {Effect::get(), value,
-          SharedKindAttr::get(value->get().getContext(), kind),
-          SharedMemory::get()};
-}
-
-template <typename Effect>
-MemoryEffects::EffectInstance makeShared(OpResult value, SharedKind kind) {
-  return {Effect::get(), value, SharedKindAttr::get(value.getContext(), kind),
+          SharedKindAttr::get(effectValue.getContext(), kind),
           SharedMemory::get()};
 }
 
