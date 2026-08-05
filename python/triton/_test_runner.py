@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -54,8 +55,19 @@ def _environment(phase=None, num_gpus=None):
     return environment
 
 
-def _run(command, *, phase=None, num_gpus=None, cwd=ROOT, environment=None):
-    return subprocess.run(command, cwd=cwd, env=environment or _environment(phase, num_gpus), check=False).returncode
+def _run(command, *, phase=None, num_gpus=None, cwd=ROOT, environment=None, timeout=None):
+    environment = environment or _environment(phase, num_gpus)
+    if timeout is None:
+        return subprocess.run(command, cwd=cwd, env=environment, check=False).returncode
+
+    process = subprocess.Popen(command, cwd=cwd, env=environment, start_new_session=True)
+    try:
+        return process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        print(f"test command exceeded its {timeout}-second timeout: {' '.join(command)}", file=sys.stderr)
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+        return 1
 
 
 def _concurrent(commands):
@@ -159,15 +171,21 @@ def _gluon(args):
 def _gsan(args):
     environment = _environment("gsan")
     environment["TRITON_DISABLE_LINE_INFO"] = "0"
-    symmetric_memory = "python/test/gsan/test_symmetric_memory.py"
+    environment["TRITON_TEST_PROCESS_TIMEOUT"] = "90"
 
+    workers = min(args.num_procs, 8 * args.num_gpus)
+    parallel_environment = environment
     targets = ("python/test/gsan", )
     if args.num_gpus != 1:
-        targets = (f"--ignore={symmetric_memory}", *targets)
-    status = _run(_pytest(*targets, workers=args.num_procs, distribution="loadgroup"), environment=environment)
+        parallel_environment = _environment("gsan", args.num_gpus)
+        parallel_environment.update({"TRITON_DISABLE_LINE_INFO": "0", "TRITON_TEST_PROCESS_TIMEOUT": "90"})
+        targets = ("-m", "not xdist_group", *targets)
+    status = _run(_pytest(*targets, workers=workers, distribution="loadgroup"), environment=parallel_environment,
+                  timeout=180)
     if status or args.num_gpus == 1:
         return status
-    return _run(_pytest(symmetric_memory, workers=1, distribution="loadgroup"), environment=environment)
+    return _run(_pytest("-m", "xdist_group", "python/test/gsan", workers=1, distribution="loadgroup"),
+                environment=environment, timeout=180)
 
 
 def _suite(args):

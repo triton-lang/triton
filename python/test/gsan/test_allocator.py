@@ -169,6 +169,7 @@ def test_malloc_edge_cases(_direct_allocator):
     free(0)
 
 
+@pytest.mark.xdist_group("gsan-multi-gpu")
 @pytest.mark.skipif(not is_cuda() or torch.cuda.device_count() < 2, reason="requires at least two CUDA devices")
 def test_configure_supports_swapped_cuda_device_ids():
     device_ranks = {0: 1, 1: 0}
@@ -176,6 +177,7 @@ def test_configure_supports_swapped_cuda_device_ids():
     assert result.exc is None
 
 
+@pytest.mark.xdist_group("gsan-multi-gpu")
 @pytest.mark.skipif(not is_cuda() or torch.cuda.device_count() < 2, reason="requires at least two CUDA devices")
 def test_configure_supports_sparse_global_device_ids():
     device_ranks = {0: 2, 1: 3}
@@ -201,6 +203,7 @@ def test_allocator_initialization_rejects_later_config():
     assert result.exc is None
 
 
+@pytest.mark.xdist_group("gsan-multi-gpu")
 @pytest.mark.skipif(not is_cuda() or torch.cuda.device_count() < 2, reason="requires at least two CUDA devices")
 def test_default_topology_uses_cuda_device_indices():
     assert get_device_rank(0) == 0

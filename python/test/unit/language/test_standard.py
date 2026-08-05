@@ -4,7 +4,6 @@ import torch
 import triton.language as tl
 
 from test_core import _test_binary, int_dtypes, uint_dtypes, float_dtypes, numpy_random
-from triton._internal_testing import assert_close
 
 # ---------------
 # test maximum/minimum ops
@@ -58,7 +57,7 @@ def test_sort(M, N, k, descending, dtype_str, device):
     else:
         y = torch.topk(x, k=k, largest=descending).values
     sort_kernel[(1, )](x, x.stride(0), z, z.stride(0), M, N, k, descending, num_warps=8)
-    assert_close(*torch.broadcast_tensors(y, z), rtol=0, atol=0)
+    assert (y == z).all(), (y, z)
 
 
 # ---------------

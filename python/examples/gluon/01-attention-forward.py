@@ -7,7 +7,6 @@ import itertools
 from dataclasses import dataclass, fields
 
 from triton.experimental import gluon
-from triton._internal_testing import is_compile_warmup
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.nvidia import blackwell as bw
 from triton.experimental.gluon.nvidia.blackwell import TensorDescriptor
@@ -1214,14 +1213,10 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, prof
 
     tri_out, _ = attention_forward(q, k, v, causal, sm_scale, use_tmem_red=use_tmem_red, cga_layout=cga_layout)
     if dtype == torch.float8_e5m2:
-        if is_compile_warmup():
-            return
         ref_out = torch.nn.functional.scaled_dot_product_attention(q.float(), k.float(), v.float(), scale=sm_scale,
                                                                    is_causal=causal)
         torch.testing.assert_close(ref_out.to(dtype).float(), tri_out.float(), atol=0.25, rtol=0.25)
     else:
-        if is_compile_warmup():
-            return
         ref_out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
         torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
 

@@ -4,7 +4,6 @@ import pytest
 import torch
 
 import triton
-from triton._internal_testing import assert_close
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.nvidia.blackwell import (
@@ -722,7 +721,7 @@ def test_matmul_matches_torch(
         )
     except triton.OutOfResources:
         pytest.skip("Out of resources")
-    assert_close(expected, actual, atol=1e-1, rtol=1e-2)
+    torch.testing.assert_close(expected, actual, atol=1e-1, rtol=1e-2)
 
 
 ########################################################

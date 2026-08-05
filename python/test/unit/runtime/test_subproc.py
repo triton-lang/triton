@@ -1,11 +1,13 @@
 import multiprocessing
 import os
 import shutil
+import time
 
+import pytest
 import triton
 import triton.language as tl
 from triton.compiler import ASTSource
-from triton._internal_testing import ReplenishingProcessPool
+from triton._internal_testing import ReplenishingProcessPool, run_in_process
 
 target = triton.runtime.driver.active.get_current_target()
 start_method = 'fork' if 'fork' in multiprocessing.get_all_start_methods() else 'spawn'
@@ -17,6 +19,23 @@ def write_process_id_to_stderr(fail=False):
     if fail:
         raise RuntimeError("expected process failure")
     os.write(2, str(os.getpid()).encode())
+
+
+def raise_large_process_error():
+    raise RuntimeError("x" * 1_048_576)
+
+
+def test_run_in_process_handles_large_exceptions(monkeypatch):
+    monkeypatch.setenv("TRITON_TEST_PROCESS_TIMEOUT", "30")
+    result = run_in_process(raise_large_process_error)
+    assert isinstance(result.exc, RuntimeError)
+    assert len(str(result.exc)) == 1_048_576
+
+
+def test_run_in_process_terminates_stalled_children(monkeypatch):
+    monkeypatch.setenv("TRITON_TEST_PROCESS_TIMEOUT", "0.05")
+    with pytest.raises(TimeoutError, match="test subprocess sleep exceeded"):
+        run_in_process(time.sleep, args=(60, ))
 
 
 def test_replenishing_process_pool_reuses_clean_processes() -> None:

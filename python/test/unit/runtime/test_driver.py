@@ -19,10 +19,11 @@ from triton._compile_warmup import (
     summarize_compile_trace,
 )
 from triton._compile_warmup_pool import SharedWarmupCoordinator, _jit_dumps
-from triton._internal_testing import assert_close, is_compile_warmup, rand, randint, random_float, random_int, randn
+from triton._internal_testing import is_compile_warmup, random_float, random_int
 from triton import _test_runner
 from triton.backends.driver import GPUDriver, expand_signature, wrap_handle_tensordesc_impl
 from triton.backends.nvidia.compiler import CUDABackend
+from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
 
 def test_compile_warmup_only_intercepts_launches():
@@ -36,28 +37,32 @@ def test_compile_warmup_only_intercepts_launches():
 
     kernel = Kernel()
     previous_getitem = triton.KernelInterface.__getitem__
+    previous_assert_close = torch.testing.assert_close
     with compile_warmup_only():
         tensor = torch.empty(16, device="cuda")
         view = tensor[1:]
         result = kernel[(2, )](tensor, BLOCK_SIZE=16)
-        assert_close(tensor, tensor)
+        torch.testing.assert_close(tensor, tensor)
+        assert torch.allclose(tensor, tensor)
+        assert (tensor == tensor).all()
+        assert triton.testing.cublas() is None
         assert is_compile_warmup()
         assert view.data_ptr() == tensor.data_ptr() + tensor.element_size()
         assert CUDABackend.get_tensor_specialization(tensor, align=True) == "D"
         assert CUDABackend.get_tensor_specialization(view, align=True) == ""
+        assert MXFP4Tensor(size=(16, ), device="cuda").random().to(torch.float32).shape == (16, )
+        assert MXScaleTensor(torch.rand(16, device="cuda")).to(torch.float32).shape == (16, )
 
     assert result == "compiled"
     assert type(tensor).__name__ == "FakeTensor"
     assert launches == [((tensor, ), (2, ), {"BLOCK_SIZE": 16})]
     assert not is_compile_warmup()
     assert triton.KernelInterface.__getitem__ is previous_getitem
+    assert torch.testing.assert_close is previous_assert_close
 
 
 def test_compile_warmup_random_helpers_preserve_normal_randomness():
     for operation, original in (
-        (lambda: rand(4), lambda: torch.rand(4)),
-        (lambda: randn(4), lambda: torch.randn(4)),
-        (lambda: randint(0, 9, (4, )), lambda: torch.randint(0, 9, (4, ))),
         (lambda: random_int(0, 9), lambda: int(torch.randint(0, 9, size=()).item())),
         (random_float, lambda: float(torch.rand(()).item())),
     ):
@@ -68,9 +73,6 @@ def test_compile_warmup_random_helpers_preserve_normal_randomness():
         torch.testing.assert_close(torch.as_tensor(actual), torch.as_tensor(expected))
 
     with compile_warmup_only():
-        assert type(rand(4)).__name__ == "FakeTensor"
-        assert type(randn(4)).__name__ == "FakeTensor"
-        assert type(randint(0, 9, (4, ))).__name__ == "FakeTensor"
         assert random_int(2, 9) == 2
         assert random_float() == 0.5
 
@@ -159,13 +161,21 @@ def test_gsan_runner_isolates_distributed_tests_when_multiple_gpus_are_visible(m
 
     assert _test_runner._gsan(SimpleNamespace(num_gpus=num_gpus, num_procs=24)) == 0
     assert len(commands) == num_gpus
-    symmetric_memory = "python/test/gsan/test_symmetric_memory.py"
+    assert commands[0][0][commands[0][0].index("-n") + 1] == str(8 * num_gpus)
+    assert all(kwargs["timeout"] == 180 for _, kwargs in commands)
+    assert all(kwargs["environment"]["TRITON_TEST_PROCESS_TIMEOUT"] == "90" for _, kwargs in commands)
     if num_gpus == 1:
-        assert f"--ignore={symmetric_memory}" not in commands[0][0]
+        assert "not xdist_group" not in commands[0][0]
     else:
-        assert f"--ignore={symmetric_memory}" in commands[0][0]
-        assert symmetric_memory in commands[1][0]
+        assert "not xdist_group" in commands[0][0]
+        assert commands[0][1]["environment"]["TRITON_TEST_NUM_GPUS"] == str(num_gpus)
+        assert "xdist_group" in commands[1][0]
         assert commands[1][0][commands[1][0].index("-n") + 1] == "1"
+
+
+def test_gsan_runner_terminates_stalled_pytest_processes():
+    command = [sys.executable, "-c", "import time; time.sleep(60)"]
+    assert _test_runner._run(command, timeout=0.05) == 1
 
 
 def test_compile_warmup_selects_eligible_markers(monkeypatch):

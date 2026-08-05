@@ -9,7 +9,7 @@ from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia import ampere
 from triton.experimental.gluon.language.nvidia.blackwell import allocate_tensor_memory, clc, mbarrier, tma
-from triton._internal_testing import assert_close, is_compile_warmup, is_cuda, ReplenishingProcessPool, run_in_process as _run_in_process
+from triton._internal_testing import is_compile_warmup, is_cuda, ReplenishingProcessPool, run_in_process as _run_in_process
 
 pytestmark = pytest.mark.enable_warmup(min_capability=9)
 
@@ -221,7 +221,7 @@ def test_consan_initializes_allocations_with_nan(MEMORY_KIND, device, num_ctas):
 
     output = torch.empty((XBLOCK.value * num_ctas, XBLOCK.value), device=device, dtype=torch.float32)
     kernel[(1, )](output, MEMORY_KIND=MEMORY_KIND, num_warps=4, num_ctas=num_ctas)
-    assert_close(output, torch.full_like(output, float("nan")), equal_nan=True)
+    assert torch.isnan(output).all()
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
@@ -770,7 +770,7 @@ def test_local_indexed_cross_cta_visibility(OP, FAILURE, device, run_wrapper, mo
     if not FAILURE:
         peer = inp.reshape(2, 2, 16).flip(1).reshape(2, 32)
         expected = inp + peer if OP == "atomic" else peer
-        assert_close(out, expected)
+        torch.testing.assert_close(out, expected)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
@@ -2061,7 +2061,7 @@ def test_fence_async_shared_across_warp_specialize(FENCE_LOCATION, device, run_w
     output_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(output, [block_m, XBLOCK.value], shared_layout)
     ready = torch.zeros((1, ), device=device, dtype=torch.int32)
     kernel[(1, )](output_desc, ready, FENCE_LOCATION=FENCE_LOCATION, num_warps=4, num_ctas=num_ctas)
-    assert_close(output, torch.full_like(output, 42.0))
+    torch.testing.assert_close(output, torch.full_like(output, 42.0))
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
@@ -2863,7 +2863,7 @@ def test_cluster_barrier_warp_specialized_phase_snapshot(EXPLICIT_BARRIER, DEFAU
     output = torch.empty((num_ctas * 16, ), device=device, dtype=torch.int32)
     for _ in range(4):
         kernel[(num_ctas * 16, )](output, EXPLICIT_BARRIER, num_warps=DEFAULT_WARPS, num_ctas=num_ctas)
-    assert_close(output, torch.arange(num_ctas * 16, device=device, dtype=torch.int32))
+    torch.testing.assert_close(output, torch.arange(num_ctas * 16, device=device, dtype=torch.int32))
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
