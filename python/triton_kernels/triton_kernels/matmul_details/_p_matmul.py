@@ -246,8 +246,8 @@ def _p_matmul(
 
     DISALLOW_ACC_MULTI_BUFFER: tl.constexpr = is_w_microscaled and BLOCK_M * BLOCK_N >= 128 * 256
 
-    loop_start = 0 if CLC else tl.program_id(0)
-    loop_end = 1 if CLC else num_blocks
+    loop_start = tl.program_id(0)
+    loop_end = loop_start + 1 if CLC else num_blocks
     loop_step = 1 if CLC else NUM_SMS
     for block_id in tl.range(
         loop_start, loop_end, loop_step,
@@ -256,9 +256,6 @@ def _p_matmul(
         # Workaround for compile error in hopper warp specialization
         warp_specialize=FLATTEN_LOOPS and not CLC,
     ):
-        if CLC:
-            block_id = tl.program_id(0)
-
         pid_z, pid_m, pid_n, pid_k = compute_pids(block_id, useful_grid_m, grid_n, num_blocks, XCD_SWIZZLE, GROUP_M, SPLIT_K)
 
         # ------------------------------------------------------------
