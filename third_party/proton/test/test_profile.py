@@ -32,11 +32,13 @@ def _find_frame_by_name(frame, name):
         queue.extend(current["children"])
     return None
 
+
 # Remove _skip_cudagraph_test once the rocm version has been updated on CI nodes
 _skip_cudagraph_test = pytest.mark.skipif(
     os.environ.get("PROTON_SKIP_CUDAGRAPH_TEST", "0") == "1",
     reason="CUDAGraph test skipped due to environment constraints",
 )
+
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context, tmp_path: pathlib.Path, device: str):
@@ -299,6 +301,7 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
     assert has_positive_time_metric(replay0_frame)
     assert has_positive_time_metric(replay1_frame)
 
+
 @_skip_cudagraph_test
 def test_cudagraph_deactivate(tmp_path, device: str):
     stream = torch.cuda.Stream()
@@ -367,7 +370,7 @@ def test_cudagraph_deactivate(tmp_path, device: str):
     assert scope_c_frame is not None
 
 
-@_skip_cudagraph_test 
+@_skip_cudagraph_test
 @pytest.mark.parametrize("data_format", ["hatchet", "hatchet_msgpack"])
 def test_cudagraph_filters_unlinked_virtual_scopes(tmp_path: pathlib.Path, data_format: str, device: str):
     stream = torch.cuda.Stream()
@@ -1695,6 +1698,7 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
     assert scope_d_frame is not None
     assert scope_d_frame["metrics"]["vec"] == [0, 10, 20, 30]
 
+
 @_skip_cudagraph_test
 def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
@@ -1746,6 +1750,7 @@ def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path, device: str
         assert scope_b_frame is None
         assert c_frame is not None
         assert c_frame["metrics"]["count"] == 10
+
 
 @_skip_cudagraph_test
 def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
