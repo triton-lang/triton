@@ -28,9 +28,7 @@ namespace proton {
 
 namespace {
 
-// Keep the lossless ROCprofiler callback buffer small enough to avoid large
-// per-agent allocations while still giving the callback thread room to drain.
-constexpr size_t PCSamplingBufferSize = 64 * 1024;
+constexpr size_t PCSamplingBufferSize = 1024 * 1024;
 // Code-object images are copied so rocprofiler-sdk can resolve sampled PCs.
 // Cap the copy to avoid unbounded memory use.
 constexpr uint64_t MaxCodeObjectImageSize = 256 * 1024 * 1024;
@@ -94,7 +92,7 @@ PCSamplingMetric::PCSamplingMetricKind mapNotIssuedReasonToStallMetric(
     rocprofiler_pc_sampling_instruction_not_issued_reason_t reason) {
   switch (reason) {
   case ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_NO_INSTRUCTION_AVAILABLE:
-    return PCSamplingMetric::StalledAMDNoInstructionAvailable;
+    return PCSamplingMetric::StalledNoInstruction;
   case ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_ALU_DEPENDENCY:
     return PCSamplingMetric::StalledAMDALUDependency;
   case ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_WAITCNT:
@@ -102,15 +100,15 @@ PCSamplingMetric::PCSamplingMetricKind mapNotIssuedReasonToStallMetric(
   case ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_INTERNAL_INSTRUCTION:
     return PCSamplingMetric::StalledAMDInternalInstruction;
   case ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_BARRIER_WAIT:
-    return PCSamplingMetric::StalledAMDBarrierWait;
+    return PCSamplingMetric::StalledBarrier;
   case ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_ARBITER_NOT_WIN:
-    return PCSamplingMetric::StalledAMDArbiterNotWin;
+    return PCSamplingMetric::StalledNotSelected;
   case ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_ARBITER_WIN_EX_STALL:
     return PCSamplingMetric::StalledAMDArbiterWinExStall;
   case ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_OTHER_WAIT:
     return PCSamplingMetric::StalledAMDOtherWait;
   case ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_SLEEP_WAIT:
-    return PCSamplingMetric::StalledAMDSleepWait;
+    return PCSamplingMetric::StalledSleeping;
   default:
     return PCSamplingMetric::StalledMisc;
   }
@@ -277,6 +275,8 @@ void RocprofSDKPCSampling::configure(rocprofiler_buffer_tracing_cb_t callback) {
   }
 
   if (!pcSamplingServiceConfigured) {
+    // NOT_AVAILABLE is the expected result for unsupported agents; distinguish
+    // that case from unexpected SDK failures while configuring the service.
     if (failedConfigCount == unsupportedConfigCount) {
       pcSamplingConfigurationFailureReason =
           "rocprofiler-sdk PC sampling service is not available for the "

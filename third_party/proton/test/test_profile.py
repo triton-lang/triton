@@ -967,7 +967,7 @@ def test_pcsampling(tmp_path: pathlib.Path, device: str):
     @triton.jit
     def foo(x, y, size: tl.constexpr):
         offs = tl.arange(0, size)
-        for _ in range(1000):
+        for _ in range(2000):
             tl.store(y + offs, tl.load(x + offs))
 
     def total_samples(frame):

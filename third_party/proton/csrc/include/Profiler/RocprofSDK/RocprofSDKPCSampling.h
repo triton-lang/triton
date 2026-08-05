@@ -34,6 +34,19 @@ class CodeobjAddressTranslate;
 
 namespace proton {
 
+// Owns the AMD PC-sampling service and its asynchronous attribution pipeline.
+// configure() creates the SDK context, buffers, and callback threads;
+// start() activates sampling only for pcsampling mode. Code-object, symbol, and
+// dispatch callbacks may run concurrently with sample-buffer processing.
+// Samples are accumulated under pcSamplingMutex, while source lookup and
+// decoder state use their dedicated mutexes.
+//
+// Code-object images remain available after an unload notification because
+// source locations are resolved asynchronously after samples are delivered.
+// They are released after both the active accumulator and the flushing
+// snapshot have drained. The owner stops sampling and flushes both SDK buffers
+// and the accumulator before destruction; an unsuccessful configure leaves
+// start(), stop(), and flushing as no-ops.
 class RocprofSDKPCSampling {
 public:
   static constexpr const char *UnknownKernelName = "<unknown>";
