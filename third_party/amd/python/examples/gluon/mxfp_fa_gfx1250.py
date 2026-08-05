@@ -1105,6 +1105,7 @@ class AttentionEpilogue:
 
 @gluon.aggregate
 class GlobalScaledAttentionConfig(AttentionConfigBase):
+
     @gluon.constexpr_function
     def __init__(self, Q_TYPE, KV_TYPE, BATCH, SEQLEN_Q, SEQLEN_K, NUM_Q_HEADS, NUM_K_HEADS, HEAD_SZ,  #
                  BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_WARPS, NUM_CTAS,  #
