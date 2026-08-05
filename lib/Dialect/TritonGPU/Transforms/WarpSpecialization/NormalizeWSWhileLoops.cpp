@@ -1,4 +1,5 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/IRMapping.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -10,52 +11,111 @@ namespace mlir::triton::gpu {
 
 namespace {
 
-// Restore the one-to-one state/result signature expected by WS after
-// canonicalization removes unused scf.while results.
-//   canonicalized: %pid = scf.while (%pid, %active) -> i32
-//                    scf.condition(%active) %pid
-//   normalized:    %result:2 = scf.while (%pid, %active) -> (i32, i1)
-//                    scf.condition(%active) %pid, %active
+// Normalize `scf.while` to the form expected by WS, where the values forwarded
+// by `scf.condition` are the loop's before-region block arguments. Rotate the
+// loop by evaluating the original before region once before the loop and again
+// after each execution of the original body.
+//   canonicalized:
+//     %result = scf.while (%state = %initial) -> i32 {
+//       %value = compute_result(%state)
+//       %cond = compute_cond(%state)
+//       scf.condition(%cond) %value
+//     } do {
+//     ^bb0(%value: i32):
+//       %next_state = body(%value)
+//       scf.yield %next_state
+//     }
+//
+//   normalized:
+//     %initial_value = compute_result(%initial)
+//     %initial_cond = compute_cond(%initial)
+//     %result:2 = scf.while (%value = %initial_value,
+//                            %cond = %initial_cond) -> (i32, i1) {
+//       scf.condition(%cond) %value, %cond
+//     } do {
+//     ^bb0(%value: i32, %cond: i1):
+//       %next_state = body(%value)
+//       %next_value = compute_result(%next_state)
+//       %next_cond = compute_cond(%next_state)
+//       scf.yield %next_value, %next_cond
+//     }
+SmallVector<Value> cloneBlockBody(OpBuilder &builder, Block &block,
+                                  ValueRange arguments) {
+  assert(block.getNumArguments() == arguments.size());
+  IRMapping mapping;
+  mapping.map(block.getArguments(), arguments);
+  for (Operation &op : block.without_terminator())
+    builder.clone(op, mapping);
+
+  SmallVector<Value> terminatorOperands;
+  for (Value operand : block.getTerminator()->getOperands())
+    terminatorOperands.push_back(mapping.lookupOrDefault(operand));
+  return terminatorOperands;
+}
+
 scf::WhileOp normalizeWhile(scf::WhileOp loop) {
   auto beforeArgs = loop.getBeforeArguments();
   auto condition = loop.getConditionOp();
   if (llvm::equal(condition.getArgs(), beforeArgs))
     return loop;
 
-  SmallVector<unsigned> resultToState;
-  for (Value value : condition.getArgs())
-    resultToState.push_back(cast<BlockArgument>(value).getArgNumber());
+  auto &oldBefore = loop.getBefore().front();
+  auto &oldAfter = loop.getAfter().front();
+  auto oldYield = loop.getYieldOp();
+  auto oldYieldLoc = oldYield.getLoc();
+  SmallVector<NamedAttribute> oldYieldAttrs(oldYield->getAttrs());
+  OpBuilder builder(loop);
+
+  // Evaluate the old before region once to seed the normalized loop. The
+  // condition is carried as the last state value.
+  auto initial = cloneBlockBody(builder, oldBefore, loop.getInits());
+  auto initialCondition = initial.front();
+  SmallVector<Value> inits(initial.begin() + 1, initial.end());
+  inits.push_back(initialCondition);
 
   SmallVector<Type> stateTypes;
-  for (BlockArgument arg : beforeArgs)
-    stateTypes.push_back(arg.getType());
-  SmallVector<Location> argLocs(stateTypes.size(), loop.getLoc());
-  OpBuilder builder(loop);
+  SmallVector<Location> argLocs;
+  for (Value init : inits) {
+    stateTypes.push_back(init.getType());
+    argLocs.push_back(init.getLoc());
+  }
   auto newLoop =
-      scf::WhileOp::create(builder, loop.getLoc(), stateTypes, loop.getInits());
+      scf::WhileOp::create(builder, loop.getLoc(), stateTypes, inits);
   newLoop->setAttrs(loop->getAttrs());
-  Block *newBefore =
+  auto newBefore =
       builder.createBlock(&newLoop.getBefore(), {}, stateTypes, argLocs);
-  Block *newAfter =
+  auto newAfter =
       builder.createBlock(&newLoop.getAfter(), {}, stateTypes, argLocs);
 
-  Block &oldBefore = loop.getBefore().front();
-  Block &oldAfter = loop.getAfter().front();
-  newBefore->getOperations().splice(newBefore->end(),
-                                    oldBefore.getOperations());
+  // The normalized before region only forwards its block arguments.
+  builder.setInsertionPointToEnd(newBefore);
+  auto newCondition = scf::ConditionOp::create(builder, condition.getLoc(),
+                                               newBefore->getArguments().back(),
+                                               newBefore->getArguments());
+  newCondition->setAttrs(condition->getAttrs());
+
+  // Execute the old body, then evaluate the old before region to produce the
+  // state and condition for the next iteration.
+  for (auto [oldArg, newArg] : llvm::zip(
+           oldAfter.getArguments(), newAfter->getArguments().drop_back())) {
+    oldArg.replaceAllUsesWith(newArg);
+  }
+  SmallVector<Value> nextBeforeArgs(oldYield.getOperands());
+  oldYield.erase();
   newAfter->getOperations().splice(newAfter->end(), oldAfter.getOperations());
 
-  for (auto [oldArg, newArg] :
-       llvm::zip(oldBefore.getArguments(), newBefore->getArguments()))
-    oldArg.replaceAllUsesWith(newArg);
-  for (auto [resultIndex, stateIndex] : llvm::enumerate(resultToState))
-    oldAfter.getArgument(resultIndex)
-        .replaceAllUsesWith(newAfter->getArgument(stateIndex));
+  builder.setInsertionPointToEnd(newAfter);
+  auto next = cloneBlockBody(builder, oldBefore, nextBeforeArgs);
+  auto nextCondition = next.front();
+  SmallVector<Value> nextState(next.begin() + 1, next.end());
+  nextState.push_back(nextCondition);
+  auto newYield = scf::YieldOp::create(builder, oldYieldLoc, nextState);
+  newYield->setAttrs(oldYieldAttrs);
 
-  condition.getArgsMutable().assign(newBefore->getArguments());
-  for (auto [resultIndex, stateIndex] : llvm::enumerate(resultToState))
-    loop.getResult(resultIndex)
-        .replaceAllUsesWith(newLoop.getResult(stateIndex));
+  for (auto [oldResult, newResult] :
+       llvm::zip(loop.getResults(), newLoop.getResults())) {
+    oldResult.replaceAllUsesWith(newResult);
+  }
 
   loop.erase();
   return newLoop;
@@ -106,7 +166,9 @@ public:
         whiles.insert(whileOp);
       op->walk([&](scf::WhileOp whileOp) { whiles.insert(whileOp); });
     });
-    for (scf::WhileOp whileOp : whiles)
+    // Normalize inner loops first so cloning a before region only duplicates
+    // already-normalized nested loops.
+    for (scf::WhileOp whileOp : llvm::reverse(whiles))
       normalizeWhile(whileOp);
   }
 };
