@@ -1426,4 +1426,12 @@ Type TDMPrefetchOp::getPredicateOperandTypeLike() {
   return IntegerType::get(getContext(), 1);
 }
 
+Value TDMPrefetchV2Op::getPredicateOperand() { return getPred(); }
+void TDMPrefetchV2Op::setPredicateOperand(Value pred) {
+  getPredMutable().assign(pred);
+}
+Type TDMPrefetchV2Op::getPredicateOperandTypeLike() {
+  return IntegerType::get(getContext(), 1);
+}
+
 } // namespace mlir::triton::amdgpu

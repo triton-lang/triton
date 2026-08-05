@@ -2618,21 +2618,96 @@ struct TDMPrefetchConversion
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
 
-    auto offsets = mlir::LLVM::AMD::emitTDMPrefetch(
+    auto prefetchAddrs = mlir::LLVM::AMD::emitTDMPrefetch(
         rewriter, loc, desc, blockShape, threadsPerWarp, numWarps, numCTAs,
         offset, op.getPred(), elementType, laneId, warpId, ctaId,
         op.getSpeculative());
 
-    // If the op has no results, just erase it
-    if (op->getNumResults() == 0) {
-      rewriter.eraseOp(op);
-      return success();
+    constexpr int cacheScope = 8; // (8) = L2 scope
+    // encoding: 0 - speculative; 1 - non-speculative (see docs)
+    const int hintValue = cacheScope | static_cast<int>(!op.getSpeculative());
+    IntegerAttr hint = rewriter.getI32IntegerAttr(hintValue);
+
+    for (auto addr : prefetchAddrs) {
+      ROCDL::GlobalPrefetchOp::create(rewriter, loc, addr, hint, {}, {}, {});
     }
 
-    // Return offsets
-    Value resultStruct = packTensorElements(loc, getTypeConverter(), offsets,
-                                            rewriter, op.getType(0));
-    rewriter.replaceOp(op, {resultStruct});
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+private:
+  const AMD::TargetInfo &targetInfo;
+};
+
+struct TDMPrefetchV2Conversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::TDMPrefetchV2Op> {
+  TDMPrefetchV2Conversion(LLVMTypeConverter &converter,
+                          const AMD::TargetInfo &targetInfo,
+                          PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::TDMPrefetchV2Op op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    auto a = adaptor.getDesc0();
+    SmallVector<std::tuple<TypedValue<triton::TensorDescType>, Value,
+                           SmallVector<Value>>>
+        data = {
+            {op.getDesc0(), adaptor.getDesc0(), adaptor.getIndices0()},
+            {op.getDesc1(), adaptor.getDesc1(), adaptor.getIndices1()},
+        };
+
+    SmallVector<SmallVector<Value>> prefetchAdds{2};
+
+    auto mod = op->getParentOfType<ModuleOp>();
+    int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
+    int halfWaves = lookupNumWarps(op) / 2;
+    int numCTAs = lookupNumCTAs(op);
+
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
+
+    for (auto [idx, item] : llvm::enumerate(data)) {
+      auto &mlirDesc = std::get<0>(item);
+      auto &llvmDesc = std::get<1>(item);
+      auto &offset = std::get<2>(item);
+
+      auto tdescType = mlirDesc.getType();
+      SmallVector<int64_t> blockShape = llvm::to_vector(tdescType.getShape());
+      Type elementType =
+          getTypeConverter()->convertType(tdescType.getElementType());
+      SmallVector<Value> desc =
+          mlir::LLVM::AMD::unpackTDMDescriptor(rewriter, loc, llvmDesc);
+
+      prefetchAdds[idx] = mlir::LLVM::AMD::emitTDMPrefetch(
+          rewriter, loc, desc, blockShape, threadsPerWarp, halfWaves, numCTAs,
+          offset, op.getPred(), elementType, laneId, warpId, ctaId,
+          op.getSpeculative());
+    }
+
+    constexpr int cacheScope = 8; // (8) = L2 scope
+    // encoding: 0 - speculative; 1 - non-speculative (see docs)
+    const int hintValue = cacheScope | static_cast<int>(!op.getSpeculative());
+    IntegerAttr hint = rewriter.getI32IntegerAttr(hintValue);
+
+    assert(prefetchAdds[0].size() == prefetchAdds[1].size());
+    const size_t numPrefetchAddrs = prefetchAdds[0].size();
+    for (size_t i = 0; i < numPrefetchAddrs; ++i) {
+      Value pred = b.icmp_slt(warpId, b.i32_val(halfWaves));
+      Value prefetchPtr =
+          b.select(pred, prefetchAdds[0][i], prefetchAdds[1][i]);
+
+      ROCDL::GlobalPrefetchOp::create(rewriter, loc, prefetchPtr, hint, {}, {},
+                                      {});
+    }
+
+    rewriter.eraseOp(op);
+
     return success();
   }
 
@@ -2660,6 +2735,7 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
   patterns.add<TTGAsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<TDMPrefetchConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<TDMPrefetchV2Conversion>(typeConverter, targetInfo, benefit);
   patterns.add<AsyncTDMIntrinsicWaitConversion>(typeConverter, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, targetInfo,
                                              benefit);

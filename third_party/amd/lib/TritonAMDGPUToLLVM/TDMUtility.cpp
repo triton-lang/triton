@@ -1627,10 +1627,6 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
                                         {kWarp, warpId},
                                         {kBlock, ctaId}});
 
-  constexpr int cacheScope = 8; // (8) = L2 scope
-  const int hintValue = cacheScope | static_cast<int>(isSpeculative);
-  IntegerAttr hint = rewriter.getI32IntegerAttr(hintValue);
-
   // Iterate over each register and emit a prefetch intrinsic
   SmallVector<Value> offsets(ll.getInDimSize(kRegister));
   for (int reg = 0; reg < ll.getInDimSize(kRegister); reg++) {
@@ -1661,12 +1657,7 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
     Value prefetchPtr =
         b.gep(globalPtrTy, elementType, tilePtr, clampedLocalOffset);
 
-    ROCDL::GlobalPrefetchOp::create(rewriter, loc, prefetchPtr, hint, {}, {},
-                                    {});
-
-    // We return the offsets for unit testing
-    offsets[reg] =
-        b.select(combinedPred, b.add(localOffset, tileOffset), b.i64_val(0));
+    offsets[reg] = prefetchPtr;
   }
   return offsets;
 }
