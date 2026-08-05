@@ -94,8 +94,7 @@ public:
   bool needsAsyncProxyFenceTracking(ModuleOp module) const override {
     bool needed = false;
     module.walk([&](Operation *op) {
-      needed |=
-          BufferRegionAnalysis::hasSharedAccess(op, ttg::SharedKind::Async);
+      needed |= hasSharedAccess(op, ttg::SharedKind::Async);
     });
     return needed;
   }

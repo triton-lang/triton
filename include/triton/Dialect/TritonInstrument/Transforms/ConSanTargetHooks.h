@@ -30,7 +30,7 @@ struct MemEffectsOpInfo {
     EffectWrites,
   };
   struct Effects {
-    enum RW { Read, Write } rw;
+    RW rw;
     std::optional<gpu::SharedKind> sharedKind;
     Value buf;
     std::string operandName = "";
@@ -138,12 +138,10 @@ public:
     } else {
       info.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
     }
-    for (const auto &access : BufferRegionAnalysis::getMemoryAccesses(op)) {
+    for (const auto &access : getMemoryAccesses(op)) {
       if (access.isShared(ttg::SharedKind::Barrier))
         continue;
-      info.operandEffects.emplace_back(access.isWrite
-                                           ? MemEffectsOpInfo::Effects::Write
-                                           : MemEffectsOpInfo::Effects::Read,
+      info.operandEffects.emplace_back(access.isWrite ? RW::Write : RW::Read,
                                        access.value, "", access.sharedKind);
     }
     if (info.operandEffects.empty())

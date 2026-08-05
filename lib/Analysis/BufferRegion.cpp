@@ -638,10 +638,9 @@ void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
   });
 }
 
-SmallVector<BufferRegionAnalysis::MemoryAccess>
-BufferRegionAnalysis::getMemoryAccesses(Operation *op,
-                                        std::optional<ttg::SharedKind> kind,
-                                        std::optional<RW> rw) {
+SmallVector<MemoryAccess> getMemoryAccesses(Operation *op,
+                                            std::optional<ttg::SharedKind> kind,
+                                            std::optional<RW> rw) {
   SmallVector<MemoryAccess> accesses;
   auto memoryEffects = dyn_cast<MemoryEffectOpInterface>(op);
   if (!memoryEffects)
@@ -681,9 +680,8 @@ BufferRegionAnalysis::getMemoryAccesses(Operation *op,
   return accesses;
 }
 
-bool BufferRegionAnalysis::hasSharedAccess(Operation *op,
-                                           std::optional<ttg::SharedKind> kind,
-                                           std::optional<RW> rw) {
+bool hasSharedAccess(Operation *op, std::optional<ttg::SharedKind> kind,
+                     std::optional<RW> rw) {
   return llvm::any_of(
       getMemoryAccesses(op, kind, rw),
       [](const MemoryAccess &access) { return access.isShared(); });

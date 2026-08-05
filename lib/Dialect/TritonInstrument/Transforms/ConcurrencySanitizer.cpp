@@ -1013,7 +1013,7 @@ private:
                                                op, effectCTAs);
         }
       }
-      if (effect.rw == MemEffectsOpInfo::Effects::Read) {
+      if (effect.rw == RW::Read) {
         // For op that is reading, we only need to check if anything else
         // is writing to the same buffer.
         addWriteChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
@@ -1030,7 +1030,7 @@ private:
               b, bufferMask, baseThread, pred, memType, opInfo->commitKind, op);
         }
       }
-      if (effect.rw == MemEffectsOpInfo::Effects::Write) {
+      if (effect.rw == RW::Write) {
         // Op is writing to the buffer, we need to check if anything else
         // is reading or writing to the same buffer.
         addWriteChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
@@ -1071,7 +1071,7 @@ private:
                  MemEffectsOpInfo::BarrierTrackingMode::EffectWrites) {
         for (auto [effect, materialized] :
              llvm::zip(opInfo->operandEffects, materializedEffects)) {
-          if (effect.rw != MemEffectsOpInfo::Effects::Write)
+          if (effect.rw != RW::Write)
             continue;
           funcBuilder.createTrackBarrierWriteForBufferCall(
               b, barrier, materialized.bufferMask, combinedPred,

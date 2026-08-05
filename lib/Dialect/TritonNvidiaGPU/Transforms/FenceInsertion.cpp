@@ -39,9 +39,8 @@ public:
     ModuleOp mod = getOperation();
     mod.walk([&](DotOpInterface dotOp) {
       SmallVector<Operation *> copyRegToSharedOps;
-      for (const auto &access : BufferRegionAnalysis::getMemoryAccesses(
-               dotOp.getOperation(), ttg::SharedKind::Async,
-               BufferRegionAnalysis::RW::Read)) {
+      for (const auto &access : getMemoryAccesses(
+               dotOp.getOperation(), ttg::SharedKind::Async, RW::Read)) {
         llvm::append_range(copyRegToSharedOps,
                            findCopyRegToSharedOps(access.value));
       }
@@ -103,9 +102,7 @@ private:
                  user->hasTrait<OpTrait::MemDescViewTrait>()) {
             user = *user->getUsers().begin();
           }
-          if (BufferRegionAnalysis::hasSharedAccess(
-                  user, ttg::SharedKind::Generic,
-                  BufferRegionAnalysis::RW::Write)) {
+          if (hasSharedAccess(user, ttg::SharedKind::Generic, RW::Write)) {
             result.insert(user);
             return;
           }
