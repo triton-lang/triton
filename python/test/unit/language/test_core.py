@@ -17,7 +17,6 @@ import triton.language as tl
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 from triton._internal_testing import (
-    assert_close,
     integral_dtypes,
     int_dtypes,
     str_to_triton_dtype,
@@ -4168,8 +4167,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             comp_dtype = tl.float16 if comp_dtype == torch.float16 else tl.bfloat16
             mxfp_upcast_kernel[grid](v, scale, v_upcast, scale.numel(), e_bits, m_bits, comp_dtype, BLOCK_SIZE,
                                      num_warps=num_warps)
-            if not is_compile_warmup():
-                assert v_upcast.isfinite().all()
+            assert v_upcast.isfinite().all()
             if transposed:
                 v_upcast = v_upcast.mT
             return v_upcast
@@ -6997,7 +6995,7 @@ def test_gather(src_shape, indices_shape, axis, device):
     indices = torch.randint(0, src.shape[axis], indices_shape, device=device)
     ref = torch.gather(src, axis, indices)
     result = triton_gather(src, axis, indices)
-    assert_close(result, ref, rtol=0, atol=0)
+    torch.testing.assert_close(result, ref, rtol=0, atol=0)
 
 
 @triton.jit

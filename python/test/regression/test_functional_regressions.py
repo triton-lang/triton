@@ -5,7 +5,7 @@ from numpy.random import RandomState
 
 import triton
 import triton.language as tl
-from triton._internal_testing import assert_close, is_compile_warmup
+from triton._internal_testing import is_compile_warmup
 
 pytestmark = pytest.mark.enable_warmup(min_capability=9)
 
@@ -65,7 +65,7 @@ def test_chained_matmul(device):
         a, b, c, triton_result, m, n, k,  #
         block_m=block_m, block_n=block_n, block_k=block_k)
 
-    assert_close(torch_result, triton_result, rtol=0, atol=0)
+    assert (torch_result == triton_result).all()
 
 
 def test_vecmat(device):
@@ -227,7 +227,7 @@ def test_iv_dependent_matmul(type, device):
         triton_output.stride(0), triton_output.stride(1),  #
         BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K, type=type,  #
         num_stages=num_stages)
-    assert_close(torch_output, triton_output, rtol=1e-2, atol=1e-2)
+    torch.testing.assert_close(torch_output, triton_output, rtol=1e-2, atol=1e-2)
 
 
 def test_reverse_range(device):
@@ -242,7 +242,7 @@ def test_reverse_range(device):
     res = torch.empty((512, ), dtype=torch.float32, device=device)
     kernel[(1, )](data, res)
     ref = torch.flip(data[1:513], [0])
-    assert_close(res, ref, rtol=0, atol=0)
+    assert (res == ref).all()
 
 
 @triton.jit
@@ -278,8 +278,8 @@ def test_inductor_cummax_bool(device):
     ref = torch.cummax(a, dim=0)
 
     triton_[(1, )](a, values, indices, 64)
-    assert_close(ref.values, values)
-    assert_close(ref.indices, indices)
+    torch.testing.assert_close(ref.values, values)
+    torch.testing.assert_close(ref.indices, indices)
 
 
 def test_permutation_ptxas_bug(device):
@@ -342,4 +342,4 @@ def test_permutation_ptxas_bug(device):
         num_warps=1,
     )
     ref = torch.matmul(X.float(), W.float()).to(dtype)
-    assert_close(Out.to(torch.float32), ref.to(torch.float32), rtol=0.25, atol=0.0625)
+    torch.testing.assert_close(Out.to(torch.float32), ref.to(torch.float32), rtol=0.25, atol=0.0625)
