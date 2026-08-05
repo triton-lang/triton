@@ -2,6 +2,7 @@
 #define TRITON_ANALYSIS_BUFFER_REGION_H
 
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <tuple>
 #include <utility>
@@ -15,6 +16,10 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SparseBitVector.h"
 #include "llvm/ADT/UniqueVector.h"
+
+namespace mlir::triton::gpu {
+enum class SharedKind : uint32_t;
+}
 
 namespace mlir::triton {
 
@@ -228,13 +233,14 @@ public:
 
   enum RegionType { SHARED_MEMORY, TENSOR_MEMORY, BARRIER, NUM_REGION_TYPES };
 
-  enum class MemoryAccessKind { Generic, Async, Barrier, Tensor };
-
   struct MemoryAccess {
     Value value;
     bool isWrite;
     bool isRead;
-    MemoryAccessKind kind;
+    std::optional<gpu::SharedKind> sharedKind;
+
+    bool isShared() const { return sharedKind.has_value(); }
+    bool isShared(gpu::SharedKind kind) const { return sharedKind == kind; }
   };
 
   static llvm::SmallVector<MemoryAccess> getMemoryAccesses(Operation *op);

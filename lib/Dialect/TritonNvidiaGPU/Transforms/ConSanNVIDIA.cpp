@@ -94,11 +94,11 @@ public:
   bool needsAsyncProxyFenceTracking(ModuleOp module) const override {
     bool needed = false;
     module.walk([&](Operation *op) {
-      needed |= llvm::any_of(
-          BufferRegionAnalysis::getMemoryAccesses(op),
-          [](const BufferRegionAnalysis::MemoryAccess &access) {
-            return access.kind == BufferRegionAnalysis::MemoryAccessKind::Async;
-          });
+      needed |=
+          llvm::any_of(BufferRegionAnalysis::getMemoryAccesses(op),
+                       [](const BufferRegionAnalysis::MemoryAccess &access) {
+                         return access.isShared(ttg::SharedKind::Async);
+                       });
     });
     return needed;
   }

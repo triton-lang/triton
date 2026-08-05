@@ -656,30 +656,17 @@ BufferRegionAnalysis::getMemoryAccesses(Operation *op) {
     if (!value || !isa<ttg::MemDescType>(value.getType()))
       continue;
 
-    SideEffects::Resource *resource = effect.getResource();
-    MemoryAccessKind kind;
-    if (resource == ttg::SharedMemory::get()) {
-      switch (cast<ttg::SharedKindAttr>(effect.getParameters()).getValue()) {
-      case ttg::SharedKind::Generic:
-        kind = MemoryAccessKind::Generic;
-        break;
-      case ttg::SharedKind::Async:
-        kind = MemoryAccessKind::Async;
-        break;
-      case ttg::SharedKind::Barrier:
-        kind = MemoryAccessKind::Barrier;
-        break;
-      }
-    } else if (resource == ttng::TensorMemory::get())
-      kind = MemoryAccessKind::Tensor;
-    else
+    std::optional<ttg::SharedKind> sharedKind;
+    if (auto shared = dyn_cast<ttg::SharedMemoryEffect>(&effect))
+      sharedKind = shared.getKind();
+    else if (!isa<ttng::TensorMemory>(effect.getResource()))
       continue;
 
     auto existing = llvm::find_if(accesses, [&](const MemoryAccess &access) {
-      return access.value == value && access.kind == kind;
+      return access.value == value && access.sharedKind == sharedKind;
     });
     if (existing == accesses.end())
-      accesses.push_back({value, isWrite, isRead, kind});
+      accesses.push_back({value, isWrite, isRead, sharedKind});
     else {
       existing->isWrite |= isWrite;
       existing->isRead |= isRead;

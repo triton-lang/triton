@@ -31,14 +31,14 @@ struct MemEffectsOpInfo {
   };
   struct Effects {
     enum RW { Read, Write } rw;
-    enum class Proxy { Generic, Async } proxy;
+    std::optional<gpu::SharedKind> sharedKind;
     Value buf;
     std::string operandName = "";
     uint32_t length = 0;
 
     Effects(RW rw, Value buf, std::string operandName = "",
-            Proxy proxy = Proxy::Generic)
-        : rw(rw), proxy(proxy), buf(buf), operandName(operandName),
+            std::optional<gpu::SharedKind> sharedKind = std::nullopt)
+        : rw(rw), sharedKind(sharedKind), buf(buf), operandName(operandName),
           length(getMemDescLength(buf)) {}
   };
   struct BarrierInfo {
@@ -139,15 +139,12 @@ public:
       info.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
     }
     for (const auto &access : BufferRegionAnalysis::getMemoryAccesses(op)) {
-      if (access.kind == BufferRegionAnalysis::MemoryAccessKind::Barrier)
+      if (access.isShared(ttg::SharedKind::Barrier))
         continue;
-      info.operandEffects.emplace_back(
-          access.isWrite ? MemEffectsOpInfo::Effects::Write
-                         : MemEffectsOpInfo::Effects::Read,
-          access.value, "",
-          access.kind == BufferRegionAnalysis::MemoryAccessKind::Async
-              ? MemEffectsOpInfo::Effects::Proxy::Async
-              : MemEffectsOpInfo::Effects::Proxy::Generic);
+      info.operandEffects.emplace_back(access.isWrite
+                                           ? MemEffectsOpInfo::Effects::Write
+                                           : MemEffectsOpInfo::Effects::Read,
+                                       access.value, "", access.sharedKind);
     }
     if (info.operandEffects.empty())
       return std::nullopt;

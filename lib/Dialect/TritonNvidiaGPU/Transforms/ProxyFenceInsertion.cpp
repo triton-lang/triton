@@ -31,15 +31,15 @@ namespace nvidia_gpu {
 
 namespace {
 
+using gpu::SharedKind;
+
 bool ignoreOpForProxyFence(Operation *op) {
   auto accesses = BufferRegionAnalysis::getMemoryAccesses(op);
   bool hasSpecialAccess = false;
   for (const auto &access : accesses) {
-    if (access.kind == BufferRegionAnalysis::MemoryAccessKind::Generic)
+    if (access.isShared(SharedKind::Generic))
       return false;
-    hasSpecialAccess |=
-        access.kind == BufferRegionAnalysis::MemoryAccessKind::Async ||
-        access.kind == BufferRegionAnalysis::MemoryAccessKind::Barrier;
+    hasSpecialAccess |= access.isShared();
   }
   return hasSpecialAccess;
 }
@@ -107,13 +107,11 @@ void ProxyFenceAnalysis<scope>::update(Operation *op, BlockInfo *blockInfo,
   BlockInfo curBlockInfo;
   BlockInfo proxyBlockInfo;
   auto accesses = BufferRegionAnalysis::getMemoryAccesses(op);
-  bool isProxyOp =
-      llvm::any_of(accesses,
-                   [](const auto &access) {
-                     return access.kind ==
-                            BufferRegionAnalysis::MemoryAccessKind::Async;
-                   }) &&
-      getProxyFenceScope(op) == scope;
+  bool isProxyOp = llvm::any_of(accesses,
+                                [](const auto &access) {
+                                  return access.isShared(SharedKind::Async);
+                                }) &&
+                   getProxyFenceScope(op) == scope;
 
   auto scratchBufferId = Allocation::InvalidBufferId;
   if (isa<triton::CallOp>(op)) {
@@ -127,8 +125,7 @@ void ProxyFenceAnalysis<scope>::update(Operation *op, BlockInfo *blockInfo,
     // Explicit buffers are classified by their memory effects rather than
     // operation-specific proxy lists.
     for (const auto &access : accesses) {
-      if (access.kind == BufferRegionAnalysis::MemoryAccessKind::Barrier ||
-          access.kind == BufferRegionAnalysis::MemoryAccessKind::Tensor)
+      if (!access.isShared() || access.isShared(SharedKind::Barrier))
         continue;
       for (auto bufferId :
            allocation.getAllBufferIdsWithAliases(access.value)) {
@@ -136,12 +133,9 @@ void ProxyFenceAnalysis<scope>::update(Operation *op, BlockInfo *blockInfo,
           continue;
         auto interval = allocation.getAllocatedInterval(bufferId);
         auto slice = AllocationSlice(access.value, interval, bufferId);
-        BlockInfo &effects =
-            access.kind == BufferRegionAnalysis::MemoryAccessKind::Async
-                ? proxyBlockInfo
-                : curBlockInfo;
-        if (access.kind == BufferRegionAnalysis::MemoryAccessKind::Async &&
-            !isProxyOp)
+        bool async = access.isShared(SharedKind::Async);
+        BlockInfo &effects = async ? proxyBlockInfo : curBlockInfo;
+        if (async && !isProxyOp)
           continue;
         if (access.isWrite)
           effects.syncWriteSlices[slice].insert(op);

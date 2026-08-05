@@ -1004,7 +1004,7 @@ private:
       Value effectCTAs = materialized.effectCTAs;
       MemType memType = materialized.memType;
       if (memType == MemType::SHARED_MEM) {
-        if (effect.proxy == MemEffectsOpInfo::Effects::Proxy::Async) {
+        if (effect.sharedKind == ttg::SharedKind::Async) {
           funcBuilder.createVerifyProxyAccessCall(b, bufferMask, baseThread,
                                                   effect.operandName, pred, op,
                                                   effectCTAs);
@@ -1077,7 +1077,7 @@ private:
               b, barrier, materialized.bufferMask, combinedPred,
               materialized.memType, op, recipientCTAs, materialized.effectCTAs);
           if (materialized.memType == MemType::SHARED_MEM &&
-              effect.proxy == MemEffectsOpInfo::Effects::Proxy::Async) {
+              effect.sharedKind == ttg::SharedKind::Async) {
             funcBuilder.createTrackProxyAccessesForBufferCall(
                 b, barrier, materialized.bufferMask, baseThread, combinedPred,
                 op, recipientCTAs, materialized.effectCTAs);

@@ -41,8 +41,7 @@ public:
       SmallVector<Operation *> copyRegToSharedOps;
       for (const auto &access :
            BufferRegionAnalysis::getMemoryAccesses(dotOp.getOperation())) {
-        if (access.kind != BufferRegionAnalysis::MemoryAccessKind::Async ||
-            !access.isRead)
+        if (!access.isShared(ttg::SharedKind::Async) || !access.isRead)
           continue;
         llvm::append_range(copyRegToSharedOps,
                            findCopyRegToSharedOps(access.value));
@@ -107,9 +106,7 @@ private:
           }
           if (llvm::any_of(BufferRegionAnalysis::getMemoryAccesses(user),
                            [](const auto &access) {
-                             return access.kind ==
-                                        BufferRegionAnalysis::MemoryAccessKind::
-                                            Generic &&
+                             return access.isShared(ttg::SharedKind::Generic) &&
                                     access.isWrite;
                            })) {
             result.insert(user);
