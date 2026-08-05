@@ -33,12 +33,6 @@ def _find_frame_by_name(frame, name):
     return None
 
 
-_skip_cudagraph_test = pytest.mark.skipif(
-    os.environ.get("PROTON_SKIP_CUDAGRAPH_TEST", "0") == "1",
-    reason="CUDAGraph test skipped due to environment constraints",
-)
-
-
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context, tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_torch.hatchet"
@@ -96,7 +90,6 @@ def test_triton(tmp_path: pathlib.Path, device: str):
     assert data[0]["children"][1]["frame"]["name"] == "test2"
 
 
-@_skip_cudagraph_test
 def test_cudagraph(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -176,7 +169,6 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
         assert total_iters == 10
 
 
-@_skip_cudagraph_test
 def test_cudagraph_metric_queue_handles_inactive_replay(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -245,7 +237,6 @@ def test_cudagraph_metric_queue_handles_inactive_replay(tmp_path: pathlib.Path, 
     assert profiled_frame["metrics"]["sum_metric"] == float(x.numel())
 
 
-@_skip_cudagraph_test
 def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -301,7 +292,6 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
     assert has_positive_time_metric(replay1_frame)
 
 
-@_skip_cudagraph_test
 def test_cudagraph_deactivate(tmp_path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -369,7 +359,6 @@ def test_cudagraph_deactivate(tmp_path, device: str):
     assert scope_c_frame is not None
 
 
-@_skip_cudagraph_test
 @pytest.mark.parametrize("data_format", ["hatchet", "hatchet_msgpack"])
 def test_cudagraph_filters_unlinked_virtual_scopes(tmp_path: pathlib.Path, data_format: str, device: str):
     stream = torch.cuda.Stream()
@@ -432,7 +421,6 @@ def test_cudagraph_filters_unlinked_virtual_scopes(tmp_path: pathlib.Path, data_
     assert iter_with_kernel_frame["children"][0]["metrics"]["time (ns)"] > 0
 
 
-@_skip_cudagraph_test
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports multi-stream CUDAGraphs")
 def test_cudagraph_multi_stream(tmp_path: pathlib.Path, device: str):
     """
@@ -1028,7 +1016,6 @@ def test_multiple_sessions(tmp_path: pathlib.Path, device: str):
     assert scope0_count + scope1_count == 3
 
 
-@_skip_cudagraph_test
 def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -1264,7 +1251,6 @@ def test_trace_flexible_metrics_no_kernel_anchor(tmp_path: pathlib.Path):
     assert isinstance(trace_events[0]["args"]["scope_id"], int)
 
 
-@_skip_cudagraph_test
 def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -1485,7 +1471,6 @@ def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path, d
     assert kernel["metrics"]["count"] == 1
 
 
-@_skip_cudagraph_test
 def test_tensor_metrics_scope(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_tensor_metrics_scope.hatchet"
     proton.start(str(temp_file.with_suffix("")))
@@ -1515,7 +1500,6 @@ def test_tensor_metrics_scope(tmp_path: pathlib.Path, device: str):
     assert test_frame["metrics"]["x_std"] == 0.0
 
 
-@_skip_cudagraph_test
 def test_tensor_metrics_hook(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_tensor_metrics_hook.hatchet"
 
@@ -1550,7 +1534,6 @@ def test_tensor_metrics_hook(tmp_path: pathlib.Path, device: str):
     assert foo_test_frame["metrics"]["flops"] == 8.0
 
 
-@_skip_cudagraph_test
 def test_tensor_metrics_cudagraph_hook(tmp_path: pathlib.Path, device: str):
     """
     Test triton kernels launched from metadata hooks and hook="triton"
@@ -1609,7 +1592,6 @@ def test_tensor_metrics_cudagraph_hook(tmp_path: pathlib.Path, device: str):
     assert _find_frame_by_name(metadata_frame, "metadata_helper_kernel") is not None
 
 
-@_skip_cudagraph_test
 def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -1699,7 +1681,6 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
     assert scope_d_frame["metrics"]["vec"] == [0, 10, 20, 30]
 
 
-@_skip_cudagraph_test
 def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -1752,7 +1733,6 @@ def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path, device: str
         assert c_frame["metrics"]["count"] == 10
 
 
-@_skip_cudagraph_test
 def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
     if torch.cuda.device_count() < 2:
         pytest.skip("Requires at least two CUDA devices")
@@ -1879,7 +1859,6 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
     assert num_scopes == 5000
 
 
-@_skip_cudagraph_test
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
 def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_size, device: str):
