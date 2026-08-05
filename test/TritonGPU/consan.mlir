@@ -38,6 +38,51 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
+#call_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [1, 0], CGALayout = [[1, 0]]}>
+#call_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#call_smem = #ttg.shared_memory
+#call_load_blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 1024 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
+  // Scratch in a non-entry function is summarized by the call's virtual
+  // shared-memory frame. The callee body itself is not instrumented.
+  // CHECK-LABEL: tt.func private @scratch_only_callee
+  // CHECK-NOT: tt.call @__triton_consan
+  // CHECK: tt.gather
+  tt.func private @scratch_only_callee(
+      %indices: tensor<1024x256xi32, #call_blocked>,
+      %values: tensor<128x256xf32, #call_blocked>) {
+    %0 = tt.gather %values[%indices] {axis = 0 : i32, allocation.offset = 0 : i32, allocation.size = 512 : i32}
+        : (tensor<128x256xf32, #call_blocked>, tensor<1024x256xi32, #call_blocked>) -> tensor<1024x256xf32, #call_blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: tt.func public @summarize_scratch_call
+  // The explicit buffer and call frame partially overlap, so both masks select
+  // the shared state lane.
+  // CHECK: arith.constant dense<[true, true, false, false]> : tensor<4xi1
+  // CHECK: ttg.local_load
+  // CHECK: arith.constant dense<[false, true, true, false]> : tensor<4xi1
+  // CHECK: %[[ALL_CTAS:.*]] = arith.constant 3 : i32
+  // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[ALL_CTAS]]
+  // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[ALL_CTAS]]
+  // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}%[[ALL_CTAS]]
+  // CHECK: tt.call @scratch_only_callee
+  tt.func public @summarize_scratch_call(
+      %indices: tensor<1024x256xi32, #call_blocked>,
+      %values: tensor<128x256xf32, #call_blocked>) {
+    %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<256xi32, #call_shared, #call_smem, mutable>
+    %loaded = ttg.local_load %buf : !ttg.memdesc<256xi32, #call_shared, #call_smem, mutable> -> tensor<256xi32, #call_load_blocked>
+    tt.call @scratch_only_callee(%indices, %values) {allocation.offset = 128 : i32, allocation.size = 512 : i32}
+        : (tensor<1024x256xi32, #call_blocked>, tensor<128x256xf32, #call_blocked>) -> ()
+    // Keep the NVIDIA dialect loaded in this standalone split module.
+    ttng.cluster_barrier {relaxed = true}
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 #smem = #ttg.shared_memory

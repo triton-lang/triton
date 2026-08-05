@@ -15,11 +15,15 @@ implementation:
 - `cuda:*` uses the NVIDIA hooks.
 - `hip:*` uses the AMD hooks.
 
-ConSan currently supports one public entry point in the module. It uses
-BufferRegion analysis to collect exact shared-memory and tensor-memory address
-sets plus barrier allocations, then creates auxiliary state in distributed
-tensors and shared-cluster global scratch memory. Most scratch state is
-CTA-qualified so cluster and multicast effects can be modeled explicitly.
+ConSan instruments the module's one public entry point. It uses BufferRegion
+analysis to collect exact shared-memory and tensor-memory address sets plus
+barrier allocations, then creates auxiliary state in distributed tensors and
+shared-cluster global scratch memory. Calls from the entry point are summarized
+as accesses to their allocator-provided shared-memory frames; ConSan does not
+instrument non-entry function bodies. A non-entry function that contains
+effects outside this call-frame model is rejected with a diagnostic asking the
+compiler to inline it. Most scratch state is CTA-qualified so cluster and
+multicast effects can be modeled explicitly.
 
 ## Visibility Model
 
@@ -333,10 +337,13 @@ The common hook implementation covers these TritonGPU operations:
   descriptors because their indices are runtime values.
 - `ttg.local_alloc` with a source: barrier-tracked shared-memory write.
 - Any operation with allocator-provided operation-local shared scratch: a
-  synchronous generic-proxy write over its allocated byte interval. Forced
-  warp-shuffle conversions publish no scratch metadata because allocation
-  reserves no scratch for them; convert, reduce, and scratch-backed atomic
-  broadcasts use CTA-aware routing.
+  synchronous generic-proxy write over its allocated byte interval in every
+  CTA. Forced warp-shuffle conversions publish no scratch metadata because
+  allocation reserves no scratch for them.
+- Function calls with allocator-provided virtual shared-memory frames: a
+  synchronous generic-proxy write over the whole callee frame in every CTA.
+  This includes nested callees because each virtual frame is sized from the
+  callee's peak shared-memory allocation.
 
 These shared-memory effects are generic-proxy accesses for the proxy-ordering
 model.
@@ -385,4 +392,8 @@ AMD hooks additionally cover:
   commit flows where possible.
 - Global-memory race checking is handled by the separate global sanitizer, not
   by ConSan.
-- The pass expects exactly one public entry point in the module.
+- The pass expects exactly one public entry point in the module. Non-entry
+  functions may contain register and global-memory operations, calls, and
+  compiler-owned shared scratch. SSA-visible shared/tensor-memory effects,
+  barrier or asynchronous state, warp specialization, and cluster barriers
+  require inlining before ConSan.

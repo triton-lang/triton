@@ -383,21 +383,14 @@ Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
                         EvictionPolicy::NORMAL, false);
 }
 
-FuncOp getEntryPoint(ModuleOp module) {
-  SmallVector<FuncOp> publicFuncs = llvm::to_vector(llvm::make_filter_range(
-      module.getOps<FuncOp>(), [](FuncOp func) { return func.isPublic(); }));
-  assert(publicFuncs.size() == 1 && "Expected exactly one public function");
-  return publicFuncs.front();
-}
-
-AuxDataMap::ThreadLayout getThreadLayout(ModuleOp module,
+AuxDataMap::ThreadLayout getThreadLayout(FuncOp entryPoint,
                                          const ConSanTargetHooks &hooks) {
   AuxDataMap::ThreadLayout layout;
   bool hasTMA = false;
   bool hasTC = false;
   bool hasCLC = false;
 
-  module.walk([&](Operation *op) {
+  entryPoint.walk([&](Operation *op) {
     if (auto wsOp = dyn_cast<WarpSpecializeOp>(op))
       layout.numBaseThreads = std::max<int>(
           layout.numBaseThreads, wsOp.getPartitionRegions().size() + 1);
@@ -458,10 +451,6 @@ Region *AuxDataMap::RegionToValueMap::getEnclosingParitionOrFunctionRegion(
       return region;
     }
     if (isa<FuncOp>(region->getParentOp())) {
-      ModuleOp module = op->getParentOfType<ModuleOp>();
-      assert(getEntryPoint(module) == region->getParentOp() &&
-             "Concurrency sanitizer supports only one instrumented "
-             "function in the module");
       return region;
     }
     region = region->getParentRegion();
@@ -470,21 +459,21 @@ Region *AuxDataMap::RegionToValueMap::getEnclosingParitionOrFunctionRegion(
   return nullptr;
 }
 
-LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
-    ModuleOp module, FunctionBuilder &fb, const ConSanTargetHooks &hooks) {
+LogicalResult
+AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
+                                            FunctionBuilder &fb,
+                                            const ConSanTargetHooks &hooks) {
   SmallVector<BufferRegion> barrierRegions;
-  if (failed(getBuffersAndBarriers(module, barrierRegions, hooks)))
+  if (failed(getBuffersAndBarriers(module, entryPoint, barrierRegions, hooks)))
     return failure();
   int numCTAs = lookupNumCTAs(module);
-  threadLayout = getThreadLayout(module, hooks);
+  threadLayout = getThreadLayout(entryPoint, hooks);
   hasAsyncProxyFenceTracking =
       hooks.needsAsyncProxyFenceTracking(module) &&
       bufferStatePlans[(int)MemType::SHARED_MEM].numLanes != 0;
   int captureCounter = 0;
   int64_t captureBytes = 0;
 
-  FuncOp entryPoint = getEntryPoint(module);
-  assert(entryPoint);
   Region *entryRegion = &entryPoint.getBody();
 
   int numMBarriers = barrierRegions.size();
@@ -662,10 +651,11 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
 }
 
 LogicalResult
-AuxDataMap::getBuffersAndBarriers(ModuleOp module,
+AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
                                   SmallVector<BufferRegion> &barrierRegions,
                                   const ConSanTargetHooks &hooks) {
-  // Collect shared memory buffers allocated in the module
+  // Run dataflow over the module so call edges resolve, then collect only the
+  // entrypoint regions that this ConSan invocation will instrument.
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
   triton::BufferRegionAnalysis *analysis =
       solver->load<triton::BufferRegionAnalysis>();
@@ -690,8 +680,10 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
     candidates[static_cast<int>(*memType)].push_back(
         {value, analysis->getLatticeElement(value)->getValue()});
   };
-  module.walk([&](Operation *op) {
-    auto info = hooks.getMemEffectsOpInfo(op);
+  SmallVector<BufferRegion> staticSharedRegions;
+  unsigned numCTAs = lookupNumCTAs(module);
+  entryPoint.walk([&](Operation *op) {
+    auto info = getConSanMemEffectsOpInfo(hooks, op);
     if (!info)
       return;
     if (info->trackingKind == MemEffectsOpInfo::TrackingKind::CommitCount &&
@@ -700,11 +692,19 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
           info->operandEffects, [](const MemEffectsOpInfo::Effects &e) {
             return e.rw == MemEffectsOpInfo::Effects::Read;
           });
-    for (const auto &effect : info->operandEffects)
-      collectCandidates(effect.buf);
+    for (const auto &effect : info->operandEffects) {
+      if (auto *value = std::get_if<Value>(&effect.buffer)) {
+        collectCandidates(*value);
+      } else {
+        staticSharedRegions.push_back(
+            std::get<MemEffectsOpInfo::Effects::StaticSharedBuffer>(
+                effect.buffer)
+                .getRegion(numCTAs));
+      }
+    }
   });
 
-  analysis->calculateUsedBufferRegions(module);
+  analysis->calculateUsedBufferRegions(entryPoint);
   barrierRegions = analysis->getAllUsedBufferRegions(
       BufferRegionAnalysis::RegionType::BARRIER);
 
@@ -715,12 +715,17 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
                           : BufferRegionAnalysis::TENSOR_MEMORY;
     SmallVector<BufferRegion> regions =
         analysis->getAllUsedBufferRegions(regionType);
+    if (memType == MemType::SHARED_MEM)
+      llvm::append_range(regions, staticSharedRegions);
+    llvm::sort(regions);
+    regions.erase(std::unique(regions.begin(), regions.end()), regions.end());
     bool hasUnknown = analysis->hasUnknownUsedBufferRegions(regionType);
     if (regions.empty() && !hasUnknown)
       continue;
 
+    bufferRegions[iMemType] = regions;
     bufferStatePlans[iMemType] =
-        triton::createBufferStatePlan(regions, hasUnknown);
+        triton::createBufferStatePlan(bufferRegions[iMemType], hasUnknown);
 
     for (const auto &[value, regionInfo] : candidates[iMemType]) {
       BufferStateCandidates stateCandidates;

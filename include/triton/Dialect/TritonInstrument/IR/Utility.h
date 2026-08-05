@@ -98,8 +98,6 @@ TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
                                                   RankedTensorType tensorType,
                                                   bool isSigned = false);
 uint32_t getMemDescLength(Value buf);
-FuncOp getEntryPoint(ModuleOp module);
-
 inline Value maybeAnd(ImplicitLocOpBuilder &b, Value lhs, Value rhs) {
   if (!lhs)
     return rhs;
@@ -237,8 +235,10 @@ struct AuxDataMap {
   RegionToValueMap commits[CommitKind::NumCommitKinds];
 
   // State-lane plans and analysis-derived runtime-base, state-mask, and CTA
-  // cases for each memdesc.
+  // cases for each memdesc. bufferRegions preserves the ordered region list
+  // used to build each plan so static scratch can select its mask directly.
   triton::BufferStatePlan bufferStatePlans[numMemTypes];
+  SmallVector<triton::BufferRegion> bufferRegions[numMemTypes];
   DenseMap<Value, BufferStateCandidates> bufferCandidates[numMemTypes];
 
   // scratch pointer, i32
@@ -273,6 +273,7 @@ struct AuxDataMap {
   bool hasAsyncProxyFenceTracking = false;
 
   LogicalResult populateAndPassToWarpSpecialize(ModuleOp module,
+                                                triton::FuncOp entryPoint,
                                                 FunctionBuilder &funcBuilder,
                                                 const ConSanTargetHooks &hooks);
 
@@ -280,7 +281,7 @@ struct AuxDataMap {
 
 private:
   LogicalResult
-  getBuffersAndBarriers(ModuleOp module,
+  getBuffersAndBarriers(ModuleOp module, triton::FuncOp entryPoint,
                         SmallVector<triton::BufferRegion> &barrierRegions,
                         const ConSanTargetHooks &hooks);
   void passToWarpSpecialize(triton::FuncOp func, ValueType value,

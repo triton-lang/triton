@@ -2,12 +2,15 @@
 #define TRITONINSTRUMENT_CONSAN_TARGET_HOOKS_H
 
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/Interfaces/CallInterfaces.h"
+#include "triton/Analysis/BufferRegion.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <variant>
 
 namespace mlir::triton::instrument {
 
@@ -30,16 +33,36 @@ struct MemEffectsOpInfo {
     EffectWrites,
   };
   struct Effects {
+    struct StaticSharedBuffer {
+      uint32_t offset;
+      uint32_t length;
+
+      triton::BufferRegion getRegion(unsigned numCTAs) const {
+        triton::BufferRegion region;
+        region.baseOffset = offset;
+        region.length = length;
+        for (unsigned cta = 0; cta < numCTAs; ++cta)
+          region.ctaAddresses.push_back(
+              {cta, triton::AddressSet::fromRange(offset, length)});
+        return region;
+      }
+    };
+
     enum RW { Read, Write } rw;
     enum class Proxy { Generic, Async } proxy;
-    Value buf;
+    std::variant<Value, StaticSharedBuffer> buffer;
     std::string operandName = "";
     uint32_t length = 0;
 
     Effects(RW rw, Value buf, std::string operandName = "",
             Proxy proxy = Proxy::Generic)
-        : rw(rw), proxy(proxy), buf(buf), operandName(operandName),
+        : rw(rw), proxy(proxy), buffer(buf), operandName(operandName),
           length(getMemDescLength(buf)) {}
+
+    Effects(RW rw, StaticSharedBuffer buffer,
+            std::string operandName = "Scratch", Proxy proxy = Proxy::Generic)
+        : rw(rw), proxy(proxy), buffer(buffer), operandName(operandName),
+          length(buffer.length) {}
   };
   struct BarrierInfo {
     Value barrier;
@@ -182,6 +205,31 @@ public:
   virtual SmallVector<CommitKind::Kind>
   getRequiredCommitKinds(ModuleOp module) const = 0;
 };
+
+inline std::optional<MemEffectsOpInfo>
+getConSanMemEffectsOpInfo(const ConSanTargetHooks &hooks, Operation *op) {
+  std::optional<MemEffectsOpInfo> info = hooks.getMemEffectsOpInfo(op);
+  auto size = op->getAttrOfType<IntegerAttr>("allocation.size");
+  if (!size)
+    return info;
+
+  auto offset = op->getAttrOfType<IntegerAttr>("allocation.offset");
+  assert(offset && "allocation.size requires allocation.offset");
+  if (!info)
+    info.emplace();
+  if (info->trackingKind == MemEffectsOpInfo::TrackingKind::None)
+    info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+  // A ConSan write performs both read- and write-conflict checks, so it is the
+  // conservative read/write summary for compiler-owned scratch.
+  StringRef name = isa<CallOpInterface>(op) ? "Callee scratch" : "Scratch";
+  info->operandEffects.emplace_back(
+      MemEffectsOpInfo::Effects::Write,
+      MemEffectsOpInfo::Effects::StaticSharedBuffer{
+          static_cast<uint32_t>(offset.getInt()),
+          static_cast<uint32_t>(size.getInt())},
+      name.str());
+  return info;
+}
 
 LogicalResult runConcurrencySanitizer(ModuleOp module,
                                       const ConSanTargetHooks &hooks);

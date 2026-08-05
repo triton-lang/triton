@@ -218,6 +218,28 @@ FailureOr<Value> createBufferStateMask(ImplicitLocOpBuilder &b,
   return result;
 }
 
+FailureOr<Value> createStaticBufferStateMask(
+    ImplicitLocOpBuilder &b, AuxDataMap &auxData,
+    const MemEffectsOpInfo::Effects::StaticSharedBuffer &buffer,
+    Operation *op) {
+  int index = static_cast<int>(MemType::SHARED_MEM);
+  const auto &regions = auxData.bufferRegions[index];
+  BufferRegion region = buffer.getRegion(ttg::lookupNumCTAs(op));
+  auto it = llvm::lower_bound(regions, region);
+  if (it == regions.end() || !(*it == region)) {
+    op->emitError("static shared-memory region is absent from the ConSan "
+                  "registry");
+    return failure();
+  }
+  unsigned id = std::distance(regions.begin(), it);
+  const BufferStatePlan &plan = auxData.bufferStatePlans[index];
+  auto writeVisibilityType =
+      cast<RankedTensorType>(auxData.writeVisibility[index].at(op).type);
+  RankedTensorType maskType =
+      tti::getSlicedTensorType(writeVisibilityType, {1}, b.getI1Type());
+  return createStateMaskConstant(b, maskType, plan.regionMasks[id]);
+}
+
 Value allCTAsMask(ImplicitLocOpBuilder &b) {
   int numCTAs = ttg::lookupNumCTAs(b);
   assert(numCTAs <= 16 && "ConSan CTA bitsets assume at most 16 CTAs");
@@ -692,12 +714,25 @@ public:
       : module(module), hooks(hooks) {}
 
   LogicalResult run() {
-    tti::FunctionBuilder funcBuilder(module, auxData);
-    if (failed(auxData.populateAndPassToWarpSpecialize(module, funcBuilder,
-                                                       hooks)))
+    SmallVector<tt::FuncOp> publicFuncs =
+        llvm::to_vector(llvm::make_filter_range(
+            module.getOps<tt::FuncOp>(),
+            [](tt::FuncOp func) { return func.isPublic(); }));
+    if (publicFuncs.size() != 1) {
+      module.emitError(
+          "ConSan requires exactly one public entrypoint function; "
+          "found ")
+          << publicFuncs.size();
+      return failure();
+    }
+    entryPoint = publicFuncs.front();
+    if (failed(validateNonEntryFunctions()))
       return failure();
 
-    tt::FuncOp entryPoint = tti::getEntryPoint(module);
+    tti::FunctionBuilder funcBuilder(module, auxData);
+    if (failed(auxData.populateAndPassToWarpSpecialize(module, entryPoint,
+                                                       funcBuilder, hooks)))
+      return failure();
 
     ImplicitLocOpBuilder b(entryPoint.getLoc(), entryPoint);
     b.setInsertionPointToStart(&entryPoint.getBody().front());
@@ -708,12 +743,56 @@ public:
   }
 
 private:
+  // Non-entry bodies are not instrumented. Their compiler-owned shared memory
+  // is covered by the virtual frame on each call, but SSA-visible memory and
+  // sanitizer state transitions cannot be represented by that summary.
+  LogicalResult validateNonEntryFunctions() {
+    AuxDataMap emptyAuxData;
+    for (tt::FuncOp func : module.getOps<tt::FuncOp>()) {
+      if (func == entryPoint)
+        continue;
+      WalkResult result = func.walk([&](Operation *op) -> WalkResult {
+        if (op == func.getOperation() || isa<CallOpInterface>(op))
+          return WalkResult::advance();
+
+        auto info = hooks.getMemEffectsOpInfo(op);
+        bool hasMemoryState =
+            info && (!info->operandEffects.empty() || !info->barriers.empty() ||
+                     info->implicitCommit);
+        bool hasBarrierState = hooks.getBarrierInitInfo(op) ||
+                               hooks.getBarrierWaitInfo(op) ||
+                               hooks.getBarrierInvalidateInfo(op);
+        bool hasAsyncState =
+            hooks.getAsyncProxyFenceInfo(op) ||
+            hooks.getWaitOpInfo(op, emptyAuxData) ||
+            isa<ttg::AsyncCommitGroupOp, ttng::WarpGroupDotWaitOp,
+                ttg::AsyncWaitOp>(op);
+        bool hasControlState =
+            isa<ttg::WarpSpecializeOp, ttg::WarpSpecializePartitionsOp,
+                ttng::ClusterBarrierOp>(op);
+        if (!hasMemoryState && !hasBarrierState && !hasAsyncState &&
+            !hasControlState)
+          return WalkResult::advance();
+
+        op->emitError("ConSan cannot summarize ")
+            << op->getName() << " in non-entry function @" << func.getName()
+            << "; inline the function before ConSan or keep its body limited "
+               "to register/global-memory operations and compiler-owned "
+               "shared scratch";
+        return WalkResult::interrupt();
+      });
+      if (result.wasInterrupted())
+        return failure();
+    }
+    return success();
+  }
+
   void initializeAllocations() {
     if (!shouldInitializeAllocations())
       return;
 
     SmallVector<Operation *> allocationsToInitialize;
-    module.walk([&](Operation *op) {
+    entryPoint.walk([&](Operation *op) {
       if (auto alloc = dyn_cast<ttg::LocalAllocOp>(op)) {
         if (!alloc.getSrc())
           allocationsToInitialize.push_back(op);
@@ -742,7 +821,7 @@ private:
   LogicalResult instrumentMemoryOperations(ImplicitLocOpBuilder &b,
                                            tti::FunctionBuilder &funcBuilder) {
     SmallVector<ttng::ClusterBarrierOp> clusterBarriers;
-    WalkResult walkResult = module.walk([&](Operation *op) -> WalkResult {
+    WalkResult walkResult = entryPoint.walk([&](Operation *op) -> WalkResult {
       CriticalSectionListener listener;
       b.setListener(&listener);
 
@@ -885,8 +964,7 @@ private:
           b.setListener(&listener);
         }
       }
-      if (isa<tt::ReturnOp>(op) && !auxData.activeMasks.empty() &&
-          op->getParentOfType<tt::FuncOp>() == tti::getEntryPoint(module)) {
+      if (isa<tt::ReturnOp>(op) && !auxData.activeMasks.empty()) {
         b.setListener(nullptr);
         Value lock = auxData.lock.at(op).value;
         Value trueVal = arith::ConstantIntOp::create(b, 1, 1);
@@ -958,7 +1036,8 @@ private:
                                      int thread,
                                      tti::FunctionBuilder &funcBuilder) {
     int baseThread = getBaseThread(thread, auxData.threadLayout);
-    std::optional<MemEffectsOpInfo> opInfo = hooks.getMemEffectsOpInfo(op);
+    std::optional<MemEffectsOpInfo> opInfo =
+        getConSanMemEffectsOpInfo(hooks, op);
     if (!opInfo)
       return success();
     Value pred = opInfo->pred;
@@ -975,29 +1054,42 @@ private:
 
     for (const auto &effect : opInfo->operandEffects) {
       MaterializedEffect materialized;
-      Value buf = effect.buf;
-      auto bufType = cast<ttg::MemDescType>(buf.getType());
-      materialized.memType = MemType::TENSOR_MEM;
-      if (isa<ttg::SharedMemorySpaceAttr>(bufType.getMemorySpace()))
+      if (auto *buf = std::get_if<Value>(&effect.buffer)) {
+        auto bufType = cast<ttg::MemDescType>(buf->getType());
+        materialized.memType = MemType::TENSOR_MEM;
+        if (isa<ttg::SharedMemorySpaceAttr>(bufType.getMemorySpace()))
+          materialized.memType = MemType::SHARED_MEM;
+        auto &candidateMap =
+            auxData.bufferCandidates[static_cast<int>(materialized.memType)];
+        auto candidateIt = candidateMap.find(*buf);
+        if (candidateIt == candidateMap.end()) {
+          op->emitError("missing buffer-region candidates for memdesc");
+          return failure();
+        }
+        Value runtimeBase;
+        if (!candidateIt->second.unknown &&
+            candidateIt->second.cases.size() > 1)
+          runtimeBase = tti::ExperimentalMemDescToI32Op::create(b, *buf);
+        FailureOr<Value> stateMask =
+            createBufferStateMask(b, auxData, materialized.memType, runtimeBase,
+                                  candidateIt->second, op);
+        if (failed(stateMask))
+          return failure();
+        materialized.bufferMask = *stateMask;
+        materialized.effectCTAs =
+            getMemEffectCTAs(b, defaultEffectCTAs, candidateIt->second);
+      } else {
         materialized.memType = MemType::SHARED_MEM;
-      auto &candidateMap =
-          auxData.bufferCandidates[static_cast<int>(materialized.memType)];
-      auto candidateIt = candidateMap.find(buf);
-      if (candidateIt == candidateMap.end()) {
-        op->emitError("missing buffer-region candidates for memdesc");
-        return failure();
+        FailureOr<Value> stateMask = createStaticBufferStateMask(
+            b, auxData,
+            std::get<MemEffectsOpInfo::Effects::StaticSharedBuffer>(
+                effect.buffer),
+            op);
+        if (failed(stateMask))
+          return failure();
+        materialized.bufferMask = *stateMask;
+        materialized.effectCTAs = allCTAsMask(b);
       }
-      Value runtimeBase;
-      if (!candidateIt->second.unknown && candidateIt->second.cases.size() > 1)
-        runtimeBase = tti::ExperimentalMemDescToI32Op::create(b, buf);
-      FailureOr<Value> stateMask =
-          createBufferStateMask(b, auxData, materialized.memType, runtimeBase,
-                                candidateIt->second, op);
-      if (failed(stateMask))
-        return failure();
-      materialized.bufferMask = *stateMask;
-      materialized.effectCTAs =
-          getMemEffectCTAs(b, defaultEffectCTAs, candidateIt->second);
       materializedEffects.push_back(materialized);
 
       Value bufferMask = materialized.bufferMask;
@@ -1142,6 +1234,7 @@ private:
   }
 
   ModuleOp module;
+  tt::FuncOp entryPoint;
   AuxDataMap auxData;
   const ConSanTargetHooks &hooks;
 };
