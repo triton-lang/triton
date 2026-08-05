@@ -1185,6 +1185,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
   auto &correlation = profiler.correlation;
 
   uint64_t numCompletedTasks = 0;
+  uint64_t maxCorrelationId = 0;
   DataPhases dataPhases;
 
   for (size_t i = 0; i < numHeaders; ++i) {
@@ -1196,6 +1197,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
       auto *record =
           static_cast<rocprofiler_buffer_tracing_kernel_dispatch_record_t *>(
               header->payload);
+      maxCorrelationId =
+          std::max(maxCorrelationId, record->correlation_id.internal);
       auto kernelName = impl->getKernelName(record->dispatch_info.kernel_id);
       uint64_t streamId =
           static_cast<uint64_t>(record->dispatch_info.queue_id.handle);
@@ -1232,7 +1235,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
     }
   }
   profiler.flushDataPhases(dataPhases, profiler.pendingGraphPool.get());
-  correlation.complete(numCompletedTasks, /*correlationId=*/0);
+  correlation.complete(numCompletedTasks, maxCorrelationId);
 }
 
 // ---- SDK tool init / fini (called by rocprofiler_force_configure) ----
