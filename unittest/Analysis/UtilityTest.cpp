@@ -1,6 +1,9 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Analysis/BufferRegion.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
+#include "mlir/Parser/Parser.h"
 #include "llvm/Support/Signals.h"
 #include <gtest/gtest.h>
 
@@ -25,6 +28,43 @@ TEST(Analysis, reorder) {
     EXPECT_EQ(reordered[1], 10);
     EXPECT_EQ(reordered[2], 30);
   }
+}
+
+TEST(Analysis, SharedMemoryEffectsPreserveResourceAndKind) {
+  MLIRContext context;
+  context.getOrLoadDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
+  auto module = parseSourceString<ModuleOp>(R"mlir(
+    #shared = #ttg.swizzled_shared<{
+      vec = 1, perPhase = 1, maxPhase = 1, order = [0]
+    }>
+    #smem = #ttg.shared_memory
+    module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+      tt.func @access(%payload: !ttg.memdesc<2xi64, #shared, #smem>,
+                      %barrier: !ttg.memdesc<1xi64, #shared, #smem>) {
+        ttng.inval_barrier %barrier : !ttg.memdesc<1xi64, #shared, #smem>
+        ttng.clc_try_cancel %payload, %barrier :
+            !ttg.memdesc<2xi64, #shared, #smem>,
+            !ttg.memdesc<1xi64, #shared, #smem>
+        tt.return
+      }
+    }
+  )mlir",
+                                            &context);
+  ASSERT_TRUE(module);
+
+  SmallVector<triton::gpu::SharedKind> kinds;
+  module->walk([&](MemoryEffectOpInterface op) {
+    SmallVector<MemoryEffects::EffectInstance> effects;
+    op.getEffects(effects);
+    for (const auto &effect : effects) {
+      EXPECT_EQ(effect.getResource(), triton::gpu::SharedMemory::get());
+      kinds.push_back(
+          cast<triton::gpu::SharedKindAttr>(effect.getParameters()).getValue());
+    }
+  });
+  using Kind = triton::gpu::SharedKind;
+  EXPECT_EQ(kinds,
+            (SmallVector<Kind>{Kind::Generic, Kind::Async, Kind::Barrier}));
 }
 
 TEST(Analysis, AddressSetExhaustiveEightUnitUniverse) {
