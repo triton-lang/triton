@@ -843,8 +843,9 @@ void LocalAllocOp::getEffects(
   effects.emplace_back(MemoryEffects::Allocate::get(), alloc,
                        SharedMemory::get());
   if (getSrc())
-    addSharedMemoryEffects<MemoryEffects::Write>(effects, alloc,
-                                                 GenericSharedMemory::get());
+    effects.emplace_back(MemoryEffects::Write::get(), alloc,
+                         StringAttr::get(getContext(), "generic"),
+                         SharedMemory::get());
 }
 
 OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {

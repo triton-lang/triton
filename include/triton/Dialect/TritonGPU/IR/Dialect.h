@@ -96,61 +96,10 @@ using LinearEncodingCache = Cache<CacheKey, LinearEncodingAttr>;
 #include "triton/Dialect/TritonGPU/IR/Ops.h.inc"
 
 namespace mlir::triton::gpu {
-
-/// Memory effect resource that represents an access on shared memory.
 struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
-  SharedMemory() = default;
-
-  StringRef getName() const override { return "<SharedMemory>"; }
+  StringRef getName() const final { return "<SharedMemory>"; }
   SideEffects::Resource *getParent() const override { return nullptr; }
-
-protected:
-  SharedMemory(TypeID id) : SideEffects::Resource::Base<SharedMemory>(id) {}
 };
-
-/// Memory effect resource that represents an access on shared memory through
-/// the generic proxy. This includes `ttg.local_load` and `ttg.local_store`.
-struct GenericSharedMemory
-    : public SideEffects::Resource::Base<GenericSharedMemory, SharedMemory> {
-  StringRef getName() const override { return "<GenericSharedMemory>"; }
-  SideEffects::Resource *getParent() const override {
-    return SharedMemory::get();
-  }
-};
-
-/// Memory effect resource that represents an access on shared memory through
-/// the async proxy. This typically includes asynchronous TMA and tensor core
-/// operations.
-struct AsyncSharedMemory
-    : public SideEffects::Resource::Base<AsyncSharedMemory, SharedMemory> {
-  StringRef getName() const override { return "<AsyncSharedMemory>"; }
-  SideEffects::Resource *getParent() const override {
-    return SharedMemory::get();
-  }
-};
-
-/// Memory effect resource that represents a barrier synchronization effect.
-/// Barrier synchronization reads and writes are considered atomic with respect
-/// to each other and unsynchronized with respect to other effects. This
-/// includes barrier arrive and wait operations.
-struct BarrierSharedMemory
-    : public SideEffects::Resource::Base<BarrierSharedMemory, SharedMemory> {
-  StringRef getName() const override { return "<BarrierSharedMemory>"; }
-  SideEffects::Resource *getParent() const override {
-    return SharedMemory::get();
-  }
-};
-
-/// Emit the parent effect as well so existing shared-memory analyses still see
-/// dependencies between accesses using different specialized resources.
-template <typename Effect, typename ValueT>
-void addSharedMemoryEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects,
-    ValueT value, SideEffects::Resource *resource) {
-  effects.emplace_back(Effect::get(), value, SharedMemory::get());
-  effects.emplace_back(Effect::get(), value, resource);
-}
 
 // Returns true iff every non-broadcast basis of `ll`, after flattening in and
 // out dimensions, maps to a single power-of-2 in the flattened output.
