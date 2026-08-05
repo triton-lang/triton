@@ -249,10 +249,10 @@ void mlir::triton::resolveMaskOp(ModuleOp moduleOp) {
   }
 }
 
-// Return true if the given ForOp has the attribute
+// Return true if the given loop has the attribute
 // `tt.disallow_acc_multi_buffer` set to true.
-bool mlir::triton::getDisallowAccMultiBuffer(scf::ForOp forOp) {
-  return forOp->hasAttr(mlir::triton::kDisallowAccMultiBufferAttrName);
+bool mlir::triton::getDisallowAccMultiBuffer(LoopLikeOpInterface loop) {
+  return loop->hasAttr(mlir::triton::kDisallowAccMultiBufferAttrName);
 }
 
 std::pair<OpResult, int64_t>

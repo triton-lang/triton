@@ -1,3 +1,5 @@
+#include "lib/Dialect/TritonGPU/Transforms/WarpSpecialization/PartitionAttrs.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/TypeRange.h"
@@ -40,6 +42,61 @@ LogicalResult ArefCreateOp::verify() {
   if (!llvm::all_equal(dims))
     return emitError("Leading dims of sliced aref inputs don't match.");
 
+  return success();
+}
+
+static FailureOr<SetVector<int>> getArefPhiOperandPartitions(Value value) {
+  if (auto result = dyn_cast<OpResult>(value)) {
+    Operation *def = result.getDefiningOp();
+    if (!gpu::hasPartition(def))
+      return failure();
+    if (!def->hasAttr(gpu::kPartitionOutputsAttrName))
+      return gpu::getPartitionIds(def);
+    auto outputs = gpu::getPartitionOutputs(def);
+    if (result.getResultNumber() >= outputs.size())
+      return failure();
+    return outputs[result.getResultNumber()];
+  }
+
+  auto arg = dyn_cast<BlockArgument>(value);
+  if (!arg || arg.getArgNumber() == 0)
+    return failure();
+  auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp());
+  if (!forOp || !gpu::hasPartition(forOp) ||
+      !forOp->hasAttr(gpu::kPartitionOutputsAttrName))
+    return failure();
+  auto outputs = gpu::getPartitionOutputs(forOp);
+  unsigned resultNumber = arg.getArgNumber() - 1;
+  if (resultNumber >= outputs.size())
+    return failure();
+  return outputs[resultNumber];
+}
+
+LogicalResult ArefPhiOp::verify() {
+  if (!gpu::hasPartition(getOperation()))
+    return emitError("requires a non-empty ttg.partition annotation");
+
+  FailureOr<SetVector<int>> local = getArefPhiOperandPartitions(getLocal());
+  FailureOr<SetVector<int>> remote = getArefPhiOperandPartitions(getRemote());
+  if (failed(local) || local->empty())
+    return emitError("local operand must have partition ownership");
+  if (failed(remote) || remote->empty())
+    return emitError("remote operand must have partition ownership");
+
+  for (int partition : *local)
+    if (remote->contains(partition))
+      return emitError("partition ")
+             << partition << " is owned by both phi operands";
+
+  SetVector<int> covered(*local);
+  covered.insert(remote->begin(), remote->end());
+  SetVector<int> expected = gpu::getPartitionIds(getOperation());
+  if (covered.size() != expected.size() ||
+      llvm::any_of(covered, [&](int partition) {
+        return !expected.contains(partition);
+      }))
+    return emitError(
+        "operand partition union must exactly match the phi partition set");
   return success();
 }
 

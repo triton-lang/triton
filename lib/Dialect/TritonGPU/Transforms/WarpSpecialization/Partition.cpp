@@ -3,12 +3,12 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/IR/Use.h"
 
 using namespace mlir;
 using namespace triton;
@@ -46,10 +46,10 @@ LogicalResult verifyPartitionIdsAttr(Operation *op, StringRef attrName,
 
 LogicalResult verifyPartitionAttrs(Operation *op) {
   if (op->hasAttr(kWarpSpecializeAttrName)) {
-    if (!isa<scf::ForOp>(op)) {
+    if (!isa<scf::ForOp, scf::WhileOp>(op)) {
       return op->emitOpError("has unexpected attribute ")
              << kWarpSpecializeAttrName
-             << " which is expected only on `scf.for` ops";
+             << " which is expected only on `scf.for` or `scf.while` ops";
     }
 
     Operation *failedOp = nullptr;
@@ -118,7 +118,7 @@ LogicalResult verifyPartitionAttrs(Operation *op) {
   }
 
   if (auto outputsAttr = op->getAttr(kPartitionOutputsAttrName)) {
-    if (!isa<scf::ForOp, scf::IfOp, triton::ReduceOp>(op))
+    if (!isa<scf::ForOp, scf::WhileOp, scf::IfOp, triton::ReduceOp>(op))
       return op->emitOpError("has unexpected attribute ")
              << kPartitionOutputsAttrName;
 
@@ -168,8 +168,12 @@ bool Partition::hasOp(Operation *op) const {
   return partitionIds.contains(getIndex());
 }
 
-void Partition::iterateInputs(scf::ForOp loop,
+void Partition::iterateInputs(LoopLikeOpInterface loop,
                               function_ref<void(OpOperand &)> callback) const {
+  Value inductionVar;
+  if (auto forOp = dyn_cast<scf::ForOp>(loop.getOperation()))
+    inductionVar = forOp.getInductionVar();
+
   for (Operation *op : getOps()) {
     visitNestedOperands(op, [&](OpOperand &operand) {
       // Ignore implicit captures.
@@ -177,21 +181,16 @@ void Partition::iterateInputs(scf::ForOp loop,
       std::optional<SetVector<int>> partitionIds;
       if (hasPartition(value.getDefiningOp()))
         partitionIds = getPartitionIds(value.getDefiningOp());
-      if (value.getParentBlock() != loop.getBody())
+      if (value.getParentRegion()->getParentOp() != loop)
         return;
-      if (auto arg = dyn_cast<BlockArgument>(value)) {
-        assert(arg.getOwner() == loop.getBody());
-        // Ignore the induction variable.
-        if (arg == loop.getInductionVar())
-          return;
-        // This value originates from a previous iteration.
-        assert(llvm::is_contained(loop.getRegionIterArgs(), arg));
-        callback(operand);
-      } else if (!partitionIds ||
-                 !llvm::is_contained(*partitionIds, getIndex())) {
+      // Ignore the induction variable.
+      if (value == inductionVar)
+        return;
+      if ((isa<BlockArgument>(value) || !partitionIds ||
+           !partitionIds->contains(getIndex()))) {
         // This value originates from a different partition in the same
         // iteration.
-        assert(value.getDefiningOp()->getParentOp() == loop);
+        assert(value.getParentRegion()->getParentOp() == loop);
         callback(operand);
       }
     });
@@ -199,22 +198,22 @@ void Partition::iterateInputs(scf::ForOp loop,
 }
 
 void Partition::iterateOutputs(
-    scf::ForOp loop,
+    LoopLikeOpInterface loop,
     function_ref<void(Operation *, OpOperand &)> callback) const {
   for (Operation *op : getOps()) {
     for (OpOperand &use : op->getUses()) {
-      Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
+      Operation *owner = nullptr;
+      for (Region *region : loop.getLoopRegions())
+        if ((owner = region->front().findAncestorOpInBlock(*use.getOwner())))
+          break;
       if (!owner) {
         continue;
       }
       std::optional<SetVector<int>> partitionIds;
       if (hasPartition(owner))
         partitionIds = getPartitionIds(owner);
-      if (isa<scf::YieldOp>(owner)) {
-        // This value is used in a subsequent iteration.
-        callback(owner, use);
-      } else if (!partitionIds ||
-                 !llvm::is_contained(*partitionIds, getIndex())) {
+      if (isa<scf::YieldOp, scf::ConditionOp>(owner) || !partitionIds ||
+          !partitionIds->contains(getIndex())) {
         // This value is used in a different partition in the same iteration.
         callback(owner, use);
       }
@@ -231,26 +230,52 @@ void Partition::iterateDefs(
   });
 }
 
+void Partition::iterateDefs(
+    scf::WhileOp loop, function_ref<void(OpResult, unsigned)> callback) const {
+  iterateInputs(loop, [&](OpOperand &input) {
+    auto value = input.get();
+    int distance = 0;
+    while (auto arg = dyn_cast<BlockArgument>(value)) {
+      value = loop.getYieldOp().getOperand(arg.getArgNumber());
+      ++distance;
+    }
+    auto def = dyn_cast<OpResult>(value);
+    if (def && loop->isProperAncestor(def.getDefiningOp()))
+      callback(def, distance);
+  });
+}
+
 void Partition::iterateUses(
-    scf::ForOp loop,
+    LoopLikeOpInterface loop,
     function_ref<void(OpResult, OpOperand &, unsigned)> callback) const {
   SmallVector<std::tuple<OpResult, OpOperand *, unsigned>> uses;
-  iterateOutputs(loop, [&](Operation *owner, OpOperand &use) {
+  iterateOutputs(loop, [&](Operation *, OpOperand &use) {
     uses.emplace_back(cast<OpResult>(use.get()), &use, 0);
   });
   while (!uses.empty()) {
     auto [output, use, distance] = uses.pop_back_val();
-    Operation *owner = loop.getBody()->findAncestorOpInBlock(*use->getOwner());
+    Operation *owner = nullptr;
+    for (Region *region : loop.getLoopRegions())
+      if ((owner = region->front().findAncestorOpInBlock(*use->getOwner())))
+        break;
     if (!owner) {
       continue;
     }
-    if (!isa<scf::YieldOp>(owner)) {
-      callback(output, *use, distance);
+    if (auto yield = dyn_cast<scf::YieldOp>(owner)) {
+      auto arg = loop.getRegionIterArgs()[use->getOperandNumber()];
+      for (OpOperand &argUse : arg.getUses())
+        uses.emplace_back(output, &argUse, distance + 1);
       continue;
     }
-    BlockArgument arg = loop.getRegionIterArg(use->getOperandNumber());
-    for (OpOperand &use : arg.getUses())
-      uses.emplace_back(output, &use, distance + 1);
+    if (auto condition = dyn_cast<scf::ConditionOp>(owner);
+        condition && use->getOperandNumber() > 0) {
+      auto body = &loop.getLoopRegions().back()->front();
+      auto arg = body->getArgument(use->getOperandNumber() - 1);
+      for (OpOperand &argUse : arg.getUses())
+        uses.emplace_back(output, &argUse, distance);
+      continue;
+    }
+    callback(output, *use, distance);
   }
 }
 
@@ -277,7 +302,7 @@ Partition *PartitionSet::getPartition(Operation *op) {
   return getPartition(id[0]);
 }
 
-FailureOr<PartitionSet> PartitionSet::fromLoop(scf::ForOp loop) {
+FailureOr<PartitionSet> PartitionSet::fromLoop(LoopLikeOpInterface loop) {
   if (failed(verifyPartitionedLoop(loop)))
     return failure();
 
@@ -294,7 +319,7 @@ FailureOr<PartitionSet> PartitionSet::fromLoop(scf::ForOp loop) {
   for (auto [idx, attr] : llvm::enumerate(stages)) {
     auto stage = dyn_cast<IntegerAttr>(attr);
     if (!stage || stage.getInt() < 0) {
-      return mlir::emitError(loop.getLoc(), "partition stages attribute '")
+      return mlir::emitError(loop->getLoc(), "partition stages attribute '")
              << kPartitionStagesAttrName << "' has invalid element " << attr;
     }
 
@@ -361,13 +386,19 @@ SmallVector<SetVector<int>, 4> getPartitionOutputs(Operation *op) {
 }
 
 SetVector<int> getPartitionIds(OpOperand *use) {
-  auto owner = use->getOwner();
-  if (isa<scf::YieldOp>(owner)) {
-    return getPartitionOutputs(owner->getParentOp())[use->getOperandNumber()];
+  Operation *owner = use->getOwner();
+  auto pos = use->getOperandNumber();
+  if (isa<scf::YieldOp, scf::ConditionOp>(owner)) {
+    unsigned numControlOperands = isa<scf::ConditionOp>(owner) ? 1 : 0;
+    if (pos < numControlOperands)
+      return getPartitionIds(owner);
+    return getPartitionOutputs(owner->getParentOp())[pos - numControlOperands];
   }
-  if (auto forOp = dyn_cast<scf::ForOp>(owner)) {
-    int idx = use->getOperandNumber() - forOp.getNumControlOperands();
-    return idx >= 0 ? getPartitionOutputs(owner)[idx] : getPartitionIds(forOp);
+  if (auto loop = dyn_cast<LoopLikeOpInterface>(owner)) {
+    auto numControlOperands = owner->getNumOperands() - loop.getInits().size();
+    if (pos < numControlOperands)
+      return getPartitionIds(owner);
+    return getPartitionOutputs(owner)[pos - numControlOperands];
   }
   return getPartitionIds(owner);
 }
@@ -386,7 +417,7 @@ std::optional<int> getWarpSpecializeTag(Operation *op) {
   return std::nullopt;
 }
 
-LogicalResult verifyPartitionedLoop(scf::ForOp loop) {
+LogicalResult verifyPartitionedLoop(LoopLikeOpInterface loop) {
   if (failed(verifyPartitionAttrs(loop)))
     return failure();
 
