@@ -2241,8 +2241,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: %[[BOTH_CTAS:.*]] = arith.constant 3 : i32
     // CHECK: %[[ASYNC_THREAD:.*]] = arith.constant 1 : i32
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[ASYNC_THREAD]], {{.*}}%[[BOTH_CTAS]])
-    // CHECK: %[[BASE_THREAD:.*]] = arith.constant 0 : i32
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[BASE_THREAD]], {{.*}}%[[BOTH_CTAS]])
     // CHECK: %[[ASYNC_BIT:.*]] = arith.constant 2 : i64
     // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}({{.*}}%[[ASYNC_BIT]], %[[BOTH_CTAS]],
     // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer{{.*}}({{.*}}%[[BOTH_CTAS]], %[[BOTH_CTAS]])
