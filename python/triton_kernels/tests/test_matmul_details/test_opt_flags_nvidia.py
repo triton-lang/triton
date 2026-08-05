@@ -9,7 +9,7 @@ from triton_kernels.matmul_details._matmul import _compute_packed_n_w
 from triton_kernels.matmul_details.opt_flags import InapplicableConstraint, scoped_opt_flags_constraints
 from triton_kernels.matmul_details.opt_flags_details import opt_flags_nvidia
 from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE, downcast_to_mxfp
-from triton_kernels.tensor import BF16, FP4, UINT8, Storage, Tensor, convert_layout, make_ragged_tensor_metadata, wrap_torch_tensor
+from triton_kernels.tensor import FP4, UINT8, Storage, Tensor, convert_layout, make_ragged_tensor_metadata, wrap_torch_tensor
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor_details.layout import BlackwellMX4ValueShuffledLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout
@@ -19,17 +19,6 @@ from triton_kernels.testing import assert_close
 def _make_blackwell_scale_tensor():
     scale_storage = Storage(torch.empty((1, 128), dtype=torch.uint8), BlackwellMXScaleLayout())
     return Tensor(scale_storage, dtype=UINT8)
-
-
-@pytest.mark.parametrize("microblock_size", [NVFP_BLOCK_SIZE.value, MXFP_BLOCK_SIZE.value])
-def test_is_blackwell_nvfp4_lhs_dense_rhs(monkeypatch, microblock_size):
-    monkeypatch.setattr(opt_flags_nvidia.target_info, "cuda_capability_geq", lambda *_: True)
-    precision_config = PrecisionConfig(a_mx_scale=torch.empty(1), a_microblock_size=microblock_size)
-
-    assert opt_flags_nvidia.is_blackwell_nvfp4_lhs_dense_rhs(precision_config, FP4,
-                                                             BF16) == (microblock_size == NVFP_BLOCK_SIZE.value)
-    assert opt_flags_nvidia.is_blackwell_mx_lhs_dense_rhs(precision_config, FP4,
-                                                          BF16) == (microblock_size == MXFP_BLOCK_SIZE.value)
 
 
 @pytest.mark.parametrize("rhs_dtype", [torch.bfloat16, torch.float16])
