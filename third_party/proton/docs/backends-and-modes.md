@@ -41,9 +41,10 @@ proton.start(
 Proton currently uses the CUPTI backend's default sampling period; the sampling
 interval is not configurable through this mode.
 
-On AMD, source-line attribution is enabled when the build's rocprofiler-sdk
-package provides code-object address translation support. Without it, Proton
-still reports PC samples at kernel level.
+On AMD, source-line attribution requires both code-object address translation
+support in the build's rocprofiler-sdk package and usable DWARF line
+information in the sampled code object. Without either, Proton reports the
+samples at kernel level.
 
 AMD PC sampling uses `PROTON_PC_SAMPLING_INTERVAL` as an optional positive
 integer sampling interval. The default is `131072`, and rocprofiler-sdk clamps

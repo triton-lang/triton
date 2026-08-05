@@ -73,6 +73,10 @@ std::string findLoadedLibPath(const char *libName, const char *symbolName) {
 }
 
 void promoteRocprofilerLibraries() {
+  // ROCm 7.2.4 requires the registration library to be globally visible
+  // before the SDK library. The generic dispatch loader uses a local,
+  // single-library load, so promote both libraries in that order and, when
+  // possible, from the same installation directory.
   std::string libDir = getStrEnv(rocprofiler::ExternLibRocprofiler::pathEnv);
   if (libDir.empty()) {
     auto path = findLoadedLibPath("librocprofiler-register.so",
