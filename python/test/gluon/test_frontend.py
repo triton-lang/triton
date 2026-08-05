@@ -222,6 +222,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@gluon.jit
+def allocate_with_nvmma_layout(layout: ttgl.constexpr):
+    if layout.rank == 2:
+        shape: ttgl.constexpr = [16, 16]
+    else:
+        shape: ttgl.constexpr = [2, 16, 16]
+    smem = ttgl.allocate_shared_memory(ttgl.float16, shape, layout)
+    smem._keep_alive()
+
+
+@gluon.jit
+def nvmma_layout_rank_kernel():
+    rank2: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=32, element_bitwidth=16, rank=2)
+    rank3: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=32, element_bitwidth=16, rank=3)
+    allocate_with_nvmma_layout(rank2)
+    allocate_with_nvmma_layout(rank3)
+
+
+def test_nvmma_layout_rank_mangling():
+    module = run_parser(nvmma_layout_rank_kernel, target=HOPPER_TARGET)
+    module_text = module.str_nodebug()
+
+    assert module_text.count("tt.func private @test_frontend.allocate_with_nvmma_layout") == 2
+    assert "!ttg.memdesc<16x16xf16" in module_text
+    assert "!ttg.memdesc<2x16x16xf16" in module_text
+
+
 @filecheck_test
 @gluon.jit
 def test_shared_atomic_scatter_rmw():
@@ -451,7 +478,7 @@ def shared_memory_cast_kernel():
     smem = ttgl.allocate_shared_memory(ttgl.float16, [32, 1, 4, 64], layout_b)
     smem.reshape((128, 64))
 
-    smem._reinterpret(ttgl.int8, [16384], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+    smem.reinterpret(ttgl.int8, [16384], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
 
 
 @pytest.mark.parametrize("target", ALL_TARGETS)
@@ -471,13 +498,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32 = arith.constant 0 : i32
     %1 = ttg.memdesc_index %0[%c0_i32] : !ttg.memdesc<2x256x128xi8, #shared, #smem, mutable> -> !ttg.memdesc<256x128xi8, #shared, #smem, mutable>
     %2 = ttg.memdesc_trans %1 {order = array<i32: 1, 0>} : !ttg.memdesc<256x128xi8, #shared, #smem, mutable> -> !ttg.memdesc<128x256xi8, #shared1, #smem, mutable>
-    tt.call @test_frontend.anchor_noinline__MDi8S128_256SLNVMMA_64_8_True_False__NVMMALAS128_256ASMD(%2) : (!ttg.memdesc<128x256xi8, #shared1, #smem, mutable>) -> ()
+    tt.call @test_frontend.anchor_noinline__MDi8S128_256SLNVMMA_64_8_2_True_False__NVMMALAS128_256ASMD(%2) : (!ttg.memdesc<128x256xi8, #shared1, #smem, mutable>) -> ()
     %3 = ttg.local_alloc : () -> !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable>
     %4 = ttg.memdesc_reshape %3 : !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared3, #smem, mutable>
     %5 = ttg.memdesc_reinterpret %3 : !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable> -> !ttg.memdesc<16384xi8, #shared4, #smem, mutable>
     tt.return
   }
-  tt.func private @test_frontend.anchor_noinline__MDi8S128_256SLNVMMA_64_8_True_False__NVMMALAS128_256ASMD(%arg0: !ttg.memdesc<128x256xi8, #shared1, #smem, mutable>) attributes {noinline = true} {
+  tt.func private @test_frontend.anchor_noinline__MDi8S128_256SLNVMMA_64_8_2_True_False__NVMMALAS128_256ASMD(%arg0: !ttg.memdesc<128x256xi8, #shared1, #smem, mutable>) attributes {noinline = true} {
     tt.return
   }
 }
@@ -899,7 +926,7 @@ def test_reinterpret_parent_then_multibuffer_subslice():
     b_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(32, 16, rank=2)
     arena = ttgl.allocate_shared_memory(ttgl.float16, [7, 8, 32], a_layout)
     # CHECK: [[B_PARENT:%.*]] = ttg.memdesc_reinterpret {{.*}} -> !ttg.memdesc<14x8x16xf16
-    b_parent = arena._reinterpret(ttgl.float16, [14, 8, 16], b_layout)
+    b_parent = arena.reinterpret(ttgl.float16, [14, 8, 16], b_layout)
     # CHECK: [[A_SUB:%.*]] = ttg.memdesc_subslice {{.*}}[0, 0, 0]
     a_stages = arena.slice(0, 3, dim=0)
     # CHECK: [[B_SUB:%.*]] = ttg.memdesc_subslice [[B_PARENT]][6, 0, 0] {{.*}} -> !ttg.memdesc<4x8x16xf16
@@ -1083,6 +1110,7 @@ def test_rubin_namespace_extends_blackwell():
     assert rubin.allocate_tensor_memory is blackwell.allocate_tensor_memory
     assert rubin.tcgen05_mma_scaled is blackwell.tcgen05_mma_scaled
     assert rubin.tma is blackwell.tma
+    assert rubin.cluster is blackwell.cluster
     assert rubin.mbarrier is not blackwell.mbarrier
     assert rubin.mbarrier.allocate_mbarrier is blackwell.mbarrier.allocate_mbarrier
 
@@ -4463,6 +4491,14 @@ def test_mismatch_shape_and_layout_rank():
         run_parser(kernel)
 
     assert "tensor shape and layout rank mismatch" in str(e.value.__cause__)
+
+
+def test_tma_descriptor_layout_rank():
+    tensor = MockTensor(ttgl.int32, (2, 32, 64))
+    layout = ttgl.NVMMASharedLayout(128, 32, rank=2)
+
+    with pytest.raises(AssertionError, match="layout rank must match block shape rank"):
+        TensorDescriptor.from_tensor(tensor, [2, 32, 64], layout)
 
 
 def test_non_scalar_loop_bounds():

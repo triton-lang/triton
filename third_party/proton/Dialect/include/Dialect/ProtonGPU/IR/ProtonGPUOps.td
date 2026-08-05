@@ -40,21 +40,25 @@ def PTG_CircularStoreOp : PTG_Op<"circular_store", [
 
   let description = [{
     Store a metric `counter` into a circular buffer backed by the internal memory `segment`.
-    automatically updated. Older metric counters are dropped if the `segment` buffer is full.
+    `scopeId` contains a compile-time scope identifier, while `dynamicScopeId`
+    contains a runtime scope identifier. Exactly one must be present. Older
+    metric counters are dropped if the `segment` buffer is full.
   }];
 
   let arguments = (ins
     PTG_SegmentType:$segment,
     AnyTypeOf<[I32, I64]>:$counter,
+    Optional<I32>:$dynamicScopeId,
     UnitAttr:$isStart,
-    I32Attr:$scopeId
+    OptionalAttr<I32Attr>:$scopeId
   );
 
   let hasVerifier = 1;
 
   let assemblyFormat = [{
-    (`start` $isStart^):(`end`)? $segment `,` $counter attr-dict `:`
-    qualified(type($segment)) `,` type($counter)
+    (`start` $isStart^):(`end`)? $segment `,` $counter
+    (`,` $dynamicScopeId^)?
+    attr-dict `:` qualified(type($segment)) `,` type($counter)
   }];
 }
 

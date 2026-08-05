@@ -460,9 +460,7 @@ int64_t getAllocationElems(Attribute encoding, ArrayRef<int64_t> shape,
     allocShape = shape;
   auto layoutShape = dropPipeliningDim(shape, encoding);
   auto allocationShape = dropPipeliningDim(allocShape, encoding);
-  auto layout = isPaddedEncoding(encoding)
-                    ? paddedLinearLayout(allocationShape, encoding)
-                    : toLinearLayout(allocationShape, encoding);
+  auto layout = toLinearLayoutIgnoringPadding(allocationShape, encoding);
   auto offsetDim = StringAttr::get(encoding.getContext(), "offset");
   int64_t stages = product<int64_t>(shape.drop_back(layoutShape.size()));
   int64_t elems = stages * layout.getInDimSize(offsetDim);

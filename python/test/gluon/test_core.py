@@ -8,6 +8,7 @@ import triton
 import triton.language as tl
 
 from triton._internal_testing import (
+    is_compile_warmup,
     is_ampere_or_newer,
     is_blackwell,
     is_blackwell_ultra,
@@ -230,12 +231,12 @@ def test_tma():
 
 
 @gluon.jit
-def tma_im2col_kernel(in_desc, out_desc):
+def tma_im2col_kernel(in_desc, out_desc, MULTICAST: ttgl.constexpr):
     smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
     bar = mbarrier.allocate_mbarrier()
     mbarrier.init(bar, count=1)
     mbarrier.expect(bar, in_desc.block_type.nbytes)
-    tma.async_load_im2col(in_desc, [0, 0, 0, 0], [0, 0], bar, smem)
+    tma.async_load_im2col(in_desc, [0, 0, 0, 0], [0, 0], bar, smem, multicast=MULTICAST)
     mbarrier.wait(bar, phase=0)
     mbarrier.invalidate(bar)
     tma.async_store(out_desc, [0, 0], smem)
@@ -246,7 +247,8 @@ def tma_im2col_kernel(in_desc, out_desc):
 @pytest.mark.parametrize("pixels_per_column", [32, 256, 512, 1024])
 @pytest.mark.parametrize("channels_per_pixel", [32])
 @pytest.mark.parametrize("swizzle_byte_width", [32])
-def test_tma_im2col(pixels_per_column, channels_per_pixel, swizzle_byte_width):
+@pytest.mark.parametrize("multicast", [False, True], ids=["unicast", "multicast"])
+def test_tma_im2col(pixels_per_column, channels_per_pixel, swizzle_byte_width, multicast):
     smem_bytes = pixels_per_column * channels_per_pixel * 4 + 8192  # block + mbarrier overhead
     if smem_bytes > 200000:
         pytest.skip(f"Skipping: shared memory {smem_bytes} exceeds limit")
@@ -262,6 +264,7 @@ def test_tma_im2col(pixels_per_column, channels_per_pixel, swizzle_byte_width):
         rank=2,
         transposed=False,
         fp4_padded=False,
+        cga_layout=((0, 0), ) if multicast else (),
     )
 
     in_desc = gluon.nvidia.hopper.TensorDescriptorIm2Col(
@@ -276,7 +279,8 @@ def test_tma_im2col(pixels_per_column, channels_per_pixel, swizzle_byte_width):
         pixel_box_upper_corner=[0, 0],
     )
     out_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(out, block_shape, layout)
-    tma_im2col_kernel[(1, )](in_desc, out_desc, num_warps=1)
+    compiled = tma_im2col_kernel[(1, )](in_desc, out_desc, multicast, num_warps=1, num_ctas=2 if multicast else 1)
+    assert (".im2col.mbarrier::complete_tx::bytes.multicast::cluster" in compiled.asm["ptx"]) == multicast
     torch.testing.assert_close(out, inp.reshape(pixels_per_column, channels_per_pixel), atol=0, rtol=0)
 
 
@@ -461,27 +465,36 @@ def test_tma_gather_scatter_multi_cta(cga_layout):
 
 @gluon.jit
 def tma_gather_scatter_subslice_kernel(in_desc, out_desc, parent_out, KIND: ttgl.constexpr):
-    cga_layout: ttgl.constexpr = () if KIND == "row" else ((1, 0), )
+    if KIND == "row":
+        cga_layout: ttgl.constexpr = ()
+    elif KIND == "column_sharded":
+        cga_layout: ttgl.constexpr = ((0, 1), )
+    elif KIND == "mixed_remote":
+        cga_layout: ttgl.constexpr = ((1, 0), (0, 1))
+    elif KIND == "remote_multicast":
+        cga_layout: ttgl.constexpr = ((1, 0), (0, 0))
+    else:
+        cga_layout: ttgl.constexpr = ((1, 0), )
     shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 16, rank=2, cga_layout=cga_layout)
     parent_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 8], [4, 1], [1, 0], cga_layout=cga_layout)
     indices_layout: ttgl.constexpr = ttgl.SliceLayout(
         1, ttgl.BlockedLayout([4, 1], [1, 32], [4, 1], [0, 1], cga_layout=cga_layout))
-    shape: ttgl.constexpr = (64, 256) if KIND == "column" else (128, 128)
+    shape: ttgl.constexpr = (64, 256) if KIND == "column" or KIND == "column_sharded" else (128, 128)
     parent = ttgl.allocate_shared_memory(ttgl.float16, shape, shared_layout,
                                          value=ttgl.full(shape, -7, ttgl.float16, layout=parent_layout))
-    dim: ttgl.constexpr = 1 if KIND == "column" else 0
+    dim: ttgl.constexpr = 1 if KIND == "column" or KIND == "column_sharded" else 0
     tile = parent.slice(shape[dim] // 2, shape[dim] // 2, dim=dim)
 
     indices = ttgl.arange(0, 64, layout=indices_layout)
     barrier = mbarrier.allocate_mbarrier()
     mbarrier.init(barrier, count=1)
     mbarrier.expect(barrier, tile.nbytes_per_cta)
-    blackwell_tma.async_gather(in_desc, 63 - indices, 0, barrier, tile)
+    blackwell_tma.async_gather(in_desc, 63 - indices, 0, barrier, tile, multicast=KIND == "remote_multicast")
     mbarrier.wait(barrier, phase=0, deps=[tile])
     if KIND != "row":
         ttgl.barrier(cluster=True)
 
-    if KIND != "remote":
+    if KIND == "row" or KIND == "column":
         blackwell_tma.async_scatter(out_desc, (indices + 1) % 64, 0, tile)
         tma.store_wait(0)
 
@@ -491,12 +504,20 @@ def tma_gather_scatter_subslice_kernel(in_desc, out_desc, parent_out, KIND: ttgl
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("kind", ["row", "column", "remote"])
+@pytest.mark.parametrize("kind", ["row", "column", "remote", "column_sharded", "mixed_remote", "remote_multicast"])
 def test_tma_gather_scatter_subslice(kind):
     values = torch.arange(64 * 128, dtype=torch.float16, device="cuda").reshape(64, 128)
     scatter_out = torch.zeros_like(values)
-    parent_out = torch.empty((64, 256) if kind == "column" else (128, 128), dtype=torch.float16, device="cuda")
-    cga_layout = () if kind == "row" else ((1, 0), )
+    parent_out = torch.empty((64, 256) if kind in ("column", "column_sharded") else (128, 128), dtype=torch.float16,
+                             device="cuda")
+    cga_layout = {
+        "row": (),
+        "column": ((1, 0), ),
+        "remote": ((1, 0), ),
+        "column_sharded": ((0, 1), ),
+        "mixed_remote": ((1, 0), (0, 1)),
+        "remote_multicast": ((1, 0), (0, 0)),
+    }[kind]
     shared_layout = ttgl.NVMMASharedLayout(128, 16, rank=2, cga_layout=cga_layout)
     in_desc = TensorDescriptor.from_tensor(values, [1, 128], shared_layout)
     out_desc = TensorDescriptor.from_tensor(scatter_out, [1, 128], shared_layout)
@@ -506,11 +527,11 @@ def test_tma_gather_scatter_subslice(kind):
 
     gathered = values.flip(0)
     expected_parent = torch.full_like(parent_out, -7)
-    if kind == "column":
+    if kind in ("column", "column_sharded"):
         expected_parent[:, 128:] = gathered
     else:
         expected_parent[64:] = gathered
-    if kind == "remote":
+    if kind in ("remote", "column_sharded", "mixed_remote", "remote_multicast"):
         assert "mapa.shared::cluster" in compiled.asm["ptx"]
         assert "tile::gather4.cta_group::2.shared::cluster" in compiled.asm["ptx"]
     else:
@@ -1384,6 +1405,7 @@ def test_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast, u
 @pytest.mark.parametrize("shape_m, shape_n, shape_k", [(1, 1, 1), (2, 4, 1), (2, 2, 4)])
 @pytest.mark.parametrize("ctas_per_cga", [[1, 1], [2, 1], [4, 4]])
 @pytest.mark.parametrize("two_ctas", [False, True] if is_blackwell() else [False])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps, swizzling_a, swizzling_b, instr_m,
                            shape_m, shape_n, shape_k, ctas_per_cga, two_ctas):
     # FIXME: Workaround for a bug in PTXAS when the shared layout is transposed and the swizzling is 0
@@ -1571,6 +1593,8 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         num_warps=num_warps,
         num_ctas=num_ctas,
     )
+    if is_compile_warmup():
+        return
 
     assert two_ctas == ("two_ctas" in compiled.asm["ttgir"])
     if two_ctas:
@@ -1935,7 +1959,7 @@ def test_tmem_copy_2d():
         smem = ttgl.allocate_shared_memory(ttgl.int8, (smem_h, smem_w), layout=smem_layout)
         tmem_pool_layout: ttgl.constexpr = TensorMemoryLayout((num_rows, 256), col_stride=1)
         tmem_pool = allocate_tensor_memory(ttgl.float32, (num_rows, 512), layout=tmem_pool_layout)
-        tmem = tmem_pool.slice(480, num_cols)._reinterpret(ttgl.int8, (smem_h, smem_w), tmem_layout)
+        tmem = tmem_pool.slice(480, num_cols).reinterpret(ttgl.int8, (smem_h, smem_w), tmem_layout)
 
         barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.constexpr(mbarrier.MBarrierLayout()))
         mbarrier.init(barrier, count=1)
@@ -1945,7 +1969,7 @@ def test_tmem_copy_2d():
         tcgen05_commit(barrier)
         mbarrier.wait(barrier, phase=0)
         tmem_alias: ttgl.constexpr = TensorMemoryLayout((num_rows, num_cols), col_stride=1)
-        tmem = tmem._reinterpret(shape=(num_rows, num_cols), layout=tmem_alias)
+        tmem = tmem.reinterpret(shape=(num_rows, num_cols), layout=tmem_alias)
         value = tmem.load(blocked)
         ttgl.store(ttgl.set_auto_layout(out_ptrs, blocked), value)
 
@@ -1980,7 +2004,7 @@ def test_tmem_pipeline_stage_subslice_index_reinterpret():
         for stage in ttgl.static_range(5):
             parent.index(stage).store(ttgl.load(inp + stage * 8192 + rows * 64 + cols))
         stages = parent.slice(2, 2, dim=0)
-        first = stages._reinterpret().index(0)
+        first = stages.reinterpret().index(0)
         first.store(first.load() + 11.0)
         second = stages.slice(1, 1, dim=0).index(0)
         second.store(second.load() + 7.0)
@@ -2050,7 +2074,7 @@ def test_tmem_source_layout_contiguous_subslice():
 
         view = parent.slice(208, 256)
         view_layout: ttgl.constexpr = TensorMemoryLayout([128, 256], col_stride=1)
-        view = view._reinterpret(ttgl.float32, [128, 256], view_layout)
+        view = view.reinterpret(ttgl.float32, [128, 256], view_layout)
         view.store(view.load() + 7.0)
         ttgl.store(out + rows * 512 + cols, parent.load(parent_layout))
 
@@ -2169,13 +2193,13 @@ def test_tmem_subslice_block_m_64():
         s_tmem.store(s)
         o_tmem.store(s)
 
-        p_tmem_parent = s_tmem._reinterpret(ttgl.float16, [BLOCK_M, 2 * N], tmem_layout)
+        p_tmem_parent = s_tmem.reinterpret(ttgl.float16, [BLOCK_M, 2 * N], tmem_layout)
         p_tmem = p_tmem_parent.slice(0, N)
         p_tmem.store(ttgl.full((BLOCK_M, N), 0.0, dtype=ttgl.float16, layout=layout))
 
         d1_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, 2), col_stride=1)
 
-        d1_tmem_parent = s_tmem._reinterpret(layout=d1_tmem_layout)
+        d1_tmem_parent = s_tmem.reinterpret(layout=d1_tmem_layout)
         m_tmem = d1_tmem_parent.slice(N // 2, 2)
         d1_layout: ttgl.constexpr = m_tmem.get_reg_layout()
         m_tmem.store(ttgl.full((BLOCK_M, 2), 2.0, dtype=ttgl.float32, layout=d1_layout))
@@ -2358,7 +2382,7 @@ def test_slice_reinterpret():
         smem_layout_2d: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
         smem = ttgl.allocate_shared_memory(ttgl.int8, [BLOCK], smem_layout_1d)
         smem_slice0 = smem.slice(0, SPLIT_BLOCK)
-        smem_i32 = smem._reinterpret(ttgl.int32, [2 * XBLOCK, YBLOCK], smem_layout_2d)
+        smem_i32 = smem.reinterpret(ttgl.int32, [2 * XBLOCK, YBLOCK], smem_layout_2d)
         smem_slice1 = smem_i32.slice(XBLOCK, XBLOCK, dim=0)
 
         offs = ttgl.arange(0, XBLOCK)[:, None] * YBLOCK + ttgl.arange(0, YBLOCK)[None, :]
@@ -3149,7 +3173,7 @@ def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_
         mbarrier.init(bar, count=1)
         if A_FP4_PADDED:
             padded_layout: ttgl.constexpr = TensorMemoryLayout([M, A_K_INPUT], col_stride=1, fp4_padded=True)
-            a_tmem = a_tmem._reinterpret(a.dtype.element_ty, [M, A_K_INPUT], padded_layout)
+            a_tmem = a_tmem.reinterpret(a.dtype.element_ty, [M, A_K_INPUT], padded_layout)
         if B_IS_FP4:
             b_smem = b_smem.permute((1, 0))
         tcgen05_mma_scaled(a_tmem, b_smem, acc_tmem, a_scale_tmem, b_scale_tmem, A_FORMAT, B_FORMAT, use_acc=False,
@@ -3533,7 +3557,7 @@ def shared_gather_cga_kernel(
     # Seed each physical CTA with distinct layout-derived values, then view the
     # same allocation through the CGA layout under test.
     seed = ttgl.allocate_shared_memory(ttgl.int32, [block], seed_layout, value=offsets)
-    smem = seed._reinterpret(shape=[CTA_TILE << NUM_SHARD_BITS], layout=shared_layout)
+    smem = seed.reinterpret(shape=[CTA_TILE << NUM_SHARD_BITS], layout=shared_layout)
     ttgl.barrier(cluster=True)
 
     cta = offsets // CTA_TILE
@@ -3683,11 +3707,11 @@ def cross_cta_tma_kernel(desc, out, cga_layout: ttgl.constexpr, MODE: ttgl.const
     parent = ttgl.allocate_shared_memory(ttgl.int32, [256, 64], shared_layout,
                                          value=ttgl.full([256, 64], -5, ttgl.int32, layout=alloc_layout))
     tile = parent.slice(128, 128, dim=0)
-    if MODE == "load":
+    if MODE == "load" or MODE == "multicast":
         bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
         mbarrier.expect(bar, desc.nbytes_per_cta)
-        tma.async_load(desc, [0, 0], bar, tile)
+        tma.async_load(desc, [0, 0], bar, tile, multicast=MODE == "multicast")
         mbarrier.wait(bar, phase=0)
         ttgl.barrier(cluster=True)
         result = parent.load(alloc_layout)
@@ -3704,19 +3728,20 @@ def cross_cta_tma_kernel(desc, out, cga_layout: ttgl.constexpr, MODE: ttgl.const
 @pytest.mark.parametrize("mode,cga_layout", [
     ("load", ((1, 0), )),
     ("load", ((1, 0), (0, 0))),
+    ("multicast", ((1, 0), (0, 0))),
     ("load", ((0, 0), (1, 0))),
     ("store", ((1, 0), )),
     ("reduce", ((1, 0), )),
-], ids=["two-ctas", "four-ctas", "nonpeer", "store", "reduce"])
+], ids=["two-ctas", "four-ctas", "multicast", "nonpeer", "store", "reduce"])
 def test_cross_cta_tma(mode, cga_layout, capfd):
-    if mode == "load" and not is_blackwell():
+    if mode in ("load", "multicast") and not is_blackwell():
         pytest.skip("Requires Blackwell CTA-pair completion")
     inp = torch.arange(128 * 64, device="cuda", dtype=torch.int32).reshape(128, 64)
     out = torch.full((256, 64), -1, device="cuda", dtype=torch.int32)
     layout = ttgl.NVMMASharedLayout(128, 32, rank=2, cga_layout=cga_layout)
     desc = TensorDescriptor.from_tensor(inp, [128, 64], layout)
 
-    if mode != "load":
+    if mode not in ("load", "multicast"):
         with pytest.raises(RuntimeError, match="error encountered during parsing"):
             cross_cta_tma_kernel.warmup(desc, out, cga_layout, MODE=mode, grid=(1, ), num_warps=4, num_ctas=2)
         assert "source subview may have an origin in another CTA" in "".join(capfd.readouterr())

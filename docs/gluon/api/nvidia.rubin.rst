@@ -10,6 +10,7 @@ NVIDIA Rubin
 
     async_copy
     clc
+    cluster
     mbarrier
     tma
 

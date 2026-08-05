@@ -26,3 +26,4 @@ Host-Side Descriptors
     nvidia.hopper.TensorDescriptor
     nvidia.hopper.TensorDescriptorIm2Col
     nvidia.blackwell.TensorDescriptor
+    amd.cdna5.TensorDescriptor

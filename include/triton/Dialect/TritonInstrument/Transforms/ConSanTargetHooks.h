@@ -129,6 +129,8 @@ public:
   virtual std::optional<MemEffectsOpInfo>
   getMemEffectsOpInfo(Operation *op) const {
     namespace ttg = triton::gpu;
+    if (getBarrierInitInfo(op) || getBarrierInvalidateInfo(op))
+      return std::nullopt;
     MemEffectsOpInfo info;
     if (isa<ttg::AsyncCopyGlobalToLocalOp>(op)) {
       info.trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;

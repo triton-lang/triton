@@ -35,10 +35,11 @@ def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
                                   Pure]> {
   let summary = "convert layout";
 
-  let arguments = (ins TT_Tensor:$src);
+  let arguments = (ins TT_Tensor:$src, UnitAttr:$force_warp_shuffle);
 
   let results = (outs TT_Tensor:$result);
 
+  let hasVerifier = 1;
   let hasCanonicalizer = 1;
 
   let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
@@ -493,6 +494,10 @@ def TTG_LocalAtomicScatterRMWOp : TTG_Op<"local_atomic_scatter_rmw", [
     I32Attr:$axis
   );
   let results = (outs TT_Tensor:$result);
+
+  let extraClassDeclaration = [{
+    bool isCommutative();
+  }];
 
   let assemblyFormat = [{
     $atomic_rmw_op `,` $dst `[` $indices `]` `,` $values (`,` $mask^)? attr-dict `:`

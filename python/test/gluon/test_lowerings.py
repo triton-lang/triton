@@ -1,10 +1,11 @@
+import math
 import torch
 import pytest
 
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
+from triton._internal_testing import is_blackwell, is_compile_warmup, is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
 from triton._C.libtriton.gluon_ir import make_cga_layout
 from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
 from triton.experimental.gluon.language.nvidia.blackwell import TensorMemoryLayout, allocate_tensor_memory
@@ -900,6 +901,7 @@ def _reduce_cases():
 @pytest.mark.parametrize("dtype_str, sanitize_overflow", [("int32", False), ("int32", True), ("float32", False),
                                                           ("float16", False)])
 @pytest.mark.parametrize("reduce_op", ["sum", "max"])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, sanitize_overflow, reduce_op, device):
 
     @gluon.jit
@@ -941,7 +943,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, saniti
     out_shape = (1, 1) if "reduce2d" in epilogue_kind else (1, N) if axis == 0 else (M, 1)
     z = torch.empty(out_shape, dtype=torch_dtype, device=device)
 
-    num_warps = int(torch.prod(torch.tensor(ttgl._layouts.warps_per_cta(src_layout, (M, N)))))
+    num_warps = math.prod(ttgl._layouts.warps_per_cta(src_layout, (M, N)))
     kernel[(1, 1, 1)](x, z, M, N, src_layout, axis, num_warps=num_warps, epilogue_kind=epilogue_kind,
                       sanitize_overflow=sanitize_overflow, debug=sanitize_overflow)
 
@@ -1042,6 +1044,7 @@ def test_histogram(M, bins, src_layout, dst_layout, device):
 @pytest.mark.parametrize("src_dim", [0, 1])
 @pytest.mark.parametrize("dst_dim", [0, 1])
 @pytest.mark.parametrize("is_bool", [True, False])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_convert1d_layouts(M, src_layout, dst_layout, src_dim, dst_dim, is_bool, device):
 
     @gluon.jit
@@ -1136,6 +1139,7 @@ _convert2d_layout_cases = _single_cta_convert2d_layout_cases + _multi_cta_conver
 @pytest.mark.parametrize("dtype", ["float16"])
 @pytest.mark.parametrize("src_ctas_per_cga, dst_ctas_per_cga, interm_layout, src_layout, dst_layout",
                          _convert2d_layout_cases)
+@pytest.mark.enable_warmup(min_capability=9)
 def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layout, src_layout, dst_layout, dtype,
                            device):
     num_ctas = 1
@@ -1221,9 +1225,8 @@ def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layo
     x = torch.randn((M, N), dtype=torch_dtype, device=device)
     y = torch.zeros_like(x)
     compiled = kernel[(1, )](x, y, M, N, src_layout, dst_layout, interm_layout, num_ctas=num_ctas)
-
     torch.testing.assert_close(y, x, rtol=0, atol=0)
-    if src_ctas_per_cga != dst_ctas_per_cga:
+    if src_ctas_per_cga != dst_ctas_per_cga and not is_compile_warmup():
         # Replicated values may be loaded from the local CTA.
         assert "st.shared::cluster" not in compiled.asm["ptx"]
 
@@ -1459,13 +1462,11 @@ def test_regress_warp_shuffle_convert_layout(tmp_path):
     # convert_layout.
     compiled_load_cvt_store = load_cvt_store.warmup(ref, x, grid=(1, 1, 1), num_warps=1)
     ttgir = compiled_load_cvt_store.asm["ttgir"]
-    ttgir = ttgir.replace(
-        "attributes {noinline = false}",
-        "attributes {always_use_warp_shuffle, noinline = false}",
-        1,
-    )
+    cvt_line = next(line for line in ttgir.splitlines() if "ttg.convert_layout" in line)
+    forced_cvt_line = cvt_line.replace(" : ", " {force_warp_shuffle} : ", 1)
+    ttgir = ttgir.replace(cvt_line, forced_cvt_line, 1)
 
-    temp_file = tmp_path / "test_override_ttgir_always_use_warp_shuffle.ttgir"
+    temp_file = tmp_path / "test_override_ttgir_force_warp_shuffle.ttgir"
     temp_file.write_text(ttgir)
 
     load_cvt_store_warp_shuffle = triton.compile(str(temp_file))

@@ -9,7 +9,7 @@ from triton.experimental.gluon.language._semantic import _check, _compute_tmem_r
 
 from . import tma
 from . import clc
-from ..hopper import async_store, fence_async_shared, mbarrier
+from ..hopper import async_store, cluster, fence_async_shared, mbarrier
 from ..ampere import async_copy, mma_v2
 
 from triton._C.libtriton import ir
@@ -24,6 +24,7 @@ __all__ = [
     "async_copy",
     "async_store",
     "clc",
+    "cluster",
     "fence_async_shared",
     "fma2",
     "mbarrier",
@@ -497,8 +498,8 @@ class tensor_memory_descriptor(base_value):
         return ret
 
     @builtin
-    def _reinterpret(self, dtype=None, shape=None, layout=None,
-                     _semantic: GluonSemantic = None) -> tensor_memory_descriptor:
+    def reinterpret(self, dtype=None, shape=None, layout=None,
+                    _semantic: GluonSemantic = None) -> tensor_memory_descriptor:
         """
         Reinterpret tensor memory descriptor with a new dtype, shape, and layout.
 

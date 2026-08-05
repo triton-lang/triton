@@ -62,6 +62,21 @@ def NVWS_ArefCreateOp : NVWS_Op<"aref.create", [
   let hasVerifier = 1;
 }
 
+def NVWS_ArefPhiOp : NVWS_Op<"aref.phi", [Pure, SameOperandsAndResultType]> {
+  let summary = "Select a local or remote aref value by partition";
+  let description = [{
+    Joins exactly two SSA values with disjoint partition ownership.  The
+    partition owning a physical clone selects the operand whose defining value
+    owns that partition.  Partition-loop construction resolves this operation
+    to the selected operand and emits no instruction.
+  }];
+
+  let arguments = (ins AnyType:$local, AnyType:$remote);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$local `,` $remote attr-dict `:` type($result)";
+  let hasVerifier = 1;
+}
+
 def NVWS_ArefBufferOp : NVWS_Op<"aref.buffer", [DeclareOpInterfaceMethods<NVWS_ArefStageInterface>]> {
   let summary = "Get buffer from aref";
 
@@ -292,6 +307,22 @@ def NVWS_ConsumerReleaseOp : NVWS_Op<"consumer_release"> {
 }
 
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
+
+def NVWS_CLCTryCancelOp : NVWS_Op<"clc_try_cancel"> {
+  let summary = "Issue a cluster launch control cancellation request";
+  let description = [{
+    Issues CLC cancellation request whose raw 16-byte response
+    is written into the supplied shared-memory buffer.
+  }];
+
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", AsyncSharedWrite>:$result
+  );
+
+  let assemblyFormat = [{
+    $result attr-dict `:` qualified(type($result))
+  }];
+}
 
 def NVWS_DescriptorLoadOp : NVWS_Op<"descriptor_load", [NVWS_DescriptorLoadOpInterface]> {
   let summary = "Load from descriptor and store into shared memory";
