@@ -67,6 +67,31 @@ TEST(Analysis, SharedMemoryEffectsPreserveResourceAndKind) {
   EXPECT_EQ(kinds,
             (SmallVector<Kind>{Kind::Generic, Kind::Async, Kind::Barrier}));
 
+  auto function = cast<triton::FuncOp>(module->getBody()->front());
+  auto invalidate = cast<triton::nvidia_gpu::InvalBarrierOp>(
+      function.getBody().front().front());
+  auto cancel =
+      cast<triton::nvidia_gpu::CLCTryCancelOp>(invalidate->getNextNode());
+  using RW = triton::BufferRegionAnalysis::RW;
+  EXPECT_TRUE(triton::BufferRegionAnalysis::hasSharedAccess(
+      invalidate, Kind::Generic, RW::Write));
+  EXPECT_FALSE(triton::BufferRegionAnalysis::hasSharedAccess(
+      invalidate, Kind::Generic, RW::Read));
+  EXPECT_FALSE(
+      triton::BufferRegionAnalysis::hasSharedAccess(invalidate, Kind::Async));
+  EXPECT_TRUE(triton::BufferRegionAnalysis::hasSharedAccess(cancel));
+  EXPECT_EQ(triton::BufferRegionAnalysis::getMemoryAccesses(cancel, Kind::Async,
+                                                            RW::Write)
+                .size(),
+            1);
+  EXPECT_EQ(triton::BufferRegionAnalysis::getMemoryAccesses(
+                cancel, Kind::Barrier, RW::Write)
+                .size(),
+            1);
+  EXPECT_TRUE(triton::BufferRegionAnalysis::getMemoryAccesses(
+                  cancel, std::nullopt, RW::Read)
+                  .empty());
+
   MemoryEffects::EffectInstance allocation(MemoryEffects::Allocate::get(),
                                            triton::gpu::SharedMemory::get());
   MemoryEffects::EffectInstance unrelated(MemoryEffects::Read::get());

@@ -639,7 +639,9 @@ void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
 }
 
 SmallVector<BufferRegionAnalysis::MemoryAccess>
-BufferRegionAnalysis::getMemoryAccesses(Operation *op) {
+BufferRegionAnalysis::getMemoryAccesses(Operation *op,
+                                        std::optional<ttg::SharedKind> kind,
+                                        std::optional<RW> rw) {
   SmallVector<MemoryAccess> accesses;
   auto memoryEffects = dyn_cast<MemoryEffectOpInterface>(op);
   if (!memoryEffects)
@@ -652,6 +654,8 @@ BufferRegionAnalysis::getMemoryAccesses(Operation *op) {
     bool isRead = isa<MemoryEffects::Read>(effect.getEffect());
     if (!isWrite && !isRead)
       continue;
+    if (rw && (*rw == RW::Read ? !isRead : !isWrite))
+      continue;
     Value value = effect.getValue();
     if (!value || !isa<ttg::MemDescType>(value.getType()))
       continue;
@@ -660,6 +664,8 @@ BufferRegionAnalysis::getMemoryAccesses(Operation *op) {
     if (auto shared = dyn_cast<ttg::SharedMemoryEffect>(&effect))
       sharedKind = shared.getKind();
     else if (!isa<ttng::TensorMemory>(effect.getResource()))
+      continue;
+    if (kind && sharedKind != kind)
       continue;
 
     auto existing = llvm::find_if(accesses, [&](const MemoryAccess &access) {
@@ -673,6 +679,14 @@ BufferRegionAnalysis::getMemoryAccesses(Operation *op) {
     }
   }
   return accesses;
+}
+
+bool BufferRegionAnalysis::hasSharedAccess(Operation *op,
+                                           std::optional<ttg::SharedKind> kind,
+                                           std::optional<RW> rw) {
+  return llvm::any_of(
+      getMemoryAccesses(op, kind, rw),
+      [](const MemoryAccess &access) { return access.isShared(); });
 }
 
 } // namespace mlir::triton

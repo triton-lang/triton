@@ -34,14 +34,8 @@ namespace {
 using gpu::SharedKind;
 
 bool ignoreOpForProxyFence(Operation *op) {
-  auto accesses = BufferRegionAnalysis::getMemoryAccesses(op);
-  bool hasSpecialAccess = false;
-  for (const auto &access : accesses) {
-    if (access.isShared(SharedKind::Generic))
-      return false;
-    hasSpecialAccess |= access.isShared();
-  }
-  return hasSpecialAccess;
+  return !BufferRegionAnalysis::hasSharedAccess(op, SharedKind::Generic) &&
+         BufferRegionAnalysis::hasSharedAccess(op);
 }
 
 bool filterFn(Operation *op, Operation *other, bool /*opIsRead*/,
@@ -107,11 +101,9 @@ void ProxyFenceAnalysis<scope>::update(Operation *op, BlockInfo *blockInfo,
   BlockInfo curBlockInfo;
   BlockInfo proxyBlockInfo;
   auto accesses = BufferRegionAnalysis::getMemoryAccesses(op);
-  bool isProxyOp = llvm::any_of(accesses,
-                                [](const auto &access) {
-                                  return access.isShared(SharedKind::Async);
-                                }) &&
-                   getProxyFenceScope(op) == scope;
+  bool isProxyOp =
+      BufferRegionAnalysis::hasSharedAccess(op, SharedKind::Async) &&
+      getProxyFenceScope(op) == scope;
 
   auto scratchBufferId = Allocation::InvalidBufferId;
   if (isa<triton::CallOp>(op)) {

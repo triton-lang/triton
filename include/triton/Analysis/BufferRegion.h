@@ -232,6 +232,7 @@ public:
   using Base::SparseForwardDataFlowAnalysis;
 
   enum RegionType { SHARED_MEMORY, TENSOR_MEMORY, BARRIER, NUM_REGION_TYPES };
+  enum class RW { Read, Write };
 
   struct MemoryAccess {
     Value value;
@@ -243,7 +244,15 @@ public:
     bool isShared(gpu::SharedKind kind) const { return sharedKind == kind; }
   };
 
-  static llvm::SmallVector<MemoryAccess> getMemoryAccesses(Operation *op);
+  static llvm::SmallVector<MemoryAccess>
+  getMemoryAccesses(Operation *op,
+                    std::optional<gpu::SharedKind> kind = std::nullopt,
+                    std::optional<RW> rw = std::nullopt);
+
+  static bool
+  hasSharedAccess(Operation *op,
+                  std::optional<gpu::SharedKind> kind = std::nullopt,
+                  std::optional<RW> rw = std::nullopt);
 
   uint32_t getOperationId(Operation *operation) const {
     return operationInterner.idFor(operation);
