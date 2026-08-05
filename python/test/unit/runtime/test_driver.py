@@ -18,7 +18,7 @@ from triton._compile_warmup import (
     pytest_xdist_setupnodes,
     summarize_compile_trace,
 )
-from triton._compile_warmup_pool import SharedWarmupCoordinator, _jit_dumps
+from triton._compile_warmup_pool import ProcessPoolWarmupDispatcher, SharedWarmupCoordinator, _jit_dumps
 from triton._internal_testing import is_compile_warmup, random_float, random_int
 from triton import _test_runner
 from triton.backends.driver import GPUDriver, expand_signature, wrap_handle_tensordesc_impl
@@ -258,6 +258,45 @@ def test_compile_warmup_serializes_patched_source_globals(monkeypatch):
     monkeypatch.setitem(kernel.fn.__globals__, name, helper)
     kernel._unsafe_update_src(kernel.src.replace("tl.store(output, value)", f"tl.store(output, {name}(value))"))
     assert cloudpickle.loads(_jit_dumps(kernel)).cache_key == kernel.cache_key
+
+
+def test_compile_warmup_reuses_equivalent_kernel_payloads(monkeypatch):
+    dispatcher = ProcessPoolWarmupDispatcher(max_workers=1, trace_directory=None, phase="warmup")
+    dispatcher.current_test = "test"
+    serialized = []
+
+    def serialize(value):
+        if hasattr(value, "fn"):
+            serialized.append(value)
+        return _jit_dumps(value)
+
+    def submit(*args):
+        future = Future()
+        future.set_result((os.getpid(), 0))
+        return future
+
+    monkeypatch.setattr("triton._compile_warmup_pool._jit_dumps", serialize)
+    monkeypatch.setattr(dispatcher._executor, "submit", submit)
+
+    def make_kernel():
+
+        @triton.jit
+        def kernel(output, value: tl.constexpr):
+            tl.store(output, value)
+
+        return kernel
+
+    kernels = [make_kernel(), make_kernel(), make_kernel()]
+    kernels[-1]._unsafe_update_src(kernels[-1].src.replace("tl.store(output, value)", "tl.store(output, value + 1)"))
+    try:
+        with compile_warmup_only(dispatcher):
+            output = torch.empty(1, device="cuda")
+            for kernel in kernels:
+                kernel[(1, )](output, value=1)
+    finally:
+        dispatcher.finish()
+
+    assert len(serialized) == 2
 
 
 def _trace(directory, phase, test, digest, hit):

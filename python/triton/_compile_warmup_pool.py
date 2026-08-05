@@ -200,25 +200,19 @@ def _jit_dumps(obj):
 
 def _preload_with_compile_context(function, name, key, serialized_target, serialized_options, signature, constants,
                                   attrs):
-    from triton.runtime.driver import driver
+    from triton.backends.compiler import GPUTarget
+    from triton.compiler import ASTSource, compile
 
     if name != function._fn_name:
         raise RuntimeError(f"Specialization data is for {name} but trying to preload for {function._fn_name}")
-    active_driver = driver.active
-    device = active_driver.get_current_device()
-    _, _, target, backend, _ = function.device_caches[device]
-    if target.__dict__ != serialized_target:
-        raise RuntimeError(f"Specialization data is for {serialized_target} but trying to preload for {target}")
-    options = backend.parse_options(serialized_options)
-    return function._do_compile(
-        key,
-        signature,
-        device,
-        constants,
-        options,
-        attrs,
-        warmup=True,
-    )
+    target = GPUTarget(**serialized_target)
+    if function.is_gluon():
+        from triton.experimental.gluon._runtime import GluonASTSource
+
+        source = GluonASTSource(function, signature, constants, attrs)
+    else:
+        source = ASTSource(function, signature, constants, attrs)
+    return compile(source, target=target, options=serialized_options)
 
 
 def _warmup_kernel(kernel, args, grid, kwargs):
@@ -258,6 +252,10 @@ def _silence_worker_shutdown_diagnostics():
     # otherwise emits the same known leak report from every ephemeral worker.
     atexit.register(_silence_worker_shutdown_stderr)
     _SHUTDOWN_STDERR_SILENCED = True
+
+
+def _initialize_preload_worker(triton_key):
+    triton.runtime.cache.triton_key = lambda: triton_key
 
 
 def _preload_worker(module_name, qualified_name, fn_bytes, compile_context_bytes, kernel_repr, instrumentation_mode,
@@ -340,7 +338,9 @@ class ProcessPoolWarmupDispatcher:
         self._executor = None
         if self._connection is None:
             context = mp.get_context("spawn")
-            self._executor = ProcessPoolExecutor(max_workers=max_workers, mp_context=context)
+            self._executor = ProcessPoolExecutor(max_workers=max_workers, mp_context=context,
+                                                 initializer=_initialize_preload_worker,
+                                                 initargs=(triton.runtime.cache.triton_key(), ))
         self._max_workers = max_workers
         self._cache_dir = triton.knobs.cache.dir
         self._trace_directory = trace_directory
@@ -352,6 +352,7 @@ class ProcessPoolWarmupDispatcher:
         self._attempted_tests = set()
         self._serialized_keys = set()
         self._serialized_functions = {}
+        self._serialized_function_payloads = {}
         self._submitted_keys = set()
 
     def record_test(self, test, phase=None):
@@ -487,7 +488,11 @@ class ProcessPoolWarmupDispatcher:
                 module_name = None
                 qualified_name = None
                 try:
-                    fn_bytes = _jit_dumps(function)
+                    function_key = (type(function), function._fn_name, function.cache_key)
+                    fn_bytes = self._serialized_function_payloads.get(function_key)
+                    if fn_bytes is None:
+                        fn_bytes = _jit_dumps(function)
+                        self._serialized_function_payloads[function_key] = fn_bytes
                 except Exception as error:
                     self._serialized_keys.remove(serialized_key)
                     raise _UnsupportedPreloadError(
@@ -550,6 +555,7 @@ class ProcessPoolWarmupDispatcher:
             self._attempted_tests.clear()
             self._serialized_keys.clear()
             self._serialized_functions.clear()
+            self._serialized_function_payloads.clear()
             self._submitted_keys.clear()
 
 
