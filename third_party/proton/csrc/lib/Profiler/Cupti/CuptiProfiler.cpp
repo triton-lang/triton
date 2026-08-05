@@ -160,17 +160,15 @@ ActivityCompletion processActivityKernel(
       }
     }
     // Decrease the expected kernel count
-    const bool countTask =
-        externState.numNodes != std::numeric_limits<size_t>::max();
-    if (countTask && externState.numNodes > 0) {
+    if (externState.numNodes > 0) {
       externState.numNodes--;
     }
     // If all kernels have been processed, clean up
-    if (countTask && externState.numNodes == 0) {
+    if (externState.numNodes == 0) {
       externIdToState.erase(externId);
       corrIdToExternId.erase(correlationId);
     }
-    return {correlationId, countTask};
+    return {correlationId, true};
   }
 }
 
