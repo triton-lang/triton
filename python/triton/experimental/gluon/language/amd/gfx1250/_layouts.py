@@ -102,7 +102,7 @@ def _make_partitioned_dot_operand_layout(sublayout, partition_dim, num_partition
 
 @constexpr_function
 def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_layout_b, num_warps, instr_shape,
-                                 a_transposed=False, b_transposed=False, slice_m=None, slice_n=None, transposed=False):
+                                 a_transposed=False, b_transposed=False, slice_m=None, slice_n=None, transposed=True):
     """Create partitioned shared memory layouts and WMMA layout for a GFX1250 GEMM
        in order to avoid LDS partition conflicts.
 
@@ -133,7 +133,7 @@ def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_l
             ``block_n`` (unsliced).
         transposed: Whether the returned WMMA result layout is transposed.  Its
             logical instruction tile is ``N x M`` when true and ``M x N`` when
-            false.  Defaults to false.
+            false.  Defaults to true.
 
     Returns:
         A tuple ``(shared_layout_a, shared_layout_b, wmma_layout)``.  The

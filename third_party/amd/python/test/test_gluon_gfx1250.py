@@ -546,8 +546,7 @@ def gemm_async_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
     if RESOLVE_PARTITION_CONFLICTS:
         # The padded layouts above are reinterpreted as per-piece sublayouts here.
         _DOT_LAYOUTS: ttgl.constexpr = ttgl.amd.gfx1250.make_partitioned_dot_layouts(
-            BLOCK_M, BLOCK_N, padded_a, padded_b, 4, [16, 16, 32], a_transposed=False, b_transposed=IS_B_K_CONTIG,
-            transposed=True)
+            BLOCK_M, BLOCK_N, padded_a, padded_b, 4, [16, 16, 32], a_transposed=False, b_transposed=IS_B_K_CONTIG)
     else:
         _DOT_LAYOUTS: ttgl.constexpr = (padded_a, padded_b,
                                         ttgl.amd.AMDWMMALayout(3, True, [[0, 1], [1, 0]], [], [16, 16, 32]))
