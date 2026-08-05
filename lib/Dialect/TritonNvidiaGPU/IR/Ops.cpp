@@ -525,10 +525,8 @@ LogicalResult AsyncSharedStoreOp::verify() {
   // PTX defines weak shared::cluster st.async as UB for a one-CTA cluster.
   if (gpu::lookupNumCTAs(getOperation()) < 2)
     return emitOpError("requires at least two CTAs in the cluster");
-  if (!getDst().getType().getMutableMemory())
-    return emitOpError("cannot store into immutable memory");
-  if (failed(triton::gpu::verifyMemoryOpTypes(*this, getSrc().getType(),
-                                              getDst().getType())))
+  if (failed(triton::gpu::verifyLocalStoreOp(*this, getSrc().getType(),
+                                             getDst().getType())))
     return failure();
   if (failed(verifyBarrierType(*this, getMbarrier().getType())))
     return failure();
@@ -539,7 +537,7 @@ LogicalResult AsyncSharedStoreOp::verify() {
 
   auto regLayout = toLinearLayout(srcTy);
   auto sharedLayout = toLinearLayoutIgnoringPadding(dstTy);
-  auto cvt = regLayout.invertAndCompose(sharedLayout);
+  auto cvt = invertAndComposeBlockLocal(sharedLayout, regLayout);
   std::optional<int> maybeMaxVecElems;
   if (isPaddedEncoding(dstTy.getEncoding()))
     maybeMaxVecElems = getMinInterval(dstTy.getEncoding());

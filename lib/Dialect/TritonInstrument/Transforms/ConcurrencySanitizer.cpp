@@ -375,11 +375,26 @@ Value getMulticastRecipientCTAs(ImplicitLocOpBuilder &b, Value alloc) {
   return createCTABitset(b, encoding.pattern, encoding.fixedBits);
 }
 
-Value getLeaderCTA(ImplicitLocOpBuilder &b, Value barrier) {
+Value getLeaderCTA(ImplicitLocOpBuilder &b, Value barrier,
+                   Value recipientCTAs = Value()) {
   uint16_t broadcastMask = getBlockBroadcastMask(barrier);
   if (!broadcastMask)
-    return currentCTAMask(b);
+    return recipientCTAs ? recipientCTAs : currentCTAMask(b);
   int numCTAs = ttg::lookupNumCTAs(b);
+  if (recipientCTAs) {
+    uint32_t leaderMask =
+        ttng::getTMAMulticastMaskEncoding(numCTAs, ~broadcastMask).pattern;
+
+    for (int bit = 1; bit < numCTAs; bit <<= 1) {
+      if (!(broadcastMask & bit))
+        continue;
+      Value shifted = b.createOrFold<arith::ShRUIOp>(
+          recipientCTAs, arith::ConstantIntOp::create(b, bit, 32));
+      recipientCTAs = b.createOrFold<arith::OrIOp>(recipientCTAs, shifted);
+    }
+    return b.createOrFold<arith::AndIOp>(
+        recipientCTAs, arith::ConstantIntOp::create(b, leaderMask, 32));
+  }
   auto encoding = ttng::getTMAMulticastMaskEncoding(numCTAs, broadcastMask);
   return createCTABitset(b, /*pattern=*/1, encoding.fixedBits);
 }
@@ -581,6 +596,10 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
     return getLocalLoadStoreRecipientCTAs(b, store.getDst().getType(),
                                           store.getSrc().getType());
   }
+  if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
+    return getLocalLoadStoreRecipientCTAs(b, store.getDst().getType(),
+                                          store.getSrc().getType());
+  }
   if (auto alloc = dyn_cast<ttg::LocalAllocOp>(op); alloc && alloc.getSrc()) {
     return getLocalLoadStoreRecipientCTAs(b, alloc.getType(),
                                           alloc.getSrc().getType());
@@ -653,7 +672,10 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Value recipients,
   return result;
 }
 
-Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
+Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op,
+                              Value effectCTAs) {
+  if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op))
+    return getLeaderCTA(b, store.getBarrier(), effectCTAs);
   if (isa<ttng::BarrierExpectOp, ttng::ArriveBarrierOp>(op)) {
     Value barrier = cast<ttg::MBarrierOpInterface>(op).getBarrier();
     std::optional<uint32_t> fromCTA;
@@ -1053,7 +1075,10 @@ private:
     for (const auto &barrierInfo : opInfo->barriers) {
       Value barrier = barrierInfo.barrier;
       Value combinedPred = tti::maybeAnd(b, barrierInfo.pred, pred);
-      Value recipientCTAs = getBarrierRecipientCTAs(b, op);
+      Value effectCTAs = materializedEffects.empty()
+                             ? Value()
+                             : materializedEffects.front().effectCTAs;
+      Value recipientCTAs = getBarrierRecipientCTAs(b, op, effectCTAs);
       if (barrierInfo.count == 0 && barrierInfo.txCount == 0)
         funcBuilder.createVerifyBarrierInitializedCall(b, barrier, combinedPred,
                                                        op, recipientCTAs);
@@ -1076,8 +1101,7 @@ private:
           funcBuilder.createTrackBarrierWriteForBufferCall(
               b, barrier, materialized.bufferMask, combinedPred,
               materialized.memType, op, recipientCTAs, materialized.effectCTAs);
-          if (materialized.memType == MemType::SHARED_MEM &&
-              effect.proxy == MemEffectsOpInfo::Effects::Proxy::Async) {
+          if (materialized.memType == MemType::SHARED_MEM) {
             funcBuilder.createTrackProxyAccessesForBufferCall(
                 b, barrier, materialized.bufferMask, baseThread, combinedPred,
                 op, recipientCTAs, materialized.effectCTAs);
