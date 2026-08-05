@@ -59,12 +59,13 @@ def configure_runtime():
         "TRITON_HSA_RUNTIME_PATH": "hsa-runtime64",
         "TRITON_ROCPROFILER_SDK_LIB_PATH": "rocprofiler-sdk",
         "TRITON_ROCTRACER_LIB_PATH": "roctracer64",
-        "TRITON_ROCTX_LIB_PATH": "roctx64",
     }
-    explicit_overrides = {key for key in path_libraries if key in os.environ}
+    explicit_overrides = {key for key in (*path_libraries, "TRITON_ROCTX_LIB_PATH") if key in os.environ}
     for key, name in path_libraries.items():
         if key not in explicit_overrides:
             triton.knobs.setenv(key, str(Path(libraries[name]).parent))
+    if "TRITON_ROCTX_LIB_PATH" not in explicit_overrides:
+        triton.knobs.setenv("TRITON_ROCTX_LIB_PATH", libraries["roctx64"])
 
     # HSA is not registered with rocm_sdk yet, so load and retain it directly.
     hsa_path = Path(os.environ["TRITON_HSA_RUNTIME_PATH"]) / "libhsa-runtime64.so.1"
