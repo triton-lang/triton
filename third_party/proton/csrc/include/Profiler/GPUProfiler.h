@@ -205,8 +205,8 @@ protected:
       //    This is the precise condition, but it is not always available — for
       //    example, when profiling starts after CUDA graph capture, the node
       //    count may be unavailable.
-      // 2. The maximum submitted correlation ID is greater than the maximum
-      // completed correlation ID.
+      // 2. The maximum completed correlation ID meets or exceeds the maximum
+      // submitted correlation ID.
       //    This is a best-effort heuristic, since kernels launched across
       //    multiple streams may complete out of order, making the completed
       //    correlation ID non-monotonic.
