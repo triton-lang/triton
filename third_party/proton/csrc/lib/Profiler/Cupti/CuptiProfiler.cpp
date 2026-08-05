@@ -646,7 +646,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId,
     const CUpti_CallbackData *callbackData) {
   size_t numNodes = 1;
-  threadState.numNodes = 1;
   if (isGraphLaunch(cbId)) {
     threadState.enterOp(Scope(""));
   } else {
@@ -721,33 +720,24 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
   if (dataToEntry.empty()) // Profiler is deactivated
     return;
 
-  threadState.numNodes = numNodes;
   profiler.correlation.correlate(callbackData->correlationId, scope.scopeId,
                                  numNodes, scope.name.empty(), dataToEntry);
   if (profiler.pcSamplingEnabled)
     pcSampling.start(callbackData->context);
+  // Conservatively estimate it as a single node graph
+  numNodes = numNodes == std::numeric_limits<size_t>::max() ? 1 : numNodes;
+  profiler.correlation.submit(numNodes, callbackData->correlationId);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::handleApiExitLaunchCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId,
     const CUpti_CallbackData *callbackData) {
   auto &dataToEntry = threadState.dataToEntry;
-  bool deactivated = dataToEntry.empty();
-
   if (profiler.pcSamplingEnabled) {
     // XXX: Conservatively stop every GPU kernel for now.
     pcSampling.stop(callbackData->context, dataToEntry);
   }
-
   threadState.exitOp();
-
-  if (threadState
-          .isStreamCapturing) // Do not correlate for stream captured kernels
-    return;
-  if (deactivated) // Profiler is deactivated
-    return;
-  profiler.correlation.submit(threadState.numNodes,
-                              callbackData->correlationId);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::handleApiCallbacks(

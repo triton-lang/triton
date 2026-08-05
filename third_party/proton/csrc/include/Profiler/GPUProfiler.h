@@ -119,8 +119,6 @@ protected:
     bool isApiExternOp{false};
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
-    // Number of kernel activities expected from the current launch API.
-    size_t numNodes{1};
     struct MetricKernelLaunchInfo {
       uint64_t seqId{};
       uint64_t metricId{};
@@ -174,8 +172,8 @@ protected:
     }
 
     void complete(uint64_t numTasks, uint64_t correlationId) {
-      numCompletedTasks.fetch_add(numTasks);
       atomicMax(maxCompletedCorrelationId, correlationId);
+      numCompletedTasks.fetch_add(numTasks);
     }
 
     void complete(uint64_t correlationId) {
@@ -201,6 +199,13 @@ protected:
       auto submittedCorrelationId = maxSubmittedCorrelationId.load();
       auto completedCorrelationId = maxCompletedCorrelationId.load();
       auto retries = maxRetries;
+      // We check two conditions here:
+      // 1. The number of completed tasks meets or exceeds the number of submitted tasks.
+      //    This is the precise condition, but it is not always available — for example, when
+      //    profiling starts after CUDA graph capture, the node count may be unavailable.
+      // 2. The maximum submitted correlation ID is greater than the maximum completed correlation ID.
+      //    This is a best-effort heuristic, since kernels launched across multiple streams may
+      //    complete out of order, making the completed correlation ID non-monotonic.
       while ((completedTasks < submittedTasks ||
               completedCorrelationId < submittedCorrelationId) &&
              retries > 0) {

@@ -895,6 +895,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleRuntimeEnter(
   auto isMissingName = scope.name.empty();
   profiler.correlation.correlate(record.correlation_id.internal, scope.scopeId,
                                  /*numNodes=*/1, isMissingName, dataToEntry);
+  profiler.correlation.submit(/*numNodes=*/1, record.correlation_id.internal);
   impl->kernelPhaseTracker.record(dataToEntry);
   impl->corrIdToStreamId[record.correlation_id.internal] =
       extractStreamId(operation, payload);
@@ -962,13 +963,6 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleRuntimeExit(
   auto &dataToEntry = threadState.dataToEntry;
   const bool deactivated = dataToEntry.empty();
   threadState.exitOp();
-#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
-  if (threadState.isStreamCapturing)
-    return;
-#endif
-  if (deactivated) // Profiler is deactivated
-    return;
-  profiler.correlation.submit(1);
 }
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
@@ -1083,7 +1077,9 @@ int RocprofSDKProfiler::RocprofSDKProfilerPimpl::graphNodeCorrelationCallback(
         impl->kernelPhaseTracker.record(
             state.nodeIdToState ? state.dataToGraphEntry : state.dataToEntry);
       });
-  profiler.correlation.submit(1);
+  // We always invoke callbacks for each node in the graph so this is more
+  // accurate than the CUPTI approach.
+  profiler.correlation.submit(/*numNodes=*/1);
   return 0;
 }
 #endif
