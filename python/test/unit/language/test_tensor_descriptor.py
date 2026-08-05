@@ -253,9 +253,18 @@ def test_tensor_descriptor_store3d(dtype_str, K_BLOCK, device):
     torch.testing.assert_close(expect, actual)
 
 
+descriptor_ndims = [
+    1,
+    2,
+    3,
+    pytest.param(4, marks=pytest.mark.enable_warmup(min_capability=9)),
+    pytest.param(5, marks=pytest.mark.enable_warmup(min_capability=9)),
+]
+
+
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("num_ctas", [1, 2])
-@pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("ndim", descriptor_ndims)
 @pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128])
 def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, device):
     if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
@@ -320,7 +329,7 @@ def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, devic
 
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("num_ctas", [1, 2])
-@pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("ndim", descriptor_ndims)
 @pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128])
 def test_tensor_descriptor_store_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, device):
     if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
@@ -1311,6 +1320,7 @@ def mxfp8_mxfp4_matmul_tma(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
+@pytest.mark.enable_warmup(min_capability=9, priority=1)
 @pytest.mark.interpreter
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (128, 256, 256), (8192, 8192, 8192)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (128, 128, 256), (128, 256, 128),
