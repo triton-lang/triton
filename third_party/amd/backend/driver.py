@@ -70,12 +70,11 @@ def _find_already_mmapped_dylib_on_linux(lib_name):
 def _get_path_to_hip_runtime_dylib():
     lib_name = "libamdhip64.so"
 
-    # If we are told explicitly where to find the HIP runtime, obey that.
-    if env_libhip_dir := knobs.amd.libhip_path:
-        env_libhip_path = os.path.join(env_libhip_dir, lib_name)
-        if os.path.isfile(env_libhip_path):
+    # If we are told explicitly what HIP runtime dynamic library to use, obey that.
+    if env_libhip_path := knobs.amd.libhip_path:
+        if Path(env_libhip_path).name.startswith(lib_name) and os.path.isfile(env_libhip_path):
             return env_libhip_path
-        raise RuntimeError(f"TRITON_LIBHIP_PATH '{env_libhip_dir}' does not contain a valid {lib_name}")
+        raise RuntimeError(f"TRITON_LIBHIP_PATH '{env_libhip_path}' does not point to a valid {lib_name}")
 
     # A TheRock installation is a coherent SDK and must take precedence over
     # system ROCm. Do not silently mix it with a different HIP runtime that was

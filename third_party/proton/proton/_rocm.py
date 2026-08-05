@@ -55,7 +55,7 @@ def configure_runtime():
         return None
 
     path_libraries = {
-        "TRITON_LIBHIP_PATH": "amdhip64",
+        "TRITON_PROTON_HIP_LIB_PATH": "amdhip64",
         "TRITON_HSA_RUNTIME_PATH": "hsa-runtime64",
         "TRITON_ROCPROFILER_SDK_LIB_PATH": "rocprofiler-sdk",
         "TRITON_ROCTRACER_LIB_PATH": "roctracer64",
@@ -73,7 +73,7 @@ def configure_runtime():
     import rocm_sdk
 
     preload_libraries = (
-        ("amdhip64", "TRITON_LIBHIP_PATH"),
+        ("amdhip64", "TRITON_PROTON_HIP_LIB_PATH"),
         ("roctx64", "TRITON_ROCTX_LIB_PATH"),
         ("rocprofiler-sdk", "TRITON_ROCPROFILER_SDK_LIB_PATH"),
         ("rocprofiler-sdk-roctx", "TRITON_ROCPROFILER_SDK_LIB_PATH"),
