@@ -647,6 +647,7 @@ def matmul(a, b, bias,
     } if fused_comm is not None else {}
     b_strides = b.storage.data.stride()[:3] if b_is_shuffled else b.storage.data.stride()
     extra_kernel_kwargs = {"W_SHUFFLED": b_is_shuffled} if opt_flags.is_persistent else {}
+    # Only pass the new mode when it differs; omitted/default None preserves pre-PR behavior.
     if a_scale_tma_mode != a_tma_mode:
         extra_kernel_kwargs["X_SCALE_TMA_MODE"] = a_scale_tma_mode
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
