@@ -13,6 +13,7 @@
 #include "triton/Dialect/TritonGPU/IR/Traits.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 
+#include <type_traits>
 #include <unordered_map>
 
 namespace mlir {
@@ -100,6 +101,18 @@ struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
   StringRef getName() const final { return "<SharedMemory>"; }
   SideEffects::Resource *getParent() const override { return nullptr; }
 };
+
+template <typename Effect, typename ValueT>
+MemoryEffects::EffectInstance makeShared(ValueT value, SharedKind kind) {
+  Value effectValue;
+  if constexpr (std::is_same_v<ValueT, OpOperand *>)
+    effectValue = value->get();
+  else
+    effectValue = value;
+  return {Effect::get(), value,
+          SharedKindAttr::get(effectValue.getContext(), kind),
+          SharedMemory::get()};
+}
 
 // Returns true iff every non-broadcast basis of `ll`, after flattening in and
 // out dimensions, maps to a single power-of-2 in the flattened output.

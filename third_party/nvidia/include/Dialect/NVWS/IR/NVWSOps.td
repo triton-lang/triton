@@ -33,13 +33,14 @@ include "mlir/Interfaces/ViewLikeInterface.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUMemoryEffects.td"
 include "NVWSDialect.td"
 include "NVWSTypes.td"
 include "NVWSAttrDefs.td"
 include "NVWSOpInterfaces.td"
 
-class NVWS_Op<string mnemonic, list<Trait> traits = []> :
-    Op<NVWS_Dialect, mnemonic, traits>;
+class NVWS_Op<string mnemonic, list<Trait> traits = []>
+    : Op<NVWS_Dialect, mnemonic, traits>;
 
 def NVWS_ArefCreateOp : NVWS_Op<"aref.create", [
     RangedTypesMatchWith<"input types match Aref output type",
@@ -58,6 +59,21 @@ def NVWS_ArefCreateOp : NVWS_Op<"aref.create", [
   let results = (outs NVWS_ArefType:$result);
 
   let assemblyFormat = [{$buffers attr-dict `:` type($result)}];
+  let hasVerifier = 1;
+}
+
+def NVWS_ArefPhiOp : NVWS_Op<"aref.phi", [Pure, SameOperandsAndResultType]> {
+  let summary = "Select a local or remote aref value by partition";
+  let description = [{
+    Joins exactly two SSA values with disjoint partition ownership.  The
+    partition owning a physical clone selects the operand whose defining value
+    owns that partition.  Partition-loop construction resolves this operation
+    to the selected operand and emits no instruction.
+  }];
+
+  let arguments = (ins AnyType:$local, AnyType:$remote);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$local `,` $remote attr-dict `:` type($result)";
   let hasVerifier = 1;
 }
 
@@ -291,7 +307,22 @@ def NVWS_ConsumerReleaseOp : NVWS_Op<"consumer_release"> {
 }
 
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
-def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
+
+def NVWS_CLCTryCancelOp : NVWS_Op<"clc_try_cancel"> {
+  let summary = "Issue a cluster launch control cancellation request";
+  let description = [{
+    Issues CLC cancellation request whose raw 16-byte response
+    is written into the supplied shared-memory buffer.
+  }];
+
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result
+  );
+
+  let assemblyFormat = [{
+    $result attr-dict `:` qualified(type($result))
+  }];
+}
 
 def NVWS_DescriptorLoadOp : NVWS_Op<"descriptor_load", [NVWS_DescriptorLoadOpInterface]> {
   let summary = "Load from descriptor and store into shared memory";
@@ -303,7 +334,7 @@ def NVWS_DescriptorLoadOp : NVWS_Op<"descriptor_load", [NVWS_DescriptorLoadOpInt
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
     Variadic<I32>:$indices,
     I32Attr:$txCount,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
+    Arg<TTG_MemDescType, "", GenericSharedWrite>:$result,
     DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
   );
@@ -330,7 +361,7 @@ def NVWS_DescriptorGatherOp : NVWS_Op<"descriptor_gather", [NVWS_DescriptorLoadO
     RankedTensorOf<[I32]>:$x_offsets,
     I32:$y_offset,
     I32Attr:$txCount,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result
+    Arg<TTG_MemDescType, "", GenericSharedWrite>:$result
   );
 
   let assemblyFormat = [{
