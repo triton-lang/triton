@@ -8,17 +8,61 @@ from triton_kernels.matmul import matmul, matmul_torch, PrecisionConfig
 from triton_kernels.matmul_details._matmul import _compute_packed_n_w
 from triton_kernels.matmul_details.opt_flags import InapplicableConstraint, scoped_opt_flags_constraints
 from triton_kernels.matmul_details.opt_flags_details import opt_flags_nvidia
-from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, downcast_to_mxfp
-from triton_kernels.tensor import FP4, UINT8, Storage, Tensor, convert_layout, wrap_torch_tensor
+from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE, downcast_to_mxfp
+from triton_kernels.tensor import FP4, UINT8, Storage, Tensor, convert_layout, make_ragged_tensor_metadata, wrap_torch_tensor
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor_details.layout import BlackwellMX4ValueShuffledLayout
-from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellMXScaleLayout
+from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout
 from triton_kernels.testing import assert_close
 
 
 def _make_blackwell_scale_tensor():
     scale_storage = Storage(torch.empty((1, 128), dtype=torch.uint8), BlackwellMXScaleLayout())
     return Tensor(scale_storage, dtype=UINT8)
+
+
+@pytest.mark.parametrize("rhs_dtype", [torch.bfloat16, torch.float16])
+def test_matmul_blackwell_ragged_nvfp4_lhs_dense_rhs(device, rhs_dtype):
+    if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
+        pytest.skip("requires CUDA")
+    if torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell or newer")
+
+    torch.manual_seed(0)
+    m, n, k = 256, 256, 128
+    routing_data = make_ragged_tensor_metadata(torch.tensor([128, 128], device=device, dtype=torch.int32), m)
+    activation = torch.randn((m, k), device=device, dtype=torch.bfloat16)
+    activation_value, activation_scale = downcast_to_mxfp(
+        activation,
+        torch.uint8,
+        axis=-1,
+        scale_dtype=torch.float8_e4m3fn,
+        microblock_size=NVFP_BLOCK_SIZE.value,
+    )
+    activation_value = wrap_torch_tensor(activation_value, dtype=FP4, shape=(m, k))
+    activation_scale = convert_layout(wrap_torch_tensor(activation_scale), BlackwellActMXScaleLayout(routing_data))
+    weight = torch.randn((2, k, n), device=device, dtype=rhs_dtype)
+    precision_config = PrecisionConfig(
+        a_mx_scale=activation_scale,
+        a_microblock_size=NVFP_BLOCK_SIZE.value,
+        out_dtype=torch.bfloat16,
+    )
+    actual = matmul(
+        activation_value,
+        weight,
+        None,
+        a_ragged_metadata=routing_data,
+        precision_config=precision_config,
+    )
+    expected = matmul_torch(
+        activation_value,
+        weight,
+        None,
+        a_ragged_metadata=routing_data,
+        precision_config=precision_config,
+    )
+
+    assert_close(expected, actual, maxtol=3e-2, rmstol=None, description=f"{torch.cuda.get_device_name()} {rhs_dtype}")
 
 
 def _make_blackwell_mxfp4_weight(device, k, n):
