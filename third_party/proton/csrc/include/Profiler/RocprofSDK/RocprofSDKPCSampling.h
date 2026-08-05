@@ -2,7 +2,6 @@
 #define PROTON_PROFILER_ROCPROFSDK_PC_SAMPLING_H_
 
 #include "Data/Data.h"
-#include "Utility/Map.h"
 
 #include "rocprofiler-sdk/buffer.h"
 #include "rocprofiler-sdk/callback_tracing.h"
@@ -15,8 +14,10 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #if PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING &&                                  \
@@ -38,8 +39,8 @@ namespace proton {
 // configure() creates the SDK context, buffers, and callback threads;
 // start() activates sampling only for pcsampling mode. Code-object, symbol, and
 // dispatch callbacks may run concurrently with sample-buffer processing.
-// Samples are accumulated under pcSamplingMutex, while source lookup and
-// decoder state use their dedicated mutexes.
+// High-frequency sample bookkeeping and attribution metadata are kept in two
+// separate lock-bound state objects so source decoding cannot block sampling.
 //
 // Code-object images remain available after an unload notification because
 // source locations are resolved asynchronously after samples are delivered.
@@ -94,11 +95,15 @@ public:
     if (externId == Scope::DummyScopeId)
       return;
 
-    externIdToState.withRead(externId, [&](const auto &state) {
-      recordResolvedTarget(dispatchId, kernelId, state.dataToEntry,
-                           graphExternId != Scope::DummyScopeId ||
-                               state.isMissingName);
-    });
+    DataToEntryMap dataToEntry;
+    bool needsKernelChild = false;
+    if (!externIdToState.withRead(externId, [&](const auto &state) {
+          dataToEntry = state.dataToEntry;
+          needsKernelChild =
+              graphExternId != Scope::DummyScopeId || state.isMissingName;
+        }))
+      return;
+    recordResolvedTarget(dispatchId, kernelId, dataToEntry, needsKernelChild);
   }
   void processBuffer(rocprofiler_record_header_t **headers, size_t numHeaders,
                      uint64_t dropCount);
@@ -171,15 +176,46 @@ private:
 
   using PCSamplingAccumMap =
       std::unordered_map<PCSamplingKey, PCSamplingAccum, PCSamplingKeyHash>;
-  using DispatchToPCSamplingTargetMap =
-      ThreadSafeMap<uint64_t, PCSamplingTarget,
-                    std::unordered_map<uint64_t, PCSamplingTarget>>;
-  using KernelSymbolMap =
-      ThreadSafeMap<uint64_t, KernelSymbolInfo,
-                    std::unordered_map<uint64_t, KernelSymbolInfo>>;
-  using CodeObjectMap =
-      ThreadSafeMap<uint64_t, CodeObjectInfo,
-                    std::unordered_map<uint64_t, CodeObjectInfo>>;
+
+  struct SamplingState {
+    PCSamplingAccumMap accum;
+    std::unordered_set<uint64_t> flushingCodeObjectIds;
+  };
+
+  struct MetadataState {
+    MetadataState();
+    ~MetadataState();
+
+    std::map<SourceLocationKey, std::optional<SourceLocation>>
+        sourceLocationCache;
+#if PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING &&                                  \
+    PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE
+    std::unique_ptr<
+        ::rocprofiler::sdk::codeobj::disassembly::CodeobjAddressTranslate>
+        sourceLocationTranslator;
+#endif
+    std::unordered_map<uint64_t, CodeObjectInfo> codeObjects;
+    std::unordered_map<uint64_t, KernelSymbolInfo> kernelSymbols;
+    std::unordered_map<uint64_t, PCSamplingTarget> dispatchTargets;
+  };
+
+  // Couples a state object to the only mutex that may protect it. State is
+  // available exclusively inside withLock() callbacks, and references cannot
+  // escape those callbacks.
+  template <typename State> class LockedState {
+  public:
+    template <typename Fn> decltype(auto) withLock(Fn &&fn) {
+      using Result = std::invoke_result_t<Fn, State &>;
+      static_assert(!std::is_reference_v<Result>,
+                    "Locked state references must not escape");
+      std::lock_guard<std::mutex> lock(mutex);
+      return std::forward<Fn>(fn)(state);
+    }
+
+  private:
+    std::mutex mutex;
+    State state;
+  };
 
   static std::unique_ptr<PCSamplingMetric>
   makePCSamplingMetric(const PCSamplingAccum &accum);
@@ -195,12 +231,17 @@ private:
                   uint64_t pcOffset);
 
   std::optional<SourceLocation>
-  resolveSourceLocation(uint64_t codeObjectId, uint64_t pcOffset,
-                        const PCSamplingTarget &target);
-  bool ensureSourceLocationDecoder(uint64_t codeObjectId);
-  void clearSourceLocationCache(uint64_t codeObjectId);
-  void releaseUnloadedCodeObject(uint64_t codeObjectId);
-  void removeSourceLocationDecoder(const CodeObjectInfo &info);
+  resolveSourceLocationLocked(MetadataState &state, uint64_t codeObjectId,
+                              uint64_t pcOffset,
+                              const PCSamplingTarget &target);
+  bool ensureSourceLocationDecoderLocked(MetadataState &state,
+                                         uint64_t codeObjectId);
+  void clearSourceLocationCacheLocked(MetadataState &state,
+                                      uint64_t codeObjectId);
+  void replaceCodeObjectLocked(MetadataState &state, CodeObjectInfo info);
+  void removeSourceLocationDecoderLocked(MetadataState &state,
+                                         const CodeObjectInfo &info);
+  void tryReleaseCodeObject(uint64_t codeObjectId);
 
   // Set when rocprofiler_force_configure successfully configures the service
   // for at least one GPU agent.
@@ -215,22 +256,15 @@ private:
   rocprofiler_context_id_t pcSamplingContext{};
   std::vector<rocprofiler_buffer_id_t> pcSamplingBuffers;
 
-  std::mutex pcSamplingMutex;
-  PCSamplingAccumMap pcSamplingAccum;
-  std::unordered_set<uint64_t> flushingCodeObjectIds;
-  std::mutex sourceLocationMutex;
-  std::map<SourceLocationKey, std::optional<SourceLocation>>
-      sourceLocationCache;
-  std::mutex sourceLocationTranslatorMutex;
-#if PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING &&                                  \
-    PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE
-  std::unique_ptr<
-      ::rocprofiler::sdk::codeobj::disassembly::CodeobjAddressTranslate>
-      sourceLocationTranslator;
-#endif
-  CodeObjectMap codeObjects;
-  KernelSymbolMap kernelSymbols;
-  DispatchToPCSamplingTargetMap dispatchToPCSamplingTarget;
+  // This state is touched by high-frequency buffer callbacks. Keep it separate
+  // from metadata so DWARF decoding never blocks sample accumulation.
+  LockedState<SamplingState> samplingState;
+  // Code objects, decoders, source cache entries, symbols, and dispatch targets
+  // form one attribution domain and are always accessed under this lock.
+  // If both state locks are needed, acquire metadata before sampling.
+  // This order ensures a thread waiting on slower metadata work does not block
+  // sample ingestion, but must be enforced consistently to prevent deadlock.
+  LockedState<MetadataState> metadataState;
 };
 
 } // namespace proton
