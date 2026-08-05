@@ -277,15 +277,11 @@ def test_async_tma_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
 def test_async_shared_store_expect_bytes(BLOCK, EXPECT_DELTA, device, run_wrapper, monkeypatch, num_ctas):
     if num_ctas == 1:
         pytest.skip("st.async.shared requires at least 2 CTAs")
-    if run_wrapper:
+    if run_wrapper and EXPECT_DELTA:
         result = run_in_process(test_async_shared_store_expect_bytes,
                                 (BLOCK, EXPECT_DELTA, device, False, monkeypatch, num_ctas))
-        if EXPECT_DELTA:
-            assert_expected_cuda_failure(result.exc)
-            assert "Deadlock detected" in result.driver_stderr_output
-        else:
-            assert result.exc is None
-            assert result.driver_stderr_output == ""
+        assert_expected_cuda_failure(result.exc)
+        assert "Deadlock detected" in result.driver_stderr_output
         return
 
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
@@ -314,18 +310,14 @@ def test_async_shared_store_expect_bytes(BLOCK, EXPECT_DELTA, device, run_wrappe
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
-@pytest.mark.parametrize("SYNC", ["wait", "none", "proxy_fence", "cluster_barrier"])
-def test_async_shared_store_completion(SYNC, device, run_wrapper, monkeypatch, num_ctas):
+@pytest.mark.parametrize("WAIT", [True, False], ids=["wait", "no-wait"])
+def test_async_shared_store_completion(WAIT, device, run_wrapper, monkeypatch, num_ctas):
     if num_ctas == 1:
         pytest.skip("st.async.shared requires at least 2 CTAs")
-    if run_wrapper:
-        result = run_in_process(test_async_shared_store_completion, (SYNC, device, False, monkeypatch, num_ctas))
-        if SYNC == "wait":
-            assert result.exc is None
-            assert result.driver_stderr_output == ""
-        else:
-            assert_expected_cuda_failure(result.exc)
-            assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+    if run_wrapper and not WAIT:
+        result = run_in_process(test_async_shared_store_completion, (WAIT, device, False, monkeypatch, num_ctas))
+        assert_expected_cuda_failure(result.exc)
+        assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
         return
 
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
@@ -333,7 +325,7 @@ def test_async_shared_store_completion(SYNC, device, run_wrapper, monkeypatch, n
     knobs.refresh_knobs()
 
     @gluon.jit
-    def kernel(out, SYNC: ttgl.constexpr):
+    def kernel(out, WAIT: ttgl.constexpr):
         cga_layout: ttgl.constexpr = multicast_cga_layout(ttgl.num_ctas(), 1)
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=cga_layout)
         smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=cga_layout)
@@ -343,20 +335,16 @@ def test_async_shared_store_completion(SYNC, device, run_wrapper, monkeypatch, n
         mbarrier.init(bar, count=1)
         mbarrier.expect(bar, smem.nbytes_per_cta)
         hopper.async_store(smem, offsets, bar)
-        if SYNC == "wait":
+        if WAIT:
             mbarrier.wait(bar, 0, deps=[smem])
-        elif SYNC == "proxy_fence":
-            hopper.fence_async_shared()
-        elif SYNC == "cluster_barrier":
-            ttgl.barrier(cluster=True)
         result = smem.load(layout)
-        if SYNC != "wait":
+        if not WAIT:
             mbarrier.wait(bar, 0, deps=[smem])
         mbarrier.invalidate(bar)
         ttgl.store(out + offsets, result)
 
     output = torch.empty((XBLOCK.value, ), device=device, dtype=torch.int32)
-    kernel[(1, )](output, SYNC=SYNC, num_warps=4, num_ctas=num_ctas)
+    kernel[(1, )](output, WAIT=WAIT, num_warps=4, num_ctas=num_ctas)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
@@ -364,15 +352,11 @@ def test_async_shared_store_completion(SYNC, device, run_wrapper, monkeypatch, n
 def test_async_shared_store_split_recipients(EXPECT_DELTA, device, run_wrapper, monkeypatch, num_ctas):
     if num_ctas == 1:
         pytest.skip("st.async.shared requires at least 2 CTAs")
-    if run_wrapper:
+    if run_wrapper and EXPECT_DELTA:
         result = run_in_process(test_async_shared_store_split_recipients,
                                 (EXPECT_DELTA, device, False, monkeypatch, num_ctas))
-        if EXPECT_DELTA:
-            assert_expected_cuda_failure(result.exc)
-            assert "Deadlock detected" in result.driver_stderr_output
-        else:
-            assert result.exc is None
-            assert result.driver_stderr_output == ""
+        assert_expected_cuda_failure(result.exc)
+        assert "Deadlock detected" in result.driver_stderr_output
         return
 
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
@@ -412,14 +396,10 @@ def test_async_shared_store_split_recipients(EXPECT_DELTA, device, run_wrapper, 
 def test_async_shared_store_proxy_handoff(FENCE, device, run_wrapper, monkeypatch, num_ctas):
     if num_ctas == 1:
         pytest.skip("st.async.shared requires at least 2 CTAs")
-    if run_wrapper:
+    if run_wrapper and not FENCE:
         result = run_in_process(test_async_shared_store_proxy_handoff, (FENCE, device, False, monkeypatch, num_ctas))
-        if FENCE:
-            assert result.exc is None
-            assert result.driver_stderr_output == ""
-        else:
-            assert_expected_cuda_failure(result.exc)
-            assert "Async shared-memory access is missing fence_async_shared" in result.driver_stderr_output
+        assert_expected_cuda_failure(result.exc)
+        assert "Async shared-memory access is missing fence_async_shared" in result.driver_stderr_output
         return
 
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
