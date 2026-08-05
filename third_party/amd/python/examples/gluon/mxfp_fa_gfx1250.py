@@ -871,7 +871,7 @@ class AttentionEpilogue:
         return AttentionEpilogue(cfg, o_ptr, l_ptr, m_ptr, acc, l_i, m_i, sm_scale)
 
     @gluon.constexpr_function
-    def get_softmax_layout(shape, num_warps, num_ctas):
+    def get_multi_cta_layout(shape, num_warps, num_ctas):
         assert len(shape) == 3
         _, _, inner = shape
 
@@ -1041,7 +1041,7 @@ class AttentionEpilogue:
         cluster.wait()
 
         # Load partial output back
-        softmax_layout: ttgl.constexpr = AttentionEpilogue.get_softmax_layout(  #
+        softmax_layout: ttgl.constexpr = AttentionEpilogue.get_multi_cta_layout(  #
             [cfg.SPLIT_K, cfg.BLOCK_M, cfg.HEAD_SZ], cfg.NUM_WARPS, cfg.NUM_CTAS)
         l_offs = \
             expand_dims(ttgl.arange(0, cfg.SPLIT_K, get_slice_layout(softmax_layout, [1, 2])), -1) * cfg.BLOCK_M + \
@@ -2813,12 +2813,21 @@ def attn_fwd(  #
         else:
             # MQA decode
             assert group_sz in {32, 64}
-            block_m = group_sz
             block_n = 128
-            num_warps = 2
-            split_k = 4 if group_sz == 32 else 8
-            split_k_mode = 'cta'
-            num_ctas = split_k
+            # For mxfp4 and shorter sequence lengths, use warp-based split-k
+            # can be faster than CTA-based split-k by saving the cost from
+            # the epilogue
+            if kv_type == 'e2m1' and seqlen_k <= 8192 and group_sz == 64:
+                block_m = 16
+                num_warps = 4
+                split_k = 4
+                split_k_mode = 'warp'
+            else:
+                block_m = group_sz
+                num_warps = 2
+                split_k = 4 if group_sz == 32 else 8
+                split_k_mode = 'cta'
+                num_ctas = split_k
 
     assert seqlen_k % block_n == 0
     assert (not pipelined) or cdiv(seqlen_k, block_n) > 4
@@ -2924,7 +2933,7 @@ def attn_fwd(  #
         l = torch.zeros((batch, num_groups, group_sz), dtype=out_dtype)
         m = torch.zeros_like(l, dtype=out_dtype)
 
-        if split_k > 1:
+        if split_k_mode == 'cta':
             o = o.repeat_interleave(split_k, dim=2)
             l = torch.unsqueeze(l, dim=-2).repeat_interleave(split_k, dim=-2)
             m = torch.zeros_like(l, dtype=out_dtype)
@@ -2955,7 +2964,7 @@ def attn_fwd(  #
         ms = triton.testing.do_bench(kernel_fn, warmup=100, rep=1000)
 
     out = o.cpu()
-    if split_k > 1:
+    if split_k_mode == 'cta':
         out = out[..., :group_sz, :]
     if seqlen_q == seqlen_k:
         out = out.permute(0, 2, 1, 3)
