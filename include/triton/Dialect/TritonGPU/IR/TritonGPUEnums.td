@@ -4,8 +4,8 @@
 include "mlir/IR/EnumAttr.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 
-def TTG_SharedMemoryAccessKind : I32EnumAttr<
-    "SharedMemoryAccessKind", "shared-memory access kind",
+def TTG_SharedKind : I32EnumAttr<
+    "SharedKind", "shared-memory access kind",
     [
       I32EnumAttrCase<"Generic", 0, "generic">,
       I32EnumAttrCase<"Async", 1, "async">,

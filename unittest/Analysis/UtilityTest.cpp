@@ -52,18 +52,17 @@ TEST(Analysis, SharedMemoryEffectsPreserveResourceAndKind) {
                                             &context);
   ASSERT_TRUE(module);
 
-  SmallVector<triton::gpu::SharedMemoryAccessKind> kinds;
+  SmallVector<triton::gpu::SharedKind> kinds;
   module->walk([&](MemoryEffectOpInterface op) {
     SmallVector<MemoryEffects::EffectInstance> effects;
     op.getEffects(effects);
     for (const auto &effect : effects) {
       EXPECT_EQ(effect.getResource(), triton::gpu::SharedMemory::get());
       kinds.push_back(
-          cast<triton::gpu::SharedMemoryAccessKindAttr>(effect.getParameters())
-              .getValue());
+          cast<triton::gpu::SharedKindAttr>(effect.getParameters()).getValue());
     }
   });
-  using Kind = triton::gpu::SharedMemoryAccessKind;
+  using Kind = triton::gpu::SharedKind;
   EXPECT_EQ(kinds,
             (SmallVector<Kind>{Kind::Generic, Kind::Async, Kind::Barrier}));
 }

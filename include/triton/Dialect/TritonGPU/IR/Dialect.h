@@ -101,6 +101,19 @@ struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
   SideEffects::Resource *getParent() const override { return nullptr; }
 };
 
+template <typename Effect>
+MemoryEffects::EffectInstance makeShared(OpOperand *value, SharedKind kind) {
+  return {Effect::get(), value,
+          SharedKindAttr::get(value->get().getContext(), kind),
+          SharedMemory::get()};
+}
+
+template <typename Effect>
+MemoryEffects::EffectInstance makeShared(OpResult value, SharedKind kind) {
+  return {Effect::get(), value, SharedKindAttr::get(value.getContext(), kind),
+          SharedMemory::get()};
+}
+
 // Returns true iff every non-broadcast basis of `ll`, after flattening in and
 // out dimensions, maps to a single power-of-2 in the flattened output.
 bool hasPowerOfTwoBases(const LinearLayout &ll);
