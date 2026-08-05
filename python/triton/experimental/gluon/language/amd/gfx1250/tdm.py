@@ -475,6 +475,28 @@ def prefetch(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor]
 
 
 @builtin
+def prefetch_v2(src0: tensor_descriptor, offsets0: List[ttgl.constexpr | ttgl.tensor], src1: tensor_descriptor,
+                offsets1: List[ttgl.constexpr | ttgl.tensor], pred: bool = True, speculative: bool = False,
+                _semantic=None) -> None:
+    """Prefetches a block of tensor specified in tensor descriptor from global memory into L2. Speculative prefetches can generate more
+    efficient assembly because they do not require out of bounds checks. However, they are dropped by the hardware if their virtual address translation is not cached.
+    So speculative should only be set if previous iterations have accessed the same virtual page (e.g. column major)
+    Args:
+        src (tensor_descriptor): the source tensor descriptor.
+        offsets (List[int]): the offsets from the base pointer in the tensor descriptor.
+        pred (bool, optional): Predicate to enable or disable the prefetch. Defaults to True.
+        speculative (bool, optional): Whether the prefetch is speculative. Defaults to False.
+    """
+    offset_handles0 = _semantic._convert_to_ir_values(offsets0, require_i64=False)
+    offset_handles1 = _semantic._convert_to_ir_values(offsets1, require_i64=False)
+    pred = _semantic.to_tensor(pred)
+    pred_handle = pred.handle
+    speculative = _unwrap_if_constexpr(speculative)
+    _semantic.builder.create_tdm_prefetch_v2(src0.handle, offset_handles0, src1.handle, offset_handles1, pred_handle,
+                                             speculative)
+
+
+@builtin
 def _test_prefetch_with_offsets(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], pred: bool = True,
                                 speculative: bool = False, _semantic=None) -> ttgl.tensor:
     """Test-only prefetch variant that returns offsets for validation."""

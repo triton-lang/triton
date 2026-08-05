@@ -1255,6 +1255,13 @@ void init_gluon_ir(py::module_ &m) {
                  returnOffsets ? UnitAttr::get(self.getContext()) : nullptr);
              return returnOffsets ? op->getResult(0) : nullptr;
            })
+      .def("create_tdm_prefetch_v2",
+           [](GluonOpBuilder &self, Value descPtr0,
+              std::vector<Value> &indices0, Value descPtr1,
+              std::vector<Value> &indices1, Value pred, bool speculative) {
+             self.create<ttag::TDMPrefetchV2Op>(descPtr0, indices0, descPtr1,
+                                                indices1, pred, speculative);
+           })
       .def("create_async_tdm_wait",
            [](GluonOpBuilder &self, int num) {
              ValueRange tokens;

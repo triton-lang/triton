@@ -1045,6 +1045,39 @@ def TDMPrefetchOp : TT_AMDGPU_Op<"tdm_prefetch", [
   }];
 }
 
+
+
+def TDMPrefetchV2Op : TT_AMDGPU_Op<"tdm_prefetch_v2", [
+    MemoryEffects<[MemWrite<L2Cache>]>,
+    AttrSizedOperandSegments,
+    DeclareOpInterfaceMethods<PredicatedOpInterface>
+  ]> {
+  let summary = "Prefetch data based on a TDM descriptor from global memory to L2.";
+
+  let description = [{
+    This operation prefetches data from global memory to L2. It is analogous to the AsyncTDMCopyGlobalToLocalOp,
+    but it does not copy the data to local memory and instead only prefetches the data into the L2 cache.
+    Speculative prefetches can generate more efficient assembly because they do not require out of bounds checks.
+    However, they are dropped by the hardware in case the virtual address translation is not already cached at CU level.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc0,
+    Variadic<I32>:$indices0,
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc1,
+    Variadic<I32>:$indices1,
+    I1:$pred,
+    BoolAttr:$speculative
+  );
+
+  let results = (outs);
+
+  let assemblyFormat = [{
+    $desc0 `[` $indices0 `]` $desc1 `[` $indices1 `]` `,` $pred `,` `speculative` `=` $speculative
+    attr-dict `:` qualified(type($desc0)) qualified(type($desc1))
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // UpdateTensorDescriptorOp
 //===----------------------------------------------------------------------===//
