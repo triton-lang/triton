@@ -8,6 +8,7 @@ import triton
 import triton.language as tl
 
 from triton._internal_testing import (
+    is_compile_warmup,
     is_ampere_or_newer,
     is_blackwell,
     is_blackwell_ultra,
@@ -1404,6 +1405,7 @@ def test_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast, u
 @pytest.mark.parametrize("shape_m, shape_n, shape_k", [(1, 1, 1), (2, 4, 1), (2, 2, 4)])
 @pytest.mark.parametrize("ctas_per_cga", [[1, 1], [2, 1], [4, 4]])
 @pytest.mark.parametrize("two_ctas", [False, True] if is_blackwell() else [False])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps, swizzling_a, swizzling_b, instr_m,
                            shape_m, shape_n, shape_k, ctas_per_cga, two_ctas):
     # FIXME: Workaround for a bug in PTXAS when the shared layout is transposed and the swizzling is 0
@@ -1591,6 +1593,8 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         num_warps=num_warps,
         num_ctas=num_ctas,
     )
+    if is_compile_warmup():
+        return
 
     assert two_ctas == ("two_ctas" in compiled.asm["ttgir"])
     if two_ctas:

@@ -7,7 +7,7 @@ import triton.language as tl
 from triton._internal_testing import is_hopper, is_sm12x, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from typing import Optional
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3
+from triton._internal_testing import is_compile_warmup, is_cuda, is_hip, is_hip_cdna3
 from triton.tools.tensor_descriptor import TensorDescriptor
 from triton import CompilationError
 
@@ -1554,6 +1554,7 @@ REDUCE_SKIP_HIP_CDNA3 = [
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("descriptor", ["host", "device"])
 @pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128), (512, 32), (1, 1024)])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK, N_BLOCK, device):
     is_native = is_cuda() and torch.cuda.get_device_capability()[0] >= 9
     if not is_native:
@@ -1628,11 +1629,13 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
     fallback_supported = dtype in FALLBACK_SUPPORTED_REDUCE_DTYPES[kind]
     supported = native_supported if is_native else fallback_supported
     if not supported:
+        if is_compile_warmup():
+            pytest.skip("unsupported descriptor reduction cannot be compiled")
         with pytest.raises(CompilationError):
             kernel[(grid_m, grid_n)](out_desc, out, inp, M, N, M_BLOCK, N_BLOCK, kind, num_ctas=num_ctas)
         return
 
-    expect = REDUCE_OP[kind](inp, out)
+    expect = out if is_compile_warmup() else REDUCE_OP[kind](inp, out)
     kernel[(grid_m, grid_n)](out_desc, out, inp, M, N, M_BLOCK, N_BLOCK, kind, num_ctas=num_ctas)
     torch.testing.assert_close(expect, unwrap_tensor(out), check_dtype=False)
 

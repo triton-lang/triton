@@ -26,6 +26,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/GenericSwizzling.h"
@@ -685,6 +686,16 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Value &lhs, Value &rhs,
               Type retType) -> Value {
              return self.create<triton::CatOp>(retType, lhs, rhs);
+           })
+      .def("create_experimental_fpsan_embed",
+           [](GluonOpBuilder &self, Value &src, Type &dstType) -> Value {
+             return self.create<triton::instrument::ExperimentalFPSanEmbedOp>(
+                 dstType, src);
+           })
+      .def("create_experimental_fpsan_unembed",
+           [](GluonOpBuilder &self, Value &src, Type &dstType) -> Value {
+             return self.create<triton::instrument::ExperimentalFPSanUnembedOp>(
+                 dstType, src);
            })
       .def("create_packed_arith",
            [](GluonOpBuilder &self, Type resultType,
