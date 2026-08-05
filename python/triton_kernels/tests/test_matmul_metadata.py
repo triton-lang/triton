@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from triton_kernels.matmul_details._common import _matmul_flops_and_bytes_from_slices, matmul_launch_metadata
-from triton_kernels.proton_opts import set_launch_metadata_allow_sync
+from triton_kernels.proton_opts import launch_metadata_allow_sync, set_launch_metadata_allow_sync
 
 
 class _Kernel:
@@ -98,12 +98,13 @@ def test_matmul_launch_metadata_nosync_matches_old_formula(case):
     expected = _old_flops_and_bytes(args, M, N, K, X, Y, W, slice_sizes, nbits, args["batch_size"])
     direct_actual = _matmul_flops_and_bytes_from_slices(args, M, N, K, X, Y, W, slice_sizes, nbits, args["batch_size"])
 
+    previous_allow_sync = launch_metadata_allow_sync()
     try:
         set_launch_metadata_allow_sync(False)
         actual = matmul_launch_metadata(None, _Kernel(), args)
         torch.cuda.synchronize(device)
     finally:
-        set_launch_metadata_allow_sync(True)
+        set_launch_metadata_allow_sync(previous_allow_sync)
 
     assert actual["name"].startswith(_Kernel.name)
     assert actual[f"flops{nbits}"].dtype == torch.float64

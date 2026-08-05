@@ -57,8 +57,7 @@ uint32_t processActivityKernel(
     CuptiProfiler::ExternIdToStateMap &externIdToState,
     std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>>
         &externIdToStateCache,
-    std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
-    CUpti_Activity *activity) {
+    DataPhases &dataPhases, CUpti_Activity *activity) {
   // Support CUDA >= 11.0
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
   auto correlationId = kernel->correlationId;
@@ -172,8 +171,7 @@ uint32_t processActivity(
     CuptiProfiler::ExternIdToStateMap &externIdToState,
     std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>>
         &externIdToStateCache,
-    std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
-    CUpti_Activity *activity) {
+    DataPhases &dataPhases, CUpti_Activity *activity) {
   auto correlationId = 0;
   switch (activity->kind) {
   case CUPTI_ACTIVITY_KIND_KERNEL:
@@ -441,7 +439,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
                                                        size_t validSize) {
   CuptiProfiler &profiler = threadState.profiler;
   uint32_t maxCorrelationId = 0;
-  std::map<Data *, std::pair<size_t, size_t>> dataPhases;
+  DataPhases dataPhases;
   CUptiResult status;
   CUpti_Activity *activity = nullptr;
   std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>>

@@ -63,6 +63,7 @@ def plus_a_reduce(x, a):
     "broadcast_n",  # broadcast over N: [B,M,1]
 ])
 @pytest.mark.parametrize("dim", [0, 1, 2])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
     # Check float8 hardware support
     if "float8" in dtype_str:

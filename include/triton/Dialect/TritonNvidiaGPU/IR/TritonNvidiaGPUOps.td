@@ -136,6 +136,13 @@ def TTNG_ClusterBarrierOp : TTNG_Op<"cluster_barrier", []> {
 //
 // Cluster Launch Control (CLC) Ops - Blackwell SM100+
 //
+def TTNG_CLCTryCancelSyncOp : TTNG_Op<"clc_try_cancel_sync"> {
+  let summary = "Request cancellation of a pending cluster";
+  let results = (outs TT_Tensor:$response);
+  let assemblyFormat = "attr-dict `:` type($response)";
+  let hasVerifier = 1;
+}
+
 def TTNG_CLCTryCancelOp : TTNG_Op<"clc_try_cancel", [
     DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
   let summary = "Issue CLC try_cancel to cancel a pending cluster";
