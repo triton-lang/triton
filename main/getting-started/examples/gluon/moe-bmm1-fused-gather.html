@@ -134,6 +134,7 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">triton.experimental.gluon.language.nvidia.hopper.mbarrier</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">mbarrier</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">triton.language.extra.libdevice</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">libdevice</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">triton.testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">do_bench_cudagraph</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton._internal_testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">random_float</span><span class="p">,</span> <span class="n">random_int</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">triton_kernels.distributed</span><span class="w"> </span><span class="kn">import</span> <span class="n">make_expt_dict_uniform</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">triton_kernels.matmul</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
@@ -150,7 +151,6 @@
     <span class="n">FP4</span><span class="p">,</span>
     <span class="n">RaggedTensorMetadata</span><span class="p">,</span>
     <span class="n">Tensor</span><span class="p">,</span>
-    <span class="n">convert_layout</span><span class="p">,</span>
     <span class="n">make_ragged_tensor_metadata</span><span class="p">,</span>
     <span class="n">wrap_torch_tensor</span><span class="p">,</span>
 <span class="p">)</span>
@@ -159,7 +159,7 @@
     <span class="n">BlackwellMX4ValueShuffledLayout</span><span class="p">,</span>
     <span class="n">make_default_matmul_mxfp4_w_scale_layout</span><span class="p">,</span>
 <span class="p">)</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">triton_kernels.testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">alloc_rand</span><span class="p">,</span> <span class="n">assert_close</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton_kernels.testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">alloc_rand</span><span class="p">,</span> <span class="n">assert_close</span><span class="p">,</span> <span class="n">convert_layout</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">triton_kernels.topk</span><span class="w"> </span><span class="kn">import</span> <span class="n">topk</span>
 
 <span class="c1"># ===-----------------------------------------------------------------------===#</span>
@@ -322,8 +322,8 @@
     <span class="n">SCALE_SIZE_INNER</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span>
     <span class="n">MXFP_BLOCK_SIZE</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span>
 
-    <span class="n">SWIGLU_ALPHA</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span>
-    <span class="n">SWIGLU_LIMIT</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span>
+    <span class="n">SWIGLU_ALPHA</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
+    <span class="n">SWIGLU_LIMIT</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span>
     <span class="n">REDUCTION_N</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span>
     <span class="n">FLEXPOINT_SATURATE_INF</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span>
 
@@ -708,7 +708,7 @@
         <span class="p">)</span>
 
 
-<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">do_not_specialize</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;SWIGLU_ALPHA&quot;</span><span class="p">,</span> <span class="s2">&quot;SWIGLU_LIMIT&quot;</span><span class="p">])</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">ws_matmul_kernel</span><span class="p">(</span>
     <span class="n">x_desc</span><span class="p">:</span> <span class="n">tma</span><span class="o">.</span><span class="n">tensor_descriptor</span><span class="p">,</span>
     <span class="n">w_desc</span><span class="p">:</span> <span class="n">tma</span><span class="o">.</span><span class="n">tensor_descriptor</span><span class="p">,</span>
@@ -735,8 +735,8 @@
     <span class="n">K</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
     <span class="n">NUM_SLICES</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
     <span class="c1">#</span>
-    <span class="n">SWIGLU_ALPHA</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-    <span class="n">SWIGLU_LIMIT</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+    <span class="n">SWIGLU_ALPHA</span><span class="p">,</span>
+    <span class="n">SWIGLU_LIMIT</span><span class="p">,</span>
     <span class="n">REDUCTION_N</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
     <span class="c1">#</span>
     <span class="n">FLEXPOINT_SATURATE_INF</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
@@ -1472,7 +1472,7 @@
                  <span class="n">reference</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">p</span><span class="p">:</span> <span class="n">KernelConfig</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PreparedCase</span><span class="p">:</span>
     <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="n">seed</span><span class="p">)</span>
 
-    <span class="n">local_rank</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">c</span><span class="o">.</span><span class="n">num_expert_shards</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="p">())</span><span class="o">.</span><span class="n">item</span><span class="p">())</span>
+    <span class="n">local_rank</span> <span class="o">=</span> <span class="n">random_int</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">c</span><span class="o">.</span><span class="n">num_expert_shards</span><span class="p">,</span> <span class="n">warmup_value</span><span class="o">=</span><span class="n">seed</span> <span class="o">%</span> <span class="n">c</span><span class="o">.</span><span class="n">num_expert_shards</span><span class="p">)</span>
     <span class="n">k</span><span class="p">,</span> <span class="n">n</span> <span class="o">=</span> <span class="n">c</span><span class="o">.</span><span class="n">hidden_size</span><span class="p">,</span> <span class="n">c</span><span class="o">.</span><span class="n">intermediate_size</span>
     <span class="n">n_expts_local</span> <span class="o">=</span> <span class="n">c</span><span class="o">.</span><span class="n">num_experts</span> <span class="o">//</span> <span class="n">c</span><span class="o">.</span><span class="n">num_expert_shards</span>
     <span class="n">ragged_metadata</span><span class="p">,</span> <span class="n">gather_indx</span> <span class="o">=</span> <span class="n">init_routing_data</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">batch_size</span><span class="p">,</span> <span class="n">local_rank</span><span class="p">,</span> <span class="n">device</span><span class="p">,</span> <span class="n">uniform_routing</span><span class="p">)</span>
@@ -1481,10 +1481,10 @@
     <span class="n">w</span><span class="p">,</span> <span class="n">w_scale</span> <span class="o">=</span> <span class="n">alloc_randn_fp4</span><span class="p">((</span><span class="n">n_expts_local</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">n</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="n">p</span><span class="p">)</span>
     <span class="n">bias</span> <span class="o">=</span> <span class="n">alloc_randn</span><span class="p">((</span><span class="n">n_expts_local</span><span class="p">,</span> <span class="n">n</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 
-    <span class="n">swiglu_alpha</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span><span class="o">.</span><span class="n">item</span><span class="p">())</span> <span class="o">/</span> <span class="mi">5</span> <span class="o">+</span> <span class="mf">1.0</span>
-    <span class="n">swiglu_limit</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span><span class="o">.</span><span class="n">item</span><span class="p">())</span> <span class="o">/</span> <span class="mi">5</span> <span class="o">+</span> <span class="mf">1.3</span>
+    <span class="n">swiglu_alpha</span> <span class="o">=</span> <span class="n">random_float</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span> <span class="o">/</span> <span class="mi">5</span> <span class="o">+</span> <span class="mf">1.0</span>
+    <span class="n">swiglu_limit</span> <span class="o">=</span> <span class="n">random_float</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span> <span class="o">/</span> <span class="mi">5</span> <span class="o">+</span> <span class="mf">1.3</span>
     <span class="n">fused_activation</span> <span class="o">=</span> <span class="n">FusedActivation</span><span class="p">(</span>
-        <span class="n">FnSpecs</span><span class="p">(</span><span class="s2">&quot;swiglu&quot;</span><span class="p">,</span> <span class="n">swiglu_fn</span><span class="p">,</span> <span class="p">(</span><span class="s2">&quot;alpha&quot;</span><span class="p">,</span> <span class="s2">&quot;limit&quot;</span><span class="p">),</span> <span class="n">reduction_n</span><span class="o">=</span><span class="mi">2</span><span class="p">),</span>
+        <span class="n">FnSpecs</span><span class="p">(</span><span class="s2">&quot;swiglu&quot;</span><span class="p">,</span> <span class="n">swiglu_fn</span><span class="p">,</span> <span class="p">(</span><span class="s2">&quot;alpha&quot;</span><span class="p">,</span> <span class="s2">&quot;limit&quot;</span><span class="p">),</span> <span class="n">fn_arg_do_not_specialize</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;alpha&quot;</span><span class="p">,</span> <span class="s2">&quot;limit&quot;</span><span class="p">),</span> <span class="n">reduction_n</span><span class="o">=</span><span class="mi">2</span><span class="p">),</span>
         <span class="p">(</span><span class="n">swiglu_alpha</span><span class="p">,</span> <span class="n">swiglu_limit</span><span class="p">),</span>
     <span class="p">)</span>
 
@@ -1541,6 +1541,10 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">run_provider</span><span class="p">(</span><span class="n">prepared</span><span class="p">:</span> <span class="n">PreparedCase</span><span class="p">,</span> <span class="n">provider</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">PrecisionConfig</span><span class="p">]:</span>
     <span class="n">precision_config</span> <span class="o">=</span> <span class="n">make_precision_config</span><span class="p">(</span><span class="n">prepared</span><span class="p">)</span>
     <span class="n">kernel</span> <span class="o">=</span> <span class="n">matmul</span> <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s2">&quot;example&quot;</span> <span class="k">else</span> <span class="n">reference_matmul</span>
+    <span class="k">if</span> <span class="n">provider</span> <span class="o">!=</span> <span class="s2">&quot;example&quot;</span><span class="p">:</span>
+        <span class="n">activation</span> <span class="o">=</span> <span class="n">prepared</span><span class="o">.</span><span class="n">fused_activation</span>
+        <span class="n">prepared</span> <span class="o">=</span> <span class="n">replace</span><span class="p">(</span><span class="n">prepared</span><span class="p">,</span> <span class="n">fused_activation</span><span class="o">=</span><span class="n">replace</span><span class="p">(</span><span class="n">activation</span><span class="p">,</span>
+                                                              <span class="n">specs</span><span class="o">=</span><span class="n">replace</span><span class="p">(</span><span class="n">activation</span><span class="o">.</span><span class="n">specs</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">&quot;swiglu_dynamic&quot;</span><span class="p">)))</span>
     <span class="n">y</span> <span class="o">=</span> <span class="n">run_kernel</span><span class="p">(</span><span class="n">prepared</span><span class="p">,</span> <span class="n">kernel</span><span class="p">,</span> <span class="n">precision_config</span><span class="p">,</span> <span class="n">make_output_buffer</span><span class="p">(</span><span class="n">prepared</span><span class="p">))</span>
     <span class="k">return</span> <span class="n">y</span><span class="p">,</span> <span class="n">precision_config</span>
 
@@ -1598,6 +1602,7 @@
 <span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;c&quot;</span><span class="p">,</span> <span class="p">[</span><span class="n">GPT_OSS_120B_CONFIG</span><span class="p">])</span>
 <span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;batch_size&quot;</span><span class="p">,</span> <span class="n">get_batch_sizes</span><span class="p">(</span><span class="n">GPT_OSS_120B_CONFIG</span><span class="p">))</span>
 <span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">is_blackwell</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Gluon MoE BMM1 fused-gather is only supported on Blackwell GPUs&quot;</span><span class="p">)</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">enable_warmup</span><span class="p">(</span><span class="n">min_capability</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">test_op</span><span class="p">(</span><span class="n">c</span><span class="p">:</span> <span class="n">MLPConfig</span><span class="p">,</span> <span class="n">batch_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
     <span class="n">prepared</span> <span class="o">=</span> <span class="n">prepare_case</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">batch_size</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;cuda:</span><span class="si">{</span><span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">current_device</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
     <span class="n">ref_y</span><span class="p">,</span> <span class="n">ref_precision</span> <span class="o">=</span> <span class="n">run_provider</span><span class="p">(</span><span class="n">prepared</span><span class="p">,</span> <span class="s2">&quot;reference&quot;</span><span class="p">)</span>
@@ -1626,6 +1631,7 @@
 
 
 <span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">is_blackwell</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Gluon MoE BMM1 fused-gather is only supported on Blackwell GPUs&quot;</span><span class="p">)</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">enable_warmup</span><span class="p">(</span><span class="n">min_capability</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">test_op_consan</span><span class="p">():</span>
     <span class="k">with</span> <span class="n">triton</span><span class="o">.</span><span class="n">knobs</span><span class="o">.</span><span class="n">compilation</span><span class="o">.</span><span class="n">scope</span><span class="p">():</span>
         <span class="n">triton</span><span class="o">.</span><span class="n">knobs</span><span class="o">.</span><span class="n">compilation</span><span class="o">.</span><span class="n">instrumentation_mode</span> <span class="o">=</span> <span class="s2">&quot;consan&quot;</span>

@@ -515,6 +515,26 @@ Interfaces: `MBarrierOpInterface`
 
 
 
+### `ttng.clc_try_cancel_sync` (triton::nvidia_gpu::CLCTryCancelSyncOp)
+
+_Request cancellation of a pending cluster_
+
+Syntax:
+
+```
+operation ::= `ttng.clc_try_cancel_sync` attr-dict `:` type($response)
+```
+
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `response` | ranked tensor of floating-point or integer or ptr values |
+
+
+
 ### `ttng.cluster_arrive` (triton::nvidia_gpu::ClusterArriveOp)
 
 Syntax:

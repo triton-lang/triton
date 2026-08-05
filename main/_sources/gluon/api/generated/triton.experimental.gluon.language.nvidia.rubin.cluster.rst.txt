@@ -1,0 +1,21 @@
+﻿triton.experimental.gluon.language.nvidia.rubin.cluster
+=======================================================
+
+.. automodule:: triton.experimental.gluon.language.nvidia.rubin.cluster
+
+
+
+
+.. rubric:: Functions
+
+.. autosummary::
+   :toctree:
+   :nosignatures:
+
+   barrier
+
+
+
+
+
+

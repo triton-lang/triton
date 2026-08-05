@@ -688,6 +688,7 @@ def matmul(a, b):
 @pytest.mark.parametrize("EPILOGUE_SIZE_N", [32])
 @pytest.mark.parametrize("SUBTILE_STAGES", [4])
 @pytest.mark.parametrize("M, N, K", [(100, 200, 200)])
+@pytest.mark.enable_warmup(min_capability=10)
 def test_matmul_matches_torch(
     M,
     N,

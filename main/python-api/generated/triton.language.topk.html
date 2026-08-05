@@ -148,7 +148,7 @@
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>x</strong> (<em>Tensor</em>) – The input tensor.</p></li>
-<li><p><strong>k</strong> (<em>int</em>) – The number of top elements to return. Must be a power of two.</p></li>
+<li><p><strong>k</strong> (<em>int</em>) – The number of top elements to return. Must be a positive power of two no larger than the selected dimension.</p></li>
 <li><p><strong>dim</strong> (<em>int</em><em>, </em><em>optional</em>) – The dimension along which to find the top k elements.
 If None, uses the last dimension. Currently only the last dimension is supported.</p></li>
 <li><p><strong>descending</strong> (<em>bool</em><em>, </em><em>optional</em>) – If set to True, returns k largest elements. If set to False, returns k smallest elements.</p></li>

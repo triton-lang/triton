@@ -804,6 +804,7 @@
 <span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;EPILOGUE_SIZE_N&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">32</span><span class="p">])</span>
 <span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;SUBTILE_STAGES&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">4</span><span class="p">])</span>
 <span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;M, N, K&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="mi">100</span><span class="p">,</span> <span class="mi">200</span><span class="p">,</span> <span class="mi">200</span><span class="p">)])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">enable_warmup</span><span class="p">(</span><span class="n">min_capability</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">test_matmul_matches_torch</span><span class="p">(</span>
     <span class="n">M</span><span class="p">,</span>
     <span class="n">N</span><span class="p">,</span>
