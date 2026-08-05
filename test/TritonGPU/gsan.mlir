@@ -76,6 +76,53 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}
 
 // -----
 
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: tt.func @cluster_barriers
+  tt.func @cluster_barriers() {
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 128 : i32, shared_cluster_state, third_party_allocation, tt.divisibility = 16 : i64} : !tt.ptr<i8>
+    // CHECK-NEXT: tti.experimental_gsan_cluster_barrier_init %[[SCRATCH]] : <i8>
+    // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+    // CHECK: ttng.cluster_barrier
+    // CHECK-NEXT: tti.experimental_gsan_cluster_barrier_sync %[[SCRATCH]] : <i8>
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+    // CHECK-NOT: tti.experimental_gsan_cluster_barrier_sync
+    ttng.cluster_barrier
+    ttng.cluster_barrier {relaxed = true}
+    tt.return
+  }
+}
+
+// -----
+
+#blockedSplitM = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
+#blockedSplitN = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: tt.func @cluster_barrier_equivalents
+  tt.func @cluster_barrier_equivalents(%ptr: !tt.ptr<i32>) {
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc
+    // CHECK-NEXT: tti.experimental_gsan_cluster_barrier_init %[[SCRATCH]] : <i8>
+    // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+    // CHECK: ttng.cluster_barrier
+    // CHECK-NEXT: tti.experimental_gsan_cluster_barrier_sync %[[SCRATCH]] : <i8>
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NEXT: %{{.*}} = tti.experimental_gsan_atomic_rmw
+    %one = arith.constant 1 : i32
+    %release = tt.atomic_rmw add, release, gpu, %ptr, %one : (!tt.ptr<i32>, i32) -> i32
+
+    // CHECK: %{{.*}} = ttg.convert_layout
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NEXT: tti.experimental_gsan_cluster_barrier_sync %[[SCRATCH]] : <i8>
+    // CHECK-NEXT: ttng.cluster_barrier
+    %value = arith.constant dense<0.000000e+00> : tensor<256x128xf16, #blockedSplitM>
+    %converted = ttg.convert_layout %value : tensor<256x128xf16, #blockedSplitM> -> tensor<256x128xf16, #blockedSplitN>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory

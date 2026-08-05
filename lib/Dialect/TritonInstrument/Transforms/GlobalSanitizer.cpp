@@ -4,6 +4,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -11,6 +12,7 @@
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -34,6 +36,7 @@ static constexpr const char kGSanStreamClockArgAttr[] = "tti.gsan_stream_clock";
 static constexpr const char kGSanKernelIdArgAttr[] = "tti.gsan_kernel_id";
 static constexpr const char kDisableSetMaxRegisterAttr[] =
     "tti.disable_setmaxregister";
+static constexpr int64_t kGSanClusterBarrierScratchBytes = 128;
 
 struct DescriptorInfo {
   Value base;
@@ -365,6 +368,98 @@ static Value getGSanStateForCall(tt::CallOp callOp, Value gsanState) {
   return partitionRegion->getArgument(captureIdx);
 }
 
+struct ClusterSyncPoint {
+  Operation *op;
+  bool before;
+  bool materializeBarrier;
+};
+
+static bool atomicResultNeedsClusterBarrier(Operation *op) {
+  if (op->getResult(0).use_empty())
+    return false;
+  auto tensorTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+  if (!tensorTy)
+    return true;
+  auto kBlock = StringAttr::get(op->getContext(), "block");
+  return ttg::toLinearLayout(tensorTy).getFreeVariableMasks().lookup(kBlock);
+}
+
+static bool hasAcquireSemantics(MemSemantic sem) {
+  return sem == MemSemantic::ACQUIRE || sem == MemSemantic::ACQUIRE_RELEASE;
+}
+
+static bool hasReleaseSemantics(MemSemantic sem) {
+  return sem == MemSemantic::RELEASE || sem == MemSemantic::ACQUIRE_RELEASE;
+}
+
+static void instrumentClusterBarrierEquivalents(ModuleOp module) {
+  DenseMap<Region *, SmallVector<ClusterSyncPoint>> pointsByGroup;
+  SmallVector<Region *> groups;
+  auto addPoint = [&](Operation *op, bool before, bool materializeBarrier) {
+    Region *group = getClusterBarrierGroupRegion(op);
+    auto [it, inserted] = pointsByGroup.try_emplace(group);
+    if (inserted)
+      groups.push_back(group);
+    it->second.push_back({op, before, materializeBarrier});
+  };
+
+  SmallVector<Operation *> ops;
+  module.walk([&](Operation *op) { ops.push_back(op); });
+  for (Operation *op : ops) {
+    if (auto barrier = dyn_cast<ttng::ClusterBarrierOp>(op)) {
+      if (!barrier.getRelaxed())
+        addPoint(op, /*before=*/false, /*materializeBarrier=*/false);
+      continue;
+    }
+
+    if (isa<tt::AtomicPollOp>(op)) {
+      // instrumentAtomicPoll materializes the poll's post-operation cluster
+      // barrier before this scan. Instrument that barrier instead.
+      continue;
+    }
+
+    if (auto atomic = dyn_cast<tt::AtomicOpInterface>(op)) {
+      if (ttg::lookupNumCTAs(op) == 1)
+        continue;
+      auto sem = atomic.getMemSemantic();
+      if (hasReleaseSemantics(sem))
+        addPoint(op, /*before=*/true, /*materializeBarrier=*/true);
+      if ((hasAcquireSemantics(sem) && !op->hasAttr("allocation.offset")) ||
+          atomicResultNeedsClusterBarrier(op)) {
+        addPoint(op, /*before=*/false, /*materializeBarrier=*/true);
+      }
+      continue;
+    }
+
+    if (ttng::needsClusterBarrier(op))
+      addPoint(op, /*before=*/false, /*materializeBarrier=*/true);
+  }
+
+  for (Region *group : groups) {
+    auto &points = pointsByGroup[group];
+    Location loc = points.front().op->getLoc();
+    Block &entry = group->front();
+    OpBuilder initBuilder(&entry, entry.begin());
+    Type ptrTy = tt::PointerType::get(initBuilder.getI8Type(), 1);
+    Value scratch = createThirdPartyScratchAlloc(
+        initBuilder, loc, ptrTy, kGSanClusterBarrierScratchBytes,
+        /*alignment=*/16, /*sharedClusterState=*/true);
+    ExperimentalGSanClusterBarrierInitOp::create(initBuilder, loc, scratch);
+    ttng::ClusterBarrierOp::create(initBuilder, loc, /*relaxed=*/true);
+
+    for (const ClusterSyncPoint &point : points) {
+      OpBuilder syncBuilder(point.op);
+      if (!point.before)
+        syncBuilder.setInsertionPointAfter(point.op);
+      if (point.materializeBarrier)
+        ttng::ClusterBarrierOp::create(syncBuilder, point.op->getLoc());
+      ExperimentalGSanClusterBarrierSyncOp::create(syncBuilder,
+                                                   point.op->getLoc(), scratch);
+      ttng::ClusterBarrierOp::create(syncBuilder, point.op->getLoc());
+    }
+  }
+}
+
 class GlobalSanitizerPass
     : public impl::TritonInstrumentGlobalSanitizerBase<GlobalSanitizerPass> {
 public:
@@ -498,6 +593,8 @@ public:
             op->setAttr(kDisableSetMaxRegisterAttr, builder.getUnitAttr());
           });
     });
+
+    instrumentClusterBarrierEquivalents(module);
   }
 };
 

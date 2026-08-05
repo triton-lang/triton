@@ -279,6 +279,12 @@ std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 bool isCvtDimSync(const triton::LinearLayout &srcLayout,
                   const triton::LinearLayout &dstLayout, StringAttr dim);
 
+namespace triton::nvidia_gpu {
+
+bool needsClusterBarrier(Operation *op);
+
+} // namespace triton::nvidia_gpu
+
 } // namespace mlir
 
 #endif // TRITON_ANALYSIS_UTILITY_H
