@@ -184,7 +184,7 @@ class MXFPGEMMConfig:
             SLICE_N = BLOCK_N // NUM_SUBTILES_N
             shared_a, shared_b, WMMA_LAYOUT = gl.amd.gfx1250.make_partitioned_dot_layouts(
                 LAYOUT_BLOCK_M, LAYOUT_BLOCK_N, padded_a, padded_b, NUM_WARPS, [INSTR_M, 16, 128], a_transposed=False,
-                b_transposed=TRANSPOSE_B, slice_m=SLICE_M, slice_n=SLICE_N)
+                b_transposed=TRANSPOSE_B, slice_m=SLICE_M, slice_n=SLICE_N, transposed=True)
             # The packed (fp4) WMMA layout shares the partition-aware warp/register
             # bases but halves the K instruction extent.
             WMMA_LAYOUT_PACKED = gl.amd.AMDWMMALayout(3, True, WMMA_LAYOUT.warp_bases, WMMA_LAYOUT.reg_bases,
