@@ -1106,6 +1106,11 @@ private:
                       CommitKind::Kind opCommitKind = CommitKind::None) {
     funcBuilder.createVerifyWriteVisibilityCall(
         b, bufferMask, thread, operandName, pred, memType, op, effectCTAs);
+    if (hooks.isTMAOp(op) && !hooks.isOrderedCommitKind(CommitKind::TmaStore)) {
+      funcBuilder.createVerifyWriteVisibilityCall(
+          b, bufferMask, getBaseThread(thread, auxData.threadLayout),
+          operandName, pred, memType, op, effectCTAs);
+    }
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM) {
       for (const auto &commitKindDesc :
