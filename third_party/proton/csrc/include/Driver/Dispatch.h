@@ -83,7 +83,6 @@ struct ExternLibBase {
   static constexpr const char *name = "";    // Placeholder
   static constexpr const char *symbolName{}; // Placeholder
   static constexpr const char *pathEnv{};    // Directory override
-  static constexpr const char *fileEnv{};    // Exact file override
   static constexpr RetType success = 0;      // Placeholder
   ExternLibBase() = delete;
   ExternLibBase(const ExternLibBase &) = delete;
@@ -97,13 +96,10 @@ public:
 
   static void init(const char *name, void **lib) {
     if (*lib == nullptr) {
-      auto fullPath =
-          ExternLib::fileEnv == nullptr ? "" : getStrEnv(ExternLib::fileEnv);
       auto dir =
           ExternLib::pathEnv == nullptr ? "" : getStrEnv(ExternLib::pathEnv);
-      if (fullPath.empty() && !dir.empty())
-        fullPath = dir + "/" + name;
-      if (!fullPath.empty()) {
+      if (!dir.empty()) {
+        auto fullPath = dir + "/" + name;
         *lib = dlopen(fullPath.c_str(), RTLD_LOCAL | RTLD_LAZY);
       } else {
         // Only if the default path is not set, we try to load it from the

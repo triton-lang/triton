@@ -62,14 +62,9 @@ def configure_runtime():
         "TRITON_ROCTX_LIB_PATH": "roctx64",
     }
     explicit_overrides = {key for key in path_libraries if key in os.environ}
-
-    # TRITON_LIBHIP_PATH and TRITON_ROCTX_LIB_PATH name exact files. The other
-    # variables retain their established directory contract.
-    exact_path_keys = {"TRITON_LIBHIP_PATH", "TRITON_ROCTX_LIB_PATH"}
     for key, name in path_libraries.items():
         if key not in explicit_overrides:
-            path = Path(libraries[name])
-            triton.knobs.setenv(key, str(path if key in exact_path_keys else path.parent))
+            triton.knobs.setenv(key, str(Path(libraries[name]).parent))
 
     # HSA is not registered with rocm_sdk yet, so load and retain it directly.
     hsa_path = Path(os.environ["TRITON_HSA_RUNTIME_PATH"]) / "libhsa-runtime64.so.1"
