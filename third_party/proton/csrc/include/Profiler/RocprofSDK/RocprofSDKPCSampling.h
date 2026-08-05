@@ -179,6 +179,9 @@ private:
 
   struct SamplingState {
     PCSamplingAccumMap accum;
+    // Code objects represented in accum, maintained to avoid scanning accum
+    // while holding the sampling lock.
+    std::unordered_set<uint64_t> pendingCodeObjectIds;
     std::unordered_set<uint64_t> flushingCodeObjectIds;
   };
 
@@ -256,6 +259,9 @@ private:
   rocprofiler_context_id_t pcSamplingContext{};
   std::vector<rocprofiler_buffer_id_t> pcSamplingBuffers;
 
+  // A flush consumes dispatch targets, so concurrent flushes cannot process
+  // independent snapshots safely.
+  std::mutex flushMutex;
   // This state is touched by high-frequency buffer callbacks. Keep it separate
   // from metadata so DWARF decoding never blocks sample accumulation.
   LockedState<SamplingState> samplingState;
