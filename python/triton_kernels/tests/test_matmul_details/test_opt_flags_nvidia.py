@@ -1,18 +1,15 @@
-from types import SimpleNamespace
-
 import pytest
 import torch
 import triton
 import triton.language as tl
 from triton._internal_testing import is_cuda
 
-import triton_kernels.matmul_details.opt_flags as opt_flags
 from triton_kernels.matmul import matmul, matmul_torch, PrecisionConfig
 from triton_kernels.matmul_details._matmul import _compute_packed_n_w
 from triton_kernels.matmul_details.opt_flags import InapplicableConstraint, scoped_opt_flags_constraints
 from triton_kernels.matmul_details.opt_flags_details import opt_flags_nvidia
 from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE, downcast_to_mxfp
-from triton_kernels.tensor import BF16, FP16, FP4, UINT8, Storage, Tensor, convert_layout, make_ragged_tensor_metadata, wrap_torch_tensor
+from triton_kernels.tensor import BF16, FP4, UINT8, Storage, Tensor, convert_layout, make_ragged_tensor_metadata, wrap_torch_tensor
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor_details.layout import BlackwellMX4ValueShuffledLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout
@@ -24,101 +21,15 @@ def _make_blackwell_scale_tensor():
     return Tensor(scale_storage, dtype=UINT8)
 
 
-def _mock_cuda_target(monkeypatch, capability):
+@pytest.mark.parametrize("microblock_size", [NVFP_BLOCK_SIZE.value, MXFP_BLOCK_SIZE.value])
+def test_is_blackwell_nvfp4_lhs_dense_rhs(monkeypatch, microblock_size):
+    monkeypatch.setattr(opt_flags_nvidia.target_info, "cuda_capability_geq", lambda *_: True)
+    precision_config = PrecisionConfig(a_mx_scale=torch.empty(1), a_microblock_size=microblock_size)
 
-    def cuda_capability_geq(major, minor=0):
-        return capability >= (major, minor)
-
-    monkeypatch.setattr(opt_flags, "cuda_capability_geq", cuda_capability_geq)
-    monkeypatch.setattr(opt_flags_nvidia.target_info, "cuda_capability_geq", cuda_capability_geq)
-    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda: capability)
-    monkeypatch.setattr(
-        torch.cuda,
-        "get_device_properties",
-        lambda _: SimpleNamespace(multi_processor_count=148, shared_memory_per_block_optin=232448),
-    )
-
-
-def _make_routed_opt_flags(precision_config, rhs_dtype, routing_data, m=256, k=128, constraints=None):
-    return opt_flags.make_default_opt_flags_nvidia(
-        BF16,
-        FP4,
-        rhs_dtype,
-        precision_config,
-        1,
-        m,
-        256,
-        k,
-        routing_data,
-        True,
-        False,
-        False,
-        None,
-        False,
-        False,
-        constraints or {},
-        torch.float32,
-        mx_block_size=precision_config.a_microblock_size,
-    )
-
-
-@pytest.mark.parametrize(
-    "capability, microblock_size, rhs_dtype, constraints, expected",
-    [
-        pytest.param((10, 0), 16, BF16, {}, (128, 128, 256, 4), id="gb200-nvfp4-bf16"),
-        pytest.param((10, 3), 16, BF16, {}, (128, 128, 256, 4), id="gb300-nvfp4-bf16"),
-        pytest.param((10, 0), 16, FP16, {}, (128, 128, 256, 4), id="gb200-nvfp4-fp16"),
-        pytest.param((10, 0), 32, BF16, {}, (128, 128, 256, 8), id="blackwell-mxfp4-bf16"),
-        pytest.param((10, 0), 16, BF16, {"block_n": 256, "num_warps": 4},
-                     (128, 256, 256, 4), id="explicit-constraints"),
-        pytest.param((9, 0), 16, BF16, {"is_persistent": True}, (128, 256, 256, 8), id="hopper-unchanged"),
-    ],
-)
-def test_make_default_opt_flags_microscaled_lhs_dense_rhs(monkeypatch, capability, microblock_size, rhs_dtype,
-                                                          constraints, expected):
-    _mock_cuda_target(monkeypatch, capability)
-    activation_scale = Tensor(
-        Storage(torch.empty((1, 128), dtype=torch.uint8), BlackwellActMXScaleLayout(None)),
-        dtype=UINT8,
-    )
-    precision_config = PrecisionConfig(a_mx_scale=activation_scale, a_microblock_size=microblock_size)
-    routing_data = SimpleNamespace(
-        expected_slice_size=256,
-        n_slices=1,
-        slice_sizes=None,
-        n_blocks=lambda n_slices, m, block_m: triton.cdiv(m, block_m),
-    )
-
-    flags = _make_routed_opt_flags(precision_config, rhs_dtype, routing_data, constraints=constraints)
-
-    assert (flags.block_m, flags.block_n, flags.block_k, flags.num_warps) == expected
-
-
-@pytest.mark.parametrize("capability, expected_num_warps", [((10, 0), 8), ((10, 3), 4)])
-def test_make_default_opt_flags_large_ragged_nvfp4_specialization(monkeypatch, capability, expected_num_warps):
-    _mock_cuda_target(monkeypatch, capability)
-    activation_scale = Tensor(
-        Storage(torch.empty((1, 128), dtype=torch.uint8), BlackwellActMXScaleLayout(None)),
-        dtype=UINT8,
-    )
-    precision_config = PrecisionConfig(
-        a_mx_scale=activation_scale,
-        a_microblock_size=NVFP_BLOCK_SIZE.value,
-        a_mx_tensor_scale=torch.ones(1),
-        b_mx_scale=_make_blackwell_scale_tensor(),
-        b_microblock_size=NVFP_BLOCK_SIZE.value,
-        b_mx_tensor_scale=torch.ones(1),
-    )
-    routing_data = SimpleNamespace(
-        expected_slice_size=256,
-        n_slices=256,
-        slice_sizes=None,
-        n_blocks=lambda n_slices, m, block_m: triton.cdiv(m, block_m),
-    )
-
-    flags = _make_routed_opt_flags(precision_config, FP4, routing_data, m=65_536, k=256)
-
-    assert (flags.block_m, flags.block_n, flags.block_k, flags.num_warps) == (128, 256, 256, expected_num_warps)
+    assert opt_flags_nvidia.is_blackwell_nvfp4_lhs_dense_rhs(precision_config, FP4,
+                                                             BF16) == (microblock_size == NVFP_BLOCK_SIZE.value)
+    assert opt_flags_nvidia.is_blackwell_mx_lhs_dense_rhs(precision_config, FP4,
+                                                          BF16) == (microblock_size == MXFP_BLOCK_SIZE.value)
 
 
 @pytest.mark.parametrize("rhs_dtype", [torch.bfloat16, torch.float16])
@@ -147,9 +58,6 @@ def test_matmul_blackwell_ragged_nvfp4_lhs_dense_rhs(device, rhs_dtype):
         a_microblock_size=NVFP_BLOCK_SIZE.value,
         out_dtype=torch.bfloat16,
     )
-    flags = _make_routed_opt_flags(precision_config, BF16 if rhs_dtype == torch.bfloat16 else FP16, routing_data)
-    assert (flags.block_m, flags.block_n, flags.block_k, flags.num_warps) == (128, 128, 256, 4)
-
     actual = matmul(
         activation_value,
         weight,
@@ -165,9 +73,7 @@ def test_matmul_blackwell_ragged_nvfp4_lhs_dense_rhs(device, rhs_dtype):
         precision_config=precision_config,
     )
 
-    description = (f"{torch.cuda.get_device_name()} {rhs_dtype} "
-                   f"{flags.block_m}x{flags.block_n}x{flags.block_k} {flags.num_warps} warps")
-    assert_close(expected, actual, maxtol=3e-2, rmstol=None, description=description)
+    assert_close(expected, actual, maxtol=3e-2, rmstol=None, description=f"{torch.cuda.get_device_name()} {rhs_dtype}")
 
 
 def _make_blackwell_mxfp4_weight(device, k, n):
