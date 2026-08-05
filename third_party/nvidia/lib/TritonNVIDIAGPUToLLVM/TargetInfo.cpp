@@ -229,19 +229,16 @@ static std::string getConstraintForBitwidth(unsigned bitwidth) {
   }
 }
 
-enum class SharedStoreKind { Sync, Async };
-
-static void emitSharedStore(RewriterBase &rewriter, Location loc, Value ptr,
-                            Value ctaId, Value val, Value pred,
-                            SharedStoreKind kind, Value mbarrier) {
+void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
+                              Value ctaId, Value val, Value pred) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  MLIRContext *ctx = rewriter.getContext();
   auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
-  bool isAsync = kind == SharedStoreKind::Async;
 
   if (!isa<VectorType>(val.getType())) {
-    emitSharedStore(rewriter, loc, ptr, ctaId,
-                    packLLVector(loc, {val}, rewriter), pred, kind, mbarrier);
+    storeDShared(rewriter, loc, ptr, ctaId, packLLVector(loc, {val}, rewriter),
+                 pred);
     return;
   }
 
@@ -258,8 +255,8 @@ static void emitSharedStore(RewriterBase &rewriter, Location loc, Value ptr,
     for (Value &v : vals) {
       v = b.zext(int_ty(8), b.bitcast(v, int_ty(elemBitwidth)));
     }
-    emitSharedStore(rewriter, loc, ptr, ctaId,
-                    packLLVector(loc, vals, rewriter), pred, kind, mbarrier);
+    storeDShared(rewriter, loc, ptr, ctaId, packLLVector(loc, vals, rewriter),
+                 pred);
     return;
   }
 
@@ -272,8 +269,8 @@ static void emitSharedStore(RewriterBase &rewriter, Location loc, Value ptr,
         v = b.bitcast(v, int_ty(elemBitwidth));
       }
     }
-    emitSharedStore(rewriter, loc, ptr, ctaId,
-                    packLLVector(loc, vals, rewriter), pred, kind, mbarrier);
+    storeDShared(rewriter, loc, ptr, ctaId, packLLVector(loc, vals, rewriter),
+                 pred);
     return;
   }
 
@@ -281,8 +278,7 @@ static void emitSharedStore(RewriterBase &rewriter, Location loc, Value ptr,
   // 4, we have two strategies for dealing with it.
   //  1. If the element type is smaller than b32, store b32's instead.
   //  2. Otherwise, split the store into multiple stores.
-  // Asynchronous stores also require at least b32 regardless of vector width.
-  if ((vec > 4 || isAsync) && elemBitwidth < 32) {
+  if (vec > 4 && elemBitwidth < 32) {
     assert(llvm::isPowerOf2_32(vec));
     int elemsPerPack = 32 / elemBitwidth;
     SmallVector<Value> oldVals = unpackLLVector(loc, val, rewriter);
@@ -294,8 +290,8 @@ static void emitSharedStore(RewriterBase &rewriter, Location loc, Value ptr,
           rewriter);
       newVals.push_back(b.bitcast(v, i32_ty));
     }
-    emitSharedStore(rewriter, loc, ptr, ctaId,
-                    packLLVector(loc, newVals, rewriter), pred, kind, mbarrier);
+    storeDShared(rewriter, loc, ptr, ctaId,
+                 packLLVector(loc, newVals, rewriter), pred);
     return;
   }
 
@@ -308,10 +304,10 @@ static void emitSharedStore(RewriterBase &rewriter, Location loc, Value ptr,
     for (int i = 0; i < vec / maxVec; i++) {
       auto newPtr = b.gep(ptr.getType(), elemTy, ptr, b.i32_val(i * maxVec),
                           LLVM::GEPNoWrapFlags::inbounds);
-      emitSharedStore(
+      storeDShared(
           rewriter, loc, newPtr, ctaId,
           packLLVector(loc, ArrayRef(vals).slice(i * maxVec, maxVec), rewriter),
-          pred, kind, mbarrier);
+          pred);
     }
     return;
   }
@@ -327,54 +323,106 @@ static void emitSharedStore(RewriterBase &rewriter, Location loc, Value ptr,
     ptr = mapa(rewriter, loc, ptr, ctaId, pred);
   }
 
-  bool predIsTrue = isConstantTruePred(pred);
-  if (!isAsync && predIsTrue) {
+  PTXBuilder builder;
+  auto st = builder.create("st")
+                ->o(ctaId ? "shared::cluster" : "shared::cta")
+                .v(vec, /*predicate=*/vec > 1)
+                .b(elemBitwidth);
+  auto *ptrOpr = builder.newAddrOperand(ptr, "r");
+
+  if (isConstantTruePred(pred)) {
     b.store(val, ptr, /*align=*/vec * elemBitwidth / 8);
+  } else {
+    PTXBuilder::Operand *valOpr;
+    std::string constraint = getConstraintForBitwidth(elemBitwidth);
+    if (vec > 1) {
+      SmallVector<std::pair<Value, std::string>> vecVals;
+      for (int i = 0; i < vec; i++) {
+        vecVals.push_back({b.extract_element(val, b.i32_val(i)), constraint});
+      }
+      valOpr = builder.newListOperand(vecVals);
+    } else {
+      valOpr = builder.newOperand(val, constraint);
+    }
+    st(ptrOpr, valOpr).predicate(pred, "b");
+    builder.launch(rewriter, loc, void_ty(ctx));
+  }
+}
+
+void TargetInfo::storeAsyncDShared(RewriterBase &rewriter, Location loc,
+                                   Value ptr, Value ctaId, Value val,
+                                   Value pred, Value mbarrier) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
+  assert(ptrTy.getAddressSpace() == 3 &&
+         "st.async expects a shared-memory pointer");
+  assert(ctaId && "st.async requires a cluster CTA ID");
+
+  auto vecTy = cast<VectorType>(val.getType());
+  Type elemTy = vecTy.getElementType();
+  unsigned vec = vecTy.getNumElements();
+  unsigned elemBitwidth = getIntOrFloatOrPtrBitWidth(elemTy);
+  assert(llvm::isPowerOf2_32(vec));
+  assert(vec * elemBitwidth >= 32 && vec * elemBitwidth <= 128);
+
+  if (!elemTy.isInteger()) {
+    SmallVector<Value> vals = unpackLLVector(loc, val, rewriter);
+    for (Value &v : vals) {
+      if (isa<LLVM::LLVMPointerType>(v.getType()))
+        v = b.ptrtoint(int_ty(elemBitwidth), v);
+      else
+        v = b.bitcast(v, int_ty(elemBitwidth));
+    }
+    storeAsyncDShared(rewriter, loc, ptr, ctaId,
+                      packLLVector(loc, vals, rewriter), pred, mbarrier);
     return;
   }
 
+  if (elemBitwidth < 32) {
+    assert(elemBitwidth >= 8);
+    int elemsPerPack = 32 / elemBitwidth;
+    SmallVector<Value> oldVals = unpackLLVector(loc, val, rewriter);
+    SmallVector<Value> newVals;
+    for (int i = 0; i < vec / elemsPerPack; i++) {
+      Value v = packLLVector(
+          loc, ArrayRef(oldVals).slice(i * elemsPerPack, elemsPerPack),
+          rewriter);
+      newVals.push_back(b.bitcast(v, i32_ty));
+    }
+    storeAsyncDShared(rewriter, loc, ptr, ctaId,
+                      packLLVector(loc, newVals, rewriter), pred, mbarrier);
+    return;
+  }
+
+  assert(elemBitwidth == 32 || elemBitwidth == 64);
+  assert(1 <= vec && vec <= 4);
+  ptr = mapa(rewriter, loc, ptr, ctaId, pred);
+
   PTXBuilder builder;
-  auto &st = *builder.create(isAsync ? "st.async" : "st");
-  if (isAsync)
-    st.o("weak").o("shared::cluster").o("mbarrier::complete_tx::bytes");
-  else
-    st.o(ctaId ? "shared::cluster" : "shared::cta");
-  st.v(vec, /*predicate=*/vec > 1).b(elemBitwidth);
+  auto st = builder.create("st.async")
+                ->o("weak")
+                .o("shared::cluster")
+                .o("mbarrier::complete_tx::bytes")
+                .v(vec, /*predicate=*/vec > 1)
+                .b(elemBitwidth);
   auto *ptrOpr = builder.newAddrOperand(ptr, "r");
 
-  PTXBuilder::Operand *valOpr;
   std::string constraint = getConstraintForBitwidth(elemBitwidth);
+  PTXBuilder::Operand *valOpr;
   if (vec > 1) {
     SmallVector<std::pair<Value, std::string>> vecVals;
-    for (int i = 0; i < vec; i++) {
+    for (int i = 0; i < vec; i++)
       vecVals.push_back({b.extract_element(val, b.i32_val(i)), constraint});
-    }
     valOpr = builder.newListOperand(vecVals);
   } else {
     valOpr =
         builder.newOperand(b.extract_element(val, b.i32_val(0)), constraint);
   }
 
-  SmallVector<PTXBuilder::Operand *> operands = {ptrOpr, valOpr};
-  if (isAsync)
-    operands.push_back(builder.newAddrOperand(mbarrier, "r"));
-  auto &execution = st(operands);
-  if (!predIsTrue)
+  auto &execution = st(ptrOpr, valOpr, builder.newAddrOperand(mbarrier, "r"));
+  if (!isConstantTruePred(pred))
     execution.predicate(pred, "b");
   builder.launch(rewriter, loc, void_ty(rewriter.getContext()));
-}
-
-void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                              Value ctaId, Value val, Value pred) const {
-  emitSharedStore(rewriter, loc, ptr, ctaId, val, pred, SharedStoreKind::Sync,
-                  Value());
-}
-
-void TargetInfo::storeAsyncDShared(RewriterBase &rewriter, Location loc,
-                                   Value ptr, Value ctaId, Value val,
-                                   Value pred, Value mbarrier) const {
-  emitSharedStore(rewriter, loc, ptr, ctaId, val, pred, SharedStoreKind::Async,
-                  mbarrier);
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
