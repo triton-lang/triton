@@ -193,29 +193,6 @@ public:
   }
 };
 
-// When reducing a 1D tensor the order of elements of the tensor doesn't matter.
-// Therefore we can relax the reshape to allow it to re-order elements.
-class CombineReshapeReducePatterns : public mlir::OpRewritePattern<ReshapeOp> {
-public:
-  using OpRewritePattern::OpRewritePattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(triton::ReshapeOp reshapeOp,
-                  mlir::PatternRewriter &rewriter) const override {
-    if (reshapeOp.getAllowReorder())
-      return failure();
-    if (reshapeOp.getType().getRank() != 1)
-      return failure();
-    for (Operation *user : reshapeOp->getUsers()) {
-      if (!isa<triton::ReduceOp, triton::HistogramOp>(user))
-        return failure();
-    }
-    rewriter.modifyOpInPlace(reshapeOp,
-                             [&]() { reshapeOp.setAllowReorder(true); });
-    return success();
-  }
-};
-
 class RankedReduceDescriptorLoads : public mlir::OpRewritePattern<ReshapeOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
@@ -307,7 +284,6 @@ public:
     patterns.add<CombineSelectMaskedLoadPattern>(context);
     patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);
-    patterns.add<CombineReshapeReducePatterns>(context);
     patterns.add<RankedReduceDescriptorLoads>(context);
 
     if (applyPatternsGreedily(m, std::move(patterns)).failed())

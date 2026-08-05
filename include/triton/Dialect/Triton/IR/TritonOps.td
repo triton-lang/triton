@@ -483,24 +483,20 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
 
 def TT_ReshapeOp : TT_Op<"reshape", [Pure,
                                      SameOperandsAndResultElementType]> {
-    let summary = "reinterpret a tensor to a different shape. It may change elements order if the attribute is set.";
+    let summary = "reinterpret a tensor to a different shape";
     let description = [{
         reinterpret a tensor to a different shape.
-
-        If allow_reorder is set the compiler is free to change the order of
-        elements to generate more efficient code.
 
         If efficient_layout is set, this is a hint that the destination layout should be kept for performance reason.
         The compiler is still free to change it for better performance.
     }];
     let builders = [
-      OpBuilder<(ins "ArrayRef<int64_t>":$shape, "Value":$src,
-                     CArg<"bool", "false">:$allowReorder)>
+      OpBuilder<(ins "ArrayRef<int64_t>":$shape, "Value":$src)>
     ];
 
-    let arguments = (ins TT_Tensor:$src, UnitAttr:$allow_reorder, UnitAttr:$efficient_layout);
+    let arguments = (ins TT_Tensor:$src, UnitAttr:$efficient_layout);
     let results = (outs TT_Tensor:$result);
-    let assemblyFormat = "$src (`allow_reorder` $allow_reorder^)? (`efficient_layout` $efficient_layout^)? attr-dict `:` type($src) `->` type($result)";
+    let assemblyFormat = "$src (`efficient_layout` $efficient_layout^)? attr-dict `:` type($src) `->` type($result)";
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
     let hasVerifier = 1;

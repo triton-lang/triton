@@ -638,7 +638,7 @@ class TritonSemantic(Generic[TensorTy]):
         if input.type.numel != numel:
             raise ValueError("reshape() cannot change total number of elements in tensor")
         ret_ty = tl.block_type(input.type.scalar, dst_shape)
-        return self.tensor(self.builder.create_reshape(input.handle, dst_shape, can_reorder), ret_ty)
+        return self.tensor(self.builder.create_reshape(input.handle, dst_shape), ret_ty)
 
     def expand_dims(self, input: TensorTy, axis: int) -> TensorTy:
         dst_shape = [tl._unwrap_if_constexpr(x) for x in input.shape]

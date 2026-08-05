@@ -122,13 +122,11 @@ TypedValue<RankedTensorType> DecomposeScaledBlocked::broadcastScale(
   auto interface = cast<DialectInferLayoutInterface>(&dstEncoding.getDialect());
   Attribute broadcastEncoding;
   auto result = interface->inferReshapeOpEncoding(
-      resultShape, dstEncoding, broadcastShape, broadcastEncoding,
-      /*allowReorder=*/false, loc);
+      resultShape, dstEncoding, broadcastShape, broadcastEncoding, loc);
   assert(succeeded(result));
   Attribute srcEncoding;
-  result = interface->inferReshapeOpEncoding(expandedShape, broadcastEncoding,
-                                             scaleTy.getShape(), srcEncoding,
-                                             /*allowReorder=*/false, loc);
+  result = interface->inferReshapeOpEncoding(
+      expandedShape, broadcastEncoding, scaleTy.getShape(), srcEncoding, loc);
   assert(succeeded(result));
 
   auto srcType = scaleTy.cloneWithEncoding(srcEncoding);
@@ -142,9 +140,9 @@ TypedValue<RankedTensorType> DecomposeScaledBlocked::broadcastScale(
   // We know this layout avoids having any layout conversions after we expand
   // the scales, so mark the layout as efficient. Otherwise, forward layout
   // propagation may try to sink the convert layout.
-  auto expandScale = ReshapeOp::create(
-      rewriter, loc, expandType, scale,
-      /*allow_reorder=*/nullptr, /*efficient_layout=*/rewriter.getUnitAttr());
+  auto expandScale =
+      ReshapeOp::create(rewriter, loc, expandType, scale,
+                        /*efficient_layout=*/rewriter.getUnitAttr());
   // Broadcast the dimension to the microscaling factor.
   auto broadcastType = RankedTensorType::get(
       broadcastShape, scaleTy.getElementType(), broadcastEncoding);

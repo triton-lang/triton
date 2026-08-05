@@ -1280,7 +1280,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %10 = arith.addi %8, %9 : tensor<8x1xi32>
     // expected-remark@+2 {{unsigned : [0, 32] signed : [0, 32]}}
     // expected-remark@+1 {{non-neg}}
-    %11 = tt.reshape %10 allow_reorder : tensor<8x1xi32> -> tensor<8xi32>
+    %11 = tt.reshape %10 : tensor<8x1xi32> -> tensor<8xi32>
     tt.return
   }
 }
@@ -1348,8 +1348,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %c10_i32 = arith.constant 5 : i32
     %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
     %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<16xi32> -> tensor<1x16xi32>
-    %2 = tt.reshape %1 allow_reorder : tensor<1x16xi32> -> tensor<8x2xi32>
-    %3 = tt.reshape %1 allow_reorder : tensor<1x16xi32> -> tensor<2x8xi32>
+    %2 = tt.reshape %1 : tensor<1x16xi32> -> tensor<8x2xi32>
+    %3 = tt.reshape %1 : tensor<1x16xi32> -> tensor<2x8xi32>
     // expected-remark@+2 {{unsigned : [0, 15] signed : [0, 15]}}
     // expected-remark@+1 {{non-neg}}
     %4 = tt.trans %3 {order = array<i32: 1, 0>} : tensor<2x8xi32> -> tensor<8x2xi32>
@@ -1365,7 +1365,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %8 = ttg.convert_layout %7 : tensor<8xi32> -> tensor<8xi32>
     %9 = tt.expand_dims %8 {axis = 0 : i32} : tensor<8xi32> -> tensor<1x8xi32>
     %10 = tt.broadcast %9 : tensor<1x8xi32> -> tensor<2x8xi32>
-    %11 = tt.reshape %10 allow_reorder : tensor<2x8xi32> -> tensor<8x2xi32>
+    %11 = tt.reshape %10 : tensor<2x8xi32> -> tensor<8x2xi32>
     %12 = tt.splat %c10_i32 : i32 -> tensor<8x2xi32>
     // expected-remark@+2 {{unsigned : [7, 14] signed : [7, 14]}}
     // expected-remark@+1 {{non-neg}}

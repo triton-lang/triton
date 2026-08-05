@@ -251,6 +251,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #blockedsrc = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blockedtrans = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#linear = #ttg.linear<{register = [[0, 1], [1, 0]], lane = [[2, 0], [4, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+#lineartrans = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[0, 4], [1, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+#linearbroadcast = #ttg.linear<{register = [[0, 1], [4, 0]], lane = [[1, 0], [2, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
 #blocked1 = #ttg.slice<{dim=0, parent=#blockedsrc}>
 #blocked2 = #ttg.slice<{dim=0, parent=#blockedtrans}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
@@ -259,8 +262,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %c10_i32 = arith.constant 5 : i32
     %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #blocked1>
     %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<16xi32, #blocked1> -> tensor<1x16xi32, #blockedsrc>
-    %2 = tt.reshape %1 allow_reorder : tensor<1x16xi32, #blockedsrc> -> tensor<8x2xi32, #blocked>
-    %3 = tt.reshape %1 allow_reorder : tensor<1x16xi32, #blockedsrc> -> tensor<2x8xi32, #blockedtrans>
+    %reshaped2 = tt.reshape %1 : tensor<1x16xi32, #blockedsrc> -> tensor<8x2xi32, #linear>
+    %2 = ttg.convert_layout %reshaped2 : tensor<8x2xi32, #linear> -> tensor<8x2xi32, #blocked>
+    %reshaped3 = tt.reshape %1 : tensor<1x16xi32, #blockedsrc> -> tensor<2x8xi32, #lineartrans>
+    %3 = ttg.convert_layout %reshaped3 : tensor<2x8xi32, #lineartrans> -> tensor<2x8xi32, #blockedtrans>
     %4 = tt.trans %3 {order = array<i32: 1, 0>} : tensor<2x8xi32, #blockedtrans> -> tensor<8x2xi32, #blocked>
     %5 = ttg.convert_layout %4 : tensor<8x2xi32, #blocked> -> tensor<8x2xi32, #blocked>
     %6 = arith.addi %5, %2 : tensor<8x2xi32, #blocked>
@@ -268,7 +273,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %8 = ttg.convert_layout %7 : tensor<8xi32, #blocked2> -> tensor<8xi32, #blocked2>
     %9 = tt.expand_dims %8 {axis = 0 : i32} : tensor<8xi32, #blocked2> -> tensor<1x8xi32, #blockedtrans>
     %10 = tt.broadcast %9 : tensor<1x8xi32, #blockedtrans> -> tensor<2x8xi32, #blockedtrans>
-    %11 = tt.reshape %10 allow_reorder : tensor<2x8xi32, #blockedtrans> -> tensor<8x2xi32, #blocked>
+    %reshaped11 = tt.reshape %10 : tensor<2x8xi32, #blockedtrans> -> tensor<8x2xi32, #linearbroadcast>
+    %11 = ttg.convert_layout %reshaped11 : tensor<8x2xi32, #linearbroadcast> -> tensor<8x2xi32, #blocked>
     %12 = tt.splat %c10_i32 : i32 -> tensor<8x2xi32, #blocked>
     %13 = arith.addi %11, %12 : tensor<8x2xi32, #blocked>
     %14 = arith.minsi %13, %5 : tensor<8x2xi32, #blocked>
@@ -314,7 +320,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %8 = tt.gather %7[%zeros] {axis = 1 : i32} : (tensor<8x2xi32, #blocked>, tensor<8x1xi32, #blocked>) -> tensor<8x1xi32, #blocked>
     %9 = tt.gather %7[%ones] {axis = 1 : i32} : (tensor<8x2xi32, #blocked>, tensor<8x1xi32, #blocked>) -> tensor<8x1xi32, #blocked>
     %10 = arith.addi %8, %9 : tensor<8x1xi32, #blocked>
-    %11 = tt.reshape %10 allow_reorder : tensor<8x1xi32, #blocked> -> tensor<8xi32, #blocked1>
+    %11 = tt.reshape %10 : tensor<8x1xi32, #blocked> -> tensor<8xi32, #blocked1>
     %12 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<8x!tt.ptr<bf16>, #blocked1>
     %14 = tt.addptr %12, %11 : tensor<8x!tt.ptr<bf16>, #blocked1>, tensor<8xi32, #blocked1>
     // COMMON: %[[loaded:.*]] = amdg.buffer_load %arg0[%{{.*}}]

@@ -135,7 +135,7 @@ def nan_propagating_absmax_reduce(x, axis=None):
 
 @triton.jit
 def compute_scale(x, Out):
-    x_absmax = nan_propagating_absmax_reduce(tl.ravel(x, can_reorder=True))
+    x_absmax = nan_propagating_absmax_reduce(tl.ravel(x))
 
     # atomic_max does not propagate NaNs, so we replace them with +inf (0x7f800000).
     # We use integer minimum because NaNs are above +inf in integer representation.
@@ -173,7 +173,7 @@ def float_to_flex(
         zero = tl.cast(0.0, tl.int32)
         if mask is not None:
             x_int32 = tl.where(mask, x_int32, zero)
-        checksum_local = tl.xor_sum(tl.ravel(x_int32, can_reorder=True), 0)
+        checksum_local = tl.xor_sum(tl.ravel(x_int32), 0)
         tl.atomic_add(checksum_scale_ptr, checksum_local)
     if mask is not None:
         if actual_scale_ptr is not None:

@@ -157,8 +157,8 @@ Value reduceAll(ImplicitLocOpBuilder &b, Value tensor) {
   if (!tensorType || tensorType.getRank() == 0)
     return tensor;
   if (tensorType.getRank() != 1) {
-    tensor = triton::ReshapeOp::create(b, {tensorType.getNumElements()}, tensor,
-                                       /*allowReorder=*/true);
+    tensor =
+        triton::ReshapeOp::create(b, {tensorType.getNumElements()}, tensor);
   }
   return reduceLastDim<OpTy>(b, tensor);
 }

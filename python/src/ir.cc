@@ -1611,10 +1611,8 @@ void init_triton_ir(py::module_ &m) {
              self.create<DescriptorScatterOp>(desc, x_indices, y_index, value);
            })
       .def("create_reshape",
-           [](TritonOpBuilder &self, Value &arg, std::vector<int64_t> &shape,
-              bool allowReorder) -> Value {
-             return self.create<ReshapeOp>(shape, arg, allowReorder);
-           })
+           [](TritonOpBuilder &self, Value &arg, std::vector<int64_t> &shape)
+               -> Value { return self.create<ReshapeOp>(shape, arg); })
       .def("create_expand_dims",
            [](TritonOpBuilder &self, Value &arg, int axis) -> Value {
              return self.create<ExpandDimsOp>(arg, axis);

@@ -707,7 +707,7 @@ class InterpreterBuilder:
         return TensorHandle(1 / np.sqrt(arg.data), arg.dtype.scalar)
 
     # tensor operators
-    create_reshape = lambda self, arg, shape, allow_reorder: TensorHandle(arg.data.reshape(shape), arg.dtype.scalar)
+    create_reshape = lambda self, arg, shape: TensorHandle(arg.data.reshape(shape), arg.dtype.scalar)
 
     def create_trans(self, arg, perm):
         return TensorHandle(np.transpose(arg.data, perm), arg.dtype.scalar)

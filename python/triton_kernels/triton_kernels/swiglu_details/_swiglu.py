@@ -14,7 +14,7 @@ def clip(x, limit, clip_lower: tl.constexpr):
 
 @triton.jit
 def thread_local_absmax(x, BLOCK_SIZE: tl.constexpr, NUM_THREADS: tl.constexpr):
-    return tl.max(tl.reshape(tl.abs(x), [NUM_THREADS, BLOCK_SIZE // NUM_THREADS], can_reorder=True), axis=1)
+    return tl.max(tl.reshape(tl.abs(x), [NUM_THREADS, BLOCK_SIZE // NUM_THREADS]), axis=1)
 
 
 def swiglu_repr(specialization):

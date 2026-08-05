@@ -124,20 +124,10 @@ struct CanonicalizeConvertFromReshape
     // If the layouts are structurally the same, the convert is trivial
     if (isConvertTrivial(convert)) {
       rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
-          op, op.getType(), convert.getSrc(), op.getAllowReorder(),
-          op.getEfficientLayout());
+          op, op.getType(), convert.getSrc(), op.getEfficientLayout());
       return success();
     }
-
-    if (isExpensiveView(convert.getSrc().getType(), op.getType()))
-      return failure();
-    if (!op.getAllowReorder())
-      return failure();
-
-    rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
-        op, op.getType(), convert.getSrc(), op.getAllowReorder(),
-        op.getEfficientLayout());
-    return mlir::success();
+    return failure();
   }
 };
 
@@ -308,28 +298,6 @@ struct CanonicalizeConvertFromConvert
     Operation *arg = op.getSrc().getDefiningOp();
     if (!arg)
       return failure();
-
-    // cvt(reshape) -> reshape
-    if (auto reshape = dyn_cast<ReshapeOp>(arg)) {
-      if (!reshape.getAllowReorder() || reshape.getEfficientLayout() ||
-          isExpensiveView(reshape.getSrc().getType(), op.getType()))
-        return failure();
-
-      // In TritonGPUToLLVM phase, ViewOp is converted to unpacking and packing
-      // operations, which requires the element type to match between unpacking
-      // and packing. However, part of values with dot operand encoding will be
-      // packed/unpacked as i32 elements instead of the underlying element type.
-      // To avoid errors, skip this folding when either the operand or result
-      // of view has a dot operand encoding.
-      if (hasDotOperandEncoding(op->getOperand(0)) ||
-          hasDotOperandEncoding(op->getResult(0)))
-        return failure();
-
-      rewriter.replaceOpWithNewOp<ReshapeOp>(op, op->getResult(0).getType(),
-                                             reshape.getResult(),
-                                             reshape.getAllowReorder());
-      return success();
-    }
 
     // cvt(histogram) -> histogram
     if (auto histogram = dyn_cast<HistogramOp>(arg)) {

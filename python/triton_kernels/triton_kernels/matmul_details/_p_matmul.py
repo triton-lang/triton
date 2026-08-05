@@ -708,7 +708,7 @@ def _p_matmul(
             else:
                 # Flexpoint
                 if USE_LOCAL_ABSMAX:
-                    out_view = tl.reshape(out, [out.numel // THREADS_PER_BLOCK, THREADS_PER_BLOCK], can_reorder=True)
+                    out_view = tl.reshape(out, [out.numel // THREADS_PER_BLOCK, THREADS_PER_BLOCK])
                     local_absmax = tl.maximum(local_absmax, nan_propagating_absmax_reduce(out_view, axis=0))
 
                 if PER_BATCH_OUT_SCALE:
