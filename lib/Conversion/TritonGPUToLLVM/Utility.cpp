@@ -977,11 +977,12 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
 }
 
 SmallVector<Value>
-lowerLocalLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
-               ArrayRef<Value> valsArray, Type llvmElemTy,
-               triton::gpu::MemDescType srcTy, SharedMemoryObject smemObj,
-               RewriterBase &rewriter, const TargetInfoBase &targetInfo,
-               LowerLdStCallback lowerInst) {
+lowerLocalLdSt(Location loc, MLIRContext *ctx,
+               LinearLayout cvt, // Map from registers to offset[, partition]
+               ArrayRef<Value> valsArray, // Input for store, empty for load
+               Type llvmElemTy, triton::gpu::MemDescType srcTy,
+               SharedMemoryObject smemObj, RewriterBase &rewriter,
+               const TargetInfoBase &targetInfo, LowerLdStCallback lowerInst) {
 
   auto isStore = !valsArray.empty();
   // Remove broadcasting in the registers

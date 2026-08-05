@@ -33,9 +33,6 @@ public:
 
   void storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     Value ctaId, Value val, Value pred) const override;
-  void storeAsyncDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                         Value ctaId, Value val, Value pred,
-                         Value mbarrier) const;
   Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     Value ctaId, Type elemTy, Value pred,
                     Operation *localLoadOp = nullptr) const override;

@@ -15,7 +15,6 @@
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/STLExtras.h"
 
-#include <functional>
 #include <optional>
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
@@ -666,13 +665,12 @@ LowerLdStCallback makeSharedStoreEmitter(const TargetInfoBase &targetInfo,
 LowerLdStCallback makeSharedLoadEmitter(const TargetInfoBase &targetInfo,
                                         Operation *localLoadOp = nullptr);
 
-// Lower an ld/st-like operation given a layout and a callback that creates the
-// PTX instruction. Lowers to ld when valsArray is empty, and to st when it is
-// not, and returns the output values.
-// calcPaddedOffset is a lambda that takes a base offset (mlir::Value)
-// and computes a new offset (mlir::Value) by applying padding based on
-// shared memory layout.
-// cvt: Maps (reg, lane, warp, block) → (offset[, partition]).
+// Lower an ld/st-like operation using a layout and instruction callback.
+// This is a close cousin of lowerLdStMatrix in MemoryOpToLLVM.cpp, but
+// ldmatrix.trans makes that path more specialized. An empty valsArray emits
+// loads and returns their values; otherwise it emits stores. `paddingShifts`
+// describes shared-memory padding, and `cvt` maps (register, lane, warp, block)
+// to (offset[, partition]).
 SmallVector<Value>
 lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
           ArrayRef<Value> valsArray, // Input for store, output for load

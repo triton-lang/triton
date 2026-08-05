@@ -267,8 +267,7 @@ struct AsyncSharedStoreOpConversion
     freeVarMasks[str_attr("block")] = 0;
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
-    if (!threadPred)
-      threadPred = b.true_val();
+    Value mapPred = threadPred ? threadPred : b.true_val();
     regLayout = regLayout.removeZeroBasesAlongDim(str_attr("register"));
     auto sharedLayout = toLinearLayoutIgnoringPadding(dstTy);
     auto cvt = invertAndComposeBlockLocal(sharedLayout, regLayout);
@@ -279,14 +278,50 @@ struct AsyncSharedStoreOpConversion
                          ArrayRef<Value> values, Value shmemAddr, int idx,
                          VectorType vecTy, Value ctaId) -> SmallVector<Value> {
       Value targetCTAId = ctaId ? ctaId : currentCTAId;
+      Value dst = targetInfo.mapDShared(rewriter, storeLoc, shmemAddr,
+                                        targetCTAId, mapPred);
       Value mbarrier = targetInfo.mapDShared(rewriter, storeLoc, mbarrierPtr,
-                                             targetCTAId, threadPred);
+                                             targetCTAId, mapPred);
       mbarrier = LLVM::NVIDIA::getLeaderAddress(storeLoc, rewriter, mbarrier,
                                                 mbarrierTy);
-      Value valsVec = packLLVector(
-          storeLoc, values.slice(idx, vecTy.getNumElements()), rewriter);
-      targetInfo.storeAsyncDShared(rewriter, storeLoc, shmemAddr, targetCTAId,
-                                   valsVec, threadPred, mbarrier);
+
+      Type elemTy = vecTy.getElementType();
+      unsigned elemBitwidth = getIntOrFloatOrPtrBitWidth(elemTy);
+      unsigned storeBitwidth = std::max(32u, elemBitwidth);
+      unsigned elemsPerStore = storeBitwidth / elemBitwidth;
+      unsigned storeVec = vecTy.getNumElements() / elemsPerStore;
+      std::string constraint = storeBitwidth == 64 ? "l" : "r";
+
+      SmallVector<std::pair<Value, std::string>> storeValues;
+      for (unsigned i = 0; i < storeVec; ++i) {
+        auto elems = values.slice(idx + i * elemsPerStore, elemsPerStore);
+        Value value = elems.front();
+        if (elemsPerStore > 1)
+          value = b.bitcast(packLLVector(storeLoc, elems, rewriter),
+                            int_ty(storeBitwidth));
+        else if (isa<LLVM::LLVMPointerType>(elemTy))
+          value = b.ptrtoint(int_ty(storeBitwidth), value);
+        else if (!elemTy.isInteger())
+          value = b.bitcast(value, int_ty(storeBitwidth));
+        storeValues.emplace_back(value, constraint);
+      }
+
+      PTXBuilder ptxBuilder;
+      auto &store = ptxBuilder.create("st.async")
+                        ->o("weak")
+                        .o("shared::cluster")
+                        .o("mbarrier::complete_tx::bytes")
+                        .v(storeVec, /*predicate=*/storeVec > 1)
+                        .b(storeBitwidth);
+      auto *dstOperand = ptxBuilder.newAddrOperand(dst, "r");
+      auto *valueOperand =
+          storeVec == 1
+              ? ptxBuilder.newOperand(storeValues.front().first, constraint)
+              : ptxBuilder.newListOperand(storeValues);
+      auto *barrierOperand = ptxBuilder.newAddrOperand(mbarrier, "r");
+      store(dstOperand, valueOperand, barrierOperand)
+          .maybePredicate(threadPred, "b");
+      ptxBuilder.launch(rewriter, storeLoc, void_ty(rewriter.getContext()));
       return {};
     };
     lowerLocalLdSt(loc, ctx, cvt, values, llvmElemTy, dstTy, dstMemObj,

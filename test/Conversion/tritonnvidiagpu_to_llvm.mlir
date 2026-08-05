@@ -263,10 +263,10 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true} {
   // CHECK-LABEL: async_shared_store_two_cta_barrier
   // CHECK: nvvm.mapa
+  // CHECK: nvvm.mapa
   // CHECK: llvm.ptrtoint
   // CHECK: llvm.and
   // CHECK: llvm.inttoptr
-  // CHECK: nvvm.mapa
   // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
   tt.func @async_shared_store_two_cta_barrier(%src: tensor<128xi32, #blocked>, %dst: !ttg.memdesc<128xi32, #shared1, #smem, mutable>, %mbarrier: !ttg.memdesc<1xi64, #shared0, #smem, mutable>) {
     ttng.async_shared_store %src, %dst, %mbarrier : tensor<128xi32, #blocked> -> !ttg.memdesc<128xi32, #shared1, #smem, mutable>, !ttg.memdesc<1xi64, #shared0, #smem, mutable>
@@ -282,7 +282,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: async_shared_store_f16
-  // CHECK: llvm.bitcast {{.*}} : vector<2xi16> to i32
+  // CHECK: llvm.bitcast {{.*}} : vector<2xf16> to i32
   // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
   tt.func @async_shared_store_f16(%src: tensor<256xf16, #blocked>, %dst: !ttg.memdesc<256xf16, #shared1, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #shared0, #smem, mutable>) {
     ttng.async_shared_store %src, %dst, %mbarrier : tensor<256xf16, #blocked> -> !ttg.memdesc<256xf16, #shared1, #smem, mutable>, !ttg.memdesc<2xi64, #shared0, #smem, mutable>

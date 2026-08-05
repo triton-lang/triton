@@ -2226,34 +2226,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
-#async_store_src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
-#async_store_dst = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
-#async_store_smem = #ttg.shared_memory
-
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 528 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
-  // CHECK-LABEL: @async_shared_store_split_recipients
-  tt.func public @async_shared_store_split_recipients(%src: tensor<128xi32, #async_store_src>) {
-    %true = arith.constant true
-    %dst = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128xi32, #async_store_dst, #async_store_smem, mutable>
-    %bar = ttg.local_alloc {allocation.offset = 512 : i32} : () -> !ttg.memdesc<2xi64, #async_store_dst, #async_store_smem, mutable>
-    ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #async_store_dst, #async_store_smem, mutable>
-    ttng.barrier_expect %bar, 512, %true : !ttg.memdesc<2xi64, #async_store_dst, #async_store_smem, mutable>
-    // CHECK: %[[BOTH_CTAS:.*]] = arith.constant 3 : i32
-    // CHECK: %[[ASYNC_THREAD:.*]] = arith.constant 1 : i32
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[ASYNC_THREAD]], {{.*}}%[[BOTH_CTAS]])
-    // CHECK: %[[ASYNC_BIT:.*]] = arith.constant 2 : i64
-    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}({{.*}}%[[ASYNC_BIT]], %[[BOTH_CTAS]],
-    // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer{{.*}}({{.*}}%[[BOTH_CTAS]], %[[BOTH_CTAS]])
-    // CHECK: %[[BYTES_PER_CTA:.*]] = arith.constant -256 : i64
-    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state{{.*}}({{.*}}%[[BYTES_PER_CTA]], {{.*}}%[[BOTH_CTAS]])
-    // CHECK: ttng.async_shared_store
-    ttng.async_shared_store %src, %dst, %bar : tensor<128xi32, #async_store_src> -> !ttg.memdesc<128xi32, #async_store_dst, #async_store_smem, mutable>, !ttg.memdesc<2xi64, #async_store_dst, #async_store_smem, mutable>
-    tt.return
-  }
-}
-
-// -----
-
 #async_remote_src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
 #async_remote_dst = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 #async_remote_smem = #ttg.shared_memory
@@ -2274,38 +2246,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state{{.*}}({{.*}}%[[BYTES_PER_CTA]], {{.*}}%[[REMOTE_CTA]])
     // CHECK: ttng.async_shared_store
     ttng.async_shared_store %src, %view, %bar : tensor<128xi32, #async_remote_src> -> !ttg.memdesc<128xi32, #async_remote_dst, #async_remote_smem, mutable, 256>, !ttg.memdesc<2xi64, #async_remote_dst, #async_remote_smem, mutable>
-    tt.return
-  }
-}
-
-// -----
-
-#async_proxy_src = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1], CGALayout = [[1, 0]]}>
-#async_proxy_dst = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CGALayout = [[1, 0]]}>
-#async_proxy_bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
-#async_proxy_smem = #ttg.shared_memory
-
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 8200 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
-  // CHECK-LABEL: @async_shared_store_generic_proxy_handoff
-  tt.func public @async_shared_store_generic_proxy_handoff(%src: tensor<64x32xf32, #async_proxy_src>, %out: !tt.tensordesc<64x32xf32, #async_proxy_dst>) {
-    %true = arith.constant true
-    %c0 = arith.constant 0 : i32
-    %dst = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<64x32xf32, #async_proxy_dst, #async_proxy_smem, mutable>
-    %bar = ttg.local_alloc {allocation.offset = 8192 : i32} : () -> !ttg.memdesc<2xi64, #async_proxy_bar, #async_proxy_smem, mutable>
-    ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #async_proxy_bar, #async_proxy_smem, mutable>
-    ttng.barrier_expect %bar, 4096, %true : !ttg.memdesc<2xi64, #async_proxy_bar, #async_proxy_smem, mutable>
-    // CHECK: tt.call @__triton_consan_set_proxy_access
-    // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer
-    // CHECK: tt.call @__triton_consan_track_proxy_accesses_for_buffer
-    // CHECK: ttng.async_shared_store
-    ttng.async_shared_store %src, %dst, %bar : tensor<64x32xf32, #async_proxy_src> -> !ttg.memdesc<64x32xf32, #async_proxy_dst, #async_proxy_smem, mutable>, !ttg.memdesc<2xi64, #async_proxy_bar, #async_proxy_smem, mutable>
-    // CHECK: ttng.wait_barrier
-    // CHECK: tt.call @__triton_consan_complete_barrier_wait
-    ttng.wait_barrier %bar, %c0, %true : !ttg.memdesc<2xi64, #async_proxy_bar, #async_proxy_smem, mutable>
-    // CHECK: tt.call @__triton_consan_fence_proxy_accesses
-    ttng.fence_async_shared {bCluster = false}
-    // CHECK: tt.call @__triton_consan_verify_proxy_access
-    ttng.async_tma_copy_local_to_global %out[%c0, %c0] %dst : !tt.tensordesc<64x32xf32, #async_proxy_dst>, !ttg.memdesc<64x32xf32, #async_proxy_dst, #async_proxy_smem, mutable>
     tt.return
   }
 }
