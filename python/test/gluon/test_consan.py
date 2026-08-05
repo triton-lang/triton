@@ -1101,7 +1101,7 @@ def test_tma_overlapping_operations(OP, SYNCHRONIZED, device, run_wrapper, monke
     output_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(output, [block_m, XBLOCK.value], layout)
     kernel[(1, )](input_desc, output_desc, OP=OP, SYNCHRONIZED=SYNCHRONIZED, num_warps=4, num_ctas=num_ctas)
     if SYNCHRONIZED:
-        assert_close(output, input)
+        torch.testing.assert_close(output, input)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires ampere or newer")
