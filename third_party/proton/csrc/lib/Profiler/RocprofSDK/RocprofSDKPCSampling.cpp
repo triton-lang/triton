@@ -458,6 +458,8 @@ void RocprofSDKPCSampling::accumulate(
     PCSamplingMetric::PCSamplingMetricKind stallKind, bool isStalled,
     uint64_t dispatchId, uint64_t codeObjectId, uint64_t pcOffset) {
   samplingState.withLock([&](SamplingState &state) {
+    if (codeObjectId != ROCPROFILER_CODE_OBJECT_ID_NONE)
+      state.pendingCodeObjectIds.insert(codeObjectId);
     auto &accum = state.accum[{dispatchId, codeObjectId, pcOffset}];
     accum.values[PCSamplingMetric::NumSamples]++;
     if (isStalled) {
@@ -599,12 +601,8 @@ void RocprofSDKPCSampling::clearSourceLocationCacheLocked(
 void RocprofSDKPCSampling::tryReleaseCodeObject(uint64_t codeObjectId) {
   metadataState.withLock([&](MetadataState &metadata) {
     samplingState.withLock([&](SamplingState &sampling) {
-      for (const auto &[key, accum] : sampling.accum) {
-        (void)accum;
-        if (key.codeObjectId == codeObjectId)
-          return;
-      }
-      if (sampling.flushingCodeObjectIds.count(codeObjectId) > 0)
+      if (sampling.pendingCodeObjectIds.count(codeObjectId) > 0 ||
+          sampling.flushingCodeObjectIds.count(codeObjectId) > 0)
         return;
 
       auto info = metadata.codeObjects.find(codeObjectId);
@@ -618,25 +616,22 @@ void RocprofSDKPCSampling::tryReleaseCodeObject(uint64_t codeObjectId) {
 }
 
 void RocprofSDKPCSampling::flushAccum() {
+  std::lock_guard<std::mutex> flushLock(flushMutex);
   PCSamplingAccumMap snapshot;
+  std::unordered_set<uint64_t> snapshotCodeObjectIds;
   samplingState.withLock([&](SamplingState &state) {
     snapshot.swap(state.accum);
-    for (const auto &[key, accum] : snapshot) {
-      (void)accum;
-      if (key.codeObjectId != ROCPROFILER_CODE_OBJECT_ID_NONE)
-        state.flushingCodeObjectIds.insert(key.codeObjectId);
-    }
+    snapshotCodeObjectIds.swap(state.pendingCodeObjectIds);
+    state.flushingCodeObjectIds.insert(snapshotCodeObjectIds.begin(),
+                                       snapshotCodeObjectIds.end());
   });
   if (snapshot.empty())
     return;
 
   std::unordered_map<uint64_t, PCSamplingAccum> unresolvedAccum;
-  std::unordered_set<uint64_t> flushedCodeObjectIds;
   std::unordered_set<uint64_t> consumedDispatchIds;
 
   for (auto &[key, accum] : snapshot) {
-    if (key.codeObjectId != ROCPROFILER_CODE_OBJECT_ID_NONE)
-      flushedCodeObjectIds.insert(key.codeObjectId);
     PCSamplingTarget target;
     std::optional<SourceLocation> sourceLocation;
     bool hasTarget = metadataState.withLock([&](MetadataState &state) {
@@ -701,14 +696,11 @@ void RocprofSDKPCSampling::flushAccum() {
   });
 
   samplingState.withLock([&](SamplingState &state) {
-    for (const auto &[key, accum] : snapshot) {
-      (void)accum;
-      if (key.codeObjectId != ROCPROFILER_CODE_OBJECT_ID_NONE)
-        state.flushingCodeObjectIds.erase(key.codeObjectId);
-    }
+    for (auto codeObjectId : snapshotCodeObjectIds)
+      state.flushingCodeObjectIds.erase(codeObjectId);
   });
 
-  for (auto codeObjectId : flushedCodeObjectIds)
+  for (auto codeObjectId : snapshotCodeObjectIds)
     tryReleaseCodeObject(codeObjectId);
 }
 
