@@ -844,7 +844,8 @@ void LocalAllocOp::getEffects(
                        SharedMemory::get());
   if (getSrc())
     effects.emplace_back(MemoryEffects::Write::get(), alloc,
-                         StringAttr::get(getContext(), "generic"),
+                         SharedMemoryAccessKindAttr::get(
+                             getContext(), SharedMemoryAccessKind::Generic),
                          SharedMemory::get());
 }
 

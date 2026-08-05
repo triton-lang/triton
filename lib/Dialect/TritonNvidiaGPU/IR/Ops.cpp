@@ -339,11 +339,13 @@ void WarpGroupDotOp::getEffects(
   auto &b = getBMutable();
   if (isa<MemDescType>(a.get().getType()))
     effects.emplace_back(MemoryEffects::Read::get(), &a,
-                         StringAttr::get(getContext(), "async"),
+                         SharedMemoryAccessKindAttr::get(
+                             getContext(), SharedMemoryAccessKind::Async),
                          SharedMemory::get());
   if (isa<MemDescType>(b.get().getType()))
     effects.emplace_back(MemoryEffects::Read::get(), &b,
-                         StringAttr::get(getContext(), "async"),
+                         SharedMemoryAccessKindAttr::get(
+                             getContext(), SharedMemoryAccessKind::Async),
                          SharedMemory::get());
 }
 
@@ -1249,7 +1251,8 @@ void TCGen5MMAOp::getEffects(
 
   if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
-                         StringAttr::get(getContext(), "async"),
+                         SharedMemoryAccessKindAttr::get(
+                             getContext(), SharedMemoryAccessKind::Async),
                          SharedMemory::get());
 
   } else {
@@ -1257,11 +1260,13 @@ void TCGen5MMAOp::getEffects(
                          TensorMemory::get());
   }
   effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
-                       StringAttr::get(getContext(), "async"),
+                       SharedMemoryAccessKindAttr::get(
+                           getContext(), SharedMemoryAccessKind::Async),
                        SharedMemory::get());
   for (auto &barrierMutable : getBarriersMutable())
     effects.emplace_back(MemoryEffects::Write::get(), &barrierMutable,
-                         StringAttr::get(getContext(), "barrier"),
+                         SharedMemoryAccessKindAttr::get(
+                             getContext(), SharedMemoryAccessKind::Barrier),
                          SharedMemory::get());
 }
 
@@ -1512,7 +1517,8 @@ void TCGen5MMAScaledOp::getEffects(
 
   if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
-                         StringAttr::get(getContext(), "async"),
+                         SharedMemoryAccessKindAttr::get(
+                             getContext(), SharedMemoryAccessKind::Async),
                          SharedMemory::get());
 
   } else {
@@ -1520,7 +1526,8 @@ void TCGen5MMAScaledOp::getEffects(
                          TensorMemory::get());
   }
   effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
-                       StringAttr::get(getContext(), "async"),
+                       SharedMemoryAccessKindAttr::get(
+                           getContext(), SharedMemoryAccessKind::Async),
                        SharedMemory::get());
   effects.emplace_back(MemoryEffects::Read::get(), &getAScaleMutable(),
                        TensorMemory::get());
@@ -1528,7 +1535,8 @@ void TCGen5MMAScaledOp::getEffects(
                        TensorMemory::get());
   for (auto &barrierMutable : getBarriersMutable())
     effects.emplace_back(MemoryEffects::Write::get(), &barrierMutable,
-                         StringAttr::get(getContext(), "barrier"),
+                         SharedMemoryAccessKindAttr::get(
+                             getContext(), SharedMemoryAccessKind::Barrier),
                          SharedMemory::get());
 }
 

@@ -4,6 +4,16 @@
 include "mlir/IR/EnumAttr.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 
+def TTG_SharedMemoryAccessKind : I32EnumAttr<
+    "SharedMemoryAccessKind", "shared-memory access kind",
+    [
+      I32EnumAttrCase<"Generic", 0, "generic">,
+      I32EnumAttrCase<"Async", 1, "async">,
+      I32EnumAttrCase<"Barrier", 2, "barrier">
+    ]> {
+  let cppNamespace = "::mlir::triton::gpu";
+}
+
 // Bitmask enum describing which memory domains a barrier/fence orders.
 def TTG_AddrSpace : I32BitEnumAttr<
     "AddrSpace", "",

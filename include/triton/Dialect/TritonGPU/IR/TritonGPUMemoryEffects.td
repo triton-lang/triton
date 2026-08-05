@@ -6,13 +6,16 @@ include "mlir/Interfaces/SideEffectInterfaces.td"
 def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
 def GenericSharedMemory : Resource<
     "::mlir::triton::gpu::SharedMemory",
-    [{::mlir::StringAttr::get(getContext(), "generic")}]>;
+    [{::mlir::triton::gpu::SharedMemoryAccessKindAttr::get(
+        getContext(), ::mlir::triton::gpu::SharedMemoryAccessKind::Generic)}]>;
 def AsyncSharedMemory : Resource<
     "::mlir::triton::gpu::SharedMemory",
-    [{::mlir::StringAttr::get(getContext(), "async")}]>;
+    [{::mlir::triton::gpu::SharedMemoryAccessKindAttr::get(
+        getContext(), ::mlir::triton::gpu::SharedMemoryAccessKind::Async)}]>;
 def BarrierSharedMemory : Resource<
     "::mlir::triton::gpu::SharedMemory",
-    [{::mlir::StringAttr::get(getContext(), "barrier")}]>;
+    [{::mlir::triton::gpu::SharedMemoryAccessKindAttr::get(
+        getContext(), ::mlir::triton::gpu::SharedMemoryAccessKind::Barrier)}]>;
 
 defvar GenericSharedRead = [MemRead<GenericSharedMemory>];
 defvar GenericSharedWrite = [MemWrite<GenericSharedMemory>];
