@@ -170,6 +170,10 @@ RocprofSDKPCSampling::RocprofSDKPCSampling() = default;
 
 RocprofSDKPCSampling::~RocprofSDKPCSampling() = default;
 
+RocprofSDKPCSampling::MetadataState::MetadataState() = default;
+
+RocprofSDKPCSampling::MetadataState::~MetadataState() = default;
+
 std::optional<RocprofSDKPCSampling::SourceLocation>
 RocprofSDKPCSampling::parseSourceLocationComment(
     const std::string &comment, const std::string &fallbackFunction) {
@@ -324,15 +328,6 @@ void RocprofSDKPCSampling::recordCodeObjectLoad(
   info.loadDelta = load.load_delta;
 
 #if PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE
-  if (codeObjects.contain(load.code_object_id)) {
-    CodeObjectInfo oldInfo;
-    codeObjects.withRead(load.code_object_id,
-                         [&](const CodeObjectInfo &value) { oldInfo = value; });
-    std::lock_guard<std::mutex> lock(sourceLocationTranslatorMutex);
-    removeSourceLocationDecoder(oldInfo);
-    clearSourceLocationCache(load.code_object_id);
-  }
-
   if (pcSamplingModeEnabled) {
     if (load.storage_type == ROCPROFILER_CODE_OBJECT_STORAGE_TYPE_MEMORY) {
       if (load.memory_base != 0 && load.memory_size != 0 &&
@@ -344,15 +339,27 @@ void RocprofSDKPCSampling::recordCodeObjectLoad(
   }
 #endif
 
-  codeObjects[load.code_object_id] = std::move(info);
+  metadataState.withLock([&](MetadataState &state) {
+    replaceCodeObjectLocked(state, std::move(info));
+  });
 }
 
-void RocprofSDKPCSampling::removeSourceLocationDecoder(
-    const CodeObjectInfo &info) {
+void RocprofSDKPCSampling::replaceCodeObjectLocked(MetadataState &state,
+                                                   CodeObjectInfo info) {
+  const uint64_t codeObjectId = info.codeObjectId;
+  auto oldInfo = state.codeObjects.find(codeObjectId);
+  if (oldInfo != state.codeObjects.end())
+    removeSourceLocationDecoderLocked(state, oldInfo->second);
+  state.codeObjects.insert_or_assign(codeObjectId, std::move(info));
+  clearSourceLocationCacheLocked(state, codeObjectId);
+}
+
+void RocprofSDKPCSampling::removeSourceLocationDecoderLocked(
+    MetadataState &state, const CodeObjectInfo &info) {
 #if PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE
-  if (sourceLocationTranslator && info.decoderRegistered) {
+  if (state.sourceLocationTranslator && info.decoderRegistered) {
     try {
-      sourceLocationTranslator->removeDecoder(
+      state.sourceLocationTranslator->removeDecoder(
           info.codeObjectId, static_cast<uint64_t>(info.loadDelta));
     } catch (...) {
       // Removal is best-effort because the decoder may have failed to register.
@@ -367,11 +374,14 @@ void RocprofSDKPCSampling::recordCodeObjectUnload(uint64_t codeObjectId) {
   if (codeObjectId == ROCPROFILER_CODE_OBJECT_ID_NONE)
     return;
 
-  codeObjects.withWrite(codeObjectId,
-                        [&](CodeObjectInfo &info) { info.unloaded = true; });
-  clearSourceLocationCache(codeObjectId);
+  metadataState.withLock([&](MetadataState &state) {
+    auto info = state.codeObjects.find(codeObjectId);
+    if (info != state.codeObjects.end())
+      info->second.unloaded = true;
+    clearSourceLocationCacheLocked(state, codeObjectId);
+  });
   if (!pcSamplingStarted)
-    releaseUnloadedCodeObject(codeObjectId);
+    tryReleaseCodeObject(codeObjectId);
 }
 
 void RocprofSDKPCSampling::recordKernelSymbol(
@@ -390,7 +400,9 @@ void RocprofSDKPCSampling::recordKernelSymbol(
                         suffix) == 0)
     info.name.resize(info.name.size() - suffix.size());
   info.codeObjectId = symbol.code_object_id;
-  kernelSymbols[symbol.kernel_id] = std::move(info);
+  metadataState.withLock([&](MetadataState &state) {
+    state.kernelSymbols.insert_or_assign(symbol.kernel_id, std::move(info));
+  });
 }
 
 void RocprofSDKPCSampling::start(bool pcSamplingModeEnabled) {
@@ -421,15 +433,16 @@ void RocprofSDKPCSampling::recordResolvedTarget(
     uint64_t dispatchId, uint64_t kernelId, const DataToEntryMap &dataToEntry,
     bool needsKernelChild) {
   PCSamplingTarget target;
-  KernelSymbolInfo symbol;
-  if (kernelSymbols.withRead(kernelId,
-                             [&](const KernelSymbolInfo &v) { symbol = v; })) {
-    target.kernelName = symbol.name;
-    target.codeObjectId = symbol.codeObjectId;
-  }
   target.dataToEntry = dataToEntry;
   target.needsKernelChild = needsKernelChild;
-  dispatchToPCSamplingTarget[dispatchId] = target;
+  metadataState.withLock([&](MetadataState &state) {
+    auto symbol = state.kernelSymbols.find(kernelId);
+    if (symbol != state.kernelSymbols.end()) {
+      target.kernelName = symbol->second.name;
+      target.codeObjectId = symbol->second.codeObjectId;
+    }
+    state.dispatchTargets.insert_or_assign(dispatchId, std::move(target));
+  });
 }
 
 std::unique_ptr<PCSamplingMetric>
@@ -444,13 +457,14 @@ RocprofSDKPCSampling::makePCSamplingMetric(const PCSamplingAccum &accum) {
 void RocprofSDKPCSampling::accumulate(
     PCSamplingMetric::PCSamplingMetricKind stallKind, bool isStalled,
     uint64_t dispatchId, uint64_t codeObjectId, uint64_t pcOffset) {
-  std::lock_guard<std::mutex> lock(pcSamplingMutex);
-  auto &accum = pcSamplingAccum[{dispatchId, codeObjectId, pcOffset}];
-  accum.values[PCSamplingMetric::NumSamples]++;
-  if (isStalled) {
-    accum.values[PCSamplingMetric::NumStalledSamples]++;
-    accum.values[stallKind]++;
-  }
+  samplingState.withLock([&](SamplingState &state) {
+    auto &accum = state.accum[{dispatchId, codeObjectId, pcOffset}];
+    accum.values[PCSamplingMetric::NumSamples]++;
+    if (isStalled) {
+      accum.values[PCSamplingMetric::NumStalledSamples]++;
+      accum.values[stallKind]++;
+    }
+  });
 }
 
 void RocprofSDKPCSampling::processBuffer(rocprofiler_record_header_t **headers,
@@ -500,10 +514,11 @@ void RocprofSDKPCSampling::processBuffer(rocprofiler_record_header_t **headers,
 }
 
 std::optional<RocprofSDKPCSampling::SourceLocation>
-RocprofSDKPCSampling::resolveSourceLocation(uint64_t codeObjectId,
-                                            uint64_t pcOffset,
-                                            const PCSamplingTarget &target) {
+RocprofSDKPCSampling::resolveSourceLocationLocked(
+    MetadataState &state, uint64_t codeObjectId, uint64_t pcOffset,
+    const PCSamplingTarget &target) {
 #if !PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE
+  (void)state;
   (void)pcOffset;
   (void)target;
   if (codeObjectId == ROCPROFILER_CODE_OBJECT_ID_NONE)
@@ -515,120 +530,103 @@ RocprofSDKPCSampling::resolveSourceLocation(uint64_t codeObjectId,
   }
 
   SourceLocationKey key{codeObjectId, pcOffset};
-  {
-    std::lock_guard<std::mutex> lock(sourceLocationMutex);
-    auto it = sourceLocationCache.find(key);
-    if (it != sourceLocationCache.end())
-      return it->second;
-  }
+  auto cached = state.sourceLocationCache.find(key);
+  if (cached != state.sourceLocationCache.end())
+    return cached->second;
 
   std::optional<SourceLocation> resolved;
-  if (ensureSourceLocationDecoder(codeObjectId)) {
-    std::lock_guard<std::mutex> lock(sourceLocationTranslatorMutex);
-    if (sourceLocationTranslator) {
-      try {
-        auto inst = sourceLocationTranslator->get(codeObjectId, pcOffset);
-        if (inst && !inst->comment.empty())
-          resolved =
-              parseSourceLocationComment(inst->comment, target.kernelName);
-      } catch (...) {
-        // Fall back to kernel-level attribution if translation fails.
-      }
+  if (ensureSourceLocationDecoderLocked(state, codeObjectId) &&
+      state.sourceLocationTranslator) {
+    try {
+      auto inst = state.sourceLocationTranslator->get(codeObjectId, pcOffset);
+      if (inst && !inst->comment.empty())
+        resolved = parseSourceLocationComment(inst->comment, target.kernelName);
+    } catch (...) {
+      // Fall back to kernel-level attribution if translation fails.
     }
   }
-
-  std::lock_guard<std::mutex> lock(sourceLocationMutex);
-  sourceLocationCache[key] = resolved;
+  state.sourceLocationCache.insert_or_assign(key, resolved);
   return resolved;
 #endif
 }
 
-bool RocprofSDKPCSampling::ensureSourceLocationDecoder(uint64_t codeObjectId) {
+bool RocprofSDKPCSampling::ensureSourceLocationDecoderLocked(
+    MetadataState &state, uint64_t codeObjectId) {
 #if !PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE
+  (void)state;
   (void)codeObjectId;
   return false;
 #else
-  std::lock_guard<std::mutex> lock(sourceLocationTranslatorMutex);
-  bool ready = false;
-  codeObjects.withWrite(codeObjectId, [&](CodeObjectInfo &info) {
-    if (info.decoderRegistered) {
-      ready = true;
-      return;
-    }
-    if (info.image.empty())
-      return;
-    if (!sourceLocationTranslator) {
-      using ::rocprofiler::sdk::codeobj::disassembly::CodeobjAddressTranslate;
-      sourceLocationTranslator = std::make_unique<CodeobjAddressTranslate>();
-    }
-    try {
-      sourceLocationTranslator->addDecoder(
-          info.image.data(), info.image.size(), info.codeObjectId,
-          static_cast<uint64_t>(info.loadDelta), info.loadSize);
-      info.decoderRegistered = true;
-      ready = true;
-    } catch (...) {
-      // A decoder failure should only disable source attribution for this
-      // object.
-    }
-  });
-  return ready;
+  auto codeObject = state.codeObjects.find(codeObjectId);
+  if (codeObject == state.codeObjects.end())
+    return false;
+  auto &info = codeObject->second;
+  if (info.decoderRegistered)
+    return true;
+  if (info.image.empty())
+    return false;
+  if (!state.sourceLocationTranslator) {
+    using ::rocprofiler::sdk::codeobj::disassembly::CodeobjAddressTranslate;
+    state.sourceLocationTranslator =
+        std::make_unique<CodeobjAddressTranslate>();
+  }
+  try {
+    state.sourceLocationTranslator->addDecoder(
+        info.image.data(), info.image.size(), info.codeObjectId,
+        static_cast<uint64_t>(info.loadDelta), info.loadSize);
+    info.decoderRegistered = true;
+    return true;
+  } catch (...) {
+    // A decoder failure should only disable source attribution for this
+    // object.
+    return false;
+  }
 #endif
 }
 
-void RocprofSDKPCSampling::clearSourceLocationCache(uint64_t codeObjectId) {
-  std::lock_guard<std::mutex> lock(sourceLocationMutex);
-  for (auto it = sourceLocationCache.begin();
-       it != sourceLocationCache.end();) {
+void RocprofSDKPCSampling::clearSourceLocationCacheLocked(
+    MetadataState &state, uint64_t codeObjectId) {
+  for (auto it = state.sourceLocationCache.begin();
+       it != state.sourceLocationCache.end();) {
     if (it->first.codeObjectId == codeObjectId) {
-      it = sourceLocationCache.erase(it);
+      it = state.sourceLocationCache.erase(it);
     } else {
       ++it;
     }
   }
 }
 
-void RocprofSDKPCSampling::releaseUnloadedCodeObject(uint64_t codeObjectId) {
-  bool hasPendingSamples = false;
-  {
-    std::lock_guard<std::mutex> lock(pcSamplingMutex);
-    for (const auto &[key, accum] : pcSamplingAccum) {
-      (void)accum;
-      if (key.codeObjectId == codeObjectId) {
-        hasPendingSamples = true;
-        break;
+void RocprofSDKPCSampling::tryReleaseCodeObject(uint64_t codeObjectId) {
+  metadataState.withLock([&](MetadataState &metadata) {
+    samplingState.withLock([&](SamplingState &sampling) {
+      for (const auto &[key, accum] : sampling.accum) {
+        (void)accum;
+        if (key.codeObjectId == codeObjectId)
+          return;
       }
-    }
-    hasPendingSamples =
-        hasPendingSamples || flushingCodeObjectIds.count(codeObjectId) > 0;
-  }
-  if (hasPendingSamples)
-    return;
+      if (sampling.flushingCodeObjectIds.count(codeObjectId) > 0)
+        return;
 
-  bool unloaded = false;
-  CodeObjectInfo codeObject;
-  codeObjects.withRead(codeObjectId, [&](const CodeObjectInfo &info) {
-    unloaded = info.unloaded;
-    codeObject = info;
+      auto info = metadata.codeObjects.find(codeObjectId);
+      if (info == metadata.codeObjects.end() || !info->second.unloaded)
+        return;
+      removeSourceLocationDecoderLocked(metadata, info->second);
+      clearSourceLocationCacheLocked(metadata, codeObjectId);
+      metadata.codeObjects.erase(info);
+    });
   });
-  if (unloaded) {
-    std::lock_guard<std::mutex> lock(sourceLocationTranslatorMutex);
-    removeSourceLocationDecoder(codeObject);
-    codeObjects.erase(codeObjectId);
-  }
 }
 
 void RocprofSDKPCSampling::flushAccum() {
   PCSamplingAccumMap snapshot;
-  {
-    std::lock_guard<std::mutex> lock(pcSamplingMutex);
-    snapshot.swap(pcSamplingAccum);
+  samplingState.withLock([&](SamplingState &state) {
+    snapshot.swap(state.accum);
     for (const auto &[key, accum] : snapshot) {
       (void)accum;
       if (key.codeObjectId != ROCPROFILER_CODE_OBJECT_ID_NONE)
-        flushingCodeObjectIds.insert(key.codeObjectId);
+        state.flushingCodeObjectIds.insert(key.codeObjectId);
     }
-  }
+  });
   if (snapshot.empty())
     return;
 
@@ -640,16 +638,22 @@ void RocprofSDKPCSampling::flushAccum() {
     if (key.codeObjectId != ROCPROFILER_CODE_OBJECT_ID_NONE)
       flushedCodeObjectIds.insert(key.codeObjectId);
     PCSamplingTarget target;
-    bool hasTarget = dispatchToPCSamplingTarget.withRead(
-        key.dispatchId, [&](const PCSamplingTarget &value) { target = value; });
+    std::optional<SourceLocation> sourceLocation;
+    bool hasTarget = metadataState.withLock([&](MetadataState &state) {
+      auto found = state.dispatchTargets.find(key.dispatchId);
+      if (found == state.dispatchTargets.end())
+        return false;
+      target = found->second;
+      sourceLocation = resolveSourceLocationLocked(state, key.codeObjectId,
+                                                   key.pcOffset, target);
+      return true;
+    });
 
     if (!hasTarget) {
       continue;
     }
     consumedDispatchIds.insert(key.dispatchId);
 
-    auto sourceLocation =
-        resolveSourceLocation(key.codeObjectId, key.pcOffset, target);
     if (!sourceLocation) {
       auto &unresolved = unresolvedAccum[key.dispatchId];
       for (int i = 0; i < PCSamplingMetric::PCSamplingMetricKind::Count; ++i)
@@ -672,8 +676,13 @@ void RocprofSDKPCSampling::flushAccum() {
 
   for (auto &[dispatchId, accum] : unresolvedAccum) {
     PCSamplingTarget target;
-    bool hasTarget = dispatchToPCSamplingTarget.withRead(
-        dispatchId, [&](const PCSamplingTarget &value) { target = value; });
+    bool hasTarget = metadataState.withLock([&](MetadataState &state) {
+      auto found = state.dispatchTargets.find(dispatchId);
+      if (found == state.dispatchTargets.end())
+        return false;
+      target = found->second;
+      return true;
+    });
     if (!hasTarget)
       continue;
 
@@ -686,20 +695,21 @@ void RocprofSDKPCSampling::flushAccum() {
     }
   }
 
-  for (auto dispatchId : consumedDispatchIds)
-    dispatchToPCSamplingTarget.erase(dispatchId);
+  metadataState.withLock([&](MetadataState &state) {
+    for (auto dispatchId : consumedDispatchIds)
+      state.dispatchTargets.erase(dispatchId);
+  });
 
-  {
-    std::lock_guard<std::mutex> lock(pcSamplingMutex);
+  samplingState.withLock([&](SamplingState &state) {
     for (const auto &[key, accum] : snapshot) {
       (void)accum;
       if (key.codeObjectId != ROCPROFILER_CODE_OBJECT_ID_NONE)
-        flushingCodeObjectIds.erase(key.codeObjectId);
+        state.flushingCodeObjectIds.erase(key.codeObjectId);
     }
-  }
+  });
 
   for (auto codeObjectId : flushedCodeObjectIds)
-    releaseUnloadedCodeObject(codeObjectId);
+    tryReleaseCodeObject(codeObjectId);
 }
 
 } // namespace proton
@@ -711,6 +721,10 @@ namespace proton {
 RocprofSDKPCSampling::RocprofSDKPCSampling() = default;
 
 RocprofSDKPCSampling::~RocprofSDKPCSampling() = default;
+
+RocprofSDKPCSampling::MetadataState::MetadataState() = default;
+
+RocprofSDKPCSampling::MetadataState::~MetadataState() = default;
 
 void RocprofSDKPCSampling::configure(rocprofiler_buffer_tracing_cb_t callback) {
   (void)callback;
