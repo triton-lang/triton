@@ -375,9 +375,6 @@ SmallVector<int64_t> getTMABlockShape(ArrayRef<int64_t> shapePerCTA,
 // Verify the types of operations that operate on memory.
 LogicalResult verifyMemoryOpTypes(Operation *op, ShapedType srcTy,
                                   ShapedType dstTy);
-// Verify a distributed-tensor store into shared memory.
-LogicalResult verifyLocalStoreOp(Operation *op, RankedTensorType srcTy,
-                                 MemDescType dstTy);
 // Verify a memory allocation operation.
 LogicalResult verifyAllocOp(Operation *op, Value src, MemDescType dstTy);
 /// Returns the size in bytes of a scalar type when stored in shared memory.

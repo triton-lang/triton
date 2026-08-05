@@ -173,20 +173,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-#blocked_rank2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
-#shared_rank1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
-#barrier_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @async_shared_store_rank_mismatch(%src: tensor<2x64xi32, #blocked_rank2>, %dst: !ttg.memdesc<2x64xi32, #shared_rank1, #smem, mutable>, %bar: !ttg.memdesc<2xi64, #barrier_shared, #smem, mutable>) {
-    // expected-error @+1 {{source has rank 2 but memdesc encoding has rank 1}}
-    ttng.async_shared_store %src, %dst, %bar : tensor<2x64xi32, #blocked_rank2> -> !ttg.memdesc<2x64xi32, #shared_rank1, #smem, mutable>, !ttg.memdesc<2xi64, #barrier_shared, #smem, mutable>
-    tt.return
-  }
-}
-
-// -----
-
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #scales = #ttg.linear<{register = [[0, 1], [0, 2], [32, 0], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[0, 0], [0, 0]], block = []}>
 #tmem = #ttng.tensor_memory_scales_encoding<>

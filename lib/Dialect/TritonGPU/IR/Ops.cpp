@@ -927,15 +927,6 @@ static LogicalResult verifySharedMemoryRank(Operation *op,
   return success();
 }
 
-LogicalResult verifyLocalStoreOp(Operation *op, RankedTensorType srcTy,
-                                 MemDescType dstTy) {
-  if (!dstTy.getMutableMemory())
-    return op->emitOpError("Cannot store into immutable memory");
-  if (failed(verifySharedMemoryRank(op, srcTy, dstTy, "source")))
-    return failure();
-  return verifyMemoryOpTypes(op, srcTy, dstTy);
-}
-
 LogicalResult LocalAllocOp::verify() {
   if (!isa<SharedMemorySpaceAttr>(getType().getMemorySpace()))
     return emitOpError("should create a buffer of shared memory");
@@ -949,7 +940,12 @@ LogicalResult LocalAllocOp::verify() {
 
 // LocalStoreOp
 LogicalResult LocalStoreOp::verify() {
-  return verifyLocalStoreOp(*this, getSrc().getType(), getDst().getType());
+  if (!getDst().getType().getMutableMemory())
+    return emitOpError("Cannot store into immutable memory");
+  if (failed(verifySharedMemoryRank(*this, getSrc().getType(),
+                                    getDst().getType(), "source")))
+    return failure();
+  return verifyMemoryOpTypes(*this, getSrc().getType(), getDst().getType());
 }
 
 // LocalLoadOp
