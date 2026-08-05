@@ -544,7 +544,9 @@ class CodeGenerator(ast.NodeVisitor):
 
         results = []
         for item in iter:
-            self.set_value(comp.target.id, item)
+            # `assignTarget` binds plain names as well as (possibly nested) tuple
+            # targets, so `for a, b in ...` unpacks the same way tuple assignment does.
+            self.assignTarget(comp.target, item)
             # Apply the comprehension's `if` filters (the conditions are constexpr).
             if all(self.visit(cond) for cond in comp.ifs):
                 results.append(self.visit(node.elt))
@@ -721,13 +723,28 @@ class CodeGenerator(ast.NodeVisitor):
         # default: call visit_Assign
         return self.visit_Assign(node)
 
+    def _check_unpackable(self, target: ast.Tuple, value):
+        # Diagnostics shared by tuple assignment and comprehension targets, so that
+        # both report starred targets and arity mismatches the same way.
+        if any(isinstance(elt, ast.Starred) for elt in target.elts):
+            raise NotImplementedError("starred assignment targets are not supported")
+        if not isinstance(value, language.tuple):
+            raise ValueError(f"cannot unpack non-tuple value of type {value.type}")
+        num_targets, num_values = len(target.elts), len(value.values)
+        if num_targets != num_values:
+            # Match CPython's errors for mismatched unpacking.
+            if num_values > num_targets:
+                raise ValueError(f"too many values to unpack (expected {num_targets})")
+            raise ValueError(f"not enough values to unpack (expected {num_targets}, got {num_values})")
+
     def assignTarget(self, target, value):
         assert isinstance(target.ctx, ast.Store)
         if isinstance(target, ast.Subscript):
             return self.visit_Subscript_Store(target, value)
         if isinstance(target, ast.Tuple):
-            for i, target in enumerate(target.elts):
-                self.assignTarget(target, value.values[i])
+            self._check_unpackable(target, value)
+            for elt, val in zip(target.elts, value.values):
+                self.assignTarget(elt, val)
             return
         if isinstance(target, ast.Attribute):
             raise NotImplementedError("Attribute assignment is not supported in triton")
@@ -749,16 +766,7 @@ class CodeGenerator(ast.NodeVisitor):
 
         def _sanitize_target_value(target, value):
             if isinstance(target, ast.Tuple) and isinstance(value, language.tuple):
-                if any(isinstance(elt, ast.Starred) for elt in target.elts):
-                    raise NotImplementedError("starred assignment targets are not supported")
-                num_targets, num_values = len(target.elts), len(value.values)
-                if num_targets != num_values:
-                    # Match CPython's errors for mismatched unpacking.
-                    if num_values > num_targets:
-                        message = f"too many values to unpack (expected {num_targets})"
-                    else:
-                        message = f"not enough values to unpack (expected {num_targets}, got {num_values})"
-                    raise ValueError(message)
+                self._check_unpackable(target, value)
                 vals = [_sanitize_target_value(elt, val) for elt, val in zip(target.elts, value.values)]
                 vals = [constexpr(val) if val is None else val for val in vals]
                 types = [val.type for val in vals]

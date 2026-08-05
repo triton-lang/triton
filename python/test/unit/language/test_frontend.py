@@ -484,6 +484,81 @@ def test_list_comprehension_if_filter():
     run_parser(kernel)
 
 
+def test_list_comprehension_tuple_target():
+
+    @triton.jit
+    def kernel():
+        # a tuple target unpacks each item and keeps the bindings constexpr
+        vals: tl.constexpr = [a + b for a, b in ((1, 2), (3, 4))]
+        tl.static_assert(len(vals) == 2)
+        tl.static_assert(vals[0] == 3)
+        tl.static_assert(vals[1] == 7)
+
+        # nested targets unpack recursively
+        nested: tl.constexpr = [a + b + c for a, (b, c) in ((1, (2, 3)), (4, (5, 6)))]
+        tl.static_assert(len(nested) == 2)
+        tl.static_assert(nested[0] == 6)
+        tl.static_assert(nested[1] == 15)
+
+        # tuple targets compose with `if` filters
+        filtered: tl.constexpr = [a for a, b in ((1, 2), (3, 4), (5, 6)) if b > 2]
+        tl.static_assert(len(filtered) == 2)
+        tl.static_assert(filtered[0] == 3)
+        tl.static_assert(filtered[1] == 5)
+
+    run_parser(kernel)
+
+
+def test_list_comprehension_target_rejects_too_many_values():
+
+    @triton.jit
+    def kernel():
+        vals: tl.constexpr = [a + b for a, b in ((1, 2, 3), )]  # noqa: F841
+
+    with pytest.raises(CompilationError, match=r"too many values to unpack \(expected 2\)"):
+        run_parser(kernel)
+
+
+def test_list_comprehension_target_rejects_too_few_values():
+
+    @triton.jit
+    def kernel():
+        vals: tl.constexpr = [a + b + c for a, b, c in ((1, 2), )]  # noqa: F841
+
+    with pytest.raises(CompilationError, match=r"not enough values to unpack \(expected 3, got 2\)"):
+        run_parser(kernel)
+
+
+def test_list_comprehension_target_rejects_scalar_item():
+
+    @triton.jit
+    def kernel():
+        vals: tl.constexpr = [a + b for a, b in (1, 2)]  # noqa: F841
+
+    with pytest.raises(CompilationError, match="cannot unpack non-tuple value"):
+        run_parser(kernel)
+
+
+def test_list_comprehension_target_rejects_starred_target():
+
+    @triton.jit
+    def kernel():
+        vals: tl.constexpr = [a for a, *rest in ((1, 2, 3), )]  # noqa: F841
+
+    with pytest.raises(CompilationError, match="starred assignment targets are not supported"):
+        run_parser(kernel)
+
+
+def test_tuple_assignment_rejects_scalar_value():
+
+    @triton.jit
+    def kernel():
+        a, b = 1  # noqa: F841
+
+    with pytest.raises(CompilationError, match="cannot unpack non-tuple value"):
+        run_parser(kernel)
+
+
 def test_named_expr_respects_prior_constexpr_annotation():
 
     @triton.jit
