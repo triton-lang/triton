@@ -389,14 +389,16 @@ SetVector<int> getPartitionIds(OpOperand *use) {
   Operation *owner = use->getOwner();
   auto pos = use->getOperandNumber();
   if (isa<scf::YieldOp, scf::ConditionOp>(owner)) {
-    auto idx = pos - isa<scf::ConditionOp>(owner);
-    return idx >= 0 ? getPartitionOutputs(owner->getParentOp())[idx]
-                    : getPartitionIds(owner);
+    unsigned numControlOperands = isa<scf::ConditionOp>(owner) ? 1 : 0;
+    if (pos < numControlOperands)
+      return getPartitionIds(owner);
+    return getPartitionOutputs(owner->getParentOp())[pos - numControlOperands];
   }
   if (auto loop = dyn_cast<LoopLikeOpInterface>(owner)) {
     auto numControlOperands = owner->getNumOperands() - loop.getInits().size();
-    auto idx = pos - numControlOperands;
-    return idx >= 0 ? getPartitionOutputs(owner)[idx] : getPartitionIds(owner);
+    if (pos < numControlOperands)
+      return getPartitionIds(owner);
+    return getPartitionOutputs(owner)[pos - numControlOperands];
   }
   return getPartitionIds(owner);
 }
