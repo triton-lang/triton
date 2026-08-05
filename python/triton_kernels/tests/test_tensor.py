@@ -2,6 +2,7 @@ import pytest
 import torch
 import triton
 import triton.language as tl
+from triton_kernels.fpsan import embed, unembed
 from triton_kernels.tensor_details.bitmatrix import _keyed_add
 from triton_kernels.tensor_details.dtype import BIT, FP4, UINT8
 from triton_kernels.tensor import (
@@ -27,6 +28,58 @@ from triton_kernels.tensor_details.layout import (
     HopperMXValueLayout,
     StridedLayout,
 )
+
+
+@pytest.mark.parametrize("dtype", [
+    torch.float64,
+    torch.float32,
+    torch.float16,
+    torch.bfloat16,
+    torch.float8_e4m3fn,
+    torch.float8_e4m3fnuz,
+    torch.float8_e5m2,
+    torch.float8_e5m2fnuz,
+])
+@pytest.mark.parametrize("layout",
+                         ["contiguous", "transposed", "sliced", "expanded", "channels_last", "scalar", "empty"])
+def test_fpsan_embed_unembed_torch_tensor(dtype, layout, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = ""
+    integer_dtype = getattr(torch, f"int{dtype.itemsize * 8}")
+    storage = (torch.arange(17 * 19, device="cuda", dtype=torch.int64) * 37).to(integer_dtype)
+    one_bits = torch.tensor(1.0, dtype=dtype).view(integer_dtype).item()
+    storage[1] = one_bits
+    values = storage.reshape(17, 19)
+
+    if layout == "transposed":
+        values = values.T
+    elif layout == "sliced":
+        values = values[1::2, 1::3]
+    elif layout == "expanded":
+        values = values[:1, :].expand(7, -1)
+    elif layout == "channels_last":
+        values = storage[:210].reshape(2, 3, 5, 7).contiguous(memory_format=torch.channels_last)
+    elif layout == "scalar":
+        values = storage[1]
+    elif layout == "empty":
+        values = values[:0]
+
+    x = values.view(dtype)
+    payload = embed(x)
+    assert payload.dtype == integer_dtype
+    assert payload.shape == x.shape
+    if layout in ("transposed", "channels_last"):
+        assert payload.stride() == x.stride()
+
+    one_positions = values == one_bits
+    assert torch.equal(payload[one_positions], torch.ones_like(payload[one_positions]))
+
+    roundtrip = unembed(payload, dtype)
+    assert torch.equal(roundtrip.view(integer_dtype), values)
+
+    unsigned_dtype = getattr(torch, f"uint{dtype.itemsize * 8}")
+    unsigned_roundtrip = unembed(payload.view(unsigned_dtype), dtype)
+    assert torch.equal(unsigned_roundtrip.view(integer_dtype), values)
+    assert fresh_knobs.compilation.instrumentation_mode == ""
 
 
 @pytest.mark.parametrize(

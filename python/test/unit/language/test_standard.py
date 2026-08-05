@@ -30,6 +30,7 @@ def test_maximum_minium(dtype, op, device):
 @pytest.mark.parametrize("k", [None, 1, 8])
 @pytest.mark.parametrize("descending", [False, True])
 @pytest.mark.parametrize("dtype_str", ['int32', 'float16', 'float32', 'bfloat16'])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_sort(M, N, k, descending, dtype_str, device):
 
     @triton.jit
