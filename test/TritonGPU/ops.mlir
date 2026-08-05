@@ -529,6 +529,20 @@ module attributes {"ttg.threads-per-warp" = 4 : i32, "ttg.num-warps" = 1 : i32} 
 
 // -----
 
+// A 64-element layout capacity may represent an inner K coordinate of size 16
+// and an outer logical count of three. Each outer count selects a complete
+// 16x256 slab; the unused fourth slab is a physical suffix, so the inner layout
+// and the other dimension's strides are unchanged.
+#shared_nonpow2_valid = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [16, 0], [32, 0]]}, alignment = 16>
+#smem = #ttg.shared_memory
+// CHECK-LABEL: @memdesc_shared_linear_nonpow2_complete_tiles
+tt.func @memdesc_shared_linear_nonpow2_complete_tiles(
+    %arg0: !ttg.memdesc<48x256xi8, #shared_nonpow2_valid, #smem>) {
+  tt.return
+  }
+
+// -----
+
 #mma_assert = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {register = [[0, 1], [2, 0]], warp = [[2, 2], [1, 0]]}, instrShape = [16, 16, 32]}>
 
 module attributes {"ttg.target" = "hip:gfx1260", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {

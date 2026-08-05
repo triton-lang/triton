@@ -285,6 +285,10 @@ ArrayRef<T> dropPipeliningDim(ArrayRef<T> shape, Attribute layout) {
 int64_t getAllocationElems(Attribute layout, ArrayRef<int64_t> shape,
                            ArrayRef<int64_t> allocShape = {});
 
+// Shape normalization helpers for handling non-pow2 shapes.
+bool isPositivePowerOfTwoShape(ArrayRef<int64_t> shape);
+SmallVector<int64_t> normalizeShapeToPowerOf2(ArrayRef<int64_t> shape);
+
 unsigned getNumCTAs(Attribute layout);
 
 // Returns the MMAv2 warp distribution for a matrix tile. This does not apply
