@@ -116,6 +116,7 @@ def _warmup(args):
 
 
 def _unit(args):
+    _validate_gpus(args.num_gpus)
     capability = _capability()
     unit_directory = ROOT / "python" / "test" / "unit"
     if capability >= 9:
@@ -123,17 +124,22 @@ def _unit(args):
                        workers=args.num_procs)
         debug = _pytest("test_debug.py", "language/test_subprocess.py", workers=args.debug_procs)
         status = _concurrent(
-            ((main, unit_directory, _environment("unit")), (debug, unit_directory, _environment("unit"))))
+            ((main, unit_directory, _environment("unit", args.num_gpus)), (debug, unit_directory,
+                                                                           _environment("unit", args.num_gpus))))
     else:
-        status = _run(_pytest("--ignore-glob=plugins/*", workers=args.num_procs), phase="unit", cwd=unit_directory)
+        status = _run(_pytest("--ignore-glob=plugins/*", workers=args.num_procs), phase="unit", num_gpus=args.num_gpus,
+                      cwd=unit_directory)
     if status:
         return status
 
-    kernel_procs = args.kernel_procs or (3 if capability >= 9 else 6)
-    status = _run(_pytest("python/triton_kernels/tests/", workers=kernel_procs), phase="triton-kernels")
+    workers_per_gpu = 4 if capability == 9 else 3 if capability >= 10 else 6
+    kernel_procs = args.kernel_procs or workers_per_gpu * args.num_gpus
+    status = _run(_pytest("python/triton_kernels/tests/", workers=kernel_procs), phase="triton-kernels",
+                  num_gpus=args.num_gpus)
     if status:
         return status
-    status = _run(_pytest("python/tutorials/06-fused-attention.py", workers=1), phase="attention")
+    status = _run(_pytest("python/tutorials/06-fused-attention.py", workers=args.num_gpus), phase="attention",
+                  num_gpus=args.num_gpus)
     if status:
         return status
 

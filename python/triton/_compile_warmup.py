@@ -197,7 +197,9 @@ def pytest_collection_modifyitems(config, items):
         selected.append(item)
     if deselected:
         config.hook.pytest_deselected(items=deselected)
-    items[:] = selected
+    selected.sort(key=lambda item: item.get_closest_marker("enable_warmup").kwargs.get("priority", 0), reverse=True)
+    capture_workers = int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "1"))
+    items[:] = [item for worker in range(capture_workers) for item in selected[worker::capture_workers]]
 
 
 @pytest.fixture(scope="session", autouse=True)

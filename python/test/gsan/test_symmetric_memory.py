@@ -28,7 +28,9 @@ def _get_free_tcp_port() -> int:
 
 
 def _spawn_distributed(worker, world_size, *args):
-    context = mp.spawn(worker, args=(world_size, *args), nprocs=world_size, join=False)
+    mp.set_forkserver_preload(["torch", "triton"])
+    context = mp.start_processes(worker, args=(world_size, *args), nprocs=world_size, join=False,
+                                 start_method="forkserver")
     deadline = time.monotonic() + _SPAWN_TIMEOUT_SECONDS
     try:
         while True:

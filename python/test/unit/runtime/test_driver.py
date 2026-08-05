@@ -127,6 +127,31 @@ def test_compile_warmup_assigns_gpu_before_xdist_worker_initialization(monkeypat
     assert [spec.env["CUDA_VISIBLE_DEVICES"] for spec in specs] == expected
 
 
+@pytest.mark.parametrize(("capability", "num_gpus", "kernel_workers"), [(8, 1, 6), (9, 1, 4), (10, 2, 6), (10, 4, 12)])
+def test_unit_runner_balances_requested_gpu_shards(monkeypatch, capability, num_gpus, kernel_workers):
+    concurrent = []
+    deferred = []
+    monkeypatch.setattr(_test_runner, "_validate_gpus", lambda count: None)
+    monkeypatch.setattr(_test_runner, "_capability", lambda: capability)
+    monkeypatch.setattr(_test_runner, "_concurrent", lambda commands: concurrent.extend(commands) or 0)
+    monkeypatch.setattr(_test_runner, "_run", lambda command, **kwargs: deferred.append((command, kwargs)) or 0)
+    options = SimpleNamespace(num_gpus=num_gpus, num_procs=24, debug_procs=4, kernel_procs=None)
+
+    assert _test_runner._unit(options) == 0
+    if capability >= 9:
+        assert all(environment["TRITON_TEST_NUM_GPUS"] == str(num_gpus) for _, _, environment in concurrent)
+        kernels = deferred[0]
+    else:
+        assert deferred[0][1]["num_gpus"] == num_gpus
+        kernels = deferred[1]
+    command, kwargs = kernels
+    assert command[command.index("-n") + 1] == str(kernel_workers)
+    assert kwargs["num_gpus"] == num_gpus
+    attention, kwargs = deferred[1 if capability >= 9 else 2]
+    assert attention[attention.index("-n") + 1] == str(num_gpus)
+    assert kwargs["num_gpus"] == num_gpus
+
+
 @pytest.mark.parametrize(("capability", "num_gpus"), [(8, 1), (10, 1), (10, 2), (10, 4), (10, 8)])
 def test_gluon_runner_balances_requested_gpu_shards(monkeypatch, capability, num_gpus):
     concurrent = []
@@ -202,6 +227,21 @@ def test_compile_warmup_selects_eligible_markers(monkeypatch):
 
     assert items == [selected]
     assert len(deselected) == 3
+
+
+def test_compile_warmup_spreads_prioritized_tests_across_capture_workers(monkeypatch):
+    monkeypatch.setenv("PYTEST_XDIST_WORKER_COUNT", "2")
+
+    def item(priority):
+        marker = SimpleNamespace(kwargs={"priority": priority})
+        return SimpleNamespace(get_closest_marker=lambda name: marker if name == "enable_warmup" else None)
+
+    low_a, high_a, low_b, high_b = items = [item(0), item(2), item(0), item(2)]
+    config = SimpleNamespace(getoption=lambda _: True, hook=SimpleNamespace(pytest_deselected=lambda items: None))
+
+    pytest_collection_modifyitems(config, items)
+
+    assert items == [high_a, low_a, high_b, low_b]
 
 
 def test_compile_warmup_serializes_patched_source_globals(monkeypatch):
