@@ -1,4 +1,5 @@
 // RUN: triton-opt %s --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
+// RUN: triton-opt %s --allocate-shared-memory-nv | FileCheck %s --check-prefix=ALLOC
 
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
 
@@ -128,6 +129,16 @@ tt.func private @convert_layout_blocked_blocked(%arg0: tensor<16x16xi32, #blocke
   tt.return %0 : tensor<16x16xi32, #blocked1>
 }
 
+// CHECK-LABEL: convert_layout_blocked_blocked_forced
+// CHECK-NOT: store
+// CHECK: @llvm.nvvm.shfl.sync.idx.i32
+// ALLOC-LABEL: @convert_layout_blocked_blocked_forced
+tt.func private @convert_layout_blocked_blocked_forced(%arg0: tensor<16x16xi32, #blocked0>) -> tensor<16x16xi32, #blocked1> {
+  // ALLOC: ttg.convert_layout %arg0 {force_warp_shuffle}
+  %0 = ttg.convert_layout %arg0 {force_warp_shuffle} : tensor<16x16xi32, #blocked0> -> tensor<16x16xi32, #blocked1>
+  tt.return %0 : tensor<16x16xi32, #blocked1>
+}
+
 tt.func private @cvt_mma_to_dot_fp8(%a: tensor<128x64xi32, #mma>) -> tensor<128x64xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> {
   %opA = ttg.convert_layout %a : tensor<128x64xi32, #mma> -> tensor<128x64xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
   tt.return %opA : tensor<128x64xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
@@ -141,6 +152,10 @@ tt.func @anchor(%ptr: !llvm.ptr, %arg0: tensor<16x16xi32, #blocked0>, %arg1: ten
   %2 = tt.call @convert_layout_blocked_blocked_vec(%arg0) : (tensor<16x16xi32, #blocked0>) -> tensor<16x16xi32, #blocked2>
   %3 = builtin.unrealized_conversion_cast %2 : tensor<16x16xi32, #blocked2> to !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32)>
   llvm.store volatile %3, %ptr : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32)>, !llvm.ptr
+
+  %4 = tt.call @convert_layout_blocked_blocked_forced(%arg0) : (tensor<16x16xi32, #blocked0>) -> tensor<16x16xi32, #blocked1>
+  %5 = builtin.unrealized_conversion_cast %4 : tensor<16x16xi32, #blocked1> to !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32)>
+  llvm.store volatile %5, %ptr : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32)>, !llvm.ptr
 
   tt.return
 }

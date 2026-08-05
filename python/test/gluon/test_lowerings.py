@@ -1459,13 +1459,11 @@ def test_regress_warp_shuffle_convert_layout(tmp_path):
     # convert_layout.
     compiled_load_cvt_store = load_cvt_store.warmup(ref, x, grid=(1, 1, 1), num_warps=1)
     ttgir = compiled_load_cvt_store.asm["ttgir"]
-    ttgir = ttgir.replace(
-        "attributes {noinline = false}",
-        "attributes {always_use_warp_shuffle, noinline = false}",
-        1,
-    )
+    cvt_line = next(line for line in ttgir.splitlines() if "ttg.convert_layout" in line)
+    forced_cvt_line = cvt_line.replace(" : ", " {force_warp_shuffle} : ", 1)
+    ttgir = ttgir.replace(cvt_line, forced_cvt_line, 1)
 
-    temp_file = tmp_path / "test_override_ttgir_always_use_warp_shuffle.ttgir"
+    temp_file = tmp_path / "test_override_ttgir_force_warp_shuffle.ttgir"
     temp_file.write_text(ttgir)
 
     load_cvt_store_warp_shuffle = triton.compile(str(temp_file))

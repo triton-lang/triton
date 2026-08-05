@@ -56,18 +56,14 @@ struct TestBufferRegionPass
     analysis->calculateUsedBufferRegions(moduleOp);
 
     moduleOp.walk([&](Operation *op) {
-      if (!triton::BufferRegionAnalysis::isMemoryAccessOperation(op))
-        return;
-
-      auto maybeMemDesc = llvm::find_if(op->getOperands(), [](Value operand) {
-        return isa<ttg::MemDescType>(operand.getType());
-      });
-
-      if (maybeMemDesc == op->operand_end())
-        return;
-
-      emitRegionInfo(op->getLoc(), "Buffers",
-                     analysis->getLatticeElement(*maybeMemDesc)->getValue());
+      for (const auto &access :
+           triton::BufferRegionAnalysis::getMemoryAccesses(op)) {
+        if (!llvm::is_contained(op->getOperands(), access.value))
+          continue;
+        emitRegionInfo(op->getLoc(), "Buffers",
+                       analysis->getLatticeElement(access.value)->getValue());
+        break;
+      }
     });
 
     llvm::SmallVector<Operation *> anchors;
@@ -124,22 +120,23 @@ struct TestBufferRegionAliasPass
         addresses.push_back(static_cast<uint32_t>(address));
       }
       uint32_t base = 0;
-      if (auto baseAttr = op->getAttrOfType<IntegerAttr>("test.region_base"))
-        base = static_cast<uint32_t>(baseAttr.getInt());
       uint32_t length = 0;
-      if (auto lengthAttr =
-              op->getAttrOfType<IntegerAttr>("test.region_length")) {
-        length = static_cast<uint32_t>(lengthAttr.getInt());
-      } else if (!addresses.empty()) {
+      if (!addresses.empty()) {
         auto [min, max] =
             std::minmax_element(addresses.begin(), addresses.end());
         base = *min;
         length = *max - *min + 1;
       }
-      tt::RegionInfo info;
-      info.regions.insert(tt::BufferRegion(
-          base, length, tt::AddressSet::fromAddresses(addresses),
-          /*storageBase=*/base, /*affineOffset=*/0));
+      tt::BufferRegion region{base, length};
+      if (!addresses.empty()) {
+        tt::AddressSet addressSet;
+        for (uint32_t address : addresses)
+          addressSet.set(address);
+        region.ctaAddresses.emplace_back(0, std::move(addressSet));
+      }
+      tt::RegionInfo info(tt::RegionInfo::ViewList{});
+      info.views.insert(
+          {std::move(region), /*storageBase=*/base, /*affineOffset=*/0});
       return info;
     }
 
@@ -153,8 +150,10 @@ struct TestBufferRegionAliasPass
   }
 
   static bool mayAlias(const tt::RegionInfo &lhs, const tt::RegionInfo &rhs) {
-    return llvm::any_of(lhs.regions, [&](const tt::BufferRegion &a) {
-      return llvm::any_of(rhs.regions, [&](const tt::BufferRegion &b) {
+    if (lhs.isUnknown() || rhs.isUnknown())
+      return true;
+    return llvm::any_of(lhs.views, [&](const tt::BufferRegionView &a) {
+      return llvm::any_of(rhs.views, [&](const tt::BufferRegionView &b) {
         return a.intersects(b);
       });
     });
@@ -162,8 +161,10 @@ struct TestBufferRegionAliasPass
 
   static bool contains(const tt::RegionInfo &container,
                        const tt::RegionInfo &contained) {
-    return llvm::all_of(contained.regions, [&](const tt::BufferRegion &b) {
-      return llvm::any_of(container.regions, [&](const tt::BufferRegion &a) {
+    if (container.isUnknown() || contained.isUnknown())
+      return false;
+    return llvm::all_of(contained.views, [&](const tt::BufferRegionView &b) {
+      return llvm::any_of(container.views, [&](const tt::BufferRegionView &a) {
         return a.contains(b);
       });
     });
@@ -189,17 +190,28 @@ struct TestBufferRegionAliasPass
                 ArrayRef<std::pair<std::string, tt::RegionInfo>> namedRegions) {
     SmallVector<tt::BufferRegion> regions;
     for (const auto &[name, info] : namedRegions)
-      llvm::append_range(regions, info.regions);
+      for (const tt::BufferRegionView &view : info.views)
+        regions.push_back(view.region);
     llvm::sort(regions);
     regions.erase(std::unique(regions.begin(), regions.end()), regions.end());
 
-    tt::BufferStatePlan plan = tt::createBufferStatePlan(regions);
+    bool hasUnknown = llvm::any_of(namedRegions, [](const auto &named) {
+      return named.second.isUnknown();
+    });
+    tt::BufferStatePlan plan = tt::createBufferStatePlan(regions, hasUnknown);
     InFlightDiagnostic summary = module.emitRemark();
     summary << "state-plan: lanes=" << plan.numLanes;
 
     for (const auto &[name, info] : namedRegions) {
-      SmallVector<tt::BufferRegion> candidates(info.regions.begin(),
-                                               info.regions.end());
+      if (info.isUnknown()) {
+        InFlightDiagnostic diag = module.emitRemark();
+        diag << name << " case unknown: mask=";
+        printMask(diag, plan.unknownMask);
+        continue;
+      }
+      SmallVector<tt::BufferRegion> candidates;
+      for (const tt::BufferRegionView &view : info.views)
+        candidates.push_back(view.region);
       llvm::sort(candidates);
       for (const tt::BufferRegion &candidate : candidates) {
         auto it = llvm::lower_bound(regions, candidate);
