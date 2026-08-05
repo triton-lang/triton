@@ -2961,7 +2961,7 @@ def attn_fwd(  #
     kernel = kernel_fn()
     ms = None
     if profile:
-        ms = triton.testing.do_bench(kernel_fn, warmup=100, rep=1000)
+        ms = triton.testing.do_bench(kernel_fn)
 
     out = o.cpu()
     if split_k_mode == 'cta':
