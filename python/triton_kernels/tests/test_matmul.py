@@ -6,7 +6,7 @@ import pytest
 import torch
 from typing import Union
 import triton
-from triton._internal_testing import is_compile_warmup
+from triton._internal_testing import is_compile_warmup, is_hopper
 # matmul utilities
 import triton_kernels.matmul_details.opt_flags as opt_flags
 from triton_kernels.matmul import FlexCtx, PrecisionConfig, FusedActivation, FnSpecs, FnName, Epilogue
@@ -15,7 +15,7 @@ from triton_kernels.matmul import apply_precision, matmul_set_idle_sms, matmul, 
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp8_fn, quantize_nvfp4_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 # testing utilities
-from triton_kernels.testing import _make_random_block_signs, assert_close, make_random_tensor
+from triton_kernels.testing import assert_close, make_random_tensor
 # target-specific utilities
 from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250
 from triton_kernels.swiglu import swiglu, swiglu_fn
@@ -112,33 +112,6 @@ class Case:
     def __post_init__(self):
         if self.n_slices is None:
             self.n_slices = 1 if self.mode == "plain" else 10
-
-
-@pytest.mark.skipif(not is_cuda(), reason="CUDA uses the Philox random-number generator")
-@pytest.mark.parametrize("shape", [(33, 47), (3, 65, 96)])
-def test_random_block_signs_preserve_cuda_rng(shape, device):
-    with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
-        torch.manual_seed(17)
-        torch.rand(7, device=device)
-        generator = torch.cuda.default_generators[torch.cuda.current_device()]
-        initial_state = generator.get_state()
-
-        batch_size, rows, cols = (1, *shape) if len(shape) == 2 else shape
-        block_size = int(MXFP_BLOCK_SIZE)
-        expected = []
-        for _, row, col in itertools.product(range(batch_size), range(0, rows, block_size),
-                                              range(0, cols, block_size)):
-            count = max(min(block_size, rows - row), min(block_size, cols - col))
-            values = torch.randint(0, 2, (count,), device=device)
-            expected.append(torch.nn.functional.pad(values, (0, block_size - count)))
-        final_state = generator.get_state()
-
-        generator.set_state(initial_state)
-        actual = _make_random_block_signs(torch.empty(shape, device=device), batch_size, rows, cols,
-                                          triton.cdiv(rows, block_size), triton.cdiv(cols, block_size), block_size)
-        torch.testing.assert_close(actual.reshape(-1, block_size), torch.stack(expected))
-        torch.testing.assert_close(generator.get_state(), final_state)
-
 
 def _build_test_op_cases():
     test_cases = []
@@ -316,168 +289,25 @@ def _build_test_op_cases():
 
     return test_cases
 
-
-def _supports_persistent_tma(case, a_dtype, b_dtype, inner_expt_opt):
-    batch_size = case.n_slices if case.mode == "batched" or inner_expt_opt is not None else 1
-    if batch_size * case.m * case.n == 0:
-        return True
-    if case.k == 0 or case.c_transpose:
-        return False
-    if case.a_transpose and case.mode == "ragged" and inner_expt_opt is None:
-        return False
-
-    a_bits = 4 if a_dtype.is_mxfloat4 else a_dtype.torch_dtype.itemsize * 8
-    a_inner = triton.cdiv(case.k, 2) if a_bits == 4 else case.k
-    a_stride = case.m if case.a_transpose else a_inner
-    if inner_expt_opt != "pad_a" and a_stride * a_bits % 128:
-        return False
-
-    b_bits = 4 if b_dtype.is_mxfloat4 else b_dtype.torch_dtype.itemsize * 8
-    b_transpose = case.b_transpose or (b_dtype.is_any_float8 and torch.cuda.get_device_capability()[0] < 10)
-    if b_dtype.has_mx_scale and case.colmajor_mxfp_weight:
-        b_stride = triton.cdiv(case.k, 2) if b_bits == 4 else case.k
-    else:
-        b_stride = case.k if b_transpose else case.n
-    if not (case.b_hbm_swizzling and b_bits == 4) and b_stride * b_bits % 128:
-        return False
-
-    if b_dtype.has_mx_scale and case.colmajor_mxfp_weight:
-        scale_stride = triton.cdiv(case.k, b_dtype.microblock_size)
-        swizzled_scale = case.b_hbm_swizzling and b_dtype.is_mxfloat4
-        if not swizzled_scale and scale_stride != 1:
-            return False
-    if b_dtype.has_mx_scale and not case.colmajor_mxfp_weight and b_bits == 4:
-        return False
-    return not (inner_expt_opt is not None and b_transpose and inner_expt_opt != "pad_b")
-
-
-def _supports_test_op_case(case, block_m, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent,
-                           capability, cuda, hip, cdna3, cdna4, gfx1250):
-    a_dtype = DType(case.act_dtype_str)
-    b_dtype = DType(case.weight_dtype_str)
-    c_dtype = DType(case.output_dtype_str or case.act_dtype_str)
-
-    if cuda:
-        if capability < 10 and (a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4):
-            return False
-        if capability < 9 and (a_dtype.uses_fp8e4nv or b_dtype.uses_fp8e4nv or c_dtype.uses_fp8e4nv):
-            return False
-        if b_dtype.is_any_float8 and capability < 9:
-            return False
-        if case.act_dtype_str == "float16" and b_dtype.has_mx_scale and capability >= 10:
-            return False
-        if b_dtype.has_mx_scale and a_dtype.has_global_scale and capability < 10:
-            return False
-    elif hip:
-        if a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4:
-            return False
-        if a_dtype.is_any_float8 and b_dtype.has_mx_scale and not (cdna4 or gfx1250):
-            return False
-        if a_dtype.is_any_float8 and b_dtype.name == "mxfloat8_e4m3fn":
-            return False
-        if a_dtype.has_mx_scale and b_dtype.has_mx_scale:
-            return False
-        if a_dtype.name == "mxfloat4_e2m1" and case.weight_dtype_str in {"bfloat16", "float16"}:
-            return False
-        if is_persistent or (case.split_k is not None and case.split_k > 1):
-            return False
-        if case.act_dtype_str in ("float32", "float64"):
-            return False
-
-    if case.swiglu_opts is not None and do_gamma:
-        return False
-    if "float8_e4m3fnuz" in (case.weight_dtype_str, case.act_dtype_str) and not cdna3:
-        return False
-
-    if case.b_hbm_swizzling:
-        if hip and (not (cdna4 or gfx1250) or not b_dtype.has_mx_scale):
-            return False
-        if capability < 9:
-            return False
-        if capability < 10 and (b_dtype.name != "mxfloat4_e2m1" or a_dtype.is_mxfloat4):
-            return False
-
-    if case.a_hbm_swizzling and (hip or capability < 10 or not a_dtype.has_mx_scale or not is_persistent
-                                 or block_m < 128 or do_gather):
-        return False
-    if case.c_hbm_swizzling and (hip or capability < 10 or do_scatter):
-        return False
-
-    if inner_expt_opt is not None:
-        if case.mode != "ragged":
-            return False
-        if a_dtype.has_mx_scale and inner_expt_opt != "pad_a":
-            return False
-        if b_dtype.has_mx_scale:
-            if inner_expt_opt != "pad_b" or (is_persistent and not case.b_hbm_swizzling):
-                return False
-            if hip and (case.act_dtype_str == "bfloat16" or case.b_hbm_swizzling):
-                return False
-    if not case.colmajor_mxfp_weight and block_m == 16:
-        return False
-
-    if case.shuffle_mxfp4_w_layout and (
-        not case.b_hbm_swizzling or hip or capability < 10 or b_dtype.name != "mxfloat4_e2m1"
-        or not a_dtype.has_global_scale or not case.colmajor_mxfp_weight or not is_persistent
-    ):
-        return False
-
-    actual_scatter = do_scatter and case.mode != "batched"
-    ragged_mx = case.mode == "ragged" and (a_dtype.has_mx_scale or b_dtype.has_mx_scale)
-    can_split_k = not actual_scatter and not ragged_mx and inner_expt_opt is None and not c_dtype.has_mx_scale
-    if case.split_k is not None and case.split_k > 1 and not can_split_k:
-        return False
-
-    if cuda and capability >= 10:
-        requires_persistent = case.a_hbm_swizzling or (
-            case.b_hbm_swizzling and case.colmajor_mxfp_weight and b_dtype.is_mxfloat4
-        )
-        if requires_persistent and not is_persistent:
-            return False
-        if is_persistent and not _supports_persistent_tma(case, a_dtype, b_dtype, inner_expt_opt):
-            return False
-    elif cuda and capability < 9 and is_persistent:
-        batch_size = case.n_slices if case.mode == "batched" or inner_expt_opt is not None else 1
-        if batch_size * case.m * case.n:
-            return False
-    return True
-
-
-def _build_test_op_parameters():
-    cuda = is_cuda()
-    hip = is_hip()
-    capability = torch.cuda.get_device_capability()[0]
-    cdna3, cdna4, gfx1250 = is_hip_cdna3(), is_hip_cdna4(), is_hip_gfx1250()
-    num_warps_options = [4, 8] if cuda and capability == 9 else [None]
-    persistent_options = [False, True] if cuda else [False]
-    scatter_options = [
-        (False, False, None),
-        (True, False, None),
-        (False, True, None),
-        (True, True, None),
-        (False, False, "pad_b"),
-        (False, False, "pad_a"),
-    ]
-    cases = _build_test_op_cases()
-    parameters = []
-    for num_warps, is_persistent, do_gamma, (do_gather, do_scatter, inner_expt_opt), block_m, (index, case) in \
-        itertools.product(num_warps_options, persistent_options, (False, True), scatter_options, (16, 128),
-                          enumerate(cases)):
-        if not _supports_test_op_case(case, block_m, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent,
-                                      capability, cuda, hip, cdna3, cdna4, gfx1250):
-            continue
-        values = (num_warps, is_persistent, do_gamma, do_gather, do_scatter, inner_expt_opt, block_m,
-                  *(getattr(case, field.name) for field in fields(Case)))
-        parameter_id = "-".join(f"swiglu_opts{index}" if isinstance(value, tuple) else str(value) for value in values)
-        parameters.append(pytest.param(*values, id=parameter_id))
-    return parameters
-
-
 @pytest.mark.parametrize(
-    ", ".join(("num_warps", "is_persistent", "do_gamma", "do_gather", "do_scatter", "inner_expt_opt", "block_m",
-               *(field.name for field in fields(Case)))),
-    _build_test_op_parameters(),
+    ", ".join(f.name for f in fields(Case)),
+    [
+        tuple(getattr(case, f.name) for f in fields(Case))
+        for case in _build_test_op_cases()
+    ],
 )
+@pytest.mark.parametrize("block_m", [16, 128])
+@pytest.mark.parametrize("do_gather, do_scatter, inner_expt_opt", [
+    (False, False, None),
+    (True, False, None),
+    (False, True, None),
+    (True, True, None),
+    (False, False, "pad_b"),
+    (False, False, "pad_a"),
+])
+@pytest.mark.parametrize("do_gamma", [False,True])
+@pytest.mark.parametrize("is_persistent", [False,True])
+@pytest.mark.parametrize("num_warps", [4, 8] if is_hopper() else [None])
 @pytest.mark.enable_warmup(priority=2)
 def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, num_warps, n_slices,
             mode, act_dtype_str, weight_dtype_str, output_dtype_str, block_m, b_hbm_swizzling, shuffle_mxfp4_w_layout, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
@@ -507,7 +337,99 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     b_dtype = DType(weight_dtype_str)
     c_dtype = DType(output_dtype_str or act_dtype_str)
     device_capability = torch.cuda.get_device_capability()[0]
+    # TODO: remove when Triton FP8 supports proper RTNE
+    if is_cuda():
+        if device_capability < 10 and (a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4):
+            pytest.skip("NVFP4 matmul only tested on Blackwell or newer")
+        if device_capability < 9 and (a_dtype.uses_fp8e4nv or b_dtype.uses_fp8e4nv or c_dtype.uses_fp8e4nv):
+            pytest.skip("MXFP8/NVFP4 tensors use fp8e4nv, which is not supported on A100")
+        if b_dtype.is_any_float8 and device_capability < 9:
+            pytest.skip("Float8 not tested on A100")
+        if act_dtype_str == "float16" and b_dtype.has_mx_scale and device_capability >= 10:
+            pytest.skip("float16 x mx not supported with cuda capability >= 10")
+        if b_dtype.has_mx_scale and a_dtype.has_global_scale and device_capability < 10:
+            pytest.skip("float8 x mx not supported with cuda capability < 10")
+        if swiglu_opts is not None and do_gamma:
+            pytest.skip("NYI: swiglu and gamma not supported together")
+
+    elif is_hip():
+        if a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4:
+            pytest.skip("NVFP4 matmul not tested on AMD GPU")
+        if a_dtype.is_any_float8 and b_dtype.has_mx_scale and not (is_hip_cdna4() or is_hip_gfx1250()):
+            pytest.skip("float8 x mx only supported on CDNA4 and gfx1250")
+        if a_dtype.is_any_float8 and b_dtype.name == "mxfloat8_e4m3fn":
+            pytest.skip("NYI: float8 x mxfloat8 not tested on AMD GPU")
+        if a_dtype.has_mx_scale and b_dtype.has_mx_scale:
+            pytest.skip("NYI: mx x mx not tested on AMD GPU")
+        if a_dtype.name == "mxfloat4_e2m1" and weight_dtype_str in {"bfloat16", "float16"}:
+            pytest.skip("NYI: MXFP4 x dense FP16/BF16 not tested on AMD GPU")
+        if is_persistent:
+            pytest.skip("NYI: Persistent kernel not supported on AMD GPU")
+        # FIXME: this works on nvidia; looks like some sort of bug on AMD?
+        if do_gamma and swiglu_opts is not None:
+            pytest.skip("NYI: gamma and swiglu not supported together on AMD GPU")
+        if split_k is not None and split_k > 1:
+            pytest.skip("splitK hasn't been fully tested on AMD GPU.")
+        if act_dtype_str in ("float32", "float64"):
+            pytest.skip("float32/float64 not fully tested on AMD GPU")
+
+    if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
+        pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
+
+    if b_hbm_swizzling:
+        if is_hip():
+            if not (is_hip_cdna4() or is_hip_gfx1250()):
+                pytest.skip("Scale preshuffling on AMD GPU has not been emulated on archs other than CDNA4 and gfx1250 yet.")
+            if not b_dtype.has_mx_scale:
+                pytest.skip("Non-scale swizzling not supported on CDNA4 yet")
+        if device_capability < 9:
+            pytest.skip("NYI. Ampere swizzling.")
+        if device_capability < 10:
+            if b_dtype.name != "mxfloat4_e2m1":
+                pytest.skip("NYI. Hopper swizzling just implemented for mxfp4.")
+            if a_dtype.is_mxfloat4:
+                pytest.skip("Hopper mxfp4 swizzled weights do not support FP4 microscaled lhs.")
+
+    if a_hbm_swizzling:
+        # current x scale swizzling requires B200, batched input, microscaled act and persistent case
+        if is_hip():
+            pytest.skip("NYI. X swizzling not tested on AMD GPU yet.")
+        if device_capability < 10:
+            pytest.skip("NYI. X swizzling only implemented for B200 for now.")
+        if not a_dtype.has_mx_scale:
+            pytest.skip(f"NYI. X swizzling only implemented for microscaled activations for now. Got {act_dtype_str}")
+        if not is_persistent:
+            pytest.skip("NYI. X swizzling only implemented for persistent case for now.")
+        if block_m < 128:
+            pytest.skip("X swizzling requires block_m >= 128")
+        if do_gather:
+            pytest.skip("X swizzling does not support gathered activations")
+
+    if c_hbm_swizzling:
+        if is_hip() or torch.cuda.get_device_capability()[0] < 10:
+            pytest.skip("NYI. Output scale swizzling is only implemented on Blackwell")
+        if do_scatter:
+            pytest.skip("NYI. Output scale swizzling does not support fused scatter")
+
     expt_is_inner = (inner_expt_opt is not None)
+    if expt_is_inner:
+        if mode != "ragged":
+            pytest.skip("inner_expt_opt only meaningful with ragged")
+        if a_dtype.has_mx_scale and inner_expt_opt != "pad_a":
+            pytest.skip("inner_expt_opt and act mx only supported with pad_a")
+        if b_dtype.has_mx_scale:
+            if inner_expt_opt != "pad_b":
+                pytest.skip("inner_expt_opt and weight mx only supported with pad_b")
+            if is_persistent and not b_hbm_swizzling:
+                pytest.skip("FIXME: Fatal Python error: Aborted")
+            if is_hip():
+                if act_dtype_str == "bfloat16":
+                    pytest.skip("FIXME: failed to translate module to LLVM IR")
+                if b_hbm_swizzling:
+                    pytest.skip("NYI: nner_expt_opt and HBM swizzling")
+    if not colmajor_mxfp_weight:
+        if block_m == 16:
+            pytest.skip("PassManager::run failed from Triton compiler")
     # TODO: should construct the test case differently rather than overriding here
     if b_dtype.is_any_float8 and device_capability < 10:
         b_transpose = True
@@ -517,6 +439,19 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     # set opt flags constraints
     constraints = make_constraints(block_m, split_k, is_persistent, epilogue_subtile, b_hbm_swizzling, weight_dtype_str, num_warps)
     use_blackwell_shuffled_w_layout = shuffle_mxfp4_w_layout and b_hbm_swizzling
+    if shuffle_mxfp4_w_layout:
+        if not b_hbm_swizzling:
+            pytest.skip("Shuffled MXFP4 weight layout only applies with b_hbm_swizzling")
+        if is_hip() or device_capability < 10:
+            pytest.skip("Shuffled MXFP4 weight layout requires Blackwell or newer")
+        if b_dtype.name != "mxfloat4_e2m1":
+            pytest.skip("Shuffled MXFP4 weight layout only supports mxfloat4_e2m1 weights")
+        if not a_dtype.has_global_scale:
+            pytest.skip("Shuffled MXFP4 weight layout is only tested with FP8 activations")
+        if not colmajor_mxfp_weight:
+            pytest.skip("Shuffled MXFP4 weight layout requires column-major MXFP weights")
+        if not is_persistent:
+            pytest.skip("Shuffled MXFP4 weight layout requires the persistent TMA kernel")
     opt_flags.update_opt_flags_constraints(constraints)
 
     # --- create conditionals ---

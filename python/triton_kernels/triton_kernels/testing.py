@@ -12,7 +12,6 @@ from triton_kernels.numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV
 from triton_kernels.tensor import convert_layout as _convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
 from triton_kernels.tensor_details.layout import BlackwellMXScaleLayout
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
-import itertools
 from dataclasses import replace
 
 
@@ -261,19 +260,7 @@ def normalize_blocks(x, BLOCK_SIZE=None):
     blocks = padded.view(batch_size, row_blocks, BLOCK_SIZE, col_blocks, BLOCK_SIZE).permute(0, 1, 3, 2, 4)
 
     block_maxima = blocks.abs().amax(dim=(-2, -1))
-    if torch.version.hip is None:
-        signs = _make_random_block_signs(x, batch_size, rows, cols, row_blocks, col_blocks, BLOCK_SIZE)
-    else:
-        random_signs = []
-        for _, row_start, col_start in itertools.product(range(batch_size), range(0, rows, BLOCK_SIZE),
-                                                         range(0, cols, BLOCK_SIZE)):
-            count = max(min(BLOCK_SIZE, rows - row_start), min(BLOCK_SIZE, cols - col_start))
-            signs = torch.randint(0, 2, (count, ), device=x.device)
-            if count < BLOCK_SIZE:
-                signs = torch.nn.functional.pad(signs, (0, BLOCK_SIZE - count))
-            random_signs.append(signs)
-        signs = torch.stack(random_signs).view(batch_size, row_blocks, col_blocks, BLOCK_SIZE)
-    signs = signs * 2 - 1
+    signs = _make_random_block_signs(x, batch_size, rows, cols, row_blocks, col_blocks, BLOCK_SIZE) * 2 - 1
 
     block_heights = (rows - torch.arange(row_blocks, device=x.device) * BLOCK_SIZE).clamp(max=BLOCK_SIZE)
     block_widths = (cols - torch.arange(col_blocks, device=x.device) * BLOCK_SIZE).clamp(max=BLOCK_SIZE)
@@ -295,7 +282,7 @@ def normalize_blocks(x, BLOCK_SIZE=None):
 def alloc_rand(shape, device, dtype, requires_grad=False):
     if is_compile_warmup():
         result = torch.empty(shape, device=device, dtype=dtype, requires_grad=requires_grad)
-        if dtype.itemsize != 1 and result.numel() and torch.version.hip is None:
+        if dtype.itemsize != 1 and result.numel():
             batch_size, rows, cols = (1, *result.shape) if result.ndim == 2 else result.shape
             block_size = int(MXFP_BLOCK_SIZE)
             _make_random_block_signs(result, batch_size, rows, cols, triton.cdiv(rows, block_size),
