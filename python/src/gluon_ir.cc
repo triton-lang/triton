@@ -26,6 +26,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/GenericSwizzling.h"
@@ -190,10 +191,10 @@ struct GluonLayouts {
     AMDWMMALayout = py::object(amdLayouts.attr("AMDWMMALayout")).release();
     PaddedSharedLayout =
         py::object(layouts.attr("PaddedSharedLayout")).release();
-    auto gfx1250Layouts = py::module_::import_(
-        "triton.experimental.gluon.language.amd.gfx1250._layouts");
+    auto cdna5Layouts = py::module_::import_(
+        "triton.experimental.gluon.language.amd.cdna5._layouts");
     PartitionedSharedLayout =
-        py::object(gfx1250Layouts.attr("PartitionedSharedLayout")).release();
+        py::object(cdna5Layouts.attr("PartitionedSharedLayout")).release();
 
     auto core = py::module_::import_("triton.language.core");
   }
@@ -691,6 +692,16 @@ void init_gluon_ir(py::module_ &m) {
               Type retType) -> Value {
              return self.create<triton::CatOp>(retType, lhs, rhs);
            })
+      .def("create_experimental_fpsan_embed",
+           [](GluonOpBuilder &self, Value &src, Type &dstType) -> Value {
+             return self.create<triton::instrument::ExperimentalFPSanEmbedOp>(
+                 dstType, src);
+           })
+      .def("create_experimental_fpsan_unembed",
+           [](GluonOpBuilder &self, Value &src, Type &dstType) -> Value {
+             return self.create<triton::instrument::ExperimentalFPSanUnembedOp>(
+                 dstType, src);
+           })
       .def("create_packed_arith",
            [](GluonOpBuilder &self, Type resultType,
               const std::string &operation,
@@ -1176,6 +1187,11 @@ void init_gluon_ir(py::module_ &m) {
               tt::CacheModifier cacheModifier) {
              self.create<ttag::BufferLoadToLocalOp>(
                  dest, ptr, offsets, mask, other, stride, cacheModifier);
+           })
+      .def("create_local_load_packed_transposed",
+           [](GluonOpBuilder &self, Type resultType, Value memDesc) -> Value {
+             return self.create<ttag::LocalLoadPackedTransposedOp>(resultType,
+                                                                   memDesc);
            })
       .def("create_scaled_upcast_fp4",
            [](GluonOpBuilder &self, Value input, Value scale, Type elemType,

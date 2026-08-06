@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import List, Any
 from triton._utils import validate_block_shape
 from triton.experimental.gluon.language._layouts import PaddedSharedLayout, SwizzledSharedLayout
-from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
+from triton.experimental.gluon.language.amd.cdna5 import PartitionedSharedLayout
 
 __all__ = ["TensorDescriptor"]
 

@@ -437,6 +437,11 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
     _dim: core.constexpr = len(x.shape) - 1 if dim is None else dim
     core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
 
+    if k is not None:
+        core.static_assert(k > 0, "topk: k must be greater than 0")
+        core.static_assert(_is_power_of_two(k), "topk: k must be a power of two")
+        core.static_assert(k <= x.shape[_dim], "topk: k must not exceed the size of the selected dimension")
+
     log_n: core.constexpr = _log2(x.shape[_dim])
     log_k: core.constexpr = log_n if k is None else _log2(k)
 
@@ -479,7 +484,7 @@ def topk(x, k: core.constexpr, dim: core.constexpr = None, descending: core.cons
 
     :param x: The input tensor.
     :type x: Tensor
-    :param k: The number of top elements to return. Must be a power of two.
+    :param k: The number of top elements to return. Must be a positive power of two no larger than the selected dimension.
     :type k: int
     :param dim: The dimension along which to find the top k elements.
                 If None, uses the last dimension. Currently only the last dimension is supported.

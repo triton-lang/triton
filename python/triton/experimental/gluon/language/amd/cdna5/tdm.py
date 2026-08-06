@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import triton.experimental.gluon.language._core as ttgl
 from triton.experimental.gluon.language._layouts import PaddedSharedLayout, SwizzledSharedLayout
-from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
+from triton.experimental.gluon.language.amd.cdna5 import PartitionedSharedLayout
 from triton.experimental.gluon.language._core import builtin, _unwrap_if_constexpr
 
 if TYPE_CHECKING:
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "update_tensor_descriptor", "async_load", "async_load_fused", "async_wait", "make_tensor_descriptor",
-    "tensor_descriptor", "tensor_descriptor_type", "prefetch", "async_scatter"
+    "tensor_descriptor", "tensor_descriptor_type", "prefetch", "async_store", "async_scatter", "async_gather"
 ]
 
 
@@ -97,7 +97,7 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
                            _semantic=None) -> tensor_descriptor:
     """Make a tensor descriptor object.
 
-    AMD GFX1250 TDM tensor descriptors only support zero padding.
+    AMD CDNA5 TDM tensor descriptors only support zero padding.
 
     Args:
         base (tensor): base pointer of the tensor in global memory.

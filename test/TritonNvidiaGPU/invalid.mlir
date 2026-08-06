@@ -985,6 +985,24 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#nvmma = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @tma_layout_rank_mismatch(
+      %desc: !tt.tensordesc<2x32x64xi32, #nvmma>,
+      %dst: !ttg.memdesc<2x32x64xi32, #nvmma, #smem, mutable>,
+      %barrier: !ttg.memdesc<1xi64, #barrier, #smem, mutable>) {
+    %zero = arith.constant 0 : i32
+    %true = arith.constant true
+    // expected-error @below {{TMA shared memory and layout ranks must match}}
+    ttng.async_tma_copy_global_to_local %desc[%zero, %zero, %zero] %dst, %barrier, %true : !tt.tensordesc<2x32x64xi32, #nvmma>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<2x32x64xi32, #nvmma, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 // Test invalid TensorDescIm2ColType: rank-3 blockType (must be rank-2)
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
   // expected-error @below {{TensorDescIm2ColType requires rank-2 shape, got rank 3}}
@@ -1644,6 +1662,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %axis1: tensor<4x128xi8, #fp4_axis1>) {
     // expected-error @below {{'ttng.packed_arith' op requires every fp4 operand to have the result shape with the same single dimension halved}}
     %0 = ttng.packed_arith mul %axis0, %axis1 : (tensor<2x256xi8, #fp4_axis0>, tensor<4x128xi8, #fp4_axis1>) -> tensor<4x256xf8E4M3FN, #result>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CGALayout = [[1, 0]]}>
+#blocked = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tma_store_rejects_remote_source(%desc: !tt.tensordesc<128x64xi32, #shared>, %view: !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>, %x: i32) {
+    // expected-error @below {{source subview may have an origin in another CTA}}
+    ttng.async_tma_copy_local_to_global %desc[%x, %x] %view : !tt.tensordesc<128x64xi32, #shared>, !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>
+    tt.return
+  }
+  tt.func @tma_reduce_rejects_remote_source(%desc: !tt.tensordesc<128x64xi32, #shared>, %view: !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>, %x: i32) {
+    // expected-error @below {{source subview may have an origin in another CTA}}
+    ttng.async_tma_reduce add, %desc[%x, %x] %view : !tt.tensordesc<128x64xi32, #shared>, !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>
+    tt.return
+  }
+
+  tt.func @tma_scatter_rejects_remote_source(%desc: !tt.tensordesc<1x64xi32, #shared>, %view: !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>, %indices: tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>, %y: i32) {
+    // expected-error @below {{source subview may have an origin in another CTA}}
+    ttng.async_tma_scatter %desc[%indices, %y] %view : !tt.tensordesc<1x64xi32, #shared>, tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>, i32, !ttg.memdesc<128x64xi32, #shared, #smem, mutable, 256x64>
     tt.return
   }
 }

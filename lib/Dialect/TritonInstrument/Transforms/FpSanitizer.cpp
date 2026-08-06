@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -75,8 +76,8 @@ bool canUseI8MmaTile(int64_t m, int64_t n, int numWarps) {
 }
 
 std::pair<int64_t, int64_t> getMmaEmulationTileShape(PatternRewriter &rewriter,
-                                                     int64_t m, int64_t n,
-                                                     int64_t k,
+                                                     Operation *op, int64_t m,
+                                                     int64_t n, int64_t k,
                                                      IntegerType accElem) {
   std::pair<int64_t, int64_t> tile = {std::min<int64_t>(kTileM, m),
                                       std::min<int64_t>(kTileN, n)};
@@ -85,8 +86,9 @@ std::pair<int64_t, int64_t> getMmaEmulationTileShape(PatternRewriter &rewriter,
   if (!supportsI8DotDecomposition(rewriter, accElem) || (k % kI8MmaK) != 0)
     return tile;
 
-  // Cap the MMAv2 accumulator at 32 registers per thread.
-  int64_t maxTileArea = 32 * 32 * numWarps / (accElem.getWidth() == 64 ? 2 : 1);
+  int64_t registerBudget = std::min(ttng::getContextualMaxNReg(op), 32);
+  int64_t maxTileArea =
+      registerBudget * 32 * numWarps / (accElem.getWidth() == 64 ? 2 : 1);
   for (int64_t tileM = kI8MmaM; tileM <= m; tileM *= 2) {
     if ((m % tileM) != 0)
       continue;
@@ -847,7 +849,7 @@ Value fpsanExp(PatternRewriter &rewriter, Location loc, Value input) {
 
   auto inputI = embedToInt(rewriter, loc, input);
   auto rcpLog2 =
-      getU32ConstantLike(rewriter, loc, inputI.getType(), 0x236ee9bfu);
+      getU32ConstantLike(rewriter, loc, inputI.getType(), 0x26a29a75u);
   auto scaledI = arith::MulIOp::create(rewriter, loc, inputI, rcpLog2);
   return fpsanExp2FromInt(rewriter, loc, scaledI, input.getType());
 }
@@ -1057,44 +1059,18 @@ static Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
                              ignoreCTA);
 }
 
-std::optional<ScratchInfo>
-createTmemOperandScratch(PatternRewriter &rewriter, Location loc,
-                         TmemScratchManager &scratch, Value memdesc,
-                         ttg::MemDescType memTy, Region *scope) {
-  auto layout = scratch.getScratchEncoding(rewriter, memdesc, memTy);
-  auto tensorTy =
-      RankedTensorType::get(memTy.getShape(), memTy.getElementType(), layout);
+std::optional<MmaOperandSource>
+createMmaOperandSource(PatternRewriter &rewriter, TmemScratchManager &scratch,
+                       Value memdesc, bool isTmem, RankedTensorType tileTy,
+                       Region *scope, int64_t rowStride, int64_t stride) {
+  if (!isTmem)
+    return MmaOperandSource{Value(), memdesc, tileTy, rowStride, stride};
+
   auto info = scratch.getOrCreate(memdesc, rewriter, scope);
   if (!info || info->scaleSourceType)
     return std::nullopt;
-  Value fullVal = loadScratchStrided2D(rewriter, loc, info->ptr, tensorTy,
-                                       info->tensorType.getShape().front());
-  if (!fullVal)
-    return std::nullopt;
-  int64_t elSize = memTy.getElementType().getIntOrFloatBitWidth() / 8;
-  int64_t alignment = std::max<int64_t>(elSize, 16);
-  int64_t sizeInBytes = product(memTy.getShape()) * elSize;
-  auto ptrTy = triton::getPointerType(
-      getScratchStorageElementType(memTy.getElementType()));
-  auto allocOp =
-      scratch.createScratchAlloc(rewriter, loc, ptrTy, sizeInBytes, alignment);
-  Value ptr = allocOp.getResult();
-  if (!storeFpSanScratchMemory(rewriter, loc, ptr, fullVal, tensorTy))
-    return std::nullopt;
-  return ScratchInfo{ptr, tensorTy};
-}
-
-std::optional<MmaOperandSource> createMmaOperandSource(
-    PatternRewriter &rewriter, Location loc, TmemScratchManager &scratch,
-    Value memdesc, ttg::MemDescType memTy, bool isTmem, RankedTensorType tileTy,
-    Region *scope, int64_t rowStride, int64_t stride) {
-  if (!isTmem)
-    return MmaOperandSource{Value(), memdesc, tileTy, rowStride, stride};
-  auto info =
-      createTmemOperandScratch(rewriter, loc, scratch, memdesc, memTy, scope);
-  if (!info)
-    return std::nullopt;
-  return MmaOperandSource{info->ptr, Value(), tileTy, rowStride, stride};
+  return MmaOperandSource{info->ptr, Value(), tileTy, rowStride,
+                          info->tensorType.getShape().front()};
 }
 
 std::optional<ScratchInfo> createWGMMAScratch(PatternRewriter &rewriter,
@@ -2240,7 +2216,8 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
     Value predInt = arith::ConstantOp::create(
         rewriter, loc, rewriter.getIntegerAttr(accElem, 1));
 
-    auto [tileM, tileN] = getMmaEmulationTileShape(rewriter, m, n, k, accElem);
+    auto [tileM, tileN] =
+        getMmaEmulationTileShape(rewriter, op.getOperation(), m, n, k, accElem);
 
     // Use optimized blocked layouts for emulation tiles instead of the
     // original dot encodings.  Encodings like AMDWmmaEncodingAttr impose
@@ -2393,7 +2370,8 @@ struct DotScaledPattern : public OpRewritePattern<tt::DotScaledOp> {
     Value predInt = arith::ConstantOp::create(
         rewriter, loc, rewriter.getIntegerAttr(accElem, 1));
 
-    auto [tileM, tileN] = getMmaEmulationTileShape(rewriter, m, n, k, accElem);
+    auto [tileM, tileN] =
+        getMmaEmulationTileShape(rewriter, op.getOperation(), m, n, k, accElem);
 
     auto accLayout = getOptimizedBlockedEncoding(rewriter, {tileM, tileN},
                                                  cTy.getElementType());
@@ -2755,7 +2733,8 @@ struct WarpGroupDotPattern : public OpRewritePattern<ttng::WarpGroupDotOp> {
     if (!aScratch || !bScratch || !dPtr)
       return emitFpSanCodegenError(op.getOperation());
 
-    auto [tileM, tileN] = getMmaEmulationTileShape(rewriter, m, n, k, accElem);
+    auto [tileM, tileN] =
+        getMmaEmulationTileShape(rewriter, op.getOperation(), m, n, k, accElem);
 
     auto accTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, tileN},
                                                      cTy.getElementType());
@@ -2841,7 +2820,8 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
         arith::ExtUIOp::create(rewriter, loc, accElem, op.getPred());
 
     rewriter.setInsertionPoint(op);
-    auto [tileM, tileN] = getMmaEmulationTileShape(rewriter, m, n, k, accElem);
+    auto [tileM, tileN] =
+        getMmaEmulationTileShape(rewriter, op.getOperation(), m, n, k, accElem);
     auto accTileLayout =
         getOptimizedBlockedEncoding(rewriter, {tileM, tileN}, accElem);
     auto accTileTy =
@@ -2859,11 +2839,11 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
         getOptimizedBlockedEncoding(rewriter, {k, tileN}, bTileElem);
     auto bTileTy = RankedTensorType::get({k, tileN}, bTileElem, bTileLayout);
 
-    auto aSource = createMmaOperandSource(rewriter, loc, *scratch, op.getA(),
-                                          aMemTy, aIsTmem, aTileTy, scope,
+    auto aSource = createMmaOperandSource(rewriter, *scratch, op.getA(),
+                                          aIsTmem, aTileTy, scope,
                                           /*rowStride=*/1, /*stride=*/m);
-    auto bSource = createMmaOperandSource(rewriter, loc, *scratch, op.getB(),
-                                          bMemTy, bIsTmem, bTileTy, scope,
+    auto bSource = createMmaOperandSource(rewriter, *scratch, op.getB(),
+                                          bIsTmem, bTileTy, scope,
                                           /*rowStride=*/1, /*stride=*/k);
     if (!aSource || !bSource)
       return emitFpSanCodegenError(op.getOperation());
@@ -3005,7 +2985,8 @@ struct TCGen5MMAScaledPattern
     if (!bScaleScratch)
       return emitFpSanCodegenError(op.getOperation());
 
-    auto [tileM, tileN] = getMmaEmulationTileShape(rewriter, m, n, k, accElem);
+    auto [tileM, tileN] =
+        getMmaEmulationTileShape(rewriter, op.getOperation(), m, n, k, accElem);
 
     auto accTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, tileN},
                                                      dMemTy.getElementType());
@@ -3020,11 +3001,11 @@ struct TCGen5MMAScaledPattern
     auto bTileTy = RankedTensorType::get({bPackedK, tileN},
                                          bMemTy.getElementType(), bTileLayout);
 
-    auto aSource = createMmaOperandSource(rewriter, loc, *scratch, op.getA(),
-                                          aMemTy, aIsTmem, aTileTy, scope,
+    auto aSource = createMmaOperandSource(rewriter, *scratch, op.getA(),
+                                          aIsTmem, aTileTy, scope,
                                           /*rowStride=*/1, /*stride=*/m);
-    auto bSource = createMmaOperandSource(rewriter, loc, *scratch, op.getB(),
-                                          bMemTy, bIsTmem, bTileTy, scope,
+    auto bSource = createMmaOperandSource(rewriter, *scratch, op.getB(),
+                                          bIsTmem, bTileTy, scope,
                                           /*rowStride=*/1, /*stride=*/bPackedK);
     if (!aSource || !bSource)
       return emitFpSanCodegenError(op.getOperation());

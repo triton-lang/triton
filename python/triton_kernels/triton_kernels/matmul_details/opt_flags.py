@@ -34,6 +34,7 @@ class OptFlags:
     arch: str
     occupancy_target: int
     target_kernel_kwargs: dict
+    clc: bool = False
 
 
 def max_allowable_mn(
@@ -185,6 +186,7 @@ def make_default_opt_flags_amd(
         w_cache_modifier=w_cache_modifier,
         split_k=split_k,
         is_persistent=is_persistent,
+        clc=False,
         idle_sms=constraints.get("idle_sms", _get_idle_sms()),
         epilogue_subtile=epilogue_subtile,
         arch=None,
@@ -218,7 +220,7 @@ def make_default_opt_flags_nvidia(
     mx_block_size=None,
     epilogue_reduction_n=1,
 ):
-    constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps", "disable_mx4_block_swap"}
+    constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "clc", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps", "disable_mx4_block_swap"}
     unsupported = set(constraints.keys()) - constraints_supported
     assert not unsupported, f"Given unsupported constraint: {unsupported}"
     is_large_ragged_nvfp4 = (
@@ -282,6 +284,14 @@ def make_default_opt_flags_nvidia(
     n_sms = torch.cuda.get_device_properties(0).multi_processor_count
     tiles_per_sm = grid_size_tma / n_sms
     supports_persistent = can_use_persistent_tma and (arch is None or int(arch[2:-1]) >= 9)
+    clc = constraints.get("clc", False)
+    if clc:
+        if not cuda_capability_geq(10, 0):
+            raise InapplicableConstraint("cannot enforce `clc=True` constraint before NVIDIA SM100")
+        if not supports_persistent:
+            raise InapplicableConstraint("cannot enforce `clc=True` constraint without persistent TMA support")
+        if constraints.get("is_persistent", True) is False:
+            raise InapplicableConstraint("`clc=True` requires `is_persistent=True`")
     a_mx_scale_layout = None if not isinstance(precision_config.a_mx_scale, Tensor) else precision_config.a_mx_scale.storage.layout
     b_mx_scale_layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
 
@@ -289,7 +299,9 @@ def make_default_opt_flags_nvidia(
         return layout is None or isinstance(layout, StridedLayout)
 
     requires_persistent = (not _is_layout_strided(a_mx_scale_layout) or not _is_layout_strided(b_mx_scale_layout)) and target_info.has_native_mxfp()
-    if constraints.get("is_persistent", None) is not None:
+    if clc:
+        is_persistent = True
+    elif constraints.get("is_persistent", None) is not None:
         if requires_persistent and not constraints["is_persistent"]:
             raise InapplicableConstraint("cannot enforce `is_persistent=False` constraint because persistent kernel is required")
         is_persistent = constraints["is_persistent"]
@@ -437,6 +449,7 @@ def make_default_opt_flags_nvidia(
         w_cache_modifier=None,
         split_k=split_k,
         is_persistent=is_persistent,
+        clc=clc,
         epilogue_subtile=epilogue_subtile,
         arch=arch,
         target_kernel_kwargs=dict(

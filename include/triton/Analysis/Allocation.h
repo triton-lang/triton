@@ -1,6 +1,7 @@
 #ifndef TRITON_ANALYSIS_ALLOCATION_H
 #define TRITON_ANALYSIS_ALLOCATION_H
 
+#include "triton/Analysis/CallGraph.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Tools/GenericSwizzling.h"
 #include "llvm/ADT/DenseMap.h"

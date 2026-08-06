@@ -114,7 +114,7 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   if (auto cvtLayout = dyn_cast<gpu::ConvertLayoutOp>(op)) {
     auto srcTy = cvtLayout.getSrc().getType();
     auto dstTy = cvtLayout.getType();
-    if (!cvtNeedsSharedMemory(srcTy, dstTy))
+    if (!cvtNeedsSharedMemory(cvtLayout))
       return 0;
     // The generic pass uses swizzling
     auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy);

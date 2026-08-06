@@ -115,14 +115,11 @@ template <ProxyFenceScope scope>
 class ProxyFenceAnalysis : public MembarOrFenceAnalysis {
 
 public:
-  explicit ProxyFenceAnalysis(Allocation *allocation, MembarFilterFn filter)
-      : MembarOrFenceAnalysis(allocation, filter) {}
+  using MembarOrFenceAnalysis::MembarOrFenceAnalysis;
 
 private:
-  /// Updates the BlockInfo operation based on the operation.
-  virtual void update(Operation *operation, BlockInfo *blockInfo,
-                      FuncBlockInfoMapT *funcBlockInfoMap,
-                      OpBuilder *builder) override;
+  void update(Operation *operation, BlockInfo *blockInfo, FuncMapT *funcMap,
+              OpBuilder *builder) override;
 
   void insertFence(Operation *operation, OpBuilder *builder);
 };
@@ -136,8 +133,7 @@ void ProxyFenceAnalysis<scope>::insertFence(Operation *op, OpBuilder *builder) {
 
 template <ProxyFenceScope scope>
 void ProxyFenceAnalysis<scope>::update(Operation *op, BlockInfo *blockInfo,
-                                       FuncBlockInfoMapT *funcBlockInfoMap,
-                                       OpBuilder *builder) {
+                                       FuncMapT *funcMap, OpBuilder *builder) {
   if (auto fence = dyn_cast<triton::nvidia_gpu::FenceAsyncSharedOp>(op)) {
     // A cluster fence covers both frontiers, while a CTA fence only covers the
     // CTA frontier.
@@ -156,7 +152,7 @@ void ProxyFenceAnalysis<scope>::update(Operation *op, BlockInfo *blockInfo,
     auto callOpInterface = dyn_cast<CallOpInterface>(op);
     if (auto callee =
             dyn_cast<FunctionOpInterface>(callOpInterface.resolveCallable()))
-      curBlockInfo = funcBlockInfoMap->lookup(callee);
+      curBlockInfo = funcMap->lookup(callee);
   } else {
     // Intra-function dependencies
     if (auto memoryEffectOpInterface = dyn_cast<MemoryEffectOpInterface>(op)) {
@@ -166,9 +162,9 @@ void ProxyFenceAnalysis<scope>::update(Operation *op, BlockInfo *blockInfo,
       memoryEffectOpInterface.getEffects(effectInstances);
       for (auto effectInstance : effectInstances) {
         if (auto value = effectInstance.getValue()) {
-          for (auto bufferId : allocation->getAllBufferIdsWithAliases(value)) {
+          for (auto bufferId : allocation.getAllBufferIdsWithAliases(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
-              auto interval = allocation->getAllocatedInterval(bufferId);
+              auto interval = allocation.getAllocatedInterval(bufferId);
               auto slice = AllocationSlice(value, interval, bufferId);
 
               if (isAsyncProxyWrite(op) && value == getSmemDest(op)) {
@@ -191,19 +187,19 @@ void ProxyFenceAnalysis<scope>::update(Operation *op, BlockInfo *blockInfo,
         }
       }
     }
-    scratchBufferId = allocation->getBufferId(op);
+    scratchBufferId = allocation.getBufferId(op);
   }
 
   // Scratch buffer operations consist of a series of shared memory operations
   // starting from a shared memory write, followed by a series of shared memory
   // read/write operations, mark them as a read.
   if (scratchBufferId != Allocation::InvalidBufferId) {
-    auto interval = allocation->getAllocatedInterval(scratchBufferId);
+    auto interval = allocation.getAllocatedInterval(scratchBufferId);
     auto scratchSlice = AllocationSlice(interval);
     curBlockInfo.syncReadSlices[scratchSlice].insert(op);
   }
   if (isProxyOp) {
-    if (proxyBlockInfo.isIntersected(*blockInfo, filter, allocation)) {
+    if (proxyBlockInfo.isIntersected(*blockInfo, filter, &allocation)) {
       builder->setInsertionPoint(op);
       insertFence(op, builder);
       blockInfo->sync();
@@ -242,11 +238,11 @@ public:
             .wasInterrupted();
     if (hasClusterProxyOp) {
       ModuleMembarOrFenceAnalysis<ProxyFenceAnalysis<ProxyFenceScope::Cluster>>
-          clusterAnalysis(&allocation, filterFn);
+          clusterAnalysis(allocation, filterFn);
       clusterAnalysis.run();
     }
     ModuleMembarOrFenceAnalysis<ProxyFenceAnalysis<ProxyFenceScope::CTA>>
-        ctaAnalysis(&allocation, filterFn);
+        ctaAnalysis(allocation, filterFn);
     ctaAnalysis.run();
   }
 };

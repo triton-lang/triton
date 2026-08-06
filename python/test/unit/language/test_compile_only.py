@@ -1,9 +1,43 @@
+import pytest
+import re
+
 import triton
 import triton.language as tl
 from triton.backends.compiler import GPUTarget
-import pytest
-import re
 from triton.compiler import ASTSource
+from triton.compiler.errors import CompileTimeAssertionFailure
+
+
+@triton.jit
+def topk_kernel(K: tl.constexpr):
+    x = tl.arange(0, 8)
+    tl.topk(x, K)
+
+
+@pytest.mark.parametrize(
+    "k, error",
+    [
+        (0, "topk: k must be greater than 0"),
+        (-1, "topk: k must be greater than 0"),
+        (3, "topk: k must be a power of two"),
+        (16, "topk: k must not exceed the size of the selected dimension"),
+    ],
+)
+def test_topk_invalid_k(k, error):
+    src = ASTSource(fn=topk_kernel, signature={"K": "constexpr"}, constexprs={"K": k})
+    with pytest.raises(triton.CompilationError) as exc_info:
+        triton.compile(src, target=GPUTarget("cuda", 90, 32))
+    cause = exc_info.value
+    while cause.__cause__ is not None:
+        cause = cause.__cause__
+    assert isinstance(cause, CompileTimeAssertionFailure)
+    assert cause.error_message == error
+
+
+@pytest.mark.parametrize("k", [1, 8])
+def test_topk_valid_k(k):
+    src = ASTSource(fn=topk_kernel, signature={"K": "constexpr"}, constexprs={"K": k})
+    triton.compile(src, target=GPUTarget("cuda", 90, 32))
 
 
 def test_compile_only_sm100() -> None:
