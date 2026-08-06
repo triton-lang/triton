@@ -3476,6 +3476,38 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
   EXPECT_EQ(ll, layout);
 }
 
+TEST_F(LinearLayoutConversionsTest, SM120BatchedDotScaledScaleLayout) {
+  auto cgaLayout =
+      CGAEncodingAttr::fromSplitParams(&ctx, {1, 1, 1}, {1, 1, 1},
+                                       {2, 1, 0});
+
+  auto layout = getSM120DotScaledScaleLayout(
+      &ctx, /*shape=*/{4, 128, 2}, /*opIdx=*/0,
+      /*warpsPerCTA=*/{4, 1, 1}, cgaLayout);
+  auto expected = LinearLayout(
+      {{S("register"),
+        {{0, 0, 1}, {0, 16, 0}, {0, 32, 0}, {0, 64, 0}}},
+       {S("lane"),
+        {{0, 8, 0}, {0, 0, 0}, {0, 1, 0}, {0, 2, 0}, {0, 4, 0}}},
+       {S("warp"), {{1, 0, 0}, {2, 0, 0}}},
+       {S("block"), {}}},
+      {S("dim0"), S("dim1"), S("dim2")});
+  EXPECT_EQ(expected, layout);
+
+  layout = getSM120DotScaledScaleLayout(
+      &ctx, /*shape=*/{4, 128, 2}, /*opIdx=*/1,
+      /*warpsPerCTA=*/{4, 1, 1}, cgaLayout);
+  expected = LinearLayout(
+      {{S("register"),
+        {{0, 0, 1}, {0, 8, 0}, {0, 16, 0}, {0, 32, 0}, {0, 64, 0}}},
+       {S("lane"),
+        {{0, 0, 0}, {0, 0, 0}, {0, 1, 0}, {0, 2, 0}, {0, 4, 0}}},
+       {S("warp"), {{1, 0, 0}, {2, 0, 0}}},
+       {S("block"), {}}},
+      {S("dim0"), S("dim1"), S("dim2")});
+  EXPECT_EQ(expected, layout);
+}
+
 //===----------------------------------------------------------------------===//
 // nvmmaSharedToLinearLayout TMA Mode Independence Tests
 //
