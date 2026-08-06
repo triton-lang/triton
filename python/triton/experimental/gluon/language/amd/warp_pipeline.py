@@ -5,49 +5,55 @@ class warp_pipeline_stage:
     """
     Marks a warp-pipeline stage inside a Gluon kernel.
 
-	When used inside @gl.kernel, each with amd.warp_pipeline_stage(...) block
-	semantically defines a distinct stage of a warp pipeline. All operations
-	inside the block belong to the same pipeline cluster and are intended to
-	execute as a unit relative to other stages.
+    Within a ``@gluon.jit`` kernel, each ``with gl.amd.warp_pipeline_stage(...)``
+    block defines a distinct stage of a warp pipeline. All operations
+	inside the block belong to the same pipeline cluster and execute as a unit
+    relative to other stages.
 
-	The optional string label (e.g., "load", "compute") names the pipeline
-	stage for identification and diagnostics, without affecting program
-	semantics.
+    The optional string ``label`` (for example, ``"load"`` or ``"compute"``)
+    identifies the stage in diagnostics without affecting program semantics.
 
-	An optional integer priority may be specified to express the relative
-	scheduling priority of the warp the stage belongs to. The priority applies
-	to the entire cluster. Valid values range from 0 (lowest) to 3 (highest)
-    as it's lowered to the operand of `s_setprio`. If unspecified, priority
-    resets to zero when any other stage in the loop uses explicit priority;
-    otherwise no priority instruction is emitted.
-    N.B., This is a performance hint to the hardware scheduler, and its effect
-	may vary depending on the dynamic interaction of instruction streams
-	across different warps. It is optional and should be used judiciously,
+    ``priority`` is an optional integer that expresses the scheduling priority
+    of the warp that executes the stage. The priority applies to the entire
+    cluster. Valid values range from 0 (lowest) to 3 (highest), matching the
+    operand range of ``s_setprio``. If omitted, the priority resets to zero
+    when another stage in the loop uses an explicit priority; otherwise, no
+    priority instruction is emitted.
+    N.B., This is a performance hint to the hardware scheduler. Its effect
+    depends on the dynamic interaction between warp instruction streams
+    across different warps. It is optional and should be used judiciously,
 	only when explicit scheduling guidance is beneficial.
 
-    Example: (only to show how to use, this example is not supposed to
-    represent the optimal way.)
+    The following schematic shows the stage boundaries; it is not intended as
+    an optimal kernel.
 
-    @gl.kernel
-    ...
+    **Example**
 
-    for k in gl.range(0, K, one):
+    .. code-block:: python
 
-        # Stage 0: prefetch tiles
-        with amd.warp_pipeline_stage("load", priority=3):
-            a = gl.amd.buffer_load(a_ptr, offs_a)
-            b = gl.amd.buffer_load(b_ptr, offs_b)
+        from triton.experimental import gluon
+        from triton.experimental.gluon import language as gl
 
-        # Stage 1: prepare MFMA operands
-        with amd.warp_pipeline_stage("prep"):
-            a_tile = a.load(layout=...)
-            b_tile = b.load(layout=...)
+        @gluon.jit
+        def warp_pipelined_kernel(a_ptr, b_ptr, c_ptr, K: gl.constexpr):
+            acc = 0.0
 
-        # Stage 2: compute
-        with amd.warp_pipeline_stage("compute", priority=0):
-            acc = gl.amd.mfma(a_tile, b_tile, acc)
-            offs_a += strideA
-            offs_b += strideB
+            for k in range(0, K):
+                # Stage 0: prefetch tiles.
+                with gl.amd.warp_pipeline_stage("load", priority=3):
+                    a = gl.load(a_ptr + k)
+                    b = gl.load(b_ptr + k)
+
+                # Stage 1: prepare MFMA operands.
+                with gl.amd.warp_pipeline_stage("prep"):
+                    a_tile = a  # Convert to the required dot-operand layout.
+                    b_tile = b  # Convert to the required dot-operand layout.
+
+                # Stage 2: compute.
+                with gl.amd.warp_pipeline_stage("compute", priority=0):
+                    acc += a_tile * b_tile
+
+            gl.store(c_ptr, acc)
     """
 
     __slots__ = ("label", "priority", "_semantic")
