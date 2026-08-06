@@ -62,7 +62,16 @@ rocprofiler_status_t agentQueryCallback(rocprofiler_agent_version_t version,
 }
 
 const rocprofiler_pc_sampling_configuration_t *pickPCSamplingConfig(
-    const std::vector<rocprofiler_pc_sampling_configuration_t> &configs) {
+    const std::vector<rocprofiler_pc_sampling_configuration_t> &configs,
+    std::optional<rocprofiler_pc_sampling_method_t> requestedMethod) {
+  if (requestedMethod) {
+    auto requested =
+        std::find_if(configs.begin(), configs.end(), [&](const auto &cfg) {
+          return cfg.method == *requestedMethod;
+        });
+    return requested == configs.end() ? nullptr : &*requested;
+  }
+
   auto stochastic =
       std::find_if(configs.begin(), configs.end(), [](const auto &cfg) {
         return cfg.method == ROCPROFILER_PC_SAMPLING_METHOD_STOCHASTIC;
@@ -77,6 +86,24 @@ const rocprofiler_pc_sampling_configuration_t *pickPCSamplingConfig(
   if (hostTrap != configs.end())
     return &*hostTrap;
   return nullptr;
+}
+
+bool parsePCSamplingMethod(
+    const std::string &value,
+    std::optional<rocprofiler_pc_sampling_method_t> &method) {
+  if (value.empty()) {
+    method = std::nullopt;
+    return true;
+  }
+  if (value == "stochastic") {
+    method = ROCPROFILER_PC_SAMPLING_METHOD_STOCHASTIC;
+    return true;
+  }
+  if (value == "host-trap") {
+    method = ROCPROFILER_PC_SAMPLING_METHOD_HOST_TRAP;
+    return true;
+  }
+  return false;
 }
 
 PCSamplingMetric::PCSamplingMetricKind mapNotIssuedReasonToStallMetric(
@@ -163,6 +190,14 @@ RocprofSDKPCSampling::~RocprofSDKPCSampling() = default;
 
 void RocprofSDKPCSampling::configure(rocprofiler_buffer_tracing_cb_t callback) {
   pcSamplingConfigurationFailureReason.clear();
+  auto methodStr = getStrEnv("PROTON_ROCPROFILER_PC_SAMPLING_METHOD");
+  std::optional<rocprofiler_pc_sampling_method_t> requestedMethod;
+  if (!parsePCSamplingMethod(methodStr, requestedMethod)) {
+    pcSamplingConfigurationFailureReason =
+        "invalid PROTON_ROCPROFILER_PC_SAMPLING_METHOD='" + methodStr +
+        "'; expected 'stochastic' or 'host-trap'";
+    return;
+  }
   auto intervalStr = getStrEnv("PROTON_PC_SAMPLING_INTERVAL");
   if (!intervalStr.empty()) {
     auto parsedInterval = parsePCSamplingInterval(intervalStr);
@@ -191,10 +226,15 @@ void RocprofSDKPCSampling::configure(rocprofiler_buffer_tracing_cb_t callback) {
   size_t unsupportedConfigCount = 0;
 
   for (auto &agent : agentsWithPCSampling) {
-    auto *picked = pickPCSamplingConfig(agent.configs);
+    auto *picked = pickPCSamplingConfig(agent.configs, requestedMethod);
     if (!picked) {
-      failureDetails << " agent " << agent.agentId.handle
-                     << " has no supported PC sampling method;";
+      failureDetails << " agent " << agent.agentId.handle;
+      if (requestedMethod)
+        failureDetails
+            << " does not support PROTON_ROCPROFILER_PC_SAMPLING_METHOD='"
+            << methodStr << "';";
+      else
+        failureDetails << " has no supported PC sampling method;";
       ++failedConfigCount;
       continue;
     }
