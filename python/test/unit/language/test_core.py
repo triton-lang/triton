@@ -3233,7 +3233,7 @@ def test_histogram_narrow_input_count_overflow(dtype, M, device):
 
 @pytest.mark.interpreter
 def test_histogram_out_of_range(device):
-    
+
     @triton.jit
     def histogram_kernel(x_ptr, z_ptr, M: tl.constexpr, N: tl.constexpr):
         offsets = tl.arange(0, M)
