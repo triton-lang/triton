@@ -3231,6 +3231,25 @@ def test_histogram_narrow_input_count_overflow(dtype, M, device):
     torch.testing.assert_close(z, expected)
 
 
+@pytest.mark.interpreter
+def test_histogram_out_of_range(device):
+    
+    @triton.jit
+    def histogram_kernel(x_ptr, z_ptr, M: tl.constexpr, N: tl.constexpr):
+        offsets = tl.arange(0, M)
+        x = tl.load(x_ptr + offsets)
+        z = tl.histogram(x, N)
+        tl.store(z_ptr + tl.arange(0, N), z)
+
+    N = 4
+    x = torch.tensor([0, 1, 2, 3, N, N, N + 1, -1], device=device, dtype=torch.int32)
+    z = torch.empty(N, device=device, dtype=torch.int32)
+
+    histogram_kernel[(1, )](x, z, M=x.numel(), N=N)
+    expected = torch.tensor([1, 1, 1, 1], device=device, dtype=torch.int32)
+    torch.testing.assert_close(z, expected)
+
+
 # ------------------------
 # test histogram with mask
 # ------------------------
