@@ -1167,6 +1167,81 @@ def test_tma_store(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+@pytest.mark.parametrize("RELEASE", [False, True], ids=["missing-release", "explicit-release"])
+def test_tcgen5_commit_does_not_publish_distributed_writes(RELEASE, device, run_wrapper, monkeypatch):
+    if run_wrapper and not RELEASE:
+        result = run_in_process(test_tcgen5_commit_does_not_publish_distributed_writes,
+                                (RELEASE, device, False, monkeypatch))
+        assert_expected_cuda_failure(result.exc)
+        assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def producer(unrelated, a, b, acc, warmup, completion, publication, layout: ttgl.constexpr,
+                 RELEASE: ttgl.constexpr):
+        blackwell.tcgen05_mma(a, b, acc, use_acc=False, mbarriers=[warmup])
+        mbarrier.wait(warmup, phase=0)
+        cta = ttgl.inline_asm_elementwise("mov.u32 $0, %cluster_ctarank;", "=r", [], dtype=ttgl.int32, is_pure=True,
+                                          pack=1)
+        if cta == 0:
+            unrelated.store(ttgl.full([XBLOCK], 42, ttgl.int32, layout))
+        if RELEASE:
+            ttgl.barrier(cluster=True)
+            mbarrier.arrive(publication, count=1)
+        blackwell.tcgen05_commit(completion, descs=[a, b])
+
+    @gluon.jit
+    def consumer(output, unrelated, completion, publication, layout: ttgl.constexpr, RELEASE: ttgl.constexpr):
+        mbarrier.wait(completion, phase=0)
+        if RELEASE:
+            mbarrier.wait(publication, phase=0)
+        offsets = ttgl.arange(0, XBLOCK, layout)
+        ttgl.store(output + offsets, unrelated.load(layout))
+
+    @gluon.jit
+    def kernel(output, RELEASE: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=((0, ), ))
+        unrelated_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=((1, ), ))
+        a_layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([256, 128], ttgl.float16,
+                                                                          cga_layout=((1, 0), ))
+        b_layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([128, 128], ttgl.float16,
+                                                                          cga_layout=((0, 1), ))
+        acc_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([128, 128], col_stride=1, cga_layout=((1, 0), ),
+                                                                  two_ctas=True)
+
+        unrelated = ttgl.allocate_shared_memory(ttgl.int32, [XBLOCK], unrelated_layout)
+        a = ttgl.allocate_shared_memory(ttgl.float16, [256, 128], a_layout)
+        b = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], b_layout)
+        acc = blackwell.allocate_tensor_memory(ttgl.float32, [256, 128], acc_layout)
+        warmup = mbarrier.allocate_mbarrier()
+        completion = mbarrier.allocate_mbarrier()
+        publication = mbarrier.allocate_mbarrier()
+        mbarrier.init(warmup, count=1)
+        mbarrier.init(completion, count=1)
+        if RELEASE:
+            mbarrier.init(publication, count=1)
+
+        ttgl.warp_specialize([
+            (producer, (unrelated, a, b, acc, warmup, completion, publication, layout, RELEASE)),
+            (consumer, (output, unrelated, completion, publication, layout, RELEASE)),
+        ], [4], [32])
+
+        mbarrier.invalidate(warmup)
+        mbarrier.invalidate(completion)
+        if RELEASE:
+            mbarrier.invalidate(publication)
+
+    output = torch.empty((XBLOCK.value, ), device=device, dtype=torch.int32)
+    kernel[(1, )](output, RELEASE=RELEASE, num_warps=4, num_ctas=2)
+    if RELEASE:
+        torch.testing.assert_close(output, torch.full_like(output, 42))
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 @pytest.mark.parametrize("MEM_ACCESS_KIND", ["tma_cp", "local_store", "tmem_load", "tmem_store"])
 @pytest.mark.parametrize("TWO_CTAS", [False, True])

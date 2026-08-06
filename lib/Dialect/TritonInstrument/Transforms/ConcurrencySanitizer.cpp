@@ -1049,6 +1049,12 @@ private:
               b, bufferMask, baseThread, pred, memType, opInfo->commitKind, op);
         }
       }
+      bool tensorCore = isTensorCoreOp(op);
+      if (tensorCore || effect.rw == RW::Write) {
+        funcBuilder.createUpdateTensorCoreAccessesCall(
+            b, bufferMask, baseThread, effect.rw, tensorCore, pred, memType, op,
+            effectCTAs);
+      }
     }
     for (const auto &barrierInfo : opInfo->barriers) {
       Value barrier = barrierInfo.barrier;
@@ -1067,6 +1073,13 @@ private:
         }
         funcBuilder.createTrackProxyAccessesCall(
             b, barrier, baseThread, combinedPred, op, recipientCTAs);
+      } else if (barrierInfo.trackingMode ==
+                 MemEffectsOpInfo::BarrierTrackingMode::TensorCore) {
+        for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
+          funcBuilder.createTrackVisibleAccessesCall(
+              b, barrier, thread, combinedPred, memType, op, recipientCTAs,
+              /*tensorCoreOnly=*/true);
+        }
       } else if (barrierInfo.trackingMode ==
                  MemEffectsOpInfo::BarrierTrackingMode::EffectWrites) {
         for (auto [effect, materialized] :

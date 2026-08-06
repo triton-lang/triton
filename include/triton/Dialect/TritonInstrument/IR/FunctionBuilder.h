@@ -154,12 +154,21 @@ public:
                                    uint64_t threadMask, Value pred,
                                    MemType memType, Operation *insertPoint,
                                    Value effectCTAs);
+  // updateTensorCoreAccesses: record tensor-core reads and writes, and clear
+  // obsolete tensor-core provenance whenever any operation writes a buffer.
+  void createUpdateTensorCoreAccessesCall(ImplicitLocOpBuilder &b,
+                                          Value bufferMask, int baseThread,
+                                          RW rw, bool isTensorCore, Value pred,
+                                          MemType memType,
+                                          Operation *insertPoint,
+                                          Value effectCTAs);
   // trackVisibleAccesses: snapshot the available read and write visibility
-  // frontiers into their independent barrier tracking tables.
+  // frontiers into their independent barrier tracking tables. Tensor-core
+  // commits include only accesses recorded for eligible tensor-core operations.
   void createTrackVisibleAccessesCall(ImplicitLocOpBuilder &b, Value mbar,
                                       int thread, Value pred, MemType memType,
-                                      Operation *insertPoint,
-                                      Value barrierCTAs);
+                                      Operation *insertPoint, Value barrierCTAs,
+                                      bool tensorCoreOnly = false);
   // trackBarrierWriteForBuffer: mark a specific buffer as tracked by a
   // barrier in the write-tracking table.
   void createTrackBarrierWriteForBufferCall(ImplicitLocOpBuilder &b, Value mbar,

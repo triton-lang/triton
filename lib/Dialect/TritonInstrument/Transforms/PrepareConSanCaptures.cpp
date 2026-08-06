@@ -49,6 +49,17 @@ bool hasBarriers(ModuleOp mod) {
   return result;
 }
 
+bool hasTensorCoreOps(ModuleOp mod) {
+  return mod
+      .walk([](Operation *op) {
+        return isa<ttng::MMAv5OpInterface, ttng::TCGen5CommitOp,
+                   ttng::TMEMCopyOp>(op)
+                   ? WalkResult::interrupt()
+                   : WalkResult::advance();
+      })
+      .wasInterrupted();
+}
+
 bool hasCpAsync(ModuleOp mod) {
   bool result = false;
   mod.walk([&](Operation *op) {
@@ -96,13 +107,14 @@ public:
 
     int numActiveMemTypes = (hasSharedMemoryBuffers(mod) ? 1 : 0) +
                             (hasTensorMemoryBuffers(mod) ? 1 : 0);
+    bool hasMBarriers = hasBarriers(mod);
     // NVIDIA inserts a terminal cluster barrier after this pass.
     bool hasClusterBarriers = target == "nvidia" && ttg::lookupNumCTAs(mod) > 1;
     int totalCaptures = tti::estimateConSanCaptureCount(
-        numActiveMemTypes, hasBarriers(mod), hasClusterBarriers,
+        numActiveMemTypes, hasMBarriers, hasClusterBarriers,
         getNumCommitKinds(mod, *hooks),
-        hasSharedMemoryBuffers(mod) &&
-            hooks->needsAsyncProxyFenceTracking(mod));
+        hasSharedMemoryBuffers(mod) && hooks->needsAsyncProxyFenceTracking(mod),
+        hasMBarriers && hasTensorCoreOps(mod));
     int extraBytes = totalCaptures * tti::kCaptureSizeBytes;
 
     auto i32Ty = IntegerType::get(mod.getContext(), 32);
