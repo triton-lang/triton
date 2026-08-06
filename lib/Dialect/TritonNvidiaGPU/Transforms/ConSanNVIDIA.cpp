@@ -240,14 +240,15 @@ public:
     }
 
     if (!namedOperands.empty()) {
-      auto effects = std::move(info->operandEffects);
+      SmallVector<MemEffectsOpInfo::Effects> effects;
       for (auto [value, name] : namedOperands)
-        for (auto &effect : effects)
-          if (effect.buf == value) {
-            effect.operandName = name.str();
-            info->operandEffects.push_back(std::move(effect));
+        for (auto it = info->operandEffects.begin();
+             it != info->operandEffects.end(); ++it)
+          if (it->buf == value) {
+            effects.emplace_back(*it).operandName = name.str();
             break;
           }
+      info->operandEffects = std::move(effects);
     }
     return info;
   }
