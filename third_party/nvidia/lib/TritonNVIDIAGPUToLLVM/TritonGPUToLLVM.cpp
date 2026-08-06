@@ -309,7 +309,14 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
       isa<ttng::WaitBarrierOp>(after))
     return true;
 
-  return false;
+  // Identical same-width commutative atomics can be freely reordered.
+  auto beforeAtomic = dyn_cast<triton::gpu::LocalAtomicScatterRMWOp>(before);
+  auto afterAtomic = dyn_cast<triton::gpu::LocalAtomicScatterRMWOp>(after);
+  return beforeAtomic && afterAtomic && beforeAtomic.isCommutative() &&
+         afterAtomic.isCommutative() &&
+         beforeAtomic.getAtomicRmwOp() == afterAtomic.getAtomicRmwOp() &&
+         beforeAtomic.getDst().getType().getElementType() ==
+             afterAtomic.getDst().getType().getElementType();
 }
 
 } // namespace triton

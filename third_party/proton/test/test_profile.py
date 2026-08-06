@@ -1447,7 +1447,12 @@ def test_scope_multiple_threads(tmp_path: pathlib.Path, device: str):
 
 
 @pytest.mark.skipif(not is_cuda() and not is_hip(), reason="Only CUDA/HIP backend supports NVTX profiling")
-@pytest.mark.parametrize("enable_nvtx", [None, True, False])
+@pytest.mark.parametrize("enable_nvtx", [
+    None,
+    True,
+    pytest.param(False, marks=pytest.mark.skipif(is_hip(),
+                                                 reason="ROCm profiling intermittently omits kernel metrics")),
+])
 def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path, device: str):
     if enable_nvtx is not None:
         fresh_knobs.proton.enable_nvtx = enable_nvtx
@@ -1839,11 +1844,10 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
         assert scope_b_frame["metrics"]["sum"] == 40.0
 
     assert len(data) > 1
-    cuda_devices = data[1].get("CUDA", {})
+    cuda_devices = data[1].get("HIP", {}) if is_hip() else data[1].get("CUDA", {})
     assert len(cuda_devices) >= 2
 
 
-@pytest.mark.skipif(not is_cuda(), reason="AMD is broken for now and will be fixed")
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
 def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, device: str):
@@ -1880,7 +1884,7 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
     assert num_scopes == 5000
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+@_skip_cudagraph_test
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
 def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_size, device: str):

@@ -80,9 +80,9 @@ Operation *wrapInMaskOp(RewriterBase &rewriter, Operation *op, Value pred);
 // lowering to predicated operations
 void resolveMaskOp(ModuleOp moduleOp);
 
-// Return true if the given ForOp has the attribute
+// Return true if the given loop has the attribute
 // `tt.disallow_acc_multi_buffer` set to true.
-bool getDisallowAccMultiBuffer(scf::ForOp forOp);
+bool getDisallowAccMultiBuffer(LoopLikeOpInterface loop);
 
 // Return the definition of the given value. If the value is a loop-carried
 // dependency, return the definition and the distance to it.

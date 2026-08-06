@@ -140,6 +140,44 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32
 
 // -----
 
+#broadcasted_registers = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func @gsan_canonical_register_accesses
+  // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<1 x i64>, array<1 x i8>)>
+  // CHECK: %[[LOAD_COUNT:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK: llvm.call @__triton_gsan_load_tensor(%{{.*}}, %{{.*}}, %[[LOAD_COUNT]], %{{.*}}, %{{.*}}, %{{.*}})
+  // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<1 x i64>, array<1 x i8>)>
+  // CHECK: %[[STORE_COUNT:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK: llvm.call @__triton_gsan_store_tensor(%{{.*}}, %{{.*}}, %[[STORE_COUNT]], %{{.*}}, %{{.*}}, %{{.*}})
+  tt.func @gsan_canonical_register_accesses(
+      %ptrs: tensor<1x!tt.ptr<i32>, #broadcasted_registers>,
+      %vals: tensor<1xi32, #broadcasted_registers>,
+      %mask: tensor<1xi1, #broadcasted_registers>) {
+    %loaded = tt.load %ptrs, %mask : tensor<1x!tt.ptr<i32>, #broadcasted_registers>
+    tt.store %ptrs, %vals, %mask : tensor<1x!tt.ptr<i32>, #broadcasted_registers>
+    tt.return
+  }
+
+  // CHECK-LABEL: llvm.func @gsan_distinct_register_accesses
+  // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<4 x i64>, array<4 x i8>)>
+  // CHECK: %[[DISTINCT_LOAD_COUNT:.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK: llvm.call @__triton_gsan_load_tensor(%{{.*}}, %{{.*}}, %[[DISTINCT_LOAD_COUNT]], %{{.*}}, %{{.*}}, %{{.*}})
+  // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<4 x i64>, array<4 x i8>)>
+  // CHECK: %[[DISTINCT_STORE_COUNT:.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK: llvm.call @__triton_gsan_store_tensor(%{{.*}}, %{{.*}}, %[[DISTINCT_STORE_COUNT]], %{{.*}}, %{{.*}}, %{{.*}})
+  tt.func @gsan_distinct_register_accesses(
+      %ptrs: tensor<128x!tt.ptr<i32>, #broadcasted_registers>,
+      %vals: tensor<128xi32, #broadcasted_registers>,
+      %mask: tensor<128xi1, #broadcasted_registers>) {
+    %loaded = tt.load %ptrs, %mask : tensor<128x!tt.ptr<i32>, #broadcasted_registers>
+    tt.store %ptrs, %vals, %mask : tensor<128x!tt.ptr<i32>, #broadcasted_registers>
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.target" = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: llvm.func @gsan_atomic_broadcast_one_cta
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
