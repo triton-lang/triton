@@ -273,11 +273,11 @@ public:
     StalledSleeping,
     StalledSelected,
     // AMD stall reasons (from rocprofiler-sdk pc_sampling.h)
-    StalledAMDALUDependency,
-    StalledAMDWaitcnt,
-    StalledAMDInternalInstruction,
-    StalledAMDArbiterWinExStall,
-    StalledAMDOtherWait,
+    StalledALUDependency,
+    StalledWaitcnt,
+    StalledInternalInstruction,
+    StalledArbiterWinExStall,
+    StalledOtherWait,
     Count,
   };
 
@@ -330,11 +330,11 @@ public:
       "stalled_sleeping",
       "stalled_selected",
       // AMD
-      "stalled_amd_alu_dependency",
-      "stalled_amd_waitcnt",
-      "stalled_amd_internal_instruction",
-      "stalled_amd_arbiter_win_ex_stall",
-      "stalled_amd_other_wait",
+      "stalled_alu_dependency",
+      "stalled_waitcnt",
+      "stalled_internal_instruction",
+      "stalled_arbiter_win_ex_stall",
+      "stalled_other_wait",
   };
   const static inline std::string name = "PCSamplingMetric";
 };
