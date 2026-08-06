@@ -130,6 +130,40 @@
              
   <section id="triton-experimental-gluon-language-amd-cdna5-tdm-async-load">
 <h1>triton.experimental.gluon.language.amd.cdna5.tdm.async_load<a class="headerlink" href="#triton-experimental-gluon-language-amd-cdna5-tdm-async-load" title="Link to this heading"></a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.cdna5.tdm.async_load">
+<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.cdna5.tdm.</span></span><span class="sig-name descname"><span class="pre">async_load</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">src</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor"><span class="pre">tensor_descriptor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">offsets</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">ttgl.constexpr</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ttgl.tensor</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dest</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="triton.experimental.gluon.language.shared_memory_descriptor.html#triton.experimental.gluon.language.shared_memory_descriptor" title="triton.experimental.gluon.language.shared_memory_descriptor"><span class="pre">shared_memory_descriptor</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pred</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mbarrier</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="triton.experimental.gluon.language.shared_memory_descriptor.html#triton.experimental.gluon.language.shared_memory_descriptor" title="triton.experimental.gluon.language.shared_memory_descriptor"><span class="pre">shared_memory_descriptor</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">warp_used_hint</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_modifier</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna5.tdm.async_load" title="Link to this definition"></a></dt>
+<dd><p>Load a block of tensor specified in tensor descriptor from global memory to shared memory asynchronously.</p>
+<p>This op expects a prior <code class="docutils literal notranslate"><span class="pre">update_tensor_descriptor</span></code> to position the
+descriptor for the load offsets and bounds.  Doing this explicitly lets the
+developer control when and where the descriptor update happens, which has
+performance implications for downstream code generation.  For convenience,
+<code class="docutils literal notranslate"><span class="pre">offsets</span></code> (and optionally <code class="docutils literal notranslate"><span class="pre">pred</span></code>) may be passed here, in which case an
+<code class="docutils literal notranslate"><span class="pre">update_tensor_descriptor</span></code> is emitted right before the load.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>src</strong> (<a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor"><em>tensor_descriptor</em></a>) – the source tensor descriptor.</p></li>
+<li><p><strong>offsets</strong> (<em>List</em><em>[</em><em>int</em><em>]</em><em>, </em><em>optional</em>) – if given, the offsets from the base
+pointer used to position the descriptor before the load.</p></li>
+<li><p><strong>dest</strong> (<a class="reference internal" href="triton.experimental.gluon.language.shared_memory_descriptor.html#triton.experimental.gluon.language.shared_memory_descriptor" title="triton.experimental.gluon.language.shared_memory_descriptor"><em>shared_memory_descriptor</em></a>) – the shared memory destination to store the loaded data.</p></li>
+<li><p><strong>pred</strong> (<em>bool</em><em>, </em><em>optional</em>) – if given, predicate to enable or disable the load.</p></li>
+<li><p><strong>mbarrier</strong> (<a class="reference internal" href="triton.experimental.gluon.language.shared_memory_descriptor.html#triton.experimental.gluon.language.shared_memory_descriptor" title="triton.experimental.gluon.language.shared_memory_descriptor"><em>shared_memory_descriptor</em></a><em>, </em><em>optional</em>) – The barrier object to signal “arrive” on.</p></li>
+<li><p><strong>warp_used_hint</strong> (<em>int</em><em>, </em><em>optional</em>) – Bitmask selecting the active warp
+subset for descriptor layout (bit <code class="docutils literal notranslate"><span class="pre">n</span></code> =&gt; warp <code class="docutils literal notranslate"><span class="pre">n</span></code>).  Doesn’t
+affect the data in <code class="docutils literal notranslate"><span class="pre">dest</span></code>, only the work split.
+The number of active warps must be a power of two, and the active
+warps must follow a regular bit pattern for efficient lowering.
+Examples: <code class="docutils literal notranslate"><span class="pre">0b00001111</span></code> (warps 0..3), <code class="docutils literal notranslate"><span class="pre">0b11110000</span></code> (warps
+4..7), <code class="docutils literal notranslate"><span class="pre">0b01010101</span></code> (warps 0,2,4,6).  Omit / <code class="docutils literal notranslate"><span class="pre">None</span></code> = all
+warps participate; explicit <code class="docutils literal notranslate"><span class="pre">0</span></code> and other invalid hints are
+rejected by the verifier.</p></li>
+<li><p><strong>cache_modifier</strong> (<em>str</em><em>, </em><em>optional</em>) – Cache behavior.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
 </section>
 
 

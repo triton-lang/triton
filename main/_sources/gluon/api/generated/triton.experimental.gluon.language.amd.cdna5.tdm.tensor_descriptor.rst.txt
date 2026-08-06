@@ -1,9 +1,9 @@
 triton.experimental.gluon.language.amd.cdna5.tdm.tensor\_descriptor
 ===================================================================
 
-.. currentmodule:: triton.experimental.gluon.language.amd.cdna5
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna5.tdm
 
-.. autoclass:: tdm.tensor_descriptor
+.. autoclass:: tensor_descriptor
 
    
    .. automethod:: __init__
@@ -13,7 +13,7 @@ triton.experimental.gluon.language.amd.cdna5.tdm.tensor\_descriptor
 
    .. autosummary::
    
-      ~tdm.tensor_descriptor.__init__
+      ~tensor_descriptor.__init__
    
    
 
@@ -23,13 +23,13 @@ triton.experimental.gluon.language.amd.cdna5.tdm.tensor\_descriptor
 
    .. autosummary::
    
-      ~tdm.tensor_descriptor.block_shape
-      ~tdm.tensor_descriptor.block_type
-      ~tdm.tensor_descriptor.dtype
-      ~tdm.tensor_descriptor.layout
-      ~tdm.tensor_descriptor.handle
-      ~tdm.tensor_descriptor.shape
-      ~tdm.tensor_descriptor.strides
-      ~tdm.tensor_descriptor.type
+      ~tensor_descriptor.block_shape
+      ~tensor_descriptor.block_type
+      ~tensor_descriptor.dtype
+      ~tensor_descriptor.layout
+      ~tensor_descriptor.handle
+      ~tensor_descriptor.shape
+      ~tensor_descriptor.strides
+      ~tensor_descriptor.type
    
    

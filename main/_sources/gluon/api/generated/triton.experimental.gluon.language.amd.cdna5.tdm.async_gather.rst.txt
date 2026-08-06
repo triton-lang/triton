@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.amd.cdna5.tdm.async\_gather
+==============================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna5.tdm
+
+.. autofunction:: async_gather

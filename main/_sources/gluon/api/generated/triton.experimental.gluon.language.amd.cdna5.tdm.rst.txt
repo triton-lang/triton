@@ -18,7 +18,9 @@
    async_wait
    make_tensor_descriptor
    prefetch
+   async_store
    async_scatter
+   async_gather
 
 
 

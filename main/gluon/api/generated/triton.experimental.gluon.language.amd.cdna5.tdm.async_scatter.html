@@ -28,8 +28,8 @@
     <script src="../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
-    <link rel="next" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor" href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.html" />
-    <link rel="prev" title="triton.experimental.gluon.language.amd.cdna5.tdm.prefetch" href="triton.experimental.gluon.language.amd.cdna5.tdm.prefetch.html" /> 
+    <link rel="next" title="triton.experimental.gluon.language.amd.cdna5.tdm.async_gather" href="triton.experimental.gluon.language.amd.cdna5.tdm.async_gather.html" />
+    <link rel="prev" title="triton.experimental.gluon.language.amd.cdna5.tdm.async_store" href="triton.experimental.gluon.language.amd.cdna5.tdm.async_store.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -130,14 +130,40 @@
              
   <section id="triton-experimental-gluon-language-amd-cdna5-tdm-async-scatter">
 <h1>triton.experimental.gluon.language.amd.cdna5.tdm.async_scatter<a class="headerlink" href="#triton-experimental-gluon-language-amd-cdna5-tdm-async-scatter" title="Link to this heading"></a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.cdna5.tdm.async_scatter">
+<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.cdna5.tdm.</span></span><span class="sig-name descname"><span class="pre">async_scatter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">desc</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor"><span class="pre">tensor_descriptor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">dst_row_indices</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttgl.tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">src</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="triton.experimental.gluon.language.shared_memory_descriptor.html#triton.experimental.gluon.language.shared_memory_descriptor" title="triton.experimental.gluon.language.shared_memory_descriptor"><span class="pre">shared_memory_descriptor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">mbarrier</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="triton.experimental.gluon.language.shared_memory_descriptor.html#triton.experimental.gluon.language.shared_memory_descriptor" title="triton.experimental.gluon.language.shared_memory_descriptor"><span class="pre">shared_memory_descriptor</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna5.tdm.async_scatter" title="Link to this definition"></a></dt>
+<dd><p>Scatter data from shared memory to non-contiguous rows in global memory asynchronously.</p>
+<p>This operation uses TDM scatter mode to write data to non-contiguous rows in global memory.
+Unlike async_store which writes to contiguous rows, scatter allows writing to arbitrary
+rows specified by the dst_row_indices tensor.</p>
+<p>The dtype of dst_row_indices determines the index size:
+- int16: up to 16 rows can be scattered per TDM instruction
+- int32: up to 8 rows can be scattered per TDM instruction
+If more rows are needed, multiple TDM instructions will be automatically issued.</p>
+<p>The column offset is carried by the descriptor: position it beforehand with
+<code class="docutils literal notranslate"><span class="pre">update_tensor_descriptor(desc,</span> <span class="pre">add_offsets=[0,</span> <span class="pre">col])</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>desc</strong> (<a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor"><em>tensor_descriptor</em></a>) – the destination tensor descriptor. Must be 2D and positioned
+(column via update_tensor_descriptor).</p></li>
+<li><p><strong>dst_row_indices</strong> (<a class="reference internal" href="triton.experimental.gluon.language.tensor.html#triton.experimental.gluon.language.tensor" title="triton.experimental.gluon.language.tensor"><em>tensor</em></a>) – 1D tensor of row indices (int16 or int32) in the destination tensor.</p></li>
+<li><p><strong>src</strong> (<a class="reference internal" href="triton.experimental.gluon.language.shared_memory_descriptor.html#triton.experimental.gluon.language.shared_memory_descriptor" title="triton.experimental.gluon.language.shared_memory_descriptor"><em>shared_memory_descriptor</em></a>) – the shared memory source containing data to scatter. Must be 2D.</p></li>
+<li><p><strong>mbarrier</strong> (<a class="reference internal" href="triton.experimental.gluon.language.shared_memory_descriptor.html#triton.experimental.gluon.language.shared_memory_descriptor" title="triton.experimental.gluon.language.shared_memory_descriptor"><em>shared_memory_descriptor</em></a><em>, </em><em>optional</em>) – The barrier object to signal “arrive” on.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
 </section>
 
 
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="triton.experimental.gluon.language.amd.cdna5.tdm.prefetch.html" class="btn btn-neutral float-left" title="triton.experimental.gluon.language.amd.cdna5.tdm.prefetch" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.html" class="btn btn-neutral float-right" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="triton.experimental.gluon.language.amd.cdna5.tdm.async_store.html" class="btn btn-neutral float-left" title="triton.experimental.gluon.language.amd.cdna5.tdm.async_store" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="triton.experimental.gluon.language.amd.cdna5.tdm.async_gather.html" class="btn btn-neutral float-right" title="triton.experimental.gluon.language.amd.cdna5.tdm.async_gather" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

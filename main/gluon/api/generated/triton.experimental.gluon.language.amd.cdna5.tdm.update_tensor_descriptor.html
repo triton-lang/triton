@@ -130,6 +130,57 @@
              
   <section id="triton-experimental-gluon-language-amd-cdna5-tdm-update-tensor-descriptor">
 <h1>triton.experimental.gluon.language.amd.cdna5.tdm.update_tensor_descriptor<a class="headerlink" href="#triton-experimental-gluon-language-amd-cdna5-tdm-update-tensor-descriptor" title="Link to this heading"></a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.cdna5.tdm.update_tensor_descriptor">
+<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.cdna5.tdm.</span></span><span class="sig-name descname"><span class="pre">update_tensor_descriptor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">desc</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor"><span class="pre">tensor_descriptor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">add_offsets</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">constexpr</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference internal" href="../../../python-api/generated/triton.language.tensor.html#triton.language.tensor" title="triton.language.core.tensor"><span class="pre">tensor</span></a><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">set_bounds</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">constexpr</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference internal" href="../../../python-api/generated/triton.language.tensor.html#triton.language.tensor" title="triton.language.core.tensor"><span class="pre">tensor</span></a><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pred</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">clamp_bounds</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor"><span class="pre">tensor_descriptor</span></a></span></span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna5.tdm.update_tensor_descriptor" title="Link to this definition"></a></dt>
+<dd><p>Update selected fields of a TDM descriptor; return a new descriptor SSA value.</p>
+<p>Each parameter is independently optional; only the fields the caller
+names are written.  Everything else is inherited from the input
+descriptor.</p>
+<p>NOTE: Unlike the standard tensor-descriptor mental model, <cite>add_offsets</cite>
+here moves the tile position only.  It does NOT update the descriptor’s
+bounds.  If the loop crosses an OOB boundary, you must also pass
+<cite>set_bounds</cite> explicitly, or pass <cite>clamp_bounds=True</cite> to derive the OOB
+extent from <cite>add_offsets</cite>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>desc</strong> (<a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor"><em>tensor_descriptor</em></a>) – the input descriptor.</p></li>
+<li><p><strong>add_offsets</strong> (<em>List</em><em>[</em><em>int</em><em>]</em><em>, </em><em>optional</em>) – per-dim deltas in element units
+that move the tile position.  Does not touch the bounds.</p></li>
+<li><p><strong>set_bounds</strong> (<em>List</em><em>[</em><em>int</em><em>]</em><em>, </em><em>optional</em>) – per-dim absolute rewrite of the
+descriptor’s bounds.  Use to install OOB extent at a peel
+epilogue.</p></li>
+<li><p><strong>pred</strong> (<em>int</em><em>, </em><em>optional</em>) – set the descriptor’s predicate.</p></li>
+<li><p><strong>clamp_bounds</strong> (<em>bool</em><em>, </em><em>optional</em>) – if True, also shrink the descriptor’s
+bounds by <cite>add_offsets</cite> (tensor_dim[i] = max(0, tensor_dim[i] -
+add_offsets[i])) to derive the advanced tile’s OOB extent.
+Requires <cite>add_offsets</cite>; mutually exclusive with <cite>set_bounds</cite>.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>a new descriptor SSA value with the requested
+fields rewritten.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor">tensor_descriptor</a></p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>ValueError</strong> – if no parameter is provided (no-op updates are forbidden).</p>
+</dd>
+</dl>
+<p class="rubric">Example</p>
+<p># K-loop interior: bump tile position only
+d = tdm.update_tensor_descriptor(d, add_offsets=[0, BLOCK_K])</p>
+<p># Prologue: position at first tile + set the predicate
+d = tdm.update_tensor_descriptor(d, add_offsets=[pid_m * BLOCK_M, 0],</p>
+<blockquote>
+<div><p>pred=do_load)</p>
+</div></blockquote>
+<p># Peel epilogue: install real OOB extent for the partial last tile
+d = tdm.update_tensor_descriptor(d, set_bounds=[M - pid_m * BLOCK_M, K - k_main])</p>
+</dd></dl>
+
 </section>
 
 

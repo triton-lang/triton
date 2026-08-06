@@ -130,6 +130,19 @@
              
   <section id="triton-experimental-gluon-language-amd-cdna5-async-copy-wait-group">
 <h1>triton.experimental.gluon.language.amd.cdna5.async_copy.wait_group<a class="headerlink" href="#triton-experimental-gluon-language-amd-cdna5-async-copy-wait-group" title="Link to this heading"></a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.cdna5.async_copy.wait_group">
+<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.cdna5.async_copy.</span></span><span class="sig-name descname"><span class="pre">wait_group</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">num_outstanding</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna5.async_copy.wait_group" title="Link to this definition"></a></dt>
+<dd><p>Wait for outstanding commit groups. It will block until the number of
+outstanding commit groups is less than or equal to <cite>num_outstanding</cite>. Note that uncommited
+async operations will be waited upon even if <cite>num_outstanding</cite> is 0.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>num_outstanding</strong> (<em>int</em>) – The number of outstanding commit groups to wait for. Defaults to 0.</p>
+</dd>
+</dl>
+</dd></dl>
+
 </section>
 
 

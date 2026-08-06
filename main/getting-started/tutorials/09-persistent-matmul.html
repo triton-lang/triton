@@ -136,11 +136,8 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># FP8</span>
 python<span class="w"> </span><span class="m">09</span>-persistent-matmul.py<span class="w"> </span>--prec<span class="w"> </span>fp8<span class="w"> </span>--K_range<span class="w"> </span><span class="m">128</span><span class="w"> </span><span class="m">1024</span><span class="w"> </span>--K_step<span class="w"> </span><span class="m">128</span>
 
-<span class="c1"># FP16</span>
+<span class="c1"># FP16 (includes CLC variants on supported devices)</span>
 python<span class="w"> </span><span class="m">09</span>-persistent-matmul.py<span class="w"> </span>--prec<span class="w"> </span>fp16<span class="w"> </span>--K_range<span class="w"> </span><span class="m">128</span><span class="w"> </span><span class="m">1024</span><span class="w"> </span>--K_step<span class="w"> </span><span class="m">128</span>
-
-<span class="c1"># FP16 with Cluster Launch Control</span>
-python<span class="w"> </span><span class="m">09</span>-persistent-matmul.py<span class="w"> </span>--prec<span class="w"> </span>fp16<span class="w"> </span>--clc
 </pre></div>
 </div>
 <p>Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.</p>
@@ -151,10 +148,10 @@ python<span class="w"> </span><span class="m">09</span>-persistent-matmul.py<spa
   cuBLAS: ✅
   Persistent: ...
   Persistent: ✅
-  CLC TMA: ...
-  CLC TMA: ⭕
   TMA (warp_specialize=False): ...
   TMA (warp_specialize=False): ⭕
+  CLC TMA (warp_specialize=False): ...
+  CLC TMA (warp_specialize=False): ⭕
   TMA Persistent (warp_specialize=False): ...
   TMA Persistent (warp_specialize=False): ⭕
   Tensor Descriptor Persistent (warp_specialize=False): ...
@@ -167,10 +164,10 @@ M=8192, N=8192, K=512, verification naive vs:
   cuBLAS: ✅
   Persistent: ...
   Persistent: ✅
-  CLC TMA: ...
-  CLC TMA: ⭕
   TMA (warp_specialize=False): ...
   TMA (warp_specialize=False): ⭕
+  CLC TMA (warp_specialize=False): ...
+  CLC TMA (warp_specialize=False): ⭕
   TMA Persistent (warp_specialize=False): ...
   TMA Persistent (warp_specialize=False): ⭕
   Tensor Descriptor Persistent (warp_specialize=False): ...
@@ -184,13 +181,13 @@ Benchmarking naive: ...
 Benchmarking naive: done
 Benchmarking persistent: ...
 Benchmarking persistent: done
-nan 15750.205 ROOT
-├─ 176.661 3889.900 cuBLAS [M=8192, N=8192, K=512]
-│  └─ nan 3889.900 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-├─ 175.219 3921.927 matmul_kernel [M=8192, N=8192, K=512]
-├─ 169.458 4055.257 matmul_kernel_persistent [M=8192, N=8192, K=512]
-└─ 176.970 3883.121 torch [M=8192, N=8192, K=512]
-   └─ nan 3883.121 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+nan 15820.379 ROOT
+├─ 175.900 3906.732 cuBLAS [M=8192, N=8192, K=512]
+│  └─ nan 3906.732 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+├─ 174.458 3939.024 matmul_kernel [M=8192, N=8192, K=512]
+├─ 168.598 4075.937 matmul_kernel_persistent [M=8192, N=8192, K=512]
+└─ 176.263 3898.686 torch [M=8192, N=8192, K=512]
+   └─ nan 3898.686 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 </pre></div>
 </div>
 <div class="line-block">
@@ -632,7 +629,7 @@ nan 15750.205 ROOT
 <span class="c1"># CLC scheduling loop.</span>
 <span class="nd">@triton</span><span class="o">.</span><span class="n">autotune</span><span class="p">(</span>
     <span class="n">configs</span><span class="o">=</span><span class="n">matmul_tma_persistent_get_configs</span><span class="p">(</span><span class="n">pre_hook</span><span class="o">=</span><span class="n">matmul_tma_set_block_size_hook</span><span class="p">),</span>
-    <span class="n">key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;M&quot;</span><span class="p">,</span> <span class="s2">&quot;N&quot;</span><span class="p">,</span> <span class="s2">&quot;K&quot;</span><span class="p">],</span>
+    <span class="n">key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;M&quot;</span><span class="p">,</span> <span class="s2">&quot;N&quot;</span><span class="p">,</span> <span class="s2">&quot;K&quot;</span><span class="p">,</span> <span class="s2">&quot;WARP_SPECIALIZE&quot;</span><span class="p">],</span>
 <span class="p">)</span>
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">launch_metadata</span><span class="o">=</span><span class="n">_matmul_launch_metadata</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">matmul_kernel_tma_clc</span><span class="p">(</span><span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span>  <span class="c1">#</span>
@@ -643,6 +640,7 @@ nan 15750.205 ROOT
                           <span class="n">GROUP_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
                           <span class="n">FP8_OUTPUT</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
                           <span class="n">EPILOGUE_SUBTILE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                          <span class="n">WARP_SPECIALIZE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
                           <span class="p">):</span>
     <span class="n">dtype</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">float8e4nv</span> <span class="k">if</span> <span class="n">FP8_OUTPUT</span> <span class="k">else</span> <span class="n">tl</span><span class="o">.</span><span class="n">float16</span>
 
@@ -662,7 +660,7 @@ nan 15750.205 ROOT
     <span class="n">offs_bn</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span>
     <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
 
-    <span class="k">for</span> <span class="n">ki</span> <span class="ow">in</span> <span class="n">tl</span><span class="o">.</span><span class="n">range</span><span class="p">(</span><span class="n">k_tiles</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">ki</span> <span class="ow">in</span> <span class="n">tl</span><span class="o">.</span><span class="n">range</span><span class="p">(</span><span class="n">k_tiles</span><span class="p">,</span> <span class="n">warp_specialize</span><span class="o">=</span><span class="n">WARP_SPECIALIZE</span><span class="p">):</span>
         <span class="n">offs_k</span> <span class="o">=</span> <span class="n">ki</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_K</span>
         <span class="n">a</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">load</span><span class="p">([</span><span class="n">offs_am</span><span class="p">,</span> <span class="n">offs_k</span><span class="p">])</span>
         <span class="n">b</span> <span class="o">=</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">load</span><span class="p">([</span><span class="n">offs_bn</span><span class="p">,</span> <span class="n">offs_k</span><span class="p">])</span>
@@ -685,7 +683,7 @@ nan 15750.205 ROOT
         <span class="n">c_desc</span><span class="o">.</span><span class="n">store</span><span class="p">([</span><span class="n">offs_am</span><span class="p">,</span> <span class="n">offs_bn</span><span class="p">],</span> <span class="n">accumulator</span><span class="p">)</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">matmul_tma_clc</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">matmul_tma_clc</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">warp_specialize</span><span class="p">:</span> <span class="nb">bool</span><span class="p">):</span>
     <span class="k">assert</span> <span class="n">HAS_TMA_CLC</span><span class="p">,</span> <span class="s2">&quot;CLC TMA requires an NVIDIA SM100+ GPU with tensor descriptor support&quot;</span>
     <span class="k">assert</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="s2">&quot;Incompatible dimensions&quot;</span>  <span class="c1"># b is transposed</span>
     <span class="k">assert</span> <span class="n">a</span><span class="o">.</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">b</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="s2">&quot;Incompatible dtypes&quot;</span>
@@ -707,6 +705,7 @@ nan 15750.205 ROOT
         <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span>  <span class="c1">#</span>
         <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>  <span class="c1">#</span>
         <span class="n">FP8_OUTPUT</span><span class="o">=</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">WARP_SPECIALIZE</span><span class="o">=</span><span class="n">warp_specialize</span><span class="p">,</span>  <span class="c1">#</span>
         <span class="n">clc</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>  <span class="c1">#</span>
     <span class="p">)</span>
     <span class="k">return</span> <span class="n">c</span>
@@ -918,7 +917,7 @@ nan 15750.205 ROOT
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\r</span><span class="s2">Benchmarking </span><span class="si">{</span><span class="n">label</span><span class="si">}</span><span class="s2">: done&quot;</span><span class="p">)</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">bench</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">reps</span><span class="o">=</span><span class="mi">10000</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="o">=</span><span class="mi">10000</span><span class="p">,</span> <span class="n">clc</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">bench</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">reps</span><span class="o">=</span><span class="mi">10000</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="o">=</span><span class="mi">10000</span><span class="p">):</span>
     <span class="n">M</span> <span class="o">=</span> <span class="mi">8192</span>
     <span class="n">N</span> <span class="o">=</span> <span class="mi">8192</span>
     <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
@@ -933,13 +932,13 @@ nan 15750.205 ROOT
         <span class="n">bench_fn</span><span class="p">(</span><span class="s2">&quot;torch&quot;</span><span class="p">,</span> <span class="n">reps</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="p">,</span> <span class="n">torch_matmul</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
     <span class="n">bench_fn</span><span class="p">(</span><span class="s2">&quot;naive&quot;</span><span class="p">,</span> <span class="n">reps</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="p">,</span> <span class="n">matmul</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
     <span class="n">bench_fn</span><span class="p">(</span><span class="s2">&quot;persistent&quot;</span><span class="p">,</span> <span class="n">reps</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="p">,</span> <span class="n">matmul_persistent</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">clc</span><span class="p">:</span>
-        <span class="n">bench_fn</span><span class="p">(</span><span class="s2">&quot;clc_tma&quot;</span><span class="p">,</span> <span class="n">reps</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="p">,</span> <span class="n">matmul_tma_clc</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
     <span class="n">warp_specialize</span> <span class="o">=</span> <span class="p">[</span><span class="kc">False</span><span class="p">,</span> <span class="kc">True</span><span class="p">]</span> <span class="k">if</span> <span class="n">HAS_WARP_SPECIALIZE</span> <span class="k">else</span> <span class="p">[</span><span class="kc">False</span><span class="p">]</span>
     <span class="k">for</span> <span class="n">ws</span> <span class="ow">in</span> <span class="n">warp_specialize</span><span class="p">:</span>
         <span class="n">ws_str</span> <span class="o">=</span> <span class="s2">&quot;_ws&quot;</span> <span class="k">if</span> <span class="n">ws</span> <span class="k">else</span> <span class="s2">&quot;&quot;</span>
         <span class="c1"># disable on-host warpspec on Hopper</span>
         <span class="k">if</span> <span class="n">HAS_HOST_TENSOR_DESC</span> <span class="ow">and</span> <span class="ow">not</span> <span class="p">(</span><span class="n">is_hopper</span><span class="p">()</span> <span class="ow">and</span> <span class="n">ws</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">HAS_TMA_CLC</span><span class="p">:</span>
+                <span class="n">bench_fn</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;clc_tma</span><span class="si">{</span><span class="n">ws_str</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">reps</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">matmul_tma_clc</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">ws</span><span class="p">),</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
             <span class="n">bench_fn</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;tma_persistent</span><span class="si">{</span><span class="n">ws_str</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">reps</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">matmul_tma_persistent</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">ws</span><span class="p">),</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
             <span class="n">bench_fn</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;tma</span><span class="si">{</span><span class="n">ws_str</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">reps</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">matmul_tma</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">ws</span><span class="p">),</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">HAS_TENSOR_DESC</span><span class="p">:</span>
@@ -958,7 +957,7 @@ nan 15750.205 ROOT
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\r</span><span class="s2">  </span><span class="si">{</span><span class="n">label</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">icon</span><span class="si">}</span><span class="s2">  &quot;</span><span class="p">)</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">validate</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">clc</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">validate</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">dtype</span><span class="p">):</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">M</span><span class="si">=}</span><span class="s2">, </span><span class="si">{</span><span class="n">N</span><span class="si">=}</span><span class="s2">, </span><span class="si">{</span><span class="n">K</span><span class="si">=}</span><span class="s2">, verification naive vs: &quot;</span><span class="p">)</span>
     <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
     <span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
@@ -968,10 +967,9 @@ nan 15750.205 ROOT
     <span class="n">run_test</span><span class="p">(</span><span class="n">naive_result</span><span class="p">,</span> <span class="n">torch_matmul</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="s2">&quot;Torch&quot;</span><span class="p">,</span> <span class="n">enabled</span><span class="o">=</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
     <span class="n">run_test</span><span class="p">(</span><span class="n">naive_result</span><span class="p">,</span> <span class="n">device_blas_matmul</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">device_blas_name</span><span class="p">(),</span> <span class="n">enabled</span><span class="o">=</span><span class="n">device_blas</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">)</span>
     <span class="n">run_test</span><span class="p">(</span><span class="n">naive_result</span><span class="p">,</span> <span class="n">matmul_persistent</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="s2">&quot;Persistent&quot;</span><span class="p">)</span>
-    <span class="n">run_test</span><span class="p">(</span><span class="n">naive_result</span><span class="p">,</span> <span class="n">matmul_tma_clc</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="s2">&quot;CLC TMA&quot;</span><span class="p">,</span> <span class="n">enabled</span><span class="o">=</span><span class="n">clc</span><span class="p">)</span>
-
     <span class="n">kernels</span> <span class="o">=</span> <span class="p">[</span>
         <span class="p">(</span><span class="n">matmul_tma</span><span class="p">,</span> <span class="s2">&quot;TMA&quot;</span><span class="p">,</span> <span class="n">HAS_HOST_TENSOR_DESC</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">matmul_tma_clc</span><span class="p">,</span> <span class="s2">&quot;CLC TMA&quot;</span><span class="p">,</span> <span class="n">HAS_TMA_CLC</span><span class="p">),</span>
         <span class="p">(</span><span class="n">matmul_tma_persistent</span><span class="p">,</span> <span class="s2">&quot;TMA Persistent&quot;</span><span class="p">,</span> <span class="n">HAS_HOST_TENSOR_DESC</span><span class="p">),</span>
         <span class="p">(</span><span class="n">matmul_descriptor_persistent</span><span class="p">,</span> <span class="s2">&quot;Tensor Descriptor Persistent&quot;</span><span class="p">,</span> <span class="n">HAS_TENSOR_DESC</span><span class="p">),</span>
     <span class="p">]</span>
@@ -1004,11 +1002,7 @@ nan 15750.205 ROOT
     <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--K_range&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">nargs</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
     <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--K_step&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">512</span><span class="p">)</span>
     <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--prec&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span> <span class="n">choices</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;fp8&quot;</span><span class="p">,</span> <span class="s2">&quot;fp16&quot;</span><span class="p">],</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;fp16&quot;</span><span class="p">)</span>
-    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--clc&quot;</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Enable CLC scheduling on NVIDIA SM100+&quot;</span><span class="p">)</span>
     <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">()</span>
-
-    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">clc</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">HAS_TMA_CLC</span><span class="p">:</span>
-        <span class="n">parser</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;--clc requires an NVIDIA SM100+ GPU with tensor descriptor support&quot;</span><span class="p">)</span>
 
     <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">prec</span> <span class="o">==</span> <span class="s1">&#39;fp8&#39;</span> <span class="ow">and</span> <span class="p">(</span><span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="s2">&quot;float8_e4m3fn&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">is_cuda</span><span class="p">()):</span>
         <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;This example requires CUDA/HIP with fp8 support.&quot;</span><span class="p">)</span>
@@ -1021,18 +1015,18 @@ nan 15750.205 ROOT
 
         <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 
-        <span class="n">validate</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">clc</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">clc</span><span class="p">)</span>
-        <span class="n">validate</span><span class="p">(</span><span class="mi">8192</span><span class="p">,</span> <span class="mi">8192</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">clc</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">clc</span><span class="p">)</span>
+        <span class="n">validate</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span>
+        <span class="n">validate</span><span class="p">(</span><span class="mi">8192</span><span class="p">,</span> <span class="mi">8192</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">dtype</span><span class="p">)</span>
 
         <span class="n">proton</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="s2">&quot;matmul&quot;</span><span class="p">,</span> <span class="n">hook</span><span class="o">=</span><span class="s2">&quot;triton&quot;</span><span class="p">)</span>
         <span class="n">proton</span><span class="o">.</span><span class="n">deactivate</span><span class="p">()</span>
         <span class="k">for</span> <span class="n">K</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">K_step</span><span class="p">):</span>
-            <span class="n">bench</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">clc</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">clc</span><span class="p">)</span>
+            <span class="n">bench</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span>
         <span class="n">proton</span><span class="o">.</span><span class="n">finalize</span><span class="p">()</span>
         <span class="n">show_profile</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">prec</span><span class="p">,</span> <span class="s2">&quot;matmul&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 25.359 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 29.743 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-09-persistent-matmul-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/b5537c431cd73b8ee3c32cdf90c58104/09-persistent-matmul.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">09-persistent-matmul.ipynb</span></code></a></p>

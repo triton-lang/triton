@@ -29,7 +29,7 @@
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor_type" href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor_type.html" />
-    <link rel="prev" title="triton.experimental.gluon.language.amd.cdna5.tdm.async_scatter" href="triton.experimental.gluon.language.amd.cdna5.tdm.async_scatter.html" /> 
+    <link rel="prev" title="triton.experimental.gluon.language.amd.cdna5.tdm.async_gather" href="triton.experimental.gluon.language.amd.cdna5.tdm.async_gather.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -130,13 +130,61 @@
              
   <section id="triton-experimental-gluon-language-amd-cdna5-tdm-tensor-descriptor">
 <h1>triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor<a class="headerlink" href="#triton-experimental-gluon-language-amd-cdna5-tdm-tensor-descriptor" title="Link to this heading"></a></h1>
+<dl class="py class">
+<dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.cdna5.tdm.</span></span><span class="sig-name descname"><span class="pre">tensor_descriptor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">handle</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ir.value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttgl.tuple</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">strides</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttgl.tuple</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">type</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor_type.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor_type" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor_type"><span class="pre">tensor_descriptor_type</span></a></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor" title="Link to this definition"></a></dt>
+<dd><p>A descriptor representing a tensor in global memory.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">handle</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ir.value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttgl.tuple</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">strides</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttgl.tuple</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">type</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor_type.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor_type" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor_type"><span class="pre">tensor_descriptor_type</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.__init__" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<p class="rubric">Methods</p>
+<table class="autosummary longtable docutils align-default">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.__init__" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.__init__"><code class="xref py py-obj docutils literal notranslate"><span class="pre">__init__</span></code></a>(self, handle, shape, strides, type)</p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+<p class="rubric">Attributes</p>
+<table class="autosummary longtable docutils align-default">
+<tbody>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">block_shape</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">block_type</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">dtype</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">layout</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">handle</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">shape</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">strides</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">type</span></code></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
 </section>
 
 
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="triton.experimental.gluon.language.amd.cdna5.tdm.async_scatter.html" class="btn btn-neutral float-left" title="triton.experimental.gluon.language.amd.cdna5.tdm.async_scatter" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="triton.experimental.gluon.language.amd.cdna5.tdm.async_gather.html" class="btn btn-neutral float-left" title="triton.experimental.gluon.language.amd.cdna5.tdm.async_gather" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
         <a href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor_type.html" class="btn btn-neutral float-right" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor_type" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 

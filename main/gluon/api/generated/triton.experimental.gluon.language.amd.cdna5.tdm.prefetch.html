@@ -28,7 +28,7 @@
     <script src="../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
-    <link rel="next" title="triton.experimental.gluon.language.amd.cdna5.tdm.async_scatter" href="triton.experimental.gluon.language.amd.cdna5.tdm.async_scatter.html" />
+    <link rel="next" title="triton.experimental.gluon.language.amd.cdna5.tdm.async_store" href="triton.experimental.gluon.language.amd.cdna5.tdm.async_store.html" />
     <link rel="prev" title="triton.experimental.gluon.language.amd.cdna5.tdm.make_tensor_descriptor" href="triton.experimental.gluon.language.amd.cdna5.tdm.make_tensor_descriptor.html" /> 
 </head>
 
@@ -130,6 +130,22 @@
              
   <section id="triton-experimental-gluon-language-amd-cdna5-tdm-prefetch">
 <h1>triton.experimental.gluon.language.amd.cdna5.tdm.prefetch<a class="headerlink" href="#triton-experimental-gluon-language-amd-cdna5-tdm-prefetch" title="Link to this heading"></a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.cdna5.tdm.prefetch">
+<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.cdna5.tdm.</span></span><span class="sig-name descname"><span class="pre">prefetch</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">src</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor"><span class="pre">tensor_descriptor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">offsets</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">constexpr</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference internal" href="../../../python-api/generated/triton.language.tensor.html#triton.language.tensor" title="triton.language.core.tensor"><span class="pre">tensor</span></a><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pred</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">speculative</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna5.tdm.prefetch" title="Link to this definition"></a></dt>
+<dd><p>Prefetches a block of tensor specified in tensor descriptor from global memory into L2. Speculative prefetches can generate more
+efficient assembly because they do not require out of bounds checks. However, they are dropped by the hardware if their virtual address translation is not cached.
+So speculative should only be set if previous iterations have accessed the same virtual page (e.g. column major)
+:param src: the source tensor descriptor.
+:type src: tensor_descriptor
+:param offsets: the offsets from the base pointer in the tensor descriptor.
+:type offsets: List[int]
+:param pred: Predicate to enable or disable the prefetch. Defaults to True.
+:type pred: bool, optional
+:param speculative: Whether the prefetch is speculative. Defaults to False.
+:type speculative: bool, optional</p>
+</dd></dl>
+
 </section>
 
 
@@ -137,7 +153,7 @@
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="triton.experimental.gluon.language.amd.cdna5.tdm.make_tensor_descriptor.html" class="btn btn-neutral float-left" title="triton.experimental.gluon.language.amd.cdna5.tdm.make_tensor_descriptor" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="triton.experimental.gluon.language.amd.cdna5.tdm.async_scatter.html" class="btn btn-neutral float-right" title="triton.experimental.gluon.language.amd.cdna5.tdm.async_scatter" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="triton.experimental.gluon.language.amd.cdna5.tdm.async_store.html" class="btn btn-neutral float-right" title="triton.experimental.gluon.language.amd.cdna5.tdm.async_store" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

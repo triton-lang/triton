@@ -134,6 +134,42 @@ Interfaces: `ArefStageInterface`
 
 
 
+### `nvws.aref.phi` (triton::nvws::ArefPhiOp)
+
+_Select a local or remote aref value by partition_
+
+Syntax:
+
+```
+operation ::= `nvws.aref.phi` $local `,` $remote attr-dict `:` type($result)
+```
+
+Joins exactly two SSA values with disjoint partition ownership.  The
+partition owning a physical clone selects the operand whose defining value
+owns that partition.  Partition-loop construction resolves this operation
+to the selected operand and emits no instruction.
+
+Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultType`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `local` | any non-token type |
+| `remote` | any non-token type |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | any non-token type |
+
+
+
 ### `nvws.aref.put.enter` (triton::nvws::ArefPutEnterOp)
 
 _Enter ArefPut region where the buffer can be used to read data_
@@ -199,6 +235,27 @@ Interfaces: `ArefStageInterface`
 | `aref` | Asynchronous Reference |
 | `token` | async token type |
 | `stage` | 32-bit signless integer |
+
+
+
+### `nvws.clc_try_cancel` (triton::nvws::CLCTryCancelOp)
+
+_Issue a cluster launch control cancellation request_
+
+Syntax:
+
+```
+operation ::= `nvws.clc_try_cancel` $result attr-dict `:` qualified(type($result))
+```
+
+Issues CLC cancellation request whose raw 16-byte response
+is written into the supplied shared-memory buffer.
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 
 

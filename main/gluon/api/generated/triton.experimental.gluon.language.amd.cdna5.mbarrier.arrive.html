@@ -130,6 +130,29 @@
              
   <section id="triton-experimental-gluon-language-amd-cdna5-mbarrier-arrive">
 <h1>triton.experimental.gluon.language.amd.cdna5.mbarrier.arrive<a class="headerlink" href="#triton-experimental-gluon-language-amd-cdna5-mbarrier-arrive" title="Link to this heading"></a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.cdna5.mbarrier.arrive">
+<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.cdna5.mbarrier.</span></span><span class="sig-name descname"><span class="pre">arrive</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">mbarrier</span></span></em>, <em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">count</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna5.mbarrier.arrive" title="Link to this definition"></a></dt>
+<dd><p>Arrive at an mbarrier with a specified count. The operation requires a <cite>count</cite> attribute
+of at least 1, and decreases the pending arrival count of the mbarrier by the specific count.
+If the pending count reaches zero, the phase changes (is decremented in a wraparound manner) and the
+pending count is reloaded with the init count value. Returns the mbarrier’s phase parity (0 for even, 1 for odd) prior to the “arrive” operation.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>mbarrier</strong> (<a class="reference internal" href="triton.experimental.gluon.language.shared_memory_descriptor.html#triton.experimental.gluon.language.shared_memory_descriptor" title="triton.experimental.gluon.language.shared_memory_descriptor"><em>shared_memory_descriptor</em></a>) – Barrier to be signalled.</p></li>
+<li><p><strong>count</strong> (<em>int</em>) – Count to arrive with. Defaults to 1.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>phase of mbarrier, prior to “arrive” operation.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>prior phase (int)</p>
+</dd>
+</dl>
+</dd></dl>
+
 </section>
 
 

@@ -132,36 +132,42 @@
 <p class="rubric">Functions</p>
 <table class="autosummary longtable docutils align-default">
 <tbody>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">update_tensor_descriptor</span></code></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.update_tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.update_tensor_descriptor" title="triton.experimental.gluon.language.amd.cdna5.tdm.update_tensor_descriptor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">update_tensor_descriptor</span></code></a></p></td>
 <td><p>Update selected fields of a TDM descriptor; return a new descriptor SSA value.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">async_load</span></code></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.async_load.html#triton.experimental.gluon.language.amd.cdna5.tdm.async_load" title="triton.experimental.gluon.language.amd.cdna5.tdm.async_load"><code class="xref py py-obj docutils literal notranslate"><span class="pre">async_load</span></code></a></p></td>
 <td><p>Load a block of tensor specified in tensor descriptor from global memory to shared memory asynchronously.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">async_load_fused</span></code></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.async_load_fused.html#triton.experimental.gluon.language.amd.cdna5.tdm.async_load_fused" title="triton.experimental.gluon.language.amd.cdna5.tdm.async_load_fused"><code class="xref py py-obj docutils literal notranslate"><span class="pre">async_load_fused</span></code></a></p></td>
 <td><p>Emit one explicit fused TDM load for 2-4 descriptor/destination pairs.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">async_wait</span></code></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.async_wait.html#triton.experimental.gluon.language.amd.cdna5.tdm.async_wait" title="triton.experimental.gluon.language.amd.cdna5.tdm.async_wait"><code class="xref py py-obj docutils literal notranslate"><span class="pre">async_wait</span></code></a></p></td>
 <td><p>Wait for the outstanding asynchronous tensor operations to complete.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">make_tensor_descriptor</span></code></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.make_tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.make_tensor_descriptor" title="triton.experimental.gluon.language.amd.cdna5.tdm.make_tensor_descriptor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">make_tensor_descriptor</span></code></a></p></td>
 <td><p>Make a tensor descriptor object.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">prefetch</span></code></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.prefetch.html#triton.experimental.gluon.language.amd.cdna5.tdm.prefetch" title="triton.experimental.gluon.language.amd.cdna5.tdm.prefetch"><code class="xref py py-obj docutils literal notranslate"><span class="pre">prefetch</span></code></a></p></td>
 <td><p>Prefetches a block of tensor specified in tensor descriptor from global memory into L2.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">async_scatter</span></code></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.async_store.html#triton.experimental.gluon.language.amd.cdna5.tdm.async_store" title="triton.experimental.gluon.language.amd.cdna5.tdm.async_store"><code class="xref py py-obj docutils literal notranslate"><span class="pre">async_store</span></code></a></p></td>
+<td><p>Store a block of tensor specified in tensor descriptor from shared memory to global memory asynchronously.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.async_scatter.html#triton.experimental.gluon.language.amd.cdna5.tdm.async_scatter" title="triton.experimental.gluon.language.amd.cdna5.tdm.async_scatter"><code class="xref py py-obj docutils literal notranslate"><span class="pre">async_scatter</span></code></a></p></td>
 <td><p>Scatter data from shared memory to non-contiguous rows in global memory asynchronously.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.async_gather.html#triton.experimental.gluon.language.amd.cdna5.tdm.async_gather" title="triton.experimental.gluon.language.amd.cdna5.tdm.async_gather"><code class="xref py py-obj docutils literal notranslate"><span class="pre">async_gather</span></code></a></p></td>
+<td><p>Gather data from non-contiguous rows in global memory to shared memory asynchronously.</p></td>
 </tr>
 </tbody>
 </table>
 <p class="rubric">Classes</p>
 <table class="autosummary longtable docutils align-default">
 <tbody>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">tensor_descriptor</span></code></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">tensor_descriptor</span></code></a></p></td>
 <td><p>A descriptor representing a tensor in global memory.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">tensor_descriptor_type</span></code></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor_type.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor_type" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor_type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">tensor_descriptor_type</span></code></a></p></td>
 <td><p>The type for a tensor descriptor.</p></td>
 </tr>
 </tbody>

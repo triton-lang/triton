@@ -133,7 +133,7 @@
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.cdna5.scaled_upcast">
 <span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.cdna5.</span></span><span class="sig-name descname"><span class="pre">scaled_upcast</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">src</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">elem_type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">axis</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna5.scaled_upcast" title="Link to this definition"></a></dt>
 <dd><p>Upcast an fp4 or fp8 tensor and fold raw E8M0 scale payload into the
-GFX1250 scaled-upcast op.</p>
+CDNA5 scaled-upcast op.</p>
 <p>The scale tensor must use raw E8M0 payload in <cite>int8</cite> or <cite>uint8</cite>.
 For fp8, scale shape/layout match <cite>src</cite>.
 For fp4, expanded or compact scales are supported along <cite>axis</cite> dimension.
@@ -141,7 +141,7 @@ Expanded scales are broadcasted to one scale value per upcast output value,
 e.g. fp4 bytes <cite>[M, K / 2]</cite> -&gt; output <cite>[M, K]</cite> with scale <cite>[M, K]</cite>.
 Compact scales keep one scale value per native scale block, e.g. output
 <cite>[M, K]</cite> with <cite>axis=1</cite> and scale block 32 uses scale <cite>[M, K / 32]</cite>.
-<cite>elem_type</cite> must be <cite>fp16</cite> or <cite>bf16</cite>. GFX1250 keeps those bytes in the native
+<cite>elem_type</cite> must be <cite>fp16</cite> or <cite>bf16</cite>. CDNA5 keeps those bytes in the native
 <cite>cvt.scale.pk8</cite> payload form.</p>
 </dd></dl>
 

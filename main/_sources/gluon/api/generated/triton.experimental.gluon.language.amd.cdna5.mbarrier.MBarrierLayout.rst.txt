@@ -1,9 +1,9 @@
 triton.experimental.gluon.language.amd.cdna5.mbarrier.MBarrierLayout
 ====================================================================
 
-.. currentmodule:: triton.experimental.gluon.language.amd.cdna5
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna5.mbarrier
 
-.. autoclass:: mbarrier.MBarrierLayout
+.. autoclass:: MBarrierLayout
 
    
    .. automethod:: __init__
@@ -13,10 +13,10 @@ triton.experimental.gluon.language.amd.cdna5.mbarrier.MBarrierLayout
 
    .. autosummary::
    
-      ~mbarrier.MBarrierLayout.__init__
-      ~mbarrier.MBarrierLayout.format_hardware_view
-      ~mbarrier.MBarrierLayout.format_tensor_view
-      ~mbarrier.MBarrierLayout.mangle
+      ~MBarrierLayout.__init__
+      ~MBarrierLayout.format_hardware_view
+      ~MBarrierLayout.format_tensor_view
+      ~MBarrierLayout.mangle
    
    
 
@@ -26,11 +26,11 @@ triton.experimental.gluon.language.amd.cdna5.mbarrier.MBarrierLayout
 
    .. autosummary::
    
-      ~mbarrier.MBarrierLayout.type
-      ~mbarrier.MBarrierLayout.vec
-      ~mbarrier.MBarrierLayout.per_phase
-      ~mbarrier.MBarrierLayout.max_phase
-      ~mbarrier.MBarrierLayout.order
-      ~mbarrier.MBarrierLayout.cga_layout
+      ~MBarrierLayout.type
+      ~MBarrierLayout.vec
+      ~MBarrierLayout.per_phase
+      ~MBarrierLayout.max_phase
+      ~MBarrierLayout.order
+      ~MBarrierLayout.cga_layout
    
    

@@ -130,6 +130,22 @@
              
   <section id="triton-experimental-gluon-language-amd-cdna5-mbarrier-wait">
 <h1>triton.experimental.gluon.language.amd.cdna5.mbarrier.wait<a class="headerlink" href="#triton-experimental-gluon-language-amd-cdna5-mbarrier-wait" title="Link to this heading"></a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.cdna5.mbarrier.wait">
+<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.cdna5.mbarrier.</span></span><span class="sig-name descname"><span class="pre">wait</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">mbarrier</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">phase</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna5.mbarrier.wait" title="Link to this definition"></a></dt>
+<dd><p>Wait until the mbarrier’s phase differs from the provided phase value.
+This means that the given ‘phase’ has completed.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>mbarrier</strong> (<a class="reference internal" href="triton.experimental.gluon.language.shared_memory_descriptor.html#triton.experimental.gluon.language.shared_memory_descriptor" title="triton.experimental.gluon.language.shared_memory_descriptor"><em>shared_memory_descriptor</em></a>) – The barrier object to wait on.</p></li>
+<li><p><strong>phase</strong> (<em>int</em>) – The phase value to compare against. The wait completes when</p></li>
+<li><p><strong>value.</strong> (<em>the barrier's phase becomes different from this</em>)</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
 </section>
 
 

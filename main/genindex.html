@@ -146,7 +146,13 @@
 </li>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.AMDWMMALayout.html#triton.experimental.gluon.language.amd.AMDWMMALayout.__init__">(triton.experimental.gluon.language.amd.AMDWMMALayout method)</a>
 </li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.mbarrier.MBarrierLayout.html#triton.experimental.gluon.language.amd.cdna5.mbarrier.MBarrierLayout.__init__">(triton.experimental.gluon.language.amd.cdna5.mbarrier.MBarrierLayout method)</a>
+</li>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.PartitionedSharedLayout.html#triton.experimental.gluon.language.amd.cdna5.PartitionedSharedLayout.__init__">(triton.experimental.gluon.language.amd.cdna5.PartitionedSharedLayout method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.__init__">(triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor method)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor_type.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor_type.__init__">(triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor_type method)</a>
 </li>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.warp_pipeline_stage.html#triton.experimental.gluon.language.amd.warp_pipeline_stage.__init__">(triton.experimental.gluon.language.amd.warp_pipeline_stage method)</a>
 </li>
@@ -289,9 +295,13 @@
 </li>
       <li><a href="python-api/generated/triton.language.argmin.html#triton.language.argmin">argmin() (in module triton.language)</a>
 </li>
-      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.mbarrier.arrive.html#triton.experimental.gluon.language.nvidia.ampere.mbarrier.arrive">arrive() (in module triton.experimental.gluon.language.nvidia.ampere.mbarrier)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.cluster.arrive.html#triton.experimental.gluon.language.amd.cdna5.cluster.arrive">arrive() (in module triton.experimental.gluon.language.amd.cdna5.cluster)</a>
 
       <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.mbarrier.arrive.html#triton.experimental.gluon.language.amd.cdna5.mbarrier.arrive">(in module triton.experimental.gluon.language.amd.cdna5.mbarrier)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.mbarrier.arrive.html#triton.experimental.gluon.language.nvidia.ampere.mbarrier.arrive">(in module triton.experimental.gluon.language.nvidia.ampere.mbarrier)</a>
+</li>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.mbarrier.arrive.html#triton.experimental.gluon.language.nvidia.hopper.mbarrier.arrive">(in module triton.experimental.gluon.language.nvidia.hopper.mbarrier)</a>
 </li>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.rubin.mbarrier.arrive.html#triton.experimental.gluon.language.nvidia.rubin.mbarrier.arrive">(in module triton.experimental.gluon.language.nvidia.rubin.mbarrier)</a>
@@ -341,14 +351,14 @@
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.async_atomic_or.html#triton.experimental.gluon.language.nvidia.hopper.tma.async_atomic_or">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
 </li>
       </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_atomic_xor.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_atomic_xor">async_atomic_xor() (in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
 
       <ul>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.async_atomic_xor.html#triton.experimental.gluon.language.nvidia.hopper.tma.async_atomic_xor">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
 </li>
       </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.async_copy.async_copy_global_to_shared.html#triton.experimental.gluon.language.nvidia.ampere.async_copy.async_copy_global_to_shared">async_copy_global_to_shared() (in module triton.experimental.gluon.language.nvidia.ampere.async_copy)</a>
 
       <ul>
@@ -365,32 +375,48 @@
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.async_copy_shared_to_global.html#triton.experimental.gluon.language.nvidia.hopper.tma.async_copy_shared_to_global">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
 </li>
       </ul></li>
-      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_gather.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_gather">async_gather() (in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
-</li>
-      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.async_copy.async_load.html#triton.experimental.gluon.language.nvidia.ampere.async_copy.async_load">async_load() (in module triton.experimental.gluon.language.nvidia.ampere.async_copy)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.tdm.async_gather.html#triton.experimental.gluon.language.amd.cdna5.tdm.async_gather">async_gather() (in module triton.experimental.gluon.language.amd.cdna5.tdm)</a>
 
       <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_gather.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_gather">(in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.tdm.async_load.html#triton.experimental.gluon.language.amd.cdna5.tdm.async_load">async_load() (in module triton.experimental.gluon.language.amd.cdna5.tdm)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.async_copy.async_load.html#triton.experimental.gluon.language.nvidia.ampere.async_copy.async_load">(in module triton.experimental.gluon.language.nvidia.ampere.async_copy)</a>
+</li>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_load.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_load">(in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
 </li>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.async_load.html#triton.experimental.gluon.language.nvidia.hopper.tma.async_load">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
 </li>
       </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.tdm.async_load_fused.html#triton.experimental.gluon.language.amd.cdna5.tdm.async_load_fused">async_load_fused() (in module triton.experimental.gluon.language.amd.cdna5.tdm)</a>
+</li>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_load_im2col.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_load_im2col">async_load_im2col() (in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
 
       <ul>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.async_load_im2col.html#triton.experimental.gluon.language.nvidia.hopper.tma.async_load_im2col">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
 </li>
       </ul></li>
-      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_scatter.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_scatter">async_scatter() (in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
-</li>
-      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_store.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_store">async_store() (in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.tdm.async_scatter.html#triton.experimental.gluon.language.amd.cdna5.tdm.async_scatter">async_scatter() (in module triton.experimental.gluon.language.amd.cdna5.tdm)</a>
 
       <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_scatter.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_scatter">(in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.tdm.async_store.html#triton.experimental.gluon.language.amd.cdna5.tdm.async_store">async_store() (in module triton.experimental.gluon.language.amd.cdna5.tdm)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.async_store.html#triton.experimental.gluon.language.nvidia.blackwell.tma.async_store">(in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+</li>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.async_store.html#triton.experimental.gluon.language.nvidia.hopper.tma.async_store">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
 </li>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.rubin.async_store.html#triton.experimental.gluon.language.nvidia.rubin.async_store">(in module triton.experimental.gluon.language.nvidia.rubin)</a>
 </li>
       </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.tdm.async_wait.html#triton.experimental.gluon.language.amd.cdna5.tdm.async_wait">async_wait() (in module triton.experimental.gluon.language.amd.cdna5.tdm)</a>
+</li>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.atomic_add.html#triton.experimental.gluon.language.atomic_add">atomic_add() (in module triton.experimental.gluon.language)</a>
 
       <ul>
@@ -567,14 +593,18 @@
         <li><a href="python-api/generated/triton.language.clamp.html#triton.language.clamp">(in module triton.language)</a>
 </li>
       </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.clc.clc_result.html#triton.experimental.gluon.language.nvidia.blackwell.clc.clc_result">clc_result (class in triton.experimental.gluon.language.nvidia.blackwell.clc)</a>
 </li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.CoalescedLayout.html#triton.experimental.gluon.language.CoalescedLayout">CoalescedLayout (class in triton.experimental.gluon.language)</a>
 </li>
-      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.async_copy.commit_group.html#triton.experimental.gluon.language.nvidia.ampere.async_copy.commit_group">commit_group() (in module triton.experimental.gluon.language.nvidia.ampere.async_copy)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.async_copy.commit_group.html#triton.experimental.gluon.language.amd.cdna5.async_copy.commit_group">commit_group() (in module triton.experimental.gluon.language.amd.cdna5.async_copy)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.async_copy.commit_group.html#triton.experimental.gluon.language.nvidia.ampere.async_copy.commit_group">(in module triton.experimental.gluon.language.nvidia.ampere.async_copy)</a>
 </li>
+      </ul></li>
       <li><a href="python-api/generated/triton.Config.html#triton.Config">Config (class in triton)</a>
 </li>
       <li><a href="gluon/api/generated/triton.experimental.gluon.constexpr_function.html#triton.experimental.gluon.constexpr_function">constexpr_function() (in module triton.experimental.gluon)</a>
@@ -747,13 +777,15 @@
       </ul></li>
       <li><a href="python-api/generated/triton.language.extra.cuda.gdc_launch_dependents.html#triton.language.extra.cuda.gdc_launch_dependents">gdc_launch_dependents() (in module triton.language.extra.cuda)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="python-api/generated/triton.language.extra.cuda.gdc_wait.html#triton.language.extra.cuda.gdc_wait">gdc_wait() (in module triton.language.extra.cuda)</a>
 </li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna4.get_mfma_scale_layout.html#triton.experimental.gluon.language.amd.cdna4.get_mfma_scale_layout">get_mfma_scale_layout() (in module triton.experimental.gluon.language.amd.cdna4)</a>
 </li>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.get_wmma_scale_layout.html#triton.experimental.gluon.language.amd.cdna5.get_wmma_scale_layout">get_wmma_scale_layout() (in module triton.experimental.gluon.language.amd.cdna5)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.async_copy.global_to_shared.html#triton.experimental.gluon.language.amd.cdna5.async_copy.global_to_shared">global_to_shared() (in module triton.experimental.gluon.language.amd.cdna5.async_copy)</a>
 </li>
       <li><a href="gluon/api/generated/triton.experimental.gluon.GluonJITFunction.html#triton.experimental.gluon.GluonJITFunction">GluonJITFunction (class in triton.experimental.gluon)</a>
 </li>
@@ -779,9 +811,11 @@
 <h2 id="I">I</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.mbarrier.init.html#triton.experimental.gluon.language.nvidia.ampere.mbarrier.init">init() (in module triton.experimental.gluon.language.nvidia.ampere.mbarrier)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.mbarrier.init.html#triton.experimental.gluon.language.amd.cdna5.mbarrier.init">init() (in module triton.experimental.gluon.language.amd.cdna5.mbarrier)</a>
 
       <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.mbarrier.init.html#triton.experimental.gluon.language.nvidia.ampere.mbarrier.init">(in module triton.experimental.gluon.language.nvidia.ampere.mbarrier)</a>
+</li>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.mbarrier.init.html#triton.experimental.gluon.language.nvidia.hopper.mbarrier.init">(in module triton.experimental.gluon.language.nvidia.hopper.mbarrier)</a>
 </li>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.rubin.mbarrier.init.html#triton.experimental.gluon.language.nvidia.rubin.mbarrier.init">(in module triton.experimental.gluon.language.nvidia.rubin.mbarrier)</a>
@@ -863,9 +897,11 @@
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.make_partitioned_dot_layouts.html#triton.experimental.gluon.language.amd.cdna5.make_partitioned_dot_layouts">make_partitioned_dot_layouts() (in module triton.experimental.gluon.language.amd.cdna5)</a>
 </li>
-      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.make_tensor_descriptor.html#triton.experimental.gluon.language.nvidia.blackwell.tma.make_tensor_descriptor">make_tensor_descriptor() (in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.tdm.make_tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.make_tensor_descriptor">make_tensor_descriptor() (in module triton.experimental.gluon.language.amd.cdna5.tdm)</a>
 
       <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.make_tensor_descriptor.html#triton.experimental.gluon.language.nvidia.blackwell.tma.make_tensor_descriptor">(in module triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+</li>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.make_tensor_descriptor.html#triton.experimental.gluon.language.nvidia.hopper.tma.make_tensor_descriptor">(in module triton.experimental.gluon.language.nvidia.hopper.tma)</a>
 </li>
         <li><a href="python-api/generated/triton.language.make_tensor_descriptor.html#triton.language.make_tensor_descriptor">(in module triton.language)</a>
@@ -907,11 +943,17 @@
         <li><a href="python-api/generated/triton.language.maximum.html#triton.language.maximum">(in module triton.language)</a>
 </li>
       </ul></li>
-      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.async_copy.mbarrier_arrive.html#triton.experimental.gluon.language.nvidia.ampere.async_copy.mbarrier_arrive">mbarrier_arrive() (in module triton.experimental.gluon.language.nvidia.ampere.async_copy)</a>
-</li>
-      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.mbarrier.MBarrierLayout.html#triton.experimental.gluon.language.nvidia.ampere.mbarrier.MBarrierLayout">MBarrierLayout (class in triton.experimental.gluon.language.nvidia.ampere.mbarrier)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.async_copy.mbarrier_arrive.html#triton.experimental.gluon.language.amd.cdna5.async_copy.mbarrier_arrive">mbarrier_arrive() (in module triton.experimental.gluon.language.amd.cdna5.async_copy)</a>
 
       <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.async_copy.mbarrier_arrive.html#triton.experimental.gluon.language.nvidia.ampere.async_copy.mbarrier_arrive">(in module triton.experimental.gluon.language.nvidia.ampere.async_copy)</a>
+</li>
+      </ul></li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.mbarrier.MBarrierLayout.html#triton.experimental.gluon.language.amd.cdna5.mbarrier.MBarrierLayout">MBarrierLayout (class in triton.experimental.gluon.language.amd.cdna5.mbarrier)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.mbarrier.MBarrierLayout.html#triton.experimental.gluon.language.nvidia.ampere.mbarrier.MBarrierLayout">(class in triton.experimental.gluon.language.nvidia.ampere.mbarrier)</a>
+</li>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.mbarrier.MBarrierLayout.html#triton.experimental.gluon.language.nvidia.hopper.mbarrier.MBarrierLayout">(class in triton.experimental.gluon.language.nvidia.hopper.mbarrier)</a>
 </li>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.rubin.mbarrier.MBarrierLayout.html#triton.experimental.gluon.language.nvidia.rubin.mbarrier.MBarrierLayout">(class in triton.experimental.gluon.language.nvidia.rubin.mbarrier)</a>
@@ -943,6 +985,8 @@
         <li><a href="python-api/generated/triton.language.minimum.html#triton.language.minimum">(in module triton.language)</a>
 </li>
       </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.mma_v2.html#triton.experimental.gluon.language.nvidia.ampere.mma_v2">mma_v2() (in module triton.experimental.gluon.language.nvidia.ampere)</a>
 
       <ul>
@@ -953,8 +997,6 @@
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.rubin.mma_v2.html#triton.experimental.gluon.language.nvidia.rubin.mma_v2">(in module triton.experimental.gluon.language.nvidia.rubin)</a>
 </li>
       </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     module
 
@@ -1056,14 +1098,16 @@
 </li>
       <li><a href="python-api/generated/triton.testing.perf_report.html#triton.testing.perf_report">perf_report() (in module triton.testing)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.permute.html#triton.experimental.gluon.language.permute">permute() (in module triton.experimental.gluon.language)</a>
 
       <ul>
         <li><a href="python-api/generated/triton.language.permute.html#triton.language.permute">(in module triton.language)</a>
 </li>
       </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.tdm.prefetch.html#triton.experimental.gluon.language.amd.cdna5.tdm.prefetch">prefetch() (in module triton.experimental.gluon.language.amd.cdna5.tdm)</a>
+</li>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.program_id.html#triton.experimental.gluon.language.program_id">program_id() (in module triton.experimental.gluon.language)</a>
 
       <ul>
@@ -1133,6 +1177,8 @@
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.set_auto_layout.html#triton.experimental.gluon.language.set_auto_layout">set_auto_layout() (in module triton.experimental.gluon.language)</a>
 </li>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.shared_memory_descriptor.html#triton.experimental.gluon.language.shared_memory_descriptor">shared_memory_descriptor (class in triton.experimental.gluon.language)</a>
+</li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.async_copy.shared_to_global.html#triton.experimental.gluon.language.amd.cdna5.async_copy.shared_to_global">shared_to_global() (in module triton.experimental.gluon.language.amd.cdna5.async_copy)</a>
 </li>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.SharedLinearLayout.html#triton.experimental.gluon.language.SharedLinearLayout">SharedLinearLayout (class in triton.experimental.gluon.language)</a>
 </li>
@@ -1250,9 +1296,11 @@
         <li><a href="python-api/generated/triton.language.tensor.html#triton.language.tensor">(class in triton.language)</a>
 </li>
       </ul></li>
-      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.tensor_descriptor.html#triton.experimental.gluon.language.nvidia.blackwell.tma.tensor_descriptor">tensor_descriptor (class in triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor">tensor_descriptor (class in triton.experimental.gluon.language.amd.cdna5.tdm)</a>
 
       <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.tensor_descriptor.html#triton.experimental.gluon.language.nvidia.blackwell.tma.tensor_descriptor">(class in triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+</li>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor.html#triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor">(class in triton.experimental.gluon.language.nvidia.hopper.tma)</a>
 </li>
         <li><a href="python-api/generated/triton.language.tensor_descriptor.html#triton.language.tensor_descriptor">(class in triton.language)</a>
@@ -1262,9 +1310,11 @@
 </li>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor_im2col_type.html#triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor_im2col_type">tensor_descriptor_im2col_type (class in triton.experimental.gluon.language.nvidia.hopper.tma)</a>
 </li>
-      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.tensor_descriptor_type.html#triton.experimental.gluon.language.nvidia.blackwell.tma.tensor_descriptor_type">tensor_descriptor_type (class in triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor_type.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor_type">tensor_descriptor_type (class in triton.experimental.gluon.language.amd.cdna5.tdm)</a>
 
       <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.blackwell.tma.tensor_descriptor_type.html#triton.experimental.gluon.language.nvidia.blackwell.tma.tensor_descriptor_type">(class in triton.experimental.gluon.language.nvidia.blackwell.tma)</a>
+</li>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor_type.html#triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor_type">(class in triton.experimental.gluon.language.nvidia.hopper.tma)</a>
 </li>
       </ul></li>
@@ -1328,6 +1378,8 @@
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.async_copy.html#module-triton.experimental.gluon.language.amd.cdna5.async_copy">module</a>
 </li>
       </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     triton.experimental.gluon.language.amd.cdna5.cluster
 
@@ -1335,8 +1387,6 @@
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.cluster.html#module-triton.experimental.gluon.language.amd.cdna5.cluster">module</a>
 </li>
       </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     triton.experimental.gluon.language.amd.cdna5.mbarrier
 
@@ -1474,6 +1524,8 @@
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="python-api/generated/triton.language.unsqueeze.html#triton.language.unsqueeze">unsqueeze() (in module triton.language)</a>
 </li>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.tdm.update_tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.update_tensor_descriptor">update_tensor_descriptor() (in module triton.experimental.gluon.language.amd.cdna5.tdm)</a>
+</li>
   </ul></td>
 </tr></table>
 
@@ -1488,24 +1540,32 @@
 <h2 id="W">W</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.mbarrier.wait.html#triton.experimental.gluon.language.nvidia.ampere.mbarrier.wait">wait() (in module triton.experimental.gluon.language.nvidia.ampere.mbarrier)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.cluster.wait.html#triton.experimental.gluon.language.amd.cdna5.cluster.wait">wait() (in module triton.experimental.gluon.language.amd.cdna5.cluster)</a>
 
       <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.mbarrier.wait.html#triton.experimental.gluon.language.amd.cdna5.mbarrier.wait">(in module triton.experimental.gluon.language.amd.cdna5.mbarrier)</a>
+</li>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.mbarrier.wait.html#triton.experimental.gluon.language.nvidia.ampere.mbarrier.wait">(in module triton.experimental.gluon.language.nvidia.ampere.mbarrier)</a>
+</li>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.mbarrier.wait.html#triton.experimental.gluon.language.nvidia.hopper.mbarrier.wait">(in module triton.experimental.gluon.language.nvidia.hopper.mbarrier)</a>
 </li>
         <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.rubin.mbarrier.wait.html#triton.experimental.gluon.language.nvidia.rubin.mbarrier.wait">(in module triton.experimental.gluon.language.nvidia.rubin.mbarrier)</a>
 </li>
       </ul></li>
-      <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.async_copy.wait_group.html#triton.experimental.gluon.language.nvidia.ampere.async_copy.wait_group">wait_group() (in module triton.experimental.gluon.language.nvidia.ampere.async_copy)</a>
+      <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.cdna5.async_copy.wait_group.html#triton.experimental.gluon.language.amd.cdna5.async_copy.wait_group">wait_group() (in module triton.experimental.gluon.language.amd.cdna5.async_copy)</a>
+
+      <ul>
+        <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.ampere.async_copy.wait_group.html#triton.experimental.gluon.language.nvidia.ampere.async_copy.wait_group">(in module triton.experimental.gluon.language.nvidia.ampere.async_copy)</a>
 </li>
+      </ul></li>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.amd.warp_pipeline_stage.html#triton.experimental.gluon.language.amd.warp_pipeline_stage">warp_pipeline_stage (class in triton.experimental.gluon.language.amd)</a>
 </li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.warp_specialize.html#triton.experimental.gluon.language.warp_specialize">warp_specialize() (in module triton.experimental.gluon.language)</a>
 </li>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.warpgroup_mma.html#triton.experimental.gluon.language.nvidia.hopper.warpgroup_mma">warpgroup_mma() (in module triton.experimental.gluon.language.nvidia.hopper)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.nvidia.hopper.warpgroup_mma_wait.html#triton.experimental.gluon.language.nvidia.hopper.warpgroup_mma_wait">warpgroup_mma_wait() (in module triton.experimental.gluon.language.nvidia.hopper)</a>
 </li>
       <li><a href="gluon/api/generated/triton.experimental.gluon.language.where.html#triton.experimental.gluon.language.where">where() (in module triton.experimental.gluon.language)</a>

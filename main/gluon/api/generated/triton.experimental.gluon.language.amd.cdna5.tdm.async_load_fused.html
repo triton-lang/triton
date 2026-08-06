@@ -130,6 +130,30 @@
              
   <section id="triton-experimental-gluon-language-amd-cdna5-tdm-async-load-fused">
 <h1>triton.experimental.gluon.language.amd.cdna5.tdm.async_load_fused<a class="headerlink" href="#triton-experimental-gluon-language-amd-cdna5-tdm-async-load-fused" title="Link to this heading"></a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.cdna5.tdm.async_load_fused">
+<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.cdna5.tdm.</span></span><span class="sig-name descname"><span class="pre">async_load_fused</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">members</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor"><span class="pre">tensor_descriptor</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference internal" href="triton.experimental.gluon.language.shared_memory_descriptor.html#triton.experimental.gluon.language.shared_memory_descriptor" title="triton.experimental.gluon.language.shared_memory_descriptor"><span class="pre">shared_memory_descriptor</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">ttgl.constexpr</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_modifier</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna5.tdm.async_load_fused" title="Link to this definition"></a></dt>
+<dd><p>Emit one explicit fused TDM load for 2-4 descriptor/destination pairs.</p>
+<p>This can perform better than several consecutive separate TDM loads,
+especially for more than two loads. Under the hood, different warps load
+different descriptor/destination pairs according to each member’s
+<code class="docutils literal notranslate"><span class="pre">warp_used_hint</span></code>; collectively all participating warps load all pairs at
+the block level.</p>
+<p>Each member is <code class="docutils literal notranslate"><span class="pre">(desc,</span> <span class="pre">dest,</span> <span class="pre">warp_used_hint)</span></code>. The descriptors must
+already encode their tile offsets, predicates, and bounds; use
+<a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.update_tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.update_tensor_descriptor" title="triton.experimental.gluon.language.amd.cdna5.tdm.update_tensor_descriptor"><code class="xref py py-func docutils literal notranslate"><span class="pre">update_tensor_descriptor()</span></code></a> before calling this helper when needed.
+All members share one cache modifier, matching the fused IR operation.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>members</strong> – 2-4 <code class="docutils literal notranslate"><span class="pre">(desc,</span> <span class="pre">dest,</span> <span class="pre">warp_used_hint)</span></code> tuples. Hints must be
+legal, pairwise-disjoint bitmasks.</p></li>
+<li><p><strong>cache_modifier</strong> (<em>str</em><em>, </em><em>optional</em>) – Cache behavior shared by all members.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
 </section>
 
 

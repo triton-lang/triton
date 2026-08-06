@@ -130,6 +130,22 @@
              
   <section id="triton-experimental-gluon-language-amd-cdna5-async-copy-shared-to-global">
 <h1>triton.experimental.gluon.language.amd.cdna5.async_copy.shared_to_global<a class="headerlink" href="#triton-experimental-gluon-language-amd-cdna5-async-copy-shared-to-global" title="Link to this heading"></a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.cdna5.async_copy.shared_to_global">
+<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.cdna5.async_copy.</span></span><span class="sig-name descname"><span class="pre">shared_to_global</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">smem</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_modifier</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna5.async_copy.shared_to_global" title="Link to this definition"></a></dt>
+<dd><p>Asynchronously copy elements from shared memory to global memory. Requires manual syncronization via <cite>wait_group</cite> before accessing the stored data.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>pointer</strong> (<a class="reference internal" href="triton.experimental.gluon.language.tensor.html#triton.experimental.gluon.language.tensor" title="triton.experimental.gluon.language.tensor"><em>tensor</em></a>) – Destination pointer tensor.</p></li>
+<li><p><strong>smem</strong> (<a class="reference internal" href="triton.experimental.gluon.language.shared_memory_descriptor.html#triton.experimental.gluon.language.shared_memory_descriptor" title="triton.experimental.gluon.language.shared_memory_descriptor"><em>shared_memory_descriptor</em></a>) – Source shared memory descriptor.</p></li>
+<li><p><strong>mask</strong> (<a class="reference internal" href="triton.experimental.gluon.language.tensor.html#triton.experimental.gluon.language.tensor" title="triton.experimental.gluon.language.tensor"><em>tensor</em></a><em>, </em><em>optional</em>) – Mask tensor for predicated stores. Defaults to None.</p></li>
+<li><p><strong>cache_modifier</strong> (<em>str</em>) – Cache modifier specifier. Defaults to “”.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
 </section>
 
 
