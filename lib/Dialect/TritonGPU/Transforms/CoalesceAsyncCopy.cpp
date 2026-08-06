@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -50,25 +52,33 @@ static void retargetCopyOperandsToEncoding(
   });
 }
 
-// This pass currently only applies if the following are all true...
+// This pass currently applies in two cases.
+//
+// Case A: all of the following are true:
 //   1) Operand A for WGMMA is to be loaded in registers
 //   2) We upcast operand A in registers before the WGMMA
 //      (downcasting is not yet supported)
 //   3) Pipelining is enabled for loading A
 //
-// ...then for the AsyncCopyGlobalToLocal op, the SharedEncoding
-// vec will be less than BlockedEncoding's sizePerThread for k-dim. E.g. if
-// we're upcasting from int8 to bf16, then shared vec is 8 and sizePerThread
-// for k is 16. In this case, AsyncCopyGlobalToLocal will generate two
-// 8-byte-cp.async's for each contiguous 16B global data owned by each
-// thread. This breaks coalescing (i.e. results 2x the minimum required
-// transactions).
+// In this case, the AsyncCopyGlobalToLocal op's SharedEncoding vec is smaller
+// than the BlockedEncoding sizePerThread for the k dimension. For example, when
+// upcasting from int8 to bf16, the shared vec is 8 and sizePerThread for k is
+// 16. AsyncCopyGlobalToLocal then generates two 8-byte cp.async operations for
+// each contiguous 16B global-data chunk owned by a thread, which breaks
+// coalescing and doubles the minimum required transactions.
 //
 // This issue occurs for cp.async because it combines load and store into one
-// instruction. The fix is to clip each dim of sizePerThread by shared vec, so
-// that the vectorization of load and store are equal along the contiguous
-// dimension. In the above example, each thread will then only own 8B contiguous
-// global data.
+// instruction. Additionally, cp.async only supports copy sizes up to 16B. The
+// fix is to clip each dim of sizePerThread by shared vec and the cp.async copy
+// size limit, so that the vectorization of load and store are equal along the
+// contiguous dimension. In the above example, each thread will then only own 8B
+// contiguous global data.
+//
+// Case B: user hints or analysis can infer alignment that allows 256-bit
+// vectorized load/store operations for regular instructions. In that case,
+// sizePerThread may exceed the 128-bit cp.async hardware limit and break
+// coalescing. Again, the fix is to cap sizePerThread.
+//
 struct ClipAsyncCopySizePerThread
     : public OpRewritePattern<AsyncCopyGlobalToLocalOp> {
   ModuleAxisInfoAnalysis &axisInfoAnalysis;
@@ -96,8 +106,11 @@ struct ClipAsyncCopySizePerThread
     // (see AsyncCopyGlobalToLocalOpConversion)
     LinearLayout regLayout = triton::gpu::toLinearLayout(srcTy);
     LinearLayout sharedLayout = triton::gpu::toLinearLayout(dstTy);
-    auto copyContigSize =
+    unsigned copyContigSize =
         regLayout.invertAndCompose(sharedLayout).getNumConsecutiveInOut();
+    unsigned cpAsyncContigSize =
+        std::max(1u, 128u / dstTy.getElementTypeBitWidth());
+    copyContigSize = std::min<unsigned>(copyContigSize, cpAsyncContigSize);
 
     // obtain block sizePerThread along contig dim
     auto contigPerThread = getContigPerThread(srcTy);
@@ -192,9 +205,9 @@ struct CoalesceAsyncCopyPass
     MLIRContext *context = &getContext();
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<ClipAsyncCopySizePerThread>(axisInfoAnalysis, context);
     patterns.add<CoalesceCheapAsyncCopyGlobalToLocal>(
         axisInfoAnalysis, coalescedAsyncCopyMap, context);
+    patterns.add<ClipAsyncCopySizePerThread>(axisInfoAnalysis, context);
 
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();

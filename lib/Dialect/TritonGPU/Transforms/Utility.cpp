@@ -160,11 +160,11 @@ getAtomicWriteElementsPerThreadCap(Operation *op) {
   return std::nullopt;
 }
 
-static unsigned getMaxElementsPerThread(Operation *op) {
+static unsigned getMaxElementsPerThread(Operation *op, unsigned maxVecBits) {
   Value val = getMemAccessPtr(op);
   auto ty = cast<RankedTensorType>(val.getType());
   unsigned elemNumBits = getElementBitWidth(ty);
-  unsigned maxElementsPerThread = 128 / elemNumBits;
+  unsigned maxElementsPerThread = maxVecBits / elemNumBits;
   // Some atomic lowerings are narrower than a plain store. TTGIR currently
   // exposes the target architecture but not the PTX version, so we only cap
   // cases that are unambiguous from the available target metadata and the
@@ -177,7 +177,8 @@ static unsigned getMaxElementsPerThread(Operation *op) {
 
 unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                 ArrayRef<int64_t> shapePerCTA) {
+                                 ArrayRef<int64_t> shapePerCTA,
+                                 unsigned maxVecBits) {
   Value val = getMemAccessPtr(op);
   auto ty = cast<RankedTensorType>(val.getType());
   AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
@@ -188,7 +189,7 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
   unsigned maxContig =
       std::min(valInfo.getContiguity(order[0]), shapePerCTA[order[0]]);
   unsigned alignment = std::min(maxMultiple, maxContig);
-  unsigned maxElementsPerThread = getMaxElementsPerThread(op);
+  unsigned maxElementsPerThread = getMaxElementsPerThread(op, maxVecBits);
   unsigned currPerThread = std::min(alignment, maxElementsPerThread);
   LDBG("elemNumBytes: " << elemNumBytes
                         << ", divisibility: " << maxMultipleBytes
