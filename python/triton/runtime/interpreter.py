@@ -143,6 +143,18 @@ def _get_signed_np_dtype(dtype):
     return dtype
 
 
+def _get_bf16_np_dtype():
+    # numpy has no native bfloat16, so the interpreter backs it with the optional
+    # ml_dtypes package. It is imported lazily (only when a bf16 tensor is actually
+    # used) so it is not a hard dependency of every Triton install.
+    try:
+        import ml_dtypes  # type: ignore
+    except ImportError as e:
+        raise ImportError("Using bfloat16 tensors in the Triton interpreter requires the optional "
+                          "'ml_dtypes' package. Install it with `pip install ml_dtypes`.") from e
+    return np.dtype(ml_dtypes.bfloat16)
+
+
 def _get_np_dtype(tt_dtype):
     if isinstance(tt_dtype, tl.pointer_type):
         return np.dtype(np.uint64)
@@ -159,8 +171,6 @@ def _get_np_dtype(tt_dtype):
         tl.uint32: np.dtype(np.uint32),
         tl.int64: np.dtype(np.int64),
         tl.uint64: np.dtype(np.uint64),
-        # bfloat16 types are stored as uint16
-        tl.bfloat16: np.dtype(np.uint16),
         # float8 types are stored as uint8
         tl.float8e5: np.dtype(np.uint8),
         tl.float8e5b16: np.dtype(np.uint8),
@@ -171,7 +181,9 @@ def _get_np_dtype(tt_dtype):
     if isinstance(tt_dtype, tl.block_type):
         if isinstance(tt_dtype.element_ty, tl.pointer_type):
             return np.dtype(np.uint64)
-        return np_types[tt_dtype.element_ty]
+        return _get_np_dtype(tt_dtype.element_ty)
+    if tt_dtype == tl.bfloat16:
+        return _get_bf16_np_dtype()
     return np_types[tt_dtype]
 
 
@@ -486,6 +498,9 @@ class InterpreterBuilder:
     def get_fp16(self, value):
         return TensorHandle(np.array([value], dtype=np.float16), tl.float16)
 
+    def get_bf16(self, value):
+        return TensorHandle(np.array([value], dtype=_get_np_dtype(tl.bfloat16)), tl.bfloat16)
+
     def get_fp32(self, value):
         return TensorHandle(np.array([value], dtype=np.float32), tl.float32)
 
@@ -527,14 +542,7 @@ class InterpreterBuilder:
 
     # casting ops
     def cast_impl(self, src, dst_type):
-        src_element_type = src.dtype.scalar
-        dst_element_type = dst_type.scalar
-        if (src_element_type == tl.bfloat16 and dst_element_type == tl.float32) or \
-           (src_element_type == tl.float32 and dst_element_type == tl.bfloat16):
-            data = _convert_float(src.data, src_element_type, dst_element_type, None).view(_get_np_dtype(dst_type))
-            return TensorHandle(data, dst_type.scalar)
-        else:
-            return TensorHandle(src.data.astype(_get_np_dtype(dst_type)), dst_type.scalar)
+        return TensorHandle(src.data.astype(_get_np_dtype(dst_type)), dst_type.scalar)
 
     create_si_to_fp = lambda self, src, dst_type: self.cast_impl(src, dst_type)
     create_ui_to_fp = lambda self, src, dst_type: self.cast_impl(src, dst_type)
