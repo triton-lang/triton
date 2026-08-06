@@ -300,8 +300,9 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
         y_tri = y if y_is_scalar else to_triton(y, device=device, dst_type=dtype_y)
         z_tri = to_triton(np.empty(SIZE, dtype=z_ref.dtype), device=device)
         kernel_fn[(1, )](z_tri, x_tri, y_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
-        err_msg = f"{expr}, {kernel_fn.__name__}"
-        np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=err_msg, atol=7e-3, rtol=0.01)
+        if not is_compile_warmup():
+            err_msg = f"{expr}, {kernel_fn.__name__}"
+            np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=err_msg, atol=7e-3, rtol=0.01)
 
     def get_scalar(x, dtype, low, high, filter):
         # If dtype is int, don't choose a huge number for the scalar
@@ -376,12 +377,17 @@ def test_dtype_codegen():
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [  #
-    (dtype_x, dtype_y, op)
-    for op in ['+', '-', '*', '/', '%']
-    for dtype_x in dtypes_with_bfloat16
-    for dtype_y in dtypes_with_bfloat16
+    pytest.param(
+        dtype_x,
+        dtype_y,
+        op,
+        marks=pytest.mark.disable_warmup if op in ('%', '/') and
+        ((dtype_x in int_dtypes and dtype_y in uint_dtypes) or (dtype_x in uint_dtypes and dtype_y in int_dtypes)) else
+        (),
+    ) for op in ['+', '-', '*', '/', '%'] for dtype_x in dtypes_with_bfloat16 for dtype_y in dtypes_with_bfloat16
 ])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
+@pytest.mark.enable_warmup(min_capability=8, priority=1)
 def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
     expr = f'x {op} y'
     np_expr_gen = (lambda x, y: f'{x} {op} {y}') if op != '%' else (lambda x, y: f'np.fmod({x}, {y})')
@@ -548,12 +554,13 @@ def test_unsigned_name_mangling(device):
 # ---------------
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [  #
-    (dtype_x, dtype_y, op)
+    pytest.param(dtype_x, dtype_y, op, marks=pytest.mark.disable_warmup if 'float' in dtype_x + dtype_y else ())
     for op in ['&', '|', '^']
-    for dtype_x in dtypes + dtypes_with_bfloat16
-    for dtype_y in dtypes + dtypes_with_bfloat16
+    for dtype_x in dtypes_with_bfloat16
+    for dtype_y in dtypes_with_bfloat16
 ])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
+@pytest.mark.enable_warmup(min_capability=8, priority=1)
 def test_bitwise_op(dtype_x, dtype_y, op, num_ctas, device):
     expr = f'x {op} y'
     if (dtype_x in uint_dtypes and dtype_y in int_dtypes and _bitwidth(dtype_x) >= _bitwidth(dtype_y)):
@@ -575,6 +582,7 @@ def test_bitwise_op(dtype_x, dtype_y, op, num_ctas, device):
     (dtype_x, dtype_y, op) for op in ['<<', '>>'] for dtype_x in int_dtypes + uint_dtypes for dtype_y in uint_dtypes
 ])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
+@pytest.mark.enable_warmup(min_capability=8, priority=1)
 def test_shift_op(dtype_x, dtype_y, op, num_ctas, device):
     expr = f'x {op} y'
     bw = max(_bitwidth(dtype_x), _bitwidth(dtype_y))
@@ -625,6 +633,7 @@ ops = ['==', '!=', '>', '<', '>=', '<=']
        for op in ops
        for mode_x, mode_y in [('nan', 'real'), ('real', 'nan'), ('nan', 'nan')]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
+@pytest.mark.enable_warmup(min_capability=8, priority=1)
 def test_compare_op(dtype_x, dtype_y, op, mode_x, mode_y, num_ctas, device):
     expr = f'x {op} y'
     if (dtype_x in uint_dtypes and dtype_y in int_dtypes and _bitwidth(dtype_x) >= _bitwidth(dtype_y)):
