@@ -10,6 +10,7 @@
 #include "rocprofiler-sdk/pc_sampling.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <cstddef>
@@ -108,28 +109,23 @@ bool parsePCSamplingMethod(
 
 PCSamplingMetric::PCSamplingMetricKind mapNotIssuedReasonToStallMetric(
     rocprofiler_pc_sampling_instruction_not_issued_reason_t reason) {
-  switch (reason) {
-  case ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_NO_INSTRUCTION_AVAILABLE:
-    return PCSamplingMetric::StalledNoInstruction;
-  case ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_ALU_DEPENDENCY:
-    return PCSamplingMetric::StalledAMDALUDependency;
-  case ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_WAITCNT:
-    return PCSamplingMetric::StalledAMDWaitcnt;
-  case ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_INTERNAL_INSTRUCTION:
-    return PCSamplingMetric::StalledAMDInternalInstruction;
-  case ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_BARRIER_WAIT:
-    return PCSamplingMetric::StalledBarrier;
-  case ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_ARBITER_NOT_WIN:
-    return PCSamplingMetric::StalledNotSelected;
-  case ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_ARBITER_WIN_EX_STALL:
-    return PCSamplingMetric::StalledAMDArbiterWinExStall;
-  case ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_OTHER_WAIT:
-    return PCSamplingMetric::StalledAMDOtherWait;
-  case ROCPROFILER_PC_SAMPLING_INSTRUCTION_NOT_ISSUED_REASON_SLEEP_WAIT:
-    return PCSamplingMetric::StalledSleeping;
-  default:
+  constexpr std::array ReasonToMetric = {
+      PCSamplingMetric::StalledMisc,
+      PCSamplingMetric::StalledNoInstruction,
+      PCSamplingMetric::StalledAMDALUDependency,
+      PCSamplingMetric::StalledAMDWaitcnt,
+      PCSamplingMetric::StalledAMDInternalInstruction,
+      PCSamplingMetric::StalledBarrier,
+      PCSamplingMetric::StalledNotSelected,
+      PCSamplingMetric::StalledAMDArbiterWinExStall,
+      PCSamplingMetric::StalledAMDOtherWait,
+      PCSamplingMetric::StalledSleeping,
+  };
+
+  auto index = static_cast<int64_t>(reason);
+  if (index < 0 || static_cast<size_t>(index) >= ReasonToMetric.size())
     return PCSamplingMetric::StalledMisc;
-  }
+  return ReasonToMetric[index];
 }
 
 template <bool CheckSuccess>
