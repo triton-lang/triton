@@ -51,6 +51,11 @@ integer sampling interval. The default is `131072`, and rocprofiler-sdk clamps
 the requested value to the supported range reported by the GPU. Smaller values
 can produce more samples and overhead; larger values reduce both.
 
+By default, Proton prefers stochastic sampling and falls back to host-trap
+sampling. Set `PROTON_ROCPROFILER_PC_SAMPLING_METHOD` to `stochastic` or
+`host-trap` to require a specific method. Profiling fails to start if the
+selected method is invalid or unavailable on the visible GPU.
+
 Proton enables rocprofiler-sdk's PC-sampling feature during backend
 configuration because the SDK locks configuration before profiling sessions are
 started. If `ROCPROFILER_PC_SAMPLING_BETA_ENABLED` is already set, Proton
