@@ -1306,6 +1306,8 @@ def test_tcgen5_copy(FAILURE, MEM_ACCESS_KIND, device, run_wrapper, monkeypatch,
         smem.store(val)
         bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
+        # An earlier synchronous reader must not impersonate the tensor core.
+        ttgl.store(output + offs, smem.load(reg_layout))
         blackwell.tcgen05_copy(smem, tmem)
         blackwell.tcgen05_commit(bar)
         if not FAILURE:

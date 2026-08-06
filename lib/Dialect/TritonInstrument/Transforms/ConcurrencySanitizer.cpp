@@ -1020,8 +1020,9 @@ private:
                        effect.operandName, effectCTAs, opInfo->commitKind);
         if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
           funcBuilder.createSetReadVisibilityCall(
-              b, bufferMask, getThreadPeersMask(thread, auxData.threadLayout),
-              pred, memType, op, effectCTAs);
+              b, bufferMask, thread,
+              getThreadPeersMask(thread, auxData.threadLayout), pred, memType,
+              op, effectCTAs);
         }
         if (opInfo->trackingKind ==
             MemEffectsOpInfo::TrackingKind::CommitCount) {

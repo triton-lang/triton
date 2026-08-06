@@ -1549,31 +1549,37 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
       });
 }
 
-void FunctionBuilder::createSetReadVisibilityCall(
-    ImplicitLocOpBuilder &b, Value bufferMask, uint64_t threadMask, Value pred,
-    MemType memType, Operation *insertPoint, Value effectCTAs) {
+void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
+                                                  Value bufferMask, int reader,
+                                                  uint64_t observerMask,
+                                                  Value pred, MemType memType,
+                                                  Operation *insertPoint,
+                                                  Value effectCTAs) {
 
   if (auxData.readVisibility[(int)memType].empty()) {
     return;
   }
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
-  Value threadMaskVal = arith::ConstantIntOp::create(b, threadMask, 64);
+  Value readerMaskVal = arith::ConstantIntOp::create(b, 1ULL << reader, 64);
+  Value observerMaskVal = arith::ConstantIntOp::create(b, observerMask, 64);
   Value readVisibilityVal =
       auxData.readVisibility[(int)memType].at(insertPoint).value;
   auto readVisibilityType = cast<RankedTensorType>(
       auxData.readVisibility[(int)memType].at(insertPoint).type);
-  SmallVector<Value> args = {bufferMask, pred, threadMaskVal, readVisibilityVal,
-                             effectCTAs};
+  SmallVector<Value> args = {bufferMask,        pred,
+                             readerMaskVal,     observerMaskVal,
+                             readVisibilityVal, effectCTAs};
   createCallToCachedFunction(
       b, "set_read_visibility", args,
       /*assertInfo=*/std::nullopt, {readVisibilityType, (uint64_t)memType},
       [readVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value bufferMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
-        Value threadMaskVal = entryBlock->getArgument(2);
-        Value readVisibilityPtr = entryBlock->getArgument(3);
-        Value effectCTAs = entryBlock->getArgument(4);
+        Value readerMaskVal = entryBlock->getArgument(2);
+        Value observerMaskVal = entryBlock->getArgument(3);
+        Value readVisibilityPtr = entryBlock->getArgument(4);
+        Value effectCTAs = entryBlock->getArgument(5);
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
@@ -1594,18 +1600,18 @@ void FunctionBuilder::createSetReadVisibilityCall(
         relationMask = arith::AndIOp::create(fb, relationMask, threadCTAMask);
         bufferMask = arith::AndIOp::create(fb, bufferMask, relationMask);
         auto elemType = cast<IntegerType>(readVisibilityType.getElementType());
-        Value threadMaskElem = adjustIntegerWidth(fb, threadMaskVal, elemType);
-        Value threadBit =
-            triton::SplatOp::create(fb, readVisibilityType, threadMaskElem);
-        Value threadColumnMask =
-            createThreadColumnMask(fb, threadMaskVal, readVisibilityType,
+        Value readerMaskElem = adjustIntegerWidth(fb, readerMaskVal, elemType);
+        Value readerBit =
+            triton::SplatOp::create(fb, readVisibilityType, readerMaskElem);
+        Value observerColumnMask =
+            createThreadColumnMask(fb, observerMaskVal, readVisibilityType,
                                    /*columnDim=*/3);
-        Value readVisibilityOrThreadBit =
-            arith::OrIOp::create(fb, readVisibility, threadBit);
-        Value bufAndThread =
-            arith::AndIOp::create(fb, bufferMask, threadColumnMask);
+        Value readVisibilityOrReaderBit =
+            arith::OrIOp::create(fb, readVisibility, readerBit);
+        Value bufAndObserver =
+            arith::AndIOp::create(fb, bufferMask, observerColumnMask);
         Value newVisibility = arith::SelectOp::create(
-            fb, bufAndThread, readVisibilityOrThreadBit, readVisibility);
+            fb, bufAndObserver, readVisibilityOrReaderBit, readVisibility);
         createMaskedStoreScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
                                        newVisibility, readVisibilityType,
                                        relationMask);
