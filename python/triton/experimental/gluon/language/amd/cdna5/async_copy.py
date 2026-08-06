@@ -9,7 +9,9 @@ __all__ = ["global_to_shared", "shared_to_global", "commit_group", "wait_group",
 @builtin
 def global_to_shared(smem, pointer, mask=None, other=None, cache_modifier="", _semantic=None):
     """
-    Asynchronously copy elements from global memory to shared memory. Requires manual syncronization via `wait_group` before accessing the loaded data.
+    Asynchronously copy elements from global memory to shared memory.
+
+    Requires manual syncronization via :func:`wait_group` before accessing the loaded data.
 
     Args:
         smem (shared_memory_descriptor): Destination shared memory descriptor.
@@ -44,7 +46,9 @@ def global_to_shared(smem, pointer, mask=None, other=None, cache_modifier="", _s
 @builtin
 def shared_to_global(pointer, smem, mask=None, cache_modifier="", _semantic=None):
     """
-    Asynchronously copy elements from shared memory to global memory. Requires manual syncronization via `wait_group` before accessing the stored data.
+    Asynchronously copy elements from shared memory to global memory.
+
+    Requires manual syncronization via :func:`wait_group` before accessing the stored data.
 
     Args:
         pointer (tensor): Destination pointer tensor.
@@ -72,6 +76,7 @@ def shared_to_global(pointer, smem, mask=None, cache_modifier="", _semantic=None
 def mbarrier_arrive(mbarrier, _semantic=None):
     """
     Arrive on the mbarrier once all outstanding async copies are complete.
+
     Args:
         mbarrier (shared_memory_descriptor): Barrier object to arrive on.
     """

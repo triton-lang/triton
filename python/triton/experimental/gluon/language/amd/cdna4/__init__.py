@@ -29,9 +29,9 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     """
     AMD Scaled MFMA operation.
 
-    ```
-    c = a * a_scale @ b * b_scale + acc
-    ```
+    .. code-block:: text
+
+        c = a * a_scale @ b * b_scale + acc
 
     `a` and `b` use microscaling formats described in
     "OCP Microscaling Formats (MX) Specification":
