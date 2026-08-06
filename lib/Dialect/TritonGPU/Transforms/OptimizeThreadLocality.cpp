@@ -134,6 +134,11 @@ static LogicalResult setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
   unsigned rank = srcType.getRank();
   if (rank == 1)
     return failure();
+  // This branch's generic convert-layout lowering materializes the full index
+  // tensor in shared memory when its gather dimension is larger than the
+  // source. Fall back to gather's source-only shared-memory lowering instead.
+  if (idxType.getDimSize(axis) > srcType.getDimSize(axis))
+    return failure();
   SmallVector<unsigned> threadsPerWarp(rank);
   SmallVector<unsigned> warpsPerCTA(rank);
   SmallVector<unsigned> order;
