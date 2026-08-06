@@ -146,23 +146,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
     %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Load 4 elements from vector0
-    // CHECK: mov.u32 $0, 0x0
+    // CHECK-NOT: mov.u32 $0, 0x0
     // CHECK: ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
-    // CHECK: mov.u32 $0, 0x0
+    // CHECK-NOT: mov.u32 $0, 0x0
     // CHECK: ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
-    // CHECK: mov.u32 $0, 0x0
+    // CHECK-NOT: mov.u32 $0, 0x0
     // CHECK: ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
-    // CHECK: mov.u32 $0, 0x0
+    // CHECK-NOT: mov.u32 $0, 0x0
     // CHECK: ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
 
     // Load 4 elements from vector1
-    // CHECK: mov.u32 $0, 0x0
+    // CHECK-NOT: mov.u32 $0, 0x0
     // CHECK: ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
-    // CHECK: mov.u32 $0, 0x0
+    // CHECK-NOT: mov.u32 $0, 0x0
     // CHECK: ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
-    // CHECK: mov.u32 $0, 0x0
+    // CHECK-NOT: mov.u32 $0, 0x0
     // CHECK: ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
-    // CHECK: mov.u32 $0, 0x0
+    // CHECK-NOT: mov.u32 $0, 0x0
     // CHECK: ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
     %9 = tt.load %6 : tensor<256x!tt.ptr<f32>, #blocked0>
     %10 = tt.load %8 : tensor<256x!tt.ptr<f32>, #blocked0>
@@ -397,12 +397,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
     %8 = tt.addptr %7, %4 : tensor<128x!tt.ptr<f32>, #slice>, tensor<128xi32, #slice>
 
     // Load 2 element from vector0 without predicate
-    // CHECK: mov.u32 $0, 0x0
+    // CHECK-NOT: mov.u32 $0, 0x0
     // CHECK-NOT: @{{.*}} ld.global
     // CHECK-COUNT-2: ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
 
     // Load 2 elements from vector1 without predicate
-    // CHECK: mov.u32 $0, 0x0
+    // CHECK-NOT: mov.u32 $0, 0x0
     // CHECK-NOT: @{{.*}} ld.global
     // CHECK-COUNT-2: ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
     %9 = tt.load %6 : tensor<128x!tt.ptr<f32>, #slice>

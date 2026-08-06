@@ -226,8 +226,10 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
       // prepare asm operands
       auto *dstsOpr = ptxBuilder.newListOperand();
-      // If there is a `other` value, use it to init.
-      bool init = other == nullptr;
+      // zero inititialise a masked load when there is no 'other' value,
+      // otherwise use it to init. no need to init when there's no predicate
+      // (i.e. unmasked).
+      bool init = pred && !other;
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         auto *opr = ptxBuilder.newOperand(writeConstraint,
                                           init); // =r operations
