@@ -64,9 +64,12 @@ public:
   bool isStarted() const { return pcSamplingStarted; }
 
   void start(bool pcSamplingModeEnabled);
+  // Checked variants surface SDK failures during normal session stop/flush.
   void stop();
-  void stopNoThrow();
   void flushBuffers();
+  // Tool finalization crosses a C callback boundary, so cleanup there is
+  // best-effort and must not allow SDK failures to escape as exceptions.
+  void stopNoThrow();
   void flushBuffersNoThrow();
   void warnIfInvalidInterval();
   void warnIfSourceLocationsUnavailable();
