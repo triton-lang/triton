@@ -120,6 +120,7 @@ def _p_matmul(
              SWAP_XW: tl.constexpr = False,
              IS_EPILOGUE_QUANT_MX: tl.constexpr = False,
              Y_VALUE_PACK_FACTOR: tl.constexpr = 1,
+             CLC: tl.constexpr = False,
              FLATTEN_LOOPS: tl.constexpr = True,
              W_SHUFFLED: tl.constexpr = False,
              pYPtrs=None,
@@ -245,13 +246,18 @@ def _p_matmul(
 
     DISALLOW_ACC_MULTI_BUFFER: tl.constexpr = is_w_microscaled and BLOCK_M * BLOCK_N >= 128 * 256
 
+    loop_start = 0 if CLC else tl.program_id(0)
+    loop_end = 1 if CLC else num_blocks
+    loop_step = 1 if CLC else NUM_SMS
     for block_id in tl.range(
-        tl.program_id(0), num_blocks, NUM_SMS,
-        flatten=FLATTEN_LOOPS,
+        loop_start, loop_end, loop_step,
+        flatten=FLATTEN_LOOPS and not CLC,
         disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER,
         # Workaround for compile error in hopper warp specialization
-        warp_specialize=FLATTEN_LOOPS,
+        warp_specialize=FLATTEN_LOOPS and not CLC,
     ):
+        if CLC:
+            block_id = tl.program_id(0)
 
         pid_z, pid_m, pid_n, pid_k = compute_pids(block_id, useful_grid_m, grid_n, num_blocks, XCD_SWIZZLE, GROUP_M, SPLIT_K)
 

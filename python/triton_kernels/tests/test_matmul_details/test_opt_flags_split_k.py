@@ -175,32 +175,27 @@ def test_max_allowable_mn_and_split_k_constraints(monkeypatch):
 
     opt_flags.reset_opt_flags()
     opt_flags.reset_opt_flags_constraints()
-    opt_flags.update_opt_flags_constraints(
-        {
-            "max_allowable_mn": 256,
-            # Without split_k, this should raise an error
-        }
-    )
-
-    with pytest.raises(opt_flags.InapplicableConstraint):
-        opt_flags.make_opt_flags(
-                    torch.float16,
-                    torch.float16,
-                    torch.float16,
-                    _DummyPrecisionConfig(),
-                    1,
-                    256,
-                    256,
-                    256,
-                    None,
-                    False,
-                    False,
-                    False,
-                    0,
-                    False,
-                    None,
-                    torch.float32,
-                )
+    with opt_flags.scoped_opt_flags_constraints({"max_allowable_mn": 256}):
+        # Without split_k, this should raise an error.
+        with pytest.raises(opt_flags.InapplicableConstraint):
+            opt_flags.make_opt_flags(
+                        torch.float16,
+                        torch.float16,
+                        torch.float16,
+                        _DummyPrecisionConfig(),
+                        1,
+                        256,
+                        256,
+                        256,
+                        None,
+                        False,
+                        False,
+                        False,
+                        0,
+                        False,
+                        None,
+                        torch.float32,
+                    )
 
 def test_max_allowable_mn(monkeypatch):
     setup_nvidia(monkeypatch)
@@ -210,30 +205,30 @@ def test_max_allowable_mn(monkeypatch):
     def get_flags(split_k, max_mn):
         opt_flags.reset_opt_flags()
         opt_flags.reset_opt_flags_constraints()
-        opt_flags.update_opt_flags_constraints(
+        with opt_flags.scoped_opt_flags_constraints(
             {
                 "split_k": split_k,
                 "max_allowable_mn": max_mn,
             }
-        )
-        return opt_flags.make_opt_flags(
-            torch.float16,
-            torch.float16,
-            torch.float16,
-            _DummyPrecisionConfig(),
-            batch_size,
-            m,
-            n,
-            k,
-            None,
-            False,
-            True,
-            False,
-            0,
-            False,
-            None,
-            torch.float32,
-        )
+        ):
+            return opt_flags.make_opt_flags(
+                torch.float16,
+                torch.float16,
+                torch.float16,
+                _DummyPrecisionConfig(),
+                batch_size,
+                m,
+                n,
+                k,
+                None,
+                False,
+                True,
+                False,
+                0,
+                False,
+                None,
+                torch.float32,
+            )
 
     split_k = 6
     # Allowable mn is less than actual mn, so split_k should be set to 1

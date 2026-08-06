@@ -697,9 +697,8 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
     if (info->trackingKind == MemEffectsOpInfo::TrackingKind::CommitCount &&
         info->commitKind == CommitKind::AsyncCp)
       hasAsyncCopyReads |= llvm::any_of(
-          info->operandEffects, [](const MemEffectsOpInfo::Effects &e) {
-            return e.rw == MemEffectsOpInfo::Effects::Read;
-          });
+          info->operandEffects,
+          [](const MemEffectsOpInfo::Effects &e) { return e.rw == RW::Read; });
     for (const auto &effect : info->operandEffects)
       collectCandidates(effect.buf);
   });

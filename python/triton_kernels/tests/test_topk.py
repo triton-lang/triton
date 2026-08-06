@@ -13,6 +13,7 @@ import torch.distributed as dist
 @pytest.mark.parametrize("k", [8])
 @pytest.mark.parametrize("apply_softmax", [True, False])
 @pytest.mark.parametrize("dtype", ["float16", "bfloat16", "float32"])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_topk(n_rows, n_cols, k, apply_softmax, dtype):
     device = "cuda"
 

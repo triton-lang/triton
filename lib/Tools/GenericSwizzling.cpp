@@ -628,7 +628,7 @@ LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
   // e.g for fp32
   // src = {reg = [], lane = [1, 2, 4, 8, 16], warp = [32]}
   // dst = {reg = [8, 32], lane = [0, 0, 1, 2, 4], warp = [16]}
-  if (log2Vec < 2) {
+  if (log2Vec < 2 && numBanks <= 32) {
     auto smemFlat = smem.flattenOuts();
     // For every bank line, find if it is in regSrc or regDst
     // and if so, store the index in the vector

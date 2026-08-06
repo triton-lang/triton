@@ -139,3 +139,4 @@ from ._standard import (
 from . import nvidia
 from . import amd
 from . import extra
+from . import fpsan
