@@ -9,6 +9,7 @@
 #endif
 
 #include <charconv>
+#include <exception>
 #include <iostream>
 #include <system_error>
 #include <utility>
@@ -98,8 +99,12 @@ void RocprofSDKPCSampling::removeSourceLocationDecoderLocked(
     try {
       state.sourceLocationTranslator->removeDecoder(
           info.codeObjectId, static_cast<uint64_t>(info.loadDelta));
+    } catch (const std::exception &error) {
+      reportSourceLocationErrorLocked(state, info.codeObjectId,
+                                      "removing its decoder", error.what());
     } catch (...) {
-      // Removal is best-effort because the decoder may have failed to register.
+      reportSourceLocationErrorLocked(state, info.codeObjectId,
+                                      "removing its decoder");
     }
   }
 #else
@@ -149,8 +154,12 @@ RocprofSDKPCSampling::resolveSourceLocationLocked(
       auto inst = state.sourceLocationTranslator->get(codeObjectId, pcOffset);
       if (inst && !inst->comment.empty())
         resolved = parseSourceLocationComment(inst->comment, target.kernelName);
+    } catch (const std::exception &error) {
+      reportSourceLocationErrorLocked(
+          state, codeObjectId, "resolving a sampled address", error.what());
     } catch (...) {
-      // Fall back to kernel-level attribution if translation fails.
+      reportSourceLocationErrorLocked(state, codeObjectId,
+                                      "resolving a sampled address");
     }
   }
   state.sourceLocationCache.insert_or_assign(key, resolved);
@@ -184,12 +193,29 @@ bool RocprofSDKPCSampling::ensureSourceLocationDecoderLocked(
         static_cast<uint64_t>(info.loadDelta), info.loadSize);
     info.decoderRegistered = true;
     return true;
+  } catch (const std::exception &error) {
+    reportSourceLocationErrorLocked(
+        state, codeObjectId, "creating its source decoder", error.what());
+    return false;
   } catch (...) {
-    // A decoder failure should only disable source attribution for this
-    // object.
+    reportSourceLocationErrorLocked(state, codeObjectId,
+                                    "creating its source decoder");
     return false;
   }
 #endif
+}
+
+void RocprofSDKPCSampling::reportSourceLocationErrorLocked(
+    MetadataState &state, uint64_t codeObjectId, const char *operation,
+    const char *detail) {
+  if (!state.sourceLocationDiagnosticEmitted.insert(codeObjectId).second)
+    return;
+  std::cerr << "[PROTON] Source-line attribution failed while " << operation
+            << " for code object " << codeObjectId;
+  if (detail)
+    std::cerr << ": " << detail;
+  std::cerr << "; samples will fall back to kernel-level attribution."
+            << std::endl;
 }
 
 void RocprofSDKPCSampling::clearSourceLocationCacheLocked(
@@ -217,6 +243,7 @@ void RocprofSDKPCSampling::tryReleaseCodeObject(uint64_t codeObjectId) {
       removeSourceLocationDecoderLocked(metadata, info->second);
       clearSourceLocationCacheLocked(metadata, codeObjectId);
       metadata.codeObjects.erase(info);
+      metadata.sourceLocationDiagnosticEmitted.erase(codeObjectId);
     });
   });
 }

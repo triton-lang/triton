@@ -198,6 +198,7 @@ private:
         sourceLocationTranslator;
 #endif
     std::unordered_map<uint64_t, CodeObjectInfo> codeObjects;
+    std::unordered_set<uint64_t> sourceLocationDiagnosticEmitted;
     std::unordered_map<uint64_t, KernelSymbolInfo> kernelSymbols;
     std::unordered_map<uint64_t, PCSamplingTarget> dispatchTargets;
   };
@@ -244,6 +245,10 @@ private:
   void replaceCodeObjectLocked(MetadataState &state, CodeObjectInfo info);
   void removeSourceLocationDecoderLocked(MetadataState &state,
                                          const CodeObjectInfo &info);
+  void reportSourceLocationErrorLocked(MetadataState &state,
+                                       uint64_t codeObjectId,
+                                       const char *operation,
+                                       const char *detail = nullptr);
   void tryReleaseCodeObject(uint64_t codeObjectId);
 
   // Set when rocprofiler_force_configure successfully configures the service
