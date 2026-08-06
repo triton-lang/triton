@@ -632,25 +632,28 @@ void RocprofSDKPCSampling::flushAccum() {
   std::unordered_set<uint64_t> consumedDispatchIds;
 
   for (auto &[key, accum] : snapshot) {
+    const auto dispatchId = key.dispatchId;
+    const auto codeObjectId = key.codeObjectId;
+    const auto pcOffset = key.pcOffset;
     PCSamplingTarget target;
     std::optional<SourceLocation> sourceLocation;
     bool hasTarget = metadataState.withLock([&](MetadataState &state) {
-      auto found = state.dispatchTargets.find(key.dispatchId);
+      auto found = state.dispatchTargets.find(dispatchId);
       if (found == state.dispatchTargets.end())
         return false;
       target = found->second;
-      sourceLocation = resolveSourceLocationLocked(state, key.codeObjectId,
-                                                   key.pcOffset, target);
+      sourceLocation = resolveSourceLocationLocked(state, codeObjectId,
+                                                   pcOffset, target);
       return true;
     });
 
     if (!hasTarget) {
       continue;
     }
-    consumedDispatchIds.insert(key.dispatchId);
+    consumedDispatchIds.insert(dispatchId);
 
     if (!sourceLocation) {
-      auto &unresolved = unresolvedAccum[key.dispatchId];
+      auto &unresolved = unresolvedAccum[dispatchId];
       for (int i = 0; i < PCSamplingMetric::PCSamplingMetricKind::Count; ++i)
         unresolved.values[i] += accum.values[i];
       continue;
@@ -670,9 +673,10 @@ void RocprofSDKPCSampling::flushAccum() {
   }
 
   for (auto &[dispatchId, accum] : unresolvedAccum) {
+    const auto currentDispatchId = dispatchId;
     PCSamplingTarget target;
     bool hasTarget = metadataState.withLock([&](MetadataState &state) {
-      auto found = state.dispatchTargets.find(dispatchId);
+      auto found = state.dispatchTargets.find(currentDispatchId);
       if (found == state.dispatchTargets.end())
         return false;
       target = found->second;
