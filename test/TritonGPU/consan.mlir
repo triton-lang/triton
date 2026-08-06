@@ -579,6 +579,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier arrive underflow: current count or tx-count would become invalid"
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK: tt.call @__triton_consan_verify_write_visibility
     // CHECK: tt.call @__triton_consan_verify_read_visibility
     // CHECK: tt.call @__triton_consan_publish_write_visibility
     // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer

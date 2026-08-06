@@ -104,13 +104,10 @@ jobs:
           make WARMUP_PROCS="$warmup_procs" test-warmup
       - name: Run triton tests
         run: make NUM_PROCS=24 test-unit
-      - name: Run gsan tests
-        run: make NUM_PROCS=24 test-gsan
-      - name: Run interpreter tests
-        if: ${{ matrix.config.runner_type == 'nvidia-h100' }}
-        run: make test-interpret
+      - name: Run gsan and interpreter tests
+        run: make -j2 NUM_PROCS=24 test-gsan test-interpret
       - name: Run regression tests
-        run: make test-regression
+        run: TRITON_TEST_NUM_GPUS="$NUM_GPUS" make test-regression
       - name: Run microbenchmark tests
         # Microbenchmark never fail but running them gives us an easy way to track performance changes.
         run: make test-microbenchmark

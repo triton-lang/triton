@@ -7,7 +7,7 @@ import pytest
 import triton
 import triton.language as tl
 from triton.compiler import ASTSource
-from triton._internal_testing import ReplenishingProcessPool, run_in_process
+from triton._internal_testing import run_in_process, use_process_pool
 
 target = triton.runtime.driver.active.get_current_target()
 start_method = 'fork' if 'fork' in multiprocessing.get_all_start_methods() else 'spawn'
@@ -39,15 +39,11 @@ def test_run_in_process_terminates_stalled_children(monkeypatch):
 
 
 def test_replenishing_process_pool_reuses_clean_processes() -> None:
-    pool = ReplenishingProcessPool(__name__)
-    pool.start()
-    try:
-        first = pool.run(write_process_id_to_stderr)
-        second = pool.run(write_process_id_to_stderr)
-        failed = pool.run(write_process_id_to_stderr, args=(True, ))
-        replacement = pool.run(write_process_id_to_stderr)
-    finally:
-        pool.close()
+    with use_process_pool(__name__):
+        first = run_in_process(write_process_id_to_stderr)
+        second = run_in_process(write_process_id_to_stderr)
+        failed = run_in_process(write_process_id_to_stderr, args=(True, ))
+        replacement = run_in_process(write_process_id_to_stderr)
     assert first.exc is None
     assert second.exc is None
     assert first.driver_stderr_output == second.driver_stderr_output

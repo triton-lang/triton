@@ -103,7 +103,7 @@ def _make_partitioned_dot_operand_layout(sublayout, partition_dim, num_partition
 @constexpr_function
 def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_layout_b, num_warps, instr_shape,
                                  a_transposed=False, b_transposed=False, slice_m=None, slice_n=None):
-    """Create partitioned shared memory layouts and WMMA layout for a GFX1250 GEMM
+    """Create partitioned shared memory layouts and WMMA layout for a CDNA5 GEMM
        in order to avoid LDS partition conflicts.
 
     Args:

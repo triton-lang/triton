@@ -432,6 +432,10 @@ def matmul(a, b, bias,
         rhs_layout=b.storage.layout,
         epilogue_reduction_n=fused_activation.specs.reduction_n,
     )
+    if opt_flags.clc and ragged_dimension == "M":
+        raise InapplicableConstraint("CLC requires a host-known grid and does not support ragged-M matmul")
+    if opt_flags.clc and opt_flags.idle_sms:
+        raise InapplicableConstraint("CLC does not support leaving SMs idle")
     if b_is_shuffled:
         if b.dtype.bitwidth != 4:
             raise ValueError("Shuffled weights are only supported for mxfp4 values")
@@ -509,7 +513,7 @@ def matmul(a, b, bias,
         grid_m = a_ragged_metadata.n_blocks(a_ragged_metadata.n_slices, M, opt_flags.block_m)
     grid_n = triton.cdiv(N, opt_flags.block_n)
     grid = batch_size * grid_m * grid_n * opt_flags.split_k
-    if opt_flags.is_persistent:
+    if opt_flags.is_persistent and not opt_flags.clc:
         available_sms = target_info.num_sms() - opt_flags.idle_sms
         grid = min(opt_flags.occupancy_target * available_sms, grid)
     # canonicalize storage
@@ -645,6 +649,8 @@ def matmul(a, b, bias,
     } if fused_comm is not None else {}
     b_strides = b.storage.data.stride()[:3] if b_is_shuffled else b.storage.data.stride()
     extra_kernel_kwargs = {"W_SHUFFLED": b_is_shuffled} if opt_flags.is_persistent else {}
+    if opt_flags.clc:
+        extra_kernel_kwargs.update(CLC=True, clc=True)
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
     (kernels._p_matmul if opt_flags.is_persistent else kernels._matmul)[(grid,)](
                    c_tensor_or_tma, c.storage.data, *out_matmul.stride(),

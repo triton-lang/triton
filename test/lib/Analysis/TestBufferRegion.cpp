@@ -56,8 +56,7 @@ struct TestBufferRegionPass
     analysis->calculateUsedBufferRegions(moduleOp);
 
     moduleOp.walk([&](Operation *op) {
-      for (const auto &access :
-           triton::BufferRegionAnalysis::getMemoryAccesses(op)) {
+      for (const auto &access : triton::getMemoryAccesses(op)) {
         if (!llvm::is_contained(op->getOperands(), access.value))
           continue;
         emitRegionInfo(op->getLoc(), "Buffers",

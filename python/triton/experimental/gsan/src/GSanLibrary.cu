@@ -556,7 +556,6 @@ GSAN_DEVICE void writeRange(ThreadState *state, uintptr_t write_addr,
   auto range = roundRange(Range{write_addr, write_addr + nBytes});
 
   auto reserveBase = state->reserveBase;
-  rwLockAcquireRead(state->lock);
 
   for (uintptr_t addr = range.start; addr < range.end;
        addr += kShadowMemGranularityBytes) {
@@ -567,8 +566,6 @@ GSAN_DEVICE void writeRange(ThreadState *state, uintptr_t write_addr,
     doWrite(state, cell, loc);
     releaseShadow(cell);
   }
-
-  rwLockReleaseRead(state->lock);
 }
 
 // Handles tl.store(ptrs, values, mask)
@@ -576,12 +573,20 @@ GSAN_DEVICE void tensorStore(ThreadState *state, const char *stackPtr,
                              int nElems, int bytesPerElem, Location loc) {
   const uintptr_t *ptrsPtr = reinterpret_cast<const uintptr_t *>(stackPtr);
   const char *maskPtr = stackPtr + nElems * sizeof(uintptr_t);
+  bool acquired = false;
   for (int i = 0; i < nElems; ++i) {
     auto ptr = ptrsPtr[i];
     auto mask = maskPtr[i];
-    if (mask)
+    if (mask) {
+      if (!acquired) {
+        rwLockAcquireRead(state->lock);
+        acquired = true;
+      }
       writeRange(state, ptr, bytesPerElem, loc);
+    }
   }
+  if (acquired)
+    rwLockReleaseRead(state->lock);
 }
 
 GSAN_DEVICE void doRead(ThreadState *state, ShadowCell *cell, Location loc) {
@@ -597,7 +602,6 @@ GSAN_DEVICE void readRange(ThreadState *state, uintptr_t read_addr, int nBytes,
   auto reserveBase = state->reserveBase;
   if (range.start >= reserveBase + kReserveSize || reserveBase >= range.end)
     return;
-  rwLockAcquireRead(state->lock);
 
   for (uintptr_t addr = range.start; addr < range.end;
        addr += kShadowMemGranularityBytes) {
@@ -608,8 +612,6 @@ GSAN_DEVICE void readRange(ThreadState *state, uintptr_t read_addr, int nBytes,
     doRead(state, cell, loc);
     releaseShadow(cell);
   }
-
-  rwLockReleaseRead(state->lock);
 }
 
 // Handles tl.load(ptrs, mask)
@@ -617,12 +619,20 @@ GSAN_DEVICE void tensorLoad(ThreadState *state, const char *stackPtr,
                             int nElems, int bytesPerElem, Location loc) {
   const uintptr_t *ptrsPtr = reinterpret_cast<const uintptr_t *>(stackPtr);
   const char *maskPtr = stackPtr + nElems * sizeof(uintptr_t);
+  bool acquired = false;
   for (int i = 0; i < nElems; ++i) {
     auto ptr = ptrsPtr[i];
     auto mask = maskPtr[i];
-    if (mask)
+    if (mask) {
+      if (!acquired) {
+        rwLockAcquireRead(state->lock);
+        acquired = true;
+      }
       readRange(state, ptr, bytesPerElem, loc);
+    }
   }
+  if (acquired)
+    rwLockReleaseRead(state->lock);
 }
 
 GSAN_DEVICE void initAtomicEventState(AtomicEventState *event) {
