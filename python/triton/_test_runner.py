@@ -49,7 +49,7 @@ def _environment(phase=None, num_gpus=None):
         environment["TRITON_CI_CACHE_PHASE"] = phase
     if num_gpus is not None:
         environment["TRITON_TEST_NUM_GPUS"] = str(num_gpus)
-        visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+        visible = os.environ.get("HIP_VISIBLE_DEVICES") or os.environ.get("CUDA_VISIBLE_DEVICES")
         if visible:
             environment["TRITON_TEST_VISIBLE_GPUS"] = visible
     return environment

@@ -129,7 +129,7 @@ class CompilationTrace:
             "cache_hit": cache_hit,
             "duration_us": times.total,
             "worker": os.environ.get("PYTEST_XDIST_WORKER", "main"),
-            "gpu": os.environ.get("CUDA_VISIBLE_DEVICES"),
+            "gpu": os.environ.get("HIP_VISIBLE_DEVICES" if torch.version.hip else "CUDA_VISIBLE_DEVICES"),
             "compiler_worker": os.environ.get("TRITON_WARMUP_COMPILER_WORKER"),
             "cache_dir": triton.knobs.cache.dir,
         }
@@ -150,14 +150,15 @@ def pytest_xdist_setupnodes(config, specs):
     if not requested:
         return
 
-    visible = os.environ.get("TRITON_TEST_VISIBLE_GPUS", os.environ.get("CUDA_VISIBLE_DEVICES"))
+    visibility_variable = "HIP_VISIBLE_DEVICES" if torch.version.hip else "CUDA_VISIBLE_DEVICES"
+    visible = os.environ.get("TRITON_TEST_VISIBLE_GPUS", os.environ.get(visibility_variable))
     if visible:
         devices = [device.strip() for device in visible.split(",") if device.strip()]
     else:
         devices = [str(index) for index in range(int(requested))]
 
     for index, spec in enumerate(specs):
-        spec.env["CUDA_VISIBLE_DEVICES"] = devices[index % int(requested)]
+        spec.env[visibility_variable] = devices[index % int(requested)]
 
 
 def _cache_phase_for_item(item):
@@ -180,6 +181,7 @@ def pytest_collection_modifyitems(config, items):
 
     selected = []
     deselected = []
+    target = None
     capability = None
     for item in items:
         marker = item.get_closest_marker("enable_warmup")
@@ -189,11 +191,14 @@ def pytest_collection_modifyitems(config, items):
             continue
         minimum = marker.kwargs.get("min_capability")
         if minimum is not None:
-            if capability is None:
-                capability = torch.cuda.get_device_capability()[0]
-            if capability < minimum:
-                deselected.append(item)
-                continue
+            if target is None:
+                target = triton.runtime.driver.active.get_current_target()
+            if target.backend == "cuda":
+                if capability is None:
+                    capability = torch.cuda.get_device_capability()[0]
+                if capability < minimum:
+                    deselected.append(item)
+                    continue
         selected.append(item)
     if deselected:
         config.hook.pytest_deselected(items=deselected)

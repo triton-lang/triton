@@ -114,17 +114,23 @@ def test_compile_warmup_coordinator_deduplicates_and_propagates_errors(monkeypat
         (4, "5,2,7,3", ["5", "2", "7", "3", "5"]),
     ],
 )
-def test_compile_warmup_assigns_gpu_before_xdist_worker_initialization(monkeypatch, num_gpus, visible, expected):
+@pytest.mark.parametrize(("hip", "variable"), [(None, "CUDA_VISIBLE_DEVICES"), ("7.2", "HIP_VISIBLE_DEVICES")])
+def test_compile_warmup_assigns_gpu_before_xdist_worker_initialization(monkeypatch, num_gpus, visible, expected, hip,
+                                                                       variable):
     monkeypatch.setenv("TRITON_TEST_NUM_GPUS", str(num_gpus))
+    monkeypatch.setattr(torch.version, "hip", hip)
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising=False)
     monkeypatch.delenv("TRITON_TEST_VISIBLE_GPUS", raising=False)
     if visible is not None:
+        monkeypatch.setenv(variable, visible)
+        assert _test_runner._environment(num_gpus=num_gpus)["TRITON_TEST_VISIBLE_GPUS"] == visible
         monkeypatch.setenv("TRITON_TEST_VISIBLE_GPUS", visible)
     specs = [SimpleNamespace(env={}) for _ in expected]
 
     pytest_xdist_setupnodes(None, specs)
 
-    assert [spec.env["CUDA_VISIBLE_DEVICES"] for spec in specs] == expected
+    assert [spec.env[variable] for spec in specs] == expected
 
 
 @pytest.mark.parametrize(("capability", "num_gpus", "kernel_workers"), [(8, 1, 6), (9, 1, 4), (10, 2, 6), (10, 4, 12)])
@@ -203,8 +209,10 @@ def test_gsan_runner_terminates_stalled_pytest_processes():
     assert _test_runner._run(command, timeout=0.05) == 1
 
 
-def test_compile_warmup_selects_eligible_markers(monkeypatch):
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+def test_compile_warmup_selects_eligible_markers(monkeypatch, backend):
     monkeypatch.setattr(torch.cuda, "get_device_capability", lambda: (8, 0))
+    monkeypatch.setattr(triton.runtime.driver.active, "get_current_target", lambda: SimpleNamespace(backend=backend))
     enabled = SimpleNamespace(kwargs={})
     unsupported = SimpleNamespace(kwargs={"min_capability": 9})
     excluded = object()
@@ -222,11 +230,11 @@ def test_compile_warmup_selects_eligible_markers(monkeypatch):
     config = SimpleNamespace(getoption=lambda _: True,
                              hook=SimpleNamespace(pytest_deselected=lambda items: deselected.extend(items)))
 
-    selected = items[1]
+    selected = [items[1]] if backend == "cuda" else [items[1], items[3]]
     pytest_collection_modifyitems(config, items)
 
-    assert items == [selected]
-    assert len(deselected) == 3
+    assert items == selected
+    assert len(deselected) == 4 - len(selected)
 
 
 def test_compile_warmup_spreads_prioritized_tests_across_capture_workers(monkeypatch):
