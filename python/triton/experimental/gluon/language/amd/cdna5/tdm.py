@@ -191,7 +191,10 @@ def update_tensor_descriptor(desc: tensor_descriptor, add_offsets: List[ttgl.con
     Raises:
         ValueError: if no parameter is provided (no-op updates are forbidden).
 
-    Example:
+    **Example**
+
+    .. code-block:: python
+
         # K-loop interior: bump tile position only
         d = tdm.update_tensor_descriptor(d, add_offsets=[0, BLOCK_K])
 
@@ -393,8 +396,10 @@ def async_scatter(desc: tensor_descriptor, dst_row_indices: ttgl.tensor, src: sh
     rows specified by the dst_row_indices tensor.
 
     The dtype of dst_row_indices determines the index size:
-    - int16: up to 16 rows can be scattered per TDM instruction
-    - int32: up to 8 rows can be scattered per TDM instruction
+
+    * ``int16``: up to 16 rows can be scattered per TDM instruction.
+    * ``int32``: up to 8 rows can be scattered per TDM instruction.
+
     If more rows are needed, multiple TDM instructions will be automatically issued.
 
     The column offset is carried by the descriptor: position it beforehand with
@@ -429,8 +434,10 @@ def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, dst: sha
     rows specified by the src_row_indices tensor.
 
     The dtype of src_row_indices determines the index size:
-    - int16: up to 16 rows can be gathered per TDM instruction
-    - int32: up to 8 rows can be gathered per TDM instruction
+
+    * ``int16``: up to 16 rows can be gathered per TDM instruction.
+    * ``int32``: up to 8 rows can be gathered per TDM instruction.
+
     If more rows are needed, multiple TDM instructions will be automatically issued.
 
     The column offset and predicate are carried by the descriptor: position it
@@ -458,9 +465,12 @@ def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, dst: sha
 @builtin
 def prefetch(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], pred: bool = True,
              speculative: bool = False, _semantic=None) -> None:
-    """Prefetches a block of tensor specified in tensor descriptor from global memory into L2. Speculative prefetches can generate more
-    efficient assembly because they do not require out of bounds checks. However, they are dropped by the hardware if their virtual address translation is not cached.
-    So speculative should only be set if previous iterations have accessed the same virtual page (e.g. column major)
+    """Prefetches a block of tensor specified in tensor descriptor from global memory into L2.
+
+    Speculative prefetches can generate more efficient assembly because they do not require out of bounds checks.
+    However, they are dropped by the hardware if their virtual address translation is not cached.
+    So speculative should only be set if previous iterations have accessed the same virtual page (e.g. column major).
+
     Args:
         src (tensor_descriptor): the source tensor descriptor.
         offsets (List[int]): the offsets from the base pointer in the tensor descriptor.
