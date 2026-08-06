@@ -120,9 +120,9 @@ class AMDWMMALayout(DistributedLayout):
 
     Current supported versions:
 
-    - 1: RDNA3; e.g., gfx1100, gfx1101
-    - 2: RDNA4; e.g., gfx1200, gfx1201
-    - 3: gfx1250
+    - 1: RDNA3: e.g., gfx1100, gfx1101
+    - 2: RDNA4: e.g., gfx1200, gfx1201
+    - 3: CDNA5: gfx1250
     """
     version: int
     transposed: bool

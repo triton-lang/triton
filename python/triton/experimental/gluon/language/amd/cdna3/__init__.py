@@ -166,6 +166,7 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
 def mfma(a, b, acc, _semantic: GluonSemantic = None):
     """
     Computes matrix-multiplication of a * b + acc using AMD native matrix core units.
+
     Args:
         a (tensor): The first operand of mfma.
         b (tensor): The second operand of mfma.
