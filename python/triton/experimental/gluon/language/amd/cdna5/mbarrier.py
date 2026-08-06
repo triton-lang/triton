@@ -61,14 +61,14 @@ def arrive(mbarrier, *, count=1, _semantic=None):
     If the pending count reaches zero, the phase changes (is decremented in a
     wraparound manner) and the pending count is reloaded with the init count value.
     Returns the mbarrier's phase parity (0 for even, 1 for odd) prior to the
-    "arrive" operation.
+    ``arrive`` operation.
 
     Args:
         mbarrier (shared_memory_descriptor): Barrier to be signalled.
         count (int): Count to arrive with. Defaults to 1.
 
     Returns:
-        prior phase (int): phase of mbarrier, prior to "arrive" operation.
+        int: Phase of the mbarrier prior to the ``arrive`` operation.
     """
     count = _unwrap_if_constexpr(count)
     handle = _semantic.builder.create_lds_barrier_arrive(mbarrier.handle, count)
