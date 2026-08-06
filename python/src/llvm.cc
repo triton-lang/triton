@@ -215,78 +215,6 @@ createTargetMachine(llvm::Module *module, std::string proc,
   return machine;
 }
 
-void dumpSchedulingDAG(llvm::Module &module, const std::string &triple,
-                       const std::string &proc, const std::string &features,
-                       const std::vector<std::string> &flags,
-                       bool enable_fp_fusion, const std::string &dumpFileId) {
-  using namespace mlir;
-
-  // Check if we should dump sched DAG
-  std::string dumpMirBase = triton::tools::getStrEnv("TRITON_DUMP_MIR");
-  bool dumpMir = !dumpMirBase.empty();
-  if (!dumpMir) {
-    return;
-  }
-
-  LLVMOptionSettings options;
-  options.enable(flags);
-  options.enableFlagsFromDisableLLVMOptEnv();
-  options.set("stop-after", "machine-scheduler");
-  options.setFlag("misched-print-dags", true);
-  ScopedLLVMOptions optionScope(options.settings);
-
-  std::string dumpFilename = dumpMirBase + "/" + dumpFileId + ".txt";
-
-  // inline everything
-  for (llvm::Function &f : module.functions())
-    if (!f.hasFnAttribute(llvm::Attribute::NoInline))
-      f.addFnAttr(llvm::Attribute::AlwaysInline);
-  // verify and store llvm
-  llvm::legacy::PassManager pm;
-  pm.add(llvm::createAlwaysInlinerLegacyPass());
-  pm.add(llvm::createVerifierPass());
-
-  pm.run(module);
-
-  // create machine
-  module.setTargetTriple(Triple(triple));
-  auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
-  // set data layout
-  module.setDataLayout(machine->createDataLayout());
-
-  // Save original stderr file descriptor
-  int saved_stderr_fd = dup(fileno(stderr));
-
-  // Redirect stderr to append to dump file
-  FILE *redirected = freopen(dumpFilename.c_str(), "a", stderr);
-  if (!redirected) {
-    llvm::errs() << "Warning: Failed to redirect stderr to " << dumpFilename
-                 << "\n";
-  }
-
-  // emit machine code
-  std::string result;
-  {
-    llvm::raw_string_ostream stream(result);
-    llvm::buffer_ostream pstream(stream);
-    llvm::legacy::PassManager pass;
-    // emit
-    machine->addPassesToEmitFile(pass, pstream, nullptr,
-                                 llvm::CodeGenFileType::AssemblyFile);
-    pass.run(module);
-  }
-
-  // Restore stderr
-  fflush(stderr);
-  if (saved_stderr_fd != -1) {
-    dup2(saved_stderr_fd, fileno(stderr));
-    close(saved_stderr_fd);
-    clearerr(stderr);
-  }
-
-  llvm::errs() << "DAG dumped to: " << dumpFilename << "\n";
-}
-
 std::string
 translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
                      const std::string &proc, const std::string &features,
@@ -327,17 +255,25 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
   // set data layout
   module.setDataLayout(machine->createDataLayout());
 
-  // emit machine code
+  // emit machine code (MIR text, since stop-before=machine-scheduler)
   std::string result;
   {
     llvm::raw_string_ostream stream(result);
     llvm::buffer_ostream pstream(stream);
     llvm::legacy::PassManager pass;
-    // emit
     machine->addPassesToEmitFile(pass, pstream, nullptr,
                                  llvm::CodeGenFileType::AssemblyFile);
     pass.run(module);
   }
+
+  // Build the scheduling DAG by re-parsing the MIR text we just produced into a
+  // fresh MachineFunction and running DAGBuilder on it. We key instruction
+  // identity on (bb, position), NOT register names, so the re-parse's virtual-
+  // register renumbering is irrelevant: the re-parsed MF enumerates
+  // instructions in the exact order of the dumped MIR text, so (bb, pos) maps
+  // 1:1 onto the dumped body lines the scheduler reorders.
+  std::string dagText =
+      llvm::mir_dag::buildSchedulingDAGText(result, triple, proc);
 
   std::string dumpFilename = dumpMirBase + "/" + dumpFileId + ".txt";
   {
@@ -350,6 +286,7 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
       outFile << result;
       outFile << "---";
       outFile << "\n========== SCHEDULING DAG ==========\n";
+      outFile << dagText;
     }
     llvm::errs() << "MIR dumped to: " << dumpFilename << "\n";
   }
@@ -894,27 +831,6 @@ void init_triton_llvm(py::module_ &m) {
       py::arg("features"), py::arg("flags"), py::arg("enable_fp_fusion"),
       py::arg("is_object"), py::arg("canonicalize_gep"),
       py::arg("sched4reg") = false);
-
-  m.def("dump_sched_dag", [](std::string llvmIR, std::string triple,
-                             std::string proc, std::string features,
-                             std::vector<std::string> flags,
-                             bool enable_fp_fusion, std::string dumpFileId) {
-    // when allow_threads goes out of scope, gil will be released
-    py::gil_scoped_release allow_threads;
-    // create LLVM module from C++
-    llvm::LLVMContext context;
-    std::unique_ptr<llvm::MemoryBuffer> buffer =
-        llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
-    llvm::SMDiagnostic error;
-    std::unique_ptr<llvm::Module> module =
-        llvm::parseIR(buffer->getMemBufferRef(), error, context);
-    if (!module) {
-      llvm::report_fatal_error("failed to parse IR: " + error.getMessage() +
-                               "lineno: " + std::to_string(error.getLineNo()));
-    }
-    dumpSchedulingDAG(*module, triple, proc, features, flags, enable_fp_fusion,
-                      dumpFileId);
-  });
 
   m.def("translate_to_mir",
         [](std::string llvmIR, std::string triple, std::string proc,
