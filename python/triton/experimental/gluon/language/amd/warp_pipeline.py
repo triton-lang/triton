@@ -6,8 +6,8 @@ class warp_pipeline_stage:
     Marks a warp-pipeline stage inside a Gluon kernel.
 
     Within a ``@gluon.jit`` kernel, each ``with gl.amd.warp_pipeline_stage(...)``
-    block defines a distinct stage of a warp pipeline. All operations
-	inside the block belong to the same pipeline cluster and execute as a unit
+    block defines a distinct stage of a warp pipeline. All operations inside
+    the block belong to the same pipeline cluster and execute as a unit
     relative to other stages.
 
     The optional string ``label`` (for example, ``"load"`` or ``"compute"``)
@@ -22,7 +22,7 @@ class warp_pipeline_stage:
     N.B., This is a performance hint to the hardware scheduler. Its effect
     depends on the dynamic interaction between warp instruction streams
     across different warps. It is optional and should be used judiciously,
-	only when explicit scheduling guidance is beneficial.
+    only when explicit scheduling guidance is beneficial.
 
     The following schematic shows the stage boundaries; it is not intended as
     an optimal kernel.

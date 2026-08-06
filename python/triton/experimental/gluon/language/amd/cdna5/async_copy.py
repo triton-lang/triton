@@ -19,7 +19,6 @@ def global_to_shared(smem, pointer, mask=None, other=None, cache_modifier="", _s
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         other (tensor or scalar, optional): Tensor or scalar providing default values for masked elements. Defaults to None(0).
         cache_modifier (str): Cache modifier specifier. Defaults to "".
-        eviction_policy (str): Eviction policy specifier. Defaults to "".
     """
     _check(pointer.type.is_block(), lambda: "expected ptr to be a tensor")
     _check(isinstance(pointer.type.layout, DistributedLayout),
