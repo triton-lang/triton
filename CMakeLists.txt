@@ -393,6 +393,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
     # LLVM
     LLVMPasses
+    LLVMCodeGen
     LLVMNVPTXCodeGen
     LLVMAMDGPUCodeGen
     LLVMAMDGPUAsmParser
@@ -420,11 +421,19 @@ if(TRITON_BUILD_PYTHON_MODULE)
                   ${PYTHON_SRC_PATH}/passes.cc
                   ${PYTHON_SRC_PATH}/interpreter.cc
                   ${PYTHON_SRC_PATH}/llvm.cc
+                  ${PYTHON_SRC_PATH}/DAGBuilder.cpp
                   ${PYTHON_SRC_PATH}/specialize.cc)
 
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(triton PRIVATE -Wno-array-bounds)
   endif()
+
+  # DAGBuilder.cpp subclasses llvm::ScheduleDAGInstrs, which LLVM compiles with
+  # -fno-rtti (no typeinfo emitted). Compiling the subclass WITH RTTI makes the
+  # compiler reference the base class's (nonexistent) typeinfo, producing an
+  # undefined-symbol link error. Match LLVM by disabling RTTI for this source.
+  set_source_files_properties(${PYTHON_SRC_PATH}/DAGBuilder.cpp
+    PROPERTIES COMPILE_OPTIONS "-fno-rtti")
 
   # Link triton with its dependencies
   target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})

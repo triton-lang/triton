@@ -542,10 +542,11 @@ class HIPBackend(BaseBackend):
         features = ''
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash
+        # translate_to_mir dumps both the pre-machine-scheduler MIR and, built
+        # from that same MachineFunction, the scheduling DAG (a (bb, position)
+        # edge list appended after the SCHEDULING DAG marker).
         _ = llvm.translate_to_mir(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
                                   dump_file_id)
-        llvm.dump_sched_dag(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
-                            dump_file_id)
         if knobs.amd.swap_mir_enable_misched and not knobs.amd.swap_mir:
             raise ValueError("TRITON_SWAP_MIR_ENABLE_MISCHED requires TRITON_SWAP_MIR to be set")
         if knobs.amd.swap_mir:
