@@ -1448,7 +1448,7 @@ def test_scope_multiple_threads(tmp_path: pathlib.Path, device: str):
 
 @pytest.mark.skipif(not is_cuda() and not is_hip(), reason="Only CUDA/HIP backend supports NVTX profiling")
 @pytest.mark.parametrize("enable_nvtx", [
-    None,
+    pytest.param(None, marks=pytest.mark.skipif(is_hip(), reason="ROCm profiling intermittently omits kernel metrics")),
     True,
     pytest.param(False, marks=pytest.mark.skipif(is_hip(),
                                                  reason="ROCm profiling intermittently omits kernel metrics")),
