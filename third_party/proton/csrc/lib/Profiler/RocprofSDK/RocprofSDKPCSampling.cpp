@@ -112,13 +112,13 @@ PCSamplingMetric::PCSamplingMetricKind mapNotIssuedReasonToStallMetric(
   constexpr std::array ReasonToMetric = {
       PCSamplingMetric::StalledMisc,
       PCSamplingMetric::StalledNoInstruction,
-      PCSamplingMetric::StalledAMDALUDependency,
-      PCSamplingMetric::StalledAMDWaitcnt,
-      PCSamplingMetric::StalledAMDInternalInstruction,
+      PCSamplingMetric::StalledALUDependency,
+      PCSamplingMetric::StalledWaitcnt,
+      PCSamplingMetric::StalledInternalInstruction,
       PCSamplingMetric::StalledBarrier,
       PCSamplingMetric::StalledNotSelected,
-      PCSamplingMetric::StalledAMDArbiterWinExStall,
-      PCSamplingMetric::StalledAMDOtherWait,
+      PCSamplingMetric::StalledArbiterWinExStall,
+      PCSamplingMetric::StalledOtherWait,
       PCSamplingMetric::StalledSleeping,
   };
 
