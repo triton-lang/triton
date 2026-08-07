@@ -679,6 +679,10 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Value recipients,
 }
 
 Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
+  if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op);
+      arrive && arrive.isMulticast())
+    return getRecipientCTAsForBroadcastMasks(
+        b, {static_cast<uint16_t>(arrive.getMulticastCTA())});
   if (isa<ttng::BarrierExpectOp, ttng::ArriveBarrierOp>(op)) {
     Value barrier = cast<ttg::MBarrierOpInterface>(op).getBarrier();
     std::optional<uint32_t> fromCTA;
