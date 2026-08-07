@@ -92,9 +92,6 @@ static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
                                              FunctionOpInterface funcOp,
                                              Allocation *allocation,
                                              int numCTAs) {
-  if (isCrossCTAMBarrier(initBarrierOp.getBarrier(), numCTAs))
-    return true;
-
   Allocation::BufferIdSetT initBarrierBuffers;
   for (auto bufferId :
        allocation->getAllBufferIdsWithAliases(initBarrierOp.getBarrier())) {
