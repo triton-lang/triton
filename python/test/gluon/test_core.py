@@ -362,7 +362,7 @@ def tma_multicast_loop_local_mbarrier_lifecycle_kernel(in_desc, out_desc, iters)
         mbarrier.wait(bar, phase=0, deps=[smem])
         mbarrier.invalidate(bar)
 
-    tma.async_copy_shared_to_global(out_desc, [0, 0], smem)
+    tma.async_store(out_desc, [0, 0], smem)
     tma.store_wait(0)
     smem._keep_alive()
 

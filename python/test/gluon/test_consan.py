@@ -1130,7 +1130,7 @@ def test_tma_store(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
         result = run_in_process(test_tma_store, (FAILURE, device, False, monkeypatch, num_ctas))
         if FAILURE:
             assert_expected_cuda_failure(result.exc)
-            assert "Accessing buffer with pending access. Pending access type: async_copy_shared_to_global" in result.driver_stderr_output
+            assert "Accessing buffer with pending access. Pending access type: async_store" in result.driver_stderr_output
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
