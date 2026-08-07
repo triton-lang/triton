@@ -7,6 +7,8 @@
 
 namespace mlir::triton::nvidia_gpu {
 
+bool hasTCGen5CommitCrossCTA(Operation *op);
+
 bool isCrossCTAMBarrier(Value barrier, int numCTAs);
 
 void getCrossCTAConsumerBarriers(Operation *op,

@@ -7,12 +7,7 @@
 
 namespace mlir::triton::nvidia_gpu {
 
-namespace {
-
-namespace ttg = mlir::triton::gpu;
-namespace ttng = mlir::triton::nvidia_gpu;
-
-static bool hasTCGen5CommitCrossCTA(Operation *op) {
+bool hasTCGen5CommitCrossCTA(Operation *op) {
   SmallVector<Value> descs;
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
     descs = mma.getCompletionDescs();
@@ -22,8 +17,6 @@ static bool hasTCGen5CommitCrossCTA(Operation *op) {
     return false;
   return !ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op), descs).empty();
 }
-
-} // namespace
 
 bool isCrossCTAMBarrier(Value barrier, int numCTAs) {
   auto barrierTy = dyn_cast<ttg::MemDescType>(barrier.getType());
