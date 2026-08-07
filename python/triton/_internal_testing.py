@@ -11,6 +11,7 @@ import triton.language as tl
 from triton import knobs
 from typing import Optional, Set, Union
 from dataclasses import dataclass
+from contextlib import contextmanager
 from contextvars import ContextVar
 import pytest
 
@@ -28,6 +29,7 @@ torch_float8_dtypes = ['float8_e4m3fn', 'float8_e5m2']
 torch_dtypes = ['bool'] + int_dtypes + ['uint8'] + float_dtypes + ['bfloat16']
 tma_dtypes = sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"})
 _COMPILE_WARMUP_ACTIVE = ContextVar("triton_compile_warmup_active", default=False)
+_PROCESS_POOL = None
 
 
 def is_interpreter():
@@ -391,7 +393,25 @@ class ReplenishingProcessPool:
         return ProcessResult(exc, stderr)
 
 
+@contextmanager
+def use_process_pool(preload_module):
+    global _PROCESS_POOL
+
+    pool = ReplenishingProcessPool(preload_module)
+    pool.start()
+    _PROCESS_POOL = pool
+    try:
+        yield pool
+    finally:
+        pool.close()
+        _PROCESS_POOL = None
+
+
 def run_in_process(client_fn, args=(), kwargs=None, env=None):
+    if is_compile_warmup() or os.environ.get("DISABLE_SUBPROCESS"):
+        return client_fn(*args, **(kwargs or {}))
+    if _PROCESS_POOL is not None:
+        return _PROCESS_POOL.run(client_fn, args, kwargs, env)
     if kwargs is None:
         kwargs = {}
 

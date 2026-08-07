@@ -1628,7 +1628,7 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
                                         {kBlock, ctaId}});
 
   constexpr int cacheScope = 8; // (8) = L2 scope
-  const int hintValue = cacheScope | static_cast<int>(isSpeculative);
+  const int hintValue = cacheScope | static_cast<int>(!isSpeculative);
   IntegerAttr hint = rewriter.getI32IntegerAttr(hintValue);
 
   // Iterate over each register and emit a prefetch intrinsic

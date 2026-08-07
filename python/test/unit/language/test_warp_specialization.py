@@ -1,6 +1,7 @@
 import torch
 import pytest
 import pathlib
+import re
 import triton
 import triton.language as tl
 
@@ -12,6 +13,16 @@ pytestmark = pytest.mark.enable_warmup(min_capability=9)
 
 def is_hopper_or_blackwell():
     return is_hopper() or is_blackwell()
+
+
+def _assert_clc_ws_ir(compiled):
+    if is_compile_warmup():
+        return
+    ttgir = compiled.asm["ttgir"]
+    num_partitions = len(re.findall(r"^\s*partition\d+\(", ttgir, re.MULTILINE))
+    assert num_partitions > 0
+    assert ttgir.count("scf.while") == num_partitions + 1
+    assert ttgir.count("ttng.clc_try_cancel ") == 1
 
 
 @pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
@@ -317,6 +328,51 @@ def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_S
         assert "ttg.warp_specialize" in ttgir
 
 
+@pytest.mark.parametrize("M,N,K", [(512, 512, 192), (4096, 2048, 512), (2048, 2048, 64)])
+@pytest.mark.skipif(not is_blackwell(), reason="CLC requires Blackwell")
+def test_warp_specialize_tma_matmul_clc(M, N, K):
+    block_m, block_n, block_k = 128, 64, 64
+    num_stages, num_warps = 2, 4
+    group_size_m = 8
+    device = "cuda"
+
+    torch.manual_seed(42)
+    a = torch.randn((M, K), dtype=torch.float16, device=device)
+    b = torch.randn((N, K), dtype=torch.float16, device=device)
+    c = torch.empty((M, N), dtype=torch.float16, device=device)
+
+    def alloc_fn(size, align, stream):
+        return torch.empty(size, dtype=torch.int8, device=device)
+
+    triton.set_allocator(alloc_fn)
+    grid = (triton.cdiv(M, block_m) * triton.cdiv(N, block_n), )
+    compiled = matmul_tma_ws_kernel[grid](
+        a,
+        b,
+        c,
+        *a.stride(),
+        *b.stride(),
+        *c.stride(),
+        M,
+        N,
+        K,
+        num_stages,
+        block_m,
+        block_n,
+        block_k,
+        group_size_m,
+        num_warps=num_warps,
+        USE_FP8=False,
+        A_USE_TMA=True,
+        B_USE_TMA=True,
+        clc=True,
+    )
+    _assert_clc_ws_ir(compiled)
+
+    expected = torch.matmul(a.float(), b.float().T).half()
+    torch.testing.assert_close(c, expected, atol=3e-2, rtol=3e-2)
+
+
 @pytest.mark.parametrize("M, N, K", [(512, 512, 512)])
 @pytest.mark.parametrize("num_stages", [0, 3])
 @pytest.mark.parametrize("a_use_tma", [False, True])
@@ -541,6 +597,136 @@ def test_warp_specialize_attention_forward(M, N, BLOCK_M, HEAD_DIM, num_stages, 
                                                   BLOCK_M, HEAD_DIM, False, num_stages=num_stages, num_warps=num_warps)
     attention_inner_loop_kernel[(M // BLOCK_M, )](desc_q, desc_k, desc_v, desc_acc, l_i, m_i, M, N, 0.5, BLOCK_M,
                                                   HEAD_DIM, True, num_stages=num_stages, num_warps=num_warps)
+
+    torch.testing.assert_close(acc.to(torch.float32), acc_ref.to(torch.float32), atol=0, rtol=0)
+    torch.testing.assert_close(l_i.to(torch.float32), l_i_ref.to(torch.float32), atol=0, rtol=0)
+    torch.testing.assert_close(m_i.to(torch.float32), m_i_ref.to(torch.float32), atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("M,N", [(8192, 8192), (1024, 1024)])
+@pytest.mark.parametrize("BLOCK_M", [64, 128])
+@pytest.mark.parametrize("HEAD_DIM", [64, 128])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("use_fp8", [False, True])
+@pytest.mark.skipif(not is_blackwell(), reason="CLC requires Blackwell")
+def test_warp_specialize_attention_clc_forward(M, N, BLOCK_M, HEAD_DIM, num_warps, use_fp8):
+    num_stages = 2
+    dtype = torch.float8_e4m3fn if use_fp8 else torch.float16
+
+    torch.manual_seed(42)
+    q = torch.randn((M, HEAD_DIM), device="cuda").to(dtype)
+    k = torch.randn((N, HEAD_DIM), device="cuda").to(dtype)
+    v = torch.randn((N, HEAD_DIM), device="cuda").to(dtype)
+
+    acc_ref = torch.empty((M, HEAD_DIM), dtype=dtype, device="cuda")
+    l_i_ref = torch.empty((M, ), dtype=dtype, device="cuda")
+    m_i_ref = torch.empty((M, ), dtype=dtype, device="cuda")
+    acc = torch.empty((M, HEAD_DIM), dtype=dtype, device="cuda")
+    l_i = torch.empty((M, ), dtype=dtype, device="cuda")
+    m_i = torch.empty((M, ), dtype=dtype, device="cuda")
+
+    desc_q = TensorDescriptor(q, shape=[M, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+    desc_k = TensorDescriptor(k, shape=[N, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+    desc_v = TensorDescriptor(v, shape=[N, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+    desc_acc_ref = TensorDescriptor(acc_ref, shape=[M, HEAD_DIM], strides=[HEAD_DIM, 1],
+                                    block_shape=[BLOCK_M, HEAD_DIM])
+    desc_acc = TensorDescriptor(acc, shape=[M, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+
+    grid = (M // BLOCK_M, )
+    attention_inner_loop_kernel[grid](desc_q, desc_k, desc_v, desc_acc_ref, l_i_ref, m_i_ref, M, N, 0.5, BLOCK_M,
+                                      HEAD_DIM, False, num_stages=num_stages, num_warps=num_warps)
+    compiled = attention_inner_loop_kernel[grid](desc_q, desc_k, desc_v, desc_acc, l_i, m_i, M, N, 0.5, BLOCK_M,
+                                                 HEAD_DIM, True, num_stages=num_stages, num_warps=num_warps, clc=True)
+    _assert_clc_ws_ir(compiled)
+
+    torch.testing.assert_close(acc.to(torch.float32), acc_ref.to(torch.float32), atol=0, rtol=0)
+    torch.testing.assert_close(l_i.to(torch.float32), l_i_ref.to(torch.float32), atol=0, rtol=0)
+    torch.testing.assert_close(m_i.to(torch.float32), m_i_ref.to(torch.float32), atol=0, rtol=0)
+
+
+@triton.jit
+def attention_clc_aref_phi_kernel(  #
+        desc_q, desc_k, desc_v,  #
+        desc_acc, l_i_ptr, m_i_ptr,  #
+        M, N, qk_scale,  #
+        BLOCK_M: tl.constexpr,  #
+        HEAD_DIM: tl.constexpr,  #
+        warp_specialize: tl.constexpr  #
+):
+    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
+    l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
+    acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
+
+    off_m = tl.program_id(0) * BLOCK_M
+    q = desc_q.load([off_m, 0])
+
+    for start_n in tl.range(0, N, HEAD_DIM, warp_specialize=warp_specialize):
+        start_n = tl.multiple_of(start_n, HEAD_DIM)
+        k = desc_k.load([start_n, 0]).T
+
+        qk = tl.dot(q, k)
+        m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
+        qk = qk * qk_scale - m_ij[:, None]
+        p = tl.math.exp2(qk)
+        alpha = tl.math.exp2(m_i - m_ij)
+        l_ij = tl.sum(p, 1)
+
+        if warp_specialize:
+            BM: tl.constexpr = acc.shape[0]
+            BN: tl.constexpr = acc.shape[1]
+            acc0, acc1 = acc.reshape([BM, 2, BN // 2]).permute(0, 2, 1).split()
+            acc0 = acc0 * alpha[:, None]
+            acc1 = acc1 * alpha[:, None]
+            acc = tl.join(acc0, acc1).permute(0, 2, 1).reshape([BM, BN])
+        else:
+            acc = acc * alpha[:, None]
+
+        v = desc_v.load([start_n, 0])
+        p = p.to(v.dtype)
+        acc = tl.dot(p, v, acc)
+
+        l_i = l_i * alpha + l_ij
+        m_i = m_ij
+
+    m_i += tl.math.log2(l_i)
+    acc = acc / l_i[:, None]
+    desc_acc.store([off_m, 0], acc.to(q.dtype))
+    tl.store(l_i_ptr + off_m + tl.arange(0, BLOCK_M), l_i)
+    tl.store(m_i_ptr + off_m + tl.arange(0, BLOCK_M), m_i)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="CLC requires Blackwell")
+def test_warp_specialize_attention_clc_aref_phi():
+    M = N = 1024
+    BLOCK_M = HEAD_DIM = 128
+    num_stages, num_warps = 2, 4
+    dtype = torch.float16
+
+    torch.manual_seed(42)
+    q = torch.randn((M, HEAD_DIM), device="cuda", dtype=dtype)
+    k = torch.randn((N, HEAD_DIM), device="cuda", dtype=dtype)
+    v = torch.randn((N, HEAD_DIM), device="cuda", dtype=dtype)
+
+    acc_ref = torch.empty((M, HEAD_DIM), dtype=dtype, device="cuda")
+    l_i_ref = torch.empty((M, ), dtype=dtype, device="cuda")
+    m_i_ref = torch.empty((M, ), dtype=dtype, device="cuda")
+    acc = torch.empty((M, HEAD_DIM), dtype=dtype, device="cuda")
+    l_i = torch.empty((M, ), dtype=dtype, device="cuda")
+    m_i = torch.empty((M, ), dtype=dtype, device="cuda")
+
+    desc_q = TensorDescriptor(q, shape=[M, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+    desc_k = TensorDescriptor(k, shape=[N, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+    desc_v = TensorDescriptor(v, shape=[N, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+    desc_acc_ref = TensorDescriptor(acc_ref, shape=[M, HEAD_DIM], strides=[HEAD_DIM, 1],
+                                    block_shape=[BLOCK_M, HEAD_DIM])
+    desc_acc = TensorDescriptor(acc, shape=[M, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+
+    grid = (M // BLOCK_M, )
+    attention_clc_aref_phi_kernel[grid](desc_q, desc_k, desc_v, desc_acc_ref, l_i_ref, m_i_ref, M, N, 0.5, BLOCK_M,
+                                        HEAD_DIM, True, num_stages=num_stages, num_warps=num_warps, clc=False)
+    compiled = attention_clc_aref_phi_kernel[grid](desc_q, desc_k, desc_v, desc_acc, l_i, m_i, M, N, 0.5, BLOCK_M,
+                                                   HEAD_DIM, True, num_stages=num_stages, num_warps=num_warps, clc=True)
+    _assert_clc_ws_ir(compiled)
 
     torch.testing.assert_close(acc.to(torch.float32), acc_ref.to(torch.float32), atol=0, rtol=0)
     torch.testing.assert_close(l_i.to(torch.float32), l_i_ref.to(torch.float32), atol=0, rtol=0)

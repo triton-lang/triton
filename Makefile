@@ -34,7 +34,7 @@ test-cpp:
 
 .PHONY: test-unit
 test-unit: all
-	$(PYTHON) -m triton._test_runner suite unit --num-procs $(NUM_PROCS)
+	$(PYTHON) -m triton._test_runner suite unit --num-gpus $(NUM_GPUS) --num-procs $(NUM_PROCS)
 
 .PHONY: test-plugins
 test-plugins: all

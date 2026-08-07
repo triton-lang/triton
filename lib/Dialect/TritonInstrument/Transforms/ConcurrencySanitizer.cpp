@@ -1004,7 +1004,7 @@ private:
       Value effectCTAs = materialized.effectCTAs;
       MemType memType = materialized.memType;
       if (memType == MemType::SHARED_MEM) {
-        if (effect.proxy == MemEffectsOpInfo::Effects::Proxy::Async) {
+        if (effect.sharedKind == ttg::SharedKind::Async) {
           funcBuilder.createVerifyProxyAccessCall(b, bufferMask, baseThread,
                                                   effect.operandName, pred, op,
                                                   effectCTAs);
@@ -1013,7 +1013,7 @@ private:
                                                op, effectCTAs);
         }
       }
-      if (effect.rw == MemEffectsOpInfo::Effects::Read) {
+      if (effect.rw == RW::Read) {
         // For op that is reading, we only need to check if anything else
         // is writing to the same buffer.
         addWriteChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
@@ -1030,7 +1030,7 @@ private:
               b, bufferMask, baseThread, pred, memType, opInfo->commitKind, op);
         }
       }
-      if (effect.rw == MemEffectsOpInfo::Effects::Write) {
+      if (effect.rw == RW::Write) {
         // Op is writing to the buffer, we need to check if anything else
         // is reading or writing to the same buffer.
         addWriteChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
@@ -1071,13 +1071,13 @@ private:
                  MemEffectsOpInfo::BarrierTrackingMode::EffectWrites) {
         for (auto [effect, materialized] :
              llvm::zip(opInfo->operandEffects, materializedEffects)) {
-          if (effect.rw != MemEffectsOpInfo::Effects::Write)
+          if (effect.rw != RW::Write)
             continue;
           funcBuilder.createTrackBarrierWriteForBufferCall(
               b, barrier, materialized.bufferMask, combinedPred,
               materialized.memType, op, recipientCTAs, materialized.effectCTAs);
           if (materialized.memType == MemType::SHARED_MEM &&
-              effect.proxy == MemEffectsOpInfo::Effects::Proxy::Async) {
+              effect.sharedKind == ttg::SharedKind::Async) {
             funcBuilder.createTrackProxyAccessesForBufferCall(
                 b, barrier, materialized.bufferMask, baseThread, combinedPred,
                 op, recipientCTAs, materialized.effectCTAs);
@@ -1106,6 +1106,11 @@ private:
                       CommitKind::Kind opCommitKind = CommitKind::None) {
     funcBuilder.createVerifyWriteVisibilityCall(
         b, bufferMask, thread, operandName, pred, memType, op, effectCTAs);
+    if (hooks.isTMAOp(op) && !hooks.isOrderedCommitKind(CommitKind::TmaStore)) {
+      funcBuilder.createVerifyWriteVisibilityCall(
+          b, bufferMask, getBaseThread(thread, auxData.threadLayout),
+          operandName, pred, memType, op, effectCTAs);
+    }
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM) {
       for (const auto &commitKindDesc :

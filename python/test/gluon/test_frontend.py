@@ -2971,9 +2971,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 @pytest.mark.parametrize("subtiles_m,subtiles_n", [(1, 1), (1, 2), (2, 1), (2, 2)])
 @pytest.mark.parametrize("a_transposed", [False, True])
 @pytest.mark.parametrize("b_transposed", [False, True])
-def test_make_partitioned_dot_layouts(num_warps, block_m, block_n, subtiles_m, subtiles_n, a_transposed, b_transposed):
-    block_k = 32
-    INSTR_M, INSTR_N, INSTR_K = 16, 16, 32
+@pytest.mark.parametrize("transposed", [False, True])
+@pytest.mark.parametrize("instr_shape", [(16, 16, 32), (32, 16, 128)])
+def test_make_partitioned_dot_layouts(num_warps, block_m, block_n, subtiles_m, subtiles_n, a_transposed, b_transposed,
+                                      transposed, instr_shape):
+    INSTR_M, INSTR_N, INSTR_K = instr_shape
+    block_k = INSTR_K // 2 if INSTR_M == 32 else INSTR_K
+    if transposed:
+        LOGICAL_INSTR_M, LOGICAL_INSTR_N = INSTR_N, INSTR_M
+    else:
+        LOGICAL_INSTR_M, LOGICAL_INSTR_N = INSTR_M, INSTR_N
 
     # The WMMA layout is sized for the sliced compute extent (block / subtiles),
     # while the shared layouts still partition the full block.
@@ -2981,7 +2988,7 @@ def test_make_partitioned_dot_layouts(num_warps, block_m, block_n, subtiles_m, s
     slice_n = block_n // subtiles_n
     # A slice must cover at least NUM_PARTITIONS (=2) * tiles_per_partition
     # instruction tiles (2 in M, 1 in N); skip configs that violate this.
-    if slice_m < 4 * INSTR_M or slice_n < 2 * INSTR_N:
+    if slice_m < 4 * LOGICAL_INSTR_M or slice_n < 2 * LOGICAL_INSTR_N:
         pytest.skip(f"slice ({slice_m}, {slice_n}) below the minimum partition extent")
 
     a_shape = [block_k, block_m] if a_transposed else [block_m, block_k]
@@ -2990,7 +2997,8 @@ def test_make_partitioned_dot_layouts(num_warps, block_m, block_n, subtiles_m, s
     pb = ttgl.PaddedSharedLayout.with_identity_for([[b_shape[1], 8]], b_shape, [1, 0])
     sla, slb, wmma = make_partitioned_dot_layouts(block_m, block_n, pa, pb, num_warps=num_warps,
                                                   instr_shape=[INSTR_M, INSTR_N, INSTR_K], a_transposed=a_transposed,
-                                                  b_transposed=b_transposed, slice_m=slice_m, slice_n=slice_n)
+                                                  b_transposed=b_transposed, slice_m=slice_m, slice_n=slice_n,
+                                                  transposed=transposed)
 
     a_partition_dim = 1 if a_transposed else 0
     b_partition_dim = 0 if b_transposed else 1
@@ -3006,7 +3014,7 @@ def test_make_partitioned_dot_layouts(num_warps, block_m, block_n, subtiles_m, s
         assert layout.partition_dim == partition_dim
         assert layout.partition_layout.shape == inner_shape
 
-    STM, STN = slice_m // INSTR_M, slice_n // INSTR_N
+    STM, STN = slice_m // LOGICAL_INSTR_M, slice_n // LOGICAL_INSTR_N
     piece_m, piece_n = STM // 4, STN // 2
     expected_warp_bases = [[STM // 2, piece_n], [piece_m, 0]]
     m_group = [piece_m * 2]
@@ -3016,9 +3024,25 @@ def test_make_partitioned_dot_layouts(num_warps, block_m, block_n, subtiles_m, s
     expected_reg_bases += [[1 << i, 0] for i in range(piece_m.bit_length() - 1)]
     expected_reg_bases += [[w, 0] for w in m_group]
     assert isinstance(wmma, amd_layouts.AMDWMMALayout)
+    assert wmma.transposed == transposed
     assert wmma.warp_bases == expected_warp_bases
     assert wmma.reg_bases == expected_reg_bases
     assert wmma.instr_shape == [INSTR_M, INSTR_N, INSTR_K]
+
+    # Linear-layout bases combine with xor. Verify that every logical
+    # instruction tile is covered exactly once. In particular, transposed
+    # asymmetric WMMA must use the logical N x M rather than physical M x N
+    # instruction extent.
+    cta_bases = wmma.reg_bases + wmma.warp_bases
+    covered_tiles = set()
+    for mask in range(1 << len(cta_bases)):
+        coord = [0, 0]
+        for i, basis in enumerate(cta_bases):
+            if mask & (1 << i):
+                coord[0] ^= basis[0]
+                coord[1] ^= basis[1]
+        covered_tiles.add(tuple(coord))
+    assert covered_tiles == {(m, n) for m in range(STM) for n in range(STN)}
 
 
 @gluon.jit

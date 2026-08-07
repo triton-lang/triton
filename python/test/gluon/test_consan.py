@@ -9,40 +9,15 @@ from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia import ampere
 from triton.experimental.gluon.language.nvidia.blackwell import allocate_tensor_memory, clc, mbarrier, tma
-from triton._internal_testing import is_compile_warmup, is_cuda, ReplenishingProcessPool, run_in_process as _run_in_process
+from triton._internal_testing import is_compile_warmup, is_cuda, run_in_process
 
-pytestmark = pytest.mark.enable_warmup(min_capability=9)
-
-_process_pool = None
+pytestmark = [pytest.mark.enable_warmup(min_capability=9), pytest.mark.usefixtures("process_pool")]
 
 
 @pytest.fixture(autouse=True)
 def isolated_consan_knobs():
     with knobs.compilation.scope(), knobs.runtime.scope():
         yield
-
-
-def run_in_process(client_fn, args=(), kwargs=None, env=None):
-    if is_compile_warmup() or os.environ.get("DISABLE_SUBPROCESS"):
-        return client_fn(*args, **(kwargs or {}))
-    if _process_pool is None:
-        return _run_in_process(client_fn, args, kwargs, env)
-    return _process_pool.run(client_fn, args, kwargs, env)
-
-
-@pytest.fixture(scope="session", autouse=True)
-def consan_process_pool(request):
-    if request.config.getoption("--warmup-only", default=False) or os.environ.get("DISABLE_SUBPROCESS"):
-        yield
-        return
-    global _process_pool
-    _process_pool = ReplenishingProcessPool(__name__)
-    _process_pool.start()
-    try:
-        yield
-    finally:
-        _process_pool.close()
-        _process_pool = None
 
 
 @pytest.fixture
@@ -1015,6 +990,7 @@ def test_tma_wait_does_not_publish_overwritten_row(WAIT_LATEST, device, run_wrap
 
         mbarrier.expect(bar.index(0), input_desc.nbytes_per_cta)
         tma.async_load(input_desc, [0, 0], bar.index(0), smem)
+        mbarrier.wait(bar.index(0), 0)
         mbarrier.expect(bar.index(1), input_desc.nbytes_per_cta)
         tma.async_load(input_desc, [0, 0], bar.index(1), smem)
 
@@ -1030,9 +1006,7 @@ def test_tma_wait_does_not_publish_overwritten_row(WAIT_LATEST, device, run_wrap
         out_n = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(0, blocked_layout))[None, :]
         ttgl.store(out + out_m * XBLOCK + out_n, val)
 
-        if WAIT_LATEST:
-            mbarrier.wait(bar.index(0), 0)
-        else:
+        if not WAIT_LATEST:
             mbarrier.wait(bar.index(1), 0)
 
         mbarrier.invalidate(bar.index(0))
@@ -1045,6 +1019,64 @@ def test_tma_wait_does_not_publish_overwritten_row(WAIT_LATEST, device, run_wrap
                                            cga_layout=default_cga_layout(num_ctas, 2))
     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [block_m, XBLOCK.value], shared_layout)
     kernel[(1, )](input_desc, output, WAIT_LATEST=WAIT_LATEST, num_warps=4, num_ctas=num_ctas)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.parametrize("OP", ["load", "store"])
+@pytest.mark.parametrize("SYNCHRONIZED", [True, False])
+def test_tma_overlapping_operations(OP, SYNCHRONIZED, device, run_wrapper, monkeypatch, num_ctas):
+    if run_wrapper:
+        result = run_in_process(test_tma_overlapping_operations,
+                                (OP, SYNCHRONIZED, device, False, monkeypatch, num_ctas))
+        if SYNCHRONIZED:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        else:
+            assert_expected_cuda_failure(result.exc)
+            assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(input_desc, output_desc, OP: ttgl.constexpr, SYNCHRONIZED: ttgl.constexpr):
+        block_m: ttgl.constexpr = XBLOCK * ttgl.num_ctas()
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [block_m, XBLOCK], input_desc.layout)
+        bars = mbarrier.allocate_mbarrier(batch=2)
+        mbarrier.init(bars.index(0), count=1)
+        if OP == "load":
+            mbarrier.init(bars.index(1), count=1)
+
+        mbarrier.expect(bars.index(0), input_desc.nbytes_per_cta)
+        tma.async_load(input_desc, [0, 0], bars.index(0), smem)
+        if SYNCHRONIZED:
+            mbarrier.wait(bars.index(0), 0)
+
+        if OP == "load":
+            mbarrier.expect(bars.index(1), input_desc.nbytes_per_cta)
+            tma.async_load(input_desc, [0, 0], bars.index(1), smem)
+            mbarrier.wait(bars.index(1), 0)
+
+        tma.async_store(output_desc, [0, 0], smem)
+        tma.store_wait(0)
+        if not SYNCHRONIZED:
+            mbarrier.wait(bars.index(0), 0)
+        mbarrier.invalidate(bars.index(0))
+        if OP == "load":
+            mbarrier.invalidate(bars.index(1))
+
+    block_m = XBLOCK.value * num_ctas
+    input = torch.randn((block_m, XBLOCK.value), device=device, dtype=torch.float16)
+    output = torch.empty_like(input)
+    layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2,
+                                    cga_layout=default_cga_layout(num_ctas, 2))
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [block_m, XBLOCK.value], layout)
+    output_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(output, [block_m, XBLOCK.value], layout)
+    kernel[(1, )](input_desc, output_desc, OP=OP, SYNCHRONIZED=SYNCHRONIZED, num_warps=4, num_ctas=num_ctas)
+    if SYNCHRONIZED:
+        torch.testing.assert_close(output, input)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires ampere or newer")
