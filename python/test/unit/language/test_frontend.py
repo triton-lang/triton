@@ -484,6 +484,53 @@ def test_list_comprehension_if_filter():
     run_parser(kernel)
 
 
+def test_list_comprehension_tuple_target():
+
+    @triton.jit
+    def kernel():
+        vals: tl.constexpr = [a + b for a, b in ((1, 2), (3, 4))]
+        tl.static_assert(len(vals) == 2)
+        tl.static_assert(vals[0] == 3)
+        tl.static_assert(vals[1] == 7)
+
+        nested: tl.constexpr = [a + b + c for a, (b, c) in ((1, (2, 3)), (4, (5, 6)))]
+        tl.static_assert(len(nested) == 2)
+        tl.static_assert(nested[0] == 6)
+        tl.static_assert(nested[1] == 15)
+
+    run_parser(kernel)
+
+
+def test_list_comprehension_tuple_target_rejects_mismatch():
+
+    @triton.jit
+    def kernel():
+        vals = [a + b for a, b in ((1, 2, 3), )]  # noqa: F841
+
+    with pytest.raises(CompilationError, match="too many values to unpack"):
+        run_parser(kernel)
+
+
+def test_list_comprehension_tuple_target_rejects_scalar_item():
+
+    @triton.jit
+    def kernel():
+        vals = [a + b for a, b in (1, 2)]  # noqa: F841
+
+    with pytest.raises(CompilationError, match="cannot unpack non-iterable value"):
+        run_parser(kernel)
+
+
+def test_list_comprehension_tuple_target_rejects_starred_target():
+
+    @triton.jit
+    def kernel():
+        vals = [a for a, *rest in ((1, 2, 3), )]  # noqa: F841
+
+    with pytest.raises(CompilationError, match="starred assignment targets are not supported"):
+        run_parser(kernel)
+
+
 def test_named_expr_respects_prior_constexpr_annotation():
 
     @triton.jit
