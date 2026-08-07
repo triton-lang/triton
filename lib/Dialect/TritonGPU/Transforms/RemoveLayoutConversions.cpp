@@ -389,11 +389,32 @@ void LayoutPropagation::resolveConflicts() {
     Attribute encoding = *info.encodings.begin();
     bool isLoadOrStore =
         op && isa<LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp>(op);
+    bool foundPreferred = false;
     for (Attribute e : info.encodings) {
       if ((isLoadOrStore && isa<BlockedEncodingAttr>(e)) ||
           (!isLoadOrStore && isa<MmaEncodingTrait>(e))) {
         encoding = e;
+        foundPreferred = true;
         break;
+      }
+    }
+    // issue #10987: when no memory/MMA preference applies, the choice above is
+    // just the arbitrary first candidate. That can be a replicated layout (e.g.
+    // a linear layout whose lane/warp bases are all zero), in which every
+    // thread materializes the full tensor. Lowering an elementwise op in such a
+    // layout emits it once per redundant copy. Break the tie toward the
+    // least-replicated candidate: the one with the fewest elements per thread.
+    if (!foundPreferred) {
+      if (auto tensorTy = dyn_cast<RankedTensorType>(it.first.getType())) {
+        auto shape = tensorTy.getShape();
+        unsigned bestElems = getUniqueElemsPerThread(encoding, shape);
+        for (Attribute e : info.encodings) {
+          unsigned elems = getUniqueElemsPerThread(e, shape);
+          if (elems < bestElems) {
+            bestElems = elems;
+            encoding = e;
+          }
+        }
       }
     }
     info.encodings.clear();
