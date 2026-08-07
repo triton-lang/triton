@@ -4,6 +4,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -193,17 +194,17 @@ struct TensormapFenceproxyAcquireOpConversion
     PTXBuilder ptxBuilder;
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    // prepare asm operands
-    auto *descAddrOpr = ptxBuilder.newAddrOperand(adaptor.getDescPtr(), "l");
-    auto *sizeOpr = ptxBuilder.newConstantOperand(TMA_SIZE_BYTES);
-
-    // Define the instruction opcode
+    // Execute the fence collectively on the first warp in the block.
     constexpr int kWarpSize = 32;
     Value threadId = getThreadId(rewriter, loc);
     Value pred = b.icmp_slt(threadId, b.i32_val(kWarpSize));
-    auto &fence =
-        *ptxBuilder.create("fence.proxy.tensormap::generic.acquire.gpu");
-    fence(descAddrOpr, sizeOpr).predicate(pred);
+    auto [prevBlock, ifBlock, thenBlock] = createIfBlock(rewriter, loc, pred);
+    (void)prevBlock;
+    rewriter.setInsertionPointToStart(ifBlock);
+    Value descPtr = b.addrspacecast(ptr_ty(getContext()), adaptor.getDescPtr());
+    NVVM::FenceProxyAcquireOp::create(rewriter, loc, NVVM::MemScopeKind::GPU,
+                                      descPtr, b.i32_val(TMA_SIZE_BYTES));
+    rewriter.setInsertionPointToStart(thenBlock);
 
     // Workaround for a ptxas bug missing a fence after generic.acquire.gpu.
     // TODO: remove the workaround once ptxas is fixed.
