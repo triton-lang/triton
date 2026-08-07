@@ -925,7 +925,7 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
                                 << contig << ") resulting in strided writes");
     setReason(
         "the global load vectorization (" + std::to_string(vectorSize) +
-        ") does not match the shared memory contiguity (" +
+        ") is smaller than the shared memory contiguity (" +
         std::to_string(contig) +
         "), which would require strided LDS writes. Adjust the blocked or "
         "shared encoding so the two agree.");
@@ -941,9 +941,8 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
     LDBG("coalesced load width (" << vectorSize
                                   << ") is not a supported direct-to-LDS load");
     setReason(
-        "the resulting " + std::to_string(vectorSize * elemBitWidth) +
-        "-bit direct-to-LDS transaction width is not supported on this "
-        "target (the vector width cannot be split without strided writes)");
+        "the coalesced " + std::to_string(vectorSize * elemBitWidth) +
+        "-bit direct-to-LDS transaction width is not supported on this target");
     return false;
   }
 

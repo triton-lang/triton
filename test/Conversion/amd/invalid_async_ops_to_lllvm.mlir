@@ -108,3 +108,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     tt.return
   }
 }
+
+// -----
+
+#blocked_vec_smaller = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared_vec_smaller = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @async_copy_vec_smaller_than_contig(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+                                %arg1: i32 {tt.divisibility = 16 : i32},
+                                %arg2: !ttg.memdesc<4x128xf32, #shared_vec_smaller, #smem, mutable>) {
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<4x128x!tt.ptr<f32>, #blocked_vec_smaller>
+    // The splat pointers vectorize to 1, but the layout writes 2 consecutive elements coalesced into LDS
+    // expected-error@+2 {{cannot lower 'ttg.async_copy_global_to_local' to a direct-to-LDS copy: the global load vectorization (1) is smaller than the shared memory contiguity (2)}}
+    // expected-error@+1 {{failed to legalize operation 'ttg.async_copy_global_to_local' that was explicitly marked illegal}}
+    %2 = ttg.async_copy_global_to_local %1, %arg2 : tensor<4x128x!tt.ptr<f32>, #blocked_vec_smaller> -> <4x128xf32, #shared_vec_smaller, #smem, mutable>
+    tt.return
+  }
+}
