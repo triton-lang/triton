@@ -33,6 +33,10 @@ public:
   }
 
 protected:
+  /// Returns the state for the function entry. Default-constructed states are
+  /// still used as the join identity for all other virtual blocks.
+  virtual StateT getEntryState() const { return StateT(); }
+
   virtual void update(Operation *operation, StateT *state, FuncMapT *funcMap,
                       OpBuilder *builder) = 0;
 
@@ -60,7 +64,9 @@ private:
     DenseMap<VirtualBlock, StateT> outputs;
     std::deque<VirtualBlock> worklist;
     // Start the analysis from the entry block of the function.
-    worklist.emplace_back(&function.getBlocks().front(), Block::iterator());
+    VirtualBlock entry(&function.getBlocks().front(), Block::iterator());
+    inputs[entry] = getEntryState();
+    worklist.push_back(entry);
 
     // A fixed point algorithm
     while (!worklist.empty()) {
