@@ -316,7 +316,7 @@ def NVWS_CLCTryCancelOp : NVWS_Op<"clc_try_cancel"> {
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result
+    Arg<TTG_MemDescType, "", AsyncSharedWrite>:$result
   );
 
   let assemblyFormat = [{

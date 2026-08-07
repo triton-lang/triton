@@ -58,12 +58,14 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx,
   assert(regLayout.getFreeVariableMasks().lookup(str_attr("register")) == 0 &&
          "expected register broadcasting to be removed by the caller");
   auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   auto sharedLayout = toLinearLayoutIgnoringPadding(memDescTy);
   auto cvt = invertAndComposeBlockLocal(sharedLayout, regLayout);
 
   lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, memDescTy, smemObj,
-                 rewriter, targetInfo);
+                 rewriter, targetInfo,
+                 makeSharedStoreEmitter(targetInfo, b.true_val()));
 
   return success();
 }
@@ -192,7 +194,8 @@ public:
     auto cvt = invertAndComposeBlockLocal(sharedLayout, regLayout);
 
     auto outVals = lowerLocalLdSt(loc, ctx, cvt, {}, llvmElemTy, memDescTy,
-                                  smemObj, rewriter, targetInfo, op);
+                                  smemObj, rewriter, targetInfo,
+                                  makeSharedLoadEmitter(targetInfo, op));
 
     Value result =
         packUniqueTensorElements(loc, typeConverter, outVals, rewriter, regTy);

@@ -40,6 +40,7 @@ jobs:
               --volume /triton-data:/triton-data
     env:
       RUNNER_TYPE: ${{ matrix.runner[1] }}
+      WARMUP_MAX_PROCS: "96"
       TRITON_BUILD_WITH_CCACHE: "true"
       TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
       TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
@@ -47,6 +48,7 @@ jobs:
       PROTON_SKIP_PC_SAMPLING_TEST: 1
       PROTON_SKIP_CUDAGRAPH_TEST: 1
       PYTHON: "python3"
+      PYTEST_ADDOPTS: "-p triton._compile_warmup"
       CCACHE_COMPRESS: "true"
       PIP_BREAK_SYSTEM_PACKAGES: 1
     container:
@@ -78,7 +80,7 @@ jobs:
       - name: Restore build dependencies cache
         id: restore-build-deps-cache
         if: ${{ !contains(matrix.runner, 'gfx90a') }}
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           # Note that we cannot use environment variables here given there is
           # no shell to interpret them in the paths.
@@ -118,6 +120,28 @@ jobs:
         run: make test-lit
       - name: Run C++ unittests
         run: make test-cpp
+      - name: Warm Triton compile cache
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          trace_dir="$RUNNER_TEMP/triton-ci-compile-trace"
+          rm -rf "$trace_dir"
+          echo "TRITON_CI_COMPILE_TRACE_DIR=$trace_dir" >> "$GITHUB_ENV"
+          export TRITON_CI_COMPILE_TRACE_DIR="$trace_dir"
+          warmup_procs=$(nproc)
+          if (( warmup_procs > WARMUP_MAX_PROCS )); then
+            warmup_procs=$WARMUP_MAX_PROCS
+          fi
+          warmup_targets=(
+            python/test/unit/language
+            python/test/gluon
+            python/tutorials/06-fused-attention.py
+            python/test/regression
+          )
+          if ${{ contains(matrix.runner, 'amd-gfx950') || contains(matrix.runner, 'amd-gfx942') }}; then
+            warmup_targets+=(python/triton_kernels/tests)
+          fi
+          python3 -m triton._test_runner warmup --warmup-procs "$warmup_procs" "${warmup_targets[@]}"
       - name: Run Python tests on AMD
         run: |
           INSTRUMENTATION_LIB_DIR="${GITHUB_WORKSPACE}/python/triton/instrumentation"
@@ -129,9 +153,9 @@ jobs:
           pip install -i https://test.pypi.org/simple/ hip-python
 
           # Test gluon
-          pytest --capture=tee-sys -rfs -n 8 python/test/gluon/
+          TRITON_CI_CACHE_PHASE=gluon pytest --capture=tee-sys -rfs -n 8 python/test/gluon/
 
-          pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
+          TRITON_CI_CACHE_PHASE=attention pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
           pytest --capture=tee-sys -rfs -n 8 third_party/amd/python/test/ \
                 --ignore=third_party/amd/python/test/test_scalarize_packed_fops.py \
                 --ignore=third_party/amd/python/test/test_address_sanitizer.py \
@@ -139,7 +163,7 @@ jobs:
           pytest --capture=tee-sys -rfs -n 8 third_party/amd/python/test/test_gluon_gfx1250.py -k "test_compile"
           TRITON_ALWAYS_COMPILE=1 pytest --capture=tee-sys -rfs third_party/amd/python/test/test_scalarize_packed_fops.py
           cd python/test/unit
-          pytest --capture=tee-sys -rfs -n 12 \
+          TRITON_CI_CACHE_PHASE=unit pytest --capture=tee-sys -rfs -n 12 \
                  --ignore=blackwell \
                  --ignore=cuda \
                  --ignore=instrumentation \
@@ -165,7 +189,7 @@ jobs:
           # Run tests under triton/python/triton_kernels/tests/ on gfx950 and gfx942
           if ${{ contains(matrix.runner, 'amd-gfx950') || contains(matrix.runner, 'amd-gfx942') }}; then
             cd ../../triton_kernels/
-            python3 -m pytest -s -n 12 tests/
+            TRITON_CI_CACHE_PHASE=triton-kernels python3 -m pytest -s -n 12 tests/
           fi
       - name: Run asan tests on AMD
         if: false
@@ -187,6 +211,8 @@ jobs:
       - name: Run regression tests
         run: |
           make test-regression
+      - name: Verify compile warmup completeness
+        run: python3 -m triton._test_runner report --require-complete
       - name: Run microbenchmark tests
         run: |
           python3 python/test/microbenchmark/launch_overhead.py
@@ -203,7 +229,7 @@ jobs:
           du -h -d 1 ~/.ccache
       - name: Save build dependencies cache
         if: ${{ github.ref == 'refs/heads/main' && !contains(matrix.runner, 'gfx90a') }}
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             ~/.triton/llvm
@@ -264,7 +290,7 @@ jobs:
         shell: bash
       - name: Restore build dependencies cache
         id: restore-build-deps-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.triton/llvm
@@ -328,7 +354,7 @@ jobs:
           du -h -d 1 ~/.ccache
       - name: Save build dependencies cache
         if: github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             ~/.triton/llvm

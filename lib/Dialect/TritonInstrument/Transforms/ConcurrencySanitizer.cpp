@@ -384,6 +384,27 @@ Value getLeaderCTA(ImplicitLocOpBuilder &b, Value barrier) {
   return createCTABitset(b, /*pattern=*/1, encoding.fixedBits);
 }
 
+Value getAsyncSharedStoreBarrierRecipientCTAs(ImplicitLocOpBuilder &b,
+                                              Value barrier,
+                                              Value recipientCTAs) {
+  uint16_t broadcastMask = getBlockBroadcastMask(barrier);
+  if (!broadcastMask)
+    return recipientCTAs;
+
+  int numCTAs = ttg::lookupNumCTAs(b);
+  uint32_t leaderMask =
+      ttng::getTMAMulticastMaskEncoding(numCTAs, ~broadcastMask).pattern;
+  for (int bit = 1; bit < numCTAs; bit <<= 1) {
+    if (!(broadcastMask & bit))
+      continue;
+    Value shifted = b.createOrFold<arith::ShRUIOp>(
+        recipientCTAs, arith::ConstantIntOp::create(b, bit, 32));
+    recipientCTAs = b.createOrFold<arith::OrIOp>(recipientCTAs, shifted);
+  }
+  return b.createOrFold<arith::AndIOp>(
+      recipientCTAs, arith::ConstantIntOp::create(b, leaderMask, 32));
+}
+
 Value getMulticastBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Value result,
                                        Value barrier) {
   uint32_t resultBroadcastMask = getBlockBroadcastMask(result);
@@ -578,6 +599,10 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
                                           load.getType());
   }
   if (auto store = dyn_cast<ttg::LocalStoreOp>(op)) {
+    return getLocalLoadStoreRecipientCTAs(b, store.getDst().getType(),
+                                          store.getSrc().getType());
+  }
+  if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
     return getLocalLoadStoreRecipientCTAs(b, store.getDst().getType(),
                                           store.getSrc().getType());
   }
@@ -1004,7 +1029,7 @@ private:
       Value effectCTAs = materialized.effectCTAs;
       MemType memType = materialized.memType;
       if (memType == MemType::SHARED_MEM) {
-        if (effect.proxy == MemEffectsOpInfo::Effects::Proxy::Async) {
+        if (effect.sharedKind == ttg::SharedKind::Async) {
           funcBuilder.createVerifyProxyAccessCall(b, bufferMask, baseThread,
                                                   effect.operandName, pred, op,
                                                   effectCTAs);
@@ -1013,7 +1038,7 @@ private:
                                                op, effectCTAs);
         }
       }
-      if (effect.rw == MemEffectsOpInfo::Effects::Read) {
+      if (effect.rw == RW::Read) {
         // For op that is reading, we only need to check if anything else
         // is writing to the same buffer.
         addWriteChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
@@ -1030,7 +1055,7 @@ private:
               b, bufferMask, baseThread, pred, memType, opInfo->commitKind, op);
         }
       }
-      if (effect.rw == MemEffectsOpInfo::Effects::Write) {
+      if (effect.rw == RW::Write) {
         // Op is writing to the buffer, we need to check if anything else
         // is reading or writing to the same buffer.
         addWriteChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
@@ -1053,7 +1078,11 @@ private:
     for (const auto &barrierInfo : opInfo->barriers) {
       Value barrier = barrierInfo.barrier;
       Value combinedPred = tti::maybeAnd(b, barrierInfo.pred, pred);
-      Value recipientCTAs = getBarrierRecipientCTAs(b, op);
+      Value recipientCTAs =
+          isa<ttng::AsyncSharedStoreOp>(op)
+              ? getAsyncSharedStoreBarrierRecipientCTAs(
+                    b, barrier, materializedEffects.front().effectCTAs)
+              : getBarrierRecipientCTAs(b, op);
       if (barrierInfo.count == 0 && barrierInfo.txCount == 0)
         funcBuilder.createVerifyBarrierInitializedCall(b, barrier, combinedPred,
                                                        op, recipientCTAs);
@@ -1071,13 +1100,12 @@ private:
                  MemEffectsOpInfo::BarrierTrackingMode::EffectWrites) {
         for (auto [effect, materialized] :
              llvm::zip(opInfo->operandEffects, materializedEffects)) {
-          if (effect.rw != MemEffectsOpInfo::Effects::Write)
+          if (effect.rw != RW::Write)
             continue;
           funcBuilder.createTrackBarrierWriteForBufferCall(
               b, barrier, materialized.bufferMask, combinedPred,
               materialized.memType, op, recipientCTAs, materialized.effectCTAs);
-          if (materialized.memType == MemType::SHARED_MEM &&
-              effect.proxy == MemEffectsOpInfo::Effects::Proxy::Async) {
+          if (materialized.memType == MemType::SHARED_MEM) {
             funcBuilder.createTrackProxyAccessesForBufferCall(
                 b, barrier, materialized.bufferMask, baseThread, combinedPred,
                 op, recipientCTAs, materialized.effectCTAs);
