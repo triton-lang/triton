@@ -1,6 +1,9 @@
 #include "mlir/Analysis/Liveness.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
@@ -13,6 +16,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/SetVector.h"
 
 namespace mlir {
 namespace triton {
@@ -27,6 +31,8 @@ namespace {
 
 // Granularity of row allocations.
 static constexpr int allocGranularity = 64;
+// Number of allocGranularity-sized row groups in tensor memory.
+static constexpr int kNumRows = 2;
 struct TMemChunk {
   int startRow;
   int startCol;
@@ -113,7 +119,6 @@ private:
     elements[row + col * kNumRows] = used;
   }
 
-  static constexpr int kNumRows = 2;
   std::vector<bool> elements;
 };
 
@@ -292,16 +297,29 @@ public:
   }
 };
 
-static int
-allocateTMem(Operation *parentOp,
-             DenseMap<triton::nvidia_gpu::TMEMAllocOp, int> &offsets) {
+static FailureOr<int>
+allocateTMem(FunctionOpInterface func,
+             const DenseMap<FunctionOpInterface, int> &funcTMemCols,
+             SymbolTableCollection &symbolTable) {
   SmallVector<triton::nvidia_gpu::TMEMAllocOp> allocs;
+  // Direct calls to functions that (transitively) use tensor memory, together
+  // with the callee's column footprint.
+  SmallVector<std::pair<Operation *, int>> tmemCalls;
   DenseMap<Operation *, int> operationId;
   RowIdConstraints rowIdConstraints;
-  parentOp->walk<WalkOrder::PostOrder>([&](Operation *op) {
+  func->walk<WalkOrder::PostOrder>([&](Operation *op) {
     operationId[op] = operationId.size();
     if (auto alloc = dyn_cast<triton::nvidia_gpu::TMEMAllocOp>(op)) {
       allocs.push_back(alloc);
+    }
+    if (auto callOp = dyn_cast<CallOpInterface>(op)) {
+      auto callee = dyn_cast_or_null<FunctionOpInterface>(
+          callOp.resolveCallableInTable(&symbolTable));
+      if (callee) {
+        int calleeCols = funcTMemCols.lookup(callee);
+        if (calleeCols > 0)
+          tmemCalls.push_back({op, calleeCols});
+      }
     }
     if (auto mmaOp = dyn_cast<MMAv5OpInterface>(op)) {
       if (isa<TensorMemoryEncodingAttr>(mmaOp.getA().getType().getEncoding())) {
@@ -328,15 +346,35 @@ allocateTMem(Operation *parentOp,
       }
     }
   });
+  // A callee's allocations keep their absolute column offsets in every caller
+  // because the lowering passes the kernel's tensor memory base unchanged
+  // through direct calls. Model each call as an immovable full-height
+  // reservation of the callee's footprint at column 0. Since the reservation
+  // cannot be relocated, concurrent execution of tensor-memory-using calls is
+  // not supported.
+  for (auto &[callOp, calleeCols] : tmemCalls) {
+    if (callOp->getParentOfType<triton::gpu::WarpSpecializeOp>() ||
+        callOp->getParentOfType<ttg::WarpSpecializePartitionsOp>())
+      return callOp->emitError(
+          "calls to functions that use tensor memory are not supported inside "
+          "warp specialize regions");
+  }
+
   int totalMemorySize = 0;
+  // The callee's footprint is occupied while a call executes, even if the
+  // caller has no allocations of its own.
+  for (auto &[callOp, calleeCols] : tmemCalls)
+    totalMemorySize = std::max(totalMemorySize, calleeCols);
+
   MemoryBitMap memoryMap;
-  Liveness liveness(parentOp);
+  Liveness liveness(func.getOperation());
   std::multimap<int, TMemChunk> intervalLiverangeEnd;
   DenseMap<TMEMAllocOp, TMemChunk> allocChunks;
   // Implement a linear scan first fit algorithm. We expect that fragmentation
   // won't be a problem, if it is this should be revisited.
   for (auto it = allocs.begin(), e = allocs.end(); it != e; ++it) {
     TMEMAllocOp alloc = *it;
+    Interval<int> liveInterval = getLiveIntervals(alloc, liveness, operationId);
 
     // Find all allocations in code that may execute at the same time. Only look
     // at processed allocations.
@@ -352,7 +390,19 @@ allocateTMem(Operation *parentOp,
       }
     }
 
-    Interval<int> liveInterval = getLiveIntervals(alloc, liveness, operationId);
+    // Allocations live across a call must avoid the columns reserved for the
+    // callee.
+    for (auto &[callOp, calleeCols] : tmemCalls) {
+      if (liveInterval.contains(operationId.lookup(callOp))) {
+        TMemChunk calleeChunk;
+        calleeChunk.startRow = 0;
+        calleeChunk.startCol = 0;
+        calleeChunk.numCols = calleeCols;
+        calleeChunk.numRows = kNumRows;
+        coexistingChunks.push_back(calleeChunk);
+      }
+    }
+
     auto memDescType = alloc.getType();
     TMemAllocation allocSize = getTmemAllocSizes(memDescType);
     updateMap(memoryMap, liveInterval, intervalLiverangeEnd);
@@ -374,15 +424,42 @@ allocateTMem(Operation *parentOp,
 
     alloc->setAttr(
         "tensor_memory_col_offset",
-        IntegerAttr::get(IntegerType::get(parentOp->getContext(), 32),
-                         colOffset));
+        IntegerAttr::get(IntegerType::get(func->getContext(), 32), colOffset));
     alloc->setAttr(
         "tensor_memory_row_offset",
-        IntegerAttr::get(IntegerType::get(parentOp->getContext(), 32),
-                         rowOffset));
+        IntegerAttr::get(IntegerType::get(func->getContext(), 32), rowOffset));
     totalMemorySize = std::max(totalMemorySize, colOffset + allocSize.numCols);
   }
   return totalMemorySize;
+}
+
+// Allocate tensor memory for `func` after all of its callees so that call
+// sites know the callee's footprint. `callStack` detects cycles.
+static LogicalResult allocateFunctionAndCallees(
+    FunctionOpInterface func, DenseMap<FunctionOpInterface, int> &funcTMemCols,
+    SymbolTableCollection &symbolTable, SetVector<Operation *> &callStack) {
+  if (funcTMemCols.contains(func))
+    return success();
+  if (!callStack.insert(func.getOperation()))
+    return func->emitError(
+        "cannot allocate tensor memory for recursive function calls");
+  WalkResult result = func->walk([&](CallOpInterface callOp) {
+    auto callee = dyn_cast_or_null<FunctionOpInterface>(
+        callOp.resolveCallableInTable(&symbolTable));
+    if (callee && failed(allocateFunctionAndCallees(callee, funcTMemCols,
+                                                    symbolTable, callStack)))
+      return WalkResult::interrupt();
+    return WalkResult::advance();
+  });
+  callStack.remove(func.getOperation());
+  if (result.wasInterrupted())
+    return failure();
+  FailureOr<int> totalMemorySize =
+      allocateTMem(func, funcTMemCols, symbolTable);
+  if (failed(totalMemorySize))
+    return failure();
+  funcTMemCols[func] = *totalMemorySize;
+  return success();
 }
 
 } // anonymous namespace
@@ -398,9 +475,24 @@ public:
   void runOnOperation() override {
     ModuleOp mod = getOperation();
 
-    DenseMap<triton::nvidia_gpu::TMEMAllocOp, int> offsets;
-    // TODO: handle cases with multiple function with TMEMAllocOp.
-    int totalMemorySize = allocateTMem(mod, offsets);
+    // Allocate functions in the call graph bottom-up so that call sites can
+    // reserve the tensor memory used by their callee.
+    SymbolTableCollection symbolTable;
+    DenseMap<FunctionOpInterface, int> funcTMemCols;
+    SetVector<Operation *> callStack;
+    for (auto func : mod.getOps<FunctionOpInterface>()) {
+      if (failed(allocateFunctionAndCallees(func, funcTMemCols, symbolTable,
+                                            callStack)))
+        return signalPassFailure();
+    }
+
+    // Only kernels allocate tensor memory at runtime; device functions are
+    // accounted for through the reservations made by their callers.
+    int totalMemorySize = 0;
+    for (auto func : mod.getOps<FunctionOpInterface>()) {
+      if (triton::isKernel(func))
+        totalMemorySize = std::max(totalMemorySize, funcTMemCols.lookup(func));
+    }
 
     std::vector<int> possibleAllocations = {0, 32, 64, 128, 256, 512, 576};
     // NOTE: if totalMemorySize > the maximum available for the target (512
