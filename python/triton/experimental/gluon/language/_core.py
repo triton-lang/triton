@@ -1,7 +1,7 @@
 from __future__ import annotations
 import inspect
 import math
-from typing import Callable, TypeVar, List, TYPE_CHECKING, Tuple
+from typing import Any, Callable, TypeVar, List, TYPE_CHECKING, Tuple
 from functools import wraps
 import warnings
 
@@ -81,7 +81,7 @@ __all__ = [
     "num_ctas",
 ]
 
-T = TypeVar("T")
+T = TypeVar("T", bound=Callable[..., Any])
 
 # TODO: split these
 GLUON_BUILTIN = "__triton_builtin__"
@@ -89,8 +89,6 @@ GLUON_BUILTIN = "__triton_builtin__"
 
 def builtin(fn: T) -> T:
     """Mark a function as a builtin."""
-    assert callable(fn)
-
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if "_semantic" not in kwargs or kwargs["_semantic"] is None:

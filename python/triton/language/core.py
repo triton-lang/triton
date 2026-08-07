@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from enum import Enum
 from functools import partial, wraps, cached_property
 import typing
-from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Union, Callable, List, Sequence, TypeVar, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
 import builtins
 from .. import knobs
@@ -16,7 +16,7 @@ import inspect
 from .._C.libtriton import ir
 from .._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape, get_primitive_bitwidth, _tuple_create
 
-T = TypeVar('T')
+T = TypeVar('T', bound=Callable[..., Any])
 
 TRITON_BUILTIN = "__triton_builtin__"
 
@@ -33,8 +33,6 @@ def must_use_result(x, s=True):
 
 def builtin(fn: T) -> T:
     """Mark a function as a builtin."""
-    assert callable(fn)
-
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if "_semantic" not in kwargs or kwargs["_semantic"] is None:
@@ -61,7 +59,6 @@ def _tensor_member_fn(fn: T) -> T:
     Unfortunately you still need to add a type stub to the body of class tensor
     in order for pytype to know about it.
     """
-    assert callable(fn)
     orig_sig = inspect.signature(fn)
     # Does fn take args other than _semantic, _generator, and the tensor itself?
     has_args = len(orig_sig.parameters.keys() - {"_semantic", "_generator"}) > 1
