@@ -67,6 +67,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %17 = ttg.async_commit_group tokens %16
       scf.yield %12, %6, %14, %arg19, %17, %arg21, %15, %11, %9 : tensor<128x16xf32, #mma>, tensor<128x16xf32, #mma>, tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>, !ttg.async.token, !ttg.async.token, !ttg.memdesc<64x16xf16, #shared, #smem, mutable>, !ttg.memdesc<64x16xf16, #shared, #smem, mutable>, !ttg.async.token, !ttg.memdesc<64x16xf16, #shared, #smem, mutable>
     }
+    scf.for %i = %c0_i32 to %arg1 step %arg2 : i32 {
+      %scaled0 = tt.dot_scaled %arg10, %arg7, %arg4 lhs = fp16 rhs = fp16 {fastMath = false} : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x16xf32, #mma>
+      %scaled1 = tt.dot_scaled %arg10, %arg7, %arg4 lhs = fp16 rhs = fp16 {fastMath = false} : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x16xf32, #mma>
+    }
     ttg.local_dealloc %1 : !ttg.memdesc<2x64x16xf16, #shared, #smem, mutable>
     ttg.local_dealloc %0 : !ttg.memdesc<2x64x16xf16, #shared, #smem, mutable>
     tt.return %5#0 : tensor<128x16xf32, #mma>
