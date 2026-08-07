@@ -59,11 +59,11 @@ bool hasCpAsync(ModuleOp mod) {
   return result;
 }
 
-int getNumCommitKinds(ModuleOp mod, const ConSanTargetHooks *hooks) {
+int getNumCommitKinds(ModuleOp mod, const ConSanTargetHooks &hooks) {
   std::array<bool, tti::CommitKind::NumCommitKinds> commitKinds{};
   if (hasCpAsync(mod))
     commitKinds[tti::CommitKind::AsyncCp] = true;
-  for (auto kind : hooks->getRequiredCommitKinds(mod)) {
+  for (auto kind : hooks.getRequiredCommitKinds(mod)) {
     if (kind >= 0 && kind < tti::CommitKind::NumCommitKinds)
       commitKinds[kind] = true;
   }
@@ -96,9 +96,11 @@ public:
 
     int numActiveMemTypes = (hasSharedMemoryBuffers(mod) ? 1 : 0) +
                             (hasTensorMemoryBuffers(mod) ? 1 : 0);
+    // NVIDIA inserts a terminal cluster barrier after this pass.
+    bool hasClusterBarriers = target == "nvidia" && ttg::lookupNumCTAs(mod) > 1;
     int totalCaptures = tti::estimateConSanCaptureCount(
-        numActiveMemTypes, hasBarriers(mod),
-        getNumCommitKinds(mod, hooks.get()),
+        numActiveMemTypes, hasBarriers(mod), hasClusterBarriers,
+        getNumCommitKinds(mod, *hooks),
         hasSharedMemoryBuffers(mod) &&
             hooks->needsAsyncProxyFenceTracking(mod));
     int extraBytes = totalCaptures * tti::kCaptureSizeBytes;

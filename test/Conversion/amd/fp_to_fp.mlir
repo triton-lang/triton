@@ -44,11 +44,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func @f32_to_bf16(%arg0: tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>) {
+    // GFX942-NOT: llvm.fptrunc
+    // GFX942: llvm.trunc %{{.+}} : i32 to i16
+    // GFX942-NEXT: llvm.bitcast %{{.+}} : i16 to bf16
+    // GFX950-COUNT-4: llvm.fptrunc %{{.+}} : vector<2xf32> to vector<2xbf16>
+    %0 = tt.fp_to_fp %arg0, rounding = rtne : tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
+
     // Two fp32 are packed into two bf16 (RTZ) with a single v_perm_b32, so the
     // 8 elements per thread produce 4 perms rather than per-halfword moves.
     // COMMON-COUNT-4: llvm.call_intrinsic "llvm.amdgcn.perm"
     // COMMON-NOT: llvm.call_intrinsic "llvm.amdgcn.perm"
-    %0 = tt.fp_to_fp %arg0, rounding = rtz : tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
+    %1 = tt.fp_to_fp %arg0, rounding = rtz : tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
     tt.return
   }
 }

@@ -5,4 +5,10 @@ add_triton_library(ProtonIR
   DEPENDS
   ProtonTableGen
   ProtonAttrDefsIncGen
+
+  LINK_LIBS PUBLIC
+  MLIRIR
+  MLIRLLVMDialect
+  MLIRFunctionInterfaces
+  MLIRTransformUtils
 )

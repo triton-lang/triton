@@ -415,10 +415,9 @@ def sugar_rewrite(module: str, alias: str) -> RewriteFn:
 
 
 def add_sugar_rewrites(rewrites: list[RewriteFn], translate_to_gluon: bool) -> None:
-    if translate_to_gluon:
-        rewrites.append(sugar_rewrite("triton.experimental.gluon.language", "gl"))
-        rewrites.append(sugar_rewrite("triton.experimental.gluon", "gluon"))
-    else:
+    rewrites.append(sugar_rewrite("triton.experimental.gluon.language", "gl"))
+    rewrites.append(sugar_rewrite("triton.experimental.gluon", "gluon"))
+    if not translate_to_gluon:
         rewrites.append(sugar_rewrite("triton.language", "tl"))
         rewrites.append(sugar_rewrite("triton", "triton"))
 

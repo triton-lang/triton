@@ -59,9 +59,7 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx,
          "expected register broadcasting to be removed by the caller");
   auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
 
-  auto sharedLayout = isPaddedEncoding(memDescTy.getEncoding())
-                          ? paddedLinearLayout(memDescTy)
-                          : toLinearLayout(memDescTy);
+  auto sharedLayout = toLinearLayoutIgnoringPadding(memDescTy);
   auto cvt = invertAndComposeBlockLocal(sharedLayout, regLayout);
 
   lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, memDescTy, smemObj,
@@ -190,9 +188,7 @@ public:
 
     auto regLayout =
         toLinearLayout(regTy).removeZeroBasesAlongDim(str_attr("register"));
-    auto sharedLayout = isPaddedEncoding(memDescTy.getEncoding())
-                            ? paddedLinearLayout(memDescTy)
-                            : toLinearLayout(memDescTy);
+    auto sharedLayout = toLinearLayoutIgnoringPadding(memDescTy);
     auto cvt = invertAndComposeBlockLocal(sharedLayout, regLayout);
 
     auto outVals = lowerLocalLdSt(loc, ctx, cvt, {}, llvmElemTy, memDescTy,
@@ -379,6 +375,12 @@ struct AtomicPollOpConversion
     if (numCTAs != 1 && !targetInfo.isCuda())
       return rewriter.notifyMatchFailure(
           op, "multi-CTA atomic_poll requires cross-CTA shared memory");
+
+    // Every lowering path emits a rendezvous barrier after the poll, so use it
+    // as the post-atomic ordering barrier instead of emitting a duplicate.
+    insertAtomicOrderingBarriers(op, op.getSem(),
+                                 /*emitBarrierAfter=*/false, rewriter,
+                                 targetInfo);
 
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred =

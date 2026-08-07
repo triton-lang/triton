@@ -50,6 +50,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-POLL: llvm.inline_asm has_side_effects
   // CHECK-POLL: nvvm.barrier
   // CHECK-POLL: %{{.*}} = llvm.load %{{.*}} : !llvm.ptr<3> -> i1
+  // CHECK-POLL-NOT: nvvm.barrier
+  // CHECK-POLL: llvm.return
   tt.func public @atomic_poll(%ptr: !tt.ptr<i32>, %expected: i32, %timeout: i64, %out: !tt.ptr<i32>) {
     %matched = tt.atomic_poll acquire, sys, %ptr, %expected timeout %timeout : !tt.ptr<i32>, i32 -> i1
     %result = arith.extui %matched : i1 to i32

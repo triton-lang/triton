@@ -942,27 +942,28 @@ LogicalResult getConvertBackwardSlice(
     auto currentValueType = dyn_cast<RankedTensorType>(currentValue.getType());
     if (!currentValueType)
       continue;
-    // Skip propagating through for op/while op/ws op results for now.
-    // TODO: enable this based on needs.
-    auto defOp = currentValue.getDefiningOp();
-    if (isa_and_nonnull<scf::ForOp, scf::WhileOp, ttg::WarpSpecializeOp>(defOp))
-      return failure();
     if (failed(updateLayout(currentValue, encoding)))
       return failure();
     // If the value already has the desired encoding, we can stop here without
     // adding it to the slice.
     if (currentValueType.getEncoding() == encoding)
       continue;
-    slice.insert(currentValue);
 
     // If there is already an existing conversion to the target layout, we don't
-    // need to propagate to the operands.
+    // need to rematerialize this value or propagate to its operands.
     // Note that this is per-use rather than per-value, so if another use fails
     // the getExistingConversion check, we may still traverse the operands.
     if (getExistingConversion &&
         getExistingConversion(*currentValueUse, encoding)) {
       continue;
     }
+
+    // Skip propagating through for op/while op/ws op results for now.
+    // TODO: enable this based on needs.
+    auto defOp = currentValue.getDefiningOp();
+    if (isa_and_nonnull<scf::ForOp, scf::WhileOp, ttg::WarpSpecializeOp>(defOp))
+      return failure();
+    slice.insert(currentValue);
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
       if (stopPropagation && stopPropagation(ifOp))
@@ -1523,7 +1524,8 @@ void replaceUsesAndPropagateType(
       auto operands = llvm::to_vector(wait.getOperands());
       operands[operand->getOperandNumber()] = val;
       auto newWait = ttng::WarpGroupDotWaitOp::create(
-          builder, wait.getLoc(), operands, wait.getPendings());
+          builder, wait.getLoc(), operands, wait.getPendingsAttr(),
+          wait.getWarpGroupLocalAttr());
       wait.replaceAllUsesWith(newWait.getResults());
       wait.erase();
     } else {

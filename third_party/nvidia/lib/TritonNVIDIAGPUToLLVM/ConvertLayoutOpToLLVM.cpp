@@ -43,7 +43,7 @@ struct ConvertLayoutOpSwizzlingConversion
 
     assert(to_vector(conversion.getInDimNames()) ==
            to_vector(conversion.getOutDimNames()));
-    if (!cvtAlwaysUseWarpShuffle(op) && cvtNeedsSharedMemory(srcTy, dstTy)) {
+    if (cvtNeedsSharedMemory(op)) {
       auto loc = op.getLoc();
 
       auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());

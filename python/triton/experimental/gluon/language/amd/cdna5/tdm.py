@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import triton.experimental.gluon.language._core as ttgl
 from triton.experimental.gluon.language._layouts import PaddedSharedLayout, SwizzledSharedLayout
-from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
+from triton.experimental.gluon.language.amd.cdna5 import PartitionedSharedLayout
 from triton.experimental.gluon.language._core import builtin, _unwrap_if_constexpr
 
 if TYPE_CHECKING:
@@ -12,8 +12,8 @@ if TYPE_CHECKING:
     from triton.experimental.gluon.language._core import shared_memory_descriptor
 
 __all__ = [
-    "update_tensor_descriptor", "async_load", "async_wait", "make_tensor_descriptor", "tensor_descriptor",
-    "tensor_descriptor_type", "prefetch", "async_scatter"
+    "update_tensor_descriptor", "async_load", "async_load_fused", "async_wait", "make_tensor_descriptor",
+    "tensor_descriptor", "tensor_descriptor_type", "prefetch", "async_store", "async_scatter", "async_gather"
 ]
 
 
@@ -97,6 +97,8 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
                            _semantic=None) -> tensor_descriptor:
     """Make a tensor descriptor object.
 
+    AMD CDNA5 TDM tensor descriptors only support zero padding.
+
     Args:
         base (tensor): base pointer of the tensor in global memory.
         shape (List[int]): shape of the tensor.
@@ -163,11 +165,11 @@ def update_tensor_descriptor(desc: tensor_descriptor, add_offsets: List[ttgl.con
     names are written.  Everything else is inherited from the input
     descriptor.
 
-    NOTE: Unlike the standard tensor-descriptor mental model, `add_offsets`
+    NOTE: Unlike the standard tensor-descriptor mental model, ``add_offsets``
     here moves the tile position only.  It does NOT update the descriptor's
     bounds.  If the loop crosses an OOB boundary, you must also pass
-    `set_bounds` explicitly, or pass `clamp_bounds=True` to derive the OOB
-    extent from `add_offsets`.
+    ``set_bounds`` explicitly, or pass ``clamp_bounds=True`` to derive the OOB
+    extent from ``add_offsets``.
 
     Args:
         desc (tensor_descriptor): the input descriptor.
@@ -178,9 +180,9 @@ def update_tensor_descriptor(desc: tensor_descriptor, add_offsets: List[ttgl.con
             epilogue.
         pred (int, optional): set the descriptor's predicate.
         clamp_bounds (bool, optional): if True, also shrink the descriptor's
-            bounds by `add_offsets` (tensor_dim[i] = max(0, tensor_dim[i] -
-            add_offsets[i])) to derive the advanced tile's OOB extent.
-            Requires `add_offsets`; mutually exclusive with `set_bounds`.
+            bounds by ``add_offsets`` (``tensor_dim[i] = max(0, tensor_dim[i] - add_offsets[i])``)
+            to derive the advanced tile's OOB extent. Requires ``add_offsets``;
+            mutually exclusive with ``set_bounds``.
 
     Returns:
         tensor_descriptor: a new descriptor SSA value with the requested
@@ -189,7 +191,10 @@ def update_tensor_descriptor(desc: tensor_descriptor, add_offsets: List[ttgl.con
     Raises:
         ValueError: if no parameter is provided (no-op updates are forbidden).
 
-    Example:
+    **Example**
+
+    .. code-block:: python
+
         # K-loop interior: bump tile position only
         d = tdm.update_tensor_descriptor(d, add_offsets=[0, BLOCK_K])
 
@@ -245,12 +250,12 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
                warp_used_hint=None, cache_modifier="", _semantic=None) -> None:
     """Load a block of tensor specified in tensor descriptor from global memory to shared memory asynchronously.
 
-    This op expects a prior ``update_tensor_descriptor`` to position the
+    This operation expects a prior :func:`update_tensor_descriptor` to position the
     descriptor for the load offsets and bounds.  Doing this explicitly lets the
     developer control when and where the descriptor update happens, which has
     performance implications for downstream code generation.  For convenience,
     ``offsets`` (and optionally ``pred``) may be passed here, in which case an
-    ``update_tensor_descriptor`` is emitted right before the load.
+    :func:`update_tensor_descriptor` is emitted immediately before the load.
 
     Args:
         src (tensor_descriptor): the source tensor descriptor.
@@ -259,9 +264,9 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
         dest (shared_memory_descriptor): the shared memory destination to store the loaded data.
         pred (bool, optional): if given, predicate to enable or disable the load.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
-        warp_used_hint (int, optional): Bitmask selecting which warps issue
-            the TDM copy (bit ``n`` => warp ``n``); cleared warps become HW
-            no-ops.  Doesn't affect the data in ``dest``, only the work split.
+        warp_used_hint (int, optional): Bitmask selecting the active warp
+            subset for descriptor layout (bit ``n`` => warp ``n``).  Doesn't
+            affect the data in ``dest``, only the work split.
             The number of active warps must be a power of two, and the active
             warps must follow a regular bit pattern for efficient lowering.
             Examples: ``0b00001111`` (warps 0..3), ``0b11110000`` (warps
@@ -290,13 +295,67 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
 
 
 @builtin
+def async_load_fused(members: List[Tuple[tensor_descriptor, shared_memory_descriptor, ttgl.constexpr | int]],
+                     cache_modifier="", _semantic=None) -> None:
+    """Emit one explicit fused TDM load for 2-4 descriptor/destination pairs.
+
+    This can perform better than several consecutive separate TDM loads,
+    especially for more than two loads. Under the hood, different warps load
+    different descriptor/destination pairs according to each member's
+    ``warp_used_hint``; collectively all participating warps load all pairs at
+    the block level.
+
+    Each member is ``(desc, dest, warp_used_hint)``. The descriptors must
+    already encode their tile offsets, predicates, and bounds; use
+    :func:`update_tensor_descriptor` before calling this helper when needed.
+    All members share one cache modifier, matching the fused IR operation.
+
+    Args:
+        members: 2-4 ``(desc, dest, warp_used_hint)`` tuples. Hints must be
+            legal, pairwise-disjoint bitmasks.
+        cache_modifier (str, optional): Cache behavior shared by all members.
+    """
+    members = _unwrap_if_constexpr(members)
+    if not 2 <= len(members) <= 4:
+        raise ValueError(f"tdm.async_load_fused requires 2 to 4 members, got {len(members)}")
+
+    desc_handles = []
+    dest_handles = []
+    warp_used_hints = []
+    rank = None
+    for idx, member in enumerate(members):
+        member = _unwrap_if_constexpr(member)
+        if len(member) != 3:
+            raise ValueError("tdm.async_load_fused members must be (desc, dest, warp_used_hint) tuples")
+        desc, dest, warp_used_hint = member
+        if not isinstance(desc, tensor_descriptor):
+            raise TypeError(f"tdm.async_load_fused member {idx}: expected tensor_descriptor")
+        if rank is None:
+            rank = len(desc.block_shape)
+        if len(desc.block_shape) != rank:
+            raise ValueError("tdm.async_load_fused requires all descriptors to have the same rank")
+
+        warp_used_hint = _unwrap_if_constexpr(warp_used_hint)
+        if warp_used_hint is None:
+            raise ValueError(f"tdm.async_load_fused member {idx}: warp_used_hint is required")
+
+        desc_handles.append(desc.handle)
+        dest_handles.append(dest.handle)
+        warp_used_hints.append(int(warp_used_hint))
+
+    cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
+    _semantic.builder.create_async_tdm_fused_copy_global_to_local(desc_handles, dest_handles, warp_used_hints,
+                                                                  cache_modifier)
+
+
+@builtin
 def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor] = None,
                 src: shared_memory_descriptor = None, mbarrier: shared_memory_descriptor = None, cache_modifier="",
                 _semantic=None) -> None:
     """Store a block of tensor specified in tensor descriptor from shared memory to global memory asynchronously.
 
     See :func:`async_load` for how the descriptor is positioned (a prior
-    ``update_tensor_descriptor`` or the ``offsets`` convenience).  Stores take no
+    :func:`update_tensor_descriptor` or the ``offsets`` convenience). Stores take no
     ``pred``.
 
     Args:
@@ -333,20 +392,22 @@ def async_scatter(desc: tensor_descriptor, dst_row_indices: ttgl.tensor, src: sh
     """Scatter data from shared memory to non-contiguous rows in global memory asynchronously.
 
     This operation uses TDM scatter mode to write data to non-contiguous rows in global memory.
-    Unlike async_store which writes to contiguous rows, scatter allows writing to arbitrary
-    rows specified by the dst_row_indices tensor.
+    Unlike :func:`async_store`, which writes to contiguous rows, scatter allows writing to
+    arbitrary rows specified by the ``dst_row_indices`` tensor.
 
-    The dtype of dst_row_indices determines the index size:
-    - int16: up to 16 rows can be scattered per TDM instruction
-    - int32: up to 8 rows can be scattered per TDM instruction
+    The dtype of ``dst_row_indices`` determines the index size:
+
+    * ``int16``: up to 16 rows can be scattered per TDM instruction.
+    * ``int32``: up to 8 rows can be scattered per TDM instruction.
+
     If more rows are needed, multiple TDM instructions will be automatically issued.
 
     The column offset is carried by the descriptor: position it beforehand with
-    ``update_tensor_descriptor(desc, add_offsets=[0, col])``.
+    :func:`update_tensor_descriptor` with ``add_offsets=[0, col]``.
 
     Args:
-        desc (tensor_descriptor): the destination tensor descriptor. Must be 2D and positioned
-                                  (column via update_tensor_descriptor).
+        desc (tensor_descriptor): The destination tensor descriptor. Must be 2D and positioned
+            through :func:`update_tensor_descriptor` for the column.
         dst_row_indices (tensor): 1D tensor of row indices (int16 or int32) in the destination tensor.
         src (shared_memory_descriptor): the shared memory source containing data to scatter. Must be 2D.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
@@ -369,20 +430,23 @@ def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, dst: sha
     """Gather data from non-contiguous rows in global memory to shared memory asynchronously.
 
     This operation uses TDM gather mode to read data from non-contiguous rows in global memory.
-    Unlike async_load which reads from contiguous rows, gather allows reading from arbitrary
-    rows specified by the src_row_indices tensor.
+    Unlike :func:`async_load`, which reads from contiguous rows, gather allows reading from
+    arbitrary rows specified by the ``src_row_indices`` tensor.
 
-    The dtype of src_row_indices determines the index size:
-    - int16: up to 16 rows can be gathered per TDM instruction
-    - int32: up to 8 rows can be gathered per TDM instruction
+    The dtype of ``src_row_indices`` determines the index size:
+
+    * ``int16``: up to 16 rows can be gathered per TDM instruction.
+    * ``int32``: up to 8 rows can be gathered per TDM instruction.
+
     If more rows are needed, multiple TDM instructions will be automatically issued.
 
     The column offset and predicate are carried by the descriptor: position it
-    beforehand with ``update_tensor_descriptor(desc, add_offsets=[0, col], pred=p)``.
+    beforehand with :func:`update_tensor_descriptor`, passing
+    ``add_offsets=[0, col]`` and ``pred=p``.
 
     Args:
-        desc (tensor_descriptor): the source tensor descriptor. Must be 2D and positioned
-                                  (column / pred via update_tensor_descriptor).
+        desc (tensor_descriptor): The source tensor descriptor. Must be 2D and positioned
+            through :func:`update_tensor_descriptor` for the column and predicate.
         src_row_indices (tensor): 1D tensor of row indices (int16 or int32) in the source tensor.
         dst (shared_memory_descriptor): the shared memory destination to store gathered data. Must be 2D.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
@@ -402,9 +466,12 @@ def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, dst: sha
 @builtin
 def prefetch(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], pred: bool = True,
              speculative: bool = False, _semantic=None) -> None:
-    """Prefetches a block of tensor specified in tensor descriptor from global memory into L2. Speculative prefetches can generate more
-    efficient assembly because they do not require out of bounds checks. However, they are dropped by the hardware if their virtual address translation is not cached.
-    So speculative should only be set if previous iterations have accessed the same virtual page (e.g. column major)
+    """Prefetches a block of tensor specified in tensor descriptor from global memory into L2.
+
+    Speculative prefetches can generate more efficient assembly because they do not require out of bounds checks.
+    However, they are dropped by the hardware if their virtual address translation is not cached.
+    So speculative should only be set if previous iterations have accessed the same virtual page (e.g. column major).
+
     Args:
         src (tensor_descriptor): the source tensor descriptor.
         offsets (List[int]): the offsets from the base pointer in the tensor descriptor.

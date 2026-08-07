@@ -25,6 +25,108 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#packed = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#fp4 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @packed_arith_fpsan_ue8m0_multiple_fp4
+  tt.func public @packed_arith_fpsan_ue8m0_multiple_fp4(
+      %scale: tensor<128x4xf8E8M0FNU, #packed>,
+      %a: tensor<128x2xi8, #fp4>,
+      %b: tensor<128x2xi8, #fp4>,
+      %addend: tensor<128x4xf8E4M3FN, #packed>) -> tensor<128x4xf8E4M3FN, #packed> {
+    // CHECK: arith.muli
+    // CHECK: tti.experimental_fpsan_embed
+    // CHECK: arith.addi
+    // CHECK: arith.muli
+    // CHECK: arith.addi
+    // CHECK-NOT: ttng.packed_arith
+    %product = ttng.packed_arith mul %a, %b : (tensor<128x2xi8, #fp4>, tensor<128x2xi8, #fp4>) -> tensor<128x4xf8E4M3FN, #packed>
+    %scaled = ttng.packed_arith add %scale, %product : (tensor<128x4xf8E8M0FNU, #packed>, tensor<128x4xf8E4M3FN, #packed>) -> tensor<128x4xf8E4M3FN, #packed>
+    %result = ttng.packed_arith fma %scale, %a, %scaled : (tensor<128x4xf8E8M0FNU, #packed>, tensor<128x2xi8, #fp4>, tensor<128x4xf8E4M3FN, #packed>) -> tensor<128x4xf8E4M3FN, #packed>
+    tt.return %result : tensor<128x4xf8E4M3FN, #packed>
+  }
+}
+
+// -----
+
+#packed = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @packed_arith_fpsan_x2
+  tt.func public @packed_arith_fpsan_x2(
+      %f32a: tensor<128x4xf32, #packed>,
+      %f32b: tensor<128x4xf32, #packed>,
+      %f32c: tensor<128x4xf32, #packed>,
+      %f16a: tensor<128x4xf16, #packed>,
+      %f16b: tensor<128x4xf16, #packed>) -> tensor<128x4xf16, #packed> {
+    // CHECK: tti.experimental_fpsan_embed
+    // CHECK: arith.addi
+    // CHECK: arith.subi
+    // CHECK: arith.muli
+    // CHECK: arith.addi
+    // CHECK: arith.extsi
+    // CHECK: arith.minsi
+    // CHECK: arith.maxsi
+    // CHECK-NOT: ttng.packed_arith
+    %add = ttng.packed_arith add %f32a, %f32b : (tensor<128x4xf32, #packed>, tensor<128x4xf32, #packed>) -> tensor<128x4xf32, #packed>
+    %sub = ttng.packed_arith sub %add, %f32b : (tensor<128x4xf32, #packed>, tensor<128x4xf32, #packed>) -> tensor<128x4xf32, #packed>
+    %mul = ttng.packed_arith mul %sub, %f32b : (tensor<128x4xf32, #packed>, tensor<128x4xf32, #packed>) -> tensor<128x4xf32, #packed>
+    %fma = ttng.packed_arith fma %mul, %f32b, %f32c : (tensor<128x4xf32, #packed>, tensor<128x4xf32, #packed>, tensor<128x4xf32, #packed>) -> tensor<128x4xf32, #packed>
+    %up = ttng.packed_arith add %f16a, %fma : (tensor<128x4xf16, #packed>, tensor<128x4xf32, #packed>) -> tensor<128x4xf32, #packed>
+    %down = ttng.packed_arith sub %up, %f32c : (tensor<128x4xf32, #packed>, tensor<128x4xf32, #packed>) -> tensor<128x4xf16, #packed>
+    %min = ttng.packed_arith min %down, %f16b : (tensor<128x4xf16, #packed>, tensor<128x4xf16, #packed>) -> tensor<128x4xf16, #packed>
+    %max = ttng.packed_arith max %min, %f16b : (tensor<128x4xf16, #packed>, tensor<128x4xf16, #packed>) -> tensor<128x4xf16, #packed>
+    tt.return %max : tensor<128x4xf16, #packed>
+  }
+}
+
+// -----
+
+#packed = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#fp4 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @packed_arith_fpsan_x4
+  tt.func public @packed_arith_fpsan_x4(
+      %fp4: tensor<128x2xi8, #fp4>,
+      %e4m3: tensor<128x4xf8E4M3FN, #packed>,
+      %e5m2: tensor<128x4xf8E5M2, #packed>) -> tensor<128x4xf8E4M3FN, #packed> {
+    // CHECK: arith.andi
+    // CHECK: arith.shrui
+    // CHECK: tt.join
+    // CHECK: tt.reshape
+    // CHECK: tti.experimental_fpsan_embed
+    // CHECK: arith.addi
+    // CHECK: arith.muli
+    // CHECK: arith.addi
+    // CHECK-NOT: ttng.packed_arith
+    %add = ttng.packed_arith add %fp4, %e4m3 : (tensor<128x2xi8, #fp4>, tensor<128x4xf8E4M3FN, #packed>) -> tensor<128x4xf8E4M3FN, #packed>
+    %mul = ttng.packed_arith mul %e5m2, %fp4 : (tensor<128x4xf8E5M2, #packed>, tensor<128x2xi8, #fp4>) -> tensor<128x4xf8E4M3FN, #packed>
+    %fma = ttng.packed_arith fma %fp4, %e5m2, %add : (tensor<128x2xi8, #fp4>, tensor<128x4xf8E5M2, #packed>, tensor<128x4xf8E4M3FN, #packed>) -> tensor<128x4xf8E4M3FN, #packed>
+    %out = ttng.packed_arith add %mul, %fma : (tensor<128x4xf8E4M3FN, #packed>, tensor<128x4xf8E4M3FN, #packed>) -> tensor<128x4xf8E4M3FN, #packed>
+    tt.return %out : tensor<128x4xf8E4M3FN, #packed>
+  }
+}
+
+// -----
+
+#result = #ttg.blocked<{sizePerThread = [4, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
+#fp4 = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @packed_arith_fpsan_fp4_axis0
+  tt.func public @packed_arith_fpsan_fp4_axis0(
+      %fp4: tensor<2x256xi8, #fp4>,
+      %f8: tensor<4x256xf8E4M3FN, #result>) -> tensor<4x256xf8E4M3FN, #result> {
+    // CHECK: tt.join
+    // CHECK: tt.trans
+    // CHECK: tt.reshape
+    // CHECK: arith.addi
+    // CHECK-NOT: ttng.packed_arith
+    %out = ttng.packed_arith add %fp4, %f8 : (tensor<2x256xi8, #fp4>, tensor<4x256xf8E4M3FN, #result>) -> tensor<4x256xf8E4M3FN, #result>
+    tt.return %out : tensor<4x256xf8E4M3FN, #result>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
 #dot_operand_b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
@@ -305,6 +407,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @tmem_scratch_sliced_payloads
   tt.func public @tmem_scratch_sliced_payloads(%arg0: tensor<128x64xf32, #tmem_split>) {
+    // CHECK: arith.constant dense<-1212696649>
     // CHECK: tt.store
     // CHECK-NOT: ttng.tmem_store
     %true = arith.constant true
@@ -457,7 +560,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @exp_ops
   tt.func public @exp_ops(%a: tensor<4xf32>) -> (tensor<4xf32>, tensor<4xf32>) {
-    // CHECK-DAG: arith.constant dense<594471359>
+    // CHECK-DAG: arith.constant dense<648190581>
     // CHECK-DAG: arith.constant dense<1>
     // CHECK: tti.experimental_fpsan_embed
     // CHECK: arith.muli
@@ -505,15 +608,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @cast_truncf
   tt.func public @cast_truncf(%a: tensor<4xf32>) -> tensor<4xf16> {
-    // CHECK-DAG: %[[MULTIPLIER:.*]] = arith.constant dense<3511>
+    // CHECK-DAG: %[[MULTIPLIER:.*]] = arith.constant dense<230100407>
     // CHECK: %[[PAYLOAD:.*]] = tti.experimental_fpsan_embed
-    // CHECK: %[[SIGN:.*]] = arith.shrui %[[PAYLOAD]]
-    // CHECK: %[[SIGN_MASK:.*]] = arith.subi {{.*}}, %[[SIGN]]
-    // CHECK: %[[NORMALIZED:.*]] = arith.xori %[[PAYLOAD]], %[[SIGN_MASK]]
-    // CHECK: %[[HIGH:.*]] = arith.shrui %[[NORMALIZED]]
-    // CHECK: %[[FOLDED_HIGH:.*]] = arith.muli %[[HIGH]], %[[MULTIPLIER]]
-    // CHECK: %[[FOLDED:.*]] = arith.xori %[[PAYLOAD]], %[[FOLDED_HIGH]]
-    // CHECK: %[[NARROWED:.*]] = arith.trunci %[[FOLDED]]
+    // CHECK: %[[LOW:.*]] = arith.trunci %[[PAYLOAD]]
+    // CHECK: %[[CANONICAL:.*]] = arith.extsi %[[LOW]]
+    // CHECK: %[[RESIDUAL:.*]] = arith.xori %[[PAYLOAD]], %[[CANONICAL]]
+    // CHECK: %[[PRODUCT:.*]] = arith.muli %[[RESIDUAL]], %[[MULTIPLIER]]
+    // CHECK: %[[HIGH_WIDE:.*]] = arith.shrui %[[PRODUCT]]
+    // CHECK: %[[HIGH:.*]] = arith.trunci %[[HIGH_WIDE]]
+    // CHECK: %[[DIFFUSION:.*]] = arith.shrui %[[HIGH]]
+    // CHECK: %[[MIXED:.*]] = arith.xori %[[HIGH]], %[[DIFFUSION]]
+    // CHECK: %[[NARROWED:.*]] = arith.xori %[[LOW]], %[[MIXED]]
     // CHECK: tti.experimental_fpsan_unembed %[[NARROWED]]
     // CHECK-NOT: arith.truncf
     %0 = arith.truncf %a : tensor<4xf32> to tensor<4xf16>
@@ -559,6 +664,20 @@ tt.func public @extern_unary_fallback(%a: tensor<4xf32>) -> tensor<4xf32> {
   // CHECK: arith.xori
   // CHECK-NOT: tt.extern_elementwise
   %0 = tt.extern_elementwise %a {libname = "", libpath = "", pure = true, symbol = "__nv_tanf"} : (tensor<4xf32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @extern_exp_known
+tt.func public @extern_exp_known(%a: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK-DAG: arith.constant dense<648190581>
+  // CHECK-DAG: arith.constant dense<1>
+  // CHECK: tti.experimental_fpsan_embed
+  // CHECK: arith.muli
+  // CHECK-NOT: scf.for
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a {libname = "", libpath = "", pure = true, symbol = "__nv_expf"} : (tensor<4xf32>) -> tensor<4xf32>
   tt.return %0 : tensor<4xf32>
 }
 
@@ -637,6 +756,69 @@ tt.func public @extern_mixed(%a: tensor<4xf32>, %b: tensor<4xi32>) -> tensor<4xf
   // CHECK-NOT: tt.extern_elementwise
   %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_ldexpf"} : (tensor<4xf32>, tensor<4xi32>) -> tensor<4xf32>
   tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @inline_asm_unary
+tt.func public @inline_asm_unary(%a: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: arith.constant dense<-2010648817> : tensor<4xi32>
+  // CHECK: tti.experimental_fpsan_embed
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.elementwise_inline_asm
+  %0 = tt.elementwise_inline_asm "ex2.approx.ftz.f32 $0, $1;" {constraints = "=r,r", packed_element = 1 : i32, pure = true} %a : tensor<4xf32> -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @inline_asm_unary_different_asm
+tt.func public @inline_asm_unary_different_asm(%a: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: arith.constant dense<-88535098> : tensor<4xi32>
+  // CHECK: tti.experimental_fpsan_embed
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.elementwise_inline_asm
+  %0 = tt.elementwise_inline_asm "cvt.rn.tf32.f32 $0, $1;" {constraints = "=r,r", packed_element = 1 : i32, pure = true} %a : tensor<4xf32> -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @inline_asm_binary
+tt.func public @inline_asm_binary(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: arith.constant dense<1604722435> : tensor<4xi32>
+  // CHECK: tti.experimental_fpsan_embed
+  // CHECK: arith.addi
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.elementwise_inline_asm
+  %0 = tt.elementwise_inline_asm "add.f32 $0, $1, $2;" {constraints = "=r,r,r", packed_element = 1 : i32, pure = true} %a, %b : tensor<4xf32>, tensor<4xf32> -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @inline_asm_mixed
+tt.func public @inline_asm_mixed(%a: tensor<4xf32>, %b: tensor<4xi32>) -> tensor<4xf32> {
+  // CHECK: arith.constant dense<1352527917> : tensor<4xi32>
+  // CHECK: tti.experimental_fpsan_embed
+  // CHECK: arith.addi
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.elementwise_inline_asm
+  %0 = tt.elementwise_inline_asm "shf.l.wrap.b32 $0, $1, $2, $2;" {constraints = "=r,r,r", packed_element = 1 : i32, pure = true} %a, %b : tensor<4xf32>, tensor<4xi32> -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @inline_asm_multi_result
+tt.func public @inline_asm_multi_result(%a: tensor<4xi64>) -> (tensor<4xf32>, tensor<4xf32>) {
+  // CHECK-DAG: arith.constant dense<2041845833> : tensor<4xi32>
+  // CHECK-DAG: arith.constant dense<2041845832> : tensor<4xi32>
+  // CHECK: arith.xori
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.elementwise_inline_asm
+  %0:2 = tt.elementwise_inline_asm "mov.b64 { $0, $1 }, $2;" {constraints = "=r,=r,l", packed_element = 1 : i32, pure = true} %a : tensor<4xi64> -> tensor<4xf32>, tensor<4xf32>
+  tt.return %0#0, %0#1 : tensor<4xf32>, tensor<4xf32>
 }
 
 //--- canonicalize.mlir

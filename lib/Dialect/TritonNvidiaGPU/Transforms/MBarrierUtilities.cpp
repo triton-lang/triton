@@ -12,6 +12,17 @@ namespace {
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
+static bool hasTCGen5CommitCrossCTA(Operation *op) {
+  SmallVector<Value> descs;
+  if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
+    descs = mma.getCompletionDescs();
+  else if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op))
+    llvm::append_range(descs, commit.getDescs());
+  else
+    return false;
+  return !ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op), descs).empty();
+}
+
 } // namespace
 
 bool isCrossCTAMBarrier(Value barrier, int numCTAs) {
@@ -23,12 +34,12 @@ void getCrossCTAConsumerBarriers(Operation *op,
                                  SmallVectorImpl<Value> &barriers) {
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
     auto barrierOp = cast<ttg::MBarrierOpInterface>(op);
-    if (mma.getTwoCtas())
+    if (hasTCGen5CommitCrossCTA(op))
       barriers.append(barrierOp.getBarriers());
     return;
   }
   if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
-    if (ttng::getModuleTwoCTAs(op))
+    if (hasTCGen5CommitCrossCTA(op))
       barriers.push_back(commit.getBarrier());
     return;
   }
@@ -39,6 +50,14 @@ void getCrossCTAConsumerBarriers(Operation *op,
   }
   if (auto clc = dyn_cast<ttng::CLCTryCancelOp>(op))
     barriers.push_back(clc.getMbarrier());
+  else if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op))
+    barriers.push_back(store.getMbarrier());
+  else if (auto expect = dyn_cast<ttng::BarrierExpectOp>(op);
+           expect && expect.getFromCTA())
+    barriers.push_back(expect.getBarrier());
+  else if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op);
+           arrive && (arrive.isMulticast() || arrive.getFromCTA()))
+    barriers.push_back(arrive.getAlloc());
 }
 
 bool isCrossCTAConsumer(Operation *op,

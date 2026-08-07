@@ -63,6 +63,7 @@ def plus_a_reduce(x, a):
     "broadcast_n",  # broadcast over N: [B,M,1]
 ])
 @pytest.mark.parametrize("dim", [0, 1, 2])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
     # Check float8 hardware support
     if "float8" in dtype_str:
@@ -153,6 +154,7 @@ def test_op_empty_forward_backward(B, M, N, dtype, mask_mode):
     assert torch.allclose(x_tri.grad.float(), x_ref.grad.float(), atol=1e-3, rtol=1e-3)
 
 
+@pytest.mark.enable_warmup(min_capability=9, priority=1)
 def test_unpadded_batch_size_rowidxs_subtile():
     if not torch.cuda.is_available() or not is_cuda():
         pytest.skip("rowidxs path requires CUDA")

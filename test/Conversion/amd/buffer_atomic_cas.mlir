@@ -19,6 +19,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %offsets = tt.make_range {end = 512 : i32, start = 0 : i32} : tensor<512xi32, #blocked>
     %scalar_ptr = tt.addptr %arg0, %1 : !tt.ptr<i64>, i32
 
+    // CHECK: rocdl.s.barrier
     // CHECK: %[[cas_val_extract:.*]] = llvm.extractvalue %[[cas_val_insert]][0] : !llvm.struct<(i64, i64)>
     // CHECK: %[[cas_cmp_extract:.*]] = llvm.extractvalue %[[cas_cmp_insert]][0] : !llvm.struct<(i64, i64)>
     // CHECK: %[[resource:.*]] = rocdl.make.buffer.rsrc %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}
@@ -30,6 +31,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: %[[dst:.*]] = rocdl.raw.ptr.buffer.atomic.cmpswap %[[cas_val_cast2]], %[[cas_cmp_cast2]], %[[resource]], %{{.*}}, %{{.*}}, {{.*}} : i64
     // CHECK: %[[dst:.*]] = rocdl.raw.ptr.buffer.atomic.cmpswap %{{.*}}, %{{.*}}, %[[resource]], %{{.*}}, %{{.*}}, {{.*}} : i64
     // CHECK: llvm.fence syncscope("agent") acquire
+    // CHECK: rocdl.s.barrier
     %4 = amdg.buffer_atomic_cas acq_rel, gpu, %cmp, %val, %scalar_ptr[%offsets] : tensor<512xi64, #blocked>
 
     %5 = tt.addptr %arg1, %1 : !tt.ptr<i64>, i32

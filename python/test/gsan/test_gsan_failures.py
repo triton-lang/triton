@@ -9,7 +9,7 @@ import torch
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_blackwell, is_cuda, run_in_process
+from triton._internal_testing import is_blackwell, is_cuda, is_hopper_or_newer, run_in_process
 from triton.experimental.gsan import create_mem_pool
 from triton.experimental.gsan._testing_utils import atomic_poll
 from triton.tools.tensor_descriptor import TensorDescriptor
@@ -71,6 +71,43 @@ def _waw_kernel(ptr, scratch_ptr, counter_ptr):
     else:
         atomic_poll(counter_ptr, 1)
         tl.store(ptr, 2)
+
+
+@triton.jit
+def _pdl_producer_kernel(payload_ptr):
+    pid = tl.program_id(0)
+    tl.store(payload_ptr + pid, 1000 + pid)
+    tl.extra.cuda.gdc_launch_dependents()
+
+
+@triton.jit
+def _pdl_consumer_without_wait_kernel(payload_ptr, scratch_ptr):
+    value = tl.load(payload_ptr + 1)
+    tl.store(scratch_ptr, value)
+
+
+@triton.jit
+def _pdl_conditional_wait_kernel(should_wait_ptr, scratch_ptr):
+    if tl.load(should_wait_ptr) != 0:
+        tl.extra.cuda.gdc_wait()
+    tl.store(scratch_ptr, 1)
+
+
+@triton.jit
+def _pdl_transitively_acquired_producer_kernel(payload_ptr, flag_ptr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        tl.store(payload_ptr, 1000)
+        tl.atomic_xchg(flag_ptr, 1, sem="release", scope="gpu")
+    else:
+        atomic_poll(flag_ptr, 1, sem="acquire", scope="gpu")
+    tl.extra.cuda.gdc_launch_dependents()
+
+
+@triton.jit
+def _pdl_transitively_acquired_consumer_without_wait_kernel(payload_ptr, scratch_ptr):
+    value = tl.load(payload_ptr)
+    tl.store(scratch_ptr + tl.program_id(0), value)
 
 
 @triton.jit
@@ -256,6 +293,36 @@ def _run_waw_case() -> None:
     scratch = torch.zeros(1, dtype=torch.int32, device="cuda")
     counter = torch.zeros(1, dtype=torch.int32, device="cuda")
     _waw_kernel[(2, )](target, scratch, counter, num_warps=1)
+
+
+@run_with_gsan
+def _run_pdl_without_wait_case() -> None:
+    payload = torch.zeros(2, dtype=torch.int32, device="cuda")
+    scratch = torch.zeros(1, dtype=torch.int32, device="cuda")
+    _pdl_producer_kernel[(2, )](payload, num_warps=1)
+    _pdl_consumer_without_wait_kernel[(1, )](payload, scratch, num_warps=1, launch_pdl=True)
+    torch.cuda.synchronize()
+
+
+@run_with_gsan
+def _run_pdl_missing_wait_case() -> None:
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    should_wait = torch.zeros(1, dtype=torch.int32, device="cuda")
+    scratch = torch.zeros(1, dtype=torch.int32, device="cuda")
+    _pdl_producer_kernel[(1, )](payload, num_warps=1)
+    _pdl_conditional_wait_kernel[(1, )](should_wait, scratch, num_warps=1, launch_pdl=True)
+    torch.cuda.synchronize()
+
+
+@run_with_gsan
+def _run_pdl_persistent_state_without_wait_case() -> None:
+    num_sms = torch.cuda.get_device_properties(torch.cuda.current_device()).multi_processor_count
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    flag = torch.zeros(1, dtype=torch.int32, device="cuda")
+    scratch = torch.zeros(num_sms, dtype=torch.int32, device="cuda")
+    _pdl_transitively_acquired_producer_kernel[(num_sms, )](payload, flag, num_warps=1)
+    _pdl_transitively_acquired_consumer_without_wait_kernel[(num_sms, )](payload, scratch, num_warps=1, launch_pdl=True)
+    torch.cuda.synchronize()
 
 
 @run_with_gsan
@@ -450,6 +517,39 @@ def test_write_after_read():
 def test_write_after_write():
     _run_failure_case("waw", runner=_run_waw_case, source_function=_waw_kernel.fn, marker="tl.store(ptr, 2)",
                       error="Write after write race detected")
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
+def test_programmatic_dependent_launch_requires_wait():
+    _run_failure_case(
+        "pdl_missing_wait",
+        runner=_run_pdl_missing_wait_case,
+        source_function=_pdl_conditional_wait_kernel.fn,
+        marker="def _pdl_conditional_wait_kernel",
+        error="kernel launched with programmatic dependent launch did not call gdc_wait",
+    )
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
+def test_programmatic_dependent_launch_without_wait_reports_race():
+    _run_failure_case(
+        "pdl_without_wait",
+        runner=_run_pdl_without_wait_case,
+        source_function=_pdl_consumer_without_wait_kernel.fn,
+        marker="value = tl.load(payload_ptr + 1)",
+        error="Read after write race detected",
+    )
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
+def test_programmatic_dependent_launch_does_not_inherit_persistent_sm_dependencies():
+    _run_failure_case(
+        "pdl_persistent_state_without_wait",
+        runner=_run_pdl_persistent_state_without_wait_case,
+        source_function=_pdl_transitively_acquired_consumer_without_wait_kernel.fn,
+        marker="value = tl.load(payload_ptr)",
+        error="Read after write race detected",
+    )
 
 
 def test_mixed_scope_release_rmw_accumulation():

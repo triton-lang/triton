@@ -25,7 +25,7 @@ def is_pingpong_schedule_enabled(arch, use_async_copy):
 
 
 def is_in_thread_transpose_enabled(arch):
-    return (arch == "gfx942" or "gfx110" in arch or "gfx115" in arch or "gfx120" in arch) \
+    return (arch == "gfx942" or "gfx110" in arch or "gfx115" in arch or "gfx117" in arch or "gfx120" in arch) \
         if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
 
 
@@ -99,6 +99,7 @@ class HIPOptions:
     max_num_imprecise_acc_default: int = 0
     backend_name: str = 'hip'
     instrumentation_mode: str = ""
+    fpsan_homomorphic_casts: bool = False
 
     # The following option provides hints to the AMDGPU backend regarding instruction scheduling
     # for all `tt.dot` operations in a kernel. Experimental; right now no effect.
@@ -318,7 +319,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if options.instrumentation_mode == "fpsan" and is_fpsan_supported(options.arch):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
-            passes.ttgpuir.add_fp_sanitizer(pm)
+            passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
         pm.run(mod, 'make_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
@@ -341,7 +342,7 @@ class HIPBackend(BaseBackend):
 
         if options.instrumentation_mode == "fpsan" and is_fpsan_supported(options.arch):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
-            passes.ttgpuir.add_fp_sanitizer(pm)
+            passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -526,6 +527,9 @@ class HIPBackend(BaseBackend):
         metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
 
         amd.cleanup_bitcode_metadata(llvm_mod)
+        # Add Triton and LLVM versions to the dumped IR.
+        if knobs.compilation.dump_ir:
+            llvm.add_version_info(llvm_mod)
         # Disable inlining of print related functions,
         # because inlining of these function could slow down compilation significantly
         amd.disable_print_inline(llvm_mod)

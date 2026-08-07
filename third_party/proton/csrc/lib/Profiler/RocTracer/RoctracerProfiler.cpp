@@ -96,7 +96,7 @@ void processActivityKernel(
     RoctracerProfiler::ExternIdToStateMap &externIdToState,
     ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
         &corrIdToIsHipGraph,
-    std::map<Data *, std::pair<size_t, size_t>> &dataPhases, size_t externId,
+    DataPhases &dataPhases, size_t externId,
     const roctracer_record_t *activity) {
   if (externId == Scope::DummyScopeId)
     return;
@@ -147,8 +147,7 @@ void processActivity(
     RoctracerProfiler::ExternIdToStateMap &externIdToState,
     ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
         &corrIdToIsHipGraph,
-    std::map<Data *, std::pair<size_t, size_t>> &dataPhases, size_t parentId,
-    const roctracer_record_t *record) {
+    DataPhases &dataPhases, size_t parentId, const roctracer_record_t *record) {
   switch (record->kind) {
   case kHipVdiCommandTask:
   case kHipVdiCommandKernel: {
@@ -423,7 +422,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
   const roctracer_record_t *endRecord =
       reinterpret_cast<const roctracer_record_t *>(end);
   uint64_t maxCorrelationId = 0;
-  std::map<Data *, std::pair<size_t, size_t>> dataPhases;
+  DataPhases dataPhases;
 
   while (record != endRecord) {
     // Log latest completed correlation id.  Used to ensure we have flushed all
@@ -465,6 +464,12 @@ void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {
   roctracer::openPool<true>(&properties);
   roctracer::enableDomainActivity<true>(ACTIVITY_DOMAIN_HIP_OPS);
   roctracer::start();
+
+  if (!profiler.isTimestampCalibrated) {
+    profiler.timestampOffsetNs =
+        detail::computeTimestampOffsetNs(roctracer::getTimestamp<true>);
+    profiler.isTimestampCalibrated = true;
+  }
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doFlush() {

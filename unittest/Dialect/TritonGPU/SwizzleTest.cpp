@@ -19,6 +19,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using mlir::triton::gpu::bankConflictsLdSt;
+using mlir::triton::gpu::getVecBitwidthLdSt;
 using mlir::triton::gpu::LocalMemOpTile;
 using mlir::triton::gpu::optimalSwizzling;
 using mlir::triton::gpu::optimalSwizzlingLdSt;
@@ -65,21 +66,21 @@ protected:
     if (cOrder.empty())
       cOrderStorage.assign(order.begin(), order.end());
 
-    auto cta = mlir::triton::gpu::CGAEncodingAttr::fromSplitParams(
+    auto cgaLayout = mlir::triton::gpu::CGAEncodingAttr::fromSplitParams(
         &ctx, cpgStorage.empty() ? cpg : ArrayRef<unsigned>(cpgStorage),
         splitStorage.empty() ? split : ArrayRef<unsigned>(splitStorage),
         cOrderStorage.empty() ? cOrder : ArrayRef<unsigned>(cOrderStorage));
     return mlir::triton::gpu::BlockedEncodingAttr::get(&ctx, spt, tpw, wpcta,
-                                                       order, cta);
+                                                       order, cgaLayout);
   }
 
   mlir::triton::gpu::NvidiaMmaEncodingAttr mma(ArrayRef<unsigned> version,
                                                ArrayRef<unsigned> warpsPerCTA,
                                                ArrayRef<unsigned> instrShape) {
-    auto cta = mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(
+    auto cgaLayout = mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(
         &ctx, warpsPerCTA.size());
     return mlir::triton::gpu::NvidiaMmaEncodingAttr::get(
-        &ctx, version[0], version[1], warpsPerCTA, cta, instrShape);
+        &ctx, version[0], version[1], warpsPerCTA, cgaLayout, instrShape);
   }
 
   mlir::triton::gpu::NVMMASharedEncodingAttr
@@ -87,31 +88,31 @@ protected:
               bool transposed = false) {
     SmallVector<unsigned> cpg(rank, 1), split(rank, 1), order(rank);
     std::iota(order.begin(), order.end(), 0);
-    auto cta = mlir::triton::gpu::CGAEncodingAttr::fromSplitParams(
+    auto cgaLayout = mlir::triton::gpu::CGAEncodingAttr::fromSplitParams(
         &ctx, cpg, split, order);
     return mlir::triton::gpu::NVMMASharedEncodingAttr::get(
         &ctx, swizzle, transposed, bitwidth,
-        /*fp4Padded=*/false, cta);
+        /*fp4Padded=*/false, cgaLayout);
   }
 
   mlir::triton::gpu::AMDMfmaEncodingAttr
   mfma(unsigned version, ArrayRef<unsigned> warpsPerCTA,
        ArrayRef<unsigned> instrShape, bool isTransposed,
        ArrayRef<unsigned> tilesPerWarp = {}, unsigned bitWidth = 0) {
-    auto cta = mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(
+    auto cgaLayout = mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(
         &ctx, warpsPerCTA.size());
     return mlir::triton::gpu::AMDMfmaEncodingAttr::get(
-        &ctx, version, warpsPerCTA, instrShape, isTransposed, cta, tilesPerWarp,
-        bitWidth);
+        &ctx, version, warpsPerCTA, instrShape, isTransposed, cgaLayout,
+        tilesPerWarp, bitWidth);
   }
 
   mlir::triton::gpu::AMDRotatingSharedEncodingAttr
   AMDRotatingShared(unsigned vec, unsigned perPhase, unsigned maxPhase,
                     ArrayRef<unsigned> order) {
-    auto cta =
+    auto cgaLayout =
         mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, order.size());
     return mlir::triton::gpu::AMDRotatingSharedEncodingAttr::get(
-        &ctx, vec, perPhase, maxPhase, order, cta);
+        &ctx, vec, perPhase, maxPhase, order, cgaLayout);
   }
 
   LinearLayout toLL(ArrayRef<int64_t> shape, Attribute attr) {
@@ -355,9 +356,9 @@ TEST_F(BankConflictTest, F64MmaV2BSharedLayout) {
   auto mmaV2 = mma({2, 0}, {4, 1}, {8, 8});
   auto dst = DotOperandEncodingAttr::get(&ctx, /*opIdx=*/1, mmaV2,
                                          /*kWidth=*/1);
-  auto cta = mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, 2);
+  auto cgaLayout = mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, 2);
   auto shared = SwizzledSharedEncodingAttr::get(
-      &ctx, dst, shape, /*order=*/{1, 0}, cta, /*typeWidthInBit=*/64);
+      &ctx, dst, shape, /*order=*/{1, 0}, cgaLayout, /*typeWidthInBit=*/64);
   EXPECT_EQ(shared.getVec(), 4);
   EXPECT_EQ(shared.getPerPhase(), 1);
   EXPECT_EQ(shared.getMaxPhase(), 4);
@@ -663,6 +664,32 @@ TEST_F(BankConflictTest, bankConflictsWavefront64) {
         << attrStr(c.reg) << "\n"
         << attrStr(c.shared);
   }
+}
+
+TEST_F(BankConflictTest, LowVectorF32MmaConvertKeeps64BankRegisterBasisHigh) {
+  auto S = [&](StringRef str) { return StringAttr::get(&ctx, str); };
+  auto src = mfma(4, {4, 1}, {32, 32, 16}, true);
+  auto dst = mfma(4, {4, 1}, {16, 16, 32}, true);
+  SmallVector<int64_t> shape = {128, 1};
+  auto srcLLRaw = toLL(shape, src);
+  auto dstLLRaw = toLL(shape, dst);
+  auto srcLL = actionRemoveBroadcastedRegs(srcLLRaw).apply(srcLLRaw);
+  auto dstLL = actionRemoveBroadcastedRegs(dstLLRaw).apply(dstLLRaw);
+
+  EXPECT_EQ(getVecBitwidthLdSt(srcLL, dstLL, /*bitwidth=*/32), 32);
+
+  auto smem = optimalSwizzlingLdSt(srcLL, dstLL, /*bitwidth=*/32,
+                                   /*numBanks=*/64);
+  auto [readConflicts, writeConflicts] =
+      bankConflictsLdSt(srcLL, dstLL, smem, /*bitwidth=*/32, /*numBanks=*/64);
+  EXPECT_EQ(readConflicts, 0);
+  EXPECT_EQ(writeConflicts, 0);
+  EXPECT_EQ(smem.getInDimSize(S("bank")), 64);
+  EXPECT_EQ(smem.getInDimSize(S("segment")), 2);
+
+  auto dstToSmem = dstLL.invertAndCompose(smem);
+  EXPECT_EQ(dstToSmem.getBasis(S("register"), /*pos=*/0, S("bank")), 32);
+  EXPECT_EQ(dstToSmem.getBasis(S("register"), /*pos=*/0, S("segment")), 0);
 }
 
 } // namespace

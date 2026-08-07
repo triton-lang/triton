@@ -40,6 +40,42 @@ def TritonGPUPlanCTAPass : Pass<"triton-nvidia-gpu-plan-cta", "mlir::ModuleOp"> 
   ];
 }
 
+def TritonNvidiaGPUToCLCPass : Pass<"triton-nvidia-gpu-to-clc", "mlir::ModuleOp"> {
+  let summary = "convert a Triton tile kernel to use Cluster Launch Control";
+
+  let description = [{
+    Wraps the root function of a kernel in the abstract Triton CLC scheduling
+    protocol and replaces logical program-ID reads with CLC generated values.
+  }];
+
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+def TritonNvidiaGPULowerCLCPass : Pass<"triton-nvidia-gpu-lower-clc", "mlir::ModuleOp"> {
+  let summary = "materialize abstract Triton CLC operations";
+
+  let description = [{
+    Lowers the abstract Cluster Launch Control response and its local-allocation
+    staging marker to the NVIDIA shared-memory response, mbarrier, and physical
+    CLC operations. The pass also threads the mbarrier phase through the
+    enclosing scf.while and retargets the existing raw response load.
+  }];
+
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
 def TritonGPUFenceInsertion : Pass<"triton-nvidia-gpu-fence-insertion", "mlir::ModuleOp"> {
   let summary = "Insert fences across generic and async proxy.";
 
