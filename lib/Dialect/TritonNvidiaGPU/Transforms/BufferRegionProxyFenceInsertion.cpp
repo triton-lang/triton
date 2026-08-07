@@ -12,8 +12,9 @@
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
 
+#include <cstdint>
+#include <map>
 #include <optional>
-#include <set>
 
 namespace mlir::triton::nvidia_gpu {
 
@@ -26,7 +27,9 @@ namespace mlir::triton::nvidia_gpu {
 // before a call without inventing incoming effects in the callee.
 namespace {
 
-enum class ProxyFenceScope { CTA, Cluster };
+enum class ProxyFenceScope : uint8_t { CTA = 1, Cluster = 2 };
+
+uint8_t scopeMask(ProxyFenceScope scope) { return static_cast<uint8_t>(scope); }
 
 ProxyFenceScope getProxyFenceScope(Operation *op) {
   if (auto load = dyn_cast<TMALoadLikeOpInterface>(op))
@@ -45,18 +48,18 @@ ProxyFenceScope getProxyFenceScope(Operation *op) {
 using BufferAccess = std::optional<BufferRegionView>;
 
 struct ProxyBlockInfo {
-  using AccessSet = std::set<BufferAccess>;
+  using AccessMap = std::map<BufferAccess, uint8_t>;
 
   // Generic accesses since the last proxy fence.
-  AccessSet genericReads;
-  AccessSet genericWrites;
+  AccessMap genericReads;
+  AccessMap genericWrites;
   // Async accesses before the first proxy fence reachable from function entry.
-  AccessSet asyncReads;
-  AccessSet asyncWrites;
+  AccessMap asyncReads;
+  AccessMap asyncWrites;
 
-  // True until a fence on every path has covered generic accesses preceding
+  // Scope bits for which no fence on every path has covered accesses preceding
   // the function.
-  bool entryGenericUnfenced = false;
+  uint8_t entryGenericUnfenced = 0;
 
   ProxyBlockInfo &join(const ProxyBlockInfo &other) {
     join(genericReads, other.genericReads);
@@ -74,20 +77,22 @@ struct ProxyBlockInfo {
                     other.asyncWrites, other.entryGenericUnfenced);
   }
 
-  void fenceGeneric() {
-    genericReads.clear();
-    genericWrites.clear();
-    entryGenericUnfenced = false;
+  void fenceGeneric(ProxyFenceScope scope) {
+    uint8_t fencedScopes = scopeMask(scope) | scopeMask(ProxyFenceScope::CTA);
+    for (AccessMap *accesses : {&genericReads, &genericWrites})
+      for (auto it = accesses->begin(); it != accesses->end();)
+        if (it->second &= ~fencedScopes)
+          ++it;
+        else
+          it = accesses->erase(it);
+    entryGenericUnfenced &= ~fencedScopes;
   }
 
-  bool hasAsyncAccesses() const {
-    return !asyncReads.empty() || !asyncWrites.empty();
-  }
-
-  bool needsFenceBefore(const ProxyBlockInfo &async) const {
-    return intersects(genericWrites, async.asyncReads) ||
-           intersects(genericReads, async.asyncWrites) ||
-           intersects(genericWrites, async.asyncWrites);
+  bool needsFenceBefore(const ProxyBlockInfo &async,
+                        ProxyFenceScope scope) const {
+    return intersects(genericWrites, async.asyncReads, scope) ||
+           intersects(genericReads, async.asyncWrites, scope) ||
+           intersects(genericWrites, async.asyncWrites, scope);
   }
 
   void joinGeneric(const ProxyBlockInfo &other) {
@@ -95,25 +100,31 @@ struct ProxyBlockInfo {
     join(genericWrites, other.genericWrites);
   }
 
-  void joinAsync(const ProxyBlockInfo &other) {
-    join(asyncReads, other.asyncReads);
-    join(asyncWrites, other.asyncWrites);
+  void joinAsync(const ProxyBlockInfo &other, uint8_t scopes) {
+    join(asyncReads, other.asyncReads, scopes);
+    join(asyncWrites, other.asyncWrites, scopes);
   }
 
 private:
-  static void join(AccessSet &into, const AccessSet &from) {
-    into.insert(from.begin(), from.end());
+  static void join(AccessMap &into, const AccessMap &from,
+                   uint8_t scopes = 0xff) {
+    for (const auto &[access, accessScopes] : from)
+      if (uint8_t activeScopes = accessScopes & scopes)
+        into[access] |= activeScopes;
   }
 
   static bool mayAlias(const BufferAccess &lhs, const BufferAccess &rhs) {
     return !lhs || !rhs || lhs->intersects(*rhs);
   }
 
-  static bool intersects(const AccessSet &lhs, const AccessSet &rhs) {
-    return llvm::any_of(lhs, [&](const BufferAccess &left) {
-      return llvm::any_of(rhs, [&](const BufferAccess &right) {
-        return mayAlias(left, right);
-      });
+  static bool intersects(const AccessMap &lhs, const AccessMap &rhs,
+                         ProxyFenceScope scope) {
+    return llvm::any_of(lhs, [&](const auto &left) {
+      return (left.second & scopeMask(scope)) &&
+             llvm::any_of(rhs, [&](const auto &right) {
+               return (right.second & scopeMask(scope)) &&
+                      mayAlias(left.first, right.first);
+             });
     });
   }
 };
@@ -205,13 +216,13 @@ std::optional<BufferRegionView> getScratchAccess(BufferRegionAnalysis &analysis,
 }
 
 void translateAccesses(BufferRegionAnalysis &analysis,
-                       ProxyBlockInfo::AccessSet &accesses,
+                       ProxyBlockInfo::AccessMap &accesses,
                        FunctionOpInterface caller, FunctionOpInterface callee,
                        uint32_t offset) {
-  ProxyBlockInfo::AccessSet translated;
+  ProxyBlockInfo::AccessMap translated;
   uint32_t calleeFrame = analysis.getOperationId(callee.getOperation());
   uint32_t callerFrame = analysis.getOperationId(caller.getOperation());
-  for (const BufferAccess &original : accesses) {
+  for (const auto &[original, scopes] : accesses) {
     BufferAccess access = original;
     if (access && access->allocationFrame == calleeFrame) {
       access->region.baseOffset += offset;
@@ -222,7 +233,7 @@ void translateAccesses(BufferRegionAnalysis &analysis,
         base += offset;
       access->allocationFrame = callerFrame;
     }
-    translated.insert(std::move(access));
+    translated[std::move(access)] |= scopes;
   }
   accesses = std::move(translated);
 }
@@ -238,7 +249,6 @@ void translateCalleeState(BufferRegionAnalysis &analysis, ProxyBlockInfo &state,
   translateAccesses(analysis, state.asyncWrites, caller, callee, callOffset);
 }
 
-template <ProxyFenceScope scope>
 class ProxyFenceFunctionAnalysis
     : public PostOrderFunctionAnalysis<ProxyBlockInfo> {
   using Base = PostOrderFunctionAnalysis<ProxyBlockInfo>;
@@ -246,31 +256,38 @@ class ProxyFenceFunctionAnalysis
 
 public:
   ProxyFenceFunctionAnalysis(FunctionOpInterface function,
-                             BufferRegionAnalysis &regions)
-      : function(function), regions(regions) {}
+                             BufferRegionAnalysis &regions, uint8_t scopes)
+      : function(function), regions(regions), scopes(scopes) {}
 
 private:
   ProxyBlockInfo getEntryState() const override {
     ProxyBlockInfo state;
-    state.entryGenericUnfenced = true;
+    state.entryGenericUnfenced = scopes;
     return state;
   }
 
-  void insertFence(Operation *op, OpBuilder *builder) {
-    builder->setInsertionPoint(op);
-    FenceAsyncSharedOp::create(*builder, op->getLoc(),
-                               scope == ProxyFenceScope::Cluster);
-  }
-
   void applyEffects(Operation *op, ProxyBlockInfo &effects,
-                    ProxyBlockInfo *state, OpBuilder *builder) {
-    if (effects.hasAsyncAccesses()) {
-      if (state->needsFenceBefore(effects)) {
-        insertFence(op, builder);
-        state->fenceGeneric();
-      } else if (state->entryGenericUnfenced) {
-        state->joinAsync(effects);
+                    ProxyBlockInfo *state, OpBuilder *builder,
+                    bool fromCall = false) {
+    for (ProxyFenceScope scope :
+         {ProxyFenceScope::Cluster, ProxyFenceScope::CTA}) {
+      if ((scopes & scopeMask(scope)) &&
+          state->needsFenceBefore(effects, scope)) {
+        builder->setInsertionPoint(op);
+        FenceAsyncSharedOp::create(*builder, op->getLoc(),
+                                   scope == ProxyFenceScope::Cluster);
+        state->fenceGeneric(scope);
+        break;
       }
+    }
+
+    state->joinAsync(effects, state->entryGenericUnfenced);
+    if (fromCall) {
+      uint8_t fencedScopes = scopes & ~effects.entryGenericUnfenced;
+      if (fencedScopes & scopeMask(ProxyFenceScope::Cluster))
+        state->fenceGeneric(ProxyFenceScope::Cluster);
+      else if (fencedScopes & scopeMask(ProxyFenceScope::CTA))
+        state->fenceGeneric(ProxyFenceScope::CTA);
     }
     state->joinGeneric(effects);
   }
@@ -278,8 +295,8 @@ private:
   void update(Operation *op, ProxyBlockInfo *state, FuncMapT *funcMap,
               OpBuilder *builder) override {
     if (auto fence = dyn_cast<FenceAsyncSharedOp>(op)) {
-      if (scope == ProxyFenceScope::CTA || fence.getBCluster())
-        state->fenceGeneric();
+      state->fenceGeneric(fence.getBCluster() ? ProxyFenceScope::Cluster
+                                              : ProxyFenceScope::CTA);
       return;
     }
 
@@ -290,72 +307,38 @@ private:
         return;
       ProxyBlockInfo effects = funcMap->lookup(callee);
       translateCalleeState(regions, effects, call, function, callee);
-      bool insertedFence =
-          effects.hasAsyncAccesses() && state->needsFenceBefore(effects);
-      if (insertedFence) {
-        insertFence(op, builder);
-        state->fenceGeneric();
-      } else if (state->entryGenericUnfenced) {
-        state->joinAsync(effects);
-      }
-      if (!effects.entryGenericUnfenced)
-        state->fenceGeneric();
-      state->joinGeneric(effects);
+      applyEffects(op, effects, state, builder, /*fromCall=*/true);
       return;
     }
 
     ProxyBlockInfo effects;
-    bool matchingProxy = hasSharedAccess(op, gpu::SharedKind::Async) &&
-                         getProxyFenceScope(op) == scope;
     for (const MemoryAccess &access : getMemoryAccesses(op)) {
       if (!access.isShared() || access.isShared(gpu::SharedKind::Barrier))
         continue;
 
       bool async = access.isShared(gpu::SharedKind::Async);
-      if (async && !matchingProxy)
-        continue;
-
+      uint8_t accessScopes = async ? scopeMask(getProxyFenceScope(op)) : scopes;
       for (BufferAccess region : getBufferAccesses(regions, access.value)) {
         if (access.isRead)
-          (async ? effects.asyncReads : effects.genericReads).insert(region);
+          (async ? effects.asyncReads : effects.genericReads)[region] |=
+              accessScopes;
         if (access.isWrite)
-          (async ? effects.asyncWrites : effects.genericWrites)
-              .insert(std::move(region));
+          (async ? effects.asyncWrites
+                 : effects.genericWrites)[std::move(region)] |= accessScopes;
       }
     }
 
     if (std::optional<BufferRegionView> scratch =
             getScratchAccess(regions, function, op)) {
-      effects.genericReads.insert(BufferAccess(*scratch));
-      effects.genericWrites.insert(BufferAccess(std::move(*scratch)));
+      effects.genericReads[BufferAccess(*scratch)] |= scopes;
+      effects.genericWrites[BufferAccess(std::move(*scratch))] |= scopes;
     }
     applyEffects(op, effects, state, builder);
   }
 
   FunctionOpInterface function;
   BufferRegionAnalysis &regions;
-};
-
-template <ProxyFenceScope scope>
-class ModuleProxyFenceAnalysis : public CallGraph<ProxyBlockInfo> {
-public:
-  ModuleProxyFenceAnalysis(ModuleOp module, BufferRegionAnalysis &regions)
-      : CallGraph<ProxyBlockInfo>(module), regions(regions) {}
-
-  void run() {
-    this->funcMap.clear();
-    this->template walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
-        [](CallOpInterface, FunctionOpInterface) {},
-        [&](FunctionOpInterface function) {
-          if (!this->funcMap.try_emplace(function).second)
-            return;
-          ProxyFenceFunctionAnalysis<scope>(function, regions)
-              .run(function, this->funcMap);
-        });
-  }
-
-private:
-  BufferRegionAnalysis &regions;
+  uint8_t scopes;
 };
 
 } // namespace
@@ -372,19 +355,17 @@ struct BufferRegionProxyFenceInsertionPass
       return;
 
     ModuleOp module = getOperation();
-    bool hasProxyOp = false;
-    bool hasClusterProxyOp =
-        module
-            .walk([&](Operation *op) {
-              if (!hasSharedAccess(op, gpu::SharedKind::Async))
-                return WalkResult::advance();
-              hasProxyOp = true;
-              return getProxyFenceScope(op) == ProxyFenceScope::Cluster
-                         ? WalkResult::interrupt()
-                         : WalkResult::advance();
-            })
-            .wasInterrupted();
-    if (!hasProxyOp)
+    uint8_t scopes = 0;
+    module.walk([&](Operation *op) {
+      if (!hasSharedAccess(op, gpu::SharedKind::Async))
+        return WalkResult::advance();
+      scopes |=
+          scopeMask(getProxyFenceScope(op)) | scopeMask(ProxyFenceScope::CTA);
+      return scopes & scopeMask(ProxyFenceScope::Cluster)
+                 ? WalkResult::interrupt()
+                 : WalkResult::advance();
+    });
+    if (!scopes)
       return;
 
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
@@ -392,10 +373,15 @@ struct BufferRegionProxyFenceInsertionPass
     if (failed(solver->initializeAndRun(module)))
       return signalPassFailure();
 
-    if (hasClusterProxyOp)
-      ModuleProxyFenceAnalysis<ProxyFenceScope::Cluster>(module, *regions)
-          .run();
-    ModuleProxyFenceAnalysis<ProxyFenceScope::CTA>(module, *regions).run();
+    CallGraph<ProxyBlockInfo> callGraph(module);
+    CallGraph<ProxyBlockInfo>::FuncDataMapT summaries;
+    callGraph.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+        [](CallOpInterface, FunctionOpInterface) {},
+        [&](FunctionOpInterface function) {
+          if (summaries.try_emplace(function).second)
+            ProxyFenceFunctionAnalysis(function, *regions, scopes)
+                .run(function, summaries);
+        });
   }
 };
 
