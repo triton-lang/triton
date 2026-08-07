@@ -1,7 +1,7 @@
 from __future__ import annotations
 import inspect
 import math
-from typing import Any, Callable, TypeVar, List, TYPE_CHECKING, Tuple
+from typing import Callable, TypeVar, List, TYPE_CHECKING, Tuple
 from functools import wraps
 import warnings
 
@@ -81,7 +81,7 @@ __all__ = [
     "num_ctas",
 ]
 
-T = TypeVar("T", bound=Callable[..., Any])
+T = TypeVar("T", bound=Callable)
 
 # TODO: split these
 GLUON_BUILTIN = "__triton_builtin__"

@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from enum import Enum
 from functools import partial, wraps, cached_property
 import typing
-from typing import Any, Union, Callable, List, Sequence, TypeVar, Optional, Tuple, TYPE_CHECKING
+from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
 import builtins
 from .. import knobs
@@ -16,7 +16,7 @@ import inspect
 from .._C.libtriton import ir
 from .._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape, get_primitive_bitwidth, _tuple_create
 
-T = TypeVar('T', bound=Callable[..., Any])
+T = TypeVar('T', bound=Callable)
 
 TRITON_BUILTIN = "__triton_builtin__"
 
