@@ -295,15 +295,18 @@ GSAN_DEVICE void initThread(GlobalState *globals, uint32_t *streamClocks,
   auto *state = getThreadState(globals);
   if (threadIdx == 0) {
     rwLockAcquireWrite(state->lock);
-    if (state->globals == nullptr) {
-      // Lazily initialize per-SM thread state.
+    auto st_globals = __scoped_atomic_load_n(&state->globals, __ATOMIC_ACQUIRE,
+                                             __MEMORY_SCOPE_DEVICE);
+    if (st_globals == nullptr) {
+      // Lazily initialize per-SM thread state
       state->reserveBase = globals->reserveBase;
       state->numReads = 0;
       state->clockBufferDirty = 0;
       state->gdcWaitCalled = 0;
       state->clockBufferHead = 0;
       state->threadId = getDeviceThreadId(globals, getSmId());
-      state->globals = globals;
+      __scoped_atomic_store_n(&state->globals, globals, __ATOMIC_RELEASE,
+                              __MEMORY_SCOPE_DEVICE);
     }
     state->gdcWaitCalled = acquirePrevious;
   }
