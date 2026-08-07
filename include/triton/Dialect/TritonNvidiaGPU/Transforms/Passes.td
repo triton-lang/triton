@@ -102,26 +102,6 @@ def TritonGPUProxyFenceInsertion : Pass<"triton-nvidia-gpu-proxy-fence-insertion
   let summary = "Insert fences across generic and async proxy";
 
   let description = [{
-    This pass is to insert memory fences to ensure that memory operations are
-    properly ordered across generic and async operations.
-  }];
-
-  let dependentDialects = [
-    "mlir::triton::gpu::TritonGPUDialect",
-    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
-  ];
-
-  let options = [
-    Option<"computeCapability", "compute-capability",
-           "int32_t", /*default*/"90",
-           "device compute capability">
-  ];
-}
-
-def TritonGPUBufferRegionProxyFenceInsertion : Pass<"triton-nvidia-gpu-buffer-region-proxy-fence-insertion", "mlir::ModuleOp"> {
-  let summary = "Insert proxy fences using fine-grained buffer regions";
-
-  let description = [{
     Insert shared-memory fences between generic and asynchronous proxy
     operations using fine-grained physical buffer-region alias analysis.
   }];

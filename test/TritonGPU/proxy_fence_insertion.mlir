@@ -1,5 +1,4 @@
-// RUN: triton-opt %s -triton-nvidia-gpu-proxy-fence-insertion --split-input-file -allow-unregistered-dialect | FileCheck %s --check-prefixes=CHECK,LEGACY
-// RUN: triton-opt %s -triton-nvidia-gpu-buffer-region-proxy-fence-insertion --split-input-file -allow-unregistered-dialect | FileCheck %s --check-prefixes=CHECK,REGION
+// RUN: triton-opt %s -triton-nvidia-gpu-proxy-fence-insertion --split-input-file -allow-unregistered-dialect | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
@@ -163,10 +162,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8x32xi32, #shared, #smem, mutable>
     // CHECK: ttg.local_store
     ttg.local_store %value, %buffer : tensor<8x32xi32, #blocked> -> !ttg.memdesc<8x32xi32, #shared, #smem, mutable>
-    // LEGACY-NOT: ttng.fence_async_shared
-    // REGION: ttng.fence_async_shared {bCluster = false}
-    // LEGACY: tt.call @callee_proxy_read_argument
-    // REGION-NEXT: tt.call @callee_proxy_read_argument
+    // CHECK: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: tt.call @callee_proxy_read_argument
     tt.call @callee_proxy_read_argument(%buffer, %desc) : (!ttg.memdesc<8x32xi32, #shared, #smem, mutable>, !tt.tensordesc<8x32xi32, #shared>) -> ()
     tt.return
   }
@@ -191,10 +188,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %bar = ttg.local_alloc {allocation.offset = 2048 : i32} : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
     %value = ttg.local_load %buffer : !ttg.memdesc<8x32xi32, #shared, #smem, mutable> -> tensor<8x32xi32, #blocked>
     "test.keep"(%value) : (tensor<8x32xi32, #blocked>) -> ()
-    // LEGACY-NOT: ttng.fence_async_shared
-    // REGION: ttng.fence_async_shared {bCluster = false}
-    // LEGACY: tt.call @callee_proxy_write_then_fence
-    // REGION-NEXT: tt.call @callee_proxy_write_then_fence
+    // CHECK: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: tt.call @callee_proxy_write_then_fence
     tt.call @callee_proxy_write_then_fence(%buffer, %desc, %bar) : (!ttg.memdesc<8x32xi32, #shared, #smem, mutable>, !tt.tensordesc<8x32xi32, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable>) -> ()
     tt.return
   }
@@ -261,10 +256,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8x32xi32, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 2048 : i32} : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
     // CHECK: tt.call @callee_fence_then_read
-    // LEGACY-NOT: ttng.fence_async_shared
-    // REGION-NEXT: ttng.fence_async_shared {bCluster = false}
-    // REGION-NEXT: ttng.async_tma_copy_global_to_local
-    // LEGACY: ttng.async_tma_copy_global_to_local
+    // CHECK-NEXT: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local
     tt.call @callee_fence_then_read(%buffer) : (!ttg.memdesc<8x32xi32, #shared, #smem, mutable>) -> ()
     ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buffer, %bar, %true : !tt.tensordesc<8x32xi32, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<8x32xi32, #shared, #smem, mutable>
     tt.return
@@ -332,10 +325,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %bar = ttg.local_alloc {allocation.offset = 2048 : i32} : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
     %value = ttg.local_load %buffer : !ttg.memdesc<8x32xi32, #shared, #smem, mutable> -> tensor<8x32xi32, #blocked>
     "test.keep"(%value) : (tensor<8x32xi32, #blocked>) -> ()
-    // LEGACY-NOT: ttng.fence_async_shared
-    // REGION: ttng.fence_async_shared {bCluster = false}
-    // LEGACY: tt.call @callee_one_path_fences_before_proxy
-    // REGION-NEXT: tt.call @callee_one_path_fences_before_proxy
+    // CHECK: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: tt.call @callee_one_path_fences_before_proxy
     tt.call @callee_one_path_fences_before_proxy(%choose, %buffer, %desc, %bar) : (i1, !ttg.memdesc<8x32xi32, #shared, #smem, mutable>, !tt.tensordesc<8x32xi32, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable>) -> ()
     tt.return
   }
@@ -410,10 +401,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %bar = ttg.local_alloc {allocation.offset = 49152 : i32} : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
     %value = ttg.local_load %buffer : !ttg.memdesc<64x64xf32, #shared, #smem, mutable> -> tensor<64x64xf32, #blocked>
     "test.keep"(%value) : (tensor<64x64xf32, #blocked>) -> ()
-    // LEGACY-NOT: ttng.fence_async_shared
-    // REGION: ttng.fence_async_shared {bCluster = false}
-    // LEGACY: tt.call @callee_proxy_write_with_local_frame
-    // REGION-NEXT: tt.call @callee_proxy_write_with_local_frame
+    // CHECK: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: tt.call @callee_proxy_write_with_local_frame
     tt.call @callee_proxy_write_with_local_frame(%desc, %bar) {allocation.offset = 16384 : i32} : (!tt.tensordesc<64x64xf32, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable>) -> ()
     tt.return
   }
@@ -424,10 +413,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %bar = ttg.local_alloc {allocation.offset = 49152 : i32} : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
     %value = ttg.local_load %buffer : !ttg.memdesc<64x64xf32, #shared, #smem, mutable> -> tensor<64x64xf32, #blocked>
     "test.keep"(%value) : (tensor<64x64xf32, #blocked>) -> ()
-    // LEGACY-NOT: ttng.fence_async_shared
-    // REGION: ttng.fence_async_shared {bCluster = false}
-    // LEGACY: tt.call @forward_proxy_write_with_local_frame
-    // REGION-NEXT: tt.call @forward_proxy_write_with_local_frame
+    // CHECK: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: tt.call @forward_proxy_write_with_local_frame
     tt.call @forward_proxy_write_with_local_frame(%desc, %bar) {allocation.offset = 4096 : i32} : (!tt.tensordesc<64x64xf32, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable>) -> ()
     tt.return
   }
@@ -499,8 +486,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %c0 = arith.constant 0 : i32
     %true = arith.constant true
     // CHECK: ttg.local_load
-    // LEGACY-NOT: ttng.fence_async_shared
-    // REGION: ttng.fence_async_shared {bCluster = false}
+    // CHECK: ttng.fence_async_shared {bCluster = false}
     // CHECK: ttng.async_tma_copy_global_to_local
     %value = ttg.local_load %read : !ttg.memdesc<64x64xf32, #shared, #smem, mutable> -> tensor<64x64xf32, #blocked>
     "test.keep"(%value) : (tensor<64x64xf32, #blocked>) -> ()
@@ -964,8 +950,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %first = ttg.memdesc_index %parent[%c0] : !ttg.memdesc<2x64x64xf32, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
     %second = ttg.memdesc_index %parent[%c1] : !ttg.memdesc<2x64x64xf32, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
     // CHECK: ttg.local_load
-    // LEGACY: ttng.fence_async_shared {bCluster = false}
-    // REGION-NOT: ttng.fence_async_shared
+    // CHECK-NOT: ttng.fence_async_shared
     // CHECK: ttng.async_tma_copy_global_to_local
     %value = ttg.local_load %first : !ttg.memdesc<64x64xf32, #shared, #smem, mutable> -> tensor<64x64xf32, #blocked>
     "test.keep"(%value) : (tensor<64x64xf32, #blocked>) -> ()
@@ -1017,8 +1002,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %c0 = arith.constant 0 : i32
     %true = arith.constant true
     // CHECK: ttg.local_load
-    // LEGACY-NOT: ttng.fence_async_shared
-    // REGION: ttng.fence_async_shared {bCluster = false}
+    // CHECK: ttng.fence_async_shared {bCluster = false}
     // CHECK: ttng.async_tma_copy_global_to_local
     %value = ttg.local_load %read : !ttg.memdesc<64x64xf32, #shared, #smem, mutable> -> tensor<64x64xf32, #blocked>
     "test.keep"(%value) : (tensor<64x64xf32, #blocked>) -> ()
@@ -1050,8 +1034,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %c0 = arith.constant 0 : i32
     %true = arith.constant true
     // CHECK: ttg.local_load
-    // LEGACY-NOT: ttng.fence_async_shared
-    // REGION: ttng.fence_async_shared {bCluster = false}
+    // CHECK: ttng.fence_async_shared {bCluster = false}
     // CHECK: ttng.async_tma_copy_global_to_local
     %value = ttg.local_load %read : !ttg.memdesc<64x64xf32, #shared, #smem, mutable> -> tensor<64x64xf32, #blocked>
     "test.keep"(%value) : (tensor<64x64xf32, #blocked>) -> ()
@@ -1133,8 +1116,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %remote = ttg.memdesc_subslice %parent [8, 0] : !ttg.memdesc<16x32xi32, #shared, #smem, mutable> -> !ttg.memdesc<8x32xi32, #shared, #smem, mutable, 16x32>
     %selected = arith.select %choose, %remote, %remote : !ttg.memdesc<8x32xi32, #shared, #smem, mutable, 16x32>
     // CHECK: ttg.local_load
-    // LEGACY: ttng.fence_async_shared {bCluster = false}
-    // REGION-NOT: ttng.fence_async_shared
+    // CHECK-NOT: ttng.fence_async_shared
     // CHECK: ttng.async_tma_copy_global_to_local
     %value = ttg.local_load %local : !ttg.memdesc<8x32xi32, #shared, #smem, mutable, 16x32> -> tensor<8x32xi32, #blocked>
     "test.keep"(%value) : (tensor<8x32xi32, #blocked>) -> ()
@@ -1169,8 +1151,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %value = ttg.local_load %first : !ttg.memdesc<64x64xf32, #shared, #smem, mutable> -> tensor<64x64xf32, #blocked>
     "test.keep"(%value) : (tensor<64x64xf32, #blocked>) -> ()
     %returned = tt.call @return_aliasing_stage(%parent) : (!ttg.memdesc<2x64x64xf32, #shared, #smem, mutable>) -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
-    // LEGACY-NOT: ttng.fence_async_shared
-    // REGION: ttng.fence_async_shared {bCluster = false}
+    // CHECK: ttng.fence_async_shared {bCluster = false}
     // CHECK: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %returned, %bar, %true : !tt.tensordesc<64x64xf32, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
     tt.return
@@ -1211,10 +1192,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %bar = ttg.local_alloc {allocation.offset = 16384 : i32} : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
     %value = ttg.local_load %buffer : !ttg.memdesc<64x64xf32, #shared, #smem, mutable> -> tensor<64x64xf32, #blocked>
     "test.keep"(%value) : (tensor<64x64xf32, #blocked>) -> ()
-    // LEGACY-NOT: ttng.fence_async_shared
-    // REGION: ttng.fence_async_shared {bCluster = false}
-    // LEGACY: tt.call @nested_proxy_middle
-    // REGION-NEXT: tt.call @nested_proxy_middle
+    // CHECK: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: tt.call @nested_proxy_middle
     tt.call @nested_proxy_middle(%buffer, %desc, %bar) : (!ttg.memdesc<64x64xf32, #shared, #smem, mutable>, !tt.tensordesc<64x64xf32, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable>) -> ()
     tt.return
   }
@@ -1279,8 +1258,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     "test.keep"(%right) : (tensor<64x64xf32, #blocked>) -> ()
     cf.br ^merge
   ^merge:
-    // LEGACY: ttng.fence_async_shared {bCluster = false}
-    // REGION-NOT: ttng.fence_async_shared
+    // CHECK-NOT: ttng.fence_async_shared
     // CHECK: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %second, %bar, %true : !tt.tensordesc<64x64xf32, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
     tt.return
@@ -1305,8 +1283,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0 = arith.constant 0 : i32
     %true = arith.constant true
     // CHECK: ttg.convert_layout
-    // LEGACY: ttng.fence_async_shared {bCluster = false}
-    // REGION-NOT: ttng.fence_async_shared
+    // CHECK-NOT: ttng.fence_async_shared
     // CHECK: ttng.async_tma_copy_global_to_local
     %converted = ttg.convert_layout %source {allocation.offset = 0 : i32} : tensor<128x32xf16, #blocked_src> -> tensor<128x32xf16, #dot>
     "test.keep"(%converted) : (tensor<128x32xf16, #dot>) -> ()
@@ -1325,8 +1302,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %converted = ttg.convert_layout %source {allocation.offset = 0 : i32} : tensor<128x32xf16, #blocked_src> -> tensor<128x32xf16, #dot>
     "test.keep"(%converted) : (tensor<128x32xf16, #dot>) -> ()
     %src = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8x32xi32, #shared, #smem, mutable>
-    // LEGACY-NOT: ttng.fence_async_shared
-    // REGION: ttng.fence_async_shared {bCluster = false}
+    // CHECK: ttng.fence_async_shared {bCluster = false}
     // CHECK: ttng.async_tma_copy_local_to_global
     ttng.async_tma_copy_local_to_global %desc[%c0, %c0] %src : !tt.tensordesc<8x32xi32, #shared>, !ttg.memdesc<8x32xi32, #shared, #smem, mutable>
     tt.return
@@ -1536,9 +1512,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     "test.keep"(%value) : (tensor<8x32xi32, #blocked>) -> ()
     // CHECK: ttng.fence_async_shared {bCluster = false}
     ttng.fence_async_shared {bCluster = false}
-    // LEGACY-NEXT: tt.call @callee_multicast_proxy_write
-    // REGION-NEXT: ttng.fence_async_shared {bCluster = true}
-    // REGION-NEXT: tt.call @callee_multicast_proxy_write
+    // CHECK-NEXT: ttng.fence_async_shared {bCluster = true}
+    // CHECK-NEXT: tt.call @callee_multicast_proxy_write
     tt.call @callee_multicast_proxy_write(%buffer, %desc, %bar) : (!ttg.memdesc<8x32xi32, #shared, #smem, mutable>, !tt.tensordesc<8x32xi32, #shared>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>) -> ()
     tt.return
   }
@@ -1561,8 +1536,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %true = arith.constant true
     %value = ttg.local_load %read : !ttg.memdesc<8x32xi32, #shared, #smem, mutable> -> tensor<8x32xi32, #blocked>
     "test.keep"(%value) : (tensor<8x32xi32, #blocked>) -> ()
-    // LEGACY-NOT: ttng.fence_async_shared
-    // REGION: ttng.fence_async_shared {bCluster = false}
+    // CHECK: ttng.fence_async_shared {bCluster = false}
     // CHECK: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %write, %bar, %true : !tt.tensordesc<8x32xi32, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<8x32xi32, #shared, #smem, mutable>
     tt.return
@@ -1685,11 +1659,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %bar = ttg.local_alloc {allocation.offset = 1024 : i32} : () -> !ttg.memdesc<2xi64, #barrier, #smem, mutable>
     %value = ttg.local_load %buffer : !ttg.memdesc<8x32xi32, #shared, #smem, mutable> -> tensor<8x32xi32, #blocked>
     "test.keep"(%value) : (tensor<8x32xi32, #blocked>) -> ()
-    // LEGACY-NOT: ttng.fence_async_shared
-    // LEGACY: tt.call @callee_mixed_proxy_scopes
-    // REGION-NOT: ttng.fence_async_shared {bCluster = false}
-    // REGION: ttng.fence_async_shared {bCluster = true}
-    // REGION-NEXT: tt.call @callee_mixed_proxy_scopes
+    // CHECK-NOT: ttng.fence_async_shared {bCluster = false}
+    // CHECK: ttng.fence_async_shared {bCluster = true}
+    // CHECK-NEXT: tt.call @callee_mixed_proxy_scopes
     tt.call @callee_mixed_proxy_scopes(%buffer, %desc, %bar) : (!ttg.memdesc<8x32xi32, #shared, #smem, mutable>, !tt.tensordesc<8x32xi32, #shared>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>) -> ()
     tt.return
   }
