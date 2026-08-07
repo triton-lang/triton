@@ -106,7 +106,7 @@ def buffer_load(ptr, offsets, mask=None, other=None, cache=None, _semantic=None)
         offsets (tensor): Offsets tensor for the load operation.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         other (tensor or scalar, optional): Tensor or scalar providing default values for masked elements. Defaults to None.
-        cache_modifier (str): Cache modifier specifier. Defaults to "".
+        cache (str, optional): Cache modifier specifier. Defaults to ``None``.
     """
     _verify_buffer_ops(ptr, offsets, mask, other)
 
@@ -142,7 +142,7 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
         ptr (pointer to scalar): Global memory scalar base pointer to store to.
         offsets (tensor): Offsets tensor for the store operation.
         mask (tensor, optional): Mask tensor for predicated store. Defaults to None.
-        cache_modifier (str): Cache modifier specifier. Defaults to "".
+        cache (str, optional): Cache modifier specifier. Defaults to ``None``.
     """
     _verify_buffer_ops(ptr, offsets, mask)
 
@@ -165,7 +165,8 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
 @builtin
 def mfma(a, b, acc, _semantic: GluonSemantic = None):
     """
-    Computes matrix-multiplication of a * b + acc using AMD native matrix core units.
+    Computes matrix multiplication ``a * b + acc`` using AMD native matrix core units.
+
     Args:
         a (tensor): The first operand of mfma.
         b (tensor): The second operand of mfma.
@@ -200,11 +201,11 @@ def scaled_upcast(src, scale, elem_type, axis=None, _semantic=None):
     CDNA3 lowers this through the software-emulated scaled-upcast path; it
     does not use native hardware scaled-upcast instructions.
 
-    The scale tensor must use raw E8M0 payload in `int8` or `uint8`, and must
+    The ``scale`` tensor must use raw E8M0 payload in ``int8`` or ``uint8``, and must
     already have the expanded output shape and scaled-upcast result layout.
-    For fp4 inputs, that is the canonical unpacked layout implied by `src`
-    and `axis`. `elem_type` must be `fp16` or `bf16`. CDNA3 converts those
-    bytes to the internal `bf16` scale form expected by the AMD op.
+    For fp4 inputs, that is the canonical unpacked layout implied by ``src``
+    and ``axis``. ``elem_type`` must be ``fp16`` or ``bf16``. CDNA3 converts
+    those bytes to the internal ``bf16`` scale form expected by the AMD op.
     """
     axis = _unwrap_if_constexpr(axis)
     elem_type = _unwrap_if_constexpr(elem_type)
