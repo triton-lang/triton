@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.amd.cdna4.async\_copy.global\_load\_to\_shared
+=================================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna4.async_copy
+
+.. autofunction:: global_load_to_shared

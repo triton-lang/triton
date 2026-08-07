@@ -134,15 +134,24 @@
 <span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.cdna5.</span></span><span class="sig-name descname"><span class="pre">scaled_upcast</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">src</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">elem_type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">axis</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna5.scaled_upcast" title="Link to this definition"></a></dt>
 <dd><p>Upcast an fp4 or fp8 tensor and fold raw E8M0 scale payload into the
 CDNA5 scaled-upcast op.</p>
-<p>The scale tensor must use raw E8M0 payload in <cite>int8</cite> or <cite>uint8</cite>.
-For fp8, scale shape/layout match <cite>src</cite>.
-For fp4, expanded or compact scales are supported along <cite>axis</cite> dimension.
-Expanded scales are broadcasted to one scale value per upcast output value,
-e.g. fp4 bytes <cite>[M, K / 2]</cite> -&gt; output <cite>[M, K]</cite> with scale <cite>[M, K]</cite>.
-Compact scales keep one scale value per native scale block, e.g. output
-<cite>[M, K]</cite> with <cite>axis=1</cite> and scale block 32 uses scale <cite>[M, K / 32]</cite>.
-<cite>elem_type</cite> must be <cite>fp16</cite> or <cite>bf16</cite>. CDNA5 keeps those bytes in the native
-<cite>cvt.scale.pk8</cite> payload form.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">scale</span></code> tensor must contain raw E8M0 payload in <code class="docutils literal notranslate"><span class="pre">int8</span></code> or
+<code class="docutils literal notranslate"><span class="pre">uint8</span></code>. <code class="docutils literal notranslate"><span class="pre">elem_type</span></code> must be <code class="docutils literal notranslate"><span class="pre">fp16</span></code> or <code class="docutils literal notranslate"><span class="pre">bf16</span></code>.</p>
+<p><strong>FP8 inputs</strong></p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">axis</span></code> must be <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">scale</span></code> must have the same shape and layout as <code class="docutils literal notranslate"><span class="pre">src</span></code>.</p></li>
+</ul>
+<p><strong>FP4 inputs</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">axis</span></code> selects the packed fp4 dimension. Two scale layouts are
+supported:</p>
+<ul class="simple">
+<li><p><strong>Expanded scale:</strong> one scale per output value. For example, fp4 bytes
+<code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">K</span> <span class="pre">/</span> <span class="pre">2]</span></code> produce output <code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">K]</span></code> with scale <code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">K]</span></code>.</p></li>
+<li><p><strong>Compact scale:</strong> one scale per native scale block. For example, with
+<code class="docutils literal notranslate"><span class="pre">axis=1</span></code> and a 32-element scale block, output <code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">K]</span></code> uses scale
+<code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">K</span> <span class="pre">/</span> <span class="pre">32]</span></code>. CDNA5 preserves those scale bytes in the native
+<code class="docutils literal notranslate"><span class="pre">cvt.scale.pk8</span></code> payload form.</p></li>
+</ul>
 </dd></dl>
 
 </section>

@@ -111,7 +111,7 @@ We can use the default libdevice library path encoded in `triton/language/math.p
 
     tensor([0.4105, 0.5430, 0.0249,  ..., 0.0424, 0.5351, 0.8149], device='cuda:0')
     tensor([0.4105, 0.5430, 0.0249,  ..., 0.0424, 0.5351, 0.8149], device='cuda:0')
-    The maximum difference between torch and triton is 2.384185791015625e-07
+    The maximum difference between torch and triton is 0.0
 
 
 
@@ -165,7 +165,7 @@ We can also customize the libdevice library path by passing the path to the `lib
 
     tensor([0.4105, 0.5430, 0.0249,  ..., 0.0424, 0.5351, 0.8149], device='cuda:0')
     tensor([0.4105, 0.5430, 0.0249,  ..., 0.0424, 0.5351, 0.8149], device='cuda:0')
-    The maximum difference between torch and triton is 2.384185791015625e-07
+    The maximum difference between torch and triton is 0.0
 
 
 

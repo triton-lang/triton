@@ -133,10 +133,10 @@
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.cdna4.mfma_scaled">
 <span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.cdna4.</span></span><span class="sig-name descname"><span class="pre">mfma_scaled</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">a</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">a_scale</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">a_format</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">b</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">b_scale</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">b_format</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">acc</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna4.mfma_scaled" title="Link to this definition"></a></dt>
 <dd><p>AMD Scaled MFMA operation.</p>
-<p><code class="docutils literal notranslate"><span class="pre">`</span>
-<span class="pre">c</span> <span class="pre">=</span> <span class="pre">a</span> <span class="pre">*</span> <span class="pre">a_scale</span> <span class="pre">&#64;</span> <span class="pre">b</span> <span class="pre">*</span> <span class="pre">b_scale</span> <span class="pre">+</span> <span class="pre">acc</span>
-<span class="pre">`</span></code></p>
-<p><cite>a</cite> and <cite>b</cite> use microscaling formats described in
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>c = a * a_scale @ b * b_scale + acc
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">a</span></code> and <code class="docutils literal notranslate"><span class="pre">b</span></code> use microscaling formats described in
 “OCP Microscaling Formats (MX) Specification”:
 <a class="reference external" href="https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf">https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf</a>.
 Currently supported only on CDNA4 hardware.</p>
@@ -145,10 +145,12 @@ Currently supported only on CDNA4 hardware.</p>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>a</strong> (<a class="reference internal" href="triton.experimental.gluon.language.tensor.html#triton.experimental.gluon.language.tensor" title="triton.experimental.gluon.language.tensor"><em>tensor</em></a>) – The operand A to be multiplied.</p></li>
 <li><p><strong>a_scale</strong> (<em>Optional</em><em>[</em><a class="reference internal" href="triton.experimental.gluon.language.tensor.html#triton.experimental.gluon.language.tensor" title="triton.experimental.gluon.language.tensor"><em>tensor</em></a><em>]</em>) – Scale factor for operand A.</p></li>
-<li><p><strong>a_format</strong> (<em>str</em>) – Format of the operand A. Available formats: <cite>e2m1</cite>, <cite>e4m3</cite>, <cite>e5m2</cite>.</p></li>
+<li><p><strong>a_format</strong> (<em>str</em>) – Format of operand A. Available formats: <code class="docutils literal notranslate"><span class="pre">e2m1</span></code>,
+<code class="docutils literal notranslate"><span class="pre">e4m3</span></code>, <code class="docutils literal notranslate"><span class="pre">e5m2</span></code>.</p></li>
 <li><p><strong>b</strong> (<a class="reference internal" href="triton.experimental.gluon.language.tensor.html#triton.experimental.gluon.language.tensor" title="triton.experimental.gluon.language.tensor"><em>tensor</em></a>) – The operand B to be multiplied.</p></li>
 <li><p><strong>b_scale</strong> (<em>Optional</em><em>[</em><a class="reference internal" href="triton.experimental.gluon.language.tensor.html#triton.experimental.gluon.language.tensor" title="triton.experimental.gluon.language.tensor"><em>tensor</em></a><em>]</em>) – Scale factor for operand B.</p></li>
-<li><p><strong>b_format</strong> (<em>str</em>) – Format of the operand B. Available formats: <cite>e2m1</cite>, <cite>e4m3</cite>, <cite>e5m2</cite>.</p></li>
+<li><p><strong>b_format</strong> (<em>str</em>) – Format of operand B. Available formats: <code class="docutils literal notranslate"><span class="pre">e2m1</span></code>,
+<code class="docutils literal notranslate"><span class="pre">e4m3</span></code>, <code class="docutils literal notranslate"><span class="pre">e5m2</span></code>.</p></li>
 <li><p><strong>acc</strong> (<a class="reference internal" href="triton.experimental.gluon.language.tensor.html#triton.experimental.gluon.language.tensor" title="triton.experimental.gluon.language.tensor"><em>tensor</em></a>) – Accumulator tensor.</p></li>
 </ul>
 </dd>

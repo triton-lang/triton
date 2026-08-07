@@ -156,13 +156,13 @@
 <td><p>Get the scale layout for WMMA scaled operands.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.amd.cdna5.make_partitioned_dot_layouts.html#triton.experimental.gluon.language.amd.cdna5.make_partitioned_dot_layouts" title="triton.experimental.gluon.language.amd.cdna5.make_partitioned_dot_layouts"><code class="xref py py-obj docutils literal notranslate"><span class="pre">make_partitioned_dot_layouts</span></code></a></p></td>
-<td><p>Create partitioned shared memory layouts and WMMA layout for a CDNA5 GEMM</p></td>
+<td><p>Create partitioned shared memory layouts and WMMA layout for a CDNA5 GEMM in order to avoid LDS partition conflicts.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.amd.cdna5.scaled_upcast.html#triton.experimental.gluon.language.amd.cdna5.scaled_upcast" title="triton.experimental.gluon.language.amd.cdna5.scaled_upcast"><code class="xref py py-obj docutils literal notranslate"><span class="pre">scaled_upcast</span></code></a></p></td>
 <td><p>Upcast an fp4 or fp8 tensor and fold raw E8M0 scale payload into the CDNA5 scaled-upcast op.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.amd.cdna5.wmma.html#triton.experimental.gluon.language.amd.cdna5.wmma" title="triton.experimental.gluon.language.amd.cdna5.wmma"><code class="xref py py-obj docutils literal notranslate"><span class="pre">wmma</span></code></a></p></td>
-<td><p>Computes matrix-multiplication of a * b + acc using AMD WMMA instruction.</p></td>
+<td><p>Computes matrix multiplication <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">*</span> <span class="pre">b</span> <span class="pre">+</span> <span class="pre">acc</span></code> using an AMD WMMA instruction.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.amd.cdna5.wmma_scaled.html#triton.experimental.gluon.language.amd.cdna5.wmma_scaled" title="triton.experimental.gluon.language.amd.cdna5.wmma_scaled"><code class="xref py py-obj docutils literal notranslate"><span class="pre">wmma_scaled</span></code></a></p></td>
 <td><p>AMD Scaled WMMA operation.</p></td>

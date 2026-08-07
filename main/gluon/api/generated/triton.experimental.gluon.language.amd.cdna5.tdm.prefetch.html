@@ -133,17 +133,20 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.cdna5.tdm.prefetch">
 <span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.cdna5.tdm.</span></span><span class="sig-name descname"><span class="pre">prefetch</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">src</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor"><span class="pre">tensor_descriptor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">offsets</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">constexpr</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference internal" href="../../../python-api/generated/triton.language.tensor.html#triton.language.tensor" title="triton.language.core.tensor"><span class="pre">tensor</span></a><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pred</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">speculative</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna5.tdm.prefetch" title="Link to this definition"></a></dt>
-<dd><p>Prefetches a block of tensor specified in tensor descriptor from global memory into L2. Speculative prefetches can generate more
-efficient assembly because they do not require out of bounds checks. However, they are dropped by the hardware if their virtual address translation is not cached.
-So speculative should only be set if previous iterations have accessed the same virtual page (e.g. column major)
-:param src: the source tensor descriptor.
-:type src: tensor_descriptor
-:param offsets: the offsets from the base pointer in the tensor descriptor.
-:type offsets: List[int]
-:param pred: Predicate to enable or disable the prefetch. Defaults to True.
-:type pred: bool, optional
-:param speculative: Whether the prefetch is speculative. Defaults to False.
-:type speculative: bool, optional</p>
+<dd><p>Prefetches a block of tensor specified in tensor descriptor from global memory into L2.</p>
+<p>Speculative prefetches can generate more efficient assembly because they do not require out of bounds checks.
+However, they are dropped by the hardware if their virtual address translation is not cached.
+So speculative should only be set if previous iterations have accessed the same virtual page (e.g. column major).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>src</strong> (<a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor.html#triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor" title="triton.experimental.gluon.language.amd.cdna5.tdm.tensor_descriptor"><em>tensor_descriptor</em></a>) – the source tensor descriptor.</p></li>
+<li><p><strong>offsets</strong> (<em>List</em><em>[</em><em>int</em><em>]</em>) – the offsets from the base pointer in the tensor descriptor.</p></li>
+<li><p><strong>pred</strong> (<em>bool</em><em>, </em><em>optional</em>) – Predicate to enable or disable the prefetch. Defaults to True.</p></li>
+<li><p><strong>speculative</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether the prefetch is speculative. Defaults to False.</p></li>
+</ul>
+</dd>
+</dl>
 </dd></dl>
 
 </section>

@@ -137,11 +137,11 @@
 <p>Each parameter is independently optional; only the fields the caller
 names are written.  Everything else is inherited from the input
 descriptor.</p>
-<p>NOTE: Unlike the standard tensor-descriptor mental model, <cite>add_offsets</cite>
+<p>NOTE: Unlike the standard tensor-descriptor mental model, <code class="docutils literal notranslate"><span class="pre">add_offsets</span></code>
 here moves the tile position only.  It does NOT update the descriptor’s
 bounds.  If the loop crosses an OOB boundary, you must also pass
-<cite>set_bounds</cite> explicitly, or pass <cite>clamp_bounds=True</cite> to derive the OOB
-extent from <cite>add_offsets</cite>.</p>
+<code class="docutils literal notranslate"><span class="pre">set_bounds</span></code> explicitly, or pass <code class="docutils literal notranslate"><span class="pre">clamp_bounds=True</span></code> to derive the OOB
+extent from <code class="docutils literal notranslate"><span class="pre">add_offsets</span></code>.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
@@ -153,9 +153,9 @@ descriptor’s bounds.  Use to install OOB extent at a peel
 epilogue.</p></li>
 <li><p><strong>pred</strong> (<em>int</em><em>, </em><em>optional</em>) – set the descriptor’s predicate.</p></li>
 <li><p><strong>clamp_bounds</strong> (<em>bool</em><em>, </em><em>optional</em>) – if True, also shrink the descriptor’s
-bounds by <cite>add_offsets</cite> (tensor_dim[i] = max(0, tensor_dim[i] -
-add_offsets[i])) to derive the advanced tile’s OOB extent.
-Requires <cite>add_offsets</cite>; mutually exclusive with <cite>set_bounds</cite>.</p></li>
+bounds by <code class="docutils literal notranslate"><span class="pre">add_offsets</span></code> (<code class="docutils literal notranslate"><span class="pre">tensor_dim[i]</span> <span class="pre">=</span> <span class="pre">max(0,</span> <span class="pre">tensor_dim[i]</span> <span class="pre">-</span> <span class="pre">add_offsets[i])</span></code>)
+to derive the advanced tile’s OOB extent. Requires <code class="docutils literal notranslate"><span class="pre">add_offsets</span></code>;
+mutually exclusive with <code class="docutils literal notranslate"><span class="pre">set_bounds</span></code>.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
@@ -169,16 +169,18 @@ fields rewritten.</p>
 <dd class="field-even"><p><strong>ValueError</strong> – if no parameter is provided (no-op updates are forbidden).</p>
 </dd>
 </dl>
-<p class="rubric">Example</p>
-<p># K-loop interior: bump tile position only
-d = tdm.update_tensor_descriptor(d, add_offsets=[0, BLOCK_K])</p>
-<p># Prologue: position at first tile + set the predicate
-d = tdm.update_tensor_descriptor(d, add_offsets=[pid_m * BLOCK_M, 0],</p>
-<blockquote>
-<div><p>pred=do_load)</p>
-</div></blockquote>
-<p># Peel epilogue: install real OOB extent for the partial last tile
-d = tdm.update_tensor_descriptor(d, set_bounds=[M - pid_m * BLOCK_M, K - k_main])</p>
+<p><strong>Example</strong></p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># K-loop interior: bump tile position only</span>
+<span class="n">d</span> <span class="o">=</span> <span class="n">tdm</span><span class="o">.</span><span class="n">update_tensor_descriptor</span><span class="p">(</span><span class="n">d</span><span class="p">,</span> <span class="n">add_offsets</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">])</span>
+
+<span class="c1"># Prologue: position at first tile + set the predicate</span>
+<span class="n">d</span> <span class="o">=</span> <span class="n">tdm</span><span class="o">.</span><span class="n">update_tensor_descriptor</span><span class="p">(</span><span class="n">d</span><span class="p">,</span> <span class="n">add_offsets</span><span class="o">=</span><span class="p">[</span><span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+                                 <span class="n">pred</span><span class="o">=</span><span class="n">do_load</span><span class="p">)</span>
+
+<span class="c1"># Peel epilogue: install real OOB extent for the partial last tile</span>
+<span class="n">d</span> <span class="o">=</span> <span class="n">tdm</span><span class="o">.</span><span class="n">update_tensor_descriptor</span><span class="p">(</span><span class="n">d</span><span class="p">,</span> <span class="n">set_bounds</span><span class="o">=</span><span class="p">[</span><span class="n">M</span> <span class="o">-</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">K</span> <span class="o">-</span> <span class="n">k_main</span><span class="p">])</span>
+</pre></div>
+</div>
 </dd></dl>
 
 </section>

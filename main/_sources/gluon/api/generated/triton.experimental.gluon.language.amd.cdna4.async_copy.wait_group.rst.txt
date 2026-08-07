@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.amd.cdna4.async\_copy.wait\_group
+====================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna4.async_copy
+
+.. autofunction:: wait_group

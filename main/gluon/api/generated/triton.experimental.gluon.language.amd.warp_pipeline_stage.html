@@ -130,53 +130,50 @@
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.warp_pipeline_stage">
 <span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.</span></span><span class="sig-name descname"><span class="pre">warp_pipeline_stage</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">label</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">priority</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">_internal</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.amd.warp_pipeline_stage" title="Link to this definition"></a></dt>
 <dd><p>Marks a warp-pipeline stage inside a Gluon kernel.</p>
-<blockquote>
-<div><p>When used inside &#64;gl.kernel, each with amd.warp_pipeline_stage(…) block
-semantically defines a distinct stage of a warp pipeline. All operations
-inside the block belong to the same pipeline cluster and are intended to
-execute as a unit relative to other stages.</p>
-<p>The optional string label (e.g., “load”, “compute”) names the pipeline
-stage for identification and diagnostics, without affecting program
-semantics.</p>
-<p>An optional integer priority may be specified to express the relative
-scheduling priority of the warp the stage belongs to. The priority applies
-to the entire cluster. Valid values range from 0 (lowest) to 3 (highest)</p>
-</div></blockquote>
-<p>as it’s lowered to the operand of <cite>s_setprio</cite>. If unspecified, priority
-resets to zero when any other stage in the loop uses explicit priority;
-otherwise no priority instruction is emitted.
-N.B., This is a performance hint to the hardware scheduler, and its effect</p>
-<blockquote>
-<div><p>may vary depending on the dynamic interaction of instruction streams
+<p>Within a <code class="docutils literal notranslate"><span class="pre">&#64;gluon.jit</span></code> kernel, each <code class="docutils literal notranslate"><span class="pre">with</span> <span class="pre">gl.amd.warp_pipeline_stage(...)</span></code>
+block defines a distinct stage of a warp pipeline. All operations inside
+the block belong to the same pipeline cluster and execute as a unit
+relative to other stages.</p>
+<p>The optional string <code class="docutils literal notranslate"><span class="pre">label</span></code> (for example, <code class="docutils literal notranslate"><span class="pre">&quot;load&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;compute&quot;</span></code>)
+identifies the stage in diagnostics without affecting program semantics.</p>
+<p><code class="docutils literal notranslate"><span class="pre">priority</span></code> is an optional integer that expresses the scheduling priority
+of the warp that executes the stage. The priority applies to the entire
+cluster. Valid values range from 0 (lowest) to 3 (highest), matching the
+operand range of <code class="docutils literal notranslate"><span class="pre">s_setprio</span></code>. If omitted, the priority resets to zero
+when another stage in the loop uses an explicit priority; otherwise, no
+priority instruction is emitted.
+N.B., This is a performance hint to the hardware scheduler. Its effect
+depends on the dynamic interaction between warp instruction streams
 across different warps. It is optional and should be used judiciously,
 only when explicit scheduling guidance is beneficial.</p>
-</div></blockquote>
-<p>Example: (only to show how to use, this example is not supposed to
-represent the optimal way.)</p>
-<p>&#64;gl.kernel
-…</p>
-<p>for k in gl.range(0, K, one):</p>
-<blockquote>
-<div><p># Stage 0: prefetch tiles
-with amd.warp_pipeline_stage(“load”, priority=3):</p>
-<blockquote>
-<div><p>a = gl.amd.buffer_load(a_ptr, offs_a)
-b = gl.amd.buffer_load(b_ptr, offs_b)</p>
-</div></blockquote>
-<p># Stage 1: prepare MFMA operands
-with amd.warp_pipeline_stage(“prep”):</p>
-<blockquote>
-<div><p>a_tile = a.load(layout=…)
-b_tile = b.load(layout=…)</p>
-</div></blockquote>
-<p># Stage 2: compute
-with amd.warp_pipeline_stage(“compute”, priority=0):</p>
-<blockquote>
-<div><p>acc = gl.amd.mfma(a_tile, b_tile, acc)
-offs_a += strideA
-offs_b += strideB</p>
-</div></blockquote>
-</div></blockquote>
+<p>The following schematic shows the stage boundaries; it is not intended as
+an optimal kernel.</p>
+<p><strong>Example</strong></p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental</span><span class="w"> </span><span class="kn">import</span> <span class="n">gluon</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon</span><span class="w"> </span><span class="kn">import</span> <span class="n">language</span> <span class="k">as</span> <span class="n">gl</span>
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">warp_pipelined_kernel</span><span class="p">(</span><span class="n">a_ptr</span><span class="p">,</span> <span class="n">b_ptr</span><span class="p">,</span> <span class="n">c_ptr</span><span class="p">,</span> <span class="n">K</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">acc</span> <span class="o">=</span> <span class="mf">0.0</span>
+
+    <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">K</span><span class="p">):</span>
+        <span class="c1"># Stage 0: prefetch tiles.</span>
+        <span class="k">with</span> <span class="n">gl</span><span class="o">.</span><span class="n">amd</span><span class="o">.</span><span class="n">warp_pipeline_stage</span><span class="p">(</span><span class="s2">&quot;load&quot;</span><span class="p">,</span> <span class="n">priority</span><span class="o">=</span><span class="mi">3</span><span class="p">):</span>
+            <span class="n">a</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">a_ptr</span> <span class="o">+</span> <span class="n">k</span><span class="p">)</span>
+            <span class="n">b</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">b_ptr</span> <span class="o">+</span> <span class="n">k</span><span class="p">)</span>
+
+        <span class="c1"># Stage 1: prepare MFMA operands.</span>
+        <span class="k">with</span> <span class="n">gl</span><span class="o">.</span><span class="n">amd</span><span class="o">.</span><span class="n">warp_pipeline_stage</span><span class="p">(</span><span class="s2">&quot;prep&quot;</span><span class="p">):</span>
+            <span class="n">a_tile</span> <span class="o">=</span> <span class="n">a</span>  <span class="c1"># Convert to the required dot-operand layout.</span>
+            <span class="n">b_tile</span> <span class="o">=</span> <span class="n">b</span>  <span class="c1"># Convert to the required dot-operand layout.</span>
+
+        <span class="c1"># Stage 2: compute.</span>
+        <span class="k">with</span> <span class="n">gl</span><span class="o">.</span><span class="n">amd</span><span class="o">.</span><span class="n">warp_pipeline_stage</span><span class="p">(</span><span class="s2">&quot;compute&quot;</span><span class="p">,</span> <span class="n">priority</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
+            <span class="n">acc</span> <span class="o">+=</span> <span class="n">a_tile</span> <span class="o">*</span> <span class="n">b_tile</span>
+
+    <span class="n">gl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">c_ptr</span><span class="p">,</span> <span class="n">acc</span><span class="p">)</span>
+</pre></div>
+</div>
 <dl class="py method">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.warp_pipeline_stage.__init__">
 <span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">label</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">priority</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">_internal</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.amd.warp_pipeline_stage.__init__" title="Link to this definition"></a></dt>

@@ -132,13 +132,16 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.cdna3.mfma">
 <span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.cdna3.</span></span><span class="sig-name descname"><span class="pre">mfma</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">a</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">b</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">acc</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">GluonSemantic</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna3.mfma" title="Link to this definition"></a></dt>
-<dd><p>Computes matrix-multiplication of a * b + acc using AMD native matrix core units.
-:param a: The first operand of mfma.
-:type a: tensor
-:param b: The second operand of mfma.
-:type b: tensor
-:param acc: The accumulator tensor.
-:type acc: tensor</p>
+<dd><p>Computes matrix multiplication <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">*</span> <span class="pre">b</span> <span class="pre">+</span> <span class="pre">acc</span></code> using AMD native matrix core units.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>a</strong> (<a class="reference internal" href="triton.experimental.gluon.language.tensor.html#triton.experimental.gluon.language.tensor" title="triton.experimental.gluon.language.tensor"><em>tensor</em></a>) – The first operand of mfma.</p></li>
+<li><p><strong>b</strong> (<a class="reference internal" href="triton.experimental.gluon.language.tensor.html#triton.experimental.gluon.language.tensor" title="triton.experimental.gluon.language.tensor"><em>tensor</em></a>) – The second operand of mfma.</p></li>
+<li><p><strong>acc</strong> (<a class="reference internal" href="triton.experimental.gluon.language.tensor.html#triton.experimental.gluon.language.tensor" title="triton.experimental.gluon.language.tensor"><em>tensor</em></a>) – The accumulator tensor.</p></li>
+</ul>
+</dd>
+</dl>
 </dd></dl>
 
 </section>

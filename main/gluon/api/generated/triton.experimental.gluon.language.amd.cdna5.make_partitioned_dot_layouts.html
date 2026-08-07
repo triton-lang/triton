@@ -132,19 +132,18 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.cdna5.make_partitioned_dot_layouts">
 <span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.cdna5.</span></span><span class="sig-name descname"><span class="pre">make_partitioned_dot_layouts</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna5.make_partitioned_dot_layouts" title="Link to this definition"></a></dt>
-<dd><dl class="simple">
-<dt>Create partitioned shared memory layouts and WMMA layout for a CDNA5 GEMM</dt><dd><p>in order to avoid LDS partition conflicts.</p>
-</dd>
-</dl>
+<dd><p>Create partitioned shared memory layouts and WMMA layout for a CDNA5 GEMM in order to avoid LDS partition conflicts.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>block_m</strong> – M dimension tile size of the <em>shared</em> operand buffer.  Must be
-at least <code class="docutils literal notranslate"><span class="pre">4</span> <span class="pre">*</span> <span class="pre">instr_shape[0]</span></code> because the M dimension is split into
-2 partitions and each partition must be at least 2 instructions wide.</p></li>
+at least four logical WMMA instruction tiles because the M dimension
+is split into 2 partitions and each partition must be at least 2
+instructions wide.</p></li>
 <li><p><strong>block_n</strong> – N dimension tile size of the <em>shared</em> operand buffer.  Must be
-at least <code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">*</span> <span class="pre">instr_shape[1]</span></code> because the N dimension is split into
-2 partitions and each partition must be at least 1 instruction wide.</p></li>
+at least two logical WMMA instruction tiles because the N dimension
+is split into 2 partitions and each partition must be at least 1
+instruction wide.</p></li>
 <li><p><strong>original_layout_a</strong> – <code class="docutils literal notranslate"><span class="pre">PaddedSharedLayout</span></code> for operand A.  Shape is
 <code class="docutils literal notranslate"><span class="pre">[block_m,</span> <span class="pre">block_k]</span></code> when not transposed (K contiguous) and
 <code class="docutils literal notranslate"><span class="pre">[block_k,</span> <span class="pre">block_m]</span></code> when transposed (M contiguous).</p></li>
@@ -152,7 +151,7 @@ at least <code class="docutils literal notranslate"><span class="pre">2</span> <
 <code class="docutils literal notranslate"><span class="pre">[block_k,</span> <span class="pre">block_n]</span></code> when not transposed (N contiguous) and
 <code class="docutils literal notranslate"><span class="pre">[block_n,</span> <span class="pre">block_k]</span></code> when transposed (K contiguous).</p></li>
 <li><p><strong>num_warps</strong> – Number of warps per CTA.  Currently must be 4 or 8.</p></li>
-<li><p><strong>instr_shape</strong> – WMMA instruction shape as <code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">N,</span> <span class="pre">K]</span></code>.</p></li>
+<li><p><strong>instr_shape</strong> – Physical WMMA instruction shape as <code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">N,</span> <span class="pre">K]</span></code>.</p></li>
 <li><p><strong>a_transposed</strong> – Whether A is transposed in shared memory, i.e. M is
 the contiguous axis instead of K.</p></li>
 <li><p><strong>b_transposed</strong> – Whether B is transposed in shared memory, i.e. K is
@@ -161,6 +160,9 @@ the contiguous axis instead of N.</p></li>
 <code class="docutils literal notranslate"><span class="pre">block_m</span></code> (unsliced).</p></li>
 <li><p><strong>slice_n</strong> – N dimension of a dot operation after slicing.  Defaults to
 <code class="docutils literal notranslate"><span class="pre">block_n</span></code> (unsliced).</p></li>
+<li><p><strong>transposed</strong> – Whether the returned WMMA result layout is transposed.  Its
+logical instruction tile is <code class="docutils literal notranslate"><span class="pre">N</span> <span class="pre">x</span> <span class="pre">M</span></code> when true and <code class="docutils literal notranslate"><span class="pre">M</span> <span class="pre">x</span> <span class="pre">N</span></code> when
+false.  Defaults to true.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>

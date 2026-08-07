@@ -137,8 +137,10 @@
 <li><p><strong>instr_shape</strong> (<em>List</em><em>[</em><em>int</em><em>]</em>) – The shape in the form of (M, N, K) of the matrix.</p></li>
 <li><p><strong>transposed</strong> (<em>bool</em>) – Indicates the result tensor is transposed so that each thread holds consecutive elements in the same row instead of column, which is good for chained dot and global write.</p></li>
 <li><p><strong>warps_per_cta</strong> (<em>List</em><em>[</em><em>int</em><em>]</em>) – The warp layout in the block.</p></li>
-<li><p><strong>Optional</strong> (<em>tiles_per_warp</em>) – Bit width of the output element type. Supported values are 32 and 64. Defaults to 32.</p></li>
-<li><p><strong>Optional</strong> – The tile layout within a warp. Defaults to unit tile layout, i.e., single tile on all dimensions.</p></li>
+<li><p><strong>element_bitwidth</strong> (<em>Optional</em><em>[</em><em>int</em><em>]</em>) – Bit width of the output element type.
+Supported values are 32 and 64. Defaults to 32.</p></li>
+<li><p><strong>tiles_per_warp</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>int</em><em>]</em><em>]</em>) – The tile layout within a warp.
+Defaults to a unit tile layout, i.e., a single tile on all dimensions.</p></li>
 <li><p><strong>cga_layout</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>List</em><em>[</em><em>int</em><em>]</em><em>]</em><em>]</em>) – Bases describing CTA tiling.</p></li>
 </ul>
 </dd>
