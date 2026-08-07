@@ -151,7 +151,7 @@ def _disjoint_subword_access_kernel(ptr, scratch_ptr, counter_ptr, ACCESS: tl.co
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e4m3fn])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
 @pytest.mark.parametrize("access", ["raw", "war", "waw"])
 def test_disjoint_subword_accesses_do_not_race(with_gsan, capfd, dtype, access):
     target = torch.zeros(4, dtype=dtype, device="cuda")
@@ -189,7 +189,7 @@ def _masked_disjoint_subword_access_kernel(ptr, scratch_ptr, counter_ptr, ACCESS
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e4m3fn])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
 @pytest.mark.parametrize("access", ["raw", "war", "waw"])
 def test_masked_disjoint_subword_accesses_do_not_race(with_gsan, capfd, dtype, access):
     target = torch.zeros(4, dtype=dtype, device="cuda")
@@ -221,7 +221,7 @@ def _ordered_subword_read_kernel(ptr, scratch_ptr, flag_ptr, ready_ptr):
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e4m3fn])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
 def test_ordered_subword_read_is_not_invalidated_by_disjoint_read(with_gsan, capfd, dtype):
     target = torch.zeros(4, dtype=dtype, device="cuda")
     scratch = torch.zeros_like(target)

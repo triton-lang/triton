@@ -550,7 +550,7 @@ def test_write_after_write():
                       error="Write after write race detected")
 
 
-@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e4m3fn])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
 @pytest.mark.parametrize("access", ["raw", "war", "waw"])
 def test_overlapping_subword_access_after_disjoint_write(dtype, access):
     marker = "overlapping_value = tl.load(ptr)" if access == "raw" else "tl.store(ptr, 3.0)"
