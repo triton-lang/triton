@@ -5,6 +5,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "triton/Analysis/Alias.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -58,16 +59,20 @@ namespace {
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
+// The chain of operations is:
+//  barrier=alloc -> init(barrier) -> wait(barrier) -> inval(barrier)
 struct BarrierLifecycle {
   Value barrier;
   ttg::LocalAllocOp alloc;
-  ttng::InitBarrierOp init;
   SmallVector<ttng::InitBarrierOp> inits;
   SmallVector<ttng::WaitBarrierOp> waits;
   Value initialPhase;
   SmallVector<ttng::InvalBarrierOp> invals;
 };
 
+// We declare a new class here to track alias instead of allocation's alias
+// buffer id sets because memory allocation hasn't been done yet when this pass
+// is run.
 class BarrierAliases {
 public:
   BarrierAliases(Value barrier, SharedMemoryAliasAnalysis &aliasAnalysis)
@@ -176,6 +181,10 @@ private:
         .wasInterrupted();
   }
 
+  // Collect a lifecycle only when:
+  // - No barrier alias has an opaque use.
+  // - Exactly one init, one inval, and at least one wait
+  // - Every wait uses the same constant-zero phase.
   LogicalResult collectLifecycle(FunctionOpInterface funcOp, Value barrier,
                                  const BarrierAliases &aliases,
                                  BarrierLifecycle &lifecycle) {
@@ -189,11 +198,8 @@ private:
 
     funcOp.walk([&](Operation *op) {
       if (auto init = dyn_cast<ttng::InitBarrierOp>(op)) {
-        if (init.getAlloc() == barrier) {
-          if (!lifecycle.init)
-            lifecycle.init = init;
+        if (init.getAlloc() == barrier)
           lifecycle.inits.push_back(init);
-        }
         return;
       }
       if (auto wait = dyn_cast<ttng::WaitBarrierOp>(op)) {
@@ -223,15 +229,19 @@ private:
     return success();
   }
 
-  void getEnclosingLoops(Operation *op, SmallVectorImpl<Operation *> &loops) {
+  void getEnclosingLoops(Operation *op,
+                         SmallVectorImpl<LoopLikeOpInterface> &loops) {
     for (op = op->getParentOp(); op; op = op->getParentOp()) {
       if (!isa<scf::ForOp, scf::WhileOp>(op))
         continue;
-      loops.push_back(op);
+      loops.push_back(cast<LoopLikeOpInterface>(op));
     }
+    std::reverse(loops.begin(), loops.end());
   }
 
-  void moveInitialPhaseBeforeLoop(Value initialPhase, Operation *loopOp) {
+  void moveInitialPhaseBeforeLoop(Value initialPhase,
+                                  LoopLikeOpInterface loop) {
+    Operation *loopOp = loop.getOperation();
     Operation *def = initialPhase.getDefiningOp();
     if (!def)
       return;
@@ -240,16 +250,12 @@ private:
     def->moveBefore(loopOp);
   }
 
-  Block *getLoopBodyBlock(Operation *loopOp) {
-    if (auto forOp = dyn_cast<scf::ForOp>(loopOp))
-      return forOp.getBody();
-    if (auto whileOp = dyn_cast<scf::WhileOp>(loopOp))
-      return &whileOp.getAfter().front();
-    return nullptr;
+  Block *getLoopBodyBlock(LoopLikeOpInterface loop) {
+    return &loop.getLoopRegions().back()->front();
   }
 
-  Value getLoopResultPhase(Operation *loopOp) {
-    return loopOp->getResults().back();
+  Value getLoopResultPhase(LoopLikeOpInterface loop) {
+    return loop->getResults().back();
   }
 
   Value createPhaseAdvance(ttng::WaitBarrierOp wait, Value phase,
@@ -328,31 +334,31 @@ private:
     return whileOp;
   }
 
-  void appendToLoopYield(Operation *loopOp, Value phase) {
-    if (auto forOp = dyn_cast<scf::ForOp>(loopOp)) {
+  void appendToLoopYield(LoopLikeOpInterface loop, Value phase) {
+    if (auto forOp = dyn_cast<scf::ForOp>(loop.getOperation())) {
       mlir::appendToForOpYield(forOp, phase);
       return;
     }
-    appendToWhileYield(cast<scf::WhileOp>(loopOp), phase);
+    appendToWhileYield(cast<scf::WhileOp>(loop.getOperation()), phase);
   }
 
+  // First move the phase initialization op before the outermost loop,
+  // then add a phase argument to each loop,
+  // xor the phase after each wait,
+  // and in the end thread the updated phase through the loop yields.
   LogicalResult rewriteLoopPhases(BarrierLifecycle &lifecycle) {
-    // Only loop-local invalidations require phase threading. If every
-    // invalidation is already outside loops, moving them to function exits does
-    // not change the phase seen by repeated loop iterations.
     if (llvm::none_of(lifecycle.invals, [&](ttng::InvalBarrierOp inval) {
-          SmallVector<Operation *> loops;
+          SmallVector<LoopLikeOpInterface> loops;
           getEnclosingLoops(inval, loops);
           return !loops.empty();
         }))
+      // Only loop-local invalidations require phase threading. If every
+      // invalidation is already outside loops, moving them to function exits
+      // does not change the phase seen by repeated loop iterations.
       return success();
 
-    if (lifecycle.inits.size() != 1 || lifecycle.invals.size() != 1)
-      return failure();
-
-    SmallVector<Operation *> loops;
+    SmallVector<LoopLikeOpInterface> loops;
     getEnclosingLoops(lifecycle.invals.front(), loops);
-    std::reverse(loops.begin(), loops.end());
 
     llvm::SmallPtrSet<Operation *, 4> waits;
     for (ttng::WaitBarrierOp wait : lifecycle.waits)
@@ -365,24 +371,23 @@ private:
     Value phaseOne =
         arith::ConstantIntOp::create(builder, loops.front()->getLoc(), 1, 32);
 
-    SmallVector<std::pair<Operation *, Value>> loopPhases;
+    SmallVector<std::pair<LoopLikeOpInterface, Value>> loopPhases;
     Value initialPhase = lifecycle.initialPhase;
-    for (auto [idx, loopOp] : llvm::enumerate(loops)) {
-      builder.setInsertionPoint(loopOp);
+    for (auto [idx, loop] : llvm::enumerate(loops)) {
+      builder.setInsertionPoint(loop);
       Value phase;
-      if (auto forOp = dyn_cast<scf::ForOp>(loopOp))
-        loopOp = addForPhaseArg(forOp, initialPhase, phase).getOperation();
+      if (auto forOp = dyn_cast<scf::ForOp>(loop.getOperation()))
+        loop = addForPhaseArg(forOp, initialPhase, phase);
       else
-        loopOp =
-            addWhilePhaseArg(cast<scf::WhileOp>(loopOp), initialPhase, phase)
-                .getOperation();
+        loop = addWhilePhaseArg(cast<scf::WhileOp>(loop.getOperation()),
+                                initialPhase, phase);
 
-      loops[idx] = loopOp;
-      loopPhases.push_back({loopOp, phase});
+      loops[idx] = loop;
+      loopPhases.push_back({loop, phase});
       initialPhase = phase;
     }
 
-    Operation *innerLoop = loopPhases.back().first;
+    LoopLikeOpInterface innerLoop = loopPhases.back().first;
     Value innerPhase = loopPhases.back().second;
     Value nextPhase = rewriteBlockPhases(getLoopBodyBlock(innerLoop),
                                          innerPhase, phaseOne, waits);
@@ -390,14 +395,14 @@ private:
     appendToLoopYield(innerLoop, nextPhase);
     Value loopResult = getLoopResultPhase(innerLoop);
 
-    for (int i = static_cast<int>(loopPhases.size()) - 2; i >= 0; --i) {
-      Operation *loopOp = loopPhases[i].first;
+    for (int i = loopPhases.size() - 2; i >= 0; --i) {
+      LoopLikeOpInterface loop = loopPhases[i].first;
       Value loopPhase = loopPhases[i].second;
-      if (loopResult.getParentBlock() != getLoopBodyBlock(loopOp))
+      if (loopResult.getParentBlock() != getLoopBodyBlock(loop))
         loopResult = mlir::triton::sinkValueRedefinition(
             builder, loopPhase, loopResult, loopResult.getParentBlock());
-      appendToLoopYield(loopOp, loopResult);
-      loopResult = getLoopResultPhase(loopOp);
+      appendToLoopYield(loop, loopResult);
+      loopResult = getLoopResultPhase(loop);
     }
 
     return success();
@@ -418,10 +423,7 @@ private:
                                FunctionOpInterface funcOp) {
     Block &entry = funcOp->getRegion(0).front();
     lifecycle.alloc->moveBefore(&entry.front());
-    lifecycle.init->moveAfter(lifecycle.alloc);
-    for (ttng::InitBarrierOp init : lifecycle.inits)
-      if (init != lifecycle.init)
-        init->erase();
+    lifecycle.inits.front()->moveAfter(lifecycle.alloc);
   }
 
   void moveInvalidationToFunctionExits(BarrierLifecycle &lifecycle,
