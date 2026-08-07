@@ -843,7 +843,14 @@ bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
 //    produce wrong results if we invalidate the condition in the future
 bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
                         RankedTensorType srcTy, Attribute dstEnc,
-                        ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize) {
+                        ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize,
+                        DirectToLdsVecInfo vecInfo,
+                        std::string *failureReason) {
+  auto setReason = [&](std::string reason) {
+    if (failureReason)
+      *failureReason = std::move(reason);
+  };
+
   // For padded encodings restrict vec by the min interval
   auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(dstEnc);
   if (paddedEnc) {
@@ -861,6 +868,27 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   int elemBitWidth = tt::getPointeeBitWidth(srcTy);
   if (fitToValidDirectToLdsVecSize(vectorSize, elemBitWidth, targetInfo) == 0) {
     LDBG("unsupported global load to LDS vectorSize (" << vectorSize << ")");
+    std::string guidance =
+        " Increase the provable alignment of the source (e.g. tl.multiple_of "
+        "on the base pointer, or aligning the leading dimensions) so a wider "
+        "vector can be used.";
+    if (vecInfo.maskIsLimiting()) {
+      guidance =
+          " The mask is the limiting factor: the pointers/offsets allow a "
+          "vector of " +
+          std::to_string(vecInfo.fromPtr) + " element(s) but the mask only " +
+          std::to_string(vecInfo.fromMask) +
+          ". A direct-to-LDS copy transfers each lane's whole vector in a "
+          "single transaction, so every vector-width group of mask values must "
+          "be identical. Align the mask boundary to the vector width, or peel "
+          "the ragged remainder into a separate load.";
+    }
+    setReason("the load can only be vectorized to " +
+              std::to_string(vectorSize) + " element(s) (" +
+              std::to_string(vectorSize * elemBitWidth) +
+              " bits), which is narrower than any direct-to-LDS transaction "
+              "width supported on this target." +
+              guidance);
     return false;
   }
 
@@ -895,6 +923,12 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   if (vectorSize < contig) {
     LDBG("Load vectorization (" << vectorSize << ") smaller than contiguity ("
                                 << contig << ") resulting in strided writes");
+    setReason(
+        "the global load vectorization (" + std::to_string(vectorSize) +
+        ") is smaller than the shared memory contiguity (" +
+        std::to_string(contig) +
+        "), which would require strided LDS writes. Adjust the blocked or "
+        "shared encoding so the two agree.");
     return false;
   }
   // If the requested load is wider than what the layout can write coalesced,
@@ -906,12 +940,20 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   if (!targetInfo.supportsDirectToLdsLoadBitWidth(vectorSize * elemBitWidth)) {
     LDBG("coalesced load width (" << vectorSize
                                   << ") is not a supported direct-to-LDS load");
+    setReason(
+        "the coalesced " + std::to_string(vectorSize * elemBitWidth) +
+        "-bit direct-to-LDS transaction width is not supported on this target");
     return false;
   }
 
   if (!canCoalesceWriteIntoSharedMemory(srcTy.getContext(), srcToSharedLayout,
                                         targetInfo.getWarpSize())) {
     LDBG("Does not write coalesced into LDS");
+    setReason("the resulting writes into shared memory are not coalesced for a "
+              "vectorization of " +
+              std::to_string(vectorSize) +
+              " element(s). Adjust the blocked or shared encoding so each warp "
+              "writes a contiguous range.");
     return false;
   }
 
