@@ -81,7 +81,7 @@ __all__ = [
     "num_ctas",
 ]
 
-T = TypeVar("T")
+T = TypeVar("T", bound=Callable)
 
 # TODO: split these
 GLUON_BUILTIN = "__triton_builtin__"
@@ -89,7 +89,6 @@ GLUON_BUILTIN = "__triton_builtin__"
 
 def builtin(fn: T) -> T:
     """Mark a function as a builtin."""
-    assert callable(fn)
 
     @wraps(fn)
     def wrapper(*args, **kwargs):
