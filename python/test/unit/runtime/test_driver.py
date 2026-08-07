@@ -2,6 +2,7 @@ import os
 import sys
 from concurrent.futures import Future, ThreadPoolExecutor
 from multiprocessing.connection import Client
+from pathlib import Path
 from types import SimpleNamespace
 
 import cloudpickle
@@ -131,6 +132,31 @@ def test_compile_warmup_assigns_gpu_before_xdist_worker_initialization(monkeypat
     pytest_xdist_setupnodes(None, specs)
 
     assert [spec.env[variable] for spec in specs] == expected
+
+
+def test_runner_assigns_unique_junit_reports(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("TRITON_TEST_JUNIT_DIR", raising=False)
+    assert not any(argument.startswith("--junitxml=") for argument in _test_runner._pytest("test.py"))
+
+    commands = []
+    monkeypatch.setattr(
+        _test_runner, "_unit", lambda args: commands.extend(
+            (_test_runner._pytest("first.py"), _test_runner._pytest("second.py"))) or 0)
+    assert _test_runner._suite(SimpleNamespace(name="unit", junit_dir="reports")) == 0
+
+    reports = [
+        Path(argument.removeprefix("--junitxml="))
+        for command in commands
+        for argument in command
+        if argument.startswith("--junitxml=")
+    ]
+    assert len(reports) == len(set(reports)) == 2
+    assert all(report.parent == (tmp_path / "reports").resolve() for report in reports)
+    assert reports[0].name.startswith("pytest-first-")
+    assert reports[1].name.startswith("pytest-second-")
+    assert all(report.name.endswith("-results.xml") for report in reports)
+    assert (tmp_path / "reports").is_dir()
 
 
 @pytest.mark.parametrize(("capability", "num_gpus", "kernel_workers"), [(8, 1, 6), (9, 1, 4), (10, 2, 6), (10, 4, 12)])
