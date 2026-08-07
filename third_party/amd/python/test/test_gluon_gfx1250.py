@@ -2303,7 +2303,7 @@ def test_compile_tensor_descriptor_prefetch_nd(dtype, ndim, INNER_BLOCK, SPECULA
 
     for pattern in ("global_prefetch_b8", "scope:SCOPE_SE"):
         assert re.search(pattern, amdgcn)
-    if SPECULATIVE:
+    if not SPECULATIVE:
         assert re.search("th:TH_LOAD_NT", amdgcn)
 
 

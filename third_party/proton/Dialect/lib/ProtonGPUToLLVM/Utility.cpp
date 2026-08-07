@@ -110,7 +110,8 @@ CircularStoreDataPack lowerCircularStore(CircularStoreOp op,
   // tag and upper clock (4 bytes):
   // 31: start or end (1 bit)
   // 30:23 scope id (8 bits)
-  // 22:11 reserved (12 bits)
+  // 22: async event (1 bit)
+  // 21:11 reserved (11 bits)
   // 10:0  64-bit clock bit 32:42 (11 bits)
   // =======================================
   // lower clock (4 bytes):
@@ -121,6 +122,8 @@ CircularStoreDataPack lowerCircularStore(CircularStoreOp op,
   Value maskedScopeId = b.and_(scopeId, b.i32_val(0xff));
   Value tag = b.or_(b.shl(maskedScopeId, b.i32_val(23)),
                     b.i32_val(op.getIsStart() ? 0u : (1u << 31)));
+  if (dynamicScopeId)
+    tag = b.or_(tag, b.i32_val(1u << 22));
   Value valsVec;
   if (clkTy.getWidth() == 64) {
     auto clkVecTy = vec_ty(i32_ty, 2);

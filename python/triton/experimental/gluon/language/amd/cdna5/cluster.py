@@ -15,6 +15,7 @@ def arrive(_semantic=None):
 def wait(_semantic=None):
     """
     Wait on a cluster barrier to be arrived by all CTAs within the same cluster.
+
     Arrive and wait operations must come in pairs. Waiting before arriving or arriving more than once
     without a corresponding wait will result in undefined behavior.
     """
