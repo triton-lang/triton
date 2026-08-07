@@ -346,17 +346,6 @@ Value createDimMask(ImplicitLocOpBuilder &b, Value index,
   return convertAndBroadcast(b, mask1D, {dim}, maskType);
 }
 
-Value createDimIndices(ImplicitLocOpBuilder &b, RankedTensorType tensorType,
-                       int dim) {
-  assert(dim >= 0 && dim < tensorType.getRank() && "invalid tensor dimension");
-  auto indexType = tti::getSlicedTensorType(tensorType, {dim}, b.getI32Type());
-  Value range = triton::MakeRangeOp::create(b, indexType, /*start=*/0,
-                                            /*end=*/tensorType.getShape()[dim]);
-  auto fullIndexType = cast<RankedTensorType>(
-      tensorType.cloneWith(std::nullopt, b.getI32Type()));
-  return convertAndBroadcast(b, range, {dim}, fullIndexType);
-}
-
 Value createCurrentCTAMask(ImplicitLocOpBuilder &b) {
   Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
   return arith::ShLIOp::create(b, arith::ConstantIntOp::create(b, 1, 32),
@@ -1591,12 +1580,8 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
         Value relationMask =
             createLeadCTAEffectMask(fb, readVisibilityType, effectCTAs);
         Value threadCTAMask =
-            createCTASetMask(fb, readVisibilityType, /*dim=*/4, effectCTAs);
-        Value sameCTA = arith::CmpIOp::create(
-            fb, arith::CmpIPredicate::eq,
-            createDimIndices(fb, readVisibilityType, /*dim=*/2),
-            createDimIndices(fb, readVisibilityType, /*dim=*/4));
-        threadCTAMask = arith::AndIOp::create(fb, threadCTAMask, sameCTA);
+            createCTASetMask(fb, readVisibilityType,
+                             /*dim=*/4, createCurrentCTAMask(fb));
         relationMask = arith::AndIOp::create(fb, relationMask, threadCTAMask);
         bufferMask = arith::AndIOp::create(fb, bufferMask, relationMask);
         auto elemType = cast<IntegerType>(readVisibilityType.getElementType());
@@ -2456,30 +2441,26 @@ void FunctionBuilder::createPublishClusterVisibilityCall(
           Value sourceColumn = arith::SelectOp::create(
               fb, createDimMask(fb, threadVal, readVisibilityType, /*dim=*/3),
               readVisibility, zeroReads);
-          Value readsForThread =
-              reduce<arith::OrIOp>(fb, sourceColumn, {2, 3, 4});
-          readsForThread = convertAndBroadcast(fb, readsForThread, {0, 1},
+          Value readsForThread = reduce<arith::OrIOp>(fb, sourceColumn, {2, 3});
+          readsForThread = convertAndBroadcast(fb, readsForThread, {0, 1, 4},
                                                readVisibilityType);
           Value peerColumns = createThreadColumnMask(
               fb, threadPeersMaskVal, readVisibilityType, /*columnDim=*/3);
           readsForCluster = arith::SelectOp::create(fb, peerColumns,
                                                     readsForThread, zeroReads);
         } else if (onlySynchronousThreads) {
-          readsForCluster = reduce<arith::OrIOp>(fb, readVisibility, {2, 3, 4});
-          readsForCluster = convertAndBroadcast(fb, readsForCluster, {0, 1},
+          readsForCluster = reduce<arith::OrIOp>(fb, readVisibility, {2, 3});
+          readsForCluster = convertAndBroadcast(fb, readsForCluster, {0, 1, 4},
                                                 readVisibilityType);
         } else {
           uint64_t baseThreadMask = (1ULL << numBaseThreads) - 1;
-          Value readBaseMask = tti::createConstIntTensor(
-              fb, fb.getLoc(), baseThreadMask, readVisibilityType);
-          Value hasBaseRead = arith::CmpIOp::create(
-              fb, arith::CmpIPredicate::ne,
-              arith::AndIOp::create(fb, readVisibility, readBaseMask),
-              zeroReads);
-          Value syncReads = arith::SelectOp::create(fb, hasBaseRead,
+          Value baseObserverColumns = createThreadColumnMask(
+              fb, arith::ConstantIntOp::create(fb, baseThreadMask, 64),
+              readVisibilityType, /*columnDim=*/3);
+          Value syncReads = arith::SelectOp::create(fb, baseObserverColumns,
                                                     readVisibility, zeroReads);
-          readsForCluster = reduce<arith::OrIOp>(fb, syncReads, {2, 3, 4});
-          readsForCluster = convertAndBroadcast(fb, readsForCluster, {0, 1},
+          readsForCluster = reduce<arith::OrIOp>(fb, syncReads, {2, 3});
+          readsForCluster = convertAndBroadcast(fb, readsForCluster, {0, 1, 4},
                                                 readVisibilityType);
         }
         Value newReadVisibility =
