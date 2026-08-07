@@ -140,7 +140,7 @@ ScratchInfo getScratchInfo(Operation *op) {
   if (auto cvt = dyn_cast<gpu::ConvertLayoutOp>(op)) {
     RankedTensorType srcTy = cvt.getSrc().getType();
     RankedTensorType dstTy = cvt.getType();
-    if (!cvtNeedsSharedMemory(srcTy, dstTy))
+    if (!cvtNeedsSharedMemory(cvt))
       return {};
 
     LinearLayout src = gpu::toLinearLayout(srcTy);
