@@ -5,12 +5,15 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TargetFeatures.h"
 
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/ErrorHandling.h"
 
 namespace ttn = mlir::triton::nvgpu;
@@ -624,27 +627,126 @@ static Value initTensorMemory(LLVM::LLVMFuncOp func) {
   return alloc;
 }
 
-static void lowerTensorMemoryAlloc(ModuleOp mod) {
-  SmallVector<Operation *> baseOps;
-  LLVM::LLVMFuncOp kernel = nullptr;
-  mod.walk([&](ttn::TensorMemoryBaseAddress baseOp) {
-    baseOps.push_back(baseOp);
-    if (!kernel)
-      kernel = baseOp->getParentOfType<LLVM::LLVMFuncOp>();
-    assert(kernel == baseOp->getParentOfType<LLVM::LLVMFuncOp>() &&
-           "TODO: add support for function calls using tmem.");
-  });
+static LogicalResult lowerTensorMemoryAlloc(ModuleOp mod) {
+  SmallVector<ttn::TensorMemoryBaseAddress> baseOps;
+  mod.walk(
+      [&](ttn::TensorMemoryBaseAddress baseOp) { baseOps.push_back(baseOp); });
   if (baseOps.empty())
-    return;
-  // TODO: Handle cases of matmul used in noinline functions.
-  assert(triton::isKernel(kernel));
-  Value newBase = initTensorMemory(kernel);
-  if (!newBase)
-    return;
+    return success();
+
+  // Tensor memory is allocated once per kernel. Thread its base address
+  // through device functions that use tensor memory and their direct callers.
+  llvm::SmallPtrSet<Operation *, 8> functionsRequiringBase;
   for (auto baseOp : baseOps) {
-    baseOp->getResult(0).replaceAllUsesWith(newBase);
+    auto func = baseOp->getParentOfType<LLVM::LLVMFuncOp>();
+    if (!func)
+      return baseOp.emitError(
+          "tensor memory base must be nested in an LLVM function");
+    functionsRequiringBase.insert(func.getOperation());
+  }
+
+  // Resolve each direct call to a device function once.
+  SymbolTable symbolTable(mod);
+  SmallVector<std::pair<LLVM::CallOp, LLVM::LLVMFuncOp>> deviceCalls;
+  mod.walk([&](LLVM::CallOp callOp) {
+    if (!callOp.getCallee())
+      return;
+    auto callee = symbolTable.lookup<LLVM::LLVMFuncOp>(*callOp.getCallee());
+    if (callee && !triton::isKernel(callee))
+      deviceCalls.push_back({callOp, callee});
+  });
+
+  bool changed;
+  do {
+    changed = false;
+    for (auto &[callOp, callee] : deviceCalls) {
+      if (!functionsRequiringBase.contains(callee.getOperation()))
+        continue;
+      auto caller = callOp->getParentOfType<LLVM::LLVMFuncOp>();
+      if (!caller)
+        return callOp.emitError(
+            "call to a tensor-memory-using function must be nested in an LLVM "
+            "function");
+      changed |= functionsRequiringBase.insert(caller.getOperation()).second;
+    }
+  } while (changed);
+
+  // Non-kernel functions requiring the base get a new trailing argument, so
+  // taking their address would miscompile any indirect call through it.
+  WalkResult addressWalk = mod.walk([&](LLVM::AddressOfOp addressOp) {
+    auto func = symbolTable.lookup<LLVM::LLVMFuncOp>(addressOp.getGlobalName());
+    if (func && !triton::isKernel(func) &&
+        functionsRequiringBase.contains(func.getOperation())) {
+      addressOp.emitError(
+          "cannot take the address of a function that uses tensor memory");
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  if (addressWalk.wasInterrupted())
+    return failure();
+
+  Type baseType = ptr_ty(mod.getContext(), 6);
+  DenseMap<Operation *, Value> functionBases;
+  for (LLVM::LLVMFuncOp func : mod.getOps<LLVM::LLVMFuncOp>()) {
+    if (!functionsRequiringBase.contains(func.getOperation()))
+      continue;
+
+    Value base;
+    if (triton::isKernel(func)) {
+      base = initTensorMemory(func);
+      if (!base)
+        return func.emitError(
+            "cannot initialize tensor memory for a zero-sized allocation");
+    } else {
+      LLVM::LLVMFunctionType type = func.getFunctionType();
+      if (type.isVarArg())
+        return func.emitError(
+            "cannot pass tensor memory base to a variadic device function");
+
+      SmallVector<Type> newArgTypes(type.getParams().begin(),
+                                    type.getParams().end());
+      newArgTypes.push_back(baseType);
+      func.setFunctionType(LLVM::LLVMFunctionType::get(
+          type.getReturnType(), newArgTypes, /*isVarArg=*/false));
+      base = func.getBody().addArgument(baseType, func.getLoc());
+
+      if (ArrayAttr argAttrs = func.getArgAttrsAttr()) {
+        SmallVector<Attribute> newArgAttrs(argAttrs.begin(), argAttrs.end());
+        newArgAttrs.push_back(DictionaryAttr::get(func.getContext(), {}));
+        func.setArgAttrsAttr(ArrayAttr::get(func.getContext(), newArgAttrs));
+      }
+    }
+    functionBases.insert({func.getOperation(), base});
+  }
+
+  for (auto &[callOp, callee] : deviceCalls) {
+    if (!functionsRequiringBase.contains(callee.getOperation()))
+      continue;
+
+    auto caller = callOp->getParentOfType<LLVM::LLVMFuncOp>();
+    Value callerBase = functionBases.lookup(caller.getOperation());
+    if (!callerBase)
+      return callOp.emitError("caller is missing its tensor memory base");
+    callOp.getCalleeOperandsMutable().append(callerBase);
+
+    if (ArrayAttr argAttrs = callOp.getArgAttrsAttr()) {
+      SmallVector<Attribute> newArgAttrs(argAttrs.begin(), argAttrs.end());
+      newArgAttrs.push_back(DictionaryAttr::get(callOp.getContext(), {}));
+      callOp.setArgAttrsAttr(ArrayAttr::get(callOp.getContext(), newArgAttrs));
+    }
+  }
+
+  for (auto baseOp : baseOps) {
+    auto func = baseOp->getParentOfType<LLVM::LLVMFuncOp>();
+    Value base = functionBases.lookup(func.getOperation());
+    if (!base)
+      return baseOp.emitError("parent function is missing its tensor memory "
+                              "base");
+    baseOp->getResult(0).replaceAllUsesWith(base);
     baseOp->erase();
   }
+  return success();
 }
 
 } // anonymous namespace
@@ -663,10 +765,15 @@ public:
     patterns.add<ClusterCTAIdOpPattern, WGMMAOpPattern, LoadAcquireOpPattern,
                  WGMMAWaitGroupOpPattern, WarpIdOpPattern>(context);
 
-    if (applyPatternsGreedily(mod, std::move(patterns)).failed())
+    if (applyPatternsGreedily(mod, std::move(patterns)).failed()) {
       signalPassFailure();
+      return;
+    }
 
-    lowerTensorMemoryAlloc(mod);
+    if (failed(lowerTensorMemoryAlloc(mod))) {
+      signalPassFailure();
+      return;
+    }
     makeAllWarpGroupsIsolatedFromAbove(mod);
   }
 };
