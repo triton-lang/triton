@@ -1076,11 +1076,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[SM_WRITE_VISIBILITY_GLOB]]
     // CHECK: %[[TC_MASK:.*]] = arith.constant 2 : i64
-    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[TC_MASK]], %[[SM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[TC_OBSERVER_MASK:.*]] = arith.constant 2 : i64
+    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[TC_MASK]], %[[TC_OBSERVER_MASK]], %[[SM_READ_VISIBILITY_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[SM_WRITE_VISIBILITY_GLOB]]
     // CHECK: %[[TC_MASK:.*]] = arith.constant 2 : i64
-    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[TC_MASK]], %[[SM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[TC_OBSERVER_MASK:.*]] = arith.constant 2 : i64
+    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[TC_MASK]], %[[TC_OBSERVER_MASK]], %[[SM_READ_VISIBILITY_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[TM_WRITE_VISIBILITY_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
@@ -1135,11 +1137,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[TM_WRITE_VISIBILITY_GLOB]]
     // CHECK: %[[TC_MASK:.*]] = arith.constant 2 : i64
-    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[TC_MASK]], %[[TM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[TC_OBSERVER_MASK:.*]] = arith.constant 2 : i64
+    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[TC_MASK]], %[[TC_OBSERVER_MASK]], %[[TM_READ_VISIBILITY_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[SM_WRITE_VISIBILITY_GLOB]]
     // CHECK: %[[TC_MASK:.*]] = arith.constant 2 : i64
-    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[TC_MASK]], %[[SM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[TC_OBSERVER_MASK:.*]] = arith.constant 2 : i64
+    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[TC_MASK]], %[[TC_OBSERVER_MASK]], %[[SM_READ_VISIBILITY_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[TM_WRITE_VISIBILITY_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 1 : i32

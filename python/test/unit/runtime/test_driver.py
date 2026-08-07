@@ -313,6 +313,29 @@ def _trace(directory, phase, test, digest, hit):
                                                   times=SimpleNamespace(total=125_000), cache_hit=hit)
 
 
+def test_compile_warmup_runner_discards_previous_job_traces(tmp_path, monkeypatch):
+    directory = tmp_path / "trace"
+    _trace(directory, "warmup-unit", "old.py::test", "old", False)
+    _trace(directory, "unit", "old.py::test", "old", False)
+    monkeypatch.setenv("TRITON_CI_COMPILE_TRACE_DIR", str(directory))
+    monkeypatch.setattr(_test_runner, "_validate_gpus", lambda count: None)
+    coordinator = SimpleNamespace(address="unused", close=lambda: None)
+    monkeypatch.setattr(_test_runner, "SharedWarmupCoordinator", lambda **kwargs: coordinator)
+
+    def run(command, **kwargs):
+        _trace(directory, "warmup-unit", "new.py::test", "new", False)
+        _trace(directory, "unit", "new.py::test", "new", True)
+        return 0
+
+    monkeypatch.setattr(_test_runner, "_run", run)
+    args = SimpleNamespace(warmup_procs=1, capture_procs=1, targets=[])
+
+    assert _test_runner._warmup(args) == 0
+    report = summarize_compile_trace(str(directory))
+    assert report["warmup_tests"] == 1
+    _require_complete_warmup(report)
+
+
 @pytest.mark.parametrize(
     ("records", "message"),
     [
