@@ -89,6 +89,7 @@ GLUON_BUILTIN = "__triton_builtin__"
 
 def builtin(fn: T) -> T:
     """Mark a function as a builtin."""
+
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if "_semantic" not in kwargs or kwargs["_semantic"] is None:
