@@ -1,8 +1,11 @@
+import pytest
 import torch
 
 import triton
-from triton._internal_testing import requires_tma
+from triton._internal_testing import supports_tma, tma_skip_msg
 from triton.tools.tensor_descriptor import TensorDescriptor
+
+requires_tma = pytest.mark.skipif(not supports_tma(), reason=tma_skip_msg())
 
 
 @requires_tma

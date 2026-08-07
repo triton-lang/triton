@@ -15,6 +15,7 @@ from contextvars import ContextVar
 import pytest
 
 from numpy.random import RandomState
+from triton.backends import backends
 from triton.runtime.jit import TensorWrapper, reinterpret, type_canonicalisation_dict
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
@@ -52,6 +53,8 @@ def random_float(*, warmup_value=0.5, **kwargs):
 
 def get_current_target():
     if is_interpreter():
+        return None
+    if not any(backend.driver.is_active() for backend in backends.values()):
         return None
     return triton.runtime.driver.active.get_current_target()
 
@@ -255,9 +258,6 @@ def tma_skip_msg(byval_only=False):
         return "Requires __grid_constant__ TMA support (NVIDIA Hopper or higher, CUDA 12.0 or higher)"
     else:
         return "Requires advanced TMA support (NVIDIA Hopper or higher, CUDA 12.3 or higher)"
-
-
-requires_tma = pytest.mark.skipif(not supports_tma(), reason=tma_skip_msg())
 
 
 def default_alloc_fn(size: int, align: int, _):
