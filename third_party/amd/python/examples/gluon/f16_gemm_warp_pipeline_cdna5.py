@@ -7,8 +7,8 @@ import triton.experimental.gluon.language as ttgl
 
 # Handle imports for both pytest (module context) and direct execution
 try:
-    from .gfx1250_utils import static_profile
-    from .f16_gemm_common_gfx1250 import (
+    from .cdna5_utils import static_profile
+    from .f16_gemm_common_cdna5 import (
         create_shared_layouts,
         create_tensor_descriptors,
         issue_loads,
@@ -17,8 +17,8 @@ try:
         issue_wmma_compute,
     )
 except ImportError:
-    from gfx1250_utils import static_profile
-    from f16_gemm_common_gfx1250 import (
+    from cdna5_utils import static_profile
+    from f16_gemm_common_cdna5 import (
         create_shared_layouts,
         create_tensor_descriptors,
         issue_loads,
@@ -74,13 +74,13 @@ def gemm_tdm_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
         producer = issue_loads(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B)
 
     # Wait for the first prefetch
-    ttgl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 2) * 2)
+    ttgl.amd.cdna5.tdm.async_wait((NUM_BUFFERS - 2) * 2)
     for _ in range(0, ttgl.cdiv(K, BLOCK_K) - (NUM_BUFFERS - 1)):
         with ttgl.amd.warp_pipeline_stage("stage0", priority=1):
             consumer, a, b = lds_load(consumer, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B, NUM_BUFFERS,
                                       TRANSPOSE_B)
         # Wait for the last one, either before the loop or a load below.
-        ttgl.amd.gfx1250.tdm.async_wait(0)
+        ttgl.amd.cdna5.tdm.async_wait(0)
         with ttgl.amd.warp_pipeline_stage("stage1", priority=0):
             producer = issue_loads(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS,
                                    TRANSPOSE_B)
@@ -90,7 +90,7 @@ def gemm_tdm_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
         with ttgl.amd.warp_pipeline_stage("stage0_epilogue", priority=1):
             consumer, a, b = lds_load(consumer, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B, NUM_BUFFERS,
                                       TRANSPOSE_B)
-        ttgl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 1 - i) * 2)
+        ttgl.amd.cdna5.tdm.async_wait((NUM_BUFFERS - 1 - i) * 2)
         with ttgl.amd.warp_pipeline_stage("stage1_epilogue", priority=0):
             accumulator = issue_wmma_compute(a, b, accumulator)
 
@@ -98,7 +98,7 @@ def gemm_tdm_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
     offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
     offs_c = stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    ttgl.amd.gfx1250.buffer_store(accumulator, c_ptr, offs_c, mask=mask_c)
+    ttgl.amd.cdna5.buffer_store(accumulator, c_ptr, offs_c, mask=mask_c)
 
 
 # ---------------------------------------------------------------------------
@@ -110,14 +110,14 @@ def gemm_tdm_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
 def issue_loads_predicated(producer, a_desc, b_desc, off_am, off_bn, a_buffer, b_buffer, BLOCK_K: ttgl.constexpr,
                            NUM_BUFFERS: ttgl.constexpr, TRANSPOSE_B: ttgl.constexpr,
                            TDM_WARP_USED_HINT: ttgl.constexpr):
-    ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_am, producer * BLOCK_K], a_buffer.index(producer % NUM_BUFFERS),
-                                    warp_used_hint=TDM_WARP_USED_HINT)
+    ttgl.amd.cdna5.tdm.async_load(a_desc, [off_am, producer * BLOCK_K], a_buffer.index(producer % NUM_BUFFERS),
+                                  warp_used_hint=TDM_WARP_USED_HINT)
     if not TRANSPOSE_B:
-        ttgl.amd.gfx1250.tdm.async_load(b_desc, [producer * BLOCK_K, off_bn], b_buffer.index(producer % NUM_BUFFERS),
-                                        warp_used_hint=TDM_WARP_USED_HINT)
+        ttgl.amd.cdna5.tdm.async_load(b_desc, [producer * BLOCK_K, off_bn], b_buffer.index(producer % NUM_BUFFERS),
+                                      warp_used_hint=TDM_WARP_USED_HINT)
     else:
-        ttgl.amd.gfx1250.tdm.async_load(b_desc, [off_bn, producer * BLOCK_K], b_buffer.index(producer % NUM_BUFFERS),
-                                        warp_used_hint=TDM_WARP_USED_HINT)
+        ttgl.amd.cdna5.tdm.async_load(b_desc, [off_bn, producer * BLOCK_K], b_buffer.index(producer % NUM_BUFFERS),
+                                      warp_used_hint=TDM_WARP_USED_HINT)
     producer += 1
     return producer
 
@@ -167,7 +167,7 @@ def gemm_tdm_predicated_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
         producer = issue_loads_predicated(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS,
                                           TRANSPOSE_B, TDM_WARP_USED_HINT)
 
-    ttgl.amd.gfx1250.tdm.async_wait(1 * 2)
+    ttgl.amd.cdna5.tdm.async_wait(1 * 2)
     for _ in range(0, ttgl.cdiv(K, BLOCK_K) - (NUM_BUFFERS - 1)):
         with ttgl.amd.warp_pipeline_stage("stage0", priority=1):
             consumer, a, b = lds_load(consumer, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B, NUM_BUFFERS,
@@ -176,10 +176,10 @@ def gemm_tdm_predicated_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
                                               TRANSPOSE_B, TDM_WARP_USED_HINT)
         with ttgl.amd.warp_pipeline_stage("stage1", priority=0):
             accumulator = issue_wmma_compute(a, b, accumulator)
-        ttgl.amd.gfx1250.tdm.async_wait(2)
+        ttgl.amd.cdna5.tdm.async_wait(2)
 
     for i in ttgl.static_range(NUM_BUFFERS - 1):
-        ttgl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 1 - i) * 2)
+        ttgl.amd.cdna5.tdm.async_wait((NUM_BUFFERS - 1 - i) * 2)
         consumer, accumulator = issue_wmma(consumer, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
                                            accumulator, (NUM_BUFFERS - 2 - i) * 2, NUM_BUFFERS, TRANSPOSE_B)
 
@@ -187,7 +187,7 @@ def gemm_tdm_predicated_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
     offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
     offs_c = stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    ttgl.amd.gfx1250.buffer_store(accumulator, c_ptr, offs_c, mask=mask_c)
+    ttgl.amd.cdna5.buffer_store(accumulator, c_ptr, offs_c, mask=mask_c)
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +249,7 @@ def gemm_tdm_pipelined_warp_pipelined_kernelB(a_ptr, b_ptr, c_ptr,  #
     for _ in ttgl.static_range(NUM_BUFFERS - 1):
         producer = issue_loads(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B)
 
-    ttgl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 3) * 2)
+    ttgl.amd.cdna5.tdm.async_wait((NUM_BUFFERS - 3) * 2)
     _p0: ttgl.constexpr = 1 if PRIO_SWAP else 0
     _p1: ttgl.constexpr = 0 if PRIO_SWAP else 1
 
@@ -259,7 +259,7 @@ def gemm_tdm_pipelined_warp_pipelined_kernelB(a_ptr, b_ptr, c_ptr,  #
             phase, a, b = lds_load(phase, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B, NUM_BUFFERS,
                                    TRANSPOSE_B)
             issue_loads(write_phase, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B)
-        ttgl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 3) * 2)
+        ttgl.amd.cdna5.tdm.async_wait((NUM_BUFFERS - 3) * 2)
         with ttgl.amd.warp_pipeline_stage("stage1", priority=_p1):
             accumulator = issue_wmma_compute(a, b, accumulator)
 
@@ -267,7 +267,7 @@ def gemm_tdm_pipelined_warp_pipelined_kernelB(a_ptr, b_ptr, c_ptr,  #
         with ttgl.amd.warp_pipeline_stage("stage0", priority=_p0):
             phase, a, b = lds_load(phase, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B, NUM_BUFFERS,
                                    TRANSPOSE_B)
-        ttgl.amd.gfx1250.tdm.async_wait(0)
+        ttgl.amd.cdna5.tdm.async_wait(0)
         with ttgl.amd.warp_pipeline_stage("stage1", priority=_p1):
             accumulator = issue_wmma_compute(a, b, accumulator)
 
@@ -275,7 +275,7 @@ def gemm_tdm_pipelined_warp_pipelined_kernelB(a_ptr, b_ptr, c_ptr,  #
     offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
     offs_c = stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    ttgl.amd.gfx1250.buffer_store(accumulator, c_ptr, offs_c, mask=mask_c)
+    ttgl.amd.cdna5.buffer_store(accumulator, c_ptr, offs_c, mask=mask_c)
 
 
 # ---------------------------------------------------------------------------
