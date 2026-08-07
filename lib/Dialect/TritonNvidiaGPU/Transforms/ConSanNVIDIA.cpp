@@ -40,7 +40,7 @@ uint32_t getBlockBroadcastMask(Type type) {
 class NVIDIAConSanHooks : public tti::ConSanTargetHooks {
 public:
   bool isTMAOp(Operation *op) const override {
-    return isa<ttng::TMAOpInterface>(op);
+    return isa<ttng::TMAOpInterface, ttng::AsyncSharedStoreOp>(op);
   }
 
   bool isCLCOp(Operation *op) const override {

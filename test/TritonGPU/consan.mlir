@@ -2224,3 +2224,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     tt.return
   }
 }
+
+// -----
+
+#async_remote_src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+#async_remote_dst = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#async_remote_smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 520 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @async_shared_store_absolute_remote_recipient
+  tt.func public @async_shared_store_absolute_remote_recipient(%src: tensor<128xi32, #async_remote_src>) {
+    %true = arith.constant true
+    %parent = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<256xi32, #async_remote_dst, #async_remote_smem, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 512 : i32} : () -> !ttg.memdesc<2xi64, #async_remote_dst, #async_remote_smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #async_remote_dst, #async_remote_smem, mutable>
+    ttng.barrier_expect %bar, 256, %true : !ttg.memdesc<2xi64, #async_remote_dst, #async_remote_smem, mutable>
+    %view = ttg.memdesc_subslice %parent [128] : !ttg.memdesc<256xi32, #async_remote_dst, #async_remote_smem, mutable> -> !ttg.memdesc<128xi32, #async_remote_dst, #async_remote_smem, mutable, 256>
+    // CHECK: %[[REMOTE_CTA:.*]] = arith.constant 2 : i32
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[REMOTE_CTA]])
+    // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer{{.*}}({{.*}}%[[REMOTE_CTA]], %[[REMOTE_CTA]])
+    // CHECK: %[[BYTES_PER_CTA:.*]] = arith.constant -256 : i64
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state{{.*}}({{.*}}%[[BYTES_PER_CTA]], {{.*}}%[[REMOTE_CTA]])
+    // CHECK: ttng.async_shared_store
+    ttng.async_shared_store %src, %view, %bar : tensor<128xi32, #async_remote_src> -> !ttg.memdesc<128xi32, #async_remote_dst, #async_remote_smem, mutable, 256>, !ttg.memdesc<2xi64, #async_remote_dst, #async_remote_smem, mutable>
+    tt.return
+  }
+}
