@@ -823,7 +823,19 @@ struct FoldTrueCmpIOp : OpRewritePattern<arith::CmpIOp> {
 
     TypedAttr constAttr = *result ? rewriter.getOneAttr(cmpOp.getType())
                                   : rewriter.getZeroAttr(cmpOp.getType());
-    rewriter.replaceOpWithNewOp<arith::ConstantOp>(cmpOp, constAttr);
+    // Keep the compare alive for `llvm.intr.assume` operands: folding it to a
+    // constant drops the fact (e.g. a non-zero trip count `sge %n, 1`) that
+    // LLVM relies on for downstream optimizations.
+    if (llvm::all_of(cmpOp->getUsers(), llvm::IsaPred<LLVM::AssumeOp>))
+      return failure();
+
+    auto constOp =
+        arith::ConstantOp::create(rewriter, cmpOp.getLoc(), constAttr);
+    rewriter.replaceUsesWithIf(
+        cmpOp.getResult(), constOp.getResult(),
+        [](OpOperand &use) { return !isa<LLVM::AssumeOp>(use.getOwner()); });
+    if (cmpOp->use_empty())
+      rewriter.eraseOp(cmpOp);
     return success();
   }
 
