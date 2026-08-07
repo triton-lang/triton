@@ -978,7 +978,7 @@ class MoESliceNKProgram:
         return accumulator
 
 
-@gluon.jit
+@gluon.jit(noalias_args=["GatherIndx"])
 def _matmul(Y, stride_y_k, stride_y_z, stride_y_m, stride_y_n, X, stride_x_z, stride_x_m, stride_x_k, XMxScale,
             stride_x_mx_z, stride_x_mx_m, stride_x_mx_k, W, stride_w_e, stride_w_k, stride_w_n,
             W_TRANSPOSE: gl.constexpr, WMxScale, stride_w_mx_e, stride_w_mx_k, stride_w_mx_n, B, stride_b_e,  # Bias

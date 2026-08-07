@@ -304,11 +304,14 @@ class KernelParam:
     """Represents a parameter (name plus metadata) to a @jit'ed function."""
 
     def __init__(self, num: int, param: inspect.Parameter, do_not_specialize: bool,
-                 do_not_specialize_on_alignment: bool):
+                 do_not_specialize_on_alignment: bool, noalias: bool = False):
         self.num = num
         self._param = param
         self.do_not_specialize = do_not_specialize
         self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
+        # noalias caller contract on a pointer arg -> tt.noalias (lowered to LLVM
+        # noalias by FuncOpToLLVM).
+        self.noalias = noalias
 
     @cached_property
     def name(self):
@@ -721,6 +724,13 @@ class JITFunction(JITCallable, KernelInterface[T]):
         attrvals = ['' if x[0] == 'constexpr' else x[1] for x in specialization]
         attrs = find_paths_if(attrvals, lambda _, x: isinstance(x, str))
         attrs = {k: backend.parse_attr(get_iterable_path(attrvals, k)) for k in attrs}
+        # user-declared noalias arg contract -> tt.noalias arg attribute, lowered
+        # to LLVM noalias by FuncOpToLLVM. Only real (non-constexpr) pointer args
+        # get it: an optional pointer passed as None specializes to constexpr and
+        # is not a runtime argument, so tagging it is invalid.
+        for p in self.params:
+            if p.noalias and specialization[p.num][0] != "constexpr":
+                attrs.setdefault((p.num, ), []).append(["tt.noalias", 1])
 
         return options, signature, constexprs, attrs
 
@@ -786,15 +796,17 @@ class JITFunction(JITCallable, KernelInterface[T]):
         return self._fn_name if self._repr is None else self._repr(_)
 
     def __init__(self, fn, version=None, do_not_specialize=None, do_not_specialize_on_alignment=None, debug=None,
-                 noinline=None, repr=None, launch_metadata=None):
+                 noinline=None, repr=None, launch_metadata=None, noalias_args=None):
         do_not_specialize = do_not_specialize if do_not_specialize else []
         do_not_specialize_on_alignment = do_not_specialize_on_alignment if do_not_specialize_on_alignment else []
+        noalias_args = noalias_args if noalias_args else []
 
         super().__init__(fn)
         self.module = fn.__module__
         self.version = version
         self.do_not_specialize = do_not_specialize
         self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
+        self.noalias_args = noalias_args
         self._repr = repr
         self.launch_metadata = launch_metadata
         # Register for simple deserialization of JITFunction constants
@@ -804,7 +816,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
         for i, param in enumerate(self.signature.parameters.values()):
             dns = i in do_not_specialize or param.name in do_not_specialize
             dns_oa = i in do_not_specialize_on_alignment or param.name in do_not_specialize_on_alignment
-            self.params.append(KernelParam(i, param, dns, dns_oa))
+            na = i in noalias_args or param.name in noalias_args
+            self.params.append(KernelParam(i, param, dns, dns_oa, na))
 
         # cache of just-in-time compiled kernels
         self.device_caches = defaultdict(self.create_binder)
@@ -948,6 +961,7 @@ def jit(
     do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
+    noalias_args: Optional[Iterable[int | str]] = None,
 ) -> Callable[[T], JITFunction[T]]:
     ...
 
@@ -962,6 +976,7 @@ def jit(
     do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
+    noalias_args: Optional[Iterable[int | str]] = None,
 ) -> KernelInterface[T]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
@@ -998,6 +1013,7 @@ def jit(
                 noinline=noinline,
                 repr=repr,
                 launch_metadata=launch_metadata,
+                noalias_args=noalias_args,
             )
 
     if fn is not None:

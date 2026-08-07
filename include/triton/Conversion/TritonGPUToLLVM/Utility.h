@@ -809,6 +809,8 @@ triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                            ConversionPatternRewriter &rewriter,
                            const TargetInfoBase &targetInfo);
 void handleArgPtrDatatype(triton::FuncOp funcOp, LLVM::LLVMFuncOp &llvmFuncOp);
+void handlePointerContractArgs(triton::FuncOp funcOp,
+                               LLVM::LLVMFuncOp &llvmFuncOp);
 } // namespace mlir
 
 #endif

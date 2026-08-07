@@ -68,6 +68,7 @@ def jit(
     do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
+    noalias_args: Optional[Iterable[int | str]] = None,
 ) -> Callable[[T], GluonJITFunction[T]]:
     ...
 
@@ -82,6 +83,7 @@ def jit(
     do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
+    noalias_args: Optional[Iterable[int | str]] = None,
 ) -> Union[GluonJITFunction[T], Callable[[T], JITFunction[T]]]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
@@ -112,6 +114,7 @@ def jit(
             noinline=noinline,
             repr=repr,
             launch_metadata=launch_metadata,
+            noalias_args=noalias_args,
         )
 
     if fn is not None:
