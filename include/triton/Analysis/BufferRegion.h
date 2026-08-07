@@ -254,6 +254,10 @@ public:
 
   enum RegionType { SHARED_MEMORY, TENSOR_MEMORY, BARRIER, NUM_REGION_TYPES };
 
+  const RegionInfo &getRegionInfo(Value value) {
+    return getLatticeElement(value)->getValue();
+  }
+
   uint32_t getOperationId(Operation *operation) const {
     return operationInterner.idFor(operation);
   }
