@@ -487,6 +487,40 @@ LogicalResult Prefetcher::initialize() {
     // Skip prefetching if kSize is less than prefetchWidth
     if (kSize < prefetchWidth)
       continue;
+
+    // Prefetching keeps ~3 K-slices of each operand live at once; if that plus
+    // the accumulator overflows the register budget, ptxas spills and the
+    // rewrite is a net loss. Estimate the footprint (in 32-bit registers) and
+    // skip when over budget. Rank-2 only; batched dots are left untouched.
+    if (aType.getRank() == 2) {
+      auto regsForElems = [](unsigned elems, Type elemTy) -> unsigned {
+        unsigned bits = elemTy.getIntOrFloatBitWidth();
+        return (elems * bits + 31) / 32;
+      };
+      // A slice: (M x prefetchWidth); B slice: (prefetchWidth x N).
+      SmallVector<int64_t> aShape{aType.getShape().begin(),
+                                  aType.getShape().end()};
+      aShape[aShape.size() - 1] = prefetchWidth;
+      SmallVector<int64_t> bShape{bType.getShape().begin(),
+                                  bType.getShape().end()};
+      bShape[bShape.size() - 2] = prefetchWidth;
+      unsigned accRegs =
+          regsForElems(getTotalElemsPerThread(dot.getType()),
+                       dot.getType().getElementType());
+      unsigned sliceRegs = regsForElems(getTotalElemsPerThread(aEnc, aShape),
+                                        aType.getElementType()) +
+                           regsForElems(getTotalElemsPerThread(bEnc, bShape),
+                                        bType.getElementType());
+      // Empirically calibrated on an H100 fp64 sweep.
+      constexpr unsigned kRegFootprintLimit = 260;
+      if (accRegs + 3 * sliceRegs > kRegFootprintLimit) {
+        LDBG("skip prefetch: estimated register footprint "
+             << accRegs << " + 3*" << sliceRegs << " exceeds "
+             << kRegFootprintLimit);
+        continue;
+      }
+    }
+
     auto aVals = getPrefetchSrc(dot.getA());
     auto bVals = getPrefetchSrc(dot.getB());
 
