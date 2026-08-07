@@ -1010,8 +1010,9 @@ def test_where_broadcast(num_ctas, device):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, expr",
-                         [(dtype_x, ' -x') for dtype_x in dtypes_with_bfloat16] + [(dtype_x, ' ~x')
-                                                                                   for dtype_x in int_dtypes])
+                         [(dtype_x, ' -x')
+                          for dtype_x in dtypes_with_bfloat16] + [(dtype_x, ' ~x')
+                                                                  for dtype_x in int_dtypes + uint_dtypes])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_unary_op(dtype_x, expr, num_ctas, device):
     _test_unary(dtype_x, expr, device=device, num_ctas=num_ctas)
