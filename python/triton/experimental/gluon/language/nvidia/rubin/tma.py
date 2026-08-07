@@ -55,7 +55,8 @@ def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, 
         pred: Predicate for conditional execution.
         multicast: Enable multicast.
         report_validity: Optional payload validity mode carried on the TMA
-            completion barrier. Supported values are:
+            completion barrier. Validity reporting does not support two-CTA
+            TMA mode. Supported values are:
 
             - ``"none"``: disable payload inspection.
             - ``"per_16B_fp32"``: sample one FP32 element in each aligned

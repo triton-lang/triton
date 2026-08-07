@@ -1674,6 +1674,30 @@ def test_rubin_tma_validity_ir():
     assert "ttng.wait_barrier" in ir and ", conditional :" in ir
 
 
+@gluon.jit
+def rubin_mbarrier_test_wait_multicta_kernel(op: ttgl.constexpr):
+    bar = ttgl.allocate_shared_memory(
+        ttgl.int64,
+        [1],
+        rubin.mbarrier.MBarrierLayout(),
+    )
+    if op == "test_wait":
+        _ = rubin.mbarrier.test_wait(bar, 0)
+    else:
+        _ = rubin.mbarrier.test_wait_validity(bar, 0)
+
+
+@pytest.mark.parametrize("op", ["test_wait", "test_wait_validity"])
+def test_rubin_mbarrier_test_wait_rejects_multicta(op):
+    with pytest.raises(CompilationError) as exc:
+        run_parser(
+            rubin_mbarrier_test_wait_multicta_kernel,
+            *make_args(op, num_ctas=2),
+            target=RUBIN_TARGET,
+        )
+    assert f"mbarrier.{op} is only supported when num_ctas == 1" in str(exc.value.__cause__)
+
+
 @pytest.mark.parametrize("target", [HOPPER_TARGET, BLACKWELL_TARGET])
 def test_async_tma(target):
     input = MockTensor(ttgl.float16, (1024, 1024))

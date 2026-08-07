@@ -54,13 +54,10 @@ def test_wait(mbarrier, phase, pred=True, phase_type="primary", _semantic=None):
     """
     Test an mbarrier phase once without blocking.
 
-    This operation is CTA-local: it neither synchronizes CTAs nor broadcasts
-    its result between them, so it may be executed by a lead CTA alone.
-    ``pred`` must be uniform among the participating threads. If the current
-    warp-specialized partition contains multiple warps, all of them must
-    execute this operation convergently. In two-CTA TMA mode, both CTAs issue
-    the transfer but only the lead CTA's barrier is signaled, so call this
-    operation only from the lead CTA.
+    This operation is supported only when ``num_ctas == 1``. ``pred`` must be
+    uniform among the participating threads. If the current warp-specialized
+    partition contains multiple warps, all of them must execute this operation
+    convergently.
 
     Args:
         mbarrier (shared_memory_descriptor): The barrier object to test.
@@ -75,6 +72,8 @@ def test_wait(mbarrier, phase, pred=True, phase_type="primary", _semantic=None):
         tensor: Scalar int1 tensor that is true if the requested phase has
             completed.
     """
+    if _semantic.builder.options.num_ctas != 1:
+        raise ValueError("mbarrier.test_wait is only supported when num_ctas == 1")
     phase_type = _unwrap_if_constexpr(phase_type)
     if phase_type == "primary":
         phase_type = gluon_ir.MBARRIER_PHASE_TYPE.PRIMARY
@@ -93,13 +92,10 @@ def test_wait_validity(mbarrier, phase, pred=True, _semantic=None):
     """
     Test primary completion and validity of a report-validity TMA attempt.
 
-    This operation is CTA-local: it neither synchronizes CTAs nor broadcasts
-    its results between them, so it may be executed by a lead CTA alone.
-    ``pred`` must be uniform among the participating threads. If the current
-    warp-specialized partition contains multiple warps, all of them must
-    execute this operation convergently. In two-CTA TMA mode, both CTAs issue
-    the transfer but only the lead CTA's barrier is signaled, so call this
-    operation only from the lead CTA.
+    This operation is supported only when ``num_ctas == 1``. ``pred`` must be
+    uniform among the participating threads. If the current warp-specialized
+    partition contains multiple warps, all of them must execute this operation
+    convergently.
 
     Args:
         mbarrier (shared_memory_descriptor): The report-validity barrier to test.
@@ -111,6 +107,8 @@ def test_wait_validity(mbarrier, phase, pred=True, _semantic=None):
             is true after primary completion. ``valid`` is true only when the
             attempt is complete and produced no validity report.
     """
+    if _semantic.builder.options.num_ctas != 1:
+        raise ValueError("mbarrier.test_wait_validity is only supported when num_ctas == 1")
     phase = _semantic.to_tensor(phase)
     pred = _semantic.to_tensor(pred)
     done_handle, reported_handle = _semantic.builder.create_mbarrier_test_wait_report(

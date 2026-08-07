@@ -437,12 +437,10 @@ def TTNG_BarrierTestWaitOp : TTNG_Op<"barrier_test_wait", [
     `phaseType` selects either the barrier's primary phase or its conditional
     phase. The latter requires the mbarrier v1 layout.
 
-    This operation is CTA-local and does not synchronize or broadcast its
-    result across CTAs. Its predicate must be uniform among the participating
-    threads. When multiple warps participate, they must execute the operation
-    convergently so the result can be broadcast within the warp group. In
-    two-CTA TMA mode, both CTAs issue the transfer but only the lead CTA's
-    barrier is signaled, so the barrier should be queried only by the lead CTA.
+    This operation is supported only when `ttg.num-ctas` is 1. Its predicate
+    must be uniform among the participating threads. When multiple warps
+    participate, they must execute the operation convergently so the result can
+    be broadcast within the warp group.
   }];
 
   let arguments = (ins
@@ -471,12 +469,10 @@ def TTNG_BarrierTestWaitReportOp : TTNG_Op<"barrier_test_wait_report", [
     and returns both its completion predicate and report predicate as scalar
     `i1` values.
 
-    This operation is CTA-local and does not synchronize or broadcast its
-    results across CTAs. Its predicate must be uniform among the participating
-    threads. When multiple warps participate, they must execute the operation
-    convergently so the results can be broadcast within the warp group. In
-    two-CTA TMA mode, both CTAs issue the transfer but only the lead CTA's
-    barrier is signaled, so the barrier should be queried only by the lead CTA.
+    This operation is supported only when `ttg.num-ctas` is 1. Its predicate
+    must be uniform among the participating threads. When multiple warps
+    participate, they must execute the operation convergently so the results
+    can be broadcast within the warp group.
   }];
 
   let arguments = (ins
@@ -624,10 +620,11 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
         - General rule: number of offsets = coord.size() - 2
       - See: https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-im2col-mode
 
-    `reportValidity` selects an optional TMA validity-reporting mechanism. The conditonal
-    phase in the provided barrier is flipped when the loaded data is deemed to be valid -
-    when a bit pattern encoding an invalid value does not match none of sampled elements
-    in the loaded data. The supported modes inspect:
+    `reportValidity` selects an optional TMA validity-reporting mechanism and
+    does not support two-CTA TMA mode. The conditonal phase in the provided barrier is
+    flipped when the loaded data is deemed to be valid - when a bit pattern encoding an
+    invalid value does not match none of sampled elements in the loaded data.
+    The supported modes inspect:
     - `per_16B_fp32`: one sampled FP32 element per aligned 16-byte chunk,
       matching the `-0` bit pattern `0x80000000`.
     - `per_16B_fp16`: one sampled FP16 element per aligned 16-byte chunk,

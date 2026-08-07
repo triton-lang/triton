@@ -477,6 +477,8 @@ Type WaitBarrierOp::getPredicateOperandTypeLike() {
 LogicalResult BarrierTestWaitOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
+  if (gpu::lookupNumCTAs(*this) != 1)
+    return emitOpError("is only supported when ttg.num-ctas is 1");
   return success();
 }
 
@@ -496,6 +498,8 @@ Type BarrierTestWaitOp::getPredicateOperandTypeLike() {
 LogicalResult BarrierTestWaitReportOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
+  if (gpu::lookupNumCTAs(*this) != 1)
+    return emitOpError("is only supported when ttg.num-ctas is 1");
   return success();
 }
 
@@ -910,6 +914,10 @@ bool AsyncTMAReduceOp::isSupportedReduceKind(DescriptorReduceKind kind,
 
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
+  if (getReportValidity() != triton::ReportValidity::NONE &&
+      getModuleTwoCTAs(getOperation()))
+    return emitOpError("reportValidity does not support two-CTA TMA mode");
+
   auto descType = getDesc().getType();
   bool isIm2Col = isIm2ColDescriptor(descType);
   auto descInterface = cast<TensorDescInterface>(descType);
