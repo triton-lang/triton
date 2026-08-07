@@ -8,8 +8,9 @@ from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia import ampere
+from triton.experimental.gluon.language.nvidia import rubin
 from triton.experimental.gluon.language.nvidia.blackwell import allocate_tensor_memory, clc, mbarrier, tma
-from triton._internal_testing import is_compile_warmup, is_cuda, run_in_process
+from triton._internal_testing import is_compile_warmup, is_cuda, is_rubin, run_in_process
 
 pytestmark = [pytest.mark.enable_warmup(min_capability=9), pytest.mark.usefixtures("process_pool")]
 
@@ -197,6 +198,25 @@ def test_consan_initializes_allocations_with_nan(MEMORY_KIND, device, num_ctas):
     output = torch.empty((XBLOCK.value * num_ctas, XBLOCK.value), device=device, dtype=torch.float32)
     kernel[(1, )](output, MEMORY_KIND=MEMORY_KIND, num_warps=4, num_ctas=num_ctas)
     assert torch.isnan(output).all()
+
+
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+def test_mbarrier_arrive_multicast_completion(device, monkeypatch):
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(out):
+        bar = rubin.mbarrier.allocate_mbarrier()
+        rubin.mbarrier.init(bar, count=2)
+        rubin.mbarrier.arrive(bar, multicast_cta=1)
+        rubin.mbarrier.wait(bar, 0)
+        rubin.mbarrier.invalidate(bar)
+        ttgl.store(out + ttgl.program_id(0), ttgl.program_id(0))
+
+    output = torch.empty(2, device=device, dtype=torch.int32)
+    kernel[(2, )](output, num_ctas=2, num_warps=4)
+    torch.testing.assert_close(output, torch.arange(2, device=device, dtype=torch.int32))
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
