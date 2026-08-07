@@ -226,5 +226,42 @@ TEST_F(NvmmaSmemAttrsTest, InferNvmmaSmemAttrsRejectsNearMisses) {
   EXPECT_FALSE(inferSharedLinearInfo(std::move(earlyRowInterleave)));
 }
 
+TEST_F(NvmmaSmemAttrsTest, InferNvmmaSmemAttrsFromLinearLayout) {
+  // 256 columns hold a swizzle period for every mode below, so all the
+  // (bitwidth, swizzling) combinations here are representable.
+  SmallVector<int64_t> shape = {256, 256};
+  for (unsigned ebw : {8u, 16u, 32u, 64u}) {
+    for (unsigned sw : {32u, 64u, 128u}) {
+      for (bool transposed : {false, true}) {
+        auto nvmma =
+            nvmmaShared(sw, transposed, ebw, {1, 1}, {1, 1}, {1, 0}, {1, 0});
+        auto inferred =
+            getNvmmaSmemAttrs(toLinearLayout(shape, nvmma).pseudoinvert(), ebw);
+        ASSERT_TRUE(inferred)
+            << "sw=" << sw << " ebw=" << ebw << " transposed=" << transposed;
+        EXPECT_EQ(inferred->first.swizzlingByteWidth, sw);
+        EXPECT_EQ(inferred->first.transposed, transposed);
+        EXPECT_FALSE(inferred->first.fp4Padded);
+      }
+    }
+  }
+
+  // The fp4 operand form, where MMAHelpers halves the bitwidth and prepends a
+  // packing factor along the contiguous dim before matching.
+  for (bool transposed : {false, true}) {
+    auto nvmma = nvmmaShared(128, transposed, /*elementBitWidth=*/8, {1, 1},
+                             {1, 1}, {1, 0}, {1, 0}, /*fp4Padded=*/true);
+    auto ll = toLinearLayout(shape, nvmma).pseudoinvert();
+    auto dims = llvm::to_vector<2>(ll.getInDimNames());
+    auto packed =
+        LinearLayout::identity1D(2, dims[transposed ? 0 : 1], S("offset")) * ll;
+    auto inferred = getNvmmaSmemAttrs(packed, /*bitwidth=*/4);
+    ASSERT_TRUE(inferred) << "transposed=" << transposed;
+    EXPECT_EQ(inferred->first.swizzlingByteWidth, 128u);
+    EXPECT_EQ(inferred->first.transposed, transposed);
+    EXPECT_TRUE(inferred->first.fp4Padded);
+  }
+}
+
 } // namespace
 } // namespace mlir::triton::gpu
