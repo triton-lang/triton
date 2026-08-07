@@ -174,7 +174,9 @@ public:
       for (auto [barrier, barrierPred] :
            llvm::zip(mmav5Op.getCompletionBarriers(),
                      mmav5Op.getCompletionBarrierPreds())) {
-        info->barriers.push_back({barrier, barrierPred, 1});
+        info->barriers.push_back(
+            {barrier, barrierPred, 1,
+             MemEffectsOpInfo::BarrierTrackingMode::TensorCore});
       }
       namedOperands = {{mmav5Op.getA(), "A"},
                        {mmav5Op.getB(), "B"},
@@ -186,7 +188,9 @@ public:
     }
     if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {
       info->pred = commitOp.getPred();
-      info->barriers.push_back({commitOp.getBarrier(), nullptr, 1});
+      info->barriers.push_back(
+          {commitOp.getBarrier(), nullptr, 1,
+           MemEffectsOpInfo::BarrierTrackingMode::TensorCore});
     }
     if (auto wgmmaOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
       if (wgmmaOp.getIsAsync() == true) {

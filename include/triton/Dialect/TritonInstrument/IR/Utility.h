@@ -61,8 +61,10 @@ constexpr int kCaptureSizeBytes = 8;
 inline int estimateConSanCaptureCount(int numActiveMemTypes, bool hasMBarriers,
                                       bool hasClusterBarriers,
                                       int numCommitKinds,
-                                      bool hasAsyncProxyFenceTracking) {
-  int perMemType = kCapturesPerMemType * numActiveMemTypes;
+                                      bool hasAsyncProxyFenceTracking,
+                                      bool hasTensorCoreTracking) {
+  int perMemType =
+      (kCapturesPerMemType + hasTensorCoreTracking) * numActiveMemTypes;
   int barrierCaptures =
       hasMBarriers || hasClusterBarriers ? kBarrierBaseCaptures : 0;
   if (hasMBarriers)
@@ -202,6 +204,11 @@ struct AuxDataMap {
   // Per-memory-type write frontier. Bit i means logical ConSan thread i can see
   // the latest write to the buffer row.
   RegionToValueMap writeVisibility[numMemTypes];
+
+  // scratch, <Cbuf x B x Cthr x i64>
+  // Tensor-core operations issued by each base thread. Bits [0..15] record
+  // reads and bits [16..31] record writes.
+  RegionToValueMap tensorCoreAccesses[numMemTypes];
 
   // scratch, <Cbuf x B x Cbar x K x i8>
   // Per-memory-type buffer/barrier map for writes that a barrier tracks.

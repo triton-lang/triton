@@ -526,6 +526,14 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
     passValueToWarpSpecialize(readVisibility[iMemType].at(entryRegion),
                               readVisibility[iMemType]);
 
+    if (threadLayout.hasTCThreads() && numMBarriers > 0) {
+      tensorCoreAccesses[iMemType].insert(
+          entryRegion,
+          createZeroInitStateTensor(b, {numCTAs, numBufs, numCTAs}, 64, fb));
+      passValueToWarpSpecialize(tensorCoreAccesses[iMemType].at(entryRegion),
+                                tensorCoreAccesses[iMemType]);
+    }
+
     if (memType == MemType::SHARED_MEM && hasAsyncProxyFenceTracking) {
       proxyAccessVisibility.insert(
           entryRegion,
@@ -650,7 +658,8 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
       numCommitKinds += !commits[i].empty();
     int expected = estimateConSanCaptureCount(
         numActiveMemTypes, numMBarriers > 0, !clusterBarrierSlots.empty(),
-        numCommitKinds, hasAsyncProxyFenceTracking);
+        numCommitKinds, hasAsyncProxyFenceTracking,
+        threadLayout.hasTCThreads() && numMBarriers > 0);
     assert(captureCounter == expected &&
            "capture count changed -- update estimateConSanCaptureCount if this "
            "is expected!");

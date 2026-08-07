@@ -25,9 +25,15 @@ struct MemEffectsOpInfo {
   // wait publishes those op-local writes and nothing else. Use this for PTX ops
   // that perform the write and also signal the barrier via
   // `mbarrier::complete_tx`.
+  //
+  // TensorCore tracks only tensor-core reads and writes issued by the current
+  // partition, excluding its generic visibility frontier. In practice, this
+  // distinction matters for distributed shared memory: arrival on a remote
+  // mbarrier is not ordered with prior remote shared-memory writes.
   enum class BarrierTrackingMode {
     Frontier,
     EffectWrites,
+    TensorCore,
   };
   struct Effects {
     RW rw;
