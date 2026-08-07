@@ -2,6 +2,7 @@
 #define TRITON_ANALYSIS_BUFFER_REGION_H
 
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <tuple>
 #include <utility>
@@ -9,10 +10,16 @@
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SparseBitVector.h"
+#include "llvm/ADT/UniqueVector.h"
+
+namespace mlir::triton::gpu {
+enum class SharedKind : uint32_t;
+}
 
 namespace mlir::triton {
 
@@ -110,11 +117,23 @@ struct BufferRegionView {
   llvm::SmallVector<uint32_t, 2> partitionBases;
   uint32_t affinePartitionOffset = 0;
   uint32_t affineCTAOffset = 0;
+  /// Deterministically interned identity of the owning allocation frame.
+  uint32_t allocationFrame = 0;
+
+  bool intersects(const BufferRegionView &other) const {
+    return allocationFrame == other.allocationFrame &&
+           region.intersects(other.region);
+  }
+
+  bool contains(const BufferRegionView &other) const {
+    return allocationFrame == other.allocationFrame &&
+           region.contains(other.region);
+  }
 
 private:
   auto key() const {
-    return std::tie(region, storageBase, affineOffset, affinePartitionOffset,
-                    affineCTAOffset, partitionBases);
+    return std::tie(allocationFrame, region, storageBase, affineOffset,
+                    affinePartitionOffset, affineCTAOffset, partitionBases);
   }
 
 public:
@@ -186,7 +205,7 @@ struct RegionInfo {
     });
   }
 
-  static RegionInfo getPessimisticValueState(MLIRContext *context = nullptr) {
+  static RegionInfo getPessimisticValueState() {
     RegionInfo result;
     result.kind = Kind::Unknown;
     return result;
@@ -195,6 +214,27 @@ struct RegionInfo {
     return getPessimisticValueState();
   }
 };
+
+enum class RW { Read, Write };
+
+struct MemoryAccess {
+  Value value;
+  bool isWrite;
+  bool isRead;
+  std::optional<gpu::SharedKind> sharedKind;
+
+  bool isShared() const { return sharedKind.has_value(); }
+  bool isShared(gpu::SharedKind kind) const { return sharedKind == kind; }
+};
+
+llvm::SmallVector<MemoryAccess>
+getMemoryAccesses(Operation *op,
+                  std::optional<gpu::SharedKind> kind = std::nullopt,
+                  std::optional<RW> rw = std::nullopt);
+
+bool hasSharedAccess(Operation *op,
+                     std::optional<gpu::SharedKind> kind = std::nullopt,
+                     std::optional<RW> rw = std::nullopt);
 
 //===----------------------------------------------------------------------===//
 // BufferRegionAnalysis (Sparse Forward Dataflow)
@@ -214,12 +254,9 @@ public:
 
   enum RegionType { SHARED_MEMORY, TENSOR_MEMORY, BARRIER, NUM_REGION_TYPES };
 
-  struct MemoryAccess {
-    Value value;
-    bool isWrite;
-  };
-
-  static llvm::SmallVector<MemoryAccess> getMemoryAccesses(Operation *op);
+  uint32_t getOperationId(Operation *operation) const {
+    return operationInterner.idFor(operation);
+  }
 
   // ------------------------------
   // Public API for ConSan
@@ -254,10 +291,18 @@ public:
   LogicalResult initialize(Operation *top) override;
 
 private:
+  BufferRegionView getAllocView(Value allocation, uint32_t storageBase,
+                                llvm::ArrayRef<uint32_t> partitionBases = {});
+  BufferRegionView getSubView(Type type, const BufferRegionView &view,
+                              uint32_t storageOffset = 0,
+                              uint32_t byteOffset = 0,
+                              uint32_t partitionOffset = 0,
+                              uint32_t ctaOffset = 0);
   // Global registry of all regions
   std::set<BufferRegion> usedBufferRegions[NUM_REGION_TYPES];
   bool usedUnknownBufferRegions[NUM_REGION_TYPES] = {};
   llvm::DenseMap<std::pair<Type, uint32_t>, AddressSet> footprintCache;
+  llvm::UniqueVector<Operation *> operationInterner;
 };
 
 } // namespace mlir::triton

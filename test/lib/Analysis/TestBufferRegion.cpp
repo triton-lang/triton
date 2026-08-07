@@ -56,8 +56,7 @@ struct TestBufferRegionPass
     analysis->calculateUsedBufferRegions(moduleOp);
 
     moduleOp.walk([&](Operation *op) {
-      for (const auto &access :
-           triton::BufferRegionAnalysis::getMemoryAccesses(op)) {
+      for (const auto &access : triton::getMemoryAccesses(op)) {
         if (!llvm::is_contained(op->getOperands(), access.value))
           continue;
         emitRegionInfo(op->getLoc(), "Buffers",
@@ -154,7 +153,7 @@ struct TestBufferRegionAliasPass
       return true;
     return llvm::any_of(lhs.views, [&](const tt::BufferRegionView &a) {
       return llvm::any_of(rhs.views, [&](const tt::BufferRegionView &b) {
-        return a.region.intersects(b.region);
+        return a.intersects(b);
       });
     });
   }
@@ -165,7 +164,7 @@ struct TestBufferRegionAliasPass
       return false;
     return llvm::all_of(contained.views, [&](const tt::BufferRegionView &b) {
       return llvm::any_of(container.views, [&](const tt::BufferRegionView &a) {
-        return a.region.contains(b.region);
+        return a.contains(b);
       });
     });
   }

@@ -338,9 +338,9 @@ void WarpGroupDotOp::getEffects(
   auto &a = getAMutable();
   auto &b = getBMutable();
   if (isa<MemDescType>(a.get().getType()))
-    effects.emplace_back(MemoryEffects::Read::get(), &a, SharedMemory::get());
+    effects.push_back(makeShared<MemoryEffects::Read>(&a, SharedKind::Async));
   if (isa<MemDescType>(b.get().getType()))
-    effects.emplace_back(MemoryEffects::Read::get(), &b, SharedMemory::get());
+    effects.push_back(makeShared<MemoryEffects::Read>(&b, SharedKind::Async));
 }
 
 bool WarpGroupDotOp::needsPartialAccumulator() {
@@ -538,9 +538,7 @@ LogicalResult AsyncSharedStoreOp::verify() {
   unsigned bitwidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
 
   auto regLayout = toLinearLayout(srcTy);
-  auto sharedLayout = isPaddedEncoding(dstTy.getEncoding())
-                          ? paddedLinearLayout(dstTy)
-                          : toLinearLayout(dstTy);
+  auto sharedLayout = toLinearLayoutIgnoringPadding(dstTy);
   auto cvt = regLayout.invertAndCompose(sharedLayout);
   std::optional<int> maybeMaxVecElems;
   if (isPaddedEncoding(dstTy.getEncoding()))
@@ -677,10 +675,12 @@ static LogicalResult verifyTMABarrierLayout(Operation *op, Value barrier) {
 }
 
 static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
-                                       Attribute enc) {
-  auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(enc);
+                                       MemDescType memDesc) {
+  auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(memDesc.getEncoding());
   if (!nvmma)
     return op->emitOpError("TMA descriptor must have NVMMA shared layout");
+  if (nvmma.getRank() != memDesc.getRank())
+    return op->emitOpError("TMA shared memory and layout ranks must match");
   auto descEnc =
       dyn_cast_if_present<NVMMASharedEncodingAttr>(desc.getSharedLayout());
   // NOTE: Cannot do descEnc != enc as the encodings may differ in rank for
@@ -708,8 +708,20 @@ static LogicalResult verifyAsyncTMALoadOp(Operation *op,
     return failure();
   if (!resultType.getMutableMemory())
     return op->emitOpError("cannot store into immutable memory");
-  if (failed(verifyTMAEncoding(op, desc, resultType.getEncoding())))
+  if (failed(verifyTMAEncoding(op, desc, resultType)))
     return failure();
+  auto block = StringAttr::get(op->getContext(), "block");
+  uint32_t barrierMask =
+      toLinearLayout(barrier.getType()).getFreeVariableMasks().lookup(block);
+  auto shape =
+      dropPipeliningDim(resultType.getShape(), resultType.getEncoding());
+  auto allocation = toLinearLayout(resultType);
+  for (auto [bit, basis] : llvm::enumerate(allocation.getBases().lookup(block)))
+    for (auto [component, size] : llvm::zip_equal(basis, shape))
+      if (component >= size && (bit || barrierMask > 1))
+        return op->emitOpError(
+            "TMA destination and completion barrier must belong to the same "
+            "CTA or a CTA pair");
   return success();
 }
 
@@ -721,7 +733,15 @@ static LogicalResult verifyAsyncTMAStoreOp(Operation *op,
   // do not support fp4_padded operands.
   if (isFp4Padded(srcEnc))
     return op->emitOpError("does not support fp4_padded operands");
-  return verifyTMAEncoding(op, desc.getType(), srcEnc);
+  auto shape = dropPipeliningDim(srcType.getShape(), srcEnc);
+  auto allocation = toLinearLayout(srcType);
+  auto block = StringAttr::get(op->getContext(), "block");
+  for (const auto &basis : allocation.getBases().lookup(block))
+    for (auto [component, size] : llvm::zip_equal(basis, shape))
+      if (component >= size)
+        return op->emitOpError(
+            "source subview may have an origin in another CTA");
+  return verifyTMAEncoding(op, desc.getType(), srcType);
 }
 
 static LogicalResult verifyAsyncTMAGatherScatterOp(Operation *op,
@@ -743,11 +763,6 @@ static LogicalResult verifyAsyncTMAGatherScatterOp(Operation *op,
   if (memDescType.getElementType() != blockType.getElementType())
     return op->emitOpError("result tensor element type must match block (")
            << blockType.getElementType() << "), but got " << memDescType;
-
-  ArrayRef<int64_t> allocShape = memDescType.getAllocShape();
-  if (allocShape.size() < 2 ||
-      memDescType.getShape() != allocShape.take_back(2))
-    return op->emitOpError("memdesc shape must match alloc shape");
 
   auto xOffsetsType = cast<RankedTensorType>(indicesType);
   if (xOffsetsType.getEncoding()) {
@@ -1229,18 +1244,18 @@ void TCGen5MMAOp::getEffects(
                        TensorMemory::get());
 
   if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
-    effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
-                         SharedMemory::get());
+    effects.push_back(
+        makeShared<MemoryEffects::Read>(&getAMutable(), SharedKind::Async));
 
   } else {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
                          TensorMemory::get());
   }
-  effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
-                       SharedMemory::get());
+  effects.push_back(
+      makeShared<MemoryEffects::Read>(&getBMutable(), SharedKind::Async));
   for (auto &barrierMutable : getBarriersMutable())
-    effects.emplace_back(MemoryEffects::Write::get(), &barrierMutable,
-                         SharedMemory::get());
+    effects.push_back(
+        makeShared<MemoryEffects::Write>(&barrierMutable, SharedKind::Barrier));
 }
 
 Value TCGen5MMAOp::useAccumulator() { return getUseD(); }
@@ -1489,22 +1504,22 @@ void TCGen5MMAScaledOp::getEffects(
                        TensorMemory::get());
 
   if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
-    effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
-                         SharedMemory::get());
+    effects.push_back(
+        makeShared<MemoryEffects::Read>(&getAMutable(), SharedKind::Async));
 
   } else {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
                          TensorMemory::get());
   }
-  effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
-                       SharedMemory::get());
+  effects.push_back(
+      makeShared<MemoryEffects::Read>(&getBMutable(), SharedKind::Async));
   effects.emplace_back(MemoryEffects::Read::get(), &getAScaleMutable(),
                        TensorMemory::get());
   effects.emplace_back(MemoryEffects::Read::get(), &getBScaleMutable(),
                        TensorMemory::get());
   for (auto &barrierMutable : getBarriersMutable())
-    effects.emplace_back(MemoryEffects::Write::get(), &barrierMutable,
-                         SharedMemory::get());
+    effects.push_back(
+        makeShared<MemoryEffects::Write>(&barrierMutable, SharedKind::Barrier));
 }
 
 bool TCGen5MMAScaledOp::verifyDims() {
@@ -1979,6 +1994,18 @@ LogicalResult TensormapCreateOp::verify() {
     return emitError("Rank mismatch for element stride. Got ")
            << getElementStride().size() << " but expected " << rank;
   }
+  return success();
+}
+
+// -- CLCTryCancelSyncOp --
+LogicalResult CLCTryCancelSyncOp::verify() {
+  auto tensorType = dyn_cast<RankedTensorType>(getResponse().getType());
+  if (!tensorType || tensorType.getRank() != 1)
+    return emitOpError("response must be a rank-one tensor");
+  if (tensorType.getShape() != ArrayRef<int64_t>{2})
+    return emitOpError("response must have shape [2]");
+  if (!tensorType.getElementType().isInteger(64))
+    return emitOpError("response element type must be i64");
   return success();
 }
 

@@ -631,6 +631,7 @@ TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
 @pytest.mark.parametrize("warp_specialize", [False, True] if is_blackwell() else [False])
 @pytest.mark.parametrize("mode", ["fwd", "bwd"])
 @pytest.mark.parametrize("provider", ["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []))
+@pytest.mark.enable_warmup
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtype=torch.float16):
     if mode == "fwd" and "fp16" in provider:
         pytest.skip("Avoid running the forward computation twice.")

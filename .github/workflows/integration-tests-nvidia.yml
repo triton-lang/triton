@@ -19,12 +19,15 @@ jobs:
         config: ${{ fromJson(inputs.matrix) }}
     env:
       RUNNER_TYPE: ${{ matrix.config.runner_type }}
+      NUM_GPUS: ${{ matrix.config.runner_type == 'nvidia-gb200' && '2' || '1' }}
+      WARMUP_MAX_PROCS: ${{ matrix.config.runner_type == 'nvidia-a100' && '96' || '112' }}
       TRITON_BUILD_WITH_CCACHE: "true"
       TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
       TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
       TRITON_DISABLE_LINE_INFO: 1
       PROTON_SKIP_PC_SAMPLING_TEST: 1
       PYTHON: "python3"
+      PYTEST_ADDOPTS: "-p triton._compile_warmup"
       CCACHE_COMPRESS: "true"
     steps:
       - name: Checkout
@@ -88,17 +91,23 @@ jobs:
         run: ccache --print-stats
       - name: Run lit tests
         run: make test-lit
+      - name: Warm Triton compile cache
+        timeout-minutes: 10
+        run: |
+          trace_dir="$RUNNER_TEMP/triton-ci-compile-trace"
+          echo "TRITON_CI_COMPILE_TRACE_DIR=$trace_dir" >> "$GITHUB_ENV"
+          export TRITON_CI_COMPILE_TRACE_DIR="$trace_dir"
+          warmup_procs=$(nproc)
+          if (( warmup_procs > WARMUP_MAX_PROCS )); then
+            warmup_procs=$WARMUP_MAX_PROCS
+          fi
+          make WARMUP_PROCS="$warmup_procs" test-warmup
       - name: Run triton tests
         run: make NUM_PROCS=24 test-unit
-      - name: Run gluon tests
-        run: make NUM_PROCS=24 test-gluon
-      - name: Run gsan tests
-        run: make NUM_PROCS=24 test-gsan
-      - name: Run interpreter tests
-        if: ${{ matrix.config.runner_type == 'nvidia-h100' }}
-        run: make test-interpret
+      - name: Run gsan and interpreter tests
+        run: make -j2 NUM_PROCS=24 test-gsan test-interpret
       - name: Run regression tests
-        run: make test-regression
+        run: TRITON_TEST_NUM_GPUS="$NUM_GPUS" make test-regression
       - name: Run microbenchmark tests
         # Microbenchmark never fail but running them gives us an easy way to track performance changes.
         run: make test-microbenchmark
@@ -106,6 +115,10 @@ jobs:
         run: make test-cpp
       - name: Run Proton tests
         run: make test-proton
+      - name: Run gluon tests
+        run: make NUM_PROCS=24 NUM_GPUS="$NUM_GPUS" test-gluon
+      - name: Verify compile warmup completeness
+        run: python3 -m triton._test_runner report --require-complete
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
