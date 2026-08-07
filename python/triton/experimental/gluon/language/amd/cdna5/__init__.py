@@ -20,7 +20,7 @@ __all__ = [
 @builtin
 def wmma(a, b, acc, _semantic=None):
     """
-    Computes matrix-multiplication of a * b + acc using AMD WMMA instruction.
+    Computes matrix multiplication ``a * b + acc`` using an AMD WMMA instruction.
 
     Args:
         a (tensor): The operand a to be multiplied.
@@ -51,17 +51,19 @@ def wmma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
 
         c = a * a_scale @ b * b_scale + acc
 
-    `a` and `b` use microscaling formats described in
+    ``a`` and ``b`` use microscaling formats described in
     "OCP Microscaling Formats (MX) Specification":
     https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf.
 
     Args:
         a (tensor): The operand A to be multiplied.
         a_scale (Optional[tensor]): Scale factor for operand A.
-        a_format (str): Format of the operand A. Available formats: `e2m1`, `e4m3`, `e5m2`.
+        a_format (str): Format of operand A. Available formats: ``e2m1``,
+            ``e4m3``, ``e5m2``.
         b (tensor): The operand B to be multiplied.
         b_scale (Optional[tensor]): Scale factor for operand B.
-        b_format (str): Format of the operand B. Available formats: `e2m1`, `e4m3`, `e5m2`.
+        b_format (str): Format of operand B. Available formats: ``e2m1``,
+            ``e4m3``, ``e5m2``.
         acc (tensor): Accumulator tensor.
     """
     _verify_wmma(3, a, b, acc)
@@ -146,9 +148,9 @@ def load_shared_fp4_repacked(mem_desc, layout, _semantic=None):
     """
     Load M/N-packed fp4 bytes from shared memory into a K-packed WMMA dot operand layout.
 
-    The source shared memory descriptor must contain `int8` or `uint8` packed fp4
+    The source shared memory descriptor must contain ``int8`` or ``uint8`` packed fp4
     values. The destination shape is inferred from the source shape and dot
-    operand index in `layout`.
+    operand index in ``layout``.
     """
     layout = _unwrap_if_constexpr(layout)
     return _load_shared_fp4_repacked(mem_desc, layout, _semantic, parent_type=AMDWMMALayout)
@@ -163,15 +165,15 @@ _get_wmma_scale_layout_impl.__triton_builtin__ = True
 
 @constexpr_function
 def get_wmma_scale_layout(dot_operand_layout, shape, scale_factor=32):
-    """ Get the scale layout for WMMA scaled operands.
+    """Get the scale layout for WMMA scaled operands.
 
     Args:
         dot_operand_layout (DotOperandLayout): The dot operand layout.
         shape (List[int]): The shape of the scale tensor.
         scale_factor (int): The scale factor, i.e. the number of elements of operand sharing a single scale.
 
-    Return:
-        layout (DistributedLinearLayout): The scale layout.
+    Returns:
+        DistributedLinearLayout: The scale layout.
     """
     assert scale_factor in (16, 32), "Only support 16 or 32 scale factor"
     op_idx = dot_operand_layout.operand_index
