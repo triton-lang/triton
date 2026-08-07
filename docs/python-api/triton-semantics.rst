@@ -18,11 +18,13 @@ The algorithm is as follows:
 
 4. **Prefer unsigned** Otherwise (same width, different signedness), they are promoted to the unsigned dtype: ``(int32, uint32) -> uint32``
 
+Division and modulo are an exception to the rules above: they do not exist natively for floating point dtypes narrower than ``float32``, so if either operand is a float (of any width), both operands are promoted to ``float32`` for these two operations. Integer division and modulo keep integer promotion.
+
 The rules are a bit different when they involve a scalar. By scalar here we mean a numeric literal, a variable marked with `tl.constexpr` or a combination of these. These are represented by NumPy scalars and have types ``bool``, ``int`` and ``float``.
 
 When an operation involves a tensor and a scalar:
 
-1. If the scalar is of a kind lower or equal to the tensor, it will not participate in the promotion: ``(uint8, int) -> uint8``
+1. If the scalar is of a kind lower or equal to the tensor, it does not participate in the promotion, and the remaining promotion rules are applied to the tensor's dtype: ``(uint8, int) -> uint8``
 
 2. If the scalar is of a higher kind, we choose the lowest dtype in which it fits among ``int32`` < ``uint32`` < ``int64`` < ``uint64`` for ints and ``float32`` < ``float64`` for floats. Then, both the tensor and the scalar are promoted to this dtype: ``(int16, 4.0) -> float32``
 

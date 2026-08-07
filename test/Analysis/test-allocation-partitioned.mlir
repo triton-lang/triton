@@ -27,6 +27,15 @@
 #PARTITIONED_2P_1G_SW = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #A_SHARED}>
 #PARTITIONED_4P_1G_SW = #ttg.partitioned_shared<{numPartitions = 4, numGroups = 1, partitionDim = 0, partitionLayout = #A_SHARED}>
 
+// Padded layouts produce non-power-of-two partition-buffer sizes while keeping
+// every physical layout dimension a power of two.
+#PADDED_STRADDLE_2P = #ttg.padded_shared<[128:+32] {order = [1, 0], shape = [512, 32]}>
+#PADDED_STRADDLE_4P = #ttg.padded_shared<[256:+64] {order = [1, 0], shape = [512, 32]}>
+#PARTITIONED_2P_STRADDLE = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #PADDED_STRADDLE_2P}>
+#PARTITIONED_4P_STRADDLE = #ttg.partitioned_shared<{numPartitions = 4, numGroups = 1, partitionDim = 0, partitionLayout = #PADDED_STRADDLE_4P}>
+#PADDED_BIG = #ttg.padded_shared<[256:+128] {order = [1, 0], shape = [1024, 32]}>
+#PARTITIONED_2P_BIG = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #PADDED_BIG}>
+
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
@@ -190,36 +199,36 @@ tt.func @partition_exact_boundary() {
 }
 
 // Partition pieces that straddle a physical-partition boundary must
-// still be separated correctly and packed tightly. %a's two pieces (40000 bytes)
+// still be separated correctly and packed tightly. %a's two pieces (40928 bytes)
 // go to partitions 0 and 1; %b's four pieces fill the gaps, with piece 0
 // straddling partitions 0/1 (allowed: %b is not a neighbor of %a).
 // expected-remark @below {{partitioned_straddle}}
-// expected-remark @below {{size = 302144}}
+// expected-remark @below {{size = 303072}}
 tt.func @partitioned_straddle() {
-  // expected-remark @below {{offset = 0, size = 40000}}
-  // expected-remark @below {{offset = 80000, size = 40000}}
-  %a = ttg.local_alloc : () -> !ttg.memdesc<1250x32xf16, #PARTITIONED_2P_1G_SW, #ttg.shared_memory, mutable>
-  // expected-remark @below {{offset = 40000, size = 40000}}
-  // expected-remark @below {{offset = 131072, size = 40000}}
-  // expected-remark @below {{offset = 196608, size = 40000}}
-  // expected-remark @below {{offset = 262144, size = 40000}}
-  %b = ttg.local_alloc : () -> !ttg.memdesc<2500x32xf16, #PARTITIONED_4P_1G_SW, #ttg.shared_memory, mutable>
-  "use"(%a) : (!ttg.memdesc<1250x32xf16, #PARTITIONED_2P_1G_SW, #ttg.shared_memory, mutable>) -> ()
-  "use"(%b) : (!ttg.memdesc<2500x32xf16, #PARTITIONED_4P_1G_SW, #ttg.shared_memory, mutable>) -> ()
+  // expected-remark @below {{offset = 0, size = 40928}}
+  // expected-remark @below {{offset = 81856, size = 40928}}
+  %a = ttg.local_alloc : () -> !ttg.memdesc<1024x32xf16, #PARTITIONED_2P_STRADDLE, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 40928, size = 40928}}
+  // expected-remark @below {{offset = 131072, size = 40928}}
+  // expected-remark @below {{offset = 196608, size = 40928}}
+  // expected-remark @below {{offset = 262144, size = 40928}}
+  %b = ttg.local_alloc : () -> !ttg.memdesc<2048x32xf16, #PARTITIONED_4P_STRADDLE, #ttg.shared_memory, mutable>
+  "use"(%a) : (!ttg.memdesc<1024x32xf16, #PARTITIONED_2P_STRADDLE, #ttg.shared_memory, mutable>) -> ()
+  "use"(%b) : (!ttg.memdesc<2048x32xf16, #PARTITIONED_4P_STRADDLE, #ttg.shared_memory, mutable>) -> ()
   tt.return
 }
 
-// Two neighbors each larger than one physical partition (96000 bytes
+// Two neighbors each larger than one physical partition (98176 bytes
 // -> each spans ~1.5 partitions). Comparing only start partitions would leave
 // them sharing a partition; the footprint-based conflict check separates them
 // (partitions 0-1 and 2-3).
 // expected-remark @below {{two_big_neighbors}}
-// expected-remark @below {{size = 227072}}
+// expected-remark @below {{size = 229248}}
 tt.func @two_big_neighbors() {
-  // expected-remark @below {{offset = 0, size = 96000}}
-  // expected-remark @below {{offset = 131072, size = 96000}}
-  %a = ttg.local_alloc : () -> !ttg.memdesc<3000x32xf16, #PARTITIONED_2P_1G_SW, #ttg.shared_memory, mutable>
-  "use"(%a) : (!ttg.memdesc<3000x32xf16, #PARTITIONED_2P_1G_SW, #ttg.shared_memory, mutable>) -> ()
+  // expected-remark @below {{offset = 0, size = 98176}}
+  // expected-remark @below {{offset = 131072, size = 98176}}
+  %a = ttg.local_alloc : () -> !ttg.memdesc<2048x32xf16, #PARTITIONED_2P_BIG, #ttg.shared_memory, mutable>
+  "use"(%a) : (!ttg.memdesc<2048x32xf16, #PARTITIONED_2P_BIG, #ttg.shared_memory, mutable>) -> ()
   tt.return
 }
 }

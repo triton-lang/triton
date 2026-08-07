@@ -1,6 +1,7 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/AtomicPTXBuilder.h"
 #include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -9,6 +10,8 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/LogicalResult.h"
 #include <limits>
+#include <type_traits>
+#include <utility>
 
 namespace tt = mlir::triton;
 namespace tti = mlir::triton::instrument;
@@ -38,8 +41,15 @@ static constexpr StringLiteral kGSanAtomicBeginRuntimeFn =
 static constexpr StringLiteral kGSanAtomicEndRuntimeFn =
     "__triton_gsan_atomic_end_scalar";
 static constexpr StringLiteral kGSanInitRuntimeFn = "__triton_gsan_init";
+static constexpr StringLiteral kGSanKernelExitRuntimeFn =
+    "__triton_gsan_kernel_exit";
+static constexpr StringLiteral kGSanGridDependencyWaitRuntimeFn =
+    "__triton_gsan_grid_dependency_wait";
 static constexpr StringLiteral kGSanGlobalStateArgAttr =
     "tti.gsan_global_state";
+static constexpr StringLiteral kGSanStreamClockArgAttr =
+    "tti.gsan_stream_clock";
+static constexpr StringLiteral kGSanKernelIdArgAttr = "tti.gsan_kernel_id";
 
 LLVM::LLVMFuncOp
 getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
@@ -51,7 +61,13 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
   auto *ctx = rewriter.getContext();
   SmallVector<Type> argTys;
   if (funcName == kGSanInitRuntimeFn) {
-    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty};
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i64_ty,      i32_ty, i32_ty,
+              i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanKernelExitRuntimeFn) {
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i64_ty,      i32_ty,
+              i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanGridDependencyWaitRuntimeFn) {
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i64_ty, i32_ty, i32_ty, i32_ty};
   } else if (funcName == kGSanLoadTensorRuntimeFn ||
              funcName == kGSanStoreTensorRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty, ptr_ty(ctx), i32_ty};
@@ -113,10 +129,11 @@ materializeSourceLocation(ConversionPatternRewriter &rewriter, Location loc) {
 // Utility functions
 ////////////////////////////////////////////
 
-Value prepareTensorStackArg(ConversionPatternRewriter &rewriter, Location loc,
-                            ArrayRef<Value> ptrElems, ArrayRef<Value> maskElems,
-                            uint32_t regMask, Value threadPred,
-                            unsigned elemIndexStride) {
+std::pair<Value, unsigned>
+prepareTensorStackArg(ConversionPatternRewriter &rewriter, Location loc,
+                      ArrayRef<Value> ptrElems, ArrayRef<Value> maskElems,
+                      uint32_t regMask, Value threadPred,
+                      unsigned elemIndexStride) {
   auto *ctx = rewriter.getContext();
   TritonLLVMOpBuilder b(loc, rewriter);
   Value one = b.i32_val(1);
@@ -124,7 +141,9 @@ Value prepareTensorStackArg(ConversionPatternRewriter &rewriter, Location loc,
   Type i8Ty = rewriter.getI8Type();
   Type i64Ty = rewriter.getI64Type();
 
-  unsigned numElems = ptrElems.size();
+  unsigned numElems = 0;
+  for (unsigned i = 0; i < ptrElems.size(); ++i)
+    numElems += isCanonicalIndex(i * elemIndexStride, regMask);
   auto ptrArrayTy = array_ty(i64Ty, numElems);
   auto maskArrayTy = array_ty(i8Ty, numElems);
   SmallVector<Type> argsFieldTys = {ptrArrayTy, maskArrayTy};
@@ -132,16 +151,17 @@ Value prepareTensorStackArg(ConversionPatternRewriter &rewriter, Location loc,
   auto argsBuffer = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx), argsTy,
                                            one, /*alignment=*/0);
 
-  for (unsigned i = 0; i < numElems; ++i) {
-    Value idx = b.i32_val(i);
+  unsigned packedIndex = 0;
+  for (unsigned i = 0; i < ptrElems.size(); ++i) {
+    if (!isCanonicalIndex(i * elemIndexStride, regMask))
+      continue;
+    Value idx = b.i32_val(packedIndex++);
     Value ptrValue = b.ptrtoint(i64_ty, ptrElems[i]);
     Value ptrSlot =
         b.gep(ptr_ty(ctx), argsTy, argsBuffer, ValueRange{zero, zero, idx});
     b.store(ptrValue, ptrSlot);
 
     Value maskValue = maskElems.empty() ? b.true_val() : maskElems[i];
-    if (!isCanonicalIndex(i * elemIndexStride, regMask))
-      maskValue = b.false_val();
     maskValue = ttg::maybeAnd(rewriter, loc, maskValue, threadPred);
     Value maskByte = b.zext(i8Ty, maskValue);
     Value maskSlot =
@@ -149,7 +169,7 @@ Value prepareTensorStackArg(ConversionPatternRewriter &rewriter, Location loc,
     b.store(maskByte, maskSlot);
   }
 
-  return argsBuffer;
+  return {argsBuffer, numElems};
 }
 
 void emitTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
@@ -162,15 +182,15 @@ void emitTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
     return;
 
   TritonLLVMOpBuilder b(loc, rewriter);
-  auto stackPtr = prepareTensorStackArg(rewriter, loc, ptrElems, maskElems,
-                                        regMask, threadPred, elemIndexStride);
+  auto [stackPtr, numElems] = prepareTensorStackArg(
+      rewriter, loc, ptrElems, maskElems, regMask, threadPred, elemIndexStride);
   StringRef funcName =
       isStore ? kGSanStoreTensorRuntimeFn : kGSanLoadTensorRuntimeFn;
   auto runtimeFunc = getOrCreateGSanRuntimeFunction(rewriter, funcName);
   auto sourceLoc = materializeSourceLocation(rewriter, loc);
 
   b.call(runtimeFunc,
-         ValueRange{gsanGlobalStatePtr, stackPtr, b.i32_val(ptrElems.size()),
+         ValueRange{gsanGlobalStatePtr, stackPtr, b.i32_val(numElems),
                     b.i32_val(bytesPerElem), sourceLoc.file, sourceLoc.line});
 }
 
@@ -185,39 +205,22 @@ void emitAtomicTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
     return;
 
   TritonLLVMOpBuilder b(loc, rewriter);
-  auto stackPtr =
+  auto [stackPtr, numElems] =
       prepareTensorStackArg(rewriter, loc, ptrElems, maskElems, regMask,
                             threadPred, /*elemIndexStride=*/1);
   auto runtimeFunc =
       getOrCreateGSanRuntimeFunction(rewriter, kGSanAtomicTensorRuntimeFn);
   auto sourceLoc = materializeSourceLocation(rewriter, loc);
 
-  b.call(runtimeFunc,
-         ValueRange{gsanGlobalStatePtr, stackPtr, b.i32_val(ptrElems.size()),
-                    b.i32_val(bytesPerElem),
-                    b.i32_val(static_cast<int32_t>(sem)),
-                    b.i32_val(static_cast<int32_t>(scope)), sourceLoc.file,
-                    sourceLoc.line});
+  b.call(runtimeFunc, ValueRange{gsanGlobalStatePtr, stackPtr,
+                                 b.i32_val(numElems), b.i32_val(bytesPerElem),
+                                 b.i32_val(static_cast<int32_t>(sem)),
+                                 b.i32_val(static_cast<int32_t>(scope)),
+                                 sourceLoc.file, sourceLoc.line});
 }
 
 unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
   return index & ~freeVarMask;
-}
-
-Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
-                                  Value resultVal,
-                                  ConversionPatternRewriter &rewriter,
-                                  TritonLLVMOpBuilder &b, Value threadPred,
-                                  const TargetInfoBase &targetInfo) {
-  if (!op->hasAttr("allocation.offset"))
-    return resultVal;
-
-  auto loc = op->getLoc();
-  Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
-  targetInfo.storeShared(rewriter, loc, smemBase, resultVal, threadPred);
-  b.barrier(ttg::AddrSpace::Local);
-  return targetInfo.loadShared(rewriter, loc, smemBase, valueElemTy,
-                               b.true_val());
 }
 
 Value materializeI32Bool(ConversionPatternRewriter &rewriter,
@@ -341,6 +344,34 @@ FailureOr<Value> getGSanGlobalStateArg(Operation *op,
   return emitError(loc, "Unable to find gsan global state");
 }
 
+FailureOr<Value> getGSanStreamClockArg(Operation *op,
+                                       ConversionPatternRewriter &rewriter,
+                                       Location loc) {
+  auto funcOp = op->getParentOfType<FunctionOpInterface>();
+  for (unsigned i = 0; i < funcOp.getNumArguments(); ++i) {
+    if (!funcOp.getArgAttr(i, kGSanStreamClockArgAttr))
+      continue;
+    Value arg = funcOp.getArgument(i);
+    if (arg.getType() == ptr_ty(rewriter.getContext()))
+      return arg;
+    TritonLLVMOpBuilder b(loc, rewriter);
+    arg = b.addrspacecast(ptr_ty(rewriter.getContext()), arg);
+    return arg;
+  }
+  return emitError(loc, "Unable to find gsan stream clock");
+}
+
+FailureOr<Value> getGSanKernelIdArg(Operation *op,
+                                    ConversionPatternRewriter &rewriter,
+                                    Location loc) {
+  auto funcOp = op->getParentOfType<FunctionOpInterface>();
+  for (unsigned i = 0; i < funcOp.getNumArguments(); ++i) {
+    if (funcOp.getArgAttr(i, kGSanKernelIdArgAttr))
+      return funcOp.getArgument(i);
+  }
+  return emitError(loc, "Unable to find gsan kernel ID");
+}
+
 static LLVM::LLVMStructType
 getTensorDescStructType(ConversionPatternRewriter &rewriter, Type basePtrTy) {
   SmallVector<Type> fieldTypes;
@@ -441,7 +472,7 @@ public:
                               maskAlign, bytesPerElem);
 
     auto ctx = op.getContext();
-    auto kReg = str_attr("reg");
+    auto kReg = str_attr("register");
     auto freeVarMasks = getFreeVariableMasks(ptrTy);
     auto threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                         loc, *targetInfo);
@@ -502,7 +533,7 @@ public:
                               maskAlign, bytesPerElem);
 
     auto ctx = op.getContext();
-    auto kReg = str_attr("reg");
+    auto kReg = str_attr("register");
     auto freeVarMasks = getFreeVariableMasks(ptrTy);
     auto regMask = freeVarMasks.lookup(kReg);
     auto threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
@@ -589,11 +620,11 @@ public:
     if (failed(gsanGlobalStatePtr))
       return failure();
 
-    auto moduleOp = op->getParentOfType<ModuleOp>();
-    assert(moduleOp && "Parent ModuleOp not found for atomic op");
     auto rmwOp = op.getAtomicRmwOp();
     auto sem = op.getSem();
     auto scope = op.getScope();
+    insertAtomicOrderingBarriers(op, sem, !op->hasAttr("allocation.offset"),
+                                 rewriter, *targetInfo);
 
     TritonLLVMOpBuilder b(loc, rewriter);
     Value llPtr = adaptor.getPtr();
@@ -618,7 +649,7 @@ public:
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                          loc, *targetInfo);
-    uint32_t regMask = freeVarMasks.lookup(str_attr("reg"));
+    uint32_t regMask = freeVarMasks.lookup(str_attr("register"));
     auto sourceLoc = materializeSourceLocation(rewriter, loc);
     auto eventStateTy = getGSanAtomicEventStateType(rewriter);
     Value eventState = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx),
@@ -697,10 +728,10 @@ public:
     if (failed(gsanGlobalStatePtr))
       return failure();
 
-    auto moduleOp = op->getParentOfType<ModuleOp>();
-    assert(moduleOp && "Parent ModuleOp not found for atomic op");
     auto sem = op.getSem();
     auto scope = op.getScope();
+    insertAtomicOrderingBarriers(op, sem, !op->hasAttr("allocation.offset"),
+                                 rewriter, *targetInfo);
 
     TritonLLVMOpBuilder b(loc, rewriter);
     Value llPtr = adaptor.getPtr();
@@ -723,7 +754,7 @@ public:
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                          loc, *targetInfo);
-    uint32_t regMask = freeVarMasks.lookup(str_attr("reg"));
+    uint32_t regMask = freeVarMasks.lookup(str_attr("register"));
     auto sourceLoc = materializeSourceLocation(rewriter, loc);
     auto eventStateTy = getGSanAtomicEventStateType(rewriter);
     Value eventState = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx),
@@ -839,15 +870,65 @@ public:
     auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
     if (failed(gsanGlobalStatePtr))
       return failure();
+    auto streamClockPtr = getGSanStreamClockArg(op, rewriter, loc);
+    if (failed(streamClockPtr))
+      return failure();
+    auto kernelId = getGSanKernelIdArg(op, rewriter, loc);
+    if (failed(kernelId))
+      return failure();
 
     auto runtimeFunc =
         getOrCreateGSanRuntimeFunction(rewriter, kGSanInitRuntimeFn);
 
     TritonLLVMOpBuilder b(loc, rewriter);
     auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    auto threadIdx = mlir::getThreadId(rewriter, loc);
+    auto numThreads = b.i32_val(ttg::lookupNumWarps(op) *
+                                ttg::lookupThreadsPerWarp(rewriter));
+    Value barrierId = tt::nvgpu::WarpGroupBarrierIdOp::create(rewriter, loc);
     b.call(runtimeFunc,
-           ValueRange{*gsanGlobalStatePtr, sourceLoc.file, sourceLoc.line});
+           ValueRange{*gsanGlobalStatePtr, *streamClockPtr, *kernelId,
+                      b.i32_val(op.getAcquireStreamClock()), threadIdx,
+                      numThreads, barrierId, sourceLoc.file, sourceLoc.line});
     b.barrier(ttg::AddrSpace::Local);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+template <typename OpTy>
+struct GSanStreamClockOpConversion : public ConvertOpToLLVMPattern<OpTy> {
+  using ConvertOpToLLVMPattern<OpTy>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
+    auto streamClockPtr = getGSanStreamClockArg(op, rewriter, loc);
+    auto kernelId = getGSanKernelIdArg(op, rewriter, loc);
+    if (failed(gsanGlobalStatePtr) || failed(streamClockPtr) ||
+        failed(kernelId))
+      return failure();
+
+    StringRef runtimeFn;
+    if constexpr (std::is_same_v<OpTy, tti::ExperimentalGSanKernelExitOp>)
+      runtimeFn = kGSanKernelExitRuntimeFn;
+    else
+      runtimeFn = kGSanGridDependencyWaitRuntimeFn;
+    auto runtimeFunc = getOrCreateGSanRuntimeFunction(rewriter, runtimeFn);
+    TritonLLVMOpBuilder b(loc, rewriter);
+    auto threadIdx = mlir::getThreadId(rewriter, loc);
+    auto numThreads = b.i32_val(ttg::lookupNumWarps(op) *
+                                ttg::lookupThreadsPerWarp(rewriter));
+    Value barrierId = tt::nvgpu::WarpGroupBarrierIdOp::create(rewriter, loc);
+    SmallVector<Value> args{*gsanGlobalStatePtr, *streamClockPtr, *kernelId,
+                            threadIdx,           numThreads,      barrierId};
+    if constexpr (std::is_same_v<OpTy, tti::ExperimentalGSanKernelExitOp>) {
+      auto sourceLoc = materializeSourceLocation(rewriter, loc);
+      args.append({sourceLoc.file, sourceLoc.line});
+    }
+    b.call(runtimeFunc, args);
     rewriter.eraseOp(op);
     return success();
   }
@@ -860,6 +941,10 @@ void mlir::triton::populateGSanToLLVMPatterns(
     ModuleAxisInfoAnalysis &axisInfoAnalysis,
     const TargetInfoBase &targetInfo) {
   patterns.add<GSanInitOpConversion>(typeConverter);
+  patterns.add<
+      GSanStreamClockOpConversion<tti::ExperimentalGSanKernelExitOp>,
+      GSanStreamClockOpConversion<tti::ExperimentalGSanGridDependencyWaitOp>>(
+      typeConverter);
   patterns.add<GSanTensorDescInfoOpConversion>(typeConverter);
   patterns.add<GSanAtomicPollOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanAtomicCASOpConversion>(typeConverter, targetInfo);

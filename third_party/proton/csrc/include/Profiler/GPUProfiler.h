@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <stdexcept>
 #include <thread>
@@ -23,24 +24,25 @@
 
 namespace proton {
 
+using DataPhases = std::map<Data *, std::pair</*start_phase=*/size_t,
+                                              /*end_phase=*/size_t>>;
+
 namespace detail {
 
-void flushDataPhasesImpl(
-    const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
-    const std::map<Data *,
-                   std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
-        &dataPhases,
-    PendingGraphPool *pendingGraphPool);
+void flushDataPhasesImpl(const bool periodicFlushEnabled,
+                         const std::string &periodicFlushingFormat,
+                         const DataPhases &dataPhases,
+                         PendingGraphPool *pendingGraphPool);
 
-void updateDataPhases(
-    std::map<Data *, std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
-        &dataPhases,
-    Data *data, size_t phase);
+void updateDataPhases(DataPhases &dataPhases, Data *data, size_t phase);
 
 void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
                              std::string &periodicFlushingFormat,
                              const std::vector<std::string> &modeAndOptions,
                              const char *profilerName);
+
+int64_t
+computeTimestampOffsetNs(const std::function<void(uint64_t *)> &getTimestamp);
 } // namespace detail
 
 // Singleton<ConcreteProfilerT>: Each concrete GPU profiler, e.g.,
@@ -48,6 +50,7 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
 template <typename ConcreteProfilerT>
 class GPUProfiler : public Profiler,
                     public OpInterface,
+                    public TimestampAlignmentInterface,
                     public Singleton<ConcreteProfilerT> {
 public:
   GPUProfiler() = default;
@@ -91,11 +94,8 @@ protected:
     threadState.dataToEntry.clear();
   }
 
-  void flushDataPhases(
-      const std::map<Data *,
-                     std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
-          &dataPhases,
-      PendingGraphPool *pendingGraphPool) {
+  void flushDataPhases(const DataPhases &dataPhases,
+                       PendingGraphPool *pendingGraphPool) {
     detail::flushDataPhasesImpl(periodicFlushingEnabled, periodicFlushingFormat,
                                 dataPhases, pendingGraphPool);
   }

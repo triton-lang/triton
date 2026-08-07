@@ -32,6 +32,25 @@ tt.func private @experimental_buffer_descriptors_shared() {
 
 // -----
 
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_assert_uniform(
+// CHECK: %[[RAW_TID:.*]] = nvvm.read.ptx.sreg.tid.x
+// CHECK: %[[TID:.*]] = llvm.and %[[RAW_TID]], %{{.*}} : i32
+// CHECK: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+// CHECK: %[[NOT_THREAD_ZERO:.*]] = llvm.icmp "ne" %[[TID]], %[[ZERO]] : i32
+// CHECK: %[[CONDITION:.*]] = llvm.or %[[NOT_THREAD_ZERO]], %arg0 : i1
+// CHECK: llvm.cond_br
+// CHECK: llvm.call @__assertfail
+// CHECK-NOT: llvm.cond_br
+// CHECK: llvm.return
+tt.func private @experimental_assert_uniform(%arg0: i1) {
+  tti.experimental_assert_uniform %arg0, "uniform assertion"
+  tt.return
+}
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #smem = #ttg.shared_memory
@@ -78,6 +97,32 @@ tt.func private @experimental_memdesc_to_i32(
   %memdesc: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
 ) {
   tti.experimental_memdesc_to_i32 %memdesc : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+// CHECK-LABEL: @experimental_memory_offset_to_i32_shared
+// CHECK: %[[BASE:.*]] = llvm.ptrtoint %arg0 : !llvm.ptr<3> to i32
+// CHECK: %[[OFFSET:.*]] = llvm.mlir.constant(42 : i32)
+// CHECK: %[[ADDRESS:.*]] = llvm.add %[[BASE]], %[[OFFSET]] : i32
+// CHECK: %[[MASK:.*]] = llvm.mlir.constant(16777215 : i32)
+// CHECK: llvm.and %[[ADDRESS]], %[[MASK]] : i32
+tt.func private @experimental_memory_offset_to_i32_shared() {
+  tti.experimental_memory_offset_to_i32 42, shared_mem
+  tt.return
+}
+
+// CHECK-LABEL: @experimental_memory_offset_to_i32_tensor
+// CHECK: %[[BASE_PTR:.*]] = nvg.tensor_memory_base
+// CHECK: %[[BASE:.*]] = llvm.ptrtoint %[[BASE_PTR]] : !llvm.ptr<6> to i32
+// CHECK: %[[OFFSET:.*]] = llvm.mlir.constant(65539 : i32)
+// CHECK: llvm.add %[[BASE]], %[[OFFSET]] : i32
+tt.func private @experimental_memory_offset_to_i32_tensor() {
+  tti.experimental_memory_offset_to_i32 65539, tensor_mem
   tt.return
 }
 }

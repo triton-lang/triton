@@ -59,6 +59,25 @@ LogicalResult verifyMMAv5Op(Operation *op);
 
 namespace mlir::triton::nvidia_gpu {
 
+struct PackedArithTypeInfo {
+  llvm::StringLiteral suffix;
+  unsigned lanes, registerBits;
+  char kind;
+
+  bool isFP4() const { return suffix == "e2m1x4"; }
+  unsigned storageLanes() const { return isFP4() ? lanes / 2 : lanes; }
+};
+
+struct PackedArithInstructionSpec {
+  const PackedArithTypeInfo *result;
+  SmallVector<const PackedArithTypeInfo *, 3> operands;
+  StringRef modifiers;
+  unsigned operandSuffixes;
+};
+
+PackedArithInstructionSpec getPackedArithInstructionSpec(PackedArithOp op);
+unsigned getPackedArithFp4Axis(PackedArithOp op);
+
 constexpr static char AttrTwoCTAsName[] = "ttng.two-ctas";
 
 inline bool getModuleTwoCTAs(ModuleOp mod) {
@@ -69,6 +88,12 @@ inline bool getModuleTwoCTAs(ModuleOp mod) {
 inline bool getModuleTwoCTAs(Operation *op) {
   return getModuleTwoCTAs(op->getParentOfType<ModuleOp>());
 }
+
+// Returns the required ordering of repeated TMEM scale blocks for one
+// tcgen05 scaled-MMA operand.
+TensorMemoryScalesBlockRepOrder getTensorMemoryScalesBlockRepOrder(
+    Operation *op, bool isA, ScaleDotElemType aType, ScaleDotElemType bType,
+    Type aScaleElemType, Type bScaleElemType);
 
 struct TensorMemory : public SideEffects::Resource::Base<TensorMemory> {
   StringRef getName() const final { return "<TensorMemory>"; }

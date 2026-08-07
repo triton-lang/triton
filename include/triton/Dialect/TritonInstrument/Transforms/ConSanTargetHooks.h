@@ -30,15 +30,15 @@ struct MemEffectsOpInfo {
     EffectWrites,
   };
   struct Effects {
-    enum RW { Read, Write } rw;
-    enum class Proxy { Generic, Async } proxy;
+    RW rw;
+    std::optional<gpu::SharedKind> sharedKind;
     Value buf;
     std::string operandName = "";
     uint32_t length = 0;
 
     Effects(RW rw, Value buf, std::string operandName = "",
-            Proxy proxy = Proxy::Generic)
-        : rw(rw), proxy(proxy), buf(buf), operandName(operandName),
+            std::optional<gpu::SharedKind> sharedKind = std::nullopt)
+        : rw(rw), sharedKind(sharedKind), buf(buf), operandName(operandName),
           length(getMemDescLength(buf)) {}
   };
   struct BarrierInfo {
@@ -111,7 +111,8 @@ public:
   virtual std::optional<BarrierInvalidateInfo>
   getBarrierInvalidateInfo(Operation *op) const = 0;
 
-  virtual std::optional<WaitOpInfo> getWaitOpInfo(Operation *op) const = 0;
+  virtual std::optional<WaitOpInfo>
+  getWaitOpInfo(Operation *op, const AuxDataMap &auxData) const = 0;
 
   virtual std::optional<AsyncProxyFenceInfo>
   getAsyncProxyFenceInfo(Operation *op) const {
@@ -128,52 +129,23 @@ public:
   virtual std::optional<MemEffectsOpInfo>
   getMemEffectsOpInfo(Operation *op) const {
     namespace ttg = triton::gpu;
-    std::optional<MemEffectsOpInfo> info;
-    if (auto copyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
-      info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
-      info->commitKind = CommitKind::AsyncCp;
-      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
-                                        copyOp.getResult());
+    if (getBarrierInitInfo(op) || getBarrierInvalidateInfo(op))
+      return std::nullopt;
+    MemEffectsOpInfo info;
+    if (isa<ttg::AsyncCopyGlobalToLocalOp>(op)) {
+      info.trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
+      info.commitKind = CommitKind::AsyncCp;
+    } else {
+      info.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
     }
-    if (auto loadOp = dyn_cast<ttg::LocalLoadOp>(op)) {
-      info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Read,
-                                        loadOp.getSrc());
+    for (const auto &access : getMemoryAccesses(op)) {
+      if (access.isShared(ttg::SharedKind::Barrier))
+        continue;
+      info.operandEffects.emplace_back(access.isWrite ? RW::Write : RW::Read,
+                                       access.value, "", access.sharedKind);
     }
-    if (auto gatherOp = dyn_cast<ttg::LocalGatherOp>(op)) {
-      info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Read,
-                                        gatherOp.getSrc());
-    }
-    if (auto storeOp = dyn_cast<ttg::LocalStoreOp>(op)) {
-      info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
-                                        storeOp.getDst());
-    }
-    if (auto scatterOp = dyn_cast<ttg::LocalScatterOp>(op)) {
-      info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
-                                        scatterOp.getDst());
-    }
-    if (auto atomicOp = dyn_cast<ttg::LocalAtomicScatterRMWOp>(op)) {
-      info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
-                                        atomicOp.getDst());
-    }
-    if (auto allocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
-      if (allocOp.getSrc()) {
-        info.emplace();
-        info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-        info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
-                                          allocOp.getResult());
-      }
-    }
+    if (info.operandEffects.empty())
+      return std::nullopt;
     return info;
   }
 
@@ -185,7 +157,8 @@ public:
 
   // Returns commit kinds used by addReadChecks to detect outstanding
   // read accesses to shared memory.
-  virtual SmallVector<CommitKindDesc> getOutstandingReadCommitKinds() const {
+  virtual SmallVector<CommitKindDesc>
+  getOutstandingReadCommitKinds(const AuxDataMap &auxData) const {
     return {};
   }
 
@@ -205,7 +178,7 @@ public:
 };
 
 LogicalResult runConcurrencySanitizer(ModuleOp module,
-                                      const ConSanTargetHooks *hooks);
+                                      const ConSanTargetHooks &hooks);
 
 using ConSanHooksFactory = std::function<std::unique_ptr<ConSanTargetHooks>()>;
 void registerConSanHooks(llvm::StringRef key, ConSanHooksFactory factory);

@@ -15,17 +15,21 @@ __all__ = [
 @builtin
 def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _semantic=None):
     """
-    AMD global load to shared operation. This operation loads data directly
-    from global memory to shared memory without going through registers. It
-    happens asynchronously and requires a subsequent `async_wait` to ensure the
-    data is available in shared memory. Note that this operation does still
-    complete in order with ttgl.loads/stores or buffer_loads/stores on CDNA4,
-    so interleaving with them will hurt performance.
+    AMD global load to shared operation.
 
-    Compared to `buffer_load_to_shared`, it requires a tensor pointer which
+    This operation loads data directly from global memory to shared memory
+    without going through registers. It happens asynchronously; call
+    :func:`wait_group` before accessing ``dest``. The operation still completes
+    in order with :func:`~triton.experimental.gluon.language.load`,
+    :func:`~triton.experimental.gluon.language.store`,
+    :func:`~triton.experimental.gluon.language.amd.cdna4.buffer_load`, and
+    :func:`~triton.experimental.gluon.language.amd.cdna4.buffer_store` on
+    CDNA4, so interleaving with them will hurt performance.
+
+    Compared to :func:`buffer_load_to_shared`, it requires a tensor pointer which
     supports 64-bit indexing range for each thread in a block, which gives more
     flexibility, but at the cost of higher register pressure and no hardware
-    out-of-bound masking support. Prefer to use `buffer_load_to_shared` when
+    out-of-bound masking support. Prefer :func:`buffer_load_to_shared` when
     possible for better performance.
 
     The underlying hardware instruction uses separate registers for global
@@ -33,11 +37,11 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
     address for the whole warp. Therefore, while using this operation
     the following conditions must be met or lowering to LLVM will fail:
 
-    - For the `ptr` layout, size per thread * bits per element must be 128 or 32.
+    * For the ``ptr`` layout, size per thread * bits per element must be 128 or 32.
       To get ideal performance, it is recommended to use 128 bits per element.
-    - Writes to `dest` must be coalesced.
-    - If `dest` is swizzled, it only can be swizzled within warp boundary.
-    - If a `mask` is present it must be aligned to the load's vector width: each
+    * Writes to ``dest`` must be coalesced.
+    * If ``dest`` is swizzled, it can only be swizzled within a warp boundary.
+    * If a ``mask`` is present it must be aligned to the load's vector width: each
       group of (size per thread) consecutive mask values must be identical. The
       copy transfers each lane's whole vector in a single transaction, so a mask
       whose true/false boundary cannot be proven vector-aligned forces
@@ -75,16 +79,21 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
 @builtin
 def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modifier="", _semantic=None):
     """
-    AMD buffer load to shared operation. Buffer load is similar to global load
-    but it accesses global memory via a scalar base pointer and a tensor of
-    32-bit offsets instead of a tensor of pointers. This operation loads data
-    directly from global memory to shared memory without going through
-    registers. It happens asynchronously and requires a subsequent `async_wait`
-    to ensure thedata is available in shared memory. Note that this operation
-    does still complete in order with ttgl.loads/stores or buffer_loads/stores
-    on CDNA4, so interleaving with them will hurt performance.
+    AMD buffer load to shared operation.
 
-    Compared to `global_load_to_shared`, it has better performance and also
+    Buffer load is similar to :func:`global_load_to_shared`, but it accesses
+    global memory through a scalar base pointer and a tensor of 32-bit offsets
+    rather than a tensor of pointers. This operation loads data directly from
+    global memory to shared memory without going through registers. It happens
+    asynchronously; call :func:`wait_group` before accessing ``dest``. The
+    operation still completes in order with
+    :func:`~triton.experimental.gluon.language.load`,
+    :func:`~triton.experimental.gluon.language.store`,
+    :func:`~triton.experimental.gluon.language.amd.cdna4.buffer_load`, and
+    :func:`~triton.experimental.gluon.language.amd.cdna4.buffer_store` on
+    CDNA4, so interleaving with them will hurt performance.
+
+    Compared to :func:`global_load_to_shared`, it has better performance and also
     supports hardware out-of-bound masking. But it strictly requires a
     32-bit offset instead of a 64-bit tensor pointer.
 
@@ -93,11 +102,11 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
     address for the whole warp. Therefore, while using this operation
     the following conditions must be met or lowering to LLVM will fail:
 
-    - For the `offsets` layout, size per thread * bits per element must be 128 or 32.
+    * For the ``offsets`` layout, size per thread * bits per element must be 128 or 32.
       To get ideal performance, it is recommended to use 128 bits per element.
-    - Writes to `dest` must be coalesced.
-    - If `dest` is swizzled, it only can be swizzled within warp boundary.
-    - If a `mask` is present it must be aligned to the load's vector width: each
+    * Writes to ``dest`` must be coalesced.
+    * If ``dest`` is swizzled, it can only be swizzled within a warp boundary.
+    * If a ``mask`` is present it must be aligned to the load's vector width: each
       group of (size per thread) consecutive mask values must be identical. The
       copy transfers each lane's whole vector in a single transaction, so a mask
       whose true/false boundary cannot be proven vector-aligned forces
@@ -138,7 +147,7 @@ def commit_group(_semantic=None):
     """
     Commit oustanding async operations.
 
-    This finalizes a set of async copy operations which can be waited upon via `wait_group`.
+    This finalizes a set of async copy operations which can be waited upon via :func:`wait_group`.
     """
     _semantic.builder.create_async_commit_group()
 
@@ -146,9 +155,11 @@ def commit_group(_semantic=None):
 @builtin
 def wait_group(num_outstanding=0, _semantic=None):
     """
-    Wait for outstanding commit groups. It will block until the number of
-    outstanding commit groups is less than or equal to `num_outstanding`. Note that uncommited
-    async operations will be waited upon even if `num_outstanding` is 0.
+    Wait for outstanding commit groups.
+
+    It will block until the number of outstanding commit groups is less than or equal to
+    ``num_outstanding``. Note that uncommited async operations will be waited upon even if
+    ``num_outstanding`` is 0.
 
     Args:
         num_outstanding (int): The number of outstanding commit groups to wait for. Defaults to 0.

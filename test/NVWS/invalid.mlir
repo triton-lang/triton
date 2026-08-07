@@ -13,6 +13,54 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
 // -----
 
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @aref_phi_overlap() {
+    %lhs = arith.constant {ttg.partition = array<i32: 0, 1>} 1 : i32
+    %rhs = arith.constant {ttg.partition = array<i32: 1, 2>} 2 : i32
+    // expected-error @+1 {{partition 1 is owned by both phi operands}}
+    %selected = nvws.aref.phi %lhs, %rhs {ttg.partition = array<i32: 0, 1, 2>} : i32
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @aref_phi_uncovered() {
+    %lhs = arith.constant {ttg.partition = array<i32: 0>} 1 : i32
+    %rhs = arith.constant {ttg.partition = array<i32: 1>} 2 : i32
+    // expected-error @+1 {{operand partition union must exactly match the phi partition set}}
+    %selected = nvws.aref.phi %lhs, %rhs {ttg.partition = array<i32: 0, 1, 2>} : i32
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @aref_phi_unowned_operand() {
+    %lhs = arith.constant 1 : i32
+    %rhs = arith.constant {ttg.partition = array<i32: 1>} 2 : i32
+    // expected-error @+1 {{local operand must have partition ownership}}
+    %selected = nvws.aref.phi %lhs, %rhs {ttg.partition = array<i32: 0, 1>} : i32
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @aref_phi_missing_partition() {
+    %lhs = arith.constant {ttg.partition = array<i32: 0>} 1 : i32
+    %rhs = arith.constant {ttg.partition = array<i32: 1>} 2 : i32
+    // expected-error @+1 {{requires a non-empty ttg.partition annotation}}
+    %selected = nvws.aref.phi %lhs, %rhs : i32
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {

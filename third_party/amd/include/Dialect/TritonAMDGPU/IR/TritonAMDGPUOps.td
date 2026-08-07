@@ -34,6 +34,7 @@ include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUOpInterfaces.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUMemoryEffects.td"
 
 include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
@@ -44,14 +45,13 @@ include "TritonAMDGPUAttrDefs.td"
 include "TritonAMDGPUOpInterfaces.td"
 
 
-class TT_AMDGPU_Op<string mnemonic, list<Trait> traits = []> :
-    Op<TritonAMDGPU_Dialect, mnemonic, !listconcat(traits, [])>;
+class TT_AMDGPU_Op<string mnemonic, list<Trait> traits = []>
+    : Op<TritonAMDGPU_Dialect, mnemonic, !listconcat(traits, [])>;
 
 //
 // Interfaces
 //
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
-def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
 def L2Cache : Resource<"::mlir::triton::amd::L2Cache">;
 
 //===----------------------------------------------------------------------===//
@@ -331,7 +331,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
       This allows to use buffer_load_to_local even if the alignment cannot be proven based on IR.
     }];
     let arguments = (ins
-      Arg<TTG_MemDescType, "Shared memory slice to write to", [MemWrite<SharedMemory>]>:$dest,
+      Arg<TTG_MemDescType, "Shared memory slice to write to", GenericSharedWrite>:$dest,
       Arg<TT_Ptr, "Global memory scalar base pointer to load from", [MemRead<GlobalMemory>]>:$ptr,
       I32Tensor:$offsets,
       Optional<TT_BoolTensor>:$mask,
@@ -505,7 +505,7 @@ def MaskedLoadOp : TT_AMDGPU_Op<"masked_load", []> {
     LLVM_AnyPointer:$ptr,
     I1:$mask,
     LLVM_Type:$falseVal,
-    Optional<I16>:$multicastMask,
+    Optional<I32>:$multicastMask,
     DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<BoolAttr, "false">:$forceNoAlias
   );
@@ -584,6 +584,12 @@ def ScaledUpcastFp4Op : TT_AMDGPU_Op<"scaled_upcast_fp4", [Pure, DeclareOpInterf
         `:` type($input) `,` type($scale) `->` type($output)
   }];
 
+  let extraClassDeclaration = [{
+    static std::optional<mlir::triton::LinearLayout>
+    computeScaleLayout(const mlir::triton::LinearLayout &outputLayout,
+                       int64_t axis, int64_t elementsPerScale);
+  }];
+
   let hasVerifier = 1;
 }
 
@@ -657,7 +663,7 @@ def InThreadTransposeOp : TT_AMDGPU_Op<"in_thread_transpose", [Pure]> {
 // LocalLoadPackedTransposedOp
 //===----------------------------------------------------------------------===//
 
-def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_tranposed", [LocalLoadTrait]> {
+def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_transposed", [LocalLoadTrait]> {
     let summary = "Load a transposed packed tensor from shared memory into a distributed tensor";
     let description = [{
       Requires a M/N packed and M/N contiguous tensor in shared memory and will yield a K packed K contiguous tensor in registers.
@@ -665,7 +671,7 @@ def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_tranposed", [L
       For example if A is 16x64 in shared memory, the result of this operation will be 32x32.
     }];
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    Arg<TTG_MemDescType, "", GenericSharedRead>:$src,
     Optional<TTG_AsyncToken>:$token
   );
   let results = (outs TT_Tensor:$result);
@@ -703,7 +709,7 @@ def AsyncCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_copy_local_to_global", [
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    Arg<TTG_MemDescType, "", GenericSharedRead>:$src,
     Arg<TT_PtrTensor, "", [MemWrite<GlobalMemory>]>:$dst,
     Optional<I1Tensor>:$mask,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
@@ -773,8 +779,8 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
-    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier,
+    Arg<TTG_MemDescType, "", GenericSharedWrite>:$result,
+    Arg<Optional<TTG_MemDescType>, "", BarrierSharedWrite>:$barrier,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
     OptionalAttr<I32Attr>:$warp_used_hint
   );
@@ -816,8 +822,8 @@ def AsyncTDMFusedCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_fused_copy_global
   }];
 
   let arguments = (ins
-    Variadic<TT_TensorDescType>:$descs,
-    Variadic<TTG_MemDescType>:$dests,
+    Arg<Variadic<TT_TensorDescType>, "", [MemRead<GlobalMemory>]>:$descs,
+    Arg<Variadic<TTG_MemDescType>, "", GenericSharedWrite>:$dests,
     DenseI32ArrayAttr:$warp_used_hints,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache
   );
@@ -855,10 +861,12 @@ def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global",
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemWrite<GlobalMemory>]>:$desc,
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
-    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier,
+    Arg<TTG_MemDescType, "", GenericSharedRead>:$src,
+    Arg<Optional<TTG_MemDescType>, "", BarrierSharedWrite>:$barrier,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache
   );
+
+  let results = (outs TTG_AsyncToken:$token);
 
   let assemblyFormat = [{
     $desc `from` $src (`,` `barrier` `=` $barrier^)?
@@ -897,8 +905,8 @@ def AsyncTDMScatterOp : TT_AMDGPU_Op<"async_tdm_scatter", [
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemWrite<GlobalMemory>]>:$desc,
     TensorOf<[I16, I32]>:$dst_row_indices,
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
-    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier
+    Arg<TTG_MemDescType, "", GenericSharedRead>:$src,
+    Arg<Optional<TTG_MemDescType>, "", BarrierSharedWrite>:$barrier
   );
   let results = (outs TTG_AsyncToken:$retToken);
 
@@ -940,8 +948,8 @@ def AsyncTDMGatherOp : TT_AMDGPU_Op<"async_tdm_gather", [
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
     TensorOf<[I16, I32]>:$src_row_indices,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst,
-    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier
+    Arg<TTG_MemDescType, "", GenericSharedWrite>:$dst,
+    Arg<Optional<TTG_MemDescType>, "", BarrierSharedWrite>:$barrier
   );
   let results = (outs TTG_AsyncToken:$token);
 
@@ -1173,7 +1181,7 @@ def InitBarrierOp : TT_AMDGPU_Op<"init_barrier", [
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$alloc,
+    Arg<TTG_MemDescType, "", GenericSharedWrite>:$alloc,
     I32Attr:$count
   );
   let assemblyFormat = "$alloc `,` $count attr-dict `:` qualified(type($alloc))";
@@ -1194,7 +1202,7 @@ def WaitBarrierOp : TT_AMDGPU_Op<"wait_barrier", [
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$alloc,
+    Arg<TTG_MemDescType, "", BarrierSharedReadWrite>:$alloc,
     I32:$phase
   );
 
@@ -1224,7 +1232,7 @@ def ArriveBarrierOp : TT_AMDGPU_Op<"arrive_barrier", [
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$alloc,
+    Arg<TTG_MemDescType, "", BarrierSharedReadWrite>:$alloc,
     I32Attr:$count
   );
 
@@ -1250,7 +1258,7 @@ def AsyncCopyMbarrierArriveOp : TT_AMDGPU_Op<"async_copy_mbarrier_arrive", [
     If the pending count becomes zero, the phase changes (is decremented in a wraparound manner) and the pending count is reloaded with the init count value.
   }];
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$barrier
+    Arg<TTG_MemDescType, "", BarrierSharedReadWrite>:$barrier
   );
   let assemblyFormat = "$barrier attr-dict `:` qualified(type($barrier))";
   let hasVerifier = 1;

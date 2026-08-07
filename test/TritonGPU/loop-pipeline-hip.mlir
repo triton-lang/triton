@@ -756,6 +756,39 @@ tt.func @pipeline_fp64_with_async_copy_gfx950(
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
+#dotA = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dotB = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+// COMMON-LABEL: @reject_oversubscribed_async_copy_gfx950
+// ASYNC-NOT: ttg.async_copy_global_to_local
+// COMMON: tt.load
+// COMMON: ttg.local_store
+// COMMON: scf.for
+// ASYNC-NOT: ttg.async_copy_global_to_local
+// COMMON: tt.dot
+// COMMON: ttg.local_store
+// ASYNC-NOT: ttg.async_copy_global_to_local
+// COMMON: tt.return
+tt.func @reject_oversubscribed_async_copy_gfx950(
+                  %a : tensor<256x16xf32, #dotA>,
+                  %b_ptr : tensor<16x2x!tt.ptr<f32>, #blocked1> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 1]> : tensor<2xi32>},
+                  %lb: i32, %ub: i32, %step: i32) -> tensor<256x2xf32, #blocked> {
+  %cst_0 = arith.constant dense<0.000000e+00> : tensor<256x2xf32, #blocked>
+  %loop = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst_0) -> (tensor<256x2xf32, #blocked>) : i32 {
+    %b_ = tt.load %b_ptr : tensor<16x2x!tt.ptr<f32>, #blocked1>
+    %b = ttg.convert_layout %b_ : tensor<16x2xf32, #blocked1> -> tensor<16x2xf32, #dotB>
+    %c = tt.dot %a, %b, %acc : tensor<256x16xf32, #dotA> * tensor<16x2xf32, #dotB> -> tensor<256x2xf32, #blocked>
+    scf.yield %c : tensor<256x2xf32, #blocked>
+  }
+  tt.return %loop : tensor<256x2xf32, #blocked>
+}
+}
+
+// -----
+
 // COMMON-LABEL: pipelining_local_load_packed_transposed
 
 // Prologue
@@ -770,13 +803,13 @@ tt.func @pipeline_fp64_with_async_copy_gfx950(
 // Main loop
 //         COMMON: scf.for
 //         COMMON:   ttg.local_load
-//         COMMON:   amdg.local_load_packed_tranposed
+//         COMMON:   amdg.local_load_packed_transposed
 //         COMMON:   tt.dot_scaled
 //         COMMON:   scf.yield
 
 // Epilogue
 //         COMMON:   ttg.local_load
-//         COMMON: amdg.local_load_packed_tranposed
+//         COMMON: amdg.local_load_packed_transposed
 //         COMMON: scf.if
 //         COMMON:   tt.dot_scaled
 // COMMON-COUNT-2:   scf.yield
@@ -844,7 +877,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %61 = tt.load %arg13 : tensor<128x64x!tt.ptr<i8>, #blocked1>
       %62 = ttg.convert_layout %60 : tensor<128x128xf8E5M2, #blocked> -> tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>
       %63 = ttg.local_alloc %61 : (tensor<128x64xi8, #blocked1>) -> !ttg.memdesc<128x64xi8, #shared, #smem>
-      %64 = amdg.local_load_packed_tranposed %63 : !ttg.memdesc<128x64xi8, #shared, #smem> -> tensor<64x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>
+      %64 = amdg.local_load_packed_transposed %63 : !ttg.memdesc<128x64xi8, #shared, #smem> -> tensor<64x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>
       %65 = tt.dot_scaled %62, %64, %arg11 lhs = e5m2 rhs = e2m1 {fastMath = false} : tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>> * tensor<64x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>> -> tensor<128x128xf32, #mma>
       %66 = tt.addptr %arg12, %cst : tensor<128x128x!tt.ptr<f8E5M2>, #blocked>, tensor<128x128xi32, #blocked>
       %67 = tt.addptr %arg13, %cst_0 : tensor<128x64x!tt.ptr<i8>, #blocked1>, tensor<128x64xi32, #blocked1>
