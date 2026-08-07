@@ -125,6 +125,7 @@ jobs:
         shell: bash
         run: |
           trace_dir="$RUNNER_TEMP/triton-ci-compile-trace"
+          rm -rf "$trace_dir"
           echo "TRITON_CI_COMPILE_TRACE_DIR=$trace_dir" >> "$GITHUB_ENV"
           export TRITON_CI_COMPILE_TRACE_DIR="$trace_dir"
           warmup_procs=$(nproc)
