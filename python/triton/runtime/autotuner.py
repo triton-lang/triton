@@ -170,6 +170,7 @@ class Autotuner(KernelInterface):
         except (OutOfResources, CompileTimeAssertionFailure, PTXASError) as e:
             if verbose:
                 print(f"Autotuning failed with {e}")
+            e.__traceback__ = None
             return [float("inf"), float("inf"), float("inf")]
 
     def check_disk_cache(self, tuning_key, configs, bench_fn):
