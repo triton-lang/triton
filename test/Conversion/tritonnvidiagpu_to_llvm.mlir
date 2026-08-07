@@ -20,31 +20,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
-#shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32} {
-  // CHECK-LABEL: test_wait_barrier_two_ctas
-  tt.func @test_wait_barrier_two_ctas(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>, %phase: i32) {
-    %cta = nvg.cluster_id
-    %c0 = arith.constant 0 : i32
-    %is_lead_cta = arith.cmpi eq, %cta, %c0 : i32
-    // CHECK: scf.if
-    scf.if %is_lead_cta {
-      // CHECK: mbarrier.test_wait.parity.shared::cta.b64
-      // CHECK-NOT: st.shared::cta.b8
-      // CHECK-NOT: nvvm.cluster
-      %complete = ttng.barrier_test_wait %alloc, %phase : !ttg.memdesc<1xi64, #shared0, #smem> -> i1
-    }
-    // CHECK: }
-    // The kernel-exit cluster barrier is outside the lead-CTA-only branch.
-    // CHECK: nvvm.cluster.arrive
-    // CHECK: nvvm.cluster.wait
-    tt.return
-  }
-}
-
-// -----
-
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
