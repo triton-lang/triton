@@ -241,43 +241,58 @@ def test_set_knob_directly(fresh_knobs_including_libraries, monkeypatch):
 def test_nvidia_tool(fresh_knobs, tmp_path, monkeypatch):
     triton_root = Path(fresh_knobs.__file__).parent
     default_ptxas = triton_root / "backends/nvidia/bin/ptxas"
+    default_ptxas_blackwell = triton_root / "backends/nvidia/bin/ptxas-blackwell"
 
     assert Path(fresh_knobs.nvidia.ptxas.path).resolve() == default_ptxas.resolve()
+    assert Path(fresh_knobs.nvidia.ptxas_blackwell.path).resolve() == default_ptxas_blackwell.resolve()
     assert fresh_knobs.nvidia.ptxas_options is None
 
     tmp_ptxas = tmp_path / "ptxas-special"
+    tmp_ptxas_blackwell = tmp_path / "ptxas-blackwell-special"
     shutil.copy(default_ptxas, tmp_ptxas)
+    shutil.copy(default_ptxas_blackwell, tmp_ptxas_blackwell)
     monkeypatch.setenv("TRITON_PTXAS_PATH", str(tmp_ptxas))
+    monkeypatch.setenv("TRITON_PTXAS_BLACKWELL_PATH", str(tmp_ptxas_blackwell))
     monkeypatch.setenv("PTXAS_OPTIONS", "--verbose")
     assert Path(fresh_knobs.nvidia.ptxas.path).resolve() == tmp_ptxas.resolve()
+    assert Path(fresh_knobs.nvidia.ptxas_blackwell.path).resolve() == tmp_ptxas_blackwell.resolve()
     assert fresh_knobs.nvidia.ptxas_options == "--verbose"
 
     # Don't prop so that the `del` is correctly tested
     fresh_knobs.propagate_env = False
     fresh_knobs.nvidia.ptxas = str(default_ptxas)
+    fresh_knobs.nvidia.ptxas_blackwell = str(default_ptxas_blackwell)
     fresh_knobs.nvidia.ptxas_options = "--device-debug"
     fresh_knobs.propagate_env = True
     assert Path(fresh_knobs.nvidia.ptxas.path).resolve() == default_ptxas.resolve()
+    assert Path(fresh_knobs.nvidia.ptxas_blackwell.path).resolve() == default_ptxas_blackwell.resolve()
     assert fresh_knobs.nvidia.ptxas_options == "--device-debug"
 
     del fresh_knobs.nvidia.ptxas
+    del fresh_knobs.nvidia.ptxas_blackwell
     del fresh_knobs.nvidia.ptxas_options
     assert Path(fresh_knobs.nvidia.ptxas.path).resolve() == tmp_ptxas.resolve()
+    assert Path(fresh_knobs.nvidia.ptxas_blackwell.path).resolve() == tmp_ptxas_blackwell.resolve()
     assert fresh_knobs.nvidia.ptxas_options == "--verbose"
 
     # Triple check scope works
     with fresh_knobs.nvidia.scope():
         fresh_knobs.nvidia.ptxas = str(default_ptxas)
+        fresh_knobs.nvidia.ptxas_blackwell = str(default_ptxas_blackwell)
         fresh_knobs.nvidia.ptxas_options = "--device-debug"
         assert Path(fresh_knobs.nvidia.ptxas.path).resolve() == default_ptxas.resolve()
+        assert Path(fresh_knobs.nvidia.ptxas_blackwell.path).resolve() == default_ptxas_blackwell.resolve()
         assert fresh_knobs.nvidia.ptxas_options == "--device-debug"
 
     assert Path(fresh_knobs.nvidia.ptxas.path).resolve() == tmp_ptxas.resolve()
+    assert Path(fresh_knobs.nvidia.ptxas_blackwell.path).resolve() == tmp_ptxas_blackwell.resolve()
     assert fresh_knobs.nvidia.ptxas_options == "--verbose"
 
     monkeypatch.delenv("TRITON_PTXAS_PATH")
+    monkeypatch.delenv("TRITON_PTXAS_BLACKWELL_PATH")
     monkeypatch.delenv("PTXAS_OPTIONS")
     assert Path(fresh_knobs.nvidia.ptxas.path).resolve() == default_ptxas.resolve()
+    assert Path(fresh_knobs.nvidia.ptxas_blackwell.path).resolve() == default_ptxas_blackwell.resolve()
     assert fresh_knobs.nvidia.ptxas_options is None
 
 
