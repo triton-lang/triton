@@ -8,6 +8,9 @@
 
 namespace mlir::triton::nvidia_gpu {
 
+namespace ttg = mlir::triton::gpu;
+namespace ttng = mlir::triton::nvidia_gpu;
+
 bool hasTCGen5CommitCrossCTA(Operation *op) {
   SmallVector<Value> descs;
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
