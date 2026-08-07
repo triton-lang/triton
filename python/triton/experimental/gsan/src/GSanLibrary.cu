@@ -355,6 +355,19 @@ GSAN_DEVICE Range roundRange(Range x) {
   return x;
 }
 
+GSAN_DEVICE uint8_t getAccessMask(Range access, uintptr_t cellAddress) {
+  uintptr_t cellEnd = cellAddress + kShadowMemGranularityBytes;
+  uint32_t firstByte =
+      access.start > cellAddress ? access.start - cellAddress : 0;
+  uint32_t lastByte = access.end < cellEnd ? access.end - cellAddress
+                                           : kShadowMemGranularityBytes;
+  return static_cast<uint8_t>((1u << lastByte) - (1u << firstByte));
+}
+
+GSAN_DEVICE bool maskIncludesByte(uint8_t mask, int byte) {
+  return (mask & (1u << byte)) != 0;
+}
+
 GSAN_DEVICE ShadowCell *acquireShadow(uintptr_t shadowAddr) {
   auto cell = reinterpret_cast<ShadowCell *>(shadowAddr);
   uint16_t actual = 0;
@@ -512,19 +525,67 @@ GSAN_DEVICE ScalarClock makePublishedClock(ThreadState *state,
   return ScalarClock{token, state->threadId, scope, true};
 }
 
+GSAN_DEVICE bool clocksEqual(const ScalarClock &lhs, const ScalarClock &rhs) {
+  return lhs.epoch == rhs.epoch && lhs.threadId == rhs.threadId &&
+         lhs.scope == rhs.scope && lhs.isRelease == rhs.isRelease;
+}
+
+GSAN_DEVICE bool isFirstWriteClock(const ShadowCell *cell, uint8_t mask,
+                                   int byte) {
+  for (int previousByte = 0; previousByte < byte; ++previousByte) {
+    if (maskIncludesByte(mask, previousByte) &&
+        clocksEqual(cell->writeClocks[byte], cell->writeClocks[previousByte]))
+      return false;
+  }
+  return true;
+}
+
+GSAN_DEVICE void replaceReadClock(ThreadState *state, ShadowCell *cell,
+                                  int index, ScalarClock clock, uint8_t mask) {
+  for (int i = 0; i < ShadowCell::kReadClockSize; ++i) {
+    if (i == index)
+      continue;
+    auto &prior = cell->readClocks[i];
+    if (prior.threadId == state->threadId && prior.scope == clock.scope) {
+      cell->readMasks[i] &= static_cast<uint8_t>(~mask);
+      if (cell->readMasks[i] == 0)
+        prior = ScalarClock{};
+    }
+  }
+  cell->readClocks[index] = clock;
+  cell->readMasks[index] = mask;
+}
+
 GSAN_DEVICE void recordRead(ThreadState *state, ShadowCell *cell,
-                            AtomicScope scope) {
+                            AtomicScope scope, uint8_t mask) {
   auto numReads = cell->numReads;
   if (numReads < kMaxUint16)
     ++cell->numReads;
 
   auto scalarClock = makeScalarClock(state, scope);
+  int reusableIndex = -1;
+  int emptyIndex = -1;
   for (int iRead = 0; iRead < ShadowCell::kReadClockSize; ++iRead) {
     auto readClock = cell->readClocks[iRead];
-    if (readClock.threadId == state->threadId || readClock.epoch == 0) {
-      cell->readClocks[iRead] = scalarClock;
+    auto readMask = cell->readMasks[iRead];
+    if (readClock.epoch == 0 || readMask == 0) {
+      if (emptyIndex == -1)
+        emptyIndex = iRead;
+      continue;
+    }
+    if (clocksEqual(readClock, scalarClock)) {
+      replaceReadClock(state, cell, iRead, scalarClock, readMask | mask);
       return;
     }
+    if (readClock.threadId == state->threadId && readClock.scope == scope &&
+        (readMask & static_cast<uint8_t>(~mask)) == 0)
+      reusableIndex = iRead;
+  }
+
+  if (reusableIndex != -1 || emptyIndex != -1) {
+    auto index = reusableIndex != -1 ? reusableIndex : emptyIndex;
+    replaceReadClock(state, cell, index, scalarClock, mask);
+    return;
   }
 
   auto threadNumReads = __scoped_atomic_fetch_add(
@@ -532,28 +593,40 @@ GSAN_DEVICE void recordRead(ThreadState *state, ShadowCell *cell,
   auto seed = getGlobalState(state)->rngSeed;
   uint32_t rand = hash2x32(threadNumReads, state->threadId, seed);
   rand = rand % numReads;
-  if (rand < ShadowCell::kReadClockSize) {
-    cell->readClocks[rand] = scalarClock;
-  }
+  if (rand < ShadowCell::kReadClockSize)
+    replaceReadClock(state, cell, rand, scalarClock, mask);
 }
 
-GSAN_DEVICE void doWrite(ThreadState *state, ShadowCell *cell, Location loc) {
+GSAN_DEVICE void doWrite(ThreadState *state, ShadowCell *cell, uint8_t mask,
+                         Location loc) {
   // Check WAR
   for (int iRead = 0; iRead < ShadowCell::kReadClockSize; ++iRead) {
+    if ((cell->readMasks[iRead] & mask) == 0)
+      continue;
     assertOrderedOrCompatible(state, AtomicScope::NonAtomic,
                               cell->readClocks[iRead], loc,
                               "Write after read race detected");
   }
   // Check WAW
-  assertOrderedOrCompatible(state, AtomicScope::NonAtomic, cell->writeClock,
-                            loc, "Write after write race detected");
+  for (int byte = 0; byte < kShadowMemGranularityBytes; ++byte) {
+    if (maskIncludesByte(mask, byte) && isFirstWriteClock(cell, mask, byte)) {
+      assertOrderedOrCompatible(state, AtomicScope::NonAtomic,
+                                cell->writeClocks[byte], loc,
+                                "Write after write race detected");
+    }
+  }
   // Update write
-  cell->writeClock = makeScalarClock(state, AtomicScope::NonAtomic);
+  auto clock = makeScalarClock(state, AtomicScope::NonAtomic);
+  for (int byte = 0; byte < kShadowMemGranularityBytes; ++byte) {
+    if (maskIncludesByte(mask, byte))
+      cell->writeClocks[byte] = clock;
+  }
 }
 
 GSAN_DEVICE void writeRange(ThreadState *state, uintptr_t write_addr,
                             int nBytes, Location loc) {
-  auto range = roundRange(Range{write_addr, write_addr + nBytes});
+  Range access{write_addr, write_addr + nBytes};
+  auto range = roundRange(access);
 
   auto reserveBase = state->reserveBase;
 
@@ -563,7 +636,7 @@ GSAN_DEVICE void writeRange(ThreadState *state, uintptr_t write_addr,
       continue;
     auto shadowAddr = getShadowAddress(addr);
     auto cell = acquireShadow(shadowAddr);
-    doWrite(state, cell, loc);
+    doWrite(state, cell, getAccessMask(access, addr), loc);
     releaseShadow(cell);
   }
 }
@@ -589,15 +662,22 @@ GSAN_DEVICE void tensorStore(ThreadState *state, const char *stackPtr,
     rwLockReleaseRead(state->lock);
 }
 
-GSAN_DEVICE void doRead(ThreadState *state, ShadowCell *cell, Location loc) {
-  assertOrderedOrCompatible(state, AtomicScope::NonAtomic, cell->writeClock,
-                            loc, "Read after write race detected");
-  recordRead(state, cell, AtomicScope::NonAtomic);
+GSAN_DEVICE void doRead(ThreadState *state, ShadowCell *cell, uint8_t mask,
+                        Location loc) {
+  for (int byte = 0; byte < kShadowMemGranularityBytes; ++byte) {
+    if (maskIncludesByte(mask, byte) && isFirstWriteClock(cell, mask, byte)) {
+      assertOrderedOrCompatible(state, AtomicScope::NonAtomic,
+                                cell->writeClocks[byte], loc,
+                                "Read after write race detected");
+    }
+  }
+  recordRead(state, cell, AtomicScope::NonAtomic, mask);
 }
 
 GSAN_DEVICE void readRange(ThreadState *state, uintptr_t read_addr, int nBytes,
                            Location loc) {
-  auto range = roundRange(Range{read_addr, read_addr + nBytes});
+  Range access{read_addr, read_addr + nBytes};
+  auto range = roundRange(access);
 
   auto reserveBase = state->reserveBase;
   if (range.start >= reserveBase + kReserveSize || reserveBase >= range.end)
@@ -609,7 +689,7 @@ GSAN_DEVICE void readRange(ThreadState *state, uintptr_t read_addr, int nBytes,
       continue;
     auto shadowAddr = getShadowAddress(addr);
     auto cell = acquireShadow(shadowAddr);
-    doRead(state, cell, loc);
+    doRead(state, cell, getAccessMask(access, addr), loc);
     releaseShadow(cell);
   }
 }
@@ -638,15 +718,18 @@ GSAN_DEVICE void tensorLoad(ThreadState *state, const char *stackPtr,
 GSAN_DEVICE void initAtomicEventState(AtomicEventState *event) {
   event->threadState = nullptr;
   event->numCells = 0;
-  for (auto &cell : event->cells)
-    cell = nullptr;
+  for (int i = 0; i < kMaxAtomicShadowCells; ++i) {
+    event->cells[i] = nullptr;
+    event->masks[i] = 0;
+  }
 }
 
 GSAN_DEVICE void acquireAtomicShadowRange(ThreadState *state,
                                           AtomicEventState *event,
                                           uintptr_t address, int nBytes,
                                           Location loc) {
-  auto range = roundRange(Range{address, address + nBytes});
+  Range access{address, address + nBytes};
+  auto range = roundRange(access);
   auto reserveBase = state->reserveBase;
   uint8_t numCells = 0;
   for (uintptr_t addr = range.start; addr < range.end;
@@ -669,7 +752,9 @@ GSAN_DEVICE void acquireAtomicShadowRange(ThreadState *state,
        addr += kShadowMemGranularityBytes) {
     if (!isGsanManaged(addr, reserveBase))
       continue;
-    event->cells[event->numCells++] = acquireShadow(getShadowAddress(addr));
+    auto index = event->numCells++;
+    event->cells[index] = acquireShadow(getShadowAddress(addr));
+    event->masks[index] = getAccessMask(access, addr);
   }
 }
 
@@ -680,6 +765,103 @@ GSAN_DEVICE void releaseAtomicShadowRange(AtomicEventState *event) {
     releaseShadow(event->cells[i]);
   rwLockReleaseWrite(event->threadState->lock);
   initAtomicEventState(event);
+}
+
+GSAN_DEVICE bool isFirstAtomicWriteClock(const AtomicEventState *event,
+                                         uint8_t cellIndex, int byteIndex) {
+  auto clock = event->cells[cellIndex]->writeClocks[byteIndex];
+  for (uint8_t previousCell = 0; previousCell <= cellIndex; ++previousCell) {
+    int byteLimit =
+        previousCell == cellIndex ? byteIndex : kShadowMemGranularityBytes;
+    for (int previousByte = 0; previousByte < byteLimit; ++previousByte) {
+      if (maskIncludesByte(event->masks[previousCell], previousByte) &&
+          clocksEqual(clock,
+                      event->cells[previousCell]->writeClocks[previousByte]))
+        return false;
+    }
+  }
+  return true;
+}
+
+GSAN_DEVICE epoch_t publishMixedAtomicReleaseSnapshots(
+    ThreadState *state, const AtomicEventState *event, bool includeCurrent,
+    Location loc) {
+  auto *globals = getGlobalState(state);
+  assert_msg(loc, globals->clockBufferSize != 0,
+             "GSan clock buffer size must be non-zero");
+  uint32_t nextHead = state->clockBufferHead + 1;
+  assert_msg(loc, nextHead <= kMaxEpoch, "GSan clock buffer token overflowed");
+  auto *slot = getClockBufferBase(state) +
+               (nextHead % globals->clockBufferSize) * globals->numThreads;
+  for (int i = 0; i < globals->numThreads; ++i) {
+    epoch_t epoch = includeCurrent ? state->vectorClock[i] : 0;
+    for (uint8_t cellIndex = 0; cellIndex < event->numCells; ++cellIndex) {
+      auto *cell = event->cells[cellIndex];
+      for (int byte = 0; byte < kShadowMemGranularityBytes; ++byte) {
+        if (!maskIncludesByte(event->masks[cellIndex], byte) ||
+            !isFirstAtomicWriteClock(event, cellIndex, byte))
+          continue;
+        auto write = cell->writeClocks[byte];
+        if (!write.isRelease)
+          continue;
+        auto *snapshot = getSnapshotForWrite(state, write, loc);
+        if (epoch < snapshot[i])
+          epoch = snapshot[i];
+      }
+    }
+    slot[i] = epoch;
+  }
+  state->clockBufferHead = nextHead;
+  // The propagated snapshot must not become this thread's acquired clock.
+  state->clockBufferDirty = 1;
+  return static_cast<epoch_t>(nextHead);
+}
+
+GSAN_DEVICE ScalarClock makeAtomicWriteClock(ThreadState *state,
+                                             const AtomicEventState *event,
+                                             AtomicSem sem, AtomicScope scope,
+                                             Location loc) {
+  bool isRelease = hasRelease(sem);
+  bool canAccumulate = false;
+  int numReleases = 0;
+  ScalarClock previousRelease{};
+  for (uint8_t cellIndex = 0; cellIndex < event->numCells; ++cellIndex) {
+    auto *cell = event->cells[cellIndex];
+    for (int byte = 0; byte < kShadowMemGranularityBytes; ++byte) {
+      if (!maskIncludesByte(event->masks[cellIndex], byte) ||
+          !isFirstAtomicWriteClock(event, cellIndex, byte))
+        continue;
+      auto write = cell->writeClocks[byte];
+      if (!write.isRelease)
+        continue;
+      if (numReleases++ == 0)
+        previousRelease = write;
+      if (isRelease && canAccumulateReleaseRmw(state, scope, write)) {
+        canAccumulate = true;
+      } else if (isRelease) {
+        auto *snapshot = getSnapshotForWrite(state, write, loc);
+        assert_msg(loc, dominatesSnapshot(state, snapshot),
+                   "GSan detected atomic release accumulation with mixed "
+                   "scopes, which is not supported.");
+      }
+    }
+  }
+
+  if (!isRelease && numReleases == 0)
+    return makeScalarClock(state, scope);
+
+  epoch_t token;
+  if (isRelease && !canAccumulate) {
+    token = publishCurrentVectorClock(state, loc);
+  } else if (numReleases == 1) {
+    token = isRelease
+                ? publishCurrentVectorClockWithPriorRelease(
+                      state, previousRelease, loc)
+                : propagateClockBufferSnapshot(state, previousRelease, loc);
+  } else {
+    token = publishMixedAtomicReleaseSnapshots(state, event, isRelease, loc);
+  }
+  return makePublishedClock(state, scope, token);
 }
 
 GSAN_DEVICE void beginAtomicAccess(GlobalState *globals,
@@ -700,15 +882,24 @@ GSAN_DEVICE void beginAtomicAccess(GlobalState *globals,
   auto scope = decodeAtomicScope(scopeRaw);
   for (uint8_t i = 0; i < event->numCells; ++i) {
     auto *cell = event->cells[i];
-    auto write = cell->writeClock;
-    assertOrderedOrCompatible(state, scope, write, loc,
-                              "Read after write race detected");
-    recordRead(state, cell, scope);
+    for (int byte = 0; byte < kShadowMemGranularityBytes; ++byte) {
+      if (maskIncludesByte(event->masks[i], byte) &&
+          isFirstAtomicWriteClock(event, i, byte)) {
+        assertOrderedOrCompatible(state, scope, cell->writeClocks[byte], loc,
+                                  "Read after write race detected");
+      }
+    }
+    recordRead(state, cell, scope, event->masks[i]);
   }
   if (hasAcquire(sem)) {
     for (uint8_t i = 0; i < event->numCells; ++i) {
-      auto write = event->cells[i]->writeClock;
-      maybeMergeAcquire(state, scope, write, loc);
+      auto *cell = event->cells[i];
+      for (int byte = 0; byte < kShadowMemGranularityBytes; ++byte) {
+        if (maskIncludesByte(event->masks[i], byte) &&
+            isFirstAtomicWriteClock(event, i, byte)) {
+          maybeMergeAcquire(state, scope, cell->writeClocks[byte], loc);
+        }
+      }
     }
   }
 }
@@ -727,42 +918,28 @@ GSAN_DEVICE void endAtomicAccess(AtomicEventState *event, bool pred,
     for (uint8_t i = 0; i < event->numCells; ++i) {
       auto *cell = event->cells[i];
       for (int iRead = 0; iRead < ShadowCell::kReadClockSize; ++iRead) {
-        assertOrderedOrCompatible(state, scope, cell->readClocks[iRead], loc,
-                                  "Write after read race detected");
+        if ((cell->readMasks[iRead] & event->masks[i]) != 0) {
+          assertOrderedOrCompatible(state, scope, cell->readClocks[iRead], loc,
+                                    "Write after read race detected");
+        }
       }
-      assertOrderedOrCompatible(state, scope, cell->writeClock, loc,
-                                "Write after write race detected");
-    }
-
-    auto previousWrite = event->cells[0]->writeClock;
-    ScalarClock newWriteClock;
-    if (hasRelease(sem)) {
-      epoch_t token;
-      if (canAccumulateReleaseRmw(state, scope, previousWrite))
-        token = publishCurrentVectorClockWithPriorRelease(state, previousWrite,
-                                                          loc);
-      else if (previousWrite.isRelease) {
-        const auto *previousSnapshot =
-            getSnapshotForWrite(state, previousWrite, loc);
-        assert_msg(loc, dominatesSnapshot(state, previousSnapshot),
-                   "GSan detected atomic release accumulation with mixed "
-                   "scopes, which is not supported.");
-        token = publishCurrentVectorClock(state, loc);
-      } else {
-        token = publishCurrentVectorClock(state, loc);
-      }
-      newWriteClock = makePublishedClock(state, scope, token);
-    } else {
-      if (previousWrite.isRelease) {
-        auto token = propagateClockBufferSnapshot(state, previousWrite, loc);
-        newWriteClock = makePublishedClock(state, scope, token);
-      } else {
-        newWriteClock = makeScalarClock(state, scope);
+      for (int byte = 0; byte < kShadowMemGranularityBytes; ++byte) {
+        if (maskIncludesByte(event->masks[i], byte) &&
+            isFirstAtomicWriteClock(event, i, byte)) {
+          assertOrderedOrCompatible(state, scope, cell->writeClocks[byte], loc,
+                                    "Write after write race detected");
+        }
       }
     }
 
-    for (uint8_t i = 0; i < event->numCells; ++i)
-      event->cells[i]->writeClock = newWriteClock;
+    auto newWriteClock = makeAtomicWriteClock(state, event, sem, scope, loc);
+    for (uint8_t i = 0; i < event->numCells; ++i) {
+      auto *cell = event->cells[i];
+      for (int byte = 0; byte < kShadowMemGranularityBytes; ++byte) {
+        if (maskIncludesByte(event->masks[i], byte))
+          cell->writeClocks[byte] = newWriteClock;
+      }
+    }
 
     if (hasRelease(sem))
       incrementThreadEpoch(state, loc);

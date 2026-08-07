@@ -59,9 +59,9 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x64xf16, #shared_f16, #smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
-    // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<32 x i64>, array<32 x i8>)>
-    // CHECK: %[[COUNT:.*]] = llvm.mlir.constant(32 : i32) : i32
-    // CHECK: %[[BYTES:.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<64 x i64>, array<64 x i8>)>
+    // CHECK: %[[COUNT:.*]] = llvm.mlir.constant(64 : i32) : i32
+    // CHECK: %[[BYTES:.*]] = llvm.mlir.constant(2 : i32) : i32
     // CHECK: llvm.call @__triton_gsan_load_tensor(%{{.*}}, %{{.*}}, %[[COUNT]], %[[BYTES]], %{{.*}}, %{{.*}})
     ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<32x64xf16, #shared_f16>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared_f16, #smem, mutable>
     tt.return
@@ -81,9 +81,9 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x64xf16, #shared_f16, #smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 16384 : i32} : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
-    // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<32 x i64>, array<32 x i8>)>
-    // CHECK: %[[COUNT_4W:.*]] = llvm.mlir.constant(32 : i32) : i32
-    // CHECK: %[[BYTES_4W:.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<64 x i64>, array<64 x i8>)>
+    // CHECK: %[[COUNT_4W:.*]] = llvm.mlir.constant(64 : i32) : i32
+    // CHECK: %[[BYTES_4W:.*]] = llvm.mlir.constant(2 : i32) : i32
     // CHECK: llvm.call @__triton_gsan_load_tensor(%{{.*}}, %{{.*}}, %[[COUNT_4W]], %[[BYTES_4W]], %{{.*}}, %{{.*}})
     ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<128x64xf16, #shared_f16>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared_f16, #smem, mutable>
     tt.return
@@ -134,6 +134,29 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32
     %c0 = arith.constant 0 : i32
     %rmw = tt.atomic_rmw add, acq_rel, gpu, %ptr, %val, %mask : (!tt.ptr<i32>, i32, i1) -> i32
     %cas = tt.atomic_cas acq_rel, gpu, %ptr, %c0, %val : (!tt.ptr<i32>, i32, i32) -> i32
+    tt.return
+  }
+}
+
+// -----
+
+#masked_f16 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func @gsan_masked_f16_preserves_lane_masks
+  // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<4 x i64>, array<4 x i8>)>
+  // CHECK: %[[MASKED_COUNT:.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK: %[[MASKED_BYTES:.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK: llvm.call @__triton_gsan_store_tensor(%{{.*}}, %{{.*}}, %[[MASKED_COUNT]], %[[MASKED_BYTES]], %{{.*}}, %{{.*}})
+  tt.func @gsan_masked_f16_preserves_lane_masks(%base: !tt.ptr<f16> {tt.divisibility = 8 : i32}, %size: i32) {
+    %offsets = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #masked_f16>
+    %bound = tt.splat %size : i32 -> tensor<128xi32, #masked_f16>
+    %mask = arith.cmpi slt, %offsets, %bound : tensor<128xi32, #masked_f16>
+    %base_ptr = tt.splat %base : !tt.ptr<f16> -> tensor<128x!tt.ptr<f16>, #masked_f16>
+    %ptrs = tt.addptr %base_ptr, %offsets : tensor<128x!tt.ptr<f16>, #masked_f16>, tensor<128xi32, #masked_f16>
+    %values = tt.splat %size : i32 -> tensor<128xi32, #masked_f16>
+    %values_f16 = arith.sitofp %values : tensor<128xi32, #masked_f16> to tensor<128xf16, #masked_f16>
+    tt.store %ptrs, %values_f16, %mask : tensor<128x!tt.ptr<f16>, #masked_f16>
     tt.return
   }
 }
