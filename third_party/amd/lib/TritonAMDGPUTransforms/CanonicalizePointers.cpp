@@ -560,6 +560,27 @@ void FatPointers::collectFatPointerAttributes(const KeyT &k) {
     pointerAttrs[k]->attributes[baseAttr.getName()] = baseAttr.getValue();
 }
 
+static ArrayRef<StringRef> getPropagatedAttrNames() {
+  static constexpr StringRef names[] = {"tt.divisibility", "tt.contiguity",
+                                        "tt.constancy"};
+  return names;
+}
+
+// The attributes carry one entry per tensor dimension and AxisInfoAnalysis
+// reads them back indexed by the op's rank. An attribute whose length disagrees
+// with the destination pointer rank would produce an inconsistent AxisInfo
+// (reading out of bounds), so only propagate an attr when its rank matches the
+// target; attributes outside getPropagatedAttrNames have no per-dimension data
+// and are always safe.
+static bool attrRankMatchesTarget(StringRef name, Attribute attr,
+                                  int64_t targetRank) {
+  if (!llvm::is_contained(getPropagatedAttrNames(), name))
+    return true;
+  if (auto dense = dyn_cast<DenseElementsAttr>(attr))
+    return dense.getNumElements() == targetRank;
+  return targetRank == 1;
+}
+
 Value createTensorPointer(RewriterBase &rewriter, Value basePtr, Value offset,
                           Location loc,
                           const FatPointers::FatPtrAttrs &fatPtrAttrs) {
@@ -570,7 +591,8 @@ Value createTensorPointer(RewriterBase &rewriter, Value basePtr, Value offset,
     auto addPtrOp =
         tt::AddPtrOp::create(rewriter, loc, basePtr.getType(), basePtr, offset);
     for (const auto &attribute : fatPtrAttrs.attributes)
-      addPtrOp->setAttr(attribute.first, attribute.second);
+      if (attrRankMatchesTarget(attribute.first, attribute.second, /*rank=*/1))
+        addPtrOp->setAttr(attribute.first, attribute.second);
     return addPtrOp.getResult();
   }
 
@@ -592,7 +614,9 @@ Value createTensorPointer(RewriterBase &rewriter, Value basePtr, Value offset,
       tt::AddPtrOp::create(rewriter, loc, tensorPtrType, tensorPtr, offset);
 
   for (const auto &attribute : fatPtrAttrs.attributes)
-    addPtrOp->setAttr(attribute.first, attribute.second);
+    if (attrRankMatchesTarget(attribute.first, attribute.second,
+                              tensorType.getRank()))
+      addPtrOp->setAttr(attribute.first, attribute.second);
   return addPtrOp.getResult();
 }
 
@@ -759,10 +783,8 @@ public:
       return rewriteSmallTensorPtr(addPtrOp, adaptor, rewriter);
 
     // Query all discardable attributes that we want to preserve
-    std::array<StringRef, 3> propagateList{"tt.divisibility", "tt.contiguity",
-                                           "tt.constancy"};
-    SmallVector<NamedAttribute> propagatedAttrs =
-        tt::filterDiscardableAttrs(addPtrOp.getOperation(), propagateList);
+    SmallVector<NamedAttribute> propagatedAttrs = tt::filterDiscardableAttrs(
+        addPtrOp.getOperation(), getPropagatedAttrNames());
     auto currPtrTy = llvm::dyn_cast<RankedTensorType>(addPtrOp.getType());
     int currPtrRank = currPtrTy ? currPtrTy.getRank() : 1;
     auto doSetDiscardableAttrs = [&](tt::AddPtrOp newAddPtrOp) {
@@ -869,6 +891,10 @@ private:
     rewriter.setInsertionPoint(addPtrOp);
 
     const auto &oldAttr = fatPtrs.at({fatPtrBase, fatPtrOffset});
+
+    // Query all discardable attributes that we want to preserve
+    SmallVector<NamedAttribute> propagatedAttrs = tt::filterDiscardableAttrs(
+        addPtrOp.getOperation(), getPropagatedAttrNames());
 
     LDBG("smal-tensor addPtr: " << addPtrOp);
     LDBG("   - isSmallTensor: " << oldAttr.isSmallTensor);
@@ -1039,6 +1065,16 @@ private:
     auto nextFatPtr = std::pair{fatPtrBase, newOffset};
     fatPtrs[nextFatPtr] = oldAttr;
     fatPtrs[nextFatPtr].canNarrow = false;
+    // Add the attributes we want to preserve into the table. They
+    // are attached to the op later, in createTensorPointer. An attribute
+    // from a previous addptr describes the pointer before this addptr's
+    // offset operand was folded in, which can break it (a 16-byte aligned
+    // pointer plus a runtime offset is no longer 16-byte aligned), so erase
+    // those attributes instead of merging into them.
+    for (StringRef name : getPropagatedAttrNames())
+      fatPtrs[nextFatPtr].attributes.erase(name);
+    for (const NamedAttribute &attr : propagatedAttrs)
+      fatPtrs[nextFatPtr].attributes[attr.getName().strref()] = attr.getValue();
 
     return success();
   }
