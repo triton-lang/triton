@@ -1,4 +1,5 @@
 import inspect
+import os
 import subprocess
 import tempfile
 
@@ -7,7 +8,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hopper_or_newer, is_interpreter
+from triton._internal_testing import is_cuda, is_hopper_or_newer, is_interpreter
 from triton._filecheck import run_filecheck
 
 
@@ -244,6 +245,38 @@ def test_line_info_env(monkeypatch, status: str):
     kernel_info = kernel_single.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1, ))
     file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
     assert len(file_lines) == 0 if status == "1" else len(file_lines) > 0
+
+
+def test_cubin_reproducible_without_line_info(fresh_knobs, tmp_path, fresh_triton_cache):
+    if not is_cuda():
+        pytest.skip("cubin debug info is NVIDIA-specific")
+
+    # ptxas records the mtime of the file named by `.file` in the cubin's
+    # .debug_line section, so raw cubins are only reproducible across mtime
+    # changes once that section is suppressed.
+    fresh_knobs.compilation.disable_line_info = True
+    fresh_knobs.compilation.always_compile = True
+
+    temp_file = tmp_path / "test.ttir"
+    temp_file.write_text(f"""
+    #loc = loc("{temp_file}":7:0)
+    module {{
+    tt.func public @test(%arg0: !tt.ptr<f32> {{tt.divisibility = 16 : i32}} loc("{temp_file}":7:0), %arg1: !tt.ptr<f32> {{tt.divisibility = 16 : i32}} loc("{temp_file}":7:0)) attributes {{noinline = false}} {{
+        %0 = tt.load %arg0 : !tt.ptr<f32> loc(#loc1)
+        tt.store %arg1, %0 : !tt.ptr<f32> loc(#loc2)
+        tt.return loc(#loc3)
+    }} loc(#loc)
+    }} loc(#loc)
+    #loc1 = loc("{temp_file}":8:16)
+    #loc2 = loc("{temp_file}":9:20)
+    #loc3 = loc("{temp_file}":9:4)
+    """)
+
+    cubins = []
+    for mtime in (1785147297, 1785210547):
+        os.utime(temp_file, (mtime, mtime))
+        cubins.append(triton.compile(str(temp_file)).asm["cubin"])
+    assert cubins[0] == cubins[1]
 
 
 @pytest.mark.parametrize("status", ["ttir", ""])

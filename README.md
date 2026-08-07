@@ -242,6 +242,11 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 - `TRITON_F32_DEFAULT` sets the default input precision of `tl.dot` when using 32-bit floats, which can be either `ieee`, `tf32`, or `tf32x3`.
 - `TRITON_FRONT_END_DEBUGGING=1` disables exception wrapping when an error occurs in the compiler frontend, allowing the full stack trace to be seen.
 - `TRITON_DISABLE_LINE_INFO=1` removes all line information from the module.
+  Line information is kept by default, and `ptxas` then records the path and the
+  modification time of the referenced source file in the cubin's `.debug_line`
+  section. Raw cubin bytes are therefore not reproducible across changes to the
+  source file's mtime, even when the PTX and the SASS are unchanged. Set this to
+  `1` if you need bit-reproducible cubins.
 - `PTXAS_OPTIONS` passes additional command-line options to the PTX assembler `ptxas` (only on NVIDIA).
 - `LLVM_EXTRACT_DI_LOCAL_VARIABLES` emit full debug info, allowing for eval of values in gpu debuggers (ie cuda-gdb, rocm-gdb etc)
 - `TRITON_DEFAULT_BACKEND=<backend>` optionally sets the default backend used by Triton when
