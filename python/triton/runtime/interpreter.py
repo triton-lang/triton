@@ -735,11 +735,16 @@ class InterpreterBuilder:
         # tl.store to write 8 bytes instead of 4 bytes which lead to silent data corruption
         dummy_weights = np.ones_like(data.data, dtype=np.int32)
 
+        # np.histogram's last bin is a closed interval [bins - 1, bins], so a
+        # value equal to `bins` would be counted there. The GPU drops every
+        # out-of-range value, so exclude such elements like masked ones.
+        valid = np.logical_and(mask.data, data.data < bins)
+
         # force all masked elements to zero
-        data = np.where(mask.data, data.data, np.zeros_like(data.data))
+        data = np.where(valid, data.data, np.zeros_like(data.data))
         histogram = np.histogram(data, bins=bins, range=(0, bins), weights=dummy_weights)[0]
         # remove overcounted elements
-        histogram[0] -= np.logical_not(mask.data).sum()
+        histogram[0] -= np.logical_not(valid).sum()
         return TensorHandle(histogram, tl.int32)
 
     def create_gather(self, src, indices, axis):
