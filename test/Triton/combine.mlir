@@ -535,6 +535,22 @@ tt.func @test_combine_broadcast_mul_reduce_extra_broadcast(%arg0: tensor<32x1xf3
     tt.return %5 : tensor<32x32xf32>
 }
 
+// Do not combine f16: the rewrite currently splats an f32 zero scalar.
+// CHECK-LABEL: @test_combine_broadcast_mul_reduce_f16
+tt.func @test_combine_broadcast_mul_reduce_f16(%arg0: tensor<32x16x1xf16>, %arg1: tensor<1x16x32xf16>) -> tensor<32x32xf16> {
+    // CHECK-NOT: tt.dot
+    // CHECK: tt.reduce
+    %0 = tt.broadcast %arg0 : tensor<32x16x1xf16> -> tensor<32x16x32xf16>
+    %1 = tt.broadcast %arg1 : tensor<1x16x32xf16> -> tensor<32x16x32xf16>
+    %2 = arith.mulf %0, %1 : tensor<32x16x32xf16>
+    %3 = "tt.reduce"(%2) <{axis = 1 : i32}> ({
+    ^bb0(%arg2: f16, %arg3: f16):
+        %4 = arith.addf %arg2, %arg3 : f16
+        tt.reduce.return %4 : f16
+    }) : (tensor<32x16x32xf16>) -> tensor<32x32xf16>
+    tt.return %3 : tensor<32x32xf16>
+}
+
 // CHECK-LABEL: @test_combine_broadcast_mul_reduce_wrong_axis
 tt.func @test_combine_broadcast_mul_reduce_wrong_axis(%arg0: tensor<32x32xf32>, %arg1: tensor<32x32xf32>) -> tensor<32x32xf32> {
     // CHECK-NOT: tt.dot
