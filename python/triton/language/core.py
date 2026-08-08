@@ -1205,7 +1205,13 @@ class tensor(base_value):
     def exp(self) -> tensor:
         ...
 
+    def exp2(self) -> tensor:
+        ...
+
     def log(self) -> tensor:
+        ...
+
+    def log2(self) -> tensor:
         ...
 
     def cos(self) -> tensor:
@@ -1217,10 +1223,22 @@ class tensor(base_value):
     def sqrt(self) -> tensor:
         ...
 
+    def sqrt_rn(self) -> tensor:
+        ...
+
     def rsqrt(self) -> tensor:
         ...
 
     def abs(self) -> tensor:
+        ...
+
+    def erf(self) -> tensor:
+        ...
+
+    def floor(self) -> tensor:
+        ...
+
+    def ceil(self) -> tensor:
         ...
 
     def reduce(self, axis, combine_fn, keep_dims=False) -> tensor:
