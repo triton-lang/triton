@@ -539,7 +539,7 @@ LogicalResult AsyncSharedStoreOp::verify() {
 
   auto regLayout = toLinearLayout(srcTy);
   auto sharedLayout = toLinearLayoutIgnoringPadding(dstTy);
-  auto cvt = regLayout.invertAndCompose(sharedLayout);
+  auto cvt = invertAndComposeBlockLocal(sharedLayout, regLayout);
   std::optional<int> maybeMaxVecElems;
   if (isPaddedEncoding(dstTy.getEncoding()))
     maybeMaxVecElems = getMinInterval(dstTy.getEncoding());

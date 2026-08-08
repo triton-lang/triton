@@ -20,11 +20,11 @@ import triton.experimental.gluon.language as ttgl
 from triton.experimental.gluon.language import expand_dims
 
 from triton.experimental.gluon.language.amd import warp_pipeline_stage
-from triton.experimental.gluon.language.amd.gfx1250 import wmma_scaled
-from triton.experimental.gluon.language.amd.gfx1250 import tdm
-from triton.experimental.gluon.language.amd.gfx1250 import buffer_load, buffer_store
-from triton.experimental.gluon.language.amd.gfx1250 import get_wmma_scale_layout
-from triton.experimental.gluon.language.amd.gfx1250 import cluster
+from triton.experimental.gluon.language.amd.cdna5 import wmma_scaled
+from triton.experimental.gluon.language.amd.cdna5 import tdm
+from triton.experimental.gluon.language.amd.cdna5 import buffer_load, buffer_store
+from triton.experimental.gluon.language.amd.cdna5 import get_wmma_scale_layout
+from triton.experimental.gluon.language.amd.cdna5 import cluster
 
 # ===-----------------------------------------------------------------------===#
 # Kernel Utilities
