@@ -15,6 +15,30 @@ def do_bench(kernel_call, quantiles, use_cuda_graph=False):
     return triton.testing.do_bench(kernel_call, quantiles=quantiles, warmup=1, rep=1)
 
 
+def make_autotuner(**autotune_kwargs):
+    configs = [triton.Config({"BLOCK_SIZE": 32}), triton.Config({"BLOCK_SIZE": 128})]
+
+    @triton.autotune(configs=configs, key=["N"], cache_results=True, **autotune_kwargs)
+    @triton.jit
+    def _kernel(dst, N, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        tl.store(dst + offsets, offsets, mask=offsets < N)
+
+    return _kernel
+
+
+def test_custom_do_bench_disables_cache_results():
+    assert not make_autotuner(do_bench=do_bench).cache_results
+
+
+def test_default_do_bench_keeps_cache_results():
+    assert make_autotuner().cache_results
+
+
+def test_legacy_bench_options_disable_cache_results():
+    assert not make_autotuner(warmup=1).cache_results
+
+
 @pytest.mark.parametrize('use_cuda_graph', [False, True])
 def test_kwargs(use_cuda_graph: bool, device: str):
     if use_cuda_graph and not torch.cuda.is_available():
