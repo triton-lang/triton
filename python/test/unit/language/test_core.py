@@ -1459,6 +1459,49 @@ def test_noinline_returns_tensor(device):
     assert torch.equal(z, x + y)
 
 
+def test_uniform_branches_convergent_op(device):
+    # Regression test for #11148. Uniform branches over identical bodies with
+    # an inlined libdevice call, plus a dead early return, let LLVM's jump
+    # threading reroute edges around the block containing the convergent
+    # bar.sync/ldmatrix of the layout conversion below. ptxas then has no
+    # legal warp-reconvergence point before the ldmatrix, which executed with
+    # a partially converged warp: illegal memory access on sm_86, silently
+    # wrong results on sm_120.
+
+    @triton.jit
+    def noise(v, OUT):
+        tl.store(OUT, tl.sin(v.to(tl.float32)))
+
+    @triton.jit
+    def kernel(SW, OUT, X, N, BLOCK_SIZE: tl.constexpr):
+        lo = tl.load(SW)
+        hi = tl.load(SW + 1)
+        cond_true = lo < hi
+        cond_false = lo > hi
+        if cond_true:
+            noise(lo, OUT)
+        tid = tl.arange(0, BLOCK_SIZE)
+        if cond_false:
+            noise(lo, OUT)
+            return
+        if cond_true:
+            noise(lo, OUT)
+        idx = tl.program_id(axis=0) * BLOCK_SIZE + tid
+        mask = idx < N // 2
+        v = tl.load(X + idx, mask=mask)
+        tl.store(X + N - 1 - idx, v, mask=mask)
+
+    N = 1024
+    BLOCK_SIZE = 512
+    x = torch.arange(N, device=device, dtype=torch.float32)
+    expected = x.clone()
+    expected[N // 2:] = x[:N // 2].flip(0)
+    sw = torch.tensor([0, 1], dtype=torch.int32, device=device)
+    out = torch.empty(1, dtype=torch.float32, device=device)
+    kernel[(1, )](sw, out, x, N, BLOCK_SIZE=BLOCK_SIZE)
+    assert torch.equal(x, expected)
+
+
 # ---------------
 # test atomics
 # ---------------

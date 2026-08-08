@@ -362,10 +362,6 @@ void init_triton_amd(py::module_ &m) {
     context.loadAllAvailableDialects();
   });
 
-  m.def("attach_target_triple", [](llvm::Module *module) {
-    module->setTargetTriple(llvm::Triple(amdTargetTriple));
-  });
-
   // Set target architecture ISA version
   m.def("set_isa_version", [](llvm::Module *module, const std::string &arch) {
     llvm::AMDGPU::IsaVersion version = llvm::AMDGPU::getIsaVersion(arch);
