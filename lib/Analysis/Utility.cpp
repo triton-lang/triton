@@ -8,6 +8,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/MLIRTypes.h"
@@ -19,6 +20,7 @@
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 namespace mlir {
 
@@ -444,6 +446,48 @@ unsigned ScanLoweringHelper::getNonAxisNumElementsPerThread() {
 }
 
 Region &ScanLoweringHelper::getCombineOp() { return scanOp.getCombineOp(); }
+
+// Depth-bounded recursive proof that `value` is in {0, 1}, walking up its
+// producer chain. Covers the common boolean mask creation and manipulation
+// patterns that reach scan lowering.
+static bool isKnownZeroOrOne(Value value, unsigned depth = 6) {
+  auto elemTy = getElementTypeOrSelf(value);
+  Operation *def = value.getDefiningOp();
+  if (elemTy.isInteger(1) ||
+      (def && (matchPattern(def, m_Zero()) || matchPattern(def, m_One()))))
+    return true;
+  if (!elemTy.isInteger() || depth == 0 || !def)
+    return false;
+  auto rec = [&](Value v) { return isKnownZeroOrOne(v, depth - 1); };
+  return llvm::TypeSwitch<Operation *, bool>(def)
+      .Case<arith::ExtUIOp, arith::TruncIOp>(
+          [&](auto cast) { return rec(cast.getIn()); })
+      .Case([&](arith::AndIOp andOp) {
+        return rec(andOp.getLhs()) || rec(andOp.getRhs());
+      })
+      .Case([&](arith::SelectOp sel) {
+        return rec(sel.getTrueValue()) && rec(sel.getFalseValue());
+      })
+      // Unary shape/layout manipulations that preserve values.
+      .Case<triton::SplatOp, triton::BroadcastOp, triton::ExpandDimsOp,
+            triton::ReshapeOp, triton::TransOp, triton::gpu::ConvertLayoutOp>(
+          [&](auto view) { return rec(view.getSrc()); })
+      .Default(false);
+}
+
+bool ScanLoweringHelper::isSingleBooleanAddScan() {
+  if (getNumOperands() != 1)
+    return false;
+  Block &block = getCombineOp().front();
+  if (block.getOperations().size() != 2)
+    return false;
+  Value arg0 = block.getArgument(0), arg1 = block.getArgument(1);
+  Value ret = block.getTerminator()->getOperand(0);
+  auto add = ret.getDefiningOp<arith::AddIOp>();
+  bool isSimpleAdd = add && ((add.getLhs() == arg0 && add.getRhs() == arg1) ||
+                             (add.getLhs() == arg1 && add.getRhs() == arg0));
+  return isSimpleAdd && isKnownZeroOrOne(scanOp->getOperand(0));
+}
 
 unsigned ScanLoweringHelper::getAxisNumThreadsPerWarpWithUniqueData() {
   return getEncoding().getThreadsPerWarp()[getAxis()];

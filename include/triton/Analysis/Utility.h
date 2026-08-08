@@ -116,6 +116,10 @@ public:
   explicit ScanLoweringHelper(triton::ScanOp op);
   // Return true if the lowering of the scan op is supported.
   bool isSupported();
+  // Return true iff the scan has a single integer operand known to take
+  // value in {0, 1}, and the combine region is an integer add of the two
+  // block arguments.
+  bool isSingleBooleanAddScan();
   // Return the number of elements per thread along axis dim.
   unsigned getAxisNumElementsPerThread();
   // Return the number of elements per thread along non-axis dims.
