@@ -1577,17 +1577,10 @@ def test_tcgen5_copy(FAILURE, MEM_ACCESS_KIND, device, run_wrapper, monkeypatch,
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
-@pytest.mark.parametrize(
-    "MODE,FAILURE",
-    [
-        pytest.param("stale-observer", True, id="stale-observer"),
-        pytest.param("stale-snapshot", True, id="stale-barrier-snapshot"),
-        pytest.param("synchronized", False, id="latest-read-synchronized"),
-    ],
-)
-def test_reader_generation(MODE, FAILURE, device, run_wrapper, monkeypatch):
-    if FAILURE and run_wrapper:
-        result = run_in_process(test_reader_generation, (MODE, FAILURE, device, False, monkeypatch))
+@pytest.mark.parametrize("MODE", ["stale-observer", "stale-snapshot", "synchronized"])
+def test_reader_generation(MODE, device, run_wrapper, monkeypatch):
+    if MODE != "synchronized" and run_wrapper:
+        result = run_in_process(test_reader_generation, (MODE, device, False, monkeypatch))
         assert_expected_cuda_failure(result.exc)
         assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
         return
@@ -1603,33 +1596,26 @@ def test_reader_generation(MODE, FAILURE, device, run_wrapper, monkeypatch):
         tensor_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([128, 128], col_stride=1)
         smem = ttgl.allocate_shared_memory(ttgl.int32, [128, 128], shared_layout)
         tensor = blackwell.allocate_tensor_memory(ttgl.int32, [128, 128], tensor_layout)
-        old_barrier = mbarrier.allocate_mbarrier()
-        latest_barrier = mbarrier.allocate_mbarrier()
-        mbarrier.init(old_barrier, count=1)
-        mbarrier.init(latest_barrier, count=1)
+        barrier = mbarrier.allocate_mbarrier()
+        mbarrier.init(barrier, count=1)
         zeros = ttgl.full([128, 128], 0, ttgl.int32, layout)
         smem.store(zeros)
 
         blackwell.tcgen05_copy(smem, tensor)
-        blackwell.tcgen05_commit(old_barrier)
+        blackwell.tcgen05_commit(barrier)
         if MODE != "stale-snapshot":
-            mbarrier.wait(old_barrier, phase=0)
+            mbarrier.wait(barrier, phase=0)
 
         blackwell.tcgen05_copy(smem, tensor)
         if MODE == "stale-snapshot":
             # Waiting on the first read must not publish the second read.
-            mbarrier.wait(old_barrier, phase=0)
+            mbarrier.wait(barrier, phase=0)
         if MODE == "synchronized":
-            blackwell.tcgen05_commit(latest_barrier)
-            mbarrier.wait(latest_barrier, phase=0)
+            blackwell.tcgen05_commit(barrier)
+            mbarrier.wait(barrier, phase=1)
 
         smem.store(zeros)
-
-        if MODE != "synchronized":
-            blackwell.tcgen05_commit(latest_barrier)
-            mbarrier.wait(latest_barrier, phase=0)
-        mbarrier.invalidate(old_barrier)
-        mbarrier.invalidate(latest_barrier)
+        mbarrier.invalidate(barrier)
 
     kernel[(1, )](MODE=MODE, num_warps=4)
 
