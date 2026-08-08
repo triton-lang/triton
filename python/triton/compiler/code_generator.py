@@ -470,6 +470,25 @@ class CodeGenerator(ast.NodeVisitor):
         self.builder.restore_insertion_point(ip)
         self.builder.set_loc(loc)
 
+    def _splice_carried_body(self, body, dest, dest_args, names, liveins):
+        """Move an already-generated loop body into `dest`, rebinding carries.
+
+        Returns the livein-handle -> block-argument map. The yield must be
+        filtered through it too: a body like `a, b = b, a` leaves `lscope[a]`
+        holding b's *livein* handle, which has to become b's block argument in
+        the yield as well as in the body's operands.
+        """
+        body.merge_block_before(dest)
+        remap = {}
+        cursor = 0
+        for name in names:
+            for handle in flatten_values_to_ir([liveins[name]]):
+                arg = dest_args[cursor]
+                cursor += 1
+                dest.replace_use_in_block_with(handle, arg)
+                remap[handle.id()] = arg
+        return remap
+
     def _find_carries(self, node, liveins, ignore: set[str] = set()):
         # create loop body block
         block = self.builder.create_block()
@@ -478,7 +497,6 @@ class CodeGenerator(ast.NodeVisitor):
         self.scf_stack.append(node)
         self.visit_compound_statement(node.body)
         self.scf_stack.pop()
-        block.erase()
 
         # If a variable (name) has changed value within the loop, then it's
         # a loop-carried variable. (The new and old value must be of the
@@ -504,11 +522,12 @@ class CodeGenerator(ast.NodeVisitor):
             else:
                 assert name not in self.local_defs, f'Loop carried variable {name} is not a triton value'
 
-        # reset local scope to not pick up local defs from the dry run.
+        body_final = [self.lscope[name] for name in names]
+        # reset local scope to not pick up local defs from the body generation.
         self.lscope = liveins.copy()
         self.local_defs = {}
 
-        return names, init_handles, init_tys
+        return names, init_handles, init_tys, block, body_final
 
     #
     # AST visitor
@@ -1181,7 +1200,8 @@ class CodeGenerator(ast.NodeVisitor):
             liveins, insert_block = sr
             ip, last_loc = self._get_insertion_point_and_loc()
 
-            names, init_handles, init_fe_tys = self._find_carries(node, liveins)
+            names, init_handles, init_fe_tys, body, body_final = self._find_carries(node, liveins)
+            body_end_loc = self.builder.get_loc()
 
             init_tys = [h.get_type() for h in init_handles]
             self._set_insertion_point_and_loc(ip, last_loc)
@@ -1218,11 +1238,11 @@ class CodeGenerator(ast.NodeVisitor):
                 self.lscope[name] = val
                 self.local_defs[name] = val
                 self._maybe_set_loc_to_name(val, name)
-            self.scf_stack.append(node)
-            self.visit_compound_statement(node.body)
-            self.scf_stack.pop()
+            remap = self._splice_carried_body(body, after_block, body_handles, names, liveins)
 
-            yield_handles = flatten_values_to_ir(self.lscope[name] for name in names)
+            self.builder.set_insertion_point_to_end(after_block)
+            self.builder.set_loc(body_end_loc)
+            yield_handles = [remap.get(h.id(), h) for h in flatten_values_to_ir(body_final)]
             self.builder.create_yield_op(yield_handles)
 
         # WhileOp defines new values, update the symbol table (lscope, local_defs)
@@ -1335,7 +1355,8 @@ class CodeGenerator(ast.NodeVisitor):
             liveins, insert_block = sr
             ip, last_loc = self._get_insertion_point_and_loc()
 
-            names, init_handles, init_tys = self._find_carries(node, liveins, ignore={node.target.id})
+            names, init_handles, init_tys, body, body_final = self._find_carries(node, liveins, ignore={node.target.id})
+            body_end_loc = self.builder.get_loc()
 
             # create ForOp
             self._set_insertion_point_and_loc(ip, last_loc)
@@ -1353,17 +1374,17 @@ class CodeGenerator(ast.NodeVisitor):
             if disable_licm:
                 for_op.set_attr("llvm.loop_annotation", self.builder.get_disable_loop_licm_attr())
 
-            self.scf_stack.append(node)
             for_op_body = for_op.get_body(0)
-            self.builder.set_insertion_point_to_start(for_op_body)
             block_handles = [for_op_body.arg(i + 1) for i in range(len(init_handles))]
             block_args = unflatten_ir_values(block_handles, init_tys)
             for name, val in zip(names, block_args):
                 self._maybe_set_loc_to_name(val, name)
                 self.set_value(name, val)
-            self.visit_compound_statement(node.body)
-            self.scf_stack.pop()
-            yield_handles = flatten_values_to_ir(self.lscope[name] for name in names)
+            remap = self._splice_carried_body(body, for_op_body, block_handles, names, liveins)
+
+            self.builder.set_insertion_point_to_end(for_op_body)
+            self.builder.set_loc(body_end_loc)
+            yield_handles = [remap.get(h.id(), h) for h in flatten_values_to_ir(body_final)]
 
             # create YieldOp
             if len(yield_handles) > 0:
