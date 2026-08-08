@@ -518,6 +518,24 @@ tt.func @test_combine_broadcast_mul_reduce_reshape(%arg0: tensor<32x16x1xf32>, %
     tt.return %3 : tensor<32x32xf32>
 }
 
+// CHECK-LABEL: @test_combine_broadcast_mul_reduce_reshape_swapped
+tt.func @test_combine_broadcast_mul_reduce_reshape_swapped(%arg0: tensor<32x16x1xf32>, %arg1: tensor<1x16x32xf32>) -> tensor<32x32xf32> {
+    // CHECK: %[[CST:.*]] = arith.constant dense<0.000000e+00> : tensor<32x32xf32>
+    // CHECK: %[[LHS:.*]] = tt.reshape %arg0 : tensor<32x16x1xf32> -> tensor<32x16xf32>
+    // CHECK: %[[RHS:.*]] = tt.reshape %arg1 : tensor<1x16x32xf32> -> tensor<16x32xf32>
+    // CHECK: %[[RES:.*]] = tt.dot %[[LHS]], %[[RHS]], %[[CST]] : tensor<32x16xf32> * tensor<16x32xf32> -> tensor<32x32xf32>
+    // CHECK: tt.return %[[RES]] : tensor<32x32xf32>
+    %0 = tt.broadcast %arg0 : tensor<32x16x1xf32> -> tensor<32x16x32xf32>
+    %1 = tt.broadcast %arg1 : tensor<1x16x32xf32> -> tensor<32x16x32xf32>
+    %2 = arith.mulf %1, %0 : tensor<32x16x32xf32>  // operands swapped
+    %3 = "tt.reduce"(%2) <{axis = 1 : i32}> ({
+    ^bb0(%arg2: f32, %arg3: f32):
+        %4 = arith.addf %arg2, %arg3 : f32
+        tt.reduce.return %4 : f32
+    }) : (tensor<32x16x32xf32>) -> tensor<32x32xf32>
+    tt.return %3 : tensor<32x32xf32>
+}
+
 // CHECK-LABEL: @test_combine_broadcast_mul_reduce_extra_broadcast
 tt.func @test_combine_broadcast_mul_reduce_extra_broadcast(%arg0: tensor<32x1xf32>, %arg1: tensor<1x32xf32>) -> tensor<32x32xf32> {
     // CHECK-NOT: tt.dot
