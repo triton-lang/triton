@@ -2,6 +2,7 @@
 #define PROTON_DRIVER_DISPATCH_H_
 
 #include <dlfcn.h>
+#include <sys/stat.h>
 
 #include "Utility/Env.h"
 #include "Utility/Errors.h"
@@ -100,7 +101,11 @@ public:
       auto dir =
           ExternLib::pathEnv == nullptr ? "" : getStrEnv(ExternLib::pathEnv);
       if (!dir.empty()) {
-        auto fullPath = dir + "/" + name;
+        struct stat pathStat;
+        auto fullPath =
+            stat(dir.c_str(), &pathStat) == 0 && !S_ISDIR(pathStat.st_mode)
+                ? dir
+                : dir + "/" + name;
         *lib = dlopen(fullPath.c_str(), RTLD_LOCAL | RTLD_LAZY);
       } else {
         // Only if the default path is not set, we try to load it from the
