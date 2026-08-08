@@ -4311,6 +4311,17 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32} {
     // CHECK: tt.return
     tt.return %cvt, %exp : tensor<1x32xf32, #blocked1>, tensor<1x32xf32, #blocked>
   }
+
+  // CHECK-LABEL: @side_effecting_inline_asm
+  tt.func @side_effecting_inline_asm() -> (tensor<1x32xi32, #blocked1>, tensor<1x32xi32, #blocked>) {
+    %cst = arith.constant dense<0> : tensor<1x32xi32, #blocked>
+    // CHECK: %[[ASM:.+]] = tt.elementwise_inline_asm {{.*}}pure = false
+    %asm = tt.elementwise_inline_asm "mov.u32 $0, %clock;" {constraints = "=r,r", packed_element = 1 : i32, pure = false} %cst : tensor<1x32xi32, #blocked> -> tensor<1x32xi32, #blocked>
+    // CHECK-NEXT: %[[CONVERT:.+]] = ttg.convert_layout %[[ASM]]
+    %converted = ttg.convert_layout %asm : tensor<1x32xi32, #blocked> -> tensor<1x32xi32, #blocked1>
+    // CHECK-NEXT: tt.return %[[CONVERT]], %[[ASM]]
+    tt.return %converted, %asm : tensor<1x32xi32, #blocked1>, tensor<1x32xi32, #blocked>
+  }
 }
 
 // -----
