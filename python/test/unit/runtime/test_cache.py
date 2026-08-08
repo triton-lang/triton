@@ -986,6 +986,9 @@ def test_async_compile_error(fresh_triton_cache):
     # After the AsyncCompileMode context manager exits, the active mode should
     # be set to None again, even if there was an error.
     assert triton.runtime._async_compile.active_mode.get() is None
+    # Failed async placeholders must not stay cached; otherwise their Future
+    # objects keep exception tracebacks alive.
+    assert len(fn.device_caches[0][0]) == 0
 
 
 def test_higher_order_kernel(device, fresh_triton_cache, capsys):
