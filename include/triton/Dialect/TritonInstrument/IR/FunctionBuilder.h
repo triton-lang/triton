@@ -148,8 +148,8 @@ public:
                                         Value pred, MemType memType,
                                         Operation *insertPoint,
                                         Value effectCTAs);
-  // setReadVisibility: record the actual reader in the visibility columns of
-  // each observer, including any synthetic peers.
+  // setReadVisibility: invalidate prior observations and barrier snapshots for
+  // this reader, then record it in each current observer's visibility column.
   void createSetReadVisibilityCall(ImplicitLocOpBuilder &b, Value bufferMask,
                                    int reader, uint64_t observerMask,
                                    Value pred, MemType memType,

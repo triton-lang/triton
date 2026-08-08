@@ -1576,6 +1576,64 @@ def test_tcgen5_copy(FAILURE, MEM_ACCESS_KIND, device, run_wrapper, monkeypatch,
     kernel[(1, )](input, output, FAILURE=FAILURE, MEM_ACCESS_KIND=MEM_ACCESS_KIND, num_warps=4, num_ctas=num_ctas)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+@pytest.mark.parametrize(
+    "MODE,FAILURE",
+    [
+        pytest.param("stale-observer", True, id="stale-observer"),
+        pytest.param("stale-snapshot", True, id="stale-barrier-snapshot"),
+        pytest.param("synchronized", False, id="latest-read-synchronized"),
+    ],
+)
+def test_reader_generation(MODE, FAILURE, device, run_wrapper, monkeypatch):
+    if FAILURE and run_wrapper:
+        result = run_in_process(test_reader_generation, (MODE, FAILURE, device, False, monkeypatch))
+        assert_expected_cuda_failure(result.exc)
+        assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(MODE: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+        shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 32, rank=2)
+        tensor_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([128, 128], col_stride=1)
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128, 128], shared_layout)
+        tensor = blackwell.allocate_tensor_memory(ttgl.int32, [128, 128], tensor_layout)
+        old_barrier = mbarrier.allocate_mbarrier()
+        latest_barrier = mbarrier.allocate_mbarrier()
+        mbarrier.init(old_barrier, count=1)
+        mbarrier.init(latest_barrier, count=1)
+        zeros = ttgl.full([128, 128], 0, ttgl.int32, layout)
+        smem.store(zeros)
+
+        blackwell.tcgen05_copy(smem, tensor)
+        blackwell.tcgen05_commit(old_barrier)
+        if MODE != "stale-snapshot":
+            mbarrier.wait(old_barrier, phase=0)
+
+        blackwell.tcgen05_copy(smem, tensor)
+        if MODE == "stale-snapshot":
+            # Waiting on the first read must not publish the second read.
+            mbarrier.wait(old_barrier, phase=0)
+        if MODE == "synchronized":
+            blackwell.tcgen05_commit(latest_barrier)
+            mbarrier.wait(latest_barrier, phase=0)
+
+        smem.store(zeros)
+
+        if MODE != "synchronized":
+            blackwell.tcgen05_commit(latest_barrier)
+            mbarrier.wait(latest_barrier, phase=0)
+        mbarrier.invalidate(old_barrier)
+        mbarrier.invalidate(latest_barrier)
+
+    kernel[(1, )](MODE=MODE, num_warps=4)
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_warpgroup_mma(FAILURE, device, run_wrapper, monkeypatch, num_ctas):

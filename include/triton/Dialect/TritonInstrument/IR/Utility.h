@@ -209,12 +209,13 @@ struct AuxDataMap {
 
   // scratch, <Cbuf x B x Cthr x T x Cmask x i64>
   // Per-memory-type read frontier. For each buffer and logical thread lane, the
-  // i64 value is a bitmask of reads visible to that lane's thread.
+  // i64 value identifies readers whose latest read is visible to that lane's
+  // thread.
   RegionToValueMap readVisibility[numMemTypes];
 
   // scratch, <Cbuf x B x Cbar x K x Cmask x i64>
-  // Per-memory-type buffer/barrier map for read visibility masks that a barrier
-  // tracks.
+  // Per-memory-type buffer/barrier map for the latest reads tracked by a
+  // barrier.
   RegionToValueMap readTracking[numMemTypes];
 
   // scratch, <Cbuf x B x Cthr x P x Cmask x i64>
