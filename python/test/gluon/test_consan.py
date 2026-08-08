@@ -1620,6 +1620,63 @@ def test_reader_generation(MODE, device, run_wrapper, monkeypatch):
     kernel[(1, )](MODE=MODE, num_warps=4)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+@pytest.mark.parametrize("TC_COMMIT", [False, True], ids=["ordinary-arrive", "tc-commit"])
+def test_reader_visibility_across_partitions(TC_COMMIT, device, run_wrapper, monkeypatch):
+    if not TC_COMMIT and run_wrapper:
+        result = run_in_process(test_reader_visibility_across_partitions, (TC_COMMIT, device, False, monkeypatch))
+        assert_expected_cuda_failure(result.exc)
+        assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def first_reader(smem, tensor, barriers):
+        blackwell.tcgen05_copy(smem, tensor)
+        blackwell.tcgen05_commit(barriers.index(0))
+
+    @gluon.jit
+    def second_reader(smem, tensor, barriers, TC_COMMIT: ttgl.constexpr):
+        mbarrier.wait(barriers.index(0), phase=0)
+        blackwell.tcgen05_copy(smem, tensor)
+        if TC_COMMIT:
+            blackwell.tcgen05_commit(barriers.index(1))
+        else:
+            mbarrier.arrive(barriers.index(1), count=1)
+
+    @gluon.jit
+    def writer(smem, barriers, layout: ttgl.constexpr):
+        mbarrier.wait(barriers.index(1), phase=0)
+        smem.store(ttgl.zeros([128, 128], ttgl.int32, layout))
+
+    @gluon.jit
+    def kernel(TC_COMMIT: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+        shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 32, rank=2)
+        tensor_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([128, 128], col_stride=1)
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128, 128], shared_layout)
+        first_tensor = blackwell.allocate_tensor_memory(ttgl.int32, [128, 128], tensor_layout)
+        second_tensor = blackwell.allocate_tensor_memory(ttgl.int32, [128, 128], tensor_layout)
+        barriers = mbarrier.allocate_mbarrier(batch=2)
+        mbarrier.init(barriers.index(0), count=1)
+        mbarrier.init(barriers.index(1), count=1)
+        smem.store(ttgl.zeros([128, 128], ttgl.int32, layout))
+
+        ttgl.warp_specialize([
+            (first_reader, (smem, first_tensor, barriers)),
+            (second_reader, (smem, second_tensor, barriers, TC_COMMIT)),
+            (writer, (smem, barriers, layout)),
+        ], [4, 4], [32, 32])
+
+        mbarrier.invalidate(barriers.index(0))
+        mbarrier.invalidate(barriers.index(1))
+
+    kernel[(1, )](TC_COMMIT=TC_COMMIT, num_warps=4)
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_warpgroup_mma(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
