@@ -42,6 +42,7 @@ public:
   bool supportLdMatrix() const { return computeCapability >= 75; }
   bool supportStMatrix() const { return computeCapability >= 90; }
   bool supportLdStMatrixB8() const { return computeCapability >= 100; }
+  bool supportsFp4Ldmatrix() const { return computeCapability >= 100; }
 
   bool supportBitwidth16Elementwise() const {
     // Hopper (sm90) and newer.

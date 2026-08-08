@@ -53,6 +53,32 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
+#blocked_fp4 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked_fp4_t = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
+#shared_fp4_t = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8, fp4Padded = true}>
+#smem_fp4 = #ttg.shared_memory
+
+module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-DAG: #[[$BLOCKED_FP4_T:.*]] = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
+  // CHECK-DAG: #[[$FP4_SHARED:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+  // CHECK-DAG: #[[$FP4_SHARED_T:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8, fp4Padded = true}>
+  // CHECK-LABEL: @sm120_fp4_transpose_in_shared_memory
+  // CHECK-NOT: tt.trans
+  // CHECK: %[[ALLOC:.*]] = ttg.local_alloc %arg0 : (tensor<256x64xi8, #{{.*}}>) -> !ttg.memdesc<256x64xi8, #[[$FP4_SHARED]], #smem>
+  // CHECK: %[[TRANS:.*]] = ttg.memdesc_trans %[[ALLOC]] {order = array<i32: 1, 0>} : !ttg.memdesc<256x64xi8, #[[$FP4_SHARED]], #smem> -> !ttg.memdesc<64x256xi8, #[[$FP4_SHARED_T]], #smem>
+  // CHECK: ttg.local_load %[[TRANS]] : !ttg.memdesc<64x256xi8, #[[$FP4_SHARED_T]], #smem> -> tensor<64x256xi8, #[[$BLOCKED_FP4_T]]>
+  tt.func @sm120_fp4_transpose_in_shared_memory(
+      %b: tensor<256x64xi8, #blocked_fp4>)
+      -> tensor<64x256xi8, #blocked_fp4_t> {
+    %b_t = tt.trans %b {order = array<i32: 1, 0>} : tensor<256x64xi8, #blocked_fp4> -> tensor<64x256xi8, #blocked_fp4_t>
+    %b_s = ttg.local_alloc %b_t : (tensor<64x256xi8, #blocked_fp4_t>) -> !ttg.memdesc<64x256xi8, #shared_fp4_t, #smem_fp4>
+    %b_r = ttg.local_load %b_s : !ttg.memdesc<64x256xi8, #shared_fp4_t, #smem_fp4> -> tensor<64x256xi8, #blocked_fp4_t>
+    tt.return %b_r : tensor<64x256xi8, #blocked_fp4_t>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>

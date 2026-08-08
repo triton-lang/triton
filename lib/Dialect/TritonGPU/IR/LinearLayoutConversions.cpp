@@ -1018,15 +1018,25 @@ LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
 LinearLayout
 DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto parent = getParent();
+  LinearLayout layout;
   if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
-    return fmaDotToLinearLayout(*this, shape);
+    layout = fmaDotToLinearLayout(*this, shape);
   } else if (auto mfmaLayout = mlir::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
-    return mfmaDotToLinearLayout(*this, shape);
+    layout = mfmaDotToLinearLayout(*this, shape);
   } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
-    return wmmaDotOperandToLinearLayout(*this, shape);
+    layout = wmmaDotOperandToLinearLayout(*this, shape);
   } else {
-    return nvidiaDotToLinearLayout(shape, *this);
+    layout = nvidiaDotToLinearLayout(shape, *this);
   }
+
+  if (getFp4Unpacked()) {
+    MLIRContext *ctx = getContext();
+    int rank = shape.size();
+    int kDim = getOpIdx() == 0 ? rank - 1 : rank - 2;
+    auto kDimName = standardOutDimNames(ctx, rank)[kDim];
+    layout = LinearLayout::zeros1D(2, S("register"), kDimName) * layout;
+  }
+  return layout;
 }
 
 LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
@@ -1313,6 +1323,32 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
   auto *ctx = layout.getContext();
   return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(shape,
                                                                    layout);
+}
+
+static LinearLayout
+fp4UnpackedToRegisterElementLinearLayout(ArrayRef<int64_t> shape,
+                                         DotOperandEncodingAttr dot) {
+  assert(dot.getFp4Unpacked() && "expected an fp4Unpacked dot operand");
+  assert(shape.size() >= 2 &&
+         "fp4Unpacked dot operand must have at least two dimensions");
+  int kDim = dot.getOpIdx() == 0 ? shape.size() - 1 : shape.size() - 2;
+  auto packedDot = DotOperandEncodingAttr::get(dot.getContext(), dot.getOpIdx(),
+                                               dot.getParent(), dot.getKWidth(),
+                                               /*fp4Unpacked=*/false);
+  auto packedLayout = toLinearLayout(shape, packedDot);
+  auto kOut = standardOutDimNames(dot.getContext(), shape.size())[kDim];
+  auto kRegister = StringAttr::get(dot.getContext(), "register");
+  // Use an identity basis for the unpacked-nibble parity so the low and high
+  // nibbles remain distinct in register-element space.
+  return LinearLayout::identity1D(2, kRegister, kOut) * packedLayout;
+}
+
+LinearLayout toRegisterElementLinearLayout(ArrayRef<int64_t> shape,
+                                           Attribute layout) {
+  auto dot = dyn_cast<DotOperandEncodingAttr>(layout);
+  if (dot && dot.getFp4Unpacked())
+    return fp4UnpackedToRegisterElementLinearLayout(shape, dot);
+  return toLinearLayout(shape, layout);
 }
 
 LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding) {

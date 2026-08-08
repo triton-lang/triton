@@ -1,4 +1,4 @@
-// RUN: triton-opt --split-input-file %s --verify-diagnostics
+// RUN: triton-opt %s --split-input-file --allocate-shared-memory-nv='compute-capability=120' --convert-triton-gpu-to-llvm='compute-capability=120' --verify-diagnostics
 
 // expected-error @below {{fp4Padded tensor memory layout requires colStride 1 but got 2}}
 #bad_fp4_padded_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 2, fp4Padded = true>
@@ -247,6 +247,33 @@ tt.func @wgmma(%a: tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kW
   %0 = ttng.warp_group_dot %a, %b, %c : tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory> -> tensor<128x128xf16, #mma>
   tt.return
 }
+}
+
+// -----
+
+// A mixed FP8/FP4 SM120 MMA requires the FP4 operand to use the decompressed
+// fp4Unpacked register representation.
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 8]}>
+#scale_a = #ttg.linear<{register = [[32, 0], [64, 0]], lane = [[8, 0], [0, 0], [1, 0], [2, 0], [4, 0]], warp = [[0, 0], [16, 0]], block = []}>
+#scale_b = #ttg.linear<{register = [[16, 0], [32, 0], [64, 0]], lane = [[0, 0], [0, 0], [1, 0], [2, 0], [4, 0]], warp = [[8, 0], [0, 0]], block = []}>
+
+module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @sm120_mixed_mma_requires_fp4_unpacked(
+    %a: tensor<128x32xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>,
+    %sa: tensor<128x1xi8, #scale_a>,
+    %b: tensor<16x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>,
+    %sb: tensor<128x1xi8, #scale_b>,
+    %c: tensor<128x128xf32, #mma>
+  ) {
+    // expected-error@+2 {{SM120 mixed FP8/FP4 MMA requires its FP4 operand to use fp4Unpacked}}
+    // expected-error@+1 {{failed to legalize operation 'tt.dot_scaled' that was explicitly marked illegal}}
+    %d = tt.dot_scaled %a scale %sa, %b scale %sb, %c lhs = e4m3 rhs = e2m1 {fastMath = false}
+      : tensor<128x32xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, tensor<128x1xi8, #scale_a>
+        * tensor<16x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>, tensor<128x1xi8, #scale_b>
+        -> tensor<128x128xf32, #mma>
+    tt.print "d: " {hex = false, isSigned = array<i32: 0>} : %d : tensor<128x128xf32, #mma>
+    tt.return
+  }
 }
 
 // -----
