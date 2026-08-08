@@ -605,6 +605,7 @@ class TritonRewriteTensorDescriptorToPointerPass
 
     ConversionConfig config;
     config.buildMaterializations = false;
+    config.allowPatternRollback = false;
 
     if (mlir::failed(mlir::applyPartialConversion(
             op, target, std::move(patterns), config))) {

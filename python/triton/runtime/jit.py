@@ -96,7 +96,6 @@ class DependenciesFinder(ast.NodeVisitor):
         return self.hasher.hexdigest()
 
     def _update_hash(self, func):
-        assert isinstance(func, JITCallable)
         func_key = func.cache_key
         # Merge our used_global_vals with those of the called function,
         # after checking that all overlapping values are consistent.
@@ -545,7 +544,6 @@ class JITCallable:
     # Our unit tests do this, for example.
     def parse(self):
         tree = ast.parse(self._src)
-        assert isinstance(tree, ast.Module)
         assert len(tree.body) == 1
         assert isinstance(tree.body[0], ast.FunctionDef)
         return tree
@@ -589,6 +587,19 @@ class JitFunctionInfo:
     jit_function: JITFunction
 
 
+def _replace_jit_callables(obj):
+    if isinstance(obj, list):
+        return [_replace_jit_callables(arg) for arg in obj]
+    elif is_namedtuple(obj):
+        results = [_replace_jit_callables(arg) for arg in obj]
+        return obj.__class__(*results)
+    elif isinstance(obj, tuple):
+        return tuple(_replace_jit_callables(arg) for arg in obj)
+    elif isinstance(obj, JITCallable):
+        return obj.cache_key
+    return obj
+
+
 def compute_cache_key(kernel_key_cache, specialization, options):
     key = (tuple(specialization), str(options))
     cache_key = kernel_key_cache.get(key, None)
@@ -596,19 +607,7 @@ def compute_cache_key(kernel_key_cache, specialization, options):
         return cache_key
 
     # Replace JITCallable objects with their hash, so the cache key will change if the src is updated
-    def replace_callables(obj):
-        if isinstance(obj, list):
-            return [replace_callables(arg) for arg in obj]
-        elif is_namedtuple(obj):
-            results = [replace_callables(arg) for arg in obj]
-            return obj.__class__(*results)
-        elif isinstance(obj, tuple):
-            return tuple(replace_callables(arg) for arg in obj)
-        elif isinstance(obj, JITCallable):
-            return obj.cache_key
-        return obj
-
-    cache_key = str(replace_callables(specialization)) + str(options)
+    cache_key = str(_replace_jit_callables(specialization)) + str(options)
     kernel_key_cache[key] = cache_key
     return cache_key
 
@@ -726,6 +725,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
     def run(self, *args, grid, warmup, **kwargs):
         kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
         kwargs["instrumentation_mode"] = knobs.compilation.instrumentation_mode
+        kwargs["fpsan_homomorphic_casts"] = knobs.compilation.fpsan_homomorphic_casts
 
         # parse options
         device = driver.active.get_current_device()
@@ -767,7 +767,6 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
         if not warmup:
             # canonicalize grid
-            assert grid is not None
             if callable(grid):
                 grid = grid(bound_args)
             grid_size = len(grid)
@@ -980,7 +979,6 @@ def jit(
     """
 
     def decorator(fn: T) -> JITFunction[T]:
-        assert callable(fn)
         if knobs.runtime.interpret:
             from .interpreter import InterpretedFunction
             return InterpretedFunction(fn, version=version, do_not_specialize=do_not_specialize,

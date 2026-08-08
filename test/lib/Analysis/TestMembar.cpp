@@ -45,7 +45,7 @@ struct TestMembarPass
               allocation, computeCapability)))
         return signalPassFailure();
     }
-    ModuleMembarAnalysis membarPass(&allocation,
+    ModuleMembarAnalysis membarPass(allocation,
                                     mlir::triton::NVIDIA::canSkipBarSync);
     membarPass.run();
   }

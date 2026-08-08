@@ -62,15 +62,10 @@ struct AssertUniformOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     TritonLLVMIRRewriter b(op.getLoc(), rewriter);
     Value tid = getThreadId(b, op.getLoc());
-    Value threadIdIsZero = b.icmp_eq(tid, b.i32_val(0));
-
-    auto [prevBlock, ifBlock, thenBlock] =
-        createIfBlock(rewriter, op.getLoc(), threadIdIsZero);
-    rewriter.setInsertionPointToStart(ifBlock);
-    AssertOp::create(rewriter, op.getLoc(), adaptor.getCondition(),
-                     adaptor.getMessage());
+    Value threadIdIsNotZero = b.icmp_ne(tid, b.i32_val(0));
+    Value condition = b.or_(threadIdIsNotZero, adaptor.getCondition());
+    AssertOp::create(rewriter, op.getLoc(), condition, adaptor.getMessage());
     rewriter.eraseOp(op);
-    rewriter.setInsertionPointToStart(thenBlock);
     return success();
   }
 };
@@ -187,8 +182,8 @@ struct LockAcquireOpConversion
     // Build: do { old = atom.global.acquire.cas.b32 [lock], 0, 1; } while (old
     // != 0);
     Block *prevBlock2 = b.getInsertionBlock();
-    Block *whileBlock = b.splitBlock(prevBlock2, b.getInsertionPoint());
-    Block *endBlock = b.splitBlock(whileBlock, whileBlock->begin());
+    Block *whileBlock = prevBlock2->splitBlock(b.getInsertionPoint());
+    Block *endBlock = whileBlock->splitBlock(whileBlock->begin());
     b.setInsertionPointToEnd(prevBlock2);
 
     Value elect;
@@ -326,6 +321,38 @@ public:
   }
 };
 
+struct MemoryOffsetToI32OpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalMemoryOffsetToI32Op> {
+public:
+  using ConvertOpToLLVMPattern<
+      tti::ExperimentalMemoryOffsetToI32Op>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalMemoryOffsetToI32Op op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    TritonLLVMOpBuilder b(op.getLoc(), rewriter);
+    auto i32Ty = rewriter.getI32Type();
+    Value base;
+    if (op.getMemType() == tti::MemType::SHARED_MEM) {
+      auto func = op->getParentOfType<FunctionOpInterface>();
+      assert(func && "memory offset must be inside a function");
+      base = b.ptrtoint(i32Ty, LLVM::getStackPointer(rewriter, func));
+    } else {
+      assert(op.getMemType() == tti::MemType::TENSOR_MEM &&
+             "unsupported memory type");
+      Value basePtr =
+          nvgpu::TensorMemoryBaseAddress::create(rewriter, op.getLoc());
+      base = b.ptrtoint(i32Ty, basePtr);
+    }
+
+    Value address = b.add(base, b.i32_val(op.getOffset()));
+    if (op.getMemType() == tti::MemType::SHARED_MEM)
+      address = b.and_(address, b.i32_val(kSharedMemoryObjectMask));
+    rewriter.replaceOp(op, address);
+    return success();
+  }
+};
+
 struct ClusterCTAIdOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalClusterCTAIdOp> {
   ClusterCTAIdOpConversion(const LLVMTypeConverter &converter,
@@ -357,9 +384,7 @@ computeLocalOffsetsWithLogicalOffsets(Location loc, ttg::MemDescType memDescTy,
                                       const TargetInfoBase &targetInfo) {
   MLIRContext *ctx = memDescTy.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto sharedLayout = ttg::isPaddedEncoding(memDescTy.getEncoding())
-                          ? ttg::paddedLinearLayout(memDescTy)
-                          : ttg::toLinearLayout(memDescTy);
+  auto sharedLayout = ttg::toLinearLayoutIgnoringPadding(memDescTy);
   LinearLayout invSharedLayout = sharedLayout.pseudoinvert();
   auto allDims = tt::standardOutDimNames(ctx, memDescTy.getRank());
   auto kOffset = str_attr("offset");
@@ -453,6 +478,7 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
   patterns.add<LockAcquireOpConversion>(typeConverter, targetInfo);
   patterns.add<LockReleaseOpConversion>(typeConverter, targetInfo);
   patterns.add<MemDescToI32OpConversion>(typeConverter);
+  patterns.add<MemoryOffsetToI32OpConversion>(typeConverter);
   patterns.add<ClusterCTAIdOpConversion>(typeConverter, targetInfo);
   patterns.add<LocalGatherOpConversion>(typeConverter, targetInfo);
 }

@@ -286,10 +286,19 @@ def async_store(tensor_desc, coord, src, _semantic=None):
     _semantic.builder.create_async_tma_copy_local_to_global(tensor_desc.handle, coord, src.handle)
 
 
-# Backward-compatible aliases
-async_copy_global_to_shared = async_load
-async_copy_global_to_shared_im2col = async_load_im2col
-async_copy_shared_to_global = async_store
+@builtin
+def async_copy_global_to_shared(*args, _semantic=None, **kwargs):
+    raise RuntimeError("async_copy_global_to_shared has been removed; call async_load instead")
+
+
+@builtin
+def async_copy_global_to_shared_im2col(*args, _semantic=None, **kwargs):
+    raise RuntimeError("async_copy_global_to_shared_im2col has been removed; call async_load_im2col instead")
+
+
+@builtin
+def async_copy_shared_to_global(*args, _semantic=None, **kwargs):
+    raise RuntimeError("async_copy_shared_to_global has been removed; call async_store instead")
 
 
 def _async_atomic_shared_to_global(kind, tensor_desc, coord, src, fn_name: str, _semantic=None):

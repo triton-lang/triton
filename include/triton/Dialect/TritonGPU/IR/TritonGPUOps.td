@@ -7,6 +7,7 @@ include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypeInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUOpInterfaces.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUMemoryEffects.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
@@ -22,7 +23,6 @@ include "mlir/Interfaces/ViewLikeInterface.td"
 // Interfaces
 //
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
-def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
 
 class TTG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonGPU_Dialect, mnemonic,
@@ -35,10 +35,11 @@ def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
                                   Pure]> {
   let summary = "convert layout";
 
-  let arguments = (ins TT_Tensor:$src);
+  let arguments = (ins TT_Tensor:$src, UnitAttr:$force_warp_shuffle);
 
   let results = (outs TT_Tensor:$result);
 
+  let hasVerifier = 1;
   let hasCanonicalizer = 1;
 
   let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
@@ -114,7 +115,7 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
 
   let arguments = (ins
     Arg<TT_PtrTensor, "", [MemRead<GlobalMemory>]>:$src,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
+    Arg<TTG_MemDescType, "", GenericSharedWrite>:$result,
     Optional<I1Tensor>:$mask,
     Optional<TT_Type>:$other,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
@@ -338,12 +339,9 @@ def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewT
 
   let description = [{
     The `ttg.memdesc_reinterpret` operation reinterprets a memory descriptor
-    as one with a different shape and element type. The logical storage size of
-    the result must not exceed that of the source. Because memory descriptors
-    lack strides, this operation is only valid if the original memory descriptor
-    is contiguous. Reinterpretation of subviews is not allowed; reinterpret the
-    parent descriptor and then take a subview of the reinterpreted descriptor
-    instead.
+    as one with a different shape and element type. Every physical byte,
+    tensor-memory row, and pipeline stage accessed by the result must belong to
+    the source view. The result must not itself be a layout subview.
   }];
 
   let arguments = (ins TTG_MemDescType:$src);
@@ -364,7 +362,7 @@ def TTG_LocalLoadOp : TTG_Op<"local_load", [LocalLoadTrait]> {
     Load a tensor from the local memory descriptor into a distributed tensor.
   }];
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    Arg<TTG_MemDescType, "", GenericSharedRead>:$src,
     Optional<TTG_AsyncToken>:$token
   );
   let results = (outs TT_Tensor:$result);
@@ -388,7 +386,7 @@ def TTG_LocalStoreOp : TTG_Op<"local_store"> {
   }];
   let arguments = (ins
     TT_Tensor:$src,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst
+    Arg<TTG_MemDescType, "", GenericSharedWrite>:$dst
   );
 
   let hasVerifier = 1;
@@ -413,7 +411,7 @@ def TTG_LocalGatherOp : TTG_Op<"local_gather", [LocalLoadTrait]> {
     This matches the behavior of tt.gather but operates on shared memory descriptors.
   }];
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    Arg<TTG_MemDescType, "", GenericSharedRead>:$src,
     TT_IntTensor:$indices,
     I32Attr:$axis,
     Optional<TTG_AsyncToken>:$token
@@ -446,7 +444,7 @@ def TTG_LocalScatterOp : TTG_Op<"local_scatter"> {
     This is the inverse of local_gather and writes to shared memory at runtime-computed indices.
   }];
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst,
+    Arg<TTG_MemDescType, "", GenericSharedWrite>:$dst,
     TT_Tensor:$values,
     TT_IntTensor:$indices,
     I32Attr:$axis,
@@ -489,13 +487,17 @@ def TTG_LocalAtomicScatterRMWOp : TTG_Op<"local_atomic_scatter_rmw", [
   }];
   let arguments = (ins
     TT_AtomicRMWAttr:$atomic_rmw_op,
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$dst,
+    Arg<TTG_MemDescType, "", GenericSharedReadWrite>:$dst,
     TT_Tensor:$values,
     TT_IntTensor:$indices,
     Optional<I1Tensor>:$mask,
     I32Attr:$axis
   );
   let results = (outs TT_Tensor:$result);
+
+  let extraClassDeclaration = [{
+    bool isCommutative();
+  }];
 
   let assemblyFormat = [{
     $atomic_rmw_op `,` $dst `[` $indices `]` `,` $values (`,` $mask^)? attr-dict `:`

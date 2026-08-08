@@ -20,11 +20,8 @@ struct FlushRange {
 };
 
 std::pair<std::vector<FlushRange>, std::set<size_t>>
-computeFlushRangesAndPeekPhases(
-    const std::map<Data *,
-                   std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
-        &dataPhases,
-    const bool peekPendingGraphs) {
+computeFlushRangesAndPeekPhases(const DataPhases &dataPhases,
+                                const bool peekPendingGraphs) {
   std::vector<FlushRange> flushRanges;
   flushRanges.reserve(dataPhases.size());
   std::set<size_t> phasesToPeek;
@@ -168,6 +165,22 @@ void periodicClearDataPhases(Data &data, size_t maxPhaseToFlush,
 
 } // namespace
 
+int64_t
+computeTimestampOffsetNs(const std::function<void(uint64_t *)> &getTimestamp) {
+  using Clock = std::chrono::system_clock;
+  const auto cpuBefore = Clock::now();
+  uint64_t profilerTimestampNs{};
+  getTimestamp(&profilerTimestampNs);
+  const auto cpuAfter = Clock::now();
+  // The native timestamp is sampled between these reads; use their midpoint.
+  const auto cpuTimestampNs =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          (cpuBefore + (cpuAfter - cpuBefore) / 2).time_since_epoch())
+          .count();
+  return static_cast<int64_t>(cpuTimestampNs) -
+         static_cast<int64_t>(profilerTimestampNs);
+}
+
 void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
                              std::string &periodicFlushingFormat,
                              const std::vector<std::string> &modeAndOptions,
@@ -197,8 +210,7 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
   }
 }
 
-void updateDataPhases(std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
-                      Data *data, size_t phase) {
+void updateDataPhases(DataPhases &dataPhases, Data *data, size_t phase) {
   auto it = dataPhases.find(data);
   if (it == dataPhases.end()) {
     dataPhases.emplace(data, std::make_pair(phase, phase));
@@ -208,12 +220,10 @@ void updateDataPhases(std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
   }
 }
 
-void flushDataPhasesImpl(
-    const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
-    const std::map<Data *,
-                   std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
-        &dataPhases,
-    PendingGraphPool *pendingGraphPool) {
+void flushDataPhasesImpl(const bool periodicFlushEnabled,
+                         const std::string &periodicFlushingFormat,
+                         const DataPhases &dataPhases,
+                         PendingGraphPool *pendingGraphPool) {
   static const bool timingEnabled =
       getBoolEnv("PROTON_DATA_FLUSH_TIMING", false);
   auto [flushRanges, phasesToPeek] =

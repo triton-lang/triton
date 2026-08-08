@@ -21,6 +21,7 @@ def _validate_common_descriptor(tensor, shape, strides, layout, padding, round_f
         assert shape_dim > 0, "shape must be positive"
     assert strides[-1] == 1, "Last dimension must be contiguous"
     assert isinstance(layout, NVMMASharedLayout), "Layout must be NVMMASharedLayout"
+    assert layout.rank == len(block_shape), "layout rank must match block shape rank"
     assert padding == "zero" or padding == "nan", "Illegal value for padding"
     if padding == "nan":
         assert tensor.dtype.is_floating_point, "Padding option `nan` is only supported for floating point tensors"
@@ -35,7 +36,10 @@ def _validate_common_descriptor(tensor, shape, strides, layout, padding, round_f
         assert tensor.data_ptr() % 32 == 0, "For fp4_padded, base must 32-byte aligned"
         for stride in strides[:-1]:
             assert (stride * elem_bytes) % 32 == 0, "For fp4_padded, tensor strides must be 32-byte aligned"
-        assert tl.target_info.cuda_capability_geq(10, 0), "fp4_padded requires blackwell or newer"
+        # Descriptors may be constructed for offline compilation without an active runtime driver.
+        target = tl.target_info.current_target()
+        assert target is None or tl.target_info.cuda_capability_geq(10, 0), \
+            "fp4_padded requires blackwell or newer"
     assert not layout.fp4_padded or layout.swizzle_byte_width == 128, (
         f"FP4 padded operands must be swizzled with 128-byte width, but got {layout.swizzle_byte_width}")
     assert layout.element_bitwidth in [

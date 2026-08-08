@@ -18,8 +18,6 @@ import triton.experimental.gluon as gluon
 import triton.experimental.gluon.language as gl
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
-from triton._C.libtriton import nvidia
-
 from triton.experimental.gluon.nvidia.blackwell import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
@@ -618,7 +616,7 @@ def mma_scaled_epilogue_partition(p):
             acc = acc_sub.load().to(p.c_desc.dtype)
             tma.store_wait(pendings=subtile_stages - 1)
             acc_smem.store(acc)
-            tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + EPILOGUE_BLOCK_N * s], acc_smem)
+            tma.async_store(p.c_desc, [off_m, off_n + EPILOGUE_BLOCK_N * s], acc_smem)
             sub_acc_state = sub_acc_state.next()
         mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
         acc_state = acc_state.next()
@@ -644,7 +642,7 @@ def mma_scaled_clc_partition(p):
         barrier = p.clc_barriers.index(state.index)
         result = p.clc_result_buffers.index(state.index)
         # 16: clc.try_cancel has a `.b128` modifier
-        mbarrier.expect(barrier, 16)
+        mbarrier.expect(barrier, 16, from_cta=0x0)
         clc.try_cancel(result, barrier)
         mbarrier.wait(barrier, state.phase)
         clc_res = clc.load_result(result)
@@ -895,6 +893,7 @@ def mma_scaled_matmul(A, B, A_scale, B_scale, VEC_SIZE, out_dtype=torch.float16,
 ])
 @pytest.mark.parametrize("scheduler", [SCHEDULER_CLC, SCHEDULER_SPS])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.enable_warmup(min_capability=10)
 def test_mma_scaled_warp_specialized(M, N, K, a_format, b_format, num_ctas, BLOCK_N, EPILOGUE_BLOCK_N, num_buffers,
                                      scheduler):
     if a_format != b_format and K % 128 != 0:
@@ -917,12 +916,6 @@ def test_mma_scaled_warp_specialized(M, N, K, a_format, b_format, num_ctas, BLOC
 # Benchmark
 # ---------------------------------------------------------------------------
 
-if is_blackwell():
-    cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
-    cublas = nvidia.cublas.CublasLt(cublas_workspace)
-else:
-    cublas = None
-
 CUBLAS_FORMATS = {"mxfp8", "nvfp4"}
 
 
@@ -931,9 +924,9 @@ def cublas_block_scaled_matmul(A, B, A_scale_flat, B_scale_flat, fmt):
     M, N = A.shape[0], B.shape[0]
     output = torch.empty((M, N), dtype=torch.float16, device="cuda")
     if fmt == "mxfp8":
-        cublas.block_scaled_matmul_mxfp8(A, B, output, A_scale_flat, B_scale_flat)
+        triton.testing.cublas().block_scaled_matmul_mxfp8(A, B, output, A_scale_flat, B_scale_flat)
     elif fmt == "nvfp4":
-        cublas.block_scaled_matmul_nvfp4(A, B, output, A_scale_flat, B_scale_flat)
+        triton.testing.cublas().block_scaled_matmul_nvfp4(A, B, output, A_scale_flat, B_scale_flat)
     else:
         raise ValueError(f"cuBLAS does not support format: {fmt}")
     return output

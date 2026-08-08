@@ -41,7 +41,7 @@ using namespace triton::nvws;
 
 int getWsTag(Operation *op) {
   while (op && !hasWarpSpecializeTag(op)) {
-    op = op->getParentOfType<scf::ForOp>();
+    op = op->getParentOfType<LoopLikeOpInterface>();
   }
   assert(op);
   return *getWarpSpecializeTag(op);
@@ -154,21 +154,27 @@ struct TmemAccessDag {
     return addOp(*newTok.getUses().begin(), ifOpNode);
   }
 
-  Value addForOp(OpOperand &tokOperand, Node *forOpNode) {
-    auto forOp = cast<scf::ForOp>(tokOperand.getOwner());
-    auto tokPos = tokOperand.getOperandNumber() - 3;
-    auto tokDefOp = forOp.getYieldedValues()[tokPos].getDefiningOp();
-    assert(tokDefOp && "expecting a token definition op");
+  Value addLoopOp(OpOperand &tokOperand, Node *loopNode) {
+    auto loop = cast<LoopLikeOpInterface>(tokOperand.getOwner());
+    auto tokPos = tokOperand.getOperandNumber() -
+                  loop.getInitsMutable().front().getOperandNumber();
+    auto &yieldedToken = (*loop.getYieldedValuesMutable())[tokPos];
+    assert(yieldedToken.get().getDefiningOp() &&
+           "expecting a token definition op");
 
-    // Create access node for the for-loop body. The first op is nullptr,
+    auto bodyArgs =
+        loop.getLoopRegions().back()->front().getArguments().take_back(
+            loop.getRegionIterArgs().size());
+    auto tokArg = bodyArgs[tokPos];
+
+    // Create access node for the loop body. The first op is nullptr,
     // but it has partitionIdx, indicating which partition owns the Tmem when
     // entering the region
     auto subDag =
         std::make_unique<Node>(nullptr, nullptr, std::nullopt, nullptr);
-    auto tokArg = forOp.getRegionIterArg(tokPos);
     assert(tokArg.hasOneUse());
     addOp(*tokArg.getUses().begin(), subDag.get());
-    forOpNode->partitionId = getPartitionId(forOp, tokPos);
+    loopNode->partitionId = getPartitionId(loop, tokPos);
 
     // finalNode keep track of partition ownership transfer ownership when
     // before exiting the loop-body or re-entering loop body
@@ -176,19 +182,18 @@ struct TmemAccessDag {
     Node *finalNode = subDag->user.get();
     while (finalNode->user)
       finalNode = finalNode->user.get();
-    auto yieldOp = forOp.getBody()->getTerminator();
     finalNode->user =
-        std::make_unique<Node>(yieldOp, &yieldOp->getOpOperand(tokPos),
-                               forOpNode->partitionId, finalNode);
+        std::make_unique<Node>(yieldedToken.getOwner(), &yieldedToken,
+                               loopNode->partitionId, finalNode);
     finalNode->user->parentDag = subDag->user.get();
-    forOpNode->tokPos = tokPos;
+    loopNode->tokPos = tokPos;
 
     // subDag->user->parentDag = subDag->user.get();
     subDag->user->parent = nullptr;
-    subDag->user->parentDag = forOpNode;
+    subDag->user->parentDag = loopNode;
 
-    forOpNode->subDags.push_back(std::move(subDag->user));
-    return forOp.getResult(tokPos);
+    loopNode->subDags.push_back(std::move(subDag->user));
+    return loop->getResult(tokPos);
   }
 
   Value addOp(OpOperand &tokOperand, Node *node) {
@@ -197,7 +202,7 @@ struct TmemAccessDag {
 
     auto op = tokOperand.getOwner();
     std::optional<PartitionId> partitionId;
-    // tmem owning partition for if & for ops are inferred from their regions
+    // TMEM ownership for region ops is inferred from their regions.
     if (op->getNumRegions() == 0)
       partitionId = getPartitionId(op);
     node->user.reset(new Node(op, &tokOperand, partitionId, node));
@@ -210,8 +215,8 @@ struct TmemAccessDag {
       newTok = tmemStore.getToken();
     } else if (auto mmav5 = dyn_cast<MMAv5OpInterface>(op)) {
       newTok = mmav5.getToken();
-    } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      newTok = addForOp(tokOperand, newNode);
+    } else if (isa<scf::ForOp, scf::WhileOp>(op)) {
+      newTok = addLoopOp(tokOperand, newNode);
     } else {
       llvm_unreachable("unsupported user");
     }
@@ -375,12 +380,12 @@ OpT createInto(
                                          partitionIdStageCluster.second,
                                          std::forward<Args>(args)...);
   if (wsTag) {
-    auto forOp = op->template getParentOfType<scf::ForOp>();
-    while (forOp && !hasWarpSpecializeTag(forOp)) {
-      forOp = forOp->template getParentOfType<scf::ForOp>();
+    auto wsLoop = op->template getParentOfType<LoopLikeOpInterface>();
+    while (wsLoop && !hasWarpSpecializeTag(wsLoop)) {
+      wsLoop = wsLoop->template getParentOfType<LoopLikeOpInterface>();
     }
     // only set wsTag if op is outside tt.ws loop
-    if (!forOp) {
+    if (!wsLoop) {
       setWarpSpecializeTag(op, *wsTag);
     }
   }
@@ -418,7 +423,9 @@ struct TMEMAref {
     buffer = {};
   }
   void release(OpBuilder &b, Location loc) {
-    assert(asyncOp[partitionId]);
+    auto asyncOpIt = asyncOp.find(partitionId);
+    assert(asyncOpIt != asyncOp.end() && asyncOpIt->second);
+    AsyncOp currentAsyncOp = *asyncOpIt->second;
     StageCluster stageCluster;
     if (partitionId)
       stageCluster = stageClusters[*partitionId];
@@ -426,13 +433,13 @@ struct TMEMAref {
       createInto<ArefPutExitOp>(
           b, loc, {partitionId, stageCluster}, aref, token,
           b.getArrayAttr(SmallVector<Attribute>{
-              AsyncOpAttr::get(b.getContext(), *asyncOp[partitionId])}));
+              AsyncOpAttr::get(b.getContext(), currentAsyncOp)}));
       kind = GET;
     } else {
       createInto<ArefGetExitOp>(
           b, loc, {partitionId, stageCluster}, aref, token,
           b.getArrayAttr(SmallVector<Attribute>{
-              AsyncOpAttr::get(b.getContext(), *asyncOp[partitionId])}));
+              AsyncOpAttr::get(b.getContext(), currentAsyncOp)}));
       kind = PUT;
     }
   }
@@ -480,9 +487,9 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
       prevOp = node->parent->op;
       b.setInsertionPointAfter(prevOp);
     } else {
-      // if we are inside if-stmt or for-stmt subdag and need to change
-      // ownerhip, release at the top of the block
-      // the parentDag op would be if-stmt or for-stmt
+      // If we are inside an if-stmt or loop subdag and need to change
+      // ownership, release at the top of the block. The parentDag op is the
+      // enclosing region op.
       prevOp = node->parentDag->op;
       b.setInsertionPointToStart(node->op->getBlock());
     }
@@ -508,12 +515,10 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
 
   for (auto &subDag : node->subDags) {
     auto subdagState = state;
-    if (auto forOp = dyn_cast<scf::ForOp>(node->op)) {
-      // forOp may have token operand, if so, we need to update the token and
-      // and reset buffer
+    if (isa<LoopLikeOpInterface>(node->op)) {
+      // A loop may have a token operand; update it and reset the buffer.
       if (node->tokOperand) {
-        subdagState.token =
-            forOp.getRegionIterArg(node->tokOperand->getOperandNumber() - 3);
+        subdagState.token = subDag->tokOperand->get();
         subdagState.buffer = {};
       }
     }
@@ -559,11 +564,11 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
     }
   } else if (auto yieldOp = dyn_cast<scf::YieldOp>(node->op)) {
     yieldOp.setOperand(node->tokOperand->getOperandNumber(), state.token);
-  } else if (isa<scf::IfOp, scf::ForOp>(node->op)) {
+  } else if (isa<scf::IfOp, LoopLikeOpInterface>(node->op)) {
     if (node->tokPos) {
-      // forOp/if may return token, if so, update state token, and reset buffer
-      if (isa<scf::ForOp>(node->op))
-        node->op->setOperand(node->tokOperand->getOperandNumber(), state.token);
+      // A loop or if may return a token; update it and reset the buffer.
+      if (isa<LoopLikeOpInterface>(node->op))
+        node->tokOperand->set(state.token);
       state.token = node->op->getResult(*node->tokPos);
       state.buffer = {};
     }
@@ -575,21 +580,6 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
     return insertTmemArefImpl(node->user.get(), node->partitionId, state);
   return node;
 }
-
-bool canDoubleBufferAcc(MMAv5OpInterface mmaOp, int numTmemBlocks) {
-  auto tmemDesc = mmaOp.getAccumulator().getType();
-  auto blockM = tmemDesc.getShape()[0];
-  auto blockN = tmemDesc.getShape()[1];
-  constexpr int numTMEMColumns = 512;
-  constexpr int numTMEMRows = 128;
-  if (numTmemBlocks + (blockM * blockN * 2) > numTMEMRows * numTMEMColumns) {
-    return false;
-  }
-  if (isa<TCGen5MMAScaledOp>(mmaOp) && blockN == 256) {
-    return false;
-  }
-  return true;
-};
 
 bool hasProducerConsumerPartitioning(TmemAccessDag &accessDag) {
   // TMEM partitioning follows a producer-consumer pattern if it has this
@@ -667,7 +657,8 @@ int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
     for (auto user : allocOp.getResult().getUsers()) {
       if (auto mmaOp = dyn_cast<MMAv5OpInterface>(user)) {
         if (auto loop = dyn_cast<scf::ForOp>(user->getParentOp())) {
-          auto wsLoop = getOuterWSLoop(loop);
+          auto wsLoop =
+              getOuterWSLoop(cast<LoopLikeOpInterface>(loop.getOperation()));
           // Determine if the MMA accumulator can be multibuffered.
           bool accIsMultiBuffered =
               // MMAs in subsequent iterations can be overlapped.
@@ -676,8 +667,7 @@ int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
               // multibuffering.
               isAccMultibufferingPossible(mmaOp, loop) &&
               // The user didn't disable it with a flag.
-              !getDisallowAccMultiBuffer(wsLoop) &&
-              canDoubleBufferAcc(mmaOp, numTmemBlocks);
+              !getDisallowAccMultiBuffer(wsLoop);
           isMultiStaged = isMultiStaged && accIsMultiBuffered;
         }
       }
@@ -693,9 +683,8 @@ int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
   OpBuilder b(allocOp);
 
   // alloc can be inside ws-loop, we need to find the entry point for ws-loop
-  auto outerWsLoop = allocOp->getParentOfType<scf::ForOp>();
-  while (outerWsLoop && !outerWsLoop->hasAttr(triton::kWarpSpecializeAttrName))
-    outerWsLoop = outerWsLoop->getParentOfType<scf::ForOp>();
+  auto outerWsLoop =
+      getOuterWSLoop(allocOp->getParentOfType<LoopLikeOpInterface>());
   if (outerWsLoop)
     b.setInsertionPoint(outerWsLoop);
   auto arefAlloc =
@@ -886,8 +875,8 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
 
 LogicalResult runOnFunction(triton::FuncOp funcOp) {
   // Skip this function if there is no warp specialized loop.
-  auto walkResult = funcOp.walk([&](scf::ForOp forOp) {
-    if (forOp->hasAttr(kWarpSpecializeAttrName))
+  auto walkResult = funcOp.walk([&](LoopLikeOpInterface loop) {
+    if (loop->hasAttr(kWarpSpecializeAttrName))
       return WalkResult::interrupt();
     return WalkResult::advance();
   });

@@ -10,8 +10,12 @@ public:
   CuptiProfiler();
   virtual ~CuptiProfiler();
 
+  int64_t getTimestampOffsetNs() const override { return timestampOffsetNs; }
+
 private:
   struct CuptiProfilerPimpl;
+  int64_t timestampOffsetNs{};
+  bool isTimestampCalibrated{false};
 
   virtual void
   doSetMode(const std::vector<std::string> &modeAndOptions) override;

@@ -555,8 +555,17 @@ class InterpreterBuilder:
 
     # binary operators
     def binary_op(self, lhs, rhs, op):
-        output = op(lhs.data, rhs.data)
         tl_dtype = lhs.dtype.scalar
+
+        if lhs.data.dtype == np.bool_ and rhs.data.dtype == np.bool_:
+            # numpy uses logical/saturating semantics for bool arithmetic
+            # (True + True == True) and rejects bool subtraction outright, but
+            # Triton treats int1 as a 1-bit integer that wraps around like any
+            # other integer type. Compute in a wider integer domain and
+            # truncate back to one bit to match the GPU backend (issue #10919).
+            output = (op(lhs.data.astype(np.int8), rhs.data.astype(np.int8)) & 1).astype(np.bool_)
+        else:
+            output = op(lhs.data, rhs.data)
 
         if not _validate_np_data_size(output, tl_dtype):
             output = output.astype(_get_np_dtype(tl_dtype))
@@ -724,13 +733,18 @@ class InterpreterBuilder:
         # This is fix for interpreter cases where for example int32 tensor is being passed
         # But unexpectedly int64 values are being returned causing
         # tl.store to write 8 bytes instead of 4 bytes which lead to silent data corruption
-        dummy_weights = np.ones_like(data.data, dtype=data.data.dtype)
+        dummy_weights = np.ones_like(data.data, dtype=np.int32)
+
+        # np.histogram's last bin is a closed interval [bins - 1, bins], so a
+        # value equal to `bins` would be counted there. The GPU drops every
+        # out-of-range value, so exclude such elements like masked ones.
+        valid = np.logical_and(mask.data, data.data < bins)
 
         # force all masked elements to zero
-        data = np.where(mask.data, data.data, np.zeros_like(data.data))
+        data = np.where(valid, data.data, np.zeros_like(data.data))
         histogram = np.histogram(data, bins=bins, range=(0, bins), weights=dummy_weights)[0]
         # remove overcounted elements
-        histogram[0] -= np.logical_not(mask.data).sum()
+        histogram[0] -= np.logical_not(valid).sum()
         return TensorHandle(histogram, tl.int32)
 
     def create_gather(self, src, indices, axis):
@@ -811,7 +825,14 @@ class InterpreterBuilder:
         if prefix:
             msg += f" {prefix}"
         if hex:
-            np.set_printoptions(formatter={'all': lambda x: f"0x{x:02x}"})
+
+            def _to_hex(x):
+                if isinstance(x, np.floating):
+                    return float(x).hex()
+                width = x.dtype.itemsize * 2
+                return f"0x{int(x):0{width}x}"
+
+            np.set_printoptions(formatter={'all': _to_hex})
         for value in values:
             print(msg + f" {value.data}")
         if hex:
@@ -836,7 +857,6 @@ class InterpreterBuilder:
 
     def create_descriptor_load(self, desc: TensorDescHandle, indices: List[TensorHandle], cache_modifier,
                                eviction_policy):
-        assert isinstance(desc, TensorDescHandle)
         ptrs, mask = desc.materialize_pointers(indices)
         dtype_tt = ptrs.get_element_ty()
         dtype_np = _get_np_dtype(dtype_tt)
@@ -942,7 +962,6 @@ def _patch_lang_tensor(tensor, scope: _LangPatchScope):
 
     def _get_transpose(self):
         handle = TensorHandle(np.transpose(self.handle.data), self.handle.dtype)
-        assert self.type.is_block()
         block_shape = list(self.type.shape)
         block_shape[-1], block_shape[-2] = block_shape[-2], block_shape[-1]
         res_ty = tl.core.block_type(self.dtype, block_shape)

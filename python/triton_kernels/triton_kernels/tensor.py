@@ -83,8 +83,7 @@ class Tensor:
 
     @property
     def data(self):
-        t = self.storage
-        return t.data if isinstance(t, Storage) else t
+        return self.storage.data
 
     def dim(self):
         return self.ndim
@@ -253,8 +252,6 @@ def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwarg
 
 
 def dtype_to_torch_dtype(dtype: DataType) -> torch.dtype:
-    if dtype is None:
-        return None
     if not isinstance(dtype, DataType):
         return dtype
     return {
@@ -311,7 +308,6 @@ def empty(shape: tuple[int], dtype: DataType, device: torch.device, layout=None,
         running *= storage_shape[d]
     storage = torch.empty_strided(storage_shape, strides, device=device, dtype=storage_dtype)
     ret = wrap_torch_tensor(storage, dtype=dtype, shape=shape, layout=initial_layout)
-    assert initial_layout == ret.storage.layout or allow_implicit_conversion
     if allow_implicit_conversion:
         ret = convert_layout(ret, layout)
     return ret

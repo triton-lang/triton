@@ -300,7 +300,9 @@ class CMakeBuild(build_ext):
         cmake_args += [f"-DCMAKE_BUILD_TYPE={cfg}"]
         if platform.system() == "Windows":
             cmake_args += [f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{cfg.upper()}={extdir}"]
-        else:
+        # This tests for "--jobserver-auth=fifo:" rather than "--jobserver-auth" because ninja
+        # only supports a jobserver in fifo mode. In other cases, use a default job count.
+        elif "--jobserver-auth=fifo:" not in os.environ.get("MAKEFLAGS", ""):
             max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
             build_args += ['-j' + max_jobs]
 
@@ -340,6 +342,7 @@ class CMakeBuild(build_ext):
             "TRITON_PARALLEL_LINK_JOBS",
             "TRITON_OFFLINE_BUILD",
             "TRITON_LLVM_SYSTEM_SUFFIX",
+            "TRITON_STABLE_ABI",
             "LLVM_SYSPATH",
             "JSON_SYSPATH",
             "TRITON_CUDACRT_PATH",
@@ -373,6 +376,13 @@ class CMakeBuild(build_ext):
         update_symlink(Path(self.base_dir) / "compile_commands.json", cmake_dir / "compile_commands.json")
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=cmake_dir)
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
+        if check_env_flag("TRITON_EXT_ENABLED"):
+            # Install Triton headers and TableGen definitions (*.h, *.h.inc, *.td)
+            # into the wheel staging directory so they are bundled in the wheel.
+            # This must run after the full build so that all TableGen-generated
+            # *.h.inc files exist in the CMake binary directory.
+            subprocess.check_call(["cmake", "--install", ".", "--component", "wheel_headers", "--prefix", wheeldir],
+                                  cwd=cmake_dir)
 
 
 backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
@@ -467,6 +477,11 @@ def add_links(external_only):
 
 
 class plugin_bdist_wheel(bdist_wheel):
+
+    def get_tag(self):
+        if check_env_flag("TRITON_STABLE_ABI"):
+            return "cp312", "abi3", super().get_tag()[2]
+        return super().get_tag()
 
     def run(self):
         add_links(external_only=True)
@@ -594,6 +609,16 @@ setup(
         "__pycache__/*",
         "*.py[cod]",
     ]},
+    package_data={
+        # Headers and TableGen definitions copied into the wheel staging dir by
+        # the wheel_headers CMake install component.  Paths are relative to the
+        # triton package root (<build_lib>/triton/).
+        "triton": [
+            "include/**/*.h",
+            "include/**/*.h.inc",
+            "include/**/*.td",
+        ],
+    },
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={
         "bdist_wheel": plugin_bdist_wheel,
