@@ -79,8 +79,7 @@ public:
   }
 };
 
-void createSharedMemoryGlobal(ModuleOp mod,
-                              LLVMTypeConverter &typeConverter) {
+void createSharedMemoryGlobal(ModuleOp mod, LLVMTypeConverter &typeConverter) {
   OpBuilder builder(mod.getBodyRegion());
   Type elemTy = typeConverter.convertType(builder.getIntegerType(8));
   // A zero-sized array with external linkage represents dynamic shared memory.
@@ -89,8 +88,7 @@ void createSharedMemoryGlobal(ModuleOp mod,
   LLVM::GlobalOp::create(
       builder, mod.getLoc(), arrayTy, /*isConstant=*/false,
       LLVM::Linkage::External, "global_smem", /*value=*/Attribute(),
-      /*alignment=*/16,
-      static_cast<unsigned>(NVVM::NVVMMemorySpace::Shared));
+      /*alignment=*/16, static_cast<unsigned>(NVVM::NVVMMemorySpace::Shared));
 }
 
 struct ConvertTritonGPUToLLVM
@@ -110,16 +108,15 @@ struct ConvertTritonGPUToLLVM
 
 private:
   LogicalResult prepareModule(ModuleOp mod, TargetInfo &targetInfo);
-  LogicalResult lowerFunctions(ModuleOp mod,
-                               LLVMTypeConverter &typeConverter,
+  LogicalResult lowerFunctions(ModuleOp mod, LLVMTypeConverter &typeConverter,
                                TargetInfo &targetInfo);
   void populateConversionPatterns(LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns,
                                   ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                   TargetInfo &targetInfo);
   LogicalResult lowerTritonGPUOps(ModuleOp mod,
-                                 LLVMTypeConverter &typeConverter,
-                                 TargetInfo &targetInfo);
+                                  LLVMTypeConverter &typeConverter,
+                                  TargetInfo &targetInfo);
   LogicalResult lowerControlFlow(ModuleOp mod,
                                  LLVMTypeConverter &typeConverter);
   void finalizeModule(ModuleOp mod);
@@ -181,8 +178,7 @@ LogicalResult ConvertTritonGPUToLLVM::prepareModule(ModuleOp mod,
       mod.emitError("no ConSan hooks registered for nvidia");
       return failure();
     }
-    if (failed(
-            mlir::triton::instrument::runConcurrencySanitizer(mod, *hooks)))
+    if (failed(mlir::triton::instrument::runConcurrencySanitizer(mod, *hooks)))
       return failure();
 
     // Normalize instrumentation-generated IR before allocation and lowering.
@@ -226,9 +222,8 @@ void ConvertTritonGPUToLLVM::populateConversionPatterns(
                                                   patterns, benefit);
   populateDotOpToLLVMPatterns(typeConverter, patterns, computeCapability,
                               benefit);
-  populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
-                                      axisInfoAnalysis, computeCapability,
-                                      targetInfo, benefit);
+  populateElementwiseOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
+                                      computeCapability, targetInfo, benefit);
   populateClampFOpToLLVMPattern(typeConverter, patterns, axisInfoAnalysis,
                                 computeCapability,
                                 patternBenefitClampOptimizedPattern);
@@ -241,8 +236,7 @@ void ConvertTritonGPUToLLVM::populateConversionPatterns(
                                              targetInfo, benefit);
   mlir::triton::populateGatherOpToLLVMPatterns(typeConverter, patterns,
                                                targetInfo, benefit);
-  populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit,
-                                  targetInfo);
+  populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit, targetInfo);
   populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit,
                                    targetInfo);
   mlir::triton::populateHistogramOpToLLVMPatterns(typeConverter, patterns,
@@ -253,8 +247,8 @@ void ConvertTritonGPUToLLVM::populateConversionPatterns(
                                                    targetInfo, benefit);
   mlir::triton::NVIDIA::populateSPMDOpToLLVMPattern(typeConverter, patterns,
                                                     benefit);
-  mlir::triton::populateSPMDOpToLLVMPattern(typeConverter, patterns,
-                                            targetInfo, benefit);
+  mlir::triton::populateSPMDOpToLLVMPattern(typeConverter, patterns, targetInfo,
+                                            benefit);
   // TODO(thomas): this should probably be done in a separate step to not
   // interfere with our own lowering of arith ops. Add arith/math's patterns
   // to help convert scalar expression to LLVM.
@@ -268,8 +262,8 @@ void ConvertTritonGPUToLLVM::populateConversionPatterns(
                                               targetInfo, benefit);
   mlir::triton::NVIDIA::populateMemoryOpToLLVMPatterns(
       typeConverter, targetInfo, patterns, benefit);
-  mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(
-      typeConverter, patterns, benefit);
+  mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(typeConverter,
+                                                            patterns, benefit);
   mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                  patterns, benefit);
   mlir::triton::NVIDIA::populateTCGen5MMAOpToLLVMPattern(
@@ -293,8 +287,9 @@ LogicalResult ConvertTritonGPUToLLVM::lowerTritonGPUOps(
   return applyPartialConversion(mod, target, std::move(patterns));
 }
 
-LogicalResult ConvertTritonGPUToLLVM::lowerControlFlow(
-    ModuleOp mod, LLVMTypeConverter &typeConverter) {
+LogicalResult
+ConvertTritonGPUToLLVM::lowerControlFlow(ModuleOp mod,
+                                         LLVMTypeConverter &typeConverter) {
   MLIRContext *context = mod.getContext();
   NvidiaLLVMConversionTarget target(*context);
   target.addIllegalDialect<cf::ControlFlowDialect>();
