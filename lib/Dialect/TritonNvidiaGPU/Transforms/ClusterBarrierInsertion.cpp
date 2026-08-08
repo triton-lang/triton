@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/MBarrierUtilities.h"
 
 #include "mlir/IR/Dominance.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
@@ -23,17 +24,6 @@ namespace {
 
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
-
-static bool hasTCGen5CommitCrossCTA(Operation *op) {
-  SmallVector<Value> descs;
-  if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
-    descs = mma.getCompletionDescs();
-  else if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op))
-    llvm::append_range(descs, commit.getDescs());
-  else
-    return false;
-  return !ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op), descs).empty();
-}
 
 static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op)) {
@@ -88,11 +78,6 @@ static bool hasUnresolvedCrossClusterDependency(const BlockInfo &blockInfo) {
          hasDistributedDependency(blockInfo.syncWriteSlices, /*isRead=*/false);
 }
 
-static bool isCrossCTAMBarrier(ttng::InitBarrierOp initBarrierOp, int numCTAs) {
-  auto barrierTy = cast<ttg::MemDescType>(initBarrierOp.getBarrier().getType());
-  return barrierTy.getShape()[0] != numCTAs;
-}
-
 static bool valueAliasesTrackedBuffers(Value value,
                                        const Allocation::BufferIdSetT &tracked,
                                        Allocation *allocation) {
@@ -103,50 +88,10 @@ static bool valueAliasesTrackedBuffers(Value value,
   return false;
 }
 
-static bool
-usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
-                                       const Allocation::BufferIdSetT &tracked,
-                                       Allocation *allocation) {
-  auto aliasesTracked = [&](Value value) {
-    return value && valueAliasesTrackedBuffers(value, tracked, allocation);
-  };
-
-  if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
-    auto barrierOp = cast<ttg::MBarrierOpInterface>(op);
-    return hasTCGen5CommitCrossCTA(op) &&
-           llvm::any_of(barrierOp.getBarriers(), aliasesTracked);
-  }
-  if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
-    return hasTCGen5CommitCrossCTA(op) && aliasesTracked(commit.getBarrier());
-  }
-  if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
-    return tma.getMulticast() && aliasesTracked(tma.getBarrier());
-  }
-  if (auto clc = dyn_cast<ttng::CLCTryCancelOp>(op)) {
-    return aliasesTracked(clc.getMbarrier());
-  }
-  if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
-    return aliasesTracked(store.getMbarrier());
-  }
-  if (auto expect = dyn_cast<ttng::BarrierExpectOp>(op);
-      expect && expect.getFromCTA())
-    return aliasesTracked(expect.getBarrier());
-  if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op))
-    return (arrive.isMulticast() || arrive.getFromCTA()) &&
-           aliasesTracked(arrive.getAlloc());
-  return false;
-}
-
 static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
                                              FunctionOpInterface funcOp,
                                              Allocation *allocation,
                                              int numCTAs) {
-  // Barrier init sync is needed for barriers that are themselves cross-CTA,
-  // and also for per-CTA barriers consumed by multi-CTA ops that multicast or
-  // otherwise fan out barrier state across the cluster.
-  if (isCrossCTAMBarrier(initBarrierOp, numCTAs))
-    return true;
-
   Allocation::BufferIdSetT initBarrierBuffers;
   for (auto bufferId :
        allocation->getAllBufferIdsWithAliases(initBarrierOp.getBarrier())) {
@@ -154,17 +99,11 @@ static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
     initBarrierBuffers.insert(bufferId);
   }
 
-  // Or if it's used by a multi-CTA consumer that broadcasts barrier state
-  // across CTAs even though the barrier allocation itself looks per-CTA.
-  return funcOp
-      ->walk<WalkOrder::PreOrder>([&](Operation *op) {
-        if (usesTrackedBarrierInCrossCTAConsumerOp(op, initBarrierBuffers,
-                                                   allocation)) {
-          return WalkResult::interrupt();
-        }
-        return WalkResult::advance();
-      })
-      .wasInterrupted();
+  return mlir::triton::nvidia_gpu::requiresCrossCTAMBarrierInitSync(
+      funcOp, initBarrierOp.getBarrier(), numCTAs, [&](Value value) {
+        return value && valueAliasesTrackedBuffers(value, initBarrierBuffers,
+                                                   allocation);
+      });
 }
 
 static bool nestedOpUsesTrackedMBarrier(Operation *op,
