@@ -1597,24 +1597,33 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
           rows = arith::AndIOp::create(fb, rows, ownerMask);
           return arith::AndIOp::create(fb, rows, readerCTAMask);
         };
+        auto clearReader = [&](Value table, RankedTensorType tableType,
+                               Value rows) {
+          auto elemType = cast<IntegerType>(tableType.getElementType());
+          Value readerMaskElem =
+              adjustIntegerWidth(fb, readerMaskVal, elemType);
+          Value readerBit =
+              triton::SplatOp::create(fb, tableType, readerMaskElem);
+          Value allOnes =
+              tti::createConstIntTensor(fb, fb.getLoc(), -1, tableType);
+          Value notReaderBit = arith::XOrIOp::create(fb, readerBit, allOnes);
+          Value withoutReader = arith::AndIOp::create(fb, table, notReaderBit);
+          return arith::SelectOp::create(fb, rows, withoutReader, table)
+              .getResult();
+        };
+
         Value readVisibility = tti::createLoadScratchMemory(
             fb, fb.getLoc(), readVisibilityPtr, readVisibilityType);
         Value visibilityRows = createReaderRows(readVisibilityType);
         // A logical reader reuses one bit for every read. Remove the previous
         // generation before publishing the current one so an old observer or
         // barrier snapshot cannot license a later unfinished read.
-        Value previousReaderBit =
-            triton::SplatOp::create(fb, readVisibilityType, readerMaskVal);
-        Value allOnes =
-            tti::createConstIntTensor(fb, fb.getLoc(), -1, readVisibilityType);
-        Value notReaderBit =
-            arith::XOrIOp::create(fb, previousReaderBit, allOnes);
-        Value withoutReader =
-            arith::AndIOp::create(fb, readVisibility, notReaderBit);
-        Value newVisibility = arith::SelectOp::create(
-            fb, visibilityRows, withoutReader, readVisibility);
+        Value newVisibility =
+            clearReader(readVisibility, readVisibilityType, visibilityRows);
+        auto elemType = cast<IntegerType>(readVisibilityType.getElementType());
+        Value readerMaskElem = adjustIntegerWidth(fb, readerMaskVal, elemType);
         Value readerBit =
-            triton::SplatOp::create(fb, readVisibilityType, readerMaskVal);
+            triton::SplatOp::create(fb, readVisibilityType, readerMaskElem);
         Value observerColumnMask =
             createThreadColumnMask(fb, observerMaskVal, readVisibilityType,
                                    /*columnDim=*/3);
@@ -1635,16 +1644,8 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
           Value readTracking = tti::createLoadScratchMemory(
               fb, fb.getLoc(), readTrackingPtr, readTrackingType);
           Value trackingRows = createReaderRows(readTrackingType);
-          Value trackedReaderBit =
-              triton::SplatOp::create(fb, readTrackingType, readerMaskVal);
-          Value allOnes =
-              tti::createConstIntTensor(fb, fb.getLoc(), -1, readTrackingType);
-          Value notReaderBit =
-              arith::XOrIOp::create(fb, trackedReaderBit, allOnes);
-          Value withoutReader =
-              arith::AndIOp::create(fb, readTracking, notReaderBit);
-          Value newTracking = arith::SelectOp::create(
-              fb, trackingRows, withoutReader, readTracking);
+          Value newTracking =
+              clearReader(readTracking, readTrackingType, trackingRows);
           createMaskedStoreScratchMemory(fb, fb.getLoc(), readTrackingPtr,
                                          newTracking, readTrackingType,
                                          trackingRows);
