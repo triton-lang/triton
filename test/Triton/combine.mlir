@@ -568,3 +568,55 @@ tt.func @test_combine_broadcast_mul_reduce_higher_rank(%arg0: tensor<32x16x4xf32
     }) : (tensor<32x16x32x4xf32>) -> tensor<32x32x4xf32>
     tt.return %5 : tensor<32x32x4xf32>
 }
+
+// CHECK-LABEL: @test_combine_select_cmp_to_minmax
+tt.func @test_combine_select_cmp_to_minmax(%arg0: tensor<8xf32>, %arg1: tensor<8xf16>) -> (tensor<8xf32>, tensor<8xf32>, tensor<8xf16>, tensor<8xf16>) {
+    %zero = arith.constant dense<0.0> : tensor<8xf32>
+    %zero_f16 = arith.constant dense<0.0> : tensor<8xf16>
+    %one = arith.constant dense<1.0> : tensor<8xf32>
+    %half = arith.constant dense<0.5> : tensor<8xf32>
+
+    // CHECK: %[[relu:.*]] = arith.maxnumf %arg0, %{{.*}} : tensor<8xf32>
+    %cmp0 = arith.cmpf ogt, %arg0, %zero : tensor<8xf32>
+    %relu = arith.select %cmp0, %arg0, %zero : tensor<8xi1>, tensor<8xf32>
+
+    // CHECK: %[[min:.*]] = arith.minnumf %arg0, %{{.*}} : tensor<8xf32>
+    %cmp1 = arith.cmpf ole, %arg0, %one : tensor<8xf32>
+    %min = arith.select %cmp1, %arg0, %one : tensor<8xi1>, tensor<8xf32>
+
+    // The frontend widens f16/bf16 comparisons to f32 while the select stays
+    // on the narrow type, the fold still applies when the wide constant is
+    // the extension of the narrow one.
+    // CHECK: %[[wrelu:.*]] = arith.maxnumf %arg1, %{{.*}} : tensor<8xf16>
+    %ext0 = arith.extf %arg1 : tensor<8xf16> to tensor<8xf32>
+    %cmp4 = arith.cmpf ogt, %ext0, %zero : tensor<8xf32>
+    %wrelu = arith.select %cmp4, %arg1, %zero_f16 : tensor<8xi1>, tensor<8xf16>
+
+    // Wide constant does not match the narrow one, we  must not fold.
+    // CHECK: %[[nofold:.*]] = arith.select %{{.*}}, %arg1, %{{.*}} : tensor<8xi1>, tensor<8xf16>
+    %ext1 = arith.extf %arg1 : tensor<8xf16> to tensor<8xf32>
+    %cmp5 = arith.cmpf ogt, %ext1, %half : tensor<8xf32>
+    %nofold = arith.select %cmp5, %arg1, %zero_f16 : tensor<8xi1>, tensor<8xf16>
+
+    // CHECK: tt.return %[[relu]], %[[min]], %[[wrelu]], %[[nofold]]
+    tt.return %relu, %min, %wrelu, %nofold : tensor<8xf32>, tensor<8xf32>, tensor<8xf16>, tensor<8xf16>
+}
+
+// CHECK-LABEL: @test_combine_select_cmp_to_minmax_fail
+// CHECK-NOT: arith.maxnumf
+// CHECK-NOT: arith.minnumf
+tt.func @test_combine_select_cmp_to_minmax_fail(%arg0: tensor<8xf32>, %arg1: tensor<8xf32>) -> (tensor<8xf32>, tensor<8xf32>) {
+    %nan = arith.constant dense<0x7FC00000> : tensor<8xf32>
+
+    // false value is not a constant, a NaN in %arg1 would be
+    // used by the select but dropped by maxnumf.
+    %cmp0 = arith.cmpf ogt, %arg0, %arg1 : tensor<8xf32>
+    %sel0 = arith.select %cmp0, %arg0, %arg1 : tensor<8xi1>, tensor<8xf32>
+
+    // NaN constant.
+    %cmp1 = arith.cmpf ogt, %arg0, %nan : tensor<8xf32>
+    %sel1 = arith.select %cmp1, %arg0, %nan : tensor<8xi1>, tensor<8xf32>
+
+    // CHECK: tt.return
+    tt.return %sel0, %sel1 : tensor<8xf32>, tensor<8xf32>
+}

@@ -292,6 +292,80 @@ using CombineDotAddFPattern = CombineDotAddPattern<DotOp, arith::AddFOp>;
 using CombineDotScaledAddFPattern =
     CombineDotAddPattern<DotScaledOp, arith::AddFOp>;
 
+// select(cmpf(ogt/oge, x, c), x, c) => maxnumf(x, c)
+// select(cmpf(olt/ole, x, c), x, c) => minnumf(x, c)
+// select(cmpf(ogt/oge, extf(x), extf(c)), x, c) => maxnumf(x, c)
+class CombineSelectCmpToMinMaxPattern
+    : public mlir::OpRewritePattern<arith::SelectOp> {
+private:
+  // Return the float if it is statically known to be a float
+  // constant
+  static std::optional<llvm::APFloat> getSplatFloatConstant(Value val) {
+    if (auto splatOp = val.getDefiningOp<SplatOp>())
+      val = splatOp.getSrc();
+    Attribute attr;
+    if (!matchPattern(val, m_Constant(&attr)))
+      return std::nullopt;
+    if (auto denseAttr = dyn_cast<DenseElementsAttr>(attr)) {
+      if (!denseAttr.isSplat())
+        return std::nullopt;
+      attr = denseAttr.getSplatValue<Attribute>();
+    }
+    if (auto floatAttr = dyn_cast_or_null<FloatAttr>(attr))
+      return floatAttr.getValue();
+    return std::nullopt;
+  }
+
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(arith::SelectOp selectOp,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto cmpOp = selectOp.getCondition().getDefiningOp<arith::CmpFOp>();
+    if (!cmpOp)
+      return failure();
+    Value x = selectOp.getTrueValue();
+    Value c = selectOp.getFalseValue();
+    Type elemTy = getElementTypeOrSelf(x.getType());
+    if (!elemTy.isF16() && !elemTy.isBF16() && !elemTy.isF32() &&
+        !elemTy.isF64())
+      return failure();
+    auto cVal = getSplatFloatConstant(c);
+    if (!cVal || cVal->isNaN())
+      return failure();
+    auto cmpRhsVal = getSplatFloatConstant(cmpOp.getRhs());
+    if (!cmpRhsVal)
+      return failure();
+    llvm::APFloat cCmp = *cVal;
+    if (cmpOp.getLhs() != x) {
+      auto extOp = cmpOp.getLhs().getDefiningOp<arith::ExtFOp>();
+      if (!extOp || extOp.getIn() != x)
+        return failure();
+      bool losesInfo = false;
+      if (cCmp.convert(cmpRhsVal->getSemantics(),
+                       llvm::APFloat::rmNearestTiesToEven,
+                       &losesInfo) != llvm::APFloat::opOK ||
+          losesInfo)
+        return failure();
+    }
+    if (!cCmp.bitwiseIsEqual(*cmpRhsVal))
+      return failure();
+    switch (cmpOp.getPredicate()) {
+    case arith::CmpFPredicate::OGT:
+    case arith::CmpFPredicate::OGE:
+      rewriter.replaceOpWithNewOp<arith::MaxNumFOp>(selectOp, x, c);
+      return success();
+    case arith::CmpFPredicate::OLT:
+    case arith::CmpFPredicate::OLE:
+      rewriter.replaceOpWithNewOp<arith::MinNumFOp>(selectOp, x, c);
+      return success();
+    default:
+      return failure();
+    }
+  }
+};
+
 } // anonymous namespace
 
 class CombineOpsPass : public impl::TritonCombineOpsBase<CombineOpsPass> {
@@ -305,6 +379,7 @@ public:
     patterns.add<CombineDotAddFPattern>(context);
     patterns.add<CombineDotScaledAddFPattern>(context);
     patterns.add<CombineSelectMaskedLoadPattern>(context);
+    patterns.add<CombineSelectCmpToMinMaxPattern>(context);
     patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);
     patterns.add<CombineReshapeReducePatterns>(context);
