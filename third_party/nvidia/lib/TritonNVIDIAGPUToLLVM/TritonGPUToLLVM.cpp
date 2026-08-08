@@ -65,17 +65,18 @@ public:
     // The custom NVGPU dialect is LLVM-level IR lowered by a subsequent pass.
     addLegalDialect<triton::nvgpu::NVGPUDialect>();
 
+    // Leave extension dialects (e.g., proton) unclassified so partial
+    // conversion can preserve them for their own downstream lowering passes.
+    addIllegalDialect<triton::TritonDialect, triton::gpu::TritonGPUDialect,
+                      triton::nvidia_gpu::TritonNvidiaGPUDialect,
+                      triton::instrument::TritonInstrumentDialect,
+                      mlir::gpu::GPUDialect>();
+
     // Warp specialization and warp ID are lowered by subsequent passes.
     addLegalOp<triton::gpu::WarpIdOp, triton::gpu::WarpSpecializeOp,
                triton::gpu::WarpYieldOp,
                triton::gpu::WarpSpecializePartitionsOp,
                triton::gpu::WarpReturnOp>();
-
-    // Partial conversion normally tolerates unknown operations. Make every
-    // registered operation not listed above dynamically illegal, while still
-    // allowing unregistered placeholder operations used by tests.
-    markUnknownOpDynamicallyLegal(
-        [](Operation *op) { return !op->getName().isRegistered(); });
   }
 };
 
