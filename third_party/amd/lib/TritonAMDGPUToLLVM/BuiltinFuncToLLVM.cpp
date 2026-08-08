@@ -169,6 +169,63 @@ private:
       replacementOp = LLVM::FMulOp::create(rewriter, loc, returnType,
                                            posResult->getResult(0),
                                            sign->getResult(0), defaultFlags);
+    } else if (calleeName == "__triton_hip_float_as_int") {
+      assert(operands.size() == 1);
+      replacementOp =
+          LLVM::BitcastOp::create(rewriter, loc, returnType, operands[0]);
+    } else if (calleeName == "__triton_hip_int_as_float") {
+      assert(operands.size() == 1);
+      replacementOp =
+          LLVM::BitcastOp::create(rewriter, loc, returnType, operands[0]);
+    } else if (calleeName == "__triton_hip_float_as_uint") {
+      assert(operands.size() == 1);
+      replacementOp =
+          LLVM::BitcastOp::create(rewriter, loc, returnType, operands[0]);
+    } else if (calleeName == "__triton_hip_uint_as_float") {
+      assert(operands.size() == 1);
+      replacementOp =
+          LLVM::BitcastOp::create(rewriter, loc, returnType, operands[0]);
+    } else if (calleeName == "__triton_hip_double_as_longlong") {
+      assert(operands.size() == 1);
+      replacementOp =
+          LLVM::BitcastOp::create(rewriter, loc, returnType, operands[0]);
+    } else if (calleeName == "__triton_hip_longlong_as_double") {
+      assert(operands.size() == 1);
+      replacementOp =
+          LLVM::BitcastOp::create(rewriter, loc, returnType, operands[0]);
+    } else if (calleeName == "__triton_hip_double2hiint") {
+      assert(operands.size() == 1);
+      // Extract high 32 bits of double: bitcast to i64, lshr 32, trunc to i32
+      auto i64Type = rewriter.getIntegerType(64);
+      auto asInt = LLVM::BitcastOp::create(rewriter, loc, i64Type, operands[0]);
+      auto shift = rewriter.create<LLVM::ConstantOp>(
+          loc, i64Type, rewriter.getIntegerAttr(i64Type, 32));
+      auto shifted = LLVM::LShrOp::create(rewriter, loc, i64Type,
+                                          asInt->getResult(0), shift);
+      replacementOp = LLVM::TruncOp::create(rewriter, loc, returnType,
+                                            shifted->getResult(0));
+    } else if (calleeName == "__triton_hip_double2loint") {
+      assert(operands.size() == 1);
+      // Extract low 32 bits of double: bitcast to i64, trunc to i32
+      auto i64Type = rewriter.getIntegerType(64);
+      auto asInt = LLVM::BitcastOp::create(rewriter, loc, i64Type, operands[0]);
+      replacementOp =
+          LLVM::TruncOp::create(rewriter, loc, returnType, asInt->getResult(0));
+    } else if (calleeName == "__triton_hip_hiloint2double") {
+      assert(operands.size() == 2);
+      // Combine hi (arg0) and lo (arg1) i32 into a double:
+      // result = (zext(hi) << 32) | zext(lo), then bitcast to double
+      auto i64Type = rewriter.getIntegerType(64);
+      auto hiExt = LLVM::ZExtOp::create(rewriter, loc, i64Type, operands[0]);
+      auto loExt = LLVM::ZExtOp::create(rewriter, loc, i64Type, operands[1]);
+      auto shift = rewriter.create<LLVM::ConstantOp>(
+          loc, i64Type, rewriter.getIntegerAttr(i64Type, 32));
+      auto hiShifted = LLVM::ShlOp::create(rewriter, loc, i64Type,
+                                           hiExt->getResult(0), shift);
+      auto combined = LLVM::OrOp::create(
+          rewriter, loc, i64Type, hiShifted->getResult(0), loExt->getResult(0));
+      replacementOp = LLVM::BitcastOp::create(rewriter, loc, returnType,
+                                              combined->getResult(0));
     } else if (calleeName == "__ocml_tanh_f32") {
       if (targetInfo.getISAFamily() == triton::amdgpu::ISAFamily::GFX1250) {
         const char *intrinsic = "llvm.amdgcn.tanh.f32";
