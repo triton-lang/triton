@@ -25,7 +25,8 @@ struct PyScalarClock {
 
 struct PyShadowCell {
   std::array<PyScalarClock, gsan::ShadowCell::kReadClockSize> readClocks;
-  PyScalarClock writeClock;
+  std::array<uint8_t, gsan::ShadowCell::kReadClockSize> readMasks;
+  std::array<PyScalarClock, gsan::kShadowMemGranularityBytes> writeClocks;
   uint32_t numReads = 0;
 };
 
@@ -35,12 +36,14 @@ bool scalarClockEquals(const PyScalarClock &lhs, const PyScalarClock &rhs) {
 }
 
 bool shadowCellEquals(const PyShadowCell &lhs, const PyShadowCell &rhs) {
-  if (lhs.numReads != rhs.numReads ||
-      !scalarClockEquals(lhs.writeClock, rhs.writeClock)) {
+  if (lhs.numReads != rhs.numReads || lhs.readMasks != rhs.readMasks)
     return false;
-  }
   for (size_t i = 0; i < lhs.readClocks.size(); ++i) {
     if (!scalarClockEquals(lhs.readClocks[i], rhs.readClocks[i]))
+      return false;
+  }
+  for (size_t i = 0; i < lhs.writeClocks.size(); ++i) {
+    if (!scalarClockEquals(lhs.writeClocks[i], rhs.writeClocks[i]))
       return false;
   }
   return true;
@@ -135,8 +138,19 @@ std::string shadowCellStr(const PyShadowCell &cell) {
       oss << ", ";
     oss << scalarClockStr(cell.readClocks[i]);
   }
-  oss << "], write_clock=" << scalarClockStr(cell.writeClock)
-      << ", num_reads=" << static_cast<uint64_t>(cell.numReads) << ")";
+  oss << "], read_masks=[";
+  for (size_t i = 0; i < cell.readMasks.size(); ++i) {
+    if (i != 0)
+      oss << ", ";
+    oss << static_cast<uint32_t>(cell.readMasks[i]);
+  }
+  oss << "], write_clocks=[";
+  for (size_t i = 0; i < cell.writeClocks.size(); ++i) {
+    if (i != 0)
+      oss << ", ";
+    oss << scalarClockStr(cell.writeClocks[i]);
+  }
+  oss << "], num_reads=" << static_cast<uint64_t>(cell.numReads) << ")";
   return oss.str();
 }
 
@@ -178,9 +192,12 @@ PyScalarClock toPyScalarClock(const gsan::ScalarClock &clock) {
 
 PyShadowCell toPyShadowCell(const gsan::ShadowCell &cell) {
   PyShadowCell out;
-  for (size_t i = 0; i < gsan::ShadowCell::kReadClockSize; ++i)
+  for (size_t i = 0; i < gsan::ShadowCell::kReadClockSize; ++i) {
     out.readClocks[i] = toPyScalarClock(cell.readClocks[i]);
-  out.writeClock = toPyScalarClock(cell.writeClock);
+    out.readMasks[i] = cell.readMasks[i];
+  }
+  for (size_t i = 0; i < out.writeClocks.size(); ++i)
+    out.writeClocks[i] = toPyScalarClock(cell.writeClocks[i]);
   out.numReads = cell.numReads;
   return out;
 }
@@ -302,8 +319,12 @@ void init_gsan_testing(py::module_ &m) {
   py::class_<PyShadowCell>(m, "ShadowCell")
       .def_prop_ro("read_clocks",
                    [](const PyShadowCell &cell) { return cell.readClocks; })
+      .def_prop_ro("read_masks",
+                   [](const PyShadowCell &cell) { return cell.readMasks; })
+      .def_prop_ro("write_clocks",
+                   [](const PyShadowCell &cell) { return cell.writeClocks; })
       .def_prop_ro("write_clock",
-                   [](const PyShadowCell &cell) { return cell.writeClock; })
+                   [](const PyShadowCell &cell) { return cell.writeClocks[0]; })
       .def_prop_ro("num_reads",
                    [](const PyShadowCell &cell) {
                      return static_cast<uint64_t>(cell.numReads);

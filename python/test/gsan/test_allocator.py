@@ -212,7 +212,7 @@ def test_default_topology_uses_cuda_device_indices():
 
 def test_malloc_free(_direct_allocator):
     malloc, free, reserve_ptr, reserve_size = _direct_allocator
-    real_base = reserve_ptr + reserve_size // 2
+    real_base = reserve_ptr + 3 * reserve_size // 4
 
     # First valid allocation should come from the real base and be reusable.
     p0 = malloc(1)
@@ -297,12 +297,12 @@ def test_mem_pool():
     assert reserve_ptr != 0
     assert reserve_size > 0
 
-    # Check real allocation is in higher half of reserve
-    real_base = reserve_ptr + reserve_size // 2
+    # Real allocations occupy the final quarter of the reservation.
+    real_base = reserve_ptr + 3 * reserve_size // 4
     assert real_base <= real.data_ptr() < reserve_ptr + reserve_size
 
     shadow = shadow_tensor_for(real)
-    assert reserve_ptr <= shadow.data_ptr() < reserve_ptr + reserve_size // 2
+    assert reserve_ptr <= shadow.data_ptr() < real_base
 
     # Test that real and shadow allocation can be used
     real.zero_()

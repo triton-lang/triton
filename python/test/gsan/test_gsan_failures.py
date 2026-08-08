@@ -74,6 +74,29 @@ def _waw_kernel(ptr, scratch_ptr, counter_ptr):
 
 
 @triton.jit
+def _overlapping_subword_access_kernel(ptr, scratch_ptr, counter_ptr, ACCESS: tl.constexpr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        if ACCESS == "war":
+            first_value = tl.load(ptr)
+            tl.store(scratch_ptr, first_value)
+        else:
+            tl.store(ptr, 1.0)
+        tl.atomic_add(counter_ptr, 1, sem="relaxed")
+    elif pid == 1:
+        atomic_poll(counter_ptr, 1)
+        tl.store(ptr + 1, 2.0)
+        tl.atomic_add(counter_ptr, 1, sem="relaxed")
+    else:
+        atomic_poll(counter_ptr, 2)
+        if ACCESS == "raw":
+            overlapping_value = tl.load(ptr)
+            tl.store(scratch_ptr + 1, overlapping_value)
+        else:
+            tl.store(ptr, 3.0)
+
+
+@triton.jit
 def _pdl_producer_kernel(payload_ptr):
     pid = tl.program_id(0)
     tl.store(payload_ptr + pid, 1000 + pid)
@@ -293,6 +316,14 @@ def _run_waw_case() -> None:
     scratch = torch.zeros(1, dtype=torch.int32, device="cuda")
     counter = torch.zeros(1, dtype=torch.int32, device="cuda")
     _waw_kernel[(2, )](target, scratch, counter, num_warps=1)
+
+
+@run_with_gsan
+def _run_overlapping_subword_case(dtype, access: str) -> None:
+    target = torch.zeros(4, dtype=dtype, device="cuda")
+    scratch = torch.zeros_like(target)
+    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
+    _overlapping_subword_access_kernel[(3, )](target, scratch, counter, ACCESS=access, num_warps=1)
 
 
 @run_with_gsan
@@ -517,6 +548,25 @@ def test_write_after_read():
 def test_write_after_write():
     _run_failure_case("waw", runner=_run_waw_case, source_function=_waw_kernel.fn, marker="tl.store(ptr, 2)",
                       error="Write after write race detected")
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
+@pytest.mark.parametrize("access", ["raw", "war", "waw"])
+def test_overlapping_subword_access_after_disjoint_write(dtype, access):
+    marker = "overlapping_value = tl.load(ptr)" if access == "raw" else "tl.store(ptr, 3.0)"
+    error = {
+        "raw": "Read after write race detected",
+        "war": "Write after read race detected",
+        "waw": "Write after write race detected",
+    }[access]
+    _run_failure_case(
+        f"overlapping_subword_{dtype}_{access}",
+        runner=_run_overlapping_subword_case,
+        runner_args=(dtype, access),
+        source_function=_overlapping_subword_access_kernel.fn,
+        marker=marker,
+        error=error,
+    )
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
