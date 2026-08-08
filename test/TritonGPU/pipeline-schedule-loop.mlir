@@ -25,6 +25,81 @@ tt.func @one_dep(%lb : index, %ub : index, %step : index,
   tt.return %loop#0 : tensor<128x32xf16, #A>
 }
 
+// CHECK-LABEL: @if_result_dependency
+tt.func @if_result_dependency(%lb : index, %ub : index, %step : index,
+                              %cond : i1, %ptr : !tt.ptr<i32>) {
+  scf.for %iv = %lb to %ub step %step {
+    // CHECK: scf.if
+    // CHECK: } {loop.cluster = {{.*}}, loop.stage = 0 : i32}
+    %value = scf.if %cond -> i32 {
+      %loaded = tt.load %ptr {tt.latency = 2 : i32} : !tt.ptr<i32>
+      scf.yield %loaded : i32
+    } else {
+      %zero = arith.constant 0 : i32
+      scf.yield %zero : i32
+    }
+    // CHECK: tt.load {{.*}} {loop.cluster = {{.*}}, loop.stage = 0 : i32
+    %other = tt.load %ptr {tt.latency = 2 : i32} : !tt.ptr<i32>
+    // CHECK: "use"(%{{.*}}, %{{.*}}) {{.*}}loop.stage = 2 : i32
+    "use"(%value, %other) : (i32, i32) -> ()
+  }
+  tt.return
+}
+
+// CHECK-LABEL: @if_result_latency_chain
+tt.func @if_result_latency_chain(%lb : index, %ub : index, %step : index,
+                                 %cond : i1) {
+  scf.for %iv = %lb to %ub step %step {
+    // CHECK: scf.if
+    // CHECK: } {loop.cluster = {{.*}}, loop.stage = 0 : i32}
+    %value = scf.if %cond -> i32 {
+      %first = scf.if %cond -> i32 {
+        %then = "first"() {tt.latency = 1 : i32} : () -> i32
+        scf.yield %then : i32
+      } else {
+        %else = "alternate"() {tt.latency = 1 : i32} : () -> i32
+        scf.yield %else : i32
+      }
+      %second = "second"(%first) {tt.latency = 1 : i32} : (i32) -> i32
+      scf.yield %second : i32
+    } else {
+      %other = "other"() {tt.latency = 1 : i32} : () -> i32
+      scf.yield %other : i32
+    }
+    // CHECK: "use"(%{{.*}}) {{.*}}loop.stage = 2 : i32
+    "use"(%value) : (i32) -> ()
+  }
+  tt.return
+}
+
+// CHECK-LABEL: @nested_loop_latency_is_local
+tt.func @nested_loop_latency_is_local(%lb : index, %ub : index, %step : index) {
+  scf.for %outer_iv = %lb to %ub step %step {
+    %result = scf.for %inner_iv = %lb to %ub step %step iter_args(%arg = %lb) -> index {
+      %next = "inner.producer"(%arg) {tt.latency = 2 : i32} : (index) -> index
+      scf.yield %next : index
+    }
+    // A nested loop owns its latency; the outer loop must remain unscheduled.
+    // CHECK: "outer.use"(%{{.*}}) : (index) -> ()
+    "outer.use"(%result) : (index) -> ()
+  }
+  tt.return
+}
+
+// CHECK-LABEL: @non_if_region_latency_is_local
+tt.func @non_if_region_latency_is_local(%lb : index, %ub : index, %step : index) {
+  scf.for %iv = %lb to %ub step %step {
+    %result = scf.execute_region -> index {
+      %produced = "region.producer"(%lb) {tt.latency = 2 : i32} : (index) -> index
+      scf.yield %produced : index
+    }
+    // Only `scf.if` regions are projected into the enclosing loop's schedule.
+    // CHECK: "outer.region_use"(%{{.*}}) : (index) -> ()
+    "outer.region_use"(%result) : (index) -> ()
+  }
+  tt.return
+}
+
 // CHECK-LABEL: @parallel_deps
 tt.func @parallel_deps(%lb : index, %ub : index, %step : index,
                        %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>,
