@@ -102,16 +102,18 @@ def _make_partitioned_dot_operand_layout(sublayout, partition_dim, num_partition
 
 @constexpr_function
 def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_layout_b, num_warps, instr_shape,
-                                 a_transposed=False, b_transposed=False, slice_m=None, slice_n=None):
+                                 a_transposed=False, b_transposed=False, slice_m=None, slice_n=None, transposed=True):
     """Create partitioned shared memory layouts and WMMA layout for a CDNA5 GEMM in order to avoid LDS partition conflicts.
 
     Args:
         block_m: M dimension tile size of the *shared* operand buffer.  Must be
-            at least ``4 * instr_shape[0]`` because the M dimension is split into
-            2 partitions and each partition must be at least 2 instructions wide.
+            at least four logical WMMA instruction tiles because the M dimension
+            is split into 2 partitions and each partition must be at least 2
+            instructions wide.
         block_n: N dimension tile size of the *shared* operand buffer.  Must be
-            at least ``2 * instr_shape[1]`` because the N dimension is split into
-            2 partitions and each partition must be at least 1 instruction wide.
+            at least two logical WMMA instruction tiles because the N dimension
+            is split into 2 partitions and each partition must be at least 1
+            instruction wide.
         original_layout_a: ``PaddedSharedLayout`` for operand A.  Shape is
             ``[block_m, block_k]`` when not transposed (K contiguous) and
             ``[block_k, block_m]`` when transposed (M contiguous).
@@ -119,7 +121,7 @@ def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_l
             ``[block_k, block_n]`` when not transposed (N contiguous) and
             ``[block_n, block_k]`` when transposed (K contiguous).
         num_warps: Number of warps per CTA.  Currently must be 4 or 8.
-        instr_shape: WMMA instruction shape as ``[M, N, K]``.
+        instr_shape: Physical WMMA instruction shape as ``[M, N, K]``.
         a_transposed: Whether A is transposed in shared memory, i.e. M is
             the contiguous axis instead of K.
         b_transposed: Whether B is transposed in shared memory, i.e. K is
@@ -128,6 +130,9 @@ def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_l
             ``block_m`` (unsliced).
         slice_n: N dimension of a dot operation after slicing.  Defaults to
             ``block_n`` (unsliced).
+        transposed: Whether the returned WMMA result layout is transposed.  Its
+            logical instruction tile is ``N x M`` when true and ``M x N`` when
+            false.  Defaults to true.
 
     Returns:
         A tuple ``(shared_layout_a, shared_layout_b, wmma_layout)``.  The
@@ -152,8 +157,14 @@ def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_l
     # transposition. TDM additionally requires order [rank-1, ..., 0].
     order = [1, 0]
 
-    INSTR_M = INSTR_SHAPE[0]
-    INSTR_N = INSTR_SHAPE[1]
+    # CTA bases are expressed in logical tensor coordinates. A transposed WMMA
+    # has a logical N x M output tile even though instr_shape continues to
+    # describe the physical M x N intrinsic.
+    PHYSICAL_INSTR_M, PHYSICAL_INSTR_N = INSTR_SHAPE[:2]
+    if transposed:
+        INSTR_M, INSTR_N = PHYSICAL_INSTR_N, PHYSICAL_INSTR_M
+    else:
+        INSTR_M, INSTR_N = PHYSICAL_INSTR_M, PHYSICAL_INSTR_N
 
     is_power_of_2 = lambda n: n > 0 and (n & (n - 1)) == 0
 
@@ -164,13 +175,13 @@ def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_l
     assert is_power_of_2(INSTR_M) and is_power_of_2(INSTR_N), \
         f"instr_shape M/N must be powers of 2, got {INSTR_SHAPE}"
     assert block_m % INSTR_M == 0 and block_n % INSTR_N == 0, \
-        f"block ({block_m}, {block_n}) must be a multiple of instr_shape ({INSTR_M}, {INSTR_N})"
+        f"block ({block_m}, {block_n}) must be a multiple of logical WMMA tile ({INSTR_M}, {INSTR_N})"
     assert is_power_of_2(slice_m) and is_power_of_2(slice_n), \
         f"slice_m / slice_n must be powers of 2, got ({slice_m}, {slice_n})"
     assert block_m % slice_m == 0 and block_n % slice_n == 0, \
         f"slice ({slice_m}, {slice_n}) must divide block ({block_m}, {block_n})"
     assert slice_m % INSTR_M == 0 and slice_n % INSTR_N == 0, \
-        f"slice ({slice_m}, {slice_n}) must be a multiple of instr_shape ({INSTR_M}, {INSTR_N})"
+        f"slice ({slice_m}, {slice_n}) must be a multiple of logical WMMA tile ({INSTR_M}, {INSTR_N})"
 
     def _log2(n):
         return n.bit_length() - 1
@@ -178,9 +189,9 @@ def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_l
     # --- Derived layout rule -------------------------------------------------
     #
     # WMMA CTA layout: Below, M runs vertically (rows) and N
-    # horizontally (cols); each cell is one INSTR_SHAPE-sized instruction tile,
+    # horizontally (cols); each cell is one logical WMMA instruction tile,
     # labelled with the warp that computes it.  ``warp_bases`` map warp-id bits
-    # to (M, N) tile offsets, ``reg_bases`` map register-id
+    # to logical (M, N) tile offsets, ``reg_bases`` map register-id
     # (more specifically, instruction repetition registers) bits the same way.
     #
     # 4-warp case (warp_bases = [[2, 1], [1, 0]], reg_bases = [[2, 0]]):
@@ -234,10 +245,10 @@ def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_l
     # (non-surjective) WMMA layout with zero warp/register bases.
     assert instr_per_slice_m >= NUM_PARTITIONS * instr_per_partition_m, \
         f"slice_m ({slice_m}) must be at least " \
-        f"{NUM_PARTITIONS * instr_per_partition_m} * instr_shape[0] ({INSTR_M})"
+        f"{NUM_PARTITIONS * instr_per_partition_m} * logical instruction M ({INSTR_M})"
     assert instr_per_slice_n >= NUM_PARTITIONS * instr_per_partition_n, \
         f"slice_n ({slice_n}) must be at least " \
-        f"{NUM_PARTITIONS * instr_per_partition_n} * instr_shape[1] ({INSTR_N})"
+        f"{NUM_PARTITIONS * instr_per_partition_n} * logical instruction N ({INSTR_N})"
 
     piece_m = instr_per_slice_m // (NUM_PARTITIONS * instr_per_partition_m)
     piece_n = instr_per_slice_n // (NUM_PARTITIONS * instr_per_partition_n)
@@ -265,7 +276,7 @@ def make_partitioned_dot_layouts(block_m, block_n, original_layout_a, original_l
     for w in m_group:
         reg_bases.append([w, 0])
 
-    wmma_layout = AMDWMMALayout(3, True, warp_bases, reg_bases, INSTR_SHAPE)
+    wmma_layout = AMDWMMALayout(3, transposed, warp_bases, reg_bases, INSTR_SHAPE)
 
     # Full-block partitioning (PartitionedSharedLayout): num_groups counts how
     # many times the [P0, P1] cycle repeats across the full block = block / slice.

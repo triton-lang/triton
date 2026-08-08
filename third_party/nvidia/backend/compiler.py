@@ -49,11 +49,10 @@ def get_ptxas_version(arch: int = 80):
 
 
 @functools.lru_cache()
-def ptx_get_version(cuda_version) -> int:
+def ptx_get_version(cuda_version: str) -> int:
     '''
     Get the highest PTX version supported by the current CUDA driver.
     '''
-    assert isinstance(cuda_version, str)
     major, minor = map(int, cuda_version.split('.'))
     if major == 12:
         if minor < 6:

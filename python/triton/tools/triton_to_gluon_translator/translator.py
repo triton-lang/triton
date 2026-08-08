@@ -216,7 +216,6 @@ def translate_kernels(kernels: list[GlobalValue], target: TranslatorTarget) -> s
             if value.original_value.is_gluon():
                 return True
             return False
-        assert isinstance(value.original_value, object)
         if isinstance(value.original_value, type | FunctionType | JITCallable):
             return True
         if isinstance(value.original_value, int | float | tl.constexpr):
