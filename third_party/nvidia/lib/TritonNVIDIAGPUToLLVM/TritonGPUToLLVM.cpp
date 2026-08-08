@@ -201,8 +201,6 @@ LogicalResult ConvertTritonGPUToLLVM::prepareModule(ModuleOp mod,
 LogicalResult ConvertTritonGPUToLLVM::lowerFunctions(
     ModuleOp mod, LLVMTypeConverter &typeConverter, TargetInfo &targetInfo) {
   NvidiaLLVMConversionTarget target(*mod.getContext());
-  // Unknown operations do not fail partial conversion, so explicitly require
-  // this phase to eliminate every Triton function.
   target.addIllegalOp<triton::FuncOp>();
   RewritePatternSet patterns(mod.getContext());
   mlir::triton::populateFuncOpConversionPattern(
@@ -342,15 +340,15 @@ createConvertTritonGPUToLLVMPass(int32_t computeCapability, int32_t ptxVersion,
 bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
                             bool /*beforeIsRead*/, bool /*afterIsRead*/,
                             Allocation * /*allocation*/) {
-  // These mbarrier ops are single threaded, so are always synchronized with
-  // respect to each other.
+  // These mbarrier ops are single threaded, so are always synchronized wrt.
+  // each other.
   if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::BarrierExpectOp>(
           before) &&
       isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::BarrierExpectOp>(
           after))
     return true;
 
-  // A wait cannot complete before its associated TMA load has been issued.
+  // wait_barrier will never run ahead of the load it's waiting on
   if (isa<ttng::TMALoadLikeOpInterface>(before) &&
       isa<ttng::WaitBarrierOp>(after))
     return true;
