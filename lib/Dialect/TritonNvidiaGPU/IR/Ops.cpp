@@ -473,6 +473,50 @@ Type WaitBarrierOp::getPredicateOperandTypeLike() {
   return IntegerType::get(getContext(), 1);
 }
 
+// -- BarrierTestWaitOp --
+LogicalResult BarrierTestWaitOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  if (gpu::lookupNumCTAs(*this) != 1)
+    return emitOpError("is only supported when ttg.num-ctas is 1");
+  return success();
+}
+
+TypedValue<MemDescType> BarrierTestWaitOp::getBarrier() { return getAlloc(); }
+
+Value BarrierTestWaitOp::getPredicateOperand() { return getPred(); }
+
+void BarrierTestWaitOp::setPredicateOperand(Value pred) {
+  getPredMutable().assign(pred);
+}
+
+Type BarrierTestWaitOp::getPredicateOperandTypeLike() {
+  return IntegerType::get(getContext(), 1);
+}
+
+// -- BarrierTestWaitReportOp --
+LogicalResult BarrierTestWaitReportOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  if (gpu::lookupNumCTAs(*this) != 1)
+    return emitOpError("is only supported when ttg.num-ctas is 1");
+  return success();
+}
+
+TypedValue<MemDescType> BarrierTestWaitReportOp::getBarrier() {
+  return getAlloc();
+}
+
+Value BarrierTestWaitReportOp::getPredicateOperand() { return getPred(); }
+
+void BarrierTestWaitReportOp::setPredicateOperand(Value pred) {
+  getPredMutable().assign(pred);
+}
+
+Type BarrierTestWaitReportOp::getPredicateOperandTypeLike() {
+  return IntegerType::get(getContext(), 1);
+}
+
 static LogicalResult verifyBarrierCGALayout(Operation *op, Value barrier,
                                             CGAEncodingAttr expectedCGALayout,
                                             StringRef barrierName);
@@ -870,6 +914,10 @@ bool AsyncTMAReduceOp::isSupportedReduceKind(DescriptorReduceKind kind,
 
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
+  if (getReportValidity() != triton::ReportValidity::NONE &&
+      getModuleTwoCTAs(getOperation()))
+    return emitOpError("reportValidity does not support two-CTA TMA mode");
+
   auto descType = getDesc().getType();
   bool isIm2Col = isIm2ColDescriptor(descType);
   auto descInterface = cast<TensorDescInterface>(descType);

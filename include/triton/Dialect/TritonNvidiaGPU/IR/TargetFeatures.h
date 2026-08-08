@@ -70,6 +70,7 @@ public:
   bool supports4xFp4Tcgen05MMA() const { return computeCapability == 107; }
   bool supports2xFp8Tcgen05MMA() const { return computeCapability == 107; }
   bool supportsReuseB() const { return computeCapability == 107; }
+  bool supportsMbarV1Layout() const { return computeCapability >= 90; }
   bool supportsMbarMulticast() const { return computeCapability == 107; }
 
 private:

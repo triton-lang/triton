@@ -955,6 +955,21 @@ class TritonSemantic(Generic[TensorTy]):
                 raise ValueError(f"Eviction policy {eviction_policy} not supported")
         return eviction
 
+    def _str_to_report_validity(self, report_validity):
+        if report_validity == "none":
+            return ir.REPORT_VALIDITY.NONE
+        if report_validity == "per_16B_fp32":
+            return ir.REPORT_VALIDITY.PER_16B_FP32
+        if report_validity == "per_16B_fp16":
+            return ir.REPORT_VALIDITY.PER_16B_FP16
+        if report_validity == "per_16B_fp8":
+            return ir.REPORT_VALIDITY.PER_16B_FP8
+        if report_validity == "per_16B_fp4":
+            return ir.REPORT_VALIDITY.PER_16B_FP4
+        if report_validity == "per_elem_1B":
+            return ir.REPORT_VALIDITY.PER_ELEM_1B
+        raise ValueError(f"Report validity kind {report_validity} not supported")
+
     def _str_to_padding_option(self, padding_option):
         padding = None  # default
         if padding_option:

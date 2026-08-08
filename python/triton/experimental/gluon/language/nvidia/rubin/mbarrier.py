@@ -1,3 +1,6 @@
+from triton.language import core as tl
+import triton._C.libtriton.gluon_ir as gluon_ir
+
 from ..._core import _unwrap_if_constexpr, builtin
 from ..hopper.mbarrier import (
     MBarrierLayout,
@@ -5,7 +8,6 @@ from ..hopper.mbarrier import (
     expect,
     init,
     invalidate,
-    wait,
 )
 
 __all__ = [
@@ -15,8 +17,109 @@ __all__ = [
     "init",
     "invalidate",
     "MBarrierLayout",
+    "test_wait",
+    "test_wait_validity",
     "wait",
 ]
+
+
+@builtin
+def wait(mbarrier, phase, pred=True, phase_type="primary", deps=(), _semantic=None):
+    """
+    Wait until the mbarrier object completes the requested phase.
+
+    Args:
+        mbarrier (shared_memory_descriptor): The barrier object to wait on.
+        phase (int): The phase/parity value to wait for.
+        pred (bool): Predicate. Operation is skipped if predicate is False. Defaults to True.
+        phase_type (str): Barrier phase type to wait on. Supported values are
+            ``"primary"`` and ``"conditional"``. Defaults to ``"primary"``.
+        deps (Sequence[shared_memory_descriptor]): Dependent allocations barrier is waiting on. Used to track liveness of dependent allocations. Defaults to ().
+    """
+    phase_type = _unwrap_if_constexpr(phase_type)
+    if phase_type == "primary":
+        phase_type = gluon_ir.MBARRIER_PHASE_TYPE.PRIMARY
+    elif phase_type == "conditional":
+        phase_type = gluon_ir.MBARRIER_PHASE_TYPE.CONDITIONAL
+    else:
+        raise ValueError(f"unsupported mbarrier phase type: {phase_type}")
+    phase = _semantic.to_tensor(phase)
+    pred = _semantic.to_tensor(pred)
+    deps = [x.handle for x in deps]
+    _semantic.builder.create_mbarrier_wait(mbarrier.handle, phase.handle, pred.handle, deps, phase_type)
+
+
+@builtin
+def test_wait(mbarrier, phase, pred=True, phase_type="primary", _semantic=None):
+    """
+    Test an mbarrier phase once without blocking.
+
+    This operation is supported only when ``num_ctas == 1``. ``pred`` must be
+    uniform among the participating threads. If the current warp-specialized
+    partition contains multiple warps, all of them must execute this operation
+    convergently.
+
+    Args:
+        mbarrier (shared_memory_descriptor): The barrier object to test.
+        phase (int): The phase/parity value to test.
+        pred (bool): Predicate. Operation is skipped if predicate is False.
+            Defaults to True.
+        phase_type (str): Barrier phase type to test. Supported values are
+            ``"primary"`` and ``"conditional"``. The conditional phase is
+            used by TMA report-validity barriers. Defaults to ``"primary"``.
+
+    Returns:
+        tensor: Scalar int1 tensor that is true if the requested phase has
+            completed.
+    """
+    if _semantic.builder.options.num_ctas != 1:
+        raise ValueError("mbarrier.test_wait is only supported when num_ctas == 1")
+    phase_type = _unwrap_if_constexpr(phase_type)
+    if phase_type == "primary":
+        phase_type = gluon_ir.MBARRIER_PHASE_TYPE.PRIMARY
+    elif phase_type == "conditional":
+        phase_type = gluon_ir.MBARRIER_PHASE_TYPE.CONDITIONAL
+    else:
+        raise ValueError(f"unsupported mbarrier phase type: {phase_type}")
+    phase = _semantic.to_tensor(phase)
+    pred = _semantic.to_tensor(pred)
+    handle = _semantic.builder.create_mbarrier_test_wait(mbarrier.handle, phase.handle, pred.handle, phase_type)
+    return _semantic.tensor(handle, tl.int1)
+
+
+@builtin
+def test_wait_validity(mbarrier, phase, pred=True, _semantic=None):
+    """
+    Test primary completion and validity of a report-validity TMA attempt.
+
+    This operation is supported only when ``num_ctas == 1``. ``pred`` must be
+    uniform among the participating threads. If the current warp-specialized
+    partition contains multiple warps, all of them must execute this operation
+    convergently.
+
+    Args:
+        mbarrier (shared_memory_descriptor): The report-validity barrier to test.
+        phase (int): The primary phase/parity value to test.
+        pred (bool): Predicate. If False, both results are false. Defaults to True.
+
+    Returns:
+        tuple[tensor, tensor]: Scalar int1 tensors ``(done, valid)``. ``done``
+            is true after primary completion. ``valid`` is true only when the
+            attempt is complete and produced no validity report.
+    """
+    if _semantic.builder.options.num_ctas != 1:
+        raise ValueError("mbarrier.test_wait_validity is only supported when num_ctas == 1")
+    phase = _semantic.to_tensor(phase)
+    pred = _semantic.to_tensor(pred)
+    done_handle, reported_handle = _semantic.builder.create_mbarrier_test_wait_report(
+        mbarrier.handle,
+        phase.handle,
+        pred.handle,
+    )
+    done = _semantic.tensor(done_handle, tl.int1)
+    reported = _semantic.tensor(reported_handle, tl.int1)
+    valid = _semantic.and_(done, _semantic.not_(reported))
+    return done, valid
 
 
 @builtin

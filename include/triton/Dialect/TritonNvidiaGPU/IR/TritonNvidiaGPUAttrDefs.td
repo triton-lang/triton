@@ -8,6 +8,15 @@ include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrInterfaces.td"
 include "mlir/IR/EnumAttr.td"
 
+def TTNG_MBarrierPhaseTypeAttr : I32EnumAttr<
+    "MBarrierPhaseType", "",
+    [
+        I32EnumAttrCase<"PRIMARY", 0, "primary">,
+        I32EnumAttrCase<"CONDITIONAL", 1, "conditional">,
+    ]> {
+    let cppNamespace = "::mlir::triton::nvidia_gpu";
+}
+
 def TTG_TensorMemorySpace : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemorySpace"> {
   let mnemonic = "tensor_memory";
   let description = [{
