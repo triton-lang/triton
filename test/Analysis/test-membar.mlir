@@ -1429,6 +1429,49 @@ tt.func @disjoint_remsi(%cst: tensor<128x128xf16>, %phase: i32) {
   tt.return
 }
 
+// CHECK-LABEL: must_barrier_irreducible_cfg
+// The first cycle is a natural loop: natural_header dominates natural_latch,
+// so its retreating edge is accepted. The later cycle bb1 -> bb2 -> bb1 has two
+// entries from dispatch. Because bb1 does not dominate bb2, that cycle is
+// irreducible. Buffer-index reasoning is disabled for the whole function, so
+// the otherwise-disjoint accesses require a barrier.
+tt.func @must_barrier_irreducible_cfg(%cst: tensor<128x128xf16>, %phase: i32,
+                                      %repeat_natural: i1, %enter_bb1: i1,
+                                      %continue: i1) {
+  %c2_i32 = arith.constant 2 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+  cf.br ^natural_header
+
+^natural_header:
+  cf.br ^natural_latch
+
+^natural_latch:
+  cf.cond_br %repeat_natural, ^natural_header, ^dispatch
+
+^dispatch:
+  cf.cond_br %enter_bb1, ^bb1, ^bb2
+
+^bb1:
+  %w_off = arith.addi %phase, %c2_i32 : i32
+  %w_idx = arith.remsi %w_off, %c3_i32 : i32
+  %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.local_store
+  ttg.local_store %cst, %w_view : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  cf.br ^bb2
+
+^bb2:
+  %r_idx = arith.remsi %phase, %c3_i32 : i32
+  %r_view = ttg.memdesc_index %alloc[%r_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+  cf.cond_br %continue, ^bb1, ^exit
+
+^exit:
+  tt.return
+}
+
 // CHECK-LABEL: disjoint_remsi_through_memdesc_trans
 // The reader sees the slot through a memdesc_trans view. The buffer-index
 // lookup must walk through MemDescViewTrait producers (here: memdesc_trans)

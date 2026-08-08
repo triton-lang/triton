@@ -1,9 +1,11 @@
 #include "triton/Analysis/BufferIndexAnalysis.h"
+#include "triton/Analysis/Membar.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "llvm/ADT/DenseMap.h"
 #include <optional>
 
 namespace mlir {
@@ -45,6 +47,36 @@ struct BufferIndexExpr {
 };
 
 namespace {
+
+enum class DFSState { Visiting, Visited };
+
+/// A CFG is reducible iff every retreating edge in a depth-first traversal is
+/// a backedge, i.e. its target dominates its source. Only blocks reachable
+/// from the function entry matter to membar's forward dataflow analysis.
+bool isReducibleCFG(Block *block, DenseMap<Block *, DFSState> &states,
+                    DominanceInfo &dominanceInfo) {
+  states[block] = DFSState::Visiting;
+
+  for (Block *successor : block->getTerminator()->getSuccessors()) {
+    auto it = states.find(successor);
+    if (it == states.end()) {
+      if (!isReducibleCFG(successor, states, dominanceInfo))
+        return false;
+      continue;
+    }
+    if (it->second == DFSState::Visiting &&
+        !dominanceInfo.dominates(successor, block))
+      return false;
+  }
+
+  states[block] = DFSState::Visited;
+  return true;
+}
+
+bool isReducibleCFG(FunctionOpInterface funcOp, DominanceInfo &dominanceInfo) {
+  DenseMap<Block *, DFSState> states;
+  return isReducibleCFG(&funcOp.getBlocks().front(), states, dominanceInfo);
+}
 
 std::optional<int64_t> getConstantIntValue(Value v) {
   APInt val;
@@ -233,7 +265,8 @@ Value extractBufferIndex(Value value) {
 } // namespace
 
 BufferIndexAnalysis::BufferIndexAnalysis(FunctionOpInterface funcOp)
-    : dominanceInfo(funcOp) {}
+    : dominanceInfo(funcOp),
+      hasReducibleCFG(isReducibleCFG(funcOp, dominanceInfo)) {}
 
 BufferIndexAnalysis::~BufferIndexAnalysis() = default;
 
@@ -274,6 +307,9 @@ BufferIndexAnalysis::makeSlice(Value value, Interval<size_t> allocationInterval,
 
 void BufferIndexAnalysis::attachBufferIndex(AllocationSlice &slice,
                                             Value value) {
+  if (!hasReducibleCFG)
+    return;
+
   Value index = extractBufferIndex(value);
   if (!index)
     return;
