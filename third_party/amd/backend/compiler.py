@@ -249,6 +249,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.ttir.add_triton_licm(pm)
         passes.common.add_symbol_dce(pm)
+        passes.ttir.add_loop_unswitch(pm)
         passes.ttir.add_loop_unroll(pm)
         pm.run(mod, 'make_ttir')
         return mod
