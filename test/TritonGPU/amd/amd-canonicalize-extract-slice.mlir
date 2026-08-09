@@ -35,3 +35,18 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     tt.return %1 : tensor<128x128xf32, #blocked>
   }
 }
+
+// -----
+
+#src = #ttg.linear<{register = [[1], [128]], lane = [[2], [4], [8], [16], [32], [64]], warp = [], block = []}>
+#dst = #ttg.linear<{register = [[128], [1]], lane = [[2], [4], [8], [16], [32], [64]], warp = [], block = []}>
+module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @do_not_canonicalize_singleton_concat_layout_change(%arg0: tensor<256xi32, #src>) -> tensor<256xi32, #dst> {
+    // CHECK-LABEL: tt.func @do_not_canonicalize_singleton_concat_layout_change
+    // CHECK: %[[CONCAT:.*]] = amdg.concat %arg0
+    // CHECK: tt.return %[[CONCAT]]
+
+    %concat = amdg.concat %arg0 : tensor<256xi32, #src> -> tensor<256xi32, #dst>
+    tt.return %concat : tensor<256xi32, #dst>
+  }
+}

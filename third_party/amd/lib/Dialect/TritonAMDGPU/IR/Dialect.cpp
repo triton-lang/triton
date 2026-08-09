@@ -798,13 +798,15 @@ LogicalResult LocalLoadPackedTransposedOp::verify() {
 static mlir::LogicalResult
 foldConcatOpFromSingleSource(amdgpu::ConcatOp op, PatternRewriter &rewriter) {
   auto sources = op.getSources();
-  if (sources.size() == 1) {
-    auto source = sources.front();
-    auto result = op.getResult();
-    result.replaceAllUsesWith(source);
-    return success();
-  }
-  return failure();
+  if (sources.size() != 1)
+    return failure();
+
+  auto source = sources.front();
+  if (source.getType() != op.getResult().getType())
+    return failure();
+
+  rewriter.replaceOp(op, source);
+  return success();
 }
 
 void ConcatOp::getCanonicalizationPatterns(mlir::RewritePatternSet &patterns,
