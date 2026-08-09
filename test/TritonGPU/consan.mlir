@@ -263,6 +263,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK-NEXT: %[[MISSING_PROXY_PREDICATES:.*]] = tt.reshape %[[HAS_MISSING_PROXY_BITS]]{{.*}} -> tensor<{{.*}}xi1
   // CHECK: "tt.reduce"(%[[MISSING_PROXY_PREDICATES]])
   // CHECK: arith.ori {{.*}} : i1
+  // CTA- and cluster-scoped fences with compatible state types share one
+  // helper. Only the CTA-scoped arm constructs an owner-CTA mask.
+  // CHECK: tt.func private @[[$FENCE_PROXY:__triton_consan_fence_proxy_accesses_[^(]+]]
+  // CHECK-SAME: %arg3: i1
+  // CHECK: %[[FENCE_BASE_MASK:.*]] = arith.andi {{.*}} : tensor<{{.*}}xi1
+  // CHECK-NEXT: cf.cond_br %arg3, ^[[CLUSTER_FENCE_PATH:bb[0-9]+]], ^[[CTA_FENCE_PATH:bb[0-9]+]]
+  // CHECK: ^[[CLUSTER_FENCE_PATH]]:
+  // CHECK-NEXT: cf.br ^[[FENCE_MASK_JOIN:bb[0-9]+]](%[[FENCE_BASE_MASK]]
+  // CHECK: ^[[CTA_FENCE_PATH]]:
+  // CHECK: %[[CTA_FENCE_MASK:.*]] = arith.andi %[[FENCE_BASE_MASK]], {{.*}} : tensor<{{.*}}xi1
+  // CHECK-NEXT: cf.br ^[[FENCE_MASK_JOIN]](%[[CTA_FENCE_MASK]]
+  // CHECK: ^[[FENCE_MASK_JOIN]](%[[FENCE_MASK:.*]]: tensor<{{.*}}xi1
+  // CHECK: arith.select %[[FENCE_MASK]],
+  // CHECK-NOT: tt.func private @__triton_consan_fence_proxy_accesses_
   // CHECK-LABEL: @proxy_fence_state_transitions
   tt.func public @proxy_fence_state_transitions(%out: !tt.tensordesc<32x32xf32, #proxy_shared>) {
     %c0 = arith.constant 0 : i32
@@ -278,8 +292,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: ttng.wait_barrier
     // CHECK: tt.call @__triton_consan_complete_barrier_wait
     ttng.wait_barrier %bar, %c0, %true : !ttg.memdesc<1xi64, #proxy_bar_shared, #proxy_smem, mutable>
-    // CHECK: tt.call @__triton_consan_fence_proxy_accesses
+    // CHECK: %[[CTA_FENCE_MODE:false_[0-9]+]] = arith.constant false
+    // CHECK-NEXT: tt.call @[[$FENCE_PROXY]]({{.*}}, %[[CTA_FENCE_MODE]])
     ttng.fence_async_shared {bCluster = false}
+    // CHECK: %[[CLUSTER_FENCE_THREAD:c0_i32_[0-9]+]] = arith.constant 0 : i32
+    // CHECK-NEXT: %[[CLUSTER_FENCE_MODE:true_[0-9]+]] = arith.constant true
+    // CHECK-NEXT: tt.call @[[$FENCE_PROXY]](%[[CLUSTER_FENCE_THREAD]], {{.*}}, %[[CLUSTER_FENCE_MODE]])
+    ttng.fence_async_shared {bCluster = true}
     // CHECK: tt.call @__triton_consan_verify_proxy_access
     ttng.async_tma_copy_local_to_global %out[%c0, %c0] %buf : !tt.tensordesc<32x32xf32, #proxy_shared>, !ttg.memdesc<32x32xf32, #proxy_shared, #proxy_smem, mutable>
     tt.return

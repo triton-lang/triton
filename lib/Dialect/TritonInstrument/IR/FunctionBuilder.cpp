@@ -2714,29 +2714,40 @@ void FunctionBuilder::createFenceProxyAccessesCall(ImplicitLocOpBuilder &b,
   ValueType visibility = auxData.proxyAccessVisibility.at(insertPoint);
   auto visibilityType = cast<RankedTensorType>(visibility.type);
   SmallVector<Value> args = {arith::ConstantIntOp::create(b, thread, 32), pred,
-                             visibility.value};
+                             visibility.value,
+                             arith::ConstantIntOp::create(b, cluster, 1)};
   createCallToCachedFunction(
       b, "fence_proxy_accesses", args, /*assertInfo=*/std::nullopt,
-      {visibilityType, (uint64_t)cluster},
-      [visibilityType, cluster](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      {visibilityType},
+      [visibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value threadVal = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value visibilityPtr = entryBlock->getArgument(2);
+        Value cluster = entryBlock->getArgument(3);
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
         Value visibility = tti::createLoadScratchMemory(
             fb, fb.getLoc(), visibilityPtr, visibilityType);
         Value currentCTA = createCurrentCTAMask(fb);
-        Value mask =
+        Value baseMask =
             createCTASetMask(fb, visibilityType, /*dim=*/2, currentCTA);
-        mask = arith::AndIOp::create(
-            fb, mask, createDimMask(fb, threadVal, visibilityType, /*dim=*/3));
-        if (!cluster) {
-          mask = arith::AndIOp::create(
-              fb, mask,
-              createCTASetMask(fb, visibilityType, /*dim=*/0, currentCTA));
-        }
+        baseMask = arith::AndIOp::create(
+            fb, baseMask,
+            createDimMask(fb, threadVal, visibilityType, /*dim=*/3));
+        Value mask =
+            createIfElseValues(
+                fb, cluster, {baseMask.getType()},
+                [&](ImplicitLocOpBuilder &) {
+                  return SmallVector<Value>{baseMask};
+                },
+                [&](ImplicitLocOpBuilder &ifBuilder) {
+                  Value ownerCTAMask = createCTASetMask(
+                      ifBuilder, visibilityType, /*dim=*/0, currentCTA);
+                  return SmallVector<Value>{arith::AndIOp::create(
+                      ifBuilder, baseMask, ownerCTAMask)};
+                })
+                .front();
         Value seenMask = tti::createConstIntTensor(
             fb, fb.getLoc(), ProxyAccessBits::seenMask, visibilityType);
         Value seen = arith::AndIOp::create(fb, visibility, seenMask);
