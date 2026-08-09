@@ -1238,6 +1238,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 2>
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // Shared and tensor memory use compatible visibility state types here. The
+  // state pointer is an SSA argument, so memory kind must not split helpers.
+  // CHECK: tt.func private @[[$SET_READ_KIND:__triton_consan_set_read_visibility_[^(]+]]
+  // CHECK: tt.func private @[[$VERIFY_WRITE_KIND:__triton_consan_verify_write_visibility_[^(]+]]
+  // CHECK-NOT: tt.func private @__triton_consan_set_read_visibility_
+  // CHECK-NOT: tt.func private @__triton_consan_verify_write_visibility_
   // CHECK-LABEL: @tcgen5_commit
   tt.func public @tcgen5_commit(%arg0: !tt.tensordesc<32x32xf32, #shared>) {
 
@@ -1254,7 +1260,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     ttng.tc_gen5_commit %bar : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    // CHECK: tt.call @[[$VERIFY_WRITE_KIND]]
+    // CHECK: tt.call @[[$SET_READ_KIND]]
     ttg.local_load %0 : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #blocked>
+    // CHECK: tt.call @[[$VERIFY_WRITE_KIND]]
+    // CHECK: tt.call @[[$SET_READ_KIND]]
     ttng.tmem_load %result : !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf16>
     tt.return
   }

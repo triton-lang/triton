@@ -1435,7 +1435,6 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
   Value threadMaskVal = arith::ConstantIntOp::create(b, threadMask, 64);
   SmallVector<Value> args = {bufferMask, pred, threadMaskVal, effectCTAs};
   ManglingArgs specializationArgs;
-  specializationArgs.append(static_cast<uint64_t>(memType));
   specializationArgs.append(static_cast<uint64_t>(publishWrite));
   specializationArgs.append(static_cast<uint64_t>(clearWrites));
   specializationArgs.append(static_cast<uint64_t>(clearReads));
@@ -1561,7 +1560,7 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
                              readerMaskVal,     observerMaskVal,
                              readVisibilityVal, effectCTAs};
   RankedTensorType readTrackingType;
-  ManglingArgs specializationArgs{readVisibilityType, (uint64_t)memType,
+  ManglingArgs specializationArgs{readVisibilityType,
                                   (uint64_t)hasReadTracking};
   if (hasReadTracking) {
     ValueType tracking = auxData.readTracking[(int)memType].at(insertPoint);
@@ -1833,7 +1832,7 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
   createCallToCachedFunction(
       b, "track_barrier_write_for_buffer", args,
       /*assertInfo=*/std::nullopt,
-      {barriersType, writeTrackingType, (uint64_t)memType},
+      {barriersType, writeTrackingType},
       [writeTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value mbarLengthVal = entryBlock->getArgument(1);
@@ -2133,7 +2132,7 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
                              effectCTAs};
   createCallToCachedFunction(
       b, "verify_write_visibility", args, assertInfo,
-      {writeVisibilityType, (uint64_t)memType},
+      {writeVisibilityType},
       [writeVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value bufferMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
@@ -2199,7 +2198,7 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
                              effectCTAs};
   createCallToCachedFunction(
       b, "verify_read_visibility", args, assertInfo,
-      {readVisibilityType, (uint64_t)memType},
+      {readVisibilityType},
       [readVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value bufferMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
@@ -2277,7 +2276,7 @@ void FunctionBuilder::createCopyWriteVisibilityCall(ImplicitLocOpBuilder &b,
                              writeVis.value};
   createCallToCachedFunction(
       b, "copy_write_visibility", args,
-      /*assertInfo=*/std::nullopt, {writeVisibilityType, (uint64_t)memType},
+      /*assertInfo=*/std::nullopt, {writeVisibilityType},
       [writeVisibilityType,
        totalNumThreads = auxData.threadLayout.totalNumThreads](
           ImplicitLocOpBuilder &fb, Block *entryBlock) {
@@ -2355,7 +2354,7 @@ void FunctionBuilder::createCopyReadVisibilityCall(ImplicitLocOpBuilder &b,
   createCallToCachedFunction(
       b, "copy_read_visibility", args,
       /*assertInfo=*/std::nullopt,
-      {readVisibilityType, destMask, (uint64_t)memType},
+      {readVisibilityType, destMask},
       [readVisibilityType, destMask](ImplicitLocOpBuilder &fb,
                                      Block *entryBlock) {
         Value sourceThread = entryBlock->getArgument(0);
