@@ -284,7 +284,8 @@ class TritonGPUOptimizeThreadLocalityPass
       if (!reduce->hasOneUse())
         return;
       Operation *user = *(reduce->getUsers().begin());
-      if (!user->hasOneUse())
+      if (user->getName() != reductionOp.value()->getName() ||
+          !user->hasOneUse())
         return;
       OpOperand &yieldOpOperand = *(user->getUses().begin());
       auto yieldOp = dyn_cast<scf::YieldOp>(yieldOpOperand.getOwner());
