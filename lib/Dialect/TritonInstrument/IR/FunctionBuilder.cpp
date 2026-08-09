@@ -274,6 +274,40 @@ std::tuple<Block *, Block *, Block *> createIfBlock(ImplicitLocOpBuilder &b,
   return {prevBlock, ifBlock, thenBlock};
 }
 
+SmallVector<Value> createIfElseValues(
+    ImplicitLocOpBuilder &b, Value cnd, ArrayRef<Type> resultTypes,
+    std::function<SmallVector<Value>(ImplicitLocOpBuilder &)> buildTrue,
+    std::function<SmallVector<Value>(ImplicitLocOpBuilder &)> buildFalse) {
+  Block *prevBlock = b.getInsertionBlock();
+  Block *continueBlock = prevBlock->splitBlock(b.getInsertionPoint());
+  Block *trueBlock = new Block();
+  Block *falseBlock = new Block();
+  Region *region = prevBlock->getParent();
+  region->getBlocks().insert(continueBlock->getIterator(), trueBlock);
+  region->getBlocks().insert(continueBlock->getIterator(), falseBlock);
+  SmallVector<Location> resultLocations(resultTypes.size(), b.getLoc());
+  continueBlock->addArguments(resultTypes, resultLocations);
+
+  b.setInsertionPointToEnd(prevBlock);
+  cf::CondBranchOp::create(b, cnd, trueBlock, ValueRange{}, falseBlock,
+                           ValueRange{});
+
+  b.setInsertionPointToStart(trueBlock);
+  SmallVector<Value> trueResults = buildTrue(b);
+  cf::BranchOp::create(b, continueBlock, trueResults);
+
+  b.setInsertionPointToStart(falseBlock);
+  SmallVector<Value> falseResults = buildFalse(b);
+  cf::BranchOp::create(b, continueBlock, falseResults);
+
+  b.setInsertionPointToStart(continueBlock);
+  SmallVector<Value> results;
+  results.reserve(resultTypes.size());
+  for (BlockArgument result : continueBlock->getArguments())
+    results.push_back(result);
+  return results;
+}
+
 Value createConvertLayout(ImplicitLocOpBuilder &b, Value tensor,
                           Attribute encoding) {
   auto tensorType = cast<RankedTensorType>(tensor.getType());

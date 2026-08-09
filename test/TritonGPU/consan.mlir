@@ -814,7 +814,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %mask = tt.splat %non_issuer_cta : i1 -> tensor<32x32xi1, #blocked>
     ttg.async_copy_global_to_local %ptr, %shmem mask %mask : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     ttg.async_commit_group
-    // CHECK: tt.call @[[$UPDATE_COMMITS]]({{.*}}, %false_{{[0-9]+}})
+    // CHECK: tt.call @[[$UPDATE_COMMITS]]({{.*}}, %{{false(_[0-9]+)?}})
     // CHECK: ttg.async_copy_global_to_local
     // CHECK: %[[FULL_COMMIT_MASK:.*]] = arith.constant dense<true> : tensor<1xi1
     // CHECK: %[[COMMIT_MODE:.*]] = arith.constant true
