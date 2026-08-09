@@ -40,27 +40,31 @@ static bool willIncreaseRegisterPressure(Operation *op) {
   return false;
 }
 
-// Return true if it has side effects that are either unknown or writes.
-static bool hasWriteSideEffect(Operation *op) {
+// Return true if an operation may invalidate a shared-memory load moved
+// across it.
+static bool hasUnsafeMemoryEffect(Operation *op) {
   auto effects = getEffectsRecursively(op);
   if (!effects)
-    return false;
+    return true;
   return llvm::any_of(*effects, [](MemoryEffects::EffectInstance effect) {
-    return !isa<MemoryEffects::Read, MemoryEffects::Allocate,
-                MemoryEffects::Free>(effect.getEffect());
+    if (isa<MemoryEffects::Read, MemoryEffects::Allocate>(effect.getEffect()))
+      return false;
+    if (isa<SideEffects::DefaultResource>(effect.getResource()))
+      return true;
+    return !effect.getResource()->isDisjointFrom(SharedMemory::get());
   });
 }
 
-// Return true if there is a write side effect on any path between start and end
-// ops. This assumes start dominates end.
-static bool crossWriteSideEffectingOp(Operation *start, Operation *end) {
+// Return true if there is an unsafe memory effect on any path between start
+// and end. This assumes start dominates end.
+static bool crossesUnsafeMemoryEffect(Operation *start, Operation *end) {
   auto ancestor = start->getBlock()->findAncestorOpInBlock(*end);
   // Couldn't find an ancestor in the same block, conservatively assume true.
   if (!ancestor)
     return true;
   Operation *nextOp = start->getNextNode();
   while (nextOp) {
-    if ((hasWriteSideEffect(nextOp)))
+    if (hasUnsafeMemoryEffect(nextOp))
       return true;
     if (nextOp == ancestor)
       return false;
@@ -117,6 +121,9 @@ public:
       if (user_begin->getParentOfType<scf::ForOp>() ==
           op->getParentOfType<scf::ForOp>())
         return;
+      if (isa<triton::gpu::LocalLoadOp>(op) &&
+          crossesUnsafeMemoryEffect(op, *user_begin))
+        return;
       opToMove.insert({op, *user_begin});
     });
     for (auto &kv : opToMove)
@@ -165,7 +172,7 @@ public:
       // after the conversion to OpIdx=0.
       if (!dom.dominates(op.getOperation(), AOp.getOperation()))
         return;
-      if (crossWriteSideEffectingOp(op, AOp))
+      if (crossesUnsafeMemoryEffect(op, AOp))
         return;
       moveAfter(op, AOp);
     });
