@@ -624,6 +624,19 @@ def test_call_in_while():
             trivial_return()
 
 
+@filecheck_test
+@triton.jit
+def test_while_integer_condition():
+    # CHECK-LABEL: test_while_integer_condition
+    i = tl.program_id(0)
+    # CHECK: scf.while
+    # CHECK: [[COND:%.*]] = arith.cmpi ne, %{{.*}}, %{{.*}} : i32
+    # CHECK: scf.condition([[COND]])
+    while i:
+        i -= 1
+    anchor(i)
+
+
 def test_return_in_while():
 
     @triton.jit

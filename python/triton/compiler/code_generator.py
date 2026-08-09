@@ -1202,6 +1202,8 @@ class CodeGenerator(ast.NodeVisitor):
                 if cond.disable_licm:
                     while_op.set_attr("llvm.loop_annotation", self.builder.get_disable_loop_licm_attr())
                 cond = cond.condition
+            if _is_triton_tensor(cond):
+                cond = cond.to(language.int1, _semantic=self.semantic)
             self.builder.set_insertion_point_to_end(before_block)
             # create ConditionOp: e.g., scf.condition(%cond) %arg0, %arg1, ...
             self.builder.create_condition_op(cond.handle, block_args)
