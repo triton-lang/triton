@@ -155,6 +155,8 @@ protected:
   };
 
   struct Correlation {
+    std::atomic<uint64_t> numSubmittedTasks{0};
+    std::atomic<uint64_t> numCompletedTasks{0};
     std::atomic<uint64_t> maxSubmittedCorrelationId{0};
     std::atomic<uint64_t> maxCompletedCorrelationId{0};
     // Mapping from a native profiler correlation id to an external id.
@@ -164,8 +166,14 @@ protected:
 
     Correlation() = default;
 
-    void submit(uint64_t correlationId) {
+    void submit(size_t numTasks, uint64_t correlationId = Scope::DummyScopeId) {
       atomicMax(maxSubmittedCorrelationId, correlationId);
+      numSubmittedTasks.fetch_add(numTasks);
+    }
+
+    void complete(uint64_t numTasks, uint64_t correlationId) {
+      atomicMax(maxCompletedCorrelationId, correlationId);
+      numCompletedTasks.fetch_add(numTasks);
     }
 
     void complete(uint64_t correlationId) {
@@ -186,13 +194,29 @@ protected:
     template <typename FlushFnT>
     void flush(uint64_t maxRetries, uint64_t sleepUs, FlushFnT &&flushFn) {
       flushFn();
-      auto submittedId = maxSubmittedCorrelationId.load();
-      auto completedId = maxCompletedCorrelationId.load();
+      auto submittedTasks = numSubmittedTasks.load();
+      auto completedTasks = numCompletedTasks.load();
+      auto submittedCorrelationId = maxSubmittedCorrelationId.load();
+      auto completedCorrelationId = maxCompletedCorrelationId.load();
       auto retries = maxRetries;
-      while ((completedId < submittedId) && retries > 0) {
+      // We check two conditions here:
+      // 1. The number of completed tasks meets or exceeds the number of
+      // submitted tasks.
+      //    This is the precise condition, but it is not always available — for
+      //    example, when profiling starts after CUDA graph capture, the node
+      //    count may be unavailable.
+      // 2. The maximum completed correlation ID meets or exceeds the maximum
+      // submitted correlation ID.
+      //    This is a best-effort heuristic, since kernels launched across
+      //    multiple streams may complete out of order, making the completed
+      //    correlation ID non-monotonic.
+      while ((completedTasks < submittedTasks ||
+              completedCorrelationId < submittedCorrelationId) &&
+             retries > 0) {
         std::this_thread::sleep_for(std::chrono::microseconds(sleepUs));
         flushFn();
-        completedId = maxCompletedCorrelationId.load();
+        completedTasks = numCompletedTasks.load();
+        completedCorrelationId = maxCompletedCorrelationId.load();
         --retries;
       }
     }
@@ -200,6 +224,8 @@ protected:
     void clear() {
       corrIdToExternId.clear();
       externIdToState.clear();
+      numCompletedTasks.store(0);
+      numSubmittedTasks.store(0);
       maxCompletedCorrelationId.store(0);
       maxSubmittedCorrelationId.store(0);
     }
