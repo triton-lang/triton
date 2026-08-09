@@ -199,27 +199,13 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #smem_cluster_ws = #ttg.shared_memory
 #blocked_cluster_ws = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 4104 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 6 : i32} {
-  // Compatible top-level and partition-scoped calls share one helper. One
-  // runtime branch yields both propagation frontiers before the common stores.
-  // CHECK: tt.func private @[[$PUBLISH_CLUSTER_VIS:__triton_consan_publish_cluster_visibility_nw4_[^(]+]]
-  // CHECK-SAME: %arg5: i1
-  // CHECK: cf.cond_br %arg5,
-  // CHECK: cf.br ^[[CLUSTER_VIS_JOIN:bb[0-9]+]](%{{.*}}, %{{.*}} : tensor<{{.*}}xi64{{.*}}>, tensor<{{.*}}xi64{{.*}}>)
-  // CHECK: cf.br ^[[CLUSTER_VIS_JOIN]](%{{.*}}, %{{.*}} : tensor<{{.*}}xi64{{.*}}>, tensor<{{.*}}xi64{{.*}}>)
-  // CHECK: ^[[CLUSTER_VIS_JOIN]](%[[CLUSTER_WRITES:.*]]: tensor<{{.*}}xi64{{.*}}>, %[[CLUSTER_READS:.*]]: tensor<{{.*}}xi64{{.*}}>)
-  // CHECK: arith.ori {{.*}}, %[[CLUSTER_WRITES]]
-  // CHECK: tt.store
-  // CHECK: arith.ori {{.*}}, %[[CLUSTER_READS]]
-  // CHECK: tt.store
-  // CHECK-NOT: tt.func private @__triton_consan_publish_cluster_visibility_nw4_
   // CHECK-LABEL: @cluster_barrier_partition_scopes
   tt.func public @cluster_barrier_partition_scopes() {
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared_cluster_ws, #smem_cluster_ws, mutable>
     %value = ttg.local_load %buf : !ttg.memdesc<32x32xf32, #shared_cluster_ws, #smem_cluster_ws, mutable> -> tensor<32x32xf32, #blocked_cluster_ws>
 
     // A top-level barrier keeps the all-partition publisher.
-    // CHECK: %[[CLUSTER_VIS_MODE:.*]] = arith.constant false
-    // CHECK-NEXT: tt.call @[[$PUBLISH_CLUSTER_VIS]]({{.*}}, %[[CLUSTER_VIS_MODE]])
+    // CHECK: tt.call @__triton_consan_publish_cluster_visibility{{.*}}_I0
     ttng.cluster_barrier
 
     ttg.warp_specialize(%buf) attributes {actualRegisters = array<i32: 32, 32, 32>, allocation.offset = 4096 : i32, requestedRegisters = array<i32: 32, 32>, warpGroupStartIds = array<i32: 4, 5>}
@@ -227,7 +213,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       // The default region is thread 0, but its cluster barrier is still
       // partition-scoped.
       // CHECK: default
-      // CHECK: tt.call @[[$PUBLISH_CLUSTER_VIS]]({{.*}}, %c0_i32_{{[0-9]+}}, %c1_i64_{{[0-9]+}}, {{.*}}, %true_{{[0-9]+}})
+      // CHECK: tt.call @__triton_consan_publish_cluster_visibility{{.*}}_I1({{.*}}, %c0_i32_{{[0-9]+}}, %c1_i64_{{[0-9]+}},
       ttng.cluster_barrier
       ttg.warp_yield
     }
@@ -238,7 +224,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       // Nested operations must retain partition1's thread identity.
       // CHECK: partition1
       // CHECK: scf.execute_region
-      // CHECK: tt.call @__triton_consan_publish_cluster_visibility{{.*}}({{.*}}, %c2_i32_{{[0-9]+}}, %c4_i64_{{[0-9]+}}, {{.*}}, %true_{{[0-9]+}})
+      // CHECK: tt.call @__triton_consan_publish_cluster_visibility{{.*}}_I1({{.*}}, %c2_i32_{{[0-9]+}}, %c4_i64_{{[0-9]+}},
       scf.execute_region {
         ttng.cluster_barrier
         scf.yield
@@ -263,20 +249,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK-NEXT: %[[MISSING_PROXY_PREDICATES:.*]] = tt.reshape %[[HAS_MISSING_PROXY_BITS]]{{.*}} -> tensor<{{.*}}xi1
   // CHECK: "tt.reduce"(%[[MISSING_PROXY_PREDICATES]])
   // CHECK: arith.ori {{.*}} : i1
-  // CTA- and cluster-scoped fences with compatible state types share one
-  // helper. Only the CTA-scoped arm constructs an owner-CTA mask.
-  // CHECK: tt.func private @[[$FENCE_PROXY:__triton_consan_fence_proxy_accesses_[^(]+]]
-  // CHECK-SAME: %arg3: i1
-  // CHECK: %[[FENCE_BASE_MASK:.*]] = arith.andi {{.*}} : tensor<{{.*}}xi1
-  // CHECK-NEXT: cf.cond_br %arg3, ^[[CLUSTER_FENCE_PATH:bb[0-9]+]], ^[[CTA_FENCE_PATH:bb[0-9]+]]
-  // CHECK: ^[[CLUSTER_FENCE_PATH]]:
-  // CHECK-NEXT: cf.br ^[[FENCE_MASK_JOIN:bb[0-9]+]](%[[FENCE_BASE_MASK]]
-  // CHECK: ^[[CTA_FENCE_PATH]]:
-  // CHECK: %[[CTA_FENCE_MASK:.*]] = arith.andi %[[FENCE_BASE_MASK]], {{.*}} : tensor<{{.*}}xi1
-  // CHECK-NEXT: cf.br ^[[FENCE_MASK_JOIN]](%[[CTA_FENCE_MASK]]
-  // CHECK: ^[[FENCE_MASK_JOIN]](%[[FENCE_MASK:.*]]: tensor<{{.*}}xi1
-  // CHECK: arith.select %[[FENCE_MASK]],
-  // CHECK-NOT: tt.func private @__triton_consan_fence_proxy_accesses_
   // CHECK-LABEL: @proxy_fence_state_transitions
   tt.func public @proxy_fence_state_transitions(%out: !tt.tensordesc<32x32xf32, #proxy_shared>) {
     %c0 = arith.constant 0 : i32
@@ -292,13 +264,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: ttng.wait_barrier
     // CHECK: tt.call @__triton_consan_complete_barrier_wait
     ttng.wait_barrier %bar, %c0, %true : !ttg.memdesc<1xi64, #proxy_bar_shared, #proxy_smem, mutable>
-    // CHECK: %[[CTA_FENCE_MODE:false(_[0-9]+)?]] = arith.constant false
-    // CHECK-NEXT: tt.call @[[$FENCE_PROXY]]({{.*}}, %[[CTA_FENCE_MODE]])
+    // CHECK: tt.call @__triton_consan_fence_proxy_accesses
     ttng.fence_async_shared {bCluster = false}
-    // CHECK: %[[CLUSTER_FENCE_THREAD:c0_i32(_[0-9]+)?]] = arith.constant 0 : i32
-    // CHECK-NEXT: %[[CLUSTER_FENCE_MODE:true(_[0-9]+)?]] = arith.constant true
-    // CHECK-NEXT: tt.call @[[$FENCE_PROXY]](%[[CLUSTER_FENCE_THREAD]], {{.*}}, %[[CLUSTER_FENCE_MODE]])
-    ttng.fence_async_shared {bCluster = true}
     // CHECK: tt.call @__triton_consan_verify_proxy_access
     ttng.async_tma_copy_local_to_global %out[%c0, %c0] %buf : !tt.tensordesc<32x32xf32, #proxy_shared>, !ttg.memdesc<32x32xf32, #proxy_shared, #proxy_smem, mutable>
     tt.return
@@ -379,15 +346,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #local_gather_scatter_smem = #ttg.shared_memory
 #local_gather_scatter_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1]]}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 528 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
-  // Proxy cluster publication builds the complete frontier inside the runtime
-  // partition-scope branch and performs one common state update after joining.
-  // CHECK: tt.func private @[[$PUBLISH_CLUSTER_PROXY:__triton_consan_publish_cluster_proxy_accesses_[^(]+]]
-  // CHECK-SAME: %arg3: i1
-  // CHECK: cf.cond_br %arg3,
-  // CHECK: cf.br ^[[CLUSTER_PROXY_JOIN:bb[0-9]+]](%{{.*}} : tensor<{{.*}}xi64{{.*}}>)
-  // CHECK: cf.br ^[[CLUSTER_PROXY_JOIN]](%{{.*}} : tensor<{{.*}}xi64{{.*}}>)
-  // CHECK: ^[[CLUSTER_PROXY_JOIN]](%[[CLUSTER_PROXY_FRONTIER:.*]]: tensor<{{.*}}xi64{{.*}}>)
-  // CHECK: arith.ori {{.*}}, %[[CLUSTER_PROXY_FRONTIER]]
   // CHECK-LABEL: @local_gather_scatter_effects
   tt.func public @local_gather_scatter_effects(%out: !tt.tensordesc<8x32xi32, #local_gather_scatter_shared>) {
     %c0 = arith.constant 0 : i32
@@ -420,9 +378,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_proxy_access
     // CHECK: ttng.async_tma_copy_local_to_global
     ttng.async_tma_copy_local_to_global %out[%c0, %c0] %dst : !tt.tensordesc<8x32xi32, #local_gather_scatter_shared>, !ttg.memdesc<8x32xi32, #local_gather_scatter_shared, #local_gather_scatter_smem, mutable>
-    // CHECK: %[[PROXY_CLUSTER_MODE:false_[0-9]+]] = arith.constant false
-    // CHECK-NEXT: tt.call @[[$PUBLISH_CLUSTER_PROXY]]({{.*}}, %[[PROXY_CLUSTER_MODE]])
-    ttng.cluster_barrier
     tt.return
   }
 }
@@ -1095,23 +1050,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #smem = #ttg.shared_memory
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
-  // Setting and clearing compatible waiting state share one helper. The
-  // clear mask is computed before the runtime mode selects the replacement.
-  // CHECK: tt.func private @[[$UPDATE_WAITING:__triton_consan_update_waiting_[^(]+]]
-  // CHECK-SAME: %arg3: i32
-  // CHECK-SAME: %arg7: i1
-  // CHECK: %[[CLEAR_MASK:.*]] = arith.xori
-  // CHECK-NEXT: %[[CLEAR_MASK_TENSOR:.*]] = tt.splat %[[CLEAR_MASK]]
-  // CHECK-NEXT: %[[CLEARED_WAITING:.*]] = arith.andi %{{.*}}, %[[CLEAR_MASK_TENSOR]]
-  // CHECK-NEXT: cf.cond_br %arg7, ^[[SET_WAITING:bb[0-9]+]], ^[[CLEAR_WAITING:bb[0-9]+]]
-  // CHECK: ^[[SET_WAITING]]:
-  // CHECK: %[[PHASE:.*]] = arith.andi %arg3
-  // CHECK: %[[PENDING_WAITING:.*]] = arith.ori
-  // CHECK-NEXT: cf.br ^[[WAITING_JOIN:bb[0-9]+]](%[[PENDING_WAITING]]
-  // CHECK: ^[[CLEAR_WAITING]]:
-  // CHECK-NEXT: cf.br ^[[WAITING_JOIN]](%[[CLEARED_WAITING]]
-  // CHECK: ^[[WAITING_JOIN]](
-  // CHECK-NOT: tt.func private @__triton_consan_update_waiting_
   // CHECK-LABEL: @wait_barrier
   tt.func public @wait_barrier(%arg0: !tt.tensordesc<32x32xf32, #shared>) {
     // CHECK-DAG: %[[WRITE_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 8 : i32, shared_cluster_state, third_party_allocation, tt.divisibility = 16 : i64} : !tt.ptr<i64>
@@ -1134,15 +1072,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_barrier_can_init
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
-    // CHECK-DAG: tt.call @[[$UPDATE_WAITING]]({{.*}}, %true_{{[0-9]+}})
+    // CHECK-DAG: tt.call @__triton_consan_set_waiting
     // CHECK-DAG: tt.call @__triton_consan_check_all_active_waiting
     // CHECK: ttng.wait_barrier
     ttng.wait_barrier %bar, %c0_i32, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tti.experimental_lock_acquire
     // CHECK: tt.call @__triton_consan_transfer_visible_accesses{{.*}}%[[BARRIERS]], %[[WRITE_VISIBILITY_GLOB]], %[[WRITE_TRACKING_GLOB]], %[[READ_VISIBILITY_GLOB]], %[[READ_TRACKING_GLOB]]) : {{.*}}!tt.ptr<i64>, !tt.ptr<i8>, !tt.ptr<i64>, !tt.ptr<i64>) -> ()
-    // CHECK: %[[CLEAR_PHASE:.*]] = arith.constant 0 : i32
-    // CHECK: %[[CLEAR_MODE:.*]] = arith.constant false
-    // CHECK-NEXT: tt.call @[[$UPDATE_WAITING]]({{.*}}, %{{.*}}, %[[CLEAR_PHASE]], {{.*}}, %[[CLEAR_MODE]])
+    // CHECK: tt.call @__triton_consan_clear_waiting
     // CHECK: tti.experimental_lock_release
     ttg.local_load %0 : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
     tt.return
@@ -1191,7 +1127,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %c0_i32 = arith.constant 0 : i32
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
-    // CHECK: tt.call @__triton_consan_update_waiting
+    // CHECK: tt.call @__triton_consan_set_waiting
     ttng.wait_barrier %bar, %c0_i32, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     tt.return
   }
@@ -1409,8 +1345,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: call {{.*}}fill_global_tensor{{.*}}(%[[WRT_COMMITS_GLOB]], %c0_i8
 
     // CHECK: tt.call @__triton_consan_verify_write_visibility_nw1
-    // CHECK: %[[NO_EXCLUDED_THREAD:.*]] = arith.constant -1 : i32
-    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}%[[NO_EXCLUDED_THREAD]], %[[WRT_COMMITS_GLOB]]
+    // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}%[[THREAD_BIT]], %[[WRT_COMMITS_GLOB]]
     // CHECK: tt.call @__triton_consan_verify_read_visibility_nw1
     // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
     // CHECK: tt.call @__triton_consan_stage_access_for_commit_nw1{{.*}}%[[THREAD_BIT]], %[[WRT_COMMITS_GLOB]]
@@ -1442,8 +1378,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_init_barrier_state
 
     // CHECK: tt.call @__triton_consan_verify_write_visibility
-    // CHECK: %[[NO_EXCLUDED_THREAD:.*]] = arith.constant -1 : i32
-    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}%[[NO_EXCLUDED_THREAD]], %[[WRT_COMMITS_GLOB]]
+    // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}%[[THREAD_BIT]], %[[WRT_COMMITS_GLOB]]
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{[^,]+}}
     // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
     // CHECK: tt.call @__triton_consan_stage_access_for_commit{{.*}}%[[THREAD_BIT]], %[[WRT_COMMITS_GLOB]]
@@ -1492,7 +1428,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK-NEXT: tti.experimental_assert_uniform
     // CHECK: ttng.wait_barrier
     // CHECK-NEXT: tti.experimental_lock_acquire %{{.*}}, %[[WAIT_PRED]]
-    // CHECK: tt.call @__triton_consan_update_waiting
+    // CHECK: tt.call @__triton_consan_clear_waiting
     // CHECK-NEXT: tti.experimental_lock_release %{{.*}}, %[[WAIT_PRED]]
     ttng.wait_barrier %bar, %c0_i32, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tti.experimental_lock_acquire
@@ -1890,7 +1826,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     ttg.warp_specialize(%smem, %bar) attributes {actualRegisters = array<i32: 480, 32>, allocation.offset = 512 : i32, requestedRegisters = array<i32: 32>, warpGroupStartIds = array<i32: 4>}
     default {
       // CHECK: tti.experimental_lock_acquire
-      // CHECK: tt.call @__triton_consan_update_waiting
+      // CHECK: tt.call @__triton_consan_set_waiting
       // CHECK: tt.call @__triton_consan_check_all_active_waiting
       // CHECK: tti.experimental_lock_release
       %c0_i32 = arith.constant 0 : i32
@@ -1901,7 +1837,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     partition0(%arg1: !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, %arg2: !ttg.memdesc<1xi64, #shared1, #smem, mutable>) num_warps(4) {
       // CHECK: partition0
       // CHECK: tti.experimental_lock_acquire
-      // CHECK: tt.call @__triton_consan_update_waiting
+      // CHECK: tt.call @__triton_consan_set_waiting
       // CHECK: tt.call @__triton_consan_check_all_active_waiting
       // CHECK: tti.experimental_lock_release
       %c0_i32 = arith.constant 0 : i32
@@ -2226,16 +2162,15 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // All logical threads in this module are synchronous. The cluster
   // publication must still propagate both visibility frontiers, but it need
   // not filter either frontier against nonexistent asynchronous threads.
-  // CHECK-LABEL: tt.func private @__triton_consan_publish_cluster_visibility
-  // CHECK-SAME: %arg5: i1
-  // CHECK: cf.cond_br %arg5,
+  // CHECK-LABEL: tt.func private @__triton_consan_publish_cluster_visibility{{.*}}_I0
+  // CHECK-NOT: arith.cmpi ne
+  // CHECK: tt.return
   // CHECK-LABEL: @cluster_barrier_publish_protocol
   tt.func public @cluster_barrier_publish_protocol() {
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared_cluster_publish, #smem_cluster_publish, mutable>
     // CHECK: ttg.local_load
     // CHECK: tti.experimental_lock_acquire
-    // CHECK: %[[TOP_LEVEL_VIS_MODE:.*]] = arith.constant false
-    // CHECK-NEXT: tt.call @__triton_consan_publish_cluster_visibility{{.*}}({{.*}}, %[[TOP_LEVEL_VIS_MODE]])
+    // CHECK: tt.call @__triton_consan_publish_cluster_visibility
     // CHECK: tti.experimental_lock_release
     // CHECK: ttng.cluster_barrier
     // CHECK-NOT: ttng.cluster_barrier

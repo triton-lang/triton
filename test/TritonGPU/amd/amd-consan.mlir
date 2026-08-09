@@ -159,8 +159,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: call {{.*}}fill_global_tensor{{.*}}(%[[WRT_COMMITS_GLOB]], %c0_i8
 
     // CHECK: tt.call @__triton_consan_verify_write_visibility_nw1
-    // CHECK: %[[NO_EXCLUDED_THREAD:.*]] = arith.constant -1 : i32
-    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}%[[NO_EXCLUDED_THREAD]], %[[WRT_COMMITS_GLOB]]
+    // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}%[[THREAD_BIT]], %[[WRT_COMMITS_GLOB]]
     // CHECK: tt.call @__triton_consan_verify_read_visibility_nw1
     // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
     // CHECK: tt.call @__triton_consan_stage_access_for_commit_nw1{{.*}}%[[THREAD_BIT]], %[[WRT_COMMITS_GLOB]]
@@ -191,8 +191,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_init_barrier_state
 
     // CHECK: tt.call @__triton_consan_verify_write_visibility
-    // CHECK: %[[NO_EXCLUDED_THREAD:.*]] = arith.constant -1 : i32
-    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}%[[NO_EXCLUDED_THREAD]], %[[WRT_COMMITS_GLOB]]
+    // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}%[[THREAD_BIT]], %[[WRT_COMMITS_GLOB]]
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{[^,]+}}
     // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
     // CHECK: tt.call @__triton_consan_stage_access_for_commit{{.*}}%[[THREAD_BIT]], %[[WRT_COMMITS_GLOB]]
@@ -369,13 +369,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_barrier_can_init
     amdg.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
-    // CHECK-DAG: tt.call @__triton_consan_update_waiting
+    // CHECK-DAG: tt.call @__triton_consan_set_waiting
     // CHECK-DAG: tt.call @__triton_consan_check_all_active_waiting
     // CHECK: amdg.wait_barrier
     amdg.wait_barrier %bar, %c0_i32 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tti.experimental_lock_acquire
     // CHECK: tt.call @__triton_consan_transfer_visible_accesses{{.*}}%[[BARRIERS]], %[[WRITE_VISIBILITY_GLOB]], %[[WRITE_TRACKING_GLOB]], %[[READ_VISIBILITY_GLOB]], %[[READ_TRACKING_GLOB]]) : {{.*}}!tt.ptr<i64>, !tt.ptr<i8>, !tt.ptr<i64>, !tt.ptr<i64>) -> ()
-    // CHECK: tt.call @__triton_consan_update_waiting
+    // CHECK: tt.call @__triton_consan_clear_waiting
     // CHECK: tti.experimental_lock_release
     ttg.local_load %0 : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
     tt.return
@@ -430,7 +430,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %c0_i32 = arith.constant 0 : i32
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
-    // CHECK: tt.call @__triton_consan_update_waiting
+    // CHECK: tt.call @__triton_consan_set_waiting
     amdg.wait_barrier %bar, %c0_i32 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     tt.return
   }
@@ -557,9 +557,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     %pred = arith.constant 1 : i32
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     // CHECK: tt.call @__triton_consan_verify_write_visibility
-    // CHECK: tt.call @__triton_consan_check_outstanding_commits
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits_excl_self
     // CHECK: tt.call @__triton_consan_verify_read_visibility
-    // CHECK: tt.call @__triton_consan_check_outstanding_commits
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits_excl_self
     // CHECK: tt.call @__triton_consan_stage_access_for_commit
     // CHECK: tt.call @__triton_consan_commit_accesses
     // CHECK-NOT: tt.call @__triton_consan_verify_and_update_barrier_state
@@ -574,20 +574,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
 #smem = #ttg.shared_memory
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shared = 65544 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32} {
-  // Excluding and non-excluding calls with compatible state types share one
-  // helper. The existing i32 argument selects the self-excluding path.
-  // CHECK: tt.func private @[[$RUNTIME_SELF_COMMITS:__triton_consan_check_outstanding_commits_[^(]+]]
-  // CHECK-SAME: %arg2: i32
-  // CHECK: %[[ZERO_THREAD:.*]] = arith.constant 0 : i32
-  // CHECK-NEXT: %[[HAS_EXCLUDED_THREAD:.*]] = arith.cmpi sge, %arg2, %[[ZERO_THREAD]] : i32
-  // CHECK-NEXT: cf.cond_br %[[HAS_EXCLUDED_THREAD]],
-  // CHECK: ^bb{{[0-9]+}}:
-  // CHECK: tt.splat %arg2
-  // CHECK: cf.br ^[[COMMITS_JOIN:bb[0-9]+]](%{{.*}} : tensor<
-  // CHECK: ^bb{{[0-9]+}}:
-  // CHECK-NEXT: cf.br ^[[COMMITS_JOIN]](%{{.*}} : tensor<
-  // CHECK: ^[[COMMITS_JOIN]](%{{.*}}: tensor<
-  // CHECK-NOT: tt.func private @__triton_consan_check_outstanding_commits_
   // CHECK-LABEL: @async_tdm_copy_local_to_global
   tt.func public @async_tdm_copy_local_to_global(%desc: !tt.tensordesc<32x32xf32>, %ptr: tensor<128x128x!tt.ptr<f16>, #blocked>) {
     %c0_i32 = arith.constant 0 : i32
@@ -595,12 +581,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     %shmem = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     ttg.async_copy_global_to_local %ptr, %shmem : tensor<128x128x!tt.ptr<f16>, #blocked> -> <128x128xf16, #shared, #smem, mutable>
 
-    // CHECK: ttg.async_copy_global_to_local
     // CHECK: tt.call @__triton_consan_verify_write_visibility
-    // CHECK: %[[NO_EXCLUDED_THREAD:.*]] = arith.constant -1 : i32
-    // CHECK: tt.call @[[$RUNTIME_SELF_COMMITS]]({{.*}}, {{.*}}, %[[NO_EXCLUDED_THREAD]],
-    // CHECK: %[[EXCLUDED_THREAD:.*]] = arith.constant 0 : i32
-    // CHECK-NEXT: tt.call @[[$RUNTIME_SELF_COMMITS]]({{.*}}, {{.*}}, %[[EXCLUDED_THREAD]],
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits_excl_self
     // CHECK: tt.call @__triton_consan_stage_access_for_commit
     // CHECK: tt.call @__triton_consan_commit_accesses
     amdg.async_tdm_copy_local_to_global %desc from %0 : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> !tt.tensordesc<32x32xf32>
@@ -619,11 +602,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     %pred = arith.constant 1 : i32
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     // CHECK: tt.call @__triton_consan_verify_write_visibility
-    // CHECK: tt.call @__triton_consan_check_outstanding_commits
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits_excl_self
     // CHECK: tt.call @__triton_consan_stage_access_for_commit
     // CHECK: tt.call @__triton_consan_commit_accesses
     %1 = amdg.async_tdm_copy_global_to_local %in_desc into %0 : !tt.tensordesc<32x32xf32> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
-    // CHECK: tt.call @__triton_consan_check_outstanding_commits
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits_excl_self
     // CHECK: tt.call @__triton_consan_stage_access_for_commit
     // CHECK: tt.call @__triton_consan_commit_accesses
     amdg.async_tdm_copy_local_to_global %out_desc from %0 : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> !tt.tensordesc<32x32xf32>
@@ -949,7 +932,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     ttg.warp_specialize(%smem, %bar) attributes {actualRegisters = array<i32: 480, 32>, allocation.offset = 512 : i32, requestedRegisters = array<i32: 32>, warpGroupStartIds = array<i32: 4>}
     default {
       // CHECK: tti.experimental_lock_acquire
-      // CHECK: tt.call @__triton_consan_update_waiting
+      // CHECK: tt.call @__triton_consan_set_waiting
       // CHECK: tt.call @__triton_consan_check_all_active_waiting
       // CHECK: tti.experimental_lock_release
       %c0_i32 = arith.constant 0 : i32
@@ -959,7 +942,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     partition0(%arg1: !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, %arg2: !ttg.memdesc<1xi64, #shared1, #smem, mutable>) num_warps(4) {
       // CHECK: partition0
       // CHECK: tti.experimental_lock_acquire
-      // CHECK: tt.call @__triton_consan_update_waiting
+      // CHECK: tt.call @__triton_consan_set_waiting
       // CHECK: tt.call @__triton_consan_check_all_active_waiting
       // CHECK: tti.experimental_lock_release
       %c0_i32 = arith.constant 0 : i32
