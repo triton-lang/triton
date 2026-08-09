@@ -199,13 +199,27 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #smem_cluster_ws = #ttg.shared_memory
 #blocked_cluster_ws = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 4104 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 6 : i32} {
+  // Compatible top-level and partition-scoped calls share one helper. One
+  // runtime branch yields both propagation frontiers before the common stores.
+  // CHECK: tt.func private @[[$PUBLISH_CLUSTER_VIS:__triton_consan_publish_cluster_visibility_nw4_[^(]+]]
+  // CHECK-SAME: %arg5: i1
+  // CHECK: cf.cond_br %arg5,
+  // CHECK: cf.br ^[[CLUSTER_VIS_JOIN:bb[0-9]+]](%{{.*}}, %{{.*}} : tensor<{{.*}}xi64{{.*}}>, tensor<{{.*}}xi64{{.*}}>)
+  // CHECK: cf.br ^[[CLUSTER_VIS_JOIN]](%{{.*}}, %{{.*}} : tensor<{{.*}}xi64{{.*}}>, tensor<{{.*}}xi64{{.*}}>)
+  // CHECK: ^[[CLUSTER_VIS_JOIN]](%[[CLUSTER_WRITES:.*]]: tensor<{{.*}}xi64{{.*}}>, %[[CLUSTER_READS:.*]]: tensor<{{.*}}xi64{{.*}}>)
+  // CHECK: arith.ori {{.*}}, %[[CLUSTER_WRITES]]
+  // CHECK: tt.store
+  // CHECK: arith.ori {{.*}}, %[[CLUSTER_READS]]
+  // CHECK: tt.store
+  // CHECK-NOT: tt.func private @__triton_consan_publish_cluster_visibility_nw4_
   // CHECK-LABEL: @cluster_barrier_partition_scopes
   tt.func public @cluster_barrier_partition_scopes() {
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared_cluster_ws, #smem_cluster_ws, mutable>
     %value = ttg.local_load %buf : !ttg.memdesc<32x32xf32, #shared_cluster_ws, #smem_cluster_ws, mutable> -> tensor<32x32xf32, #blocked_cluster_ws>
 
     // A top-level barrier keeps the all-partition publisher.
-    // CHECK: tt.call @__triton_consan_publish_cluster_visibility{{.*}}_I0
+    // CHECK: %[[CLUSTER_VIS_MODE:.*]] = arith.constant false
+    // CHECK-NEXT: tt.call @[[$PUBLISH_CLUSTER_VIS]]({{.*}}, %[[CLUSTER_VIS_MODE]])
     ttng.cluster_barrier
 
     ttg.warp_specialize(%buf) attributes {actualRegisters = array<i32: 32, 32, 32>, allocation.offset = 4096 : i32, requestedRegisters = array<i32: 32, 32>, warpGroupStartIds = array<i32: 4, 5>}
@@ -213,7 +227,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       // The default region is thread 0, but its cluster barrier is still
       // partition-scoped.
       // CHECK: default
-      // CHECK: tt.call @__triton_consan_publish_cluster_visibility{{.*}}_I1({{.*}}, %c0_i32_{{[0-9]+}}, %c1_i64_{{[0-9]+}},
+      // CHECK: tt.call @[[$PUBLISH_CLUSTER_VIS]]({{.*}}, %c0_i32_{{[0-9]+}}, %c1_i64_{{[0-9]+}}, {{.*}}, %true_{{[0-9]+}})
       ttng.cluster_barrier
       ttg.warp_yield
     }
@@ -224,7 +238,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       // Nested operations must retain partition1's thread identity.
       // CHECK: partition1
       // CHECK: scf.execute_region
-      // CHECK: tt.call @__triton_consan_publish_cluster_visibility{{.*}}_I1({{.*}}, %c2_i32_{{[0-9]+}}, %c4_i64_{{[0-9]+}},
+      // CHECK: tt.call @__triton_consan_publish_cluster_visibility{{.*}}({{.*}}, %c2_i32_{{[0-9]+}}, %c4_i64_{{[0-9]+}}, {{.*}}, %true_{{[0-9]+}})
       scf.execute_region {
         ttng.cluster_barrier
         scf.yield
@@ -346,6 +360,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #local_gather_scatter_smem = #ttg.shared_memory
 #local_gather_scatter_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1]]}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 528 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // Proxy cluster publication builds the complete frontier inside the runtime
+  // partition-scope branch and performs one common state update after joining.
+  // CHECK: tt.func private @[[$PUBLISH_CLUSTER_PROXY:__triton_consan_publish_cluster_proxy_accesses_[^(]+]]
+  // CHECK-SAME: %arg3: i1
+  // CHECK: cf.cond_br %arg3,
+  // CHECK: cf.br ^[[CLUSTER_PROXY_JOIN:bb[0-9]+]](%{{.*}} : tensor<{{.*}}xi64{{.*}}>)
+  // CHECK: cf.br ^[[CLUSTER_PROXY_JOIN]](%{{.*}} : tensor<{{.*}}xi64{{.*}}>)
+  // CHECK: ^[[CLUSTER_PROXY_JOIN]](%[[CLUSTER_PROXY_FRONTIER:.*]]: tensor<{{.*}}xi64{{.*}}>)
+  // CHECK: arith.ori {{.*}}, %[[CLUSTER_PROXY_FRONTIER]]
   // CHECK-LABEL: @local_gather_scatter_effects
   tt.func public @local_gather_scatter_effects(%out: !tt.tensordesc<8x32xi32, #local_gather_scatter_shared>) {
     %c0 = arith.constant 0 : i32
@@ -378,6 +401,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_proxy_access
     // CHECK: ttng.async_tma_copy_local_to_global
     ttng.async_tma_copy_local_to_global %out[%c0, %c0] %dst : !tt.tensordesc<8x32xi32, #local_gather_scatter_shared>, !ttg.memdesc<8x32xi32, #local_gather_scatter_shared, #local_gather_scatter_smem, mutable>
+    // CHECK: %[[PROXY_CLUSTER_MODE:false_[0-9]+]] = arith.constant false
+    // CHECK-NEXT: tt.call @[[$PUBLISH_CLUSTER_PROXY]]({{.*}}, %[[PROXY_CLUSTER_MODE]])
+    ttng.cluster_barrier
     tt.return
   }
 }
@@ -2217,15 +2243,16 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // All logical threads in this module are synchronous. The cluster
   // publication must still propagate both visibility frontiers, but it need
   // not filter either frontier against nonexistent asynchronous threads.
-  // CHECK-LABEL: tt.func private @__triton_consan_publish_cluster_visibility{{.*}}_I0
-  // CHECK-NOT: arith.cmpi ne
-  // CHECK: tt.return
+  // CHECK-LABEL: tt.func private @__triton_consan_publish_cluster_visibility
+  // CHECK-SAME: %arg5: i1
+  // CHECK: cf.cond_br %arg5,
   // CHECK-LABEL: @cluster_barrier_publish_protocol
   tt.func public @cluster_barrier_publish_protocol() {
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared_cluster_publish, #smem_cluster_publish, mutable>
     // CHECK: ttg.local_load
     // CHECK: tti.experimental_lock_acquire
-    // CHECK: tt.call @__triton_consan_publish_cluster_visibility
+    // CHECK: %[[TOP_LEVEL_VIS_MODE:.*]] = arith.constant false
+    // CHECK-NEXT: tt.call @__triton_consan_publish_cluster_visibility{{.*}}({{.*}}, %[[TOP_LEVEL_VIS_MODE]])
     // CHECK: tti.experimental_lock_release
     // CHECK: ttng.cluster_barrier
     // CHECK-NOT: ttng.cluster_barrier
