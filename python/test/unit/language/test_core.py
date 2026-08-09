@@ -5573,6 +5573,38 @@ def test_inline_asm_with_pointers(num_ctas, device):
     np.testing.assert_equal(y_ref, to_numpy(y_tri))
 
 
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_inline_asm_mixed_pointer_value_args(num_ctas, device):
+    if not is_cuda():
+        pytest.skip("test_inline_asm is only supported in CUDA")
+
+    @triton.jit
+    def kernel(X, Y, Z, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        x_ptrs = X + offsets
+        y = tl.load(Y)
+        z = tl.inline_asm_elementwise(
+            "ld.global.f32 $0, [$1]; add.f32 $0, $0, $2;",
+            "=f,l,f",
+            [x_ptrs, y],
+            dtype=tl.float32,
+            is_pure=False,
+            pack=1,
+        )
+        tl.store(Z + offsets, z)
+
+    shape = (128, )
+    rs = RandomState(17)
+    x = numpy_random(shape, dtype_str="float32", rs=rs)
+    y = numpy_random((1, ), dtype_str="float32", rs=rs)
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+    z_tri = to_triton(numpy_random(shape, dtype_str="float32", rs=rs), device=device)
+    kernel[(1, )](x_tri, y_tri, z_tri, BLOCK=shape[0], num_ctas=num_ctas)
+
+    np.testing.assert_equal(x + y, to_numpy(z_tri))
+
+
 def test_inline_asm_multiple_outputs(device):
     if not is_cuda():
         pytest.skip('test_inline_asm is only supported in CUDA')
