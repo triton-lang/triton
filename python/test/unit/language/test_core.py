@@ -5582,7 +5582,7 @@ def test_inline_asm_mixed_pointer_value_args(num_ctas, device):
     def kernel(X, Y, Z, BLOCK: tl.constexpr):
         offsets = tl.arange(0, BLOCK)
         x_ptrs = X + offsets
-        y = tl.load(Y)
+        y = tl.load(Y + offsets)
         z = tl.inline_asm_elementwise(
             "ld.global.f32 $0, [$1]; add.f32 $0, $0, $2;",
             "=f,l,f",
@@ -5596,7 +5596,7 @@ def test_inline_asm_mixed_pointer_value_args(num_ctas, device):
     shape = (128, )
     rs = RandomState(17)
     x = numpy_random(shape, dtype_str="float32", rs=rs)
-    y = numpy_random((1, ), dtype_str="float32", rs=rs)
+    y = numpy_random(shape, dtype_str="float32", rs=rs)
     x_tri = to_triton(x, device=device)
     y_tri = to_triton(y, device=device)
     z_tri = to_triton(numpy_random(shape, dtype_str="float32", rs=rs), device=device)
