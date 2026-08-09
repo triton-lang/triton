@@ -311,6 +311,10 @@ public:
       bool excludeSelf = false);
 
 private:
+  void createUpdateWaitingCall(ImplicitLocOpBuilder &b, Value mbar, int thread,
+                               Value phase, Value pred,
+                               Operation *insertPoint, bool setWaiting);
+
   void createVerifyBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
                                     Value pred, Operation *insertPoint,
                                     Value recipientCTAs,

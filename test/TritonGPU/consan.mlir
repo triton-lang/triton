@@ -1131,6 +1131,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #smem = #ttg.shared_memory
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // Setting and clearing compatible waiting state share one helper. The
+  // clear mask is computed before the runtime mode selects the replacement.
+  // CHECK: tt.func private @[[$UPDATE_WAITING:__triton_consan_update_waiting_[^(]+]]
+  // CHECK-SAME: %arg3: i32
+  // CHECK-SAME: %arg7: i1
+  // CHECK: %[[CLEAR_MASK:.*]] = arith.xori
+  // CHECK-NEXT: %[[CLEAR_MASK_TENSOR:.*]] = tt.splat %[[CLEAR_MASK]]
+  // CHECK-NEXT: %[[CLEARED_WAITING:.*]] = arith.andi %{{.*}}, %[[CLEAR_MASK_TENSOR]]
+  // CHECK-NEXT: cf.cond_br %arg7, ^[[SET_WAITING:bb[0-9]+]], ^[[CLEAR_WAITING:bb[0-9]+]]
+  // CHECK: ^[[SET_WAITING]]:
+  // CHECK: %[[PHASE:.*]] = arith.andi %arg3
+  // CHECK: %[[PENDING_WAITING:.*]] = arith.ori
+  // CHECK-NEXT: cf.br ^[[WAITING_JOIN:bb[0-9]+]](%[[PENDING_WAITING]]
+  // CHECK: ^[[CLEAR_WAITING]]:
+  // CHECK-NEXT: cf.br ^[[WAITING_JOIN]](%[[CLEARED_WAITING]]
+  // CHECK: ^[[WAITING_JOIN]](
+  // CHECK-NOT: tt.func private @__triton_consan_update_waiting_
   // CHECK-LABEL: @wait_barrier
   tt.func public @wait_barrier(%arg0: !tt.tensordesc<32x32xf32, #shared>) {
     // CHECK-DAG: %[[WRITE_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 8 : i32, shared_cluster_state, third_party_allocation, tt.divisibility = 16 : i64} : !tt.ptr<i64>
@@ -1153,13 +1170,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_barrier_state
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_verify_barrier_state
-    // CHECK-DAG: tt.call @__triton_consan_set_waiting
+    // CHECK-DAG: tt.call @[[$UPDATE_WAITING]]({{.*}}, %true_{{[0-9]+}})
     // CHECK-DAG: tt.call @__triton_consan_check_all_active_waiting
     // CHECK: ttng.wait_barrier
     ttng.wait_barrier %bar, %c0_i32, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tti.experimental_lock_acquire
     // CHECK: tt.call @__triton_consan_transfer_visible_accesses{{.*}}%[[BARRIERS]], %[[WRITE_VISIBILITY_GLOB]], %[[WRITE_TRACKING_GLOB]], %[[READ_VISIBILITY_GLOB]], %[[READ_TRACKING_GLOB]]) : {{.*}}!tt.ptr<i64>, !tt.ptr<i8>, !tt.ptr<i64>, !tt.ptr<i64>) -> ()
-    // CHECK: tt.call @__triton_consan_clear_waiting
+    // CHECK: %[[CLEAR_PHASE:.*]] = arith.constant 0 : i32
+    // CHECK: %[[CLEAR_MODE:.*]] = arith.constant false
+    // CHECK-NEXT: tt.call @[[$UPDATE_WAITING]]({{.*}}, %{{.*}}, %[[CLEAR_PHASE]], {{.*}}, %[[CLEAR_MODE]])
     // CHECK: tti.experimental_lock_release
     ttg.local_load %0 : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
     tt.return
@@ -1208,7 +1227,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %c0_i32 = arith.constant 0 : i32
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_verify_barrier_state
-    // CHECK: tt.call @__triton_consan_set_waiting
+    // CHECK: tt.call @__triton_consan_update_waiting
     ttng.wait_barrier %bar, %c0_i32, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     tt.return
   }
@@ -1544,7 +1563,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK-NEXT: tti.experimental_assert_uniform
     // CHECK: ttng.wait_barrier
     // CHECK-NEXT: tti.experimental_lock_acquire %{{.*}}, %[[WAIT_PRED]]
-    // CHECK: tt.call @__triton_consan_clear_waiting
+    // CHECK: tt.call @__triton_consan_update_waiting
     // CHECK-NEXT: tti.experimental_lock_release %{{.*}}, %[[WAIT_PRED]]
     ttng.wait_barrier %bar, %c0_i32, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tti.experimental_lock_acquire
@@ -1942,7 +1961,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     ttg.warp_specialize(%smem, %bar) attributes {actualRegisters = array<i32: 480, 32>, allocation.offset = 512 : i32, requestedRegisters = array<i32: 32>, warpGroupStartIds = array<i32: 4>}
     default {
       // CHECK: tti.experimental_lock_acquire
-      // CHECK: tt.call @__triton_consan_set_waiting
+      // CHECK: tt.call @__triton_consan_update_waiting
       // CHECK: tt.call @__triton_consan_check_all_active_waiting
       // CHECK: tti.experimental_lock_release
       %c0_i32 = arith.constant 0 : i32
@@ -1953,7 +1972,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     partition0(%arg1: !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, %arg2: !ttg.memdesc<1xi64, #shared1, #smem, mutable>) num_warps(4) {
       // CHECK: partition0
       // CHECK: tti.experimental_lock_acquire
-      // CHECK: tt.call @__triton_consan_set_waiting
+      // CHECK: tt.call @__triton_consan_update_waiting
       // CHECK: tt.call @__triton_consan_check_all_active_waiting
       // CHECK: tti.experimental_lock_release
       %c0_i32 = arith.constant 0 : i32

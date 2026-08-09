@@ -532,13 +532,27 @@ void FunctionBuilder::createFillGlobalTensorCall(ImplicitLocOpBuilder &b,
 void FunctionBuilder::createSetWaitingCall(ImplicitLocOpBuilder &b, Value mbar,
                                            int thread, Value phase, Value pred,
                                            Operation *insertPoint) {
-
-  if (auxData.barriers.empty() || auxData.waiting.empty()) {
+  if (auxData.barriers.empty() || auxData.waiting.empty())
     return;
-  }
-  if (!pred) {
+  createUpdateWaitingCall(b, mbar, thread, phase, pred, insertPoint,
+                          /*setWaiting=*/true);
+}
+
+void FunctionBuilder::createClearWaitingCall(ImplicitLocOpBuilder &b,
+                                             Value mbar, int thread, Value pred,
+                                             Operation *insertPoint) {
+  if (auxData.barriers.empty() || auxData.waiting.empty())
+    return;
+  Value phase = arith::ConstantIntOp::create(b, 0, 32);
+  createUpdateWaitingCall(b, mbar, thread, phase, pred, insertPoint,
+                          /*setWaiting=*/false);
+}
+
+void FunctionBuilder::createUpdateWaitingCall(
+    ImplicitLocOpBuilder &b, Value mbar, int thread, Value phase, Value pred,
+    Operation *insertPoint, bool setWaiting) {
+  if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
-  }
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
   Value barriersVal = auxData.barriers.at(insertPoint).value;
   auto barriersType =
@@ -549,10 +563,12 @@ void FunctionBuilder::createSetWaitingCall(ImplicitLocOpBuilder &b, Value mbar,
   uint32_t length = getMemDescLength(mbar);
   Value mbarOffset = tti::ExperimentalMemDescToI32Op::create(b, mbar);
   Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
-  SmallVector<Value> args = {mbarOffset, lengthVal,   threadVal, phase,
-                             pred,       barriersVal, waitingVal};
+  Value setWaitingVal = arith::ConstantIntOp::create(b, setWaiting, 1);
+  SmallVector<Value> args = {mbarOffset,  lengthVal,   threadVal, phase,
+                             pred,        barriersVal, waitingVal,
+                             setWaitingVal};
   createCallToCachedFunction(
-      b, "set_waiting", args,
+      b, "update_waiting", args,
       /*assertInfo=*/std::nullopt, {barriersType, waitingType},
       [waitingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
@@ -560,9 +576,9 @@ void FunctionBuilder::createSetWaitingCall(ImplicitLocOpBuilder &b, Value mbar,
         Value baseThread = entryBlock->getArgument(2);
         Value phase = entryBlock->getArgument(3);
         Value pred = entryBlock->getArgument(4);
-
         Value barriers = entryBlock->getArgument(5);
         Value waitingPtr = entryBlock->getArgument(6);
+        Value setWaiting = entryBlock->getArgument(7);
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
@@ -599,116 +615,39 @@ void FunctionBuilder::createSetWaitingCall(ImplicitLocOpBuilder &b, Value mbar,
         Value clearMaskScalar =
             arith::XOrIOp::create(fb, combinedMask, minusOne);
 
-        Value flagMaskTensor =
-            triton::SplatOp::create(fb, waitingType, flagMaskScalar);
         Value clearMaskTensor =
             triton::SplatOp::create(fb, waitingType, clearMaskScalar);
-        Value phaseShiftTensor =
-            triton::SplatOp::create(fb, waitingType, phaseShift);
-
         Value clearedWaiting =
             arith::AndIOp::create(fb, waiting, clearMaskTensor);
-        Value withFlag =
-            arith::OrIOp::create(fb, clearedWaiting, flagMaskTensor);
 
-        Value phaseScalar = arith::AndIOp::create(fb, phase, one);
-        Value phaseTensor =
-            triton::SplatOp::create(fb, waitingType, phaseScalar);
-        Value phaseBits =
-            arith::ShLIOp::create(fb, phaseTensor, phaseShiftTensor);
-        Value pendingWaiting = arith::OrIOp::create(fb, withFlag, phaseBits);
-
+        Value selectedWaiting =
+            createIfElseValues(
+                fb, setWaiting, {waitingType},
+                [&](ImplicitLocOpBuilder &ifBuilder) {
+                  Value flagMaskTensor = triton::SplatOp::create(
+                      ifBuilder, waitingType, flagMaskScalar);
+                  Value withFlag = arith::OrIOp::create(
+                      ifBuilder, clearedWaiting, flagMaskTensor);
+                  Value phaseScalar =
+                      arith::AndIOp::create(ifBuilder, phase, one);
+                  Value phaseTensor = triton::SplatOp::create(
+                      ifBuilder, waitingType, phaseScalar);
+                  Value phaseShiftTensor = triton::SplatOp::create(
+                      ifBuilder, waitingType, phaseShift);
+                  Value phaseBits = arith::ShLIOp::create(
+                      ifBuilder, phaseTensor, phaseShiftTensor);
+                  return SmallVector<Value>{arith::OrIOp::create(
+                      ifBuilder, withFlag, phaseBits)};
+                },
+                [&](ImplicitLocOpBuilder &) {
+                  return SmallVector<Value>{clearedWaiting};
+                })
+                .front();
         auto condType = cast<RankedTensorType>(barriersEqBar.getType());
         Value predTensor = triton::SplatOp::create(fb, condType, pred);
         Value cond = arith::AndIOp::create(fb, barriersEqBar, predTensor);
-
         Value newWaiting =
-            arith::SelectOp::create(fb, cond, pendingWaiting, waiting);
-        createMaskedStoreScratchMemory(fb, fb.getLoc(), waitingPtr, newWaiting,
-                                       waitingType, ctaMask);
-
-        fb.setInsertionPointToEnd(thenBlock);
-        triton::ReturnOp::create(fb);
-      });
-}
-
-void FunctionBuilder::createClearWaitingCall(ImplicitLocOpBuilder &b,
-                                             Value mbar, int thread, Value pred,
-                                             Operation *insertPoint) {
-  if (auxData.barriers.empty() || auxData.waiting.empty()) {
-    return;
-  }
-  if (!pred) {
-    pred = arith::ConstantIntOp::create(b, 1, 1);
-  }
-  Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
-
-  Value barriersVal = auxData.barriers.at(insertPoint).value;
-  auto barriersType =
-      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
-  Value waitingVal = auxData.waiting.at(insertPoint).value;
-  auto waitingType =
-      cast<RankedTensorType>(auxData.waiting.at(insertPoint).type);
-
-  uint32_t length = getMemDescLength(mbar);
-  Value mbarOffset = tti::ExperimentalMemDescToI32Op::create(b, mbar);
-  Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
-  SmallVector<Value> args = {mbarOffset, lengthVal,   threadVal,
-                             pred,       barriersVal, waitingVal};
-  createCallToCachedFunction(
-      b, "clear_waiting", args,
-      /*assertInfo=*/std::nullopt, {barriersType, waitingType},
-      [waitingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
-        Value mbarOffset = entryBlock->getArgument(0);
-        Value lengthVal = entryBlock->getArgument(1);
-        Value baseThread = entryBlock->getArgument(2);
-        Value pred = entryBlock->getArgument(3);
-
-        Value barriers = entryBlock->getArgument(4);
-        Value waitingPtr = entryBlock->getArgument(5);
-
-        auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
-        fb.setInsertionPointToStart(ifBlock);
-
-        Value waiting = tti::createLoadScratchMemory(fb, fb.getLoc(),
-                                                     waitingPtr, waitingType);
-        Value descriptor = createBufferDescriptor(fb, mbarOffset, lengthVal);
-        Value barriersEqBar =
-            createCmpIntTensorScalar(fb, barriers, descriptor);
-        barriersEqBar =
-            convertAndBroadcast(fb, barriersEqBar, {1}, waitingType);
-        Value ctaMask =
-            createLeadCTAEffectMask(fb, waitingType, createCurrentCTAMask(fb));
-        barriersEqBar = arith::AndIOp::create(fb, barriersEqBar, ctaMask);
-
-        Value bitsPerThread =
-            arith::ConstantIntOp::create(fb, WaitingBits::bitsPerThread, 32);
-        Value flagBit =
-            arith::ConstantIntOp::create(fb, WaitingBits::flagBit, 32);
-        Value phaseBit =
-            arith::ConstantIntOp::create(fb, WaitingBits::phaseBit, 32);
-        Value one = arith::ConstantIntOp::create(fb, 1, 32);
-        Value minusOne = arith::ConstantIntOp::create(fb, -1, 32);
-
-        Value baseTimesBits =
-            arith::MulIOp::create(fb, baseThread, bitsPerThread);
-        Value flagShift = arith::AddIOp::create(fb, baseTimesBits, flagBit);
-        Value phaseShift = arith::AddIOp::create(fb, baseTimesBits, phaseBit);
-
-        Value flagMaskScalar = arith::ShLIOp::create(fb, one, flagShift);
-        Value phaseMaskScalar = arith::ShLIOp::create(fb, one, phaseShift);
-        Value combinedMask =
-            arith::OrIOp::create(fb, flagMaskScalar, phaseMaskScalar);
-        Value clearMaskScalar =
-            arith::XOrIOp::create(fb, combinedMask, minusOne);
-
-        Value clearMaskTensor =
-            triton::SplatOp::create(fb, waitingType, clearMaskScalar);
-        Value clearedWaiting =
-            arith::AndIOp::create(fb, waiting, clearMaskTensor);
-
-        Value newWaiting =
-            arith::SelectOp::create(fb, barriersEqBar, clearedWaiting, waiting);
+            arith::SelectOp::create(fb, cond, selectedWaiting, waiting);
 
         createMaskedStoreScratchMemory(fb, fb.getLoc(), waitingPtr, newWaiting,
                                        waitingType, ctaMask);
