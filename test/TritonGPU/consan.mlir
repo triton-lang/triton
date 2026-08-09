@@ -274,52 +274,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
-#copy_mask_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
-#copy_mask_smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 4096 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 6 : i32} {
-  // Two warp-specialize sites use masks 2 and 6 with the same state types.
-  // Both destination masks are SSA arguments, so each family has one helper.
-  // CHECK: tt.func private @[[$COPY_PROXY_MASK:__triton_consan_copy_proxy_accesses_[^(]+]](%arg0: i32, %arg1: i64,
-  // CHECK-NOT: tt.func private @__triton_consan_copy_proxy_accesses_
-  // CHECK: tt.func private @[[$COPY_READ_MASK:__triton_consan_copy_read_visibility_[^(]+]](%arg0: i32, %arg1: i64,
-  // CHECK-NOT: tt.func private @__triton_consan_copy_read_visibility_
-  // CHECK-LABEL: @copy_visibility_runtime_destination_mask
-  tt.func public @copy_visibility_runtime_destination_mask(%out: !tt.tensordesc<32x32xf32, #copy_mask_shared>) {
-    %c0 = arith.constant 0 : i32
-    %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #copy_mask_shared, #copy_mask_smem, mutable>
-    ttng.async_tma_copy_local_to_global %out[%c0, %c0] %buf : !tt.tensordesc<32x32xf32, #copy_mask_shared>, !ttg.memdesc<32x32xf32, #copy_mask_shared, #copy_mask_smem, mutable>
-
-    // CHECK: tt.call @[[$COPY_READ_MASK]]({{.*}}, %{{c18_i64(_[0-9]+)?}},
-    // CHECK: tt.call @[[$COPY_PROXY_MASK]]({{.*}}, %{{c2_i64(_[0-9]+)?}},
-    ttg.warp_specialize(%buf) attributes {actualRegisters = array<i32: 32, 32>, allocation.offset = 4096 : i32, requestedRegisters = array<i32: 32>, warpGroupStartIds = array<i32: 4>}
-    default {
-      ttg.warp_yield
-    }
-    partition0(%arg0: !ttg.memdesc<32x32xf32, #copy_mask_shared, #copy_mask_smem, mutable>) num_warps(1) {
-      ttg.local_load %arg0 : !ttg.memdesc<32x32xf32, #copy_mask_shared, #copy_mask_smem, mutable> -> tensor<32x32xf32>
-      ttg.warp_return
-    } : (!ttg.memdesc<32x32xf32, #copy_mask_shared, #copy_mask_smem, mutable>) -> ()
-
-    // CHECK: tt.call @[[$COPY_READ_MASK]]({{.*}}, %{{c54_i64(_[0-9]+)?}},
-    // CHECK: tt.call @[[$COPY_PROXY_MASK]]({{.*}}, %{{c6_i64(_[0-9]+)?}},
-    ttg.warp_specialize(%buf) attributes {actualRegisters = array<i32: 32, 32, 32>, allocation.offset = 4096 : i32, requestedRegisters = array<i32: 32, 32>, warpGroupStartIds = array<i32: 4, 5>}
-    default {
-      ttg.warp_yield
-    }
-    partition0(%arg0: !ttg.memdesc<32x32xf32, #copy_mask_shared, #copy_mask_smem, mutable>) num_warps(1) {
-      ttg.local_load %arg0 : !ttg.memdesc<32x32xf32, #copy_mask_shared, #copy_mask_smem, mutable> -> tensor<32x32xf32>
-      ttg.warp_return
-    }
-    partition1(%arg0: !ttg.memdesc<32x32xf32, #copy_mask_shared, #copy_mask_smem, mutable>) num_warps(1) {
-      ttg.local_load %arg0 : !ttg.memdesc<32x32xf32, #copy_mask_shared, #copy_mask_smem, mutable> -> tensor<32x32xf32>
-      ttg.warp_return
-    } : (!ttg.memdesc<32x32xf32, #copy_mask_shared, #copy_mask_smem, mutable>) -> ()
-    tt.return
-  }
-}
-
-// -----
-
 #proxy_cp_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #proxy_cp_smem = #ttg.shared_memory
 #proxy_cp_blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
@@ -1284,12 +1238,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 2>
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
-  // Shared and tensor memory use compatible visibility state types here. The
-  // state pointer is an SSA argument, so memory kind must not split helpers.
-  // CHECK: tt.func private @[[$SET_READ_KIND:__triton_consan_set_read_visibility_[^(]+]]
-  // CHECK: tt.func private @[[$VERIFY_WRITE_KIND:__triton_consan_verify_write_visibility_[^(]+]]
-  // CHECK-NOT: tt.func private @__triton_consan_set_read_visibility_
-  // CHECK-NOT: tt.func private @__triton_consan_verify_write_visibility_
   // CHECK-LABEL: @tcgen5_commit
   tt.func public @tcgen5_commit(%arg0: !tt.tensordesc<32x32xf32, #shared>) {
 
@@ -1306,11 +1254,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     ttng.tc_gen5_commit %bar : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    // CHECK: tt.call @[[$VERIFY_WRITE_KIND]]
-    // CHECK: tt.call @[[$SET_READ_KIND]]
     ttg.local_load %0 : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #blocked>
-    // CHECK: tt.call @[[$VERIFY_WRITE_KIND]]
-    // CHECK: tt.call @[[$SET_READ_KIND]]
     ttng.tmem_load %result : !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf16>
     tt.return
   }

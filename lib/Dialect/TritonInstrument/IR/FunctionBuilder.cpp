@@ -1831,8 +1831,7 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
                              barrierCTAs, effectCTAs};
   createCallToCachedFunction(
       b, "track_barrier_write_for_buffer", args,
-      /*assertInfo=*/std::nullopt,
-      {barriersType, writeTrackingType},
+      /*assertInfo=*/std::nullopt, {barriersType, writeTrackingType},
       [writeTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value mbarLengthVal = entryBlock->getArgument(1);
@@ -2131,8 +2130,7 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
   SmallVector<Value> args = {bufferMask, pred, threadVal, writeVisibilityVal,
                              effectCTAs};
   createCallToCachedFunction(
-      b, "verify_write_visibility", args, assertInfo,
-      {writeVisibilityType},
+      b, "verify_write_visibility", args, assertInfo, {writeVisibilityType},
       [writeVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value bufferMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
@@ -2197,8 +2195,7 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
   SmallVector<Value> args = {bufferMask, pred, threadVal, readVisibilityVal,
                              effectCTAs};
   createCallToCachedFunction(
-      b, "verify_read_visibility", args, assertInfo,
-      {readVisibilityType},
+      b, "verify_read_visibility", args, assertInfo, {readVisibilityType},
       [readVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value bufferMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
