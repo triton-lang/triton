@@ -2735,19 +2735,6 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
   auto barriersType = cast<RankedTensorType>(barriers.type);
   auto visibilityType = cast<RankedTensorType>(visibility.type);
   auto trackingType = cast<RankedTensorType>(tracking.type);
-  if (!filterByBuffer) {
-    ValueType writeVisibility =
-        auxData.writeVisibility[(int)MemType::SHARED_MEM].at(insertPoint);
-    auto writeVisibilityType =
-        cast<RankedTensorType>(writeVisibility.type);
-    auto bufferMaskType =
-        tti::getSlicedTensorType(writeVisibilityType, {1}, b.getI1Type());
-    bufferMask =
-        tti::createConstIntTensor(b, b.getLoc(), 1, bufferMaskType);
-    int numCTAs = ttg::lookupNumCTAs(insertPoint);
-    effectCTAs =
-        arith::ConstantIntOp::create(b, (1u << numCTAs) - 1, 32);
-  }
   SmallVector<Value> args = {
       tti::ExperimentalMemDescToI32Op::create(b, mbar),
       arith::ConstantIntOp::create(b, getMemDescLength(mbar), 32),
@@ -2756,16 +2743,18 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
       barriers.value,
       visibility.value,
       tracking.value,
-      barrierCTAs,
-      bufferMask,
-      effectCTAs,
-      arith::ConstantIntOp::create(b, filterByBuffer, 1)};
+      barrierCTAs};
   ManglingArgs specializationArgs{barriersType, visibilityType, trackingType};
+  if (filterByBuffer) {
+    args.append({bufferMask, effectCTAs});
+  }
   createCallToCachedFunction(
-      b, "track_proxy_accesses",
+      b,
+      filterByBuffer ? "track_proxy_accesses_for_buffer"
+                     : "track_proxy_accesses",
       args, /*assertInfo=*/std::nullopt, specializationArgs,
-      [visibilityType, trackingType](ImplicitLocOpBuilder &fb,
-                                     Block *entryBlock) {
+      [visibilityType, trackingType, filterByBuffer](ImplicitLocOpBuilder &fb,
+                                                     Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
@@ -2774,9 +2763,10 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
         Value visibilityPtr = entryBlock->getArgument(5);
         Value trackingPtr = entryBlock->getArgument(6);
         Value barrierCTAs = entryBlock->getArgument(7);
-        Value completeMask = entryBlock->getArgument(8);
-        Value effectCTAs = entryBlock->getArgument(9);
-        Value filterByBuffer = entryBlock->getArgument(10);
+        Value completeMask =
+            filterByBuffer ? entryBlock->getArgument(8) : Value();
+        Value effectCTAs =
+            filterByBuffer ? entryBlock->getArgument(9) : Value();
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
@@ -2790,24 +2780,16 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
         sourceMask = arith::AndIOp::create(
             fb, sourceMask,
             createDimMask(fb, threadVal, visibilityType, /*dim=*/3));
-        sourceMask =
-            createIfElseValues(
-                fb, filterByBuffer, {sourceMask.getType()},
-                [&](ImplicitLocOpBuilder &ifBuilder) {
-                  Value visibilityBuffers = convertAndBroadcast(
-                      ifBuilder, completeMask, {1}, visibilityType);
-                  Value filteredSourceMask = arith::AndIOp::create(
-                      ifBuilder, sourceMask, visibilityBuffers);
-                  filteredSourceMask = arith::AndIOp::create(
-                      ifBuilder, filteredSourceMask,
-                      createCTASetMask(ifBuilder, visibilityType, /*dim=*/0,
-                                       effectCTAs));
-                  return SmallVector<Value>{filteredSourceMask};
-                },
-                [&](ImplicitLocOpBuilder &) {
-                  return SmallVector<Value>{sourceMask};
-                })
-                .front();
+        Value containedBuffers;
+        if (filterByBuffer) {
+          containedBuffers = completeMask;
+          Value visibilityBuffers =
+              convertAndBroadcast(fb, containedBuffers, {1}, visibilityType);
+          sourceMask = arith::AndIOp::create(fb, sourceMask, visibilityBuffers);
+          sourceMask = arith::AndIOp::create(
+              fb, sourceMask,
+              createCTASetMask(fb, visibilityType, /*dim=*/0, effectCTAs));
+        }
         Value zeroVisibility =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, visibilityType);
         Value source =
@@ -2824,29 +2806,18 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
             createCTASetMask(fb, trackingType, /*dim=*/2, barrierCTAs);
         Value trackMask =
             arith::AndIOp::create(fb, barriersEqBar, barrierCTAMask);
-        SmallVector<Value> masks = createIfElseValues(
-            fb, filterByBuffer,
-            {trackMask.getType(), barrierCTAMask.getType()},
-            [&](ImplicitLocOpBuilder &ifBuilder) {
-              Value trackingBuffers = convertAndBroadcast(
-                  ifBuilder, completeMask, {1}, trackingType);
-              Value filteredTrackMask = arith::AndIOp::create(
-                  ifBuilder, trackMask, trackingBuffers);
-              filteredTrackMask = arith::AndIOp::create(
-                  ifBuilder, filteredTrackMask,
-                  createCTASetMask(ifBuilder, trackingType, /*dim=*/0,
-                                   effectCTAs));
-              return SmallVector<Value>{filteredTrackMask,
-                                        filteredTrackMask};
-            },
-            [&](ImplicitLocOpBuilder &) {
-              return SmallVector<Value>{trackMask, barrierCTAMask};
-            });
-        trackMask = masks[0];
-        Value storeMask = masks[1];
+        if (filterByBuffer) {
+          Value trackingBuffers =
+              convertAndBroadcast(fb, containedBuffers, {1}, trackingType);
+          trackMask = arith::AndIOp::create(fb, trackMask, trackingBuffers);
+          trackMask = arith::AndIOp::create(
+              fb, trackMask,
+              createCTASetMask(fb, trackingType, /*dim=*/0, effectCTAs));
+        }
         Value withSource = arith::OrIOp::create(fb, tracking, source);
         Value updated =
             arith::SelectOp::create(fb, trackMask, withSource, tracking);
+        Value storeMask = filterByBuffer ? trackMask : barrierCTAMask;
         createMaskedStoreScratchMemory(fb, fb.getLoc(), trackingPtr, updated,
                                        trackingType, storeMask);
 
@@ -3479,7 +3450,8 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
   SmallVector<Value> args = {bufferMask, pred, excludedThreadVal,
                              outstandingCommits.value, effectCTAs};
   createCallToCachedFunction(
-      b, "check_outstanding_commits", args, assertInfo, {commitsType},
+      b, "check_outstanding_commits", args, assertInfo,
+      {commitsType, (uint64_t)thread},
       [commitsType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value checkMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
