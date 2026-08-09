@@ -35,6 +35,16 @@ bool isSplat(Operation *op) {
   return (matchPattern(op, m_Constant(&constAttr)) && constAttr.isSplat());
 }
 
+bool canShrinkElementwiseOp(Operation *op) {
+  if (!isMemoryEffectFree(op))
+    return false;
+
+  // Packed inline asm consumes elements as a group, so shrinking its operands
+  // changes the inputs to each invocation.
+  auto inlineAsm = dyn_cast<ElementwiseInlineAsmOp>(op);
+  return !inlineAsm || inlineAsm.getPackedElement() == 1;
+}
+
 // elementwise(splat(a), splat(b), ...) => splat(elementwise(a, b, ...))
 struct MoveSplatAfterElementwisePattern
     : public OpTraitRewritePattern<OpTrait::Elementwise> {
@@ -44,7 +54,7 @@ struct MoveSplatAfterElementwisePattern
 
   LogicalResult matchAndRewrite(Operation *op,
                                 PatternRewriter &rewriter) const override {
-    if (!isMemoryEffectFree(op)) {
+    if (!canShrinkElementwiseOp(op)) {
       return failure();
     }
 
@@ -111,7 +121,7 @@ struct MoveBroadcastAfterElementwisePattern
 
   LogicalResult matchAndRewrite(Operation *op,
                                 PatternRewriter &rewriter) const override {
-    if (!isMemoryEffectFree(op)) {
+    if (!canShrinkElementwiseOp(op)) {
       return failure();
     }
 

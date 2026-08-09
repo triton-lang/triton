@@ -65,3 +65,33 @@ tt.func @test_broadcast_mix_type_op_pattern(%arg0: tensor<128x1xf32>, %arg1: f32
 
     tt.return %sel : tensor<128x128xf32>
 }
+
+// CHECK-LABEL: @do_not_move_splat_after_packed_inline_asm
+tt.func @do_not_move_splat_after_packed_inline_asm(%arg0: i8) -> tensor<4xi8> {
+    // CHECK: %[[SPLAT:.*]] = tt.splat %arg0 : i8 -> tensor<4xi8>
+    // CHECK-NEXT: %[[ASM:.*]] = tt.elementwise_inline_asm "mov.b32 $0, $1;" {constraints = "=r,r", packed_element = 4 : i32, pure = true} %[[SPLAT]] : tensor<4xi8> -> tensor<4xi8>
+    // CHECK-NEXT: tt.return %[[ASM]] : tensor<4xi8>
+    %splat = tt.splat %arg0 : i8 -> tensor<4xi8>
+    %asm = tt.elementwise_inline_asm "mov.b32 $0, $1;" {constraints = "=r,r", packed_element = 4 : i32, pure = true} %splat : tensor<4xi8> -> tensor<4xi8>
+    tt.return %asm : tensor<4xi8>
+}
+
+// CHECK-LABEL: @do_not_move_broadcast_after_packed_inline_asm
+tt.func @do_not_move_broadcast_after_packed_inline_asm(%arg0: tensor<1xi8>) -> tensor<4xi8> {
+    // CHECK: %[[BROADCAST:.*]] = tt.broadcast %arg0 : tensor<1xi8> -> tensor<4xi8>
+    // CHECK-NEXT: %[[ASM:.*]] = tt.elementwise_inline_asm "mov.b32 $0, $1;" {constraints = "=r,r", packed_element = 4 : i32, pure = true} %[[BROADCAST]] : tensor<4xi8> -> tensor<4xi8>
+    // CHECK-NEXT: tt.return %[[ASM]] : tensor<4xi8>
+    %broadcast = tt.broadcast %arg0 : tensor<1xi8> -> tensor<4xi8>
+    %asm = tt.elementwise_inline_asm "mov.b32 $0, $1;" {constraints = "=r,r", packed_element = 4 : i32, pure = true} %broadcast : tensor<4xi8> -> tensor<4xi8>
+    tt.return %asm : tensor<4xi8>
+}
+
+// CHECK-LABEL: @move_splat_after_unpacked_inline_asm
+tt.func @move_splat_after_unpacked_inline_asm(%arg0: i8) -> tensor<4xi8> {
+    // CHECK: %[[ASM:.*]] = tt.elementwise_inline_asm "mov.b32 $0, $1;" {constraints = "=r,r", packed_element = 1 : i32, pure = true} %arg0 : i8 -> i8
+    // CHECK-NEXT: %[[SPLAT:.*]] = tt.splat %[[ASM]] : i8 -> tensor<4xi8>
+    // CHECK-NEXT: tt.return %[[SPLAT]] : tensor<4xi8>
+    %splat = tt.splat %arg0 : i8 -> tensor<4xi8>
+    %asm = tt.elementwise_inline_asm "mov.b32 $0, $1;" {constraints = "=r,r", packed_element = 1 : i32, pure = true} %splat : tensor<4xi8> -> tensor<4xi8>
+    tt.return %asm : tensor<4xi8>
+}
