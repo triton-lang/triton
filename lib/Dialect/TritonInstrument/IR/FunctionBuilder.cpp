@@ -3428,7 +3428,7 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
   std::string funcName = excludeSelf ? "check_outstanding_commits_excl_self"
                                      : "check_outstanding_commits";
   createCallToCachedFunction(
-      b, funcName, args, assertInfo, {commitsType, (uint64_t)thread},
+      b, funcName, args, assertInfo, {commitsType},
       [commitsType, excludeSelf](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value checkMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);

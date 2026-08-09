@@ -1279,6 +1279,41 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32} {
+  // Both warp-specialized threads use the same commit-state type. The thread
+  // identity is an SSA argument, so they must share one generated helper.
+  // CHECK: tt.func private @[[$CHECK_COMMITS:__triton_consan_check_outstanding_commits_[^(]+]]
+  // CHECK-SAME: %arg2: i32
+  // CHECK-NOT: tt.func private @__triton_consan_check_outstanding_commits_
+  // CHECK-LABEL: @outstanding_commits_runtime_thread
+  tt.func public @outstanding_commits_runtime_thread(%ptr: tensor<128x128x!tt.ptr<f16>, #blocked>) {
+    %smem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    ttg.warp_specialize(%smem, %ptr) attributes {actualRegisters = array<i32: 480, 32>, allocation.offset = 512 : i32, requestedRegisters = array<i32: 32>, warpGroupStartIds = array<i32: 4>}
+    default {
+      // CHECK: default
+      ttg.async_copy_global_to_local %ptr, %smem : tensor<128x128x!tt.ptr<f16>, #blocked> -> <128x128xf16, #shared, #smem, mutable>
+      ttg.async_commit_group
+      // CHECK: tt.call @[[$CHECK_COMMITS]]({{.*}}, {{.*}}, %{{c0_i32(_[0-9]+)?}},
+      ttg.local_load %smem : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+      ttg.warp_yield
+    }
+    partition0(%arg0: !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, %arg1: tensor<128x128x!tt.ptr<f16>, #blocked>) num_warps(4) {
+      ttg.async_copy_global_to_local %arg1, %arg0 : tensor<128x128x!tt.ptr<f16>, #blocked> -> <128x128xf16, #shared, #smem, mutable>
+      ttg.async_commit_group
+      // CHECK: partition0
+      // CHECK: tt.call @[[$CHECK_COMMITS]]({{.*}}, {{.*}}, %{{c1_i32(_[0-9]+)?}},
+      ttg.local_load %arg0 : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+      ttg.warp_return
+    } : (!ttg.memdesc<128x128xf16, #shared, #smem, mutable>, tensor<128x128x!tt.ptr<f16>, #blocked>) -> ()
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
