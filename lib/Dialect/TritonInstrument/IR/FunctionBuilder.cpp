@@ -665,24 +665,8 @@ void FunctionBuilder::createSetActiveMaskCall(ImplicitLocOpBuilder &b,
       expandActiveMask(activeMask, auxData.threadLayout.numBaseThreads);
   Value expandedActiveMaskVal =
       arith::ConstantIntOp::create(b, expandedActiveMask, 32);
-  Value activeMasksVal = auxData.activeMasks.at(insertPoint).value;
-  auto activeMasksType =
-      cast<RankedTensorType>(auxData.activeMasks.at(insertPoint).type);
-  SmallVector<Value> args = {expandedActiveMaskVal, activeMasksVal};
-  createCallToCachedFunction(
-      b, "set_active_mask", args,
-      /*assertInfo=*/std::nullopt, {activeMasksType},
-      [activeMasksType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
-        Value expandedActiveMaskVal = entryBlock->getArgument(0);
-        Value activeMasksPtr = entryBlock->getArgument(1);
-
-        Value newActiveMasks =
-            triton::SplatOp::create(fb, activeMasksType, expandedActiveMaskVal);
-        tti::createStoreScratchMemory(fb, fb.getLoc(), activeMasksPtr,
-                                      newActiveMasks, activeMasksType,
-                                      /*currentCTAOnly=*/true);
-        triton::ReturnOp::create(fb);
-      });
+  createUpdateActiveMaskCall(b, expandedActiveMaskVal, insertPoint,
+                             /*retireThread=*/false);
 }
 
 void FunctionBuilder::createRetireActiveThreadCall(ImplicitLocOpBuilder &b,
@@ -693,26 +677,48 @@ void FunctionBuilder::createRetireActiveThreadCall(ImplicitLocOpBuilder &b,
   int64_t threadMask =
       expandActiveMask(1u << thread, auxData.threadLayout.numBaseThreads);
   Value clearMaskVal = arith::ConstantIntOp::create(b, ~threadMask, 32);
+  createUpdateActiveMaskCall(b, clearMaskVal, insertPoint,
+                             /*retireThread=*/true);
+}
+
+void FunctionBuilder::createUpdateActiveMaskCall(
+    ImplicitLocOpBuilder &b, Value mask, Operation *insertPoint,
+    bool retireThread) {
   Value activeMasksVal = auxData.activeMasks.at(insertPoint).value;
   auto activeMasksType =
       cast<RankedTensorType>(auxData.activeMasks.at(insertPoint).type);
-  SmallVector<Value> args = {clearMaskVal, activeMasksVal};
+  Value retireThreadVal =
+      arith::ConstantIntOp::create(b, retireThread, 1);
+  SmallVector<Value> args = {mask, activeMasksVal, retireThreadVal};
   createCallToCachedFunction(
-      b, "retire_active_thread", args,
+      b, "update_active_mask", args,
       /*assertInfo=*/std::nullopt, {activeMasksType},
       [activeMasksType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
-        Value clearMaskVal = entryBlock->getArgument(0);
+        Value mask = entryBlock->getArgument(0);
         Value activeMasksPtr = entryBlock->getArgument(1);
+        Value retireThread = entryBlock->getArgument(2);
 
-        Value activeMasks = tti::createLoadScratchMemory(
-            fb, fb.getLoc(), activeMasksPtr, activeMasksType);
-        Value clearMask =
-            triton::SplatOp::create(fb, activeMasksType, clearMaskVal);
-        Value retiredMasks = arith::AndIOp::create(fb, activeMasks, clearMask);
-        Value oneMask =
-            tti::createConstIntTensor(fb, fb.getLoc(), 1, activeMasksType);
         Value newActiveMasks =
-            arith::MaxUIOp::create(fb, retiredMasks, oneMask);
+            createIfElseValues(
+                fb, retireThread, {activeMasksType},
+                [&](ImplicitLocOpBuilder &ifBuilder) {
+                  Value activeMasks = tti::createLoadScratchMemory(
+                      ifBuilder, ifBuilder.getLoc(), activeMasksPtr,
+                      activeMasksType);
+                  Value clearMask = triton::SplatOp::create(
+                      ifBuilder, activeMasksType, mask);
+                  Value retiredMasks = arith::AndIOp::create(
+                      ifBuilder, activeMasks, clearMask);
+                  Value oneMask = tti::createConstIntTensor(
+                      ifBuilder, ifBuilder.getLoc(), 1, activeMasksType);
+                  return SmallVector<Value>{arith::MaxUIOp::create(
+                      ifBuilder, retiredMasks, oneMask)};
+                },
+                [&](ImplicitLocOpBuilder &ifBuilder) {
+                  return SmallVector<Value>{triton::SplatOp::create(
+                      ifBuilder, activeMasksType, mask)};
+                })
+                .front();
         tti::createStoreScratchMemory(fb, fb.getLoc(), activeMasksPtr,
                                       newActiveMasks, activeMasksType,
                                       /*currentCTAOnly=*/true);

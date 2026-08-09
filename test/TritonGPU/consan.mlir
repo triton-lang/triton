@@ -1911,7 +1911,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tti.experimental_lock_acquire
     // CHECK: arith.constant 1 : i32
-    // CHECK: tt.call @__triton_consan_set_active_mask
+    // CHECK: tt.call @__triton_consan_update_active_mask
     // CHECK: tti.experimental_lock_release
     ttg.warp_specialize(%smem, %bar) attributes {actualRegisters = array<i32: 480, 32>, allocation.offset = 512 : i32, requestedRegisters = array<i32: 32>, warpGroupStartIds = array<i32: 4>}
     default {
@@ -1969,13 +1969,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 2>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32} {
+  // Setting and retiring compatible active state share one helper. The state
+  // load remains entirely inside the runtime retire branch.
+  // CHECK: tt.func private @[[$UPDATE_ACTIVE_MASK:__triton_consan_update_active_mask_[^(]+]]
+  // CHECK-SAME: %arg2: i1
+  // CHECK-NEXT: cf.cond_br %arg2, ^[[RETIRE_THREAD:bb[0-9]+]], ^[[SET_ACTIVE_MASK:bb[0-9]+]]
+  // CHECK: ^[[RETIRE_THREAD]]:
+  // CHECK: tt.load
+  // CHECK: arith.andi
+  // CHECK: %[[RETIRED_MASK:.*]] = arith.maxui
+  // CHECK-NEXT: cf.br ^[[ACTIVE_MASK_JOIN:bb[0-9]+]](%[[RETIRED_MASK]]
+  // CHECK: ^[[SET_ACTIVE_MASK]]:
+  // CHECK-NOT: tt.load
+  // CHECK: %[[NEW_ACTIVE_MASK:.*]] = tt.splat %arg0
+  // CHECK-NEXT: cf.br ^[[ACTIVE_MASK_JOIN]](%[[NEW_ACTIVE_MASK]]
+  // CHECK: ^[[ACTIVE_MASK_JOIN]](
+  // CHECK-NOT: tt.func private @__triton_consan_update_active_mask_
   // CHECK-LABEL: @ws_wait_barrier
   tt.func public @ws_wait_barrier() {
     %smem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: %[[ACTIVE_MASK:.*]] = arith.constant 5 : i32
-    // CHECK: tt.call @__triton_consan_set_active_mask{{.*}}(%[[ACTIVE_MASK]],
+    // CHECK-NEXT: %[[SET_ACTIVE_MODE:.*]] = arith.constant false
+    // CHECK-NEXT: tt.call @[[$UPDATE_ACTIVE_MASK]](%[[ACTIVE_MASK]], {{.*}}, %[[SET_ACTIVE_MODE]])
     ttg.warp_specialize(%smem, %bar) attributes {actualRegisters = array<i32: 480, 32>, allocation.offset = 512 : i32, requestedRegisters = array<i32: 32>, warpGroupStartIds = array<i32: 4>}
     default {
       // CHECK: tti.experimental_lock_acquire
@@ -1985,6 +2002,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       %c0_i32 = arith.constant 0 : i32
       %true = arith.constant true
       ttng.wait_barrier %bar, %c0_i32, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+      // CHECK: %[[DEFAULT_CLEAR_MASK:.*]] = arith.constant -2 : i32
+      // CHECK-NEXT: %[[DEFAULT_RETIRE_MODE:.*]] = arith.constant true
+      // CHECK-NEXT: tt.call @[[$UPDATE_ACTIVE_MASK]](%[[DEFAULT_CLEAR_MASK]], {{.*}}, %[[DEFAULT_RETIRE_MODE]])
       ttg.warp_yield
     }
     partition0(%arg1: !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, %arg2: !ttg.memdesc<1xi64, #shared1, #smem, mutable>) num_warps(4) {
@@ -1996,6 +2016,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       %c0_i32 = arith.constant 0 : i32
       %true = arith.constant true
       ttng.wait_barrier %arg2, %c0_i32, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+      // CHECK: %[[PARTITION_CLEAR_MASK:.*]] = arith.constant -5 : i32
+      // CHECK-NEXT: %[[PARTITION_RETIRE_MODE:.*]] = arith.constant true
+      // CHECK-NEXT: tt.call @[[$UPDATE_ACTIVE_MASK]](%[[PARTITION_CLEAR_MASK]], {{.*}}, %[[PARTITION_RETIRE_MODE]])
       ttg.warp_return
     } : (!ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>) -> ()
     tt.return

@@ -311,6 +311,9 @@ public:
       bool excludeSelf = false);
 
 private:
+  void createUpdateActiveMaskCall(ImplicitLocOpBuilder &b, Value mask,
+                                  Operation *insertPoint, bool retireThread);
+
   void createUpdateOutstandingCommitsCall(
       ImplicitLocOpBuilder &b, Value bufferMask, int thread, Value pred,
       CommitKind::Kind commitKind, Operation *insertPoint,
