@@ -311,6 +311,12 @@ public:
       bool excludeSelf = false);
 
 private:
+  void createVerifyBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
+                                    Value pred, Operation *insertPoint,
+                                    Value recipientCTAs,
+                                    bool expectedInitialized,
+                                    StringRef assertMessage);
+
   void createClearOutstandingCommitsTransferCall(
       ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
       int outstandingNum, Value pred, CommitKind::Kind commitKind,

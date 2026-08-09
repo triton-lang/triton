@@ -995,52 +995,10 @@ void FunctionBuilder::createVerifyBarrierCanInitCall(ImplicitLocOpBuilder &b,
          "barrier descriptors must exist when verifying barrier init");
   assert(!auxData.barrierStates.empty() &&
          "barrier states must exist when verifying barrier init");
-  if (!pred) {
-    pred = arith::ConstantIntOp::create(b, 1, 1);
-  }
-  Value barriersVal = auxData.barriers.at(insertPoint).value;
-  auto barriersType =
-      cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
-  Value barrierStatesVal = auxData.barrierStates.at(insertPoint).value;
-  auto barrierStatesType =
-      cast<RankedTensorType>(auxData.barrierStates.at(insertPoint).type);
-  uint32_t length = getMemDescLength(mbar);
-  Value mbarOffset = tti::ExperimentalMemDescToI32Op::create(b, mbar);
-  Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
-  SmallVector<Value> args = {mbarOffset,  lengthVal,        pred,
-                             barriersVal, barrierStatesVal, recipientCTAs};
-  AssertInfo assertInfo{"Barrier re-initialized without prior invalidation",
-                        b.getI1Type()};
-  createCallToCachedFunction(
-      b, "verify_barrier_can_init", args, assertInfo,
-      {barriersType, barrierStatesType},
-      [barrierStatesType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
-        Value mbarOffset = entryBlock->getArgument(0);
-        Value lengthVal = entryBlock->getArgument(1);
-        Value pred = entryBlock->getArgument(2);
-        Value barriers = entryBlock->getArgument(3);
-        Value statesPtr = entryBlock->getArgument(4);
-        Value recipientCTAs = entryBlock->getArgument(5);
-
-        Value states = tti::createLoadScratchMemory(fb, fb.getLoc(), statesPtr,
-                                                    barrierStatesType);
-        Value descriptor = createBufferDescriptor(fb, mbarOffset, lengthVal);
-        Value mask = createCmpIntTensorScalar(fb, barriers, descriptor);
-        mask = convertAndBroadcast(fb, mask, {1}, barrierStatesType);
-        Value zero =
-            tti::createConstIntTensor(fb, fb.getLoc(), 0, barrierStatesType);
-        Value canInit =
-            arith::CmpIOp::create(fb, arith::CmpIPredicate::eq, states, zero);
-        auto condType = cast<RankedTensorType>(canInit.getType());
-        Value vTrue = tti::createConstIntTensor(fb, fb.getLoc(), 1, condType);
-        canInit = arith::SelectOp::create(fb, mask, canInit, vTrue);
-        Value ctaMask =
-            createCTASetMask(fb, condType, /*dim=*/0, recipientCTAs);
-        canInit = arith::SelectOp::create(fb, ctaMask, canInit, vTrue);
-        Value predTensor = triton::SplatOp::create(fb, condType, pred);
-        canInit = arith::SelectOp::create(fb, predTensor, canInit, vTrue);
-        triton::ReturnOp::create(fb, reduceAll<arith::AndIOp>(fb, canInit));
-      });
+  createVerifyBarrierStateCall(
+      b, mbar, pred, insertPoint, recipientCTAs,
+      /*expectedInitialized=*/false,
+      "Barrier re-initialized without prior invalidation");
 }
 
 void FunctionBuilder::createVerifyBarrierInitializedCall(
@@ -1050,6 +1008,15 @@ void FunctionBuilder::createVerifyBarrierInitializedCall(
          "barrier descriptors must exist when verifying barrier use");
   assert(!auxData.barrierStates.empty() &&
          "barrier states must exist when verifying barrier use");
+  createVerifyBarrierStateCall(
+      b, mbar, pred, insertPoint, recipientCTAs,
+      /*expectedInitialized=*/true,
+      "Barrier used before initialization or after invalidation");
+}
+
+void FunctionBuilder::createVerifyBarrierStateCall(
+    ImplicitLocOpBuilder &b, Value mbar, Value pred, Operation *insertPoint,
+    Value recipientCTAs, bool expectedInitialized, StringRef assertMessage) {
   if (!pred) {
     pred = arith::ConstantIntOp::create(b, 1, 1);
   }
@@ -1062,13 +1029,15 @@ void FunctionBuilder::createVerifyBarrierInitializedCall(
   uint32_t length = getMemDescLength(mbar);
   Value mbarOffset = tti::ExperimentalMemDescToI32Op::create(b, mbar);
   Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
-  SmallVector<Value> args = {mbarOffset,  lengthVal,        pred,
-                             barriersVal, barrierStatesVal, recipientCTAs};
-  AssertInfo assertInfo{
-      "Barrier used before initialization or after invalidation",
-      b.getI1Type()};
+  Value expectedInitializedVal =
+      arith::ConstantIntOp::create(b, expectedInitialized, 1);
+  SmallVector<Value> args = {mbarOffset,        lengthVal,
+                             pred,              barriersVal,
+                             barrierStatesVal,  recipientCTAs,
+                             expectedInitializedVal};
+  AssertInfo assertInfo{assertMessage, b.getI1Type()};
   createCallToCachedFunction(
-      b, "verify_barrier_initialized", args, assertInfo,
+      b, "verify_barrier_state", args, assertInfo,
       {barriersType, barrierStatesType},
       [barrierStatesType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
@@ -1077,6 +1046,7 @@ void FunctionBuilder::createVerifyBarrierInitializedCall(
         Value barriers = entryBlock->getArgument(3);
         Value statesPtr = entryBlock->getArgument(4);
         Value recipientCTAs = entryBlock->getArgument(5);
+        Value expectedInitialized = entryBlock->getArgument(6);
 
         Value states = tti::createLoadScratchMemory(fb, fb.getLoc(), statesPtr,
                                                     barrierStatesType);
@@ -1085,19 +1055,30 @@ void FunctionBuilder::createVerifyBarrierInitializedCall(
         mask = convertAndBroadcast(fb, mask, {1}, barrierStatesType);
         Value zero =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, barrierStatesType);
-        Value initialized =
-            arith::CmpIOp::create(fb, arith::CmpIPredicate::ne, states, zero);
-        auto condType = cast<RankedTensorType>(initialized.getType());
+        auto condType = cast<RankedTensorType>(barrierStatesType.cloneWith(
+            std::nullopt, fb.getI1Type()));
+        Value validState =
+            createIfElseValues(
+                fb, expectedInitialized, {condType},
+                [&](ImplicitLocOpBuilder &ifBuilder) {
+                  return SmallVector<Value>{arith::CmpIOp::create(
+                      ifBuilder, arith::CmpIPredicate::ne, states, zero)};
+                },
+                [&](ImplicitLocOpBuilder &ifBuilder) {
+                  return SmallVector<Value>{arith::CmpIOp::create(
+                      ifBuilder, arith::CmpIPredicate::eq, states, zero)};
+                })
+                .front();
         Value vTrue = tti::createConstIntTensor(fb, fb.getLoc(), 1, condType);
-        initialized = arith::SelectOp::create(fb, mask, initialized, vTrue);
+        validState = arith::SelectOp::create(fb, mask, validState, vTrue);
         Value ctaMask =
             createCTASetMask(fb, condType, /*dim=*/0, recipientCTAs);
-        initialized = arith::SelectOp::create(fb, ctaMask, initialized, vTrue);
+        validState = arith::SelectOp::create(fb, ctaMask, validState, vTrue);
         Value predTensor = triton::SplatOp::create(fb, condType, pred);
-        Value predicatedInitialized =
-            arith::SelectOp::create(fb, predTensor, initialized, vTrue);
+        Value predicatedState =
+            arith::SelectOp::create(fb, predTensor, validState, vTrue);
         triton::ReturnOp::create(
-            fb, reduceAll<arith::AndIOp>(fb, predicatedInitialized));
+            fb, reduceAll<arith::AndIOp>(fb, predicatedState));
       });
 }
 

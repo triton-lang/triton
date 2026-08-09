@@ -734,7 +734,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %c0_i32 = arith.constant 0 : i32
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    // CHECK: tt.call @__triton_consan_verify_barrier_can_init
+    // CHECK: tt.call @__triton_consan_verify_barrier_state
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // Model the async TMA completion mechanism: barrier_expect corresponds to
     // mbarrier.arrive.expect_tx and is what should update ConSan's barrier state.
@@ -881,7 +881,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %a_smem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %b_smem = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    // CHECK: tt.call @__triton_consan_verify_barrier_can_init
+    // CHECK: tt.call @__triton_consan_verify_barrier_state
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // Two TMA copies contribute to a single expected transaction.
     ttng.barrier_expect %bar, 8192, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -1088,20 +1088,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // Init and use verification with compatible state types share one helper.
+  // The runtime mode selects the original nonzero and zero predicates.
+  // CHECK: tt.func private @[[$VERIFY_BARRIER_STATE:__triton_consan_verify_barrier_state_[^(]+]]
+  // CHECK-SAME: %arg6: i1
+  // CHECK: cf.cond_br %arg6, ^[[EXPECT_INITIALIZED:bb[0-9]+]], ^[[EXPECT_INVALID:bb[0-9]+]]
+  // CHECK: ^[[EXPECT_INITIALIZED]]:
+  // CHECK: %[[IS_INITIALIZED:.*]] = arith.cmpi ne,
+  // CHECK-NEXT: cf.br ^[[BARRIER_STATE_JOIN:bb[0-9]+]](%[[IS_INITIALIZED]]
+  // CHECK: ^[[EXPECT_INVALID]]:
+  // CHECK: %[[IS_INVALID:.*]] = arith.cmpi eq,
+  // CHECK-NEXT: cf.br ^[[BARRIER_STATE_JOIN]](%[[IS_INVALID]]
+  // CHECK: ^[[BARRIER_STATE_JOIN]](
+  // CHECK-NOT: tt.func private @__triton_consan_verify_barrier_state_
   // CHECK-LABEL: @barrier_reinit_requires_invalidate
   tt.func public @barrier_reinit_requires_invalidate() {
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32xi32, #shared1, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    // CHECK: tt.call @__triton_consan_verify_barrier_can_init
+    // CHECK: %[[CAN_INIT:.*]] = tt.call @[[$VERIFY_BARRIER_STATE]]({{.*}}, %{{false(_[0-9]+)?}})
+    // CHECK-NEXT: tti.experimental_assert_uniform %[[CAN_INIT]], "Barrier re-initialized without prior invalidation"
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_init_barrier_state
     %tmp = ttg.local_load %buf : !ttg.memdesc<32xi32, #shared1, #smem, mutable> -> tensor<32xi32>
-    // CHECK: tt.call @__triton_consan_verify_barrier_initialized
+    // CHECK: %[[IS_INIT:.*]] = tt.call @[[$VERIFY_BARRIER_STATE]]({{.*}}, %true_{{[0-9]+}})
+    // CHECK-NEXT: tti.experimental_assert_uniform %[[IS_INIT]], "Barrier used before initialization or after invalidation"
     ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_invalidate_barrier_state
     // CHECK: tt.call @__triton_consan_clear_barrier_write_tracking
     // CHECK: tt.call @__triton_consan_clear_barrier_read_tracking
-    // CHECK: tt.call @__triton_consan_verify_barrier_can_init
+    // CHECK: %[[CAN_REINIT:.*]] = tt.call @[[$VERIFY_BARRIER_STATE]]({{.*}}, %false_{{[0-9]+}})
+    // CHECK-NEXT: tti.experimental_assert_uniform %[[CAN_REINIT]], "Barrier re-initialized without prior invalidation"
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_init_barrier_state
     tt.return
@@ -1134,9 +1150,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %c0_i32 = arith.constant 0 : i32
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    // CHECK: tt.call @__triton_consan_verify_barrier_can_init
+    // CHECK: tt.call @__triton_consan_verify_barrier_state
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    // CHECK: tt.call @__triton_consan_verify_barrier_initialized
+    // CHECK: tt.call @__triton_consan_verify_barrier_state
     // CHECK-DAG: tt.call @__triton_consan_set_waiting
     // CHECK-DAG: tt.call @__triton_consan_check_all_active_waiting
     // CHECK: ttng.wait_barrier
@@ -1165,7 +1181,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %c0_i32 = arith.constant 0 : i32
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    // CHECK: tt.call @__triton_consan_verify_barrier_can_init
+    // CHECK: tt.call @__triton_consan_verify_barrier_state
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_init_barrier_state
     // CHECK: tti.experimental_lock_acquire
@@ -1191,7 +1207,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %true = arith.constant true
     %c0_i32 = arith.constant 0 : i32
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    // CHECK: tt.call @__triton_consan_verify_barrier_initialized
+    // CHECK: tt.call @__triton_consan_verify_barrier_state
     // CHECK: tt.call @__triton_consan_set_waiting
     ttng.wait_barrier %bar, %c0_i32, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     tt.return
