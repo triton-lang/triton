@@ -438,6 +438,10 @@ struct CanonicalizeExtractSliceAndConcat
     // Calculate which concat operand contains our slice
     auto srcShape = concatItemType.getShape();
     auto rank = srcShape.size();
+    for (auto [dimOffset, dimSize] : llvm::zip_equal(offset, srcShape)) {
+      if (dimOffset < 0 || dimOffset % dimSize != 0)
+        return failure();
+    }
     std::vector<unsigned> defaultOrder(rank);
     std::iota(defaultOrder.rbegin(), defaultOrder.rend(), 0);
 
