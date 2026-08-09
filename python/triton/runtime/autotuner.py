@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import math
 import time
 import inspect
 import hashlib
@@ -88,6 +89,7 @@ class Autotuner(KernelInterface):
             self.perf_model = prune_configs_by.get("perf_model", self.perf_model)
             self.configs_top_k = prune_configs_by.get("top_k", self.configs_top_k)
             self.early_config_prune = prune_configs_by.get("early_config_prune", self.early_config_prune)
+            self._validate_top_k(self.configs_top_k)
 
         self.fn = fn
         self.base_fn = fn
@@ -123,6 +125,20 @@ class Autotuner(KernelInterface):
                 quantiles=quantiles,
             )
             return
+
+    @staticmethod
+    def _validate_top_k(top_k):
+        if isinstance(top_k, bool):
+            raise TypeError("top_k must be a positive integer or a float in the interval (0.0, 1.0]")
+        if isinstance(top_k, int):
+            if top_k <= 0:
+                raise ValueError("top_k must be a positive integer")
+            return
+        if isinstance(top_k, float):
+            if not math.isfinite(top_k) or top_k <= 0.0 or top_k > 1.0:
+                raise ValueError("top_k must be a finite float in the interval (0.0, 1.0]")
+            return
+        raise TypeError("top_k must be a positive integer or a float in the interval (0.0, 1.0]")
 
     @cached_property
     def do_bench(self):
@@ -290,15 +306,12 @@ class Autotuner(KernelInterface):
                     "No valid autotuner configs after pruning. `early_config_prune` should return at least one config.")
         if self.perf_model:
             top_k = self.configs_top_k
-            if isinstance(top_k, float) and top_k <= 1.0:
+            if isinstance(top_k, float):
                 # Keep at least one config: a small fraction over a small config
                 # set rounds down to zero, which would prune everything and crash
                 # the later min() on an empty set. early_config_prune already
                 # guarantees at least one config; mirror that here.
                 top_k = max(1, int(len(pruned_configs) * top_k))
-            elif not isinstance(top_k, int):
-                # Slice index must be an integer
-                raise TypeError("Error while pruning configs, top_k must be either 1) a float <= 1.0 or 2) an int")
 
             if len(pruned_configs) > top_k:
                 est_timing = {

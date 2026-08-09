@@ -1,3 +1,4 @@
+import math
 import torch
 
 import triton
@@ -235,6 +236,51 @@ def test_prune_configs(with_perf_model: bool, device: str):
         assert records['run_early_config_prune']
         assert records['capture_kwargs']
         assert records['capture_named_args']
+
+
+@pytest.mark.parametrize("top_k", [True, False, 0, -1, 1.0, 0.0, 1.1, -0.1, math.nan, math.inf, -math.inf, "2", object()])
+def test_top_k_invalid_values_rejected(top_k):
+    class Kernel:
+
+        def __init__(self):
+            self.fn = lambda: None
+
+        def run(self, **kwargs):
+            return None
+
+    with pytest.raises((TypeError, ValueError)):
+        triton.runtime.Autotuner(
+            Kernel(),
+            arg_names=[],
+            configs=[triton.Config(kwargs={"BLOCK_SIZE": 32})],
+            key=[],
+            reset_to_zero=None,
+            restore_value=None,
+            prune_configs_by={"top_k": top_k},
+        )
+
+
+@pytest.mark.parametrize("top_k", [1, 2, 0.5, 1.0, 0.3])
+def test_top_k_valid_values_accepted(top_k):
+    class Kernel:
+
+        def __init__(self):
+            self.fn = lambda: None
+
+        def run(self, **kwargs):
+            return None
+
+    tuner = triton.runtime.Autotuner(
+        Kernel(),
+        arg_names=[],
+        configs=[triton.Config(kwargs={"BLOCK_SIZE": 32})],
+        key=[],
+        reset_to_zero=None,
+        restore_value=None,
+        prune_configs_by={"top_k": top_k},
+    )
+
+    assert tuner.configs_top_k == top_k
 
 
 def test_prune_configs_fractional_top_k_keeps_one(device: str):
