@@ -1409,8 +1409,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: call {{.*}}fill_global_tensor{{.*}}(%[[WRT_COMMITS_GLOB]], %c0_i8
 
     // CHECK: tt.call @__triton_consan_verify_write_visibility_nw1
-    // CHECK: %[[NO_EXCLUDED_THREAD:.*]] = arith.constant -1 : i32
-    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}%[[NO_EXCLUDED_THREAD]], %[[WRT_COMMITS_GLOB]]
+    // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}%[[THREAD_BIT]], %[[WRT_COMMITS_GLOB]]
     // CHECK: tt.call @__triton_consan_verify_read_visibility_nw1
     // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
     // CHECK: tt.call @__triton_consan_stage_access_for_commit_nw1{{.*}}%[[THREAD_BIT]], %[[WRT_COMMITS_GLOB]]
@@ -1442,8 +1442,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_init_barrier_state
 
     // CHECK: tt.call @__triton_consan_verify_write_visibility
-    // CHECK: %[[NO_EXCLUDED_THREAD:.*]] = arith.constant -1 : i32
-    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}%[[NO_EXCLUDED_THREAD]], %[[WRT_COMMITS_GLOB]]
+    // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}%[[THREAD_BIT]], %[[WRT_COMMITS_GLOB]]
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{[^,]+}}
     // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
     // CHECK: tt.call @__triton_consan_stage_access_for_commit{{.*}}%[[THREAD_BIT]], %[[WRT_COMMITS_GLOB]]
