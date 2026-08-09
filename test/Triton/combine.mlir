@@ -569,54 +569,58 @@ tt.func @test_combine_broadcast_mul_reduce_higher_rank(%arg0: tensor<32x16x4xf32
     tt.return %5 : tensor<32x32x4xf32>
 }
 
-// CHECK-LABEL: @test_combine_select_cmp_to_minmax
-tt.func @test_combine_select_cmp_to_minmax(%arg0: tensor<8xf32>, %arg1: tensor<8xf16>) -> (tensor<8xf32>, tensor<8xf32>, tensor<8xf16>, tensor<8xf16>) {
+// CHECK-LABEL: @test_combine_trunc_ext_roundtrip
+tt.func @test_combine_trunc_ext_roundtrip(%arg0: tensor<8xf16>) -> (tensor<8xf16>, tensor<8xf16>, tensor<8xf16>) {
     %zero = arith.constant dense<0.0> : tensor<8xf32>
-    %zero_f16 = arith.constant dense<0.0> : tensor<8xf16>
     %one = arith.constant dense<1.0> : tensor<8xf32>
-    %half = arith.constant dense<0.5> : tensor<8xf32>
+    %two = arith.constant dense<2.0> : tensor<8xf32>
 
-    // CHECK: %[[relu:.*]] = arith.maxnumf %arg0, %{{.*}} : tensor<8xf32>
-    %cmp0 = arith.cmpf ogt, %arg0, %zero : tensor<8xf32>
-    %relu = arith.select %cmp0, %arg0, %zero : tensor<8xi1>, tensor<8xf32>
+    // The shape the frontend emits for tl.maximum(x_f16, 0.0) stored as f16.
+    // CHECK: %[[max:.*]] = arith.maxnumf %arg0, %{{.*}} : tensor<8xf16>
+    %e0 = arith.extf %arg0 : tensor<8xf16> to tensor<8xf32>
+    %m0 = arith.maxnumf %e0, %zero : tensor<8xf32>
+    %max = arith.truncf %m0 : tensor<8xf32> to tensor<8xf16>
 
-    // CHECK: %[[min:.*]] = arith.minnumf %arg0, %{{.*}} : tensor<8xf32>
-    %cmp1 = arith.cmpf ole, %arg0, %one : tensor<8xf32>
-    %min = arith.select %cmp1, %arg0, %one : tensor<8xi1>, tensor<8xf32>
+    // CHECK: %[[min:.*]] = arith.minnumf %arg0, %{{.*}} : tensor<8xf16>
+    %e1 = arith.extf %arg0 : tensor<8xf16> to tensor<8xf32>
+    %m1 = arith.minnumf %e1, %one : tensor<8xf32>
+    %min = arith.truncf %m1 : tensor<8xf32> to tensor<8xf16>
 
-    // The frontend widens f16/bf16 comparisons to f32 while the select stays
-    // on the narrow type, the fold still applies when the wide constant is
-    // the extension of the narrow one.
-    // CHECK: %[[wrelu:.*]] = arith.maxnumf %arg1, %{{.*}} : tensor<8xf16>
-    %ext0 = arith.extf %arg1 : tensor<8xf16> to tensor<8xf32>
-    %cmp4 = arith.cmpf ogt, %ext0, %zero : tensor<8xf32>
-    %wrelu = arith.select %cmp4, %arg1, %zero_f16 : tensor<8xi1>, tensor<8xf16>
+    // Division by a power of two has an exact reciprocal.
+    // CHECK: %[[div:.*]] = arith.mulf %arg0, %{{.*}} : tensor<8xf16>
+    %e2 = arith.extf %arg0 : tensor<8xf16> to tensor<8xf32>
+    %d0 = arith.divf %e2, %two : tensor<8xf32>
+    %div = arith.truncf %d0 : tensor<8xf32> to tensor<8xf16>
 
-    // Wide constant does not match the narrow one, we  must not fold.
-    // CHECK: %[[nofold:.*]] = arith.select %{{.*}}, %arg1, %{{.*}} : tensor<8xi1>, tensor<8xf16>
-    %ext1 = arith.extf %arg1 : tensor<8xf16> to tensor<8xf32>
-    %cmp5 = arith.cmpf ogt, %ext1, %half : tensor<8xf32>
-    %nofold = arith.select %cmp5, %arg1, %zero_f16 : tensor<8xi1>, tensor<8xf16>
-
-    // CHECK: tt.return %[[relu]], %[[min]], %[[wrelu]], %[[nofold]]
-    tt.return %relu, %min, %wrelu, %nofold : tensor<8xf32>, tensor<8xf32>, tensor<8xf16>, tensor<8xf16>
+    // CHECK: tt.return %[[max]], %[[min]], %[[div]]
+    tt.return %max, %min, %div : tensor<8xf16>, tensor<8xf16>, tensor<8xf16>
 }
 
-// CHECK-LABEL: @test_combine_select_cmp_to_minmax_fail
-// CHECK-NOT: arith.maxnumf
-// CHECK-NOT: arith.minnumf
-tt.func @test_combine_select_cmp_to_minmax_fail(%arg0: tensor<8xf32>, %arg1: tensor<8xf32>) -> (tensor<8xf32>, tensor<8xf32>) {
-    %nan = arith.constant dense<0x7FC00000> : tensor<8xf32>
+// CHECK-LABEL: @test_combine_trunc_ext_roundtrip_fail
+// CHECK-NOT: arith.maxnumf {{.*}} : tensor<8xf16>
+// CHECK-NOT: arith.mulf
+tt.func @test_combine_trunc_ext_roundtrip_fail(%arg0: tensor<8xf16>) -> (tensor<8xf16>, tensor<8xf16>, tensor<8xf32>, tensor<8xf16>) {
+    %tenth = arith.constant dense<1.000000e-01> : tensor<8xf32>
+    %zero = arith.constant dense<0.0> : tensor<8xf32>
+    %three = arith.constant dense<3.0> : tensor<8xf32>
 
-    // false value is not a constant, a NaN in %arg1 would be
-    // used by the select but dropped by maxnumf.
-    %cmp0 = arith.cmpf ogt, %arg0, %arg1 : tensor<8xf32>
-    %sel0 = arith.select %cmp0, %arg0, %arg1 : tensor<8xi1>, tensor<8xf32>
+    // 0.1 is not exactly representable in f16 — folding would change the
+    // max threshold.
+    %e0 = arith.extf %arg0 : tensor<8xf16> to tensor<8xf32>
+    %m0 = arith.maxnumf %e0, %tenth : tensor<8xf32>
+    %r0 = arith.truncf %m0 : tensor<8xf32> to tensor<8xf16>
 
-    // NaN constant.
-    %cmp1 = arith.cmpf ogt, %arg0, %nan : tensor<8xf32>
-    %sel1 = arith.select %cmp1, %arg0, %nan : tensor<8xi1>, tensor<8xf32>
+    // The wide max has a second user — the f32 value is live.
+    %e1 = arith.extf %arg0 : tensor<8xf16> to tensor<8xf32>
+    %m1 = arith.maxnumf %e1, %zero : tensor<8xf32>
+    %r1 = arith.truncf %m1 : tensor<8xf32> to tensor<8xf16>
+    %r2 = arith.addf %m1, %e1 : tensor<8xf32>
+
+    // 1/3 is not exact — must stay a division.
+    %e2 = arith.extf %arg0 : tensor<8xf16> to tensor<8xf32>
+    %d0 = arith.divf %e2, %three : tensor<8xf32>
+    %r3 = arith.truncf %d0 : tensor<8xf32> to tensor<8xf16>
 
     // CHECK: tt.return
-    tt.return %sel0, %sel1 : tensor<8xf32>, tensor<8xf32>
+    tt.return %r0, %r1, %r2, %r3 : tensor<8xf16>, tensor<8xf16>, tensor<8xf32>, tensor<8xf16>
 }
