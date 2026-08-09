@@ -3015,6 +3015,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @histogram_narrow_inputs
+  // CHECK: llvm.zext {{.*}} : i8 to i32
+  // CHECK: llvm.zext {{.*}} : i16 to i32
+  tt.func @histogram_narrow_inputs(%src_i8: tensor<256xi8, #blocked>, %src_i16: tensor<256xi16, #blocked>) {
+    %hist_i8 = tt.histogram %src_i8 : tensor<256xi8, #blocked> -> tensor<8xi32, #blocked>
+    %hist_i16 = tt.histogram %src_i16 : tensor<256xi16, #blocked> -> tensor<8xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 2304 : i32} {
   // CHECK-LABEL: @profile_scratch_ptr_uses_i64
   // CHECK: %[[CLUSTER_Z:.*]] = nvvm.read.ptx.sreg.clusterid.z : i32

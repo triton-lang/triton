@@ -38,7 +38,10 @@ static SmallVector<Value> computeHistogram(
   // Apply atomic add to update the histogram in shared memory.
   Value numBinsValue = b.i32_val(numBins);
   for (int i = 0; i < srcValues.size(); ++i) {
-    Value updatePred = b.icmp_ult(srcValues[i], numBinsValue);
+    Value bin = srcValues[i];
+    if (bin.getType().getIntOrFloatBitWidth() < 32)
+      bin = b.zext(i32_ty, bin);
+    Value updatePred = b.icmp_ult(bin, numBinsValue);
     if (!maskValues.empty())
       updatePred = b.and_(updatePred, maskValues[i]);
 
@@ -47,7 +50,7 @@ static SmallVector<Value> computeHistogram(
     (void)prevBlock;
     rewriter.setInsertionPointToStart(ifBlock);
     Value sharedMemPtr = b.gep(baseSharedMemPtr.getType(), i32_ty,
-                               baseSharedMemPtr, srcValues[i]);
+                               baseSharedMemPtr, bin);
     atomicAddOne(sharedMemPtr, loc, rewriter);
     rewriter.setInsertionPointToStart(thenBlock);
   }
