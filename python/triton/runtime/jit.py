@@ -161,12 +161,10 @@ class DependenciesFinder(ast.NodeVisitor):
             return None
 
         def name_lookup(name):
-            val = self.globals.get(name, None)
-            if val is not None:
-                return val, self.globals
-            val = self.nonlocals.get(name, None)
-            if val is not None:
-                return val, self.nonlocals
+            if name in self.nonlocals:
+                return self.nonlocals[name], self.nonlocals
+            if name in self.globals:
+                return self.globals[name], self.globals
             return None, None
 
         val, var_dict = name_lookup(node.id)
