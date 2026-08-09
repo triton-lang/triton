@@ -3154,109 +3154,102 @@ void FunctionBuilder::createPublishClusterProxyAccessesCall(
 void FunctionBuilder::createStageAccessForCommitCall(
     ImplicitLocOpBuilder &b, Value bufferMask, int thread, Value pred,
     MemType /*memType*/, CommitKind::Kind commitKind, Operation *insertPoint) {
-  createUpdateOutstandingCommitsCall(
-      b, bufferMask, thread, pred, commitKind, insertPoint,
-      /*commitAccesses=*/false);
-}
-
-void FunctionBuilder::createCommitAccessesCall(ImplicitLocOpBuilder &b,
-                                               int thread, Value pred,
-                                               CommitKind::Kind commitKind,
-                                               Operation *insertPoint) {
-  createUpdateOutstandingCommitsCall(
-      b, Value(), thread, pred, commitKind, insertPoint,
-      /*commitAccesses=*/true);
-}
-
-void FunctionBuilder::createUpdateOutstandingCommitsCall(
-    ImplicitLocOpBuilder &b, Value bufferMask, int thread, Value pred,
-    CommitKind::Kind commitKind, Operation *insertPoint, bool commitAccesses) {
-  if (auxData.commits[commitKind].empty())
+  if (auxData.commits[commitKind].empty()) {
     return;
+  }
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   ValueType outstandingCommits = auxData.commits[commitKind].at(insertPoint);
   auto commitsType = cast<RankedTensorType>(outstandingCommits.type);
-  auto bufferMaskType =
-      tti::getSlicedTensorType(commitsType, {1}, b.getI1Type());
-  if (!bufferMask) {
-    bufferMask =
-        tti::createConstIntTensor(b, b.getLoc(), 1, bufferMaskType);
-  } else if (bufferMask.getType() != bufferMaskType) {
-    bufferMask =
-        ttg::ConvertLayoutOp::create(b, bufferMaskType, bufferMask);
-  }
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
-  Value commitAccessesVal =
-      arith::ConstantIntOp::create(b, commitAccesses, 1);
   SmallVector<Value> args = {bufferMask, pred, threadVal,
-                             outstandingCommits.value, commitAccessesVal};
+                             outstandingCommits.value};
   createCallToCachedFunction(
-      b, "update_outstanding_commits", args,
+      b, "stage_access_for_commit", args,
       /*assertInfo=*/std::nullopt, {commitsType},
       [commitsType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value bufferMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value threadVal = entryBlock->getArgument(2);
         Value outstandingCommitsPtr = entryBlock->getArgument(3);
-        Value commitAccesses = entryBlock->getArgument(4);
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
 
         Value commits = tti::createLoadScratchMemory(
             fb, fb.getLoc(), outstandingCommitsPtr, commitsType);
-        Value threadColumnMask =
-            createDimMask(fb, threadVal, commitsType, /*dim=*/2);
+        bufferMask = convertAndBroadcast(fb, bufferMask, {1}, commitsType);
         Value ctaMask = createCTASetMask(fb, commitsType, /*dim=*/0,
                                          createCurrentCTAMask(fb));
-        Value threadMask =
-            arith::AndIOp::create(fb, threadColumnMask, ctaMask);
+        bufferMask = arith::AndIOp::create(fb, bufferMask, ctaMask);
+        Value threadColumnMask =
+            createDimMask(fb, threadVal, commitsType, /*dim=*/2);
+        Value bufAndThread =
+            arith::AndIOp::create(fb, bufferMask, threadColumnMask);
+        Value minusOne =
+            tti::createConstIntTensor(fb, fb.getLoc(), -1, commitsType, true);
         Value updated =
-            createIfElseValues(
-                fb, commitAccesses, {commitsType},
-                [&](ImplicitLocOpBuilder &ifBuilder) {
-                  Type elementType = commitsType.getElementType();
-                  Value zero = arith::ConstantOp::create(
-                      ifBuilder, elementType,
-                      ifBuilder.getIntegerAttr(elementType, 0));
-                  Value minusOne = arith::ConstantOp::create(
-                      ifBuilder, elementType,
-                      ifBuilder.getIntegerAttr(elementType, -1));
-                  Value ones = tti::createConstIntTensor(
-                      ifBuilder, ifBuilder.getLoc(), 1, commitsType);
-                  Value commitsGtZero = createCmpIntTensorScalar(
-                      ifBuilder, commits, zero, arith::CmpIPredicate::sgt);
-                  commitsGtZero = arith::AndIOp::create(
-                      ifBuilder, commitsGtZero, threadMask);
-                  Value commitsPlusOne =
-                      arith::AddIOp::create(ifBuilder, commits, ones);
-                  Value incremented = arith::SelectOp::create(
-                      ifBuilder, commitsGtZero, commitsPlusOne, commits);
-                  Value commitsEqMinusOne = createCmpIntTensorScalar(
-                      ifBuilder, incremented, minusOne,
-                      arith::CmpIPredicate::eq);
-                  commitsEqMinusOne = arith::AndIOp::create(
-                      ifBuilder, commitsEqMinusOne, threadMask);
-                  return SmallVector<Value>{arith::SelectOp::create(
-                      ifBuilder, commitsEqMinusOne, ones, incremented)};
-                },
-                [&](ImplicitLocOpBuilder &ifBuilder) {
-                  Value stagedBufferMask = convertAndBroadcast(
-                      ifBuilder, bufferMask, {1}, commitsType);
-                  stagedBufferMask = arith::AndIOp::create(
-                      ifBuilder, stagedBufferMask, ctaMask);
-                  Value bufferAndThread = arith::AndIOp::create(
-                      ifBuilder, stagedBufferMask, threadColumnMask);
-                  Value minusOne = tti::createConstIntTensor(
-                      ifBuilder, ifBuilder.getLoc(), -1, commitsType, true);
-                  return SmallVector<Value>{arith::SelectOp::create(
-                      ifBuilder, bufferAndThread, minusOne, commits)};
-                })
-                .front();
-
+            arith::SelectOp::create(fb, bufAndThread, minusOne, commits);
         createMaskedStoreScratchMemory(fb, fb.getLoc(), outstandingCommitsPtr,
                                        updated, commitsType, ctaMask);
+
+        fb.setInsertionPointToEnd(thenBlock);
+        triton::ReturnOp::create(fb);
+      });
+}
+
+void FunctionBuilder::createCommitAccessesCall(ImplicitLocOpBuilder &b,
+                                               int thread, Value pred,
+                                               CommitKind::Kind commitKind,
+                                               Operation *insertPoint) {
+  if (auxData.commits[commitKind].empty()) {
+    return;
+  }
+  if (!pred)
+    pred = arith::ConstantIntOp::create(b, 1, 1);
+  ValueType outstandingCommits = auxData.commits[commitKind].at(insertPoint);
+  auto commitsType = cast<RankedTensorType>(outstandingCommits.type);
+  Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
+  SmallVector<Value> args = {threadVal, pred, outstandingCommits.value};
+  createCallToCachedFunction(
+      b, "commit_accesses", args,
+      /*assertInfo=*/std::nullopt, {commitsType},
+      [commitsType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+        Value threadVal = entryBlock->getArgument(0);
+        Value pred = entryBlock->getArgument(1);
+        Value outstandingCommitsPtr = entryBlock->getArgument(2);
+
+        auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
+        fb.setInsertionPointToStart(ifBlock);
+
+        Value commits = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), outstandingCommitsPtr, commitsType);
+        Type elementType = commitsType.getElementType();
+        Value zero = arith::ConstantOp::create(
+            fb, elementType, fb.getIntegerAttr(elementType, 0));
+        Value minusOne = arith::ConstantOp::create(
+            fb, elementType, fb.getIntegerAttr(elementType, -1));
+        Value ones = tti::createConstIntTensor(fb, fb.getLoc(), 1, commitsType);
+
+        Value threadMask = createDimMask(fb, threadVal, commitsType, /*dim=*/2);
+        Value ctaMask = createCTASetMask(fb, commitsType, /*dim=*/0,
+                                         createCurrentCTAMask(fb));
+        threadMask = arith::AndIOp::create(fb, threadMask, ctaMask);
+        auto commitsGtZero = createCmpIntTensorScalar(
+            fb, commits, zero, arith::CmpIPredicate::sgt);
+        commitsGtZero = arith::AndIOp::create(fb, commitsGtZero, threadMask);
+        Value commitsPlusOne = arith::AddIOp::create(fb, commits, ones);
+        commits =
+            arith::SelectOp::create(fb, commitsGtZero, commitsPlusOne, commits);
+
+        auto commitsEqMinusOne = createCmpIntTensorScalar(
+            fb, commits, minusOne, arith::CmpIPredicate::eq);
+        commitsEqMinusOne =
+            arith::AndIOp::create(fb, commitsEqMinusOne, threadMask);
+        commits = arith::SelectOp::create(fb, commitsEqMinusOne, ones, commits);
+
+        createMaskedStoreScratchMemory(fb, fb.getLoc(), outstandingCommitsPtr,
+                                       commits, commitsType, ctaMask);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -3448,21 +3441,21 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   auto commitsType = cast<RankedTensorType>(outstandingCommits.type);
-  Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
+  Value excludedThreadVal =
+      arith::ConstantIntOp::create(b, excludeSelf ? thread : -1, 32);
   std::string message =
       "Accessing buffer with pending access. Pending access type: " +
       pendingAccessType.str();
   AssertInfo assertInfo{message, b.getI1Type()};
-  SmallVector<Value> args = {bufferMask, pred, threadVal,
+  SmallVector<Value> args = {bufferMask, pred, excludedThreadVal,
                              outstandingCommits.value, effectCTAs};
-  std::string funcName = excludeSelf ? "check_outstanding_commits_excl_self"
-                                     : "check_outstanding_commits";
   createCallToCachedFunction(
-      b, funcName, args, assertInfo, {commitsType, (uint64_t)thread},
-      [commitsType, excludeSelf](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      b, "check_outstanding_commits", args, assertInfo,
+      {commitsType, (uint64_t)thread},
+      [commitsType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value checkMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
-        Value threadVal = entryBlock->getArgument(2);
+        Value excludedThread = entryBlock->getArgument(2);
         Value outstandingCommitsPtr = entryBlock->getArgument(3);
         Value effectCTAs = entryBlock->getArgument(4);
 
@@ -3476,12 +3469,23 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
             tti::createConstIntTensor(fb, fb.getLoc(), 0, commitsType);
         Value selectedRows = arith::SelectOp::create(
             fb, checkMask, outstandingCommits, zeroTensor);
-        if (excludeSelf) {
-          Value threadColumnMask =
-              createDimMask(fb, threadVal, commitsType, /*dim=*/2);
-          selectedRows = arith::SelectOp::create(fb, threadColumnMask,
-                                                 zeroTensor, selectedRows);
-        }
+        Value zeroThread = arith::ConstantIntOp::create(fb, 0, 32);
+        Value hasExcludedThread = arith::CmpIOp::create(
+            fb, arith::CmpIPredicate::sge, excludedThread, zeroThread);
+        selectedRows =
+            createIfElseValues(
+                fb, hasExcludedThread, {commitsType},
+                [&](ImplicitLocOpBuilder &ifBuilder) {
+                  Value threadColumnMask = createDimMask(
+                      ifBuilder, excludedThread, commitsType, /*dim=*/2);
+                  Value withoutExcludedThread = arith::SelectOp::create(
+                      ifBuilder, threadColumnMask, zeroTensor, selectedRows);
+                  return SmallVector<Value>{withoutExcludedThread};
+                },
+                [&](ImplicitLocOpBuilder &) {
+                  return SmallVector<Value>{selectedRows};
+                })
+                .front();
         Value selectedEqZero = arith::CmpIOp::create(
             fb, arith::CmpIPredicate::eq, selectedRows, zeroTensor);
         Value allSelectedEqZero = reduceAll<arith::AndIOp>(fb, selectedEqZero);

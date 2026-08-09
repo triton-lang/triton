@@ -311,11 +311,6 @@ public:
       bool excludeSelf = false);
 
 private:
-  void createUpdateOutstandingCommitsCall(
-      ImplicitLocOpBuilder &b, Value bufferMask, int thread, Value pred,
-      CommitKind::Kind commitKind, Operation *insertPoint,
-      bool commitAccesses);
-
   void createUpdateWaitingCall(ImplicitLocOpBuilder &b, Value mbar, int thread,
                                Value phase, Value pred,
                                Operation *insertPoint, bool setWaiting);
