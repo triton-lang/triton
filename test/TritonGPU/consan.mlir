@@ -1339,8 +1339,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32} {
-  // Both warp-specialized threads use the same commit-state type. The thread
-  // identity is an SSA argument, so they must share one generated helper.
+  // Both warp-specialized threads use the same commit-state type. Their
+  // non-excluding checks pass the same runtime sentinel and share one helper.
   // CHECK: tt.func private @[[$CHECK_COMMITS:__triton_consan_check_outstanding_commits_[^(]+]]
   // CHECK-SAME: %arg2: i32
   // CHECK-NOT: tt.func private @__triton_consan_check_outstanding_commits_
@@ -1352,7 +1352,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       // CHECK: default
       ttg.async_copy_global_to_local %ptr, %smem : tensor<128x128x!tt.ptr<f16>, #blocked> -> <128x128xf16, #shared, #smem, mutable>
       ttg.async_commit_group
-      // CHECK: tt.call @[[$CHECK_COMMITS]]({{.*}}, {{.*}}, %{{c0_i32(_[0-9]+)?}},
+      // CHECK: tt.call @[[$CHECK_COMMITS]]({{.*}}, {{.*}}, %{{c-1_i32(_[0-9]+)?}},
       ttg.local_load %smem : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
       ttg.warp_yield
     }
@@ -1360,7 +1360,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       ttg.async_copy_global_to_local %arg1, %arg0 : tensor<128x128x!tt.ptr<f16>, #blocked> -> <128x128xf16, #shared, #smem, mutable>
       ttg.async_commit_group
       // CHECK: partition0
-      // CHECK: tt.call @[[$CHECK_COMMITS]]({{.*}}, {{.*}}, %{{c1_i32(_[0-9]+)?}},
+      // CHECK: tt.call @[[$CHECK_COMMITS]]({{.*}}, {{.*}}, %{{c-1_i32(_[0-9]+)?}},
       ttg.local_load %arg0 : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
       ttg.warp_return
     } : (!ttg.memdesc<128x128xf16, #shared, #smem, mutable>, tensor<128x128x!tt.ptr<f16>, #blocked>) -> ()
@@ -1380,8 +1380,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: call {{.*}}fill_global_tensor{{.*}}(%[[WRT_COMMITS_GLOB]], %c0_i8
 
     // CHECK: tt.call @__triton_consan_verify_write_visibility_nw1
-    // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
-    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}%[[THREAD_BIT]], %[[WRT_COMMITS_GLOB]]
+    // CHECK: %[[NO_EXCLUDED_THREAD:.*]] = arith.constant -1 : i32
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}%[[NO_EXCLUDED_THREAD]], %[[WRT_COMMITS_GLOB]]
     // CHECK: tt.call @__triton_consan_verify_read_visibility_nw1
     // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
     // CHECK: tt.call @__triton_consan_stage_access_for_commit_nw1{{.*}}%[[THREAD_BIT]], %[[WRT_COMMITS_GLOB]]
@@ -1413,8 +1413,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_init_barrier_state
 
     // CHECK: tt.call @__triton_consan_verify_write_visibility
-    // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
-    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}%[[THREAD_BIT]], %[[WRT_COMMITS_GLOB]]
+    // CHECK: %[[NO_EXCLUDED_THREAD:.*]] = arith.constant -1 : i32
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}%[[NO_EXCLUDED_THREAD]], %[[WRT_COMMITS_GLOB]]
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{[^,]+}}
     // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
     // CHECK: tt.call @__triton_consan_stage_access_for_commit{{.*}}%[[THREAD_BIT]], %[[WRT_COMMITS_GLOB]]

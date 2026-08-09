@@ -274,6 +274,40 @@ std::tuple<Block *, Block *, Block *> createIfBlock(ImplicitLocOpBuilder &b,
   return {prevBlock, ifBlock, thenBlock};
 }
 
+SmallVector<Value> createIfElseValues(
+    ImplicitLocOpBuilder &b, Value cnd, ArrayRef<Type> resultTypes,
+    std::function<SmallVector<Value>(ImplicitLocOpBuilder &)> buildTrue,
+    std::function<SmallVector<Value>(ImplicitLocOpBuilder &)> buildFalse) {
+  Block *prevBlock = b.getInsertionBlock();
+  Block *continueBlock = prevBlock->splitBlock(b.getInsertionPoint());
+  Block *trueBlock = new Block();
+  Block *falseBlock = new Block();
+  Region *region = prevBlock->getParent();
+  region->getBlocks().insert(continueBlock->getIterator(), trueBlock);
+  region->getBlocks().insert(continueBlock->getIterator(), falseBlock);
+  SmallVector<Location> resultLocations(resultTypes.size(), b.getLoc());
+  continueBlock->addArguments(resultTypes, resultLocations);
+
+  b.setInsertionPointToEnd(prevBlock);
+  cf::CondBranchOp::create(b, cnd, trueBlock, ValueRange{}, falseBlock,
+                           ValueRange{});
+
+  b.setInsertionPointToStart(trueBlock);
+  SmallVector<Value> trueResults = buildTrue(b);
+  cf::BranchOp::create(b, continueBlock, trueResults);
+
+  b.setInsertionPointToStart(falseBlock);
+  SmallVector<Value> falseResults = buildFalse(b);
+  cf::BranchOp::create(b, continueBlock, falseResults);
+
+  b.setInsertionPointToStart(continueBlock);
+  SmallVector<Value> results;
+  results.reserve(resultTypes.size());
+  for (BlockArgument result : continueBlock->getArguments())
+    results.push_back(result);
+  return results;
+}
+
 Value createConvertLayout(ImplicitLocOpBuilder &b, Value tensor,
                           Attribute encoding) {
   auto tensorType = cast<RankedTensorType>(tensor.getType());
@@ -3417,21 +3451,20 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   auto commitsType = cast<RankedTensorType>(outstandingCommits.type);
-  Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
+  Value excludedThreadVal =
+      arith::ConstantIntOp::create(b, excludeSelf ? thread : -1, 32);
   std::string message =
       "Accessing buffer with pending access. Pending access type: " +
       pendingAccessType.str();
   AssertInfo assertInfo{message, b.getI1Type()};
-  SmallVector<Value> args = {bufferMask, pred, threadVal,
+  SmallVector<Value> args = {bufferMask, pred, excludedThreadVal,
                              outstandingCommits.value, effectCTAs};
-  std::string funcName = excludeSelf ? "check_outstanding_commits_excl_self"
-                                     : "check_outstanding_commits";
   createCallToCachedFunction(
-      b, funcName, args, assertInfo, {commitsType},
-      [commitsType, excludeSelf](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      b, "check_outstanding_commits", args, assertInfo, {commitsType},
+      [commitsType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value checkMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
-        Value threadVal = entryBlock->getArgument(2);
+        Value excludedThread = entryBlock->getArgument(2);
         Value outstandingCommitsPtr = entryBlock->getArgument(3);
         Value effectCTAs = entryBlock->getArgument(4);
 
@@ -3445,12 +3478,23 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
             tti::createConstIntTensor(fb, fb.getLoc(), 0, commitsType);
         Value selectedRows = arith::SelectOp::create(
             fb, checkMask, outstandingCommits, zeroTensor);
-        if (excludeSelf) {
-          Value threadColumnMask =
-              createDimMask(fb, threadVal, commitsType, /*dim=*/2);
-          selectedRows = arith::SelectOp::create(fb, threadColumnMask,
-                                                 zeroTensor, selectedRows);
-        }
+        Value zeroThread = arith::ConstantIntOp::create(fb, 0, 32);
+        Value hasExcludedThread = arith::CmpIOp::create(
+            fb, arith::CmpIPredicate::sge, excludedThread, zeroThread);
+        selectedRows =
+            createIfElseValues(
+                fb, hasExcludedThread, {commitsType},
+                [&](ImplicitLocOpBuilder &ifBuilder) {
+                  Value threadColumnMask = createDimMask(
+                      ifBuilder, excludedThread, commitsType, /*dim=*/2);
+                  Value withoutExcludedThread = arith::SelectOp::create(
+                      ifBuilder, threadColumnMask, zeroTensor, selectedRows);
+                  return SmallVector<Value>{withoutExcludedThread};
+                },
+                [&](ImplicitLocOpBuilder &) {
+                  return SmallVector<Value>{selectedRows};
+                })
+                .front();
         Value selectedEqZero = arith::CmpIOp::create(
             fb, arith::CmpIPredicate::eq, selectedRows, zeroTensor);
         Value allSelectedEqZero = reduceAll<arith::AndIOp>(fb, selectedEqZero);
