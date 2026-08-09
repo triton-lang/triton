@@ -507,6 +507,7 @@ def MaskedLoadOp : TT_AMDGPU_Op<"masked_load", []> {
     LLVM_Type:$falseVal,
     Optional<I32>:$multicastMask,
     DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+    DefaultValuedAttr<BoolAttr, "false">:$isVolatile,
     DefaultValuedAttr<BoolAttr, "false">:$forceNoAlias
   );
 
@@ -515,6 +516,7 @@ def MaskedLoadOp : TT_AMDGPU_Op<"masked_load", []> {
   let assemblyFormat = [{
     $ptr `,` $mask `,` $falseVal (`,` $multicastMask^)?
     oilist(`cacheModifier` `=` $cache)
+    (`volatile` $isVolatile^)?
     (`forceNoAlias` $forceNoAlias^)?
     attr-dict `:` functional-type(operands, results)
   }];

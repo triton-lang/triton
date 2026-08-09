@@ -35,6 +35,21 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+// Volatile semantics cannot be represented by the cluster load intrinsic, so
+// volatile loads must use regular LLVM loads instead.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0], [0, 0], [0, 0]]}>
+module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32} {
+  // CHECK-LABEL: volatile_load_no_cluster
+  tt.func public @volatile_load_no_cluster(%arg0: tensor<32x32x!tt.ptr<f16>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>}) {
+    // CHECK-NOT: llvm.amdgcn.cluster.load
+    // CHECK: llvm.load volatile
+    %6 = tt.load %arg0 {isVolatile = true} : tensor<32x32x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 // 16 CTAs with communication groups {0,1,4,5,8,9,12,13} and
 // {2,3,6,7,10,11,14,15}. The eight-bit masks exceed gfx1250's limit of five
 // bits, so split each group into four-CTA subgroups selected by CTA id bit 3.
