@@ -596,3 +596,107 @@ tt.func @prologue_output(%ub: i32) {
 
   tt.return
 }
+
+// -----
+
+// CHECK-LABEL: @do_not_hoist_bound_load_across_store
+// CHECK-NOT: tt.load
+// CHECK: scf.for
+// CHECK-NEXT: [[BOUND:%.*]] = tt.load
+// CHECK-NEXT: scf.for {{.*}} to [[BOUND]]
+// CHECK: tt.store
+tt.func @do_not_hoist_bound_load_across_store(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c2_i32 = arith.constant 2 : i32
+  scf.for %i = %c0_i32 to %c2_i32 step %c1_i32 : i32 {
+    %bound = tt.load %ptr : !tt.ptr<i32>
+    scf.for %j = %c0_i32 to %bound step %c1_i32 : i32 {
+      %out_ptr = tt.addptr %out, %j : !tt.ptr<i32>, i32
+      tt.store %out_ptr, %j : !tt.ptr<i32>
+    }
+    %next = arith.addi %bound, %c1_i32 : i32
+    tt.store %ptr, %next : !tt.ptr<i32>
+  } {tt.flatten}
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @do_not_slice_bound_load_across_store
+// CHECK: scf.for
+// CHECK-NEXT: arith.muli
+// CHECK-NEXT: tt.addptr
+// CHECK-NEXT: [[BOUND:%.*]] = tt.load
+// CHECK-NEXT: scf.for {{.*}} to [[BOUND]]
+// CHECK: tt.store
+// CHECK-NOT: tt.load
+// CHECK: tt.return
+tt.func @do_not_slice_bound_load_across_store(
+    %ptr: !tt.ptr<i32>, %stride: i32, %out: !tt.ptr<i32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c2_i32 = arith.constant 2 : i32
+  scf.for %i = %c0_i32 to %c2_i32 step %c1_i32 : i32 {
+    %offset = arith.muli %i, %stride : i32
+    %iter_ptr = tt.addptr %ptr, %offset : !tt.ptr<i32>, i32
+    %bound = tt.load %iter_ptr : !tt.ptr<i32>
+    scf.for %j = %c0_i32 to %bound step %c1_i32 : i32 {
+      %out_ptr = tt.addptr %out, %j : !tt.ptr<i32>, i32
+      tt.store %out_ptr, %j : !tt.ptr<i32>
+    }
+    %next = arith.addi %bound, %c1_i32 : i32
+    tt.store %iter_ptr, %next : !tt.ptr<i32>
+  } {"ttg.always-fuse"}
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @hoist_bound_load_in_read_only_loop
+// CHECK: tt.load %arg0
+// CHECK: scf.for
+// CHECK-NOT: scf.for
+// CHECK: tt.return
+tt.func @hoist_bound_load_in_read_only_loop(%bound_ptr: !tt.ptr<i32>, %data_ptr: !tt.ptr<i32>) -> i32 {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %result = scf.for %i = %c0_i32 to %c2_i32 step %c1_i32 iter_args(%acc = %c0_i32) -> i32 : i32 {
+    %bound = tt.load %bound_ptr : !tt.ptr<i32>
+    %next = scf.for %j = %c0_i32 to %bound step %c1_i32 iter_args(%sum = %acc) -> i32 : i32 {
+      %value = tt.load %data_ptr : !tt.ptr<i32>
+      %new_sum = arith.addi %sum, %value : i32
+      scf.yield %new_sum : i32
+    }
+    scf.yield %next : i32
+  } {"ttg.always-fuse"}
+  tt.return %result : i32
+}
+
+// -----
+
+#smem = #ttg.shared_memory
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+
+// CHECK-LABEL: @hoist_bound_load_across_shared_store
+// CHECK: tt.load %arg0
+// CHECK: scf.for
+// CHECK: ttg.local_store
+// CHECK-NOT: scf.for
+// CHECK: tt.return
+tt.func @hoist_bound_load_across_shared_store(
+    %bound_ptr: !tt.ptr<i32>,
+    %buffer: !ttg.memdesc<1xi32, #shared, #smem, mutable>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %value = arith.constant dense<1> : tensor<1xi32>
+  scf.for %i = %c0_i32 to %c2_i32 step %c1_i32 : i32 {
+    %bound = tt.load %bound_ptr : !tt.ptr<i32>
+    scf.for %j = %c0_i32 to %bound step %c1_i32 : i32 {
+      ttg.local_store %value, %buffer : tensor<1xi32> -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
+    }
+  } {"ttg.always-fuse"}
+  tt.return
+}
