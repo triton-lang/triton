@@ -458,10 +458,24 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #frontier_src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8200 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
-  // The helper consumes the analysis-derived completion mask directly.
-  // CHECK-LABEL: tt.func private @__triton_consan_track_proxy_accesses_for_buffer
-  // CHECK-SAME: %arg8: tensor<8xi1{{.*}}, %arg9: i32
+  // Filtered and unfiltered tracking with compatible state types share one
+  // helper. The mode controls both source filtering and the exact store mask.
+  // CHECK: tt.func private @[[$TRACK_PROXY:__triton_consan_track_proxy_accesses_[^(]+]]
+  // CHECK-SAME: %arg8: tensor<8xi1{{.*}}, %arg9: i32, %arg10: i1
+  // CHECK: cf.cond_br %arg10,
   // CHECK: ttg.convert_layout %arg8 {force_warp_shuffle}
+  // CHECK: cf.br ^[[PROXY_SOURCE_JOIN:bb[0-9]+]](%{{.*}} : tensor<
+  // CHECK: cf.br ^[[PROXY_SOURCE_JOIN]](%{{.*}} : tensor<
+  // CHECK: ^[[PROXY_SOURCE_JOIN]](
+  // CHECK: %[[PROXY_BARRIER_CTA_MASK:.*]] = arith.cmpi ne,
+  // CHECK-NEXT: %[[PROXY_TRACK_MASK:.*]] = arith.andi {{.*}}, %[[PROXY_BARRIER_CTA_MASK]]
+  // CHECK-NEXT: cf.cond_br %arg10,
+  // CHECK: %[[FILTER_EFFECT_MASK:.*]] = arith.cmpi ne,
+  // CHECK-NEXT: %[[FILTERED_TRACK_MASK:.*]] = arith.andi {{.*}}, %[[FILTER_EFFECT_MASK]]
+  // CHECK-NEXT: cf.br ^[[PROXY_MASK_JOIN:bb[0-9]+]](%[[FILTERED_TRACK_MASK]], %[[FILTERED_TRACK_MASK]]
+  // CHECK: cf.br ^[[PROXY_MASK_JOIN]](%[[PROXY_TRACK_MASK]], %[[PROXY_BARRIER_CTA_MASK]]
+  // CHECK: ^[[PROXY_MASK_JOIN]](
+  // CHECK-NOT: tt.func private @__triton_consan_track_proxy_accesses_
   // CHECK-LABEL: @tma_completion_tracks_contained_proxy_frontier
   tt.func public @tma_completion_tracks_contained_proxy_frontier(
       %desc: !tt.tensordesc<1024xi32, #frontier_shared>) {
@@ -482,6 +496,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
         : () -> !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
     ttng.init_barrier %bar, 1
         : !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
+    // Unfiltered tracking passes a synthetic full buffer mask and runtime
+    // false mode to the shared helper.
+    // CHECK: %[[FULL_PROXY_MASK:.*]] = arith.constant dense<true> : tensor<8xi1
+    // CHECK: %[[UNFILTERED_PROXY_MODE:.*]] = arith.constant false
+    // CHECK-NEXT: tt.call @[[$TRACK_PROXY]]({{.*}}%[[FULL_PROXY_MASK]], {{.*}}, %[[UNFILTERED_PROXY_MODE]])
     ttng.barrier_expect %bar, 4096, %true
         : !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
     ttng.fence_async_shared {bCluster = false}
@@ -490,9 +509,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %unrelated = ttg.local_alloc %value {allocation.offset = 4608 : i32}
         : (tensor<128xi32, #frontier_src>) -> !ttg.memdesc<128xi32, #frontier_shared, #frontier_smem, mutable>
 
-    // CHECK: arith.constant dense<[true, true, true, false, false, false, false, false]> : tensor<8xi1
+    // CHECK: %[[FILTERED_PROXY_MASK:.*]] = arith.constant dense<[true, true, true, false, false, false, false, false]> : tensor<8xi1
     // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer
-    // CHECK: tt.call @__triton_consan_track_proxy_accesses_for_buffer
+    // CHECK: %[[FILTERED_PROXY_MODE:.*]] = arith.constant true
+    // CHECK-NEXT: tt.call @[[$TRACK_PROXY]]({{.*}}%[[FILTERED_PROXY_MASK]], {{.*}}, %[[FILTERED_PROXY_MODE]])
     // CHECK: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %desc[%c0] %dst, %bar, %true
         : !tt.tensordesc<1024xi32, #frontier_shared>,
