@@ -292,11 +292,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: ttng.wait_barrier
     // CHECK: tt.call @__triton_consan_complete_barrier_wait
     ttng.wait_barrier %bar, %c0, %true : !ttg.memdesc<1xi64, #proxy_bar_shared, #proxy_smem, mutable>
-    // CHECK: %[[CTA_FENCE_MODE:false_[0-9]+]] = arith.constant false
+    // CHECK: %[[CTA_FENCE_MODE:false(_[0-9]+)?]] = arith.constant false
     // CHECK-NEXT: tt.call @[[$FENCE_PROXY]]({{.*}}, %[[CTA_FENCE_MODE]])
     ttng.fence_async_shared {bCluster = false}
-    // CHECK: %[[CLUSTER_FENCE_THREAD:c0_i32_[0-9]+]] = arith.constant 0 : i32
-    // CHECK-NEXT: %[[CLUSTER_FENCE_MODE:true_[0-9]+]] = arith.constant true
+    // CHECK: %[[CLUSTER_FENCE_THREAD:c0_i32(_[0-9]+)?]] = arith.constant 0 : i32
+    // CHECK-NEXT: %[[CLUSTER_FENCE_MODE:true(_[0-9]+)?]] = arith.constant true
     // CHECK-NEXT: tt.call @[[$FENCE_PROXY]](%[[CLUSTER_FENCE_THREAD]], {{.*}}, %[[CLUSTER_FENCE_MODE]])
     ttng.fence_async_shared {bCluster = true}
     // CHECK: tt.call @__triton_consan_verify_proxy_access
