@@ -67,8 +67,7 @@ getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm, MemoryOp op);
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
              Value pred, Value falseVal, Value multicastMask,
              triton::CacheModifier cm = triton::CacheModifier::NONE,
-             bool isVolatile = false,
-             bool forceNoAliasAsyncLoads = false);
+             bool isVolatile = false, bool forceNoAliasAsyncLoads = false);
 
 // Stores to shared or global memory with predication.
 // forceNoAliasAsyncLoads=true adds alias information to the llvm.store to
