@@ -138,3 +138,155 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// CHECK-LABEL: break_at_store
+// CHECK: tt.store
+// CHECK: arith.cmpi
+// CHECK: tt.splat
+// CHECK: tt.load
+// CHECK: ttg.local_alloc
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 16, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @break_at_store(%ptrs: tensor<32x128x!tt.ptr<f16>, #blocked>,
+                          %value: tensor<32x128xf16, #blocked>, %arg2: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    tt.store %ptrs, %value : tensor<32x128x!tt.ptr<f16>, #blocked>
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<1x32x128xf16, #shared, #smem, mutable>
+    %1 = arith.cmpi sgt, %arg2, %c0_i32 : i32
+    %2 = tt.splat %1 : i1 -> tensor<32x128xi1, #blocked>
+    %3 = tt.load %ptrs, %2 {amd.pipeliner_part = "prologue"} : tensor<32x128x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: break_at_nested_store
+// CHECK: scf.if
+// CHECK: tt.store
+// CHECK: arith.cmpi
+// CHECK: tt.splat
+// CHECK: tt.load
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 16, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @break_at_nested_store(%ptrs: tensor<32x128x!tt.ptr<f16>, #blocked>,
+                                 %value: tensor<32x128xf16, #blocked>, %predicate: i1, %arg3: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    scf.if %predicate {
+      tt.store %ptrs, %value : tensor<32x128x!tt.ptr<f16>, #blocked>
+    }
+    %0 = arith.cmpi sgt, %arg3, %c0_i32 : i32
+    %1 = tt.splat %0 : i1 -> tensor<32x128xi1, #blocked>
+    %2 = tt.load %ptrs, %1 {amd.pipeliner_part = "prologue"} : tensor<32x128x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: break_at_unknown_effect
+// CHECK: tt.call @overwrite
+// CHECK: arith.cmpi
+// CHECK: tt.splat
+// CHECK: tt.load
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 16, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func private @overwrite(%ptrs: tensor<32x128x!tt.ptr<f16>, #blocked>,
+                             %value: tensor<32x128xf16, #blocked>) {
+    tt.store %ptrs, %value : tensor<32x128x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+
+  tt.func @break_at_unknown_effect(%ptrs: tensor<32x128x!tt.ptr<f16>, #blocked>,
+                                   %value: tensor<32x128xf16, #blocked>, %arg2: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    tt.call @overwrite(%ptrs, %value) : (tensor<32x128x!tt.ptr<f16>, #blocked>, tensor<32x128xf16, #blocked>) -> ()
+    %0 = arith.cmpi sgt, %arg2, %c0_i32 : i32
+    %1 = tt.splat %0 : i1 -> tensor<32x128xi1, #blocked>
+    %2 = tt.load %ptrs, %1 {amd.pipeliner_part = "prologue"} : tensor<32x128x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: move_across_shared_store
+// CHECK: arith.cmpi
+// CHECK: tt.splat
+// CHECK: tt.load
+// CHECK: ttg.local_store
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 16, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @move_across_shared_store(%ptrs: tensor<32x128x!tt.ptr<f16>, #blocked>,
+                                    %value: tensor<32x128xf16, #blocked>,
+                                    %buffer: !ttg.memdesc<32x128xf16, #shared, #smem, mutable>, %arg3: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    ttg.local_store %value, %buffer : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+    %0 = arith.cmpi sgt, %arg3, %c0_i32 : i32
+    %1 = tt.splat %0 : i1 -> tensor<32x128xi1, #blocked>
+    %2 = tt.load %ptrs, %1 {amd.pipeliner_part = "prologue"} : tensor<32x128x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: move_across_l2_prefetch
+// CHECK: arith.cmpi
+// CHECK: tt.splat
+// CHECK: tt.load
+// CHECK: amdg.tdm_prefetch
+// CHECK: ttg.local_alloc
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 16, order = [1, 0]}>
+#desc_shared = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [64, 64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @move_across_l2_prefetch(%base: !tt.ptr<f16>,
+                                    %ptrs: tensor<32x128x!tt.ptr<f16>, #blocked>, %arg2: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c_shape = arith.constant 128 : i32
+    %c_stride0 = arith.constant 128 : i64
+    %c_stride1 = arith.constant 1 : i64
+    %c_offset = arith.constant 0 : i32
+    %c_true = arith.constant true
+    %desc = tt.make_tensor_descriptor %base, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <64x64xf16, #desc_shared>
+    amdg.tdm_prefetch %desc[%c_offset, %c_offset], %c_true, speculative = false : !tt.tensordesc<64x64xf16, #desc_shared>
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<1x32x128xf16, #shared, #smem, mutable>
+    %1 = arith.cmpi sgt, %arg2, %c0_i32 : i32
+    %2 = tt.splat %1 : i1 -> tensor<32x128xi1, #blocked>
+    %3 = tt.load %ptrs, %2 {amd.pipeliner_part = "prologue"} : tensor<32x128x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: do_not_move_volatile_load
+// CHECK: ttg.local_alloc
+// CHECK: arith.cmpi
+// CHECK: tt.splat
+// CHECK: tt.load
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 16, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @do_not_move_volatile_load(%ptrs: tensor<32x128x!tt.ptr<f16>, #blocked>, %arg1: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<1x32x128xf16, #shared, #smem, mutable>
+    %1 = arith.cmpi sgt, %arg1, %c0_i32 : i32
+    %2 = tt.splat %1 : i1 -> tensor<32x128xi1, #blocked>
+    %3 = tt.load %ptrs, %2 {amd.pipeliner_part = "prologue", isVolatile = true} : tensor<32x128x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}

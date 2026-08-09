@@ -1,11 +1,12 @@
 //===----------------------------------------------------------------------===//
 // This pass moves global load ops early in the prologue for prefetching to
-// improve GEMM performance. It only affects loads marked with the
-// "amd.pipeliner_part" attribute.
+// improve GEMM performance. It only affects non-volatile loads marked with
+// the "amd.pipeliner_part" attribute.
 //
 // The pass moves each load op and its dependencies (backward slice) to the
 // earliest valid insertion point, which is after:
 //   - The defining op of the source pointer
+//   - Any operation that may modify global memory
 //   - Any atomic ops
 //   - Any barriers
 //   - Any loop ops (scf.for, scf.while)
@@ -17,6 +18,7 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/PassManager.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -32,6 +34,24 @@ namespace mlir {
 
 namespace {
 
+// Return true when moving a global load above `op` may change the value it
+// observes. Unknown effects and effects on the default resource may alias
+// global memory; explicitly disjoint resources, such as shared memory, do not.
+static bool mayModifyGlobalMemory(Operation *op) {
+  auto effects = getEffectsRecursively(op);
+  if (!effects)
+    return true;
+
+  return llvm::any_of(
+      *effects, [](const MemoryEffects::EffectInstance &effect) {
+        if (!isa<MemoryEffects::Write, MemoryEffects::Free>(effect.getEffect()))
+          return false;
+        if (effect.getResource() == SideEffects::DefaultResource::get())
+          return true;
+        return !effect.getResource()->isDisjointFrom(tt::GlobalMemory::get());
+      });
+}
+
 // Find the earliest valid insertion point for the load op in its block.
 static Block::iterator findEarlyInsertionPoint(Block *block, tt::LoadOp load) {
   Block::iterator insertPoint = block->end();
@@ -46,8 +66,9 @@ static Block::iterator findEarlyInsertionPoint(Block *block, tt::LoadOp load) {
       continue;
     }
 
-    // Break at atomic, barrier and loop ops.
-    if (isa<tt::AtomicRMWOp, tt::AtomicCASOp, tt::AtomicPollOp, gpu::BarrierOp,
+    // Break at global memory modifications, atomics, barriers and loops.
+    if (mayModifyGlobalMemory(&op) ||
+        isa<tt::AtomicRMWOp, tt::AtomicCASOp, tt::AtomicPollOp, gpu::BarrierOp,
             ttg::BarrierOp, scf::ForOp, scf::WhileOp>(&op)) {
       insertPoint = Block::iterator(&op);
     }
@@ -95,7 +116,7 @@ struct TritonAMDGPUMoveUpPrologueLoadsPass
     // Collect load ops with "amd.pipeliner_part" attribute.
     SmallVector<tt::LoadOp> prologueLoads;
     getOperation().walk([&](tt::LoadOp load) {
-      if (load->hasAttr("amd.pipeliner_part"))
+      if (load->hasAttr("amd.pipeliner_part") && !load.getIsVolatile())
         prologueLoads.push_back(load);
     });
     // Process in reverse order to maintain relative order of moved ops.
