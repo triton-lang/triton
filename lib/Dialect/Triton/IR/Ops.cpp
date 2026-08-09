@@ -81,9 +81,10 @@ struct CanonicalizeMaskedLoadPattern : public OpRewritePattern<LoadOp> {
 
     if (splatMask.getSplatValue<IntegerAttr>().getValue() == true) {
       // mask = splat(1)
-      rewriter.replaceOpWithNewOp<LoadOp>(
-          loadOp, loadOp.getType(), loadOp.getPtr(), Value(), Value(),
-          loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+      rewriter.modifyOpInPlace(loadOp, [&] {
+        loadOp.getMaskMutable().clear();
+        loadOp.getOtherMutable().clear();
+      });
     } else {
       // mask = splat(0)
 
@@ -137,9 +138,8 @@ struct CanonicalizeMaskedStorePattern : public OpRewritePattern<StoreOp> {
 
     if (splatMask.getSplatValue<IntegerAttr>().getValue() == true) {
       // mask = splat(1)
-      rewriter.replaceOpWithNewOp<StoreOp>(
-          storeOp, storeOp.getPtr(), storeOp.getValue(), storeOp.getCache(),
-          storeOp.getEvict());
+      rewriter.modifyOpInPlace(storeOp,
+                               [&] { storeOp.getMaskMutable().clear(); });
     } else {
       // mask = splat(0)
       rewriter.eraseOp(storeOp);
