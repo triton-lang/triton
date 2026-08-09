@@ -311,23 +311,9 @@ public:
       bool excludeSelf = false);
 
 private:
-  void createUpdateActiveMaskCall(ImplicitLocOpBuilder &b, Value mask,
-                                  Operation *insertPoint, bool retireThread);
-
-  void createUpdateOutstandingCommitsCall(
-      ImplicitLocOpBuilder &b, Value bufferMask, int thread, Value pred,
-      CommitKind::Kind commitKind, Operation *insertPoint,
-      bool commitAccesses);
-
   void createUpdateWaitingCall(ImplicitLocOpBuilder &b, Value mbar, int thread,
                                Value phase, Value pred,
                                Operation *insertPoint, bool setWaiting);
-
-  void createVerifyBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
-                                    Value pred, Operation *insertPoint,
-                                    Value recipientCTAs,
-                                    bool expectedInitialized,
-                                    StringRef assertMessage);
 
   void createClearOutstandingCommitsTransferCall(
       ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
