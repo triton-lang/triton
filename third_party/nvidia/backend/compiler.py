@@ -115,7 +115,7 @@ class CUDAOptions:
     # maximum number of 32-bit registers used by one thread.
     maxnreg: Optional[int] = None
     ptx_version: int = None
-    ptx_options: Optional[str] = knobs.nvidia.ptxas_options
+    ptx_options: Optional[str] = None
     ir_override: Optional[str] = None  # filename of a user-defined IR (*.{ttir|ttgir|llir|ptx})
     enable_fp_fusion: bool = True
     enable_reflect_ftz: bool = True  # ftz in libdevice
@@ -214,6 +214,9 @@ class CUDABackend(BaseBackend):
 
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
+
+        if "ptx_options" not in args:
+            args["ptx_options"] = knobs.nvidia.ptxas_options
 
         args["max_num_imprecise_acc_default"] = 2**30 if capability == 90 else 0
 
