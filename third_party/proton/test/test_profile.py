@@ -433,7 +433,7 @@ def test_cudagraph_filters_unlinked_virtual_scopes(tmp_path: pathlib.Path, data_
     assert iter_with_kernel_frame["children"][0]["metrics"]["time (ns)"] > 0
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports multi-stream CUDAGraphs")
+@_skip_cudagraph_test
 def test_cudagraph_multi_stream(tmp_path: pathlib.Path, device: str):
     """
     kernels in a cudagraph can be launched using multiple internal streams, without
