@@ -3,7 +3,6 @@
 
 #include <array>
 #include <map>
-#include <tuple>
 #include <utility>
 
 namespace mlir::triton {
@@ -19,12 +18,6 @@ public:
   }
   void addWrite(AccessT access, ScopeMaskT scopes) {
     add(/*isWrite=*/true, std::move(access), scopes);
-  }
-  void add(AccessT access, bool isRead, bool isWrite, ScopeMaskT scopes) {
-    if (isRead)
-      addRead(access, scopes);
-    if (isWrite)
-      addWrite(std::move(access), scopes);
   }
 
   ScopedMemoryFrontier &join(const ScopedMemoryFrontier &other) {
@@ -93,52 +86,6 @@ private:
   }
 
   std::array<AccessMap, 2> accesses;
-};
-
-/// Generic- and async-proxy frontiers propagated through control flow. Async
-/// accesses are retained only while they can conflict with generic accesses
-/// preceding the current function.
-template <typename AccessT, typename ScopeMaskT> struct ProxyMemoryState {
-  using Frontier = ScopedMemoryFrontier<AccessT, ScopeMaskT>;
-
-  Frontier generic;
-  Frontier async;
-  ScopeMaskT entryGenericUnfenced = 0;
-
-  ProxyMemoryState &join(const ProxyMemoryState &other) {
-    generic.join(other.generic);
-    async.join(other.async);
-    entryGenericUnfenced |= other.entryGenericUnfenced;
-    return *this;
-  }
-
-  bool operator==(const ProxyMemoryState &other) const {
-    return std::tie(generic, async, entryGenericUnfenced) ==
-           std::tie(other.generic, other.async, other.entryGenericUnfenced);
-  }
-
-  void fenceGeneric(ScopeMaskT scopes) {
-    generic.eraseScopes(scopes);
-    entryGenericUnfenced &= ~scopes;
-  }
-
-  template <typename MayAlias>
-  bool needsFenceBefore(const ProxyMemoryState &other, ScopeMaskT scope,
-                        MayAlias mayAlias) const {
-    return generic.hasHazard(other.async, scope, mayAlias);
-  }
-
-  void joinGeneric(const ProxyMemoryState &other) {
-    generic.join(other.generic);
-  }
-  void joinAsync(const ProxyMemoryState &other, ScopeMaskT scopes) {
-    async.join(other.async, scopes);
-  }
-
-  template <typename Transform> void transformAccesses(Transform transform) {
-    generic.transformAccesses(transform);
-    async.transformAccesses(transform);
-  }
 };
 
 } // namespace mlir::triton

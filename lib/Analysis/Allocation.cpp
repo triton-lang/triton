@@ -38,52 +38,6 @@ namespace mlir {
 //===----------------------------------------------------------------------===//
 namespace triton {
 
-std::pair<SmallVector<gpu::LocalMemOpTile>, SmallVector<gpu::LocalMemOpTile>>
-getScratchBufferTiles(int bitwidth, bool crossCTA, bool supportLdMatrix,
-                      bool supportStMatrix) {
-  SmallVector<gpu::LocalMemOpTile> src{{{}, {0, 1, 2}}};
-  SmallVector<gpu::LocalMemOpTile> dst = src;
-  if (bitwidth <= 32) {
-    gpu::LocalMemOpTile matrix{{0, 1}, {2, 3, 4}};
-    if (supportStMatrix)
-      src.push_back(matrix);
-    if (!crossCTA && supportLdMatrix)
-      dst.push_back(matrix);
-    if (bitwidth == 16) {
-      matrix = {{2, 3, 4}, {0, 1}};
-      if (supportStMatrix)
-        src.push_back(matrix);
-      if (!crossCTA && supportLdMatrix)
-        dst.push_back(matrix);
-    }
-  }
-  return {std::move(src), std::move(dst)};
-}
-
-ScratchBufferInfo getConvertLayoutScratchBufferInfo(gpu::ConvertLayoutOp op,
-                                                    bool supportLdMatrix,
-                                                    bool supportStMatrix) {
-  if (!cvtNeedsSharedMemory(op))
-    return {};
-  RankedTensorType srcTy = op.getSrc().getType();
-  LinearLayout src = gpu::toLinearLayout(srcTy);
-  LinearLayout dst = gpu::toLinearLayout(op.getType());
-  src = actionRemoveBroadcastedRegs(src).apply(src);
-  dst = actionRemoveBroadcastedRegs(dst).apply(dst);
-  StringAttr block = StringAttr::get(op.getContext(), "block");
-  bool crossCTA = !dst.invertAndCompose(src).isTrivialOver({block});
-  int bitwidth = getBitwidth(srcTy);
-  auto [srcTiles, dstTiles] = getScratchBufferTiles(
-      bitwidth, crossCTA, supportLdMatrix, supportStMatrix);
-  auto [scratch, _] =
-      gpu::optimalSwizzling(src, dst, srcTiles, dstTiles, bitwidth);
-  unsigned reps =
-      scratch.getInDimSize(StringAttr::get(op.getContext(), "reps"));
-  unsigned numCTAs = product(gpu::getCTASplitNum(srcTy.getEncoding()));
-  return {scratch.getTotalOutDimSize() / (reps * numCTAs) * bitwidth / 8,
-          crossCTA};
-}
-
 unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
                                        const LinearLayout &dstLayout,
                                        int bitwidth, int numBanks,

@@ -45,9 +45,39 @@ getSrcDstTiles(const TargetInfoBase &targetInfo, int bitwidth,
                bool crossCTALoads) {
   assert(bitwidth <= 128 && "bitwidth must be <= 128");
   assert(llvm::isPowerOf2_32(bitwidth) && "bitwidth must be a power of two");
-  return getScratchBufferTiles(bitwidth, crossCTALoads,
-                               targetInfo.supportLdMatrix(),
-                               targetInfo.supportStMatrix());
+  SmallVector<LocalMemOpTile> src;
+  SmallVector<LocalMemOpTile> dst;
+
+  // ld.shared/st.shared
+  auto ldstshared = LocalMemOpTile{{}, {0, 1, 2}};
+  src.push_back(ldstshared);
+  dst.push_back(ldstshared);
+
+  if (targetInfo.supportLdMatrix() || targetInfo.supportStMatrix()) {
+    // ldmatrix/stmatrix
+    if (bitwidth <= 32) {
+      auto ldstmatrix = LocalMemOpTile{{0, 1}, {2, 3, 4}};
+      if (targetInfo.supportStMatrix()) {
+        src.push_back(ldstmatrix);
+      }
+      // We do cross-CTA reads but in-CTA writes
+      // ldmatrix/stmatrix do not support cross-CTA transfers.
+      if (!crossCTALoads && targetInfo.supportLdMatrix()) {
+        dst.push_back(ldstmatrix);
+      }
+    }
+    // ldmatrix.trans/stmatrix.trans
+    if (bitwidth == 16) {
+      auto ldstmatrixtrans = LocalMemOpTile{{2, 3, 4}, {0, 1}};
+      if (targetInfo.supportStMatrix()) {
+        src.push_back(ldstmatrixtrans);
+      }
+      if (!crossCTALoads && targetInfo.supportLdMatrix()) {
+        dst.push_back(ldstmatrixtrans);
+      }
+    }
+  }
+  return {std::move(src), std::move(dst)};
 }
 
 Type getFunctionType(Type resultType, ValueRange operands) {

@@ -529,29 +529,6 @@ BufferRegionAnalysis::getAccessRegions(Value value) {
   return accesses;
 }
 
-BufferRegionAccess
-BufferRegionAnalysis::getScratchRegion(FunctionOpInterface function,
-                                       Operation *operation, uint32_t size,
-                                       bool crossCTA) const {
-  auto offset = operation->getAttrOfType<IntegerAttr>("allocation.offset");
-  if (!offset || !size)
-    return std::nullopt;
-
-  uint32_t base = offset.getInt();
-  AddressSet addresses = AddressSet::fromRange(base, size);
-  SmallVector<BufferRegion::CTAAddresses, 2> ctaAddresses;
-  unsigned numCTAs = crossCTA ? ttg::lookupNumCTAs(operation) : 1;
-  for (unsigned cta = 0; cta < numCTAs; ++cta)
-    ctaAddresses.emplace_back(cta, addresses);
-  return BufferRegionView{{base, size, std::move(ctaAddresses)},
-                          base,
-                          /*affineOffset=*/0,
-                          /*partitionBases=*/{},
-                          /*affinePartitionOffset=*/0,
-                          /*affineCTAOffset=*/0,
-                          getOperationId(function.getOperation())};
-}
-
 BufferRegionAccess BufferRegionAnalysis::translateToCallsite(
     BufferRegionAccess view, CallOpInterface call, FunctionOpInterface caller,
     FunctionOpInterface callee) const {
