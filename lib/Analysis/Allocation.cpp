@@ -149,17 +149,23 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
 std::optional<bool> hasCrossCTAScratch(Operation *op) {
   if (!op->hasAttr("allocation.size"))
     return std::nullopt;
-  auto cvt = dyn_cast<gpu::ConvertLayoutOp>(op);
-  if (cvt) {
-    LinearLayout src = gpu::toLinearLayout(cvt.getSrc().getType());
-    LinearLayout dst = gpu::toLinearLayout(cvt.getType());
-    src = actionRemoveBroadcastedRegs(src).apply(src);
-    dst = actionRemoveBroadcastedRegs(dst).apply(dst);
+  if (auto cvt = dyn_cast<gpu::ConvertLayoutOp>(op)) {
     auto block = StringAttr::get(op->getContext(), "block");
-    return !dst.invertAndCompose(src).isTrivialOver({block});
+    return !isCvtDimSync(gpu::toLinearLayout(cvt.getSrc().getType()),
+                         gpu::toLinearLayout(cvt.getType()), block);
   }
   if (auto reduce = dyn_cast<ReduceOp>(op))
     return !ReduceOpHelper(reduce).isReduceWithinCTA();
+  if (isa<AtomicPollOp>(op))
+    return gpu::lookupNumCTAs(op) > 1;
+  if (isa<AtomicOpInterface, gpu::LocalAtomicScatterRMWOp>(op)) {
+    auto resultTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+    if (!resultTy)
+      return gpu::lookupNumCTAs(op) > 1;
+    auto block = StringAttr::get(op->getContext(), "block");
+    return gpu::toLinearLayout(resultTy).getFreeVariableMasks().lookup(block) !=
+           0;
+  }
   return false;
 }
 
