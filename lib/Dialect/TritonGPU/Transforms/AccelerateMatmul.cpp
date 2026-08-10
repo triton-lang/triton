@@ -896,13 +896,12 @@ public:
     // back to mxf8f6f4 if either operand is not K-packed. The mxf8f6f4
     // shared-memory packing format requires padding for every fp4 operand,
     // even if the operand is K packed.
-    bool isFp4MMAUsingMxf8f6f4 = hasMNMajorFp4Operand;
     bool isMMAv5Fp4PaddedLhs =
-        isFp4MMAUsingMxf8f6f4 ||
+        hasMNMajorFp4Operand ||
         (IsAMixedPrecFp4 && (requiresFp4Padding || blockM == 64 ||
                              blockK == 32 || !dotOp.getLhsKPack()));
     bool isMMAv5Fp4PaddedRhs =
-        isFp4MMAUsingMxf8f6f4 ||
+        hasMNMajorFp4Operand ||
         (IsBMixedPrecFp4 &&
          (requiresFp4Padding || blockK == 32 || !dotOp.getRhsKPack()));
 
