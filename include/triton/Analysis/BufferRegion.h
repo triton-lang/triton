@@ -9,6 +9,8 @@
 
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/IR/Value.h"
+#include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -130,6 +132,9 @@ struct BufferRegionView {
            region.contains(other.region);
   }
 
+  BufferRegionView translated(uint32_t offset,
+                              uint32_t newAllocationFrame) const;
+
 private:
   auto key() const {
     return std::tie(allocationFrame, region, storageBase, affineOffset,
@@ -145,6 +150,9 @@ public:
     return key() < other.key();
   }
 };
+
+/// An exact access view, or no view when the physical region is unknown.
+using BufferRegionAccess = std::optional<BufferRegionView>;
 
 //===----------------------------------------------------------------------===//
 // Buffer state planning
@@ -257,6 +265,16 @@ public:
   const RegionInfo &getRegionInfo(Value value) {
     return getLatticeElement(value)->getValue();
   }
+
+  /// Return every exact view an access may reference. A null view represents
+  /// an unknown region and therefore may alias any other view.
+  llvm::SmallVector<BufferRegionAccess> getAccessRegions(Value value);
+
+  /// Translate a callee-local view into the caller's allocation frame.
+  BufferRegionAccess translateToCallsite(BufferRegionAccess view,
+                                         CallOpInterface call,
+                                         FunctionOpInterface caller,
+                                         FunctionOpInterface callee) const;
 
   uint32_t getOperationId(Operation *operation) const {
     return operationInterner.idFor(operation);
