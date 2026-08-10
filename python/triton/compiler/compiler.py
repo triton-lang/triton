@@ -1,6 +1,8 @@
 from __future__ import annotations
 import hashlib
 import json
+from types import ModuleType
+from typing import TYPE_CHECKING, Any, Callable, NoReturn
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
 from ..backends.compiler import Language
@@ -17,6 +19,9 @@ import os
 import time
 import copy
 
+if TYPE_CHECKING:
+    from ..runtime.jit import JITFunction
+
 # - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
 #    and any following whitespace
 # - (public\s+)? : optionally match the keyword public and any following whitespace
@@ -26,17 +31,17 @@ import copy
 #   zero or more arguments separated by commas, and capture it as group 2 (the argument list)
 # - (attributes \{[\S\s]+\})? : optionally match attributes enclosed in braces and capture it as group 3
 ptx_prototype_pattern = r"\.(?:visible|extern)\s+\.(?:entry|func)\s+(\w+)\s*\(([^)]*)\)"
-prototype_pattern = {
+prototype_pattern: dict[str, str] = {
     "ptx": ptx_prototype_pattern,
 }
 
 ptx_arg_type_pattern = r"\.param\s+\.(\w+)"
-arg_type_pattern = {
+arg_type_pattern: dict[str, str] = {
     "ptx": ptx_arg_type_pattern,
 }
 
 
-def convert_type_repr(x):
+def convert_type_repr(x: str) -> str:
     # Currently we only capture the pointer type and assume the pointer is on global memory.
     # TODO: Capture and support shared memory space
     match = re.search(r'!tt\.ptr<([^,]+)', x)
@@ -51,7 +56,9 @@ def convert_type_repr(x):
 
 class ASTSource:
 
-    def __init__(self, fn, signature, constexprs=None, attrs=None) -> None:
+    def __init__(self, fn: JITFunction, signature: dict[str, Any],
+                 constexprs: dict[str | tuple[int, ...], Any] | None = None,
+                 attrs: dict[tuple[int, ...], list[list[str | int]]] | None = None) -> None:
         self.fn = fn
         self.language = Language.TRITON
         self.ext = "ttir"
@@ -68,25 +75,26 @@ class ASTSource:
             if not isinstance(k, str):
                 raise TypeError("Signature keys must be string")
 
-    def hash(self):
+    def hash(self) -> str:
         sorted_sig = [v for k, v in sorted(self.signature.items())]
         get_key = lambda x: x.cache_key if hasattr(x, 'cache_key') else str(x)
         constants_key = '-'.join([get_key(v) for k, v in sorted(self.constants.items())])
         key = f"{self.fn.cache_key}-{str(self.attrs)}-{sorted_sig}-{constants_key}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
-    def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
+    def make_ir(self, target: GPUTarget, options: Any, codegen_fns: dict[str, Callable],
+                module_map: dict[str, ModuleType], context: ir.context) -> ir.module:
         from .code_generator import ast_to_ttir
         return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
                            module_map=module_map)
 
-    def parse_options(self):
+    def parse_options(self) -> dict[str, Any]:
         return dict()
 
 
 class IRSource:
 
-    def __init__(self, path, context, backend):
+    def __init__(self, path: str, context: ir.context, backend: BaseBackend) -> None:
         self.path = path
         path = Path(path)
         self.ext = path.suffix[1:]
@@ -111,14 +119,15 @@ class IRSource:
             func_ty = self.module.get_function_signature(funcOp)
             self.signature = {k: ty for k, ty in enumerate(func_ty)}
 
-    def hash(self):
+    def hash(self) -> str:
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
-    def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
+    def make_ir(self, target: GPUTarget, options: Any, codegen_fns: dict[str, Callable],
+                module_map: dict[str, ModuleType], context: ir.context) -> ir.module:
         self.module.context = context
         return self.module
 
-    def parse_options(self):
+    def parse_options(self) -> dict[str, Any]:
         if self.ext == "ttgir":
             num_warps = self.module.get_int_attr("ttg.num-warps")
             assert num_warps is not None, "Unable to parse ttg.num-warps attribute"
@@ -131,11 +140,11 @@ class IRSource:
 
 
 @functools.lru_cache()
-def max_shared_mem(device):
+def max_shared_mem(device: int) -> int:
     return driver.active.utils.get_device_properties(device)["max_shared_mem"]
 
 
-def parse(full_name, ext, context):
+def parse(full_name: str, ext: str, context: ir.context) -> Any:
     if ext == "ttir" or ext == "ttgir":
         module = ir.parse_mlir_module(full_name, context)
         module.context = context
@@ -146,7 +155,7 @@ def parse(full_name, ext, context):
         return Path(full_name).read_bytes()
 
 
-def filter_traceback(e: BaseException):
+def filter_traceback(e: BaseException) -> None:
     """
     Removes code_generator.py and related files from tracebacks.
 
@@ -223,7 +232,8 @@ class CompileTimer:
         )
 
 
-def compile(src, target=None, options=None, _env_vars=None):
+def compile(src: ASTSource | str, target: GPUTarget | None = None, options: dict[str, Any] | None = None,
+            _env_vars: dict[str, str] | None = None) -> CompiledKernel:
     compilation_listener = knobs.compilation.listener
     if compilation_listener:
         timer = CompileTimer()
@@ -290,7 +300,8 @@ def compile(src, target=None, options=None, _env_vars=None):
     stages = dict()
     backend.add_stages(stages, options, src.language)
     first_stage = list(stages.keys()).index(src.ext)
-    # when the source is an IR file, don't apply the passes related to this stage. This makes it easier to write IR level tests.
+    # when the source is an IR file, don't apply the passes related to this stage.
+    # This makes it easier to write IR level tests.
     if ir_source:
         first_stage += 1
 
@@ -373,23 +384,23 @@ def make_backend(target: GPUTarget) -> BaseBackend:
 
 class LazyDict:
 
-    def __init__(self, data):
+    def __init__(self, data: dict[str, Any]) -> None:
         self.data = data
-        self.extras = []
+        self.extras: list[tuple[Callable, tuple[Any, ...]]] = []
 
-    def get(self):
+    def get(self) -> dict[str, Any]:
         for func, args in self.extras:
             self.data = self.data | func(*args)
         self.extras.clear()
         return self.data
 
-    def add(self, func, args):
+    def add(self, func: Callable, args: tuple[Any, ...]) -> None:
         self.extras.append((func, args))
 
 
 class AsmDict(dict):
 
-    def __missing__(self, key):
+    def __missing__(self, key: str) -> str | bytes:
 
         if key == "sass":
             value = get_sass(self["cubin"])
@@ -400,13 +411,13 @@ class AsmDict(dict):
         return value
 
 
-def _raise_error(err, *args, **kwargs):
+def _raise_error(err: BaseException, *args: Any, **kwargs: Any) -> NoReturn:
     raise copy.deepcopy(err)
 
 
 class CompiledKernel:
 
-    def __init__(self, src, metadata_group, hash):
+    def __init__(self, src: ASTSource | IRSource, metadata_group: dict[str, str], hash: str) -> None:
         from collections import namedtuple
         metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
         metadata = json.loads(metadata_path.read_text())
@@ -414,29 +425,30 @@ class CompiledKernel:
         target = metadata['target']
         metadata['target'] = GPUTarget(target['backend'], target['arch'], target['warp_size'])
         KernelMetadata = namedtuple('KernelMetadata', sorted(list(metadata.keys())))
-        self.metadata = KernelMetadata(**metadata)
+        self.metadata: Any = KernelMetadata(**metadata)
         backend = make_backend(self.metadata.target)
-        self.packed_metadata = backend.pack_metadata(self.metadata)
-        self.src = src
-        self.hash = hash
-        self.name = self.metadata.name
+        self.packed_metadata: Any = backend.pack_metadata(self.metadata)
+        self.src: ASTSource | IRSource = src
+        self.hash: str = hash
+        self.name: str = self.metadata.name
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
         binary_ext = backend.binary_ext
-        self.asm = AsmDict({
-            file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
+        self.asm: AsmDict = AsmDict({
+            file.suffix[1:]:
+            file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
             for file in asm_files
         })
-        self.metadata_group = metadata_group
-        self.kernel = self.asm[binary_ext]
+        self.metadata_group: dict[str, str] = metadata_group
+        self.kernel: bytes = self.asm[binary_ext]
         # binaries are lazily initialized
         # because it involves doing runtime things
         # (e.g., checking amount of shared memory on current device)
-        self.module = None
-        self.function = None
-        self._run = None
+        self.module: Any = None
+        self.function: Any = None
+        self._run: Callable | None = None
 
-    def __del__(self):
+    def __del__(self) -> None:
 
         if self.module is not None:
             if knobs.runtime.kernel_unload_hook is not None:
@@ -445,11 +457,11 @@ class CompiledKernel:
             driver.active.utils.unload_module(self.module)
             self.module = None
 
-    def _init_handles(self):
+    def _init_handles(self) -> None:
         if self.module is not None:
             return
 
-        def raise_(err):
+        def raise_(err: BaseException) -> NoReturn:
             # clone the exception object so that the one saved in the closure
             # of the partial function below doesn't get assigned a stack trace
             # after the subsequent raise. otherwise, the CompiledKernel instance
@@ -485,12 +497,12 @@ class CompiledKernel:
             knobs.runtime.kernel_load_end_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
 
     @property
-    def run(self):
+    def run(self) -> Callable:
         if self._run is None:
             self._init_handles()
         return self._run
 
-    def launch_metadata(self, grid, stream, *args):
+    def launch_metadata(self, grid: tuple[int, int, int], stream: int, *args: Any) -> LazyDict | None:
         if knobs.runtime.launch_enter_hook is None:
             return None
         self._init_handles()
@@ -501,10 +513,10 @@ class CompiledKernel:
         ret.add(self.src.fn.launch_metadata, (grid, self.metadata, arg_dict))
         return ret
 
-    def __getitem__(self, grid):
+    def __getitem__(self, grid: tuple[int, int, int]) -> Callable:
         self._init_handles()
 
-        def runner(*args, stream=None):
+        def runner(*args: Any, stream: int | None = None) -> None:
             if stream is None:
                 device = driver.active.get_current_device()
                 stream = driver.active.get_current_stream(device)
