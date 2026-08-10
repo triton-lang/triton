@@ -842,6 +842,8 @@ private:
         Value pred = hooks.getIssuerCTAPred(b, op);
         funcBuilder.createVerifyBarrierInitializedCall(b, barrier, pred, op,
                                                        currentCTAMask(b));
+        funcBuilder.createVerifyBarrierHasNoWaitersCall(b, barrier, pred, op,
+                                                        currentCTAMask(b));
         funcBuilder.createInvalidateBarrierStateCall(b, barrier, pred, op);
         for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
           funcBuilder.createClearBarrierWriteTrackingCall(b, barrier, pred,
@@ -988,8 +990,20 @@ private:
                                      tti::FunctionBuilder &funcBuilder) {
     int baseThread = getBaseThread(thread, auxData.threadLayout);
     std::optional<MemEffectsOpInfo> opInfo = hooks.getMemEffectsOpInfo(op);
+    for (const MemoryAccess &access :
+         getMemoryAccesses(op, ttg::SharedKind::Barrier)) {
+      if (opInfo && llvm::any_of(opInfo->barriers, [&](const auto &barrier) {
+            return barrier.barrier == access.value;
+          }))
+        continue;
+      funcBuilder.createVerifyBarrierInitializedCall(
+          b, access.value, hooks.getIssuerCTAPred(b, op), op,
+          getBarrierRecipientCTAs(b, op));
+    }
     if (!opInfo)
       return success();
+    bool isBarrierLifecycle = hooks.getBarrierInitInfo(op).has_value() ||
+                              hooks.getBarrierInvalidateInfo(op).has_value();
     Value pred = opInfo->pred;
     Value issuerCTAPred = hooks.getIssuerCTAPred(b, op);
     pred = tti::maybeAnd(b, pred, issuerCTAPred);
@@ -1013,6 +1027,8 @@ private:
           auxData.bufferCandidates[static_cast<int>(materialized.memType)];
       auto candidateIt = candidateMap.find(buf);
       if (candidateIt == candidateMap.end()) {
+        if (isBarrierLifecycle)
+          continue;
         op->emitError("missing buffer-region candidates for memdesc");
         return failure();
       }
@@ -1032,6 +1048,38 @@ private:
       Value bufferMask = materialized.bufferMask;
       Value effectCTAs = materialized.effectCTAs;
       MemType memType = materialized.memType;
+
+      if (memType == MemType::SHARED_MEM && !isBarrierLifecycle) {
+        const BufferStateCandidates &candidates = candidateIt->second;
+        for (const auto &[barrier, barrierMask] : auxData.sharedBarrierMasks) {
+          Value barrierOffset = tti::ExperimentalMemoryOffsetToI32Op::create(
+              b, barrier.baseOffset, memType);
+          auto verifyAvailable = [&](Value candidatePred) {
+            funcBuilder.createVerifyBarrierMemoryAvailableCall(
+                b, barrierOffset, barrier.length, candidatePred, op,
+                effectCTAs);
+          };
+          if (candidates.unknown) {
+            verifyAvailable(pred);
+            continue;
+          }
+          for (const BufferStateCandidate &candidate : candidates.cases) {
+            if (!candidate.mask.anyCommon(barrierMask))
+              continue;
+            Value candidatePred = pred;
+            if (candidates.cases.size() > 1) {
+              Value candidateBase =
+                  tti::ExperimentalMemoryOffsetToI32Op::create(
+                      b, candidate.baseOffset, memType);
+              Value matchesBase = arith::CmpIOp::create(
+                  b, arith::CmpIPredicate::eq, runtimeBase, candidateBase);
+              candidatePred = tti::maybeAnd(b, candidatePred, matchesBase);
+            }
+            verifyAvailable(candidatePred);
+          }
+        }
+      }
+
       if (memType == MemType::SHARED_MEM) {
         if (effect.sharedKind == ttg::SharedKind::Async) {
           funcBuilder.createVerifyProxyAccessCall(b, bufferMask, baseThread,
@@ -1088,6 +1136,35 @@ private:
               ? getAsyncSharedStoreBarrierRecipientCTAs(
                     b, barrier, materializedEffects.front().effectCTAs)
               : getBarrierRecipientCTAs(b, op);
+      Value completionBufferMask;
+      if (thread != baseThread) {
+        auto &candidateMap = auxData.bufferCandidates[(int)MemType::SHARED_MEM];
+        auto candidateIt = candidateMap.find(barrier);
+        if (candidateIt == candidateMap.end()) {
+          op->emitError(
+              "missing buffer-region candidates for completion barrier");
+          return failure();
+        }
+        Value runtimeBase;
+        if (!candidateIt->second.unknown &&
+            candidateIt->second.cases.size() > 1)
+          runtimeBase = tti::ExperimentalMemDescToI32Op::create(b, barrier);
+        FailureOr<Value> stateMask =
+            createBufferStateMask(b, auxData, MemType::SHARED_MEM, runtimeBase,
+                                  candidateIt->second, op);
+        if (failed(stateMask))
+          return failure();
+        completionBufferMask = *stateMask;
+        // A deferred completion may still touch the barrier after the issuing
+        // thread advances. Model that future touch as a reader owned by the
+        // synthetic engine. Waiting publishes the reader through the existing
+        // barrier frontier; invalidation is a generic write and therefore must
+        // observe it first.
+        funcBuilder.createSetReadVisibilityCall(
+            b, completionBufferMask, thread,
+            getThreadPeersMask(thread, auxData.threadLayout), combinedPred,
+            MemType::SHARED_MEM, op, recipientCTAs);
+      }
       if (barrierInfo.count == 0 && barrierInfo.txCount == 0)
         funcBuilder.createVerifyBarrierInitializedCall(b, barrier, combinedPred,
                                                        op, recipientCTAs);
@@ -1116,6 +1193,10 @@ private:
                 op, recipientCTAs, materialized.effectCTAs);
           }
         }
+        if (completionBufferMask)
+          funcBuilder.createTrackBarrierReadForBufferCall(
+              b, barrier, completionBufferMask, thread, combinedPred,
+              MemType::SHARED_MEM, op, recipientCTAs, recipientCTAs);
       }
       if (barrierInfo.count > 0 || barrierInfo.txCount != 0) {
         funcBuilder.createVerifyAndUpdateBarrierStateCall(

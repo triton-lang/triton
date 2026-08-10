@@ -674,6 +674,9 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
 
   SmallVector<std::pair<Value, RegionInfo>> candidates[numMemTypes];
   DenseSet<Value> seenValues;
+  DenseSet<Value> lifecycleValues;
+  DenseSet<Value> payloadValues;
+  DenseSet<Value> completionBarrierValues;
   auto collectCandidates = [&](Value value) {
     if (!seenValues.insert(value).second)
       return;
@@ -694,13 +697,30 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
     auto info = hooks.getMemEffectsOpInfo(op);
     if (!info)
       return;
+    Value lifecycleValue;
+    if (auto init = hooks.getBarrierInitInfo(op))
+      lifecycleValue = init->alloc;
+    if (auto invalidate = hooks.getBarrierInvalidateInfo(op))
+      lifecycleValue = invalidate->alloc;
     if (info->trackingKind == MemEffectsOpInfo::TrackingKind::CommitCount &&
         info->commitKind == CommitKind::AsyncCp)
       hasAsyncCopyReads |= llvm::any_of(
           info->operandEffects,
           [](const MemEffectsOpInfo::Effects &e) { return e.rw == RW::Read; });
-    for (const auto &effect : info->operandEffects)
+    for (const auto &effect : info->operandEffects) {
       collectCandidates(effect.buf);
+      if (effect.buf == lifecycleValue)
+        lifecycleValues.insert(effect.buf);
+      else
+        payloadValues.insert(effect.buf);
+    }
+    if (hooks.isTMAOp(op) || hooks.isCLCOp(op) ||
+        isa<MMAv5OpInterface, TCGen5CommitOp, TMEMCopyOp>(op)) {
+      for (const auto &barrier : info->barriers) {
+        collectCandidates(barrier.barrier);
+        completionBarrierValues.insert(barrier.barrier);
+      }
+    }
   });
 
   analysis->calculateUsedBufferRegions(module);
@@ -715,11 +735,57 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
     SmallVector<BufferRegion> regions =
         analysis->getAllUsedBufferRegions(regionType);
     bool hasUnknown = analysis->hasUnknownUsedBufferRegions(regionType);
+
+    if (memType == MemType::SHARED_MEM) {
+      // BufferRegionAnalysis classifies a value used as an mbarrier as barrier
+      // storage globally. Recover ordinary payload uses here. Barrier bytes use
+      // the ordinary reader model only when they can alias payload or receive a
+      // deferred engine completion; isolated synchronous barriers stay on the
+      // compact barrier-specific state.
+      for (Value value : payloadValues) {
+        auto type = dyn_cast<MemDescType>(value.getType());
+        if (!type || !isa<SharedMemorySpaceAttr>(type.getMemorySpace()))
+          continue;
+        const RegionInfo &info = analysis->getLatticeElement(value)->getValue();
+        hasUnknown |= info.isUnknown();
+        for (const BufferRegionView &view : info.views)
+          regions.push_back(view.region);
+      }
+
+      llvm::sort(regions);
+      regions.erase(std::unique(regions.begin(), regions.end()), regions.end());
+      SmallVector<BufferRegion> payloadRegions = regions;
+      for (Value value : completionBarrierValues) {
+        const RegionInfo &info = analysis->getLatticeElement(value)->getValue();
+        hasUnknown |= info.isUnknown();
+        for (const BufferRegionView &view : info.views)
+          regions.push_back(view.region);
+      }
+      for (const BufferRegion &barrier : barrierRegions)
+        if (hasUnknown || llvm::any_of(payloadRegions, [&](const auto &region) {
+              return barrier.intersects(region);
+            }))
+          regions.push_back(barrier);
+      llvm::sort(regions);
+      regions.erase(std::unique(regions.begin(), regions.end()), regions.end());
+    }
+
     if (regions.empty() && !hasUnknown)
       continue;
 
     bufferStatePlans[iMemType] =
         triton::createBufferStatePlan(regions, hasUnknown);
+
+    if (memType == MemType::SHARED_MEM) {
+      for (const BufferRegion &barrier : barrierRegions) {
+        auto it = llvm::lower_bound(regions, barrier);
+        if (it == regions.end() || !(*it == barrier))
+          continue;
+        unsigned id = std::distance(regions.begin(), it);
+        sharedBarrierMasks.push_back(
+            {barrier, bufferStatePlans[iMemType].regionMasks[id]});
+      }
+    }
 
     for (const auto &[value, regionInfo] : candidates[iMemType]) {
       BufferStateCandidates stateCandidates;
@@ -728,6 +794,8 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
         const BufferRegion &candidate = view.region;
         auto it = llvm::lower_bound(regions, candidate);
         if (it == regions.end() || !(*it == candidate)) {
+          if (lifecycleValues.contains(value) && !payloadValues.contains(value))
+            continue;
           InFlightDiagnostic diag = emitError(
               value.getLoc(),
               "accessed exact buffer-region candidate is absent from the "
@@ -751,7 +819,9 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
           existing->ctaMask |= ctaMask;
         }
       }
-      bufferCandidates[iMemType].try_emplace(value, std::move(stateCandidates));
+      if (stateCandidates.unknown || !stateCandidates.cases.empty())
+        bufferCandidates[iMemType].try_emplace(value,
+                                               std::move(stateCandidates));
     }
   }
   return success();

@@ -122,6 +122,18 @@ public:
   void createVerifyBarrierInitializedCall(ImplicitLocOpBuilder &b, Value mbar,
                                           Value pred, Operation *insertPoint,
                                           Value recipientCTAs);
+  // verifyBarrierMemoryAvailable: reject ordinary shared-memory accesses that
+  // overlap initialized barrier storage.
+  void createVerifyBarrierMemoryAvailableCall(ImplicitLocOpBuilder &b,
+                                              Value offset, uint32_t length,
+                                              Value pred,
+                                              Operation *insertPoint,
+                                              Value recipientCTAs);
+  // verifyBarrierHasNoWaiters: reject invalidation while any thread is waiting
+  // on the barrier.
+  void createVerifyBarrierHasNoWaitersCall(ImplicitLocOpBuilder &b, Value mbar,
+                                           Value pred, Operation *insertPoint,
+                                           Value recipientCTAs);
   // initBarrierState: Initialize the tracked barrier state to phase 0 and set
   // both the initial and current arrival counts. A zero state denotes an
   // invalidated/uninitialized barrier.
@@ -168,6 +180,13 @@ public:
                                             Operation *insertPoint,
                                             Value barrierCTAs,
                                             Value effectCTAs);
+  // trackBarrierReadForBuffer: snapshot one buffer's current reader frontier
+  // into the barrier read-tracking table.
+  void createTrackBarrierReadForBufferCall(ImplicitLocOpBuilder &b, Value mbar,
+                                           Value bufferMask, int thread,
+                                           Value pred, MemType memType,
+                                           Operation *insertPoint,
+                                           Value barrierCTAs, Value effectCTAs);
   // clearBarrierWriteTracking: clear all write tracking associated with the
   // given barrier row.
   void createClearBarrierWriteTrackingCall(ImplicitLocOpBuilder &b, Value mbar,
