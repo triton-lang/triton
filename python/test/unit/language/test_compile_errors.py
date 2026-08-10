@@ -602,3 +602,20 @@ def test_err_histogram_non_32bit_int(ptr_ty):
             triton.compiler.ASTSource(fn=kernel, signature={"x_ptr": ptr_ty, "z_ptr": "*i32", "N": "constexpr"},
                                       constexprs={"N": 4}))
     assert "histogram only supports 32-bit integer input" in str(e.value.__cause__)
+
+
+def test_err_range_zero_step():
+
+    @triton.jit
+    def kernel(ptr, STEP: tl.constexpr):
+        acc = 0
+        for i in tl.range(0, 10, STEP):
+            acc += 1
+        tl.store(ptr, acc)
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(
+            triton.compiler.ASTSource(fn=kernel, signature={"ptr": "*i32"}, constexprs={"STEP": 0}))
+
+    err_msg = format_exception(e.type, value=e.value, tb=e.tb)
+    assert "must not be zero" in err_msg, "error should explain the zero step"
