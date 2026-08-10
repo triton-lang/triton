@@ -395,18 +395,13 @@ private:
   // xor the phase after each wait,
   // and in the end thread the updated phase through the loop yields.
   LogicalResult rewriteLoopPhases(BarrierLifecycle &lifecycle) {
-    if (llvm::none_of(lifecycle.invals, [&](ttng::InvalBarrierOp inval) {
-          SmallVector<LoopLikeOpInterface> loops;
-          getEnclosingLoops(inval, loops);
-          return !loops.empty();
-        }))
+    SmallVector<LoopLikeOpInterface> loops;
+    getEnclosingLoops(lifecycle.invals.front(), loops);
+    if (loops.empty())
       // Only loop-local invalidations require phase threading. If every
       // invalidation is already outside loops, moving them to function exits
       // does not change the phase seen by repeated loop iterations.
       return success();
-
-    SmallVector<LoopLikeOpInterface> loops;
-    getEnclosingLoops(lifecycle.invals.front(), loops);
 
     llvm::SmallPtrSet<Operation *, 4> waits;
     for (ttng::WaitBarrierOp wait : lifecycle.waits)
