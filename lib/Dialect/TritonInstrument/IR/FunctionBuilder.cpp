@@ -1435,7 +1435,6 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
   Value threadMaskVal = arith::ConstantIntOp::create(b, threadMask, 64);
   SmallVector<Value> args = {bufferMask, pred, threadMaskVal, effectCTAs};
   ManglingArgs specializationArgs;
-  specializationArgs.append(static_cast<uint64_t>(memType));
   specializationArgs.append(static_cast<uint64_t>(publishWrite));
   specializationArgs.append(static_cast<uint64_t>(clearWrites));
   specializationArgs.append(static_cast<uint64_t>(clearReads));
@@ -1561,7 +1560,7 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
                              readerMaskVal,     observerMaskVal,
                              readVisibilityVal, effectCTAs};
   RankedTensorType readTrackingType;
-  ManglingArgs specializationArgs{readVisibilityType, (uint64_t)memType,
+  ManglingArgs specializationArgs{readVisibilityType,
                                   (uint64_t)hasReadTracking};
   if (hasReadTracking) {
     ValueType tracking = auxData.readTracking[(int)memType].at(insertPoint);
@@ -1832,8 +1831,7 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
                              barrierCTAs, effectCTAs};
   createCallToCachedFunction(
       b, "track_barrier_write_for_buffer", args,
-      /*assertInfo=*/std::nullopt,
-      {barriersType, writeTrackingType, (uint64_t)memType},
+      /*assertInfo=*/std::nullopt, {barriersType, writeTrackingType},
       [writeTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value mbarLengthVal = entryBlock->getArgument(1);
@@ -2132,8 +2130,7 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
   SmallVector<Value> args = {bufferMask, pred, threadVal, writeVisibilityVal,
                              effectCTAs};
   createCallToCachedFunction(
-      b, "verify_write_visibility", args, assertInfo,
-      {writeVisibilityType, (uint64_t)memType},
+      b, "verify_write_visibility", args, assertInfo, {writeVisibilityType},
       [writeVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value bufferMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
@@ -2198,8 +2195,7 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
   SmallVector<Value> args = {bufferMask, pred, threadVal, readVisibilityVal,
                              effectCTAs};
   createCallToCachedFunction(
-      b, "verify_read_visibility", args, assertInfo,
-      {readVisibilityType, (uint64_t)memType},
+      b, "verify_read_visibility", args, assertInfo, {readVisibilityType},
       [readVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value bufferMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
@@ -2277,7 +2273,7 @@ void FunctionBuilder::createCopyWriteVisibilityCall(ImplicitLocOpBuilder &b,
                              writeVis.value};
   createCallToCachedFunction(
       b, "copy_write_visibility", args,
-      /*assertInfo=*/std::nullopt, {writeVisibilityType, (uint64_t)memType},
+      /*assertInfo=*/std::nullopt, {writeVisibilityType},
       [writeVisibilityType,
        totalNumThreads = auxData.threadLayout.totalNumThreads](
           ImplicitLocOpBuilder &fb, Block *entryBlock) {
@@ -2351,16 +2347,16 @@ void FunctionBuilder::createCopyReadVisibilityCall(ImplicitLocOpBuilder &b,
   auto readVis = auxData.readVisibility[(int)memType].at(insertPoint);
   auto readVisibilityType = cast<RankedTensorType>(readVis.type);
   Value sourceThreadVal = arith::ConstantIntOp::create(b, sourceThread, 32);
-  SmallVector<Value> args = {sourceThreadVal, pred, readVis.value};
+  Value destMaskVal = arith::ConstantIntOp::create(b, destMask, 64);
+  SmallVector<Value> args = {sourceThreadVal, destMaskVal, pred, readVis.value};
   createCallToCachedFunction(
       b, "copy_read_visibility", args,
-      /*assertInfo=*/std::nullopt,
-      {readVisibilityType, destMask, (uint64_t)memType},
-      [readVisibilityType, destMask](ImplicitLocOpBuilder &fb,
-                                     Block *entryBlock) {
+      /*assertInfo=*/std::nullopt, {readVisibilityType},
+      [readVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value sourceThread = entryBlock->getArgument(0);
-        Value pred = entryBlock->getArgument(1);
-        Value readVisibilityPtr = entryBlock->getArgument(2);
+        Value destMaskVal = entryBlock->getArgument(1);
+        Value pred = entryBlock->getArgument(2);
+        Value readVisibilityPtr = entryBlock->getArgument(3);
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
@@ -2370,8 +2366,7 @@ void FunctionBuilder::createCopyReadVisibilityCall(ImplicitLocOpBuilder &b,
         Value zeroTensor =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, readVisibilityType);
         Value destMaskTensor = createThreadColumnMask(
-            fb, arith::ConstantIntOp::create(fb, destMask, 64),
-            readVisibilityType, /*columnDim=*/3);
+            fb, destMaskVal, readVisibilityType, /*columnDim=*/3);
         Value cleared = arith::SelectOp::create(fb, destMaskTensor, zeroTensor,
                                                 readVisibility);
 
@@ -3039,14 +3034,16 @@ void FunctionBuilder::createCopyProxyAccessesCall(ImplicitLocOpBuilder &b,
   ValueType visibility = auxData.proxyAccessVisibility.at(insertPoint);
   auto visibilityType = cast<RankedTensorType>(visibility.type);
   SmallVector<Value> args = {arith::ConstantIntOp::create(b, sourceThread, 32),
+                             arith::ConstantIntOp::create(b, destMask, 64),
                              pred, visibility.value};
   createCallToCachedFunction(
       b, "copy_proxy_accesses", args, /*assertInfo=*/std::nullopt,
-      {visibilityType, destMask},
-      [visibilityType, destMask](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      {visibilityType},
+      [visibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value sourceThread = entryBlock->getArgument(0);
-        Value pred = entryBlock->getArgument(1);
-        Value visibilityPtr = entryBlock->getArgument(2);
+        Value destMaskVal = entryBlock->getArgument(1);
+        Value pred = entryBlock->getArgument(2);
+        Value visibilityPtr = entryBlock->getArgument(3);
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
@@ -3055,8 +3052,7 @@ void FunctionBuilder::createCopyProxyAccessesCall(ImplicitLocOpBuilder &b,
         Value zero =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, visibilityType);
         Value destColumns = createThreadColumnMask(
-            fb, arith::ConstantIntOp::create(fb, destMask, 64), visibilityType,
-            /*columnDim=*/3);
+            fb, destMaskVal, visibilityType, /*columnDim=*/3);
         Value cleared =
             arith::SelectOp::create(fb, destColumns, zero, visibility);
         Value sourceColumn = arith::SelectOp::create(
