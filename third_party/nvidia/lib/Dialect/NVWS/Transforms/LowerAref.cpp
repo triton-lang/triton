@@ -179,9 +179,9 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
       continue;
     auto partitionIds = getPartitionIds(user);
 
-    assert(partitionIds.size() == 1);
-
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
+      assert(partitionIds.size() == 1 &&
+             "aref producer must have exactly one partition");
       if (producerGroups.count(partitionIds.front())) {
         continue;
       }
@@ -191,6 +191,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         case AsyncOp::TC5MMA:
         case AsyncOp::TMALoad:
         case AsyncOp::NONE:
+        case AsyncOp::CLC:
           count.producerPendingCount += 1;
           break;
         default:
@@ -198,19 +199,19 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         }
       }
     } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
-      if (consumerGroups.count(partitionIds.front())) {
-        continue;
-      }
-      consumerGroups.insert(partitionIds.front());
-      for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
-        switch (kind) {
-        case AsyncOp::TC5MMA:
-        case AsyncOp::WGMMA:
-        case AsyncOp::NONE:
-          count.consumerPendingCount += 1;
-          break;
-        default:
-          llvm_unreachable("unsupported consumer kind");
+      for (int partitionId : partitionIds) {
+        if (!consumerGroups.insert(partitionId))
+          continue;
+        for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
+          switch (kind) {
+          case AsyncOp::TC5MMA:
+          case AsyncOp::WGMMA:
+          case AsyncOp::NONE:
+            count.consumerPendingCount += 1;
+            break;
+          default:
+            llvm_unreachable("unsupported consumer kind");
+          }
         }
       }
     }
@@ -353,6 +354,30 @@ void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
   }
 }
 
+void lowerCLC(ArefPutEnterOp op, Value fullBarrier, PatternRewriter &rewriter) {
+  SmallVector<nvws::CLCTryCancelOp> clcOps;
+  for (Value buffer : op.getBuffers()) {
+    for (Operation *user : buffer.getUsers()) {
+      if (auto clc = dyn_cast<nvws::CLCTryCancelOp>(user))
+        clcOps.push_back(clc);
+    }
+  }
+  assert(clcOps.size() == 1 && "expected one CLC producer per response aref");
+  auto clc = clcOps.front();
+  auto pred = arith::ConstantIntOp::create(rewriter, clc.getLoc(), 1, 1);
+  assignStageCluster(pred, getPartitionWsTagIds(clc), getStageCluster(clc),
+                     rewriter);
+  auto expect = nvidia_gpu::BarrierExpectOp::create(rewriter, clc.getLoc(),
+                                                    fullBarrier, 16, pred);
+  assignStageCluster(expect, getPartitionWsTagIds(clc), getStageCluster(clc),
+                     rewriter);
+  auto issue = nvidia_gpu::CLCTryCancelOp::create(rewriter, clc.getLoc(),
+                                                  clc.getResult(), fullBarrier);
+  assignStageCluster(issue, getPartitionWsTagIds(clc), getStageCluster(clc),
+                     rewriter);
+  clc.erase();
+}
+
 void insertWaitOp(PatternRewriter &rewriter, Operation *op, Value barrier,
                   Value phase, Value stage) {
   auto waitOp = WaitBarrierOp::create(rewriter, op->getLoc(), barrier, phase);
@@ -400,12 +425,20 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
     return kind == AsyncOp::TMALoad || kind == AsyncOp::CpAsync;
   };
   auto hasTMA = [](AsyncOp kind) { return kind == AsyncOp::TMALoad; };
+  auto hasCLC = [](AsyncOp kind) { return kind == AsyncOp::CLC; };
 
   if (llvm::any_of(asyncKinds, hasTMA)) {
     Value fullBarrier =
         getFullBarrier(rewriter, loc, arefVal, op.getStage(),
                        getPartitionWsTagIds(op), getStageCluster(op));
     lowerTMALoad(op, fullBarrier, rewriter, arefVal);
+  }
+
+  if (llvm::any_of(asyncKinds, hasCLC)) {
+    Value fullBarrier =
+        getFullBarrier(rewriter, loc, arefVal, op.getStage(),
+                       getPartitionWsTagIds(op), getStageCluster(op));
+    lowerCLC(op, fullBarrier, rewriter);
   }
 
   if (llvm::any_of(asyncKinds, hasAsyncLoad)) {
@@ -484,6 +517,7 @@ void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
                                                     Value(), ValueRange{});
       break;
     case AsyncOp::TMALoad:
+    case AsyncOp::CLC:
       // nothing to do, the arrive is done by HW
       break;
     case AsyncOp::CpAsync:
@@ -919,8 +953,9 @@ public:
     mlir::ModuleOp m = getOperation();
 
     SmallVector<scf::ForOp> loops;
-    m.walk([&](scf::ForOp loop) {
-      if (loop->hasAttr(triton::kWarpSpecializeAttrName)) {
+    m.walk([&](Operation *loop) {
+      if (isa<scf::ForOp, scf::WhileOp>(loop) &&
+          loop->hasAttr(triton::kWarpSpecializeAttrName)) {
         loop->walk([&](scf::ForOp op) { loops.push_back(op); });
       }
     });

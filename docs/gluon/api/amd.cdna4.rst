@@ -6,8 +6,15 @@ AMD CDNA 4
 .. autosummary::
     :toctree: generated
     :nosignatures:
+    :template: autosummary/gluon-module.rst
 
     async_copy
+
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
     buffer_load
     buffer_store
     buffer_atomic_add

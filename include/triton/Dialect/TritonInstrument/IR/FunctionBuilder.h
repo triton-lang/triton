@@ -148,12 +148,12 @@ public:
                                         Value pred, MemType memType,
                                         Operation *insertPoint,
                                         Value effectCTAs);
-  // setReadVisibility: add the threads set in threadMask to the buffer's read
-  // visibility bitmask.
+  // setReadVisibility: record the actual reader in the visibility columns of
+  // each observer, including any synthetic peers.
   void createSetReadVisibilityCall(ImplicitLocOpBuilder &b, Value bufferMask,
-                                   uint64_t threadMask, Value pred,
-                                   MemType memType, Operation *insertPoint,
-                                   Value effectCTAs);
+                                   int reader, uint64_t observerMask,
+                                   Value pred, MemType memType,
+                                   Operation *insertPoint, Value effectCTAs);
   // trackVisibleAccesses: snapshot the available read and write visibility
   // frontiers into their independent barrier tracking tables.
   void createTrackVisibleAccessesCall(ImplicitLocOpBuilder &b, Value mbar,

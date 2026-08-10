@@ -186,7 +186,6 @@ def right_shift_unsigned(x, shift):
 
 def get_max_quant_val(dtype: torch.dtype):
     d = {torch.uint8: 6.0, torch.float8_e5m2: 57344.0, torch.float8_e4m3fn: 448.0}
-    assert dtype in d
     return d[dtype]
 
 

@@ -34,6 +34,12 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
   if (!allocationInterval.intersects(other.allocationInterval))
     return false;
 
+  // For slices of the same allocation, compare dynamic buffer indices to prove
+  // that different slots do not overlap.
+  if (bufferId == other.bufferId && bufferId != Allocation::InvalidBufferId &&
+      areBufferIndicesProvablyDifferent(*this, other))
+    return false;
+
   // If access types are unknown, assume intersection
   if (!accessTy || !other.accessTy)
     return true;
@@ -214,6 +220,18 @@ static bool hasSyncPointBeforeMemoryEffect(Operation *op,
   return false;
 }
 
+void MembarAnalysis::updateSuccessor(Operation *terminator, Block *successor,
+                                     BlockInfo *blockInfo) {
+  if (bufferIndexAnalysis.isBackedgeSuccessor(terminator, successor))
+    bufferIndexAnalysis.invalidateBufferIndices(*blockInfo);
+}
+
+void MembarAnalysis::updateExitState(BlockInfo *blockInfo) {
+  // Function summaries are reused at every call site, so per-function SSA
+  // index identity is no longer meaningful.
+  bufferIndexAnalysis.invalidateBufferIndices(*blockInfo);
+}
+
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncMapT *funcMap, OpBuilder *builder) {
   // A later CTA-wide synchronization can also synchronize this wait, provided
@@ -269,7 +287,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           for (auto bufferId : allocation.getAllBufferIdsWithAliases(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
               auto interval = allocation.getAllocatedInterval(bufferId);
-              auto slice = AllocationSlice(value, interval, bufferId);
+              auto slice =
+                  bufferIndexAnalysis.makeSlice(value, interval, bufferId);
 
               if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
                 curBlockInfo.syncWriteSlices[slice].insert(op);

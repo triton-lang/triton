@@ -23,9 +23,9 @@ def compute_split_factor(batch, num_q_heads, seq_len_k):
 
 # Handle imports for both pytest (module context) and direct execution
 try:
-    from .gfx1250_utils import static_profile
+    from .cdna5_utils import static_profile
 except ImportError:
-    from gfx1250_utils import static_profile
+    from cdna5_utils import static_profile
 
 
 @gluon.aggregate
@@ -89,10 +89,10 @@ class AttentionProgram:
 
     q: gl.tensor
 
-    k_desc: gl.amd.gfx1250.tdm.tensor_descriptor
+    k_desc: gl.amd.cdna5.tdm.tensor_descriptor
     k_buffer: gl.shared_memory_descriptor
 
-    v_desc: gl.amd.gfx1250.tdm.tensor_descriptor
+    v_desc: gl.amd.cdna5.tdm.tensor_descriptor
     v_buffer: gl.shared_memory_descriptor
 
     o_ptr: gl.tensor
@@ -141,23 +141,23 @@ class AttentionProgram:
                   (gl.arange(0, cfg.HEAD_SZ, layout=gl.SliceLayout(0, cfg.q_layout)))[None, :])
 
         # k [HEAD_SZ, BLOCK_N]
-        k_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(base=k_ptr + stride_kz * off_z + stride_kh * off_k_head,
-                                                           shape=(cfg.SEQLEN_K, cfg.HEAD_SZ),
-                                                           strides=(stride_kn, stride_kk),
-                                                           block_shape=(cfg.BLOCK_N, cfg.HEAD_SZ),
-                                                           layout=cfg.k_smem_layout)
+        k_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(base=k_ptr + stride_kz * off_z + stride_kh * off_k_head,
+                                                         shape=(cfg.SEQLEN_K, cfg.HEAD_SZ),
+                                                         strides=(stride_kn, stride_kk),
+                                                         block_shape=(cfg.BLOCK_N, cfg.HEAD_SZ),
+                                                         layout=cfg.k_smem_layout)
         k_buffer = gl.allocate_shared_memory(k_desc.dtype, shape=[2] + k_desc.block_shape, layout=k_desc.layout)
 
         # v [BLOCK_N, BLOCK_DMODEL]
-        v_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(base=v_ptr + stride_vz * off_z + stride_vh * off_k_head,
-                                                           shape=(cfg.SEQLEN_K, cfg.HEAD_SZ),
-                                                           strides=(stride_vn, stride_vk),
-                                                           block_shape=(cfg.BLOCK_N, cfg.HEAD_SZ),
-                                                           layout=cfg.v_smem_layout)
+        v_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(base=v_ptr + stride_vz * off_z + stride_vh * off_k_head,
+                                                         shape=(cfg.SEQLEN_K, cfg.HEAD_SZ),
+                                                         strides=(stride_vn, stride_vk),
+                                                         block_shape=(cfg.BLOCK_N, cfg.HEAD_SZ),
+                                                         layout=cfg.v_smem_layout)
         v_buffer = gl.allocate_shared_memory(v_desc.dtype, shape=[2] + v_desc.block_shape, layout=v_desc.layout)
 
         q_mask = (off_m + gl.arange(0, cfg.BLOCK_M, layout=gl.SliceLayout(1, cfg.q_layout)))[:, None] < cfg.SEQLEN_Q
-        q = gl.amd.gfx1250.buffer_load(q_ptr, q_offs, mask=q_mask)
+        q = gl.amd.cdna5.buffer_load(q_ptr, q_offs, mask=q_mask)
 
         # dummy values for Program struct (unused in Decode FWD)
         o_offs = gl.zeros([cfg.BLOCK_M, cfg.HEAD_SZ], dtype=gl.int32)
@@ -191,7 +191,7 @@ class AttentionProgram:
                   (gl.arange(0, HEAD_SZ, layout=gl.SliceLayout(0, cfg.q_layout)))[None, :])
 
         # k [HEAD_SZ, BLOCK_N]
-        k_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(  #
+        k_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(  #
             base=k_ptr + stride_kz * off_z + stride_kh * off_k_head,  #
             shape=(SEQLEN_K, HEAD_SZ),  #
             strides=(stride_kn, stride_kk),  #
@@ -200,7 +200,7 @@ class AttentionProgram:
         k_buffer = gl.allocate_shared_memory(k_desc.dtype, shape=[2] + k_desc.block_shape, layout=k_desc.layout)
 
         # v [BLOCK_N, BLOCK_DMODEL]
-        v_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(  #
+        v_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(  #
             base=v_ptr + stride_vz * off_z + stride_vh * off_k_head,  #
             shape=(SEQLEN_K, HEAD_SZ),  #
             strides=(stride_vn, stride_vk),  #
@@ -209,7 +209,7 @@ class AttentionProgram:
         v_buffer = gl.allocate_shared_memory(v_desc.dtype, shape=[2] + v_desc.block_shape, layout=v_desc.layout)
 
         q_mask = (off_m + gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, cfg.q_layout)))[:, None] < SEQLEN_Q
-        q = gl.amd.gfx1250.buffer_load(q_ptr, q_offs, mask=q_mask)
+        q = gl.amd.cdna5.buffer_load(q_ptr, q_offs, mask=q_mask)
 
         o_offs = (stride_oz * off_z + stride_oh * off_q_head + stride_om *
                   (off_m + gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, cfg.pv_layout)))[:, None] + stride_on *
@@ -226,26 +226,26 @@ class AttentionProgram:
 
     @gluon.jit
     def tdm_shared_load_k(self, buffer_id, wait_count):
-        gl.amd.gfx1250.tdm.async_wait(wait_count)
+        gl.amd.cdna5.tdm.async_wait(wait_count)
         return self.k_buffer.index(buffer_id).permute([1, 0]).load(layout=self.cfg.k_layout)
 
     @gluon.jit
     def tdm_shared_load_v(self, buffer_id, wait_count):
-        gl.amd.gfx1250.tdm.async_wait(wait_count)
+        gl.amd.cdna5.tdm.async_wait(wait_count)
         return self.v_buffer.index(buffer_id).load(layout=self.cfg.v_layout)
 
     @gluon.jit
     def tdm_load_global_to_shared_k(self, offset, buffer_index):
-        gl.amd.gfx1250.tdm.async_load(self.k_desc, offset, self.k_buffer.index(buffer_index), warp_used_hint=0b00001111)
+        gl.amd.cdna5.tdm.async_load(self.k_desc, offset, self.k_buffer.index(buffer_index), warp_used_hint=0b00001111)
 
     @gluon.jit
     def tdm_load_global_to_shared_v(self, offset, buffer_index):
-        gl.amd.gfx1250.tdm.async_load(self.v_desc, offset, self.v_buffer.index(buffer_index), warp_used_hint=0b00001111)
+        gl.amd.cdna5.tdm.async_load(self.v_desc, offset, self.v_buffer.index(buffer_index), warp_used_hint=0b00001111)
 
     @gluon.jit
     def compute_qk(self, k, cur_seq):
         qk = gl.zeros([self.cfg.BLOCK_M, self.cfg.BLOCK_N], dtype=gl.float32, layout=self.cfg.qk_layout)
-        qk = gl.amd.gfx1250.wmma(self.q, k, qk)
+        qk = gl.amd.cdna5.wmma(self.q, k, qk)
         # Handle/pad unaligned M and K2 ids for QK.
         qk_mask = (
             cur_seq +
@@ -256,7 +256,7 @@ class AttentionProgram:
     @gluon.jit
     def compute_qk_no_mask(self, k):
         qk = gl.zeros([self.cfg.BLOCK_M, self.cfg.BLOCK_N], dtype=gl.float32, layout=self.cfg.qk_layout)
-        qk = gl.amd.gfx1250.wmma(self.q, k, qk)
+        qk = gl.amd.cdna5.wmma(self.q, k, qk)
         return qk
 
     @gluon.jit
@@ -281,7 +281,7 @@ class AttentionProgram:
     @gluon.jit
     def compute_pv(self, p, v, acc):
         p = gl.convert_layout(p, self.cfg.p_layout)
-        return gl.amd.gfx1250.wmma(p, v, acc)
+        return gl.amd.cdna5.wmma(p, v, acc)
 
     @gluon.jit
     def softmax_part1(self, p, l_i, acc, alpha):
@@ -299,7 +299,7 @@ class AttentionProgram:
     @gluon.jit
     def store_output(self, out):
         casted_out = out.to(self.o_ptr.dtype.element_ty)
-        gl.amd.gfx1250.buffer_store(casted_out, self.o_ptr, self.o_offs, mask=self.o_mask)
+        gl.amd.cdna5.buffer_store(casted_out, self.o_ptr, self.o_offs, mask=self.o_mask)
 
 
 @gluon.jit
@@ -356,7 +356,7 @@ def attn_decode_fwd_kernel(q_ptr, k_ptr, v_ptr, mid_o_ptr, mid_l_ptr, mid_m_ptr,
                   (gl.arange(0, HEAD_SZ, layout=gl.SliceLayout(0, cfg.pv_layout)))[None, :] * stride_mid_on)
 
     casted_acc = acc.to(mid_o_ptr.dtype.element_ty)
-    gl.amd.gfx1250.buffer_store(casted_acc, mid_o_ptr, mid_o_offs)
+    gl.amd.cdna5.buffer_store(casted_acc, mid_o_ptr, mid_o_offs)
 
     mid_l_base = mid_l_ptr + off_z * stride_mid_lz + off_h * stride_mid_lh + split_id * stride_mid_ls
     mid_m_base = mid_m_ptr + off_z * stride_mid_mz + off_h * stride_mid_mh + split_id * stride_mid_ms
@@ -408,7 +408,7 @@ def attn_decode_reduce_kernel(mid_o_ptr, mid_l_ptr, mid_m_ptr, out_ptr, stride_m
                       (gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, cfg.pv_layout)))[:, None] * stride_mid_om +
                       (gl.arange(0, HEAD_SZ, layout=gl.SliceLayout(0, cfg.pv_layout)))[None, :] * stride_mid_on)
 
-        acc_s = gl.amd.gfx1250.buffer_load(mid_o_ptr, mid_o_offs)
+        acc_s = gl.amd.cdna5.buffer_load(mid_o_ptr, mid_o_offs)
         acc_s = acc_s.to(gl.float32)
 
         m_new = gl.maximum(m_global, m_s)
@@ -430,7 +430,7 @@ def attn_decode_reduce_kernel(mid_o_ptr, mid_l_ptr, mid_m_ptr, out_ptr, stride_m
     o_mask = (gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, cfg.pv_layout)))[:, None] < SEQLEN_Q
 
     casted_out = acc_global.to(out_ptr.dtype.element_ty)
-    gl.amd.gfx1250.buffer_store(casted_out, out_ptr, o_offs, mask=o_mask)
+    gl.amd.cdna5.buffer_store(casted_out, out_ptr, o_offs, mask=o_mask)
 
 
 @gluon.jit
@@ -754,7 +754,7 @@ def attn_fwd_pingpong_pipelined_kernel(q_ptr, k_ptr, v_ptr, out_ptr,  #
         # Warp-pipelined code has two warps on the same SIMD at consecutive stages.
         # warp_used_hint lets us effectively emit TDM from only the leading warp,
         # so we can defer the async wait until here.
-        gl.amd.gfx1250.tdm.async_wait(2)
+        gl.amd.cdna5.tdm.async_wait(2)
         with gl.amd.warp_pipeline_stage("stage1", priority=1):
             # v = pgm.tdm_shared_load_v(iter_id % NUM_BUFFERS, wait_count=2)
             p, l_i, acc = pgm.softmax_part1(p, l_i, acc, alpha)
@@ -768,7 +768,7 @@ def attn_fwd_pingpong_pipelined_kernel(q_ptr, k_ptr, v_ptr, out_ptr,  #
         # Warp-pipelined code has two warps on the same SIMD at consecutive stages.
         # warp_used_hint lets us effectively emit TDM from only the leading warp,
         # so we can defer the async wait until here.
-        gl.amd.gfx1250.tdm.async_wait(2)
+        gl.amd.cdna5.tdm.async_wait(2)
         with gl.amd.warp_pipeline_stage("stage3", priority=1):
             # k = pgm.tdm_shared_load_k(iter_id % NUM_BUFFERS, wait_count=2)
             p, alpha, m_i = pgm.softmax_part0(qk, m_i)
