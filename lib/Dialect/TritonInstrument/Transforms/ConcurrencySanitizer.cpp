@@ -1066,10 +1066,10 @@ private:
         for (const auto &[barrier, barrierMask] : auxData.sharedBarrierMasks) {
           Value barrierOffset = tti::ExperimentalMemoryOffsetToI32Op::create(
               b, barrier.baseOffset, memType);
+          int64_t barrierLength = barrier.length;
           auto verifyAvailable = [&](Value candidatePred) {
             funcBuilder.createVerifyBarrierMemoryAvailableCall(
-                b, barrierOffset, barrier.length, candidatePred, op,
-                effectCTAs);
+                b, barrierOffset, barrierLength, candidatePred, op, effectCTAs);
           };
           if (candidates.unknown) {
             verifyAvailable(pred);
