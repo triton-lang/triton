@@ -35,32 +35,23 @@ bool requiresCrossCTAMBarrierInitSync(
   // Or if it's used by a multi-CTA consumer that broadcasts barrier state
   // across CTAs even though the barrier allocation itself looks per-CTA.
   return funcOp
-      ->walk<WalkOrder::PreOrder>([&](Operation *op) {
-        SmallVector<Value> consumerBarriers;
-        if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
-          auto barrierOp = cast<ttg::MBarrierOpInterface>(op);
-          if (hasTCGen5CommitCrossCTA(op))
-            consumerBarriers.append(barrierOp.getBarriers());
-        } else if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
-          if (hasTCGen5CommitCrossCTA(op))
-            consumerBarriers.push_back(commit.getBarrier());
-        } else if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
-          if (tma.getMulticast())
-            consumerBarriers.push_back(tma.getBarrier());
-        } else if (auto clc = dyn_cast<ttng::CLCTryCancelOp>(op)) {
-          consumerBarriers.push_back(clc.getMbarrier());
-        } else if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
-          consumerBarriers.push_back(store.getMbarrier());
-        } else if (auto expect = dyn_cast<ttng::BarrierExpectOp>(op);
-                   expect && expect.getFromCTA()) {
-          consumerBarriers.push_back(expect.getBarrier());
-        } else if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op);
-                   arrive && (arrive.isMulticast() || arrive.getFromCTA())) {
-          consumerBarriers.push_back(arrive.getAlloc());
-        }
-        if (llvm::any_of(consumerBarriers, aliasesBarrier))
-          return WalkResult::interrupt();
-        return WalkResult::advance();
+      ->walk<WalkOrder::PreOrder>([&](ttg::MBarrierOpInterface user) {
+        Operation *op = user.getOperation();
+        bool crossCTA = false;
+        if (isa<ttng::MMAv5OpInterface, ttng::TCGen5CommitOp>(op))
+          crossCTA = hasTCGen5CommitCrossCTA(op);
+        else if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op))
+          crossCTA = tma.getMulticast();
+        else if (isa<ttng::CLCTryCancelOp, ttng::AsyncSharedStoreOp>(op))
+          crossCTA = true;
+        else if (auto expect = dyn_cast<ttng::BarrierExpectOp>(op))
+          crossCTA = expect.getFromCTA().has_value();
+        else if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op))
+          crossCTA = arrive.isMulticast() || arrive.getFromCTA().has_value();
+
+        return crossCTA && llvm::any_of(user.getBarriers(), aliasesBarrier)
+                   ? WalkResult::interrupt()
+                   : WalkResult::advance();
       })
       .wasInterrupted();
 }
