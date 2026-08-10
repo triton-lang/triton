@@ -217,10 +217,12 @@ public:
                                      uint64_t destMask, Value pred,
                                      MemType memType, Operation *insertPoint);
   // copyReadVisibility: replicate the read visibility row of sourceThread to
-  // every destination thread in destMask.
+  // every destination thread in destMask. Preserve existing destination rows
+  // when merge is true.
   void createCopyReadVisibilityCall(ImplicitLocOpBuilder &b, int sourceThread,
                                     uint64_t destMask, Value pred,
-                                    MemType memType, Operation *insertPoint);
+                                    MemType memType, Operation *insertPoint,
+                                    bool merge = false);
   // publishClusterVisibility: after a non-relaxed cluster barrier, make the
   // participating threads' synchronous facts visible across the cluster. A
   // top-level barrier includes every thread; a warp-specialized barrier is

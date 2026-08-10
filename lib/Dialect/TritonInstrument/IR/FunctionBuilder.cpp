@@ -2446,11 +2446,9 @@ void FunctionBuilder::createCopyWriteVisibilityCall(ImplicitLocOpBuilder &b,
       });
 }
 
-void FunctionBuilder::createCopyReadVisibilityCall(ImplicitLocOpBuilder &b,
-                                                   int sourceThread,
-                                                   uint64_t destMask,
-                                                   Value pred, MemType memType,
-                                                   Operation *insertPoint) {
+void FunctionBuilder::createCopyReadVisibilityCall(
+    ImplicitLocOpBuilder &b, int sourceThread, uint64_t destMask, Value pred,
+    MemType memType, Operation *insertPoint, bool merge) {
 
   if (auxData.readVisibility[(int)memType].empty()) {
     return;
@@ -2464,8 +2462,8 @@ void FunctionBuilder::createCopyReadVisibilityCall(ImplicitLocOpBuilder &b,
   SmallVector<Value> args = {sourceThreadVal, destMaskVal, pred, readVis.value};
   createCallToCachedFunction(
       b, "copy_read_visibility", args,
-      /*assertInfo=*/std::nullopt, {readVisibilityType},
-      [readVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      /*assertInfo=*/std::nullopt, {readVisibilityType, (uint64_t)merge},
+      [readVisibilityType, merge](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value sourceThread = entryBlock->getArgument(0);
         Value destMaskVal = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
@@ -2493,7 +2491,8 @@ void FunctionBuilder::createCopyReadVisibilityCall(ImplicitLocOpBuilder &b,
         Value replicated = arith::SelectOp::create(fb, destMaskTensor,
                                                    broadcastRow, zeroTensor);
 
-        Value updated = arith::OrIOp::create(fb, cleared, replicated);
+        Value retained = merge ? readVisibility : cleared;
+        Value updated = arith::OrIOp::create(fb, retained, replicated);
         Value currentCTAMask = createCTASetMask(
             fb, readVisibilityType, /*dim=*/2, createCurrentCTAMask(fb));
         createMaskedStoreScratchMemory(fb, fb.getLoc(), readVisibilityPtr,

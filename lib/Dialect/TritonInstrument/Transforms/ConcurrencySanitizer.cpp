@@ -828,6 +828,20 @@ private:
           if (baseDestMask)
             funcBuilder.createCopyProxyAccessesCall(b, baseThread, baseDestMask,
                                                     nullptr, op);
+          // Lowering joins the partitions with a CTA barrier. Merge completed
+          // reader observations only after that join so the default partition
+          // cannot observe a worker's state while it is still running.
+          b.setListener(nullptr);
+          b.setInsertionPointAfter(wsOp);
+          for (Region *region : partitionRegions) {
+            int sourceThread = region->getRegionNumber() + 1;
+            for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM})
+              funcBuilder.createCopyReadVisibilityCall(
+                  b, sourceThread, /*destMask=*/1, nullptr, memType, op,
+                  /*merge=*/true);
+          }
+          b.setInsertionPoint(wsOp);
+          b.setListener(&listener);
         }
       }
       if (auto info = hooks.getBarrierInitInfo(op)) {
