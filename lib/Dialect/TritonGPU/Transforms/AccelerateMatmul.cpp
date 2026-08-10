@@ -892,10 +892,10 @@ public:
     // the mxf8f6f4 fallback for MN-major FP4 only supports E8M0 scales.
     if (hasMNMajorFp4Operand && (hasUE4M3Scale || hasUE5M3Scale))
       return failure();
-    // mxf4/mxf4nvf4 do not support MN-major operands, so fp4 x fp4 falls
-    // back to mxf8f6f4 if either operand is not K-packed. The mxf8f6f4
-    // shared-memory packing format requires padding for every fp4 operand,
-    // even if the operand is K packed.
+    // mxf4 does not support MN-major operands, so mxfp4 x mxfp4 falls back to
+    // mxf8f6f4 if either operand is not K-packed. The mxf8f6f4 shared-memory
+    // packing format requires padding for every fp4 operand, even if the
+    // operand is K packed.
     bool isMMAv5Fp4PaddedLhs =
         hasMNMajorFp4Operand ||
         (IsAMixedPrecFp4 && (requiresFp4Padding || blockM == 64 ||
