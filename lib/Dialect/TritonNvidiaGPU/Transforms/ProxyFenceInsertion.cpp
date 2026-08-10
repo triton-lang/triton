@@ -14,7 +14,6 @@
 #include "triton/Tools/LayoutUtils.h"
 
 #include <cstdint>
-#include <optional>
 
 namespace mlir::triton::nvidia_gpu {
 
@@ -27,22 +26,15 @@ namespace mlir::triton::nvidia_gpu {
 // before a call without inventing incoming effects in the callee.
 namespace {
 
-enum class ProxyFenceScope : uint8_t { CTA = 1, Cluster = 2 };
+enum : uint8_t { kCTAScope = 1, kClusterScope = 2 };
 
-uint8_t scopeMask(ProxyFenceScope scope) { return static_cast<uint8_t>(scope); }
-
-ProxyFenceScope getProxyFenceScope(Operation *op) {
-  if (auto load = dyn_cast<TMALoadLikeOpInterface>(op))
-    if (load.getMulticast())
-      return ProxyFenceScope::Cluster;
-  if (auto mma = dyn_cast<MMAv5OpInterface>(op))
-    if (mma.getTwoCtas())
-      return ProxyFenceScope::Cluster;
-  if (isa<TMEMCopyOp>(op) && getModuleTwoCTAs(op))
-    return ProxyFenceScope::Cluster;
-  if (isa<CLCTryCancelOp>(op) && gpu::lookupNumCTAs(op) > 1)
-    return ProxyFenceScope::Cluster;
-  return ProxyFenceScope::CTA;
+uint8_t getProxyFenceScope(Operation *op) {
+  auto load = dyn_cast<TMALoadLikeOpInterface>(op);
+  auto mma = dyn_cast<MMAv5OpInterface>(op);
+  bool cluster = (load && load.getMulticast()) || (mma && mma.getTwoCtas()) ||
+                 (isa<TMEMCopyOp>(op) && getModuleTwoCTAs(op)) ||
+                 (isa<CLCTryCancelOp>(op) && gpu::lookupNumCTAs(op) > 1);
+  return cluster ? kClusterScope : kCTAScope;
 }
 
 using BufferAccess = BufferRegionAccess;
@@ -71,47 +63,22 @@ struct ProxyBlockInfo {
            std::tie(other.generic, other.async, other.entryGenericUnfenced);
   }
 
-  void fenceGeneric(ProxyFenceScope scope) {
-    uint8_t fencedScopes = scopeMask(scope) | scopeMask(ProxyFenceScope::CTA);
-    generic.eraseScopes(fencedScopes);
-    entryGenericUnfenced &= ~fencedScopes;
-  }
-
-  bool needsFenceBefore(const ProxyBlockInfo &async,
-                        ProxyFenceScope scope) const {
-    uint8_t scopeBit = scopeMask(scope);
-    auto mayAlias = [](const BufferAccess &lhs, const BufferAccess &rhs) {
-      return !lhs || !rhs || lhs->intersects(*rhs);
-    };
-    return generic.hasHazard(async.async, scopeBit, mayAlias);
-  }
-
-  void joinGeneric(const ProxyBlockInfo &other) { generic.join(other.generic); }
-
-  void joinAsync(const ProxyBlockInfo &other, uint8_t scopes) {
-    async.join(other.async, scopes);
-  }
-
-  template <typename Transform> void transformAccesses(Transform transform) {
-    generic.transformAccesses(transform);
-    async.transformAccesses(transform);
+  void fenceGeneric(uint8_t scopes) {
+    if (scopes & kClusterScope)
+      scopes |= kCTAScope;
+    generic.eraseScopes(scopes);
+    entryGenericUnfenced &= ~scopes;
   }
 };
 
-struct ScratchInfo {
-  unsigned size = 0;
-  bool crossCTA = false;
-};
-
-ScratchInfo getScratchInfo(Operation *op) {
+std::pair<unsigned, bool> getScratchInfo(Operation *op) {
   if (auto cvt = dyn_cast<gpu::ConvertLayoutOp>(op)) {
-    RankedTensorType srcTy = cvt.getSrc().getType();
-    RankedTensorType dstTy = cvt.getType();
     if (!cvtNeedsSharedMemory(cvt))
       return {};
 
+    RankedTensorType srcTy = cvt.getSrc().getType();
     LinearLayout src = gpu::toLinearLayout(srcTy);
-    LinearLayout dst = gpu::toLinearLayout(dstTy);
+    LinearLayout dst = gpu::toLinearLayout(cvt.getType());
     src = actionRemoveBroadcastedRegs(src).apply(src);
     dst = actionRemoveBroadcastedRegs(dst).apply(dst);
 
@@ -119,25 +86,17 @@ ScratchInfo getScratchInfo(Operation *op) {
     StringAttr block = StringAttr::get(ctx, "block");
     bool crossCTA = !dst.invertAndCompose(src).isTrivialOver({block});
     unsigned bitwidth = getBitwidth(srcTy);
-    SmallVector<gpu::LocalMemOpTile> srcTiles{{{}, {0, 1, 2}}};
+    SmallVector<gpu::LocalMemOpTile> srcTiles{
+        {{}, {0, 1, 2}}, {{0, 1}, {2, 3, 4}}, {{2, 3, 4}, {0, 1}}};
+    srcTiles.resize(1 + (bitwidth <= 32) + (bitwidth == 16));
     SmallVector<gpu::LocalMemOpTile> dstTiles = srcTiles;
-    if (bitwidth <= 32) {
-      srcTiles.push_back({{0, 1}, {2, 3, 4}});
-      if (!crossCTA)
-        dstTiles.push_back(srcTiles.back());
-      if (bitwidth == 16) {
-        srcTiles.push_back({{2, 3, 4}, {0, 1}});
-        if (!crossCTA)
-          dstTiles.push_back(srcTiles.back());
-      }
-    }
+    dstTiles.resize(crossCTA ? 1 : srcTiles.size());
 
     auto [scratch, _] =
         gpu::optimalSwizzling(src, dst, srcTiles, dstTiles, bitwidth);
-    unsigned reps = scratch.getInDimSize(StringAttr::get(ctx, "reps"));
-    unsigned numCTAs = product(gpu::getCTASplitNum(srcTy.getEncoding()));
-    return {scratch.getTotalOutDimSize() / (reps * numCTAs) * bitwidth / 8,
-            crossCTA};
+    unsigned divisor = scratch.getInDimSize(StringAttr::get(ctx, "reps")) *
+                       product(gpu::getCTASplitNum(srcTy.getEncoding()));
+    return {scratch.getTotalOutDimSize() / divisor * bitwidth / 8, crossCTA};
   }
 
   unsigned size = defaultAllocationAnalysisScratchSizeFn(op);
@@ -145,79 +104,46 @@ ScratchInfo getScratchInfo(Operation *op) {
     if (auto extra = op->getAttrOfType<IntegerAttr>(
             instrument::kConSanExtraCaptureBytesAttr))
       size += extra.getInt();
-  return {size};
+  return {size, false};
 }
 
-std::optional<BufferRegionView> getScratchAccess(BufferRegionAnalysis &analysis,
-                                                 FunctionOpInterface function,
-                                                 Operation *op) {
-  auto offset = op->getAttrOfType<IntegerAttr>("allocation.offset");
-  ScratchInfo scratch = getScratchInfo(op);
-  if (!offset || !scratch.size)
-    return std::nullopt;
-
-  uint32_t base = offset.getInt();
-  AddressSet addresses = AddressSet::fromRange(base, scratch.size);
-  SmallVector<BufferRegion::CTAAddresses, 2> ctaAddresses;
-  unsigned numCTAs = scratch.crossCTA ? gpu::lookupNumCTAs(op) : 1;
-  for (unsigned cta = 0; cta < numCTAs; ++cta)
-    ctaAddresses.emplace_back(cta, addresses);
-  return BufferRegionView{{base, scratch.size, std::move(ctaAddresses)},
-                          base,
-                          /*affineOffset=*/0,
-                          /*partitionBases=*/{},
-                          /*affinePartitionOffset=*/0,
-                          /*affineCTAOffset=*/0,
-                          analysis.getOperationId(function.getOperation())};
-}
-
-class ProxyFenceFunctionAnalysis
+struct ProxyFenceFunctionAnalysis
     : public PostOrderFunctionAnalysis<ProxyBlockInfo> {
   using FuncMapT = PostOrderFunctionAnalysis<ProxyBlockInfo>::FuncMapT;
 
-public:
   ProxyFenceFunctionAnalysis(FunctionOpInterface function,
                              BufferRegionAnalysis &regions, uint8_t scopes)
       : function(function), regions(regions), scopes(scopes) {}
 
-private:
-  ProxyBlockInfo getEntryState() const override {
-    ProxyBlockInfo state;
-    state.entryGenericUnfenced = scopes;
-    return state;
-  }
+  ProxyBlockInfo getEntryState() const override { return {{}, {}, scopes}; }
 
-  void applyEffects(Operation *op, ProxyBlockInfo &effects,
-                    ProxyBlockInfo *state, OpBuilder *builder,
-                    bool fromCall = false) {
-    for (ProxyFenceScope scope :
-         {ProxyFenceScope::Cluster, ProxyFenceScope::CTA}) {
-      if ((scopes & scopeMask(scope)) &&
-          state->needsFenceBefore(effects, scope)) {
-        builder->setInsertionPoint(op);
-        FenceAsyncSharedOp::create(*builder, op->getLoc(),
-                                   scope == ProxyFenceScope::Cluster);
-        state->fenceGeneric(scope);
+  void applyEffects(Operation *op, const ProxyBlockInfo &effects,
+                    ProxyBlockInfo &state, OpBuilder &builder) {
+    auto mayAlias = [](const BufferAccess &lhs, const BufferAccess &rhs) {
+      return !lhs || !rhs || lhs->intersects(*rhs);
+    };
+    for (uint8_t scope : {kClusterScope, kCTAScope}) {
+      if ((scopes & scope) &&
+          state.generic.hasHazard(effects.async, scope, mayAlias)) {
+        builder.setInsertionPoint(op);
+        FenceAsyncSharedOp::create(builder, op->getLoc(),
+                                   scope == kClusterScope);
+        state.fenceGeneric(scope);
         break;
       }
     }
 
-    state->joinAsync(effects, state->entryGenericUnfenced);
-    if (fromCall) {
-      uint8_t fencedScopes = scopes & ~effects.entryGenericUnfenced;
-      if (fencedScopes & scopeMask(ProxyFenceScope::Cluster))
-        state->fenceGeneric(ProxyFenceScope::Cluster);
-      else if (fencedScopes & scopeMask(ProxyFenceScope::CTA))
-        state->fenceGeneric(ProxyFenceScope::CTA);
-    }
-    state->joinGeneric(effects);
+    state.async.join(effects.async, state.entryGenericUnfenced);
+    if (uint8_t fenced = scopes & ~effects.entryGenericUnfenced;
+        isa<CallOpInterface>(op) && fenced)
+      state.fenceGeneric(fenced);
+    state.generic.join(effects.generic);
   }
 
   void update(Operation *op, ProxyBlockInfo *state, FuncMapT *funcMap,
               OpBuilder *builder) override {
     if (auto fence = dyn_cast<FenceAsyncSharedOp>(op)) {
-      state->fenceGeneric(fence.getBCluster() ? ProxyFenceScope::Cluster
-                                              : ProxyFenceScope::CTA);
+      state->fenceGeneric(fence.getBCluster() ? kClusterScope : kCTAScope);
       return;
     }
 
@@ -227,11 +153,12 @@ private:
       if (!callee)
         return;
       ProxyBlockInfo effects = funcMap->lookup(callee);
-      effects.transformAccesses([&](BufferAccess access) {
-        return regions.translateToCallsite(std::move(access), call, function,
-                                           callee);
-      });
-      applyEffects(op, effects, state, builder, /*fromCall=*/true);
+      for (auto *frontier : {&effects.generic, &effects.async})
+        frontier->transformAccesses([&](BufferAccess access) {
+          return regions.translateToCallsite(std::move(access), call, function,
+                                             callee);
+        });
+      applyEffects(op, effects, *state, *builder);
       return;
     }
 
@@ -241,7 +168,7 @@ private:
         continue;
 
       bool async = access.isShared(gpu::SharedKind::Async);
-      uint8_t accessScopes = async ? scopeMask(getProxyFenceScope(op)) : scopes;
+      uint8_t accessScopes = async ? getProxyFenceScope(op) : scopes;
       ProxyBlockInfo::Frontier &frontier =
           async ? effects.async : effects.generic;
       for (BufferAccess region : regions.getAccessRegions(access.value)) {
@@ -252,12 +179,22 @@ private:
       }
     }
 
-    if (std::optional<BufferRegionView> scratch =
-            getScratchAccess(regions, function, op)) {
-      effects.generic.addRead(BufferAccess(*scratch), scopes);
-      effects.generic.addWrite(BufferAccess(std::move(*scratch)), scopes);
+    if (auto offset = op->getAttrOfType<IntegerAttr>("allocation.offset")) {
+      auto [size, crossCTA] = getScratchInfo(op);
+      if (size) {
+        uint32_t base = offset.getInt();
+        BufferRegionView scratch{{base, size, {}}, base};
+        scratch.allocationFrame =
+            regions.getOperationId(function.getOperation());
+        AddressSet addresses = AddressSet::fromRange(base, size);
+        unsigned numCTAs = crossCTA ? gpu::lookupNumCTAs(op) : 1;
+        for (unsigned cta = 0; cta < numCTAs; ++cta)
+          scratch.region.ctaAddresses.emplace_back(cta, addresses);
+        effects.generic.addRead(scratch, scopes);
+        effects.generic.addWrite(std::move(scratch), scopes);
+      }
     }
-    applyEffects(op, effects, state, builder);
+    applyEffects(op, effects, *state, *builder);
   }
 
   FunctionOpInterface function;
@@ -279,18 +216,15 @@ struct ProxyFenceInsertionPass
     ModuleOp module = getOperation();
     uint8_t scopes = 0;
     module.walk([&](Operation *op) {
-      if (!hasSharedAccess(op, gpu::SharedKind::Async))
-        return WalkResult::advance();
-      scopes |=
-          scopeMask(getProxyFenceScope(op)) | scopeMask(ProxyFenceScope::CTA);
-      return scopes & scopeMask(ProxyFenceScope::Cluster)
-                 ? WalkResult::interrupt()
-                 : WalkResult::advance();
+      if (hasSharedAccess(op, gpu::SharedKind::Async))
+        scopes |= getProxyFenceScope(op) | kCTAScope;
+      return scopes & kClusterScope ? WalkResult::interrupt()
+                                    : WalkResult::advance();
     });
     if (!scopes)
       return;
 
-    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    auto solver = createDataFlowSolver();
     auto *regions = solver->load<BufferRegionAnalysis>();
     if (failed(solver->initializeAndRun(module)))
       return signalPassFailure();
