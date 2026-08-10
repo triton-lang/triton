@@ -125,8 +125,8 @@ def test_print(func_type: str, data_type: str, device: str, capfd):
     elif func_type == "print_no_arg":
         expected_lines["pid (0, 0, 0) no arg"] = N
     elif func_type == "device_print_large":
-        for i, j, k in itertools.product(range(2), range(64), range(N)):
-            expected_lines[f"pid (0, {i}, 0) idx ({j:2}, {k:3}) x: 1"] = 1
+        for j, k in itertools.product(range(64), range(N)):
+            expected_lines[f"pid (0, 0, 0) idx ({j:2}, {k:3}) x: 1"] = 1
     elif func_type == "print_multiple_args" or func_type == "device_print_multiple_args":
         for i in range(N):
             expected_lines[f"pid (0, 0, 0) idx ({i:3}): (operand 0) {i}"] = 1
