@@ -1909,7 +1909,9 @@ class _block_ptr:
         if padding_option == "":
             generated_other = None
         elif padding_option == "zero":
-            generated_other = 0
+            # Use a float literal for float element types: `cast` cannot take an
+            # integer to a non-standard float (e.g. fp8e4nv), but fp32 -> fp8 is fine.
+            generated_other = 0.0 if self.base.dtype.element_ty.is_floating() else 0
         elif padding_option == "nan":
             if self.base.dtype.element_ty.is_int():
                 raise ValueError("Padding option `nan` is not supported for integer block pointers")
