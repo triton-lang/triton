@@ -1136,6 +1136,7 @@ Syntax:
 ```
 operation ::= `amdg.masked_load` $ptr `,` $mask `,` $falseVal (`,` $multicastMask^)?
               oilist(`cacheModifier` `=` $cache)
+              (`volatile` $isVolatile^)?
               (`forceNoAlias` $forceNoAlias^)?
               attr-dict `:` functional-type(operands, results)
 ```
@@ -1149,6 +1150,7 @@ data to multiple CTAs in the cluster.
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>isVolatile</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 <tr><td><code>forceNoAlias</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
 
