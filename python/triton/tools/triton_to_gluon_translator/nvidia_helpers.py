@@ -54,8 +54,8 @@ def tl_dot_mma_sync(a, b, acc_init=None, input_precision=None, out_dtype=ttgl.fl
     if acc_init is not None:
         acc = ttgl.convert_layout(acc_init, mma_layout)
     else:
-        shape: ttgl.constexpr = ([a.shape[0], b.shape[1]] if len(a.shape) == 2 else
-                                [a.shape[0], a.shape[1], b.shape[2]])
+        shape: ttgl.constexpr = ([a.shape[0], b.shape[1]]
+                                 if len(a.shape) == 2 else [a.shape[0], a.shape[1], b.shape[2]])
         acc = ttgl.full(shape, 0.0, out_dtype, layout=mma_layout)
     result = mma_v2(a, b, acc, input_precision)
     if acc_init is not None:

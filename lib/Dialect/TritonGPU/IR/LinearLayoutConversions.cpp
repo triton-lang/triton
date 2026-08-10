@@ -1552,18 +1552,15 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
   const unsigned kIdx = rank - 1;
   const unsigned mnIdx = rank - 2;
 
-  std::vector<std::vector<int32_t>> laneBase(
-      5, std::vector<int32_t>(rank, 0));
+  std::vector<std::vector<int32_t>> laneBase(5, std::vector<int32_t>(rank, 0));
   laneBase[2][mnIdx] = 1;
   laneBase[3][mnIdx] = 2;
   laneBase[4][mnIdx] = 4;
   if (opIdx == 0)
     laneBase[0][mnIdx] = 8;
 
-  SmallVector<unsigned> order =
-      getMatrixOrder(rank, /*rowMajor=*/true);
-  SmallVector<unsigned> mmaWarpsPerCTA(warpsPerCTA.begin(),
-                                       warpsPerCTA.end());
+  SmallVector<unsigned> order = getMatrixOrder(rank, /*rowMajor=*/true);
+  SmallVector<unsigned> mmaWarpsPerCTA(warpsPerCTA.begin(), warpsPerCTA.end());
   if (opIdx == 1) {
     std::swap(mmaWarpsPerCTA[mnIdx], mmaWarpsPerCTA[kIdx]);
     for (unsigned &dim : order) {
