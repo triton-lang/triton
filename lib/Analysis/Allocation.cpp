@@ -146,6 +146,23 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   return 0;
 }
 
+std::optional<bool> hasCrossCTAScratch(Operation *op) {
+  if (!op->hasAttr("allocation.size"))
+    return std::nullopt;
+  auto cvt = dyn_cast<gpu::ConvertLayoutOp>(op);
+  if (cvt) {
+    LinearLayout src = gpu::toLinearLayout(cvt.getSrc().getType());
+    LinearLayout dst = gpu::toLinearLayout(cvt.getType());
+    src = actionRemoveBroadcastedRegs(src).apply(src);
+    dst = actionRemoveBroadcastedRegs(dst).apply(dst);
+    auto block = StringAttr::get(op->getContext(), "block");
+    return !dst.invertAndCompose(src).isTrivialOver({block});
+  }
+  if (auto reduce = dyn_cast<ReduceOp>(op))
+    return !ReduceOpHelper(reduce).isReduceWithinCTA();
+  return false;
+}
+
 class AllocationAnalysis {
 public:
   AllocationAnalysis(Operation *operation,

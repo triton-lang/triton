@@ -3,15 +3,9 @@
 #include "triton/Analysis/CallGraph.h"
 #include "triton/Analysis/Function.h"
 #include "triton/Analysis/MemoryFrontier.h"
-#include "triton/Analysis/Utility.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
-#include "triton/Dialect/TritonInstrument/IR/ConSanConstants.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
-#include "triton/Tools/GenericSwizzling.h"
-#include "triton/Tools/LayoutUtils.h"
 
 #include <cstdint>
 
@@ -70,42 +64,6 @@ struct ProxyBlockInfo {
     entryGenericUnfenced &= ~scopes;
   }
 };
-
-std::pair<unsigned, bool> getScratchInfo(Operation *op) {
-  if (auto cvt = dyn_cast<gpu::ConvertLayoutOp>(op)) {
-    if (!cvtNeedsSharedMemory(cvt))
-      return {};
-
-    RankedTensorType srcTy = cvt.getSrc().getType();
-    LinearLayout src = gpu::toLinearLayout(srcTy);
-    LinearLayout dst = gpu::toLinearLayout(cvt.getType());
-    src = actionRemoveBroadcastedRegs(src).apply(src);
-    dst = actionRemoveBroadcastedRegs(dst).apply(dst);
-
-    MLIRContext *ctx = op->getContext();
-    StringAttr block = StringAttr::get(ctx, "block");
-    bool crossCTA = !dst.invertAndCompose(src).isTrivialOver({block});
-    unsigned bitwidth = getBitwidth(srcTy);
-    SmallVector<gpu::LocalMemOpTile> srcTiles{
-        {{}, {0, 1, 2}}, {{0, 1}, {2, 3, 4}}, {{2, 3, 4}, {0, 1}}};
-    srcTiles.resize(1 + (bitwidth <= 32) + (bitwidth == 16));
-    SmallVector<gpu::LocalMemOpTile> dstTiles = srcTiles;
-    dstTiles.resize(crossCTA ? 1 : srcTiles.size());
-
-    auto [scratch, _] =
-        gpu::optimalSwizzling(src, dst, srcTiles, dstTiles, bitwidth);
-    unsigned divisor = scratch.getInDimSize(StringAttr::get(ctx, "reps")) *
-                       product(gpu::getCTASplitNum(srcTy.getEncoding()));
-    return {scratch.getTotalOutDimSize() / divisor * bitwidth / 8, crossCTA};
-  }
-
-  unsigned size = defaultAllocationAnalysisScratchSizeFn(op);
-  if (isa<gpu::WarpSpecializeOp>(op))
-    if (auto extra = op->getAttrOfType<IntegerAttr>(
-            instrument::kConSanExtraCaptureBytesAttr))
-      size += extra.getInt();
-  return {size, false};
-}
 
 struct ProxyFenceFunctionAnalysis
     : public PostOrderFunctionAnalysis<ProxyBlockInfo> {
@@ -179,20 +137,19 @@ struct ProxyFenceFunctionAnalysis
       }
     }
 
-    if (auto offset = op->getAttrOfType<IntegerAttr>("allocation.offset")) {
-      auto [size, crossCTA] = getScratchInfo(op);
-      if (size) {
-        uint32_t base = offset.getInt();
-        BufferRegionView scratch{{base, size, {}}, base};
-        scratch.allocationFrame =
-            regions.getOperationId(function.getOperation());
-        AddressSet addresses = AddressSet::fromRange(base, size);
-        unsigned numCTAs = crossCTA ? gpu::lookupNumCTAs(op) : 1;
-        for (unsigned cta = 0; cta < numCTAs; ++cta)
-          scratch.region.ctaAddresses.emplace_back(cta, addresses);
-        effects.generic.addRead(scratch, scopes);
-        effects.generic.addWrite(std::move(scratch), scopes);
-      }
+    if (std::optional<bool> crossCTA = hasCrossCTAScratch(op)) {
+      uint32_t base =
+          op->getAttrOfType<IntegerAttr>("allocation.offset").getInt();
+      uint32_t size =
+          op->getAttrOfType<IntegerAttr>("allocation.size").getInt();
+      BufferRegionView scratch{{base, size, {}}, base};
+      scratch.allocationFrame = regions.getOperationId(function.getOperation());
+      AddressSet addresses = AddressSet::fromRange(base, size);
+      unsigned numCTAs = *crossCTA ? gpu::lookupNumCTAs(op) : 1;
+      for (unsigned cta = 0; cta < numCTAs; ++cta)
+        scratch.region.ctaAddresses.emplace_back(cta, addresses);
+      effects.generic.addRead(scratch, scopes);
+      effects.generic.addWrite(std::move(scratch), scopes);
     }
     applyEffects(op, effects, *state, *builder);
   }
