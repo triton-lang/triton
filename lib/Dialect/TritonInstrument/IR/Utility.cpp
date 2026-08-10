@@ -674,7 +674,6 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
 
   SmallVector<std::pair<Value, RegionInfo>> candidates[numMemTypes];
   DenseSet<Value> seenValues;
-  DenseSet<Value> lifecycleValues;
   DenseSet<Value> payloadValues;
   DenseSet<Value> completionBarrierValues;
   auto collectCandidates = [&](Value value) {
@@ -709,9 +708,7 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
           [](const MemEffectsOpInfo::Effects &e) { return e.rw == RW::Read; });
     for (const auto &effect : info->operandEffects) {
       collectCandidates(effect.buf);
-      if (effect.buf == lifecycleValue)
-        lifecycleValues.insert(effect.buf);
-      else
+      if (effect.buf != lifecycleValue)
         payloadValues.insert(effect.buf);
     }
     if (hooks.isTMAOp(op) || hooks.isCLCOp(op) ||
@@ -737,37 +734,38 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
     bool hasUnknown = analysis->hasUnknownUsedBufferRegions(regionType);
 
     if (memType == MemType::SHARED_MEM) {
+      auto appendRegions = [&](const DenseSet<Value> &values) {
+        for (Value value : values) {
+          auto type = dyn_cast<MemDescType>(value.getType());
+          if (!type || !isa<SharedMemorySpaceAttr>(type.getMemorySpace()))
+            continue;
+          const RegionInfo &info =
+              analysis->getLatticeElement(value)->getValue();
+          hasUnknown |= info.isUnknown();
+          for (const BufferRegionView &view : info.views)
+            regions.push_back(view.region);
+        }
+      };
+      auto sortUnique = [](SmallVectorImpl<BufferRegion> &regions) {
+        llvm::sort(regions);
+        regions.erase(std::unique(regions.begin(), regions.end()),
+                      regions.end());
+      };
       // BufferRegionAnalysis classifies a value used as an mbarrier as barrier
       // storage globally. Recover ordinary payload uses here. Barrier bytes use
       // the ordinary reader model only when they can alias payload or receive a
       // deferred engine completion; isolated synchronous barriers stay on the
       // compact barrier-specific state.
-      for (Value value : payloadValues) {
-        auto type = dyn_cast<MemDescType>(value.getType());
-        if (!type || !isa<SharedMemorySpaceAttr>(type.getMemorySpace()))
-          continue;
-        const RegionInfo &info = analysis->getLatticeElement(value)->getValue();
-        hasUnknown |= info.isUnknown();
-        for (const BufferRegionView &view : info.views)
-          regions.push_back(view.region);
-      }
-
-      llvm::sort(regions);
-      regions.erase(std::unique(regions.begin(), regions.end()), regions.end());
+      appendRegions(payloadValues);
+      sortUnique(regions);
       SmallVector<BufferRegion> payloadRegions = regions;
-      for (Value value : completionBarrierValues) {
-        const RegionInfo &info = analysis->getLatticeElement(value)->getValue();
-        hasUnknown |= info.isUnknown();
-        for (const BufferRegionView &view : info.views)
-          regions.push_back(view.region);
-      }
+      appendRegions(completionBarrierValues);
       for (const BufferRegion &barrier : barrierRegions)
         if (hasUnknown || llvm::any_of(payloadRegions, [&](const auto &region) {
               return barrier.intersects(region);
             }))
           regions.push_back(barrier);
-      llvm::sort(regions);
-      regions.erase(std::unique(regions.begin(), regions.end()), regions.end());
+      sortUnique(regions);
     }
 
     if (regions.empty() && !hasUnknown)
@@ -794,7 +792,7 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
         const BufferRegion &candidate = view.region;
         auto it = llvm::lower_bound(regions, candidate);
         if (it == regions.end() || !(*it == candidate)) {
-          if (lifecycleValues.contains(value) && !payloadValues.contains(value))
+          if (!payloadValues.contains(value))
             continue;
           InFlightDiagnostic diag = emitError(
               value.getLoc(),

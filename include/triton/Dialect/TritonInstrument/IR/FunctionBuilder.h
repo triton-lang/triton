@@ -129,19 +129,14 @@ public:
                                               Value pred,
                                               Operation *insertPoint,
                                               Value recipientCTAs);
-  // verifyBarrierHasNoWaiters: reject invalidation while any thread is waiting
-  // on the barrier.
-  void createVerifyBarrierHasNoWaitersCall(ImplicitLocOpBuilder &b, Value mbar,
-                                           Value pred, Operation *insertPoint,
-                                           Value recipientCTAs);
   // initBarrierState: Initialize the tracked barrier state to phase 0 and set
   // both the initial and current arrival counts. A zero state denotes an
   // invalidated/uninitialized barrier.
   void createInitBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
                                   int count, Value pred,
                                   Operation *insertPoint);
-  // invalidateBarrierState: clear the tracked barrier lifecycle state and any
-  // waiting bits for the barrier.
+  // invalidateBarrierState: verify the barrier is initialized with no active
+  // waiters, then clear its lifecycle state and waiting bits.
   void createInvalidateBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
                                         Value pred, Operation *insertPoint);
   // verifyAndUpdateBarrierState: Validate barrier initialization, an arrive

@@ -652,7 +652,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // synthetic engine's deferred completion use of the barrier bytes.
     // CHECK: tt.call @__triton_consan_set_proxy_access
     // CHECK: tt.call @__triton_consan_verify_read_visibility
-    // CHECK: tt.call @__triton_consan_verify_barrier_has_no_waiters
+    // CHECK: tt.call @__triton_consan_invalidate_barrier_state
+    // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier invalidated while a thread is waiting"
     // CHECK: ttng.inval_barrier
     ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     tt.return
@@ -996,10 +997,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_init_barrier_state
     %tmp = ttg.local_load %buf : !ttg.memdesc<32xi32, #shared1, #smem, mutable> -> tensor<32xi32>
-    // CHECK: tt.call @__triton_consan_verify_barrier_initialized
-    // CHECK: tt.call @__triton_consan_verify_barrier_has_no_waiters
-    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_invalidate_barrier_state
+    // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier used before initialization or after invalidation"
+    // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier invalidated while a thread is waiting"
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_clear_barrier_write_tracking
     // CHECK: tt.call @__triton_consan_clear_barrier_read_tracking
     // CHECK: tt.call @__triton_consan_verify_barrier_can_init
@@ -2333,6 +2334,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
         : () -> !ttg.memdesc<16xi32, #lifetime_shared, #lifetime_smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 0 : i32}
         : () -> !ttg.memdesc<1xi64, #lifetime_shared, #lifetime_smem, mutable>
+    %uninitialized = ttg.local_alloc {allocation.offset = 8 : i32}
+        : () -> !ttg.memdesc<1xi64, #lifetime_shared, #lifetime_smem, mutable>
     // Init and invalidate are generic writes to the barrier bytes.
     // CHECK: tt.call @__triton_consan_verify_write_visibility
     // CHECK: ttng.init_barrier
@@ -2345,28 +2348,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
         : !ttg.memdesc<16xi32, #lifetime_shared, #lifetime_smem, mutable>
         -> tensor<16xi32>
     // CHECK: tt.call @__triton_consan_verify_write_visibility
-    // CHECK: tt.call @__triton_consan_verify_barrier_has_no_waiters
+    // CHECK: tt.call @__triton_consan_invalidate_barrier_state
+    // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier invalidated while a thread is waiting"
     // CHECK: ttng.inval_barrier
     ttng.inval_barrier %barrier
         : !ttg.memdesc<1xi64, #lifetime_shared, #lifetime_smem, mutable>
-    tt.return
-  }
-}
-
-// -----
-
-#lifetime_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#lifetime_smem = #ttg.shared_memory
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 8 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
-  // CHECK-LABEL: @copy_completion_requires_initialized_barrier
-  tt.func public @copy_completion_requires_initialized_barrier() {
-    %barrier = ttg.local_alloc {allocation.offset = 0 : i32}
-        : () -> !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
     // CHECK: ttng.async_copy_mbarrier_arrive
-    ttng.async_copy_mbarrier_arrive %barrier
-        : !ttg.memdesc<1xi64, #lifetime_barrier, #lifetime_smem, mutable>
+    ttng.async_copy_mbarrier_arrive %uninitialized
+        : !ttg.memdesc<1xi64, #lifetime_shared, #lifetime_smem, mutable>
     tt.return
   }
 }
