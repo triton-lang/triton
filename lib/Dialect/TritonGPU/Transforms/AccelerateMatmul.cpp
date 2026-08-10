@@ -874,12 +874,29 @@ public:
     // MMA_K = 64 is also not supported when BLOCK_M = 64.
     auto blockK = dotOp.getA().getType().getShape().back() * (isAFP4 ? 2 : 1);
     auto blockM = dotOp.getA().getType().getShape()[0];
+    bool hasMNMajorFp4Operand =
+        isFp4MMA && (!dotOp.getLhsKPack() || !dotOp.getRhsKPack());
+    auto aScaleType = dotOp.getAScale().getType();
+    auto bScaleType = dotOp.getBScale().getType();
+    auto aScaleElemType = aScaleType.getElementType();
+    auto bScaleElemType = bScaleType.getElementType();
+    auto isBlock16Scale = [blockK](RankedTensorType scaleType) {
+      return scaleType.getShape().back() * 16 == blockK;
+    };
+    bool hasUE4M3Scale = isa<Float8E4M3FNType>(aScaleElemType) ||
+                         isa<Float8E4M3FNType>(bScaleElemType);
+    bool hasUE5M3Scale =
+        (aScaleElemType.isInteger(8) && isBlock16Scale(aScaleType)) ||
+        (bScaleElemType.isInteger(8) && isBlock16Scale(bScaleType));
+    // mxf4nvf4 supports UE4M3/UE5M3 scales but not MN-major operands, while
+    // the mxf8f6f4 fallback for MN-major FP4 only supports E8M0 scales.
+    if (hasMNMajorFp4Operand && (hasUE4M3Scale || hasUE5M3Scale))
+      return failure();
     // mxf4/mxf4nvf4 do not support MN-major operands, so fp4 x fp4 falls
     // back to mxf8f6f4 if either operand is not K-packed. The mxf8f6f4
     // shared-memory packing format requires padding for every fp4 operand,
     // even if the operand is K packed.
-    bool isFp4MMAUsingMxf8f6f4 =
-        isFp4MMA && (!dotOp.getLhsKPack() || !dotOp.getRhsKPack());
+    bool isFp4MMAUsingMxf8f6f4 = hasMNMajorFp4Operand;
     bool isMMAv5Fp4PaddedLhs =
         isFp4MMAUsingMxf8f6f4 ||
         (IsAMixedPrecFp4 && (requiresFp4Padding || blockM == 64 ||
