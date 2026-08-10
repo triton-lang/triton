@@ -19,7 +19,20 @@ class AllocationAnalysis;
 /// some operations.
 using AllocationAnalysisScratchSizeFn = std::function<unsigned(Operation *)>;
 
+struct ScratchBufferInfo {
+  unsigned size = 0;
+  bool crossCTA = false;
+};
+
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
+
+std::pair<SmallVector<gpu::LocalMemOpTile>, SmallVector<gpu::LocalMemOpTile>>
+getScratchBufferTiles(int bitwidth, bool crossCTA, bool supportLdMatrix,
+                      bool supportStMatrix);
+
+ScratchBufferInfo getConvertLayoutScratchBufferInfo(gpu::ConvertLayoutOp op,
+                                                    bool supportLdMatrix,
+                                                    bool supportStMatrix);
 
 unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
                                        const LinearLayout &dstLayout,

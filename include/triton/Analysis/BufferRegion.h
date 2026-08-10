@@ -270,6 +270,12 @@ public:
   /// an unknown region and therefore may alias any other view.
   llvm::SmallVector<BufferRegionAccess> getAccessRegions(Value value);
 
+  /// Return the exact physical region assigned to an operation's scratch
+  /// allocation.
+  BufferRegionAccess getScratchRegion(FunctionOpInterface function,
+                                      Operation *operation, uint32_t size,
+                                      bool crossCTA) const;
+
   /// Translate a callee-local view into the caller's allocation frame.
   BufferRegionAccess translateToCallsite(BufferRegionAccess view,
                                          CallOpInterface call,

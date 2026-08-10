@@ -5,11 +5,7 @@
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/AllocateSharedMemoryUtility.h"
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonInstrument/IR/ConSanConstants.h"
-#include "triton/Tools/GenericSwizzling.h"
-#include "triton/Tools/LayoutUtils.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -43,40 +39,14 @@ struct AllocateSharedMemoryNv
 
 namespace mlir::triton::nvidia_gpu {
 
-static unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
-                                              RankedTensorType dstTy,
-                                              TargetInfoBase &targetInfo) {
-  auto *ctx = srcTy.getContext();
-  auto srcLayout = triton::gpu::toLinearLayout(srcTy);
-  auto dstLayout = triton::gpu::toLinearLayout(dstTy);
-  srcLayout = actionRemoveBroadcastedRegs(srcLayout).apply(srcLayout);
-  dstLayout = actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
-  auto bitwidth = getBitwidth(srcTy);
-  auto kBlock = StringAttr::get(ctx, "block");
-  bool crossCTA =
-      !dstLayout.invertAndCompose(srcLayout).isTrivialOver({kBlock});
-  auto [srcTiles, dstTiles] =
-      gpu::getSrcDstTiles(targetInfo, bitwidth, crossCTA);
-  auto [smem, _] = triton::gpu::optimalSwizzling(srcLayout, dstLayout, srcTiles,
-                                                 dstTiles, bitwidth);
-  auto reps = smem.getInDimSize(StringAttr::get(ctx, "reps"));
-  // The smem has the same CGA layout as srcLayout, so use that instead.
-  // Remove the number of elements duplicated in the CGA layout.
-  auto nBlocks = product(triton::gpu::getCTASplitNum(srcTy.getEncoding()));
-  return smem.getTotalOutDimSize() / (reps * nBlocks);
-}
-
 std::function<unsigned(Operation *)>
 getNvidiaAllocationAnalysisScratchSizeFn(TargetInfoBase &targetInfo) {
   auto allocation = [&targetInfo](Operation *op) -> unsigned {
     if (auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-      auto srcTy = cvtOp.getSrc().getType();
-      auto dstTy = cvtOp.getType();
-      if (!cvtNeedsSharedMemory(cvtOp))
-        return 0;
-      // In cuda we always swizzle
-      auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy, targetInfo);
-      return elems * getBitwidth(srcTy) / 8;
+      return getConvertLayoutScratchBufferInfo(cvtOp,
+                                               targetInfo.supportLdMatrix(),
+                                               targetInfo.supportStMatrix())
+          .size;
     }
     if (auto ws = dyn_cast<triton::gpu::WarpSpecializeOp>(op)) {
       unsigned captureSize = defaultAllocationAnalysisScratchSizeFn(op);
