@@ -2,7 +2,6 @@
 #define PROTON_DRIVER_DISPATCH_H_
 
 #include <dlfcn.h>
-#include <sys/stat.h>
 
 #include "Utility/Env.h"
 #include "Utility/Errors.h"
@@ -83,7 +82,7 @@ struct ExternLibBase {
   using RetType = int; // Generic type, can be overridden in derived structs
   static constexpr const char *name = "";    // Placeholder
   static constexpr const char *symbolName{}; // Placeholder
-  static constexpr const char *pathEnv{};    // Placeholder
+  static constexpr const char *pathEnv{};    // Directory override
   static constexpr RetType success = 0;      // Placeholder
   ExternLibBase() = delete;
   ExternLibBase(const ExternLibBase &) = delete;
@@ -97,15 +96,10 @@ public:
 
   static void init(const char *name, void **lib) {
     if (*lib == nullptr) {
-      // If not found, try to load it from the default path
       auto dir =
           ExternLib::pathEnv == nullptr ? "" : getStrEnv(ExternLib::pathEnv);
       if (!dir.empty()) {
-        struct stat pathStat;
-        auto fullPath =
-            stat(dir.c_str(), &pathStat) == 0 && !S_ISDIR(pathStat.st_mode)
-                ? dir
-                : dir + "/" + name;
+        auto fullPath = dir + "/" + name;
         *lib = dlopen(fullPath.c_str(), RTLD_LOCAL | RTLD_LAZY);
       } else {
         // Only if the default path is not set, we try to load it from the

@@ -548,6 +548,7 @@ class proton_knobs(base_knobs):
     cupti_lib_blackwell_dir: env_str = env_str(
         "TRITON_CUPTI_LIB_BLACKWELL_PATH",
         str(pathlib.Path(__file__).parent.absolute() / "backends" / "nvidia" / "lib" / "cupti-blackwell"))
+    hip_lib_path: env_opt_str = env_opt_str("TRITON_PROTON_HIP_LIB_PATH")
     hsa_runtime_path: env_opt_str = env_opt_str("TRITON_HSA_RUNTIME_PATH")
     rocprofiler_sdk_include_path: env_opt_str = env_opt_str("TRITON_ROCPROFILER_SDK_INCLUDE_PATH")
     rocprofiler_sdk_lib_path: env_opt_str = env_opt_str("TRITON_ROCPROFILER_SDK_LIB_PATH")
