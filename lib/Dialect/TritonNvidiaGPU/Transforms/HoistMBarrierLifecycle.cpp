@@ -126,11 +126,12 @@ public:
       SmallVector<Value> candidates;
       funcOp.walk([&](ttng::InitBarrierOp init) {
         Value barrier = init.getAlloc();
+        if (!seen.insert(barrier).second)
+          return;
         BarrierAliases aliases(barrier, *aliasAnalysis);
         if (requiresCrossCTAMBarrierInitSync(
                 funcOp, barrier, numCTAs,
-                [&](Value value) { return aliases.contains(value); }) &&
-            seen.insert(barrier).second)
+                [&](Value value) { return aliases.contains(value); }))
           candidates.push_back(barrier);
       });
 
