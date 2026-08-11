@@ -226,7 +226,7 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 - `TRITON_ALWAYS_COMPILE=1` forces to compile kernels regardless of cache hit.
 - `MLIR_ENABLE_TIMING` dumps the timing information for each MLIR pass.
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
-- `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of allowing fp fusion (mul+add->fma).
+- `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of disabling fp fusion (mul+add->fma).
 - `MLIR_ENABLE_DIAGNOSTICS=<comma-separated>` controls diagnostic emission in MLIR.
   Options are: `warnings`, `remarks`, `stacktraces`, `operations`.
   Use comma-separated values to customize output. For example,
