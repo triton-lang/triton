@@ -54,33 +54,50 @@ def configure_runtime():
                 triton.knobs.proton.rocprofiler_sdk_lib_path = lib_dir
         return None
 
-    path_libraries = {
-        "TRITON_PROTON_HIP_LIB_PATH": "amdhip64",
-        "TRITON_HSA_RUNTIME_PATH": "hsa-runtime64",
-        "TRITON_ROCPROFILER_SDK_LIB_PATH": "rocprofiler-sdk",
-        "TRITON_ROCTRACER_LIB_PATH": "roctracer64",
+    library_settings = {
+        "TRITON_PROTON_HIP_LIB_PATH": ("TRITON_PROTON_HIP_LIBRARY", "amdhip64"),
+        "TRITON_HSA_RUNTIME_PATH": ("TRITON_HSA_RUNTIME_LIBRARY", "hsa-runtime64"),
+        "TRITON_ROCPROFILER_SDK_LIB_PATH": ("TRITON_ROCPROFILER_SDK_LIBRARY", "rocprofiler-sdk"),
+        "TRITON_ROCTRACER_LIB_PATH": ("TRITON_ROCTRACER_LIBRARY", "roctracer64"),
     }
-    explicit_overrides = {key for key in (*path_libraries, "TRITON_ROCTX_LIB_PATH") if key in os.environ}
-    for key, name in path_libraries.items():
-        if key not in explicit_overrides:
-            triton.knobs.setenv(key, str(Path(libraries[name]).parent))
-    if "TRITON_ROCTX_LIB_PATH" not in explicit_overrides:
+    override_keys = (
+        *library_settings,
+        *(library_key for library_key, _ in library_settings.values()),
+        "TRITON_ROCTX_LIB_PATH",
+        "TRITON_ROCTX_LIBRARY",
+    )
+    explicit_overrides = {key for key in override_keys if key in os.environ}
+    for path_key, (library_key, name) in library_settings.items():
+        if path_key not in explicit_overrides and library_key not in explicit_overrides:
+            path = Path(libraries[name])
+            triton.knobs.setenv(path_key, str(path.parent))
+            triton.knobs.setenv(library_key, path.name)
+    if not {"TRITON_ROCTX_LIB_PATH", "TRITON_ROCTX_LIBRARY"} & explicit_overrides:
         triton.knobs.setenv("TRITON_ROCTX_LIB_PATH", libraries["roctx64"])
+        triton.knobs.setenv("TRITON_ROCTX_LIBRARY", libraries["roctx64"])
 
     # HSA is not registered with rocm_sdk yet, so load and retain it directly.
-    hsa_path = Path(os.environ["TRITON_HSA_RUNTIME_PATH"]) / "libhsa-runtime64.so.1"
+    hsa_library = os.environ.get("TRITON_HSA_RUNTIME_LIBRARY", "libhsa-runtime64.so.1")
+    hsa_path = Path(hsa_library)
+    if not hsa_path.is_absolute():
+        hsa_dir = os.environ.get("TRITON_HSA_RUNTIME_PATH")
+        if hsa_dir:
+            hsa_path = Path(hsa_dir) / hsa_path
     hsa_handle = ctypes.CDLL(str(hsa_path), mode=ctypes.RTLD_GLOBAL | os.RTLD_NOW)
 
     import rocm_sdk
 
     preload_libraries = (
-        ("amdhip64", "TRITON_PROTON_HIP_LIB_PATH"),
-        ("roctx64", "TRITON_ROCTX_LIB_PATH"),
-        ("rocprofiler-sdk", "TRITON_ROCPROFILER_SDK_LIB_PATH"),
-        ("rocprofiler-sdk-roctx", "TRITON_ROCPROFILER_SDK_LIB_PATH"),
-        ("roctracer64", "TRITON_ROCTRACER_LIB_PATH"),
+        ("amdhip64", ("TRITON_PROTON_HIP_LIB_PATH", "TRITON_PROTON_HIP_LIBRARY")),
+        ("roctx64", ("TRITON_ROCTX_LIB_PATH", "TRITON_ROCTX_LIBRARY")),
+        ("rocprofiler-sdk", ("TRITON_ROCPROFILER_SDK_LIB_PATH", "TRITON_ROCPROFILER_SDK_LIBRARY")),
+        ("rocprofiler-sdk-roctx", ("TRITON_ROCPROFILER_SDK_LIB_PATH", "TRITON_ROCPROFILER_SDK_LIBRARY")),
+        ("roctracer64", ("TRITON_ROCTRACER_LIB_PATH", "TRITON_ROCTRACER_LIBRARY")),
     )
-    preload_names = [name for name, override in preload_libraries if override not in explicit_overrides]
+    preload_names = [
+        name for name, overrides in preload_libraries
+        if not any(override in explicit_overrides for override in overrides)
+    ]
     if preload_names:
         rocm_sdk.preload_libraries(*preload_names)
     return hsa_handle

@@ -11,6 +11,7 @@ struct ExternLibHip : public ExternLibBase {
   using RetType = hipError_t;
   static constexpr const char *name = "libamdhip64.so";
   static constexpr const char *pathEnv = "TRITON_PROTON_HIP_LIB_PATH";
+  static constexpr const char *libraryEnv = "TRITON_PROTON_HIP_LIBRARY";
   static constexpr RetType success = hipSuccess;
   static void *lib;
 };

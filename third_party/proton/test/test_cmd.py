@@ -6,6 +6,50 @@ import pathlib
 import sys
 
 
+def test_therock_runtime_library_variables():
+    script = r"""
+import ctypes
+import os
+import pathlib
+
+try:
+    import rocm_sdk
+except ImportError:
+    raise SystemExit(77)
+
+import triton.profiler
+
+settings = {
+    "amdhip64": ("TRITON_PROTON_HIP_LIB_PATH", "TRITON_PROTON_HIP_LIBRARY"),
+    "hsa-runtime64": ("TRITON_HSA_RUNTIME_PATH", "TRITON_HSA_RUNTIME_LIBRARY"),
+    "rocprofiler-sdk": ("TRITON_ROCPROFILER_SDK_LIB_PATH", "TRITON_ROCPROFILER_SDK_LIBRARY"),
+    "roctracer64": ("TRITON_ROCTRACER_LIB_PATH", "TRITON_ROCTRACER_LIBRARY"),
+}
+
+amdhip = pathlib.Path(rocm_sdk.find_libraries("amdhip64")[0])
+expected = {
+    "amdhip64": amdhip,
+    "hsa-runtime64": amdhip.parent / "libhsa-runtime64.so.1",
+    "rocprofiler-sdk": pathlib.Path(rocm_sdk.find_libraries("rocprofiler-sdk")[0]),
+    "roctracer64": pathlib.Path(rocm_sdk.find_libraries("roctracer64")[0]),
+}
+
+for name, (path_key, library_key) in settings.items():
+    library = expected[name]
+    assert os.environ[path_key] == str(library.parent)
+    assert os.environ[library_key] == library.name
+    ctypes.CDLL(str(pathlib.Path(os.environ[path_key]) / os.environ[library_key]))
+
+roctx = pathlib.Path(rocm_sdk.find_libraries("roctx64")[0])
+assert os.environ["TRITON_ROCTX_LIBRARY"] == str(roctx)
+ctypes.CDLL(os.environ["TRITON_ROCTX_LIBRARY"])
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    if result.returncode == 77:
+        pytest.skip("Requires ROCm installed via TheRock wheels")
+    assert result.returncode == 0, result.stderr
+
+
 def test_help():
     # Only check if the viewer can be invoked
     subprocess.check_call(["proton", "-h"], stdout=subprocess.DEVNULL)

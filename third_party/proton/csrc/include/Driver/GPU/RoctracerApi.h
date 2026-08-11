@@ -13,6 +13,7 @@ struct ExternLibRoctracer : public ExternLibBase {
   static constexpr const char *name = "libroctracer64.so";
   static constexpr const char *symbolName = "roctracer_start";
   static constexpr const char *pathEnv = "TRITON_ROCTRACER_LIB_PATH";
+  static constexpr const char *libraryEnv = "TRITON_ROCTRACER_LIBRARY";
   static constexpr RetType success = ROCTRACER_STATUS_SUCCESS;
   static inline void *lib = nullptr;
 };
