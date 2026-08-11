@@ -261,6 +261,21 @@ def tma_kernel(desc):
     alloc._keep_alive()
 
 
+@gluon.jit(noinline=True)
+def noinline_tma_store(desc, alloc):
+    tma.async_store(desc, [0, 0], alloc)
+    tma.store_wait(0)
+
+
+@gluon.jit
+def noinline_tma_kernel(desc):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+    value = ttgl.full(desc.block_shape, 0, desc.dtype, layout)
+    alloc = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout, value)
+    noinline_tma_store(desc, alloc)
+    alloc._keep_alive()
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_tma():
     out = torch.ones((16, 16), dtype=torch.float16, device="cuda")
@@ -274,6 +289,18 @@ def test_tma():
 
     desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(out, [16, 16], layout)
     tma_kernel[(1, )](desc)
+    torch.testing.assert_close(out, torch.zeros_like(out))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_proxy_fence_noinline_tma_store():
+    out = torch.ones((16, 16), dtype=torch.float16, device="cuda")
+    layout = ttgl.NVMMASharedLayout(32, 16, rank=2)
+    desc = TensorDescriptor.from_tensor(out, [16, 16], layout)
+
+    compiled = noinline_tma_kernel[(1, )](desc)
+    assert "tt.call" in compiled.asm["ttgir"]
+    assert "fence.proxy.async.shared::cta" in compiled.asm["ptx"]
     torch.testing.assert_close(out, torch.zeros_like(out))
 
 

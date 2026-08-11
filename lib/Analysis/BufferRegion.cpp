@@ -331,6 +331,20 @@ AddressSet AddressSet::translated(uint32_t delta) const {
   return result;
 }
 
+BufferRegionView
+BufferRegionView::translated(uint32_t offset,
+                             uint32_t newAllocationFrame) const {
+  BufferRegionView result = *this;
+  result.region.baseOffset += offset;
+  for (auto &[cta, addresses] : result.region.ctaAddresses)
+    addresses = addresses.translated(offset);
+  result.storageBase += offset;
+  for (uint32_t &base : result.partitionBases)
+    base += offset;
+  result.allocationFrame = newAllocationFrame;
+  return result;
+}
+
 BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions,
                                       bool includeUnknown) {
   BufferStatePlan plan;
@@ -502,6 +516,28 @@ LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
     }
   });
   return success();
+}
+
+SmallVector<BufferRegionAccess>
+BufferRegionAnalysis::getAccessRegions(Value value) {
+  const RegionInfo &info = getRegionInfo(value);
+  if (info.kind != RegionInfo::Kind::Exact || info.views.empty())
+    return {std::nullopt};
+  SmallVector<BufferRegionAccess> accesses;
+  for (const BufferRegionView &view : info.views)
+    accesses.push_back(view);
+  return accesses;
+}
+
+BufferRegionAccess BufferRegionAnalysis::translateToCallsite(
+    BufferRegionAccess view, CallOpInterface call, FunctionOpInterface caller,
+    FunctionOpInterface callee) const {
+  uint32_t calleeFrame = getOperationId(callee.getOperation());
+  if (!view || view->allocationFrame != calleeFrame)
+    return view;
+  auto offset = call->getAttrOfType<IntegerAttr>("allocation.offset");
+  return view->translated(offset ? offset.getInt() : 0,
+                          getOperationId(caller.getOperation()));
 }
 
 LogicalResult BufferRegionAnalysis::visitOperation(

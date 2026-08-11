@@ -102,8 +102,8 @@ def TritonGPUProxyFenceInsertion : Pass<"triton-nvidia-gpu-proxy-fence-insertion
   let summary = "Insert fences across generic and async proxy";
 
   let description = [{
-    This pass is to insert memory fences to ensure that memory operations are
-    properly ordered across generic and async operations.
+    Insert shared-memory fences between generic and asynchronous proxy
+    operations using fine-grained physical buffer-region alias analysis.
   }];
 
   let dependentDialects = [

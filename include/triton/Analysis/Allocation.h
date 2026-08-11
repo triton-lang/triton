@@ -21,6 +21,9 @@ using AllocationAnalysisScratchSizeFn = std::function<unsigned(Operation *)>;
 
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
 
+/// Returns whether an operation uses scratch memory across CTAs.
+bool hasCrossCTAScratch(Operation *op);
+
 unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
                                        const LinearLayout &dstLayout,
                                        int bitwidth, int numBanks = 32,
