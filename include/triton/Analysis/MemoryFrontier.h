@@ -1,16 +1,19 @@
 #ifndef TRITON_ANALYSIS_MEMORYFRONTIER_H
 #define TRITON_ANALYSIS_MEMORYFRONTIER_H
 
+#include "triton/Analysis/BufferRegion.h"
+
 #include <array>
 #include <map>
 #include <utility>
 
 namespace mlir::triton {
 
-/// Read and write frontiers keyed by an alias-analysis result. Each access is
-/// associated with the scopes in which it remains live.
-template <typename AccessT, typename ScopeMaskT> class ScopedMemoryFrontier {
+/// Read and write frontiers keyed by exact physical buffer regions. Each access
+/// is associated with the scopes in which it remains live.
+template <typename ScopeMaskT> class ScopedMemoryFrontier {
 public:
+  using AccessT = BufferRegionAccess;
   using AccessMap = std::map<AccessT, ScopeMaskT>;
 
   void addRead(AccessT access, ScopeMaskT scopes) {
@@ -43,15 +46,10 @@ public:
           it = map.erase(it);
   }
 
-  template <typename MayAlias>
-  bool hasHazard(const ScopedMemoryFrontier &other, ScopeMaskT scope,
-                 MayAlias mayAlias) const {
-    return intersects(other, /*lhsWrite=*/true, /*rhsWrite=*/false, scope,
-                      mayAlias) ||
-           intersects(other, /*lhsWrite=*/false, /*rhsWrite=*/true, scope,
-                      mayAlias) ||
-           intersects(other, /*lhsWrite=*/true, /*rhsWrite=*/true, scope,
-                      mayAlias);
+  bool hasHazard(const ScopedMemoryFrontier &other, ScopeMaskT scope) const {
+    return intersects(other, /*lhsWrite=*/true, /*rhsWrite=*/false, scope) ||
+           intersects(other, /*lhsWrite=*/false, /*rhsWrite=*/true, scope) ||
+           intersects(other, /*lhsWrite=*/true, /*rhsWrite=*/true, scope);
   }
 
   template <typename Transform> void transformAccesses(Transform transform) {
@@ -72,14 +70,14 @@ private:
     accesses[isWrite][std::move(access)] |= scopes;
   }
 
-  template <typename MayAlias>
   bool intersects(const ScopedMemoryFrontier &other, bool lhsWrite,
-                  bool rhsWrite, ScopeMaskT scope, MayAlias mayAlias) const {
+                  bool rhsWrite, ScopeMaskT scope) const {
     for (const auto &[left, leftScopes] : accesses[lhsWrite]) {
       if (!(leftScopes & scope))
         continue;
       for (const auto &[right, rightScopes] : other.accesses[rhsWrite])
-        if ((rightScopes & scope) && mayAlias(left, right))
+        if ((rightScopes & scope) &&
+            (!left || !right || left->intersects(*right)))
           return true;
     }
     return false;

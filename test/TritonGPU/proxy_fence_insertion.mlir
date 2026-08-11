@@ -336,6 +336,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 #src = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
 #dst = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
+#local = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 #reduce = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
 #reduce_result = #ttg.slice<{dim = 1, parent = #reduce}>
 #replicated = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
@@ -343,6 +344,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: cta_local_scratch_does_not_alias_remote_cta
+  tt.func @cta_local_scratch_does_not_alias_remote_cta(
+      %source: tensor<16x32xi32, #src>,
+      %desc: !tt.tensordesc<8x32xi32, #shared>) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    // CHECK: ttg.convert_layout
+    %converted = ttg.convert_layout %source {allocation.offset = 0 : i32, allocation.size = 1024 : i32} : tensor<16x32xi32, #src> -> tensor<16x32xi32, #local>
+    "test.keep"(%converted) : (tensor<16x32xi32, #local>) -> ()
+    %parent = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16x32xi32, #shared, #smem, mutable>
+    %remote = ttg.memdesc_subslice %parent [8, 0] : !ttg.memdesc<16x32xi32, #shared, #smem, mutable> -> !ttg.memdesc<8x32xi32, #shared, #smem, mutable, 16x32>
+    %bar = ttg.local_alloc {allocation.offset = 2048 : i32} : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    // CHECK-NOT: ttng.fence_async_shared
+    // CHECK: ttng.async_tma_copy_global_to_local
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %remote, %bar, %true : !tt.tensordesc<8x32xi32, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<8x32xi32, #shared, #smem, mutable, 16x32>
+    tt.return
+  }
+
   // CHECK-LABEL: cross_cta_scratch_requires_remote_proxy_fence
   tt.func @cross_cta_scratch_requires_remote_proxy_fence(
       %source: tensor<16x32xi32, #src>,

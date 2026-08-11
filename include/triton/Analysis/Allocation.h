@@ -9,7 +9,6 @@
 #include "llvm/ADT/SetVector.h"
 
 #include <limits>
-#include <optional>
 
 namespace mlir {
 
@@ -22,9 +21,8 @@ using AllocationAnalysisScratchSizeFn = std::function<unsigned(Operation *)>;
 
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
 
-/// Returns whether an operation's allocated scratch spans CTAs, or nullopt if
-/// the operation has no scratch allocation.
-std::optional<bool> hasCrossCTAScratch(Operation *op);
+/// Returns whether an operation uses scratch memory across CTAs.
+bool hasCrossCTAScratch(Operation *op);
 
 unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
                                        const LinearLayout &dstLayout,

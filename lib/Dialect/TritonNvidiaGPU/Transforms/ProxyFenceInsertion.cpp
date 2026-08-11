@@ -34,7 +34,10 @@ uint8_t getProxyFenceScope(Operation *op) {
 using BufferAccess = BufferRegionAccess;
 
 struct ProxyBlockInfo {
-  using Frontier = ScopedMemoryFrontier<BufferAccess, uint8_t>;
+  using Frontier = ScopedMemoryFrontier<uint8_t>;
+
+  ProxyBlockInfo() = default;
+  explicit ProxyBlockInfo(uint8_t scopes) : entryGenericUnfenced(scopes) {}
 
   // Generic accesses since the last proxy fence and async accesses before the
   // first proxy fence reachable from function entry.
@@ -67,22 +70,18 @@ struct ProxyBlockInfo {
 
 struct ProxyFenceFunctionAnalysis
     : public PostOrderFunctionAnalysis<ProxyBlockInfo> {
-  using FuncMapT = PostOrderFunctionAnalysis<ProxyBlockInfo>::FuncMapT;
+  using Base = PostOrderFunctionAnalysis<ProxyBlockInfo>;
+  using FuncMapT = Base::FuncMapT;
 
   ProxyFenceFunctionAnalysis(FunctionOpInterface function,
                              BufferRegionAnalysis &regions, uint8_t scopes)
-      : function(function), regions(regions), scopes(scopes) {}
-
-  ProxyBlockInfo getEntryState() const override { return {{}, {}, scopes}; }
+      : Base(ProxyBlockInfo(scopes)), function(function), regions(regions),
+        scopes(scopes) {}
 
   void applyEffects(Operation *op, const ProxyBlockInfo &effects,
                     ProxyBlockInfo &state, OpBuilder &builder) {
-    auto mayAlias = [](const BufferAccess &lhs, const BufferAccess &rhs) {
-      return !lhs || !rhs || lhs->intersects(*rhs);
-    };
     for (uint8_t scope : {kClusterScope, kCTAScope}) {
-      if ((scopes & scope) &&
-          state.generic.hasHazard(effects.async, scope, mayAlias)) {
+      if ((scopes & scope) && state.generic.hasHazard(effects.async, scope)) {
         builder.setInsertionPoint(op);
         FenceAsyncSharedOp::create(builder, op->getLoc(),
                                    scope == kClusterScope);
@@ -106,10 +105,7 @@ struct ProxyFenceFunctionAnalysis
     }
 
     if (auto call = dyn_cast<CallOpInterface>(op)) {
-      auto callee =
-          dyn_cast_or_null<FunctionOpInterface>(call.resolveCallable());
-      if (!callee)
-        return;
+      auto callee = cast<FunctionOpInterface>(call.resolveCallable());
       ProxyBlockInfo effects = funcMap->lookup(callee);
       for (auto *frontier : {&effects.generic, &effects.async})
         frontier->transformAccesses([&](BufferAccess access) {
@@ -137,15 +133,14 @@ struct ProxyFenceFunctionAnalysis
       }
     }
 
-    if (std::optional<bool> crossCTA = hasCrossCTAScratch(op)) {
+    if (auto sizeAttr = op->getAttrOfType<IntegerAttr>("allocation.size")) {
       uint32_t base =
           op->getAttrOfType<IntegerAttr>("allocation.offset").getInt();
-      uint32_t size =
-          op->getAttrOfType<IntegerAttr>("allocation.size").getInt();
+      uint32_t size = sizeAttr.getInt();
       BufferRegionView scratch{{base, size, {}}, base};
       scratch.allocationFrame = regions.getOperationId(function.getOperation());
       AddressSet addresses = AddressSet::fromRange(base, size);
-      unsigned numCTAs = *crossCTA ? gpu::lookupNumCTAs(op) : 1;
+      unsigned numCTAs = hasCrossCTAScratch(op) ? gpu::lookupNumCTAs(op) : 1;
       for (unsigned cta = 0; cta < numCTAs; ++cta)
         scratch.region.ctaAddresses.emplace_back(cta, addresses);
       effects.generic.addRead(scratch, scopes);
