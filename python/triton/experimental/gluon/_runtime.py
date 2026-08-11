@@ -44,8 +44,8 @@ class GluonASTSource(ASTSource):
 
 class GluonJITFunction(JITFunction[T]):
 
-    def create_binder(self):
-        result = super().create_binder()
+    def create_binder(self, device=None):
+        result = super().create_binder(device)
         self.ASTSource = GluonASTSource
         return result
 
