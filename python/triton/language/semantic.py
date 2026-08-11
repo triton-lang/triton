@@ -332,7 +332,12 @@ class TritonSemantic(Generic[TensorTy]):
         if ieee_rounding:
             ret = self.builder.create_precise_divf(input.handle, other.handle)
         else:
-            ret = self.builder.create_fdiv(input.handle, other.handle)
+            # Fast division: marked with the `arcp` fast-math flag so backends
+            # can lower it to an approximate division (e.g. div.full.f32 on
+            # NVIDIA, div.scale + rcp + fmas + fixup on AMD). The `/` operator
+            # (truediv) keeps using the unflagged arith.divf, which remains
+            # IEEE-compliant on AMD.
+            ret = self.builder.create_fast_fdiv(input.handle, other.handle)
         return self.tensor(ret, input.type)
 
     def mod(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number) -> TensorTy:
