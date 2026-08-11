@@ -19,6 +19,7 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -975,43 +976,19 @@ public:
   Value Fp8E4M3fnToFp16OneValue(Location loc,
                                 ConversionPatternRewriter &rewriter, Value v) {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto fp8x2VecTy = vec_ty(i8_ty, 2);
-    Value a = b.undef(fp8x2VecTy);
-    a = b.insert_element(fp8x2VecTy, a, b.i8_val(0), b.i32_val(0));
-    a = b.insert_element(fp8x2VecTy, a, v, b.i32_val(1));
-    a = b.bitcast(a, i16_ty);
+    Value v8 = b.bitcast(v, i8_ty);
+    Value vAbs = b.and_(v8, b.i8_val(0x7F));
+    Value fp32 = mlir::LLVM::AMD::convertF8ToF32_SW(rewriter, loc, v8,
+                                                    /*isE4M3FN=*/true);
+    Value fp16 = b.fptrunc(f16_ty, fp32);
 
-    // Get sign and absolute value
-    Value sign = b.and_(a, b.i16_val(0x8000));
-    a = b.and_(a, b.i16_val(0x7FFF));
-
-    // Right shift 1 bit to adjust the positions of exponent and mantissa
-    a = b.lshr(a, b.i16_val(1));
-
-    // Adjust exponent, (15 - 7) << 10 === 0x2000
-    a = b.add(a, b.i16_val(0x2000));
-
-    // Check NaN
-    Value vAbs = b.and_(b.bitcast(v, i8_ty), b.i8_val(0x7F));
-    a = b.select(b.icmp_eq(vAbs, b.i8_val(0x7F)), b.i16_val(0x7E00), a);
-
-    // Check denorms and zero
-    // Here we use a LUT to map S.0000.000 ~ S.0000.111 to its corresponding
-    // fp16 value
-    constexpr size_t lutSize = 8;
-    static constexpr int denormsAndZeroLut[lutSize] = {
-        0x0000, 0x1800, 0x1C00, 0x1E00, 0x2000, 0x2100, 0x2200, 0x2300};
-
-    for (int i = 0; i < lutSize; i++) {
-      a = b.select(b.icmp_eq(vAbs, b.i8_val(i)),
-                   b.i16_val(denormsAndZeroLut[i]), a);
-    }
-
-    // Set sign
-    a = b.or_(a, sign);
-    a = b.bitcast(a, f16_ty);
-
-    return a;
+    // E4M3FN reserves magnitude 0x7f for NaN. The arithmetic conversion
+    // treats it as 480, so restore a signed canonical half NaN explicitly.
+    Value sign =
+        b.shl(b.zext(i16_ty, b.and_(v8, b.i8_val(0x80))), b.i16_val(8));
+    Value nanBits = b.or_(sign, b.i16_val(0x7E00));
+    Value nan = b.bitcast(nanBits, f16_ty);
+    return b.select(b.icmp_eq(vAbs, b.i8_val(0x7F)), nan, fp16);
   }
 
   // Ocp Fp8->Fp16
