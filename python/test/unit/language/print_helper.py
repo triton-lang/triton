@@ -129,7 +129,9 @@ def test_print(func: str, data_type: str, device: str):
     elif func == "print":
         kernel_print[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "device_print_large":
-        kernel_device_print_large[(1, 2)](BLOCK_M=64, num_warps=num_warps, BLOCK_N=N)
+        # Each thread still prints 64 values, exercising the >32 argument case
+        # without overflowing CUDA's process-wide printf FIFO.
+        kernel_device_print_large[(1, )](BLOCK_M=64, num_warps=num_warps, BLOCK_N=N)
     elif func == "print_multiple_args":
         kernel_print_multiple_args[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "device_print_multiple_args":
