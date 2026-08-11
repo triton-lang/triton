@@ -608,6 +608,145 @@ GSAN_DEVICE void synchronizeClusterBarrier(GlobalState *globals, void *scratch,
   acquireClusterClocks(barrier, state, numCTAs, loc);
 }
 
+GSAN_DEVICE uint32_t getMBarrierKey(uint32_t offset, uint32_t ownerRank,
+                                    Location loc) {
+  assert_msg(loc, offset < (1u << 24), "Invalid GSan mbarrier offset");
+  assert_msg(loc, ownerRank < kMaxClusterCTAs,
+             "Invalid GSan mbarrier owner CTA rank");
+  return offset | (ownerRank << 24);
+}
+
+GSAN_DEVICE void initMBarrierTable(void *scratch, uint32_t capacity) {
+  auto *table = reinterpret_cast<MBarrierTable *>(scratch);
+  table->capacity = capacity;
+  for (uint32_t i = 0; i < capacity; ++i) {
+    table->states[i].key = kEmptyMBarrierKey;
+    table->states[i].lock = 0;
+  }
+  __scoped_atomic_store_n(&table->lock, 0, __ATOMIC_RELEASE,
+                          __MEMORY_SCOPE_DEVICE);
+}
+
+GSAN_DEVICE MBarrierState *getMBarrierState(MBarrierTable *table, uint32_t key,
+                                            bool create, Location loc) {
+  MBarrierState *empty = nullptr;
+  clusterLockAcquire(table->lock);
+  for (uint32_t i = 0; i < table->capacity; ++i) {
+    auto *state = &table->states[i];
+    if (state->key == key) {
+      clusterLockRelease(table->lock);
+      return state;
+    }
+    if (state->key == kEmptyMBarrierKey && empty == nullptr)
+      empty = state;
+  }
+  if (create && empty != nullptr) {
+    empty->lock = 0;
+    empty->key = key;
+  }
+  clusterLockRelease(table->lock);
+  assert_msg(loc, create && empty != nullptr,
+             create ? "GSan mbarrier table is full"
+                    : "GSan mbarrier used before initialization");
+  return empty;
+}
+
+GSAN_DEVICE void initMBarrier(void *scratch, uint32_t offset,
+                              uint32_t ownerRank, uint32_t expectedCount,
+                              Location loc) {
+  assert_msg(loc, expectedCount > 0, "Invalid GSan mbarrier arrival count");
+  auto *table = reinterpret_cast<MBarrierTable *>(scratch);
+  auto *barrier = getMBarrierState(
+      table, getMBarrierKey(offset, ownerRank, loc), /*create=*/true, loc);
+  clusterLockAcquire(barrier->lock);
+  barrier->expectedCount = expectedCount;
+  barrier->pendingCount = expectedCount;
+  barrier->generation = 0;
+  for (int bank = 0; bank < 2; ++bank) {
+    barrier->phases[bank].generation = 0;
+    barrier->phases[bank].complete = 0;
+    for (int source = 0; source < kMaxClusterCTAs; ++source)
+      barrier->phases[bank].clocks[source] = {};
+  }
+  clusterLockRelease(barrier->lock);
+}
+
+GSAN_DEVICE void recordMBarrierArrival(GlobalState *globals, void *scratch,
+                                       uint32_t offset, uint32_t recipientMask,
+                                       uint32_t count, uint32_t sourceRank,
+                                       bool publishClock, Location loc) {
+  assert_msg(loc, sourceRank < kMaxClusterCTAs,
+             "Invalid GSan mbarrier source CTA rank");
+  assert_msg(loc, recipientMask != 0,
+             "GSan mbarrier arrival has no recipients");
+  MBarrierPublishedClock published = {};
+  if (publishClock) {
+    auto *threadState = getThreadState(globals);
+    published = {threadState->threadId, publishClusterClock(threadState, loc)};
+  }
+  auto *table = reinterpret_cast<MBarrierTable *>(scratch);
+  for (uint32_t ownerRank = 0; ownerRank < kMaxClusterCTAs; ++ownerRank) {
+    if ((recipientMask & (1u << ownerRank)) == 0)
+      continue;
+    auto *barrier = getMBarrierState(
+        table, getMBarrierKey(offset, ownerRank, loc), /*create=*/false, loc);
+    clusterLockAcquire(barrier->lock);
+    uint32_t generation = barrier->generation;
+    auto *phase = &barrier->phases[generation & 1];
+    if (phase->generation != generation + 1) {
+      phase->generation = generation + 1;
+      phase->complete = 0;
+      for (int source = 0; source < kMaxClusterCTAs; ++source)
+        phase->clocks[source] = {};
+    }
+    if (publishClock)
+      phase->clocks[sourceRank] = published;
+    assert_msg(loc, count > 0 && count <= barrier->pendingCount,
+               "Invalid GSan mbarrier arrival count");
+    barrier->pendingCount -= count;
+    if (barrier->pendingCount == 0) {
+      phase->complete = 1;
+      barrier->pendingCount = barrier->expectedCount;
+      barrier->generation = generation + 1;
+    }
+    clusterLockRelease(barrier->lock);
+  }
+}
+
+GSAN_DEVICE void acquireMBarrierPhase(GlobalState *globals, void *scratch,
+                                      uint32_t offset, uint32_t ownerRank,
+                                      uint32_t waitPhase, Location loc) {
+  assert_msg(loc, waitPhase < 2, "Invalid GSan mbarrier wait phase");
+  auto *table = reinterpret_cast<MBarrierTable *>(scratch);
+  auto *barrier = getMBarrierState(
+      table, getMBarrierKey(offset, ownerRank, loc), /*create=*/false, loc);
+
+  MBarrierPublishedClock clocks[kMaxClusterCTAs] = {};
+  clusterLockAcquire(barrier->lock);
+  const auto &phase = barrier->phases[waitPhase];
+  assert_msg(loc,
+             phase.generation != 0 && ((phase.generation - 1) & 1) == waitPhase,
+             "Invalid GSan mbarrier phase state");
+  assert_msg(loc, phase.complete,
+             "GSan mbarrier wait observed an incomplete phase");
+  for (int source = 0; source < kMaxClusterCTAs; ++source)
+    clocks[source] = phase.clocks[source];
+  clusterLockRelease(barrier->lock);
+
+  auto *threadState = getThreadState(globals);
+  rwLockAcquireWrite(threadState->lock);
+  for (int source = 0; source < kMaxClusterCTAs; ++source) {
+    const auto &published = clocks[source];
+    if (published.token == 0 || published.threadId == threadState->threadId)
+      continue;
+    auto *publisher = getThreadStateById(globals, published.threadId);
+    const epoch_t *snapshot =
+        getClockBufferSlot(publisher, published.token, loc);
+    mergeVectorClock(threadState, snapshot);
+  }
+  rwLockReleaseWrite(threadState->lock);
+}
+
 GSAN_DEVICE ScalarClock makeScalarClock(ThreadState *state, AtomicScope scope) {
   auto tid = state->threadId;
   return ScalarClock{state->vectorClock[tid], tid, scope, false};
@@ -939,6 +1078,46 @@ __triton_gsan_cluster_barrier_sync(void *globalState, void *scratch, int pred,
   gsan::synchronizeClusterBarrier(
       reinterpret_cast<gsan::GlobalState *>(globalState), scratch, numCTAs,
       ctaRank, loc);
+}
+
+extern "C" GSAN_DEVICE void
+__triton_gsan_mbarrier_table_init(void *scratch, int pred, unsigned capacity) {
+  if (pred)
+    gsan::initMBarrierTable(scratch, capacity);
+}
+
+extern "C" GSAN_DEVICE void
+__triton_gsan_mbarrier_init(void *scratch, unsigned offset, int pred,
+                            unsigned ownerRank, unsigned expectedCount,
+                            const char *file, unsigned line) {
+  if (!pred)
+    return;
+  auto loc = gsan::Location{file, line};
+  gsan::initMBarrier(scratch, offset, ownerRank, expectedCount, loc);
+}
+
+extern "C" GSAN_DEVICE void
+__triton_gsan_mbarrier_arrive(void *globalState, void *scratch, unsigned offset,
+                              int pred, unsigned recipientMask, unsigned count,
+                              unsigned sourceRank, int publishClock,
+                              const char *file, unsigned line) {
+  if (!pred)
+    return;
+  auto loc = gsan::Location{file, line};
+  gsan::recordMBarrierArrival(
+      reinterpret_cast<gsan::GlobalState *>(globalState), scratch, offset,
+      recipientMask, count, sourceRank, publishClock != 0, loc);
+}
+
+extern "C" GSAN_DEVICE void
+__triton_gsan_mbarrier_wait(void *globalState, void *scratch, unsigned offset,
+                            int pred, unsigned ownerRank, unsigned phase,
+                            const char *file, unsigned line) {
+  if (!pred)
+    return;
+  auto loc = gsan::Location{file, line};
+  gsan::acquireMBarrierPhase(reinterpret_cast<gsan::GlobalState *>(globalState),
+                             scratch, offset, ownerRank, phase, loc);
 }
 
 extern "C" GSAN_DEVICE void

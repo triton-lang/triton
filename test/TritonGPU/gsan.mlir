@@ -76,6 +76,170 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}
 
 // -----
 
+#mbarrier_pair = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: tt.func @mbarrier_release_acquire
+  tt.func @mbarrier_release_acquire(%phase: i32, %pred: i1) {
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 192 : i32, shared_cluster_state, third_party_allocation, tt.divisibility = 16 : i64} : !tt.ptr<i8>
+    // CHECK-NEXT: tti.experimental_gsan_mbarrier_table_init %[[SCRATCH]], 1 : <i8>
+    // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #mbarrier_pair, #smem, mutable>
+    // CHECK: ttng.init_barrier %[[BARRIER:.*]], 1
+    // CHECK-NEXT: tti.experimental_gsan_mbarrier_init %[[SCRATCH]], %[[BARRIER]], 2
+    ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #mbarrier_pair, #smem, mutable>
+    // CHECK: tti.experimental_gsan_mbarrier_arrive %[[SCRATCH]], %[[BARRIER]], %{{.*}}, 1
+    // CHECK-SAME: multicast = false, multicastMasks = array<i32>, sourceBroadcastMask = 0 : i32
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttng.arrive_barrier %[[BARRIER]], 1, %{{.*}}
+    ttng.arrive_barrier %barrier, 1, %pred : !ttg.memdesc<1xi64, #mbarrier_pair, #smem, mutable>
+    // CHECK: ttng.wait_barrier %[[BARRIER]], %[[PHASE:.*]], %{{.*}}
+    // CHECK-NEXT: tti.experimental_gsan_mbarrier_wait %[[SCRATCH]], %[[BARRIER]], %[[PHASE]], %{{.*}}
+    // CHECK-NEXT: ttg.barrier local
+    ttng.wait_barrier %barrier, %phase, %pred : !ttg.memdesc<1xi64, #mbarrier_pair, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#mbarrier_pair = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: tt.func @mbarrier_warp_specialized
+  tt.func @mbarrier_warp_specialized(%pred: i1) {
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #mbarrier_pair, #smem, mutable>
+    ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #mbarrier_pair, #smem, mutable>
+    // CHECK: ttg.warp_specialize(%[[BARRIER:.*]], %[[PRED:.*]], %[[SCRATCH]])
+    ttg.warp_specialize(%barrier, %pred)
+    default {
+      ttg.warp_yield
+    }
+    // CHECK: partition0(%[[PARTITION_BARRIER:.*]]: !ttg.memdesc<1xi64, #{{.*}}, #smem, mutable>, %[[PARTITION_PRED:.*]]: i1, %[[PARTITION_SCRATCH:.*]]: !tt.ptr<i8>)
+    partition0(%partition_barrier: !ttg.memdesc<1xi64, #mbarrier_pair, #smem, mutable>, %partition_pred: i1) num_warps(4) {
+      // CHECK: tti.experimental_gsan_mbarrier_arrive %[[PARTITION_SCRATCH]], %[[PARTITION_BARRIER]], %[[PARTITION_PRED]], 1
+      ttng.arrive_barrier %partition_barrier, 1, %partition_pred : !ttg.memdesc<1xi64, #mbarrier_pair, #smem, mutable>
+      %phase = arith.constant 0 : i32
+      // CHECK: tti.experimental_gsan_mbarrier_wait %[[PARTITION_SCRATCH]], %[[PARTITION_BARRIER]], %{{.*}}, %[[PARTITION_PRED]]
+      ttng.wait_barrier %partition_barrier, %phase, %partition_pred : !ttg.memdesc<1xi64, #mbarrier_pair, #smem, mutable>
+      ttg.warp_return
+    } : (!ttg.memdesc<1xi64, #mbarrier_pair, #smem, mutable>, i1) -> ()
+    tt.return
+  }
+}
+
+// -----
+
+#mbarrier_local = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: tt.func @mbarrier_tcgen5_commit
+  tt.func @mbarrier_tcgen5_commit(%pred: i1) {
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #mbarrier_local, #smem, mutable>
+    ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #mbarrier_local, #smem, mutable>
+    // CHECK: tti.experimental_gsan_mbarrier_arrive %[[SCRATCH]], %[[BARRIER:.*]], %[[PRED:.*]], 1
+    // CHECK-SAME: publishClock = false
+    // CHECK-NEXT: ttng.tc_gen5_commit %[[BARRIER]], %[[PRED]]
+    ttng.tc_gen5_commit %barrier, %pred : !ttg.memdesc<1xi64, #mbarrier_local, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#mbarrier_local = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#shared_commit = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: tt.func @mbarrier_tcgen5_commit_multicast
+  tt.func @mbarrier_tcgen5_commit_multicast(%desc: !ttg.memdesc<128x128xf16, #shared_commit, #smem>, %wait_pred: i1) {
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #mbarrier_local, #smem, mutable>
+    // CHECK: ttng.init_barrier %[[BARRIER:.*]], 2
+    // CHECK-NEXT: tti.experimental_gsan_mbarrier_init %[[SCRATCH]], %[[BARRIER]], 2
+    ttng.init_barrier %barrier, 2 : !ttg.memdesc<2xi64, #mbarrier_local, #smem, mutable>
+    // CHECK: tti.experimental_gsan_mbarrier_arrive %[[SCRATCH]], %[[BARRIER:.*]], %{{.*}}, 1
+    // CHECK-SAME: multicast = true, multicastMasks = array<i32: 1>, publishClock = false, sourceBroadcastMask = 0 : i32
+    // CHECK-NEXT: ttng.tc_gen5_commit %[[BARRIER]] descs %{{.*}}
+    ttng.tc_gen5_commit %barrier descs %desc : !ttg.memdesc<2xi64, #mbarrier_local, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared_commit, #smem>
+    %phase = arith.constant 0 : i32
+    // CHECK: ttng.wait_barrier %[[BARRIER]], %[[PHASE:.*]], %[[WAIT_PRED:.*]] :
+    // CHECK-NEXT: tti.experimental_gsan_mbarrier_wait %[[SCRATCH]], %[[BARRIER]], %[[PHASE]], %[[WAIT_PRED]]
+    ttng.wait_barrier %barrier, %phase, %wait_pred : !ttg.memdesc<2xi64, #mbarrier_local, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#mbarrier_partial = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0], [1]]}>
+#tma_partial = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0], [0, 0]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: tt.func @mbarrier_multicast_partial_wait
+  tt.func @mbarrier_multicast_partial_wait(%desc: !tt.tensordesc<256x128xf16, #tma_partial>, %wait_pred: i1) {
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc
+    %true = arith.constant true
+    %zero = arith.constant 0 : i32
+    %signal = ttg.local_alloc : () -> !ttg.memdesc<256x128xf16, #tma_partial, #smem, mutable>
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #mbarrier_partial, #smem, mutable>
+    // CHECK: ttng.init_barrier %[[BARRIER:.*]], 1
+    // CHECK-NEXT: tti.experimental_gsan_mbarrier_init %[[SCRATCH]], %[[BARRIER]], 2
+    ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #mbarrier_partial, #smem, mutable>
+    // CHECK: tti.experimental_gsan_mbarrier_arrive %[[SCRATCH]], %[[BARRIER]], %{{.*}}, 1
+    // CHECK-SAME: multicast = false, multicastMasks = array<i32>, sourceBroadcastMask = 0 : i32
+    ttng.barrier_expect %barrier, 32768, %true : !ttg.memdesc<2xi64, #mbarrier_partial, #smem, mutable>
+    // CHECK: ttng.async_tma_copy_global_to_local %{{.*}}[%{{.*}}, %{{.*}}] %{{.*}}, %[[BARRIER]], %{{.*}} {multicast}
+    ttng.async_tma_copy_global_to_local %desc[%zero, %zero] %signal, %barrier, %true {multicast} : !tt.tensordesc<256x128xf16, #tma_partial>, !ttg.memdesc<2xi64, #mbarrier_partial, #smem, mutable> -> !ttg.memdesc<256x128xf16, #tma_partial, #smem, mutable>
+    %phase = arith.constant 0 : i32
+    // CHECK: ttng.wait_barrier %[[BARRIER]], %[[PHASE:.*]], %[[WAIT_PRED:.*]] deps %{{.*}} :
+    // CHECK-NEXT: tti.experimental_gsan_mbarrier_wait %[[SCRATCH]], %[[BARRIER]], %[[PHASE]], %[[WAIT_PRED]]
+    ttng.wait_barrier %barrier, %phase, %wait_pred deps %signal : !ttg.memdesc<2xi64, #mbarrier_partial, #smem, mutable>, !ttg.memdesc<256x128xf16, #tma_partial, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1]]}>
+#mbarrier_local = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+
+// Gluon represents two-CTA execution on the MMA op itself and does not add the
+// module-level ttng.two-ctas attribute.
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: tt.func @mbarrier_two_cta_mma_without_module_attr
+  tt.func @mbarrier_two_cta_mma_without_module_attr() {
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc
+    %true = arith.constant true
+    %a = ttg.local_alloc : () -> !ttg.memdesc<256x128xf16, #shared_a, #smem, mutable>
+    %b = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared_b, #smem, mutable>
+    %d = ttng.tmem_alloc : () -> !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #mbarrier_local, #smem, mutable>
+    ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #mbarrier_local, #smem, mutable>
+    // CHECK: tti.experimental_gsan_mbarrier_arrive %[[SCRATCH]], %[[BARRIER:.*]], %{{.*}}, 1
+    // CHECK-SAME: multicast = true, multicastMasks = array<i32: 1>, publishClock = false, sourceBroadcastMask = 1 : i32
+    // CHECK-NEXT: ttng.tc_gen5_mma %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[BARRIER]][%{{.*}}] {is_async, two_ctas}
+    ttng.tc_gen5_mma %a, %b, %d, %true, %true, %barrier[%true] {is_async, two_ctas} :
+      !ttg.memdesc<256x128xf16, #shared_a, #smem, mutable>,
+      !ttg.memdesc<128x128xf16, #shared_b, #smem, mutable>,
+      !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+      !ttg.memdesc<1xi64, #mbarrier_local, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
   // CHECK-LABEL: tt.func @cluster_barriers
   tt.func @cluster_barriers() {

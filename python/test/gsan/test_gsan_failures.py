@@ -11,6 +11,12 @@ import triton.language as tl
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.nvidia import hopper
+from triton.experimental.gluon.language.nvidia.blackwell import (
+    TensorMemoryLayout,
+    allocate_tensor_memory,
+    tcgen05_commit,
+    tcgen05_mma,
+)
 
 from triton._internal_testing import is_blackwell, is_cuda, is_hopper_or_newer, run_in_process
 from triton.experimental.gsan import create_mem_pool
@@ -275,6 +281,77 @@ def _gluon_cluster_barrier_kernel(payload_ptr, out_ptr, RELAXED: gl.constexpr):
     gl.store(out_ptrs, value, mask=offsets == 128)
 
 
+@gluon.jit
+def _gluon_mbarrier_post_arrival_write_kernel(payload_ptr, out_ptr):
+    data_layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
+
+    barrier = hopper.mbarrier.allocate_mbarrier(two_ctas=True)
+    hopper.mbarrier.init(barrier, count=1)
+    offsets = gl.arange(0, 256, data_layout)
+
+    ordered_ptrs = payload_ptr + offsets * 0
+    gl.store(ordered_ptrs, 1, mask=offsets == 128)
+    hopper.mbarrier.arrive(barrier, count=1)
+    hopper.mbarrier.wait(barrier, phase=0)
+    ordered = gl.load(ordered_ptrs, mask=offsets == 0, other=0)
+    gl.store(out_ptr + offsets * 0, ordered, mask=offsets == 0)
+
+    unordered_ptrs = payload_ptr + 1 + offsets * 0
+    gl.store(unordered_ptrs, 2, mask=offsets == 128)
+    hopper.cluster.barrier(relaxed=True)
+    unordered = gl.load(unordered_ptrs, mask=offsets == 0, other=0)
+    gl.store(out_ptr + 1 + offsets * 0, unordered, mask=offsets == 0)
+    hopper.mbarrier.invalidate(barrier)
+
+
+@gluon.jit
+def _gluon_tcgen05_commit_no_release_kernel(payload_ptr, out_ptr):
+    data_layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
+    signal_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([128, 128], gl.float16, cga_layout=((0, 0), ))
+    signal_desc = gl.allocate_shared_memory(gl.float16, [128, 128], signal_layout)
+
+    barrier = hopper.mbarrier.allocate_mbarrier()
+    hopper.mbarrier.init(barrier, count=2)
+    offsets = gl.arange(0, 256, data_layout)
+    payload_ptrs = payload_ptr + offsets * 0
+    out_ptrs = out_ptr + offsets * 0
+    gl.store(payload_ptrs, 1, mask=offsets == 0)
+    tcgen05_commit(barrier, descs=[signal_desc])
+    hopper.mbarrier.wait(barrier, phase=0)
+    value = gl.load(payload_ptrs, mask=offsets == 128, other=0)
+    gl.store(out_ptrs, value, mask=offsets == 128)
+    hopper.mbarrier.invalidate(barrier)
+
+
+@gluon.jit
+def _gluon_mbarrier_multicast_partial_wait_kernel(input_desc, payload_ptr, out_ptr):
+    data_layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1], [2]])
+    signal = gl.allocate_shared_memory(gl.float16, [256, 128], input_desc.layout)
+    b_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([128, 256], gl.float16, cga_layout=((0, 1), (0, 2)))
+    b = gl.allocate_shared_memory(gl.float16, [128, 256], b_layout)
+    acc_layout: gl.constexpr = TensorMemoryLayout([128, 128], col_stride=1, cga_layout=((1, 0), (0, 1)), two_ctas=True)
+    acc = allocate_tensor_memory(gl.float32, [256, 256], acc_layout)
+
+    # Four CTAs lower this to a two-element mbarrier with CGA layout [[0], [1]].
+    # Each pair of CTAs arrives on a different barrier, and only its leader CTA
+    # executes the lowered wait because the first CTA-layout basis is zero.
+    barrier = hopper.mbarrier.allocate_mbarrier(two_ctas=True)
+    hopper.mbarrier.init(barrier, count=1)
+    offsets = gl.arange(0, 512, data_layout)
+    payload_ptrs = payload_ptr + offsets * 0
+    out_ptrs = out_ptr + offsets * 0
+    gl.store(payload_ptrs, 1, mask=offsets == 0)
+    hopper.cluster.barrier(relaxed=True)
+    hopper.mbarrier.expect(barrier, input_desc.nbytes_per_cta)
+    hopper.tma.async_load(input_desc, [0, 0], barrier, signal, multicast=True)
+    hopper.mbarrier.wait(barrier, phase=0, deps=[signal])
+    value = gl.load(payload_ptrs, mask=offsets == 128, other=0)
+    gl.store(out_ptrs, value, mask=offsets == 128)
+    tcgen05_mma(signal, b, acc, use_acc=False)
+    hopper.cluster.barrier(relaxed=True)
+    hopper.mbarrier.invalidate(barrier)
+
+
 def _cuda_byte_allocator(size: int, _align: int, _stream):
     return torch.empty(size, dtype=torch.int8, device="cuda")
 
@@ -364,6 +441,30 @@ def _run_gluon_relaxed_cluster_barrier_case() -> None:
     payload = torch.zeros(1, dtype=torch.int32, device="cuda")
     out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
     _gluon_cluster_barrier_kernel[(1, )](payload, out, RELAXED=True, num_warps=4, num_ctas=2)
+
+
+@run_with_gsan
+def _run_gluon_mbarrier_post_arrival_write_case() -> None:
+    payload = torch.zeros(2, dtype=torch.int32, device="cuda")
+    out = torch.full((2, ), -1, dtype=torch.int32, device="cuda")
+    _gluon_mbarrier_post_arrival_write_kernel[(1, )](payload, out, num_warps=4, num_ctas=2)
+
+
+@run_with_gsan
+def _run_gluon_tcgen05_commit_no_release_case() -> None:
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    _gluon_tcgen05_commit_no_release_kernel[(1, )](payload, out, num_warps=4, num_ctas=2)
+
+
+@run_with_gsan
+def _run_gluon_mbarrier_multicast_partial_wait_case() -> None:
+    source = torch.zeros((256, 128), dtype=torch.float16, device="cuda")
+    signal_layout = gl.NVMMASharedLayout.get_default_for([256, 128], gl.float16, cga_layout=((1, 0), (0, 0)))
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(source, [256, 128], signal_layout)
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    _gluon_mbarrier_multicast_partial_wait_kernel[(1, )](input_desc, payload, out, num_warps=4, num_ctas=4)
 
 
 @run_with_gsan
@@ -603,6 +704,39 @@ def test_relaxed_cluster_barrier_does_not_synchronize_vector_clocks():
         runner=_run_gluon_relaxed_cluster_barrier_case,
         source_function=_gluon_cluster_barrier_kernel.fn,
         marker="value = gl.load(payload_ptr",
+        error="Read after write race detected",
+    )
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
+def test_mbarrier_wait_does_not_acquire_post_arrival_writes():
+    _run_failure_case(
+        "mbarrier_post_arrival_write",
+        runner=_run_gluon_mbarrier_post_arrival_write_case,
+        source_function=_gluon_mbarrier_post_arrival_write_kernel.fn,
+        marker="unordered = gl.load(unordered_ptrs",
+        error="Read after write race detected",
+    )
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tcgen05_commit_does_not_publish_vector_clock():
+    _run_failure_case(
+        "tcgen05_commit_no_release",
+        runner=_run_gluon_tcgen05_commit_no_release_case,
+        source_function=_gluon_tcgen05_commit_no_release_kernel.fn,
+        marker="value = gl.load(payload_ptrs",
+        error="Read after write race detected",
+    )
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_mbarrier_multicast_partial_wait_only_acquires_on_leader_ctas():
+    _run_failure_case(
+        "mbarrier_multicast_partial_wait",
+        runner=_run_gluon_mbarrier_multicast_partial_wait_case,
+        source_function=_gluon_mbarrier_multicast_partial_wait_kernel.fn,
+        marker="value = gl.load(payload_ptrs",
         error="Read after write race detected",
     )
 

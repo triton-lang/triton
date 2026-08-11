@@ -121,6 +121,83 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
 
 // -----
 
+#mbarrier_pair = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0], [1]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: llvm.func @mbarrier_release_acquire
+  // CHECK: %[[TABLE_ELECT:.*]] = nvvm.elect.sync -> i1
+  // CHECK: %[[TABLE_CTA:.*]] = nvg.cluster_id
+  // CHECK: llvm.call @__triton_gsan_mbarrier_table_init(%[[TABLE:.*]], %{{.*}}, %{{.*}}) : (!llvm.ptr, i32, i32) -> ()
+  // CHECK: %[[INIT_ELECT:.*]] = nvvm.elect.sync -> i1
+  // CHECK: %[[INIT_LEADER_CTA:.*]] = nvg.cluster_id
+  // CHECK: %[[INIT_CTA:.*]] = nvg.cluster_id
+  // CHECK: %[[INIT_ADDRESS:.*]] = llvm.ptrtoint %{{.*}} : !llvm.ptr<3> to i32
+  // CHECK: %[[OFFSET_MASK:.*]] = llvm.mlir.constant(16777215 : i32) : i32
+  // CHECK: %[[INIT_OFFSET:.*]] = llvm.and %[[INIT_ADDRESS]], %[[OFFSET_MASK]] : i32
+  // CHECK: %[[INIT_TABLE:.*]] = llvm.addrspacecast %{{.*}} : !llvm.ptr<1> to !llvm.ptr
+  // CHECK: llvm.call @__triton_gsan_mbarrier_init(%[[INIT_TABLE]], %[[INIT_OFFSET]], %{{.*}}, %[[INIT_CTA]], %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+  // CHECK: %[[ARRIVE_CTA:.*]] = nvg.cluster_id
+  // CHECK: %[[ARRIVE_ELECT:.*]] = nvvm.elect.sync -> i1
+  // CHECK: %[[LEADER_MASK:.*]] = llvm.mlir.constant({{.*}} : i32) : i32
+  // CHECK: %[[LEADER_RANK:.*]] = llvm.and %[[ARRIVE_CTA]], %{{.*}} : i32
+  // CHECK: %[[ONE:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK: %[[RECIPIENTS:.*]] = llvm.shl %[[ONE]], %[[LEADER_RANK]] : i32
+  // CHECK: %[[ARRIVE_COUNT:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-NEXT: %[[PUBLISH:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-NEXT: llvm.call @__triton_gsan_mbarrier_arrive(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[RECIPIENTS]], %[[ARRIVE_COUNT]], %[[ARRIVE_CTA]], %[[PUBLISH]], %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+  // CHECK: %[[WAIT_ELECT:.*]] = nvvm.elect.sync -> i1
+  // CHECK: %[[WAIT_WARP_ELECT:.*]] = llvm.and %{{.*}}, %[[WAIT_ELECT]] : i1
+  // CHECK: %[[WAIT_OP_PRED:.*]] = llvm.and %[[WAIT_WARP_ELECT]], %{{.*}} : i1
+  // CHECK: %[[WAIT_LEADER_CTA:.*]] = nvg.cluster_id
+  // CHECK: %[[WAIT_LEADER_MASK:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK: %[[WAIT_RANK_IN_GROUP:.*]] = llvm.and %[[WAIT_LEADER_CTA]], %[[WAIT_LEADER_MASK]] : i32
+  // CHECK: %[[WAIT_ZERO:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK: %[[WAIT_IS_LEADER:.*]] = llvm.icmp "eq" %[[WAIT_RANK_IN_GROUP]], %[[WAIT_ZERO]] : i32
+  // CHECK: %[[WAIT_PRED:.*]] = llvm.and %[[WAIT_OP_PRED]], %[[WAIT_IS_LEADER]] : i1
+  // CHECK: %[[WAIT_CTA:.*]] = nvg.cluster_id
+  // CHECK: %[[WAIT_PRED_I32:.*]] = llvm.zext %[[WAIT_PRED]] : i1 to i32
+  // CHECK: llvm.call @__triton_gsan_mbarrier_wait(%{{.*}}, %{{.*}}, %{{.*}}, %[[WAIT_PRED_I32]], %[[WAIT_CTA]], %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+  tt.func @mbarrier_release_acquire(%phase: i32, %pred: i1) {
+    %barrier = ttg.local_alloc {allocation.offset = 64 : i32} : () -> !ttg.memdesc<2xi64, #mbarrier_pair, #smem, mutable>
+    ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #mbarrier_pair, #smem, mutable>
+    ttng.arrive_barrier %barrier, 1, %pred : !ttg.memdesc<2xi64, #mbarrier_pair, #smem, mutable>
+    ttng.wait_barrier %barrier, %phase, %pred : !ttg.memdesc<2xi64, #mbarrier_pair, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#mbarrier_local = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.profile_scratch_memory_size" = 192 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: llvm.func @mbarrier_two_cta_source_predicate
+  // CHECK: %[[ARRIVE_CTA:.*]] = nvg.cluster_id
+  // CHECK: %[[SOURCE_ELECT:.*]] = nvvm.elect.sync -> i1
+  // CHECK: %[[SOURCE_WARP_ELECT:.*]] = llvm.and %{{.*}}, %[[SOURCE_ELECT]] : i1
+  // CHECK: %[[SOURCE_ELECT_PRED:.*]] = llvm.and %[[SOURCE_WARP_ELECT]], %{{.*}} : i1
+  // CHECK: %[[SOURCE_PRED_CTA:.*]] = nvg.cluster_id
+  // CHECK: %[[SOURCE_MASK:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK: %[[SOURCE_RANK:.*]] = llvm.and %[[SOURCE_PRED_CTA]], %[[SOURCE_MASK]] : i32
+  // CHECK: %[[SOURCE_ZERO:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK: %[[SOURCE_LEADER:.*]] = llvm.icmp "eq" %[[SOURCE_RANK]], %[[SOURCE_ZERO]] : i32
+  // CHECK: %[[SOURCE_PRED:.*]] = llvm.and %[[SOURCE_ELECT_PRED]], %[[SOURCE_LEADER]] : i1
+  // CHECK: %[[SOURCE_PRED_I32:.*]] = llvm.zext %[[SOURCE_PRED]] : i1 to i32
+  // CHECK: %[[SIGNAL_COUNT:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-NEXT: %[[NO_PUBLISH:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-NEXT: llvm.call @__triton_gsan_mbarrier_arrive(%{{.*}}, %{{.*}}, %{{.*}}, %[[SOURCE_PRED_I32]], %{{.*}}, %[[SIGNAL_COUNT]], %[[ARRIVE_CTA]], %[[NO_PUBLISH]], %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+  tt.func @mbarrier_two_cta_source_predicate(%pred: i1) {
+    %scratch = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 192 : i32, shared_cluster_state, third_party_allocation, ttg.global_scratch_memory_offset = 0 : i32} : !tt.ptr<i8>
+    %barrier = ttg.local_alloc {allocation.offset = 64 : i32} : () -> !ttg.memdesc<1xi64, #mbarrier_local, #smem, mutable>
+    tti.experimental_gsan_mbarrier_arrive %scratch, %barrier, %pred, 1 {multicast = true, multicastMasks = array<i32: 1>, publishClock = false, sourceBroadcastMask = 1 : i32} : <i8>, !ttg.memdesc<1xi64, #mbarrier_local, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.target" = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: llvm.func @gsan_atomic_ordering_one_cta
   // CHECK: llvm.call @__triton_gsan_init
