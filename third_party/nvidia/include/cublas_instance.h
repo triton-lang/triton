@@ -3,6 +3,9 @@
 
 #include "cublas_types.h"
 #include <dlfcn.h>
+#ifdef __linux__
+#include <link.h>
+#endif
 #include <stdexcept>
 #include <string>
 
@@ -64,19 +67,48 @@ private:
 
   cublasLtMatmulPreference_t preference = NULL;
 
+#ifdef __linux__
+  // PyTorch may preload a versioned cuBLAS from its wheel. Reuse that exact
+  // library so it remains paired with the compatible cuBLASLt already loaded.
+  static int findLoadedCublas(struct dl_phdr_info *info, size_t, void *data) {
+    if (!info->dlpi_name || !*info->dlpi_name)
+      return 0;
+    std::string path = info->dlpi_name;
+    size_t slash = path.find_last_of('/');
+    std::string basename =
+        slash == std::string::npos ? path : path.substr(slash + 1);
+    if (basename == name ||
+        basename.rfind(std::string(name) + ".", /*pos=*/0) == 0) {
+      *static_cast<std::string *>(data) = path;
+      return 1;
+    }
+    return 0;
+  }
+#endif
+
   void loadCublasDylib() {
+#ifdef __linux__
+    // dlopen("libcublas.so", RTLD_NOLOAD) does not find a library loaded under
+    // a versioned SONAME, so recover its path from the loaded ELF objects.
+    std::string loadedCublas;
+    dl_iterate_phdr(findLoadedCublas, &loadedCublas);
+    if (!loadedCublas.empty()) {
+      dylibHandle =
+          dlopen(loadedCublas.c_str(), RTLD_NOLOAD | RTLD_LOCAL | RTLD_LAZY);
+    }
+#endif
     if (dylibHandle == nullptr) {
       // First reuse the existing handle
-      dylibHandle = dlopen(name, RTLD_NOLOAD);
+      dylibHandle = dlopen(name, RTLD_NOLOAD | RTLD_LOCAL | RTLD_LAZY);
     }
     if (dylibHandle == nullptr) {
       // If not found, try to load it
       dylibHandle = dlopen(name, RTLD_LOCAL | RTLD_LAZY);
     }
     if (dylibHandle == nullptr) {
-      throw std::runtime_error("Could not find `" + std::string(name) +
-                               "`. Make sure it is in your "
-                               "LD_LIBRARY_PATH.");
+      const char *error = dlerror();
+      throw std::runtime_error("Could not load `" + std::string(name) +
+                               "`: " + (error ? error : "unknown error"));
     }
     dlerror(); // Clear any existing error
 
