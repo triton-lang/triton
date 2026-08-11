@@ -84,8 +84,7 @@ private:
     auto promotedOperands = this->getTypeConverter()->promoteOperands(
         callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
         adaptor.getOperands(), rewriter);
-    if (!caller->hasAttr("allocation.offset") ||
-        !callOp->hasAttr("allocation.offset")) {
+    if (!callOp->hasAttr("allocation.offset")) {
       auto base = LLVM::getStackPointer(rewriter, caller);
       promotedOperands.push_back(base);
     } else {
