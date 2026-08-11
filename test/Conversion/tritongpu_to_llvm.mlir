@@ -2888,6 +2888,44 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func internal @call_smem_leaf(
+  tt.func private @call_smem_leaf() attributes {noinline = true} {
+    %inner = ttg.local_alloc : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    ttg.local_dealloc %inner : !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: llvm.func internal @call_smem_nested(
+  // CHECK-SAME: %[[NESTED_PARENT_SMEM:.*]]: !llvm.ptr<3>
+  tt.func private @call_smem_nested() attributes {noinline = true} {
+    %inner = ttg.local_alloc : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    // CHECK: %[[NESTED_CALL_OFFSET:.*]] = llvm.mlir.constant(128 : i32)
+    // CHECK-NEXT: %[[NESTED_CALLEE_SMEM:.*]] = llvm.getelementptr %[[NESTED_PARENT_SMEM]][%[[NESTED_CALL_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK-NEXT: llvm.call @call_smem_leaf(%[[NESTED_CALLEE_SMEM]],
+    tt.call @call_smem_leaf() : () -> ()
+    ttg.local_dealloc %inner : !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: llvm.func @test_nested_calls_with_smem(
+  tt.func public @test_nested_calls_with_smem() {
+    %outer = ttg.local_alloc : () -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    // CHECK: %[[ENTRY_CALL_OFFSET:.*]] = llvm.mlir.constant(512 : i32)
+    // CHECK-NEXT: %[[ENTRY_SMEM:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK-NEXT: %[[ENTRY_CALLEE_SMEM:.*]] = llvm.getelementptr %[[ENTRY_SMEM]][%[[ENTRY_CALL_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK-NEXT: llvm.call @call_smem_nested(%[[ENTRY_CALLEE_SMEM]],
+    tt.call @call_smem_nested() : () -> ()
+    ttg.local_dealloc %outer : !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #shared1 = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 1, order = [1, 0]}>
 
