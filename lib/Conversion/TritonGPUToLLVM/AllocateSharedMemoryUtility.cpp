@@ -14,10 +14,11 @@ void attachAllocationSizeAndOffsetAttr(ModuleOp mod,
       // Handle scratch buffers (from operations like convert_layout)
       auto oBufferId = funcAllocation->getBufferId(op);
       if (oBufferId != Allocation::InvalidBufferId) {
-        int offset = funcAllocation->getOffset(oBufferId);
+        auto interval = funcAllocation->getAllocatedInterval(oBufferId);
+        int offset = interval.start();
         op->setAttr("allocation.offset", IntegerAttr::get(i32Ty, offset));
-        if (!funcAllocation->isVirtualBuffer(oBufferId)) {
-          int size = funcAllocation->getAllocatedSize(oBufferId);
+        if (!isa<FunctionOpInterface>(op)) {
+          int size = interval.size();
           op->setAttr("allocation.size", IntegerAttr::get(i32Ty, size));
         }
         return;

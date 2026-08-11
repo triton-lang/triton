@@ -35,6 +35,21 @@ uint32_t getBlockBroadcastMask(Type type) {
   return toLinearLayout(memDescTy).getFreeVariableMasks().lookup(kBlock);
 }
 
+std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op) {
+  if (!op->hasAttr("allocation.size") ||
+      !isa<AtomicPollOp, AtomicRMWOp, AtomicCASOp, ttg::LocalAtomicScatterRMWOp,
+           tti::ExperimentalGSanAtomicRMWOp, tti::ExperimentalGSanAtomicCASOp>(
+          op))
+    return std::nullopt;
+
+  Type resultTy = op->getResult(0).getType();
+  if (auto tensorTy = dyn_cast<RankedTensorType>(resultTy)) {
+    auto kBlock = StringAttr::get(op->getContext(), "block");
+    return ttg::toLinearLayout(tensorTy).getFreeVariableMasks().lookup(kBlock);
+  }
+  return static_cast<uint16_t>(ttg::lookupNumCTAs(op) - 1);
+}
+
 } // namespace
 
 class NVIDIAConSanHooks : public tti::ConSanTargetHooks {
@@ -129,6 +144,8 @@ public:
     }
     if (auto storeOp = dyn_cast<ttng::TMAStoreLikeOpInterface>(op))
       mask = getBlockBroadcastMask(storeOp.getSrc().getType());
+    if (auto scratchMask = getAtomicScratchBroadcastMask(op))
+      mask = *scratchMask;
     if (isa<ttng::CLCTryCancelOp>(op) && ttg::lookupNumCTAs(op) > 1) {
       Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
       return arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId,
@@ -144,6 +161,22 @@ public:
     if (!mask)
       return nullptr;
     return getLeaderCTAPredicate(b, mask);
+  }
+
+  SmallVector<Operation *>
+  createInitClusterBarrier(ImplicitLocOpBuilder &b) const override {
+    return {ClusterBarrierOp::create(b, b.getLoc()).getOperation()};
+  }
+
+  std::optional<uint16_t>
+  getScratchCTABroadcastMask(Operation *op) const override {
+    return getAtomicScratchBroadcastMask(op);
+  }
+
+  bool hasUnsummarizableCalleeState(Operation *op) const override {
+    if (isa<ClusterBarrierOp>(op))
+      return true;
+    return getAtomicScratchBroadcastMask(op).value_or(0) != 0;
   }
 
   std::optional<MemEffectsOpInfo>
@@ -244,7 +277,8 @@ public:
       for (auto [value, name] : namedOperands)
         for (auto it = info->operandEffects.begin();
              it != info->operandEffects.end(); ++it)
-          if (it->buf == value) {
+          if (auto *buffer = std::get_if<Value>(&it->buffer);
+              buffer && *buffer == value) {
             effects.emplace_back(*it).operandName = name.str();
             break;
           }
