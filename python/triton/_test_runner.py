@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -98,6 +99,8 @@ def _warmup(args):
         if str(entry) not in sys.path:
             sys.path.insert(0, str(entry))
     directory = os.environ.get("TRITON_CI_COMPILE_TRACE_DIR")
+    if directory and Path(directory).is_dir():
+        shutil.rmtree(directory)
     coordinator = SharedWarmupCoordinator(max_workers=args.warmup_procs, trace_directory=directory)
     environment = _environment("warmup-unit", 1)
     environment["TRITON_WARMUP_COORDINATOR"] = coordinator.address

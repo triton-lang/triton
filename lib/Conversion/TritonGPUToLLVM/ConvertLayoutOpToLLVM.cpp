@@ -215,22 +215,25 @@ struct ConvertLayoutOpConversion
       }
     };
 
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     for (int i = 0; i < nReps; ++i) {
       if (i > 0)
         emitBarrier();
       auto tileInVals =
           ArrayRef<Value>(permutedInVals).slice(i * tileSize, tileSize);
       // Store
-      lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
-                      /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset,
-                      /*affineBlockOffset=*/Value(),
-                      /*maskSpanAffineBlock=*/0, rewriter, targetInfo);
+      lowerLdSt(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
+                /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset,
+                /*affineBlockOffset=*/Value(), /*maskSpanAffineBlock=*/0,
+                laneId, warpId, rewriter, targetInfo, /*maybeMaxVecElems=*/{},
+                makeSharedStoreEmitter(targetInfo, b.true_val()));
       emitBarrier();
       // Load
-      auto tileOutVals = lowerLdStShared(
+      auto tileOutVals = lowerLdSt(
           loc, ctx, loadCvt, {}, llvmElemTy, smemBase, /*paddingShifts=*/{},
           affineOffset, maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
-          /*maskSpanAffineBlock=*/0, rewriter, targetInfo);
+          /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
+          /*maybeMaxVecElems=*/{}, makeSharedLoadEmitter(targetInfo));
       llvm::append_range(outVals, tileOutVals);
     }
 

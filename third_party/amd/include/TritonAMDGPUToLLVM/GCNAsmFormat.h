@@ -53,34 +53,32 @@ class GCNInstrExecution;
 // string and C++ if-else code.
 //
 // Usage:
-// To create a multiplcation operation
+// To create a multiplication operation
 //
-//
-// GCNBuilder gcnBuilder;
-// unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
+// GCNBuilder builder;
 //
 // const std::string readConstraint = "v";
 // const std::string writeConstraint = "=v";
-// auto res = gcnBuilder.newOperand(writeConstraint);
-// auto lhs = gcnBuilder.newOperand(operands[0], readConstraint);
-// auto rhs = gcnBuilder.newOperand(operands[1], readConstraint);
+// auto *res = builder.newOperand(writeConstraint);
+// auto *lhs = builder.newOperand(operands[0], readConstraint);
+// auto *rhs = builder.newOperand(operands[1], readConstraint);
 //
 // create inst
-// auto &mul_inst =
-// GCNInstr::create(gcnBuilder, "v_mul")->float_op_type(bitwidth);
+// auto &mulInstr = *builder.create("v_mul_f32");
 //
 // launch insts
-// mul_inst(res, lhs, rhs);
+// mulInstr(res, lhs, rhs);
 //
 // return result
-// Value ret = gcnBuilder.launch(rewriter, loc, elemTy, false);
+// Value ret = builder.launch(rewriter, loc, elemTy, false);
 // return ret;
+//
 // To get the asm code:
 // builder.dump()
 //
 // To get all the mlir::Value used in the GCN code,
 //
-// builder.getAllMlirArgs() // get {pVal, iVal, jVal, kVal}
+// builder.getAllMLIRArgs() // get {pVal, iVal, jVal, kVal}
 //
 // To get the string containing all the constraints with "," separated,
 // builder.getConstraints() // get "=v,v,v"
@@ -88,25 +86,20 @@ class GCNInstrExecution;
 // GCNBuilder can build a GCN asm with multiple instructions, sample code:
 //
 // GCNBuilder builder;
-// auto &rcp = GCNInstr::create(gcnBuilder, "v_rcp")->float_op_type(bitwidth);
-// auto &mul_inst =
-// GCNInstr::create(gcnBuilder, "v_mul")->float_op_type(bitwidth);
+// auto &rcpInstr = *builder.create("v_rcp_f32");
+// auto &mulInstr = *builder.create("v_mul_f32");
 //
-// rcp(...);
-// mul_inst(...);
+// rcpInstr(...);
+// mulInstr(...);
 // This will get a GCN code with two instructions.
 //
 // Similar to a C function, a declared GCNInstr instance can be launched
 // multiple times with different operands, e.g.
 //
-//   auto &mul_inst =
-//   GCNInstr::create(gcnBuilder, "v_mul")->float_op_type(bitwidth);
-//   mul_inst(... some operands ...); mul_inst(... some different operands ...);
+//   auto &mulInstr = *builder.create("v_mul_f32");
+//   mulInstr(... some operands ...); mulInstr(... some different operands ...);
 //
-// Finally, we will get a GCN code with two mov instructions.
-//
-// There are several derived instruction type for typical instructions, for
-// example, the GCNIOInstr for ld and st instructions.
+// Finally, we will get a GCN code with two multiplication instructions.
 struct GCNBuilder {
   struct Operand {
     std::string constraint;
@@ -220,8 +213,6 @@ struct GCNBuilder {
   // Create a constant operand with explicit code specified.
   Operand *newConstantOperand(const std::string &v);
 
-  Operand *newAddrOperand(mlir::Value addr, StringRef constraint);
-
   Modifier *newModifier(StringRef modifier, StringRef arg);
 
   llvm::SmallVector<Operand *, 4> getAllArgs() const;
@@ -307,30 +298,8 @@ template <class ConcreteT> struct GCNInstrBase : public GCNInstrCommon {
   }
 };
 
-enum VectorWidth { Byte = 8, Short = 16, Dword = 32, Qword = 64 };
-
 struct GCNInstr : public GCNInstrBase<GCNInstr> {
   using GCNInstrBase<GCNInstr>::GCNInstrBase;
-
-  GCNInstr &float_op_type(int width) {
-    switch (width) {
-    case Byte:
-      assert(Byte != width);
-      break;
-    case Short:
-      o("f16");
-      break;
-    case Dword:
-      o("f32");
-      break;
-    case Qword:
-      o("f64");
-      break;
-    default:
-      break;
-    }
-    return *this;
-  }
 };
 
 struct GCNInstrExecution {
@@ -344,59 +313,12 @@ struct GCNInstrExecution {
   explicit GCNInstrExecution(GCNInstrCommon *instr,
                              llvm::ArrayRef<Operand *> oprs,
                              llvm::ArrayRef<Modifier *> modifiers)
-      : argsInOrder(oprs.begin(), oprs.end()), instr(instr),
-        mods(modifiers.begin(), modifiers.end()) {}
+      : argsInOrder(oprs.begin(), oprs.end()),
+        mods(modifiers.begin(), modifiers.end()), instr(instr) {}
 
   std::string dump() const;
 
-  SmallVector<Operand *> getArgList() const;
-
   GCNInstrCommon *instr{};
-};
-
-struct GCNMemInstr : public GCNInstrBase<GCNMemInstr> {
-  using GCNInstrBase<GCNMemInstr>::GCNInstrBase;
-  // Add specific type suffix to instruction
-
-  GCNMemInstr &load_type(int width) {
-    switch (width) {
-    case Byte:
-      o("ubyte");
-      break;
-    case Short:
-      o("ushort");
-      break;
-    case Dword:
-      o("dword");
-      break;
-    case Qword:
-      o("dwordx2");
-      break;
-    default:
-      break;
-    }
-    return *this;
-  }
-
-  GCNMemInstr &store_type(int width) {
-    switch (width) {
-    case Byte:
-      o("byte");
-      break;
-    case Short:
-      o("short");
-      break;
-    case Dword:
-      o("dword");
-      break;
-    case Qword:
-      o("dwordx2");
-      break;
-    default:
-      break;
-    }
-    return *this;
-  }
 };
 
 } // namespace mlir::triton

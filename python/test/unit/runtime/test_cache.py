@@ -540,6 +540,40 @@ def test_cache_closure():
     assert "cst has changed since we compiled this kernel, from constexpr[42] to constexpr[43]" in str(e.value)
 
 
+CLOSURE_SHADOW_GLOBAL = tl.constexpr(3)
+
+
+def test_cache_closure_shadows_global():
+
+    def make_closure(value):
+        CLOSURE_SHADOW_GLOBAL = value
+
+        @triton.jit
+        def closure():
+            return CLOSURE_SHADOW_GLOBAL
+
+        return closure
+
+    first = make_closure(tl.constexpr(7))
+    second = make_closure(tl.constexpr(9))
+    same_as_first = make_closure(tl.constexpr(7))
+    captures_none = make_closure(None)
+
+    first_key = first.cache_key
+    second_key = second.cache_key
+    same_as_first_key = same_as_first.cache_key
+    captures_none.cache_key
+
+    def tracked_values(fn):
+        return {name: value for (name, _), (value, _) in fn.used_global_vals.items()}
+
+    assert first_key != second_key
+    assert first_key == same_as_first_key
+    assert tracked_values(first)["CLOSURE_SHADOW_GLOBAL"].value == 7
+    assert tracked_values(second)["CLOSURE_SHADOW_GLOBAL"].value == 9
+    assert "CLOSURE_SHADOW_GLOBAL" not in tracked_values(captures_none)
+
+
 @triton.jit
 def no_cache_callable_inner():
     pass

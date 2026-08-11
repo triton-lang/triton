@@ -40,6 +40,12 @@ protected:
   virtual void update(Operation *operation, StateT *state, FuncMapT *funcMap,
                       OpBuilder *builder) = 0;
 
+  /// Called after `state` is joined into a CFG or region successor.
+  virtual void updateSuccessor(Operation *, Block *, StateT *) {}
+
+  /// Called on a copy of each return block's state before it is summarized.
+  virtual void updateExitState(StateT *) {}
+
 private:
   void resolve(FunctionOpInterface function, FuncMapT *funcMap,
                OpBuilder *builder) {
@@ -75,6 +81,7 @@ private:
       // Make a copy of the inputblockInfo but not update
       StateT state = inputs[block];
       SmallVector<VirtualBlock> successors;
+      Operation *terminator = nullptr;
       Block::iterator begin = block.second.isValid() ? std::next(block.second)
                                                      : block.first->begin();
       for (Operation &operation : llvm::make_range(begin, block.first->end())) {
@@ -86,6 +93,7 @@ private:
         if (operation.hasTrait<OpTrait::IsTerminator>() ||
             isa<RegionBranchOpInterface>(operation)) {
           visitTerminator(&operation, successors);
+          terminator = &operation;
           break;
         }
       }
@@ -100,6 +108,7 @@ private:
       outputs[block] = state;
       for (VirtualBlock successor : successors) {
         inputs[successor].join(state);
+        updateSuccessor(terminator, successor.first, &inputs[successor]);
         worklist.push_back(successor);
       }
     }
@@ -123,7 +132,9 @@ private:
         return !lhsIt.isValid() ||
                (rhsIt.isValid() && lhsIt->isBeforeInBlock(&*rhsIt));
       });
-      summary.join(last->second);
+      StateT exitState = last->second;
+      updateExitState(&exitState);
+      summary.join(exitState);
     }
   }
 

@@ -16,6 +16,7 @@ from contextvars import ContextVar
 import pytest
 
 from numpy.random import RandomState
+from triton.backends import backends
 from triton.runtime.jit import TensorWrapper, reinterpret, type_canonicalisation_dict
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
@@ -54,6 +55,8 @@ def random_float(*, warmup_value=0.5, **kwargs):
 
 def get_current_target():
     if is_interpreter():
+        return None
+    if not any(backend.driver.is_active() for backend in backends.values()):
         return None
     return triton.runtime.driver.active.get_current_target()
 

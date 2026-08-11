@@ -319,6 +319,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
   # nanobind expects find_package(Python) which sets Python::Module target
   # and Python_* variables. Triton uses find_package(Python3) instead.
   # Bridge the two by aliasing the target and forwarding variables.
+  if(NOT TARGET Python::Interpreter)
+    add_executable(Python::Interpreter ALIAS Python3::Interpreter)
+  endif()
   if(NOT TARGET Python::Module)
     add_library(Python::Module ALIAS Python3::Module)
     set(Python_EXECUTABLE "${Python3_EXECUTABLE}")

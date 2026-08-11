@@ -125,22 +125,7 @@ GSAN_DEVICE ThreadState *getThreadState(GlobalState *globals) {
   uintptr_t stateBase =
       getThreadStateBaseAddress(reinterpret_cast<uintptr_t>(globals));
   auto stateStride = getThreadStateStrideBytes(globals);
-  auto *state = reinterpret_cast<ThreadState *>(stateBase + stateStride * smid);
-
-  if (state->globals == nullptr) {
-    // Per-SM thread state is persistent across launches; initialize lazily.
-    // Multiple threads may race here but they write identical values.
-    state->reserveBase = globals->reserveBase;
-    state->numReads = 0;
-    state->clockBufferDirty = 0;
-    state->gdcWaitCalled = 0;
-    state->clockBufferHead = 0;
-    state->threadId = getDeviceThreadId(globals, smid);
-    __scoped_atomic_thread_fence(__ATOMIC_RELEASE, __MEMORY_SCOPE_SYSTEM);
-    state->globals = globals;
-  }
-
-  return state;
+  return reinterpret_cast<ThreadState *>(stateBase + stateStride * smid);
 }
 
 GSAN_DEVICE epoch_t *getClockBufferBase(ThreadState *state) {
@@ -310,6 +295,19 @@ GSAN_DEVICE void initThread(GlobalState *globals, uint32_t *streamClocks,
   auto *state = getThreadState(globals);
   if (threadIdx == 0) {
     rwLockAcquireWrite(state->lock);
+    auto st_globals = __scoped_atomic_load_n(&state->globals, __ATOMIC_ACQUIRE,
+                                             __MEMORY_SCOPE_DEVICE);
+    if (st_globals == nullptr) {
+      // Lazily initialize per-SM thread state
+      state->reserveBase = globals->reserveBase;
+      state->numReads = 0;
+      state->clockBufferDirty = 0;
+      state->gdcWaitCalled = 0;
+      state->clockBufferHead = 0;
+      state->threadId = getDeviceThreadId(globals, getSmId());
+      __scoped_atomic_store_n(&state->globals, globals, __ATOMIC_RELEASE,
+                              __MEMORY_SCOPE_DEVICE);
+    }
     state->gdcWaitCalled = acquirePrevious;
   }
   syncThreads(barrierId, numThreads);
