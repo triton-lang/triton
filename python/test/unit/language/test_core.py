@@ -6438,7 +6438,7 @@ def test_enable_reflect_ftz(enable_reflect_ftz, device, fresh_knobs):
 
 @pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 @pytest.mark.parametrize("default_override", [False, True])
-def test_ptxas_options(default_override, device, fresh_knobs):
+def test_ptxas_options(default_override, device, fresh_knobs_including_libraries):
     # PTXAS_OPTIONS must be read at compile time, not frozen at import.
     @triton.jit
     def copy(data):
@@ -6447,7 +6447,7 @@ def test_ptxas_options(default_override, device, fresh_knobs):
 
     data = torch.randn((128, ), device=device, dtype=torch.float32)
     if default_override:
-        fresh_knobs.nvidia.ptxas_options = "-v"
+        fresh_knobs_including_libraries.nvidia.ptxas_options = "-v"
         h = copy.warmup(data, grid=(1, ))
     else:
         h = copy.warmup(data, grid=(1, ), ptx_options="-v")
