@@ -65,26 +65,24 @@ python3 -m pip uninstall -y triton pytorch-triton pytorch-triton-rocm || true
 
 python3 -m pip install --no-cache-dir "hip-python==${HIP_PYTHON_VERSION}"
 
-# ROCm builds from before TheRock install runtime shared objects under
-# /opt/rocm/lib, but their Python packages can also expose _rocm_sdk_core.
-# Proton currently treats that package as the runtime location and searches
-# only its lib directory, so it cannot fall back to the valid system ROCm
-# libraries. Populate the selected directory with the APT-provided objects.
-if [ "${ROCM_RELEASE_TYPE}" = "pre-therock" ] &&
-    rocm_sdk_lib="$(
-        python3 -c 'import _rocm_sdk_core, os; print(os.path.join(os.path.dirname(_rocm_sdk_core.__file__), "lib"))' \
-            2>/dev/null
-    )"; then
-    test -d "${rocm_sdk_lib}"
-    for base in librocprofiler-sdk librocprofiler-sdk-attach; do
-        if [ ! -e "${rocm_sdk_lib}/${base}.so" ] && [ -e "/opt/rocm/lib/${base}.so" ]; then
-            ln -s "/opt/rocm/lib/${base}.so" "${rocm_sdk_lib}/${base}.so"
-        fi
-    done
-    test -e "${rocm_sdk_lib}/librocprofiler-sdk.so"
-    ROCM_SDK_LIB="${rocm_sdk_lib}" python3 -c \
-        'import ctypes, os; ctypes.CDLL(os.path.join(os.environ["ROCM_SDK_LIB"], "librocprofiler-sdk.so"))'
+# Proton currently accepts a directory override and then loads an unversioned
+# library name from it. Give every image one stable directory regardless of
+# whether ROCm libraries came from the legacy APT layout or TheRock packages.
+if [ "${ROCM_RELEASE_TYPE}" = "pre-therock" ]; then
+    rocprofiler_source_lib="/opt/rocm/lib"
+else
+    rocprofiler_source_lib="${rocm_sdk_lib}"
 fi
+mkdir -p "${TRITON_ROCPROFILER_SDK_LIB_PATH}"
+for base in librocprofiler-sdk librocprofiler-sdk-attach; do
+    if [ -e "${rocprofiler_source_lib}/${base}.so" ]; then
+        ln -s "${rocprofiler_source_lib}/${base}.so" \
+            "${TRITON_ROCPROFILER_SDK_LIB_PATH}/${base}.so"
+    fi
+done
+test -e "${TRITON_ROCPROFILER_SDK_LIB_PATH}/librocprofiler-sdk.so"
+env -u ROCPROFILER_REGISTER_FORCE_LOAD python3 -c \
+    'import ctypes, os, torch; ctypes.CDLL(os.path.join(os.environ["TRITON_ROCPROFILER_SDK_LIB_PATH"], "librocprofiler-sdk.so")); assert torch.version.hip'
 
 # Confirm the image does not retain a packaged Triton, which would shadow
 # the source checkout installed by CI.
