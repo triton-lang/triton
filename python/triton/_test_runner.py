@@ -7,6 +7,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 from triton._compile_warmup import _require_complete_warmup, summarize_compile_trace
@@ -39,6 +40,18 @@ def _pytest(*arguments, workers=None, import_mode=None, distribution="worksteal"
         command.append(f"--import-mode={import_mode}")
     if workers is not None:
         command.extend(("-n", str(workers), f"--dist={distribution}"))
+    if directory := os.environ.get("TRITON_TEST_JUNIT_DIR"):
+        directory = Path(directory).resolve()
+        directory.mkdir(parents=True, exist_ok=True)
+        label = "unit"
+        for target in arguments:
+            if target.startswith("-") or ("/" not in target and not target.endswith(".py")):
+                continue
+            path = Path(target.rstrip("/"))
+            label = path.stem.removeprefix("test_") if path.suffix else "-".join(path.parts[-2:])
+            label = label.replace("_", "-")
+            break
+        command.append(f"--junitxml={directory / f'pytest-{label}-{uuid.uuid4().hex}-results.xml'}")
     command.extend(arguments)
     return command
 
@@ -198,6 +211,8 @@ def _gsan(args):
 
 
 def _suite(args):
+    if args.junit_dir is not None:
+        os.environ["TRITON_TEST_JUNIT_DIR"] = args.junit_dir
     return {"unit": _unit, "gsan": _gsan, "gluon": _gluon}[args.name](args)
 
 
@@ -230,6 +245,8 @@ def _main(argv=None):
     suite.add_argument("--example-procs", type=int, default=4)
     suite.add_argument("--debug-procs", type=int, default=4)
     suite.add_argument("--kernel-procs", type=int)
+    suite.add_argument("--junit-dir", default=os.environ.get("TRITON_TEST_JUNIT_DIR"),
+                       help="write one JUnit XML report per pytest subprocess to this directory")
     suite.set_defaults(run=_suite)
 
     report = commands.add_parser("report", help="summarize cache coverage and validate completeness")
