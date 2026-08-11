@@ -2520,11 +2520,20 @@ void FunctionBuilder::createPublishCTAVisibilityCall(ImplicitLocOpBuilder &b,
   SmallVector<Value> args = {arith::ConstantIntOp::create(b, sourceMask, 64),
                              arith::ConstantIntOp::create(b, destMask, 64),
                              writeVis.value, readVis.value};
+  ManglingArgs specializationArgs{writeVisibilityType, readVisibilityType};
+  RankedTensorType proxyVisibilityType;
+  if (memType == MemType::SHARED_MEM &&
+      !auxData.proxyAccessVisibility.empty()) {
+    auto proxyVis = auxData.proxyAccessVisibility.at(insertPoint);
+    proxyVisibilityType = cast<RankedTensorType>(proxyVis.type);
+    args.push_back(proxyVis.value);
+    specializationArgs.append(proxyVisibilityType);
+  }
   createCallToCachedFunction(
       b, "publish_cta_visibility", args,
-      /*assertInfo=*/std::nullopt, {writeVisibilityType, readVisibilityType},
-      [writeVisibilityType, readVisibilityType](ImplicitLocOpBuilder &fb,
-                                                Block *entryBlock) {
+      /*assertInfo=*/std::nullopt, specializationArgs,
+      [writeVisibilityType, readVisibilityType,
+       proxyVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value sourceMask = entryBlock->getArgument(0);
         Value destMask = entryBlock->getArgument(1);
         Value writeVisibilityPtr = entryBlock->getArgument(2);
@@ -2556,28 +2565,33 @@ void FunctionBuilder::createPublishCTAVisibilityCall(ImplicitLocOpBuilder &b,
                                        newWriteVisibility, writeVisibilityType,
                                        writeCTAMask);
 
-        Value readVisibility = tti::createLoadScratchMemory(
-            fb, fb.getLoc(), readVisibilityPtr, readVisibilityType);
-        Value zeroReads =
-            tti::createConstIntTensor(fb, fb.getLoc(), 0, readVisibilityType);
-        Value sourceColumns = createThreadColumnMask(
-            fb, sourceMask, readVisibilityType, /*columnDim=*/3);
-        Value sourceReads = arith::SelectOp::create(fb, sourceColumns,
-                                                    readVisibility, zeroReads);
-        sourceReads = reduce<arith::OrIOp>(fb, sourceReads, {3});
-        sourceReads = convertAndBroadcast(fb, sourceReads, {0, 1, 2, 4},
-                                          readVisibilityType);
-        Value destColumns = createThreadColumnMask(
-            fb, destMask, readVisibilityType, /*columnDim=*/3);
-        Value publishedReads =
-            arith::SelectOp::create(fb, destColumns, sourceReads, zeroReads);
-        Value newReadVisibility =
-            arith::OrIOp::create(fb, readVisibility, publishedReads);
-        Value readCTAMask =
-            createCTASetMask(fb, readVisibilityType, /*dim=*/2, currentCTA);
-        createMaskedStoreScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
-                                       newReadVisibility, readVisibilityType,
-                                       readCTAMask);
+        auto publishObserverVisibility = [&](Value visibilityPtr,
+                                             RankedTensorType visibilityType) {
+          Value visibility = tti::createLoadScratchMemory(
+              fb, fb.getLoc(), visibilityPtr, visibilityType);
+          Value zero =
+              tti::createConstIntTensor(fb, fb.getLoc(), 0, visibilityType);
+          Value sourceColumns = createThreadColumnMask(
+              fb, sourceMask, visibilityType, /*columnDim=*/3);
+          Value source =
+              arith::SelectOp::create(fb, sourceColumns, visibility, zero);
+          source = reduce<arith::OrIOp>(fb, source, {3});
+          source =
+              convertAndBroadcast(fb, source, {0, 1, 2, 4}, visibilityType);
+          Value destColumns = createThreadColumnMask(
+              fb, destMask, visibilityType, /*columnDim=*/3);
+          Value published =
+              arith::SelectOp::create(fb, destColumns, source, zero);
+          Value updated = arith::OrIOp::create(fb, visibility, published);
+          Value ctaMask =
+              createCTASetMask(fb, visibilityType, /*dim=*/2, currentCTA);
+          createMaskedStoreScratchMemory(fb, fb.getLoc(), visibilityPtr,
+                                         updated, visibilityType, ctaMask);
+        };
+        publishObserverVisibility(readVisibilityPtr, readVisibilityType);
+        if (proxyVisibilityType)
+          publishObserverVisibility(entryBlock->getArgument(4),
+                                    proxyVisibilityType);
 
         triton::ReturnOp::create(fb);
       });

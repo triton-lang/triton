@@ -221,8 +221,8 @@ public:
   void createCopyReadVisibilityCall(ImplicitLocOpBuilder &b, int sourceThread,
                                     uint64_t destMask, Value pred,
                                     MemType memType, Operation *insertPoint);
-  // publishCTAVisibility: make the read and write visibility observed by
-  // sourceMask visible to destMask in the current CTA.
+  // publishCTAVisibility: make read, write, and shared-memory proxy visibility
+  // observed by sourceMask visible to destMask in the current CTA.
   void createPublishCTAVisibilityCall(ImplicitLocOpBuilder &b,
                                       uint64_t sourceMask, uint64_t destMask,
                                       MemType memType, Operation *insertPoint);

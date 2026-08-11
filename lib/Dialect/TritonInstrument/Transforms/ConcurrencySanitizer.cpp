@@ -833,9 +833,15 @@ private:
           // effects remain pending until a worker explicitly waits for them.
           b.setListener(nullptr);
           b.setInsertionPointAfter(wsOp);
+          Value lock = auxData.lock.at(op).value;
+          Value trueVal = arith::ConstantIntOp::create(b, 1, 1);
+          tti::ExperimentalLockAcquireOp::create(b, lock, trueVal);
           for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM})
             funcBuilder.createPublishCTAVisibilityCall(
-                b, baseDestMask, /*destMask=*/1, memType, op);
+                b, baseDestMask,
+                getThreadPeersMask(baseThread, auxData.threadLayout), memType,
+                op);
+          tti::ExperimentalLockReleaseOp::create(b, lock, trueVal);
           b.setInsertionPoint(wsOp);
           b.setListener(&listener);
         }
