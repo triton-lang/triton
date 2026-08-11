@@ -212,6 +212,8 @@ def test_consan_noinline_convert_layout_scratch(ENABLE_CONSAN, NESTED, device, f
     output = torch.empty_like(values)
     sentinel_output = torch.empty_like(values)
     compiled = _consan_noinline_convert_layout_kernel[(1, )](values, output, sentinel_output, NESTED, num_warps=4)
+    if is_compile_warmup():
+        return
     assert compiled.metadata.shared >= 2 * values.numel() * values.element_size()
     assert compiled.asm["ttgir"].count("noinline = true") >= 1 + int(NESTED)
     torch.testing.assert_close(output, values)
