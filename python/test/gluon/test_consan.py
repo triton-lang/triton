@@ -200,7 +200,7 @@ def _consan_noinline_convert_layout_kernel(input, output, sentinel_output, NESTE
     ttgl.store(sentinel_output + offsets, caller_allocation.load(layout))
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
 @pytest.mark.parametrize("ENABLE_CONSAN,NESTED", [
     pytest.param(False, False, id="without-consan"),
     pytest.param(True, False, id="with-consan"),
