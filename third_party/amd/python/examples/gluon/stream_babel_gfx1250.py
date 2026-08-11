@@ -38,7 +38,11 @@ def stream_tdm_kernel(
     num_warps: gl.constexpr = gl.num_warps()
     num_buffers: gl.constexpr = 2 if PIPELINED else 1
     blocked_layout: gl.constexpr = gl.BlockedLayout([8], [32], [num_warps], [0])
-    shared_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[BLOCK_SIZE // 2, 8]], [BLOCK_SIZE], [0])
+    # Pad every half tile to break LDS bank conflicts, but stop at 512 elements:
+    # TDM encodes the interval as log2(dwords) and rejects anything above 8, so it
+    # cannot exceed 256 dwords, which is 512 fp16 elements.
+    pad_interval: gl.constexpr = min(BLOCK_SIZE // 2, 512)
+    shared_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[pad_interval, 8]], [BLOCK_SIZE], [0])
     offs = gl.arange(0, BLOCK_SIZE, layout=blocked_layout)
 
     a_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(N, ), strides=(1, ),
@@ -194,10 +198,16 @@ def compile_stream_tdm(nary: int, pipelined: bool):
         "NARY": nary,
         "PIPELINED": pipelined,
     }
+    # Match the alignment facts the JIT specializes on at launch. Without them
+    # the pointer alignment and the `offsets < N` mask constancy are unknown, so
+    # the output store scalarizes to one b16 per element and the compiled code
+    # no longer resembles what actually runs.
+    attrs = {(i, ): [["tt.divisibility", 16]] for i in range(5)}
     with triton.knobs.compilation.scope():
         triton.knobs.compilation.always_compile = True
         return triton.compile(
-            gluon._runtime.GluonASTSource(fn=stream_tdm_kernel, signature=signature, constexprs=constexprs),
+            gluon._runtime.GluonASTSource(fn=stream_tdm_kernel, signature=signature, constexprs=constexprs,
+                                          attrs=attrs),
             target=GPUTarget("hip", "gfx1250", 32),
             options={"num_warps": WARPS_PER_CTA},
         )
@@ -208,17 +218,47 @@ def compile_stream_tdm(nary: int, pipelined: bool):
 def test_compile_stream_tdm(nary, pipelined):
     """Verify every stream mode uses gfx1250 TDM global-to-LDS loads."""
     kernel = compile_stream_tdm(nary, pipelined)
-    actual = len(re.findall(r"\btensor_load_to_lds\b", kernel.asm["amdgcn"]))
+    amdgcn = kernel.asm["amdgcn"]
+
+    actual = len(re.findall(r"\btensor_load_to_lds\b", amdgcn))
     minimum = nary * (2 if pipelined else 1)
     assert actual >= minimum, f"expected at least {minimum} tensor_load_to_lds instructions, got {actual}"
 
+    # Every input byte must arrive through TDM, with no per-lane load fallback.
+    fallback = re.findall(r"\b(?:global_load|buffer_load)\w*", amdgcn)
+    assert not fallback, f"inputs should be TDM-only, found register loads: {sorted(set(fallback))}"
 
-@pytest.mark.parametrize("N", [32768, 500], ids=lambda N: f"N={N}")
+    # The output stream must stay fully vectorized; a scalarized store would
+    # invalidate any bandwidth measured from this kernel.
+    stores = re.findall(r"\bbuffer_store_\w+", amdgcn)
+    assert stores, "expected buffer stores for the output stream"
+    assert set(stores) == {"buffer_store_b128"}, f"expected only 128-bit output stores, got {sorted(set(stores))}"
+
+
+@pytest.mark.parametrize(
+    "N, num_workgroups",
+    [(500, 1),  # one partial tile
+     (4097, 2),  # uneven iteration counts across workgroups
+     (8192, 2),  # several iterations per workgroup
+     (32768, 32),  # many workgroups, one tile each
+     (32785, 32),  # many workgroups with a partial tail
+     ],
+    ids=lambda v: str(v),
+)
 @pytest.mark.parametrize("pipelined", [False, True], ids=["non_pipelined", "pipelined"])
 @pytest.mark.parametrize("nary", [1, 2, 3], ids=["unary", "binary", "ternary"])
-def test_stream_copy(nary, pipelined, N):
+def test_stream_copy(nary, pipelined, N, num_workgroups):
     """Test stream copy kernel correctness."""
-    run_stream_nary(N, nary, pipelined=pipelined, check=True)
+    run_stream_nary(N, nary, pipelined=pipelined, check=True, num_workgroups=num_workgroups)
+
+
+@pytest.mark.parametrize("block_size", [128, 256, 1024, 2048, 4096], ids=lambda b: f"block={b}")
+@pytest.mark.parametrize("pipelined", [False, True], ids=["non_pipelined", "pipelined"])
+@pytest.mark.parametrize("nary", [1, 2, 3], ids=["unary", "binary", "ternary"])
+def test_stream_copy_block_sizes(nary, pipelined, block_size):
+    """Each tile size must handle a full tile and an uneven tail."""
+    run_stream_nary(4 * block_size, nary, pipelined=pipelined, check=True, num_workgroups=2, block_size=block_size)
+    run_stream_nary(4 * block_size + 1, nary, pipelined=pipelined, check=True, num_workgroups=2, block_size=block_size)
 
 
 if __name__ == "__main__":
@@ -238,7 +278,8 @@ if __name__ == "__main__":
     parser.add_argument("--no-check", action="store_true",
                         help="Skip stream-copy correctness checks and D2H copy-back for bandwidth runs")
     parser.add_argument("--stream-workgroups", type=int, default=1024, help="Number of workgroups")
-    parser.add_argument("--stream-block-size", type=int, default=1024, help="Elements per workgroup")
+    parser.add_argument("--stream-block-size", type=int, default=1024,
+                        help="Elements per workgroup")
     args = parser.parse_args()
 
     print(f"Running stream_tdm_kernel with N={args.n} elements")
