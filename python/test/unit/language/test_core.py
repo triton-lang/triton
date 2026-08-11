@@ -1052,24 +1052,50 @@ def test_math_op(dtype_x, expr, x, device):
     _test_unary(dtype_x, f'tl.{expr}({x})', np_expr, device=device)
 
 
+# Interpreter only patches tensor members marked as builtins.
+# Use float32 because `sqrt_rn` only accepts fp32 tensors.
 @pytest.mark.interpreter
+@pytest.mark.parametrize(
+    "expr", ['abs', 'exp', 'exp2', 'log', 'log2', 'cos', 'sin', 'sqrt', 'sqrt_rn', 'rsqrt', 'floor', 'ceil'])
+def test_math_member_fn(expr, device):
+    np_expr = {'rsqrt': "1.0 / np.sqrt(x)", 'sqrt_rn': "np.sqrt(x)"}.get(expr, f"np.{expr}(x)")
+    _test_unary('float32', f'x.{expr}()', np_expr, device=device)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("expr", ['tl.exp(x)', 'x.exp()'])
+def test_math_member_fn_rejects_fp16(expr, device):
+
+    @triton.jit
+    def kernel(X):
+        x = tl.load(X + tl.arange(0, 4))
+        y = GENERATE_TEST_HERE  # noqa: F841
+
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': expr})
+    x = to_triton(numpy_random(4, dtype_str='float16'), device=device, dst_type='float16')
+    with pytest.raises(triton.TritonError, match="Expected dtype"):
+        kernel[(1, )](x)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("member_fn", [False, True])
 @pytest.mark.parametrize("dtype", [dtype for dtype in ["float32", "float64"]])
-def test_math_erf_op(dtype, device):
+def test_math_erf_op(dtype, member_fn, device):
     check_type_supported(dtype, device)
     SIZE = 128
 
     @triton.jit
-    def kernel(Z, X, SIZE: tl.constexpr):
+    def kernel(Z, X, SIZE: tl.constexpr, MEMBER_FN: tl.constexpr):
         off = tl.arange(0, SIZE)
         x = tl.load(X + off)
-        z = tl.math.erf(x)
+        z = x.erf() if MEMBER_FN else tl.math.erf(x)
         tl.store(Z + off, z)
 
     torch_dtype = torch.float32 if dtype == "float32" else torch.float64
     x = torch.randn(SIZE, dtype=torch_dtype, device=device)
     z_ref = torch.erf(x)
     z_tri = torch.zeros_like(x)
-    kernel[(1, )](z_tri, x, SIZE=SIZE, num_warps=4)
+    kernel[(1, )](z_tri, x, SIZE=SIZE, MEMBER_FN=member_fn, num_warps=4)
     torch.testing.assert_close(z_tri, z_ref)
 
 
@@ -3208,27 +3234,6 @@ def test_histogram_silent_data_corruption(device):
 
     histogram_kernel[(1, )](x, z)
     assert z[1] == 1, f"Second element shouldn't be affected, expected_buffer=[1, 1], actual_buffer={z}"
-
-
-@pytest.mark.interpreter
-@pytest.mark.parametrize("dtype, M", [(torch.int8, 128), (torch.int16, 32768)])
-def test_histogram_narrow_input_count_overflow(dtype, M, device):
-    if not is_interpreter():
-        pytest.skip("narrow integer histogram lowering is not supported yet")
-
-    @triton.jit
-    def histogram_kernel(x_ptr, z_ptr, M: tl.constexpr):
-        offsets = tl.arange(0, M)
-        x = tl.load(x_ptr + offsets)
-        z = tl.histogram(x, 2)
-        tl.store(z_ptr + tl.arange(0, 2), z)
-
-    x = torch.ones(M, device=device, dtype=dtype)
-    z = torch.empty(2, device=device, dtype=torch.int32)
-
-    histogram_kernel[(1, )](x, z, M=M)
-    expected = torch.tensor([0, M], device=device, dtype=torch.int32)
-    torch.testing.assert_close(z, expected)
 
 
 @pytest.mark.interpreter

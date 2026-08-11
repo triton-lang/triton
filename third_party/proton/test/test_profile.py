@@ -33,6 +33,7 @@ def _find_frame_by_name(frame, name):
     return None
 
 
+# Remove _skip_cudagraph_test once the rocm version has been updated on CI nodes
 _skip_cudagraph_test = pytest.mark.skipif(
     os.environ.get("PROTON_SKIP_CUDAGRAPH_TEST", "0") == "1",
     reason="CUDAGraph test skipped due to environment constraints",
@@ -176,7 +177,7 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
         assert total_iters == 10
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+@_skip_cudagraph_test
 def test_cudagraph_metric_queue_handles_inactive_replay(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -245,7 +246,7 @@ def test_cudagraph_metric_queue_handles_inactive_replay(tmp_path: pathlib.Path, 
     assert profiled_frame["metrics"]["sum_metric"] == float(x.numel())
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph replay")
+@_skip_cudagraph_test
 def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -301,7 +302,7 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
     assert has_positive_time_metric(replay1_frame)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph deactivation")
+@_skip_cudagraph_test
 def test_cudagraph_deactivate(tmp_path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -369,7 +370,7 @@ def test_cudagraph_deactivate(tmp_path, device: str):
     assert scope_c_frame is not None
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph replay")
+@_skip_cudagraph_test
 @pytest.mark.parametrize("data_format", ["hatchet", "hatchet_msgpack"])
 def test_cudagraph_filters_unlinked_virtual_scopes(tmp_path: pathlib.Path, data_format: str, device: str):
     stream = torch.cuda.Stream()
@@ -432,7 +433,7 @@ def test_cudagraph_filters_unlinked_virtual_scopes(tmp_path: pathlib.Path, data_
     assert iter_with_kernel_frame["children"][0]["metrics"]["time (ns)"] > 0
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+@_skip_cudagraph_test
 def test_cudagraph_multi_stream(tmp_path: pathlib.Path, device: str):
     """
     kernels in a cudagraph can be launched using multiple internal streams, without
@@ -1027,7 +1028,7 @@ def test_multiple_sessions(tmp_path: pathlib.Path, device: str):
     assert scope0_count + scope1_count == 3
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+@_skip_cudagraph_test
 def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -1171,7 +1172,6 @@ def test_trace(tmp_path: pathlib.Path, device: str):
         assert abs(time.time_ns() - base_time_ns) < one_day_ns
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
 def test_trace_flexible_metrics_scope_ranges(tmp_path: pathlib.Path, device: str):
 
     @triton.jit
@@ -1264,7 +1264,7 @@ def test_trace_flexible_metrics_no_kernel_anchor(tmp_path: pathlib.Path):
     assert isinstance(trace_events[0]["args"]["scope_id"], int)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph trace reconstruction")
+@_skip_cudagraph_test
 def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
