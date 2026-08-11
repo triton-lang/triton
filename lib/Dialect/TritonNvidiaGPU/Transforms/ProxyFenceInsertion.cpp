@@ -36,9 +36,6 @@ using BufferAccess = BufferRegionAccess;
 struct ProxyBlockInfo {
   using Frontier = ScopedMemoryFrontier<uint8_t>;
 
-  ProxyBlockInfo() = default;
-  explicit ProxyBlockInfo(uint8_t scopes) : entryGenericUnfenced(scopes) {}
-
   // Generic accesses since the last proxy fence and async accesses before the
   // first proxy fence reachable from function entry.
   Frontier generic;
@@ -70,13 +67,13 @@ struct ProxyBlockInfo {
 
 struct ProxyFenceFunctionAnalysis
     : public PostOrderFunctionAnalysis<ProxyBlockInfo> {
-  using Base = PostOrderFunctionAnalysis<ProxyBlockInfo>;
-  using FuncMapT = Base::FuncMapT;
+  using FuncMapT = PostOrderFunctionAnalysis<ProxyBlockInfo>::FuncMapT;
 
   ProxyFenceFunctionAnalysis(FunctionOpInterface function,
                              BufferRegionAnalysis &regions, uint8_t scopes)
-      : Base(ProxyBlockInfo(scopes)), function(function), regions(regions),
-        scopes(scopes) {}
+      : function(function), regions(regions), scopes(scopes) {}
+
+  ProxyBlockInfo getEntryState() const override { return {{}, {}, scopes}; }
 
   void applyEffects(Operation *op, const ProxyBlockInfo &effects,
                     ProxyBlockInfo &state, OpBuilder &builder) {

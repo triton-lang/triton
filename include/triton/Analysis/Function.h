@@ -25,9 +25,6 @@ template <typename StateT> class PostOrderFunctionAnalysis {
 public:
   using FuncMapT = DenseMap<FunctionOpInterface, StateT>;
 
-  explicit PostOrderFunctionAnalysis(StateT entryState = StateT())
-      : entryState(std::move(entryState)) {}
-
   virtual ~PostOrderFunctionAnalysis() = default;
 
   void run(FunctionOpInterface function, FuncMapT &funcMap) {
@@ -36,6 +33,10 @@ public:
   }
 
 protected:
+  /// Returns the state for the function entry. Default-constructed states are
+  /// still used as the join identity for all other virtual blocks.
+  virtual StateT getEntryState() const { return StateT(); }
+
   virtual void update(Operation *operation, StateT *state, FuncMapT *funcMap,
                       OpBuilder *builder) = 0;
 
@@ -46,8 +47,6 @@ protected:
   virtual void updateExitState(StateT *) {}
 
 private:
-  StateT entryState;
-
   void resolve(FunctionOpInterface function, FuncMapT *funcMap,
                OpBuilder *builder) {
     // Initialize the blockList. Operations are organized into "virtual blocks",
@@ -72,7 +71,7 @@ private:
     std::deque<VirtualBlock> worklist;
     // Start the analysis from the entry block of the function.
     VirtualBlock entry(&function.getBlocks().front(), Block::iterator());
-    inputs.try_emplace(entry, entryState);
+    inputs[entry] = getEntryState();
     worklist.push_back(entry);
 
     // A fixed point algorithm
