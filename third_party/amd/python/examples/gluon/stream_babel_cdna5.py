@@ -1,4 +1,4 @@
-"""Semantic FP16 stream kernels using gfx1250 TDM loads."""
+"""Semantic FP16 stream kernels using CDNA5 TDM loads."""
 
 import re
 
@@ -9,8 +9,8 @@ from triton.backends.compiler import GPUTarget
 from triton.experimental import gluon
 import triton.experimental.gluon.language as gl
 
-# Constants for GFX1250
-THREADS_PER_WARP = 32  # GFX1250 warp size
+# Constants for CDNA5
+THREADS_PER_WARP = 32  # CDNA5 warp size
 ELEMENTS_PER_THREAD = 8  # 128 bits / 16 bits per fp16 = 8 elements
 WARPS_PER_CTA = 4  # 4 warps per CTA.
 BLOCK_SIZE = ELEMENTS_PER_THREAD * THREADS_PER_WARP * WARPS_PER_CTA  # 1024 elements per workgroup (4 warps)
@@ -28,7 +28,7 @@ def stream_tdm_kernel(
     NARY: gl.constexpr,
     PIPELINED: gl.constexpr,
 ):
-    """N-input semantic stream with gfx1250 TDM loads staged through LDS."""
+    """N-input semantic stream with CDNA5 TDM loads staged through LDS."""
     wg_id = gl.program_id(0)
     start_offset = wg_id * BLOCK_SIZE
     grid_stride = NUM_WGS * BLOCK_SIZE
@@ -45,26 +45,26 @@ def stream_tdm_kernel(
     shared_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[pad_interval, 8]], [BLOCK_SIZE], [0])
     offs = gl.arange(0, BLOCK_SIZE, layout=blocked_layout)
 
-    a_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(N, ), strides=(1, ),
-                                                       block_shape=(BLOCK_SIZE, ), layout=shared_layout)
+    a_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr, shape=(N, ), strides=(1, ), block_shape=(BLOCK_SIZE, ),
+                                                     layout=shared_layout)
     a_buffer = gl.allocate_shared_memory(a_desc.dtype, shape=[num_buffers] + a_desc.block_shape, layout=a_desc.layout)
     if NARY >= 2:
-        b_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_ptr, shape=(N, ), strides=(1, ),
-                                                           block_shape=(BLOCK_SIZE, ), layout=shared_layout)
+        b_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(base=b_ptr, shape=(N, ), strides=(1, ),
+                                                         block_shape=(BLOCK_SIZE, ), layout=shared_layout)
         b_buffer = gl.allocate_shared_memory(b_desc.dtype, shape=[num_buffers] + b_desc.block_shape,
                                              layout=b_desc.layout)
     if NARY >= 3:
-        c_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(base=c_ptr, shape=(N, ), strides=(1, ),
-                                                           block_shape=(BLOCK_SIZE, ), layout=shared_layout)
+        c_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(base=c_ptr, shape=(N, ), strides=(1, ),
+                                                         block_shape=(BLOCK_SIZE, ), layout=shared_layout)
         c_buffer = gl.allocate_shared_memory(c_desc.dtype, shape=[num_buffers] + c_desc.block_shape,
                                              layout=c_desc.layout)
 
     if PIPELINED:
-        gl.amd.gfx1250.tdm.async_load(a_desc, [start_offset], a_buffer.index(0))
+        gl.amd.cdna5.tdm.async_load(a_desc, [start_offset], a_buffer.index(0))
         if NARY >= 2:
-            gl.amd.gfx1250.tdm.async_load(b_desc, [start_offset], b_buffer.index(0))
+            gl.amd.cdna5.tdm.async_load(b_desc, [start_offset], b_buffer.index(0))
         if NARY >= 3:
-            gl.amd.gfx1250.tdm.async_load(c_desc, [start_offset], c_buffer.index(0))
+            gl.amd.cdna5.tdm.async_load(c_desc, [start_offset], c_buffer.index(0))
 
         steady_iters = gl.maximum(num_iters - 1, 0)
         for i in range(0, steady_iters):
@@ -73,14 +73,14 @@ def stream_tdm_kernel(
             current_offset = start_offset + i * grid_stride
             next_offset = current_offset + grid_stride
 
-            gl.amd.gfx1250.tdm.async_load(a_desc, [next_offset], a_buffer.index(next_slot))
+            gl.amd.cdna5.tdm.async_load(a_desc, [next_offset], a_buffer.index(next_slot))
             if NARY >= 2:
-                gl.amd.gfx1250.tdm.async_load(b_desc, [next_offset], b_buffer.index(next_slot))
+                gl.amd.cdna5.tdm.async_load(b_desc, [next_offset], b_buffer.index(next_slot))
             if NARY >= 3:
-                gl.amd.gfx1250.tdm.async_load(c_desc, [next_offset], c_buffer.index(next_slot))
+                gl.amd.cdna5.tdm.async_load(c_desc, [next_offset], c_buffer.index(next_slot))
 
             # Leave only the next iteration's TDM loads outstanding.
-            gl.amd.gfx1250.tdm.async_wait(NARY)
+            gl.amd.cdna5.tdm.async_wait(NARY)
             value = a_buffer.index(current_slot).load(layout=blocked_layout)
             if NARY >= 2:
                 value = value + b_buffer.index(current_slot).load(layout=blocked_layout)
@@ -89,9 +89,9 @@ def stream_tdm_kernel(
 
             current_offsets = current_offset + offs
             current_mask = current_offsets < N
-            gl.amd.gfx1250.buffer_store(value, out_ptr, current_offsets, mask=current_mask)
+            gl.amd.cdna5.buffer_store(value, out_ptr, current_offsets, mask=current_mask)
 
-        gl.amd.gfx1250.tdm.async_wait(0)
+        gl.amd.cdna5.tdm.async_wait(0)
         last_slot = steady_iters % 2
         last_offset = start_offset + steady_iters * grid_stride
         value = a_buffer.index(last_slot).load(layout=blocked_layout)
@@ -101,16 +101,16 @@ def stream_tdm_kernel(
             value = value + c_buffer.index(last_slot).load(layout=blocked_layout)
         last_offsets = last_offset + offs
         last_mask = last_offsets < N
-        gl.amd.gfx1250.buffer_store(value, out_ptr, last_offsets, mask=last_mask)
+        gl.amd.cdna5.buffer_store(value, out_ptr, last_offsets, mask=last_mask)
     else:
         for i in range(0, num_iters):
             tile_offset = start_offset + i * grid_stride
-            gl.amd.gfx1250.tdm.async_load(a_desc, [tile_offset], a_buffer.index(0))
+            gl.amd.cdna5.tdm.async_load(a_desc, [tile_offset], a_buffer.index(0))
             if NARY >= 2:
-                gl.amd.gfx1250.tdm.async_load(b_desc, [tile_offset], b_buffer.index(0))
+                gl.amd.cdna5.tdm.async_load(b_desc, [tile_offset], b_buffer.index(0))
             if NARY >= 3:
-                gl.amd.gfx1250.tdm.async_load(c_desc, [tile_offset], c_buffer.index(0))
-            gl.amd.gfx1250.tdm.async_wait(0)
+                gl.amd.cdna5.tdm.async_load(c_desc, [tile_offset], c_buffer.index(0))
+            gl.amd.cdna5.tdm.async_wait(0)
 
             value = a_buffer.index(0).load(layout=blocked_layout)
             if NARY >= 2:
@@ -119,7 +119,7 @@ def stream_tdm_kernel(
                 value = value + c_buffer.index(0).load(layout=blocked_layout)
             tile_offsets = tile_offset + offs
             mask = tile_offsets < N
-            gl.amd.gfx1250.buffer_store(value, out_ptr, tile_offsets, mask=mask)
+            gl.amd.cdna5.buffer_store(value, out_ptr, tile_offsets, mask=mask)
 
 
 def reference_torch_nary(inputs):
@@ -216,7 +216,7 @@ def compile_stream_tdm(nary: int, pipelined: bool):
 @pytest.mark.parametrize("pipelined", [False, True], ids=["non_pipelined", "pipelined"])
 @pytest.mark.parametrize("nary", [1, 2, 3], ids=["unary", "binary", "ternary"])
 def test_compile_stream_tdm(nary, pipelined):
-    """Verify every stream mode uses gfx1250 TDM global-to-LDS loads."""
+    """Verify every stream mode uses CDNA5 TDM global-to-LDS loads."""
     kernel = compile_stream_tdm(nary, pipelined)
     amdgcn = kernel.asm["amdgcn"]
 
@@ -266,11 +266,11 @@ if __name__ == "__main__":
 
     # Handle imports for both pytest (module context) and direct execution
     try:
-        from .gfx1250_utils import static_profile
+        from .cdna5_utils import static_profile
     except ImportError:
-        from gfx1250_utils import static_profile
+        from cdna5_utils import static_profile
 
-    parser = argparse.ArgumentParser(description="Stream Copy Kernels for GFX1250")
+    parser = argparse.ArgumentParser(description="Stream Copy Kernels for CDNA5")
     parser.add_argument("-n", type=int, default=65536, help="Number of elements to copy")
     parser.add_argument("--nary", type=int, choices=[1, 2, 3], default=1, help="Number of input streams")
     parser.add_argument("--pipelined", action="store_true",
@@ -278,12 +278,11 @@ if __name__ == "__main__":
     parser.add_argument("--no-check", action="store_true",
                         help="Skip stream-copy correctness checks and D2H copy-back for bandwidth runs")
     parser.add_argument("--stream-workgroups", type=int, default=1024, help="Number of workgroups")
-    parser.add_argument("--stream-block-size", type=int, default=1024,
-                        help="Elements per workgroup")
+    parser.add_argument("--stream-block-size", type=int, default=1024, help="Elements per workgroup")
     args = parser.parse_args()
 
     print(f"Running stream_tdm_kernel with N={args.n} elements")
-    print("Configuration: 4 warps/CTA, gfx1250 TDM global-to-LDS loads, buffer stores")
+    print("Configuration: 4 warps/CTA, CDNA5 TDM global-to-LDS loads, buffer stores")
     print(f"Block size: {args.stream_block_size} elements per workgroup")
     print(f"Grid size: {min(args.stream_workgroups, triton.cdiv(args.n, args.stream_block_size))} workgroups")
     print(f"{args.nary}-input stream copy, pipelined={args.pipelined}, "
