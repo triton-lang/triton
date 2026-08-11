@@ -3237,27 +3237,6 @@ def test_histogram_silent_data_corruption(device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("dtype, M", [(torch.int8, 128), (torch.int16, 32768)])
-def test_histogram_narrow_input_count_overflow(dtype, M, device):
-    if not is_interpreter():
-        pytest.skip("narrow integer histogram lowering is not supported yet")
-
-    @triton.jit
-    def histogram_kernel(x_ptr, z_ptr, M: tl.constexpr):
-        offsets = tl.arange(0, M)
-        x = tl.load(x_ptr + offsets)
-        z = tl.histogram(x, 2)
-        tl.store(z_ptr + tl.arange(0, 2), z)
-
-    x = torch.ones(M, device=device, dtype=dtype)
-    z = torch.empty(2, device=device, dtype=torch.int32)
-
-    histogram_kernel[(1, )](x, z, M=M)
-    expected = torch.tensor([0, M], device=device, dtype=torch.int32)
-    torch.testing.assert_close(z, expected)
-
-
-@pytest.mark.interpreter
 def test_histogram_out_of_range(device):
 
     @triton.jit

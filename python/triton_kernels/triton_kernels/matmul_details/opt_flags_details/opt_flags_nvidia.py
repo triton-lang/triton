@@ -116,7 +116,7 @@ def compute_num_warps(block_m, block_n, is_persistent: bool, precision_config, c
     num_warps = constraints.get("num_warps", None)
     if num_warps is not None:
         return num_warps
-    return max(block_m * block_n // 4096, 4 if is_persistent else 1)
+    return max(block_m * block_n // 4096, 4 if is_persistent else 2)
 
 
 def compute_num_stages(

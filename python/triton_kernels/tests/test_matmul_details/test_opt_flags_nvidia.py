@@ -161,6 +161,12 @@ def test_compute_block_n_blackwell_scale_aligns_to_128(n, expected):
     assert block_n == block_n_tma == expected
 
 
+def test_compute_num_warps_uses_two_warp_floor():
+    precision_config = PrecisionConfig()
+    assert opt_flags_nvidia.compute_num_warps(16, 256, False, precision_config, {}) == 2
+    assert opt_flags_nvidia.compute_num_warps(16, 256, False, precision_config, {"num_warps": 1}) == 1
+
+
 def test_matmul_blackwell_scale_small_n(device):
     if device != "cuda" or not torch.cuda.is_available():
         pytest.skip("requires CUDA")
