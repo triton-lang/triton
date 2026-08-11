@@ -96,7 +96,6 @@ class DependenciesFinder(ast.NodeVisitor):
         return self.hasher.hexdigest()
 
     def _update_hash(self, func):
-        assert isinstance(func, JITCallable)
         func_key = func.cache_key
         # Merge our used_global_vals with those of the called function,
         # after checking that all overlapping values are consistent.
@@ -162,12 +161,10 @@ class DependenciesFinder(ast.NodeVisitor):
             return None
 
         def name_lookup(name):
-            val = self.globals.get(name, None)
-            if val is not None:
-                return val, self.globals
-            val = self.nonlocals.get(name, None)
-            if val is not None:
-                return val, self.nonlocals
+            if name in self.nonlocals:
+                return self.nonlocals[name], self.nonlocals
+            if name in self.globals:
+                return self.globals[name], self.globals
             return None, None
 
         val, var_dict = name_lookup(node.id)
@@ -545,7 +542,6 @@ class JITCallable:
     # Our unit tests do this, for example.
     def parse(self):
         tree = ast.parse(self._src)
-        assert isinstance(tree, ast.Module)
         assert len(tree.body) == 1
         assert isinstance(tree.body[0], ast.FunctionDef)
         return tree
@@ -769,7 +765,6 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
         if not warmup:
             # canonicalize grid
-            assert grid is not None
             if callable(grid):
                 grid = grid(bound_args)
             grid_size = len(grid)
@@ -982,7 +977,6 @@ def jit(
     """
 
     def decorator(fn: T) -> JITFunction[T]:
-        assert callable(fn)
         if knobs.runtime.interpret:
             from .interpreter import InterpretedFunction
             return InterpretedFunction(fn, version=version, do_not_specialize=do_not_specialize,

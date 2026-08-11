@@ -310,10 +310,8 @@ def _matmul_flops_and_bytes_from_slices(
     static_flops = 0.0
     flops_per_token = 0.0
     if ragged_k:
-        assert M is not None
         flops_per_token = 2.0 * M * N * z
     elif M is None:
-        assert K is not None
         flops_per_token = 2.0 * N * K * z
     elif K is None:
         flops_per_token = 2.0 * M * N * z
@@ -419,7 +417,6 @@ def matmul_launch_metadata(grid, kernel, args):
     n_y_bytes = Y.numel() * Y.element_size()
     n_w_bytes = W.numel() * W.element_size()
     if slice_sizes is not None:
-        assert n_tokens is not None
         n_read_rows = n_tokens
 
         if args["RAGGED_DIMENSION"] == "K":

@@ -2,6 +2,7 @@
 #define TRITON_ANALYSIS_MEMBAR_H
 
 #include "Allocation.h"
+#include "BufferIndexAnalysis.h"
 #include "CallGraph.h"
 #include "Function.h"
 
@@ -33,7 +34,9 @@ using MembarSliceFilterFn =
 // logical view on it (layout, subslice offsets and shape for the access)
 struct AllocationSlice {
 public:
-  // Create allocation slice from a value, collecting subslice offsets
+  // Create allocation slice from a value, collecting subslice offsets.
+  // Dynamic buffer-index information is attached by BufferIndexAnalysis; use
+  // BufferIndexAnalysis::makeSlice when constructing slices for membar.
   AllocationSlice(Value value, Interval<size_t> allocationInterval,
                   Allocation::BufferId bufferId);
 
@@ -65,17 +68,27 @@ public:
         allocationInterval.start() + offset, allocationInterval.end() + offset);
     if (invalidateBufferId)
       shifted.bufferId = Allocation::InvalidBufferId;
+    // This preserves analysis payloads such as bufferIndexExpr. Callers that
+    // translate slices across function boundaries must clear per-function
+    // payloads before translating.
     return shifted;
   }
 
   void print(raw_ostream &os) const;
 
+  // Buffer-index expression attached by BufferIndexAnalysis. It participates
+  // in ordering/equality so accesses to different slots remain separate.
+  // Must not be mutated after the slice is inserted into a sorted container
+  // (e.g. BlockInfo::SliceMapT); rebuild the container instead, as
+  // BufferIndexAnalysis::invalidateBufferIndices does.
+  const BufferIndexExpr *bufferIndexExpr = nullptr;
+
 private:
   std::tuple<Interval<size_t>, Allocation::BufferId, const void *,
-             llvm::ArrayRef<int64_t>>
+             llvm::ArrayRef<int64_t>, const BufferIndexExpr *>
   asTuple() const {
     return {allocationInterval, bufferId, accessTy.getAsOpaquePointer(),
-            subsliceOffsets};
+            subsliceOffsets, bufferIndexExpr};
   }
   // Offsets from subslice. Empty when offsets are unknown
   SmallVector<int64_t> subsliceOffsets;
@@ -235,14 +248,24 @@ public:
   /// a shared memory read. If the temporary storage is written but not read,
   /// it is considered as the problem of the operation itself but not the membar
   /// analysis.
-  using MembarOrFenceAnalysis::MembarOrFenceAnalysis;
+  MembarAnalysis(Allocation &allocation, MembarFilterFn filter)
+      : MembarOrFenceAnalysis(allocation, std::move(filter)),
+        bufferIndexAnalysis(
+            cast<FunctionOpInterface>(allocation.getOperation())) {}
 
 private:
   /// Updates the BlockInfo operation based on the operation.
   void update(Operation *operation, BlockInfo *blockInfo, FuncMapT *funcMap,
               OpBuilder *builder) override;
 
+  void updateSuccessor(Operation *terminator, Block *successor,
+                       BlockInfo *blockInfo) override;
+
+  void updateExitState(BlockInfo *blockInfo) override;
+
   void insertBarrier(Operation *operation, OpBuilder *builder);
+
+  BufferIndexAnalysis bufferIndexAnalysis;
 };
 
 /// Postorder traversal on the callgraph to insert membar instructions
