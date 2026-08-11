@@ -385,6 +385,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+// Verify that when mask+other are present, the `other` store is emitted in the
+// after-load block (not inside the load block). This ensures masked-out lanes
+// write the `other` value to LDS even when the load branch is not taken.
+// Regression test: before the fix, `emitOtherStore` was placed inside the
+// load block, so masked-out lanes never wrote `other`, leaving stale LDS data.
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @buffer_load_to_local_other_in_after_block
+  tt.func @buffer_load_to_local_other_in_after_block(%ptr: !tt.ptr<f32>, %lds: !ttg.memdesc<64xf32, #shared, #smem, mutable>, %mask: tensor<64xi1, #blocked>) {
+    %off = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked>
+    %other = arith.constant dense<0.000000e+00> : tensor<64xf32, #blocked>
+    // The conditional branch enters the load block only when pred is true.
+    // COMMON: llvm.cond_br %{{.*}}, ^[[LOAD_BB:bb[0-9]+]], ^[[AFTER_BB:bb[0-9]+]]
+    // COMMON-NEXT: ^[[LOAD_BB]]:
+    // COMMON: rocdl.raw.ptr.buffer.load.async.lds
+    // COMMON-NEXT: llvm.br ^[[AFTER_BB]]
+    // The `other` store must appear in the after-load block so it is reached
+    // regardless of whether the load branch was taken (i.e., for masked-out lanes).
+    // COMMON-NEXT: ^[[AFTER_BB]]:
+    // COMMON: llvm.store
+    amdg.buffer_load_to_local %ptr[%off] mask=%mask other=%other into %lds : <f32>[tensor<64xi32, #blocked>] tensor<64xf32, #blocked> -> <64xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 // The blocked layout will return contiguity of 2 because the repeat pattern to cover the full tensor.
 // Check that we lower it to 2 separate instructions because the order of blocked layout and shared layout disagree.
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [64, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
