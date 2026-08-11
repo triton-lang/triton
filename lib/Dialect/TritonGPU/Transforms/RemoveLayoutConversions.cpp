@@ -227,14 +227,8 @@ bool isLayoutAnchor(Operation *op) {
     return true;
   if (auto gatherOp = dyn_cast<GatherOp>(op))
     return gatherOp.getEfficientLayout();
-
-  // Heuristic: Mark permuting reshape as a layout anchor.  Its dst can be
-  // anything, so it stops forward-propagation of layouts.  We rely on the
-  // backwards pass to fix it up if necessary.  (If we didn't do this, then
-  // anything following the reshape won't be covered by the forward pass at
-  // all.)
   if (auto reshape = dyn_cast<ReshapeOp>(op))
-    return reshape.getAllowReorder();
+    return reshape.getEfficientLayout();
 
   return false;
 }
