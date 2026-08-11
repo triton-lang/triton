@@ -11,6 +11,7 @@ packages=(
     file
     git
     gnupg
+    libdw1t64
     lld
     pkg-config
     python3-dev
