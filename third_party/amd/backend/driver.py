@@ -1,13 +1,15 @@
 import functools
 import os
+import platform
 import subprocess
 import triton
 from pathlib import Path
 from triton import knobs
+from triton._C.libtriton import amd
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver, decompose_descriptor, expand_signature, wrap_handle_tensordesc_impl
 from triton.runtime import _allocation
-from triton.runtime.build import compile_module_from_file, compile_module_from_src
+from triton.runtime.build import compile_module_from_src
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dirs = [os.path.join(dirname, "include")]
@@ -18,22 +20,10 @@ ARG_KERNEL = None
 ARG_TUPLE = None
 
 
-@functools.lru_cache()
-def _load_dl_helper_module():
-    return compile_module_from_file(
-        src_path=os.path.join(dirname, "dl_helper.c"),
-        name="amd_dl_helper",
-    )
-
-
 def _find_already_mmapped_dylib_on_linux(lib_name):
-    import platform
-    if platform.system() != 'Linux':
+    if platform.system() != "Linux":
         return None
-    try:
-        return _load_dl_helper_module().find_loaded_library(lib_name)
-    except Exception:
-        return None
+    return amd.find_loaded_library(lib_name)
 
 
 @functools.lru_cache()
