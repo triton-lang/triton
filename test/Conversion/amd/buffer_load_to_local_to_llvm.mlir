@@ -385,11 +385,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-// Verify that when mask+other are present, the `other` store is emitted in the
-// after-load block (not inside the load block). This ensures masked-out lanes
-// write the `other` value to LDS even when the load branch is not taken.
-// Regression test: before the fix, `emitOtherStore` was placed inside the
-// load block, so masked-out lanes never wrote `other`, leaving stale LDS data.
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory

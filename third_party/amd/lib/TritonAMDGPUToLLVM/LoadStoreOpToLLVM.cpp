@@ -870,9 +870,6 @@ struct BufferLoadToLocalOpConversion
 
         rewriter.setInsertionPointToStart(afterLoadBlock);
 
-        // The `other` values are written for masked-out lanes, so this store
-        // must run unconditionally in the after-load block rather than inside
-        // the (mask-predicated) load block.
         if (hasOther) {
           emitOtherStore(rewriter, loc, this->getTypeConverter(), vecTy,
                          maskElem, otherElems, shmemAddr, laneId,
