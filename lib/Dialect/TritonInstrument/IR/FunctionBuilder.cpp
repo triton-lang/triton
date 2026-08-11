@@ -2446,9 +2446,11 @@ void FunctionBuilder::createCopyWriteVisibilityCall(ImplicitLocOpBuilder &b,
       });
 }
 
-void FunctionBuilder::createCopyReadVisibilityCall(
-    ImplicitLocOpBuilder &b, int sourceThread, uint64_t destMask, Value pred,
-    MemType memType, Operation *insertPoint, bool merge) {
+void FunctionBuilder::createCopyReadVisibilityCall(ImplicitLocOpBuilder &b,
+                                                   int sourceThread,
+                                                   uint64_t destMask,
+                                                   Value pred, MemType memType,
+                                                   Operation *insertPoint) {
 
   if (auxData.readVisibility[(int)memType].empty()) {
     return;
@@ -2462,8 +2464,8 @@ void FunctionBuilder::createCopyReadVisibilityCall(
   SmallVector<Value> args = {sourceThreadVal, destMaskVal, pred, readVis.value};
   createCallToCachedFunction(
       b, "copy_read_visibility", args,
-      /*assertInfo=*/std::nullopt, {readVisibilityType, (uint64_t)merge},
-      [readVisibilityType, merge](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      /*assertInfo=*/std::nullopt, {readVisibilityType},
+      [readVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value sourceThread = entryBlock->getArgument(0);
         Value destMaskVal = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
@@ -2491,8 +2493,7 @@ void FunctionBuilder::createCopyReadVisibilityCall(
         Value replicated = arith::SelectOp::create(fb, destMaskTensor,
                                                    broadcastRow, zeroTensor);
 
-        Value retained = merge ? readVisibility : cleared;
-        Value updated = arith::OrIOp::create(fb, retained, replicated);
+        Value updated = arith::OrIOp::create(fb, cleared, replicated);
         Value currentCTAMask = createCTASetMask(
             fb, readVisibilityType, /*dim=*/2, createCurrentCTAMask(fb));
         createMaskedStoreScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
@@ -2500,6 +2501,84 @@ void FunctionBuilder::createCopyReadVisibilityCall(
                                        currentCTAMask);
 
         fb.setInsertionPointToEnd(thenBlock);
+        triton::ReturnOp::create(fb);
+      });
+}
+
+void FunctionBuilder::createPublishCTAVisibilityCall(ImplicitLocOpBuilder &b,
+                                                     uint64_t sourceMask,
+                                                     uint64_t destMask,
+                                                     MemType memType,
+                                                     Operation *insertPoint) {
+  if (auxData.writeVisibility[(int)memType].empty())
+    return;
+
+  auto writeVis = auxData.writeVisibility[(int)memType].at(insertPoint);
+  auto readVis = auxData.readVisibility[(int)memType].at(insertPoint);
+  auto writeVisibilityType = cast<RankedTensorType>(writeVis.type);
+  auto readVisibilityType = cast<RankedTensorType>(readVis.type);
+  SmallVector<Value> args = {arith::ConstantIntOp::create(b, sourceMask, 64),
+                             arith::ConstantIntOp::create(b, destMask, 64),
+                             writeVis.value, readVis.value};
+  createCallToCachedFunction(
+      b, "publish_cta_visibility", args,
+      /*assertInfo=*/std::nullopt, {writeVisibilityType, readVisibilityType},
+      [writeVisibilityType, readVisibilityType](ImplicitLocOpBuilder &fb,
+                                                Block *entryBlock) {
+        Value sourceMask = entryBlock->getArgument(0);
+        Value destMask = entryBlock->getArgument(1);
+        Value writeVisibilityPtr = entryBlock->getArgument(2);
+        Value readVisibilityPtr = entryBlock->getArgument(3);
+        Value currentCTA = createCurrentCTAMask(fb);
+
+        Value writeVisibility = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), writeVisibilityPtr, writeVisibilityType);
+        Value zeroWrites =
+            tti::createConstIntTensor(fb, fb.getLoc(), 0, writeVisibilityType);
+        auto writeElemType =
+            cast<IntegerType>(writeVisibilityType.getElementType());
+        Value sourceBits = triton::SplatOp::create(
+            fb, writeVisibilityType,
+            adjustIntegerWidth(fb, sourceMask, writeElemType));
+        Value destBits = triton::SplatOp::create(
+            fb, writeVisibilityType,
+            adjustIntegerWidth(fb, destMask, writeElemType));
+        Value sourceVisible = arith::CmpIOp::create(
+            fb, arith::CmpIPredicate::ne,
+            arith::AndIOp::create(fb, writeVisibility, sourceBits), zeroWrites);
+        Value publishedWrites =
+            arith::SelectOp::create(fb, sourceVisible, destBits, zeroWrites);
+        Value newWriteVisibility =
+            arith::OrIOp::create(fb, writeVisibility, publishedWrites);
+        Value writeCTAMask =
+            createCTASetMask(fb, writeVisibilityType, /*dim=*/2, currentCTA);
+        createMaskedStoreScratchMemory(fb, fb.getLoc(), writeVisibilityPtr,
+                                       newWriteVisibility, writeVisibilityType,
+                                       writeCTAMask);
+
+        Value readVisibility = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), readVisibilityPtr, readVisibilityType);
+        Value zeroReads =
+            tti::createConstIntTensor(fb, fb.getLoc(), 0, readVisibilityType);
+        Value sourceColumns = createThreadColumnMask(
+            fb, sourceMask, readVisibilityType, /*columnDim=*/3);
+        Value sourceReads = arith::SelectOp::create(fb, sourceColumns,
+                                                    readVisibility, zeroReads);
+        sourceReads = reduce<arith::OrIOp>(fb, sourceReads, {3});
+        sourceReads = convertAndBroadcast(fb, sourceReads, {0, 1, 2, 4},
+                                          readVisibilityType);
+        Value destColumns = createThreadColumnMask(
+            fb, destMask, readVisibilityType, /*columnDim=*/3);
+        Value publishedReads =
+            arith::SelectOp::create(fb, destColumns, sourceReads, zeroReads);
+        Value newReadVisibility =
+            arith::OrIOp::create(fb, readVisibility, publishedReads);
+        Value readCTAMask =
+            createCTASetMask(fb, readVisibilityType, /*dim=*/2, currentCTA);
+        createMaskedStoreScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
+                                       newReadVisibility, readVisibilityType,
+                                       readCTAMask);
+
         triton::ReturnOp::create(fb);
       });
 }
