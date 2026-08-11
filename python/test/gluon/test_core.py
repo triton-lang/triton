@@ -8,6 +8,7 @@ import triton
 import triton.language as tl
 
 from triton._internal_testing import (
+    is_compile_warmup,
     is_ampere_or_newer,
     is_blackwell,
     is_blackwell_ultra,
@@ -76,6 +77,53 @@ def test_copy_kernel(layout, XBLOCK):
 
     copy_kernel[(4, )](out, inp, inp.numel(), XBLOCK, layout, num_warps=layout.warps_per_cta[0])
     torch.testing.assert_close(out, inp)
+
+
+@gluon.jit(noinline=True)
+def _noinline_convert_layout_scratch(input, output):
+    src_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    dst_layout: ttgl.constexpr = ttgl.SliceLayout(1, ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0]))
+    src_offsets = ttgl.arange(0, 128, layout=src_layout)
+    dst_offsets = ttgl.arange(0, 128, layout=dst_layout)
+    values = ttgl.load(input + src_offsets)
+    ttgl.store(output + dst_offsets, ttgl.convert_layout(values, dst_layout))
+
+
+@gluon.jit(noinline=True)
+def _noinline_forward_convert_layout_scratch(input, output):
+    _noinline_convert_layout_scratch(input, output)
+
+
+@gluon.jit
+def _noinline_shared_allocation_call_kernel(input, output, sentinel_output, NESTED: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+    offsets = ttgl.arange(0, 128, layout=layout)
+    sentinel = offsets + 4096
+    caller_allocation = ttgl.allocate_shared_memory(ttgl.int32, [128], shared_layout, sentinel)
+
+    if NESTED:
+        _noinline_forward_convert_layout_scratch(input, output)
+    else:
+        _noinline_convert_layout_scratch(input, output)
+
+    ttgl.store(sentinel_output + offsets, caller_allocation.load(layout))
+
+
+@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
+@pytest.mark.parametrize("NESTED", [False, True], ids=["direct", "nested"])
+def test_noinline_call_preserves_live_shared_allocation(NESTED, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = ""
+    values = torch.arange(128, device="cuda", dtype=torch.int32) * 3 + 7
+    output = torch.empty_like(values)
+    sentinel_output = torch.empty_like(values)
+
+    compiled = _noinline_shared_allocation_call_kernel[(1, )](values, output, sentinel_output, NESTED, num_warps=4)
+
+    assert compiled.metadata.shared >= 2 * values.numel() * values.element_size()
+    assert compiled.asm["ttgir"].count("noinline = true") >= 1 + int(NESTED)
+    torch.testing.assert_close(output, values)
+    torch.testing.assert_close(sentinel_output, torch.arange(128, device="cuda", dtype=torch.int32) + 4096)
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
@@ -1404,6 +1452,7 @@ def test_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast, u
 @pytest.mark.parametrize("shape_m, shape_n, shape_k", [(1, 1, 1), (2, 4, 1), (2, 2, 4)])
 @pytest.mark.parametrize("ctas_per_cga", [[1, 1], [2, 1], [4, 4]])
 @pytest.mark.parametrize("two_ctas", [False, True] if is_blackwell() else [False])
+@pytest.mark.enable_warmup(min_capability=9, priority=1)
 def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps, swizzling_a, swizzling_b, instr_m,
                            shape_m, shape_n, shape_k, ctas_per_cga, two_ctas):
     # FIXME: Workaround for a bug in PTXAS when the shared layout is transposed and the swizzling is 0
@@ -1591,6 +1640,8 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         num_warps=num_warps,
         num_ctas=num_ctas,
     )
+    if is_compile_warmup():
+        return
 
     assert two_ctas == ("two_ctas" in compiled.asm["ttgir"])
     if two_ctas:

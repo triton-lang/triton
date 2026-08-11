@@ -346,17 +346,6 @@ Value createDimMask(ImplicitLocOpBuilder &b, Value index,
   return convertAndBroadcast(b, mask1D, {dim}, maskType);
 }
 
-Value createDimIndices(ImplicitLocOpBuilder &b, RankedTensorType tensorType,
-                       int dim) {
-  assert(dim >= 0 && dim < tensorType.getRank() && "invalid tensor dimension");
-  auto indexType = tti::getSlicedTensorType(tensorType, {dim}, b.getI32Type());
-  Value range = triton::MakeRangeOp::create(b, indexType, /*start=*/0,
-                                            /*end=*/tensorType.getShape()[dim]);
-  auto fullIndexType = cast<RankedTensorType>(
-      tensorType.cloneWith(std::nullopt, b.getI32Type()));
-  return convertAndBroadcast(b, range, {dim}, fullIndexType);
-}
-
 Value createCurrentCTAMask(ImplicitLocOpBuilder &b) {
   Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
   return arith::ShLIOp::create(b, arith::ConstantIntOp::create(b, 1, 32),
@@ -1446,7 +1435,6 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
   Value threadMaskVal = arith::ConstantIntOp::create(b, threadMask, 64);
   SmallVector<Value> args = {bufferMask, pred, threadMaskVal, effectCTAs};
   ManglingArgs specializationArgs;
-  specializationArgs.append(static_cast<uint64_t>(memType));
   specializationArgs.append(static_cast<uint64_t>(publishWrite));
   specializationArgs.append(static_cast<uint64_t>(clearWrites));
   specializationArgs.append(static_cast<uint64_t>(clearReads));
@@ -1549,66 +1537,118 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
       });
 }
 
-void FunctionBuilder::createSetReadVisibilityCall(
-    ImplicitLocOpBuilder &b, Value bufferMask, uint64_t threadMask, Value pred,
-    MemType memType, Operation *insertPoint, Value effectCTAs) {
+void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
+                                                  Value bufferMask, int reader,
+                                                  uint64_t observerMask,
+                                                  Value pred, MemType memType,
+                                                  Operation *insertPoint,
+                                                  Value effectCTAs) {
 
   if (auxData.readVisibility[(int)memType].empty()) {
     return;
   }
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
-  Value threadMaskVal = arith::ConstantIntOp::create(b, threadMask, 64);
+  Value readerMaskVal = arith::ConstantIntOp::create(b, 1ULL << reader, 64);
+  Value observerMaskVal = arith::ConstantIntOp::create(b, observerMask, 64);
   Value readVisibilityVal =
       auxData.readVisibility[(int)memType].at(insertPoint).value;
   auto readVisibilityType = cast<RankedTensorType>(
       auxData.readVisibility[(int)memType].at(insertPoint).type);
-  SmallVector<Value> args = {bufferMask, pred, threadMaskVal, readVisibilityVal,
-                             effectCTAs};
+  bool hasReadTracking = !auxData.readTracking[(int)memType].empty();
+  SmallVector<Value> args = {bufferMask,        pred,
+                             readerMaskVal,     observerMaskVal,
+                             readVisibilityVal, effectCTAs};
+  RankedTensorType readTrackingType;
+  ManglingArgs specializationArgs{readVisibilityType,
+                                  (uint64_t)hasReadTracking};
+  if (hasReadTracking) {
+    ValueType tracking = auxData.readTracking[(int)memType].at(insertPoint);
+    readTrackingType = cast<RankedTensorType>(tracking.type);
+    args.push_back(tracking.value);
+    specializationArgs.append(readTrackingType);
+  }
   createCallToCachedFunction(
       b, "set_read_visibility", args,
-      /*assertInfo=*/std::nullopt, {readVisibilityType, (uint64_t)memType},
-      [readVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      /*assertInfo=*/std::nullopt, specializationArgs,
+      [readVisibilityType, readTrackingType,
+       hasReadTracking](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value bufferMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
-        Value threadMaskVal = entryBlock->getArgument(2);
-        Value readVisibilityPtr = entryBlock->getArgument(3);
-        Value effectCTAs = entryBlock->getArgument(4);
+        Value readerMaskVal = entryBlock->getArgument(2);
+        Value observerMaskVal = entryBlock->getArgument(3);
+        Value readVisibilityPtr = entryBlock->getArgument(4);
+        Value effectCTAs = entryBlock->getArgument(5);
+        Value readTrackingPtr;
+        if (hasReadTracking)
+          readTrackingPtr = entryBlock->getArgument(6);
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
 
+        Value currentCTA = createCurrentCTAMask(fb);
+        auto createReaderRows = [&](RankedTensorType tableType) {
+          Value rows = convertAndBroadcast(fb, bufferMask, {1}, tableType);
+          Value ownerMask =
+              createCTASetMask(fb, tableType, /*dim=*/0, effectCTAs);
+          Value readerCTAMask =
+              createCTASetMask(fb, tableType, /*dim=*/4, currentCTA);
+          rows = arith::AndIOp::create(fb, rows, ownerMask);
+          return arith::AndIOp::create(fb, rows, readerCTAMask);
+        };
+        auto clearReader = [&](Value table, RankedTensorType tableType,
+                               Value rows) {
+          auto elemType = cast<IntegerType>(tableType.getElementType());
+          Value readerMaskElem =
+              adjustIntegerWidth(fb, readerMaskVal, elemType);
+          Value readerBit =
+              triton::SplatOp::create(fb, tableType, readerMaskElem);
+          Value allOnes =
+              tti::createConstIntTensor(fb, fb.getLoc(), -1, tableType);
+          Value notReaderBit = arith::XOrIOp::create(fb, readerBit, allOnes);
+          Value withoutReader = arith::AndIOp::create(fb, table, notReaderBit);
+          return arith::SelectOp::create(fb, rows, withoutReader, table)
+              .getResult();
+        };
+
         Value readVisibility = tti::createLoadScratchMemory(
             fb, fb.getLoc(), readVisibilityPtr, readVisibilityType);
-        bufferMask =
-            convertAndBroadcast(fb, bufferMask, {1}, readVisibilityType);
-        Value relationMask =
-            createLeadCTAEffectMask(fb, readVisibilityType, effectCTAs);
-        Value threadCTAMask =
-            createCTASetMask(fb, readVisibilityType, /*dim=*/4, effectCTAs);
-        Value sameCTA = arith::CmpIOp::create(
-            fb, arith::CmpIPredicate::eq,
-            createDimIndices(fb, readVisibilityType, /*dim=*/2),
-            createDimIndices(fb, readVisibilityType, /*dim=*/4));
-        threadCTAMask = arith::AndIOp::create(fb, threadCTAMask, sameCTA);
-        relationMask = arith::AndIOp::create(fb, relationMask, threadCTAMask);
-        bufferMask = arith::AndIOp::create(fb, bufferMask, relationMask);
+        Value visibilityRows = createReaderRows(readVisibilityType);
+        // A logical reader reuses one bit for every read. Remove the previous
+        // generation before publishing the current one so an old observer or
+        // barrier snapshot cannot license a later unfinished read.
+        Value newVisibility =
+            clearReader(readVisibility, readVisibilityType, visibilityRows);
         auto elemType = cast<IntegerType>(readVisibilityType.getElementType());
-        Value threadMaskElem = adjustIntegerWidth(fb, threadMaskVal, elemType);
-        Value threadBit =
-            triton::SplatOp::create(fb, readVisibilityType, threadMaskElem);
-        Value threadColumnMask =
-            createThreadColumnMask(fb, threadMaskVal, readVisibilityType,
+        Value readerMaskElem = adjustIntegerWidth(fb, readerMaskVal, elemType);
+        Value readerBit =
+            triton::SplatOp::create(fb, readVisibilityType, readerMaskElem);
+        Value observerColumnMask =
+            createThreadColumnMask(fb, observerMaskVal, readVisibilityType,
                                    /*columnDim=*/3);
-        Value readVisibilityOrThreadBit =
-            arith::OrIOp::create(fb, readVisibility, threadBit);
-        Value bufAndThread =
-            arith::AndIOp::create(fb, bufferMask, threadColumnMask);
-        Value newVisibility = arith::SelectOp::create(
-            fb, bufAndThread, readVisibilityOrThreadBit, readVisibility);
+        Value observerCTAMask =
+            createCTASetMask(fb, readVisibilityType, /*dim=*/2, currentCTA);
+        Value observerRows =
+            arith::AndIOp::create(fb, visibilityRows, observerCTAMask);
+        observerRows =
+            arith::AndIOp::create(fb, observerRows, observerColumnMask);
+        Value withReader = arith::OrIOp::create(fb, newVisibility, readerBit);
+        newVisibility = arith::SelectOp::create(fb, observerRows, withReader,
+                                                newVisibility);
         createMaskedStoreScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
                                        newVisibility, readVisibilityType,
-                                       relationMask);
+                                       visibilityRows);
+
+        if (hasReadTracking) {
+          Value readTracking = tti::createLoadScratchMemory(
+              fb, fb.getLoc(), readTrackingPtr, readTrackingType);
+          Value trackingRows = createReaderRows(readTrackingType);
+          Value newTracking =
+              clearReader(readTracking, readTrackingType, trackingRows);
+          createMaskedStoreScratchMemory(fb, fb.getLoc(), readTrackingPtr,
+                                         newTracking, readTrackingType,
+                                         trackingRows);
+        }
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -1791,8 +1831,7 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
                              barrierCTAs, effectCTAs};
   createCallToCachedFunction(
       b, "track_barrier_write_for_buffer", args,
-      /*assertInfo=*/std::nullopt,
-      {barriersType, writeTrackingType, (uint64_t)memType},
+      /*assertInfo=*/std::nullopt, {barriersType, writeTrackingType},
       [writeTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value mbarLengthVal = entryBlock->getArgument(1);
@@ -2091,8 +2130,7 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
   SmallVector<Value> args = {bufferMask, pred, threadVal, writeVisibilityVal,
                              effectCTAs};
   createCallToCachedFunction(
-      b, "verify_write_visibility", args, assertInfo,
-      {writeVisibilityType, (uint64_t)memType},
+      b, "verify_write_visibility", args, assertInfo, {writeVisibilityType},
       [writeVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value bufferMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
@@ -2157,8 +2195,7 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
   SmallVector<Value> args = {bufferMask, pred, threadVal, readVisibilityVal,
                              effectCTAs};
   createCallToCachedFunction(
-      b, "verify_read_visibility", args, assertInfo,
-      {readVisibilityType, (uint64_t)memType},
+      b, "verify_read_visibility", args, assertInfo, {readVisibilityType},
       [readVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value bufferMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
@@ -2236,7 +2273,7 @@ void FunctionBuilder::createCopyWriteVisibilityCall(ImplicitLocOpBuilder &b,
                              writeVis.value};
   createCallToCachedFunction(
       b, "copy_write_visibility", args,
-      /*assertInfo=*/std::nullopt, {writeVisibilityType, (uint64_t)memType},
+      /*assertInfo=*/std::nullopt, {writeVisibilityType},
       [writeVisibilityType,
        totalNumThreads = auxData.threadLayout.totalNumThreads](
           ImplicitLocOpBuilder &fb, Block *entryBlock) {
@@ -2310,16 +2347,16 @@ void FunctionBuilder::createCopyReadVisibilityCall(ImplicitLocOpBuilder &b,
   auto readVis = auxData.readVisibility[(int)memType].at(insertPoint);
   auto readVisibilityType = cast<RankedTensorType>(readVis.type);
   Value sourceThreadVal = arith::ConstantIntOp::create(b, sourceThread, 32);
-  SmallVector<Value> args = {sourceThreadVal, pred, readVis.value};
+  Value destMaskVal = arith::ConstantIntOp::create(b, destMask, 64);
+  SmallVector<Value> args = {sourceThreadVal, destMaskVal, pred, readVis.value};
   createCallToCachedFunction(
       b, "copy_read_visibility", args,
-      /*assertInfo=*/std::nullopt,
-      {readVisibilityType, destMask, (uint64_t)memType},
-      [readVisibilityType, destMask](ImplicitLocOpBuilder &fb,
-                                     Block *entryBlock) {
+      /*assertInfo=*/std::nullopt, {readVisibilityType},
+      [readVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value sourceThread = entryBlock->getArgument(0);
-        Value pred = entryBlock->getArgument(1);
-        Value readVisibilityPtr = entryBlock->getArgument(2);
+        Value destMaskVal = entryBlock->getArgument(1);
+        Value pred = entryBlock->getArgument(2);
+        Value readVisibilityPtr = entryBlock->getArgument(3);
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
@@ -2329,8 +2366,7 @@ void FunctionBuilder::createCopyReadVisibilityCall(ImplicitLocOpBuilder &b,
         Value zeroTensor =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, readVisibilityType);
         Value destMaskTensor = createThreadColumnMask(
-            fb, arith::ConstantIntOp::create(fb, destMask, 64),
-            readVisibilityType, /*columnDim=*/3);
+            fb, destMaskVal, readVisibilityType, /*columnDim=*/3);
         Value cleared = arith::SelectOp::create(fb, destMaskTensor, zeroTensor,
                                                 readVisibility);
 
@@ -2450,30 +2486,26 @@ void FunctionBuilder::createPublishClusterVisibilityCall(
           Value sourceColumn = arith::SelectOp::create(
               fb, createDimMask(fb, threadVal, readVisibilityType, /*dim=*/3),
               readVisibility, zeroReads);
-          Value readsForThread =
-              reduce<arith::OrIOp>(fb, sourceColumn, {2, 3, 4});
-          readsForThread = convertAndBroadcast(fb, readsForThread, {0, 1},
+          Value readsForThread = reduce<arith::OrIOp>(fb, sourceColumn, {2, 3});
+          readsForThread = convertAndBroadcast(fb, readsForThread, {0, 1, 4},
                                                readVisibilityType);
           Value peerColumns = createThreadColumnMask(
               fb, threadPeersMaskVal, readVisibilityType, /*columnDim=*/3);
           readsForCluster = arith::SelectOp::create(fb, peerColumns,
                                                     readsForThread, zeroReads);
         } else if (onlySynchronousThreads) {
-          readsForCluster = reduce<arith::OrIOp>(fb, readVisibility, {2, 3, 4});
-          readsForCluster = convertAndBroadcast(fb, readsForCluster, {0, 1},
+          readsForCluster = reduce<arith::OrIOp>(fb, readVisibility, {2, 3});
+          readsForCluster = convertAndBroadcast(fb, readsForCluster, {0, 1, 4},
                                                 readVisibilityType);
         } else {
           uint64_t baseThreadMask = (1ULL << numBaseThreads) - 1;
-          Value readBaseMask = tti::createConstIntTensor(
-              fb, fb.getLoc(), baseThreadMask, readVisibilityType);
-          Value hasBaseRead = arith::CmpIOp::create(
-              fb, arith::CmpIPredicate::ne,
-              arith::AndIOp::create(fb, readVisibility, readBaseMask),
-              zeroReads);
-          Value syncReads = arith::SelectOp::create(fb, hasBaseRead,
+          Value baseObserverColumns = createThreadColumnMask(
+              fb, arith::ConstantIntOp::create(fb, baseThreadMask, 64),
+              readVisibilityType, /*columnDim=*/3);
+          Value syncReads = arith::SelectOp::create(fb, baseObserverColumns,
                                                     readVisibility, zeroReads);
-          readsForCluster = reduce<arith::OrIOp>(fb, syncReads, {2, 3, 4});
-          readsForCluster = convertAndBroadcast(fb, readsForCluster, {0, 1},
+          readsForCluster = reduce<arith::OrIOp>(fb, syncReads, {2, 3});
+          readsForCluster = convertAndBroadcast(fb, readsForCluster, {0, 1, 4},
                                                 readVisibilityType);
         }
         Value newReadVisibility =
@@ -3002,14 +3034,16 @@ void FunctionBuilder::createCopyProxyAccessesCall(ImplicitLocOpBuilder &b,
   ValueType visibility = auxData.proxyAccessVisibility.at(insertPoint);
   auto visibilityType = cast<RankedTensorType>(visibility.type);
   SmallVector<Value> args = {arith::ConstantIntOp::create(b, sourceThread, 32),
+                             arith::ConstantIntOp::create(b, destMask, 64),
                              pred, visibility.value};
   createCallToCachedFunction(
       b, "copy_proxy_accesses", args, /*assertInfo=*/std::nullopt,
-      {visibilityType, destMask},
-      [visibilityType, destMask](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      {visibilityType},
+      [visibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value sourceThread = entryBlock->getArgument(0);
-        Value pred = entryBlock->getArgument(1);
-        Value visibilityPtr = entryBlock->getArgument(2);
+        Value destMaskVal = entryBlock->getArgument(1);
+        Value pred = entryBlock->getArgument(2);
+        Value visibilityPtr = entryBlock->getArgument(3);
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
@@ -3018,8 +3052,7 @@ void FunctionBuilder::createCopyProxyAccessesCall(ImplicitLocOpBuilder &b,
         Value zero =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, visibilityType);
         Value destColumns = createThreadColumnMask(
-            fb, arith::ConstantIntOp::create(fb, destMask, 64), visibilityType,
-            /*columnDim=*/3);
+            fb, destMaskVal, visibilityType, /*columnDim=*/3);
         Value cleared =
             arith::SelectOp::create(fb, destColumns, zero, visibility);
         Value sourceColumn = arith::SelectOp::create(

@@ -9,8 +9,8 @@ from triton._C.libtriton.gluon_ir import make_cga_layout
 
 # Handle imports for both pytest (module context) and direct execution
 try:
-    from .gfx1250_utils import static_profile
-    from .f16_gemm_common_gfx1250 import (
+    from .cdna5_utils import static_profile
+    from .f16_gemm_common_cdna5 import (
         apply_activation_epilogue,
         create_shared_layouts,
         create_tensor_descriptors,
@@ -22,8 +22,8 @@ try:
         TileScheduler,
     )
 except ImportError:
-    from gfx1250_utils import static_profile
-    from f16_gemm_common_gfx1250 import (
+    from cdna5_utils import static_profile
+    from f16_gemm_common_cdna5 import (
         apply_activation_epilogue,
         create_shared_layouts,
         create_tensor_descriptors,
@@ -341,8 +341,8 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
     a_desc, b_desc = create_tensor_descriptors(a_ptr, b_ptr, pid_m * BLOCK_M * stride_am, pid_n * BLOCK_N * stride_bn,
                                                stride_am, stride_ak, stride_bn, stride_bk, SHARED_LAYOUT_A,
                                                SHARED_LAYOUT_B, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B)
-    c_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT_ACC)
+    c_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
+                                                       block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT_ACC)
     a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape, layout=a_desc.layout)
     b_buffer = ttgl.allocate_shared_memory(b_desc.dtype, shape=[NUM_BUFFERS] + b_desc.block_shape, layout=b_desc.layout)
 
@@ -356,7 +356,7 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
     for _ in ttgl.static_range(NUM_BUFFERS - 1):
         producer = issue_loads(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B)
 
-    ttgl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 2) * 2)
+    ttgl.amd.cdna5.tdm.async_wait((NUM_BUFFERS - 2) * 2)
     # LDS load SubIteration0
     a0, b0 = lds_subtile_load(consumer, 0, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B, NUM_BUFFERS,
                               TRANSPOSE_B, SUBTILE_LEN)
@@ -377,7 +377,7 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
         a1, b1 = lds_subtile_load(consumer, SUBTILE_LEN, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
                                   NUM_BUFFERS, TRANSPOSE_B, SUBTILE_LEN)
         # WMMA Subtile0
-        accumulator = ttgl.amd.gfx1250.wmma(a0, b0, accumulator)
+        accumulator = ttgl.amd.cdna5.wmma(a0, b0, accumulator)
 
         # SubIteration1
         # We prefetch distance - 1 iterations ahead because producer is already incremented by 1
@@ -387,7 +387,7 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
         a2, b2 = lds_subtile_load(consumer, 2 * SUBTILE_LEN, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
                                   NUM_BUFFERS, TRANSPOSE_B, SUBTILE_LEN)
         # WMMA Subtile1
-        accumulator = ttgl.amd.gfx1250.wmma(a1, b1, accumulator)
+        accumulator = ttgl.amd.cdna5.wmma(a1, b1, accumulator)
 
         # SubIteration2
         # LDS load SubIteration3
@@ -395,14 +395,14 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
                                   NUM_BUFFERS, TRANSPOSE_B, SUBTILE_LEN)
         # WMMA Subtile2
         if num_ctas > 1:
-            ttgl.amd.gfx1250.cluster.arrive()
-        accumulator = ttgl.amd.gfx1250.wmma(a2, b2, accumulator)
+            ttgl.amd.cdna5.cluster.arrive()
+        accumulator = ttgl.amd.cdna5.wmma(a2, b2, accumulator)
         if num_ctas > 1:
-            ttgl.amd.gfx1250.cluster.wait()
+            ttgl.amd.cdna5.cluster.wait()
 
         # SubIteration3
         consumer += 1
-        ttgl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 2) * 2)
+        ttgl.amd.cdna5.tdm.async_wait((NUM_BUFFERS - 2) * 2)
         # TDM load for next tile
         # If we are in epilogue, we have already issued our tile loads
         pred = (i + 1) - epilogue_lb
@@ -412,12 +412,12 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
         # LDS load SubIteration0 for next tile
         a0, b0 = lds_subtile_load(consumer, 0, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B, NUM_BUFFERS,
                                   TRANSPOSE_B, SUBTILE_LEN)
-        accumulator = ttgl.amd.gfx1250.wmma(a3, b3, accumulator)
+        accumulator = ttgl.amd.cdna5.wmma(a3, b3, accumulator)
 
     acc_buffer = ttgl.allocate_shared_memory(ttgl.bfloat16, [BLOCK_M, BLOCK_N], SHARED_LAYOUT_ACC)
     acc_buffer.store(accumulator.to(ttgl.bfloat16))
-    ttgl.amd.gfx1250.tdm.async_store(c_desc, [pid_m * BLOCK_M, pid_n * BLOCK_N], acc_buffer)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.cdna5.tdm.async_store(c_desc, [pid_m * BLOCK_M, pid_n * BLOCK_N], acc_buffer)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
 
 def _run_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, PERSISTENT, PREFETCH,
@@ -645,8 +645,8 @@ def test_runtime_gemm_tdm_pipelined_single_warp_per_simd_schedule(BLOCK_M, BLOCK
 # Helper class for passing arguments around partitions.
 @gluon.aggregate
 class PartitionArgs:
-    a_desc: ttgl.amd.gfx1250.tdm.tensor_descriptor
-    b_desc: ttgl.amd.gfx1250.tdm.tensor_descriptor
+    a_desc: ttgl.amd.cdna5.tdm.tensor_descriptor
+    b_desc: ttgl.amd.cdna5.tdm.tensor_descriptor
     a_buffer: ttgl.shared_memory_descriptor
     b_buffer: ttgl.shared_memory_descriptor
     empty_bars: ttgl.shared_memory_descriptor
@@ -676,9 +676,9 @@ class PartitionArgs:
 # Helper class for passing arguments around persistent warp-specialization partitions.
 @gluon.aggregate
 class PersistentPartitionArgs:
-    a_desc: ttgl.amd.gfx1250.tdm.tensor_descriptor
-    b_desc: ttgl.amd.gfx1250.tdm.tensor_descriptor
-    c_desc: ttgl.amd.gfx1250.tdm.tensor_descriptor
+    a_desc: ttgl.amd.cdna5.tdm.tensor_descriptor
+    b_desc: ttgl.amd.cdna5.tdm.tensor_descriptor
+    c_desc: ttgl.amd.cdna5.tdm.tensor_descriptor
     a_buffer: ttgl.shared_memory_descriptor
     b_buffer: ttgl.shared_memory_descriptor
     acc_buffer: ttgl.shared_memory_descriptor
@@ -718,9 +718,9 @@ class PersistentPartitionArgs:
 # Helper class for passing arguments around persistent warp-specialization partitions (subtiled variant).
 @gluon.aggregate
 class PersistentPartitionSubtiledArgs:
-    a_desc: ttgl.amd.gfx1250.tdm.tensor_descriptor
-    b_desc: ttgl.amd.gfx1250.tdm.tensor_descriptor
-    c_desc: ttgl.amd.gfx1250.tdm.tensor_descriptor
+    a_desc: ttgl.amd.cdna5.tdm.tensor_descriptor
+    b_desc: ttgl.amd.cdna5.tdm.tensor_descriptor
+    c_desc: ttgl.amd.cdna5.tdm.tensor_descriptor
     a_buffer: ttgl.shared_memory_descriptor
     b_buffer: ttgl.shared_memory_descriptor
     acc_buffer: ttgl.shared_memory_descriptor
@@ -815,16 +815,16 @@ def producer_partition(args):
         empty_bar = args.empty_bars.index(buffer_idx)
         ready_bar = args.ready_bars.index(buffer_idx)
         # Wait for the buffers to be consumed before loading
-        ttgl.amd.gfx1250.mbarrier.wait(empty_bar, empty_phase_counter.phase())
+        ttgl.amd.cdna5.mbarrier.wait(empty_bar, empty_phase_counter.phase())
 
         # Only attach mbarrier to the last load so we signal once after both loads complete
-        ttgl.amd.gfx1250.tdm.async_load(args.a_desc, [off_am, k_offset], args.a_buffer.index(buffer_idx))
+        ttgl.amd.cdna5.tdm.async_load(args.a_desc, [off_am, k_offset], args.a_buffer.index(buffer_idx))
         if args.TRANSPOSE_B:
-            ttgl.amd.gfx1250.tdm.async_load(args.b_desc, [off_bn, k_offset], args.b_buffer.index(buffer_idx),
-                                            mbarrier=ready_bar)
+            ttgl.amd.cdna5.tdm.async_load(args.b_desc, [off_bn, k_offset], args.b_buffer.index(buffer_idx),
+                                          mbarrier=ready_bar)
         else:
-            ttgl.amd.gfx1250.tdm.async_load(args.b_desc, [k_offset, off_bn], args.b_buffer.index(buffer_idx),
-                                            mbarrier=ready_bar)
+            ttgl.amd.cdna5.tdm.async_load(args.b_desc, [k_offset, off_bn], args.b_buffer.index(buffer_idx),
+                                          mbarrier=ready_bar)
 
         empty_phase_counter = empty_phase_counter.next()
 
@@ -851,7 +851,7 @@ def consumer_partition(args, c_ptr, M, N, stride_cm, stride_cn, pid_m, pid_n):
         empty_bar = args.empty_bars.index(buffer_idx)
 
         # Wait for the buffers to be filled by the producer
-        ttgl.amd.gfx1250.mbarrier.wait(ready_bar, ready_phase_counter.phase())
+        ttgl.amd.cdna5.mbarrier.wait(ready_bar, ready_phase_counter.phase())
 
         a = args.a_buffer.index(buffer_idx).load(layout=OPERAND_LAYOUT_A)
         if args.TRANSPOSE_B:
@@ -859,10 +859,10 @@ def consumer_partition(args, c_ptr, M, N, stride_cm, stride_cn, pid_m, pid_n):
         else:
             b = args.b_buffer.index(buffer_idx).load(layout=OPERAND_LAYOUT_B)
 
-        accumulator = ttgl.amd.gfx1250.wmma(a, b, accumulator)
+        accumulator = ttgl.amd.cdna5.wmma(a, b, accumulator)
 
         # Signal that we're done with these buffers (producer can reuse them)
-        ttgl.amd.gfx1250.mbarrier.arrive(empty_bar, count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(empty_bar, count=1)
 
         ready_phase_counter = ready_phase_counter.next()
 
@@ -870,7 +870,7 @@ def consumer_partition(args, c_ptr, M, N, stride_cm, stride_cn, pid_m, pid_n):
     offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, args.WMMA_LAYOUT))
     offs_c = stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    ttgl.amd.gfx1250.buffer_store(accumulator, c_ptr, offs_c, mask=mask_c)
+    ttgl.amd.cdna5.buffer_store(accumulator, c_ptr, offs_c, mask=mask_c)
 
 
 @gluon.jit
@@ -912,17 +912,17 @@ def gemm_tdm_warp_specialized_kernel(a_ptr, b_ptr, c_ptr,  #
     a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape, layout=a_desc.layout)
     b_buffer = ttgl.allocate_shared_memory(b_desc.dtype, shape=[NUM_BUFFERS] + b_desc.block_shape, layout=b_desc.layout)
 
-    empty_bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_BUFFERS, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
-    ready_bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_BUFFERS, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+    empty_bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_BUFFERS, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+    ready_bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_BUFFERS, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
 
     # Initialize mbarriers
     # empty_bars: signals when consumer is done with buffers
     # ready_bars: signals when producer has filled buffers
     for i in ttgl.static_range(NUM_BUFFERS):
         # empty_bars: arrive on barrier once per thread, so use consumer thread count
-        ttgl.amd.gfx1250.mbarrier.init(empty_bars.index(i), count=CONSUMER_WARPS * WARP_SIZE)
+        ttgl.amd.cdna5.mbarrier.init(empty_bars.index(i), count=CONSUMER_WARPS * WARP_SIZE)
         # ready_bars: TDM arrives on barrier once per warp, so use producer warp count
-        ttgl.amd.gfx1250.mbarrier.init(ready_bars.index(i), count=PRODUCER_WARPS)
+        ttgl.amd.cdna5.mbarrier.init(ready_bars.index(i), count=PRODUCER_WARPS)
 
     args = PartitionArgs(a_desc, b_desc, a_buffer, b_buffer, empty_bars, ready_bars, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B,
                          WMMA_LAYOUT, c_ptr.type.element_ty)
@@ -1128,16 +1128,16 @@ def persistent_producer_partition(args, scheduler):
             ready_bar = args.load_ready_bars.index(buffer_idx)
 
             # Wait for the buffers to be consumed before loading
-            ttgl.amd.gfx1250.mbarrier.wait(empty_bar, load_empty_phase_counter.phase())
+            ttgl.amd.cdna5.mbarrier.wait(empty_bar, load_empty_phase_counter.phase())
 
             # Only attach mbarrier to the last load so we signal once after both loads complete
-            ttgl.amd.gfx1250.tdm.async_load(args.a_desc, [off_am, k_offset], args.a_buffer.index(buffer_idx))
+            ttgl.amd.cdna5.tdm.async_load(args.a_desc, [off_am, k_offset], args.a_buffer.index(buffer_idx))
             if args.TRANSPOSE_B:
-                ttgl.amd.gfx1250.tdm.async_load(args.b_desc, [off_bn, k_offset], args.b_buffer.index(buffer_idx),
-                                                mbarrier=ready_bar)
+                ttgl.amd.cdna5.tdm.async_load(args.b_desc, [off_bn, k_offset], args.b_buffer.index(buffer_idx),
+                                              mbarrier=ready_bar)
             else:
-                ttgl.amd.gfx1250.tdm.async_load(args.b_desc, [k_offset, off_bn], args.b_buffer.index(buffer_idx),
-                                                mbarrier=ready_bar)
+                ttgl.amd.cdna5.tdm.async_load(args.b_desc, [k_offset, off_bn], args.b_buffer.index(buffer_idx),
+                                              mbarrier=ready_bar)
 
             load_empty_phase_counter = load_empty_phase_counter.next()
 
@@ -1168,7 +1168,7 @@ def persistent_compute_partition(args, scheduler):
         acc_ready_bar = args.acc_ready_bars.index(acc_buffer_idx)
 
         # Wait for the accumulator buffer to be empty (consumed by epilogue partition)
-        ttgl.amd.gfx1250.mbarrier.wait(acc_empty_bar, acc_empty_phase_counter.phase())
+        ttgl.amd.cdna5.mbarrier.wait(acc_empty_bar, acc_empty_phase_counter.phase())
 
         accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=args.c_dtype, layout=args.WMMA_LAYOUT)
 
@@ -1178,7 +1178,7 @@ def persistent_compute_partition(args, scheduler):
             empty_bar = args.load_empty_bars.index(buffer_idx)
 
             # Wait for the buffers to be filled by the producer
-            ttgl.amd.gfx1250.mbarrier.wait(ready_bar, load_ready_phase_counter.phase())
+            ttgl.amd.cdna5.mbarrier.wait(ready_bar, load_ready_phase_counter.phase())
 
             a = args.a_buffer.index(buffer_idx).load(layout=OPERAND_LAYOUT_A)
             if args.TRANSPOSE_B:
@@ -1186,10 +1186,10 @@ def persistent_compute_partition(args, scheduler):
             else:
                 b = args.b_buffer.index(buffer_idx).load(layout=OPERAND_LAYOUT_B)
 
-            accumulator = ttgl.amd.gfx1250.wmma(a, b, accumulator)
+            accumulator = ttgl.amd.cdna5.wmma(a, b, accumulator)
 
             # Signal that we're done with these buffers (producer can reuse them)
-            ttgl.amd.gfx1250.mbarrier.arrive(empty_bar, count=1)
+            ttgl.amd.cdna5.mbarrier.arrive(empty_bar, count=1)
 
             load_ready_phase_counter = load_ready_phase_counter.next()
 
@@ -1197,7 +1197,7 @@ def persistent_compute_partition(args, scheduler):
         args.acc_buffer.index(acc_buffer_idx).store(accumulator)
 
         # Signal epilogue partition that accumulator is ready to be consumed
-        ttgl.amd.gfx1250.mbarrier.arrive(acc_ready_bar, count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(acc_ready_bar, count=1)
         acc_empty_phase_counter = acc_empty_phase_counter.next()
         local_tile_counter += 1
 
@@ -1222,15 +1222,15 @@ def persistent_epilogue_partition(args, c_ptr, M, N, stride_cm, stride_cn, sched
         acc_empty_bar = args.acc_empty_bars.index(acc_buffer_idx)
 
         # Wait for the accumulator to be filled by the compute partition
-        ttgl.amd.gfx1250.mbarrier.wait(acc_ready_bar, acc_ready_phase_counter.phase())
+        ttgl.amd.cdna5.mbarrier.wait(acc_ready_bar, acc_ready_phase_counter.phase())
 
-        ttgl.amd.gfx1250.tdm.async_store(args.c_desc, [pid_m * BLOCK_M, pid_n * BLOCK_N],
-                                         args.acc_buffer.index(acc_buffer_idx), mbarrier=acc_empty_bar)
+        ttgl.amd.cdna5.tdm.async_store(args.c_desc, [pid_m * BLOCK_M, pid_n * BLOCK_N],
+                                       args.acc_buffer.index(acc_buffer_idx), mbarrier=acc_empty_bar)
 
         acc_ready_phase_counter = acc_ready_phase_counter.next()
         local_tile_counter += 1
 
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
 
 @gluon.jit
@@ -1270,16 +1270,16 @@ def persistent_producer_subtiled_partition(args, scheduler):
                 ready_bar = args.load_ready_bars.index(buffer_idx)
 
                 # Wait for the buffers to be consumed before loading
-                ttgl.amd.gfx1250.mbarrier.wait(empty_bar, load_empty_phase_counter.phase())
+                ttgl.amd.cdna5.mbarrier.wait(empty_bar, load_empty_phase_counter.phase())
 
                 # Only attach mbarrier to the last load so we signal once after both loads complete
-                ttgl.amd.gfx1250.tdm.async_load(args.a_desc, [off_am, k_offset], args.a_buffer.index(buffer_idx))
+                ttgl.amd.cdna5.tdm.async_load(args.a_desc, [off_am, k_offset], args.a_buffer.index(buffer_idx))
                 if args.TRANSPOSE_B:
-                    ttgl.amd.gfx1250.tdm.async_load(args.b_desc, [off_bn, k_offset], args.b_buffer.index(buffer_idx),
-                                                    mbarrier=ready_bar)
+                    ttgl.amd.cdna5.tdm.async_load(args.b_desc, [off_bn, k_offset], args.b_buffer.index(buffer_idx),
+                                                  mbarrier=ready_bar)
                 else:
-                    ttgl.amd.gfx1250.tdm.async_load(args.b_desc, [k_offset, off_bn], args.b_buffer.index(buffer_idx),
-                                                    mbarrier=ready_bar)
+                    ttgl.amd.cdna5.tdm.async_load(args.b_desc, [k_offset, off_bn], args.b_buffer.index(buffer_idx),
+                                                  mbarrier=ready_bar)
 
                 load_empty_phase_counter = load_empty_phase_counter.next()
 
@@ -1316,7 +1316,7 @@ def persistent_compute_subtiled_partition(args, scheduler):
                 empty_bar = args.load_empty_bars.index(buffer_idx)
 
                 # Wait for the buffers to be filled by the producer
-                ttgl.amd.gfx1250.mbarrier.wait(ready_bar, load_ready_phase_counter.phase())
+                ttgl.amd.cdna5.mbarrier.wait(ready_bar, load_ready_phase_counter.phase())
 
                 a = args.a_buffer.index(buffer_idx).load(layout=OPERAND_LAYOUT_A)
                 if args.TRANSPOSE_B:
@@ -1324,10 +1324,10 @@ def persistent_compute_subtiled_partition(args, scheduler):
                 else:
                     b = args.b_buffer.index(buffer_idx).load(layout=OPERAND_LAYOUT_B)
 
-                accumulator = ttgl.amd.gfx1250.wmma(a, b, accumulator)
+                accumulator = ttgl.amd.cdna5.wmma(a, b, accumulator)
 
                 # Signal that we're done with these buffers (producer can reuse them)
-                ttgl.amd.gfx1250.mbarrier.arrive(empty_bar, count=1)
+                ttgl.amd.cdna5.mbarrier.arrive(empty_bar, count=1)
 
                 load_ready_phase_counter = load_ready_phase_counter.next()
 
@@ -1340,11 +1340,11 @@ def persistent_compute_subtiled_partition(args, scheduler):
                 acc_empty_bar = args.acc_empty_bars.index(acc_buffer_idx)
                 acc_ready_bar = args.acc_ready_bars.index(acc_buffer_idx)
                 # Wait for the accumulator subtile buffer to be empty (consumed by epilogue partition)
-                ttgl.amd.gfx1250.mbarrier.wait(acc_empty_bar, acc_empty_phase_counter.phase())
+                ttgl.amd.cdna5.mbarrier.wait(acc_empty_bar, acc_empty_phase_counter.phase())
                 # Store buffer to shared memory for epilogue partition
                 args.acc_buffer.index(acc_buffer_idx).store(subtile)
                 # Signal epilogue partition that accumulator subtile is ready to be consumed
-                ttgl.amd.gfx1250.mbarrier.arrive(acc_ready_bar, count=1)
+                ttgl.amd.cdna5.mbarrier.arrive(acc_ready_bar, count=1)
                 acc_empty_phase_counter = acc_empty_phase_counter.next()
 
 
@@ -1384,16 +1384,16 @@ def persistent_epilogue_subtiled_partition(args, scheduler):
                 acc_ready_bar = args.acc_ready_bars.index(acc_buffer_idx)
                 acc_empty_bar = args.acc_empty_bars.index(acc_buffer_idx)
 
-                ttgl.amd.gfx1250.mbarrier.wait(acc_ready_bar, acc_ready_phase_counter.phase())
+                ttgl.amd.cdna5.mbarrier.wait(acc_ready_bar, acc_ready_phase_counter.phase())
 
                 offs_m = pid_m * BLOCK_M + quad_m_offset + local_subtile_m * ACC_SUBTILE
                 offs_n = pid_n * BLOCK_N + quad_n_offset + local_subtile_n * ACC_SUBTILE
 
-                ttgl.amd.gfx1250.tdm.async_store(args.c_desc, [offs_m, offs_n], args.acc_buffer.index(acc_buffer_idx),
-                                                 mbarrier=acc_empty_bar)
+                ttgl.amd.cdna5.tdm.async_store(args.c_desc, [offs_m, offs_n], args.acc_buffer.index(acc_buffer_idx),
+                                               mbarrier=acc_empty_bar)
                 acc_ready_phase_counter = acc_ready_phase_counter.next()
 
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
 
 @gluon.jit
@@ -1435,8 +1435,8 @@ def persistent_gemm_tdm_warp_specialized_kernel(a_ptr, b_ptr, c_ptr,  #
                                                SHARED_LAYOUT_A, SHARED_LAYOUT_B, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
                                                TRANSPOSE_B)
 
-    c_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT_ACC)
+    c_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
+                                                       block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT_ACC)
 
     scheduler = TileScheduler.initialize(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, STREAMK_TILES=0)
 
@@ -1446,13 +1446,13 @@ def persistent_gemm_tdm_warp_specialized_kernel(a_ptr, b_ptr, c_ptr,  #
                                              layout=SHARED_LAYOUT_ACC)
 
     load_empty_bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_BUFFERS, 1],
-                                                  ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+                                                  ttgl.amd.cdna5.mbarrier.MBarrierLayout())
     load_ready_bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_BUFFERS, 1],
-                                                  ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+                                                  ttgl.amd.cdna5.mbarrier.MBarrierLayout())
     acc_empty_bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_ACC_BUFFERS, 1],
-                                                 ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+                                                 ttgl.amd.cdna5.mbarrier.MBarrierLayout())
     acc_ready_bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_ACC_BUFFERS, 1],
-                                                 ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+                                                 ttgl.amd.cdna5.mbarrier.MBarrierLayout())
 
     # Initialize mbarriers
     # load_empty_bars: signals when compute partition has consumed the shared memory buffers for matrices A and B
@@ -1461,15 +1461,15 @@ def persistent_gemm_tdm_warp_specialized_kernel(a_ptr, b_ptr, c_ptr,  #
     # acc_ready_bars: signals when compute partition has filled the accuumulator to be consumed by the epilogue partition
     for i in ttgl.static_range(NUM_BUFFERS):
         # load_empty_bars: arrive on barrier once per thread, so use compute thread count
-        ttgl.amd.gfx1250.mbarrier.init(load_empty_bars.index(i), count=COMPUTE_WARPS * WARP_SIZE)
+        ttgl.amd.cdna5.mbarrier.init(load_empty_bars.index(i), count=COMPUTE_WARPS * WARP_SIZE)
         # load_ready_bars: TDM arrives on barrier once per warp, so use producer warp count
-        ttgl.amd.gfx1250.mbarrier.init(load_ready_bars.index(i), count=PRODUCER_WARPS)
+        ttgl.amd.cdna5.mbarrier.init(load_ready_bars.index(i), count=PRODUCER_WARPS)
 
     for i in ttgl.static_range(NUM_ACC_BUFFERS):
         # acc_empty_bars: TDM arrives on barrier once per warp, so use epilogue warp count
-        ttgl.amd.gfx1250.mbarrier.init(acc_empty_bars.index(i), count=EPILOGUE_WARPS)
+        ttgl.amd.cdna5.mbarrier.init(acc_empty_bars.index(i), count=EPILOGUE_WARPS)
         # acc_ready_bars: arrive on barrier once per thread, so use compute thread count
-        ttgl.amd.gfx1250.mbarrier.init(acc_ready_bars.index(i), count=COMPUTE_WARPS * WARP_SIZE)
+        ttgl.amd.cdna5.mbarrier.init(acc_ready_bars.index(i), count=COMPUTE_WARPS * WARP_SIZE)
 
     args = PersistentPartitionArgs(a_desc, b_desc, c_desc, a_buffer, b_buffer, acc_buffer, load_empty_bars,
                                    load_ready_bars, acc_empty_bars, acc_ready_bars, BLOCK_K, NUM_BUFFERS,
@@ -1532,9 +1532,9 @@ def persistent_gemm_tdm_warp_specialized_subtiled_kernel(a_ptr, b_ptr, c_ptr,  #
                                                SHARED_LAYOUT_A, SHARED_LAYOUT_B, M, N, K, QUADRANT_M, QUADRANT_N,
                                                BLOCK_K, TRANSPOSE_B)
 
-    c_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-                                                         block_shape=(ACC_SUBTILE_M, ACC_SUBTILE_N),
-                                                         layout=SHARED_LAYOUT_ACC)
+    c_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
+                                                       block_shape=(ACC_SUBTILE_M, ACC_SUBTILE_N),
+                                                       layout=SHARED_LAYOUT_ACC)
 
     scheduler = TileScheduler.initialize(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, STREAMK_TILES=0)
 
@@ -1545,13 +1545,13 @@ def persistent_gemm_tdm_warp_specialized_subtiled_kernel(a_ptr, b_ptr, c_ptr,  #
                                                     ACC_SUBTILE_N], layout=SHARED_LAYOUT_ACC)
 
     load_empty_bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_BUFFERS, 1],
-                                                  ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+                                                  ttgl.amd.cdna5.mbarrier.MBarrierLayout())
     load_ready_bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_BUFFERS, 1],
-                                                  ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+                                                  ttgl.amd.cdna5.mbarrier.MBarrierLayout())
     acc_empty_bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_ACC_BUFFERS, 1],
-                                                 ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+                                                 ttgl.amd.cdna5.mbarrier.MBarrierLayout())
     acc_ready_bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_ACC_BUFFERS, 1],
-                                                 ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+                                                 ttgl.amd.cdna5.mbarrier.MBarrierLayout())
 
     # Initialize mbarriers
     # load_empty_bars: signals when compute partition has consumed the shared memory buffers for matrices A and B
@@ -1560,15 +1560,15 @@ def persistent_gemm_tdm_warp_specialized_subtiled_kernel(a_ptr, b_ptr, c_ptr,  #
     # acc_ready_bars: signals when compute partition has filled the accuumulator to be consumed by the epilogue partition
     for i in ttgl.static_range(NUM_BUFFERS):
         # load_empty_bars: arrive on barrier once per thread, so use compute thread count
-        ttgl.amd.gfx1250.mbarrier.init(load_empty_bars.index(i), count=COMPUTE_WARPS * WARP_SIZE)
+        ttgl.amd.cdna5.mbarrier.init(load_empty_bars.index(i), count=COMPUTE_WARPS * WARP_SIZE)
         # load_ready_bars: TDM arrives on barrier once per warp, so use producer warp count
-        ttgl.amd.gfx1250.mbarrier.init(load_ready_bars.index(i), count=PRODUCER_WARPS)
+        ttgl.amd.cdna5.mbarrier.init(load_ready_bars.index(i), count=PRODUCER_WARPS)
 
     for i in ttgl.static_range(NUM_ACC_BUFFERS):
         # acc_empty_bars: TDM arrives on barrier once per warp, so use epilogue warp count
-        ttgl.amd.gfx1250.mbarrier.init(acc_empty_bars.index(i), count=EPILOGUE_WARPS)
+        ttgl.amd.cdna5.mbarrier.init(acc_empty_bars.index(i), count=EPILOGUE_WARPS)
         # acc_ready_bars: arrive on barrier once per thread, so use compute thread count
-        ttgl.amd.gfx1250.mbarrier.init(acc_ready_bars.index(i), count=COMPUTE_WARPS * WARP_SIZE)
+        ttgl.amd.cdna5.mbarrier.init(acc_ready_bars.index(i), count=COMPUTE_WARPS * WARP_SIZE)
 
     args = PersistentPartitionSubtiledArgs(a_desc, b_desc, c_desc, a_buffer, b_buffer, acc_buffer, load_empty_bars,
                                            load_ready_bars, acc_empty_bars, acc_ready_bars, BLOCK_K, NUM_BUFFERS,

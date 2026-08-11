@@ -33,10 +33,6 @@ def is_async_copy_enabled(arch):
     return (arch in ["gfx950", "gfx1250"]) if knobs.amd.use_async_copy is None else knobs.amd.use_async_copy
 
 
-def is_coexec_scheduler_supported(arch):
-    return arch in ["gfx1250"]
-
-
 def is_coexec_scheduler_enabled(arch):
     if knobs.amd.use_coexec_scheduler is not None:
         return knobs.amd.use_coexec_scheduler
@@ -55,10 +51,6 @@ def is_fpsan_supported(arch):
 
 def is_consan_supported(arch):
     return arch in ["gfx1250"]
-
-
-def disable_real_true16_feature(arch):
-    return '-real-true16' if arch.startswith('gfx11') else ''
 
 
 def _parse_llvm_fn_attrs(attrs):
@@ -547,7 +539,7 @@ class HIPBackend(BaseBackend):
         flags = []
         if is_expert_scheduling_enabled(options.arch):
             flags.append("amdgpu-expert-scheduling-mode")
-        features = disable_real_true16_feature(options.arch)
+        features = ''
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash
         _ = llvm.translate_to_mir(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
@@ -573,8 +565,6 @@ class HIPBackend(BaseBackend):
         target_features = []
         if knobs.compilation.enable_asan:
             target_features.append('+xnack')
-        if true16 := disable_real_true16_feature(options.arch):
-            target_features.append(true16)
         hsaco = amd.assemble_amdgcn(src, options.arch, ','.join(target_features))
         with tempfile.NamedTemporaryFile() as tmp_out:
             with tempfile.NamedTemporaryFile() as tmp_in:

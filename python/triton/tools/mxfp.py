@@ -54,26 +54,10 @@ class MXFP4Tensor:
         E = ((data >> 1) & 0x3).type(dtype)
         M = (data & 0x1).type(dtype)
 
-        # The MXF4 E2M1 spec defines 0bS000 as zero
-        value = torch.zeros_like(S)
-        is_zero = (E == 0) & (M == 0)
-        non_zero_mask = ~is_zero
-        if non_zero_mask.any():
-            S_nz = S[non_zero_mask]
-            E_nz = E[non_zero_mask]
-            M_nz = M[non_zero_mask]
-
-            sign = torch.pow(-1, S_nz)
-            # Normal and subnormal handling for the exponent and mantissa
-            exponent = torch.where(E_nz == 0, E_nz, E_nz - 1)
-            mantissa = torch.where(E_nz == 0, M_nz * 0.5, 1.0 + M_nz * 0.5)
-            value_nz = sign * torch.pow(2, exponent) * mantissa
-
-            value[non_zero_mask] = value_nz
-
-        # For zeros, the values must remain zero with the correct sign
-        value[is_zero & (S == 1)] *= -1
-        return value.type(torch.float32)
+        is_subnormal = E == 0
+        exponent = torch.where(is_subnormal, E, E - 1)
+        mantissa = torch.where(is_subnormal, M * 0.5, 1.0 + M * 0.5)
+        return (1.0 - 2.0 * S) * torch.pow(2.0, exponent) * mantissa
 
     def _from_float(self, values):
         """
@@ -286,16 +270,10 @@ class MXScaleTensor:
         Parameters:
         - values: A torch tensor of float32 numbers to convert to E8M0 format.
         """
-        result = torch.empty_like(values, dtype=torch.uint8, device=self.device)
-
         is_invalid = torch.isnan(values) | torch.isinf(values) | (values <= 0)
-        result[is_invalid] = 255
-
-        valid_values = values[~is_invalid]
+        valid_values = torch.where(is_invalid, torch.ones_like(values), values)
         e = torch.floor(torch.log2(valid_values))
         e_biased = e + 127
         e_biased_int = e_biased.type(torch.int32)
         e_biased_clamped = torch.clamp(e_biased_int, 0, 254)
-        result[~is_invalid] = e_biased_clamped.type(torch.uint8)
-
-        return result
+        return torch.where(is_invalid, 255, e_biased_clamped.type(torch.uint8))

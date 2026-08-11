@@ -3,6 +3,7 @@
 
 include "triton/Dialect/TritonInstrument/IR/TritonInstrumentDialect.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUMemoryEffects.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
@@ -15,14 +16,13 @@ include "triton/Dialect/TritonInstrument/IR/TritonInstrumentAttrDefs.td"
 // Interfaces
 //
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
-def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
 
 //
 // Ops
 //
 
-class TTI_Op<string mnemonic, list<Trait> traits = []> :
-    Op<TritonInstrument_Dialect, mnemonic, traits> {
+class TTI_Op<string mnemonic, list<Trait> traits = []>
+    : Op<TritonInstrument_Dialect, mnemonic, traits> {
 }
 
 def TTI_ExperimentalAssertUniformOp : TTI_Op<"experimental_assert_uniform", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
@@ -102,7 +102,7 @@ def TTI_ExperimentalLocalGatherOp
     offsets. This is intentionally private to instrumentation passes.
   }];
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    Arg<TTG_MemDescType, "", GenericSharedRead>:$src,
     TT_IntTensor:$indices,
     Variadic<I32>:$offsets,
     I32Attr:$axis

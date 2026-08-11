@@ -12,7 +12,7 @@ from triton._internal_testing import is_hip_gfx1250, str_to_triton_dtype, numpy_
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
-from triton.experimental.gluon.language.amd.gfx1250 import get_wmma_scale_layout, PartitionedSharedLayout, _valid_dtype_combinations
+from triton.experimental.gluon.language.amd.cdna5 import get_wmma_scale_layout, PartitionedSharedLayout, _valid_dtype_combinations
 from triton._C.libtriton.gluon_ir import make_cga_layout
 
 
@@ -51,7 +51,7 @@ def gemm_kernel(a_ptr, b_ptr, c_ptr,  #
 
         a = ttgl.convert_layout(a, ttgl.DotOperandLayout(0, WMMA_LAYOUT, K_WIDTH))
         b = ttgl.convert_layout(b, ttgl.DotOperandLayout(1, WMMA_LAYOUT, K_WIDTH))
-        accumulator = ttgl.amd.gfx1250.wmma(a, b, accumulator)
+        accumulator = ttgl.amd.cdna5.wmma(a, b, accumulator)
 
         offs_a += BLOCK_K * stride_ak
         offs_b += BLOCK_K * stride_bk
@@ -134,7 +134,7 @@ def test_compile_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K):
     assert re.search(wmma_pattern, amdgcn)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("compact_scale", [
     False,
     True,
@@ -165,7 +165,7 @@ def test_runtime_scaled_upcast_fp4(compact_scale, BLOCK_K):
         scale_offsets = offs_scale_m[:, None] * scale_k + offs_scale_k[None, :]
         scale = ttgl.load(scale_ptr + scale_offsets)
 
-        y = ttgl.amd.gfx1250.scaled_upcast(x, scale, ttgl.bfloat16, axis=1)
+        y = ttgl.amd.cdna5.scaled_upcast(x, scale, ttgl.bfloat16, axis=1)
         out_layout: ttgl.constexpr = y.type.layout
         offs_out_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, out_layout))
         offs_out_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, out_layout))
@@ -190,7 +190,7 @@ def test_runtime_scaled_upcast_fp4(compact_scale, BLOCK_K):
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 def test_runtime_scaled_upcast_fp4_bf16_gemm_layouts():
     # Test packed / compact-scale DistributedLinearLayouts used when upcasting an fp4 weight tile to bf16 for a WMMA GEMM.
     @gluon.jit
@@ -222,7 +222,7 @@ def test_runtime_scaled_upcast_fp4_bf16_gemm_layouts():
         scale_offsets = offs_scale_n[:, None] * scale_k + offs_scale_k[None, :]
         scale = ttgl.load(scale_ptr + scale_offsets)
 
-        y = ttgl.amd.gfx1250.scaled_upcast(x, scale, ttgl.bfloat16, axis=1)
+        y = ttgl.amd.cdna5.scaled_upcast(x, scale, ttgl.bfloat16, axis=1)
         out_layout: ttgl.constexpr = y.type.layout
         offs_out_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(1, out_layout))
         offs_out_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, out_layout))
@@ -248,7 +248,7 @@ def test_runtime_scaled_upcast_fp4_bf16_gemm_layouts():
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("fp8_dtype", ["e4m3", "e5m2"])
 @pytest.mark.parametrize("out_dtype", ["bf16", "f16"], ids=lambda v: f"out_{v}")
 def test_runtime_scaled_upcast_fp8(fp8_dtype, out_dtype):
@@ -279,7 +279,7 @@ def test_runtime_scaled_upcast_fp8(fp8_dtype, out_dtype):
         x = ttgl.load(x_ptr + offsets)
         scale = ttgl.load(scale_ptr + offsets)
 
-        y = ttgl.amd.gfx1250.scaled_upcast(x, scale, OUT_DTYPE)
+        y = ttgl.amd.cdna5.scaled_upcast(x, scale, OUT_DTYPE)
         ttgl.store(y_ptr + offsets, y)
 
     BLOCK_M = 16
@@ -300,7 +300,7 @@ def test_runtime_scaled_upcast_fp8(fp8_dtype, out_dtype):
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 def test_runtime_scaled_upcast_fp8_non_broadcast_block16():
 
     @gluon.jit
@@ -322,7 +322,7 @@ def test_runtime_scaled_upcast_fp8_non_broadcast_block16():
         x = ttgl.load(x_ptr + offsets)
         scale = ttgl.load(scale_ptr + offsets)
 
-        y = ttgl.amd.gfx1250.scaled_upcast(x, scale, ttgl.bfloat16)
+        y = ttgl.amd.cdna5.scaled_upcast(x, scale, ttgl.bfloat16)
         ttgl.store(y_ptr + offsets, y)
 
     BLOCK_M = 32
@@ -436,7 +436,7 @@ def gemm_3d_kernel(a_ptr, b_ptr, c_ptr,  #
 
         a = ttgl.convert_layout(a, ttgl.DotOperandLayout(0, wmma_layout, K_WIDTH))
         b = ttgl.convert_layout(b, ttgl.DotOperandLayout(1, wmma_layout, K_WIDTH))
-        accumulator = ttgl.amd.gfx1250.wmma(a, b, accumulator)
+        accumulator = ttgl.amd.cdna5.wmma(a, b, accumulator)
 
         offs_a += BLOCK_K * stride_ak
         offs_b += BLOCK_K * stride_bk
@@ -545,8 +545,9 @@ def gemm_async_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
 
     if RESOLVE_PARTITION_CONFLICTS:
         # The padded layouts above are reinterpreted as per-piece sublayouts here.
-        _DOT_LAYOUTS: ttgl.constexpr = ttgl.amd.gfx1250.make_partitioned_dot_layouts(
-            BLOCK_M, BLOCK_N, padded_a, padded_b, 4, [16, 16, 32], a_transposed=False, b_transposed=IS_B_K_CONTIG)
+        _DOT_LAYOUTS: ttgl.constexpr = ttgl.amd.cdna5.make_partitioned_dot_layouts(BLOCK_M, BLOCK_N, padded_a, padded_b,
+                                                                                   4, [16, 16, 32], a_transposed=False,
+                                                                                   b_transposed=IS_B_K_CONTIG)
     else:
         _DOT_LAYOUTS: ttgl.constexpr = (padded_a, padded_b,
                                         ttgl.amd.AMDWMMALayout(3, True, [[0, 1], [1, 0]], [], [16, 16, 32]))
@@ -563,7 +564,7 @@ def gemm_async_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
     pid_n = pid // num_pid_m
 
     # Descriptors for TDM
-    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(  #
+    a_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(  #
         base=a_ptr + pid_m * BLOCK_M * stride_am,  #
         shape=(M, K),  #
         strides=(stride_am, stride_ak),  #
@@ -572,14 +573,14 @@ def gemm_async_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
     if IS_B_K_CONTIG:
         # TDM always needs the most-minor dimension to be contiguous, so for K-contiguous B we
         # describe the tile as (BLOCK_N, BLOCK_K) and permute it before the dot.
-        b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(  #
+        b_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(  #
             base=b_ptr + pid_n * BLOCK_N * stride_bn,  #
             shape=(N, K),  #
             strides=(stride_bn, stride_bk),  #
             block_shape=(BLOCK_N, BLOCK_K),  #
             layout=SHARED_LAYOUT_B)
     else:
-        b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(  #
+        b_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(  #
             base=b_ptr + pid_n * BLOCK_N * stride_bn,  #
             shape=(K, N),  #
             strides=(stride_bk, stride_bn),  #
@@ -611,26 +612,26 @@ def gemm_async_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
 
     for _ in ttgl.static_range(NUM_BUFFERS - 1):
         if USE_TDM:
-            ttgl.amd.gfx1250.tdm.async_load(a_desc, [0, load_idx * BLOCK_K],  #
-                                            a_buffer.index(load_idx % NUM_BUFFERS))
+            ttgl.amd.cdna5.tdm.async_load(a_desc, [0, load_idx * BLOCK_K],  #
+                                          a_buffer.index(load_idx % NUM_BUFFERS))
             if IS_B_K_CONTIG:
-                ttgl.amd.gfx1250.tdm.async_load(b_desc, [0, load_idx * BLOCK_K],  #
-                                                b_buffer.index(load_idx % NUM_BUFFERS))
+                ttgl.amd.cdna5.tdm.async_load(b_desc, [0, load_idx * BLOCK_K],  #
+                                              b_buffer.index(load_idx % NUM_BUFFERS))
             else:
-                ttgl.amd.gfx1250.tdm.async_load(b_desc, [load_idx * BLOCK_K, 0],  #
-                                                b_buffer.index(load_idx % NUM_BUFFERS))
+                ttgl.amd.cdna5.tdm.async_load(b_desc, [load_idx * BLOCK_K, 0],  #
+                                              b_buffer.index(load_idx % NUM_BUFFERS))
         else:
             mask_a = offs_ak[None, :] < K - load_idx * BLOCK_K
-            ttgl.amd.gfx1250.async_copy.global_to_shared(a_buffer.index(load_idx % NUM_BUFFERS), a_ptrs, mask_a,
-                                                         other=0.0)
+            ttgl.amd.cdna5.async_copy.global_to_shared(a_buffer.index(load_idx % NUM_BUFFERS), a_ptrs, mask_a,
+                                                       other=0.0)
 
             if IS_B_K_CONTIG:
                 mask_b = offs_bk[None, :] < K - load_idx * BLOCK_K
             else:
                 mask_b = offs_bk[:, None] < K - load_idx * BLOCK_K
-            ttgl.amd.gfx1250.async_copy.global_to_shared(b_buffer.index(load_idx % NUM_BUFFERS), b_ptrs, mask_b,
-                                                         other=0.0)
-            ttgl.amd.gfx1250.async_copy.commit_group()
+            ttgl.amd.cdna5.async_copy.global_to_shared(b_buffer.index(load_idx % NUM_BUFFERS), b_ptrs, mask_b,
+                                                       other=0.0)
+            ttgl.amd.cdna5.async_copy.commit_group()
 
         load_idx += 1
         a_ptrs += BLOCK_K * stride_ak
@@ -638,56 +639,56 @@ def gemm_async_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
 
     for _ in range(0, ttgl.cdiv(K, BLOCK_K) - (NUM_BUFFERS - 1)):
         if USE_TDM:
-            ttgl.amd.gfx1250.tdm.async_load(a_desc, [0, load_idx * BLOCK_K],  #
-                                            a_buffer.index(load_idx % NUM_BUFFERS))
+            ttgl.amd.cdna5.tdm.async_load(a_desc, [0, load_idx * BLOCK_K],  #
+                                          a_buffer.index(load_idx % NUM_BUFFERS))
             if IS_B_K_CONTIG:
-                ttgl.amd.gfx1250.tdm.async_load(b_desc, [0, load_idx * BLOCK_K],  #
-                                                b_buffer.index(load_idx % NUM_BUFFERS))
+                ttgl.amd.cdna5.tdm.async_load(b_desc, [0, load_idx * BLOCK_K],  #
+                                              b_buffer.index(load_idx % NUM_BUFFERS))
             else:
-                ttgl.amd.gfx1250.tdm.async_load(b_desc, [load_idx * BLOCK_K, 0],  #
-                                                b_buffer.index(load_idx % NUM_BUFFERS))
+                ttgl.amd.cdna5.tdm.async_load(b_desc, [load_idx * BLOCK_K, 0],  #
+                                              b_buffer.index(load_idx % NUM_BUFFERS))
         else:
             mask_a = offs_ak[None, :] < K - load_idx * BLOCK_K
-            ttgl.amd.gfx1250.async_copy.global_to_shared(a_buffer.index(load_idx % NUM_BUFFERS), a_ptrs, mask_a,
-                                                         other=0.0)
+            ttgl.amd.cdna5.async_copy.global_to_shared(a_buffer.index(load_idx % NUM_BUFFERS), a_ptrs, mask_a,
+                                                       other=0.0)
 
             if IS_B_K_CONTIG:
                 mask_b = offs_bk[None, :] < K - load_idx * BLOCK_K
             else:
                 mask_b = offs_bk[:, None] < K - load_idx * BLOCK_K
-            ttgl.amd.gfx1250.async_copy.global_to_shared(b_buffer.index(load_idx % NUM_BUFFERS), b_ptrs, mask_b,
-                                                         other=0.0)
-            ttgl.amd.gfx1250.async_copy.commit_group()
+            ttgl.amd.cdna5.async_copy.global_to_shared(b_buffer.index(load_idx % NUM_BUFFERS), b_ptrs, mask_b,
+                                                       other=0.0)
+            ttgl.amd.cdna5.async_copy.commit_group()
 
         load_idx += 1
         a_ptrs += BLOCK_K * stride_ak
         b_ptrs += BLOCK_K * stride_bk
 
         if USE_TDM:
-            ttgl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 1) * 2)
+            ttgl.amd.cdna5.tdm.async_wait((NUM_BUFFERS - 1) * 2)
         else:
-            ttgl.amd.gfx1250.async_copy.wait_group((NUM_BUFFERS - 1))
+            ttgl.amd.cdna5.async_copy.wait_group((NUM_BUFFERS - 1))
 
         a = a_buffer.index(wmma_idx % NUM_BUFFERS).load(layout=OPERAND_LAYOUT_A)
         if IS_B_K_CONTIG:
             b = b_buffer.index(wmma_idx % NUM_BUFFERS).permute([1, 0]).load(layout=OPERAND_LAYOUT_B)
         else:
             b = b_buffer.index(wmma_idx % NUM_BUFFERS).load(layout=OPERAND_LAYOUT_B)
-        accumulator = ttgl.amd.gfx1250.wmma(a, b, accumulator)
+        accumulator = ttgl.amd.cdna5.wmma(a, b, accumulator)
         wmma_idx += 1
 
     for i in ttgl.static_range(NUM_BUFFERS - 1):
         if USE_TDM:
-            ttgl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 2 - i) * 2)
+            ttgl.amd.cdna5.tdm.async_wait((NUM_BUFFERS - 2 - i) * 2)
         else:
-            ttgl.amd.gfx1250.async_copy.wait_group((NUM_BUFFERS - 2 - i))
+            ttgl.amd.cdna5.async_copy.wait_group((NUM_BUFFERS - 2 - i))
 
         a = a_buffer.index(wmma_idx % NUM_BUFFERS).load(layout=OPERAND_LAYOUT_A)
         if IS_B_K_CONTIG:
             b = b_buffer.index(wmma_idx % NUM_BUFFERS).permute([1, 0]).load(layout=OPERAND_LAYOUT_B)
         else:
             b = b_buffer.index(wmma_idx % NUM_BUFFERS).load(layout=OPERAND_LAYOUT_B)
-        accumulator = ttgl.amd.gfx1250.wmma(a, b, accumulator)
+        accumulator = ttgl.amd.cdna5.wmma(a, b, accumulator)
         wmma_idx += 1
 
     offs_cm = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, WMMA_LAYOUT))
@@ -854,12 +855,12 @@ def gemm_async_kernel(a_ptr, b_ptr, c_ptr,  #
     pid_n = pid // num_pid_m
 
     # Descriptors for TDM
-    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr + pid_m * BLOCK_M * stride_am, shape=(M, K),
-                                                         strides=(stride_am, stride_ak), block_shape=(BLOCK_M, BLOCK_K),
-                                                         layout=SHARED_LAYOUT_A)
-    b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_ptr + pid_n * BLOCK_N * stride_bn, shape=(K, N),
-                                                         strides=(stride_bk, stride_bn), block_shape=(BLOCK_K, BLOCK_N),
-                                                         layout=SHARED_LAYOUT_B)
+    a_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr + pid_m * BLOCK_M * stride_am, shape=(M, K),
+                                                       strides=(stride_am, stride_ak), block_shape=(BLOCK_M, BLOCK_K),
+                                                       layout=SHARED_LAYOUT_A)
+    b_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=b_ptr + pid_n * BLOCK_N * stride_bn, shape=(K, N),
+                                                       strides=(stride_bk, stride_bn), block_shape=(BLOCK_K, BLOCK_N),
+                                                       layout=SHARED_LAYOUT_B)
 
     # Pointers for AsyncCopy
     offs_ak = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))
@@ -876,26 +877,26 @@ def gemm_async_kernel(a_ptr, b_ptr, c_ptr,  #
     accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=c_ptr.type.element_ty, layout=WMMA_LAYOUT)
     for k in range(0, ttgl.cdiv(K, BLOCK_K)):
         if USE_TDM:
-            ttgl.amd.gfx1250.tdm.async_load(a_desc, [0, k * BLOCK_K], a_buffer)
-            ttgl.amd.gfx1250.tdm.async_load(b_desc, [k * BLOCK_K, 0], b_buffer)
-            ttgl.amd.gfx1250.tdm.async_wait(0)
+            ttgl.amd.cdna5.tdm.async_load(a_desc, [0, k * BLOCK_K], a_buffer)
+            ttgl.amd.cdna5.tdm.async_load(b_desc, [k * BLOCK_K, 0], b_buffer)
+            ttgl.amd.cdna5.tdm.async_wait(0)
         else:
             mask_a = offs_ak[None, :] < K - k * BLOCK_K
-            ttgl.amd.gfx1250.async_copy.global_to_shared(a_buffer, a_ptrs, mask_a, other=0.0)
+            ttgl.amd.cdna5.async_copy.global_to_shared(a_buffer, a_ptrs, mask_a, other=0.0)
 
             mask_b = offs_bk[:, None] < K - k * BLOCK_K
-            ttgl.amd.gfx1250.async_copy.global_to_shared(b_buffer, b_ptrs, mask_b, other=0.0)
-            ttgl.amd.gfx1250.async_copy.commit_group()
+            ttgl.amd.cdna5.async_copy.global_to_shared(b_buffer, b_ptrs, mask_b, other=0.0)
+            ttgl.amd.cdna5.async_copy.commit_group()
             a_ptrs += BLOCK_K * stride_ak
             b_ptrs += BLOCK_K * stride_bk
-            ttgl.amd.gfx1250.async_copy.wait_group(0)
+            ttgl.amd.cdna5.async_copy.wait_group(0)
 
         a = a_buffer.load(layout=BLOCKED_LAYOUT)
         b = b_buffer.load(layout=BLOCKED_LAYOUT)
 
         a = ttgl.convert_layout(a, ttgl.DotOperandLayout(0, WMMA_LAYOUT, K_WIDTH))
         b = ttgl.convert_layout(b, ttgl.DotOperandLayout(1, WMMA_LAYOUT, K_WIDTH))
-        accumulator = ttgl.amd.gfx1250.wmma(a, b, accumulator)
+        accumulator = ttgl.amd.cdna5.wmma(a, b, accumulator)
 
     offs_cm = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, WMMA_LAYOUT))
     offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
@@ -1046,7 +1047,7 @@ def get_test_mxfp_variants():
     return [(a_type, b_type) for a_type in types for b_type in types]
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("wmma_shape", [(16, 16), (32, 16)])
 @pytest.mark.parametrize("transposed", [False, True])
 @pytest.mark.parametrize(
@@ -1117,7 +1118,7 @@ def test_amd_wmma_scaled(wmma_shape, transposed, M, N, K, a_type, b_type, a_scal
             b_scale = None
 
         zero = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=wmma_layout)
-        c = ttgl.amd.gfx1250.wmma_scaled(a, a_scale, a_type, b, b_scale, b_type, zero)
+        c = ttgl.amd.cdna5.wmma_scaled(a, a_scale, a_type, b, b_scale, b_type, zero)
         c = c.to(c_ptr.dtype.element_ty)
 
         c_offs = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, wmma_layout))[:, None] * BLOCK_N + \
@@ -1164,7 +1165,7 @@ def test_amd_wmma_scaled(wmma_shape, transposed, M, N, K, a_type, b_type, a_scal
     torch.testing.assert_close(c.cpu(), c_torch, atol=1e-5, rtol=2e-5)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("M, N, K", get_test_mxfp_block_mnk())
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
 @pytest.mark.parametrize("a_scale_type, b_scale_type", itertools.product(["e8m0", "e4m3"], repeat=2))
@@ -1226,7 +1227,7 @@ def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scal
         b_scale = ttgl.load(b_scale_ptr + b_scale_offs)
 
         zero = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=acc_layout)
-        c = ttgl.amd.gfx1250.wmma_scaled(a, a_scale, a_type, b, b_scale, b_type, zero)
+        c = ttgl.amd.cdna5.wmma_scaled(a, a_scale, a_type, b, b_scale, b_type, zero)
         c = c.to(c_ptr.dtype.element_ty)
 
         c_offs = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, acc_layout))[:, None] * BLOCK_N + \
@@ -1257,7 +1258,7 @@ def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scal
     torch.testing.assert_close(c.cpu(), c_torch, atol=1e-5, rtol=2e-5)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("B", [4])
 @pytest.mark.parametrize("M, N, K", get_test_mxfp_block_mnk())
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
@@ -1311,7 +1312,7 @@ def test_amd_wmma_scaled_batched(B, M, N, K, a_type, b_type, a_scale_type, b_sca
         b_scale = ttgl.load(b_scale_ptr + b_scale_offs)
 
         zero = ttgl.zeros([BLOCK_B, BLOCK_M, BLOCK_N], ttgl.float32, wmma_layout)
-        c = ttgl.amd.gfx1250.wmma_scaled(a, a_scale, a_type, b, b_scale, b_type, zero)
+        c = ttgl.amd.cdna5.wmma_scaled(a, a_scale, a_type, b, b_scale, b_type, zero)
         c = c.to(c_ptr.dtype.element_ty)
 
         c_offs = _offsets(BLOCK_B, BLOCK_M, BLOCK_N, wmma_layout)
@@ -1346,7 +1347,7 @@ def test_amd_wmma_scaled_batched(B, M, N, K, a_type, b_type, a_scale_type, b_sca
     torch.testing.assert_close(c.cpu(), c_torch, atol=1e-5, rtol=2e-5)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("M, N, K", [(16, 16, 128), (32, 32, 128), (32, 32, 256), (32, 32, 512), (64, 64, 128),
                                      (128, 128, 256)])
 @pytest.mark.parametrize("mxfp_type", ["e2m1"])
@@ -1416,23 +1417,23 @@ def test_amd_wmma_scaled_tdm(M, N, K, mxfp_type, hasScale, scale_dtype, scale_fa
 
         zero = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=wmma_layout)
 
-        a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_base, shape=(BLOCK_M, PACKED_BLOCK_K_A),
-                                                             strides=(stride_am, stride_ak),
-                                                             block_shape=(BLOCK_M, PACKED_BLOCK_K_A),
-                                                             layout=SHARED_LAYOUT_A)
+        a_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_base, shape=(BLOCK_M, PACKED_BLOCK_K_A),
+                                                           strides=(stride_am, stride_ak),
+                                                           block_shape=(BLOCK_M, PACKED_BLOCK_K_A),
+                                                           layout=SHARED_LAYOUT_A)
         a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, shape=a_desc.block_shape, layout=a_desc.layout)
-        ttgl.amd.gfx1250.tdm.async_load(a_desc, [0, 0], a_buffer)
-        ttgl.amd.gfx1250.tdm.async_wait(0)
+        ttgl.amd.cdna5.tdm.async_load(a_desc, [0, 0], a_buffer)
+        ttgl.amd.cdna5.tdm.async_wait(0)
         a = a_buffer.load(layout=a_layout)
         a = ttgl.convert_layout(a, a_operand_layout)
 
-        b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_base, shape=(PACKED_BLOCK_K_B, BLOCK_N),
-                                                             strides=(stride_bk, stride_bn),
-                                                             block_shape=(PACKED_BLOCK_K_B, BLOCK_N),
-                                                             layout=SHARED_LAYOUT_B)
+        b_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=b_base, shape=(PACKED_BLOCK_K_B, BLOCK_N),
+                                                           strides=(stride_bk, stride_bn),
+                                                           block_shape=(PACKED_BLOCK_K_B, BLOCK_N),
+                                                           layout=SHARED_LAYOUT_B)
         b_buffer = ttgl.allocate_shared_memory(b_desc.dtype, shape=b_desc.block_shape, layout=b_desc.layout)
-        ttgl.amd.gfx1250.tdm.async_load(b_desc, [0, 0], b_buffer)
-        ttgl.amd.gfx1250.tdm.async_wait(0)
+        ttgl.amd.cdna5.tdm.async_load(b_desc, [0, 0], b_buffer)
+        ttgl.amd.cdna5.tdm.async_wait(0)
         b = b_buffer.load(layout=b_layout)
         b = ttgl.convert_layout(b, b_operand_layout)
 
@@ -1454,7 +1455,7 @@ def test_amd_wmma_scaled_tdm(M, N, K, mxfp_type, hasScale, scale_dtype, scale_fa
         else:
             scale_b = None
 
-        c = ttgl.amd.gfx1250.wmma_scaled(a, scale_a, type_a, b, scale_b, type_b, zero)
+        c = ttgl.amd.cdna5.wmma_scaled(a, scale_a, type_a, b, scale_b, type_b, zero)
         c = c.to(out.dtype.element_ty)
 
         offs_cm = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, wmma_layout))
@@ -1537,10 +1538,10 @@ def tensor_async_copy_kernel(a_ptr, b_ptr, M, N,  #
         offs_an = idx_n + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, block_layout))
         a_ptrs = a_ptr + offs_am[:, None] * N + offs_an[None, :]
         a_mask = (offs_am[:, None] < M) & (offs_an[None, :] < N)
-        ttgl.amd.gfx1250.async_copy.global_to_shared(a_buffer.index(i), a_ptrs, a_mask, other=0.0)
-        ttgl.amd.gfx1250.async_copy.commit_group()
+        ttgl.amd.cdna5.async_copy.global_to_shared(a_buffer.index(i), a_ptrs, a_mask, other=0.0)
+        ttgl.amd.cdna5.async_copy.commit_group()
 
-    ttgl.amd.gfx1250.async_copy.wait_group(0)
+    ttgl.amd.cdna5.async_copy.wait_group(0)
 
     for i in ttgl.static_range(0, NUM_BUFFERS):
         idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
@@ -1572,16 +1573,16 @@ def tensor_device_tdm_copy_kernel(a_ptr, b_ptr, M, N,  #
     pid_m = ttgl.program_id(axis=0)
     pid_n = ttgl.program_id(axis=1)
 
-    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
-                                                         block_shape=(BLOCK_M, BLOCK_N), layout=smem_layout)
+    a_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                       block_shape=(BLOCK_M, BLOCK_N), layout=smem_layout)
     a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, [NUM_BUFFERS] + a_desc.block_shape, a_desc.layout)
 
     idx_m = pid_m * BLOCK_M
     for i in ttgl.static_range(0, NUM_BUFFERS):
         idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
-        ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i))
+        ttgl.amd.cdna5.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i))
 
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
     for i in ttgl.static_range(0, NUM_BUFFERS):
         idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
@@ -1610,9 +1611,9 @@ def tensor_host_tdm_copy_kernel(a_desc, b_ptr, M, N,  #
     idx_m = pid_m * BLOCK_M
     for i in ttgl.static_range(0, NUM_BUFFERS):
         idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
-        ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i))
+        ttgl.amd.cdna5.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i))
 
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
     for i in ttgl.static_range(0, NUM_BUFFERS):
         idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
@@ -1718,7 +1719,7 @@ def test_runtime_tensor_copy(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYP
     else:
         assert ASYNC_LOAD_TYPE == "HOST_TDM"
         smem_layout = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
-        a_desc = gluon.amd.gfx1250.TensorDescriptor.from_tensor(a_device, [BLOCK_M, BLOCK_N], layout=smem_layout)
+        a_desc = gluon.amd.cdna5.TensorDescriptor.from_tensor(a_device, [BLOCK_M, BLOCK_N], layout=smem_layout)
         tensor_host_tdm_copy_kernel[grid](a_desc, b_device, M, N, NUM_BUFFERS, num_warps=NUM_WARPS)
 
     b_triton = b_device.cpu()
@@ -1767,12 +1768,12 @@ def partitioned_tdm_copy_kernel(a_ptr, b_ptr, M, N,  #
     idx_m = pid_m * BLOCK_M
     idx_n = pid_n * BLOCK_N
 
-    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
-                                                         block_shape=(BLOCK_M, BLOCK_N), layout=smem_layout)
+    a_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                       block_shape=(BLOCK_M, BLOCK_N), layout=smem_layout)
     a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
 
-    ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.cdna5.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
     a_dot = a_buffer.load(layout=DOT_RHS_LAYOUT)
     a = ttgl.convert_layout(a_dot, block_layout)
@@ -1814,7 +1815,7 @@ _PARTITIONED_TDM_DTYPE_CONFIG = {
 }
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("DTYPE", list(_PARTITIONED_TDM_DTYPE_CONFIG.keys()))
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N,NUM_PARTITIONS,NUM_GROUPS,PARTITION_DIM", _PARTITIONED_TDM_PARAMS)
 def test_runtime_partitioned_tdm_load(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GROUPS, PARTITION_DIM, DTYPE):
@@ -1876,7 +1877,7 @@ _LOAD_SHARED_FP4_REPACKED_CASES = [
 ]
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("src_shape,src_layout,shared_layout,wmma_layout,op_idx", _LOAD_SHARED_FP4_REPACKED_CASES)
 def test_load_shared_fp4_repacked(src_shape, src_layout, shared_layout, wmma_layout, op_idx):
 
@@ -1899,7 +1900,7 @@ def test_load_shared_fp4_repacked(src_shape, src_layout, shared_layout, wmma_lay
         value = ttgl.load(src_ptr + offs_m[:, None] * src_cols + offs_n[None, :])
         smem = ttgl.allocate_shared_memory(src_ptr.type.element_ty, [src_rows, src_cols], shared_layout, value)
 
-        value = ttgl.amd.gfx1250.load_shared_fp4_repacked(smem, dot_layout)
+        value = ttgl.amd.cdna5.load_shared_fp4_repacked(smem, dot_layout)
         value = ttgl.convert_layout(value, out_layout)
         out_m = ttgl.arange(0, 64, layout=ttgl.SliceLayout(1, out_layout))
         out_n = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, out_layout))
@@ -1974,26 +1975,26 @@ def tensor_device_tdm_multi_cta_load_and_store_kernel(a_ptr, b_ptr, M, N,  #
 
     # Load data - either using TDM load or async_copy
     if USE_TDM_LOAD:
-        a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
-                                                             block_shape=(BLOCK_M, BLOCK_N), layout=smem_layout)
-        ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer)
-        ttgl.amd.gfx1250.tdm.async_wait(0)
+        a_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=smem_layout)
+        ttgl.amd.cdna5.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer)
+        ttgl.amd.cdna5.tdm.async_wait(0)
     else:
         offs_am = idx_m + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, block_layout))
         offs_an = idx_n + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, block_layout))
         offs_a = (offs_am[:, None] * N) + offs_an[None, :]
         a_mask = (offs_am[:, None] < M) & (offs_an[None, :] < N)
         a_ptrs = a_ptr + offs_a
-        ttgl.amd.gfx1250.async_copy.global_to_shared(a_buffer, a_ptrs, a_mask)
-        ttgl.amd.gfx1250.async_copy.commit_group()
-        ttgl.amd.gfx1250.async_copy.wait_group(0)
+        ttgl.amd.cdna5.async_copy.global_to_shared(a_buffer, a_ptrs, a_mask)
+        ttgl.amd.cdna5.async_copy.commit_group()
+        ttgl.amd.cdna5.async_copy.wait_group(0)
 
     # Store data - either using TDM store or local_load + store
     if USE_TDM_STORE:
-        b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_ptr, shape=(M, N), strides=(N, 1),
-                                                             block_shape=(BLOCK_M, BLOCK_N), layout=smem_layout)
-        ttgl.amd.gfx1250.tdm.async_store(b_desc, [idx_m, idx_n], a_buffer)
-        ttgl.amd.gfx1250.tdm.async_wait(0)
+        b_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=b_ptr, shape=(M, N), strides=(N, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=smem_layout)
+        ttgl.amd.cdna5.tdm.async_store(b_desc, [idx_m, idx_n], a_buffer)
+        ttgl.amd.cdna5.tdm.async_wait(0)
     else:
         a = a_buffer.load(layout=block_layout)
         offs_bm = idx_m + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, block_layout))
@@ -2049,8 +2050,8 @@ def tensor_fill_kernel(a_ptr, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.const
     pid_m = pid % num_pid_m
     pid_n = pid // num_pid_m
 
-    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
-                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    a_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                       block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
     a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, [NUM_BUFFERS] + a_desc.block_shape, a_desc.layout)
 
     idx_m = pid_m * BLOCK_M
@@ -2064,9 +2065,9 @@ def tensor_fill_kernel(a_ptr, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.const
 
     for i in ttgl.static_range(0, NUM_BUFFERS):
         idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
-        ttgl.amd.gfx1250.tdm.async_store(a_desc, [idx_m, idx_n], a_buffer.index(i))
+        ttgl.amd.cdna5.tdm.async_store(a_desc, [idx_m, idx_n], a_buffer.index(i))
 
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
 
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32), (32, 64), (64, 64)])
@@ -2107,19 +2108,19 @@ def test_runtime_tensor_fill(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS):
 def tensor_descriptor_load_store_nd_kernel_device_tdm(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE, out_shape,
                                                       out_strides, SHARED_LAYOUT: ttgl.constexpr):
     ndim: ttgl.constexpr = len(BLOCK_SHAPE)
-    desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=shape, strides=strides,
-                                                       block_shape=BLOCK_SHAPE, layout=SHARED_LAYOUT)
+    desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr, shape=shape, strides=strides, block_shape=BLOCK_SHAPE,
+                                                     layout=SHARED_LAYOUT)
 
     offs = (0, ) * ndim
     block_shared = ttgl.allocate_shared_memory(desc.dtype, shape=desc.block_shape, layout=desc.layout)
-    ttgl.amd.gfx1250.tdm.async_load(desc, offs, block_shared)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.cdna5.tdm.async_load(desc, offs, block_shared)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
-    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=out_shape, strides=out_strides,
-                                                           block_shape=BLOCK_SHAPE, layout=SHARED_LAYOUT)
+    out_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=out_ptr, shape=out_shape, strides=out_strides,
+                                                         block_shape=BLOCK_SHAPE, layout=SHARED_LAYOUT)
 
-    ttgl.amd.gfx1250.tdm.async_store(out_desc, offs, block_shared)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.cdna5.tdm.async_store(out_desc, offs, block_shared)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
 
 @gluon.jit
@@ -2127,11 +2128,11 @@ def tensor_descriptor_load_store_nd_kernel_host_tdm(out_desc, inp_desc):
     ndim: ttgl.constexpr = len(inp_desc.block_shape)
     offs = (0, ) * ndim
     block_shared = ttgl.allocate_shared_memory(inp_desc.dtype, shape=inp_desc.block_shape, layout=inp_desc.layout)
-    ttgl.amd.gfx1250.tdm.async_load(inp_desc, offs, block_shared)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.cdna5.tdm.async_load(inp_desc, offs, block_shared)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
-    ttgl.amd.gfx1250.tdm.async_store(out_desc, offs, block_shared)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.cdna5.tdm.async_store(out_desc, offs, block_shared)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
 
 def _run_tensor_descriptor_load_store_test(dtype_str, ndim, INNER_BLOCK, TDM_TYPE, SHARED_LAYOUT):
@@ -2153,8 +2154,8 @@ def _run_tensor_descriptor_load_store_test(dtype_str, ndim, INNER_BLOCK, TDM_TYP
                                                                      out.stride(), SHARED_LAYOUT)
     else:
         assert TDM_TYPE == "HOST_TDM"
-        inp_desc = gluon.amd.gfx1250.TensorDescriptor.from_tensor(inp, list(BLOCK_SHAPE), layout=SHARED_LAYOUT)
-        out_desc = gluon.amd.gfx1250.TensorDescriptor.from_tensor(out, list(BLOCK_SHAPE), layout=SHARED_LAYOUT)
+        inp_desc = gluon.amd.cdna5.TensorDescriptor.from_tensor(inp, list(BLOCK_SHAPE), layout=SHARED_LAYOUT)
+        out_desc = gluon.amd.cdna5.TensorDescriptor.from_tensor(out, list(BLOCK_SHAPE), layout=SHARED_LAYOUT)
         k = tensor_descriptor_load_store_nd_kernel_host_tdm[(1, )](out_desc, inp_desc)
 
     amdgcn = k.asm["amdgcn"]
@@ -2241,17 +2242,17 @@ def test_tensor_descriptor_load_store_invalid_blocksize():
 def tensor_descriptor_prefetch_nd_kernel_device_tdm(a_ptr, shape, strides, BLOCK_SHAPE, SHARED_LAYOUT: ttgl.constexpr,
                                                     PREFETCH_SPECULATIVE: ttgl.constexpr):
     ndim: ttgl.constexpr = len(BLOCK_SHAPE)
-    desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=shape, strides=strides,
-                                                       block_shape=BLOCK_SHAPE, layout=SHARED_LAYOUT)
+    desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr, shape=shape, strides=strides, block_shape=BLOCK_SHAPE,
+                                                     layout=SHARED_LAYOUT)
     offs = (0, ) * ndim
-    ttgl.amd.gfx1250.tdm.prefetch(desc, offs, speculative=PREFETCH_SPECULATIVE)
+    ttgl.amd.cdna5.tdm.prefetch(desc, offs, speculative=PREFETCH_SPECULATIVE)
 
 
 @gluon.jit
 def tensor_descriptor_prefetch_nd_kernel_host_tdm(inp_desc, SPECULATIVE: ttgl.constexpr):
     ndim: ttgl.constexpr = len(inp_desc.block_shape)
     offs = (0, ) * ndim
-    ttgl.amd.gfx1250.tdm.prefetch(inp_desc, offs, speculative=SPECULATIVE)
+    ttgl.amd.cdna5.tdm.prefetch(inp_desc, offs, speculative=SPECULATIVE)
 
 
 @pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
@@ -2303,7 +2304,7 @@ def test_compile_tensor_descriptor_prefetch_nd(dtype, ndim, INNER_BLOCK, SPECULA
 
     for pattern in ("global_prefetch_b8", "scope:SCOPE_SE"):
         assert re.search(pattern, amdgcn)
-    if SPECULATIVE:
+    if not SPECULATIVE:
         assert re.search("th:TH_LOAD_NT", amdgcn)
 
 
@@ -2337,7 +2338,7 @@ def test_runtime_tensor_descriptor_prefetch_nd(dtype_str, ndim, INNER_BLOCK, SPE
                                                                SHARED_LAYOUT, SPECULATIVE)
     else:
         assert TDM_TYPE == "HOST_TDM"
-        inp_desc = gluon.amd.gfx1250.TensorDescriptor.from_tensor(inp, list(BLOCK_SHAPE), layout=SHARED_LAYOUT)
+        inp_desc = gluon.amd.cdna5.TensorDescriptor.from_tensor(inp, list(BLOCK_SHAPE), layout=SHARED_LAYOUT)
         tensor_descriptor_prefetch_nd_kernel_host_tdm[(1, )](inp_desc, SPECULATIVE)
 
 
@@ -2363,9 +2364,9 @@ def tdm_prefetch_store_back_offsets_kernel(inp_ptr, out_ptr, shape, inp_strides,
         linear_idx = linear_idx * ttgl.num_programs(2) + pid[2]
         indices = [pid[0] * block_shape[0], pid[1] * block_shape[1], pid[2] * block_shape[2]]
 
-    desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(inp_ptr, shape=shape, strides=inp_strides,
-                                                       block_shape=block_shape, layout=layout)
-    prefetch_offsets = ttgl.amd.gfx1250.tdm._test_prefetch_with_offsets(desc, indices, pred=True, speculative=False)
+    desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(inp_ptr, shape=shape, strides=inp_strides, block_shape=block_shape,
+                                                     layout=layout)
+    prefetch_offsets = ttgl.amd.cdna5.tdm._test_prefetch_with_offsets(desc, indices, pred=True, speculative=False)
 
     out_layout: ttgl.constexpr = prefetch_offsets.type.layout
 
@@ -2534,7 +2535,7 @@ def mxgemm_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, stride_am, str
         a = ttgl.convert_layout(a, DOT_LAYOUT_A)
         b = ttgl.convert_layout(b, DOT_LAYOUT_B)
 
-        accumulator = ttgl.amd.gfx1250.wmma_scaled(a, scale_a, DTYPE_A, b, scale_b, DTYPE_B, accumulator)
+        accumulator = ttgl.amd.cdna5.wmma_scaled(a, scale_a, DTYPE_A, b, scale_b, DTYPE_B, accumulator)
 
         a_ptrs += BLOCK_K_PACKED_A * stride_ak
         b_ptrs += BLOCK_K_PACKED_B * stride_bk
@@ -2715,9 +2716,9 @@ def async_load_and_write_back_kernel(a_ptr, out_ptr, M, N, BLOCK_M: ttgl.constex
     mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
 
     buffer = ttgl.allocate_shared_memory(a_ptr.type.element_ty, [BLOCK_M, BLOCK_N], shared_layout)
-    ttgl.amd.gfx1250.async_copy.global_to_shared(buffer, a_ptrs)
-    ttgl.amd.gfx1250.async_copy.commit_group()
-    ttgl.amd.gfx1250.async_copy.wait_group(0)
+    ttgl.amd.cdna5.async_copy.global_to_shared(buffer, a_ptrs)
+    ttgl.amd.cdna5.async_copy.commit_group()
+    ttgl.amd.cdna5.async_copy.wait_group(0)
 
     res = buffer.load(blocked_layout)
 
@@ -2851,10 +2852,10 @@ def scaled_wmma_scale_preshuffle(a_base, stride_am, stride_ak, a_scale, b_base, 
     operand_b_layout: ttgl.constexpr = ttgl.DotOperandLayout(
         operand_index=1, parent=wmma_layout_packed if type_b == "e2m1" else wmma_layout, k_width=16)
 
-    a_scale_linear_layout: ttgl.constexpr = ttgl.amd.gfx1250.get_wmma_scale_layout(operand_a_layout,
-                                                                                   [BLOCK_M, SCALE_BLOCK_K])
-    b_scale_linear_layout: ttgl.constexpr = ttgl.amd.gfx1250.get_wmma_scale_layout(operand_b_layout,
-                                                                                   [BLOCK_N, SCALE_BLOCK_K])
+    a_scale_linear_layout: ttgl.constexpr = ttgl.amd.cdna5.get_wmma_scale_layout(operand_a_layout,
+                                                                                 [BLOCK_M, SCALE_BLOCK_K])
+    b_scale_linear_layout: ttgl.constexpr = ttgl.amd.cdna5.get_wmma_scale_layout(operand_b_layout,
+                                                                                 [BLOCK_N, SCALE_BLOCK_K])
 
     zero = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=wmma_layout)
 
@@ -2891,7 +2892,7 @@ def scaled_wmma_scale_preshuffle(a_base, stride_am, stride_ak, a_scale, b_base, 
     scale_a = ttgl.convert_layout(scale_a, a_scale_linear_layout)
     scale_b = ttgl.convert_layout(scale_b, b_scale_linear_layout)
 
-    c = ttgl.amd.gfx1250.wmma_scaled(a, scale_a, type_a, b, scale_b, type_b, zero)
+    c = ttgl.amd.cdna5.wmma_scaled(a, scale_a, type_a, b, scale_b, type_b, zero)
     c = c.to(out.dtype.element_ty)
 
     offs_cm = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, wmma_layout))
@@ -2931,7 +2932,7 @@ def test_compile_wmma_scale_preshuffle(M, N, K, type_a, type_b, TRANSPOSED_WMMA)
         assert re.search(pattern, amdgcn), f"Can't find pattern {pattern} in AMDGCN assembly"
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("M, N, K", [(64, 64, 64), (128, 128, 128), (256, 256, 256)])
 @pytest.mark.parametrize("type_a", ["e5m2", "e2m1", "e4m3"])
 @pytest.mark.parametrize("type_b", ["e5m2", "e2m1", "e4m3"])
@@ -3010,15 +3011,15 @@ def async_copy_mbarrier_kernel(a_ptr, out_ptr, M, N, BLOCK_M: ttgl.constexpr, BL
     a_ptrs = a_ptr + offs_m[:, None] * N + offs_n[None, :]
     mask = (out_offs_m[:, None] < M) & (out_offs_n[None, :] < N)
 
-    mbar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+    mbar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
     buffer = ttgl.allocate_shared_memory(a_ptr.type.element_ty, [BLOCK_M, BLOCK_N], shared_layout)
-    # NOTE: Setting count = NUM_WARPS * WARP_SIZE * 2 is only for testing purposes, in order to also exercise the ttgl.amd.gfx1250.mbarrier.arrive API.
-    # In practice, since we know that phase is initialized to 0, we can just set count = NUM_WARPS * WARP_SIZE and call directly ttgl.amd.gfx1250.mbarrier.wait(mbar, 0).
-    ttgl.amd.gfx1250.mbarrier.init(mbar, count=NUM_WARPS * WARP_SIZE * 2)
-    ttgl.amd.gfx1250.async_copy.global_to_shared(buffer, a_ptrs)
-    ttgl.amd.gfx1250.async_copy.mbarrier_arrive(mbar)
-    prior_phase = ttgl.amd.gfx1250.mbarrier.arrive(mbar)
-    ttgl.amd.gfx1250.mbarrier.wait(mbar, prior_phase)
+    # NOTE: Setting count = NUM_WARPS * WARP_SIZE * 2 is only for testing purposes, in order to also exercise the ttgl.amd.cdna5.mbarrier.arrive API.
+    # In practice, since we know that phase is initialized to 0, we can just set count = NUM_WARPS * WARP_SIZE and call directly ttgl.amd.cdna5.mbarrier.wait(mbar, 0).
+    ttgl.amd.cdna5.mbarrier.init(mbar, count=NUM_WARPS * WARP_SIZE * 2)
+    ttgl.amd.cdna5.async_copy.global_to_shared(buffer, a_ptrs)
+    ttgl.amd.cdna5.async_copy.mbarrier_arrive(mbar)
+    prior_phase = ttgl.amd.cdna5.mbarrier.arrive(mbar)
+    ttgl.amd.cdna5.mbarrier.wait(mbar, prior_phase)
 
     res = buffer.load(BLOCKED_LAYOUT)
 
@@ -3067,26 +3068,26 @@ def tensor_async_copy_mbarrier_kernel(a_ptr, b_ptr, M, N,  #
     pid_m = pid % num_pid_m
     pid_n = pid // num_pid_m
 
-    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
-                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
-    bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_BUFFERS, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+    a_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                       block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_BUFFERS, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
     a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, [NUM_BUFFERS] + a_desc.block_shape, a_desc.layout)
 
     # NOTE: barrier count takes into account both warp count (NUM_WARPS which is used for TDM) + thread count (NUM_WARPS * WARP_SIZE which is used for mbarrier.arrive)
-    # NOTE: Setting count = NUM_WARPS + NUM_WARPS * WARP_SIZE is only for testing purposes, in order to also exercise the ttgl.amd.gfx1250.mbarrier.arrive API.
-    # In practice, since we know that phase is initialized to 0, we can just set count = NUM_WARPS and call directly ttgl.amd.gfx1250.mbarrier.wait(bars.index(i), 0).
+    # NOTE: Setting count = NUM_WARPS + NUM_WARPS * WARP_SIZE is only for testing purposes, in order to also exercise the ttgl.amd.cdna5.mbarrier.arrive API.
+    # In practice, since we know that phase is initialized to 0, we can just set count = NUM_WARPS and call directly ttgl.amd.cdna5.mbarrier.wait(bars.index(i), 0).
 
     for i in ttgl.static_range(0, NUM_BUFFERS):
-        ttgl.amd.gfx1250.mbarrier.init(bars.index(i), count=NUM_WARPS + NUM_WARPS * WARP_SIZE)
+        ttgl.amd.cdna5.mbarrier.init(bars.index(i), count=NUM_WARPS + NUM_WARPS * WARP_SIZE)
 
     idx_m = pid_m * BLOCK_M
     for i in ttgl.static_range(0, NUM_BUFFERS):
         idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
-        ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i), mbarrier=bars.index(i))
+        ttgl.amd.cdna5.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i), mbarrier=bars.index(i))
 
     for i in ttgl.static_range(0, NUM_BUFFERS):
-        prior_phase = ttgl.amd.gfx1250.mbarrier.arrive(bars.index(i))
-        ttgl.amd.gfx1250.mbarrier.wait(bars.index(i), prior_phase)
+        prior_phase = ttgl.amd.cdna5.mbarrier.arrive(bars.index(i))
+        ttgl.amd.cdna5.mbarrier.wait(bars.index(i), prior_phase)
         idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
         a = a_buffer.index(i).load(layout=BLOCKED_LAYOUT)
 
@@ -3148,7 +3149,7 @@ def test_runtime_tensor_copy_mbarrier(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_W
     assert torch.equal(b_triton, a)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 def test_tdm_load_pred():
 
     @gluon.jit
@@ -3156,20 +3157,20 @@ def test_tdm_load_pred():
         shared_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [16, 32], [1, 0])
         reg_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
 
-        desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(16, 64), strides=(64, 1),
-                                                           block_shape=(16, 32), layout=shared_layout)
+        desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr, shape=(16, 64), strides=(64, 1),
+                                                         block_shape=(16, 32), layout=shared_layout)
         smem = ttgl.allocate_shared_memory(desc.dtype, shape=desc.block_shape, layout=desc.layout)
         b_offs_m = ttgl.arange(0, 16, layout=ttgl.SliceLayout(1, reg_layout))
         b_offs_n = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, reg_layout))
         b_ptrs = b_ptr + b_offs_m[:, None] * 64 + b_offs_n[None, :]
 
-        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 0], smem, pred=0)
-        ttgl.amd.gfx1250.tdm.async_wait(0)
+        ttgl.amd.cdna5.tdm.async_load(desc, [0, 0], smem, pred=0)
+        ttgl.amd.cdna5.tdm.async_wait(0)
         tile1 = smem.load(reg_layout)
         ttgl.store(b_ptrs, tile1)
 
-        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 32], smem, pred=1)
-        ttgl.amd.gfx1250.tdm.async_wait(0)
+        ttgl.amd.cdna5.tdm.async_load(desc, [0, 32], smem, pred=1)
+        ttgl.amd.cdna5.tdm.async_wait(0)
         tile2 = smem.load(reg_layout)
         ttgl.store(b_ptrs + 32, tile2)
 
@@ -3185,7 +3186,7 @@ def test_tdm_load_pred():
 
 
 # Check that negative TDM offsets are treated as unsigned so they will mask (zero-fill) out the whole tile.
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 def test_tdm_load_negative_offset():
 
     @gluon.jit
@@ -3193,12 +3194,12 @@ def test_tdm_load_negative_offset():
         shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
         reg_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
 
-        desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(16, 64), strides=(64, 1),
-                                                           block_shape=(16, 64), layout=shared_layout)
+        desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr, shape=(16, 64), strides=(64, 1),
+                                                         block_shape=(16, 64), layout=shared_layout)
         smem = ttgl.allocate_shared_memory(desc.dtype, shape=desc.block_shape, layout=desc.layout)
 
-        ttgl.amd.gfx1250.tdm.async_load(desc, [-1, -1], smem)
-        ttgl.amd.gfx1250.tdm.async_wait(0)
+        ttgl.amd.cdna5.tdm.async_load(desc, [-1, -1], smem)
+        ttgl.amd.cdna5.tdm.async_wait(0)
 
         b_offs_m = ttgl.arange(0, 16, layout=ttgl.SliceLayout(1, reg_layout))
         b_offs_n = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, reg_layout))
@@ -3213,7 +3214,7 @@ def test_tdm_load_negative_offset():
     assert torch.all(b_device.cpu() == 0)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("XBLOCK", [128])
 def test_ws_store_wait_load(XBLOCK):
     """
@@ -3241,15 +3242,15 @@ def test_ws_store_wait_load(XBLOCK):
 
     @gluon.jit
     def ws_consumer(smem, ready_bar, done_bar, layout: ttgl.constexpr):
-        ttgl.amd.gfx1250.mbarrier.wait(ready_bar, phase=0)
+        ttgl.amd.cdna5.mbarrier.wait(ready_bar, phase=0)
         val = smem.index(0).load(layout)
         smem.index(1).store(val)
-        ttgl.amd.gfx1250.mbarrier.arrive(done_bar, count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(done_bar, count=1)
 
     @gluon.jit
     def ws_producer(smem, ready_bar, XBLOCK: ttgl.constexpr, layout: ttgl.constexpr):
         smem.index(0).store(ttgl.arange(0, XBLOCK, layout).to(ttgl.float16))
-        ttgl.amd.gfx1250.mbarrier.arrive(ready_bar, count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(ready_bar, count=1)
 
     @gluon.jit
     def ws_kernel(output, XBLOCK: ttgl.constexpr):
@@ -3258,10 +3259,10 @@ def test_ws_store_wait_load(XBLOCK):
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0])
         smem = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK], smem_layout)
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
         for i in range(2):
             # we have 4 default warps and 4 worker warps and arrive on barrier once per thread
-            ttgl.amd.gfx1250.mbarrier.init(bar.index(i), count=4 * WARP_SIZE)
+            ttgl.amd.cdna5.mbarrier.init(bar.index(i), count=4 * WARP_SIZE)
         ready_bar = bar.index(0)
         done_bar = bar.index(1)
         # NOTE: We have 8 warps in total. worker_num_warps = [4] (num warps for ws_producer partition) and num_warps = 4 (num warps for consumer partition)
@@ -3269,7 +3270,7 @@ def test_ws_store_wait_load(XBLOCK):
             (ws_consumer, (smem, ready_bar, done_bar, blocked_layout)),
             (ws_producer, (smem, ready_bar, XBLOCK, blocked_layout)),
         ], [4])
-        ttgl.amd.gfx1250.mbarrier.wait(done_bar, phase=0)
+        ttgl.amd.cdna5.mbarrier.wait(done_bar, phase=0)
         val = smem.index(1).load(blocked_layout)
         output_ptrs = output + ttgl.arange(0, XBLOCK, blocked_layout)
         ttgl.store(output_ptrs, val)
@@ -3281,7 +3282,7 @@ def test_ws_store_wait_load(XBLOCK):
     assert torch.equal(output_ref, torch_output)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("XBLOCK", [128])
 @pytest.mark.parametrize("NUM_ITERS", [10])
 def test_ws_store_wait_load_loop(XBLOCK, NUM_ITERS):
@@ -3316,14 +3317,14 @@ def test_ws_store_wait_load_loop(XBLOCK, NUM_ITERS):
         acc = ttgl.zeros([XBLOCK], ttgl.float16, layout)
         phase = 0
         for _ in ttgl.static_range(NUM_ITERS):
-            ttgl.amd.gfx1250.mbarrier.wait(ready_bar, phase=phase)
+            ttgl.amd.cdna5.mbarrier.wait(ready_bar, phase=phase)
             phase = phase ^ 1
             val = smem.index(0).load(layout)
             acc += val
-            ttgl.amd.gfx1250.mbarrier.arrive(empty_bar, count=1)
+            ttgl.amd.cdna5.mbarrier.arrive(empty_bar, count=1)
 
         smem.index(1).store(acc)
-        ttgl.amd.gfx1250.mbarrier.arrive(done_bar, count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(done_bar, count=1)
 
     @gluon.jit
     def ws_producer(smem, ready_bar, empty_bar, XBLOCK: ttgl.constexpr, NUM_ITERS: ttgl.constexpr,
@@ -3331,10 +3332,10 @@ def test_ws_store_wait_load_loop(XBLOCK, NUM_ITERS):
         val = ttgl.arange(0, XBLOCK, layout).to(ttgl.float16)
         phase = 0
         for _ in ttgl.static_range(NUM_ITERS):
-            ttgl.amd.gfx1250.mbarrier.wait(empty_bar, phase=phase)
+            ttgl.amd.cdna5.mbarrier.wait(empty_bar, phase=phase)
             phase = phase ^ 1
             smem.index(0).store(val)
-            ttgl.amd.gfx1250.mbarrier.arrive(ready_bar, count=1)
+            ttgl.amd.cdna5.mbarrier.arrive(ready_bar, count=1)
 
     @gluon.jit
     def ws_kernel(output, XBLOCK: ttgl.constexpr, NUM_ITERS: ttgl.constexpr):
@@ -3343,21 +3344,21 @@ def test_ws_store_wait_load_loop(XBLOCK, NUM_ITERS):
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0])
         smem = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK], smem_layout)
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [3, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [3, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
         for i in ttgl.static_range(3):
             # we have 4 default warps and 4 worker warps and arrive on barrier once per thread
-            ttgl.amd.gfx1250.mbarrier.init(bar.index(i), count=4 * WARP_SIZE)
+            ttgl.amd.cdna5.mbarrier.init(bar.index(i), count=4 * WARP_SIZE)
         ready_bar = bar.index(0)
         done_bar = bar.index(1)
         empty_bar = bar.index(2)
 
-        ttgl.amd.gfx1250.mbarrier.arrive(empty_bar, count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(empty_bar, count=1)
         # NOTE: We have 8 warps in total. worker_num_warps = [4] (num warps for ws_producer partition) and num_warps = 4 (num warps for consumer partition)
         ttgl.warp_specialize([
             (ws_consumer, (smem, ready_bar, done_bar, empty_bar, XBLOCK, NUM_ITERS, blocked_layout)),
             (ws_producer, (smem, ready_bar, empty_bar, XBLOCK, NUM_ITERS, blocked_layout)),
         ], [4])
-        ttgl.amd.gfx1250.mbarrier.wait(done_bar, phase=0)
+        ttgl.amd.cdna5.mbarrier.wait(done_bar, phase=0)
         val = smem.index(1).load(blocked_layout)
         output_ptrs = output + ttgl.arange(0, XBLOCK, blocked_layout)
         ttgl.store(output_ptrs, val)
@@ -3403,16 +3404,16 @@ def test_runtime_ws_tensor_async_load_store_mbarrier(M, N, BLOCK_M, BLOCK_N, NUM
     def ws_producer(a_desc, a_buffer, bars, pid_n, idx_m, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr):
         for i in ttgl.static_range(0, NUM_BUFFERS):
             idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
-            ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i), mbarrier=bars.index(i))
+            ttgl.amd.cdna5.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i), mbarrier=bars.index(i))
 
     @gluon.jit
     def ws_consumer(b_desc, a_buffer, bars, pid_n, idx_m, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr):
         for i in ttgl.static_range(0, NUM_BUFFERS):
-            ttgl.amd.gfx1250.mbarrier.wait(bars.index(i), 0)
+            ttgl.amd.cdna5.mbarrier.wait(bars.index(i), 0)
             idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
-            ttgl.amd.gfx1250.tdm.async_store(b_desc, [idx_m, idx_n], a_buffer.index(i))
+            ttgl.amd.cdna5.tdm.async_store(b_desc, [idx_m, idx_n], a_buffer.index(i))
 
-        ttgl.amd.gfx1250.tdm.async_wait(0)
+        ttgl.amd.cdna5.tdm.async_wait(0)
 
     @gluon.jit
     def ws_tensor_async_load_store_mbarrier_kernel(a_ptr, b_ptr, M, N,  #
@@ -3425,15 +3426,15 @@ def test_runtime_ws_tensor_async_load_store_mbarrier(M, N, BLOCK_M, BLOCK_N, NUM
         pid_m = pid % num_pid_m
         pid_n = pid // num_pid_m
 
-        a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
-                                                             block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
-        b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_ptr, shape=(M, N), strides=(N, 1),
-                                                             block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
-        bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_BUFFERS, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+        a_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+        b_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=b_ptr, shape=(M, N), strides=(N, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+        bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_BUFFERS, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
         a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, [NUM_BUFFERS] + a_desc.block_shape, a_desc.layout)
 
         for i in ttgl.static_range(0, NUM_BUFFERS):
-            ttgl.amd.gfx1250.mbarrier.init(bars.index(i), count=PRODUCER_WARPS)
+            ttgl.amd.cdna5.mbarrier.init(bars.index(i), count=PRODUCER_WARPS)
 
         idx_m = pid_m * BLOCK_M
 
@@ -3495,13 +3496,13 @@ def test_runtime_ws_tensor_copy_mbarrier(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, NU
     def ws_producer(a_desc, a_buffer, bars, pid_n, idx_m, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr):
         for i in ttgl.static_range(0, NUM_BUFFERS):
             idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
-            ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i), mbarrier=bars.index(i))
+            ttgl.amd.cdna5.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i), mbarrier=bars.index(i))
 
     @gluon.jit
     def ws_consumer(a_buffer, b_ptr, bars, pid_n, idx_m, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
                     NUM_BUFFERS: ttgl.constexpr, BLOCKED_LAYOUT: ttgl.constexpr):
         for i in ttgl.static_range(0, NUM_BUFFERS):
-            ttgl.amd.gfx1250.mbarrier.wait(bars.index(i), 0)
+            ttgl.amd.cdna5.mbarrier.wait(bars.index(i), 0)
             idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
             a = a_buffer.index(i).load(layout=BLOCKED_LAYOUT)
             offs_bm = idx_m + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
@@ -3522,14 +3523,14 @@ def test_runtime_ws_tensor_copy_mbarrier(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, NU
         pid_m = pid % num_pid_m
         pid_n = pid // num_pid_m
 
-        a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
-                                                             block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
-        bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_BUFFERS, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+        a_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+        bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_BUFFERS, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
         a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, [NUM_BUFFERS] + a_desc.block_shape, a_desc.layout)
 
         for i in ttgl.static_range(0, NUM_BUFFERS):
             # TDM arrives on barrier once per warp, so use producer warp count
-            ttgl.amd.gfx1250.mbarrier.init(bars.index(i), count=PRODUCER_WARPS)
+            ttgl.amd.cdna5.mbarrier.init(bars.index(i), count=PRODUCER_WARPS)
 
         idx_m = pid_m * BLOCK_M
 
@@ -3588,15 +3589,15 @@ def test_runtime_ws_async_copy_mbarrier(M, N, shared_layout, dtype, NUM_TOTAL_WA
 
     @gluon.jit
     def ws_producer(a_ptrs, buffer, ready_bar):
-        ttgl.amd.gfx1250.async_copy.global_to_shared(buffer, a_ptrs)
-        ttgl.amd.gfx1250.async_copy.mbarrier_arrive(ready_bar)
+        ttgl.amd.cdna5.async_copy.global_to_shared(buffer, a_ptrs)
+        ttgl.amd.cdna5.async_copy.mbarrier_arrive(ready_bar)
 
     @gluon.jit
     def ws_consumer(in_buffer, out_buffer, ready_bar, done_bar, BLOCKED_LAYOUT: ttgl.constexpr):
-        ttgl.amd.gfx1250.mbarrier.wait(ready_bar, 0)
+        ttgl.amd.cdna5.mbarrier.wait(ready_bar, 0)
         val = in_buffer.load(BLOCKED_LAYOUT)
         out_buffer.store(val)
-        ttgl.amd.gfx1250.mbarrier.arrive(done_bar, count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(done_bar, count=1)
 
     @gluon.jit
     def ws_async_copy_mbarrier_kernel(a_ptr, out_ptr, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
@@ -3617,7 +3618,7 @@ def test_runtime_ws_async_copy_mbarrier(M, N, shared_layout, dtype, NUM_TOTAL_WA
 
         a_ptrs = a_ptr + offs_m[:, None] * N + offs_n[None, :]
 
-        mbar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+        mbar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
         buffer = ttgl.allocate_shared_memory(a_ptr.type.element_ty, [BLOCK_M, BLOCK_N], shared_layout)
         out_buffer = ttgl.allocate_shared_memory(out_ptr.type.element_ty, [BLOCK_M, BLOCK_N], shared_layout)
 
@@ -3625,8 +3626,8 @@ def test_runtime_ws_async_copy_mbarrier(M, N, shared_layout, dtype, NUM_TOTAL_WA
         done_bar = mbar.index(1)
 
         # TDM arrives on barrier once per warp, so use partition warp count
-        ttgl.amd.gfx1250.mbarrier.init(ready_bar, count=PARTITION_WARPS * WARP_SIZE)
-        ttgl.amd.gfx1250.mbarrier.init(done_bar, count=PARTITION_WARPS * WARP_SIZE)
+        ttgl.amd.cdna5.mbarrier.init(ready_bar, count=PARTITION_WARPS * WARP_SIZE)
+        ttgl.amd.cdna5.mbarrier.init(done_bar, count=PARTITION_WARPS * WARP_SIZE)
 
         ttgl.warp_specialize([
             (ws_producer, (a_ptrs, buffer, ready_bar)),
@@ -3636,7 +3637,7 @@ def test_runtime_ws_async_copy_mbarrier(M, N, shared_layout, dtype, NUM_TOTAL_WA
         out_offs_m = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
         out_offs_n = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))
         mask = (out_offs_m[:, None] < M) & (out_offs_n[None, :] < N)
-        ttgl.amd.gfx1250.mbarrier.wait(done_bar, 0)
+        ttgl.amd.cdna5.mbarrier.wait(done_bar, 0)
         res = out_buffer.load(BLOCKED_LAYOUT)
         out_ptrs = out_ptr + out_offs_m[:, None] * N + out_offs_n[None, :]
         ttgl.store(out_ptrs, res, mask)
@@ -3691,9 +3692,9 @@ def async_store_and_write_back_kernel(a_ptr, out_ptr, M, N, BLOCK_M: ttgl.conste
 
     # Async store from shared to global
     out_ptrs = out_ptr + offs_m[:, None] * N + offs_n[None, :]
-    ttgl.amd.gfx1250.async_copy.shared_to_global(out_ptrs, buffer, mask=mask)
-    ttgl.amd.gfx1250.async_copy.commit_group()
-    ttgl.amd.gfx1250.async_copy.wait_group(0)
+    ttgl.amd.cdna5.async_copy.shared_to_global(out_ptrs, buffer, mask=mask)
+    ttgl.amd.cdna5.async_copy.commit_group()
+    ttgl.amd.cdna5.async_copy.wait_group(0)
 
 
 @gluon.jit
@@ -3721,12 +3722,12 @@ def async_copy_shared_to_global_multi_cta_kernel(a_ptr, out_ptr, M, N, BLOCK_M: 
 
     # Async store from shared to global
     out_ptrs = out_ptr + offs_m[:, None] * N + offs_n[None, :]
-    ttgl.amd.gfx1250.async_copy.shared_to_global(out_ptrs, buffer, mask=mask)
-    ttgl.amd.gfx1250.async_copy.commit_group()
-    ttgl.amd.gfx1250.async_copy.wait_group(0)
+    ttgl.amd.cdna5.async_copy.shared_to_global(out_ptrs, buffer, mask=mask)
+    ttgl.amd.cdna5.async_copy.commit_group()
+    ttgl.amd.cdna5.async_copy.wait_group(0)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @ASYNC_COPY_TEST_PARAM_SIZE
 @ASYNC_COPY_TEST_PARAM_SHARED_LAYOUT
 @ASYNC_COPY_TEST_PARAM_DTYPE
@@ -3790,12 +3791,12 @@ def test_async_copy_shared_to_global_multi_cta(blocked_layout):
 
 @gluon.jit
 def cluster_barrier_arrive_kernel():
-    ttgl.amd.gfx1250.cluster.arrive()
+    ttgl.amd.cdna5.cluster.arrive()
 
 
 @gluon.jit
 def cluster_barrier_wait_kernel():
-    ttgl.amd.gfx1250.cluster.wait()
+    ttgl.amd.cdna5.cluster.wait()
 
 
 def test_compile_cluster_barrier_arrive():
@@ -3818,8 +3819,8 @@ def test_compile_cluster_barrier_wait():
 
 @gluon.jit
 def cluster_barrier_arrive_and_wait_kernel():
-    ttgl.amd.gfx1250.cluster.arrive()
-    ttgl.amd.gfx1250.cluster.wait()
+    ttgl.amd.cdna5.cluster.arrive()
+    ttgl.amd.cdna5.cluster.wait()
 
 
 def test_runtime_cluster_barrier_arrive_and_wait():
@@ -3849,23 +3850,22 @@ def tdm_scatter_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_out, stri
     smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
 
     # Load data from global to shared memory using TDM
-    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
-                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
-    ttgl.amd.gfx1250.tdm.async_load(inp_desc, [0, 0], smem)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    inp_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=inp_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.cdna5.tdm.async_load(inp_desc, [0, 0], smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
     # Create tensor descriptor for output
-    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=(M_out, N_out), strides=(stride_m, 1),
-                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    out_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=out_ptr, shape=(M_out, N_out), strides=(stride_m, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
 
     idx_offs = ttgl.arange(0, NUM_INDICES, layout=IDX_LAYOUT)
     dst_row_indices = ttgl.load(dst_row_indices_ptr + idx_offs)
 
     # Scatter the data to non-contiguous rows starting at DST_COL_OFFSET
-    out_desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(out_desc, add_offsets=[0, DST_COL_OFFSET],
-                                                             clamp_bounds=True)
-    ttgl.amd.gfx1250.tdm.async_scatter(out_desc, dst_row_indices, smem)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    out_desc = ttgl.amd.cdna5.tdm.update_tensor_descriptor(out_desc, add_offsets=[0, DST_COL_OFFSET], clamp_bounds=True)
+    ttgl.amd.cdna5.tdm.async_scatter(out_desc, dst_row_indices, smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
 
 @pytest.mark.parametrize("NUM_INDICES", [1, 2, 4, 8, 16])
@@ -3923,7 +3923,7 @@ def _create_scatter_test_data(shape, dtype):
         return torch.randn(shape, dtype=dtype)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("NUM_INDICES", [1, 2, 4, 8, 16])
 @pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])
 @pytest.mark.parametrize("BLOCK_N", [16, 32, 64, 128, 256])
@@ -4030,7 +4030,7 @@ def test_compile_tdm_scatter_multiple_instructions(BLOCK_M, BLOCK_N, index_dtype
         f"with {index_dtype} indices, but found {actual_count}"
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])
 @pytest.mark.parametrize("BLOCK_N", [16, 32, 64, 128, 256])
 @pytest.mark.parametrize("dst_col_offset", [0, 16])
@@ -4096,25 +4096,25 @@ def tdm_scatter_multi_col_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M, N, st
     pid_n = pid // num_pid_m
 
     smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
-    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(M, N), strides=(stride_m, 1),
-                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
-    ttgl.amd.gfx1250.tdm.async_load(inp_desc, [pid_m * BLOCK_M, pid_n * BLOCK_N], smem)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    inp_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=inp_ptr, shape=(M, N), strides=(stride_m, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.cdna5.tdm.async_load(inp_desc, [pid_m * BLOCK_M, pid_n * BLOCK_N], smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
-    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=(M, N), strides=(stride_m, 1),
-                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    out_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=out_ptr, shape=(M, N), strides=(stride_m, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
 
     idx_offs = ttgl.arange(0, BLOCK_M, layout=IDX_LAYOUT)
     idx_mask = (pid_m * BLOCK_M + idx_offs) < M
     dst_row_indices = ttgl.load(dst_row_indices_ptr + pid_m * BLOCK_M + idx_offs, mask=idx_mask, other=M)
 
     col_offset = pid_n * BLOCK_N
-    out_desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(out_desc, add_offsets=[0, col_offset], clamp_bounds=True)
-    ttgl.amd.gfx1250.tdm.async_scatter(out_desc, dst_row_indices, smem)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    out_desc = ttgl.amd.cdna5.tdm.update_tensor_descriptor(out_desc, add_offsets=[0, col_offset], clamp_bounds=True)
+    ttgl.amd.cdna5.tdm.async_scatter(out_desc, dst_row_indices, smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("N", [16, 32, 64, 100, 128, 140, 200, 250, 256, 300, 384, 400, 500])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
@@ -4159,24 +4159,23 @@ def _tdm_scatter_padded_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_o
     """TDM scatter kernel using a padded shared layout."""
     smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
 
-    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
-                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
-    ttgl.amd.gfx1250.tdm.async_load(inp_desc, [0, 0], smem)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    inp_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=inp_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.cdna5.tdm.async_load(inp_desc, [0, 0], smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
-    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=(M_out, N_out), strides=(stride_m, 1),
-                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    out_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=out_ptr, shape=(M_out, N_out), strides=(stride_m, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
 
     idx_offs = ttgl.arange(0, NUM_INDICES, layout=IDX_LAYOUT)
     dst_row_indices = ttgl.load(dst_row_indices_ptr + idx_offs)
 
-    out_desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(out_desc, add_offsets=[0, DST_COL_OFFSET],
-                                                             clamp_bounds=True)
-    ttgl.amd.gfx1250.tdm.async_scatter(out_desc, dst_row_indices, smem)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    out_desc = ttgl.amd.cdna5.tdm.update_tensor_descriptor(out_desc, add_offsets=[0, DST_COL_OFFSET], clamp_bounds=True)
+    ttgl.amd.cdna5.tdm.async_scatter(out_desc, dst_row_indices, smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("NUM_INDICES", [4, 8, 16])
 @pytest.mark.parametrize("BLOCK_N", [16, 64, 128])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
@@ -4240,22 +4239,21 @@ def tdm_gather_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_inp, strid
     smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
 
     # Create tensor descriptor for input (source)
-    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(M_inp, N_inp), strides=(stride_m, 1),
-                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    inp_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=inp_ptr, shape=(M_inp, N_inp), strides=(stride_m, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
 
     idx_offs = ttgl.arange(0, NUM_INDICES, layout=IDX_LAYOUT)
     src_row_indices = ttgl.load(src_row_indices_ptr + idx_offs)
 
-    inp_desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(inp_desc, add_offsets=[0, SRC_COL_OFFSET],
-                                                             clamp_bounds=True)
-    ttgl.amd.gfx1250.tdm.async_gather(inp_desc, src_row_indices, smem)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    inp_desc = ttgl.amd.cdna5.tdm.update_tensor_descriptor(inp_desc, add_offsets=[0, SRC_COL_OFFSET], clamp_bounds=True)
+    ttgl.amd.cdna5.tdm.async_gather(inp_desc, src_row_indices, smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
     # Store gathered data to output using TDM
-    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
-                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
-    ttgl.amd.gfx1250.tdm.async_store(out_desc, [0, 0], smem)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    out_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=out_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.cdna5.tdm.async_store(out_desc, [0, 0], smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
 
 @gluon.jit
@@ -4265,14 +4263,14 @@ def tdm_gather_multi_cta_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_
     """Kernel that uses TDM gather with a multi-CTA shared-memory layout."""
     smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
 
-    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(M_inp, N_inp), strides=(stride_m, 1),
-                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    inp_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=inp_ptr, shape=(M_inp, N_inp), strides=(stride_m, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
 
     idx_offs = ttgl.arange(0, BLOCK_M, layout=IDX_LAYOUT)
     src_row_indices = ttgl.load(src_row_indices_ptr + idx_offs)
 
-    ttgl.amd.gfx1250.tdm.async_gather(inp_desc, src_row_indices, smem)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.cdna5.tdm.async_gather(inp_desc, src_row_indices, smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
     gathered = smem.load(layout=BLOCK_LAYOUT)
     offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, BLOCK_LAYOUT))
@@ -4377,7 +4375,7 @@ def test_compile_tdm_gather_multi_cta(CGALayout):
     assert re.search("tensor_load_to_lds", k.asm["amdgcn"])
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("NUM_INDICES", [1, 2, 4, 8, 16])
 @pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])
 @pytest.mark.parametrize("BLOCK_N", [16, 32, 64, 128, 256])
@@ -4438,7 +4436,7 @@ def test_runtime_tdm_gather(NUM_INDICES, BLOCK_M, BLOCK_N, src_col_offset, dtype
     torch.testing.assert_close(gathered_out.view(torch.uint8), ref_bytes)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("CGALayout", [[[0, 0]],  # 1x1 cluster (single-cta)
                                        [[0, 1]],  # 1x2 cluster
                                        [[1, 0], [2, 0]],  # 4x1 cluster
@@ -4537,7 +4535,7 @@ def test_compile_tdm_gather_multiple_instructions(BLOCK_M, BLOCK_N, index_dtype,
         f"with {index_dtype} indices, but found {actual_count}"
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])
 @pytest.mark.parametrize("BLOCK_N", [16, 32, 64, 128, 256])
 @pytest.mark.parametrize("src_col_offset", [0, 16])
@@ -4608,22 +4606,22 @@ def tdm_gather_multi_col_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M, N, str
 
     smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
 
-    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(M, N), strides=(stride_m, 1),
-                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    inp_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=inp_ptr, shape=(M, N), strides=(stride_m, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
 
     idx_offs = ttgl.arange(0, BLOCK_M, layout=IDX_LAYOUT)
     idx_mask = (pid_m * BLOCK_M + idx_offs) < M
     src_row_indices = ttgl.load(src_row_indices_ptr + pid_m * BLOCK_M + idx_offs, mask=idx_mask, other=M)
 
     col_offset = pid_n * BLOCK_N
-    inp_desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(inp_desc, add_offsets=[0, col_offset], clamp_bounds=True)
-    ttgl.amd.gfx1250.tdm.async_gather(inp_desc, src_row_indices, smem)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    inp_desc = ttgl.amd.cdna5.tdm.update_tensor_descriptor(inp_desc, add_offsets=[0, col_offset], clamp_bounds=True)
+    ttgl.amd.cdna5.tdm.async_gather(inp_desc, src_row_indices, smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
-    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=(M, N), strides=(stride_m, 1),
-                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
-    ttgl.amd.gfx1250.tdm.async_store(out_desc, [pid_m * BLOCK_M, pid_n * BLOCK_N], smem)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    out_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=out_ptr, shape=(M, N), strides=(stride_m, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.cdna5.tdm.async_store(out_desc, [pid_m * BLOCK_M, pid_n * BLOCK_N], smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
 
 @gluon.jit
@@ -4640,21 +4638,20 @@ def _tdm_gather_layout_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_in
     """
     smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
 
-    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(M_inp, N_inp), strides=(stride_m, 1),
-                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    inp_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=inp_ptr, shape=(M_inp, N_inp), strides=(stride_m, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
 
     idx_offs = ttgl.arange(0, NUM_INDICES, layout=IDX_LAYOUT)
     src_row_indices = ttgl.load(src_row_indices_ptr + idx_offs)
 
-    inp_desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(inp_desc, add_offsets=[0, SRC_COL_OFFSET],
-                                                             clamp_bounds=True)
-    ttgl.amd.gfx1250.tdm.async_gather(inp_desc, src_row_indices, smem)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    inp_desc = ttgl.amd.cdna5.tdm.update_tensor_descriptor(inp_desc, add_offsets=[0, SRC_COL_OFFSET], clamp_bounds=True)
+    ttgl.amd.cdna5.tdm.async_gather(inp_desc, src_row_indices, smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
-    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
-                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
-    ttgl.amd.gfx1250.tdm.async_store(out_desc, [0, 0], smem)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    out_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=out_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.cdna5.tdm.async_store(out_desc, [0, 0], smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
 
 def _tdm_gather_scatter_index_layouts():
@@ -4706,7 +4703,7 @@ def _tdm_gather_scatter_index_layouts():
     return cases
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("num_indices, num_warps, idx_layout", _tdm_gather_scatter_index_layouts())
 @pytest.mark.parametrize("BLOCK_N", [64, 128])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
@@ -4759,24 +4756,23 @@ def _tdm_scatter_layout_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_o
     """
     smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
 
-    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
-                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
-    ttgl.amd.gfx1250.tdm.async_load(inp_desc, [0, 0], smem)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    inp_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=inp_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.cdna5.tdm.async_load(inp_desc, [0, 0], smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
-    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=(M_out, N_out), strides=(stride_m, 1),
-                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    out_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=out_ptr, shape=(M_out, N_out), strides=(stride_m, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
 
     idx_offs = ttgl.arange(0, NUM_INDICES, layout=IDX_LAYOUT)
     dst_row_indices = ttgl.load(dst_row_indices_ptr + idx_offs)
 
-    out_desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(out_desc, add_offsets=[0, DST_COL_OFFSET],
-                                                             clamp_bounds=True)
-    ttgl.amd.gfx1250.tdm.async_scatter(out_desc, dst_row_indices, smem)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    out_desc = ttgl.amd.cdna5.tdm.update_tensor_descriptor(out_desc, add_offsets=[0, DST_COL_OFFSET], clamp_bounds=True)
+    ttgl.amd.cdna5.tdm.async_scatter(out_desc, dst_row_indices, smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("num_indices, num_warps, idx_layout", _tdm_gather_scatter_index_layouts())
 @pytest.mark.parametrize("BLOCK_N", [64, 128])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
@@ -4819,7 +4815,7 @@ def test_runtime_tdm_scatter_layouts(num_indices, num_warps, idx_layout, BLOCK_N
     torch.testing.assert_close(out_result, ref_out)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("N", [16, 32, 64, 100, 128, 140, 200, 250, 256, 300, 384, 400, 500])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
@@ -4863,8 +4859,8 @@ def buffer_load_store_roundtrip_kernel(a_ptr, b_ptr, BLOCK: ttgl.constexpr, load
     BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([8], [32], [1], [0])
     pid = ttgl.program_id(axis=0)
     offs = pid * BLOCK + ttgl.arange(0, BLOCK, layout=BLOCKED_LAYOUT)
-    data = ttgl.amd.gfx1250.buffer_load(ptr=a_ptr, offsets=offs, cache=loadCM)
-    ttgl.amd.gfx1250.buffer_store(stored_value=data, ptr=b_ptr, offsets=offs, cache=storeCM)
+    data = ttgl.amd.cdna5.buffer_load(ptr=a_ptr, offsets=offs, cache=loadCM)
+    ttgl.amd.cdna5.buffer_store(stored_value=data, ptr=b_ptr, offsets=offs, cache=storeCM)
 
 
 @gluon.jit
@@ -4875,10 +4871,10 @@ def async_load_store_roundtrip_kernel(a_ptr, b_ptr, BLOCK: ttgl.constexpr, loadC
     pid = ttgl.program_id(axis=0)
     offs = pid * BLOCK + ttgl.arange(0, BLOCK, layout=BLOCKED_LAYOUT)
     buffer = ttgl.allocate_shared_memory(ttgl.float16, shape=[BLOCK], layout=SHARED_LAYOUT)
-    ttgl.amd.gfx1250.async_copy.global_to_shared(buffer, a_ptr + offs, cache_modifier=loadCM)
-    ttgl.amd.gfx1250.async_copy.commit_group()
-    ttgl.amd.gfx1250.async_copy.wait_group(0)
-    ttgl.amd.gfx1250.async_copy.shared_to_global(b_ptr + offs, buffer, cache_modifier=storeCM)
+    ttgl.amd.cdna5.async_copy.global_to_shared(buffer, a_ptr + offs, cache_modifier=loadCM)
+    ttgl.amd.cdna5.async_copy.commit_group()
+    ttgl.amd.cdna5.async_copy.wait_group(0)
+    ttgl.amd.cdna5.async_copy.shared_to_global(b_ptr + offs, buffer, cache_modifier=storeCM)
 
 
 @gluon.jit
@@ -4887,16 +4883,16 @@ def tdm_load_store_roundtrip_kernel(a_ptr, b_ptr, BLOCK: ttgl.constexpr, loadCM:
     SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK, 8]], [BLOCK], [0])
     pid = ttgl.program_id(axis=0)
 
-    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(BLOCK, ), strides=(1, ),
-                                                         block_shape=(BLOCK, ), layout=SHARED_LAYOUT)
+    a_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr, shape=(BLOCK, ), strides=(1, ),
+                                                       block_shape=(BLOCK, ), layout=SHARED_LAYOUT)
     buffer = ttgl.allocate_shared_memory(ttgl.float16, shape=[BLOCK], layout=SHARED_LAYOUT)
-    ttgl.amd.gfx1250.tdm.async_load(a_desc, [pid * BLOCK], buffer, cache_modifier=loadCM)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.cdna5.tdm.async_load(a_desc, [pid * BLOCK], buffer, cache_modifier=loadCM)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
-    b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_ptr, shape=(BLOCK, ), strides=(1, ),
-                                                         block_shape=(BLOCK, ), layout=SHARED_LAYOUT)
-    ttgl.amd.gfx1250.tdm.async_store(b_desc, [pid * BLOCK], buffer, cache_modifier=storeCM)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    b_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=b_ptr, shape=(BLOCK, ), strides=(1, ),
+                                                       block_shape=(BLOCK, ), layout=SHARED_LAYOUT)
+    ttgl.amd.cdna5.tdm.async_store(b_desc, [pid * BLOCK], buffer, cache_modifier=storeCM)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
 
 @pytest.mark.parametrize("loadCM, storeCM", [(".ca", ".wb"), (".cg", ".cg"), (".cs", ".cs"), (".cv", ".wt")])
@@ -4970,7 +4966,7 @@ def gemm_3d_cga_split_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
     a = ttgl.convert_layout(a, ttgl.DotOperandLayout(0, wmma_layout, K_WIDTH))
     b = ttgl.convert_layout(b, ttgl.DotOperandLayout(1, wmma_layout, K_WIDTH))
     acc = ttgl.zeros((NUM_CTAS, BLOCK_M, BLOCK_N), dtype=ttgl.float32, layout=wmma_layout)
-    acc = ttgl.amd.gfx1250.wmma(a, b, acc)
+    acc = ttgl.amd.cdna5.wmma(a, b, acc)
 
     sb = ttgl.arange(0, NUM_CTAS, layout=wmma_dim0_layout)
     sm = ttgl.arange(0, BLOCK_M, layout=wmma_dim1_layout)
@@ -4979,7 +4975,7 @@ def gemm_3d_cga_split_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
     ttgl.store(c_ptr + offs_c, acc)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("num_ctas", [2, 4])
 def test_runtime_gemm_3d_multi_cta(num_ctas):
     BLOCK_M = BLOCK_N = 32

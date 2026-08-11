@@ -95,5 +95,4 @@ class StridedLayoutTransformation(LayoutTransformation):
             out_shape[-1] //= 2
         ret = torch.empty(out_shape, dtype=data.dtype, device=data.device)
         repack(data, self.order[0], -1, self.is_fp4, out=ret)
-        assert ret.stride(-1) == 1
         return ret

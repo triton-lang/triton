@@ -13,6 +13,8 @@ import triton
 import triton.language as tl
 from triton._internal_testing import is_hip_cdna3, is_cuda, is_hip
 
+pytestmark = pytest.mark.enable_warmup(min_capability=9)
+
 input_dtypes = ["bfloat16", "float16", "float32"]
 if is_cuda():
     input_dtypes += ["int8", "float8_e5m2"]
