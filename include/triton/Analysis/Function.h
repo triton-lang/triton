@@ -11,9 +11,30 @@
 
 #include <deque>
 #include <iterator>
+#include <optional>
 #include <utility>
 
 namespace mlir::triton {
+
+/// Distinguishes an uninitialized join destination from an initialized state.
+template <typename StateT> class DataflowState {
+public:
+  StateT &get() {
+    if (!state)
+      state.emplace();
+    return *state;
+  }
+
+  void join(const StateT &other) {
+    if (state)
+      state->join(other);
+    else
+      state = other;
+  }
+
+private:
+  std::optional<StateT> state;
+};
 
 /// A forward dataflow analysis over the CFG and nested region control flow of
 /// one function. StateT must be default constructible and provide join() and
@@ -33,10 +54,6 @@ public:
   }
 
 protected:
-  /// Returns the state for the function entry. Default-constructed states are
-  /// still used as the join identity for all other virtual blocks.
-  virtual StateT getEntryState() const { return StateT(); }
-
   virtual void update(Operation *operation, StateT *state, FuncMapT *funcMap,
                       OpBuilder *builder) = 0;
 
@@ -66,20 +83,18 @@ private:
     // Entry virtual blocks are represented by a null iterator. Populate the
     // blockList with the entry virtual blocks in the function. Then, each
     // iteration scans until a terminator or region branch operation is found.
-    DenseMap<VirtualBlock, StateT> inputs;
+    DenseMap<VirtualBlock, DataflowState<StateT>> inputs;
     DenseMap<VirtualBlock, StateT> outputs;
     std::deque<VirtualBlock> worklist;
     // Start the analysis from the entry block of the function.
-    VirtualBlock entry(&function.getBlocks().front(), Block::iterator());
-    inputs[entry] = getEntryState();
-    worklist.push_back(entry);
+    worklist.emplace_back(&function.getBlocks().front(), Block::iterator());
 
     // A fixed point algorithm
     while (!worklist.empty()) {
       VirtualBlock block = worklist.front();
       worklist.pop_front();
       // Make a copy of the inputblockInfo but not update
-      StateT state = inputs[block];
+      StateT state = inputs[block].get();
       SmallVector<VirtualBlock> successors;
       Operation *terminator = nullptr;
       Block::iterator begin = block.second.isValid() ? std::next(block.second)
@@ -108,13 +123,13 @@ private:
       outputs[block] = state;
       for (VirtualBlock successor : successors) {
         inputs[successor].join(state);
-        updateSuccessor(terminator, successor.first, &inputs[successor]);
+        updateSuccessor(terminator, successor.first, &inputs[successor].get());
         worklist.push_back(successor);
       }
     }
 
     // Update the final dangling buffers that haven't been synced
-    StateT &summary = (*funcMap)[function];
+    DataflowState<StateT> summary;
     for (Block &exit : function.getBlocks()) {
       if (!exit.getTerminator()->hasTrait<OpTrait::ReturnLike>())
         continue;
@@ -136,6 +151,7 @@ private:
       updateExitState(&exitState);
       summary.join(exitState);
     }
+    (*funcMap)[function] = std::move(summary.get());
   }
 
   static void visitTerminator(Operation *operation,

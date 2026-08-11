@@ -41,27 +41,26 @@ struct ProxyBlockInfo {
   Frontier generic;
   Frontier async;
 
-  // Scope bits for which no fence on every path has covered accesses preceding
-  // the function.
-  uint8_t entryGenericUnfenced = 0;
+  // Scopes fenced on every path from the function entry.
+  uint8_t entryGenericFenced = 0;
 
   ProxyBlockInfo &join(const ProxyBlockInfo &other) {
     generic.join(other.generic);
     async.join(other.async);
-    entryGenericUnfenced |= other.entryGenericUnfenced;
+    entryGenericFenced &= other.entryGenericFenced;
     return *this;
   }
 
   bool operator==(const ProxyBlockInfo &other) const {
-    return std::tie(generic, async, entryGenericUnfenced) ==
-           std::tie(other.generic, other.async, other.entryGenericUnfenced);
+    return std::tie(generic, async, entryGenericFenced) ==
+           std::tie(other.generic, other.async, other.entryGenericFenced);
   }
 
   void fenceGeneric(uint8_t scopes) {
     if (scopes & kClusterScope)
       scopes |= kCTAScope;
     generic.eraseScopes(scopes);
-    entryGenericUnfenced &= ~scopes;
+    entryGenericFenced |= scopes;
   }
 };
 
@@ -72,8 +71,6 @@ struct ProxyFenceFunctionAnalysis
   ProxyFenceFunctionAnalysis(FunctionOpInterface function,
                              BufferRegionAnalysis &regions, uint8_t scopes)
       : function(function), regions(regions), scopes(scopes) {}
-
-  ProxyBlockInfo getEntryState() const override { return {{}, {}, scopes}; }
 
   void applyEffects(Operation *op, const ProxyBlockInfo &effects,
                     ProxyBlockInfo &state, OpBuilder &builder) {
@@ -87,10 +84,9 @@ struct ProxyFenceFunctionAnalysis
       }
     }
 
-    state.async.join(effects.async, state.entryGenericUnfenced);
-    if (uint8_t fenced = scopes & ~effects.entryGenericUnfenced;
-        isa<CallOpInterface>(op) && fenced)
-      state.fenceGeneric(fenced);
+    state.async.join(effects.async, scopes & ~state.entryGenericFenced);
+    if (isa<CallOpInterface>(op) && effects.entryGenericFenced)
+      state.fenceGeneric(effects.entryGenericFenced);
     state.generic.join(effects.generic);
   }
 
