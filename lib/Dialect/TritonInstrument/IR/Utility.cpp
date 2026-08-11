@@ -696,11 +696,8 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
     auto info = hooks.getMemEffectsOpInfo(op);
     if (!info)
       return;
-    Value lifecycleValue;
-    if (auto init = hooks.getBarrierInitInfo(op))
-      lifecycleValue = init->alloc;
-    if (auto invalidate = hooks.getBarrierInvalidateInfo(op))
-      lifecycleValue = invalidate->alloc;
+    bool isBarrierLifecycle = hooks.getBarrierInitInfo(op).has_value() ||
+                              hooks.getBarrierInvalidateInfo(op).has_value();
     if (info->trackingKind == MemEffectsOpInfo::TrackingKind::CommitCount &&
         info->commitKind == CommitKind::AsyncCp)
       hasAsyncCopyReads |= llvm::any_of(
@@ -708,7 +705,7 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
           [](const MemEffectsOpInfo::Effects &e) { return e.rw == RW::Read; });
     for (const auto &effect : info->operandEffects) {
       collectCandidates(effect.buf);
-      if (effect.buf != lifecycleValue)
+      if (!isBarrierLifecycle)
         payloadValues.insert(effect.buf);
     }
     if (hooks.isTMAOp(op) || hooks.isCLCOp(op) ||
