@@ -2599,6 +2599,7 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // Reducing axis 1 groups CTA {0,2} and {1,3}, without crossing into
     // the other independent reduction. The recipient masks are 5 or 10.
     // CHECK: tti.experimental_lock_acquire
+    // CHECK: arith.shli
     // CHECK: %[[REDUCE_GROUP_CTA:.*]] = tti.experimental_cluster_cta_id
     // CHECK: %[[REDUCE_GROUP_FIXED:.*]] = arith.constant 1 : i32
     // CHECK: %[[REDUCE_GROUP_BASE:.*]] = arith.andi %[[REDUCE_GROUP_CTA]], %[[REDUCE_GROUP_FIXED]] : i32

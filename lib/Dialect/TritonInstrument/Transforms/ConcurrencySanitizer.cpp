@@ -1262,7 +1262,8 @@ private:
     auto addBarrierOwners = [&](MaterializedEffect &materialized,
                                 const llvm::SmallBitVector &bufferMask,
                                 Value ownerCTAs, bool selectBarrierStorage) {
-      if (!selectBarrierStorage || materialized.memType != MemType::SHARED_MEM ||
+      if (!selectBarrierStorage ||
+          materialized.memType != MemType::SHARED_MEM ||
           auxData.barrierBufferMasks.empty())
         return;
 
