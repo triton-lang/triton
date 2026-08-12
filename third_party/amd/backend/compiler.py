@@ -419,7 +419,7 @@ class HIPBackend(BaseBackend):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
-        amd.attach_target_triple(llvm_mod)
+        llvm.attach_target_triple(llvm_mod, amd.TARGET_TRIPLE)
         target_features = ''
         if knobs.compilation.enable_asan:
             target_features = '+xnack'
@@ -495,8 +495,8 @@ class HIPBackend(BaseBackend):
             if len(paths) > 0:
                 llvm.link_extern_libs(llvm_mod, paths)
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion,
-                             disable_vector_combine=True)
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, arch=options.arch, features=target_features,
+                             enable_fp_fusion=options.enable_fp_fusion, disable_vector_combine=True)
 
         # Architectures with architected SGPRs store the workgroup id in ttmp9 (X) and ttmp7 (Y[15:0], Z[31:16]).
         # These attributes are used to determine if Z should be masked out when loading Y. They are inferred during

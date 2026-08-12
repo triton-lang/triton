@@ -720,6 +720,11 @@ void init_triton_llvm(py::module_ &m) {
 #endif
   });
 
+  m.def("attach_target_triple",
+        [](llvm::Module *mod, const std::string triple) {
+          mod->setTargetTriple(llvm::Triple(triple));
+        });
+
   m.def("attach_datalayout", [](llvm::Module *mod, const std::string triple,
                                 const std::string proc,
                                 const std::string features) {
@@ -797,12 +802,6 @@ void init_triton_llvm(py::module_ &m) {
         tuningOptions.LoopUnrolling = true;
         tuningOptions.LoopInterleaving = true;
         tuningOptions.LoopVectorization = true;
-        // TODO: currently we run SLP vectorizer with an empty target machine.
-        // This cause the vectorizer to create larger vector which could be bad.
-        // Disabling it would currently cause regressions as this pass also
-        // applies some scheduling that helps performance in some cases. We
-        // should work on using NVPTX target instead and address the performance
-        // regressions with some scheduling solution.
         tuningOptions.SLPVectorization = !disable_slp_vectorizer;
 
         std::string pluginFile =

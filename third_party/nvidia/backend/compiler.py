@@ -461,6 +461,7 @@ class CUDABackend(BaseBackend):
         proc = sm_arch_from_capability(cap_llvm)
         features = get_features(options, cap_llvm)
         triple = 'nvptx64-nvidia-cuda'
+        llvm.attach_target_triple(llvm_mod, triple)
         nvidia.set_short_ptr()
         llvm.attach_datalayout(llvm_mod, triple, proc, features)
         if options.enable_reflect_ftz:
@@ -474,6 +475,9 @@ class CUDABackend(BaseBackend):
         llvm.optimize_module(
             llvm_mod,
             llvm.OPTIMIZE_O3,
+            arch=proc,
+            features=features,
+            enable_fp_fusion=options.enable_fp_fusion,
             disable_slp_vectorizer=capability == 80,
             expand_masked_div_rem=True,
         )
