@@ -1650,10 +1650,9 @@ public:
       return false;
     }
 
-    // Try I8 x I8 -> I32 v_dot
-    // if k % 4 != 0: can not use integer V_DOT instruction
+    // The lowering zero-pads a partial final group for I8 x I8 -> I32 v_dot.
     if (dotTypes.a.isInteger(8) && dotTypes.b.isInteger(8) &&
-        dotTypes.c.isInteger(32) && dotTypes.d.isInteger(32) && k % 4 == 0) {
+        dotTypes.c.isInteger(32) && dotTypes.d.isInteger(32)) {
       return true;
     }
 
