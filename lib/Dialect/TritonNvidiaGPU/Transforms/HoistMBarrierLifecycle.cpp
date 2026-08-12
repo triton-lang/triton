@@ -124,8 +124,7 @@ public:
         BarrierLifecycle lifecycle;
         if (failed(collectLifecycle(funcOp, barrier, aliases, lifecycle)))
           continue;
-        if (failed(rewriteLoopPhases(lifecycle)))
-          continue;
+        rewriteLoopPhases(lifecycle);
 
         moveInitToFunctionEntry(lifecycle, funcOp);
         moveInvalidationToFunctionExits(lifecycle, funcOp);
@@ -371,14 +370,14 @@ private:
   // then add a phase argument to each loop,
   // xor the phase after each wait,
   // and in the end thread the updated phase through the loop yields.
-  LogicalResult rewriteLoopPhases(BarrierLifecycle &lifecycle) {
+  void rewriteLoopPhases(BarrierLifecycle &lifecycle) {
     SmallVector<LoopLikeOpInterface> loops;
     getEnclosingLoops(lifecycle.invals.front(), loops);
     if (loops.empty())
       // Only loop-local invalidations require phase threading. If every
       // invalidation is already outside loops, moving them to function exits
       // does not change the phase seen by repeated loop iterations.
-      return success();
+      return;
 
     llvm::SmallPtrSet<Operation *, 4> waits;
     for (ttng::WaitBarrierOp wait : lifecycle.waits)
@@ -435,8 +434,6 @@ private:
       appendToLoopYield(current.loop, current.body, loopResult);
       loopResult = getLoopResultPhase(current.loop);
     }
-
-    return success();
   }
 
   void moveInitToFunctionEntry(BarrierLifecycle &lifecycle,
