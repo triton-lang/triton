@@ -134,8 +134,19 @@ def compile_kernel(args: CompileArgs):
     attrs = {k: [["tt.divisibility", 16]] for k, v in hints.items() if v == 16}
     kernel.create_binder()
     src = kernel.ASTSource(fn=kernel, constexprs=constants, signature=signature, attrs=attrs)
-    target = triton.backends.compiler.GPUTarget(*args.target.split(":")) \
-        if args.target else triton.runtime.driver.active.get_current_target()
+    if args.target:
+        parts = args.target.split(":")
+        if len(parts) != 3:
+            raise ValueError(f"Invalid target format '{args.target}', expected '<backend>:<arch>:<warp-size>'")
+        backend_name, arch_str, warp_size_str = parts
+        # arch is int for CUDA (e.g. 90) but str for HIP (e.g. "gfx942")
+        try:
+            arch = int(arch_str)
+        except ValueError:
+            arch = arch_str
+        target = triton.backends.compiler.GPUTarget(backend_name, arch, int(warp_size_str))
+    else:
+        target = triton.runtime.driver.active.get_current_target()
     backend = triton.compiler.make_backend(target)
     kwargs = {"num_warps": args.num_warps, "num_stages": args.num_stages}
     options = backend.parse_options(kwargs)
