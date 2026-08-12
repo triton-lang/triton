@@ -266,14 +266,6 @@ private:
     return arith::XOrIOp::create(builder, wait.getLoc(), phase, phaseAdvance);
   }
 
-  void appendToYieldAndReplace(scf::YieldOp yield, Value value) {
-    SmallVector<Value> operands(yield->getOperands());
-    operands.push_back(value);
-    builder.setInsertionPoint(yield);
-    scf::YieldOp::create(builder, yield.getLoc(), operands);
-    yield->erase();
-  }
-
   bool containsTrackedWait(Block *block,
                            const llvm::SmallPtrSetImpl<Operation *> &waits) {
     for (Operation &op : block->without_terminator()) {
@@ -308,8 +300,8 @@ private:
 
     scf::IfOp newIfOp =
         mlir::replaceIfOpWithNewSignature(builder, ifOp, phase.getType());
-    appendToYieldAndReplace(newIfOp.thenYield(), thenPhase);
-    appendToYieldAndReplace(newIfOp.elseYield(), elsePhase);
+    newIfOp.thenYield().getResultsMutable().append(thenPhase);
+    newIfOp.elseYield().getResultsMutable().append(elsePhase);
     builder.eraseOp(ifOp);
     return newIfOp.getResults().back();
   }
@@ -332,7 +324,9 @@ private:
         forOp = addForPhaseArg(forOp, phase, loopPhase);
         Value nextPhase =
             rewriteBlockPhases(forOp.getBody(), loopPhase, phaseOne, waits);
-        mlir::appendToForOpYield(forOp, nextPhase);
+        cast<scf::YieldOp>(forOp.getBody()->getTerminator())
+            .getResultsMutable()
+            .append(nextPhase);
         phase = forOp.getResults().back();
         continue;
       }
@@ -359,20 +353,18 @@ private:
   }
 
   void appendToLoopYield(LoopLikeOpInterface loop, Block *body, Value phase) {
-    if (auto forOp = dyn_cast<scf::ForOp>(loop.getOperation())) {
-      mlir::appendToForOpYield(forOp, phase);
-      return;
+    if (auto whileOp = dyn_cast<scf::WhileOp>(loop.getOperation())) {
+      if (body == &whileOp.getBefore().front()) {
+        // addIterArgsToLoop initially forwards the input phase through the
+        // condition. Replace it with the phase updated in the before region,
+        // then carry the corresponding after-region argument through its yield.
+        auto conditionOp = whileOp.getConditionOp();
+        conditionOp->setOperand(conditionOp->getNumOperands() - 1, phase);
+        phase = whileOp.getAfterArguments().back();
+      }
+      body = &whileOp.getAfter().front();
     }
-    auto whileOp = cast<scf::WhileOp>(loop.getOperation());
-    if (body == &whileOp.getBefore().front()) {
-      // addIterArgsToLoop initially forwards the input phase through the
-      // condition. Replace it with the phase updated in the before region,
-      // then carry the corresponding after-region argument through its yield.
-      auto conditionOp = whileOp.getConditionOp();
-      conditionOp->setOperand(conditionOp->getNumOperands() - 1, phase);
-      phase = whileOp.getAfterArguments().back();
-    }
-    appendToWhileYield(whileOp, phase);
+    cast<scf::YieldOp>(body->getTerminator()).getResultsMutable().append(phase);
   }
 
   // First move the phase initialization op before the outermost loop,
@@ -445,17 +437,6 @@ private:
     }
 
     return success();
-  }
-
-  void appendToWhileYield(scf::WhileOp whileOp, Value phase) {
-    auto yieldOp =
-        cast<scf::YieldOp>(whileOp.getAfter().front().getTerminator());
-    SmallVector<Value> operands(yieldOp->getOperands());
-    operands.push_back(phase);
-
-    builder.setInsertionPoint(yieldOp);
-    scf::YieldOp::create(builder, yieldOp.getLoc(), operands);
-    yieldOp->erase();
   }
 
   void moveInitToFunctionEntry(BarrierLifecycle &lifecycle,
