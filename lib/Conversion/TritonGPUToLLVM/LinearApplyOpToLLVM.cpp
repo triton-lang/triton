@@ -43,8 +43,7 @@ struct LinearApplyOpConversion
           op, "bases must have one value per lane, with basis i owned by lane "
               "i and replicated in every warp and CTA");
     };
-    if (bases.size() != 1 ||
-        basisLayout.getInDimSize(kLane) < kIndexBitWidth ||
+    if (bases.size() != 1 || basisLayout.getInDimSize(kLane) < kIndexBitWidth ||
         !basisLayout.sublayoutIsZero({kRegister, kWarp, kBlock}, {kDim})) {
       return notifyInvalidBasisLayout();
     }
