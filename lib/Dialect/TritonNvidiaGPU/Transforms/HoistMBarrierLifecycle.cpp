@@ -63,7 +63,6 @@ namespace ttng = mlir::triton::nvidia_gpu;
 // The chain of operations is:
 //  barrier=alloc -> init(barrier) -> wait(barrier) -> inval(barrier)
 struct BarrierLifecycle {
-  Value barrier;
   ttg::LocalAllocOp alloc;
   SmallVector<ttng::InitBarrierOp> inits;
   SmallVector<ttng::WaitBarrierOp> waits;
@@ -173,7 +172,6 @@ private:
   LogicalResult collectLifecycle(FunctionOpInterface funcOp, Value barrier,
                                  const BarrierAliases &aliases,
                                  BarrierLifecycle &lifecycle) {
-    lifecycle.barrier = barrier;
     lifecycle.alloc = barrier.getDefiningOp<ttg::LocalAllocOp>();
     if (!lifecycle.alloc || lifecycle.alloc->getNumOperands() != 0)
       return failure();
@@ -419,7 +417,8 @@ private:
       if (!ret->hasTrait<OpTrait::ReturnLike>())
         continue;
       builder.setInsertionPoint(ret);
-      ttng::InvalBarrierOp::create(builder, ret->getLoc(), lifecycle.barrier);
+      ttng::InvalBarrierOp::create(builder, ret->getLoc(),
+                                   lifecycle.alloc.getResult());
     }
   }
 
