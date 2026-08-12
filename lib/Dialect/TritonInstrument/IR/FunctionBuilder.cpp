@@ -399,9 +399,8 @@ Value createCTASetMask(ImplicitLocOpBuilder &b, RankedTensorType tensorType,
 }
 
 static void createVerifyBarrierAvailableCall(
-    ImplicitLocOpBuilder &b, StringRef functionName, StringRef message,
-    Value offset, Value length, Value pred, ValueType barriers,
-    ValueType states, Value recipientCTAs) {
+    ImplicitLocOpBuilder &b, StringRef message, Value offset, Value length,
+    Value pred, ValueType barriers, ValueType states, Value recipientCTAs) {
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   auto barriersType = cast<RankedTensorType>(barriers.type);
@@ -410,7 +409,8 @@ static void createVerifyBarrierAvailableCall(
                              barriers.value, states.value, recipientCTAs};
   AssertInfo assertInfo{message, b.getI1Type()};
   createCallToCachedFunction(
-      b, functionName.str(), args, assertInfo, {barriersType, statesType},
+      b, "verify_barrier_can_init", args, assertInfo,
+      {barriersType, statesType},
       [statesType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value offset = entryBlock->getArgument(0);
         Value length = entryBlock->getArgument(1);
@@ -1026,8 +1026,7 @@ void FunctionBuilder::createVerifyBarrierCanInitCall(ImplicitLocOpBuilder &b,
   assert(!auxData.barrierStates.empty() &&
          "barrier states must exist when verifying barrier init");
   createVerifyBarrierAvailableCall(
-      b, "verify_barrier_can_init",
-      "Barrier re-initialized without prior invalidation",
+      b, "Barrier re-initialized without prior invalidation",
       tti::ExperimentalMemDescToI32Op::create(b, mbar),
       arith::ConstantIntOp::create(b, getMemDescLength(mbar), 32), pred,
       auxData.barriers.at(insertPoint), auxData.barrierStates.at(insertPoint),
@@ -1096,8 +1095,7 @@ void FunctionBuilder::createVerifyBarrierMemoryAvailableCall(
     ImplicitLocOpBuilder &b, Value offset, uint32_t length, Value pred,
     Operation *insertPoint, Value recipientCTAs) {
   createVerifyBarrierAvailableCall(
-      b, "verify_barrier_memory_available",
-      "Shared memory reused before barrier invalidation", offset,
+      b, "Shared memory reused before barrier invalidation", offset,
       arith::ConstantIntOp::create(b, length, 32), pred,
       auxData.barriers.at(insertPoint), auxData.barrierStates.at(insertPoint),
       recipientCTAs);

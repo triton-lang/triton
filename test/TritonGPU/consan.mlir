@@ -2345,7 +2345,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     ttng.init_barrier %barrier, 1
         : !ttg.memdesc<1xi64, #lifetime_shared, #lifetime_smem, mutable>
     // Ordinary accesses cannot reuse live barrier storage.
-    // CHECK: tt.call @__triton_consan_verify_barrier_memory_available
+    // CHECK: tt.call @__triton_consan_verify_barrier_can_init
     // CHECK: ttg.local_load
     %before = ttg.local_load %payload
         : !ttg.memdesc<16xi32, #lifetime_shared, #lifetime_smem, mutable>
