@@ -81,6 +81,7 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   std::optional<int> useStage;
   DenseSet<Operation *> topLevelUsers =
       triton::getTopLevelUsersInLoop(op, forOp);
+  DenseSet<Operation *> topLevelWaitUsers;
   // Special case for loads used by local_alloc:
   // we must consider the uses of the local_alloc, as it may be removed and its
   // uses will become direct uses of the async load.
@@ -88,16 +89,21 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   // local_alloc is used by a dot product and has correct encoding.
   if (isa<tt::LoadOp, tt::DescriptorLoadLikeOpInterface>(op)) {
     DenseSet<Operation *> allocUsers;
+    DenseSet<Operation *> allocWaitUsers;
     for (Operation *topLevelUser : topLevelUsers) {
       if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(topLevelUser)) {
         DenseSet<Operation *> users =
             triton::getTopLevelUsersInLoop(localAlloc, forOp);
         allocUsers.insert(users.begin(), users.end());
+        DenseSet<Operation *> waitUsers = triton::getTopLevelUsersInLoop(
+            localAlloc, forOp,
+            [](Operation *user) { return isa<ttng::WaitBarrierOp>(user); });
+        allocWaitUsers.insert(waitUsers.begin(), waitUsers.end());
       }
     }
     topLevelUsers.insert(allocUsers.begin(), allocUsers.end());
+    topLevelWaitUsers.insert(allocWaitUsers.begin(), allocWaitUsers.end());
   }
-  DenseSet<Operation *> topLevelWaitUsers;
   for (Operation *topLevelUser : topLevelUsers) {
     if (isa<ttng::WaitBarrierOp>(topLevelUser)) {
       topLevelWaitUsers.insert(topLevelUser);
