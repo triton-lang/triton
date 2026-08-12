@@ -184,12 +184,10 @@ module {
         %98 = tt.splat %97 : i32 -> tensor<256xi32>
         %99 = arith.cmpi slt, %20, %98 : tensor<256xi32>
         %100 = math.log2 %91#1 : tensor<256xf32>
-        %101 = arith.addf %91#2, %100 : tensor<256xf32>
-        tt.store %76, %101, %99 : tensor<256x!tt.ptr<f32>>
+        tt.store %76, %100, %99 : tensor<256x!tt.ptr<f32>>
       } else {
         %97 = math.log2 %91#1 : tensor<256xf32>
-        %98 = arith.addf %91#2, %97 : tensor<256xf32>
-        tt.store %76, %98 : tensor<256x!tt.ptr<f32>>
+        tt.store %76, %97 : tensor<256x!tt.ptr<f32>>
       }
       tt.store %88, %96, %89 : tensor<256x128x!tt.ptr<f16>>
       scf.yield %c1_i32 : i32
