@@ -181,22 +181,16 @@ private:
     if (hasOpaqueBarrierUse(funcOp, aliases))
       return failure();
 
-    funcOp.walk([&](Operation *op) {
-      if (auto init = dyn_cast<ttng::InitBarrierOp>(op)) {
-        if (aliases.contains(init.getAlloc()))
-          lifecycle.inits.push_back(init);
+    funcOp.walk([&](ttg::MBarrierOpInterface user) {
+      if (!aliases.contains(user.getBarrier()))
         return;
-      }
-      if (auto wait = dyn_cast<ttng::WaitBarrierOp>(op)) {
-        if (aliases.contains(wait.getAlloc()))
-          lifecycle.waits.push_back(wait);
-        return;
-      }
-      if (auto inval = dyn_cast<ttng::InvalBarrierOp>(op)) {
-        if (aliases.contains(inval.getAlloc()))
-          lifecycle.invals.push_back(inval);
-        return;
-      }
+      Operation *op = user.getOperation();
+      if (auto init = dyn_cast<ttng::InitBarrierOp>(op))
+        lifecycle.inits.push_back(init);
+      else if (auto wait = dyn_cast<ttng::WaitBarrierOp>(op))
+        lifecycle.waits.push_back(wait);
+      else if (auto inval = dyn_cast<ttng::InvalBarrierOp>(op))
+        lifecycle.invals.push_back(inval);
     });
 
     if (lifecycle.waits.empty() || lifecycle.invals.size() != 1 ||
