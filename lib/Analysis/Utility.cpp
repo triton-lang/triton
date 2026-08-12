@@ -1271,6 +1271,32 @@ bool isCvtDimSync(const triton::LinearLayout &srcLayout,
   }
 }
 
+namespace triton {
+
+BarrierStages getAtomicBarrierStages(MemSemantic semantic,
+                                     bool hasResultBarrier) {
+  BarrierStages stages;
+  stages.beforeMemoryEffects = semantic == MemSemantic::RELEASE ||
+                               semantic == MemSemantic::ACQUIRE_RELEASE;
+  stages.afterMemoryEffects =
+      !hasResultBarrier && (semantic == MemSemantic::ACQUIRE ||
+                            semantic == MemSemantic::ACQUIRE_RELEASE);
+  stages.betweenMemoryEffects = hasResultBarrier;
+  return stages;
+}
+
+bool atomicResultHasCTABroadcast(Operation *op) {
+  if (op->getNumResults() != 1 || op->getResult(0).use_empty())
+    return false;
+  auto tensorTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+  if (!tensorTy)
+    return gpu::lookupNumCTAs(op) > 1;
+  auto kBlock = StringAttr::get(op->getContext(), "block");
+  return gpu::toLinearLayout(tensorTy).getFreeVariableMasks().lookup(kBlock);
+}
+
+} // namespace triton
+
 namespace triton::nvidia_gpu {
 
 static bool atomicNeedsClusterBarrier(Operation *op) {
@@ -1280,18 +1306,10 @@ static bool atomicNeedsClusterBarrier(Operation *op) {
   if (!atomic || gpu::lookupNumCTAs(op) == 1)
     return false;
 
-  auto sem = atomic.getMemSemantic();
-  if (sem == MemSemantic::RELEASE || sem == MemSemantic::ACQUIRE_RELEASE ||
-      (sem == MemSemantic::ACQUIRE && !op->hasAttr("allocation.offset")))
-    return true;
-
-  if (op->getResult(0).use_empty())
-    return false;
-  auto tensorTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
-  if (!tensorTy)
-    return true;
-  auto kBlock = StringAttr::get(op->getContext(), "block");
-  return gpu::toLinearLayout(tensorTy).getFreeVariableMasks().lookup(kBlock);
+  auto stages = getAtomicBarrierStages(atomic.getMemSemantic(),
+                                       atomicResultHasCTABroadcast(op));
+  return stages.beforeMemoryEffects || stages.afterMemoryEffects ||
+         stages.betweenMemoryEffects;
 }
 
 bool needsClusterBarrier(Operation *op) {

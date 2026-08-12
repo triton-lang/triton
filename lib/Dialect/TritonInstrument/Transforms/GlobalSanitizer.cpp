@@ -558,24 +558,6 @@ struct ClusterSyncPoint {
   bool materializeBarrier;
 };
 
-static bool atomicResultNeedsClusterBarrier(Operation *op) {
-  if (op->getResult(0).use_empty())
-    return false;
-  auto tensorTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
-  if (!tensorTy)
-    return true;
-  auto kBlock = StringAttr::get(op->getContext(), "block");
-  return ttg::toLinearLayout(tensorTy).getFreeVariableMasks().lookup(kBlock);
-}
-
-static bool hasAcquireSemantics(MemSemantic sem) {
-  return sem == MemSemantic::ACQUIRE || sem == MemSemantic::ACQUIRE_RELEASE;
-}
-
-static bool hasReleaseSemantics(MemSemantic sem) {
-  return sem == MemSemantic::RELEASE || sem == MemSemantic::ACQUIRE_RELEASE;
-}
-
 static void instrumentClusterBarrierEquivalents(ModuleOp module) {
   DenseMap<Region *, SmallVector<ClusterSyncPoint>> pointsByGroup;
   SmallVector<Region *> groups;
@@ -605,11 +587,11 @@ static void instrumentClusterBarrierEquivalents(ModuleOp module) {
     if (auto atomic = dyn_cast<tt::AtomicOpInterface>(op)) {
       if (ttg::lookupNumCTAs(op) == 1)
         continue;
-      auto sem = atomic.getMemSemantic();
-      if (hasReleaseSemantics(sem))
+      auto stages = tt::getAtomicBarrierStages(
+          atomic.getMemSemantic(), tt::atomicResultHasCTABroadcast(op));
+      if (stages.beforeMemoryEffects)
         addPoint(op, /*before=*/true, /*materializeBarrier=*/true);
-      if ((hasAcquireSemantics(sem) && !op->hasAttr("allocation.offset")) ||
-          atomicResultNeedsClusterBarrier(op)) {
+      if (stages.afterMemoryEffects || stages.betweenMemoryEffects) {
         addPoint(op, /*before=*/false, /*materializeBarrier=*/true);
       }
       continue;

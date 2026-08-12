@@ -275,12 +275,71 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %one = arith.constant 1 : i32
     %release = tt.atomic_rmw add, release, gpu, %ptr, %one : (!tt.ptr<i32>, i32) -> i32
 
+    // CHECK-NEXT: %{{.*}} = tti.experimental_gsan_atomic_rmw
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NEXT: tti.experimental_gsan_cluster_barrier_sync %[[SCRATCH]] : <i8>
+    // CHECK-NEXT: ttng.cluster_barrier
+    %acquire = tt.atomic_rmw add, acquire, gpu, %ptr, %one : (!tt.ptr<i32>, i32) -> i32
+
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NEXT: tti.experimental_gsan_cluster_barrier_sync %[[SCRATCH]] : <i8>
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NEXT: %{{.*}} = tti.experimental_gsan_atomic_rmw
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NEXT: tti.experimental_gsan_cluster_barrier_sync %[[SCRATCH]] : <i8>
+    // CHECK-NEXT: ttng.cluster_barrier
+    %acq_rel = tt.atomic_rmw add, acq_rel, gpu, %ptr, %one : (!tt.ptr<i32>, i32) -> i32
+
+    // CHECK-NEXT: %{{.*}} = tti.experimental_gsan_atomic_rmw
+    %relaxed = tt.atomic_rmw add, relaxed, gpu, %ptr, %one : (!tt.ptr<i32>, i32) -> i32
+
     // CHECK: %{{.*}} = ttg.convert_layout
     // CHECK-NEXT: ttng.cluster_barrier
     // CHECK-NEXT: tti.experimental_gsan_cluster_barrier_sync %[[SCRATCH]] : <i8>
     // CHECK-NEXT: ttng.cluster_barrier
     %value = arith.constant dense<0.000000e+00> : tensor<256x128xf16, #blockedSplitM>
     %converted = ttg.convert_layout %value : tensor<256x128xf16, #blockedSplitM> -> tensor<256x128xf16, #blockedSplitN>
+    tt.return
+  }
+}
+
+// -----
+
+#blockedLocalBroadcast = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+#blockedCTABroadcast = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: tt.func @atomic_result_barrier_scope
+  tt.func @atomic_result_barrier_scope(%ptr: !tt.ptr<i32>) {
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc
+    // CHECK-NEXT: tti.experimental_gsan_cluster_barrier_init %[[SCRATCH]] : <i8>
+    %local_ptrs = tt.splat %ptr : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #blockedLocalBroadcast>
+    %local_ones = arith.constant dense<1> : tensor<32xi32, #blockedLocalBroadcast>
+
+    // A CTA-local scratch barrier cannot supply the acquire cluster barrier,
+    // even if shared-memory allocation has already attached an offset.
+    // CHECK: %{{.*}} = tti.experimental_gsan_atomic_rmw
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NEXT: tti.experimental_gsan_cluster_barrier_sync %[[SCRATCH]] : <i8>
+    // CHECK-NEXT: ttng.cluster_barrier
+    %local_acquire = tt.atomic_rmw add, acquire, gpu, %local_ptrs, %local_ones {allocation.offset = 0 : i32} : (tensor<32x!tt.ptr<i32>, #blockedLocalBroadcast>, tensor<32xi32, #blockedLocalBroadcast>) -> tensor<32xi32, #blockedLocalBroadcast>
+    tt.store %local_ptrs, %local_acquire : tensor<32x!tt.ptr<i32>, #blockedLocalBroadcast>
+
+    // A relaxed atomic with only a CTA-local result broadcast has no cluster
+    // synchronization effect.
+    // CHECK: %{{.*}} = tti.experimental_gsan_atomic_rmw
+    // CHECK-NOT: tti.experimental_gsan_cluster_barrier_sync
+    %local_relaxed = tt.atomic_rmw add, relaxed, gpu, %local_ptrs, %local_ones {allocation.offset = 0 : i32} : (tensor<32x!tt.ptr<i32>, #blockedLocalBroadcast>, tensor<32xi32, #blockedLocalBroadcast>) -> tensor<32xi32, #blockedLocalBroadcast>
+    tt.store %local_ptrs, %local_relaxed : tensor<32x!tt.ptr<i32>, #blockedLocalBroadcast>
+
+    %cluster_ptrs = tt.splat %ptr : !tt.ptr<i32> -> tensor<128x!tt.ptr<i32>, #blockedCTABroadcast>
+    %cluster_ones = arith.constant dense<1> : tensor<128xi32, #blockedCTABroadcast>
+    // CHECK: %{{.*}} = tti.experimental_gsan_atomic_rmw
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NEXT: tti.experimental_gsan_cluster_barrier_sync %[[SCRATCH]] : <i8>
+    // CHECK-NEXT: ttng.cluster_barrier
+    %cluster_relaxed = tt.atomic_rmw add, relaxed, gpu, %cluster_ptrs, %cluster_ones {allocation.offset = 0 : i32} : (tensor<128x!tt.ptr<i32>, #blockedCTABroadcast>, tensor<128xi32, #blockedCTABroadcast>) -> tensor<128xi32, #blockedCTABroadcast>
+    tt.store %cluster_ptrs, %cluster_relaxed : tensor<128x!tt.ptr<i32>, #blockedCTABroadcast>
     tt.return
   }
 }

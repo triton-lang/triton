@@ -660,7 +660,7 @@ public:
     auto rmwOp = op.getAtomicRmwOp();
     auto sem = op.getSem();
     auto scope = op.getScope();
-    insertAtomicOrderingBarriers(op, sem, !op->hasAttr("allocation.offset"),
+    insertAtomicOrderingBarriers(op, sem, !atomicResultHasOrderingBarrier(op),
                                  rewriter, *targetInfo);
 
     TritonLLVMOpBuilder b(loc, rewriter);
@@ -767,7 +767,7 @@ public:
 
     auto sem = op.getSem();
     auto scope = op.getScope();
-    insertAtomicOrderingBarriers(op, sem, !op->hasAttr("allocation.offset"),
+    insertAtomicOrderingBarriers(op, sem, !atomicResultHasOrderingBarrier(op),
                                  rewriter, *targetInfo);
 
     TritonLLVMOpBuilder b(loc, rewriter);

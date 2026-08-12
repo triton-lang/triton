@@ -1641,6 +1641,24 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.tar
 
 // -----
 
+#blockedLocalBroadcast = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: atomic_acquire_with_cta_local_result_broadcast
+  tt.func @atomic_acquire_with_cta_local_result_broadcast(%ptrs : tensor<32x!tt.ptr<f32>, #blockedLocalBroadcast>, %vals : tensor<32xf32, #blockedLocalBroadcast>) {
+    // CHECK: atom.global.gpu.acquire.add.f32
+    // CHECK: st.shared::cta
+    // CHECK: nvvm.barrier
+    // CHECK: llvm.load
+    // CHECK: nvvm.cluster.arrive
+    // CHECK-NEXT: nvvm.cluster.wait
+    %old = tt.atomic_rmw fadd, acquire, gpu, %ptrs, %vals {allocation.offset = 0 : i32} : (tensor<32x!tt.ptr<f32>, #blockedLocalBroadcast>, tensor<32xf32, #blockedLocalBroadcast>) -> tensor<32xf32, #blockedLocalBroadcast>
+    tt.store %ptrs, %old : tensor<32x!tt.ptr<f32>, #blockedLocalBroadcast>
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:90", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32} {
   // Atomic ordering barriers must not introduce a nested warp specialization.
   // CHECK-LABEL: atomic_release_multi_cta_warp_specialize
