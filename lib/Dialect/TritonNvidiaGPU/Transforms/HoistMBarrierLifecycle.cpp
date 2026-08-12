@@ -229,12 +229,14 @@ private:
     def->moveBefore(loopOp);
   }
 
-  Block *getLoopBodyBlock(LoopLikeOpInterface loop, bool whileBefore) {
+  Block *getLoopBodyBlock(LoopLikeOpInterface loop, Operation *nested) {
     if (auto forOp = dyn_cast<scf::ForOp>(loop.getOperation()))
       return forOp.getBody();
     auto whileOp = cast<scf::WhileOp>(loop.getOperation());
-    return whileBefore ? &whileOp.getBefore().front()
-                       : &whileOp.getAfter().front();
+    Region &region = whileOp.getBefore().isAncestor(nested->getParentRegion())
+                         ? whileOp.getBefore()
+                         : whileOp.getAfter();
+    return &region.front();
   }
 
   Value getLoopResultPhase(LoopLikeOpInterface loop) {
@@ -313,8 +315,8 @@ private:
       if (auto forOp = dyn_cast<scf::ForOp>(op)) {
         if (!containsTrackedWait(forOp.getBody(), waits))
           continue;
-        Value loopPhase;
-        forOp = addForPhaseArg(forOp, phase, loopPhase);
+        forOp = mlir::addIterArgsToLoop(builder, forOp, phase);
+        Value loopPhase = forOp.getRegionIterArgs().back();
         Value nextPhase =
             rewriteBlockPhases(forOp.getBody(), loopPhase, phaseOne, waits);
         cast<scf::YieldOp>(forOp.getBody()->getTerminator())
@@ -328,21 +330,6 @@ private:
         phase = rewriteIfPhase(ifOp, phase, phaseOne, waits);
     }
     return phase;
-  }
-
-  scf::ForOp addForPhaseArg(scf::ForOp forOp, Value initialPhase,
-                            Value &phase) {
-    forOp = mlir::addIterArgsToLoop(builder, forOp, initialPhase);
-    phase = forOp.getRegionIterArg(forOp.getNumRegionIterArgs() - 1);
-    return forOp;
-  }
-
-  scf::WhileOp addWhilePhaseArg(scf::WhileOp whileOp, Value initialPhase,
-                                bool beforeRegion, Value &phase) {
-    whileOp = mlir::addIterArgsToLoop(builder, whileOp, initialPhase);
-    phase = beforeRegion ? whileOp.getBeforeArguments().back()
-                         : whileOp.getAfterArguments().back();
-    return whileOp;
   }
 
   void appendToLoopYield(LoopLikeOpInterface loop, Block *body, Value phase) {
@@ -384,49 +371,34 @@ private:
     Value phaseOne =
         arith::ConstantIntOp::create(builder, loops.front()->getLoc(), 1, 32);
 
-    struct LoopPhase {
-      LoopLikeOpInterface loop;
-      Value phase;
-      Block *body;
-    };
-    SmallVector<LoopPhase> loopPhases;
-    Value initialPhase = lifecycle.initialPhase;
-    for (auto [idx, loop] : llvm::enumerate(loops)) {
+    Operation *inval = lifecycle.invals.front().getOperation();
+    Value phase = lifecycle.initialPhase;
+    for (LoopLikeOpInterface &loop : loops) {
       builder.setInsertionPoint(loop);
-      Value phase;
-      bool whileBefore = false;
-      if (auto forOp = dyn_cast<scf::ForOp>(loop.getOperation())) {
-        loop = addForPhaseArg(forOp, initialPhase, phase);
-      } else {
-        auto whileOp = cast<scf::WhileOp>(loop.getOperation());
-        Operation *nestedOp = idx + 1 < loops.size()
-                                  ? loops[idx + 1].getOperation()
-                                  : lifecycle.invals.front().getOperation();
-        Region *nestedRegion = nestedOp->getParentRegion();
-        whileBefore = nestedRegion == &whileOp.getBefore() ||
-                      whileOp.getBefore().isAncestor(nestedRegion);
-        loop = addWhilePhaseArg(whileOp, initialPhase, whileBefore, phase);
-      }
-
-      loops[idx] = loop;
-      loopPhases.push_back({loop, phase, getLoopBodyBlock(loop, whileBefore)});
-      initialPhase = phase;
+      if (auto forOp = dyn_cast<scf::ForOp>(loop.getOperation()))
+        loop = mlir::addIterArgsToLoop(builder, forOp, phase);
+      else
+        loop = mlir::addIterArgsToLoop(
+            builder, cast<scf::WhileOp>(loop.getOperation()), phase);
+      phase = getLoopBodyBlock(loop, inval)->getArguments().back();
     }
 
-    LoopPhase inner = loopPhases.back();
-    Value nextPhase =
-        rewriteBlockPhases(inner.body, inner.phase, phaseOne, waits);
+    LoopLikeOpInterface innerLoop = loops.back();
+    Block *innerBody = getLoopBodyBlock(innerLoop, inval);
+    Value nextPhase = rewriteBlockPhases(innerBody, phase, phaseOne, waits);
 
-    appendToLoopYield(inner.loop, inner.body, nextPhase);
-    Value loopResult = getLoopResultPhase(inner.loop);
+    appendToLoopYield(innerLoop, innerBody, nextPhase);
+    Value loopResult = getLoopResultPhase(innerLoop);
 
-    for (int i = loopPhases.size() - 2; i >= 0; --i) {
-      LoopPhase current = loopPhases[i];
-      if (loopResult.getParentBlock() != current.body)
+    for (int i = loops.size() - 2; i >= 0; --i) {
+      LoopLikeOpInterface loop = loops[i];
+      Block *body = getLoopBodyBlock(loop, inval);
+      Value loopPhase = body->getArguments().back();
+      if (loopResult.getParentBlock() != body)
         loopResult = mlir::triton::sinkValueRedefinition(
-            builder, current.phase, loopResult, loopResult.getParentBlock());
-      appendToLoopYield(current.loop, current.body, loopResult);
-      loopResult = getLoopResultPhase(current.loop);
+            builder, loopPhase, loopResult, loopResult.getParentBlock());
+      appendToLoopYield(loop, body, loopResult);
+      loopResult = getLoopResultPhase(loop);
     }
   }
 
