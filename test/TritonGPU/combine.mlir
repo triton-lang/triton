@@ -4568,3 +4568,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#index_layout = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#other_index_layout = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+#basis_layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // The two-dimensional index and result change layout together, while the
+  // independently distributed one-dimensional basis remains untouched.
+  // CHECK-LABEL: @linear_apply_forward_propagation
+  // CHECK-SAME: [[INDEX:%[^:]+]]: tensor<64x32xi32, #[[INDEX_LAYOUT:[^>]+]]>, [[BASES:%[^:]+]]: tensor<32xi32, #[[BASIS_LAYOUT:[^>]+]]>
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: [[RESULT:%.*]] = tt.linear_apply [[INDEX]], [[BASES]] : tensor<64x32xi32, #[[INDEX_LAYOUT]]>, tensor<32xi32, #[[BASIS_LAYOUT]]> -> tensor<64x32xi32, #[[INDEX_LAYOUT]]>
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: tt.return [[RESULT]]
+  tt.func @linear_apply_forward_propagation(%index: tensor<64x32xi32, #index_layout>, %bases: tensor<32xi32, #basis_layout>) -> tensor<64x32xi32, #index_layout> {
+    %converted_index = ttg.convert_layout %index : tensor<64x32xi32, #index_layout> -> tensor<64x32xi32, #other_index_layout>
+    %result = tt.linear_apply %converted_index, %bases : tensor<64x32xi32, #other_index_layout>, tensor<32xi32, #basis_layout> -> tensor<64x32xi32, #other_index_layout>
+    %converted_result = ttg.convert_layout %result : tensor<64x32xi32, #other_index_layout> -> tensor<64x32xi32, #index_layout>
+    tt.return %converted_result : tensor<64x32xi32, #index_layout>
+  }
+
+  // Backward rematerialization must follow only the index operand. Propagating
+  // the rank-two result encoding into the rank-one basis would produce invalid
+  // IR and lose the canonical warp-local basis distribution.
+  // CHECK-LABEL: @linear_apply_backward_rematerialization
+  // CHECK-SAME: [[BASES:%[^:]+]]: tensor<32xi32, #[[BASIS_LAYOUT:[^>]+]]>
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: [[INDEX:%.*]] = tt.make_range
+  // CHECK: [[EXPANDED:%.*]] = tt.expand_dims [[INDEX]]
+  // CHECK: [[RESULT:%.*]] = tt.linear_apply [[EXPANDED]], [[BASES]]
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: tt.return [[RESULT]]
+  tt.func @linear_apply_backward_rematerialization(%bases: tensor<32xi32, #basis_layout>) -> tensor<1x32xi32, #index_layout> {
+    %index = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #other_index_layout}>>
+    %expanded = tt.expand_dims %index {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #other_index_layout}>> -> tensor<1x32xi32, #other_index_layout>
+    %result = tt.linear_apply %expanded, %bases : tensor<1x32xi32, #other_index_layout>, tensor<32xi32, #basis_layout> -> tensor<1x32xi32, #other_index_layout>
+    %converted = ttg.convert_layout %result : tensor<1x32xi32, #other_index_layout> -> tensor<1x32xi32, #index_layout>
+    tt.return %converted : tensor<1x32xi32, #index_layout>
+  }
+}

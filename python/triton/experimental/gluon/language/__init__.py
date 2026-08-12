@@ -62,6 +62,7 @@ from ._core import (
     histogram,
     inline_asm_elementwise,
     join,
+    linear_apply,
     load,
     map_elementwise,
     max_constancy,

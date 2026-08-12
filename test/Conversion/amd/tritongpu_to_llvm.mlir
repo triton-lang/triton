@@ -969,3 +969,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#index = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#basis = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // Wave64 lanes 32-63 duplicate the 32-element basis. The primitive remains
+  // wave-local and works for all supported AMD architecture families.
+  // COMMON-LABEL: @linear_apply_wave64_i32
+  // COMMON-COUNT-32: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.ds_bpermute
+  // COMMON: llvm.xor
+  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.return
+  tt.func private @linear_apply_wave64_i32(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+}

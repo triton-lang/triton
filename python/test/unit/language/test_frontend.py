@@ -1268,3 +1268,72 @@ def test_dot_fp16_accumulator():
         tl.dot(a, b, c)
 
     run_parser(fp16_acc_kernel)
+
+
+@filecheck_test
+@triton.jit
+def test_linear_apply_ir():
+    # CHECK-LABEL: test_linear_apply_ir
+    # CHECK: [[SIGNED_INDEX:%.*]] = tt.make_range {end = 64 : i32, start = 0 : i32}
+    # CHECK: [[INDEX:%.*]] = arith.bitcast [[SIGNED_INDEX]] : tensor<64xi32> to tensor<64xi32>
+    index = tl.arange(0, 64).to(tl.uint32)
+    # CHECK: [[SIGNED_BASES:%.*]] = tt.make_range {end = 32 : i32, start = 0 : i32}
+    # CHECK: [[BASES:%.*]] = arith.bitcast [[SIGNED_BASES]] : tensor<32xi32> to tensor<32xi32>
+    bases = tl.arange(0, 32).to(tl.uint32)
+    # CHECK: [[RESULT:%.*]] = tt.linear_apply [[INDEX]], [[BASES]] : tensor<64xi32>, tensor<32xi32> -> tensor<64xi32>
+    result = tl.linear_apply(index, bases)
+    # CHECK: call @{{.*}}anchor{{.*}}([[RESULT]])
+    anchor(result)
+
+
+@filecheck_test
+@triton.jit
+def test_linear_apply_multidimensional_ir():
+    # CHECK-LABEL: test_linear_apply_multidimensional_ir
+    index = tl.reshape(tl.arange(0, 64), (8, 8)).to(tl.uint32)
+    bases = tl.arange(0, 32).to(tl.uint32)
+    # CHECK: tt.linear_apply {{.*}} : tensor<8x8xi32>, tensor<32xi32> -> tensor<8x8xi32>
+    result = index.linear_apply(bases)
+    anchor(result)
+
+
+@pytest.mark.parametrize("invalid_kind", [
+    "index_float", "index_signed", "index_bitwidth", "basis_float", "basis_signed", "basis_bitwidth", "basis_rank",
+    "basis_size"
+])
+def test_linear_apply_invalid_operands(invalid_kind):
+
+    @triton.jit
+    def invalid_linear_apply(INVALID_KIND: tl.constexpr):
+        index = tl.arange(0, 16).to(tl.uint32)
+        bases = tl.arange(0, 32).to(tl.uint32)
+        if INVALID_KIND == "index_float":
+            index = index.to(tl.float32)
+        elif INVALID_KIND == "index_signed":
+            index = index.to(tl.int32)
+        elif INVALID_KIND == "index_bitwidth":
+            index = index.to(tl.uint16)
+        elif INVALID_KIND == "basis_float":
+            bases = bases.to(tl.float32)
+        elif INVALID_KIND == "basis_signed":
+            bases = bases.to(tl.int32)
+        elif INVALID_KIND == "basis_bitwidth":
+            bases = bases.to(tl.uint64)
+        elif INVALID_KIND == "basis_rank":
+            bases = tl.reshape(bases, (4, 8))
+        elif INVALID_KIND == "basis_size":
+            bases = tl.arange(0, 16).to(tl.uint32)
+        tl.linear_apply(index, bases)
+
+    expected_errors = {
+        "index_float": "index must be a uint32 tensor",
+        "index_signed": "index must be a uint32 tensor",
+        "index_bitwidth": "index must be a uint32 tensor",
+        "basis_float": "bases must be a uint32 tensor",
+        "basis_signed": "bases must be a uint32 tensor",
+        "basis_bitwidth": "bases must be a uint32 tensor",
+        "basis_rank": "bases must be a one-dimensional tensor",
+        "basis_size": "bases must contain exactly 32 elements",
+    }
+    with pytest.raises(CompilationError, match=expected_errors[invalid_kind]):
+        run_parser(invalid_linear_apply, args=(invalid_kind, ))

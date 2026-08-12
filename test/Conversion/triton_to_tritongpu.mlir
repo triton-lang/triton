@@ -225,3 +225,24 @@ tt.func @call_into_dot(%b: tensor<32x128xf16>) {
   %0 = tt.dot %a, %b, %c : tensor<128x32xf16> * tensor<32x128xf16> -> tensor<128x128xf32>
   tt.return
 }
+
+// -----
+
+// CHECK-DAG: #[[$LA_BASIS:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
+// CHECK-TWO-CTAS-DAG: #[[$LA_CTA_BASIS:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0], CGALayout = {{\[\[0\]\]}}}>
+
+// CHECK-LABEL: @linear_apply_i32
+// CHECK: tt.linear_apply {{.*}} : tensor<128xi32, #[[$LA_BASIS]]>, tensor<32xi32, #[[$LA_BASIS]]> -> tensor<128xi32, #[[$LA_BASIS]]>
+// CHECK-TWO-CTAS-LABEL: @linear_apply_i32
+// CHECK-TWO-CTAS: tt.linear_apply {{.*}} : tensor<128xi32, #{{.*}}>, tensor<32xi32, #[[$LA_CTA_BASIS]]> -> tensor<128xi32, #{{.*}}>
+tt.func @linear_apply_i32(%index: tensor<128xi32>, %bases: tensor<32xi32>) -> tensor<128xi32> {
+  %result = tt.linear_apply %index, %bases : tensor<128xi32>, tensor<32xi32> -> tensor<128xi32>
+  tt.return %result : tensor<128xi32>
+}
+
+// CHECK-LABEL: @linear_apply_i32_rank_two
+// CHECK: tt.linear_apply {{.*}} : tensor<16x16xi32, #[[LA_INDEX2D:[^>]+]]>, tensor<32xi32, #[[$LA_BASIS]]> -> tensor<16x16xi32, #[[LA_INDEX2D]]>
+tt.func @linear_apply_i32_rank_two(%index: tensor<16x16xi32>, %bases: tensor<32xi32>) -> tensor<16x16xi32> {
+  %result = tt.linear_apply %index, %bases : tensor<16x16xi32>, tensor<32xi32> -> tensor<16x16xi32>
+  tt.return %result : tensor<16x16xi32>
+}

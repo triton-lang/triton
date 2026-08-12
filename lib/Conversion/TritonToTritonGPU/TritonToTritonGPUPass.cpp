@@ -481,6 +481,43 @@ struct TritonMapElementwisePattern
   }
 };
 
+struct TritonLinearApplyPattern
+    : public OpConversionPattern<triton::LinearApplyOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::LinearApplyOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto indexType = cast<RankedTensorType>(adaptor.getIndex().getType());
+    auto basesType = cast<RankedTensorType>(adaptor.getBases().getType());
+    auto *converter = getTypeConverter<TritonGPUTypeConverter>();
+    unsigned threadsPerWarp = converter->getThreadsPerWarp();
+
+    // Give every warp its own complete copy of the 32-element basis, with one
+    // basis element per lane. On wave64 the upper lanes duplicate the lower
+    // lanes. Replicating across CTAs keeps the operation entirely warp-local.
+    auto cgaLayout = CGAEncodingAttr::fromSplitParams(
+        getContext(), {static_cast<unsigned>(converter->getNumCTAs())}, {1},
+        {0});
+    auto basesEncoding = BlockedEncodingAttr::get(
+        getContext(), {1}, {threadsPerWarp},
+        {static_cast<unsigned>(converter->getNumWarps())}, {0}, cgaLayout);
+
+    Value bases = adaptor.getBases();
+    if (basesType.getEncoding() != basesEncoding) {
+      basesType = basesType.cloneWithEncoding(basesEncoding);
+      bases = ConvertLayoutOp::create(rewriter, op.getLoc(), basesType, bases);
+    }
+
+    auto resultType = cast<RankedTensorType>(op.getType())
+                          .cloneWithEncoding(indexType.getEncoding());
+    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::LinearApplyOp>(
+                      op, resultType, adaptor.getIndex(), bases),
+                  adaptor.getAttributes());
+    return success();
+  }
+};
+
 void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
                             RewritePatternSet &patterns, unsigned numCTAs) {
   MLIRContext *context = patterns.getContext();
@@ -513,6 +550,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       TritonTransPattern,
       TritonDotPattern,
       TritonMapElementwisePattern,
+      TritonLinearApplyPattern,
       GatherScatterOpPattern<DescriptorGatherOp>,
       GatherScatterOpPattern<DescriptorScatterOp>,
       GenericOpPattern<triton::LoadOp>,

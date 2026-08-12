@@ -460,6 +460,12 @@ static Attribute inferSrcEncoding(GatherOp op, Attribute dstEnc) {
   return dstEnc;
 }
 
+static Attribute inferSrcEncoding(LinearApplyOp op, Attribute dstEnc) {
+  // Only the index, not the independent one-dimensional basis, shares the
+  // result encoding.
+  return dstEnc;
+}
+
 static Attribute inferTransOpDstEncoding(Attribute srcEnc,
                                          ArrayRef<int64_t> shape,
                                          ArrayRef<int32_t> order) {
@@ -548,6 +554,12 @@ static Attribute inferDstEncoding(GatherOp op, Attribute encoding) {
   return encoding;
 }
 
+static Attribute inferDstEncoding(LinearApplyOp op, Attribute encoding) {
+  // The result encoding follows the index encoding; callers must not use the
+  // basis encoding as this transfer function's input.
+  return encoding;
+}
+
 static Attribute inferSrcEncoding(triton::ReshapeOp op, Attribute encoding) {
   // The encoding of x given the encoding of y in `reshape(x) -> y` is the same
   // as the encoding of x given the encoding of y in `reshape(y) -> x`.  It's an
@@ -603,6 +615,8 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
     return inferSrcEncoding(reshape, encoding);
   if (auto gather = dyn_cast<triton::GatherOp>(op))
     return inferSrcEncoding(gather, encoding);
+  if (auto linearApply = dyn_cast<triton::LinearApplyOp>(op))
+    return inferSrcEncoding(linearApply, encoding);
   if (auto fp4ToFp = dyn_cast<triton::gpu::Fp4ToFpOp>(op))
     return inferSrcEncoding(fp4ToFp, encoding);
 
@@ -637,6 +651,8 @@ Attribute inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(reshape, encoding);
   if (auto gather = dyn_cast<triton::GatherOp>(op))
     return inferDstEncoding(gather, encoding);
+  if (auto linearApply = dyn_cast<triton::LinearApplyOp>(op))
+    return inferDstEncoding(linearApply, encoding);
   if (auto fp4ToFp = dyn_cast<triton::gpu::Fp4ToFpOp>(op))
     return inferDstEncoding(fp4ToFp, encoding);
 
@@ -982,6 +998,12 @@ LogicalResult getConvertBackwardSlice(
         if (!srcEncoding)
           return failure();
         enqueue(gather.getIndicesMutable(), srcEncoding);
+        continue;
+      }
+      if (auto linearApply = dyn_cast<LinearApplyOp>(definingOp)) {
+        // The basis has a separate rank and a fixed warp-local encoding, so
+        // only propagate a requested result encoding to the index operand.
+        enqueue(linearApply.getIndexMutable(), encoding);
         continue;
       }
       for (auto [i, operand] : llvm::enumerate(definingOp->getOpOperands())) {

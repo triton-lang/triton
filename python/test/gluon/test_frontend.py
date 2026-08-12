@@ -920,6 +920,203 @@ def anchor_noinline(x):
 
 @filecheck_test
 @gluon.jit
+def test_linear_apply_frontend():
+    # CHECK-DAG: [[INDEX_LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    # CHECK-DAG: [[BASIS_LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    # CHECK-LABEL: @test_linear_apply_frontend
+    index_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+    basis_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    index = ttgl.arange(0, 128, layout=index_layout).to(ttgl.uint32)
+    bases = ttgl.arange(0, 32, layout=basis_layout).to(ttgl.uint32)
+    # CHECK: [[RESULT:%.*]] = tt.linear_apply {{.*}} : tensor<128xi32, [[INDEX_LAYOUT]]>, tensor<32xi32, [[BASIS_LAYOUT]]> -> tensor<128xi32, [[INDEX_LAYOUT]]>
+    result = ttgl.linear_apply(index, bases)
+    ttgl.static_assert(result.dtype == ttgl.uint32)
+    ttgl.static_assert(result.type.layout == index_layout)
+    # CHECK: tt.call {{.*}}([[RESULT]])
+    anchor(result)
+
+
+@filecheck_test
+@gluon.jit
+def test_linear_apply_explicit_basis_layout_conversion():
+    # CHECK-DAG: [[SOURCE_LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    # CHECK-DAG: [[BASIS_LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    # CHECK-LABEL: @test_linear_apply_explicit_basis_layout_conversion
+    source_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+    basis_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    index = ttgl.arange(0, 128, layout=source_layout).to(ttgl.uint32)
+    bases = ttgl.arange(0, 32, layout=source_layout).to(ttgl.uint32)
+    # CHECK: [[BASES:%.*]] = ttg.convert_layout {{.*}} : tensor<32xi32, [[SOURCE_LAYOUT]]> -> tensor<32xi32, [[BASIS_LAYOUT]]>
+    bases = ttgl.convert_layout(bases, basis_layout)
+    # CHECK: [[RESULT:%.*]] = tt.linear_apply {{.*}}, [[BASES]] : tensor<128xi32, [[SOURCE_LAYOUT]]>, tensor<32xi32, [[BASIS_LAYOUT]]> -> tensor<128xi32, [[SOURCE_LAYOUT]]>
+    result = ttgl.linear_apply(index, bases)
+    # CHECK: tt.call {{.*}}([[RESULT]])
+    anchor(result)
+
+
+@filecheck_test
+@gluon.jit
+def test_linear_apply_tensor_member_multidimensional():
+    # CHECK-DAG: [[INDEX_LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [1, 0]}>
+    # CHECK-DAG: [[BASIS_PARENT:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+    # CHECK-LABEL: @test_linear_apply_tensor_member_multidimensional
+    index_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [2, 2], [1, 0])
+    basis_parent: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+    basis_layout: ttgl.constexpr = ttgl.SliceLayout(0, basis_parent)
+    index = ttgl.full([8, 8], 5, ttgl.uint32, layout=index_layout)
+    bases = ttgl.arange(0, 32, layout=basis_layout).to(ttgl.uint32)
+    # CHECK: [[RESULT:%.*]] = tt.linear_apply {{.*}} : tensor<8x8xi32, [[INDEX_LAYOUT]]>, tensor<32xi32, #ttg.slice<{dim = 0, parent = [[BASIS_PARENT]]}>> -> tensor<8x8xi32, [[INDEX_LAYOUT]]>
+    result = index.linear_apply(bases)
+    ttgl.static_assert(result.dtype == ttgl.uint32)
+    ttgl.static_assert(result.type.layout == index_layout)
+    # CHECK: tt.call {{.*}}([[RESULT]])
+    anchor(result)
+
+
+@filecheck_test
+@gluon.jit
+def test_linear_apply_auto_layout_independent_bases_frontend():
+    # CHECK-DAG: [[INDEX_LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [1, 0]}>
+    # CHECK-DAG: [[BASIS_LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    # CHECK-LABEL: @test_linear_apply_auto_layout_independent_bases_frontend
+    index_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [2, 2], [1, 0])
+    basis_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    index = ttgl.full([8, 8], 5, ttgl.uint32, layout=ttgl.AutoLayout())
+    bases = ttgl.full([32], 7, ttgl.uint32, layout=ttgl.AutoLayout())
+    # CHECK: [[BASES:%.*]] = arith.constant dense<7> : tensor<32xi32, #gluon.auto_encoding>
+    # CHECK: gluon.set_auto_layout [[BASES]] : tensor<32xi32, #gluon.auto_encoding> -> tensor<32xi32, [[BASIS_LAYOUT]]>
+    ttgl.set_auto_layout(bases, basis_layout)
+    # CHECK: [[RESULT:%.*]] = tt.linear_apply {{.*}}, [[BASES]] : tensor<8x8xi32, #gluon.auto_encoding>, tensor<32xi32, #gluon.auto_encoding> -> tensor<8x8xi32, #gluon.auto_encoding>
+    result = ttgl.linear_apply(index, bases)
+    ttgl.static_assert(result.dtype == ttgl.uint32)
+    ttgl.static_assert(result.type.layout == ttgl.AutoLayout())
+    # CHECK: [[RESOLVED:%.*]] = gluon.set_auto_layout [[RESULT]] : tensor<8x8xi32, #gluon.auto_encoding> -> tensor<8x8xi32, [[INDEX_LAYOUT]]>
+    resolved = ttgl.set_auto_layout(result, index_layout)
+    ttgl.static_assert(resolved.type.layout == index_layout)
+    # CHECK: tt.call {{.*}}([[RESOLVED]])
+    anchor(resolved)
+
+
+@gluon.jit
+def _linear_apply_target_frontend_kernel(index_layout: ttgl.constexpr, basis_layout: ttgl.constexpr,
+                                         rank_two: ttgl.constexpr, use_member: ttgl.constexpr):
+    if rank_two:
+        index = ttgl.full([8, 8], 5, ttgl.uint32, layout=index_layout)
+    else:
+        index = ttgl.full([128], 5, ttgl.uint32, layout=index_layout)
+    bases = ttgl.full([32], 7, ttgl.uint32, layout=basis_layout)
+    if use_member:
+        result = index.linear_apply(bases)
+    else:
+        result = ttgl.linear_apply(index, bases)
+    ttgl.static_assert(result.dtype == ttgl.uint32)
+    ttgl.static_assert(result.type.layout == index_layout)
+    anchor(result)
+
+
+@pytest.mark.parametrize("target", [HOPPER_TARGET, HIP_TARGET_RDNA4, HIP_TARGET_CDNA3],
+                         ids=["cuda", "wave32", "wave64"])
+@pytest.mark.parametrize("rank_two", [False, True], ids=["rank1", "rank2"])
+@pytest.mark.parametrize("use_member", [False, True], ids=["function", "member"])
+def test_linear_apply_frontend_targets(target, rank_two, use_member):
+    warp_size = target.warp_size
+    if rank_two:
+        index_layout = ttgl.BlockedLayout([1, 2], [4, warp_size // 4], [2, 2], [1, 0])
+        index_shape = "8x8"
+    else:
+        index_layout = ttgl.BlockedLayout([2], [warp_size], [4], [0])
+        index_shape = "128"
+    basis_layout = ttgl.BlockedLayout([1], [warp_size], [4], [0])
+    module = run_parser(_linear_apply_target_frontend_kernel,
+                        *make_args(index_layout, basis_layout, rank_two, use_member), target=target)
+    text = module.str_nodebug()
+    assert f'"ttg.threads-per-warp" = {warp_size} : i32' in text
+    assert f"sizePerThread = [1], threadsPerWarp = [{warp_size}]" in text
+    assert re.search(
+        rf"tt\.linear_apply .* : tensor<{index_shape}xi32, ([^>]+)>, tensor<32xi32, [^>]+> -> "
+        rf"tensor<{index_shape}xi32, \1>", text)
+
+
+@gluon.jit
+def _linear_apply_invalid_frontend_kernel(case: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    index = ttgl.full([128], 5, ttgl.uint32, layout=layout)
+    bases = ttgl.full([32], 7, ttgl.uint32, layout=layout)
+    if case == "index_signed":
+        index = index.to(ttgl.int32)
+    elif case == "index_narrow":
+        index = index.to(ttgl.uint16)
+    elif case == "index_float":
+        index = index.to(ttgl.float32)
+    elif case == "index_scalar":
+        index = ttgl.full([], 5, ttgl.uint32)
+    elif case == "bases_signed":
+        bases = bases.to(ttgl.int32)
+    elif case == "bases_wide":
+        bases = bases.to(ttgl.uint64)
+    elif case == "bases_float":
+        bases = bases.to(ttgl.float32)
+    elif case == "bases_scalar":
+        bases = ttgl.full([], 7, ttgl.uint32)
+    elif case == "bases_rank":
+        rank_two_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 8], [2, 2], [1, 0])
+        bases = ttgl.full([4, 8], 7, ttgl.uint32, layout=rank_two_layout)
+    elif case == "bases_length":
+        bases = ttgl.full([16], 7, ttgl.uint32, layout=layout)
+    elif case == "bases_two_per_lane":
+        bases = ttgl.full([32], 7, ttgl.uint32, layout=ttgl.BlockedLayout([2], [32], [4], [0]))
+    elif case == "bases_four_per_lane":
+        bases = ttgl.full([32], 7, ttgl.uint32, layout=ttgl.BlockedLayout([4], [32], [4], [0]))
+    elif case == "bases_permuted_lanes":
+        permuted_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(reg_bases=[], lane_bases=[[2], [1], [4], [8],
+                                                                                                 [16]],
+                                                                       warp_bases=[[0],
+                                                                                   [0]], block_bases=[], shape=[32])
+        bases = ttgl.full([32], 7, ttgl.uint32, layout=permuted_layout)
+    elif case == "bases_noncanonical_slice":
+        slice_parent: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0])
+        bases = ttgl.full([32], 7, ttgl.uint32, layout=ttgl.SliceLayout(0, slice_parent))
+    elif case == "bases_cross_warp":
+        cross_warp_parent: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 8], [1, 4], [1, 0])
+        cross_warp_layout: ttgl.constexpr = ttgl.SliceLayout(0, cross_warp_parent)
+        bases = ttgl.full([32], 7, ttgl.uint32, layout=cross_warp_layout)
+    ttgl.linear_apply(index, bases)
+
+
+@pytest.mark.parametrize(
+    "case, message",
+    [
+        ("index_signed", "linear_apply index must be a uint32 tensor"),
+        ("index_narrow", "linear_apply index must be a uint32 tensor"),
+        ("index_float", "linear_apply index must be a uint32 tensor"),
+        ("index_scalar", "linear_apply index must be a uint32 tensor"),
+        ("bases_signed", "linear_apply bases must be a uint32 tensor"),
+        ("bases_wide", "linear_apply bases must be a uint32 tensor"),
+        ("bases_float", "linear_apply bases must be a uint32 tensor"),
+        ("bases_scalar", "linear_apply bases must be a uint32 tensor"),
+        ("bases_rank", "linear_apply bases must be a one-dimensional tensor"),
+        ("bases_length", "linear_apply bases must contain exactly 32 elements, but got 16"),
+        ("bases_two_per_lane", "linear_apply bases layout must have one value per lane"),
+        ("bases_four_per_lane", "linear_apply bases layout must have one value per lane"),
+        ("bases_permuted_lanes", "linear_apply bases layout must have one value per lane"),
+        ("bases_noncanonical_slice", "linear_apply bases layout must have one value per lane"),
+        ("bases_cross_warp", "linear_apply bases layout must have one value per lane"),
+    ],
+)
+def test_linear_apply_frontend_errors(case, message):
+    with pytest.raises(CompilationError) as exc:
+        run_parser(_linear_apply_invalid_frontend_kernel, *make_args(case), target=HOPPER_TARGET)
+    assert message in str(exc.value.__cause__ or exc.value)
+    if case.startswith("bases_") and case in {
+            "bases_two_per_lane", "bases_four_per_lane", "bases_permuted_lanes", "bases_noncanonical_slice",
+            "bases_cross_warp"
+    }:
+        assert "gl.convert_layout(..., gl.BlockedLayout([1], [warp_size], [num_warps], [0]))" in str(exc.value.__cause__
+                                                                                                     or exc.value)
+
+
+@filecheck_test
+@gluon.jit
 def test_reinterpret_parent_then_multibuffer_subslice():
     # CHECK-LABEL: test_reinterpret_parent_then_multibuffer_subslice
     a_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(64, 16, rank=2)

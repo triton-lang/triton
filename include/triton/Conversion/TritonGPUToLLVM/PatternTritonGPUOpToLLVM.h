@@ -76,6 +76,10 @@ void populateGatherOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     RewritePatternSet &patterns,
                                     const TargetInfoBase &targetInfo,
                                     PatternBenefit benefit);
+void populateLinearApplyOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                         RewritePatternSet &patterns,
+                                         const TargetInfoBase &targetInfo,
+                                         PatternBenefit benefit);
 
 void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                            const TargetInfoBase &targetInfo,
