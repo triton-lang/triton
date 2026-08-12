@@ -674,8 +674,6 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
 
   SmallVector<std::pair<Value, RegionInfo>> candidates[numMemTypes];
   DenseSet<Value> seenValues;
-  DenseSet<Value> payloadValues;
-  DenseSet<Value> completionBarrierValues;
   auto collectCandidates = [&](Value value) {
     if (!seenValues.insert(value).second)
       return;
@@ -693,28 +691,19 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
         {value, analysis->getLatticeElement(value)->getValue()});
   };
   module.walk([&](Operation *op) {
+    for (const MemoryAccess &access : getMemoryAccesses(op))
+      collectCandidates(access.value);
+
     auto info = hooks.getMemEffectsOpInfo(op);
     if (!info)
       return;
-    bool isBarrierLifecycle = hooks.getBarrierInitInfo(op).has_value() ||
-                              hooks.getBarrierInvalidateInfo(op).has_value();
     if (info->trackingKind == MemEffectsOpInfo::TrackingKind::CommitCount &&
         info->commitKind == CommitKind::AsyncCp)
       hasAsyncCopyReads |= llvm::any_of(
           info->operandEffects,
           [](const MemEffectsOpInfo::Effects &e) { return e.rw == RW::Read; });
-    for (const auto &effect : info->operandEffects) {
-      collectCandidates(effect.buf);
-      if (!isBarrierLifecycle)
-        payloadValues.insert(effect.buf);
-    }
-    if (hooks.isTMAOp(op) || hooks.isCLCOp(op) ||
-        isa<MMAv5OpInterface, TCGen5CommitOp, TMEMCopyOp>(op)) {
-      for (const auto &barrier : info->barriers) {
-        collectCandidates(barrier.barrier);
-        completionBarrierValues.insert(barrier.barrier);
-      }
-    }
+    for (const auto &barrier : info->barriers)
+      collectCandidates(barrier.barrier);
   });
 
   analysis->calculateUsedBufferRegions(module);
@@ -730,41 +719,6 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
         analysis->getAllUsedBufferRegions(regionType);
     bool hasUnknown = analysis->hasUnknownUsedBufferRegions(regionType);
 
-    if (memType == MemType::SHARED_MEM) {
-      auto appendRegions = [&](const DenseSet<Value> &values) {
-        for (Value value : values) {
-          auto type = dyn_cast<MemDescType>(value.getType());
-          if (!type || !isa<SharedMemorySpaceAttr>(type.getMemorySpace()))
-            continue;
-          const RegionInfo &info =
-              analysis->getLatticeElement(value)->getValue();
-          hasUnknown |= info.isUnknown();
-          for (const BufferRegionView &view : info.views)
-            regions.push_back(view.region);
-        }
-      };
-      auto sortUnique = [](SmallVectorImpl<BufferRegion> &regions) {
-        llvm::sort(regions);
-        regions.erase(std::unique(regions.begin(), regions.end()),
-                      regions.end());
-      };
-      // BufferRegionAnalysis classifies a value used as an mbarrier as barrier
-      // storage globally. Recover ordinary payload uses here. Barrier bytes use
-      // the ordinary reader model only when they can alias payload or receive a
-      // deferred engine completion; isolated synchronous barriers stay on the
-      // compact barrier-specific state.
-      appendRegions(payloadValues);
-      sortUnique(regions);
-      SmallVector<BufferRegion> payloadRegions = regions;
-      appendRegions(completionBarrierValues);
-      for (const BufferRegion &barrier : barrierRegions)
-        if (hasUnknown || llvm::any_of(payloadRegions, [&](const auto &region) {
-              return barrier.intersects(region);
-            }))
-          regions.push_back(barrier);
-      sortUnique(regions);
-    }
-
     if (regions.empty() && !hasUnknown)
       continue;
 
@@ -774,8 +728,6 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
     if (memType == MemType::SHARED_MEM) {
       for (const BufferRegion &barrier : barrierRegions) {
         auto it = llvm::lower_bound(regions, barrier);
-        if (it == regions.end() || !(*it == barrier))
-          continue;
         unsigned id = std::distance(regions.begin(), it);
         sharedBarrierMasks.push_back(
             {barrier, bufferStatePlans[iMemType].regionMasks[id]});
@@ -789,8 +741,6 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
         const BufferRegion &candidate = view.region;
         auto it = llvm::lower_bound(regions, candidate);
         if (it == regions.end() || !(*it == candidate)) {
-          if (!payloadValues.contains(value))
-            continue;
           InFlightDiagnostic diag = emitError(
               value.getLoc(),
               "accessed exact buffer-region candidate is absent from the "
@@ -814,9 +764,7 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
           existing->ctaMask |= ctaMask;
         }
       }
-      if (stateCandidates.unknown || !stateCandidates.cases.empty())
-        bufferCandidates[iMemType].try_emplace(value,
-                                               std::move(stateCandidates));
+      bufferCandidates[iMemType].try_emplace(value, std::move(stateCandidates));
     }
   }
   return success();

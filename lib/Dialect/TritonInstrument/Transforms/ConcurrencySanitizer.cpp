@@ -848,16 +848,9 @@ private:
       }
       if (auto info = hooks.getBarrierInitInfo(op)) {
         Value pred = hooks.getIssuerCTAPred(b, op);
-        if (!hooks.barrierWritesInvalidate()) {
+        if (!hooks.barrierWritesInvalidate())
           funcBuilder.createVerifyBarrierCanInitCall(b, info->alloc, pred, op,
                                                      currentCTAMask(b));
-        } else if (!auxData.bufferCandidates[(int)MemType::SHARED_MEM].contains(
-                       info->alloc)) {
-          // Isolated barriers have no buffer lane for instrumentMemEffects.
-          funcBuilder.createInvalidateBarrierStorageCall(
-              b, tti::ExperimentalMemDescToI32Op::create(b, info->alloc),
-              getMemDescLength(info->alloc), pred, op, currentCTAMask(b));
-        }
         funcBuilder.createInitBarrierStateCall(b, info->alloc, info->count,
                                                pred, op);
       }
@@ -1031,14 +1024,15 @@ private:
     struct MaterializedEffect {
       Value bufferMask;
       Value effectCTAs;
+      Value runtimeBase;
+      const BufferStateCandidates *candidates = nullptr;
       MemType memType;
     };
     SmallVector<MaterializedEffect> materializedEffects;
     materializedEffects.reserve(opInfo->operandEffects.size());
 
-    for (const auto &effect : opInfo->operandEffects) {
+    auto materializeBuffer = [&](Value buf) -> FailureOr<MaterializedEffect> {
       MaterializedEffect materialized;
-      Value buf = effect.buf;
       auto bufType = cast<ttg::MemDescType>(buf.getType());
       materialized.memType = MemType::TENSOR_MEM;
       if (isa<ttg::SharedMemorySpaceAttr>(bufType.getMemorySpace()))
@@ -1047,24 +1041,33 @@ private:
           auxData.bufferCandidates[static_cast<int>(materialized.memType)];
       auto candidateIt = candidateMap.find(buf);
       if (candidateIt == candidateMap.end()) {
-        if (isBarrierLifecycle)
-          continue;
         op->emitError("missing buffer-region candidates for memdesc");
         return failure();
       }
-      Value runtimeBase;
+      materialized.candidates = &candidateIt->second;
       if (!candidateIt->second.unknown && candidateIt->second.cases.size() > 1)
-        runtimeBase = tti::ExperimentalMemDescToI32Op::create(b, buf);
-      FailureOr<Value> stateMask =
-          createBufferStateMask(b, auxData, materialized.memType, runtimeBase,
-                                candidateIt->second, op);
+        materialized.runtimeBase =
+            tti::ExperimentalMemDescToI32Op::create(b, buf);
+      FailureOr<Value> stateMask = createBufferStateMask(
+          b, auxData, materialized.memType, materialized.runtimeBase,
+          candidateIt->second, op);
       if (failed(stateMask))
         return failure();
       materialized.bufferMask = *stateMask;
+      return materialized;
+    };
+
+    for (const auto &effect : opInfo->operandEffects) {
+      FailureOr<MaterializedEffect> maybeMaterialized =
+          materializeBuffer(effect.buf);
+      if (failed(maybeMaterialized))
+        return failure();
+      MaterializedEffect materialized = *maybeMaterialized;
       materialized.effectCTAs =
-          getMemEffectCTAs(b, defaultEffectCTAs, candidateIt->second);
+          getMemEffectCTAs(b, defaultEffectCTAs, *materialized.candidates);
       materializedEffects.push_back(materialized);
 
+      Value buf = effect.buf;
       Value bufferMask = materialized.bufferMask;
       Value effectCTAs = materialized.effectCTAs;
       MemType memType = materialized.memType;
@@ -1088,7 +1091,7 @@ private:
 
       if (memType == MemType::SHARED_MEM &&
           (!isBarrierLifecycle || invalidatesBarriers)) {
-        const BufferStateCandidates &candidates = candidateIt->second;
+        const BufferStateCandidates &candidates = *materialized.candidates;
         for (const auto &[barrier, barrierMask] : auxData.sharedBarrierMasks) {
           Value barrierOffset = tti::ExperimentalMemoryOffsetToI32Op::create(
               b, barrier.baseOffset, memType);
@@ -1110,7 +1113,8 @@ private:
                   tti::ExperimentalMemoryOffsetToI32Op::create(
                       b, candidate.baseOffset, memType);
               Value matchesBase = arith::CmpIOp::create(
-                  b, arith::CmpIPredicate::eq, runtimeBase, candidateBase);
+                  b, arith::CmpIPredicate::eq, materialized.runtimeBase,
+                  candidateBase);
               candidatePred = tti::maybeAnd(b, candidatePred, matchesBase);
             }
             bool singleOwner = candidate.ctaMask &&
@@ -1188,23 +1192,10 @@ private:
               : getBarrierRecipientCTAs(b, op);
       Value completionBufferMask;
       if (thread != baseThread) {
-        auto &candidateMap = auxData.bufferCandidates[(int)MemType::SHARED_MEM];
-        auto candidateIt = candidateMap.find(barrier);
-        if (candidateIt == candidateMap.end()) {
-          op->emitError("missing buffer-region candidates for completion "
-                        "barrier");
+        FailureOr<MaterializedEffect> completion = materializeBuffer(barrier);
+        if (failed(completion))
           return failure();
-        }
-        Value runtimeBase;
-        if (!candidateIt->second.unknown &&
-            candidateIt->second.cases.size() > 1)
-          runtimeBase = tti::ExperimentalMemDescToI32Op::create(b, barrier);
-        FailureOr<Value> stateMask =
-            createBufferStateMask(b, auxData, MemType::SHARED_MEM, runtimeBase,
-                                  candidateIt->second, op);
-        if (failed(stateMask))
-          return failure();
-        completionBufferMask = *stateMask;
+        completionBufferMask = completion->bufferMask;
         // A deferred completion may still touch the barrier after the issuing
         // thread advances. Model that future touch as a reader owned by the
         // synthetic engine. Waiting publishes the reader through the existing

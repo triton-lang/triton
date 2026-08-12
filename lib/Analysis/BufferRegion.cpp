@@ -215,13 +215,6 @@ uint32_t getMemDescStorageOffset(ttg::MemDescType ty, unsigned index) {
                             ty);
 }
 
-bool isUsedAsBarrier(Value v) {
-  return llvm::any_of(v.getUsers(), [&](Operation *user) {
-    auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(user);
-    return barrierOp && llvm::is_contained(barrierOp.getBarriers(), v);
-  });
-}
-
 struct MemDescSubsliceOffsets {
   uint32_t byteOffset = 0;
   uint32_t partitionOffset = 0;
@@ -278,15 +271,6 @@ getMemDescSubsliceUnpaddedOffsets(ttg::MemDescSubsliceOp op) {
   assert(elementSizeBytes > 0 && "element size must be non-zero");
   return MemDescSubsliceOffsets{elementOffset * elementSizeBytes,
                                 partitionOffset, blockOffset};
-}
-
-triton::BufferRegionAnalysis::RegionType getRegionType(Value v) {
-  if (isUsedAsBarrier(v))
-    return triton::BufferRegionAnalysis::RegionType::BARRIER;
-  return isa<ttng::TensorMemorySpaceAttr>(
-             cast<ttg::MemDescType>(v.getType()).getMemorySpace())
-             ? triton::BufferRegionAnalysis::RegionType::TENSOR_MEMORY
-             : triton::BufferRegionAnalysis::RegionType::SHARED_MEMORY;
 }
 
 } // namespace
@@ -627,13 +611,21 @@ LogicalResult BufferRegionAnalysis::visitOperation(
 void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
   op->walk([&](Operation *op) {
     for (const MemoryAccess &access : getMemoryAccesses(op)) {
-      RegionType regionType = getRegionType(access.value);
       const RegionInfo &regionInfo =
           getLatticeElement(access.value)->getValue();
-      if (regionInfo.isUnknown())
-        usedUnknownBufferRegions[regionType] = true;
-      for (const BufferRegionView &view : regionInfo.views)
-        usedBufferRegions[regionType].insert(view.region);
+      auto addRegions = [&](RegionType regionType) {
+        if (regionInfo.isUnknown())
+          usedUnknownBufferRegions[regionType] = true;
+        for (const BufferRegionView &view : regionInfo.views)
+          usedBufferRegions[regionType].insert(view.region);
+      };
+
+      bool isTensorMemory = isa<ttng::TensorMemorySpaceAttr>(
+          cast<ttg::MemDescType>(access.value.getType()).getMemorySpace());
+      addRegions(isTensorMemory ? TENSOR_MEMORY : SHARED_MEMORY);
+      if (auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op))
+        if (llvm::is_contained(barrierOp.getBarriers(), access.value))
+          addRegions(BARRIER);
     }
   });
 }
