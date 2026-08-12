@@ -786,9 +786,7 @@ scf::WhileOp addIterArgsToLoop(OpBuilder &rewriter, scf::WhileOp loop,
   scf::WhileOp newLoop = replaceWhileOpWithNewSignature(
       rewriter, loop, newIterOperands, newIterOperands.getTypes());
 
-  auto conditionOp =
-      cast<scf::ConditionOp>(newLoop.getBefore().front().getTerminator());
-  conditionOp.getArgsMutable().append(
+  newLoop.getConditionOp().getArgsMutable().append(
       newLoop.getBeforeArguments().take_back(newIterOperands.size()));
 
   // Save the caller from insertion point invalidation.
