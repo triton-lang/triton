@@ -198,17 +198,17 @@ private:
 
     funcOp.walk([&](Operation *op) {
       if (auto init = dyn_cast<ttng::InitBarrierOp>(op)) {
-        if (init.getAlloc() == barrier)
+        if (aliases.contains(init.getAlloc()))
           lifecycle.inits.push_back(init);
         return;
       }
       if (auto wait = dyn_cast<ttng::WaitBarrierOp>(op)) {
-        if (wait.getAlloc() == barrier)
+        if (aliases.contains(wait.getAlloc()))
           lifecycle.waits.push_back(wait);
         return;
       }
       if (auto inval = dyn_cast<ttng::InvalBarrierOp>(op)) {
-        if (inval.getAlloc() == barrier)
+        if (aliases.contains(inval.getAlloc()))
           lifecycle.invals.push_back(inval);
         return;
       }

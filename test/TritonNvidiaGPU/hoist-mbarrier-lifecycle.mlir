@@ -171,12 +171,13 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
   // CHECK-NEXT: ttng.init_barrier %[[BAR]], 1
   // CHECK: scf.for {{.*}} iter_args(%[[PHASE:.*]] = %{{.*}}) -> (i32)
+  // CHECK: %[[ALIAS:.*]] = ttg.memdesc_reinterpret %[[BAR]]
   // CHECK: %[[IF_RESULT:.*]] = scf.if {{.*}} -> (i32)
   // CHECK: ttng.wait_barrier %[[BAR]], %[[PHASE]]
   // CHECK-NEXT: %[[THEN_NEXT:.*]] = arith.xori %[[PHASE]],
   // CHECK: scf.yield %[[THEN_NEXT]] : i32
   // CHECK: } else {
-  // CHECK: ttng.wait_barrier %[[BAR]], %[[PHASE]]
+  // CHECK: ttng.wait_barrier %[[ALIAS]], %[[PHASE]]
   // CHECK-NEXT: %[[ELSE_NEXT:.*]] = arith.xori %[[PHASE]],
   // CHECK: scf.yield %[[ELSE_NEXT]] : i32
   // CHECK: scf.yield %[[IF_RESULT]] : i32
@@ -192,6 +193,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %buf0 = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
       %buf1 = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
       %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+      %alias = ttg.memdesc_reinterpret %bar : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       scf.if %pred {
         ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
@@ -202,7 +204,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
         ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
         ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf1, %bar, %true {multicast} :
           !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
-        ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.wait_barrier %alias, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       }
       ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
     }
