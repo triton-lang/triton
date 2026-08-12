@@ -216,17 +216,6 @@ private:
     std::reverse(loops.begin(), loops.end());
   }
 
-  void moveInitialPhaseBeforeLoop(Value initialPhase,
-                                  LoopLikeOpInterface loop) {
-    Operation *loopOp = loop.getOperation();
-    Operation *def = initialPhase.getDefiningOp();
-    if (!def)
-      return;
-    if (def->getBlock() == loopOp->getBlock() && def->isBeforeInBlock(loopOp))
-      return;
-    def->moveBefore(loopOp);
-  }
-
   Block *getLoopBodyBlock(LoopLikeOpInterface loop, Operation *nested) {
     if (auto forOp = dyn_cast<scf::ForOp>(loop.getOperation()))
       return forOp.getBody();
@@ -357,7 +346,11 @@ private:
       waits.insert(wait);
 
     OpBuilder::InsertionGuard guard(builder);
-    moveInitialPhaseBeforeLoop(lifecycle.initialPhase, loops.front());
+    Operation *phaseDef = lifecycle.initialPhase.getDefiningOp();
+    Operation *outerLoop = loops.front().getOperation();
+    if (phaseDef->getBlock() != outerLoop->getBlock() ||
+        !phaseDef->isBeforeInBlock(outerLoop))
+      phaseDef->moveBefore(outerLoop);
 
     builder.setInsertionPoint(loops.front());
     Value phaseOne =
