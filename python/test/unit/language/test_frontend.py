@@ -1,4 +1,5 @@
 import functools
+import importlib.util
 import triton
 import triton.language as tl
 from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
@@ -371,6 +372,30 @@ def test_named_expr():
     anchor(x)
     # CHECK-NEXT: call @{{.*}}anchor{{.*}}(%c0_i32)
     anchor(y)
+
+
+def test_large_elif_chain(tmp_path):
+    source = [
+        "import triton",
+        "import triton.language as tl",
+        "",
+        "@triton.jit",
+        "def kernel(selector):",
+        "    value = selector",
+    ]
+    for index in range(200):
+        keyword = "if" if index == 0 else "elif"
+        source.extend((f"    {keyword} selector == {index}:", "        value += 1"))
+    source.extend(("    else:", "        value -= 1"))
+
+    module_path = tmp_path / "large_elif_chain.py"
+    module_path.write_text("\n".join(source))
+    spec = importlib.util.spec_from_file_location("large_elif_chain", module_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    run_parser(module.kernel, args=(200, ))
 
 
 def test_tuple_assignment_respects_prior_constexpr_annotation():
