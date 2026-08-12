@@ -21,6 +21,7 @@
 #include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
+#include <cassert>
 
 namespace mlir {
 namespace triton {
@@ -101,7 +102,7 @@ private:
       if (roots.contains(root))
         return true;
 
-    return roots.contains(value);
+    return false;
   }
 
   SharedMemoryAliasAnalysis &aliasAnalysis;
@@ -248,12 +249,6 @@ private:
     if (def->getBlock() == loopOp->getBlock() && def->isBeforeInBlock(loopOp))
       return;
     def->moveBefore(loopOp);
-  }
-
-  bool isInWhileBeforeRegion(scf::WhileOp whileOp, Operation *op) {
-    Region *region = op->getParentRegion();
-    return region == &whileOp.getBefore() ||
-           whileOp.getBefore().isAncestor(region);
   }
 
   Block *getLoopBodyBlock(LoopLikeOpInterface loop, bool whileBefore) {
@@ -442,7 +437,9 @@ private:
         Operation *nestedOp = idx + 1 < loops.size()
                                   ? loops[idx + 1].getOperation()
                                   : lifecycle.invals.front().getOperation();
-        whileBefore = isInWhileBeforeRegion(whileOp, nestedOp);
+        Region *nestedRegion = nestedOp->getParentRegion();
+        whileBefore = nestedRegion == &whileOp.getBefore() ||
+                      whileOp.getBefore().isAncestor(nestedRegion);
         loop = addWhilePhaseArg(whileOp, initialPhase, whileBefore, phase);
       }
 
@@ -483,12 +480,12 @@ private:
 
   void moveInitToFunctionEntry(BarrierLifecycle &lifecycle,
                                FunctionOpInterface funcOp) {
-    // TODO: A lifecycle inside an isolated warp-specialization partition
-    // cannot be moved to function scope without explicitly capturing the
-    // barrier in that partition. NVWS ARef barriers are currently allocated
-    // outside partitions, but post-NVWS pipelining can create partition-local
-    // barriers. Handle that case before allowing such a barrier to become a
-    // cross-CTA hoisting candidate.
+    bool isInIsolatedPartition =
+        lifecycle.alloc->getParentOfType<ttg::WarpSpecializePartitionsOp>() !=
+        nullptr;
+    assert(!isInIsolatedPartition &&
+           "cannot hoist mbarrier lifecycle out of an isolated "
+           "warp-specialization partition");
     Block &entry = funcOp->getRegion(0).front();
     lifecycle.alloc->moveBefore(&entry.front());
     lifecycle.inits.front()->moveAfter(lifecycle.alloc);
