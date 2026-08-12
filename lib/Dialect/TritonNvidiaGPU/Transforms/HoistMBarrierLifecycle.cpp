@@ -77,36 +77,20 @@ struct BarrierLifecycle {
 class BarrierAliases {
 public:
   BarrierAliases(Value barrier, SharedMemoryAliasAnalysis &aliasAnalysis)
-      : aliasAnalysis(aliasAnalysis) {
-    collectAliasRoots(barrier, roots);
-  }
+      : aliasAnalysis(aliasAnalysis),
+        roots(
+            aliasAnalysis.getLatticeElement(barrier)->getValue().getAllocs()) {}
 
-  bool contains(Value value) const { return aliasesRoot(value); }
+  bool contains(Value value) const {
+    return value &&
+           llvm::any_of(
+               aliasAnalysis.getLatticeElement(value)->getValue().getAllocs(),
+               [&](Value root) { return roots.contains(root); });
+  }
 
 private:
-  void collectAliasRoots(Value value, llvm::DenseSet<Value> &values) const {
-    auto *lattice = aliasAnalysis.getLatticeElement(value);
-    if (!lattice)
-      return;
-    for (Value alloc : lattice->getValue().getAllocs())
-      values.insert(alloc);
-  }
-
-  bool aliasesRoot(Value value) const {
-    if (!value)
-      return false;
-
-    llvm::DenseSet<Value> valueRoots;
-    collectAliasRoots(value, valueRoots);
-    for (Value root : valueRoots)
-      if (roots.contains(root))
-        return true;
-
-    return false;
-  }
-
   SharedMemoryAliasAnalysis &aliasAnalysis;
-  llvm::DenseSet<Value> roots;
+  const llvm::DenseSet<Value> &roots;
 };
 
 class MBarrierLifecycleHoister {
