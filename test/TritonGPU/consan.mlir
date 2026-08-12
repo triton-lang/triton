@@ -2590,6 +2590,39 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#reduce_groups = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0], [0, 1]]}>
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 32 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
+  // CHECK-LABEL: @reduce_independent_noncontiguous_cta_groups
+  tt.func public @reduce_independent_noncontiguous_cta_groups(
+      %value: tensor<8x256xf32, #reduce_groups>) {
+    // Reducing axis 1 groups CTA {0,2} and {1,3}, without crossing into
+    // the other independent reduction. The recipient masks are 5 or 10.
+    // CHECK: tti.experimental_lock_acquire
+    // CHECK: %[[REDUCE_GROUP_CTA:.*]] = tti.experimental_cluster_cta_id
+    // CHECK: %[[REDUCE_GROUP_FIXED:.*]] = arith.constant 1 : i32
+    // CHECK: %[[REDUCE_GROUP_BASE:.*]] = arith.andi %[[REDUCE_GROUP_CTA]], %[[REDUCE_GROUP_FIXED]] : i32
+    // CHECK: %[[REDUCE_GROUP_PATTERN:.*]] = arith.constant 5 : i32
+    // CHECK: %[[REDUCE_GROUP_SHIFT:.*]] = arith.shli %[[REDUCE_GROUP_PATTERN]], %[[REDUCE_GROUP_BASE]] : i32
+    // CHECK: %[[REDUCE_GROUP_RECIPIENTS:.*]] = arith.ori {{.*}}, %[[REDUCE_GROUP_SHIFT]] : i32
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[REDUCE_GROUP_RECIPIENTS]]
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[REDUCE_GROUP_RECIPIENTS]]
+    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}%[[REDUCE_GROUP_RECIPIENTS]]
+    // CHECK: "tt.reduce"
+    %reduced = "tt.reduce"(%value) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %sum = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %sum : f32
+    }) {allocation.offset = 0 : i32, allocation.size = 32 : i32}
+        : (tensor<8x256xf32, #reduce_groups>)
+        -> tensor<8xf32, #ttg.slice<{dim = 1, parent = #reduce_groups}>>
+    ttng.cluster_barrier {relaxed = true}
+    tt.return
+  }
+}
+
+// -----
+
 #cross_src = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
 #cross_dst = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1]]}>
 

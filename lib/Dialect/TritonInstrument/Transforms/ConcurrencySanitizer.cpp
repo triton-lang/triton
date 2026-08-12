@@ -664,10 +664,15 @@ Value getScratchEffectCTAs(ImplicitLocOpBuilder &b, Operation *op,
   }
 
   if (auto reduce = dyn_cast<tt::ReduceOp>(op)) {
-    auto srcType = reduce.getInputTypes()[0];
-    if (ttg::getCTASplitNum(srcType.getEncoding())[reduce.getAxis()] != 1)
+    LinearLayout srcLayout = ttg::toLinearLayout(reduce.getInputTypes()[0]);
+    auto block = StringAttr::get(op->getContext(), "block");
+    auto axis = *(srcLayout.getOutDimNames().begin() + reduce.getAxis());
+    uint16_t groupMask = getInputBasisMask(srcLayout, block, {axis});
+    if (!groupMask)
+      return currentCTAMask(b);
+    if (groupMask == ttg::lookupNumCTAs(op) - 1)
       return allCTAsMask(b);
-    return currentCTAMask(b);
+    return getRecipientCTAsForBroadcastMasks(b, {groupMask});
   }
 
   if (auto broadcastMask = hooks.getScratchCTABroadcastMask(op)) {
@@ -812,7 +817,6 @@ public:
     entryPoint = publicFuncs.front();
     SmallVector<tt::FuncOp> reachableFunctions;
     if (failed(collectReachableFunctions(reachableFunctions)) ||
-        failed(validateScratchMetadata(reachableFunctions)) ||
         failed(validateNonEntryFunctions(reachableFunctions)))
       return failure();
 
@@ -864,72 +868,6 @@ private:
     return success();
   }
 
-  LogicalResult
-  validateScratchMetadata(ArrayRef<tt::FuncOp> reachableFunctions) {
-    constexpr uint64_t maxSharedMemorySize = uint64_t{1} << 24;
-    for (tt::FuncOp func : reachableFunctions) {
-      WalkResult result = func.walk([&](Operation *op) -> WalkResult {
-        Attribute rawSize = op->getAttr("allocation.size");
-        if (!rawSize)
-          return WalkResult::advance();
-
-        auto size = dyn_cast<IntegerAttr>(rawSize);
-        auto offset =
-            dyn_cast_or_null<IntegerAttr>(op->getAttr("allocation.offset"));
-        if (!size || !offset || !size.getType().isSignlessInteger() ||
-            !offset.getType().isSignlessInteger()) {
-          op->emitError("compiler scratch metadata requires integer "
-                        "allocation.offset and allocation.size attributes");
-          return WalkResult::interrupt();
-        }
-
-        const APInt &offsetValue = offset.getValue();
-        const APInt &sizeValue = size.getValue();
-        bool valid = !offsetValue.isNegative() && !sizeValue.isNegative() &&
-                     !sizeValue.isZero() &&
-                     offsetValue.ule(maxSharedMemorySize) &&
-                     sizeValue.ule(maxSharedMemorySize);
-        if (valid) {
-          uint64_t unsignedOffset = offsetValue.getZExtValue();
-          uint64_t unsignedSize = sizeValue.getZExtValue();
-          valid = unsignedSize <= maxSharedMemorySize - unsignedOffset;
-        }
-        if (!valid) {
-          InFlightDiagnostic diagnostic =
-              op->emitError("invalid compiler scratch allocation metadata: "
-                            "offset ");
-          if (offsetValue.getBitWidth() <= 64)
-            diagnostic << offset.getInt();
-          else
-            diagnostic << offset;
-          diagnostic << ", size ";
-          if (sizeValue.getBitWidth() <= 64)
-            diagnostic << size.getInt();
-          else
-            diagnostic << size;
-          diagnostic << "; the interval must be non-empty and fit in the "
-                        "24-bit shared-memory address space";
-          return WalkResult::interrupt();
-        }
-
-        if (auto info = hooks.getMemEffectsOpInfo(op)) {
-          bool hasSynchronousTracking =
-              info->trackingKind == MemEffectsOpInfo::TrackingKind::None ||
-              info->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier;
-          if (!hasSynchronousTracking || info->implicitCommit) {
-            op->emitError("compiler scratch cannot be combined with "
-                          "asynchronous operation effect tracking");
-            return WalkResult::interrupt();
-          }
-        }
-        return WalkResult::advance();
-      });
-      if (result.wasInterrupted())
-        return failure();
-    }
-    return success();
-  }
-
   bool isCTALocalScratch(Operation *op) const {
     if (!op->hasAttr("allocation.size") || ttg::lookupNumCTAs(op) == 1)
       return true;
@@ -968,7 +906,12 @@ private:
       if (func == entryPoint)
         continue;
       WalkResult result = func.walk([&](Operation *op) -> WalkResult {
-        if (op == func.getOperation() || isa<CallOpInterface>(op))
+        if (op == func.getOperation())
+          return WalkResult::advance();
+        if (op->hasAttr("allocation.size") &&
+            failed(getConSanMemEffectsOpInfo(hooks, op)))
+          return WalkResult::interrupt();
+        if (isa<CallOpInterface>(op))
           return WalkResult::advance();
 
         bool hasUnsupportedAllocation =
@@ -1285,8 +1228,10 @@ private:
                                      int thread,
                                      tti::FunctionBuilder &funcBuilder) {
     int baseThread = getBaseThread(thread, auxData.threadLayout);
-    std::optional<MemEffectsOpInfo> opInfo =
-        getConSanMemEffectsOpInfo(hooks, op);
+    auto opInfoOr = getConSanMemEffectsOpInfo(hooks, op);
+    if (failed(opInfoOr))
+      return failure();
+    const std::optional<MemEffectsOpInfo> &opInfo = *opInfoOr;
     for (const MemoryAccess &access :
          getMemoryAccesses(op, ttg::SharedKind::Barrier)) {
       if (opInfo && llvm::any_of(opInfo->barriers, [&](const auto &barrier) {
