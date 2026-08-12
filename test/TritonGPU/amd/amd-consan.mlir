@@ -336,7 +336,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_invalidate_barrier_storage
     amdg.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_init_barrier_state
+    // CHECK: ttg.local_load
     ttg.local_load %buf : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
+    // CHECK: tt.call @__triton_consan_invalidate_barrier_storage
+    // CHECK: tt.call @__triton_consan_init_barrier_state
+    amdg.init_barrier %bar, 2 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     tt.return
   }
 }
@@ -1000,7 +1004,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK-LABEL: @amd_payload_rejects_live_barrier_storage
   tt.func public @amd_payload_rejects_live_barrier_storage(
       %indices: tensor<16xi32, #lifetime_blocked>,
-      %values: tensor<16xi32, #lifetime_blocked>) {
+      %values: tensor<16xi32, #lifetime_blocked>,
+      %partial: tensor<1xi32, #lifetime_blocked>) {
     %payload = ttg.local_alloc {allocation.offset = 0 : i32}
         : () -> !ttg.memdesc<16xi32, #lifetime_shared, #lifetime_smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 0 : i32}
@@ -1023,30 +1028,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
     // CHECK: amdg.async_copy_mbarrier_arrive
     amdg.async_copy_mbarrier_arrive %uninitialized
-        : !ttg.memdesc<1xi64, #lifetime_shared, #lifetime_smem, mutable>
-    tt.return
-  }
-}
-
-// -----
-
-#lifetime_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#lifetime_smem = #ttg.shared_memory
-#lifetime_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
-  // CHECK-LABEL: @amd_store_invalidates_barrier_storage
-  tt.func public @amd_store_invalidates_barrier_storage(
-      %values: tensor<16xi32, #lifetime_blocked>,
-      %partial: tensor<1xi32, #lifetime_blocked>) {
-    %payload = ttg.local_alloc {allocation.offset = 0 : i32}
-        : () -> !ttg.memdesc<16xi32, #lifetime_shared, #lifetime_smem, mutable>
-    %barrier = ttg.local_alloc {allocation.offset = 0 : i32}
-        : () -> !ttg.memdesc<1xi64, #lifetime_shared, #lifetime_smem, mutable>
-    // CHECK: tt.call @__triton_consan_invalidate_barrier_storage
-    // CHECK-NOT: tt.call @__triton_consan_verify_barrier_can_init
-    // CHECK: tt.call @__triton_consan_init_barrier_state
-    amdg.init_barrier %barrier, 1
         : !ttg.memdesc<1xi64, #lifetime_shared, #lifetime_smem, mutable>
     // CHECK: tt.call @__triton_consan_verify_write_visibility
     // CHECK: tt.call @__triton_consan_verify_read_visibility
@@ -1072,28 +1053,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_barrier_initialized
     // CHECK: amdg.async_copy_mbarrier_arrive
     amdg.async_copy_mbarrier_arrive %barrier
-        : !ttg.memdesc<1xi64, #lifetime_shared, #lifetime_smem, mutable>
-    tt.return
-  }
-}
-
-// -----
-
-#lifetime_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#lifetime_smem = #ttg.shared_memory
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
-  // CHECK-LABEL: @amd_reinitialize_isolated_barrier
-  tt.func public @amd_reinitialize_isolated_barrier() {
-    %barrier = ttg.local_alloc {allocation.offset = 0 : i32}
-        : () -> !ttg.memdesc<1xi64, #lifetime_shared, #lifetime_smem, mutable>
-    // CHECK: tt.call @__triton_consan_invalidate_barrier_storage
-    // CHECK: tt.call @__triton_consan_init_barrier_state
-    amdg.init_barrier %barrier, 1
-        : !ttg.memdesc<1xi64, #lifetime_shared, #lifetime_smem, mutable>
-    // CHECK: tt.call @__triton_consan_invalidate_barrier_storage
-    // CHECK: tt.call @__triton_consan_init_barrier_state
-    amdg.init_barrier %barrier, 2
         : !ttg.memdesc<1xi64, #lifetime_shared, #lifetime_smem, mutable>
     tt.return
   }

@@ -1269,13 +1269,11 @@ Value FunctionBuilder::createInvalidateBarrierStateCallImpl(
         if (allowUninitialized) {
           Value active = arith::CmpIOp::create(fb, arith::CmpIPredicate::ne,
                                                states, zeroState);
-          selectedStates = arith::AndIOp::create(fb, selectedStates, active);
-          initialized = reduceAll<arith::OrIOp>(fb, selectedStates);
+          initialized = reduceAll<arith::OrIOp>(
+              fb, arith::AndIOp::create(fb, selectedStates, active));
         }
 
-        Value waitingMask =
-            convertAndBroadcast(fb, allowUninitialized ? selectedStates : mask,
-                                {0, 1}, waitingType);
+        Value waitingMask = convertAndBroadcast(fb, mask, {0, 1}, waitingType);
         Value waitingCTAMask =
             createLeadCTAEffectMask(fb, waitingType, currentCTA);
         Value selectedWaiters = arith::AndIOp::create(
@@ -2075,6 +2073,16 @@ static void createClearBarrierTrackingCall(
       });
 }
 
+static void createClearBarrierTrackingCall(ImplicitLocOpBuilder &b,
+                                           StringRef functionName, Value mbar,
+                                           Value pred, ValueType barriers,
+                                           ValueType tracking) {
+  createClearBarrierTrackingCall(
+      b, functionName, tti::ExperimentalMemDescToI32Op::create(b, mbar),
+      arith::ConstantIntOp::create(b, getMemDescLength(mbar), 32), pred,
+      nullptr, barriers, tracking);
+}
+
 void FunctionBuilder::createClearBarrierWriteTrackingCall(
     ImplicitLocOpBuilder &b, Value mbar, Value pred, MemType memType,
     Operation *insertPoint) {
@@ -2083,10 +2091,8 @@ void FunctionBuilder::createClearBarrierWriteTrackingCall(
   assert(!auxData.barriers.empty() &&
          "barrier descriptors must exist when clearing barrier write tracking");
   createClearBarrierTrackingCall(
-      b, "clear_barrier_write_tracking",
-      tti::ExperimentalMemDescToI32Op::create(b, mbar),
-      arith::ConstantIntOp::create(b, getMemDescLength(mbar), 32), pred,
-      nullptr, auxData.barriers.at(insertPoint),
+      b, "clear_barrier_write_tracking", mbar, pred,
+      auxData.barriers.at(insertPoint),
       auxData.writeTracking[(int)memType].at(insertPoint));
 }
 
@@ -2098,10 +2104,8 @@ void FunctionBuilder::createClearBarrierReadTrackingCall(
   assert(!auxData.barriers.empty() &&
          "barrier descriptors must exist when clearing barrier read tracking");
   createClearBarrierTrackingCall(
-      b, "clear_barrier_read_tracking",
-      tti::ExperimentalMemDescToI32Op::create(b, mbar),
-      arith::ConstantIntOp::create(b, getMemDescLength(mbar), 32), pred,
-      nullptr, auxData.barriers.at(insertPoint),
+      b, "clear_barrier_read_tracking", mbar, pred,
+      auxData.barriers.at(insertPoint),
       auxData.readTracking[(int)memType].at(insertPoint));
 }
 
@@ -3213,12 +3217,9 @@ void FunctionBuilder::createClearBarrierProxyAccessTrackingCall(
     return;
   assert(!auxData.barriers.empty() &&
          "barrier descriptors must exist when clearing proxy tracking");
-  createClearBarrierTrackingCall(
-      b, "clear_barrier_proxy_tracking",
-      tti::ExperimentalMemDescToI32Op::create(b, mbar),
-      arith::ConstantIntOp::create(b, getMemDescLength(mbar), 32), pred,
-      nullptr, auxData.barriers.at(insertPoint),
-      auxData.proxyAccessTracking.at(insertPoint));
+  createClearBarrierTrackingCall(b, "clear_barrier_proxy_tracking", mbar, pred,
+                                 auxData.barriers.at(insertPoint),
+                                 auxData.proxyAccessTracking.at(insertPoint));
 }
 
 void FunctionBuilder::createVerifyProxyAccessCall(ImplicitLocOpBuilder &b,
