@@ -250,15 +250,12 @@ private:
     // lifecycle completes. The phase is consumed by wait_barrier, so advance it
     // next to that wait and under the wait predicate when the wait is
     // predicated.
-    Value phaseAdvance = phaseOne;
-    Value pred = wait.getPred();
-    if (pred && !matchPattern(pred, m_One())) {
-      Value phaseZero =
-          arith::ConstantIntOp::create(builder, wait.getLoc(), 0, 32);
-      phaseAdvance = arith::SelectOp::create(builder, wait.getLoc(), pred,
-                                             phaseOne, phaseZero);
-    }
-    return arith::XOrIOp::create(builder, wait.getLoc(), phase, phaseAdvance);
+    Value nextPhase =
+        arith::XOrIOp::create(builder, wait.getLoc(), phase, phaseOne);
+    if (Value pred = wait.getPred(); pred && !matchPattern(pred, m_One()))
+      nextPhase = arith::SelectOp::create(builder, wait.getLoc(), pred,
+                                          nextPhase, phase);
+    return nextPhase;
   }
 
   bool containsTrackedWait(Block *block,

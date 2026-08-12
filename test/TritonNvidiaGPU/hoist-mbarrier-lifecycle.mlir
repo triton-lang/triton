@@ -94,9 +94,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-NEXT: ttng.init_barrier %[[BAR]], 1
   // CHECK: scf.for {{.*}} iter_args(%[[PHASE:.*]] = %{{.*}}) -> (i32)
   // CHECK: ttng.wait_barrier %[[BAR]], %[[PHASE]], %[[PRED:.*]] :
-  // CHECK-NEXT: %[[ZERO:.*]] = arith.constant 0 : i32
-  // CHECK-NEXT: %[[ADVANCE:.*]] = arith.select %[[PRED]], %{{.*}}, %[[ZERO]]
-  // CHECK-NEXT: %[[NEXT:.*]] = arith.xori %[[PHASE]], %[[ADVANCE]]
+  // CHECK-NEXT: %[[ADVANCE:.*]] = arith.xori %[[PHASE]],
+  // CHECK-NEXT: %[[NEXT:.*]] = arith.select %[[PRED]], %[[ADVANCE]], %[[PHASE]]
   // CHECK: scf.yield %[[NEXT]]
   // CHECK: ttng.inval_barrier %[[BAR]]
   // CHECK-NEXT: tt.return
@@ -633,9 +632,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttng.cluster_barrier
   // CHECK-NEXT: %[[WAIT_PRED:.*]] = arith.cmpi ne,
   // CHECK-NEXT: ttng.wait_barrier %[[BARRIER]], %[[PHASE]], %[[WAIT_PRED]]
-  // CHECK-NEXT: %[[PHASE_ZERO:.*]] = arith.constant 0 : i32
-  // CHECK-NEXT: %[[ADVANCE:.*]] = arith.select %[[WAIT_PRED]], %{{.*}}, %[[PHASE_ZERO]]
-  // CHECK-NEXT: %[[NEXT_PHASE:.*]] = arith.xori %[[PHASE]], %[[ADVANCE]]
+  // CHECK-NEXT: %[[ADVANCE:.*]] = arith.xori %[[PHASE]],
+  // CHECK-NEXT: %[[NEXT_PHASE:.*]] = arith.select %[[WAIT_PRED]], %[[ADVANCE]], %[[PHASE]]
   // CHECK: scf.yield %[[NEXT_PHASE]]
   // CHECK: ttng.inval_barrier %[[BARRIER]]
   tt.func @synchronous_arrive_with_varying_wait_predicate() {
