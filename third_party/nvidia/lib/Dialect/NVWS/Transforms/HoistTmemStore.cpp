@@ -26,6 +26,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Interfaces/InferIntRangeInterface.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
@@ -53,22 +54,13 @@ namespace triton {
 namespace {
 
 bool underWSLoop(Operation *op) {
-  scf::ForOp topLevelFor = op->getParentOfType<scf::ForOp>();
-  if (!topLevelFor) {
-    return false;
-  }
-
-  if (topLevelFor->hasAttr(kWarpSpecializeAttrName)) {
-    return true;
-  } else {
-    while (auto outer = topLevelFor->getParentOfType<scf::ForOp>()) {
-      topLevelFor = outer;
-      if (outer->hasAttr(kWarpSpecializeAttrName)) {
-        return true;
-      }
+  for (Operation *parent = op->getParentOp(); parent;
+       parent = parent->getParentOp()) {
+    if (isa<scf::ForOp, scf::WhileOp>(parent) &&
+        parent->hasAttr(kWarpSpecializeAttrName)) {
+      return true;
     }
   }
-
   return false;
 }
 
@@ -197,18 +189,18 @@ bool canProveExecuteOnce(scf::ForOp forOp) {
 
 bool hoistTmemAlloc(ttng::TMEMAllocOp allocToHoist) {
   // extra loop nest
-  SmallVector<scf::ForOp> loopNest;
-  auto currentForOp = allocToHoist->getParentOfType<scf::ForOp>();
-  while (currentForOp && !currentForOp->hasAttr(kWarpSpecializeAttrName)) {
-    loopNest.push_back(currentForOp);
-    currentForOp = currentForOp->getParentOfType<scf::ForOp>();
+  SmallVector<LoopLikeOpInterface> loopNest;
+  auto currentLoop = allocToHoist->getParentOfType<LoopLikeOpInterface>();
+  while (currentLoop && !currentLoop->hasAttr(kWarpSpecializeAttrName)) {
+    loopNest.push_back(currentLoop);
+    currentLoop = currentLoop->getParentOfType<LoopLikeOpInterface>();
   }
 
-  if (!currentForOp) {
+  if (!currentLoop) {
     return false;
   }
 
-  loopNest.push_back(currentForOp);
+  loopNest.push_back(currentLoop);
 
   {
     // Check if hoisting across all loop nests is valid. Hoisting is invalid
@@ -226,9 +218,10 @@ bool hoistTmemAlloc(ttng::TMEMAllocOp allocToHoist) {
       return false;
     }
 
-    SmallVector<scf::ForOp> innerLoopNest{opt->first};
-    innerLoopNest.insert(innerLoopNest.begin(), loopNest.begin(),
-                         loopNest.end() - 1);
+    SmallVector<scf::ForOp> innerLoopNest;
+    for (LoopLikeOpInterface loop : ArrayRef(loopNest).drop_back())
+      innerLoopNest.push_back(cast<scf::ForOp>(loop.getOperation()));
+    innerLoopNest.push_back(opt->first);
 
     // Does the expression x depend on y?
     auto dependOn = [](Value x, Value y) {
@@ -246,11 +239,19 @@ bool hoistTmemAlloc(ttng::TMEMAllocOp allocToHoist) {
 
     for (auto [i, innerFor] : llvm::enumerate(innerLoopNest)) {
       for (int j = i; j < loopNest.size(); ++j) {
-        auto outerForIter = loopNest[j].getInductionVar();
-        if ((dependOn(innerFor.getLowerBound(), outerForIter) ||
-             dependOn(innerFor.getUpperBound(), outerForIter)) &&
-            !canProveExecuteOnce(innerFor)) {
-          // Cannot hoist this tmem alloc across the outer loop loopNest[j]
+        auto outerLoop = loopNest[j];
+        bool depends;
+        if (auto outerFor = dyn_cast<scf::ForOp>(outerLoop.getOperation())) {
+          auto outerForIter = outerFor.getInductionVar();
+          depends = dependOn(innerFor.getLowerBound(), outerForIter) ||
+                    dependOn(innerFor.getUpperBound(), outerForIter);
+        } else {
+          auto outerWhile = cast<scf::WhileOp>(outerLoop.getOperation());
+          depends =
+              !outerWhile.isDefinedOutsideOfLoop(innerFor.getLowerBound()) ||
+              !outerWhile.isDefinedOutsideOfLoop(innerFor.getUpperBound());
+        }
+        if (depends && !canProveExecuteOnce(innerFor)) {
           return false;
         }
       }
@@ -258,36 +259,49 @@ bool hoistTmemAlloc(ttng::TMEMAllocOp allocToHoist) {
   }
 
   // hoist to outside tt.warp_specialized loop
-  allocToHoist->moveBefore(currentForOp);
+  allocToHoist->moveBefore(currentLoop);
   allocToHoist->removeAttr(kPartitionAttrName);
 
   Value token = allocToHoist.getToken();
   assert(token.hasOneUse());
   auto &tokenUse = *token.getUses().begin();
+  auto currentForOp = cast<scf::ForOp>(tokenUse.getOwner());
   auto tokenPos =
       tokenUse.getOperandNumber() - currentForOp.getNumControlOperands();
   auto tokenPartition = getPartitionOutputs(tokenUse.getOwner())[tokenPos];
 
-  // thread token to for-op init/iter args from outer-to inner
+  // thread token to loop init/iter args from outer-to inner
   std::reverse(loopNest.begin(), loopNest.end());
-  for (auto &forOp : loopNest) {
-    OpBuilder b(forOp);
-    int nArgs = forOp.getRegionIterArgs().size();
-    forOp = addIterArgsToLoop(b, forOp, {token});
-
-    // update partitions for the forOp
-    if (forOp->hasAttr(kPartitionOutputsAttrName)) {
-      auto partitionOuputs = getPartitionOutputs(forOp);
-      partitionOuputs.push_back(tokenPartition);
-      setPartitionOutputs(forOp, partitionOuputs);
+  for (LoopLikeOpInterface &loop : loopNest) {
+    if (auto forOp = dyn_cast<scf::ForOp>(loop.getOperation())) {
+      OpBuilder builder(forOp);
+      forOp = addIterArgsToLoop(builder, forOp, {token});
+      token = forOp.getRegionIterArgs().back();
+      loop = forOp;
     } else {
-      setPartitionOutputs(forOp, {tokenPartition});
+      auto whileOp = cast<scf::WhileOp>(loop.getOperation());
+      auto oldWhile = whileOp;
+      OpBuilder builder(whileOp);
+      whileOp = replaceWhileOpWithNewSignature(builder, whileOp, {token},
+                                               {token.getType()});
+      oldWhile.erase();
+      whileOp.getConditionOp().getArgsMutable().append(
+          whileOp.getBeforeArguments().back());
+      token = whileOp.getAfterArguments().back();
+      loop = whileOp;
     }
-    auto partitions = getPartitionIds(forOp);
-    partitions.insert(tokenPartition.begin(), tokenPartition.end());
-    setPartition(forOp, partitions);
 
-    token = forOp.getRegionIterArg(nArgs);
+    // update partitions for the loop
+    if (loop->hasAttr(kPartitionOutputsAttrName)) {
+      auto outputs = getPartitionOutputs(loop);
+      outputs.push_back(tokenPartition);
+      setPartitionOutputs(loop, outputs);
+    } else {
+      setPartitionOutputs(loop, {tokenPartition});
+    }
+    auto partitions = getPartitionIds(loop);
+    partitions.insert(tokenPartition.begin(), tokenPartition.end());
+    setPartition(loop, partitions);
   }
 
   // set inner loop init_args with updated token
@@ -310,10 +324,17 @@ bool hoistTmemAlloc(ttng::TMEMAllocOp allocToHoist) {
 
   // append token to yield, from inner to outer loop
   std::reverse(loopNest.begin(), loopNest.end());
-  for (auto forOp : loopNest) {
-    appendToForOpYield(forOp, {token});
-    setPartition(forOp.getBody()->getTerminator(), getPartitionIds(forOp));
-    token = forOp->getResults().back();
+  for (auto loop : loopNest) {
+    if (auto forOp = dyn_cast<scf::ForOp>(loop.getOperation())) {
+      appendToForOpYield(forOp, {token});
+      setPartition(forOp.getBody()->getTerminator(), getPartitionIds(forOp));
+    } else {
+      cast<scf::WhileOp>(loop.getOperation())
+          .getYieldOp()
+          .getResultsMutable()
+          .append(token);
+    }
+    token = loop->getResults().back();
   }
 
   return true;
@@ -335,27 +356,33 @@ public:
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();
 
-    m.walk([&](scf::ForOp loop) {
-      if (loop->hasAttr(kWarpSpecializeAttrName)) {
-        SmallVector<ttng::TMEMAllocOp> tmemAllocToHoist;
-        loop.walk([&](ttng::TMEMAllocOp tmemAlloc) {
-          if (tmemAlloc.getSrc() && canRemoveTmemStore(tmemAlloc)) {
-            tmemAllocToHoist.push_back(tmemAlloc);
-          }
-        });
-
-        for (auto alloc : tmemAllocToHoist) {
-          if (!hoistTmemAlloc(alloc)) {
-            SetVector<int> mmaPartition;
-            mmaPartition.insert(1);
-            // tmem store remaining in the outer loop must belong to the MMA
-            // partition. This is required by aref-tmem-insert for correctly
-            // double buffering this accumulator.
-            setPartition(alloc, mmaPartition);
-          }
-        }
-      }
+    SmallVector<LoopLikeOpInterface> loops;
+    m.walk([&](LoopLikeOpInterface loop) {
+      if (isa<scf::ForOp, scf::WhileOp>(loop.getOperation()) &&
+          loop->hasAttr(kWarpSpecializeAttrName))
+        loops.push_back(loop);
     });
+
+    for (LoopLikeOpInterface loop : loops) {
+      SmallVector<ttng::TMEMAllocOp> tmemAllocToHoist;
+      loop->walk([&](ttng::TMEMAllocOp tmemAlloc) {
+        if (tmemAlloc.getSrc() && canRemoveTmemStore(tmemAlloc)) {
+          tmemAllocToHoist.push_back(tmemAlloc);
+        }
+      });
+
+      for (auto alloc : tmemAllocToHoist) {
+        if (hoistTmemAlloc(alloc))
+          continue;
+
+        SetVector<int> mmaPartition;
+        mmaPartition.insert(1);
+        // A TMEM store remaining in the outer loop must belong to the MMA
+        // partition. This is required by aref-tmem-insert for correctly
+        // double buffering this accumulator.
+        setPartition(alloc, mmaPartition);
+      }
+    }
   }
 }; // namespace triton
 

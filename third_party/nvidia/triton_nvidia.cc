@@ -134,6 +134,12 @@ void init_triton_nvidia_passes_ttgpuir(py::module_ &m) {
           pm.addPass(mlir::triton::createAllocateSharedMemoryNvPass(
               capability, ptxVersion));
         });
+  m.def("add_set_minimum_shared_memory",
+        [](mlir::PassManager &pm, int32_t minimumSize) {
+          mlir::triton::SetMinimumSharedMemoryOptions options;
+          options.minimumSize = minimumSize;
+          pm.addPass(mlir::triton::createSetMinimumSharedMemory(options));
+        });
   m.def("add_to_llvmir",
         [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion,
            bool enableConcurrencySanitizer) {
@@ -167,6 +173,8 @@ createInitializeWSClusterBarriersWrapper(int32_t capability,
 
 void init_triton_nvidia_passes_ttnvgpuir(py::module_ &m) {
   ADD_PASS_WRAPPER_0("add_plan_cta", ttng::createTritonNvidiaGPUPlanCTAPass);
+  ADD_PASS_WRAPPER_0("add_to_clc", ttng::createTritonNvidiaGPUToCLCPass);
+  ADD_PASS_WRAPPER_0("add_lower_clc", ttng::createTritonNvidiaGPULowerCLCPass);
   ADD_PASS_WRAPPER_1("add_fence_insertion",
                      createTritonGPUFenceInsertionWrapper, int32_t);
   ADD_PASS_WRAPPER_1("add_proxy_fence_insertion",

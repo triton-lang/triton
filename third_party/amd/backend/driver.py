@@ -291,7 +291,6 @@ def make_tensordesc_arg(arg, tensordesc_metadata, base_args):
     strides = arg.strides
     base = arg.base.data_ptr()
 
-    assert "elem_bits" in tensordesc_metadata and "block_size" in tensordesc_metadata
     elem_bits = tensordesc_metadata["elem_bits"]
     block_size = tensordesc_metadata["block_size"]
     pad_interval, pad_amount = 0, 0

@@ -1,4 +1,5 @@
 #include "triton/Analysis/Membar.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -32,6 +33,12 @@ AllocationSlice::AllocationSlice(Value value,
 bool AllocationSlice::intersects(const AllocationSlice &other) const {
   // Disjoint intervals don't overlap
   if (!allocationInterval.intersects(other.allocationInterval))
+    return false;
+
+  // For slices of the same allocation, compare dynamic buffer indices to prove
+  // that different slots do not overlap.
+  if (bufferId == other.bufferId && bufferId != Allocation::InvalidBufferId &&
+      areBufferIndicesProvablyDifferent(*this, other))
     return false;
 
   // If access types are unknown, assume intersection
@@ -123,14 +130,6 @@ bool containsLocalBarrier(Operation *op) {
   return false;
 }
 
-struct LocalBarrierStages {
-  // Stages are independent: for example, a release atomic with scratch has
-  // both a leading ordering barrier and a scratch rendezvous.
-  bool beforeMemoryEffects = false;
-  bool afterMemoryEffects = false;
-  bool betweenMemoryEffects = false;
-};
-
 static Allocation::BufferId getScratchBufferId(Operation *op,
                                                Allocation *allocation) {
   // A call's allocation belongs to the callee and is translated separately.
@@ -152,9 +151,9 @@ static bool scratchBufferUsesWarpSync(Operation *op) {
   return mlir::isCvtDimSync(srcLayout, dstLayout, kWarp);
 }
 
-static LocalBarrierStages getLocalBarrierStages(Operation *op,
-                                                Allocation *allocation) {
-  LocalBarrierStages stages;
+static triton::BarrierStages getLocalBarrierStages(Operation *op,
+                                                   Allocation *allocation) {
+  triton::BarrierStages stages;
   auto scratchBufferId = getScratchBufferId(op, allocation);
   bool hasScratchBarrier = scratchBufferId != Allocation::InvalidBufferId &&
                            !scratchBufferUsesWarpSync(op);
@@ -168,16 +167,10 @@ static LocalBarrierStages getLocalBarrierStages(Operation *op,
   }
 
   if (auto atomic = dyn_cast<triton::AtomicOpInterface>(op)) {
-    auto sem = atomic.getMemSemantic();
-    stages.beforeMemoryEffects = sem == triton::MemSemantic::RELEASE ||
-                                 sem == triton::MemSemantic::ACQUIRE_RELEASE;
-    stages.afterMemoryEffects =
-        !hasScratchBarrier && (sem == triton::MemSemantic::ACQUIRE ||
-                               sem == triton::MemSemantic::ACQUIRE_RELEASE);
-    // Scalar-result broadcast uses a scratch write, rendezvous, and read for
+    // Atomic result broadcast uses a scratch write, rendezvous, and read for
     // every memory semantic, including relaxed.
-    stages.betweenMemoryEffects = hasScratchBarrier;
-    return stages;
+    return triton::getAtomicBarrierStages(atomic.getMemSemantic(),
+                                          hasScratchBarrier);
   }
 
   // Scratch-backed operations contain a rendezvous between their scratch
@@ -212,6 +205,18 @@ static bool hasSyncPointBeforeMemoryEffect(Operation *op,
       return false;
   }
   return false;
+}
+
+void MembarAnalysis::updateSuccessor(Operation *terminator, Block *successor,
+                                     BlockInfo *blockInfo) {
+  if (bufferIndexAnalysis.isBackedgeSuccessor(terminator, successor))
+    bufferIndexAnalysis.invalidateBufferIndices(*blockInfo);
+}
+
+void MembarAnalysis::updateExitState(BlockInfo *blockInfo) {
+  // Function summaries are reused at every call site, so per-function SSA
+  // index identity is no longer meaningful.
+  bufferIndexAnalysis.invalidateBufferIndices(*blockInfo);
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
@@ -269,7 +274,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           for (auto bufferId : allocation.getAllBufferIdsWithAliases(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
               auto interval = allocation.getAllocatedInterval(bufferId);
-              auto slice = AllocationSlice(value, interval, bufferId);
+              auto slice =
+                  bufferIndexAnalysis.makeSlice(value, interval, bufferId);
 
               if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
                 curBlockInfo.syncWriteSlices[slice].insert(op);

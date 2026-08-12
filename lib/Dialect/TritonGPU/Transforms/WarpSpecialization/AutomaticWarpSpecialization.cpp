@@ -30,7 +30,7 @@ struct VerifyWarpSpecializationPartitions
       VerifyWarpSpecializationPartitions)
 
   void runOnOperation() override {
-    WalkResult result = getOperation().walk([&](scf::ForOp loop) {
+    WalkResult result = getOperation().walk([&](LoopLikeOpInterface loop) {
       if (!loop->hasAttr(kPartitionStagesAttrName))
         return WalkResult::advance();
       if (failed(verifyPartitionedLoop(loop))) {
@@ -53,12 +53,12 @@ struct AutomaticWarpSpecialization
 };
 
 void multiBufferTMADescriptors(ModuleOp mod, int numStages) {
-  SetVector<scf::ForOp> descUpdateLoops;
-  mod.walk([&](scf::ForOp loop) {
+  SetVector<LoopLikeOpInterface> descUpdateLoops;
+  mod.walk([&](LoopLikeOpInterface loop) {
     if (loop->hasAttr(kWarpSpecializeAttrName)) {
       loop.walk([&](triton::MakeTensorDescOp op) {
-        if (auto forOp = op->getParentOfType<scf::ForOp>()) {
-          descUpdateLoops.insert(forOp);
+        if (auto loopOp = op->getParentOfType<LoopLikeOpInterface>()) {
+          descUpdateLoops.insert(loopOp);
         }
       });
     }
@@ -99,6 +99,7 @@ void AutomaticWarpSpecialization::runOnOperation() {
     pm.addPass(createVerifyWarpSpecializationPartitionsPass());
   };
 
+  pm.addPass(createTritonGPUNormalizeWSWhileLoops());
   addPassWithPartitionVerifier(createTritonGPUPartitionScheduling());
   addPassWithPartitionVerifier(createNVWSHoistTmemStore());
   addPassWithPartitionVerifier(createNVWSInsertAref());

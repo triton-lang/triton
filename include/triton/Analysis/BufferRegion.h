@@ -2,12 +2,15 @@
 #define TRITON_ANALYSIS_BUFFER_REGION_H
 
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <tuple>
 #include <utility>
 
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/IR/Value.h"
+#include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -15,6 +18,10 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SparseBitVector.h"
 #include "llvm/ADT/UniqueVector.h"
+
+namespace mlir::triton::gpu {
+enum class SharedKind : uint32_t;
+}
 
 namespace mlir::triton {
 
@@ -125,6 +132,9 @@ struct BufferRegionView {
            region.contains(other.region);
   }
 
+  BufferRegionView translated(uint32_t offset,
+                              uint32_t newAllocationFrame) const;
+
 private:
   auto key() const {
     return std::tie(allocationFrame, region, storageBase, affineOffset,
@@ -140,6 +150,9 @@ public:
     return key() < other.key();
   }
 };
+
+/// An exact access view, or no view when the physical region is unknown.
+using BufferRegionAccess = std::optional<BufferRegionView>;
 
 //===----------------------------------------------------------------------===//
 // Buffer state planning
@@ -210,6 +223,27 @@ struct RegionInfo {
   }
 };
 
+enum class RW { Read, Write };
+
+struct MemoryAccess {
+  Value value;
+  bool isWrite;
+  bool isRead;
+  std::optional<gpu::SharedKind> sharedKind;
+
+  bool isShared() const { return sharedKind.has_value(); }
+  bool isShared(gpu::SharedKind kind) const { return sharedKind == kind; }
+};
+
+llvm::SmallVector<MemoryAccess>
+getMemoryAccesses(Operation *op,
+                  std::optional<gpu::SharedKind> kind = std::nullopt,
+                  std::optional<RW> rw = std::nullopt);
+
+bool hasSharedAccess(Operation *op,
+                     std::optional<gpu::SharedKind> kind = std::nullopt,
+                     std::optional<RW> rw = std::nullopt);
+
 //===----------------------------------------------------------------------===//
 // BufferRegionAnalysis (Sparse Forward Dataflow)
 //===----------------------------------------------------------------------===//
@@ -228,12 +262,19 @@ public:
 
   enum RegionType { SHARED_MEMORY, TENSOR_MEMORY, BARRIER, NUM_REGION_TYPES };
 
-  struct MemoryAccess {
-    Value value;
-    bool isWrite;
-  };
+  const RegionInfo &getRegionInfo(Value value) {
+    return getLatticeElement(value)->getValue();
+  }
 
-  static llvm::SmallVector<MemoryAccess> getMemoryAccesses(Operation *op);
+  /// Return every exact view an access may reference. A null view represents
+  /// an unknown region and therefore may alias any other view.
+  llvm::SmallVector<BufferRegionAccess> getAccessRegions(Value value);
+
+  /// Translate a callee-local view into the caller's allocation frame.
+  BufferRegionAccess translateToCallsite(BufferRegionAccess view,
+                                         CallOpInterface call,
+                                         FunctionOpInterface caller,
+                                         FunctionOpInterface callee) const;
 
   uint32_t getOperationId(Operation *operation) const {
     return operationInterner.idFor(operation);

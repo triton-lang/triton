@@ -4,7 +4,7 @@ import pytest
 import triton
 import argparse
 from triton.experimental import gluon
-from triton.experimental.gluon.language.amd.gfx1250 import tdm
+from triton.experimental.gluon.language.amd.cdna5 import tdm
 import triton.experimental.gluon.language as gl
 from triton.language.core import _aggregate as aggregate
 
@@ -27,12 +27,12 @@ from triton_kernels.testing import assert_close
 
 # Handle imports for both pytest (module context) and direct execution
 try:
-    from .gfx1250_utils import static_profile, composition
+    from .cdna5_utils import static_profile, composition
     from .moe_utils.specialize import SpecializationModule
     from .moe_utils.misc import _import_from_triton, quantize_weight, get_scaled_dot_format_string, DType
     from .moe_utils.testing import make_random_tensor
 except ImportError:
-    from gfx1250_utils import static_profile, composition
+    from cdna5_utils import static_profile, composition
     from moe_utils.specialize import SpecializationModule
     from moe_utils.misc import _import_from_triton, quantize_weight, get_scaled_dot_format_string, DType
     from moe_utils.testing import make_random_tensor
@@ -204,11 +204,11 @@ class MoEConfig:
                                 k_width=DOT_K_WIDTH))
         if self.USE_WMMA_SCALED:
             self.layout_x_scale = gl.constexpr(
-                gl.amd.gfx1250.get_wmma_scale_layout(self.dot_layout_x,
-                                                     [BLOCK_M // NUM_SUBTILES_M, BLOCK_K_SCALE // NUM_SUBTILES_K]))
+                gl.amd.cdna5.get_wmma_scale_layout(self.dot_layout_x,
+                                                   [BLOCK_M // NUM_SUBTILES_M, BLOCK_K_SCALE // NUM_SUBTILES_K]))
             self.layout_w_scale = gl.constexpr(
-                gl.amd.gfx1250.get_wmma_scale_layout(self.dot_layout_w,
-                                                     [BLOCK_N // NUM_SUBTILES_N, BLOCK_K_SCALE // NUM_SUBTILES_K]))
+                gl.amd.cdna5.get_wmma_scale_layout(self.dot_layout_w,
+                                                   [BLOCK_N // NUM_SUBTILES_N, BLOCK_K_SCALE // NUM_SUBTILES_K]))
         else:
             # Scale layouts are not needed for non-scaled WMMA
             self.layout_x_scale = gl.constexpr(0)
@@ -329,9 +329,9 @@ class MoEProgramBase:
     def wmma(self, x, scale_x, w, scale_w, accumulator):
         cfg = self.cfg
         if cfg.USE_WMMA_SCALED:
-            return gl.amd.gfx1250.wmma_scaled(x, scale_x, cfg.DTYPE_X, w, scale_w, cfg.DTYPE_W, accumulator)
+            return gl.amd.cdna5.wmma_scaled(x, scale_x, cfg.DTYPE_X, w, scale_w, cfg.DTYPE_W, accumulator)
         else:
-            return gl.amd.gfx1250.wmma(x, w, accumulator)
+            return gl.amd.cdna5.wmma(x, w, accumulator)
 
     @gluon.jit
     def issue_global_loads(self, load_idx, pred=1):
@@ -1187,7 +1187,7 @@ def _matmul(Y, stride_y_k, stride_y_z, stride_y_m, stride_y_n, X, stride_x_z, st
 
         y_offs = offs_y_m.to(cfg.index_type)[:, None] * stride_y_m + offs_y_n.to(cfg.index_type)[None, :] * stride_y_n
         y_mask = mask_m[:, None] & mask_n[None, :]
-        gl.amd.gfx1250.buffer_store(out, Y_ptr, y_offs, mask=y_mask)
+        gl.amd.cdna5.buffer_store(out, Y_ptr, y_offs, mask=y_mask)
 
 
 specializations = SpecializationModule(

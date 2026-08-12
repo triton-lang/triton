@@ -40,7 +40,7 @@ uint32_t getBlockBroadcastMask(Type type) {
 class NVIDIAConSanHooks : public tti::ConSanTargetHooks {
 public:
   bool isTMAOp(Operation *op) const override {
-    return isa<ttng::TMAOpInterface>(op);
+    return isa<ttng::TMAOpInterface, ttng::AsyncSharedStoreOp>(op);
   }
 
   bool isCLCOp(Operation *op) const override {
@@ -94,9 +94,7 @@ public:
   bool needsAsyncProxyFenceTracking(ModuleOp module) const override {
     bool needed = false;
     module.walk([&](Operation *op) {
-      needed |= isa<ttng::TMALoadLikeOpInterface, ttng::CLCTryCancelOp,
-                    ttng::WarpGroupDotOp, ttng::MMAv5OpInterface,
-                    ttng::TMEMCopyOp, ttng::TMAStoreLikeOpInterface>(op);
+      needed |= hasSharedAccess(op, ttg::SharedKind::Async);
     });
     return needed;
   }
@@ -150,101 +148,56 @@ public:
 
   std::optional<MemEffectsOpInfo>
   getMemEffectsOpInfo(Operation *op) const override {
-    std::optional<MemEffectsOpInfo> info;
-    if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
+    std::optional<MemEffectsOpInfo> info =
+        ConSanTargetHooks::getMemEffectsOpInfo(op);
+    if (!info) {
+      if (!isa<ttng::BarrierExpectOp, ttng::TCGen5CommitOp,
+               ttng::ArriveBarrierOp>(op))
+        return std::nullopt;
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+    }
+
+    SmallVector<std::pair<Value, StringRef>> namedOperands;
+    if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
       info->pred = expectOp.getPred();
       info->barriers.push_back(
           {expectOp.getBarrier(), nullptr,
            /*count=*/1, MemEffectsOpInfo::BarrierTrackingMode::Frontier,
            /*txCount=*/static_cast<int>(expectOp.getSize())});
     }
-    if (auto loadOp = dyn_cast<ttng::TMEMLoadOp>(op)) {
-      info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Read,
-                                        loadOp.getSrc());
-    }
-    if (auto storeOp = dyn_cast<ttng::TMEMStoreOp>(op)) {
-      info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
-                                        storeOp.getDst());
-    }
-    if (auto allocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
-      if (allocOp.getSrc()) {
-        info.emplace();
-        info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-        info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
-                                          allocOp.getResult());
-      }
-    }
     if (auto copyOp = dyn_cast<ttng::TMEMCopyOp>(op)) {
-      info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-      info->operandEffects.emplace_back(
-          MemEffectsOpInfo::Effects::Read, copyOp.getSrc(), "Src",
-          MemEffectsOpInfo::Effects::Proxy::Async);
-      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
-                                        copyOp.getDst(), "Dst");
+      namedOperands = {{copyOp.getSrc(), "Src"}, {copyOp.getDst(), "Dst"}};
     }
     if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
-      info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = mmav5Op.getPredicate();
       for (auto [barrier, barrierPred] :
            llvm::zip(mmav5Op.getCompletionBarriers(),
                      mmav5Op.getCompletionBarrierPreds())) {
         info->barriers.push_back({barrier, barrierPred, 1});
       }
-      info->operandEffects.emplace_back(
-          MemEffectsOpInfo::Effects::Read, mmav5Op.getA(), "A",
-          MemEffectsOpInfo::Effects::Proxy::Async);
-      info->operandEffects.emplace_back(
-          MemEffectsOpInfo::Effects::Read, mmav5Op.getB(), "B",
-          MemEffectsOpInfo::Effects::Proxy::Async);
-      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
-                                        mmav5Op.getAccumulator(), "Acc");
+      namedOperands = {{mmav5Op.getA(), "A"},
+                       {mmav5Op.getB(), "B"},
+                       {mmav5Op.getAccumulator(), "Acc"}};
       if (auto mmaScaledOp = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
-        info->operandEffects.emplace_back(
-            MemEffectsOpInfo::Effects::Read, mmaScaledOp.getAScale(), "AScale",
-            MemEffectsOpInfo::Effects::Proxy::Async);
-        info->operandEffects.emplace_back(
-            MemEffectsOpInfo::Effects::Read, mmaScaledOp.getBScale(), "BScale",
-            MemEffectsOpInfo::Effects::Proxy::Async);
+        namedOperands.emplace_back(mmaScaledOp.getAScale(), "AScale");
+        namedOperands.emplace_back(mmaScaledOp.getBScale(), "BScale");
       }
     }
     if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {
-      info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = commitOp.getPred();
       info->barriers.push_back({commitOp.getBarrier(), nullptr, 1});
     }
     if (auto wgmmaOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
-      info.emplace();
       if (wgmmaOp.getIsAsync() == true) {
         info->trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
         info->commitKind = tti::CommitKind::Wgmma;
         info->implicitCommit = true;
         info->barriers = {};
       }
-      if (isa<ttg::SharedEncodingTrait>(
-              wgmmaOp.getA().getType().getEncoding())) {
-        info->operandEffects.emplace_back(
-            MemEffectsOpInfo::Effects::Read, wgmmaOp.getA(), "A",
-            MemEffectsOpInfo::Effects::Proxy::Async);
-      }
-      if (isa<ttg::SharedEncodingTrait>(
-              wgmmaOp.getB().getType().getEncoding())) {
-        info->operandEffects.emplace_back(
-            MemEffectsOpInfo::Effects::Read, wgmmaOp.getB(), "B",
-            MemEffectsOpInfo::Effects::Proxy::Async);
-      }
+      namedOperands = {{wgmmaOp.getA(), "A"}, {wgmmaOp.getB(), "B"}};
     }
     if (auto loadOp = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
-      info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = loadOp.getPred();
       int txCount = tti::getMemDescLength(loadOp.getResult());
       if (loadOp.getMulticast()) {
@@ -260,56 +213,44 @@ public:
           {loadOp.getBarrier(), nullptr, /*count=*/0,
            MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
            /*txCount=*/-txCount});
-      info->operandEffects.emplace_back(
-          MemEffectsOpInfo::Effects::Write, loadOp.getResult(), "",
-          MemEffectsOpInfo::Effects::Proxy::Async);
     }
     if (auto storeOp = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
-      info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->barriers.push_back(
           {storeOp.getBarrier(), nullptr, /*count=*/0,
            MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
            /*txCount=*/
            -static_cast<int>(tti::getMemDescLength(storeOp.getDst()))});
-      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
-                                        storeOp.getDst());
     }
     if (auto tryCancelOp = dyn_cast<ttng::CLCTryCancelOp>(op)) {
-      info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->barriers.push_back(
           {tryCancelOp.getMbarrier(), nullptr, /*count=*/0,
            MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
            /*txCount=*/
            -static_cast<int>(tti::getMemDescLength(tryCancelOp.getResult()))});
-      info->operandEffects.emplace_back(
-          MemEffectsOpInfo::Effects::Write, tryCancelOp.getResult(), "",
-          MemEffectsOpInfo::Effects::Proxy::Async);
     }
-    if (auto loadResultOp = dyn_cast<ttng::CLCLoadResultOp>(op)) {
-      info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Read,
-                                        loadResultOp.getSrc());
-    }
-    if (auto storeOp = dyn_cast<ttng::TMAStoreLikeOpInterface>(op)) {
-      info.emplace();
+    if (isa<ttng::TMAStoreLikeOpInterface>(op)) {
       info->trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
       info->commitKind = tti::CommitKind::TmaStore;
       info->implicitCommit = true;
-      info->operandEffects.emplace_back(
-          MemEffectsOpInfo::Effects::Read, storeOp.getSrc(), "",
-          MemEffectsOpInfo::Effects::Proxy::Async);
     }
     if (auto arriveOp = dyn_cast<ttng::ArriveBarrierOp>(op)) {
-      info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = arriveOp.getPred();
       info->barriers.push_back(
           {arriveOp.getBarrier(), nullptr, (int)arriveOp.getCount()});
     }
-    return info ? info : ConSanTargetHooks::getMemEffectsOpInfo(op);
+
+    if (!namedOperands.empty()) {
+      SmallVector<MemEffectsOpInfo::Effects> effects;
+      for (auto [value, name] : namedOperands)
+        for (auto it = info->operandEffects.begin();
+             it != info->operandEffects.end(); ++it)
+          if (it->buf == value) {
+            effects.emplace_back(*it).operandName = name.str();
+            break;
+          }
+      info->operandEffects = std::move(effects);
+    }
+    return info;
   }
 
   SmallVector<CommitKindDesc>

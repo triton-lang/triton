@@ -7,8 +7,8 @@ import triton.experimental.gluon.language as ttgl
 
 # Handle imports for both pytest (module context) and direct execution
 try:
-    from .gfx1250_utils import static_profile
-    from .f16_gemm_common_gfx1250 import (
+    from .cdna5_utils import static_profile
+    from .f16_gemm_common_cdna5 import (
         create_shared_layouts,
         create_tensor_descriptors,
         issue_loads,
@@ -16,8 +16,8 @@ try:
         TileScheduler,
     )
 except ImportError:
-    from gfx1250_utils import static_profile
-    from f16_gemm_common_gfx1250 import (
+    from cdna5_utils import static_profile
+    from f16_gemm_common_cdna5 import (
         create_shared_layouts,
         create_tensor_descriptors,
         issue_loads,
@@ -72,7 +72,7 @@ def store_quadrant_to_p_buffer(
     row_offs = rm_q + (qm * HALF_M)
     col_offs = rn_q + (qn * HALF_N)
     p_offs = P_base_offs + row_offs[:, None] * BLOCK_N + col_offs[None, :]
-    ttgl.amd.gfx1250.buffer_store(acc_q, p_ptr, p_offs)
+    ttgl.amd.cdna5.buffer_store(acc_q, p_ptr, p_offs)
 
 
 @gluon.jit
@@ -86,7 +86,7 @@ def load_quadrant_from_p_buffer(p_ptr, next_pid, BLOCK_M: ttgl.constexpr, BLOCK_
     row_offs = rm_q + (qm * HALF_M)
     col_offs = rn_q + (qn * HALF_N)
     p_offs = P_base_offs + row_offs[:, None] * BLOCK_N + col_offs[None, :]
-    return ttgl.amd.gfx1250.buffer_load(p_ptr, p_offs)
+    return ttgl.amd.cdna5.buffer_load(p_ptr, p_offs)
 
 
 @gluon.jit
@@ -116,7 +116,7 @@ def store_quadrant_to_c_buffer(
     rn = pid_n * BLOCK_N + rn_q + (qn * HALF_N)
     mask = (rm[:, None] < M) & (rn[None, :] < N)
     offs = stride_cm * rm[:, None] + stride_cn * rn[None, :]
-    ttgl.amd.gfx1250.buffer_store(acc_q, c_ptr, offs, mask=mask)
+    ttgl.amd.cdna5.buffer_store(acc_q, c_ptr, offs, mask=mask)
 
 
 @gluon.jit
@@ -192,13 +192,13 @@ def process_streamk_tiles(
         for k_idx in range(num_k_iters):
             k_offset = (remainder + k_idx) * BLOCK_K
 
-            ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_am, k_offset], a_buffer.index(0))
+            ttgl.amd.cdna5.tdm.async_load(a_desc, [off_am, k_offset], a_buffer.index(0))
             if not TRANSPOSE_B:
-                ttgl.amd.gfx1250.tdm.async_load(b_desc, [k_offset, off_bn], b_buffer.index(0))
+                ttgl.amd.cdna5.tdm.async_load(b_desc, [k_offset, off_bn], b_buffer.index(0))
             else:
-                ttgl.amd.gfx1250.tdm.async_load(b_desc, [off_bn, k_offset], b_buffer.index(0))
+                ttgl.amd.cdna5.tdm.async_load(b_desc, [off_bn, k_offset], b_buffer.index(0))
 
-            ttgl.amd.gfx1250.tdm.async_wait(0)
+            ttgl.amd.cdna5.tdm.async_wait(0)
 
             a_operand = a_buffer.index(0).load(layout=OPERAND_LAYOUT_A)
             if not TRANSPOSE_B:
@@ -206,7 +206,7 @@ def process_streamk_tiles(
             else:
                 b_operand = (b_buffer.index(0).permute([1, 0]).load(layout=OPERAND_LAYOUT_B))
 
-            accumulator = ttgl.amd.gfx1250.wmma(a_operand, b_operand, accumulator)
+            accumulator = ttgl.amd.cdna5.wmma(a_operand, b_operand, accumulator)
 
         # Shared quadrant setup for 256x256 tiles
         HALF_M: ttgl.constexpr = BLOCK_M // 2
@@ -236,22 +236,22 @@ def process_streamk_tiles(
 
                 # Store each quadrant with buffer_store
                 p00_offs = P_base_offs + rm_q[:, None] * BLOCK_N + rn_q[None, :]
-                ttgl.amd.gfx1250.buffer_store(acc_00, p_ptr, p00_offs)
+                ttgl.amd.cdna5.buffer_store(acc_00, p_ptr, p00_offs)
 
                 p01_offs = P_base_offs + rm_q[:, None] * BLOCK_N + (rn_q[None, :] + HALF_N)
-                ttgl.amd.gfx1250.buffer_store(acc_01, p_ptr, p01_offs)
+                ttgl.amd.cdna5.buffer_store(acc_01, p_ptr, p01_offs)
 
                 p10_offs = P_base_offs + (rm_q[:, None] + HALF_M) * BLOCK_N + rn_q[None, :]
-                ttgl.amd.gfx1250.buffer_store(acc_10, p_ptr, p10_offs)
+                ttgl.amd.cdna5.buffer_store(acc_10, p_ptr, p10_offs)
 
                 p11_offs = P_base_offs + (rm_q[:, None] + HALF_M) * BLOCK_N + (rn_q[None, :] + HALF_N)
-                ttgl.amd.gfx1250.buffer_store(acc_11, p_ptr, p11_offs)
+                ttgl.amd.cdna5.buffer_store(acc_11, p_ptr, p11_offs)
             else:
                 # Full tile store for smaller tiles
                 rm1 = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, WMMA_LAYOUT))
                 rn1 = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
                 p_offset = pid * BLOCK_M * BLOCK_N + rm1[:, None] * BLOCK_N + rn1[None, :]
-                ttgl.amd.gfx1250.buffer_store(accumulator, p_ptr, p_offset)
+                ttgl.amd.cdna5.buffer_store(accumulator, p_ptr, p_offset)
 
             ttgl.barrier()
             ttgl.atomic_xchg(locks_ptr + pid, 1)
@@ -277,16 +277,16 @@ def process_streamk_tiles(
 
                     # Load and accumulate quadrants with buffer_load
                     p00_offs = P_base_offs + rm_q[:, None] * BLOCK_N + rn_q[None, :]
-                    acc_00 += ttgl.amd.gfx1250.buffer_load(p_ptr, p00_offs)
+                    acc_00 += ttgl.amd.cdna5.buffer_load(p_ptr, p00_offs)
 
                     p01_offs = P_base_offs + rm_q[:, None] * BLOCK_N + (rn_q[None, :] + HALF_N)
-                    acc_01 += ttgl.amd.gfx1250.buffer_load(p_ptr, p01_offs)
+                    acc_01 += ttgl.amd.cdna5.buffer_load(p_ptr, p01_offs)
 
                     p10_offs = P_base_offs + (rm_q[:, None] + HALF_M) * BLOCK_N + rn_q[None, :]
-                    acc_10 += ttgl.amd.gfx1250.buffer_load(p_ptr, p10_offs)
+                    acc_10 += ttgl.amd.cdna5.buffer_load(p_ptr, p10_offs)
 
                     p11_offs = P_base_offs + (rm_q[:, None] + HALF_M) * BLOCK_N + (rn_q[None, :] + HALF_N)
-                    acc_11 += ttgl.amd.gfx1250.buffer_load(p_ptr, p11_offs)
+                    acc_11 += ttgl.amd.cdna5.buffer_load(p_ptr, p11_offs)
 
                     end += streamk_iters_pcu + (next_pid < streamk_remainder_iters)
                     next_pid += 1
@@ -299,19 +299,19 @@ def process_streamk_tiles(
 
                 mask00 = (rm_top[:, None] < M) & (rn_left[None, :] < N)
                 offs00 = stride_cm * rm_top[:, None] + stride_cn * rn_left[None, :]
-                ttgl.amd.gfx1250.buffer_store(acc_00, c_ptr, offs00, mask=mask00)
+                ttgl.amd.cdna5.buffer_store(acc_00, c_ptr, offs00, mask=mask00)
 
                 mask01 = (rm_top[:, None] < M) & (rn_right[None, :] < N)
                 offs01 = stride_cm * rm_top[:, None] + stride_cn * rn_right[None, :]
-                ttgl.amd.gfx1250.buffer_store(acc_01, c_ptr, offs01, mask=mask01)
+                ttgl.amd.cdna5.buffer_store(acc_01, c_ptr, offs01, mask=mask01)
 
                 mask10 = (rm_bottom[:, None] < M) & (rn_left[None, :] < N)
                 offs10 = stride_cm * rm_bottom[:, None] + stride_cn * rn_left[None, :]
-                ttgl.amd.gfx1250.buffer_store(acc_10, c_ptr, offs10, mask=mask10)
+                ttgl.amd.cdna5.buffer_store(acc_10, c_ptr, offs10, mask=mask10)
 
                 mask11 = (rm_bottom[:, None] < M) & (rn_right[None, :] < N)
                 offs11 = stride_cm * rm_bottom[:, None] + stride_cn * rn_right[None, :]
-                ttgl.amd.gfx1250.buffer_store(acc_11, c_ptr, offs11, mask=mask11)
+                ttgl.amd.cdna5.buffer_store(acc_11, c_ptr, offs11, mask=mask11)
             else:
                 # Full accumulator for smaller tiles
                 rm = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, WMMA_LAYOUT))
@@ -324,7 +324,7 @@ def process_streamk_tiles(
                         pass
 
                     p_offset_load = next_pid * BLOCK_M * BLOCK_N + rm[:, None] * BLOCK_N + rn[None, :]
-                    contrib_acc = ttgl.amd.gfx1250.buffer_load(p_ptr, p_offset_load)
+                    contrib_acc = ttgl.amd.cdna5.buffer_load(p_ptr, p_offset_load)
                     accumulator += contrib_acc
 
                     end += streamk_iters_pcu + (next_pid < streamk_remainder_iters)
@@ -332,7 +332,7 @@ def process_streamk_tiles(
 
                 mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
                 offs_c = stride_cm * offs_m[:, None] + stride_cn * offs_n[None, :]
-                ttgl.amd.gfx1250.buffer_store(accumulator, c_ptr, offs_c, mask=mask)
+                ttgl.amd.cdna5.buffer_store(accumulator, c_ptr, offs_c, mask=mask)
 
         current_start_iter = end_iter
 
@@ -412,13 +412,13 @@ def process_streamk_tiles_8warps(
         for k_idx in range(num_k_iters):
             k_offset = (remainder + k_idx) * BLOCK_K
 
-            ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_am, k_offset], a_buffer.index(0))
+            ttgl.amd.cdna5.tdm.async_load(a_desc, [off_am, k_offset], a_buffer.index(0))
             if not TRANSPOSE_B:
-                ttgl.amd.gfx1250.tdm.async_load(b_desc, [k_offset, off_bn], b_buffer.index(0))
+                ttgl.amd.cdna5.tdm.async_load(b_desc, [k_offset, off_bn], b_buffer.index(0))
             else:
-                ttgl.amd.gfx1250.tdm.async_load(b_desc, [off_bn, k_offset], b_buffer.index(0))
+                ttgl.amd.cdna5.tdm.async_load(b_desc, [off_bn, k_offset], b_buffer.index(0))
 
-            ttgl.amd.gfx1250.tdm.async_wait(0)
+            ttgl.amd.cdna5.tdm.async_wait(0)
 
             a_operand = a_buffer.index(0).load(layout=OPERAND_LAYOUT_A)
             if not TRANSPOSE_B:
@@ -426,7 +426,7 @@ def process_streamk_tiles_8warps(
             else:
                 b_operand = (b_buffer.index(0).permute([1, 0]).load(layout=OPERAND_LAYOUT_B))
 
-            accumulator = ttgl.amd.gfx1250.wmma(a_operand, b_operand, accumulator)
+            accumulator = ttgl.amd.cdna5.wmma(a_operand, b_operand, accumulator)
 
         # Quadrant handling for 256x256 tiles to reduce VGPR pressure
         if BLOCK_M == 256 and BLOCK_N == 256:
@@ -506,7 +506,7 @@ def process_streamk_tiles_8warps(
             rn_full = ttgl.arange(0, BLOCK_N)
             if current_start_iter != tile_iter:
                 p_off = (pid * BLOCK_M * BLOCK_N + rm_full[:, None] * BLOCK_N + rn_full[None, :])
-                ttgl.amd.gfx1250.buffer_store(accumulator, p_ptr, p_off)
+                ttgl.amd.cdna5.buffer_store(accumulator, p_ptr, p_off)
                 ttgl.barrier()
                 ttgl.atomic_xchg(locks_ptr + pid, 1)
             else:
@@ -519,14 +519,14 @@ def process_streamk_tiles_8warps(
                     while ttgl.atomic_cas(locks_ptr + next_pid, 1, 1) != 1:
                         pass
                     p_offset_load = (next_pid * BLOCK_M * BLOCK_N + rm_full[:, None] * BLOCK_N + rn_full[None, :])
-                    contrib_acc = ttgl.amd.gfx1250.buffer_load(p_ptr, p_offset_load)
+                    contrib_acc = ttgl.amd.cdna5.buffer_load(p_ptr, p_offset_load)
                     accumulator += contrib_acc
                     end += streamk_iters_pcu + (next_pid < streamk_remainder_iters)
                     next_pid += 1
 
                 mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
                 offs_c = stride_cm * offs_m[:, None] + stride_cn * offs_n[None, :]
-                ttgl.amd.gfx1250.buffer_store(accumulator, c_ptr, offs_c, mask=mask)
+                ttgl.amd.cdna5.buffer_store(accumulator, c_ptr, offs_c, mask=mask)
 
         current_start_iter = end_iter
 
@@ -998,11 +998,11 @@ def streamk_gemm_tdm_prefetch_kernel(
         for i in ttgl.static_range(NUM_BUFFERS - 1):
             k_offset = i * BLOCK_K
             slot = buffer_slot % NUM_BUFFERS
-            ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_am_first, k_offset], a_buffer.index(slot))
+            ttgl.amd.cdna5.tdm.async_load(a_desc, [off_am_first, k_offset], a_buffer.index(slot))
             if not TRANSPOSE_B:
-                ttgl.amd.gfx1250.tdm.async_load(b_desc, [k_offset, off_bn_first], b_buffer.index(slot))
+                ttgl.amd.cdna5.tdm.async_load(b_desc, [k_offset, off_bn_first], b_buffer.index(slot))
             else:
-                ttgl.amd.gfx1250.tdm.async_load(b_desc, [off_bn_first, k_offset], b_buffer.index(slot))
+                ttgl.amd.cdna5.tdm.async_load(b_desc, [off_bn_first, k_offset], b_buffer.index(slot))
             buffer_slot += 1
 
     # k_counter for current tile (starts at NUM_BUFFERS-1 because we prefilled)
@@ -1022,23 +1022,23 @@ def streamk_gemm_tdm_prefetch_kernel(
             # Issue load for current tile
             k_offset = k_counter * BLOCK_K
             slot = buffer_slot % NUM_BUFFERS
-            ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_am, k_offset], a_buffer.index(slot))
+            ttgl.amd.cdna5.tdm.async_load(a_desc, [off_am, k_offset], a_buffer.index(slot))
             if not TRANSPOSE_B:
-                ttgl.amd.gfx1250.tdm.async_load(b_desc, [k_offset, off_bn], b_buffer.index(slot))
+                ttgl.amd.cdna5.tdm.async_load(b_desc, [k_offset, off_bn], b_buffer.index(slot))
             else:
-                ttgl.amd.gfx1250.tdm.async_load(b_desc, [off_bn, k_offset], b_buffer.index(slot))
+                ttgl.amd.cdna5.tdm.async_load(b_desc, [off_bn, k_offset], b_buffer.index(slot))
             buffer_slot += 1
             k_counter += 1
 
             # Wait and consume
-            ttgl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 1) * 2)
+            ttgl.amd.cdna5.tdm.async_wait((NUM_BUFFERS - 1) * 2)
             cons_slot = consumer_slot % NUM_BUFFERS
             a_operand = a_buffer.index(cons_slot).load(layout=OPERAND_LAYOUT_A)
             if not TRANSPOSE_B:
                 b_operand = b_buffer.index(cons_slot).load(layout=OPERAND_LAYOUT_B)
             else:
                 b_operand = (b_buffer.index(cons_slot).permute([1, 0]).load(layout=OPERAND_LAYOUT_B))
-            accumulator = ttgl.amd.gfx1250.wmma(a_operand, b_operand, accumulator)
+            accumulator = ttgl.amd.cdna5.wmma(a_operand, b_operand, accumulator)
             consumer_slot += 1
 
         # Check for next tile
@@ -1055,25 +1055,25 @@ def streamk_gemm_tdm_prefetch_kernel(
         # Drain + Prefetch for next tile
         for i in ttgl.static_range(NUM_BUFFERS - 1):
             # Consume remaining data from current tile
-            ttgl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 2 - i) * 2)
+            ttgl.amd.cdna5.tdm.async_wait((NUM_BUFFERS - 2 - i) * 2)
             cons_slot = consumer_slot % NUM_BUFFERS
             a_operand = a_buffer.index(cons_slot).load(layout=OPERAND_LAYOUT_A)
             if not TRANSPOSE_B:
                 b_operand = b_buffer.index(cons_slot).load(layout=OPERAND_LAYOUT_B)
             else:
                 b_operand = (b_buffer.index(cons_slot).permute([1, 0]).load(layout=OPERAND_LAYOUT_B))
-            accumulator = ttgl.amd.gfx1250.wmma(a_operand, b_operand, accumulator)
+            accumulator = ttgl.amd.cdna5.wmma(a_operand, b_operand, accumulator)
             consumer_slot += 1
 
             # Prefetch for next tile (overlapped with current drain)
             if has_next_tile:
                 k_offset_next = i * BLOCK_K
                 slot = buffer_slot % NUM_BUFFERS
-                ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_am_next, k_offset_next], a_buffer.index(slot))
+                ttgl.amd.cdna5.tdm.async_load(a_desc, [off_am_next, k_offset_next], a_buffer.index(slot))
                 if not TRANSPOSE_B:
-                    ttgl.amd.gfx1250.tdm.async_load(b_desc, [k_offset_next, off_bn_next], b_buffer.index(slot))
+                    ttgl.amd.cdna5.tdm.async_load(b_desc, [k_offset_next, off_bn_next], b_buffer.index(slot))
                 else:
-                    ttgl.amd.gfx1250.tdm.async_load(b_desc, [off_bn_next, k_offset_next], b_buffer.index(slot))
+                    ttgl.amd.cdna5.tdm.async_load(b_desc, [off_bn_next, k_offset_next], b_buffer.index(slot))
                 buffer_slot += 1
 
         # Reset k_counter for next tile (it starts at NUM_BUFFERS-1 because we just prefilled)
@@ -1295,7 +1295,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(
         description="StreamK GEMM kernel test - automatically calculates StreamK tiles for load balancing",
-        epilog="Example: python3 f16_sk_gemm_gfx1250.py -M 258 -N 258 -K 510",
+        epilog="Example: python3 f16_gemm_streamk_cdna5.py -M 258 -N 258 -K 510",
     )
     parser.add_argument("-M", type=int, default=1028, help="problem M size (default: 258)")
     parser.add_argument("-N", type=int, default=1028, help="problem N size (default: 258)")
