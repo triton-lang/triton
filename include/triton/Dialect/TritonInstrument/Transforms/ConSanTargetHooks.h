@@ -173,6 +173,9 @@ public:
 
   virtual SmallVector<CommitKind::Kind>
   getRequiredCommitKinds(ModuleOp module) const = 0;
+
+  // AMD barriers are ordinary LDS objects and have no invalidate operation.
+  virtual bool barrierWritesInvalidate() const { return false; }
 };
 
 LogicalResult runConcurrencySanitizer(ModuleOp module,

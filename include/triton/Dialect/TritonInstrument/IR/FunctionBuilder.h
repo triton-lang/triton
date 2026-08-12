@@ -139,6 +139,12 @@ public:
   // waiters, then clear its lifecycle state and waiting bits.
   void createInvalidateBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
                                         Value pred, Operation *insertPoint);
+  // invalidateBarrierStorage: clear an active barrier overwritten by an
+  // ordinary store, including its saved visibility frontiers.
+  void createInvalidateBarrierStorageCall(ImplicitLocOpBuilder &b, Value offset,
+                                          uint32_t length, Value pred,
+                                          Operation *insertPoint,
+                                          Value recipientCTAs);
   // verifyAndUpdateBarrierState: Validate barrier initialization, an arrive
   // count, and a tx-count delta using one snapshot of the tracked barrier
   // state. Preserve independent initialization and underflow assertions and
@@ -323,6 +329,17 @@ public:
       bool excludeSelf = false);
 
 private:
+  Value createInvalidateBarrierStateCallImpl(ImplicitLocOpBuilder &b,
+                                             Value offset, Value length,
+                                             Value pred, Operation *insertPoint,
+                                             Value recipientCTAs,
+                                             bool allowUninitialized);
+
+  void createClearBarrierStorageTrackingCall(ImplicitLocOpBuilder &b,
+                                             Value offset, Value length,
+                                             Value pred, Operation *insertPoint,
+                                             Value recipientCTAs);
+
   void createClearOutstandingCommitsTransferCall(
       ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
       int outstandingNum, Value pred, CommitKind::Kind commitKind,

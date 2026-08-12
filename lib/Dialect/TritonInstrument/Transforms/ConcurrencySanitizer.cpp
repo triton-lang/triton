@@ -848,8 +848,16 @@ private:
       }
       if (auto info = hooks.getBarrierInitInfo(op)) {
         Value pred = hooks.getIssuerCTAPred(b, op);
-        funcBuilder.createVerifyBarrierCanInitCall(b, info->alloc, pred, op,
-                                                   currentCTAMask(b));
+        if (!hooks.barrierWritesInvalidate()) {
+          funcBuilder.createVerifyBarrierCanInitCall(b, info->alloc, pred, op,
+                                                     currentCTAMask(b));
+        } else if (!auxData.bufferCandidates[(int)MemType::SHARED_MEM].contains(
+                       info->alloc)) {
+          // Isolated barriers have no buffer lane for instrumentMemEffects.
+          funcBuilder.createInvalidateBarrierStorageCall(
+              b, tti::ExperimentalMemDescToI32Op::create(b, info->alloc),
+              getMemDescLength(info->alloc), pred, op, currentCTAMask(b));
+        }
         funcBuilder.createInitBarrierStateCall(b, info->alloc, info->count,
                                                pred, op);
       }
@@ -1060,19 +1068,36 @@ private:
       Value bufferMask = materialized.bufferMask;
       Value effectCTAs = materialized.effectCTAs;
       MemType memType = materialized.memType;
+      struct PendingBarrierInvalidation {
+        Value offset;
+        uint32_t length;
+        Value pred;
+        Value recipientCTAs;
+      };
+      SmallVector<PendingBarrierInvalidation> pendingInvalidations;
+      bool invalidatesBarriers = false;
+      if (memType == MemType::SHARED_MEM && hooks.barrierWritesInvalidate() &&
+          effect.rw == RW::Write &&
+          effect.sharedKind == ttg::SharedKind::Generic &&
+          thread == baseThread &&
+          opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
+        invalidatesBarriers =
+            llvm::none_of(getMemoryAccesses(op), [&](const auto &access) {
+              return access.value == buf &&
+                     access.sharedKind == effect.sharedKind && access.isRead;
+            });
+      }
 
-      if (memType == MemType::SHARED_MEM && !isBarrierLifecycle) {
+      if (memType == MemType::SHARED_MEM &&
+          (!isBarrierLifecycle || invalidatesBarriers)) {
         const BufferStateCandidates &candidates = candidateIt->second;
         for (const auto &[barrier, barrierMask] : auxData.sharedBarrierMasks) {
           Value barrierOffset = tti::ExperimentalMemoryOffsetToI32Op::create(
               b, barrier.baseOffset, memType);
           int64_t barrierLength = barrier.length;
-          auto verifyAvailable = [&](Value candidatePred) {
-            funcBuilder.createVerifyBarrierMemoryAvailableCall(
-                b, barrierOffset, barrierLength, candidatePred, op, effectCTAs);
-          };
           if (candidates.unknown) {
-            verifyAvailable(pred);
+            funcBuilder.createVerifyBarrierMemoryAvailableCall(
+                b, barrierOffset, barrierLength, pred, op, effectCTAs);
             continue;
           }
           for (const BufferStateCandidate &candidate : candidates.cases) {
@@ -1087,7 +1112,20 @@ private:
                   b, arith::CmpIPredicate::eq, runtimeBase, candidateBase);
               candidatePred = tti::maybeAnd(b, candidatePred, matchesBase);
             }
-            verifyAvailable(candidatePred);
+            bool singleOwner = candidate.ctaMask &&
+                               !(candidate.ctaMask & (candidate.ctaMask - 1));
+            if (!invalidatesBarriers || !singleOwner) {
+              funcBuilder.createVerifyBarrierMemoryAvailableCall(
+                  b, barrierOffset, barrierLength, candidatePred, op,
+                  effectCTAs);
+              continue;
+            }
+            BufferStateCandidates selected;
+            selected.cases.push_back(candidate);
+            pendingInvalidations.push_back(
+                {barrierOffset, static_cast<uint32_t>(barrierLength),
+                 candidatePred,
+                 getMemEffectCTAs(b, defaultEffectCTAs, selected)});
           }
         }
       }
@@ -1127,6 +1165,11 @@ private:
                        effect.operandName, effectCTAs, opInfo->commitKind);
         addReadChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
                       effect.operandName, effectCTAs, opInfo->commitKind);
+        for (const PendingBarrierInvalidation &barrier : pendingInvalidations) {
+          funcBuilder.createInvalidateBarrierStorageCall(
+              b, barrier.offset, barrier.length, barrier.pred, op,
+              barrier.recipientCTAs);
+        }
         if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
           funcBuilder.createPublishWriteVisibilityCall(
               b, bufferMask, getThreadPeersMask(thread, auxData.threadLayout),
