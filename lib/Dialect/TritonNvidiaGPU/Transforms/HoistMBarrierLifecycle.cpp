@@ -239,10 +239,6 @@ private:
     return &region.front();
   }
 
-  Value getLoopResultPhase(LoopLikeOpInterface loop) {
-    return loop->getResults().back();
-  }
-
   Value createPhaseAdvance(ttng::WaitBarrierOp wait, Value phase,
                            Value phaseOne) {
     builder.setInsertionPointAfter(wait);
@@ -329,7 +325,7 @@ private:
     return phase;
   }
 
-  void appendToLoopYield(LoopLikeOpInterface loop, Block *body, Value phase) {
+  Value appendToLoopYield(LoopLikeOpInterface loop, Block *body, Value phase) {
     if (auto whileOp = dyn_cast<scf::WhileOp>(loop.getOperation())) {
       if (body == &whileOp.getBefore().front()) {
         // addIterArgsToLoop initially forwards the input phase through the
@@ -342,6 +338,7 @@ private:
       body = &whileOp.getAfter().front();
     }
     cast<scf::YieldOp>(body->getTerminator()).getResultsMutable().append(phase);
+    return loop->getResults().back();
   }
 
   // First move the phase initialization op before the outermost loop,
@@ -384,8 +381,7 @@ private:
     Block *innerBody = getLoopBodyBlock(innerLoop, inval);
     Value nextPhase = rewriteBlockPhases(innerBody, phase, phaseOne, waits);
 
-    appendToLoopYield(innerLoop, innerBody, nextPhase);
-    Value loopResult = getLoopResultPhase(innerLoop);
+    Value loopResult = appendToLoopYield(innerLoop, innerBody, nextPhase);
 
     for (int i = loops.size() - 2; i >= 0; --i) {
       LoopLikeOpInterface loop = loops[i];
@@ -394,8 +390,7 @@ private:
       if (loopResult.getParentBlock() != body)
         loopResult = mlir::triton::sinkValueRedefinition(
             builder, loopPhase, loopResult, loopResult.getParentBlock());
-      appendToLoopYield(loop, body, loopResult);
-      loopResult = getLoopResultPhase(loop);
+      loopResult = appendToLoopYield(loop, body, loopResult);
     }
   }
 
