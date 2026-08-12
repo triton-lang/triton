@@ -420,16 +420,12 @@ private:
     for (ttng::InvalBarrierOp inval : lifecycle.invals)
       inval->erase();
 
-    SmallVector<Operation *> returns;
-    funcOp.walk([&](Operation *op) {
-      if (op->hasTrait<OpTrait::ReturnLike>() &&
-          op->getParentOp() == funcOp.getOperation())
-        returns.push_back(op);
-    });
-
     // Once alloc/init move to function entry, the matching invalidation must
     // live on every function exit instead of at the former loop-local position.
-    for (Operation *ret : returns) {
+    for (Block &block : funcOp.getFunctionBody()) {
+      Operation *ret = block.getTerminator();
+      if (!ret->hasTrait<OpTrait::ReturnLike>())
+        continue;
       builder.setInsertionPoint(ret);
       ttng::InvalBarrierOp::create(builder, ret->getLoc(), lifecycle.barrier);
     }
