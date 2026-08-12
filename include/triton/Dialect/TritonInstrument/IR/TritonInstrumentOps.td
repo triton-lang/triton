@@ -265,6 +265,24 @@ def TTI_ExperimentalGSanTensorAccessOp
   }];
 }
 
+def TTI_ExperimentalGSanTensorRectAccessOp
+    : TTI_Op<"experimental_gsan_tensor_rect_access",
+             [AttrSizedOperandSegments]> {
+  let summary = "Instrument a stack of rectangular GSan tensor accesses";
+  let description = [{
+    Represents one or more rectangles with shared row width, row stride, and
+    row count. Each scalar base contributes one rectangle; a tensor of bases
+    contributes one independently masked rectangle per element.
+  }];
+  let arguments = (ins Variadic<TT_PtrLike>:$bases,
+                   Variadic<TT_BoolLike>:$masks, I64:$rowBytes,
+                   I64:$colStride, I64:$numCols, BoolAttr:$isStore);
+  let assemblyFormat = [{
+    `[` $bases `]` `,` `[` $masks `]` `,` $rowBytes `,` $colStride `,`
+    $numCols `,` $isStore attr-dict `:` type($bases) `,` type($masks)
+  }];
+}
+
 def TTI_ExperimentalGSanAtomicTensorAccessOp
     : TTI_Op<"experimental_gsan_atomic_tensor_access",
              [TypesMatchWith<"mask type matches ptr type", "ptr", "mask",

@@ -35,6 +35,10 @@ static constexpr StringLiteral kGSanLoadTensorRuntimeFn =
     "__triton_gsan_load_tensor";
 static constexpr StringLiteral kGSanStoreTensorRuntimeFn =
     "__triton_gsan_store_tensor";
+static constexpr StringLiteral kGSanLoadTensorRectRuntimeFn =
+    "__triton_gsan_load_tensor_rect";
+static constexpr StringLiteral kGSanStoreTensorRectRuntimeFn =
+    "__triton_gsan_store_tensor_rect";
 static constexpr StringLiteral kGSanAtomicTensorRuntimeFn =
     "__triton_gsan_atomic_tensor";
 static constexpr StringLiteral kGSanAtomicBeginRuntimeFn =
@@ -99,6 +103,10 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
   } else if (funcName == kGSanLoadTensorRuntimeFn ||
              funcName == kGSanStoreTensorRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty, ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanLoadTensorRectRuntimeFn ||
+             funcName == kGSanStoreTensorRectRuntimeFn) {
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty,      i64_ty,
+              i32_ty,      i32_ty,      i32_ty, ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanAtomicTensorRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty,      i32_ty,
               i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
@@ -520,7 +528,105 @@ public:
                                 maskElems, freeVarMasks.lookup(kReg),
                                 threadPred, bytesPerElem, op.getIsStore(),
                                 mergeVec);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
 
+struct GSanTensorRectAccessOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanTensorRectAccessOp> {
+public:
+  using ConvertOpToLLVMPattern<
+      tti::ExperimentalGSanTensorRectAccessOp>::ConvertOpToLLVMPattern;
+  const TargetInfoBase *targetInfo;
+
+  GSanTensorRectAccessOpConversion(LLVMTypeConverter &typeConverter,
+                                   const TargetInfoBase &targetInfo,
+                                   PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanTensorRectAccessOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
+    if (failed(gsanGlobalStatePtr))
+      return failure();
+    assert(!op.getBases().empty() &&
+           op.getBases().size() == op.getMasks().size() &&
+           "stacked GSan rectangles require matching bases and masks");
+
+    TritonLLVMOpBuilder b(loc, rewriter);
+    SmallVector<Value> ptrElems;
+    SmallVector<Value> maskElems;
+    bool distributedRows =
+        !isa<RankedTensorType>(op.getBases().front().getType());
+    auto warpsPerRectAttr =
+        op->getAttrOfType<IntegerAttr>("tti.gsan_warps_per_rect");
+    unsigned warpsPerRect = warpsPerRectAttr ? warpsPerRectAttr.getInt() : 1;
+    uint32_t registerMask = 0;
+    Value threadPred;
+
+    if (distributedRows) {
+      Value laneId = getLaneAndWarpId(rewriter, loc).first;
+      threadPred = b.icmp_eq(laneId, b.i32_val(0));
+      for (auto [base, mask] :
+           llvm::zip(adaptor.getBases(), adaptor.getMasks())) {
+        ptrElems.push_back(base);
+        maskElems.push_back(mask);
+      }
+    } else {
+      assert(op.getBases().size() == 1 &&
+             "stacked tensor rectangles accept one tensor of bases");
+      Type baseType = op.getBases().front().getType();
+      ptrElems = unpackTensorElements(loc, adaptor.getBases().front(), rewriter,
+                                      baseType);
+      maskElems =
+          unpackTensorElements(loc, adaptor.getMasks().front(), rewriter,
+                               op.getMasks().front().getType());
+      auto freeVarMasks = getFreeVariableMasks(baseType);
+      auto registerDim = StringAttr::get(op.getContext(), "register");
+      registerMask = freeVarMasks.lookup(registerDim);
+      if (warpsPerRect > 1) {
+        auto warpDim = StringAttr::get(op.getContext(), "warp");
+        freeVarMasks[warpDim] = 0;
+      }
+      threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
+                                                     loc, *targetInfo);
+    }
+
+    auto [stackPtr, numRects] =
+        prepareTensorStackArg(rewriter, loc, ptrElems, maskElems, registerMask,
+                              threadPred, /*elemIndexStride=*/1);
+    Value warpId = b.i32_val(0);
+    int numWarps = 1;
+    if (distributedRows) {
+      warpId = getLaneAndWarpId(rewriter, loc).second;
+      numWarps = ttg::lookupNumWarps(op);
+      int numCTAs = ttg::lookupNumCTAs(op);
+      if (numCTAs > 1) {
+        Value ctaRank = targetInfo->getClusterCTAId(rewriter, loc);
+        warpId = b.add(b.mul(warpId, b.i32_val(numCTAs)), ctaRank);
+        numWarps *= numCTAs;
+      }
+    } else if (warpsPerRect > 1) {
+      Value physicalWarpId = getLaneAndWarpId(rewriter, loc).second;
+      int rectWarps = ttg::lookupNumWarps(op) / warpsPerRect;
+      warpId = b.udiv(physicalWarpId, b.i32_val(rectWarps));
+      numWarps = warpsPerRect;
+    }
+
+    StringRef funcName = op.getIsStore() ? kGSanStoreTensorRectRuntimeFn
+                                         : kGSanLoadTensorRectRuntimeFn;
+    auto runtimeFunc = getOrCreateGSanRuntimeFunction(rewriter, funcName);
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    b.call(runtimeFunc,
+           ValueRange{*gsanGlobalStatePtr, stackPtr, b.i32_val(numRects),
+                      b.trunc(i32_ty, adaptor.getRowBytes()),
+                      adaptor.getColStride(),
+                      b.trunc(i32_ty, adaptor.getNumCols()), warpId,
+                      b.i32_val(numWarps), sourceLoc.file, sourceLoc.line});
     rewriter.eraseOp(op);
     return success();
   }
@@ -1239,6 +1345,7 @@ void mlir::triton::populateGSanToLLVMPatterns(
   patterns.add<GSanMBarrierArriveOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanMBarrierWaitOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanTensorDescInfoOpConversion>(typeConverter);
+  patterns.add<GSanTensorRectAccessOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanAtomicPollOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanAtomicCASOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanAtomicRMWOpConversion>(typeConverter, targetInfo);

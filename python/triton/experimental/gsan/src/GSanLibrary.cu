@@ -879,6 +879,64 @@ GSAN_DEVICE void tensorLoad(ThreadState *state, const char *stackPtr,
     rwLockReleaseRead(state->lock);
 }
 
+template <bool IsStore>
+GSAN_DEVICE void tensorAccessRect(ThreadState *state, const char *stackPtr,
+                                  int numRects, int rowBytes,
+                                  uintptr_t colStride, int numCols, int warpId,
+                                  int numWarps, Location loc) {
+  const auto *bases = reinterpret_cast<const uintptr_t *>(stackPtr);
+  const char *masks = stackPtr + numRects * sizeof(uintptr_t);
+  uint32_t participatingLanes = __nvvm_activemask();
+  uint32_t laneId = __nvvm_read_ptx_sreg_laneid();
+  auto reserveBase = state->reserveBase;
+  bool acquired = false;
+
+  for (int rect = 0; rect < numRects; ++rect) {
+    uint32_t pendingRects =
+        __nvvm_vote_ballot_sync(participatingLanes, masks[rect] != 0);
+    uintptr_t localBase = bases[rect];
+
+    while (pendingRects != 0) {
+      int ownerLane = __builtin_ctz(pendingRects);
+      uint32_t baseLow = __nvvm_shfl_sync_idx_i32(
+          participatingLanes, static_cast<uint32_t>(localBase), ownerLane,
+          /*clamp=*/31);
+      uint32_t baseHigh = __nvvm_shfl_sync_idx_i32(
+          participatingLanes, static_cast<uint32_t>(localBase >> 32), ownerLane,
+          /*clamp=*/31);
+      uintptr_t base = static_cast<uintptr_t>(baseLow) |
+                       (static_cast<uintptr_t>(baseHigh) << 32);
+
+      for (int col = warpId; col < numCols; col += numWarps) {
+        uintptr_t rowPtr = base + static_cast<uintptr_t>(col) * colStride;
+        auto range = roundRange(Range{rowPtr, rowPtr + rowBytes});
+
+        for (uintptr_t addr = range.start + laneId * kShadowMemGranularityBytes;
+             addr < range.end; addr += 32 * kShadowMemGranularityBytes) {
+          if (!isGsanManaged(addr, reserveBase))
+            continue;
+          if (!acquired) {
+            rwLockAcquireRead(state->lock);
+            acquired = true;
+          }
+          auto cell = acquireShadow(getShadowAddress(addr));
+          if constexpr (IsStore) {
+            doWrite(state, cell, loc);
+          } else {
+            doRead(state, cell, loc);
+          }
+          releaseShadow(cell);
+        }
+      }
+
+      pendingRects &= pendingRects - 1;
+    }
+  }
+
+  if (acquired)
+    rwLockReleaseRead(state->lock);
+}
+
 GSAN_DEVICE void initAtomicEventState(AtomicEventState *event) {
   event->threadState = nullptr;
   event->numCells = 0;
@@ -1027,6 +1085,18 @@ __triton_gsan_load_tensor(void *globalState, const char *stackPtr, int numElems,
   gsan::tensorLoad(threadState, stackPtr, numElems, bytesPerElem, loc);
 }
 
+extern "C" GSAN_DEVICE void __triton_gsan_load_tensor_rect(
+    void *globalState, const char *stackPtr, int numRects, int rowBytes,
+    gsan::uintptr_t colStride, int numCols, int warpId, int numWarps,
+    const char *file, unsigned line) {
+  auto loc = gsan::Location{file, line};
+  auto *threadState =
+      gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
+  gsan::tensorAccessRect</*IsStore=*/false>(threadState, stackPtr, numRects,
+                                            rowBytes, colStride, numCols,
+                                            warpId, numWarps, loc);
+}
+
 extern "C" GSAN_DEVICE void
 __triton_gsan_init(void *globalState, gsan::uint32_t *streamClocks,
                    __UINT64_TYPE__ kernelId, int acquirePrevious,
@@ -1127,6 +1197,18 @@ __triton_gsan_store_tensor(void *globalState, const char *stackPtr,
   auto *threadState =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
   gsan::tensorStore(threadState, stackPtr, numElems, bytesPerElem, loc);
+}
+
+extern "C" GSAN_DEVICE void __triton_gsan_store_tensor_rect(
+    void *globalState, const char *stackPtr, int numRects, int rowBytes,
+    gsan::uintptr_t colStride, int numCols, int warpId, int numWarps,
+    const char *file, unsigned line) {
+  auto loc = gsan::Location{file, line};
+  auto *threadState =
+      gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
+  gsan::tensorAccessRect</*IsStore=*/true>(threadState, stackPtr, numRects,
+                                           rowBytes, colStride, numCols, warpId,
+                                           numWarps, loc);
 }
 
 extern "C" GSAN_DEVICE void
