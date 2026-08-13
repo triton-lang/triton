@@ -765,9 +765,6 @@ class InterpreterBuilder:
     def create_broadcast(self, arg, shape):
         return TensorHandle(np.broadcast_to(arg.data, shape), arg.dtype.scalar)
 
-    def create_cat(self, lhs, rhs):
-        return TensorHandle(np.concatenate([lhs.data, rhs.data]), lhs.dtype.scalar)
-
     def create_join(self, lhs, rhs):
         # Triton only supports joining two original tensors into a new one along the last axis
         return TensorHandle(np.stack([lhs.data, rhs.data], axis=-1), lhs.dtype.scalar)

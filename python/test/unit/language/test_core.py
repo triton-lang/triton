@@ -2257,8 +2257,7 @@ def test_cat(dtype_str, num_warps, can_reorder, device):
     z = torch.zeros((256, ), dtype=getattr(torch, dtype_str), device=device)
     kernel[(1, )](x, y, z, N=128, num_warps=num_warps, CAN_REORDER=can_reorder)
     assert z.sum() == z_ref.sum()
-    if not can_reorder:
-        torch.testing.assert_close(z, z_ref, atol=0, rtol=0)
+    torch.testing.assert_close(z, z_ref, atol=0, rtol=0)
     # check if there's no duplicate value in z
     assert z.unique().size(0) == z.size(0)
 
