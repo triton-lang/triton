@@ -258,11 +258,11 @@ class TritonGPUOptimizeThreadLocalityPass
       auto srcType = cast<RankedTensorType>(reduce.getOperands()[0].getType());
       auto rank = srcType.getShape().size();
       auto srcEncoding = srcType.getEncoding();
-      auto reductionOp = getReductionOp(reduce);
+      Operation *reductionOp = reduce.getSingleCombiner();
       if (!reductionOp ||
           !isa<arith::AddFOp, arith::MulFOp, arith::MaximumFOp,
                arith::MaxNumFOp, arith::MinimumFOp, arith::MinNumFOp>(
-              reductionOp.value()))
+              reductionOp))
         return;
       // TODO: relax this restriction
       if (!(isa<triton::gpu::BlockedEncodingAttr>(srcEncoding) && rank > 1))
@@ -271,10 +271,8 @@ class TritonGPUOptimizeThreadLocalityPass
       // inner dim.
       if (reduce.getAxis() != rank - 1)
         return;
-      for (auto operand : reduce->getOperands()) {
-        if (!operand.getDefiningOp<triton::LoadOp>())
-          return;
-      }
+      if (!reduce.getOperands()[0].getDefiningOp<triton::LoadOp>())
+        return;
       auto elemsPerThread =
           triton::gpu::getElemsPerThread(srcType)[reduce.getAxis()];
       // Not worth applying this optimization if there is only one element per
@@ -378,23 +376,6 @@ class TritonGPUOptimizeThreadLocalityPass
   };
 
 private:
-  std::optional<Operation *> getReductionOp(triton::ReduceOp reduce) const {
-    auto numRegions = reduce->getNumRegions();
-    if (numRegions != 1)
-      return std::nullopt;
-    Region &region = reduce->getRegion(0);
-    auto numBlocks = region.getBlocks().size();
-    if (numBlocks != 1)
-      return std::nullopt;
-    Block &block = region.front();
-    auto blockWithoutTerminator = block.without_terminator();
-    auto blockSizeWithoutTerminator = std::distance(
-        blockWithoutTerminator.begin(), blockWithoutTerminator.end());
-    if (blockSizeWithoutTerminator != 1)
-      return std::nullopt;
-    Operation *op = &block.front();
-    return std::optional<Operation *>(op);
-  }
   Operation *incorporateOriginalAccumulatorValue(OpBuilder &builder,
                                                  Operation *oldUpdate,
                                                  Operation *cvtLayout,
@@ -421,7 +402,7 @@ private:
     auto newLoopResult = loop.getResult(resultIndex);
     builder.setInsertionPointAfter(loop);
     IRMapping mapping;
-    mapping.map(*(reduce.getOperands().begin()), newLoopResult);
+    mapping.map(reduce.getOperands()[0], newLoopResult);
     auto newReduce2 = cloneWithInferType(builder, &(*reduce), mapping);
     return newReduce2;
   }
@@ -474,22 +455,21 @@ private:
     std::swap(transposeOrder[rank - 1], transposeOrder[rank]);
 
     builder.setInsertionPointAfter(reduce);
+    Value operand = reduce.getOperands()[0];
+    auto factored = triton::ReshapeOp::create(builder, reduce.getLoc(),
+                                              factorShape, operand);
+    auto transposed = triton::TransOp::create(builder, reduce.getLoc(),
+                                              factored, transposeOrder);
+    auto viewOp = triton::ReshapeOp::create(builder, reduce.getLoc(), dstShape,
+                                            transposed);
+    viewOp.setEfficientLayout(true);
+    auto converted =
+        ConvertLayoutOp::create(builder, reduce.getLoc(), dstType, viewOp);
+    assert(cvtReordersRegisters(viewOp.getType(), converted.getType()) &&
+           "thread locality optimization requires a register-only layout "
+           "conversion");
     IRMapping mapping;
-    for (auto operand : reduce.getOperands()) {
-      auto factored = triton::ReshapeOp::create(builder, reduce.getLoc(),
-                                                factorShape, operand);
-      auto transposed = triton::TransOp::create(builder, reduce.getLoc(),
-                                                factored, transposeOrder);
-      auto viewOp = triton::ReshapeOp::create(builder, reduce.getLoc(),
-                                              dstShape, transposed);
-      viewOp.setEfficientLayout(true);
-      auto converted =
-          ConvertLayoutOp::create(builder, reduce.getLoc(), dstType, viewOp);
-      assert(cvtReordersRegisters(viewOp.getType(), converted.getType()) &&
-             "thread locality optimization requires a register-only layout "
-             "conversion");
-      mapping.map(operand, converted);
-    }
+    mapping.map(operand, converted);
 
     auto newReduce = cloneWithInferType(builder, &(*reduce), mapping);
     newReduce->setAttr("axis", builder.getI32IntegerAttr(rank));
@@ -500,10 +480,8 @@ private:
           newReduce->getContext(), newReduce->getLoc(),
           newReduce->getOperands(), newReduce->getAttrDictionary(),
           newReduce->getPropertiesStorage(), newReduce->getRegions(), newTypes);
-      if (succeeded(success)) {
-        for (size_t i = 0; i < newTypes.size(); i++)
-          newReduce->getResult(i).setType(newTypes[i]);
-      }
+      if (succeeded(success))
+        newReduce->getResult(0).setType(newTypes[0]);
     }
     return newReduce;
   }
@@ -542,9 +520,9 @@ private:
     auto accumType = RankedTensorType::get(accumShape, elemType, slice2d);
     // Create new accumulator
     builder.setInsertionPointAfter(oldAccum.getDefiningOp());
-    auto reductionOp = getReductionOp(reduce);
+    Operation *reductionOp = reduce.getSingleCombiner();
     assert(reductionOp && "Processing a reduce that is not supported!");
-    auto neutralVal = getNeutralElement(reductionOp.value());
+    auto neutralVal = getNeutralElement(reductionOp);
     assert(neutralVal && "Could not find neutral value for reduction op!");
     auto denseAttr = DenseElementsAttr::get(accumType, neutralVal.value());
     auto newAccum = arith::ConstantOp::create(builder, oldAccum.getLoc(),
