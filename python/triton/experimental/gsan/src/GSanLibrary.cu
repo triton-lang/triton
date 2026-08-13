@@ -723,6 +723,13 @@ GSAN_DEVICE void acquireMBarrierPhase(GlobalState *globals, void *scratch,
 
   MBarrierPublishedClock clocks[kMaxClusterCTAs] = {};
   clusterLockAcquire(barrier->lock);
+  if (barrier->generation == 0 && waitPhase == 1) {
+    // The immediately preceding phase is always complete, even if the mbarrier
+    // has just been created and there was no previous phase.
+    // https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier-test-wait-try-wait
+    clusterLockRelease(barrier->lock);
+    return;
+  }
   const auto &phase = barrier->phases[waitPhase];
   assert_msg(loc, ((phase.generation - 1) & 1) == waitPhase,
              "Invalid GSan mbarrier phase state");
