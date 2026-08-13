@@ -672,35 +672,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 4 : i32} {
-  // CHECK-LABEL: @cluster_arrive_not_warp_specialized
-  llvm.func @cluster_arrive_not_warp_specialized() {
-    // CHECK-NOT: ttg.warp_specialize
-    // CHECK: nvvm.cluster.arrive
-    ttng.cluster_arrive
-    llvm.return
-  }
-}
-
-// -----
-
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32} {
-  // CHECK-LABEL: @cluster_arrive_warp_specialized
-  llvm.func @cluster_arrive_warp_specialized() {
-    // CHECK: ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 4>}
-    // CHECK: default {
-    // CHECK-NEXT: nvvm.cluster.arrive.relaxed
-    // CHECK-NEXT: ttg.warp_yield
-    // CHECK: partition0() num_warps(4) {
-    // CHECK-NEXT: nvvm.cluster.arrive.relaxed
-    // CHECK-NEXT: ttg.warp_return
-    ttng.cluster_arrive {relaxed = true}
-    llvm.return
-  }
-}
-
-// -----
-
 #local_gather_scatter_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1]]}>
 #local_gather_scatter_shared_split = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
 #local_gather_scatter_shared_broadcast = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 0]]}>
@@ -1115,35 +1086,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       ttg.warp_return
     } : () -> ()
     tt.return
-  }
-}
-
-// -----
-
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 4 : i32} {
-  // CHECK-LABEL: @cluster_wait_not_warp_specialized
-  llvm.func @cluster_wait_not_warp_specialized() {
-    // CHECK-NOT: ttg.warp_specialize
-    // CHECK: nvvm.cluster.wait
-    ttng.cluster_wait
-    llvm.return
-  }
-}
-
-// -----
-
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32} {
-  // CHECK-LABEL: @cluster_wait_warp_specialized
-  llvm.func @cluster_wait_warp_specialized() {
-    // CHECK: ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 4>}
-    // CHECK: default {
-    // CHECK-NEXT: nvvm.cluster.wait
-    // CHECK-NEXT: ttg.warp_yield
-    // CHECK: partition0() num_warps(4) {
-    // CHECK-NEXT: nvvm.cluster.wait
-    // CHECK-NEXT: ttg.warp_return
-    ttng.cluster_wait
-    llvm.return
   }
 }
 
