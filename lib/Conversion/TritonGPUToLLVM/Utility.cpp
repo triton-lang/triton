@@ -332,7 +332,15 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
       outIndices.push_back({outDimName, b.i32_val(constant)});
   }
 
-  if (nonConstantIns.size() == 0) {
+  if (outIndices.size() == 1 &&
+      layout.getOutDimSize(outIndices.front().first) == 2) {
+    while (!nonConstantIns.empty() &&
+           layout.sublayoutIsZero({nonConstantIns.back().first},
+                                  {outIndices.front().first}))
+      nonConstantIns.pop_back();
+  }
+
+  if (nonConstantIns.empty()) {
     return outIndices;
   }
 

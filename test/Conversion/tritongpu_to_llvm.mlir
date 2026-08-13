@@ -3089,3 +3089,22 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.prof
     tt.return
   }
 }
+
+// -----
+
+#onebit_lane = #ttg.linear<{register = [[0]], lane = [[0], [0], [1], [0], [0]], warp = [[0], [0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @linear_layout_onebit_first_input
+  tt.func @linear_layout_onebit_first_input(%ptr: tensor<2x!tt.ptr<i32>, #onebit_lane>) {
+    // CHECK: [[LANE:%.*]] = llvm.urem {{.*}} : i32
+    // CHECK: [[WARP:%.*]] = ttg.warp_id
+    // CHECK-NOT: llvm.shl [[WARP]]
+    // CHECK: [[SHIFTED:%.*]] = llvm.shl [[LANE]], {{.*}} : i32
+    // CHECK: [[PACKED:%.*]] = llvm.or {{.*}}, [[SHIFTED]] : i32
+    // CHECK: [[BITS:%.*]] = llvm.and [[PACKED]], {{.*}} : i32
+    // CHECK: llvm.lshr [[BITS]], {{.*}} : i32
+    %result = tt.make_range {start = 0 : i32, end = 2 : i32} : tensor<2xi32, #onebit_lane>
+    tt.store %ptr, %result : tensor<2x!tt.ptr<i32>, #onebit_lane>
+    tt.return
+  }
+}
