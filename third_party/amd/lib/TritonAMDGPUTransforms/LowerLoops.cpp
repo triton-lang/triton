@@ -182,6 +182,10 @@ StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
   return {newLoadOp, viewLoad, storeOp, maybeLocalLoad};
 }
 
+static ttg::SharedEncodingTrait
+clampSwizzleForDirectToLds(RankedTensorType srcTy, ttg::SharedEncodingTrait enc,
+                           const tt::AMD::TargetInfo &targetInfo);
+
 // Adapted from
 // lib/Dialect/TritonGPU/Transforms/Utility.cpp::getSharedEncIfAllUsersAreDotEnc
 // to support AMDMfmaEncodingAttr.
@@ -354,6 +358,17 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
 
   LDBG("Deduced shared encoding: " << maxVecSharedEnc);
 
+  // On GFX9 the direct-to-LDS lowering models the shared swizzle as a
+  // within-warp lane shuffle. If the deduced swizzle would shuffle across the
+  // warp boundary (e.g. a bf16 kWidth=8 operand feeding an f32 async copy),
+  // shrink its maxPhase so the shuffle stays valid instead of miscompiling into
+  // an out-of-bounds global read.
+  if (useAsyncCopy && !targetInfo.supportsDirectToLdsScatter())
+    if (auto ld = dyn_cast<tt::LoadOp>(loadOp))
+      if (auto srcTy = dyn_cast<RankedTensorType>(ld.getResult().getType()))
+        maxVecSharedEnc =
+            clampSwizzleForDirectToLds(srcTy, maxVecSharedEnc, targetInfo);
+
   return maxVecSharedEnc;
 }
 
@@ -374,6 +389,111 @@ bool hasEnoughCTABytesForDirectToLds(tt::LoadOp loadOp,
   int64_t ctaTileBits = mlir::product(ttg::getShapePerCTA(srcTy)) *
                         srcTy.getElementTypeBitWidth();
   return ctaTileBits >= 32 * targetInfo.getWarpSize();
+}
+
+// The GFX9 direct-to-LDS lowering of a swizzled shared encoding assumes the
+// shuffle stays inside the warp, but a wide operand swizzle (e.g. bf16
+// kWidth=8 feeding an f32 direct-to-LDS load) can have a reach larger than the
+// lanes covering the swizzled dimension. Detect that statically for a
+// candidate shared encoding so the caller can shrink the maxPhase before it is
+// committed.
+static bool
+directToLdsSwizzleStaysInWarp(RankedTensorType srcTy,
+                              ttg::SwizzledSharedEncodingAttr enc,
+                              const tt::AMD::TargetInfo &targetInfo) {
+  // Scatter-capable targets do not use the lane-shuffle swizzle path.
+  if (targetInfo.supportsDirectToLdsScatter())
+    return true;
+
+  // maxPhase == 1 means no swizzling, so `requiresSrcPtrSwizzling` is false in
+  // the lowering and there is no lane shuffle.
+  if (!enc || enc.getMaxPhase() == 1)
+    return true;
+
+  MLIRContext *ctx = srcTy.getContext();
+  auto shape = srcTy.getShape();
+
+  // Mirror the flat (unswizzled) encoding the lowering builds to compute LDS
+  // addresses when gathering into shared memory.
+  auto flatEnc = ttg::SwizzledSharedEncodingAttr::get(
+      ctx, enc.getVec(), /*perPhase=*/1, /*maxPhase=*/1, enc.getOrder(),
+      enc.getCGALayout());
+
+  auto regLayout = triton::gpu::toLinearLayout(srcTy);
+  auto sharedSwizz = triton::gpu::toLinearLayout(shape, enc);
+  auto sharedFlat = triton::gpu::toLinearLayout(shape, flatEnc);
+
+  auto regToSharedSwizzled = regLayout.invertAndCompose(sharedSwizz);
+  auto regToSharedFlat = regLayout.invertAndCompose(sharedFlat);
+
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto kWarp = StringAttr::get(ctx, "warp");
+  auto kBlock = StringAttr::get(ctx, "block");
+
+  // Mirror emitSwizzledLaneOffsets, which normalizes the swizzled-vs-flat
+  // offset delta by the vector size to turn it into a lane offset.
+  int64_t vec = enc.getVec();
+  // Enumerate lanes over the layout's own lane dimension: apply() silently
+  // ignores index bits above the in-dim size, so an out-of-range lane would
+  // alias onto a smaller one and yield a meaningless offset.
+  int64_t warpSize = regToSharedSwizzled.getInDimSize(kLane);
+  int64_t numRegs = regToSharedSwizzled.getInDimSize(kRegister);
+
+  for (int32_t regId = 0; regId < numRegs; ++regId) {
+    for (int64_t lane = 0; lane < warpSize; ++lane) {
+      int32_t swizzledOff = regToSharedSwizzled
+                                .apply({{kRegister, regId},
+                                        {kLane, static_cast<int32_t>(lane)},
+                                        {kWarp, 0},
+                                        {kBlock, 0}})[0]
+                                .second;
+      int32_t flatOff = regToSharedFlat
+                            .apply({{kRegister, regId},
+                                    {kLane, static_cast<int32_t>(lane)},
+                                    {kWarp, 0},
+                                    {kBlock, 0}})[0]
+                            .second;
+      int64_t shuffledLane = lane + (swizzledOff - flatOff) / vec;
+      if (shuffledLane < 0 || shuffledLane >= warpSize)
+        return false;
+    }
+  }
+  return true;
+}
+
+// If a swizzled shared encoding would make the GFX9 direct-to-LDS lane shuffle
+// leave the warp, shrink its maxPhase until the shuffle is valid. Halving
+// maxPhase monotonically reduces the swizzle reach, and maxPhase == 1 always
+// passes, so the search terminates on the largest safe value.
+static ttg::SharedEncodingTrait
+clampSwizzleForDirectToLds(RankedTensorType srcTy, ttg::SharedEncodingTrait enc,
+                           const tt::AMD::TargetInfo &targetInfo) {
+  auto swizz = dyn_cast_or_null<ttg::SwizzledSharedEncodingAttr>(enc);
+  if (!swizz)
+    return enc;
+
+  for (unsigned maxPhase = swizz.getMaxPhase(); maxPhase >= 1; maxPhase /= 2) {
+    auto candidate =
+        maxPhase == swizz.getMaxPhase()
+            ? swizz
+            : ttg::SwizzledSharedEncodingAttr::get(
+                  swizz.getContext(), swizz.getVec(), swizz.getPerPhase(),
+                  maxPhase, swizz.getOrder(), swizz.getCGALayout());
+    if (directToLdsSwizzleStaysInWarp(srcTy, candidate, targetInfo)) {
+      if (candidate != swizz)
+        LDBG("Clamped direct-to-LDS swizzle maxPhase "
+             << swizz.getMaxPhase() << " -> " << maxPhase
+             << " to keep the lane shuffle inside the warp");
+      return candidate;
+    }
+    if (maxPhase == 1)
+      break;
+  }
+  // Unreachable: maxPhase == 1 always stays in warp.
+  return ttg::SwizzledSharedEncodingAttr::get(
+      swizz.getContext(), swizz.getVec(), swizz.getPerPhase(), /*maxPhase=*/1,
+      swizz.getOrder(), swizz.getCGALayout());
 }
 
 bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
