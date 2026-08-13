@@ -1570,7 +1570,6 @@ bool backwardRematerialization(ModuleOp module, bool disableRematSplitting) {
 }
 
 void hoistConvert(ModuleOp module, bool disableRematSplitting) {
-  SmallVector<ConvertLayoutOp> convertOps;
   module.walk([&](FuncOp funcOp) {
     LayoutRematerialization layoutRemat(funcOp);
     layoutRemat.hoistConvertOnTopOfExtOrBroadcast(disableRematSplitting);
