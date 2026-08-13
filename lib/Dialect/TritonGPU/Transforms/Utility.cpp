@@ -659,9 +659,6 @@ bool isExpensiveLoadOrStore(Operation *op) {
 }
 
 bool canUseResultEncoding(Operation *op, Attribute targetEncoding) {
-  if (isa<triton::CatOp>(op))
-    return triton::gpu::isLegalCatEncoding(cast<triton::CatOp>(op),
-                                           targetEncoding);
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     if (mlir::isa<triton::gpu::NvidiaMmaEncodingAttr>(targetEncoding)) {
       auto srcEncoding = convert.getSrc().getType().getEncoding();
@@ -970,8 +967,6 @@ LogicalResult getConvertBackwardSlice(
         continue;
       if (stopPropagation && stopPropagation(definingOp))
         continue;
-      if (isa<triton::CatOp>(definingOp))
-        return failure();
       if (auto gather = dyn_cast<GatherOp>(definingOp)) {
         // Specially handle gather since its transfer function only applies
         // between its index operand and result.
