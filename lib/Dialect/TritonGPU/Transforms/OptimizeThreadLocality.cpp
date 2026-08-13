@@ -1,6 +1,7 @@
 #include <memory>
 #include <numeric>
 
+#include "llvm/ADT/TypeSwitch.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
@@ -239,6 +240,20 @@ struct OptimizeGatherLayoutPattern : public mlir::OpRewritePattern<GatherOp> {
 } // namespace
 
 namespace {
+static bool hasSameReductionSemantics(Operation *reductionOp,
+                                      Operation *updateOp) {
+  auto match = [updateOp](auto typedReductionOp) {
+    using OpTy = decltype(typedReductionOp);
+    auto typedUpdateOp = dyn_cast<OpTy>(updateOp);
+    return typedUpdateOp &&
+           typedReductionOp.getProperties() == typedUpdateOp.getProperties();
+  };
+  return llvm::TypeSwitch<Operation *, bool>(reductionOp)
+      .Case<arith::AddFOp, arith::MulFOp, arith::MaximumFOp,
+            arith::MaxNumFOp, arith::MinimumFOp, arith::MinNumFOp>(match)
+      .Default(false);
+}
+
 class TritonGPUOptimizeThreadLocalityPass
     : public impl::TritonGPUOptimizeThreadLocalityBase<
           TritonGPUOptimizeThreadLocalityPass> {
@@ -259,10 +274,7 @@ class TritonGPUOptimizeThreadLocalityPass
       auto rank = srcType.getShape().size();
       auto srcEncoding = srcType.getEncoding();
       auto reductionOp = getReductionOp(reduce);
-      if (!reductionOp ||
-          !isa<arith::AddFOp, arith::MulFOp, arith::MaximumFOp,
-               arith::MaxNumFOp, arith::MinimumFOp, arith::MinNumFOp>(
-              reductionOp.value()))
+      if (!reductionOp)
         return;
       // TODO: relax this restriction
       if (!(isa<triton::gpu::BlockedEncodingAttr>(srcEncoding) && rank > 1))
@@ -284,7 +296,7 @@ class TritonGPUOptimizeThreadLocalityPass
       if (!reduce->hasOneUse())
         return;
       Operation *user = *(reduce->getUsers().begin());
-      if (user->getName() != reductionOp.value()->getName() ||
+      if (!hasSameReductionSemantics(reductionOp.value(), user) ||
           !user->hasOneUse())
         return;
       OpOperand &yieldOpOperand = *(user->getUses().begin());
