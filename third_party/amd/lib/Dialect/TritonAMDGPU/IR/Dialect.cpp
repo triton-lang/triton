@@ -343,6 +343,8 @@ LogicalResult ExtractSliceOp::verify() {
   };
 
   for (size_t i = 0; i < rank; ++i) {
+    if (offsets[i] < 0)
+      return failDim("offset must be non-negative", i);
     if (dstShape[i] > srcShape[i])
       return failDim("result shape cannot exceed source shape", i);
     if (offsets[i] + dstShape[i] > srcShape[i])
@@ -439,7 +441,7 @@ struct CanonicalizeExtractSliceAndConcat
     auto srcShape = concatItemType.getShape();
     auto rank = srcShape.size();
     for (auto [dimOffset, dimSize] : llvm::zip_equal(offset, srcShape)) {
-      if (dimOffset < 0 || dimOffset % dimSize != 0)
+      if (dimOffset % dimSize != 0)
         return failure();
     }
     std::vector<unsigned> defaultOrder(rank);
