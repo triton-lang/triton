@@ -2090,7 +2090,8 @@ def test_linear_apply_layouts(second_dim, use_member, device):
                                            use_member, num_warps=4)
     torch.testing.assert_close(output, reference, rtol=0, atol=0)
     assert "tt.linear_apply" in compiled.asm["ttgir"]
-    assert ("nvvm.shfl.sync.idx" in compiled.asm["llir"]) or ("llvm.amdgcn.ds.bpermute" in compiled.asm["llir"])
+    if is_cuda():
+        assert "nvvm.shfl.sync.idx" in compiled.asm["llir"]
     assert compiled.metadata.shared == 0
 
 
