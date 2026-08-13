@@ -113,8 +113,6 @@ bool containsLocalBarrier(Operation *op) {
     return true;
   if (isa<ttng::ClusterBarrierOp>(op))
     return true;
-  if (isa<ttng::ClusterWaitOp>(op))
-    return true;
   if (isa<triton::gpu::WarpSpecializePartitionsOp>(op))
     return true;
   if (isa<ttng::ArriveBarrierOp>(op))

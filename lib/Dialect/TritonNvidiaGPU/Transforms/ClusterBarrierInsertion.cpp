@@ -347,7 +347,7 @@ private:
 
 void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
                                     FuncMapT *funcMap, OpBuilder *builder) {
-  if (isa<ttng::ClusterBarrierOp, ttng::ClusterWaitOp>(op)) {
+  if (isa<ttng::ClusterBarrierOp>(op)) {
     blockInfo->sync();
     return;
   }
