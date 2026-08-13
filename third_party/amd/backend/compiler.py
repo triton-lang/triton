@@ -537,6 +537,8 @@ class HIPBackend(BaseBackend):
         metadata["name"] = names[0]
         # llvm -> hsaco
         flags = []
+        if options.arch in ["gfx942", "gfx950"]:
+            flags.append("amdgpu-use-amdgpu-trackers")
         if is_expert_scheduling_enabled(options.arch):
             flags.append("amdgpu-expert-scheduling-mode")
         features = ''
