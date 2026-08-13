@@ -217,8 +217,9 @@ struct ClusterBarrierOpConversion
     if (targetInfo.getTargetFeatures().supportsMbarMulticast()) {
       Value ctaId = NVVM::ClusterId::create(rewriter, loc, i32_ty);
       // Exclude the issuing CTA: the mbarriers expect numCTAs - 1 arrivals.
-      Value peerMask =
-          b.xor_(b.i32_val((1u << numCTAs) - 1), b.shl(b.i32_val(1), ctaId));
+      Value allCTAsMask = b.i32_val((1u << numCTAs) - 1);
+      Value selfMask = b.shl(b.i32_val(1), ctaId);
+      Value peerMask = b.xor_(allCTAsMask, selfMask);
       createMBarrierArrive(rewriter, loc, pred, barrierPtr, relaxed, peerMask);
     } else {
       Value barrierInt = b.ptrtoint(i32_ty, barrierPtr);

@@ -87,6 +87,7 @@ gpu::GlobalScratchAllocOp
 createThirdPartyScratchAlloc(OpBuilder &b, Location loc, Type ptrType,
                              int64_t sizeInBytes, int64_t alignment,
                              bool sharedClusterState = false);
+Region *getClusterBarrierGroupRegion(Operation *op);
 RankedTensorType getSlicedTensorType(RankedTensorType tensorType,
                                      ArrayRef<int> keptDims, Type elementType);
 Value reshapeAndBroadcast(OpBuilder &b, Location loc, Value tensor,
@@ -116,6 +117,17 @@ struct ValueType {
   ValueType(Value value, Type type) : value(value), type(type) {}
   ValueType(std::pair<Value, Type> value)
       : value(value.first), type(value.second) {}
+};
+
+struct BufferStateCandidate {
+  uint32_t baseOffset = 0;
+  llvm::SmallBitVector mask;
+  uint32_t ctaMask = 0;
+};
+
+struct BufferStateCandidates {
+  SmallVector<BufferStateCandidate, 2> cases;
+  bool unknown = false;
 };
 
 // Map from IR region to ConSan auxiliary data.
@@ -225,11 +237,10 @@ struct AuxDataMap {
   // intra-CTA.
   RegionToValueMap commits[CommitKind::NumCommitKinds];
 
-  // Stable exact region identities, the selected state-lane plan, and
-  // analysis-derived candidate IDs for each SSA memdesc.
-  SmallVector<triton::BufferRegion> bufferRegions[numMemTypes];
+  // State-lane plans and analysis-derived runtime-base, state-mask, and CTA
+  // cases for each memdesc.
   triton::BufferStatePlan bufferStatePlans[numMemTypes];
-  DenseMap<Value, SmallVector<uint32_t>> bufferCandidateIds[numMemTypes];
+  DenseMap<Value, BufferStateCandidates> bufferCandidates[numMemTypes];
 
   // scratch pointer, i32
   // Shared-cluster lock used to serialize ConSan instrumentation updates.
@@ -259,11 +270,12 @@ struct AuxDataMap {
   // present; TMA/TC/CLC peer ranges are added only when the module uses them.
   ThreadLayout threadLayout;
 
+  bool hasAsyncCopyReads = false;
   bool hasAsyncProxyFenceTracking = false;
 
   LogicalResult populateAndPassToWarpSpecialize(ModuleOp module,
                                                 FunctionBuilder &funcBuilder,
-                                                const ConSanTargetHooks *hooks);
+                                                const ConSanTargetHooks &hooks);
 
   int getClusterBarrierSlot(Operation *op) const;
 
@@ -271,7 +283,7 @@ private:
   LogicalResult
   getBuffersAndBarriers(ModuleOp module,
                         SmallVector<triton::BufferRegion> &barrierRegions,
-                        const ConSanTargetHooks *hooks);
+                        const ConSanTargetHooks &hooks);
   void passToWarpSpecialize(triton::FuncOp func, ValueType value,
                             RegionToValueMap &map, int &captureCounter,
                             int64_t &captureBytes);

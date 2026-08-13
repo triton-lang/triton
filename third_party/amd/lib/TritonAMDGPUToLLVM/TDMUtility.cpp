@@ -23,6 +23,25 @@ Value vecSet(TritonLLVMOpBuilder &b, Value vec, int idx, Value val) {
   return b.insert_element(vec, val, b.i32_val(idx));
 }
 
+// Keep the carried group0 descriptor in one SGPR tuple across consecutive TDM
+// instructions. LLVM's AMDGPU DAG combiner otherwise expands each
+// insertelement from a shared BUILD_VECTOR into an independent REG_SEQUENCE,
+// so every chunk gets a separate tuple and copies the invariant descriptor
+// lanes. The empty side-effecting asm sequences each update after the previous
+// TDM intrinsic; tying its output to its input makes it instruction-free while
+// preventing that BUILD_VECTOR expansion.
+Value sequenceGroup0(RewriterBase &rewriter, Location loc, Value group0) {
+  auto *ctx = rewriter.getContext();
+  return LLVM::InlineAsmOp::create(
+             rewriter, loc, group0.getType(), ValueRange{group0},
+             /*asm_string=*/"", /*constraints=*/"=s,0",
+             /*has_side_effects=*/true, /*is_align_stack=*/false,
+             LLVM::TailCallKind::None,
+             LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
+             /*operand_attrs=*/ArrayAttr::get(ctx, {}))
+      .getRes();
+}
+
 // Add `byteOffset` to the 64-bit global address held in group0 dwords [2:3], in
 // place.  Viewing group0 as <2 x i64> and adding to lane 1 is a single i64 add
 // (the i32<->i64 bitcasts are free), saving the scalar-ALU a per-dword
@@ -1329,9 +1348,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
       ctx, numPartitions, numGroupsInSlice, partitionedEnc.getPartitionDim(),
       partitionedEnc.getPartitionLayout());
   triton::LinearLayout sliceLayout =
-      triton::gpu::isPaddedEncoding(sliceEncoding)
-          ? triton::gpu::paddedLinearLayout(sliceShape, sliceEncoding)
-          : triton::gpu::toLinearLayout(sliceShape, sliceEncoding);
+      triton::gpu::toLinearLayoutIgnoringPadding(sliceShape, sliceEncoding);
 
   // Per-partition LDS stride between slices (accounts for padding).
   int64_t elementsPerSlice = computePerPartitionSliceStride(
@@ -1462,8 +1479,12 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
       baseGroup0, baseGroup1, pred, multicastMask, barrierPtr, cgaLayout, ctaId,
       use32BitIndices, isGather);
 
+  // Carry group0 forward so each chunk updates the descriptor produced for the
+  // preceding chunk rather than independently rebuilding it from the base.
+  Value g0 = baseGroup0;
   // Issue multiple TDM instructions if needed
   for (size_t instrIdx = 0; instrIdx < analysis.numInstructions; ++instrIdx) {
+    g0 = sequenceGroup0(rewriter, loc, g0);
     size_t startIdx = instrIdx * maxIndicesPerInstr;
     size_t endIdx = std::min(startIdx + maxIndicesPerInstr, numIndicesPerWarp);
 
@@ -1471,7 +1492,6 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
     SmallVector<Value> batchIndices(effectiveRowIndices.begin() + startIdx,
                                     effectiveRowIndices.begin() + endIdx);
 
-    Value g0 = baseGroup0;
     Value g1 = baseGroup1;
     Value g2 = group2Zero;
     Value g3 = group3Zero;
@@ -1574,7 +1594,8 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
       b.mul(b.zext(i64_ty, tensorShape[0]), tensorStride[0]);
 
   // Calculate maximum allowed offset from tilePtr before going out of bounds
-  Value maxOffsetFromTile = b.sub(linearTensorSize, tileOffset);
+  Value maxInBoundsLocalOffset =
+      b.sub(b.sub(linearTensorSize, tileOffset), b.i64_val(1));
 
   // Prefetches 256 bytes into L2
   const int bytesPerPrefetch = 256;
@@ -1607,7 +1628,7 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
                                         {kBlock, ctaId}});
 
   constexpr int cacheScope = 8; // (8) = L2 scope
-  const int hintValue = cacheScope | static_cast<int>(isSpeculative);
+  const int hintValue = cacheScope | static_cast<int>(!isSpeculative);
   IntegerAttr hint = rewriter.getI32IntegerAttr(hintValue);
 
   // Iterate over each register and emit a prefetch intrinsic
@@ -1627,30 +1648,21 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
     // Compute the local offset from tile ptr for this prefetch based on the
     // computed indices
     Value localOffset = dot64(indices, scaledStride);
-    Value prefetchPtr = b.gep(globalPtrTy, elementType, tilePtr, localOffset);
 
     // Mask the prefetch if the offset is out of bounds
-    Value inBounds = b.icmp_slt(localOffset, maxOffsetFromTile);
+    Value inBounds = b.icmp_sle(localOffset, maxInBoundsLocalOffset);
     // Only predicate based in inBounds for non-speculative prefetches.
     Value combinedPred = isSpeculative ? pred : b.and_(pred, inBounds);
 
     // Predicate and emit prefetch
-    Block *currentBlock = rewriter.getInsertionBlock();
-    Block *afterPrefetch =
-        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
-    Block *prefetchBlock = rewriter.createBlock(afterPrefetch);
-    rewriter.setInsertionPointToEnd(currentBlock);
-    LLVM::CondBrOp::create(rewriter, loc, combinedPred, prefetchBlock,
-                           afterPrefetch);
-
-    rewriter.setInsertionPointToStart(prefetchBlock);
+    // For OOB/pred we clamp the address to the last valid address
+    Value clampedLocalOffset =
+        b.select(combinedPred, localOffset, maxInBoundsLocalOffset);
+    Value prefetchPtr =
+        b.gep(globalPtrTy, elementType, tilePtr, clampedLocalOffset);
 
     ROCDL::GlobalPrefetchOp::create(rewriter, loc, prefetchPtr, hint, {}, {},
                                     {});
-
-    rewriter.setInsertionPointToEnd(prefetchBlock);
-    LLVM::BrOp::create(rewriter, loc, afterPrefetch);
-    rewriter.setInsertionPointToStart(afterPrefetch);
 
     // We return the offsets for unit testing
     offsets[reg] =

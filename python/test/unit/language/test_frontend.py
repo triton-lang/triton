@@ -421,6 +421,46 @@ def test_tuple_assignment_constexpr_tuple_normalizes_recursively():
     run_parser(kernel)
 
 
+def test_tuple_assignment_rejects_too_many_values():
+
+    @triton.jit
+    def kernel():
+        a, b = (1, 2, 3)  # noqa: F841
+
+    with pytest.raises(CompilationError, match="too many values to unpack"):
+        run_parser(kernel)
+
+
+def test_tuple_assignment_rejects_too_few_values():
+
+    @triton.jit
+    def kernel():
+        a, b, c = (1, 2)  # noqa: F841
+
+    with pytest.raises(CompilationError, match=r"not enough values to unpack \(expected 3, got 2\)"):
+        run_parser(kernel)
+
+
+def test_tuple_assignment_rejects_nested_mismatch():
+
+    @triton.jit
+    def kernel():
+        (a, b), c = ((1, 2, 3), 4)  # noqa: F841
+
+    with pytest.raises(CompilationError, match="too many values to unpack"):
+        run_parser(kernel)
+
+
+def test_tuple_assignment_rejects_starred_target():
+
+    @triton.jit
+    def kernel():
+        a, *rest = (1, 2, 3)  # noqa: F841
+
+    with pytest.raises(CompilationError, match="starred assignment targets are not supported"):
+        run_parser(kernel)
+
+
 def test_list_comprehension_if_filter():
 
     @triton.jit
@@ -885,6 +925,7 @@ def test_fp8_div_mod_promotion():
         z = tl.full((8, ), 0, tl.float16).to(tl.float8e4nv)
         h = tl.full((8, ), 0, tl.float16)
         b = tl.full((8, ), 0, tl.bfloat16)
+        d = tl.full((8, ), 0, tl.float64)
         i = tl.full((8, ), 0, tl.int32)
         tl.static_assert((x / y).dtype == tl.float32)
         tl.static_assert((x / z).dtype == tl.float32)
@@ -901,12 +942,14 @@ def test_fp8_div_mod_promotion():
         tl.static_assert((i // i).dtype == tl.int32)
         tl.static_assert((i % i).dtype == tl.int32)
         # A scalar operand doesn't participate in promotion, so / and % against
-        # a float tensor must upcast to fp32 for the same reason, while other
+        # a narrow float tensor must upcast to fp32 for the same reason, while other
         # ops keep the tensor's type.
         tl.static_assert((2.0 / x).dtype == tl.float32)
         tl.static_assert((x / 2.0).dtype == tl.float32)
         tl.static_assert((x % 2).dtype == tl.float32)
         tl.static_assert((h / 2.0).dtype == tl.float32)
+        tl.static_assert((d / 2.0).dtype == tl.float64)
+        tl.static_assert((d % 2.0).dtype == tl.float64)
         tl.static_assert((x * 2.0).dtype == tl.float8e5)
         tl.static_assert((h * 2.0).dtype == tl.float16)
         tl.static_assert((i // 2).dtype == tl.int32)

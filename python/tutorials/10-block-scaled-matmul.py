@@ -20,6 +20,9 @@ and iteration steps.
     # FP8
     python 10-block-scaled-matmul.py --format mxfp8 --K_range 8192 16384 --K_step 2048 --bench
 
+    # FP4 with Cluster Launch Control
+    python 10-block-scaled-matmul.py --format nvfp4 --clc
+
 Future updates to this tutorial which support mixed precision block scaled matmul are planned.
 """
 
@@ -240,7 +243,8 @@ def block_scaled_matmul_kernel(  #
     c_desc.store([offs_am, offs_bn], accumulator.to(output_dtype))
 
 
-def block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, dtype_dst, M, N, K, rep_m, rep_n, rep_k, configs):
+def block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, dtype_dst, M, N, K, rep_m, rep_n, rep_k, configs,
+                        clc=False):
     output = torch.empty((M, N), dtype=dtype_dst, device="cuda")
     if dtype_dst == torch.float32:
         dtype_dst = 0
@@ -256,6 +260,9 @@ def block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, dtype_dst, M
     c_desc = TensorDescriptor.from_tensor(output, [BLOCK_M, BLOCK_N])
 
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    num_stages = configs["num_stages"]
+    if clc:
+        num_stages = min(num_stages, 3)
     block_scaled_matmul_kernel[grid](
         a_desc,
         a_scale_desc,
@@ -275,8 +282,9 @@ def block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, dtype_dst, M
         rep_m,
         rep_n,
         rep_k,
-        configs["num_stages"],
+        num_stages,
         disallow_acc_multi_buffer=configs["disallow_acc_multi_buffer"],
+        clc=clc,
     )
     return output
 
@@ -449,14 +457,14 @@ def initialize_block_scaled(M, N, K, block_scale_type="nvfp4", compute_reference
     return a_desc, a_scale_desc, b_desc, b_scale_desc, rep_m, rep_n, rep_k, configs, reference, a, b, a_scale_cublas, b_scale_cublas
 
 
-def validate_block_scaled(M, N, K, block_scale_type="nvfp4"):
+def validate_block_scaled(M, N, K, block_scale_type="nvfp4", clc=False):
     results = initialize_block_scaled(M, N, K, block_scale_type, compute_reference=True)
     a_desc, a_scale_desc, b_desc, b_scale_desc, rep_m, rep_n, rep_k, configs, reference = results[:9]
     a, b, a_scale_cublas, b_scale_cublas = results[9:]
 
     # Test Triton implementation
     output = block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, torch.float16, M, N, K, rep_m, rep_n,
-                                 rep_k, configs)
+                                 rep_k, configs, clc=clc)
     torch.testing.assert_close(reference, output.to(torch.float32), atol=1e-3, rtol=1e-3)
 
     # Test cuBLAS implementation if available (available for mxfp8 and nvfp4 only as of 13.1)
@@ -469,7 +477,7 @@ def validate_block_scaled(M, N, K, block_scale_type="nvfp4"):
         print(f"✅ (pass {block_scale_type} - Triton only)")
 
 
-def bench_block_scaled(K, block_scale_type="nvfp4", reps=10, warmup_reps=10):
+def bench_block_scaled(K, block_scale_type="nvfp4", reps=10, warmup_reps=10, clc=False):
     assert K % 128 == 0
     M = 8192
     N = 8192
@@ -482,7 +490,7 @@ def bench_block_scaled(K, block_scale_type="nvfp4", reps=10, warmup_reps=10):
     # Warmup
     for _ in range(warmup_reps):
         _ = block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, torch.float16, M, N, K, rep_m, rep_n, rep_k,
-                                configs)
+                                configs, clc=clc)
         if cublas is not None and supports_block_scaling() and block_scale_type in ["mxfp8", "nvfp4"]:
             _ = cublas_block_scaled_matmul(a, a_scale_cublas, b, b_scale_cublas, block_scale_type=block_scale_type)
 
@@ -490,7 +498,7 @@ def bench_block_scaled(K, block_scale_type="nvfp4", reps=10, warmup_reps=10):
     proton.activate()
     for _ in range(reps):
         _ = block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, torch.float16, M, N, K, rep_m, rep_n, rep_k,
-                                configs)
+                                configs, clc=clc)
         if cublas is not None and supports_block_scaling() and block_scale_type in ["mxfp8", "nvfp4"]:
             bytes_per_elem = a.element_size()
             # For nvfp4, K is in elements but a.shape[1] is in bytes, so use K/2 for byte calculation
@@ -734,7 +742,11 @@ if __name__ == "__main__":
     parser.add_argument("--K_step", type=int, default=512)
     parser.add_argument("--bench", action="store_true", default=True)
     parser.add_argument("--format", type=str, choices=["mxfp4", "nvfp4", "mxfp8", "mixed"], default="nvfp4")
+    parser.add_argument("--clc", action="store_true", help="Enable CLC scheduling on NVIDIA SM100+")
     args = parser.parse_args()
+
+    if args.clc and (not is_cuda() or torch.cuda.get_device_capability()[0] < 10):
+        parser.error("--clc requires an NVIDIA SM100+ GPU")
 
     if not supports_block_scaling():
         print("⛔ This example requires GPU support for block scaled matmul")
@@ -746,7 +758,7 @@ if __name__ == "__main__":
         torch.manual_seed(42)
 
         if is_cuda():
-            validate_block_scaled(8192, 8192, 8192, block_scale_type=args.format)
+            validate_block_scaled(8192, 8192, 8192, block_scale_type=args.format, clc=args.clc)
         elif is_hip_cdna4():
             assert args.format == "mxfp4", "AMD tutorial only supports mxpf4 format currently"
             validate_block_scaled_amd(8192, 8192, 8192, block_scale_type=args.format, mfma_nonkdim=16)
@@ -757,7 +769,7 @@ if __name__ == "__main__":
             proton.deactivate()  # Skip argument creation
             for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
                 if is_cuda():
-                    bench_block_scaled(K, reps=10000, block_scale_type=args.format)
+                    bench_block_scaled(K, reps=10000, block_scale_type=args.format, clc=args.clc)
                 elif is_hip_cdna4():
                     bench_block_scaled_amd(K, reps=10000, block_scale_type=args.format, mfma_nonkdim=16)
                     bench_block_scaled_amd(K, reps=10000, block_scale_type=args.format, mfma_nonkdim=32)

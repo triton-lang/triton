@@ -2,15 +2,20 @@
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 #include "triton/Tools/Sys/GetEnv.h"
+#include "triton/Version.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/MIRParser/MIRParser.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
@@ -27,6 +32,7 @@
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/VCSRevision.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
@@ -60,6 +66,52 @@ struct BreakStructPhiNodesPass
 using namespace llvm;
 
 namespace {
+
+struct ExpandMaskedDivRemPass : RequiredPassInfoMixin<ExpandMaskedDivRemPass> {
+  PreservedAnalyses run(Module &module, ModuleAnalysisManager &) {
+    SmallVector<std::pair<IntrinsicInst *, Instruction::BinaryOps>> intrinsics;
+    for (Function &function : module) {
+      for (BasicBlock &block : function) {
+        for (Instruction &instruction : block) {
+          auto *intrinsic = dyn_cast<IntrinsicInst>(&instruction);
+          if (!intrinsic)
+            continue;
+          switch (intrinsic->getIntrinsicID()) {
+          case Intrinsic::masked_sdiv:
+            intrinsics.emplace_back(intrinsic, Instruction::SDiv);
+            break;
+          case Intrinsic::masked_udiv:
+            intrinsics.emplace_back(intrinsic, Instruction::UDiv);
+            break;
+          case Intrinsic::masked_srem:
+            intrinsics.emplace_back(intrinsic, Instruction::SRem);
+            break;
+          case Intrinsic::masked_urem:
+            intrinsics.emplace_back(intrinsic, Instruction::URem);
+            break;
+          default:
+            break;
+          }
+        }
+      }
+    }
+
+    for (auto [intrinsic, opcode] : intrinsics) {
+      IRBuilder<> builder(intrinsic);
+      Value *dividend = intrinsic->getArgOperand(0);
+      Value *divisor = intrinsic->getArgOperand(1);
+      Value *mask = intrinsic->getArgOperand(2);
+      Value *safeDivisor = builder.CreateSelect(
+          mask, divisor, ConstantInt::get(divisor->getType(), 1));
+      intrinsic->replaceAllUsesWith(
+          builder.CreateBinOp(opcode, dividend, safeDivisor));
+      intrinsic->eraseFromParent();
+    }
+
+    return intrinsics.empty() ? PreservedAnalyses::all()
+                              : PreservedAnalyses::none();
+  }
+};
 
 // Set an LLVM command-line option using addOccurrence (simulates command-line)
 // and return its original value. Using addOccurrence instead of setValue is
@@ -362,12 +414,20 @@ std::string translateLLVMIRToASM(
     }
   }
 
+  // Set up target information before inlining so target-specific inline
+  // compatibility checks use the backend's TTI.
+  module.setTargetTriple(Triple(triple));
+  auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
+  module.setDataLayout(machine->createDataLayout());
+
   // inline everything
   for (llvm::Function &f : module.functions())
     if (!f.hasFnAttribute(llvm::Attribute::NoInline))
       f.addFnAttr(llvm::Attribute::AlwaysInline);
   // verify and store llvm
   llvm::legacy::PassManager pm;
+  pm.add(llvm::createTargetTransformInfoWrapperPass(
+      machine->getTargetIRAnalysis()));
   pm.add(llvm::createAlwaysInlinerLegacyPass());
   pm.add(llvm::createVerifierPass());
 
@@ -388,11 +448,6 @@ std::string translateLLVMIRToASM(
     timePassesStr.clear();
   }
 
-  // create machine
-  module.setTargetTriple(Triple(triple));
-  auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
-  // set data layout
-  module.setDataLayout(machine->createDataLayout());
   if (canonicalizeGEP && !disableLLVMOpt) {
     // The NVPTX pipeline otherwise exposes many equivalent GEPs to SLSR
     // without eliminating them first.
@@ -630,11 +685,12 @@ void init_triton_llvm(py::module_ &m) {
       });
 
   // optimization levels
-  py::class_<llvm::OptimizationLevel>(m, "optimization_level");
-  m.attr("OPTIMIZE_O0") = llvm::OptimizationLevel::O0;
-  m.attr("OPTIMIZE_O1") = llvm::OptimizationLevel::O1;
-  m.attr("OPTIMIZE_O2") = llvm::OptimizationLevel::O2;
-  m.attr("OPTIMIZE_O3") = llvm::OptimizationLevel::O3;
+  py::enum_<llvm::OptimizationLevel>(m, "optimization_level")
+      .value("OPTIMIZE_O0", llvm::OptimizationLevel::O0)
+      .value("OPTIMIZE_O1", llvm::OptimizationLevel::O1)
+      .value("OPTIMIZE_O2", llvm::OptimizationLevel::O2)
+      .value("OPTIMIZE_O3", llvm::OptimizationLevel::O3)
+      .export_values();
 
   m.def(
       "to_module",
@@ -647,6 +703,22 @@ void init_triton_llvm(py::module_ &m) {
         return llvmMod;
       },
       py::keep_alive<0, 2>(), py::call_guard<py::gil_scoped_release>());
+
+  // Add Triton and LLVM versions to the module.
+  m.def("add_version_info", [](llvm::Module *mod) {
+    llvm::LLVMContext &ctx = mod->getContext();
+    // Use llvm.ident metadata so the versions appear in the asm as well.
+    auto *ident = mod->getOrInsertNamedMetadata("llvm.ident");
+    auto addIdent = [&](llvm::StringRef s) {
+      ident->addOperand(llvm::MDNode::get(ctx, {llvm::MDString::get(ctx, s)}));
+    };
+    addIdent("Triton version " TRITON_VERSION);
+#ifdef LLVM_REVISION
+    addIdent("LLVM version " LLVM_VERSION_STRING " (" LLVM_REVISION ")");
+#else
+    addIdent("LLVM version " LLVM_VERSION_STRING);
+#endif
+  });
 
   m.def("attach_datalayout", [](llvm::Module *mod, const std::string triple,
                                 const std::string proc,
@@ -671,7 +743,7 @@ void init_triton_llvm(py::module_ &m) {
       [](llvm::Module *mod, const llvm::OptimizationLevel &opt,
          std::string arch, std::string features, std::vector<std::string> flags,
          bool enable_fp_fusion, bool disable_slp_vectorizer,
-         bool disable_vector_combine) {
+         bool disable_vector_combine, bool expand_masked_div_rem) {
         if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
           return;
         // Check to see if we are passing a list of flags to disable
@@ -788,6 +860,8 @@ void init_triton_llvm(py::module_ &m) {
           mpm.addPass(AddressSanitizerPass(Opts));
         }
         mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
+        if (expand_masked_div_rem)
+          mpm.addPass(ExpandMaskedDivRemPass());
         mpm.run(*mod, mam);
       },
       // Mandatory parameters
@@ -799,6 +873,7 @@ void init_triton_llvm(py::module_ &m) {
       py::arg("enable_fp_fusion") = false,
       py::arg("disable_slp_vectorizer") = false,
       py::arg("disable_vector_combine") = false,
+      py::arg("expand_masked_div_rem") = false,
       py::call_guard<py::gil_scoped_release>());
 
   m.def("translate_to_asm",

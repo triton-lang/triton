@@ -1,6 +1,7 @@
 #ifndef TRITON_ANALYSIS_ALLOCATION_H
 #define TRITON_ANALYSIS_ALLOCATION_H
 
+#include "triton/Analysis/CallGraph.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Tools/GenericSwizzling.h"
 #include "llvm/ADT/DenseMap.h"
@@ -19,6 +20,9 @@ class AllocationAnalysis;
 using AllocationAnalysisScratchSizeFn = std::function<unsigned(Operation *)>;
 
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
+
+/// Returns whether an operation uses scratch memory across CTAs.
+bool hasCrossCTAScratch(Operation *op);
 
 unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
                                        const LinearLayout &dstLayout,

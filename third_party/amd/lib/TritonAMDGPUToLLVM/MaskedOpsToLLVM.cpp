@@ -39,6 +39,7 @@ public:
     std::tie(volatileFlag, nonTmpFlag) =
         mlir::LLVM::AMD::getCacheModifierFlagsForLoadStore(
             cacheMod, mlir::LLVM::AMD::MemoryOp::Load);
+    volatileFlag |= loadOp.getIsVolatile();
 
     auto createLoadWithAttrs = [&](Location loadLoc) -> Value {
       int vecBits = 0;
@@ -48,8 +49,11 @@ public:
         vecBits = elemTy.getIntOrFloatBitWidth();
       }
       assert(vecBits != 0);
-      // We can only multicast for 32, 64, 128 bit load size (hw limitation)
-      if (multicastMask && targetInfo.supportsClusterLoadBitWidth(vecBits)) {
+      bool supportsClusterLoad =
+          targetInfo.supportsClusterLoadBitWidth(vecBits);
+      // The cluster load intrinsic cannot represent LLVM volatile semantics,
+      // so use a regular load for volatile accesses.
+      if (multicastMask && supportsClusterLoad && !loadOp.getIsVolatile()) {
         std::string intrinsic =
             "llvm.amdgcn.cluster.load.b" + std::to_string(vecBits);
         auto cacheModBits = LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
@@ -63,7 +67,7 @@ public:
             rewriter, loc, intrinsic, {resTy},
             {ptr, b.i32_val(cacheModBits), multicastMask});
         return b.bitcast(clusterLoadOp->getResult(0), elemTy);
-      } else if (multicastMask) {
+      } else if (multicastMask && !supportsClusterLoad) {
         loadOp.emitRemark()
             << "Multicast with bit width " << vecBits << " is not supported on "
             << targetInfo.getArch() << " falling back to regular load";
@@ -87,8 +91,7 @@ public:
     }
 
     Block *currentBlock = rewriter.getInsertionBlock();
-    Block *afterLoad =
-        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    Block *afterLoad = currentBlock->splitBlock(rewriter.getInsertionPoint());
     afterLoad->addArgument({elemTy}, {loc});
 
     Block *trueBlock = rewriter.createBlock(afterLoad);
@@ -157,8 +160,7 @@ public:
     }
 
     Block *currentBlock = rewriter.getInsertionBlock();
-    Block *afterStore =
-        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    Block *afterStore = currentBlock->splitBlock(rewriter.getInsertionPoint());
     Block *trueBlock = rewriter.createBlock(afterStore);
     rewriter.setInsertionPointToEnd(currentBlock);
     LLVM::CondBrOp::create(rewriter, loc, mask, trueBlock, afterStore);

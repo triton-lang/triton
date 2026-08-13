@@ -108,6 +108,20 @@ LogicalResult verifyTDMLayoutConsistency(Operation *op,
   Attribute allocLayout = smemTy.getEncoding();
 
   bool compatible = descLayout == allocLayout;
+  // Rank-reducing descriptor loads drop leading unit dimensions from the
+  // allocation, so the two swizzled encodings have different ranks even though
+  // they describe the same LDS layout. Compare the physical layouts with the
+  // dropped dimensions projected away.
+  int descRank = descTy.getShape().size();
+  int allocRank = smemTy.getRank();
+  if (descRank > allocRank &&
+      llvm::isa<gpu::SwizzledSharedEncodingAttr>(descLayout) &&
+      llvm::isa<gpu::SwizzledSharedEncodingAttr>(allocLayout)) {
+    auto descLL = gpu::toLinearLayout(descTy.getShape(), descLayout);
+    for (int i = 0; i < descRank - allocRank; ++i)
+      descLL = triton::removeStandardDim(descLL, 0);
+    compatible = descLL == gpu::toLinearLayout(smemTy);
+  }
   // Padded layouts bake in the tile shape, so compare the physical padding
   // only.
   auto descPad = llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(descLayout);
@@ -121,7 +135,9 @@ LogicalResult verifyTDMLayoutConsistency(Operation *op,
            << descLayout
            << ") is inconsistent with the shared memory allocation layout ("
            << allocLayout
-           << "); TDM uses a single shared layout so they must match";
+           << "); TDM accesses shared memory through the descriptor's layout, "
+              "so the allocation must describe the same physical layout, up to "
+              "leading unit dimensions dropped by a rank-reducing access";
   return success();
 }
 
@@ -736,13 +752,8 @@ LogicalResult LocalLoadPackedTransposedOp::verify() {
   if (!dotEnc)
     return emitOpError("only works with DotOperandEncodingAttr dst encoding");
 
-  auto sharedEnc =
-      dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
-  if (!sharedEnc)
-    return emitOpError(
-        "only works with SwizzledSharedEncodingAttr src encoding");
-
-  auto order = sharedEnc.getOrder();
+  auto order = triton::gpu::getOrder(srcTy);
+  ArrayRef<unsigned> orderRef(order);
   bool isA = dotEnc.getOpIdx() == 0;
 
   // operand A: [0, 1] / [1, 2, 0]
@@ -751,7 +762,7 @@ LogicalResult LocalLoadPackedTransposedOp::verify() {
 
   if (isA) {
     bool matchingOrderA =
-        order.equals({0, 1}) || (hasBatchDim && order.equals({1, 2, 0}));
+        orderRef.equals({0, 1}) || (hasBatchDim && orderRef.equals({1, 2, 0}));
     if (!matchingOrderA)
       return emitOpError("Order of dimensions don't match expected");
 
@@ -765,7 +776,7 @@ LogicalResult LocalLoadPackedTransposedOp::verify() {
           "Input and output dimensions don't match after packing changes");
   } else {
     bool matchingOrderB =
-        order.equals({1, 0}) || (hasBatchDim && order.equals({2, 1, 0}));
+        orderRef.equals({1, 0}) || (hasBatchDim && orderRef.equals({2, 1, 0}));
     if (!matchingOrderB)
       return emitOpError("Order of dimensions don't match expected");
 

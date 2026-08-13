@@ -34,6 +34,7 @@ include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypeInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUOpInterfaces.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUMemoryEffects.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
@@ -41,12 +42,40 @@ include "mlir/Interfaces/DestinationStyleOpInterface.td"
 include "mlir/Interfaces/ViewLikeInterface.td"
 
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
-def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
 def TensorMemory : Resource<"::mlir::triton::nvidia_gpu::TensorMemory">;
 
 class TTNG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonNvidiaGPU_Dialect, mnemonic,
        !listconcat(traits, [VerifyTensorLayoutsTrait, VerifyMemDescLayoutsTrait])> {
+}
+
+def TTNG_PackedArithOperandElement : AnyTypeOf<[
+  I8, F8E8M0FNU, F8E4M3FN, F8E5M2, F16, BF16, F32
+], "packed arithmetic operand element">;
+def TTNG_PackedArithResultElement : AnyTypeOf<[
+  F8E4M3FN, F8E5M2, F16, BF16, F32
+], "packed arithmetic result element">;
+
+def TTNG_PackedArithOp : TTNG_Op<"packed_arith", [Pure]> {
+  let summary = "Apply elementwise arithmetic using a packed PTX instruction";
+
+  let description = [{
+    Applies packed x2, mixed-precision, and FP8/FP4/UE8M0 x4 arithmetic.
+    Instruction types, modifiers, and grouping are inferred from tensor types.
+    FP4 uses lower-nibble-first i8 values along the inferred halved dimension.
+  }];
+
+  let arguments = (ins
+    TTNG_PackedArithOpKindAttr:$op_kind,
+    Variadic<RankedTensorOf<[TTNG_PackedArithOperandElement]>>:$operands
+  );
+  let results = (outs RankedTensorOf<[TTNG_PackedArithResultElement]>:$result);
+
+  let assemblyFormat = [{
+    $op_kind $operands attr-dict `:` functional-type($operands, $result)
+  }];
+
+  let hasVerifier = 1;
 }
 
 def TTNG_FenceAsyncSharedOp : TTNG_Op<"fence_async_shared"> {
@@ -96,6 +125,13 @@ def TTNG_ClusterBarrierOp : TTNG_Op<"cluster_barrier", []> {
 //
 // Cluster Launch Control (CLC) Ops - Blackwell SM100+
 //
+def TTNG_CLCTryCancelSyncOp : TTNG_Op<"clc_try_cancel_sync"> {
+  let summary = "Request cancellation of a pending cluster";
+  let results = (outs TT_Tensor:$response);
+  let assemblyFormat = "attr-dict `:` type($response)";
+  let hasVerifier = 1;
+}
+
 def TTNG_CLCTryCancelOp : TTNG_Op<"clc_try_cancel", [
     DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
   let summary = "Issue CLC try_cancel to cancel a pending cluster";
@@ -112,8 +148,8 @@ def TTNG_CLCTryCancelOp : TTNG_Op<"clc_try_cancel", [
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$mbarrier
+    Arg<TTG_MemDescType, "", AsyncSharedWrite>:$result,
+    Arg<TTG_MemDescType, "", BarrierSharedWrite>:$mbarrier
   );
 
   let assemblyFormat = [{
@@ -132,7 +168,7 @@ def TTNG_CLCLoadResultOp : TTNG_Op<"clc_load_result", []> {
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
+    Arg<TTG_MemDescType, "", GenericSharedRead>:$src
   );
 
   let results = (outs I128:$clcResult);
@@ -228,7 +264,7 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
 def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                                               AllTypesMatch<["inputs", "outputs"]>]> {
   let summary = "warp group dot wait";
-  let arguments = (ins Variadic<TTG_TensorOrMemDesc>:$inputs, I32Attr:$pendings);
+  let arguments = (ins Variadic<TTG_TensorOrMemDesc>:$inputs, I32Attr:$pendings, UnitAttr:$warpGroupLocal);
   let results = (outs Variadic<TTG_TensorOrMemDesc>:$outputs);
   let description = [{
     Waits until there are $pendings or fewer outstanding async dot operations.
@@ -237,6 +273,11 @@ def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterface
     waiting on. For example, if there are N pending async dot ops and we wait
     until one remains pending, then $inputs must include the results of the
     first N - 1 dot ops.
+
+    The `warpGroupLocal` attribute specifies that we only wait for the local
+    warp group, and if num_warps > 4 then shared memory inputs may still be in
+    use by other warp groups. This is useful when only the result register
+    values need to be ready and the shared memory inputs will not be overwritten.
   }];
 
   let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
@@ -256,7 +297,7 @@ def TTNG_InitBarrierOp : TTNG_Op<"init_barrier", [
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$alloc,
+    Arg<TTG_MemDescType, "", GenericSharedWrite>:$alloc,
     I32Attr:$count
   );
   let assemblyFormat = "$alloc `,` $count attr-dict `:` qualified(type($alloc))";
@@ -275,7 +316,7 @@ def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [
   }];
 
   let hasVerifier = 1;
-  let arguments = (ins Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$alloc);
+  let arguments = (ins Arg<TTG_MemDescType, "", GenericSharedWrite>:$alloc);
   let assemblyFormat = "$alloc attr-dict `:` qualified(type($alloc))";
 }
 
@@ -295,7 +336,7 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
   let hasVerifier = 1;
   let hasCanonicalizeMethod = 1;
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$alloc,
+    Arg<TTG_MemDescType, "", BarrierSharedWrite>:$alloc,
     I32Attr:$size,
     I1:$pred,
     OptionalAttr<I32Attr>:$fromCTA
@@ -334,7 +375,7 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$alloc,
+    Arg<TTG_MemDescType, "", BarrierSharedReadWrite>:$alloc,
     I32:$phase,
     Optional<I1>:$pred,
     Variadic<TTG_MemDescType>:$deps
@@ -396,7 +437,7 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$alloc,
+    Arg<TTG_MemDescType, "", BarrierSharedReadWrite>:$alloc,
     I32Attr:$count,
     Optional<I1>:$pred,
     OptionalAttr<I32Attr>:$fromCTA,
@@ -430,7 +471,7 @@ def TTNG_AsyncCopyMbarrierArriveOp : TTNG_Op<"async_copy_mbarrier_arrive", [
     DeclareOpInterfaceMethods<MBarrierOpInterface>]> {
   let summary = "arrive on mbarrier once all previously issued copies are completed";
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
+    Arg<TTG_MemDescType, "", BarrierSharedWrite>:$barrier,
     UnitAttr:$noIncrement
   );
   let assemblyFormat = "$barrier attr-dict `:` qualified(type($barrier))";
@@ -449,8 +490,8 @@ def TTNG_AsyncSharedStoreOp : TTNG_Op<"async_shared_store", [
 
   let arguments = (ins
     TT_Tensor:$src,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$mbarrier
+    Arg<TTG_MemDescType, "", GenericSharedWrite>:$dst,
+    Arg<TTG_MemDescType, "", BarrierSharedWrite>:$mbarrier
   );
 
   let assemblyFormat = [{
@@ -500,8 +541,8 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
     Arg<TT_AnyTensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
     Variadic<I32>:$coord,
     Variadic<I16>:$offsets,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
+    Arg<TTG_MemDescType, "", BarrierSharedWrite>:$barrier,
+    Arg<TTG_MemDescType, "", AsyncSharedWrite>:$result,
     I1:$pred,
     UnitAttr:$multicast,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
@@ -548,7 +589,7 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
     Variadic<I32>:$coord,
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
+    Arg<TTG_MemDescType, "", AsyncSharedRead>:$src
   );
 
   let assemblyFormat = [{
@@ -572,7 +613,7 @@ def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [TMAStoreLikeOpInterface
     TT_DescriptorReduceKindAttr:$kind,
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
     Variadic<I32>:$coord,
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
+    Arg<TTG_MemDescType, "", AsyncSharedRead>:$src
   );
 
   let assemblyFormat = [{
@@ -601,8 +642,8 @@ def TTNG_AsyncTMAGatherOp : TTNG_Op<"async_tma_gather", [
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
     RankedTensorOf<[I32]>:$x_offsets,
     I32:$y_offset,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
+    Arg<TTG_MemDescType, "", BarrierSharedWrite>:$barrier,
+    Arg<TTG_MemDescType, "", AsyncSharedWrite>:$result,
     I1:$pred,
     UnitAttr:$multicast
   );
@@ -631,7 +672,7 @@ def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter", [
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
     RankedTensorOf<[I32]>:$x_offsets,
     I32:$y_offset,
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
+    Arg<TTG_MemDescType, "", AsyncSharedRead>:$src
   );
 
   let assemblyFormat = [{
@@ -829,7 +870,7 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments,
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
+    Arg<TTG_MemDescType, "", BarrierSharedWrite>:$barrier,
     Optional<I1>:$pred,
     Variadic<TTG_MemDescType>:$descs
   );
@@ -1077,7 +1118,7 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
 
   }];
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    Arg<TTG_MemDescType, "", AsyncSharedRead>:$src,
     Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst
   );
 

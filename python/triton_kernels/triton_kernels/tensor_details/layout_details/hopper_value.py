@@ -213,7 +213,6 @@ def _compress_fourth(x):
 
 def _pack_bits(x: torch.Tensor, mx_axis: int):
     x = x.contiguous()
-    assert x.shape[-1] % 4 == 0, "Input tensor must have a last dimension divisible by 4"
     x = x.reshape(x.shape[:-1] + (x.shape[-1] // 4, 4))
     ret = _compress_fp4(x[..., 0]) | (_compress_fp4(x[..., 0] >> 4) << 16)
     ret |= right_shift_unsigned(_compress_fp4(x[..., 1]) | (_compress_fp4(x[..., 1] >> 4) << 16), 3)

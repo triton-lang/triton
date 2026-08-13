@@ -4,6 +4,8 @@ import triton.language as tl
 import triton
 from triton._internal_testing import run_in_process
 
+pytestmark = pytest.mark.usefixtures("process_pool")
+
 
 def _run_device_assert(cond, mask, opt_flag, jit_flag, device):
     triton.knobs.refresh_knobs()

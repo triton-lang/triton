@@ -73,10 +73,8 @@ class TritonSemantic(Generic[TensorTy]):
         if a_is_scalar != b_is_scalar:
             scalar_ty, tensor_ty = (a_ty, b_ty) if a_is_scalar else (b_ty, a_ty)
             if scalar_ty.kind().value <= tensor_ty.kind().value:
-                # Upcast because of 2) below!
-                if div_or_mod and tensor_ty.is_floating():
-                    return tl.float32
-                return tensor_ty
+                # Ignore the scalar and apply the remaining promotion rules.
+                a_ty, b_ty = tensor_ty, tensor_ty
 
         # 1) if one operand is double, the other is implicitly
         #    converted to double
@@ -1784,7 +1782,8 @@ class TritonSemantic(Generic[TensorTy]):
 
     def histogram(self, input: TensorTy, num_bins: int, mask: Optional[TensorTy]) -> TensorTy:
         assert len(input.shape) == 1, "histogram only supports 1D input"
-        assert input.dtype.is_int(), "histogram only supports integer input"
+        if not (input.dtype.is_int() and input.dtype.int_bitwidth == 32):
+            raise ValueError(f"histogram only supports 32-bit integer input, but got {input.dtype}")
         if mask is not None:
             mask = self.broadcast_impl_shape(mask, input.shape)
             if not mask.type.scalar.is_bool():

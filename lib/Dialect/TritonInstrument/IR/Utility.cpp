@@ -27,6 +27,7 @@ namespace {
 
 DistributedEncodingTrait getWarpLocalEncoding(MLIRContext *ctx,
                                               ArrayRef<int64_t> shape,
+                                              unsigned threadsPerWarp,
                                               unsigned warps, unsigned numCTAs,
                                               unsigned bitwidth) {
   assert(!shape.empty() && "Expected non-empty shape");
@@ -41,13 +42,13 @@ DistributedEncodingTrait getWarpLocalEncoding(MLIRContext *ctx,
   // We pick a layout that vectorises global loads and stores.
   auto dim = StringAttr::get(ctx, "dim0");
   int numel = product(shape);
-  auto nlanes = std::min(numel, 32);
+  auto nlanes = std::min(numel, static_cast<int>(threadsPerWarp));
   auto nregs = numel / nlanes;
   auto vec = std::min<int>(kMaxVectorLengthBits / bitwidth, nregs);
   nregs /= vec;
   auto ll = LinearLayout::identity1D(vec, kRegister, dim) *
             LinearLayout::identity1D(nlanes, kLane, dim) *
-            LinearLayout::zeros1D(32 / nlanes, kLane, dim) *
+            LinearLayout::zeros1D(threadsPerWarp / nlanes, kLane, dim) *
             LinearLayout::zeros1D(warps, kWarp, dim) *
             LinearLayout::zeros1D(numCTAs, kBlock, dim) *
             LinearLayout::identity1D(nregs, kRegister, dim);
@@ -214,10 +215,12 @@ void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,
 RankedTensorType getIntTensorType(Region *region, ArrayRef<int64_t> shape,
                                   unsigned bitWidth) {
   MLIRContext *ctx = region->getContext();
+  unsigned int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(
+      region->getParentOp()->getParentOfType<ModuleOp>());
   unsigned int warps = lookupNumWarps(region);
   unsigned int numCTAs = lookupNumCTAs(region->getParentOp());
-  DistributedEncodingTrait encoding =
-      getWarpLocalEncoding(ctx, shape, warps, numCTAs, bitWidth);
+  DistributedEncodingTrait encoding = getWarpLocalEncoding(
+      ctx, shape, threadsPerWarp, warps, numCTAs, bitWidth);
   Type elType = IntegerType::get(ctx, bitWidth);
   return RankedTensorType::get(shape, elType, encoding);
 }
@@ -388,7 +391,7 @@ FuncOp getEntryPoint(ModuleOp module) {
 }
 
 AuxDataMap::ThreadLayout getThreadLayout(ModuleOp module,
-                                         const ConSanTargetHooks *hooks) {
+                                         const ConSanTargetHooks &hooks) {
   AuxDataMap::ThreadLayout layout;
   bool hasTMA = false;
   bool hasTC = false;
@@ -401,9 +404,9 @@ AuxDataMap::ThreadLayout getThreadLayout(ModuleOp module,
     if (auto wsOp = dyn_cast<WarpSpecializePartitionsOp>(op))
       layout.numBaseThreads = std::max<int>(
           layout.numBaseThreads, wsOp.getPartitionRegions().size() + 1);
-    hasTMA |= hooks->isTMAOp(op);
+    hasTMA |= hooks.isTMAOp(op);
     hasTC |= isa<MMAv5OpInterface, TCGen5CommitOp, TMEMCopyOp>(op);
-    hasCLC |= hooks->isCLCOp(op);
+    hasCLC |= hooks.isCLCOp(op);
   });
 
   assert(layout.numBaseThreads <= MAX_NUM_BASE_THREADS &&
@@ -468,14 +471,14 @@ Region *AuxDataMap::RegionToValueMap::getEnclosingParitionOrFunctionRegion(
 }
 
 LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
-    ModuleOp module, FunctionBuilder &fb, const ConSanTargetHooks *hooks) {
+    ModuleOp module, FunctionBuilder &fb, const ConSanTargetHooks &hooks) {
   SmallVector<BufferRegion> barrierRegions;
   if (failed(getBuffersAndBarriers(module, barrierRegions, hooks)))
     return failure();
   int numCTAs = lookupNumCTAs(module);
   threadLayout = getThreadLayout(module, hooks);
   hasAsyncProxyFenceTracking =
-      hooks && hooks->needsAsyncProxyFenceTracking(module) &&
+      hooks.needsAsyncProxyFenceTracking(module) &&
       bufferStatePlans[(int)MemType::SHARED_MEM].numLanes != 0;
   int captureCounter = 0;
   int64_t captureBytes = 0;
@@ -492,8 +495,7 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
   });
   int numTrackedBarriers = numMBarriers + clusterBarrierSlots.size();
   if (numTrackedBarriers > 0)
-    barrierRegions.resize(llvm::NextPowerOf2(numTrackedBarriers - 1),
-                          BufferRegion{0, 0});
+    barrierRegions.resize(llvm::NextPowerOf2(numTrackedBarriers - 1));
 
   ImplicitLocOpBuilder b(entryPoint.getLoc(), entryPoint);
   b.setInsertionPointToStart(&entryPoint.getBody().front());
@@ -634,12 +636,9 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
     createCommitTensor(CommitKind::AsyncCp);
   }
 
-  if (hooks) {
-    for (auto kind : hooks->getRequiredCommitKinds(module)) {
-      if (commits[kind].empty())
-        createCommitTensor(kind);
-    }
-  }
+  for (auto kind : hooks.getRequiredCommitKinds(module))
+    if (commits[kind].empty())
+      createCommitTensor(kind);
 
   // Verify the actual capture count matches the expected one.
   if (captureCounter > 0) {
@@ -665,7 +664,7 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
 LogicalResult
 AuxDataMap::getBuffersAndBarriers(ModuleOp module,
                                   SmallVector<BufferRegion> &barrierRegions,
-                                  const ConSanTargetHooks *hooks) {
+                                  const ConSanTargetHooks &hooks) {
   // Collect shared memory buffers allocated in the module
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
   triton::BufferRegionAnalysis *analysis =
@@ -691,43 +690,42 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
     candidates[static_cast<int>(*memType)].push_back(
         {value, analysis->getLatticeElement(value)->getValue()});
   };
-  if (hooks) {
-    module.walk([&](Operation *op) {
-      auto info = hooks->getMemEffectsOpInfo(op);
-      if (!info)
-        return;
-      for (const auto &effect : info->operandEffects)
-        collectCandidates(effect.buf);
-    });
-  } else {
-    module.walk([&](Operation *op) {
-      if (!BufferRegionAnalysis::isMemoryAccessOperation(op))
-        return;
-      llvm::for_each(op->getOperands(), collectCandidates);
-      llvm::for_each(op->getResults(), collectCandidates);
-    });
-  }
+  module.walk([&](Operation *op) {
+    auto info = hooks.getMemEffectsOpInfo(op);
+    if (!info)
+      return;
+    if (info->trackingKind == MemEffectsOpInfo::TrackingKind::CommitCount &&
+        info->commitKind == CommitKind::AsyncCp)
+      hasAsyncCopyReads |= llvm::any_of(
+          info->operandEffects,
+          [](const MemEffectsOpInfo::Effects &e) { return e.rw == RW::Read; });
+    for (const auto &effect : info->operandEffects)
+      collectCandidates(effect.buf);
+  });
 
   analysis->calculateUsedBufferRegions(module);
-  bufferRegions[(int)MemType::SHARED_MEM] = analysis->getAllUsedBufferRegions(
-      BufferRegionAnalysis::RegionType::SHARED_MEMORY);
-  bufferRegions[(int)MemType::TENSOR_MEM] = analysis->getAllUsedBufferRegions(
-      BufferRegionAnalysis::RegionType::TENSOR_MEMORY);
   barrierRegions = analysis->getAllUsedBufferRegions(
       BufferRegionAnalysis::RegionType::BARRIER);
 
   for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
     int iMemType = (int)memType;
-    ArrayRef<BufferRegion> regions = bufferRegions[iMemType];
-    if (regions.empty()) {
+    auto regionType = memType == MemType::SHARED_MEM
+                          ? BufferRegionAnalysis::SHARED_MEMORY
+                          : BufferRegionAnalysis::TENSOR_MEMORY;
+    SmallVector<BufferRegion> regions =
+        analysis->getAllUsedBufferRegions(regionType);
+    bool hasUnknown = analysis->hasUnknownUsedBufferRegions(regionType);
+    if (regions.empty() && !hasUnknown)
       continue;
-    }
 
-    bufferStatePlans[iMemType] = triton::createBufferStatePlan(regions);
+    bufferStatePlans[iMemType] =
+        triton::createBufferStatePlan(regions, hasUnknown);
 
     for (const auto &[value, regionInfo] : candidates[iMemType]) {
-      SmallVector<uint32_t> ids;
-      for (const BufferRegion &candidate : regionInfo.regions) {
+      BufferStateCandidates stateCandidates;
+      stateCandidates.unknown = regionInfo.isUnknown();
+      for (const BufferRegionView &view : regionInfo.views) {
+        const BufferRegion &candidate = view.region;
         auto it = llvm::lower_bound(regions, candidate);
         if (it == regions.end() || !(*it == candidate)) {
           InFlightDiagnostic diag = emitError(
@@ -737,24 +735,23 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
           candidate.print(diag);
           return failure();
         }
-        ids.push_back(std::distance(regions.begin(), it));
-      }
-      const BufferStatePlan &plan = bufferStatePlans[iMemType];
-      llvm::SmallDenseMap<uint32_t, uint32_t> firstByBase;
-      SmallVector<uint32_t> distinguishableIds;
-      for (uint32_t id : ids) {
-        auto [it, inserted] =
-            firstByBase.try_emplace(regions[id].baseOffset, id);
-        if (!inserted && plan.regionMasks[it->second] != plan.regionMasks[id]) {
-          emitError(value.getLoc(),
-                    "ambiguous buffer-state cases share a runtime base");
-          return failure();
+        uint32_t id = std::distance(regions.begin(), it);
+        uint32_t ctaMask = 1u << view.affineCTAOffset;
+
+        auto existing = llvm::find_if(
+            stateCandidates.cases, [&](const BufferStateCandidate &state) {
+              return state.baseOffset == candidate.baseOffset;
+            });
+        if (existing == stateCandidates.cases.end()) {
+          stateCandidates.cases.push_back(
+              {candidate.baseOffset, bufferStatePlans[iMemType].regionMasks[id],
+               ctaMask});
+        } else {
+          existing->mask |= bufferStatePlans[iMemType].regionMasks[id];
+          existing->ctaMask |= ctaMask;
         }
-        if (inserted)
-          distinguishableIds.push_back(id);
       }
-      bufferCandidateIds[iMemType].try_emplace(value,
-                                               std::move(distinguishableIds));
+      bufferCandidates[iMemType].try_emplace(value, std::move(stateCandidates));
     }
   }
   return success();

@@ -49,6 +49,213 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
+// -- PackedArithOp --
+namespace {
+constexpr llvm::StringLiteral Half = "hb";
+constexpr llvm::StringLiteral X2 = "fhb";
+constexpr llvm::StringLiteral Alternate = "542u";
+constexpr llvm::StringLiteral AlternateResult = "54";
+
+struct PackedArithSignatureRule {
+  llvm::StringLiteral operations;
+  StringRef resultTypes;
+  StringRef operandTypes[3];
+  llvm::StringLiteral modifiers;
+  unsigned operandSuffixes;
+};
+} // namespace
+
+static const PackedArithTypeInfo &getPackedArithTypeInfo(Type elementType) {
+  static const struct {
+    TypeID type;
+    PackedArithTypeInfo info;
+  } types[] = {
+      {TypeID::get<Float32Type>(), {"f32x2", 2, 64, 'f'}},
+      {TypeID::get<Float16Type>(), {"f16x2", 2, 32, 'h'}},
+      {TypeID::get<BFloat16Type>(), {"bf16x2", 2, 32, 'b'}},
+      {TypeID::get<Float8E5M2Type>(), {"e5m2x4", 4, 32, '5'}},
+      {TypeID::get<Float8E4M3FNType>(), {"e4m3x4", 4, 32, '4'}},
+      {TypeID::get<IntegerType>(), {"e2m1x4", 4, 16, '2'}},
+      {TypeID::get<Float8E8M0FNUType>(), {"ue8m0x4", 4, 32, 'u'}},
+  };
+  for (const auto &type : types)
+    if (elementType.getTypeID() == type.type)
+      return type.info;
+  llvm_unreachable("unsupported packed arithmetic element type");
+}
+
+static FailureOr<PackedArithInstructionSpec>
+resolvePackedArithInstructionSpec(PackedArithOp op) {
+  auto kind = op.getOpKind();
+  const auto *result = &getPackedArithTypeInfo(op.getType().getElementType());
+  SmallVector<const PackedArithTypeInfo *, 3> operands;
+  for (Value operand : op.getOperands())
+    operands.push_back(&getPackedArithTypeInfo(
+        cast<RankedTensorType>(operand.getType()).getElementType()));
+
+  // clang-format off
+  static constexpr PackedArithSignatureRule signatures[] = {
+      // operations       result           operands                     modifiers  suffixes
+      {"add sub mul",    X2,              {"=", "="},                  "",        0},
+      {"fma",            X2,              {"=", "=", "="},             "rn",      0},
+      {"min max",        Half,            {"=", "="},                  "",        0},
+      {"add sub",        "f",             {Half, "f"},                 "",        2},
+      {"add sub",        "h",             {"f", "f"},                  "rz.ftz",  2},
+      {"add sub",        "b",             {"f", "f"},                  "rz",      2},
+      {"mul",            "h",             {"f", "f"},                  "ftz.rz",  2},
+      {"mul",            "b",             {"f", "f"},                  "rz",      2},
+      {"mul",            Half,            {"=", "!"},                  "",        2},
+      {"fma",            "f",             {Half, "f", "f"},            "rn",      3},
+      {"add sub",        AlternateResult, {Alternate, "="},            "",        1},
+      {"mul",            AlternateResult, {Alternate, Alternate},      "",        2},
+      {"fma",            AlternateResult, {Alternate, Alternate, "="}, "",        2},
+  };
+  // clang-format on
+
+  auto matches = [result](StringRef types, const PackedArithTypeInfo *info) {
+    if (types == "=")
+      return info == result;
+    if (types == "!")
+      return info != result && Half.contains(info->kind);
+    return types.contains(info->kind);
+  };
+  for (const PackedArithSignatureRule &signature : signatures) {
+    if (!StringRef(signature.operations)
+             .contains(stringifyPackedArithOpKind(kind)) ||
+        !matches(signature.resultTypes, result))
+      continue;
+    auto types = ArrayRef(signature.operandTypes).take_front(operands.size());
+    if (!llvm::all_of(llvm::zip_equal(operands, types), [&](auto pair) {
+          return matches(std::get<1>(pair), std::get<0>(pair));
+        }))
+      continue;
+    return PackedArithInstructionSpec{result, std::move(operands),
+                                      signature.modifiers,
+                                      signature.operandSuffixes};
+  }
+  return failure();
+}
+
+PackedArithInstructionSpec getPackedArithInstructionSpec(PackedArithOp op) {
+  auto spec = resolvePackedArithInstructionSpec(op);
+  assert(succeeded(spec) && "expected a verified packed arithmetic operation");
+  return std::move(*spec);
+}
+
+static std::optional<unsigned> inferPackedArithFp4Axis(PackedArithOp op) {
+  auto resultShape = op.getType().getShape();
+  std::optional<unsigned> axis;
+  for (Value operand : op.getOperands()) {
+    auto type = cast<RankedTensorType>(operand.getType());
+    if (!type.getElementType().isInteger(8))
+      continue;
+    if (type.getRank() != resultShape.size())
+      return std::nullopt;
+    auto shape = type.getShape();
+    auto [sourceDim, resultDim] = llvm::mismatch(shape, resultShape);
+    if (sourceDim == shape.end())
+      return std::nullopt;
+    unsigned differing = std::distance(shape.begin(), sourceDim);
+    if (2 * *sourceDim != *resultDim ||
+        !llvm::equal(shape.drop_front(differing + 1),
+                     resultShape.drop_front(differing + 1)) ||
+        (axis && *axis != differing))
+      return std::nullopt;
+    axis = differing;
+  }
+  return axis;
+}
+
+unsigned getPackedArithFp4Axis(PackedArithOp op) {
+  auto axis = inferPackedArithFp4Axis(op);
+  assert(axis && "expected a verified packed arithmetic operation with an "
+                 "FP4 operand");
+  return *axis;
+}
+
+LogicalResult PackedArithOp::verify() {
+  unsigned expectedOperands = getOpKind() == PackedArithOpKind::FMA ? 3 : 2;
+  if (getNumOperands() != expectedOperands)
+    return emitOpError() << stringifyPackedArithOpKind(getOpKind())
+                         << " expects " << expectedOperands
+                         << " operands but got " << getNumOperands();
+
+  auto tensorType = getResult().getType();
+  const auto &resultInfo = getPackedArithTypeInfo(tensorType.getElementType());
+  if (!isa_and_nonnull<DistributedEncodingTrait>(tensorType.getEncoding()))
+    return emitOpError("requires a distributed tensor layout");
+
+  auto instruction = resolvePackedArithInstructionSpec(*this);
+  if (failed(instruction)) {
+    auto diag = emitOpError()
+                << "unsupported " << stringifyPackedArithOpKind(getOpKind())
+                << " signature " << resultInfo.suffix << " <- (";
+    llvm::interleaveComma(getOperands(), diag, [&](Value operand) {
+      diag << getPackedArithTypeInfo(
+                  cast<RankedTensorType>(operand.getType()).getElementType())
+                  .suffix;
+    });
+    return diag << ")";
+  }
+
+  std::optional<unsigned> fp4Axis = inferPackedArithFp4Axis(*this);
+  if (!fp4Axis && llvm::any_of(instruction->operands,
+                               [](auto *info) { return info->isFP4(); }))
+    return emitOpError("requires every fp4 operand to have the result shape "
+                       "with the same single dimension halved");
+
+  unsigned packWidth = resultInfo.lanes;
+  unsigned resultRegisters = getUniqueElemsPerThread(tensorType);
+  if (resultRegisters < packWidth || resultRegisters % packWidth != 0)
+    return emitOpError() << "result layout must provide a multiple of "
+                         << packWidth << " unique elements per thread";
+
+  Attribute canonicalFp4Encoding;
+  if (fp4Axis) {
+    auto *dialect =
+        tensorType.getEncoding()
+            .getDialect()
+            .getRegisteredInterface<triton::DialectInferLayoutInterface>();
+    if (dialect &&
+        failed(dialect->inferFp4ToFpOpEncoding(
+            tensorType.getShape(), *fp4Axis, tensorType.getEncoding(),
+            canonicalFp4Encoding, /*fwdInference=*/false, std::nullopt)))
+      canonicalFp4Encoding = {};
+  }
+
+  for (auto [index, operand] : llvm::enumerate(getOperands())) {
+    auto operandType = cast<RankedTensorType>(operand.getType());
+    const auto &operandInfo = *instruction->operands[index];
+    if (operandInfo.isFP4()) {
+      if (!isa_and_nonnull<DistributedEncodingTrait>(
+              operandType.getEncoding()) ||
+          !canonicalFp4Encoding ||
+          !areLayoutsEquivalent(
+              operandType.getShape(),
+              cast<LayoutEncodingTrait>(canonicalFp4Encoding),
+              cast<LayoutEncodingTrait>(operandType.getEncoding())))
+        return emitOpError() << "fp4 operand " << index
+                             << " must have a layout compatible with the "
+                                "result";
+      continue;
+    }
+    if (operandType.getShape() != tensorType.getShape())
+      return emitOpError() << "operand " << index
+                           << " must have the result shape "
+                           << tensorType.getShape() << ", but got "
+                           << operandType.getShape();
+    if (!isa_and_nonnull<LayoutEncodingTrait>(operandType.getEncoding()) ||
+        !areLayoutsEquivalent(
+            tensorType.getShape(),
+            cast<LayoutEncodingTrait>(operandType.getEncoding()),
+            cast<LayoutEncodingTrait>(tensorType.getEncoding())))
+      return emitOpError() << "operand " << index
+                           << " must have a layout equivalent to the result";
+  }
+
+  return success();
+}
+
 // -- WarpGroupDotOp --
 LogicalResult WarpGroupDotOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
@@ -131,9 +338,9 @@ void WarpGroupDotOp::getEffects(
   auto &a = getAMutable();
   auto &b = getBMutable();
   if (isa<MemDescType>(a.get().getType()))
-    effects.emplace_back(MemoryEffects::Read::get(), &a, SharedMemory::get());
+    effects.push_back(makeShared<MemoryEffects::Read>(&a, SharedKind::Async));
   if (isa<MemDescType>(b.get().getType()))
-    effects.emplace_back(MemoryEffects::Read::get(), &b, SharedMemory::get());
+    effects.push_back(makeShared<MemoryEffects::Read>(&b, SharedKind::Async));
 }
 
 bool WarpGroupDotOp::needsPartialAccumulator() {
@@ -331,10 +538,8 @@ LogicalResult AsyncSharedStoreOp::verify() {
   unsigned bitwidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
 
   auto regLayout = toLinearLayout(srcTy);
-  auto sharedLayout = isPaddedEncoding(dstTy.getEncoding())
-                          ? paddedLinearLayout(dstTy)
-                          : toLinearLayout(dstTy);
-  auto cvt = regLayout.invertAndCompose(sharedLayout);
+  auto sharedLayout = toLinearLayoutIgnoringPadding(dstTy);
+  auto cvt = invertAndComposeBlockLocal(sharedLayout, regLayout);
   std::optional<int> maybeMaxVecElems;
   if (isPaddedEncoding(dstTy.getEncoding()))
     maybeMaxVecElems = getMinInterval(dstTy.getEncoding());
@@ -452,10 +657,12 @@ static LogicalResult verifyTMABarrierLayout(Operation *op, Value barrier) {
 }
 
 static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
-                                       Attribute enc) {
-  auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(enc);
+                                       MemDescType memDesc) {
+  auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(memDesc.getEncoding());
   if (!nvmma)
     return op->emitOpError("TMA descriptor must have NVMMA shared layout");
+  if (nvmma.getRank() != memDesc.getRank())
+    return op->emitOpError("TMA shared memory and layout ranks must match");
   auto descEnc =
       dyn_cast_if_present<NVMMASharedEncodingAttr>(desc.getSharedLayout());
   // NOTE: Cannot do descEnc != enc as the encodings may differ in rank for
@@ -483,8 +690,20 @@ static LogicalResult verifyAsyncTMALoadOp(Operation *op,
     return failure();
   if (!resultType.getMutableMemory())
     return op->emitOpError("cannot store into immutable memory");
-  if (failed(verifyTMAEncoding(op, desc, resultType.getEncoding())))
+  if (failed(verifyTMAEncoding(op, desc, resultType)))
     return failure();
+  auto block = StringAttr::get(op->getContext(), "block");
+  uint32_t barrierMask =
+      toLinearLayout(barrier.getType()).getFreeVariableMasks().lookup(block);
+  auto shape =
+      dropPipeliningDim(resultType.getShape(), resultType.getEncoding());
+  auto allocation = toLinearLayout(resultType);
+  for (auto [bit, basis] : llvm::enumerate(allocation.getBases().lookup(block)))
+    for (auto [component, size] : llvm::zip_equal(basis, shape))
+      if (component >= size && (bit || barrierMask > 1))
+        return op->emitOpError(
+            "TMA destination and completion barrier must belong to the same "
+            "CTA or a CTA pair");
   return success();
 }
 
@@ -496,7 +715,15 @@ static LogicalResult verifyAsyncTMAStoreOp(Operation *op,
   // do not support fp4_padded operands.
   if (isFp4Padded(srcEnc))
     return op->emitOpError("does not support fp4_padded operands");
-  return verifyTMAEncoding(op, desc.getType(), srcEnc);
+  auto shape = dropPipeliningDim(srcType.getShape(), srcEnc);
+  auto allocation = toLinearLayout(srcType);
+  auto block = StringAttr::get(op->getContext(), "block");
+  for (const auto &basis : allocation.getBases().lookup(block))
+    for (auto [component, size] : llvm::zip_equal(basis, shape))
+      if (component >= size)
+        return op->emitOpError(
+            "source subview may have an origin in another CTA");
+  return verifyTMAEncoding(op, desc.getType(), srcType);
 }
 
 static LogicalResult verifyAsyncTMAGatherScatterOp(Operation *op,
@@ -518,11 +745,6 @@ static LogicalResult verifyAsyncTMAGatherScatterOp(Operation *op,
   if (memDescType.getElementType() != blockType.getElementType())
     return op->emitOpError("result tensor element type must match block (")
            << blockType.getElementType() << "), but got " << memDescType;
-
-  ArrayRef<int64_t> allocShape = memDescType.getAllocShape();
-  if (allocShape.size() < 2 ||
-      memDescType.getShape() != allocShape.take_back(2))
-    return op->emitOpError("memdesc shape must match alloc shape");
 
   auto xOffsetsType = cast<RankedTensorType>(indicesType);
   if (xOffsetsType.getEncoding()) {
@@ -1004,18 +1226,18 @@ void TCGen5MMAOp::getEffects(
                        TensorMemory::get());
 
   if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
-    effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
-                         SharedMemory::get());
+    effects.push_back(
+        makeShared<MemoryEffects::Read>(&getAMutable(), SharedKind::Async));
 
   } else {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
                          TensorMemory::get());
   }
-  effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
-                       SharedMemory::get());
+  effects.push_back(
+      makeShared<MemoryEffects::Read>(&getBMutable(), SharedKind::Async));
   for (auto &barrierMutable : getBarriersMutable())
-    effects.emplace_back(MemoryEffects::Write::get(), &barrierMutable,
-                         SharedMemory::get());
+    effects.push_back(
+        makeShared<MemoryEffects::Write>(&barrierMutable, SharedKind::Barrier));
 }
 
 Value TCGen5MMAOp::useAccumulator() { return getUseD(); }
@@ -1264,22 +1486,22 @@ void TCGen5MMAScaledOp::getEffects(
                        TensorMemory::get());
 
   if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
-    effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
-                         SharedMemory::get());
+    effects.push_back(
+        makeShared<MemoryEffects::Read>(&getAMutable(), SharedKind::Async));
 
   } else {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
                          TensorMemory::get());
   }
-  effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
-                       SharedMemory::get());
+  effects.push_back(
+      makeShared<MemoryEffects::Read>(&getBMutable(), SharedKind::Async));
   effects.emplace_back(MemoryEffects::Read::get(), &getAScaleMutable(),
                        TensorMemory::get());
   effects.emplace_back(MemoryEffects::Read::get(), &getBScaleMutable(),
                        TensorMemory::get());
   for (auto &barrierMutable : getBarriersMutable())
-    effects.emplace_back(MemoryEffects::Write::get(), &barrierMutable,
-                         SharedMemory::get());
+    effects.push_back(
+        makeShared<MemoryEffects::Write>(&barrierMutable, SharedKind::Barrier));
 }
 
 bool TCGen5MMAScaledOp::verifyDims() {
@@ -1754,6 +1976,18 @@ LogicalResult TensormapCreateOp::verify() {
     return emitError("Rank mismatch for element stride. Got ")
            << getElementStride().size() << " but expected " << rank;
   }
+  return success();
+}
+
+// -- CLCTryCancelSyncOp --
+LogicalResult CLCTryCancelSyncOp::verify() {
+  auto tensorType = dyn_cast<RankedTensorType>(getResponse().getType());
+  if (!tensorType || tensorType.getRank() != 1)
+    return emitOpError("response must be a rank-one tensor");
+  if (tensorType.getShape() != ArrayRef<int64_t>{2})
+    return emitOpError("response must have shape [2]");
+  if (!tensorType.getElementType().isInteger(64))
+    return emitOpError("response element type must be i64");
   return success();
 }
 

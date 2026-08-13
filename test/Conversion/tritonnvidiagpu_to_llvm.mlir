@@ -204,11 +204,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: async_shared_store
-  // CHECK: nvvm.mapa
-  // CHECK: nvvm.mapa
-  // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
+  // CHECK: %[[CTA_ID:.*]] = nvg.cluster_id
+  // CHECK: nvvm.mapa {{.*}}, %[[CTA_ID]]
+  // CHECK: nvvm.mapa {{.*}}, %[[CTA_ID]]
+  // CHECK: "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
+  // CHECK-SAME: "r,r,r"
   tt.func @async_shared_store(%src: tensor<128xi32, #blocked>, %dst: !ttg.memdesc<128xi32, #shared1, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #shared0, #smem, mutable>) {
     ttng.async_shared_store %src, %dst, %mbarrier : tensor<128xi32, #blocked> -> !ttg.memdesc<128xi32, #shared1, #smem, mutable>, !ttg.memdesc<2xi64, #shared0, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: async_shared_store_predicates_redundant_threads
+  // CHECK: %[[WARP:.*]] = ttg.warp_id
+  // CHECK: %[[REDUNDANT_MASK:.*]] = llvm.mlir.constant(3 : i32)
+  // CHECK: %[[REDUNDANT_WARP:.*]] = llvm.and %[[WARP]], %[[REDUNDANT_MASK]]
+  // CHECK: %[[UNIQUE_THREAD:.*]] = llvm.icmp "eq" %[[REDUNDANT_WARP]]
+  // CHECK: "@$3 st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
+  // CHECK-SAME: "r,r,r,b" {{.*}}%[[UNIQUE_THREAD]]
+  tt.func @async_shared_store_predicates_redundant_threads(%src: tensor<64xi32, #blocked>, %dst: !ttg.memdesc<64xi32, #shared, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #shared, #smem, mutable>) {
+    ttng.async_shared_store %src, %dst, %mbarrier : tensor<64xi32, #blocked> -> !ttg.memdesc<64xi32, #shared, #smem, mutable>, !ttg.memdesc<2xi64, #shared, #smem, mutable>
     tt.return
   }
 }
