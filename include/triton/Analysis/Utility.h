@@ -279,6 +279,32 @@ std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 bool isCvtDimSync(const triton::LinearLayout &srcLayout,
                   const triton::LinearLayout &dstLayout, StringAttr dim);
 
+namespace triton {
+
+struct BarrierStages {
+  // Stages are independent: for example, a release atomic with scratch has
+  // both a leading ordering barrier and a scratch rendezvous.
+  bool beforeMemoryEffects = false;
+  bool afterMemoryEffects = false;
+  bool betweenMemoryEffects = false;
+};
+
+// Classify the barriers required by an atomic at a chosen scope. A result
+// broadcast barrier at that scope supplies the post-atomic rendezvous itself.
+BarrierStages getAtomicBarrierStages(MemSemantic semantic,
+                                     bool hasResultBarrier);
+
+// Whether distributing an atomic result requires communication between CTAs.
+bool atomicResultHasCTABroadcast(Operation *op);
+
+} // namespace triton
+
+namespace triton::nvidia_gpu {
+
+bool needsClusterBarrier(Operation *op);
+
+} // namespace triton::nvidia_gpu
+
 } // namespace mlir
 
 #endif // TRITON_ANALYSIS_UTILITY_H

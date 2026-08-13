@@ -87,6 +87,7 @@ gpu::GlobalScratchAllocOp
 createThirdPartyScratchAlloc(OpBuilder &b, Location loc, Type ptrType,
                              int64_t sizeInBytes, int64_t alignment,
                              bool sharedClusterState = false);
+Region *getClusterBarrierGroupRegion(Operation *op);
 RankedTensorType getSlicedTensorType(RankedTensorType tensorType,
                                      ArrayRef<int> keptDims, Type elementType);
 Value reshapeAndBroadcast(OpBuilder &b, Location loc, Value tensor,
