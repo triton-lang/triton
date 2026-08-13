@@ -984,8 +984,9 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
 }
 
 void LayoutRematerialization::hoistConvertIntoConditionals() {
-  runHoistConvertPass(
-      [&](ConvertLayoutOp convertOp) { return hoistConvertIntoConditionals(convertOp); });
+  runHoistConvertPass([&](ConvertLayoutOp convertOp) {
+    return hoistConvertIntoConditionals(convertOp);
+  });
 }
 
 static bool isExpensiveMathOp(Operation *op) {
@@ -1239,8 +1240,9 @@ bool LayoutRematerialization::backwardRematerialization(
 }
 
 void LayoutRematerialization::hoistConvertDotOperand() {
-  runHoistConvertPass(
-      [&](ConvertLayoutOp convertOp) { return hoistConvertDotOperand(convertOp); });
+  runHoistConvertPass([&](ConvertLayoutOp convertOp) {
+    return hoistConvertDotOperand(convertOp);
+  });
 }
 
 bool LayoutRematerialization::hoistConvertDotOperand(
