@@ -136,15 +136,14 @@ public:
                                   int count, Value pred,
                                   Operation *insertPoint);
   // invalidateBarrierState: verify the barrier is initialized with no active
-  // waiters, then clear its lifecycle state and waiting bits.
+  // waiters, then clear its lifecycle state, waiting bits, and saved frontiers.
   void createInvalidateBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
                                         Value pred, Operation *insertPoint);
   // invalidateBarrierStorage: clear an active barrier overwritten by an
   // ordinary store, including its saved visibility frontiers.
   void createInvalidateBarrierStorageCall(ImplicitLocOpBuilder &b, Value offset,
                                           uint32_t length, Value pred,
-                                          Operation *insertPoint,
-                                          Value recipientCTAs);
+                                          Operation *insertPoint);
   // verifyAndUpdateBarrierState: Validate barrier initialization, an arrive
   // count, and a tx-count delta using one snapshot of the tracked barrier
   // state. Preserve independent initialization and underflow assertions and
@@ -181,16 +180,6 @@ public:
                                             Operation *insertPoint,
                                             Value barrierCTAs,
                                             Value effectCTAs);
-  // clearBarrierWriteTracking: clear all write tracking associated with the
-  // given barrier row.
-  void createClearBarrierWriteTrackingCall(ImplicitLocOpBuilder &b, Value mbar,
-                                           Value pred, MemType memType,
-                                           Operation *insertPoint);
-  // clearBarrierReadTracking: clear all read tracking associated with the
-  // given barrier row.
-  void createClearBarrierReadTrackingCall(ImplicitLocOpBuilder &b, Value mbar,
-                                          Value pred, MemType memType,
-                                          Operation *insertPoint);
   // transferVisibleAccesses: transfer the barrier's independently tracked
   // write and read visibility to all threads in threadMask.
   void createTransferVisibleAccessesCall(ImplicitLocOpBuilder &b, Value mbar,
@@ -261,11 +250,6 @@ public:
   void createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b, Value mbar,
                                      int thread, Value pred,
                                      Operation *insertPoint);
-  // clearBarrierProxyAccessTracking: clear packed proxy state associated with
-  // an invalidated barrier.
-  void createClearBarrierProxyAccessTrackingCall(ImplicitLocOpBuilder &b,
-                                                 Value mbar, Value pred,
-                                                 Operation *insertPoint);
   // verifyProxyAccess: assert that every generic-proxy access visible to the
   // issuing base thread has crossed fence.proxy.async.
   void createVerifyProxyAccessCall(ImplicitLocOpBuilder &b, Value bufferMask,
@@ -329,16 +313,15 @@ public:
       bool excludeSelf = false);
 
 private:
-  Value createInvalidateBarrierStateCallImpl(ImplicitLocOpBuilder &b,
-                                             Value offset, Value length,
-                                             Value pred, Operation *insertPoint,
-                                             Value recipientCTAs,
-                                             bool allowUninitialized);
+  void createInvalidateBarrierStateCallImpl(ImplicitLocOpBuilder &b,
+                                            Value offset, Value length,
+                                            Value pred, Operation *insertPoint,
+                                            bool allowUninitialized);
 
   void createClearBarrierStorageTrackingCall(ImplicitLocOpBuilder &b,
                                              Value offset, Value length,
-                                             Value pred, Operation *insertPoint,
-                                             Value recipientCTAs);
+                                             Value pred,
+                                             Operation *insertPoint);
 
   void createClearOutstandingCommitsTransferCall(
       ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,

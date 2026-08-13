@@ -858,14 +858,6 @@ private:
         Value barrier = info->alloc;
         Value pred = hooks.getIssuerCTAPred(b, op);
         funcBuilder.createInvalidateBarrierStateCall(b, barrier, pred, op);
-        for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
-          funcBuilder.createClearBarrierWriteTrackingCall(b, barrier, pred,
-                                                          memType, op);
-          funcBuilder.createClearBarrierReadTrackingCall(b, barrier, pred,
-                                                         memType, op);
-        }
-        funcBuilder.createClearBarrierProxyAccessTrackingCall(b, barrier, pred,
-                                                              op);
       }
       if (auto asyncCommitGroupOp = dyn_cast<ttg::AsyncCommitGroupOp>(op)) {
         if (!auxData.commits[CommitKind::AsyncCp].empty())
@@ -1117,9 +1109,7 @@ private:
                   candidateBase);
               candidatePred = tti::maybeAnd(b, candidatePred, matchesBase);
             }
-            bool singleOwner = candidate.ctaMask &&
-                               !(candidate.ctaMask & (candidate.ctaMask - 1));
-            if (!invalidatesBarriers || !singleOwner) {
+            if (!invalidatesBarriers) {
               verifyAvailable(candidatePred);
               continue;
             }
@@ -1127,11 +1117,8 @@ private:
               verifyWrite();
               invalidatedBarrier = true;
             }
-            BufferStateCandidates selected;
-            selected.cases.push_back(candidate);
             funcBuilder.createInvalidateBarrierStorageCall(
-                b, barrierOffset, barrierLength, candidatePred, op,
-                getMemEffectCTAs(b, defaultEffectCTAs, selected));
+                b, barrierOffset, barrierLength, candidatePred, op);
           }
         }
       }
