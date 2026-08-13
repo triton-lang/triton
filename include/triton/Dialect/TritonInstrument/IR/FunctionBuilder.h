@@ -125,10 +125,8 @@ public:
   // verifyBarrierMemoryAvailable: reject ordinary shared-memory accesses that
   // overlap initialized barrier storage.
   void createVerifyBarrierMemoryAvailableCall(ImplicitLocOpBuilder &b,
-                                              Value offset, uint32_t length,
-                                              Value pred,
-                                              Operation *insertPoint,
-                                              Value recipientCTAs);
+                                              Value barrierCTAs, Value pred,
+                                              Operation *insertPoint);
   // initBarrierState: Initialize the tracked barrier state to phase 0 and set
   // both the initial and current arrival counts. A zero state denotes an
   // invalidated/uninitialized barrier.
@@ -141,8 +139,8 @@ public:
                                         Value pred, Operation *insertPoint);
   // invalidateBarrierStorage: clear an active barrier overwritten by an
   // ordinary store, including its saved visibility frontiers.
-  void createInvalidateBarrierStorageCall(ImplicitLocOpBuilder &b, Value offset,
-                                          uint32_t length, Value pred,
+  void createInvalidateBarrierStorageCall(ImplicitLocOpBuilder &b,
+                                          Value barrierCTAs, Value pred,
                                           Operation *insertPoint);
   // verifyAndUpdateBarrierState: Validate barrier initialization, an arrive
   // count, and a tx-count delta using one snapshot of the tracked barrier
@@ -314,13 +312,12 @@ public:
 
 private:
   void createInvalidateBarrierStateCallImpl(ImplicitLocOpBuilder &b,
-                                            Value offset, Value length,
-                                            Value pred, Operation *insertPoint,
+                                            Value selectedBarriers, Value pred,
+                                            Operation *insertPoint,
                                             bool allowUninitialized);
 
   void createClearBarrierStorageTrackingCall(ImplicitLocOpBuilder &b,
-                                             Value offset, Value length,
-                                             Value pred,
+                                             Value selectedBarriers, Value pred,
                                              Operation *insertPoint);
 
   void createClearOutstandingCommitsTransferCall(

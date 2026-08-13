@@ -2180,13 +2180,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 // -----
 
 // Cross-CTA subviews must direct every local memory access to the CTA that
-// owns its physical bytes. Runtime selection conservatively reaches both.
+// owns its physical bytes, including dynamically selected subviews whose
+// physical offsets are equal.
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 512 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
   // CHECK-LABEL: @cross_cta_affine_subslice_recipients
+  // CHECK-SAME: (%[[CHOOSE:.*]]: i1)
   tt.func public @cross_cta_affine_subslice_recipients(%choose: i1) {
     // CHECK: %[[AFFINE_PARENT:.*]] = ttg.local_alloc
     %parent = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x32xi32, #shared, #smem, mutable>
@@ -2208,7 +2210,12 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[REMOTE_CTAS]])
     // CHECK: ttg.local_load
     %r = ttg.local_load %remote : !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32> -> tensor<2x32xi32, #blocked>
-    // CHECK: %[[SELECTED_CTAS:.*]] = arith.constant 3 : i32
+    // CHECK: %[[LOCAL_SELECTED:.*]] = arith.andi {{.*}}, %[[CHOOSE]] : i1
+    // CHECK: %[[REMOTE_CHOICE:.*]] = arith.xori %[[CHOOSE]], {{.*}} : i1
+    // CHECK: %[[REMOTE_SELECTED:.*]] = arith.andi {{.*}}, %[[REMOTE_CHOICE]] : i1
+    // CHECK: %[[LOCAL_CTA:.*]] = arith.select %[[LOCAL_SELECTED]], {{.*}} : i32
+    // CHECK: %[[REMOTE_CTA:.*]] = arith.select %[[REMOTE_SELECTED]], {{.*}} : i32
+    // CHECK: %[[SELECTED_CTAS:.*]] = arith.ori %[[LOCAL_CTA]], %[[REMOTE_CTA]] : i32
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[SELECTED_CTAS]])
     // CHECK: ttg.local_load
     %s = ttg.local_load %selected : !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32> -> tensor<2x32xi32, #blocked>
@@ -2231,6 +2238,43 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]])
     // CHECK: ttg.local_atomic_scatter_rmw
     %a = ttg.local_atomic_scatter_rmw add, %remote[%indices], %values {axis = 1 : i32} : (!ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>, tensor<2x32xi32, #blocked>, tensor<2x32xi32, #blocked>) -> tensor<2x32xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// Dynamically selected subviews can have the same physical byte offset while
+// belonging to different CTAs. Barrier checks retain the selected owner and
+// verify every overlapping barrier with one call.
+#owner_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
+#owner_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#owner_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#owner_smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 512 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
+  // CHECK-LABEL: @dynamic_barrier_owner_selection
+  // CHECK-SAME: (%[[CHOOSE:.*]]: i1)
+  tt.func public @dynamic_barrier_owner_selection(%choose: i1) {
+    %parent = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x32xi32, #owner_shared, #owner_smem, mutable>
+    %barrier = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2xi64, #owner_barrier, #owner_smem, mutable>
+    %other = ttg.local_alloc {allocation.offset = 8 : i32} : () -> !ttg.memdesc<2xi64, #owner_barrier, #owner_smem, mutable>
+    ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #owner_barrier, #owner_smem, mutable>
+    ttng.init_barrier %other, 1 : !ttg.memdesc<2xi64, #owner_barrier, #owner_smem, mutable>
+    %local = ttg.memdesc_subslice %parent [0, 0] : !ttg.memdesc<4x32xi32, #owner_shared, #owner_smem, mutable> -> !ttg.memdesc<2x32xi32, #owner_shared, #owner_smem, mutable, 4x32>
+    %remote = ttg.memdesc_subslice %parent [2, 0] : !ttg.memdesc<4x32xi32, #owner_shared, #owner_smem, mutable> -> !ttg.memdesc<2x32xi32, #owner_shared, #owner_smem, mutable, 4x32>
+    // CHECK: arith.select %[[CHOOSE]], {{.*}} : !ttg.memdesc
+    %selected = arith.select %choose, %local, %remote : !ttg.memdesc<2x32xi32, #owner_shared, #owner_smem, mutable, 4x32>
+    // CHECK: %[[LOCAL_SELECTED:.*]] = arith.andi {{.*}}, %[[CHOOSE]] : i1
+    // CHECK: %[[REMOTE_CHOICE:.*]] = arith.xori %[[CHOOSE]], {{.*}} : i1
+    // CHECK: %[[REMOTE_SELECTED:.*]] = arith.andi {{.*}}, %[[REMOTE_CHOICE]] : i1
+    // CHECK: arith.select %[[LOCAL_SELECTED]], {{.*}} : i32
+    // CHECK: arith.select %[[REMOTE_SELECTED]], {{.*}} : i32
+    // CHECK: %[[BARRIER_OWNERS:.*]] = arith.ori {{.*}} : tensor<2xi32
+    // CHECK: tt.call @__triton_consan_verify_barrier_can_init{{.*}}(%[[BARRIER_OWNERS]],
+    // CHECK-NOT: tt.call @__triton_consan_verify_barrier_can_init
+    // CHECK: ttg.local_load
+    %value = ttg.local_load %selected : !ttg.memdesc<2x32xi32, #owner_shared, #owner_smem, mutable, 4x32> -> tensor<2x32xi32, #owner_blocked>
     tt.return
   }
 }

@@ -1036,6 +1036,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier invalidated while a thread is waiting"
     // CHECK: tt.call @__triton_consan_clear_barrier_write_tracking
     // CHECK: tt.call @__triton_consan_clear_barrier_read_tracking
+    // CHECK-NOT: tt.call @__triton_consan_invalidate_barrier_storage
     // CHECK: tt.call @__triton_consan_publish_write_visibility
     // CHECK: ttg.local_store
     ttg.local_store %values, %payload : tensor<16xi32, #lifetime_blocked>
