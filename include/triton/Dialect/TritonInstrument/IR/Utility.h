@@ -183,6 +183,7 @@ struct AuxDataMap {
   //       padded for the distributed layout.
   //   P = base-thread columns used by commit and proxy state, power-of-two
   //       padded.
+  //   F = mbarrier phase parity slots, with extent 2.
   //
   // Storage notation:
   //   tensor  = distributed tensor value.
@@ -204,8 +205,8 @@ struct AuxDataMap {
   // the latest write to the buffer row.
   RegionToValueMap writeVisibility[numMemTypes];
 
-  // scratch, <Cbuf x B x Cbar x K x i8>
-  // Per-memory-type buffer/barrier map for writes that a barrier tracks.
+  // scratch, <Cbuf x B x Cbar x K x F x i8>
+  // Per-memory-type buffer/barrier/phase map for writes that a barrier tracks.
   RegionToValueMap writeTracking[numMemTypes];
 
   // scratch, <Cbuf x B x Cthr x T x Cmask x i64>
@@ -213,9 +214,9 @@ struct AuxDataMap {
   // i64 value is a bitmask of reads visible to that lane's thread.
   RegionToValueMap readVisibility[numMemTypes];
 
-  // scratch, <Cbuf x B x Cbar x K x Cmask x i64>
-  // Per-memory-type buffer/barrier map for read visibility masks that a barrier
-  // tracks.
+  // scratch, <Cbuf x B x Cbar x K x Cmask x F x i64>
+  // Per-memory-type buffer/barrier/phase map for read visibility masks that a
+  // barrier tracks.
   RegionToValueMap readTracking[numMemTypes];
 
   // scratch, <Cbuf x B x Cthr x P x Cmask x i64>
@@ -225,8 +226,9 @@ struct AuxDataMap {
   // that consumer. CTA dimensions distinguish source and consumer CTAs.
   RegionToValueMap proxyAccessVisibility;
 
-  // scratch, <Cbuf x B x Cbar x K x Cmask x i64>
-  // Barrier publication table for packed proxyAccessVisibility state.
+  // scratch, <Cbuf x B x Cbar x K x Cmask x F x i64>
+  // Phase-specific barrier publication table for packed proxyAccessVisibility
+  // state.
   RegionToValueMap proxyAccessTracking;
 
   // scratch, <C x B x P x i8>

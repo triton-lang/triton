@@ -1348,11 +1348,29 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
   SmallVector<Value> args = {mbarOffset,       lengthVal,    countVal,
                              txCountVal,       pred,         barriersVal,
                              barrierStatesVal, recipientCTAs};
+  SmallVector<RankedTensorType> trackingTypes;
+  ManglingArgs specializationArgs{barriersType, barrierStatesType};
+  auto appendTracking = [&](AuxDataMap::RegionToValueMap &tracking) {
+    if (tracking.empty())
+      return;
+    ValueType value = tracking.at(insertPoint);
+    auto type = cast<RankedTensorType>(value.type);
+    args.push_back(value.value);
+    trackingTypes.push_back(type);
+    specializationArgs.append(type);
+  };
+  for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
+    appendTracking(auxData.writeTracking[(int)memType]);
+    appendTracking(auxData.readTracking[(int)memType]);
+  }
+  appendTracking(auxData.proxyAccessTracking);
+
   AssertInfo statusInfo{"", b.getI32Type()};
   Value status = createCallToCachedFunction(
       b, "verify_and_update_barrier_state", args, statusInfo,
-      {barriersType, barrierStatesType},
-      [barrierStatesType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      specializationArgs,
+      [barrierStatesType, trackingTypes](ImplicitLocOpBuilder &fb,
+                                         Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
         Value count = entryBlock->getArgument(2);
@@ -1502,6 +1520,41 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
         Value updated = arith::SelectOp::create(fb, mask, newState, states);
         createCTAScopedStoreScratchMemory(fb, fb.getLoc(), statesPtr, updated,
                                           barrierStatesType, recipientCTAs);
+
+        if (!trackingTypes.empty()) {
+          Value recipientMask =
+              createCTASetMask(fb, barrierStatesType, /*dim=*/0, recipientCTAs);
+          Value completed = arith::AndIOp::create(fb, zeroCond, recipientMask);
+          Value anyCompleted = reduceAll<arith::OrIOp>(fb, completed);
+          auto [beforeClear, clearBlock, afterClear] =
+              createIfBlock(fb, anyCompleted);
+          fb.setInsertionPointToStart(clearBlock);
+
+          for (auto [index, trackingType] : llvm::enumerate(trackingTypes)) {
+            Value trackingPtr = entryBlock->getArgument(8 + index);
+            Value tracking = tti::createLoadScratchMemory(
+                fb, fb.getLoc(), trackingPtr, trackingType);
+            Value completedMask =
+                convertAndBroadcast(fb, completed, {2, 3}, trackingType);
+            Value nextPhase =
+                convertAndBroadcast(fb, newPhase, {2, 3}, trackingType);
+            auto phaseType = cast<RankedTensorType>(
+                trackingType.cloneWith(std::nullopt, fb.getI32Type()));
+            nextPhase = arith::TruncIOp::create(fb, phaseType, nextPhase);
+            Value phaseIndices =
+                createDimIndices(fb, trackingType, trackingType.getRank() - 1);
+            Value phaseMask = arith::CmpIOp::create(
+                fb, arith::CmpIPredicate::eq, phaseIndices, nextPhase);
+            Value clearMask =
+                arith::AndIOp::create(fb, completedMask, phaseMask);
+            Value zero =
+                tti::createConstIntTensor(fb, fb.getLoc(), 0, trackingType);
+            Value cleared =
+                arith::SelectOp::create(fb, clearMask, zero, tracking);
+            createMaskedStoreScratchMemory(fb, fb.getLoc(), trackingPtr,
+                                           cleared, trackingType, clearMask);
+          }
+        }
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb, packedStatus);
@@ -1759,7 +1812,7 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
     ImplicitLocOpBuilder &b, Value mbar, int thread, Value pred,
     MemType memType, Operation *insertPoint, Value barrierCTAs,
     Value readBufferMask) {
-  if (auxData.barriers.empty())
+  if (auxData.barriers.empty() || auxData.barrierStates.empty())
     return;
 
   const bool trackWrites = !readBufferMask &&
@@ -1774,16 +1827,20 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
     pred = arith::ConstantIntOp::create(b, 1, 1);
   ValueType barriers = auxData.barriers.at(insertPoint);
   auto barriersType = cast<RankedTensorType>(barriers.type);
+  ValueType barrierStates = auxData.barrierStates.at(insertPoint);
+  auto barrierStatesType = cast<RankedTensorType>(barrierStates.type);
   SmallVector<Value> args = {
       tti::ExperimentalMemDescToI32Op::create(b, mbar),
       arith::ConstantIntOp::create(b, getMemDescLength(mbar), 32),
       pred,
       arith::ConstantIntOp::create(b, thread, 32),
       barriers.value,
+      barrierStates.value,
       barrierCTAs,
   };
   ManglingArgs specializationArgs;
   specializationArgs.append(barriersType);
+  specializationArgs.append(barrierStatesType);
   specializationArgs.append(static_cast<uint64_t>(trackWrites));
   specializationArgs.append(static_cast<uint64_t>(trackReads));
 
@@ -1820,15 +1877,17 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
                      : "track_visible_accesses",
       args, /*assertInfo=*/std::nullopt, specializationArgs,
       [trackWrites, trackReads, writeVisibilityType, writeTrackingType,
-       readVisibilityType, filterBuffer = static_cast<bool>(readBufferMask),
+       readVisibilityType, barrierStatesType,
+       filterBuffer = static_cast<bool>(readBufferMask),
        readTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
         Value threadVal = entryBlock->getArgument(3);
         Value barriers = entryBlock->getArgument(4);
-        Value barrierCTAs = entryBlock->getArgument(5);
-        unsigned nextArg = 6;
+        Value barrierStatesPtr = entryBlock->getArgument(5);
+        Value barrierCTAs = entryBlock->getArgument(6);
+        unsigned nextArg = 7;
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
@@ -1836,6 +1895,11 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
         Value barriersEqBar =
             createCmpIntTensorScalar(fb, barriers, descriptor);
         Value currentCTA = createCurrentCTAMask(fb);
+        Value barrierStates = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), barrierStatesPtr, barrierStatesType);
+        Value currentPhases = arith::AndIOp::create(
+            fb, barrierStates,
+            tti::createConstIntTensor(fb, fb.getLoc(), 1, barrierStatesType));
 
         if (trackWrites) {
           Value visibilityPtr = entryBlock->getArgument(nextArg++);
@@ -1849,6 +1913,17 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
           Value barrierCTAMask =
               createCTASetMask(fb, writeTrackingType, /*dim=*/2, barrierCTAs);
           barrierMask = arith::AndIOp::create(fb, barrierMask, barrierCTAMask);
+          Value currentPhase =
+              convertAndBroadcast(fb, currentPhases, {2, 3}, writeTrackingType);
+          Value phaseIndices = createDimIndices(
+              fb, writeTrackingType, /*dim=*/writeTrackingType.getRank() - 1);
+          auto phaseIndicesType =
+              cast<RankedTensorType>(phaseIndices.getType());
+          currentPhase =
+              arith::TruncIOp::create(fb, phaseIndicesType, currentPhase);
+          Value phaseMask = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
+                                                  phaseIndices, currentPhase);
+          barrierMask = arith::AndIOp::create(fb, barrierMask, phaseMask);
           Value threadI64 =
               arith::ExtUIOp::create(fb, fb.getI64Type(), threadVal);
           Value one64 = arith::ConstantIntOp::create(fb, 1, 64);
@@ -1896,6 +1971,17 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
             barrierMask = arith::AndIOp::create(fb, barrierMask, bufferMask);
             barrierMask = arith::AndIOp::create(fb, barrierMask, bufferCTAMask);
           }
+          Value currentPhase =
+              convertAndBroadcast(fb, currentPhases, {2, 3}, readTrackingType);
+          Value phaseIndices = createDimIndices(
+              fb, readTrackingType, /*dim=*/readTrackingType.getRank() - 1);
+          auto phaseIndicesType =
+              cast<RankedTensorType>(phaseIndices.getType());
+          currentPhase =
+              arith::TruncIOp::create(fb, phaseIndicesType, currentPhase);
+          Value phaseMask = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
+                                                  phaseIndices, currentPhase);
+          barrierMask = arith::AndIOp::create(fb, barrierMask, phaseMask);
           Value threadColumnMask =
               createDimMask(fb, threadVal, readVisibilityType, /*dim=*/3);
           Value zero =
@@ -1926,7 +2012,8 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
     ImplicitLocOpBuilder &b, Value mbar, Value bufferMask, Value pred,
     MemType memType, Operation *insertPoint, Value barrierCTAs,
     Value effectCTAs) {
-  if (auxData.barriers.empty() || auxData.writeTracking[(int)memType].empty()) {
+  if (auxData.barriers.empty() || auxData.barrierStates.empty() ||
+      auxData.writeTracking[(int)memType].empty()) {
     return;
   }
   if (!pred)
@@ -1938,30 +2025,38 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
       auxData.writeTracking[(int)memType].at(insertPoint).value;
   auto writeTrackingType = cast<RankedTensorType>(
       auxData.writeTracking[(int)memType].at(insertPoint).type);
+  Value barrierStatesVal = auxData.barrierStates.at(insertPoint).value;
+  auto barrierStatesType =
+      cast<RankedTensorType>(auxData.barrierStates.at(insertPoint).type);
   uint32_t mbarLength = getMemDescLength(mbar);
   Value mbarOffset = tti::ExperimentalMemDescToI32Op::create(b, mbar);
   Value mbarLengthVal = arith::ConstantIntOp::create(b, mbarLength, 32);
-  SmallVector<Value> args = {mbarOffset,  mbarLengthVal, pred,
-                             bufferMask,  barriersVal,   writeTrackingVal,
-                             barrierCTAs, effectCTAs};
+  SmallVector<Value> args = {mbarOffset,       mbarLengthVal, pred,
+                             bufferMask,       barriersVal,   writeTrackingVal,
+                             barrierStatesVal, barrierCTAs,   effectCTAs};
   createCallToCachedFunction(
       b, "track_barrier_write_for_buffer", args,
-      /*assertInfo=*/std::nullopt, {barriersType, writeTrackingType},
-      [writeTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      /*assertInfo=*/std::nullopt,
+      {barriersType, writeTrackingType, barrierStatesType},
+      [writeTrackingType, barrierStatesType](ImplicitLocOpBuilder &fb,
+                                             Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value mbarLengthVal = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
         Value bufferMask = entryBlock->getArgument(3);
         Value barriers = entryBlock->getArgument(4);
         Value writeTrackingPtr = entryBlock->getArgument(5);
-        Value barrierCTAs = entryBlock->getArgument(6);
-        Value effectCTAs = entryBlock->getArgument(7);
+        Value barrierStatesPtr = entryBlock->getArgument(6);
+        Value barrierCTAs = entryBlock->getArgument(7);
+        Value effectCTAs = entryBlock->getArgument(8);
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
 
         Value writeTracking = tti::createLoadScratchMemory(
             fb, fb.getLoc(), writeTrackingPtr, writeTrackingType);
+        Value barrierStates = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), barrierStatesPtr, barrierStatesType);
         Value barrierDescriptor =
             createBufferDescriptor(fb, mbarOffset, mbarLengthVal);
         Value barriersEqBar =
@@ -1977,6 +2072,19 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
         Value trackMask = arith::AndIOp::create(fb, barriersEqBar, bufferMask);
         trackMask = arith::AndIOp::create(fb, trackMask, bufferCTAMask);
         trackMask = arith::AndIOp::create(fb, trackMask, barrierCTAMask);
+        Value phaseOne =
+            tti::createConstIntTensor(fb, fb.getLoc(), 1, barrierStatesType);
+        Value currentPhase = arith::AndIOp::create(fb, barrierStates, phaseOne);
+        currentPhase =
+            convertAndBroadcast(fb, currentPhase, {2, 3}, writeTrackingType);
+        Value phaseIndices = createDimIndices(
+            fb, writeTrackingType, /*dim=*/writeTrackingType.getRank() - 1);
+        auto phaseIndicesType = cast<RankedTensorType>(phaseIndices.getType());
+        currentPhase =
+            arith::TruncIOp::create(fb, phaseIndicesType, currentPhase);
+        Value phaseMask = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
+                                                phaseIndices, currentPhase);
+        trackMask = arith::AndIOp::create(fb, trackMask, phaseMask);
         Value writeTrackingOne =
             tti::createConstIntTensor(fb, fb.getLoc(), 1, writeTrackingType);
         Value newTracking = arith::SelectOp::create(
@@ -2047,8 +2155,8 @@ void FunctionBuilder::createClearBarrierStorageTrackingCall(
 }
 
 void FunctionBuilder::createTransferVisibleAccessesCall(
-    ImplicitLocOpBuilder &b, Value mbar, uint64_t threadMask, Value pred,
-    MemType memType, Operation *insertPoint) {
+    ImplicitLocOpBuilder &b, Value mbar, Value phase, uint64_t threadMask,
+    Value pred, MemType memType, Operation *insertPoint) {
   if (auxData.barriers.empty())
     return;
 
@@ -2067,6 +2175,7 @@ void FunctionBuilder::createTransferVisibleAccessesCall(
   SmallVector<Value> args = {
       tti::ExperimentalMemDescToI32Op::create(b, mbar),
       arith::ConstantIntOp::create(b, getMemDescLength(mbar), 32),
+      phase,
       pred,
       threadMaskVal,
       barriers.value,
@@ -2109,10 +2218,11 @@ void FunctionBuilder::createTransferVisibleAccessesCall(
        readTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
-        Value pred = entryBlock->getArgument(2);
-        Value threadMaskVal = entryBlock->getArgument(3);
-        Value barriers = entryBlock->getArgument(4);
-        unsigned nextArg = 5;
+        Value phase = entryBlock->getArgument(2);
+        Value pred = entryBlock->getArgument(3);
+        Value threadMaskVal = entryBlock->getArgument(4);
+        Value barriers = entryBlock->getArgument(5);
+        unsigned nextArg = 6;
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
@@ -2120,6 +2230,9 @@ void FunctionBuilder::createTransferVisibleAccessesCall(
         Value barriersEqBar =
             createCmpIntTensorScalar(fb, barriers, descriptor);
         Value currentCTA = createCurrentCTAMask(fb);
+        Value phaseI32 = adjustIntegerWidth(fb, phase, fb.getI32Type());
+        phaseI32 = arith::AndIOp::create(
+            fb, phaseI32, arith::ConstantIntOp::create(fb, 1, 32));
 
         if (transferWrites) {
           Value visibilityPtr = entryBlock->getArgument(nextArg++);
@@ -2133,11 +2246,16 @@ void FunctionBuilder::createTransferVisibleAccessesCall(
           Value barrierCTAMask =
               createCTASetMask(fb, writeTrackingType, /*dim=*/2, currentCTA);
           barrierMask = arith::AndIOp::create(fb, barrierMask, barrierCTAMask);
+          int phaseDim = writeTrackingType.getRank() - 1;
+          Value phaseMask =
+              createDimMask(fb, phaseI32, writeTrackingType, phaseDim);
+          barrierMask = arith::AndIOp::create(fb, barrierMask, phaseMask);
           Value zeroTracking =
               tti::createConstIntTensor(fb, fb.getLoc(), 0, writeTrackingType);
           Value trackingBuffers =
               arith::SelectOp::create(fb, barrierMask, tracking, zeroTracking);
-          trackingBuffers = reduce<arith::OrIOp>(fb, trackingBuffers, {2, 3});
+          trackingBuffers =
+              reduce<arith::OrIOp>(fb, trackingBuffers, {2, 3, phaseDim});
           trackingBuffers = convertAndBroadcast(fb, trackingBuffers, {0, 1},
                                                 writeVisibilityType);
           auto trackingBuffersType =
@@ -2178,11 +2296,15 @@ void FunctionBuilder::createTransferVisibleAccessesCall(
           Value barrierCTAMask =
               createCTASetMask(fb, readTrackingType, /*dim=*/2, currentCTA);
           barrierMask = arith::AndIOp::create(fb, barrierMask, barrierCTAMask);
+          int phaseDim = readTrackingType.getRank() - 1;
+          Value phaseMask =
+              createDimMask(fb, phaseI32, readTrackingType, phaseDim);
+          barrierMask = arith::AndIOp::create(fb, barrierMask, phaseMask);
           Value zeroTracking =
               tti::createConstIntTensor(fb, fb.getLoc(), 0, readTrackingType);
           Value trackingBar =
               arith::SelectOp::create(fb, barrierMask, tracking, zeroTracking);
-          trackingBar = reduce<arith::OrIOp>(fb, trackingBar, {2, 3});
+          trackingBar = reduce<arith::OrIOp>(fb, trackingBar, {2, 3, phaseDim});
           trackingBar = convertAndBroadcast(fb, trackingBar, {0, 1, 4},
                                             readVisibilityType);
           Value visibilityOrTracking =
@@ -2798,7 +2920,8 @@ void FunctionBuilder::createSetProxyAccessCall(ImplicitLocOpBuilder &b,
 
         // A new generic access supersedes fence coverage for an older access
         // from the same source. Clear that source's fence bit in outstanding
-        // barrier snapshots as well, so an old publication cannot mask it.
+        // barrier snapshots from either phase as well, so an old publication
+        // cannot mask it.
         if (hasTracking) {
           Value tracking = tti::createLoadScratchMemory(
               fb, fb.getLoc(), trackingPtr, trackingType);
@@ -2899,15 +3022,18 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
     Operation *insertPoint, Value barrierCTAs, Value bufferMask,
     Value effectCTAs) {
   bool filterByBuffer = static_cast<bool>(bufferMask);
-  if (auxData.barriers.empty() || auxData.proxyAccessVisibility.empty() ||
+  if (auxData.barriers.empty() || auxData.barrierStates.empty() ||
+      auxData.proxyAccessVisibility.empty() ||
       auxData.proxyAccessTracking.empty())
     return;
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   ValueType barriers = auxData.barriers.at(insertPoint);
+  ValueType barrierStates = auxData.barrierStates.at(insertPoint);
   ValueType visibility = auxData.proxyAccessVisibility.at(insertPoint);
   ValueType tracking = auxData.proxyAccessTracking.at(insertPoint);
   auto barriersType = cast<RankedTensorType>(barriers.type);
+  auto barrierStatesType = cast<RankedTensorType>(barrierStates.type);
   auto visibilityType = cast<RankedTensorType>(visibility.type);
   auto trackingType = cast<RankedTensorType>(tracking.type);
   SmallVector<Value> args = {
@@ -2916,10 +3042,12 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
       pred,
       arith::ConstantIntOp::create(b, thread, 32),
       barriers.value,
+      barrierStates.value,
       visibility.value,
       tracking.value,
       barrierCTAs};
-  ManglingArgs specializationArgs{barriersType, visibilityType, trackingType};
+  ManglingArgs specializationArgs{barriersType, barrierStatesType,
+                                  visibilityType, trackingType};
   if (filterByBuffer) {
     args.append({bufferMask, effectCTAs});
   }
@@ -2928,23 +3056,26 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
       filterByBuffer ? "track_proxy_accesses_for_buffer"
                      : "track_proxy_accesses",
       args, /*assertInfo=*/std::nullopt, specializationArgs,
-      [visibilityType, trackingType, filterByBuffer](ImplicitLocOpBuilder &fb,
-                                                     Block *entryBlock) {
+      [barrierStatesType, visibilityType, trackingType,
+       filterByBuffer](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
         Value threadVal = entryBlock->getArgument(3);
         Value barriers = entryBlock->getArgument(4);
-        Value visibilityPtr = entryBlock->getArgument(5);
-        Value trackingPtr = entryBlock->getArgument(6);
-        Value barrierCTAs = entryBlock->getArgument(7);
+        Value barrierStatesPtr = entryBlock->getArgument(5);
+        Value visibilityPtr = entryBlock->getArgument(6);
+        Value trackingPtr = entryBlock->getArgument(7);
+        Value barrierCTAs = entryBlock->getArgument(8);
         Value completeMask =
-            filterByBuffer ? entryBlock->getArgument(8) : Value();
-        Value effectCTAs =
             filterByBuffer ? entryBlock->getArgument(9) : Value();
+        Value effectCTAs =
+            filterByBuffer ? entryBlock->getArgument(10) : Value();
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
+        Value barrierStates = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), barrierStatesPtr, barrierStatesType);
         Value visibility = tti::createLoadScratchMemory(
             fb, fb.getLoc(), visibilityPtr, visibilityType);
         Value tracking = tti::createLoadScratchMemory(
@@ -2981,6 +3112,19 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
             createCTASetMask(fb, trackingType, /*dim=*/2, barrierCTAs);
         Value trackMask =
             arith::AndIOp::create(fb, barriersEqBar, barrierCTAMask);
+        Value currentPhases = arith::AndIOp::create(
+            fb, barrierStates,
+            tti::createConstIntTensor(fb, fb.getLoc(), 1, barrierStatesType));
+        currentPhases =
+            convertAndBroadcast(fb, currentPhases, {2, 3}, trackingType);
+        Value phaseIndices =
+            createDimIndices(fb, trackingType, trackingType.getRank() - 1);
+        auto phaseIndicesType = cast<RankedTensorType>(phaseIndices.getType());
+        currentPhases =
+            arith::TruncIOp::create(fb, phaseIndicesType, currentPhases);
+        Value phaseMask = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
+                                                currentPhases, phaseIndices);
+        trackMask = arith::AndIOp::create(fb, trackMask, phaseMask);
         if (filterByBuffer) {
           Value trackingBuffers =
               convertAndBroadcast(fb, containedBuffers, {1}, trackingType);
@@ -2992,9 +3136,8 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
         Value withSource = arith::OrIOp::create(fb, tracking, source);
         Value updated =
             arith::SelectOp::create(fb, trackMask, withSource, tracking);
-        Value storeMask = filterByBuffer ? trackMask : barrierCTAMask;
         createMaskedStoreScratchMemory(fb, fb.getLoc(), trackingPtr, updated,
-                                       trackingType, storeMask);
+                                       trackingType, trackMask);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -3002,8 +3145,8 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
 }
 
 void FunctionBuilder::createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b,
-                                                    Value mbar, int thread,
-                                                    Value pred,
+                                                    Value mbar, Value phase,
+                                                    int thread, Value pred,
                                                     Operation *insertPoint) {
   if (auxData.barriers.empty())
     return;
@@ -3024,6 +3167,7 @@ void FunctionBuilder::createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b,
   SmallVector<Value> args = {
       tti::ExperimentalMemDescToI32Op::create(b, mbar),
       arith::ConstantIntOp::create(b, getMemDescLength(mbar), 32),
+      phase,
       pred,
       arith::ConstantIntOp::create(b, thread, 32),
       barriers.value,
@@ -3050,11 +3194,12 @@ void FunctionBuilder::createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b,
        waitingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
-        Value pred = entryBlock->getArgument(2);
-        Value threadVal = entryBlock->getArgument(3);
-        Value barriers = entryBlock->getArgument(4);
-        Value visibilityPtr = entryBlock->getArgument(5);
-        Value trackingPtr = entryBlock->getArgument(6);
+        Value phase = entryBlock->getArgument(2);
+        Value pred = entryBlock->getArgument(3);
+        Value threadVal = entryBlock->getArgument(4);
+        Value barriers = entryBlock->getArgument(5);
+        Value visibilityPtr = entryBlock->getArgument(6);
+        Value trackingPtr = entryBlock->getArgument(7);
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
@@ -3073,11 +3218,17 @@ void FunctionBuilder::createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b,
             createCTASetMask(fb, trackingType, /*dim=*/2, currentCTA);
         Value selected =
             arith::AndIOp::create(fb, proxyBarrierMask, barrierCTAMask);
+        Value phaseIndex = adjustIntegerWidth(fb, phase, fb.getI32Type());
+        phaseIndex = arith::AndIOp::create(
+            fb, phaseIndex, arith::ConstantIntOp::create(fb, 1, 32));
+        int phaseDim = trackingType.getRank() - 1;
+        Value phaseMask = createDimMask(fb, phaseIndex, trackingType, phaseDim);
+        selected = arith::AndIOp::create(fb, selected, phaseMask);
         Value zeroTracking =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, trackingType);
         Value frontier =
             arith::SelectOp::create(fb, selected, tracking, zeroTracking);
-        frontier = reduce<arith::OrIOp>(fb, frontier, {2, 3});
+        frontier = reduce<arith::OrIOp>(fb, frontier, {2, 3, phaseDim});
         frontier = convertAndBroadcast(fb, frontier, {0, 1, 4}, visibilityType);
 
         Value targetMask =
@@ -3092,7 +3243,7 @@ void FunctionBuilder::createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b,
                                        visibilityType, targetMask);
 
         if (clearWaiting) {
-          Value waitingPtr = entryBlock->getArgument(7);
+          Value waitingPtr = entryBlock->getArgument(8);
           Value waiting = tti::createLoadScratchMemory(fb, fb.getLoc(),
                                                        waitingPtr, waitingType);
           Value waitingBarrierMask =

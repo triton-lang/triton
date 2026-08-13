@@ -576,13 +576,14 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
         writeTracking[iMemType].insert(
             entryRegion,
             createZeroInitStateTensor(
-                b, {numCTAs, numBufs, numCTAs, numBarriers}, 8, fb));
+                b, {numCTAs, numBufs, numCTAs, numBarriers, 2}, 8, fb));
         passValueToWarpSpecialize(writeTracking[iMemType].at(entryRegion),
                                   writeTracking[iMemType]);
         readTracking[iMemType].insert(
             entryRegion,
             createZeroInitStateTensor(
-                b, {numCTAs, numBufs, numCTAs, numBarriers, numCTAs}, 64, fb));
+                b, {numCTAs, numBufs, numCTAs, numBarriers, numCTAs, 2}, 64,
+                fb));
         passValueToWarpSpecialize(readTracking[iMemType].at(entryRegion),
                                   readTracking[iMemType]);
       }
@@ -594,7 +595,7 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
       proxyAccessTracking.insert(
           entryRegion,
           createZeroInitStateTensor(
-              b, {numCTAs, numBufs, numCTAs, numBarriers, numCTAs}, 64, fb));
+              b, {numCTAs, numBufs, numCTAs, numBarriers, numCTAs, 2}, 64, fb));
       passValueToWarpSpecialize(proxyAccessTracking.at(entryRegion),
                                 proxyAccessTracking);
     }
