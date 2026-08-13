@@ -346,6 +346,17 @@ Value createDimMask(ImplicitLocOpBuilder &b, Value index,
   return convertAndBroadcast(b, mask1D, {dim}, maskType);
 }
 
+Value createDimIndices(ImplicitLocOpBuilder &b, RankedTensorType tensorType,
+                       int dim) {
+  assert(dim >= 0 && dim < tensorType.getRank() && "invalid tensor dimension");
+  auto indexType = tti::getSlicedTensorType(tensorType, {dim}, b.getI32Type());
+  Value range = triton::MakeRangeOp::create(b, indexType, /*start=*/0,
+                                            /*end=*/tensorType.getShape()[dim]);
+  auto fullIndexType = cast<RankedTensorType>(
+      tensorType.cloneWith(std::nullopt, b.getI32Type()));
+  return convertAndBroadcast(b, range, {dim}, fullIndexType);
+}
+
 Value createCurrentCTAMask(ImplicitLocOpBuilder &b) {
   Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
   return arith::ShLIOp::create(b, arith::ConstantIntOp::create(b, 1, 32),
