@@ -363,12 +363,13 @@ struct RewriteStorePattern : OpConversionPattern<triton::DescriptorStoreOp> {
     const auto blockShape = descTy.getShape();
     auto desc = unpackDescriptor(descTy, adaptor.getDesc());
     auto offsets = castToI64(rewriter, op.getIndices());
+    auto attrs = filterSegmentSizes(op->getAttrs());
 
     auto newStore = rewriter.replaceOpWithNewOp<triton::StoreOp>(
         op, generatePtr(rewriter, loc, blockShape, desc, offsets), op.getSrc(),
         generateMask(rewriter, loc, blockShape, desc, offsets),
         triton::CacheModifier::NONE, triton::EvictionPolicy::NORMAL);
-    newStore->setAttrs(filterSegmentSizes(op->getAttrs()));
+    newStore->setAttrs(attrs);
 
     return llvm::success();
   }
@@ -440,10 +441,11 @@ struct RewriteScatterPattern
     auto desc = unpackDescriptor(descTy, adaptor.getDesc());
     auto [ptr, mask] = generateGatherScatterPtrMask(
         rewriter, loc, blockShape, desc, op.getXOffsets(), op.getYOffset());
+    auto attrs = filterSegmentSizes(op->getAttrs());
     auto newStore = rewriter.replaceOpWithNewOp<triton::StoreOp>(
         op, ptr, op.getSrc(), mask, triton::CacheModifier::NONE,
         triton::EvictionPolicy::NORMAL);
-    newStore->setAttrs(filterSegmentSizes(op->getAttrs()));
+    newStore->setAttrs(attrs);
 
     return llvm::success();
   }
