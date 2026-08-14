@@ -261,6 +261,7 @@ TritonIntegerRangeAnalysis::maybeGetTripCount(LoopLikeOpInterface loop) {
     return {};
 
   unsigned int width = ConstantIntRanges::getStorageBitwidth(iv->getType());
+  bool hasExactBounds = true;
 
   auto getLoopRangeInfo = [&](std::optional<OpFoldResult> loopBound,
                               Block *block,
@@ -273,12 +274,14 @@ TritonIntegerRangeAnalysis::maybeGetTripCount(LoopLikeOpInterface loop) {
       } else if (auto value = llvm::dyn_cast_if_present<Value>(*loopBound)) {
         const dataflow::IntegerValueRangeLattice *lattice =
             getLatticeElementFor(getProgramPointBefore(block), value);
-        if (lattice != nullptr && !lattice->getValue().isUninitialized())
-          return getUpper.value_or(false)
-                     ? lattice->getValue().getValue().smax()
-                     : lattice->getValue().getValue().smin();
+        if (lattice != nullptr && !lattice->getValue().isUninitialized()) {
+          const ConstantIntRanges &range = lattice->getValue().getValue();
+          hasExactBounds &= range.smin() == range.smax();
+          return getUpper.value_or(false) ? range.smax() : range.smin();
+        }
       }
     }
+    hasExactBounds = false;
     if (defaultVal)
       return *defaultVal;
     return getUpper.value_or(false) ? APInt::getSignedMaxValue(width)
@@ -307,10 +310,14 @@ TritonIntegerRangeAnalysis::maybeGetTripCount(LoopLikeOpInterface loop) {
   //  step = ceildiv(K, k)
   if (stepVal.isZero())
     stepVal = stepValDefault;
-  if (max.sge(min))
-    return llvm::divideCeilSigned(max.getSExtValue() - min.getSExtValue(),
-                                  stepVal.getSExtValue());
-  return {};
+  if (max.slt(min))
+    return {};
+  int64_t tripCount = llvm::divideCeilSigned(
+      max.getSExtValue() - min.getSExtValue(), stepVal.getSExtValue());
+  // We can only simulate a fixed number of backedges if we have exact bounds
+  if (!hasExactBounds && tripCount <= kDefaultMaxTripCount)
+    return {};
+  return tripCount;
 }
 
 bool isEmptyInitializedRange(ConstantIntRanges rv) {

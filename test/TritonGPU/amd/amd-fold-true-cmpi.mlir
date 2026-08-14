@@ -248,3 +248,33 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[TRUE:.*]] = arith.constant dense<true> : tensor<32xi1>
 // CHECK:           tt.return %[[TRUE]] : tensor<32xi1>
 // CHECK:         }
+
+// -----
+
+// A loop with a runtime trip count in [0, 1] can return either its initial
+// iter_arg or the value yielded by its only iteration.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @dontfold_dynamic_one_trip_loop() -> i1 {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c4 = arith.constant 4 : i32
+    %pid = tt.get_program_id x : i32
+    %has_work = arith.cmpi slt, %pid, %c4 : i32
+    %upper_i32 = arith.extui %has_work : i1 to i32
+    %upper = arith.index_cast %upper_i32 : i32 to index
+    %result = scf.for %iv = %c0 to %upper step %c1
+        iter_args(%value = %c0_i32) -> (i32) {
+      %next = arith.addi %value, %c1_i32 : i32
+      scf.yield %next : i32
+    }
+    %is_one = arith.cmpi eq, %result, %c1_i32 : i32
+    tt.return %is_one : i1
+  }
+}
+
+// CHECK-LABEL:   tt.func @dontfold_dynamic_one_trip_loop
+// CHECK:           %[[RESULT:.*]] = scf.for
+// CHECK:           %[[IS_ONE:.*]] = arith.cmpi eq, %[[RESULT]],
+// CHECK:           tt.return %[[IS_ONE]] : i1
