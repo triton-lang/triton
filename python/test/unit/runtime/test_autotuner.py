@@ -6,6 +6,7 @@ import pytest
 
 import pathlib
 import uuid
+import weakref
 from triton._internal_testing import is_cuda, is_hip_cdna2, is_rubin
 
 
@@ -13,6 +14,30 @@ def do_bench(kernel_call, quantiles, use_cuda_graph=False):
     if use_cuda_graph:
         return triton.testing.do_bench_cudagraph(kernel_call, quantiles=quantiles)
     return triton.testing.do_bench(kernel_call, quantiles=quantiles, warmup=1, rep=1)
+
+
+def test_autotuner_releases_failed_benchmark_arguments():
+
+    class Payload:
+        pass
+
+    def kernel():
+        pass
+
+    def failing_bench(kernel_call, quantiles):
+        error = triton.OutOfResources(2, 1, "test resource")
+        raise error
+
+    config = triton.Config({})
+    tuner = triton.runtime.Autotuner(kernel, [], [config], [], None, None, do_bench=failing_bench)
+    tuner.nargs = {}
+
+    payload = Payload()
+    payload_ref = weakref.ref(payload)
+    tuner._bench(payload, config=config)
+    del payload
+
+    assert payload_ref() is None
 
 
 @pytest.mark.parametrize('use_cuda_graph', [False, True])
