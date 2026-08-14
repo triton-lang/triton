@@ -271,9 +271,14 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
           }
           v = b.bitcast(v, IntegerType::get(getContext(), width));
 
-          if (!otherIsSplatConstInt && valueElemNBits == 16 && nWords > 1 &&
-              isa<RankedTensorType>(op.getType())) {
+          auto tensorType = dyn_cast<RankedTensorType>(op.getType());
+          if (!otherIsSplatConstInt && tensorType &&
+              ((valueElemNBits == 16 && nWords > 1) ||
+               (valueElemNBits == 8 && width == 32 && nWords == 1 && vec == 4 &&
+                tensorType.getRank() == 1 &&
+                isa<FloatType>(tensorType.getElementType())))) {
             // Match each fallback to its destination instead of moving it.
+            // Match the packed FP8 fallback to its 32-bit destination.
             ptxBuilder.newOperand(v, std::to_string(dstsOpr->listGet(ii)->idx));
             continue;
           }

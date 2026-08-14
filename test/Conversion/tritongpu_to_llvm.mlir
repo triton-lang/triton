@@ -198,7 +198,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
 // -----
 
 #blocked0 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#blocked2d = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 0, parent = #blocked2d}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+
+  // CHECK-LABEL: masked_four_byte_fp8
+  tt.func @masked_four_byte_fp8(%ptr: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}, %bound: i32 {tt.divisibility = 4 : i32}, %fallback: f8E4M3FN) {
+    %offsets = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked0>
+    %base = tt.splat %ptr : !tt.ptr<f8E4M3FN> -> tensor<128x!tt.ptr<f8E4M3FN>, #blocked0>
+    %ptrs = tt.addptr %base, %offsets : tensor<128x!tt.ptr<f8E4M3FN>, #blocked0>, tensor<128xi32, #blocked0>
+    %bounds = tt.splat %bound : i32 -> tensor<128xi32, #blocked0>
+    %mask = arith.cmpi slt, %offsets, %bounds : tensor<128xi32, #blocked0>
+    %other = tt.splat %fallback : f8E4M3FN -> tensor<128xf8E4M3FN, #blocked0>
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: @$3 ld.global.b32 { $0 }, [ $2 + 0 ];", "=r,0,l,b"
+    %values = tt.load %ptrs, %mask, %other : tensor<128x!tt.ptr<f8E4M3FN>, #blocked0>
+    tt.store %ptrs, %values, %mask : tensor<128x!tt.ptr<f8E4M3FN>, #blocked0>
+    tt.return
+  }
+
+  // CHECK-LABEL: masked_rank_two_fp8
+  tt.func @masked_rank_two_fp8(%ptr: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}, %bound: i32 {tt.divisibility = 4 : i32}, %fallback: f8E4M3FN) {
+    %columns = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #slice>
+    %offsets = tt.expand_dims %columns {axis = 0 : i32} : tensor<128xi32, #slice> -> tensor<1x128xi32, #blocked2d>
+    %base = tt.splat %ptr : !tt.ptr<f8E4M3FN> -> tensor<1x128x!tt.ptr<f8E4M3FN>, #blocked2d>
+    %ptrs = tt.addptr %base, %offsets : tensor<1x128x!tt.ptr<f8E4M3FN>, #blocked2d>, tensor<1x128xi32, #blocked2d>
+    %bounds = tt.splat %bound : i32 -> tensor<1x128xi32, #blocked2d>
+    %mask = arith.cmpi slt, %offsets, %bounds : tensor<1x128xi32, #blocked2d>
+    %other = tt.splat %fallback : f8E4M3FN -> tensor<1x128xf8E4M3FN, #blocked2d>
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: mov.u32 $0, $1;
+    // CHECK-SAME: ld.global.b32
+    %values = tt.load %ptrs, %mask, %other : tensor<1x128x!tt.ptr<f8E4M3FN>, #blocked2d>
+    tt.store %ptrs, %values, %mask : tensor<1x128x!tt.ptr<f8E4M3FN>, #blocked2d>
+    tt.return
+  }
+
   // CHECK-LABEL: masked_scalarized_contiguous_load
   tt.func @masked_scalarized_contiguous_load(%arg0: !tt.ptr<f32> {tt.divisibility = 4 : i32}, %arg1: i32) {
     %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked0>
