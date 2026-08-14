@@ -155,13 +155,6 @@ public:
   virtual SmallVector<Operation *>
   createInitClusterBarrier(ImplicitLocOpBuilder &b) const = 0;
 
-  // Scratch-backed atomic results may be produced by one CTA and consumed by
-  // other CTAs in the same broadcast group.
-  virtual std::optional<uint16_t>
-  getScratchCTABroadcastMask(Operation *op) const {
-    return std::nullopt;
-  }
-
   // A call-frame summary cannot represent target-specific synchronization or
   // compiler scratch that crosses CTA boundaries.
   virtual bool hasUnsummarizableCalleeState(Operation *op) const {

@@ -337,10 +337,10 @@ The common hook implementation covers these TritonGPU operations:
   descriptors because their indices are runtime values.
 - `ttg.local_alloc` with a source: barrier-tracked shared-memory write.
 - Any operation with allocator-provided operation-local shared scratch: a
-  synchronous generic-proxy write over its allocated byte interval. The
-  affected CTAs are derived from the operation's layout and target-specific
-  broadcast behavior. Forced warp-shuffle conversions publish no scratch
-  metadata because allocation reserves no scratch for them.
+  synchronous generic-proxy write over its allocated byte interval in its owning
+  CTA. Cross-CTA scratch reads follow intrinsic synchronization, and atomic
+  writes are issued only by producer CTAs. Forced warp-shuffle conversions
+  publish no scratch metadata because allocation reserves no scratch for them.
 - Function calls with allocator-provided virtual shared-memory frames: a
   synchronous generic-proxy write over the whole callee frame in the current
   CTA. This includes nested callees because each virtual frame is sized from

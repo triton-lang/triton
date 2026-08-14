@@ -1311,49 +1311,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #amd_convert_src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #amd_convert_parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #amd_convert_dst = #ttg.slice<{dim = 1, parent = #amd_convert_parent}>
+#amd_convert_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 512 : i32, ttg.target = "hip:gfx1250", ttg.tensor_memory_size = 0 : i32} {
   // CHECK-LABEL: @amd_convert_layout_shared_scratch
   tt.func public @amd_convert_layout_shared_scratch(
       %value: tensor<128xi32, #amd_convert_src>) {
+    %barrier = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<1xi64, #amd_convert_barrier, #ttg.shared_memory, mutable>
+    amdg.init_barrier %barrier, 128
+        : !ttg.memdesc<1xi64, #amd_convert_barrier, #ttg.shared_memory, mutable>
+    %phase = amdg.arrive_barrier %barrier, 1
+        : !ttg.memdesc<1xi64, #amd_convert_barrier, #ttg.shared_memory, mutable> -> i32
+    amdg.wait_barrier %barrier, %phase
+        : !ttg.memdesc<1xi64, #amd_convert_barrier, #ttg.shared_memory, mutable>
+    // CHECK: ttg.local_dealloc
+    ttg.local_dealloc %barrier
+        : !ttg.memdesc<1xi64, #amd_convert_barrier, #ttg.shared_memory, mutable>
+    // CHECK-NOT: tt.call @__triton_consan_verify_barrier_can_init
     // CHECK: tt.call @__triton_consan_verify_write_visibility
     // CHECK: tt.call @__triton_consan_verify_read_visibility
+    // CHECK: tt.call @__triton_consan_invalidate_barrier_storage
     // CHECK: tt.call @__triton_consan_publish_write_visibility
     // CHECK: ttg.convert_layout
     %converted = ttg.convert_layout %value
         {allocation.offset = 0 : i32, allocation.size = 512 : i32}
         : tensor<128xi32, #amd_convert_src>
         -> tensor<128xi32, #amd_convert_dst>
-    tt.return
-  }
-}
-
-// -----
-
-#amd_atomic_broadcast = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
-
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 64 : i32, ttg.target = "hip:gfx1250", ttg.tensor_memory_size = 0 : i32} {
-  // CHECK-LABEL: @amd_buffer_atomic_broadcast_scratch
-  tt.func public @amd_buffer_atomic_broadcast_scratch(
-      %base: !tt.ptr<i32>,
-      %offsets: tensor<16xi32, #amd_atomic_broadcast>,
-      %values: tensor<16xi32, #amd_atomic_broadcast>,
-      %out: tensor<16x!tt.ptr<i32>, #amd_atomic_broadcast>) {
-    // AMD initializes cluster-wide ConSan state with its own barrier dialect.
-    // CHECK: amdg.cluster_barrier_arrive
-    // CHECK-NEXT: amdg.cluster_barrier_wait
-    // CHECK: %[[AMD_PRODUCER:.*]] = arith.cmpi eq, {{.*}} : i32
-    // CHECK: %[[AMD_ALL_ROWS:.*]] = arith.constant 3 : i32
-    // CHECK: %[[AMD_GROUP_ROWS:.*]] = arith.shli %[[AMD_ALL_ROWS]], {{.*}} : i32
-    // CHECK: %[[AMD_RECIPIENTS:.*]] = arith.ori {{.*}}, %[[AMD_GROUP_ROWS]] : i32
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[AMD_PRODUCER]]{{.*}}%[[AMD_RECIPIENTS]]
-    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[AMD_PRODUCER]]{{.*}}%[[AMD_RECIPIENTS]]
-    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}%[[AMD_PRODUCER]]{{.*}}%[[AMD_RECIPIENTS]]
-    // CHECK: amdg.buffer_atomic_rmw
-    %old = amdg.buffer_atomic_rmw add, acq_rel, gpu, %values, %base[%offsets]
-        {allocation.offset = 0 : i32, allocation.size = 64 : i32}
-        : tensor<16xi32, #amd_atomic_broadcast>
-    tt.store %out, %old : tensor<16x!tt.ptr<i32>, #amd_atomic_broadcast>
     tt.return
   }
 }

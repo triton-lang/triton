@@ -168,11 +168,6 @@ public:
     return {ClusterBarrierOp::create(b, b.getLoc()).getOperation()};
   }
 
-  std::optional<uint16_t>
-  getScratchCTABroadcastMask(Operation *op) const override {
-    return getAtomicScratchBroadcastMask(op);
-  }
-
   bool hasUnsummarizableCalleeState(Operation *op) const override {
     if (isa<ClusterBarrierOp>(op))
       return true;

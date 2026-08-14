@@ -201,13 +201,12 @@ def _consan_noinline_convert_layout_kernel(input, output, sentinel_output, NESTE
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
-@pytest.mark.parametrize("ENABLE_CONSAN,NESTED", [
-    pytest.param(False, False, id="without-consan"),
-    pytest.param(True, False, id="with-consan"),
-    pytest.param(True, True, id="with-consan-nested"),
+@pytest.mark.parametrize("NESTED", [
+    pytest.param(False, id="with-consan"),
+    pytest.param(True, id="with-consan-nested"),
 ])
-def test_consan_noinline_convert_layout_scratch(ENABLE_CONSAN, NESTED, device, fresh_knobs):
-    fresh_knobs.compilation.instrumentation_mode = "consan" if ENABLE_CONSAN else ""
+def test_consan_noinline_convert_layout_scratch(NESTED, device, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = "consan"
     values = torch.arange(128, device=device, dtype=torch.int32)
     output = torch.empty_like(values)
     sentinel_output = torch.empty_like(values)

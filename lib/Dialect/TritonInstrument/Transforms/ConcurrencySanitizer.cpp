@@ -645,22 +645,14 @@ Value getLocalLoadStoreRecipientCTAs(ImplicitLocOpBuilder &b,
       b, getLocalLoadStoreConversion(memDescTy, regTy));
 }
 
-Value getScratchEffectCTAs(ImplicitLocOpBuilder &b, Operation *op,
-                           const ConSanTargetHooks &hooks) {
-  if (isa<CallOpInterface>(op)) {
-    // Non-entry validation ensures every scratch operation in the callee and
-    // its nested callees accesses only the issuing CTA's virtual frame.
-    return currentCTAMask(b);
-  }
-
+Value getScratchReadCTAs(ImplicitLocOpBuilder &b, Operation *op,
+                         Value ownerCTAs) {
   if (auto convert = dyn_cast<ttg::ConvertLayoutOp>(op)) {
-    // Conversion stores remain CTA-local, but the source-owned scratch may be
-    // read by other CTAs when the source and destination block layouts differ.
     LinearLayout srcLayout = ttg::toLinearLayout(convert.getSrc().getType());
     LinearLayout dstLayout = ttg::toLinearLayout(convert.getType());
     Value loadCTAs = getLocalMemoryRecipientCTAs(
         b, invertAndComposeBlockLocal(srcLayout, dstLayout));
-    return arith::OrIOp::create(b, currentCTAMask(b), loadCTAs);
+    return arith::OrIOp::create(b, ownerCTAs, loadCTAs);
   }
 
   if (auto reduce = dyn_cast<tt::ReduceOp>(op)) {
@@ -669,17 +661,13 @@ Value getScratchEffectCTAs(ImplicitLocOpBuilder &b, Operation *op,
     auto axis = *(srcLayout.getOutDimNames().begin() + reduce.getAxis());
     uint16_t groupMask = getInputBasisMask(srcLayout, block, {axis});
     if (!groupMask)
-      return currentCTAMask(b);
+      return ownerCTAs;
     if (groupMask == ttg::lookupNumCTAs(op) - 1)
       return allCTAsMask(b);
     return getRecipientCTAsForBroadcastMasks(b, {groupMask});
   }
 
-  if (auto broadcastMask = hooks.getScratchCTABroadcastMask(op)) {
-    if (*broadcastMask)
-      return getRecipientCTAsForBroadcastMasks(b, {*broadcastMask});
-  }
-  return currentCTAMask(b);
+  return ownerCTAs;
 }
 
 Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
@@ -1354,7 +1342,9 @@ private:
       if (failed(stateMask))
         return failure();
       materialized.bufferMask = *stateMask;
-      materialized.effectCTAs = getScratchEffectCTAs(b, op, hooks);
+      // Scratch stores target the issuing CTA; cross-CTA consumers read after
+      // intrinsic synchronization.
+      materialized.effectCTAs = currentCTAMask(b);
 
       if (selectBarrierStorage && !auxData.barrierBufferMasks.empty()) {
         int index = static_cast<int>(MemType::SHARED_MEM);
@@ -1380,15 +1370,16 @@ private:
           !buf || isa<ttg::SharedMemorySpaceAttr>(
                       cast<ttg::MemDescType>(buf->getType()).getMemorySpace());
       bool invalidatesBarriers =
-          buf && isSharedMemory && hooks.barrierWritesInvalidate() &&
+          isSharedMemory && hooks.barrierWritesInvalidate() &&
           effect.rw == RW::Write &&
           effect.sharedKind == ttg::SharedKind::Generic &&
           thread == baseThread &&
           opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier &&
-          llvm::none_of(getMemoryAccesses(op), [&](const auto &access) {
-            return access.value == *buf &&
-                   access.sharedKind == effect.sharedKind && access.isRead;
-          });
+          (!buf ||
+           llvm::none_of(getMemoryAccesses(op), [&](const auto &access) {
+             return access.value == *buf &&
+                    access.sharedKind == effect.sharedKind && access.isRead;
+           }));
       bool selectBarrierStorage = !isBarrierLifecycle || invalidatesBarriers;
       FailureOr<MaterializedEffect> maybeMaterialized =
           buf ? materializeBuffer(*buf, defaultEffectCTAs, selectBarrierStorage)
@@ -1403,11 +1394,12 @@ private:
 
       Value bufferMask = materialized.bufferMask;
       Value effectCTAs = materialized.effectCTAs;
+      Value readCTAs = buf ? effectCTAs : getScratchReadCTAs(b, op, effectCTAs);
       MemType memType = materialized.memType;
       bool invalidatedBarrier = false;
       auto verifyWrite = [&] {
         addWriteChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
-                       effect.operandName, effectCTAs, opInfo->commitKind);
+                       effect.operandName, readCTAs, opInfo->commitKind);
         addReadChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
                       effect.operandName, effectCTAs, opInfo->commitKind);
       };
@@ -1431,7 +1423,7 @@ private:
                                                   effectCTAs);
         } else {
           funcBuilder.createSetProxyAccessCall(b, bufferMask, baseThread, pred,
-                                               op, effectCTAs);
+                                               op, readCTAs);
         }
       }
       if (effect.rw == RW::Read) {
