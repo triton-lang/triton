@@ -5,6 +5,11 @@ Each test should invoke one or more GPU kernels and check the validity of their 
 
 import os
 import pathlib
+import shutil
+import subprocess
+import sys
+
+import cuda_graph_helper
 
 import triton
 import triton.profiler as proton
@@ -1974,3 +1979,100 @@ def test_hw_trace(fresh_knobs, tmp_path: pathlib.Path, device: str):
     kernel_frame = data[0]["children"][0]["children"][0]
     assert "elementwise" in kernel_frame["frame"]["name"]
     assert kernel_frame["metrics"]["time (ns)"] > 0
+
+
+@pytest.fixture(scope="module")
+def cupti_graph_construction_runtime(tmp_path_factory: pytest.TempPathFactory):
+    if not is_blackwell():
+        pytest.skip("CUPTI HES graph construction tests require a Blackwell GPU")
+    if shutil.which("gcc") is None:
+        pytest.skip("gcc is required to build the CUDA graph test runtime")
+
+    cuda_home = pathlib.Path(os.environ.get("CUDA_HOME", "/usr/local/cuda"))
+    if not (cuda_home / "include" / "cuda.h").is_file():
+        pytest.skip(f"CUDA headers are unavailable under {cuda_home}")
+    build_dir = tmp_path_factory.mktemp("cupti-graph-construction")
+    return cuda_graph_helper.build_runtime(build_dir, cuda_home)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="HW trace is only supported on Blackwell GPUs")
+@pytest.mark.parametrize("case", cuda_graph_helper.CASES)
+def test_cupti_hes_graph_construction_launch(
+    case: str,
+    cupti_graph_construction_runtime: cuda_graph_helper.RuntimeBuild,
+    tmp_path: pathlib.Path,
+):
+    replays = 3
+    helper_path = pathlib.Path(cuda_graph_helper.__file__).resolve()
+
+    trace_path = tmp_path / f"{case}.chrome_trace"
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(helper_path),
+                case,
+                str(replays),
+                str(trace_path),
+                str(cupti_graph_construction_runtime.library_path),
+                str(cupti_graph_construction_runtime.producer_path),
+                str(cupti_graph_construction_runtime.consumer_path),
+                cupti_graph_construction_runtime.producer_name,
+                cupti_graph_construction_runtime.consumer_name,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as error:
+        pytest.fail(f"{case}: timed out after {error.timeout}s\n"
+                    f"stdout:\n{error.stdout}\nstderr:\n{error.stderr}")
+
+    assert result.returncode == 0, (f"{case}: child exited with status {result.returncode}\n"
+                                    f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+
+    with trace_path.open() as trace_file:
+        trace_events = json.load(trace_file)["traceEvents"]
+    build = cupti_graph_construction_runtime
+    kernel_names = {build.producer_name, build.consumer_name}
+    kernel_events = [
+        event for event in trace_events if event.get("cat") == "kernel" and event.get("name") in kernel_names
+    ]
+    expected_kernel_count = replays * cuda_graph_helper.KERNELS_PER_GRAPH
+    assert len(kernel_events) == expected_kernel_count, (
+        f"{case}: found {len(kernel_events)} kernel events, expected {expected_kernel_count}")
+
+    for replay in range(replays):
+        scope_name = f"{case}_{replay}"
+        replay_events = [
+            event for event in kernel_events if event.get("args", {}).get("call_stack", [])[:2] == ["ROOT", scope_name]
+        ]
+        assert len(replay_events) == cuda_graph_helper.KERNELS_PER_GRAPH, (
+            f"{scope_name}: found {len(replay_events)} kernel events")
+        for event in replay_events:
+            assert event["args"]["call_stack"] == [
+                "ROOT",
+                scope_name,
+                "<captured_at>",
+                event["name"],
+            ]
+            assert event["dur"] > 0
+
+        producers = [event for event in replay_events if event["name"] == build.producer_name]
+        consumers = [event for event in replay_events if event["name"] == build.consumer_name]
+        if case in ("pdl", "no-pdl"):
+            assert len(producers) == 1
+            assert len(consumers) == cuda_graph_helper.CONSUMERS_PER_GRAPH
+            producer = producers[0]
+            producer_end = producer["ts"] + producer["dur"]
+            overlaps = [
+                consumer["ts"] < producer_end and producer["ts"] < consumer["ts"] + consumer["dur"]
+                for consumer in consumers
+            ]
+            if case == "pdl":
+                assert all(overlaps)
+            else:
+                assert not any(overlaps)
+        else:
+            assert not producers
+            assert len(consumers) == cuda_graph_helper.KERNELS_PER_GRAPH
