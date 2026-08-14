@@ -242,6 +242,10 @@ struct AuxDataMap {
   triton::BufferStatePlan bufferStatePlans[numMemTypes];
   DenseMap<Value, BufferStateCandidates> bufferCandidates[numMemTypes];
 
+  // Shared-memory state lanes occupied by each physical mbarrier. Virtual
+  // cluster barriers have no storage and therefore do not appear here.
+  SmallVector<llvm::SmallBitVector> barrierBufferMasks;
+
   // scratch pointer, i32
   // Shared-cluster lock used to serialize ConSan instrumentation updates.
   RegionToValueMap lock;

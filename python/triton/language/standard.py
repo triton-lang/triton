@@ -379,7 +379,7 @@ def _compare_and_swap(x, flip, i: core.constexpr):
     is_right = _indicator(n_dims, i)
 
     # conditional swap:
-    ret = core.where((x > y) != (flip ^ is_right), y, x)
+    ret = core.where((x > y) != (flip ^ is_right).to(core.int1), y, x)
     return ret
 
 

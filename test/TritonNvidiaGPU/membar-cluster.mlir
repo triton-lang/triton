@@ -315,8 +315,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // TODO: A better codegen would be:
   // for {
   //   reduce
-  //   cluster_arrive
-  //   cluster_wait
+  //   cluster_barrier
   // }
   // local_alloc
   // but not even the membar allocation pass generates this pattern

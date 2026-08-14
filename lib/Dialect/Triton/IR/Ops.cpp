@@ -893,31 +893,6 @@ OpFoldResult ExpandDimsOp::fold(FoldAdaptor adaptor) {
   return foldViewLikeOp(*this, adaptor.getSrc());
 }
 
-//-- CatOp --
-LogicalResult CatOp::verify() {
-  RankedTensorType lhsTy = getLhs().getType();
-  RankedTensorType resultTy = getType();
-
-  int64_t operandElements = lhsTy.getNumElements() * 2;
-  if (resultTy.getNumElements() != operandElements) {
-    return emitOpError("result element count must equal the sum of the "
-                       "operand element counts, expected ")
-           << operandElements << " but got " << resultTy.getNumElements();
-  }
-
-  Attribute operandEnc = lhsTy.getEncoding();
-  Attribute resultEnc = resultTy.getEncoding();
-  if (!!operandEnc != !!resultEnc) {
-    return emitOpError("requires that either (a) operands and result all have "
-                       "encodings, or (b) none do.");
-  }
-  if (!resultEnc)
-    return success();
-
-  auto interface = cast<DialectInferLayoutInterface>(&resultEnc.getDialect());
-  return interface->verifyCatOpEncodingCompatibility(getOperation());
-}
-
 //-- ReshapeOp --
 
 std::optional<unsigned> ReshapeOp::getExpandDimsAxis() {
