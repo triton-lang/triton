@@ -64,7 +64,7 @@ CUresult launchKernel(CUfunction f, unsigned int gridDimX,
                       CUstream hStream, void **kernelParams, void **extra);
 
 template <bool CheckSuccess>
-CUresult funcGetName(const char** name, CUfunction hfunc);
+CUresult funcGetName(const char **name, CUfunction hfunc);
 
 Device getDevice(uint64_t index);
 
