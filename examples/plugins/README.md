@@ -272,8 +272,8 @@ def override_key_hash():
     return key, hashlib.sha256(key.encode('utf-8')).hexdigest()
 
 def dump_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
-  if all(arg is None for arg in (stages, options, language, capability)):
-      return PLUGIN_KEY, PLUGIN_HASH
+    if all(arg is None for arg in (stages, options, language, capability)):
+        return PLUGIN_KEY, PLUGIN_HASH
     source_code = "# This is generated from Triton compiler.py"
     source_code = (
         source_code
@@ -286,10 +286,10 @@ def dump_stages_hook(self=None, stages=None, options=None, language=None, capabi
 
     with open("compiler_override.py", "w") as file:
         file.write(source_code)
-  return PLUGIN_KEY, PLUGIN_HASH
+    return PLUGIN_KEY, PLUGIN_HASH
 def override_stages(self=None, stages=None, options=None, language=None, capability=None):
-  if all(arg is None for arg in (stages, options, language, capability)):
-      return override_key_hash()
+    if all(arg is None for arg in (stages, options, language, capability)):
+        return override_key_hash()
     if language != Language.TRITON:
         return
     full_name = "compiler_override.py"
