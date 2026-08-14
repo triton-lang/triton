@@ -683,6 +683,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#affine_linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0]], block = [[128, 0]]}>
+#affine_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CGALayout = [[1, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @unpadded_affine_subslice_add
+  tt.func @unpadded_affine_subslice_add(%vals: tensor<256x32xf32, #affine_linear>, %src: !ttg.memdesc<256x128xf32, #affine_shared, #ttg.shared_memory, mutable>) {
+    %tile = ttg.memdesc_subslice %src [0, 32] : !ttg.memdesc<256x128xf32, #affine_shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x32xf32, #affine_shared, #ttg.shared_memory, mutable, 256x128>
+    // CHECK: %[[AFFINE:.*]] = llvm.mul %{{.*}}, %{{.*}} : i32
+    // CHECK: llvm.add %{{.*}}, %[[AFFINE]] : i32
+    ttg.local_store %vals, %tile : tensor<256x32xf32, #affine_linear> -> !ttg.memdesc<256x32xf32, #affine_shared, #ttg.shared_memory, mutable, 256x128>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
 #slice1d0 = #ttg.slice<{dim = 0, parent = #blocked1}>
 #shared1D = #ttg.swizzled_shared<{vec = 2, perPhase = 1, maxPhase = 8, order = [0]}>

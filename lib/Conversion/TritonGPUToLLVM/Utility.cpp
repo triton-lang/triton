@@ -884,6 +884,7 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   // will be folded into a constant
   auto affineOffsetI8 = b.mul(affineOffset, b.i32_val(bitwidth / 8));
   bool hasPadding = !paddingShifts.empty();
+  bool addUnpaddedAffineOffset = maskSpanAffineOffset != 0 && !hasPadding;
   Value paddedAffineOffsetI8 = b.i32_val(0);
   if (hasPadding && maskSpanAffineOffset != 0) {
     // `maskSpanAffineOffset != 0` indicates the affine offsets come from
@@ -892,7 +893,7 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
     // applied separately. This helps LLVM reuse base pointers.
     paddedAffineOffsetI8 =
         applyPadding(loc, rewriter, affineOffsetI8, paddingShifts);
-  } else {
+  } else if (!addUnpaddedAffineOffset) {
     regBaseI8 = b.xor_(regBaseI8, affineOffsetI8);
   }
 
@@ -924,6 +925,8 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
         reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
     auto regIdxI8 = idxAndBlock[0].second * (bitwidth / 8);
     Value offset = b.xor_(regBaseI8, b.i32_val(regIdxI8));
+    if (addUnpaddedAffineOffset)
+      offset = b.add(offset, affineOffsetI8);
     if (hasPadding) {
       offset = applyPadding(loc, rewriter, offset, paddingShifts);
       if (maskSpanAffineOffset != 0)
