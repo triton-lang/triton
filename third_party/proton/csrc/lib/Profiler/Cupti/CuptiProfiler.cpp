@@ -265,6 +265,15 @@ constexpr std::array<CUpti_CallbackId, 11> kGraphCallbacks = {
     CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCaptureToGraph_ptsz,
     CUPTI_DRIVER_TRACE_CBID_cuStreamEndCapture};
 
+#define PROTON_GRAPH_KERNEL_NODE_CALLBACK_LIST(X)                              \
+  X(CUPTI_DRIVER_TRACE_CBID_cuGraphAddKernelNode)                              \
+  X(CUPTI_DRIVER_TRACE_CBID_cuGraphAddKernelNode_v2)
+
+#define PROTON_GRAPH_KERNEL_NODE_CB_AS_ID(cbId) cbId,
+constexpr std::array<CUpti_CallbackId, 2> kGraphKernelNodeCallbacks = {
+    PROTON_GRAPH_KERNEL_NODE_CALLBACK_LIST(PROTON_GRAPH_KERNEL_NODE_CB_AS_ID)};
+#undef PROTON_GRAPH_KERNEL_NODE_CB_AS_ID
+
 #define PROTON_KERNEL_CALLBACK_LIST(X)                                         \
   X(CUPTI_DRIVER_TRACE_CBID_cuLaunch)                                          \
   X(CUPTI_DRIVER_TRACE_CBID_cuLaunchGrid)                                      \
@@ -310,6 +319,10 @@ void setGraphCallbacks(CUpti_SubscriberHandle subscriber, bool enable) {
     cupti::enableCallback<true>(static_cast<uint32_t>(enable), subscriber,
                                 CUPTI_CB_DOMAIN_DRIVER_API, cbId);
   }
+  for (auto cbId : kGraphKernelNodeCallbacks) {
+    cupti::enableCallback<true>(static_cast<uint32_t>(enable), subscriber,
+                                CUPTI_CB_DOMAIN_DRIVER_API, cbId);
+  }
   for (auto cbId : kGraphResourceCallbacks) {
     cupti::enableCallback<true>(static_cast<uint32_t>(enable), subscriber,
                                 CUPTI_CB_DOMAIN_RESOURCE, cbId);
@@ -347,6 +360,32 @@ bool isGraphLaunch(CUpti_CallbackId cbId) {
          cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz;
 }
 
+bool isGraphKernelNode(CUpti_CallbackId cbId) {
+  switch (cbId) {
+#define PROTON_GRAPH_KERNEL_NODE_CB_AS_CASE(cbId)                              \
+  case cbId:                                                                   \
+    return true;
+    PROTON_GRAPH_KERNEL_NODE_CALLBACK_LIST(PROTON_GRAPH_KERNEL_NODE_CB_AS_CASE)
+#undef PROTON_GRAPH_KERNEL_NODE_CB_AS_CASE
+  default:
+    return false;
+  }
+}
+
+CUfunction getGraphKernelFunction(CUpti_CallbackId cbId,
+                                  const void *functionParams) {
+  if (!functionParams)
+    return nullptr;
+  if (cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphAddKernelNode) {
+    const auto *params =
+        static_cast<const cuGraphAddKernelNode_params *>(functionParams);
+    return params->nodeParams ? params->nodeParams->func : nullptr;
+  }
+  const auto *params =
+      static_cast<const cuGraphAddKernelNode_v2_params *>(functionParams);
+  return params->nodeParams ? params->nodeParams->func : nullptr;
+}
+
 bool isLaunch(CUpti_CallbackId cbId) {
   return isKernel(cbId) || isGraphLaunch(cbId);
 }
@@ -366,6 +405,7 @@ bool isStreamCaptureEnd(CUpti_CallbackId cbId) {
 }
 
 #undef PROTON_KERNEL_CALLBACK_LIST
+#undef PROTON_GRAPH_KERNEL_NODE_CALLBACK_LIST
 
 } // namespace
 
@@ -412,6 +452,8 @@ private:
 
   void handleStreamCaptureCallbacks(CUpti_CallbackId cbId,
                                     const CUpti_CallbackData *callbackData);
+  void handleGraphKernelNodeCallbacks(CUpti_CallbackId cbId,
+                                      const CUpti_CallbackData *callbackData);
   void handleApiEnterLaunchCallbacks(CuptiProfiler &profiler,
                                      CUpti_CallbackId cbId,
                                      const CUpti_CallbackData *callbackData);
@@ -640,6 +682,25 @@ void CuptiProfiler::CuptiProfilerPimpl::handleStreamCaptureCallbacks(
   }
 }
 
+void CuptiProfiler::CuptiProfilerPimpl::handleGraphKernelNodeCallbacks(
+    CUpti_CallbackId cbId, const CUpti_CallbackData *callbackData) {
+  if (!isGraphKernelNode(cbId))
+    return;
+
+  if (callbackData->callbackSite == CUPTI_API_ENTER) {
+    auto function = getGraphKernelFunction(cbId, callbackData->functionParams);
+    const char *name = function ? cuda::getFunctionName(function) : nullptr;
+    // symbolName is only reliable for launch callbacks, but retaining it as a
+    // fallback avoids making graph construction fail on older drivers without
+    // cuFuncGetName.
+    if (!name)
+      name = callbackData->symbolName;
+    threadState.enterOp(Scope(name ? name : ""));
+  } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
+    threadState.exitOp();
+  }
+}
+
 void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId,
     const CUpti_CallbackData *callbackData) {
@@ -743,6 +804,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiCallbacks(
   const CUpti_CallbackData *callbackData =
       static_cast<const CUpti_CallbackData *>(cbData);
   handleStreamCaptureCallbacks(cbId, callbackData);
+  handleGraphKernelNodeCallbacks(cbId, callbackData);
   if (isLaunch(cbId)) {
     if (callbackData->callbackSite == CUPTI_API_ENTER) {
       handleApiEnterLaunchCallbacks(profiler, cbId, callbackData);
