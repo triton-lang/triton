@@ -38,7 +38,6 @@ from .core import (
     tensor_descriptor,
     tensor_descriptor_type,
     add,
-    advance,
     arange,
     associative_scan,
     assume,
@@ -150,7 +149,6 @@ __all__ = [
     "tensor_descriptor",
     "abs",
     "add",
-    "advance",
     "arange",
     "argmax",
     "argmin",
@@ -334,7 +332,7 @@ def str_to_ty(name, c):
             from triton.experimental.gluon.language._layouts import NVMMASharedLayout, PaddedSharedLayout, SwizzledSharedLayout
             from triton.experimental.gluon.language.nvidia.hopper.tma import tensor_descriptor_type as nvidia_tensor_descriptor_type
             from triton.experimental.gluon.language.nvidia.hopper.tma import tensor_descriptor_im2col_type as nvidia_tensor_descriptor_im2col_type
-            from triton.experimental.gluon.language.amd.gfx1250.tdm import tensor_descriptor_type as amd_tensor_descriptor_type
+            from triton.experimental.gluon.language.amd.cdna5.tdm import tensor_descriptor_type as amd_tensor_descriptor_type
             layout = eval(
                 layout_str,
                 dict(NVMMASharedLayout=NVMMASharedLayout, PaddedSharedLayout=PaddedSharedLayout,

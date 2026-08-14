@@ -2,6 +2,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -124,36 +125,6 @@ struct ArithConstantSplatOpConversion
   }
 };
 
-struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
-  using OpAdaptor = typename CatOp::Adaptor;
-  explicit CatOpConversion(LLVMTypeConverter &typeConverter,
-                           PatternBenefit benefit = patternBenefitDefault)
-      : ConvertOpToLLVMPattern<CatOp>(typeConverter, benefit) {}
-  LogicalResult
-  matchAndRewrite(CatOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    auto resultTy = cast<RankedTensorType>(op.getType());
-    // Unpack input values.
-    auto lhsVals = unpackUniqueTensorElements(loc, adaptor.getLhs(), rewriter);
-    auto rhsVals = unpackUniqueTensorElements(loc, adaptor.getRhs(), rewriter);
-
-    // concatenate (and potentially reorder) values
-    SmallVector<Value> retVals;
-    for (Value v : lhsVals)
-      retVals.push_back(v);
-    for (Value v : rhsVals)
-      retVals.push_back(v);
-
-    assert(retVals.size() == getUniqueElemsPerThread(resultTy));
-
-    // pack and replace
-    Value ret = packUniqueTensorElements(loc, getTypeConverter(), retVals,
-                                         rewriter, resultTy);
-    rewriter.replaceOp(op, ret);
-    return success();
-  }
-};
 struct JoinOpConversion : public ConvertOpToLLVMPattern<JoinOp> {
   using OpAdaptor = typename JoinOp::Adaptor;
   explicit JoinOpConversion(LLVMTypeConverter &typeConverter,
@@ -429,15 +400,14 @@ struct MemDescIndexOpConversion
     // reduced shape, so partitionDim=0 refers to the tensor's first dimension,
     // not the multi-buffer dimension that was just indexed away.
     //
-    // getAllocationShapePerCTA returns the correct number of fp4 elements that
+    // getAllocationElems returns the correct number of fp4 elements that
     // we need to skip when we have fp4Padded=True. getShapePerCTA does not
     // account for this.
-    auto allocShape = product(
-        getAllocationShapePerCTA(dstTy.getEncoding(), dstTy.getShape()));
-    int64_t stride = allocShape;
+    int64_t stride =
+        getAllocationElems(dstTy.getEncoding(), dstTy.getAllocShape());
     if (auto partEnc =
             dyn_cast<PartitionedSharedEncodingAttr>(dstTy.getEncoding())) {
-      stride = allocShape / partEnc.getNumPartitions();
+      stride /= partEnc.getNumPartitions();
     }
     Value offset = b.mul(op.getIndex(), b.i32_val(stride));
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
@@ -489,6 +459,20 @@ struct MemDescSubsliceOpConversion
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
     auto opOffsetVals = op.getOffsets();
+    auto encoding = srcTy.getEncoding();
+    auto layoutOffsets = dropPipeliningDim(opOffsetVals, encoding);
+    SmallVector<Value> newBases = llvm::to_vector(smemObj.getBases());
+
+    if (layoutOffsets.size() != opOffsetVals.size() &&
+        opOffsetVals.front() != 0) {
+      int64_t stride = getAllocationElems(
+          encoding, dropPipeliningDim(srcTy.getAllocShape(), encoding));
+      if (auto partEnc = dyn_cast<PartitionedSharedEncodingAttr>(encoding))
+        stride /= partEnc.getNumPartitions();
+      Value offset = b.i32_val(opOffsetVals.front() * stride);
+      for (Value &base : newBases)
+        base = b.gep(base.getType(), llvmElemTy, base, offset);
+    }
 
     // Accumulate the logical offsets
     SmallVector<Value> offsetVals;
@@ -518,17 +502,14 @@ struct MemDescSubsliceOpConversion
     //
     // The offset component of (3) is already XORed in by getShmemOffset at
     // load time; only the partition component needs this fix.
-    SmallVector<Value> newBases = llvm::to_vector(smemObj.getBases());
     if (newBases.size() > 1) {
-      LinearLayout ll = triton::gpu::isPaddedEncoding(srcTy.getEncoding())
-                            ? triton::gpu::paddedLinearLayout(srcTy)
-                            : triton::gpu::toLinearLayout(srcTy);
+      LinearLayout ll = triton::gpu::toLinearLayoutIgnoringPadding(srcTy);
       auto kPartition = StringAttr::get(ctx, "partition");
       assert(ll.hasInDim(kPartition) &&
              "multiple bases require a partition input dim");
-      auto dimNames = standardOutDimNames(ctx, opOffsetVals.size());
+      auto dimNames = standardOutDimNames(ctx, layoutOffsets.size());
       SmallVector<std::pair<StringAttr, int32_t>> namedOffsets;
-      for (auto [dim, off] : llvm::zip(dimNames, opOffsetVals))
+      for (auto [dim, off] : llvm::zip(dimNames, layoutOffsets))
         namedOffsets.push_back({dim, off});
       auto partitionLayout = ll.invert().sublayout(dimNames, {kPartition});
       int32_t partitionShift = partitionLayout.apply(namedOffsets)[0].second;
@@ -583,7 +564,6 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<SplatOpConversion>(typeConverter, benefit);
   patterns.add<UnsplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
-  patterns.add<CatOpConversion>(typeConverter, benefit);
   patterns.add<JoinOpConversion>(typeConverter, benefit);
   patterns.add<SplitOpConversion>(typeConverter, benefit);
   patterns.add<MemDescTransOpConversion, MemDescReshapeOpConversion>(

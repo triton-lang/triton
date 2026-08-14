@@ -159,18 +159,18 @@ struct TritonExpandDimsPattern
     SmallVector<unsigned, 4> retOrder(retShape.size());
     std::iota(retOrder.begin(), retOrder.end(), 0);
 
-    auto ctaLl = argEncoding.getCGALayout().getLinearLayout();
-    auto kBlock = *ctaLl.getInDimNames().begin();
+    auto cgaLl = argEncoding.getCGALayout().getLinearLayout();
+    auto kBlock = *cgaLl.getInDimNames().begin();
     auto *ctx = kBlock.getContext();
     auto newDim = standardOutDimNames(ctx, newRank)[newRank - 1];
-    ctaLl *= LinearLayout::identity1D(1, kBlock, newDim);
+    cgaLl *= LinearLayout::identity1D(1, kBlock, newDim);
     // Move last dim to op.getAxis(). nb is this a std::rotate?
     auto newOrder = to_vector(llvm::seq<int32_t>(newRank));
     for (int i = newRank - 1; i >= op.getAxis() + 1; --i) {
       std::swap(newOrder[i], newOrder[i - 1]);
     }
-    ctaLl = transposeLinearLayout(ctaLl, newOrder);
-    auto retCGALayout = CGAEncodingAttr::get(ctx, std::move(ctaLl));
+    cgaLl = transposeLinearLayout(cgaLl, newOrder);
+    auto retCGALayout = CGAEncodingAttr::get(ctx, std::move(cgaLl));
     triton::gpu::BlockedEncodingAttr retEncoding =
         triton::gpu::BlockedEncodingAttr::get(getContext(), retSizePerThread,
                                               retThreadsPerWarp, retWarpsPerCTA,
@@ -255,50 +255,6 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
     addNamedAttrs(rewriter.replaceOpWithNewOp<triton::DotOp>(
                       op, retType, a, b, c, adaptor.getInputPrecision(),
                       adaptor.getMaxNumImpreciseAcc()),
-                  adaptor.getAttributes());
-    return success();
-  }
-};
-
-struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::CatOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    // The cat op satisfy two conditions:
-    // 1. output.numel = lhs.numel + rhs.numel
-    // 2. output.total_elems_per_thread =
-    // next_power_of_2(lhs.total_elems_per_thread + rhs.total_elems_per_thread)
-    // For now, this behaves like generic, but this
-    // will evolve when we add support for `can_reorder=False`.
-    auto retType = cast<RankedTensorType>(
-        this->getTypeConverter()->convertType(op.getType()));
-    auto retEncoding =
-        cast<triton::gpu::BlockedEncodingAttr>(retType.getEncoding());
-    auto lhsType = adaptor.getLhs().getType();
-    auto rhsType = adaptor.getRhs().getType();
-    auto lhsTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(lhsType);
-    auto rhsTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(rhsType);
-    auto retTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(retType);
-    auto retOrder = retEncoding.getOrder();
-    auto retThreadsPerWarp = retEncoding.getThreadsPerWarp();
-    auto retWarpsPerCTA = retEncoding.getWarpsPerCTA();
-    // Get new retSizePerThread if ret elems per thread is not enough.
-    // We have to round it up to the next power of 2 due to triton's tensor size
-    // constraint.
-    auto newRetTotalElemsPerThread =
-        nextPowOf2(lhsTotalElemsPerThread + rhsTotalElemsPerThread);
-    auto newRetSizePerThread = llvm::to_vector(retEncoding.getSizePerThread());
-    newRetSizePerThread[retOrder[0]] *=
-        newRetTotalElemsPerThread / retTotalElemsPerThread;
-    triton::gpu::BlockedEncodingAttr newRetEncoding =
-        triton::gpu::BlockedEncodingAttr::get(
-            getContext(), newRetSizePerThread, retThreadsPerWarp,
-            retWarpsPerCTA, retOrder, retEncoding.getCGALayout());
-    auto newRetType = retType.cloneWithEncoding(newRetEncoding);
-    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::CatOp>(
-                      op, newRetType, adaptor.getOperands()),
                   adaptor.getAttributes());
     return success();
   }
@@ -496,7 +452,6 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::UnsplatOp>,
       GenericOpPattern<triton::AddPtrOp>,
       TritonBroadcastPattern,
-      TritonCatPattern,
       TritonJoinOpPattern,
       TritonSplitOpPattern,
       GenericOpPattern<triton::ClampFOp>,
@@ -760,7 +715,10 @@ public:
     mod->setAttr(AttrNumCTAsName, b.getI32IntegerAttr(numCTAs));
     mod->setAttr(AttrTargetName, b.getStringAttr(this->target.getValue()));
 
-    if (failed(applyPartialConversion(mod, target, std::move(patterns))))
+    ConversionConfig config;
+    config.allowPatternRollback = false;
+    if (failed(
+            applyPartialConversion(mod, target, std::move(patterns), config)))
       return signalPassFailure();
   }
 };

@@ -433,17 +433,21 @@ class CompiledKernel:
         # because it involves doing runtime things
         # (e.g., checking amount of shared memory on current device)
         self.module = None
+        self._module_pid = None
         self.function = None
         self._run = None
 
     def __del__(self):
 
-        if self.module is not None:
+        # Forked children inherit module handles that are still owned by the
+        # parent's GPU runtime and must not unload them.
+        if self.module is not None and self._module_pid == os.getpid():
             if knobs.runtime.kernel_unload_hook is not None:
                 knobs.runtime.kernel_unload_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
 
             driver.active.utils.unload_module(self.module)
             self.module = None
+            self._module_pid = None
 
     def _init_handles(self):
         if self.module is not None:
@@ -469,6 +473,8 @@ class CompiledKernel:
         if hasattr(self.metadata, "tmem_size") and self.metadata.tmem_size is not None:
             # Use blackwell max tmem size for now, this should be moved in device properties
             max_tmem_size = 512  # tmem size in number of columns
+            if self.metadata.target.arch == 107:
+                max_tmem_size = 576
             if self.metadata.tmem_size > max_tmem_size:
                 raise_(OutOfResources(self.metadata.tmem_size, max_tmem_size, "tensor memory"))
         if knobs.runtime.kernel_load_start_hook is not None:
@@ -476,6 +482,7 @@ class CompiledKernel:
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
+        self._module_pid = os.getpid()
         warp_size = driver.active.get_current_target().warp_size
         if self.metadata.num_warps * warp_size > self.n_max_threads:
             raise_(OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads"))

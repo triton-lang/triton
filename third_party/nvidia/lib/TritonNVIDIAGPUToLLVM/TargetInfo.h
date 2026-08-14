@@ -8,6 +8,8 @@ namespace mlir::triton::NVIDIA {
 
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
+  explicit TargetInfo(int computeCapability)
+      : TargetInfo(computeCapability, /*ptxVersion=*/0) {}
   TargetInfo(int computeCapability, int ptxVersion)
       : targetFeatures(computeCapability), ptxVersion(ptxVersion) {}
 
@@ -71,6 +73,7 @@ public:
   bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
                   triton::ReduceOp op,
                   unsigned reduceLaneIdMask) const override;
+  unsigned getReductionTreeArity(Operation *combinerOp) const override;
 
   std::string getMulhiFuncName(Type resultElementTy) const override;
 
@@ -94,6 +97,9 @@ public:
   int getPtxVersion() const { return ptxVersion; }
   int getComputeCapability() const {
     return targetFeatures.getComputeCapability();
+  }
+  const triton::nvidia_gpu::TargetFeatures &getTargetFeatures() const {
+    return targetFeatures;
   }
 
   bool isCuda() const override { return true; }

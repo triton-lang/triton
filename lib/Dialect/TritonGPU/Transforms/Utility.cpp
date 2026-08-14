@@ -659,9 +659,6 @@ bool isExpensiveLoadOrStore(Operation *op) {
 }
 
 bool canUseResultEncoding(Operation *op, Attribute targetEncoding) {
-  if (isa<triton::CatOp>(op))
-    return triton::gpu::isLegalCatEncoding(cast<triton::CatOp>(op),
-                                           targetEncoding);
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     if (mlir::isa<triton::gpu::NvidiaMmaEncodingAttr>(targetEncoding)) {
       auto srcEncoding = convert.getSrc().getType().getEncoding();
@@ -744,39 +741,21 @@ scf::WhileOp replaceWhileOpWithNewSignature(
   operands.append(newIterOperands.begin(), newIterOperands.end());
 
   // Result and operand types
-  SmallVector<Type> resultTypes;
-  SmallVector<Type> argsTypesBefore;
-  for (auto res : loop.getResults())
-    resultTypes.push_back(res.getType());
-  for (auto type : newResultTypes)
-    resultTypes.push_back(type);
-  for (Value operand : operands)
-    argsTypesBefore.push_back(operand.getType());
+  auto resultTypes = llvm::to_vector<4>(loop.getResults().getTypes());
+  resultTypes.append(newResultTypes.begin(), newResultTypes.end());
   scf::WhileOp newLoop =
       scf::WhileOp::create(rewriter, loop.getLoc(), resultTypes, operands);
   newLoop->setAttrs(loop->getAttrs());
 
-  SmallVector<Location> bbArgLocsBefore(argsTypesBefore.size(), loop.getLoc());
-  SmallVector<Location> bbArgLocsAfter(resultTypes.size(), loop.getLoc());
-  rewriter.createBlock(&newLoop.getBefore(), {}, argsTypesBefore,
-                       bbArgLocsBefore);
-  rewriter.createBlock(&newLoop.getAfter(), {}, resultTypes, bbArgLocsAfter);
-
   // Copy regions
-  for (int i = 0; i < loop.getNumRegions(); ++i)
-    newLoop->getRegion(i).front().getOperations().splice(
-        newLoop->getRegion(i).front().getOperations().begin(),
-        loop->getRegion(i).front().getOperations());
+  newLoop.getBefore().takeBody(loop.getBefore());
+  newLoop.getAfter().takeBody(loop.getAfter());
 
   // Remap arguments
-  for (auto [oldArg, newArg] : llvm::zip(
-           loop.getBeforeArguments(), newLoop.getBeforeArguments().take_front(
-                                          loop.getBeforeArguments().size())))
-    oldArg.replaceAllUsesWith(newArg);
-  for (auto [oldArg, newArg] : llvm::zip(loop.getAfterArguments(),
-                                         newLoop.getAfterArguments().take_front(
-                                             loop.getAfterArguments().size())))
-    oldArg.replaceAllUsesWith(newArg);
+  for (Value operand : newIterOperands)
+    newLoop.getBefore().front().addArgument(operand.getType(), loop.getLoc());
+  for (Type type : newResultTypes)
+    newLoop.getAfter().front().addArgument(type, loop.getLoc());
 
   // Stack the new results
   for (auto it : llvm::zip(loop.getResults(), newLoop.getResults().take_front(
@@ -797,6 +776,21 @@ scf::WhileOp replaceWhileOpWithNewSignature(OpBuilder &rewriter,
     std::get<0>(kv).replaceAllUsesWith(std::get<1>(kv));
   }
   return newWhileOp;
+}
+
+scf::WhileOp addIterArgsToLoop(OpBuilder &rewriter, scf::WhileOp loop,
+                               ValueRange newIterOperands) {
+  scf::WhileOp newLoop = replaceWhileOpWithNewSignature(
+      rewriter, loop, newIterOperands, newIterOperands.getTypes());
+
+  newLoop.getConditionOp().getArgsMutable().append(
+      newLoop.getBeforeArguments().take_back(newIterOperands.size()));
+
+  // Save the caller from insertion point invalidation.
+  if (rewriter.getInsertionPoint() == loop->getIterator())
+    rewriter.setInsertionPoint(newLoop);
+  loop.erase();
+  return newLoop;
 }
 
 scf::IfOp replaceIfOpWithNewSignature(
@@ -920,27 +914,28 @@ LogicalResult getConvertBackwardSlice(
     auto currentValueType = dyn_cast<RankedTensorType>(currentValue.getType());
     if (!currentValueType)
       continue;
-    // Skip propagating through for op/while op/ws op results for now.
-    // TODO: enable this based on needs.
-    auto defOp = currentValue.getDefiningOp();
-    if (isa_and_nonnull<scf::ForOp, scf::WhileOp, ttg::WarpSpecializeOp>(defOp))
-      return failure();
     if (failed(updateLayout(currentValue, encoding)))
       return failure();
     // If the value already has the desired encoding, we can stop here without
     // adding it to the slice.
     if (currentValueType.getEncoding() == encoding)
       continue;
-    slice.insert(currentValue);
 
     // If there is already an existing conversion to the target layout, we don't
-    // need to propagate to the operands.
+    // need to rematerialize this value or propagate to its operands.
     // Note that this is per-use rather than per-value, so if another use fails
     // the getExistingConversion check, we may still traverse the operands.
     if (getExistingConversion &&
         getExistingConversion(*currentValueUse, encoding)) {
       continue;
     }
+
+    // Skip propagating through for op/while op/ws op results for now.
+    // TODO: enable this based on needs.
+    auto defOp = currentValue.getDefiningOp();
+    if (isa_and_nonnull<scf::ForOp, scf::WhileOp, ttg::WarpSpecializeOp>(defOp))
+      return failure();
+    slice.insert(currentValue);
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
       if (stopPropagation && stopPropagation(ifOp))
@@ -972,8 +967,6 @@ LogicalResult getConvertBackwardSlice(
         continue;
       if (stopPropagation && stopPropagation(definingOp))
         continue;
-      if (isa<triton::CatOp>(definingOp))
-        return failure();
       if (auto gather = dyn_cast<GatherOp>(definingOp)) {
         // Specially handle gather since its transfer function only applies
         // between its index operand and result.
@@ -1501,7 +1494,8 @@ void replaceUsesAndPropagateType(
       auto operands = llvm::to_vector(wait.getOperands());
       operands[operand->getOperandNumber()] = val;
       auto newWait = ttng::WarpGroupDotWaitOp::create(
-          builder, wait.getLoc(), operands, wait.getPendings());
+          builder, wait.getLoc(), operands, wait.getPendingsAttr(),
+          wait.getWarpGroupLocalAttr());
       wait.replaceAllUsesWith(newWait.getResults());
       wait.erase();
     } else {

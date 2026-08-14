@@ -29,7 +29,9 @@ def _check(cond, msg_fn, category=ValueError):
 @_core.builtin
 def fence_async_shared(cluster=False, _semantic=None):
     """
-    Issue a fence to complete asynchronous shared memory operations.
+    Order generic-proxy and asynchronous-proxy shared memory accesses.
+
+    This fence does not wait for asynchronous operations to complete.
 
     Args:
         cluster (bool): Whether to fence across cluster. Defaults to False.

@@ -17,6 +17,7 @@ using namespace mlir::triton;
 namespace mlir {
 namespace triton {
 #define GEN_PASS_DEF_ALLOCATESHAREDMEMORYNV
+#define GEN_PASS_DEF_SETMINIMUMSHAREDMEMORY
 #include "TritonNVIDIAGPUToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
@@ -37,6 +38,26 @@ struct AllocateSharedMemoryNv
         mod, mlir::triton::nvidia_gpu::getNvidiaAllocationAnalysisScratchSizeFn(
                  targetInfo));
     mlir::triton::gpu::attachAllocationSizeAndOffsetAttr(mod, allocation);
+  }
+};
+
+struct SetMinimumSharedMemory
+    : public mlir::triton::impl::SetMinimumSharedMemoryBase<
+          SetMinimumSharedMemory> {
+  using SetMinimumSharedMemoryBase::SetMinimumSharedMemoryBase;
+
+  void runOnOperation() override {
+    ModuleOp mod = getOperation();
+    if (minimumSize < 0) {
+      mod.emitError("minimum shared memory size must be non-negative");
+      return signalPassFailure();
+    }
+    auto sharedAttr = mod->getAttrOfType<IntegerAttr>("ttg.shared");
+    int64_t sharedSize = sharedAttr ? sharedAttr.getInt() : 0;
+    if (sharedSize < minimumSize)
+      mod->setAttr("ttg.shared",
+                   IntegerAttr::get(IntegerType::get(mod.getContext(), 32),
+                                    minimumSize));
   }
 };
 } // namespace
@@ -60,8 +81,8 @@ static unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
   auto [smem, _] = triton::gpu::optimalSwizzling(srcLayout, dstLayout, srcTiles,
                                                  dstTiles, bitwidth);
   auto reps = smem.getInDimSize(StringAttr::get(ctx, "reps"));
-  // The smem has the same cta layout as the srcLayout, so we use that instead
-  // We remove the number of elements that are duplicated in the cta layout
+  // The smem has the same CGA layout as srcLayout, so use that instead.
+  // Remove the number of elements duplicated in the CGA layout.
   auto nBlocks = product(triton::gpu::getCTASplitNum(srcTy.getEncoding()));
   return smem.getTotalOutDimSize() / (reps * nBlocks);
 }
@@ -72,7 +93,7 @@ getNvidiaAllocationAnalysisScratchSizeFn(TargetInfoBase &targetInfo) {
     if (auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
       auto srcTy = cvtOp.getSrc().getType();
       auto dstTy = cvtOp.getType();
-      if (!cvtNeedsSharedMemory(srcTy, dstTy))
+      if (!cvtNeedsSharedMemory(cvtOp))
         return 0;
       // In cuda we always swizzle
       auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy, targetInfo);

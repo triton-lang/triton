@@ -23,19 +23,6 @@ namespace mlir::triton::nvidia_gpu {
 
 namespace {
 
-bool atomicNeedsClusterBarrier(Operation *op) {
-  if (isa<AtomicPollOp>(op))
-    return gpu::lookupNumCTAs(op) != 1;
-  if (!isa<AtomicCASOp, AtomicRMWOp>(op) || op->getResult(0).use_empty() ||
-      gpu::lookupNumCTAs(op) == 1)
-    return false;
-  auto tensorTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
-  if (!tensorTy)
-    return true;
-  auto kBlock = StringAttr::get(op->getContext(), "block");
-  return gpu::toLinearLayout(tensorTy).getFreeVariableMasks().lookup(kBlock);
-}
-
 struct ClusterBarrierMbarAllocatorPass
     : public impl::TritonNvidiaGPUClusterBarrierMbarAllocatorPassBase<
           ClusterBarrierMbarAllocatorPass> {
@@ -45,19 +32,6 @@ struct ClusterBarrierMbarAllocatorPass
 };
 
 } // namespace
-
-bool needsClusterBarrier(Operation *op) {
-  if (isa<ClusterBarrierOp>(op))
-    return true;
-  if (auto cvt = dyn_cast<gpu::ConvertLayoutOp>(op)) {
-    auto kBlock = StringAttr::get(op->getContext(), "block");
-    return !isCvtDimSync(gpu::toLinearLayout(cvt.getSrc().getType()),
-                         gpu::toLinearLayout(cvt.getType()), kBlock);
-  }
-  if (auto reduce = dyn_cast<ReduceOp>(op))
-    return !ReduceOpHelper(reduce).isReduceWithinCTA();
-  return atomicNeedsClusterBarrier(op);
-}
 
 void runClusterBarrierMbarAllocator(ModuleOp mod) {
   auto funcs = mod.getOps<triton::FuncOp>();

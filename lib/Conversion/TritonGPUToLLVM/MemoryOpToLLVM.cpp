@@ -58,14 +58,14 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx,
   assert(regLayout.getFreeVariableMasks().lookup(str_attr("register")) == 0 &&
          "expected register broadcasting to be removed by the caller");
   auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  auto sharedLayout = isPaddedEncoding(memDescTy.getEncoding())
-                          ? paddedLinearLayout(memDescTy)
-                          : toLinearLayout(memDescTy);
+  auto sharedLayout = toLinearLayoutIgnoringPadding(memDescTy);
   auto cvt = invertAndComposeBlockLocal(sharedLayout, regLayout);
 
   lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, memDescTy, smemObj,
-                 rewriter, targetInfo);
+                 rewriter, targetInfo,
+                 makeSharedStoreEmitter(targetInfo, b.true_val()));
 
   return success();
 }
@@ -190,13 +190,12 @@ public:
 
     auto regLayout =
         toLinearLayout(regTy).removeZeroBasesAlongDim(str_attr("register"));
-    auto sharedLayout = isPaddedEncoding(memDescTy.getEncoding())
-                            ? paddedLinearLayout(memDescTy)
-                            : toLinearLayout(memDescTy);
+    auto sharedLayout = toLinearLayoutIgnoringPadding(memDescTy);
     auto cvt = invertAndComposeBlockLocal(sharedLayout, regLayout);
 
     auto outVals = lowerLocalLdSt(loc, ctx, cvt, {}, llvmElemTy, memDescTy,
-                                  smemObj, rewriter, targetInfo, op);
+                                  smemObj, rewriter, targetInfo,
+                                  makeSharedLoadEmitter(targetInfo, op));
 
     Value result =
         packUniqueTensorElements(loc, typeConverter, outVals, rewriter, regTy);
@@ -379,6 +378,12 @@ struct AtomicPollOpConversion
     if (numCTAs != 1 && !targetInfo.isCuda())
       return rewriter.notifyMatchFailure(
           op, "multi-CTA atomic_poll requires cross-CTA shared memory");
+
+    // Every lowering path emits a rendezvous barrier after the poll, so use it
+    // as the post-atomic ordering barrier instead of emitting a duplicate.
+    insertAtomicOrderingBarriers(op, op.getSem(),
+                                 /*emitBarrierAfter=*/false, rewriter,
+                                 targetInfo);
 
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred =

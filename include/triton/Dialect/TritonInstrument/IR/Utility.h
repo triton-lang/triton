@@ -87,6 +87,7 @@ gpu::GlobalScratchAllocOp
 createThirdPartyScratchAlloc(OpBuilder &b, Location loc, Type ptrType,
                              int64_t sizeInBytes, int64_t alignment,
                              bool sharedClusterState = false);
+Region *getClusterBarrierGroupRegion(Operation *op);
 RankedTensorType getSlicedTensorType(RankedTensorType tensorType,
                                      ArrayRef<int> keptDims, Type elementType);
 Value reshapeAndBroadcast(OpBuilder &b, Location loc, Value tensor,
@@ -116,6 +117,17 @@ struct ValueType {
   ValueType(Value value, Type type) : value(value), type(type) {}
   ValueType(std::pair<Value, Type> value)
       : value(value.first), type(value.second) {}
+};
+
+struct BufferStateCandidate {
+  uint32_t baseOffset = 0;
+  llvm::SmallBitVector mask;
+  uint32_t ctaMask = 0;
+};
+
+struct BufferStateCandidates {
+  SmallVector<BufferStateCandidate, 2> cases;
+  bool unknown = false;
 };
 
 // Map from IR region to ConSan auxiliary data.
@@ -176,11 +188,6 @@ struct AuxDataMap {
   //   tensor  = distributed tensor value.
   //   scratch = pointer to shared-cluster global scratch memory.
 
-  // tensor, <B x i64>
-  // Per-memory-type packed buffer descriptors. Each i64 stores the 32-bit base
-  // offset and 32-bit length of one shared-memory or tensor-memory region.
-  RegionToValueMap buffers[numMemTypes];
-
   // tensor, <K x i64>
   // Packed descriptors for tracked mbarrier allocations. Barriers are shared
   // memory descriptors.
@@ -230,11 +237,14 @@ struct AuxDataMap {
   // intra-CTA.
   RegionToValueMap commits[CommitKind::NumCommitKinds];
 
-  // tensor, <B x B x i1>
-  // Optional per-memory-type alias matrix. Created only when BufferRegion
-  // analysis finds cross-buffer aliasing; checks expand selected buffer rows
-  // through this matrix.
-  RegionToValueMap aliasMatrices[numMemTypes];
+  // State-lane plans and analysis-derived runtime-base, state-mask, and CTA
+  // cases for each memdesc.
+  triton::BufferStatePlan bufferStatePlans[numMemTypes];
+  DenseMap<Value, BufferStateCandidates> bufferCandidates[numMemTypes];
+
+  // Shared-memory state lanes occupied by each physical mbarrier. Virtual
+  // cluster barriers have no storage and therefore do not appear here.
+  SmallVector<llvm::SmallBitVector> barrierBufferMasks;
 
   // scratch pointer, i32
   // Shared-cluster lock used to serialize ConSan instrumentation updates.
@@ -260,27 +270,24 @@ struct AuxDataMap {
   // terminator.
   RegionToValueMap activeMasks;
 
-  // True when a memory type has cross-buffer aliasing and therefore requires
-  // aliasMatrices to make visibility and commit checks conservative.
-  std::array<bool, numMemTypes> hasNonTrivialAliasing{};
-
   // Dense logical-thread numbering for this module. Base threads are always
   // present; TMA/TC/CLC peer ranges are added only when the module uses them.
   ThreadLayout threadLayout;
 
+  bool hasAsyncCopyReads = false;
   bool hasAsyncProxyFenceTracking = false;
 
   LogicalResult populateAndPassToWarpSpecialize(ModuleOp module,
                                                 FunctionBuilder &funcBuilder,
-                                                const ConSanTargetHooks *hooks);
+                                                const ConSanTargetHooks &hooks);
 
   int getClusterBarrierSlot(Operation *op) const;
 
 private:
-  LogicalResult getBuffersAndBarriers(
-      ModuleOp module,
-      SmallVector<SmallVector<triton::BufferRegion>, 2> &bufRegions,
-      SmallVector<triton::BufferRegion> &barrierRegions);
+  LogicalResult
+  getBuffersAndBarriers(ModuleOp module,
+                        SmallVector<triton::BufferRegion> &barrierRegions,
+                        const ConSanTargetHooks &hooks);
   void passToWarpSpecialize(triton::FuncOp func, ValueType value,
                             RegionToValueMap &map, int &captureCounter,
                             int64_t &captureBytes);

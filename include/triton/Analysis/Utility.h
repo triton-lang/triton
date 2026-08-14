@@ -214,10 +214,12 @@ struct DecomposedWarpConversion {
 // This function handles cases where the numbers of register and lane basis
 // vectors differ between the two layouts. This is done by padding the smaller
 // dimension(s) with zero vectors, ensuring that the layout conversion can be
-// represented as a permutation.
+// represented as a permutation. The layouts must not contain broadcasted
+// register bases.
 DecomposedWarpConversion
-getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
-                                  RankedTensorType dstTy, int bitwidth);
+getWarpLayoutConvertDecomposition(const triton::LinearLayout &srcLayout,
+                                  const triton::LinearLayout &dstLayout,
+                                  int bitwidth);
 
 // Decomposes a reshape into simpler pieces.
 //
@@ -256,24 +258,16 @@ bool supportMMA(triton::DotOpInterface op, int version);
 
 bool supportMMA(Value value, int version);
 
-// Conversion from `srcTy` to `dstTy` involving the minimum amount of data
-// transfer provided that both types can be converted to LL (if it can't it'll
-// return nullopt). The output will be such that layout.getInDimNames() ==
-// layout.getOutDimNames() and the conversion will not include kBlock (resp.
-// kWarp or kLane) if it can be avoided
-triton::LinearLayout minimalCvtLayout(Type srcTy, Type dstTy);
-
 // Conversion from `srcTy` to `dstTy` only involves reordering of registers.
 // There is no need for data exchange across threads, warps, or blocks.
 bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy);
 
-// Conversion from `srcTy` to `dstTy` involves data exchange across threads
-// within a warp.  No data exchange across warps or blocks is needed.
-bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
+// The conversion involves data exchange across threads within a warp, or is
+// explicitly forced to use warp shuffles.
+bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op);
 
-// Conversion from `srcTy` to `dstTy` involves data exchange across threads,
-// warps, and possibly blocks.
-bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
+// The conversion requires data exchange through shared memory.
+bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op);
 
 // TODO: Move utility functions that belong to ConvertLayoutOp to class
 // ConvertLayoutOpHelper in the future
@@ -282,154 +276,34 @@ bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout);
 /// Create a basic DataFlowSolver with constant and dead code analysis included.
 std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 
+bool isCvtDimSync(const triton::LinearLayout &srcLayout,
+                  const triton::LinearLayout &dstLayout, StringAttr dim);
+
 namespace triton {
 
-/// This class represents a call graph for a given ModuleOp and holds
-/// data of type T associated with each FunctionOpInterface.
-template <typename T> class CallGraph {
-public:
-  using FuncDataMapT = DenseMap<FunctionOpInterface, T>;
-
-  /// Constructor that builds the call graph for the given moduleOp.
-  explicit CallGraph(ModuleOp moduleOp) : moduleOp(moduleOp) { build(); }
-
-  /// Walks the call graph and applies the provided update functions
-  /// to the edges and nodes.
-  template <WalkOrder UpdateEdgeOrder = WalkOrder::PreOrder,
-            WalkOrder UpdateNodeOrder = WalkOrder::PreOrder,
-            typename UpdateEdgeFn, typename UpdateNodeFn>
-  void walk(UpdateEdgeFn updateEdgeFn, UpdateNodeFn updateNodeFn) {
-    DenseSet<FunctionOpInterface> visited;
-    for (auto root : roots) {
-      doWalk<UpdateEdgeOrder, UpdateNodeOrder>(root, visited, updateEdgeFn,
-                                               updateNodeFn);
-    }
-  }
-
-  /// Retrieves the data associated with a function
-  T *getFuncData(FunctionOpInterface funcOp) {
-    if (funcMap.count(funcOp)) {
-      return &funcMap[funcOp];
-    }
-    return nullptr;
-  }
-
-  /// Getters
-  ModuleOp getModuleOp() const { return moduleOp; }
-  SmallVector<FunctionOpInterface> getRoots() const { return roots; }
-  size_t getNumFunctions() const { return funcMap.size(); }
-
-  /// Returns true if the given function is a root.
-  bool isRoot(FunctionOpInterface funcOp) const {
-    return llvm::is_contained(roots, funcOp);
-  }
-
-  /// Maps the data and the graph nodes associated with a funcOp to a
-  /// targetFuncOp.
-  template <typename FROM, typename TO>
-  void mapFuncOp(FROM funcOp, TO targetFuncOp) {
-    // Iterate over graph and replace
-    for (auto &kv : graph) {
-      for (auto &edge : kv.second) {
-        if (edge.second == funcOp) {
-          edge.second = targetFuncOp;
-        }
-      }
-    }
-    graph[targetFuncOp] = graph[funcOp];
-    // Replace in roots
-    for (auto it = roots.begin(); it != roots.end(); ++it) {
-      if (*it == funcOp) {
-        *it = targetFuncOp;
-        break;
-      }
-    }
-    // Replace in funcMap
-    funcMap[targetFuncOp] = funcMap[funcOp];
-  }
-
-  /// Maps the graph edges associated with a callOp to a targetCallOp.
-  template <typename FROM, typename TO>
-  void mapCallOp(FROM callOp, TO targetCallOp) {
-    // Iterate over graph and replace
-    for (auto &kv : graph) {
-      for (auto &edge : kv.second) {
-        if (edge.first == callOp) {
-          edge.first = targetCallOp;
-        }
-      }
-    }
-  }
-
-private:
-  void build() {
-    SymbolTableCollection symbolTable;
-    DenseSet<FunctionOpInterface> visited;
-    // Build graph
-    moduleOp.walk([&](Operation *op) {
-      auto caller = op->getParentOfType<FunctionOpInterface>();
-      if (auto callOp = dyn_cast<CallOpInterface>(op)) {
-        auto *callee = callOp.resolveCallableInTable(&symbolTable);
-        auto funcOp = dyn_cast_or_null<FunctionOpInterface>(callee);
-        if (funcOp) {
-          graph[caller].emplace_back(
-              std::pair<CallOpInterface, FunctionOpInterface>(callOp, funcOp));
-          visited.insert(funcOp);
-        }
-      }
-    });
-    // Find roots
-    moduleOp.walk([&](FunctionOpInterface funcOp) {
-      if (!visited.count(funcOp)) {
-        roots.push_back(funcOp);
-      }
-    });
-  }
-
-  template <WalkOrder UpdateEdgeOrder = WalkOrder::PreOrder,
-            WalkOrder UpdateNodeOrder = WalkOrder::PreOrder,
-            typename UpdateEdgeFn, typename UpdateNodeFn>
-  void doWalk(FunctionOpInterface funcOp,
-              DenseSet<FunctionOpInterface> &visited, UpdateEdgeFn updateEdgeFn,
-              UpdateNodeFn updateNodeFn) {
-    if (visited.count(funcOp)) {
-      llvm::report_fatal_error("Cycle detected in call graph");
-    }
-    if constexpr (UpdateNodeOrder == WalkOrder::PreOrder) {
-      updateNodeFn(funcOp);
-    }
-    for (auto [callOp, callee] : graph[funcOp]) {
-      if constexpr (UpdateEdgeOrder == WalkOrder::PreOrder) {
-        updateEdgeFn(callOp, callee);
-      }
-      doWalk<UpdateEdgeOrder, UpdateNodeOrder>(callee, visited, updateEdgeFn,
-                                               updateNodeFn);
-      if constexpr (UpdateEdgeOrder == WalkOrder::PostOrder) {
-        updateEdgeFn(callOp, callee);
-      }
-    }
-    if constexpr (UpdateNodeOrder == WalkOrder::PostOrder) {
-      updateNodeFn(funcOp);
-    }
-    visited.erase(funcOp);
-  }
-
-protected:
-  ModuleOp moduleOp;
-  DenseMap<FunctionOpInterface,
-           SmallVector<std::pair<CallOpInterface, FunctionOpInterface>>>
-      graph;
-  FuncDataMapT funcMap;
-  SmallVector<FunctionOpInterface> roots;
+struct BarrierStages {
+  // Stages are independent: for example, a release atomic with scratch has
+  // both a leading ordering barrier and a scratch rendezvous.
+  bool beforeMemoryEffects = false;
+  bool afterMemoryEffects = false;
+  bool betweenMemoryEffects = false;
 };
+
+// Classify the barriers required by an atomic at a chosen scope. A result
+// broadcast barrier at that scope supplies the post-atomic rendezvous itself.
+BarrierStages getAtomicBarrierStages(MemSemantic semantic,
+                                     bool hasResultBarrier);
+
+// Whether distributing an atomic result requires communication between CTAs.
+bool atomicResultHasCTABroadcast(Operation *op);
 
 } // namespace triton
 
-// Create a basic DataFlowSolver with constant and dead code analysis included.
-std::unique_ptr<DataFlowSolver> createDataFlowSolver();
+namespace triton::nvidia_gpu {
 
-bool isCvtDimSync(const triton::LinearLayout &srcLayout,
-                  const triton::LinearLayout &dstLayout, StringAttr dim);
+bool needsClusterBarrier(Operation *op);
+
+} // namespace triton::nvidia_gpu
 
 } // namespace mlir
 

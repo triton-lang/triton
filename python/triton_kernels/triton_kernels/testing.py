@@ -4,14 +4,20 @@ import os
 import subprocess
 import sys
 import torch
+import triton
+import triton.language as tl
+from triton.language.random import philox
+from triton._internal_testing import is_compile_warmup
 from triton_kernels.numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
-from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
+from triton_kernels.tensor import convert_layout as _convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
+from triton_kernels.tensor_details.layout import BlackwellMXScaleLayout
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
-import itertools
 from dataclasses import replace
 
 
 def assert_equal(ref, tri):
+    if is_compile_warmup():
+        return
     if isinstance(ref, torch.Tensor):
         assert torch.all(ref == tri)
     else:
@@ -19,6 +25,8 @@ def assert_equal(ref, tri):
 
 
 def assert_close(ref, tri, maxtol=None, rmstol=None, description="--", verbose=True):
+    if is_compile_warmup():
+        return
     if tri.dtype.itemsize == 1:
         ref_as_type = ref.to(tri.dtype)
         if ref.dtype == tri.dtype:
@@ -203,33 +211,83 @@ def compute_actual_scale(x, dtype, per_batch_scale=False):
 # --- create tensor ---
 
 
+@triton.jit(do_not_specialize=["seed", "offset", "rows", "cols", "row_blocks", "col_blocks", "num_elements"])
+def _random_block_signs(output, seed: tl.uint64, offset: tl.uint64, rows: tl.int32, cols: tl.int32,
+                        row_blocks: tl.int32, col_blocks: tl.int32, block_size: tl.constexpr, num_elements: tl.int32,
+                        TILE_SIZE: tl.constexpr):
+    indices = tl.program_id(0) * TILE_SIZE + tl.arange(0, TILE_SIZE)
+    block = indices // block_size
+    lane = indices % block_size
+    row_block = (block // col_blocks) % row_blocks
+    col_block = block % col_blocks
+    random_count = tl.maximum(tl.minimum(block_size, rows - row_block * block_size),
+                              tl.minimum(block_size, cols - col_block * block_size))
+    counter = offset // 4 + block.to(tl.uint64)
+    value, _, _, _ = philox(seed, counter.to(tl.uint32), (counter >> 32).to(tl.uint32), lane.to(tl.uint32),
+                            tl.zeros_like(lane).to(tl.uint32))
+    tl.store(output + indices, tl.where(lane < random_count, value & 1, 0).to(tl.int64), mask=indices < num_elements)
+
+
+def _make_random_block_signs(x, batch_size, rows, cols, row_blocks, col_blocks, block_size):
+    signs = torch.empty((batch_size, row_blocks, col_blocks, block_size), device=x.device, dtype=torch.int64)
+    warming = is_compile_warmup()
+    if warming:
+        seed, offset = 0, 0
+    else:
+        index = x.device.index if x.device.index is not None else torch.cuda.current_device()
+        generator = torch.cuda.default_generators[index]
+        seed, offset = generator.initial_seed(), generator.get_offset()
+
+    _random_block_signs[(triton.cdiv(signs.numel(), 512), )](signs, seed, offset, rows, cols, row_blocks, col_blocks,
+                                                             block_size, signs.numel(), TILE_SIZE=512)
+    if not warming:
+        generator.set_offset(offset + 4 * batch_size * row_blocks * col_blocks)
+    return signs
+
+
 def normalize_blocks(x, BLOCK_SIZE=None):
     if BLOCK_SIZE is None:
         BLOCK_SIZE = int(MXFP_BLOCK_SIZE)
-    x_ndim = x.ndim
-    if x_ndim == 2:
-        x = x.unsqueeze(0)
-    for e, i, j in itertools.product(range(x.shape[0]), range(0, x.shape[1], BLOCK_SIZE),
-                                     range(0, x.shape[2], BLOCK_SIZE)):
-        i_end = min(i + BLOCK_SIZE, x.shape[1])
-        j_end = min(j + BLOCK_SIZE, x.shape[2])
-        block = x[e, i:i_end, j:j_end]
-        m_abs = block.abs().max()
-        i_len = i_end - i
-        j_len = j_end - j
-        min_len = min(i_len, j_len)
-        signs = torch.randint(0, 2, (max(i_len, j_len), ), device=x.device) * 2 - 1
-        block.diagonal(dim1=-2, dim2=-1)[:] = signs[:min_len] * m_abs
-        if j_len > i_len:
-            block[i_len - 1, i_len:] = signs[min_len:] * m_abs
-        elif i_len > j_len:
-            block[j_len:, j_len - 1] = signs[min_len:] * m_abs
-    if x_ndim == 2:
-        x = x.squeeze(0)
+    if x.numel() == 0:
+        return x
+
+    batched = x.unsqueeze(0) if x.ndim == 2 else x
+    batch_size, rows, cols = batched.shape
+    row_padding = (-rows) % BLOCK_SIZE
+    col_padding = (-cols) % BLOCK_SIZE
+    padded = torch.nn.functional.pad(batched, (0, col_padding, 0, row_padding))
+    row_blocks, col_blocks = padded.shape[-2] // BLOCK_SIZE, padded.shape[-1] // BLOCK_SIZE
+    blocks = padded.view(batch_size, row_blocks, BLOCK_SIZE, col_blocks, BLOCK_SIZE).permute(0, 1, 3, 2, 4)
+
+    block_maxima = blocks.abs().amax(dim=(-2, -1))
+    signs = _make_random_block_signs(x, batch_size, rows, cols, row_blocks, col_blocks, BLOCK_SIZE) * 2 - 1
+
+    block_heights = (rows - torch.arange(row_blocks, device=x.device) * BLOCK_SIZE).clamp(max=BLOCK_SIZE)
+    block_widths = (cols - torch.arange(col_blocks, device=x.device) * BLOCK_SIZE).clamp(max=BLOCK_SIZE)
+    height = block_heights[None, :, None, None, None]
+    width = block_widths[None, None, :, None, None]
+    row = torch.arange(BLOCK_SIZE, device=x.device)[None, None, None, :, None]
+    col = torch.arange(BLOCK_SIZE, device=x.device)[None, None, None, None, :]
+
+    diagonal = (row == col) & (row < height) & (col < width)
+    extra_row = (width > height) & (row == height - 1) & (col >= height) & (col < width)
+    extra_col = (height > width) & (col == width - 1) & (row >= width) & (row < height)
+    sign_values = torch.where(width > height, signs[..., None, :], signs[..., :, None])
+    replacements = sign_values * block_maxima[..., None, None]
+    blocks.copy_(torch.where(diagonal | extra_row | extra_col, replacements, blocks))
+    batched.copy_(padded[:, :rows, :cols])
     return x
 
 
 def alloc_rand(shape, device, dtype, requires_grad=False):
+    if is_compile_warmup():
+        result = torch.empty(shape, device=device, dtype=dtype, requires_grad=requires_grad)
+        if dtype.itemsize != 1 and result.numel():
+            batch_size, rows, cols = (1, *result.shape) if result.ndim == 2 else result.shape
+            block_size = int(MXFP_BLOCK_SIZE)
+            _make_random_block_signs(result, batch_size, rows, cols, triton.cdiv(rows, block_size),
+                                     triton.cdiv(cols, block_size), block_size)
+        return result
     if dtype.itemsize == 1:
         tmp = 2**-(torch.randint(4, 8, shape, device=device, dtype=torch.float16))
         return tmp.to(dtype).requires_grad_(requires_grad)
@@ -238,8 +296,7 @@ def alloc_rand(shape, device, dtype, requires_grad=False):
     return ret
 
 
-def make_slice_sizes(n_slices, total_size, device="cuda"):
-    torch.manual_seed(0)
+def _make_slice_sizes(n_slices, total_size, device, generator=None):
     dtype = torch.int32
     if total_size < 0:
         raise ValueError("total_size must be non-negative")
@@ -252,11 +309,26 @@ def make_slice_sizes(n_slices, total_size, device="cuda"):
     if n_slices > 1:
         probs[2] += probs[1]
         probs[1] = 0.
-    assignments = torch.multinomial(probs, total_size, replacement=True)
+    assignments = torch.multinomial(probs, total_size, replacement=True, generator=generator)
     counts = torch.bincount(assignments, minlength=n_slices).to(dtype)
     assert counts.sum().item() == total_size
     assert len(counts) == n_slices
     return counts
+
+
+def make_slice_sizes(n_slices, total_size, device="cuda"):
+    if is_compile_warmup():
+        from torch._subclasses.fake_tensor import unset_fake_temporarily
+
+        with unset_fake_temporarily():
+            generator = torch.Generator(device="cpu").manual_seed(0)
+            values = _make_slice_sizes(n_slices, total_size, "cpu", generator).tolist()
+        result = torch.empty((max(n_slices, 0), ), dtype=torch.int32, device=device)
+        result._triton_warmup_values = values
+        return result
+
+    torch.manual_seed(0)
+    return _make_slice_sizes(n_slices, total_size, device)
 
 
 def pad_rows_to_multiples(A, indices, multiple=128, pad_value=float('nan')):
@@ -277,7 +349,13 @@ def pad_rows_to_multiples(A, indices, multiple=128, pad_value=float('nan')):
 
 def pad_ragged_tensor(x, x_ragged_metadata, hbm_swizzling, transpose):
     multiple = 128 if hbm_swizzling else 64
-    if transpose:
+    if is_compile_warmup():
+        dimension = 1 if transpose else 0
+        shape = list(x.shape)
+        values = x_ragged_metadata.slice_sizes._triton_warmup_values
+        shape[dimension] = sum((value + multiple - 1) // multiple * multiple for value in values)
+        y = torch.empty(shape, dtype=x.dtype, device=x.device)
+    elif transpose:
         y = pad_rows_to_multiples(x.T, x_ragged_metadata.slice_offs, multiple=multiple, pad_value=0).T.contiguous()
     else:
         y = pad_rows_to_multiples(x, x_ragged_metadata.slice_offs, multiple=multiple, pad_value=0).contiguous()
@@ -285,6 +363,31 @@ def pad_ragged_tensor(x, x_ragged_metadata, hbm_swizzling, transpose):
     y_ragged_metadata = replace(x_ragged_metadata, slice_offs=x_ragged_metadata.block_offs(multiple) * multiple,
                                 slice_sizes_divisibility=multiple)
     return y, y_ragged_metadata
+
+
+class _WarmupTensorProxy:
+
+    def __init__(self, tensor):
+        self.tensor = tensor
+
+    def __getattr__(self, name):
+        return getattr(self.tensor, name)
+
+
+def convert_layout(tensor, layout, **layout_transformation_kwargs):
+    converted = _convert_layout(tensor, layout, **layout_transformation_kwargs)
+    if not is_compile_warmup() or converted is tensor:
+        return converted
+
+    data = tensor.storage.data
+    if (not isinstance(layout, BlackwellMXScaleLayout) or data.device.type in ["cpu", "meta"]
+            or data.dtype.itemsize != 1 or not converted.storage.data.numel()):
+        return converted
+
+    transformation = layout.make_transformation(tensor.shape, tensor.dtype == FP4, **layout_transformation_kwargs)
+    data = torch.empty(tensor.shape, dtype=data.dtype, device=data.device)
+    transformation.swizzle_data(_WarmupTensorProxy(data))
+    return converted
 
 
 def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtype, mxfp_dim, transpose,

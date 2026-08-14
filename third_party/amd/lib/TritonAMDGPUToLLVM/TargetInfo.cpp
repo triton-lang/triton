@@ -170,6 +170,7 @@ Value TargetInfo::getGlobalTimer(RewriterBase &rewriter, Location loc) const {
   Value timer;
   switch (getISAFamily()) {
   case ISAFamily::RDNA3:
+  case ISAFamily::RDNA4m:
   case ISAFamily::RDNA4:
   case ISAFamily::GFX1250: {
     Value msg = b.i32_val(/*MSG_RTN_GET_REALTIME=*/131);
@@ -246,7 +247,8 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
   bool addAliasGroup = localLoadOp && requiresAliasInfoForAsyncOps() &&
                        isSyncedViaAsyncWait(localLoadOp);
   return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal, {},
-                                 triton::CacheModifier::NONE, addAliasGroup);
+                                 triton::CacheModifier::NONE,
+                                 /*isVolatile=*/false, addAliasGroup);
 }
 
 Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
@@ -747,6 +749,10 @@ bool TargetInfo::supportsMultiCTALaunch() const {
   return targetFeatures.supportsMultiCTALaunch();
 }
 
+unsigned TargetInfo::getMaxMulticastMaskPopcount() const {
+  return targetFeatures.getMaxMulticastMaskPopcount();
+}
+
 bool TargetInfo::supportsTDM() const { return targetFeatures.supportsTDM(); }
 
 bool TargetInfo::supportsClusterLoadBitWidth(int biwWidth) const {
@@ -810,6 +816,7 @@ TargetInfo::getSharedLdStTiles(int32_t vecBitwidth) const {
   case ISAFamily::RDNA1:
   case ISAFamily::RDNA2:
   case ISAFamily::RDNA3:
+  case ISAFamily::RDNA4m:
     if (vecBitwidth == 128)
       return {/*load tile*/ {{}, {0, 1, 4}}, /*store tile*/ {}};
     break;

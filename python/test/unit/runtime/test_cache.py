@@ -1,6 +1,7 @@
 import expecttest
 import importlib.util
 import itertools
+import multiprocessing
 import os
 import re
 import gc
@@ -537,6 +538,40 @@ def test_cache_closure():
         closure[(1, )]()
 
     assert "cst has changed since we compiled this kernel, from constexpr[42] to constexpr[43]" in str(e.value)
+
+
+CLOSURE_SHADOW_GLOBAL = tl.constexpr(3)
+
+
+def test_cache_closure_shadows_global():
+
+    def make_closure(value):
+        CLOSURE_SHADOW_GLOBAL = value
+
+        @triton.jit
+        def closure():
+            return CLOSURE_SHADOW_GLOBAL
+
+        return closure
+
+    first = make_closure(tl.constexpr(7))
+    second = make_closure(tl.constexpr(9))
+    same_as_first = make_closure(tl.constexpr(7))
+    captures_none = make_closure(None)
+
+    first_key = first.cache_key
+    second_key = second.cache_key
+    same_as_first_key = same_as_first.cache_key
+    captures_none.cache_key
+
+    def tracked_values(fn):
+        return {name: value for (name, _), (value, _) in fn.used_global_vals.items()}
+
+    assert first_key != second_key
+    assert first_key == same_as_first_key
+    assert tracked_values(first)["CLOSURE_SHADOW_GLOBAL"].value == 7
+    assert tracked_values(second)["CLOSURE_SHADOW_GLOBAL"].value == 9
+    assert "CLOSURE_SHADOW_GLOBAL" not in tracked_values(captures_none)
 
 
 @triton.jit
@@ -1094,9 +1129,11 @@ def test_module_load_unload(device, fresh_knobs):
 
     # we should hit the kernel unload call to decrese the counter from 1 to 0
     counter = 1
+    owner_pid = os.getpid()
 
     def kernel_unload(*args, **kwargs):
         nonlocal counter
+        assert os.getpid() == owner_pid
         counter -= 1
 
     # turn off python garbage collector, so the callback is not called
@@ -1110,6 +1147,14 @@ def test_module_load_unload(device, fresh_knobs):
 
     assert counter == 1
     assert pre_compile.module is not None
+
+    if "fork" in multiprocessing.get_all_start_methods():
+        child = multiprocessing.get_context("fork").Process(target=pre_compile.__del__)
+        child.start()
+        child.join()
+        assert child.exitcode == 0
+        assert counter == 1
+
     pre_compile.__del__()
 
     assert counter == 0

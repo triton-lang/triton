@@ -82,10 +82,12 @@ struct ThreadState {
   // monotonic counter, used for stochastic read clock updates
   uint32_t numReads;
 
+  uint32_t gdcWaitCalled : 1;
+
   // Index to head of the circular clock buffer, plus a bit to mark if the
   // vector clock has changed since the last clock buffer write (to allow reuse)
   uint32_t clockBufferDirty : 1;
-  uint32_t clockBufferHead : 31;
+  uint32_t clockBufferHead : 30;
 
   // Reader-writer lock controlling access to the vector clock and clock buffer
   uint32_t lock;
@@ -104,6 +106,55 @@ struct AtomicEventState {
   ShadowCell *cells[kMaxAtomicShadowCells];
   uint8_t numCells;
 };
+
+static constexpr int kMaxClusterCTAs = 16;
+static constexpr int kClusterBarrierScratchBytes = 128;
+
+struct alignas(16) ClusterBarrierState {
+  uint32_t lock;
+  uint32_t arrivalCount;
+  uint32_t publicationCount;
+  uint32_t generation;
+  uint32_t registrationGeneration;
+  thread_id_t threadIds[kMaxClusterCTAs];
+  epoch_t tokens[kMaxClusterCTAs];
+};
+static_assert(sizeof(ClusterBarrierState) <= kClusterBarrierScratchBytes);
+
+struct MBarrierPublishedClock {
+  thread_id_t threadId;
+  epoch_t token;
+};
+static_assert(sizeof(MBarrierPublishedClock) == 4);
+
+struct MBarrierPhaseState {
+  // One-based generation tag. Zero denotes an unused phase slot.
+  uint32_t generation;
+  uint32_t complete;
+  MBarrierPublishedClock clocks[kMaxClusterCTAs];
+};
+static_assert(sizeof(MBarrierPhaseState) == 72);
+
+static constexpr uint32_t kEmptyMBarrierKey = 0xffffffffu;
+
+struct alignas(16) MBarrierState {
+  // Key uniquely identifying the barrier. kEmptyMBarrierKey represents empty.
+  uint32_t key;
+  uint32_t lock;
+  uint32_t expectedCount;
+  uint32_t pendingCount;
+  // Number of completed phases. The active phase has this zero-based index.
+  uint32_t generation;
+  MBarrierPhaseState phases[2];
+};
+static_assert(sizeof(MBarrierState) == 176);
+
+struct alignas(16) MBarrierTable {
+  uint32_t lock;
+  uint32_t capacity;
+  MBarrierState states[];
+};
+static_assert(sizeof(MBarrierTable) == 16);
 
 // Place the thread state for each device at a fixed stride for ease of
 // address calculation.

@@ -8,6 +8,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Traits.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/ADT/EquivalenceClasses.h"
@@ -124,7 +125,7 @@ static Interval<int> getLiveIntervals(Value value, Liveness &liveness,
   SmallVector<Operation *> users(value.getUsers());
   while (!users.empty()) {
     Operation *user = users.pop_back_val();
-    if (!isa<ttg::MemDescIndexOp, ttg::MemDescReinterpretOp>(user))
+    if (!user->hasTrait<OpTrait::MemDescViewTrait>())
       continue;
     auto usersLivness = liveness.resolveLiveness(user->getResult(0));
     liveOperations.insert(liveOperations.end(), usersLivness.begin(),
@@ -244,8 +245,6 @@ static SmallVector<Operation *> getAlloc(Value value) {
       allocs.push_back(defOp);
     } else if (defOp->hasTrait<OpTrait::MemDescViewTrait>()) {
       worklist.push_back(defOp->getOperand(0));
-    } else if (auto sliceOp = dyn_cast<TMEMSubSliceOp>(defOp)) {
-      worklist.push_back(sliceOp.getSrc());
     } else if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
       worklist.push_back(selectOp.getTrueValue());
       worklist.push_back(selectOp.getFalseValue());
@@ -403,11 +402,12 @@ public:
     // TODO: handle cases with multiple function with TMEMAllocOp.
     int totalMemorySize = allocateTMem(mod, offsets);
 
-    std::array<int, 6> possibleAllocations = {0, 32, 64, 128, 256, 512};
-    // NOTE: if totalMemorySize > 512 we exceeded the maximum amount of tensor
-    // memory, but we let the compilation finish so that we can raise an
+    std::vector<int> possibleAllocations = {0, 32, 64, 128, 256, 512, 576};
+    // NOTE: if totalMemorySize > the maximum available for the target (512
+    // for Blackwell and 576 for Rubin), we exceeded the maximum amount of
+    // tensor memory, but we let the compilation finish so that we can raise an
     // exception in python for the auto-tuner.
-    if (totalMemorySize <= 512) {
+    if (totalMemorySize <= possibleAllocations.back()) {
       for (int size : possibleAllocations) {
         if (totalMemorySize <= size) {
           totalMemorySize = size;

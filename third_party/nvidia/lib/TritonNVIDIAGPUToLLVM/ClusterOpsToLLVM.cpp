@@ -32,8 +32,6 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
 
-#include <type_traits>
-
 namespace mlir::triton {
 #define GEN_PASS_DEF_INITIALIZEWSCLUSTERBARRIERS
 #include "TritonNVIDIAGPUToLLVM/Passes.h.inc"
@@ -67,14 +65,25 @@ static void createMBarrierInit(OpBuilder &b, Location loc, Value pred,
 }
 
 static void createMBarrierArrive(OpBuilder &b, Location loc, Value pred,
-                                 Value barrierPtr, bool relaxed) {
+                                 Value barrierPtr, bool relaxed,
+                                 Value multicastMask = {}) {
   PTXBuilder ptxBuilder;
-  auto &arrive = *ptxBuilder.create(
-      "@$0 mbarrier.arrive." + std::string(relaxed ? "relaxed" : "release") +
-      ".cluster.shared::cluster.b64 _, [$1];");
-  arrive({ptxBuilder.newOperand(pred, "b"),
-          ptxBuilder.newOperand(barrierPtr, "r")},
-         /*onlyAttachMLIRArgs=*/true);
+  std::string ptx = "@$0 mbarrier.arrive." +
+                    std::string(relaxed ? "relaxed" : "release") +
+                    ".cluster.shared::cluster";
+  if (multicastMask)
+    ptx += ".multicast::cluster::32b";
+  ptx += ".b64 _, [$1]";
+  if (multicastMask)
+    ptx += ", $2";
+  ptx += ";";
+
+  SmallVector<PTXBuilder::Operand *> operands = {
+      ptxBuilder.newOperand(pred, "b"), ptxBuilder.newOperand(barrierPtr, "r")};
+  if (multicastMask)
+    operands.push_back(ptxBuilder.newOperand(multicastMask, "r"));
+  auto &arrive = *ptxBuilder.create(ptx);
+  arrive(operands, /*onlyAttachMLIRArgs=*/true);
   ptxBuilder.launch(b, loc, void_ty(b.getContext()));
 }
 
@@ -151,35 +160,6 @@ void lowerClusterSyncForAllWarps(Location loc, OpBuilder &rewriter,
   }
 }
 
-template <typename Op>
-struct ClusterSyncOpConversion : public ConvertOpToLLVMPattern<Op> {
-  using ConvertOpToLLVMPattern<Op>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(Op op, typename Op::Adaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto mod = op->template getParentOfType<ModuleOp>();
-    int defaultNumWarps = triton::gpu::lookupNumWarps(op);
-    int totalNumWarps = defaultNumWarps;
-    if (auto attr =
-            mod->template getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
-      totalNumWarps = attr.getInt();
-
-    rewriter.setInsertionPoint(op);
-    lowerClusterSyncForAllWarps(
-        op.getLoc(), rewriter, defaultNumWarps, totalNumWarps,
-        [&](OpBuilder &b) {
-          if constexpr (!std::is_same_v<Op, triton::nvidia_gpu::ClusterWaitOp>)
-            createClusterArrive(b, op.getLoc(), op.getRelaxed());
-          if constexpr (!std::is_same_v<Op,
-                                        triton::nvidia_gpu::ClusterArriveOp>)
-            createClusterWait(b, op.getLoc());
-        });
-    rewriter.eraseOp(op);
-    return success();
-  }
-};
-
 struct ClusterBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::ClusterBarrierOp> {
   ClusterBarrierOpConversion(LLVMTypeConverter &typeConverter,
@@ -230,14 +210,24 @@ struct ClusterBarrierOpConversion
     auto barrierSlotTy = LLVM::LLVMArrayType::get(
         i8_ty, triton::nvidia_gpu::kClusterBarrierMbarSlotSize);
     Value barrierPtr = b.gep(ptrTy, barrierSlotTy, barrierPtr0, barrierIdx);
-    Value pred = b.icmp_eq(getThreadId(rewriter, loc), b.i32_val(0));
-    Value barrierInt = b.ptrtoint(i32_ty, barrierPtr);
+    Value threadId = getThreadId(rewriter, loc);
+    Value pred = b.icmp_eq(threadId, b.i32_val(0));
     int numCTAs = triton::gpu::lookupNumCTAs(op);
     bool relaxed = op.getRelaxed() && targetInfo.getPtxVersion() >= 86;
-    for (int i = 1; i < numCTAs; ++i) {
-      Value peerBarrierInt = b.xor_(barrierInt, b.i32_val(i << 24));
+    if (targetInfo.getTargetFeatures().supportsMbarMulticast()) {
+      Value ctaId = NVVM::ClusterId::create(rewriter, loc, i32_ty);
+      // Exclude the issuing CTA: the mbarriers expect numCTAs - 1 arrivals.
+      Value allCTAsMask = b.i32_val((1u << numCTAs) - 1);
+      Value selfMask = b.shl(b.i32_val(1), ctaId);
+      Value peerMask = b.xor_(allCTAsMask, selfMask);
+      createMBarrierArrive(rewriter, loc, pred, barrierPtr, relaxed, peerMask);
+    } else {
+      Value barrierInt = b.ptrtoint(i32_ty, barrierPtr);
+      Value peerId = b.add(threadId, b.i32_val(1));
+      Value peerBarrierInt = b.xor_(barrierInt, b.shl(peerId, b.i32_val(24)));
       Value peerBarrierPtr = b.inttoptr(barrierPtr.getType(), peerBarrierInt);
-      createMBarrierArrive(rewriter, loc, pred, peerBarrierPtr, relaxed);
+      Value arrivePred = b.icmp_ult(threadId, b.i32_val(numCTAs - 1));
+      createMBarrierArrive(rewriter, loc, arrivePred, peerBarrierPtr, relaxed);
     }
     createMBarrierWait(rewriter, loc, barrierPtr, parity);
     Value nextCounter = b.and_(b.add(counter, b.i32_val(1)), b.i32_val(3));
@@ -321,8 +311,5 @@ struct InitializeWSClusterBarriers
 void mlir::triton::NVIDIA::populateClusterOpsToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit, const NVIDIA::TargetInfo &targetInfo) {
-  patterns.add<ClusterSyncOpConversion<triton::nvidia_gpu::ClusterArriveOp>,
-               ClusterSyncOpConversion<triton::nvidia_gpu::ClusterWaitOp>>(
-      typeConverter, benefit);
   patterns.add<ClusterBarrierOpConversion>(typeConverter, benefit, targetInfo);
 }

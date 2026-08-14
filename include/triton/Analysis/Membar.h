@@ -2,11 +2,15 @@
 #define TRITON_ANALYSIS_MEMBAR_H
 
 #include "Allocation.h"
+#include "BufferIndexAnalysis.h"
+#include "CallGraph.h"
+#include "Function.h"
 
 #include "llvm/Support/raw_ostream.h"
 #include <functional>
 #include <set>
 #include <tuple>
+#include <utility>
 
 namespace mlir {
 
@@ -30,7 +34,9 @@ using MembarSliceFilterFn =
 // logical view on it (layout, subslice offsets and shape for the access)
 struct AllocationSlice {
 public:
-  // Create allocation slice from a value, collecting subslice offsets
+  // Create allocation slice from a value, collecting subslice offsets.
+  // Dynamic buffer-index information is attached by BufferIndexAnalysis; use
+  // BufferIndexAnalysis::makeSlice when constructing slices for membar.
   AllocationSlice(Value value, Interval<size_t> allocationInterval,
                   Allocation::BufferId bufferId);
 
@@ -62,17 +68,27 @@ public:
         allocationInterval.start() + offset, allocationInterval.end() + offset);
     if (invalidateBufferId)
       shifted.bufferId = Allocation::InvalidBufferId;
+    // This preserves analysis payloads such as bufferIndexExpr. Callers that
+    // translate slices across function boundaries must clear per-function
+    // payloads before translating.
     return shifted;
   }
 
   void print(raw_ostream &os) const;
 
+  // Buffer-index expression attached by BufferIndexAnalysis. It participates
+  // in ordering/equality so accesses to different slots remain separate.
+  // Must not be mutated after the slice is inserted into a sorted container
+  // (e.g. BlockInfo::SliceMapT); rebuild the container instead, as
+  // BufferIndexAnalysis::invalidateBufferIndices does.
+  const BufferIndexExpr *bufferIndexExpr = nullptr;
+
 private:
   std::tuple<Interval<size_t>, Allocation::BufferId, const void *,
-             llvm::ArrayRef<int64_t>>
+             llvm::ArrayRef<int64_t>, const BufferIndexExpr *>
   asTuple() const {
     return {allocationInterval, bufferId, accessTy.getAsOpaquePointer(),
-            subsliceOffsets};
+            subsliceOffsets, bufferIndexExpr};
   }
   // Offsets from subslice. Empty when offsets are unknown
   SmallVector<int64_t> subsliceOffsets;
@@ -206,11 +222,19 @@ bool containsLocalBarrier(Operation *op);
 //===----------------------------------------------------------------------===//
 
 // Common class to analyze membar and fence placement.
-class MembarOrFenceAnalysis {
-  using VirtualBlock = std::pair<Block *, Block::iterator>;
-
+class MembarOrFenceAnalysis
+    : public triton::PostOrderFunctionAnalysis<BlockInfo> {
 public:
-  using FuncBlockInfoMapT = triton::CallGraph<BlockInfo>::FuncDataMapT;
+  MembarOrFenceAnalysis(Allocation &allocation, MembarFilterFn filter)
+      : allocation(allocation), filter(std::move(filter)) {}
+
+protected:
+  Allocation &allocation;
+  MembarFilterFn filter;
+};
+
+class MembarAnalysis : public MembarOrFenceAnalysis {
+public:
   /// Creates a new Membar analysis that generates the shared memory barrier
   /// in the following circumstances:
   /// - RAW: If a shared memory write is followed by a shared memory read, and
@@ -224,62 +248,24 @@ public:
   /// a shared memory read. If the temporary storage is written but not read,
   /// it is considered as the problem of the operation itself but not the membar
   /// analysis.
-  MembarOrFenceAnalysis() = default;
-  explicit MembarOrFenceAnalysis(Allocation *allocation, MembarFilterFn filter)
-      : allocation(allocation), filter(filter) {}
-
-  virtual ~MembarOrFenceAnalysis() = default;
-
-  /// Runs the membar analysis to the given operation, inserts a barrier if
-  /// necessary.
-  void run(FuncBlockInfoMapT &funcBlockInfoMap);
-
-protected:
-  /// Applies the barrier analysis based on the SCF dialect, in which each
-  /// region has a single basic block only.
-  /// Example:
-  /// region1
-  ///   op1
-  ///   op2 (scf.if)
-  ///      region2
-  ///        op3
-  ///        op4
-  ///      region3
-  ///        op5
-  ///        op6
-  ///   op7
-  /// TODO: Explain why we don't use ForwardAnalysis:
-  void resolve(FunctionOpInterface funcOp, FuncBlockInfoMapT *funcBlockInfoMap,
-               OpBuilder *builder);
-
-  /// Collects the successors of the terminator
-  void visitTerminator(Operation *operation,
-                       SmallVector<VirtualBlock> &successors);
-
-  /// Updates the BlockInfo operation based on the operation.
-  virtual void update(Operation *operation, BlockInfo *blockInfo,
-                      FuncBlockInfoMapT *funcBlockInfoMap,
-                      OpBuilder *builder) = 0;
-
-  Allocation *allocation = nullptr;
-  MembarFilterFn filter = nullptr;
-};
-
-class MembarAnalysis : public MembarOrFenceAnalysis {
-public:
-  MembarAnalysis() = default;
-  explicit MembarAnalysis(Allocation *allocation, MembarFilterFn filter)
-      : MembarOrFenceAnalysis(allocation, filter) {}
-
-  ~MembarAnalysis() override = default;
+  MembarAnalysis(Allocation &allocation, MembarFilterFn filter)
+      : MembarOrFenceAnalysis(allocation, std::move(filter)),
+        bufferIndexAnalysis(
+            cast<FunctionOpInterface>(allocation.getOperation())) {}
 
 private:
   /// Updates the BlockInfo operation based on the operation.
-  virtual void update(Operation *operation, BlockInfo *blockInfo,
-                      FuncBlockInfoMapT *funcBlockInfoMap,
-                      OpBuilder *builder) override;
+  void update(Operation *operation, BlockInfo *blockInfo, FuncMapT *funcMap,
+              OpBuilder *builder) override;
+
+  void updateSuccessor(Operation *terminator, Block *successor,
+                       BlockInfo *blockInfo) override;
+
+  void updateExitState(BlockInfo *blockInfo) override;
 
   void insertBarrier(Operation *operation, OpBuilder *builder);
+
+  BufferIndexAnalysis bufferIndexAnalysis;
 };
 
 /// Postorder traversal on the callgraph to insert membar instructions
@@ -287,13 +273,13 @@ private:
 /// Each function maintains a BlockInfo map that includes all potential buffers
 /// after returning. This way users do not have to explicitly insert membars
 /// before and after function calls, but might be a bit conservative.
-template <typename AnalysisType>
+template <typename AnalysisT>
 class ModuleMembarOrFenceAnalysis : public triton::CallGraph<BlockInfo> {
 public:
-  ModuleMembarOrFenceAnalysis(ModuleAllocation *moduleAllocation,
+  ModuleMembarOrFenceAnalysis(ModuleAllocation &moduleAllocation,
                               MembarFilterFn filter = nullptr)
-      : triton::CallGraph<BlockInfo>(moduleAllocation->getModuleOp()),
-        moduleAllocation(moduleAllocation), filter(filter) {}
+      : triton::CallGraph<BlockInfo>(moduleAllocation.getModuleOp()),
+        moduleAllocation(moduleAllocation), filter(std::move(filter)) {}
 
   void run() {
     walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
@@ -301,21 +287,19 @@ public:
         [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
         // Post-order walk callback
         [&](FunctionOpInterface funcOp) {
-          auto *allocation = moduleAllocation->getFuncData(funcOp);
-          auto [it, inserted] = funcMap.try_emplace(funcOp, BlockInfo());
-          if (inserted) {
-            AnalysisType analysis(allocation, filter);
-            analysis.run(funcMap);
-          }
+          auto &allocation = *moduleAllocation.getFuncData(funcOp);
+          if (!funcMap.try_emplace(funcOp).second)
+            return;
+          AnalysisT(allocation, filter).run(funcOp, funcMap);
         });
   }
 
 private:
-  ModuleAllocation *moduleAllocation;
+  ModuleAllocation &moduleAllocation;
   MembarFilterFn filter;
 };
 
-typedef ModuleMembarOrFenceAnalysis<MembarAnalysis> ModuleMembarAnalysis;
+using ModuleMembarAnalysis = ModuleMembarOrFenceAnalysis<MembarAnalysis>;
 
 } // namespace mlir
 

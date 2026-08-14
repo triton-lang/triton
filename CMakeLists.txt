@@ -8,7 +8,6 @@ endif()
 
 project(triton CXX C)
 include(CTest)
-include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
@@ -20,6 +19,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" ON)
+option(TRITON_STABLE_ABI "Build with Python Stable ABI (abi3) for Python 3.12+" OFF)
 option(TRITON_BUILD_UT "Build C++ Triton Unit Tests" ON)
 option(TRITON_BUILD_WITH_CCACHE "Build with ccache (if available)" ON)
 option(TRITON_OFFLINE_BUILD "Build without downloading dependencies" OFF)
@@ -319,6 +319,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
   # nanobind expects find_package(Python) which sets Python::Module target
   # and Python_* variables. Triton uses find_package(Python3) instead.
   # Bridge the two by aliasing the target and forwarding variables.
+  if(NOT TARGET Python::Interpreter)
+    add_executable(Python::Interpreter ALIAS Python3::Interpreter)
+  endif()
   if(NOT TARGET Python::Module)
     add_library(Python::Module ALIAS Python3::Module)
     set(Python_EXECUTABLE "${Python3_EXECUTABLE}")
@@ -330,6 +333,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   find_package(nanobind CONFIG REQUIRED HINTS "${Python3_SITELIB}")
   nanobind_build_library(nanobind-static)
+  if(TRITON_STABLE_ABI)
+    target_compile_definitions(nanobind-static PUBLIC Py_LIMITED_API=0x030C0000)
+  endif()
   target_link_libraries(nanobind-static PRIVATE Python3::Module)
 
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
@@ -416,6 +422,10 @@ if(TRITON_BUILD_PYTHON_MODULE)
                   ${PYTHON_SRC_PATH}/llvm.cc
                   ${PYTHON_SRC_PATH}/specialize.cc)
 
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(triton PRIVATE -Wno-array-bounds)
+  endif()
+
   # Link triton with its dependencies
   target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})
 
@@ -450,12 +460,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
       CONTENT "${TRITON_EXPORT_SYMBOLS_FILE_CONTENT}")
   endif()
 
-  install(TARGETS triton
-    COMPONENT libraries
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  )
-
   if (NOT DEFINED LLVM_SYSPATH)
       message(FATAL_ERROR "LLVM_SYSPATH must be set.")
   endif()
@@ -468,6 +472,28 @@ if(TRITON_BUILD_PYTHON_MODULE)
     "${LLVM_SYSPATH}/bin/FileCheck"
     "${TRITON_WHEEL_DIR}/FileCheck"
     COPYONLY)
+
+  # Install Triton headers and TableGen definitions into the wheel staging
+  # directory so that downstream projects can use Triton as a C++ library
+  # without a separate cmake --install step.
+  set(_TRITON_WHEEL_INCLUDE "${TRITON_WHEEL_DIR}/include")
+  install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
+    COMPONENT wheel_headers
+    DESTINATION "${_TRITON_WHEEL_INCLUDE}"
+    FILES_MATCHING PATTERN "*.h")
+  install(DIRECTORY ${PROJECT_BINARY_DIR}/include/
+    COMPONENT wheel_headers
+    DESTINATION "${_TRITON_WHEEL_INCLUDE}"
+    FILES_MATCHING PATTERN "*.h" PATTERN "*.h.inc")
+  install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
+    COMPONENT wheel_headers
+    DESTINATION "${_TRITON_WHEEL_INCLUDE}"
+    FILES_MATCHING PATTERN "*.td")
+  install(DIRECTORY ${PROJECT_SOURCE_DIR}/python/
+    COMPONENT wheel_headers
+    DESTINATION "${_TRITON_WHEEL_INCLUDE}/python"
+    FILES_MATCHING PATTERN "*.h"
+    PATTERN "triton" EXCLUDE)
 
   # Build plugins when building libtriton since they depend on libtriton.
   if(TRITON_EXT_ENABLED)
@@ -508,24 +534,3 @@ if(TRITON_BUILD_UT)
     USES_TERMINAL
   )
 endif()
-
-################################################################################
-# Header installation
-################################################################################
-
-install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
-  COMPONENT headers
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-  FILES_MATCHING PATTERN "*.h")
-install(DIRECTORY ${PROJECT_BINARY_DIR}/include/
-  COMPONENT headers
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-  FILES_MATCHING PATTERN "*.h" PATTERN "*.h.inc")
-install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
-  COMPONENT headers
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-  FILES_MATCHING PATTERN "*.td")
-install(DIRECTORY ${PROJECT_SOURCE_DIR}/python/
-  COMPONENT headers
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/python
-  FILES_MATCHING PATTERN "*.h")
