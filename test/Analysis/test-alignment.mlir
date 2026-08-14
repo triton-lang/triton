@@ -24,6 +24,8 @@ tt.func @bitcast_pointer_element_width(%arg0: !tt.ptr<f32> {tt.divisibility = 16
   %same_width = tt.bitcast %ptrs : tensor<128x!tt.ptr<f32>> -> tensor<128x!tt.ptr<i32>>
   // expected-remark @below {{contiguity = [1], divisibility = [4], constancy = [1], constant_value = <none>}}
   %cast = tt.bitcast %ptrs : tensor<128x!tt.ptr<f32>> -> tensor<128x!tt.ptr<f16>>
+  // expected-remark @below {{contiguity = [1], divisibility = [4], constancy = [1], constant_value = <none>}}
+  %cast_fp8 = tt.bitcast %cast : tensor<128x!tt.ptr<f16>> -> tensor<128x!tt.ptr<f8E4M3FN>>
   %byte_base = tt.splat %arg1 : !tt.ptr<i1> -> tensor<128x!tt.ptr<i1>>
   %byte_ptrs = tt.addptr %byte_base, %range : tensor<128x!tt.ptr<i1>>, tensor<128xi32>
   // Sub-byte and i8 pointers both use an effective one-byte element size.
