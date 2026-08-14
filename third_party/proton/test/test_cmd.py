@@ -4,6 +4,7 @@ import json
 import os
 import pathlib
 import sys
+from packaging.version import Version
 
 
 def clean_rocprofiler_env():
@@ -19,15 +20,19 @@ def clean_rocprofiler_env():
 
 
 def test_therock_runtime_library_variables():
+    try:
+        import rocm_sdk
+    except ImportError:
+        pytest.skip("Requires ROCm installed via TheRock wheels")
+    if Version(rocm_sdk.__version__).release[:2] <= (7, 12):
+        pytest.skip("Requires ROCm SDK newer than 7.12")
+
     script = r"""
 import ctypes
 import os
 import pathlib
 
-try:
-    import rocm_sdk
-except ImportError:
-    raise SystemExit(77)
+import rocm_sdk
 
 settings = {
     "amdhip64": ("TRITON_PROTON_HIP_LIB_PATH", "TRITON_PROTON_HIP_LIBRARY"),
@@ -36,17 +41,14 @@ settings = {
     "roctracer64": ("TRITON_ROCTRACER_LIB_PATH", "TRITON_ROCTRACER_LIBRARY"),
 }
 
-try:
-    amdhip = pathlib.Path(rocm_sdk.find_libraries("amdhip64")[0])
-    expected = {
-        "amdhip64": amdhip,
-        "hsa-runtime64": amdhip.parent / "libhsa-runtime64.so.1",
-        "rocprofiler-sdk": pathlib.Path(rocm_sdk.find_libraries("rocprofiler-sdk")[0]),
-        "roctracer64": pathlib.Path(rocm_sdk.find_libraries("roctracer64")[0]),
-    }
-    roctx = pathlib.Path(rocm_sdk.find_libraries("roctx64")[0])
-except (ModuleNotFoundError, FileNotFoundError):
-    raise SystemExit(77)
+amdhip = pathlib.Path(rocm_sdk.find_libraries("amdhip64")[0])
+expected = {
+    "amdhip64": amdhip,
+    "hsa-runtime64": amdhip.parent / "libhsa-runtime64.so.1",
+    "rocprofiler-sdk": pathlib.Path(rocm_sdk.find_libraries("rocprofiler-sdk")[0]),
+    "roctracer64": pathlib.Path(rocm_sdk.find_libraries("roctracer64")[0]),
+}
+roctx = pathlib.Path(rocm_sdk.find_libraries("roctx64")[0])
 
 import triton.profiler
 
@@ -60,8 +62,6 @@ assert os.environ["TRITON_ROCTX_LIBRARY"] == str(roctx)
 ctypes.CDLL(os.environ["TRITON_ROCTX_LIBRARY"])
 """
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, env=clean_rocprofiler_env(), text=True)
-    if result.returncode == 77:
-        pytest.skip("Requires ROCm installed via TheRock wheels")
     assert result.returncode == 0, result.stderr
 
 
