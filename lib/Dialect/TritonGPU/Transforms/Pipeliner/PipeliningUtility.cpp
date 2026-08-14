@@ -154,11 +154,18 @@ Value triton::sinkValueRedefinition(RewriterBase &rewriter, Value in, Value out,
 //===----------------------------------------------------------------------===//
 
 bool mlir::triton::loopHasDistGreaterThanOne(scf::ForOp forOp) {
-  return llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
-                      [](Value operand) {
-                        Operation *def = operand.getDefiningOp();
-                        return !def;
-                      });
+  // A yielded value has a loop-carried distance greater than one when tracing
+  // it back through the block-argument chain crosses more than one iteration
+  // boundary before reaching a real definition. `getDefinitionAndDistance`
+  // performs that walk and returns a null definition for values that carry no
+  // meaningful distance: the induction variable, implicit captures, and
+  // self-cycles such as a pass-through iter-arg yielded unchanged. Those must
+  // not disqualify the loop from pipelining, so only consider yielded values
+  // that resolve to an actual definition.
+  return llvm::any_of(forOp.getYieldedValues(), [&](Value operand) {
+    auto [def, distance] = getDefinitionAndDistance(forOp, operand);
+    return def && distance > 1;
+  });
 }
 
 bool mlir::triton::isOuterLoop(scf::ForOp forOp) {
