@@ -535,25 +535,6 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 
 
-### `ttng.cluster_arrive` (triton::nvidia_gpu::ClusterArriveOp)
-
-Syntax:
-
-```
-operation ::= `ttng.cluster_arrive` attr-dict
-```
-
-Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
-
-#### Attributes:
-
-<table>
-<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>relaxed</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
-</table>
-
-
-
 ### `ttng.cluster_barrier` (triton::nvidia_gpu::ClusterBarrierOp)
 
 _Synchronize all warps at cluster scope_
@@ -579,18 +560,6 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>relaxed</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
-
-
-
-### `ttng.cluster_wait` (triton::nvidia_gpu::ClusterWaitOp)
-
-Syntax:
-
-```
-operation ::= `ttng.cluster_wait` attr-dict
-```
-
-Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 
 

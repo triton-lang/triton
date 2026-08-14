@@ -148,10 +148,8 @@
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>input</strong> (<em>Tensor</em>) – The first input tensor.</p></li>
 <li><p><strong>other</strong> (<em>Tensor</em>) – The second input tensor.</p></li>
-<li><p><strong>can_reorder</strong> (<em>bool</em>) – Compiler hint. If true, the compiler is
-allowed to reorder elements while concatenating inputs.  Only use if the
-order does not matter (e.g., result is only used in reduction ops).</p></li>
-<li><p><strong>dim</strong> (<em>int</em>) – The dimension to concatenate along (used when can_reorder is False).</p></li>
+<li><p><strong>can_reorder</strong> (<em>bool</em>) – Ignored.</p></li>
+<li><p><strong>dim</strong> (<em>int</em>) – The dimension to concatenate along.</p></li>
 </ul>
 </dd>
 </dl>
