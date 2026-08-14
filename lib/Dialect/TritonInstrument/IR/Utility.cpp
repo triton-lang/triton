@@ -2,6 +2,8 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/IR/Dominance.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "triton/Analysis/BufferRegion.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -675,6 +677,10 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
 
   SmallVector<std::pair<Value, RegionInfo>> candidates[numMemTypes];
   DenseSet<Value> seenValues;
+  SmallVector<std::pair<Operation *, Value>> barrierInitializations;
+  SmallVector<std::pair<Operation *, Value>> barrierInvalidations;
+  SmallVector<std::pair<Operation *, Value>> barrierUses;
+  SmallVector<BufferRegion> payloadRegions;
   auto collectCandidates = [&](Value value) {
     SmallVector<Value> pending = {value};
     while (!pending.empty()) {
@@ -698,8 +704,30 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
     }
   };
   module.walk([&](Operation *op) {
-    for (const MemoryAccess &access : getMemoryAccesses(op))
+    std::optional<BarrierInitInfo> init = hooks.getBarrierInitInfo(op);
+    std::optional<BarrierInvalidateInfo> invalidate =
+        hooks.getBarrierInvalidateInfo(op);
+    if (init)
+      barrierInitializations.emplace_back(op, init->alloc);
+    if (invalidate)
+      barrierInvalidations.emplace_back(op, invalidate->alloc);
+
+    for (const MemoryAccess &access : getMemoryAccesses(op)) {
       collectCandidates(access.value);
+      if (!access.isShared())
+        continue;
+      if (access.isShared(SharedKind::Barrier)) {
+        barrierUses.emplace_back(op, access.value);
+        continue;
+      }
+      if ((init && access.value == init->alloc) ||
+          (invalidate && access.value == invalidate->alloc))
+        continue;
+      const RegionInfo &regionInfo =
+          analysis->getLatticeElement(access.value)->getValue();
+      for (const BufferRegionView &view : regionInfo.views)
+        payloadRegions.push_back(view.region);
+    }
 
     auto info = hooks.getMemEffectsOpInfo(op);
     if (!info)
@@ -709,8 +737,10 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
       hasAsyncCopyReads |= llvm::any_of(
           info->operandEffects,
           [](const MemEffectsOpInfo::Effects &e) { return e.rw == RW::Read; });
-    for (const auto &barrier : info->barriers)
+    for (const auto &barrier : info->barriers) {
       collectCandidates(barrier.barrier);
+      barrierUses.emplace_back(op, barrier.barrier);
+    }
   });
 
   analysis->calculateUsedBufferRegions(module);
@@ -726,8 +756,102 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
         analysis->getAllUsedBufferRegions(regionType);
     bool hasUnknown = analysis->hasUnknownUsedBufferRegions(regionType);
 
-    if (regions.empty() && !hasUnknown)
+    if (memType == MemType::SHARED_MEM && !hasUnknown &&
+        !hooks.barrierWritesInvalidate()) {
+      DominanceInfo dominance(module);
+      SmallVector<BufferRegion> fixedLifetimeBarriers;
+      for (const BufferRegion &barrier : barrierRegions) {
+        if (llvm::any_of(payloadRegions, [&](const BufferRegion &payload) {
+              return barrier.intersects(payload);
+            }))
+          continue;
+
+        auto overlapsBarrier = [&](Value value) {
+          const RegionInfo &info =
+              analysis->getLatticeElement(value)->getValue();
+          return info.isUnknown() ||
+                 llvm::any_of(info.views, [&](const BufferRegionView &view) {
+                   return barrier.intersects(view.region);
+                 });
+        };
+        if (llvm::any_of(barrierInvalidations, [&](const auto &invalidation) {
+              return overlapsBarrier(invalidation.second);
+            }))
+          continue;
+
+        Operation *initialization = nullptr;
+        bool hasAmbiguousInitialization = false;
+        for (const auto &[op, value] : barrierInitializations) {
+          if (!overlapsBarrier(value))
+            continue;
+          const RegionInfo &info =
+              analysis->getLatticeElement(value)->getValue();
+          if (initialization || info.views.size() != 1 ||
+              !info.views.begin()->region.contains(barrier)) {
+            hasAmbiguousInitialization = true;
+            break;
+          }
+          initialization = op;
+        }
+        if (!initialization || hasAmbiguousInitialization ||
+            initialization->getParentOfType<LoopLikeOpInterface>())
+          continue;
+
+        // An unstructured backedge can repeat an initialization without a
+        // LoopLikeOpInterface, so retain barriers in multi-block regions.
+        bool mayRepeat = false;
+        for (Operation *op = initialization; op && !isa<FuncOp>(op);
+             op = op->getParentOp()) {
+          if (!op->getParentRegion()->hasOneBlock()) {
+            mayRepeat = true;
+            break;
+          }
+        }
+        if (mayRepeat || llvm::any_of(barrierUses, [&](const auto &use) {
+              return use.first != initialization &&
+                     overlapsBarrier(use.second) &&
+                     !dominance.properlyDominates(initialization, use.first);
+            }))
+          continue;
+        fixedLifetimeBarriers.push_back(barrier);
+      }
+
+      // A runtime-selected descriptor cannot drop only some exact candidates:
+      // doing so would make the remaining candidate appear unconditional.
+      bool changed = true;
+      while (changed) {
+        changed = false;
+        for (const auto &[value, info] : candidates[iMemType]) {
+          bool hasFixedLifetime = false;
+          bool hasTrackedStorage = false;
+          for (const BufferRegionView &view : info.views) {
+            bool fixedLifetime =
+                llvm::is_contained(fixedLifetimeBarriers, view.region);
+            hasFixedLifetime |= fixedLifetime;
+            hasTrackedStorage |= !fixedLifetime;
+          }
+          if (!hasFixedLifetime || !hasTrackedStorage)
+            continue;
+          for (const BufferRegionView &view : info.views) {
+            auto it = llvm::find(fixedLifetimeBarriers, view.region);
+            if (it != fixedLifetimeBarriers.end()) {
+              fixedLifetimeBarriers.erase(it);
+              changed = true;
+            }
+          }
+        }
+      }
+
+      llvm::erase_if(regions, [&](const BufferRegion &region) {
+        return llvm::is_contained(fixedLifetimeBarriers, region);
+      });
+    }
+
+    if (regions.empty() && !hasUnknown) {
+      if (memType == MemType::SHARED_MEM)
+        barrierBufferMasks.resize(barrierRegions.size());
       continue;
+    }
 
     bufferStatePlans[iMemType] =
         triton::createBufferStatePlan(regions, hasUnknown);
@@ -735,6 +859,10 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
     if (memType == MemType::SHARED_MEM) {
       for (const BufferRegion &barrier : barrierRegions) {
         auto it = llvm::lower_bound(regions, barrier);
+        if (it == regions.end() || !(*it == barrier)) {
+          barrierBufferMasks.emplace_back(bufferStatePlans[iMemType].numLanes);
+          continue;
+        }
         unsigned id = std::distance(regions.begin(), it);
         barrierBufferMasks.push_back(
             bufferStatePlans[iMemType].regionMasks[id]);
@@ -748,6 +876,9 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
         const BufferRegion &candidate = view.region;
         auto it = llvm::lower_bound(regions, candidate);
         if (it == regions.end() || !(*it == candidate)) {
+          if (memType == MemType::SHARED_MEM &&
+              llvm::is_contained(barrierRegions, candidate))
+            continue;
           InFlightDiagnostic diag = emitError(
               value.getLoc(),
               "accessed exact buffer-region candidate is absent from the "
@@ -771,7 +902,9 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
           existing->mask |= bufferStatePlans[iMemType].regionMasks[id];
         }
       }
-      bufferCandidates[iMemType].try_emplace(value, std::move(stateCandidates));
+      if (stateCandidates.unknown || !stateCandidates.cases.empty())
+        bufferCandidates[iMemType].try_emplace(value,
+                                               std::move(stateCandidates));
     }
   }
   return success();

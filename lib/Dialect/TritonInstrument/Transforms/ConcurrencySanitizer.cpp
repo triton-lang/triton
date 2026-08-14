@@ -1130,6 +1130,9 @@ private:
       Value buf = effect.buf;
       bool isSharedMemory = isa<ttg::SharedMemorySpaceAttr>(
           cast<ttg::MemDescType>(buf.getType()).getMemorySpace());
+      if (isBarrierLifecycle && isSharedMemory &&
+          !auxData.bufferCandidates[(int)MemType::SHARED_MEM].contains(buf))
+        continue;
       bool invalidatesBarriers =
           isSharedMemory && hooks.barrierWritesInvalidate() &&
           effect.rw == RW::Write &&
@@ -1225,7 +1228,9 @@ private:
                     b, barrier, materializedEffects.front().effectCTAs)
               : getBarrierRecipientCTAs(b, op);
       Value completionBufferMask;
-      if (thread != baseThread) {
+      if (thread != baseThread &&
+          auxData.bufferCandidates[(int)MemType::SHARED_MEM].contains(
+              barrier)) {
         FailureOr<MaterializedEffect> completion =
             materializeBuffer(barrier, recipientCTAs,
                               /*selectBarrierStorage=*/false);
