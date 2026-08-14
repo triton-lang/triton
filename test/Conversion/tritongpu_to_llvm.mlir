@@ -182,6 +182,56 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
 
 // -----
 
+#blocked0 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: masked_scalarized_contiguous_load
+  tt.func @masked_scalarized_contiguous_load(%arg0: !tt.ptr<f32> {tt.divisibility = 4 : i32}, %arg1: i32) {
+    %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked0>
+    %base = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #blocked0>
+    %ptrs = tt.addptr %base, %range : tensor<128x!tt.ptr<f32>, #blocked0>, tensor<128xi32, #blocked0>
+    %limit = tt.splat %arg1 : i32 -> tensor<128xi32, #blocked0>
+    %mask = arith.cmpi slt, %range, %limit : tensor<128xi32, #blocked0>
+    %other = arith.constant dense<0.0> : tensor<128xf32, #blocked0>
+
+    // CHECK: ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
+    // CHECK: ld.global.b32 { ${{.*}} }, [ ${{.*}} + 4 ];
+    // CHECK: ld.global.b32 { ${{.*}} }, [ ${{.*}} + 8 ];
+    // CHECK: ld.global.b32 { ${{.*}} }, [ ${{.*}} + 12 ];
+    %0 = tt.load %ptrs, %mask, %other : tensor<128x!tt.ptr<f32>, #blocked0>
+    // CHECK: st.global.b32 [ ${{.*}} + 0 ]
+    // CHECK: st.global.b32 [ ${{.*}} + 4 ]
+    // CHECK: st.global.b32 [ ${{.*}} + 8 ]
+    // CHECK: st.global.b32 [ ${{.*}} + 12 ]
+    tt.store %ptrs, %0, %mask : tensor<128x!tt.ptr<f32>, #blocked0>
+    tt.return
+  }
+
+  // CHECK-LABEL: masked_scalarized_bitcast_load
+  tt.func @masked_scalarized_bitcast_load(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32) {
+    %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked0>
+    %base = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #blocked0>
+    %ptrs = tt.addptr %base, %range : tensor<128x!tt.ptr<f32>, #blocked0>, tensor<128xi32, #blocked0>
+    %cast = tt.bitcast %ptrs : tensor<128x!tt.ptr<f32>, #blocked0> -> tensor<128x!tt.ptr<f16>, #blocked0>
+    %limit = tt.splat %arg1 : i32 -> tensor<128xi32, #blocked0>
+    %mask = arith.cmpi slt, %range, %limit : tensor<128xi32, #blocked0>
+    %other = arith.constant dense<0.0> : tensor<128xf16, #blocked0>
+
+    // CHECK: ld.global.b16 { ${{.*}} }, [ ${{.*}} + 0 ];
+    // CHECK: ld.global.b16 { ${{.*}} }, [ ${{.*}} + 0 ];
+    // CHECK: ld.global.b16 { ${{.*}} }, [ ${{.*}} + 0 ];
+    // CHECK: ld.global.b16 { ${{.*}} }, [ ${{.*}} + 0 ];
+    %0 = tt.load %cast, %mask, %other : tensor<128x!tt.ptr<f16>, #blocked0>
+    // CHECK: st.global.b16 [ ${{.*}} + 0 ]
+    // CHECK: st.global.b16 [ ${{.*}} + 0 ]
+    // CHECK: st.global.b16 [ ${{.*}} + 0 ]
+    // CHECK: st.global.b16 [ ${{.*}} + 0 ]
+    tt.store %cast, %0, %mask : tensor<128x!tt.ptr<f16>, #blocked0>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
   // CHECK-LABEL: global_load_store_vec4
