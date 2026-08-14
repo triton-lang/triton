@@ -9,6 +9,13 @@ tt.func @fn(%v: i32) {
 
 // -----
 
+// expected-error @+1 {{pointer types must point to integer or floating-point types}}
+tt.func public @invalid_pointer_pointee(%arg0: !tt.ptr<index>) {
+  tt.return
+}
+
+// -----
+
 // Invalid bitcast between types of different bit width.
 tt.func public @fn(%arg0: tensor<128xf32>) {
     // expected-error @+1 {{Cannot bitcast data-type of size}}
