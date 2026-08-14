@@ -278,3 +278,33 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[RESULT:.*]] = scf.for
 // CHECK:           %[[IS_ONE:.*]] = arith.cmpi eq, %[[RESULT]],
 // CHECK:           tt.return %[[IS_ONE]] : i1
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @dontfold_widening_inner_bound() -> i1 {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c4 = arith.constant 4 : index
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c4_i32 = arith.constant 4 : i32
+    %outer:2 = scf.for %i = %c0 to %c4 step %c1
+        iter_args(%upper = %c1, %count = %c0_i32) -> (index, i32) {
+      %inner = scf.for %j = %c0 to %upper step %c1
+          iter_args(%value = %c0_i32) -> (i32) {
+        %next = arith.addi %value, %c1_i32 : i32
+        scf.yield %next : i32
+      }
+      %upper_next = arith.addi %upper, %c1 : index
+      scf.yield %upper_next, %inner : index, i32
+    }
+    %is_not_four = arith.cmpi ne, %outer#1, %c4_i32 : i32
+    tt.return %is_not_four : i1
+  }
+}
+
+// CHECK-LABEL:   tt.func @dontfold_widening_inner_bound
+// CHECK:           %[[OUTER:.*]]:2 = scf.for
+// CHECK:           %[[IS_NOT_FOUR:.*]] = arith.cmpi ne, %[[OUTER]]#1,
+// CHECK:           tt.return %[[IS_NOT_FOUR]] : i1

@@ -13,6 +13,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
+#include <algorithm>
 #include <numeric>
 #include <optional>
 
@@ -261,7 +262,6 @@ TritonIntegerRangeAnalysis::maybeGetTripCount(LoopLikeOpInterface loop) {
     return {};
 
   unsigned int width = ConstantIntRanges::getStorageBitwidth(iv->getType());
-  bool hasExactBounds = true;
 
   auto getLoopRangeInfo = [&](std::optional<OpFoldResult> loopBound,
                               Block *block,
@@ -274,14 +274,12 @@ TritonIntegerRangeAnalysis::maybeGetTripCount(LoopLikeOpInterface loop) {
       } else if (auto value = llvm::dyn_cast_if_present<Value>(*loopBound)) {
         const dataflow::IntegerValueRangeLattice *lattice =
             getLatticeElementFor(getProgramPointBefore(block), value);
-        if (lattice != nullptr && !lattice->getValue().isUninitialized()) {
-          const ConstantIntRanges &range = lattice->getValue().getValue();
-          hasExactBounds &= range.smin() == range.smax();
-          return getUpper.value_or(false) ? range.smax() : range.smin();
-        }
+        if (lattice != nullptr && !lattice->getValue().isUninitialized())
+          return getUpper.value_or(false)
+                     ? lattice->getValue().getValue().smax()
+                     : lattice->getValue().getValue().smin();
       }
     }
-    hasExactBounds = false;
     if (defaultVal)
       return *defaultVal;
     return getUpper.value_or(false) ? APInt::getSignedMaxValue(width)
@@ -312,10 +310,15 @@ TritonIntegerRangeAnalysis::maybeGetTripCount(LoopLikeOpInterface loop) {
     stepVal = stepValDefault;
   if (max.slt(min))
     return {};
+  // Widest bounds and smallest step give the largest number of iterations the
+  // loop can run. Over-estimating is safe because extra backedges only widen
+  // loop carried values; under-estimating is not. Loops which may not run at
+  // all are handled by always propagating the init args.
   int64_t tripCount = llvm::divideCeilSigned(
       max.getSExtValue() - min.getSExtValue(), stepVal.getSExtValue());
-  // We can only simulate a fixed number of backedges if we have exact bounds
-  if (!hasExactBounds && tripCount <= kDefaultMaxTripCount)
+  // A negative count means the subtraction above overflowed, i.e. we do not
+  // have a usable bound on the number of iterations.
+  if (tripCount < 0)
     return {};
   return tripCount;
 }
@@ -386,6 +389,22 @@ TritonIntegerRangeAnalysis::getTotalLoopTripCount(LoopLikeOpInterface loop) {
                            return accum * maybeGetTripCount(loop).value_or(
                                               kDefaultMaxTripCount + 1);
                          });
+}
+
+int64_t
+TritonIntegerRangeAnalysis::getLoopSimulationSteps(LoopLikeOpInterface loop) {
+  int64_t steps = getTotalLoopTripCount(loop);
+  // A lattice of this loop changes once per iteration, but also once for every
+  // step a nested loop needs to converge. This keeps the simulation steps
+  // bounded for deeply nested loops.
+  loop->walk([&](LoopLikeOpInterface nested) {
+    if (nested == loop)
+      return;
+    int64_t nestedSteps = getTotalLoopTripCount(nested);
+    if (nestedSteps <= kDefaultMaxTripCount)
+      steps = std::max(steps, nestedSteps);
+  });
+  return steps;
 }
 
 void TritonIntegerRangeAnalysis::setToEntryState(
@@ -656,29 +675,37 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
     lattices.push_back(
         static_cast<dataflow::IntegerValueRangeLattice *>(abstractLat));
   }
-  // Initialize loop trip counts
+  // Initialize the number of simulation steps
   LoopLikeOpInterface loop =
       llvm::dyn_cast<LoopLikeOpInterface>(branch.getOperation());
   if (loop) {
-    if (!loopTripCounts.contains(loop)) {
-      loopTripCounts[loop] = std::numeric_limits<int64_t>::max();
+    if (!loopSimulationSteps.contains(loop)) {
+      loopSimulationSteps[loop] = 0;
       for (auto argLat : lattices)
         loopVisits[{loop, argLat}] = 0;
     }
 
-    int64_t loopTripCount = getTotalLoopTripCount(loop);
+    int64_t steps = getLoopSimulationSteps(loop);
     LLVM_DEBUG({
-      DBGS() << "Trip count for ";
+      DBGS() << "Simulation steps for ";
       OpPrintingFlags flags;
       flags.skipRegions(true);
       loop->print(llvm::dbgs(), flags);
       llvm::dbgs() << "\n";
-      DBGS() << " --> " << loopTripCount << '\n';
+      DBGS() << " --> " << steps << '\n';
     });
-    if (loopTripCount < loopTripCounts[loop]) {
-      loopTripCounts[loop] = loopTripCount;
-    }
+    if (steps < 0)
+      steps = kDefaultMaxTripCount + 1;
+    // We can only widen the simulation steps (conservative).
+    loopSimulationSteps[loop] = std::max(loopSimulationSteps[loop], steps);
   }
+
+  // Loop iter_args need init values plus values from simulated iterations.
+  // Loop results need one extra backedge to observe the final iteration's yield
+  int64_t maxBackedges = 0;
+  if (loop)
+    maxBackedges = successor.isOperation() ? loopSimulationSteps[loop]
+                                           : loopSimulationSteps[loop] - 1;
 
   const auto *predecessors =
       getOrCreateFor<dataflow::PredecessorState>(point, point);
@@ -708,6 +735,8 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
   //
   for (Operation *op : predecessors->getKnownPredecessors()) {
     std::optional<OperandRange> operands;
+    // Loop init args are not backedges and should never be blocked or counted.
+    bool isBackedge = loop && op != branch.getOperation();
     if (op == branch) {
       operands = branch.getEntrySuccessorOperands(successor);
     } else if (auto regionTerminator =
@@ -754,19 +783,12 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
     for (auto [oper, argLat] :
          llvm::zip(*operands, ArrayRef(lattices).drop_front(firstIndex))) {
       std::pair loopArgLat = {loop, argLat};
-      // If we've "run the loop" #tripcount times, stop propagating.
-      bool reachedTripCount =
-          loop && loopVisits[loopArgLat] >= loopTripCounts[loop];
-      // However, if trip count is 0, we still need to initialize loop-carried
-      // values from the initial iter_args (so loop results equal initial
-      // values).
-      bool needsZeroTripInit = loop && loopTripCounts[loop] == 0 &&
-                               argLat->getValue().isUninitialized();
-      if (reachedTripCount && !needsZeroTripInit)
+      // If we've "run the loop" #maxBackedges times, stop propagating.
+      if (isBackedge && loopVisits[loopArgLat] >= maxBackedges)
         continue;
 
       ChangeResult changed;
-      if (loop && loopTripCounts[loop] > kDefaultMaxTripCount) {
+      if (loop && loopSimulationSteps[loop] > kDefaultMaxTripCount) {
         // If the loop's tripcount is too large, infer the maximum range for
         // the arg lattices. This will have the effect that all users will
         // also be inferred to have maximum range and end the analysis will
@@ -793,9 +815,7 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
       // lattice because otherwise we will over count the number of visits
       // (since not all iter_arg lattices are updated/propagated on each
       // visit).
-      // For initial iterations of zero trip count loops we do not increment
-      // the visit count to avoid overcounting.
-      if (loop && changed == ChangeResult::Change && !needsZeroTripInit)
+      if (isBackedge && changed == ChangeResult::Change)
         ++loopVisits[loopArgLat];
     }
   }
