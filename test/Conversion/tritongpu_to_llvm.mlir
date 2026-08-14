@@ -47,10 +47,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: vectorized_load_f16
   tt.func @vectorized_load_f16(%a_ptr_init: tensor<256x!tt.ptr<f16>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf16, #blocked0>) {
     // CHECK: llvm.inline_asm
-    // CHECK-SAME: ld.global.b16
+    // CHECK-SAME: mov.u16 $0, $1;\0A\09@$3 ld.global.b16 { $0 }, [ $2 + 0 ];", "=c,c,l,b"
     // CHECK: llvm.inline_asm
     // CHECK-SAME: ld.global.b16
     %1 = tt.load %a_ptr_init, %cst, %cst_0 : tensor<256x!tt.ptr<f16>, #blocked0>
+    tt.return
+  }
+
+  // CHECK-LABEL: masked_multiword_f16
+  tt.func @masked_multiword_f16(%ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %bound: i32 {tt.divisibility = 8 : i32}, %fallback: f16) {
+    %offsets = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
+    %base = tt.splat %ptr : !tt.ptr<f16> -> tensor<256x!tt.ptr<f16>, #blocked0>
+    %ptrs = tt.addptr %base, %offsets : tensor<256x!tt.ptr<f16>, #blocked0>, tensor<256xi32, #blocked0>
+    %bounds = tt.splat %bound : i32 -> tensor<256xi32, #blocked0>
+    %mask = arith.cmpi slt, %offsets, %bounds : tensor<256xi32, #blocked0>
+    %other = tt.splat %fallback : f16 -> tensor<256xf16, #blocked0>
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: @$9 ld.global.v4.b32 { $0, $1, $2, $3 }, [ $8 + 0 ];", "=r,=r,=r,=r,0,1,2,3,l,b"
+    %values = tt.load %ptrs, %mask, %other : tensor<256x!tt.ptr<f16>, #blocked0>
+    tt.store %ptrs, %values, %mask : tensor<256x!tt.ptr<f16>, #blocked0>
     tt.return
   }
 }
