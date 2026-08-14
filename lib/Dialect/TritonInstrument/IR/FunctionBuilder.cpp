@@ -387,6 +387,27 @@ Value createCurrentCTAMask(ImplicitLocOpBuilder &b) {
                                ctaId);
 }
 
+Value createTrackingOriginPhasePointer(ImplicitLocOpBuilder &b,
+                                       Value trackingPtr,
+                                       RankedTensorType trackingType,
+                                       RankedTensorType bankType,
+                                       Value originId, int phase) {
+  assert(trackingType.getRank() == 6 && trackingType.getShape()[5] == 2 &&
+         "expected origin CTA followed by the two barrier phases");
+  int64_t numOrigins = trackingType.getShape()[4];
+  Value bankIndex = originId;
+  if (phase != 0) {
+    Value phaseOriginOffset =
+        arith::ConstantIntOp::create(b, phase * numOrigins, 32);
+    bankIndex = arith::AddIOp::create(b, bankIndex, phaseOriginOffset);
+  }
+  Value bankElements =
+      arith::ConstantIntOp::create(b, bankType.getNumElements(), 32);
+  Value elementOffset = arith::MulIOp::create(b, bankIndex, bankElements);
+  return triton::AddPtrOp::create(b, trackingPtr.getType(), trackingPtr,
+                                  elementOffset);
+}
+
 Value createCTASetMask(ImplicitLocOpBuilder &b, RankedTensorType tensorType,
                        int dim, Value ctas) {
   int numCTAs = ttg::lookupNumCTAs(b);
@@ -1826,14 +1847,38 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
                                       /*currentCTAOnly=*/false);
 
         if (hasReadTracking) {
-          Value readTracking = tti::createLoadScratchMemory(
-              fb, fb.getLoc(), readTrackingPtr, readTrackingType);
-          Value trackingRows = createReaderRows(readTrackingType);
-          Value newTracking =
-              clearReader(readTracking, readTrackingType, trackingRows);
-          tti::createStoreScratchMemory(fb, fb.getLoc(), readTrackingPtr,
-                                        newTracking, readTrackingType,
-                                        /*currentCTAOnly=*/false);
+          if (readTrackingType.getShape()[4] == 1) {
+            Value readTracking = tti::createLoadScratchMemory(
+                fb, fb.getLoc(), readTrackingPtr, readTrackingType);
+            Value trackingRows = createReaderRows(readTrackingType);
+            Value newTracking =
+                clearReader(readTracking, readTrackingType, trackingRows);
+            tti::createStoreScratchMemory(fb, fb.getLoc(), readTrackingPtr,
+                                          newTracking, readTrackingType,
+                                          /*currentCTAOnly=*/false);
+          } else {
+            RankedTensorType bankType =
+                tti::getSlicedTensorType(readTrackingType, {0, 1, 2, 3},
+                                         readTrackingType.getElementType());
+            Value trackingRows =
+                convertAndBroadcast(fb, bufferMask, {1}, bankType);
+            Value ownerMask =
+                createCTASetMask(fb, bankType, /*dim=*/0, effectCTAs);
+            trackingRows = arith::AndIOp::create(fb, trackingRows, ownerMask);
+            Value originId =
+                tti::ExperimentalClusterCTAIdOp::create(fb, fb.getLoc());
+            for (int phase = 0; phase < 2; ++phase) {
+              Value bankPtr = createTrackingOriginPhasePointer(
+                  fb, readTrackingPtr, readTrackingType, bankType, originId,
+                  phase);
+              Value tracking = tti::createLoadScratchMemory(fb, fb.getLoc(),
+                                                            bankPtr, bankType);
+              Value updated = clearReader(tracking, bankType, trackingRows);
+              tti::createStoreScratchMemory(fb, fb.getLoc(), bankPtr, updated,
+                                            bankType,
+                                            /*currentCTAOnly=*/false);
+            }
+          }
         }
 
         fb.setInsertionPointToEnd(thenBlock);
@@ -2949,27 +2994,55 @@ void FunctionBuilder::createSetProxyAccessCall(ImplicitLocOpBuilder &b,
         // barrier snapshots from either phase as well, so an old publication
         // cannot mask it.
         if (hasTracking) {
-          Value tracking = tti::createLoadScratchMemory(
-              fb, fb.getLoc(), trackingPtr, trackingType);
-          Value trackingBuffers =
-              convertAndBroadcast(fb, bufferVector, {1}, trackingType);
-          Value trackingBufferCTAMask =
-              createCTASetMask(fb, trackingType, /*dim=*/0, effectCTAs);
-          Value trackingOriginCTAMask =
-              createCTASetMask(fb, trackingType, /*dim=*/4, currentCTA);
-          Value trackingMask =
-              arith::AndIOp::create(fb, trackingBuffers, trackingBufferCTAMask);
-          trackingMask =
-              arith::AndIOp::create(fb, trackingMask, trackingOriginCTAMask);
-          Value trackingClear =
-              triton::SplatOp::create(fb, trackingType, clearFencedScalar);
-          Value clearedTracking =
-              arith::AndIOp::create(fb, tracking, trackingClear);
-          Value updatedTracking = arith::SelectOp::create(
-              fb, trackingMask, clearedTracking, tracking);
-          tti::createStoreScratchMemory(fb, fb.getLoc(), trackingPtr,
-                                        updatedTracking, trackingType,
-                                        /*currentCTAOnly=*/false);
+          if (trackingType.getShape()[4] == 1) {
+            Value tracking = tti::createLoadScratchMemory(
+                fb, fb.getLoc(), trackingPtr, trackingType);
+            Value trackingBuffers =
+                convertAndBroadcast(fb, bufferVector, {1}, trackingType);
+            Value trackingBufferCTAMask =
+                createCTASetMask(fb, trackingType, /*dim=*/0, effectCTAs);
+            Value trackingOriginCTAMask =
+                createCTASetMask(fb, trackingType, /*dim=*/4, currentCTA);
+            Value trackingMask = arith::AndIOp::create(fb, trackingBuffers,
+                                                       trackingBufferCTAMask);
+            trackingMask =
+                arith::AndIOp::create(fb, trackingMask, trackingOriginCTAMask);
+            Value trackingClear =
+                triton::SplatOp::create(fb, trackingType, clearFencedScalar);
+            Value clearedTracking =
+                arith::AndIOp::create(fb, tracking, trackingClear);
+            Value updatedTracking = arith::SelectOp::create(
+                fb, trackingMask, clearedTracking, tracking);
+            tti::createStoreScratchMemory(fb, fb.getLoc(), trackingPtr,
+                                          updatedTracking, trackingType,
+                                          /*currentCTAOnly=*/false);
+          } else {
+            RankedTensorType bankType = tti::getSlicedTensorType(
+                trackingType, {0, 1, 2, 3}, trackingType.getElementType());
+            Value trackingBuffers =
+                convertAndBroadcast(fb, bufferVector, {1}, bankType);
+            Value ownerMask =
+                createCTASetMask(fb, bankType, /*dim=*/0, effectCTAs);
+            Value trackingMask =
+                arith::AndIOp::create(fb, trackingBuffers, ownerMask);
+            Value trackingClear =
+                triton::SplatOp::create(fb, bankType, clearFencedScalar);
+            Value originId =
+                tti::ExperimentalClusterCTAIdOp::create(fb, fb.getLoc());
+            for (int phase = 0; phase < 2; ++phase) {
+              Value bankPtr = createTrackingOriginPhasePointer(
+                  fb, trackingPtr, trackingType, bankType, originId, phase);
+              Value tracking = tti::createLoadScratchMemory(fb, fb.getLoc(),
+                                                            bankPtr, bankType);
+              Value clearedTracking =
+                  arith::AndIOp::create(fb, tracking, trackingClear);
+              Value updated = arith::SelectOp::create(
+                  fb, trackingMask, clearedTracking, tracking);
+              tti::createStoreScratchMemory(fb, fb.getLoc(), bankPtr, updated,
+                                            bankType,
+                                            /*currentCTAOnly=*/false);
+            }
+          }
         }
 
         fb.setInsertionPointToEnd(thenBlock);
