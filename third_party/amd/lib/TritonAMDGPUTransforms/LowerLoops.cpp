@@ -182,10 +182,6 @@ StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
   return {newLoadOp, viewLoad, storeOp, maybeLocalLoad};
 }
 
-static ttg::SharedEncodingTrait
-clampSwizzleForDirectToLds(RankedTensorType srcTy, ttg::SharedEncodingTrait enc,
-                           const tt::AMD::TargetInfo &targetInfo);
-
 // Adapted from
 // lib/Dialect/TritonGPU/Transforms/Utility.cpp::getSharedEncIfAllUsersAreDotEnc
 // to support AMDMfmaEncodingAttr.
@@ -357,17 +353,6 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
   }
 
   LDBG("Deduced shared encoding: " << maxVecSharedEnc);
-
-  // On GFX9 the direct-to-LDS lowering models the shared swizzle as a
-  // within-warp lane shuffle. If the deduced swizzle would shuffle across the
-  // warp boundary (e.g. a bf16 kWidth=8 operand feeding an f32 async copy),
-  // shrink its maxPhase so the shuffle stays valid instead of miscompiling into
-  // an out-of-bounds global read.
-  if (useAsyncCopy && !targetInfo.supportsDirectToLdsScatter())
-    if (auto ld = dyn_cast<tt::LoadOp>(loadOp))
-      if (auto srcTy = dyn_cast<RankedTensorType>(ld.getResult().getType()))
-        maxVecSharedEnc =
-            clampSwizzleForDirectToLds(srcTy, maxVecSharedEnc, targetInfo);
 
   return maxVecSharedEnc;
 }
@@ -597,13 +582,32 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
     if (!loadOp && !descLoadOp && !gatherOp)
       continue;
 
-    // Create an allocation that can hold distance number of loadOp shapes.
     auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
-    Value alloc = triton::createAlloc(forOp, ty, op->getLoc(),
-                                      info.sharedEncoding, numBuffers);
-    assert(alloc && "Failed to create alloc for the async load.");
     triton::AMD::TargetInfo targetInfo(
         getAMDArch(op->getParentOfType<ModuleOp>()));
+
+    ttg::SharedEncodingTrait sharedEncoding = info.sharedEncoding;
+    bool canUseAsyncCopy =
+        loadOp && useAsyncCopy &&
+        canBeConvertedToAsyncLoad(numBuffers, loadOp, sharedEncoding,
+                                  axisInfoAnalysis, targetInfo);
+    if (canUseAsyncCopy && !targetInfo.supportsDirectToLdsScatter()) {
+      sharedEncoding =
+          clampSwizzleForDirectToLds(ty, sharedEncoding, targetInfo);
+      // Clamping changes the shared layout used by the final eligibility
+      // check, so verify that the load remains convertible.
+      canUseAsyncCopy = canBeConvertedToAsyncLoad(
+          numBuffers, loadOp, sharedEncoding, axisInfoAnalysis, targetInfo);
+    }
+
+    // Create the allocation only after final async-copy eligibility is known.
+    // Stream copies retain the original encoding; only the direct-to-LDS path
+    // uses the clamped encoding.
+    if (!canUseAsyncCopy)
+      sharedEncoding = info.sharedEncoding;
+    Value alloc = triton::createAlloc(forOp, ty, op->getLoc(), sharedEncoding,
+                                      numBuffers);
+    assert(alloc && "Failed to create alloc for the async load.");
 
     // Replace the old load with multi-buffered loads
     if (descLoadOp) {
@@ -615,9 +619,7 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
       continue;
     }
 
-    if (useAsyncCopy &&
-        canBeConvertedToAsyncLoad(numBuffers, loadOp, info.sharedEncoding,
-                                  axisInfoAnalysis, targetInfo)) {
+    if (canUseAsyncCopy) {
       unsigned vec = axisInfoAnalysis.getContiguity(loadOp.getPtr());
       if (auto mask = loadOp.getMask())
         vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
