@@ -1211,6 +1211,7 @@ def test_tma_wait_tracks_only_waited_barrier(FAILURE, device, run_wrapper, monke
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.disable_warmup(reason="phase-aware multi-CTA instrumentation exceeds the Blackwell warmup budget")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_tma_wait_tracks_only_requested_phase(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
