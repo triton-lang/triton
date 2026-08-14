@@ -1276,4 +1276,5 @@ def test_host_tma_reduce_updates_atomic_shadow(with_gsan):
     torch.cuda.synchronize()
 
     torch.testing.assert_close(target, src)
-    _assert_atomic_rmw_shadow(target[0, 0].data_ptr(), AtomicScope.GPU, is_release=False)
+    for col in range(block_y):
+        _assert_atomic_rmw_shadow(target[0, col].data_ptr(), AtomicScope.GPU, is_release=False)
