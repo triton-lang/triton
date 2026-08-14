@@ -27,8 +27,22 @@ public:
 
   LogicalResult matchAndRewrite(ConvertLayoutOp cvtOp,
                                 PatternRewriter &rewriter) const override {
-    if (!cvtOp->hasOneUse() ||
-        !isa<triton::DotOp>(cvtOp->use_begin()->getOwner()))
+    // The rewrite below only reassigns `cvtOp`'s *source*; the result of
+    // `cvtOp` keeps its type (and its DotOperandEncodingAttr) unchanged, and
+    // none of its users are modified. Correctness therefore rests entirely on
+    // the encoding inference below, which is a pure function of the dot-operand
+    // encoding, the pre-transpose source type and the transpose order -- it
+    // never inspects the consuming op. So we can accept any dot-like consumer
+    // (tt.dot, tt.dot_scaled, ttng.warp_group_dot, ...) rather than only
+    // tt.dot, and we can accept several of them sharing the same convert.
+    //
+    // We still require *every* user to be dot-like: the shared-memory
+    // round-trip we introduce is only a win when the value is consumed as an
+    // MMA operand, and a non-dot user would pay for it without benefiting.
+    if (cvtOp->use_empty() ||
+        !llvm::all_of(cvtOp->getUsers(), [](Operation *user) {
+          return isa<triton::DotOpInterface>(user);
+        }))
       return failure();
     // Match outerCvt(trans(innerCvt(x))).
     auto trans = cvtOp.getSrc().getDefiningOp<TransOp>();
