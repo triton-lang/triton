@@ -9,14 +9,17 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <shared_mutex>
+#include <string>
 #include <unordered_map>
 #include <utility>
 
 namespace proton {
 
 class Data;
+class PendingGraphPool;
 class Runtime;
 
 struct NodeStatus {
@@ -86,6 +89,17 @@ struct GraphState {
   bool captureStatusChecked{};
   // Total number of uint64 words written by all metric nodes in this graph.
   size_t numMetricWords{};
+
+  void recordNode(uint64_t nodeId, const std::string &name,
+                  std::optional<MetricNodeState> metricNodeState,
+                  const std::set<Data *> &dataSet, bool isApiExternOp);
+
+  void buildLaunchEntries(const DataToEntryMap &dataToEntry,
+                          DataToEntryMap &dataToGraphEntry) const;
+
+  void queueMetrics(PendingGraphPool *pendingGraphPool,
+                    const DataToEntryMap *dataToGraphEntry,
+                    bool flushIfNeeded) const;
 };
 
 struct PendingGraphQueue {
