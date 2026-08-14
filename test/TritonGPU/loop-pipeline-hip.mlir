@@ -485,10 +485,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
     %cst_1 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    // The pid-like argument is nonnegative; `arith.remsi` only keeps its
+    // contiguity for nonnegative numerators.
+    %arg1_nonneg = arith.cmpi sge, %arg1, %c0_i32 : i32
+    llvm.intr.assume %arg1_nonneg : i1
     %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
-    %1 = arith.muli %arg1, %c64_i32 : i32
+    %1 = arith.muli %arg1, %c64_i32 overflow<nsw> : i32
     %2 = tt.splat %1 : i32 -> tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
-    %3 = arith.addi %2, %0 : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
+    %3 = arith.addi %2, %0 overflow<nsw> : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
     %4 = tt.splat %arg6 : i32 -> tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
     %5 = arith.remsi %3, %4 : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
     %6 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>

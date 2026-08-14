@@ -59,6 +59,162 @@ int64_t getDivisibilityFromContiguity(const AxisInfo &lhs, const AxisInfo &rhs,
   }
 }
 
+// Returns true if `v` is provably nonnegative for every element.
+//
+// This is a deliberately cheap, purely local syntactic check: AxisInfo runs as
+// part of the `to-llvm` lowering, i.e. after `scf-to-cf`, so a general
+// SCF-oriented integer-range analysis is not available to us here.  We only
+// need soundness plus enough coverage to keep the common indexing idioms
+// (`tt.make_range`, program ids, and the affine expressions built on top of
+// them) out of the pessimistic path.
+//
+// Any value we cannot classify is treated as possibly negative.
+static bool isProvablyNonNegative(Value v, int depth = 0) {
+  // Bound the recursion so pathological expression trees cannot blow up
+  // compile time.
+  constexpr int kMaxDepth = 6;
+  if (depth > kMaxDepth)
+    return false;
+
+  // An unsigned-typed value is nonnegative by construction. Note Triton/MLIR
+  // integers are signless, so this only fires for genuinely unsigned types.
+  if (auto intTy = dyn_cast<IntegerType>(getElementTypeOrSelf(v.getType())))
+    if (intTy.isUnsigned())
+      return true;
+
+  // An `llvm.intr.assume` of `v >= 0` / `v > 0` anywhere in the same function
+  // lets us treat `v` as nonnegative. Scanning the users of `v` keeps this
+  // cheap, and covers the idiom kernels use to declare that a size or an
+  // index base is nonnegative. This works for block arguments too, which is
+  // why it runs before the defining-op checks below.
+  for (Operation *user : v.getUsers()) {
+    auto cmpOp = dyn_cast<arith::CmpIOp>(user);
+    if (!cmpOp || cmpOp.getLhs() != v)
+      continue;
+    auto pred = cmpOp.getPredicate();
+    if (pred != arith::CmpIPredicate::sge && pred != arith::CmpIPredicate::sgt)
+      continue;
+    // The bound must itself be nonnegative for the assumption to imply
+    // nonnegativity (`v >= -5` says nothing useful). `sgt` against 0 or more
+    // is fine; `sge` needs a nonnegative bound as well.
+    auto boundOp = cmpOp.getRhs().getDefiningOp<arith::ConstantOp>();
+    if (!boundOp)
+      continue;
+    auto boundAttr = dyn_cast<IntegerAttr>(boundOp.getValue());
+    if (!boundAttr)
+      continue;
+    bool boundImpliesNonNegative = pred == arith::CmpIPredicate::sge
+                                       ? boundAttr.getValue().isNonNegative()
+                                       : boundAttr.getValue().sge(-1);
+    if (!boundImpliesNonNegative)
+      continue;
+    // Only trust the comparison if it actually feeds an assume. Require the
+    // assume to sit in the entry block of the enclosing function so that it is
+    // unconditionally executed; an assume nested inside control flow only
+    // holds on the paths that reach it.
+    for (Operation *cmpUser : cmpOp.getResult().getUsers()) {
+      if (cmpUser->getName().getStringRef() != "llvm.intr.assume")
+        continue;
+      auto funcOp = cmpUser->getParentOfType<FunctionOpInterface>();
+      if (funcOp && !funcOp.getFunctionBody().empty() &&
+          cmpUser->getBlock() == &funcOp.getFunctionBody().front())
+        return true;
+    }
+  }
+
+  Operation *defOp = v.getDefiningOp();
+  if (!defOp)
+    return false;
+
+  // Splat/broadcast/reshape/expand_dims and friends are element-preserving, so
+  // nonnegativity passes straight through.
+  if (isa<triton::SplatOp, triton::BroadcastOp, triton::ExpandDimsOp,
+          triton::ReshapeOp, triton::TransOp>(defOp))
+    return isProvablyNonNegative(defOp->getOperand(0), depth + 1);
+
+  // `tt.make_range` has a statically known start, and is ascending, so the
+  // whole range is nonnegative exactly when the start is.  Note getStart()
+  // returns uint32_t even though the attribute is signed, so go through the
+  // attribute to get the correctly-signed value.
+  if (auto rangeOp = dyn_cast<triton::MakeRangeOp>(defOp))
+    return rangeOp.getStartAttr().getInt() >= 0;
+
+  // Program ids and the number of programs are nonnegative by definition.
+  if (isa<triton::GetProgramIdOp, triton::GetNumProgramsOp>(defOp))
+    return true;
+
+  // Constants: check the actual value(s).
+  if (auto constOp = dyn_cast<arith::ConstantOp>(defOp)) {
+    Attribute value = constOp.getValue();
+    if (auto intAttr = dyn_cast<IntegerAttr>(value))
+      return intAttr.getValue().isNonNegative();
+    if (auto denseAttr = dyn_cast<DenseIntElementsAttr>(value)) {
+      return llvm::all_of(denseAttr.getValues<APInt>(),
+                          [](const APInt &v) { return v.isNonNegative(); });
+    }
+    return false;
+  }
+
+  // Closure properties. Addition and multiplication preserve nonnegativity
+  // only in the absence of signed wraparound, so require the `nsw` flag; the
+  // index arithmetic Triton generates carries it.
+  if (isa<arith::AddIOp, arith::MulIOp>(defOp)) {
+    auto iface = dyn_cast<arith::ArithIntegerOverflowFlagsInterface>(defOp);
+    if (!iface || !iface.hasNoSignedWrap())
+      return false;
+    return isProvablyNonNegative(defOp->getOperand(0), depth + 1) &&
+           isProvablyNonNegative(defOp->getOperand(1), depth + 1);
+  }
+
+  // Truncating division and remainder of nonnegative operands stay
+  // nonnegative, as do the unsigned variants (whose results are nonnegative
+  // whenever they fit in the signed range -- which the operands being
+  // nonnegative guarantees).
+  if (isa<arith::DivSIOp, arith::RemSIOp, arith::DivUIOp, arith::RemUIOp>(
+          defOp))
+    return isProvablyNonNegative(defOp->getOperand(0), depth + 1) &&
+           isProvablyNonNegative(defOp->getOperand(1), depth + 1);
+
+  // max(a, b) is nonnegative as soon as either side is; min(a, b) needs both.
+  if (isa<arith::MaxSIOp>(defOp))
+    return isProvablyNonNegative(defOp->getOperand(0), depth + 1) ||
+           isProvablyNonNegative(defOp->getOperand(1), depth + 1);
+  if (isa<arith::MinSIOp>(defOp))
+    return isProvablyNonNegative(defOp->getOperand(0), depth + 1) &&
+           isProvablyNonNegative(defOp->getOperand(1), depth + 1);
+
+  // Unsigned max/min return one of their operands unchanged, so the result is
+  // nonnegative when both inputs are.
+  if (isa<arith::MaxUIOp, arith::MinUIOp>(defOp))
+    return isProvablyNonNegative(defOp->getOperand(0), depth + 1) &&
+           isProvablyNonNegative(defOp->getOperand(1), depth + 1);
+
+  // A logical shift right by a nonzero amount clears the sign bit, so the
+  // result is nonnegative regardless of the input's sign.
+  if (auto shrOp = dyn_cast<arith::ShRUIOp>(defOp)) {
+    if (auto rhsConst = shrOp.getRhs().getDefiningOp<arith::ConstantOp>()) {
+      if (auto intAttr = dyn_cast<IntegerAttr>(rhsConst.getValue()))
+        if (intAttr.getValue().isStrictlyPositive())
+          return true;
+      if (auto denseAttr =
+              dyn_cast<DenseIntElementsAttr>(rhsConst.getValue())) {
+        if (llvm::all_of(denseAttr.getValues<APInt>(), [](const APInt &v) {
+              return v.isStrictlyPositive();
+            }))
+          return true;
+      }
+    }
+    return isProvablyNonNegative(shrOp.getLhs(), depth + 1);
+  }
+
+  // `select` is nonnegative when both arms are.
+  if (auto selOp = dyn_cast<arith::SelectOp>(defOp))
+    return isProvablyNonNegative(selOp.getTrueValue(), depth + 1) &&
+           isProvablyNonNegative(selOp.getFalseValue(), depth + 1);
+
+  return false;
+}
+
 // Base class for all operations
 template <typename OpTy> class AxisInfoVisitorImpl : public AxisInfoVisitor {
 public:
@@ -440,8 +596,25 @@ private:
     // the minimal constancy is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual constancy.
+    //
+    // This plateau argument relies on the quotient being constant on aligned
+    // blocks of `gcd(...)` elements, which only holds when the numerator is
+    // nonnegative.  `arith.divsi` truncates toward zero, so on the negative
+    // side the plateaus are shifted by one and are no longer aligned to
+    // multiples of the divisor:
+    //
+    //   a    : ... -17 -16 -15 ...  -9  -8  -7 ...  -1   0   1 ...   7   8
+    //   a / 8: ...  -2  -2  -1 ...  -1  -1   0 ...   0   0   0 ...   0   1
+    //
+    // The plateaus on the negative side start at -7, -15, -23, ... rather than
+    // at multiples of 8, so no nontrivial constancy is guaranteed. Note that
+    // this is about the *numerator* only: a negative divisor is harmless
+    // because the quotient's plateau structure depends solely on the sign of
+    // the numerator.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim) &&
+        (!std::is_same_v<OpTy, arith::DivSIOp> ||
+         isProvablyNonNegative(op.getLhs()))) {
       constancy = std::max(constancy,
                            gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                                rhs.getDivisibility(dim)));
@@ -501,8 +674,21 @@ private:
     // The minimal contiguity is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual contiguity.
+    //
+    // As with `divsi`, the run-of-consecutive-values argument requires a
+    // nonnegative numerator. `arith.remsi` takes the sign of the dividend, so
+    // a contiguous negative input wraps at zero rather than at a multiple of
+    // the divisor:
+    //
+    //   a      : -64 -63 -62 ... -33  -32 -31 ...  -1   0   1
+    //   a % 32 :   0 -31 -30 ...  -1    0 -31 ...  -1   0   1
+    //
+    // The run restarts at a = -64 (giving 0, -31, -30, ...), which is not a
+    // contiguous ascending run, so no nontrivial contiguity is guaranteed.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim) &&
+        (!std::is_same_v<OpTy, arith::RemSIOp> ||
+         isProvablyNonNegative(op.getLhs()))) {
       contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                        rhs.getDivisibility(dim));
     }
@@ -516,6 +702,11 @@ private:
       // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
       // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
       // r must be divisible by gcd(d_lhs, d_rhs)
+      //
+      // Unlike the contiguity rule above, this stays valid for negative
+      // operands: r = lhs - (lhs / rhs) * rhs is an integer combination of lhs
+      // and rhs, so it is divisible by gcd(d_lhs, d_rhs) whatever the signs
+      // and whichever way the division rounds.
       return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
     }
     // Otherwise we shouldn't assume any divisibility.

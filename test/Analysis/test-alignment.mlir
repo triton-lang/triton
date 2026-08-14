@@ -275,6 +275,134 @@ tt.func @rem() {
 
 // -----
 
+// `arith.divsi` truncates toward zero, so the plateaus of the quotient are
+// only aligned to multiples of the divisor when the numerator is nonnegative.
+tt.func @divsi_negative() {
+  // A range that is entirely negative: [-128, -1].
+  // expected-remark @below {{contiguity = [128], divisibility = [128], constancy = [1], constant_value = <none>}}
+  %0 = tt.make_range {end = 0 : i32, start = -128 : i32} : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [128], constant_value = 64}}
+  %1 = arith.constant dense<64> : tensor<128xi32>
+  // Truncation toward zero makes the negative plateaus start at -63, -127, ...
+  // rather than at multiples of 64, so no constancy can be claimed.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %2 = arith.divsi %0, %1 : tensor<128xi32>
+
+  // A range straddling zero: [-64, 63]. Same conclusion.
+  // expected-remark @below {{contiguity = [128], divisibility = [64], constancy = [1], constant_value = <none>}}
+  %3 = tt.make_range {end = 64 : i32, start = -64 : i32} : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %4 = arith.divsi %3, %1 : tensor<128xi32>
+
+  // A nonnegative range keeps the original, still-sound constancy.
+  // expected-remark @below {{contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
+  %5 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [64], constant_value = <none>}}
+  %6 = arith.divsi %5, %1 : tensor<128xi32>
+
+  // The sign of the *divisor* does not matter: with a nonnegative numerator
+  // the plateau structure is unchanged, so constancy is still provable.
+  // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [128], constant_value = -64}}
+  %7 = arith.constant dense<-64> : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [64], constant_value = <none>}}
+  %8 = arith.divsi %5, %7 : tensor<128xi32>
+
+  // ... but a negative numerator with a negative divisor is still unprovable.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %9 = arith.divsi %0, %7 : tensor<128xi32>
+
+  // `divui` is unaffected: the operands are unsigned bit patterns.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [64], constant_value = <none>}}
+  %10 = arith.divui %0, %1 : tensor<128xi32>
+  tt.return
+}
+
+// -----
+
+// `arith.remsi` takes the sign of the dividend, so a contiguous negative input
+// wraps at zero instead of at a multiple of the divisor.
+tt.func @remsi_negative() {
+  // expected-remark @below {{contiguity = [128], divisibility = [128], constancy = [1], constant_value = <none>}}
+  %0 = tt.make_range {end = 0 : i32, start = -128 : i32} : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [128], constant_value = 64}}
+  %1 = arith.constant dense<64> : tensor<128xi32>
+  // [-128, -127, ...] % 64 = [0, -63, -62, ...], which is not a contiguous
+  // ascending run, so no contiguity can be claimed. Divisibility survives:
+  // the remainder is still an integer combination of the two operands.
+  // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = <none>}}
+  %2 = arith.remsi %0, %1 : tensor<128xi32>
+
+  // A range straddling zero: [-64, 63]. Same conclusion.
+  // expected-remark @below {{contiguity = [128], divisibility = [64], constancy = [1], constant_value = <none>}}
+  %3 = tt.make_range {end = 64 : i32, start = -64 : i32} : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = <none>}}
+  %4 = arith.remsi %3, %1 : tensor<128xi32>
+
+  // A nonnegative range keeps the original contiguity.
+  // expected-remark @below {{contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
+  %5 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  // expected-remark @below {{contiguity = [64], divisibility = [64], constancy = [1], constant_value = <none>}}
+  %6 = arith.remsi %5, %1 : tensor<128xi32>
+
+  // A negative divisor is harmless when the numerator is nonnegative.
+  // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [128], constant_value = -64}}
+  %7 = arith.constant dense<-64> : tensor<128xi32>
+  // expected-remark @below {{contiguity = [64], divisibility = [64], constancy = [1], constant_value = <none>}}
+  %8 = arith.remsi %5, %7 : tensor<128xi32>
+
+  // `remui` is unaffected.
+  // expected-remark @below {{contiguity = [64], divisibility = [64], constancy = [1], constant_value = <none>}}
+  %9 = arith.remui %0, %1 : tensor<128xi32>
+  tt.return
+}
+
+// -----
+
+// Nonnegativity is propagated through the affine index arithmetic Triton
+// generates, so the common addressing idioms keep their constancy/contiguity.
+tt.func @divsi_remsi_nonneg_propagation(%arg0: i32) {
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %pid = tt.get_program_id x : i32
+  // expected-remark @below {{contiguity = [1], divisibility = [128], constancy = [1], constant_value = 128}}
+  %c128 = arith.constant 128 : i32
+  // expected-remark @below {{contiguity = [1], divisibility = [128], constancy = [1], constant_value = <none>}}
+  %off = arith.muli %pid, %c128 overflow<nsw> : i32
+  // expected-remark @below {{contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
+  %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [128], constancy = [128], constant_value = <none>}}
+  %splat = tt.splat %off : i32 -> tensor<128xi32>
+  // pid * 128 + [0, 128) is provably nonnegative.
+  // expected-remark @below {{contiguity = [128], divisibility = [128], constancy = [1], constant_value = <none>}}
+  %idx = arith.addi %splat, %range overflow<nsw> : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [128], constant_value = 64}}
+  %c64 = arith.constant dense<64> : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [64], constant_value = <none>}}
+  %div = arith.divsi %idx, %c64 : tensor<128xi32>
+  // expected-remark @below {{contiguity = [64], divisibility = [64], constancy = [1], constant_value = <none>}}
+  %rem = arith.remsi %idx, %c64 : tensor<128xi32>
+
+  // Without `nsw` the sum could wrap into the negatives, so we must be
+  // conservative.
+  // expected-remark @below {{contiguity = [128], divisibility = [128], constancy = [1], constant_value = <none>}}
+  %idx_wrap = arith.addi %splat, %range : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %div_wrap = arith.divsi %idx_wrap, %c64 : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = <none>}}
+  %rem_wrap = arith.remsi %idx_wrap, %c64 : tensor<128xi32>
+
+  // An opaque function argument is not provably nonnegative, so the plateau
+  // rule is skipped. The constancy of 128 that remains comes from both
+  // operands being constant along the dimension, which is sound regardless of
+  // sign.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = <none>}}
+  %opaque = tt.splat %arg0 : i32 -> tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = <none>}}
+  %div_opaque = arith.divsi %opaque, %c64 : tensor<128xi32>
+  tt.return
+}
+
+// -----
+
 tt.func @expanddims() {
   // expected-remark @below {{contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
   %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
