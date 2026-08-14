@@ -2,6 +2,7 @@
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=85' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=85' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX85 %s
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=86' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=86' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX86 %s
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' --initialize-ws-cluster-barriers='compute-capability=107 ptx-version=94' -reconcile-unrealized-casts | FileCheck --check-prefix=RUBIN %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm=compute-capability=90 --initialize-ws-cluster-barriers=compute-capability=90 --canonicalize-llvm-ir -reconcile-unrealized-casts | FileCheck --check-prefix=CLUSTER-MASK %s
 
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -20,9 +21,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: init_barrier_cluster_broadcast
+  // CLUSTER-MASK-LABEL: init_barrier_cluster_broadcast
   tt.func @init_barrier_cluster_broadcast() {
     %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     // CHECK: nvg.cluster_id
+    // CLUSTER-MASK: [[CTA:%.*]] = nvg.cluster_id
+    // CLUSTER-MASK-NOT: llvm.and [[CTA]], {{.*}} : i32
+    // CLUSTER-MASK: llvm.icmp "eq" [[CTA]], {{.*}} : i32
     // CHECK: @$0 mbarrier.init.shared::cta.b64 [$1], 2;
     ttng.init_barrier %alloc, 1 : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     ttng.inval_barrier %alloc : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
