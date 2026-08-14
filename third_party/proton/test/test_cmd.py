@@ -29,8 +29,6 @@ try:
 except ImportError:
     raise SystemExit(77)
 
-import triton.profiler
-
 settings = {
     "amdhip64": ("TRITON_PROTON_HIP_LIB_PATH", "TRITON_PROTON_HIP_LIBRARY"),
     "hsa-runtime64": ("TRITON_HSA_RUNTIME_PATH", "TRITON_HSA_RUNTIME_LIBRARY"),
@@ -38,13 +36,19 @@ settings = {
     "roctracer64": ("TRITON_ROCTRACER_LIB_PATH", "TRITON_ROCTRACER_LIBRARY"),
 }
 
-amdhip = pathlib.Path(rocm_sdk.find_libraries("amdhip64")[0])
-expected = {
-    "amdhip64": amdhip,
-    "hsa-runtime64": amdhip.parent / "libhsa-runtime64.so.1",
-    "rocprofiler-sdk": pathlib.Path(rocm_sdk.find_libraries("rocprofiler-sdk")[0]),
-    "roctracer64": pathlib.Path(rocm_sdk.find_libraries("roctracer64")[0]),
-}
+try:
+    amdhip = pathlib.Path(rocm_sdk.find_libraries("amdhip64")[0])
+    expected = {
+        "amdhip64": amdhip,
+        "hsa-runtime64": amdhip.parent / "libhsa-runtime64.so.1",
+        "rocprofiler-sdk": pathlib.Path(rocm_sdk.find_libraries("rocprofiler-sdk")[0]),
+        "roctracer64": pathlib.Path(rocm_sdk.find_libraries("roctracer64")[0]),
+    }
+    roctx = pathlib.Path(rocm_sdk.find_libraries("roctx64")[0])
+except (ModuleNotFoundError, FileNotFoundError):
+    raise SystemExit(77)
+
+import triton.profiler
 
 for name, (path_key, library_key) in settings.items():
     library = expected[name]
@@ -52,7 +56,6 @@ for name, (path_key, library_key) in settings.items():
     assert os.environ[library_key] == library.name
     ctypes.CDLL(str(pathlib.Path(os.environ[path_key]) / os.environ[library_key]))
 
-roctx = pathlib.Path(rocm_sdk.find_libraries("roctx64")[0])
 assert os.environ["TRITON_ROCTX_LIBRARY"] == str(roctx)
 ctypes.CDLL(os.environ["TRITON_ROCTX_LIBRARY"])
 """
