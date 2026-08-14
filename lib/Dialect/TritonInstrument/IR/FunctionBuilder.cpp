@@ -1692,9 +1692,9 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
               triton::SplatOp::create(fb, writeVisibilityType, threadMaskElem);
           Value updated = arith::SelectOp::create(fb, visibilityMask,
                                                   threadMaskTensor, visibility);
-          createMaskedStoreScratchMemory(fb, fb.getLoc(), visibilityPtr,
-                                         updated, writeVisibilityType,
-                                         relationMask);
+          tti::createStoreScratchMemory(fb, fb.getLoc(), visibilityPtr, updated,
+                                        writeVisibilityType,
+                                        /*currentCTAOnly=*/false);
         }
 
         auto clearTable = [&](RankedTensorType tableType) {
@@ -1707,8 +1707,8 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
           tableMask = arith::AndIOp::create(fb, tableMask, ctaMask);
           Value zero = tti::createConstIntTensor(fb, fb.getLoc(), 0, tableType);
           Value updated = arith::SelectOp::create(fb, tableMask, zero, table);
-          createMaskedStoreScratchMemory(fb, fb.getLoc(), tablePtr, updated,
-                                         tableType, ctaMask);
+          tti::createStoreScratchMemory(fb, fb.getLoc(), tablePtr, updated,
+                                        tableType, /*currentCTAOnly=*/false);
         };
 
         if (clearWrites)
@@ -1821,9 +1821,9 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
         Value withReader = arith::OrIOp::create(fb, newVisibility, readerBit);
         newVisibility = arith::SelectOp::create(fb, observerRows, withReader,
                                                 newVisibility);
-        createMaskedStoreScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
-                                       newVisibility, readVisibilityType,
-                                       visibilityRows);
+        tti::createStoreScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
+                                      newVisibility, readVisibilityType,
+                                      /*currentCTAOnly=*/false);
 
         if (hasReadTracking) {
           Value readTracking = tti::createLoadScratchMemory(
@@ -1831,9 +1831,9 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
           Value trackingRows = createReaderRows(readTrackingType);
           Value newTracking =
               clearReader(readTracking, readTrackingType, trackingRows);
-          createMaskedStoreScratchMemory(fb, fb.getLoc(), readTrackingPtr,
-                                         newTracking, readTrackingType,
-                                         trackingRows);
+          tti::createStoreScratchMemory(fb, fb.getLoc(), readTrackingPtr,
+                                        newTracking, readTrackingType,
+                                        /*currentCTAOnly=*/false);
         }
 
         fb.setInsertionPointToEnd(thenBlock);
@@ -2940,9 +2940,9 @@ void FunctionBuilder::createSetProxyAccessCall(ImplicitLocOpBuilder &b,
         Value withSeen = arith::OrIOp::create(fb, clearedVisibility, seenBit);
         Value updatedVisibility =
             arith::SelectOp::create(fb, ownerMask, withSeen, clearedVisibility);
-        createMaskedStoreScratchMemory(fb, fb.getLoc(), visibilityPtr,
-                                       updatedVisibility, visibilityType,
-                                       selectedBuffers);
+        tti::createStoreScratchMemory(fb, fb.getLoc(), visibilityPtr,
+                                      updatedVisibility, visibilityType,
+                                      /*currentCTAOnly=*/false);
 
         // A new generic access supersedes fence coverage for an older access
         // from the same source. Clear that source's fence bit in outstanding
@@ -2967,9 +2967,9 @@ void FunctionBuilder::createSetProxyAccessCall(ImplicitLocOpBuilder &b,
               arith::AndIOp::create(fb, tracking, trackingClear);
           Value updatedTracking = arith::SelectOp::create(
               fb, trackingMask, clearedTracking, tracking);
-          createMaskedStoreScratchMemory(fb, fb.getLoc(), trackingPtr,
-                                         updatedTracking, trackingType,
-                                         trackingMask);
+          tti::createStoreScratchMemory(fb, fb.getLoc(), trackingPtr,
+                                        updatedTracking, trackingType,
+                                        /*currentCTAOnly=*/false);
         }
 
         fb.setInsertionPointToEnd(thenBlock);
