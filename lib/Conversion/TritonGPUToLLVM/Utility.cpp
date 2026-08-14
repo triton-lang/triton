@@ -1208,6 +1208,13 @@ void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
   }
 }
 
+bool atomicResultHasOrderingBarrier(Operation *op) {
+  if (!op->hasAttr("allocation.offset"))
+    return false;
+  return triton::gpu::lookupNumCTAs(op) == 1 ||
+         triton::atomicResultHasCTABroadcast(op);
+}
+
 Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
                                   Value resultVal,
                                   ConversionPatternRewriter &rewriter,
