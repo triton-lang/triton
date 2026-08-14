@@ -4,6 +4,7 @@
 #include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/AtomicPTXBuilder.h"
 #include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
+#include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
@@ -45,6 +46,18 @@ static constexpr StringLiteral kGSanKernelExitRuntimeFn =
     "__triton_gsan_kernel_exit";
 static constexpr StringLiteral kGSanGridDependencyWaitRuntimeFn =
     "__triton_gsan_grid_dependency_wait";
+static constexpr StringLiteral kGSanClusterBarrierInitRuntimeFn =
+    "__triton_gsan_cluster_barrier_init";
+static constexpr StringLiteral kGSanClusterBarrierSyncRuntimeFn =
+    "__triton_gsan_cluster_barrier_sync";
+static constexpr StringLiteral kGSanMBarrierTableInitRuntimeFn =
+    "__triton_gsan_mbarrier_table_init";
+static constexpr StringLiteral kGSanMBarrierInitRuntimeFn =
+    "__triton_gsan_mbarrier_init";
+static constexpr StringLiteral kGSanMBarrierArriveRuntimeFn =
+    "__triton_gsan_mbarrier_arrive";
+static constexpr StringLiteral kGSanMBarrierWaitRuntimeFn =
+    "__triton_gsan_mbarrier_wait";
 static constexpr StringLiteral kGSanGlobalStateArgAttr =
     "tti.gsan_global_state";
 static constexpr StringLiteral kGSanStreamClockArgAttr =
@@ -68,6 +81,21 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
               i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanGridDependencyWaitRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i64_ty, i32_ty, i32_ty, i32_ty};
+  } else if (funcName == kGSanClusterBarrierInitRuntimeFn) {
+    argTys = {ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanClusterBarrierSyncRuntimeFn) {
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty,
+              i32_ty,      ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanMBarrierTableInitRuntimeFn) {
+    argTys = {ptr_ty(ctx), i32_ty, i32_ty};
+  } else if (funcName == kGSanMBarrierInitRuntimeFn) {
+    argTys = {ptr_ty(ctx), i32_ty, i32_ty, i32_ty, i32_ty, ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanMBarrierArriveRuntimeFn) {
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty,      i32_ty,
+              i32_ty,      i32_ty,      i32_ty, ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanMBarrierWaitRuntimeFn) {
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty,      i32_ty,
+              i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanLoadTensorRuntimeFn ||
              funcName == kGSanStoreTensorRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty, ptr_ty(ctx), i32_ty};
@@ -228,6 +256,15 @@ Value materializeI32Bool(ConversionPatternRewriter &rewriter,
   if (!pred)
     return b.i32_val(1);
   return b.zext(i32_ty, pred);
+}
+
+Value castToGenericPointer(ConversionPatternRewriter &rewriter, Location loc,
+                           Value ptr) {
+  Type genericPtrTy = ptr_ty(rewriter.getContext());
+  if (ptr.getType() == genericPtrTy)
+    return ptr;
+  TritonLLVMOpBuilder b(loc, rewriter);
+  return b.addrspacecast(genericPtrTy, ptr);
 }
 
 void emitGSanAtomicBeginCall(ConversionPatternRewriter &rewriter, Location loc,
@@ -623,7 +660,7 @@ public:
     auto rmwOp = op.getAtomicRmwOp();
     auto sem = op.getSem();
     auto scope = op.getScope();
-    insertAtomicOrderingBarriers(op, sem, !op->hasAttr("allocation.offset"),
+    insertAtomicOrderingBarriers(op, sem, !atomicResultHasOrderingBarrier(op),
                                  rewriter, *targetInfo);
 
     TritonLLVMOpBuilder b(loc, rewriter);
@@ -730,7 +767,7 @@ public:
 
     auto sem = op.getSem();
     auto scope = op.getScope();
-    insertAtomicOrderingBarriers(op, sem, !op->hasAttr("allocation.offset"),
+    insertAtomicOrderingBarriers(op, sem, !atomicResultHasOrderingBarrier(op),
                                  rewriter, *targetInfo);
 
     TritonLLVMOpBuilder b(loc, rewriter);
@@ -934,6 +971,256 @@ struct GSanStreamClockOpConversion : public ConvertOpToLLVMPattern<OpTy> {
   }
 };
 
+struct GSanClusterBarrierInitOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanClusterBarrierInitOp> {
+  const TargetInfoBase &targetInfo;
+
+  GSanClusterBarrierInitOpConversion(LLVMTypeConverter &typeConverter,
+                                     const TargetInfoBase &targetInfo)
+      : ConvertOpToLLVMPattern<tti::ExperimentalGSanClusterBarrierInitOp>(
+            typeConverter),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanClusterBarrierInitOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    Value elect = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+    Value ctaRank = targetInfo.getClusterCTAId(rewriter, loc);
+    Value isCTA0 = b.icmp_eq(ctaRank, b.i32_val(0));
+    Value pred = b.and_(elect, isCTA0);
+    auto runtimeFunc = getOrCreateGSanRuntimeFunction(
+        rewriter, kGSanClusterBarrierInitRuntimeFn);
+    Value scratch = castToGenericPointer(rewriter, loc, adaptor.getScratch());
+    b.call(runtimeFunc, ValueRange{scratch, b.zext(i32_ty, pred)});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct GSanClusterBarrierSyncOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanClusterBarrierSyncOp> {
+  const TargetInfoBase &targetInfo;
+
+  GSanClusterBarrierSyncOpConversion(LLVMTypeConverter &typeConverter,
+                                     const TargetInfoBase &targetInfo)
+      : ConvertOpToLLVMPattern<tti::ExperimentalGSanClusterBarrierSyncOp>(
+            typeConverter),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanClusterBarrierSyncOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
+    if (failed(gsanGlobalStatePtr))
+      return failure();
+
+    TritonLLVMOpBuilder b(loc, rewriter);
+    Value elect = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+    Value ctaRank = targetInfo.getClusterCTAId(rewriter, loc);
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    auto runtimeFunc = getOrCreateGSanRuntimeFunction(
+        rewriter, kGSanClusterBarrierSyncRuntimeFn);
+    Value scratch = castToGenericPointer(rewriter, loc, adaptor.getScratch());
+    b.call(runtimeFunc,
+           ValueRange{*gsanGlobalStatePtr, scratch, b.zext(i32_ty, elect),
+                      b.i32_val(ttg::lookupNumCTAs(op)), ctaRank,
+                      sourceLoc.file, sourceLoc.line});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+static Value getMBarrierOffset(Location loc, Value barrier,
+                               ConversionPatternRewriter &rewriter) {
+  auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+      loc, barrier, rewriter.getI64Type(), rewriter);
+  TritonLLVMOpBuilder b(loc, rewriter);
+  Value address = b.ptrtoint(i32_ty, smemObj.getBase());
+  return b.and_(address, b.i32_val(0x00ffffff));
+}
+
+static Value
+getMBarrierIssuerPredicate(Location loc, ConversionPatternRewriter &rewriter,
+                           const TargetInfoBase &targetInfo, Value opPred,
+                           ttg::MemDescType barrierTy, bool leaderOnly,
+                           uint32_t sourceBroadcastMask) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+  Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+  if (opPred)
+    pred = b.and_(pred, opPred);
+  if (leaderOnly) {
+    if (auto leaderPred =
+            LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
+      pred = b.and_(pred, *leaderPred);
+  }
+  if (sourceBroadcastMask != 0) {
+    Value ctaRank = targetInfo.getClusterCTAId(rewriter, loc);
+    Value rankInGroup = b.and_(ctaRank, b.i32_val(sourceBroadcastMask));
+    pred = b.and_(pred, b.icmp_eq(rankInGroup, b.i32_val(0)));
+  }
+  return pred;
+}
+
+struct GSanMBarrierTableInitOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanMBarrierTableInitOp> {
+  const TargetInfoBase &targetInfo;
+
+  GSanMBarrierTableInitOpConversion(LLVMTypeConverter &typeConverter,
+                                    const TargetInfoBase &targetInfo)
+      : ConvertOpToLLVMPattern<tti::ExperimentalGSanMBarrierTableInitOp>(
+            typeConverter),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanMBarrierTableInitOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    Value elect = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+    Value ctaRank = targetInfo.getClusterCTAId(rewriter, loc);
+    Value pred = b.and_(elect, b.icmp_eq(ctaRank, b.i32_val(0)));
+    auto runtimeFunc = getOrCreateGSanRuntimeFunction(
+        rewriter, kGSanMBarrierTableInitRuntimeFn);
+    Value scratch = castToGenericPointer(rewriter, loc, adaptor.getScratch());
+    b.call(runtimeFunc, ValueRange{scratch, b.zext(i32_ty, pred),
+                                   b.i32_val(op.getCapacity())});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct GSanMBarrierInitOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanMBarrierInitOp> {
+  const TargetInfoBase &targetInfo;
+
+  GSanMBarrierInitOpConversion(LLVMTypeConverter &typeConverter,
+                               const TargetInfoBase &targetInfo)
+      : ConvertOpToLLVMPattern<tti::ExperimentalGSanMBarrierInitOp>(
+            typeConverter),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanMBarrierInitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    auto barrierTy = op.getBarrier().getType();
+    Value pred = getMBarrierIssuerPredicate(
+        loc, rewriter, targetInfo, /*opPred=*/{}, barrierTy,
+        /*leaderOnly=*/true, /*sourceBroadcastMask=*/0);
+    Value ctaRank = targetInfo.getClusterCTAId(rewriter, loc);
+    Value offset = getMBarrierOffset(loc, adaptor.getBarrier(), rewriter);
+    Value scratch = castToGenericPointer(rewriter, loc, adaptor.getScratch());
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    auto runtimeFunc =
+        getOrCreateGSanRuntimeFunction(rewriter, kGSanMBarrierInitRuntimeFn);
+    b.call(runtimeFunc, ValueRange{scratch, offset, b.zext(i32_ty, pred),
+                                   ctaRank, b.i32_val(op.getExpectedCount()),
+                                   sourceLoc.file, sourceLoc.line});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct GSanMBarrierArriveOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanMBarrierArriveOp> {
+  const TargetInfoBase &targetInfo;
+
+  GSanMBarrierArriveOpConversion(LLVMTypeConverter &typeConverter,
+                                 const TargetInfoBase &targetInfo)
+      : ConvertOpToLLVMPattern<tti::ExperimentalGSanMBarrierArriveOp>(
+            typeConverter),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanMBarrierArriveOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
+    if (failed(gsanGlobalStatePtr))
+      return failure();
+
+    TritonLLVMOpBuilder b(loc, rewriter);
+    Value ctaRank = targetInfo.getClusterCTAId(rewriter, loc);
+    Value pred = getMBarrierIssuerPredicate(
+        loc, rewriter, targetInfo, adaptor.getPred(), op.getBarrier().getType(),
+        /*leaderOnly=*/false, op.getSourceBroadcastMask());
+    Value recipientMask;
+    if (!op.getMulticast()) {
+      uint32_t broadcastMask =
+          LLVM::NVIDIA::getCGABroadcastMask(op.getBarrier().getType());
+      Value leaderRank =
+          b.and_(ctaRank, b.i32_val(static_cast<uint32_t>(~broadcastMask)));
+      recipientMask = b.shl(b.i32_val(1), leaderRank);
+    } else {
+      for (int32_t mask : op.getMulticastMasks()) {
+        Value nextMask = LLVM::NVIDIA::createTMAMulticastMask(
+            loc, rewriter, static_cast<uint16_t>(mask), ctaRank);
+        recipientMask =
+            recipientMask ? b.or_(recipientMask, nextMask) : nextMask;
+      }
+      assert(recipientMask && "multicast mbarrier arrival needs recipients");
+    }
+
+    Value offset = getMBarrierOffset(loc, adaptor.getBarrier(), rewriter);
+    Value scratch = castToGenericPointer(rewriter, loc, adaptor.getScratch());
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    auto runtimeFunc =
+        getOrCreateGSanRuntimeFunction(rewriter, kGSanMBarrierArriveRuntimeFn);
+    b.call(runtimeFunc, ValueRange{*gsanGlobalStatePtr, scratch, offset,
+                                   b.zext(i32_ty, pred), recipientMask,
+                                   b.i32_val(op.getCount()), ctaRank,
+                                   b.i32_val(op.getPublishClock()),
+                                   sourceLoc.file, sourceLoc.line});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct GSanMBarrierWaitOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanMBarrierWaitOp> {
+  const TargetInfoBase &targetInfo;
+
+  GSanMBarrierWaitOpConversion(LLVMTypeConverter &typeConverter,
+                               const TargetInfoBase &targetInfo)
+      : ConvertOpToLLVMPattern<tti::ExperimentalGSanMBarrierWaitOp>(
+            typeConverter),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanMBarrierWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
+    if (failed(gsanGlobalStatePtr))
+      return failure();
+
+    TritonLLVMOpBuilder b(loc, rewriter);
+    auto barrierTy = op.getBarrier().getType();
+    Value pred = getMBarrierIssuerPredicate(
+        loc, rewriter, targetInfo, adaptor.getPred(), barrierTy,
+        /*leaderOnly=*/true, /*sourceBroadcastMask=*/0);
+    Value ctaRank = targetInfo.getClusterCTAId(rewriter, loc);
+    Value offset = getMBarrierOffset(loc, adaptor.getBarrier(), rewriter);
+    Value scratch = castToGenericPointer(rewriter, loc, adaptor.getScratch());
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    auto runtimeFunc =
+        getOrCreateGSanRuntimeFunction(rewriter, kGSanMBarrierWaitRuntimeFn);
+    b.call(runtimeFunc,
+           ValueRange{*gsanGlobalStatePtr, scratch, offset,
+                      b.zext(i32_ty, pred), ctaRank, adaptor.getPhase(),
+                      sourceLoc.file, sourceLoc.line});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::populateGSanToLLVMPatterns(
@@ -945,6 +1232,12 @@ void mlir::triton::populateGSanToLLVMPatterns(
       GSanStreamClockOpConversion<tti::ExperimentalGSanKernelExitOp>,
       GSanStreamClockOpConversion<tti::ExperimentalGSanGridDependencyWaitOp>>(
       typeConverter);
+  patterns.add<GSanClusterBarrierInitOpConversion>(typeConverter, targetInfo);
+  patterns.add<GSanClusterBarrierSyncOpConversion>(typeConverter, targetInfo);
+  patterns.add<GSanMBarrierTableInitOpConversion>(typeConverter, targetInfo);
+  patterns.add<GSanMBarrierInitOpConversion>(typeConverter, targetInfo);
+  patterns.add<GSanMBarrierArriveOpConversion>(typeConverter, targetInfo);
+  patterns.add<GSanMBarrierWaitOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanTensorDescInfoOpConversion>(typeConverter);
   patterns.add<GSanAtomicPollOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanAtomicCASOpConversion>(typeConverter, targetInfo);

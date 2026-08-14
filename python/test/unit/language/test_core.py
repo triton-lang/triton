@@ -1953,7 +1953,7 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
                     reason="num_ctas > 1 requires NVIDIA SM90+ (Hopper)")
-@pytest.mark.skipif(is_sm12x(), reason="scalar multi-CTA atomic_cas is not supported on sm120 (consumer Blackwell)")
+@pytest.mark.skipif(is_sm12x(), reason="scalar multi-CTA atomic_cas is not supported on sm12x (consumer Blackwell)")
 def test_scalar_atomic_cas_multicta_result(device):
 
     @triton.jit
@@ -2257,8 +2257,7 @@ def test_cat(dtype_str, num_warps, can_reorder, device):
     z = torch.zeros((256, ), dtype=getattr(torch, dtype_str), device=device)
     kernel[(1, )](x, y, z, N=128, num_warps=num_warps, CAN_REORDER=can_reorder)
     assert z.sum() == z_ref.sum()
-    if not can_reorder:
-        torch.testing.assert_close(z, z_ref, atol=0, rtol=0)
+    torch.testing.assert_close(z, z_ref, atol=0, rtol=0)
     # check if there's no duplicate value in z
     assert z.unique().size(0) == z.size(0)
 
@@ -4042,7 +4041,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         if capability[0] == 9 and M >= 64 and N >= 8:
             assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e5m2.e5m2' in ptx
         elif capability[0] >= 8 and M < 64:
-            assert 'mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32' in ptx
+            if capability == (8, 9) or capability[0] == 12:
+                assert 'mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e5m2.f32' in ptx
+            else:
+                assert 'mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32' in ptx
     elif in_dtype == "float8e4nv" and out_dtype == tl.float32:
         if capability[0] == 9 and M >= 64 and N >= 8:
             assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e4m3.e4m3' in ptx

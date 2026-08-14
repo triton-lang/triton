@@ -68,6 +68,16 @@ def AllocateSharedMemoryNv : Pass<"allocate-shared-memory-nv", "mlir::ModuleOp">
   ];
 }
 
+def SetMinimumSharedMemory : Pass<"set-minimum-shared-memory", "mlir::ModuleOp"> {
+  let summary = "Set a lower bound on the module shared memory size";
+
+  let options = [
+      Option<"minimumSize", "minimum-size",
+             "int32_t", /*default*/"0",
+             "minimum shared memory size in bytes">,
+  ];
+}
+
 
 def ConvertWarpSpecializeToLLVM : Pass<"convert-warp-specialize-to-llvm", "mlir::ModuleOp"> {
   let summary = "lower `ttg.warp_specialize` to LLVM";

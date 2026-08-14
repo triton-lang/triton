@@ -1,5 +1,6 @@
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "triton/Analysis/BufferRegion.h"
 #include "triton/Analysis/Utility.h"
@@ -675,22 +676,31 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
   SmallVector<std::pair<Value, RegionInfo>> candidates[numMemTypes];
   DenseSet<Value> seenValues;
   auto collectCandidates = [&](Value value) {
-    if (!seenValues.insert(value).second)
-      return;
-    auto type = dyn_cast<MemDescType>(value.getType());
-    if (!type)
-      return;
-    std::optional<MemType> memType;
-    if (isa<SharedMemorySpaceAttr>(type.getMemorySpace()))
-      memType = MemType::SHARED_MEM;
-    else if (isa<TensorMemorySpaceAttr>(type.getMemorySpace()))
-      memType = MemType::TENSOR_MEM;
-    if (!memType)
-      return;
-    candidates[static_cast<int>(*memType)].push_back(
-        {value, analysis->getLatticeElement(value)->getValue()});
+    SmallVector<Value> pending = {value};
+    while (!pending.empty()) {
+      Value current = pending.pop_back_val();
+      if (!seenValues.insert(current).second)
+        continue;
+      auto type = dyn_cast<MemDescType>(current.getType());
+      if (!type)
+        continue;
+      std::optional<MemType> memType;
+      if (isa<SharedMemorySpaceAttr>(type.getMemorySpace()))
+        memType = MemType::SHARED_MEM;
+      else if (isa<TensorMemorySpaceAttr>(type.getMemorySpace()))
+        memType = MemType::TENSOR_MEM;
+      if (!memType)
+        continue;
+      candidates[static_cast<int>(*memType)].push_back(
+          {current, analysis->getLatticeElement(current)->getValue()});
+      if (auto select = current.getDefiningOp<arith::SelectOp>())
+        pending.append({select.getTrueValue(), select.getFalseValue()});
+    }
   };
   module.walk([&](Operation *op) {
+    for (const MemoryAccess &access : getMemoryAccesses(op))
+      collectCandidates(access.value);
+
     auto info = hooks.getMemEffectsOpInfo(op);
     if (!info)
       return;
@@ -699,8 +709,8 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
       hasAsyncCopyReads |= llvm::any_of(
           info->operandEffects,
           [](const MemEffectsOpInfo::Effects &e) { return e.rw == RW::Read; });
-    for (const auto &effect : info->operandEffects)
-      collectCandidates(effect.buf);
+    for (const auto &barrier : info->barriers)
+      collectCandidates(barrier.barrier);
   });
 
   analysis->calculateUsedBufferRegions(module);
@@ -715,11 +725,21 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
     SmallVector<BufferRegion> regions =
         analysis->getAllUsedBufferRegions(regionType);
     bool hasUnknown = analysis->hasUnknownUsedBufferRegions(regionType);
+
     if (regions.empty() && !hasUnknown)
       continue;
 
     bufferStatePlans[iMemType] =
         triton::createBufferStatePlan(regions, hasUnknown);
+
+    if (memType == MemType::SHARED_MEM) {
+      for (const BufferRegion &barrier : barrierRegions) {
+        auto it = llvm::lower_bound(regions, barrier);
+        unsigned id = std::distance(regions.begin(), it);
+        barrierBufferMasks.push_back(
+            bufferStatePlans[iMemType].regionMasks[id]);
+      }
+    }
 
     for (const auto &[value, regionInfo] : candidates[iMemType]) {
       BufferStateCandidates stateCandidates;
@@ -740,7 +760,8 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
 
         auto existing = llvm::find_if(
             stateCandidates.cases, [&](const BufferStateCandidate &state) {
-              return state.baseOffset == candidate.baseOffset;
+              return state.baseOffset == candidate.baseOffset &&
+                     state.ctaMask == ctaMask;
             });
         if (existing == stateCandidates.cases.end()) {
           stateCandidates.cases.push_back(
@@ -748,7 +769,6 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module,
                ctaMask});
         } else {
           existing->mask |= bufferStatePlans[iMemType].regionMasks[id];
-          existing->ctaMask |= ctaMask;
         }
       }
       bufferCandidates[iMemType].try_emplace(value, std::move(stateCandidates));

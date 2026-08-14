@@ -51,6 +51,8 @@ public:
     return std::nullopt;
   }
 
+  bool barrierWritesInvalidate() const override { return true; }
+
   std::optional<WaitOpInfo>
   getWaitOpInfo(Operation *op, const tti::AuxDataMap &auxData) const override {
     // On asyncmark targets (CDNA3/CDNA4), ttg::AsyncWaitOp is kept as-is

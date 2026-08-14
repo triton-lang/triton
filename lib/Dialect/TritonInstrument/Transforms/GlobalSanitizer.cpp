@@ -4,6 +4,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -11,6 +12,7 @@
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -32,8 +34,13 @@ namespace {
 static constexpr const char kGSanGlobalStateArgAttr[] = "tti.gsan_global_state";
 static constexpr const char kGSanStreamClockArgAttr[] = "tti.gsan_stream_clock";
 static constexpr const char kGSanKernelIdArgAttr[] = "tti.gsan_kernel_id";
+static constexpr const char kGSanMBarrierScratchArgAttr[] =
+    "tti.gsan_mbarrier_scratch";
 static constexpr const char kDisableSetMaxRegisterAttr[] =
     "tti.disable_setmaxregister";
+static constexpr int64_t kGSanClusterBarrierScratchBytes = 128;
+static constexpr int64_t kGSanMBarrierTableHeaderBytes = 16;
+static constexpr int64_t kGSanMBarrierRecordBytes = 176;
 
 struct DescriptorInfo {
   Value base;
@@ -345,24 +352,278 @@ static void instrumentAsyncTMAScatter(ttng::AsyncTMAScatterOp op) {
                                          access.second, /*isStore=*/true);
 }
 
-static Value getGSanStateForCall(tt::CallOp callOp, Value gsanState) {
-  auto partitions = callOp->getParentOfType<ttg::WarpSpecializePartitionsOp>();
+static Value getValueForOp(Operation *op, Value value) {
+  auto partitions = op->getParentOfType<ttg::WarpSpecializePartitionsOp>();
   if (!partitions)
-    return gsanState;
+    return value;
 
   auto captures = partitions.getExplicitCaptures();
-  auto capture = llvm::find(captures, gsanState);
+  auto capture = llvm::find(captures, value);
   unsigned captureIdx = std::distance(captures.begin(), capture);
   if (capture == captures.end()) {
-    partitions->insertOperands(captureIdx, gsanState);
+    partitions->insertOperands(captureIdx, value);
     for (Region &region : partitions.getPartitionRegions())
-      region.addArgument(gsanState.getType(), callOp.getLoc());
+      region.addArgument(value.getType(), op->getLoc());
   }
 
-  Region *partitionRegion = callOp->getParentRegion();
+  Region *partitionRegion = op->getParentRegion();
   while (partitionRegion->getParentOp() != partitions.getOperation())
     partitionRegion = partitionRegion->getParentRegion();
   return partitionRegion->getArgument(captureIdx);
+}
+
+static Value getFuncArgumentWithAttr(tt::FuncOp func, StringRef attrName) {
+  for (unsigned i = 0; i < func.getNumArguments(); ++i) {
+    if (func.getArgAttr(i, attrName))
+      return func.getArgument(i);
+  }
+  llvm_unreachable("missing attributed GSan function argument");
+}
+
+struct MBarrierArrivalInfo {
+  Value barrier;
+  Value pred;
+  int32_t count;
+  SmallVector<int32_t> multicastMasks;
+  bool multicast;
+  int32_t sourceBroadcastMask;
+  bool publishClock;
+};
+
+static Value trueValue(OpBuilder &builder, Location loc) {
+  return arith::ConstantIntOp::create(builder, loc, 1, 1);
+}
+
+static Value andPredicates(OpBuilder &builder, Location loc, Value lhs,
+                           Value rhs) {
+  if (!lhs)
+    return rhs;
+  if (!rhs)
+    return lhs;
+  return arith::AndIOp::create(builder, loc, lhs, rhs);
+}
+
+static SmallVector<int32_t> getMMACompletionMulticastMasks(ValueRange descs,
+                                                           bool twoCTAs) {
+  SmallVector<int32_t> masks;
+  for (uint16_t mask : ttng::getCTABroadcastMasks(twoCTAs, descs))
+    masks.push_back(mask);
+  return masks;
+}
+
+static SmallVector<MBarrierArrivalInfo>
+getMBarrierArrivals(Operation *op, OpBuilder &builder) {
+  SmallVector<MBarrierArrivalInfo> arrivals;
+  Location loc = op->getLoc();
+  int numCTAs = ttg::lookupNumCTAs(op);
+
+  if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op)) {
+    Value pred = arrive.getPred() ? arrive.getPred() : trueValue(builder, loc);
+    SmallVector<int32_t> multicastMasks;
+    bool multicast = false;
+    int32_t sourceBroadcastMask = 0;
+    if (arrive.isMulticast()) {
+      multicastMasks.push_back(arrive.getMulticastCTA());
+      multicast = true;
+    } else if (std::optional<uint32_t> fromCTA = arrive.getFromCTA();
+               fromCTA && *fromCTA != static_cast<uint32_t>(numCTAs - 1)) {
+      uint32_t broadcastMask = ~*fromCTA & (numCTAs - 1);
+      multicastMasks.push_back(broadcastMask);
+      multicast = true;
+      sourceBroadcastMask = broadcastMask;
+    }
+    arrivals.push_back({arrive.getBarrier(), pred,
+                        static_cast<int32_t>(arrive.getCount()),
+                        std::move(multicastMasks), multicast,
+                        sourceBroadcastMask, /*publishClock=*/true});
+    return arrivals;
+  }
+
+  if (auto expect = dyn_cast<ttng::BarrierExpectOp>(op)) {
+    Value pred = expect.getPred();
+    SmallVector<int32_t> multicastMasks;
+    bool multicast = false;
+    int32_t sourceBroadcastMask = 0;
+    if (std::optional<uint32_t> fromCTA = expect.getFromCTA();
+        fromCTA && *fromCTA != static_cast<uint32_t>(numCTAs - 1)) {
+      uint32_t broadcastMask = ~*fromCTA & (numCTAs - 1);
+      multicastMasks.push_back(broadcastMask);
+      multicast = true;
+      sourceBroadcastMask = broadcastMask;
+    }
+    arrivals.push_back({expect.getBarrier(), pred, /*count=*/1,
+                        std::move(multicastMasks), multicast,
+                        sourceBroadcastMask, /*publishClock=*/true});
+    return arrivals;
+  }
+
+  if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
+    bool twoCTAs = mma.getTwoCtas();
+    auto masks =
+        getMMACompletionMulticastMasks(mma.getCompletionDescs(), twoCTAs);
+    for (auto [barrier, barrierPred] : llvm::zip(
+             mma.getCompletionBarriers(), mma.getCompletionBarrierPreds())) {
+      Value pred = andPredicates(builder, loc, mma.getPredicate(), barrierPred);
+      arrivals.push_back({barrier, pred, /*count=*/1, masks,
+                          /*multicast=*/!masks.empty(),
+                          /*sourceBroadcastMask=*/twoCTAs ? 1 : 0,
+                          /*publishClock=*/false});
+    }
+    return arrivals;
+  }
+
+  if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
+    bool twoCTAs = ttng::getModuleTwoCTAs(op);
+    auto masks = getMMACompletionMulticastMasks(commit.getDescs(), twoCTAs);
+    bool multicast = !masks.empty();
+    Value pred = commit.getPred() ? commit.getPred() : trueValue(builder, loc);
+    arrivals.push_back({commit.getBarrier(), pred, /*count=*/1,
+                        std::move(masks), multicast,
+                        /*sourceBroadcastMask=*/twoCTAs ? 1 : 0,
+                        /*publishClock=*/false});
+  }
+  return arrivals;
+}
+
+static int64_t getMBarrierCapacity(ModuleOp module) {
+  // Upper bound to the number of simultaneously active mbarriers
+  int64_t capacity = 0;
+  module.walk([&](ttng::InitBarrierOp op) {
+    capacity += op.getAlloc().getType().getNumElements();
+  });
+  return capacity;
+}
+
+static void
+instrumentMBarrierOps(ModuleOp module,
+                      const DenseMap<tt::FuncOp, Value> &scratchMap) {
+  SmallVector<Operation *> ops;
+  module.walk([&](Operation *op) { ops.push_back(op); });
+  for (Operation *op : ops) {
+    auto func = op->getParentOfType<tt::FuncOp>();
+    auto scratchIt = scratchMap.find(func);
+    if (scratchIt == scratchMap.end())
+      continue;
+    Value scratch = getValueForOp(op, scratchIt->second);
+
+    if (auto init = dyn_cast<ttng::InitBarrierOp>(op)) {
+      OpBuilder builder(op);
+      builder.setInsertionPointAfter(op);
+      auto barrierTy = init.getAlloc().getType();
+      int32_t expectedCount =
+          static_cast<int32_t>(init.getCount() * ttg::lookupNumCTAs(op) /
+                               barrierTy.getNumElements());
+      ExperimentalGSanMBarrierInitOp::create(builder, op->getLoc(), scratch,
+                                             init.getBarrier(), expectedCount);
+      continue;
+    }
+
+    if (auto wait = dyn_cast<ttng::WaitBarrierOp>(op)) {
+      OpBuilder builder(op);
+      builder.setInsertionPointAfter(op);
+      Value pred =
+          wait.getPred() ? wait.getPred() : trueValue(builder, op->getLoc());
+      ExperimentalGSanMBarrierWaitOp::create(builder, op->getLoc(), scratch,
+                                             wait.getBarrier(), wait.getPhase(),
+                                             pred);
+      ttg::BarrierOp::create(builder, op->getLoc(), ttg::AddrSpace::Local);
+      continue;
+    }
+
+    OpBuilder builder(op);
+    auto arrivals = getMBarrierArrivals(op, builder);
+    if (arrivals.empty())
+      continue;
+    for (const MBarrierArrivalInfo &arrival : arrivals) {
+      auto masks = builder.getDenseI32ArrayAttr(arrival.multicastMasks);
+      ExperimentalGSanMBarrierArriveOp::create(
+          builder, op->getLoc(), scratch, arrival.barrier, arrival.pred,
+          arrival.count, masks, arrival.multicast, arrival.sourceBroadcastMask,
+          arrival.publishClock);
+    }
+    if (llvm::any_of(arrivals, [](const MBarrierArrivalInfo &arrival) {
+          return arrival.publishClock;
+        })) {
+      // Publish before the hardware arrival and hold every thread in the
+      // current partition until the elected thread has finished writing the
+      // release. Completion-only signals do not need this synchronization.
+      ttg::BarrierOp::create(builder, op->getLoc(), ttg::AddrSpace::Local);
+    }
+  }
+}
+
+struct ClusterSyncPoint {
+  Operation *op;
+  bool before;
+  bool materializeBarrier;
+};
+
+static void instrumentClusterBarrierEquivalents(ModuleOp module) {
+  DenseMap<Region *, SmallVector<ClusterSyncPoint>> pointsByGroup;
+  SmallVector<Region *> groups;
+  auto addPoint = [&](Operation *op, bool before, bool materializeBarrier) {
+    Region *group = getClusterBarrierGroupRegion(op);
+    auto [it, inserted] = pointsByGroup.try_emplace(group);
+    if (inserted)
+      groups.push_back(group);
+    it->second.push_back({op, before, materializeBarrier});
+  };
+
+  SmallVector<Operation *> ops;
+  module.walk([&](Operation *op) { ops.push_back(op); });
+  for (Operation *op : ops) {
+    if (auto barrier = dyn_cast<ttng::ClusterBarrierOp>(op)) {
+      if (!barrier.getRelaxed())
+        addPoint(op, /*before=*/false, /*materializeBarrier=*/false);
+      continue;
+    }
+
+    if (isa<tt::AtomicPollOp>(op)) {
+      // instrumentAtomicPoll materializes the poll's post-operation cluster
+      // barrier before this scan. Instrument that barrier instead.
+      continue;
+    }
+
+    if (auto atomic = dyn_cast<tt::AtomicOpInterface>(op)) {
+      if (ttg::lookupNumCTAs(op) == 1)
+        continue;
+      auto stages = tt::getAtomicBarrierStages(
+          atomic.getMemSemantic(), tt::atomicResultHasCTABroadcast(op));
+      if (stages.beforeMemoryEffects)
+        addPoint(op, /*before=*/true, /*materializeBarrier=*/true);
+      if (stages.afterMemoryEffects || stages.betweenMemoryEffects) {
+        addPoint(op, /*before=*/false, /*materializeBarrier=*/true);
+      }
+      continue;
+    }
+
+    if (ttng::needsClusterBarrier(op))
+      addPoint(op, /*before=*/false, /*materializeBarrier=*/true);
+  }
+
+  for (Region *group : groups) {
+    auto &points = pointsByGroup[group];
+    Location loc = points.front().op->getLoc();
+    Block &entry = group->front();
+    OpBuilder initBuilder(&entry, entry.begin());
+    Type ptrTy = tt::PointerType::get(initBuilder.getI8Type(), 1);
+    Value scratch = createThirdPartyScratchAlloc(
+        initBuilder, loc, ptrTy, kGSanClusterBarrierScratchBytes,
+        /*alignment=*/16, /*sharedClusterState=*/true);
+    ExperimentalGSanClusterBarrierInitOp::create(initBuilder, loc, scratch);
+    ttng::ClusterBarrierOp::create(initBuilder, loc, /*relaxed=*/true);
+
+    for (const ClusterSyncPoint &point : points) {
+      OpBuilder syncBuilder(point.op);
+      if (!point.before)
+        syncBuilder.setInsertionPointAfter(point.op);
+      if (point.materializeBarrier)
+        ttng::ClusterBarrierOp::create(syncBuilder, point.op->getLoc());
+      ExperimentalGSanClusterBarrierSyncOp::create(syncBuilder,
+                                                   point.op->getLoc(), scratch);
+      ttng::ClusterBarrierOp::create(syncBuilder, point.op->getLoc());
+    }
+  }
 }
 
 class GlobalSanitizerPass
@@ -379,22 +640,36 @@ public:
     DenseSet<StringRef> calledFuncs;
     module.walk(
         [&](tt::CallOp callOp) { calledFuncs.insert(callOp.getCallee()); });
+    int64_t mBarrierCapacity =
+        ttg::lookupNumCTAs(module) > 1 ? getMBarrierCapacity(module) : 0;
+    const bool instrumentMBarriers = mBarrierCapacity > 0;
+    DenseMap<tt::FuncOp, Value> mbarrierScratch;
 
     SmallVector<tt::FuncOp> funcs;
     module.walk([&](tt::FuncOp func) { funcs.push_back(func); });
     for (tt::FuncOp func : funcs) {
+      bool isEntry = !calledFuncs.contains(func.getSymName());
       auto funcTy = func.getFunctionType();
       SmallVector<Type> inputTys(funcTy.getInputs().begin(),
                                  funcTy.getInputs().end());
+      if (instrumentMBarriers && !isEntry)
+        inputTys.push_back(gsanStatePtrTy);
       inputTys.push_back(gsanStatePtrTy);
       inputTys.push_back(streamClockPtrTy);
       inputTys.push_back(kernelIdTy);
       func.setType(FunctionType::get(module.getContext(), inputTys,
                                      funcTy.getResults()));
 
-      func.getBody().addArgument(gsanStatePtrTy, func.getLoc());
-      func.getBody().addArgument(streamClockPtrTy, func.getLoc());
-      func.getBody().addArgument(kernelIdTy, func.getLoc());
+      SmallVector<std::pair<BlockArgument, StringRef>> hiddenArgs;
+      auto addHiddenArg = [&](Type type, StringRef attrName) {
+        BlockArgument arg = func.getBody().addArgument(type, func.getLoc());
+        hiddenArgs.emplace_back(arg, attrName);
+      };
+      if (instrumentMBarriers && !isEntry)
+        addHiddenArg(gsanStatePtrTy, kGSanMBarrierScratchArgAttr);
+      addHiddenArg(gsanStatePtrTy, kGSanGlobalStateArgAttr);
+      addHiddenArg(streamClockPtrTy, kGSanStreamClockArgAttr);
+      addHiddenArg(kernelIdTy, kGSanKernelIdArgAttr);
       SmallVector<Attribute> newArgAttrs;
       if (auto argAttrs = func.getAllArgAttrs())
         newArgAttrs.append(argAttrs.begin(), argAttrs.end());
@@ -403,17 +678,27 @@ public:
       }
       if (!newArgAttrs.empty())
         func.setAllArgAttrs(newArgAttrs);
-      func.setArgAttr(func.getNumArguments() - 3, kGSanGlobalStateArgAttr,
-                      builder.getUnitAttr());
-      func.setArgAttr(func.getNumArguments() - 2, kGSanStreamClockArgAttr,
-                      builder.getUnitAttr());
-      func.setArgAttr(func.getNumArguments() - 1, kGSanKernelIdArgAttr,
-                      builder.getUnitAttr());
+      for (auto [arg, attrName] : hiddenArgs)
+        func.setArgAttr(arg.getArgNumber(), attrName, builder.getUnitAttr());
+      if (instrumentMBarriers && !isEntry) {
+        mbarrierScratch.try_emplace(
+            func, getFuncArgumentWithAttr(func, kGSanMBarrierScratchArgAttr));
+      }
 
-      bool isEntry = !calledFuncs.contains(func.getSymName());
       if (isEntry) {
         OpBuilder b(&func.front(), func.front().begin());
         ExperimentalGSanInitOp::create(b, func.getLoc(), acquireStreamClock);
+        if (instrumentMBarriers) {
+          int64_t scratchBytes = kGSanMBarrierTableHeaderBytes +
+                                 mBarrierCapacity * kGSanMBarrierRecordBytes;
+          Value scratch = createThirdPartyScratchAlloc(
+              b, func.getLoc(), gsanStatePtrTy, scratchBytes,
+              /*alignment=*/16, /*sharedClusterState=*/true);
+          ExperimentalGSanMBarrierTableInitOp::create(b, func.getLoc(), scratch,
+                                                      mBarrierCapacity);
+          ttng::ClusterBarrierOp::create(b, func.getLoc(), /*relaxed=*/true);
+          mbarrierScratch.try_emplace(func, scratch);
+        }
         func.walk([&](tt::ReturnOp returnOp) {
           OpBuilder returnBuilder(returnOp);
           ExperimentalGSanKernelExitOp::create(returnBuilder,
@@ -431,12 +716,21 @@ public:
 
       SmallVector<Value> operands(callOp.getOperands().begin(),
                                   callOp.getOperands().end());
-      Value gsanState = caller.getArgument(caller.getNumArguments() - 3);
-      Value streamClock = caller.getArgument(caller.getNumArguments() - 2);
-      Value kernelId = caller.getArgument(caller.getNumArguments() - 1);
-      operands.push_back(getGSanStateForCall(callOp, gsanState));
-      operands.push_back(getGSanStateForCall(callOp, streamClock));
-      operands.push_back(getGSanStateForCall(callOp, kernelId));
+      Value gsanState =
+          getFuncArgumentWithAttr(caller, kGSanGlobalStateArgAttr);
+      Value streamClock =
+          getFuncArgumentWithAttr(caller, kGSanStreamClockArgAttr);
+      Value kernelId = getFuncArgumentWithAttr(caller, kGSanKernelIdArgAttr);
+      if (instrumentMBarriers) {
+        auto scratchIt = mbarrierScratch.find(caller);
+        assert(scratchIt != mbarrierScratch.end() &&
+               "missing GSan mbarrier scratch for caller");
+        operands.push_back(
+            getValueForOp(callOp.getOperation(), scratchIt->second));
+      }
+      operands.push_back(getValueForOp(callOp.getOperation(), gsanState));
+      operands.push_back(getValueForOp(callOp.getOperation(), streamClock));
+      operands.push_back(getValueForOp(callOp.getOperation(), kernelId));
 
       OpBuilder b(callOp);
       auto newCallOp =
@@ -498,6 +792,10 @@ public:
             op->setAttr(kDisableSetMaxRegisterAttr, builder.getUnitAttr());
           });
     });
+
+    if (instrumentMBarriers)
+      instrumentMBarrierOps(module, mbarrierScratch);
+    instrumentClusterBarrierEquivalents(module);
   }
 };
 

@@ -1641,6 +1641,24 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.tar
 
 // -----
 
+#blockedLocalBroadcast = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: atomic_acquire_with_cta_local_result_broadcast
+  tt.func @atomic_acquire_with_cta_local_result_broadcast(%ptrs : tensor<32x!tt.ptr<f32>, #blockedLocalBroadcast>, %vals : tensor<32xf32, #blockedLocalBroadcast>) {
+    // CHECK: atom.global.gpu.acquire.add.f32
+    // CHECK: st.shared::cta
+    // CHECK: nvvm.barrier
+    // CHECK: llvm.load
+    // CHECK: nvvm.cluster.arrive
+    // CHECK-NEXT: nvvm.cluster.wait
+    %old = tt.atomic_rmw fadd, acquire, gpu, %ptrs, %vals {allocation.offset = 0 : i32} : (tensor<32x!tt.ptr<f32>, #blockedLocalBroadcast>, tensor<32xf32, #blockedLocalBroadcast>) -> tensor<32xf32, #blockedLocalBroadcast>
+    tt.store %ptrs, %old : tensor<32x!tt.ptr<f32>, #blockedLocalBroadcast>
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:90", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32} {
   // Atomic ordering barriers must not introduce a nested warp specialization.
   // CHECK-LABEL: atomic_release_multi_cta_warp_specialize
@@ -2882,6 +2900,44 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
   // CHECK: llvm.func internal @call_no_smem_usage(%arg0: !llvm.ptr<3>, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>)
   tt.func private @call_no_smem_usage() {
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func internal @call_smem_leaf(
+  tt.func private @call_smem_leaf() attributes {noinline = true} {
+    %inner = ttg.local_alloc : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    ttg.local_dealloc %inner : !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: llvm.func internal @call_smem_nested(
+  // CHECK-SAME: %[[NESTED_PARENT_SMEM:.*]]: !llvm.ptr<3>
+  tt.func private @call_smem_nested() attributes {noinline = true} {
+    %inner = ttg.local_alloc : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    // CHECK: %[[NESTED_CALL_OFFSET:.*]] = llvm.mlir.constant(128 : i32)
+    // CHECK-NEXT: %[[NESTED_CALLEE_SMEM:.*]] = llvm.getelementptr %[[NESTED_PARENT_SMEM]][%[[NESTED_CALL_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK-NEXT: llvm.call @call_smem_leaf(%[[NESTED_CALLEE_SMEM]],
+    tt.call @call_smem_leaf() : () -> ()
+    ttg.local_dealloc %inner : !ttg.memdesc<16xi32, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: llvm.func @test_nested_calls_with_smem(
+  tt.func public @test_nested_calls_with_smem() {
+    %outer = ttg.local_alloc : () -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    // CHECK: %[[ENTRY_CALL_OFFSET:.*]] = llvm.mlir.constant(512 : i32)
+    // CHECK-NEXT: %[[ENTRY_SMEM:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK-NEXT: %[[ENTRY_CALLEE_SMEM:.*]] = llvm.getelementptr %[[ENTRY_SMEM]][%[[ENTRY_CALL_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK-NEXT: llvm.call @call_smem_nested(%[[ENTRY_CALLEE_SMEM]],
+    tt.call @call_smem_nested() : () -> ()
+    ttg.local_dealloc %outer : !ttg.memdesc<128xi32, #shared, #smem, mutable>
     tt.return
   }
 }
