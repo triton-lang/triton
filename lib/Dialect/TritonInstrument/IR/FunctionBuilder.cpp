@@ -1543,8 +1543,6 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
 
           for (auto [index, trackingType] : llvm::enumerate(trackingTypes)) {
             Value trackingPtr = entryBlock->getArgument(8 + index);
-            Value tracking = tti::createLoadScratchMemory(
-                fb, fb.getLoc(), trackingPtr, trackingType);
             Value completedMask =
                 convertAndBroadcast(fb, completed, {2, 3}, trackingType);
             Value nextPhase =
@@ -1560,10 +1558,9 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
                 arith::AndIOp::create(fb, completedMask, phaseMask);
             Value zero =
                 tti::createConstIntTensor(fb, fb.getLoc(), 0, trackingType);
-            Value cleared =
-                arith::SelectOp::create(fb, clearMask, zero, tracking);
-            createMaskedStoreScratchMemory(fb, fb.getLoc(), trackingPtr,
-                                           cleared, trackingType, clearMask);
+            tti::createStoreScratchMemory(fb, fb.getLoc(), trackingPtr, zero,
+                                          trackingType,
+                                          /*currentCTAOnly=*/false, clearMask);
           }
         }
 

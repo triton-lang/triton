@@ -80,7 +80,8 @@ void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,
                           StringRef message);
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                     Value tensor, RankedTensorType tensorType,
-                                    bool currentCTAOnly = false);
+                                    bool currentCTAOnly = false,
+                                    Value storeMask = nullptr);
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
                               RankedTensorType tensorType);
 gpu::GlobalScratchAllocOp
