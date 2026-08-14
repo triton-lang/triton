@@ -259,10 +259,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
       if (other) {
         for (size_t ii = 0; ii < nWords; ++ii) {
-          // PTX doesn't support mov.u8, so we need to use mov.u16
-          PTXInstr &mov =
-              ptxBuilder.create("mov")->o("u" + std::to_string(movWidth));
-
           size_t size = width / valueElemNBits;
 
           auto vecTy = LLVM::getVectorType(valueElemTy, size);
@@ -274,6 +270,17 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
             v = b.insert_element(vecTy, v, falseVal, sVal);
           }
           v = b.bitcast(v, IntegerType::get(getContext(), width));
+
+          if (!otherIsSplatConstInt && valueElemNBits == 16 && nWords > 1 &&
+              isa<RankedTensorType>(op.getType())) {
+            // Match each fallback to its destination instead of moving it.
+            ptxBuilder.newOperand(v, std::to_string(dstsOpr->listGet(ii)->idx));
+            continue;
+          }
+
+          // PTX doesn't support mov.u8, so we need to use mov.u16
+          PTXInstr &mov =
+              ptxBuilder.create("mov")->o("u" + std::to_string(movWidth));
 
           PTXInstr::Operand *opr{};
 
