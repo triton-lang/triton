@@ -137,15 +137,11 @@ class HIPBackend(BaseBackend):
         return target.backend == 'hip'
 
     def __init__(self, target: GPUTarget) -> None:
-        # Normalize warp_size to int.
-        # This handles cases where target is constructed from string parsing
-        # (e.g., CLI --target flag: "hip:gfx942:64".split(":") produces strings).
         if not isinstance(target.warp_size, int):
             try:
                 warp_size = int(target.warp_size)
             except ValueError:
-                raise ValueError(f"HIP backend expects a numeric warp_size, got '{target.warp_size}'. "
-                                 f"Expected format: 'hip:<arch>:<warp_size>' (e.g., 'hip:gfx942:64')")
+                raise ValueError(f"HIP backend expects a numeric warp_size, got '{target.warp_size}'")
             target = GPUTarget(target.backend, target.arch, warp_size)
 
         super().__init__(target)
