@@ -2029,11 +2029,17 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
           visibleReads = convertAndBroadcast(fb, visibleReads, {0, 1, 4},
                                              readTrackingType);
           Value withVisible = arith::OrIOp::create(fb, tracking, visibleReads);
-          Value updated =
-              arith::SelectOp::create(fb, barrierMask, withVisible, tracking);
-          createMaskedStoreScratchMemory(
-              fb, fb.getLoc(), trackingPtr, updated, readTrackingType,
-              filterBuffer ? barrierMask : barrierCTAMask);
+          if (filterBuffer) {
+            Value updated =
+                arith::SelectOp::create(fb, barrierMask, withVisible, tracking);
+            createMaskedStoreScratchMemory(fb, fb.getLoc(), trackingPtr,
+                                           updated, readTrackingType,
+                                           barrierMask);
+          } else {
+            tti::createStoreScratchMemory(
+                fb, fb.getLoc(), trackingPtr, withVisible, readTrackingType,
+                /*currentCTAOnly=*/false, barrierMask);
+          }
         }
 
         fb.setInsertionPointToEnd(thenBlock);
@@ -3154,10 +3160,16 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
               createCTASetMask(fb, trackingType, /*dim=*/0, effectCTAs));
         }
         Value withSource = arith::OrIOp::create(fb, tracking, source);
-        Value updated =
-            arith::SelectOp::create(fb, trackMask, withSource, tracking);
-        createMaskedStoreScratchMemory(fb, fb.getLoc(), trackingPtr, updated,
-                                       trackingType, trackMask);
+        if (filterByBuffer) {
+          Value updated =
+              arith::SelectOp::create(fb, trackMask, withSource, tracking);
+          createMaskedStoreScratchMemory(fb, fb.getLoc(), trackingPtr, updated,
+                                         trackingType, trackMask);
+        } else {
+          tti::createStoreScratchMemory(fb, fb.getLoc(), trackingPtr,
+                                        withSource, trackingType,
+                                        /*currentCTAOnly=*/false, trackMask);
+        }
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
