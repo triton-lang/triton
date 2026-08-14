@@ -29,7 +29,7 @@ def pdl_producer(output, count, iterations, tag, BLOCK_SIZE: tl.constexpr):
     value = offset.to(tl.float32) + tag.to(tl.float32)
     iteration = 0
     while iteration < iterations:
-        value = value * 1.0000001192092896 + 0.0000001192092896
+        value = value * 1.02 + 1.02
         iteration += 1
     tl.store(output + tag * count + offset, value, mask=active)
 
@@ -41,7 +41,7 @@ def pdl_consumer(output, count, iterations, tag, BLOCK_SIZE: tl.constexpr):
     value = offset.to(tl.float32) + tag.to(tl.float32)
     iteration = 0
     while iteration < iterations:
-        value = value * 1.0000001192092896 + 0.0000001192092896
+        value = value * 1.02 + 1.02
         iteration += 1
     tl.store(output + tag * count + offset, value, mask=active)
 
