@@ -182,6 +182,31 @@ class CUDABackend(BaseBackend):
         return f"cuda:{capability}"
 
     def __init__(self, target: GPUTarget) -> None:
+        # Normalize arch and warp_size to expected types.
+        # This handles cases where target is constructed from string parsing
+        # (e.g., CLI --target flag: "cuda:90:32".split(":") produces strings).
+        arch = target.arch
+        warp_size = target.warp_size
+
+        if not isinstance(arch, int):
+            try:
+                arch = int(arch)
+            except ValueError:
+                raise ValueError(
+                    f"CUDA backend expects a numeric arch, got '{target.arch}'. "
+                    f"Expected format: 'cuda:<arch>:<warp_size>' (e.g., 'cuda:90:32')")
+
+        if not isinstance(warp_size, int):
+            try:
+                warp_size = int(warp_size)
+            except ValueError:
+                raise ValueError(
+                    f"CUDA backend expects a numeric warp_size, got '{target.warp_size}'. "
+                    f"Expected format: 'cuda:<arch>:<warp_size>' (e.g., 'cuda:90:32')")
+
+        if arch is not target.arch or warp_size is not target.warp_size:
+            target = GPUTarget(target.backend, arch, warp_size)
+
         super().__init__(target)
         self.binary_ext = "cubin"
 
