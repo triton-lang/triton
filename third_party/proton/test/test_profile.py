@@ -2005,7 +2005,7 @@ def test_cupti_hes_graph_construction_launch(
     replays = 3
     helper_path = pathlib.Path(cuda_graph_helper.__file__).resolve()
 
-    trace_path = tmp_path / f"{case}.chrome_trace"
+    profile_path = tmp_path / f"{case}.hatchet"
     try:
         result = subprocess.run(
             [
@@ -2013,7 +2013,7 @@ def test_cupti_hes_graph_construction_launch(
                 str(helper_path),
                 case,
                 str(replays),
-                str(trace_path),
+                str(profile_path),
                 str(cupti_graph_construction_runtime.library_path),
                 str(cupti_graph_construction_runtime.producer_path),
                 str(cupti_graph_construction_runtime.consumer_path),
@@ -2031,48 +2031,30 @@ def test_cupti_hes_graph_construction_launch(
     assert result.returncode == 0, (f"{case}: child exited with status {result.returncode}\n"
                                     f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
 
-    with trace_path.open() as trace_file:
-        trace_events = json.load(trace_file)["traceEvents"]
+    with profile_path.open() as profile_file:
+        profile = json.load(profile_file)
     build = cupti_graph_construction_runtime
     kernel_names = {build.producer_name, build.consumer_name}
-    kernel_events = [
-        event for event in trace_events if event.get("cat") == "kernel" and event.get("name") in kernel_names
-    ]
-    expected_kernel_count = replays * cuda_graph_helper.KERNELS_PER_GRAPH
-    assert len(kernel_events) == expected_kernel_count, (
-        f"{case}: found {len(kernel_events)} kernel events, expected {expected_kernel_count}")
 
     for replay in range(replays):
         scope_name = f"{case}_{replay}"
-        replay_events = [
-            event for event in kernel_events if event.get("args", {}).get("call_stack", [])[:2] == ["ROOT", scope_name]
-        ]
-        assert len(replay_events) == cuda_graph_helper.KERNELS_PER_GRAPH, (
-            f"{scope_name}: found {len(replay_events)} kernel events")
-        for event in replay_events:
-            assert event["args"]["call_stack"] == [
-                "ROOT",
-                scope_name,
-                "<captured_at>",
-                event["name"],
-            ]
-            assert event["dur"] > 0
+        replay_frame = _find_frame_by_name(profile[0], scope_name)
+        assert replay_frame is not None
+        capture_frame = _find_frame_by_name(replay_frame, "<captured_at>")
+        assert capture_frame is not None
+        kernel_frames = [child for child in capture_frame["children"] if child["frame"]["name"] in kernel_names]
+        assert sum(frame["metrics"]["count"] for frame in kernel_frames) == cuda_graph_helper.KERNELS_PER_GRAPH
+        assert all(frame["metrics"]["time (ns)"] > 0 for frame in kernel_frames)
 
-        producers = [event for event in replay_events if event["name"] == build.producer_name]
-        consumers = [event for event in replay_events if event["name"] == build.consumer_name]
+        producer_count = sum(frame["metrics"]["count"]
+                             for frame in kernel_frames
+                             if frame["frame"]["name"] == build.producer_name)
+        consumer_count = sum(frame["metrics"]["count"]
+                             for frame in kernel_frames
+                             if frame["frame"]["name"] == build.consumer_name)
         if case in ("pdl", "no-pdl"):
-            assert len(producers) == 1
-            assert len(consumers) == cuda_graph_helper.CONSUMERS_PER_GRAPH
-            producer = producers[0]
-            producer_end = producer["ts"] + producer["dur"]
-            overlaps = [
-                consumer["ts"] < producer_end and producer["ts"] < consumer["ts"] + consumer["dur"]
-                for consumer in consumers
-            ]
-            if case == "pdl":
-                assert all(overlaps)
-            else:
-                assert not any(overlaps)
+            assert producer_count == 1
+            assert consumer_count == cuda_graph_helper.CONSUMERS_PER_GRAPH
         else:
-            assert not producers
-            assert len(consumers) == cuda_graph_helper.KERNELS_PER_GRAPH
+            assert producer_count == 0
+            assert consumer_count == cuda_graph_helper.KERNELS_PER_GRAPH

@@ -55,16 +55,16 @@ C_SOURCE = r"""
 #include <string.h>
 
 enum {
-    PDL = 0,
-    EVENT = 1,
-    NO_PDL = 2,
-    KERNELS_PER_GRAPH = 4,
-    CONSUMERS_PER_GRAPH = 3,
-    BLOCK_SIZE = 256,
-    COUNT = 4096,
+    Pdl = 0,
+    Event = 1,
+    NoPdl = 2,
+    KernelsPerGraph = 4,
+    ConsumersPerGraph = 3,
+    BlockSize = 256,
+    Count = 4096,
 };
 
-static void check_cuda(CUresult result, const char *operation) {
+static void checkCuda(CUresult result, const char *operation) {
     if (result == CUDA_SUCCESS)
         return;
     const char *description = NULL;
@@ -74,81 +74,81 @@ static void check_cuda(CUresult result, const char *operation) {
     exit(2);
 }
 
-#define CUDA(call) check_cuda((call), #call)
+#define CUDA(call) checkCuda((call), #call)
 
-struct runtime {
+struct Runtime {
     int mode;
     CUdevice device;
     CUcontext context;
-    CUmodule producer_module;
-    CUmodule consumer_module;
+    CUmodule producerModule;
+    CUmodule consumerModule;
     CUfunction producer;
     CUfunction consumer;
     CUstream stream;
     CUgraph graph;
     CUgraphExec executable;
-    CUevent graph_start;
-    CUevent graph_end;
-    CUgraphNode kernels[KERNELS_PER_GRAPH];
+    CUevent graphStart;
+    CUevent graphEnd;
+    CUgraphNode kernels[KernelsPerGraph];
     CUdeviceptr output;
-    CUdeviceptr null_scratch;
+    CUdeviceptr nullScratch;
     uint32_t count;
-    uint32_t iterations[KERNELS_PER_GRAPH];
-    uint32_t tags[KERNELS_PER_GRAPH];
-    void *parameters[KERNELS_PER_GRAPH][6];
+    uint32_t iterations[KernelsPerGraph];
+    uint32_t tags[KernelsPerGraph];
+    void *parameters[KernelsPerGraph][6];
 };
 
-static void add_kernel(struct runtime *runtime, int index, CUfunction function,
-                       const CUgraphNode *dependencies,
-                       size_t dependency_count) {
+static void addKernel(struct Runtime *runtime, int index, CUfunction function,
+                      const CUgraphNode *dependencies,
+                      size_t dependencyCount) {
     runtime->parameters[index][0] = &runtime->output;
     runtime->parameters[index][1] = &runtime->count;
     runtime->parameters[index][2] = &runtime->iterations[index];
     runtime->parameters[index][3] = &runtime->tags[index];
-    runtime->parameters[index][4] = &runtime->null_scratch;
-    runtime->parameters[index][5] = &runtime->null_scratch;
+    runtime->parameters[index][4] = &runtime->nullScratch;
+    runtime->parameters[index][5] = &runtime->nullScratch;
 
     CUDA_KERNEL_NODE_PARAMS params;
     memset(&params, 0, sizeof(params));
     params.func = function;
-    params.gridDimX = (runtime->count + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    params.gridDimX = (runtime->count + BlockSize - 1) / BlockSize;
     params.gridDimY = 1;
     params.gridDimZ = 1;
-    params.blockDimX = BLOCK_SIZE;
+    params.blockDimX = BlockSize;
     params.blockDimY = 1;
     params.blockDimZ = 1;
     params.kernelParams = runtime->parameters[index];
     CUDA(cuGraphAddKernelNode(&runtime->kernels[index], runtime->graph,
-                              dependencies, dependency_count, &params));
+                              dependencies, dependencyCount, &params));
 }
 
-static void build_graph(struct runtime *runtime) {
+static void buildGraph(struct Runtime *runtime) {
     CUDA(cuGraphCreate(&runtime->graph, 0));
-    runtime->count = COUNT;
-    for (int index = 0; index < KERNELS_PER_GRAPH; ++index) {
+    runtime->count = Count;
+    for (int index = 0; index < KernelsPerGraph; ++index) {
         runtime->tags[index] = (uint32_t)index;
         runtime->iterations[index] = 10000;
     }
 
-    if (runtime->mode == EVENT) {
+    if (runtime->mode == Event) {
         CUgraphNode dependency;
-        CUDA(cuEventCreate(&runtime->graph_start, CU_EVENT_DEFAULT));
-        CUDA(cuEventCreate(&runtime->graph_end, CU_EVENT_DEFAULT));
+        CUDA(cuEventCreate(&runtime->graphStart, CU_EVENT_DEFAULT));
+        CUDA(cuEventCreate(&runtime->graphEnd, CU_EVENT_DEFAULT));
         CUDA(cuGraphAddEventRecordNode(&dependency, runtime->graph, NULL, 0,
-                                       runtime->graph_start));
-        for (int index = 0; index < KERNELS_PER_GRAPH; ++index) {
-            add_kernel(runtime, index, runtime->consumer, &dependency, 1);
+                                       runtime->graphStart));
+        for (int index = 0; index < KernelsPerGraph; ++index) {
+            addKernel(runtime, index, runtime->consumer, &dependency, 1);
             dependency = runtime->kernels[index];
         }
         CUDA(cuGraphAddEventRecordNode(&dependency, runtime->graph,
-                                       &runtime->kernels[KERNELS_PER_GRAPH - 1],
-                                       1, runtime->graph_end));
+                                       &runtime->kernels[KernelsPerGraph - 1],
+                                       1, runtime->graphEnd));
     } else {
         runtime->iterations[0] = 25000;
-        add_kernel(runtime, 0, runtime->producer, NULL, 0);
-        for (int index = 1; index < KERNELS_PER_GRAPH; ++index) {
-            if (runtime->mode == PDL) {
-                add_kernel(runtime, index, runtime->consumer, NULL, 0);
+        addKernel(runtime, 0, runtime->producer, NULL, 0);
+        for (int index = 1; index < KernelsPerGraph; ++index) {
+            if (runtime->mode == Pdl) {
+                addKernel(runtime, index, runtime->consumer, NULL, 0);
                 CUgraphEdgeData edge;
                 memset(&edge, 0, sizeof(edge));
                 edge.from_port = CU_GRAPH_KERNEL_NODE_PORT_PROGRAMMATIC;
@@ -157,8 +157,8 @@ static void build_graph(struct runtime *runtime) {
                     runtime->graph, &runtime->kernels[0],
                     &runtime->kernels[index], &edge, 1));
             } else {
-                add_kernel(runtime, index, runtime->consumer,
-                           &runtime->kernels[0], 1);
+                addKernel(runtime, index, runtime->consumer,
+                          &runtime->kernels[0], 1);
             }
         }
     }
@@ -166,11 +166,11 @@ static void build_graph(struct runtime *runtime) {
 }
 
 __attribute__((visibility("default")))
-void *graph_runtime_create(int mode, const char *producer_path,
-                           const char *consumer_path,
-                           const char *producer_name,
-                           const char *consumer_name) {
-    struct runtime *runtime = calloc(1, sizeof(*runtime));
+void *graphRuntimeCreate(int mode, const char *producerPath,
+                         const char *consumerPath,
+                         const char *producerName,
+                         const char *consumerName) {
+    struct Runtime *runtime = calloc(1, sizeof(*runtime));
     if (!runtime)
         return NULL;
     runtime->mode = mode;
@@ -179,45 +179,45 @@ void *graph_runtime_create(int mode, const char *producer_path,
     CUDA(cuDeviceGet(&runtime->device, 0));
     CUDA(cuDevicePrimaryCtxRetain(&runtime->context, runtime->device));
     CUDA(cuCtxSetCurrent(runtime->context));
-    CUDA(cuModuleLoad(&runtime->producer_module, producer_path));
-    CUDA(cuModuleLoad(&runtime->consumer_module, consumer_path));
-    CUDA(cuModuleGetFunction(&runtime->producer, runtime->producer_module,
-                             producer_name));
-    CUDA(cuModuleGetFunction(&runtime->consumer, runtime->consumer_module,
-                             consumer_name));
+    CUDA(cuModuleLoad(&runtime->producerModule, producerPath));
+    CUDA(cuModuleLoad(&runtime->consumerModule, consumerPath));
+    CUDA(cuModuleGetFunction(&runtime->producer, runtime->producerModule,
+                             producerName));
+    CUDA(cuModuleGetFunction(&runtime->consumer, runtime->consumerModule,
+                             consumerName));
     CUDA(cuMemAlloc(&runtime->output,
-                    KERNELS_PER_GRAPH * COUNT * sizeof(float)));
+                    KernelsPerGraph * Count * sizeof(float)));
     CUDA(cuStreamCreate(&runtime->stream, CU_STREAM_NON_BLOCKING));
-    build_graph(runtime);
+    buildGraph(runtime);
     return runtime;
 }
 
 __attribute__((visibility("default")))
-void graph_runtime_launch(void *handle) {
-    struct runtime *runtime = handle;
+void graphRuntimeLaunch(void *handle) {
+    struct Runtime *runtime = handle;
     CUDA(cuGraphLaunch(runtime->executable, runtime->stream));
-    if (runtime->mode == EVENT)
-        CUDA(cuEventSynchronize(runtime->graph_end));
+    if (runtime->mode == Event)
+        CUDA(cuEventSynchronize(runtime->graphEnd));
     else
         CUDA(cuStreamSynchronize(runtime->stream));
 }
 
 __attribute__((visibility("default")))
-void graph_runtime_destroy(void *handle) {
-    struct runtime *runtime = handle;
+void graphRuntimeDestroy(void *handle) {
+    struct Runtime *runtime = handle;
     if (!runtime)
         return;
     CUDA(cuCtxSetCurrent(runtime->context));
     CUDA(cuGraphExecDestroy(runtime->executable));
     CUDA(cuGraphDestroy(runtime->graph));
-    if (runtime->graph_start)
-        CUDA(cuEventDestroy(runtime->graph_start));
-    if (runtime->graph_end)
-        CUDA(cuEventDestroy(runtime->graph_end));
+    if (runtime->graphStart)
+        CUDA(cuEventDestroy(runtime->graphStart));
+    if (runtime->graphEnd)
+        CUDA(cuEventDestroy(runtime->graphEnd));
     CUDA(cuStreamDestroy(runtime->stream));
     CUDA(cuMemFree(runtime->output));
-    CUDA(cuModuleUnload(runtime->consumer_module));
-    CUDA(cuModuleUnload(runtime->producer_module));
+    CUDA(cuModuleUnload(runtime->consumerModule));
+    CUDA(cuModuleUnload(runtime->producerModule));
     CUDA(cuDevicePrimaryCtxRelease(runtime->device));
     free(runtime);
 }
@@ -237,17 +237,17 @@ class GraphRuntime:
 
     def __init__(self, build: RuntimeBuild, case: str) -> None:
         self.library = ctypes.CDLL(str(build.library_path))
-        self.library.graph_runtime_create.argtypes = [
+        self.library.graphRuntimeCreate.argtypes = [
             ctypes.c_int,
             ctypes.c_char_p,
             ctypes.c_char_p,
             ctypes.c_char_p,
             ctypes.c_char_p,
         ]
-        self.library.graph_runtime_create.restype = ctypes.c_void_p
-        self.library.graph_runtime_launch.argtypes = [ctypes.c_void_p]
-        self.library.graph_runtime_destroy.argtypes = [ctypes.c_void_p]
-        self.handle = self.library.graph_runtime_create(
+        self.library.graphRuntimeCreate.restype = ctypes.c_void_p
+        self.library.graphRuntimeLaunch.argtypes = [ctypes.c_void_p]
+        self.library.graphRuntimeDestroy.argtypes = [ctypes.c_void_p]
+        self.handle = self.library.graphRuntimeCreate(
             CASE_IDS[case],
             os.fsencode(build.producer_path),
             os.fsencode(build.consumer_path),
@@ -258,11 +258,11 @@ class GraphRuntime:
             raise RuntimeError("C graph runtime creation failed")
 
     def launch(self) -> None:
-        self.library.graph_runtime_launch(self.handle)
+        self.library.graphRuntimeLaunch(self.handle)
 
     def close(self) -> None:
         if self.handle:
-            self.library.graph_runtime_destroy(self.handle)
+            self.library.graphRuntimeDestroy(self.handle)
             self.handle = None
 
 
@@ -334,11 +334,11 @@ def main() -> None:
     triton.knobs.proton.cupti_lib_dir = triton.knobs.proton.cupti_lib_blackwell_dir
     triton.knobs.proton.enable_hw_trace = True
 
-    from triton._C.libproton import proton as libproton
+    import triton.profiler as proton
 
     case = sys.argv[1]
     replays = int(sys.argv[2])
-    trace_path = Path(sys.argv[3])
+    profile_path = Path(sys.argv[3])
     build = RuntimeBuild(
         library_path=Path(sys.argv[4]),
         producer_path=Path(sys.argv[5]),
@@ -347,44 +347,29 @@ def main() -> None:
         consumer_name=sys.argv[8],
     )
 
-    # cuInit initializes the driver, not a CUDA context. Start Proton through
-    # the low-level entry point next so HES is enabled before GraphRuntime
-    # retains and sets the primary context.
+    # cuInit initializes the driver, not a CUDA context. Start Proton next so
+    # HES is enabled before GraphRuntime retains and sets the primary context.
     cuda = ctypes.CDLL("libcuda.so.1")
     cuda.cuInit.argtypes = [ctypes.c_uint]
     cuda.cuInit.restype = ctypes.c_int
     if status := cuda.cuInit(0):
         raise RuntimeError(f"cuInit failed with status {status}")
 
-    session = libproton.start(
-        str(trace_path.with_suffix("")),
-        "shadow",
-        "trace",
-        "cupti",
-        "",
+    session = proton.start(
+        str(profile_path.with_suffix("")),
+        context="shadow",
+        data="tree",
+        backend="cupti",
     )
     runtime = GraphRuntime(build, case)
-    finalized = False
-    try:
-        libproton.deactivate(session, False)
-        runtime.launch()
-        libproton.activate(session)
-        for replay in range(replays):
-            scope_name = f"{case}_{replay}"
-            scope_id = libproton.record_scope()
-            libproton.enter_scope(scope_id, scope_name)
-            try:
-                runtime.launch()
-            finally:
-                libproton.exit_scope(scope_id, scope_name)
-        libproton.finalize(session, "")
-        finalized = True
-    finally:
-        try:
-            if not finalized:
-                libproton.finalize(session, "")
-        finally:
-            runtime.close()
+    proton.deactivate(session, flushing=False)
+    runtime.launch()
+    proton.activate(session)
+    for replay in range(replays):
+        with proton.scope(f"{case}_{replay}"):
+            runtime.launch()
+    proton.finalize(session, "")
+    runtime.close()
 
 
 if __name__ == "__main__":
