@@ -62,15 +62,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
-    // CHECK: tti.experimental_gsan_tensordesc_info %arg0
-    // CHECK: %[[ROW_ELEMS:.*]] = arith.trunci %{{.*}} : i64 to i32
-    // CHECK: %[[ROW_BYTES:.*]] = arith.muli %[[ROW_ELEMS]], %{{.*}} : i32
-    // CHECK: %[[NUM_COLS:.*]] = arith.trunci %{{.*}} : i64 to i32
-    // CHECK: tti.experimental_gsan_tensor_rect_access[%{{.*}}], [%{{.*}}], %[[ROW_BYTES]], %{{.*}}, %[[NUM_COLS]], false
+    // CHECK: tti.experimental_gsan_tensordesc_access %arg0[%{{.*}}, %{{.*}}], false, %{{.*}}
     // CHECK-NEXT: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
-    // CHECK: tti.experimental_gsan_tensordesc_info %arg0
-    // CHECK: tti.experimental_gsan_tensor_rect_access{{.*}} true
+    // CHECK: tti.experimental_gsan_tensordesc_access %arg0[%{{.*}}, %{{.*}}], true
     // CHECK-NEXT: ttng.async_tma_copy_local_to_global
     ttng.async_tma_copy_local_to_global %desc[%c0_i32, %c0_i32] %buf : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     tt.return
@@ -82,8 +77,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<64x32xf32, #shared, #smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 8192 : i32} : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
-    // CHECK: tti.experimental_gsan_tensor_rect_access[%{{.*}}], [%{{.*}}],
-    // CHECK-SAME: false : tensor<4x2x!tt.ptr<f32>, #{{.*}}>, tensor<4x2xi1, #{{.*}}>
+    // CHECK: tti.experimental_gsan_tensordesc_access %arg0[%{{.*}}, %{{.*}}, %{{.*}}], false, %{{.*}}
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<8x8x32xf32, #shared>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<64x32xf32, #shared, #smem, mutable>
     tt.return
   }
@@ -94,9 +89,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16x32xf32, #shared, #smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 2048 : i32} : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
-    // CHECK: tti.experimental_gsan_tensor_rect_access[%{{.*}}], [%{{.*}}],
-    // CHECK-SAME: false {tti.gsan_warps_per_rect = 2 : i32}
-    // CHECK-SAME: tensor<2x1x!tt.ptr<f32>, #{{.*}}>, tensor<2x1xi1, #{{.*}}>
+    // CHECK: tti.experimental_gsan_tensordesc_access %arg0[%{{.*}}, %{{.*}}, %{{.*}}], false, %{{.*}}
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<2x8x32xf32, #shared>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<16x32xf32, #shared, #smem, mutable>
     tt.return
   }
@@ -105,11 +99,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
   tt.func @instrumented_async_tma_reduce(%desc: !tt.tensordesc<8x32xi32, #shared>) {
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8x32xi32, #shared, #smem, mutable>
-    // CHECK: tti.experimental_gsan_tensordesc_info %arg0
-    // CHECK: %[[ATOMIC_ROW_ELEMS:.*]] = arith.trunci %{{.*}} : i64 to i32
-    // CHECK: %[[ATOMIC_ROW_BYTES:.*]] = arith.muli %[[ATOMIC_ROW_ELEMS]], %{{.*}} : i32
-    // CHECK: %[[ATOMIC_NUM_COLS:.*]] = arith.trunci %{{.*}} : i64 to i32
-    // CHECK: tti.experimental_gsan_atomic_tensor_access[%{{.*}}], [%{{.*}}], %[[ATOMIC_ROW_BYTES]], %{{.*}}, %[[ATOMIC_NUM_COLS]], relaxed, gpu
+    // CHECK: tti.experimental_gsan_atomic_tensordesc_access %arg0[%{{.*}}, %{{.*}}], relaxed, gpu
     // CHECK-NEXT: ttng.async_tma_reduce add
     ttng.async_tma_reduce add, %desc[%c0_i32, %c0_i32] %buf : !tt.tensordesc<8x32xi32, #shared>, !ttg.memdesc<8x32xi32, #shared, #smem, mutable>
     tt.return
@@ -119,8 +109,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
   tt.func @instrumented_async_tma_reduce_many_planes(%desc: !tt.tensordesc<8x8x32xi32, #shared>) {
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<64x32xi32, #shared, #smem, mutable>
-    // CHECK: tti.experimental_gsan_atomic_tensor_access[%{{.*}}], [%{{.*}}],
-    // CHECK-SAME: relaxed, gpu : tensor<4x2x!tt.ptr<i32>, #{{.*}}>, tensor<4x2xi1, #{{.*}}>
+    // CHECK: tti.experimental_gsan_atomic_tensordesc_access %arg0[%{{.*}}, %{{.*}}, %{{.*}}], relaxed, gpu
     // CHECK-NEXT: ttng.async_tma_reduce add
     ttng.async_tma_reduce add, %desc[%c0_i32, %c0_i32, %c0_i32] %buf : !tt.tensordesc<8x8x32xi32, #shared>, !ttg.memdesc<64x32xi32, #shared, #smem, mutable>
     tt.return
@@ -680,10 +669,10 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
-    // CHECK: tti.experimental_gsan_tensor_rect_access{{.*}} false
+    // CHECK: tti.experimental_gsan_tensordesc_access %arg0[%{{.*}}], false, %{{.*}}
     // CHECK-NEXT: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32, %c0_i32, %c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<1x1x1x32x32xf32, #shared>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
-    // CHECK: tti.experimental_gsan_tensor_rect_access{{.*}} true
+    // CHECK: tti.experimental_gsan_tensordesc_access %arg0[%{{.*}}], true
     // CHECK-NEXT: ttng.async_tma_copy_local_to_global
     ttng.async_tma_copy_local_to_global %desc[%c0_i32, %c0_i32, %c0_i32, %c0_i32, %c0_i32] %buf : !tt.tensordesc<1x1x1x32x32xf32, #shared>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     tt.return
@@ -735,22 +724,10 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}
     %x_offsets = arith.constant dense<1> : tensor<32xi32, #blocked_rows>
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
-    // CHECK: tti.experimental_gsan_tensordesc_info %arg0
-    // CHECK: %[[GATHER_VALID_COLS:.*]] = arith.trunci %{{.*}} : i64 to i32
-    // CHECK: %[[GATHER_ROW_BYTES:.*]] = arith.muli %[[GATHER_VALID_COLS]], %{{.*}} : i32
-    // CHECK: %[[GATHER_X_OFFSETS:.*]] = arith.extsi %{{.*}}
-    // CHECK-NEXT: %[[GATHER_RESHAPED:.*]] = tt.reshape %[[GATHER_X_OFFSETS]]
-    // CHECK-NEXT: %[[GATHER_DISTRIBUTED:.*]] = ttg.convert_layout %[[GATHER_RESHAPED]]
-    // CHECK-NOT: tt.make_range
-    // CHECK: tti.experimental_gsan_tensor_rect_access[%{{.*}}], [%{{.*}}], %[[GATHER_ROW_BYTES]], %{{.*}}, %{{.*}}, false
+    // CHECK: tti.experimental_gsan_indexed_tensordesc_access %arg0[%{{.*}}, %{{.*}}], false, %{{.*}} : !tt.tensordesc<1x32xf32, #shared>, tensor<32xi32, #{{.*}}>
     // CHECK-NEXT: ttng.async_tma_gather
     ttng.async_tma_gather %desc[%x_offsets, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<1x32xf32, #shared>, tensor<32xi32, #blocked_rows>, i32, !ttg.memdesc<1xi64, #bar, #smem, mutable>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, i1
-    // CHECK: tti.experimental_gsan_tensordesc_info %arg0
-    // CHECK: %[[SCATTER_X_OFFSETS:.*]] = arith.extsi %{{.*}}
-    // CHECK-NEXT: %[[SCATTER_RESHAPED:.*]] = tt.reshape %[[SCATTER_X_OFFSETS]]
-    // CHECK-NEXT: %[[SCATTER_DISTRIBUTED:.*]] = ttg.convert_layout %[[SCATTER_RESHAPED]]
-    // CHECK-NOT: tt.make_range
-    // CHECK: tti.experimental_gsan_tensor_rect_access{{.*}} true
+    // CHECK: tti.experimental_gsan_indexed_tensordesc_access %arg0[%{{.*}}, %{{.*}}], true : !tt.tensordesc<1x32xf32, #shared>, tensor<32xi32, #{{.*}}>
     // CHECK-NEXT: ttng.async_tma_scatter
     ttng.async_tma_scatter %desc[%x_offsets, %c0_i32] %buf : !tt.tensordesc<1x32xf32, #shared>, tensor<32xi32, #blocked_rows>, i32, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     tt.return
@@ -778,8 +755,7 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}
     %desc = ttng.reinterpret_tensor_descriptor %raw_desc : !tt.ptr<i8> to !tt.tensordesc<32x32xf32, #shared>
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
-    // CHECK: tti.experimental_gsan_tensordesc_info %[[DESC]]
-    // CHECK: tti.experimental_gsan_tensor_rect_access{{.*}} false
+    // CHECK: tti.experimental_gsan_tensordesc_access %[[DESC]][%{{.*}}, %{{.*}}], false, %{{.*}}
     // CHECK-NEXT: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     tt.return

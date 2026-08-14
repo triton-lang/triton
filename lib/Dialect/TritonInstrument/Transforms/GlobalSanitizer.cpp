@@ -17,7 +17,6 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 
-#include <algorithm>
 #include <optional>
 
 namespace mlir::triton::instrument {
@@ -42,409 +41,29 @@ static constexpr int64_t kGSanClusterBarrierScratchBytes = 128;
 static constexpr int64_t kGSanMBarrierTableHeaderBytes = 16;
 static constexpr int64_t kGSanMBarrierRecordBytes = 176;
 
-struct DescriptorInfo {
-  Value base;
-  SmallVector<Value> shape;
-  SmallVector<Value> strides;
-};
-
-struct RectAccess {
-  Value base;
-  Value rowBytes;
-  Value colStride;
-  Value numCols;
-  Value pred;
-};
-
-struct ClippedRange {
-  Value start;
-  Value count;
-  Value valid;
-};
-
-struct WarpDistributedLayout {
-  RankedTensorType indexType;
-  RankedTensorType ptrType;
-  RankedTensorType maskType;
-  int numWarps;
-  int64_t activeWarps;
-  int64_t itemsPerWarp;
-};
-
-enum class GSanAccessKind { Load, Store, Atomic };
-
-static Value castToI64(OpBuilder &builder, Location loc, Value value) {
-  if (value.getType().isInteger(64))
-    return value;
-  return builder.createOrFold<arith::ExtSIOp>(loc, builder.getI64Type(), value);
-}
-
-static SmallVector<Value> castToI64(OpBuilder &builder, Location loc,
-                                    ValueRange values) {
-  SmallVector<Value> result;
-  result.reserve(values.size());
-  for (Value value : values)
-    result.push_back(castToI64(builder, loc, value));
-  return result;
-}
-
-static Value createBoundsCheck(OpBuilder &builder, Location loc, Value coord,
-                               Value upperBound, Value zero) {
-  Value lowerValid = arith::CmpIOp::create(
-      builder, loc, arith::CmpIPredicate::sge, coord, zero);
-  Value upperValid = arith::CmpIOp::create(
-      builder, loc, arith::CmpIPredicate::slt, coord, upperBound);
-  return arith::AndIOp::create(builder, loc, lowerValid, upperValid);
-}
-
-static ClippedRange createClippedRange(OpBuilder &builder, Location loc,
-                                       Value offset, int64_t width,
-                                       Value upperBound, Value zero) {
-  Value start = arith::MaxSIOp::create(builder, loc, offset, zero);
-  Value blockWidth = arith::ConstantIntOp::create(builder, loc, width, 64);
-  Value limit = arith::AddIOp::create(builder, loc, offset, blockWidth);
-  Value end = arith::MinSIOp::create(builder, loc, limit, upperBound);
-  Value count = arith::SubIOp::create(builder, loc, end, start);
-  count = arith::MaxSIOp::create(builder, loc, count, zero);
-  Value valid = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::sgt,
-                                      count, zero);
-  return ClippedRange{start, count, valid};
-}
-
-static Value createElementByteWidth(OpBuilder &builder, Location loc,
-                                    const DescriptorInfo &desc,
-                                    unsigned integerWidth) {
-  auto elemTy = cast<tt::PointerType>(desc.base.getType()).getPointeeType();
-  return arith::ConstantIntOp::create(
-      builder, loc, elemTy.getIntOrFloatBitWidth() / 8, integerWidth);
-}
-
-static Value createRowByteWidth(OpBuilder &builder, Location loc,
-                                const DescriptorInfo &desc, Value elemCount) {
-  Value countI32 =
-      arith::TruncIOp::create(builder, loc, builder.getI32Type(), elemCount);
-  Value elemBytes = createElementByteWidth(builder, loc, desc, 32);
-  return arith::MulIOp::create(builder, loc, countI32, elemBytes);
-}
-
-static Value addStridedPointerOffset(OpBuilder &builder, Location loc,
-                                     Value ptr, Value offset, Value stride) {
-  if (auto offsetType = dyn_cast<RankedTensorType>(offset.getType()))
-    stride = tt::SplatOp::create(builder, loc, offsetType, stride);
-  Value stridedOffset =
-      arith::MulIOp::create(builder, loc, offset.getType(), offset, stride);
-  return tt::AddPtrOp::create(builder, loc, ptr.getType(), ptr, stridedOffset);
-}
-
-static DescriptorInfo getDescriptorInfo(Value desc, OpBuilder &builder) {
-  if (!isa<tt::TensorDescType>(desc.getType())) {
-    std::string msg;
-    llvm::raw_string_ostream stream(msg);
-    stream << "GSan: Unsupported descriptor type" << desc.getType();
-    llvm::report_fatal_error(msg.c_str());
-  }
-  auto descTy = cast<tt::TensorDescType>(desc.getType());
-
-  auto elemTy = descTy.getSignlessBlockType().getElementType();
-  auto basePtrTy = tt::getPointerType(elemTy);
-  unsigned rank = descTy.getShape().size();
-  SmallVector<Type> resultTypes;
-  resultTypes.reserve(1 + 2 * rank);
-  resultTypes.push_back(basePtrTy);
-  resultTypes.append(rank, builder.getI64Type());
-  resultTypes.append(rank, builder.getI64Type());
-
-  auto info = ExperimentalGSanTensorDescInfoOp::create(builder, desc.getLoc(),
-                                                       resultTypes, desc);
-  auto results = info->getResults();
-
-  DescriptorInfo descriptorInfo;
-  descriptorInfo.base = results.front();
-  descriptorInfo.shape.assign(results.begin() + 1, results.begin() + 1 + rank);
-  descriptorInfo.strides.assign(results.begin() + 1 + rank, results.end());
-  return descriptorInfo;
-}
-
-static Value createExpandedOffsetRange(OpBuilder &builder, Location loc,
-                                       RankedTensorType fullI64Type,
-                                       Value offset, unsigned dim) {
-  int64_t dimSize = fullI64Type.getShape()[dim];
-
-  auto sliceI32Type = getSlicedTensorType(fullI64Type, {static_cast<int>(dim)},
-                                          builder.getI32Type());
-  auto sliceI64Type = getSlicedTensorType(fullI64Type, {static_cast<int>(dim)},
-                                          builder.getI64Type());
-
-  Value range = tt::MakeRangeOp::create(builder, loc, sliceI32Type, 0, dimSize);
-  Value rangeI64 = arith::ExtSIOp::create(builder, loc, sliceI64Type, range);
-  Value offsetI64 = castToI64(builder, loc, offset);
-  Value offsetSplat =
-      tt::SplatOp::create(builder, loc, sliceI64Type, offsetI64);
-  Value result =
-      arith::AddIOp::create(builder, loc, sliceI64Type, offsetSplat, rangeI64);
-  return reshapeAndBroadcast(builder, loc, result, {static_cast<int>(dim)},
-                             fullI64Type);
-}
-
-static WarpDistributedLayout
-createWarpDistributedLayout(OpBuilder &builder, const DescriptorInfo &desc,
-                            int64_t numItems) {
-  int numWarps = ttg::lookupNumWarps(builder.getInsertionBlock()->getParent());
-  int threadsPerWarp = ttg::lookupThreadsPerWarp(builder);
-  int numCTAs = ttg::lookupNumCTAs(builder.getInsertionBlock()->getParentOp());
-  int64_t activeWarps = std::min<int64_t>(numWarps, numItems);
-  int64_t itemsPerWarp = numItems / activeWarps;
-  SmallVector<int64_t> shape{activeWarps, itemsPerWarp};
-
-  auto baseEncoding = ttg::getDefaultBlockedEncoding(
-      builder.getContext(), shape, numWarps, threadsPerWarp, numCTAs);
-  SmallVector<unsigned> sizePerThread{1, 1};
-  SmallVector<unsigned> threadsPerWarpLayout{
-      1, static_cast<unsigned>(threadsPerWarp)};
-  SmallVector<unsigned> warpsPerCTALayout{static_cast<unsigned>(numWarps), 1};
-  SmallVector<unsigned> order{1, 0};
-  auto encoding = ttg::BlockedEncodingAttr::get(
-      builder.getContext(), sizePerThread, threadsPerWarpLayout,
-      warpsPerCTALayout, order, baseEncoding.getCGALayout());
-  auto indexType = RankedTensorType::get(shape, builder.getI64Type(), encoding);
-  auto ptrType = RankedTensorType::get(shape, desc.base.getType(), encoding);
-  auto maskType = RankedTensorType::get(shape, builder.getI1Type(), encoding);
-  return WarpDistributedLayout{indexType, ptrType,     maskType,
-                               numWarps,  activeWarps, itemsPerWarp};
-}
-
-static Value
-createWarpDistributedIndex(OpBuilder &builder, Location loc,
-                           const WarpDistributedLayout &layout, Value zero,
-                           std::optional<Value> indexedRows = std::nullopt) {
-  if (indexedRows) {
-    auto indexedType = cast<RankedTensorType>((*indexedRows).getType());
-    auto indexedI64Type =
-        RankedTensorType::get(indexedType.getShape(), builder.getI64Type(),
-                              indexedType.getEncoding());
-    Value indexedI64 =
-        arith::ExtSIOp::create(builder, loc, indexedI64Type, *indexedRows);
-    Value reshaped = tt::ReshapeOp::create(
-        builder, loc, layout.indexType.getShape(), indexedI64);
-    return ttg::ConvertLayoutOp::create(builder, loc, layout.indexType,
-                                        reshaped);
-  }
-
-  Value warpIndex = createExpandedOffsetRange(builder, loc, layout.indexType,
-                                              zero, /*dim=*/0);
-  Value indexInWarp = createExpandedOffsetRange(builder, loc, layout.indexType,
-                                                zero, /*dim=*/1);
-  Value strideValue =
-      arith::ConstantIntOp::create(builder, loc, layout.activeWarps, 64);
-  Value strideTensor =
-      tt::SplatOp::create(builder, loc, layout.indexType, strideValue);
-  Value index = arith::MulIOp::create(builder, loc, layout.indexType,
-                                      indexInWarp, strideTensor);
-  return arith::AddIOp::create(builder, loc, layout.indexType, index,
-                               warpIndex);
-}
-
-static int64_t getGSanRectPlaneCount(ArrayRef<int64_t> blockShape,
-                                     unsigned rectDims) {
-  int64_t planes = 1;
-  for (unsigned dim = 0; dim + rectDims < blockShape.size(); ++dim)
-    planes *= blockShape[dim];
-  return planes;
-}
-
-static RectAccess
-createRectAccess(OpBuilder &builder, Location loc, const DescriptorInfo &desc,
-                 ArrayRef<int64_t> blockShape, ValueRange offsets,
-                 std::optional<Value> pred, std::optional<Value> indexedRows,
-                 unsigned rectDims) {
-  unsigned rank = blockShape.size();
-  assert(rank > 0 && "compact GSan rectangles require at least one dimension");
-
-  Value zero = arith::ConstantIntOp::create(builder, loc, 0, 64);
-  Value one = arith::ConstantIntOp::create(builder, loc, 1, 32);
-  Value planeValid = arith::ConstantIntOp::create(builder, loc, 1, 1);
-  Value rowValid = planeValid;
-  Value rowBytes;
-  Value base = desc.base;
-  if (rectDims > 0) {
-    auto rows = createClippedRange(builder, loc, offsets.back(),
-                                   blockShape.back(), desc.shape.back(), zero);
-    rowValid = rows.valid;
-    rowBytes = createRowByteWidth(builder, loc, desc, rows.count);
-    base = tt::AddPtrOp::create(builder, loc, desc.base.getType(), desc.base,
-                                rows.start);
-  } else {
-    rowBytes = createElementByteWidth(builder, loc, desc, 32);
-  }
-  for (unsigned dim = 0; dim + rectDims < rank; ++dim) {
-    if (indexedRows && dim == 0)
-      continue;
-    Value coord = offsets[dim];
-    Value coordValid =
-        createBoundsCheck(builder, loc, coord, desc.shape[dim], zero);
-    planeValid = arith::AndIOp::create(builder, loc, planeValid, coordValid);
-    base =
-        addStridedPointerOffset(builder, loc, base, coord, desc.strides[dim]);
-  }
-
-  Value colStride = zero;
-  Value numCols = one;
-  Value hasCols = planeValid;
-  if (rectDims == 2 && rank >= 2) {
-    unsigned colDim = rank - 2;
-    auto cols =
-        createClippedRange(builder, loc, offsets[colDim], blockShape[colDim],
-                           desc.shape[colDim], zero);
-    hasCols = cols.valid;
-    numCols =
-        arith::TruncIOp::create(builder, loc, builder.getI32Type(), cols.count);
-    base = addStridedPointerOffset(builder, loc, base, cols.start,
-                                   desc.strides[colDim]);
-    Value elemBytesI64 = createElementByteWidth(builder, loc, desc, 64);
-    colStride =
-        arith::MulIOp::create(builder, loc, desc.strides[colDim], elemBytesI64);
-  }
-
-  Value enabled = arith::AndIOp::create(builder, loc, rowValid, hasCols);
-  enabled = arith::AndIOp::create(builder, loc, enabled, planeValid);
-  if (pred)
-    enabled = arith::AndIOp::create(builder, loc, enabled, *pred);
-
-  return RectAccess{base, rowBytes, colStride, numCols, enabled};
-}
-
-static void emitRectAccess(OpBuilder &builder, Location loc,
-                           const RectAccess &access, GSanAccessKind kind,
-                           int warpsPerRect = 1) {
-  SmallVector<Value> bases{access.base};
-  SmallVector<Value> masks{access.pred};
-  Operation *rect;
-  if (kind == GSanAccessKind::Atomic) {
-    rect = ExperimentalGSanAtomicTensorAccessOp::create(
-        builder, loc, bases, masks, access.rowBytes, access.colStride,
-        access.numCols, MemSemantic::RELAXED, MemSyncScope::GPU);
-  } else {
-    rect = ExperimentalGSanTensorRectAccessOp::create(
-        builder, loc, bases, masks, access.rowBytes, access.colStride,
-        access.numCols, kind == GSanAccessKind::Store);
-  }
-  if (warpsPerRect > 1)
-    rect->setAttr("tti.gsan_warps_per_rect",
-                  builder.getI32IntegerAttr(warpsPerRect));
-}
-
-static void createStackedRectAccess(
-    OpBuilder &builder, Location loc, const DescriptorInfo &desc,
-    ArrayRef<int64_t> blockShape, ValueRange offsets, std::optional<Value> pred,
-    GSanAccessKind kind, std::optional<Value> indexedRows = std::nullopt) {
-  unsigned rectDims = indexedRows ? 1 : 2;
-  int64_t numPlanes = getGSanRectPlaneCount(blockShape, rectDims);
-  if (numPlanes > 1 || indexedRows) {
-    auto layout = createWarpDistributedLayout(builder, desc, numPlanes);
-
-    auto firstPlane = createRectAccess(builder, loc, desc, blockShape, offsets,
-                                       pred, indexedRows, rectDims);
-    Value zero = arith::ConstantIntOp::create(builder, loc, 0, 64);
-    Value zeroI32 = arith::ConstantIntOp::create(builder, loc, 0, 32);
-    Value zeroTensor =
-        tt::SplatOp::create(builder, loc, layout.indexType, zero);
-    Value planeIndex =
-        createWarpDistributedIndex(builder, loc, layout, zero, indexedRows);
-
-    Value hasRows = arith::CmpIOp::create(
-        builder, loc, arith::CmpIPredicate::sgt, firstPlane.rowBytes, zeroI32);
-    Value hasCols = arith::CmpIOp::create(
-        builder, loc, arith::CmpIPredicate::sgt, firstPlane.numCols, zeroI32);
-    Value enabled = arith::AndIOp::create(builder, loc, hasRows, hasCols);
-    if (pred)
-      enabled = arith::AndIOp::create(builder, loc, enabled, *pred);
-    Value planeMask =
-        tt::SplatOp::create(builder, loc, layout.maskType, enabled);
-    Value planeBase =
-        tt::SplatOp::create(builder, loc, layout.ptrType, firstPlane.base);
-
-    for (unsigned dim = 0; dim + rectDims < blockShape.size(); ++dim) {
-      Value logicalIndex;
-      Value coord;
-      if (indexedRows && dim == 0) {
-        logicalIndex = planeIndex;
-        coord = logicalIndex;
-      } else {
-        int64_t planeStride = 1;
-        for (unsigned next = dim + 1; next + rectDims < blockShape.size();
-             ++next)
-          planeStride *= blockShape[next];
-        Value planeStrideValue =
-            arith::ConstantIntOp::create(builder, loc, planeStride, 64);
-        Value planeStrideTensor = tt::SplatOp::create(
-            builder, loc, layout.indexType, planeStrideValue);
-        logicalIndex = arith::DivSIOp::create(builder, loc, layout.indexType,
-                                              planeIndex, planeStrideTensor);
-        Value extentValue =
-            arith::ConstantIntOp::create(builder, loc, blockShape[dim], 64);
-        Value extentTensor =
-            tt::SplatOp::create(builder, loc, layout.indexType, extentValue);
-        logicalIndex = arith::RemSIOp::create(builder, loc, layout.indexType,
-                                              logicalIndex, extentTensor);
-        Value dimOffset =
-            tt::SplatOp::create(builder, loc, layout.indexType, offsets[dim]);
-        coord = arith::AddIOp::create(builder, loc, layout.indexType,
-                                      logicalIndex, dimOffset);
-      }
-      Value dimUpper =
-          tt::SplatOp::create(builder, loc, layout.indexType, desc.shape[dim]);
-      Value coordValid =
-          createBoundsCheck(builder, loc, coord, dimUpper, zeroTensor);
-      planeMask = arith::AndIOp::create(builder, loc, planeMask, coordValid);
-      planeBase = addStridedPointerOffset(builder, loc, planeBase, logicalIndex,
-                                          desc.strides[dim]);
-    }
-
-    int warpsPerPlane = layout.numWarps / layout.activeWarps;
-    auto access =
-        RectAccess{planeBase, firstPlane.rowBytes, firstPlane.colStride,
-                   firstPlane.numCols, planeMask};
-    emitRectAccess(builder, loc, access, kind, indexedRows ? 1 : warpsPerPlane);
-    return;
-  }
-
-  auto access = createRectAccess(builder, loc, desc, blockShape, offsets, pred,
-                                 indexedRows, rectDims);
-  emitRectAccess(builder, loc, access, kind);
-}
-
 static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
   if (isa<ttng::TensorDescIm2ColType>(op.getDesc().getType()))
     return;
 
   OpBuilder builder(op);
-  auto desc = getDescriptorInfo(op.getDesc(), builder);
-  auto blockShape = op.getDesc().getType().getShape();
-
-  auto offsets = castToI64(builder, op.getLoc(), op.getCoord());
-  createStackedRectAccess(builder, op.getLoc(), desc, blockShape, offsets,
-                          op.getPred(), GSanAccessKind::Load);
+  ExperimentalGSanTensorDescAccessOp::create(builder, op.getLoc(), op.getDesc(),
+                                             op.getCoord(), op.getPred(),
+                                             /*isStore=*/false);
 }
 
 static void instrumentAsyncTMAStore(Operation *op, Value descValue,
                                     ValueRange coords) {
   OpBuilder builder(op);
-  auto desc = getDescriptorInfo(descValue, builder);
-  auto blockShape = cast<tt::TensorDescType>(descValue.getType()).getShape();
-
-  auto offsets = castToI64(builder, op->getLoc(), coords);
-  createStackedRectAccess(builder, op->getLoc(), desc, blockShape, offsets,
-                          std::nullopt, GSanAccessKind::Store);
+  ExperimentalGSanTensorDescAccessOp::create(builder, op->getLoc(), descValue,
+                                             coords, /*pred=*/Value{},
+                                             /*isStore=*/true);
 }
 
 static void instrumentAsyncTMAReduce(ttng::AsyncTMAReduceOp op) {
   OpBuilder builder(op);
-  auto desc = getDescriptorInfo(op.getDesc(), builder);
-  auto blockShape = op.getDesc().getType().getShape();
-
-  auto offsets = castToI64(builder, op.getLoc(), op.getCoord());
-  createStackedRectAccess(builder, op.getLoc(), desc, blockShape, offsets,
-                          std::nullopt, GSanAccessKind::Atomic);
+  ExperimentalGSanAtomicTensorDescAccessOp::create(
+      builder, op.getLoc(), op.getDesc(), op.getCoord(), MemSemantic::RELAXED,
+      MemSyncScope::GPU);
 }
 
 static void instrumentAtomicPoll(tt::AtomicPollOp op) {
@@ -461,24 +80,16 @@ static void instrumentAtomicPoll(tt::AtomicPollOp op) {
 
 static void instrumentAsyncTMAGather(ttng::AsyncTMAGatherOp op) {
   OpBuilder builder(op);
-  auto desc = getDescriptorInfo(op.getDesc(), builder);
-  SmallVector<Value> offsets = {
-      arith::ConstantIntOp::create(builder, op.getLoc(), 0, 64),
-      castToI64(builder, op.getLoc(), op.getYOffset())};
-  createStackedRectAccess(builder, op.getLoc(), desc,
-                          op.getResult().getType().getShape(), offsets,
-                          op.getPred(), GSanAccessKind::Load, op.getXOffsets());
+  ExperimentalGSanIndexedTensorDescAccessOp::create(
+      builder, op.getLoc(), op.getDesc(), op.getXOffsets(), op.getYOffset(),
+      op.getPred(), /*isStore=*/false);
 }
 
 static void instrumentAsyncTMAScatter(ttng::AsyncTMAScatterOp op) {
   OpBuilder builder(op);
-  auto desc = getDescriptorInfo(op.getDesc(), builder);
-  SmallVector<Value> offsets = {
-      arith::ConstantIntOp::create(builder, op.getLoc(), 0, 64),
-      castToI64(builder, op.getLoc(), op.getYOffset())};
-  createStackedRectAccess(
-      builder, op.getLoc(), desc, op.getSrc().getType().getShape(), offsets,
-      std::nullopt, GSanAccessKind::Store, op.getXOffsets());
+  ExperimentalGSanIndexedTensorDescAccessOp::create(
+      builder, op.getLoc(), op.getDesc(), op.getXOffsets(), op.getYOffset(),
+      /*pred=*/Value{}, /*isStore=*/true);
 }
 
 static Value getValueForOp(Operation *op, Value value) {
