@@ -1270,7 +1270,7 @@ def test_tma_wait_tracks_only_requested_phase(FAILURE, device, run_wrapper, monk
         ttgl.warp_specialize([
             (producer, (input_desc, smem, bar)),
             (consumer, (smem, bar, out, FAILURE, blocked_layout)),
-        ], [4], [32])
+        ], [4])
 
     block_m = XBLOCK.value * num_ctas
     input = torch.randn((block_m, XBLOCK.value), device=device, dtype=torch.float16)
