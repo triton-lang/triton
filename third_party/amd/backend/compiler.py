@@ -144,9 +144,8 @@ class HIPBackend(BaseBackend):
             try:
                 warp_size = int(target.warp_size)
             except ValueError:
-                raise ValueError(
-                    f"HIP backend expects a numeric warp_size, got '{target.warp_size}'. "
-                    f"Expected format: 'hip:<arch>:<warp_size>' (e.g., 'hip:gfx942:64')")
+                raise ValueError(f"HIP backend expects a numeric warp_size, got '{target.warp_size}'. "
+                                 f"Expected format: 'hip:<arch>:<warp_size>' (e.g., 'hip:gfx942:64')")
             target = GPUTarget(target.backend, target.arch, warp_size)
 
         super().__init__(target)
