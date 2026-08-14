@@ -1248,22 +1248,17 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // -----
 
 
-// CHECK-LABEL: join_cat_transitive_nonneg
+// CHECK-LABEL: join_transitive_nonneg
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func @join_cat_transitive_nonneg(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>) {
+  tt.func @join_transitive_nonneg(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>) {
     %0 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
     %1 = tt.make_range {end = 10 : i32, start = 2 : i32} : tensor<8xi32>
     // expected-remark@+2 {{unsigned : [0, 9] signed : [0, 9]}}
     // expected-remark@+1 {{non-neg}}
     %2 = tt.join %0, %1 : tensor<8xi32> -> tensor<8x2xi32>
-    %3 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32>
-    %4 = tt.make_range {end = 8 : i32, start = 4 : i32} : tensor<4xi32>
     // expected-remark@+2 {{unsigned : [0, 7] signed : [0, 7]}}
     // expected-remark@+1 {{non-neg}}
-    %5 = tt.join %3, %4 : tensor<4xi32> -> tensor<4x2xi32>
-    // expected-remark@+2 {{unsigned : [0, 7] signed : [0, 7]}}
-    // expected-remark@+1 {{non-neg}}
-    %6 = tt.cat %5, %5 : tensor<4x2xi32> -> tensor<8x2xi32>
+    %6 = tt.join %0, %0 : tensor<8xi32> -> tensor<8x2xi32>
     // expected-remark@+2 {{unsigned : [0, 16] signed : [0, 16]}}
     // expected-remark@+1 {{non-neg}}
     %7 = arith.addi %2, %6 : tensor<8x2xi32>

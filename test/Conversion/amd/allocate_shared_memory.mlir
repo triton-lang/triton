@@ -18,6 +18,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK-LABEL: @convert_layout_swizzled
 tt.func @convert_layout_swizzled(%arg0: tensor<256x256xi32, #blocked1>) {
   // CHECK-NEXT: allocation.offset = 0 : i32
+  // CHECK-SAME: allocation.size = 131072 : i32
   %0 = ttg.convert_layout %arg0 : tensor<256x256xi32, #blocked1> -> tensor<256x256xi32, #blocked2>
   tt.return
 }
