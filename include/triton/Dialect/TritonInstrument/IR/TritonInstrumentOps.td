@@ -285,18 +285,19 @@ def TTI_ExperimentalGSanTensorRectAccessOp
 
 def TTI_ExperimentalGSanAtomicTensorAccessOp
     : TTI_Op<"experimental_gsan_atomic_tensor_access",
-             [TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
-                             "getI1SameShape(getPointeeType($_self))",
-                             "($_op.getOperands().size() <= 1) || std::equal_to<>()">]> {
-  let summary = "Instrument a tensor atomic access for GSan";
+             [AttrSizedOperandSegments]> {
+  let summary = "Instrument a stack of rectangular atomic GSan accesses";
   let description = [{
-    Emits runtime instrumentation for a tensor pointer access whose individual
-    elements are atomic read-modify-write operations.
+    Represents one or more rectangles whose individual elements are atomic
+    read-modify-write operations with the specified semantics and scope.
   }];
-  let arguments = (ins Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$ptr,
-                   Optional<TT_BoolLike>:$mask, TT_MemSemanticAttr:$sem, TT_MemSyncScopeAttr:$scope);
+  let arguments = (ins Variadic<TT_PtrLike>:$bases,
+                   Variadic<TT_BoolLike>:$masks, I32:$rowBytes,
+                   I64:$colStride, I32:$numCols, TT_MemSemanticAttr:$sem,
+                   TT_MemSyncScopeAttr:$scope);
   let assemblyFormat = [{
-    $sem `,` $scope `,` $ptr (`,` $mask^)? attr-dict `:` type($ptr)
+    `[` $bases `]` `,` `[` $masks `]` `,` $rowBytes `,` $colStride `,`
+    $numCols `,` $sem `,` $scope attr-dict `:` type($bases) `,` type($masks)
   }];
 }
 

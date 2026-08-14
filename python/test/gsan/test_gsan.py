@@ -1264,11 +1264,12 @@ def test_host_tma_scatter_updates_shadow(with_gsan):
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
-def test_host_tma_reduce_updates_atomic_shadow(with_gsan):
-    block_x = 1
+@pytest.mark.parametrize("dtype", (torch.int32, torch.float16, torch.bfloat16, torch.uint64))
+@pytest.mark.parametrize("block_x", (1, 8))
+def test_host_tma_reduce_updates_atomic_shadow(with_gsan, block_x, dtype):
     block_y = 16
-    target = torch.zeros((block_x, block_y), dtype=torch.int32, device="cuda")
-    src = torch.arange(1, block_y + 1, dtype=torch.int32, device="cuda").reshape(block_x, block_y)
+    target = torch.zeros((block_x, block_y), dtype=dtype, device="cuda")
+    src = torch.arange(1, block_x * block_y + 1, dtype=torch.int32, device="cuda").to(dtype).reshape(block_x, block_y)
     target_desc = TensorDescriptor.from_tensor(target, [block_x, block_y])
 
     compiled = _host_tma_reduce_add_kernel[(1, )](target_desc, src, src.stride(0), src.stride(1), BLOCK_X=block_x)
@@ -1276,5 +1277,8 @@ def test_host_tma_reduce_updates_atomic_shadow(with_gsan):
     torch.cuda.synchronize()
 
     torch.testing.assert_close(target, src)
-    for col in range(block_y):
-        _assert_atomic_rmw_shadow(target[0, col].data_ptr(), AtomicScope.GPU, is_release=False)
+    for row in range(block_x):
+        for col in range(block_y):
+            for byte_offset in range(0, target.element_size(), SHADOW_GRANULARITY_BYTES):
+                address = target[row, col].data_ptr() + byte_offset
+                _assert_atomic_rmw_shadow(address, AtomicScope.GPU, is_release=False)

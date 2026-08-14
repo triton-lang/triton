@@ -879,17 +879,15 @@ GSAN_DEVICE void tensorLoad(ThreadState *state, const char *stackPtr,
     rwLockReleaseRead(state->lock);
 }
 
-template <bool IsStore>
-GSAN_DEVICE void tensorAccessRect(ThreadState *state, const char *stackPtr,
-                                  int numRects, int rowBytes,
-                                  uintptr_t colStride, int numCols, int warpId,
-                                  int numWarps, Location loc) {
+template <typename ElementHandler>
+GSAN_DEVICE void
+tensorAccessRect(const char *stackPtr, int numRects, int rowBytes,
+                 uintptr_t colStride, int numCols, int elementGranularity,
+                 int warpId, int numWarps, ElementHandler &handleElement) {
   const auto *bases = reinterpret_cast<const uintptr_t *>(stackPtr);
   const char *masks = stackPtr + numRects * sizeof(uintptr_t);
   uint32_t participatingLanes = __nvvm_activemask();
   uint32_t laneId = __nvvm_read_ptx_sreg_laneid();
-  auto reserveBase = state->reserveBase;
-  bool acquired = false;
 
   for (int rect = 0; rect < numRects; ++rect) {
     uint32_t pendingRects =
@@ -911,29 +909,60 @@ GSAN_DEVICE void tensorAccessRect(ThreadState *state, const char *stackPtr,
         uintptr_t rowPtr = base + static_cast<uintptr_t>(col) * colStride;
         auto range = roundRange(Range{rowPtr, rowPtr + rowBytes});
 
-        for (uintptr_t addr = range.start + laneId * kShadowMemGranularityBytes;
-             addr < range.end; addr += 32 * kShadowMemGranularityBytes) {
-          if (!isGsanManaged(addr, reserveBase))
-            continue;
-          if (!acquired) {
-            rwLockAcquireRead(state->lock);
-            acquired = true;
-          }
-          auto cell = acquireShadow(getShadowAddress(addr));
-          if constexpr (IsStore) {
-            doWrite(state, cell, loc);
-          } else {
-            doRead(state, cell, loc);
-          }
-          releaseShadow(cell);
-        }
+        for (uintptr_t addr = range.start + laneId * elementGranularity;
+             addr < range.end; addr += 32 * elementGranularity)
+          handleElement(addr);
       }
 
       pendingRects &= pendingRects - 1;
     }
   }
+}
 
-  if (acquired)
+struct ReadShadowCellHandler {
+  GSAN_DEVICE void operator()(ThreadState *state, ShadowCell *cell,
+                              Location loc) const {
+    doRead(state, cell, loc);
+  }
+};
+
+struct WriteShadowCellHandler {
+  GSAN_DEVICE void operator()(ThreadState *state, ShadowCell *cell,
+                              Location loc) const {
+    doWrite(state, cell, loc);
+  }
+};
+
+template <typename ShadowCellHandler> struct NonAtomicElementHandler {
+  ThreadState *state;
+  Location loc;
+  ShadowCellHandler handleShadowCell;
+  bool acquired = false;
+
+  GSAN_DEVICE void operator()(uintptr_t address) {
+    if (!isGsanManaged(address, state->reserveBase))
+      return;
+    if (!acquired) {
+      rwLockAcquireRead(state->lock);
+      acquired = true;
+    }
+    auto cell = acquireShadow(getShadowAddress(address));
+    handleShadowCell(state, cell, loc);
+    releaseShadow(cell);
+  }
+};
+
+template <typename ShadowCellHandler>
+GSAN_DEVICE void tensorNonAtomicRect(ThreadState *state, const char *stackPtr,
+                                     int numRects, int rowBytes,
+                                     uintptr_t colStride, int numCols,
+                                     int warpId, int numWarps, Location loc,
+                                     ShadowCellHandler handleShadowCell) {
+  NonAtomicElementHandler<ShadowCellHandler> handleElement{state, loc,
+                                                           handleShadowCell};
+  tensorAccessRect(stackPtr, numRects, rowBytes, colStride, numCols,
+                   kShadowMemGranularityBytes, warpId, numWarps, handleElement);
+  if (handleElement.acquired)
     rwLockReleaseRead(state->lock);
 }
 
@@ -1073,6 +1102,31 @@ GSAN_DEVICE void endAtomicAccess(AtomicEventState *event, bool pred,
   releaseAtomicShadowRange(event);
 }
 
+struct AtomicElementHandler {
+  GlobalState *globals;
+  int bytesPerElem;
+  int sem;
+  int scope;
+  Location loc;
+
+  GSAN_DEVICE void operator()(uintptr_t address) const {
+    AtomicEventState event;
+    beginAtomicAccess(globals, &event, /*pred=*/true, address, bytesPerElem,
+                      sem, scope, loc);
+    endAtomicAccess(&event, /*pred=*/true, /*didWrite=*/true, sem, scope, loc);
+  }
+};
+
+GSAN_DEVICE void tensorAtomicRect(GlobalState *globals, const char *stackPtr,
+                                  int numRects, int rowBytes,
+                                  uintptr_t colStride, int numCols,
+                                  int bytesPerElem, int sem, int scope,
+                                  int warpId, int numWarps, Location loc) {
+  AtomicElementHandler handleElement{globals, bytesPerElem, sem, scope, loc};
+  tensorAccessRect(stackPtr, numRects, rowBytes, colStride, numCols,
+                   bytesPerElem, warpId, numWarps, handleElement);
+}
+
 } // namespace
 } // namespace gsan
 
@@ -1092,9 +1146,9 @@ extern "C" GSAN_DEVICE void __triton_gsan_load_tensor_rect(
   auto loc = gsan::Location{file, line};
   auto *threadState =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
-  gsan::tensorAccessRect</*IsStore=*/false>(threadState, stackPtr, numRects,
-                                            rowBytes, colStride, numCols,
-                                            warpId, numWarps, loc);
+  gsan::tensorNonAtomicRect(threadState, stackPtr, numRects, rowBytes,
+                            colStride, numCols, warpId, numWarps, loc,
+                            gsan::ReadShadowCellHandler{});
 }
 
 extern "C" GSAN_DEVICE void
@@ -1206,29 +1260,20 @@ extern "C" GSAN_DEVICE void __triton_gsan_store_tensor_rect(
   auto loc = gsan::Location{file, line};
   auto *threadState =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
-  gsan::tensorAccessRect</*IsStore=*/true>(threadState, stackPtr, numRects,
-                                           rowBytes, colStride, numCols, warpId,
-                                           numWarps, loc);
+  gsan::tensorNonAtomicRect(threadState, stackPtr, numRects, rowBytes,
+                            colStride, numCols, warpId, numWarps, loc,
+                            gsan::WriteShadowCellHandler{});
 }
 
-extern "C" GSAN_DEVICE void
-__triton_gsan_atomic_tensor(void *globalState, const char *stackPtr,
-                            int numElems, int bytesPerElem, int sem, int scope,
-                            const char *file, unsigned line) {
+extern "C" GSAN_DEVICE void __triton_gsan_atomic_tensor_rect(
+    void *globalState, const char *stackPtr, int numRects, int rowBytes,
+    gsan::uintptr_t colStride, int numCols, int bytesPerElem, int sem,
+    int scope, int warpId, int numWarps, const char *file, unsigned line) {
   auto loc = gsan::Location{file, line};
   auto *globals = reinterpret_cast<gsan::GlobalState *>(globalState);
-  const auto *ptrsPtr = reinterpret_cast<const gsan::uintptr_t *>(stackPtr);
-  const auto *maskPtr = stackPtr + numElems * sizeof(gsan::uintptr_t);
-
-  for (int i = 0; i < numElems; ++i) {
-    if (!maskPtr[i])
-      continue;
-    gsan::AtomicEventState event;
-    gsan::beginAtomicAccess(globals, &event, /*pred=*/true, ptrsPtr[i],
-                            bytesPerElem, sem, scope, loc);
-    gsan::endAtomicAccess(&event, /*pred=*/true, /*didWrite=*/true, sem, scope,
-                          loc);
-  }
+  gsan::tensorAtomicRect(globals, stackPtr, numRects, rowBytes, colStride,
+                         numCols, bytesPerElem, sem, scope, warpId, numWarps,
+                         loc);
 }
 
 extern "C" GSAN_DEVICE void __triton_gsan_atomic_begin_scalar(

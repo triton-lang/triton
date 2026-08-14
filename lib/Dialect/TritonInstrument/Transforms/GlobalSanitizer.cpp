@@ -73,25 +73,6 @@ struct WarpDistributedLayout {
 
 enum class GSanAccessKind { Load, Store, Atomic };
 
-static void setTMAPtrAxisHints(OpBuilder &builder, Value ptr) {
-  auto ptrTy = cast<RankedTensorType>(ptr.getType());
-
-  Operation *def = ptr.getDefiningOp();
-  if (!def)
-    return;
-
-  auto rank = ptrTy.getRank();
-  SmallVector<int32_t> contiguity(rank, 1);
-  contiguity.back() = ptrTy.getShape().back();
-  SmallVector<int32_t> divisibility(rank, 1);
-  divisibility.back() = 16;
-  auto attrTy = RankedTensorType::get({rank}, builder.getI32Type());
-  def->setDiscardableAttr("tt.contiguity",
-                          DenseIntElementsAttr::get(attrTy, contiguity));
-  def->setDiscardableAttr("tt.divisibility",
-                          DenseIntElementsAttr::get(attrTy, divisibility));
-}
-
 static Value castToI64(OpBuilder &builder, Location loc, Value value) {
   if (value.getType().isInteger(64))
     return value;
@@ -235,7 +216,6 @@ createWarpDistributedLayout(OpBuilder &builder, const DescriptorInfo &desc,
 static Value
 createWarpDistributedIndex(OpBuilder &builder, Location loc,
                            const WarpDistributedLayout &layout, Value zero,
-                           GSanAccessKind kind,
                            std::optional<Value> indexedRows = std::nullopt) {
   if (indexedRows) {
     auto indexedType = cast<RankedTensorType>((*indexedRows).getType());
@@ -254,17 +234,14 @@ createWarpDistributedIndex(OpBuilder &builder, Location loc,
                                               zero, /*dim=*/0);
   Value indexInWarp = createExpandedOffsetRange(builder, loc, layout.indexType,
                                                 zero, /*dim=*/1);
-  bool contiguous = kind == GSanAccessKind::Atomic;
-  int64_t stride = contiguous ? layout.itemsPerWarp : layout.activeWarps;
-  Value strideValue = arith::ConstantIntOp::create(builder, loc, stride, 64);
+  Value strideValue =
+      arith::ConstantIntOp::create(builder, loc, layout.activeWarps, 64);
   Value strideTensor =
       tt::SplatOp::create(builder, loc, layout.indexType, strideValue);
-  Value majorIndex = contiguous ? warpIndex : indexInWarp;
-  Value minorIndex = contiguous ? indexInWarp : warpIndex;
   Value index = arith::MulIOp::create(builder, loc, layout.indexType,
-                                      majorIndex, strideTensor);
+                                      indexInWarp, strideTensor);
   return arith::AddIOp::create(builder, loc, layout.indexType, index,
-                               minorIndex);
+                               warpIndex);
 }
 
 static int64_t getGSanRectPlaneCount(ArrayRef<int64_t> blockShape,
@@ -339,20 +316,18 @@ createRectAccess(OpBuilder &builder, Location loc, const DescriptorInfo &desc,
 static void emitRectAccess(OpBuilder &builder, Location loc,
                            const RectAccess &access, GSanAccessKind kind,
                            int warpsPerRect = 1) {
-  if (kind == GSanAccessKind::Atomic) {
-    if (isa<RankedTensorType>(access.base.getType()))
-      setTMAPtrAxisHints(builder, access.base);
-    ExperimentalGSanAtomicTensorAccessOp::create(
-        builder, loc, access.base, access.pred, MemSemantic::RELAXED,
-        MemSyncScope::GPU);
-    return;
-  }
-
   SmallVector<Value> bases{access.base};
   SmallVector<Value> masks{access.pred};
-  auto rect = ExperimentalGSanTensorRectAccessOp::create(
-      builder, loc, bases, masks, access.rowBytes, access.colStride,
-      access.numCols, kind == GSanAccessKind::Store);
+  Operation *rect;
+  if (kind == GSanAccessKind::Atomic) {
+    rect = ExperimentalGSanAtomicTensorAccessOp::create(
+        builder, loc, bases, masks, access.rowBytes, access.colStride,
+        access.numCols, MemSemantic::RELAXED, MemSyncScope::GPU);
+  } else {
+    rect = ExperimentalGSanTensorRectAccessOp::create(
+        builder, loc, bases, masks, access.rowBytes, access.colStride,
+        access.numCols, kind == GSanAccessKind::Store);
+  }
   if (warpsPerRect > 1)
     rect->setAttr("tti.gsan_warps_per_rect",
                   builder.getI32IntegerAttr(warpsPerRect));
@@ -362,7 +337,7 @@ static void createStackedRectAccess(
     OpBuilder &builder, Location loc, const DescriptorInfo &desc,
     ArrayRef<int64_t> blockShape, ValueRange offsets, std::optional<Value> pred,
     GSanAccessKind kind, std::optional<Value> indexedRows = std::nullopt) {
-  unsigned rectDims = kind == GSanAccessKind::Atomic ? 0 : indexedRows ? 1 : 2;
+  unsigned rectDims = indexedRows ? 1 : 2;
   int64_t numPlanes = getGSanRectPlaneCount(blockShape, rectDims);
   if (numPlanes > 1 || indexedRows) {
     auto layout = createWarpDistributedLayout(builder, desc, numPlanes);
@@ -373,8 +348,8 @@ static void createStackedRectAccess(
     Value zeroI32 = arith::ConstantIntOp::create(builder, loc, 0, 32);
     Value zeroTensor =
         tt::SplatOp::create(builder, loc, layout.indexType, zero);
-    Value planeIndex = createWarpDistributedIndex(builder, loc, layout, zero,
-                                                  kind, indexedRows);
+    Value planeIndex =
+        createWarpDistributedIndex(builder, loc, layout, zero, indexedRows);
 
     Value hasRows = arith::CmpIOp::create(
         builder, loc, arith::CmpIPredicate::sgt, firstPlane.rowBytes, zeroI32);
