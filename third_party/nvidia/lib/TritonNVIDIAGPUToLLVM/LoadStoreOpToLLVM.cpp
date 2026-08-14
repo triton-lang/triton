@@ -70,7 +70,8 @@ Value createCachePolicy(triton::EvictionPolicy opEvict,
     policy(dstOpr, fractionOpr);
 
     Type policyRetTy = rewriter.getI64Type();
-    policyRet = ptxBuilder.launch(rewriter, loc, policyRetTy);
+    policyRet = ptxBuilder.launch(rewriter, loc, policyRetTy,
+                                  /*hasSideEffect=*/false);
   }
 
   return policyRet;
