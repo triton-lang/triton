@@ -376,8 +376,10 @@ createRowAccess(OpBuilder &builder, Location loc, const DescriptorInfo &desc,
 
   auto elemTy = cast<tt::PointerType>(desc.base.getType()).getPointeeType();
   Value elemBytes = arith::ConstantIntOp::create(
-      builder, loc, elemTy.getIntOrFloatBitWidth() / 8, 64);
-  Value nbytes = arith::MulIOp::create(builder, loc, validCols, elemBytes);
+      builder, loc, elemTy.getIntOrFloatBitWidth() / 8, 32);
+  Value validColsI32 =
+      arith::TruncIOp::create(builder, loc, builder.getI32Type(), validCols);
+  Value nbytes = arith::MulIOp::create(builder, loc, validColsI32, elemBytes);
   return RowAccess{rowPtr, rowMask, nbytes};
 }
 
@@ -398,11 +400,11 @@ createRectAccess(OpBuilder &builder, Location loc, const DescriptorInfo &desc,
          "compact GSan rectangle plane is out of bounds");
 
   Value zero = arith::ConstantIntOp::create(builder, loc, 0, 64);
-  Value one = arith::ConstantIntOp::create(builder, loc, 1, 64);
+  Value one = arith::ConstantIntOp::create(builder, loc, 1, 32);
   Value planeValid = arith::ConstantIntOp::create(builder, loc, 1, 1);
   auto elemTy = cast<tt::PointerType>(desc.base.getType()).getPointeeType();
   Value elemBytes = arith::ConstantIntOp::create(
-      builder, loc, elemTy.getIntOrFloatBitWidth() / 8, 64);
+      builder, loc, elemTy.getIntOrFloatBitWidth() / 8, 32);
 
   Value rowOffset = offsets.back();
   Value rowStart = arith::MaxSIOp::create(builder, loc, rowOffset, zero);
@@ -413,8 +415,10 @@ createRectAccess(OpBuilder &builder, Location loc, const DescriptorInfo &desc,
       arith::MinSIOp::create(builder, loc, rowLimit, desc.shape.back());
   Value validRowElems = arith::SubIOp::create(builder, loc, rowEnd, rowStart);
   validRowElems = arith::MaxSIOp::create(builder, loc, validRowElems, zero);
+  Value validRowElemsI32 = arith::TruncIOp::create(
+      builder, loc, builder.getI32Type(), validRowElems);
   Value rowBytes =
-      arith::MulIOp::create(builder, loc, validRowElems, elemBytes);
+      arith::MulIOp::create(builder, loc, validRowElemsI32, elemBytes);
 
   Value baseOffset = rowStart;
   for (unsigned dim = 0; dim + 2 < rank; ++dim) {
@@ -441,6 +445,7 @@ createRectAccess(OpBuilder &builder, Location loc, const DescriptorInfo &desc,
 
   Value colStride = zero;
   Value numCols = one;
+  Value hasCols = planeValid;
   if (rank >= 2) {
     unsigned colDim = rank - 2;
     Value colOffset = offsets[colDim];
@@ -450,23 +455,27 @@ createRectAccess(OpBuilder &builder, Location loc, const DescriptorInfo &desc,
     Value colLimit = arith::AddIOp::create(builder, loc, colOffset, colWidth);
     Value colEnd =
         arith::MinSIOp::create(builder, loc, colLimit, desc.shape[colDim]);
-    numCols = arith::SubIOp::create(builder, loc, colEnd, colStart);
-    numCols = arith::MaxSIOp::create(builder, loc, numCols, zero);
+    Value validCols = arith::SubIOp::create(builder, loc, colEnd, colStart);
+    validCols = arith::MaxSIOp::create(builder, loc, validCols, zero);
+    hasCols = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::sgt,
+                                    validCols, zero);
+    numCols =
+        arith::TruncIOp::create(builder, loc, builder.getI32Type(), validCols);
 
     Value colStartOffset =
         arith::MulIOp::create(builder, loc, colStart, desc.strides[colDim]);
     baseOffset =
         arith::AddIOp::create(builder, loc, baseOffset, colStartOffset);
+    Value elemBytesI64 = arith::ConstantIntOp::create(
+        builder, loc, elemTy.getIntOrFloatBitWidth() / 8, 64);
     colStride =
-        arith::MulIOp::create(builder, loc, desc.strides[colDim], elemBytes);
+        arith::MulIOp::create(builder, loc, desc.strides[colDim], elemBytesI64);
   }
 
   Value base = tt::AddPtrOp::create(builder, loc, desc.base.getType(),
                                     desc.base, baseOffset);
   Value hasRows = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::sgt,
-                                        rowBytes, zero);
-  Value hasCols = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::sgt,
-                                        numCols, zero);
+                                        validRowElems, zero);
   Value enabled = arith::AndIOp::create(builder, loc, hasRows, hasCols);
   enabled = arith::AndIOp::create(builder, loc, enabled, planeValid);
   if (pred)
@@ -511,6 +520,7 @@ static void createStackedRectAccess(OpBuilder &builder, Location loc,
     auto firstPlane =
         createRectAccess(builder, loc, desc, blockShape, offsets, pred, 0);
     Value zero = arith::ConstantIntOp::create(builder, loc, 0, 64);
+    Value zeroI32 = arith::ConstantIntOp::create(builder, loc, 0, 32);
     Value zeroTensor = tt::SplatOp::create(builder, loc, planeI64Type, zero);
     Value warpIndex =
         createExpandedOffsetRange(builder, loc, planeI64Type, zero, /*dim=*/0);
@@ -526,9 +536,9 @@ static void createStackedRectAccess(OpBuilder &builder, Location loc,
                                        warpIndex);
 
     Value hasRows = arith::CmpIOp::create(
-        builder, loc, arith::CmpIPredicate::sgt, firstPlane.rowBytes, zero);
+        builder, loc, arith::CmpIPredicate::sgt, firstPlane.rowBytes, zeroI32);
     Value hasCols = arith::CmpIOp::create(
-        builder, loc, arith::CmpIPredicate::sgt, firstPlane.numCols, zero);
+        builder, loc, arith::CmpIPredicate::sgt, firstPlane.numCols, zeroI32);
     Value enabled = arith::AndIOp::create(builder, loc, hasRows, hasCols);
     if (pred)
       enabled = arith::AndIOp::create(builder, loc, enabled, *pred);
@@ -599,7 +609,7 @@ static void createStackedRectAccess(OpBuilder &builder, Location loc,
 static void createStackedRowAccess(OpBuilder &builder, Location loc,
                                    const RowAccess &access, bool isStore) {
   Value zero = arith::ConstantIntOp::create(builder, loc, 0, 64);
-  Value one = arith::ConstantIntOp::create(builder, loc, 1, 64);
+  Value one = arith::ConstantIntOp::create(builder, loc, 1, 32);
   SmallVector<Value> bases{access.ptr};
   SmallVector<Value> masks{access.mask};
   ExperimentalGSanTensorRectAccessOp::create(builder, loc, bases, masks,

@@ -275,8 +275,8 @@ def TTI_ExperimentalGSanTensorRectAccessOp
     contributes one independently masked rectangle per element.
   }];
   let arguments = (ins Variadic<TT_PtrLike>:$bases,
-                   Variadic<TT_BoolLike>:$masks, I64:$rowBytes,
-                   I64:$colStride, I64:$numCols, BoolAttr:$isStore);
+                   Variadic<TT_BoolLike>:$masks, I32:$rowBytes,
+                   I64:$colStride, I32:$numCols, BoolAttr:$isStore);
   let assemblyFormat = [{
     `[` $bases `]` `,` `[` $masks `]` `,` $rowBytes `,` $colStride `,`
     $numCols `,` $isStore attr-dict `:` type($bases) `,` type($masks)

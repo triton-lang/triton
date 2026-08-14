@@ -63,7 +63,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
     // CHECK: tti.experimental_gsan_tensordesc_info %arg0
-    // CHECK: tti.experimental_gsan_tensor_rect_access{{.*}} false
+    // CHECK: %[[ROW_ELEMS:.*]] = arith.trunci %{{.*}} : i64 to i32
+    // CHECK: %[[ROW_BYTES:.*]] = arith.muli %[[ROW_ELEMS]], %{{.*}} : i32
+    // CHECK: %[[NUM_COLS:.*]] = arith.trunci %{{.*}} : i64 to i32
+    // CHECK: tti.experimental_gsan_tensor_rect_access[%{{.*}}], [%{{.*}}], %[[ROW_BYTES]], %{{.*}}, %[[NUM_COLS]], false
     // CHECK-NEXT: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     // CHECK: tti.experimental_gsan_tensordesc_info %arg0
@@ -708,7 +711,9 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
     // CHECK: tti.experimental_gsan_tensordesc_info %arg0
-    // CHECK: tti.experimental_gsan_tensor_rect_access{{.*}} false
+    // CHECK: %[[GATHER_VALID_COLS:.*]] = arith.trunci %{{.*}} : i64 to i32
+    // CHECK: %[[GATHER_ROW_BYTES:.*]] = arith.muli %[[GATHER_VALID_COLS]], %{{.*}} : i32
+    // CHECK: tti.experimental_gsan_tensor_rect_access[%{{.*}}], [%{{.*}}], %[[GATHER_ROW_BYTES]], %{{.*}}, %{{.*}}, false
     // CHECK-NEXT: ttng.async_tma_gather
     ttng.async_tma_gather %desc[%x_offsets, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<1x32xf32, #shared>, tensor<32xi32, #blocked_rows>, i32, !ttg.memdesc<1xi64, #bar, #smem, mutable>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, i1
     // CHECK: tti.experimental_gsan_tensordesc_info %arg0

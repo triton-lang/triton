@@ -88,9 +88,10 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x64xf16, #shared_f16, #smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
-    // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<1 x i64>, array<1 x i8>)>
-    // CHECK: %[[ROW_BYTES:.*]] = llvm.trunc %{{.*}} : i64 to i32
+    // CHECK: %[[ROW_ELEMS:.*]] = llvm.trunc %{{.*}} : i64 to i32
+    // CHECK: %[[ROW_BYTES:.*]] = llvm.mul %[[ROW_ELEMS]], %{{.*}} : i32
     // CHECK: %[[NUM_ROWS:.*]] = llvm.trunc %{{.*}} : i64 to i32
+    // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<1 x i64>, array<1 x i8>)>
     // CHECK: llvm.call @__triton_gsan_load_tensor_rect(%{{.*}}, %{{.*}}, %{{.*}}, %[[ROW_BYTES]], %{{.*}}, %[[NUM_ROWS]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}})
     ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<32x64xf16, #shared_f16>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared_f16, #smem, mutable>
     tt.return
@@ -110,9 +111,10 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x64xf16, #shared_f16, #smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 16384 : i32} : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
-    // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<1 x i64>, array<1 x i8>)>
-    // CHECK: %[[ROW_BYTES_4W:.*]] = llvm.trunc %{{.*}} : i64 to i32
+    // CHECK: %[[ROW_ELEMS_4W:.*]] = llvm.trunc %{{.*}} : i64 to i32
+    // CHECK: %[[ROW_BYTES_4W:.*]] = llvm.mul %[[ROW_ELEMS_4W]], %{{.*}} : i32
     // CHECK: %[[NUM_ROWS_4W:.*]] = llvm.trunc %{{.*}} : i64 to i32
+    // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<1 x i64>, array<1 x i8>)>
     // CHECK: llvm.call @__triton_gsan_load_tensor_rect(%{{.*}}, %{{.*}}, %{{.*}}, %[[ROW_BYTES_4W]], %{{.*}}, %[[NUM_ROWS_4W]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}})
     ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<128x64xf16, #shared_f16>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared_f16, #smem, mutable>
     tt.return

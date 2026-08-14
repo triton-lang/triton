@@ -623,10 +623,9 @@ public:
     auto sourceLoc = materializeSourceLocation(rewriter, loc);
     b.call(runtimeFunc,
            ValueRange{*gsanGlobalStatePtr, stackPtr, b.i32_val(numRects),
-                      b.trunc(i32_ty, adaptor.getRowBytes()),
-                      adaptor.getColStride(),
-                      b.trunc(i32_ty, adaptor.getNumCols()), warpId,
-                      b.i32_val(numWarps), sourceLoc.file, sourceLoc.line});
+                      adaptor.getRowBytes(), adaptor.getColStride(),
+                      adaptor.getNumCols(), warpId, b.i32_val(numWarps),
+                      sourceLoc.file, sourceLoc.line});
     rewriter.eraseOp(op);
     return success();
   }
