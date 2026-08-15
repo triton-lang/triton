@@ -1521,7 +1521,7 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   unsigned version = 0;
   SmallVector<unsigned> warpsPerCTA;
   SmallVector<unsigned> instrShape;
-  bool isTransposed;
+  bool isTransposed = false;
   SmallVector<unsigned> tilesPerWarp = {};
   unsigned elementBitWidth = 32;
   Attribute cgaAttr = nullptr;
