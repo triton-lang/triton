@@ -103,6 +103,8 @@ Finally, if we both load the plugin at runtime and insert the pass pipeline hook
 ``` python
 import torch
 import os
+import hashlib
+import pathlib
 
 import triton
 import triton.language as tl
@@ -237,6 +239,8 @@ inserted pass.
 ``` python
 import torch
 import os
+import hashlib
+import pathlib
 import sys
 
 import triton
