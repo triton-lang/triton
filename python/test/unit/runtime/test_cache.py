@@ -37,6 +37,24 @@ def test_file_cache_manager_get_group_rejects_missing_child(fresh_knobs, tmp_pat
     assert manager.get_group("kernel.json") is None
 
 
+def test_file_cache_manager_concurrent_group_publish_stays_coherent(fresh_knobs, tmp_path):
+    # A reader must never see a group mixing files from concurrent same-key writers, however the writes interleave.
+    fresh_knobs.cache.dir = str(tmp_path)
+    writer_a = FileCacheManager("key")
+    writer_b = FileCacheManager("key")
+
+    group_a = {"kernel.cubin": writer_a.put("A cubin", "kernel.cubin", binary=False, grouped=True)}
+    group_b = {"kernel.cubin": writer_b.put("B cubin", "kernel.cubin", binary=False, grouped=True)}
+    group_b["kernel.json"] = writer_b.put("B json", "kernel.json", binary=False, grouped=True)
+    group_a["kernel.json"] = writer_a.put("A json", "kernel.json", binary=False, grouped=True)
+
+    for writer, group in ((writer_a, group_a), (writer_b, group_b)):
+        writer.put_group("kernel.json", group)
+        published = FileCacheManager("key").get_group("kernel.json")
+        contents = {pathlib.Path(path).read_text() for path in published.values()}
+        assert contents in ({"A cubin", "A json"}, {"B cubin", "B json"})
+
+
 def test_remote_cache_manager_get_group_rejects_missing_child(fresh_knobs, tmp_path):
 
     class DictRemoteCacheBackend:

@@ -21,7 +21,7 @@ class CacheManager(ABC):
         pass
 
     @abstractmethod
-    def put(self, data, filename, binary=True) -> str:
+    def put(self, data, filename, binary=True, grouped=False) -> str:
         pass
 
     @abstractmethod
@@ -38,6 +38,7 @@ class FileCacheManager(CacheManager):
     def __init__(self, key, override=False, dump=False):
         self.key = key
         self.lock_path = None
+        self._staging_dir = None
         if dump:
             self.cache_dir = knobs.cache.dump_dir
             self.cache_dir = os.path.join(self.cache_dir, self.key)
@@ -100,14 +101,23 @@ class FileCacheManager(CacheManager):
         grp_filename = f"__grp__{filename}"
         return self.put(grp_contents, grp_filename, binary=False)
 
-    def put(self, data, filename, binary=True) -> str:
+    def _group_staging_dir(self) -> str:
+        # Per-writer staging, published atomically by put_group's manifest replace, so groups never mix writers.
+        if self._staging_dir is None:
+            staging_dir = os.path.join(self.cache_dir, f"grp.{uuid.uuid4().hex[:16]}")
+            os.makedirs(staging_dir, exist_ok=True)
+            self._staging_dir = staging_dir
+        return self._staging_dir
+
+    def put(self, data, filename, binary=True, grouped=False) -> str:
         if not self.cache_dir:
             raise RuntimeError("Could not create or locate cache dir")
         binary = isinstance(data, bytes)
         if not binary:
             data = str(data)
         assert self.lock_path is not None
-        filepath = self._make_path(filename)
+        target_dir = self._group_staging_dir() if grouped else self.cache_dir
+        filepath = os.path.join(target_dir, filename)
         # Random ID to avoid any collisions
         rnd_id = str(uuid.uuid4())
         # we use the PID in case a bunch of these around so we can see what PID made it
@@ -200,10 +210,10 @@ class RemoteCacheManager(CacheManager):
         (_, data), = results.items()
         return self._materialize(filename, data)
 
-    def put(self, data, filename: str, binary=True) -> str:
+    def put(self, data, filename: str, binary=True, grouped=False) -> str:
         # We don't handle the dump/override cases.
         if self._dump or self._override:
-            return self._file_cache_manager.put(data, filename, binary=binary)
+            return self._file_cache_manager.put(data, filename, binary=binary, grouped=grouped)
 
         if not isinstance(data, bytes):
             data = str(data).encode("utf-8")

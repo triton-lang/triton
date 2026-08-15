@@ -311,10 +311,10 @@ def compile(src, target=None, options=None, _env_vars=None):
 
     if ir_source:
         ir_filename = f"{file_name}.{src.ext}"
-        metadata_group[ir_filename] = fn_cache_manager.put(module, ir_filename)
+        metadata_group[ir_filename] = fn_cache_manager.put(module, ir_filename, grouped=True)
     else:
         ir_filename = f"{file_name}.source"
-        metadata_group[ir_filename] = fn_cache_manager.put(module, ir_filename)
+        metadata_group[ir_filename] = fn_cache_manager.put(module, ir_filename, grouped=True)
 
     use_ir_loc = knobs.compilation.use_ir_loc
     if ir_source and use_ir_loc:
@@ -336,7 +336,7 @@ def compile(src, target=None, options=None, _env_vars=None):
             next_module = parse(full_name, ext, context)
         # If TRITON_STORE_BINARY_ONLY is 1, only store cubin/hsaco/json
         if (not store_only_binary) or (ext in ("cubin", "hsaco", "json")):
-            metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
+            metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename, grouped=True)
         if fn_dump_manager is not None:
             fn_dump_manager.put(next_module, ir_filename)
             if ext == "cubin":
@@ -344,7 +344,7 @@ def compile(src, target=None, options=None, _env_vars=None):
                 fn_dump_manager.put(sass, file_name + ".sass")
         # use an env variable to parse ir from file
         if use_ir_loc == ext:
-            ir_full_name = fn_cache_manager.get_file(ir_filename)
+            ir_full_name = metadata_group[ir_filename]
             next_module.create_location_snapshot(ir_full_name)
             print(f"Creating new locations for {ir_full_name}")
         module = next_module
@@ -352,7 +352,7 @@ def compile(src, target=None, options=None, _env_vars=None):
             timer.stage_finished(ext)
     # write-back metadata
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
-                                                             binary=False)
+                                                             binary=False, grouped=True)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
 
     # notify any listener
