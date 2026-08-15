@@ -1650,7 +1650,8 @@ public:
       return false;
     }
 
-    // The lowering zero-pads a partial final group for I8 x I8 -> I32 v_dot.
+    // Try I8 x I8 -> I32 v_dot
+    // Partial K groups are zero-padded in the FMA lowering.
     if (dotTypes.a.isInteger(8) && dotTypes.b.isInteger(8) &&
         dotTypes.c.isInteger(32) && dotTypes.d.isInteger(32)) {
       return true;
