@@ -175,7 +175,16 @@ static triton::BarrierStages getLocalBarrierStages(Operation *op,
   // write and read phases. Other barrier-like operations behave as a barrier
   // immediately before the operation.
   stages.betweenMemoryEffects = hasScratchBarrier;
-  stages.beforeMemoryEffects = containsLocalBarrier(op);
+
+  // Leaving the default region of a `ttg.warp_specialize` goes through the
+  // CTA-wide barrier `lowerWarpSpecializeCommon` emits at every
+  // `ttg.warp_yield`, which is the rendezvous with the barrier each partition
+  // executes on `ttg.warp_return`, so shared memory effects inside the region
+  // are synchronized before the code after the op runs.
+  if (isa<triton::gpu::WarpYieldOp>(op))
+    stages.beforeMemoryEffects = true;
+  else
+    stages.beforeMemoryEffects = containsLocalBarrier(op);
   return stages;
 }
 
