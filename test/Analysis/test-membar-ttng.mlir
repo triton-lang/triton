@@ -50,6 +50,21 @@ tt.func @warpgroup_wait_followed_by_barrier_expect(%acc: tensor<256xf32, #blocke
   tt.return
 }
 
+// CHECK-LABEL: @warpgroup_wait_followed_by_warp_specialize
+tt.func @warpgroup_wait_followed_by_warp_specialize(%acc: tensor<256xf32, #blocked>, %value: i32) {
+  %c1 = arith.constant 1 : i32
+  // CHECK: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32, warpGroupLocal}
+  // CHECK-NEXT: arith.addi
+  // CHECK-NEXT: ttg.warp_specialize
+  %wait = ttng.warp_group_dot_wait %acc {pendings = 0 : i32} : tensor<256xf32, #blocked>
+  %next = arith.addi %value, %c1 : i32
+  ttg.warp_specialize()
+  default {
+    ttg.warp_yield
+  } : () -> ()
+  tt.return
+}
+
 // CHECK-LABEL: @warpgroup_wait_before_memory_effect
 tt.func @warpgroup_wait_before_memory_effect(%acc: tensor<256xf32, #blocked>) {
   %allocation = ttg.local_alloc : () -> !ttg.memdesc<256xf32, #shared, #smem, mutable>

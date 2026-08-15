@@ -1040,7 +1040,6 @@ tt.func @warp_specialize_into_default(%arg0: tensor<1xi64>) {
   ttg.warp_specialize()
   // CHECK-NEXT: default
   default {
-    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: local_load
     ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
     // CHECK-NEXT: ttg.barrier local
@@ -1064,7 +1063,6 @@ tt.func @default_region_cfg(%arg0: tensor<1xi64>, %arg1: i1) {
   ttg.warp_specialize()
   // CHECK-NEXT: default
   default {
-    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: local_load
     ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
     cf.cond_br %arg1, ^bb1, ^bb2
@@ -1084,6 +1082,59 @@ tt.func @default_region_cfg(%arg0: tensor<1xi64>, %arg1: i1) {
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: local_store
   ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+  tt.return
+}
+
+// -----
+
+#layout = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0]}>
+#smem = #ttg.shared_memory
+
+// A memory wait can defer its barrier onto a following sync point, and the
+// entry into a captureless warp_specialize is one.
+// CHECK-LABEL: @async_wait_before_warp_specialize
+tt.func @async_wait_before_warp_specialize(%arg0: tensor<1xi64>) {
+  // CHECK-NEXT: local_alloc
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+  // CHECK-NEXT: local_store
+  ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+  // CHECK-NEXT: async_wait
+  ttg.async_wait {num = 4 : i32}
+  // CHECK-NEXT: warp_specialize
+  ttg.warp_specialize()
+  // CHECK-NEXT: default
+  default {
+    // CHECK-NEXT: local_load
+    ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
+    // CHECK-NEXT: warp_yield
+    ttg.warp_yield
+  // CHECK-NEXT: () -> ()
+  } : () -> ()
+  tt.return
+}
+
+// The same wait keeps its barrier when the op owns a scratch buffer.
+// CHECK-LABEL: @async_wait_before_warp_specialize_with_captures
+tt.func @async_wait_before_warp_specialize_with_captures(%arg0: tensor<1xi64>) {
+  // CHECK-NEXT: local_alloc
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+  // CHECK-NEXT: local_store
+  ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+  // CHECK-NEXT: async_wait
+  ttg.async_wait {num = 4 : i32}
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: warp_specialize
+  ttg.warp_specialize(%0)
+  // CHECK-NEXT: default
+  default {
+    // CHECK-NEXT: warp_yield
+    ttg.warp_yield
+  }
+  // CHECK: partition0
+  partition0(%arg1: !ttg.memdesc<1xi64, #layout, #smem, mutable>) num_warps(1) {
+    // CHECK-NEXT: warp_return
+    ttg.warp_return
+  } : (!ttg.memdesc<1xi64, #layout, #smem, mutable>) -> ()
   tt.return
 }
 
@@ -1185,7 +1236,6 @@ tt.func @check_barrier_no_duplication(%arg0: tensor<1xi64>) {
   ttg.warp_specialize()
   // CHECK-NEXT: default
   default {
-    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: local_load
     ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
     // CHECK-NEXT: ttg.barrier

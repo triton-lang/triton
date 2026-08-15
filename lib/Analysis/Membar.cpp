@@ -175,7 +175,19 @@ static triton::BarrierStages getLocalBarrierStages(Operation *op,
   // write and read phases. Other barrier-like operations behave as a barrier
   // immediately before the operation.
   stages.betweenMemoryEffects = hasScratchBarrier;
-  stages.beforeMemoryEffects = containsLocalBarrier(op);
+
+  // Entering the default region of a `ttg.warp_specialize` goes through the two
+  // CTA-wide barriers `lowerWarpSpecializeCommon` emits between the capture
+  // stores and the branch into the region. This is keyed on the scratch buffer
+  // rather than on `getCaptureSize() == 0` because the capture stores precede
+  // those barriers, backends override the scratch size, and the concurrency
+  // sanitizer reserves capture bytes on every op regardless of its captures.
+  // It cannot live in `containsLocalBarrier`, which has no `Allocation` and so
+  // could only answer unconditionally.
+  if (isa<triton::gpu::WarpSpecializeOp>(op))
+    stages.beforeMemoryEffects = !hasScratchBarrier;
+  else
+    stages.beforeMemoryEffects = containsLocalBarrier(op);
   return stages;
 }
 
