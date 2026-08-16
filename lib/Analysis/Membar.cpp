@@ -49,6 +49,18 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
   if (subsliceOffsets.empty() || other.subsliceOffsets.empty())
     return true;
 
+  // The offsets below are logical coordinates in the shape the subslice was
+  // taken from, so they are only comparable when both slices index the same
+  // allocation under the same shape. Two things break that: a
+  // `memdesc_reinterpret` changes the shape, and hence how many bytes a row
+  // spans, before the subslice is taken; and two distinct allocations can cover
+  // the same bytes, because the allocator reuses memory across disjoint
+  // lifetimes. In either case equal row indices denote different bytes, and
+  // different row indices can denote the same bytes.
+  if (bufferId != other.bufferId || bufferId == Allocation::InvalidBufferId ||
+      accessTy.getAllocShape() != other.accessTy.getAllocShape())
+    return true;
+
   // If layouts differ, we assume intersection as we currently only work on
   // logical elements
   if (accessTy.getEncoding() != other.accessTy.getEncoding())

@@ -1873,3 +1873,48 @@ tt.func @must_barrier_nonzero_wrap_arm(%cst: tensor<128x128xf16>, %phase: i32) {
 }
 
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+// A `memdesc_reinterpret` between the allocation and the subslice changes the
+// shape the offsets are measured in: row 16 of a 32x16 buffer and row 8 of the
+// same buffer viewed as 16x32 are the same 512 bytes. The offsets must not be
+// compared across the two shapes.
+// CHECK-LABEL: @subslice_offsets_after_reinterpret
+tt.func public @subslice_offsets_after_reinterpret(%data: tensor<16x16xf16>) {
+  // CHECK: ttg.local_alloc
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #shared, #smem, mutable>
+  %lo = ttg.memdesc_subslice %alloc[16, 0] : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+  // CHECK: ttg.local_store
+  ttg.local_store %data, %lo : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+  %view = ttg.memdesc_reinterpret %alloc : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x32xf16, #shared, #smem, mutable>
+  %same = ttg.memdesc_subslice %view[8, 0] : !ttg.memdesc<16x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<8x32xf16, #shared, #smem, mutable, 16x32>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %read = ttg.local_load %same : !ttg.memdesc<8x32xf16, #shared, #smem, mutable, 16x32> -> tensor<8x32xf16>
+  tt.return
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+// Same allocation and same shape: the offsets are comparable, and genuinely
+// disjoint rows still need no barrier.
+// CHECK-LABEL: @subslice_offsets_same_shape_stay_disjoint
+tt.func public @subslice_offsets_same_shape_stay_disjoint(%data: tensor<16x16xf16>) {
+  // CHECK: ttg.local_alloc
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #shared, #smem, mutable>
+  %lo = ttg.memdesc_subslice %alloc[16, 0] : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+  // CHECK: ttg.local_store
+  ttg.local_store %data, %lo : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+  %hi = ttg.memdesc_subslice %alloc[0, 0] : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.local_load
+  %read = ttg.local_load %hi : !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16> -> tensor<16x16xf16>
+  tt.return
+}
