@@ -110,20 +110,17 @@ struct LoadStoreConversionBase {
 
   unsigned getScalarizedContiguousRun(Value ptr) const {
     auto type = dyn_cast<RankedTensorType>(ptr.getType());
-    auto addPtr = ptr.getDefiningOp<triton::AddPtrOp>();
-    if (!type || !addPtr)
+    if (!type)
       return 1;
 
-    AxisInfo *baseInfo = axisAnalysisPass.getAxisInfo(addPtr.getPtr());
-    AxisInfo *offsetInfo = axisAnalysisPass.getAxisInfo(addPtr.getOffset());
-    if (!baseInfo || !offsetInfo)
+    AxisInfo *ptrInfo = axisAnalysisPass.getAxisInfo(ptr);
+    if (!ptrInfo)
       return 1;
 
     unsigned dim = ttg::getOrder(type)[0];
-    // A constant base and consecutive offsets prove the actual byte stride.
-    return std::min<int64_t>({baseInfo->getConstancy(dim),
-                              offsetInfo->getContiguity(dim),
-                              ttg::getContigPerThread(type)[dim]});
+    // Scalar accesses need a consecutive element stride, not vector alignment.
+    return std::min<int64_t>(ptrInfo->getContiguity(dim),
+                             ttg::getContigPerThread(type)[dim]);
   }
 
 protected:
