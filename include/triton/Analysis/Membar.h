@@ -85,13 +85,17 @@ public:
 
 private:
   std::tuple<Interval<size_t>, Allocation::BufferId, const void *,
-             llvm::ArrayRef<int64_t>, const BufferIndexExpr *>
+             llvm::ArrayRef<int64_t>, llvm::ArrayRef<int64_t>,
+             const BufferIndexExpr *>
   asTuple() const {
-    return {allocationInterval, bufferId, accessTy.getAsOpaquePointer(),
-            subsliceOffsets, bufferIndexExpr};
+    return {allocationInterval, bufferId,        accessTy.getAsOpaquePointer(),
+            subsliceOffsets,    canonicalBounds, bufferIndexExpr};
   }
   // Offsets from subslice. Empty when offsets are unknown
   SmallVector<int64_t> subsliceOffsets;
+  // Subslice bounds converted into the original allocation shape, with starts
+  // followed by exclusive ends. Empty when normalization is unsafe.
+  SmallVector<int64_t> canonicalBounds;
   // The allocated interval for this buffer
   Interval<size_t> allocationInterval;
   // Type of the memory descriptor for this access

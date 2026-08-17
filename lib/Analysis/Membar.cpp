@@ -7,9 +7,126 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 
+#include <optional>
+
 namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace mlir {
+
+static triton::gpu::MemDescType getRootAllocationType(Value value) {
+  while (Operation *def = value.getDefiningOp()) {
+    if (auto alloc = dyn_cast<triton::gpu::LocalAllocOp>(def))
+      return alloc.getType();
+    if (isa<triton::gpu::MemDescTransOp, triton::gpu::MemDescReshapeOp,
+            triton::gpu::MemDescReinterpretOp>(def)) {
+      value = def->getOperand(0);
+      continue;
+    }
+    return {};
+  }
+  return {};
+}
+
+static std::optional<uint64_t> linearizeIndex(ArrayRef<int64_t> coordinates,
+                                              ArrayRef<int64_t> shape,
+                                              ArrayRef<unsigned> order) {
+  if (coordinates.size() != shape.size() || order.size() != shape.size())
+    return std::nullopt;
+  uint64_t linear = 0;
+  uint64_t stride = 1;
+  for (unsigned dim : order) {
+    if (coordinates[dim] < 0 || coordinates[dim] >= shape[dim])
+      return std::nullopt;
+    linear += coordinates[dim] * stride;
+    stride *= shape[dim];
+  }
+  return linear;
+}
+
+static std::optional<SmallVector<int64_t>>
+delinearizeIndex(uint64_t linear, ArrayRef<int64_t> shape,
+                 ArrayRef<unsigned> order) {
+  if (order.size() != shape.size())
+    return std::nullopt;
+  SmallVector<int64_t> coordinates(shape.size());
+  for (unsigned dim : order) {
+    coordinates[dim] = linear % shape[dim];
+    linear /= shape[dim];
+  }
+  if (linear != 0)
+    return std::nullopt;
+  return coordinates;
+}
+
+static bool canonicalizeSubslice(triton::gpu::MemDescSubsliceOp subslice,
+                                 SmallVectorImpl<int64_t> &canonicalBounds) {
+  auto accessTy = subslice.getType();
+  auto sourceTy = subslice.getSrc().getType();
+  auto rootTy = getRootAllocationType(subslice.getSrc());
+  if (!rootTy || sourceTy.getEncoding() != rootTy.getEncoding() ||
+      triton::gpu::getPaddedEncoding(sourceTy.getEncoding()) ||
+      isa<triton::gpu::PartitionedSharedEncodingAttr>(sourceTy.getEncoding()))
+    return false;
+
+  auto sourceLayout =
+      dyn_cast<triton::gpu::SharedEncodingTrait>(sourceTy.getEncoding());
+  auto rootLayout =
+      dyn_cast<triton::gpu::SharedEncodingTrait>(rootTy.getEncoding());
+  if (!sourceLayout || !rootLayout)
+    return false;
+
+  auto sourceAllocShape = sourceTy.getAllocShape();
+  auto rootAllocShape = rootTy.getAllocShape();
+  auto sourceOrder = triton::gpu::getOrder(sourceLayout, sourceAllocShape);
+  auto rootOrder = triton::gpu::getOrder(rootLayout, rootAllocShape);
+  if (sourceOrder.size() != sourceAllocShape.size() ||
+      rootOrder.size() != rootAllocShape.size())
+    return false;
+
+  SmallVector<int64_t> offsets(subslice.getOffsets());
+  SmallVector<int64_t> last(offsets);
+  uint64_t numElements = 1;
+  for (auto [i, extent] : llvm::enumerate(accessTy.getShape())) {
+    last[i] += extent - 1;
+    numElements *= extent;
+  }
+  auto firstLinear = linearizeIndex(offsets, sourceAllocShape, sourceOrder);
+  auto lastLinear = linearizeIndex(last, sourceAllocShape, sourceOrder);
+  if (!firstLinear || !lastLinear || *lastLinear < *firstLinear ||
+      *lastLinear - *firstLinear + 1 != numElements)
+    return false;
+
+  unsigned sourceBits = sourceTy.getElementTypeBitWidth();
+  unsigned rootBits = rootTy.getElementTypeBitWidth();
+  uint64_t firstBit = *firstLinear * sourceBits;
+  uint64_t numBits = numElements * sourceBits;
+  if (firstBit % rootBits != 0 || numBits % rootBits != 0)
+    return false;
+
+  uint64_t rootFirst = firstBit / rootBits;
+  uint64_t rootNumElements = numBits / rootBits;
+  auto rootStart = delinearizeIndex(rootFirst, rootAllocShape, rootOrder);
+  auto rootEnd = delinearizeIndex(rootFirst + rootNumElements - 1,
+                                  rootAllocShape, rootOrder);
+  if (!rootStart || !rootEnd)
+    return false;
+
+  SmallVector<int64_t> normalizedShape(rootAllocShape.size());
+  uint64_t normalizedElements = 1;
+  for (size_t i = 0; i < rootAllocShape.size(); ++i) {
+    normalizedShape[i] = (*rootEnd)[i] - (*rootStart)[i] + 1;
+    if (normalizedShape[i] <= 0)
+      return false;
+    normalizedElements *= normalizedShape[i];
+  }
+  if (normalizedElements != rootNumElements)
+    return false;
+
+  canonicalBounds.assign(rootStart->begin(), rootStart->end());
+  for (auto [start, extent] : llvm::zip(*rootStart, normalizedShape))
+    canonicalBounds.push_back(start + extent);
+  return true;
+}
 
 AllocationSlice::AllocationSlice(Value value,
                                  Interval<size_t> allocationInterval,
@@ -26,6 +143,7 @@ AllocationSlice::AllocationSlice(Value value,
     // and when a subslice is carried in a loop
     if (accessTy.getAllocShape() == subslice.getSrc().getType().getShape()) {
       subsliceOffsets = SmallVector<int64_t>(subslice.getOffsets());
+      canonicalizeSubslice(subslice, canonicalBounds);
     }
   }
 }
@@ -49,28 +167,48 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
   if (subsliceOffsets.empty() || other.subsliceOffsets.empty())
     return true;
 
-  // If layouts differ, we assume intersection as we currently only work on
-  // logical elements
-  if (accessTy.getEncoding() != other.accessTy.getEncoding())
+  if (bufferId == other.bufferId && bufferId != Allocation::InvalidBufferId) {
+    ArrayRef<int64_t> offsetsA = subsliceOffsets;
+    ArrayRef<int64_t> offsetsB = other.subsliceOffsets;
+    ArrayRef<int64_t> shapeA = accessTy.getShape();
+    ArrayRef<int64_t> shapeB = other.accessTy.getShape();
+
+    // Prefer bounds normalized to the original allocation shape. This keeps
+    // offsets comparable across reinterpret/reshape view shapes.
+    if (!canonicalBounds.empty() && !other.canonicalBounds.empty() &&
+        canonicalBounds.size() == other.canonicalBounds.size()) {
+      size_t rank = canonicalBounds.size() / 2;
+      auto startsA = ArrayRef<int64_t>(canonicalBounds).take_front(rank);
+      auto endsA = ArrayRef<int64_t>(canonicalBounds).drop_front(rank);
+      auto startsB = ArrayRef<int64_t>(other.canonicalBounds).take_front(rank);
+      auto endsB = ArrayRef<int64_t>(other.canonicalBounds).drop_front(rank);
+      for (size_t i = 0; i < rank; ++i) {
+        if (endsA[i] <= startsB[i] || endsB[i] <= startsA[i])
+          return false;
+      }
+      return true;
+    } else if (accessTy.getAllocShape() != other.accessTy.getAllocShape() ||
+               accessTy.getEncoding() != other.accessTy.getEncoding()) {
+      return true;
+    }
+
+    // Check if all subslice region dimensions have some intersection.
+    // [offsetA, offsetA + shape) and [offsetB, offsetB + other.shape)
+    // If any dimension doesn't intersect, we are looking at disjoint slices.
+    for (size_t i = 0; i < offsetsA.size(); ++i) {
+      int64_t startA = offsetsA[i];
+      int64_t endA = startA + shapeA[i];
+      int64_t startB = offsetsB[i];
+      int64_t endB = startB + shapeB[i];
+
+      if (endA <= startB || endB <= startA)
+        return false;
+    }
     return true;
-
-  auto shapeA = SmallVector<int64_t>(accessTy.getShape());
-  auto shapeB = SmallVector<int64_t>(other.accessTy.getShape());
-  // Chek if all subslice region dimensions have some intersection
-  // [offsetA, offsetA + shape) and [offsetB, offsetB + other.shape)
-  // If any dimension doesn't intersect, we are looking at disjoint subslices
-  for (size_t i = 0; i < subsliceOffsets.size(); ++i) {
-    int64_t startA = subsliceOffsets[i];
-    int64_t endA = startA + shapeA[i];
-    int64_t startB = other.subsliceOffsets[i];
-    int64_t endB = startB + shapeB[i];
-
-    // Is A completely before B? Is B completely before A? If so, disjoint
-    if (endA <= startB || endB <= startA)
-      return false;
   }
 
-  // All dimensions of subslices have some intersection
+  // Distinct allocations may reuse the same physical interval, but their
+  // logical origins are unrelated.
   return true;
 }
 
