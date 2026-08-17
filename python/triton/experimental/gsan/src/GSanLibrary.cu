@@ -664,7 +664,7 @@ GSAN_DEVICE void initMBarrier(void *scratch, uint32_t offset,
   barrier->generation = 0;
   for (int bank = 0; bank < 2; ++bank) {
     barrier->phases[bank].generation = 0;
-    barrier->phases[bank].complete = 0;
+    barrier->phases[bank].complete = bank;
     for (int source = 0; source < kMaxClusterCTAs; ++source)
       barrier->phases[bank].clocks[source] = {};
   }
@@ -724,8 +724,7 @@ GSAN_DEVICE void acquireMBarrierPhase(GlobalState *globals, void *scratch,
   MBarrierPublishedClock clocks[kMaxClusterCTAs] = {};
   clusterLockAcquire(barrier->lock);
   const auto &phase = barrier->phases[waitPhase];
-  assert_msg(loc,
-             phase.generation != 0 && ((phase.generation - 1) & 1) == waitPhase,
+  assert_msg(loc, ((phase.generation - 1) & 1) == waitPhase,
              "Invalid GSan mbarrier phase state");
   assert_msg(loc, phase.complete,
              "GSan mbarrier wait observed an incomplete phase");

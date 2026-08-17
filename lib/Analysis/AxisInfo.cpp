@@ -146,6 +146,35 @@ public:
   }
 };
 
+class BitcastOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<triton::BitcastOp> {
+public:
+  using AxisInfoVisitorImpl<triton::BitcastOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(triton::BitcastOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    AxisInfo info = operands[0]->getValue();
+    if (!isa<PointerType>(getElementTypeOrSelf(op.getSrc().getType())))
+      return info;
+
+    int64_t srcBytes =
+        std::max<int64_t>(1, getPointeeBitWidth(op.getSrc().getType()) / 8);
+    int64_t dstBytes =
+        std::max<int64_t>(1, getPointeeBitWidth(op.getType()) / 8);
+    if (srcBytes == dstBytes)
+      return info;
+
+    AxisInfo::DimVectorT divisibility = info.getDivisibility();
+    // Every former element becomes a group base after the bitcast.
+    for (unsigned dim = 0; dim < divisibility.size(); ++dim)
+      if (info.getContiguity(dim) > 1)
+        divisibility[dim] = gcd(divisibility[dim], srcBytes);
+    return AxisInfo(AxisInfo::DimVectorT(info.getRank(), 1), divisibility,
+                    info.getConstancy(), info.getConstantValue());
+  }
+};
+
 class UnrealizedConversionCastOpAxisInfoVisitor final
     : public AxisInfoVisitorImpl<mlir::UnrealizedConversionCastOp> {
 public:
@@ -1181,7 +1210,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   CastOpAxisInfoVisitor<arith::ExtUIOp>,
                   CastOpAxisInfoVisitor<arith::TruncIOp>,
                   CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
-                  CastOpAxisInfoVisitor<triton::BitcastOp>,
+                  BitcastOpAxisInfoVisitor,
                   CastOpAxisInfoVisitor<triton::gluon::SetAutoLayoutOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<PoisonOpAxisInfoVisitor>();

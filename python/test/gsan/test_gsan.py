@@ -458,11 +458,34 @@ def test_gluon_cluster_barriers_in_warp_specialize_synchronize_vector_clocks(wit
 
 
 @gluon.jit
+def _gluon_mbarrier_initial_empty_phase_kernel(out_ptr):
+    data_layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
+    barrier = hopper.mbarrier.allocate_mbarrier(two_ctas=True)
+    hopper.mbarrier.init(barrier, count=1)
+    hopper.mbarrier.wait(barrier, phase=1)
+    offsets = gl.arange(0, 256, data_layout)
+    gl.store(out_ptr + offsets * 0, 1, mask=offsets == 0)
+    hopper.mbarrier.invalidate(barrier)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
+def test_gluon_mbarrier_initial_empty_phase_is_ready(with_gsan):
+    out = torch.zeros(1, dtype=torch.int32, device="cuda")
+
+    compiled = _gluon_mbarrier_initial_empty_phase_kernel[(1, )](out, num_warps=4, num_ctas=2)
+    assert "__triton_gsan_mbarrier_wait" in compiled.asm["llir"]
+    torch.cuda.synchronize()
+
+    assert out.item() == 1
+
+
+@gluon.jit
 def _gluon_mbarrier_sync_kernel(payload_ptr, out_ptr):
     data_layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
 
     barrier = hopper.mbarrier.allocate_mbarrier(two_ctas=True)
     hopper.mbarrier.init(barrier, count=1)
+    hopper.mbarrier.wait(barrier, phase=1)
     offsets = gl.arange(0, 256, data_layout)
     for iteration in range(4):
         payload_ptrs = payload_ptr + iteration + offsets * 0
