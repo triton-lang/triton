@@ -720,16 +720,11 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
           [](const MemEffectsOpInfo::Effects &e) { return e.rw == RW::Read; });
     for (const auto &barrier : info->barriers)
       collectCandidates(barrier.barrier);
-    for (const auto &effect : info->operandEffects) {
-      if (auto *value = std::get_if<Value>(&effect.buffer)) {
-        collectCandidates(*value);
-      } else {
-        staticSharedRegions.push_back(
-            std::get<MemEffectsOpInfo::Effects::StaticSharedBuffer>(
-                effect.buffer)
-                .getRegion(numCTAs));
-      }
-    }
+    for (const auto &effect : info->operandEffects)
+      if (auto *buffer =
+              std::get_if<MemEffectsOpInfo::Effects::StaticSharedBuffer>(
+                  &effect.buffer))
+        staticSharedRegions.push_back(buffer->getRegion(numCTAs));
     return WalkResult::advance();
   });
   if (result.wasInterrupted())

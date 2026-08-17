@@ -248,28 +248,6 @@ FailureOr<Value> createBufferStateMask(ImplicitLocOpBuilder &b,
   return result;
 }
 
-FailureOr<Value> createStaticBufferStateMask(
-    ImplicitLocOpBuilder &b, AuxDataMap &auxData,
-    const MemEffectsOpInfo::Effects::StaticSharedBuffer &buffer,
-    Operation *op) {
-  int index = static_cast<int>(MemType::SHARED_MEM);
-  const auto &regions = auxData.bufferRegions[index];
-  BufferRegion region = buffer.getRegion(ttg::lookupNumCTAs(op));
-  auto it = llvm::lower_bound(regions, region);
-  if (it == regions.end() || !(*it == region)) {
-    op->emitError("static shared-memory region is absent from the ConSan "
-                  "registry");
-    return failure();
-  }
-  unsigned id = std::distance(regions.begin(), it);
-  const BufferStatePlan &plan = auxData.bufferStatePlans[index];
-  auto writeVisibilityType =
-      cast<RankedTensorType>(auxData.writeVisibility[index].at(op).type);
-  RankedTensorType maskType =
-      tti::getSlicedTensorType(writeVisibilityType, {1}, b.getI1Type());
-  return createStateMaskConstant(b, maskType, plan.regionMasks[id]);
-}
-
 Value allCTAsMask(ImplicitLocOpBuilder &b) {
   int numCTAs = ttg::lookupNumCTAs(b);
   assert(numCTAs <= 16 && "ConSan CTA bitsets assume at most 16 CTAs");
@@ -1335,32 +1313,31 @@ private:
     auto materializeStaticBuffer =
         [&](const MemEffectsOpInfo::Effects::StaticSharedBuffer &buffer,
             bool selectBarrierStorage) -> FailureOr<MaterializedEffect> {
+      int index = static_cast<int>(MemType::SHARED_MEM);
+      const auto &regions = auxData.bufferRegions[index];
+      BufferRegion region = buffer.getRegion(ttg::lookupNumCTAs(op));
+      auto it = llvm::lower_bound(regions, region);
+      if (it == regions.end() || !(*it == region)) {
+        op->emitError("static shared-memory region is absent from the ConSan "
+                      "registry");
+        return failure();
+      }
+      unsigned id = std::distance(regions.begin(), it);
+      const llvm::SmallBitVector &stateMask =
+          auxData.bufferStatePlans[index].regionMasks[id];
+      auto writeVisibilityType =
+          cast<RankedTensorType>(auxData.writeVisibility[index].at(op).type);
+      RankedTensorType maskType =
+          tti::getSlicedTensorType(writeVisibilityType, {1}, b.getI1Type());
+
       MaterializedEffect materialized;
       materialized.memType = MemType::SHARED_MEM;
-      FailureOr<Value> stateMask =
-          createStaticBufferStateMask(b, auxData, buffer, op);
-      if (failed(stateMask))
-        return failure();
-      materialized.bufferMask = *stateMask;
+      materialized.bufferMask = createStateMaskConstant(b, maskType, stateMask);
       // Scratch stores target the issuing CTA; cross-CTA consumers read after
       // intrinsic synchronization.
       materialized.effectCTAs = currentCTAMask(b);
-
-      if (selectBarrierStorage && !auxData.barrierBufferMasks.empty()) {
-        int index = static_cast<int>(MemType::SHARED_MEM);
-        const auto &regions = auxData.bufferRegions[index];
-        BufferRegion region = buffer.getRegion(ttg::lookupNumCTAs(op));
-        auto it = llvm::lower_bound(regions, region);
-        if (it == regions.end() || !(*it == region)) {
-          op->emitError("static shared-memory region is absent from the ConSan "
-                        "registry");
-          return failure();
-        }
-        unsigned id = std::distance(regions.begin(), it);
-        addBarrierOwners(materialized,
-                         auxData.bufferStatePlans[index].regionMasks[id],
-                         materialized.effectCTAs, selectBarrierStorage);
-      }
+      addBarrierOwners(materialized, stateMask, materialized.effectCTAs,
+                       selectBarrierStorage);
       return materialized;
     };
 

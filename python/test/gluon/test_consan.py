@@ -185,36 +185,28 @@ def _consan_noinline_forward_convert_layout(input, output):
 
 
 @gluon.jit
-def _consan_noinline_convert_layout_kernel(input, output, sentinel_output, NESTED: ttgl.constexpr):
+def _consan_noinline_convert_layout_kernel(input, output, sentinel_output):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
     shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
     offsets = ttgl.arange(0, 128, layout=layout)
     sentinel = offsets + 4096
     caller_allocation = ttgl.allocate_shared_memory(ttgl.int32, [128], shared_layout, sentinel)
 
-    if NESTED:
-        _consan_noinline_forward_convert_layout(input, output)
-    else:
-        _consan_noinline_convert_layout(input, output)
-
+    _consan_noinline_forward_convert_layout(input, output)
     ttgl.store(sentinel_output + offsets, caller_allocation.load(layout))
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
-@pytest.mark.parametrize("NESTED", [
-    pytest.param(False, id="with-consan"),
-    pytest.param(True, id="with-consan-nested"),
-])
-def test_consan_noinline_convert_layout_scratch(NESTED, device, fresh_knobs):
+def test_consan_noinline_convert_layout_scratch(device, fresh_knobs):
     fresh_knobs.compilation.instrumentation_mode = "consan"
     values = torch.arange(128, device=device, dtype=torch.int32)
     output = torch.empty_like(values)
     sentinel_output = torch.empty_like(values)
-    compiled = _consan_noinline_convert_layout_kernel[(1, )](values, output, sentinel_output, NESTED, num_warps=4)
+    compiled = _consan_noinline_convert_layout_kernel[(1, )](values, output, sentinel_output, num_warps=4)
     if is_compile_warmup():
         return
     assert compiled.metadata.shared >= 2 * values.numel() * values.element_size()
-    assert compiled.asm["ttgir"].count("noinline = true") >= 1 + int(NESTED)
+    assert compiled.asm["ttgir"].count("noinline = true") >= 2
     torch.testing.assert_close(output, values)
     torch.testing.assert_close(sentinel_output, values + 4096)
 
