@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import gc
 from enum import IntEnum
 from pathlib import Path
 from types import ModuleType
@@ -88,6 +89,19 @@ def configure(
 def freeze_config() -> None:
     """Prevents later `configure(...)` calls from changing allocator configuration."""
     _load_gsan_module().freeze_config()
+
+
+def reset() -> None:
+    """Reset GSan runtime state after all GSan allocations have been released."""
+    from . import _stream_sync
+
+    module = _load_gsan_module()
+    _stream_sync._reset_caches()
+    try:
+        module.reset()
+    except AssertionError:
+        gc.collect()
+        module.reset()
 
 
 def create_mem_pool():

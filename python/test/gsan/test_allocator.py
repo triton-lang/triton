@@ -4,15 +4,18 @@ import os
 
 import pytest
 import torch
+import triton
 
 from triton._internal_testing import is_cuda, run_in_process
-from triton.experimental.gsan import ShareableHandleType, configure, create_mem_pool, freeze_config
+from triton.experimental.gsan import ShareableHandleType, configure, create_mem_pool, freeze_config, reset
+from triton.experimental.gsan import _stream_sync
 from triton.experimental.gsan._allocator import (
     export_allocation_handles,
     export_allocation_memhandle_regions,
     export_runtime_state_handle,
     free_allocation,
     get_device_rank,
+    get_global_state_pointer,
     get_reserve_pointer,
     get_reserve_size,
     gsan_free,
@@ -20,7 +23,8 @@ from triton.experimental.gsan._allocator import (
     import_allocation_handles,
     import_runtime_state_handle,
 )
-from triton.experimental.gsan._testing_utils import global_state, shadow_tensor_for
+from triton.experimental.gsan._testing_utils import (global_state, shadow_cell_from_address, shadow_tensor_for,
+                                                     store_one_i32, thread_state_from_smid)
 from triton.experimental.gsan._utils import uint8_cuda_tensor_from_ptr
 
 # With 2 MiB pages, this rounds to a 6 MiB allocation inside an 8 MiB tree node.
@@ -71,6 +75,102 @@ def _run_allocator_freezes_config_check() -> None:
             raise AssertionError("expected allocator initialization to freeze config")
     finally:
         gsan_free(ptr, device, 0, 0)
+
+
+def _run_reset_rejects_live_allocations_check() -> None:
+    device = torch.cuda.current_device()
+    ptr = gsan_malloc(1, device)
+    try:
+        with pytest.raises(AssertionError, match="GSan allocations are still live"):
+            reset()
+    finally:
+        gsan_free(ptr, device)
+
+    reset()
+
+
+def _run_reset_collects_unreachable_allocations_check() -> None:
+    device = torch.cuda.current_device()
+
+    class CyclicAllocation:
+
+        def __init__(self):
+            self.ptr = gsan_malloc(1, device)
+            self.cycle = self
+
+        def __del__(self):
+            gsan_free(self.ptr, device)
+
+    allocation = CyclicAllocation()
+    del allocation
+    reset()
+
+
+def _run_reset_reinitializes_runtime_state_check() -> None:
+    device = torch.cuda.current_device()
+    configure(rng_seed=12345, clock_buffer_size=17)
+    original_state_pointer = get_global_state_pointer()
+
+    ptr = gsan_malloc(4, device)
+    target = uint8_cuda_tensor_from_ptr(ptr, 4, device).view(torch.int32)
+    with triton.knobs.compilation.scope():
+        triton.knobs.compilation.instrumentation_mode = "gsan"
+        store_one_i32[(1, )](target, num_warps=1)
+    torch.cuda.synchronize()
+
+    thread_id = shadow_cell_from_address(ptr).write_clock.thread_id
+    old_thread_state = thread_state_from_smid(thread_id)
+    assert old_thread_state.globals_ptr != 0
+    assert old_thread_state.vector_clock[thread_id] != 0
+    assert _stream_sync._launch_stream_state.cache_info().currsize == 1
+    assert _stream_sync._runtime_state_layout.cache_info().currsize == 1
+
+    del target
+    gsan_free(ptr, device)
+    reset()
+
+    assert get_global_state_pointer() == original_state_pointer
+    assert _stream_sync._launch_stream_state.cache_info().currsize == 0
+    assert _stream_sync._runtime_state_layout.cache_info().currsize == 0
+
+    state = global_state(device_index=device)
+    assert state.rng_seed == 12345
+    assert state.clock_buffer_size == 17
+    with pytest.raises(RuntimeError, match="configuration is already frozen"):
+        configure(rng_seed=12345)
+
+    new_thread_state = thread_state_from_smid(thread_id)
+    assert new_thread_state.globals_ptr == 0
+    assert all(epoch == 0 for epoch in new_thread_state.vector_clock)
+
+    ptr = gsan_malloc(4, device)
+    target = uint8_cuda_tensor_from_ptr(ptr, 4, device).view(torch.int32)
+    try:
+        with triton.knobs.compilation.scope():
+            triton.knobs.compilation.instrumentation_mode = "gsan"
+            store_one_i32[(1, )](target, num_warps=1)
+        torch.cuda.synchronize()
+        stream = torch.cuda.current_stream().cuda_stream
+        assert _stream_sync._launch_stream_state(device, stream).next_kernel_id == 1
+    finally:
+        del target
+        gsan_free(ptr, device)
+
+
+def _run_reset_releases_cached_pool_clocks_check(num_pools: int) -> None:
+    pools = [create_mem_pool() for _ in range(num_pools)]
+    streams = [torch.cuda.Stream() for _ in pools]
+    for pool, stream in zip(pools, streams):
+        with torch.cuda.stream(stream), torch.cuda.use_mem_pool(pool), triton.knobs.compilation.scope():
+            triton.knobs.compilation.instrumentation_mode = "gsan"
+            target = torch.zeros(1, dtype=torch.int32, device="cuda")
+            store_one_i32[(1, )](target, num_warps=1)
+        del target
+    torch.cuda.synchronize()
+
+    del pool
+    del pools
+    reset()
 
 
 def _run_export_import_fabric_handles_check(explicit_config: bool) -> None:
@@ -200,6 +300,31 @@ def test_freeze_config_rejects_later_changes():
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
 def test_allocator_initialization_rejects_later_config():
     result = run_in_process(_run_allocator_freezes_config_check)
+    assert result.exc is None
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_reset_rejects_live_allocations():
+    result = run_in_process(_run_reset_rejects_live_allocations_check)
+    assert result.exc is None
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_reset_collects_unreachable_allocations():
+    result = run_in_process(_run_reset_collects_unreachable_allocations_check)
+    assert result.exc is None
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_reset_reinitializes_runtime_state():
+    result = run_in_process(_run_reset_reinitializes_runtime_state_check)
+    assert result.exc is None
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@pytest.mark.parametrize("num_pools", [1, 2])
+def test_reset_releases_cached_pool_clocks(num_pools):
+    result = run_in_process(_run_reset_releases_cached_pool_clocks_check, args=(num_pools, ))
     assert result.exc is None
 
 

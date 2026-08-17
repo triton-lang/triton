@@ -58,6 +58,11 @@ def get_launch_stream_clock(device: int, stream: int):
     return state.clocks, kernel_id
 
 
+def _reset_caches() -> None:
+    _launch_stream_state.cache_clear()
+    _runtime_state_layout.cache_clear()
+
+
 @triton.jit(do_not_specialize=["rank", "epoch"])
 def _synchronize_process_group_barrier_kernel(counters, rank, epoch, WORLD_SIZE: tl.constexpr):
     tl.atomic_xchg(counters + rank, epoch, sem="release", scope="sys")
