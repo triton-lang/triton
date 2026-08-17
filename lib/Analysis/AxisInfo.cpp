@@ -70,7 +70,7 @@ evaluateConstant(Operation *operation,
       if (op.hasNoUnsignedWrap() && overflow)
         return std::nullopt;
       if (op.hasNoSignedWrap()) {
-        (a.*signedOp)(b, overflow);
+        (void)(a.*signedOp)(b, overflow);
         if (overflow)
           return std::nullopt;
       }
