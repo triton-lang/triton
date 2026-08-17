@@ -667,7 +667,7 @@ void init_triton_llvm(py::module &&m) {
         if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
           return;
         auto options = llvm::cl::getRegisteredOptions();
-        // Hack for the 3.6 release only. Vectorization of copyable elements
+        // Hack for the 3.8 release only. Vectorization of copyable elements
         // exposed a bug in ptxas. Manually disable it by modifying the command
         // line option for it. Note that we can abuse DISABLE_LLVM_OPT to
         // override this, since setting it to slp-copyable-elements will set the
