@@ -203,12 +203,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     }
     // Preserve the existing initialization of proven integer constants.
     // Tying them can add a dependency on a materialized constant register.
-    APInt otherConstant;
-    bool otherIsConstInt =
-        otherIsSplatConstInt ||
-        (other && isa<IntegerType>(valueElemTy) &&
-         matchPattern(axisAnalysisPass.getExactConstant(other),
-                      m_ConstantInt(&otherConstant)));
+    auto *otherInfo = other ? axisAnalysisPass.getAxisInfo(other) : nullptr;
+    bool otherIsConstInt = otherInfo && isa<IntegerType>(valueElemTy) &&
+                           otherInfo->getConstantValue().has_value();
     SmallVector<Value> otherElems;
     if (other) {
       otherElems = unpackUniqueTensorElements(loc, llOther, rewriter);

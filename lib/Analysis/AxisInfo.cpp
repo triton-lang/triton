@@ -1,5 +1,4 @@
 #include "triton/Analysis/AxisInfo.h"
-#include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
@@ -1509,12 +1508,6 @@ void ModuleAxisInfoAnalysis::initialize(
       axisInfo = AxisInfo::getPessimisticValueState(value);
     auto &valInfo = (*axisInfoMap)[value];
     valInfo = AxisInfo::join(axisInfo, valInfo);
-
-    auto *constant =
-        solver->lookupState<dataflow::Lattice<dataflow::ConstantValue>>(value);
-    if (constant && !constant->getValue().isUninitialized())
-      if (Attribute attr = constant->getValue().getConstantValue())
-        exactConstants[value] = attr;
   };
   funcOp.walk([&](Operation *op) {
     for (auto value : op->getResults()) {

@@ -1,11 +1,8 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/BufferRegion.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/IR/Matchers.h"
 #include "mlir/Parser/Parser.h"
 #include "llvm/Support/Signals.h"
 #include <gtest/gtest.h>
@@ -14,44 +11,6 @@
 #include <set>
 
 namespace mlir {
-
-TEST(Analysis, ExactConstantsPreserveIntegerSemantics) {
-  MLIRContext context;
-  context.getOrLoadDialect<arith::ArithDialect>();
-  context.getOrLoadDialect<triton::TritonDialect>();
-  auto module = parseSourceString<ModuleOp>(R"mlir(
-    tt.func @constants(%unknown: i32) {
-      %one = arith.constant 1 : i32
-      %minus_one = arith.constant -1 : i32
-      %max = arith.maxui %minus_one, %one : i32
-      %byte = arith.constant -1 : i8
-      %extended = arith.extui %byte : i8 to i32
-      %splat = tt.splat %one : i32 -> tensor<4xi32>
-      tt.return
-    }
-  )mlir",
-                                            &context);
-  ASSERT_TRUE(module);
-  auto function = cast<triton::FuncOp>(module->getBody()->front());
-  auto &body = function.getBody().front();
-  auto max = *body.getOps<arith::MaxUIOp>().begin();
-  auto ext = *body.getOps<arith::ExtUIOp>().begin();
-  auto splat = *body.getOps<triton::SplatOp>().begin();
-  triton::ModuleAxisInfoAnalysis analysis(*module);
-
-  APInt value;
-  ASSERT_TRUE(matchPattern(analysis.getExactConstant(max.getResult()),
-                           m_ConstantInt(&value)));
-  EXPECT_EQ(value.getBitWidth(), 32u);
-  EXPECT_EQ(value.getZExtValue(), 0xffffffffu);
-  ASSERT_TRUE(matchPattern(analysis.getExactConstant(ext.getResult()),
-                           m_ConstantInt(&value)));
-  EXPECT_EQ(value.getBitWidth(), 32u);
-  EXPECT_EQ(value.getZExtValue(), 255u);
-  EXPECT_TRUE(
-      matchPattern(analysis.getExactConstant(splat.getResult()), m_One()));
-  EXPECT_FALSE(analysis.getExactConstant(function.getArgument(0)));
-}
 
 TEST(Analysis, reorder) {
   SmallVector<int> shape({10, 20, 30});

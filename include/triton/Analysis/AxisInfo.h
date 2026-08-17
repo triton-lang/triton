@@ -288,12 +288,6 @@ public:
     return &(it->second);
   }
 
-  // Return the exact constant proven by sparse constant propagation, or null.
-  // The attribute preserves the value's type and integer bit width.
-  Attribute getExactConstant(Value value) const {
-    return exactConstants.lookup(value);
-  }
-
   unsigned getContiguity(Value value);
   unsigned getAlignment(Value value);
 
@@ -313,8 +307,6 @@ public:
   unsigned getMaskAlignment(Value mask);
 
 private:
-  DenseMap<Value, Attribute> exactConstants;
-
   void initialize(FunctionOpInterface funcOp, AxisInfoAnalysis::LoadCallback);
   void update(CallOpInterface callOp, FunctionOpInterface funcOp);
 };
