@@ -115,6 +115,8 @@ bool containsLocalBarrier(Operation *op) {
     return true;
   if (isa<triton::gpu::WarpSpecializePartitionsOp>(op))
     return true;
+  if (isa<triton::gpu::WarpYieldOp, triton::gpu::WarpReturnOp>(op))
+    return true;
   if (isa<ttng::ArriveBarrierOp>(op))
     return true;
   if (isa<ttng::BarrierExpectOp>(op))
@@ -176,15 +178,7 @@ static triton::BarrierStages getLocalBarrierStages(Operation *op,
   // immediately before the operation.
   stages.betweenMemoryEffects = hasScratchBarrier;
 
-  // Leaving the default region of a `ttg.warp_specialize` goes through the
-  // CTA-wide barrier `lowerWarpSpecializeCommon` emits at every
-  // `ttg.warp_yield`, which is the rendezvous with the barrier each partition
-  // executes on `ttg.warp_return`, so shared memory effects inside the region
-  // are synchronized before the code after the op runs.
-  if (isa<triton::gpu::WarpYieldOp>(op))
-    stages.beforeMemoryEffects = true;
-  else
-    stages.beforeMemoryEffects = containsLocalBarrier(op);
+  stages.beforeMemoryEffects = containsLocalBarrier(op);
   return stages;
 }
 
