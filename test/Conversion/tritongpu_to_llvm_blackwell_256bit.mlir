@@ -1,6 +1,7 @@
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=88' -cse | FileCheck --check-prefix=BW256 %s
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=103 ptx-version=88' -cse | FileCheck --check-prefix=SM103 %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -cse | FileCheck --check-prefix=PRE_BW %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -cse | FileCheck --check-prefixes=PRE_BW,FP8,LEGACY %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=92' -cse | FileCheck --check-prefixes=FP8,PACKED %s
 
 // Test 256-bit global load with 8x f32 (v8.b32) on Blackwell
 #blocked_8xf32 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
@@ -86,5 +87,36 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num
       tt.reduce.return %1 : f32
     }) {allocation.offset = 0 : i32} : (tensor<1x1024xf32, #blocked_redux_103>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_redux_103}>>
     tt.return
+  }
+}
+
+// -----
+
+// Blackwell uses native packed BF16/FP8 conversions in both directions.
+// Pre-Blackwell targets retain their existing paths.
+#blocked_fp8 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // FP8-LABEL: @bf16_to_fp8e4
+  // PACKED: cvt.rn.satfinite.e4m3x2.bf16x2 $0, $1;", "=h,r"
+  // LEGACY: cvt.rn.satfinite.e4m3x2.f32
+  tt.func private @bf16_to_fp8e4(%in: tensor<64xbf16, #blocked_fp8>) -> tensor<64xf8E4M3FN, #blocked_fp8> {
+    %out = tt.fp_to_fp %in, rounding = rtne : tensor<64xbf16, #blocked_fp8> -> tensor<64xf8E4M3FN, #blocked_fp8>
+    tt.return %out : tensor<64xf8E4M3FN, #blocked_fp8>
+  }
+
+  // FP8-LABEL: @bf16_to_fp8e5
+  // PACKED: cvt.rn.satfinite.e5m2x2.bf16x2 $0, $1;", "=h,r"
+  // LEGACY: cvt.rn.satfinite.e5m2x2.f32
+  tt.func private @bf16_to_fp8e5(%in: tensor<64xbf16, #blocked_fp8>) -> tensor<64xf8E5M2, #blocked_fp8> {
+    %out = tt.fp_to_fp %in, rounding = rtne : tensor<64xbf16, #blocked_fp8> -> tensor<64xf8E5M2, #blocked_fp8>
+    tt.return %out : tensor<64xf8E5M2, #blocked_fp8>
+  }
+
+  // FP8-LABEL: @fp8e4_to_bf16
+  // PACKED: cvt.rn.bf16x2.e4m3x2 $0, $1;", "=r,h"
+  // LEGACY: cvt.rn.f16x2.e4m3x2
+  tt.func private @fp8e4_to_bf16(%in: tensor<64xf8E4M3FN, #blocked_fp8>) -> tensor<64xbf16, #blocked_fp8> {
+    %out = tt.fp_to_fp %in : tensor<64xf8E4M3FN, #blocked_fp8> -> tensor<64xbf16, #blocked_fp8>
+    tt.return %out : tensor<64xbf16, #blocked_fp8>
   }
 }
