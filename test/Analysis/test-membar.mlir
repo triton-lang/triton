@@ -1941,3 +1941,26 @@ tt.func public @subslice_offsets_after_reinterpret_element_type(%data: tensor<16
   %read = ttg.local_load %same : !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16> -> tensor<16x16xf16>
   tt.return
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+// Two separate but identical views of one buffer still describe the same
+// coordinates, so disjoint rows taken through them stay provably disjoint.
+// CHECK-LABEL: @subslice_offsets_through_identical_views
+tt.func public @subslice_offsets_through_identical_views(%data: tensor<16x16xf16>) {
+  // CHECK: ttg.local_alloc
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #shared, #smem, mutable>
+  %v0 = ttg.memdesc_reinterpret %alloc : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<32x16xf16, #shared, #smem, mutable>
+  %lo = ttg.memdesc_subslice %v0[0, 0] : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+  // CHECK: ttg.local_store
+  ttg.local_store %data, %lo : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+  %v1 = ttg.memdesc_reinterpret %alloc : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<32x16xf16, #shared, #smem, mutable>
+  %hi = ttg.memdesc_subslice %v1[16, 0] : !ttg.memdesc<32x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16>
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.local_load
+  %read = ttg.local_load %hi : !ttg.memdesc<16x16xf16, #shared, #smem, mutable, 32x16> -> tensor<16x16xf16>
+  tt.return
+}

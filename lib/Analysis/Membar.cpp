@@ -26,7 +26,7 @@ AllocationSlice::AllocationSlice(Value value,
     // and when a subslice is carried in a loop
     if (accessTy.getAllocShape() == subslice.getSrc().getType().getShape()) {
       subsliceOffsets = SmallVector<int64_t>(subslice.getOffsets());
-      subsliceSrc = subslice.getSrc();
+      subsliceSrcTy = subslice.getSrc().getType();
     }
   }
 }
@@ -50,12 +50,15 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
   if (subsliceOffsets.empty() || other.subsliceOffsets.empty())
     return true;
 
-  // The offsets below are logical coordinates in the shape of the value the
-  // subslice was taken from, so they only mean the same thing when both slices
-  // were taken from the same value. A `memdesc_reinterpret` in between changes
-  // the shape or the element type, and hence how many bytes a row spans, so the
-  // same row index denotes different bytes on either side.
-  if (subsliceSrc != other.subsliceSrc)
+  // The offsets below are logical coordinates in the shape and element type of
+  // the value the subslice was taken from, so they only denote the same bytes
+  // when both sources agree on both, within the same buffer. A
+  // `memdesc_reinterpret` in between changes how many bytes a row spans, so the
+  // same row index means something else on either side. Comparing the source
+  // types rather than the source values keeps the disjointness proof for two
+  // separate but identical views of one buffer.
+  if (bufferId != other.bufferId || bufferId == Allocation::InvalidBufferId ||
+      subsliceSrcTy != other.subsliceSrcTy)
     return true;
 
   // If layouts differ, we assume intersection as we currently only work on

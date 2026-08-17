@@ -91,15 +91,16 @@ private:
             bufferId,
             accessTy.getAsOpaquePointer(),
             subsliceOffsets,
-            subsliceSrc.getAsOpaquePointer(),
+            subsliceSrcTy.getAsOpaquePointer(),
             bufferIndexExpr};
   }
   // Offsets from subslice. Empty when offsets are unknown
   SmallVector<int64_t> subsliceOffsets;
-  // The value the subslice was taken from. Offsets are logical coordinates in
-  // that value's shape, so they are only comparable between slices that share
-  // it. Null when there are no offsets.
-  Value subsliceSrc;
+  // Type of the value the subslice was taken from. Offsets are logical
+  // coordinates in that type's shape and element type, so they are only
+  // comparable between slices whose sources agree on it. Null when there are
+  // no offsets.
+  triton::gpu::MemDescType subsliceSrcTy;
   // The allocated interval for this buffer
   Interval<size_t> allocationInterval;
   // Type of the memory descriptor for this access
