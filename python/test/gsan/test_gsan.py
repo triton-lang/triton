@@ -986,6 +986,14 @@ def _device_tma_masked_store_kernel(ptr, m_size, n_size, row_idx, col_idx, strid
 
 
 @triton.jit
+def _device_tma_masked_load_kernel(out_ptr, ptr, m_size, n_size, row_idx, col_idx, stride_0, BLOCK: tl.constexpr):
+    desc = tl.make_tensor_descriptor(ptr, [m_size, n_size], [stride_0, 1], [BLOCK, BLOCK])
+    values = desc.load([row_idx, col_idx])
+    offsets = tl.arange(0, BLOCK)[:, None] * BLOCK + tl.arange(0, BLOCK)[None, :]
+    tl.store(out_ptr + offsets, values)
+
+
+@triton.jit
 def _host_tma_gather_kernel(out_ptr, out_stride_0, out_stride_1, desc, x_offsets_ptr, y_offset, BLOCK_X: tl.constexpr):
     BLOCK_Y: tl.constexpr = desc.block_shape[1]
     x_offsets = tl.load(x_offsets_ptr + tl.arange(0, BLOCK_X))
@@ -1049,10 +1057,14 @@ def _assert_shadow_mask(before, after, changed_mask: torch.Tensor, *, access_kin
                 assert after_cell == before_cell
 
 
-def _masked_store_change_mask(storage: torch.Tensor, m_size: int, n_size: int, row_idx: int,
-                              col_idx: int) -> torch.Tensor:
+def _masked_tma_change_mask(storage: torch.Tensor, m_size: int, n_size: int, row_idx: int, col_idx: int,
+                            block: int) -> torch.Tensor:
     changed_mask = torch.zeros(storage.shape, dtype=torch.bool)
-    changed_mask[row_idx:m_size, col_idx:n_size] = True
+    first_row = max(row_idx, 0)
+    last_row = min(row_idx + block, m_size)
+    first_col = max(col_idx, 0)
+    last_col = min(col_idx + block, n_size)
+    changed_mask[first_row:last_row, first_col:last_col] = True
     return changed_mask
 
 
@@ -1119,26 +1131,72 @@ def test_gluon_async_copy_updates_shadow(with_gsan):
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-def test_tma_masked_store_updates_shadow(with_gsan, with_allocator):
+@pytest.mark.parametrize("num_ctas", [
+    1,
+    pytest.param(
+        2, marks=pytest.mark.skipif(not is_hopper_or_newer() or is_sm12x(),
+                                    reason="Multi-CTA TMA requires Hopper or Blackwell")),
+])
+@pytest.mark.parametrize("row_idx,col_idx", [(5, 8), (30, 8), (5, 32)])
+def test_tma_masked_load_updates_shadow(with_gsan, with_allocator, row_idx, col_idx, num_ctas):
     block = 32
     m_size = 35
     n_size = 37
     padded_m = 40
     padded_n = 40
-    row_idx = 5
-    col_idx = 8
-    valid_rows = m_size - row_idx
-    valid_cols = n_size - col_idx
+    first_row = max(row_idx, 0)
+    last_row = min(row_idx + block, m_size)
+    first_col = max(col_idx, 0)
+    last_col = min(col_idx + block, n_size)
+    target_storage = torch.arange(padded_m * padded_n, dtype=torch.int32, device="cuda").reshape(padded_m, padded_n)
+    target = target_storage[:m_size, :n_size]
+    output = torch.empty((block, block), dtype=torch.int32, device="cuda")
+    shadow0 = _shadow_cells_for_tensor(target_storage)
+    changed_mask = _masked_tma_change_mask(target_storage, m_size, n_size, row_idx, col_idx, block)
+
+    _device_tma_masked_load_kernel[(1, )](output, target, m_size, n_size, row_idx, col_idx, target.stride(0),
+                                          BLOCK=block, num_ctas=num_ctas)
+    torch.cuda.synchronize()
+
+    expected = torch.zeros_like(output)
+    expected[:last_row - first_row, :last_col - first_col] = target[first_row:last_row, first_col:last_col]
+    torch.testing.assert_close(output, expected)
+
+    shadow1 = _shadow_cells_for_tensor(target_storage)
+    _assert_shadow_mask(shadow0, shadow1, changed_mask, access_kind="read")
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("num_ctas", [
+    1,
+    pytest.param(
+        2, marks=pytest.mark.skipif(not is_hopper_or_newer() or is_sm12x(),
+                                    reason="Multi-CTA TMA requires Hopper or Blackwell")),
+])
+@pytest.mark.parametrize("row_idx,col_idx", [(5, 8), (30, 8), (5, 32)])
+def test_tma_masked_store_updates_shadow(with_gsan, with_allocator, row_idx, col_idx, num_ctas):
+    block = 32
+    m_size = 35
+    n_size = 37
+    padded_m = 40
+    padded_n = 40
+    first_row = max(row_idx, 0)
+    last_row = min(row_idx + block, m_size)
+    first_col = max(col_idx, 0)
+    last_col = min(col_idx + block, n_size)
+    valid_rows = max(last_row - first_row, 0)
+    valid_cols = max(last_col - first_col, 0)
     target_storage = torch.zeros((padded_m, padded_n), dtype=torch.int32, device="cuda")
     target = target_storage[:m_size, :n_size]
     shadow0 = _shadow_cells_for_tensor(target_storage)
-    changed_mask = _masked_store_change_mask(target_storage, m_size, n_size, row_idx, col_idx)
+    changed_mask = _masked_tma_change_mask(target_storage, m_size, n_size, row_idx, col_idx, block)
 
-    _device_tma_masked_store_kernel[(1, )](target, m_size, n_size, row_idx, col_idx, target.stride(0), BLOCK=block)
+    _device_tma_masked_store_kernel[(1, )](target, m_size, n_size, row_idx, col_idx, target.stride(0), BLOCK=block,
+                                           num_ctas=num_ctas)
     torch.cuda.synchronize()
 
     expected = torch.zeros_like(target)
-    expected[row_idx:, col_idx:] = 1
+    expected[first_row:last_row, first_col:last_col] = 1
     torch.testing.assert_close(target, expected)
 
     shadow1 = _shadow_cells_for_tensor(target_storage)
@@ -1206,11 +1264,12 @@ def test_host_tma_scatter_updates_shadow(with_gsan):
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
-def test_host_tma_reduce_updates_atomic_shadow(with_gsan):
-    block_x = 1
+@pytest.mark.parametrize("dtype", (torch.int32, torch.float16, torch.bfloat16, torch.uint64))
+@pytest.mark.parametrize("block_x", (1, 8))
+def test_host_tma_reduce_updates_atomic_shadow(with_gsan, block_x, dtype):
     block_y = 16
-    target = torch.zeros((block_x, block_y), dtype=torch.int32, device="cuda")
-    src = torch.arange(1, block_y + 1, dtype=torch.int32, device="cuda").reshape(block_x, block_y)
+    target = torch.zeros((block_x, block_y), dtype=dtype, device="cuda")
+    src = torch.arange(1, block_x * block_y + 1, dtype=torch.int32, device="cuda").to(dtype).reshape(block_x, block_y)
     target_desc = TensorDescriptor.from_tensor(target, [block_x, block_y])
 
     compiled = _host_tma_reduce_add_kernel[(1, )](target_desc, src, src.stride(0), src.stride(1), BLOCK_X=block_x)
@@ -1218,4 +1277,8 @@ def test_host_tma_reduce_updates_atomic_shadow(with_gsan):
     torch.cuda.synchronize()
 
     torch.testing.assert_close(target, src)
-    _assert_atomic_rmw_shadow(target[0, 0].data_ptr(), AtomicScope.GPU, is_release=False)
+    for row in range(block_x):
+        for col in range(block_y):
+            for byte_offset in range(0, target.element_size(), SHADOW_GRANULARITY_BYTES):
+                address = target[row, col].data_ptr() + byte_offset
+                _assert_atomic_rmw_shadow(address, AtomicScope.GPU, is_release=False)
