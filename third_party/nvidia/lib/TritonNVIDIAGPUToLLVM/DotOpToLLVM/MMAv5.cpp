@@ -357,7 +357,7 @@ void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
                    ttng::TCGen5MMAOp op, MemDescOperand a, Value b,
                    MemDescOperand d, Value pred, Value instDescriptor,
                    Value useInitAcc, bool aInTMem, bool twoCTAs,
-                   std::string collectorB) {
+                   std::string collector) {
   PTXBuilder ptxBuilder;
   std::string opcode =
       "tcgen05.mma.cta_group::" + std::to_string(twoCTAs ? 2 : 1) + ".kind::";
@@ -375,7 +375,7 @@ void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
   } else {
     assert(0 && "Unsupported type.");
   }
-  opcode += collectorB;
+  opcode += collector;
   auto *accOp = ptxBuilder.newAddrOperand(d.base, "r", *d.offset);
   assert(a.offset.has_value() == aInTMem);
   auto *aOp = aInTMem ? ptxBuilder.newAddrOperand(a.base, "r", *a.offset)
@@ -393,7 +393,7 @@ void createScaledGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
                          MemDescOperand d, Value scaleA, Value scaleB,
                          Value pred, Value instDescriptor, Value useInitAcc,
                          bool aInTmem, mxfpKind mxfpInstKind, bool twoCTAs,
-                         std::string collectorB) {
+                         std::string collector) {
   PTXBuilder ptxBuilder;
   std::string opcode =
       "tcgen05.mma.cta_group::" + std::to_string(twoCTAs ? 2 : 1) + ".kind::";
@@ -407,7 +407,7 @@ void createScaledGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
   } else {
     assert(0 && "Unsupported mxfp kind.");
   }
-  opcode += collectorB;
+  opcode += collector;
   auto *accOp = ptxBuilder.newAddrOperand(d.base, "r", *d.offset);
   assert(aInTmem == a.offset.has_value());
   auto *aOp = aInTmem ? ptxBuilder.newAddrOperand(a.base, "r", *a.offset)
@@ -462,11 +462,14 @@ void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
 // MMAv5 Conversion
 //===----------------------------------------------------------------------===//
 
-enum class ReuseB {
+enum class OperandReuse {
   None,
-  Keep,
-  Use,
-  Lastuse,
+  AFill,
+  AUse,
+  ALastuse,
+  BFill,
+  BUse,
+  BLastuse,
 };
 
 // Information about how to lower a dot operation, shared between regular and
@@ -489,7 +492,7 @@ struct DotConversion {
       ConversionPatternRewriter &, Location, int, int, const InstDesc &)>;
   using CreateMMAInstFn = std::function<void(
       ConversionPatternRewriter &, Location, MemDescOperand, MemDescOperand,
-      Value, Value, Value, const InstDesc &, int, int, int, ReuseB)>;
+      Value, Value, Value, const InstDesc &, int, int, int, OperandReuse)>;
 
   struct {
     unsigned M;
@@ -629,9 +632,37 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
               op.getAccAddress(rewriter, loc, m, n, desc);
           MemDescOperand a =
               aLoader->memLoad(m * mmaSizeM, k * mmaSizeK, rewriter, loc);
-          ReuseB reuseB = m == 0 ? ReuseB::Keep : ReuseB::Lastuse;
+          OperandReuse reuse =
+              m == 0 ? OperandReuse::BFill : OperandReuse::BLastuse;
           op.createMMAInst(rewriter, loc, accAddress, a, b, elect, useInitAcc,
-                           desc, m, n, k, reuseB);
+                           desc, m, n, k, reuse);
+        }
+        useInitAcc = tb.i1_val(1);
+      }
+    }
+  } else if (mmaSizeM == 128 && numRepN > 1 &&
+             targetFeatures.supportsReuseA()) {
+    // Keep one A tile in the collector across the N tiles. Interleaving N
+    // inside K preserves the accumulation order and the first-K useD flag for
+    // every destination tile. Reuse is opportunistic, so A remains live until
+    // the whole MMA operation completes, just as on the non-reuse path.
+    // M=64 uses half the datapath and can interleave N tiles across TMEM lane
+    // alignments 0 and 16. A collector cannot be reused across that change.
+    for (int m = 0; m < numRepM; m++) {
+      Value useInitAcc = useDFlag;
+      for (int k = 0; k < numRepK; k++) {
+        MemDescOperand a = aLoader->memLoad(
+            m * aOperandShape[0], k * aOperandShape[1], rewriter, loc);
+        for (int n = 0; n < numRepN; n++) {
+          MemDescOperand accAddress =
+              op.getAccAddress(rewriter, loc, m, n, desc);
+          Value b = bLoader->smemLoad(k * bOperandShape[0],
+                                      n * bOperandShape[1], rewriter, loc);
+          OperandReuse reuse = n == 0             ? OperandReuse::AFill
+                               : n == numRepN - 1 ? OperandReuse::ALastuse
+                                                  : OperandReuse::AUse;
+          op.createMMAInst(rewriter, loc, accAddress, a, b, elect, useInitAcc,
+                           desc, m, n, k, reuse);
         }
         useInitAcc = tb.i1_val(1);
       }
@@ -647,7 +678,7 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
           Value b = bLoader->smemLoad(k * bOperandShape[0],
                                       n * bOperandShape[1], rewriter, loc);
           op.createMMAInst(rewriter, loc, accAddress, a, b, elect, useInitAcc,
-                           desc, m, n, k, ReuseB::None);
+                           desc, m, n, k, OperandReuse::None);
           useInitAcc = tb.i1_val(1);
         }
       }
@@ -665,15 +696,24 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   return success();
 }
 
-std::string getCollectorBModifer(ReuseB reuseB) {
-  if (reuseB == ReuseB::Keep) {
+std::string getCollectorModifier(OperandReuse reuse) {
+  switch (reuse) {
+  case OperandReuse::AFill:
+    return ".collector::a::fill";
+  case OperandReuse::AUse:
+    return ".collector::a::use";
+  case OperandReuse::ALastuse:
+    return ".collector::a::lastuse";
+  case OperandReuse::BFill:
     return ".collector::b::fill";
-  } else if (reuseB == ReuseB::Use) {
+  case OperandReuse::BUse:
     return ".collector::b::use";
-  } else if (reuseB == ReuseB::Lastuse) {
+  case OperandReuse::BLastuse:
     return ".collector::b::lastuse";
+  case OperandReuse::None:
+    return "";
   }
-  return "";
+  llvm_unreachable("unsupported collector operation");
 }
 
 LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
@@ -724,7 +764,7 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
                           MemDescOperand accAddress, MemDescOperand a, Value b,
                           Value pred, Value useInitAcc,
                           const DotConversion::InstDesc &desc, int m, int n,
-                          int k, ReuseB reuseB) {
+                          int k, OperandReuse reuse) {
     // mmaSizeM/N is the per-cta size M/N, while the 2CTA instruction expects
     // the 2CTA size mmaSize is always 64 / 128 so we double it for 2CTA
     auto mmaSizeM = twoCTAs ? desc.mmaSizeM * 2 : desc.mmaSizeM;
@@ -733,9 +773,9 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
     Value instDescriptor =
         createInstDescriptor(rewriter, op, mmaSizeM, mmaSizeN, desc.transA,
                              desc.transB, dot.mmaSizeK);
-    auto collectorB = getCollectorBModifer(reuseB);
+    auto collector = getCollectorModifier(reuse);
     createGen5MMA(rewriter, loc, op, a, b, accAddress, pred, instDescriptor,
-                  useInitAcc, desc.aInTmem, twoCTAs, collectorB);
+                  useInitAcc, desc.aInTmem, twoCTAs, collector);
   };
 
   return convertDotImpl(
@@ -866,7 +906,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
                           MemDescOperand accAddress, MemDescOperand a, Value b,
                           Value pred, Value useInitAcc,
                           const DotConversion::InstDesc &desc, int m, int n,
-                          int k, ReuseB reuseB) {
+                          int k, OperandReuse reuse) {
     auto [numRepM, numRepN, numRepK] = desc.repShape;
     int scaleFactorColsPerSet =
         getScaleFactorColsPerSet(mxfpInstKind, op, dot.mmaSizeK);
@@ -904,10 +944,10 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
           subWordIdx, subWordIdx, mxfpInstKind, blockK, dot.mmaSizeK);
     }
 
-    auto collectorB = getCollectorBModifer(reuseB);
+    auto collector = getCollectorModifier(reuse);
     createScaledGen5MMA(rewriter, loc, op, a, b, accAddress, scaleA, scaleB,
                         pred, instDescriptor, useInitAcc, desc.aInTmem,
-                        mxfpInstKind, twoCTAs, collectorB);
+                        mxfpInstKind, twoCTAs, collector);
   };
 
   return convertDotImpl(

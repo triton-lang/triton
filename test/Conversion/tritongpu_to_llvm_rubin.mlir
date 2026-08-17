@@ -132,19 +132,22 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:107"} {
   // CHECK-LABEL: @tc_gen5_mma_breuse
+  // Both operands can be reused; retain the Rubin B-reuse schedule.
+  // CHECK-NOT: collector::a
   // CHECK: tcgen05.mma.cta_group::1.kind::f16.collector::b::fill
   // CHECK: tcgen05.mma.cta_group::1.kind::f16.collector::b::lastuse
+  // CHECK-NOT: collector::a
   tt.func @tc_gen5_mma_breuse(%a: !ttg.memdesc<256x128xf16, #shared, #ttg.shared_memory>,
-                       %b: !ttg.memdesc<128x128xf16, #shared1, #ttg.shared_memory>,
-                       %c: !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+                       %b: !ttg.memdesc<128x256xf16, #shared1, #ttg.shared_memory>,
+                       %c: !ttg.memdesc<256x256xf32, #tmem, #ttng.tensor_memory, mutable>,
                        %useAcc: i1,
                        %pred: i1,
                        %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>,
                        %barrierPred: i1) {
     ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred, %barrier[%barrierPred] {is_async} :
        !ttg.memdesc<256x128xf16, #shared, #ttg.shared_memory>,
-       !ttg.memdesc<128x128xf16, #shared1, #ttg.shared_memory>,
-       !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<128x256xf16, #shared1, #ttg.shared_memory>,
+       !ttg.memdesc<256x256xf32, #tmem, #ttng.tensor_memory, mutable>,
        !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>
     tt.return
   }
