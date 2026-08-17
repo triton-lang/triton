@@ -274,6 +274,8 @@ public:
     }
   }
 
+  // Integer/index constant values returned here are exact scalar or splat
+  // constants representable as a signed int64_t.
   AxisInfo *getAxisInfo(Value value) {
     auto funcOp =
         value.getParentRegion()->getParentOfType<FunctionOpInterface>();

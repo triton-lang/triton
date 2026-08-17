@@ -502,7 +502,7 @@ tt.func @cmp_all_contiguous() {
   %14 = arith.constant dense<8> : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [8], constant_value = <none>}}
   %15 = arith.cmpi sgt, %14, %0 : tensor<128xi32>
-  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = 1}}
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = -1}}
   %16 = arith.cmpi sgt, %14, %1 : tensor<128xi32>
   tt.return
 }
@@ -1280,7 +1280,7 @@ tt.func @cmp_after_max_constancy() {
   %c5 = arith.constant dense<5> : tensor<4xi32>
   %c7 = arith.constant dense<7> : tensor<4xi32>
   %max = arith.maxsi %c5, %c7 : tensor<4xi32>
-  // expected-remark @below {{constancy = [4], constant_value = 1}}
+  // expected-remark @below {{constancy = [4], constant_value = -1}}
   %cmp = arith.cmpi sgt, %max, %c5 : tensor<4xi32>
   tt.return
 }
@@ -1298,7 +1298,7 @@ tt.func public @test_inductor_for() {
   %c1_i32 = arith.constant 1 : i32
   // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = 64}}
   %c64_i64 = arith.constant 64 : i64
-  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = -1}}
   %0 = arith.cmpi slt, %c0_i32, %c1_i32 : i32
 
   // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = 64}}

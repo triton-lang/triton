@@ -21,6 +21,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/APInt.h"
 
 #include <cassert>
 
@@ -158,8 +159,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Value llOther = adaptor.getOther();
 
     // Determine the vectorization size
-    Type valueElemTy =
-        typeConverter->convertType(getElementTypeOrSelf(op.getType()));
+    Type elemTy = getElementTypeOrSelf(op.getType());
+    Type valueElemTy = typeConverter->convertType(elemTy);
     unsigned vec = getVectorSize(ptr);
     unsigned numElems = getUniqueElemsPerThread(ptr.getType());
     unsigned vecOrig = vec;
@@ -190,24 +191,15 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     }
 
     // Get the LLVM values for `other`
-    // TODO: (goostavz) handle when other is const but not splat, which
-    //       should be rarely seen
-    bool otherIsSplatConstInt = false;
-    DenseElementsAttr constAttr;
-    int64_t splatVal = 0;
-    if (other && isa<IntegerType>(valueElemTy) &&
-        matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
-        isa<IntegerType>(constAttr.getElementType())) {
-      otherIsSplatConstInt = true;
-      splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
-    }
-    // Preserve the existing initialization of proven integer constants.
-    // Tying them can add a dependency on a materialized constant register.
-    auto *otherInfo = other ? axisAnalysisPass.getAxisInfo(other) : nullptr;
-    bool otherIsConstInt = otherInfo && isa<IntegerType>(valueElemTy) &&
-                           otherInfo->getConstantValue().has_value();
+    std::optional<int64_t> otherConstInt;
     SmallVector<Value> otherElems;
     if (other) {
+      // Use immediates for proven integer constants.
+      // Tying them can add a dependency on a materialized constant register.
+      // Check the original type because FP8 can lower to i8.
+      if (isa<IntegerType>(elemTy))
+        if (auto *otherInfo = axisAnalysisPass.getAxisInfo(other))
+          otherConstInt = otherInfo->getConstantValue();
       otherElems = unpackUniqueTensorElements(loc, llOther, rewriter);
     }
 
@@ -272,7 +264,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
           }
           v = b.bitcast(v, IntegerType::get(getContext(), width));
 
-          if (!otherIsConstInt && (width == 32 || width == 64)) {
+          if (!otherConstInt && (width == 32 || width == 64)) {
             // Match each fallback to its destination instead of moving it.
             // The packed value and destination have the same register width.
             ptxBuilder.newOperand(v, std::to_string(dstsOpr->listGet(ii)->idx));
@@ -285,12 +277,14 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
           PTXInstr::Operand *opr{};
 
-          if (otherIsSplatConstInt) {
-            int64_t replicatedSplatVal = 0;
-            for (size_t s = 0; s < movWidth; s += valueElemNBits) {
-              replicatedSplatVal |= splatVal << s;
-            }
-            opr = ptxBuilder.newConstantOperand(replicatedSplatVal);
+          if (otherConstInt && movWidth <= 64) {
+            // Pack the declared element bits, not a sign-extended int64_t.
+            APInt bits = APInt(64, static_cast<uint64_t>(*otherConstInt))
+                             .sextOrTrunc(elemTy.getIntOrFloatBitWidth())
+                             .zextOrTrunc(valueElemNBits);
+            APInt packed = APInt::getSplat(movWidth, bits);
+            opr = ptxBuilder.newConstantOperand(
+                packed.zextOrTrunc(64).getSExtValue());
           } else
             opr = ptxBuilder.newOperand(v, readConstraint);
 

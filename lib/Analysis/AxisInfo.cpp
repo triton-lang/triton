@@ -1,6 +1,8 @@
 #include "triton/Analysis/AxisInfo.h"
+#include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
+#include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -1549,6 +1551,24 @@ void ModuleAxisInfoAnalysis::initialize(
       axisInfo = AxisInfo::getPessimisticValueState(value);
     auto &valInfo = (*axisInfoMap)[value];
     valInfo = AxisInfo::join(axisInfo, valInfo);
+
+    // The axis visitors' integer arithmetic is not always width-aware. Expose
+    // only exact integer/index constants from SCCP to clients that materialize
+    // them. Keep the axis bounds and noninteger values unchanged.
+    if (getElementTypeOrSelf(value.getType()).isIntOrIndex()) {
+      std::optional<int64_t> constantValue;
+      auto *constant =
+          solver->lookupState<dataflow::Lattice<dataflow::ConstantValue>>(
+              value);
+      if (constant && !constant->getValue().isUninitialized()) {
+        APInt intValue;
+        if (matchPattern(constant->getValue().getConstantValue(),
+                         m_ConstantInt(&intValue)))
+          constantValue = intValue.trySExtValue();
+      }
+      valInfo = AxisInfo(valInfo.getContiguity(), valInfo.getDivisibility(),
+                         valInfo.getConstancy(), constantValue);
+    }
   };
   funcOp.walk([&](Operation *op) {
     for (auto value : op->getResults()) {
