@@ -5,7 +5,6 @@ import triton.language as tl
 import pytest
 
 import pathlib
-import uuid
 from triton._internal_testing import is_cuda, is_hip_cdna2, is_rubin
 
 
@@ -365,7 +364,7 @@ def test_pruned_single_config_skips_benchmark(prune_kind: str, device: str, fres
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
                     reason="Requires compute capability >= 9 for NV")
-def test_override_ttir(device):
+def test_override_ttir(device, tmp_path: pathlib.Path):
     N = 1024
     src = torch.randn(N, device=device)
     dst = torch.empty(N, device=device)
@@ -393,7 +392,7 @@ module {
   }
 }
     """
-    temp_file = pathlib.Path(f"/tmp/test_override_{str(uuid.uuid4())}.ttir")
+    temp_file = tmp_path / "test_override.ttir"
     temp_file.write_text(ir_src)
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32, 'ir_override': str(temp_file)})]
@@ -414,7 +413,7 @@ module {
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
                     reason="Requires compute capability >= 9 for NV")
-def test_override_ttgir(device):
+def test_override_ttgir(device, tmp_path: pathlib.Path):
     N = 1024
     src = torch.randn(N, device=device)
     dst = torch.empty(N, device=device)
@@ -443,7 +442,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
     """
-    temp_file = pathlib.Path(f"/tmp/test_override_{str(uuid.uuid4())}.ttgir")
+    temp_file = tmp_path / "test_override.ttgir"
     temp_file.write_text(ir_src)
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32, 'ir_override': str(temp_file)})]
@@ -464,7 +463,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9,
                     reason="PTX file in this unit test is only for SM90")
-def test_override_ptx(device):
+def test_override_ptx(device, tmp_path: pathlib.Path):
     N = 1024
     src = torch.randn(N, device=device)
     dst = torch.empty(N, device=device)
@@ -540,7 +539,7 @@ $L__func_end0:
                                         // -- End function
 }
     """
-    temp_file = pathlib.Path(f"/tmp/test_override_{str(uuid.uuid4())}.ptx")
+    temp_file = tmp_path / "test_override.ptx"
     temp_file.write_text(ir_src)
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32, 'ir_override': str(temp_file)})]
