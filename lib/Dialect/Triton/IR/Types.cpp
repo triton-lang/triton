@@ -63,6 +63,7 @@ void TensorDescType::print(AsmPrinter &printer) const {
 }
 
 Type PointerType::parse(AsmParser &parser) {
+  Location loc = parser.getEncodedSourceLoc(parser.getCurrentLocation());
   if (parser.parseLess())
     return Type();
 
@@ -79,7 +80,7 @@ Type PointerType::parse(AsmParser &parser) {
   if (parser.parseGreater())
     return Type();
 
-  return PointerType::get(pointeeType, addressSpace);
+  return PointerType::getChecked(loc, pointeeType, addressSpace);
 }
 
 void PointerType::print(AsmPrinter &printer) const {
@@ -104,9 +105,9 @@ TensorDescType::verify(function_ref<InFlightDiagnostic()> emitError,
 
 LogicalResult PointerType::verify(function_ref<InFlightDiagnostic()> emitError,
                                   Type pointeeType, int addressSpace) {
-  if (isa<RankedTensorType>(pointeeType)) {
-    return emitError() << "pointer types cannot point to ranked tensor types";
-  }
+  if (!pointeeType.isIntOrFloat())
+    return emitError()
+           << "pointer types must point to integer or floating-point types";
   return success();
 }
 

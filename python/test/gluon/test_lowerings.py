@@ -1,12 +1,15 @@
+import math
+import os
+import re
 import torch
 import pytest
 
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
+from triton._internal_testing import is_blackwell, is_compile_warmup, is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size, run_in_process
 from triton._C.libtriton.gluon_ir import make_cga_layout
-from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
+from triton.experimental.gluon.language.amd.cdna5 import PartitionedSharedLayout
 from triton.experimental.gluon.language.nvidia.blackwell import TensorMemoryLayout, allocate_tensor_memory
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
@@ -213,33 +216,88 @@ def test_atomic_poll_two_ctas(warp_specialize, device):
     assert out.item() == 42
 
 
+@gluon.jit
+def _cluster_barrier_partition(out, offset: ttgl.constexpr, BLOCK: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=_make_cga_broadcast(1, ttgl.num_ctas()))
+    offs = offset + ttgl.arange(0, BLOCK, layout=layout)
+    ttgl.barrier(cluster=True)
+    ttgl.store(out + offs, offs)
+
+
+@gluon.jit
+def _cluster_barrier_kernel(out, BLOCK: ttgl.constexpr):
+    ttgl.warp_specialize([
+        (_cluster_barrier_partition, (out, 0, BLOCK)),
+        (_cluster_barrier_partition, (out, BLOCK, BLOCK)),
+    ], [4])
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
 @pytest.mark.parametrize("num_ctas", [2, 4])
 def test_cluster_barrier_in_warp_specialize(device, num_ctas):
-    BLOCK = ttgl.constexpr(128)
-
-    @gluon.jit
-    def partition(out, offset: ttgl.constexpr):
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0],
-                                                    cga_layout=_make_cga_broadcast(1, ttgl.num_ctas()))
-        offs = offset + ttgl.arange(0, BLOCK, layout=layout)
-        ttgl.barrier(cluster=True)
-        ttgl.store(out + offs, offs)
-
-    @gluon.jit
-    def kernel(out):
-        ttgl.warp_specialize([
-            (partition, (out, 0)),
-            (partition, (out, BLOCK)),
-        ], [4])
-
-    out = torch.empty((2 * BLOCK.value, ), device=device, dtype=torch.int32)
-    compiled = kernel[(1, )](out, num_warps=4, num_ctas=num_ctas)
+    BLOCK = 128
+    out = torch.empty((2 * BLOCK, ), device=device, dtype=torch.int32)
+    compiled = _cluster_barrier_kernel[(1, )](out, BLOCK, num_warps=4, num_ctas=num_ctas)
 
     ptx = compiled.asm["ptx"]
     assert ptx.count("mbarrier.arrive.release.cluster.shared::cluster") == 2
     assert "mapa" not in ptx
-    torch.testing.assert_close(out, torch.arange(2 * BLOCK.value, device=device, dtype=torch.int32))
+    torch.testing.assert_close(out, torch.arange(2 * BLOCK, device=device, dtype=torch.int32))
+
+
+def _run_cluster_barrier_delayed_counter(device, delayed_ptx):
+    BLOCK = 128
+    out = torch.empty((2 * BLOCK, ), device=device, dtype=torch.int32)
+    options = dict(num_warps=4, num_ctas=2)
+    with triton.knobs.compilation.scope():
+        # A source-level delay would precede the old entry rendezvous.
+        # Delay the nonleader warps immediately before the generated counter
+        # load instead, leaving the synchronization instructions intact.
+        triton.knobs.compilation.instrumentation_mode = ""
+        original = _cluster_barrier_kernel.warmup(out, BLOCK, grid=(1, ), **options).asm["ptx"]
+        entry = r"\tbar\.sync\s+0,\s*128;"
+        load = r"\tld\.shared\.b32\s+%r\d+,\s*\[global_smem\+\d+\];"
+        # Accept old and fixed ordering so the same test reproduces the bug.
+        sites = list(re.finditer(rf"^(?:{entry}\n(?P<old>{load})|(?P<fixed>{load})\n{entry})", original, re.MULTILINE))
+        assert len(sites) == 1, "Expected one default-partition counter load"
+        site = sites[0]
+        pos = site.start("old" if site.group("old") is not None else "fixed")
+        delay = """\t{
+\t.reg .pred waiting;
+\t.reg .b32 tid;
+\t.reg .b64 start, elapsed;
+\tmov.u32 tid, %tid.x;
+\tsetp.lt.u32 waiting, tid, 32;
+\t@waiting bra.uni counter_delay_done;
+\tmov.u64 start, %clock64;
+counter_delay_loop:
+\tmov.u64 elapsed, %clock64;
+\tsub.u64 elapsed, elapsed, start;
+\tsetp.lt.u64 waiting, elapsed, 10000000;
+\t@waiting bra.uni counter_delay_loop;
+counter_delay_done:
+\t}
+"""
+        delayed = original[:pos] + delay + original[pos:]
+        delayed_ptx.write_text(delayed)
+        compiled = _cluster_barrier_kernel[(1, )](out, BLOCK, ir_override=str(delayed_ptx), **options)
+        assert compiled.asm["ptx"] == delayed
+
+    ptx = compiled.asm["ptx"]
+    assert ptx.count("mbarrier.arrive.release.cluster.shared::cluster") == 2
+    assert "mapa" not in ptx
+    torch.testing.assert_close(out, torch.arange(2 * BLOCK, device=device, dtype=torch.int32))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
+def test_cluster_barrier_warp_specialize_delayed_counter(device, tmp_path, monkeypatch):
+    # A regression deadlocks the CUDA context. Reuse the bounded subprocess
+    # helper so the failure cannot leave the rest of the test suite hanging.
+    if is_compile_warmup() or os.environ.get("DISABLE_SUBPROCESS"):
+        pytest.skip("requires a timeout-bounded subprocess")
+    monkeypatch.setenv("TRITON_TEST_PROCESS_TIMEOUT", "15")
+    result = run_in_process(_run_cluster_barrier_delayed_counter, (device, tmp_path / "delayed-counter.ptx"))
+    assert result.exc is None, result.exc
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
@@ -900,6 +958,7 @@ def _reduce_cases():
 @pytest.mark.parametrize("dtype_str, sanitize_overflow", [("int32", False), ("int32", True), ("float32", False),
                                                           ("float16", False)])
 @pytest.mark.parametrize("reduce_op", ["sum", "max"])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, sanitize_overflow, reduce_op, device):
 
     @gluon.jit
@@ -941,7 +1000,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, saniti
     out_shape = (1, 1) if "reduce2d" in epilogue_kind else (1, N) if axis == 0 else (M, 1)
     z = torch.empty(out_shape, dtype=torch_dtype, device=device)
 
-    num_warps = int(torch.prod(torch.tensor(ttgl._layouts.warps_per_cta(src_layout, (M, N)))))
+    num_warps = math.prod(ttgl._layouts.warps_per_cta(src_layout, (M, N)))
     kernel[(1, 1, 1)](x, z, M, N, src_layout, axis, num_warps=num_warps, epilogue_kind=epilogue_kind,
                       sanitize_overflow=sanitize_overflow, debug=sanitize_overflow)
 
@@ -1042,6 +1101,7 @@ def test_histogram(M, bins, src_layout, dst_layout, device):
 @pytest.mark.parametrize("src_dim", [0, 1])
 @pytest.mark.parametrize("dst_dim", [0, 1])
 @pytest.mark.parametrize("is_bool", [True, False])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_convert1d_layouts(M, src_layout, dst_layout, src_dim, dst_dim, is_bool, device):
 
     @gluon.jit
@@ -1136,6 +1196,7 @@ _convert2d_layout_cases = _single_cta_convert2d_layout_cases + _multi_cta_conver
 @pytest.mark.parametrize("dtype", ["float16"])
 @pytest.mark.parametrize("src_ctas_per_cga, dst_ctas_per_cga, interm_layout, src_layout, dst_layout",
                          _convert2d_layout_cases)
+@pytest.mark.enable_warmup(min_capability=9)
 def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layout, src_layout, dst_layout, dtype,
                            device):
     num_ctas = 1
@@ -1221,9 +1282,8 @@ def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layo
     x = torch.randn((M, N), dtype=torch_dtype, device=device)
     y = torch.zeros_like(x)
     compiled = kernel[(1, )](x, y, M, N, src_layout, dst_layout, interm_layout, num_ctas=num_ctas)
-
     torch.testing.assert_close(y, x, rtol=0, atol=0)
-    if src_ctas_per_cga != dst_ctas_per_cga:
+    if src_ctas_per_cga != dst_ctas_per_cga and not is_compile_warmup():
         # Replicated values may be loaded from the local CTA.
         assert "st.shared::cluster" not in compiled.asm["ptx"]
 

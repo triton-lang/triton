@@ -26,6 +26,8 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &stream, Flags flags) {
       strs.push_back("SFU");
     if (flags & Flags::VIEW)
       strs.push_back("VIEW");
+    if (flags & Flags::CLC)
+      strs.push_back("CLC");
   }
   for (size_t i = 0; i < strs.size(); i++) {
     if (i != 0)
@@ -53,6 +55,8 @@ Flags getNodeFlags(Node *node) {
       return Flags::TMEM;
     if (isa<math::Exp2Op>(op))
       return Flags::SFU;
+    if (isa<ttng::CLCTryCancelSyncOp>(op))
+      return Flags::CLC;
     if (isViewOp(op))
       return Flags::VIEW;
   }

@@ -703,60 +703,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-  tt.func @cluster_arrive_invalid() {
-    // expected-error @below {{requires ttg.num-ctas > 1}}
-    ttng.cluster_arrive
-    tt.return
-  }
-}
-
-// -----
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-  tt.func @cluster_wait_invalid() {
-    // expected-error @below {{requires ttg.num-ctas > 1}}
-    ttng.cluster_wait
-    tt.return
-  }
-}
-
-// -----
-
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-  tt.func @cluster_arrive_in_default_region_invalid() {
-    ttg.warp_specialize()
-    default {
-      // expected-error @below {{cannot be used inside `ttg.warp_specialize`}}
-      ttng.cluster_arrive
-      ttg.warp_yield
-    }
-    partition0() num_warps(4) {
-      ttg.warp_return
-    } : () -> ()
-    tt.return
-  }
-}
-
-// -----
-
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-  tt.func @cluster_wait_in_partition_invalid() {
-    ttg.warp_specialize()
-    default {
-      ttg.warp_yield
-    }
-    partition0() num_warps(4) {
-      // expected-error @below {{cannot be used inside `ttg.warp_specialize`}}
-      ttng.cluster_wait
-      ttg.warp_return
-    } : () -> ()
-    tt.return
-  }
-}
-
-// -----
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
   tt.func @cluster_barrier_invalid() {
     // expected-error @below {{requires ttg.num-ctas > 1}}
     ttng.cluster_barrier
@@ -981,6 +927,24 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 
+}
+
+// -----
+
+#nvmma = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @tma_layout_rank_mismatch(
+      %desc: !tt.tensordesc<2x32x64xi32, #nvmma>,
+      %dst: !ttg.memdesc<2x32x64xi32, #nvmma, #smem, mutable>,
+      %barrier: !ttg.memdesc<1xi64, #barrier, #smem, mutable>) {
+    %zero = arith.constant 0 : i32
+    %true = arith.constant true
+    // expected-error @below {{TMA shared memory and layout ranks must match}}
+    ttng.async_tma_copy_global_to_local %desc[%zero, %zero, %zero] %dst, %barrier, %true : !tt.tensordesc<2x32x64xi32, #nvmma>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<2x32x64xi32, #nvmma, #smem, mutable>
+    tt.return
+  }
 }
 
 // -----

@@ -355,16 +355,6 @@ struct CanonicalizeConvertFromConvert
       return success();
     }
 
-    // cvt(cat) -> cat
-    if (auto cat = dyn_cast<CatOp>(arg)) {
-      if (!isLegalCatEncoding(cat, op.getType().getEncoding()))
-        return failure();
-
-      rewriter.replaceOpWithNewOp<CatOp>(op, op->getResult(0).getType(),
-                                         cat.getOperands());
-      return success();
-    }
-
     // cvt(cvt(x, type1), type2) -> cvt(x, type2)
     if (auto cvt = dyn_cast<ConvertLayoutOp>(arg)) {
       rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
@@ -852,8 +842,8 @@ void LocalAllocOp::getEffects(
   effects.emplace_back(MemoryEffects::Allocate::get(), alloc,
                        SharedMemory::get());
   if (getSrc())
-    effects.emplace_back(MemoryEffects::Write::get(), alloc,
-                         SharedMemory::get());
+    effects.push_back(
+        makeShared<MemoryEffects::Write>(alloc, SharedKind::Generic));
 }
 
 OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
@@ -1052,6 +1042,26 @@ LogicalResult LocalScatterOp::verify() {
 }
 
 // LocalAtomicScatterRMWOp
+bool LocalAtomicScatterRMWOp::isCommutative() {
+  if (!getResult().use_empty() ||
+      !getDst().getType().getElementType().isInteger())
+    return false;
+
+  switch (getAtomicRmwOp()) {
+  case RMWOp::ADD:
+  case RMWOp::AND:
+  case RMWOp::OR:
+  case RMWOp::XOR:
+  case RMWOp::MAX:
+  case RMWOp::MIN:
+  case RMWOp::UMAX:
+  case RMWOp::UMIN:
+    return true;
+  default:
+    return false;
+  }
+}
+
 LogicalResult LocalAtomicScatterRMWOp::verify() {
   auto dstTy = getDst().getType();
   auto valuesTy = cast<RankedTensorType>(getValues().getType());

@@ -8,7 +8,6 @@ endif()
 
 project(triton CXX C)
 include(CTest)
-include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
@@ -320,6 +319,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
   # nanobind expects find_package(Python) which sets Python::Module target
   # and Python_* variables. Triton uses find_package(Python3) instead.
   # Bridge the two by aliasing the target and forwarding variables.
+  if(NOT TARGET Python::Interpreter)
+    add_executable(Python::Interpreter ALIAS Python3::Interpreter)
+  endif()
   if(NOT TARGET Python::Module)
     add_library(Python::Module ALIAS Python3::Module)
     set(Python_EXECUTABLE "${Python3_EXECUTABLE}")
@@ -458,12 +460,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
       CONTENT "${TRITON_EXPORT_SYMBOLS_FILE_CONTENT}")
   endif()
 
-  install(TARGETS triton
-    COMPONENT libraries
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  )
-
   if (NOT DEFINED LLVM_SYSPATH)
       message(FATAL_ERROR "LLVM_SYSPATH must be set.")
   endif()
@@ -538,24 +534,3 @@ if(TRITON_BUILD_UT)
     USES_TERMINAL
   )
 endif()
-
-################################################################################
-# Header installation
-################################################################################
-
-install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
-  COMPONENT headers
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-  FILES_MATCHING PATTERN "*.h")
-install(DIRECTORY ${PROJECT_BINARY_DIR}/include/
-  COMPONENT headers
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-  FILES_MATCHING PATTERN "*.h" PATTERN "*.h.inc")
-install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
-  COMPONENT headers
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-  FILES_MATCHING PATTERN "*.td")
-install(DIRECTORY ${PROJECT_SOURCE_DIR}/python/
-  COMPONENT headers
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/python
-  FILES_MATCHING PATTERN "*.h")

@@ -40,6 +40,42 @@ def TritonGPUPlanCTAPass : Pass<"triton-nvidia-gpu-plan-cta", "mlir::ModuleOp"> 
   ];
 }
 
+def TritonNvidiaGPUToCLCPass : Pass<"triton-nvidia-gpu-to-clc", "mlir::ModuleOp"> {
+  let summary = "convert a Triton tile kernel to use Cluster Launch Control";
+
+  let description = [{
+    Wraps the root function of a kernel in the abstract Triton CLC scheduling
+    protocol and replaces logical program-ID reads with CLC generated values.
+  }];
+
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+def TritonNvidiaGPULowerCLCPass : Pass<"triton-nvidia-gpu-lower-clc", "mlir::ModuleOp"> {
+  let summary = "materialize abstract Triton CLC operations";
+
+  let description = [{
+    Lowers the abstract Cluster Launch Control response and its local-allocation
+    staging marker to the NVIDIA shared-memory response, mbarrier, and physical
+    CLC operations. The pass also threads the mbarrier phase through the
+    enclosing scf.while and retargets the existing raw response load.
+  }];
+
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
 def TritonGPUFenceInsertion : Pass<"triton-nvidia-gpu-fence-insertion", "mlir::ModuleOp"> {
   let summary = "Insert fences across generic and async proxy.";
 
@@ -66,11 +102,34 @@ def TritonGPUProxyFenceInsertion : Pass<"triton-nvidia-gpu-proxy-fence-insertion
   let summary = "Insert fences across generic and async proxy";
 
   let description = [{
-    This pass is to insert memory fences to ensure that memory operations are
-    properly ordered across generic and async operations.
+    Insert shared-memory fences between generic and asynchronous proxy
+    operations using fine-grained physical buffer-region alias analysis.
   }];
 
   let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+
+  let options = [
+    Option<"computeCapability", "compute-capability",
+           "int32_t", /*default*/"90",
+           "device compute capability">
+  ];
+}
+
+def TritonNvidiaGPUHoistMBarrierLifecyclePass : Pass<"triton-nvidia-gpu-hoist-mbarrier-lifecycle", "mlir::ModuleOp"> {
+  let summary = "Hoist cross-CTA mbarrier lifecycles to function scope";
+
+  let description = [{
+    This pass moves cross-CTA mbarrier initialization to the beginning of the
+    function and invalidation to function exits so cluster-visible mbarrier init
+    fences can be inserted outside loops.
+  }];
+
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::scf::SCFDialect",
     "mlir::triton::gpu::TritonGPUDialect",
     "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
   ];

@@ -3,6 +3,9 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
 
@@ -25,6 +28,31 @@ class SelectConstantConditionPattern : public OpRewritePattern<LLVM::SelectOp> {
     return success();
   }
 };
+
+class ElideFullClusterRankMaskPattern : public OpRewritePattern<LLVM::AndOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(LLVM::AndOp op,
+                                PatternRewriter &rewriter) const override {
+    APInt mask;
+    Value rank = op.getLhs();
+    if (!matchPattern(op.getRhs(), m_ConstantInt(&mask))) {
+      if (!matchPattern(op.getLhs(), m_ConstantInt(&mask)))
+        return failure();
+      rank = op.getRhs();
+    }
+
+    if (!rank.getDefiningOp<triton::nvgpu::ClusterCTAIdOp>())
+      return failure();
+
+    unsigned numCTAs = triton::gpu::lookupNumCTAs(op);
+    if (mask.countr_one() < llvm::Log2_32_Ceil(numCTAs))
+      return failure();
+
+    rewriter.replaceOp(op, rank);
+    return success();
+  }
+};
 } // namespace
 
 namespace {
@@ -34,7 +62,9 @@ struct CanonicalizeLLVMIR
   void runOnOperation() override {
     LLVM::LLVMFuncOp func = getOperation();
     RewritePatternSet patterns(&getContext());
-    patterns.add<SelectConstantConditionPattern>(&getContext());
+    patterns
+        .add<SelectConstantConditionPattern, ElideFullClusterRankMaskPattern>(
+            &getContext());
 
     getContext()
         .getLoadedDialect<LLVM::LLVMDialect>()

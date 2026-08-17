@@ -119,7 +119,16 @@ void ScopeIdAllocation::liveness() {
   llvm::DenseMap<ScopeId, RecordOp> idToOpMap;
   ScopeId scopeId = 0;
 
-  funcOp->walk<WalkOrder::PreOrder>([&](RecordOp recordOp) {
+  funcOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
+    if (auto eventAlloc = dyn_cast<AllocateEventOp>(op)) {
+      idToNameMap[scopeId] = eventAlloc.getName();
+      opToIdMap[op] = scopeId;
+      ++scopeId;
+      return;
+    }
+    auto recordOp = dyn_cast<RecordOp>(op);
+    if (!recordOp)
+      return;
     auto name = recordOp.getName();
     LDBG("Processing RecordOp: " << recordOp);
     if (!nameToIdMap.contains(name)) {
@@ -282,6 +291,21 @@ void ScopeIdAllocation::dominance() {
       }
     }
   }
+
+  // An asynchronous event inherits the innermost synchronous scope active at
+  // its allocation site. Its start and end endpoints may execute elsewhere.
+  funcOp->walk<WalkOrder::PreOrder>([&](AllocateEventOp eventOp) {
+    for (int j = sortedStartRecordOps.size() - 1; j >= 0; --j) {
+      auto *parentStartOp = sortedStartRecordOps[j];
+      auto parentScopeId = opToIdMap.lookup(parentStartOp);
+      auto *parentEndOp = endRecordMap.lookup(parentScopeId);
+      if (parentEndOp && domInfo.dominates(parentStartOp, eventOp) &&
+          postDomInfo.postDominates(parentEndOp, eventOp)) {
+        scopeParentIds.push_back({opToIdMap.lookup(eventOp), parentScopeId});
+        break;
+      }
+    }
+  });
 }
 
 void ScopeIdAllocation::visitTerminator(Operation *op,
@@ -366,6 +390,13 @@ ModuleScopeIdAllocation::ModuleScopeIdAllocation(ModuleOp moduleOp)
     }
     scopeIdParents[funcOp] = std::move(parents);
   }
+
+  moduleOp.walk([&](Operation *op) {
+    if (!isa<RecordOp, AllocateEventOp>(op))
+      return;
+    if (getOpScopeId(op) > 255)
+      op->emitError("scope id exceeds the 8-bit encoding");
+  });
 }
 
 ScopeIdAllocation::ScopeId

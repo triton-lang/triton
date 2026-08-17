@@ -16,6 +16,37 @@ def _wrap_scaled_upcast_result(handle, elem_type, semantic):
     return ttgl.tensor(handle, ret_ty)
 
 
+def _infer_fp4_repacked_shape(src_shape, op_idx):
+    result_shape = list(src_shape)
+    k_dim = -1 if op_idx == 0 else -2
+    packed_dim = -2 if op_idx == 0 else -1
+    _check(src_shape[k_dim] % 2 == 0, lambda: f"Expected K dimension {src_shape[k_dim]} to be even")
+    result_shape[k_dim] //= 2
+    result_shape[packed_dim] *= 2
+    return result_shape
+
+
+def _load_shared_fp4_repacked(mem_desc, layout, semantic, parent_type):
+    _check(isinstance(mem_desc, ttgl.shared_memory_descriptor),
+           lambda: f"Expected mem_desc to be a shared_memory_descriptor but got {type(mem_desc)}")
+    _check(isinstance(layout, DotOperandLayout), lambda: f"Expected layout to be a DotOperandLayout but got {layout}")
+    _check(isinstance(layout.parent, parent_type),
+           lambda: f"Expected layout parent to be an instance of {parent_type} but got {layout.parent}")
+    _check(mem_desc.dtype in {ttgl.int8, ttgl.uint8},
+           lambda: f"Expected packed fp4 input in int8/uint8 but got {mem_desc.dtype}")
+
+    src_shape = list(mem_desc.shape)
+    rank = len(src_shape)
+    _check(rank in {2, 3}, lambda: f"Expected mem_desc rank to be 2 or 3 but got {rank}")
+    _check(layout.operand_index in {0, 1},
+           lambda: f"Expected operand_index to be 0 or 1 but got {layout.operand_index}")
+
+    result_shape = _infer_fp4_repacked_shape(src_shape, layout.operand_index)
+    ret_ty = ttgl.distributed_type(mem_desc.dtype, result_shape, layout)
+    handle = semantic.builder.create_local_load_packed_transposed(ret_ty.to_ir(semantic.builder), mem_desc.handle)
+    return ttgl.tensor(handle, ret_ty)
+
+
 def _verify_wmma(version, a, b, acc):
     _check(acc is not None, lambda: "acc is required")
 

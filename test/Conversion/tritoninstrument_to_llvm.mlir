@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s --dump-input-context 20
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s --dump-input-context 20 --implicit-check-not=tti.
 
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
@@ -26,6 +26,25 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK: llvm.mlir.constant(16777215 : i64) : i64
 tt.func private @experimental_buffer_descriptors_shared() {
   tti.experimental_buffer_descriptors [0, 42], [4, 12], shared_mem : tensor<2xi64, #blocked>
+  tt.return
+}
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_assert_uniform(
+// CHECK: %[[RAW_TID:.*]] = nvvm.read.ptx.sreg.tid.x
+// CHECK: %[[TID:.*]] = llvm.and %[[RAW_TID]], %{{.*}} : i32
+// CHECK: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+// CHECK: %[[NOT_THREAD_ZERO:.*]] = llvm.icmp "ne" %[[TID]], %[[ZERO]] : i32
+// CHECK: %[[CONDITION:.*]] = llvm.or %[[NOT_THREAD_ZERO]], %arg0 : i1
+// CHECK: llvm.cond_br
+// CHECK: llvm.call @__assertfail
+// CHECK-NOT: llvm.cond_br
+// CHECK: llvm.return
+tt.func private @experimental_assert_uniform(%arg0: i1) {
+  tti.experimental_assert_uniform %arg0, "uniform assertion"
   tt.return
 }
 }

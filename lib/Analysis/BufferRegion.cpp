@@ -215,13 +215,6 @@ uint32_t getMemDescStorageOffset(ttg::MemDescType ty, unsigned index) {
                             ty);
 }
 
-bool isUsedAsBarrier(Value v) {
-  return llvm::any_of(v.getUsers(), [&](Operation *user) {
-    auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(user);
-    return barrierOp && llvm::is_contained(barrierOp.getBarriers(), v);
-  });
-}
-
 struct MemDescSubsliceOffsets {
   uint32_t byteOffset = 0;
   uint32_t partitionOffset = 0;
@@ -280,15 +273,6 @@ getMemDescSubsliceUnpaddedOffsets(ttg::MemDescSubsliceOp op) {
                                 partitionOffset, blockOffset};
 }
 
-triton::BufferRegionAnalysis::RegionType getRegionType(Value v) {
-  if (isUsedAsBarrier(v))
-    return triton::BufferRegionAnalysis::RegionType::BARRIER;
-  return isa<ttng::TensorMemorySpaceAttr>(
-             cast<ttg::MemDescType>(v.getType()).getMemorySpace())
-             ? triton::BufferRegionAnalysis::RegionType::TENSOR_MEMORY
-             : triton::BufferRegionAnalysis::RegionType::SHARED_MEMORY;
-}
-
 } // namespace
 
 namespace mlir::triton {
@@ -328,6 +312,20 @@ AddressSet AddressSet::translated(uint32_t delta) const {
   AddressSet result;
   for (uint32_t address : addresses)
     result.set(address + delta);
+  return result;
+}
+
+BufferRegionView
+BufferRegionView::translated(uint32_t offset,
+                             uint32_t newAllocationFrame) const {
+  BufferRegionView result = *this;
+  result.region.baseOffset += offset;
+  for (auto &[cta, addresses] : result.region.ctaAddresses)
+    addresses = addresses.translated(offset);
+  result.storageBase += offset;
+  for (uint32_t &base : result.partitionBases)
+    base += offset;
+  result.allocationFrame = newAllocationFrame;
   return result;
 }
 
@@ -504,6 +502,28 @@ LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
   return success();
 }
 
+SmallVector<BufferRegionAccess>
+BufferRegionAnalysis::getAccessRegions(Value value) {
+  const RegionInfo &info = getRegionInfo(value);
+  if (info.kind != RegionInfo::Kind::Exact || info.views.empty())
+    return {std::nullopt};
+  SmallVector<BufferRegionAccess> accesses;
+  for (const BufferRegionView &view : info.views)
+    accesses.push_back(view);
+  return accesses;
+}
+
+BufferRegionAccess BufferRegionAnalysis::translateToCallsite(
+    BufferRegionAccess view, CallOpInterface call, FunctionOpInterface caller,
+    FunctionOpInterface callee) const {
+  uint32_t calleeFrame = getOperationId(callee.getOperation());
+  if (!view || view->allocationFrame != calleeFrame)
+    return view;
+  auto offset = call->getAttrOfType<IntegerAttr>("allocation.offset");
+  return view->translated(offset ? offset.getInt() : 0,
+                          getOperationId(caller.getOperation()));
+}
+
 LogicalResult BufferRegionAnalysis::visitOperation(
     Operation *op,
     llvm::ArrayRef<const dataflow::Lattice<RegionInfo> *> operands,
@@ -627,19 +647,28 @@ LogicalResult BufferRegionAnalysis::visitOperation(
 void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
   op->walk([&](Operation *op) {
     for (const MemoryAccess &access : getMemoryAccesses(op)) {
-      RegionType regionType = getRegionType(access.value);
       const RegionInfo &regionInfo =
           getLatticeElement(access.value)->getValue();
-      if (regionInfo.isUnknown())
-        usedUnknownBufferRegions[regionType] = true;
-      for (const BufferRegionView &view : regionInfo.views)
-        usedBufferRegions[regionType].insert(view.region);
+      auto addRegions = [&](RegionType regionType) {
+        if (regionInfo.isUnknown())
+          usedUnknownBufferRegions[regionType] = true;
+        for (const BufferRegionView &view : regionInfo.views)
+          usedBufferRegions[regionType].insert(view.region);
+      };
+
+      bool isTensorMemory = isa<ttng::TensorMemorySpaceAttr>(
+          cast<ttg::MemDescType>(access.value.getType()).getMemorySpace());
+      addRegions(isTensorMemory ? TENSOR_MEMORY : SHARED_MEMORY);
+      if (auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op))
+        if (llvm::is_contained(barrierOp.getBarriers(), access.value))
+          addRegions(BARRIER);
     }
   });
 }
 
-SmallVector<BufferRegionAnalysis::MemoryAccess>
-BufferRegionAnalysis::getMemoryAccesses(Operation *op) {
+SmallVector<MemoryAccess> getMemoryAccesses(Operation *op,
+                                            std::optional<ttg::SharedKind> kind,
+                                            std::optional<RW> rw) {
   SmallVector<MemoryAccess> accesses;
   auto memoryEffects = dyn_cast<MemoryEffectOpInterface>(op);
   if (!memoryEffects)
@@ -649,23 +678,41 @@ BufferRegionAnalysis::getMemoryAccesses(Operation *op) {
   memoryEffects.getEffects(effects);
   for (const MemoryEffects::EffectInstance &effect : effects) {
     bool isWrite = isa<MemoryEffects::Write>(effect.getEffect());
-    if (!isWrite && !isa<MemoryEffects::Read>(effect.getEffect()))
+    bool isRead = isa<MemoryEffects::Read>(effect.getEffect());
+    if (!isWrite && !isRead)
       continue;
-    if (effect.getResource() != ttg::SharedMemory::get() &&
-        effect.getResource() != ttng::TensorMemory::get())
+    if (rw && (*rw == RW::Read ? !isRead : !isWrite))
       continue;
     Value value = effect.getValue();
     if (!value || !isa<ttg::MemDescType>(value.getType()))
       continue;
+
+    std::optional<ttg::SharedKind> sharedKind;
+    if (auto shared = dyn_cast<ttg::SharedMemoryEffect>(&effect))
+      sharedKind = shared.getKind();
+    else if (!isa<ttng::TensorMemory>(effect.getResource()))
+      continue;
+    if (kind && sharedKind != kind)
+      continue;
+
     auto existing = llvm::find_if(accesses, [&](const MemoryAccess &access) {
-      return access.value == value;
+      return access.value == value && access.sharedKind == sharedKind;
     });
     if (existing == accesses.end())
-      accesses.push_back({value, isWrite});
-    else
+      accesses.push_back({value, isWrite, isRead, sharedKind});
+    else {
       existing->isWrite |= isWrite;
+      existing->isRead |= isRead;
+    }
   }
   return accesses;
+}
+
+bool hasSharedAccess(Operation *op, std::optional<ttg::SharedKind> kind,
+                     std::optional<RW> rw) {
+  return llvm::any_of(
+      getMemoryAccesses(op, kind, rw),
+      [](const MemoryAccess &access) { return access.isShared(); });
 }
 
 } // namespace mlir::triton
