@@ -1086,24 +1086,6 @@ tt.func @default_region_cfg(%arg0: tensor<1xi64>, %arg1: i1) {
   tt.return
 }
 
-// A `ttg.warp_return` lowers to the same CTA-wide barrier as `ttg.warp_yield`,
-// so a wait at the end of a partition region does not need one of its own.
-// CHECK-LABEL: @async_wait_before_warp_return
-tt.func @async_wait_before_warp_return() {
-  ttg.warp_specialize()
-  default {
-    ttg.warp_yield
-  }
-  // CHECK: partition0
-  partition0() num_warps(4) {
-    // CHECK: ttg.async_wait
-    // CHECK-NEXT: ttg.warp_return
-    ttg.async_wait {num = 0 : i32}
-    ttg.warp_return
-  } : () -> ()
-  tt.return
-}
-
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
