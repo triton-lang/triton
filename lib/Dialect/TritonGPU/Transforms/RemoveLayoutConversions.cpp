@@ -1573,13 +1573,13 @@ bool backwardRematerialization(ModuleOp module, bool disableRematSplitting) {
 
 void hoistConvert(ModuleOp module, bool disableRematSplitting) {
   module.walk([&](FuncOp funcOp) {
-    LayoutRematerialization layoutRemat(funcOp);
-    layoutRemat.hoistConvertOnTopOfExtOrBroadcast(disableRematSplitting);
+    LayoutRematerialization(funcOp).hoistConvertOnTopOfExtOrBroadcast(
+        disableRematSplitting);
     if (disableRematSplitting)
       return;
 
-    layoutRemat.hoistConvertIntoConditionals();
-    layoutRemat.hoistConvertDotOperand();
+    LayoutRematerialization(funcOp).hoistConvertIntoConditionals();
+    LayoutRematerialization(funcOp).hoistConvertDotOperand();
   });
 }
 } // namespace
