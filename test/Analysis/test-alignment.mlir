@@ -7,8 +7,9 @@ tt.func @cast() {
   %0 = arith.extsi %cst : i32 to i64
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = 1}}
   %cst_tensor = arith.constant dense<1> : tensor<128xi32>
-  // Bitcast preserves axis info for same-width types.
-  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = 1}}
+  // Bitcast preserves axis bounds for same-width types, but float results have
+  // no integer constant.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = <none>}}
   %1 = tt.bitcast %cst_tensor : tensor<128xi32> -> tensor<128xf32>
   tt.return
 }
@@ -41,11 +42,157 @@ tt.func @wide_integer_cast_constants() {
   %minus_one = arith.constant -1 : i64
   // expected-remark @below {{constant_value = -1}}
   %signed = arith.extsi %minus_one : i64 to i128
-  // A positive 2^64 - 1 does not fit AxisInfo's signed constant field.
-  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  // The positive 2^64 - 1 remains exact in the wider constant field.
+  // expected-remark @below {{constant_value = 18446744073709551615}}
   %unsigned = arith.extui %minus_one : i64 to i128
   // expected-remark @below {{constant_value = -1}}
+  %round_trip = arith.trunci %unsigned : i128 to i64
+  // expected-remark @below {{constant_value = -1}}
   %narrow = arith.trunci %signed : i128 to i8
+  tt.return
+}
+
+// -----
+
+tt.func @narrow_integer_arithmetic_constants() {
+  %min = arith.constant -128 : i8
+  %one = arith.constant 1 : i8
+  // Wrapping to zero recovers the strongest divisibility.
+  // expected-remark @below {{divisibility = [4611686018427387904], constancy = [1], constant_value = 0}}
+  %sum = arith.addi %min, %min : i8
+  // expected-remark @below {{constant_value = 127}}
+  %difference = arith.subi %min, %one : i8
+  %sixteen = arith.constant dense<16> : tensor<4xi8>
+  // expected-remark @below {{divisibility = [4611686018427387904], constancy = [4], constant_value = 0}}
+  %product = arith.muli %sixteen, %sixteen : tensor<4xi8>
+  // expected-remark @below {{constant_value = 0}}
+  %shift = arith.shli %min, %one : i8
+  tt.return
+}
+
+// -----
+
+tt.func @signed_unsigned_integer_constants() {
+  %negative = arith.constant -7 : i8
+  %one = arith.constant 1 : i8
+  %two = arith.constant 2 : i8
+  // The same i8 bits represent either -7 or 249.
+  // expected-remark @below {{constant_value = -3}}
+  %signed_div = arith.divsi %negative, %two : i8
+  // expected-remark @below {{constant_value = 124}}
+  %unsigned_div = arith.divui %negative, %two : i8
+  // expected-remark @below {{constant_value = -1}}
+  %signed_rem = arith.remsi %negative, %two : i8
+  // expected-remark @below {{constant_value = 1}}
+  %unsigned_rem = arith.remui %negative, %two : i8
+  // expected-remark @below {{constant_value = -4}}
+  %signed_shift = arith.shrsi %negative, %one : i8
+  // expected-remark @below {{constant_value = 124}}
+  %unsigned_shift = arith.shrui %negative, %one : i8
+  // expected-remark @below {{constant_value = -7}}
+  %signed_min = arith.minsi %negative, %two : i8
+  // expected-remark @below {{constant_value = 2}}
+  %unsigned_min = arith.minui %negative, %two : i8
+  // expected-remark @below {{constant_value = 2}}
+  %signed_max = arith.maxsi %negative, %two : i8
+  // expected-remark @below {{constant_value = -7}}
+  %unsigned_max = arith.maxui %negative, %two : i8
+  // expected-remark @below {{constant_value = -1}}
+  %signed_cmp = arith.cmpi slt, %negative, %two : i8
+  // expected-remark @below {{constant_value = 0}}
+  %unsigned_cmp = arith.cmpi ult, %negative, %two : i8
+  tt.return
+}
+
+// -----
+
+tt.func @invalid_integer_constants() {
+  %zero = arith.constant 0 : i8
+  %one = arith.constant 1 : i8
+  %min = arith.constant -128 : i8
+  %minus_one = arith.constant -1 : i8
+  %width = arith.constant 8 : i8
+  // Undefined division and remainder must not produce exact constants.
+  // expected-remark @below {{constant_value = <none>}}
+  %div_zero = arith.divsi %one, %zero : i8
+  // expected-remark @below {{constant_value = <none>}}
+  %rem_zero = arith.remui %one, %zero : i8
+  // expected-remark @below {{constant_value = <none>}}
+  %div_overflow = arith.divsi %min, %minus_one : i8
+  // Unlike signed division, this remainder is defined.
+  // expected-remark @below {{constant_value = 0}}
+  %rem_min = arith.remsi %min, %minus_one : i8
+  // A shift by the element width produces poison.
+  // expected-remark @below {{constant_value = <none>}}
+  %left_overshift = arith.shli %one, %width : i8
+  // expected-remark @below {{constant_value = <none>}}
+  %right_overshift = arith.shrui %one, %width : i8
+  tt.return
+}
+
+// -----
+
+tt.func @integer_overflow_flags() {
+  %zero = arith.constant 0 : i8
+  %one = arith.constant 1 : i8
+  %two = arith.constant 2 : i8
+  %min = arith.constant -128 : i8
+  %max = arith.constant 127 : i8
+  // Each flagged operation rejects the corresponding kind of wrap.
+  // expected-remark @below {{constant_value = <none>}}
+  %signed_add = arith.addi %max, %one overflow<nsw> : i8
+  // expected-remark @below {{constant_value = <none>}}
+  %unsigned_sub = arith.subi %zero, %one overflow<nuw> : i8
+  // expected-remark @below {{constant_value = <none>}}
+  %unsigned_mul = arith.muli %min, %two overflow<nuw> : i8
+  // expected-remark @below {{constant_value = <none>}}
+  %signed_shift = arith.shli %max, %one overflow<nsw> : i8
+  // expected-remark @below {{constant_value = 3}}
+  %valid = arith.addi %one, %two overflow<nsw, nuw> : i8
+  tt.return
+}
+
+// -----
+
+tt.func @integer_exact_flags() {
+  %odd = arith.constant -7 : i8
+  %even = arith.constant -8 : i8
+  %one = arith.constant 1 : i8
+  %two = arith.constant 2 : i8
+  // Exact division and shifts cannot discard nonzero bits.
+  // expected-remark @below {{constant_value = <none>}}
+  %signed_div = arith.divsi %odd, %two exact : i8
+  // expected-remark @below {{constant_value = <none>}}
+  %unsigned_div = arith.divui %odd, %two exact : i8
+  // expected-remark @below {{constant_value = <none>}}
+  %inexact_shift = arith.shrui %odd, %one exact : i8
+  // expected-remark @below {{constant_value = 124}}
+  %valid_div = arith.divui %even, %two exact : i8
+  // expected-remark @below {{constant_value = -4}}
+  %valid_shift = arith.shrsi %even, %one exact : i8
+  tt.return
+}
+
+// -----
+
+tt.func @integer_cast_flags() {
+  %negative = arith.constant -1 : i8
+  %positive = arith.constant 1 : i8
+  %unsigned_byte = arith.constant 255 : i16
+  %signed_byte = arith.constant -1 : i16
+  // expected-remark @below {{constant_value = <none>}}
+  %negative_ext = arith.extui %negative nneg : i8 to i16
+  // expected-remark @below {{constant_value = 1}}
+  %positive_ext = arith.extui %positive nneg : i8 to i16
+  // 255 fits unsigned i8, while -1 fits signed i8.
+  // expected-remark @below {{constant_value = <none>}}
+  %signed_trunc_overflow = arith.trunci %unsigned_byte overflow<nsw> : i16 to i8
+  // expected-remark @below {{constant_value = -1}}
+  %unsigned_trunc = arith.trunci %unsigned_byte overflow<nuw> : i16 to i8
+  // expected-remark @below {{constant_value = <none>}}
+  %unsigned_trunc_overflow = arith.trunci %signed_byte overflow<nuw> : i16 to i8
+  // expected-remark @below {{constant_value = -1}}
+  %signed_trunc = arith.trunci %signed_byte overflow<nsw> : i16 to i8
   tt.return
 }
 
@@ -656,6 +803,9 @@ tt.func @shift(%arg0: i32 {tt.divisibility = 4 : i32}) {
   %5 = arith.shli %1, %2 : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [8], constancy = [128], constant_value = <none>}}
   %6 = arith.shli %1, %s : tensor<128xi32>
+  // Unknown shifts make every range element a group base, including odd ones.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %unknown_left = arith.shli %0, %s : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   %7 = arith.shrsi %0, %s : tensor<128xi32>
   tt.return

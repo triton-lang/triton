@@ -191,7 +191,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     }
 
     // Get the LLVM values for `other`
-    std::optional<int64_t> otherConstInt;
+    std::optional<APInt> otherConstInt;
     SmallVector<Value> otherElems;
     if (other) {
       // Use immediates for proven integer constants.
@@ -252,42 +252,31 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
       if (other) {
         for (size_t ii = 0; ii < nWords; ++ii) {
-          size_t size = width / valueElemNBits;
-
-          auto vecTy = LLVM::getVectorType(valueElemTy, size);
-          Value v = b.undef(vecTy);
-          for (size_t s = 0; s < size; ++s) {
-            Value falseVal = otherElems[vecStart + ii * size + s];
-            Value sVal = createIndexAttrConstant(
-                rewriter, loc, typeConverter->getIndexType(), s);
-            v = b.insert_element(vecTy, v, falseVal, sVal);
-          }
-          v = b.bitcast(v, IntegerType::get(getContext(), width));
-
-          if (!otherConstInt && (width == 32 || width == 64)) {
-            // Match each fallback to its destination instead of moving it.
-            // The packed value and destination have the same register width.
-            ptxBuilder.newOperand(v, std::to_string(dstsOpr->listGet(ii)->idx));
-            continue;
+          PTXInstr::Operand *opr{};
+          if (otherConstInt && movWidth <= 64) {
+            // Pack the declared element bits into their physical slots.
+            APInt bits = otherConstInt->zextOrTrunc(valueElemNBits);
+            APInt packed = APInt::getSplat(movWidth, bits);
+            opr = ptxBuilder.newConstantOperand(
+                packed.zextOrTrunc(64).getSExtValue());
+          } else {
+            auto elems = ArrayRef<Value>(otherElems)
+                             .slice(vecStart + ii * wordNElems, wordNElems);
+            Value v = b.bitcast(packLLVector(loc, elems, rewriter),
+                                IntegerType::get(getContext(), width));
+            if (width == 32 || width == 64) {
+              // Match each fallback to its destination instead of moving it.
+              // The packed value and destination have the same register width.
+              ptxBuilder.newOperand(v,
+                                    std::to_string(dstsOpr->listGet(ii)->idx));
+              continue;
+            }
+            opr = ptxBuilder.newOperand(v, readConstraint);
           }
 
           // PTX doesn't support mov.u8, so we need to use mov.u16
           PTXInstr &mov =
               ptxBuilder.create("mov")->o("u" + std::to_string(movWidth));
-
-          PTXInstr::Operand *opr{};
-
-          if (otherConstInt && movWidth <= 64) {
-            // Pack the declared element bits, not a sign-extended int64_t.
-            APInt bits = APInt(64, static_cast<uint64_t>(*otherConstInt))
-                             .sextOrTrunc(elemTy.getIntOrFloatBitWidth())
-                             .zextOrTrunc(valueElemNBits);
-            APInt packed = APInt::getSplat(movWidth, bits);
-            opr = ptxBuilder.newConstantOperand(
-                packed.zextOrTrunc(64).getSExtValue());
-          } else
-            opr = ptxBuilder.newOperand(v, readConstraint);
-
           mov(dstsOpr->listGet(ii), opr);
         }
       }
