@@ -519,6 +519,45 @@ def test_gluon_mbarrier_wait_acquires_arrival_vector_clocks(with_gsan):
 
 
 @gluon.jit
+def _gluon_mbarrier_retains_atomic_release_kernel(payload_ptr, flag_ptr, out_ptr, ITERATIONS: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
+    offsets = gl.arange(0, 256, layout)
+    producer = offsets == 128
+    consumer = offsets == 0
+
+    barrier = hopper.mbarrier.allocate_mbarrier(two_ctas=True)
+    hopper.mbarrier.init(barrier, count=1)
+    hopper.mbarrier.wait(barrier, phase=1)
+
+    gl.store(payload_ptr + offsets * 0, 41, mask=producer)
+    gl.atomic_xchg(flag_ptr + offsets * 0, 1, sem="release", scope="gpu", mask=producer)
+    for iteration in range(ITERATIONS):
+        hopper.mbarrier.arrive(barrier, count=1)
+        hopper.mbarrier.wait(barrier, phase=iteration & 1)
+        hopper.cluster.barrier(relaxed=True)
+
+    gl.atomic_add(flag_ptr + offsets * 0, 0, sem="acquire", scope="gpu", mask=consumer)
+    value = gl.load(payload_ptr + offsets * 0, mask=consumer, other=0)
+    gl.store(out_ptr + offsets * 0, value + 1, mask=consumer)
+    hopper.mbarrier.invalidate(barrier)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
+@pytest.mark.parametrize("iterations", [1025, 65536], ids=["atomic-token-survives", "compact-epoch-wraps"])
+def test_gluon_mbarrier_publications_preserve_atomic_releases(with_gsan, iterations):
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    flag = torch.zeros(1, dtype=torch.int32, device="cuda")
+    out = torch.zeros(1, dtype=torch.int32, device="cuda")
+
+    _gluon_mbarrier_retains_atomic_release_kernel[(1, )](payload, flag, out, ITERATIONS=iterations, num_warps=4,
+                                                        num_ctas=2)
+    torch.cuda.synchronize()
+
+    assert flag.item() == 1
+    assert out.item() == 42
+
+
+@gluon.jit
 def _gluon_ws_mbarrier_partition(payload_ptr, out_ptr, barrier, index: gl.constexpr):
     data_layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
 

@@ -35,10 +35,11 @@ enum class AtomicScope : uint8_t {
   MAX_VALUE = System,
 };
 
-using epoch_t = uint16_t;
+using epoch_t = uint32_t;
+using compact_epoch_t = uint16_t;
 
 struct alignas(4) ScalarClock {
-  epoch_t epoch;
+  compact_epoch_t epoch;
   thread_id_t threadId : 12; // Supports 4096 threads
   AtomicScope scope : 2;
   // For a release write, the epoch is actually an index into the thread's
@@ -92,10 +93,15 @@ struct ThreadState {
   // Reader-writer lock controlling access to the vector clock and clock buffer
   uint32_t lock;
 
+  // Cluster barriers publish frequently, so keep their snapshots separate from
+  // atomic releases that may remain observable for much longer.
+  uint32_t clusterClockBufferHead;
+
   thread_id_t threadId;
 
   // Local vector clock, shape [numThreads]
-  // Followed by the clock buffer, shape [clockBufferSize, numThreads]
+  // Followed by the atomic and cluster clock buffers, each with shape
+  // [clockBufferSize, numThreads].
   epoch_t vectorClock[];
 };
 
@@ -117,13 +123,13 @@ struct alignas(16) ClusterBarrierState {
   uint32_t generation;
   uint32_t registrationGeneration;
   thread_id_t threadIds[kMaxClusterCTAs];
-  epoch_t tokens[kMaxClusterCTAs];
+  compact_epoch_t tokens[kMaxClusterCTAs];
 };
 static_assert(sizeof(ClusterBarrierState) <= kClusterBarrierScratchBytes);
 
 struct MBarrierPublishedClock {
   thread_id_t threadId;
-  epoch_t token;
+  compact_epoch_t token;
 };
 static_assert(sizeof(MBarrierPublishedClock) == 4);
 
