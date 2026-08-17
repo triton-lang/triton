@@ -29,17 +29,17 @@ def find_therock_rocm_libraries():
         return None
 
 
-def find_legacy_rocprofiler_sdk_lib_dir():
-    try:
-        import _rocm_sdk_core
-
-        lib_dir = Path(_rocm_sdk_core.__file__).parent / "lib"
-        if lib_dir.is_dir():
-            return str(lib_dir)
-    except ImportError:
-        pass
-
-    return None
+# def find_legacy_rocprofiler_sdk_lib_dir():
+#     try:
+#         import _rocm_sdk_core
+#
+#         lib_dir = Path(_rocm_sdk_core.__file__).parent / "lib"
+#         if lib_dir.is_dir():
+#             return str(lib_dir)
+#     except ImportError:
+#         pass
+#
+#     return None
 
 
 def configure_runtime():
@@ -48,14 +48,23 @@ def configure_runtime():
 
     libraries = find_therock_rocm_libraries()
     if libraries is None:
-        if triton.knobs.proton.rocprofiler_sdk_lib_path is None:
-            lib_dir = find_legacy_rocprofiler_sdk_lib_dir()
-            if lib_dir is not None:
-                triton.knobs.proton.rocprofiler_sdk_lib_path = lib_dir
+        # if triton.knobs.proton.rocprofiler_sdk_lib_path is None:
+        #     lib_dir = find_legacy_rocprofiler_sdk_lib_dir()
+        #     if lib_dir is not None:
+        #         triton.knobs.proton.rocprofiler_sdk_lib_path = lib_dir
         return None
 
+    # Use Triton's existing full-path HIP override so the AMD driver and Proton
+    # always select the same runtime. Preserve an explicit user value.
+    hip_override = "TRITON_LIBHIP_PATH"
+    explicit_overrides = {hip_override} if hip_override in os.environ else set()
+    if hip_override not in explicit_overrides:
+        triton.knobs.setenv(hip_override, libraries["amdhip64"])
+
+    # Export the remaining TheRock libraries as a directory plus their exact
+    # filename. If either value was set by the user, preserve the complete
+    # override instead of mixing it with a TheRock-derived value.
     library_settings = {
-        "TRITON_PROTON_HIP_LIB_PATH": ("TRITON_PROTON_HIP_LIBRARY", "amdhip64"),
         "TRITON_HSA_RUNTIME_PATH": ("TRITON_HSA_RUNTIME_LIBRARY", "hsa-runtime64"),
         "TRITON_ROCPROFILER_SDK_LIB_PATH": ("TRITON_ROCPROFILER_SDK_LIBRARY", "rocprofiler-sdk"),
         "TRITON_ROCTRACER_LIB_PATH": ("TRITON_ROCTRACER_LIBRARY", "roctracer64"),
@@ -66,14 +75,13 @@ def configure_runtime():
         "TRITON_ROCTX_LIB_PATH",
         "TRITON_ROCTX_LIBRARY",
     )
-    explicit_overrides = {key for key in override_keys if key in os.environ}
+    explicit_overrides.update(key for key in override_keys if key in os.environ)
     for path_key, (library_key, name) in library_settings.items():
         if path_key not in explicit_overrides and library_key not in explicit_overrides:
             path = Path(libraries[name])
             triton.knobs.setenv(path_key, str(path.parent))
             triton.knobs.setenv(library_key, path.name)
     if not {"TRITON_ROCTX_LIB_PATH", "TRITON_ROCTX_LIBRARY"} & explicit_overrides:
-        triton.knobs.setenv("TRITON_ROCTX_LIB_PATH", libraries["roctx64"])
         triton.knobs.setenv("TRITON_ROCTX_LIBRARY", libraries["roctx64"])
 
     # HSA is not registered with rocm_sdk yet, so load and retain it directly.
@@ -87,8 +95,11 @@ def configure_runtime():
 
     import rocm_sdk
 
+    # Preload automatically selected TheRock libraries so their dependencies
+    # resolve from the same SDK. Libraries with explicit overrides remain under
+    # the caller's control and are not preloaded from TheRock.
     preload_libraries = (
-        ("amdhip64", ("TRITON_PROTON_HIP_LIB_PATH", "TRITON_PROTON_HIP_LIBRARY")),
+        ("amdhip64", ("TRITON_LIBHIP_PATH", )),
         ("roctx64", ("TRITON_ROCTX_LIB_PATH", "TRITON_ROCTX_LIBRARY")),
         ("rocprofiler-sdk", ("TRITON_ROCPROFILER_SDK_LIB_PATH", "TRITON_ROCPROFILER_SDK_LIBRARY")),
         ("rocprofiler-sdk-roctx", ("TRITON_ROCPROFILER_SDK_LIB_PATH", "TRITON_ROCPROFILER_SDK_LIBRARY")),

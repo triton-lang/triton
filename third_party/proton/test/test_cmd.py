@@ -12,6 +12,7 @@ def clean_rocprofiler_env():
     # rocprofiler-sdk updates the native process environment directly. Passing
     # an explicit Python environment prevents that parent-process bootstrap
     # state from initializing the SDK before Proton in a fresh CLI subprocess.
+    # https://github.com/ROCm/rocm-systems/pull/5348
     env = os.environ.copy()
     env.pop("ROCPROFILER_REGISTER_FORCE_LOAD", None)
     env.pop("ROCPROFILER_REGISTER_LIBRARY", None)
@@ -35,7 +36,6 @@ import pathlib
 import rocm_sdk
 
 settings = {
-    "amdhip64": ("TRITON_PROTON_HIP_LIB_PATH", "TRITON_PROTON_HIP_LIBRARY"),
     "hsa-runtime64": ("TRITON_HSA_RUNTIME_PATH", "TRITON_HSA_RUNTIME_LIBRARY"),
     "rocprofiler-sdk": ("TRITON_ROCPROFILER_SDK_LIB_PATH", "TRITON_ROCPROFILER_SDK_LIBRARY"),
     "roctracer64": ("TRITON_ROCTRACER_LIB_PATH", "TRITON_ROCTRACER_LIBRARY"),
@@ -51,6 +51,9 @@ expected = {
 roctx = pathlib.Path(rocm_sdk.find_libraries("roctx64")[0])
 
 import triton.profiler
+
+assert os.environ["TRITON_LIBHIP_PATH"] == str(amdhip)
+ctypes.CDLL(os.environ["TRITON_LIBHIP_PATH"])
 
 for name, (path_key, library_key) in settings.items():
     library = expected[name]

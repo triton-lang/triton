@@ -548,8 +548,6 @@ class proton_knobs(base_knobs):
     cupti_lib_blackwell_dir: env_str = env_str(
         "TRITON_CUPTI_LIB_BLACKWELL_PATH",
         str(pathlib.Path(__file__).parent.absolute() / "backends" / "nvidia" / "lib" / "cupti-blackwell"))
-    hip_lib_path: env_opt_str = env_opt_str("TRITON_PROTON_HIP_LIB_PATH")
-    hip_library: env_opt_str = env_opt_str("TRITON_PROTON_HIP_LIBRARY")
     hsa_runtime_path: env_opt_str = env_opt_str("TRITON_HSA_RUNTIME_PATH")
     hsa_runtime_library: env_opt_str = env_opt_str("TRITON_HSA_RUNTIME_LIBRARY")
     rocprofiler_sdk_include_path: env_opt_str = env_opt_str("TRITON_ROCPROFILER_SDK_INCLUDE_PATH")
@@ -557,8 +555,10 @@ class proton_knobs(base_knobs):
     rocprofiler_sdk_library: env_opt_str = env_opt_str("TRITON_ROCPROFILER_SDK_LIBRARY")
     roctracer_lib_path: env_opt_str = env_opt_str("TRITON_ROCTRACER_LIB_PATH")
     roctracer_library: env_opt_str = env_opt_str("TRITON_ROCTRACER_LIBRARY")
-    roctx_lib_path: env_str = env_str("TRITON_ROCTX_LIB_PATH", "libroctx64.so")
-    roctx_library: env_opt_str = env_opt_str("TRITON_ROCTX_LIBRARY")
+    # Legacy full-path override.
+    roctx_lib_path: env_opt_str = env_opt_str("TRITON_ROCTX_LIB_PATH")
+    # Preferred library name or full-path override.
+    roctx_library: env_str = env_str("TRITON_ROCTX_LIBRARY", "libroctx64.so")
     profile_buffer_size: env_int = env_int("TRITON_PROFILE_BUFFER_SIZE", 64 * 1024 * 1024)
     profile_metric_buffer_size: env_int = env_int("TRITON_PROFILE_METRIC_BUFFER_SIZE", 64 * 1024 * 1024)
     enable_nvtx: env_bool = env_bool("TRITON_ENABLE_NVTX", True)
