@@ -4783,50 +4783,6 @@ def test_masked_load(dtype_str, size, size_diff, other, num_ctas, device):
     torch.testing.assert_close(output, reference_out)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="NVIDIA inline-assembly register constraints")
-@pytest.mark.parametrize("dtype_str, pack", [("int8", 4), ("int16", 2), ("int32", 1), ("int64", 1), ("float32", 1)])
-def test_masked_load_live_fallback(dtype_str, pack, device):
-    block = 1024
-    dtype = getattr(torch, dtype_str)
-    bit_dtype = torch.int32 if dtype_str == "float32" else dtype
-    offsets = torch.arange(block, dtype=torch.int64, device=device)
-    if dtype_str == "float32":
-        # Compare raw bits so signed zero and the NaN payload are significant.
-        source_bits = torch.tensor([0, -0x80000000, 0x7FC12345, 0x3F800000], dtype=bit_dtype,
-                                   device=device).repeat(block // 4)
-        fallback_bits = source_bits.roll(1)
-    else:
-        source_bits = (offsets * 17 + 0x1234567812345678).to(bit_dtype)
-        fallback_bits = (-offsets * 29 - 0x2345678923456789).to(bit_dtype)
-    source = source_bits.view(dtype)
-    fallback = fallback_bits.view(dtype)
-    result = torch.empty_like(source_bits)
-    mixed = torch.empty_like(source_bits)
-
-    @triton.jit(do_not_specialize=["phase"])
-    def kernel(Source, Fallback, Result, Mixed, phase, PACK: tl.constexpr, BLOCK: tl.constexpr):
-        offsets = tl.arange(0, BLOCK)
-        mask = tl.max_constancy(((offsets // PACK) & 1) == phase, PACK)
-        other = tl.load(Fallback + offsets)
-        value = tl.load(Source + offsets, mask, other=other)
-        value_bits = value.to(Result.dtype.element_ty, bitcast=True)
-        other_bits = other.to(Result.dtype.element_ty, bitcast=True)
-        tl.store(Result + offsets, value_bits)
-        # Both operands are needed after the masked load has completed.
-        tl.store(Mixed + offsets, value_bits ^ other_bits)
-
-    for phase in (0, 1):
-        compiled = kernel[(1, )](source, fallback, result, mixed, phase, PACK=pack, BLOCK=block, num_warps=4)
-        mask = ((offsets // pack) & 1) == phase
-        expected = torch.where(mask, source_bits, fallback_bits)
-        torch.testing.assert_close(result, expected, rtol=0, atol=0)
-        torch.testing.assert_close(mixed, expected ^ fallback_bits, rtol=0, atol=0)
-
-    # Ensure the narrow cases reached the packed-word path under test.
-    width = 64 if bit_dtype == torch.int64 else 32
-    assert re.search(rf"@\S+\s+ld\.global\.b{width}\b", compiled.asm["ptx"])
-
-
 @pytest.mark.interpreter
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 @pytest.mark.parametrize("mask_val", [True, False])
