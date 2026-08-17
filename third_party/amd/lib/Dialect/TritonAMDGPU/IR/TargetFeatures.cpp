@@ -274,7 +274,6 @@ bool TargetFeatures::supportsBufferAtomicFMinMax(Type elementType) const {
                               isaFamily);
   }
   if (elementType.isF64()) {
-    // GFX11 dropped the 64-bit buffer atomic fmin/fmax that GFX10 provides.
     return llvm::is_contained({ISAFamily::CDNA2, ISAFamily::CDNA3,
                                ISAFamily::CDNA4, ISAFamily::RDNA1,
                                ISAFamily::RDNA2, ISAFamily::GFX1250},
